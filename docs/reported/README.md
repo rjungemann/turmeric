@@ -59,7 +59,7 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | **`#json-str?<T>` landed 2026-08-21**; `#json-file<T>` still unimplemented (RD2 blocker 2: read-file's `ptr<void>`/NULL, ownership, unreadable-file semantics) |
-| [arrowloop-lazy-feedback](arrowloop-lazy-feedback.md) | low | ArrowLoop at (->) only supports feedback the arrow never reads |
+| [arrow-struct-typed-arrow-abi](arrow-struct-typed-arrow-abi.md) | low | a function declared over `(Tuple2 int int)` rather than the erased `:int` carrier returns garbage through any arrow combinator: `TUR_APPLY1` calls it with the `int64` thunk ABI while it was emitted with the struct-by-value return ABI. Silent -- nothing checks the callee's shape |
 | [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
 
 `spices-carry-pre-sum-option-result-layout` was resolved 2026-08-27 in

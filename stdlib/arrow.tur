@@ -13,6 +13,11 @@
 ;;; the receiver's type selects one, and falls back to the bare combinator
 ;;; otherwise (see docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md).
 ;;;
+;;; Feedback (ArrowLoop): arrow-loop-lazy, arrow-loop-fix, and arrow-loop-delay
+;;; close the d output of an arrow back onto its d input, each at a different
+;;; time -- see the "ArrowLoop feedback cells" section below, and
+;;; docs/guides/arrows-guide.md ("ArrowLoop -- feedback").
+;;;
 ;;; The typeclass layer was scaled back in
 ;;; docs/archive/history/stdlib-arrow-scaleback-plan.md and reintroduced -- then merged
 ;;; back into this single module -- per
@@ -263,19 +268,194 @@
   r->e1 = s->e1;
   r->e2 = TUR_APPLY1(fv, s->e2);
   return (int64_t)(intptr_t)r; ```)
-;;; __ac_loop_step -- inline-C: non-recursive ArrowLoop step.  Build the input
-;;; pair (b, 0), apply the looped arrow fv, and project the first slot of the
-;;; result pair.  The fed-back slot is a sentinel 0; this is the non-recursive
-;;; subset only (fv must not read it).  See arrow-loop.
+;; =============================================================================
+;; ArrowLoop feedback cells
+;; =============================================================================
+;; The fed-back `d` component is handed to the looped arrow as a LoopCell: a
+;; two-word heap cell `{ int64_t filled; int64_t value; }`.  The cell is the
+;; strict-language stand-in for Haskell's lazy knot.  Turmeric evaluates the
+;; looped arrow eagerly, so `d` cannot simply BE the value that same run is
+;; about to produce -- but indirecting through a cell splits the two events
+;; apart, so a read that happens LATER sees a value written EARLIER:
+;;
+;;   arrow-loop        the cell starts empty and is filled with the arrow's d
+;;                     output once the run returns.  Forcing it during the run
+;;                     is the black hole (a `<<loop>>` panic); forcing it
+;;                     through a handle the arrow parked in its own c output is
+;;                     true lazy feedback -- the c value observes the d that
+;;                     the very same run produced.
+;;   arrow-loop-fix    the cell starts filled with a seed and is re-filled once
+;;                     per iteration until d stops moving: the strict fixpoint,
+;;                     for a looped arrow that must read d immediately.
+;;   arrow-loop-delay  the cell starts filled with a seed and carries the
+;;                     PREVIOUS call's d forward: a unit delay in the feedback
+;;                     path.  Always total, and the shape signal-processing and
+;;                     state-machine arrows actually want.
+;;
+;; All three put the same thing in slot 1 of the input pair, so one looped
+;; arrow works unchanged under any of them.  A Turmeric-level arrow reads the
+;; slot with loop-cell-of + loop-cell-force; an inline-C arrow redeclares the
+;; layout locally, exactly as the pair helpers redeclare P:
+;;
+;;   typedef struct { int64_t filled; int64_t value; } LC;
+;;
+;; See docs/guides/arrows-guide.md ("ArrowLoop -- feedback").
+;; ---------------------------------------------------------------------------
+;;; LoopCell -- the fed-back `d` slot of an ArrowLoop, as a handle.
+;;;
+;;; Carrier is :int (the erased two-slot pair carrier the arrow layer runs on),
+;;; but the newtype keeps an arbitrary integer out of loop-cell-force: only a
+;;; cell minted by one of the arrow-loop combinators is accepted.
+;;;
+;;; Since: arrowloop-lazy-feedback
+
+(defopaque LoopCell :int)
+;;; loop-cell-of -- read slot 1 of an ArrowLoop input pair as a LoopCell.
+;;;
+;;; The arrow layer erases every slot to the int64 carrier, so a looped arrow
+;;; written in Turmeric receives the feedback cell as a plain int.  This is the
+;;; one sanctioned way back to the handle type.
+;;;
+;;; Parameters:
+;;;   slot -- the erased slot-1 value handed to the looped arrow
+;;;
+;;; Returns:
+;;;   The same handle, typed as a LoopCell.
+;;;
+;;; Example:
+;;;   (loop-cell-force (loop-cell-of d))  ; => the fed-back value
+;;;
+;;; Since: arrowloop-lazy-feedback
+
+(defn loop-cell-of [slot : int] : LoopCell
+  ```c
+  return slot; ```)
+;;; loop-cell-ready? -- has the fed-back value been written yet?
+;;;
+;;; False exactly inside an arrow-loop run, before the looped arrow has
+;;; returned its d output.  arrow-loop-fix and arrow-loop-delay seed the cell
+;;; up front, so it reads true there from the first call.
+;;;
+;;; Parameters:
+;;;   c -- the feedback cell
+;;;
+;;; Returns:
+;;;   true when loop-cell-force would succeed, false when it would black-hole.
+;;;
+;;; Example:
+;;;   (if (loop-cell-ready? c) (loop-cell-force c) 0)
+;;;
+;;; Since: arrowloop-lazy-feedback
+
+(defn loop-cell-ready? [c : LoopCell] : bool
+  ```c
+  typedef struct { int64_t filled; int64_t value; } LC;
+  LC *cell = (LC *)(intptr_t)c;
+  return cell && cell->filled ? true : false; ```)
+;;; loop-cell-force -- read the fed-back value out of a feedback cell.
+;;;
+;;; Panics with `<<loop>>` when the value is not there yet -- that is the black
+;;; hole, and it is a genuine error in the looped arrow (it demanded its own
+;;; output).  Guard with loop-cell-ready? when a miss is expected.
+;;;
+;;; Parameters:
+;;;   c -- the feedback cell
+;;;
+;;; Returns:
+;;;   The fed-back d value, in the erased arrow carrier.
+;;;
+;;; Example:
+;;;   (let [lp (arrow-loop step)]
+;;;     (loop-cell-force (loop-cell-of (lp 7))))
+;;;
+;;; Since: arrowloop-lazy-feedback
+
+(defn loop-cell-force [c : LoopCell] : int
+  ```c
+  typedef struct { int64_t filled; int64_t value; } LC;
+  LC *cell = (LC *)(intptr_t)c;
+  if (!cell) {
+    tur_panic("loop-cell-force: null feedback cell");
+    return 0;
+  }
+  if (!cell->filled) {
+    tur_panic("<<loop>>: ArrowLoop feedback forced before the looped arrow produced it");
+    return 0;
+  }
+  return cell->value; ```)
+;;; __ac_cell_new -- inline-C: allocate a feedback cell, filled or empty.
+
+(defn __ac_cell_new [filled : int value : int] : LoopCell
+  ```c
+  typedef struct { int64_t filled; int64_t value; } LC;
+  LC *cell = (LC *)malloc(sizeof(LC));
+  cell->filled = filled;
+  cell->value  = value;
+  return (int64_t)(intptr_t)cell; ```)
+;;; __ac_loop_step -- inline-C: the lazy (knot-tying) ArrowLoop step.  Allocate
+;;; an EMPTY feedback cell, run the looped arrow fv on the pair (b, cell), fill
+;;; the cell with the arrow's d output, and project its c output.  A read of
+;;; the cell that happens after the run -- through a handle fv parked in c --
+;;; therefore sees the d this very run produced.  See arrow-loop.
 
 (defn __ac_loop_step [fv b] : int
   ```c
   typedef struct { int64_t e1; int64_t e2; } P;
+  typedef struct { int64_t filled; int64_t value; } LC;
+  LC *cell = (LC *)malloc(sizeof(LC));
+  cell->filled = 0;
+  cell->value  = 0;
   P *in = (P *)malloc(sizeof(P));
   in->e1 = b;
-  in->e2 = 0;
+  in->e2 = (int64_t)(intptr_t)cell;
   int64_t rp = TUR_APPLY1(fv, (int64_t)(intptr_t)in);
   P *r = (P *)(intptr_t)rp;
+  /* Tie the knot: the d output becomes the fed-back value, visible to every
+   * deferred read of the cell from here on. */
+  cell->value  = r->e2;
+  cell->filled = 1;
+  return r->e1; ```)
+;;; __ac_loop_fix_step -- inline-C: the strict fixpoint ArrowLoop step.  Seed a
+;;; filled feedback cell with d0, then re-run fv on (b, cell) -- refilling the
+;;; cell from each d output -- until d stops moving or the fuel runs out.
+;;; Returns the c output of the last iteration.
+
+(defn __ac_loop_fix_step [fv b d0 : int fuel : int] : int
+  ```c
+  typedef struct { int64_t e1; int64_t e2; } P;
+  typedef struct { int64_t filled; int64_t value; } LC;
+  LC *cell = (LC *)malloc(sizeof(LC));
+  cell->filled = 1;
+  cell->value  = d0;
+  int64_t c = 0;
+  int64_t budget = fuel < 1 ? 1 : fuel;   /* always run at least once */
+  for (int64_t i = 0; i < budget; i++) {
+    P *in = (P *)malloc(sizeof(P));
+    in->e1 = b;
+    in->e2 = (int64_t)(intptr_t)cell;
+    int64_t rp = TUR_APPLY1(fv, (int64_t)(intptr_t)in);
+    P *r = (P *)(intptr_t)rp;
+    c = r->e1;
+    if (r->e2 == cell->value) break;   /* reached the fixpoint */
+    cell->value = r->e2;
+  }
+  return c; ```)
+;;; __ac_loop_delay_step -- inline-C: one step of the unit-delay ArrowLoop.  The
+;;; caller owns the cell across calls, so slot 1 carries the PREVIOUS call's d
+;;; output (the seed on the first call); the fresh d output replaces it.
+
+(defn __ac_loop_delay_step [fv cell : LoopCell b] : int
+  ```c
+  typedef struct { int64_t e1; int64_t e2; } P;
+  typedef struct { int64_t filled; int64_t value; } LC;
+  LC *lc = (LC *)(intptr_t)cell;
+  P *in = (P *)malloc(sizeof(P));
+  in->e1 = b;
+  in->e2 = (int64_t)(intptr_t)lc;
+  int64_t rp = TUR_APPLY1(fv, (int64_t)(intptr_t)in);
+  P *r = (P *)(intptr_t)rp;
+  lc->value  = r->e2;
+  lc->filled = 1;
   return r->e1; ```)
 ;;; __ac_app -- inline-C: ArrowApply for (->).  The input pair carries an arrow
 ;;; in slot 0 and its argument in slot 1; apply the arrow to the argument.
@@ -369,11 +549,19 @@
 ;;;   arrow-loop -- given an arrow a (b, d) (c, d), produce an arrow a b c by
 ;;;                 feeding the d output back as the d input.
 ;;;
-;;; Turmeric is strict and has no lazy thunks, so the (->) instance implements
-;;; only the NON-RECURSIVE subset: it is correct exactly when the looped arrow
-;;; does not read the fed-back component.  True lazy feedback is future work.
+;;; Turmeric is strict, so the fed-back d is handed to the looped arrow as a
+;;; LoopCell rather than as a bare value: the (->) instance runs the arrow on
+;;; (b, empty-cell) and fills the cell with the d output afterwards.  An arrow
+;;; that ignores d behaves exactly as before; an arrow that parks the cell in
+;;; its c output and forces it later gets true lazy feedback; an arrow that
+;;; forces the cell mid-run hits the black hole (a `<<loop>>` panic) instead of
+;;; silently reading a sentinel.
 ;;;
-;;; Since: Phase CA1
+;;; For a looped arrow that must read d *immediately*, use the bare
+;;; arrow-loop-fix (iterate to a fixpoint) or arrow-loop-delay (a unit delay in
+;;; the feedback path) below.
+;;;
+;;; Since: Phase CA1 (lazy feedback: arrowloop-lazy-feedback)
 
 (defclass ArrowLoop [a] (arrow-loop [f] : a))
 ;;; ArrowApply [a] -- apply an arrow that is itself a value flowing through.
@@ -403,10 +591,90 @@
   (right [f] (fn [e] (match e (Left b) (Left b) (Right d) (Right (f d)))))
   (+++ [f g] (fn [e] (match e (Left b) (Left (f b)) (Right d) (Right (g d)))))
   (||| [f g] (fn [e] (match e (Left b) (f b) (Right d) (g d)))))
-;;; ArrowLoop [(->)] -- non-recursive feedback: project the first output slot
-;;; after running the arrow on (b, sentinel).  Valid only when f ignores d.
+;;; ArrowLoop [(->)] -- lazy (knot-tying) feedback: run the arrow on
+;;; (b, empty-cell), fill the cell with the d output, project the c output.
 
 (definstance ArrowLoop [(->)] (arrow-loop [f] (fn [b] (__ac_loop_step f b))))
+;;; arrow-loop-lazy -- the bare-surface twin of the ArrowLoop [(->)] instance.
+;;;
+;;; Feeds the d output back through a LoopCell that is filled only once the
+;;; looped arrow returns.  Reads of the cell that the arrow defers -- by parking
+;;; the handle in its own c output -- observe the d that this same run produced;
+;;; a read made during the run is the `<<loop>>` black hole.
+;;;
+;;; Parameters:
+;;;   f -- the looped arrow, a (b, LoopCell) -> (c, d) over the heap-pair layout
+;;;
+;;; Returns:
+;;;   A ptr<void> closure b -> c.
+;;;
+;;; Example:
+;;;   ;; f parks the cell in c, so forcing c after the loop yields d = b * 10.
+;;;   (let [lp (arrow-loop-lazy park-cell-step)]
+;;;     (loop-cell-force (loop-cell-of (lp 7))))  ; => 70
+;;;
+;;; Since: arrowloop-lazy-feedback
+
+(defn arrow-loop-lazy [^fat f] : ptr<void>
+  (let [fv f]
+    (fn [b : int] : int (__ac_loop_step fv b))))
+;;; arrow-loop-fix -- feedback by iteration to a fixpoint.
+;;;
+;;; For a looped arrow that reads d *strictly*: the cell is seeded with d0 and
+;;; the arrow is re-run, each time seeing the previous run's d, until d stops
+;;; changing or fuel iterations have elapsed.  The result is the c output of the
+;;; last iteration.  Non-convergence is not an error here -- it simply spends
+;;; the fuel and returns the last c -- so a diverging arrow costs a bounded
+;;; amount of work rather than hanging.
+;;;
+;;; Parameters:
+;;;   f    -- the looped arrow, a (b, LoopCell) -> (c, d)
+;;;   d0   -- the seed for the fed-back component
+;;;   fuel -- maximum iterations; anything below 1 runs exactly one pass
+;;;
+;;; Returns:
+;;;   A ptr<void> closure b -> c.
+;;;
+;;; Example:
+;;;   ;; newton-step: d' = (d + b/d)/2, c = d  -- integer sqrt by fixpoint.
+;;;   ((arrow-loop-fix newton-step 1 32) 144)  ; => 12
+;;;
+;;; Since: arrowloop-lazy-feedback
+
+(defn arrow-loop-fix [^fat f d0 : int fuel : int] : ptr<void>
+  (let [fv f
+        s  d0
+        n  fuel]
+    (fn [b : int] : int (__ac_loop_fix_step fv b s n))))
+;;; arrow-loop-delay -- feedback through a unit delay (step-indexed).
+;;;
+;;; The fed-back component persists across calls: call n sees the d that call
+;;; n-1 produced, and the first call sees d0.  This is the always-total member
+;;; of the family -- there is no black hole and no iteration -- and it is the
+;;; feedback shape signal-processing and state-machine arrows want, where the
+;;; loop is closed over time rather than within a single step.
+;;;
+;;; The returned arrow is stateful: it owns one cell, so each call advances the
+;;; same feedback line.  Call arrow-loop-delay again for an independent line.
+;;;
+;;; Parameters:
+;;;   f  -- the looped arrow, a (b, LoopCell) -> (c, d)
+;;;   d0 -- the value the first call sees fed back
+;;;
+;;; Returns:
+;;;   A ptr<void> closure b -> c, carrying its own feedback state.
+;;;
+;;; Example:
+;;;   ;; sum-step: d' = d + b, c = d + b  -- a running total.
+;;;   (let [acc (arrow-loop-delay sum-step 0)]
+;;;     (acc 1) (acc 2) (acc 3))  ; => 1, 3, 6
+;;;
+;;; Since: arrowloop-lazy-feedback
+
+(defn arrow-loop-delay [^fat f d0 : int] : ptr<void>
+  (let [fv   f
+        cell (__ac_cell_new 1 d0)]
+    (fn [b : int] : int (__ac_loop_delay_step fv cell b))))
 ;;; ArrowApply [(->)] -- the apply arrow: run the arrow in slot 0 on slot 1.
 
 (definstance ArrowApply [(->)] (app [] (fn [p] (__ac_app p))))

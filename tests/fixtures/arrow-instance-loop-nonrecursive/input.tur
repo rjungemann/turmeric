@@ -1,10 +1,10 @@
-;; arrow-instance-loop-nonrecursive -- ArrowLoop [(->)], non-recursive subset.
+;; arrow-instance-loop-nonrecursive -- ArrowLoop [(->)], the degenerate case.
 ;;
 ;; arrow-loop takes an arrow a (b, d) (c, d) and feeds the d output back as the
-;; d input, yielding a b c.  Turmeric is strict with no lazy thunks, so the (->)
-;; instance implements only the case where the looped arrow does NOT read the
-;; fed-back component: it runs the arrow on (b, sentinel) and projects the first
-;; output slot.  Here the looped arrow ignores its second (fed-back) slot.
+;; d input, yielding a b c.  This fixture pins the simplest case: a looped arrow
+;; that never looks at the fed-back component at all, so the feedback carries no
+;; information and c depends on b alone.  The cases where the arrow DOES read d
+;; live in arrow-loop-lazy-feedback, arrow-loop-fix, and arrow-loop-delay.
 
 (load "stdlib/arrow.tur")
 

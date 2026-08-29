@@ -172,7 +172,7 @@ Haskell-style hierarchy and instantiates it at the function arrow:
 | `Category` | `ident`, `comp` | yes |
 | `Arrow` | `arr`, `>>>`, `<<<`, `first`, `second` | yes |
 | `ArrowChoice` | `left`, `right`, `+++`, `\|\|\|` | yes (over `Either`) |
-| `ArrowLoop` | `arrow-loop` | yes (non-recursive subset) |
+| `ArrowLoop` | `arrow-loop` | yes (cell-based feedback -- see below) |
 | `ArrowApply` | `app` | yes |
 | `ArrowZero` | `zero-arrow` | no -- `(->)` has no zero (see Kleisli below) |
 | `ArrowPlus` | `plus-arrow` | no -- declared for other arrows |
@@ -281,13 +281,118 @@ two arms, and `|||` collapses both arms to a common result:
   0)
 ```
 
-### `ArrowLoop` -- non-recursive only
+### `ArrowLoop` -- feedback
 
-`arrow-loop` feeds part of an arrow's output back as input. Turmeric is strict
-and has no lazy thunks, so the `(->)` instance implements only the case where
-the looped arrow **does not read** the fed-back component (it runs the arrow on
-`(b, sentinel)` and projects the first output). True lazy feedback is future
-work.
+`arrow-loop` feeds part of an arrow's output back as input: given an arrow
+`a (b, d) (c, d)` it produces `a b c`, wiring the `d` output round to the `d`
+input. In Haskell that knot is tied by laziness. Turmeric is strict, so the
+`d` slot cannot simply *be* the value the same run is about to produce -- and
+the fix is to hand the looped arrow a **`LoopCell`** in slot 1 instead of a
+bare value. The cell splits "the value is written" from "the value is read",
+which is all laziness was buying:
+
+```
+LoopCell  =  { filled : int64, value : int64 }   ; two words on the heap
+```
+
+Three combinators fill the cell at three different times. They share one
+protocol -- slot 1 is always a `LoopCell` -- so a single looped arrow works
+under all three.
+
+| Combinator | The cell starts | Good for | Total? |
+|---|---|---|---|
+| `arrow-loop` (and its bare twin `arrow-loop-lazy`) | **empty**; filled with the `d` output when the run returns | knot-tying: the arrow parks the cell in its `c` output and something forces it *later* | no -- forcing mid-run is the `<<loop>>` black hole |
+| `arrow-loop-fix` | **seeded** with `d0`, refilled once per pass until `d` stops moving or `fuel` runs out | an arrow that reads `d` *strictly*, where the answer is a fixpoint | yes -- `fuel` bounds it |
+| `arrow-loop-delay` | **seeded** with `d0`, carried forward across calls | a unit delay in the feedback path: call *n* sees call *n-1*'s `d` | yes |
+
+Reading the cell:
+
+| Function | Meaning |
+|---|---|
+| `(loop-cell-of slot)` | the erased slot-1 value, typed as a `LoopCell` |
+| `(loop-cell-ready? c)` | `true` when the value has been written; `false` inside an `arrow-loop` run |
+| `(loop-cell-force c)` | the fed-back value, or a `<<loop>>` panic when it is not there yet |
+
+#### Lazy feedback (knot-tying)
+
+The looped arrow's `c` output is *defined by* the `d` output of the same run --
+it parks the cell handle in `c` and the consumer forces it afterwards:
+
+```turmeric
+(load "stdlib/arrow.tur")
+
+;; c = the feedback cell itself; d = b * 10, known only at the end of the run.
+(defn park-cell [p] : int
+  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  P *s = (P *)(intptr_t)p;
+  P *r = (P *)malloc(sizeof(P));
+  r->e1 = s->e2;
+  r->e2 = s->e1 * 10;
+  return (int64_t)(intptr_t)r; ```)
+
+(defn main [] : int
+  (let [lp (arrow-loop park-cell)
+        c  (loop-cell-of (lp 7))]
+    (println (loop-cell-force c)))   ; => 70
+  0)
+```
+
+An arrow that forces the cell *during* the run has demanded its own output;
+that is a genuine error, and it panics with `<<loop>>` rather than quietly
+reading a sentinel. Guard with `loop-cell-ready?` when a miss is expected.
+
+#### Fixpoint feedback
+
+```turmeric
+;; newton: d' = (d + b/d)/2, c = d -- iterate to floor(sqrt(b)).
+((arrow-loop-fix newton 1 32) 144)    ; => 12
+```
+
+`fuel` is a bound, not an assertion: a non-converging arrow spends its passes
+and returns the last `c` rather than hanging.
+
+#### Delayed feedback
+
+```turmeric
+;; sum-step: d' = c = d + b -- a running total, seeded at 0.
+(let [acc (arrow-loop-delay sum-step 0)]
+  (acc 1) (acc 2) (acc 3))            ; => 1, 3, 6
+```
+
+The returned arrow is stateful: it owns one cell, so each call advances the
+same feedback line. Call `arrow-loop-delay` again for an independent one.
+
+#### Writing the looped arrow
+
+The arrow layer runs on an erased two-slot heap pair of `int64`, so a looped
+arrow written in Turmeric takes and returns that carrier and ascribes at the
+edges:
+
+```turmeric
+(load "stdlib/tuple.tur")
+
+(defn prev-step [p : int] : int             ; unit delay: emit the previous b
+  (let [t (:: p (Tuple2 int int))
+        b (tuple2-1st t)
+        d (loop-cell-force (loop-cell-of (tuple2-2nd t)))]
+    (:: (tuple2 d b) :int)))
+```
+
+An inline-C arrow redeclares the cell layout locally, the same way the pair
+helpers in `stdlib/arrow.tur` redeclare `P`:
+
+```c
+typedef struct { int64_t filled; int64_t value; } LC;
+```
+
+A looped arrow declared directly over `(Tuple2 int int)` -- rather than over
+the erased `:int` carrier -- does **not** work: the struct-by-value return ABI
+does not match the `int64` thunk ABI the arrow layer dispatches through. See
+`docs/reported/arrow-struct-typed-arrow-abi.md`.
+
+Fixtures: `arrow-loop-lazy-feedback`, `arrow-loop-fix`, `arrow-loop-delay`,
+and `arrow-instance-loop-nonrecursive` (the degenerate case, where the arrow
+ignores `d` entirely).
 
 ### Both surfaces agree
 
