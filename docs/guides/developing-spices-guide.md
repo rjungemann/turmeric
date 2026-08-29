@@ -111,7 +111,7 @@ defpackage tur-mylib
 | `:exports` | Yes (library) | Map of module path to exported symbol names |
 | `:spices` | If needed | Turmeric package dependencies |
 | `:cmake-deps` | If needed | C/C++ library dependencies |
-| `:build-opts` | Rarely | `:c-flags` / `:link-libs`, plus `:c-sources` / `:c-includes` for [vendored C](#vendoring-c-sources-c-sources--c-includes) |
+| `:build-opts` | Rarely | `:c-flags` / `:link-libs` / `:link-flags`, plus `:c-sources` / `:c-includes` for [vendored C](#vendoring-c-sources-c-sources--c-includes) |
 
 ---
 
@@ -611,6 +611,95 @@ When the CMake `find_package` name or target name differs from the key in
                 :ref        "version-3.47.2"
                 :cmake-name "SQLite3"
                 :targets    ["SQLite::SQLite3"]}
+}
+```
+
+### How the link line is derived
+
+When a dep declares `:targets`, `tur` asks CMake what each target actually is
+rather than guessing from its name. Two generator expressions do the work, and
+both are evaluated when `cmake/spice-deps-manifest.json` is generated:
+
+- **`$<TARGET_FILE:tgt>`** -- the exact file the target produces, linked by
+  full path. This resolves `OUTPUT_NAME` (glfw's target is `glfw`, its archive
+  is `libglfw3.a`), namespace aliasing (`PostgreSQL::PostgreSQL` is `libpq`),
+  and static-vs-shared preference (zlib builds `libz.a` and `libz.1.dylib`
+  into one directory, where a `-lz` would pick the dylib) in one move. A
+  header-only `INTERFACE` target has no artifact and contributes nothing here.
+- **`$<TARGET_PROPERTY:tgt,INTERFACE_LINK_LIBRARIES>`** -- the target's
+  transitive requirements, recorded in the manifest's `link_flags` array.
+  This is where `-framework Cocoa` and `-framework IOKit` come from, which is
+  what makes the Objective-C macOS backends of glfw and raylib link at all: a
+  framework cannot be spelled as `-l`.
+
+The `INTERFACE_LINK_LIBRARIES` walk happens **in CMake, at configure time**,
+because its entries cannot be classified afterwards. A bare entry may be a
+library name (`m`) or a target name (raylib's property lists `glfw`) -- the
+same shape, opposite handling -- and only `if(TARGET ...)` can tell them apart.
+The walk:
+
+- unwraps `$<LINK_ONLY:...>` and skips any other generator expression;
+- for an entry that is a target with a linkable artifact, takes
+  `$<TARGET_FILE:...>` (plus an rpath if it is shared);
+- for an entry that is a target *without* one -- an `OBJECT_LIBRARY` or
+  `INTERFACE_LIBRARY` -- **recurses into its requirements** rather than
+  dropping it. raylib vendors glfw as an `OBJECT_LIBRARY`: its objects are
+  already inside `libraylib.a`, so it contributes no library to link, but the
+  Cocoa and IOKit frameworks its macOS backend needs are reachable no other
+  way;
+- passes anything else through as written.
+
+Those tokens then become cc flags: a flag (`-framework Cocoa`, `-Wl,...`) or an
+absolute path goes through verbatim, and a bare name becomes `-l<name>`. One
+translation is applied -- an Apple framework arrives as an absolute path to the
+`.framework` *directory*, which cannot be passed as a link input (`ld: file
+cannot be mmap()ed`), so it is respelled `-framework <name>`.
+
+A shared-library dependency also gets `-Wl,-rpath` pointing at its build
+directory, which makes the binary runnable where it was built. That rpath is
+not relocatable: a binary copied elsewhere still needs its shared dependency
+installed or bundled.
+
+### `:link-libs` and `:link-flags` overrides
+
+When the derived link line is wrong, or when there is no target to ask about,
+override it per dep:
+
+```turmeric
+:cmake-deps #map{
+  ;; Header-only: contributes include dirs, links nothing.
+  "raygui" #map{:url "https://github.com/raysan5/raygui" :ref "4.0"
+                :link-libs []}
+
+  ;; Link a specific name instead of the derived artifact.
+  "libpq"  #map{:prefer-system true :cmake-name "PostgreSQL"
+                :targets   ["PostgreSQL::PostgreSQL"]
+                :link-libs ["pq"]}
+
+  ;; Verbatim tokens, no prefix added.
+  "audio"  #map{:url "https://example.invalid/audio" :ref "v1"
+                :link-flags ["-framework AudioToolbox"]}
+}
+```
+
+- **`:link-libs [...]`** replaces the derived link entirely -- both the `-l`
+  name and the `$<TARGET_FILE:...>` artifact path. The empty list is a
+  meaningful value, distinct from omitting the key: `:link-libs []` says
+  "contribute include dirs, link nothing", which is the only way to express a
+  header-only dep (raygui) or a code generator that builds no library at all
+  (glad). Transitive `link_flags` are still emitted.
+- **`:link-flags [...]`** appends verbatim tokens with no prefix added. This is
+  the escape hatch for anything the structured keys cannot describe.
+
+A project's own link needs the same escape hatch when it has no `:cmake-deps`
+entry to hang it on -- for instance inline-C that calls a system framework
+directly. That spelling is `:build-opts :link-flags`, the verbatim sibling of
+`:build-opts :link-libs`:
+
+```turmeric
+:build-opts #map{
+  :link-libs  ["m"]                     ;; -lm
+  :link-flags ["-framework Foundation"] ;; passed through as written
 }
 ```
 

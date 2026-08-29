@@ -54,7 +54,7 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [ascribe-int-to-float-expression-ambiguity](ascribe-int-to-float-expression-ambiguity.md) | medium | `(:: <int expr> :float)` still reinterprets; convert-vs-reinterpret is unresolved for non-literals |
 | [wss-client-cert-verification](wss-client-cert-verification.md) | medium | (spice repo) `wss://` client uses MBEDTLS_SSL_VERIFY_NONE -- no cert verification |
 | [webkit-sw-controlled-reload-fails-wasm-init](webkit-sw-controlled-reload-fails-wasm-init.md) | medium | Try Turmeric shows "Failed to load WASM" on a WebKit *reload*, once the service worker controls the page and the wasm assets come from the Cache API instead of the network. Not the SharedArrayBuffer path (main.js:1178, not :1168). First load is fine, so it hits returning visitors, and the "Please refresh the page" advice cannot work. Root cause not established; unconfirmed on real iOS Safari, which is what decides the severity |
-| [type-fuzz-src-red-on-clang-21](type-fuzz-src-red-on-clang-21.md) | medium | `tur_type_fuzz_src` reports 15/40 BUG on Apple clang 21 and passes in CI on both ubuntu-latest and macos-latest (older clang). All 15 are Result shapes (`res`/`res_box`/`res_bind`). Identical case set on the v0.39.0 compiler, so it predates the SR2a graduation. Trap: a saved case does NOT reproduce when compiled by hand |
+| [stdlib-dir-guard-accepts-mismatched-stdlib](stdlib-dir-guard-accepts-mismatched-stdlib.md) | medium | `resolve_stdlib_root` (`main.c:263`) accepts `$TUR_STDLIB_DIR` on a readable `macros.tur` alone, so a stdlib from a *different release* passes and the current compiler silently builds against it. Surfaces as `no member named 'is_ok' in 'tur_result_box_t'` with nothing naming the variable -- it reads as a Result-lowering bug. This is what `type-fuzz-src-red-on-clang-21` (now archived) actually was; a version manager whose `python3` is a shim can inject the variable into a process whose shell never had it |
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | **`#json-str?<T>` landed 2026-08-21**; `#json-file<T>` still unimplemented (RD2 blocker 2: read-file's `ptr<void>`/NULL, ownership, unreadable-file semantics) |
@@ -1246,14 +1246,15 @@ with messages that point nowhere near the cause. The seventh is a SIGSEGV.
 0. macOS went from 32 to 11-15, and every one still red is red on `main` too --
 pre-existing, not a regression. Its
 [status comment](https://github.com/rjungemann/turmeric-spices/pull/60#issuecomment-)
-sorts them into four classes; **two are blocked on `turmeric`, and are the last
-three rows of this table**:
+sorts them into four classes. Two of them were blocked on `turmeric` and are
+**fixed as of 2026-08-28** -- the compiler side is done and those jobs are worth
+retrying; the remaining open row is the mbedTLS one:
 
 | Class | Spices | Owner |
 | --- | --- | --- |
-| Frameworks not expressible in the manifest | `raygui`, `opengl` | **compiler** -- `cmake-deps-cannot-express-framework` |
+| Frameworks not expressible in the manifest | `raygui`, `opengl` | **fixed** -- `docs/archive/cmake-deps-cannot-express-framework.md` |
 | `ld: library 'mbedtls' not found`, cause not established | `tls`, `http`, `httpd`, `ws-client`, `ws-server`, `tourist-ws` | diagnosability blocked by `spices-ci-fetch-failure-downgraded-to-warning` |
-| `dyld: @rpath/libz.1.dylib` -- static/shared preference | `zlib` | **compiler** -- folded into `cmake-deps-link-name-not-overridable` |
+| `dyld: @rpath/libz.1.dylib` -- static/shared preference | `zlib` | **fixed** -- `docs/archive/cmake-deps-link-name-not-overridable.md` |
 | Genuine platform behavior differences (kqueue vs inotify, etc.) | `tourist`, `watch`, `wav`, `plot`, part of `tourist-session` | spice repo |
 
 The mbedTLS class is six jobs presenting the *identical* misleading error, and
@@ -1282,8 +1283,6 @@ framing would miss cases:
 | [forward-referenced-nil-call-bound-to-auto-type](forward-referenced-nil-call-bound-to-auto-type.md) | medium | a statement-position call to a **forward-referenced** `: nil` function is bound to `__auto_type` -- `variable has incomplete type 'void'`. Not the same defect as the archived `let-binding-void-call-emits-invalid-c` (that was a user `let`; this temp is emitter-synthesized, and TUR-E0023 correctly does not fire) |
 | [control-form-around-if-double-unboxes-carrier-arms](control-form-around-if-double-unboxes-carrier-arms.md) | medium | `let`/`do` wrapping an `if` whose arms are carrier producers bridges carrier->concrete twice. Fourth report in this family; fix direction is the one-predicate change that already fixed the `emit_if` arms, plus a sweep of the remaining `fn_body_tail_emits_byvalue_carrier_abi` callers rather than a fifth round |
 | [emit-value-dispatch-unbounded-recursion](emit-value-dispatch-unbounded-recursion.md) | high | `emit_value_dispatch`/`emit_value`/`emit_builtin` recurse over the expression tree with no depth bound. **The documented bootstrap build (Debug+ASan) SIGSEGVs on 47 levels of nesting**; unsanitized survives ~2000. `tur check` crashes identically (it runs the emitter), so the LSP path goes through it too. Three other passes already carry a depth guard; the emitter is the outlier |
-| [cmake-deps-cannot-express-framework](cmake-deps-cannot-express-framework.md) | high (blocker, macOS) | `-framework Cocoa` cannot be spelled at any layer -- the manifest JSON has no key (`pkg.c:3484`), `emit_link_lines` never emits one, and the sole consumer hardcodes `-I`/`-L`/`-l` (`pkg.c:3535`). Zero occurrences of "framework" under `src/`. `INTERFACE_LINK_LIBRARIES` holds the answer and is never read -- though the sibling property *is* read for include dirs, 20 lines away. Blocks raygui + opengl |
-| [cmake-deps-link-name-not-overridable](cmake-deps-link-name-not-overridable.md) | medium | not a defect: `:cmake-deps` derives the `-l` name from the target basename with no override, so raygui/glfw/glad/libpq/**zlib** each need a hand-written shim. Prefer `$<TARGET_FILE:...>` (link by artifact path) over `$<TARGET_FILE_BASE_NAME:...>` -- only the former fixes zlib, whose dir holds both `libz.a` and `libz.1.dylib` and whose `-lz` picks the wrong one |
 | [spices-ci-fetch-failure-downgraded-to-warning](spices-ci-fetch-failure-downgraded-to-warning.md) | medium | (spice repo) `tur fetch` failure becomes a `::warning::`, so a failed native-dep build surfaces two steps later as `ld: library 'mbedtls' not found` in six jobs at once. **Deliberate and correctly so** -- making it fatal risks Linux, since optional `:spices` routinely fail. The fix is to put the captured output *in* the annotation, and to give `tur fetch` an exit code that separates optional-dep failure from required-dep failure |
 
 ## Windows port

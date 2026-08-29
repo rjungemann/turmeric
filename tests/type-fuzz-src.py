@@ -657,6 +657,26 @@ def run_case(tur, path, src):
     with open(path, "w") as f:
         f.write(src)
     env = dict(os.environ)
+    # Drop any ambient TUR_STDLIB_DIR so the compiler under test resolves the
+    # stdlib that ships beside it (its walk-up probe), not one belonging to
+    # some other turmeric install.
+    #
+    # This is not hypothetical, and it is expensive to diagnose. A version
+    # manager whose `python3` is a shim (mise, asdf) re-exports the tool env
+    # *inside* this process, so the variable can point at an unrelated
+    # installed release even when the invoking shell has no such variable --
+    # which means `unset` in the shell wrapper does not reach it, and a saved
+    # case rerun by hand does not reproduce. The compiler's own guard does not
+    # catch it either: it only checks that macros.tur is readable there, which
+    # a stale-but-intact install passes.
+    #
+    # The symptom is a wall of Result/Option shape failures -- an old stdlib's
+    # `(defstruct Result [A B] (is-ok :bool) ...)` compiled against a current
+    # compiler's box layout gives `no member named 'is_ok' in
+    # 'tur_result_box_t'`, or silently wrong output. It reads as a codegen bug
+    # in the compiler and is not one. See
+    # docs/archive/type-fuzz-src-red-on-clang-21.md.
+    env.pop("TUR_STDLIB_DIR", None)
     env["ASAN_OPTIONS"] = env.get("ASAN_OPTIONS", "") or "detect_leaks=0"
     try:
         chk = subprocess.run([tur, "check", path], capture_output=True,
