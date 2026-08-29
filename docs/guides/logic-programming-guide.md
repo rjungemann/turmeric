@@ -682,6 +682,7 @@ Unlike Prolog's stack-based choice points, Turmeric's cloneable continuations al
 
 ## See Also
 
+- [Backtrackable State Guide](backtrackable-state-guide.md) -- Trailed mutable cells with mark/undo. An indexed trailed substitution beats the persistent `Subst` chain described here by 11-34x on lookup, with no crossover; the catch is that answers must be reified before the search backtracks past them
 - [Effects System Guide](effects-system-guide.md) -- Algebraic effects foundation
 - [Async/Await Guide](async-await-guide.md) -- Single-shot continuations for I/O
 - [Checkpointing with Serializable Continuations](checkpointing-guide.md) -- Persisting computations

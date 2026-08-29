@@ -1,5 +1,7 @@
 #include "serial.h"
 
+#include "trail.h"
+
 #include <assert.h>
 #include <errno.h>
 #include <stddef.h>
@@ -279,6 +281,32 @@ static bool wire_field_payload(WireBuf *wb, const SerialField *fld) {
 uint8_t *serial_cont_to_bytes(const SerialFrame *head, size_t *out_len) {
     WireBuf wb = {0};
     *out_len = 0;
+
+    /* SX1 (solver-extension-plan 3.5): refuse inside a trail scope.
+     *
+     * A serialized continuation captures CONTROL.  The trailed writes made under
+     * an open `bt-scope` are not part of it, and the undo information that would
+     * put them back lives in this process's trail -- which does not travel.  So a
+     * blob taken here would deserialize into a world where the writes either
+     * never happened (fresh process) or are still live with no way to unwind
+     * them (same process, scope since exited).  Both are silent wrong answers.
+     *
+     * Refusing is the SX1 answer, per 3.5: serializing the live trail segment
+     * alongside the continuation is the alternative, and it is declined for the
+     * same reason (b) is -- a snapshot restores symmetrically, which is not what
+     * the state under a search scope wants. */
+    uint32_t lvl = tur_trail_level();
+    if (lvl != 0) {
+        fprintf(stderr,
+                "serial error: cannot serialize a continuation inside a trail "
+                "scope (bt-scope depth %u, %u trailed write%s outstanding)\n"
+                "  the trail's undo information is process-local and does not "
+                "travel with the blob\n"
+                "  serialize outside the enclosing bt-scope, or commit the "
+                "level first with bt-commit-to!\n",
+                lvl, tur_trail_depth(), tur_trail_depth() == 1 ? "" : "s");
+        return NULL;
+    }
 
     /* Count frames. */
     uint32_t n_frames = 0;

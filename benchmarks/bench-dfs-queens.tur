@@ -15,7 +15,7 @@
 ;;
 ;; Output per N: n, list solutions, list ns/run, dfs solutions, dfs ns/run.
 ;;
-;; Run: ./build/tur --enable=backtrackable-state run benchmarks/bench-dfs-queens.tur
+;; Run: ./build/tur run benchmarks/bench-dfs-queens.tur
 
 (load "stdlib/backtrack.tur")
 (load "stdlib/backtrack-dfs.tur")

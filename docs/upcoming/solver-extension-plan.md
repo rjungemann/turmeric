@@ -414,13 +414,80 @@ has one sharp edge and one design decision:
   at a cost proportional to the trail depth -- which is the second axis of the
   benchmark in section 4 and should not be built before that curve exists.
 
-Recommendation: ship (a); measure; only consider (b) if the curve says it is
-affordable and something real wants it.
+**DECIDED 2026-08-29: (a) is permanent. (b) is declined, not deferred.** This
+was the last open question holding `backtrackable-state` at
+`XF_LIFECYCLE_PROTOTYPE`; it is what SX9's graduation clause was waiting on.
+Three things settle it, in increasing order of weight.
 
-- **Serialization.** `serial.c` / the serializable-continuation path must
-  either serialize the live trail segment alongside the continuation or refuse
-  to serialize inside a `bt-scope`. Refusing is the SX1 answer; the diagnostic
-  should say which scope.
+**1. The curve exists now, and (b) is not cheap.** A trail entry is 32 bytes and
+a record-plus-undo cycle costs **5.0 ns** per write (`capture-curve-results.md`,
+the T axis, mean over T >= 8). Snapshotting that same entry costs a 32-byte copy
+-- which the `dk` fit prices at 0.14-0.18 ns per env byte, so **4.6-5.8 ns**
+before anything else -- plus a `clone` hook call (~2 ns, the `closure-call`
+baseline) for every entry whose payload owns something. So a snapshot of depth
+T is at best at parity with simply replaying T writes, and usually worse. The
+asymmetry in *when* it is paid is what decides it: the undo is paid only on the
+branch actually taken, while a snapshot is paid at **every capture**, including
+the captures that are never re-entered. For search, that is the wrong end.
+
+**2. (b) does not give a solver what it needs even if it were free.** This
+section's own opening framing: backtracking in a solver is asymmetric, and a
+snapshot is symmetric. A CDCL backjump discards the trail above the backjump
+level but **keeps the learned clause**; simplex keeps its basis. A snapshot that
+faithfully restores the live trail segment restores the learned clause away
+too -- it reproduces exactly the problem that made "use continuations as the
+theory-seam backtracking mechanism" dissolve into "use backtrackable state" in
+the first place. The operation that *does* serve the asymmetric case is
+`bt-commit-to!`, which is shipped. (b) would be a faithful implementation of the
+wrong shape.
+
+**3. Nothing wants it.** The one candidate genuine multi-shot consumer named
+anywhere in this plan is RT6 hint generation (below), which is unmeasured and
+filed as open question 3 rather than as a phase. Building a mechanism with a
+measurable cost at every capture, for zero present callers and one hypothetical
+one, on the strength of symmetry that the actual consumers do not want, is not
+a trade this plan should make.
+
+**4. Found while writing the fixture: the typed surface already refuses the
+shape.** `Mark`, `BtCell` and `GCell` are all `defopaque` with no `Clone`
+instance, and `cloneable-shift` requires `Clone` on every captured binding --
+so a cloneable (multi-shot) continuation **cannot close over a trail handle at
+all**. It is `TUR-E0014` at compile time, not a runtime hazard. The re-entry
+edge is therefore only reachable by laundering a mark through a plain `:int`
+(or through inline-C), which is what `sx1-trail-reentry-stale-mark` does to
+exercise the backstop. This was not known when 3.5 was written and it inverts
+the emphasis: the static refusal is the primary defense and the generation
+counter is defense in depth. It also means (b) would have had to *add* a `Clone`
+instance for `Mark` before it could do anything -- deliberately widening the
+hole the type checker currently closes. Pinned by
+`errors/sx1-trail-mark-not-cloneable`, precisely so that adding such an
+instance cannot happen silently.
+
+**Revisit trigger, stated so it is falsifiable:** measure RT6 hint generation
+(the SX0 curve x `TUR_REFINE_STATS` probe counts, per open question 3). If it
+both beats the RT7 memo *and* wants state to be multi-shot rather than just
+control, reopen (b) then -- with a caller in hand. Absent that, the checked
+error is the shipped semantics and `bt-undo-to!` returning false on a stale mark
+is a documented part of the contract, not a placeholder.
+
+- **Serialization. LANDED 2026-08-29.** `serial.c` / the serializable-continuation
+  path must either serialize the live trail segment alongside the continuation or
+  refuse to serialize inside a `bt-scope`. Refusing is the SX1 answer; the
+  diagnostic says which scope. Both halves now do: `serial_cont_to_bytes` (the
+  host codec) returns NULL, and the emitted `tur_serial_cont_serialize` aborts,
+  each reporting the trail depth and the count of outstanding trailed writes.
+
+  Two things this turned up. The guard in the emitted prelude is emitted **only
+  when `stdlib/trail.tur` was autoloaded into that compile** (`g_trail_autoloaded`),
+  because that autoload is also what puts trail.tur's `__tur_autolink__` marker in
+  the output and so pulls `src/runtime/trail.c` into the link -- gating on the
+  experiment bit instead would emit a call to `tur_trail_level` that `cc` cannot
+  resolve under `--no-auto-stdlib`. And writing the guard exposed a latent ABI
+  bug: `tur_trail_level` / `tur_trail_depth` return `uint32_t`, while trail.tur
+  declared them `:int` (`int64_t`), so the result's upper half was unspecified and
+  a level could in principle read as 4294967297. Both now go through
+  `tur_trail_level_i64` / `tur_trail_depth_i64`, matching how the mark is already
+  packed across that boundary. Fixture: `sx1-serial-in-trail-scope-refused`.
 
 **One candidate *genuine* multi-shot use: RT6 hint generation.** Today each
 candidate hypothesis re-runs the whole chain from scratch (`run_chain`,
@@ -833,6 +900,33 @@ a nice-to-have; the asymmetry is the reason.
   a way to say "this touches the trail" that is checked, instead of relying on
   a conservative walk to notice. That is worth having, but it does not gate
   SX2's engine work, and this phase should stop listing it as a prerequisite.
+
+  **Revisited 2026-08-29, and the "checked" half does not hold up.** The trail's
+  eight mutators in `stdlib/trail.tur` now carry `#fx{Bt}` -- `bt-set!`,
+  `g-set!`, `bt-mark`, `bt-undo-to!`, `bt-commit-to!`, `untrailed-begin`,
+  `untrailed-end`, `trail-reset!` -- but this is **declared intent, not a
+  checked guarantee**, and the entry above should not be read as promising more:
+
+  - **No compiler change was needed or made.** `#fx{...}` labels are free-form;
+    `#fx{Bt}` parses and type-checks today with no registry row, no elaboration
+    hook, and no new diagnostic. There was never a feature here to build.
+  - **It does not ripple.** Annotating the stdlib mutators required no change to
+    any caller -- not `bt-scope`, not `stdlib/backtrack-dfs.tur`, not the
+    fixtures. The row is carried, not propagated as an obligation.
+  - **No verdict anywhere moves.** The intended demonstration was a body the
+    purity walk *can* prove pure, vetoed only by its declared row. It could not
+    be produced: on every shape tried, `#fx{Bt}`, `#fx{IO}` and even
+    `#fx{Unsafe}` all left the solver's answer unchanged. So the
+    `row_veto` line in `rt_classify_binding_top` is real code that reads
+    `effect_row`, but nothing in reach exercises it, and **no fixture can
+    currently pin the row doing work.** One was not written rather than writing
+    one that asserts something else and reads as if it pinned this.
+
+  Net: the annotations are accurate and free, and they mean a later widening of
+  the purity walk would find a declared row already in place rather than
+  silently promoting `bt-set!` to pure. That is the whole of the value. Anyone
+  picking this up should treat "make the row checked" as the actual open work --
+  it is unstarted, and the annotations do not represent progress on it.
 
   The one residual worth knowing: the `#reads`-frame grant
   (`enc_reads_args_frozen`) *can* hand congruence to an otherwise-impure
@@ -1387,10 +1481,32 @@ one dishonest failure mode a query surface can have.
   [logic-programming-guide.md](../guides/logic-programming-guide.md). Document
   the `tur smt` subcommand and the JSON obligation schema (stamping it
   `"schema": 1`) in a `docs/guides/solver-query-guide.md`.
-- Graduate `backtrackable-state` (delete the row, behavior unconditional) once
-  3.5's re-entry question is settled and SX2 has a benchmark answer. Graduate
-  `solver-lazy-smt` on the SX6a corpus criterion. Move this plan to
-  `docs/archive/` when the last phase lands, per the archiving rule.
+- ~~Graduate `backtrackable-state` (delete the row, behavior unconditional) once
+  3.5's re-entry question is settled and SX2 has a benchmark answer.~~
+  **DONE 2026-08-29.** Both conditions were met: SX2's benchmark answered
+  decisively (no crossover, 11-34x on `Subst` lookup) and 3.5's re-entry
+  question is DECIDED above. The row is gone from `EXPERIMENTS[]`,
+  `g_opt_backtrackable_state` is retired, and `stdlib/trail.tur` is an ordinary
+  member of `autoload_files_`.
+
+  Two things the graduation turned up that were not on this list. Making the
+  autoload unconditional put `trail.tur` in front of the **turi native-parity
+  ratchet**, which requires every compiled-path auto-load to be in the
+  interpreter prelude or carry a written rationale. The trail had no turi
+  natives at all, so it was carved out and the gap filed -- then **closed the
+  same day**: `wk_register_trail_natives` shims all 18 bindings as direct calls
+  into the already-linked `src/runtime/trail.c`, so the interpreter and the
+  compiled path share one trail rather than two that can drift. Five fixtures
+  dropped `requires.compiled` and now run under both harnesses with
+  byte-identical output, including the `bt-depth` counts that pin the stamp
+  discipline. Record:
+  [trail-tur-has-no-turi-natives](https://github.com/rjungemann/turmeric/blob/main/docs/archive/trail-tur-has-no-turi-natives.md).
+  And prepending trail.tur to every compile moved **148 codegen snapshots**,
+  regenerated in the same change per the fixture rule.
+
+  Still open in this phase: graduate `solver-lazy-smt` on the SX6a corpus
+  criterion. Move this plan to `docs/archive/` when the last phase lands, per
+  the archiving rule.
 
 ### Recommended order
 
@@ -1475,11 +1591,14 @@ surface slotted where it is cheapest:
 
 ## 8. Open questions to take back to the reviewer
 
-1. Multi-shot re-entry across a trail scope (3.5): checked error, or
-   state-snapshotting `call/cc*`? The review's own framing (multi-shot is the
-   wrong strength for search; one-shot is the relevant path) argues for the
-   checked error plus a one-shot fast path; the SX0 curve settles the cost
-   half, the semantics half is a decision.
+1. ~~Multi-shot re-entry across a trail scope (3.5): checked error, or
+   state-snapshotting `call/cc*`?~~ **ANSWERED 2026-08-29: the checked error,
+   permanently.** The SX0 curve settled the cost half -- a snapshot is at best
+   at parity with replaying the writes, and is paid at every capture rather
+   than only on the branch taken -- and the semantics half went the same way:
+   a symmetric snapshot restores the learned clause away, which is the shape a
+   solver specifically does not want. Declined rather than deferred, with a
+   falsifiable revisit trigger (measure RT6, question 3). Full record in 3.5.
 2. Is a *write-once* cell flavor (`LVar`) worth its own type, or should
    everything be a value cell with the stamp doing the optimization? The WAM
    says yes; a smaller API says no.

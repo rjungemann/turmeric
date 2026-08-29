@@ -174,6 +174,21 @@ int64_t  tur_trail_mark_packed(void);
 bool     tur_trail_undo_to_packed(int64_t packed);
 bool     tur_trail_commit_to_packed(int64_t packed);
 
+/* Width shims for `tur_trail_level` / `tur_trail_depth`.
+ *
+ * Those return uint32_t, which is the right C spelling for a level and a depth.
+ * A Turmeric `:int` extern-c declares them as int64_t, and calling a uint32_t
+ * function through an int64_t prototype is a real ABI mismatch, not a pedantic
+ * one: the callee writes a 32-bit result register and the upper half is
+ * unspecified, so the caller can read a level of 4294967297.  It has not bitten
+ * yet only because the compilers in use happen to zero-extend.
+ *
+ * So the int64 boundary gets int64 functions, exactly as the mark does above.
+ * stdlib/trail.tur and the emitted serial guard both go through these; nothing
+ * declares the uint32_t pair from Turmeric or from emitted C. */
+int64_t  tur_trail_level_i64(void);
+int64_t  tur_trail_depth_i64(void);
+
 /* ------------------------------------------------------------------------- *
  * A trailed substitution (SX2)
  *

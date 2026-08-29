@@ -149,7 +149,42 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 " * A call frame is [SK_TAG_CALL][name_len][name][env_kind][env]: an int env is an\n"
 " * inline int64; a cstr env is [int64 len][bytes] -- so a non-int (cstr) env is\n"
 " * marshaled by value, not as a code/heap address. All scalars are memcpy'd. */\n"
-"static int64_t tur_serial_cont_serialize(int64_t k) {\n"
+"static int64_t tur_serial_cont_serialize(int64_t k) {\n");
+    /* SX1 (solver-extension-plan 3.5): refuse to serialize inside a trail
+     * scope.  Emitted ONLY when stdlib/trail.tur was autoloaded into this
+     * compile -- that is also what puts trail.tur's `__tur_autolink__` marker in
+     * the output, which is what pulls src/runtime/trail.c into the link.  Gating
+     * on anything looser (the experiment bit, or nothing at all) emits a call to
+     * `tur_trail_level` that cc cannot resolve. */
+    if (g_trail_autoloaded) {
+        buf_puts(out,
+"    /* A serialized continuation carries CONTROL.  Trailed writes made under an\n"
+"     * open bt-scope are not in it, and the undo information that would put them\n"
+"     * back is process-local -- so a blob taken here deserializes into a world\n"
+"     * where those writes either never happened or can never be unwound.  Both\n"
+"     * are silent wrong answers, so this refuses instead.  See\n"
+"     * docs/upcoming/solver-extension-plan.md 3.5. */\n"
+"    /* Declared here because this prelude is emitted well ahead of trail.tur's\n"
+"     * own extern-c block.  Same return type, so the two declarations are\n"
+"     * compatible and whichever lands first wins. */\n"
+"    extern int64_t tur_trail_level_i64(void);\n"
+"    extern int64_t tur_trail_depth_i64(void);\n"
+"    {\n"
+"        int64_t __tur_lvl = tur_trail_level_i64();\n"
+"        if (__tur_lvl != 0) {\n"
+"            fprintf(stderr,\n"
+"                    \"tur: cannot serialize a continuation inside a trail scope \"\n"
+"                    \"(bt-scope depth %lld, %lld trailed write(s) outstanding)\\n\"\n"
+"                    \"  the trail's undo information is process-local and does \"\n"
+"                    \"not travel with the blob\\n\"\n"
+"                    \"  serialize outside the enclosing bt-scope, or commit the \"\n"
+"                    \"level first with bt-commit-to!\\n\",\n"
+"                    (long long)__tur_lvl, (long long)tur_trail_depth_i64());\n"
+"            abort();\n"
+"        }\n"
+"    }\n");
+    }
+    buf_puts(out,
 "    DK *p = (DK *)(intptr_t)k;\n"
 "    int64_t n = 0, sz = 8;  /* 8 bytes for the frame count */\n"
 "    for (DK *q = p; q && q->kind == DKK_FRAME; q = q->next) {\n"

@@ -31,28 +31,12 @@
 
 /* The registry. */
 static const ExperimentDescriptor EXPERIMENTS[] = {
-    /* SX1 (solver-extension-plan): backtrackable state as a runtime primitive
-     * -- a trail with per-cell, per-write and per-level opt-out.
-     *
-     * Prototype rather than beta because the surface has a genuinely open
-     * question, not because it is unfinished: plan 3.5 leaves multi-shot
-     * re-entry across a trail scope undecided.  A captured continuation
-     * restores CONTROL, not state, so re-entering one resumes a computation
-     * whose trail levels are already gone.  This ships the checked-error
-     * answer (generational marks); whether `call/cc*` should instead snapshot
-     * the live trail segment is a measured decision nobody has made yet.
-     *
-     * `introduced` is 0.39.0 rather than the plan's 0.36.0: the plan was
-     * written when 0.36.0 was current and this landed after 0.38.0.  The
-     * expiry is advisory and never blocks a release -- on its cut, graduate,
-     * shelve, or bump with a one-line rationale. */
-    { "backtrackable-state",
-      "trail-backed mutable cells with mark/undo (stdlib/trail.tur)",
-      "docs/upcoming/solver-extension-plan.md",
-      "0.39.0",                  /* introduced */
-      "0.42.0",                  /* expires_at (soft deadline) */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_backtrackable_state },
+    /* `backtrackable-state` GRADUATED 2026-08-29 -- stdlib/trail.tur is
+     * autoloaded unconditionally and the row is gone (see stdlib_autoload.c).
+     * It was held at prototype by one open question, plan 3.5's multi-shot
+     * re-entry, which is now DECIDED: the checked error is permanent and
+     * snapshotting the live trail segment is declined.  Do not re-add a gate
+     * for it. */
     /* SR3 slice B (sum-representation-plan): an `(Option P)` over a non-nullable
      * pointer payload is carried AS that pointer -- 16 bytes to 8, `(none)` as
      * NULL, no tag word.  Unshelved 2026-08-28 once `defopaque` over a pointer
