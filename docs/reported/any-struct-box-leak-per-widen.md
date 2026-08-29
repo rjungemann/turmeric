@@ -18,7 +18,7 @@ widens). What remains is every widen that is *not* such an argument:
 | return position (`: any` result) | yes | necessarily -- a caller-frame temp would dangle the moment the frame returns |
 | callee whose result type can carry the payload out | yes | it may keep it |
 | callee with an inline-C body | yes | C can stash the pointer where no AST walk sees it |
-| callee that can perform an effect | yes | it may suspend, and resumption must not reach into a frame the trampoline has left. Defensive today: `perform` inside a function with an `any` parameter has no CPS lowering at all, so the shape does not currently compile |
+| callee that can perform an effect | yes | it may suspend, and resumption must not reach into a frame the trampoline has left. Exercised end-to-end since [perform-in-fn-with-any-param-has-no-cps-lowering](../archive/perform-in-fn-with-any-param-has-no-cps-lowering.md) landed -- the shape compiles now, and `any-widen-retaining-callee` asserts the box stays |
 | indirect call | yes | no body to inspect |
 
 `tests/fixtures/any-widen-retaining-callee` pins the declining shapes -- those

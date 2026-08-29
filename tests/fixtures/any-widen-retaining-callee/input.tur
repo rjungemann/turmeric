@@ -13,6 +13,7 @@
 ;; callee that keeps it.
 
 (defstruct Pt [x : int y : int])
+(defeffect Ask [] :int)
 
 ;; DECLINES: the result type is `any`, so the payload can leave through it.
 (defn keep-it [v : any] : any v)
@@ -21,6 +22,15 @@
 (defn c-body [v : any] : int
   ```c
   (void)v; return 7; ```)
+
+;; DECLINES: a callee that can perform may SUSPEND, and its resumption must not
+;; reach into a caller frame the trampoline has already left.  This case used to
+;; be unreachable -- a `perform` in a function with an `any` parameter had no CPS
+;; lowering at all, so the shape did not compile (that was
+;; docs/archive/perform-in-fn-with-any-param-has-no-cps-lowering.md).  It does
+;; now, which is what makes the gate testable rather than merely defensive.
+(defn effectful [v : any] : int
+  (+ (perform (Ask)) (if (is? v Pt) 1 0)))
 
 ;; ACCEPTS: reads only, int result.  Present so the fixture would notice if the
 ;; whole optimization silently stopped firing rather than just declining here.
@@ -35,4 +45,7 @@
     (let [p (cast kept Pt)]
       (println (+ (.x p) (.y p)))))                       ;; 7
   (println (c-body (make-struct Pt 7 8)))                 ;; 7
+  ;; The suspended callee must still see its payload when it resumes.
+  (println (handle (effectful (make-struct Pt 1 2))
+                   (Ask [] k) (resume k 5)))              ;; 5 + 1 = 6
   0)

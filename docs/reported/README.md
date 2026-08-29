@@ -59,7 +59,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | **`#json-str?<T>` landed 2026-08-21**; `#json-file<T>` still unimplemented (RD2 blocker 2: read-file's `ptr<void>`/NULL, ownership, unreadable-file semantics) |
-| [perform-in-fn-with-any-param-has-no-cps-lowering](perform-in-fn-with-any-param-has-no-cps-lowering.md) | low | a function with an `any` parameter leaves the CPS backend's supported subset, so `perform` in it has no lowering -- and the diagnostic prescribes hoisting into a helper when the function already *is* one |
 | [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
 
 `spices-carry-pre-sum-option-result-layout` was resolved 2026-08-27 in

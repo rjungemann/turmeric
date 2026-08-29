@@ -537,6 +537,12 @@ static bool operand_uses_control(const Expr *e) {
         case EX_RC_PTR:   return operand_uses_control(e->as.rc_ptr_.expr);
         case EX_REINTERPRET:
             return operand_uses_control(e->as.reinterpret_.expr);
+        /* The `any` widen / readers carry no control op of their own; only their
+         * operand can hide one. */
+        case EX_UNION_INJECT: return operand_uses_control(e->as.union_inject_.value);
+        case EX_ANY_TYPE_OF:  return operand_uses_control(e->as.any_type_of_.value);
+        case EX_ANY_IS:       return operand_uses_control(e->as.any_is_.value);
+        case EX_ANY_CAST:     return operand_uses_control(e->as.any_cast_.value);
         /* Nested fn boundaries: a control op inside is emitted elsewhere. */
         case EX_FN_DEF:
         case EX_FN:
@@ -576,6 +582,39 @@ static bool is_delegatable_struct(const Expr *e) {
             return true;
         case EX_DEFAULT_OF:
             return true;
+        /* perform-in-fn-with-any-param-has-no-cps-lowering: the `any` widen and
+         * the three `any` readers are value ops of exactly this shape -- one
+         * operand, no control operator, a result the direct emitter already
+         * knows how to spell (`TUR_TAG(...)`, a tag compare, a deref).  Left
+         * out they translated to CT_UNSUPPORTED, which evicted the enclosing
+         * function; a `handle` in it then had no CPS lowering, and its
+         * `perform` reached the direct emitter, which has none either.  That is
+         * why `(with-any 3)` in main -- a widen, nothing more -- took the whole
+         * program off the DK backend.
+         *
+         * These take the WIDER operand rule is_delegatable_owning uses -- atomic
+         * OR provably control-free -- rather than the atomic-only rule the
+         * struct ops above kept.  Atomic-only is not enough for the shape that
+         * motivates this: `(f (make-struct Pt 1 2))` widens a CONSTRUCTOR CALL
+         * to `any`, so the operand is never atomic and the caller evicted even
+         * after the widen itself was admitted.  Control-freedom is the property
+         * that actually matters for handing the whole subtree to the direct
+         * emitter, and it is the same soundness posture the owning ops rely on.
+         */
+        case EX_UNION_INJECT:
+            return is_atomic(e->as.union_inject_.value)
+                || !operand_uses_control(e->as.union_inject_.value);
+        case EX_ANY_TYPE_OF:
+            return is_atomic(e->as.any_type_of_.value)
+                || !operand_uses_control(e->as.any_type_of_.value);
+        case EX_ANY_IS:
+            return is_atomic(e->as.any_is_.value)
+                || !operand_uses_control(e->as.any_is_.value);
+        case EX_ANY_CAST:
+            /* A checked downcast can panic, which is a plain direct-path abort,
+             * not a control operator the DK machine has to thread. */
+            return is_atomic(e->as.any_cast_.value)
+                || !operand_uses_control(e->as.any_cast_.value);
         default:
             return false;
     }

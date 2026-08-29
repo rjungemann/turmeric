@@ -404,6 +404,13 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     ls[lsp++] = cur->as.set_field_.value;
                     ls[lsp++] = cur->as.set_field_.receiver;
                     break;
+                /* Mirror the main traversal's `any` widen / reader arms, so a
+                 * local bound inside one of their operands is registered as
+                 * locally defined rather than reported free. */
+                case EX_UNION_INJECT: ls[lsp++] = cur->as.union_inject_.value;  break;
+                case EX_ANY_TYPE_OF:  ls[lsp++] = cur->as.any_type_of_.value;   break;
+                case EX_ANY_IS:       ls[lsp++] = cur->as.any_is_.value;        break;
+                case EX_ANY_CAST:     ls[lsp++] = cur->as.any_cast_.value;      break;
                 case EX_MAKE_STRUCT:
                     for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--)
                         ls[lsp++] = cur->as.make_struct_.field_values[i-1];
@@ -878,6 +885,25 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
             case EX_SET_FIELD:
                 stack[sp++] = cur->as.set_field_.receiver;
                 stack[sp++] = cur->as.set_field_.value;
+                break;
+            /* perform-in-fn-with-any-param-has-no-cps-lowering: the `any` widen
+             * and its three readers, for the same reason the catch forms below
+             * were added -- an unwalked node kind falls to `default:` and its
+             * operand's free variables are silently lost.  Here that surfaced as
+             * `'v' undeclared` in a lifted CPS continuation helper: `(is? v Pt)`
+             * after a `perform` is delegated as a CT_LETRAW, whose capture set is
+             * exactly this walk's answer, so a missed `v` never rode the env. */
+            case EX_UNION_INJECT:
+                stack[sp++] = cur->as.union_inject_.value;
+                break;
+            case EX_ANY_TYPE_OF:
+                stack[sp++] = cur->as.any_type_of_.value;
+                break;
+            case EX_ANY_IS:
+                stack[sp++] = cur->as.any_is_.value;
+                break;
+            case EX_ANY_CAST:
+                stack[sp++] = cur->as.any_cast_.value;
                 break;
             /* Phase 19: Algebraic effects */
             case EX_PERFORM:
