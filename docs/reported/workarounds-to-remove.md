@@ -78,6 +78,38 @@ pinning the spelling users actually write, and going red if the discard ever
 regresses. Proof ran as specified: the discarded-form write happens (the
 fixture prints 55, not 0), and `poly-statement-position-effect` is green.
 
+## 5. `ws-server` casts its hub mutex through `:int` -- UNBLOCKED 2026-08-29
+
+**Where:** `turmeric-spices`, not this tree -- `spices/ws-server`
+(`broadcast_test.tur` and `fixtures/broadcast/server.tur`):
+
+```turmeric
+(def hub-mutex (:: (mutex-new) :int))
+(defn hub-lock!   [] : nil (mutex-lock   (:: hub-mutex Mutex)))
+(defn hub-unlock! [] : nil (mutex-unlock (:: hub-mutex Mutex)))
+```
+
+**Why:** `(def hub-mutex (mutex-new))` emitted no global at all while the use
+sites still referenced it -- `'hub_hymutex_1866' undeclared`. Holding the
+carrier and casting back at each borrow sidestepped it.
+
+**What it costs:** every borrow is an unchecked `:int`-to-`Mutex` cast, so the
+type checker stops helping at exactly the point where a mutex most needs it.
+
+**Blocker:** [module-level-def-with-linear-init-emits-no-global](../archive/module-level-def-with-linear-init-emits-no-global.md)
+-- **RESOLVED 2026-08-29**. The cause was not linearity (that framing was a red
+herring; a non-linear `defopaque` global failed the same way) but
+`def_is_opaque_type_decl` matching any `def` whose value merely had an opaque
+type.
+
+**When it lands:** it has. Restore the direct spelling -- `(def hub-mutex
+(mutex-new))`, and `(mutex-lock hub-mutex)` at each borrow -- and delete the six
+`::` casts.
+
+**Proof it is no longer needed:** `tests/fixtures/module-level-def-of-opaque-value`
+in this tree pins both flavours; against a `tur` carrying that fix, the direct
+spelling builds and runs.
+
 ## Not on this list, and why
 
 **`disjoined-dfs` is not a workaround.** It is a second search strategy with

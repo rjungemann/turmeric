@@ -1275,6 +1275,15 @@ framing would miss cases:
   forward-declared as the `TY_INT` placeholder. Worth reading before trusting
   any other report's "Fix direction" section -- both of this one's pointed at
   the wrong file.
+- `module-level-def-with-linear-init-emits-no-global` **RESOLVED 2026-08-29** --
+  [docs/archive/module-level-def-with-linear-init-emits-no-global.md](../archive/module-level-def-with-linear-init-emits-no-global.md).
+  Its title is a misnomer and its central question does not arise: linearity is
+  never consulted on the failing path. The control varied two axes at once
+  (`:linear` opaque vs `vec-new`) and credited the difference to linearity; a
+  plain non-linear `defopaque` global fails identically. Root cause was
+  `def_is_opaque_type_decl` matching any `def` whose value merely HAS an opaque
+  type, rather than the type declaration itself. A one-conjunct fix
+  (`init == NULL`). Unblocks row 5 of `workarounds-to-remove`.
 - `emit-value-dispatch-unbounded-recursion` **RESOLVED 2026-08-29** as
   TUR-E0712 --
   [docs/archive/emit-value-dispatch-unbounded-recursion.md](../archive/emit-value-dispatch-unbounded-recursion.md).
@@ -1310,7 +1319,6 @@ framing would miss cases:
 | Report | Severity | One line |
 | --- | --- | --- |
 | [nested-defn-accepted-outer-returns-zero](nested-defn-accepted-outer-returns-zero.md) | **critical** | a `defn` nested in a `defn` (the shape a missing close paren produces) is accepted silently, and the outer function emits `return 0;` discarding the value it just computed. Runs, exits 0, wrong answer. Cost `spices/watch` three tree-mode assertions failing for months with nothing to point at |
-| [module-level-def-with-linear-init-emits-no-global](module-level-def-with-linear-init-emits-no-global.md) | high | a module-level `def` whose init has a `:linear` type passes `tur check`, emits **no global**, and still emits the references -- `'g_1377' undeclared`. Non-linear control emits it fine. Blocks the process-lifetime-mutex shape (`ws-server`'s broadcast hub); workaround casts to `:int` and back, losing the type checker exactly where a mutex needs it |
 | [control-form-around-if-double-unboxes-carrier-arms](control-form-around-if-double-unboxes-carrier-arms.md) | medium | `let`/`do` wrapping an `if` whose arms are carrier producers bridges carrier->concrete twice. Fourth report in this family; fix direction is the one-predicate change that already fixed the `emit_if` arms, plus a sweep of the remaining `fn_body_tail_emits_byvalue_carrier_abi` callers rather than a fifth round |
 | [cmake-deps-cannot-express-framework](cmake-deps-cannot-express-framework.md) | high (blocker, macOS) | `-framework Cocoa` cannot be spelled at any layer -- the manifest JSON has no key (`pkg.c:3484`), `emit_link_lines` never emits one, and the sole consumer hardcodes `-I`/`-L`/`-l` (`pkg.c:3535`). Zero occurrences of "framework" under `src/`. `INTERFACE_LINK_LIBRARIES` holds the answer and is never read -- though the sibling property *is* read for include dirs, 20 lines away. Blocks raygui + opengl |
 | [cmake-deps-link-name-not-overridable](cmake-deps-link-name-not-overridable.md) | medium | not a defect: `:cmake-deps` derives the `-l` name from the target basename with no override, so raygui/glfw/glad/libpq/**zlib** each need a hand-written shim. Prefer `$<TARGET_FILE:...>` (link by artifact path) over `$<TARGET_FILE_BASE_NAME:...>` -- only the former fixes zlib, whose dir holds both `libz.a` and `libz.1.dylib` and whose `-lz` picks the wrong one |

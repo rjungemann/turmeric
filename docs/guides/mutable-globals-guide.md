@@ -33,6 +33,32 @@ Initialization runs in source order before `main`, so a `def` may read an
 earlier global. A forward reference is `TUR-E0003`, not a zero-initialized
 surprise.
 
+### Any type may be bound at module level
+
+There is no restriction on the *type* of a global. In particular, a value whose
+type comes from `defopaque` -- including one declared `:linear` -- is an
+ordinary global:
+
+```turmeric
+(def hub-mutex (mutex-new))     ; Mutex is (defopaque Mutex :ptr<void> :linear)
+
+(defn broadcast [msg : cstr] : nil
+  (mutex-lock hub-mutex)
+  ...
+  (mutex-unlock hub-mutex))
+```
+
+A process-lifetime mutex, connection pool, or shared registry behind a
+module-level `def` is the intended spelling. Linearity is satisfied by the
+initializer: the value is produced once, at static-init, and lives for the
+process -- one production, one lifetime.
+
+You may see older code holding the carrier and casting back at each borrow
+(`(def hub-mutex (:: (mutex-new) :int))`, then `(:: hub-mutex Mutex)`). That was
+a workaround for a codegen bug that emitted no storage for such a global while
+still emitting references to it; it was fixed 2026-08-29. It costs an unchecked
+cast at every use, so replace it with the direct spelling.
+
 ## Reach for something else first
 
 A mutable global is a name every function in the program can read and, inside
