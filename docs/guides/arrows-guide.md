@@ -385,14 +385,23 @@ helpers in `stdlib/arrow.tur` redeclare `P`:
 typedef struct { int64_t filled; int64_t value; } LC;
 ```
 
-A looped arrow declared directly over `(Tuple2 int int)` -- rather than over
-the erased `:int` carrier -- does **not** work: the struct-by-value return ABI
-does not match the `int64` thunk ABI the arrow layer dispatches through. See
-`docs/reported/arrow-struct-typed-arrow-abi.md`.
+Declaring the arrow directly over `(Tuple2 int int)` works too, and computes
+the same values -- the compiler bridges the by-value aggregate to the carrier
+at the fat-box boundary:
+
+```turmeric
+(defn prev-step [t : (Tuple2 int int)] : (Tuple2 int int)
+  (tuple2 (loop-cell-force (loop-cell-of (tuple2-2nd t)))
+          (tuple2-1st t)))
+```
+
+(That crossing used to return garbage and then segfault; see
+`docs/archive/arrow-struct-typed-arrow-abi.md`. `tests/fixtures/arrow-struct-typed-arrow`
+now asserts the two spellings agree under every member of the family.)
 
 Fixtures: `arrow-loop-lazy-feedback`, `arrow-loop-fix`, `arrow-loop-delay`,
-and `arrow-instance-loop-nonrecursive` (the degenerate case, where the arrow
-ignores `d` entirely).
+`arrow-struct-typed-arrow`, and `arrow-instance-loop-nonrecursive` (the
+degenerate case, where the arrow ignores `d` entirely).
 
 ### Both surfaces agree
 

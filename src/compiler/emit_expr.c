@@ -11253,6 +11253,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             char *typed_shim = ensure_typed_fatshim(ctx, fnt_result, fnt_params, arity);
 
+            /* arrow-struct-typed-arrow-abi: when the typed shim is declined but
+             * a parameter is a wide by-value aggregate, the generic
+             * `__tur_fatshim<arity>` is not a safe fallback -- it hands the
+             * callee an int64 heap-box pointer where the callee reads a struct
+             * out of two registers.  ensure_carrier_fatshim is the bridge: slot
+             * 0 keeps the erased `int64_t (*)(void *, int64_t...)` spelling the
+             * call site casts to, with each b4box parameter unboxed and a wide
+             * result boxed back into the carrier.  It declines (leaving the
+             * generic shim in place, as before) for every signature that is not
+             * in that broken set. */
+            if (!typed_shim) {
+                typed_shim = ensure_carrier_fatshim(ctx, fnt_result, fnt_params,
+                                                    arity);
+                if (g_emit_abi_trace && typed_shim) {
+                    fprintf(stderr,
+                            "repr-trace %u:%u bridge bare-to-fat carrier-shim %s\n",
+                            e->span.line, e->span.col_start, typed_shim);
+                }
+            }
+
             /* repr-trace: a bare fn crossing into a fat sink -- the shim
              * bridge is where the representation changes hands. */
             if (g_emit_abi_trace) {

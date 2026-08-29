@@ -1059,6 +1059,140 @@ char *ensure_typed_fatshim(EmitCtx *ctx,
     return name;
 }
 
+/* arrow-struct-typed-arrow-abi: the CARRIER fatshim -- slot 0 spelled exactly
+ * as an erased consumer casts it (`int64_t (*)(void *, int64_t...)`), with each
+ * wide by-value parameter unboxed and a wide by-value result boxed.
+ *
+ * `use_typed_thunk_abi` ANDs the result and the parameters, so a result that
+ * thunk_type_has_concrete_c_abi declines -- an app monomorph at or below the
+ * 16-byte sret threshold, deliberately kept on the generic forwarding shim so
+ * the erased `int64_t` cast in slot 0 stays honest -- also took down the
+ * PARAMETER bridge that same signature needed.  Those are not one decision.  A
+ * wide by-value aggregate crosses a fat boundary as an int64 heap-box POINTER
+ * (thunk_param_slot_c_name); the generic shim's `int64_t (*)(int64_t)` cast
+ * instead handed the pointer straight to a callee that reads a by-value struct
+ * out of two registers, and read its aggregate return as the first eightbyte.
+ * Both halves silently wrong, because slot 0's own spelling never lied.
+ *
+ * This shim is the missing bridge, and it is deliberately NOT
+ * ensure_typed_fatshim with an int64 result: that would still cast the callee
+ * to int64-returning and hand back `e1`, where an erased consumer of a wide
+ * aggregate wants the carrier -- a `T *`, the same convention the parameter
+ * side and ensure_catch_box_shim already use.
+ *
+ * Applicability is kept to exactly the broken set: at least one parameter must
+ * be a b4box slot.  A signature whose parameters are all fine and whose result
+ * is merely a <= 16 byte monomorph keeps the generic forwarding shim it has
+ * today, where the register-returned aggregate passes through the tail-call to
+ * a typed consumer untouched.  Results other than a b4box aggregate or a plain
+ * int64 carrier decline too -- a `double` result would need a conversion here,
+ * not a reinterpret, and no caller has asked for one. */
+char *ensure_carrier_fatshim(EmitCtx *ctx,
+                             Type result_type, Type *param_types, uint8_t n_params) {
+    if (!ctx) return NULL;
+
+    bool any_b4box_param = false;
+    for (uint32_t i = 0; i < n_params; i++) {
+        if (!thunk_type_has_concrete_c_abi(param_types[i], /*result_pos=*/false))
+            return NULL;
+        if (type_is_b4box_closure_slot(param_types[i])) any_b4box_param = true;
+    }
+    if (!any_b4box_param) return NULL;
+
+    bool box_result = type_is_b4box_closure_slot(result_type);
+    if (!box_result &&
+        (!thunk_type_has_concrete_c_abi(result_type, /*result_pos=*/false) ||
+         strcmp(type_c_name(result_type), "int64_t") != 0))
+        return NULL;
+
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_fatshim_carrier_");
+    append_sanitized_c_token(&nb, type_c_name(result_type));
+    for (uint32_t i = 0; i < n_params; i++) {
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, type_c_name(param_types[i]));
+    }
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    const char *rc = type_c_name(result_type);
+
+    buf_printf(target, "static int64_t %s(void *__e", name);
+    for (uint32_t i = 0; i < n_params; i++) {
+        buf_printf(target, ", %s a%u", thunk_param_slot_c_name(param_types[i]),
+                   (unsigned)i);
+    }
+    buf_puts(target, ") {\n    ");
+    if (box_result) buf_printf(target, "%s __r = ", rc);
+    else            buf_puts(target, "return ");
+
+    /* The bare fn behind the shim keeps its own ABI, exactly as
+     * ensure_typed_fatshim spells it: `const T *` for a pbp aggregate, the
+     * aggregate by value below the pbp threshold. */
+    buf_printf(target, "((%s (*)(", rc);
+    if (n_params == 0) {
+        buf_puts(target, "void");
+    } else {
+        for (uint32_t i = 0; i < n_params; i++) {
+            if (i) buf_puts(target, ", ");
+            Type rp = param_types[i];
+            bool rp_pbp = (rp.kind == TY_ADT && rp.as.adt_.def)
+                              ? adt_byval_pass_by_ptr(rp.as.adt_.def)
+                              : adt_app_byval_pass_by_ptr(rp);
+            if (type_is_b4box_closure_slot(rp) && rp_pbp)
+                buf_printf(target, "const %s *", type_c_name(rp));
+            else
+                buf_puts(target, type_c_name(rp));
+        }
+    }
+    buf_puts(target, "))(intptr_t)((int64_t *)__e)[1])(");
+    for (uint32_t i = 0; i < n_params; i++) {
+        if (i) buf_puts(target, ", ");
+        Type rp = param_types[i];
+        bool rp_pbp = (rp.kind == TY_ADT && rp.as.adt_.def)
+                          ? adt_byval_pass_by_ptr(rp.as.adt_.def)
+                          : adt_app_byval_pass_by_ptr(rp);
+        if (type_is_b4box_closure_slot(rp) && rp_pbp)
+            buf_printf(target, "(const %s *)(intptr_t)a%u",
+                       type_c_name(rp), (unsigned)i);
+        else if (type_is_b4box_closure_slot(rp))
+            buf_printf(target, "*(%s *)(intptr_t)a%u",
+                       type_c_name(rp), (unsigned)i);
+        else
+            buf_printf(target, "a%u", (unsigned)i);
+    }
+    buf_puts(target, ");\n");
+    if (box_result) {
+        /* Hand the erased consumer the carrier it expects: a heap copy, so the
+         * int64 it reads really is a `T *`.  Same shape as ensure_catch_box_shim
+         * -- the box is owned by the consumer's carrier discipline, not by the
+         * shim. */
+        buf_printf(target,
+                   "    %s *__b = (%s *)malloc(sizeof *__b);\n"
+                   "    *__b = __r;\n"
+                   "    return (int64_t)(intptr_t)__b;\n",
+                   rc, rc);
+    }
+    buf_puts(target, "}\n");
+    return name;
+}
+
 /* E2 (fat-closure fn-value threading): emit a `<wrapper>__cps` twin for a
  * poly-wrap thunk `<wrapper>` (e.g. `__poly_1285`) that boxes an EFFECTFUL named
  * fn `inner_fn` (e.g. `cb`) into a `tur_poly_fn_t`.  The twin has the fat

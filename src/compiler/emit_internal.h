@@ -980,6 +980,13 @@ const char *ensure_catch_bits_shim(EmitCtx *ctx, Type result_type);
 
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params);
+/* arrow-struct-typed-arrow-abi: the erased-carrier fatshim used when the typed
+ * shim is declined but a parameter is a wide by-value aggregate -- slot 0 keeps
+ * the `int64_t (*)(void *, int64_t...)` spelling the erased call site casts to,
+ * unboxing each b4box parameter and boxing a wide result.  NULL when the
+ * signature is not in that set (the generic `__tur_fatshim<arity>` stands). */
+char *ensure_carrier_fatshim(EmitCtx *ctx,
+                             Type result_type, Type *param_types, uint8_t n_params);
 /* constrained-byval dispatch: ensure a carrier-adapter witness dict exists for a
  * by-value struct payload boxed into a constrained existential, returning the
  * dict's base name (caller references `&<name>_singleton`).  Each method slot is
