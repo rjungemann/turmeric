@@ -1,5 +1,41 @@
 # `stdlib/trail.tur` has no turi natives, so the trail is unusable under `--interpret`
 
+> **RESOLVED 2026-08-29.** `wk_register_trail_natives`
+> (`src/turi/interpreter_natives.c`) shims all 18 bindings and `trail.tur` is in
+> the interpreter preload (`src/turi/preload.c`); the carve-out is deleted and
+> the parity ratchet now reports only json/schema as gaps.
+>
+> The fix directions below held, including the central one: **nothing was
+> reimplemented.** Every shim is a direct call into the already-linked
+> `src/runtime/trail.c`, so the interpreter and the compiled path share one
+> trail rather than two that can drift.
+>
+> Four fixtures dropped `requires.compiled` and now run under both harnesses --
+> `sx1-trail-basics`, `sx2-trail-combinators`, `sx2-dfs-driver`,
+> `sx1-trail-reentry-stale-mark` -- plus `sx2-trail-measure-not-congruent`,
+> which reproduces its `W0372` interpreted too. Each produces **byte-identical**
+> output to the compiled path, including the `bt-depth` counts that pin the
+> stamp discipline and the generation results that pin stale-mark refusal.
+> `bt-scope` and `with-untrailed` needed no shim, as predicted.
+>
+> Two things learned that the report did not anticipate:
+>
+> - **`sx1-serial-in-trail-scope-refused` correctly keeps `requires.compiled`,
+>   and this is not a residual gap.** The interpreter implements
+>   `tur_serial_cont_serialize` as an in-process deep copy, not a byte codec
+>   (`src/turi/eval.c:2978-2999`) -- a real codec cannot encode the call-frame
+>   closures. Nothing leaves the process, so the hazard the emitted guard
+>   defends against (a blob outliving the trail's process-local undo
+>   information) does not exist there. Do not "fix" this by adding a refusal to
+>   the interpreter; resuming the copy in-process is the stale-mark case, which
+>   the generation counter already covers.
+> - **`g-set!` is the one shim with a real trap.** A `GCell` is the same struct
+>   as a `BtCell`; what makes it never-trailed is the `pause`/`resume` bracket
+>   around the write. A shim that forgot it would silently trail the per-cell
+>   opt-out -- a wrong answer the interpreter would produce and the compiled path
+>   would not, invisible to any test that does not assert `bt-depth`.
+
+
 **Severity: medium.** Not a wrong answer -- the interpreter reports the names as
 unknown rather than doing something incorrect -- but it is a whole stdlib module
 that exists on the compiled path and not in the tree-walker, and since

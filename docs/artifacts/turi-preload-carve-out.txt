@@ -22,4 +22,3 @@
 
 json.tur    -- reader-backed (#json / -Xjson); not in the static prelude[], but unconditionally preloaded by the JR0 reader-macro auto-load block after prelude[].
 schema.tur  -- reader-backed (#json-str<T>) and depends on json.tur; not in prelude[], unconditionally preloaded by the RD block right after json.tur.
-trail.tur   -- native-only (SX1): every binding is inline-C over src/runtime/trail.c and none is registered as a turi native, so the tree-walker cannot execute one. Preloading it would add names that resolve and then fail at call time, which is worse than the honest "unknown name 'bt-cell-new'" the interpreter reports today. Unconditionally auto-loaded on the COMPILED path since `backtrackable-state` graduated 2026-08-29; revisit if the trail ever gets turi natives.

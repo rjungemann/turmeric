@@ -21,9 +21,22 @@ All notable changes to Turmeric are documented here.
   `cloneable-shift` **cannot capture a trail handle at all** -- `TUR-E0014` at
   compile time, now pinned so it cannot regress.
 
-  Consequences worth knowing: the trail is unavailable under `--interpret` (it
-  has no turi natives -- filed, and carved out of the interpreter preload), and
-  because trail.tur now prepends to every compile, 148 codegen snapshots moved.
+  Because trail.tur now prepends to every compile, 148 codegen snapshots moved.
+
+- **The trail works under `--interpret`.** `stdlib/trail.tur` is entirely
+  inline-C, which the tree-walker cannot execute, so making it an unconditional
+  autoload would have left a whole module resolving to nothing outside the
+  compiled path. It is now shimmed for the interpreter -- and shimmed by
+  *calling the same `src/runtime/trail.c`* rather than reimplementing it, so
+  there is one trail, not two that can drift. `tur --interpret`, `tur eval`,
+  `tur repl` and the web REPL all have the full surface; five fixtures now run
+  under both harnesses and produce byte-identical output, including the
+  `bt-depth` counts that pin "a thousand writes cost one trail entry".
+
+  Serializing a continuation is the one compiled-only behavior, and it is not a
+  gap: under `--interpret` `tur_serial_cont_serialize` is an in-process deep
+  copy rather than a byte codec, so no blob outlives the trail and there is
+  nothing to refuse.
 
 ### Added
 

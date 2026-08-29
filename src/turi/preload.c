@@ -149,6 +149,11 @@ void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root) {
         "mutmap.tur",
         "unique.tur",
         "sym.tur",
+        /* SX1: backtrackable state.  Every binding is inline-C the tree-walker
+         * cannot run, so this is only usable because wk_register_trail_natives
+         * overrides the bodies -- which is why that registration must run AFTER
+         * this preload, not before. */
+        "trail.tur",
         NULL
     };
 

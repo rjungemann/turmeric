@@ -1492,10 +1492,15 @@ one dishonest failure mode a query surface can have.
   Two things the graduation turned up that were not on this list. Making the
   autoload unconditional put `trail.tur` in front of the **turi native-parity
   ratchet**, which requires every compiled-path auto-load to be in the
-  interpreter prelude or carry a written rationale -- the trail has no turi
-  natives at all, so it is carved out in
-  `docs/artifacts/turi-preload-carve-out.txt` and the gap is filed as
-  [trail-tur-has-no-turi-natives](https://github.com/rjungemann/turmeric/blob/main/docs/reported/trail-tur-has-no-turi-natives.md).
+  interpreter prelude or carry a written rationale. The trail had no turi
+  natives at all, so it was carved out and the gap filed -- then **closed the
+  same day**: `wk_register_trail_natives` shims all 18 bindings as direct calls
+  into the already-linked `src/runtime/trail.c`, so the interpreter and the
+  compiled path share one trail rather than two that can drift. Five fixtures
+  dropped `requires.compiled` and now run under both harnesses with
+  byte-identical output, including the `bt-depth` counts that pin the stamp
+  discipline. Record:
+  [trail-tur-has-no-turi-natives](https://github.com/rjungemann/turmeric/blob/main/docs/archive/trail-tur-has-no-turi-natives.md).
   And prepending trail.tur to every compile moved **148 codegen snapshots**,
   regenerated in the same change per the fixture rule.
 

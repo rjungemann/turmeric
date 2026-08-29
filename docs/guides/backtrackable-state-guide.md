@@ -205,12 +205,21 @@ Worth knowing before extending the driver:
   [codegen bug](https://github.com/rjungemann/turmeric/blob/main/docs/reported/self-recursive-fn-returning-call-into-fat-sink.md);
   the same call through a one-line forwarder works.
 
-## Not available under `--interpret`
+## Under `--interpret`
 
-Every binding here is inline-C over `src/runtime/trail.c` and none is registered
-as a turi native, so the tree-walker reports `unknown name 'bt-cell-new'`. The
-compiled path is the supported one. Tracked in
-[trail-tur-has-no-turi-natives](https://github.com/rjungemann/turmeric/blob/main/docs/reported/trail-tur-has-no-turi-natives.md).
+The whole surface works, and the interpreter calls the same
+`src/runtime/trail.c` the compiled path does -- there is one trail, not two
+that can drift. `tur --interpret`, `tur eval`, `tur repl` and the web REPL all
+have it.
+
+The exception is serializing a continuation. Under `--interpret`,
+`tur_serial_cont_serialize` is an in-process deep copy rather than a byte codec,
+so there is no blob to outlive the trail and nothing to refuse; the scope check
+described above is a compiled-path behavior.
+
+Bear in mind that the tree-walker retains roughly 4 KiB per trampolined step, so
+an interpreted search is memory-bound well before the trail's cost matters. Use
+it to explore, not to measure.
 
 ## See also
 
