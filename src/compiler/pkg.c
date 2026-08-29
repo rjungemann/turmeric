@@ -2526,7 +2526,11 @@ static void cmake_dep_path_dir(const PkgCmakeDep *d, const char *project_dir,
     if (p[0] == '/')
         snprintf(out, cap, "%s", p);
     else
-        snprintf(out, cap, "%s/%s", project_dir, p);
+        /* Fallback only. append_cmake_dep_with_conflict_check absolutizes
+         * every :path dep it collects, so in practice the branch above is the
+         * one that runs; this covers a dep that reached here without passing
+         * through the collector. */
+        snprintf(out, cap, "%s/cmake/%s", project_dir, p);
 }
 
 /* Emit the CMake that computes _spice_<name>_inc / _spice_<name>_bld from a
@@ -2872,16 +2876,46 @@ static bool append_cmake_dep_with_conflict_check(PkgCmakeDep **out_deps,
         /* parallel origins[] array grows in the caller */
     }
     if (!deep_copy_cmake_dep(&(*out_deps)[*out_n], dep)) return false;
-    /* Absolutize :path-form deps relative to their origin dir so the
-     * downstream generator's `<project_dir>/<path>` join still resolves
-     * correctly when the dep came from a sibling. */
+    /* Absolutize :path-form deps so a sibling's relative path still resolves
+     * from here.
+     *
+     * The base is `<origin_dir>/cmake`, NOT `origin_dir`. The generated
+     * CMakeLists lives in `<spice>/cmake/`, so a relative add_subdirectory
+     * argument resolves from there, and every spice writes its `:path`
+     * accordingly -- `"../cmake-deps/raygui"` means
+     * `<spice>/cmake/../cmake-deps/raygui`, i.e. `<spice>/cmake-deps/raygui`.
+     * Joining against `origin_dir` instead lands one directory too high
+     * (`spices/cmake-deps/raygui`), which does not exist.
+     *
+     * The result is always absolute, which is what lets cmake_dep_path_dir
+     * stay a pure passthrough: `origin_dir` is itself relative under
+     * `tur fetch` (it is "."), so joining alone would leave a relative path
+     * that the emitter would then join against project_dir a second time,
+     * inserting `cmake/` twice. realpath() settles both the absoluteness and
+     * the `..` normalization; if the directory does not exist there is
+     * nothing to resolve, so the unnormalized join is kept and CMake reports
+     * it verbatim, which is the more useful error. */
     if ((*out_deps)[*out_n].path && (*out_deps)[*out_n].path[0] != '/'
         && origin_dir) {
-        char abs[4096];
-        snprintf(abs, sizeof(abs), "%s/%s",
-                 origin_dir, (*out_deps)[*out_n].path);
+        char joined[4096];
+        char cwd[4096];
+        if (origin_dir[0] == '/') {
+            snprintf(joined, sizeof(joined), "%s/cmake/%s",
+                     origin_dir, (*out_deps)[*out_n].path);
+        } else if (getcwd(cwd, sizeof(cwd))) {
+            /* origin_dir is "." under `tur fetch`, which is relative to the
+             * process cwd -- anchor it there rather than leaving a relative
+             * result the emitter would join a second time. */
+            snprintf(joined, sizeof(joined), "%s/%s/cmake/%s",
+                     cwd, origin_dir, (*out_deps)[*out_n].path);
+        } else {
+            snprintf(joined, sizeof(joined), "%s/cmake/%s",
+                     origin_dir, (*out_deps)[*out_n].path);
+        }
+        char resolved[4096];
+        const char *final = realpath(joined, resolved) ? resolved : joined;
         free((*out_deps)[*out_n].path);
-        (*out_deps)[*out_n].path = tur_strdup(abs);
+        (*out_deps)[*out_n].path = tur_strdup(final);
     }
     (*out_n)++;
     return true;
@@ -3387,6 +3421,26 @@ bool pkg_gen_cmake_deps(const char *project_dir,
 /* cmake build invocation                                              */
 /* ================================================================== */
 
+/* Major version of the `cmake` on PATH, or 0 if it cannot be determined.
+ * Probed once and cached -- pkg_cmake_build can run several times per
+ * invocation (fetch, then build). */
+static int cmake_major_version(void) {
+    static int cached = -1;
+    if (cached >= 0) return cached;
+    cached = 0;
+    FILE *p = popen("cmake --version 2>/dev/null", "r");
+    if (p) {
+        char line[256];
+        if (fgets(line, sizeof(line), p)) {
+            /* "cmake version 4.3.3" */
+            const char *v = strstr(line, "version ");
+            if (v) cached = atoi(v + strlen("version "));
+        }
+        pclose(p);
+    }
+    return cached;
+}
+
 bool pkg_cmake_build(const char *project_dir,
                      const PkgManifest *manifest,
                      PkgLockFile *lock,
@@ -3413,6 +3467,20 @@ bool pkg_cmake_build(const char *project_dir,
         buf_printf(&cmd, "emcmake cmake -S '%s' -B '%s'", cmake_src, cmake_bld);
     else
         buf_printf(&cmd, "cmake -S '%s' -B '%s'", cmake_src, cmake_bld);
+    /* CMake 4 removed compatibility with `cmake_minimum_required` floors below
+     * 3.5, so a dependency that has not raised its floor (hiredis, and plenty
+     * of other stable C libraries) aborts the whole configure and *nothing*
+     * builds -- including the deps that were fine. The spice author does not
+     * control that floor, so failing here punishes the wrong person.
+     *
+     * Pass the escape hatch CMake itself recommends in that error, which is
+     * also what turmeric's own bootstrap already does. Only on CMake >= 4: on
+     * 3.x the variable goes unused and CMake reports it under
+     * "Manually-specified variables were not used by the project", which is
+     * noise on every single configure. TUR_CMAKE_NO_POLICY_MIN=1 opts out for
+     * a project that wants the strict floor enforced. */
+    if (!wasm && cmake_major_version() >= 4 && !getenv("TUR_CMAKE_NO_POLICY_MIN"))
+        buf_printf(&cmd, " -DCMAKE_POLICY_VERSION_MINIMUM=3.5");
     /* SF3: honor `tur fetch --refetch` (sets TUR_FETCH_FORCE_FETCH) by
      * disabling the system find_package short-circuit. */
     if (getenv("TUR_FETCH_FORCE_FETCH"))
