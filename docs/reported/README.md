@@ -1275,6 +1275,15 @@ framing would miss cases:
   forward-declared as the `TY_INT` placeholder. Worth reading before trusting
   any other report's "Fix direction" section -- both of this one's pointed at
   the wrong file.
+- `nested-defn-accepted-outer-returns-zero` **RESOLVED 2026-08-29** as
+  TUR-E0713 --
+  [docs/archive/nested-defn-accepted-outer-returns-zero.md](../archive/nested-defn-accepted-outer-returns-zero.md).
+  Two of the three stacked failures it diagnosed are not failures: a definition
+  in expression position is a shipped feature (Phase B3 nested defn, with four
+  fixtures relying on it), so its recommended fix would have deleted it. Only
+  TAIL position is the defect. Its failure (3), the `return 0;` codegen
+  backstop, is still unaudited. Chasing why it was silent turned up
+  `nil-tail-not-checked-against-declared-return`, filed below.
 - `module-level-def-with-linear-init-emits-no-global` **RESOLVED 2026-08-29** --
   [docs/archive/module-level-def-with-linear-init-emits-no-global.md](../archive/module-level-def-with-linear-init-emits-no-global.md).
   Its title is a misnomer and its central question does not arise: linearity is
@@ -1318,7 +1327,7 @@ framing would miss cases:
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [nested-defn-accepted-outer-returns-zero](nested-defn-accepted-outer-returns-zero.md) | **critical** | a `defn` nested in a `defn` (the shape a missing close paren produces) is accepted silently, and the outer function emits `return 0;` discarding the value it just computed. Runs, exits 0, wrong answer. Cost `spices/watch` three tree-mode assertions failing for months with nothing to point at |
+| [nil-tail-not-checked-against-declared-return](nil-tail-not-checked-against-declared-return.md) | medium | the body-tail return-type check (TUR-E0707/E0709) fires for a `cstr`, `float` or `bool` tail and **not** for a `nil` one, so `(defn f [] : int nil)` is accepted and returns 0. Filed 2026-08-29 while fixing `nested-defn-accepted-outer-returns-zero`, which is one instance of it -- definitions collapse to nil-ish, which is why that defect had no diagnostic at all. Fixing this subsumes TUR-E0713's job, though that should survive as the specific diagnostic since a bare type mismatch cannot name the missing paren |
 | [control-form-around-if-double-unboxes-carrier-arms](control-form-around-if-double-unboxes-carrier-arms.md) | medium | `let`/`do` wrapping an `if` whose arms are carrier producers bridges carrier->concrete twice. Fourth report in this family; fix direction is the one-predicate change that already fixed the `emit_if` arms, plus a sweep of the remaining `fn_body_tail_emits_byvalue_carrier_abi` callers rather than a fifth round |
 | [cmake-deps-cannot-express-framework](cmake-deps-cannot-express-framework.md) | high (blocker, macOS) | `-framework Cocoa` cannot be spelled at any layer -- the manifest JSON has no key (`pkg.c:3484`), `emit_link_lines` never emits one, and the sole consumer hardcodes `-I`/`-L`/`-l` (`pkg.c:3535`). Zero occurrences of "framework" under `src/`. `INTERFACE_LINK_LIBRARIES` holds the answer and is never read -- though the sibling property *is* read for include dirs, 20 lines away. Blocks raygui + opengl |
 | [cmake-deps-link-name-not-overridable](cmake-deps-link-name-not-overridable.md) | medium | not a defect: `:cmake-deps` derives the `-l` name from the target basename with no override, so raygui/glfw/glad/libpq/**zlib** each need a hand-written shim. Prefer `$<TARGET_FILE:...>` (link by artifact path) over `$<TARGET_FILE_BASE_NAME:...>` -- only the former fixes zlib, whose dir holds both `libz.a` and `libz.1.dylib` and whose `-lz` picks the wrong one |

@@ -671,6 +671,38 @@ A short list of pitfalls newcomers hit:
 8. **An expression at `defmodule` top level.** There is no module-level
    side-effect position; see
    [What may appear inside a `defmodule`](#what-may-appear-inside-a-defmodule).
+9. **A definition as the last form of a function body.** Legal anywhere else in
+   the body, but not last -- see
+   [Definitions inside a function body](#definitions-inside-a-function-body).
+
+### Definitions inside a function body
+
+A `defn` (or any `def*` form) may appear inside a function body. It is lifted to
+file scope and stays callable by name from the enclosing function:
+
+```turmeric
+(defn outer [] : int
+  (defn inner [x : int] : int (+ x 1))
+  (inner 5))                  ; => 6
+```
+
+**It may not be the last form**, unless the function owes no value. A definition
+produces nothing, so a function declared `: int` whose body ends with one has
+nothing to return -- that is `TUR-E0713`:
+
+```turmeric
+(defn outer [] : int
+  (let [x (helper)] x)
+  (defn other [] : int 7))    ; error [TUR-E0713]
+```
+
+In practice this is almost always a **missing close paren**: `outer` was meant
+to end after `x`, and everything following it got swallowed into its body. An
+editor will happily reindent around the slip, so the diagnostic names it. Until
+2026-08-29 this was silent -- the function returned 0, which is a successful
+exit status, a `false`, and a "nothing found" all at once.
+
+A `: nil` / `: void` function may end with a definition, since it owes no value.
 
 ### What may appear inside a `defmodule`
 
