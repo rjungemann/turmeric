@@ -109,6 +109,7 @@
 #include "lsp/mcp.h"
 /* DAP server (debugger Phase 3) */
 #include "turi/dap.h"
+#include "turi/trace.h"
 /* lsp-lite: lightweight completion/calltip backend for editors */
 #include "cli/lsp_lite.h"
 /* tur completion <zsh|bash>: emit a shell completion script */
@@ -7113,6 +7114,10 @@ static int cmd_fmt(int argc, char **argv) {
  * the DAP pause / condition handlers.  NULL for the plain `tur debug` REPL. */
 typedef struct {
     void (*on_ready)(TuriEnv *env, void *ud);
+    /* Fired once, immediately before the env is freed. Anything the embedder
+     * installed ON the env -- a pause handler, above all -- has to come off
+     * while the env is still there to take it off. */
+    void (*on_done)(TuriEnv *env, void *ud);
     void  *ud;
 } EvalHooks;
 
@@ -7396,6 +7401,7 @@ static int cmd_eval_h(const char *path, bool use_color,
         }
         turi_run_pending_defers(env);
     }
+    if (hooks && hooks->on_done) hooks->on_done(env, hooks->ud);
     turi_env_free(env);
     return rc;
 }
@@ -7417,7 +7423,7 @@ static void dap_on_ready_cb(TuriEnv *env, void *ud) {
 static int dap_launch_cb(const char *program, char **args, int n_args,
                          void *state, void *ud) {
     (void)ud;
-    EvalHooks hooks = { dap_on_ready_cb, state };
+    EvalHooks hooks = { dap_on_ready_cb, NULL, state };
     /* use_color=false: stdout is the (captured) debuggee channel; diagnostics go
      * to stderr without colour, matching `tur lsp` / `tur mcp`. */
     return cmd_eval_h(program, /*use_color=*/false, args, n_args,
@@ -7427,6 +7433,160 @@ static int dap_launch_cb(const char *program, char **args, int n_args,
 static int cmd_dap(void) {
     diag_init(false);   /* no color -- stdout is reserved for JSON-RPC */
     return dap_server_run(STDIN_FILENO, STDOUT_FILENO, dap_launch_cb, NULL);
+}
+
+/* ---------------------------------------------------------------------------
+ * `tur trace` -- the time-travel recorder (track T1)
+ *
+ * Runs a program under the interpreter with the tracer installed, then either
+ * writes the recording or prints what it caught. The smallest thing that
+ * proves the recorder, and a post-mortem tool in its own right even before
+ * anything replays the bytes.
+ * ------------------------------------------------------------------------ */
+
+typedef struct {
+    TurTrace     *trace;
+    TurTraceOpts  opts;
+} TraceCtx;
+
+static void trace_on_ready_cb(TuriEnv *env, void *ud) {
+    TraceCtx *ctx = (TraceCtx *)ud;
+    ctx->trace = turi_trace_begin(env, &ctx->opts);
+}
+
+/* The recorder's pause handler lives on the env, so it has to be taken off
+ * before the env is. The recording itself survives -- it is our bytes, not
+ * the interpreter's. */
+static void trace_on_done_cb(TuriEnv *env, void *ud) {
+    (void)env;
+    TraceCtx *ctx = (TraceCtx *)ud;
+    turi_trace_stop(ctx->trace);
+}
+
+static int cmd_trace(const char *path, const char *out_path,
+                     char **extra_argv, int extra_argc, uint32_t max_steps) {
+    TraceCtx ctx;
+    memset(&ctx, 0, sizeof ctx);
+    ctx.opts.max_steps      = max_steps;
+    ctx.opts.capture_output = true;
+
+    EvalHooks hooks = { trace_on_ready_cb, trace_on_done_cb, &ctx };
+    /* debug=true is what installs the debugger and arms it; the tracer's
+     * pause handler then sees every node. */
+    int rc = cmd_eval_h(path, /*use_color=*/false, extra_argv, extra_argc,
+                        /*debug=*/true, &hooks);
+
+    if (!ctx.trace) {
+        fprintf(stderr, "tur: trace: could not attach the recorder\n");
+        return rc ? rc : 1;
+    }
+    turi_trace_stop(ctx.trace);
+
+    TurTraceStats st;
+    memset(&st, 0, sizeof st);
+    turi_trace_stats(ctx.trace, &st);
+
+    size_t len = 0;
+    const uint8_t *bytes = turi_trace_bytes(ctx.trace, &len);
+
+    int wrote = 0;
+    if (out_path && bytes) {
+        FILE *f = fopen(out_path, "wb");
+        if (!f) {
+            fprintf(stderr, "tur: trace: cannot write %s\n", out_path);
+            turi_trace_end(ctx.trace);
+            return 1;
+        }
+        wrote = fwrite(bytes, 1, len, f) == len;
+        fclose(f);
+        if (!wrote) {
+            fprintf(stderr, "tur: trace: short write to %s\n", out_path);
+            turi_trace_end(ctx.trace);
+            return 1;
+        }
+    }
+
+    fprintf(stderr,
+            "trace: %u steps, %u enters, %u pops, %u changes, "
+            "peak depth %u, %zu bytes, %u bytes of output, truncated %s\n",
+            st.steps, st.enters, st.pops, st.changes, st.peak_depth,
+            len, st.output_bytes, st.truncated ? "yes" : "no");
+    if (out_path && wrote)
+        fprintf(stderr, "trace: wrote %s\n", out_path);
+
+    turi_trace_end(ctx.trace);
+    return rc;
+}
+
+/* Read a .turtrace back and print one line per record.
+ *
+ * The format is exercised by a reader before any UI depends on it, which is
+ * the ordering the plan asks for: if the format is wrong, a timeline widget is
+ * the expensive place to find that out. */
+static int cmd_trace_dump(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "tur: trace: cannot read %s\n", path);
+        return 1;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 1; }
+    long sz = ftell(f);
+    if (sz < 0) { fclose(f); return 1; }
+    rewind(f);
+    uint8_t *buf = malloc((size_t)sz);
+    if (!buf) { fclose(f); return 1; }
+    size_t got = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+
+    TurTraceReader r;
+    if (!turi_trace_open(&r, buf, got)) {
+        fprintf(stderr, "tur: trace: %s is not a readable .turtrace\n", path);
+        free(buf);
+        return 1;
+    }
+    printf("turtrace v%u  names=%u sites=%u records=%zu bytes  truncated=%s\n",
+           r.version, r.name_count, r.site_count, r.record_bytes,
+           r.truncated ? "yes" : "no");
+
+    TurTraceRecord rec;
+    while (turi_trace_next(&r, &rec)) {
+        TurTraceSite site;
+        uint16_t fl = 0, nl = 0;
+        const char *file = "", *fn = "";
+        if (turi_trace_site(&r, rec.site, &site)) {
+            file = turi_trace_name(&r, site.file_name, &fl);
+            fn   = turi_trace_name(&r, site.fn_name, &nl);
+        }
+        switch (rec.tag) {
+        case TUR_TRACE_ENTER:
+            printf("ENTER  depth=%u %.*s:%u:%u %.*s\n", rec.depth,
+                   (int)fl, file, site.line, site.col, (int)nl, fn);
+            break;
+        case TUR_TRACE_POP:
+            printf("POP    depth=%u\n", rec.depth);
+            break;
+        case TUR_TRACE_STEP:
+            printf("STEP   depth=%u %.*s:%u:%u %.*s", rec.depth,
+                   (int)fl, file, site.line, site.col, (int)nl, fn);
+            for (uint16_t i = 0; i < rec.n_changes; i++) {
+                uint32_t nid = 0;
+                const char *repr = "";
+                uint16_t rl = 0, bnl = 0;
+                if (!turi_trace_change(&rec, i, &nid, &repr, &rl)) break;
+                const char *bn = turi_trace_name(&r, nid, &bnl);
+                printf("  %.*s=%.*s", (int)bnl, bn, (int)rl, repr);
+            }
+            printf("\n");
+            break;
+        case TUR_TRACE_OUTPUT:
+            printf("OUTPUT %u bytes\n", rec.payload_len);
+            break;
+        default:
+            break;
+        }
+    }
+    free(buf);
+    return 0;
 }
 
 /* E3: tur eval '<expr>' — evaluate an inline expression and print result. */
@@ -8205,7 +8365,7 @@ static void list_external_subcommands(void) {
         "build", "compile", "link",
         "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
         "eval", "doc", "docs", "explain", "test", "check", "expand", "format", "fmt",
-        "parse-check", "audit-spans", "debug", "dap", "lsp-lite",
+        "parse-check", "audit-spans", "debug", "dap", "trace", "lsp-lite",
         "init", "add", "add-cmake", "fetch", "audit",
         "install", "uninstall", "list", "upgrade", "smt",
         NULL,
@@ -8294,7 +8454,7 @@ cleanup:
  * chain in main() still uses strcmp against these same names. */
 static const char *const CANONICAL_COMMANDS[] = {
     "emit-c", "emit-h", "emit-cmake", "check", "expand", "audit-spans",
-    "lsp", "mcp", "dap", "lsp-lite",
+    "lsp", "mcp", "dap", "trace", "lsp-lite",
     "build", "compile", "link", "run", "repl", "worker", "interpret", "debug",
     "eval", "doc", "docs", "image-info", "image-verify", "explain",
     "format", "fmt", "parse-check", "test", "demangle",
@@ -8345,6 +8505,7 @@ static int usage(void) {
         "  tur interpret <file.tur>          run a file through the tree-walking interpreter\n"
         "  tur debug <file.tur>              run a file under the interactive debugger\n"
         "  tur dap                           Debug Adapter Protocol server (JSON-RPC/stdio) for editors\n"
+        "  tur trace <file.tur> [-o f]       record an interpreted run; --dump reads one back\n"
         "  tur lsp-lite                      lightweight completion/calltip/doc backend (NDJSON/stdio)\n"
         "  tur eval '<expr>'                 evaluate an inline expression\n"
         "  tur doc <symbol>                  print documentation for a builtin, special form, or stdlib definition\n"
@@ -10558,6 +10719,39 @@ int main(int argc, char **argv) {
     /* Debugger Phase 3: DAP server over the interpreter (JSON-RPC / stdio). */
     if (strcmp(cmd, "dap") == 0) {
         return cmd_dap();
+    }
+    /* Track T1: record an interpreted run, or read a recording back. */
+    if (strcmp(cmd, "trace") == 0) {
+        const char *file = NULL, *out_path = NULL;
+        uint32_t    max_steps = 0;
+        bool        dump = false;
+        char      **prog_argv = NULL;
+        int         prog_argc = 0;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--dump") == 0) { dump = true; continue; }
+            if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+                out_path = argv[++i];
+                continue;
+            }
+            if (strncmp(argv[i], "--max-steps=", 12) == 0) {
+                max_steps = (uint32_t)strtoul(argv[i] + 12, NULL, 10);
+                continue;
+            }
+            if (!file) { file = argv[i]; continue; }
+            /* Everything after the program is the program's own argv. */
+            prog_argv = &argv[i];
+            prog_argc = argc - i;
+            break;
+        }
+        if (!file) {
+            fprintf(stderr,
+                "usage: tur trace <file.tur> [-o out.turtrace] "
+                "[--max-steps=N] [-- args...]\n"
+                "       tur trace --dump <file.turtrace>\n");
+            return 1;
+        }
+        if (dump) return cmd_trace_dump(file);
+        return cmd_trace(file, out_path, prog_argv, prog_argc, max_steps);
     }
     /* lsp-lite: completion/calltip/doc backend for lightweight editors.
      * Newline-delimited JSON over stdio; stdout is reserved for protocol
