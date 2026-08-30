@@ -177,7 +177,7 @@ const char *turi_doc_lookup(const char *name);
 char *turi_wasm_strdup(const char *s);
 
 /* ---------------------------------------------------------------------------
- * Time-travel tracer (docs/upcoming/try-turmeric-tracer-plan.md, T3)
+ * Time-travel tracer (docs/archive/try-turmeric-tracer-plan.md, T3)
  *
  * turi_wasm_trace_run records a program; everything else answers questions
  * about the recording it left behind.  The JSON returns are owned by the glue

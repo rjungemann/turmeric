@@ -785,7 +785,7 @@ const char *turi_explain(const char *code_or_null) {
 }
 
 /* ---------------------------------------------------------------------------
- * Time-travel tracer bridge (docs/upcoming/try-turmeric-tracer-plan.md, T3)
+ * Time-travel tracer bridge (docs/archive/try-turmeric-tracer-plan.md, T3)
  *
  * The recorder, the reader and the replay are all in turi/trace.c, which has
  * compiled into this module since it landed -- it was simply dead-stripped,

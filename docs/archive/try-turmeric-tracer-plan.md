@@ -5,7 +5,7 @@
 > v0.41.0.
 > **Type:** WASM glue / web client.
 > **Executes:** T3 of
-> [`editor-intelligence-follow-through-plan.md`](../archive/editor-intelligence-follow-through-plan.md),
+> [`editor-intelligence-follow-through-plan.md`](editor-intelligence-follow-through-plan.md),
 > which landed T1 (`tur trace`) and T2 (DAP reverse execution) on 2026-08-30
 > and deferred T3 behind them on purpose: "if the format is wrong, T3 is the
 > expensive place to find that out" (§4.5). The format now has two consumers
