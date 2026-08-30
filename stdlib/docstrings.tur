@@ -1912,7 +1912,7 @@
     {"with-untrailed", "with-untrailed -- run `body` with trailing PAUSED, then resume.\n\nParameters:\n  body -- a thunk, taken ^fat so it can capture the cells it writes.\n\nReturns:\n  Whatever `body` returned.\n\nExample:\n  (let [m (bt-mark)]\n      (with-untrailed (fn [] (bt-set! c 7)))\n      (bt-undo-to! m)\n      (bt-get c))                                      ; => 7, not restored\n  \n  Same panic caveat as `bt-scope`, and worse: a panic inside `body` leaves\n  trailing paused for everything after it, so later writes silently stop\n  being undoable. Do not put fallible work here that a `bt-scope` could hold.\n\nSince: SX2"},
     {"trail-reset!", "trail-reset! -- drop every level and entry WITHOUT running undo.\n\nExample:\n  (trail-reset!)\n\nSince: SX1"},
     {"trail/autolink-hint", "trail/autolink-hint -- internal marker that triggers trail.c compilation in tur build/run."},
-    {"tur/trail", "tur/trail -- backtrackable state: mutable cells whose writes undo on demand.\n\nSince: SX1"},
+    {"tur/trail", "tur/trail -- backtrackable state: mutable cells whose writes undo on demand.\n\nSince: SX1 (graduated from `--enable=backtrackable-state` 2026-08-29)"},
     {"Tuple2", "Tuple2 -- two-element tuple with element types A, B.\n\nSince: Phase TP1"},
     {"tuple2", "tuple2 -- construct a Tuple2[A B].\n\nParameters:\n  a -- first element (type A)\n  b -- second element (type B)\n\nReturns:\n  A Tuple2[A B] value.\n\nExample:\n  (tuple2 1 \"hi\")  ; => Tuple2(1, \"hi\")\n\nSince: Phase TP1"},
     {"tuple2-1st", "tuple2-1st -- first element of a Tuple2[A B].\n\nParameters:\n  t -- Tuple2[A B]\n\nReturns:\n  The first element of type A.\n\nExample:\n  (tuple2-1st (tuple2 10 20))  ; => 10\n\nSince: Phase TP1"},

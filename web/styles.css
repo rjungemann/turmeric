@@ -301,9 +301,19 @@ pre {
     padding: 0;
 }
 
+/* `min-width: 0` is load-bearing, not boilerplate. As a flex item this box
+   defaults to `min-width: auto`, so it cannot shrink below the min-content
+   width of the two panes. Push the split handle far enough that the console
+   pane hits that floor and the container overflows `.main` -- and because
+   .editor-pane's basis is `calc(var(--split-h) * 100%)`, the fatter container
+   makes the pane fatter, which makes the container fatter again. Monaco's
+   automaticLayout observer unwinds that loop one pixel per frame, so the whole
+   layout visibly creeps for a second or more after the pointer is released.
+   Flooring the container at 0 keeps the percentage resolving against .main. */
 .repl-container {
     flex: 1;
     display: flex;
+    min-width: 0;
     min-height: 0;
     gap: 0;
 }
