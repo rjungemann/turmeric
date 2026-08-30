@@ -95,6 +95,10 @@ docs/api/
 
 # Web
 web/node_modules/
+# Without the slash too: the trailing-slash form matches directories
+# only, so a `node_modules` SYMLINK (handy for running the web tests
+# from a worktree) sails past it and lands in a commit.
+web/node_modules
 web/dist/
 web/test-results/
 web/.vite/

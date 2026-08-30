@@ -1783,13 +1783,34 @@ body.split-dragging * {
 /* Language picker (try-turmeric-lang-toggle-plan): a dialect radio group +
    layer checkboxes popover that edits the #lang line in place. Reuses the
    .more-menu popover shell. */
-.lang-wrap { position: relative; display: inline-flex; }
+.lang-wrap {
+    position: relative;
+    display: inline-flex;
+    /* The toolbar is a nowrap flex row that scrolls; letting this wrapper
+       shrink would squeeze the button instead of scrolling the row. */
+    flex: 0 0 auto;
+}
 .btn-lang {
     padding: 5px 10px;
     font-size: 12px;
     font-family: var(--font-mono, monospace);
     color: var(--text-primary);
     min-width: 58px;
+    /* Every other button in this row holds a 16px SVG, so their content box is
+       16px and they come out 28px tall. This one holds 12px text against
+       .btn's `line-height: 1`, which is a 12px content box and a 24px button --
+       4px short of all of its neighbours. Pad the line box to the same 16px
+       rather than hard-coding a height, so the two stay tied to one measure. */
+    line-height: 16px;
+    /* The label is a whole word ("neoteric", "s-expr"); half of one is not a
+       useful thing to show. .editor-actions scrolls, so on a narrow screen the
+       row moves and the word stays intact. */
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
+#lang-btn-label {
+    white-space: nowrap;
+    overflow: visible;
 }
 .lang-menu { min-width: 260px; max-width: 380px; }
 .lang-menu-cols { display: flex; flex-direction: row; gap: 4px; }
