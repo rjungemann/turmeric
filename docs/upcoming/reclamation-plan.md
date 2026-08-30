@@ -204,6 +204,65 @@ fixtures with real teeth (the SR1 pattern: bytes leaked without the change,
 zero with it), the full corpus green at its current baseline, and snapshots
 regenerated in the same commit.
 
+#### Scope, MEASURED 2026-08-30 (before building anything)
+
+The corpus was swept twice -- once for where the erased base is emitted and
+called, once under LeakSanitizer -- because this section was written assuming
+a residue nobody had counted. Four findings, and two of them narrow the phase.
+
+**1. Generic wrappers do not box at all.** `(defn wrap [A] [x : A] :
+(Option A) (some x))` specializes end to end: `wrap__spec__...` calls
+`some__spec__...`, the erased base is not even emitted, and a 200,000-call
+loop leaks zero bytes under ASan. The intuition that "a generic body means an
+erased box" is wrong; SR2a's specialization reaches through ordinary generic
+code.
+
+**2. The erased base is mostly DEAD CODE.** Across 2181 emitted fixtures it is
+*defined* in 95 and actually *called* in **27**. The other 68 emit a base the
+linker drops.
+
+**3. Of the 27 callers, 24 leak -- and 13 name the sum constructor in the
+trace.** Those 13 are RM1's constituency, ~1.7 KB total, 32-528 bytes each.
+The other 11 leaks are different allocations (`httpd-req-string-opt` 3756 B,
+`re-string` 1281 B lead them) and are NOT this phase's; they want their own
+look, and the fact that nobody has taken it is the point of the aside below.
+
+**4. The shape is one shape: typeclass instance bodies / HKT dictionary
+dispatch.** Every SUM-BOX caller is `hkt-*`, `result-monad-*`, `zipper-*`,
+`option-map-capturing-closure` or `result-basic`. A representative trace:
+
+```
+ctor_Some  ->  some  ->  __inst_Applicative_ap_Option  ->  main
+```
+
+That is precisely "an instance method's carrier base" from the report, and it
+is the one place specialization does not reach -- a dictionary-dispatched
+method has no concrete element type to specialize against.
+
+**What this confirms about the mechanism, and what it rules out.** The
+consumer keeps the value as a CARRIER (`opt_hyval(__ps_204)`), never bridging
+it to a by-value aggregate -- so there is no carrier->concrete crossing to
+hang a free on. The owned-carrier table built for
+[inline-c-option-carrier-box-leaks](../archive/inline-c-option-carrier-box-leaks.md)
+frees at exactly that crossing and therefore does NOT reach this shape. The
+scope-exit drop this section proposes is the right mechanism, and the two are
+complementary rather than alternatives: one frees a box the caller converts,
+the other frees a box the caller merely reads.
+
+**One caveat that shapes the work.** In the representative trace the box is
+the instance method's RETURN value -- it escapes the frame that built it, so a
+drop inside `ap` would be wrong. The drop belongs to the CALLER's scope, on
+the temp holding the returned carrier (`__ps_204` above), which is the
+`any`-box pattern applied one frame out. That is the same place the escape
+walk has to run, so the machinery fits -- but "free where it was built" would
+be a use-after-free, and the phase should be written knowing that.
+
+**An aside worth its own report.** None of these 24 fixtures carries
+`requires.leak-check`, so `bash tests/run.sh` has never seen any of it -- which
+is CLAUDE.md's documented gap ("a leak in EMITTED code passes run.sh
+silently") turning up 8.3 KB of real leaks the moment anyone looks. Widening
+the marker set is cheap and is not gated on RM1.
+
 ### RM2 -- the recursive spine
 
 The per-node spine box of a self-recursive sum, which is what `logic.tur`
