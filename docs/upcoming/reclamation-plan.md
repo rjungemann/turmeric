@@ -257,6 +257,74 @@ the temp holding the returned carrier (`__ps_204` above), which is the
 walk has to run, so the machinery fits -- but "free where it was built" would
 be a use-after-free, and the phase should be written knowing that.
 
+#### First increment, LANDED 2026-08-30: the null-None mirror
+
+Building the phase started by finding that part of the residue was not an
+ownership problem at all. SR3 slice A made the carrier `None` the null pointer
+at three producers -- the monomorph ctor (types.c), the base ctor in
+`emit_adt_typedef_and_ctors`, and the preamble's `tur_none()`. But
+`emit_program` emits base ctors at a FOURTH site of its own (`early_file`,
+emit_module.c), whose own comments call it a "mirror" of the second -- and that
+copy never got the branch. So an erased `(none)` still malloc'd a `tag = 0`
+box, showing up in the sweep as `ctor_None -> none -> ...` traces.
+
+Fixed by adding the missing branch. The read side has accepted NULL as tag 0
+since slice A, so this removes an allocation with no ownership analysis at all
+-- the "make the box never exist" direction the report prefers, and the
+cheapest kind of win this plan can have.
+
+It is the same defect class as the merge-temp bug fixed earlier the same day:
+two sibling emitters that are supposed to mirror each other, where a change
+landed in one. Worth a standing habit -- when a representation change lands in
+a ctor or temp emitter, grep for the other emitter before calling it done.
+
+Measured: 8324 -> 8212 bytes across the 27 callers, with several fixtures
+shrinking individually (`option-map-capturing-closure` 72 -> 40 B,
+`refined-nonempty` 112 -> 80 B, `zipper-basic` 96 -> 80 B). Modest, and honest:
+the bulk is `some`/`ok`/`err` boxes, which carry a payload and cannot be made
+null. Snapshot churn was 148 fixtures, regenerated in the same commit.
+
+#### The blocker for the REST of the phase, established 2026-08-30
+
+**The scope-exit drop this section proposes does not fit the shape the sweep
+found, and the reason is not fixable by moving the drop.**
+
+In the representative trace the box is built by `some(...)` INSIDE
+`__inst_Applicative_ap_Option` and returned, so it escapes the frame that
+builds it -- no drop inside `ap` is correct. The drop must go to the caller,
+on the temp holding the returned carrier. But at the caller, whether that
+carrier is owned depends on the callee's BODY, not its signature, and the
+Option instances are split:
+
+```turmeric
+(definstance Applicative [Option]
+  (ap [ff fa] ...))                          ; every path returns some(..)/none() -- FRESH
+
+(definstance Alternative [Option]
+  (alt-or [x y] (match x (Some _) x (None) y)))   ; returns an ARGUMENT
+```
+
+Freeing the result of `alt-or` would free a box the caller still holds. That
+is the same class of error as keying the inline-C free on a call's resolved
+type, where `vec-get` -- also inline C, also Option-typed -- returns a box the
+VECTOR owns; that one cost a `double free detected in tcache 2` before the
+declared-type key fixed it.
+
+So a safe RM1 needs a **per-callee freshness analysis**: "does every return
+path of this function yield a freshly-allocated carrier box or NULL?"
+`ap` passes, `alt-or` fails. That is intraprocedural and bounded -- the
+tail-walking family (`fn_body_tail_is_carrier_producer`) is the right shape to
+extend -- but it is a real analysis the phase text did not anticipate, and
+"local, no whole-program analysis, fourth client of the any-box machinery" is
+no longer an accurate description of the work.
+
+**Recommendation: do not build the drop until that analysis is specified.**
+The measured prize is ~1.7 KB across 13 fixtures, and the failure mode of
+getting it wrong is a use-after-free rather than a leak. The alternative the
+report already prefers -- monomorphize the dictionary path so the box never
+exists -- removes the same leaks with no ownership reasoning, and is where the
+track is already heading.
+
 **An aside worth its own report.** None of these 24 fixtures carries
 `requires.leak-check`, so `bash tests/run.sh` has never seen any of it -- which
 is CLAUDE.md's documented gap ("a leak in EMITTED code passes run.sh

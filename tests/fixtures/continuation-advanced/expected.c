@@ -3726,9 +3726,7 @@ typedef struct tur_adt_Option {
 } tur_adt_Option;
 
 static int64_t ctor_None() {
-    tur_adt_Option *__r = (tur_adt_Option *)malloc(sizeof(tur_adt_Option));
-    __r->tag = 0;
-    return (int64_t)(intptr_t)__r;
+    return 0;
 }
 
 static int64_t ctor_Some(int64_t _0) {

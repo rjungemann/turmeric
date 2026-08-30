@@ -13128,6 +13128,26 @@ int emit_program(Buf *out, const Expr *program) {
                         free(mp);
                     }
                     buf_printf(&early_file, "    return __r;\n");
+                } else if (adt_ctor_is_null_none(def, ctor)) {
+                    /* SR3 slice A, the mirror that was missed.  Slice A made
+                     * the carrier None the null pointer at three producers --
+                     * the monomorph ctor (types.c), the base ctor in
+                     * emit_adt_typedef_and_ctors, and the preamble's
+                     * tur_none() -- but emit_program emits base ctors HERE
+                     * instead, and this copy never got the branch.  So an
+                     * ERASED `(none)` still malloc'd a `tag = 0` box that
+                     * nothing frees: measured leaking in the corpus from
+                     * `ctor_None -> none -> ...` traces.
+                     *
+                     * The read side has accepted NULL as tag 0 since slice A
+                     * (`__scrut ? __scrut->tag : 0`, tur_is_some(0) false), so
+                     * this is purely removing an allocation nobody wanted.
+                     *
+                     * The branch order matches the other site exactly --
+                     * byval, then null-None, then the boxed default -- because
+                     * these two emitters are supposed to be mirrors and the
+                     * whole defect is that they had drifted. */
+                    buf_puts(&early_file, "    return 0;\n");
                 } else {
                     /* Mirror of the emit_adt_typedef_and_ctors site: slab only
                      * when nothing will ever free this box. */
