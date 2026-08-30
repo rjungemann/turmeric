@@ -619,3 +619,333 @@ bool turi_trace_change(const TurTraceRecord *rec, uint16_t i,
     if (repr_out)     *repr_out     = (const char *)(p + off + 6);
     return true;
 }
+
+/* --------------------------------------------------------------------------
+ * Replay
+ * ----------------------------------------------------------------------- */
+
+typedef struct {
+    uint32_t site;
+    char   **names;
+    char   **reprs;
+    int      n, cap;
+} RFrame;
+
+struct TurTraceReplay {
+    TurTraceReader rd;
+    /* NUL-terminated copies of the interned names, so callers get C strings
+     * rather than a pointer plus a length they would have to carry around. */
+    char     **names;
+    uint32_t   n_names;
+    /* Record offset of each STEP, which is the axis a client scrubs. */
+    size_t    *stops;
+    uint32_t   n_stops;
+    /* Depth at each stop, precomputed: step-over and step-out are "advance
+     * until the depth comes back", and asking that question should not cost a
+     * rebuild per candidate. */
+    uint16_t  *depths;
+    uint32_t   cursor;
+
+    RFrame    *frames;
+    int        n_frames, cap_frames;
+
+    Bytes      output;
+};
+
+static void rframe_clear(RFrame *f) {
+    for (int i = 0; i < f->n; i++) { free(f->names[i]); free(f->reprs[i]); }
+    f->n = 0;
+}
+
+static void rframe_free(RFrame *f) {
+    rframe_clear(f);
+    free(f->names);
+    free(f->reprs);
+    f->names = f->reprs = NULL;
+    f->cap = 0;
+}
+
+static void rframe_set(RFrame *f, const char *name, const char *repr,
+                       uint16_t rlen) {
+    for (int i = 0; i < f->n; i++) {
+        if (strcmp(f->names[i], name) != 0) continue;
+        char *copy = malloc((size_t)rlen + 1);
+        if (!copy) return;
+        memcpy(copy, repr, rlen);
+        copy[rlen] = '\0';
+        free(f->reprs[i]);
+        f->reprs[i] = copy;
+        return;
+    }
+    if (f->n == f->cap) {
+        int want = f->cap ? f->cap * 2 : 8;
+        char **gn = realloc(f->names, (size_t)want * sizeof *gn);
+        if (!gn) return;
+        f->names = gn;
+        char **gr = realloc(f->reprs, (size_t)want * sizeof *gr);
+        if (!gr) return;
+        f->reprs = gr;
+        f->cap = want;
+    }
+    char *n = strdup(name);
+    char *r = malloc((size_t)rlen + 1);
+    if (!n || !r) { free(n); free(r); return; }
+    memcpy(r, repr, rlen);
+    r[rlen] = '\0';
+    f->names[f->n] = n;
+    f->reprs[f->n] = r;
+    f->n++;
+}
+
+static void replay_reset_frames(TurTraceReplay *rp) {
+    for (int i = 0; i < rp->cap_frames; i++) rframe_clear(&rp->frames[i]);
+    rp->n_frames = 0;
+}
+
+static bool replay_push_frame(TurTraceReplay *rp, uint32_t site) {
+    if (rp->n_frames == rp->cap_frames) {
+        int want = rp->cap_frames ? rp->cap_frames * 2 : 16;
+        RFrame *grown = realloc(rp->frames, (size_t)want * sizeof *grown);
+        if (!grown) return false;
+        memset(grown + rp->cap_frames, 0,
+               (size_t)(want - rp->cap_frames) * sizeof *grown);
+        rp->frames = grown;
+        rp->cap_frames = want;
+    }
+    rframe_clear(&rp->frames[rp->n_frames]);
+    rp->frames[rp->n_frames].site = site;
+    rp->n_frames++;
+    return true;
+}
+
+/* Rebuild the state at stop `target` from the start of the stream. */
+static void replay_rebuild(TurTraceReplay *rp, uint32_t target) {
+    replay_reset_frames(rp);
+    rp->output.len = 0;
+
+    rp->rd.cursor = 0;
+    uint32_t seen = 0;
+    TurTraceRecord rec;
+    while (turi_trace_next(&rp->rd, &rec)) {
+        switch (rec.tag) {
+        case TUR_TRACE_ENTER:
+            replay_push_frame(rp, rec.site);
+            break;
+        case TUR_TRACE_POP:
+            if (rp->n_frames > 0) {
+                rframe_clear(&rp->frames[rp->n_frames - 1]);
+                rp->n_frames--;
+            }
+            break;
+        case TUR_TRACE_OUTPUT:
+            bytes_put(&rp->output, rec.payload, rec.payload_len);
+            break;
+        case TUR_TRACE_STEP: {
+            int depth = rec.depth;
+            while (rp->n_frames < depth) replay_push_frame(rp, rec.site);
+            if (rp->n_frames > depth) rp->n_frames = depth;
+            if (rp->n_frames > 0) {
+                RFrame *f = &rp->frames[rp->n_frames - 1];
+                f->site = rec.site;
+                for (uint16_t i = 0; i < rec.n_changes; i++) {
+                    uint32_t nid = 0;
+                    const char *repr = "";
+                    uint16_t rl = 0;
+                    if (!turi_trace_change(&rec, i, &nid, &repr, &rl)) break;
+                    const char *bn = (nid < rp->n_names) ? rp->names[nid] : "";
+                    rframe_set(f, bn, repr, rl);
+                }
+            }
+            if (seen == target) return;   /* state AT this step, inclusive */
+            seen++;
+            break;
+        }
+        default:
+            return;
+        }
+    }
+}
+
+TurTraceReplay *turi_trace_replay_open(const uint8_t *bytes, size_t len) {
+    TurTraceReplay *rp = calloc(1, sizeof *rp);
+    if (!rp) return NULL;
+    if (!turi_trace_open(&rp->rd, bytes, len)) { free(rp); return NULL; }
+
+    rp->names = calloc(rp->rd.name_count ? rp->rd.name_count : 1,
+                       sizeof *rp->names);
+    if (!rp->names) { free(rp); return NULL; }
+    rp->n_names = rp->rd.name_count;
+    for (uint32_t i = 0; i < rp->n_names; i++) {
+        uint16_t nl = 0;
+        const char *n = turi_trace_name(&rp->rd, i, &nl);
+        char *copy = malloc((size_t)nl + 1);
+        if (!copy) continue;
+        memcpy(copy, n, nl);
+        copy[nl] = '\0';
+        rp->names[i] = copy;
+    }
+
+    /* Index the stop points and their depths in one pass. */
+    uint32_t cap = 256;
+    rp->stops  = malloc(cap * sizeof *rp->stops);
+    rp->depths = malloc(cap * sizeof *rp->depths);
+    if (!rp->stops || !rp->depths) { turi_trace_replay_free(rp); return NULL; }
+    rp->rd.cursor = 0;
+    TurTraceRecord rec;
+    for (;;) {
+        size_t at = rp->rd.cursor;
+        if (!turi_trace_next(&rp->rd, &rec)) break;
+        if (rec.tag != TUR_TRACE_STEP) continue;
+        if (rp->n_stops == cap) {
+            cap *= 2;
+            size_t *gs = realloc(rp->stops, cap * sizeof *gs);
+            if (!gs) { turi_trace_replay_free(rp); return NULL; }
+            rp->stops = gs;   /* adopt before the next realloc can fail */
+            uint16_t *gd = realloc(rp->depths, cap * sizeof *gd);
+            if (!gd) { turi_trace_replay_free(rp); return NULL; }
+            rp->depths = gd;
+        }
+        rp->stops[rp->n_stops]  = at;
+        rp->depths[rp->n_stops] = rec.depth;
+        rp->n_stops++;
+    }
+
+    rp->cursor = 0;
+    replay_rebuild(rp, 0);
+    return rp;
+}
+
+void turi_trace_replay_free(TurTraceReplay *rp) {
+    if (!rp) return;
+    for (uint32_t i = 0; i < rp->n_names; i++) free(rp->names[i]);
+    free(rp->names);
+    free(rp->stops);
+    free(rp->depths);
+    for (int i = 0; i < rp->cap_frames; i++) rframe_free(&rp->frames[i]);
+    free(rp->frames);
+    free(rp->output.data);
+    free(rp);
+}
+
+uint32_t turi_trace_replay_steps(const TurTraceReplay *rp) {
+    return rp ? rp->n_stops : 0;
+}
+
+uint32_t turi_trace_replay_index(const TurTraceReplay *rp) {
+    return rp ? rp->cursor : 0;
+}
+
+uint32_t turi_trace_replay_seek(TurTraceReplay *rp, uint32_t index) {
+    if (!rp || rp->n_stops == 0) return 0;
+    if (index >= rp->n_stops) index = rp->n_stops - 1;
+    rp->cursor = index;
+    replay_rebuild(rp, index);
+    return index;
+}
+
+int turi_trace_replay_frame_count(const TurTraceReplay *rp) {
+    return rp ? rp->n_frames : 0;
+}
+
+bool turi_trace_replay_frame_at(const TurTraceReplay *rp, int idx,
+                                TurTraceFrame *out) {
+    if (!rp || !out || idx < 0 || idx >= rp->n_frames) return false;
+    /* Index 0 is the innermost frame; the stack grows upwards internally. */
+    const RFrame *f = &rp->frames[rp->n_frames - 1 - idx];
+    TurTraceSite site;
+    memset(out, 0, sizeof *out);
+    out->fn_name   = "";
+    out->file_path = "";
+    if (turi_trace_site(&rp->rd, f->site, &site)) {
+        if (site.file_name < rp->n_names && rp->names[site.file_name])
+            out->file_path = rp->names[site.file_name];
+        if (site.fn_name < rp->n_names && rp->names[site.fn_name])
+            out->fn_name = rp->names[site.fn_name];
+        out->line = site.line;
+        out->col  = site.col;
+    }
+    return true;
+}
+
+int turi_trace_replay_local_count(const TurTraceReplay *rp, int idx) {
+    if (!rp || idx < 0 || idx >= rp->n_frames) return 0;
+    return rp->frames[rp->n_frames - 1 - idx].n;
+}
+
+bool turi_trace_replay_local_at(const TurTraceReplay *rp, int idx, int i,
+                                const char **name_out, const char **repr_out) {
+    if (!rp || idx < 0 || idx >= rp->n_frames) return false;
+    const RFrame *f = &rp->frames[rp->n_frames - 1 - idx];
+    if (i < 0 || i >= f->n) return false;
+    if (name_out) *name_out = f->names[i];
+    if (repr_out) *repr_out = f->reprs[i];
+    return true;
+}
+
+const char *turi_trace_replay_output(const TurTraceReplay *rp, size_t *len_out) {
+    if (!rp) { if (len_out) *len_out = 0; return ""; }
+    if (len_out) *len_out = rp->output.len;
+    return rp->output.data ? (const char *)rp->output.data : "";
+}
+
+int turi_trace_replay_depth_at(const TurTraceReplay *rp, uint32_t index) {
+    if (!rp || index >= rp->n_stops) return 0;
+    return rp->depths[index];
+}
+
+/* The trailing path component, so a breakpoint set on "input.tur" matches a
+ * site recorded with an absolute path -- the same basename rule the live
+ * debugger's breakpoint table uses. */
+static const char *replay_basename(const char *p) {
+    const char *slash = strrchr(p, '/');
+#ifdef _WIN32
+    const char *back = strrchr(p, '\\');
+    if (back && (!slash || back > slash)) slash = back;
+#endif
+    return slash ? slash + 1 : p;
+}
+
+uint32_t turi_trace_replay_find_line(const TurTraceReplay *rp, int dir,
+                                     const char *file, uint32_t line,
+                                     bool *hit_out) {
+    if (hit_out) *hit_out = false;
+    if (!rp || rp->n_stops == 0) return 0;
+    uint32_t last = rp->n_stops - 1;
+    if (dir >= 0) {
+        for (uint32_t i = rp->cursor + 1; i <= last; i++) {
+            TurTraceRecord rec;
+            TurTraceReader scan = rp->rd;
+            scan.cursor = rp->stops[i];
+            if (!turi_trace_next(&scan, &rec)) break;
+            TurTraceSite site;
+            if (!turi_trace_site(&rp->rd, rec.site, &site)) continue;
+            if (site.line != line) continue;
+            if (file && *file) {
+                const char *fp = (site.file_name < rp->n_names)
+                                   ? rp->names[site.file_name] : "";
+                if (strcmp(replay_basename(fp), file) != 0) continue;
+            }
+            if (hit_out) *hit_out = true;
+            return i;
+        }
+        return last;
+    }
+    for (uint32_t i = rp->cursor; i > 0; i--) {
+        uint32_t j = i - 1;
+        TurTraceRecord rec;
+        TurTraceReader scan = rp->rd;
+        scan.cursor = rp->stops[j];
+        if (!turi_trace_next(&scan, &rec)) break;
+        TurTraceSite site;
+        if (!turi_trace_site(&rp->rd, rec.site, &site)) continue;
+        if (site.line != line) continue;
+        if (file && *file) {
+            const char *fp = (site.file_name < rp->n_names)
+                               ? rp->names[site.file_name] : "";
+            if (strcmp(replay_basename(fp), file) != 0) continue;
+        }
+        if (hit_out) *hit_out = true;
+        return j;
+    }
+    return 0;
+}

@@ -190,4 +190,71 @@ bool turi_trace_change(const TurTraceRecord *rec, uint16_t i,
                        uint32_t *name_out, const char **repr_out,
                        uint16_t *repr_len_out);
 
+/* ---------------------------------------------------------------------------
+ * Replay -- the state a recording describes at any one of its steps
+ *
+ * The recording is deltas, so "what did the stack look like at step 4218" is a
+ * question only a replay can answer. This is that replay, in C rather than in
+ * the DAP server, because two consumers want it: `tur dap`'s reverse execution
+ * (T2) and, eventually, the browser timeline (T3).
+ *
+ * Seeking rebuilds from the start of the stream rather than undoing deltas
+ * backwards. That is O(records) per seek, which at the default 200k-step cap
+ * is a few milliseconds, and it is the difference between a decoder that is
+ * obviously correct and one that has to get an undo log right in both
+ * directions. The plan's "the decoder builds its own snapshots every N steps"
+ * is the optimization to reach for if that stops being true.
+ * --------------------------------------------------------------------------- */
+
+typedef struct TurTraceReplay TurTraceReplay;
+
+/* Open a replay over `bytes`, which the caller must keep alive for the
+ * replay's lifetime. NULL if the buffer is not a readable recording. */
+TurTraceReplay *turi_trace_replay_open(const uint8_t *bytes, size_t len);
+void            turi_trace_replay_free(TurTraceReplay *rp);
+
+/* Stop points -- one per STEP record. This is the axis a client scrubs. */
+uint32_t turi_trace_replay_steps(const TurTraceReplay *rp);
+uint32_t turi_trace_replay_index(const TurTraceReplay *rp);
+
+/* Seek to `index`, clamped into range. Returns the index actually reached. */
+uint32_t turi_trace_replay_seek(TurTraceReplay *rp, uint32_t index);
+
+/* The frame stack at the cursor. Index 0 is the INNERMOST frame, matching
+ * turi_debug_frame_at, so a DAP stackTrace reads the same either way. */
+typedef struct {
+    const char *fn_name;    /* NUL-terminated; owned by the replay */
+    const char *file_path;
+    uint32_t    line;
+    uint32_t    col;
+} TurTraceFrame;
+
+int  turi_trace_replay_frame_count(const TurTraceReplay *rp);
+bool turi_trace_replay_frame_at(const TurTraceReplay *rp, int idx,
+                                TurTraceFrame *out);
+
+/* The locals of frame `idx` at the cursor, in the order they were first seen.
+ * A binding appears once, carrying its most recent rendering. */
+int  turi_trace_replay_local_count(const TurTraceReplay *rp, int idx);
+bool turi_trace_replay_local_at(const TurTraceReplay *rp, int idx, int i,
+                                const char **name_out, const char **repr_out);
+
+/* Program output produced strictly before the cursor's step, as one buffer.
+ * *len_out is its length; the bytes are owned by the replay and are rebuilt on
+ * every seek. */
+const char *turi_trace_replay_output(const TurTraceReplay *rp, size_t *len_out);
+
+/* Search for a step whose site is on `file` (basename match; "" matches any)
+ * at `line`, scanning forward (`dir` > 0) or backward from the cursor. Returns
+ * the index found, or the boundary index when there is no hit -- which is what
+ * a `continue` with no breakpoint ahead of it should do. `*hit_out` says which
+ * of the two happened. */
+uint32_t turi_trace_replay_find_line(const TurTraceReplay *rp, int dir,
+                                     const char *file, uint32_t line,
+                                     bool *hit_out);
+
+/* The depth (frame count) at an arbitrary step index, without seeking.
+ * Returns 0 for an out-of-range index. */
+int turi_trace_replay_depth_at(const TurTraceReplay *rp, uint32_t index);
+
 #endif

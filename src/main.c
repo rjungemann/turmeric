@@ -7420,10 +7420,16 @@ static void dap_on_ready_cb(TuriEnv *env, void *ud) {
     dap_begin_session(ud, env);   /* ud is the opaque DapState* */
 }
 
+/* The mirror of dap_on_ready_cb: a replay session's recorder is installed on
+ * the env, so it has to be taken off before the env is freed. */
+static void dap_on_done_cb(TuriEnv *env, void *ud) {
+    dap_end_session(ud, env);
+}
+
 static int dap_launch_cb(const char *program, char **args, int n_args,
                          void *state, void *ud) {
     (void)ud;
-    EvalHooks hooks = { dap_on_ready_cb, NULL, state };
+    EvalHooks hooks = { dap_on_ready_cb, dap_on_done_cb, state };
     /* use_color=false: stdout is the (captured) debuggee channel; diagnostics go
      * to stderr without colour, matching `tur lsp` / `tur mcp`. */
     return cmd_eval_h(program, /*use_color=*/false, args, n_args,
