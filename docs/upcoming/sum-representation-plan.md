@@ -41,6 +41,14 @@ distribution observed"). It says nothing about what the change is worth *per
 construction*, and per construction it removes the allocation outright. The
 expressiveness case SR0(b) collects still stands on its own for SR2.
 
+**The reclamation half now has a plan of its own:**
+[reclamation-plan.md](reclamation-plan.md) (RM). It carries the arena and
+drop-glue work this document repeatedly defers to, and its first phase is a
+re-measurement -- SR1, SR2a and SR3 slice A have removed the allocation
+outright for most of the population the 7.64x was measured over, so the rows
+in section 2 now price the recursive sums and the erased residue rather than
+the language as a whole.
+
 **Not on the critical path to v1.** Every phase is a representation change to
 code that already compiles and runs correctly. Read section 4 for what to do
 first if only one phase gets built -- and section 5 for why the obvious
@@ -592,7 +600,8 @@ never the whole cost.
 close (7-13% time for 2.2x memory) --
 (`is_self_recursive` in `adt_sr1_sum_candidate`, types.c, where the decision
 record lives) waiting on either a workload that wants memory over speed, or
-reclamation landing first -- an arena makes the carrier's mallocs cheap AND
+reclamation landing first ([reclamation-plan.md](reclamation-plan.md), RM4
+owns this decision) -- an arena makes the carrier's mallocs cheap AND
 keeps one-word copies, at which point by-value recursive sums may have no
 constituency at all. Measure again then; the seam reproduces everything.
 
@@ -650,8 +659,9 @@ travels by value; only the self-referential field stays a pointer. This is what
 pointer), so **1.41x is this phase's number, not SR1's** (re-measured
 2026-08-25; it was published as 1.8x).
 
-**Gate:** reclamation first -- and on the re-measured numbers that is no longer
-a sequencing preference but the substance of the whole thing.
+**Gate:** reclamation first ([reclamation-plan.md](reclamation-plan.md)) --
+and on the re-measured numbers that is no longer a sequencing preference
+but the substance of the whole thing.
 
 **The reclamation half is no longer blocked**, and it is worth far more than
 this phase. It was described here as blocked on the `rc/of` coupling that parked
