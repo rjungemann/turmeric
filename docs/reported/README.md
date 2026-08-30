@@ -695,6 +695,10 @@ Pinned by four `errors/` negatives and
 
 ## Build / CI / performance
 
+| Report | Severity | One line |
+| --- | --- | --- |
+| [turi-suite-accounting-and-reporting-gaps](turi-suite-accounting-and-reporting-gaps.md) | medium | `turi_fixture_tests` counts 2615 of the 2714 fixtures it discovers: marker skips write no result file (81, positive pass) and the error pass returns silently (18, of which 7 carry no `expected.diag` and so assert nothing). Plus: the errors denylist names a fixture that no longer exists, the 7 `eval-async-*.sh` scripts run twice per CI job because they are also their own ctest targets, and none of the count reaches CI -- `--output-on-failure` hides the summary, the timing ingest discards it, and the 737-fixture inline-C carve-out (27% of the corpus) gets no `TUR_SKIP_PARTIAL:` marker. Filed 2026-08-29; measured, not read-verified. The suite does **not** need splitting out -- it is already its own `RUN_SERIAL` target |
+
 `env-doctests-are-machine-dependent` was resolved 2026-08-21 and moved to
 [docs/archive](../archive/env-doctests-are-machine-dependent.md). The five
 `stdlib/env.tur` examples now carry the `; doctest: <reason>` opt-out that
