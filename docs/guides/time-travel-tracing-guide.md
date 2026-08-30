@@ -170,5 +170,7 @@ axis looking for something -- breakpoint matching, a search -- reads the index.
 
 - [lsp-guide.md](lsp-guide.md) -- the language server, including scope-aware
   highlight, rename and references.
-- [../artifacts/debugger-dap-phase3.md](../artifacts/debugger-dap-phase3.md) --
-  the live DAP session this replays alongside.
+- `docs/artifacts/debugger-dap-phase3.md` -- the live DAP session this replays
+  alongside. Referenced as a path rather than linked: the offline docs pack
+  carries guides and API modules only, and `genpack.py --strict-links` rejects
+  a link that would leave the pack.
