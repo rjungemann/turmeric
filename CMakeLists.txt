@@ -358,7 +358,7 @@ add_test(
 # that the step cap truncates loudly. The fixture carries
 # requires.dedicated-runner so tests/run.sh leaves it to this target -- the
 # recorder is an interpreter feature and the compiled path does not share it.
-# See docs/upcoming/editor-intelligence-follow-through-plan.md.
+# See docs/archive/editor-intelligence-follow-through-plan.md.
 add_test(
   NAME tur_trace
   COMMAND bash tests/run-trace.sh

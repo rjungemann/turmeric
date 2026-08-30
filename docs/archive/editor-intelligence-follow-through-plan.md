@@ -1,6 +1,11 @@
 # Editor intelligence follow-through: scope, rename, and a time-travel tracer
 
-> **Status: PROPOSED.** Written 2026-08-29 against v0.41.0.
+> **Status: Executed (2026-08-30)** -- S1, A1, A2, A3, A6, W1-W4, T1 and T2
+> landed. T3 (the Try Turmeric timeline) is deferred, as the plan itself
+> phases it. The Playwright half of track W could not be run in the execution
+> environment (no `emcc` to build `web/turmeric.js`); see
+> [§9 Execution record](#9-execution-record).
+> Written 2026-08-29 against v0.41.0.
 > **Type:** LSP / interpreter / web client.
 > **Source:** the follow-up sections of c2mp's
 > `~/Projects/c2mir-playground/c2mp/docs/lsp-plan.md` (S11 occurrences and
@@ -604,3 +609,129 @@ happens.
 - **Pausing the wasm interpreter from the browser.** c2mp's reasoning against
   it applies here for the same reason it applied there -- there is no yield
   point in a browser tab -- and the tracer is what makes it unnecessary.
+
+
+---
+
+## 9. Execution record
+
+Written after the fact. The plan body above is left as it was proposed; this
+section records what actually happened, including where the plan was wrong.
+
+### 9.1 What landed
+
+| | Where |
+|---|---|
+| **S1** scope resolver | `src/lsp/lsp_scope.{c,h}`, hooked from `src/main.c` and `src/web/wasm_lsp.c` |
+| **A1** scope-aware highlight | `src/lsp/lsp.c` (`gate_admits`) |
+| **A2** prepareRename + rename R1 | `src/lsp/lsp.c` |
+| **A3** rename R2 + references | `src/lsp/lsp.c` (`workspace_scan`) |
+| **A6** cross-file identity | `src/main.c` (`tur_collect_symbols` takes a logical path) |
+| **W1-W4** the prompt | `web/main.js`, `web/lsp-client.js`, `web/try/index.html`, `web/styles.css` |
+| **T1** the recorder | `src/turi/trace.{c,h}`, `tur trace` |
+| **T2** reverse execution | `src/turi/dap.c` (`"replay": true`), `turi_trace_replay_*` |
+
+Tests: `tests/lsp/session_test.c` (10 new cases), `tests/lsp/mcp_lsp_test.py`
+(`test_lsp_inside_a_spice`), `tests/run-trace.sh` + `tests/fixtures/trace/`,
+`tests/dap-replay-driver.py` driven from `tests/run-dap.sh`,
+`web/tests/repl-intelligence.spec.js`.
+
+### 9.2 Where the plan's repo facts were wrong
+
+**Span offsets do not index the file on disk.** §1.2 specifies
+`scope_start_off` / `scope_end_off` as byte offsets and assumes they can be
+compared against the buffer the editor holds. They cannot, for two independent
+reasons the plan did not anticipate:
+
+- A **sweet-exp** buffer reaches the elaborator as *transformed* s-expression
+  text, so every `Span` indexes a string the user has never seen. Diagnostics
+  had always translated back (`render_snippet_ex`); nothing else did, because
+  nothing else read offsets.
+- A **`#lang` line** is stripped from the head of every file that has one, and
+  `src` starts past it. Line numbering survives that strip (the directive's
+  newline is left in place, so line 1 is simply empty), which is exactly why it
+  went unnoticed -- every consumer so far read line/column.
+
+`diag_translate_span` now undoes both, and `SourceFile` carries `head_offset`.
+Without this, a rename in a `.tur.sweet` file edited the binder and missed
+every use; the plan's own `.tur.sweet` fixture requirement (§2.2) is what
+caught it.
+
+**The reverse shadowing case is the destructive one, and §2.1 only names the
+forward one.** The plan's `documentHighlight` sketch branches on "is this a
+local?" and scans the whole buffer otherwise. That still paints a local's uses
+when the caret is on the *global* it shadows -- and renaming from there
+rewrites the local. `gate_admits` handles both: a local's marks are its scope,
+and a global's marks are the buffer minus every region a local of the same name
+covers.
+
+**A cross-file rename needs each file's own locals, not just its imports.**
+§2.2's R2 says "scan each file for occurrences, skipping any file that does not
+`import` the defining module". That is necessary and not sufficient: a sibling
+module can bind a local `total` *and* import the global `total`, and a textual
+rewrite renames both. Each candidate file is now compiled for its own binding
+table before it is edited. Rename is a deliberate, occasional action that can
+afford a compile per importing file; `LSP_WS_ANALYZE_MAX` (200) bounds it, and
+overrun refuses rather than emitting a partial `WorkspaceEdit`.
+
+**A6 was not a verification pass.** §2.4 lists go-to-definition across modules
+and completion from imports as things to *check* rather than build. Both were
+broken, and badly: `tur_collect_symbols` passed no include dirs at all, and the
+walk-up ran from the scratch file the LSP writes -- so a module inside a spice
+came back with no symbol index whatsoever. `tur check` on the same file worked
+the whole time, which is what made it invisible.
+
+**The re-export gap does not exist.** §2.4's second "close" item -- a
+re-exported name resolving to the re-export rather than to the defining `defn`
+-- has no Turmeric analogue: `(export x)` for a name not defined in the module
+is a hard error (`exported symbol 'x' is not defined in this module`), so the
+situation cannot arise.
+
+**The `setBusy` focus bug has no analogue either.** §3.1 says to copy c2mp's
+S12.4 fix. Try Turmeric never disables the prompt during a run -- the only
+`disabled` write is the one that *enables* it when the WASM boots -- so there
+is nothing to blur and nothing to restore. What does transfer is the `Escape`
+rule: the page has document-level Escape handlers for the docs pane and three
+menus, so the prompt stops propagation.
+
+**The step cap needed a decision the plan left open.** §4.4 says the cap "ends
+the run through the same unwind path a fuel exhaustion takes". Setting
+`turi_env_set_fuel(env, 1)` does that, and the alternative -- resuming
+untraced -- was rejected because the recording would then describe a prefix of
+a program whose answer came from somewhere the trace cannot show.
+
+**The trace format grew two fields and lost one.** Ids are `u32` rather than
+`u16` (a 65k ceiling on distinct names is the kind of limit that is fine until
+a generated program walks into it), the header carries a name table (§4.3's
+`site` references an `fn_name_id` with nothing to resolve it against), and
+`ENTER` / `POP` carry no separate frame index -- `depth` already identifies the
+frame, because frames are a stack.
+
+### 9.3 Measurements the plan asked for
+
+§4.6 says to measure the tracer's cost rather than copy c2mp's number. On a
+Debug + ASan build, a 20,000-iteration `while` loop: **0.11s untraced, 0.57s
+traced (~5x)**, producing 80,006 steps in 1.2 MB -- about 15 bytes a step, with
+deltas doing the work the plan predicted they would. That sits inside c2mp's
+measured 1.6x-13x band. A Release measurement was not taken.
+
+### 9.4 What was not done
+
+- **T3, the Try Turmeric timeline.** Deferred, as §5 phases it: "if the format
+  is wrong, T3 is the expensive place to find that out". The format now has two
+  consumers (the `--dump` reader and the DAP replay) and a version byte.
+- **The Playwright specs were written but not run.** The suite needs
+  `web/turmeric.js`, and building it needs emscripten, which the execution
+  environment does not have. `npm run build` bundles the changed JS cleanly
+  (2,979 modules transformed), so the code parses and imports resolve; the
+  behavioural assertions in `web/tests/repl-intelligence.spec.js` and the
+  updated `meta-commands` / `smoke` / `diag` specs are unverified.
+- **Semantic tokens and inlay hints.** Out of scope per §8, and still are.
+
+### 9.5 One behaviour change worth calling out
+
+`:help` in the web REPL is generated from the command table now, aligned on the
+widest label. The old hand-written block spelled `:doc  <sym>` with two spaces;
+the generated one spells `:doc <sym>`. `web/tests/meta-commands.spec.js`
+asserted on the old spacing and was updated -- which is precisely the class of
+drift the single table exists to prevent.

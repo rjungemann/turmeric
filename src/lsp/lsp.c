@@ -1236,7 +1236,7 @@ static void on_document_highlight(const char *id_raw, size_t id_len,
 /* -------------------------------------------------------------------------
  * A2/A3: textDocument/prepareRename, textDocument/rename,
  *        textDocument/references
- * (editor-intelligence-follow-through-plan, S2.2 and S2.3)
+ * (editor-intelligence-follow-through-plan, 2.2 and 2.3)
  *
  * Rename is the feature the scope resolver was built for, and refusing is
  * half of it. c2mp lists rename as not covered in both its S11.4 and its
