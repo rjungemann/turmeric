@@ -4287,12 +4287,55 @@ if (document.readyState === 'loading') {
     init();
 }
 
-// Register the service worker after the page settles. Scope `/` so the
-// origin-wide kill-switch and runtime caching can target docs paths too.
-if ('serviceWorker' in navigator) {
+/* The service worker is a production feature, and on a dev server it is
+ * actively harmful.
+ *
+ * sw.js falls through to cache-first for same-origin static assets, and its
+ * precache names `/main.js` and `/styles.css` -- which on a dev server are the
+ * files you are editing. So a worker installed by one `npm run dev` session
+ * keeps serving that session's JS and CSS to every later one: the page comes up
+ * unstyled, or running code you changed an hour ago, and the only way out is a
+ * hard reload every single time.
+ *
+ * On a loopback host we therefore tear the worker down instead of registering
+ * it. `?sw=1` opts back in, which is how the PWA and offline-docs specs still
+ * exercise the real thing. */
+const SW_LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '']);
+const swDevDisabled = SW_LOOPBACK_HOSTS.has(location.hostname) &&
+                      !new URLSearchParams(location.search).has('sw');
+
+if ('serviceWorker' in navigator && !swDevDisabled) {
+    // Register after the page settles. Scope `/` so the origin-wide
+    // kill-switch and runtime caching can target docs paths too.
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js', { scope: '/' })
             .catch((err) => console.warn('SW registration failed:', err));
+    });
+} else if ('serviceWorker' in navigator) {
+    window.addEventListener('load', async () => {
+        try {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            // Nothing installed is the steady state, and returning here is what
+            // makes the reload below safe: after one teardown there are no
+            // registrations left, so the next load cannot reload again.
+            if (!regs.length) return;
+
+            const wasControlled = !!navigator.serviceWorker.controller;
+            await Promise.all(regs.map((r) => r.unregister()));
+            if ('caches' in window) {
+                const keys = await caches.keys();
+                await Promise.all(keys.map((k) => caches.delete(k)));
+            }
+            console.info('Service worker disabled on localhost (append ?sw=1 to keep it).');
+
+            // This page load was served BY the worker just removed, so what is
+            // on screen is the stale copy. Reload once to get the real files --
+            // otherwise the fix appears not to have worked until a manual
+            // reload, which is the thing being fixed.
+            if (wasControlled) window.location.reload();
+        } catch (err) {
+            console.warn('SW teardown failed:', err);
+        }
     });
 }
 

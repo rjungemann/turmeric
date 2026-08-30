@@ -1,7 +1,10 @@
 import { test, expect } from '@playwright/test';
 
 async function gotoTry(page) {
-    await page.goto('/try/');
+    // ?sw=1 opts back in to the service worker, which main.js disables on
+    // loopback hosts so a dev server stops serving yesterday's main.js and
+    // styles.css cache-first. The PWA assertions below need the real thing.
+    await page.goto('/try/?sw=1');
     await expect(page.locator('#wasm-status-text')).toHaveText('Ready', { timeout: 30_000 });
 }
 
