@@ -639,6 +639,7 @@ struct TurTraceReplay {
     uint32_t   n_names;
     /* Record offset of each STEP, which is the axis a client scrubs. */
     size_t    *stops;
+    uint32_t  *stop_sites;   /* site id of each stop, for breakpoint matching */
     uint32_t   n_stops;
     /* Depth at each stop, precomputed: step-over and step-out are "advance
      * until the depth comes back", and asking that question should not cost a
@@ -787,9 +788,13 @@ TurTraceReplay *turi_trace_replay_open(const uint8_t *bytes, size_t len) {
 
     /* Index the stop points and their depths in one pass. */
     uint32_t cap = 256;
-    rp->stops  = malloc(cap * sizeof *rp->stops);
-    rp->depths = malloc(cap * sizeof *rp->depths);
-    if (!rp->stops || !rp->depths) { turi_trace_replay_free(rp); return NULL; }
+    rp->stops      = malloc(cap * sizeof *rp->stops);
+    rp->depths     = malloc(cap * sizeof *rp->depths);
+    rp->stop_sites = malloc(cap * sizeof *rp->stop_sites);
+    if (!rp->stops || !rp->depths || !rp->stop_sites) {
+        turi_trace_replay_free(rp);
+        return NULL;
+    }
     rp->rd.cursor = 0;
     TurTraceRecord rec;
     for (;;) {
@@ -804,9 +809,13 @@ TurTraceReplay *turi_trace_replay_open(const uint8_t *bytes, size_t len) {
             uint16_t *gd = realloc(rp->depths, cap * sizeof *gd);
             if (!gd) { turi_trace_replay_free(rp); return NULL; }
             rp->depths = gd;
+            uint32_t *gt = realloc(rp->stop_sites, cap * sizeof *gt);
+            if (!gt) { turi_trace_replay_free(rp); return NULL; }
+            rp->stop_sites = gt;
         }
-        rp->stops[rp->n_stops]  = at;
-        rp->depths[rp->n_stops] = rec.depth;
+        rp->stops[rp->n_stops]      = at;
+        rp->depths[rp->n_stops]     = rec.depth;
+        rp->stop_sites[rp->n_stops] = rec.site;
         rp->n_stops++;
     }
 
@@ -821,6 +830,7 @@ void turi_trace_replay_free(TurTraceReplay *rp) {
     free(rp->names);
     free(rp->stops);
     free(rp->depths);
+    free(rp->stop_sites);
     for (int i = 0; i < rp->cap_frames; i++) rframe_free(&rp->frames[i]);
     free(rp->frames);
     free(rp->output.data);
@@ -893,6 +903,19 @@ int turi_trace_replay_depth_at(const TurTraceReplay *rp, uint32_t index) {
     return rp->depths[index];
 }
 
+bool turi_trace_replay_site_at(const TurTraceReplay *rp, uint32_t index,
+                               const char **file_out, uint32_t *line_out) {
+    if (file_out) *file_out = "";
+    if (line_out) *line_out = 0;
+    if (!rp || index >= rp->n_stops) return false;
+    TurTraceSite site;
+    if (!turi_trace_site(&rp->rd, rp->stop_sites[index], &site)) return false;
+    if (file_out && site.file_name < rp->n_names && rp->names[site.file_name])
+        *file_out = rp->names[site.file_name];
+    if (line_out) *line_out = site.line;
+    return true;
+}
+
 /* The trailing path component, so a breakpoint set on "input.tur" matches a
  * site recorded with an absolute path -- the same basename rule the live
  * debugger's breakpoint table uses. */
@@ -905,6 +928,16 @@ static const char *replay_basename(const char *p) {
     return slash ? slash + 1 : p;
 }
 
+static bool replay_stop_matches(const TurTraceReplay *rp, uint32_t index,
+                                const char *file, uint32_t line) {
+    const char *fp = "";
+    uint32_t at = 0;
+    if (!turi_trace_replay_site_at(rp, index, &fp, &at)) return false;
+    if (at != line) return false;
+    if (file && *file && strcmp(replay_basename(fp), file) != 0) return false;
+    return true;
+}
+
 uint32_t turi_trace_replay_find_line(const TurTraceReplay *rp, int dir,
                                      const char *file, uint32_t line,
                                      bool *hit_out) {
@@ -913,39 +946,16 @@ uint32_t turi_trace_replay_find_line(const TurTraceReplay *rp, int dir,
     uint32_t last = rp->n_stops - 1;
     if (dir >= 0) {
         for (uint32_t i = rp->cursor + 1; i <= last; i++) {
-            TurTraceRecord rec;
-            TurTraceReader scan = rp->rd;
-            scan.cursor = rp->stops[i];
-            if (!turi_trace_next(&scan, &rec)) break;
-            TurTraceSite site;
-            if (!turi_trace_site(&rp->rd, rec.site, &site)) continue;
-            if (site.line != line) continue;
-            if (file && *file) {
-                const char *fp = (site.file_name < rp->n_names)
-                                   ? rp->names[site.file_name] : "";
-                if (strcmp(replay_basename(fp), file) != 0) continue;
-            }
+            if (!replay_stop_matches(rp, i, file, line)) continue;
             if (hit_out) *hit_out = true;
             return i;
         }
         return last;
     }
     for (uint32_t i = rp->cursor; i > 0; i--) {
-        uint32_t j = i - 1;
-        TurTraceRecord rec;
-        TurTraceReader scan = rp->rd;
-        scan.cursor = rp->stops[j];
-        if (!turi_trace_next(&scan, &rec)) break;
-        TurTraceSite site;
-        if (!turi_trace_site(&rp->rd, rec.site, &site)) continue;
-        if (site.line != line) continue;
-        if (file && *file) {
-            const char *fp = (site.file_name < rp->n_names)
-                               ? rp->names[site.file_name] : "";
-            if (strcmp(replay_basename(fp), file) != 0) continue;
-        }
+        if (!replay_stop_matches(rp, i - 1, file, line)) continue;
         if (hit_out) *hit_out = true;
-        return j;
+        return i - 1;
     }
     return 0;
 }

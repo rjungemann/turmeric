@@ -113,7 +113,14 @@ print("CAP supportsReverseContinue=%s" %
       str(caps.get("supportsReverseContinue", False)).lower())
 event("initialized")
 req("launch", program=PROG, stopOnEntry=True, replay=True)
-req("setBreakpoints", source={"path": PROG}, breakpoints=[{"line": 7}])
+
+# The breakpoint line is read out of the fixture rather than written down: the
+# replay fixture is deliberately a different (and larger) file from the live
+# one, and a hardcoded line silently stops matching the moment either moves.
+with open(PROG) as _f:
+    _lines = _f.read().split("\n")
+BP_LINE = next(i + 1 for i, l in enumerate(_lines) if "(+ a b)" in l)
+req("setBreakpoints", source={"path": PROG}, breakpoints=[{"line": BP_LINE}])
 req("configurationDone")
 
 # 1) The recording opens at its first step.
@@ -159,6 +166,19 @@ locals_of(0, "again")
 # 6) reverseContinue rewinds to the previous breakpoint hit, or to the start.
 req("reverseContinue", threadId=1); stop("rev")
 stack("rev")
+
+# 7) Run off the end. Nothing asserts a duration here, but the fixture is
+#    large enough (~8k steps) that a scan which re-derives the interpreter
+#    state at every candidate step -- which is what the first version did --
+#    does not finish inside the driver's timeout. Reaching `exited` at all is
+#    the assertion.
+req("setBreakpoints", source={"path": PROG}, breakpoints=[])
+t0 = time.time()
+_send("continue", threadId=1)
+ex = event("exited")
+print("EXIT code=%d" % ex["body"]["exitCode"])
+print("CONTINUE-TO-END under-10s=%s" % ("yes" if time.time() - t0 < 10 else "no"))
+event("terminated")
 
 req("disconnect")
 proc.stdin.close()

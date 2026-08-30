@@ -109,7 +109,14 @@ expect "driver completed the session"     "DONE"
 # the direction a live debugger cannot go answerable at all.
 # ---------------------------------------------------------------------------
 
-replay_out=$(python3 tests/dap-replay-driver.py "$TUR" "$FIX" 2>&1)
+# Its own fixture, and a larger one: see tests/fixtures/dap-replay/input.tur
+# for why a 65-step recording cannot tell a linear scan from a quadratic one.
+REPLAY_FIX="tests/fixtures/dap-replay/input.tur"
+if [ ! -f "$REPLAY_FIX" ]; then
+  echo "FAIL dap: replay fixture not found at $REPLAY_FIX"
+  exit 1
+fi
+replay_out=$(python3 tests/dap-replay-driver.py "$TUR" "$REPLAY_FIX" 2>&1)
 replay_status=$?
 
 expect_replay() {
@@ -144,13 +151,18 @@ else
   # The gate: stepping BACK out of the callee lands in the caller, showing the
   # caller's own values -- "how did this come to be what it is", answered.
   expect_replay "stepBack leaves the callee"      "STEPBACK left-callee-after=yes"
-  expect_replay "and lands in the caller"         "FRAME back #0 main :18"
+  expect_replay "and lands in the caller"         "FRAME back #0 main"
   expect_replay "with the caller's own locals"    "VAR back x=3"
   expect_replay "and not the callee's"            "DEPTH after-stepback=1"
   # A recording is replayable: the second visit reads exactly like the first.
   expect_replay "the same breakpoint again"       "DEPTH again=2"
   expect_replay "with the same values"            "VAR again a=3"
   expect_replay "reverseContinue rewinds"         "STOP rev reason="
+  # A `continue` with nothing ahead of it scans the whole recording. Reaching
+  # `exited` is the assertion; the timing line is the diagnostic that says
+  # WHY, if a future change makes that scan quadratic again.
+  expect_replay "continue runs off the end of the recording" "EXIT code=7"
+  expect_replay "and the end-to-end scan stays linear" "CONTINUE-TO-END under-10s=yes"
   expect_replay "the replay session completed"    "DONE"
 fi
 

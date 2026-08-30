@@ -682,27 +682,28 @@ static void dap_replay_flush_output(DapState *s) {
 
 /* Is `index` on a line the client set a breakpoint on?
  *
+ * Asked of every step between the cursor and the next hit, so it reads the
+ * step's recorded site directly rather than seeking to it: a seek rebuilds the
+ * whole state from the start of the stream, and doing that per candidate turns
+ * a `continue` over an 80k-step recording from instant into a hang. Measured.
+ *
  * Conditions are not evaluated here. A condition is an expression in a frame,
  * and a recording has no frame to evaluate it in -- the same reason `evaluate`
  * refuses. A conditional breakpoint therefore behaves as an unconditional one
  * in replay, which is the honest degradation: it stops more often than asked,
  * never less. */
 static bool dap_replay_is_bp(DapState *s, uint32_t index) {
-    TurTraceFrame fr;
-    uint32_t saved = turi_trace_replay_index(s->replay);
-    if (saved != index) turi_trace_replay_seek(s->replay, index);
-    bool hit = false;
-    if (turi_trace_replay_frame_at(s->replay, 0, &fr)) {
-        for (int i = 0; i < s->n_bps && !hit; i++) {
-            if (s->bps[i].line != fr.line) continue;
-            if (s->bps[i].file[0] &&
-                strcmp(s->bps[i].file, dap_basename(fr.file_path)) != 0)
-                continue;
-            hit = true;
-        }
+    const char *file = "";
+    uint32_t line = 0;
+    if (!turi_trace_replay_site_at(s->replay, index, &file, &line)) return false;
+    for (int i = 0; i < s->n_bps; i++) {
+        if (s->bps[i].line != line) continue;
+        if (s->bps[i].file[0] &&
+            strcmp(s->bps[i].file, dap_basename(file)) != 0)
+            continue;
+        return true;
     }
-    if (saved != index) turi_trace_replay_seek(s->replay, saved);
-    return hit;
+    return false;
 }
 
 /* Scan for the next (dir > 0) or previous breakpoint hit; falls back to the
@@ -889,6 +890,11 @@ void dap_end_session(void *state, TuriEnv *env) {
      * while the env is still there. The recording itself outlives it -- that
      * is the whole point. */
     if (s->trace) turi_trace_stop(s->trace);
+    /* And the env itself is about to be freed. A replay session keeps serving
+     * requests after this point -- that is what replay IS -- so anything that
+     * still reached for `s->env` would be reading freed memory. Every user of
+     * it already guards on NULL; this is what makes the guard true. */
+    s->env = NULL;
 }
 
 /* Run the program with the debuggee's stdout captured to a pipe so it does not

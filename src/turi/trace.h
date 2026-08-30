@@ -257,4 +257,14 @@ uint32_t turi_trace_replay_find_line(const TurTraceReplay *rp, int dir,
  * Returns 0 for an out-of-range index. */
 int turi_trace_replay_depth_at(const TurTraceReplay *rp, uint32_t index);
 
+/* The source position of an arbitrary step, without seeking.
+ *
+ * Without-seeking is the whole point: matching a breakpoint means asking this
+ * of every step between here and the next hit, and a seek rebuilds the state
+ * from the start of the stream. Asking it that way turns a `continue` over a
+ * 200k-step recording into 200k rebuilds -- which is not slow, it is a hang.
+ * `*file_out` points into the replay and is NUL-terminated. */
+bool turi_trace_replay_site_at(const TurTraceReplay *rp, uint32_t index,
+                               const char **file_out, uint32_t *line_out);
+
 #endif
