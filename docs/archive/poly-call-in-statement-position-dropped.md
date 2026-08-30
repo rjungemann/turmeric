@@ -22,6 +22,47 @@ across all 147 `expected.c` fixtures**, and the suite went from 2697/1 to
 **2698/0** -- the regression fixture had been red on purpose and flipped green
 on the fix.
 
+## The sweep: it was eight cases, not two
+
+The first fix took the two with repros. A follow-up sweep asked the structural
+question instead -- *which kinds in that list hold a sub-expression?* -- and
+found six more, every one of them in the list on the strength of the WRAPPER
+being pure:
+
+| kind | was described as | holds |
+|---|---|---|
+| `EX_CAST` | "pure expression" | `cast_.expr` |
+| `EX_UNION_INJECT` | "pure struct literal" | `union_inject_.value` |
+| `EX_ANY_TYPE_OF` | "pure read" | `any_type_of_.value` |
+| `EX_ANY_CAST` | "pure unbox" | `any_cast_.value` |
+| `EX_ANY_IS` | "pure tag test" | `any_is_.value` |
+| `EX_POLY_WRAP` | "pure struct literal" | `poly_wrap_.inner` |
+| `EX_EXISTS_PACK` | "pure boxing" | `exists_pack_.value` |
+| `EX_CONS_LIST` | "allocation side-effects handled in emit_value" | `cons_list_.items[]` |
+
+That last comment is worth reading twice: it names the function that would have
+handled the effects, and `emit_value` was never called.
+
+**Three are demonstrably reachable**, and were silently dropping calls before
+the sweep -- proven by reverting it and watching the effects vanish:
+
+```turmeric
+(cast (effAny) cstr)      ;; EX_ANY_CAST     -- dropped
+(type-of (effAny))        ;; EX_ANY_TYPE_OF  -- dropped
+(:: (eff) :any)           ;; the widening wrap -- dropped
+```
+
+All three are in `tests/fixtures/poly-statement-position-effect` now. The other
+five have no reachable statement-position spelling found so far, so they are
+fixed as defence rather than against a repro -- stated plainly rather than
+implied, since "fixed" reads stronger than the evidence for those five.
+
+**`EX_CPS_CONT_APP` was deliberately left alone.** It also holds sub-expressions,
+but applying a continuation is the effect rather than a wrapper around one, so
+the rule used here does not apply to it and it needs its own answer.
+
+Zero snapshot drift again across all 147 fixtures, and the suite stays 2698/0.
+
 ## Repro
 
 ```turmeric

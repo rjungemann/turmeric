@@ -209,24 +209,63 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
         case EX_FLOAT_LIT: case EX_CSTR_LIT: case EX_SYM_LIT: case EX_VAR:
         case EX_DEFAULT_OF:    /* M2b: pure zero-initializer, no side effects */
-        case EX_CAST:         /* pure expression, no stmt-level side effects */
-        case EX_UNION_INJECT: /* IT4: pure struct literal, no stmt-level side effects */
-        case EX_ANY_TYPE_OF:  /* IT4: pure read, no stmt-level side effects */
-        case EX_ANY_CAST:     /* IT4: pure unbox, no stmt-level side effects */
-        case EX_ANY_IS:       /* TY3: pure tag test, no stmt-level side effects */
         case EX_TYPECLASS_DEF:
         case EX_DEFMODULE: /* Phase M0: module metadata — nothing to emit */
         case EX_PANIC_PAYLOAD_TYPE:
-        case EX_CONS_LIST:    /* AR8: cons-list expr -- allocation side-effects handled in emit_value */
         case EX_PANIC_PAYLOAD_VALUE:
         case EX_PANIC_PAYLOAD_FILE:
         case EX_PANIC_PAYLOAD_LINE:
         case EX_PANIC_PAYLOAD_DOWNS:
-        case EX_POLY_WRAP:   /* Phase HRT1: pure struct literal, no stmt-level side effects */
-        case EX_EXISTS_PACK: /* Phase HRT2: pure boxing, no stmt-level side effects */
         case EX_DEFGADT:     /* Phase G1: ADT definition — handled in Pass 0 */
         case EX_CPS_CONT_APP: /* CPS2: continuation application — emit via emit_value if side-effecting */
             /* No side effects — emit nothing. */
+            return;
+        /* poly-call-in-statement-position-dropped, second sweep.
+         *
+         * Every case below WRAPS an operand.  Each was in the no-side-effects
+         * list above on the strength of the wrapper being pure -- a cast, a tag
+         * test, a boxing -- which says nothing about what it wraps.  In
+         * statement position that deleted the operand along with its effects,
+         * which is how `(polyA true)` and `(:: (eff) :int)` silently did
+         * nothing before the two cases below were fixed.
+         *
+         * The uniform rule: discard the OPERATION (that is what statement
+         * position means) and emit the OPERAND as a statement.  Emitting is
+         * only ever more correct than not -- eliding a call is sound solely
+         * when the callee is known pure, and none of these checked that.
+         *
+         * EX_CPS_CONT_APP is deliberately NOT here: applying a continuation is
+         * the effect, not a wrapper around one, so it needs its own answer
+         * rather than this rule.
+         */
+        case EX_CAST:
+            if (e->as.cast_.expr) emit_stmt(ctx, body, e->as.cast_.expr);
+            return;
+        case EX_UNION_INJECT:
+            if (e->as.union_inject_.value) emit_stmt(ctx, body, e->as.union_inject_.value);
+            return;
+        case EX_ANY_TYPE_OF:
+            if (e->as.any_type_of_.value) emit_stmt(ctx, body, e->as.any_type_of_.value);
+            return;
+        case EX_ANY_CAST:
+            if (e->as.any_cast_.value) emit_stmt(ctx, body, e->as.any_cast_.value);
+            return;
+        case EX_ANY_IS:
+            if (e->as.any_is_.value) emit_stmt(ctx, body, e->as.any_is_.value);
+            return;
+        case EX_POLY_WRAP:
+            if (e->as.poly_wrap_.inner) emit_stmt(ctx, body, e->as.poly_wrap_.inner);
+            return;
+        case EX_EXISTS_PACK:
+            if (e->as.exists_pack_.value) emit_stmt(ctx, body, e->as.exists_pack_.value);
+            return;
+        case EX_CONS_LIST:
+            /* Its comment claimed "allocation side-effects handled in
+             * emit_value" -- which emit_value was never called to do.  Each
+             * ELEMENT can be an arbitrary expression. */
+            for (uint32_t __i = 0; __i < e->as.cons_list_.n; __i++)
+                if (e->as.cons_list_.items[__i])
+                    emit_stmt(ctx, body, e->as.cons_list_.items[__i]);
             return;
         case EX_ASCRIBE:
             /* Same defect as EX_REINTERPRET below, and this one's comment

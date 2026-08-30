@@ -10,6 +10,12 @@
 ;;   EX_ASCRIBE     -- `(:: (eff) :int)`, whose own comment said "delegate to
 ;;                     inner" while the code returned without delegating.
 ;;
+;; A follow-up sweep found six more of the same shape and fixed them the same
+;; way -- EX_CAST, EX_ANY_TYPE_OF, EX_ANY_CAST, EX_ANY_IS, EX_UNION_INJECT,
+;; EX_POLY_WRAP, EX_EXISTS_PACK and EX_CONS_LIST.  Three are exercised below;
+;; the rest have no reachable statement-position spelling found so far, so they
+;; are fixed as defence rather than against a repro.
+;;
 ;; Fixed 2026-08-26; see docs/archive/poly-call-in-statement-position-dropped.md.
 ;;
 ;; The assertion is the printed order: each "ran" line must appear between its
@@ -19,6 +25,7 @@
   (do (println "  ran") x))
 
 (defn eff [] : int (do (println "  ran") 7))
+(defn effAny [] : any (do (println "  ran") "hello"))
 
 (defn main [] : int
   (println "bool:")  (polyA true)
@@ -27,5 +34,9 @@
   (println "cstr:")  (polyA "s")
   ;; EX_ASCRIBE around a call, discarded
   (println "asc:")   (:: (eff) :int)
+  ;; EX_ANY_CAST / EX_ANY_TYPE_OF / the widening wrap, all discarded
+  (println "cast:")  (cast (effAny) cstr)
+  (println "tyof:")  (type-of (effAny))
+  (println "widen:") (:: (eff) :any)
   (println "done")
   0)
