@@ -35,7 +35,12 @@ test.describe('Minimap', () => {
         await expect.poll(() => minimapOn(page), { timeout: 10_000 }).toBe(true);
         // The gate decides; the DOM is what the user sees. Assert both, since
         // an option set to true with no canvas behind it is still no minimap.
-        await expect(page.locator('.monaco-editor .minimap')).toBeVisible();
+        // Scoped to #editor. The page hosts a SECOND Monaco instance -- the
+        // REPL prompt (`#repl-input`) -- and Monaco builds a .minimap node
+        // even with minimap.enabled false, so a page-wide locator matches two
+        // elements and fails strict mode. This assertion was always about the
+        // editor's minimap; now it says so.
+        await expect(page.locator('#editor .monaco-editor .minimap')).toBeVisible();
     });
 
     test('the toggle turns it off, and the choice survives a reload',
@@ -88,7 +93,7 @@ test.describe('Minimap', () => {
 
         // Unconditional, unlike the minimap: the ruler is a few pixels wide at
         // any pane size, so it is not width-gated.
-        await expect(page.locator('.monaco-editor .decorationsOverviewRuler'))
+        await expect(page.locator('#editor .monaco-editor .decorationsOverviewRuler'))
             .toHaveCount(1);
         // (That a *diagnostic* actually lands in it needs a marker, which
         // needs a language server -- asserted in lsp.spec.js against the
