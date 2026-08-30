@@ -707,7 +707,25 @@ a generated program walks into it), the header carries a name table (§4.3's
 `ENTER` / `POP` carry no separate frame index -- `depth` already identifies the
 frame, because frames are a stack.
 
-### 9.3 Measurements the plan asked for
+### 9.3 Two bugs the first fixture was too small to reach
+
+Both in T2, both found by giving the replay driver a larger fixture
+(`tests/fixtures/dap-replay/`, ~8k steps) rather than reusing the live
+debugger's 65-step one.
+
+**A `continue` with no breakpoint ahead of it hung.** Breakpoint matching
+seeked to each candidate step, and a seek rebuilds the whole state from the
+start of the stream -- 160k rebuilds for one scan. Over 110 seconds and still
+going, against 0.02s once each stop's site was indexed alongside its depth. A
+65-step recording cannot tell the two implementations apart, which is the
+entire reason the replay fixture is its own file and is deliberately not small.
+
+**`setBreakpoints` during a replay session read freed memory.** A replay keeps
+serving requests after the interpreter env is gone -- that is what replay *is*
+-- and the handler still reached for it. `dap_end_session` nulls the pointer,
+which is what makes the NULL guards that were already there true.
+
+### 9.4 Measurements the plan asked for
 
 §4.6 says to measure the tracer's cost rather than copy c2mp's number. On a
 Debug + ASan build, a 20,000-iteration `while` loop: **0.11s untraced, 0.57s
@@ -715,7 +733,7 @@ traced (~5x)**, producing 80,006 steps in 1.2 MB -- about 15 bytes a step, with
 deltas doing the work the plan predicted they would. That sits inside c2mp's
 measured 1.6x-13x band. A Release measurement was not taken.
 
-### 9.4 What was not done
+### 9.5 What was not done
 
 - **T3, the Try Turmeric timeline.** Deferred, as §5 phases it: "if the format
   is wrong, T3 is the expensive place to find that out". The format now has two
@@ -728,7 +746,7 @@ measured 1.6x-13x band. A Release measurement was not taken.
   updated `meta-commands` / `smoke` / `diag` specs are unverified.
 - **Semantic tokens and inlay hints.** Out of scope per §8, and still are.
 
-### 9.5 One behaviour change worth calling out
+### 9.6 One behaviour change worth calling out
 
 `:help` in the web REPL is generated from the command table now, aligned on the
 widest label. The old hand-written block spelled `:doc  <sym>` with two spaces;

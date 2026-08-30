@@ -160,6 +160,12 @@ undoing deltas backwards. That is O(records) per seek -- a few milliseconds at
 the default cap -- and it is the difference between a decoder that is obviously
 correct and one that has to get an undo log right in both directions.
 
+**Per seek** is the operative phrase. Asking *where was step N* is
+`turi_trace_replay_site_at`, which reads an index and does not seek; asking it
+by seeking, once per candidate, is how a scan to the end of an 80k-step
+recording goes from 0.02 seconds to not finishing. Anything that walks the step
+axis looking for something -- breakpoint matching, a search -- reads the index.
+
 ## See also
 
 - [lsp-guide.md](lsp-guide.md) -- the language server, including scope-aware
