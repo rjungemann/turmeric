@@ -327,9 +327,7 @@
 ;;;
 ;;; Since: arrowloop-lazy-feedback
 
-(defn loop-cell-of [slot : int] : LoopCell
-  ```c
-  return slot; ```)
+(defn loop-cell-of [slot : int] : LoopCell ```c return slot; ```)
 ;;; loop-cell-ready? -- has the fed-back value been written yet?
 ;;;
 ;;; False exactly inside an arrow-loop run, before the looped arrow has
@@ -616,8 +614,7 @@
 ;;; Since: arrowloop-lazy-feedback
 
 (defn arrow-loop-lazy [^fat f] : ptr<void>
-  (let [fv f]
-    (fn [b : int] : int (__ac_loop_step fv b))))
+  (let [fv f] (fn [b : int] : int (__ac_loop_step fv b))))
 ;;; arrow-loop-fix -- feedback by iteration to a fixpoint.
 ;;;
 ;;; For a looped arrow that reads d *strictly*: the cell is seeded with d0 and
