@@ -841,7 +841,13 @@ def test_lsp_inside_a_spice() -> None:
     on a stdlib name.
     """
     print("--- LSP inside a spice (A6) ---")
-    root = tempfile.mkdtemp(prefix="lsp_spice_")
+    # realpath, not the raw mkdtemp result. On macOS /var is a symlink to
+    # /private/var, so mkdtemp hands back the unresolved spelling while the
+    # compiler registers the resolved one -- and a definition that correctly
+    # crossed to the sibling module then failed a string compare on its uri.
+    # Canonicalising here makes every path this test builds match whichever
+    # spelling the server reports, on both platforms.
+    root = os.path.realpath(tempfile.mkdtemp(prefix="lsp_spice_"))
     src_dir = os.path.join(root, "src")
     os.makedirs(src_dir, exist_ok=True)
     with open(os.path.join(root, "build.tur"), "w") as f:
