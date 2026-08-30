@@ -158,6 +158,58 @@ about ten places and read widely --
 [closure-first-class-type-plan](../archive/history/closure-first-class-type-plan.md)
 is marked COMPLETE (B-0..B-4 shipped) and the comment was never updated.
 
+## Investigated 2026-08-26: it is a documented gap in a PRIOR fix
+
+This is not an unknown bug. `elab_structs.c:1326` carries the fix for
+[capturing-closure-in-struct-field-segv](../archive/history/capturing-closure-in-struct-field-segv.md),
+which marks a `(fn ...)` field **boxed** so every read steers to the fat
+dispatch -- precisely the crash described above. Its bound is the problem:
+
+```c
+/* Bound to arity 1..4: ... A nullary or >4-arg fn field stays on the
+ * pre-existing thin path. */
+if (t && t->kind == TY_FN && !t->as.fn.boxed &&
+    t->as.fn.arity >= 1 && t->as.fn.arity <= 4) {
+```
+
+So a **nullary** fn field -- a thunk, which is exactly what a lazy stream or a
+`with-*` bracket wants -- is *explicitly excluded* and left on the path that
+segfaults. **`>4` is excluded too and carries the same latent crash**, untested
+because nothing in the tree has a 5-arg fn field.
+
+The bound's stated reason is that the store shim needs arity >= 1 and the read
+dispatch covers N <= 4. Both halves turn out to exist for 0: `__tur_fatshim0`
+(store) and `TUR_APPLY0_T` (read).
+
+## Lowering the bound is NOT sufficient -- tried it
+
+The obvious fix is to drop both floors to 0 (`elab_structs.c`'s boxing test and
+`elab_call.c`'s `inner_arity < 1` skip). **Done, built, and it changes nothing**:
+all three repros still segfault, and the suite stays 2698/0. Reverted rather
+than shipped -- it is an unmotivated behaviour change that silently adds drop
+glue and makes such structs move-only, with no demonstrated benefit.
+
+The reason it does not help is the real finding:
+
+## A nullary `:fn` field has NO working invocation form
+
+| spelling | result |
+|---|---|
+| `(.run b)` | **reads** the field -- types as `(fn [] : ?)`, not a call |
+| `((.run b))` | calls it, but the result types as `?` |
+| `((:: (.run b) (fn [] int)))` | typechecks -- and **SIGSEGVs** on a capturing closure |
+
+The direct-call form the boxing machinery targets (`(.run em "x")` for arity
+>= 1) does not exist at arity 0, because with no arguments there is nothing to
+distinguish a call from a read. So the only spelling that typechecks is the
+ascription -- which rebuilds a fresh unboxed `TY_FN` and takes the thin path,
+whatever the field is marked.
+
+**That makes this elaboration work on the read-then-call path, not a bound
+change.** Two things have to happen together: `(.run b)` / `((.run b))` on a
+nullary fn field needs a resolved result type, and that path has to preserve
+the fat representation instead of reconstructing an unboxed one.
+
 ## Fix directions
 
 1. ~~**Widen the argument-type determination in `emit_expr.c`**~~ -- **DONE
@@ -183,12 +235,18 @@ is marked COMPLETE (B-0..B-4 shipped) and the comment was never updated.
    unboxed `TY_FN` -- which is the `boxed`-through-mangle-and-`type_eq` hole
    above, so it is type-system work, not a codegen patch.
 
-   **The cheap interim is a diagnostic**, and it is worth taking on its own: a
-   `:fn` field is only safe for a captureless lambda, so accepting a capturing
-   one and crashing at runtime is the worst available behaviour. Rejecting the
-   *store* of a capturing closure into a `:fn` field, with a message naming the
-   `defopaque :ptr<void>` route, turns a segfault into an error and breaks
-   nothing in the tree (every in-tree `:fn` field stores a captureless lambda).
+   **The cheap interim is a diagnostic**, and after the investigation above it
+   is the recommended next step rather than a fallback. The rule is now precise:
+   reject the store of a CAPTURING closure into a `:fn` field whose arity is
+   **outside the boxed range** -- 0, or > 4 -- because those are exactly the
+   fields left on the thin path. Arity 1..4 already works and must keep
+   working, so a blanket rejection would be wrong.
+
+   Elaboration can already tell the two apart: the shim loop in `elab_call.c`
+   distinguishes a bare `TY_FN` from a capturing closure today. The message
+   should name the `defopaque :ptr<void>` route. This breaks nothing in the
+   tree -- every in-tree `:fn` field stores a captureless lambda, which is why
+   the crash was never hit.
 3. **Document the working route.** Nothing says how to store a callback in an
    ADT; the answer is currently "read `Goal`'s declaration in `logic.tur`".
 
