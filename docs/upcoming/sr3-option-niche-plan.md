@@ -38,10 +38,18 @@ That left `option<Vec T>` / `option<Map ...>` / `option<Set ...>`: one fixture.
 **The second disqualification is gone.** `defopaque` over a pointer now c-names
 as `void *` ([gate results](../archive/opaque-pointer-c-spelling-gate-results.md),
 graduated 2026-08-28), so `String` and `StringBuilder` are eligible and the
-`(Option String)` census the plan named -- `env` (5 spellings), `httpd-string`
-(5), `args` (2), `re` (2), `docstrings` (2) -- is in scope. The first
-disqualification stands; `Cons` is still ineligible -- and item (2) of the
-original recommendation is now closed as DECLINED (see What is left, item 3).
+~~`(Option String)` census the plan named -- `env` (5 spellings), `httpd-string`
+(5), `args` (2), `re` (2), `docstrings` (2) -- is in scope.~~ **That census is
+wrong, and item 4's measurement is what found it**
+([results](../../benchmarks/option-niche-size/RESULTS.md)): `env`, `args` and
+`re` are `(Option cstr)`, not `(Option String)` -- verified ineligible against
+the emitter, since a `cstr` is a raw `const char *` that cannot carry
+`:non-null` -- and the `docstrings` hits are inside string LITERALS, the
+documentation text of two httpd functions. `httpd-string` is the only real
+row of the five, and it is the one file the emitted census independently
+found. The first disqualification stands; `Cons` is still ineligible -- and
+item (2) of the original recommendation is now closed as DECLINED (see What
+is left, item 3).
 
 ## What the phase is
 
@@ -358,6 +366,44 @@ container parity row breaking.
    on a population of approximately zero. Verified both ways:
    `(some (tnil))` is a legal, distinguishable value with the experiment on
    and off, and the one census fixture is bit-identical under the flag.
-4. **A size measurement worth the name.** The gate measured correctness, not
-   bytes. The claim is 16 -> 8 per value on the eligible population; nobody has
-   run SR0(a)'s instrument over it since the population changed.
+4. ~~A size measurement worth the name~~ -- **DONE 2026-08-30.** Instruments
+   and full results in
+   [benchmarks/option-niche-size/](../../benchmarks/option-niche-size/RESULTS.md).
+   Three findings:
+
+   **The per-value claim is exact: 16 -> 8, measured from the emitted
+   typedef.** Composition the plan never recorded -- a 4-byte tag, 4 bytes of
+   ALIGNMENT PADDING, and the 8-byte payload -- so half of what the niche
+   recovers is padding the tag's alignment forces, and the win would not
+   shrink if the tag were narrowed to a byte.
+
+   **The eligible population is two monomorphs in eight files**, out of 4736
+   Option monomorph instances the corpus emits: `Option__String` (7 files,
+   `stdlib/httpd-string.tur` plus 6 fixtures) and `Option__Vec__int` (1
+   fixture). Eligibility was decided by the compiler rather than re-derived --
+   a monomorph is eligible exactly when its typedef is present by default and
+   absent under the flag. Zero inputs emit by default and fail under the flag.
+   This is also what corrected the census above.
+
+   **And the size trade is not one-directional.** The niche costs 184-310
+   bytes of emitted `.text` per translation unit that uses it, because it must
+   ENFORCE what the default representation can simply represent: a null
+   payload is a legal value in a 16-byte tagged Option and an impossibility in
+   an 8-byte niche one, so the `:non-null` checks are emitted at the `Some`
+   ctor and at the carrier crossing. Three ineligible control fixtures are
+   byte-identical under the flag (+0), which is an object-code proof of the
+   inertness the corpus result asserts at the level of test outcomes.
+
+   No aggregate "bytes saved" figure is produced, deliberately: per-value
+   bytes need live values rather than emission sites (a corpus-wide sum would
+   be one stdlib body times the file count -- the CE0 trap), and container
+   elements are already known to be at exact parity.
+
+5. **`(Option cstr)` is 2.6x the eligible population and cannot be reached.**
+   Surfaced by item 4's payload tally: 34 `(Option cstr)` spellings against 13
+   `(Option String)`, and `cstr` is a builtin raw pointer that nothing can
+   declare `:non-null` over. The plan unshelved slice B on the reasoning that
+   making `String` eligible "is the whole census"; `String` was made eligible
+   and it is not. Whether a builtin pointer type can carry the declaration --
+   or whether these sites should be holding `String` -- is the open question
+   with the largest population behind it.

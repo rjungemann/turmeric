@@ -454,6 +454,11 @@ show the volume is there.
 pointer-payload Option shapes are real but concentrated -- `env` (5 spellings),
 `httpd-string` (5), `args` (2), `re` (2), `docstrings` (2), plus the
 `(Option String)` / `(Option (Vec ...))` idioms, and ~19 fixture files.
+**Corrected 2026-08-30 -- most of that list is not the eligible shape**
+([results](../../benchmarks/option-niche-size/RESULTS.md)): `env` / `args` /
+`re` are `(Option cstr)` and ineligible, and the `docstrings` rows are string
+literals. Emitted, the eligible population is TWO monomorphs across eight
+files.
 **Result gets no niche at all**: both of its variants carry a payload, so NULL
 cannot discriminate `Ok` from `Err` -- SR3 is Option-only.
 

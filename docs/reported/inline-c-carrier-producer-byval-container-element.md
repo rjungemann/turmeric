@@ -65,3 +65,33 @@ word and the slot is the by-value monomorph, route through
 this exact shape already works (pinned by
 `tests/fixtures/option-niche-crossings`), which both shows the fix shape and
 makes the default/niche behavior gap worth closing.
+
+## A second instance, on a different crossing (found 2026-08-30)
+
+Not a container element at all: a **match scrutinee**. `option-niche-crossings`
+emits C that does not compile on the DEFAULT path --
+
+```
+error: invalid initializer
+    tur_adt_Option__String __scrut_v = (__ps_266);
+```
+
+-- the same defect shape as the `vec-of` case above (a carrier `int64_t` word
+initializing a by-value monomorph slot, because the store keys on the type and
+not on the value's recorded emitted spelling), at a site the original filing
+did not name. So the fix direction above should be read as a **family** of
+store sites rather than the one `vec-of` row: the crossing table in
+`docs/upcoming/sr3-option-niche-plan.md` lists five positions the niche path
+bridges, and the default path needs the same treatment at each.
+
+**It is invisible to CI, and structurally so.** The fixture carries
+`flags: --enable=option-niche`, so `tests/run.sh` only ever builds it WITH the
+flag -- the emission that does not compile is the one nobody asks for. That is
+a general hazard of flag-pinned fixtures, not a property of this one: a
+fixture written to exercise an experiment silently stops covering the default
+path. Found by
+[benchmarks/option-niche-size](../../benchmarks/option-niche-size/RESULTS.md),
+which emits every input BOTH ways and so compiles the combination CI does not.
+
+Severity unchanged: still a loud compile error rather than a wrong answer, and
+still on a path no shipped code takes today.

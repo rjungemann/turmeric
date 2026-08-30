@@ -9,6 +9,10 @@
 # Neither direction is obvious in advance, which is why it is measured here
 # rather than asserted.
 #
+# Measures the emitted translation unit as an OBJECT (-c), not a linked
+# binary: the object is exactly the emitted code, with no libturi to cancel
+# out and no sanitizer runtime to inflate it.
+#
 # Usage: bash benchmarks/option-niche-size/binary-size.sh <input.tur>...
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -24,19 +28,21 @@ for input in "$@"; do
     "$TUR" emit-c "$input" > "$W/d.c" 2>/dev/null || { echo "$name: emit-c failed (default)"; continue; }
     "$TUR" --enable=option-niche emit-c "$input" > "$W/n.c" 2>/dev/null || { echo "$name: emit-c failed (niche)"; continue; }
 
-    # -O2 and no sanitizer: this measures the shipped shape, not the Debug
-    # compiler's.  Fixture programs are built exactly this way by run.sh.
+    # Compile to an OBJECT, not a linked binary.  Linking would pull in
+    # libturi, which is identical between the two runs and so cancels in the
+    # delta -- but the Debug libturi is built `-fsanitize=address,undefined`,
+    # so an unsanitized fixture compile does not link against it at all
+    # (undefined `__asan_report_load8`), and a sanitized one inflates .text
+    # by an order of magnitude.  The object isolates exactly the emitted
+    # code, which is the thing whose size the representation moves.
     ok=1
     for v in d n; do
-        "$CC" -O2 -std=c99 -w -fno-strict-aliasing "$W/$v.c" \
-            -L"$ROOT/build/src" -lturi -lm -lpthread -o "$W/$v.bin" 2>/dev/null || ok=0
+        "$CC" -O2 -std=c99 -w -fno-strict-aliasing -c "$W/$v.c" -o "$W/$v.o" \
+            2>/dev/null || ok=0
     done
     [ "$ok" = 1 ] || { echo "$name: cc failed"; continue; }
 
-    # `size` reports the linked artifact, which includes all of libturi that
-    # got pulled in -- identical between the two, so the DELTA is the emitted
-    # code's and the absolute figure is not worth quoting.
-    dt=$(size "$W/d.bin" | awk 'NR==2 {print $1}')
-    nt=$(size "$W/n.bin" | awk 'NR==2 {print $1}')
+    dt=$(size "$W/d.o" | awk 'NR==2 {print $1}')
+    nt=$(size "$W/n.o" | awk 'NR==2 {print $1}')
     printf '%-44s %10s %10s %+9d  bytes .text\n' "$name" "$dt" "$nt" "$((nt - dt))"
 done
