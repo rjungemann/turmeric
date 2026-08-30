@@ -2119,8 +2119,34 @@ static char *bridge_control_value_to_byvalue_temp(EmitCtx *ctx, Buf *body,
                                                    char *v, const Expr *last) {
     Type bv = fn_body_tail_byvalue_carrier_type(ctx, last);
     if (bv.kind != TY_UNKNOWN &&
-        !fn_body_tail_emits_byvalue_carrier_abi(ctx, last))
+        !fn_body_tail_emits_byvalue_carrier_abi(ctx, last)) {
+        /* inline-c-carrier-producer-byval-container-element (control-merge
+         * position).  This function decides from the TAIL EXPRESSION -- "does
+         * `last` produce a carrier?" -- but the value in hand may already be
+         * the aggregate, because emit_control_result_temp_decl declared the
+         * merge temp by value and each arm bridged into it.  Re-deriving from
+         * the tail then bridges a second time and emits
+         * `(int64_t)(intptr_t)(<aggregate>)`: "aggregate value used where an
+         * integer was expected".
+         *
+         * `(let [o (if flag (mk-c 1) (mk-c 0))] ...)` over an inline-C Option
+         * producer is the shape -- both arms are carrier producers, so the
+         * tail says "carrier" however many times it is asked.
+         *
+         * The let-init path already guards exactly this with the recorded
+         * emitted spelling (`init_val_recorded_byval_agg`); this is the same
+         * key at the one site that re-asks the tail. emit_control_result_temp_decl
+         * records the temp's real C type when it declares it by value, which
+         * is what makes the lookup authoritative here. */
+        if (emit_str_is_bare_ident(v)) {
+            const char *vty = emit_localvar_lookup_ctype(v);
+            const char *bvn = emit_type_c_name(ctx, bv);
+            if (vty && bvn && strcmp(vty, bvn) == 0 &&
+                strcmp(vty, "int64_t") != 0 && strchr(vty, '*') == NULL)
+                return v;
+        }
         return emit_carrier_bridge(ctx, body, v, CK_CARRIER, CK_CONCRETE, bv);
+    }
     return v;
 }
 
@@ -3163,9 +3189,26 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     if (!nil_result && ( !any_has_return_or_throw || only_then_diverges || only_else_diverges)) {
         tmp = fresh_tmp(ctx);
         if_bv = fn_body_tail_byvalue_carrier_type(ctx, e);
-        if (if_bv.kind != TY_UNKNOWN)
+        if (if_bv.kind != TY_UNKNOWN) {
             emit_temp_decl(ctx, body, if_bv, tmp, NULL);
-        else
+            /* inline-c-carrier-producer-byval-container-element (control-merge
+             * position).  RECORD the temp's actual emitted C type, exactly as
+             * the sibling declarer emit_control_result_temp_decl does for its
+             * own by-value branch.  Without this the two declarers disagree
+             * about a fact only one of them writes down, and every consumer
+             * keying on the recorded spelling -- the let-init double-deref
+             * guard above all -- looks the temp up, finds nothing, and falls
+             * back to re-deriving "is this a carrier producer?" from the TAIL.
+             * The tail of `(if flag (mk-c 1) (mk-c 0))` says carrier however
+             * many times it is asked, so the already-bridged aggregate got
+             * bridged a second time: `(int64_t)(intptr_t)(<aggregate>)`,
+             * "aggregate value used where an integer was expected".
+             *
+             * The arms below bridge each carrier-producing arm INTO this temp,
+             * so by the time anyone reads it the value really is the
+             * aggregate the declaration says it is. */
+            emit_localvar_record_ctype(tmp, emit_type_c_name(ctx, if_bv));
+        } else
             emit_control_result_temp_decl(ctx, body, e->type, e, tmp);
     }
     char *cond = emit_value(ctx, body, e->as.if_.cond);
@@ -7321,7 +7364,36 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 _fty = emit_resolve_type(
                                     ctx, *_nctor->fields[i].full_type);
                             }
-                            if (adt_app_is_niche_option(_fty)) {
+                            /* inline-c-carrier-producer-byval-container-element
+                             * (ctor-argument position, DEFAULT path).  The
+                             * niche gate below was the only reader here, so a
+                             * plain BY-VALUE monomorph field -- `(Holder
+                             * (mk-c 1))` where Holder's field is `(Option
+                             * String)` -- fell through to the case-A straddle,
+                             * which is a pure cast and cannot turn a carrier
+                             * word into an aggregate: cc rejected it with
+                             * "incompatible type for argument 1 of
+                             * ctor_Holder".
+                             *
+                             * The destination test is the field's emitted C
+                             * spelling rather than a type predicate: an
+                             * aggregate slot is exactly one that is neither
+                             * the carrier word nor a pointer, which is the
+                             * same question the cc error asks.  `type_c_name`
+                             * hands back a shared static buffer
+                             * (c-name-accessors-share-static-buffers), so it
+                             * is consumed here and never held across the
+                             * bridge call below. */
+                            bool _fty_niche = adt_app_is_niche_option(_fty);
+                            bool _fty_byval_agg = false;
+                            if (!_fty_niche &&
+                                (_fty.kind == TY_APP || _fty.kind == TY_ADT)) {
+                                const char *_fcn = type_c_name(_fty);
+                                _fty_byval_agg =
+                                    _fcn && strcmp(_fcn, "int64_t") != 0 &&
+                                    strchr(_fcn, '*') == NULL;
+                            }
+                            if (_fty_niche || _fty_byval_agg) {
                                 const char *aty =
                                     emit_localvar_lookup_ctype(arg_strs[i]);
                                 if (aty && strcmp(aty, "int64_t") == 0)
@@ -8482,7 +8554,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                       !find_matched_abi_spec(ctx, emit_arg,
                                              emit_arg->as.call_.fn_binding) &&
                       !expr_emits_byvalue_carrier_abi(ctx, emit_arg)) ||
-                     emit_arg_holds_carrier_byval)) {
+                     emit_arg_holds_carrier_byval ||
+                     /* inline-c-carrier-producer-byval-container-element
+                      * (call-argument position).  The disjuncts above all ask
+                      * the EXPRESSION whether it produces a carrier -- is it a
+                      * TY_INT, does its type use the carrier ABI, is it a
+                      * direct call to a known producer.  None of them sees an
+                      * ASCRIBED erased read: `(:: (vec-get v 0) (Option
+                      * String))` has an aggregate type that does not use the
+                      * carrier ABI, and the arg expression is an ascribe
+                      * rather than the call, so the producer disjunct misses
+                      * it too.  The value in hand is nonetheless the carrier
+                      * word, and the spec param is the by-value monomorph.
+                      *
+                      * Ask the VALUE instead of the expression: a temp whose
+                      * recorded emitted spelling is `int64_t` really is the
+                      * carrier here, because every guard above has already
+                      * excluded the shapes that hold an aggregate.  This is
+                      * the same recorded-spelling key the let-init, scrutinee
+                      * and niche bridges use, and it is what makes a
+                      * double-bridge impossible: once bridged, the temp's
+                      * recorded type is the aggregate, so it cannot fire
+                      * twice. */
+                     (emit_str_is_bare_ident(raw) &&
+                      emit_localvar_lookup_ctype(raw) &&
+                      strcmp(emit_localvar_lookup_ctype(raw),
+                             "int64_t") == 0))) {
                     raw = emit_carrier_bridge(ctx, body, raw,
                                              CK_CARRIER, CK_CONCRETE,
                                              matched_spec->arg_types[i]);
@@ -12840,31 +12937,49 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool adt_niche = adt_byval && !adt_byval_pbp &&
                              adt_app_is_niche_option(scrut_ty);
 
+            /* inline-c-carrier-producer-byval-container-element, scrutinee
+             * position.  An inline-C body declared `: (Option String)` builds
+             * its result with the preamble's typed builders (`tur_some_ptr`),
+             * which return the CARRIER -- a pointer to a tagged box -- and its
+             * C signature is `int64_t` accordingly.  A by-value monomorph
+             * scrutinee bound straight from that word spells
+             * `tur_adt_Option__String __scrut_v = (<int64_t>);`, an invalid
+             * initializer.
+             *
+             * HOISTED ABOVE THE IF-CHAIN/SWITCH FORK, and that is the fix.
+             * This bridge existed, but inside the if-chain arm and gated on
+             * `adt_niche` -- so it covered the niche representation only, and
+             * the switch path, which is exactly where a TAGGED by-value sum
+             * lands, had no bridge at all.  `adt_niche` implies `adt_byval`,
+             * so widening the gate subsumes the old case rather than running
+             * beside it.
+             *
+             * Keyed on the value's RECORDED emitted spelling rather than its
+             * type: a scrutinee that already IS the aggregate (a Turmeric
+             * producer, or a merge temp some earlier bridge normalized) must
+             * not be bridged a second time.  `adt_byval_pbp` is excluded
+             * because such a scrutinee is already a `const T *`, never a
+             * carrier word -- the recorded-spelling test would decline it
+             * anyway, but the intent is worth stating.
+             *
+             * Emitting above the fork puts the bridge's temp in the enclosing
+             * scope rather than the match's own block: a longer lifetime than
+             * the readers need, never a shorter one. */
+            if (adt_byval && !adt_byval_pbp &&
+                emit_str_is_bare_ident(scrut_val)) {
+                const char *svty = emit_localvar_lookup_ctype(scrut_val);
+                if (svty && strcmp(svty, "int64_t") == 0)
+                    scrut_val = emit_carrier_bridge(ctx, body, scrut_val,
+                                                    CK_CARRIER, CK_CONCRETE,
+                                                    scrut_ty);
+            }
+
             if (has_any_guard || adt_flat || adt_niche) {
                 /* Phase G4: Emit as if-chain with goto for guard fallthrough */
                 char *end_label = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
                 buf_puts(body, "{\n");
                 ctx->indent += 4;
-
-                /* SR3 slice B (inline-C carrier producer, match-scrutinee
-                 * position): `(match (mk-opt 1) ...)` where mk-opt's inline-C
-                 * body returns tur_some_ptr's CARRIER box.  The niche bind
-                 * below assumes the scrutinee is already the payload pointer,
-                 * so without this the box pointer became `__scrut` and the
-                 * `Some` binder handed the tagged box to every arm body --
-                 * silent wrong answer (see docs/reported/option-niche-inline-c-
-                 * carrier-crossings-incomplete.md).  Same key as the let-bind
-                 * and call-arg bridges: the value's RECORDED emitted spelling
-                 * is the carrier word, so a niche-producing Turmeric scrutinee
-                 * (already the payload) is never double-bridged. */
-                if (adt_niche && emit_str_is_bare_ident(scrut_val)) {
-                    const char *svty = emit_localvar_lookup_ctype(scrut_val);
-                    if (svty && strcmp(svty, "int64_t") == 0)
-                        scrut_val = emit_carrier_bridge(ctx, body, scrut_val,
-                                                        CK_CARRIER, CK_CONCRETE,
-                                                        scrut_ty);
-                }
 
                 indent_buf(body, ctx->indent);
                 if (adt_byval_pbp) {

@@ -5112,6 +5112,27 @@ char *emit_carrier_bridge_escaping(EmitCtx *ctx, Buf *body,
         default: break;
     }
 
+    /* inline-c-carrier-producer-byval-container-element, the position the
+     * report is named for.  The heap-promote below copies the value in hand
+     * into a `T *` cell -- but an inline-C Option producer hands back the
+     * CARRIER word, so `*tmp = <int64_t>` against an aggregate cell is
+     * "incompatible types when assigning".  The niche row above escapes this
+     * by delegating; the by-value monomorph had no such row and fell straight
+     * into the promote.
+     *
+     * Normalize FIRST, promote second: bridge the carrier word to the
+     * aggregate, then box the aggregate.  Keyed on the value's recorded
+     * emitted spelling, so a value that already IS the aggregate -- every
+     * pre-existing caller of this path -- is untouched and cannot be
+     * double-bridged. */
+    if (emit_str_is_bare_ident(src_str)) {
+        const char *sty = emit_localvar_lookup_ctype(src_str);
+        if (sty && strcmp(sty, "int64_t") == 0)
+            src_str = emit_carrier_bridge(ctx, body, src_str,
+                                          CK_CARRIER, CK_CONCRETE,
+                                          concrete_ty);
+    }
+
     /* By-value aggregate flowing into an escaping heap container: heap-promote
      * instead of spilling to a stack local.  malloc a copy and carry the heap
      * pointer; the element now outlives the producing frame, and the
