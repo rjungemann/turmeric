@@ -1007,6 +1007,28 @@ static OwnCarry own_carry_for_arg(const char *fn, uint32_t idx) {
      * the `owned` flag, which routes the insert through tur_hamt_set_eq_vo with
      * the emitted rc ops). */
     if (strcmp(fn, "map-assoc-eq-o") == 0 && idx == 3) return OWN_CARRY_RETAIN;
+    /* option-rc-payload-constructible-only-from-inline-c: the SUM
+     * CONSTRUCTORS.  `(some x)` / `(ok x)` / `(err x)` wrap the value in a
+     * result the CALLER receives and owns -- there is no second, longer-lived
+     * holder the way a collection is one, so the reference MOVES in and
+     * nothing is minted.  That is OWN_CARRY_BORROW by this enum's own
+     * definition ("crossing moves the existing reference and mints nothing").
+     *
+     * RETAIN would be wrong in the other direction: nothing releases an
+     * Option's payload when the value goes out of scope, so a count minted
+     * here would never come back down.  BORROW keeps exactly one owner, which
+     * is the contract `weak/upgrade` and `weak/unwrap` already document ("the
+     * caller owns it and must rc/drop it").
+     *
+     * Without these rows the default REJECT fired on a construction with no
+     * collection anywhere in the program -- so `(Option rc<A>)` could be
+     * RETURNED, built in inline C and matched, but not built in Turmeric.  The
+     * inline-C form is the one that shipped, and it leaked a box per call
+     * until 2026-08-30, so the language was rejecting the safe spelling and
+     * accepting the unsafe one. */
+    if (strcmp(fn, "some") == 0 && idx == 0) return OWN_CARRY_BORROW;
+    if (strcmp(fn, "ok")   == 0 && idx == 0) return OWN_CARRY_BORROW;
+    if (strcmp(fn, "err")  == 0 && idx == 0) return OWN_CARRY_BORROW;
     return OWN_CARRY_REJECT;
 }
 
@@ -1068,6 +1090,25 @@ static Expr *call_wrap_reinterpret_owning(Elab *e, Expr *inner, TypeKind target_
                       "collection would have to own. Store a plain handle, or keep "
                       "the value outside the collection",
                       typekind_to_string(owning_src ? source_kind : target_kind));
+            /* option-rc-payload-constructible-only-from-inline-c, fix
+             * direction 2.  The line above names a COLLECTION, which is where
+             * this fires most often and reads correctly there -- but the check
+             * is really about crossing a GENERIC boundary, so it also fires
+             * with no collection anywhere in the program (`(unwrap o)` over an
+             * `(Option rc<A>)`).  Rather than reword a message that is right
+             * for its common case, say what the rule actually is and name the
+             * spellings that work. */
+            diag_emit(DIAG_NOTE, span,
+                      "the restriction is about crossing a GENERIC boundary, "
+                      "not about collections as such: a tyvar parameter or "
+                      "result is erased to the int64 carrier, which has no "
+                      "room for the reference count");
+            diag_emit(DIAG_NOTE, span,
+                      "the sum constructors are allowed -- `(some x)` / "
+                      "`(ok x)` / `(err x)` MOVE the reference into a value "
+                      "the caller owns.  To read an owning payload back out, "
+                      "destructure with `match` rather than the generic "
+                      "accessor, as stdlib's `weak/unwrap` does");
             return NULL;
         }
         /* Only rc<T> is refcount-accounted today.  A weak/ref crossing has no
