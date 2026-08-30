@@ -61,6 +61,13 @@ static void record_binding(const Binding *b, LspBindKind kind, int depth,
      * `let` binder that lands 13 bytes off, which is a highlight on the wrong
      * word and a rename on the wrong bytes. The scope bounds travel with the
      * binder, so they are translated too. */
+    /* A scope that starts at byte zero is one we failed to compute, not one
+     * that genuinely begins at the first byte of the file: a binder is always
+     * inside a form, so its uses always start after something. Dropping it
+     * beats recording a binding whose region is the whole file -- that is the
+     * exact wrong answer, and it is the one every consumer would then trust. */
+    if (scope_start == 0) return;
+
     Span sp    = diag_translate_span(b->span);
     Span start = diag_translate_span(
         span_from_offsets(b->span.file_id, scope_start, scope_start));
