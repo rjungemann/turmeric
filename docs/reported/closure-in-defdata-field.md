@@ -262,13 +262,23 @@ to place it all failed, and the reason is worth recording.**
 |---|---|
 | Lower both arity floors to 0 (`elab_structs.c` + `elab_call.c`) | Built clean, suite green, **changed nothing** -- all repros still segfaulted. Reverted: an inert change that silently adds drop glue and makes the struct move-only. |
 | The parametric-ADT shim loop, `elab_call.c:~3189` | Never reached. Probed with the ctor name: `SInc`/`Box` never appear. That loop serves ADT-*application* constructions; an ordinary ctor call does not go through it, and the field's `full_type` is NULL there. |
-| The general ctor arg type-check, `elab_call.c:~3696` (where `TUR-E0001` for a wrong ctor arg is raised) | Also never reached for these stores. Probed the same way: no `fnfield:` line for either repro. |
+| The general ctor arg type-check, `elab_call.c:~3696` | Never reached either. |
+| Both ctor-call construction sites (`call_.ctor = ctor` at `elab_call.c:3082` and `:3117`) | Neither fires for `SInc` or `Box`. Probed by ctor name at the assignment itself. |
+| The **second** `function '%s' arg %u` site, `elab_call.c:~5415`, and its enclosing arg loop | This IS the path for a ctor arg TYPE ERROR on the same constructor -- confirmed by tagging the message text and watching `[SITE2]` appear for `(SInc 42)`. But a **closure** argument to the same constructor never reaches that loop's head: probes on `arg_full_types[fidx]->kind == TY_FN` and on `expected_arg_kind == TY_FN` both print nothing. |
 
-So the store of a closure into a concrete fn field goes through **none** of the
-three sites that look like the obvious home for the check. Locating the path it
-*does* take is the first task for whoever picks this up -- and the probe that
-answers it is cheap: print `fn_binding->name->name` at a candidate site and look
-for the constructor's name.
+**The narrowing fact, and it is the useful one.** `(SInc 42)` -- an int where the
+`fn` field is expected -- is diagnosed from `elab_call.c:5415`. `(SInc (fn [] ...))`
+does not reach the same loop. So the closure store **diverges from the ordinary
+ctor-argument path somewhere before that loop**, and finding that divergence is
+the whole remaining task. The lambda pre-elaboration around `elab_call.c:4826`
+(which pushes an expected type for a `fn`/`lambda` argument form and sets
+`arg_done[i]`) is the obvious suspect and was not chased further.
+
+Two method notes for whoever does. The message-tagging trick is what settled
+which of two identical-looking diagnostics fires -- append a marker to one
+format string, rebuild, and read the output. And every failed placement here
+built clean and left the suite at 2698/0 while refusing nothing, so the only
+acceptable evidence that a check works is watching it reject the repro.
 
 Two conclusions from that. Placing the diagnostic is not the small change it
 appears to be, so it should not be quoted as a quick win. And a check placed
