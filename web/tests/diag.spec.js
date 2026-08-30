@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { submitAtPrompt } from './repl-helpers.js';
 
 async function waitForReady(page) {
     await expect(page.locator('#wasm-status-text')).toHaveText('Ready', { timeout: 30_000 });
@@ -33,10 +34,7 @@ test('diagnostic — defn in editor, call in REPL', async ({ page }) => {
     await page.evaluate((c) => window._turiEditor.setValue(c), '(defn add [a :int b :int] :int (+ a b))');
     await page.click('#run-btn');
     await page.waitForTimeout(1000);
-    const replInput = page.locator('#repl-input');
-    await replInput.click();
-    await replInput.fill('(add 3 4)');
-    await replInput.press('Enter');
+    await submitAtPrompt(page, '(add 3 4)');
     await page.waitForTimeout(2000);
     const text = await page.locator('#console').textContent();
     console.log('CROSS-EVAL REPL RESULT:', JSON.stringify(text));

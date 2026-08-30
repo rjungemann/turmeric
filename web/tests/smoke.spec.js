@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { submitAtPrompt } from './repl-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -74,10 +75,7 @@ test.describe('Try Turmeric smoke tests', () => {
         await page.waitForTimeout(500);
 
         // Call it from the REPL — same env
-        const replInput = page.locator('#repl-input');
-        await replInput.click();
-        await replInput.fill('(double 21)');
-        await replInput.press('Enter');
+        await submitAtPrompt(page, '(double 21)');
 
         await expect(page.locator('#console')).toContainText('42', { timeout: 10_000 });
     });
@@ -138,26 +136,26 @@ test.describe('Try Turmeric smoke tests', () => {
         await page.goto('/try/');
         await waitForReady(page);
 
-        const replInput = page.locator('#repl-input');
-        await replInput.click();
-
-        await replInput.fill('(+ 1 1)');
-        await replInput.press('Enter');
+        await submitAtPrompt(page, '(+ 1 1)');
         await page.waitForTimeout(300);
 
-        await replInput.fill('(+ 2 2)');
-        await replInput.press('Enter');
+        await submitAtPrompt(page, '(+ 2 2)');
         await page.waitForTimeout(300);
 
-        // ArrowUp should recall last entry
-        await replInput.press('ArrowUp');
-        await expect(replInput).toHaveValue('(+ 2 2)');
+        // The arrows still walk history after an evaluation. This is the case
+        // that broke in c2mp: the arrows and the completion list want the same
+        // keys, and with two listeners the winner depends on registration
+        // order. One handler decides, so this is a claim about that handler.
+        const promptValue = () => page.evaluate(() => window._turiRepl.value());
 
-        await replInput.press('ArrowUp');
-        await expect(replInput).toHaveValue('(+ 1 1)');
+        await page.keyboard.press('ArrowUp');
+        await expect.poll(promptValue).toBe('(+ 2 2)');
 
-        await replInput.press('ArrowDown');
-        await expect(replInput).toHaveValue('(+ 2 2)');
+        await page.keyboard.press('ArrowUp');
+        await expect.poll(promptValue).toBe('(+ 1 1)');
+
+        await page.keyboard.press('ArrowDown');
+        await expect.poll(promptValue).toBe('(+ 2 2)');
     });
 });
 

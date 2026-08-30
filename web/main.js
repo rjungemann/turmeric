@@ -1150,8 +1150,7 @@ async function initWasm() {
         console.log('Turmeric WASM runtime initialized');
         wasmState = WASM_STATE.READY;
 
-        const replInput = document.getElementById('repl-input');
-        if (replInput) replInput.disabled = false;
+        promptSetEnabled(true);
 
         await fetchDocNames();
         fetchLangRegistry();  // re-renders the picker from the C-side tables
@@ -1558,6 +1557,10 @@ function resetWasm() {
     pendingCalls.set(id, {
         resolve: () => {
             currentLangMode = 'turmeric'; // turi_env_new() always starts in default mode
+            /* The session forgot everything it had accepted, so the prompt's
+             * document has to forget it too -- otherwise completion keeps
+             * offering names `:reset` just destroyed. */
+            replSessionReset();
             clearConsole();
             showStatus('Environment reset', 'success');
         },
@@ -2261,11 +2264,19 @@ async function runCode() {
     // shows `2`, not `#<fn main>`.
     if (definesMainEntry(code)) {
         const { isError } = await executeCode(code, '', true, false, true);
-        if (!isError) await executeCode('(main)', '', false, false);
+        if (!isError) {
+            replSessionAccept(code);
+            await executeCode('(main)', '', false, false);
+        }
         return;
     }
 
-    await executeCode(code, '', true, false);
+    const { isError } = await executeCode(code, '', true, false);
+    /* W2: a Run is how a tab's definitions become callable at the prompt, so
+     * it is also how they become offerable there. Before this, completion at
+     * the prompt would have had to guess -- and the two honest answers were
+     * "offer the tab and be wrong until Run" or "never offer it at all". */
+    if (!isError) replSessionAccept(code);
 }
 
 /**
@@ -2786,47 +2797,464 @@ function shareCode() {
 /**
  * REPL input at the bottom of the console
  */
+/* ---------------------------------------------------------------------------
+ * W3: hover in the transcript
+ *
+ * This needs no markup at all, which is the whole reason it is cheap.
+ * appendToConsole inserts HTML it built itself and console lines are ordinary
+ * text nodes, so caretPositionFromPoint lands on the right node without a span
+ * around every identifier. Wrapping them would put an escaping surface exactly
+ * where "interpreted stdout stays inert" lives.
+ *
+ * WHICH lines answer is a judgement, not a capability. The echoed `turi> ...`
+ * lines and error lines do; program stdout does not. Text a program happened
+ * to print is not a symbol reference, and a hover card about `println` over a
+ * program that printed the word "println" is a lie about what that text is.
+ * ------------------------------------------------------------------------ */
+
+const CONSOLE_IDENT = /[A-Za-z0-9\-?!*/><+=_]/;
+
+/** The identifier under `offset` in `text`, or ''. Same character class the
+ *  server's occurrence scanner uses, so a hover lands on what a hover means. */
+function identifierAt(text, offset) {
+    if (!text || offset < 0 || offset > text.length) return '';
+    let i = offset;
+    if ((i >= text.length || !CONSOLE_IDENT.test(text[i])) &&
+        i > 0 && CONSOLE_IDENT.test(text[i - 1])) i--;
+    if (i >= text.length || !CONSOLE_IDENT.test(text[i])) return '';
+    let start = i, end = i;
+    while (start > 0 && CONSOLE_IDENT.test(text[start - 1])) start--;
+    while (end < text.length && CONSOLE_IDENT.test(text[end])) end++;
+    const word = text.slice(start, end);
+    // A bare number is not a symbol; neither is a lone operator run that the
+    // index has never heard of, but that one the lookup answers for itself.
+    return /^[0-9]+$/.test(word) ? '' : word;
+}
+
+/** Does this text node belong to a line a hover may answer on? */
+function consoleLineAnswers(node) {
+    if (!node) return false;
+    const parent = node.parentElement;
+    if (!parent) return false;
+    // An error line: the whole span carries the class.
+    if (parent.classList && parent.classList.contains('console-error')) return true;
+    // An echoed prompt line: `<span class="console-prompt">turi&gt;</span> code`,
+    // so the code is a bare text node sitting right after that span.
+    let prev = node.previousSibling;
+    while (prev && prev.nodeType === Node.TEXT_NODE && !prev.data.trim()) {
+        prev = prev.previousSibling;
+    }
+    return !!(prev && prev.nodeType === Node.ELEMENT_NODE &&
+              prev.classList && prev.classList.contains('console-prompt'));
+}
+
+/** The (node, offset) under a viewport point, across the two browser spellings. */
+function caretAt(x, y) {
+    if (document.caretPositionFromPoint) {
+        const p = document.caretPositionFromPoint(x, y);
+        return p ? { node: p.offsetNode, offset: p.offset } : null;
+    }
+    if (document.caretRangeFromPoint) {
+        const r = document.caretRangeFromPoint(x, y);
+        return r ? { node: r.startContainer, offset: r.startOffset } : null;
+    }
+    return null;
+}
+
+function initConsoleHover() {
+    const consoleEl = document.getElementById('console');
+    if (!consoleEl) return;
+
+    let card = document.getElementById('console-hover-card');
+    if (!card) {
+        card = document.createElement('div');
+        card.id = 'console-hover-card';
+        card.className = 'console-hover-card';
+        card.hidden = true;
+        document.body.appendChild(card);
+    }
+
+    let shownFor = null;
+    let token = 0;
+
+    function hide() {
+        shownFor = null;
+        card.hidden = true;
+    }
+
+    async function show(name, x, y) {
+        if (name === shownFor) return;
+        shownFor = name;
+        const mine = ++token;
+
+        let summary = null;
+        const entry = (docNames || []).find(d => d.name === name);
+        if (entry && entry.summary) summary = entry.summary;
+        else summary = await wasmDocLookup(name).catch(() => null);
+        // A later hover already won; do not paint over it.
+        if (mine !== token) return;
+        if (!summary) { hide(); return; }
+
+        card.textContent = summary;
+        card.hidden = false;
+        // Place above the cursor when there is room, below when there is not.
+        const rect = card.getBoundingClientRect();
+        const top = (y - rect.height - 10 > 8) ? y - rect.height - 10 : y + 16;
+        card.style.left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8)) + 'px';
+        card.style.top = top + 'px';
+    }
+
+    const onMove = debounce((x, y) => {
+        const caret = caretAt(x, y);
+        if (!caret || caret.node.nodeType !== Node.TEXT_NODE) { hide(); return; }
+        if (!consoleEl.contains(caret.node)) { hide(); return; }
+        if (!consoleLineAnswers(caret.node)) { hide(); return; }
+        const name = identifierAt(caret.node.data, caret.offset);
+        if (!name) { hide(); return; }
+        show(name, x, y);
+    }, 120);
+
+    consoleEl.addEventListener('mousemove', (e) => onMove(e.clientX, e.clientY));
+    consoleEl.addEventListener('mouseleave', hide);
+    consoleEl.addEventListener('scroll', hide);
+}
+
+/* ---------------------------------------------------------------------------
+ * W1/W2: the REPL prompt
+ *
+ * The prompt was a bare <input> with Enter-to-submit and ArrowUp/ArrowDown
+ * history, and nothing the language server knows reached it -- no completion,
+ * no hover, no signature help, in the one place a beginner types the most.
+ *
+ * The fix is not a completion widget built over the <input>. It is a
+ * single-line Monaco editor, because then completion, hover and signature help
+ * at the prompt are *the providers that already exist* rather than a second
+ * copy of the state machine that drives them.
+ * ------------------------------------------------------------------------ */
+
+/** The prompt's Monaco editor, or null before init. */
+let promptEditor = null;
+
+/** The synthetic document the prompt is analysed as (W2). */
+const REPL_DOC_URI = 'file:///project/repl.tur';
+let promptDoc = null;
+
+/**
+ * Source the interpreter session has actually accepted -- previous prompt
+ * lines and Runs that evaluated without error.
+ *
+ * This, and not the active tab, is what the prompt may offer. The editor's
+ * index is built from whatever file is open; the prompt evaluates against the
+ * wasm session, and a `defn` typed in a tab that has never been Run is not
+ * callable here. An offered name the session cannot resolve is not merely
+ * unhelpful: accepting it produces an expression that fails to evaluate.
+ */
+let replSessionSource = '';
+
+function replSessionAccept(source) {
+    const text = String(source || '').trim();
+    if (!text) return;
+    replSessionSource = replSessionSource ? replSessionSource + '\n' + text : text;
+    // Push it now rather than on the debounce, so the very next keystroke's
+    // completion already knows about the name that was just defined.
+    if (promptDoc) promptDoc.refresh();
+}
+
+function replSessionReset() {
+    replSessionSource = '';
+    if (promptDoc) promptDoc.refresh();
+}
+
+/** Is the suggest widget open? Asked once per keystroke, by one handler. */
+function promptSuggestOpen() {
+    if (!promptEditor) return false;
+    const c = promptEditor.getContribution('editor.contrib.suggestController');
+    // `model.state` is 0 when idle; the widget's own visibility flag is not
+    // public, and the controller is.
+    return !!(c && c.model && c.model.state !== 0);
+}
+
+function promptValue() {
+    return promptEditor ? promptEditor.getValue() : '';
+}
+
+function promptSetValue(text) {
+    if (!promptEditor) return;
+    promptEditor.setValue(text);
+    const line = promptEditor.getModel().getLineCount();
+    promptEditor.setPosition({
+        lineNumber: line,
+        column: promptEditor.getModel().getLineMaxColumn(line),
+    });
+}
+
+function promptSetEnabled(on) {
+    if (!promptEditor) return;
+    promptEditor.updateOptions({ readOnly: !on });
+    const host = document.getElementById('repl-input');
+    if (host) host.classList.toggle('repl-input-disabled', !on);
+}
+
+async function promptSubmit() {
+    const code = promptValue().trim();
+    if (!code || wasmState !== WASM_STATE.READY) return;
+
+    replHistory.unshift(code);
+    replHistoryIndex = -1;
+    promptSetValue('');
+
+    if (code.startsWith(':')) {
+        appendToConsole(`<span class="console-prompt">turi&gt;</span> ${escapeHtml(code)}`);
+        await dispatchReplMetaCommand(code);
+    } else {
+        const res = await executeCode(code, '<span class="console-prompt">turi&gt;</span>');
+        // Only a line the session actually accepted joins the prompt's
+        // document. A line that failed defined nothing, and offering its
+        // names would be the exact lie W2 exists to prevent.
+        if (!res || !res.isError) replSessionAccept(code);
+    }
+
+    const consoleEl = document.getElementById('console');
+    if (consoleEl) consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+
 function initReplInput() {
-    const input = document.getElementById('repl-input');
-    if (!input) return;
+    const host = document.getElementById('repl-input');
+    if (!host) return;
 
-    input.addEventListener('keydown', async (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            const code = input.value.trim();
-            if (!code || wasmState !== WASM_STATE.READY) return;
+    /* The suggest widget has to escape a 22px-tall, overflow:hidden row, so it
+     * renders into a body-level node instead of inside the editor. */
+    let overlay = document.getElementById('repl-suggest-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'repl-suggest-overlay';
+        overlay.className = 'repl-suggest-overlay';
+        document.body.appendChild(overlay);
+    }
 
-            replHistory.unshift(code);
-            replHistoryIndex = -1;
-            input.value = '';
+    promptEditor = monaco.editor.create(host, {
+        value: '',
+        language: 'turmeric',
+        theme: 'turmeric-dark',
+        automaticLayout: true,
+        lineNumbers: 'off',
+        glyphMargin: false,
+        folding: false,
+        lineDecorationsWidth: 0,
+        lineNumbersMinChars: 0,
+        minimap: { enabled: false },
+        overviewRulerLanes: 0,
+        overviewRulerBorder: false,
+        hideCursorInOverviewRuler: true,
+        renderLineHighlight: 'none',
+        scrollBeyondLastLine: false,
+        scrollBeyondLastColumn: 0,
+        wordWrap: 'off',
+        contextmenu: false,
+        fontFamily: 'var(--font-mono)',
+        fontSize: 12.5,
+        lineHeight: 20,
+        padding: { top: 1, bottom: 1 },
+        scrollbar: {
+            vertical: 'hidden',
+            horizontal: 'hidden',
+            handleMouseWheel: false,
+            alwaysConsumeMouseWheel: false,
+        },
+        overflowWidgetsDomNode: overlay,
+        fixedOverflowWidgets: true,
+        readOnly: wasmState !== WASM_STATE.READY,
+        quickSuggestions: { other: true, comments: false, strings: false },
+        suggestOnTriggerCharacters: true,
+        acceptSuggestionOnEnter: 'on',
+        tabCompletion: 'off',
+        parameterHints: { enabled: true },
+    });
 
-            if (code.startsWith(':')) {
-                appendToConsole(`<span class="console-prompt">turi&gt;</span> ${escapeHtml(code)}`);
-                await dispatchReplMetaCommand(code);
-            } else {
-                await executeCode(code, '<span class="console-prompt">turi&gt;</span>');
-            }
+    host.classList.toggle('repl-input-disabled', wasmState !== WASM_STATE.READY);
+    host.classList.add('repl-input-empty');
 
-            const consoleEl = document.getElementById('console');
-            if (consoleEl) consoleEl.scrollTop = consoleEl.scrollHeight;
+    const model = promptEditor.getModel();
 
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            if (replHistoryIndex < replHistory.length - 1) {
-                replHistoryIndex++;
-                input.value = replHistory[replHistoryIndex];
-            }
-        } else if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            if (replHistoryIndex > 0) {
-                replHistoryIndex--;
-                input.value = replHistory[replHistoryIndex];
-            } else {
-                replHistoryIndex = -1;
-                input.value = '';
-            }
+    promptEditor.onDidChangeModelContent(() => {
+        const v = model.getValue();
+        host.classList.toggle('repl-input-empty', v.length === 0);
+        // One line, always. A paste can carry newlines and Monaco will happily
+        // take them; the prompt submits a line, so it keeps one.
+        if (v.indexOf('\n') >= 0) {
+            const flat = v.replace(/\s*\n\s*/g, ' ');
+            promptEditor.setValue(flat);
+            promptEditor.setPosition({
+                lineNumber: 1,
+                column: model.getLineMaxColumn(1),
+            });
         }
     });
+
+    /* One handler, not several listeners.
+     *
+     * Enter submits, ArrowUp/ArrowDown walk history, and the suggest widget
+     * wants all three. With two listeners the behaviour depends on
+     * registration order, which a reader has to infer rather than read -- so
+     * every key that is contested is decided here, in one place, by asking
+     * whether the widget is open.
+     */
+    promptEditor.onKeyDown((e) => {
+        const widget = promptSuggestOpen();
+
+        if (e.keyCode === monaco.KeyCode.Enter && !e.shiftKey) {
+            if (widget) return;          // accept the highlighted suggestion
+            e.preventDefault();
+            e.stopPropagation();
+            promptSubmit();
+            return;
+        }
+        if (e.keyCode === monaco.KeyCode.UpArrow) {
+            if (widget) return;          // move within the list
+            e.preventDefault();
+            e.stopPropagation();
+            if (replHistoryIndex < replHistory.length - 1) {
+                replHistoryIndex++;
+                promptSetValue(replHistory[replHistoryIndex]);
+            }
+            return;
+        }
+        if (e.keyCode === monaco.KeyCode.DownArrow) {
+            if (widget) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (replHistoryIndex > 0) {
+                replHistoryIndex--;
+                promptSetValue(replHistory[replHistoryIndex]);
+            } else {
+                replHistoryIndex = -1;
+                promptSetValue('');
+            }
+            return;
+        }
+        if (e.keyCode === monaco.KeyCode.Escape) {
+            /* Dismissing a popup must not also close the docs pane or a menu.
+             * The page has document-level Escape handlers; Monaco's own
+             * dismissal happens on this same event, so the key is left to it
+             * and only the propagation is stopped. */
+            e.stopPropagation();
+            return;
+        }
+    });
+
+    /* W4: meta-command completion, on a `:` at the start of a line and nowhere
+     * else. A `:foo` mid-expression is a keyword literal and a map key
+     * (`#map{:name name}`), and offering the REPL's vocabulary there would be
+     * noise on top of the language completions that already fire. */
+    const metaProvider = {
+        triggerCharacters: [':', ' '],
+        provideCompletionItems(m, position) {
+            if (m !== model) return { suggestions: [] };
+            const upto = m.getLineContent(position.lineNumber)
+                          .slice(0, position.column - 1);
+
+            const typing = /^\s*(:[a-z-]*)$/.exec(upto);
+            if (typing) {
+                const word = m.getWordUntilPosition(position);
+                const range = {
+                    startLineNumber: position.lineNumber,
+                    endLineNumber: position.lineNumber,
+                    // The `:` is not a word character, so getWordUntilPosition
+                    // stops after it; the replacement has to start on it or
+                    // accepting a suggestion leaves `::doc`.
+                    startColumn: position.column - typing[1].length,
+                    endColumn: word.endColumn,
+                };
+                return {
+                    suggestions: REPL_META_COMMANDS.map(c => ({
+                        label: c.usage ? `${c.name} ${c.usage}` : c.name,
+                        kind: monaco.languages.CompletionItemKind.Keyword,
+                        insertText: c.arg ? c.name + ' ' : c.name,
+                        detail: c.summary,
+                        filterText: c.name,
+                        range,
+                    })),
+                };
+            }
+
+            /* Second context: `:doc ` and `:type ` take a symbol, so
+             * completion after them offers symbols rather than commands. One
+             * line of context test, reusing the doc table the panel already
+             * loaded. */
+            const withArg = /^\s*(:[a-z-]+)\s+(\S*)$/.exec(upto);
+            if (withArg) {
+                const spec = REPL_META_COMMANDS.find(c => c.name === withArg[1]);
+                if (!spec || (spec.arg !== 'sym' && spec.arg !== 'expr'))
+                    return { suggestions: [] };
+                const word = m.getWordUntilPosition(position);
+                const range = {
+                    startLineNumber: position.lineNumber,
+                    endLineNumber: position.lineNumber,
+                    startColumn: word.startColumn,
+                    endColumn: word.endColumn,
+                };
+                return {
+                    suggestions: (docNames || []).slice(0, 500).map(d => ({
+                        label: d.name,
+                        kind: monaco.languages.CompletionItemKind.Function,
+                        insertText: d.name,
+                        detail: d.summary ? String(d.summary).split('\n')[0] : undefined,
+                        range,
+                    })),
+                };
+            }
+            return { suggestions: [] };
+        },
+    };
+    monaco.languages.registerCompletionItemProvider('turmeric', metaProvider);
+
+    /* Test surface. A spec cannot type into Monaco through `fill()` and should
+     * not have to read the suggest widget's DOM to find out what was offered,
+     * so the prompt's own state and its providers' answers are reachable
+     * directly -- while Enter and the arrows still go through the real
+     * onKeyDown, which is the part worth covering. */
+    window._turiRepl = {
+        focus: () => promptEditor && promptEditor.focus(),
+        value: () => promptValue(),
+        setValue: (t) => promptSetValue(t),
+        submit: () => promptSubmit(),
+        suggestOpen: () => promptSuggestOpen(),
+        sessionSource: () => replSessionSource,
+        metaCompletions: (line) => {
+            promptSetValue(line);
+            const r = metaProvider.provideCompletionItems(model, {
+                lineNumber: 1,
+                column: model.getLineMaxColumn(1),
+            });
+            return (r && r.suggestions ? r.suggestions : []).map(x => x.label);
+        },
+        completions: async (line) => {
+            promptSetValue(line);
+            if (!lspClient) return [];
+            const r = await lspClient.completions(model, {
+                lineNumber: 1,
+                column: model.getLineMaxColumn(1),
+            });
+            return (r && r.suggestions ? r.suggestions : []).map(x => x.label);
+        },
+    };
+
+    /* W2: the prompt's own document. It is opened against the same session the
+     * editor's tabs are, which needs nothing from the server --
+     * lsp_session_handle is already document-keyed and already holds several
+     * documents at once. */
+    const attachPromptDoc = () => {
+        if (promptDoc || !lspClient) return;
+        promptDoc = lspClient.attachDocument({
+            model,
+            uri: REPL_DOC_URI,
+            getPrefix: () => replSessionSource,
+        });
+    };
+    promptEditor.onDidFocusEditorText(() => {
+        startLspClient().then(attachPromptDoc).catch(() => {});
+    });
+    if (lspClient) attachPromptDoc();
 }
 
 /**
@@ -3016,6 +3444,7 @@ function initEventListeners() {
 
     // REPL input
     initReplInput();
+    initConsoleHover();
 
     // Horizontal drag-to-scroll on the editor header (mobile / narrow widths)
     initHScrollDrag();
@@ -4061,6 +4490,44 @@ function wasmExplain(code) {
     });
 }
 
+/* ---------------------------------------------------------------------------
+ * W4: one table, three consumers
+ *
+ * The meta-command vocabulary was about to exist in three places -- the
+ * dispatch chain, the hand-written `:help` text, and (once the prompt could
+ * complete) a suggestion list. Three copies is how the help text and the
+ * switch quietly stop agreeing about what the REPL can do.
+ *
+ * `arg` says what a command takes, which is also the completion context: a
+ * command taking 'sym' offers symbols after the space, one taking nothing
+ * offers nothing.
+ * ------------------------------------------------------------------------ */
+const REPL_META_COMMANDS = [
+    { name: ':help',    arg: null,     usage: '',        summary: 'show this help text' },
+    { name: ':type',    arg: 'expr',   usage: '<expr>',  summary: 'print inferred type without evaluating' },
+    { name: ':doc',     arg: 'sym',    usage: '<sym>',   summary: 'print builtin/standard operator documentation' },
+    { name: ':docs',    arg: 'page',   usage: '[page]',  summary: 'open the docs browser (guides + API), offline-ready' },
+    { name: ':reset',   arg: null,     usage: '',        summary: 'clear session and start fresh' },
+    { name: ':explain', arg: 'code',   usage: '[code]',  summary: 'explain the most recent error, or a TUR-E#### code' },
+];
+
+/* Rendered from the table, aligned on the widest label -- so adding a command
+ * cannot leave the column crooked, which is the failure mode a hand-written
+ * block has and a generated one cannot. */
+function replHelpText() {
+    const labels = REPL_META_COMMANDS.map(c =>
+        c.usage ? `${c.name} ${c.usage}` : c.name);
+    const width = labels.reduce((w, l) => Math.max(w, l.length), 0);
+    const rows = REPL_META_COMMANDS.map((c, i) =>
+        `  ${labels[i].padEnd(width)}  ${c.summary}`);
+    return 'Turmeric REPL Help\n' +
+           '------------------\n' +
+           rows.join('\n') + '\n' +
+           '\n' +
+           'Multi-line input: keep typing when parentheses are open;\n' +
+           '  an empty line to cancel an incomplete expression.';
+}
+
 /**
  * Dispatch web REPL meta-commands locally.
  */
@@ -4070,19 +4537,8 @@ async function dispatchReplMetaCommand(line) {
     const arg = parts.slice(1).join(' ').trim();
 
     if (cmd === ':help') {
-        const helpText = 
-            'Turmeric REPL Help\n' +
-            '------------------\n' +
-            '  :help               show this help text\n' +
-            '  :type <expr>        print inferred type without evaluating\n' +
-            '  :doc  <sym>         print builtin/standard operator documentation\n' +
-            '  :docs [page]        open the docs browser (guides + API), offline-ready\n' +
-            '  :reset              clear session and start fresh\n' +
-            '  :explain [code]     explain the most recent error, or a TUR-E#### code\n' +
-            '\n' +
-            'Multi-line input: keep typing when parentheses are open;\n' +
-            '  an empty line to cancel an incomplete expression.';
-        appendToConsole(`<pre class="console-output" style="margin:0">${escapeHtml(helpText)}</pre>`);
+        appendToConsole(
+            `<pre class="console-output" style="margin:0">${escapeHtml(replHelpText())}</pre>`);
 
     } else if (cmd === ':doc') {
         if (!arg) {
