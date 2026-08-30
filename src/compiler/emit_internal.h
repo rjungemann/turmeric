@@ -348,6 +348,12 @@ typedef struct EmitCtx {
     char    **any_pending;
     uint32_t  n_any_pending;
     uint32_t  cap_any_pending;
+    /* RM1: pending frees for fresh sum-carrier boxes consumed as accessor
+     * arguments -- the any_pending discipline (mark before children, drain
+     * after the call materializes), draining as a null-guarded free. */
+    char    **sum_pending;
+    uint32_t  n_sum_pending;
+    uint32_t  cap_sum_pending;
     /* any-struct-box-leak-per-widen: C names of `any` locals whose payload box
      * the ENCLOSING SCOPES own, innermost last.  The scope-exit drop is a
      * trailing free, so an early exit -- a `return`, or a self-tail-call's
@@ -886,6 +892,11 @@ bool closure_binding_escapes(const Expr *e, const Binding *b);
  * closure_binding_escapes, but a use of `b` as a read-only ok?/err?/ok-val
  * argument is not an escape.  See emit_core.c. */
 bool catch_box_binding_escapes(const Expr *e, const Binding *b);
+bool sum_box_binding_escapes(const Expr *e, const Binding *b);
+/* RM1: the read-only Option/Result accessor family -- shared between the
+ * escape walk's whitelist and elab_call.c's drop-after stamp so the two
+ * cannot drift. */
+bool sum_box_reader_name(const char *nm);
 /* catch-unwind-return-bridge-residuals (Part B): like catch_box_binding_escapes
  * but the single occurrence `ignore` (the return-tail use the caller is about to
  * copy out and free) is not counted as an escape.  Used to prove a returned

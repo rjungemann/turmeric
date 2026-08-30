@@ -332,6 +332,19 @@ struct Binding {
      * wrap, keeping the two ABI emitters in sync. Set in elab_fns.c when
      * the FnDef is built. */
     bool          body_is_inline_c;
+    /* RM1 (reclamation-plan): true when every VALUE PATH of this defn's body
+     * ends in a sum-constructor application, or in a call to a binding this
+     * flag is already true for.  On the ERASED path such a callee hands back
+     * either a freshly-malloc'd carrier box or NULL (the slice-A None), so the
+     * caller owns the result and may free it at scope exit -- which is what
+     * separates `ap` (every arm returns some(..)/none()) from `alt-or`
+     * (returns an ARGUMENT; freeing its result frees a box the caller still
+     * holds).  Stamped beside body_is_inline_c in elab_fns.c /
+     * elab_typeclasses.c; false for inline-C bodies (their contract lives in
+     * the owned-carrier table instead), false conservatively for
+     * self-recursion (the flag is read before it is set).  A false negative
+     * is a status-quo leak, never a use-after-free. */
+    bool          returns_fresh_sum_box;
     /* class-defn-constraint-not-discharged-at-call-site: backlink to the owning
      * FnDef's typeclass constraint set (`^Encode T`, or the `[(Encode T)]`
      * middle-vector form), or NULL for a binding with no constraints.  Stamped
@@ -1205,6 +1218,14 @@ struct Expr {
      * been materialized.  Outside the union because the argument can be any
      * node kind. */
     bool     any_drop_after;
+    /* RM1 (reclamation-plan), same architecture one type over: this CALL
+     * produces an erased sum-carrier box nothing else owns (its callee's
+     * returns_fresh_sum_box flag), and it flows into argument 0 of a pure
+     * read-only accessor -- so the box dies as soon as that call returns.
+     * Stamped by elab_call.c beside the any stamp; consumed at emit_value's
+     * call hoist, which frees the temp (null-guarded; None IS NULL) once the
+     * consuming call has been materialized. */
+    bool     sum_box_drop_after;
     union {
         bool         b;
         int64_t      i;

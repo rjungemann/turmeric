@@ -1785,4 +1785,8 @@ Expr *elab_session_recv_timeout(Elab *e, const Form *call);
  * payload box the evaluating expression owns?  See elab_call.c. */
 bool any_expr_is_owned_temp(const Expr *x, int depth);
 
+/* RM1 (reclamation-plan): the per-callee freshness analysis -- see the walker
+ * in elab_fns.c and the flag's comment in expr.h. */
+bool elab_body_returns_fresh_sum_box(const Expr *e);
+
 #endif

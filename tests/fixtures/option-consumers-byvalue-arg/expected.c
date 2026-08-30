@@ -8274,6 +8274,7 @@ int main(int argc, char **argv) {
         /* panic-return-signal: ret ctype unknown; no propagation here */
         int64_t __ps_203 = (unwrap_hyor(__ps_202, INT64_C(42)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
+        if (__ps_202) free((void *)(intptr_t)__ps_202);
         printf("%lld\n", (long long)(__ps_203));
         int64_t __t204;
         __t204 = INT64_C(0);

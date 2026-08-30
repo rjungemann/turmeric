@@ -17,6 +17,21 @@ now -- its explicit `option-free` calls had to be REMOVED, because by value
 they free a stack slot.  The residue shrinks further with each site that
 monomorphizes; end-to-end monomorphization is where it reaches zero.
 
+**Narrowed a third time 2026-08-30 (RM1), and this is most of what was
+left.**  The erased residue now HAS an owner for the audited consumer set:
+`returns_fresh_sum_box` (a per-callee freshness analysis -- every value path
+mints a fresh box or NULL) plus two drop mechanisms (free-after-accessor-call
+and free-at-scope-exit) close the `(ok? (ok 1))` / instance-body shapes, which
+the corpus sweep showed were the bulk: 8324 -> 7364 bytes across every
+erased-base caller in the tree, with the `hkt-stdlib-*` fixtures leaving the
+leak list entirely.  What remains open is exactly the unstampable residue: a
+box handed to a consumer OUTSIDE the audited read-only allowlist (user-defined
+readers, dictionary-dispatched `bind`/`fmap` chains -- a user instance may
+retain its argument, so those can never be stamped by name).  That residue
+reaches zero where this report always said it would: end-to-end
+monomorphization.  Mechanism and measurements:
+[reclamation-plan.md](../upcoming/reclamation-plan.md), RM1.
+
 ## Summary
 
 SR2b made stdlib Option/Result real sums.  On the default path a `(some x)` /

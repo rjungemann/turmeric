@@ -949,6 +949,31 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                                    bool allow_box_accessors,
                                    const Expr *ignore, bool allow_any_cast);
 
+/* RM1 (reclamation-plan): widens the accessor whitelist for the sum-carrier
+ * scope drop.  Every name here READS its Option/Result argument and returns a
+ * copy of a payload word or a bool -- never a pointer INTO the box -- so the
+ * box may be freed at scope exit after such uses.  The catch-box caller keeps
+ * its narrower set: its free is DEEP (tur_result_box_free walks the payload),
+ * which is why err-val is scalar-restricted there and unrestricted here. */
+static bool g_esc_allow_sum_accessors = false;
+bool sum_box_reader_name(const char *nm) {
+    /* Concrete stdlib defns only, each body audited for "reads, never
+     * retains": the accessors copy a payload word or return a bool; the two
+     * eq? comparators read both boxes through match / inline-C and return a
+     * bool; option-map reads its input and mints a fresh result.  A CLASS
+     * METHOD name (bind, fmap, eq?) must never appear here -- the callee is
+     * dictionary-dispatched, and a user instance could retain its argument,
+     * turning the drop into a use-after-free. */
+    static const char *const names[] = {
+        "some?", "none?", "ok?", "err?",
+        "unwrap", "unwrap-or", "ok-val", "err-val",
+        "result-eq?", "option-eq?", "option-map", NULL,
+    };
+    for (int i = 0; names[i]; i++)
+        if (strcmp(nm, names[i]) == 0) return true;
+    return false;
+}
+
 static bool binding_escapes_impl(const Expr *e, const Binding *b,
                                  bool allow_box_accessors,
                                  const Expr *ignore) {
@@ -1044,6 +1069,8 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                     box_accessor = nm && (strcmp(nm, "ok?") == 0 ||
                                           strcmp(nm, "err?") == 0 ||
                                           strcmp(nm, "ok-val") == 0);
+                    if (!box_accessor && g_esc_allow_sum_accessors && nm)
+                        box_accessor = sum_box_reader_name(nm);
                     /* Part A: err-val is a non-escape only when its scalar result
                      * cannot alias the payload tur_result_box_free reclaims. */
                     if (!box_accessor && nm && strcmp(nm, "err-val") == 0 &&
@@ -1352,6 +1379,16 @@ bool closure_binding_escapes(const Expr *e, const Binding *b) {
  * greenlights a free). */
 bool catch_box_binding_escapes(const Expr *e, const Binding *b) {
     return binding_escapes_impl(e, b, /*allow_box_accessors=*/true, NULL);
+}
+
+/* RM1: the catch-box walk with the sum-accessor whitelist widened.  The flag
+ * is file-scope rather than a sixth parameter because exactly one caller sets
+ * it and the walk is not reentrant (iterative, no callbacks). */
+bool sum_box_binding_escapes(const Expr *e, const Binding *b) {
+    g_esc_allow_sum_accessors = true;
+    bool r = binding_escapes_impl(e, b, /*allow_box_accessors=*/true, NULL);
+    g_esc_allow_sum_accessors = false;
+    return r;
 }
 
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,

@@ -8388,6 +8388,7 @@ int main(int argc, char **argv) {
         /* panic-return-signal: ret ctype unknown; no propagation here */
         bool __ps_199 = (some_qu(__ps_198));
         /* panic-return-signal: ret ctype unknown; no propagation here */
+        if (__ps_198) free((void *)(intptr_t)__ps_198);
         puts((__ps_199) ? "true" : "false");
         int64_t __t200;
         __t200 = INT64_C(0);

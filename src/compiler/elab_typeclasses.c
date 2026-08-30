@@ -4471,6 +4471,12 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         if (method_fd->binding) {
             method_fd->binding->body_is_inline_c =
                 (method_body && method_body->kind == EX_INLINE_C);
+            /* RM1: instance-method bodies are where the erased sum boxes the
+             * leak sweep found actually come from (`ap`'s some(..) arms), so
+             * the freshness flag matters most here -- and `alt-or`, which
+             * returns an argument, is exactly what it must stay false for. */
+            method_fd->binding->returns_fresh_sum_box =
+                elab_body_returns_fresh_sum_box(method_body);
         }
 
         /* Arrow head: the method's declared return was the class variable (the

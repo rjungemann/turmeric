@@ -19,6 +19,57 @@ bool expr_subtree_has_inline_c(const Expr *e);
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
                                       const Expr *ignore);
 
+/* RM1 (reclamation-plan): the freshness analysis, on the elaborated body.
+ * True iff every VALUE PATH ends in a sum-constructor application or a call
+ * to a binding already proven fresh.  Callees elaborate before callers within
+ * a load order (stdlib first), so `some`/`ok`/`err`/`none` -- whose bodies are
+ * bare ctor applications -- are stamped before the instance bodies that call
+ * them; a self-recursive body reads its own flag before it is set and fails
+ * conservatively.  Guarded match fall-through yields the zero-initialized
+ * merge temp, i.e. the NULL carrier, which the null-guarded free ignores --
+ * so guards need no special case.  Anything unrecognized is NOT fresh: the
+ * polarity is that a wrong `false` leaks (status quo) and a wrong `true`
+ * frees a live box, so every default answers false. */
+bool elab_body_returns_fresh_sum_box(const Expr *e) {
+    static int depth = 0;
+    if (!e || depth > 64) return false;
+    bool r = false;
+    depth++;
+    switch (e->kind) {
+        case EX_ASCRIBE:
+            r = elab_body_returns_fresh_sum_box(e->as.ascribe_.inner);
+            break;
+        case EX_DO:
+            r = e->as.do_.n > 0 &&
+                elab_body_returns_fresh_sum_box(e->as.do_.items[e->as.do_.n - 1]);
+            break;
+        case EX_LET:
+            r = elab_body_returns_fresh_sum_box(e->as.let_.body);
+            break;
+        case EX_IF:
+            r = e->as.if_.else_or_null &&
+                elab_body_returns_fresh_sum_box(e->as.if_.then_) &&
+                elab_body_returns_fresh_sum_box(e->as.if_.else_or_null);
+            break;
+        case EX_MATCH:
+            if (e->as.match_.n_arms == 0) break;
+            r = true;
+            for (uint32_t i = 0; r && i < e->as.match_.n_arms; i++)
+                r = elab_body_returns_fresh_sum_box(e->as.match_.arms[i].body);
+            break;
+        case EX_CALL:
+            if (e->as.call_.ctor) { r = true; break; }
+            r = e->as.call_.fn_binding &&
+                e->as.call_.fn_binding->returns_fresh_sum_box;
+            break;
+        default:
+            break;
+    }
+    depth--;
+    return r;
+}
+
+
 bool ptr_param_is_nonretaining(const Expr *body, const Binding *p,
                                bool result_cannot_carry);
 
@@ -8592,6 +8643,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Mirror emit_fns.c:377's predicate on the binding so call sites can
      * detect an inline-C callee without walking back to the FnDef. */
     b->body_is_inline_c = (body && body->kind == EX_INLINE_C);
+    b->returns_fresh_sum_box = elab_body_returns_fresh_sum_box(body);
     fd->closure = NULL;
     fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
     /* Phase 19: Store declared effect row (ERK_UNRESOLVED until PASS_EFFECT_ROW_INFER). */
@@ -9723,6 +9775,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* Mirror emit_fns.c:377's predicate so call sites referencing this
      * anonymous fn binding can see the same flag a defn binding would. */
     b->body_is_inline_c = (body && body->kind == EX_INLINE_C);
+    b->returns_fresh_sum_box = elab_body_returns_fresh_sum_box(body);
     fd->closure = NULL;
     fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
     /* Phase 19: Store declared effect row (ERK_UNRESOLVED until PASS_EFFECT_ROW_INFER). */

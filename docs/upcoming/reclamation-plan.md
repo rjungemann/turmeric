@@ -318,12 +318,49 @@ extend -- but it is a real analysis the phase text did not anticipate, and
 "local, no whole-program analysis, fourth client of the any-box machinery" is
 no longer an accurate description of the work.
 
-**Recommendation: do not build the drop until that analysis is specified.**
-The measured prize is ~1.7 KB across 13 fixtures, and the failure mode of
-getting it wrong is a use-after-free rather than a leak. The alternative the
-report already prefers -- monomorphize the dictionary path so the box never
-exists -- removes the same leaks with no ownership reasoning, and is where the
-track is already heading.
+~~**Recommendation: do not build the drop until that analysis is
+specified.**~~ **The analysis was specified and BUILT 2026-08-30.**
+
+`returns_fresh_sum_box` (Binding, expr.h): true iff every value path of the
+body ends in a sum-constructor application or a call to a binding already
+proven fresh.  Computed at elaboration beside `body_is_inline_c` (walker in
+elab_fns.c; instance methods stamped in elab_typeclasses.c), so callee flags
+exist before callers elaborate; self-recursion reads its own unset flag and
+fails conservatively.  `ap` passes; `alt-or` -- the pass-through that made
+the naive drop a use-after-free -- fails, by the same body-not-signature
+distinction the `any` family's `returns_fresh_any` already drew.
+
+Two consumers, mirroring the `any` family's two cases:
+
+- **Pending** (the dominant sweep shape, `(ok? (ok 1))`): elab_call.c stamps
+  `sum_box_drop_after` on a fresh-producer argument headed into a read-only
+  accessor (audited allowlist, `sum_box_reader_name` -- concrete stdlib defns
+  only, never a class-method name, since a dictionary-dispatched callee could
+  retain).  emit_value's hoist frees the temp after the consuming call
+  materializes, gated on the temp's recorded `int64_t` spelling so a
+  specialized by-value call is never touched.  Argument positions are
+  per-callee: `unwrap-or`'s arg 1 is the DEFAULT the callee can return, so
+  only the eq? comparators stamp past position 0.
+- **Scope** (`emit_let_value`): a let-bound fresh-producer result with
+  accessor-only uses (a widened `catch_box_binding_escapes`) is freed at
+  trailing scope exit.  letrec conservatively skipped.
+
+All frees are null-guarded (the None carrier IS NULL) and shallow (accessors
+copy payload words out; the box owns nothing else).
+
+**Measured: 8324 -> 7364 bytes** across the 27 erased-base callers (the
+null-None mirror above contributed 112 of that; the drops the rest), with the
+`hkt-stdlib-*` fixtures leaving the leak list entirely and
+`typed/result-basic` 528 -> 288.  Residue: consumers outside the audited
+allowlist (user readers like `opt-val`, monadic `bind` chains -- unstampable
+by design, a user instance may retain), plus the non-sum "other" leaks.  The
+end state is still monomorphization; this mechanism is the interim owner.
+Guarded by `tests/fixtures/erased-sum-box-scope-drop`
+(`requires.leak-check`, verified NON-VACUOUS: six erased constructor calls
+and six frees in its emitted C -- an ascribed spelling specializes and tests
+nothing).  Leak-check 62/0/0; full suite 2749/0; both seams green; 4
+snapshots regenerated in the same commit.  Sweep record:
+[rm1-leak-sweep-after.txt](../artifacts/rm1-leak-sweep-after.txt).
 
 **An aside worth its own report.** None of these 24 fixtures carries
 `requires.leak-check`, so `bash tests/run.sh` has never seen any of it -- which

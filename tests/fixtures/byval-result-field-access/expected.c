@@ -8208,6 +8208,7 @@ int main(int argc, char **argv) {
             int64_t __t183;
             __t183 = INT64_C(0);
             __t178 = __t183;
+            if (r_1434) free((void *)(intptr_t)r_1434);
         }
         return (int)__t178;
 }

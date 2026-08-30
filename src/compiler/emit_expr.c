@@ -2408,6 +2408,17 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     char **box_free_names = NULL;
     /* any-struct-box-leak-per-widen: `any` locals whose payload box dies here. */
     char **any_free_names = NULL;
+    /* RM1 (reclamation-plan): C names of let-bound erased sum-carrier boxes
+     * whose producer is freshness-flagged and whose every use is a read-only
+     * accessor -- freed (null-guarded; None IS NULL) at scope exit.  Collected
+     * INSIDE the binding loop, unlike the neighbours, because the decision
+     * needs the binding's EMITTED C type: only an `int64_t` binding holds the
+     * carrier box, and re-deriving that from the type view is the exact class
+     * of error this file keeps relearning.  emit_let_value only; the letrec
+     * path (which shares the recorded-i64 pattern) is conservatively skipped
+     * -- a recursive binding's box can be re-entered by a later iteration. */
+    char **sum_free_names = NULL;
+    uint32_t n_sum_free = 0;
     uint32_t n_any_free = 0;
     uint32_t n_box_free = 0;
     /* local-struct-drop (fn-field): C names + struct C types of let-bound owning
@@ -2613,6 +2624,39 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                             strcmp(lvty, "void *") != 0;
                 init_val_recorded_voidp = lvty && strcmp(lvty, "void *") == 0;
                 init_val_recorded_i64 = lvty && strcmp(lvty, "int64_t") == 0;
+            }
+            /* RM1: the sum-carrier scope drop.  Four conditions, each load-
+             * bearing: the callee's every value path mints a fresh box or NULL
+             * (the elab-computed flag -- `ap` yes, `alt-or` no, and freeing
+             * alt-or's result would free a box the caller still holds); the
+             * BINDING is emitted as the int64 carrier (a by-value spec result
+             * has no box and must never be freed); the call temp's RECORDED
+             * spelling agrees (a byval-to-carrier spill would be a stack
+             * address); and every use in the body and sibling inits passes the
+             * accessor-whitelist walk, whose polarity only ever greenlights a
+             * free.  Trailing-only, like the env and catch-box clients: an
+             * early exit keeps the status-quo leak, never a UAF. */
+            if (!body_has_return_or_throw &&
+                strcmp(bind_c, "int64_t") == 0 &&
+                init_val_recorded_i64) {
+                const Expr *fin = e->as.let_.bindings[i].init;
+                while (fin && fin->kind == EX_ASCRIBE) fin = fin->as.ascribe_.inner;
+                bool fresh = fin && fin->kind == EX_CALL &&
+                    (fin->as.call_.ctor ||
+                     (fin->as.call_.fn_binding &&
+                      fin->as.call_.fn_binding->returns_fresh_sum_box));
+                if (fresh && !sum_box_binding_escapes(e->as.let_.body, b)) {
+                    bool sib = false;
+                    for (uint32_t j = 0; j < e->as.let_.n && !sib; j++)
+                        if (j != i && sum_box_binding_escapes(
+                                e->as.let_.bindings[j].init, b))
+                            sib = true;
+                    if (!sib) {
+                        sum_free_names = (char **)realloc(sum_free_names,
+                            (n_sum_free + 1) * sizeof(char *));
+                        sum_free_names[n_sum_free++] = name_for_binding(ctx, b);
+                    }
+                }
             }
             /* gcc14-int-conversion (carrier-representation-tracking): the init
              * VALUE is a `void *` union-default read (`((union { int64_t s; void *
@@ -2827,6 +2871,18 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         free(box_free_names[i]);
     }
     free(box_free_names);
+
+    /* RM1: release non-escaping erased sum-carrier boxes -- the body was their
+     * last use.  SHALLOW free, null-guarded: the None carrier is NULL (slice
+     * A), and the payload word was copied out by the accessors, so the box is
+     * all this scope owns. */
+    for (uint32_t i = 0; i < n_sum_free; i++) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "if (%s) free((void *)(intptr_t)%s);\n",
+                   sum_free_names[i], sum_free_names[i]);
+        free(sum_free_names[i]);
+    }
+    free(sum_free_names);
 
     /* any-struct-box-leak-per-widen: release the payload box of each
      * non-escaping `any` local now that the body -- its last use -- is emitted. */
@@ -4062,6 +4118,29 @@ static void any_pending_push(EmitCtx *ctx, const char *name) {
  * something to drop, and register it. */
 static char *emit_any_drop_arm(EmitCtx *ctx, Buf *body, char *v);
 
+/* RM1: the sum-box twin of the any_pending pair below -- same mark/drain
+ * discipline, draining as a null-guarded shallow free (the None carrier IS
+ * NULL, and the accessors copy the payload word out before the drain runs). */
+static void sum_pending_push(EmitCtx *ctx, const char *name) {
+    if (ctx->n_sum_pending >= ctx->cap_sum_pending) {
+        uint32_t nc = ctx->cap_sum_pending ? ctx->cap_sum_pending * 2 : 8;
+        char **nn = (char **)realloc(ctx->sum_pending, nc * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->sum_pending = nn;
+        ctx->cap_sum_pending = nc;
+    }
+    ctx->sum_pending[ctx->n_sum_pending++] = strdup(name);
+}
+
+static void sum_pending_drain(EmitCtx *ctx, Buf *body, uint32_t mark) {
+    while (ctx->n_sum_pending > mark) {
+        char *nm = ctx->sum_pending[--ctx->n_sum_pending];
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "if (%s) free((void *)(intptr_t)%s);\n", nm, nm);
+        free(nm);
+    }
+}
+
 static void any_pending_drain(EmitCtx *ctx, Buf *body, uint32_t mark) {
     while (ctx->n_any_pending > mark) {
         char *nm = ctx->any_pending[--ctx->n_any_pending];
@@ -4135,6 +4214,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     g_emit_expr_depth++;
     /* Mark before the children run: everything they push belongs to THIS node. */
     uint32_t any_mark = ctx->n_any_pending;
+    uint32_t sum_mark = ctx->n_sum_pending;
     char *v = emit_value_dispatch(ctx, body, e);
     g_emit_expr_depth--;
     /* S1/findings 16: capture-and-clear the builder's ret-type note
@@ -4437,10 +4517,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * above without materializing, and deliberately leaves its pending entries
      * to an enclosing call instead of dropping them early. */
     any_pending_drain(ctx, body, any_mark);
+    sum_pending_drain(ctx, body, sum_mark);
     /* And if THIS call is itself an owned `any` argument, its temp is what the
      * enclosing call will drop.  Pushed after the drain so it belongs to the
      * PARENT's mark, not this node's. */
     if (e->any_drop_after) any_pending_push(ctx, tmp);
+    /* RM1: same discipline for a fresh sum-carrier box headed into an accessor.
+     * Gated on the temp's ACTUAL declared spelling: only an int64_t temp holds
+     * the carrier box -- a specialized call returns the by-value aggregate (or
+     * a typed pointer) and there is nothing to free.  ret_ct NULL means
+     * __auto_type, i.e. we could not prove the spelling, so no free either;
+     * both misses are status-quo leaks, never a double free. */
+    if (e->sum_box_drop_after && ret_ct && strcmp(ret_ct, "int64_t") == 0)
+        sum_pending_push(ctx, tmp);
     return strdup(tmp);
 }
 

@@ -8181,6 +8181,7 @@ int main(int argc, char **argv) {
         void *__t174 = (void *)((char *)&__tur_fatbox_0 + sizeof(void *));
         tur_adt_Option__int __ps_175 = (option_map__spec__tur_adt_Option__int_int64_t_int64_t(__ps_173, (int64_t)(intptr_t)(__t174)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
+        if (__ps_173) free((void *)(intptr_t)__ps_173);
         int64_t __ps_176 = (unwrap_or__spec__int64_t_tur_adt_Option__int_int64_t(__ps_175, INT64_C(99)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         printf("%lld\n", (long long)(__ps_176));
@@ -8189,6 +8190,7 @@ int main(int argc, char **argv) {
         void *__t178 = (void *)((char *)&__tur_fatbox_1 + sizeof(void *));
         tur_adt_Option__int __ps_179 = (option_map__spec__tur_adt_Option__int_int64_t_int64_t(__ps_177, (int64_t)(intptr_t)(__t178)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
+        if (__ps_177) free((void *)(intptr_t)__ps_177);
         int64_t __ps_180 = (unwrap_or__spec__int64_t_tur_adt_Option__int_int64_t(__ps_179, INT64_C(88)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         printf("%lld\n", (long long)(__ps_180));

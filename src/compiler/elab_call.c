@@ -6,6 +6,7 @@
 #define _GNU_SOURCE
 #endif
 #include "elab_internal.h"
+bool sum_box_reader_name(const char *nm);  /* emit_core.c; see emit_internal.h */
 #include "experiments.h"  /* Slice 3 (constrained-hkt-forall): hkt-hrt gate */
 #include "mono_specs.h"   /* VBM1 (van-laarhoven-monomorphization): spec registry */
 
@@ -5521,6 +5522,37 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             && effect_row_is_empty(fn_binding->type.as.fn.effect_row)) {
             if (any_expr_is_owned_temp(args[i], 8))
                 args[i]->any_drop_after = true;
+        }
+
+        /* RM1 (reclamation-plan): the sum-box temporary case, the any rule one
+         * type over.  `(ok? (ok 1))` mallocs a carrier box on the erased path
+         * that nothing owns -- the sweep's dominant leak shape.  Stamp the
+         * argument call when the CONSUMER is a read-only accessor (argument 0,
+         * pure -- the same non-suspending condition the any rule carries) and
+         * the PRODUCER's every value path mints a fresh box (the callee-side
+         * freshness fact; a pass-through like alt-or stays unstamped, exactly
+         * as `keep-it` does for any).  Emit frees the temp after the accessor
+         * call materializes, gated there on the temp's recorded int64 spelling
+         * so a specialized by-value call is never touched. */
+        if (args[i] && fn_binding && fn_binding->name &&
+            fn_binding->type.kind == TY_FN &&
+            effect_row_is_empty(fn_binding->type.as.fn.effect_row) &&
+            sum_box_reader_name(fn_binding->name->name) &&
+            /* Which argument POSITIONS hold a readable box differs per
+             * callee, and the restriction is load-bearing: unwrap-or's arg 1
+             * is the DEFAULT, which the callee RETURNS on the None path --
+             * stamping it would free a value the caller receives.  The eq?
+             * comparators read boxes at 0 and 1; everything else at 0 only. */
+            (i == 0 ||
+             (i == 1 && (strcmp(fn_binding->name->name, "result-eq?") == 0 ||
+                         strcmp(fn_binding->name->name, "option-eq?") == 0)))) {
+            Expr *a = args[i];
+            while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+            if (a && a->kind == EX_CALL &&
+                (a->as.call_.ctor ||
+                 (a->as.call_.fn_binding &&
+                  a->as.call_.fn_binding->returns_fresh_sum_box)))
+                a->sum_box_drop_after = true;
         }
 
         /* LT2: When both expected and actual argument types are function types,
