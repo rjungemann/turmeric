@@ -247,6 +247,32 @@ the fat representation instead of reconstructing an unboxed one.
    should name the `defopaque :ptr<void>` route. This breaks nothing in the
    tree -- every in-tree `:fn` field stores a captureless lambda, which is why
    the crash was never hit.
+
+   **A hard error, not a fallback -- and the distinction matters.** "Rejected"
+   here means a compile error, because *the other path is the one that
+   crashes*. There is no third representation to fall back to:
+
+   - The **thin path** is already the fallback. Arity 0 and >4 are on it now,
+     and it works for a captureless lambda (verified: a non-capturing `:fn`
+     thunk returns 42) and segfaults for a capturing one. Routing there
+     silently is the current behaviour and is the bug.
+   - **Boxing it anyway** is the real fix, not a fallback, and it cannot be
+     done at the store alone: the read side has no working invocation form at
+     arity 0, so a boxed store and a thin read would disagree -- exactly what
+     the original arity bound's comment warned about.
+   - **Silently rewriting the field to `ptr<void>`** would change the user's
+     declared type and the meaning of every `(.f v)` read. This codebase
+     already treats a silent representation change as a defect worth filing
+     (see byvalue-adt-app-rejects-nested-monomorphs), so it should not
+     introduce one deliberately.
+   - A **runtime check** cannot work: a fat env pointer and a code pointer are
+     not distinguishable at runtime.
+
+   So the choice is between an error and the status quo, and the status quo is
+   a silent SIGSEGV. The error costs nothing anyone currently has: a program
+   that trips it is already miscompiled today, and the narrow rule --
+   *capturing* AND *arity 0 or >4* -- leaves the working cases (any captureless
+   store; any capturing store at arity 1..4) untouched.
 3. **Document the working route.** Nothing says how to store a callback in an
    ADT; the answer is currently "read `Goal`'s declaration in `logic.tur`".
 
