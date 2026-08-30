@@ -164,7 +164,7 @@ class SiteFooter extends HTMLElement {
           <div class="footer-col">
             <div class="footer-col-title">Ecosystem</div>
             <a href="/docs/html/guides/">Guides</a>
-            <a href="/docs/html/api/">API Docs</a>
+            <a href="/docs/html/api/">Docs</a>
             <a href="https://spices.turmeric-lang.com">Spices</a>
             <!-- Same-project subdomain, so the same plain href as Spices
                  above: no target, no rel. Sibling labels here are bare noun
