@@ -34,8 +34,9 @@ impossible. It is three other things:
    addresses that have to be ordered by guesswork.
 3. **The web has no debugger.** `tur dap` is stdio, and a browser tab has no
    way to host a blocking pause loop. A trace is a byte buffer, and a byte
-   buffer crosses the wasm boundary and is scrubbed client-side with no
-   protocol at all.
+   buffer crosses the wasm boundary with no protocol at all -- which is what
+   Try Turmeric's timeline is built on. See
+   [Recording in the browser](#recording-in-the-browser).
 
 The recorder is an **interpreter** feature. Compiled programs are not traced; a
 native tracer is a different job and would start from the `#line` emission
@@ -147,6 +148,40 @@ to a client that owns its own console.
 
 Replay is opt-in. A plain `launch` is still a live session, still the one that
 can `evaluate`, and unchanged.
+
+## Recording in the browser
+
+Try Turmeric has a **Trace** button next to Run, and a `:trace` command at the
+prompt. Both record the tab's program and open a timeline under the console:
+
+- A slider over the run, with first / step-back / step-forward / last. Stepping
+  **back** is the point -- it is the question a pause cannot answer.
+- The editor gutter follows the cursor, and clicking a line number jumps to that
+  line's next execution (Alt+click for the previous one). A line with no hit
+  ahead of it says so rather than silently running to the end.
+- The frame stack at the cursor, innermost first, and the bindings of whichever
+  frame you select -- each carrying its most recent rendering.
+- The console shows what the program had printed by that step, so scrubbing
+  backwards rewinds the transcript. Closing the timeline puts your own
+  transcript back.
+- **Download** writes the recording as a `.turtrace` that `tur trace --dump`
+  reads, so a run recorded in a browser can be inspected on the command line.
+
+Trace is a second button rather than something Run always does, for the reason
+in [Cost](#cost) -- and the browser's cap is 50,000 steps, a quarter of the
+native default, because a tab pays for the interpreter's per-step retention as
+well as the recording's. A run that hits the cap says so in a banner.
+
+The page does not decode the format. Every question the timeline asks goes
+through the same `turi_trace_replay_*` calls `tur dap` uses, exported from
+`src/web/wasm_glue.c`, so there is one decoder for `.turtrace` and it is the C
+one.
+
+One thing to know when reading line numbers: the browser session accumulates
+every evaluation into one source blob, so an interpreter line is absolute in
+that blob rather than relative to your tab. The timeline subtracts the offset
+before it highlights anything -- but a raw `.turtrace` downloaded from the tab
+carries the absolute lines.
 
 ## Reading a recording in C
 

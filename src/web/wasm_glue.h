@@ -176,6 +176,31 @@ const char *turi_doc_lookup(const char *name);
  * The result must be freed with turi_wasm_free_string(). */
 char *turi_wasm_strdup(const char *s);
 
+/* ---------------------------------------------------------------------------
+ * Time-travel tracer (docs/upcoming/try-turmeric-tracer-plan.md, T3)
+ *
+ * turi_wasm_trace_run records a program; everything else answers questions
+ * about the recording it left behind.  The JSON returns are owned by the glue
+ * layer and are invalidated by the next call to the same function -- do NOT
+ * free them.
+ * ---------------------------------------------------------------------------
+ */
+
+#include <stdint.h>
+
+int             turi_wasm_trace_run(const char *input, uint32_t max_steps,
+                                    int has_main);
+const char     *turi_wasm_trace_stats(void);
+uint32_t        turi_wasm_trace_seek(uint32_t index);
+const char     *turi_wasm_trace_state(void);
+const char     *turi_wasm_trace_site_at(uint32_t index);
+const char     *turi_wasm_trace_find_line(int dir, const char *file,
+                                          uint32_t line);
+const char     *turi_wasm_trace_output_full(void);
+const uint8_t  *turi_wasm_trace_buffer(void);
+uint32_t        turi_wasm_trace_buffer_len(void);
+void            turi_wasm_trace_release(void);
+
 #ifdef __cplusplus
 }
 #endif

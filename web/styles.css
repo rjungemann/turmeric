@@ -2235,3 +2235,122 @@ body.split-dragging * {
     .repl-container { display: block; }
     .editor-pane, .console-pane { break-inside: avoid; }
 }
+
+/* ---------------------------------------------------------------------------
+ * T3: the time-travel timeline (try-turmeric-tracer-plan)
+ *
+ * Sits between the console header and the transcript, so scrubbing changes
+ * what is directly below the controls that drive it.
+ * ------------------------------------------------------------------------- */
+
+.trace-panel {
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    font-size: 12px;
+    flex: 0 0 auto;
+}
+
+.trace-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+}
+
+.trace-slider {
+    flex: 1 1 auto;
+    min-width: 80px;
+    accent-color: var(--accent-color);
+    cursor: pointer;
+}
+
+.trace-pos {
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.trace-site {
+    color: var(--accent-color);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 40%;
+}
+
+.trace-banner {
+    padding: 4px 10px 6px;
+    color: var(--text-secondary);
+    border-top: 1px solid var(--border-color);
+}
+
+.trace-frames-row {
+    display: flex;
+    gap: 1px;
+    background: var(--border-color);
+    border-top: 1px solid var(--border-color);
+    max-height: 140px;
+}
+
+.trace-frames,
+.trace-locals {
+    background: var(--bg-secondary);
+    overflow-y: auto;
+    padding: 4px 0;
+}
+
+.trace-frames { flex: 0 0 40%; }
+.trace-locals { flex: 1 1 60%; }
+
+.trace-frame {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 3px 10px;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.trace-frame:hover  { background: var(--bg-tertiary); }
+.trace-frame.active { background: var(--bg-tertiary); color: var(--accent-color); }
+
+.trace-frame-fn   { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trace-frame-line { color: var(--text-muted); white-space: nowrap; }
+
+.trace-local {
+    display: flex;
+    gap: 8px;
+    padding: 3px 10px;
+}
+
+.trace-local-name { color: var(--accent-color); flex: 0 0 auto; }
+.trace-local-val  {
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.trace-empty {
+    padding: 3px 10px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* The step the cursor is on. A left marker rather than a glyph-margin icon:
+ * the editor is created without a glyph margin, and turning one on for this
+ * would shift the gutter for every user who never opens the timeline. */
+.trace-current-line {
+    background: var(--gold-glow);
+}
+
+.trace-current-marker {
+    background: var(--accent-color);
+    width: 3px !important;
+    margin-left: 2px;
+}

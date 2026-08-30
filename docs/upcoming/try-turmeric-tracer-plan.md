@@ -1,6 +1,8 @@
 # Try Turmeric: the time-travel timeline (track T3)
 
-> **Status: Not started.** Written 2026-08-30 against v0.41.0.
+> **Status: Executed (2026-08-30).** T3.0 through T3.5 all landed; see
+> [§10 Execution record](#10-execution-record). Written 2026-08-30 against
+> v0.41.0.
 > **Type:** WASM glue / web client.
 > **Executes:** T3 of
 > [`editor-intelligence-follow-through-plan.md`](../archive/editor-intelligence-follow-through-plan.md),
@@ -43,9 +45,9 @@ execution (T2) and, eventually, the browser timeline (T3)."
 **The recorder is already in the wasm source set.** `turi/trace.c` sits in
 `TURI_EVAL_SOURCES` (`src/CMakeLists.txt:117`), which is spliced into
 `TUR_CORE_SOURCES` (:289), which is `WASM_SOURCES` (:1525). It compiles for
-wasm32 today. It is then dead-stripped, because nothing in
-`-sEXPORTED_FUNCTIONS` (:1573) reaches it -- that list ends
-`_turi_explain,_malloc,_free` and mentions no trace symbol.
+wasm32 today. Nothing in `-sEXPORTED_FUNCTIONS` (:1573) reaches it, though --
+that list ends `_turi_explain,_malloc,_free` and mentions no trace symbol, so
+the module carries the recorder and offers no way to call it.
 
 **Nothing above that line exists.** Verified rather than assumed:
 
@@ -292,3 +294,90 @@ tracer -- but measure before assuming there is a problem.
   without seeking).
 - Sharing a recording through the existing `?code=` URL state. The trace is
   megabytes, so this needs a store, not an encoding.
+
+---
+
+## 10. Execution record
+
+Executed 2026-08-30 on branch `worktree-try-turmeric-tracer-t3`. All six phases
+landed. `emcc` was present in this environment, so unlike the T1/T2 execution
+the Playwright half actually ran.
+
+### 10.1 What shipped
+
+| Phase | Landed as |
+|---|---|
+| T3.0 | `turi_wasm_trace_run` / `_stats` + the export list + the worker's `trace-run` branch |
+| T3.1 | `_seek` / `_state` / `_site_at` / `_find_line` / `_buffer` / `_release`, and `trace-seek` |
+| T3.2 | The timeline strip: slider, first/back/forward/last, `file:line`, gutter decoration |
+| T3.3 | Frames + locals panes; console output replayed from the recording |
+| T3.4 | Line-number click jumps to that line's next execution (Alt+click for previous); truncation banner |
+| T3.5 | `web/tests/trace.spec.js` -- 8 specs, all green, including native-vs-browser parity |
+
+### 10.2 The three risks, resolved
+
+**Risk 1 (output capture under emscripten) did not materialize.** `pipe`,
+`dup`, `dup2` and `fcntl(O_NONBLOCK)` all work in the Emscripten POSIX layer,
+so `capture_output` is on in the browser and the OUTPUT records are populated.
+`trace.c`'s decision to write drained bytes back out to the saved descriptor
+("the tracer is a recorder, not a muzzle") pays off here in a way it was not
+designed for: the console still streams live *during* a traced run, so the
+transcript restored when the timeline closes is the real one.
+
+**Risk 3 (wasm size) is zero.** Measured by building the module twice, with a
+reconfigure between so the export list actually changed: **3,475,137 bytes both
+ways.** The recorder and the replay were being linked in already; the export
+list only decided whether anything could call them. §1's claim that they were
+"dead-stripped" was wrong and has been corrected -- the deployed artifact was
+simply built on 2026-07-29, before the tracer existed.
+
+**Risk 2 (memory) stands as designed.** `TRACE_MAX_STEPS` is 50,000 in
+`web/main.js`, a quarter of the recorder's native default, and truncation
+raises a banner.
+
+### 10.3 One thing the plan did not anticipate
+
+**Interpreter line numbers are not editor line numbers.** The browser env
+accumulates every eval into `env->src_acc` and hands the whole blob to the
+reader, so a site's line is absolute in that blob -- a five-line tab reports
+its errors at `<eval>:75`, and a timeline lighting up line 75 of a five-line
+file would be worse than no timeline at all. The bridge captures
+`env->acc_next_line` before the run and reports it as `baseLine`; the page
+subtracts. Measured on the `fib` program: `baseLine` 62, sites at 63/65/68,
+editor lines 2/4/7 -- which is what the gutter highlights.
+
+**And one behavior worth stating.** `turi_trace_replay_output` answers "what
+had been printed *before* the cursor's step", which is right everywhere except
+the end: a program whose last act is a `println` drains it after the final
+STEP record, so the transcript at the last step was empty for a program that
+had visibly printed. Rather than change the replay -- its semantics are correct
+for its own question and `tur dap` depends on them -- the glue got
+`turi_wasm_trace_output_full`, built on the public reader, which the page asks
+for only when the cursor is on the last step.
+
+### 10.4 Verification
+
+- `web/tests/trace.spec.js`: **8 passed.** The parity spec records
+  `tests/fixtures/trace/input.tur` with `./build/tur trace` and the same
+  program in the tab: **65 steps both ways**, peak depth 7.
+- `bash tests/run-trace.sh`: **19 passed, 0 failed** -- the native T1 harness is
+  unaffected.
+- Full desktop Playwright suite: 127 passed. The failures that remain
+  (minimap x2, repl-intelligence x3, smoke "Force update") reproduce on an
+  untouched checkout and are pre-existing. A further batch (guide-toggle x7,
+  smoke's console-error assertion) is a fresh worktree missing generated web
+  assets -- `web/public/doc-names.json` and the docs HTML -- not a regression;
+  copying `doc-names.json` in turns the `:doc`-completion spec green.
+- `:help` is generated from `REPL_META_COMMANDS`, so adding `:trace` needed no
+  test update and the alignment spec still passes.
+
+### 10.5 Left, unchanged from §9
+
+The depth ribbon, struct/collection bindings rendered as more than a summary
+line, and sharing a recording through the URL. `turi_wasm_trace_site_at`
+already returns `depth` without seeking, so the ribbon is the cheapest of the
+three.
+
+One doc follow-up landed with this: the tracing guide gained a "Recording in
+the browser" section, since §1's note about its §3 reading as shipped behavior
+stopped being hypothetical the moment this did ship.

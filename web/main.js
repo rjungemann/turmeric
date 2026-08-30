@@ -1132,6 +1132,18 @@ async function initWasm() {
                     pending.resolve(msg.result);
                 } else if (msg.type === 'lang-registry-result') {
                     pending.resolve(msg.result);
+                } else if (msg.type === 'trace-run-result') {
+                    pending.resolve({ steps: msg.steps, stats: msg.stats, error: msg.error });
+                } else if (msg.type === 'trace-state') {
+                    pending.resolve(msg.state);
+                } else if (msg.type === 'trace-sites') {
+                    pending.resolve(msg.sites);
+                } else if (msg.type === 'trace-found') {
+                    pending.resolve(msg.found);
+                } else if (msg.type === 'trace-bytes') {
+                    pending.resolve(msg.bytes);
+                } else if (msg.type === 'trace-released') {
+                    pending.resolve();
                 } else if (msg.type === 'reset-done') {
                     pending.resolve();
                 } else if (msg.type === 'error') {
@@ -1992,6 +2004,17 @@ async function initEditor() {
     
     // Expose editor for smoke tests
     window._turiEditor = editor;
+    // T3: line-number clicks jump the timeline while a recording is open.
+    traceInstallGutterHandler(editor);
+    // Timeline test surface, alongside _turiTabs below.
+    window._turiTrace = {
+        state:   () => ({ active: traceState.active, steps: traceState.steps,
+                          index: traceState.index, baseLine: traceState.baseLine,
+                          frames: traceState.frames }),
+        run:     () => traceCode(),
+        seek:    (i) => traceSeek(i),
+        close:   () => traceClose(),
+    };
     // Multi-tab test surface. Read-only `tabs()` snapshot keeps tests from
     // accidentally mutating module state.
     window._turiTabs = {
@@ -3290,6 +3313,9 @@ function initEventListeners() {
     document.getElementById('jump-back-btn')?.addEventListener('click', jumpBack);
     renderJumpBack();
 
+    // Time-travel timeline (try-turmeric-tracer-plan T3).
+    traceInstallHandlers();
+
     // Format button
     document.getElementById('format-btn')?.addEventListener('click', formatCode);
     
@@ -4522,6 +4548,7 @@ const REPL_META_COMMANDS = [
     { name: ':docs',    arg: 'page',   usage: '[page]',  summary: 'open the docs browser (guides + API), offline-ready' },
     { name: ':reset',   arg: null,     usage: '',        summary: 'clear session and start fresh' },
     { name: ':explain', arg: 'code',   usage: '[code]',  summary: 'explain the most recent error, or a TUR-E#### code' },
+    { name: ':trace',   arg: null,     usage: '',        summary: 'record this program and open the time-travel timeline' },
 ];
 
 /* Rendered from the table, aligned on the widest label -- so adding a command
@@ -4552,6 +4579,9 @@ async function dispatchReplMetaCommand(line) {
     if (cmd === ':help') {
         appendToConsole(
             `<pre class="console-output" style="margin:0">${escapeHtml(replHelpText())}</pre>`);
+
+    } else if (cmd === ':trace') {
+        await traceCode();
 
     } else if (cmd === ':doc') {
         if (!arg) {
@@ -5330,3 +5360,377 @@ window.turmericApp = {
         docsRef: docsCurrentRef,
     })
 };
+
+/* ---------------------------------------------------------------------------
+ * T3: the time-travel timeline
+ *
+ * Run records; then you scrub the recording, forwards and backwards, watching
+ * the gutter follow the cursor and each live frame's bindings change under it.
+ *
+ * The page does not decode the .turtrace format.  Every question here --
+ * where am I, what are the frames, what had been printed by now -- is answered
+ * by turi_trace_replay_* through the WASM bridge, which is the same replay
+ * `tur dap` answers stepBack with.  One decoder for one format.
+ * ------------------------------------------------------------------------- */
+
+/* The browser's cap is deliberately far below the recorder's own 200,000
+ * default.  That number was chosen for a native process; here the interpreter
+ * retains roughly 4 KiB per step of a trampolined loop on top of the ~15 bytes
+ * a step costs the recording itself, and the tab is what pays.  50,000 steps
+ * is about 750 KB of trace and a session that stays responsive. */
+const TRACE_MAX_STEPS = 50000;
+
+const traceState = {
+    active: false,
+    steps: 0,
+    index: 0,
+    baseLine: 1,
+    frames: [],
+    selectedFrame: 0,
+    stats: null,
+    savedConsoleHTML: null,
+    savedConsoleLog: null,
+    decorations: null,
+    seekPending: false,
+    seekQueued: null,
+};
+
+function traceWorkerCall(message) {
+    if (!evalWorker || wasmState !== WASM_STATE.READY) return Promise.resolve(null);
+    return new Promise((resolve, reject) => {
+        const id = ++evalCallId;
+        pendingCalls.set(id, {
+            resolve,
+            reject,
+            startTime: performance.now(),
+            isEval: false,
+        });
+        evalWorker.postMessage({ ...message, id });
+    });
+}
+
+/**
+ * Record the editor's program and open the timeline.
+ */
+async function traceCode() {
+    if (wasmState !== WASM_STATE.READY) {
+        showStatus('WASM not ready', 'error');
+        return;
+    }
+    const code = editor.getValue();
+    if (!code.trim()) {
+        appendToConsole('<span class="console-error">Error: No code to trace</span>');
+        return;
+    }
+
+    showStatus('Recording...', 'info');
+    const started = performance.now();
+    // hasMain is the page's existing Run rule, not a second one: a program with
+    // a top-level `main` loads its forms and then runs `(main)`, and the
+    // recording covers the run rather than the definitions.
+    const res = await traceWorkerCall({
+        type: 'trace-run',
+        input: code,
+        maxSteps: TRACE_MAX_STEPS,
+        hasMain: definesMainEntry(code),
+    });
+
+    if (!res || res.steps < 0) {
+        const why = res && res.steps === -2
+            ? 'this program declares a main entry point but did not define one'
+            : (res && res.error) || 'the program did not load';
+        appendToConsole(`<span class="console-error">Trace failed: ${escapeHtml(why)}</span>`);
+        showStatus('Trace failed', 'error');
+        return;
+    }
+    if (res.steps === 0) {
+        appendToConsole('<span class="console-error">Trace recorded nothing -- the program ran no interpreted steps.</span>');
+        showStatus('Ready', 'success');
+        return;
+    }
+
+    updateExecTime(performance.now() - started);
+    traceState.stats = res.stats || null;
+    traceState.steps = res.steps;
+    traceState.baseLine = (res.stats && res.stats.baseLine) || 1;
+    traceOpen();
+    await traceSeek(0);
+}
+
+function traceOpen() {
+    const panel = document.getElementById('trace-panel');
+    if (!panel) return;
+    if (!traceState.active) {
+        // The transcript belongs to the user, so it is put back on close
+        // rather than overwritten: while the timeline is open the console
+        // shows what the program had printed by the cursor's step, which is
+        // what the OUTPUT records exist for.
+        const consoleEl = document.getElementById('console');
+        traceState.savedConsoleHTML = consoleEl ? consoleEl.innerHTML : '';
+        traceState.savedConsoleLog = consoleLog.slice();
+    }
+    traceState.active = true;
+    panel.hidden = false;
+
+    const slider = document.getElementById('trace-slider');
+    if (slider) {
+        slider.min = '0';
+        slider.max = String(Math.max(0, traceState.steps - 1));
+        slider.value = '0';
+    }
+
+    const banner = document.getElementById('trace-banner');
+    if (banner) {
+        const st = traceState.stats;
+        if (st && st.truncated) {
+            banner.hidden = false;
+            banner.textContent =
+                `Recording stopped at the ${TRACE_MAX_STEPS.toLocaleString()}-step cap -- ` +
+                `this is the beginning of the run, not all of it.`;
+        } else if (st) {
+            banner.hidden = false;
+            banner.textContent =
+                `${st.steps.toLocaleString()} steps, peak depth ${st.peakDepth}, ` +
+                `${(st.bytes / 1024).toFixed(1)} KB recorded.`;
+        } else {
+            banner.hidden = true;
+        }
+    }
+}
+
+function traceClose() {
+    const panel = document.getElementById('trace-panel');
+    if (panel) panel.hidden = true;
+    if (traceState.decorations) {
+        traceState.decorations.clear();
+        traceState.decorations = null;
+    }
+    if (traceState.active) {
+        const consoleEl = document.getElementById('console');
+        if (consoleEl && traceState.savedConsoleHTML !== null) {
+            consoleEl.innerHTML = traceState.savedConsoleHTML;
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+        }
+        if (traceState.savedConsoleLog) {
+            consoleLog = traceState.savedConsoleLog;
+            safeWrite(STORAGE_KEYS.consol, consoleLog);
+        }
+    }
+    traceState.active = false;
+    traceState.savedConsoleHTML = null;
+    traceState.savedConsoleLog = null;
+    traceState.frames = [];
+    // Hand the megabyte back rather than letting it sit in WASM memory for the
+    // rest of the session.
+    traceWorkerCall({ type: 'trace-release' });
+}
+
+/**
+ * Move the cursor.  Seeks coalesce: a slider drag issues one seek at a time
+ * and remembers only the most recent target, so dragging across a 50,000-step
+ * recording costs one rebuild per settled position rather than one per pixel.
+ */
+async function traceSeek(index) {
+    if (!traceState.active && index !== 0) return;
+    const target = Math.max(0, Math.min(index, traceState.steps - 1));
+    if (traceState.seekPending) {
+        traceState.seekQueued = target;
+        return;
+    }
+    traceState.seekPending = true;
+    const state = await traceWorkerCall({
+        type: 'trace-seek',
+        index: target,
+        // At the last step, ask for every OUTPUT record rather than the ones
+        // before the cursor: a program whose final act is a println drains it
+        // after the final STEP, and an empty console at the end of a run that
+        // printed reads as a broken timeline rather than a precise one.
+        wantFullOutput: target === traceState.steps - 1,
+    });
+    traceState.seekPending = false;
+
+    if (state) traceRender(state);
+
+    if (traceState.seekQueued !== null) {
+        const next = traceState.seekQueued;
+        traceState.seekQueued = null;
+        await traceSeek(next);
+    }
+}
+
+function traceRender(state) {
+    traceState.index = state.index;
+    traceState.frames = state.frames || [];
+    if (traceState.selectedFrame >= traceState.frames.length) {
+        traceState.selectedFrame = 0;
+    }
+
+    const slider = document.getElementById('trace-slider');
+    if (slider && String(state.index) !== slider.value) slider.value = String(state.index);
+
+    const pos = document.getElementById('trace-pos');
+    if (pos) pos.textContent = `${state.index + 1} / ${state.steps}`;
+
+    const top = traceState.frames[0];
+    const site = document.getElementById('trace-site');
+    if (site) {
+        site.textContent = top
+            ? `${top.fn || '(top level)'}  line ${traceEditorLine(top.line)}`
+            : '';
+    }
+
+    traceRenderFrames();
+    traceRenderOutput(state.fullOutput !== undefined ? state.fullOutput : (state.output || ''));
+    traceHighlight(top ? traceEditorLine(top.line) : 0);
+}
+
+/* Interpreter line -> editor line.  The env accumulates every eval into one
+ * blob, so an interpreter line is absolute in that blob; baseLine is where
+ * this run's source started in it. */
+function traceEditorLine(line) {
+    const mapped = (line | 0) - traceState.baseLine + 1;
+    return mapped > 0 ? mapped : 0;
+}
+
+function traceRenderFrames() {
+    const framesEl = document.getElementById('trace-frames');
+    const localsEl = document.getElementById('trace-locals');
+    if (!framesEl || !localsEl) return;
+
+    if (!traceState.frames.length) {
+        framesEl.innerHTML = '<div class="trace-empty">no frames</div>';
+        localsEl.innerHTML = '';
+        return;
+    }
+
+    framesEl.innerHTML = traceState.frames.map((f, i) => {
+        const cls = i === traceState.selectedFrame ? ' class="trace-frame active"' : ' class="trace-frame"';
+        const line = traceEditorLine(f.line);
+        return `<button${cls} data-frame="${i}">` +
+               `<span class="trace-frame-fn">${escapeHtml(f.fn || '(top level)')}</span>` +
+               `<span class="trace-frame-line">${line ? 'line ' + line : ''}</span>` +
+               `</button>`;
+    }).join('');
+
+    const frame = traceState.frames[traceState.selectedFrame];
+    const locals = (frame && frame.locals) || [];
+    localsEl.innerHTML = locals.length
+        ? locals.map(l =>
+            `<div class="trace-local">` +
+            `<span class="trace-local-name">${escapeHtml(l.name)}</span>` +
+            `<span class="trace-local-val">${escapeHtml(l.repr)}</span>` +
+            `</div>`).join('')
+        : '<div class="trace-empty">no bindings in this frame yet</div>';
+}
+
+function traceRenderOutput(output) {
+    const consoleEl = document.getElementById('console');
+    if (!consoleEl) return;
+    consoleEl.innerHTML = output
+        ? `<span class="console-output">${escapeHtml(output)}</span>`
+        : '<div class="console-welcome"><p>Nothing printed yet at this step.</p></div>';
+    consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+
+function traceHighlight(line) {
+    if (!editor) return;
+    if (!traceState.decorations) {
+        traceState.decorations = editor.createDecorationsCollection([]);
+    }
+    if (!line) {
+        traceState.decorations.set([]);
+        return;
+    }
+    traceState.decorations.set([{
+        range: new monaco.Range(line, 1, line, 1),
+        options: {
+            isWholeLine: true,
+            className: 'trace-current-line',
+            /* No glyphMarginClassName: the editor is created without a glyph
+             * margin, and turning one on would shift the whole gutter. */
+            linesDecorationsClassName: 'trace-current-marker',
+        },
+    }]);
+    editor.revealLineInCenterIfOutsideViewport(line);
+}
+
+/**
+ * Jump to the next (dir > 0) or previous execution of an editor line.
+ *
+ * This is what a breakpoint is in a recording: the run already happened, so
+ * "next hit on line 12" is a scan rather than a resume.  A miss lands on the
+ * boundary and says so, which is the difference between "ran to the end" and
+ * "found it".
+ */
+async function traceJumpToLine(editorLine, dir) {
+    if (!traceState.active) return;
+    const absolute = editorLine + traceState.baseLine - 1;
+    const found = await traceWorkerCall({
+        type: 'trace-find-line',
+        dir,
+        file: '',          // "" matches any file; the tab is the only source here
+        line: absolute,
+    });
+    if (!found) return;
+    if (!found.hit) {
+        showStatus(`No ${dir > 0 ? 'later' : 'earlier'} step on line ${editorLine}`, 'info');
+        return;
+    }
+    await traceSeek(found.index);
+}
+
+async function traceDownload() {
+    const buf = await traceWorkerCall({ type: 'trace-download' });
+    if (!buf) {
+        showStatus('Nothing to download', 'error');
+        return;
+    }
+    const blob = new Blob([buf], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'run.turtrace';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
+
+function traceInstallHandlers() {
+    document.getElementById('trace-btn')?.addEventListener('click', traceCode);
+    document.getElementById('trace-close')?.addEventListener('click', traceClose);
+    document.getElementById('trace-download')?.addEventListener('click', traceDownload);
+    document.getElementById('trace-first')?.addEventListener('click', () => traceSeek(0));
+    document.getElementById('trace-last')?.addEventListener('click', () => traceSeek(traceState.steps - 1));
+    document.getElementById('trace-back')?.addEventListener('click', () => traceSeek(traceState.index - 1));
+    document.getElementById('trace-fwd')?.addEventListener('click', () => traceSeek(traceState.index + 1));
+
+    document.getElementById('trace-slider')?.addEventListener('input', (e) => {
+        traceSeek(parseInt(e.target.value, 10) || 0);
+    });
+
+    document.getElementById('trace-frames')?.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-frame]');
+        if (!btn) return;
+        traceState.selectedFrame = parseInt(btn.dataset.frame, 10) || 0;
+        traceRenderFrames();
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (!traceState.active || !e.altKey) return;
+        if (e.key === 'ArrowLeft')  { e.preventDefault(); traceSeek(traceState.index - 1); }
+        if (e.key === 'ArrowRight') { e.preventDefault(); traceSeek(traceState.index + 1); }
+    });
+}
+
+/* Click a line number while the timeline is open -> jump to that line's next
+ * execution; Alt+click for the previous one. Registered from the editor setup
+ * path, once Monaco exists. */
+function traceInstallGutterHandler(ed) {
+    ed.onMouseDown((e) => {
+        if (!traceState.active) return;
+        if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS) return;
+        const line = e.target.position?.lineNumber;
+        if (line) traceJumpToLine(line, e.event.altKey ? -1 : 1);
+    });
+}
