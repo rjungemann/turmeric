@@ -150,4 +150,45 @@ test.describe('language picker', () => {
         await expect(page.locator('#lang-menu')).toBeVisible();
         await expect(page.locator('#more-menu')).toBeHidden();
     });
+
+    test('the dialect button is the same height as its neighbours', async ({ page }) => {
+        await page.goto('/try/');
+        await waitForEditor(page);
+
+        // Every other button in the row holds a 16px SVG; this one holds text
+        // against .btn's `line-height: 1`, which used to make it 24px against
+        // their 28px -- visibly short in a row of otherwise identical buttons.
+        const heights = await page.evaluate(() => {
+            const h = (sel) => document.querySelector(sel)?.getBoundingClientRect().height ?? null;
+            return { run: h('#run-btn'), lang: h('#lang-btn'), examples: h('#examples-btn') };
+        });
+        expect(heights.lang).toBe(heights.run);
+        expect(heights.lang).toBe(heights.examples);
+    });
+
+    test('the dialect label is never clipped, at any width or dialect', async ({ page }) => {
+        await page.goto('/try/');
+        await waitForEditor(page);
+
+        // 620 is above the 600px breakpoint that moves the picker into the
+        // overflow menu, so this is the narrowest the button is ever shown at.
+        for (const width of [1280, 900, 700, 620]) {
+            await page.setViewportSize({ width, height: 800 });
+            const clipped = await page.evaluate(() => {
+                const btn = document.querySelector('#lang-btn');
+                const label = document.querySelector('#lang-btn-label');
+                const before = label.textContent;
+                const bad = [];
+                // The full set baseShortLabel can produce.
+                for (const text of ['s-expr', 'curly', 'neoteric', 'sweet']) {
+                    label.textContent = text;
+                    if (label.scrollWidth > label.clientWidth ||
+                        btn.scrollWidth > btn.clientWidth) bad.push(text);
+                }
+                label.textContent = before;
+                return bad;
+            });
+            expect(clipped, `clipped at ${width}px`).toEqual([]);
+        }
+    });
 });

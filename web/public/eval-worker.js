@@ -133,6 +133,109 @@ function handleMessage(msg) {
             self.postMessage({ type: 'lang-registry-result', id, result: null });
         }
 
+    } else if (msg.type === 'trace-run') {
+        // Record a run (try-turmeric-tracer-plan T3.0).  Returns the step count
+        // and the stats blob; the recording itself stays in WASM memory and is
+        // scrubbed through 'trace-seek' below, so the format has exactly one
+        // decoder and it is the C one.
+        try {
+            const fn = turiModule._turi_wasm_trace_run;
+            if (!fn) {
+                self.postMessage({ type: 'trace-run-result', id, steps: -1,
+                                   error: 'this WASM build has no tracer' });
+                return;
+            }
+            if (msg.lang) wasmSetLang(msg.lang);
+            const inputLen = turiModule.lengthBytesUTF8(msg.input) + 1;
+            const inputPtr = turiModule._malloc(inputLen);
+            turiModule.stringToUTF8(msg.input, inputPtr, inputLen);
+            const steps = fn(inputPtr, msg.maxSteps >>> 0, msg.hasMain ? 1 : 0);
+            turiModule._free(inputPtr);
+
+            let stats = null;
+            if (steps >= 0) {
+                const p = turiModule._turi_wasm_trace_stats();
+                if (p) { try { stats = JSON.parse(turiModule.UTF8ToString(p)); } catch (_) {} }
+            }
+            self.postMessage({ type: 'trace-run-result', id, steps, stats });
+        } catch (err) {
+            self.postMessage({ type: 'trace-run-result', id, steps: -1, error: String(err) });
+        }
+
+    } else if (msg.type === 'trace-seek') {
+        try {
+            turiModule._turi_wasm_trace_seek(msg.index >>> 0);
+            const p = turiModule._turi_wasm_trace_state();
+            const state = p ? JSON.parse(turiModule.UTF8ToString(p)) : null;
+            // The transcript at the LAST step needs every OUTPUT record, not
+            // just the ones before it: a program whose final act is a println
+            // drains it after the final STEP.
+            if (state && msg.wantFullOutput) {
+                const q = turiModule._turi_wasm_trace_output_full();
+                state.fullOutput = q ? turiModule.UTF8ToString(q) : '';
+            }
+            self.postMessage({ type: 'trace-state', id, state });
+        } catch (err) {
+            self.postMessage({ type: 'error', id, error: String(err) });
+        }
+
+    } else if (msg.type === 'trace-site-at') {
+        // Deliberately NOT a seek: a seek rebuilds state from the start of the
+        // stream, so asking it per index (the depth ribbon does, thousands of
+        // times) is a hang rather than a slowdown.  See turi/trace.h.
+        try {
+            const out = [];
+            for (let i = 0; i < msg.indices.length; i++) {
+                const p = turiModule._turi_wasm_trace_site_at(msg.indices[i] >>> 0);
+                out.push(p ? JSON.parse(turiModule.UTF8ToString(p)) : null);
+            }
+            self.postMessage({ type: 'trace-sites', id, sites: out });
+        } catch (err) {
+            self.postMessage({ type: 'error', id, error: String(err) });
+        }
+
+    } else if (msg.type === 'trace-find-line') {
+        try {
+            const fileVal = msg.file || '';
+            const fileLen = turiModule.lengthBytesUTF8(fileVal) + 1;
+            const filePtr = turiModule._malloc(fileLen);
+            turiModule.stringToUTF8(fileVal, filePtr, fileLen);
+            const p = turiModule._turi_wasm_trace_find_line(msg.dir | 0, filePtr,
+                                                            msg.line >>> 0);
+            turiModule._free(filePtr);
+            const found = p ? JSON.parse(turiModule.UTF8ToString(p)) : null;
+            self.postMessage({ type: 'trace-found', id, found });
+        } catch (err) {
+            self.postMessage({ type: 'error', id, error: String(err) });
+        }
+
+    } else if (msg.type === 'trace-download') {
+        // The one thing that crosses as bytes.  Copied out of HEAPU8 rather
+        // than viewed: the heap can be detached by a later growth, and
+        // UTF8ToString would stop at the first NUL inside a rendered value.
+        try {
+            const ptr = turiModule._turi_wasm_trace_buffer();
+            const len = turiModule._turi_wasm_trace_buffer_len() >>> 0;
+            if (!ptr || !len) {
+                self.postMessage({ type: 'trace-bytes', id, bytes: null });
+                return;
+            }
+            const copy = new Uint8Array(len);
+            copy.set(turiModule.HEAPU8.subarray(ptr, ptr + len));
+            self.postMessage({ type: 'trace-bytes', id, bytes: copy.buffer },
+                             [copy.buffer]);
+        } catch (err) {
+            self.postMessage({ type: 'error', id, error: String(err) });
+        }
+
+    } else if (msg.type === 'trace-release') {
+        try {
+            turiModule._turi_wasm_trace_release();
+            self.postMessage({ type: 'trace-released', id });
+        } catch (err) {
+            self.postMessage({ type: 'error', id, error: String(err) });
+        }
+
     } else if (msg.type === 'reset') {
         try {
             turiModule._turi_wasm_reset();

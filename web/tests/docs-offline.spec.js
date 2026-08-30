@@ -131,7 +131,7 @@ test.describe('offline docs', () => {
     test.afterAll(async () => { await stopServer(); });
 
     test('the pack precaches on install without anyone opening the docs', async ({ page }) => {
-        await page.goto(`${ORIGIN}/try/`);
+        await page.goto(`${ORIGIN}/try/?sw=1`);
         await waitForController(page);
         const status = await waitForPackCached(page);
 
@@ -143,7 +143,7 @@ test.describe('offline docs', () => {
 
     test('docs browse offline on a cold pane', async ({ page }) => {
         // 1. One online load. The docs pane is never opened.
-        await page.goto(`${ORIGIN}/try/`);
+        await page.goto(`${ORIGIN}/try/?sw=1`);
         await waitForController(page);
         await waitForPackCached(page);
         expect(await page.evaluate(() => window.turmericApp.getState().docsOpen)).toBe(false);
@@ -186,12 +186,12 @@ test.describe('offline docs', () => {
     });
 
     test('an offline /docs/html/ page points at the copy on the device', async ({ page }) => {
-        await page.goto(`${ORIGIN}/try/`);
+        await page.goto(`${ORIGIN}/try/?sw=1`);
         await waitForController(page);
         await waitForPackCached(page);
 
         await stopServer();
-        await page.goto(`${ORIGIN}/docs/html/guides/hkt-guide.html`);
+        await page.goto(`${ORIGIN}/docs/html/guides/hkt-guide.html?sw=1`);
 
         // Not the REPL shell -- that read as a bug: you asked for a guide and
         // got a code editor.
@@ -200,7 +200,7 @@ test.describe('offline docs', () => {
     });
 
     test('a partial pack is reported by the pane and repaired on request', async ({ page }) => {
-        await page.goto(`${ORIGIN}/try/`);
+        await page.goto(`${ORIGIN}/try/?sw=1`);
         await waitForController(page);
         await waitForPackCached(page);
 

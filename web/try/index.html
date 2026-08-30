@@ -47,6 +47,15 @@
                                     <path d="M8 5v14l11-7z"/>
                                 </svg>
                             </button>
+                            <!-- Trace is a second button rather than something
+                                 Run always does: recording costs roughly 5x and
+                                 produces a megabyte for a busy loop
+                                 (try-turmeric-tracer-plan §6). -->
+                            <button class="btn btn-icon" id="trace-btn" title="Trace (record and scrub this run)" aria-label="Trace">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M13 3a9 9 0 0 0-9 9H1l3.9 3.9.1.2L9 12H6a7 7 0 1 1 2.1 5l-1.4 1.4A9 9 0 1 0 13 3zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8H12z"/>
+                                </svg>
+                            </button>
                             <button class="btn btn-icon" id="solve-btn" title="Fill in the answer for this step" aria-label="Solve this" style="display: none;">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                     <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
@@ -287,6 +296,42 @@
                                     <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
                                 </svg>
                             </button>
+                        </div>
+                    </div>
+                    <!-- Time-travel timeline (try-turmeric-tracer-plan T3.2/T3.3).
+                         Hidden until a recording exists; every control in here is
+                         driven by turi_trace_replay_* through the WASM bridge, so
+                         the page never decodes a .turtrace byte itself. -->
+                    <div class="trace-panel" id="trace-panel" hidden>
+                        <div class="trace-controls">
+                            <button class="btn btn-icon btn-sm" id="trace-first" title="First step" aria-label="First step">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+                            </button>
+                            <button class="btn btn-icon btn-sm" id="trace-back" title="Step back (Alt+Left)" aria-label="Step back">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 5v14l-9-7z"/></svg>
+                            </button>
+                            <button class="btn btn-icon btn-sm" id="trace-fwd" title="Step forward (Alt+Right)" aria-label="Step forward">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8.5 5v14l9-7z"/></svg>
+                            </button>
+                            <button class="btn btn-icon btn-sm" id="trace-last" title="Last step" aria-label="Last step">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg>
+                            </button>
+                            <input type="range" id="trace-slider" class="trace-slider"
+                                   min="0" max="0" value="0" step="1"
+                                   aria-label="Step through the recording">
+                            <span class="trace-pos" id="trace-pos">0 / 0</span>
+                            <span class="trace-site" id="trace-site"></span>
+                            <button class="btn btn-icon btn-sm" id="trace-download" title="Download .turtrace" aria-label="Download recording">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                            </button>
+                            <button class="btn btn-icon btn-sm" id="trace-close" title="Close the timeline and free the recording" aria-label="Close timeline">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                            </button>
+                        </div>
+                        <div class="trace-banner" id="trace-banner" hidden></div>
+                        <div class="trace-frames-row">
+                            <div class="trace-frames" id="trace-frames" aria-label="Frames"></div>
+                            <div class="trace-locals" id="trace-locals" aria-label="Bindings"></div>
                         </div>
                     </div>
                     <div class="console-wrapper">

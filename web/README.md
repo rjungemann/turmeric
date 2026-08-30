@@ -41,6 +41,29 @@ A web-based REPL for the [Turmeric programming language](https://github.com/turm
 
 4. Open [http://localhost:3000](http://localhost:3000) in your browser.
 
+#### The service worker is off on localhost
+
+`sw.js` is cache-first for same-origin static assets, and its precache names
+`/main.js` and `/styles.css` -- the files a dev server exists to re-serve. A
+worker left installed by one session hands the next one the previous session's
+JS and CSS, which shows up as an unstyled page running code you already
+changed, and needs a hard reload every time.
+
+So on a loopback host the app does not register the worker, and unregisters
+any it finds (dropping their caches) before reloading once to pick up the real
+files. Nothing to do -- the first load after this change cleans up whatever
+was already installed.
+
+To work on the PWA itself, append `?sw=1`:
+
+```
+http://localhost:3000/try/?sw=1
+```
+
+That is also how `tests/mobile.split-and-pwa.spec.js` and
+`tests/docs-offline.spec.js` still exercise the real worker. Production is
+unaffected: the opt-out keys off the hostname.
+
 ### Production Build
 
 ```bash

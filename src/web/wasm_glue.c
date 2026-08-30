@@ -783,3 +783,380 @@ const char *turi_explain(const char *code_or_null) {
 
     return static_buf;
 }
+
+/* ---------------------------------------------------------------------------
+ * Time-travel tracer bridge (docs/archive/try-turmeric-tracer-plan.md, T3)
+ *
+ * The recorder, the reader and the replay are all in turi/trace.c, which has
+ * compiled into this module since it landed -- it was simply dead-stripped,
+ * because nothing in -sEXPORTED_FUNCTIONS reached it.  This section is the
+ * reach.
+ *
+ * The page never decodes a .turtrace byte.  A recording stays in wasm memory
+ * and the timeline asks turi_trace_replay_* the same questions `tur dap`'s
+ * stepBack asks, so there is one decoder for the format rather than a C one
+ * and a JavaScript one drifting apart.
+ * ---------------------------------------------------------------------------
+ */
+
+#include "turi/trace.h"
+
+/* A recording outlives the run that produced it: the replay reads straight out
+ * of the trace's buffer, so the TurTrace is stopped but not ended until the
+ * next Trace press. */
+static TurTrace       *g_trace  = NULL;
+static TurTraceReplay *g_replay = NULL;
+
+/* The line in the session's accumulated blob at which THIS run's source began.
+ *
+ * The browser env accumulates every eval into env->src_acc and hands the whole
+ * blob to the reader, so an interpreter line number is absolute in that blob,
+ * not relative to what is in the editor -- which is why a five-line tab
+ * reports its errors at `<eval>:75`.  A timeline that lit up line 75 of a
+ * five-line file would be worse than no timeline, so the base is captured
+ * before the run and the page subtracts it. */
+static uint32_t g_trace_base_line = 1;
+
+/* Lines already accumulated, +1: where the next appended chunk starts. */
+static uint32_t wasm_acc_base_line(void) {
+    if (!g_env) return 1;
+    if (g_env->acc_next_line > 0) return g_env->acc_next_line;
+    uint32_t line = 1;
+    for (size_t i = 0; i < g_env->src_acc.len; i++)
+        if (g_env->src_acc.data[i] == '\n') line++;
+    /* turi_eval_typed joins the accumulated blob and the new chunk with a
+     * newline (eval.c: `if (env->src_acc.len > 0) buf_putc(&env->src_acc, '\n')`),
+     * so a non-empty accumulator costs one more line than it contains. */
+    if (g_env->src_acc.len > 0) line++;
+    return line;
+}
+
+static void wasm_trace_clear(void) {
+    if (g_replay) { turi_trace_replay_free(g_replay); g_replay = NULL; }
+    if (g_trace)  { turi_trace_end(g_trace); g_trace = NULL; }
+}
+
+/* Record a program.  `has_main` comes from the page, which already decides the
+ * same question for Run (definesMainEntry in web/main.js): a program defining
+ * a top-level `main` loads its forms and then runs `(main)`.  Keeping the rule
+ * on one side means Run and Trace cannot disagree about where a program
+ * starts.
+ *
+ * Returns the number of recorded steps, -1 if the recorder could not attach or
+ * the program failed to load, and -2 when `has_main` was claimed and no `main`
+ * closure materialized.
+ */
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+int turi_wasm_trace_run(const char *input, uint32_t max_steps, int has_main) {
+    if (!g_env || !input) return -1;
+    wasm_trace_clear();
+    turi_repl_set_last_diag_code("");
+    g_trace_base_line = wasm_acc_base_line();
+
+    /* The order is cmd_trace's (src/main.c:7502) by way of cmd_eval_h: attach
+     * the debugger, install the recorder on it, load the program UNARMED so
+     * the recording is of the program and not of its definitions, then arm and
+     * call main. */
+    turi_debug_enable(g_env, NULL, NULL);
+
+    TurTraceOpts opts;
+    memset(&opts, 0, sizeof opts);
+    opts.max_steps = max_steps;
+    /* Kept on in the browser.  output_drain writes every captured byte back
+     * out to the saved descriptor as well (trace.c: "the tracer is a recorder,
+     * not a muzzle"), so the console still streams live while the OUTPUT
+     * records accumulate for the scrub. */
+    opts.capture_output = true;
+
+    g_trace = turi_trace_begin(g_env, &opts);
+    if (!g_trace) {
+        turi_debug_disable(g_env);
+        return -1;
+    }
+
+    int rc = 0;
+    char type_tag[64] = {0};
+
+    if (has_main) {
+        TuriValue top = turi_eval_typed(g_env, input, type_tag, sizeof(type_tag));
+        if (turi_is_error(top)) {
+            rc = -1;
+        } else {
+            TuriValue main_fn = turi_env_get(g_env, "main");
+            if (main_fn.tag == TURI_CLOSURE) {
+                turi_debug_arm(g_env);
+                (void)turi_call(g_env, main_fn, NULL, 0);
+            } else {
+                rc = -2;
+            }
+        }
+    } else {
+        /* No entry point, so the top-level forms are the program.  Arm first
+         * or there is nothing to record. */
+        turi_debug_arm(g_env);
+        TuriValue top = turi_eval_typed(g_env, input, type_tag, sizeof(type_tag));
+        if (turi_is_error(top)) rc = -1;
+    }
+
+    /* Not optional.  The recorder owns the env's pause handler and this module
+     * keeps ONE env for the life of the tab -- a handler left installed turns
+     * every later eval at the prompt into a traced one. */
+    turi_trace_stop(g_trace);
+    turi_debug_disable(g_env);
+
+    if (rc != 0) {
+        wasm_trace_clear();
+        return rc;
+    }
+
+    size_t len = 0;
+    const uint8_t *bytes = turi_trace_bytes(g_trace, &len);
+    if (bytes) g_replay = turi_trace_replay_open(bytes, len);
+    if (!g_replay) {
+        wasm_trace_clear();
+        return -1;
+    }
+    return (int)turi_trace_replay_steps(g_replay);
+}
+
+/* Recording-level facts, as JSON.  `truncated` is the header flag: the step
+ * cap ended the run, and the UI must say so rather than present a partial
+ * recording as a whole one. */
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+const char *turi_wasm_trace_stats(void) {
+    static char *cached = NULL;
+    free(cached);
+    cached = NULL;
+    if (!g_trace || !g_replay) return "{\"steps\":0}";
+
+    TurTraceStats st;
+    memset(&st, 0, sizeof st);
+    turi_trace_stats(g_trace, &st);
+    size_t len = 0;
+    (void)turi_trace_bytes(g_trace, &len);
+
+    Buf b;
+    buf_init(&b);
+    buf_printf(&b,
+        "{\"steps\":%u,\"enters\":%u,\"pops\":%u,\"changes\":%u,"
+        "\"peakDepth\":%u,\"outputBytes\":%u,\"truncated\":%s,\"bytes\":%u,"
+        "\"baseLine\":%u}",
+        (unsigned)turi_trace_replay_steps(g_replay), (unsigned)st.enters,
+        (unsigned)st.pops, (unsigned)st.changes, (unsigned)st.peak_depth,
+        (unsigned)st.output_bytes, st.truncated ? "true" : "false",
+        (unsigned)len, (unsigned)g_trace_base_line);
+    buf_putc(&b, '\0');
+    cached = turi_wasm_strdup(b.data ? b.data : "{\"steps\":0}");
+    buf_free(&b);
+    return cached;
+}
+
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+uint32_t turi_wasm_trace_seek(uint32_t index) {
+    if (!g_replay) return 0;
+    return turi_trace_replay_seek(g_replay, index);
+}
+
+/* The whole cursor as one JSON payload: index, the frame stack innermost
+ * first, each frame's bindings, and the program output produced strictly
+ * before this step.
+ *
+ * One message rather than four, because every one of these changes on every
+ * seek and a scrub issues a seek per animation frame. */
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+const char *turi_wasm_trace_state(void) {
+    static char *cached = NULL;
+    free(cached);
+    cached = NULL;
+    if (!g_replay) return "{\"index\":0,\"steps\":0,\"frames\":[],\"output\":\"\"}";
+
+    Buf b;
+    buf_init(&b);
+    buf_printf(&b, "{\"index\":%u,\"steps\":%u,\"frames\":[",
+               (unsigned)turi_trace_replay_index(g_replay),
+               (unsigned)turi_trace_replay_steps(g_replay));
+
+    int nframes = turi_trace_replay_frame_count(g_replay);
+    for (int i = 0; i < nframes; i++) {
+        TurTraceFrame f;
+        memset(&f, 0, sizeof f);
+        if (!turi_trace_replay_frame_at(g_replay, i, &f)) continue;
+        if (i) buf_putc(&b, ',');
+        buf_puts(&b, "{\"fn\":\"");
+        wasm_json_escape(&b, f.fn_name);
+        buf_puts(&b, "\",\"file\":\"");
+        wasm_json_escape(&b, f.file_path);
+        buf_printf(&b, "\",\"line\":%u,\"col\":%u,\"locals\":[",
+                   (unsigned)f.line, (unsigned)f.col);
+        int nlocals = turi_trace_replay_local_count(g_replay, i);
+        for (int j = 0; j < nlocals; j++) {
+            const char *name = NULL, *repr = NULL;
+            if (!turi_trace_replay_local_at(g_replay, i, j, &name, &repr))
+                continue;
+            if (j) buf_putc(&b, ',');
+            buf_puts(&b, "{\"name\":\"");
+            wasm_json_escape(&b, name);
+            buf_puts(&b, "\",\"repr\":\"");
+            wasm_json_escape(&b, repr);
+            buf_puts(&b, "\"}");
+        }
+        buf_puts(&b, "]}");
+    }
+
+    buf_puts(&b, "],\"output\":\"");
+    size_t olen = 0;
+    const char *out = turi_trace_replay_output(g_replay, &olen);
+    if (out) {
+        /* wasm_json_escape wants a NUL-terminated string and the output buffer
+         * is a length-counted blob, so escape it by hand on the same rules. */
+        for (size_t i = 0; i < olen; i++) {
+            char c = out[i];
+            if (c == '"' || c == '\\') { buf_putc(&b, '\\'); buf_putc(&b, c); }
+            else if ((unsigned char)c < 0x20) buf_printf(&b, "\\u%04x", (unsigned char)c);
+            else buf_putc(&b, c);
+        }
+    }
+    buf_puts(&b, "\"}");
+    buf_putc(&b, '\0');
+
+    cached = turi_wasm_strdup(b.data ? b.data : "{\"index\":0,\"steps\":0,\"frames\":[],\"output\":\"\"}");
+    buf_free(&b);
+    return cached;
+}
+
+/* The site and depth of an arbitrary step, WITHOUT seeking.
+ *
+ * This is the one that makes a timeline affordable: drawing a depth ribbon or
+ * marking which lines were ever executed asks this of thousands of indices,
+ * and a seek rebuilds state from the start of the stream each time.  trace.h
+ * spells out the consequence of confusing the two: "which is not slow, it is a
+ * hang". */
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+const char *turi_wasm_trace_site_at(uint32_t index) {
+    static char *cached = NULL;
+    free(cached);
+    cached = NULL;
+    if (!g_replay) return "{\"line\":0,\"depth\":0,\"file\":\"\"}";
+
+    const char *file = NULL;
+    uint32_t line = 0;
+    bool ok = turi_trace_replay_site_at(g_replay, index, &file, &line);
+    int depth = turi_trace_replay_depth_at(g_replay, index);
+
+    Buf b;
+    buf_init(&b);
+    buf_puts(&b, "{\"file\":\"");
+    if (ok) wasm_json_escape(&b, file);
+    buf_printf(&b, "\",\"line\":%u,\"depth\":%d}", (unsigned)(ok ? line : 0), depth);
+    buf_putc(&b, '\0');
+    cached = turi_wasm_strdup(b.data ? b.data : "{\"line\":0,\"depth\":0,\"file\":\"\"}");
+    buf_free(&b);
+    return cached;
+}
+
+/* Scan for the next step on `line`, forwards (dir > 0) or backwards.  A miss
+ * returns the boundary index with hit=false, which is what a continue with no
+ * breakpoint ahead of it should do -- and what stops the UI presenting "ran to
+ * the end" as "found it". */
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+const char *turi_wasm_trace_find_line(int dir, const char *file, uint32_t line) {
+    static char *cached = NULL;
+    free(cached);
+    cached = NULL;
+    if (!g_replay) return "{\"index\":0,\"hit\":false}";
+
+    bool hit = false;
+    uint32_t idx = turi_trace_replay_find_line(g_replay, dir, file ? file : "",
+                                               line, &hit);
+    Buf b;
+    buf_init(&b);
+    buf_printf(&b, "{\"index\":%u,\"hit\":%s}", (unsigned)idx,
+               hit ? "true" : "false");
+    buf_putc(&b, '\0');
+    cached = turi_wasm_strdup(b.data ? b.data : "{\"index\":0,\"hit\":false}");
+    buf_free(&b);
+    return cached;
+}
+
+/* Every OUTPUT record in the recording, concatenated.
+ *
+ * turi_trace_replay_output answers "what had been printed by the cursor's
+ * step", which is the right question everywhere except at the end of the run:
+ * a program whose last act is a println drains it AFTER the final STEP, so the
+ * trailing OUTPUT records sit past every stop point and the transcript at the
+ * last step is empty.  Scrubbing to the end of `(println (fib 6))` and being
+ * told nothing was printed reads as a broken timeline, so the page asks this
+ * instead once the cursor is on the last step.
+ *
+ * Built on the public reader rather than by changing the replay, because the
+ * replay's semantics are correct for its own question and `tur dap` depends on
+ * them. */
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+const char *turi_wasm_trace_output_full(void) {
+    static char *cached = NULL;
+    free(cached);
+    cached = NULL;
+    if (!g_trace) return "";
+
+    size_t len = 0;
+    const uint8_t *bytes = turi_trace_bytes(g_trace, &len);
+    TurTraceReader r;
+    if (!bytes || !turi_trace_open(&r, bytes, len)) return "";
+
+    Buf b;
+    buf_init(&b);
+    TurTraceRecord rec;
+    while (turi_trace_next(&r, &rec)) {
+        if (rec.tag != TUR_TRACE_OUTPUT || !rec.payload) continue;
+        buf_write(&b, (const char *)rec.payload, rec.payload_len);
+    }
+    buf_putc(&b, '\0');
+    cached = turi_wasm_strdup(b.data ? b.data : "");
+    buf_free(&b);
+    return cached;
+}
+
+/* The raw recording, so the page can offer it as a .turtrace download that
+ * `tur trace --dump` reads.  Bytes, not a string: a NUL inside a rendered
+ * value would truncate it. */
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+const uint8_t *turi_wasm_trace_buffer(void) {
+    if (!g_trace) return NULL;
+    size_t len = 0;
+    return turi_trace_bytes(g_trace, &len);
+}
+
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+uint32_t turi_wasm_trace_buffer_len(void) {
+    if (!g_trace) return 0;
+    size_t len = 0;
+    (void)turi_trace_bytes(g_trace, &len);
+    return (uint32_t)len;
+}
+
+/* Drop the recording.  Called when the timeline closes, so a megabyte of trace
+ * does not sit in wasm memory for the rest of the session. */
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+void turi_wasm_trace_release(void) {
+    wasm_trace_clear();
+}
