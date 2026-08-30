@@ -5410,6 +5410,37 @@ function traceWorkerCall(message) {
 }
 
 /**
+ * Reset the interpreter env for a recording, without the console-clearing and
+ * status message the user-facing `:reset` does.
+ *
+ * A trace is a run of a whole program from the start, which is what `tur trace
+ * <file>` means and what makes two recordings of the same program comparable.
+ * The browser env is a REPL session that accumulates every eval, so without
+ * this the SECOND Trace re-evaluates the program on top of the first one's
+ * definitions and dies on `'Ask' is already defined` -- and even where the
+ * program has no top-level definitions to collide, the recording would be of a
+ * program running in an env polluted by its own previous run.
+ */
+function traceResetEnv() {
+    return new Promise((resolve) => {
+        const id = ++evalCallId;
+        pendingCalls.set(id, {
+            resolve: () => {
+                currentLangMode = 'turmeric';  // turi_env_new() starts in default mode
+                // The session forgot what it had accepted, so the prompt's
+                // document has to forget it too.
+                replSessionReset();
+                resolve(true);
+            },
+            reject: () => resolve(false),
+            startTime: performance.now(),
+            isEval: false,
+        });
+        evalWorker.postMessage({ type: 'reset', id });
+    });
+}
+
+/**
  * Record the editor's program and open the timeline.
  */
 async function traceCode() {
@@ -5424,7 +5455,19 @@ async function traceCode() {
     }
 
     showStatus('Recording...', 'info');
+    if (!await traceResetEnv()) {
+        appendToConsole('<span class="console-error">Trace failed: could not reset the session</span>');
+        showStatus('Trace failed', 'error');
+        return;
+    }
+
     const started = performance.now();
+    // Forwarded for the same reason Run forwards it: turi_eval_typed strips an
+    // inline #lang itself, but set_lang ASSIGNS the layer set, so a program
+    // opening `#lang turmeric stringed` needs the tail or its layers are off.
+    const { lang, layers } = parseLangDirective(code);
+    if (lang !== null) currentLangMode = lang;
+
     // hasMain is the page's existing Run rule, not a second one: a program with
     // a top-level `main` loads its forms and then runs `(main)`, and the
     // recording covers the run rather than the definitions.
@@ -5433,6 +5476,7 @@ async function traceCode() {
         input: code,
         maxSteps: TRACE_MAX_STEPS,
         hasMain: definesMainEntry(code),
+        lang: lang !== null ? [lang, ...layers].join(' ') : null,
     });
 
     if (!res || res.steps < 0) {
@@ -5491,7 +5535,7 @@ function traceOpen() {
             banner.hidden = false;
             banner.textContent =
                 `${st.steps.toLocaleString()} steps, peak depth ${st.peakDepth}, ` +
-                `${(st.bytes / 1024).toFixed(1)} KB recorded.`;
+                `${(st.bytes / 1024).toFixed(1)} KB recorded from a fresh session.`;
         } else {
             banner.hidden = true;
         }

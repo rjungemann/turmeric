@@ -145,6 +145,7 @@ function handleMessage(msg) {
                                    error: 'this WASM build has no tracer' });
                 return;
             }
+            if (msg.lang) wasmSetLang(msg.lang);
             const inputLen = turiModule.lengthBytesUTF8(msg.input) + 1;
             const inputPtr = turiModule._malloc(inputLen);
             turiModule.stringToUTF8(msg.input, inputPtr, inputLen);

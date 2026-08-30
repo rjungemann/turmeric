@@ -346,6 +346,23 @@ file would be worse than no timeline at all. The bridge captures
 subtracts. Measured on the `fib` program: `baseLine` 62, sites at 63/65/68,
 editor lines 2/4/7 -- which is what the gutter highlights.
 
+**A recording is a run of a whole program, so it needs a whole environment.**
+Reported from a local server the day this landed: pressing Trace a second time
+died with `defeffect: 'Ask' is already defined`. The browser env is a REPL
+session that accumulates every eval, so the second Trace was re-evaluating the
+program on top of the first one's definitions. `tur trace <file>` is a new
+process with an empty env and the browser now matches it -- Trace resets the
+session first, which also makes two recordings of one program comparable
+(identical step counts and an identical `baseLine`, which the regression spec
+asserts). Run deliberately does not reset, because Run is how a tab's
+definitions become callable at the prompt; the two buttons want opposite
+things from the env and now each gets it.
+
+The same fix carried the `#lang` directive tail into `trace-run`, which had
+been missed: `turi_eval_typed` strips an inline `#lang` itself, but `set_lang`
+*assigns* the layer set, so a program opening `#lang turmeric stringed` would
+have recorded with its layers off.
+
 **And one behavior worth stating.** `turi_trace_replay_output` answers "what
 had been printed *before* the cursor's step", which is right everywhere except
 the end: a program whose last act is a `println` drains it after the final
@@ -357,7 +374,7 @@ for only when the cursor is on the last step.
 
 ### 10.4 Verification
 
-- `web/tests/trace.spec.js`: **8 passed.** The parity spec records
+- `web/tests/trace.spec.js`: **10 passed.** The parity spec records
   `tests/fixtures/trace/input.tur` with `./build/tur trace` and the same
   program in the tab: **65 steps both ways**, peak depth 7.
 - `bash tests/run-trace.sh`: **19 passed, 0 failed** -- the native T1 harness is

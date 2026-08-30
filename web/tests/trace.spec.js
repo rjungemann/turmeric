@@ -161,6 +161,33 @@ test.describe('Time-travel timeline', () => {
         await expect(page.locator('#console')).toContainText('42');
     });
 
+    test('tracing the same program twice does not collide with itself', async ({ page }) => {
+        await openReady(page);
+
+        // The reported failure: the browser env accumulates every eval, so a
+        // second Trace re-evaluated the program on top of the first one's
+        // definitions and died on "'Ask' is already defined". A recording is a
+        // run of a whole program, so it starts from a fresh session.
+        // Verbatim from the editor's own "effects" example, which is where
+        // the report came from.
+        const EFFECTS = `(defeffect Ask [] :int)
+
+(defn use-ask [] :int
+  (+ 1 (perform (Ask))))
+
+(println (handle (use-ask)
+  (Ask [] k) (resume k 41)))`;
+
+        const first  = await record(page, EFFECTS);
+        expect(first.steps).toBeGreaterThan(0);
+
+        const second = await record(page, EFFECTS);
+        expect(second.steps).toBe(first.steps);
+        // Same program, same fresh session: even the line mapping repeats.
+        expect(second.baseLine).toBe(first.baseLine);
+        await expect(page.locator('#console')).not.toContainText('already defined');
+    });
+
     test('parity: the browser and `tur trace` agree on the step count', async ({ page }) => {
         test.skip(!existsSync(TUR), `no tur binary at ${TUR} -- build it first`);
 

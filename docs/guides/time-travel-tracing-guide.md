@@ -172,6 +172,14 @@ in [Cost](#cost) -- and the browser's cap is 50,000 steps, a quarter of the
 native default, because a tab pays for the interpreter's per-step retention as
 well as the recording's. A run that hits the cap says so in a banner.
 
+**A recording starts from a fresh session.** `tur trace <file>` is a new
+process with an empty environment, and Trace is the same: it resets the
+interpreter before recording, so two recordings of one program are comparable
+and a second Trace does not re-evaluate the program on top of the first one's
+definitions. Run is the opposite by design -- it is how a tab's definitions
+become callable at the prompt -- so anything you defined at the prompt or in an
+earlier Run is gone after a Trace. The banner says which it was.
+
 The page does not decode the format. Every question the timeline asks goes
 through the same `turi_trace_replay_*` calls `tur dap` uses, exported from
 `src/web/wasm_glue.c`, so there is one decoder for `.turtrace` and it is the C
