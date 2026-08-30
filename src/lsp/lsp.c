@@ -352,7 +352,7 @@ static void stdlib_cache_prime(void) {
          * document it owns. */
         diag_reset();
         diag_lsp_begin();
-        tur_collect_symbols(tmp_path, syms, LSP_SYM_CAP, &count);
+        tur_collect_symbols(tmp_path, NULL, syms, LSP_SYM_CAP, &count);
         diag_lsp_end();
         stdlib_cache_fill(syms, count);
         free(syms);
@@ -431,7 +431,8 @@ static void run_doc_analysis(LspDoc *doc, LspSink *sink) {
     diag_lsp_begin();
     if (fresh_b)
         lsp_scope_begin(fresh_b, LSP_BIND_CAP, &fresh_bcount, tmp_path);
-    int rc = tur_collect_symbols(tmp_path, fresh, LSP_SYM_CAP, &fresh_count);
+    int rc = tur_collect_symbols(tmp_path, doc->path, fresh,
+                                 LSP_SYM_CAP, &fresh_count);
     int fresh_btrunc = lsp_scope_truncated() ? 1 : 0;
     lsp_scope_end();
     diag_lsp_remap_path(tmp_path, doc->path);
@@ -1516,7 +1517,8 @@ static void workspace_visit(const char *path, void *user) {
         diag_reset();
         diag_lsp_begin();
         lsp_scope_begin(ws->scratch_binds, LSP_BIND_CAP, &nb, path);
-        int rc = tur_collect_symbols(path, ws->scratch_syms, LSP_SYM_CAP, &ns);
+        int rc = tur_collect_symbols(path, NULL, ws->scratch_syms,
+                                     LSP_SYM_CAP, &ns);
         lsp_scope_end();
         diag_lsp_end();
         /* A type error after a clean parse still leaves a complete binding

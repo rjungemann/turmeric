@@ -66,8 +66,9 @@
 /* Stub: tur_core's lsp.c references this; this harness never touches LSP, but
  * the symbol must resolve when tur_core is linked into a standalone
  * executable.  Matches the stub in tests/unit/refine_solver.c. */
-int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
-                        int *count_out) {
+int tur_collect_symbols(const char *source_path, const char *logical_path,
+                        LspSymbol *out, int cap, int *count_out) {
+    (void)logical_path;
     (void)source_path; (void)out; (void)cap;
     if (count_out) *count_out = 0;
     return 0;

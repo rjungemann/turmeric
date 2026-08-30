@@ -68,8 +68,9 @@ static void stub_sym(LspSymbol *s, const char *name, const char *type,
     s->kind = kind;
 }
 
-int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
-                        int *count_out) {
+int tur_collect_symbols(const char *source_path, const char *logical_path,
+                        LspSymbol *out, int cap, int *count_out) {
+    (void)logical_path;   /* the stub has no spice tree to resolve against */
     *count_out = 0;
 
     /* The stdlib prime analyses an empty scratch file, which always compiles

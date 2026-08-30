@@ -19,7 +19,9 @@
  * references tur_collect_symbols(), normally defined in main.c.  The unit-test
  * binaries don't link main.c, so we provide a stub here (matching the other
  * tur_core-based unit tests, e.g. tests/compiler/reinterpret-codegen.c). */
-int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap, int *count_out) {
+int tur_collect_symbols(const char *source_path, const char *logical_path,
+                        LspSymbol *out, int cap, int *count_out) {
+    (void)logical_path;
     (void)source_path; (void)out; (void)cap;
     if (count_out) *count_out = 0;
     return 0;

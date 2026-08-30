@@ -117,8 +117,11 @@ static int read_whole_file(const char *path, char **out, size_t *out_len) {
  * clean parse has a complete binding table, and throwing it away would take
  * completion to zero at the moment it is most wanted.
  */
-int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
-                        int *count_out) {
+int tur_collect_symbols(const char *source_path, const char *logical_path,
+                        LspSymbol *out, int cap, int *count_out) {
+    /* The playground has no spice tree to walk up into -- every buffer is a
+     * tab, and the module search path is the bundled stdlib. */
+    (void)logical_path;
     wasm_lsp_init();
     lsp_collect_begin(out, cap, count_out);
 

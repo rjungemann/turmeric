@@ -702,17 +702,47 @@ static int auto_append_spice_includes(const char *input,
 
 static void ls2_resolver_ctx_dispose(Ls2ResolverCtx *ctx);
 
-int tur_collect_symbols(const char *path, LspSymbol *out, int cap,
-                        int *count_out) {
+int tur_collect_symbols(const char *path, const char *logical_path,
+                        LspSymbol *out, int cap, int *count_out) {
     lsp_collect_begin(out, cap, count_out);
+
+    /* Resolve the spice from where the buffer LIVES, not from where it was
+     * written.
+     *
+     * The LSP writes the editor's text to a scratch file and analyses that,
+     * so walk-up discovery from the scratch path finds no build.tur -- and a
+     * module inside a spice came back with every `(import sibling)`
+     * unresolved, no symbol index at all, and therefore no completion, no
+     * go-to-definition, and a rename that refused because it could not see a
+     * definition. `tur check` on the same file has always worked, because it
+     * walks up from the real one. This is the difference.
+     *
+     * NULL means the path IS the real one (the MCP server, the stdlib prime
+     * on an empty scratch file), which is the pre-existing behaviour. */
+    const char *anchor = (logical_path && *logical_path) ? logical_path : path;
+
+    char **inc = NULL;
+    int    n_inc = 0;
+    char **owned = NULL;
+    int    n_owned = 0;
+    Ls2ResolverCtx ls2;
+    auto_append_spice_includes(anchor, &inc, &n_inc, &owned, &n_owned, &ls2);
+
     Buf discard;
     buf_init(&discard);
     int rm_n = 0;
-    char **rm_p = discover_manifest_reader_macros(path, &rm_n);
-    int rc = compile_to_c(path, &discard, NULL, 0,
+    char **rm_p = discover_manifest_reader_macros(anchor, &rm_n);
+    ls2_resolver_ctx_set(&ls2);
+    int rc = compile_to_c(path, &discard, (const char **)inc, n_inc,
                           (const char **)rm_p, rm_n);
+    ls2_resolver_ctx_set(NULL);
+    ls2_resolver_ctx_dispose(&ls2);
     free_reader_macro_paths(rm_p, rm_n);
     buf_free(&discard);
+
+    for (int i = 0; i < n_owned; i++) free(owned[i]);
+    free(owned);
+    free(inc);
     lsp_collect_end();
     return rc;
 }

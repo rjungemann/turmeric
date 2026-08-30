@@ -36,8 +36,15 @@ typedef struct {
 /* Run elaboration on source_path and fill out[0..cap-1].
  * *count_out receives the number of symbols written (capped at cap).
  * Must be called with diag_lsp_begin() active (caller's responsibility).
- * Returns 0 on success. */
-int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
-                        int *count_out);
+ * Returns 0 on success.
+ *
+ * `logical_path` is where the buffer LIVES, when that differs from where it
+ * was written -- the LSP analyses a scratch copy of the editor's text, and
+ * spice resolution (the enclosing build.tur, its src/, each :spices dep)
+ * has to walk up from the real location or a module inside a spice comes
+ * back with every intra-spice import unresolved and no symbols at all.
+ * NULL when source_path is already the real one. */
+int tur_collect_symbols(const char *source_path, const char *logical_path,
+                        LspSymbol *out, int cap, int *count_out);
 
 #endif
