@@ -399,11 +399,65 @@ container parity row breaking.
    be one stdlib body times the file count -- the CE0 trap), and container
    elements are already known to be at exact parity.
 
-5. **`(Option cstr)` is 2.6x the eligible population and cannot be reached.**
+5. **`(Option cstr)` is 2.6x the eligible population, and reaching it is an
+   API decision rather than a compiler feature.** INVESTIGATED 2026-08-30;
+   probes in
+   [benchmarks/option-niche-size/probes/](../../benchmarks/option-niche-size/probes/README.md).
+
    Surfaced by item 4's payload tally: 34 `(Option cstr)` spellings against 13
-   `(Option String)`, and `cstr` is a builtin raw pointer that nothing can
-   declare `:non-null` over. The plan unshelved slice B on the reasoning that
-   making `String` eligible "is the whole census"; `String` was made eligible
-   and it is not. Whether a builtin pointer type can carry the declaration --
-   or whether these sites should be holding `String` -- is the open question
-   with the largest population behind it.
+   `(Option String)` (8 against 2 counting only stdlib API). The plan unshelved
+   slice B on the reasoning that making `String` eligible "is the whole
+   census"; `String` was made eligible and it is not.
+
+   **`#refine{}` is NOT the key, and the reason is documented rather than
+   incidental.** A refinement in type-argument position -- the payload slot of
+   a container, which is exactly the position at issue -- is peeled to its base
+   with `TUR-W0380` (`rt_peel_type_arg_contract`, elab_types.c:640). It is
+   peeled because keeping it is worse: a live `TY_CONTRACT` inside a type
+   application makes ordinary uses of the payload fail, since operator lookup,
+   overload resolution and return-type checking all compare kinds without
+   peeling. The diagnostic names what enforcement would take -- the refinement
+   surviving as a type argument down to the unpacking binder, plus a checked
+   crossing at the constructor -- and says it is "a real feature, not an
+   oversight, and it is not built."
+
+   **`:non-null` on `cstr` is not the key either, and should not be.**
+   `opaque_base_is_ptr` admits `ptr` / `ptr<...>` only, and more fundamentally
+   `cstr` is `TY_CSTR` -- a builtin TypeKind with no declaration site. But the
+   deeper reason is that the claim would be FALSE: `env/get-raw` returns a null
+   `cstr` for an unset variable, so "every `cstr` is non-null" is not a fact
+   about the type. Nullability here is per-BOUNDARY, not per-type.
+
+   **What does work, today, with no compiler change: a `defopaque` newtype at
+   that boundary.** Measured, all four ways:
+
+   ```turmeric
+   (defopaque Cstr! :ptr<void> :non-null)
+
+   (defn env-get [name : cstr] : (Option Cstr!)
+     (let [v (getenv-raw name)]
+       (if (= v 0) (none) (some (:: v Cstr!)))))
+   ```
+
+   The monomorph's typedef is emitted by default and ABSENT under the flag --
+   it takes the niche -- with identical correct output both ways. A consumer
+   pays one `::` ascription to get a usable `cstr` back, the same ceremony
+   `String` consumers already pay. And the declaration is enforced on a
+   user-defined newtype at both doors with nothing added: `TUR-E0303` at
+   elaboration for a literal zero, the ctor abort under the niche for a
+   computed one.
+
+   This is not a workaround; it is the granularity the invariant actually has.
+   `env/get` already tests its raw pointer against 0 and maps null to
+   `(none)`, so the value inside its `Some` is non-null BY CONSTRUCTION and
+   the newtype merely writes down what the function already guarantees.
+
+   **And on size grounds it is still not worth doing.** The trade is 8 bytes
+   per live value against 184-310 bytes of `.text` per translation unit, on
+   functions called a handful of times per program. If these sites are ever
+   retyped it should be for the reason section 4 of
+   [sum-representation-plan.md](sum-representation-plan.md) gives for the whole
+   SR programme -- expressiveness, an invariant the type currently cannot
+   state -- and the niche then follows for free. Retyping stdlib's `(Option
+   cstr)` API to chase 8 bytes would be a breaking change to a public surface
+   bought with a rounding error.

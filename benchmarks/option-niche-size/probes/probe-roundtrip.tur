@@ -1,0 +1,19 @@
+(defopaque Cstr! :ptr<void> :non-null)
+
+(defn getenv-raw [name : cstr] : int
+  ```c
+  const char *v = getenv(name);
+  return (int64_t)(intptr_t)v;
+  ```)
+
+(defn env-get [name : cstr] : (Option Cstr!)
+  (let [v (getenv-raw name)]
+    (if (= v 0) (none) (some (:: v Cstr!)))))
+
+(defn main [] : int
+  (let [o (env-get "HOME")]
+    (if (some? o)
+      ;; the consumer's question: how much ceremony to get a usable cstr back?
+      (println (:: (unwrap o) :cstr))
+      (println "none"))
+    0))
