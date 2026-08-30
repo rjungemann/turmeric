@@ -5,8 +5,22 @@ happen -- its effects are lost, not deferred -- and the program runs on to print
 a plausible wrong answer. Only `int` instantiations survive, which is why it has
 gone unnoticed: `int` is the carrier and the overwhelmingly common case.
 
-**Status:** OPEN. Minimal repro below, root cause not located. Found while
-adding `with-untrailed` for SX2, whose most natural call is exactly this shape.
+**Status:** RESOLVED 2026-08-26. Two cases in `emit_stmt`'s
+"no side effects -- emit nothing" list wrapped an operand and returned without
+emitting it, so the wrapped call was deleted along with its effects:
+
+- **`EX_REINTERPRET`**, the carrier bridge placed around a polymorphic call at a
+  non-carrier type. This is why `int` was the exception -- it needs no bridge,
+  so nothing wrapped it.
+- **`EX_ASCRIBE`**, whose own comment already said "type erased, delegate to
+  inner" while the code returned without delegating. Found by testing the
+  neighbours rather than assuming the first fix was the whole bug.
+
+Both now emit their operand as a statement: the conversion is discarded, which
+is what statement position means, and the effect survives. **Zero snapshot drift
+across all 147 `expected.c` fixtures**, and the suite went from 2697/1 to
+**2698/0** -- the regression fixture had been red on purpose and flipped green
+on the fix.
 
 ## Repro
 
@@ -94,6 +108,15 @@ value the caller uses.
 Regression fixture: `tests/fixtures/poly-statement-position-effect`. It is
 **red on purpose** -- it asserts the correct output, so it goes green exactly
 when this is fixed.
+
+## Workarounds -- REMOVED 2026-08-26
+
+Both were reverted in the same change that fixed the bug, per the note below.
+`with-untrailed`'s docstring carries the natural example again, and
+`sx2-trail-combinators` discards the result on purpose -- exercising the
+spelling that used to be miscompiled is now part of what that fixture is for.
+
+The original note follows, for the record.
 
 ## Workarounds to replace once this lands
 

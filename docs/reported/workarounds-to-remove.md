@@ -64,32 +64,14 @@ findings vary by toolchain.
 
 **Proof:** CI green on every platform with the variable set.
 
-## 4. `with-untrailed` callers bind a result they do not want
+## ~~4. `with-untrailed` callers bind a result they do not want~~ -- DONE
 
-**Where:** `stdlib/trail.tur` -- a HAZARD block in `with-untrailed`'s docstring
-and its worked example; `tests/fixtures/sx2-trail-combinators`, which binds the
-result to `_`.
-
-**Why:** a discarded call to a parametric function is dropped unless it
-instantiates at `int`, taking its side effects with it. `with-untrailed` is
-parametric and its natural call discards a `bool`, so the obvious spelling
-silently does nothing:
-
-```turmeric
-(with-untrailed (fn [] (bt-set! c 7)))     ;; write never happens
-```
-
-**Blocker:**
-[poly-call-in-statement-position-dropped](poly-call-in-statement-position-dropped.md).
-
-**When it lands:** delete the HAZARD block, restore the docstring example to the
-discarded form, and change the fixture to discard rather than bind -- it should
-exercise what users will actually write.
-
-**Proof it is no longer needed:** run the restored discarded-form example and
-check the write happens. The general fixture
-(`poly-statement-position-effect`, red on purpose until this is fixed) pins the
-rule; these sites pin that the rule reaches real stdlib code, so check both.
+Removed 2026-08-26, in the same change that fixed
+[poly-call-in-statement-position-dropped](../archive/poly-call-in-statement-position-dropped.md).
+The HAZARD block is gone from `with-untrailed`'s docstring, its example is the
+natural discarded-result form again, and `sx2-trail-combinators` discards rather
+than binds. Kept here struck through rather than deleted: the point of this file
+is that a workaround leaves a trace, and so should its removal.
 
 ## Not on this list, and why
 

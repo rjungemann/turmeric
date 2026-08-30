@@ -936,7 +936,16 @@ turned up a defect in the instrument that would have justified it.
 | [sanitizer-gate-not-armed-in-ci](sanitizer-gate-not-armed-in-ci.md) | low | `tests/run.sh` gained a gate for UBSan findings from the compiler and it is verified in both directions, but nothing sets `TUR_SANITIZER_GATE=1`, so CI runs unarmed. Not a pure flag flip: the zero-finding count was measured on Linux only, and UBSan findings vary by toolchain |
 | [closure-in-defdata-field](closure-in-defdata-field.md) | medium | PARTIALLY FIXED. The `defopaque :ptr<void>` route is clean now and the lazy-stream work it blocked has landed. Still open: a `:fn` field accepts a capturing closure, type-checks, and SIGSEGVs when forced, while a non-capturing one works -- so the shape you write first is fine and the shape you need crashes |
 | [workarounds-to-remove](workarounds-to-remove.md) | -- | checklist, not a defect: three places the tree is deliberately doing the second-best thing (`StThunk` instead of a `:fn` field, a `known-leak` marker, the unarmed sanitizer gate), each with its blocker and how to prove the workaround is no longer needed |
-| [poly-call-in-statement-position-dropped](poly-call-in-statement-position-dropped.md) | **high** | a discarded call to a parametric function is DROPPED unless it instantiates at `int` -- the side effects are lost, silently, with no diagnostic. `(polyA true)` in statement position never runs; `(polyA 1)` does. Fixture `poly-statement-position-effect` is red on purpose and goes green when this is fixed |
+
+`poly-call-in-statement-position-dropped` was found and resolved 2026-08-26 and
+moved to
+[docs/archive/](../archive/poly-call-in-statement-position-dropped.md). A
+discarded call was being deleted along with its side effects whenever the
+elaborator had wrapped it in an `EX_REINTERPRET` (the carrier bridge around a
+polymorphic call at a non-carrier type) or an `EX_ASCRIBE` -- both sat in
+`emit_stmt`'s "no side effects" list on the strength of the WRAPPER being pure,
+which said nothing about the operand. `int` was the exception only because it
+needs no bridge.
 
 `compiled-fixtures-are-not-leak-checked` was resolved 2026-08-26 and moved to
 [docs/archive/](../archive/compiled-fixtures-are-not-leak-checked.md). Its two

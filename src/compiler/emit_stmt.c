@@ -210,7 +210,6 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_FLOAT_LIT: case EX_CSTR_LIT: case EX_SYM_LIT: case EX_VAR:
         case EX_DEFAULT_OF:    /* M2b: pure zero-initializer, no side effects */
         case EX_CAST:         /* pure expression, no stmt-level side effects */
-        case EX_REINTERPRET:  /* compiler-only pure reinterpret node */
         case EX_UNION_INJECT: /* IT4: pure struct literal, no stmt-level side effects */
         case EX_ANY_TYPE_OF:  /* IT4: pure read, no stmt-level side effects */
         case EX_ANY_CAST:     /* IT4: pure unbox, no stmt-level side effects */
@@ -224,11 +223,33 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_PANIC_PAYLOAD_LINE:
         case EX_PANIC_PAYLOAD_DOWNS:
         case EX_POLY_WRAP:   /* Phase HRT1: pure struct literal, no stmt-level side effects */
-        case EX_ASCRIBE:     /* Phase HRT1: type erased, delegate to inner */
         case EX_EXISTS_PACK: /* Phase HRT2: pure boxing, no stmt-level side effects */
         case EX_DEFGADT:     /* Phase G1: ADT definition — handled in Pass 0 */
         case EX_CPS_CONT_APP: /* CPS2: continuation application — emit via emit_value if side-effecting */
             /* No side effects — emit nothing. */
+            return;
+        case EX_ASCRIBE:
+            /* Same defect as EX_REINTERPRET below, and this one's comment
+             * already said the right thing -- "type erased, delegate to inner"
+             * -- while the code returned without delegating.  `(:: (eff) :int)`
+             * in statement position dropped the call. */
+            if (e->as.ascribe_.inner) emit_stmt(ctx, body, e->as.ascribe_.inner);
+            return;
+        case EX_REINTERPRET:
+            /* poly-call-in-statement-position-dropped: the CONVERSION is pure,
+             * but its operand is not.  This case used to sit in the
+             * no-side-effects list above as a "compiler-only pure reinterpret
+             * node", which silently deleted whatever it wrapped.
+             *
+             * A polymorphic call instantiated at a non-carrier type is wrapped
+             * in exactly this node -- the carrier bridge -- so `(polyA true)`
+             * in statement position emitted nothing at all while `(polyA 1)`,
+             * needing no bridge, ran.  The call was specialized and defined;
+             * only the call SITE went missing.
+             *
+             * Emitting the operand as a statement discards the conversion
+             * (which is what statement position means) and keeps the effect. */
+            if (e->as.reinterpret_.expr) emit_stmt(ctx, body, e->as.reinterpret_.expr);
             return;
         case EX_EXISTS_OPEN: { /* Phase HRT2: run open body for side effects */
             char *v = emit_value(ctx, body, e);

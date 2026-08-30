@@ -1,8 +1,16 @@
-;; A discarded call to a PARAMETRIC function must still happen.
+;; A discarded call must still happen, however the elaborator wrapped it.
 ;;
-;; It is dropped today for every instantiation except `int` -- the side effect
-;; is lost, with no diagnostic and no crash.  See
-;; docs/reported/poly-call-in-statement-position-dropped.md.
+;; Two wrappers used to delete whatever they contained when it landed in
+;; statement position, because the WRAPPER is pure and the list they sat in was
+;; keyed on that rather than on the operand:
+;;
+;;   EX_REINTERPRET -- the carrier bridge around a polymorphic call at a
+;;                     non-carrier type.  `(polyA true)` emitted nothing while
+;;                     `(polyA 1)`, needing no bridge, ran.
+;;   EX_ASCRIBE     -- `(:: (eff) :int)`, whose own comment said "delegate to
+;;                     inner" while the code returned without delegating.
+;;
+;; Fixed 2026-08-26; see docs/archive/poly-call-in-statement-position-dropped.md.
 ;;
 ;; The assertion is the printed order: each "ran" line must appear between its
 ;; label and the next.  A dropped call removes a line, so the diff catches it.
@@ -10,10 +18,14 @@
 (defn polyA [A] [x : A] : A
   (do (println "  ran") x))
 
+(defn eff [] : int (do (println "  ran") 7))
+
 (defn main [] : int
   (println "bool:")  (polyA true)
   (println "int:")   (polyA 1)
   (println "float:") (polyA 7.1)
   (println "cstr:")  (polyA "s")
+  ;; EX_ASCRIBE around a call, discarded
+  (println "asc:")   (:: (eff) :int)
   (println "done")
   0)
