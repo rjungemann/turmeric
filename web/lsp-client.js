@@ -428,6 +428,11 @@ export function createLspClient(opts) {
             }, debounceMs));
         });
 
+        /* Diagnostics for this document are dropped on the floor:
+         * applyDiagnostics resolves a uri to a tab, and there is no tab here.
+         * That is the behaviour we want -- an expression being typed is
+         * unbalanced on nearly every keystroke, and a red underline under the
+         * prompt would be a permanent fixture rather than information. */
         if (available) {
             notify('textDocument/didOpen', {
                 textDocument: {
@@ -633,10 +638,12 @@ export function createLspClient(opts) {
         });
         if (!Array.isArray(result)) return null;
         if (token && token.isCancellationRequested) return null;
-        return result.map(h => ({
-            range: monacoRangeFor(model, h.range),
-            kind: highlightKind(h.kind),
-        }));
+        return result
+            .filter(h => rangeInDocument(model, h.range))
+            .map(h => ({
+                range: monacoRangeFor(model, h.range),
+                kind: highlightKind(h.kind),
+            }));
     }
 
     /**
@@ -658,7 +665,7 @@ export function createLspClient(opts) {
         });
         if (!Array.isArray(result)) return [];
         if (token && token.isCancellationRequested) return [];
-        return result.map(s => ({
+        return result.filter(s => rangeInDocument(model, s.range)).map(s => ({
             name: s.name,
             detail: s.detail || '',
             kind: symbolKind(s.kind),
@@ -791,6 +798,20 @@ export function createLspClient(opts) {
         const extra = extraForModel(model);
         if (extra) p.line += extra.prefixLines;
         return p;
+    }
+
+    /* Does a server range fall inside the model, rather than inside the
+     * prefix that precedes it?
+     *
+     * The prompt's document is the session's accepted source plus the line
+     * being typed, so the server can legitimately answer with a range from a
+     * line the prompt is not showing. Clamping such a range to line 1 would
+     * paint a mark on the current input that refers to something typed
+     * minutes ago -- so a list-producing provider drops it instead. */
+    function rangeInDocument(model, range) {
+        const extra = extraForModel(model);
+        if (!extra || !range) return true;
+        return (range.end.line || 0) >= extra.prefixLines;
     }
 
     function monacoRangeFor(model, range) {

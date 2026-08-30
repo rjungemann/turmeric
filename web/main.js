@@ -2989,10 +2989,13 @@ function promptSetValue(text) {
 }
 
 function promptSetEnabled(on) {
-    if (!promptEditor) return;
-    promptEditor.updateOptions({ readOnly: !on });
+    /* The host class is set whether or not the editor exists yet: the WASM
+     * boot and the prompt's construction are independent, and whichever wins
+     * the race must not leave the row looking disabled forever. The editor's
+     * own initial readOnly is read from wasmState in initReplInput. */
     const host = document.getElementById('repl-input');
     if (host) host.classList.toggle('repl-input-disabled', !on);
+    if (promptEditor) promptEditor.updateOptions({ readOnly: !on });
 }
 
 async function promptSubmit() {

@@ -468,7 +468,10 @@ static void run_doc_analysis(LspDoc *doc, LspSink *sink) {
         doc->bindings           = fresh_b;
         doc->binding_cap        = LSP_BIND_CAP;
         doc->binding_count      = fresh_bcount;
-        doc->bindings_truncated = fresh_btrunc;
+        /* A table that could not be allocated is indistinguishable from one
+         * with no locals in it, and those two call for opposite edits -- so it
+         * reports as truncated, which is what makes rename refuse. */
+        doc->bindings_truncated = fresh_b ? fresh_btrunc : 1;
         fresh_b = NULL;
         stdlib_cache_fill(fresh, fresh_count);
     } else if (!doc->ever_analyzed) {
