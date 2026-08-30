@@ -199,14 +199,20 @@ used to carry; closed, pinned by
    the eligible population run under the flag); "no new crossing defects over
    a release cycle" is now a checkable claim, and it should be checked before
    the flip.
-2. **Default-on is a semantic break, not just a representation change.** On
+2. **Default-on is a semantic break, not just a representation change.**
+   Filed 2026-08-30 as
+   [option-niche-graduation-breaks-carrier-some-null](../reported/option-niche-graduation-breaks-carrier-some-null.md),
+   which carries the drafted release-notes entry so the flip is a copy-paste
+   rather than a prose exercise.  On
    today's default a carrier `Some(NULL)` is a legal, distinct value
    (`tur_some_ptr(0)`; `some?` true).  Under the niche it is an abort at the
    construction or crossing door.  That is the `:non-null` declaration being
    enforced -- but code that never opted in would start aborting, which wants
    a release-notes entry and a deliberate decision, not a default flipped in
    passing.
-3. **The measurement removes the urgency.** Parity at container elements and
+3. **The measurement removes the urgency.** Filed 2026-08-30 as
+   [option-niche-container-elements-box-at-parity](../reported/option-niche-container-elements-box-at-parity.md).
+   Parity at container elements and
    a direct-position win that is real but synthetic-loop-amplified is not the
    SR2a shape (3.6x + 71x RSS on real workloads); it is closer to the SR4
    shape, which was measured and deliberately NOT defaulted.
