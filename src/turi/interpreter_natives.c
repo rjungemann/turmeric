@@ -33,6 +33,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "../runtime/tur_string.h"
+#include "../runtime/trail.h"   /* SX1: the real trail, shimmed for --interpret */
 #if defined(_WIN32)
 /* Windows has no fork/exec.  The CRT's _spawnvp/_cwait are the direct
  * equivalents (spawn-and-return-a-handle, then reap it), so process/spawn and
@@ -3843,6 +3844,135 @@ static void wk_register_backtrack_natives(TuriEnv *env) {
     turi_env_register_native(env, "bt-apply-fat",  native_bt_apply_fat, NULL);
 }
 
+/* -------------------------------------------------------------------------
+ * SX1 (solver-extension-plan): stdlib/trail.tur -- backtrackable state.
+ *
+ * Every binding in trail.tur is inline-C over src/runtime/trail.c, which the
+ * tree-walker cannot execute, so without these shims the whole module resolves
+ * to nothing under --interpret.
+ *
+ * Unlike the backtrack.tur block above -- which had to REIMPLEMENT its cons
+ * cell (`wk_bt_cell`) because the compiled layout lived only in emitted C --
+ * nothing is reimplemented here.  src/runtime/trail.c is in TUR_CORE_SOURCES,
+ * so this process already has the real trail linked; each shim is a direct
+ * call, and the interpreter therefore shares one trail implementation with the
+ * compiled path rather than approximating it.  A stamp or generation bug can
+ * only be in the one place.
+ *
+ * Representations, matching the compiled `defopaque`s: `BtCell` and `GCell` are
+ * `:ptr` and `Mark` is a packed `:int`, and all three box as `turi_int` -- the
+ * same handle-as-int64 convention the String fallbacks below use.
+ *
+ * bt-scope and with-untrailed get NO shim on purpose: they are ordinary
+ * Turmeric over these primitives (stdlib/trail.tur), so shimming the
+ * primitives makes the brackets work for free -- the same reason backtrack.tur's
+ * workers needed none.
+ * ---------------------------------------------------------------------- */
+
+static TuriValue native_bt_cell_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int((int64_t)(intptr_t)tur_bt_cell_new((n > 0) ? a[0].as_int : 0));
+}
+static TuriValue native_bt_lvar_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int((int64_t)(intptr_t)tur_bt_lvar_new((n > 0) ? a[0].as_int : 0));
+}
+static TuriValue native_bt_cell_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0) tur_bt_cell_free((void *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+static TuriValue native_bt_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n == 0) return turi_int(0);
+    return turi_int(tur_bt_cell_get((void *)(intptr_t)a[0].as_int));
+}
+static TuriValue native_bt_bound(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n == 0) return turi_bool(false);
+    return turi_bool(tur_bt_cell_bound((void *)(intptr_t)a[0].as_int));
+}
+static TuriValue native_bt_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_bool(false);
+    return turi_bool(tur_bt_cell_set((void *)(intptr_t)a[0].as_int, a[1].as_int));
+}
+
+/* A GCell is the same struct; what makes it never-trailed is that the write is
+ * bracketed by pause/resume.  trail.tur's g-set! does exactly this, and getting
+ * it wrong here would silently make the per-cell opt-out a trailed cell -- a
+ * wrong answer the interpreter would produce and the compiled path would not. */
+static TuriValue native_g_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_nil();
+    tur_trail_pause();
+    tur_bt_cell_set((void *)(intptr_t)a[0].as_int, a[1].as_int);
+    tur_trail_resume();
+    return turi_nil();
+}
+
+static TuriValue native_bt_mark(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_int(tur_trail_mark_packed());
+}
+static TuriValue native_bt_undo_to(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n == 0) return turi_bool(false);
+    return turi_bool(tur_trail_undo_to_packed(a[0].as_int));
+}
+static TuriValue native_bt_commit_to(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n == 0) return turi_bool(false);
+    return turi_bool(tur_trail_commit_to_packed(a[0].as_int));
+}
+static TuriValue native_bt_level(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_int(tur_trail_level_i64());
+}
+static TuriValue native_bt_depth(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_int(tur_trail_depth_i64());
+}
+static TuriValue native_untrailed_begin(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    tur_trail_pause();
+    return turi_nil();
+}
+static TuriValue native_untrailed_end(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    tur_trail_resume();
+    return turi_nil();
+}
+static TuriValue native_trail_reset(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    tur_trail_reset();
+    return turi_nil();
+}
+
+static void wk_register_trail_natives(TuriEnv *env) {
+    turi_env_register_native(env, "bt-cell-new",     native_bt_cell_new,     NULL);
+    turi_env_register_native(env, "bt-lvar-new",     native_bt_lvar_new,     NULL);
+    turi_env_register_native(env, "bt-cell-free",    native_bt_cell_free,    NULL);
+    turi_env_register_native(env, "bt-get",          native_bt_get,          NULL);
+    turi_env_register_native(env, "bt-bound?",       native_bt_bound,        NULL);
+    turi_env_register_native(env, "bt-set!",         native_bt_set,          NULL);
+    /* g-cell-new / g-cell-free are the SAME allocator and free as the BtCell
+     * pair -- trail.tur spells them separately only so the never-trailed cell
+     * gets a distinct type at the language level. */
+    turi_env_register_native(env, "g-cell-new",      native_bt_cell_new,     NULL);
+    turi_env_register_native(env, "g-cell-free",     native_bt_cell_free,    NULL);
+    turi_env_register_native(env, "g-get",           native_bt_get,          NULL);
+    turi_env_register_native(env, "g-set!",          native_g_set,           NULL);
+    turi_env_register_native(env, "bt-mark",         native_bt_mark,         NULL);
+    turi_env_register_native(env, "bt-undo-to!",     native_bt_undo_to,      NULL);
+    turi_env_register_native(env, "bt-commit-to!",   native_bt_commit_to,    NULL);
+    turi_env_register_native(env, "bt-level",        native_bt_level,        NULL);
+    turi_env_register_native(env, "bt-depth",        native_bt_depth,        NULL);
+    turi_env_register_native(env, "untrailed-begin", native_untrailed_begin, NULL);
+    turi_env_register_native(env, "untrailed-end",   native_untrailed_end,   NULL);
+    turi_env_register_native(env, "trail-reset!",    native_trail_reset,     NULL);
+}
+
 static void wk_register_proc_fs_natives(TuriEnv *env) {
     turi_env_register_native(env, "process/spawn",    native_process_spawn,     NULL);
     turi_env_register_native(env, "process/wait",     native_process_wait,      NULL);
@@ -4665,6 +4795,9 @@ void turi_env_register_interpreter_natives(TuriEnv *env) {
     wk_register_chan_natives(env);
     /* R3: backtrack.tur cons-stream monad primitives (loaded on demand). */
     wk_register_backtrack_natives(env);
+    /* SX1: trail.tur backtrackable-state cells over the real src/runtime/trail.c
+     * (auto-loaded, so these always have a module body to override). */
+    wk_register_trail_natives(env);
     /* R1: process.tur spawn/wait + fs.tur tmpfile OS-handle ops (loaded on demand). */
     wk_register_proc_fs_natives(env);
     /* R1: serial.tur Serializable int/bool instances (loaded on demand). */

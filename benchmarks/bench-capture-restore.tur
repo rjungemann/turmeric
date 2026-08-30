@@ -764,11 +764,11 @@
 ;; comparable live state -- which is what puts these rows in the same table
 ;; rather than a file of their own.
 ;;
-;; Called through the C shims rather than stdlib/trail.tur on purpose: the
-;; language surface is behind the `backtrackable-state` experiment, and a
-;; benchmark that needed the gate flipped to run would measure how the gate is
-;; configured as much as what the mechanism costs. What is being measured here
-;; is the runtime, which the gate does not touch.
+;; Called through the C shims rather than stdlib/trail.tur on purpose: what is
+;; being measured is the runtime mechanism, not the language surface over it, so
+;; the timed region holds no Turmeric call overhead. (This predates the
+;; `backtrackable-state` graduation, when reaching the surface also meant
+;; flipping an experiment gate; the reason to keep it is now the narrower one.)
 ;; ---------------------------------------------------------------------------
 
 ;;; trail-autolink-hint -- pull src/runtime/trail.c into this program.

@@ -244,6 +244,9 @@ static TurTrailMark mark_unpack(int64_t p) {
     return m;
 }
 
+int64_t tur_trail_level_i64(void)               { return (int64_t)tur_trail_level(); }
+int64_t tur_trail_depth_i64(void)               { return (int64_t)tur_trail_depth(); }
+
 int64_t tur_trail_mark_packed(void)             { return mark_pack(tur_trail_mark()); }
 bool    tur_trail_undo_to_packed(int64_t p)     { return tur_trail_undo_to(mark_unpack(p)); }
 bool    tur_trail_commit_to_packed(int64_t p)   { return tur_trail_commit_to(mark_unpack(p)); }

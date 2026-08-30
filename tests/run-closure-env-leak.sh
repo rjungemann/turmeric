@@ -53,11 +53,22 @@ fi
 
 # Compile with ASan/UBSan.  LeakSanitizer ships with ASan on Linux; on macOS it
 # is unsupported and ASan aborts at startup, so probe and skip cleanly.
+#
+# src/runtime/trail.c is in the list even though this fixture never touches the
+# trail: stdlib/trail.tur is auto-loaded into every program since
+# `backtrackable-state` graduated, so the emitted C carries its inline-C bodies
+# (bt_hycell_hynew and friends) and their calls into tur_bt_cell_*.  Whether that
+# costs a link error is TOOLCHAIN-DEPENDENT and macOS says the wrong thing:
+# Apple clang drops the unused statics, so the link succeeds and this gate skips
+# for want of LSan, while GCC at -O0 emits them and the link fails with a wall of
+# undefined references.  The emitted C says as much in its `__tur_autolink__:
+# src/runtime/trail.c` marker -- `tur build` reads that marker, and this
+# hand-rolled cc line has to be kept in step with it by hand.
 if ! "$CC" -g -O0 -fno-strict-aliasing -fsanitize=address,undefined \
         -Isrc/runtime -o "$BIN" "$C_OUT" \
         src/runtime/hamt.c src/runtime/runtime.c src/runtime/rc.c \
         src/runtime/gc.c src/runtime/rc_free_queue.c src/runtime/tur_string.c \
-        src/runtime/symbols.c -lpthread 2>"$WORK/cc.err"; then
+        src/runtime/symbols.c src/runtime/trail.c -lpthread 2>"$WORK/cc.err"; then
     echo "FAIL closure-env-leak -- C compile failed"
     sed 's/^/    /' "$WORK/cc.err"
     exit 1

@@ -2,6 +2,61 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **`backtrackable-state` graduated -- `stdlib/trail.tur` is always available.**
+  The trail (mark/undo cells with per-cell, per-write and per-level opt-out) no
+  longer needs `--enable=backtrackable-state`; the experiment row is deleted and
+  the module is an ordinary autoload. What held it at `prototype` was one open
+  question -- plan 3.5's multi-shot re-entry -- now decided: **the checked error
+  is permanent and snapshotting the live trail segment on capture is declined.**
+  The SX0 curve settled the cost half (a snapshot is at best at parity with
+  replaying the writes at 5.0 ns each, and is paid at *every* capture rather than
+  only on the branch taken), and the semantics half went the same way (a
+  symmetric snapshot restores the learned clause away, which is the one thing a
+  backjump must keep). Writing the fixtures turned up a stronger guard than
+  either: `Mark`, `BtCell` and `GCell` have no `Clone` instance, so a multi-shot
+  `cloneable-shift` **cannot capture a trail handle at all** -- `TUR-E0014` at
+  compile time, now pinned so it cannot regress.
+
+  Because trail.tur now prepends to every compile, 148 codegen snapshots moved.
+
+- **The trail works under `--interpret`.** `stdlib/trail.tur` is entirely
+  inline-C, which the tree-walker cannot execute, so making it an unconditional
+  autoload would have left a whole module resolving to nothing outside the
+  compiled path. It is now shimmed for the interpreter -- and shimmed by
+  *calling the same `src/runtime/trail.c`* rather than reimplementing it, so
+  there is one trail, not two that can drift. `tur --interpret`, `tur eval`,
+  `tur repl` and the web REPL all have the full surface; five fixtures now run
+  under both harnesses and produce byte-identical output, including the
+  `bt-depth` counts that pin "a thousand writes cost one trail entry".
+
+  Serializing a continuation is the one compiled-only behavior, and it is not a
+  gap: under `--interpret` `tur_serial_cont_serialize` is an in-process deep
+  copy rather than a byte codec, so no blob outlives the trail and there is
+  nothing to refuse.
+
+### Added
+
+- **Serializing a continuation inside an open `bt-scope` is refused.** Both the
+  host codec and the emitted `tur_serial_cont_serialize` now report the trail
+  depth and the count of outstanding trailed writes instead of producing a blob.
+  A serialized continuation carries control; the undo information that would put
+  the scope's writes back is process-local and does not travel with it, so such a
+  blob would deserialize into a world where those writes either never happened or
+  can never be unwound.
+
+### Fixed
+
+- **`bt-level` and `bt-depth` read an unspecified upper half.** Both C functions
+  return `uint32_t` while `stdlib/trail.tur` declared them `:int` (`int64_t`), so
+  the result's high 32 bits were whatever the callee left in the register -- a
+  level could in principle read as 4294967297. Found while writing the serialize
+  guard. Both now go through `tur_trail_level_i64` / `tur_trail_depth_i64`,
+  matching how a mark is already packed across that boundary.
+
 ## [0.41.0] -- 2026-08-28
 
 ### Added
