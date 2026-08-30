@@ -78,8 +78,15 @@ Checked one by one against the source, comments and string literals stripped:
 - **`re` (2)** are `(Option cstr)`.
 - **`docstrings` (2)** are inside **string literals** -- the documentation text
   of `httpd-req-cookie-opt` / `httpd-req-form-opt`. Not code.
-- **`httpd-string` (5)** is the only real row, and it is the one file the
-  emitted census independently found.
+- **`httpd-string` (5)** is the only real row -- **and it is 2, not 5.**
+  Stripping strings and comments leaves exactly two `(Option String)` API
+  functions in the file, `httpd-req-cookie-opt` and `httpd-req-form-opt`; the
+  other three hits are their own docstrings. It is the one file the emitted
+  census independently found.
+
+**So the eligible stdlib API surface of the whole language is two functions.**
+Every one of the five published rows is either the wrong type or inflated by
+its own documentation.
 
 Payload spellings across `stdlib/` + `tests/fixtures/`, strings and comments
 stripped:
@@ -94,7 +101,35 @@ stripped:
 | everything else | 14 | mostly no |
 
 So `cstr` is the largest pointer-payload Option population in the tree at
-**2.6x** the eligible one, and it is the population the niche cannot reach.
+**2.6x** the eligible one (34 against 13), and **4x** counting only real
+stdlib API surface (8 sites in `env`/`re`/`args` against 2 in
+`httpd-string`) -- and it is the population the niche cannot reach.
+
+**`cstr` is not un-annotated, it is structurally unreachable.**
+`sr3_payload_is_nonnull_pointer` (types.c:1483) begins by extracting an
+`AdtDef` from the payload and returns false when there is none. `cstr` is
+`TY_CSTR`, a builtin TypeKind c-named `const char *` -- not an ADT, not a
+`defopaque`, and so not a thing `:non-null` can be written on. No allowlist
+row or annotation reaches it; the eligibility machinery only speaks ADTs.
+
+And the irony is total: `env/get` **already implements the niche by hand.**
+
+```turmeric
+(defn env/get [name : cstr] #fx{Proc} : (Option cstr)
+  (let [v (env/get-raw name)] (if (= v 0) (none) (some (:: v :cstr)))))
+```
+
+It tests the raw pointer against 0 and maps null to `(none)`, so the invariant
+the niche needs -- a payload inside a `Some` is never 0 -- is established
+there by construction. It is the ideal candidate semantically and out of
+reach representationally.
+
+Nor is switching those sites to `String` a migration path. `getenv` returns a
+borrowed pointer into the environment block; `String` is an owned handle whose
+constructor mallocs unconditionally -- which is precisely the warrant for its
+`:non-null`. Retyping `env/get` to `(Option String)` would add an allocation
+and a copy per lookup to save 8 bytes of stack. The `cstr` population is not
+un-migrated, it is genuinely a different thing.
 That is the finding with a future in it: the plan unshelved slice B because
 giving `defopaque` a pointer C spelling "makes `String` eligible and is the
 whole census." `String` was made eligible and it is **not** the whole census;
