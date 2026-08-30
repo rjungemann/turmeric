@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.41.0` -- `:cmake-deps` link lines are resolved by CMake rather than guessed downstream, so a raylib spice builds and runs on macOS with no shim, and a pointer `defopaque` c-names as `void *` (breaking for out-of-tree inline-C).
+**Latest release:** `v0.42.0` -- `tur trace` records an interpreted run, `tur dap` replays it backwards, and Try Turmeric scrubs it on a timeline; the language server gained real lexical scope, so rename and references work.
 
 ## What
 

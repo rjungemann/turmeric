@@ -2,7 +2,51 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.42.0] -- 2026-08-30
+
+### Added
+
+- **`tur trace` -- a time-travel recorder, and reverse execution in `tur dap`.**
+  `src/turi/trace.c` records every node the tree-walker evaluates as deltas
+  rather than states: a step carries only the bindings whose rendered value
+  moved, so 80006 steps cost 1.2 MB -- 15 bytes a step. `tur dap` `launch` with
+  `"replay": true` then serves the whole session from that recording, so
+  `stackTrace`, `scopes` and `variables` answer from a trace cursor. That is
+  what makes `stepBack`, `reverseContinue` and `reverseNext` answerable at all
+  -- a pause cannot go back. VS Code and nvim-dap draw the reverse-execution UI
+  off `supportsStepBack`, so there is no editor-side widget here.
+
+- **A time-travel timeline in Try Turmeric.** Trace is a second button beside
+  Run (and a `:trace` command at the prompt): it records the tab's program under
+  the interpreter and turns the console area into a scrubber -- a slider over
+  the run, step forward and backward, the editor gutter following the cursor,
+  each live frame's bindings at that point, and the transcript rewinding with
+  it. The recorder was already compiled into the wasm module and simply
+  unexported; the module is byte-identical in size either way, so this costs no
+  download.
+
+- **The Try Turmeric prompt gets completion, hover and its own LSP document.**
+  The `turi>` prompt is a single-line Monaco editor backed by
+  `file:///project/repl.tur` rather than an `<input>` -- not for the look, but
+  so that completion, hover and signature help at the prompt are the providers
+  that already exist instead of a second widget stack built over a text field.
+
+- **Lexical scope in the language server -- scope-aware highlight, rename and
+  references.** The symbol index knew only global bindings, so every consumer
+  answered a textual question when it had been asked a lexical one: a parameter
+  named `x` highlighted every `x` in the file, and rename could not be written
+  at all. Each local binding now carries the region it is visible in, as two
+  ranges whose gap is the binding's own initializer -- so `(let [x (+ x 1)] x)`
+  resolves the init's `x` to the OUTER binding while a caret on the binder still
+  resolves to the inner one.
+
+- **Serializing a continuation inside an open `bt-scope` is refused.** Both the
+  host codec and the emitted `tur_serial_cont_serialize` now report the trail
+  depth and the count of outstanding trailed writes instead of producing a blob.
+  A serialized continuation carries control; the undo information that would put
+  the scope's writes back is process-local and does not travel with it, so such a
+  blob would deserialize into a world where those writes either never happened or
+  can never be unwound.
 
 ### Changed
 
@@ -38,17 +82,54 @@ All notable changes to Turmeric are documented here.
   copy rather than a byte codec, so no blob outlives the trail and there is
   nothing to refuse.
 
-### Added
+- **`::` between an integer kind and a float kind is refused, and both meanings
+  are named.** It meant two different things depending on where the value came
+  from -- `(:: (.n m) :float)` means the NUMBER, `(:: (list-head c) :float)`
+  means the BIT PATTERN -- and both operands are statically `:int`, so the
+  same-size rule answered "bits" for both, silently. A small integer read as
+  IEEE bits is a denormal, so `mixedfold` returned 0.25 instead of 3.25: a
+  dropped term, not a garbage one. Say which you mean -- `int->float` /
+  `float->int` (`stdlib/math.tur`) to convert the number, the new `float->bits`
+  / `bits->float` (`stdlib/bits.tur`) to reinterpret. Integer literals stay
+  exempt and keep converting. The interpreter registers the new pair as natives,
+  which closes a compiled-vs-interpreted divergence rather than adding one: the
+  tagged model could never implement a bit-reinterpreting `::`, but once the
+  author has said which reading they meant there is nothing left to guess. All
+  four spellings now agree on both paths.
 
-- **Serializing a continuation inside an open `bt-scope` is refused.** Both the
-  host codec and the emitted `tur_serial_cont_serialize` now report the trail
-  depth and the count of outstanding trailed writes instead of producing a blob.
-  A serialized continuation carries control; the undo information that would put
-  the scope's writes back is process-local and does not travel with it, so such a
-  blob would deserialize into a world where those writes either never happened or
-  can never be unwound.
+- **`stdlib/arrow`: real `ArrowLoop` feedback via `LoopCell`.** The fed-back `d`
+  of `ArrowLoop` at `(->)` was a sentinel `0`, so the instance was only correct
+  when the looped arrow never read it. Turmeric is strict, so `d` cannot simply
+  BE the value the same run is about to produce -- but indirecting through a
+  two-word heap cell `{ filled, value }` splits "the value is written" from "the
+  value is read", which is the only thing laziness was buying here.
+  `arrow-loop` / `arrow-loop-lazy` fill it with the `d` output when the run
+  returns (knot-tying, so a deferred read observes the `d` this run produced);
+  `arrow-loop-fix` seeds it and refills per pass until `d` stops moving or fuel
+  runs out. One shared protocol, so a single looped arrow works under any of
+  them.
 
 ### Fixed
+
+- **`any` payload boxes leaked once per widen.** A value RETURNED as `any`, or
+  handed back by a callee that boxed it, leaked 16 bytes a turn under
+  LeakSanitizer in three residual shapes -- the earlier argument-position fix
+  could not help there, because a caller-frame copy would dangle. Ownership is
+  now settled where the value lands: a non-escaping local's box dies with its
+  scope, an owned temporary is dropped after the call that consumes it, the drop
+  fires at early exits as well as the normal one, and a non-retained widen stays
+  in the caller's frame. `any` also joins the CPS subset, so a `perform` beside
+  one lowers.
+
+- **A local callee was spelled as two different C identifiers.** Calling an
+  ascribed `:fn` param -- `((:: f (fn [int] int)) v)` -- hoists the callable head
+  into a synthetic binding whose declaration and use went through different
+  naming rules, so cc rejected the undeclared one: a clean build break on a
+  documented spelling. Both ends now name it by the same rule.
+
+- **Wide by-value aggregates crossing the poly-to-fat boundary.** The three
+  poly-to-fat ABIs disagreed about an argument too wide for the carrier; they now
+  bridge it through the fat-box carrier and agree.
 
 - **`bt-level` and `bt-depth` read an unspecified upper half.** Both C functions
   return `uint32_t` while `stdlib/trail.tur` declared them `:int` (`int64_t`), so
@@ -56,6 +137,14 @@ All notable changes to Turmeric are documented here.
   level could in principle read as 4294967297. Found while writing the serialize
   guard. Both now go through `tur_trail_level_i64` / `tur_trail_depth_i64`,
   matching how a mark is already packed across that boundary.
+
+- **Editor-side resolution fixes.** DAP breakpoints match against the recorded
+  site rather than a rebuilt state; the language server resolves a buffer's
+  spice from where the file lives rather than where it was written; a local
+  whose scope start cannot be computed is dropped instead of indexed. Try
+  Turmeric starts a recording from a fresh session, aligns the dialect button
+  with the rest of the toolbar, and does not register the service worker on
+  localhost.
 
 ## [0.41.0] -- 2026-08-28
 
