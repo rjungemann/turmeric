@@ -4261,6 +4261,57 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         buf_printf(body, "%s %s = (%s);\n", ret_ct, tmp, v);
     else
         buf_printf(body, "__auto_type %s = (%s);\n", tmp, v);
+    /* inline-c-option-carrier-box-leaks: mark a call temp that holds a carrier
+     * box an inline-C body malloc'd, so the carrier->concrete bridge can free
+     * it after copying the contents out.
+     *
+     * Three conditions, all necessary.  The callee's body is inline C, so the
+     * box came from `tur_some_ptr` / `tur_box_*` -- the guide's documented
+     * idiom, and the only way such a body can produce an option/result.  The
+     * declared result is an Option/Result application, so the word really is a
+     * carrier box rather than an ordinary integer.  And the temp is spelled
+     * `int64_t`, which is what says the callee handed back the BOX rather than
+     * a by-value monomorph (an inline-C body whose result is lowered by value
+     * allocates nothing and must never be freed).
+     *
+     * Ownership transfer is the contract this defines: an inline-C body that
+     * returns option/result hands the caller a box to own.  Every in-tree
+     * producer and every documented example builds a FRESH box
+     * (`tur_some_ptr(...)`, or `tur_none()` which is the null carrier and is
+     * guarded by the bridge's null test), so no caller receives a box someone
+     * else still holds.  A body that cached and returned a shared box would
+     * break it -- which is why the guide now states the contract rather than
+     * leaving it implied. */
+    if (ret_ct && strcmp(ret_ct, "int64_t") == 0 &&
+        e->kind == EX_CALL && e->as.call_.fn_binding &&
+        e->as.call_.fn_binding->body_is_inline_c) {
+        /* Ask the callee's DECLARED result, never the call's resolved type.
+         * That distinction is the whole safety argument, and getting it wrong
+         * is a double free rather than a leak: `vec-get [A] (v : (Vec A)) : A`
+         * is ALSO an inline-C function, and `(:: (vec-get v 0) (Option int))`
+         * resolves its call type to an Option app -- but the box it returns
+         * belongs to the VECTOR, which frees it in `vec-free`.  Keying on the
+         * resolved type marked it owned and `vec-app-element-box-lifecycle`
+         * aborted with "double free detected in tcache 2".
+         *
+         * A declared `: A` is a borrow-shaped signature: the box came from
+         * somewhere the callee does not own.  A declared `: (Option T)` is the
+         * minting shape -- the body's only way to produce one is
+         * `tur_some_ptr` / `tur_box_*`, which malloc.  `result_full_type` is
+         * NULL exactly when the result is monomorphic, and then the declared
+         * type IS `e->type`, so the fallback is the same question asked of the
+         * only type available. */
+        const Type *_decl = (e->as.call_.fn_binding->type.kind == TY_FN)
+            ? e->as.call_.fn_binding->type.as.fn.result_full_type : NULL;
+        Type _rt = emit_resolve_type(ctx, _decl ? *_decl : e->type);
+        AdtDef *_rd = NULL;
+        Type _ra[16];
+        uint8_t _rn = 0;
+        if (type_extract_adt_app(&_rt, &_rd, _ra, &_rn) && _rd && _rd->name &&
+            (strcmp(_rd->name, "Option") == 0 ||
+             strcmp(_rd->name, "Result") == 0))
+            emit_owned_carrier_mark(tmp);
+    }
     /* SR2b: the RETURNED string is now just `tmp`, so the caller can no longer
      * read the value's emitted C type off the text.  Leave the note set to the
      * temp's declared type: an ARGUMENT emission that cleared the note before

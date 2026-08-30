@@ -167,6 +167,37 @@ through spices (see
   `task-group-new` abort), but it is wrong for routine, recoverable
   failures like a port that is busy or a connection that is refused.
 
+## Who owns the box
+
+`tur_some_ptr` / `tur_ok_ptr` / `tur_box_*` **malloc** the option/result
+carrier box. Until 2026-08-30 nothing freed it: the allocation happens inside a
+C body, so no elaborated expression corresponded to it and the compiler had
+nothing to give ownership to -- every call through the idiom this guide
+recommends leaked one box.
+
+That is fixed, and the fix is a contract worth stating explicitly:
+
+> **A function whose body is inline C and whose DECLARED return type is
+> `(Option T)` / `(Result T E)` transfers ownership of the box to its caller.**
+> The compiler frees it at the point the value is read back into an ordinary
+> Turmeric value.
+
+Two consequences for anyone writing such a body:
+
+- **Return a FRESH box.** `tur_some_ptr(...)`, `tur_ok_ptr(...)`, `tur_none()`
+  (which is the null carrier and allocates nothing) all satisfy this. A body
+  that cached a box in a static and returned it twice would hand the same
+  allocation to two owners -- a double free, not a leak.
+- **Returning a BORROWED box needs a different signature.** If the box belongs
+  to something else -- a container, a cache -- do not declare the result
+  `(Option T)`. Declare the element type and let the caller wrap it, which is
+  what `vec-get [A] (v : (Vec A)) : A` does: the vector owns the box and frees
+  it in `vec-free`, and the borrow-shaped signature is what tells the compiler
+  so.
+
+The distinction is the DECLARED type, not the type at a particular call site:
+`(:: (vec-get v 0) (Option int))` resolves to an Option and is still a borrow.
+
 ## Limitation: only `_int` and `_ptr` payloads
 
 v1 ships the monomorphised `_int` / `_ptr` builders, which cover an integer

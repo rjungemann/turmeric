@@ -96,6 +96,11 @@ return `:int`" escape hatch. The codegen preamble carries typed builders
 carrier-level `tur_box_*`) that construct the canonical Result/Option
 layout, so a fallible C constructor hands back a real `(Result Handle E)`
 / `(Option Handle)` with no struct hand-rolling and no sentinel integer.
+The box those builders malloc is **owned by the caller**: a body whose
+declared return type is `option`/`result` transfers it, and the compiler frees
+it when the value is read back. So return a FRESH box, and do not declare
+`option`/`result` for a box something else owns (a container's element) --
+give that a borrow-shaped signature instead, as `vec-get` does.
 See [docs/guides/inline-c-results-guide.md](docs/guides/inline-c-results-guide.md).
 
 ### When you notice this in existing code

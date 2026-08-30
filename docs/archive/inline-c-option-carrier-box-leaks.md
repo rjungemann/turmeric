@@ -109,3 +109,67 @@ call count:
    resolves the return-type/construction inconsistency above.
 3. **Document the hazard** and convert both stdlib sites to the split. Cheapest,
    but leaves the trap armed for users.
+
+## Resolution (2026-08-30) -- fix direction 1, the class closed
+
+**Fixed**, and by the direction the report ranked first: the compiler now owns
+an inline-C-returned carrier. The documented advice is true rather than
+annotated, so directions 2 and 3 were not needed.
+
+**"Needs a way to know the callee boxed rather than returned a by-value
+monomorph"** was the open question, and the answer was already in the tree:
+ownership is recorded ONCE where the fact is known and consumed at ONE place.
+
+- **Mark** (`emit_value`, emit_expr.c): a call-result temp is marked owning when
+  the callee's body is inline C, its DECLARED return type is an Option/Result
+  application, and the temp is spelled `int64_t` -- that last condition being
+  what says the callee handed back the BOX rather than a by-value monomorph,
+  which allocates nothing.
+- **Consume** (`emit_carrier_bridge`, emit_core.c): the carrier->concrete
+  readback already copied the box's contents into an aggregate and abandoned
+  it. It now materializes the copy into a temp and frees the box. Both arms:
+  the Option branch (null-guarded, because `tur_none()` is the null carrier and
+  allocates nothing) and the Result branch (no guard -- both variants carry a
+  payload, which is also why SR3's niche is Option-only, and `result/bimap`'s
+  `tur_box_ok` is the site this branch covers).
+
+Routing it through the bridge is why every consumer position gets it at once --
+let binding, call argument, match scrutinee, ctor argument, container element --
+without each needing its own rule. Marks are cleared when consumed, so a temp
+bridged twice cannot double-free.
+
+**The declared-vs-resolved distinction is the whole safety argument, and it
+cost a double free to find.** The first draft keyed on the call's RESOLVED
+type. But `vec-get [A] (v : (Vec A)) : A` is ALSO an inline-C function, and
+`(:: (vec-get v 0) (Option int))` resolves to an Option app -- while the box
+belongs to the VECTOR, which frees it in `vec-free`.
+`tests/fixtures/vec-app-element-box-lifecycle` aborted with "double free
+detected in tcache 2", which is exactly the fixture that exists to catch this
+("a double-free or a use-after-free here aborts instead of printing"). Keying
+on the callee's `result_full_type` fixes it: a declared `: A` is borrow-shaped,
+a declared `: (Option T)` is the minting shape.
+
+**The contract is now documented** rather than implied, in
+[inline-c-results-guide.md](../guides/inline-c-results-guide.md) ("Who owns the
+box") and in `CLAUDE.md`: return a fresh box, and give a borrowed box a
+borrow-shaped signature.
+
+**The two open sub-questions are answered by being made moot, not by being
+fixed:**
+
+- The `(Option rc<A>)` return-vs-construction inconsistency (direction 2)
+  **still stands** -- `(some rc)` is still rejected while the inline-C form is
+  accepted. It no longer blocks anything, because `weak/upgrade` keeps its
+  inline-C form and no longer leaks. Worth its own report if anyone wants the
+  split available; the rejection's stated rationale ("elements go through an
+  int64 carrier") is measurably stale for a by-value monomorph, whose `Some`
+  arm is a typed `RcControlBlock *`.
+- Converting the two stdlib sites (direction 3) is unnecessary; both are
+  correct as written.
+
+**Validation.** `tests/fixtures/weak-upgrade-after-drop` was the `known-leak`
+fixture and is now clean, so its marker is deleted -- and the harness enforces
+that, failing a `known-leak` fixture that runs clean, which is how the fix was
+confirmed before the marker came off. Leak-check 60 passed / 0 failed /
+**0 known-open** (was 59/0/1). Full suite 2747/0 after regenerating three
+snapshots that gained the free; option-niche seam 9/0; sr4 seam 24/0.

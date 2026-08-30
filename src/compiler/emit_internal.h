@@ -689,6 +689,14 @@ void emit_inline_c_raw_locals_collect(const struct Expr *body,
 void emit_localvar_reset(void);
 void emit_localvar_record_ctype(const char *cname, const char *ctype);
 const char *emit_localvar_lookup_ctype(const char *cname);
+
+/* inline-c-option-carrier-box-leaks: the owned-carrier side table.  A call
+ * temp holding a carrier box an inline-C body malloc'd is marked here, and the
+ * carrier->concrete bridge frees the box after copying its contents out.  See
+ * the table's comment in emit_module.c. */
+void emit_owned_carrier_mark(const char *cname);
+bool emit_owned_carrier_is(const char *cname);
+void emit_owned_carrier_clear(const char *cname);
 /* S1 (jit-engine-plan section 4): true when an emitted C type NAME denotes a
  * scalar -- any pointer, or one of the primitive/stdint spellings the emitter
  * produces.  Anything else (a struct typedef such as `Option__int` or

@@ -8211,71 +8211,81 @@ int main(int argc, char **argv) {
         {
             int64_t __ps_172 = (open_hydevice(INT64_C(7)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-                        tur_adt_Result__Device__int r_1441 = (*(tur_adt_Result__Device__int *)(intptr_t)(__ps_172));
+                        int64_t __t173 = (int64_t)(intptr_t)(__ps_172);
+            tur_adt_Result__Device__int __t174 = (*(tur_adt_Result__Device__int *)(intptr_t)(__t173));
+            if (__t173) free((void *)(intptr_t)(__t173));
+            tur_adt_Result__Device__int r_1441 = __t174;
             (void)r_1441;
-            bool __ps_173 = (ok___spec__bool_tur_adt_Result__Device__int(r_1441));
+            bool __ps_175 = (ok___spec__bool_tur_adt_Result__Device__int(r_1441));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            puts((__ps_173) ? "true" : "false");
-            void * __ps_174 = (ok_val__spec__void___tur_adt_Result__Device__int(r_1441));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
-            int64_t __ps_175 = (device_hytag((void *)(intptr_t)(__ps_174)));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
-            printf("%lld\n", (long long)(__ps_175));
+            puts((__ps_175) ? "true" : "false");
             void * __ps_176 = (ok_val__spec__void___tur_adt_Result__Device__int(r_1441));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            device_hyfree((void *)(intptr_t)(__ps_176));
+            int64_t __ps_177 = (device_hytag((void *)(intptr_t)(__ps_176)));
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+            printf("%lld\n", (long long)(__ps_177));
+            void * __ps_178 = (ok_val__spec__void___tur_adt_Result__Device__int(r_1441));
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+            device_hyfree((void *)(intptr_t)(__ps_178));
         }
         {
-            int64_t __ps_177 = (open_hydevice(INT64_C(-1)));
+            int64_t __ps_179 = (open_hydevice(INT64_C(-1)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-                        tur_adt_Result__Device__int e_1442 = (*(tur_adt_Result__Device__int *)(intptr_t)(__ps_177));
+                        int64_t __t180 = (int64_t)(intptr_t)(__ps_179);
+            tur_adt_Result__Device__int __t181 = (*(tur_adt_Result__Device__int *)(intptr_t)(__t180));
+            if (__t180) free((void *)(intptr_t)(__t180));
+            tur_adt_Result__Device__int e_1442 = __t181;
             (void)e_1442;
-            bool __ps_178 = (err___spec__bool_tur_adt_Result__Device__int(e_1442));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
-            puts((__ps_178) ? "true" : "false");
-            int64_t __ps_179 = (err_val__spec__int64_t_tur_adt_Result__Device__int(e_1442));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
-            printf("%lld\n", (long long)(__ps_179));
-        }
-        {
-            int64_t __ps_180 = (maybe_hyopen(INT64_C(5)));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
-                        int64_t __t181 = (int64_t)(intptr_t)(__ps_180);
-            tur_adt_Option__Device o_1443 = (__t181 ? (*(tur_adt_Option__Device *)(intptr_t)(__t181)) : (tur_adt_Option__Device){0});
-            (void)o_1443;
-            bool __ps_182 = (some___spec__bool_tur_adt_Option__Device(o_1443));
+            bool __ps_182 = (err___spec__bool_tur_adt_Result__Device__int(e_1442));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             puts((__ps_182) ? "true" : "false");
-            void * __ps_183 = (unwrap__spec__void___tur_adt_Option__Device(o_1443));
+            int64_t __ps_183 = (err_val__spec__int64_t_tur_adt_Result__Device__int(e_1442));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            int64_t __ps_184 = (device_hytag((void *)(intptr_t)(__ps_183)));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
-            printf("%lld\n", (long long)(__ps_184));
-            void * __ps_185 = (unwrap__spec__void___tur_adt_Option__Device(o_1443));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
-            device_hyfree((void *)(intptr_t)(__ps_185));
+            printf("%lld\n", (long long)(__ps_183));
         }
-        int64_t __ps_186 = (maybe_hyopen(INT64_C(-1)));
+        {
+            int64_t __ps_184 = (maybe_hyopen(INT64_C(5)));
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+                        int64_t __t185 = (int64_t)(intptr_t)(__ps_184);
+            tur_adt_Option__Device __t186 = (__t185 ? (*(tur_adt_Option__Device *)(intptr_t)(__t185)) : (tur_adt_Option__Device){0});
+            if (__t185) free((void *)(intptr_t)(__t185));
+            tur_adt_Option__Device o_1443 = __t186;
+            (void)o_1443;
+            bool __ps_187 = (some___spec__bool_tur_adt_Option__Device(o_1443));
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+            puts((__ps_187) ? "true" : "false");
+            void * __ps_188 = (unwrap__spec__void___tur_adt_Option__Device(o_1443));
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+            int64_t __ps_189 = (device_hytag((void *)(intptr_t)(__ps_188)));
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+            printf("%lld\n", (long long)(__ps_189));
+            void * __ps_190 = (unwrap__spec__void___tur_adt_Option__Device(o_1443));
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+            device_hyfree((void *)(intptr_t)(__ps_190));
+        }
+        int64_t __ps_191 = (maybe_hyopen(INT64_C(-1)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        int64_t __t187 = (int64_t)(intptr_t)(__ps_186);
-        bool __ps_188 = (some___spec__bool_tur_adt_Option__Device((__t187 ? (*(tur_adt_Option__Device *)(intptr_t)(__t187)) : (tur_adt_Option__Device){0})));
+        int64_t __t192 = (int64_t)(intptr_t)(__ps_191);
+        tur_adt_Option__Device __t193 = (__t192 ? (*(tur_adt_Option__Device *)(intptr_t)(__t192)) : (tur_adt_Option__Device){0});
+        if (__t192) free((void *)(intptr_t)(__t192));
+        bool __ps_194 = (some___spec__bool_tur_adt_Option__Device(__t193));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        puts((__ps_188) ? "true" : "false");
-        int64_t __t189;
-        __t189 = INT64_C(0);
-        return (int)__t189;
+        puts((__ps_194) ? "true" : "false");
+        int64_t __t195;
+        __t195 = INT64_C(0);
+        return (int)__t195;
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
-        tur_adt_Cons__int * __ps_190 = (ctor_Cons__int(h, t));
+        tur_adt_Cons__int * __ps_196 = (ctor_Cons__int(h, t));
         if (tur_panicking) return ((tur_adt_Cons__int *)0);
-        return __ps_190;
+        return __ps_196;
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        tur_adt_Vec__int * __ps_191 = (vec_new__spec__tur_adt_Vec__int__());
+        tur_adt_Vec__int * __ps_197 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return ((tur_adt_Vec__int *)0);
-        return __ps_191;
+        return __ps_197;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
@@ -8288,133 +8298,133 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
 }
 
 static bool ok___spec__bool_tur_adt_Result__Device__int(tur_adt_Result__Device__int r) {
-        bool __t192 = 0;
+        bool __t198 = 0;
         {
             tur_adt_Result__Device__int __scrut_v = (r);
             tur_adt_Result__Device__int *__scrut = &__scrut_v;
             switch (__scrut->tag) {
             case 0: {
                 void * _un_936 = (void *)__scrut->as.Ok._0;
-                __t192 = true;
+                __t198 = true;
                 break;
             }
             case 1: {
                 int64_t _un_937 = (int64_t)__scrut->as.Err._0;
-                __t192 = false;
+                __t198 = false;
                 break;
             }
             default: break;
             }
         }
-        return __t192;
+        return __t198;
 }
 
 static void * ok_val__spec__void___tur_adt_Result__Device__int(tur_adt_Result__Device__int r) {
-        void * __t193 = 0;
+        void * __t199 = 0;
         {
             tur_adt_Result__Device__int __scrut_v = (r);
             tur_adt_Result__Device__int *__scrut = &__scrut_v;
             switch (__scrut->tag) {
             case 0: {
                 void * v_942 = (void *)__scrut->as.Ok._0;
-                __t193 = v_942;
+                __t199 = v_942;
                 break;
             }
             case 1: {
                 int64_t _un_943 = (int64_t)__scrut->as.Err._0;
-                __t193 = ((void *)0);
+                __t199 = ((void *)0);
                 break;
             }
             default: break;
             }
         }
-        return __t193;
+        return __t199;
 }
 
 static bool err___spec__bool_tur_adt_Result__Device__int(tur_adt_Result__Device__int r) {
-        bool __t194 = 0;
+        bool __t200 = 0;
         {
             tur_adt_Result__Device__int __scrut_v = (r);
             tur_adt_Result__Device__int *__scrut = &__scrut_v;
             switch (__scrut->tag) {
             case 0: {
                 void * _un_939 = (void *)__scrut->as.Ok._0;
-                __t194 = false;
+                __t200 = false;
                 break;
             }
             case 1: {
                 int64_t _un_940 = (int64_t)__scrut->as.Err._0;
-                __t194 = true;
+                __t200 = true;
                 break;
             }
             default: break;
             }
         }
-        return __t194;
+        return __t200;
 }
 
 static int64_t err_val__spec__int64_t_tur_adt_Result__Device__int(tur_adt_Result__Device__int r) {
-        int64_t __t195 = 0;
+        int64_t __t201 = 0;
         {
             tur_adt_Result__Device__int __scrut_v = (r);
             tur_adt_Result__Device__int *__scrut = &__scrut_v;
             switch (__scrut->tag) {
             case 0: {
                 void * _un_945 = (void *)__scrut->as.Ok._0;
-                __t195 = ((int64_t)0);
+                __t201 = ((int64_t)0);
                 break;
             }
             case 1: {
                 int64_t e_946 = (int64_t)__scrut->as.Err._0;
-                __t195 = e_946;
+                __t201 = e_946;
                 break;
             }
             default: break;
             }
         }
-        return __t195;
+        return __t201;
 }
 
 static bool some___spec__bool_tur_adt_Option__Device(tur_adt_Option__Device o) {
-        bool __t196 = 0;
+        bool __t202 = 0;
         {
             tur_adt_Option__Device __scrut_v = (o);
             tur_adt_Option__Device *__scrut = &__scrut_v;
             switch (__scrut->tag) {
             case 1: {
                 void * _un_886 = (void *)__scrut->as.Some._0;
-                __t196 = true;
+                __t202 = true;
                 break;
             }
             case 0: {
-                __t196 = false;
+                __t202 = false;
                 break;
             }
             default: break;
             }
         }
-        return __t196;
+        return __t202;
 }
 
 static void * unwrap__spec__void___tur_adt_Option__Device(tur_adt_Option__Device o) {
-        void * __t197 = 0;
+        void * __t203 = 0;
         {
             tur_adt_Option__Device __scrut_v = (o);
             tur_adt_Option__Device *__scrut = &__scrut_v;
             switch (__scrut->tag) {
             case 1: {
                 void * v_890 = (void *)__scrut->as.Some._0;
-                __t197 = v_890;
+                __t203 = v_890;
                 break;
             }
             case 0: {
-                __t197 = ((void *)0);
+                __t203 = ((void *)0);
                 break;
             }
             default: break;
             }
         }
-        return __t197;
+        return __t203;
 }
 
 

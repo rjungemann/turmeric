@@ -6472,6 +6472,58 @@ static EmitLocalVarEntry *g_lv_tab;
 static uint32_t           g_lv_tab_n;
 static uint32_t           g_lv_tab_cap;
 
+/* inline-c-option-carrier-box-leaks: the OWNED-CARRIER side table.
+ *
+ * An inline-C body declared `: (Option T)` builds its result with
+ * `tur_some_ptr` / `tur_box_*`, which malloc the carrier box.  The allocation
+ * happens inside a C body, so no elaborated expression corresponds to it and
+ * nothing could be given ownership -- the box leaked once per call, and that
+ * is the form the inline-C results guide recommends.
+ *
+ * Ownership is recorded ONCE, where the fact is known (the call-result temp in
+ * emit_value), and consumed at ONE place (the carrier->concrete bridge, which
+ * copies the box's contents into an aggregate and previously abandoned it).
+ * Routing it through the bridge is what makes every consumer position -- let
+ * binding, call argument, match scrutinee, ctor argument, container element --
+ * free the box without each one needing its own rule.
+ *
+ * Marks are CLEARED when consumed, so a temp bridged twice cannot double-free.
+ * Same lifetime and shape as the localvar table above; reset with it. */
+static char   **g_own_tab;
+static uint32_t g_own_tab_n;
+static uint32_t g_own_tab_cap;
+
+void emit_owned_carrier_mark(const char *cname) {
+    if (!cname) return;
+    for (uint32_t i = 0; i < g_own_tab_n; i++)
+        if (strcmp(g_own_tab[i], cname) == 0) return;
+    if (g_own_tab_n == g_own_tab_cap) {
+        uint32_t nc = g_own_tab_cap ? g_own_tab_cap * 2 : 64;
+        char **nt = (char **)realloc(g_own_tab, nc * sizeof(char *));
+        if (!nt) return;
+        g_own_tab = nt;
+        g_own_tab_cap = nc;
+    }
+    g_own_tab[g_own_tab_n++] = strdup(cname);
+}
+
+bool emit_owned_carrier_is(const char *cname) {
+    if (!cname) return false;
+    for (uint32_t i = 0; i < g_own_tab_n; i++)
+        if (strcmp(g_own_tab[i], cname) == 0) return true;
+    return false;
+}
+
+void emit_owned_carrier_clear(const char *cname) {
+    if (!cname) return;
+    for (uint32_t i = 0; i < g_own_tab_n; i++)
+        if (strcmp(g_own_tab[i], cname) == 0) {
+            free(g_own_tab[i]);
+            g_own_tab[i] = g_own_tab[--g_own_tab_n];
+            return;
+        }
+}
+
 void emit_localvar_reset(void) {
     for (uint32_t i = 0; i < g_lv_tab_n; i++) {
         free(g_lv_tab[i].cname);
@@ -6481,6 +6533,11 @@ void emit_localvar_reset(void) {
     g_lv_tab = NULL;
     g_lv_tab_n = 0;
     g_lv_tab_cap = 0;
+    for (uint32_t i = 0; i < g_own_tab_n; i++) free(g_own_tab[i]);
+    free(g_own_tab);
+    g_own_tab = NULL;
+    g_own_tab_n = 0;
+    g_own_tab_cap = 0;
 }
 
 void emit_localvar_record_ctype(const char *cname, const char *ctype) {

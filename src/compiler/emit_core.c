@@ -5034,14 +5034,67 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                 if (_adt && _adt->ctors && _adt->ctors[0] &&
                     adt_ctor_is_null_none(_adt, _adt->ctors[0])) {
                     /* Bind the carrier once: src_str may be a call. */
+                    bool owns_box = emit_str_is_bare_ident(src_str) &&
+                                    emit_owned_carrier_is(src_str);
                     char *ctmp = fresh_tmp(ctx);
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
                                ctmp, src_str);
                     char *z = emit_c_zero_of(cname);
-                    buf_printf(&out, "(%s ? (*(%s *)(intptr_t)(%s)) : %s)",
-                               ctmp, cname, ctmp, z);
+                    if (owns_box) {
+                        /* inline-c-option-carrier-box-leaks: the box was
+                         * malloc'd by an inline-C body and this readback is
+                         * what consumes it.  The deref COPIES the contents
+                         * into the aggregate, so once the copy is
+                         * materialized the box is dead -- but the expression
+                         * form below cannot free it (there is nowhere in a
+                         * ternary to put a statement), which is exactly why
+                         * it leaked.  Materialize into a temp, then free.
+                         *
+                         * The null test does double duty: `tur_none()` is the
+                         * null carrier (SR3 slice A), so a None allocates
+                         * nothing and must not be freed. */
+                        char *vtmp = fresh_tmp(ctx);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s %s = (%s ? (*(%s *)(intptr_t)(%s)) : %s);\n",
+                                   cname, vtmp, ctmp, cname, ctmp, z);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "if (%s) free((void *)(intptr_t)(%s));\n",
+                                   ctmp, ctmp);
+                        buf_printf(&out, "%s", vtmp);
+                        /* Consume the mark: a temp bridged twice must not be
+                         * freed twice. */
+                        emit_owned_carrier_clear(src_str);
+                        free(vtmp);
+                    } else {
+                        buf_printf(&out, "(%s ? (*(%s *)(intptr_t)(%s)) : %s)",
+                                   ctmp, cname, ctmp, z);
+                    }
                     free(z);
+                    free(ctmp);
+                } else if (emit_str_is_bare_ident(src_str) &&
+                           emit_owned_carrier_is(src_str)) {
+                    /* inline-c-option-carrier-box-leaks, the Result half.  Same
+                     * consumption as the Option branch above, minus the null
+                     * test: a Result has no null value to produce (both
+                     * variants carry a payload, which is also why SR3's niche
+                     * is Option-only), so the box is always there to free.
+                     * `stdlib/result.tur`'s `tur_box_ok` in `result/bimap` is
+                     * the in-tree site the report names for this branch. */
+                    char *ctmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
+                               ctmp, src_str);
+                    char *vtmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s %s = (*(%s *)(intptr_t)(%s));\n",
+                               cname, vtmp, cname, ctmp);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "if (%s) free((void *)(intptr_t)(%s));\n",
+                               ctmp, ctmp);
+                    buf_printf(&out, "%s", vtmp);
+                    emit_owned_carrier_clear(src_str);
+                    free(vtmp);
                     free(ctmp);
                 } else {
                     /* Pointer carrier: dereference the heap pointer. */
