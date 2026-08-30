@@ -210,6 +210,71 @@ change.** Two things have to happen together: `(.run b)` / `((.run b))` on a
 nullary fn field needs a resolved result type, and that path has to preserve
 the fat representation instead of reconstructing an unboxed one.
 
+## The longer-term fix
+
+The end state is that a `:fn` field just works at every arity, and both the
+special-case machinery and any interim diagnostic are **deleted** rather than
+relaxed. Three things have to be true together; none is sufficient alone, which
+is why the two bounded attempts below did not land.
+
+**1. The field's representation must be uniform.** Today it is conditional:
+`elab_structs.c` marks a concrete `(fn ...)` field `boxed` for arity 1..4 and
+leaves 0 and >4 thin. That split is the bug's whole surface -- it means a field
+declared identically behaves differently by arity, and only the arities nobody
+had tested are broken. The fix makes every concrete fn field carry the fat
+representation, so a capturing closure is always storable.
+
+**2. The nullary read-then-call path must exist and preserve fatness.** This is
+the part the arity bound was hiding. At arity 0 there is no direct-call form --
+`(.run b)` reads, and there is no argument list to distinguish a call from a
+read -- so invoking it requires reading the field and calling the value, and
+today that path is broken twice over: `((.run b))` types as `?`, and
+`((:: (.run b) (fn [] int)))` typechecks only by building a **fresh unboxed
+`TY_FN`**, which is what selects the thin call. Boxing the store without fixing
+this makes the store and the read disagree, which is exactly the hazard the
+original bound's comment named.
+
+**3. `boxed` must survive the round trip.** `types.h` describes the mechanism --
+a boxed `TY_FN` is "always called through the fat protocol", and a bare one
+coerces to boxed via `EX_FN_TO_FAT`, never the reverse -- but the flag is
+absent from both the `TY_FN` mangle and `type_eq`, so any path that rebuilds a
+type from a signature loses it. The ascription above is one such path. Until
+`boxed` is part of type identity, every fix is local to the sites that happen
+to remember.
+
+Doing 1 without 2 breaks reads; doing 2 without 3 leaves the ascription
+rebuilding an unboxed type; doing 3 alone changes nothing observable. That is
+the shape of the work, and it is a type-system change, not a codegen patch.
+
+**Deleting, not relaxing.** When this lands, `elab_structs.c`'s arity bound,
+`elab_call.c`'s `inner_arity` floor, and any interim diagnostic all go away --
+they are scaffolding around a representation that stopped being conditional.
+The `StThunk` workaround in `stdlib/logic.tur` goes with them (row 1 of
+[workarounds-to-remove](workarounds-to-remove.md)).
+
+## Interim diagnostic: attempted, not landed
+
+The recommendation below is still right -- refuse the store with a
+"not supported yet" error rather than emitting a crash -- but **three attempts
+to place it all failed, and the reason is worth recording.**
+
+| hook tried | why it failed |
+|---|---|
+| Lower both arity floors to 0 (`elab_structs.c` + `elab_call.c`) | Built clean, suite green, **changed nothing** -- all repros still segfaulted. Reverted: an inert change that silently adds drop glue and makes the struct move-only. |
+| The parametric-ADT shim loop, `elab_call.c:~3189` | Never reached. Probed with the ctor name: `SInc`/`Box` never appear. That loop serves ADT-*application* constructions; an ordinary ctor call does not go through it, and the field's `full_type` is NULL there. |
+| The general ctor arg type-check, `elab_call.c:~3696` (where `TUR-E0001` for a wrong ctor arg is raised) | Also never reached for these stores. Probed the same way: no `fnfield:` line for either repro. |
+
+So the store of a closure into a concrete fn field goes through **none** of the
+three sites that look like the obvious home for the check. Locating the path it
+*does* take is the first task for whoever picks this up -- and the probe that
+answers it is cheap: print `fn_binding->name->name` at a candidate site and look
+for the constructor's name.
+
+Two conclusions from that. Placing the diagnostic is not the small change it
+appears to be, so it should not be quoted as a quick win. And a check placed
+without confirming it fires is worse than no check -- twice here a version
+built clean, left the suite green, and refused nothing.
+
 ## Fix directions
 
 1. ~~**Widen the argument-type determination in `emit_expr.c`**~~ -- **DONE
