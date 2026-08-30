@@ -318,11 +318,32 @@ By-value structs are heap-boxed on widening (a `malloc`'d copy) and unboxed by
 dereference on `cast`; ADTs and `cstr` are pointer-carried and ride the carrier
 directly; floats are stored by their bit pattern so no precision is lost.
 
-> **Note:** the struct heap-box is owned by the `any` value's (untracked)
-> lifetime, so the `malloc`'d copy is not freed -- widening a struct to `any`
-> leaks one allocation per widen. This is acceptable for the gradual-typing
-> use cases `any` targets; if you need a struct in `any` on a hot path, prefer
-> a pointer/ADT payload, which is carrier-resident and allocation-free.
+> **Note:** widening a struct to `any` does not leak. The heap box a by-value
+> payload needs is owned in every position it can occupy:
+>
+> - **As a call argument**, when the callee neither retains the value nor can
+>   suspend, there is no allocation at all -- the copy lives in the caller's
+>   frame.
+> - **Bound to a local** that does not escape, the box is released when the
+>   local dies: at scope exit, at its sole consuming use when the scope's end is
+>   unreachable, and at a `return` or a tail-call back-edge otherwise. A local
+>   that `is?` narrows is covered too, even though the narrowing rebinds the
+>   name.
+> - **As a temporary** -- never named -- produced by a function whose body ends
+>   in a widen, or forwarded through a pure passthrough, and consumed by a
+>   non-retaining, effect-free call.
+>
+> A callee that retains the value, has an inline-C body, may suspend, or is
+> called indirectly keeps the box by design: the caller cannot know when it
+> dies. That is the one place a struct payload still costs an allocation, and
+> the guidance there is unchanged -- prefer a pointer/ADT payload, which is
+> carrier-resident and allocation-free.
+>
+> Pinned leak-clean under LeakSanitizer by `tests/fixtures/any-widen-frame-box`,
+> `any-widen-local-drop`, `any-widen-temp-drop`,
+> `any-widen-drop-past-early-exit`, and `any-widen-drop-narrowed`; the shapes
+> that must NOT be dropped by `any-widen-retaining-callee`. See
+> `docs/archive/any-struct-box-leak-per-widen.md`.
 
 ---
 

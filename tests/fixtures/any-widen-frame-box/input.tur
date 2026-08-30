@@ -1,0 +1,50 @@
+;; any-widen-frame-box -- widening a by-value struct to `any` for a call that
+;; provably neither retains it nor suspends puts the payload in the CALLER's
+;; frame, so there is no allocation to leak.
+;;
+;; Widening a by-value struct to `any` heap-copies it, because the payload
+;; cannot ride tur_tagged_t's 8-byte value slot.  Nothing owned that copy: one
+;; malloc per widen, with no drop point anywhere, so a loop over it grew RSS
+;; without bound (docs/reported/any-struct-box-leak-per-widen.md).
+;;
+;; When the callee's `any` parameter is inferred non-retaining -- the same
+;; inference the closure-env and catch-box frees already use -- and the callee
+;; cannot suspend, the copy is a plain local in the caller's frame instead.
+;;
+;; This fixture carries requires.leak-check: `tests/run-leak-check.sh` builds it
+;; under AddressSanitizer and fails if a single allocation is orphaned.  The
+;; loop count is what makes that meaningful -- one leaked 16-byte box is easy to
+;; miss by eye, 2000 of them are not.
+
+(defstruct Pt [x : int y : int])
+
+;; Reads the tag only.  Its result is an int, so nothing can carry the payload
+;; back out of the call.
+(defn is-pt? [v : any] : int
+  (if (is? v Pt) 1 0))
+
+;; Reads through `type-of`, whose cstr result is a static name from the
+;; runtime's table, never a pointer into the payload.
+(defn names-pt? [v : any] : int
+  (if (= (type-of v) "Pt") 1 0))
+
+;; Reads through `cast`, which for a boxed by-value payload is a DEREF -- the
+;; result is a copy, so it does not alias the box either.  Unguarded on purpose:
+;; an `is?` guard flow-narrows `v` to Pt, and then `cast` has nothing to do.
+(defn sum-pt [v : any] : int
+  (let [p (cast v Pt)]
+    (+ (.x p) (.y p))))
+
+(defn drive [i : int n : int acc : int] : int
+  (if (= i n)
+    acc
+    (drive (+ i 1) n
+           (+ acc (+ (is-pt? (make-struct Pt i 1))
+                     (+ (names-pt? (make-struct Pt i 2))
+                        (sum-pt (make-struct Pt i 3))))))))
+
+(defn main [] : int
+  ;; Three widens a turn.  Per turn i: 1 + 1 + (i + 3).
+  ;; Over i in [0, 2000): 2000*5 + (0+1+...+1999) = 10000 + 1999000 = 2009000.
+  (println (drive 0 2000 0))
+  0)

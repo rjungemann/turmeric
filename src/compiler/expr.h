@@ -567,6 +567,31 @@ struct Binding {
      * exit (the make-scaler shape).  False for non-fns and any fn that returns a
      * shared/owning-capture/param closure. */
     bool                returns_fresh_closure;
+    /* any-struct-box-leak-per-widen (the temporary case): every call to this
+     * function produces a FRESH `any` -- its body's tail is a widen, so the
+     * payload box is minted per call and aliases nothing the callee keeps.
+     * That is what lets a caller drop the box after consuming it.  Inferred
+     * exactly like returns_fresh_closure, and for the same reason: ownership of
+     * a returned value cannot be read off the call site alone. */
+    bool                returns_fresh_any;
+    /* any-struct-box-leak-per-widen (the passthrough case): this function's
+     * body is exactly `param[returns_any_param_idx]` -- it hands its argument
+     * straight back, and does not otherwise retain it.  So the OWNERSHIP of the
+     * value it returns is the ownership of that argument: a caller that passed
+     * a temporary it owned still owns the result.  -1 when the function is not
+     * that shape.  Distinct from returns_fresh_any, which says the value was
+     * minted here; this says it was forwarded. */
+    int                 returns_any_param_idx;
+    /* any-struct-box-leak-per-widen: this `any` binding's payload box is dropped
+     * at its single consuming CALL, not at its scope's exit -- so the scope-exit
+     * rule must skip it or the box would be freed twice.  Set when the drop was
+     * moved to the use because the scope's end is not reachable from the body
+     * (a tail call, a `return`), which is exactly where a trailing free is
+     * jumped past.  On the Binding rather than the LetBinding because
+     * binding_new zeroes, while LetBinding arrays are built field-by-field at
+     * half a dozen sites -- one missed initializer there is an uninitialized
+     * read, which is how UBSan found the first draft of this. */
+    bool                any_dropped_at_use;
     /* Existential `open` dispatch: when this binding names the `v` of
      * `(open e [a v] ...)` and `e` is a constraint-carrying existential, this
      * points at the packed scrutinee's TY_EXISTS type (carrying the constraint
@@ -1171,6 +1196,15 @@ struct Expr {
     ExprKind kind;
     Type     type;
     Span     span;
+    /* any-struct-box-leak-per-widen (the temporary case): this expression
+     * PRODUCES an `any` whose payload box nothing else owns, and it flows into
+     * a call parameter that provably neither retains it nor suspends -- so the
+     * box dies as soon as that call returns.  Stamped by elab at the call site
+     * (the only place that knows the callee); emit_value hoists such a value
+     * into a temp and the enclosing call emission drops it once the call has
+     * been materialized.  Outside the union because the argument can be any
+     * node kind. */
+    bool     any_drop_after;
     union {
         bool         b;
         int64_t      i;
@@ -1501,6 +1535,13 @@ struct Expr {
         struct {
             int64_t     tag_idx;  /* member index (for TY_UNION) or TypeKind (for TY_ANY) */
             struct Expr *value;   /* the value being injected */
+            /* any-struct-box-leak-per-widen: this widen is a call ARGUMENT whose
+             * callee provably neither retains the `any` nor suspends, so the
+             * by-value payload can live in a caller-frame temporary instead of a
+             * malloc'd box nothing ever frees.  Set by elab at the call site
+             * (which is the only place that knows the callee); the emitter
+             * consults it only on the by-value-ADT branch, the one that boxes. */
+            bool        frame_box;
         } union_inject_;
         /* IT4 gradual typing */
         struct { struct Expr *value; } any_type_of_;   /* (type-of x) — x must be TY_ANY */

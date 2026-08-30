@@ -1,0 +1,61 @@
+;; arrow-struct-typed-arrow -- a looped arrow declared over (Tuple2 int int)
+;; rather than the erased :int carrier.
+;;
+;; Every arrow combinator hands its function argument to the consumer through a
+;; fat box whose slot 0 an erased consumer casts to
+;; `int64_t (*)(void *, int64_t)`.  A wide by-value aggregate crosses that
+;; boundary as an int64 heap-box POINTER, so a callee declared over
+;; (Tuple2 int int) -- which reads a struct out of two registers and returns one
+;; in two more -- needs a bridge shim on both sides.  It used not to get one:
+;; use_typed_thunk_abi ANDs the result and the parameters, and a <= 16 byte
+;; monomorph RESULT is deliberately declined (it rides the generic forwarding
+;; shim), which took the PARAMETER bridge down with it.  The callee then read
+;; the box pointer as a struct and the caller read the returned struct's first
+;; eightbyte as a pointer: silently wrong, then a segfault.
+;;
+;; This fixture pins the repair by asserting EQUIVALENCE: the same computation
+;; spelled over the struct type and over the erased carrier must agree, under
+;; every member of the arrow-loop family.
+
+(load "stdlib/arrow.tur")
+(load "stdlib/tuple.tur")
+
+;; --- the struct-typed spelling: wide param, wide result --------------------
+(defn step-struct [t : (Tuple2 int int)] : (Tuple2 int int)
+  (let [b (tuple2-1st t)
+        c (loop-cell-of (tuple2-2nd t))
+        d (if (loop-cell-ready? c) (loop-cell-force c) -1)]
+    (tuple2 (+ b d) (* b 2))))
+
+;; --- the erased-carrier spelling of exactly the same arrow ------------------
+(defn step-carrier [p : int] : int
+  (let [t (:: p (Tuple2 int int))
+        b (tuple2-1st t)
+        c (loop-cell-of (tuple2-2nd t))
+        d (if (loop-cell-ready? c) (loop-cell-force c) -1)]
+    (:: (tuple2 (+ b d) (* b 2)) :int)))
+
+;; --- wide param, narrow result ---------------------------------------------
+(defn sum-slots [t : (Tuple2 int int)] : int
+  (+ (tuple2-1st t) (tuple2-2nd t)))
+
+(defn main [] : int
+  ;; arrow-loop: the cell is empty mid-run, so d reads as -1 in both spellings.
+  (println ((arrow-loop step-struct) 5))          ;; 4
+  (println ((arrow-loop step-carrier) 5))         ;; 4
+
+  ;; arrow-loop-delay: seeded at 100, then carrying the previous d forward.
+  (let [ds (arrow-loop-delay step-struct 100)
+        dc (arrow-loop-delay step-carrier 100)]
+    (println (ds 5))                              ;; 105
+    (println (dc 5))                              ;; 105
+    (println (ds 7))                              ;; 17
+    (println (dc 7)))                             ;; 17
+
+  ;; arrow-loop-fix: iterate the seeded cell to a fixpoint.
+  (println ((arrow-loop-fix step-struct 1 4) 3))   ;; 9
+  (println ((arrow-loop-fix step-carrier 1 4) 3))  ;; 9
+
+  ;; A wide parameter with a narrow result takes the same bridge.
+  (println (sum-slots (tuple2 4 5)))               ;; 9
+  0)

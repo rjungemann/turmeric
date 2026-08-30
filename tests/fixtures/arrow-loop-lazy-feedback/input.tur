@@ -1,0 +1,45 @@
+;; arrow-loop-lazy-feedback -- ArrowLoop [(->)] ties the knot through a cell.
+;;
+;; Turmeric is strict, so the fed-back d cannot BE the value the same run is
+;; about to produce.  arrow-loop therefore hands the looped arrow a LoopCell in
+;; slot 1: empty while the arrow runs, filled with the arrow's d output the
+;; moment it returns.  A read that happens LATER -- through a handle the arrow
+;; parked in its own c output -- observes the d this very run produced.  That is
+;; true lazy feedback, not the old "the arrow must ignore d" subset.
+
+(load "stdlib/arrow.tur")
+(load "stdlib/tuple.tur")
+
+;; Looped arrow: c = the feedback cell itself (a deferred read), d = b * 10.
+;; The c output is thus DEFINED BY the d output of the same run.
+(defn park-cell [p] : int
+  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  P *s = (P *)(intptr_t)p;
+  P *r = (P *)malloc(sizeof(P));
+  r->e1 = s->e2;          /* c = the feedback cell handle */
+  r->e2 = s->e1 * 10;     /* d = b * 10, only known at the end of the run */
+  return (int64_t)(intptr_t)r; ```)
+
+;; The same arrow written in Turmeric, on the erased pair carrier: it reads the
+;; cell eagerly, guarded by loop-cell-ready?, so under arrow-loop it sees the
+;; black hole (not ready) and falls back to -1 instead of panicking.
+(defn read-cell [p : int] : int
+  (let [t (:: p (Tuple2 int int))
+        b (tuple2-1st t)
+        c (loop-cell-of (tuple2-2nd t))
+        d (if (loop-cell-ready? c) (loop-cell-force c) -1)]
+    (:: (tuple2 (+ b d) (* b 2)) :int)))
+
+(defn main [] : int
+  ;; Knot-tying through the typeclass instance.
+  (let [lp (arrow-loop park-cell)
+        c  (loop-cell-of (lp 7))]
+    (println (loop-cell-ready? c))     ;; true -- filled once the run returned
+    (println (loop-cell-force c)))     ;; 70   -- the d this run produced
+  ;; The same thing through the bare-surface twin, with a second input.
+  (let [lz (arrow-loop-lazy park-cell)]
+    (println (loop-cell-force (loop-cell-of (lz 4)))))   ;; 40
+  ;; Mid-run the cell is still empty, and loop-cell-ready? says so.
+  (let [rd (arrow-loop read-cell)]
+    (println (rd 5)))                  ;; 5 + (-1) = 4
+  0)

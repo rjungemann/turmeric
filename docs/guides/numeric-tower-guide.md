@@ -208,6 +208,43 @@ and run on both the compiled and the interpreted harness against the *same*
 `expected.stdout`. If that ever diverges, the divergence is itself the bug worth
 finding.
 
+## Crossing between `int` and `float`
+
+Below the exact tower sits the ordinary machine pair, and moving between its two
+halves is **two different operations that must not share a spelling**:
+
+| you mean | int -> float | float -> int | from |
+| --- | --- | --- | --- |
+| the NUMBER -- convert | `(int->float 7)` => `7` | `(float->int 7.1)` => `7` | `stdlib/math.tur` |
+| the BIT PATTERN -- reinterpret | `(bits->float 7)` => `3.45846e-323` | `(float->bits 7.1)` => `4619679907765970534` | `stdlib/bits.tur` |
+
+`::` spells **neither**. An ascription between an integer kind and a float kind
+is a hard error, and the diagnostic names both replacements:
+
+```turmeric no-check
+(defstruct Mixed [n : int d : float])
+(defn mixedfold [m : Mixed] : float
+  (+ (:: (.n m) :float) (.d m)))   ; error: `::` between an integer and a
+                                   ; float kind is ambiguous
+```
+
+The reason is that **both operands are statically `:int`** in the two cases that
+mean opposite things. `(.n m)` above is a genuine integer wanting conversion.
+`(list-head c)` on a `Cons[float]` is float bits that reached an `:int`-typed
+slot through the erased carrier -- typed slots, variadic rest collection and the
+cons/HAMT carriers all round-trip floats that way -- and wants reinterpretation.
+Nothing in the types separates them, so whichever reading `::` picked, the other
+one's existing code would keep compiling and start returning silently wrong
+answers. The reinterpret reading is the one that shipped, and its failure mode
+is nasty: a small integer read as IEEE bits is a denormal, so a wrong
+`mixedfold` returns `0.25` rather than `3.25` -- a *dropped* term, not a garbage
+one.
+
+An integer **literal** is exempt and still converts (`(:: 7 :float)` is `7.0`):
+the author wrote a constant, so there is no carried value whose bits could be
+meant. All four functions behave identically compiled and interpreted. See
+[docs/archive/ascribe-int-to-float-expression-ambiguity.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ascribe-int-to-float-expression-ambiguity.md).
+
 ## Related
 
 - [data-literals-guide.md](data-literals-guide.md) -- the `#rat{...}` and

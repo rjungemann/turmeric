@@ -1,0 +1,1 @@
+any-struct-box-leak-per-widen: an `any` local must be dropped even when the scope end is unreachable -- and exactly once.

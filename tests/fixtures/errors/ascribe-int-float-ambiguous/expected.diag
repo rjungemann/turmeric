@@ -1,0 +1,3 @@
+`::` between an integer and a float kind is ambiguous
+to convert, use (int->float x)
+to reinterpret the bits

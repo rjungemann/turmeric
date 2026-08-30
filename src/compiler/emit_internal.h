@@ -334,6 +334,29 @@ typedef struct EmitCtx {
      * "struct". */
     char    **any_type_names;   /* identity key: type_name(), per monomorph */
     char    **any_type_shown;   /* what type-of reports for that id */
+    /* any-struct-box-leak-per-widen: is the payload behind this id HEAP-BOXED
+     * at the widen site (a by-value aggregate) rather than carried in the tag's
+     * value word?  Only a boxed one has anything to free, and the tag is the
+     * only thing a drop site knows -- an `any` local is typed `any`, not by its
+     * payload.  Interned alongside the id so the two cannot drift. */
+    bool     *any_type_boxed;
+    /* any-struct-box-leak-per-widen (the temporary case): C temp names holding
+     * owned `any` values whose payload box must be dropped once the call
+     * consuming them has been materialized.  Pushed when the argument is
+     * emitted, drained by the enclosing call's emission -- the mark/drain pair
+     * in emit_value keeps nested calls from stealing each other's entries. */
+    char    **any_pending;
+    uint32_t  n_any_pending;
+    uint32_t  cap_any_pending;
+    /* any-struct-box-leak-per-widen: C names of `any` locals whose payload box
+     * the ENCLOSING SCOPES own, innermost last.  The scope-exit drop is a
+     * trailing free, so an early exit -- a `return`, or a self-tail-call's
+     * back-edge goto -- jumps past it; those two sites walk this list and drop
+     * first, the same shape as the dynvar guards beside them.  A given path
+     * takes one or the other, never both, so nothing is freed twice. */
+    char    **any_scope_drops;
+    uint32_t  n_any_scope_drops;
+    uint32_t  cap_any_scope_drops;
     uint32_t  n_any_type_names;
     uint32_t  cap_any_type_names;
     /* poly-to-fat-typed-shim-plan: per-signature typed poly-to-fat shim tracking.
@@ -859,6 +882,9 @@ bool catch_box_binding_escapes(const Expr *e, const Binding *b);
  * but the single occurrence `ignore` (the return-tail use the caller is about to
  * copy out and free) is not counted as an escape.  Used to prove a returned
  * caught box is sole-owned -- it escapes nowhere except that return. */
+bool any_box_binding_escapes(const Expr *e, const Binding *b);
+bool any_box_binding_escapes_except(const Expr *e, const Binding *b,
+                                    const Expr *ignore);
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
                                       const Expr *ignore);
 /* catch-unwind-panic-payload-leaks (Leak 2): admit a deep box free when `b` is
@@ -969,6 +995,10 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
 /* type-of-cast-kind-granularity: the `any` box tag for a type -- its TypeKind
  * for a primitive, an interned per-monomorph id for a struct/ADT. */
 int64_t emit_any_type_id(EmitCtx *ctx, Type t);
+/* any-struct-box-leak-per-widen: the predicate the `any` widen uses to decide
+ * whether a payload is heap-boxed.  Exported so emit_any_type_id can intern the
+ * same answer for the drop side -- one predicate, not two that can drift. */
+bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t);
 /* Emit the per-program name table `__tur_any_name_ext` for the ids allocated
  * above.  Always emitted (a stub when none were), since the preamble
  * forward-declares it. */
@@ -980,6 +1010,13 @@ const char *ensure_catch_bits_shim(EmitCtx *ctx, Type result_type);
 
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params);
+/* arrow-struct-typed-arrow-abi: the erased-carrier fatshim used when the typed
+ * shim is declined but a parameter is a wide by-value aggregate -- slot 0 keeps
+ * the `int64_t (*)(void *, int64_t...)` spelling the erased call site casts to,
+ * unboxing each b4box parameter and boxing a wide result.  NULL when the
+ * signature is not in that set (the generic `__tur_fatshim<arity>` stands). */
+char *ensure_carrier_fatshim(EmitCtx *ctx,
+                             Type result_type, Type *param_types, uint8_t n_params);
 /* constrained-byval dispatch: ensure a carrier-adapter witness dict exists for a
  * by-value struct payload boxed into a constrained existential, returning the
  * dict's base name (caller references `&<name>_singleton`).  Each method slot is
@@ -1054,6 +1091,14 @@ char *emit_effects_cont_pred(EmitCtx *ctx, Buf *body, const Expr *e);
 
 /* ------------ emit_expr.c: expression-position emission ------------ */
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e);
+/* any-struct-box-leak-per-widen: enclosing-scope `any` drops (see emit_expr.c). */
+void any_scope_drops_push(EmitCtx *ctx, const char *name);
+void any_scope_drops_pop(EmitCtx *ctx, uint32_t mark);
+void emit_any_scope_drops(EmitCtx *ctx, Buf *body);
+/* any-struct-box-leak-per-widen: does let-binding `idx` hold an `any` whose
+ * payload box that scope owns and may drop?  Exported because emit_tail emits a
+ * tail-position `let` inline rather than through emit_let_value. */
+bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx);
 void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const char *init_or_null);
 
 /* True when a handle's sole case is the built-in `Unsafe` effect -- a pure

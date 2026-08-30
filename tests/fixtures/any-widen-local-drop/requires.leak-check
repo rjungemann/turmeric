@@ -1,0 +1,1 @@
+any-struct-box-leak-per-widen: a non-escaping `any` local must release its payload box at scope exit.

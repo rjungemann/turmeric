@@ -14,11 +14,14 @@
 ;;
 ;; Covers: capturing closure through a typed `^fat` sink (mk/apply-it) and a
 ;; bare fn through the same sink (fatshim path).  The untyped `:fn` carrier
-;; crossing is covered by the logic-* fixtures under the SR4 seam; spelling it
-;; here as `((:: f (fn [P] int)) v)` trips an UNRELATED pre-existing bug
-;; (ascribed-fn-param-call-head-name-mismatch -- the call-head temp's
-;; declaration and use disagree on mangling), so this fixture stays off that
-;; spelling.
+;; crossing is covered by the logic-* fixtures under the SR4 seam, and -- for
+;; the `((:: f (fn [P] int)) v)` spelling this fixture used to have to avoid --
+;; by tests/fixtures/ascribed-fn-param-call-head, which carries the same wide
+;; by-value aggregate through it.  That spelling used to trip an unrelated bug
+;; (ascribed-fn-param-call-head-name-mismatch: the call-head temp's declaration
+;; and use disagreed on mangling); it is fixed, so the shape is now covered
+;; rather than dodged.  This fixture stays on the `^fat` sink, which is what it
+;; is actually about.
 
 (defdata P :copy (P [a : int b : int c : int]))
 

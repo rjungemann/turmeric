@@ -4280,6 +4280,34 @@ static bool arg_form_is_ctor_call_of(Elab *e, const Form *f, const Type *app) {
 }
 
 /* Phase 2: Elaborate a function call (f a b c) */
+/* any-struct-box-leak-per-widen: does `x` evaluate to an `any` whose payload box
+ * THIS expression owns -- nothing else holds it, so the consumer may drop it?
+ *
+ * Two base cases and one step.  A widen performed here mints the box (a
+ * frame-boxed one is excluded: that payload is a stack address).  A call to a
+ * returns_fresh_any producer mints one per call.  And a call to a passthrough
+ * (returns_any_param_idx) forwards its argument without keeping it, so the
+ * question moves to that argument -- which is what makes `(alias tmp)` owned
+ * when `tmp` was, and NOT owned when the caller was handed it.
+ *
+ * Depth-bounded rather than recursive-without-limit: the chain is a syntactic
+ * one through named callees, so a handful of links is generous, and a bound
+ * removes any question about a pathological program.  Running out of depth
+ * answers "not owned", which only ever declines a drop. */
+bool any_expr_is_owned_temp(const Expr *x, int depth) {
+    if (!x || depth <= 0) return false;
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x || x->type.kind != TY_ANY) return false;
+    if (x->kind == EX_UNION_INJECT) return !x->as.union_inject_.frame_box;
+    if (x->kind != EX_CALL || !x->as.call_.fn_binding) return false;
+    const Binding *fb = x->as.call_.fn_binding;
+    if (fb->returns_fresh_any) return true;
+    int pi = fb->returns_any_param_idx;
+    if (pi >= 0 && (uint32_t)pi < x->as.call_.n_args && x->as.call_.args)
+        return any_expr_is_owned_temp(x->as.call_.args[pi], depth - 1);
+    return false;
+}
+
 static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
 
@@ -5397,6 +5425,61 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         if (!arg_ok && expected_arg_kind == TY_ANY) {
             arg_ok = true;
             args[i] = elab_coerce_to_any(e, args[i]);
+            /* any-struct-box-leak-per-widen: a by-value payload widened here is
+             * heap-copied by the emitter, and nothing owns that copy -- one
+             * malloc leaked per widen, which a loop turns into linear growth.
+             * When the callee provably cannot keep the payload past this call,
+             * the copy belongs in the CALLER's frame instead, and then there is
+             * no allocation to own.  Three conditions, each of which only ever
+             * declines:
+             *
+             *   direct callee   -- given: elab_call_fn_inner is the
+             *                      statically-known-callee path, so an indirect
+             *                      call (no body to inspect) never arrives here;
+             *   non-retaining   -- the inferred mask (elab_fns.c) says the body
+             *                      does not keep a pointer this parameter
+             *                      carries, and its result cannot carry one out.
+             *                      Cleared for any body containing inline-C,
+             *                      which could stash the pointer where no AST
+             *                      walk can see it;
+             *   effect-free     -- a callee that can PERFORM may suspend, and
+             *                      its resumption must not reach back into a
+             *                      caller frame that the trampoline has left.
+             *                      A declared row variable reads as non-empty
+             *                      and is refused, so this is conservative.
+             *
+             * Same soundness posture as the closure-env and catch-box frees this
+             * inference already serves: it only ever greenlights, and every
+             * unmodelled shape keeps the status-quo allocation. */
+            if (args[i] && args[i]->kind == EX_UNION_INJECT &&
+                fn_binding && i < 32 &&
+                (fn_binding->nonretain_ptr_param_mask & (1u << i)) &&
+                fn_binding->type.kind == TY_FN &&
+                effect_row_is_empty(fn_binding->type.as.fn.effect_row)) {
+                args[i]->as.union_inject_.frame_box = true;
+            }
+        }
+
+        /* any-struct-box-leak-per-widen (the temporary case): the argument was
+         * ALREADY an `any` -- no widen here to frame-box -- but it is a fresh
+         * one this expression owns and nothing else does: the result of a call
+         * whose body's tail is a widen (returns_fresh_any).  Its payload box has
+         * no owner anywhere, so without this it leaks once per evaluation.
+         *
+         * The same two conditions as the frame-box rule make it safe to drop as
+         * soon as the consuming call returns -- the callee does not keep it, and
+         * cannot suspend between receiving it and returning.  What is NOT enough
+         * is "the argument is a call returning any": a callee that hands back an
+         * `any` it was GIVEN (`(defn keep-it [v : any] : any v)`) returns an
+         * alias, and dropping that would free a box its other holder still uses.
+         * returns_fresh_any is exactly the distinction, and it is why this needs
+         * a callee-side fact rather than a call-site shape. */
+        if (expected_arg_kind == TY_ANY && args[i] && i < 32 && fn_binding
+            && (fn_binding->nonretain_ptr_param_mask & (1u << i))
+            && fn_binding->type.kind == TY_FN
+            && effect_row_is_empty(fn_binding->type.as.fn.effect_row)) {
+            if (any_expr_is_owned_temp(args[i], 8))
+                args[i]->any_drop_after = true;
         }
 
         /* LT2: When both expected and actual argument types are function types,

@@ -1,0 +1,59 @@
+;; any-widen-drop-narrowed -- an `any` local that `is?` flow-narrows still
+;; releases its payload box, including when the scope's end is unreachable.
+;;
+;; `is?` REBINDS the name inside the arm: `a` there is a `Pt`, unboxed out of the
+;; original by a cast.  So after the narrowing nothing refers to the `any`
+;; binding at all -- and that is exactly what made this shape hard.  The
+;; drop-at-sole-use rule finds no use to attach to (the only mentions of the
+;; `any` are the `is?` test and the narrowing cast, neither of which is a call
+;; argument), so the box has to come off the scope.
+;;
+;; Two things had to be true for that to work:
+;;
+;;   the escape walk had to stop counting `(cast a Pt)` on a bare `a` as an
+;;   escape.  A box is only ever freed when the tag says a widen heap-boxed the
+;;   payload, and for such a payload the cast emits `*(T *)TUR_UNTAG(v)` -- a
+;;   COPY, which cannot alias the box.  (For any other payload the drop is a
+;;   no-op, so aliasing does not matter either.)  That admission is scoped to
+;;   the `any` rules; the closure-env and catch-box walks still refuse it.
+;;
+;;   the scope drop had to fire at early exits, since a `return` or a
+;;   tail-recursive back-edge jumps past a trailing free -- and a tail-position
+;;   `let` is emitted inline by emit_tail rather than through emit_let_value, so
+;;   that path needed the bookkeeping too.
+
+(defstruct Pt [x : int y : int])
+
+(defn ret-any [i : int] : any (make-struct Pt i 2))
+
+;; Narrowing with the scope's end reachable.
+(defn plain [i : int] : int
+  (let [a (ret-any i)]
+    (if (is? a Pt)
+      (.x a)
+      0)))
+
+;; Narrowing with an explicit `return` past the trailing free.
+(defn early [i : int] : int
+  (let [a (ret-any i)]
+    (if (is? a Pt)
+      (return (.x a))
+      0)))
+
+;; Narrowing in a TAIL-recursive loop body -- the back-edge case, and the one
+;; emit_tail emits inline.
+(defn tail-loop [i : int n : int acc : int] : int
+  (if (= i n)
+    acc
+    (let [a (ret-any i)]
+      (tail-loop (+ i 1) n (+ acc (if (is? a Pt) (.x a) 0))))))
+
+(defn drive [i : int n : int acc : int] : int
+  (if (= i n)
+    acc
+    (drive (+ i 1) n (+ acc (+ (plain i) (early i))))))
+
+(defn main [] : int
+  (println (tail-loop 0 1000 0))   ;; 0+1+...+999 = 499500
+  (println (drive 0 1000 0))       ;; 2 * 499500 = 999000
+  0)

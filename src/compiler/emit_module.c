@@ -740,9 +740,11 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
         uint32_t nc = ctx->cap_any_type_names ? ctx->cap_any_type_names * 2 : 8;
         char **nn = (char **)realloc(ctx->any_type_names, nc * sizeof(char *));
         char **ns = (char **)realloc(ctx->any_type_shown, nc * sizeof(char *));
-        if (!nn || !ns) { fprintf(stderr, "tur: oom\n"); abort(); }
+        bool  *nb = (bool  *)realloc(ctx->any_type_boxed, nc * sizeof(bool));
+        if (!nn || !ns || !nb) { fprintf(stderr, "tur: oom\n"); abort(); }
         ctx->any_type_names = nn;
         ctx->any_type_shown = ns;
+        ctx->any_type_boxed = nb;
         ctx->cap_any_type_names = nc;
     }
     char *kdup = strdup(key);
@@ -750,12 +752,48 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
     if (!kdup || !sdup) { fprintf(stderr, "tur: oom\n"); abort(); }
     ctx->any_type_names[ctx->n_any_type_names] = kdup;
     ctx->any_type_shown[ctx->n_any_type_names] = sdup;
+    /* any-struct-box-leak-per-widen: record whether the widen site heap-boxes
+     * this payload.  Decided by the SAME predicate the inject uses
+     * (emit_type_is_byvalue_adt), so "the drop frees it" and "the widen
+     * allocated it" cannot disagree -- a heap-ADT handle rides the value word
+     * and must never be freed here. */
+    ctx->any_type_boxed[ctx->n_any_type_names] = emit_type_is_byvalue_adt(ctx, r);
     ctx->n_any_type_names++;
     return (int64_t)(TUR_ANY_ID_BASE + ctx->n_any_type_names - 1);
 }
 
 void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
     if (!out) return;
+    /* any-struct-box-leak-per-widen: the drop side.  `__tur_any_drop` is the
+     * ONLY place an `any` payload box is released, and it releases one exactly
+     * when the widen allocated one -- the boxed flag interned by
+     * emit_any_type_id, from the same predicate the widen itself uses.  A
+     * primitive payload and a heap-ADT handle ride the tag's value word and own
+     * nothing, so both fall through untouched.
+     *
+     * Emitted BEFORE the nothing-to-name early return below, and
+     * unconditionally: a drop SITE exists whenever a scope owns an `any`, which
+     * does not require any struct/ADT payload to have been interned.  A program
+     * that widens only a primitive (`any-box-cstr` widens a cstr) interns no ids
+     * at all, took that early return, and emitted a call to a function that was
+     * never defined -- an undefined-reference link failure.  With no boxed ids
+     * the switch degenerates to `default: return;`, which is exactly right. */
+    buf_puts(out, "static void __tur_any_drop(tur_tagged_t __v) {\n");
+    buf_puts(out, "    switch (TUR_GETTAG(__v)) {\n");
+    if (ctx) {
+        bool any_boxed = false;
+        for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
+            if (!ctx->any_type_boxed[i]) continue;
+            any_boxed = true;
+            buf_printf(out, "        case %d:\n", (int)(TUR_ANY_ID_BASE + i));
+        }
+        if (any_boxed)
+            buf_puts(out, "            free((void *)(intptr_t)TUR_UNTAG(__v));\n"
+                          "            return;\n");
+    }
+    buf_puts(out, "        default: return;\n    }\n}\n");
+    buf_puts(out, "static void (*__tur_any_drop_keep)(tur_tagged_t) "
+                  "__attribute__((unused)) = __tur_any_drop;\n");
     if (!ctx || ctx->n_any_type_names == 0) return;   /* nothing to name */
     buf_puts(out, "static const char *__tur_any_name_ext(int64_t tag) {\n");
     if (ctx && ctx->n_any_type_names) {
@@ -768,6 +806,7 @@ void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
         buf_puts(out, "    }\n");
     }
     buf_puts(out, "    (void)tag;\n    return \"unknown\";\n}\n");
+
     /* Installed from __tur_static_init (the KEYS band runs before any user
      * code), so the preamble's __tur_any_type_name can reach it. */
     buf_puts(out, "static void __tur_any_names_init(void) {\n");
@@ -1056,6 +1095,140 @@ char *ensure_typed_fatshim(EmitCtx *ctx,
             buf_printf(target, "a%u", (unsigned)i);
     }
     buf_puts(target, ");\n}\n");
+    return name;
+}
+
+/* arrow-struct-typed-arrow-abi: the CARRIER fatshim -- slot 0 spelled exactly
+ * as an erased consumer casts it (`int64_t (*)(void *, int64_t...)`), with each
+ * wide by-value parameter unboxed and a wide by-value result boxed.
+ *
+ * `use_typed_thunk_abi` ANDs the result and the parameters, so a result that
+ * thunk_type_has_concrete_c_abi declines -- an app monomorph at or below the
+ * 16-byte sret threshold, deliberately kept on the generic forwarding shim so
+ * the erased `int64_t` cast in slot 0 stays honest -- also took down the
+ * PARAMETER bridge that same signature needed.  Those are not one decision.  A
+ * wide by-value aggregate crosses a fat boundary as an int64 heap-box POINTER
+ * (thunk_param_slot_c_name); the generic shim's `int64_t (*)(int64_t)` cast
+ * instead handed the pointer straight to a callee that reads a by-value struct
+ * out of two registers, and read its aggregate return as the first eightbyte.
+ * Both halves silently wrong, because slot 0's own spelling never lied.
+ *
+ * This shim is the missing bridge, and it is deliberately NOT
+ * ensure_typed_fatshim with an int64 result: that would still cast the callee
+ * to int64-returning and hand back `e1`, where an erased consumer of a wide
+ * aggregate wants the carrier -- a `T *`, the same convention the parameter
+ * side and ensure_catch_box_shim already use.
+ *
+ * Applicability is kept to exactly the broken set: at least one parameter must
+ * be a b4box slot.  A signature whose parameters are all fine and whose result
+ * is merely a <= 16 byte monomorph keeps the generic forwarding shim it has
+ * today, where the register-returned aggregate passes through the tail-call to
+ * a typed consumer untouched.  Results other than a b4box aggregate or a plain
+ * int64 carrier decline too -- a `double` result would need a conversion here,
+ * not a reinterpret, and no caller has asked for one. */
+char *ensure_carrier_fatshim(EmitCtx *ctx,
+                             Type result_type, Type *param_types, uint8_t n_params) {
+    if (!ctx) return NULL;
+
+    bool any_b4box_param = false;
+    for (uint32_t i = 0; i < n_params; i++) {
+        if (!thunk_type_has_concrete_c_abi(param_types[i], /*result_pos=*/false))
+            return NULL;
+        if (type_is_b4box_closure_slot(param_types[i])) any_b4box_param = true;
+    }
+    if (!any_b4box_param) return NULL;
+
+    bool box_result = type_is_b4box_closure_slot(result_type);
+    if (!box_result &&
+        (!thunk_type_has_concrete_c_abi(result_type, /*result_pos=*/false) ||
+         strcmp(type_c_name(result_type), "int64_t") != 0))
+        return NULL;
+
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_fatshim_carrier_");
+    append_sanitized_c_token(&nb, type_c_name(result_type));
+    for (uint32_t i = 0; i < n_params; i++) {
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, type_c_name(param_types[i]));
+    }
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    const char *rc = type_c_name(result_type);
+
+    buf_printf(target, "static int64_t %s(void *__e", name);
+    for (uint32_t i = 0; i < n_params; i++) {
+        buf_printf(target, ", %s a%u", thunk_param_slot_c_name(param_types[i]),
+                   (unsigned)i);
+    }
+    buf_puts(target, ") {\n    ");
+    if (box_result) buf_printf(target, "%s __r = ", rc);
+    else            buf_puts(target, "return ");
+
+    /* The bare fn behind the shim keeps its own ABI, exactly as
+     * ensure_typed_fatshim spells it: `const T *` for a pbp aggregate, the
+     * aggregate by value below the pbp threshold. */
+    buf_printf(target, "((%s (*)(", rc);
+    if (n_params == 0) {
+        buf_puts(target, "void");
+    } else {
+        for (uint32_t i = 0; i < n_params; i++) {
+            if (i) buf_puts(target, ", ");
+            Type rp = param_types[i];
+            bool rp_pbp = (rp.kind == TY_ADT && rp.as.adt_.def)
+                              ? adt_byval_pass_by_ptr(rp.as.adt_.def)
+                              : adt_app_byval_pass_by_ptr(rp);
+            if (type_is_b4box_closure_slot(rp) && rp_pbp)
+                buf_printf(target, "const %s *", type_c_name(rp));
+            else
+                buf_puts(target, type_c_name(rp));
+        }
+    }
+    buf_puts(target, "))(intptr_t)((int64_t *)__e)[1])(");
+    for (uint32_t i = 0; i < n_params; i++) {
+        if (i) buf_puts(target, ", ");
+        Type rp = param_types[i];
+        bool rp_pbp = (rp.kind == TY_ADT && rp.as.adt_.def)
+                          ? adt_byval_pass_by_ptr(rp.as.adt_.def)
+                          : adt_app_byval_pass_by_ptr(rp);
+        if (type_is_b4box_closure_slot(rp) && rp_pbp)
+            buf_printf(target, "(const %s *)(intptr_t)a%u",
+                       type_c_name(rp), (unsigned)i);
+        else if (type_is_b4box_closure_slot(rp))
+            buf_printf(target, "*(%s *)(intptr_t)a%u",
+                       type_c_name(rp), (unsigned)i);
+        else
+            buf_printf(target, "a%u", (unsigned)i);
+    }
+    buf_puts(target, ");\n");
+    if (box_result) {
+        /* Hand the erased consumer the carrier it expects: a heap copy, so the
+         * int64 it reads really is a `T *`.  Same shape as ensure_catch_box_shim
+         * -- the box is owned by the consumer's carrier discipline, not by the
+         * shim. */
+        buf_printf(target,
+                   "    %s *__b = (%s *)malloc(sizeof *__b);\n"
+                   "    *__b = __r;\n"
+                   "    return (int64_t)(intptr_t)__b;\n",
+                   rc, rc);
+    }
+    buf_puts(target, "}\n");
     return name;
 }
 
@@ -1355,9 +1528,17 @@ char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type,
     /* All-int64_t carrier signatures are likewise served by the preamble shim
      * (its int64_t (*)(void *, int64_t...) ABI equals the typed-thunk cast), so
      * emit nothing new and keep int64/pointer poly boxes churn-free. */
+    /* poly-to-fat-wide-byval-arg: compare on the SLOT spelling, not the type's
+     * own C name.  A wide by-value aggregate occupies an int64 slot here (it
+     * crosses as a heap-box pointer), so `(fn [(Tuple2 int int)] int)` really
+     * is an all-int64 signature and the preamble shim already serves it --
+     * better than the typed shim did, which used to declare the aggregate by
+     * value and survive only because the caller's pointer happened to sit in
+     * the register the struct's first eightbyte was read from. */
     bool all_int64 = strcmp(type_c_name(result_type), "int64_t") == 0;
     for (uint32_t i = 0; all_int64 && i < n_args; i++) {
-        if (strcmp(type_c_name(arg_types[i]), "int64_t") != 0) all_int64 = false;
+        if (strcmp(thunk_param_slot_c_name(arg_types[i]), "int64_t") != 0)
+            all_int64 = false;
     }
     if (all_int64) return NULL;
 
@@ -1386,18 +1567,32 @@ char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type,
      * The carrier erases the signature to int64_t (*)(void *, int64_t...); this
      * shim re-types it back to the true R (*)(void *, A0..An) so the sink's
      * typed-thunk cast at slot 0 matches the actual ABI and every argument is
-     * forwarded. */
+     * forwarded.
+     *
+     * poly-to-fat-wide-byval-arg: each PARAMETER is spelled with
+     * thunk_param_slot_c_name, the same routine the sink's typed-thunk typedef
+     * uses, so the two agree by construction -- a wide by-value aggregate is an
+     * int64 heap-box pointer on both sides.  It is also what slot 1 wants: the
+     * poly wrapper (make_poly_wrapper) declares such a parameter as the int64
+     * carrier and does its own deref.  So unlike the bare-fn typed fatshim,
+     * this shim never bridges an argument -- it forwards the slot word as-is.
+     * Spelling the aggregate by value here instead put the caller's pointer and
+     * the callee's read in different registers (and, for a float-field
+     * aggregate, different register CLASSES); it survived only because the shim
+     * happened not to clobber the register the pointer arrived in. */
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
     const char *rc = type_c_name(result_type);
     bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
     buf_printf(target, "static %s %s(void *__e", rc, name);
     for (uint32_t i = 0; i < n_args; i++) {
-        buf_printf(target, ", %s a%u", type_c_name(arg_types[i]), (unsigned)i);
+        buf_printf(target, ", %s a%u", thunk_param_slot_c_name(arg_types[i]),
+                   (unsigned)i);
     }
     buf_puts(target, ") {\n    int64_t *__b = (int64_t *)__e;\n    ");
     if (has_ret) buf_puts(target, "return ");
     buf_printf(target, "((%s (*)(void *", rc);
-    for (uint32_t i = 0; i < n_args; i++) buf_printf(target, ", %s", type_c_name(arg_types[i]));
+    for (uint32_t i = 0; i < n_args; i++)
+        buf_printf(target, ", %s", thunk_param_slot_c_name(arg_types[i]));
     buf_puts(target, "))(intptr_t)__b[1])((void *)(intptr_t)__b[2]");
     for (uint32_t i = 0; i < n_args; i++) buf_printf(target, ", a%u", (unsigned)i);
     buf_puts(target, ");\n}\n");
@@ -14099,6 +14294,14 @@ int emit_program(Buf *out, const Expr *program) {
     }
     free(ctx.any_type_names);
     free(ctx.any_type_shown);
+    free(ctx.any_type_boxed);
+    /* any-struct-box-leak-per-widen: the pending-drop stack.  Entries are freed
+     * as they drain; anything still here belongs to a node whose enclosing call
+     * never materialized (a void-returning consumer), so free the names too. */
+    for (uint32_t _i = 0; _i < ctx.n_any_pending; _i++) free(ctx.any_pending[_i]);
+    free(ctx.any_pending);
+    for (uint32_t _i = 0; _i < ctx.n_any_scope_drops; _i++) free(ctx.any_scope_drops[_i]);
+    free(ctx.any_scope_drops);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
     for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
@@ -15515,6 +15718,14 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     }
     free(ctx.any_type_names);
     free(ctx.any_type_shown);
+    free(ctx.any_type_boxed);
+    /* any-struct-box-leak-per-widen: the pending-drop stack.  Entries are freed
+     * as they drain; anything still here belongs to a node whose enclosing call
+     * never materialized (a void-returning consumer), so free the names too. */
+    for (uint32_t _i = 0; _i < ctx.n_any_pending; _i++) free(ctx.any_pending[_i]);
+    free(ctx.any_pending);
+    for (uint32_t _i = 0; _i < ctx.n_any_scope_drops; _i++) free(ctx.any_scope_drops[_i]);
+    free(ctx.any_scope_drops);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
     for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);

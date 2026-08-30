@@ -835,6 +835,22 @@ bool expr_subtree_has_inline_c(const Expr *e) {
             return false;
         case EX_ASCRIBE: return expr_subtree_has_inline_c(e->as.ascribe_.inner);
         case EX_CAST:    return expr_subtree_has_inline_c(e->as.cast_.expr);
+        /* any-struct-box-leak-per-widen: the `any` readers carry no inline-C of
+         * their own -- each lowers to emitter-generated tag arithmetic or a
+         * deref -- so only their operand needs walking.  Left to the
+         * conservative `default` they reported "may hide inline-C" for every
+         * body that so much as looks at an `any`, which silently switched off
+         * the whole nonretain inference below (this one and the catch-box
+         * confinement that has always shared it) for those bodies. */
+        case EX_ANY_TYPE_OF: return expr_subtree_has_inline_c(e->as.any_type_of_.value);
+        case EX_ANY_IS:      return expr_subtree_has_inline_c(e->as.any_is_.value);
+        case EX_ANY_CAST:    return expr_subtree_has_inline_c(e->as.any_cast_.value);
+        /* A field READ is likewise inline-C-free in itself (a field WRITE is a
+         * different node and keeps the conservative default), and it is common
+         * enough that leaving it unmodelled switched the inference off for most
+         * bodies that touch a struct at all.  The `default` below stays
+         * conservative for everything still unlisted. */
+        case EX_GET_FIELD:   return expr_subtree_has_inline_c(e->as.get_field_.struct_expr);
         case EX_RETURN:  return expr_subtree_has_inline_c(e->as.return_.value);
         default:
             /* Unmodeled kind -- conservatively assume it may hide inline-C. */
@@ -929,9 +945,26 @@ bool result_err_arm_is_freeable_scalar(const Type *t) {
  * arm could dangle an extracted payload and stays an escape; a scalar err arm
  * copies out a plain word that never aliases the payload, so freeing the box is
  * sound.  With the flag off this is exactly the fat-closure-env analysis. */
+static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
+                                   bool allow_box_accessors,
+                                   const Expr *ignore, bool allow_any_cast);
+
 static bool binding_escapes_impl(const Expr *e, const Binding *b,
                                  bool allow_box_accessors,
                                  const Expr *ignore) {
+    return binding_escapes_impl_x(e, b, allow_box_accessors, ignore, false);
+}
+
+/* any-struct-box-leak-per-widen: `allow_any_cast` additionally treats
+ * `(cast b T)` on a bare `b` as a non-escape.  Sound for THIS decision and only
+ * this one: the box is freed only when the tag says a widen heap-boxed the
+ * payload, and for such a payload the cast emits `*(T *)TUR_UNTAG(v)` -- a copy,
+ * which cannot alias the box.  For any other payload the drop is a no-op, so
+ * whether the cast result aliases is irrelevant.  The flag is off for the
+ * closure-env and catch-box callers, where a cast result can matter. */
+static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
+                                   bool allow_box_accessors,
+                                   const Expr *ignore, bool allow_any_cast) {
     if (!e || !b) return true;
     size_t cap = 256;
     const Expr **stack = (const Expr **)malloc(cap * sizeof(const Expr *));
@@ -961,6 +994,36 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
             case EX_VAR:
                 if (cur->as.var.binding == b) { escapes = true; goto esc_done; }
                 break;
+            /* any-struct-box-leak-per-widen: `(type-of b)` and `(is? b T)` READ
+             * the tag and yield something that cannot alias the payload -- a
+             * bool, or a static name out of the runtime's table.  A bare `b`
+             * directly underneath one is therefore not an escape, exactly as a
+             * bare `b` under the ok?/err? accessors above is not.  A NESTED use
+             * (`(is? (f b) T)`) is still walked and still escapes.
+             *
+             * EX_ANY_CAST is deliberately NOT here: it hands back the payload,
+             * which for a pointer payload is the value itself, so a cast result
+             * can alias `b` and the conservative default is the right answer. */
+            case EX_ANY_CAST:
+                if (allow_any_cast) {
+                    const Expr *cop = cur->as.any_cast_.value;
+                    while (cop && cop->kind == EX_ASCRIBE) cop = cop->as.ascribe_.inner;
+                    if (cop && cop->kind == EX_VAR && cop->as.var.binding == b)
+                        break;   /* a copy out of the box, not an escape of it */
+                    ESC_PUSH(cur->as.any_cast_.value);
+                    break;
+                }
+                escapes = true; goto esc_done;
+            case EX_ANY_TYPE_OF:
+            case EX_ANY_IS: {
+                const Expr *op = (cur->kind == EX_ANY_TYPE_OF)
+                                     ? cur->as.any_type_of_.value
+                                     : cur->as.any_is_.value;
+                while (op && op->kind == EX_ASCRIBE) op = op->as.ascribe_.inner;
+                if (!(op && op->kind == EX_VAR && op->as.var.binding == b))
+                    ESC_PUSH(op);
+                break;
+            }
             /* A direct call `(b ...)` is the one allowed, non-escaping use of
              * `b`: the callee is carried in fn_binding (not an EX_VAR child), so
              * it is simply not pushed here.  An indirect call whose callee slot
@@ -1296,6 +1359,19 @@ bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
     return binding_escapes_impl(e, b, /*allow_box_accessors=*/true, ignore);
 }
 
+/* any-struct-box-leak-per-widen: the two walks above, with `(cast b T)` on a
+ * bare `b` admitted as a read.  Used only by the `any` drop rules. */
+bool any_box_binding_escapes(const Expr *e, const Binding *b) {
+    return binding_escapes_impl_x(e, b, /*allow_box_accessors=*/true, NULL,
+                                  /*allow_any_cast=*/true);
+}
+
+bool any_box_binding_escapes_except(const Expr *e, const Binding *b,
+                                    const Expr *ignore) {
+    return binding_escapes_impl_x(e, b, /*allow_box_accessors=*/true, ignore,
+                                  /*allow_any_cast=*/true);
+}
+
 /* catch-unwind-panic-payload-leaks (Leak 2): runtime sinks that CONSUME their
  * argument -- print it -- and never retain a pointer into it beyond the call.
  * A box-owned pointer (the caught message an err-val / inline-C accessor hands
@@ -1348,6 +1424,25 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
             return e->as.var.binding != b || confined;
         case EX_ASCRIBE: return box_uses_confined(e->as.ascribe_.inner, b, confined);
         case EX_CAST:    return box_uses_confined(e->as.cast_.expr, b, confined);
+        /* any-struct-box-leak-per-widen: the three `any` readers.  Each consumes
+         * the tagged value and yields something that cannot alias the payload
+         * box, so `b` appearing directly underneath one is a READ, not
+         * retention -- which is why the operand is checked confined regardless
+         * of this expression's own position:
+         *   type-of -- reads the tag; the cstr it returns is a static name from
+         *              __tur_any_type_name, never a pointer into the payload.
+         *   is?     -- reads the tag; returns bool.
+         *   cast    -- unboxes.  For the boxed by-value payload this rule exists
+         *              for, that is a DEREF: the result is a copy, so it does
+         *              not alias the box.  A carrier payload was never boxed, so
+         *              there is nothing this decision could free out from under
+         *              it either way. */
+        case EX_ANY_TYPE_OF:
+            return box_uses_confined(e->as.any_type_of_.value, b, /*confined=*/true);
+        case EX_ANY_IS:
+            return box_uses_confined(e->as.any_is_.value, b, /*confined=*/true);
+        case EX_ANY_CAST:
+            return box_uses_confined(e->as.any_cast_.value, b, /*confined=*/true);
         case EX_IF:
             return box_uses_confined(e->as.if_.cond, b, /*discarded=*/true) &&
                    box_uses_confined(e->as.if_.then_, b, confined) &&
@@ -2912,6 +3007,35 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
     if (b) {
         char *captured = capture_env_access(ctx, b);
         if (captured) return captured;
+    }
+    /* ascribed-fn-param-call-head-name-mismatch: a callee that is a LOCAL
+     * binding names a C local variable, not a linker symbol, so it must be
+     * spelled by the same rule that DECLARED it -- name_for_binding -- or the
+     * two ends disagree and cc rejects the undeclared one.
+     *
+     * raw_name_for_binding is right for a global: a top-level defn's C name IS
+     * the function symbol, un-suffixed. For a local it is right only by
+     * coincidence, when name_for_binding happens to delegate to it too (a
+     * parameter, an inline-C-named local, a non-boxed TY_FN). A synthetic
+     * call-head temp that is none of those falls through name_for_binding to
+     * the id-suffixed mangler, and the mismatch is a hard build break: the
+     * `__call_head_N` hoisted for `((:: f (fn [int] int)) v)` -- TY_PTR_VOID +
+     * is_poly_fn -- was declared `_un_uncall_unhead_unN_M` and used as
+     * `__call_head_N`.
+     *
+     * Routing locals through name_for_binding closes that by construction,
+     * present and future, and changes no name that already agreed: for every
+     * local shape where name_for_binding delegates to raw_name_for_binding it
+     * returns the identical string. Globals keep the raw symbol.
+     *
+     * Deliberately NOT fixed by making the declaration spell `__call_head_N`
+     * verbatim: the "__-prefixed pure C identifier" class also contains
+     * macro-template names that carry no gensym counter (`__v` / `__vw` from
+     * stdlib/vec.tur's `vec-of`), whose distinctness today comes precisely from
+     * the `_<id>` suffix. Dropping it for the whole class would let two nested
+     * expansions collide in one C scope. */
+    if (b && !b->is_global) {
+        return name_for_binding(ctx, b);
     }
     return raw_name_for_binding(b);
 }

@@ -64,6 +64,15 @@ float bit-reinterpret note below).
    documented wrong-output case; treat any new float divergence as this
    family first.
 
+   In **source**, the two are spelled apart and `::` spells neither: an
+   int/float `::` is a hard error, because the operator cannot tell a carrier
+   slot holding float bits from a genuine integer. Reading a float back out of
+   an `:int` slot -- a cons cell, a variadic rest list, a HAMT value -- is
+   `(bits->float x)`, and pushing one in is `(float->bits x)`, both from
+   `stdlib/bits.tur`; converting a real number is `int->float` / `float->int`
+   from `stdlib/math.tur`. See
+   [docs/archive/ascribe-int-to-float-expression-ambiguity.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ascribe-int-to-float-expression-ambiguity.md).
+
 ## Representations: fn-typed values
 
 Function values are their own zoo. The per-boundary decision today spans

@@ -1,0 +1,1 @@
+any-struct-box-leak-per-widen: an is?-narrowed `any` local must still release its payload box, exactly once.

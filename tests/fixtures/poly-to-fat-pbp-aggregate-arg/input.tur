@@ -1,0 +1,40 @@
+;; poly-to-fat-pbp-aggregate-arg -- a poly fn value boxed into a ^fat sink whose
+;; declared signature takes an aggregate PAST the 16-byte pass-by-pointer
+;; threshold, so the callee takes `const T *` rather than the value.
+;;
+;; make_poly_wrapper marks such an argument in poly_agg_arg_mask, and the emit
+;; side "derefs it back to the aggregate the callee parameter expects".  That is
+;; right only below the threshold.  At 24 bytes the callee wants the pointer,
+;; and the carrier word already IS one -- so the word wants retyping, not
+;; dereferencing.  Doing both emitted
+;;
+;;   sum3((const T *)(intptr_t)(*(T *)(intptr_t)(x)))
+;;
+;; an aggregate value handed to a pointer slot, which cc rejects outright:
+;; "aggregate value used where an integer was expected".  A hard build failure,
+;; not a miscompile -- reachable from any typeclass method that forwards a
+;; closure over a > 16 byte by-value aggregate into a typed ^fat sink.
+
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+(load "stdlib/tuple.tur")
+
+;; Tuple3 int int int is 24 bytes -- past the pass-by-pointer threshold.
+(defn call-t3 [^fat f :(fn [(Tuple3 int int int)] #fx{} int)
+               x : (Tuple3 int int int)] : int
+  (f x))
+
+(defstruct BoxW [A] (raw :int))
+
+(defclass Box3 [^f] (box3 [container [fn :fn]] : int))
+(definstance Box3 [BoxW]
+  (box3 [container fn]
+    (call-t3 fn (tuple3 11 22 33))))
+
+(defn sum3 [t : (Tuple3 int int int)] : int
+  (+ (tuple3-1st t) (+ (tuple3-2nd t) (tuple3-3rd t))))
+
+(defn main [] : int
+  (let [b (:: (make-struct BoxW (schema/int)) (BoxW int))]
+    (println (.box3 b sum3)))    ;; 11 + 22 + 33 = 66
+  0)

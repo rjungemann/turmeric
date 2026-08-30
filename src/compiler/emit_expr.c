@@ -917,7 +917,7 @@ static bool call_spec_result_byvalue_app(EmitCtx *ctx, const Expr *e, Type *out)
  * and unboxed (deref) on the way out -- the byval<->carrier field crossing.  ADT
  * fields are always stored as int64 in the tagged-union typedef, so a by-value
  * child is never stored inline; the box/unbox bridge is mandatory at the seam. */
-static bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t) {
+bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t) {
     Type r = emit_resolve_type(ctx, t);
     if (r.kind == TY_ADT && r.as.adt_.def)
         /* seam 3: a :heap ADT is a typed POINTER, not a by-value aggregate, so it
@@ -2301,6 +2301,54 @@ static bool let_binding_box_freeable(const Expr *e, uint32_t idx) {
     return true;
 }
 
+/* any-struct-box-leak-per-widen (the residue): decide whether let-binding `idx`
+ * holds an `any` whose payload box this scope owns and may drop at scope exit.
+ *
+ * The frame-box rule upstream removes the allocation for a widen in ARGUMENT
+ * position.  It cannot help where the `any` outlives the expression that built
+ * it -- a value RETURNED as `any`, or one handed back by a callee that boxed it
+ * -- because a caller-frame copy would dangle.  Those land in a local, and a
+ * local is where ownership can be settled: if the name does not escape, the
+ * body is its last use and the box dies with the scope.
+ *
+ * Sound iff both:
+ *   - the initializer PRODUCES the value here (a call result, or a widen this
+ *     scope performed) rather than aliasing someone else's -- a bare variable
+ *     is deliberately excluded, exactly as catch_thunk_owns_fat_box excludes
+ *     one, since `(let [b a] ...)` must not free the box `a` still holds; and
+ *   - the bound name does not escape the scope, by the same walk (and the same
+ *     reader-confinement relaxation) the caught-box free uses.
+ *
+ * `__tur_any_drop` then frees only a payload the widen actually boxed, so a
+ * primitive or heap-ADT payload is untouched.  Like its siblings this only ever
+ * GREENLIGHTS a free: a false negative keeps the status-quo leak. */
+bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) {
+    const Expr *init = e->as.let_.bindings[idx].init;
+    const Binding *b = e->as.let_.bindings[idx].binding;
+    if (!init || !b) return false;
+    /* any-struct-box-leak-per-widen: elab moved this binding's drop to its
+     * single consuming call, which every path reaches before the scope can
+     * exit.  Dropping again here would free the box twice. */
+    if (b->any_dropped_at_use) return false;
+    if (emit_resolve_type(ctx, b->type).kind != TY_ANY) return false;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!init) return false;
+    /* Owned-here shapes only.  A frame-boxed widen is a STACK address -- freeing
+     * it would be far worse than the leak this closes. */
+    bool owned_here =
+        (init->kind == EX_UNION_INJECT && !init->as.union_inject_.frame_box)
+        || (init->kind == EX_CALL);
+    if (!owned_here) return false;
+    if (any_box_binding_escapes(e->as.let_.body, b) &&
+        !catch_box_binding_reader_confined(e->as.let_.body, b, e->type.kind))
+        return false;
+    for (uint32_t j = 0; j < e->as.let_.n; j++) {
+        if (j == idx) continue;
+        if (any_box_binding_escapes(e->as.let_.bindings[j].init, b)) return false;
+    }
+    return true;
+}
+
 static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr);
 
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
@@ -2332,6 +2380,9 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* catch-unwind-thunk-closure-leak (Part 2): C names of let-bound,
      * non-escaping caught Result boxes to tur_result_box_free at scope exit. */
     char **box_free_names = NULL;
+    /* any-struct-box-leak-per-widen: `any` locals whose payload box dies here. */
+    char **any_free_names = NULL;
+    uint32_t n_any_free = 0;
     uint32_t n_box_free = 0;
     /* local-struct-drop (fn-field): C names + struct C types of let-bound owning
      * by-value struct locals the elaborator flagged `drops_fn_fields` -- their
@@ -2340,6 +2391,19 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     char **fnfld_names = NULL;
     char **fnfld_types = NULL;
     uint32_t n_fnfld = 0;
+    /* any-struct-box-leak-per-widen: collected UNGUARDED, unlike its neighbours.
+     * They are trailing-only frees, so a body with an early exit gets none and
+     * leaks -- the status quo this rule is closing.  An `any` drop is also
+     * emitted at each early exit (see emit_any_scope_drops), so collecting it
+     * here is what makes those sites have something to fire. */
+    for (uint32_t i = 0; i < e->as.let_.n; i++) {
+        if (let_binding_any_freeable(ctx, e, i)) {
+            any_free_names = (char **)realloc(any_free_names,
+                                              (n_any_free + 1) * sizeof(char *));
+            any_free_names[n_any_free++] =
+                name_for_binding(ctx, e->as.let_.bindings[i].binding);
+        }
+    }
     if (!body_has_return_or_throw) {
         for (uint32_t i = 0; i < e->as.let_.n; i++) {
             if (let_binding_env_freeable(e, i)) {
@@ -2656,6 +2720,11 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         free(iv);
     }
 
+    /* In scope for the body: an early exit inside it drops these first. */
+    uint32_t any_scope_mark = ctx->n_any_scope_drops;
+    for (uint32_t i = 0; i < n_any_free; i++)
+        any_scope_drops_push(ctx, any_free_names[i]);
+
     if (body_has_return_or_throw) {
         /* Body contains return/throw but may still produce a value on the
          * non-diverging path (e.g. the `?` operator: an if whose then-branch
@@ -2679,12 +2748,22 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         } else {
             emit_stmt(ctx, body, e->as.let_.body);
         }
+        any_scope_drops_pop(ctx, any_scope_mark);
+        /* The FALL-THROUGH path out of a body that also returns somewhere still
+         * needs the drop; the returning paths took emit_any_scope_drops. */
+        for (uint32_t i = 0; i < n_any_free; i++) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "__tur_any_drop(%s);\n", any_free_names[i]);
+            free(any_free_names[i]);
+        }
+        free(any_free_names);
         /* Close scope */
         ctx->indent -= 4;
         indent_buf(body, ctx->indent);
         buf_puts(body, "}\n");
         return tmp;
     }
+    any_scope_drops_pop(ctx, any_scope_mark);
     
     if (nil_result) {
         emit_stmt(ctx, body, e->as.let_.body);
@@ -2722,6 +2801,15 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         free(box_free_names[i]);
     }
     free(box_free_names);
+
+    /* any-struct-box-leak-per-widen: release the payload box of each
+     * non-escaping `any` local now that the body -- its last use -- is emitted. */
+    for (uint32_t i = 0; i < n_any_free; i++) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "__tur_any_drop(%s);\n", any_free_names[i]);
+        free(any_free_names[i]);
+    }
+    free(any_free_names);
 
     /* local-struct-drop (fn-field): free the boxed fn-field handles of flagged
      * non-escaping by-value struct locals now that the body (their last use) has
@@ -3911,6 +3999,72 @@ void emit_expr_depth_reset(void) {
     g_emit_depth_exceeded = false;
 }
 
+
+/* any-struct-box-leak-per-widen (the temporary case): the pending-drop stack.
+ * `emit_value` records a mark before dispatching a node and drains back to it
+ * after the node's call has been materialized, so an inner call never drops an
+ * outer call's argument (or vice versa). */
+static void any_pending_push(EmitCtx *ctx, const char *name) {
+    if (ctx->n_any_pending >= ctx->cap_any_pending) {
+        uint32_t nc = ctx->cap_any_pending ? ctx->cap_any_pending * 2 : 8;
+        char **nn = (char **)realloc(ctx->any_pending, nc * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->any_pending = nn;
+        ctx->cap_any_pending = nc;
+    }
+    ctx->any_pending[ctx->n_any_pending++] = strdup(name);
+}
+
+/* Hoist a non-call `any` value into a named temp so the enclosing call has
+ * something to drop, and register it. */
+static char *emit_any_drop_arm(EmitCtx *ctx, Buf *body, char *v);
+
+static void any_pending_drain(EmitCtx *ctx, Buf *body, uint32_t mark) {
+    while (ctx->n_any_pending > mark) {
+        char *nm = ctx->any_pending[--ctx->n_any_pending];
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "__tur_any_drop(%s);\n", nm);
+        free(nm);
+    }
+}
+
+static char *emit_any_drop_arm(EmitCtx *ctx, Buf *body, char *v) {
+    char *slot = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_tagged_t %s = (%s);\n", slot, v);
+    any_pending_push(ctx, slot);
+    free(v);
+    return slot;
+}
+
+
+/* any-struct-box-leak-per-widen: push/pop and fire for the enclosing-scope drop
+ * list.  `emit_any_scope_drops` is called at every EARLY exit (a `return`, a
+ * tail-call back-edge); the normal fall-through path uses the trailing drops
+ * emit_let_value already emits. */
+void any_scope_drops_push(EmitCtx *ctx, const char *name) {
+    if (ctx->n_any_scope_drops >= ctx->cap_any_scope_drops) {
+        uint32_t nc = ctx->cap_any_scope_drops ? ctx->cap_any_scope_drops * 2 : 8;
+        char **nn = (char **)realloc(ctx->any_scope_drops, nc * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->any_scope_drops = nn;
+        ctx->cap_any_scope_drops = nc;
+    }
+    ctx->any_scope_drops[ctx->n_any_scope_drops++] = strdup(name);
+}
+
+void any_scope_drops_pop(EmitCtx *ctx, uint32_t mark) {
+    while (ctx->n_any_scope_drops > mark)
+        free(ctx->any_scope_drops[--ctx->n_any_scope_drops]);
+}
+
+void emit_any_scope_drops(EmitCtx *ctx, Buf *body) {
+    for (uint32_t i = ctx->n_any_scope_drops; i-- > 0; ) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "__tur_any_drop(%s);\n", ctx->any_scope_drops[i]);
+    }
+}
+
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* G3 general catch-unwind splitter: a registered hole emits its C temp name
      * verbatim (the suspended sub-expression's already-delivered value). */
@@ -3936,6 +4090,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         return strdup("0");
     }
     g_emit_expr_depth++;
+    /* Mark before the children run: everything they push belongs to THIS node. */
+    uint32_t any_mark = ctx->n_any_pending;
     char *v = emit_value_dispatch(ctx, body, e);
     g_emit_expr_depth--;
     /* S1/findings 16: capture-and-clear the builder's ret-type note
@@ -3944,11 +4100,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     char ret_note[sizeof ctx->call_ret_note];
     memcpy(ret_note, ctx->call_ret_note, sizeof ret_note);
     ctx->call_ret_note[0] = '\0';
-    if (e->kind != EX_CALL) return v;
+    if (e->kind != EX_CALL) {
+        if (e->any_drop_after) v = emit_any_drop_arm(ctx, body, v);
+        return v;
+    }
     /* unit/void and never/diverging calls emit as C `void`, so there is no
      * value to bind into an __auto_type temp; their panic signal is handled at
      * statement position (EX_PANIC / EX_PANIC_WITH). */
-    if (e->type.kind == TY_NIL || e->type.kind == TY_NEVER) return v;
+    if (e->type.kind == TY_NIL || e->type.kind == TY_NEVER) {
+        /* No value to bind, so the call has not been materialized here; leave any
+         * pending drops to an enclosing call rather than emitting them before the
+         * call they belong to has run. */
+        return v;
+    }
     /* Hoist the call into a temp so a tur_panicking check can follow it.  Use
      * __auto_type (GNU C, supported by the gcc/clang the backend targets) so
      * the temp takes the call's EXACT emitted C representation -- carrier int64
@@ -4170,6 +4334,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         if (!recorded && rcty && strcmp(rcty, "int64_t") == 0 && !v_is_ctor)
             emit_localvar_record_ctype(tmp, "int64_t");
     }
+    /* any-struct-box-leak-per-widen (the temporary case): the call is now a
+     * statement -- `__ps_N = f(...)` followed by its panic check -- so every
+     * owned `any` its arguments contributed has been consumed and can be
+     * released.  This is the statement boundary the temporary case needed; it
+     * exists only here, which is why the drop hangs off the panic-signal hoist
+     * rather than off the call emission proper.  A void/never call returns
+     * above without materializing, and deliberately leaves its pending entries
+     * to an enclosing call instead of dropping them early. */
+    any_pending_drain(ctx, body, any_mark);
+    /* And if THIS call is itself an owned `any` argument, its temp is what the
+     * enclosing call will drop.  Pushed after the drain so it belongs to the
+     * PARENT's mark, not this node's. */
+    if (e->any_drop_after) any_pending_push(ctx, tmp);
     return strdup(tmp);
 }
 
@@ -4588,10 +4765,30 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * name; EX_ANY_CAST unboxes via the same predicate on the target. */
                 const char *cn = emit_type_c_name(ctx,
                     emit_resolve_type(ctx, e->as.union_inject_.value->type));
-                buf_printf(&out,
-                    "({ %s *__tur_box = (%s *)malloc(sizeof(%s)); "
-                    "*__tur_box = (%s); TUR_TAG(%lld, (int64_t)(intptr_t)__tur_box); })",
-                    cn, cn, cn, inner, (long long)tag);
+                if (e->as.union_inject_.frame_box) {
+                    /* any-struct-box-leak-per-widen: elab proved this widen is a
+                     * call argument the callee neither retains nor outlives (it
+                     * cannot suspend), so the payload copy goes in THIS frame.
+                     * No malloc, hence nothing to own -- which is the whole
+                     * defect: the heap form below has no drop point anywhere,
+                     * so a loop over it grows RSS without bound.
+                     *
+                     * A plain block-scope local, not a compound literal inside
+                     * the statement-expression: a compound literal there dies
+                     * with the statement-expression, and the pointer would be
+                     * dangling before the call it was built for. */
+                    char *slot = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s %s = (%s);\n", cn, slot, inner);
+                    buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)&%s)",
+                               (long long)tag, slot);
+                    free(slot);
+                } else {
+                    buf_printf(&out,
+                        "({ %s *__tur_box = (%s *)malloc(sizeof(%s)); "
+                        "*__tur_box = (%s); TUR_TAG(%lld, (int64_t)(intptr_t)__tur_box); })",
+                        cn, cn, cn, inner, (long long)tag);
+                }
             } else {
                 buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)(%s))",
                            (long long)tag, inner);
@@ -7641,10 +7838,45 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * the Path A deref-back must NOT fire. */
                     !(ctx->current_abi_specialization &&
                       ctx->current_abi_specialization->is_vl_wide_mono)) {
-                    char *ub = emit_agg_unbox(ctx,
-                        *fn_binding->type.as.fn.arg_full_types[i], raw);
-                    free(raw);
-                    raw = ub;
+                    /* poly-to-fat-pbp-aggregate-param: "deref it back to the
+                     * aggregate" is right only when the callee takes that
+                     * aggregate BY VALUE.  Past the 16-byte threshold the
+                     * callee takes `const T *` instead, and the carrier word
+                     * already IS a pointer to the aggregate -- so the word
+                     * wants RETYPING, not dereferencing.  Deref'ing produced
+                     * `(const T *)(intptr_t)(*(T *)(intptr_t)(x))`, an
+                     * aggregate value handed to a pointer slot, which cc
+                     * rejects outright ("aggregate value used where an integer
+                     * was expected").  The by-value SUM site below already
+                     * draws exactly this fork; this is the same fork for the
+                     * poly-wrapper's inner call.
+                     *
+                     * The wide-byval pbp arg site further down may retype the
+                     * word again, so the emitted C can carry `(const T *)`
+                     * twice.  That is deliberate rather than tidied away: a
+                     * pointer-to-pointer cast is idempotent, so applying it
+                     * here is correct whether or not the later site fires,
+                     * whereas leaving the word bare would depend on that site
+                     * firing for every shape. */
+                    Type pt = emit_resolve_type(
+                        ctx, *fn_binding->type.as.fn.arg_full_types[i]);
+                    bool pbp = (pt.kind == TY_ADT && pt.as.adt_.def)
+                                   ? adt_byval_pass_by_ptr(pt.as.adt_.def)
+                                   : adt_app_byval_pass_by_ptr(pt);
+                    if (pbp) {
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "((const %s *)(intptr_t)(%s))",
+                                   emit_type_c_name(ctx, pt), raw);
+                        buf_putc(&c, '\0');
+                        free(raw);
+                        raw = strdup(c.data);
+                        buf_free(&c);
+                    } else {
+                        char *ub = emit_agg_unbox(ctx,
+                            *fn_binding->type.as.fn.arg_full_types[i], raw);
+                        free(raw);
+                        raw = ub;
+                    }
                 }
                 /* vec-push-heap-struct-element-not-carrier-cast: the symmetric
                  * direction of the ACB bridge below.  When the callee param is a
@@ -11252,6 +11484,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                     : emit_type_from_kind(fnty.as.fn.arg_kinds[i]);
             }
             char *typed_shim = ensure_typed_fatshim(ctx, fnt_result, fnt_params, arity);
+
+            /* arrow-struct-typed-arrow-abi: when the typed shim is declined but
+             * a parameter is a wide by-value aggregate, the generic
+             * `__tur_fatshim<arity>` is not a safe fallback -- it hands the
+             * callee an int64 heap-box pointer where the callee reads a struct
+             * out of two registers.  ensure_carrier_fatshim is the bridge: slot
+             * 0 keeps the erased `int64_t (*)(void *, int64_t...)` spelling the
+             * call site casts to, with each b4box parameter unboxed and a wide
+             * result boxed back into the carrier.  It declines (leaving the
+             * generic shim in place, as before) for every signature that is not
+             * in that broken set. */
+            if (!typed_shim) {
+                typed_shim = ensure_carrier_fatshim(ctx, fnt_result, fnt_params,
+                                                    arity);
+                if (g_emit_abi_trace && typed_shim) {
+                    fprintf(stderr,
+                            "repr-trace %u:%u bridge bare-to-fat carrier-shim %s\n",
+                            e->span.line, e->span.col_start, typed_shim);
+                }
+            }
 
             /* repr-trace: a bare fn crossing into a fat sink -- the shim
              * bridge is where the representation changes hands. */

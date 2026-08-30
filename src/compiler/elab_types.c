@@ -3179,20 +3179,22 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * float widths.
      *
      * Scoped to literals on purpose.  `::` from an int-typed EXPRESSION to a
-     * float really is a bit-reinterpret in the carrier round-trip that typed
-     * slots, variadic rest collection, and the cons/HAMT carriers depend on --
-     * a value whose static type is :int while it holds float bits (see
-     * tests/fixtures/typed-slots/ascribe-reinterpret and
-     * variadic-float-cons-collect).  Nothing in the static types separates
-     * that from a genuine int being converted, so a blanket change would break
-     * it: forcing conversion for every int->float ascription was measured at
-     * 4 fixture failures, all of them that carrier path.  A literal is the one
-     * shape with no such ambiguity -- the author wrote a constant, and there
-     * is no carried value whose bits could be meant.  This mirrors the
-     * float-literal arm directly above, which retypes for the same reason.
+     * float could equally mean a bit-reinterpret -- that is the carrier
+     * round-trip typed slots, variadic rest collection, and the cons/HAMT
+     * carriers depend on, where a value's static type is :int while it holds
+     * float bits.  Nothing in the static types separates that from a genuine
+     * int being converted, so no reading can be picked for it; that case is
+     * refused by the arm below, and the two meanings are spelled
+     * `int->float` (stdlib/math.tur) and `bits->float` (stdlib/bits.tur).
+     * A literal is the one shape with no such ambiguity -- the author wrote a
+     * constant, and there is no carried value whose bits could be meant.  This
+     * mirrors the float-literal arm directly above, which retypes for the same
+     * reason.
      *
-     * The residual expression-level ambiguity is recorded in
-     * docs/reported/ascribe-int-to-float-expression-ambiguity.md. */
+     * The residual expression-level ambiguity is resolved by the arm directly
+     * below, which refuses the ambiguous spelling outright rather than picking
+     * a reading; see
+     * docs/archive/ascribe-int-to-float-expression-ambiguity.md. */
     if ((dst_kind == TY_FLOAT || dst_kind == TY_FLOAT32 ||
          dst_kind == TY_FLOAT64) &&
         (src_kind == TY_INT || src_kind == TY_INT64 ||
@@ -3240,6 +3242,61 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
                 lit->as.f = (double)v;
                 return lit;
             }
+        }
+    }
+    /* ascribe-int-to-float-expression-ambiguity: `::` between an int kind and a
+     * float kind means two different things, and nothing in the static types
+     * separates them.  `(:: (.n m) :float)` on a genuine integer wants the
+     * NUMBER; `(:: (list-head c) :float)` on a value that reached an :int slot
+     * through the carrier wants the BITS.  Both operands are statically :int.
+     *
+     * The same-size rule below used to answer "bits", silently, in both cases.
+     * That reading is right for the carrier round-trip that typed slots,
+     * variadic rest collection and the cons/HAMT carriers depend on -- and
+     * catastrophically wrong for the other, where the int becomes a denormal
+     * that contributes nothing to a sum.  A dropped term, not a garbage one,
+     * which is what made it easy to miss.
+     *
+     * Neither reading gets to win by default: whichever were chosen, the other
+     * one's existing code would keep compiling and start returning silently
+     * wrong answers.  So the ambiguous spelling is refused and the author says
+     * which they meant.  Both spellings already exist and neither is new
+     * syntax -- `int->float` / `float->int` in stdlib/math.tur convert,
+     * `bits->float` / `float->bits` in stdlib/bits.tur reinterpret.
+     *
+     * LITERALS are exempt, and keep converting: the author wrote a constant, so
+     * there is no carried value whose bits could be meant.  That half was fixed
+     * separately (the arm above, and ascribe-int-to-float-reinterprets). */
+    {
+        bool src_int = (src_kind == TY_INT || src_kind == TY_INT64 ||
+                        src_kind == TY_INT32 || src_kind == TY_INT16 ||
+                        src_kind == TY_INT8 || src_kind == TY_UINT64 ||
+                        src_kind == TY_UINT32 || src_kind == TY_UINT16 ||
+                        src_kind == TY_UINT8);
+        bool dst_int = (dst_kind == TY_INT || dst_kind == TY_INT64 ||
+                        dst_kind == TY_INT32 || dst_kind == TY_INT16 ||
+                        dst_kind == TY_INT8 || dst_kind == TY_UINT64 ||
+                        dst_kind == TY_UINT32 || dst_kind == TY_UINT16 ||
+                        dst_kind == TY_UINT8);
+        bool src_flt = (src_kind == TY_FLOAT || src_kind == TY_FLOAT32 ||
+                        src_kind == TY_FLOAT64);
+        bool dst_flt = (dst_kind == TY_FLOAT || dst_kind == TY_FLOAT32 ||
+                        dst_kind == TY_FLOAT64);
+        if ((src_int && dst_flt) || (src_flt && dst_int)) {
+            const char *conv = (src_int && dst_flt) ? "int->float" : "float->int";
+            const char *bits = (src_int && dst_flt) ? "bits->float" : "float->bits";
+            diag_emit(DIAG_ERROR, call->span,
+                      "`::` between an integer and a float kind is ambiguous: it "
+                      "could convert the NUMBER or reinterpret the BIT PATTERN, "
+                      "and the static types do not say which");
+            diag_emit(DIAG_NOTE, call->span,
+                      "to convert, use (%s x) -- (load \"stdlib/math.tur\")", conv);
+            diag_emit(DIAG_NOTE, call->span,
+                      "to reinterpret the bits, as when reading a float back out "
+                      "of an :int carrier slot (a cons cell, a variadic rest "
+                      "list, a HAMT value), use (%s x) -- (load "
+                      "\"stdlib/bits.tur\")", bits);
+            return NULL;
         }
     }
     if (src_kind != dst_kind) {

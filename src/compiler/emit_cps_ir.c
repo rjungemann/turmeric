@@ -168,6 +168,29 @@ static bool slot_carrier_app(const Type *t) {
 static bool slot_box_ty(const Type *t) {
     if (!t) return false;
     Type _r; t = cps_resolve_ty(t, &_r);
+    /* perform-in-fn-with-any-param-has-no-cps-lowering: `any` is a Tier C
+     * aggregate in every way that matters here -- a fixed two-word
+     * `tur_tagged_t` the direct emitter passes and returns BY VALUE
+     * (type_struct_pass_by_ptr says so), owning-free as far as the compiler
+     * tracks (the payload box behind `val` has no drop glue anywhere; that is
+     * docs/reported/any-struct-box-leak-per-widen.md, not an owning field).
+     * It simply is not an AdtDef, so the by-value-product test below cannot
+     * see it and the whole function fell out of the CPS subset: `fn_sig_ok`'s
+     * param gate rejected it, and a `perform` anywhere in such a function then
+     * reached the direct emitter, which has no lowering for one.
+     *
+     * Answering here rather than at the param gate is deliberate: this is the
+     * one predicate param admission, slot_store/slot_load, and cap_ty_ok all
+     * consult, so an `any` that merely crosses a signature and one that has to
+     * live across a `perform` get consistent treatment -- boxed into the
+     * one-word slot on the way in, unboxed (and freed, on the consuming load)
+     * on the way out.
+     *
+     * Note this is a narrower question than type_has_concrete_codegen_layout,
+     * which deliberately rejects TY_ANY (types.c): that gate is about by-value
+     * MONOMORPH FIELDS, where a 16-byte member would be an ABI change. Crossing
+     * a DK slot is a local box/unbox and needs no such thing. */
+    if (t->kind == TY_ANY) return true;
     /* A heap-passed ADT / struct (`(Vec int)` -> `tur_adt_Vec__int *`, ...) is
      * already a pointer (the int64 carrier), NOT a by-value product to heap-copy.
      * Some heap ADT defs still have product *shape* (`{ len; cap; data }`), so
@@ -646,8 +669,21 @@ static bool callee_effect_free(const Binding *fn) {
 static bool call_arg_ok(const CAtom *a, bool cps_to_direct) {
     if (!atom_ok(a)) return false;
     if (atom_is_fat_fn(a)) return false;
+    /* The reject exists because a by-value ADT arg reaching an UNCOLORED callee
+     * is emitted raw against that callee's direct-emitter C signature, which
+     * takes the aggregate through the carrier ABI -- a raw-struct-for-int64 arg.
+     *
+     * perform-in-fn-with-any-param-has-no-cps-lowering: `any` is the one member
+     * of slot_box_ty for which those two spellings AGREE.  The direct emitter
+     * declares such a parameter `tur_tagged_t` by value (type_struct_pass_by_ptr
+     * says so) and emit_params spells the CPS side the same way, so the raw arg
+     * is exactly what the callee's signature wants.  Without this, admitting
+     * `any` to slot_box_ty at all would have made every cps->direct call taking
+     * one evict -- which is what `main` did: it passes an `any` to the very
+     * function whose `perform` this change exists to lower. */
     if (cps_to_direct && (a->kind == CA_VAR || a->kind == CA_CVAR)
-        && slot_box_ty(a->type))
+        && slot_box_ty(a->type)
+        && !(a->type && a->type->kind == TY_ANY))
         return false;
     return true;
 }
