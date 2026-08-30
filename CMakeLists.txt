@@ -351,6 +351,19 @@ add_test(
   COMMAND bash tests/run-dap.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# editor-intelligence follow-through, track T1: the time-travel recorder.
+# Records a fixture with `tur trace`, reads it back with `tur trace --dump`,
+# and asserts the step/frame counts, that a delta only carries a binding whose
+# rendering moved, that program output is both forwarded and interleaved, and
+# that the step cap truncates loudly. The fixture carries
+# requires.dedicated-runner so tests/run.sh leaves it to this target -- the
+# recorder is an interpreter feature and the compiled path does not share it.
+# See docs/archive/editor-intelligence-follow-through-plan.md.
+add_test(
+  NAME tur_trace
+  COMMAND bash tests/run-trace.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # debugger Phase 4: native source maps for emit-C. `tur --debug` threads
 # `#line N "file.tur"` directives into the generated C (gated off by default so
 # emit-c snapshots are unchanged) and compiles single-file builds with -g -Og,

@@ -825,6 +825,160 @@ def test_lsp_unsaved_buffer() -> None:
         srv.close()
 
 
+def test_lsp_inside_a_spice() -> None:
+    """Cross-file identity, against the real compiler (A6).
+
+    A module inside a spice imports its siblings, and everything the editor
+    knows about those names depends on the analysis resolving the import.  The
+    LSP writes the buffer to a scratch file and analyses THAT, so resolution
+    has to walk up from where the buffer lives rather than from where it was
+    written -- and until it did, a file in a spice came back with no symbols at
+    all: no completion, no go-to-definition, and a rename that refused because
+    it could not see a definition.  `tur check` on the same file worked the
+    whole time, which is exactly what made it easy to miss.
+
+    Also pinned here: rename across two modules of one spice, and the refusal
+    on a stdlib name.
+    """
+    print("--- LSP inside a spice (A6) ---")
+    # realpath, not the raw mkdtemp result. On macOS /var is a symlink to
+    # /private/var, so mkdtemp hands back the unresolved spelling while the
+    # compiler registers the resolved one -- and a definition that correctly
+    # crossed to the sibling module then failed a string compare on its uri.
+    # Canonicalising here makes every path this test builds match whichever
+    # spelling the server reports, on both platforms.
+    root = os.path.realpath(tempfile.mkdtemp(prefix="lsp_spice_"))
+    src_dir = os.path.join(root, "src")
+    os.makedirs(src_dir, exist_ok=True)
+    with open(os.path.join(root, "build.tur"), "w") as f:
+        f.write('(defpackage lspspice\n  :name    "lspspice"\n'
+                '  :version "0.1.0")\n')
+
+    mathy_src = textwrap.dedent("""\
+        (defmodule mathy
+          (export double-it)
+          (defn double-it [n : int] : int
+            (* n 2)))
+        """)
+    user_src = textwrap.dedent("""\
+        (defmodule user
+          (import mathy)
+          (defn go [] : int
+            (let [double-it 7]
+              (+ double-it 1)))
+          (defn go2 [] : int
+            (double-it 3)))
+        """)
+    mathy_path = os.path.join(src_dir, "mathy.tur")
+    user_path = os.path.join(src_dir, "user.tur")
+    with open(mathy_path, "w") as f:
+        f.write(mathy_src)
+    with open(user_path, "w") as f:
+        f.write(user_src)
+
+    mathy_uri = "file://" + mathy_path
+    user_uri = "file://" + user_path
+
+    def caret(text: str, needle: str, offset: int = 0):
+        for i, line in enumerate(text.split("\n")):
+            j = line.find(needle)
+            if j >= 0:
+                return {"line": i, "character": j + offset}
+        raise AssertionError("no %r in fixture" % needle)
+
+    srv = Server([TUR, "lsp"], transport="lsp")
+    try:
+        r = srv.call("initialize", {"processId": None, "rootUri": None,
+                                    "capabilities": {}})
+        caps = (r or {}).get("result", {}).get("capabilities", {})
+        check(isinstance(caps.get("renameProvider"), dict)
+              and caps["renameProvider"].get("prepareProvider") is True,
+              "lsp spice: rename advertised in the prepare form")
+        check(caps.get("referencesProvider") is True,
+              "lsp spice: references advertised")
+        srv.call("initialized", {}, notification=True)
+
+        for uri, text in ((mathy_uri, mathy_src), (user_uri, user_src)):
+            srv.call("textDocument/didOpen", {
+                "textDocument": {"uri": uri, "languageId": "tur",
+                                 "version": 1, "text": text},
+            }, notification=True)
+
+        # Go-to-definition on a name defined in a SIBLING module lands in that
+        # module's file. This is the whole of A6's "verify" list, and it was
+        # answering null.
+        pos = caret(user_src, "(double-it 3)", 1)
+        r = srv.call("textDocument/definition",
+                     {"textDocument": {"uri": user_uri}, "position": pos})
+        loc = (r or {}).get("result")
+        check(isinstance(loc, dict) and loc.get("uri") == mathy_uri,
+              f"lsp spice: definition crosses to the sibling module (got {loc!r})")
+
+        # Completion offers the imported name.
+        r = srv.call("textDocument/completion",
+                     {"textDocument": {"uri": user_uri},
+                      "position": {"line": pos["line"],
+                                   "character": pos["character"] + 4}})
+        res = (r or {}).get("result") or {}
+        items = res if isinstance(res, list) else res.get("items", [])
+        labels = {i.get("label") for i in items}
+        check("double-it" in labels,
+              f"lsp spice: completion offers an imported name (got {labels!r})")
+
+        # Rename at the definition rewrites the sibling's call site -- and NOT
+        # the `let` in that sibling that shadows the same name.
+        defpos = caret(mathy_src, "defn double-it", 7)
+        r = srv.call("textDocument/rename",
+                     {"textDocument": {"uri": mathy_uri}, "position": defpos,
+                      "newName": "twice"})
+        changes = ((r or {}).get("result") or {}).get("changes") or {}
+        check(mathy_uri in changes,
+              "lsp spice: rename edits the defining file")
+        user_edits = changes.get(user_uri) or []
+        shadow_line = caret(user_src, "let [double-it")["line"]
+        check(len(user_edits) == 1,
+              f"lsp spice: rename edits exactly the one real use "
+              f"(got {len(user_edits)})")
+        check(all(e["range"]["start"]["line"] != shadow_line for e in user_edits),
+              "lsp spice: the sibling's own shadowing `let` is left alone")
+
+        # prepareRename from a USE in another file refuses rather than
+        # producing an edit anchored on a definition it is not looking at.
+        # Refusing with a reason is half the feature -- it is the reason c2mp
+        # lists rename as not covered.
+        r = srv.call("textDocument/prepareRename",
+                     {"textDocument": {"uri": user_uri},
+                      "position": caret(user_src, "(double-it 3)", 1)})
+        msg = str(((r or {}).get("error") or {}).get("message", ""))
+        check("another file" in msg,
+              f"lsp spice: renaming from a use in another file refuses "
+              f"with a reason (got {r!r})")
+
+        # And the caret sitting on a local resolves to the local, so
+        # prepareRename offers exactly its range rather than refusing.
+        r = srv.call("textDocument/prepareRename",
+                     {"textDocument": {"uri": user_uri},
+                      "position": caret(user_src, "let [double-it", 5)})
+        res = (r or {}).get("result") or {}
+        check(res.get("placeholder") == "double-it",
+              f"lsp spice: a local is renameable in place (got {r!r})")
+
+        srv.call("shutdown", {})
+        srv.call("exit", {}, notification=True)
+    finally:
+        srv.close()
+        for p in (mathy_path, user_path, os.path.join(root, "build.tur")):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+        try:
+            os.rmdir(src_dir)
+            os.rmdir(root)
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -839,6 +993,7 @@ def main() -> int:
     test_lsp_client_gaps()
     test_lsp_unprimed_completion()
     test_lsp_unsaved_buffer()
+    test_lsp_inside_a_spice()
     print(f"\nResults: {PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1
 

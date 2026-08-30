@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { submitAtPrompt } from './repl-helpers.js';
 
 async function waitForReady(page) {
     page.on('console', msg => console.log(`PAGE CONSOLE: ${msg.text()}`));
@@ -11,14 +12,11 @@ test.describe('Try Turmeric REPL meta-commands', () => {
         await page.goto('/try/');
         await waitForReady(page);
 
-        const replInput = page.locator('#repl-input');
-        await replInput.click();
-        await replInput.fill(':help');
-        await replInput.press('Enter');
+        await submitAtPrompt(page, ':help');
 
         await expect(page.locator('#console')).toContainText('Turmeric REPL Help', { timeout: 10_000 });
         await expect(page.locator('#console')).toContainText(':type <expr>', { timeout: 10_000 });
-        await expect(page.locator('#console')).toContainText(':doc  <sym>', { timeout: 10_000 });
+        await expect(page.locator('#console')).toContainText(':doc <sym>', { timeout: 10_000 });
         await expect(page.locator('#console')).toContainText(':explain [code]', { timeout: 10_000 });
     });
 
@@ -26,10 +24,7 @@ test.describe('Try Turmeric REPL meta-commands', () => {
         await page.goto('/try/');
         await waitForReady(page);
 
-        const replInput = page.locator('#repl-input');
-        await replInput.click();
-        await replInput.fill(':doc +');
-        await replInput.press('Enter');
+        await submitAtPrompt(page, ':doc +');
 
         await expect(page.locator('#console')).toContainText('(+ a b ...) -- add numbers', { timeout: 10_000 });
     });
@@ -38,10 +33,7 @@ test.describe('Try Turmeric REPL meta-commands', () => {
         await page.goto('/try/');
         await waitForReady(page);
 
-        const replInput = page.locator('#repl-input');
-        await replInput.click();
-        await replInput.fill(':type 42');
-        await replInput.press('Enter');
+        await submitAtPrompt(page, ':type 42');
 
         await expect(page.locator('#console')).toContainText(': int', { timeout: 10_000 });
     });
@@ -50,12 +42,8 @@ test.describe('Try Turmeric REPL meta-commands', () => {
         await page.goto('/try/');
         await waitForReady(page);
 
-        const replInput = page.locator('#repl-input');
-        await replInput.click();
-        
         // 1. Specific explain
-        await replInput.fill(':explain TUR-E0001');
-        await replInput.press('Enter');
+        await submitAtPrompt(page, ':explain TUR-E0001');
         await expect(page.locator('#console')).toContainText('Type mismatch', { timeout: 10_000 });
 
         // 2. Clear console
@@ -63,13 +51,11 @@ test.describe('Try Turmeric REPL meta-commands', () => {
         await expect(page.locator('#console')).not.toContainText('Type mismatch', { timeout: 10_000 });
 
         // 3. Trigger error in REPL to populate last diagnostic code
-        await replInput.fill('(defn f [] invalid-name)');
-        await replInput.press('Enter');
+        await submitAtPrompt(page, '(defn f [] invalid-name)');
         await expect(page.locator('#console')).toContainText('unbound symbol', { timeout: 10_000 });
 
         // 4. Bare explain
-        await replInput.fill(':explain');
-        await replInput.press('Enter');
+        await submitAtPrompt(page, ':explain');
         await expect(page.locator('#console')).toContainText('Unbound symbol', { timeout: 10_000 });
     });
 
@@ -77,10 +63,7 @@ test.describe('Try Turmeric REPL meta-commands', () => {
         await page.goto('/try/');
         await waitForReady(page);
 
-        const replInput = page.locator('#repl-input');
-        await replInput.click();
-        await replInput.fill(':nonsense');
-        await replInput.press('Enter');
+        await submitAtPrompt(page, ':nonsense');
 
         await expect(page.locator('#console')).toContainText("unknown meta-command ':nonsense'", { timeout: 10_000 });
     });

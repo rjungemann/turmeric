@@ -801,6 +801,7 @@ body.split-dragging * {
 .repl-input-row {
     height: 44px;
     display: flex;
+    position: relative;   /* anchor for the prompt's own placeholder */
     align-items: center;
     gap: 8px;
     padding: 0 16px;
@@ -841,21 +842,74 @@ body.split-dragging * {
     opacity: 1;
 }
 
+/* W3: the transcript's hover card. Positioned in the document body rather than
+   inside the console so it is never clipped by the console's own scroll. */
+.console-hover-card {
+    position: fixed;
+    z-index: 70;
+    max-width: 420px;
+    max-height: 240px;
+    overflow: auto;
+    padding: 8px 10px;
+    border: 1px solid var(--border-mid);
+    border-radius: 6px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+}
+
+/* W1: the prompt hosts a single-line Monaco editor. The row is a fixed height
+   and the editor fills it; Monaco supplies its own caret, selection and
+   suggest widget, so everything this rule used to set on an <input> is now
+   either Monaco's or unnecessary. */
 .repl-input {
     flex: 1;
+    min-width: 0;
+    height: 22px;
+    position: relative;   /* anchor for the placeholder below */
+    overflow: hidden;
+}
+
+.repl-input .monaco-editor,
+.repl-input .monaco-editor .overflow-guard {
     background: transparent;
-    border: none;
-    outline: none;
-    color: var(--text-primary);
+}
+
+.repl-input .monaco-editor .margin,
+.repl-input .monaco-editor-background {
+    background: transparent;
+}
+
+/* The suggest widget has to escape a 22px-tall, overflow:hidden row, so it is
+   rendered into the document body (`overflowWidgetsDomNode`) rather than
+   inside the editor. This keeps it above the console. */
+.repl-suggest-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 60;
+}
+
+/* Shown until the first keystroke. An <input>'s ::placeholder has no Monaco
+   equivalent, so the row draws its own. */
+.repl-input.repl-input-empty::after {
+    content: attr(data-placeholder);
+    position: absolute;
+    left: 0;
+    top: 1px;
+    pointer-events: none;
+    color: var(--text-dim);
     font-family: var(--font-mono);
     font-size: 12.5px;
     line-height: 1.6;
-    caret-color: var(--gold);
 }
 
-.repl-input::placeholder { color: var(--text-dim); }
-
-.repl-input:disabled {
+.repl-input-disabled {
     opacity: 0.35;
     cursor: not-allowed;
 }
@@ -1815,7 +1869,10 @@ body.split-dragging * {
    override to coarse pointers rather than the width-based fallback -- a
    narrow desktop window should keep the 12.5px input. */
 @media (pointer: coarse) {
-    #repl-input { font-size: 16px !important; }
+    #repl-input .monaco-editor,
+    #repl-input .monaco-editor .view-line,
+    #repl-input.repl-input-empty::after { font-size: 16px !important; }
+    #repl-input { height: 26px; }
 }
 
 @media (max-width: 768px) {

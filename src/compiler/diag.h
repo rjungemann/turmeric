@@ -419,6 +419,16 @@ typedef struct SourceFile {
     const char     *orig_src;
     size_t          orig_len;
     const SweetMap *xform_map;
+    /* Bytes of the file on disk that `src` starts past -- the `#lang` line
+     * the reader strips before handing the body over.
+     *
+     * Line numbering survives that strip (the directive's own newline is left
+     * in place, so line 1 is simply empty), which is why nothing needed this
+     * until something started reading span *offsets*. Those are relative to
+     * `src`, so an editor that seeks to one lands `head_offset` bytes early --
+     * on a `#lang turmeric` file as much as a sweet-exp one. Zero for a file
+     * with no directive. */
+    size_t          head_offset;
 } SourceFile;
 
 /* Detect #lang directive from file source (Phase S0).  Base reader only;
@@ -494,6 +504,17 @@ void diag_register_file(const SourceFile *file);
 /* Return the filesystem path registered for file_id, or NULL. */
 const char *diag_file_path(uint16_t file_id);
 const SourceFile *diag_source_file(uint16_t file_id);
+
+/* Translate a span into the coordinates of the file the user is editing.
+ *
+ * A sweet-exp file reaches the elaborator as transformed s-expression text,
+ * so every Span on the tree indexes THAT buffer, not the one on disk.
+ * Diagnostics have always translated back (render_snippet_ex); anything else
+ * that reports a position -- the LSP's symbol and scope tables above all --
+ * has to make the same trip, or an editor lands the caret on a byte that is
+ * not where the user's name lives. A file with no transformation returns the
+ * span unchanged, so callers can apply this unconditionally. */
+Span diag_translate_span(Span span);
 
 /* Core diagnostic emission */
 void diag_emit(DiagLevel level, Span span, const char *fmt, ...);

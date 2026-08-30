@@ -2503,6 +2503,39 @@ bool diag_explain(DiagCode code, FILE *out) {
 }
 
 
+Span diag_translate_span(Span span) {
+    const SourceFile *f = diag_source_file(span.file_id);
+    if (!f) return span;
+    if (!f->xform_map || !f->orig_src) {
+        /* No syntax transform, but a stripped `#lang` line still shifts every
+         * offset relative to the file on disk. */
+        span.off_start += (uint32_t)f->head_offset;
+        span.off_end   += (uint32_t)f->head_offset;
+        return span;
+    }
+
+    size_t orig_start = sweet_map_translate_offset(f->xform_map, span.off_start);
+    size_t orig_end   = sweet_map_translate_offset(f->xform_map, span.off_end);
+    if (orig_end < orig_start) orig_end = orig_start;
+
+    uint32_t line = 1, col = 1;
+    for (size_t i = 0; i < orig_start && i < f->orig_len; i++) {
+        if (f->orig_src[i] == '\n') { line++; col = 1; }
+        else col++;
+    }
+    uint32_t col_e = col;
+    for (size_t i = orig_start; i < orig_end && i < f->orig_len; i++) {
+        if (f->orig_src[i] == '\n') col_e = 1;
+        else col_e++;
+    }
+    span.line      = line;
+    span.col_start = col;
+    span.col_end   = col_e;
+    span.off_start = (uint32_t)(orig_start + f->head_offset);
+    span.off_end   = (uint32_t)(orig_end + f->head_offset);
+    return span;
+}
+
 /* Render a multi-line snippet with context, underlines, and colors.
    Phase 8: Enhanced with configurable options and multi-span support. */
 static void render_snippet_ex(const SourceFile *f, Span span, const SnippetOpts *opts) {

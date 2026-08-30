@@ -19,12 +19,23 @@
  *   program exit      -> `exited` + `terminated`
  *   disconnect        -> tear down
  *
+ * Replay mode (editor-intelligence follow-through, T2): `launch` with
+ * `"replay": true` inverts that. The program runs to completion with the
+ * recorder attached (turi/trace.c) and the session is then served from the
+ * recording -- so stackTrace, scopes and variables answer from a trace cursor
+ * rather than a live frame, and `stepBack` / `reverseContinue` / `reverseNext`
+ * are answerable at all. VS Code and nvim-dap draw the whole reverse-execution
+ * UI off supportsStepBack, so there is no widget to write here. The one thing
+ * a recording cannot do is `evaluate`: there is no live frame to evaluate in,
+ * and it says so rather than returning something stale.
+ *
  * See docs/archive/history/debugger-plan.md (Phase 3) and
  * docs/artifacts/debugger-dap-phase3.md.
  */
 
 #include "dap.h"
 #include "eval.h"
+#include "trace.h"
 
 #include "../lsp/lsp_io.h"
 #include "../lsp/lsp_json.h"
@@ -56,6 +67,24 @@ typedef struct DapState {
     /* Breakpoints staged by setBreakpoints before the env exists. */
     DapBp     bps[DAP_MAX_BP];
     int       n_bps;
+
+    /* T2: replay mode.
+     *
+     * `launch` with `"replay": true` records the whole run first and then
+     * serves the session from the recording. stackTrace / scopes / variables
+     * answer from the trace cursor rather than from a live env, which is what
+     * makes stepping BACKWARDS possible at all -- a pause cannot go back.
+     *
+     * Off by default: the live session is the one that can `evaluate`, and a
+     * recording has no frame to evaluate in. */
+    bool             replay_mode;
+    TurTrace        *trace;
+    TurTraceReplay  *replay;
+    /* How much of the recorded output has already been sent as `output`
+     * events. Scrubbing backwards does not un-print: a terminal has no undo,
+     * so the transcript only ever grows here. The rewinding transcript is
+     * T3's, where the client owns the console. */
+    size_t           replay_out_sent;
 } DapState;
 
 /* ---------------------------------------------------------------------------
@@ -388,14 +417,46 @@ static void dap_set_breakpoints(DapState *s, int64_t req_seq, const char *args) 
  * Stack / scopes / variables
  * --------------------------------------------------------------------------- */
 
+/* One frame, from whichever source the session is being served from.
+ *
+ * The replay's TurTraceFrame and the live TuriDbgFrame carry the same four
+ * things in the same order (innermost first), so the two paths differ by where
+ * the fields come from and by nothing else -- which is the point of the
+ * replay: a client cannot tell a recorded session from a live one except by
+ * what it is allowed to ask. */
+static bool dap_frame_at(DapState *s, int idx, const char **fn,
+                         const char **file, uint32_t *line, uint32_t *col) {
+    if (s->replay_mode) {
+        TurTraceFrame tf;
+        if (!turi_trace_replay_frame_at(s->replay, idx, &tf)) return false;
+        *fn = tf.fn_name; *file = tf.file_path;
+        *line = tf.line;  *col = tf.col;
+        return true;
+    }
+    if (!s->env) return false;
+    static TuriDbgFrame fr;
+    if (!turi_debug_frame_at(s->env, idx, &fr)) return false;
+    *fn = fr.fn_name; *file = fr.file_path;
+    *line = fr.line;  *col = fr.col;
+    return true;
+}
+
+static int dap_frame_count(DapState *s) {
+    if (s->replay_mode) return turi_trace_replay_frame_count(s->replay);
+    return s->env ? turi_debug_frame_count(s->env) : 0;
+}
+
 static void dap_stack_trace(DapState *s, int64_t req_seq) {
     Buf body; buf_init(&body);
     buf_puts(&body, "{\"stackFrames\":[");
-    int n = s->env ? turi_debug_frame_count(s->env) : 0;
+    int n = dap_frame_count(s);
     int emitted = 0;
     for (int i = 0; i < n; i++) {
-        TuriDbgFrame fr;
-        if (!turi_debug_frame_at(s->env, i, &fr)) continue;
+        const char *fn = "", *file = "";
+        uint32_t fline = 0, fcol = 0;
+        if (!dap_frame_at(s, i, &fn, &file, &fline, &fcol)) continue;
+        struct { const char *fn_name; const char *file_path;
+                 uint32_t line, col; } fr = { fn, file, fline, fcol };
         if (emitted++) buf_putc(&body, ',');
         buf_printf(&body, "{\"id\":%d,\"name\":\"", i);
         dap_json_escape(&body, fr.fn_name);
@@ -445,13 +506,31 @@ static void dap_variables(DapState *s, int64_t req_seq, const char *args) {
     Buf body; buf_init(&body);
     buf_puts(&body, "{\"variables\":[");
     VarCollect vc = { &body, 0 };
-    if (s->env) turi_debug_frame_locals(s->env, frame, dap_var_cb, &vc);
+    if (s->replay_mode) {
+        int n = turi_trace_replay_local_count(s->replay, frame);
+        for (int i = 0; i < n; i++) {
+            const char *name = "", *repr = "";
+            if (turi_trace_replay_local_at(s->replay, frame, i, &name, &repr))
+                dap_var_cb(name, repr, &vc);
+        }
+    } else if (s->env) {
+        turi_debug_frame_locals(s->env, frame, dap_var_cb, &vc);
+    }
     buf_puts(&body, "]}");
     dap_send_response(s, req_seq, "variables", dap_cstr(&body), true);
     buf_free(&body);
 }
 
 static void dap_evaluate(DapState *s, int64_t req_seq, const char *args) {
+    if (s->replay_mode) {
+        /* The one request a recording cannot answer: there is no live frame to
+         * evaluate in. Saying so beats returning a stale value that looks like
+         * an answer. */
+        dap_send_error(s, req_seq, "evaluate",
+                       "cannot evaluate in a recording -- "
+                       "relaunch without \"replay\" for a live session");
+        return;
+    }
     char expr[256] = {0};
     lsp_json_str_copy(args, "expression", expr, sizeof expr);
     int64_t frame_id = lsp_json_int(args, "frameId");
@@ -567,16 +646,255 @@ static void dap_on_pause(TuriEnv *env, TuriDbgStop reason, void *ud) {
 }
 
 /* ---------------------------------------------------------------------------
+ * T2: reverse execution over a recording
+ *
+ * VS Code and nvim-dap already draw the whole reverse-execution UI when a
+ * server advertises supportsStepBack -- the scrubber, the backwards
+ * breakpoints, the rewinding variables pane. So the leverage here is entirely
+ * in answering the requests: there is no widget to write.
+ *
+ * The session model is the plain one turned inside out. A live session pauses
+ * the program and asks it questions; this one runs the program to completion
+ * with the recorder attached and then asks the recording. Everything except
+ * `evaluate` answers identically, because a frame and its locals are exactly
+ * what the recording stores.
+ * --------------------------------------------------------------------------- */
+
+/* Send the recorded output the cursor has now passed.
+ *
+ * Only ever forward: a terminal has no undo, so scrubbing backwards cannot
+ * unprint. The transcript that rewinds with the cursor is the browser
+ * timeline's (T3), where the client owns the console. */
+static void dap_replay_flush_output(DapState *s) {
+    size_t len = 0;
+    const char *out = turi_trace_replay_output(s->replay, &len);
+    if (len <= s->replay_out_sent) return;
+    size_t n = len - s->replay_out_sent;
+    Buf b; buf_init(&b);
+    buf_printf(&b, "{\"seq\":%d,\"type\":\"event\",\"event\":\"output\","
+                   "\"body\":{\"category\":\"stdout\",\"output\":\"", s->seq++);
+    dap_json_escape_n(&b, out + s->replay_out_sent, n);
+    buf_puts(&b, "\"}}");
+    dap_write(s, &b);
+    buf_free(&b);
+    s->replay_out_sent = len;
+}
+
+/* Is `index` on a line the client set a breakpoint on?
+ *
+ * Asked of every step between the cursor and the next hit, so it reads the
+ * step's recorded site directly rather than seeking to it: a seek rebuilds the
+ * whole state from the start of the stream, and doing that per candidate turns
+ * a `continue` over an 80k-step recording from instant into a hang. Measured.
+ *
+ * Conditions are not evaluated here. A condition is an expression in a frame,
+ * and a recording has no frame to evaluate it in -- the same reason `evaluate`
+ * refuses. A conditional breakpoint therefore behaves as an unconditional one
+ * in replay, which is the honest degradation: it stops more often than asked,
+ * never less. */
+static bool dap_replay_is_bp(DapState *s, uint32_t index) {
+    const char *file = "";
+    uint32_t line = 0;
+    if (!turi_trace_replay_site_at(s->replay, index, &file, &line)) return false;
+    for (int i = 0; i < s->n_bps; i++) {
+        if (s->bps[i].line != line) continue;
+        if (s->bps[i].file[0] &&
+            strcmp(s->bps[i].file, dap_basename(file)) != 0)
+            continue;
+        return true;
+    }
+    return false;
+}
+
+/* Scan for the next (dir > 0) or previous breakpoint hit; falls back to the
+ * end of the recording, which is what a `continue` with nothing ahead of it
+ * should do. */
+static uint32_t dap_replay_seek_bp(DapState *s, int dir, bool *hit_out) {
+    uint32_t n = turi_trace_replay_steps(s->replay);
+    uint32_t cur = turi_trace_replay_index(s->replay);
+    if (hit_out) *hit_out = false;
+    if (n == 0) return 0;
+    if (dir > 0) {
+        for (uint32_t i = cur + 1; i < n; i++) {
+            if (!dap_replay_is_bp(s, i)) continue;
+            if (hit_out) *hit_out = true;
+            return i;
+        }
+        return n - 1;
+    }
+    for (uint32_t i = cur; i > 0; i--) {
+        if (!dap_replay_is_bp(s, i - 1)) continue;
+        if (hit_out) *hit_out = true;
+        return i - 1;
+    }
+    return 0;
+}
+
+/* Advance (or rewind) until the frame depth comes back to `want` or shallower
+ * -- which is step-over when `want` is the current depth and step-out when it
+ * is one less. */
+static uint32_t dap_replay_seek_depth(DapState *s, int dir, int want) {
+    uint32_t n = turi_trace_replay_steps(s->replay);
+    uint32_t cur = turi_trace_replay_index(s->replay);
+    if (n == 0) return 0;
+    if (dir > 0) {
+        for (uint32_t i = cur + 1; i < n; i++)
+            if (turi_trace_replay_depth_at(s->replay, i) <= want) return i;
+        return n - 1;
+    }
+    for (uint32_t i = cur; i > 0; i--)
+        if (turi_trace_replay_depth_at(s->replay, i - 1) <= want) return i - 1;
+    return 0;
+}
+
+/* The replay session loop. Returns when the client disconnects, or when a
+ * forward `continue` reaches the end of the recording -- at which point
+ * dap_run_program emits `exited` / `terminated` exactly as it does for a live
+ * run. */
+static void dap_replay_session(DapState *s) {
+    uint32_t n = turi_trace_replay_steps(s->replay);
+    if (n == 0) return;
+
+    turi_trace_replay_seek(s->replay, 0);
+    const char *reason = "entry";
+    if (!s->stop_on_entry) {
+        bool hit = false;
+        uint32_t to = dap_replay_seek_bp(s, +1, &hit);
+        if (!hit) return;   /* nothing to stop at: the run is simply over */
+        turi_trace_replay_seek(s->replay, to);
+        reason = "breakpoint";
+    }
+
+    for (;;) {
+        dap_replay_flush_output(s);
+        char ev[160];
+        snprintf(ev, sizeof ev,
+            "{\"reason\":\"%s\",\"threadId\":1,\"allThreadsStopped\":true}",
+            reason);
+        dap_send_event(s, "stopped", ev);
+        reason = "step";
+
+        bool moved = false;
+        while (!moved) {
+            char *msg = lsp_read_message(s->in_fd);
+            if (!msg) return;   /* EOF: the client is gone */
+
+            char cmd[64];
+            if (lsp_json_str_copy(msg, "command", cmd, sizeof cmd) != 0) {
+                free(msg);
+                continue;
+            }
+            int64_t rq = lsp_json_int(msg, "seq");
+            size_t alen;
+            const char *araw = lsp_json_raw(msg, "arguments", &alen);
+            char *args = NULL;
+            if (araw) {
+                args = (char *)malloc(alen + 1);
+                memcpy(args, araw, alen);
+                args[alen] = '\0';
+            }
+
+            uint32_t cur   = turi_trace_replay_index(s->replay);
+            int      depth = turi_trace_replay_depth_at(s->replay, cur);
+            uint32_t to    = cur;
+            bool     stop  = false;   /* leave the loop entirely */
+
+            if (!strcmp(cmd, "continue")) {
+                bool hit = false;
+                to = dap_replay_seek_bp(s, +1, &hit);
+                if (!hit) stop = true;   /* ran off the end */
+                else reason = "breakpoint";
+                dap_send_response(s, rq, "continue",
+                                  "{\"allThreadsContinued\":true}", true);
+                moved = true;
+            } else if (!strcmp(cmd, "reverseContinue")) {
+                bool hit = false;
+                to = dap_replay_seek_bp(s, -1, &hit);
+                if (hit) reason = "breakpoint";
+                dap_send_response(s, rq, "reverseContinue", NULL, true);
+                moved = true;
+            } else if (!strcmp(cmd, "stepIn")) {
+                to = (cur + 1 < n) ? cur + 1 : cur;
+                if (to == cur) stop = true;
+                dap_send_response(s, rq, "stepIn", NULL, true);
+                moved = true;
+            } else if (!strcmp(cmd, "stepBack")) {
+                to = cur ? cur - 1 : 0;
+                dap_send_response(s, rq, "stepBack", NULL, true);
+                moved = true;
+            } else if (!strcmp(cmd, "next")) {
+                to = dap_replay_seek_depth(s, +1, depth);
+                if (to == cur) stop = true;
+                dap_send_response(s, rq, "next", NULL, true);
+                moved = true;
+            } else if (!strcmp(cmd, "reverseNext")) {
+                to = dap_replay_seek_depth(s, -1, depth);
+                dap_send_response(s, rq, "reverseNext", NULL, true);
+                moved = true;
+            } else if (!strcmp(cmd, "stepOut")) {
+                to = dap_replay_seek_depth(s, +1, depth - 1);
+                if (to == cur) stop = true;
+                dap_send_response(s, rq, "stepOut", NULL, true);
+                moved = true;
+            } else if (!strcmp(cmd, "pause")) {
+                dap_send_response(s, rq, "pause", NULL, true);
+            } else if (!strcmp(cmd, "disconnect") || !strcmp(cmd, "terminate")) {
+                dap_send_response(s, rq, cmd, NULL, true);
+                free(args); free(msg);
+                return;
+            } else if (!dap_handle_common(s, cmd, rq, args)) {
+                dap_send_error(s, rq, cmd, "not supported in a recording");
+            }
+
+            free(args);
+            free(msg);
+            if (moved) {
+                turi_trace_replay_seek(s->replay, to);
+                if (stop) { dap_replay_flush_output(s); return; }
+            }
+        }
+    }
+}
+
+/* ---------------------------------------------------------------------------
  * Public entry points
  * --------------------------------------------------------------------------- */
 
 void dap_begin_session(void *state, TuriEnv *env) {
     DapState *s = (DapState *)state;
     s->env = env;
+    if (s->replay_mode) {
+        /* The recorder owns the pause handler for the whole run -- it stops at
+         * every node and immediately resumes, so breakpoints have nothing to
+         * do until the replay, where they are matched against recorded sites
+         * instead. */
+        TurTraceOpts opts;
+        memset(&opts, 0, sizeof opts);
+        opts.capture_output = true;
+        s->trace = turi_trace_begin(env, &opts);
+        if (s->trace) return;
+        /* No recorder: fall through to a live session rather than running the
+         * program with no debugger attached at all. */
+        s->replay_mode = false;
+    }
     turi_debug_set_pause_handler(env, dap_on_pause, s);
     turi_debug_set_cond_handler(env, dap_on_cond, s);
     for (int i = 0; i < s->n_bps; i++)
         turi_debug_add_breakpoint(env, s->bps[i].file, s->bps[i].line, s->bps[i].cond);
+}
+
+void dap_end_session(void *state, TuriEnv *env) {
+    (void)env;
+    DapState *s = (DapState *)state;
+    /* The recorder's pause handler lives on the env, so it has to come off
+     * while the env is still there. The recording itself outlives it -- that
+     * is the whole point. */
+    if (s->trace) turi_trace_stop(s->trace);
+    /* And the env itself is about to be freed. A replay session keeps serving
+     * requests after this point -- that is what replay IS -- so anything that
+     * still reached for `s->env` would be reading freed memory. Every user of
+     * it already guards on NULL; this is what makes the guard true. */
+    s->env = NULL;
 }
 
 /* Run the program with the debuggee's stdout captured to a pipe so it does not
@@ -616,9 +934,26 @@ static void dap_run_program(DapState *s, DapLaunchFn launch, void *ud,
     int rc = launch(program, args, n_args, s, ud);
 
     fflush(stdout);
-    dap_drain_output(s);
+    /* In replay mode the recorder already wrote the program's output through
+     * to this pipe on its way into the recording. Draining it here would send
+     * the whole transcript up front and then the replay would send it again as
+     * the cursor advanced; the recording is the one that knows WHEN each byte
+     * was printed, so it is the one that gets to say it. */
+    if (!s->replay_mode) dap_drain_output(s);
     if (saved >= 0) { dup2(saved, STDOUT_FILENO); close(saved); }
     if (s->out_pipe_r >= 0) { close(s->out_pipe_r); s->out_pipe_r = -1; }
+
+    if (s->replay_mode && s->trace) {
+        size_t len = 0;
+        const uint8_t *bytes = turi_trace_bytes(s->trace, &len);
+        s->replay = bytes ? turi_trace_replay_open(bytes, len) : NULL;
+        if (s->replay) {
+            dap_replay_session(s);
+            turi_trace_replay_free(s->replay);
+            s->replay = NULL;
+        }
+    }
+    if (s->trace) { turi_trace_end(s->trace); s->trace = NULL; }
 
     char body[64];
     snprintf(body, sizeof body, "{\"exitCode\":%d}", rc);
@@ -656,11 +991,24 @@ int dap_server_run(int in_fd, int out_fd, DapLaunchFn launch, void *ud) {
                 "{\"supportsConfigurationDoneRequest\":true,"
                 "\"supportsConditionalBreakpoints\":true,"
                 "\"supportsEvaluateForHovers\":true,"
+                /* Reverse execution. Advertised unconditionally, because the
+                 * client asks for capabilities before it tells us whether this
+                 * launch is a replay -- and a client that draws the buttons
+                 * and gets an error on a live session is better than one that
+                 * never offers them at all. A live session answers stepBack
+                 * with "not supported while paused". */
+                "\"supportsStepBack\":true,"
+                "\"supportsReverseContinue\":true,"
                 "\"supportsTerminateRequest\":true}", true);
             dap_send_event(&st, "initialized", NULL);
         } else if (!strcmp(command, "launch")) {
             lsp_json_str_copy(args, "program", program, sizeof program);
             st.stop_on_entry = dap_json_bool(args, "stopOnEntry");
+            /* T2: `"replay": true` records the run and then serves the session
+             * from the recording, which is what makes stepBack and
+             * reverseContinue answerable. Off by default -- a live session is
+             * the one that can `evaluate`. */
+            st.replay_mode   = dap_json_bool(args, "replay");
             n_prog_args = dap_parse_str_array(args, "args", &prog_args);
             launched = (program[0] != '\0');
             dap_send_response(&st, req_seq, "launch", NULL, launched);

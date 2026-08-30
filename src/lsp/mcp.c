@@ -95,7 +95,8 @@ static void mcp_write_message(int fd_out, const char *json, size_t len) {
 #endif
 
 extern int tur_check_only(const char *path);
-extern int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
+extern int tur_collect_symbols(const char *source_path, const char *logical_path,
+                               LspSymbol *out, int cap,
                                int *count_out);
 
 #define MCP_SYM_CAP 2048
@@ -300,7 +301,7 @@ static int mcp_load_and_analyze(const char *path, McpAnalysis *a) {
     diag_reset();
     diag_init(false);
     diag_lsp_begin();
-    tur_collect_symbols(path, a->syms, MCP_SYM_CAP, &a->sym_count);
+    tur_collect_symbols(path, NULL, a->syms, MCP_SYM_CAP, &a->sym_count);
     diag_lsp_end();
 
     for (int i = 0; i < a->sym_count; i++) {

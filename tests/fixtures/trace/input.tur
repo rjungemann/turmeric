@@ -1,0 +1,15 @@
+;; Fixture for tests/run-trace.sh -- the time-travel recorder (track T1).
+;;
+;; Small on purpose. The tree-walking interpreter retains roughly 4 KiB per
+;; step of a trampolined loop, so a fixture's step count is a memory
+;; multiplier under --interpret; a recording on top of that is the wrong place
+;; to be generous. fib 6 is 65 steps and a peak depth of 7, which is enough to
+;; exercise ENTER, POP, and a delta that only fires when `n` actually changes.
+(defn fib [n : int] : int
+  (if (< n 2)
+    n
+    (+ (fib (- n 1)) (fib (- n 2)))))
+
+(defn main [] : int
+  (println (fib 6))
+  0)

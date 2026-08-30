@@ -26,8 +26,9 @@
 /* Stub: tur_core's lsp.c references this; this test doesn't touch LSP, but the
  * symbol must resolve when we link tur_core into a standalone executable.
  * Matches the stub in tests/runtime/ffi-dispatch-unit.c. */
-int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
-                        int *count_out) {
+int tur_collect_symbols(const char *source_path, const char *logical_path,
+                        LspSymbol *out, int cap, int *count_out) {
+    (void)logical_path;
     (void)source_path;
     (void)out;
     (void)cap;

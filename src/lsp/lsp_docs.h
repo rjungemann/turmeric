@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include "lsp_sym.h"
+#include "lsp_scope.h"
 
 /* -------------------------------------------------------------------------
  * LspDocTable -- docstring re-scanner results (LD0)
@@ -65,6 +66,17 @@ typedef struct LspDoc {
      * client stops typing (or asks a question that needs symbols) so a burst
      * of keystrokes costs one compile, not one per character. */
     int        dirty;
+    /* S1: the lexical binding table -- locals, with the region each is
+     * visible in. Collected by the same pass that fills `symbols`, and
+     * adopted or retained on exactly the same rule, so the two never
+     * describe different revisions of the text. */
+    LspBinding *bindings;
+    int         binding_count;
+    int         binding_cap;
+    /* The collection hit the cap. A rename refuses on this rather than
+     * guessing: with a truncated table, "not a local" and "a local we had no
+     * room for" are the same answer, and they call for opposite edits. */
+    int         bindings_truncated;
 } LspDoc;
 
 void    lsp_docs_init(void);
@@ -93,6 +105,9 @@ int     lsp_docs_any_dirty(void);
 
 /* Free and zero the symbol array on doc. */
 void    lsp_doc_free_symbols(LspDoc *doc);
+
+/* Free and zero the binding table on doc. */
+void    lsp_doc_free_bindings(LspDoc *doc);
 
 /* Decode a file:// URI into a filesystem path (in-place, returns dest). */
 char   *lsp_uri_to_path(const char *uri, char *dest, size_t dest_cap);

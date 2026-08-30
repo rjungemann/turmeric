@@ -53,6 +53,7 @@
 #include "symbols.h"
 
 #include "lsp/lsp_collect.h"
+#include "lsp/lsp_scope.h"
 #include "lsp/lsp_session.h"
 #include "lsp/lsp_sym.h"
 
@@ -116,8 +117,11 @@ static int read_whole_file(const char *path, char **out, size_t *out_len) {
  * clean parse has a complete binding table, and throwing it away would take
  * completion to zero at the moment it is most wanted.
  */
-int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
-                        int *count_out) {
+int tur_collect_symbols(const char *source_path, const char *logical_path,
+                        LspSymbol *out, int cap, int *count_out) {
+    /* The playground has no spice tree to walk up into -- every buffer is a
+     * tab, and the module search path is the bundled stdlib. */
+    (void)logical_path;
     wasm_lsp_init();
     lsp_collect_begin(out, cap, count_out);
 
@@ -149,6 +153,7 @@ int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
     file.path        = source_path;
     file.src         = src_adj;
     file.len         = len_adj;
+    file.head_offset = (size_t)(src_adj - src);
     file.file_id     = 0;
     file.reader_type = reader_type;
     file.lang_layers = layers;
@@ -186,6 +191,7 @@ int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
          * still fully built, and that tree is exactly what hover and completion
          * want to describe. */
         if (prog) lsp_collect_program(prog);
+        if (prog && lsp_scope_active()) lsp_scope_program(prog);
         if (!prog || diag_had_error()) rc = 1;
     }
 

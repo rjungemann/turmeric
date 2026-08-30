@@ -22,8 +22,9 @@
 /* Stub: tur_core's lsp.c references this; this test never touches LSP, but the
  * symbol must resolve when tur_core is linked into a standalone executable.
  * Matches the stub in tests/unit/experiments_user_config.c. */
-int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
-                        int *count_out) {
+int tur_collect_symbols(const char *source_path, const char *logical_path,
+                        LspSymbol *out, int cap, int *count_out) {
+    (void)logical_path;
     (void)source_path;
     (void)out;
     (void)cap;

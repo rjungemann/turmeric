@@ -23,7 +23,8 @@
  *   1. construct the interpreter env for `program` (with `args`/`n_args`),
  *   2. enable the debugger and call dap_begin_session(state, env) BEFORE arming,
  *   3. arm and run main to completion,
- *   4. return the program's exit code.
+ *   4. call dap_end_session(state, env) before freeing the env,
+ *   5. return the program's exit code.
  * `state` is the opaque DapState handle to forward to dap_begin_session. */
 typedef int (*DapLaunchFn)(const char *program, char **args, int n_args,
                            void *state, void *ud);
@@ -35,5 +36,11 @@ int dap_server_run(int in_fd, int out_fd, DapLaunchFn launch, void *ud);
  * program is armed: records the env, installs the DAP pause / conditional
  * handlers, and flushes the client's staged breakpoints into the debugger. */
 void dap_begin_session(void *state, TuriEnv *env);
+
+/* Called by the launch callback immediately before the env is freed. In a
+ * replay session the recorder's pause handler lives on the env and has to come
+ * off while the env is still there; the recording outlives it. A no-op for a
+ * live session. */
+void dap_end_session(void *state, TuriEnv *env);
 
 #endif

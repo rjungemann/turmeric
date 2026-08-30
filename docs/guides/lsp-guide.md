@@ -28,6 +28,9 @@ Editors launch it as a subprocess and communicate via stdin/stdout.
 | Completion (`textDocument/completion`) | Supported |
 | Signature help (`textDocument/signatureHelp`) | Supported |
 | Formatting (`textDocument/formatting`) | Supported |
+| Document highlight (`textDocument/documentHighlight`) | Supported, scope-aware |
+| Rename (`textDocument/prepareRename`, `textDocument/rename`) | Supported |
+| References (`textDocument/references`) | Supported |
 | Cancellation (`$/cancelRequest`) | Supported |
 | Semantic tokens | Not supported |
 
@@ -84,7 +87,74 @@ Behaviours worth knowing about:
   `null` — "no edits" — rather than an error.
 - **Unsaved buffers work.** Analysis routes the buffer through a temp file, so
   a document with an `untitled:` URI and no filesystem path still gets
-  diagnostics, symbols, completion, and formatting.
+  diagnostics, symbols, completion, and formatting. A buffer that *does* have a
+  path also gets its spice resolved from that path rather than from the temp
+  copy, so intra-spice imports resolve in the editor exactly as they do for
+  `tur check`.
+
+## Scope, highlight, rename and references
+
+The symbol index records global bindings. On its own that is enough for hover
+and an outline and not enough for any question about a name the cursor is
+standing *inside*: a parameter named `x` has no entry at all, so highlighting
+it matched every `x` in the file.
+
+A second pass (`src/lsp/lsp_scope.c`) records the locals -- `defn` and `fn`
+parameters, `let` and `letrec` bindings, `match` binders -- each with the
+source region it is visible in. It rides the same elaboration hook the symbol
+harvest does, so it is one walk over the tree the compiler already built, not
+a second front end.
+
+What that buys:
+
+- **`documentHighlight` is lexical.** A local's marks stop at its own scope,
+  and a global's marks skip every region where a local of the same name
+  shadows it. Both halves matter and they fail in opposite directions: without
+  the first, highlighting the inner `total` of `(let [total ...] ...)` paints
+  the outer one; without the second, highlighting the outer one paints the
+  inner. With the minimap on, the answer is painted down the whole file, so a
+  wrong one is visible at a glance.
+- **`rename` is safe or it refuses.** Renaming a local edits exactly the
+  occurrences in its scope. Renaming a top-level name defined in this file
+  edits this file and every workspace file that imports its module -- the file
+  set comes from the manifest (the project's own `src/`, plus each `:path`
+  `:spices` dep's `src/`), resolved in the compiler rather than in the client,
+  because a second implementation of the module search path would eventually
+  disagree with the first and the disagreement would be an edit applied to the
+  wrong file.
+
+  Every other case refuses, with a reason, through `prepareRename` -- which is
+  why the server advertises `"renameProvider": {"prepareProvider": true}`
+  rather than the bare boolean: the message reaches the user *before* they
+  type a new name.
+
+  | Situation | Message |
+  |---|---|
+  | The cursor is not on an identifier | (null -- no rename here) |
+  | The binder came from a macro expansion | `cannot rename a macro-introduced binding` |
+  | The binding table for the document was truncated | `file too large to rename safely` |
+  | The name is a stdlib symbol | `cannot rename stdlib symbol` |
+  | The name is defined in another file | `cannot rename a symbol defined in another file -- rename it at its definition` |
+  | The module is listed in the manifest's `:exports` | `renaming an exported symbol needs --rename-exports` |
+  | Too many files import the module to verify | `too many files import this module to rename safely` |
+  | A file that uses the name does not compile | `cannot rename: <file> uses this name but does not compile, so its own bindings are unknown` |
+
+  The last two are about the workspace half. Each importing file is compiled
+  for its *own* binding table before it is edited, because rewriting every
+  textual occurrence in a file that imports the module is the cross-file
+  version of the shadowing bug -- and the destructive one: a sibling module
+  that binds a local `total` and separately imports the global `total` would
+  have its local silently renamed too.
+
+  `tur lsp --rename-exports` lifts the `:exports` refusal. It is off by
+  default because such a name is published surface: a spice that fetched this
+  one by `:url` may import it, and those files are outside the workspace.
+
+- **`references` is the workspace walk without the edit.** `includeDeclaration`
+  is honoured. A local's references are its scope; a global's are every
+  importing file's real uses. An oversized workspace returns a shorter list
+  rather than an error -- an incomplete list of references is still true about
+  every entry in it, where an incomplete *edit* is not.
 
 ## Editor configuration
 

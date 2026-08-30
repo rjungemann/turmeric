@@ -101,6 +101,71 @@ expect "program stdout as output event"   "OUTPUT done"
 expect "exit code is forwarded"           "EXIT code=7"
 expect "driver completed the session"     "DONE"
 
+# ---------------------------------------------------------------------------
+# T2: reverse execution over a recording
+#
+# A second session, launched with `"replay": true`. The server records the
+# whole run and then serves the session from the recording, which is what makes
+# the direction a live debugger cannot go answerable at all.
+# ---------------------------------------------------------------------------
+
+# Its own fixture, and a larger one: see tests/fixtures/dap-replay/input.tur
+# for why a 65-step recording cannot tell a linear scan from a quadratic one.
+REPLAY_FIX="tests/fixtures/dap-replay/input.tur"
+if [ ! -f "$REPLAY_FIX" ]; then
+  echo "FAIL dap: replay fixture not found at $REPLAY_FIX"
+  exit 1
+fi
+replay_out=$(python3 tests/dap-replay-driver.py "$TUR" "$REPLAY_FIX" 2>&1)
+replay_status=$?
+
+expect_replay() {
+  local desc="$1" needle="$2"
+  if grep -qF -- "$needle" <<< "$replay_out"; then
+    echo "PASS dap: $desc"
+    pass=$((pass + 1))
+  else
+    echo "FAIL dap: $desc (missing: $needle)"
+    fail=$((fail + 1))
+  fi
+}
+
+if [ "$replay_status" -ne 0 ]; then
+  echo "FAIL dap: replay driver exited non-zero ($replay_status)"
+  printf '%s\n' "$replay_out" | sed 's/^/    /'
+  fail=$((fail + 1))
+else
+  expect_replay "stepBack is advertised"        "CAP supportsStepBack=true"
+  expect_replay "reverseContinue is advertised" "CAP supportsReverseContinue=true"
+  expect_replay "a recording opens at its first step" "STOP entry reason=entry"
+  # Forward through the recording behaves like a live session: the same
+  # breakpoint, the same two-frame stack, the same locals.
+  expect_replay "a recorded breakpoint stops"   "STOP bp-add reason=breakpoint"
+  expect_replay "the recorded stack has both frames" "DEPTH bp-add=2"
+  expect_replay "recorded locals expose param a" "VAR add a=3"
+  expect_replay "recorded locals expose param b" "VAR add b=4"
+  # The one request a recording cannot answer says so, rather than returning a
+  # stale value that looks like an answer.
+  expect_replay "evaluate refuses in a recording" "EVAL success=false"
+  expect_replay "and names the reason"            "cannot evaluate in a recording"
+  # The gate: stepping BACK out of the callee lands in the caller, showing the
+  # caller's own values -- "how did this come to be what it is", answered.
+  expect_replay "stepBack leaves the callee"      "STEPBACK left-callee-after=yes"
+  expect_replay "and lands in the caller"         "FRAME back #0 main"
+  expect_replay "with the caller's own locals"    "VAR back x=3"
+  expect_replay "and not the callee's"            "DEPTH after-stepback=1"
+  # A recording is replayable: the second visit reads exactly like the first.
+  expect_replay "the same breakpoint again"       "DEPTH again=2"
+  expect_replay "with the same values"            "VAR again a=3"
+  expect_replay "reverseContinue rewinds"         "STOP rev reason="
+  # A `continue` with nothing ahead of it scans the whole recording. Reaching
+  # `exited` is the assertion; the timing line is the diagnostic that says
+  # WHY, if a future change makes that scan quadratic again.
+  expect_replay "continue runs off the end of the recording" "EXIT code=7"
+  expect_replay "and the end-to-end scan stays linear" "CONTINUE-TO-END under-10s=yes"
+  expect_replay "the replay session completed"    "DONE"
+fi
+
 echo
 if [ "$fail" -ne 0 ]; then
   echo "FAIL dap: $fail assertion(s) failed ($pass passed)"

@@ -111,6 +111,10 @@ set(TURI_EVAL_SOURCES
     # dap.c -- Debug Adapter Protocol server (debugger Phase 3), a thin shell
     # over the Phase 2 interpreter debugger's control API in eval.c.
     turi/dap.c
+    # trace.c -- the time-travel recorder (editor-intelligence follow-through,
+    # track T). Drives the same Phase 3 control API dap.c does: a pause
+    # handler that captures and immediately resumes step-in IS a tracer.
+    turi/trace.c
     turi/repl.c
     # RP3: REPL spice-image loader. Walks up to build.tur, dlopens
     # .tur-repl-cache/lib.so, primes a symbol map from exports.manifest.
@@ -287,6 +291,7 @@ set(TUR_CORE_SOURCES
     lsp/lsp_io.c
     lsp/lsp_sink.c
     lsp/lsp_collect.c
+    lsp/lsp_scope.c
     lsp/lsp_json.c
     lsp/lsp_docs.c
     lsp/lsp_util.c

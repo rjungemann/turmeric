@@ -305,9 +305,14 @@
                     </div>
                     <div class="repl-input-row" id="repl-input-row">
                         <span class="repl-prompt">turi&gt;</span>
-                        <input type="text" id="repl-input" class="repl-input"
-                               placeholder="Enter an expression…"
-                               autocomplete="off" spellcheck="false" disabled />
+                        <!-- W1: the prompt is a single-line Monaco editor, not
+                             an <input>. Not for the look: completion, hover and
+                             signature help at the prompt are then the providers
+                             that already exist, rather than a second copy of the
+                             widget stack over a bare text field. The id is kept
+                             so existing CSS and tests still find it. -->
+                        <div id="repl-input" class="repl-input repl-input-disabled"
+                             data-placeholder="Enter an expression…"></div>
                     </div>
                     <div class="console-footer">
                         <span class="execution-time" id="exec-time">Ready</span>
