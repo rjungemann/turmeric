@@ -3026,14 +3026,24 @@ function initReplInput() {
     if (!host) return;
 
     /* The suggest widget has to escape a 22px-tall, overflow:hidden row, so it
-     * renders into a body-level node instead of inside the editor. */
+     * renders into a body-level node instead of inside the editor.
+     *
+     * `monaco-editor` on that node is mandatory, not decorative. Monaco ships
+     * every widget rule scoped to a `.monaco-editor` ancestor
+     * (`.monaco-editor .suggest-widget { ... }`) and declares the whole
+     * `--vscode-*` color set on `.monaco-editor` itself. Hoisted out of the
+     * editor without the class, the popup matches none of it: transparent
+     * background, no border, unsized rows -- suggestions painted straight over
+     * the prompt with nothing behind them. */
     let overlay = document.getElementById('repl-suggest-overlay');
     if (!overlay) {
         overlay = document.createElement('div');
         overlay.id = 'repl-suggest-overlay';
-        overlay.className = 'repl-suggest-overlay';
+        overlay.className = 'repl-suggest-overlay monaco-editor';
         document.body.appendChild(overlay);
     }
+    // An overlay left over from a previous init predates the class.
+    overlay.classList.add('monaco-editor');
 
     promptEditor = monaco.editor.create(host, {
         value: '',

@@ -898,11 +898,24 @@ body.split-dragging * {
 /* The suggest widget has to escape a 22px-tall, overflow:hidden row, so it is
    rendered into the document body (`overflowWidgetsDomNode`) rather than
    inside the editor. This keeps it above the console. */
-.repl-suggest-overlay {
+/* Deliberately an id selector. The node also carries `monaco-editor` so the
+   hoisted suggest widget inherits Monaco's `--vscode-*` colors and widget
+   rules, and Monaco injects its stylesheet after this one -- a class selector
+   here loses to `.monaco-editor { position: relative }`, which drops a
+   full-width box into normal flow at the end of <body>. */
+#repl-suggest-overlay {
     position: absolute;
     top: 0;
     left: 0;
     z-index: 60;
+    /* ... and for the same reason the box itself has to be neutralised.
+       `.monaco-editor` also carries `width/height: 100%` and an opaque
+       `background-color`, which on a body-level node is a full-viewport
+       curtain over the app. The widgets inside are `position: fixed`
+       (fixedOverflowWidgets), so a zero-sized host still places them. */
+    width: 0;
+    height: 0;
+    background: transparent;
 }
 
 /* Shown until the first keystroke. An <input>'s ::placeholder has no Monaco

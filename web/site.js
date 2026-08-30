@@ -79,9 +79,19 @@ class SiteNav extends HTMLElement {
       ['/trowel',                          'Trowel'],
     ];
 
-    const linkHTML = links.map(([href, label]) =>
-      `<a href="${href}"${active === label ? ' class="active"' : ''}>${label}</a>`
-    ).join('');
+    // On /try itself, every route to /try is a link to the page you are already
+    // on -- both the nav entry and the gold CTA. Drop them rather than render a
+    // self-link (the other `active` pages keep their entry as a you-are-here
+    // highlight; only /try has a duplicate CTA that would be left dangling).
+    const onTry = active === 'Try It';
+
+    const linkHTML = links
+      .filter(([href]) => !(onTry && href === '/try'))
+      .map(([href, label]) =>
+        `<a href="${href}"${active === label ? ' class="active"' : ''}>${label}</a>`
+      ).join('');
+
+    const ctaHTML = onTry ? '' : '<a href="/try" class="btn-gold">Try it →</a>';
 
     this.innerHTML = `
       <nav>
@@ -95,14 +105,14 @@ class SiteNav extends HTMLElement {
         <div class="nav-links">${linkHTML}</div>
         <div class="nav-right">
           <a href="https://github.com/rjungemann/turmeric" class="btn-ghost">GitHub</a>
-          <a href="/try" class="btn-gold">Try it →</a>
+          ${ctaHTML}
         </div>
         <div class="nav-mobile-panel">
           <a class="nav-mobile-back" href="/">← Back to home</a>
           ${linkHTML}
           <div class="nav-mobile-cta">
             <a href="https://github.com/rjungemann/turmeric" class="btn-ghost">GitHub</a>
-            <a href="/try" class="btn-gold">Try it →</a>
+            ${ctaHTML}
           </div>
         </div>
       </nav>`;
