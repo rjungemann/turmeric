@@ -74,7 +74,7 @@ class SiteNav extends HTMLElement {
       ['/tour',                            'Tour'],
       ['/try',                             'Try It'],
       ['/docs/html/guides/',               'Guides'],
-      ['/docs/html/api/',                  'API Docs'],
+      ['/docs/html/api/',                  'Docs'],
       ['https://spices.turmeric-lang.com', 'Spices'],
       ['/trowel',                          'Trowel'],
     ];
