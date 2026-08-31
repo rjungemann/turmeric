@@ -102,7 +102,26 @@ typedef struct {
     char *default_val;  /* NULL if no default */
     int   variadic;     /* 1 if +NAME or *NAME */
     int   variadic_req; /* 1 for +NAME (>=1 required), 0 for *NAME */
+    /* Option binding from [arg('name', short='v', long='version')].  When
+     * opt_long or opt_short is set the parameter is filled from a CLI option
+     * instead of by position.  opt_flag_value non-NULL makes it a valueless
+     * flag whose presence binds that literal (just's value='true'). */
+    char *opt_long;
+    char *opt_short;
+    char *opt_flag_value;
 } JParam;
+
+/* One [arg(...)] attribute, resolved onto a JParam once the recipe header
+ * has been parsed (the attribute precedes the header, so the parameter it
+ * names does not exist yet when the attribute is read). */
+typedef struct {
+    char *param;
+    char *lng;
+    char *shrt;
+    char *flag_value;
+} JArgSpec;
+
+#define JR_MAX_ARGSPECS 16
 
 typedef struct {
     char  *recipe;
@@ -150,6 +169,8 @@ typedef struct {
     char *group;            /* [group('name')], or NULL */
     char *doc_attr;         /* [doc("...")], overrides a `#` doc comment */
     int   platform;         /* JR_PLAT_* bitmask; JR_PLAT_ANY = unrestricted */
+    JArgSpec argspecs[JR_MAX_ARGSPECS];
+    int      n_argspecs;
 } JAttrs;
 
 typedef struct {
@@ -374,6 +395,20 @@ static char *jr_issuef(const char *fmt, ...) {
 /* Attribute lines                                                     */
 /* ------------------------------------------------------------------ */
 
+/* Release every heap string an attribute set owns, and zero it. */
+static void jattrs_free(JAttrs *at) {
+    free(at->confirm_msg);
+    free(at->group);
+    free(at->doc_attr);
+    for (int i = 0; i < at->n_argspecs; i++) {
+        free(at->argspecs[i].param);
+        free(at->argspecs[i].lng);
+        free(at->argspecs[i].shrt);
+        free(at->argspecs[i].flag_value);
+    }
+    memset(at, 0, sizeof(*at));
+}
+
 /* Is this line an attribute line -- `[` at the start, and no `:=` before the
  * bracket (which would make it an array-valued assignment RHS instead)?  We
  * only need to distinguish the two forms; the caller has already left-trimmed. */
@@ -432,6 +467,83 @@ static char *parse_attr_line(const char *line, int lineno, const char *path,
         memcpy(name, nstart, nlen);
 
         while (*p == ' ' || *p == '\t') p++;
+
+        /* [arg('param', short='v', long='version', value='true')] needs the
+         * whole keyword-argument list, not just the first string, so it is
+         * parsed here rather than falling into the single-argument path. */
+        if (strcmp(name, "arg") == 0) {
+            if (*p != '(') {
+                return jr_issuef("%s:%d: [arg] requires an argument list, e.g. "
+                                 "[arg('name', long='name')]", path, lineno);
+            }
+            if (at->n_argspecs >= JR_MAX_ARGSPECS) {
+                return jr_issuef("%s:%d: too many [arg(...)] attributes",
+                                 path, lineno);
+            }
+            p++;
+            JArgSpec *spec = &at->argspecs[at->n_argspecs];
+            memset(spec, 0, sizeof(*spec));
+            int first = 1;
+            for (;;) {
+                while (*p == ' ' || *p == '\t' || *p == ',') p++;
+                if (*p == ')') { p++; break; }
+                if (*p == '\0') {
+                    return jr_issuef("%s:%d: unterminated [arg(...)]",
+                                     path, lineno);
+                }
+                if (first && (*p == '\'' || *p == '"')) {
+                    spec->param = jr_attr_string(&p);
+                    if (!spec->param) {
+                        return jr_issuef("%s:%d: unterminated string in [arg(...)]",
+                                         path, lineno);
+                    }
+                    first = 0;
+                    continue;
+                }
+                first = 0;
+                /* key = 'value' */
+                const char *kstart = p;
+                while (*p && (isalnum((unsigned char)*p) || *p == '_')) p++;
+                char key[32] = {0};
+                size_t klen = (size_t)(p - kstart);
+                if (klen == 0 || klen >= sizeof(key)) {
+                    return jr_issuef("%s:%d: malformed key in [arg(...)]",
+                                     path, lineno);
+                }
+                memcpy(key, kstart, klen);
+                while (*p == ' ' || *p == '\t') p++;
+                if (*p != '=') {
+                    return jr_issuef("%s:%d: expected '=' after '%s' in [arg(...)]",
+                                     path, lineno, key);
+                }
+                p++;
+                while (*p == ' ' || *p == '\t') p++;
+                char *val = jr_attr_string(&p);
+                if (!val) {
+                    return jr_issuef("%s:%d: expected a quoted value for '%s' "
+                                     "in [arg(...)]", path, lineno, key);
+                }
+                if      (strcmp(key, "long")  == 0) { free(spec->lng);  spec->lng  = val; }
+                else if (strcmp(key, "short") == 0) { free(spec->shrt); spec->shrt = val; }
+                else if (strcmp(key, "value") == 0) { free(spec->flag_value); spec->flag_value = val; }
+                else {
+                    free(val);
+                    return jr_issuef("%s:%d: unknown key '%s' in [arg(...)] "
+                                     "(expected long, short, or value)",
+                                     path, lineno, key);
+                }
+            }
+            if (!spec->param) {
+                return jr_issuef("%s:%d: [arg(...)] needs a parameter name as "
+                                 "its first argument", path, lineno);
+            }
+            /* Default the long option to the parameter name, as just does. */
+            if (!spec->lng && !spec->shrt) spec->lng = jr_strdup(spec->param);
+            at->n_argspecs++;
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == ',') { p++; continue; }
+            break;
+        }
 
         /* Optional argument list. We keep only the first string argument,
          * which is all any attribute we support needs. */
@@ -1246,6 +1358,38 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
             memset(r, 0, sizeof(*r));
             if (parse_recipe_header(t, r)) {
                 r->attrs = pending_attrs;
+                /* Resolve [arg(...)] onto the parameters it names.  The
+                 * attribute is written above the header, so this is the first
+                 * point at which the parameter list exists. */
+                for (int a = 0; a < pending_attrs.n_argspecs; a++) {
+                    JArgSpec *spec = &pending_attrs.argspecs[a];
+                    int matched = 0;
+                    for (int q = 0; q < r->n_params; q++) {
+                        if (r->params[q].name &&
+                            strcmp(r->params[q].name, spec->param) == 0) {
+                            r->params[q].opt_long       = spec->lng;
+                            r->params[q].opt_short      = spec->shrt;
+                            r->params[q].opt_flag_value = spec->flag_value;
+                            spec->lng = spec->shrt = spec->flag_value = NULL;
+                            matched = 1;
+                            break;
+                        }
+                    }
+                    if (!matched) {
+                        char *issue = jr_issuef(
+                            "%s:%d: [arg('%s')] names a parameter that recipe "
+                            "'%s' does not declare", path, lineno,
+                            spec->param, r->name);
+                        if (jf->n_issues < JR_MAX_ISSUES)
+                            jf->issues[jf->n_issues++] = issue;
+                        else free(issue);
+                    }
+                    free(spec->param);
+                    free(spec->lng);
+                    free(spec->shrt);
+                    free(spec->flag_value);
+                }
+                r->attrs.n_argspecs = 0;
                 /* [doc("...")] wins over an accumulated `#` doc comment. */
                 if (pending_attrs.doc_attr) {
                     free(pending_doc);
@@ -1271,17 +1415,12 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
         free(pending_doc);
         pending_doc     = NULL;
         pending_private = 0;
-        free(pending_attrs.confirm_msg);
-        free(pending_attrs.group);
-        free(pending_attrs.doc_attr);
-        memset(&pending_attrs, 0, sizeof(pending_attrs));
+        jattrs_free(&pending_attrs);
         free(line);
     }
 
     free(pending_doc);
-    free(pending_attrs.confirm_msg);
-    free(pending_attrs.group);
-    free(pending_attrs.doc_attr);
+    jattrs_free(&pending_attrs);
     return 0;
 }
 
@@ -1395,12 +1534,13 @@ static void jfile_free(JFile *jf) {
         JRecipe *r = &jf->recipes[i];
         free(r->name);
         free(r->doc);
-        free(r->attrs.confirm_msg);
-        free(r->attrs.group);
-        free(r->attrs.doc_attr);
+        jattrs_free(&r->attrs);
         for (int j = 0; j < r->n_params; j++) {
             free(r->params[j].name);
             free(r->params[j].default_val);
+            free(r->params[j].opt_long);
+            free(r->params[j].opt_short);
+            free(r->params[j].opt_flag_value);
         }
         for (int j = 0; j < r->n_deps; j++) {
             free(r->deps[j].recipe);
@@ -1689,25 +1829,153 @@ static JRecipe *find_recipe(JFile *jf, const char *name) {
 /* Parameter binding                                                   */
 /* ================================================================== */
 
-static int bind_params(const JRecipe *r, const char **positional, int n_pos,
-                        JEnv *env, const char *recipe_name) {
+/* Does this recipe bind any parameter to a CLI option? */
+static int recipe_has_options(const JRecipe *r) {
+    for (int i = 0; i < r->n_params; i++)
+        if (r->params[i].opt_long || r->params[i].opt_short) return 1;
+    return 0;
+}
+
+/* Match argv[k] against one parameter's option spelling.
+ * Returns: 0 no match, 1 matched and value is inline (--opt=V, -o=V, or a
+ * valueless flag), 2 matched and the value is the NEXT argv entry. */
+static int option_matches(const JParam *p, const char *arg, const char **inline_val) {
+    *inline_val = NULL;
+    const char *body = NULL;
+    if (arg[0] == '-' && arg[1] == '-' && p->opt_long) {
+        body = arg + 2;
+        size_t n = strlen(p->opt_long);
+        if (strncmp(body, p->opt_long, n) != 0) return 0;
+        if (body[n] == '\0')      body = NULL;         /* exact: --opt */
+        else if (body[n] == '=') { *inline_val = body + n + 1; return 1; }
+        else return 0;
+    } else if (arg[0] == '-' && arg[1] != '-' && arg[1] != '\0' && p->opt_short) {
+        body = arg + 1;
+        size_t n = strlen(p->opt_short);
+        if (strncmp(body, p->opt_short, n) != 0) return 0;
+        if (body[n] == '\0')      body = NULL;         /* exact: -o */
+        else if (body[n] == '=') { *inline_val = body + n + 1; return 1; }
+        else return 0;
+    } else {
+        return 0;
+    }
+    (void)body;
+    /* Bare option: a flag supplies its own value, otherwise take the next argv. */
+    if (p->opt_flag_value) { *inline_val = p->opt_flag_value; return 1; }
+    return 2;
+}
+
+/* Bind parameters from option-style arguments (`--name value`, `--name=value`,
+ * `-n value`, `-n=value`, and valueless flags).  Any argument that is not a
+ * recognized option is handed to the positional binder, so a recipe can mix
+ * the two.  Mirrors just's [arg(...)] behavior. */
+static int bind_option_params(const JRecipe *r, const char **argv, int argc,
+                              JEnv *env, const char *recipe_name,
+                              const char ***out_rest, int *out_n_rest) {
+    const char **rest = (const char **)malloc((size_t)(argc + 1) * sizeof(char *));
+    int n_rest = 0;
+    int *bound = (int *)calloc((size_t)r->n_params, sizeof(int));
+    if (!rest || !bound) { free(rest); free(bound); return 2; }
+
+    for (int k = 0; k < argc; k++) {
+        const char *arg = argv[k];
+        int handled = 0;
+        if (arg[0] == '-' && arg[1] != '\0') {
+            for (int i = 0; i < r->n_params; i++) {
+                const JParam *p = &r->params[i];
+                if (!p->opt_long && !p->opt_short) continue;
+                const char *inline_val = NULL;
+                int m = option_matches(p, arg, &inline_val);
+                if (m == 0) continue;
+                if (m == 2) {
+                    if (k + 1 >= argc) {
+                        fprintf(stderr,
+                                "tur run: recipe '%s': option '%s' needs a value\n",
+                                recipe_name, arg);
+                        free(rest); free(bound);
+                        return 2;
+                    }
+                    inline_val = argv[++k];
+                }
+                jenv_set(env, p->name, inline_val);
+                bound[i] = 1;
+                handled  = 1;
+                break;
+            }
+            if (!handled) {
+                fprintf(stderr, "tur run: recipe '%s' has no option '%s'\n",
+                        recipe_name, arg);
+                free(rest); free(bound);
+                return 2;
+            }
+        }
+        if (!handled) rest[n_rest++] = arg;
+    }
+
+    /* Option-bound parameters that were not supplied fall back to their
+     * default, or are reported as required. */
     for (int i = 0; i < r->n_params; i++) {
         const JParam *p = &r->params[i];
+        if (!p->opt_long && !p->opt_short) continue;
+        if (bound[i]) continue;
+        /* An absent flag takes the parameter's default when it has one, and
+         * only falls back to empty when it does not -- matching just. */
+        if (p->default_val)    { jenv_set(env, p->name, p->default_val); continue; }
+        if (p->opt_flag_value) { jenv_set(env, p->name, ""); continue; }
+        fprintf(stderr, "tur run: recipe '%s' requires option '%s%s'\n",
+                recipe_name,
+                p->opt_long ? "--" : "-",
+                p->opt_long ? p->opt_long : p->opt_short);
+        free(rest); free(bound);
+        return 2;
+    }
+
+    free(bound);
+    *out_rest   = rest;
+    *out_n_rest = n_rest;
+    return 0;
+}
+
+static int bind_params(const JRecipe *r, const char **positional, int n_pos,
+                        JEnv *env, const char *recipe_name) {
+    /* Option-bound parameters are filled first and removed from the argument
+     * list; whatever is left binds positionally as before. */
+    const char **owned_rest = NULL;
+    if (recipe_has_options(r)) {
+        const char **rest = NULL;
+        int          n_rest = 0;
+        int rc = bind_option_params(r, positional, n_pos, env, recipe_name,
+                                    &rest, &n_rest);
+        if (rc) return rc;
+        owned_rest = rest;
+        positional = rest;
+        n_pos      = n_rest;
+    }
+
+#define BIND_RETURN(rc) do { free(owned_rest); return (rc); } while (0)
+
+    /* Tracked separately from the parameter index: an option-bound parameter
+     * consumes no positional slot. */
+    int pos_idx = 0;
+
+    for (int i = 0; i < r->n_params; i++) {
+        const JParam *p = &r->params[i];
+        if (p->opt_long || p->opt_short) continue;  /* already bound */
         if (p->variadic) {
-            int remaining = n_pos - i;
+            int remaining = n_pos - pos_idx;
             if (remaining < 0) remaining = 0;
             if (p->variadic_req && remaining == 0) {
                 fprintf(stderr,
                     "tur run: recipe '%s' requires at least one argument "
                     "for parameter +%s\n",
                     recipe_name, p->name);
-                return 2;
+                BIND_RETURN(2);
             }
             size_t total = 0;
-            for (int j = i; j < n_pos; j++) total += strlen(positional[j]) + 1;
+            for (int j = pos_idx; j < n_pos; j++) total += strlen(positional[j]) + 1;
             char *joined = (char *)malloc(total + 1);
             char *jp = joined;
-            for (int j = i; j < n_pos; j++) {
+            for (int j = pos_idx; j < n_pos; j++) {
                 size_t len = strlen(positional[j]);
                 memcpy(jp, positional[j], len);
                 jp += len;
@@ -1719,7 +1987,8 @@ static int bind_params(const JRecipe *r, const char **positional, int n_pos,
             jenv_set(env, p->name, joined);
             break;
         } else {
-            const char *val = (i < n_pos) ? positional[i] : p->default_val;
+            const char *val = (pos_idx < n_pos) ? positional[pos_idx] : p->default_val;
+            if (pos_idx < n_pos) pos_idx++;
             if (!val) {
                 fprintf(stderr,
                     "tur run: recipe '%s' requires argument '%s'\n"
@@ -1733,12 +2002,13 @@ static int bind_params(const JRecipe *r, const char **positional, int n_pos,
                         fprintf(stderr, " %s", r->params[j].name);
                 }
                 fprintf(stderr, ":\n");
-                return 2;
+                BIND_RETURN(2);
             }
             jenv_set(env, p->name, val);
         }
     }
-    return 0;
+    BIND_RETURN(0);
+#undef BIND_RETURN
 }
 
 /* ================================================================== */

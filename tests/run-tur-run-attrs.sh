@@ -24,12 +24,13 @@ trap 'rm -rf "$WORK"' EXIT
 # ok NAME <<'EOF' ... EOF  -- writes $WORK/Justfile from stdin
 write_justfile() { cat > "$WORK/Justfile"; }
 
-# expect_refused NAME RECIPE PATTERN
+# expect_refused NAME PATTERN ARGV...
 #   The recipe must NOT run: exit 2, and stderr must match PATTERN.
+#   ARGV is passed verbatim after `tur run`, as a user would type it.
 expect_refused() {
-    local name="$1" recipe="$2" pattern="$3"
+    local name="$1" pattern="$2"; shift 2
     local out rc
-    out=$(cd "$WORK" && "$TUR_BIN" run "$recipe" 2>&1 </dev/null)
+    out=$(cd "$WORK" && "$TUR_BIN" run "$@" 2>&1 </dev/null)
     rc=$?
     if [ "$rc" -ne 2 ]; then
         echo "FAIL: $name -- expected exit 2, got $rc"
@@ -77,14 +78,14 @@ danger:
 	@echo DESTRUCTIVE-ACTION-RAN
 EOF
 expect_refused "confirm-with-message is not silently dropped" \
-    danger "requires confirmation"
+    "requires confirmation" danger
 
 write_justfile <<'EOF'
 [confirm]
 danger:
 	@echo DESTRUCTIVE-ACTION-RAN
 EOF
-expect_refused "bare confirm is honored too" danger "requires confirmation"
+expect_refused "bare confirm is honored too" "requires confirmation" danger
 
 # Backticks inside {{ }} used to expand to the empty string, so the recipe ran
 # with a value silently missing.
@@ -93,7 +94,7 @@ show:
 	@echo "inline {{ `echo xyz` }}"
 EOF
 expect_refused "backtick in interpolation is refused" \
-    show "backtick command substitution"
+    "backtick command substitution" show
 
 write_justfile <<'EOF'
 REV := `git rev-parse HEAD`
@@ -101,7 +102,7 @@ show:
 	@echo "{{REV}}"
 EOF
 expect_refused "backtick in assignment is refused" \
-    show "backtick command substitution"
+    "backtick command substitution" show
 
 # An attribute we do not implement must be refused, not ignored -- otherwise
 # every attribute upstream adds becomes a silent no-op here.
@@ -110,14 +111,14 @@ write_justfile <<'EOF'
 a:
 	@echo a
 EOF
-expect_refused "unknown parameterized attribute is refused" a "frobnicate"
+expect_refused "unknown parameterized attribute is refused" "frobnicate" a
 
 write_justfile <<'EOF'
 [frobnicate]
 a:
 	@echo a
 EOF
-expect_refused "unknown bare attribute is refused" a "frobnicate"
+expect_refused "unknown bare attribute is refused" "frobnicate" a
 
 # ------------------------------------------------------------------
 # Attributes we do implement.
@@ -166,7 +167,7 @@ winonly:
 EOF
 if [ "$(uname -s)" = "Darwin" ] || [ "$(uname -s)" = "Linux" ]; then
     expect_refused "wrong-platform recipe is refused" \
-        winonly "not available on this platform"
+        "not available on this platform" winonly
 fi
 
 # ------------------------------------------------------------------
@@ -195,20 +196,20 @@ write_justfile <<'EOF'
 show:
 	@echo "value=[{{ env_var('DEFINITELY_NOT_SET_XYZ') }}]"
 EOF
-expect_refused "env_var on an unset variable aborts" show "not set"
+expect_refused "env_var on an unset variable aborts" "not set" show
 
 write_justfile <<'EOF'
 show:
 	@echo "{{ error('deliberate abort') }}"
 EOF
-expect_refused "error() aborts the run" show "deliberate abort"
+expect_refused "error() aborts the run" "deliberate abort" show
 
 write_justfile <<'EOF'
 show:
 	@echo "{{ nosuchfn('x') }}"
 EOF
 expect_refused "unknown built-in is still reported as unknown" \
-    show "unknown built-in function"
+    "unknown built-in function" show
 
 # Builtins added alongside the fix, checked byte-for-byte against just 1.54.0.
 write_justfile <<'EOF'
@@ -221,6 +222,49 @@ show:
 EOF
 expect_output "replace/join/path_exists match just" \
     "a_b_c usr/local/bin /abs/bin false" show
+
+# ------------------------------------------------------------------
+# [arg(...)] named and flag parameters.
+# Every expectation below was verified byte-for-byte against just 1.54.0.
+# ------------------------------------------------------------------
+
+write_justfile <<'EOF'
+[arg('version', short='v', long='version')]
+[arg('force', long='force', value='true')]
+tag version force='no':
+	@echo "v={{version}} f={{force}}"
+EOF
+expect_output "arg: --long value"    "v=1.0 f=no"   tag --version 1.0
+expect_output "arg: -s value"        "v=2.0 f=no"   tag -v 2.0
+expect_output "arg: --long=value"    "v=3.0 f=no"   tag --version=3.0
+expect_output "arg: -s=value"        "v=5.0 f=no"   tag -v=5.0
+expect_output "arg: valueless flag"  "v=4.0 f=true" tag --version=4.0 --force
+expect_output "arg: options in any order" "v=6.0 f=true" tag --force -v 6.0
+expect_refused "arg: missing required option" "requires option" tag
+
+write_justfile <<'EOF'
+[arg('version', long='version')]
+tag version:
+	@echo "{{version}}"
+EOF
+expect_refused "arg: unknown option is rejected" "has no option" tag --bogus x
+
+# An option-bound parameter consumes no positional slot.
+write_justfile <<'EOF'
+[arg('opt', long='opt')]
+mix pos opt='d':
+	@echo "pos={{pos}} opt={{opt}}"
+EOF
+expect_output "arg: mixes with a positional" "pos=hello opt=x" mix hello --opt=x
+expect_output "arg: positional alone uses the default" "pos=hello opt=d" mix hello
+
+# [arg] naming a parameter the recipe never declares is a Justfile bug.
+write_justfile <<'EOF'
+[arg('nosuch', long='nosuch')]
+tag version:
+	@echo "{{version}}"
+EOF
+expect_refused "arg: names an undeclared parameter" "does not declare" tag --nosuch=1
 
 # ------------------------------------------------------------------
 # --set
