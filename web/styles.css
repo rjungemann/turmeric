@@ -2384,3 +2384,13 @@ body.split-dragging * {
     width: 3px !important;
     margin-left: 2px;
 }
+
+/* The expression the cursor is on, inside that line. A step is one evaluation
+ * rather than one line, so several consecutive steps share a line -- without
+ * this the marker sits still through all of them and the scrub looks stuck.
+ * Stronger than the line wash it sits on top of, and underlined so it still
+ * reads where the two overlap. */
+.trace-current-expr {
+    background: var(--gold-glow);
+    border-bottom: 1px solid var(--accent-color);
+}

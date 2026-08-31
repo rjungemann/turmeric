@@ -74,7 +74,7 @@ typedef struct {
 } Name;
 
 typedef struct {
-    uint32_t file_name, fn_name, line, col;
+    uint32_t file_name, fn_name, line, col, col_end;
 } Site;
 
 /* One frame's memo of what its locals last rendered as, so a STEP can carry
@@ -104,6 +104,7 @@ struct TurTrace {
     int       last_depth;
     bool      truncated;
     bool      stopped;
+    TurTraceGrain grain;
 
     TurTraceStats stats;
 
@@ -149,13 +150,13 @@ static uint32_t intern_name(TurTrace *t, const char *s) {
 }
 
 static uint32_t intern_site(TurTrace *t, const char *file, const char *fn,
-                            uint32_t line, uint32_t col) {
+                            uint32_t line, uint32_t col, uint32_t col_end) {
     uint32_t f = intern_name(t, file);
     uint32_t n = intern_name(t, fn);
     for (uint32_t i = 0; i < t->n_sites; i++) {
         Site *s = &t->sites[i];
         if (s->file_name == f && s->fn_name == n &&
-            s->line == line && s->col == col)
+            s->line == line && s->col == col && s->col_end == col_end)
             return i;
     }
     if (t->n_sites == t->cap_sites) {
@@ -165,7 +166,7 @@ static uint32_t intern_site(TurTrace *t, const char *file, const char *fn,
         t->sites = grown;
         t->cap_sites = want;
     }
-    t->sites[t->n_sites] = (Site){ f, n, line, col };
+    t->sites[t->n_sites] = (Site){ f, n, line, col, col_end };
     return t->n_sites++;
 }
 
@@ -324,6 +325,15 @@ static void scan_reset(TurTrace *t) {
     t->scan.n = 0;
 }
 
+/* Ask for the next stop at whatever granularity this recording is being taken
+ * at. Every early return in the handler goes through here too: a resume that
+ * silently downgraded to step-in would leave the rest of the recording at a
+ * different granularity than its header claims. */
+static void trace_resume(TurTrace *t, TuriEnv *env) {
+    if (t->grain == TUR_TRACE_GRAIN_LINE) turi_debug_resume_step_in(env);
+    else                                  turi_debug_resume_step_node(env);
+}
+
 static void trace_pause(TuriEnv *env, TuriDbgStop reason, void *ud) {
     TurTrace *t = (TurTrace *)ud;
     (void)reason;
@@ -350,11 +360,12 @@ static void trace_pause(TuriEnv *env, TuriDbgStop reason, void *ud) {
     TuriDbgFrame f;
     memset(&f, 0, sizeof f);
     if (!turi_debug_frame_at(env, 0, &f)) {
-        turi_debug_resume_step_in(env);
+        trace_resume(t, env);
         return;
     }
     uint32_t site = intern_site(t, f.file_path ? f.file_path : "",
-                                f.fn_name ? f.fn_name : "", f.line, f.col);
+                                f.fn_name ? f.fn_name : "", f.line,
+                                f.col, f.end_col);
 
     /* Frame transitions first, so a decoder can maintain a stack without
      * inferring one from depth deltas of its own. */
@@ -409,7 +420,7 @@ static void trace_pause(TuriEnv *env, TuriDbgStop reason, void *ud) {
     t->stats.changes += n_changes;
 
     output_drain(t);
-    turi_debug_resume_step_in(env);
+    trace_resume(t, env);
 }
 
 /* --------------------------------------------------------------------------
@@ -423,6 +434,7 @@ TurTrace *turi_trace_begin(TuriEnv *env, const TurTraceOpts *opts) {
     t->env          = env;
     t->max_steps    = (opts && opts->max_steps) ? opts->max_steps
                                                 : TURI_TRACE_DEFAULT_MAX_STEPS;
+    t->grain        = opts ? opts->grain : TUR_TRACE_GRAIN_NODE;
     t->last_depth   = 0;
     t->saved_stdout = -1;
     t->pipe_read    = -1;
@@ -470,7 +482,10 @@ const uint8_t *turi_trace_bytes(TurTrace *t, size_t *len_out) {
         Bytes *b = &t->serialized;
         bytes_put(b, TURI_TRACE_MAGIC, TURI_TRACE_MAGIC_N);
         bytes_u16(b, TURI_TRACE_VERSION);
-        bytes_u8 (b, (uint8_t)(t->truncated ? 1 : 0));
+        uint8_t flags = 0;
+        if (t->truncated)                        flags |= TUR_TRACE_FLAG_TRUNCATED;
+        if (t->grain == TUR_TRACE_GRAIN_NODE)    flags |= TUR_TRACE_FLAG_NODE_GRAIN;
+        bytes_u8 (b, flags);
         bytes_u32(b, t->n_names);
         for (uint32_t i = 0; i < t->n_names; i++) {
             bytes_u16(b, t->names[i].len);
@@ -482,6 +497,7 @@ const uint8_t *turi_trace_bytes(TurTrace *t, size_t *len_out) {
             bytes_u32(b, t->sites[i].fn_name);
             bytes_u32(b, t->sites[i].line);
             bytes_u32(b, t->sites[i].col);
+            bytes_u32(b, t->sites[i].col_end);
         }
         bytes_u32(b, (uint32_t)t->records.len);
         if (t->records.len) bytes_put(b, t->records.data, t->records.len);
@@ -505,8 +521,15 @@ bool turi_trace_open(TurTraceReader *r, const uint8_t *bytes, size_t len) {
     r->bytes     = bytes;
     r->len       = len;
     r->version   = rd_u16(bytes + p); p += 2;
-    if (r->version != TURI_TRACE_VERSION) return false;
-    r->truncated = bytes[p++] != 0;
+    /* v1 is still readable: it differs only in a narrower site record and the
+     * absence of the granularity flag, and a recording downloaded from an
+     * older tab should not stop being inspectable. */
+    if (r->version == 1)                        r->site_bytes = TURI_TRACE_SITE_BYTES_V1;
+    else if (r->version == TURI_TRACE_VERSION)  r->site_bytes = TURI_TRACE_SITE_BYTES_V2;
+    else return false;
+    uint8_t flags = bytes[p++];
+    r->truncated  = (flags & TUR_TRACE_FLAG_TRUNCATED) != 0;
+    r->node_grain = (flags & TUR_TRACE_FLAG_NODE_GRAIN) != 0;
 
     r->name_count = rd_u32(bytes + p); p += 4;
     r->names = bytes + p;
@@ -520,8 +543,8 @@ bool turi_trace_open(TurTraceReader *r, const uint8_t *bytes, size_t len) {
     if (p + 4 > len) return false;
     r->site_count = rd_u32(bytes + p); p += 4;
     r->sites = bytes + p;
-    if (r->site_count > (len - p) / 16) return false;
-    p += (size_t)r->site_count * 16;
+    if (r->site_count > (len - p) / r->site_bytes) return false;
+    p += (size_t)r->site_count * r->site_bytes;
 
     if (p + 4 > len) return false;
     r->record_bytes = rd_u32(bytes + p); p += 4;
@@ -544,11 +567,13 @@ const char *turi_trace_name(const TurTraceReader *r, uint32_t id,
 
 bool turi_trace_site(const TurTraceReader *r, uint32_t id, TurTraceSite *out) {
     if (!r || !out || id >= r->site_count) return false;
-    const uint8_t *p = r->sites + (size_t)id * 16;
+    const uint8_t *p = r->sites + (size_t)id * r->site_bytes;
     out->file_name = rd_u32(p);
     out->fn_name   = rd_u32(p + 4);
     out->line      = rd_u32(p + 8);
     out->col       = rd_u32(p + 12);
+    /* A v1 site is a point, and 0 is how a client is told so. */
+    out->col_end   = r->site_bytes >= TURI_TRACE_SITE_BYTES_V2 ? rd_u32(p + 16) : 0;
     return true;
 }
 
@@ -871,8 +896,9 @@ bool turi_trace_replay_frame_at(const TurTraceReplay *rp, int idx,
             out->file_path = rp->names[site.file_name];
         if (site.fn_name < rp->n_names && rp->names[site.fn_name])
             out->fn_name = rp->names[site.fn_name];
-        out->line = site.line;
-        out->col  = site.col;
+        out->line    = site.line;
+        out->col     = site.col;
+        out->col_end = site.col_end;
     }
     return true;
 }

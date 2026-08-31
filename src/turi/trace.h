@@ -21,7 +21,8 @@
  *      come to be 7", and stepping back is the answer. A pause cannot go back.
  *   2. It is nearly free to build. The pause handler is already called at
  *      every node and already has an API for frames and locals, so
- *      turi_debug_set_pause_handler plus resume-step-in in a loop IS a tracer.
+ *      turi_debug_set_pause_handler plus resume-step-node in a loop IS a
+ *      tracer.
  *      There is no source instrumentation here at all -- the interpreter is
  *      ours, and turi_debug_frame_at gives real frames rather than sentinel
  *      addresses that have to be ordered by guesswork.
@@ -38,14 +39,46 @@
  * There are no keyframes in the format. A decoder builds its own snapshots
  * every N steps, which is the same work in a language that can afford it and
  * keeps this side to one rule: write what changed.
+ *
+ * A step is one *expression*, not one source line. See TurTraceGrain.
  * --------------------------------------------------------------------------- */
 
-/* A recording of a runaway loop is a tab that dies. */
+/* A recording of a runaway loop is a tab that dies.
+ *
+ * Raised from 200k when the recorder moved from line to node granularity: the
+ * cap is there to bound the recording, and the point of it is how much of a
+ * program fits under it, so holding the step number fixed across that change
+ * would have quietly cut the reach of every recording by the multiplier. */
 #ifndef TURI_TRACE_DEFAULT_MAX_STEPS
-#  define TURI_TRACE_DEFAULT_MAX_STEPS 200000u
+#  define TURI_TRACE_DEFAULT_MAX_STEPS 1000000u
 #endif
 
 typedef struct TurTrace TurTrace;
+
+/* What one STEP record covers.
+ *
+ * NODE is the default and the right answer; LINE exists to read an old
+ * recording's shape back, and as an escape hatch for a program so large that
+ * the node-granular recording does not fit under the cap.
+ *
+ * The distinction matters here more than it would in a C-shaped language. A
+ * line is a unit of *layout*, not of evaluation, and in a Lisp one line
+ * routinely holds a whole expression tree -- more so in Turmeric, where
+ * neoteric `f(g(x))` and sweet-exp `$` chains exist to put more on a line, not
+ * less. Under LINE the recording of
+ *
+ *     (while (< i 5) (do (println "tick") (set! i (+ i 1))))
+ *
+ * is three steps with `i` going 0 -> 5 in one delta and all five prints in one
+ * drain, while the same loop broken across four lines records twenty-three.
+ * Fidelity that depends on where the newlines went is not a property a
+ * debugging record can have, and "how did this value come to be 5" -- the
+ * question the whole recording exists to answer -- is exactly what the
+ * collapse destroys. */
+typedef enum {
+    TUR_TRACE_GRAIN_NODE = 0,  /* one step per evaluated expression (default) */
+    TUR_TRACE_GRAIN_LINE,      /* one step per source line entered */
+} TurTraceGrain;
 
 typedef struct {
     /* 0 selects TURI_TRACE_DEFAULT_MAX_STEPS. Reaching it ends the run through
@@ -57,6 +90,9 @@ typedef struct {
      * for the duration of the run; unavailable on Windows, where it is
      * silently off. */
     bool     capture_output;
+    /* Zero-initializing this struct selects TUR_TRACE_GRAIN_NODE, which is
+     * what a caller that has not thought about it should get. */
+    TurTraceGrain grain;
 } TurTraceOpts;
 
 /* Install the recorder on `env`.
@@ -100,11 +136,12 @@ const uint8_t *turi_trace_bytes(TurTrace *t, size_t *len_out);
  *   header   "TURTRACE\0"        9 bytes
  *            u16 version         TURI_TRACE_VERSION
  *            u8  flags           bit 0: truncated
+ *                                bit 1: node granularity (v2+; clear = line)
  *            u32 name_count      name[name_count]
  *            u32 site_count      site[site_count]
  *            u32 record_bytes    record[] filling exactly that many bytes
  *   name     u16 len, u8 bytes[len]
- *   site     u32 file_name, u32 fn_name, u32 line, u32 col
+ *   site     u32 file_name, u32 fn_name, u32 line, u32 col, u32 col_end
  *   record   u8 tag
  *     1 ENTER   u32 site, u16 depth
  *     2 STEP    u32 site, u16 depth, u16 n, change[n]
@@ -121,11 +158,28 @@ const uint8_t *turi_trace_bytes(TurTrace *t, size_t *len_out);
  * a generated program walks into it), and ENTER/POP carry no separate frame
  * index -- `depth` already identifies the frame, because frames are a stack.
  * All integers are little-endian.
+ *
+ * v2 added `col_end` to a site (20 bytes rather than 16) and the granularity
+ * flag. A site has always carried a column, but under line-granular stepping
+ * it was the column of whichever node happened to land first on a newly
+ * entered line -- a number with no referent. With one step per expression it
+ * names the expression, and the end column makes it a range a client can
+ * highlight. The reader still accepts v1: a v1 site reads back with col_end 0,
+ * which is how a client knows it has a point rather than a range.
  * --------------------------------------------------------------------------- */
 
 #define TURI_TRACE_MAGIC   "TURTRACE\0"
 #define TURI_TRACE_MAGIC_N 9
-#define TURI_TRACE_VERSION 1
+#define TURI_TRACE_VERSION 2
+
+/* Site record width by version. v1 had no col_end. */
+#define TURI_TRACE_SITE_BYTES_V1 16
+#define TURI_TRACE_SITE_BYTES_V2 20
+
+enum {
+    TUR_TRACE_FLAG_TRUNCATED  = 1u << 0,
+    TUR_TRACE_FLAG_NODE_GRAIN = 1u << 1,
+};
 
 enum {
     TUR_TRACE_ENTER  = 1,
@@ -141,11 +195,13 @@ typedef struct {
     size_t         len;
     uint16_t       version;
     bool           truncated;
+    bool           node_grain;  /* false for every v1 recording */
     /* Name table: offsets into `bytes`, resolved by turi_trace_name. */
     const uint8_t *names;
     uint32_t       name_count;
     const uint8_t *sites;
     uint32_t       site_count;
+    size_t         site_bytes;  /* per-site width, by version */
     const uint8_t *records;
     size_t         record_bytes;
     /* Cursor into `records`, advanced by turi_trace_next. */
@@ -181,6 +237,7 @@ typedef struct {
     uint32_t fn_name;
     uint32_t line;
     uint32_t col;
+    uint32_t col_end;  /* exclusive; 0 when the recording is a v1 file */
 } TurTraceSite;
 
 bool turi_trace_site(const TurTraceReader *r, uint32_t id, TurTraceSite *out);
@@ -227,6 +284,7 @@ typedef struct {
     const char *file_path;
     uint32_t    line;
     uint32_t    col;
+    uint32_t    col_end;    /* exclusive; 0 if the recording did not carry one */
 } TurTraceFrame;
 
 int  turi_trace_replay_frame_count(const TurTraceReplay *rp);

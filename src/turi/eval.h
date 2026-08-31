@@ -176,6 +176,17 @@ void turi_debug_resume_step_in(TuriEnv *env);
 void turi_debug_resume_step_over(TuriEnv *env);
 void turi_debug_resume_step_out(TuriEnv *env);
 
+/* Resume and stop at the next *expression*, not the next line.
+ *
+ * step_in and friends are line-granular, which is the granularity DAP speaks
+ * and a human wants to drive.  It is the wrong one for a recorder: a line is
+ * not a unit of evaluation in a Lisp, so line-granular stops collapse nested
+ * calls on one line into a single stop and collapse a one-line loop body into
+ * a single stop for the whole loop.  This resume stops at every located node
+ * instead.  It is what turi/trace.c drives the recorder with; there is no
+ * interactive command bound to it. */
+void turi_debug_resume_step_node(TuriEnv *env);
+
 /* Number of live activation frames (capped at the backtrace storage limit). */
 int  turi_debug_frame_count(TuriEnv *env);
 /* Fill *out for frame `idx` (0 = innermost).  Returns false if idx is out of

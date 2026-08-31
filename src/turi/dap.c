@@ -730,9 +730,65 @@ static uint32_t dap_replay_seek_bp(DapState *s, int dir, bool *hit_out) {
     return 0;
 }
 
+/* Would landing on step `i` read as having moved, from a step at
+ * (from_file, from_line, from_depth)?  See dap_replay_seek_line. */
+static bool replay_step_is_move(DapState *s, uint32_t i, const char *from_file,
+                                uint32_t from_line, int from_depth,
+                                int max_depth) {
+    int depth = turi_trace_replay_depth_at(s->replay, i);
+    if (max_depth >= 0 && depth > max_depth) return false;
+    if (depth != from_depth) return true;
+    const char *file = NULL;
+    uint32_t    line = 0;
+    turi_trace_replay_site_at(s->replay, i, &file, &line);
+    if (line != from_line) return true;
+    if (file && from_file) return strcmp(file, from_file) != 0;
+    return file != from_file;
+}
+
+/* Advance (or rewind) to the next step a DAP client would call a step.
+ *
+ * A recording is taken per expression, but DAP is a line protocol: an editor
+ * draws a line marker, so `stepIn` and `next` have to land somewhere the
+ * marker visibly moves.  Mapping them onto raw trace indices would step
+ * through the sub-expressions of one line and look, four keypresses running,
+ * like a debugger that has stopped responding.
+ *
+ * So the recording stays fine and the presentation is coarse: stop at the
+ * first step whose source line differs -- or whose depth differs, which is how
+ * a call to a one-line function on the current line still registers as
+ * entering something rather than being skipped over.
+ *
+ * `max_depth` >= 0 additionally requires the landing step to be at that depth
+ * or shallower, which is what makes this step-over; pass -1 for step-in. */
+static uint32_t dap_replay_seek_line(DapState *s, int dir, int max_depth) {
+    uint32_t n = turi_trace_replay_steps(s->replay);
+    uint32_t cur = turi_trace_replay_index(s->replay);
+    if (n == 0) return 0;
+
+    const char *from_file = NULL;
+    uint32_t    from_line = 0;
+    turi_trace_replay_site_at(s->replay, cur, &from_file, &from_line);
+    int from_depth = turi_trace_replay_depth_at(s->replay, cur);
+
+    /* Written as two loops rather than one with a signed cursor: `i` is a
+     * uint32_t and the backwards scan runs down to and including index 0. */
+    if (dir > 0) {
+        for (uint32_t i = cur + 1; i < n; i++)
+            if (replay_step_is_move(s, i, from_file, from_line, from_depth,
+                                    max_depth))
+                return i;
+        return n - 1;
+    }
+    for (uint32_t i = cur; i > 0; i--)
+        if (replay_step_is_move(s, i - 1, from_file, from_line, from_depth,
+                                max_depth))
+            return i - 1;
+    return 0;
+}
+
 /* Advance (or rewind) until the frame depth comes back to `want` or shallower
- * -- which is step-over when `want` is the current depth and step-out when it
- * is one less. */
+ * -- which is step-out when `want` is one less than the current depth. */
 static uint32_t dap_replay_seek_depth(DapState *s, int dir, int want) {
     uint32_t n = turi_trace_replay_steps(s->replay);
     uint32_t cur = turi_trace_replay_index(s->replay);
@@ -814,21 +870,21 @@ static void dap_replay_session(DapState *s) {
                 dap_send_response(s, rq, "reverseContinue", NULL, true);
                 moved = true;
             } else if (!strcmp(cmd, "stepIn")) {
-                to = (cur + 1 < n) ? cur + 1 : cur;
+                to = dap_replay_seek_line(s, +1, -1);
                 if (to == cur) stop = true;
                 dap_send_response(s, rq, "stepIn", NULL, true);
                 moved = true;
             } else if (!strcmp(cmd, "stepBack")) {
-                to = cur ? cur - 1 : 0;
+                to = dap_replay_seek_line(s, -1, -1);
                 dap_send_response(s, rq, "stepBack", NULL, true);
                 moved = true;
             } else if (!strcmp(cmd, "next")) {
-                to = dap_replay_seek_depth(s, +1, depth);
+                to = dap_replay_seek_line(s, +1, depth);
                 if (to == cur) stop = true;
                 dap_send_response(s, rq, "next", NULL, true);
                 moved = true;
             } else if (!strcmp(cmd, "reverseNext")) {
-                to = dap_replay_seek_depth(s, -1, depth);
+                to = dap_replay_seek_line(s, -1, depth);
                 dap_send_response(s, rq, "reverseNext", NULL, true);
                 moved = true;
             } else if (!strcmp(cmd, "stepOut")) {
