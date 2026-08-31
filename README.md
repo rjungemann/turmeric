@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.42.0` -- `tur trace` records an interpreted run, `tur dap` replays it backwards, and Try Turmeric scrubs it on a timeline; the language server gained real lexical scope, so rename and references work.
+**Latest release:** `v0.42.1` -- `tur trace` now records one step per expression rather than per source line, so a one-line loop no longer collapses into a single step; `tur run` gains Justfile parameters, modules and builtins.
 
 ## What
 

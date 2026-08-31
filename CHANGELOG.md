@@ -2,6 +2,56 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.42.1] -- 2026-08-31
+
+### Changed
+
+- **`tur trace` records one step per expression, not per source line.** The
+  recorder drove the debugger with step-in, whose stop predicate is
+  line-granular, so a recording's resolution was a source line -- the wrong unit
+  in a Lisp, and more so in Turmeric, where neoteric `f(g(x))` and sweet-exp `$`
+  chains exist to put more on a line rather than less. A loop whose body fit on
+  one line collapsed into a single step, with the induction variable jumping
+  from its first value to its last in one delta and every iteration's output
+  arriving in one drain; and fidelity depended on formatting, the same loop
+  recording 3 steps on one line and 23 across four. Both spellings now record
+  58. `tur debug` stepping is unchanged -- line granularity is what a human
+  drives by hand and what DAP speaks -- and `--lines` selects the old
+  granularity.
+
+- **The `.turtrace` format is v2.** A site carries a column range rather than a
+  bare column, and the header records which granularity a recording was taken
+  at. The column was always in the format but named nothing under line stepping:
+  it was whichever node landed first on a newly entered line. v1 recordings
+  still read back. The step cap moved with the unit (200,000 -> 1,000,000
+  native, 50,000 -> 250,000 in the browser) -- a cap bounds the recording, but
+  what it means is how much of a program fits under it.
+
+- **`tur run` matches attributes by name and refuses unknown ones**, and aborts
+  on a builtin failure rather than continuing with an empty string.
+
+### Added
+
+- **`tur run` gains Justfile parity on parameters, modules and builtins**: named
+  and flag parameters via `[arg(...)]`, `mod` and imports, backtick evaluation,
+  and `os_family` / `path_exists` / `replace` / `join` / `error`.
+
+- **The Try Turmeric timeline highlights the expression** inside the current
+  line, which is the visible half of recording per expression; the toolbar
+  scrolls when it overflows.
+
+### Fixed
+
+- **Two silent-ignore holes in `tur run`** where a parameterized attribute was
+  accepted and then quietly dropped.
+
+- **`tur run` runs recipes from the Justfile's directory** and honors `[no-cd]`.
+
+- **A node was hooked twice by the interpreter's debugger** when the driver
+  handed a black-box node to `eval_expr`. Line-granular stepping hid it -- the
+  duplicate shares a line -- so it surfaced as doubled records the moment the
+  recorder began asking for every node.
+
 ## [0.42.0] -- 2026-08-30
 
 ### Added
