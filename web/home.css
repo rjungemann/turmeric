@@ -26,6 +26,15 @@ body.page-home { padding-left: 0; }
   z-index: 1;
 }
 
+/* Plain sentence above the headline -- deliberately not an eyebrow: no pill,
+   no dot, no uppercase tracking. */
+.hero-status {
+  font-size: 14px;
+  font-weight: 300;
+  color: var(--green);
+  margin-bottom: 20px;
+}
+
 h1 {
   font-family: 'Space Grotesk', sans-serif;
   font-size: clamp(34px, 6.5vw, 68px);
@@ -35,7 +44,7 @@ h1 {
   color: var(--text-primary);
   margin-bottom: 12px;
 }
-h1 em { font-style: italic; color: var(--gold-bright); }
+h1 em { font-style: italic; color: var(--green); }
 
 .hero-subtitle {
   font-family: 'Space Grotesk', sans-serif;
@@ -66,7 +75,7 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   margin: 4px 0;
 }
 .hero-desc em {
-  color: var(--gold-bright);
+  color: var(--green);
   font-style: italic;
 }
 
@@ -143,7 +152,7 @@ section {
   align-items: center;
   margin-bottom: 16px;
   font-size: 18px;
-  color: var(--gold-bright);
+  color: var(--green);
 }
 
 .feat-title {
@@ -235,7 +244,7 @@ section {
 .step-num {
   font-family: 'Space Grotesk', sans-serif;
   font-size: 13px;
-  color: var(--gold-dim);
+  color: var(--green);
   letter-spacing: 0.06em;
   font-weight: 500;
 }
@@ -344,6 +353,7 @@ section {
 
 /* ── CTA ───────────────────────────────── */
 .cta-title { font-size: clamp(36px, 4vw, 56px); }
+.cta-title em { color: var(--green); }
 
 /* ── RESPONSIVE: HOMEPAGE ──────────────── */
 @media (max-width: 768px) {

@@ -67,6 +67,33 @@ document.querySelectorAll('.step-code').forEach(el => {
 
 // ── WEB COMPONENTS ─────────────────────────────────────────────────────────
 
+// Native `title` tooltips for the site chrome (nav, sidebar, footer). Keyed by
+// href so the three lists cannot drift apart in what they claim a page is; a
+// link whose href is absent simply gets no tooltip.
+const LINK_TITLES = {
+  '/':                                    'Turmeric home',
+  '/tour':                                'A guided tour of the language in fourteen stops',
+  '/try':                                 'Run Turmeric in your browser -- nothing to install',
+  '/trowel':                              'Trowel -- the native Turmeric editor for macOS and Linux',
+  '/docs/html/guides/':                   'Guides and tutorials, from quickstart to compiler internals',
+  '/docs/html/api/':                      'Generated API reference for the standard library',
+  '/roadmap':                             'Planned features, work in progress, and recent milestones',
+  '/ci':                                  'Build and test metrics from continuous integration',
+  'https://spices.turmeric-lang.com':     'Browse Spice packages -- the Turmeric package registry',
+  'https://c.turmeric-lang.com':          'A C interpreter running in your browser',
+  'https://github.com/rjungemann/turmeric': 'Turmeric source code on GitHub',
+  'https://phasor.space':                 "Roger Jungemann's site",
+};
+
+function applyLinkTitles(root) {
+  root.querySelectorAll('a[href]').forEach(a => {
+    if (a.title) return;
+    const href = a.getAttribute('href');
+    if (LINK_TITLES[href]) a.title = LINK_TITLES[href];
+    else if (href.startsWith('#')) a.title = `Jump to ${a.textContent.trim()}`;
+  });
+}
+
 class SiteNav extends HTMLElement {
   connectedCallback() {
     const active = this.getAttribute('active') ?? '';
@@ -91,7 +118,7 @@ class SiteNav extends HTMLElement {
         `<a href="${href}"${active === label ? ' class="active"' : ''}>${label}</a>`
       ).join('');
 
-    const ctaHTML = onTry ? '' : '<a href="/try" class="btn-gold">Try it →</a>';
+    const ctaHTML = onTry ? '' : '<a href="/try" class="btn-gold">Try it</a>';
 
     this.innerHTML = `
       <nav>
@@ -108,7 +135,7 @@ class SiteNav extends HTMLElement {
           ${ctaHTML}
         </div>
         <div class="nav-mobile-panel">
-          <a class="nav-mobile-back" href="/">← Back to home</a>
+          <a class="nav-mobile-back" href="/">Home</a>
           ${linkHTML}
           <div class="nav-mobile-cta">
             <a href="https://github.com/rjungemann/turmeric" class="btn-ghost">GitHub</a>
@@ -116,6 +143,8 @@ class SiteNav extends HTMLElement {
           </div>
         </div>
       </nav>`;
+
+    applyLinkTitles(this);
 
     const nav    = this.querySelector('nav');
     const btn    = this.querySelector('.nav-hamburger');
@@ -185,18 +214,21 @@ class SiteFooter extends HTMLElement {
           <div class="footer-links"></div>
         </div>
       </footer>`;
+
+    applyLinkTitles(this);
   }
 }
 
 class SiteSidebar extends HTMLElement {
   connectedCallback() {
     const back = this.getAttribute('back') ?? '/';
-    const backLabel = this.getAttribute('back-label') ?? '← Back to home';
+    const backLabel = this.getAttribute('back-label') ?? 'Home';
     const tocHtml = this.innerHTML.trim();
+    // No rule directly under the back button -- the only divider is the one
+    // that closes a page's own table of contents, when it has one.
     this.innerHTML = `
       <a class="sidebar-back" href="${back}">${backLabel}</a>
-      ${tocHtml ? `<hr class="sidebar-divider"><div class="sidebar-toc">${tocHtml}</div>` : ''}
-      <hr class="sidebar-divider">
+      ${tocHtml ? `<div class="sidebar-toc">${tocHtml}</div><hr class="sidebar-divider">` : ''}
       <h3>Language</h3>
       <ul>
         <li><a href="/tour">Tour</a></li>
@@ -218,6 +250,8 @@ class SiteSidebar extends HTMLElement {
         <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
         <li><a href="/ci">CI Metrics</a></li>
       </ul>`;
+
+    applyLinkTitles(this);
   }
 }
 

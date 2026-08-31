@@ -35,14 +35,15 @@ except ImportError:  # pragma: no cover -- preflight, not a code path
 sys.path.insert(0, str(Path(__file__).parent))
 from genguides import (SIDEBAR_TOGGLE_JS, SYNTAX_TOGGLE_JS,
                        TURMERIC_HIGHLIGHT_JS, GUIDE_CSS,
-                       inject_syntax_toggles, toc_tokens_to_sidebar)
+                       inject_syntax_toggles, toc_tokens_to_sidebar,
+                       apply_link_titles)
 from gendocs import render_tree, collect_doc_entries
 import packlib
 
 GITHUB_BASE = 'https://github.com/rjungemann/turmeric-spices'
 SPICES_REPO = Path('../turmeric-spices')
 
-PAGE_HEADER = '''\
+PAGE_HEADER = apply_link_titles('''\
   <header class="site-header">
     <button class="hamburger" aria-label="Toggle navigation">
       <span></span><span></span><span></span>
@@ -57,7 +58,7 @@ PAGE_HEADER = '''\
       <a href="/docs/html/spices/" class="active">Spices</a>
       <a href="https://turmeric-lang.com/try">Try It</a>
     </nav>
-  </header>'''
+  </header>''')
 
 
 # ---------------------------------------------------------------------------
@@ -186,15 +187,17 @@ def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str,
     toc_tokens = getattr(conv, 'toc_tokens', [])
 
     sidebar_items = toc_tokens_to_sidebar(toc_tokens)
-    sidebar_html = (
-        '<a class="sidebar-back" href="https://turmeric-lang.com/">&larr; Back to home</a>\n      '
+    sidebar_html = apply_link_titles(
+        '<a class="sidebar-back" href="https://turmeric-lang.com/">Home</a>\n      '
         '<div style="margin-bottom:1.25rem">'
-        '<a href="../index.html" style="font-size:0.8rem;color:var(--text-sec)">&larr; All Spices</a>'
+        '<a href="../index.html" style="font-size:0.8rem;color:var(--text-sec)">All Spices</a>'
         '</div>\n      '
         '<div style="margin-bottom:1.25rem">'
         '<a href="api/" style="font-size:0.85rem;color:var(--gold-bright)">API reference &rarr;</a>'
         '</div>\n      '
-        f'<h3>On this page</h3>\n      <ul>{sidebar_items}</ul>'
+        f'<h3>On this page</h3>\n      <ul>{sidebar_items}</ul>',
+        extra={'../index.html': 'Every first-party spice',
+               'api/': f'API reference for tur-{meta["name"]}'},
     )
 
     title = f'tur-{meta["name"]} | Turmeric Spices'
@@ -334,12 +337,13 @@ def render_top_index(metas: list[SpiceMeta], out_dir: Path) -> None:
         'a per-spice API reference.</p>'
     )
 
-    sidebar_html = (
-        '<a class="sidebar-back" href="https://turmeric-lang.com/">&larr; Back to home</a>\n      '
+    sidebar_html = apply_link_titles(
+        '<a class="sidebar-back" href="https://turmeric-lang.com/">Home</a>\n      '
         '<h3>About</h3>\n'
         '      <ul>\n'
         f'        <li><a href="{GITHUB_BASE}">GitHub repo</a></li>\n'
-        '      </ul>'
+        '      </ul>',
+        extra={GITHUB_BASE: 'Spice sources on GitHub'},
     )
 
     html = f'''<!DOCTYPE html>

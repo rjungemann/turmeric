@@ -22,6 +22,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import packlib  # noqa: E402  (sibling module, path fixed up just above)
+# Chrome-link tooltips live in genguides so guides, API docs and the spices
+# site describe the same page the same way.
+from genguides import apply_link_titles  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -765,7 +768,10 @@ a:hover { text-decoration: underline; }
 .sidebar h3:first-child { margin-top: 0; }
 .sidebar ul { list-style: none; }
 .sidebar li { margin: 0.15rem 0; }
-.sidebar a { font-size: 0.825rem; color: var(--text-sec); font-family: 'Iosevka', 'Fira Code', monospace; }
+.sidebar a { font-size: 0.825rem; color: var(--text-sec); }
+/* Navigation links read as prose; a link that names a definition is an
+   identifier and stays in the code face. */
+.sidebar a.sidebar-def, .sidebar code { font-family: 'Iosevka', 'Fira Code', monospace; }
 .sidebar a:hover { color: var(--gold-bright); text-decoration: none; }
 .sidebar-back {
   display: block;
@@ -1138,7 +1144,20 @@ _SIDEBAR_TOGGLE_JS = """\
 </script>"""
 
 
-SIDEBAR_GLOBALS = """\
+def _sidebar_tip(defn) -> str:
+    """Tooltip for a sidebar definition link: its docstring summary if it has
+    one, else a plain 'jump to' so every entry carries something useful."""
+    doc = defn.get('docstring')
+    if doc and doc.get('summary'):
+        s = doc['summary']
+        dash_idx = s.find(' -- ')
+        tip = s[dash_idx + 4:] if dash_idx != -1 else s
+        if tip.strip():
+            return html_module.escape(tip.strip(), quote=True)
+    return html_module.escape(f'Jump to {defn["name"]}', quote=True)
+
+
+SIDEBAR_GLOBALS = apply_link_titles("""\
   <hr class="sidebar-divider">
   <h3>Language</h3>
   <ul>
@@ -1155,7 +1174,7 @@ SIDEBAR_GLOBALS = """\
   <ul>
     <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
   </ul>
-"""
+""")
 
 
 def _html_header(title, css_path='style.css'):
@@ -1184,15 +1203,15 @@ def _html_header(title, css_path='style.css'):
   <button class="hamburger" aria-label="Toggle navigation">
     <span></span><span></span><span></span>
   </button>
-  <a class="nav-logo" href="/">
+  <a class="nav-logo" href="/" title="Turmeric home">
     <img src="/logo-icon.svg" width="28" height="28" alt="">
     <img src="/logo.svg" width="101" height="28" alt="Turmeric">
   </a>
   <nav>
-    <a href="/docs/html/guides/">Guides</a>
-    <a href="index.html" class="active">API Docs</a>
-    <a href="https://spices.turmeric-lang.com">Spices</a>
-    <a href="/try">Try It</a>
+    <a href="/docs/html/guides/" title="Guides and tutorials, from quickstart to compiler internals">Guides</a>
+    <a href="index.html" class="active" title="Generated API reference for the standard library">API Docs</a>
+    <a href="https://spices.turmeric-lang.com" title="Browse Spice packages -- the Turmeric package registry">Spices</a>
+    <a href="/try" title="Run Turmeric in your browser -- nothing to install">Try It</a>
   </nav>
   <div class="search-wrap">
     <input class="search-input" type="search" placeholder="Filter... (/)" aria-label="Filter definitions">
@@ -1419,17 +1438,20 @@ def render_module_page(module, out_dir, brand='stdlib'):
 
     # Build sidebar TOC (exported only)
     sidebar = '<div class="sidebar">\n'
-    sidebar += '  <a class="sidebar-back" href="/">← Back to home</a>\n'
-    sidebar += '  <hr class="sidebar-divider">\n'
+    sidebar += '  <a class="sidebar-back" href="/" title="Turmeric home">Home</a>\n'
     sidebar += '  <h3>Exported</h3>\n  <ul>\n'
     for defn in exported:
         anchor = re.sub(r'[^a-zA-Z0-9_\-]', '_', defn['name'])
-        sidebar += f'    <li><a href="#{html_module.escape(anchor)}">{html_module.escape(defn["name"])}</a></li>\n'
+        sidebar += (f'    <li><a class="sidebar-def" href="#{html_module.escape(anchor)}"'
+                    f' title="{_sidebar_tip(defn)}">'
+                    f'{html_module.escape(defn["name"])}</a></li>\n')
     sidebar += '  </ul>\n'
     if internal:
         sidebar += '  <h3>Internal</h3>\n  <ul>\n'
         for defn in internal:
-            sidebar += f'    <li><a href="#{html_module.escape(defn["name"])}" style="color:var(--faint)">{html_module.escape(defn["name"])}</a></li>\n'
+            sidebar += (f'    <li><a class="sidebar-def" href="#{html_module.escape(defn["name"])}"'
+                        f' style="color:var(--faint)" title="{_sidebar_tip(defn)}">'
+                        f'{html_module.escape(defn["name"])}</a></li>\n')
         sidebar += '  </ul>\n'
     sidebar += SIDEBAR_GLOBALS
     sidebar += '</div>\n'
@@ -1511,7 +1533,7 @@ def render_index_page(modules, out_dir, brand='stdlib', brand_label=None):
     content += '</div>\n'
 
     sidebar = '<div class="sidebar">\n'
-    sidebar += '  <a class="sidebar-back" href="/">← Back to home</a>\n'
+    sidebar += '  <a class="sidebar-back" href="/" title="Turmeric home">Home</a>\n'
     sidebar += SIDEBAR_GLOBALS
     sidebar += '</div>\n'
 

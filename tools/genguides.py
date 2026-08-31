@@ -93,7 +93,52 @@ def build_categories_from_meta(meta_by_stem: dict, all_stems: set) -> list:
 
 STYLE_REL = '../api/style.css'
 
-SIDEBAR_GLOBALS = '''\
+# Native `title` tooltips for the site chrome (topbar, sidebar, footer). Keyed
+# by site-relative href -- absolute turmeric-lang.com URLs, which the spices
+# site uses for cross-site links, are normalized to the same key so all three
+# generators describe a page identically. Mirrors LINK_TITLES in web/site.js.
+LINK_TITLES = {
+    '/':                                      'Turmeric home',
+    '/tour':                                  'A guided tour of the language in fourteen stops',
+    '/try':                                   'Run Turmeric in your browser -- nothing to install',
+    '/trowel':                                'Trowel -- the native Turmeric editor for macOS and Linux',
+    '/docs/html/guides/':                     'Guides and tutorials, from quickstart to compiler internals',
+    '/docs/html/api/':                        'Generated API reference for the standard library',
+    '/docs/html/spices/':                     'Browse Spice packages -- the Turmeric package registry',
+    '/roadmap':                               'Planned features, work in progress, and recent milestones',
+    '/ci':                                    'Build and test metrics from continuous integration',
+    'https://spices.turmeric-lang.com':       'Browse Spice packages -- the Turmeric package registry',
+    'https://c.turmeric-lang.com':            'A C interpreter running in your browser',
+    'https://github.com/rjungemann/turmeric': 'Turmeric source code on GitHub',
+}
+
+_A_TAG_RE = re.compile(r'<a\s+([^>]*)href="([^"]+)"([^>]*)>')
+
+
+def apply_link_titles(html: str, extra: dict | None = None) -> str:
+    """Add a native `title` tooltip to every chrome link with a known href.
+
+    Only used on the header/sidebar chrome, never on article bodies: a tooltip
+    belongs on a navigation target, not on every prose link that happens to
+    point at the same page. Links already carrying a title, and hrefs absent
+    from the table, are left alone.
+    """
+    table = {**LINK_TITLES, **(extra or {})}
+
+    def repl(m):
+        before, href, after = m.group(1), m.group(2), m.group(3)
+        if 'title=' in before or 'title=' in after:
+            return m.group(0)
+        key = href.replace('https://turmeric-lang.com', '') or '/'
+        title = table.get(href) or table.get(key)
+        if not title:
+            return m.group(0)
+        return f'<a {before}href="{href}"{after} title="{_html.escape(title, quote=True)}">'
+
+    return _A_TAG_RE.sub(repl, html)
+
+
+SIDEBAR_GLOBALS = apply_link_titles('''\
       <hr class="sidebar-divider">
       <h3>Language</h3>
       <ul>
@@ -109,9 +154,9 @@ SIDEBAR_GLOBALS = '''\
       <h3>Community</h3>
       <ul>
         <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
-      </ul>'''
+      </ul>''')
 
-PAGE_HEADER = '''\
+PAGE_HEADER = apply_link_titles('''\
   <header class="site-header">
     <button class="hamburger" aria-label="Toggle navigation">
       <span></span><span></span><span></span>
@@ -126,9 +171,9 @@ PAGE_HEADER = '''\
       <a href="https://spices.turmeric-lang.com">Spices</a>
       <a href="/try">Try It</a>
     </nav>
-  </header>'''
+  </header>''')
 
-INDEX_PAGE_HEADER = '''\
+INDEX_PAGE_HEADER = apply_link_titles('''\
   <header class="site-header">
     <button class="hamburger" aria-label="Toggle navigation">
       <span></span><span></span><span></span>
@@ -147,7 +192,7 @@ INDEX_PAGE_HEADER = '''\
       <input class="search-input" type="search" placeholder="Filter... (/)" aria-label="Filter guides">
     </div>
   </header>
-  <p class="search-no-results">No matching guides.</p>'''
+  <p class="search-no-results">No matching guides.</p>''')
 
 INDEX_FILTER_JS = '''\
   <script>
@@ -579,8 +624,14 @@ def toc_tokens_to_sidebar(tokens: list) -> str:
         level = tok.get('level', 2)
         indent = 'padding-left:0.75rem;' if level > 2 else ''
         color = 'color:var(--text-sec);' if level > 2 else ''
+        # `name` is already the heading text, so the tooltip says what the link
+        # does (jump within this page) rather than repeating the label. Round
+        # -trip through unescape so an entity in the heading is not re-escaped.
+        plain = _html.unescape(re.sub(r'<[^>]+>', '', name)).strip()
+        tip = _html.escape(f'Jump to {plain}', quote=True)
         items.append(
-            f'<li style="{indent}"><a href="#{anchor}" style="{color}">{name}</a></li>'
+            f'<li style="{indent}"><a href="#{anchor}" style="{color}" '
+            f'title="{tip}">{name}</a></li>'
         )
         children = tok.get('children', [])
         if children:
@@ -674,15 +725,14 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set,
     body_html = rewrite_links_site(doc['body'])
 
     sidebar_items = toc_tokens_to_sidebar(toc_tokens)
-    sidebar_html = f'''\
-      <a class="sidebar-back" href="/">← Back to home</a>
+    sidebar_html = apply_link_titles(f'''\
+      <a class="sidebar-back" href="/">Home</a>
       <div style="margin-bottom:1.25rem">
-        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">All Guides</a>
       </div>
-      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul>{sidebar_items}</ul>
-{SIDEBAR_GLOBALS}'''
+{SIDEBAR_GLOBALS}''', extra={'index.html': 'Every guide, grouped by category'})
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -784,11 +834,14 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     </div>''')
 
     sidebar_cats_list = [
-        f'<li><a href="#{re.sub(r" +", "-", c["name"].lower())}">{c["name"]}</a></li>'
+        f'<li><a href="#{re.sub(r" +", "-", c["name"].lower())}" '
+        f'title="Jump to {_html.escape(c["name"], quote=True)}">{c["name"]}</a></li>'
         for c in categories if any(g['stem'] in all_stems for g in c['guides'])
     ]
     if recent:
-        sidebar_cats_list.insert(0, '<li><a href="#recently-added">Recently Added</a></li>')
+        sidebar_cats_list.insert(
+            0, '<li><a href="#recently-added" title="Jump to Recently Added">'
+               'Recently Added</a></li>')
     sidebar_cats = '\n'.join(sidebar_cats_list)
 
     recent_html = ''
@@ -834,8 +887,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
 {SIDEBAR_TOGGLE_JS}
   <div class="page-layout">
     <div class="sidebar">
-      <a class="sidebar-back" href="/">← Back to home</a>
-      <hr class="sidebar-divider">
+      <a class="sidebar-back" href="/" title="Turmeric home">Home</a>
       <h3>Categories</h3>
       <ul>{sidebar_cats}</ul>
 {SIDEBAR_GLOBALS}

@@ -221,7 +221,7 @@ nav {
   font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--gold);
+  color: var(--green);
   font-weight: 500;
   margin-bottom: 16px;
 }
@@ -647,7 +647,6 @@ site-sidebar li { margin: 0.15rem 0; }
 site-sidebar a {
   font-size: 0.825rem;
   color: var(--text-sec);
-  font-family: 'Iosevka', 'Fira Code', monospace;
 }
 site-sidebar a:hover { color: var(--gold-bright); }
 site-sidebar .sidebar-toc ul { padding-left: 0; }
