@@ -1,0 +1,36 @@
+# Attribute parity: group / private / doc / platform.
+# Bodies are TAB-indented -- tools/just-vs-tur-run.sh extracts them with /^\t/.
+
+default:
+	@echo default
+
+loose:
+	@echo loose
+
+[group('build')]
+debug:
+	@echo debug
+
+[group('build')]
+release:
+	@echo release
+
+[group('test')]
+check:
+	@echo check
+
+[private]
+internal:
+	@echo internal
+
+[doc("documented via attribute")]
+documented:
+	@echo documented
+
+[unix]
+platform-specific:
+	@echo unix
+
+[private, group('build')]
+combo:
+	@echo combo

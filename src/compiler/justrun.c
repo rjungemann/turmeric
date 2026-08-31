@@ -100,10 +100,47 @@ typedef struct {
     char *text;    /* interpolation template */
 } JLine;
 
+/* Platform selector from [unix] / [windows] / [macos] / [linux] / [openbsd].
+ * JR_PLAT_ANY means the recipe carried no platform attribute and runs
+ * everywhere; otherwise the value is a bitmask of the platforms named, so
+ * `[macos]` and `[unix]` on the same recipe are a union, as in `just`. */
+#define JR_PLAT_ANY      0
+#define JR_PLAT_LINUX    (1 << 0)
+#define JR_PLAT_MACOS    (1 << 1)
+#define JR_PLAT_WINDOWS  (1 << 2)
+#define JR_PLAT_OPENBSD  (1 << 3)
+#define JR_PLAT_UNIX     (JR_PLAT_LINUX | JR_PLAT_MACOS | JR_PLAT_OPENBSD)
+
+#if defined(__APPLE__)
+#  define JR_HOST_OS_NAME "macos"
+#elif defined(__linux__)
+#  define JR_HOST_OS_NAME "linux"
+#elif defined(_WIN32)
+#  define JR_HOST_OS_NAME "windows"
+#elif defined(__OpenBSD__)
+#  define JR_HOST_OS_NAME "openbsd"
+#else
+#  define JR_HOST_OS_NAME "unknown"
+#endif
+
+/* Attributes attached to a recipe.  Accumulated across consecutive `[...]`
+ * lines above a recipe header, then copied onto the recipe. */
+typedef struct {
+    int   hidden;           /* [private] */
+    int   no_cd;            /* [no-cd] */
+    int   no_exit_message;  /* [no-exit-message] */
+    int   confirm;          /* [confirm] or [confirm("...")] */
+    char *confirm_msg;      /* the custom prompt, or NULL for the default */
+    char *group;            /* [group('name')], or NULL */
+    char *doc_attr;         /* [doc("...")], overrides a `#` doc comment */
+    int   platform;         /* JR_PLAT_* bitmask; JR_PLAT_ANY = unrestricted */
+} JAttrs;
+
 typedef struct {
     char   *name;
     char   *doc;   /* accumulated doc comment, or NULL */
     int     hidden; /* [private] attribute or a leading '_': omit from --list */
+    JAttrs  attrs;
     JParam  params[JR_MAX_PARAMS];
     int     n_params;
     JDep    deps[JR_MAX_DEPS];
@@ -317,46 +354,192 @@ static char *jr_issuef(const char *fmt, ...) {
     return jr_strdup(buf);
 }
 
-/* Returns NULL when the line uses nothing unsupported, else a heap-allocated
- * message describing what is unsupported (caller owns it).  `*is_private` is
- * set to 1 for the `[private]` attribute, which we support natively by hiding
- * the recipe from listings -- it is not an issue. */
-static char *check_unsupported(const char *line, int lineno, const char *path,
-                                int *is_private) {
-    const char *p = jr_ltrim(line);
-    if (is_private) *is_private = 0;
+/* ------------------------------------------------------------------ */
+/* Attribute lines                                                     */
+/* ------------------------------------------------------------------ */
 
-    /* Recipe attributes: [private], [unix], [windows], [no-cd], etc.
-     * Distinguish from array values (which appear after := on the same line). */
-    if (*p == '[' && p[1] != '\0' && p[1] != ' ' && p[1] != '\n') {
-        const char *close = strchr(p + 1, ']');
-        if (close && close > p + 1) {
-            size_t alen = (size_t)(close - p - 1);
-            char attr[64] = {0};
-            if (alen < sizeof(attr)) {
-                memcpy(attr, p + 1, alen);
-                /* [private] is honored: the recipe stays runnable by name but
-                 * drops out of `--list`, which is exactly `just` semantics. */
-                if (strcmp(attr, "private") == 0) {
-                    if (is_private) *is_private = 1;
-                    return NULL;
-                }
-                if (strcmp(attr, "unix") == 0 ||
-                    strcmp(attr, "windows") == 0 || strcmp(attr, "no-cd") == 0 ||
-                    strcmp(attr, "no-exit-message") == 0 ||
-                    strcmp(attr, "confirm") == 0 ||
-                    jr_starts_with(attr, "group:")) {
-                    return jr_issuef(
-                        "unsupported Justfile feature at %s:%d: "
-                        "recipe attribute [%s]\n"
-                        "        Install `just` (https://just.systems) to run "
-                        "this recipe, or remove the [%s] attribute if the "
-                        "recipe is portable.",
-                        path, lineno, attr, attr);
+/* Is this line an attribute line -- `[` at the start, and no `:=` before the
+ * bracket (which would make it an array-valued assignment RHS instead)?  We
+ * only need to distinguish the two forms; the caller has already left-trimmed. */
+static int jr_is_attr_line(const char *p) {
+    return *p == '[' && p[1] != '\0' && p[1] != ' ' && p[1] != '\n' &&
+           strstr(p, ":=") == NULL;
+}
+
+/* Read a single-or-double-quoted string literal starting at *pp (which must
+ * point at the quote).  Returns a fresh string and advances *pp past the
+ * closing quote, or NULL if unterminated. */
+static char *jr_attr_string(const char **pp) {
+    const char *p = *pp;
+    char quote = *p;
+    if (quote != '\'' && quote != '"') return NULL;
+    p++;
+    const char *start = p;
+    while (*p && *p != quote) p++;
+    if (*p != quote) return NULL;
+    char *out = jr_strndup(start, (size_t)(p - start));
+    *pp = p + 1;
+    return out;
+}
+
+/* Parse one attribute line into `at`.  Handles `[a]`, `[a(x)]`, and the
+ * comma-separated form `[a, b('c')]`.
+ *
+ * Matching is on the attribute NAME -- the text up to `(` or `]` -- so an
+ * attribute that carries an argument list is recognized rather than falling
+ * through to be silently skipped.  Anything not recognized is REFUSED, not
+ * ignored: an unknown attribute means the Justfile is asking for behavior we
+ * do not implement, and running the recipe anyway would silently drop a
+ * constraint the author wrote down (the `[confirm("...")]` case, where
+ * ignoring the attribute skips a prompt guarding a destructive command).
+ *
+ * Returns NULL on success, else a heap-allocated diagnostic. */
+static char *parse_attr_line(const char *line, int lineno, const char *path,
+                             JAttrs *at) {
+    const char *p = jr_ltrim(line);
+    if (*p != '[') return NULL;
+    p++;
+
+    for (;;) {
+        while (*p == ' ' || *p == '\t') p++;
+
+        const char *nstart = p;
+        while (*p && (isalnum((unsigned char)*p) || *p == '-' || *p == '_')) p++;
+        if (p == nstart) {
+            return jr_issuef("%s:%d: malformed recipe attribute", path, lineno);
+        }
+        char name[64] = {0};
+        size_t nlen = (size_t)(p - nstart);
+        if (nlen >= sizeof(name)) {
+            return jr_issuef("%s:%d: recipe attribute name too long", path, lineno);
+        }
+        memcpy(name, nstart, nlen);
+
+        while (*p == ' ' || *p == '\t') p++;
+
+        /* Optional argument list. We keep only the first string argument,
+         * which is all any attribute we support needs. */
+        char *arg = NULL;
+        if (*p == '(') {
+            p++;
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '\'' || *p == '"') {
+                arg = jr_attr_string(&p);
+                if (!arg) {
+                    return jr_issuef("%s:%d: unterminated string in attribute "
+                                     "[%s(...)]", path, lineno, name);
                 }
             }
+            /* Skip to the matching close paren, ignoring any further args. */
+            int depth = 1;
+            while (*p && depth > 0) {
+                if (*p == '(') depth++;
+                else if (*p == ')') depth--;
+                p++;
+            }
+            if (depth != 0) {
+                free(arg);
+                return jr_issuef("%s:%d: unterminated argument list in attribute "
+                                 "[%s(...)]", path, lineno, name);
+            }
         }
+
+        if (strcmp(name, "private") == 0) {
+            at->hidden = 1;
+        } else if (strcmp(name, "no-cd") == 0) {
+            at->no_cd = 1;
+        } else if (strcmp(name, "no-exit-message") == 0) {
+            at->no_exit_message = 1;
+        } else if (strcmp(name, "confirm") == 0) {
+            at->confirm = 1;
+            free(at->confirm_msg);
+            at->confirm_msg = arg;  /* may be NULL: bare [confirm] */
+            arg = NULL;
+        } else if (strcmp(name, "group") == 0) {
+            free(at->group);
+            at->group = arg;
+            arg = NULL;
+        } else if (strcmp(name, "doc") == 0) {
+            free(at->doc_attr);
+            at->doc_attr = arg;
+            arg = NULL;
+        } else if (strcmp(name, "unix") == 0) {
+            at->platform |= JR_PLAT_UNIX;
+        } else if (strcmp(name, "linux") == 0) {
+            at->platform |= JR_PLAT_LINUX;
+        } else if (strcmp(name, "macos") == 0) {
+            at->platform |= JR_PLAT_MACOS;
+        } else if (strcmp(name, "windows") == 0) {
+            at->platform |= JR_PLAT_WINDOWS;
+        } else if (strcmp(name, "openbsd") == 0) {
+            at->platform |= JR_PLAT_OPENBSD;
+        } else {
+            free(arg);
+            return jr_issuef(
+                "unsupported Justfile feature at %s:%d: "
+                "recipe attribute [%s]\n"
+                "        Install `just` (https://just.systems) to run "
+                "this recipe, or remove the [%s] attribute if the "
+                "recipe is portable.",
+                path, lineno, name, name);
+        }
+        free(arg);
+
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == ',') { p++; continue; }
+        break;
     }
+    return NULL;
+}
+
+/* Does `platform` (a JR_PLAT_* bitmask) include the host we are running on? */
+static int jr_platform_matches(int platform) {
+    if (platform == JR_PLAT_ANY) return 1;
+#if defined(__APPLE__)
+    return (platform & JR_PLAT_MACOS) != 0;
+#elif defined(__linux__)
+    return (platform & JR_PLAT_LINUX) != 0;
+#elif defined(_WIN32)
+    return (platform & JR_PLAT_WINDOWS) != 0;
+#elif defined(__OpenBSD__)
+    return (platform & JR_PLAT_OPENBSD) != 0;
+#else
+    return (platform & JR_PLAT_UNIX) != 0;
+#endif
+}
+
+/* Backtick command substitution inside `{{ ... }}` interpolation.
+ *
+ * Without this the interpolation evaluator finds no variable named "`cmd`"
+ * and yields the empty string, so the recipe runs with a value silently
+ * missing.  Refuse it the same way the assignment path does -- an honest
+ * error beats a plausible-looking command with a hole in it.
+ *
+ * Called for recipe BODY lines as well as top-level lines: body lines are
+ * consumed by the parse loop before check_unsupported ever sees them, and a
+ * body line is where an interpolated backtick actually shows up. */
+static char *check_interp_backtick(const char *p, int lineno, const char *path) {
+    for (const char *q = p; (q = strstr(q, "{{")) != NULL; ) {
+        const char *end = strstr(q + 2, "}}");
+        if (!end) break;
+        if (memchr(q + 2, '`', (size_t)(end - (q + 2))) != NULL) {
+            return jr_issuef(
+                "unsupported Justfile feature at %s:%d: "
+                "backtick command substitution in interpolation\n"
+                "        Install `just` (https://just.systems) for this "
+                "feature.",
+                path, lineno);
+        }
+        q = end + 2;
+    }
+    return NULL;
+}
+
+/* Returns NULL when the line uses nothing unsupported, else a heap-allocated
+ * message describing what is unsupported (caller owns it).  Attribute lines
+ * are handled by parse_attr_line before this is reached. */
+static char *check_unsupported(const char *line, int lineno, const char *path) {
+    const char *p = jr_ltrim(line);
 
     /* Module / import directives */
     if (jr_starts_with(p, "mod ") || jr_starts_with(p, "import '") ||
@@ -382,6 +565,11 @@ static char *check_unsupported(const char *line, int lineno, const char *path,
                     path, lineno);
             }
         }
+    }
+
+    {
+        char *issue = check_interp_backtick(p, lineno, path);
+        if (issue) return issue;
     }
 
     /* Top-level `if` conditionals are only valid inside assignment RHS (which
@@ -811,6 +999,8 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
     char    *pending_doc     = NULL;
     JRecipe *cur_recipe      = NULL;
     int      pending_private = 0;
+    JAttrs   pending_attrs;
+    memset(&pending_attrs, 0, sizeof(pending_attrs));
 
     while (*p) {
         lineno++;
@@ -829,6 +1019,13 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
             const char *cmd_start;
             JLine jline;
             parse_body_prefix(line, &jline, &cmd_start);
+            /* A body line never reaches check_unsupported, so the constructs
+             * that only appear in a body get checked here. */
+            char *issue = check_interp_backtick(cmd_start, lineno, path);
+            if (issue) {
+                if (jf->n_issues < JR_MAX_ISSUES) jf->issues[jf->n_issues++] = issue;
+                else free(issue);
+            }
             jline.text = jr_strdup(cmd_start);
             if (cur_recipe->n_lines < JR_MAX_LINES)
                 cur_recipe->lines[cur_recipe->n_lines++] = jline;
@@ -881,22 +1078,31 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
             continue;
         }
 
+        /* ---- Recipe attribute line ----
+         * Accumulates into pending_attrs, which the next recipe header claims.
+         * pending_doc deliberately survives: a doc comment above an attribute
+         * still belongs to the recipe below it. */
+        if (jr_is_attr_line(t)) {
+            char *issue = parse_attr_line(line, lineno, path, &pending_attrs);
+            if (issue) {
+                if (jf->n_issues < JR_MAX_ISSUES) jf->issues[jf->n_issues++] = issue;
+                else free(issue);
+            }
+            if (pending_attrs.hidden) pending_private = 1;
+            free(line);
+            continue;
+        }
+
         /* ---- Unsupported feature check ----
          * Never fatal here: the issue is recorded and the line skipped, so a
          * listing (and therefore shell completion) still sees every recipe the
          * parser CAN handle.  cmd_justrun turns a recorded issue into a hard
          * error when a recipe is actually being executed. */
         {
-            int   is_private = 0;
-            char *issue = check_unsupported(line, lineno, path, &is_private);
-            if (is_private) pending_private = 1;
+            char *issue = check_unsupported(line, lineno, path);
             if (issue) {
                 if (jf->n_issues < JR_MAX_ISSUES) jf->issues[jf->n_issues++] = issue;
                 else free(issue);
-            }
-            if (issue || is_private) {
-                /* pending_doc deliberately survives: a doc comment above an
-                 * attribute still belongs to the recipe below it. */
                 free(line);
                 continue;
             }
@@ -1015,12 +1221,21 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
             JRecipe *r = &jf->recipes[jf->n_recipes];
             memset(r, 0, sizeof(*r));
             if (parse_recipe_header(t, r)) {
-                r->doc = pending_doc;
+                r->attrs = pending_attrs;
+                /* [doc("...")] wins over an accumulated `#` doc comment. */
+                if (pending_attrs.doc_attr) {
+                    free(pending_doc);
+                    r->doc = pending_attrs.doc_attr;
+                    r->attrs.doc_attr = NULL;
+                } else {
+                    r->doc = pending_doc;
+                }
                 /* `just` omits both [private] recipes and '_'-prefixed ones
                  * from --list; they stay runnable by name. */
                 r->hidden = pending_private || (r->name && r->name[0] == '_');
                 pending_doc     = NULL;
                 pending_private = 0;
+                memset(&pending_attrs, 0, sizeof(pending_attrs));
                 jf->n_recipes++;
                 cur_recipe = r;
                 free(line);
@@ -1032,10 +1247,17 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
         free(pending_doc);
         pending_doc     = NULL;
         pending_private = 0;
+        free(pending_attrs.confirm_msg);
+        free(pending_attrs.group);
+        free(pending_attrs.doc_attr);
+        memset(&pending_attrs, 0, sizeof(pending_attrs));
         free(line);
     }
 
     free(pending_doc);
+    free(pending_attrs.confirm_msg);
+    free(pending_attrs.group);
+    free(pending_attrs.doc_attr);
     return 0;
 }
 
@@ -1149,6 +1371,9 @@ static void jfile_free(JFile *jf) {
         JRecipe *r = &jf->recipes[i];
         free(r->name);
         free(r->doc);
+        free(r->attrs.confirm_msg);
+        free(r->attrs.group);
+        free(r->attrs.doc_attr);
         for (int j = 0; j < r->n_params; j++) {
             free(r->params[j].name);
             free(r->params[j].default_val);
@@ -1343,6 +1568,16 @@ static char *interpolate(const char *tmpl, const JEnv *env, const JFile *jf) {
 /* ================================================================== */
 
 static JRecipe *find_recipe(JFile *jf, const char *name) {
+    /* A Justfile may define the same recipe name several times under
+     * different platform attributes ([unix] configure / [windows] configure).
+     * Prefer one whose platform matches this host; fall back to the first
+     * by-name match so a single-definition recipe still resolves (and a
+     * genuinely wrong-platform recipe reaches exec_recipe_idx, which reports
+     * it properly instead of "not found"). */
+    for (int i = 0; i < jf->n_recipes; i++)
+        if (jf->recipes[i].name && strcmp(jf->recipes[i].name, name) == 0 &&
+            jr_platform_matches(jf->recipes[i].attrs.platform))
+            return &jf->recipes[i];
     for (int i = 0; i < jf->n_recipes; i++)
         if (jf->recipes[i].name && strcmp(jf->recipes[i].name, name) == 0)
             return &jf->recipes[i];
@@ -1451,6 +1686,41 @@ static int exec_recipe_idx(JFile *jf, int idx, const char **args, int n_args,
     if (rctx->executed[idx]) return 0;
 
     JRecipe *r = &jf->recipes[idx];
+
+    /* [unix] / [windows] / ... -- refuse rather than run something written for
+     * a different OS.  find_recipe already preferred a matching same-name
+     * recipe, so reaching here means no definition applies to this host. */
+    if (!jr_platform_matches(r->attrs.platform)) {
+        fprintf(stderr,
+                "tur run: recipe '%s' is not available on this platform (%s)\n",
+                r->name, JR_HOST_OS_NAME);
+        return 2;
+    }
+
+    /* [confirm] / [confirm("prompt")] -- gate a destructive recipe behind an
+     * interactive yes.  A non-tty stdin declines rather than blocking, so a
+     * confirm-guarded recipe never silently runs unattended in CI. */
+    if (r->attrs.confirm && !dry_run) {
+        if (!isatty(STDIN_FILENO)) {
+            fprintf(stderr,
+                    "tur run: recipe '%s' requires confirmation and stdin is "
+                    "not a terminal; declining\n", r->name);
+            return 2;
+        }
+        /* A custom prompt is printed verbatim (it is already a question);
+         * only the default form names the recipe. */
+        if (r->attrs.confirm_msg)
+            fprintf(stderr, "%s [y/N] ", r->attrs.confirm_msg);
+        else
+            fprintf(stderr, "Run recipe '%s'? [y/N] ", r->name);
+        fflush(stderr);
+        char resp[16];
+        if (!fgets(resp, sizeof(resp), stdin) ||
+            (resp[0] != 'y' && resp[0] != 'Y')) {
+            fprintf(stderr, "tur run: declined\n");
+            return 2;
+        }
+    }
 
     /* Build variable environment */
     JEnv env;
@@ -1616,6 +1886,24 @@ static int alias_hidden(const JFile *jf, const JAlias *a) {
     return t ? t->hidden : 0;
 }
 
+/* One plain-text listing line: name, params, trailing doc comment. */
+static void list_one_recipe(const JRecipe *r) {
+    printf("  %s", r->name);
+    for (int j = 0; j < r->n_params; j++) {
+        const JParam *p = &r->params[j];
+        if (p->variadic_req)        printf(" +%s", p->name);
+        else if (p->variadic)       printf(" *%s", p->name);
+        else if (p->default_val)    printf(" %s='%s'", p->name, p->default_val);
+        else                        printf(" %s", p->name);
+    }
+    if (r->doc) {
+        const char *nl = strchr(r->doc, '\n');
+        if (nl) printf("  # %.*s", (int)(nl - r->doc), r->doc);
+        else    printf("  # %s", r->doc);
+    }
+    printf("\n");
+}
+
 static int list_recipes(const JFile *jf, int json_mode, int show_all) {
     if (json_mode) {
         /* Count first so the trailing-comma logic stays correct across the
@@ -1635,6 +1923,11 @@ static int list_recipes(const JFile *jf, int json_mode, int show_all) {
             jr_json_puts(r->name);
             printf("\"");
             if (r->hidden) printf(",\"hidden\":true");
+            if (r->attrs.group) {
+                printf(",\"group\":\"");
+                jr_json_puts(r->attrs.group);
+                printf("\"");
+            }
             if (r->doc) {
                 printf(",\"doc\":\"");
                 jr_json_puts(r->doc);
@@ -1681,24 +1974,34 @@ static int list_recipes(const JFile *jf, int json_mode, int show_all) {
         return 0;
     }
 
-    /* Plain text */
+    /* Plain text.  Ungrouped recipes first, then one section per [group(...)]
+     * in order of first appearance -- the flat list is what makes a 60-recipe
+     * Justfile unreadable. */
     for (int i = 0; i < jf->n_recipes; i++) {
         const JRecipe *r = &jf->recipes[i];
         if (!show_all && r->hidden) continue;
-        printf("  %s", r->name);
-        for (int j = 0; j < r->n_params; j++) {
-            const JParam *p = &r->params[j];
-            if (p->variadic_req)        printf(" +%s", p->name);
-            else if (p->variadic)       printf(" *%s", p->name);
-            else if (p->default_val)    printf(" %s='%s'", p->name, p->default_val);
-            else                        printf(" %s", p->name);
+        if (r->attrs.group) continue;
+        list_one_recipe(r);
+    }
+    for (int i = 0; i < jf->n_recipes; i++) {
+        const char *g = jf->recipes[i].attrs.group;
+        if (!g) continue;
+        if (!show_all && jf->recipes[i].hidden) continue;
+        /* Only emit the section at the group's first visible member. */
+        int first = 1;
+        for (int j = 0; j < i; j++) {
+            const JRecipe *pr = &jf->recipes[j];
+            if (!show_all && pr->hidden) continue;
+            if (pr->attrs.group && strcmp(pr->attrs.group, g) == 0) { first = 0; break; }
         }
-        if (r->doc) {
-            const char *nl = strchr(r->doc, '\n');
-            if (nl) printf("  # %.*s", (int)(nl - r->doc), r->doc);
-            else    printf("  # %s", r->doc);
+        if (!first) continue;
+        printf("\n  [%s]\n", g);
+        for (int j = i; j < jf->n_recipes; j++) {
+            const JRecipe *m = &jf->recipes[j];
+            if (!show_all && m->hidden) continue;
+            if (!m->attrs.group || strcmp(m->attrs.group, g) != 0) continue;
+            list_one_recipe(m);
         }
-        printf("\n");
     }
     for (int i = 0; i < jf->n_aliases; i++) {
         const JAlias *a = &jf->aliases[i];
@@ -1871,6 +2174,7 @@ int usage_justrun(void) {
         "  --verbose           echo recipe metadata to stderr\n"
         "  --justfile PATH     explicit Justfile path\n"
         "  --chdir DIR         change to DIR before running the recipe\n"
+        "  --set VAR VALUE     override a Justfile variable (also VAR=VALUE)\n"
         "  --init              write a starter Justfile into cwd\n"
         "  --force             overwrite existing Justfile (with --init)\n"
         "\n"
@@ -1913,6 +2217,10 @@ int cmd_justrun(int argc, char **argv) {
     const char **recipe_args     = NULL;
     int          n_recipe_args   = 0;
     int          end_of_opts     = 0;
+    /* --set overrides, applied after the parse so they win over the file. */
+    const char  *set_names[JR_MAX_VARS];
+    const char  *set_values[JR_MAX_VARS];
+    int          n_sets           = 0;
 
     for (int i = 2; i < argc; i++) {
         if (!end_of_opts && strcmp(argv[i], "--") == 0) {
@@ -1938,6 +2246,31 @@ int cmd_justrun(int argc, char **argv) {
             if (strcmp(argv[i], "--verbose") == 0) { verbose = 1; continue; }
             if (strcmp(argv[i], "--init") == 0) { init_mode = 1; continue; }
             if (strcmp(argv[i], "--force") == 0) { force = 1; continue; }
+            /* --set VAR VALUE, and the --set VAR=VALUE spelling. */
+            if (strcmp(argv[i], "--set") == 0) {
+                if (n_sets >= JR_MAX_VARS) {
+                    fprintf(stderr, "tur run: too many --set overrides\n");
+                    return 2;
+                }
+                if (i + 2 < argc && strchr(argv[i + 1], '=') == NULL) {
+                    set_names[n_sets]    = argv[i + 1];
+                    set_values[n_sets++] = argv[i + 2];
+                    i += 2;
+                    continue;
+                }
+                if (i + 1 < argc) {
+                    char *eq = strchr(argv[i + 1], '=');
+                    if (eq) {
+                        *eq = '\0';  /* argv is writable and not reused */
+                        set_names[n_sets]    = argv[i + 1];
+                        set_values[n_sets++] = eq + 1;
+                        i += 1;
+                        continue;
+                    }
+                }
+                fprintf(stderr, "tur run: --set needs VAR VALUE (or VAR=VALUE)\n");
+                return 2;
+            }
             if (strcmp(argv[i], "--justfile") == 0 && i + 1 < argc) {
                 explicit_just = argv[++i]; continue;
             }
@@ -2005,6 +2338,26 @@ int cmd_justrun(int argc, char **argv) {
     int rc = parse_justfile(text, justfile_path, &jf);
     free(text);
     if (rc) { jfile_free(&jf); free(justfile_path); return rc; }
+
+    /* --set overrides: applied after parsing so they beat the file's own
+     * assignment, and added if the name is new (matching `just --set`). */
+    for (int s = 0; s < n_sets; s++) {
+        int found = 0;
+        for (int i = 0; i < jf.n_vars; i++) {
+            if (jf.vars[i].name && strcmp(jf.vars[i].name, set_names[s]) == 0) {
+                free(jf.vars[i].value);
+                jf.vars[i].value = jr_strdup(set_values[s]);
+                found = 1;
+                break;
+            }
+        }
+        if (!found && jf.n_vars < JR_MAX_VARS) {
+            jf.vars[jf.n_vars].name     = jr_strdup(set_names[s]);
+            jf.vars[jf.n_vars].value    = jr_strdup(set_values[s]);
+            jf.vars[jf.n_vars].exported = 0;
+            jf.n_vars++;
+        }
+    }
 
     /* .env loading */
     if (jf.settings.dotenv_load) load_dotenv(justfile_dir);
