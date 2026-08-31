@@ -1,30 +1,66 @@
 # tur run feature audit: missing just features worth implementing
 
-> **Status:** draft (2026-08-20), inventory revised 2026-08-30. **Track:**
-> tooling. **Type:** CLI / justfile compatibility.
+> **Status:** EXECUTED 2026-08-30 (drafted 2026-08-20, inventory revised and
+> plan carried out the same day). **Track:** tooling. **Type:** CLI / justfile
+> compatibility.
 >
-> **Builds on:** the original tur-run-plan.md (RN0-RN9) and the current
-> `src/compiler/justrun.c` implementation.  Referenced just version: 1.54.0
-> (from casey/just).
+> **Builds on:** the original tur-run-plan.md (RN0-RN9) and
+> `src/compiler/justrun.c`.  Referenced just version: 1.54.0 (from casey/just),
+> which is installed on the dev box -- every behavior below was checked
+> differentially against it rather than from its docs.
 >
-> **2026-08-30 revision.**  The original inventory was written from a reading
-> of `justrun.c` and had drifted from the binary's actual behavior.  Every
-> "tur run" claim below has now been re-checked by running `./build/tur run`
-> against a scratch Justfile.  Three corrections and two new findings:
+> ## Outcome
 >
-> - **Shebang recipes already work** — they landed 2026-06-10 in `5ed86be1f`,
->   two months *before* this audit was written, so the "all missing" row and
->   the Tier 2 work item were wrong on day one.  Removed from the backlog.
-> - **Built-in function count is 10, not 9.**
-> - **Parameterized attributes are silently ignored, not rejected.**
->   `[confirm("msg")]` runs the recipe with no prompt.  This is a safety bug,
->   not a missing feature; see §2.0.
-> - **Backticks inside `{{ }}` silently expand to the empty string.**  Also
->   a wrong-answer bug rather than a gap; see §2.0.
+> Phases 0 through 3 are implemented and landed.  What this document proposed
+> as ~2-3 weeks of tiered work is done except for the items explicitly ruled
+> out in section 3, plus two Windows-only remainders noted below.
 >
-> The upstream ("just v1.54.0") column is carried over from the original audit
-> and has *not* been re-verified against casey/just; treat those counts as
-> approximate.
+> | Phase | Item | State |
+> |---|---|---|
+> | 0a | Attributes matched by name; unknown ones refused | landed |
+> | 0b | Backticks in `{{ }}` no longer silently empty | landed (superseded by real evaluation) |
+> | 0c | Shebang + refusal test coverage; header comment | landed |
+> | 1.1 | `--set VAR VALUE` (and `VAR=VALUE`) | landed |
+> | 1.2 | `[group('name')]` with `--list` sections | landed |
+> | 1.3 | `[unix]`/`[windows]`/`[macos]`/`[linux]`/`[openbsd]` | landed |
+> | 2.1 | Named and flag parameters via `[arg(...)]` | landed |
+> | 2.2 | Modules (`mod`) and imports (`import`) | landed |
+> | 3.6 | `[no-cd]` | landed, and made meaningful (see below) |
+> | 3.7 | `[confirm]` / `[confirm("msg")]` prompt | landed |
+> | 3.8 | `path_exists`, `replace`, `join`, `error`, `os_family` | landed |
+> | 3.9 | Backtick command substitution | landed |
+>
+> **Three bugs were found and fixed along the way**, all of the same family --
+> input accepted but silently mishandled:
+>
+> 1. Parameterized attributes fell through a `strcmp` chain and were skipped,
+>    so `[confirm("msg")]` ran its recipe with no prompt.
+> 2. Backticks inside `{{ }}` expanded to the empty string.
+> 3. `interpolate()` discarded a failing builtin's NULL and spliced `""`, so
+>    `env_var` on an unset variable printed a misleading "unknown built-in
+>    function" note and ran the command anyway with exit 0.
+>
+> **One behavior change:** a recipe now runs from the Justfile's directory, as
+> just does.  `tur run build` from a subdirectory used to run
+> `cmake -S . -B build` in that subdirectory.  This is also what makes
+> `[no-cd]` meaningful -- it was going to be a no-op otherwise, since tur run
+> never chdir'd at all.  `[no-cd]`, `--chdir`, and `invocation_directory()`
+> are the escape hatches.
+>
+> **Test coverage went from vacuous to real.**  `tools/just-vs-tur-run.sh`
+> had no `tests/tur/run/fixtures/` tree at all: the `ok-*/` glob matched
+> nothing and it exited 0 having compared nothing, which is indistinguishable
+> from "parity holds".  It now runs 11 cases against just 1.54.0 and fails
+> loudly when it finds nothing to compare.  `tests/run-tur-run-attrs.sh` adds
+> 42 cases covering the refusals and attribute behavior that the parity
+> harness structurally cannot check (tur run exits 2 where just exits 1).
+>
+> **Still open:** the Windows shebang invocation path (splitting the `#!` line
+> and invoking the interpreter directly, since Windows has no kernel shebang
+> handling), and everything in section 3 that was deliberately skipped.
+>
+> The sections below are the original analysis, kept as the rationale record.
+> Where a section's inventory was wrong, an inline note says so.
 
 ## 0. Summary
 

@@ -8,6 +8,21 @@ backticks inside `{{ }}` expand to the empty string instead of being refused.
 gated behind a prompt runs unprompted), medium for the rest (silent wrong
 value where an error is expected).
 
+**RESOLVED 2026-08-30** on branch `worktree-tur-run-just-parity`:
+
+- Attributes are parsed name-first with an argument list, and an unknown
+  attribute is now refused rather than skipped (commit `5a7daabc6`).
+- Backticks in `{{ }}` were first refused (`5a7daabc6`), then implemented for
+  real along with assignment-RHS and function-argument backticks (`17df3d6e7`).
+- A third instance of the same bug class turned up while fixing these:
+  `interpolate()` swallowed a failing builtin's NULL and spliced an empty
+  string, so `env_var` on an unset variable ran the command anyway with exit 0.
+  Fixed in `db118ff58`.
+- The coverage gap in section 3 is closed: `tests/run-tur-run-attrs.sh` (42
+  cases) asserts the refusals, and `tools/just-vs-tur-run.sh` -- which had no
+  fixture tree and was silently comparing nothing -- now runs 11 cases against
+  just 1.54.0 and fails loudly if it finds none.
+
 Found 2026-08-30 while re-verifying
 [docs/upcoming/tur-run-feature-audit-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/tur-run-feature-audit-plan.md).
 Reproduced against `./build/tur` v0.41.0 on darwin.
