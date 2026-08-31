@@ -3512,7 +3512,25 @@ function initHScrollDragRow(el) {
     };
     updateOverflow();
     if (typeof ResizeObserver !== 'undefined') {
-        new ResizeObserver(updateOverflow).observe(el);
+        // The row's own box never changes when a button appears -- its width
+        // comes from the pane -- so observing only `el` misses the overflow
+        // that Solve or Back-from-definition unhiding creates. Watch the
+        // children too, and re-attach as the child list changes (tabs are
+        // re-rendered wholesale by renderTabs()).
+        const ro = new ResizeObserver(updateOverflow);
+        const observeChildren = () => {
+            ro.disconnect();
+            ro.observe(el);
+            for (const child of el.children) ro.observe(child);
+        };
+        observeChildren();
+        if (typeof MutationObserver !== 'undefined') {
+            new MutationObserver(() => {
+                observeChildren();
+                updateOverflow();
+            }).observe(el, { childList: true, attributes: true, subtree: true,
+                             attributeFilter: ['hidden', 'style'] });
+        }
     }
     window.addEventListener('resize', updateOverflow);
 

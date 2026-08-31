@@ -422,8 +422,17 @@ body.split-dragging * {
     align-items: center;
     gap: 4px;
     padding: 0 8px;
-    justify-content: flex-end;
 }
+/* Right-aligned while the row fits, overflowing off the *end* when it does
+   not. `justify-content: flex-end` looks equivalent but is not: it puts the
+   overflow past the start edge, which a scroll container cannot reach
+   (scrollWidth stays == clientWidth, scrollLeft is pinned at 0), so Run and
+   Trace were clipped away with no way to scroll them back. An auto start
+   margin right-aligns the same way when there is free space and collapses to
+   zero when there isn't. */
+.editor-actions > :first-child { margin-inline-start: auto; }
+/* Buttons keep their size and push the row wider; they do not compress. */
+.editor-actions > * { flex: 0 0 auto; }
 .editor-tabs::-webkit-scrollbar,
 .editor-actions::-webkit-scrollbar { display: none; }
 .editor-tabs.has-overflow,
