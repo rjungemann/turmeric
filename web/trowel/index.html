@@ -76,20 +76,12 @@
 
 .trowel-hero .install-hint { justify-content: flex-start; }
 
-/* Framed portrait screenshot with a soft gold glow behind it */
+/* Portrait product shot */
 .trowel-shot {
   position: relative;
   justify-self: center;
   max-width: 460px;
   width: 100%;
-}
-.trowel-shot::before {
-  content: '';
-  position: absolute;
-  inset: -12%;
-  background: radial-gradient(ellipse at 50% 35%, rgba(212,139,28,0.22), transparent 68%);
-  filter: blur(34px);
-  z-index: -1;
 }
 .trowel-shot img {
   display: block;
@@ -108,26 +100,14 @@
   margin-top: 48px;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 24px;
+  gap: 48px;
 }
 
 .dl-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-mid);
-  border-radius: 12px;
-  padding: 30px 28px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  position: relative;
-  overflow: hidden;
-}
-.dl-card::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--gold-line), transparent);
+  min-width: 0;
 }
 .dl-card.soon { opacity: 0.62; }
 
@@ -226,7 +206,7 @@
   .trowel-duo { grid-template-columns: 1fr; gap: 44px; padding: 60px 24px; }
 
   .download-section { padding: 60px 24px 24px; }
-  .dl-grid { grid-template-columns: 1fr; gap: 16px; }
+  .dl-grid { grid-template-columns: 1fr; gap: 40px; }
   .trowel-credit { padding: 0 24px 32px; }
 }
 
@@ -244,14 +224,8 @@
 
 <!-- ── HERO ───────────────────────────── -->
 <div class="trowel-hero">
-  <div class="hero-grid"></div>
-  <div class="hero-glow"></div>
   <div class="trowel-hero-inner">
     <div class="trowel-hero-copy">
-      <div class="hero-eyebrow">
-        <span class="eyebrow-dot"></span>
-        Trowel Editor -- now available for macOS and Linux
-      </div>
       <h1>The perfect way to get started with Turmeric.</h1>
       <p class="hero-desc">
         Open a file and press Run. Trowel is a fast, native desktop app with a live REPL and the Turmeric compiler built right in. There's nothing else to install.

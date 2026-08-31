@@ -27,10 +27,6 @@
   text-align: center;
 }
 
-.hero-grid {
-  mask-image: radial-gradient(ellipse 80% 80% at 50% 30%, black 0%, transparent 80%);
-}
-
 .hero-inner {
   max-width: 760px;
   margin: 0 auto;
@@ -94,23 +90,18 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 .tour-index-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 1px;
-  background: var(--border);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  overflow: hidden;
+  gap: 36px 32px;
 }
 
 .tour-index-card {
-  background: var(--bg-card);
-  padding: 24px 20px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  transition: background 0.14s;
+  min-width: 0;
   color: inherit;
 }
-.tour-index-card:hover { background: var(--bg-hover); }
+.tour-index-card .tour-card-label { transition: color 0.14s; }
+.tour-index-card:hover .tour-card-label { color: var(--gold-bright); }
 
 .tour-stop-num {
   font-family: 'Iosevka', monospace;
@@ -160,13 +151,7 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 
 <!-- ── HERO ───────────────────────────── -->
 <div class="hero">
-  <div class="hero-grid"></div>
-  <div class="hero-glow"></div>
   <div class="hero-inner">
-    <div class="hero-eyebrow">
-      <span class="eyebrow-dot"></span>
-      Language Tour
-    </div>
     <h1>Fourteen things about <em>turmeric</em>.</h1>
     <p class="hero-subtitle">A walkthrough of what makes Turmeric tick.</p>
     <p class="hero-desc">
@@ -269,9 +254,6 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   </div>
   <div class="code-card">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename">effects.tur</span>
     </div>
     <div class="code-card-body"><span class="cmt">;; Declare effects as first-class operations</span>
@@ -308,9 +290,6 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   </div>
   <div class="code-card" style="font-size:12.5px;">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename">typeclasses.tur</span>
     </div>
     <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="pnc">(</span><span class="kw">defclass</span> <span class="fn">Show</span> <span class="pnc">[</span>a<span class="pnc">]</span>
@@ -346,9 +325,6 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   </div>
   <div class="code-card">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename">expr.tur</span>
     </div>
     <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="cmt">;; GADT: each constructor carries its own return type.</span>
@@ -385,9 +361,6 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   </div>
   <div class="code-card">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename">gen.tur</span>
     </div>
     <div class="code-card-body"><span class="cmt">;; Build a list lazily with shift/reset</span>
@@ -423,9 +396,6 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   </div>
   <div class="code-card">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename">macros.tur</span>
     </div>
     <div class="code-card-body"><span class="cmt">;; `unless` -- inverse of when</span>
@@ -460,9 +430,6 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   </div>
   <div class="code-card">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename">memory.tur</span>
     </div>
     <div class="code-card-body"><span class="cmt">;; Heap-allocate a value with rc/of</span>
@@ -492,9 +459,6 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   </div>
   <div class="code-card">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename">cycles.tur</span>
     </div>
     <div class="code-card-body"><span class="cmt">;; Two nodes pointing at each other: RC alone</span>
@@ -533,9 +497,6 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   </div>
   <div class="code-card">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename">closures.tur</span>
     </div>
     <div class="code-card-body"><span class="cmt">;; Closures capture their lexical environment</span>
@@ -569,16 +530,13 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   </div>
   <div class="code-card">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename" id="neoteric-filename" data-turmeric="classic.tur" data-sweet-exp="neoteric.tur">classic.tur</span>
       <div class="code-syntax-toggle">
         <button class="seg-btn active" data-syntax="turmeric">turmeric</button>
         <button class="seg-btn" data-syntax="sweet-exp">sweet-exp</button>
       </div>
     </div>
-    <div class="code-card-body" style="padding:20px 22px;font-size:12px;"><div class="code-version turmeric-version"><span class="cmt">;; Standard Lisp-style syntax</span>
+    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><div class="code-version turmeric-version"><span class="cmt">;; Standard Lisp-style syntax</span>
 <span class="pnc">(</span><span class="kw">defn</span> <span class="fn">factorial</span> <span class="pnc">[</span>n <span class="tp">:int</span><span class="pnc">]</span> <span class="tp">:int</span>
   <span class="pnc">(</span><span class="kw">if</span> <span class="pnc">(</span><span class="op">&lt;=</span> n <span class="num">1</span><span class="pnc">)</span>
     <span class="num">1</span>
@@ -615,9 +573,6 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
   </div>
   <div class="code-card">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename">contracts.tur</span>
     </div>
     <div class="code-card-body"><span class="cmt">;; Named contract types -- predicates as types</span>
@@ -648,9 +603,6 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
   </div>
   <div class="code-card">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename">refined.tur</span>
     </div>
     <div class="code-card-body"><span class="cmt">;; Proved: x &gt; 0 entails 2x &gt; 0.</span>
@@ -685,9 +637,6 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
   </div>
   <div class="code-card" style="font-size:12.5px;">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename">build.tur</span>
     </div>
     <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="pnc">(</span><span class="kw">defpackage</span> <span class="fn">my-app</span>
@@ -725,9 +674,6 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
   </div>
   <div class="code-card">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename">structural.tur</span>
     </div>
     <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="cmt">;; Union types -- structural dispatch, not nominal</span>
@@ -769,9 +715,6 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
   </div>
   <div class="code-card">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename">macOS &amp; Linux</span>
     </div>
     <div class="code-card-body"><span class="cmt"># Install the editor and the compiler in one step</span>
