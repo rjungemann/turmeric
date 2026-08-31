@@ -267,6 +267,77 @@ EOF
 expect_refused "arg: names an undeclared parameter" "does not declare" tag --nosuch=1
 
 # ------------------------------------------------------------------
+# Modules and imports.  Behavior checked against just 1.54.0.
+# ------------------------------------------------------------------
+
+cat > "$WORK/shared.just" <<'EOF'
+SHARED := "from-import"
+imported:
+	@echo "imported {{SHARED}}"
+EOF
+cat > "$WORK/build.just" <<'EOF'
+INNER := "inner"
+debug: helper
+	@echo "build::debug {{INNER}}"
+helper:
+	@echo "build::helper"
+EOF
+write_justfile <<'EOF'
+import 'shared.just'
+mod build
+TOP := "top-value"
+top:
+	@echo "top {{TOP}}"
+EOF
+expect_output "import splices recipes flat" "imported from-import" imported
+expect_output "root recipe still runs" "top top-value" top
+expect_output "mod::recipe runs, module-local dep first" \
+    "build::helper
+build::debug inner" build::debug
+
+# Modules are strictly scoped: a module cannot see the root's variables.
+cat > "$WORK/leaky.just" <<'EOF'
+peek:
+	@echo "sees=[{{TOP}}]"
+EOF
+write_justfile <<'EOF'
+mod leaky
+TOP := "top-value"
+EOF
+expect_output "module does not inherit root variables" "sees=[]" leaky::peek
+
+# A missing module is an error; `mod?` makes it optional.
+write_justfile <<'EOF'
+mod nosuchmodule
+t:
+	@echo t
+EOF
+expect_refused "missing module is reported" "cannot load module" t
+
+write_justfile <<'EOF'
+mod? nosuchmodule
+t:
+	@echo t
+EOF
+expect_output "mod? tolerates a missing module" "t" t
+
+write_justfile <<'EOF'
+import 'nosuchfile.just'
+t:
+	@echo t
+EOF
+expect_refused "missing import is reported" "cannot read imported file" t
+
+write_justfile <<'EOF'
+import? 'nosuchfile.just'
+t:
+	@echo t
+EOF
+expect_output "import? tolerates a missing file" "t" t
+
+rm -f "$WORK"/*.just
+
+# ------------------------------------------------------------------
 # --set
 # ------------------------------------------------------------------
 

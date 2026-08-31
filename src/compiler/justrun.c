@@ -92,6 +92,8 @@ extern _Bool use_json_output;
 #define JR_MAX_ALIASES 64
 #define JR_MAX_SHELL     8
 #define JR_MAX_ISSUES   32
+#define JR_MAX_MODULES  32
+#define JR_MAX_INCLUDE_DEPTH 8
 
 /* ================================================================== */
 /* Data structures                                                     */
@@ -174,9 +176,10 @@ typedef struct {
 } JAttrs;
 
 typedef struct {
-    char   *name;
+    char   *name;   /* `mod::recipe` for a recipe defined inside a module */
     char   *doc;   /* accumulated doc comment, or NULL */
     int     hidden; /* [private] attribute or a leading '_': omit from --list */
+    int     module; /* owning module id; 0 = the root Justfile */
     JAttrs  attrs;
     JParam  params[JR_MAX_PARAMS];
     int     n_params;
@@ -190,6 +193,10 @@ typedef struct {
     char *name;
     char *value;
     int   exported;
+    /* Owning module id.  `just` scopes modules strictly: a module cannot see
+     * its parent's variables and vice versa, so a recipe's environment is
+     * built only from variables sharing its module id. */
+    int   module;
 } JVar;
 
 typedef struct {
@@ -212,6 +219,9 @@ typedef struct {
     JAlias   aliases[JR_MAX_ALIASES];
     int      n_aliases;
     JSettings settings;
+    /* Module names by id; id 0 is the root Justfile and has no name. */
+    char    *modules[JR_MAX_MODULES];
+    int      n_modules;
     char    *justfile_dir;
     /* Unsupported-feature diagnostics collected during the parse. Listing
      * tolerates them (and reports them on stderr) so shell completion still
@@ -669,15 +679,6 @@ static char *check_interp_backtick(const char *p, int lineno, const char *path) 
 static char *check_unsupported(const char *line, int lineno, const char *path) {
     const char *p = jr_ltrim(line);
 
-    /* Module / import directives */
-    if (jr_starts_with(p, "mod ") || jr_starts_with(p, "import '") ||
-        jr_starts_with(p, "import \"")) {
-        return jr_issuef(
-            "unsupported Justfile feature at %s:%d: module/import directive\n"
-            "        Install `just` (https://just.systems) to use modules.",
-            path, lineno);
-    }
-
     /* Backtick command substitution in assignment RHS */
     {
         const char *assign = strstr(p, ":=");
@@ -1128,7 +1129,52 @@ static char *eval_rhs(const char *text, JFile *jf, const char *path,
 /* Justfile parser                                                     */
 /* ================================================================== */
 
+/* Defined below; needed here for import/mod file loading. */
+static char *jr_read_file(const char *path);
+
+/* Parse `text` into `jf`.
+ *
+ * `module` is the owning module id (0 = the root Justfile); every recipe and
+ * variable read here is tagged with it, and recipes defined inside a module
+ * are stored under their qualified `mod::name`.  `dir` is the directory the
+ * file was read from, which is what `import`/`mod` paths resolve against.
+ * `depth` bounds include recursion. */
+static int parse_justfile_in(const char *text, const char *path, JFile *jf,
+                             int module, const char *dir, int depth);
+
+/* Resolve `mod NAME` to a file: NAME.just, NAME/mod.just, NAME/justfile,
+ * NAME/Justfile, or NAME/.justfile -- just's search order.  Returns a fresh
+ * path or NULL. */
+static char *resolve_module_file(const char *dir, const char *name) {
+    static const char *pats[] = { "%s/%s.just", "%s/%s/mod.just",
+                                  "%s/%s/justfile", "%s/%s/Justfile",
+                                  "%s/%s/.justfile" };
+    for (size_t i = 0; i < sizeof(pats) / sizeof(pats[0]); i++) {
+        char buf[4096];
+        snprintf(buf, sizeof(buf), pats[i], dir, name);
+        struct stat st;
+        if (stat(buf, &st) == 0 && S_ISREG(st.st_mode)) return jr_strdup(buf);
+    }
+    return NULL;
+}
+
+/* Directory part of a path, as a fresh string ("." when there is none). */
+static char *jr_dirname(const char *path) {
+    const char *slash = strrchr(path, '/');
+    if (!slash) return jr_strdup(".");
+    if (slash == path) return jr_strdup("/");
+    return jr_strndup(path, (size_t)(slash - path));
+}
+
 static int parse_justfile(const char *text, const char *path, JFile *jf) {
+    char *dir = jr_dirname(path);
+    int rc = parse_justfile_in(text, path, jf, 0, dir, 0);
+    free(dir);
+    return rc;
+}
+
+static int parse_justfile_in(const char *text, const char *path, JFile *jf,
+                             int module, const char *dir, int depth) {
     const char *p = text;
     int lineno    = 0;
 
@@ -1211,6 +1257,106 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
             free(pending_doc);
             pending_doc = NULL;
             free(line);
+            continue;
+        }
+
+        /* ---- import 'path' / import? 'path' ----
+         * A flat splice: the imported file's recipes and variables land in
+         * THIS module's namespace, as if typed here. */
+        if (jr_starts_with(t, "import ") || jr_starts_with(t, "import? ")) {
+            int optional = (t[6] == '?');
+            const char *q = t + (optional ? 8 : 7);
+            while (*q == ' ' || *q == '\t') q++;
+            char *rel = jr_attr_string(&q);
+            if (!rel) {
+                char *issue = jr_issuef("%s:%d: import needs a quoted path",
+                                        path, lineno);
+                if (jf->n_issues < JR_MAX_ISSUES) jf->issues[jf->n_issues++] = issue;
+                else free(issue);
+                free(line);
+                continue;
+            }
+            char full[4096];
+            if (rel[0] == '/') snprintf(full, sizeof(full), "%s", rel);
+            else               snprintf(full, sizeof(full), "%s/%s", dir, rel);
+            char *sub = (depth < JR_MAX_INCLUDE_DEPTH) ? jr_read_file(full) : NULL;
+            if (!sub) {
+                if (!optional) {
+                    char *issue = depth >= JR_MAX_INCLUDE_DEPTH
+                        ? jr_issuef("%s:%d: import nesting too deep (limit %d)",
+                                    path, lineno, JR_MAX_INCLUDE_DEPTH)
+                        : jr_issuef("%s:%d: cannot read imported file '%s'",
+                                    path, lineno, full);
+                    if (jf->n_issues < JR_MAX_ISSUES) jf->issues[jf->n_issues++] = issue;
+                    else free(issue);
+                }
+                free(rel);
+                free(line);
+                continue;
+            }
+            char *subdir = jr_dirname(full);
+            parse_justfile_in(sub, full, jf, module, subdir, depth + 1);
+            free(subdir);
+            free(sub);
+            free(rel);
+            free(line);
+            cur_recipe = NULL;
+            continue;
+        }
+
+        /* ---- mod NAME ['path'] / mod? NAME ----
+         * A namespaced load: the module's recipes are stored as `NAME::recipe`
+         * and its variables are scoped to it (a module cannot see its
+         * parent's variables, matching just). */
+        if (jr_starts_with(t, "mod ") || jr_starts_with(t, "mod? ")) {
+            int optional = (t[3] == '?');
+            const char *q = t + (optional ? 5 : 4);
+            while (*q == ' ' || *q == '\t') q++;
+            const char *nstart = q;
+            while (*q && (isalnum((unsigned char)*q) || *q == '-' || *q == '_')) q++;
+            char *modname = jr_strndup(nstart, (size_t)(q - nstart));
+            while (*q == ' ' || *q == '\t') q++;
+            char *explicit_path = (*q == '\'' || *q == '"')
+                                    ? jr_attr_string((const char **)&q) : NULL;
+
+            char *full = NULL;
+            if (explicit_path) {
+                char buf[4096];
+                if (explicit_path[0] == '/') snprintf(buf, sizeof(buf), "%s", explicit_path);
+                else snprintf(buf, sizeof(buf), "%s/%s", dir, explicit_path);
+                full = jr_strdup(buf);
+            } else {
+                full = resolve_module_file(dir, modname);
+            }
+
+            char *sub = (full && depth < JR_MAX_INCLUDE_DEPTH)
+                          ? jr_read_file(full) : NULL;
+            if (!sub) {
+                if (!optional) {
+                    char *issue = jr_issuef(
+                        "%s:%d: cannot load module '%s'%s%s", path, lineno,
+                        modname, full ? " from " : " (no NAME.just or NAME/mod.just)",
+                        full ? full : "");
+                    if (jf->n_issues < JR_MAX_ISSUES) jf->issues[jf->n_issues++] = issue;
+                    else free(issue);
+                }
+            } else if (jf->n_modules + 1 >= JR_MAX_MODULES) {
+                char *issue = jr_issuef("%s:%d: too many modules", path, lineno);
+                if (jf->n_issues < JR_MAX_ISSUES) jf->issues[jf->n_issues++] = issue;
+                else free(issue);
+            } else {
+                int id = ++jf->n_modules;   /* id 0 is the root */
+                jf->modules[id] = jr_strdup(modname);
+                char *subdir = jr_dirname(full);
+                parse_justfile_in(sub, full, jf, id, subdir, depth + 1);
+                free(subdir);
+            }
+            free(sub);
+            free(full);
+            free(explicit_path);
+            free(modname);
+            free(line);
+            cur_recipe = NULL;
             continue;
         }
 
@@ -1299,6 +1445,7 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
                     var->name     = jr_strndup(vp, name_len);
                     var->value    = val;
                     var->exported = exported;
+                    var->module   = module;
                     if (exported) setenv(var->name, var->value, 0);
                     free(pending_doc);
                     pending_doc = NULL;
@@ -1357,6 +1504,17 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
             JRecipe *r = &jf->recipes[jf->n_recipes];
             memset(r, 0, sizeof(*r));
             if (parse_recipe_header(t, r)) {
+                r->module = module;
+                /* Inside a module, a recipe is addressed as `mod::name`. */
+                if (module > 0 && jf->modules[module] && r->name) {
+                    size_t n = strlen(jf->modules[module]) + 2 + strlen(r->name) + 1;
+                    char  *q = (char *)malloc(n);
+                    if (q) {
+                        snprintf(q, n, "%s::%s", jf->modules[module], r->name);
+                        free(r->name);
+                        r->name = q;
+                    }
+                }
                 r->attrs = pending_attrs;
                 /* Resolve [arg(...)] onto the parameters it names.  The
                  * attribute is written above the header, so this is the first
@@ -1559,6 +1717,8 @@ static void jfile_free(JFile *jf) {
     }
     for (int i = 0; i < jf->settings.n_shell; i++) free(jf->settings.shell[i]);
     for (int i = 0; i < jf->n_issues; i++) free(jf->issues[i]);
+    for (int i = 0; i <= jf->n_modules && i < JR_MAX_MODULES; i++)
+        free(jf->modules[i]);
     free(jf->justfile_dir);
 }
 
@@ -2086,8 +2246,12 @@ static int exec_recipe_idx(JFile *jf, int idx, const char **args, int n_args,
     /* Build variable environment */
     JEnv env;
     jenv_init(&env);
+    /* Only this recipe's own module contributes variables: `just` scopes
+     * modules strictly, so a module recipe sees neither the root Justfile's
+     * variables nor a sibling module's. */
     for (int i = 0; i < jf->n_vars; i++)
-        jenv_set(&env, jf->vars[i].name, jf->vars[i].value);
+        if (jf->vars[i].module == r->module)
+            jenv_set(&env, jf->vars[i].name, jf->vars[i].value);
 
     /* Bind parameters */
     int rc = bind_params(r, args, n_args, &env, r->name);
@@ -2096,7 +2260,18 @@ static int exec_recipe_idx(JFile *jf, int idx, const char **args, int n_args,
     /* Execute dependencies first */
     for (int i = 0; i < r->n_deps; i++) {
         const JDep *dep = &r->deps[i];
-        JRecipe *drec = find_recipe(jf, dep->recipe);
+        /* A dependency named inside a module refers to a sibling in that
+         * module first; an unqualified name only escapes to the root when the
+         * module has no such recipe. */
+        JRecipe *drec = NULL;
+        if (r->module > 0 && jf->modules[r->module] &&
+            strstr(dep->recipe, "::") == NULL) {
+            char qualified[512];
+            snprintf(qualified, sizeof(qualified), "%s::%s",
+                     jf->modules[r->module], dep->recipe);
+            drec = find_recipe(jf, qualified);
+        }
+        if (!drec) drec = find_recipe(jf, dep->recipe);
         if (!drec) {
             fprintf(stderr, "tur run: recipe '%s' depends on '%s': not found\n",
                     r->name, dep->recipe);
@@ -2348,15 +2523,21 @@ static int list_recipes(const JFile *jf, int json_mode, int show_all) {
     /* Plain text.  Ungrouped recipes first, then one section per [group(...)]
      * in order of first appearance -- the flat list is what makes a 60-recipe
      * Justfile unreadable. */
+    /* Module recipes are represented by a single `name ...` line at the end,
+     * as in just, rather than listed individually here.  They remain in the
+     * --json listing: that drives shell completion, and `mod::recipe` is a
+     * runnable name (same reasoning as aliases). */
     for (int i = 0; i < jf->n_recipes; i++) {
         const JRecipe *r = &jf->recipes[i];
         if (!show_all && r->hidden) continue;
+        if (r->module > 0) continue;
         if (r->attrs.group) continue;
         list_one_recipe(r);
     }
     for (int i = 0; i < jf->n_recipes; i++) {
         const char *g = jf->recipes[i].attrs.group;
         if (!g) continue;
+        if (jf->recipes[i].module > 0) continue;
         if (!show_all && jf->recipes[i].hidden) continue;
         /* Only emit the section at the group's first visible member. */
         int first = 1;
@@ -2378,6 +2559,11 @@ static int list_recipes(const JFile *jf, int json_mode, int show_all) {
         const JAlias *a = &jf->aliases[i];
         if (!show_all && alias_hidden(jf, a)) continue;
         printf("  %s  # alias for `%s`\n", a->name, a->target);
+    }
+    /* Modules get a `name ...` line, as in just, so the flat listing does not
+     * bury `mod::recipe` entries among the root's own. */
+    for (int m = 1; m <= jf->n_modules && m < JR_MAX_MODULES; m++) {
+        if (jf->modules[m]) printf("  %s ...\n", jf->modules[m]);
     }
     return 0;
 }
