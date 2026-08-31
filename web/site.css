@@ -21,6 +21,9 @@
 /* ── RESET ─────────────────────────────── */
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* Use green for emphasis by default */
+em { color: var(--green); }
+
 /* ── ICONS (<t-icon>, Lucide set) ──────── */
 /* Sized by font-size (1em); the CSS width/height override the SVG's baked-in
  * 24x24 attributes. Stroke inherits `color` via currentColor. */
@@ -235,7 +238,7 @@ nav {
   letter-spacing: -0.03em;
 }
 
-.section-title em { font-style: italic; color: var(--gold-bright); }
+.section-title em { font-style: italic; color: var(--green); }
 
 .section-desc {
   font-size: 15px;
@@ -338,7 +341,7 @@ nav {
   position: relative;
   z-index: 1;
 }
-.cta-title em { font-style: italic; color: var(--gold-bright); }
+.cta-title em { font-style: italic; color: var(--green); }
 
 .cta-desc {
   font-size: 16px;

@@ -242,11 +242,12 @@ section {
 }
 
 .step-num {
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 13px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   color: var(--green);
-  letter-spacing: 0.06em;
   font-weight: 500;
+  margin-bottom: 16px;
 }
 
 .step-title {
