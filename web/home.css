@@ -180,7 +180,6 @@ section {
   padding: 36px 32px;
   transition: background 0.14s;
 }
-.feature-card:hover { background: var(--bg-hover); }
 
 .feat-icon {
   width: 36px;
