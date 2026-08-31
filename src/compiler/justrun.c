@@ -223,6 +223,13 @@ typedef struct {
     char    *modules[JR_MAX_MODULES];
     int      n_modules;
     char    *justfile_dir;
+    /* cwd at process start.  Captured because a recipe now runs from the
+     * Justfile's directory, so getcwd() at interpolation time would no longer
+     * answer what invocation_directory() means. */
+    char    *invocation_dir;
+    /* Set when --chdir put us somewhere deliberately; suppresses the
+     * automatic chdir to justfile_dir so the user's choice wins. */
+    int      explicit_chdir;
     /* Unsupported-feature diagnostics collected during the parse. Listing
      * tolerates them (and reports them on stderr) so shell completion still
      * gets candidates; executing a recipe is still a hard error. */
@@ -646,70 +653,16 @@ static int jr_platform_matches(int platform) {
 #endif
 }
 
-/* Backtick command substitution inside `{{ ... }}` interpolation.
+/* Note: there is no longer a general "unsupported construct" scanner here.
+ * Every construct that used to be refused line-by-line -- module/import
+ * directives, backtick substitution in both assignment and interpolation --
+ * is now implemented.  Unknown recipe ATTRIBUTES are still refused, by
+ * parse_attr_line, which is the one place a Justfile can still name
+ * something we do not implement.
  *
- * Without this the interpolation evaluator finds no variable named "`cmd`"
- * and yields the empty string, so the recipe runs with a value silently
- * missing.  Refuse it the same way the assignment path does -- an honest
- * error beats a plausible-looking command with a hole in it.
- *
- * Called for recipe BODY lines as well as top-level lines: body lines are
- * consumed by the parse loop before check_unsupported ever sees them, and a
- * body line is where an interpolated backtick actually shows up. */
-static char *check_interp_backtick(const char *p, int lineno, const char *path) {
-    for (const char *q = p; (q = strstr(q, "{{")) != NULL; ) {
-        const char *end = strstr(q + 2, "}}");
-        if (!end) break;
-        if (memchr(q + 2, '`', (size_t)(end - (q + 2))) != NULL) {
-            return jr_issuef(
-                "unsupported Justfile feature at %s:%d: "
-                "backtick command substitution in interpolation\n"
-                "        Install `just` (https://just.systems) for this "
-                "feature.",
-                path, lineno);
-        }
-        q = end + 2;
-    }
-    return NULL;
-}
-
-/* Returns NULL when the line uses nothing unsupported, else a heap-allocated
- * message describing what is unsupported (caller owns it).  Attribute lines
- * are handled by parse_attr_line before this is reached. */
-static char *check_unsupported(const char *line, int lineno, const char *path) {
-    const char *p = jr_ltrim(line);
-
-    /* Backtick command substitution in assignment RHS */
-    {
-        const char *assign = strstr(p, ":=");
-        if (assign) {
-            const char *rhs = assign + 2;
-            while (*rhs == ' ' || *rhs == '\t') rhs++;
-            if (*rhs == '`') {
-                return jr_issuef(
-                    "unsupported Justfile feature at %s:%d: "
-                    "backtick command substitution in assignment\n"
-                    "        Install `just` (https://just.systems) for this "
-                    "feature.",
-                    path, lineno);
-            }
-        }
-    }
-
-    {
-        char *issue = check_interp_backtick(p, lineno, path);
-        if (issue) return issue;
-    }
-
-    /* Top-level `if` conditionals are only valid inside assignment RHS (which
-     * the RHS evaluator handles). A bare top-level `if` statement is not a
-     * just construct, so fall through and let the normal parser flag it as a
-     * junk line. */
-
-    /* Alias is handled directly in the parse loop now (see parse_justfile). */
-
-    return NULL;
-}
+ * A top-level `if` is only valid inside an assignment RHS (the RHS evaluator
+ * handles it); a bare one falls through to the normal parser as a junk line.
+ * Aliases are handled directly in the parse loop. */
 
 /* ================================================================== */
 /* Recipe header parser                                                */
@@ -944,9 +897,76 @@ static char *re_string_literal(REval *r) {
     return buf;
 }
 
+/* Run `cmd` through the shell and capture stdout, stripping the single
+ * trailing newline the way `just` does ("a\nb\n" -> "a\nb").  Sets *failed
+ * when the command could not run or exited non-zero; the caller aborts. */
+static char *jr_capture_command(const char *cmd, int *failed, int *exit_code) {
+    if (failed) *failed = 0;
+    if (exit_code) *exit_code = 0;
+    FILE *pipe = popen(cmd, "r");
+    if (!pipe) {
+        if (failed) *failed = 1;
+        return NULL;
+    }
+    size_t cap = 256, len = 0;
+    char  *out = (char *)malloc(cap);
+    if (!out) { pclose(pipe); if (failed) *failed = 1; return NULL; }
+    for (;;) {
+        if (len + 1 >= cap) {
+            cap *= 2;
+            char *bigger = (char *)realloc(out, cap);
+            if (!bigger) { free(out); pclose(pipe); if (failed) *failed = 1; return NULL; }
+            out = bigger;
+        }
+        size_t got = fread(out + len, 1, cap - len - 1, pipe);
+        len += got;
+        if (got == 0) break;
+    }
+    out[len] = '\0';
+    int status = pclose(pipe);
+    int code   = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+    if (code != 0) {
+        free(out);
+        if (failed)    *failed = 1;
+        if (exit_code) *exit_code = code;
+        return NULL;
+    }
+    if (len > 0 && out[len - 1] == '\n') out[--len] = '\0';
+    return out;
+}
+
+/* Read a `...` token starting at *pp (which points at the opening backtick).
+ * Returns the command text and advances past the closing backtick, or NULL. */
+static char *jr_backtick_body(const char **pp) {
+    const char *p = *pp;
+    if (*p != '`') return NULL;
+    p++;
+    const char *start = p;
+    while (*p && *p != '`') p++;
+    if (*p != '`') return NULL;
+    char *body = jr_strndup(start, (size_t)(p - start));
+    *pp = p + 1;
+    return body;
+}
+
 static char *re_primary(REval *r) {
     re_skip_ws(r);
     if (*r->p == '"' || *r->p == '\'') return re_string_literal(r);
+    if (*r->p == '`') {
+        char *body = jr_backtick_body(&r->p);
+        if (!body) { re_error(r, "unterminated backtick"); return jr_strdup(""); }
+        int failed = 0, code = 0;
+        char *out = jr_capture_command(body, &failed, &code);
+        if (failed) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "backtick failed with exit code %d", code);
+            re_error(r, msg);
+            free(body);
+            return jr_strdup("");
+        }
+        free(body);
+        return out;
+    }
     if (*r->p == '(') {
         r->p++;
         char *v = re_expr(r);
@@ -1132,6 +1152,10 @@ static char *eval_rhs(const char *text, JFile *jf, const char *path,
 /* Defined below; needed here for import/mod file loading. */
 static char *jr_read_file(const char *path);
 
+/* Backtick evaluation helpers, defined with the RHS evaluator below. */
+static char *jr_backtick_body(const char **pp);
+static char *jr_capture_command(const char *cmd, int *failed, int *exit_code);
+
 /* Parse `text` into `jf`.
  *
  * `module` is the owning module id (0 = the root Justfile); every recipe and
@@ -1201,13 +1225,6 @@ static int parse_justfile_in(const char *text, const char *path, JFile *jf,
             const char *cmd_start;
             JLine jline;
             parse_body_prefix(line, &jline, &cmd_start);
-            /* A body line never reaches check_unsupported, so the constructs
-             * that only appear in a body get checked here. */
-            char *issue = check_interp_backtick(cmd_start, lineno, path);
-            if (issue) {
-                if (jf->n_issues < JR_MAX_ISSUES) jf->issues[jf->n_issues++] = issue;
-                else free(issue);
-            }
             jline.text = jr_strdup(cmd_start);
             if (cur_recipe->n_lines < JR_MAX_LINES)
                 cur_recipe->lines[cur_recipe->n_lines++] = jline;
@@ -1373,21 +1390,6 @@ static int parse_justfile_in(const char *text, const char *path, JFile *jf,
             if (pending_attrs.hidden) pending_private = 1;
             free(line);
             continue;
-        }
-
-        /* ---- Unsupported feature check ----
-         * Never fatal here: the issue is recorded and the line skipped, so a
-         * listing (and therefore shell completion) still sees every recipe the
-         * parser CAN handle.  cmd_justrun turns a recorded issue into a hard
-         * error when a recipe is actually being executed. */
-        {
-            char *issue = check_unsupported(line, lineno, path);
-            if (issue) {
-                if (jf->n_issues < JR_MAX_ISSUES) jf->issues[jf->n_issues++] = issue;
-                else free(issue);
-                free(line);
-                continue;
-            }
         }
 
         /* ---- Comment / doc accumulation ---- */
@@ -1720,6 +1722,7 @@ static void jfile_free(JFile *jf) {
     for (int i = 0; i <= jf->n_modules && i < JR_MAX_MODULES; i++)
         free(jf->modules[i]);
     free(jf->justfile_dir);
+    free(jf->invocation_dir);
 }
 
 /* ================================================================== */
@@ -1828,6 +1831,7 @@ static char *eval_builtin(const char *name, const char **args, int n_args,
     if (strcmp(name, "justfile_directory") == 0)
         return jr_strdup(jf->justfile_dir ? jf->justfile_dir : ".");
     if (strcmp(name, "invocation_directory") == 0) {
+        if (jf->invocation_dir) return jr_strdup(jf->invocation_dir);
         char cwd[4096];
         return jr_strdup(getcwd(cwd, sizeof(cwd)) ? cwd : ".");
     }
@@ -1874,6 +1878,30 @@ static char *eval_builtin(const char *name, const char **args, int n_args,
 static char *eval_expr(const char *expr, const JEnv *env, const JFile *jf) {
     char *trimmed = jr_trim(expr);
 
+    /* Backtick command substitution: {{ `git rev-parse HEAD` }} */
+    if (trimmed[0] == '`') {
+        const char *q    = trimmed;
+        char       *body = jr_backtick_body(&q);
+        if (!body) {
+            fprintf(stderr, "tur run: unterminated backtick in '{{ %s }}'\n",
+                    trimmed);
+            free(trimmed);
+            return NULL;
+        }
+        int   failed = 0, code = 0;
+        char *out = jr_capture_command(body, &failed, &code);
+        if (failed) {
+            fprintf(stderr, "tur run: backtick failed with exit code %d: `%s`\n",
+                    code, body);
+            free(body);
+            free(trimmed);
+            return NULL;
+        }
+        free(body);
+        free(trimmed);
+        return out;
+    }
+
     /* Function call: name(...) */
     char *paren = strchr(trimmed, '(');
     if (paren && paren > trimmed) {
@@ -1885,6 +1913,37 @@ static char *eval_expr(const char *expr, const JEnv *env, const JFile *jf) {
         while (*ap && *ap != ')' && n_args < 8) {
             while (*ap == ' ') ap++;
             if (*ap == ')') break;
+            /* An argument may itself be a backtick command, e.g.
+             * {{ uppercase(`echo hi`) }}.  parse_value is a plain lexer and
+             * would hand the backticks through to the shell verbatim. */
+            if (*ap == '`') {
+                char *body = jr_backtick_body(&ap);
+                if (!body) {
+                    fprintf(stderr, "tur run: unterminated backtick in '%s(...)'\n",
+                            fname);
+                    for (int i = 0; i < n_args; i++) free(args[i]);
+                    free(fname);
+                    free(trimmed);
+                    return NULL;
+                }
+                int   failed = 0, code = 0;
+                char *out = jr_capture_command(body, &failed, &code);
+                if (failed) {
+                    fprintf(stderr,
+                            "tur run: backtick failed with exit code %d: `%s`\n",
+                            code, body);
+                    free(body);
+                    for (int i = 0; i < n_args; i++) free(args[i]);
+                    free(fname);
+                    free(trimmed);
+                    return NULL;
+                }
+                free(body);
+                args[n_args++] = out;
+                while (*ap == ' ') ap++;
+                if (*ap == ',') ap++;
+                continue;
+            }
             const char *end;
             char *arg = parse_value(ap, &end);
             args[n_args++] = arg;
@@ -2310,6 +2369,29 @@ static int exec_recipe_idx(JFile *jf, int idx, const char **args, int n_args,
     rctx->executed[idx] = 1;
 
     if (verbose) fprintf(stderr, "[tur run] running recipe: %s\n", r->name);
+
+    /* Run from the Justfile's directory, as `just` does, so a recipe written
+     * as `cmake -S . -B build` means the project root no matter where it was
+     * invoked from.  [no-cd] opts out per recipe, and an explicit --chdir
+     * wins over both.  invocation_directory() still reports where the user
+     * actually was. */
+    if (!r->attrs.no_cd && !jf->explicit_chdir && jf->justfile_dir) {
+        if (chdir(jf->justfile_dir) != 0) {
+            fprintf(stderr, "tur run: cannot enter '%s': %s\n",
+                    jf->justfile_dir, strerror(errno));
+            jenv_free(&env);
+            return 2;
+        }
+    } else if (r->attrs.no_cd && jf->invocation_dir) {
+        /* A [no-cd] recipe runs where the user stood, even if an earlier
+         * recipe in this same invocation moved us to the Justfile's dir. */
+        if (chdir(jf->invocation_dir) != 0) {
+            fprintf(stderr, "tur run: cannot return to '%s': %s\n",
+                    jf->invocation_dir, strerror(errno));
+            jenv_free(&env);
+            return 2;
+        }
+    }
 
     /* Shebang recipe: if the first body line starts with `#!`, the whole body
      * is a single script run by the interpreter named on the shebang line
@@ -2850,6 +2932,12 @@ int cmd_justrun(int argc, char **argv) {
     if (init_mode)
         return justrun_write_template(".", NULL, force);
 
+    /* Remember where the user actually invoked us, before --chdir or the
+     * per-recipe chdir to the Justfile's directory moves us. */
+    char invocation_cwd[4096];
+    const char *invocation_cwd_p = getcwd(invocation_cwd, sizeof(invocation_cwd))
+                                     ? invocation_cwd : NULL;
+
     /* --chdir */
     if (chdir_to && chdir(chdir_to) != 0) {
         fprintf(stderr, "tur run: cannot chdir to '%s': %s\n",
@@ -2891,6 +2979,8 @@ int cmd_justrun(int argc, char **argv) {
     jf.settings.shell[0]  = jr_strdup("sh");
     jf.settings.shell[1]  = jr_strdup("-c");
     jf.justfile_dir       = jr_strdup(justfile_dir);
+    jf.invocation_dir     = invocation_cwd_p ? jr_strdup(invocation_cwd_p) : NULL;
+    jf.explicit_chdir     = chdir_to != NULL;
 
     int rc = parse_justfile(text, justfile_path, &jf);
     free(text);

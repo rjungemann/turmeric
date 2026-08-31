@@ -88,21 +88,28 @@ EOF
 expect_refused "bare confirm is honored too" "requires confirmation" danger
 
 # Backticks inside {{ }} used to expand to the empty string, so the recipe ran
-# with a value silently missing.
+# with a value silently missing.  They are now evaluated for real; the
+# regression guard is that the value ARRIVES, never that it is quietly empty.
+# Expectations checked against just 1.54.0.
 write_justfile <<'EOF'
+REV := `printf 'abc\n'`
+MULTI := `printf 'a\nb\n'`
 show:
-	@echo "inline {{ `echo xyz` }}"
+	@echo "rev=[{{REV}}] inline=[{{ `echo xyz` }}] up=[{{ uppercase(`echo hi`) }}]"
+multi:
+	@echo "[{{MULTI}}]"
 EOF
-expect_refused "backtick in interpolation is refused" \
-    "backtick command substitution" show
+expect_output "backtick substitution in assignment and interpolation" \
+    "rev=[abc] inline=[xyz] up=[HI]" show
+expect_output "backtick keeps interior newlines, strips the trailing one" \
+    "[a
+b]" multi
 
 write_justfile <<'EOF'
-REV := `git rev-parse HEAD`
-show:
-	@echo "{{REV}}"
+fails:
+	@echo "{{ `exit 3` }}"
 EOF
-expect_refused "backtick in assignment is refused" \
-    "backtick command substitution" show
+expect_refused "a failing backtick aborts the recipe" "exit code 3" fails
 
 # An attribute we do not implement must be refused, not ignored -- otherwise
 # every attribute upstream adds becomes a silent no-op here.
@@ -265,6 +272,48 @@ tag version:
 	@echo "{{version}}"
 EOF
 expect_refused "arg: names an undeclared parameter" "does not declare" tag --nosuch=1
+
+# ------------------------------------------------------------------
+# cwd semantics: a recipe runs from the Justfile's directory (as just
+# does), [no-cd] runs where the user stood, and --chdir beats both.
+# ------------------------------------------------------------------
+
+mkdir -p "$WORK/sub"
+# `pwd -P` on both sides: the shell inherits a logical $PWD from the
+# invocation, so a bare `pwd` compares /var/... against /private/var/... on
+# macOS and fails for reasons that have nothing to do with the chdir.
+write_justfile <<'EOF'
+where:
+	@pwd -P
+
+[no-cd]
+where-here:
+	@pwd -P
+EOF
+jf_dir="$(cd "$WORK" && pwd -P)"
+sub_dir="$(cd "$WORK/sub" && pwd -P)"
+got=$(cd "$WORK/sub" && "$TUR_BIN" run where 2>/dev/null </dev/null)
+if [ "$got" = "$jf_dir" ]; then
+    echo "PASS: recipe runs from the Justfile directory"; PASS=$((PASS + 1))
+else
+    echo "FAIL: recipe runs from the Justfile directory -- got '$got' want '$jf_dir'"
+    FAIL=$((FAIL + 1))
+fi
+got=$(cd "$WORK/sub" && "$TUR_BIN" run where-here 2>/dev/null </dev/null)
+if [ "$got" = "$sub_dir" ]; then
+    echo "PASS: [no-cd] runs from the invocation directory"; PASS=$((PASS + 1))
+else
+    echo "FAIL: [no-cd] runs from the invocation directory -- got '$got' want '$sub_dir'"
+    FAIL=$((FAIL + 1))
+fi
+got=$(cd "$WORK" && "$TUR_BIN" run --chdir "$WORK/sub" where 2>/dev/null </dev/null)
+if [ "$got" = "$sub_dir" ]; then
+    echo "PASS: --chdir wins over the automatic chdir"; PASS=$((PASS + 1))
+else
+    echo "FAIL: --chdir wins over the automatic chdir -- got '$got' want '$sub_dir'"
+    FAIL=$((FAIL + 1))
+fi
+rmdir "$WORK/sub" 2>/dev/null || true
 
 # ------------------------------------------------------------------
 # Modules and imports.  Behavior checked against just 1.54.0.
