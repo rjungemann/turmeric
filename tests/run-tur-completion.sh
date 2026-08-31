@@ -80,16 +80,18 @@ fi
 
 # --------------------------------------------------- unsupported features ---
 
-cat > Justfile.confirm <<'EOF'
+# [confirm] is implemented now, so it is no longer a stand-in for "unsupported".
+# [positional-arguments] is a real `just` attribute tur run does not implement.
+cat > Justfile.unsupported <<'EOF'
 good:
     @echo good
 
-[confirm]
+[positional-arguments]
 risky:
     @echo risky
 EOF
 
-OUT="$("$TUR" run --justfile Justfile.confirm --list 2>/dev/null)"
+OUT="$("$TUR" run --justfile Justfile.unsupported --list 2>/dev/null)"
 RC=$?
 if [ "$RC" -eq 0 ] && grep -q '^  good' <<< "$OUT"; then
   pass "an unsupported attribute degrades --list instead of blanking it"
@@ -97,7 +99,7 @@ else
   fail "an unsupported attribute degrades --list instead of blanking it (rc=$RC, out=$OUT)"
 fi
 
-"$TUR" run --justfile Justfile.confirm good >/dev/null 2>&1
+"$TUR" run --justfile Justfile.unsupported good >/dev/null 2>&1
 if [ $? -eq 2 ]; then
   pass "an unsupported attribute is still fatal when running a recipe"
 else

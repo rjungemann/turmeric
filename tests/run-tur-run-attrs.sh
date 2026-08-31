@@ -38,7 +38,7 @@ expect_refused() {
         FAIL=$((FAIL + 1))
         return
     fi
-    if ! echo "$out" | grep -qi -- "$pattern"; then
+    if ! grep -qi -- "$pattern" <<< "$out"; then
         echo "FAIL: $name -- stderr did not match '$pattern'"
         echo "  output: $out"
         FAIL=$((FAIL + 1))
