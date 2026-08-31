@@ -211,12 +211,68 @@ step -- see [A step is one expression](#a-step-is-one-expression). The
 recording is finer than that; DAP is where it gets presented at the
 granularity the protocol speaks.
 
-Stepping backwards does not un-print: a terminal has no undo, so the DAP
-transcript only ever grows. The transcript that rewinds with the cursor belongs
-to a client that owns its own console.
-
 Replay is opt-in. A plain `launch` is still a live session, still the one that
 can `evaluate`, and unchanged.
+
+### The timeline extension
+
+DAP describes execution as a sequence of steps, never as an **axis**. That is
+the right model for a live debuggee — there is nowhere to scrub to — but a
+recording *is* an axis, and the three things a scrubber needs of one have no
+standard request. Three custom ones add them, advertised as
+`supportsTurmericReplayTimeline` in the `initialize` response:
+
+| Request | Arguments | Body |
+| --- | --- | --- |
+| `replayInfo` | — | `{"steps": N, "index": i, "depth": d, "outputLength": n}` |
+| `replaySeek` | `{"index": N}` | `{"index": actual}`, then a `stopped` event |
+| `replayDepths` | `{"buckets": N}` (optional) | `{"steps": N, "buckets": M, "depths": [...]}` |
+
+Each answers something that is expensive or impossible to approximate:
+
+- **`replayInfo`** gives a slider its range. A range that is a guess is worse
+  than no slider.
+- **`replaySeek`** jumps to an arbitrary step. Approximating it with repeated
+  `stepBack` is the trap [Reading a recording in C](#reading-a-recording-in-c)
+  describes: every seek rebuilds state from the start of the stream, so one per
+  candidate turns a scan of an 80k recording from milliseconds into a hang. The
+  index is clamped into range and the reply reports where the cursor actually
+  landed — believe that over your own arithmetic. A `stopped` event with reason
+  `step` follows, because from the client's side that is what happened.
+- **`replayDepths`** is the call-depth profile, downsampled to `buckets`
+  (default 256, max 4096, never more than there are steps). Each bucket carries
+  the **maximum** depth in its range, not the first or the mean: a ribbon is
+  read for recursion shape, and a deep call falling between two samples is
+  exactly what the reader is looking for.
+
+All three refuse in a live session, naming the reason rather than falling
+through to a generic error — a client that asked has a scrubber in mind.
+
+### The console rewinds
+
+Forward motion appends to the transcript through ordinary `output` events, as
+before. Backward motion cannot: the transcript at the new cursor is a *prefix*
+of what the client has already been sent, and a delta has no way to express a
+truncation.
+
+So a backwards seek emits **`replayOutput`** carrying the whole transcript,
+to be used in place of what the client holds:
+
+```json
+{ "type": "event", "event": "replayOutput",
+  "body": { "category": "stdout", "length": 0, "output": "" } }
+```
+
+Whole-transcript rather than a cut offset, because a client that missed an
+earlier event would otherwise cut in the wrong place and never know. A client
+that does not recognise the event ignores it and behaves exactly as it did
+before — the console simply does not rewind.
+
+One thing to know when testing this: a replay transcript holds the output
+produced **strictly before** the cursor's step, so a program whose only
+`println` is its last statement reports `outputLength: 0` at *every* index,
+including the last. There is then nothing to rewind. `tests/fixtures/dap-replay/input.tur`
+prints before its loop as well as after it for exactly this reason.
 
 ## Recording in the browser
 

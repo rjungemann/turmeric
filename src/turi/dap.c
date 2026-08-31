@@ -29,6 +29,15 @@
  * a recording cannot do is `evaluate`: there is no live frame to evaluate in,
  * and it says so rather than returning something stale.
  *
+ * A recording is also an axis, which DAP has no vocabulary for. Three custom
+ * requests add one -- `replayInfo` (how long, where are we), `replaySeek` (go
+ * to step N) and `replayDepths` (the call-depth profile, downsampled) -- plus
+ * a `replayOutput` event for the case a delta cannot express: a backwards seek
+ * shortens the transcript. Together they are what a timeline scrubber and a
+ * depth ribbon need; a client detects them from
+ * `supportsTurmericReplayTimeline`, and one that does not know them still gets
+ * exactly the session it got before.
+ *
  * See docs/archive/history/debugger-plan.md (Phase 3) and
  * docs/artifacts/debugger-dap-phase3.md.
  */
@@ -80,10 +89,13 @@ typedef struct DapState {
     bool             replay_mode;
     TurTrace        *trace;
     TurTraceReplay  *replay;
-    /* How much of the recorded output has already been sent as `output`
-     * events. Scrubbing backwards does not un-print: a terminal has no undo,
-     * so the transcript only ever grows here. The rewinding transcript is
-     * T3's, where the client owns the console. */
+    /* How much of the recorded output the client has been told about.
+     *
+     * Forward motion appends via `output`. Backward motion cannot: the new
+     * transcript is a prefix of the old one and a delta cannot express a
+     * truncation, so it re-sends the whole thing as `replayOutput`. This
+     * therefore tracks the client's view, not a high-water mark -- it goes
+     * down as well as up. */
     size_t           replay_out_sent;
 } DapState;
 
@@ -548,10 +560,111 @@ static void dap_evaluate(DapState *s, int64_t req_seq, const char *args) {
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * T4-T6: the timeline extension (`replayInfo` / `replaySeek` / `replayDepths`)
+ *
+ * DAP describes execution as a sequence of steps, never as an axis. That is
+ * the right model for a live debuggee -- there is nowhere to scrub to -- but a
+ * recording IS an axis, and the three things a scrubber needs of one are its
+ * length, a way to jump to an arbitrary point, and a shape to draw. None has a
+ * standard request, and approximating them costs more than it looks:
+ *
+ *  - A slider with no length has no range, and a range that is a guess is
+ *    worse than no slider.
+ *  - Approximating a seek with repeated `stepBack` is the trap trace.h already
+ *    documents: every seek rebuilds state from the start of the stream, so
+ *    doing it once per candidate turns a scan of an 80k recording from
+ *    milliseconds into a hang.
+ *  - A depth ribbon samples one value per pixel across the whole run, which
+ *    would be that trap at its very worst -- and `turi_trace_replay_depth_at`
+ *    exists precisely so it does not have to be.
+ *
+ * So these are three custom requests over the reader that already answers all
+ * of it. Custom, not proposed-standard: they are meaningful only for a session
+ * served from a recording, and a client that does not know them is not missing
+ * anything it could have used. A client detects them from
+ * `supportsTurmericReplayTimeline` in the initialize response.
+ * --------------------------------------------------------------------------- */
+
+/* How many buckets a depth ribbon gets when the client does not say. Chosen as
+ * roughly the pixel width a ribbon is drawn at; the point of downsampling here
+ * rather than in the client is that the client would otherwise have to ask for
+ * every step to do it. */
+#define DAP_DEPTHS_DEFAULT_BUCKETS 256
+#define DAP_DEPTHS_MAX_BUCKETS     4096
+
+static void dap_replay_info(DapState *s, int64_t req_seq) {
+    uint32_t steps = turi_trace_replay_steps(s->replay);
+    uint32_t index = turi_trace_replay_index(s->replay);
+    Buf b; buf_init(&b);
+    buf_printf(&b, "{\"steps\":%u,\"index\":%u,\"depth\":%d,\"outputLength\":%zu}",
+               steps, index, turi_trace_replay_depth_at(s->replay, index),
+               s->replay_out_sent);
+    dap_send_response(s, req_seq, "replayInfo", dap_cstr(&b), true);
+    buf_free(&b);
+}
+
+/* The call-depth profile over the whole recording, downsampled to `buckets`.
+ *
+ * Each bucket reports the MAXIMUM depth in its range, not the first or the
+ * mean. A ribbon is read for recursion shape, and a deep call that happens to
+ * fall between two samples is exactly the thing the reader is looking for --
+ * averaging or sampling would quietly erase it. `depth_at` is an array index,
+ * so scanning every step to find those maxima costs nothing worth measuring. */
+static void dap_replay_depths(DapState *s, int64_t req_seq, const char *args) {
+    uint32_t steps = turi_trace_replay_steps(s->replay);
+    int64_t want = args ? lsp_json_int(args, "buckets") : -1;
+    uint32_t buckets = (want > 0) ? (uint32_t)want : DAP_DEPTHS_DEFAULT_BUCKETS;
+    if (buckets > DAP_DEPTHS_MAX_BUCKETS) buckets = DAP_DEPTHS_MAX_BUCKETS;
+    /* Never more buckets than steps: empty buckets at the tail would draw as a
+     * ribbon that falls to zero before the recording ends. */
+    if (buckets > steps) buckets = steps;
+
+    Buf b; buf_init(&b);
+    buf_printf(&b, "{\"steps\":%u,\"buckets\":%u,\"depths\":[", steps, buckets);
+    for (uint32_t i = 0; i < buckets; i++) {
+        /* 64-bit intermediate: steps * buckets overflows 32 bits at the 1M
+         * step cap with a wide ribbon. */
+        uint32_t lo = (uint32_t)(((uint64_t)i * steps) / buckets);
+        uint32_t hi = (uint32_t)(((uint64_t)(i + 1) * steps) / buckets);
+        if (hi <= lo) hi = lo + 1;
+        int peak = 0;
+        for (uint32_t j = lo; j < hi && j < steps; j++) {
+            int d = turi_trace_replay_depth_at(s->replay, j);
+            if (d > peak) peak = d;
+        }
+        buf_printf(&b, "%s%d", i ? "," : "", peak);
+    }
+    buf_puts(&b, "]}");
+    dap_send_response(s, req_seq, "replayDepths", dap_cstr(&b), true);
+    buf_free(&b);
+}
+
 /* Handle a request that is valid both pre-launch and while paused (the
  * introspection + breakpoint surface).  Returns true if `cmd` was handled. */
 static bool dap_handle_common(DapState *s, const char *cmd, int64_t req_seq,
                               const char *args) {
+    /* The timeline extension. Checked first and answered in both loops, so a
+     * live session gets the reason rather than the generic "not supported
+     * while paused" -- a client that asked has a recording in mind, and
+     * "relaunch with replay" is the actionable answer. */
+    if (!strcmp(cmd, "replayInfo") || !strcmp(cmd, "replayDepths") ||
+        !strcmp(cmd, "replaySeek")) {
+        if (!s->replay_mode || !s->replay) {
+            dap_send_error(s, req_seq, cmd,
+                           "there is no recording in this session -- "
+                           "relaunch with \"replay\": true");
+            return true;
+        }
+        if (!strcmp(cmd, "replayInfo"))   { dap_replay_info(s, req_seq);         return true; }
+        if (!strcmp(cmd, "replayDepths")) { dap_replay_depths(s, req_seq, args); return true; }
+        /* `replaySeek` moves the cursor, so it is handled by the replay
+         * session loop, which owns that. Reaching here means it was sent from
+         * somewhere that cannot move -- pre-launch, before the recording
+         * exists. */
+        dap_send_error(s, req_seq, cmd, "no cursor to seek yet; wait for the first stop");
+        return true;
+    }
     if (!strcmp(cmd, "setBreakpoints"))      { dap_set_breakpoints(s, req_seq, args); return true; }
     if (!strcmp(cmd, "setExceptionBreakpoints")) {
         dap_send_response(s, req_seq, "setExceptionBreakpoints", "{\"breakpoints\":[]}", true);
@@ -662,18 +775,38 @@ static void dap_on_pause(TuriEnv *env, TuriDbgStop reason, void *ud) {
 
 /* Send the recorded output the cursor has now passed.
  *
- * Only ever forward: a terminal has no undo, so scrubbing backwards cannot
- * unprint. The transcript that rewinds with the cursor is the browser
- * timeline's (T3), where the client owns the console. */
+ * Forward motion appends, as a standard `output` event: that is what every DAP
+ * client already understands, and a terminal has no undo.
+ *
+ * Backward motion is the case a plain `output` event cannot express. The
+ * transcript at the new cursor is a PREFIX of what was already sent, and the
+ * client has no way to work out where to cut -- it has only ever been told
+ * deltas. Silently sending nothing (what this did before) leaves the console
+ * showing output from steps the cursor has since rewound past, which is the
+ * one thing a time-travel console must not do.
+ *
+ * So a shrink emits `replayOutput` carrying the whole transcript, to be used
+ * in place of what the client has. A client that does not know the event
+ * ignores it and is no worse off than before; one that does can mirror the
+ * console exactly. Whole-transcript rather than a truncation offset because a
+ * client that missed an earlier event would otherwise cut to the wrong place
+ * and have no way to notice. */
 static void dap_replay_flush_output(DapState *s) {
     size_t len = 0;
     const char *out = turi_trace_replay_output(s->replay, &len);
-    if (len <= s->replay_out_sent) return;
-    size_t n = len - s->replay_out_sent;
+    if (len == s->replay_out_sent) return;
+
     Buf b; buf_init(&b);
-    buf_printf(&b, "{\"seq\":%d,\"type\":\"event\",\"event\":\"output\","
-                   "\"body\":{\"category\":\"stdout\",\"output\":\"", s->seq++);
-    dap_json_escape_n(&b, out + s->replay_out_sent, n);
+    if (len < s->replay_out_sent) {
+        buf_printf(&b, "{\"seq\":%d,\"type\":\"event\",\"event\":\"replayOutput\","
+                       "\"body\":{\"category\":\"stdout\",\"length\":%zu,"
+                       "\"output\":\"", s->seq++, len);
+        dap_json_escape_n(&b, out, len);
+    } else {
+        buf_printf(&b, "{\"seq\":%d,\"type\":\"event\",\"event\":\"output\","
+                       "\"body\":{\"category\":\"stdout\",\"output\":\"", s->seq++);
+        dap_json_escape_n(&b, out + s->replay_out_sent, len - s->replay_out_sent);
+    }
     buf_puts(&b, "\"}}");
     dap_write(s, &b);
     buf_free(&b);
@@ -892,6 +1025,29 @@ static void dap_replay_session(DapState *s) {
                 if (to == cur) stop = true;
                 dap_send_response(s, rq, "stepOut", NULL, true);
                 moved = true;
+            } else if (!strcmp(cmd, "replaySeek")) {
+                /* The one request that moves the cursor to somewhere neither
+                 * stepping nor breakpoints could reach: an arbitrary index.
+                 * This is what makes a slider a slider.
+                 *
+                 * A missing or negative `index` clamps to 0 rather than
+                 * erroring -- lsp_json_int reports both as -1, and a scrubber
+                 * dragged to the far left means the start. The reader clamps
+                 * the upper end itself and reports where it actually landed,
+                 * which is the value the client should believe over its own
+                 * arithmetic. */
+                int64_t want = args ? lsp_json_int(args, "index") : 0;
+                if (want < 0) want = 0;
+                uint32_t n_steps = turi_trace_replay_steps(s->replay);
+                to = (want >= (int64_t)n_steps && n_steps > 0)
+                       ? n_steps - 1 : (uint32_t)want;
+                char body[64];
+                snprintf(body, sizeof body, "{\"index\":%u}", to);
+                dap_send_response(s, rq, "replaySeek", body, true);
+                /* Reported as a `step` stop, because that is what it is from
+                 * the client's side: the cursor moved, and every pane that
+                 * follows the cursor has to refresh. */
+                moved = true;
             } else if (!strcmp(cmd, "pause")) {
                 dap_send_response(s, rq, "pause", NULL, true);
             } else if (!strcmp(cmd, "disconnect") || !strcmp(cmd, "terminate")) {
@@ -1055,6 +1211,13 @@ int dap_server_run(int in_fd, int out_fd, DapLaunchFn launch, void *ud) {
                  * with "not supported while paused". */
                 "\"supportsStepBack\":true,"
                 "\"supportsReverseContinue\":true,"
+                /* The timeline extension: `replayInfo` / `replaySeek` /
+                 * `replayDepths`, and the `replayOutput` event. Not a DAP
+                 * capability name, which is the point -- a client that does
+                 * not recognise it will not ask, and everything it does not
+                 * ask for degrades to the standard session it already
+                 * understands. */
+                "\"supportsTurmericReplayTimeline\":true,"
                 "\"supportsTerminateRequest\":true}", true);
             dap_send_event(&st, "initialized", NULL);
         } else if (!strcmp(command, "launch")) {

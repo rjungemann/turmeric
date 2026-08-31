@@ -97,6 +97,12 @@ expect "conditional breakpoint fires"     "STOP cond reason=breakpoint"
 expect "conditional fires at i==3"        "VAR cond i=3"
 expect "evaluate resolves i"              "EVAL i=3"
 # Program output forwarded + clean exit.
+# The timeline extension needs a recording, and refuses with the reason rather
+# than the generic "not supported while paused".
+expect "live session refuses replayInfo"  "LIVE replayInfo success=false"
+expect "and says to relaunch with replay" "relaunch with \"replay\": true"
+expect "live session refuses replaySeek"  "LIVE replaySeek success=false"
+# Program output forwarded + clean exit.
 expect "program stdout as output event"   "OUTPUT done"
 expect "exit code is forwarded"           "EXIT code=7"
 expect "driver completed the session"     "DONE"
@@ -161,6 +167,27 @@ else
   # A `continue` with nothing ahead of it scans the whole recording. Reaching
   # `exited` is the assertion; the timing line is the diagnostic that says
   # WHY, if a future change makes that scan quadratic again.
+  # T4-T6: the timeline extension. A recording is an axis, and these three
+  # requests are what give a scrubber and a depth ribbon something to stand on.
+  expect_replay "the timeline extension is advertised" \
+      "CAP supportsTurmericReplayTimeline=true"
+  expect_replay "replayInfo reports a length"     "INFO steps-positive=yes"
+  expect_replay "replayDepths honours its bucket count" "DEPTHS buckets=16 len=16"
+  # Max-per-bucket, not sample-per-bucket: the two-frame stack the forward pass
+  # walked through must survive the downsample.
+  expect_replay "the ribbon keeps the deepest call" "DEPTHS peak-at-least-2=yes"
+  expect_replay "and has a default bucket count"    "DEPTHS default-len-matches=yes"
+  # A seek reaches a step no amount of stepping would find in reasonable time.
+  expect_replay "replaySeek reports where it landed" "SEEK end-index-matches=yes"
+  expect_replay "and the cursor actually moved"      "SEEK cursor-followed=yes"
+  expect_replay "an out-of-range seek clamps"        "SEEK clamps-high=yes"
+  # The rewind. A backwards seek shortens the transcript, which a delta cannot
+  # express -- so the whole transcript is re-sent as `replayOutput`.
+  expect_replay "the end of the run has printed"     "SEEK output-at-end=yes"
+  expect_replay "seeking back rewinds the transcript" "REWIND transcript-emptied=yes"
+  expect_replay "to nothing at the first step"       "REWIND replayOutput-length=0"
+  expect_replay "with the cursor back at the start"  "REWIND cursor-at-start=yes"
+  expect_replay "and the two agreeing"               "REWIND output-length-agrees=yes"
   expect_replay "continue runs off the end of the recording" "EXIT code=7"
   expect_replay "and the end-to-end scan stays linear" "CONTINUE-TO-END under-10s=yes"
   expect_replay "the replay session completed"    "DONE"

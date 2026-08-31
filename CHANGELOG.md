@@ -2,6 +2,49 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **`tur dap` serves a recording as a timeline**, not just as a sequence of
+  steps. DAP describes execution as one step after another and has no
+  vocabulary for an axis -- correct for a live debuggee, where there is nowhere
+  to scrub to, and wrong for a recording, which is an axis. Three custom
+  requests add one, advertised as `supportsTurmericReplayTimeline`:
+  `replayInfo` (how many steps, where the cursor is), `replaySeek` (jump to
+  step N, clamped, reporting where it landed) and `replayDepths` (the
+  call-depth profile, downsampled to a bucket count, each bucket carrying its
+  range's *maximum* so a deep call between two samples is not erased). All
+  three refuse in a live session naming the reason, because a client that asks
+  has a scrubber in mind.
+
+  None of this is new capability in the reader -- `turi_trace_replay_seek`,
+  `_steps` and `_depth_at` already existed and `_depth_at` is an array index.
+  What was missing was any way to reach them over the wire, and the
+  alternatives are worse than they look: a slider whose range is a guess, and a
+  seek approximated by repeated `stepBack`, which rebuilds state from the start
+  of the stream once per candidate and turns a scan of an 80k recording from
+  milliseconds into a hang.
+
+- **The replay console rewinds.** Forward motion still appends through ordinary
+  `output` events. Backward motion could not: the transcript at the new cursor
+  is a prefix of what the client was already sent, and a delta cannot express a
+  truncation -- so the old code sent nothing and left the console showing
+  output from steps the cursor had rewound past. A backwards seek now emits a
+  `replayOutput` event carrying the whole transcript to be used in its place.
+  Whole-transcript rather than a cut offset, because a client that missed an
+  earlier event would otherwise cut in the wrong place and never know. Clients
+  that do not recognise the event are exactly as they were.
+
+### Changed
+
+- **`tests/fixtures/dap-replay/input.tur` prints before its loop as well as
+  after it.** A replay transcript holds the output produced strictly before the
+  cursor's step, so a program whose only `println` is its last statement
+  reports `outputLength: 0` at every index including the last -- measured, 0 at
+  step 24020 of 24021. The rewind assertions would have passed by describing
+  nothing.
+
 ## [0.42.1] -- 2026-08-31
 
 ### Changed
