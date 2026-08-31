@@ -183,6 +183,46 @@ EOF
 expect_output "shebang recipe carries state across lines" "carried 42" sb
 
 # ------------------------------------------------------------------
+# Built-in failure must abort, not splice an empty string.
+#
+# Same bug class as the two above: env_var on an unset variable printed a
+# (wrong) "unknown built-in function" note, substituted "", and ran the
+# command anyway with exit 0.  Substituting nothing turns
+# `rm -rf {{ env_var('BUILD') }}/x` into `rm -rf /x`.
+# ------------------------------------------------------------------
+
+write_justfile <<'EOF'
+show:
+	@echo "value=[{{ env_var('DEFINITELY_NOT_SET_XYZ') }}]"
+EOF
+expect_refused "env_var on an unset variable aborts" show "not set"
+
+write_justfile <<'EOF'
+show:
+	@echo "{{ error('deliberate abort') }}"
+EOF
+expect_refused "error() aborts the run" show "deliberate abort"
+
+write_justfile <<'EOF'
+show:
+	@echo "{{ nosuchfn('x') }}"
+EOF
+expect_refused "unknown built-in is still reported as unknown" \
+    show "unknown built-in function"
+
+# Builtins added alongside the fix, checked byte-for-byte against just 1.54.0.
+write_justfile <<'EOF'
+A := replace("a-b-c", "-", "_")
+B := join("usr", "local", "bin")
+C := join("usr", "/abs", "bin")
+D := path_exists("/definitely/not/here")
+show:
+	@echo "{{A}} {{B}} {{C}} {{D}}"
+EOF
+expect_output "replace/join/path_exists match just" \
+    "a_b_c usr/local/bin /abs/bin false" show
+
+# ------------------------------------------------------------------
 # --set
 # ------------------------------------------------------------------
 

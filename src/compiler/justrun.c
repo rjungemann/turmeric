@@ -5,7 +5,10 @@
  * Pure C; no Turmeric compiler dependency at runtime.
  *
  * Supported:
- *   - Recipe definitions with shell-command bodies (tab or 4-space indent)
+ *   - Recipe definitions with shell-command bodies (tab or 2+ space indent)
+ *   - Shebang recipes: a body whose first line is `#!` is materialized to a
+ *     temp file and exec'd, so it runs under the named interpreter as one
+ *     script rather than as independent `sh -c` lines
  *   - Recipe dependencies (chained, deps-with-args)
  *   - Recipe parameters with optional defaults and variadic +PARAM / *PARAM
  *   - Variable assignment: name := "value", export name := "value"
@@ -13,14 +16,27 @@
  *   - Line prefixes: @ (silent) and - (continue on failure), @- and -@
  *   - Settings: set shell, set dotenv-load, set positional-arguments,
  *               set windows-shell (accepted, ignored on POSIX)
- *   - Built-in functions: env_var, env_var_or_default, os, arch,
+ *   - Recipe attributes: [private], [group('name')], [doc("...")],
+ *     [confirm] / [confirm("prompt")], [no-cd], [no-exit-message], and the
+ *     platform selectors [unix] [linux] [macos] [windows] [openbsd].
+ *     Comma-separated lists ([private, group('x')]) are accepted.  An
+ *     attribute we do not implement is REFUSED, never silently skipped.
+ *   - Built-in functions: env_var, env_var_or_default, os, os_family, arch,
  *     justfile_directory, invocation_directory, uppercase, lowercase,
- *     trim, quote
+ *     trim, quote, path_exists, replace, join, error
  *   - Listing: tur run / tur run --list [--json] [--all]; aliases are listed
- *     alongside recipes, [private] and _-prefixed names are hidden
+ *     alongside recipes, [private] and _-prefixed names are hidden, and
+ *     [group(...)] recipes are printed in per-group sections
+ *   - Variable overrides: --set VAR VALUE (and --set VAR=VALUE)
  *   - The default recipe
  *   - Dotenv loading: .env file from the Justfile's directory
  *   - Unsupported-feature detection with clear error messages
+ *
+ * Deliberately divergent from upstream `just`:
+ *   - Exit 2 means "this Justfile asks for something we do not implement"
+ *     (just exits 1); exit 1 is reserved for "the recipe ran and failed".
+ *   - We do NOT chdir to the Justfile's directory before running a recipe,
+ *     so [no-cd] is accepted but is already the default behavior here.
  *
  * Exit codes:
  *   0   recipe succeeded
@@ -715,9 +731,15 @@ static void parse_body_prefix(const char *p, JLine *jline, const char **cmd_star
 /* RHS scanner + expression evaluator                                  */
 /* ================================================================== */
 
-/* Forward decl -- implementation lives after eval_builtin. */
+/* Forward decl -- implementation lives after eval_builtin.
+ *
+ * Returns NULL both for "no such builtin" and for "the builtin failed"
+ * (env_var on an unset variable, error(...)).  `*failed` distinguishes them:
+ * it is set to 1 only in the second case.  Without that split, a failing
+ * builtin was reported as an unknown one AND its empty result was spliced
+ * into the command, which then ran. */
 static char *eval_builtin(const char *name, const char **args, int n_args,
-                            const JFile *jf);
+                            const JFile *jf, int *failed);
 
 /* Balanced RHS scanner: reads from `p` until end-of-logical-line, balancing
  * (), {}, [] and skipping over "..." / '...' literals. Honors '#' as an
@@ -890,12 +912,14 @@ static char *re_primary(REval *r) {
             re_skip_ws(r);
             if (*r->p == ')') r->p++;
             else re_error(r, "expected ')' in function call");
-            char *result = eval_builtin(name, (const char **)args, n_args, r->jf);
+            int   bfailed = 0;
+            char *result  = eval_builtin(name, (const char **)args, n_args,
+                                         r->jf, &bfailed);
             for (int i = 0; i < n_args; i++) free(args[i]);
             if (!result) {
                 char msg[256];
-                snprintf(msg, sizeof(msg),
-                    "unknown or failed built-in function '%s'", name);
+                snprintf(msg, sizeof(msg), "%s built-in function '%s'",
+                         bfailed ? "failed call to" : "unknown", name);
                 re_error(r, msg);
                 result = jr_strdup("");
             }
@@ -1403,12 +1427,14 @@ static void jfile_free(JFile *jf) {
 /* ================================================================== */
 
 static char *eval_builtin(const char *name, const char **args, int n_args,
-                            const JFile *jf) {
+                            const JFile *jf, int *failed) {
+    if (failed) *failed = 0;
     if (strcmp(name, "env_var") == 0) {
         if (n_args < 1) return jr_strdup("");
         const char *val = getenv(args[0]);
         if (!val) {
             fprintf(stderr, "tur run: env_var: variable '%s' not set\n", args[0]);
+            if (failed) *failed = 1;
             return NULL;
         }
         return jr_strdup(val);
@@ -1428,6 +1454,63 @@ static char *eval_builtin(const char *name, const char **args, int n_args,
 #else
         return jr_strdup("unknown");
 #endif
+    }
+    if (strcmp(name, "os_family") == 0) {
+#if defined(_WIN32)
+        return jr_strdup("windows");
+#else
+        return jr_strdup("unix");
+#endif
+    }
+    if (strcmp(name, "path_exists") == 0) {
+        if (n_args < 1) return jr_strdup("false");
+        struct stat st;
+        return jr_strdup(stat(args[0], &st) == 0 ? "true" : "false");
+    }
+    if (strcmp(name, "replace") == 0) {
+        /* replace(s, from, to) -- every occurrence, like just's. */
+        if (n_args < 3) return jr_strdup(n_args > 0 ? args[0] : "");
+        const char *s = args[0], *from = args[1], *to = args[2];
+        size_t flen = strlen(from);
+        if (flen == 0) return jr_strdup(s);
+        size_t tlen = strlen(to), n = 0;
+        for (const char *q = s; (q = strstr(q, from)) != NULL; q += flen) n++;
+        char *out = (char *)malloc(strlen(s) + n * (tlen > flen ? tlen - flen : 0) + 1);
+        if (!out) { fprintf(stderr, "tur run: out of memory\n"); exit(2); }
+        char *w = out;
+        for (const char *q = s; *q; ) {
+            const char *hit = strstr(q, from);
+            if (!hit) { strcpy(w, q); break; }
+            memcpy(w, q, (size_t)(hit - q)); w += hit - q;
+            memcpy(w, to, tlen);            w += tlen;
+            q = hit + flen;
+            if (!*q) { *w = '\0'; break; }
+        }
+        return out;
+    }
+    if (strcmp(name, "join") == 0) {
+        /* join(a, b, ...) -- path join, "/"-separated; an absolute later
+         * component replaces what came before, as in just. */
+        if (n_args < 1) return jr_strdup("");
+        size_t cap = 1;
+        for (int i = 0; i < n_args; i++) cap += strlen(args[i]) + 1;
+        char *out = (char *)malloc(cap);
+        if (!out) { fprintf(stderr, "tur run: out of memory\n"); exit(2); }
+        out[0] = '\0';
+        for (int i = 0; i < n_args; i++) {
+            if (args[i][0] == '/') { strcpy(out, args[i]); continue; }
+            size_t len = strlen(out);
+            if (len > 0 && out[len - 1] != '/') { out[len++] = '/'; out[len] = '\0'; }
+            strcat(out, args[i]);
+        }
+        return out;
+    }
+    if (strcmp(name, "error") == 0) {
+        /* Abort the run with the author's own message. Returning NULL is how
+         * a builtin signals failure to the interpolation layer. */
+        fprintf(stderr, "tur run: error: %s\n", n_args > 0 ? args[0] : "");
+        if (failed) *failed = 1;
+        return NULL;
     }
     if (strcmp(name, "arch") == 0) {
 #if defined(__aarch64__) || defined(__arm64__)
@@ -1509,9 +1592,11 @@ static char *eval_expr(const char *expr, const JEnv *env, const JFile *jf) {
             while (*ap == ' ') ap++;
             if (*ap == ',') ap++;
         }
-        char *result = eval_builtin(fname, (const char **)args, n_args, jf);
+        int   bfailed = 0;
+        char *result  = eval_builtin(fname, (const char **)args, n_args, jf,
+                                     &bfailed);
         for (int i = 0; i < n_args; i++) free(args[i]);
-        if (!result)
+        if (!result && !bfailed)
             fprintf(stderr, "tur run: unknown built-in function '%s'\n", fname);
         free(fname);
         free(trimmed);
@@ -1550,7 +1635,13 @@ static char *interpolate(const char *tmpl, const JEnv *env, const JFile *jf) {
             char *expr = jr_strndup(start, (size_t)(p - start));
             char *val  = eval_expr(expr, env, jf);
             free(expr);
-            if (val) { RES_PUTS(val); free(val); }
+            /* A failed expression aborts the interpolation rather than
+             * splicing in an empty string: substituting nothing turns
+             * `rm -rf {{ env_var('BUILD') }}/x` into `rm -rf /x`, which is
+             * exactly the kind of quiet damage an error is for. */
+            if (!val) { free(res); return NULL; }
+            RES_PUTS(val);
+            free(val);
             if (p[0] == '}' && p[1] == '}') p += 2;
         } else {
             RES_PUTC(*p++);
@@ -1747,8 +1838,18 @@ static int exec_recipe_idx(JFile *jf, int idx, const char **args, int n_args,
         const char **dep_args = NULL;
         if (dep->n_args > 0) {
             dep_args = (const char **)malloc((size_t)dep->n_args * sizeof(char *));
-            for (int j = 0; j < dep->n_args; j++)
+            for (int j = 0; j < dep->n_args; j++) {
                 dep_args[j] = interpolate(dep->args[j], &env, jf);
+                if (!dep_args[j]) {
+                    fprintf(stderr,
+                            "tur run: recipe '%s': failed to evaluate argument "
+                            "to dependency '%s'\n", r->name, dep->recipe);
+                    for (int k = 0; k < j; k++) free((char *)dep_args[k]);
+                    free(dep_args);
+                    jenv_free(&env);
+                    return 2;
+                }
+            }
         }
         rc = exec_recipe_idx(jf, dep_idx, dep_args, dep->n_args,
                               dry_run, verbose, rctx);
