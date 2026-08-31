@@ -44,23 +44,9 @@
       <em>Lisp-level expressiveness</em> with a <em>non-Lispy dialect</em> available<br>
     </div>
     <div class="hero-actions">
-      <a href="/try" class="btn-hero btn-hero-primary">Try in browser <span class="arrow">→</span></a>
+      <a href="/try" class="btn-hero btn-hero-primary">Try in browser</a>
+      <a href="#install" class="btn-hero btn-hero-secondary">Install</a>
       <a href="/docs/html/guides/" class="btn-hero btn-hero-secondary">Read the Guides</a>
-    </div>
-    <div class="install-hint">
-      <span>Install via</span>
-      <span class="install-cmd">curl -sSf https://turmeric-lang.com/install | sh</span>
-    </div>
-    <div class="codespaces-badge">
-      <a href="https://codespaces.new/rjungemann/turmeric"
-         class="btn-hero btn-hero-secondary"
-         aria-label="Open Turmeric in GitHub Codespaces">
-        Open in GitHub Codespaces
-      </a>
-    </div>
-    <div class="docker-hint">
-      Or <a href="https://github.com/rjungemann/turmeric/blob/main/Dockerfile">run via Docker</a>
-      -- <code>docker build -t turmeric . &amp;&amp; docker run --rm -it turmeric</code>
     </div>
 
     <!-- Code block -->
@@ -318,15 +304,46 @@ println(run-test(compute(1)))  ;; =&gt; 1</div>
 <hr class="divider">
 
 <!-- ── GETTING STARTED ───────────────── -->
-<div class="started-section reveal">
+<div class="started-section reveal" id="install">
   <h2 class="section-title">Up and running<br>in minutes.</h2>
 
   <div class="started-grid">
     <div class="step-card">
       <div class="step-num">01 -- Install</div>
-      <div class="step-title">One-command install</div>
-      <div class="step-code">curl -sSf https://turmeric-lang.com/install | sh</div>
-      <p class="step-desc">Installs <code>tur</code> via <a href="https://brew.sh" style="color:var(--gold);">Homebrew</a> on macOS. On Linux, grab a prebuilt binary from the <a href="https://github.com/rjungemann/turmeric/releases" style="color:var(--gold);">releases page</a>, <a href="https://github.com/rjungemann/turmeric" style="color:var(--gold);">build from source</a>, or use the <a href="https://github.com/rjungemann/turmeric/blob/main/Dockerfile" style="color:var(--gold);">Docker image</a>. To install and switch between multiple releases per-shell, use the <a href="https://github.com/rjungemann/turmeric/blob/main/tvm/README.md" style="color:var(--gold);">version manager</a> (<code>tvm</code>).</p>
+      <div class="step-title">Pick your install</div>
+
+      <div class="install-tabs" role="tablist" aria-label="Install method">
+        <button class="install-tab active" id="tab-homebrew" role="tab"
+                aria-selected="true" aria-controls="panel-homebrew"
+                data-method="homebrew">Homebrew</button>
+        <button class="install-tab" id="tab-docker" role="tab"
+                aria-selected="false" aria-controls="panel-docker"
+                data-method="docker">Docker</button>
+        <button class="install-tab" id="tab-codespaces" role="tab"
+                aria-selected="false" aria-controls="panel-codespaces"
+                data-method="codespaces">Codespaces</button>
+      </div>
+
+      <div class="install-panel" id="panel-homebrew" role="tabpanel"
+           aria-labelledby="tab-homebrew" data-method="homebrew">
+        <div class="step-code">curl -sSf https://turmeric-lang.com/install | sh</div>
+        <p class="step-desc">Installs <code>tur</code> via <a href="https://brew.sh" style="color:var(--gold);">Homebrew</a> on macOS. On Linux, grab a prebuilt binary from the <a href="https://github.com/rjungemann/turmeric/releases" style="color:var(--gold);">releases page</a> or <a href="https://github.com/rjungemann/turmeric" style="color:var(--gold);">build from source</a>. To install and switch between multiple releases per-shell, use the <a href="https://github.com/rjungemann/turmeric/blob/main/tvm/README.md" style="color:var(--gold);">version manager</a> (<code>tvm</code>).</p>
+      </div>
+
+      <div class="install-panel" id="panel-docker" role="tabpanel"
+           aria-labelledby="tab-docker" data-method="docker" hidden>
+        <div class="step-code">git clone https://github.com/rjungemann/turmeric
+cd turmeric
+docker build -t turmeric .
+docker run --rm -it turmeric</div>
+        <p class="step-desc">The <a href="https://github.com/rjungemann/turmeric/blob/main/Dockerfile" style="color:var(--gold);">Dockerfile</a> builds the compiler and stdlib inside the image and drops you at a REPL -- no toolchain on your host.</p>
+      </div>
+
+      <div class="install-panel" id="panel-codespaces" role="tabpanel"
+           aria-labelledby="tab-codespaces" data-method="codespaces" hidden>
+        <div class="step-code">gh codespace create --repo rjungemann/turmeric</div>
+        <p class="step-desc">Or <a href="https://codespaces.new/rjungemann/turmeric" style="color:var(--gold);">open a Codespace in the browser</a> -- a cloud dev container with the toolchain already built, so there is nothing to install locally.</p>
+      </div>
     </div>
 
     <div class="step-card">

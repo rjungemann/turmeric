@@ -246,6 +246,37 @@ revealTargets.forEach((el, i) => {
   revealObs.observe(el);
 });
 
+// ── INSTALL METHOD TABS ────────────────────────────────────────────────────
+
+// Homepage "01 -- Install" step: one tablist switching between install methods.
+document.querySelectorAll('.install-tabs').forEach(tabs => {
+  const card    = tabs.closest('.step-card');
+  const buttons = Array.from(tabs.querySelectorAll('.install-tab'));
+
+  const select = (method) => {
+    buttons.forEach(btn => {
+      const active = btn.dataset.method === method;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    card?.querySelectorAll('.install-panel').forEach(panel => {
+      panel.hidden = panel.dataset.method !== method;
+    });
+  };
+
+  tabs.addEventListener('click', (e) => {
+    const btn = e.target.closest('.install-tab');
+    if (btn) select(btn.dataset.method);
+  });
+
+  tabs.addEventListener('keydown', (e) => {
+    const idx = buttons.indexOf(document.activeElement);
+    if (idx === -1) return;
+    if (e.key === 'ArrowRight') { buttons[(idx + 1) % buttons.length].focus(); e.preventDefault(); }
+    if (e.key === 'ArrowLeft')  { buttons[(idx - 1 + buttons.length) % buttons.length].focus(); e.preventDefault(); }
+  });
+});
+
 // ── SYNTAX TOGGLE ──────────────────────────────────────────────────────────
 
 const SYNTAX_PREF_KEY = 'tur-syntax-pref';

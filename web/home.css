@@ -94,39 +94,6 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   white-space: nowrap;
 }
 
-.codespaces-badge {
-  display: flex;
-  justify-content: center;
-  margin-top: 14px;
-}
-
-.codespaces-badge .btn-hero {
-  font-size: 13px;
-  padding: 9px 20px;
-}
-
-.codespaces-badge img {
-  display: block;
-}
-
-.docker-hint {
-  margin-top: 10px;
-  font-size: 12px;
-  color: var(--text-sec);
-  text-align: center;
-}
-.docker-hint a {
-  color: var(--gold);
-  text-decoration: none;
-}
-.docker-hint a:hover {
-  text-decoration: underline;
-}
-.docker-hint code {
-  font-size: 11px;
-  opacity: 0.7;
-}
-
 /* ── HERO CODE BLOCK ───────────────────── */
 .hero-code {
   margin-top: 64px;
@@ -244,6 +211,8 @@ section {
   max-width: 1100px;
   margin: 0 auto;
   padding: 100px 48px;
+  /* Clears the fixed 60px nav when the hero's "Install" button jumps here */
+  scroll-margin-top: 24px;
 }
 
 .started-grid {
@@ -299,6 +268,40 @@ section {
 }
 
 .step-desc { font-size: 13.5px; color: var(--text-sec); line-height: 1.6; font-weight: 300; }
+
+/* ── INSTALL METHOD TABS ───────────────── */
+.install-tabs {
+  display: flex;
+  gap: 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.install-tab {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  border-bottom: 1px solid transparent;
+  margin-bottom: -1px;
+  padding: 0 0 9px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.install-tab:hover { color: var(--text-sec); }
+.install-tab.active {
+  color: var(--gold-bright);
+  border-bottom-color: var(--gold);
+}
+
+.install-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.install-panel[hidden] { display: none; }
 
 /* ── INFLUENCES ────────────────────────── */
 .influences {
@@ -370,6 +373,10 @@ section {
 
 @media (max-width: 480px) {
   .hero { padding: 90px 16px 48px; }
+
+  /* home.css loads after site.css, so the stacked-button rule has to be
+     restated here or `align-items: center` above wins on source order */
+  .hero-actions { flex-direction: column; align-items: stretch; }
 
   .feature-grid { padding: 24px 16px 48px; grid-template-columns: 1fr; }
   .bench-section { padding: 48px 16px; }
