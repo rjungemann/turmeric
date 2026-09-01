@@ -62,17 +62,17 @@
         </div>
         <div class="code-card-body">
           <div class="code-version turmeric-version">;; Algebraic effects in Turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 
-(defn use-ask [] :int
+(defn use-ask [] : int
   (+ 1 (perform (Ask))))
 
 (println
   (handle (use-ask)
     (Ask [] k) (resume k 41)))</div><div class="code-version sweet-exp-version" style="display: none;">;; Algebraic effects in Turmeric
-defeffect Ask [] :int
+defeffect Ask [] : int
 
-defn use-ask [] :int
+defn use-ask [] : int
   {1 + perform(Ask())}
 
 println
@@ -90,10 +90,11 @@ println
   <span class="infl-label">Inspired by</span>
   <div class="infl-sep"></div>
   <div class="infl-items">
+    <span class="infl-item">Rust</span>
     <span class="infl-item">Clojure</span>
     <span class="infl-item">Racket</span>
     <span class="infl-item">Haskell</span>
-    <span class="infl-item">Koka</span>
+    <span class="infl-item">Dafny</span>
   </div>
 </div>
 
@@ -164,10 +165,10 @@ println
     </div>
     <div class="code-card-body">
       <div class="code-version turmeric-version">(defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (defclass Eq [a]
-  (eq? [x y] :bool))
+  (eq? [x y] : bool))
 
 (defdata Color (Red) (Green) (Blue))
 
@@ -175,19 +176,19 @@ println
   (eq? [x y] (= x y)))
 
 ;; Typeclass constraint -- requires Show instance
-(defn display [^Show a x] :void
+(defn display [^Show a x] : void
   (println (show x)))
 
 ;; Pattern match on ADTs
-(defn color-name [c] :cstr
+(defn color-name [c] : cstr
   (match c
     (Red)   "red"
     (Green) "green"
     (Blue)  "blue"))</div><div class="code-version sweet-exp-version" style="display:none;">defclass Show [a]
-  show [x] :cstr
+  show [x] : cstr
 
 defclass Eq [a]
-  eq? [x y] :bool
+  eq? [x y] : bool
 
 defdata Color (Red) (Green) (Blue)
 
@@ -195,11 +196,11 @@ definstance Eq [int]
   eq? [x y] {x = y}
 
 ;; Typeclass constraint -- requires Show instance
-defn display [^Show a x] :void
+defn display [^Show a x] : void
   println(show(x))
 
 ;; Pattern match on ADTs
-defn color-name [c] :cstr
+defn color-name [c] : cstr
   match c
     (Red)   "red"
     (Green) "green"
@@ -227,36 +228,36 @@ defn color-name [c] :cstr
       </div>
     </div>
     <div class="code-card-body">
-      <div class="code-version turmeric-version">(defeffect Ask [] :int)
+      <div class="code-version turmeric-version">(defeffect Ask [] : int)
 
 ;; Business logic -- no mention of *how* Ask works
-(defn compute [x] :int
+(defn compute [x] : int
   (+ x (perform (Ask))))
 
 ;; Production: supply real value
-(defn run-prod [program] :int
+(defn run-prod [program] : int
   (handle program
     (Ask [] k) (resume k 41)))
 
 ;; Test: supply fixed value -- no mocking frameworks
-(defn run-test [program] :int
+(defn run-test [program] : int
   (handle program
     (Ask [] k) (resume k 0)))
 
 (println (run-prod (compute 1)))  ;; =&gt; 42
-(println (run-test (compute 1)))  ;; =&gt; 1</div><div class="code-version sweet-exp-version" style="display:none;">defeffect Ask [] :int
+(println (run-test (compute 1)))  ;; =&gt; 1</div><div class="code-version sweet-exp-version" style="display:none;">defeffect Ask [] : int
 
 ;; Business logic -- no mention of *how* Ask works
-defn compute [x] :int
+defn compute [x] : int
   {x + perform(Ask())}
 
 ;; Production: supply real value
-defn run-prod [program] :int
+defn run-prod [program] : int
   handle program
     (Ask [] k) resume(k 41)
 
 ;; Test: supply fixed value -- no mocking frameworks
-defn run-test [program] :int
+defn run-test [program] : int
   handle program
     (Ask [] k) resume(k 0)
 
@@ -359,12 +360,12 @@ tur run</div>
     <div class="step-card">
       <div class="step-num">03 -- Write Code</div>
       <div class="step-title">Your first function</div>
-      <div class="step-code">(defn factorial [n] :int
+      <div class="step-code">(defn factorial [n] : int
   (if (&lt;= n 1) 1
     (* n (factorial (- n 1)))))
 
 (println (factorial 10))  ;; =&gt; 3628800</div>
-      <p class="step-desc">Return types are annotated with <code>:int</code>, <code>:bool</code>, or <code>:cstr</code>. The compiler catches type errors before you run.</p>
+      <p class="step-desc">Return types follow the parameter list -- <code>: int</code>, <code>: bool</code>, or <code>: cstr</code>. The compiler catches type errors before you run.</p>
     </div>
 
     <div class="step-card">

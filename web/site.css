@@ -489,6 +489,9 @@ nav.nav-open .nav-mobile-panel {
   transform: translateY(0);
   pointer-events: auto;
 }
+/* On a page whose sidebar is serving as the drawer, the panel would be a second
+   copy of the same links sliding in over the first. */
+nav.nav-drawer .nav-mobile-panel { display: none; }
 .nav-mobile-panel a {
   font-size: 15px;
   color: var(--text-sec);
@@ -507,21 +510,29 @@ nav.nav-open .nav-mobile-panel {
   border-radius: 0;
   padding-bottom: 10px;
 }
-.nav-mobile-cta {
-  display: flex;
-  gap: 8px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+/* The panel renders SIDEBAR_GROUPS, so it needs the sidebar's group headings */
+.nav-mobile-panel h3 {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  font-weight: 500;
+  margin: 14px 0 4px 12px;
 }
-.nav-mobile-cta a { flex: 1; text-align: center; justify-content: center; }
-.nav-mobile-cta .btn-gold { color: #000; }
+.nav-mobile-panel ul { list-style: none; margin: 0; padding: 0; }
+.nav-mobile-panel li { display: flex; }
+.nav-mobile-panel li a { flex: 1; }
 
 /* ── RESPONSIVE ────────────────────────── */
+@media (max-width: 1080px) {
+  /* Six nav links plus two buttons stop fitting before the drawer breakpoint;
+     drop the buttons first -- both are reachable from the sidebar groups. */
+  .nav-right { display: none; }
+}
+
 @media (max-width: 768px) {
   nav { padding: 0 20px; }
   .nav-links { display: none; }
-  .nav-right { display: none; }
   .nav-hamburger { display: flex; }
   .nav-mobile-panel { display: flex; }
 
@@ -548,7 +559,6 @@ nav.nav-open .nav-mobile-panel {
 @media (max-width: 480px) {
   nav { padding: 0 16px; }
 
-  .hero-actions { flex-direction: column; align-items: stretch; }
   .btn-hero { justify-content: center; }
 
   .cta-box { padding: 32px 0; }
@@ -616,21 +626,17 @@ site-sidebar {
   z-index: 10;
   font-family: 'DM Sans', sans-serif;
 }
-site-sidebar .sidebar-back {
+/* An ordinary link, not a button: nothing here submits or toggles, it just
+   navigates like every other entry in the rail. Selector carries the `a` so it
+   outranks the `site-sidebar a` colour rule below it. */
+site-sidebar a.sidebar-back {
   display: block;
   font-size: 0.85rem;
   color: var(--text-primary);
-  padding: 0.45rem 0.65rem;
   margin-bottom: 1rem;
-  border: 1px solid var(--border-mid);
-  border-radius: 6px;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  transition: color 0.12s;
 }
-site-sidebar .sidebar-back:hover {
-  color: var(--gold-bright);
-  background: var(--bg-hover);
-  border-color: var(--gold-line);
-}
+site-sidebar a.sidebar-back:hover { color: var(--gold-bright); }
 site-sidebar .sidebar-divider {
   border: none;
   border-top: 1px solid var(--border);
@@ -657,9 +663,29 @@ site-sidebar .sidebar-toc li { font-size: 0.825rem; }
 
 body:has(site-sidebar) { padding-left: 240px; }
 
-@media (max-width: 900px) {
-  site-sidebar { display: none; }
+/* Mobile drawer -- same behaviour, breakpoint and overlay as the generated doc
+   pages: the topbar hamburger slides the sidebar in rather than hiding its
+   contents outright, so the page's own table of contents and the global groups
+   stay reachable on a phone. */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 99;
+}
+.sidebar-overlay.is-open { display: block; }
+
+@media (max-width: 768px) {
   body:has(site-sidebar) { padding-left: 0; }
+  site-sidebar {
+    width: 280px;
+    z-index: 100;
+    background: var(--bg-surface);
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+  }
+  site-sidebar.is-open { transform: translateX(0); }
 }
 
 /* ── UTILITIES ─────────────────────────── */

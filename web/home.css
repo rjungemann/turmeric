@@ -2,9 +2,19 @@
  * home.css — Homepage-specific styles for turmeric-lang.com /
  * ========================================================================== */
 
-/* ── SIDEBAR (hidden on homepage) ─────── */
-body.page-home site-sidebar { display: none; }
-body.page-home { padding-left: 0; }
+/* ── SIDEBAR ───────────────────────────
+ * The home page is full-bleed, so it shows no docked rail on desktop. The
+ * sidebar still ships in the markup: below the drawer breakpoint it is the
+ * hamburger drawer, exactly as on /tour and the generated doc pages, so a
+ * phone gets the same set of links here as it does everywhere else. Only the
+ * docked desktop presentation is suppressed, never the content.
+ *
+ * Scoped to a min-width -- an unconditional `display: none` would take the
+ * mobile drawer with it. */
+@media (min-width: 769px) {
+  body.page-home site-sidebar { display: none; }
+  body.page-home { padding-left: 0; }
+}
 
 /* ── HERO ──────────────────────────────── */
 .hero {
@@ -79,7 +89,9 @@ h1 em { font-style: italic; color: var(--green); }
   font-style: italic;
 }
 
-.hero-actions { margin-bottom: 64px; display: flex; align-items: center; justify-content: center; gap: 16px; }
+/* Same flow as .cta-actions at the foot of the page: the row wraps rather than
+   stacking, so the two arrangements of the same three buttons match on a phone. */
+.hero-actions { margin-bottom: 64px; display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
 
 .install-hint {
   display: flex;
@@ -384,10 +396,6 @@ section {
 
 @media (max-width: 480px) {
   .hero { padding: 90px 16px 48px; }
-
-  /* home.css loads after site.css, so the stacked-button rule has to be
-     restated here or `align-items: center` above wins on source order */
-  .hero-actions { flex-direction: column; align-items: stretch; }
 
   .feature-grid { padding: 24px 16px 48px; grid-template-columns: 1fr; }
   .bench-section { padding: 48px 16px; }

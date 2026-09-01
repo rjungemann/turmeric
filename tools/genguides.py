@@ -110,7 +110,118 @@ LINK_TITLES = {
     'https://spices.turmeric-lang.com':       'Browse Spice packages -- the Turmeric package registry',
     'https://c.turmeric-lang.com':            'A C interpreter running in your browser',
     'https://github.com/rjungemann/turmeric': 'Turmeric source code on GitHub',
+    'https://phasor.space':                   "Roger Jungemann's site",
 }
+
+# ---------------------------------------------------------------------------
+# Canonical site chrome -- one list per region, four consumers
+#
+# The topbar and the sidebar name the same set of places on every page of the
+# site, whether that page is hand-written (web/*.html, driven by web/site.js)
+# or generated (guides here, API docs in gendocs.py, spices in genspices.py).
+# Keeping the lists as data in one module is what stops the four surfaces from
+# drifting into four different answers to "what is on this site". `web/site.js`
+# mirrors NAV_LINKS/SIDEBAR_GROUPS verbatim -- change one, change the other.
+# ---------------------------------------------------------------------------
+
+# Topbar links, in order. `active` is matched by label.
+NAV_LINKS = [
+    ('/tour',                            'Tour'),
+    ('/try',                             'Try It'),
+    ('/docs/html/guides/',               'Guides'),
+    ('/docs/html/api/',                  'API Docs'),
+    ('https://spices.turmeric-lang.com', 'Spices'),
+    ('/trowel',                          'Trowel'),
+]
+
+# Sidebar link groups, in order. The mobile drawer renders the same groups, so
+# a phone sees the same site map a desktop sidebar shows.
+SIDEBAR_GROUPS = [
+    ('Language', [
+        ('/tour',   'Tour'),
+        ('/trowel', 'Trowel'),
+        ('/try',    'Try It'),
+    ]),
+    ('Ecosystem', [
+        ('/docs/html/guides/',               'Guides'),
+        ('/docs/html/api/',                  'API Docs'),
+        ('https://spices.turmeric-lang.com', 'Spices'),
+        ('https://c.turmeric-lang.com',      'C Interpreter'),
+    ]),
+    ('Community', [
+        ('https://github.com/rjungemann/turmeric', 'GitHub'),
+        ('/ci',                                    'CI Metrics'),
+    ]),
+]
+
+# The spices site lives on its own subdomain, so its root-relative hrefs have
+# to be re-rooted at the main host. Everything already absolute is left alone.
+MAIN_SITE = 'https://turmeric-lang.com'
+
+
+def _href(href: str, base: str = '') -> str:
+    """Re-root a site-relative href onto `base` (used by the spices subdomain)."""
+    if not base or not href.startswith('/'):
+        return href
+    return base.rstrip('/') + href
+
+
+def build_sidebar_globals(base: str = '', indent: str = '      ') -> str:
+    """Render SIDEBAR_GROUPS -- the block every sidebar ends with.
+
+    Emitted after the page's own back link and table of contents, separated
+    from them by the one `sidebar-divider` on the page.
+    """
+    out = [f'{indent}<hr class="sidebar-divider">']
+    for heading, links in SIDEBAR_GROUPS:
+        out.append(f'{indent}<h3>{heading}</h3>')
+        out.append(f'{indent}<ul>')
+        for href, label in links:
+            out.append(f'{indent}  <li><a href="{_href(href, base)}">{label}</a></li>')
+        out.append(f'{indent}</ul>')
+    return apply_link_titles('\n'.join(out))
+
+
+def build_page_header(active: str = '', base: str = '', search: str = '',
+                      indent: str = '  ') -> str:
+    """Render the topbar -- identical on every page but for the `active` mark.
+
+    `search` is the aria-label for the filter box on the pages that have one
+    (the guides and API indexes); pages without a filter simply omit it. The
+    Try It entry and the gold CTA both drop out on Try Turmeric itself, where
+    every route to /try is a link to the page you are already looking at.
+    """
+    on_try = active == 'Try It'
+    parts = []
+    for href, label in NAV_LINKS:
+        if on_try and href == '/try':
+            continue
+        cls = ' class="active"' if label == active else ''
+        parts.append(f'<a href="{_href(href, base)}"{cls}>{label}</a>')
+    links = ''.join(parts)
+    search_html = (
+        f'\n{indent}  <div class="search-wrap">'
+        f'<input class="search-input" type="search" placeholder="Filter... (/)" '
+        f'aria-label="{search}"></div>'
+        if search else ''
+    )
+    cta = ('' if on_try else
+           f'\n{indent}    <a href="{_href("/try", base)}" class="btn-gold">Try it</a>')
+    github = 'https://github.com/rjungemann/turmeric'
+    return apply_link_titles(f'''\
+{indent}<header class="site-header">
+{indent}  <button class="hamburger" aria-label="Toggle navigation" aria-expanded="false">
+{indent}    <span></span><span></span><span></span>
+{indent}  </button>
+{indent}  <a class="nav-logo" href="{_href('/', base)}">
+{indent}    <img src="/logo-icon.svg" width="28" height="28" alt="">
+{indent}    <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+{indent}  </a>
+{indent}  <nav class="nav-links">{links}</nav>{search_html}
+{indent}  <div class="nav-right">
+{indent}    <a href="{github}" class="btn-ghost">GitHub</a>{cta}
+{indent}  </div>
+{indent}</header>''')
 
 _A_TAG_RE = re.compile(r'<a\s+([^>]*)href="([^"]+)"([^>]*)>')
 
@@ -138,61 +249,31 @@ def apply_link_titles(html: str, extra: dict | None = None) -> str:
     return _A_TAG_RE.sub(repl, html)
 
 
-SIDEBAR_GLOBALS = apply_link_titles('''\
-      <hr class="sidebar-divider">
-      <h3>Language</h3>
-      <ul>
-        <li><a href="/tour">Tour</a></li>
-        <li><a href="/try">Try It</a></li>
-      </ul>
-      <h3>Ecosystem</h3>
-      <ul>
-        <li><a href="/docs/html/guides/">Guides</a></li>
-        <li><a href="/docs/html/api/">API Docs</a></li>
-        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
-      </ul>
-      <h3>Community</h3>
-      <ul>
-        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
-      </ul>''')
+SIDEBAR_GLOBALS = build_sidebar_globals()
 
-PAGE_HEADER = apply_link_titles('''\
-  <header class="site-header">
-    <button class="hamburger" aria-label="Toggle navigation">
-      <span></span><span></span><span></span>
-    </button>
-    <a class="nav-logo" href="/">
-      <img src="/logo-icon.svg" width="28" height="28" alt="">
-      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
-    </a>
-    <nav>
-      <a href="/docs/html/guides/" class="active">Guides</a>
-      <a href="/docs/html/api/">API Docs</a>
-      <a href="https://spices.turmeric-lang.com">Spices</a>
-      <a href="/try">Try It</a>
-    </nav>
-  </header>''')
 
-INDEX_PAGE_HEADER = apply_link_titles('''\
-  <header class="site-header">
-    <button class="hamburger" aria-label="Toggle navigation">
-      <span></span><span></span><span></span>
-    </button>
-    <a class="nav-logo" href="/">
-      <img src="/logo-icon.svg" width="28" height="28" alt="">
-      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
-    </a>
-    <nav>
-      <a href="/docs/html/guides/" class="active">Guides</a>
-      <a href="/docs/html/api/">API Docs</a>
-      <a href="https://spices.turmeric-lang.com">Spices</a>
-      <a href="/try">Try It</a>
-    </nav>
-    <div class="search-wrap">
-      <input class="search-input" type="search" placeholder="Filter... (/)" aria-label="Filter guides">
-    </div>
-  </header>
-  <p class="search-no-results">No matching guides.</p>''')
+def build_sidebar(toc: str = '', uplinks: list | None = None, base: str = '',
+                  extra_titles: dict | None = None) -> str:
+    """Assemble a sidebar in the site's one shape.
+
+    Home link, then the page's own "up" links (All Guides, All Spices, ...),
+    then its table of contents, then the divider and the global groups. Every
+    page in the site reads top-to-bottom in that order, so the global links sit
+    in the same place whether you arrived at a guide, an API module, or a spice.
+    """
+    out = [f'      <a class="sidebar-back" href="{_href("/", base)}">Home</a>']
+    if uplinks:
+        items = ''.join(f'<a href="{href}">{label}</a>' for href, label in uplinks)
+        out.append(f'      <div class="sidebar-uplinks">{items}</div>')
+    if toc:
+        out.append(toc.rstrip())
+    out.append(build_sidebar_globals(base))
+    return apply_link_titles('\n'.join(out), extra=extra_titles)
+
+PAGE_HEADER = build_page_header(active='Guides')
+
+INDEX_PAGE_HEADER = (build_page_header(active='Guides', search='Filter guides')
+                     + '\n  <p class="search-no-results">No matching guides.</p>')
 
 INDEX_FILTER_JS = '''\
   <script>
@@ -249,7 +330,11 @@ INDEX_FILTER_JS = '''\
   });
   </script>'''
 
-SIDEBAR_TOGGLE_JS = '''\
+# The mobile drawer. One implementation, shared by every generated page and
+# mirrored by `web/site.js` for the hand-written ones, so the hamburger does
+# the same four things everywhere: toggle, close on overlay, close on Escape,
+# close after following a link.
+SIDEBAR_DRAWER_JS = '''\
   <div class="sidebar-overlay"></div>
   <script>
     document.addEventListener('DOMContentLoaded', function(){
@@ -257,12 +342,26 @@ SIDEBAR_TOGGLE_JS = '''\
       var sidebar = document.querySelector('.sidebar');
       var overlay = document.querySelector('.sidebar-overlay');
       if (!btn || !sidebar) return;
-      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
-      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
-      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
-      overlay && overlay.addEventListener('click', close);
+      function setOpen(open) {
+        sidebar.classList.toggle('is-open', open);
+        overlay && overlay.classList.toggle('is-open', open);
+        btn.setAttribute('aria-expanded', String(open));
+      }
+      btn.addEventListener('click', function(){
+        setOpen(!sidebar.classList.contains('is-open'));
+      });
+      overlay && overlay.addEventListener('click', function(){ setOpen(false); });
+      document.addEventListener('keydown', function(e){
+        if (e.key === 'Escape') setOpen(false);
+      });
+      sidebar.addEventListener('click', function(e){
+        if (e.target.closest('a')) setOpen(false);
+      });
     });
   </script>'''
+
+# Kept under the old name for the two importers that still spell it this way.
+SIDEBAR_TOGGLE_JS = SIDEBAR_DRAWER_JS
 
 # ---------------------------------------------------------------------------
 # Guide runtime -- one source, three consumers
@@ -418,24 +517,30 @@ GUIDE_RUNTIME_JS = '''\
 TURMERIC_HIGHLIGHT_JS = GUIDE_RUNTIME_JS
 SYNTAX_TOGGLE_JS = ''
 
+# Gold leads, green answers -- the same two-colour split the home page uses for
+# headline and emphasis, carried into long-form prose so a guide, an API page
+# and a spice page all rank their headings by the same pair.
 GUIDE_CSS = '''\
     .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
-    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
-    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content h2 { font-size:1.2rem; color:var(--gold); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--green); margin:1.5rem 0 0.5rem; }
+    .guide-content h4 { font-size:0.925rem; color:var(--text-primary); margin:1.25rem 0 0.5rem; }
+    .guide-content em { color:var(--green); font-style:italic; }
     .guide-content p  { margin-bottom:1rem; }
     .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
     .guide-content li { margin:0.25rem 0; }
     .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
     .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
     .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
-    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content blockquote { border-left:3px solid var(--green); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
     .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
     .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
     .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
     .guide-content a { color:var(--gold-bright); }
     .guide-content strong { color:var(--text-primary); }
     .guide-toc { border:1px solid var(--border); border-radius:6px; background:var(--bg-panel); padding:0.85rem 1.15rem 0.95rem; margin:0 0 2rem; }
-    .guide-toc-title { font-family:system-ui; font-size:0.7rem; text-transform:uppercase; letter-spacing:0.09em; color:var(--text-sec); margin-bottom:0.5rem; }
+    .guide-toc { border-left:3px solid var(--green-line); }
+    .guide-toc-title { font-family:system-ui; font-size:0.7rem; text-transform:uppercase; letter-spacing:0.09em; color:var(--green); margin-bottom:0.5rem; }
     .guide-toc ul { margin:0 0 0 1.15rem; padding:0; }
     .guide-toc ul ul { margin-top:0.15rem; margin-bottom:0.15rem; }
     .guide-toc li { margin:0.2rem 0; font-size:0.875rem; }
@@ -725,14 +830,11 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set,
     body_html = rewrite_links_site(doc['body'])
 
     sidebar_items = toc_tokens_to_sidebar(toc_tokens)
-    sidebar_html = apply_link_titles(f'''\
-      <a class="sidebar-back" href="/">Home</a>
-      <div style="margin-bottom:1.25rem">
-        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">All Guides</a>
-      </div>
-      <h3>On this page</h3>
-      <ul>{sidebar_items}</ul>
-{SIDEBAR_GLOBALS}''', extra={'index.html': 'Every guide, grouped by category'})
+    sidebar_html = build_sidebar(
+        toc=f'      <h3>On this page</h3>\n      <ul>{sidebar_items}</ul>',
+        uplinks=[('index.html', 'All Guides')],
+        extra_titles={'index.html': 'Every guide, grouped by category'},
+    )
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -843,6 +945,8 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
             0, '<li><a href="#recently-added" title="Jump to Recently Added">'
                'Recently Added</a></li>')
     sidebar_cats = '\n'.join(sidebar_cats_list)
+    sidebar_html = build_sidebar(
+        toc=f'      <h3>Categories</h3>\n      <ul>{sidebar_cats}</ul>')
 
     recent_html = ''
     if recent:
@@ -887,10 +991,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
 {SIDEBAR_TOGGLE_JS}
   <div class="page-layout">
     <div class="sidebar">
-      <a class="sidebar-back" href="/" title="Turmeric home">Home</a>
-      <h3>Categories</h3>
-      <ul>{sidebar_cats}</ul>
-{SIDEBAR_GLOBALS}
+{sidebar_html}
     </div>
     <div class="content">
       <div class="module-heading">
