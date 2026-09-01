@@ -183,9 +183,13 @@ each has a live report in `docs/reported/`. This table is the campaign's
 index -- a repr cell with a filed report belongs here, so if you file one,
 add the row.
 
-*(No open cells as of 2026-08-21.)*
+| Open cell (producer -> boundary) | Report |
+| --- | --- |
+| inline-C carrier producer (`int64_t`) -> by-value monomorph slot for a `vec-of` element, on the default path; binding the value in a `let` first works, and `--enable=option-niche` already bridges the same shape | [`inline-c-carrier-producer-byval-container-element`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/inline-c-carrier-producer-byval-container-element.md) |
+| `^Class`-constrained parameter (carrier `int64_t`) -> generated instance method taking a `defdata` ADT by value; instantiating at `int` is a no-op erasure and works | [`typeclass-constrained-param-erases-adt-to-int64`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/typeclass-constrained-param-erases-adt-to-int64.md) |
 
-The last two closed on the same day, and the `let` merge-temp one is worth a
+The table was empty between 2026-08-21 and these two filings. The pair that
+emptied it closed on the same day, and the `let` merge-temp one is worth a
 note because its filing had the arrow backwards. It was recorded here as
 "CAPTURELESS closure (bare fn pointer) -> `let` merge temp decided
 `fat-handle`", i.e. a thin producer reaching a fat boundary -- the same shape

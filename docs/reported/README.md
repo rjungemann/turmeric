@@ -286,6 +286,7 @@ the plan links. File a new repr cell there as well as here.
 | Report | Severity | One line |
 |---|---|---|
 | [inline-c-carrier-producer-byval-container-element](inline-c-carrier-producer-byval-container-element.md) | low-medium | On the DEFAULT path, an inline-C `(Option String)` producer passed directly as a `vec-of` element is a cc `incompatible types` error (carrier int64 into the by-value monomorph slot); binding it in a `let` first works, and under `--enable=option-niche` the same shape already works |
+| [typeclass-constrained-param-erases-adt-to-int64](typeclass-constrained-param-erases-adt-to-int64.md) | medium | A `^Show a x` constrained parameter instantiated at an ADT stays on the `int64_t` carrier while the generated `__inst_Show_show_Color` takes the ADT by value, so the dispatch call is a cc `incompatible types` error; `tur check` is silent and the instance body itself is emitted correctly -- only the call site inside the constrained function disagrees. Instantiating at `int` works (erasure is a no-op there), which is why the pattern looks fine in the common case |
 
 `option-niche-inline-c-carrier-crossings-incomplete` was resolved 2026-08-28
 (same day it was filed) and moved to
