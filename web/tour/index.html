@@ -64,6 +64,12 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   font-weight: 300;
 }
 
+/* The hero description runs to more than one paragraph. Only the last one
+   carries the 40px that sets the gap before .hero-actions -- the rest get
+   ordinary paragraph spacing (1em, the UA default for a <p>, resolved against
+   this element's own font-size). */
+.hero-desc:not(:last-of-type) { margin-bottom: 1em; }
+
 .section-title { font-size: clamp(32px, 3.5vw, 48px); }
 .section-desc { max-width: 440px; }
 
@@ -130,12 +136,23 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   line-height: 1;
 }
 
+/* Portrait product shot -- the Trowel stop shows the editor instead of a code
+   card, so it sits in the same split-section slot a .code-card would. Sizing
+   only; the shadow and spotlight come from .product-shot in site.css. */
+.tour-shot {
+  justify-self: center;
+  max-width: 420px;
+  width: 100%;
+}
+
 /* ── RESPONSIVE: TOUR ──────────────────── */
 @media (max-width: 768px) {
   .hero { padding: 100px 24px 60px; }
 
   .tour-index { padding: 0 24px 60px; }
   .tour-index-grid { grid-template-columns: repeat(2, 1fr); }
+
+  .tour-shot { max-width: 380px; }
 }
 
 @media (max-width: 480px) {
@@ -155,16 +172,18 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <!-- ── HERO ───────────────────────────── -->
 <div class="hero">
   <div class="hero-inner">
-    <h1>Fourteen things about <em>turmeric</em>.</h1>
+    <h1>A quick tour of Turmeric</h1>
     <p class="hero-subtitle">A walkthrough of what makes Turmeric tick.</p>
     <p class="hero-desc">
-      From algebraic effects to refinement types, each stop in this tour
-      shows you real language features with real code -- and the last one
-      shows you the editor to write it in.
+      From algebraic effects to refinement types, each stop in this tour shows you real language features with real code.
+    </p>
+    <p class="hero-desc">
+      Stick around to the end to learn how to install Turmeric in one step, no setup required.
     </p>
     <div class="hero-actions">
-      <a href="/try" class="btn-hero btn-hero-primary">Try in browser <span style="font-size:16px;">→</span></a>
-      <a href="/" class="btn-hero btn-hero-secondary">← Back to home</a>
+      <a href="/try" class="btn-hero btn-hero-primary">Try in Browser</a>
+      <a href="#install" class="btn-hero btn-hero-secondary">Install</a>
+      <a href="/docs/html/guides/" class="btn-hero btn-hero-secondary">Read the Guides</a>
     </div>
   </div>
 </div>
@@ -294,9 +313,9 @@ let [xs [1 2 3 4 5]]
 <div class="split-section reverse reveal" id="effects">
   <div>
     <p class="section-label">02 -- Algebraic Effects</p>
-    <h2 class="section-title">Effects declared.<br>Handlers <em>swapped.</em></h2>
-    <p class="section-desc">Your functions declare what side effects they may perform. Their callers decide how to handle them -- in production, in tests, or as mocks.</p>
-    <p class="section-desc">The type system ensures no effect goes unhandled. Swap between handlers at the call site without touching the core logic.</p>
+    <h2 class="section-title">Let the consumer determine how <code>handle</code> side-effects themselves.</h2>
+    <p class="section-desc">Your functions declare what side effects they may perform. Their callers decide how to handle them, depending on context. For example, let behavior change in tests, for mocking, or create wizard-like workflows where the consumer handles the in-between.</p>
+    <p class="section-desc">The type system ensures any effect that needs handling gets handled. Swap between handlers at the call site without touching the core logic.</p>
   </div>
   <div class="code-card">
     <div class="code-card-bar"><span class="code-card-filename" data-turmeric="effects.tur" data-sweet-exp="effects.tur.sweet">effects.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
@@ -873,26 +892,9 @@ show-type("hello")   ;; =&gt; "cstr"</div></div>
       <a href="https://github.com/rjungemann/trowel" class="btn-hero btn-hero-secondary">View on GitHub</a>
     </div>
   </div>
-  <div class="code-card">
-    <div class="code-card-bar">
-      <span class="code-card-filename">macOS &amp; Linux</span>
-    </div>
-    <div class="code-card-body"><div class="code-version turmeric-version"># Install the editor and the compiler in one step
-brew install --cask rjungemann/trowel/trowel
-
-# ...or grab a build straight from Releases:
-#   github.com/rjungemann/trowel/releases/latest
-
-# Then: File -&gt; New Project, pick a template,
-# and press Run. That is the whole setup.
-
-;; hello.tur
-(defn main [] : int
-  (println "Hello from Trowel")
-  0)
-
-;; Run  -&gt; Hello from Trowel
-;; REPL -&gt; (+ 1 1)  =&gt; 2</div></div>
+  <div class="tour-shot product-shot">
+    <img src="/trowel-screenshot.png" width="1132" height="1664" loading="lazy"
+         alt="The Trowel editor showing lens-example.tur in a tabbed editor above a live REPL pane, where :run has printed 'Updated boss name: Alice'">
   </div>
 </div>
 

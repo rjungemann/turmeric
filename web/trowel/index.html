@@ -76,17 +76,12 @@
 
 .trowel-hero .install-hint { justify-content: flex-start; }
 
-/* Portrait product shot */
+/* Portrait product shot -- sizing only; the shadow and the spotlight that
+   separates the window from the page come from .product-shot in site.css. */
 .trowel-shot {
-  position: relative;
   justify-self: center;
   max-width: 460px;
   width: 100%;
-}
-.trowel-shot img {
-  display: block;
-  width: 100%;
-  height: auto;
 }
 
 /* ── DOWNLOAD / PLATFORMS ──────────────── */
@@ -240,9 +235,9 @@
       </div>
     </div>
 
-    <div class="trowel-shot reveal">
-      <img src="/trowel-screenshot.png" width="1210" height="1852" loading="eager"
-           alt="The Trowel editor showing a Turmeric source file in a tabbed editor above a live REPL pane printing (+ 1 1) => 2">
+    <div class="trowel-shot product-shot reveal">
+      <img src="/trowel-screenshot.png" width="1132" height="1664" loading="eager"
+           alt="The Trowel editor showing lens-example.tur in a tabbed editor above a live REPL pane, where :run has printed 'Updated boss name: Alice'">
     </div>
   </div>
 </div>

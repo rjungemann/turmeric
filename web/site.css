@@ -271,6 +271,55 @@ nav {
 .split-section.reverse { direction: rtl; }
 .split-section.reverse > * { direction: ltr; }
 
+/* ── PRODUCT SHOT ──────────────────────── */
+/* A screenshot standing in for a code card. The PNG is a tight crop: rounded
+ * corners live in its alpha and it carries no baked-in shadow, so both the
+ * lift and the edge separation are drawn here. Used by /trowel and the Trowel
+ * stop on /tour, which supply their own sizing.
+ *
+ * The window is near-black on a near-black page, so its outline would
+ * otherwise dissolve into the background. The spotlight is what makes the
+ * edges legible: it sits behind the image and is sized so its bright core is
+ * hidden BEHIND the window, leaving only the falloff visible as a halo around
+ * the perimeter. Light the backdrop, not the subject -- the screenshot's own
+ * pixels stay untouched. */
+.product-shot {
+  position: relative;
+  isolation: isolate;
+}
+
+.product-shot::before {
+  content: "";
+  position: absolute;
+  /* The pool has to reach well past the window on every side. Kept tighter
+   * than the sides, so the light stays a pool around the window rather than
+   * washing into the copy in the opposite column. */
+  inset: -26% -46%;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 62% 58% at 50% 46%,
+    rgba(240, 232, 220, 0.13) 0%,
+    rgba(236, 214, 178, 0.10) 38%,
+    rgba(212, 139, 28, 0.045) 62%,
+    transparent 82%
+  );
+}
+
+.product-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* Both alpha-following (drop-shadow, not box-shadow, or the rounded corners
+   * would be boxed in a rectangle): a hairline rim tracing the window outline,
+   * then a contact shadow. The shadow is offset DOWN rather than spread evenly
+   * -- an even 40px halo of black sits exactly where the spotlight's falloff
+   * is and the two cancel, which is what made the first attempt read flat. */
+  filter:
+    drop-shadow(0 0 1px rgba(240, 232, 220, 0.30))
+    drop-shadow(0 30px 46px rgba(0, 0, 0, 0.55));
+}
+
 /* ── CODE SYNTAX TOGGLE ───────────────── */
 .code-syntax-toggle {
   margin-left: auto;
@@ -543,6 +592,12 @@ nav.nav-drawer .nav-mobile-panel { display: none; }
   }
   .split-section.reverse { direction: ltr; }
   .split-section.reverse > * { direction: ltr; }
+
+  /* A percentage inset this narrow runs the pool off both edges of the
+     viewport, which reads as a wash rather than a spotlight -- and leaves the
+     page relying on body's overflow-x clip not to become pannable. Pin the
+     sides to a fixed gutter instead, so the falloff still lands on-screen. */
+  .product-shot::before { inset: -14% -20px; }
 
   .cta-section { padding: 48px 24px 80px; }
   .cta-box { padding: 40px 0; }
