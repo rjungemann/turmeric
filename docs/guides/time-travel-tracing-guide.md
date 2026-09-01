@@ -211,12 +211,86 @@ step -- see [A step is one expression](#a-step-is-one-expression). The
 recording is finer than that; DAP is where it gets presented at the
 granularity the protocol speaks.
 
-Stepping backwards does not un-print: a terminal has no undo, so the DAP
-transcript only ever grows. The transcript that rewinds with the cursor belongs
-to a client that owns its own console.
-
 Replay is opt-in. A plain `launch` is still a live session, still the one that
 can `evaluate`, and unchanged.
+
+### The timeline extension
+
+DAP describes execution as a sequence of steps, never as an **axis**. That is
+the right model for a live debuggee — there is nowhere to scrub to — but a
+recording *is* an axis, and the three things a scrubber needs of one have no
+standard request. Three custom ones add them, advertised as
+`supportsTurmericReplayTimeline` in the `initialize` response:
+
+| Request | Arguments | Body |
+| --- | --- | --- |
+| `replayInfo` | — | `{"steps": N, "index": i, "depth": d, "outputLength": n}` |
+| `replaySeek` | `{"index": N}` | `{"index": actual}`, then a `stopped` event |
+| `replaySites` | `{"indices": [...]}` **or** `{"buckets": N}` | `{"steps": N, "sites": [{"index", "file", "line", "depth"}, …]}` |
+
+Each answers something that is expensive or impossible to approximate:
+
+- **`replayInfo`** gives a slider its range. A range that is a guess is worse
+  than no slider.
+- **`replaySeek`** jumps to an arbitrary step. Approximating it with repeated
+  `stepBack` is the trap [Reading a recording in C](#reading-a-recording-in-c)
+  describes: every seek rebuilds state from the start of the stream, so one per
+  candidate turns a scan of an 80k recording from milliseconds into a hang. The
+  index is clamped into range and the reply reports where the cursor actually
+  landed — believe that over your own arithmetic. A `stopped` event with reason
+  `step` follows, because from the client's side that is what happened.
+- **`replaySites`** says where steps are and how deep they are. Ask by
+  `indices` for specific steps — a cursor readout, a tooltip — or by `buckets`
+  for the whole recording downsampled (default 256, max 4096, never more than
+  there are steps).
+
+  Position and depth come back **together**, which is the shape Try Turmeric's
+  `trace-site-at` already uses: a timeline's cursor readout wants `file:line`
+  and a depth ribbon wants `depth`, and serving them separately doubles the
+  traffic over the same steps for nothing.
+
+  A bucket reports the **maximum** depth in its range and the site of the step
+  where that maximum occurred — not the bucket's first step. A ribbon is read
+  for recursion shape, so a deep call falling between two samples is exactly
+  what the reader is looking for; and pointing at the deepest step means
+  clicking a spike goes where the spike is.
+
+  Neither form seeks. `depth_at` and `site_at` are index reads by construction,
+  which is what keeps a full-width ribbon over a 1M-step recording a scan
+  rather than a hang.
+
+All three refuse in a live session, naming the reason rather than falling
+through to a generic error — a client that asked has a scrubber in mind.
+
+### The console rewinds
+
+Forward motion appends to the transcript through ordinary `output` events, as
+before. Backward motion cannot: the transcript at the new cursor is a *prefix*
+of what the client has already been sent, and a delta has no way to express a
+truncation.
+
+So a backwards seek emits **`replayOutput`** carrying the whole transcript,
+to be used in place of what the client holds:
+
+```json
+{ "type": "event", "event": "replayOutput",
+  "body": { "category": "stdout", "length": 0, "output": "" } }
+```
+
+Whole-transcript rather than a cut offset, because a client that missed an
+earlier event would otherwise cut in the wrong place and never know. A client
+that does not recognise the event ignores it and behaves exactly as it did
+before — the console simply does not rewind.
+
+**At the last step the transcript is the whole recording's, not the cursor's.**
+A replay transcript otherwise holds the output produced *strictly before* the
+cursor's step — and a program whose final act is a `println` drains it after
+the final STEP, so a cursor-relative answer at the last index reports nothing.
+Measured: the replay fixture reports `outputLength: 0` at step 24020 of 24021
+without this. An empty console at the end of a run that printed reads as a
+broken timeline rather than a precise one, so the final step is special-cased
+to concatenate every OUTPUT record. Try Turmeric hit this first and answers it
+the same way — `turi_wasm_trace_output_full`, asked for only at the last step.
 
 ## Recording in the browser
 
