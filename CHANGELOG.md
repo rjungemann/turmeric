@@ -12,19 +12,25 @@ All notable changes to Turmeric are documented here.
   to scrub to, and wrong for a recording, which is an axis. Three custom
   requests add one, advertised as `supportsTurmericReplayTimeline`:
   `replayInfo` (how many steps, where the cursor is), `replaySeek` (jump to
-  step N, clamped, reporting where it landed) and `replayDepths` (the
-  call-depth profile, downsampled to a bucket count, each bucket carrying its
-  range's *maximum* so a deep call between two samples is not erased). All
+  step N, clamped, reporting where it landed) and `replaySites` (where steps
+  are and how deep, by explicit index or downsampled to a bucket count). All
   three refuse in a live session naming the reason, because a client that asks
   has a scrubber in mind.
 
+  `replaySites` returns position and depth **together**, which is the shape Try
+  Turmeric's `trace-site-at` already uses: a timeline's cursor readout wants
+  `file:line` and a depth ribbon wants `depth`, over the same steps. A bucket
+  reports its range's *maximum* depth and the site of the step where that
+  maximum occurred, so a deep call between two samples is not erased and
+  clicking a ribbon spike lands where the spike is.
+
   None of this is new capability in the reader -- `turi_trace_replay_seek`,
-  `_steps` and `_depth_at` already existed and `_depth_at` is an array index.
-  What was missing was any way to reach them over the wire, and the
-  alternatives are worse than they look: a slider whose range is a guess, and a
-  seek approximated by repeated `stepBack`, which rebuilds state from the start
-  of the stream once per candidate and turns a scan of an 80k recording from
-  milliseconds into a hang.
+  `_steps`, `_depth_at` and `_site_at` already existed, and the last two are
+  index reads. What was missing was any way to reach them over the wire, and
+  the alternatives are worse than they look: a slider whose range is a guess,
+  and a seek approximated by repeated `stepBack`, which rebuilds state from the
+  start of the stream once per candidate and turns a scan of an 80k recording
+  from milliseconds into a hang.
 
 - **The replay console rewinds.** Forward motion still appends through ordinary
   `output` events. Backward motion could not: the transcript at the new cursor
@@ -36,14 +42,17 @@ All notable changes to Turmeric are documented here.
   earlier event would otherwise cut in the wrong place and never know. Clients
   that do not recognise the event are exactly as they were.
 
-### Changed
+### Fixed
 
-- **`tests/fixtures/dap-replay/input.tur` prints before its loop as well as
-  after it.** A replay transcript holds the output produced strictly before the
-  cursor's step, so a program whose only `println` is its last statement
-  reports `outputLength: 0` at every index including the last -- measured, 0 at
-  step 24020 of 24021. The rewind assertions would have passed by describing
-  nothing.
+- **A recording's last step now shows what the program printed.** A replay
+  transcript holds the output produced strictly before the cursor's step, and a
+  program whose final act is a `println` drains it after the final STEP -- so
+  the last index reported an empty transcript. Measured: `outputLength: 0` at
+  step 24020 of 24021 for a fixture that prints "done" and exits. An empty
+  console at the end of a run that printed reads as a broken timeline rather
+  than a precise one. The final step now concatenates every OUTPUT record, the
+  same special case and for the same reason as Try Turmeric's
+  `turi_wasm_trace_output_full`.
 
 ## [0.42.1] -- 2026-08-31
 

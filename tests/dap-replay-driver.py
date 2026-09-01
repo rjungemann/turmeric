@@ -169,8 +169,12 @@ stack("rev")
 
 # 7) The timeline extension: a recording is an axis, and DAP has no vocabulary
 #    for one. `replayInfo` gives it a length, `replaySeek` a way to jump to an
-#    arbitrary point, and `replayDepths` a shape to draw. Together they are
-#    what a scrubber and a depth ribbon need.
+#    arbitrary point, and `replaySites` position-and-depth per step. Together
+#    they are what a scrubber and a depth ribbon need.
+#
+#    Shapes follow Try Turmeric's `trace-site-at`, which returns position and
+#    depth together and batches over many indices -- the two callers want the
+#    same data, and asking separately doubles the traffic for nothing.
 print("CAP supportsTurmericReplayTimeline=%s" %
       str(caps.get("supportsTurmericReplayTimeline", False)).lower())
 
@@ -181,25 +185,51 @@ n_steps = info["steps"]
 # The ribbon. Its peak must be at least as deep as the deepest stack the
 # forward pass actually saw -- a downsample that reports each bucket's maximum
 # cannot lose that; one that sampled or averaged would.
-dep = req("replayDepths", buckets=16)["body"]
-print("DEPTHS buckets=%d len=%d" % (dep["buckets"], len(dep["depths"])))
-print("DEPTHS peak-at-least-2=%s" % ("yes" if max(dep["depths"]) >= 2 else "no"))
-# Default bucket count when the client does not ask, capped by the step count.
-dflt = req("replayDepths")["body"]
-print("DEPTHS default-len-matches=%s" %
-      ("yes" if len(dflt["depths"]) == dflt["buckets"] else "no"))
+sites = req("replaySites", buckets=16)["body"]["sites"]
+print("SITES bucketed-len=%d" % len(sites))
+print("SITES peak-at-least-2=%s" %
+      ("yes" if max(s["depth"] for s in sites) >= 2 else "no"))
+# Position comes back with depth, which is the whole point of the shape: a
+# ribbon spike is clickable because the entry says where it was.
+print("SITES carry-position=%s" %
+      ("yes" if all(s["line"] > 0 for s in sites) else "no"))
+print("SITES carry-file=%s" %
+      ("yes" if all(s["file"] for s in sites) else "no"))
+# A bucket reports the step where its maximum occurred, not its first step --
+# so the deepest bucket's own index must really be that deep.
+deepest = max(sites, key=lambda s: s["depth"])
+one = req("replaySites", indices=[deepest["index"]])["body"]["sites"]
+print("SITES peak-index-is-the-peak=%s" %
+      ("yes" if one and one[0]["depth"] == deepest["depth"] else "no"))
+# Explicit indices: the other way to ask, for a cursor readout or a tooltip.
+few = req("replaySites", indices=[0, 1, n_steps - 1])["body"]["sites"]
+print("SITES explicit-len=%d" % len(few))
+print("SITES explicit-indices-echo=%s" %
+      ("yes" if [s["index"] for s in few] == [0, 1, n_steps - 1] else "no"))
+# Default bucket count when the client does not ask.
+dflt = req("replaySites")["body"]["sites"]
+print("SITES default-len=%d" % len(dflt))
 
 # Seek to the last step. The reader clamps and reports where it landed, which
 # is the value to believe over the client's own arithmetic.
 seek = req("replaySeek", index=n_steps - 1)["body"]
+# The transcript arrives between the response and the stop. Read it here: it
+# is the only place the final `println` is observable, and asserting on its
+# text rather than on a length is what distinguishes "the full-transcript path
+# ran" from "some bytes turned up".
+end_out = event("output")["body"]["output"]
 event("stopped")
 print("SEEK end-index-matches=%s" %
       ("yes" if seek["index"] == n_steps - 1 else "no"))
+print("SEEK final-println-visible=%s" % ("yes" if "done" in end_out else "no"))
 at_end = req("replayInfo")["body"]
 print("SEEK cursor-followed=%s" %
       ("yes" if at_end["index"] == n_steps - 1 else "no"))
-# By the last step the program has printed; that is what makes the rewind
-# below an assertion rather than a tautology.
+# The last step's transcript is the WHOLE recording's, not the cursor's. The
+# fixture's only println is its final act and drains after the final STEP, so
+# a cursor-relative answer reports nothing here -- an empty console at the end
+# of a run that printed reads as a broken timeline. This is the assertion that
+# the full-transcript path exists.
 print("SEEK output-at-end=%s" % ("yes" if at_end["outputLength"] > 0 else "no"))
 
 # Out of range clamps rather than erroring: a scrubber dragged past the end

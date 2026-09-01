@@ -11,14 +11,6 @@
 ;; The head of the program mirrors the dap fixture so the driver can assert on
 ;; the same shapes (add over main, x and y bound at the call site); the loop
 ;; that follows is what makes the recording large.
-;;
-;; It prints BEFORE the loop as well as after it, which the timeline assertions
-;; need. A replay transcript holds the output produced strictly before the
-;; cursor's step, so a program whose only `println` is its last statement has
-;; an empty transcript at every index -- including the last. There would then
-;; be nothing for a backwards seek to rewind, and the `replayOutput` assertions
-;; would pass by describing nothing. Measured, not assumed: with only the
-;; trailing print, `replayInfo` reports outputLength 0 at step 24020 of 24021.
 
 (defn add [a : int b : int] : int
   (let [s (+ a b)]
@@ -30,7 +22,6 @@
         z (add x y)
         ^mut i 0
         ^mut acc 0]
-    (println "start")
     (while (< i 2000)
       (do
         (set! acc (+ acc i))

@@ -31,12 +31,19 @@
  *
  * A recording is also an axis, which DAP has no vocabulary for. Three custom
  * requests add one -- `replayInfo` (how long, where are we), `replaySeek` (go
- * to step N) and `replayDepths` (the call-depth profile, downsampled) -- plus
- * a `replayOutput` event for the case a delta cannot express: a backwards seek
- * shortens the transcript. Together they are what a timeline scrubber and a
- * depth ribbon need; a client detects them from
+ * to step N) and `replaySites` (where steps are and how deep, by index or
+ * downsampled) -- plus a `replayOutput` event for the case a delta cannot
+ * express: a backwards seek shortens the transcript. Together they are what a
+ * timeline scrubber and a depth ribbon need; a client detects them from
  * `supportsTurmericReplayTimeline`, and one that does not know them still gets
  * exactly the session it got before.
+ *
+ * Shapes follow Try Turmeric, which built this timeline first: `web/main.js`
+ * (the seek loop and its coalescing), `web/public/eval-worker.js`
+ * (`trace-seek` / `trace-site-at`) and `src/web/wasm_glue.c`
+ * (`turi_wasm_trace_state` / `_site_at` / `_output_full`). Read those before
+ * changing anything here -- every question this file answers, that one has
+ * answered once already, and in-process where the answers are cheaper.
  *
  * See docs/archive/history/debugger-plan.md (Phase 3) and
  * docs/artifacts/debugger-dap-phase3.md.
@@ -561,7 +568,7 @@ static void dap_evaluate(DapState *s, int64_t req_seq, const char *args) {
 }
 
 /* ---------------------------------------------------------------------------
- * T4-T6: the timeline extension (`replayInfo` / `replaySeek` / `replayDepths`)
+ * T4-T6: the timeline extension (`replayInfo` / `replaySeek` / `replaySites`)
  *
  * DAP describes execution as a sequence of steps, never as an axis. That is
  * the right model for a live debuggee -- there is nowhere to scrub to -- but a
@@ -590,8 +597,40 @@ static void dap_evaluate(DapState *s, int64_t req_seq, const char *args) {
  * roughly the pixel width a ribbon is drawn at; the point of downsampling here
  * rather than in the client is that the client would otherwise have to ask for
  * every step to do it. */
-#define DAP_DEPTHS_DEFAULT_BUCKETS 256
-#define DAP_DEPTHS_MAX_BUCKETS     4096
+#define DAP_SITES_DEFAULT_BUCKETS 256
+#define DAP_SITES_MAX_BUCKETS     4096
+/* An explicit index list is a client asking about specific steps -- a cursor
+ * readout, a tooltip -- not a scan. Bounded so a malformed request cannot make
+ * the adapter build an unbounded response. */
+#define DAP_SITES_MAX_INDICES     4096
+
+/* One site entry: where step `index` was, and how deep the stack was there. */
+static void dap_write_site(DapState *s, Buf *b, uint32_t index, int depth,
+                           bool first) {
+    const char *file = "";
+    uint32_t line = 0;
+    turi_trace_replay_site_at(s->replay, index, &file, &line);
+    buf_printf(b, "%s{\"index\":%u,\"line\":%u,\"depth\":%d,\"file\":\"",
+               first ? "" : ",", index, line, depth);
+    dap_json_escape(b, file);
+    buf_puts(b, "\"}");
+}
+
+/* Parse a JSON array of non-negative integers. Returns the count written. */
+static int dap_parse_int_array(const char *json, const char *key,
+                               uint32_t *out, int cap) {
+    size_t l;
+    const char *arr = json ? lsp_json_raw(json, key, &l) : NULL;
+    if (!arr) return -1;   /* absent, which is different from empty */
+    int n = 0;
+    for (const char *p = arr; *p && *p != ']'; p++) {
+        if (*p < '0' || *p > '9') continue;
+        long long v = atoll(p);
+        if (n < cap) out[n++] = (uint32_t)(v < 0 ? 0 : v);
+        while (p[1] >= '0' && p[1] <= '9') p++;
+    }
+    return n;
+}
 
 static void dap_replay_info(DapState *s, int64_t req_seq) {
     uint32_t steps = turi_trace_replay_steps(s->replay);
@@ -604,39 +643,71 @@ static void dap_replay_info(DapState *s, int64_t req_seq) {
     buf_free(&b);
 }
 
-/* The call-depth profile over the whole recording, downsampled to `buckets`.
+/* Where steps are and how deep they are -- `{index, file, line, depth}` each.
  *
- * Each bucket reports the MAXIMUM depth in its range, not the first or the
- * mean. A ribbon is read for recursion shape, and a deep call that happens to
- * fall between two samples is exactly the thing the reader is looking for --
- * averaging or sampling would quietly erase it. `depth_at` is an array index,
- * so scanning every step to find those maxima costs nothing worth measuring. */
-static void dap_replay_depths(DapState *s, int64_t req_seq, const char *args) {
+ * The shape is Try Turmeric's `trace-site-at`
+ * (`web/public/eval-worker.js`, `turi_wasm_trace_site_at` in
+ * `src/web/wasm_glue.c`), which returns position and depth **together**,
+ * batched over many indices in one round trip. That matters because the two
+ * callers want the same data: a timeline's cursor readout needs `file:line`,
+ * a depth ribbon needs `depth`, and asking for them separately doubles the
+ * traffic for no reason. An earlier draft of this served only a depths array
+ * and would have forced exactly that.
+ *
+ * Two ways to ask, because the two callers scan differently:
+ *
+ *  - `{"indices": [...]}` -- specific steps. A cursor readout, a tooltip.
+ *  - `{"buckets": N}`     -- the whole recording downsampled to N samples.
+ *
+ * A bucket reports the MAXIMUM depth in its range and the site of the step
+ * where that maximum occurred, not the bucket's first step. A ribbon is read
+ * for recursion shape, and a deep call falling between two samples is exactly
+ * what the reader is looking for -- sampling or averaging would quietly erase
+ * it, and reporting the deepest step's position means clicking a spike goes
+ * where the spike is.
+ *
+ * Neither form seeks. `depth_at` and `site_at` are index reads by
+ * construction (see trace.h), which is what keeps a full-width ribbon over a
+ * 1M-step recording a scan rather than a hang. */
+static void dap_replay_sites(DapState *s, int64_t req_seq, const char *args) {
     uint32_t steps = turi_trace_replay_steps(s->replay);
-    int64_t want = args ? lsp_json_int(args, "buckets") : -1;
-    uint32_t buckets = (want > 0) ? (uint32_t)want : DAP_DEPTHS_DEFAULT_BUCKETS;
-    if (buckets > DAP_DEPTHS_MAX_BUCKETS) buckets = DAP_DEPTHS_MAX_BUCKETS;
-    /* Never more buckets than steps: empty buckets at the tail would draw as a
-     * ribbon that falls to zero before the recording ends. */
-    if (buckets > steps) buckets = steps;
-
     Buf b; buf_init(&b);
-    buf_printf(&b, "{\"steps\":%u,\"buckets\":%u,\"depths\":[", steps, buckets);
-    for (uint32_t i = 0; i < buckets; i++) {
-        /* 64-bit intermediate: steps * buckets overflows 32 bits at the 1M
-         * step cap with a wide ribbon. */
-        uint32_t lo = (uint32_t)(((uint64_t)i * steps) / buckets);
-        uint32_t hi = (uint32_t)(((uint64_t)(i + 1) * steps) / buckets);
-        if (hi <= lo) hi = lo + 1;
-        int peak = 0;
-        for (uint32_t j = lo; j < hi && j < steps; j++) {
-            int d = turi_trace_replay_depth_at(s->replay, j);
-            if (d > peak) peak = d;
+    buf_printf(&b, "{\"steps\":%u,\"sites\":[", steps);
+
+    uint32_t idx[DAP_SITES_MAX_INDICES];
+    int n_idx = dap_parse_int_array(args, "indices", idx, DAP_SITES_MAX_INDICES);
+    if (n_idx >= 0) {
+        /* Explicit lookups. An out-of-range index answers with depth 0 and an
+         * empty file rather than failing the whole batch: one bad index in a
+         * tooltip request should not cost the client the other forty. */
+        for (int i = 0; i < n_idx; i++) {
+            dap_write_site(s, &b, idx[i],
+                           turi_trace_replay_depth_at(s->replay, idx[i]), i == 0);
         }
-        buf_printf(&b, "%s%d", i ? "," : "", peak);
+    } else {
+        int64_t want = args ? lsp_json_int(args, "buckets") : -1;
+        uint32_t buckets = (want > 0) ? (uint32_t)want : DAP_SITES_DEFAULT_BUCKETS;
+        if (buckets > DAP_SITES_MAX_BUCKETS) buckets = DAP_SITES_MAX_BUCKETS;
+        /* Never more buckets than steps: empty buckets at the tail would draw
+         * as a ribbon that falls to zero before the recording ends. */
+        if (buckets > steps) buckets = steps;
+        for (uint32_t i = 0; i < buckets; i++) {
+            /* 64-bit intermediate: steps * buckets overflows 32 bits at the
+             * 1M step cap with a wide ribbon. */
+            uint32_t lo = (uint32_t)(((uint64_t)i * steps) / buckets);
+            uint32_t hi = (uint32_t)(((uint64_t)(i + 1) * steps) / buckets);
+            if (hi <= lo) hi = lo + 1;
+            int peak = 0;
+            uint32_t peak_at = lo;
+            for (uint32_t j = lo; j < hi && j < steps; j++) {
+                int d = turi_trace_replay_depth_at(s->replay, j);
+                if (d > peak) { peak = d; peak_at = j; }
+            }
+            dap_write_site(s, &b, peak_at, peak, i == 0);
+        }
     }
     buf_puts(&b, "]}");
-    dap_send_response(s, req_seq, "replayDepths", dap_cstr(&b), true);
+    dap_send_response(s, req_seq, "replaySites", dap_cstr(&b), true);
     buf_free(&b);
 }
 
@@ -648,7 +719,7 @@ static bool dap_handle_common(DapState *s, const char *cmd, int64_t req_seq,
      * live session gets the reason rather than the generic "not supported
      * while paused" -- a client that asked has a recording in mind, and
      * "relaunch with replay" is the actionable answer. */
-    if (!strcmp(cmd, "replayInfo") || !strcmp(cmd, "replayDepths") ||
+    if (!strcmp(cmd, "replayInfo") || !strcmp(cmd, "replaySites") ||
         !strcmp(cmd, "replaySeek")) {
         if (!s->replay_mode || !s->replay) {
             dap_send_error(s, req_seq, cmd,
@@ -656,8 +727,8 @@ static bool dap_handle_common(DapState *s, const char *cmd, int64_t req_seq,
                            "relaunch with \"replay\": true");
             return true;
         }
-        if (!strcmp(cmd, "replayInfo"))   { dap_replay_info(s, req_seq);         return true; }
-        if (!strcmp(cmd, "replayDepths")) { dap_replay_depths(s, req_seq, args); return true; }
+        if (!strcmp(cmd, "replayInfo"))  { dap_replay_info(s, req_seq);        return true; }
+        if (!strcmp(cmd, "replaySites")) { dap_replay_sites(s, req_seq, args); return true; }
         /* `replaySeek` moves the cursor, so it is handled by the replay
          * session loop, which owns that. Reaching here means it was sent from
          * somewhere that cannot move -- pre-launch, before the recording
@@ -773,6 +844,40 @@ static void dap_on_pause(TuriEnv *env, TuriDbgStop reason, void *ud) {
  * what the recording stores.
  * --------------------------------------------------------------------------- */
 
+/* Every OUTPUT record in the recording, regardless of the cursor.
+ *
+ * Needed because `turi_trace_replay_output` reports what was printed strictly
+ * BEFORE the cursor's step, and a program whose final act is a `println`
+ * drains it after the final STEP -- so the last step's transcript is missing
+ * the last thing the program printed. Measured: the replay fixture reports
+ * outputLength 0 at step 24020 of 24021 when its only print is trailing.
+ *
+ * An empty console at the end of a run that printed reads as a broken timeline
+ * rather than a precise one. Try Turmeric hit this first and answered it the
+ * same way -- `turi_wasm_trace_output_full` in src/web/wasm_glue.c, asked for
+ * only at the last step -- and this is that function for the DAP side. */
+static void dap_replay_output_full(DapState *s, Buf *out) {
+    if (!s->trace) return;
+    size_t len = 0;
+    const uint8_t *bytes = turi_trace_bytes(s->trace, &len);
+    TurTraceReader r;
+    if (!bytes || !turi_trace_open(&r, bytes, len)) return;
+    TurTraceRecord rec;
+    while (turi_trace_next(&r, &rec)) {
+        if (rec.tag != TUR_TRACE_OUTPUT || !rec.payload) continue;
+        buf_write(out, (const char *)rec.payload, rec.payload_len);
+    }
+}
+
+/* Is the cursor on the recording's final step? Only there does the transcript
+ * need the whole-recording treatment above; everywhere else the cursor-relative
+ * answer is the correct one, and is what makes scrubbing show the program's
+ * output as it accumulated. */
+static bool dap_replay_at_last_step(DapState *s) {
+    uint32_t n = turi_trace_replay_steps(s->replay);
+    return n > 0 && turi_trace_replay_index(s->replay) == n - 1;
+}
+
 /* Send the recorded output the cursor has now passed.
  *
  * Forward motion appends, as a standard `output` event: that is what every DAP
@@ -792,9 +897,20 @@ static void dap_on_pause(TuriEnv *env, TuriDbgStop reason, void *ud) {
  * client that missed an earlier event would otherwise cut to the wrong place
  * and have no way to notice. */
 static void dap_replay_flush_output(DapState *s) {
+    /* At the last step the transcript is the whole recording's, not the
+     * cursor's -- see dap_replay_output_full. `full` owns those bytes when it
+     * is used; `out` points into the replay otherwise. */
+    Buf full; buf_init(&full);
+    const char *out = NULL;
     size_t len = 0;
-    const char *out = turi_trace_replay_output(s->replay, &len);
-    if (len == s->replay_out_sent) return;
+    if (dap_replay_at_last_step(s)) {
+        dap_replay_output_full(s, &full);
+        out = full.data ? full.data : "";
+        len = full.len;
+    } else {
+        out = turi_trace_replay_output(s->replay, &len);
+    }
+    if (len == s->replay_out_sent) { buf_free(&full); return; }
 
     Buf b; buf_init(&b);
     if (len < s->replay_out_sent) {
@@ -810,6 +926,7 @@ static void dap_replay_flush_output(DapState *s) {
     buf_puts(&b, "\"}}");
     dap_write(s, &b);
     buf_free(&b);
+    buf_free(&full);
     s->replay_out_sent = len;
 }
 
