@@ -468,6 +468,7 @@ into a frame env again.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [debugger-and-tracer-only-instrument-main](debugger-and-tracer-only-instrument-main.md) | medium | `tur dap` and `tur trace` attach around `(main)` only, so a file whose work is at the top level stops nowhere and records nothing -- and `setBreakpoints` still answers `verified: true`, so the client draws a bound breakpoint that can never hit. |
 
 `turi-catch-unwind-aggregate-payload` was filed and resolved 2026-08-21 and
 moved to
