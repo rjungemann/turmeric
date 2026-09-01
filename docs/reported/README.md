@@ -1214,7 +1214,9 @@ the report's own named-let snippet does not compile (its `if` branches are
 
 ## Try Turmeric / web REPL (filed 2026-08-25)
 
-*(empty -- the one row here is resolved)*
+| Report | Severity | One line |
+|---|---|---|
+| [try-turmeric-browser-suites-green-while-failing](try-turmeric-browser-suites-green-while-failing.md) | medium | The browser job is marked passed with 5 Playwright tests failing (both suite steps exited 1). Three mechanisms: the steps are `continue-on-error`; the report upload is `if: failure()`, which is mutually exclusive with that, so the Playwright report is uploaded only when nothing failed; and the suites contribute no rows to `timings.jsonl`, so `/ci` does not report them the way it reports every ctest suite. Three of the five failures are test-side (unscoped `.monaco-editor` now that `#repl-input` hosts a second Monaco; `location.reload` no longer redefinable); the two mobile ones ("Failed to load WASM" after `page.reload()` on WebKit) are unattributed and may be a real mobile product bug |
 
 `try-docs-pane-forgets-scroll-position` was resolved 2026-08-26 and moved to
 [docs/archive](../archive/try-docs-pane-forgets-scroll-position.md), along its
