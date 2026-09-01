@@ -97,6 +97,12 @@ expect "conditional breakpoint fires"     "STOP cond reason=breakpoint"
 expect "conditional fires at i==3"        "VAR cond i=3"
 expect "evaluate resolves i"              "EVAL i=3"
 # Program output forwarded + clean exit.
+# The timeline extension needs a recording, and refuses with the reason rather
+# than the generic "not supported while paused".
+expect "live session refuses replayInfo"  "LIVE replayInfo success=false"
+expect "and says to relaunch with replay" "relaunch with \"replay\": true"
+expect "live session refuses replaySeek"  "LIVE replaySeek success=false"
+# Program output forwarded + clean exit.
 expect "program stdout as output event"   "OUTPUT done"
 expect "exit code is forwarded"           "EXIT code=7"
 expect "driver completed the session"     "DONE"
@@ -161,6 +167,40 @@ else
   # A `continue` with nothing ahead of it scans the whole recording. Reaching
   # `exited` is the assertion; the timing line is the diagnostic that says
   # WHY, if a future change makes that scan quadratic again.
+  # T4-T6: the timeline extension. A recording is an axis, and these three
+  # requests are what give a scrubber and a depth ribbon something to stand on.
+  expect_replay "the timeline extension is advertised" \
+      "CAP supportsTurmericReplayTimeline=true"
+  expect_replay "replayInfo reports a length"     "INFO steps-positive=yes"
+  expect_replay "replaySites honours its bucket count"  "SITES bucketed-len=16"
+  # Max-per-bucket, not sample-per-bucket: the two-frame stack the forward pass
+  # walked through must survive the downsample.
+  expect_replay "the ribbon keeps the deepest call" "SITES peak-at-least-2=yes"
+  # Position and depth arrive together -- Try Turmeric's trace-site-at shape.
+  # A depths-only reply would make a scrubber ask twice for the same steps.
+  expect_replay "a site carries its line"           "SITES carry-position=yes"
+  expect_replay "and its file"                      "SITES carry-file=yes"
+  # A bucket points at the step its maximum came from, so a ribbon spike is
+  # clickable and lands where the deep call actually is.
+  expect_replay "a bucket points at its own peak"   "SITES peak-index-is-the-peak=yes"
+  # The other way to ask: specific steps, for a cursor readout or a tooltip.
+  expect_replay "explicit indices are answered"     "SITES explicit-len=3"
+  expect_replay "and echoed back in order"          "SITES explicit-indices-echo=yes"
+  expect_replay "and there is a default width"      "SITES default-len=256"
+  # A seek reaches a step no amount of stepping would find in reasonable time.
+  expect_replay "replaySeek reports where it landed" "SEEK end-index-matches=yes"
+  expect_replay "and the cursor actually moved"      "SEEK cursor-followed=yes"
+  expect_replay "an out-of-range seek clamps"        "SEEK clamps-high=yes"
+  # The last step's transcript is the whole recording's. The fixture's only
+  # println is its final act and drains after the final STEP, so a
+  # cursor-relative answer reports nothing -- and an empty console at the end
+  # of a run that printed reads as a broken timeline.
+  expect_replay "the final println is visible"       "SEEK final-println-visible=yes"
+  expect_replay "and the end of the run has printed" "SEEK output-at-end=yes"
+  expect_replay "seeking back rewinds the transcript" "REWIND transcript-emptied=yes"
+  expect_replay "to nothing at the first step"       "REWIND replayOutput-length=0"
+  expect_replay "with the cursor back at the start"  "REWIND cursor-at-start=yes"
+  expect_replay "and the two agreeing"               "REWIND output-length-agrees=yes"
   expect_replay "continue runs off the end of the recording" "EXIT code=7"
   expect_replay "and the end-to-end scan stays linear" "CONTINUE-TO-END under-10s=yes"
   expect_replay "the replay session completed"    "DONE"
