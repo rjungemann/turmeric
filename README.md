@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.42.1` -- `tur trace` now records one step per expression rather than per source line, so a one-line loop no longer collapses into a single step; `tur run` gains Justfile parameters, modules and builtins.
+**Latest release:** `v0.42.2` -- `tur dap` serves a recording as a scrubbable timeline (`replayInfo`/`replaySeek`/`replaySites`) and the replay console rewinds; the website is rebuilt around one canonical site map.
 
 ## What
 

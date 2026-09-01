@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.42.2] -- 2026-09-01
 
 ### Added
 
@@ -41,6 +41,18 @@ All notable changes to Turmeric are documented here.
   Whole-transcript rather than a cut offset, because a client that missed an
   earlier event would otherwise cut in the wrong place and never know. Clients
   that do not recognise the event are exactly as they were.
+
+### Changed
+
+- **The website is rebuilt around one canonical site map.** The topbar,
+  sidebar, mobile drawer and footer are generated from a single pair of lists
+  shared by `web/site.js` and the three page generators (`tools/gendocs.py`,
+  `tools/genguides.py`, `tools/genspices.py`), so hand-written pages and
+  generated ones -- guides, API docs, spices -- can no longer disagree about
+  what is on the site. Every chrome link carries a `title` describing where it
+  goes, the mobile drawer shows the same site map the desktop rail does, and
+  the home page's install step became a tabbed set of install methods. The
+  tour was reworked to match.
 
 ### Fixed
 
