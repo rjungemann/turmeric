@@ -1625,7 +1625,21 @@ static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
          * member types (they have no generic-union twin), and float/double
          * keep theirs (an implicit float->int64 store would VALUE-convert;
          * double is already 8-aligned). */
-        if (owner && owner->n_ctors > 1 && nm &&
+        /* erased-generic-field-read-overruns-subword-monomorph-box: the
+         * single-variant record DOES have a generic twin after all.  The base
+         * typedef of a parametric record (`tur_adt_Identity { int64_t
+         * wrapped; }`) is what every erased generic body reads through --
+         * `(defn run-id [A] [i : (Identity A)] : A (.wrapped i))` -- and a
+         * `(Identity bool)` monomorph boxed at an aggregate spill with a 1-byte
+         * `bool wrapped;` is then read 8 bytes wide (ASan heap-buffer-overflow;
+         * the right answer only by little-endian luck).  So the widening applies
+         * to a record too, but ONLY for a field whose DECLARED type is a type
+         * parameter: that is the field the twin spells as int64_t.  A record
+         * field declared concretely (`:bool`) is `bool` in both layouts and
+         * keeps its width. */
+        bool declared_tyvar = field->full_type &&
+                              field->full_type->kind == TY_TYVAR;
+        if (owner && (owner->n_ctors > 1 || declared_tyvar) && nm &&
             (strcmp(nm, "bool") == 0 ||
              strcmp(nm, "int8_t") == 0 || strcmp(nm, "uint8_t") == 0 ||
              strcmp(nm, "int16_t") == 0 || strcmp(nm, "uint16_t") == 0 ||

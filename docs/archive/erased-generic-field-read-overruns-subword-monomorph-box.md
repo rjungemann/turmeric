@@ -1,5 +1,7 @@
 # An erased generic field read overruns a sub-word monomorph's return box
 
+**RESOLVED 2026-09-02.** See the resolution section at the end.
+
 **Severity: medium.** Silent wrong-width read on the default path; ASan
 `heap-buffer-overflow`. Found by the corpus-wide leak sweep of 2026-09-02
 (`benchmarks`-style ASan build of every fixture), which ran every fixture
@@ -64,3 +66,38 @@ accident.
 - `docs/upcoming/sum-representation-plan.md` -- the M6 / G6(c) notes on
   sub-word carriers folding wrong at nested nodes are the same mismatch seen
   from the constructor side.
+
+## Resolution (2026-09-02)
+
+Neither fix direction as written. The layout rule already had the answer
+for MULTI-variant parametric monomorphs: `adt_field_c_type` (types.c) widens
+a sub-word INTEGER field to the int64 slot so the monomorph agrees with the
+generic layout every erased reader assumes, and its comment claimed
+single-variant records "have no generic-union twin". They do -- the base
+typedef of a parametric record (`tur_adt_Identity { int64_t wrapped; }`) is
+what every erased generic body reads through, which is exactly this report.
+
+The widening now applies to a record monomorph too, but only for a field
+whose DECLARED type is a type parameter (`wrapped : a`): that is the field
+the twin spells as `int64_t`. A record field declared concretely (`:bool`)
+is `bool` in both layouts and keeps its width. So `tur_adt_Identity__bool`
+is `{ int64_t wrapped; }`, the box at every crossing is 8 bytes, and the
+erased read is exact rather than lucky. The typed reads and writes already
+convert at the slot (the store widens, the typed binder narrows), as they
+did for the multi-variant case.
+
+Pinned by `tests/fixtures/erased-reader-subword-record-monomorph`, which
+asserts VALUES through the rank-2 dict-clone crossing at `bool`, a negative
+`int8` (sign extension), and an `int32` with non-zero high bytes (a
+byte-punned read cannot be right by accident). Verified to fail against the
+reverted compiler with the same `heap-buffer-overflow`, and to pass with the
+fix. The original fixture is clean under ASan. Suite 2755/0 with one
+snapshot regenerated; leak-check 76/0/0; both seams green.
+
+**Residue, recorded.** `float32` keeps its 4-byte width in every monomorph
+(the existing policy: an implicit float-to-int64 store would VALUE-convert),
+so a `(Identity float32)` read through an erased body still overreads by
+four bytes and is right only by little-endian luck; closing it needs a
+bit-reinterpreting store and read at the slot. No fixture exercises it
+today (the corpus census found `Box__float32` in one fixture, never read
+through erased code).

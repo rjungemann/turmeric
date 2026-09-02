@@ -4042,13 +4042,13 @@ static tur_adt_Identity__int ctor_Identity_Identity__int(int64_t _0) {
 #ifndef TUR_TY_tur_adt_Identity__bool
 #define TUR_TY_tur_adt_Identity__bool
 typedef struct tur_adt_Identity__bool {
-    bool wrapped;
+    int64_t wrapped;
 } tur_adt_Identity__bool;
 #endif
 
 #ifndef TUR_FN_tur_adt_Identity__bool
 #define TUR_FN_tur_adt_Identity__bool
-static tur_adt_Identity__bool ctor_Identity_Identity__bool(bool _0) {
+static tur_adt_Identity__bool ctor_Identity_Identity__bool(int64_t _0) {
     tur_adt_Identity__bool __r;
     __r.wrapped = _0;
     return __r;
