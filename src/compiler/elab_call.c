@@ -5537,15 +5537,21 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         if (args[i] && fn_binding && fn_binding->name &&
             fn_binding->type.kind == TY_FN &&
             effect_row_is_empty(fn_binding->type.as.fn.effect_row) &&
-            sum_box_reader_name(fn_binding->name->name) &&
-            /* Which argument POSITIONS hold a readable box differs per
-             * callee, and the restriction is load-bearing: unwrap-or's arg 1
-             * is the DEFAULT, which the callee RETURNS on the None path --
-             * stamping it would free a value the caller receives.  The eq?
-             * comparators read boxes at 0 and 1; everything else at 0 only. */
-            (i == 0 ||
-             (i == 1 && (strcmp(fn_binding->name->name, "result-eq?") == 0 ||
-                         strcmp(fn_binding->name->name, "option-eq?") == 0)))) {
+            ((sum_box_reader_name(fn_binding->name->name) &&
+              /* Which argument POSITIONS hold a readable box differs per
+               * callee, and the restriction is load-bearing: unwrap-or's arg 1
+               * is the DEFAULT, which the callee RETURNS on the None path --
+               * stamping it would free a value the caller receives.  The eq?
+               * comparators read boxes at 0 and 1; everything else at 0 only. */
+              (i == 0 ||
+               (i == 1 && (strcmp(fn_binding->name->name, "result-eq?") == 0 ||
+                           strcmp(fn_binding->name->name, "option-eq?") == 0)))) ||
+             /* value-struct-payload-sum-monomorph-box-has-no-owner: or a USER
+              * callee whose body was inferred not to retain this sum-typed
+              * parameter (and whose result cannot carry it out) -- the same
+              * fact the name allowlist asserts, checked instead of trusted.
+              * Zero for inline-C bodies and dictionary-dispatched methods. */
+             (i < 32 && (fn_binding->nonretain_sum_param_mask & (1u << i))))) {
             Expr *a = args[i];
             while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
             if (a && a->kind == EX_CALL &&

@@ -4255,6 +4255,34 @@ static void sum_pending_drain(EmitCtx *ctx, Buf *body, uint32_t mark) {
     }
 }
 
+/* value-struct-payload-sum-monomorph-box-has-no-owner: the by-value twin of
+ * sum_pending -- a fresh Option/Result monomorph temp whose arm holds a boxed
+ * value-struct payload, consumed by a non-retaining callee; drained as the
+ * tag-dispatched arm free after the consuming call materializes. */
+static void vsp_pending_push(EmitCtx *ctx, const char *name, Type t) {
+    if (ctx->n_vsp_pending >= ctx->cap_vsp_pending) {
+        uint32_t nc = ctx->cap_vsp_pending ? ctx->cap_vsp_pending * 2 : 8;
+        char **nn = (char **)realloc(ctx->vsp_pending, nc * sizeof(char *));
+        Type *nt = (Type *)realloc(ctx->vsp_pending_types, nc * sizeof(Type));
+        if (!nn || !nt) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->vsp_pending = nn;
+        ctx->vsp_pending_types = nt;
+        ctx->cap_vsp_pending = nc;
+    }
+    ctx->vsp_pending[ctx->n_vsp_pending] = strdup(name);
+    ctx->vsp_pending_types[ctx->n_vsp_pending] = t;
+    ctx->n_vsp_pending++;
+}
+
+static void vsp_pending_drain(EmitCtx *ctx, Buf *body, uint32_t mark) {
+    while (ctx->n_vsp_pending > mark) {
+        uint32_t k = --ctx->n_vsp_pending;
+        emit_boxed_struct_payload_free(ctx, body, ctx->vsp_pending[k],
+                                       ctx->vsp_pending_types[k]);
+        free(ctx->vsp_pending[k]);
+    }
+}
+
 static void any_pending_drain(EmitCtx *ctx, Buf *body, uint32_t mark) {
     while (ctx->n_any_pending > mark) {
         char *nm = ctx->any_pending[--ctx->n_any_pending];
@@ -4301,6 +4329,28 @@ void emit_any_scope_drops(EmitCtx *ctx, Buf *body) {
     }
 }
 
+/* value-struct-payload-sum-monomorph-box-has-no-owner (the void-consumer
+ * gap): emit_value drains a node's pending drops only when it MATERIALIZES the
+ * call into a temp, and deliberately leaves a void/never call's entries "to an
+ * enclosing call".  At STATEMENT position there is no enclosing call, so a
+ * fresh sum box passed to `(defn outcome [r : (Result ..)] : void ...)` had
+ * its free pushed and never drained -- correct at every hoist, orphaned at the
+ * one place a void consumer actually lives.  The statement emitter brackets
+ * the call with these two: mark before, drain after the statement is written,
+ * for all three pending families at once.  Draining past a NON-void call is a
+ * no-op (its own hoist already drained to the same point), so the bracket is
+ * unconditional. */
+void emit_pending_drops_mark(EmitCtx *ctx, uint32_t m[3]) {
+    m[0] = ctx->n_any_pending;
+    m[1] = ctx->n_sum_pending;
+    m[2] = ctx->n_vsp_pending;
+}
+void emit_pending_drops_drain(EmitCtx *ctx, Buf *body, const uint32_t m[3]) {
+    any_pending_drain(ctx, body, m[0]);
+    sum_pending_drain(ctx, body, m[1]);
+    vsp_pending_drain(ctx, body, m[2]);
+}
+
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* G3 general catch-unwind splitter: a registered hole emits its C temp name
      * verbatim (the suspended sub-expression's already-delivered value). */
@@ -4329,6 +4379,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Mark before the children run: everything they push belongs to THIS node. */
     uint32_t any_mark = ctx->n_any_pending;
     uint32_t sum_mark = ctx->n_sum_pending;
+    uint32_t vsp_mark = ctx->n_vsp_pending;
     char *v = emit_value_dispatch(ctx, body, e);
     g_emit_expr_depth--;
     /* S1/findings 16: capture-and-clear the builder's ret-type note
@@ -4632,6 +4683,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * to an enclosing call instead of dropping them early. */
     any_pending_drain(ctx, body, any_mark);
     sum_pending_drain(ctx, body, sum_mark);
+    vsp_pending_drain(ctx, body, vsp_mark);
     /* And if THIS call is itself an owned `any` argument, its temp is what the
      * enclosing call will drop.  Pushed after the drain so it belongs to the
      * PARENT's mark, not this node's. */
@@ -4644,6 +4696,14 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * both misses are status-quo leaks, never a double free. */
     if (e->sum_box_drop_after && ret_ct && strcmp(ret_ct, "int64_t") == 0)
         sum_pending_push(ctx, tmp);
+    /* ... and the by-value twin: the temp IS the monomorph aggregate (not the
+     * carrier word, not a pointer), and its arm holds a boxed value-struct
+     * payload.  The consumer was proven non-retaining at elab (allowlist or
+     * inferred mask), so the box is dead once that call returns. */
+    else if (e->sum_box_drop_after && ret_ct &&
+             strcmp(ret_ct, "int64_t") != 0 && strchr(ret_ct, '*') == NULL &&
+             adt_app_has_boxed_struct_payload(ctx, e->type))
+        vsp_pending_push(ctx, tmp, e->type);
     return strdup(tmp);
 }
 

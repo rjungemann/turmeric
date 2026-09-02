@@ -189,6 +189,61 @@ NEGATES. The correct drop-site test is `adt_field_is_ros_pointer_box(def,
 it agrees with the typedef and the ctor-argument path (all three key on the
 same rule).
 
+## Direction 3, widened: 5 of the 9 (2026-09-02)
+
+The let-scope drop above reached 2 fixtures because, as the section below
+says, the dominant consumption shape is an ARGUMENT, not a binding. Two
+mechanisms now cover that shape, and the measurement moved from
+**465 -> 213 bytes** (9 leaking fixtures -> 4). Same sweep as before: the 11
+fixtures whose emitted C carries a malloc'ing `*__spec__*` sum ctor, built
+with ASan, bytes counted per fixture; the spec-ctor frames themselves account
+for 104 of the remaining 213.
+
+**Argument position: an inferred non-retaining sum-parameter mask.** A
+`defn` whose parameter is a stdlib `Option`/`Result` and whose body only ever
+reads that parameter through the known accessors (`some?`, `ok?`, `unwrap`,
+`ok-val`, ...) -- the same `box_uses_confined` walk RM1 uses, widened so an
+EX_CALL through a reader name or through a callee that itself carries the mask
+counts as confined -- gets the bit set in `Binding.nonretain_sum_param_mask`
+(`elab_fns.c`, mirroring `nonretain_ptr_param_mask`, including its
+scalar-result gate). `elab_call.c` then stamps `sum_box_drop_after` on a
+fresh-producer argument in a masked slot exactly as it does for the accessor
+readers, and the hoist in `emit_expr.c` pushes the value-struct payload free
+onto the pending list. `(res-ok? (rat/of 3 4))` -- the `rational-basics` shape
+-- now frees. Inline-C bodies zero the mask, as they do the other two.
+
+**Void consumers: statement-position drain.** A call in statement position
+whose result is `: void` never reaches `emit_value`, so the frees its
+arguments had pushed stayed on the pending list and were emitted at the wrong
+scope (or never). `emit_stmt.c`'s `EX_CALL`/`EX_CALLCC` arms now bracket the
+call with `emit_pending_drops_mark`/`emit_pending_drops_drain` (exported from
+`emit_expr.c`), draining the `any`, carrier-sum, and value-struct-payload
+lists back to the mark right after the call. `outcome : void` in
+`rational-overflow` was the trigger.
+
+Now fully ASan-clean and carrying `requires.leak-check`: `rational-basics`
+(112 B of teeth) and `rational-overflow`, alongside
+`polymorphic-ok-err-value-struct-payload` from the first round. `rational-arith`
+and `instance-method-return-carrier-bridge` are also clean of this class.
+
+**The remaining 4 are by design, not by miss:**
+
+- `conv-defstruct-result-struct-field-typedef-order` and
+  `result-over-struct-with-option-field-typedef-order`: the consumer is
+  `describe [r : (Result User cstr)] : cstr`. The mask's scalar-result gate
+  excludes `cstr` results (a returned `cstr` could alias the payload), exactly
+  as the `ptr` mask does; lifting that needs an aliasing fact the checker does
+  not have.
+- `constrained-instance-element-dispatch` and `nested-construct-byvalue-decode`:
+  `enc`/`dec` are dictionary-dispatched class methods, and the instance bodies
+  are inline C. Dispatch goes through a dictionary slot, so there is no
+  `Binding` at the call site to carry a mask, and inline C zeros it anyway.
+
+Both residues are the argument for the glue route (drop glue on the monomorph,
+freeing the arm at the consumer's scope exit regardless of what the consumer
+is), which is still the fix that scales. Suite 2749/0, leak-check 65/0/0,
+option-niche seam 9/0, SR4 seam 24/0.
+
 ## Related
 
 - [carrier-sum-option-boxes-have-no-owner](carrier-sum-option-boxes-have-no-owner.md)

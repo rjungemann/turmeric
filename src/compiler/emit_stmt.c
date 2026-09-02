@@ -287,8 +287,11 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             return;
         }
         case EX_CALLCC: {   /* call-cc-completion: run for effect, discard value */
+            uint32_t pd_mark[3];
+            emit_pending_drops_mark(ctx, pd_mark);
             char *v = emit_value(ctx, body, e);
             free(v);
+            emit_pending_drops_drain(ctx, body, pd_mark);
             return;
         }
         case EX_WHILE: emit_while_stmt(ctx, body, e); return;
@@ -475,7 +478,12 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                 }
             }
-            /* Emit as expression statement */
+            /* Emit as expression statement.  Bracketed by the pending-drop
+             * mark/drain: a VOID callee never materializes in emit_value, so a
+             * fresh sum-box argument's free (stamped sum_box_drop_after) would
+             * otherwise be orphaned here -- see emit_pending_drops_mark. */
+            uint32_t pd_mark[3];
+            emit_pending_drops_mark(ctx, pd_mark);
             char *v = emit_value(ctx, body, e);
             indent_buf(body, ctx->indent);
             if (e->type.kind == TY_NIL) {
@@ -484,6 +492,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "(void)(%s);\n", v);
             }
             free(v);
+            emit_pending_drops_drain(ctx, body, pd_mark);
             return;
         }
         case EX_FN:

@@ -17,7 +17,7 @@ hiding a real default-path defect in the other.
 | fixture scaffolding | `httpd-req-string-opt`'s `fake-conn-cookie` / `fake-conn-body` | ~3.5 K | **nobody's** -- the fixture's own `calloc`'d `HttpdConn` and `strdup`'d headers, never freed by the test |
 | fixture-owned runtime values | `option-niche-crossings` (`vec_new`, `vec_push_ex`, `tur_string_from_bytes`) | ~0.4 K | **nobody's** -- Vecs and Strings the fixture allocates and never `vec-free`s |
 | recursive sum spine | `re-string`'s `ctor_RxCons` / `ctor_REmpty` / `ctor_RxNil` | ~0.6 K | **RM2** (the recursive spine), not RM1 |
-| **value-struct payload box** | `rational-*`'s `ok__spec__...` / `err__spec__...` | 0.46 K -> 0.36 K | **a defect**, filed: [value-struct-payload-sum-monomorph-box-has-no-owner](../reported/value-struct-payload-sum-monomorph-box-has-no-owner.md); a scope-exit drop now covers the let-bound shape (2 of 9 fixtures), the rest flow into user functions |
+| **value-struct payload box** | `rational-*`'s `ok__spec__...` / `err__spec__...` | 0.46 K -> 0.21 K | **a defect**, filed: [value-struct-payload-sum-monomorph-box-has-no-owner](../reported/value-struct-payload-sum-monomorph-box-has-no-owner.md); a scope-exit drop covers the let-bound shape, an inferred non-retaining sum-param mask plus a statement-position drain cover the argument shape (5 of 9 fixtures clean); the remaining 4 are `cstr`-returning readers and dictionary-dispatched inline-C methods, which need the glue route |
 | erased sum carrier | `hkt-*`, `result-basic` | ~1.0 K remaining | **RM1**, partially closed 2026-08-30 |
 
 ## The two things worth carrying forward

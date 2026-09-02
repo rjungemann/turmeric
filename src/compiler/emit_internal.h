@@ -354,6 +354,14 @@ typedef struct EmitCtx {
     char    **sum_pending;
     uint32_t  n_sum_pending;
     uint32_t  cap_sum_pending;
+    /* value-struct-payload-sum-monomorph-box-has-no-owner: pending frees for
+     * fresh BY-VALUE sum monomorph temps whose arm holds a boxed value-struct
+     * payload, consumed as a non-retaining argument.  Name + type pairs (the
+     * arm layout is per-monomorph); same mark/drain discipline. */
+    char    **vsp_pending;
+    Type     *vsp_pending_types;
+    uint32_t  n_vsp_pending;
+    uint32_t  cap_vsp_pending;
     /* any-struct-box-leak-per-widen: C names of `any` locals whose payload box
      * the ENCLOSING SCOPES own, innermost last.  The scope-exit drop is a
      * trailing free, so an early exit -- a `return`, or a self-tail-call's
@@ -897,6 +905,11 @@ bool sum_box_binding_escapes(const Expr *e, const Binding *b);
  * escape walk's whitelist and elab_call.c's drop-after stamp so the two
  * cannot drift. */
 bool sum_box_reader_name(const char *nm);
+bool sum_param_is_nonretaining(const Expr *body, const Binding *p);
+/* The pending-drop bracket for a call at STATEMENT position (emit_stmt.c);
+ * see emit_pending_drops_mark's comment in emit_expr.c. */
+void emit_pending_drops_mark(EmitCtx *ctx, uint32_t m[3]);
+void emit_pending_drops_drain(EmitCtx *ctx, Buf *body, const uint32_t m[3]);
 /* catch-unwind-return-bridge-residuals (Part B): like catch_box_binding_escapes
  * but the single occurrence `ignore` (the return-tail use the caller is about to
  * copy out and free) is not counted as an escape.  Used to prove a returned

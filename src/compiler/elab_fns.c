@@ -72,6 +72,7 @@ bool elab_body_returns_fresh_sum_box(const Expr *e) {
 
 bool ptr_param_is_nonretaining(const Expr *body, const Binding *p,
                                bool result_cannot_carry);
+bool sum_param_is_nonretaining(const Expr *body, const Binding *p);
 
 /* closure-capture-escapes-linearity: one enclosing linear/unique binding's
  * substructural state, recorded before a lambda body is elaborated so the body's
@@ -8420,10 +8421,38 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * only be treated as non-retained if the function's own result cannot carry
      * it back out. */
     b->nonretain_ptr_param_mask = 0;
+    b->nonretain_sum_param_mask = 0;
     if (body && !expr_subtree_has_inline_c(body)) {
         for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
             Binding *_pb = params[_pi];
             if (!_pb) continue;
+            /* value-struct-payload-sum-monomorph-box-has-no-owner: a stdlib
+             * Option/Result-typed parameter joins the inference.  Same result
+             * gate as the pointer-scalar case (a non-pointer scalar result
+             * cannot carry the param or its arm pointer back out), same
+             * inline-C exclusion (enforced by the enclosing `if`). */
+            {
+                const AdtDef *_sd = NULL;
+                if (_pb->type.kind == TY_APP) _sd = type_adt_app_def(&_pb->type);
+                else if (_pb->type.kind == TY_ADT) _sd = _pb->type.as.adt_.def;
+                bool _is_sum = _sd && _sd->name &&
+                    (strcmp(_sd->name, "Option") == 0 || strcmp(_sd->name, "Result") == 0);
+                if (_is_sum) {
+                    TypeKind _srk = (b->type.kind == TY_FN) ? b->type.as.fn.result_kind
+                                                            : TY_UNKNOWN;
+                    bool _sres_safe = false;
+                    switch (_srk) {
+                        case TY_NIL: case TY_INT: case TY_BOOL: case TY_FLOAT:
+                        case TY_INT64: case TY_UINT64: case TY_INT32: case TY_UINT32:
+                        case TY_INT16: case TY_UINT16: case TY_INT8: case TY_UINT8:
+                        case TY_FLOAT64: case TY_FLOAT32:
+                            _sres_safe = true; break;
+                        default: break;
+                    }
+                    if (_sres_safe && sum_param_is_nonretaining(body, _pb))
+                        b->nonretain_sum_param_mask |= (1u << _pi);
+                }
+            }
             bool _is_fnparam = _pb->is_fat || _pb->is_poly_fn ||
                                _pb->type.kind == TY_FN;
             if (_is_fnparam && !closure_binding_escapes(body, _pb))

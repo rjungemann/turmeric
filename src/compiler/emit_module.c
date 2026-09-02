@@ -14379,6 +14379,9 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.any_pending);
     for (uint32_t _i = 0; _i < ctx.n_sum_pending; _i++) free(ctx.sum_pending[_i]);
     free(ctx.sum_pending);
+    for (uint32_t _i = 0; _i < ctx.n_vsp_pending; _i++) free(ctx.vsp_pending[_i]);
+    free(ctx.vsp_pending);
+    free(ctx.vsp_pending_types);
     for (uint32_t _i = 0; _i < ctx.n_any_scope_drops; _i++) free(ctx.any_scope_drops[_i]);
     free(ctx.any_scope_drops);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
@@ -15805,6 +15808,9 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     free(ctx.any_pending);
     for (uint32_t _i = 0; _i < ctx.n_sum_pending; _i++) free(ctx.sum_pending[_i]);
     free(ctx.sum_pending);
+    for (uint32_t _i = 0; _i < ctx.n_vsp_pending; _i++) free(ctx.vsp_pending[_i]);
+    free(ctx.vsp_pending);
+    free(ctx.vsp_pending_types);
     for (uint32_t _i = 0; _i < ctx.n_any_scope_drops; _i++) free(ctx.any_scope_drops[_i]);
     free(ctx.any_scope_drops);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);

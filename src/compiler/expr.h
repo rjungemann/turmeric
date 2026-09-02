@@ -572,6 +572,17 @@ struct Binding {
      * callee's body rather than trusted from a name list.  Params beyond bit 31
      * are left unset (conservative -- no free). */
     uint32_t            nonretain_ptr_param_mask;
+    /* value-struct-payload-sum-monomorph-box-has-no-owner: the same inference
+     * for a stdlib Option/Result-typed parameter -- "this body reads that sum
+     * value (accessors, non-retaining callees) and never keeps it or its arm
+     * pointer".  Lets a caller free a FRESH sum argument's payload box right
+     * after the call, exactly as the reader allowlist does, but inferred from
+     * the callee body instead of trusted by name -- which is what reaches a
+     * user wrapper like `(defn res-ok? [r] (ok? r))`.  Zero for any body
+     * containing inline C (a C body can stash the pointer), and only set when
+     * the function's own result is a non-pointer scalar, so it cannot carry
+     * the param or its arm back out. */
+    uint32_t            nonretain_sum_param_mask;
     /* closure-drop-glue S1c (fresh-closure-returning fn): true when this function
      * binding's body is a bare capturing EX_CLOSURE with only scalar (Copy)
      * captures and a scalar result -- so every call mallocs a FRESH, uniquely

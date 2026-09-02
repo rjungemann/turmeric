@@ -1533,6 +1533,11 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
             if (!acc && nm && strcmp(nm, "err-val") == 0 &&
                 err_val_result_is_freeable_scalar(e->type.kind))
                 acc = true;
+            /* value-struct-payload sum drop: under the sum flag the whole
+             * audited reader family is an accessor (their results are copies
+             * or bools, never a pointer into the arm box). */
+            if (!acc && g_esc_allow_sum_accessors && nm && sum_box_reader_name(nm))
+                acc = true;
             bool sink = box_reader_result_void_sink(nm);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 const Expr *a = e->as.call_.args[i];
@@ -1540,9 +1545,13 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
                  * print family, a USER-DEFINED callee confines this argument
                  * when its body was inferred not to retain that parameter.
                  * Per-argument rather than per-call: a two-parameter logger may
-                 * retain one and print the other. */
+                 * retain one and print the other.  Under the sum flag the
+                 * callee's SUM mask answers the same question for a sum-typed
+                 * argument -- this is what lets `res-ok?` -> `ok?` chain. */
                 bool arg_sink = sink ||
-                    (fb && i < 32 && (fb->nonretain_ptr_param_mask & (1u << i)));
+                    (fb && i < 32 && (fb->nonretain_ptr_param_mask & (1u << i))) ||
+                    (g_esc_allow_sum_accessors && fb && i < 32 &&
+                     (fb->nonretain_sum_param_mask & (1u << i)));
                 if (a && a->kind == EX_VAR && a->as.var.binding == b) {
                     if (acc) continue;             /* scalar result cannot alias */
                     if (arg_sink) continue;        /* printed, not retained */
@@ -1605,6 +1614,17 @@ bool ptr_param_is_nonretaining(const Expr *body, const Binding *p,
                                bool result_cannot_carry) {
     if (!body || !p) return false;
     return box_uses_confined(body, p, result_cannot_carry);
+}
+
+/* value-struct-payload-sum-monomorph-box-has-no-owner: the same walk for a
+ * stdlib Option/Result-typed parameter, with the sum accessor family admitted
+ * and callees' sum masks consulted.  Same posture: only ever clears a bit. */
+bool sum_param_is_nonretaining(const Expr *body, const Binding *p) {
+    if (!body || !p) return false;
+    g_esc_allow_sum_accessors = true;
+    bool r = box_uses_confined(body, p, /*confined=*/true);
+    g_esc_allow_sum_accessors = false;
+    return r;
 }
 
 /* Check whether the fall-through point after `e` is unreachable -- i.e. every
