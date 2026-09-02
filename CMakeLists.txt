@@ -224,16 +224,15 @@ add_test(
   COMMAND bash tests/run-fmt.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
-# SR4 seam-rot gate: recursive sums by value (TUR_SR4_RECURSIVE_BYVALUE=1) are
-# OFF by default -- a measured performance decision, not a correctness one --
-# so nothing else in CI ever compiles a recursive sum by value, and the seam's
-# 2708-green state (2026-08-27) would rot silently as the compiler moves.
-# This harness re-runs the recursive-sum fixture population under the seam
-# (build + run + stdout compare, ~22 fixtures) behind a canary that asserts
-# the seam actually bites (ctor_SBind returns the aggregate, not int64_t), so
-# an env-var rename can't quietly turn it into a re-test of the default path.
-# See the is_self_recursive decision record in src/compiler/types.c and the
-# SR plan's SR4 section for why the seam exists at all.
+# SR4 seam-rot gate.  Recursive sums flow BY VALUE by default since RM4
+# (2026-09-02); TUR_SR4_RECURSIVE_CARRIER=1 restores the int64 carrier for A/B
+# measurement, so nothing else in CI ever compiles a recursive sum through the
+# carrier and that path would rot silently as the compiler moves.  This harness
+# re-runs the recursive-sum fixture population under the seam (build + run +
+# stdout compare, ~22 fixtures) behind a canary that asserts the seam actually
+# bit (the logic ctor returns int64_t), so a renamed env var fails loudly
+# instead of silently re-testing the default path.  RUN_SERIAL for the same
+# reason as the suites above.
 add_test(
   NAME tur_sr4_seam
   COMMAND bash tests/run-sr4-seam.sh

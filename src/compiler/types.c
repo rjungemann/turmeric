@@ -3297,8 +3297,8 @@ static bool adt_sr1_sum_candidate(const AdtDef *def) {
     if (!def || def->is_gadt || def->is_heap) return false;
     if (def->n_ctors < 2 || def->n_type_params != 0) return false;
     if (!def->ctors) return false;
-    /* SR4 measurement seam (2026-08-27): TUR_SR4_RECURSIVE_BYVALUE=1 admits
-     * recursive sums to the by-value path.  The suite is GREEN with it on --
+    /* SR4 measurement seam (2026-08-27): TUR_SR4_RECURSIVE_BYVALUE=1 admitted
+     * recursive sums to the by-value path (the default since RM4, below).  The suite is GREEN with it on --
      * every codegen blocker is fixed (the fat-dispatch ABI disagreement,
      * resolved by unifying every fat boundary on the b4box convention via
      * thunk_param_slot_c_name; see the archived
@@ -3324,7 +3324,16 @@ static bool adt_sr1_sum_candidate(const AdtDef *def) {
      * reasonably take it, but the default stays carrier until one asks.  is_self_recursive is the
      * boundary; adt_graph_reaches below is the separate SOUNDNESS gate over
      * inline-field cycles and is never bypassed. */
-    if (def->is_self_recursive && !getenv("TUR_SR4_RECURSIVE_BYVALUE"))
+    /* RM4 (reclamation-plan.md, 2026-09-02): the default FLIPPED to by value.
+     * Re-measured on the same two workloads after RM0 established that no
+     * arena is coming to make the carrier's mallocs cheap (RM2/RM3 have no
+     * constituency): logic bind+walk 400k passes carrier 0.49s / by-value
+     * 0.51s (~1.03x) at 370 MB -> 202 MB peak RSS; re compile+match 5k passes
+     * 68-90 ms / 65-71 ms (no slower) at 41 MB -> 33 MB.  The time side of the
+     * trade shrank to noise while the memory side held, and the premise for
+     * waiting is gone.  TUR_SR4_RECURSIVE_CARRIER=1 restores the carrier for
+     * A/B measurement; tests/run-sr4-seam.sh keeps THAT path from rotting now. */
+    if (def->is_self_recursive && getenv("TUR_SR4_RECURSIVE_CARRIER"))
         return false;
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         const CtorDef *c = def->ctors[ci];

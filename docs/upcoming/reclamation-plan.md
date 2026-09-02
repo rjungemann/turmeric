@@ -509,6 +509,17 @@ re-measurement is a re-run, not a re-excavation.
 Deliverable: the SR plan's SR4 section updated with a decision, either
 direction. RM4 is not entitled to leave it open a second time.
 
+**RM4 ran on 2026-09-02, and decided: by value.** RM0 removed the premise for
+waiting (no arena is coming), and the re-measurement on the same two
+workloads came back at ~1.03x time for 1.8x less memory on `logic.tur`
+(370 -> 202 MB peak RSS at 400k passes) and no slower at 1.2x less on
+`re.tur`. The default is flipped at the one line the SR plan named;
+`TUR_SR4_RECURSIVE_CARRIER=1` restores the carrier and the seam harness now
+guards that path. Full suite 2749/0 with no snapshot drift. The decision
+record is in the SR plan's SR4 section. The erased sweep moved with it,
+6856 -> 6091 B, all of it `re-string`'s payload boxes (1281 -> 516); the
+spine boxes are what remain there.
+
 ## 4. What this plan does not do
 
 - **Region inference.** Named as the hard part by the benchmark's own caveat.

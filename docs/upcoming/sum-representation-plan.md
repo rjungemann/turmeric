@@ -6,7 +6,7 @@ description: Lowering multi-variant ADTs by value, converting Option and Result 
 
 # Sum Representation (SR)
 
-**Status: SR1 is BUILT and ON by default (2026-08-26).** SR2-SR4 unstarted.
+**Status: SR1 is BUILT and ON by default (2026-08-26).** SR2a/b built and default; SR3 slice A default, slice B behind `--enable=option-niche`; SR4 default flipped to by value 2026-09-02 (RM4).
 
 **SR0's verdict -- "do not start SR1 for performance" -- was wrong, and section
 5 of this plan says why.** SR0(a) and the SR1 gate both priced SR1 against
@@ -561,7 +561,29 @@ the erased-crossing bridges are the ones that graduation must harden anyway.
 Building it before then doubles the bridge states for an 8-byte win on a
 non-default tier.
 
-### SR4 -- recursive sums -- UNBLOCKED AND MEASURED 2026-08-27; default stays carrier
+### SR4 -- recursive sums -- DEFAULT FLIPPED TO BY VALUE 2026-09-02 (RM4)
+
+**Decision: by value is the default.** RM4 in
+[reclamation-plan.md](reclamation-plan.md) owned this and re-measured the same
+two workloads after RM0 established that no arena is coming (RM2/RM3 have no
+constituency), which was the premise for waiting:
+
+| workload | carrier | by value | |
+|---|---:|---:|---|
+| logic.tur bind+walk, 400k passes, n=8 | 0.49-0.51 s | 0.51-0.52 s | ~1.03x |
+| ... peak RSS | 370 MB | 202 MB | 1.8x less |
+| re.tur compile+match, 5k passes | 68-90 ms | 65-71 ms | not slower |
+| ... peak RSS | 41 MB | 33 MB | 1.2x less |
+
+The time side of the trade shrank to noise while the memory side held, so
+the one-line flip was made (`is_self_recursive` in `adt_sr1_sum_candidate`,
+types.c). `TUR_SR4_RECURSIVE_CARRIER=1` restores the carrier for A/B
+measurement, and `tests/run-sr4-seam.sh` (ctest `tur_sr4_seam`) now keeps
+THAT path green with the inverted canary. Full suite 2749/0 under the flip
+with no snapshot drift; leak-check 70/0/0; both seams green. The section
+below is the pre-flip record.
+
+### SR4 (pre-flip record) -- UNBLOCKED AND MEASURED 2026-08-27; default stayed carrier
 
 **The blocker is fixed.** The fat-dispatch ABI disagreement is
 [resolved](../archive/fat-dispatch-wide-byvalue-aggregate-argument.md) --

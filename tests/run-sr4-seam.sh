@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # tests/run-sr4-seam.sh -- keep the SR4 seam's green state from rotting.
 #
-# TUR_SR4_RECURSIVE_BYVALUE=1 admits recursive sums (Term, Subst, Stream,
-# Regex, ...) to the by-value path.  The seam is OFF by default -- a measured
-# performance decision, not a correctness one (see the is_self_recursive test
-# in src/compiler/types.c and the SR plan's SR4 section) -- which means
-# nothing in the ordinary suite ever compiles a recursive sum by value.  A
-# gate nobody turns on decays to a gate nobody notices (the lesson of
-# docs/reported/sanitizer-gate-not-armed-in-ci.md), and the full suite was
-# 2708-green under this seam on 2026-08-27; this harness is what keeps that
-# claim true as the compiler moves, so the flip stays a one-line decision
-# instead of a re-excavation.
+# Recursive sums (Term, Subst, Stream, Regex, ...) flow BY VALUE by default
+# since RM4 (2026-09-02; see the is_self_recursive test in src/compiler/types.c
+# and the SR plan's SR4 section).  TUR_SR4_RECURSIVE_CARRIER=1 restores the
+# int64 carrier for A/B measurement, which means nothing in the ordinary suite
+# ever compiles a recursive sum through the carrier any more.  A gate nobody
+# turns on decays to a gate nobody notices (the lesson of
+# docs/reported/sanitizer-gate-not-armed-in-ci.md); this harness keeps the
+# carrier path green as the compiler moves, so the A/B stays a one-line
+# switch instead of a re-excavation.  (Before the flip it kept the by-value
+# path green the same way; the population below is unchanged.)
 #
 # Two checks:
-#   1. A CANARY: emit-c of a logic fixture must show the by-value ctor
-#      signature (`static tur_adt_Subst ctor_SBind(`).  Under the carrier the
-#      same ctor returns int64_t, so if the env var is ever renamed or the
-#      gate stops reading it, this harness fails LOUDLY instead of silently
+#   1. A CANARY: emit-c of a logic fixture must show the carrier ctor
+#      signature (`static int64_t ctor_SBind(`).  By value the same ctor
+#      returns tur_adt_Subst, so if the env var is ever renamed or the gate
+#      stops reading it, this harness fails LOUDLY instead of silently
 #      re-testing the default path.
 #   2. Every fixture below -- the recursive-sum population plus the SR1/fat-ABI
 #      fixtures the seam must not perturb -- builds and prints its committed
@@ -27,7 +27,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-export TUR_SR4_RECURSIVE_BYVALUE=1
+export TUR_SR4_RECURSIVE_CARRIER=1
 # The compiler binary is ASan-instrumented in Debug; emitted programs are not.
 # Leak-checking the compile path stays the ordinary suite's job -- this
 # harness answers "does the seam still produce correct programs".
@@ -60,12 +60,12 @@ canary_c="$WORKDIR/canary.c"
 if ! $TIMEOUT "$TUR" emit-c tests/fixtures/logic-unify-basic/input.tur \
         > "$canary_c" 2>/dev/null; then
     fail "sr4-seam-canary" "emit-c of logic-unify-basic failed under the seam"
-elif grep -q "static tur_adt_Subst ctor_SBind(" "$canary_c"; then
-    pass "sr4-seam-canary (ctor_SBind returns tur_adt_Subst by value)"
+elif grep -q "static int64_t ctor_SBind(" "$canary_c"; then
+    pass "sr4-seam-canary (ctor_SBind returns the int64 carrier)"
 else
     fail "sr4-seam-canary" \
-        "ctor_SBind is not by-value -- the seam did not bite.  If \
-TUR_SR4_RECURSIVE_BYVALUE was renamed or the is_self_recursive gate moved, \
+        "ctor_SBind is not the carrier -- the seam did not bite.  If \
+TUR_SR4_RECURSIVE_CARRIER was renamed or the is_self_recursive gate moved, \
 update this harness in the same change."
 fi
 

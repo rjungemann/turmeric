@@ -982,9 +982,10 @@ moved to
 every fat boundary now speaks one convention (a wide by-value aggregate
 crosses as an int64 box pointer), spelled in one place and consulted by the
 typedef, the dispatches, the fatshims and the thunk emitters alike. Its
-resolution also records why SR4 (recursive sums by value) is green but OFF by
-default: measured 1.4x slower / 2.2x less memory on the logic and regex
-workloads -- a trade to make deliberately, behind TUR_SR4_RECURSIVE_BYVALUE=1.
+resolution also records why SR4 (recursive sums by value) was green but OFF by
+default at the time (measured 1.4x slower / 2.2x less memory). **Flipped to
+by value 2026-09-02 (RM4)** once the time cost re-measured at ~1.03x with
+no arena coming; `TUR_SR4_RECURSIVE_CARRIER=1` restores the carrier.
 
 `multi-variant-adts-always-heap-allocate` was resolved 2026-08-26 for the
 NON-RECURSIVE sum population and moved to
@@ -992,11 +993,11 @@ NON-RECURSIVE sum population and moved to
 shipped on by default: such a sum flows by value as a tag+union aggregate, so
 it neither mallocs nor leaks (1005 allocations / 24,112 leaked bytes -> zero on
 the guarding fixture; 62.6 MB -> 1.2 MB peak RSS on a 2e6-construction loop).
-Two things to carry forward. **Recursive sums are unchanged** -- `Term`,
-`Subst`, `Stream` and 18 others still box and still leak, which means the
-callgrind numbers that made this report look urgent are unimproved; they are
-SR4's, blocked on `stdlib/logic.tur` ascribing carrier-erased results back to a
-sum type, not on codegen. And **the "do not start SR1 for performance" verdict
+Two things to carry forward. **Recursive sums** -- `Term`, `Subst`, `Stream`
+and 18 others -- flow by value since 2026-09-02 (SR4/RM4), which halves their
+mallocs (the payload no longer boxes); the per-node SPINE box remains and
+still leaks, and RM0 recorded that no workload constructs enough of them to
+justify RM2/RM3. And **the "do not start SR1 for performance" verdict
 was wrong for the reason the SR plan's own section 5 warns about**: it was
 priced against `logic.tur`, a workload built entirely from recursive types and
 therefore structurally blind to the change being judged.
