@@ -126,17 +126,19 @@ is inside the folded alphabet and the split is ambiguous: ADT `a-b` constructor
 `c` and ADT `a` constructor `b-c` both spell `ctor_a_b_c`, and a user ADT named
 `Foo__int` is the `(Foo int)` monomorph's type name. Those are cc errors.
 
-The bare-name alias above is the arm that is **silent**: it tests uniqueness on
-the RAW constructor name but guards its `#define` on the MANGLED one, so `b-c`
-and `b_c` in two different ADTs both qualify as unique, and the second
-`#define` is dropped by its own `#ifndef`. Inline C calling `ctor_b_c` then
-reaches the other ADT's constructor with no diagnostic at any layer -- when both
-ADTs lower to the `int64_t` carrier, C's type system cannot see it either.
+The bare-name alias above used to add a **silent** arm: it tested uniqueness on
+the RAW constructor name but guarded its `#define` on the MANGLED one, so `b-c`
+and `b_c` in two different ADTs both qualified as unique and the second
+`#define` was dropped by its own `#ifndef` -- inline C calling `ctor_b_c` then
+reached the other ADT's constructor with no diagnostic at any layer, invisible
+to C too whenever both ADTs lower to the `int64_t` carrier. **Fixed:** the
+census stores mangled names and `ctor_base_name_is_unique` takes the mangled
+name, so the uniqueness test and the guard cannot disagree. Pinned by
+`tests/check-ctor-alias-ambiguity.sh` (ctest `tur_ctor_alias_ambiguity`).
 
-Open finding, with repros and fix directions:
+That leaves the fold ambiguity itself, which is still open (all loud):
 [docs/reported/separator-fold-collides-emitted-c-names.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/separator-fold-collides-emitted-c-names.md).
-Until its direction 1 lands, do not give two ADTs constructor names that differ
-only by a separator.
+Do not name an ADT after a monomorph spelling (`Foo__int`).
 
 See
 [docs/archive/duplicate-ctor-names-collide-in-emitted-c.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/duplicate-ctor-names-collide-in-emitted-c.md).

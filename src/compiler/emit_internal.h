@@ -919,7 +919,7 @@ char *mangle_ctor_symbol(const struct AdtDef *adt, const char *ctor_name);
  * inline C.  Fed from elab_register_adt_def; see emit_core.c. */
 void ctor_census_reset(void);
 void ctor_census_snapshot(struct AdtDef *const *defs, uint32_t n_defs);
-bool ctor_base_name_is_unique(const char *ctor_name);
+bool ctor_base_name_is_unique(const char *mangled_ctor_name);
 void emit_ctor_bare_alias(Buf *out, const struct AdtDef *def,
                           const struct CtorDef *ctor);
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);

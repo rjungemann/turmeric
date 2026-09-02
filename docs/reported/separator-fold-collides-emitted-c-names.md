@@ -1,15 +1,19 @@
 # Every separator folds to `_`, so distinct names share one emitted C symbol
 
-**Severity: medium.** Most of this family is a loud cc error, and would be low
-on its own. One arm is a **silent wrong answer with no diagnostic at any
-layer** -- hand-written inline C calling `ctor_b_c` reaches a *different ADT's*
-constructor -- and that arm is what sets the severity.
+**Severity: low**, reduced from medium on 2026-09-02 when the one silent arm
+was closed. Every remaining arm is a loud cc error and needs contrived names to
+reach.
 
-**Status:** OPEN. Filed 2026-09-02 while resolving
+**Status:** OPEN, partially resolved. Filed 2026-09-02 while resolving
 [duplicate-ctor-names-collide-in-emitted-c](../archive/duplicate-ctor-names-collide-in-emitted-c.md),
 whose fix qualifies the constructor symbol with its ADT and explicitly leaves
-this open. Pre-existing for the type-name arms; the silent arm arrived with
-that fix (see **Attribution**).
+this open.
+
+**Fix direction 1 landed 2026-09-02**, closing repro D -- the silent arm, and
+the only one that was a wrong answer rather than a compile error. Cause 1 (the
+fold ambiguity itself, repros A/B/C) is untouched and is what keeps this open.
+Kept here rather than archived with a "remaining work" heading, per the
+archiving rule in CLAUDE.md.
 
 ## The shape
 
@@ -27,7 +31,9 @@ that differ only by where a separator falls therefore collide.
 
 ## Repros
 
-All four reproduce against `336865d`. A/B/C are loud; D is not.
+A/B/C reproduce against today's `main` and are loud. **D no longer reproduces**
+-- it is kept below because it is the shape the ratchet now guards, and because
+the mechanism is the interesting part of this report.
 
 ### A -- constructor symbol, two ways to split (loud)
 
@@ -69,7 +75,7 @@ with different layouts. But reaching the outer collision requires instantiating
 `(Pair2 int)`, which trips B at the base first. Worth recording as a
 **negative result**: the outer arm has no quiet path of its own.
 
-### D -- the silent one: bare ctor alias binds to the wrong ADT
+### D -- the silent one: bare ctor alias binds to the wrong ADT (FIXED)
 
 ````turmeric
 ; Both parametric, so both constructors lower to the int64 carrier and C's type
@@ -92,9 +98,11 @@ with different layouts. But reaching the outer collision requires instantiating
   0)
 ````
 
-Builds with **no diagnostic of any kind** -- no turmeric error, no cc warning,
-no ASan report -- and prints `1`. The inline C asked for `Y`'s `b_c` and got
-`X`'s `b-c`.
+**Before the 2026-09-02 fix** this built with no diagnostic of any kind -- no
+turmeric error, no cc warning, no ASan report -- and printed `1`. The inline C
+asked for `Y`'s `b_c` and got `X`'s `b-c`. It now fails to build, naming
+`ctor_b_c` (`implicit declaration of function 'ctor_b_c'`, then a link error),
+which is the fail-closed behaviour the alias was designed around.
 
 Note what had to line up for this to be silent, because it is also the guide to
 which shapes are dangerous: **both ADTs must lower to the same C type.** With
@@ -157,14 +165,16 @@ information here.
 
 In rough order of cost.
 
-1. **Close cause 2 alone** (small, and it is the only silent arm). Make the
-   census agree with the guard by keying `ctor_base_name_is_unique` on the
-   MANGLED name -- `mangle_field_name(c->name)` -- rather than the raw one.
-   `b-c` and `b_c` then read as one name owned by two ADTs, neither gets an
-   alias, and inline C naming `ctor_b_c` fails at cc pointing at it. Restores
-   the fail-closed property the alias was designed around. **Do this first
-   whatever else happens**; it is a one-line key change plus a fixture, and it
-   converts the only silent case in the family into a loud one.
+1. ~~**Close cause 2 alone**~~ -- **DONE 2026-09-02.** The census stores both
+   names MANGLED (`ctor_census_push`) and `ctor_base_name_is_unique` takes the
+   mangled name, which is the same string the `#ifndef` guard uses, so the two
+   can no longer disagree. `b-c` and `b_c` now read as one name owned by two
+   ADTs, neither gets an alias, and inline C naming `ctor_b_c` fails at cc
+   pointing at it. Zero snapshot churn (no fixture has ambiguous names); suite
+   2748 passed / 0 failed. Guarded by `tests/check-ctor-alias-ambiguity.sh`
+   (ctest `tur_ctor_alias_ambiguity`), which was verified to go red against a
+   reverted compiler -- both silent-arm assertions fail, the two control
+   assertions stay green.
 2. **A collision diagnostic.** Detect two distinct source names folding to one
    emitted symbol and report it as a turmeric error naming both, instead of
    letting cc say `conflicting types for 'ctor_a_b_c'` with no hint that two
@@ -179,19 +189,25 @@ In rough order of cost.
    plus any hand-written inline C naming a monomorph. Worth coordinating as its
    own regen window rather than riding along with another change.
 
-Note the ordering is deliberate: 1 removes the silent wrong answer for
-essentially nothing, and 2 and 3 are then quality-of-diagnostic and
-completeness work that can be scheduled rather than rushed.
+The ordering was deliberate and it held up: 1 removed the silent wrong answer
+for essentially nothing, leaving 2 and 3 as quality-of-diagnostic and
+completeness work that can be scheduled rather than rushed. Nothing remaining
+in this report is a wrong answer.
 
 ## Workaround
 
-Do not give two ADTs constructor names that differ only by a separator
-(`b-c` vs `b_c`), and do not name an ADT after a monomorph spelling
-(`Foo__int`). Neither is checked, and the first is not diagnosed at all.
+Do not name an ADT after a monomorph spelling (`Foo__int`), and do not give two
+ADTs constructor names that differ only by where a separator falls (ADT `a-b`
+ctor `c` vs ADT `a` ctor `b-c`). Neither is checked; both fail at cc with a
+message that does not mention the two ADTs involved.
+
+The `b-c` / `b_c` case no longer needs a workaround: it is diagnosed, and the
+constructors remain reachable by their qualified symbols
+(`ctor_X_b_c` / `ctor_Y_b_c`).
 
 ## Guides to update when fixed
 
 - [docs/guides/name-mangling-guide.md](../guides/name-mangling-guide.md) --
-  its "ADT constructors" section states the residual ambiguity as a bounded
-  caveat; it needs the silent arm called out until direction 1 lands, and
-  rewriting entirely if direction 3 does.
+  its "ADT constructors" section carries the residual; updated 2026-09-02 to
+  record that the silent arm is closed. It needs rewriting entirely if
+  direction 3 lands.

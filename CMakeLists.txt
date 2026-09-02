@@ -474,6 +474,17 @@ add_test(
   COMMAND bash tests/check-static-cname-buffers.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# The bare-name constructor alias must fail CLOSED: no alias when the name has
+# more than one meaning, so inline C naming it fails at cc instead of silently
+# reaching whichever ADT was emitted first.  It did not, when the uniqueness
+# test keyed on the raw name and the #ifndef guard on the mangled one -- a
+# silent wrong constructor with no diagnostic at any layer.  See
+# docs/reported/separator-fold-collides-emitted-c-names.md.
+add_test(
+  NAME tur_ctor_alias_ambiguity
+  COMMAND bash tests/check-ctor-alias-ambiguity.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # docs/reported/README.md is the triage index: it must list every open finding
 # and nothing else.  It has drifted BOTH ways -- four rows left behind after
 # their reports were archived (so triage read four findings that were not open),

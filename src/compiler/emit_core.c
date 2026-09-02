@@ -1937,6 +1937,17 @@ void ctor_census_reset(void) {
     g_cap_ctor_census = 0;
 }
 
+/* Both names are stored MANGLED.  The alias the census gates expands to
+ * `ctor_<mangled adt>_<mangled ctor>` and is guarded on `<mangled ctor>`, so
+ * the mangled spelling is the only one that answers the question being asked.
+ * Storing the raw name made the uniqueness test and its guard disagree about
+ * what "the same name" means: `b-c` and `b_c` in two different ADTs read as two
+ * distinct unique names, both emitted an alias, and the second `#define` was
+ * dropped by its own `#ifndef` -- so `ctor_b_c` in inline C silently reached
+ * the FIRST ADT's constructor.  With both ADTs on the int64 carrier, C's type
+ * system could not see it either: no turmeric error, no cc warning, no ASan
+ * report, just the wrong constructor.  See
+ * docs/reported/separator-fold-collides-emitted-c-names.md. */
 static void ctor_census_push(const char *adt_name, const char *ctor_name) {
     if (g_n_ctor_census >= g_cap_ctor_census) {
         uint32_t nc = g_cap_ctor_census ? g_cap_ctor_census * 2 : 64;
@@ -1946,7 +1957,7 @@ static void ctor_census_push(const char *adt_name, const char *ctor_name) {
         g_ctor_census = nr;
         g_cap_ctor_census = nc;
     }
-    char *a = strdup(adt_name), *c = strdup(ctor_name);
+    char *a = mangle_field_name(adt_name), *c = mangle_field_name(ctor_name);
     if (!a || !c) { fprintf(stderr, "tur: oom\n"); abort(); }
     g_ctor_census[g_n_ctor_census].adt_name  = a;
     g_ctor_census[g_n_ctor_census].ctor_name = c;
@@ -1970,18 +1981,27 @@ void ctor_census_snapshot(struct AdtDef *const *defs, uint32_t n_defs) {
     }
 }
 
-/* True when exactly one ADT owns this constructor name, so a bare-name alias
- * for the ADT-qualified symbol is unambiguous.  A name the census never saw
- * answers false -- fail closed, because a missing alias is a loud compile error
- * and a wrong one is a silent wrong answer. */
-bool ctor_base_name_is_unique(const char *ctor_name) {
-    if (!ctor_name) return false;
+/* True when every constructor whose MANGLED name is `mangled_ctor_name` belongs
+ * to one ADT -- so the bare-name alias for it has exactly one meaning.
+ *
+ * `mangled_ctor_name` must already be mangled: it is compared against the
+ * census's mangled rows, and it is the same string the alias is guarded on.
+ * Two constructors that differ only by a separator (`b-c`, `b_c`) mangle alike
+ * and are correctly a conflict here, because they would fight over one macro.
+ *
+ * A name the census never saw answers false -- fail closed, because a missing
+ * alias is a loud compile error and a wrong one is a silent wrong answer. */
+bool ctor_base_name_is_unique(const char *mangled_ctor_name) {
+    if (!mangled_ctor_name) return false;
     const char *owner = NULL;
     for (uint32_t i = 0; i < g_n_ctor_census; i++) {
-        if (strcmp(g_ctor_census[i].ctor_name, ctor_name) != 0) continue;
-        /* Keyed on the ADT NAME, not identity: re-elaboration and module
-         * reloads legitimately yield two entries for one ADT, and both spell
-         * the SAME qualified symbol, so they are not a conflict. */
+        if (strcmp(g_ctor_census[i].ctor_name, mangled_ctor_name) != 0) continue;
+        /* Compared on the mangled ADT name, not identity: re-elaboration and
+         * module reloads legitimately yield two entries for one ADT, and both
+         * spell the SAME qualified symbol, so they are not a conflict.  Two
+         * ADTs whose names differ but mangle alike are likewise not a conflict
+         * for the ALIAS -- they already collide at the qualified symbol, which
+         * is the other half of the same report. */
         if (!owner) owner = g_ctor_census[i].adt_name;
         else if (strcmp(owner, g_ctor_census[i].adt_name) != 0) return false;
     }
@@ -1994,8 +2014,11 @@ bool ctor_base_name_is_unique(const char *ctor_name) {
  * Header-guarded so a re-emitted ADT does not redefine it. */
 void emit_ctor_bare_alias(Buf *out, const AdtDef *def, const CtorDef *ctor) {
     if (!out || !def || !ctor || !ctor->name) return;
-    if (!ctor_base_name_is_unique(ctor->name)) return;
+    /* Ask the census about the same string the guard below uses -- the MANGLED
+     * name.  These two disagreeing is what made the alias bind silently to the
+     * wrong ADT; keeping the query and the guard on one spelling is the fix. */
     char *bare = mangle_field_name(ctor->name);
+    if (!ctor_base_name_is_unique(bare)) { free(bare); return; }
     char *qual = mangle_ctor_symbol(def, ctor->name);
     if (strcmp(bare, qual) != 0) {
         buf_printf(out, "#ifndef TUR_CTORALIAS_%s\n", bare);
