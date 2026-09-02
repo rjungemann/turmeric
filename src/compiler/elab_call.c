@@ -2684,7 +2684,13 @@ Expr *elab_call(Elab *e, Form *call) {
     }
     /* Phase 15: Method call syntax - (.method obj arg1 arg2) */
     if (name->len > 0 && name->name[0] == '.') {
-        return elab_method_call(e, call);
+        /* RM1 (bind chains): `do-m` expands to `(.bind m (fn [x] ...))`, so
+         * this route needs the same closure-argument hoist the bare-name
+         * dispatch route applies -- gated, as there, on a statically resolved
+         * instance whose masks are the callee's own. */
+        Expr *mc = elab_method_call(e, call);
+        return (mc && call_dispatch_is_static(mc))
+            ? hoist_borrowed_closure_args(e, mc, call->span) : mc;
     }
     /* Phase 6 */
     if (name == e->sym_defmacro) return elab_defmacro(e, call);

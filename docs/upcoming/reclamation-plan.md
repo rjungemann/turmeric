@@ -401,12 +401,19 @@ per monomorph (`emit_reresolve_method_fndef`) and asks THAT binding.  The
 `van-laarhoven-lens-*` family (rank-2 dict clones) and
 `hkt-cata-fmap-byvalue-carrier` were the fixtures that caught it.
 
-**7200 -> 6984 bytes**; `result-monad-bind-typed-boundary` fully clean and
-carrying `requires.leak-check`; `result-monad-nested-bind-typed-boundary`
-272 -> 128 (the `do-m` continuations' envs, which are not hoisted -- the
-macro's `(list .bind ...)` route into `elab_method_call` bypasses the hoist);
-`option-map-capturing-closure` 40 -> 16.  The audited-reader residue of the
-erased sweep (rows tagged SUM-BOX) is 704 B.
+**7200 -> 6856 bytes**; `result-monad-bind-typed-boundary` and
+`result-monad-nested-bind-typed-boundary` fully clean and carrying
+`requires.leak-check`; `option-map-capturing-closure` 40 -> 16.  Two more
+gaps closed on the way to the nested one: the `do-m` macro's
+`(list .bind ...)` route into `elab_method_call` bypassed the hoist (both
+dot-call routes now apply it, static-gated), and `expr_subtree_has_inline_c`
+defaulted to "may hide inline C" on a closure literal and the fat / poly
+wraps, so every body holding a hoisted continuation lost the inferences keyed
+on it -- it now walks into a nested closure's body (its captures are copies
+this body's inline C could equally stash) and through the wraps.  The
+audited-reader residue of the erased sweep (rows tagged SUM-BOX) is 704 B:
+inline-C `:int` readers in fixture scaffolding (`res-ok`, `unwrap-or-carrier`)
+and dictionary-dispatched sites inside constrained generics.
 
 **Measured: 8324 -> 7364 bytes** across the 27 erased-base callers (the
 null-None mirror above contributed 112 of that; the drops the rest), with the

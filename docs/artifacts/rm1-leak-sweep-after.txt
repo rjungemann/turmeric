@@ -12,10 +12,9 @@ LEAK option-niche-crossings 322B other
 LEAK option-niche-string 41B other
 LEAK re-string 1281B other
 LEAK refined-nonempty 80B SUM-BOX
-LEAK result-monad-nested-bind-typed-boundary 128B other
 LEAK result-typed-basic 144B other
 LEAK coerce-carrier-to-struct 32B SUM-BOX
 LEAK result-basic 288B SUM-BOX
 LEAK zipper-basic 64B other
 LEAK zipper-basic 64B other
----- leaky:20 clean:7 build-failed:0 total-bytes:6984
+---- leaky:19 clean:8 build-failed:0 total-bytes:6856

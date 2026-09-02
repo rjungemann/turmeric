@@ -852,6 +852,20 @@ bool expr_subtree_has_inline_c(const Expr *e) {
          * conservative for everything still unlisted. */
         case EX_GET_FIELD:   return expr_subtree_has_inline_c(e->as.get_field_.struct_expr);
         case EX_RETURN:  return expr_subtree_has_inline_c(e->as.return_.value);
+        /* RM1 (bind chains): a nested closure literal is walked INTO -- its
+         * captures are copies of this body's values, so inline C in there can
+         * stash them just as inline C here could -- and the packings around a
+         * function value / a carrier reinterpret are walked through.  Left to
+         * `default`, a body holding any lambda (every hoisted `bind`
+         * continuation) read as "may hide inline C" and lost every inference
+         * that keys on this predicate. */
+        case EX_CLOSURE:
+            return e->as.closure_.closure && e->as.closure_.closure->fn &&
+                   expr_subtree_has_inline_c(e->as.closure_.closure->fn->body);
+        case EX_POLY_WRAP:   return expr_subtree_has_inline_c(e->as.poly_wrap_.inner);
+        case EX_FN_TO_FAT:   return expr_subtree_has_inline_c(e->as.fn_to_fat_.inner);
+        case EX_POLY_TO_FAT: return expr_subtree_has_inline_c(e->as.poly_to_fat_.inner);
+        case EX_REINTERPRET: return expr_subtree_has_inline_c(e->as.reinterpret_.expr);
         default:
             /* Unmodeled kind -- conservatively assume it may hide inline-C. */
             return true;

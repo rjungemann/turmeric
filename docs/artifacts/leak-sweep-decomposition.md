@@ -18,7 +18,7 @@ hiding a real default-path defect in the other.
 | fixture-owned runtime values | `option-niche-crossings` (`vec_new`, `vec_push_ex`, `tur_string_from_bytes`) | ~0.4 K | **nobody's** -- Vecs and Strings the fixture allocates and never `vec-free`s |
 | recursive sum spine | `re-string`'s `ctor_RxCons` / `ctor_REmpty` / `ctor_RxNil` | ~0.6 K | **RM2** (the recursive spine), not RM1 |
 | **value-struct payload box** | `rational-*`'s `ok__spec__...` / `err__spec__...` | 0.46 K -> 0.13 K | **a defect**, filed: [value-struct-payload-sum-monomorph-box-has-no-owner](../reported/value-struct-payload-sum-monomorph-box-has-no-owner.md); a scope-exit drop covers the let-bound shape, an inferred non-retaining sum-param mask (now admitting `cstr` results) plus a statement-position drain cover the argument shape, and the carrier free is deep for a boxed struct arm (7 of 9 fixtures clean); the remaining 2 are dictionary-dispatched inline-C class methods, which need the glue route |
-| erased sum carrier | `hkt-*`, `result-basic` | ~0.7 K remaining | **RM1**, partially closed 2026-08-30; bind chains closed 2026-09-02 (sweep 7200 -> 6984 B; 704 B of SUM-BOX rows left, dominated by inline-C `:int` readers in fixtures and dictionary-dispatched sites) |
+| erased sum carrier | `hkt-*`, `result-basic` | ~0.7 K remaining | **RM1**, partially closed 2026-08-30; bind chains closed 2026-09-02 (sweep 7200 -> 6856 B; 704 B of SUM-BOX rows left, dominated by inline-C `:int` readers in fixtures and dictionary-dispatched sites) |
 
 ## The two things worth carrying forward
 

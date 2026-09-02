@@ -80,8 +80,8 @@ dispatch sites only: instance methods carry the same inferred non-retaining
 masks a defn does, freshness is tracked through a continuation parameter
 (`fresh_sum_via_param_mask`), a fresh producer read back by value marks its
 carrier owned for the bridge to free, and the closure-argument hoist reaches
-dispatch calls. Corpus sweep 7200 -> 6984 B; `result-monad-bind-typed-boundary`
-is fully clean. A dynamic dispatch (abstract receiver inside a constrained
+dispatch calls. Corpus sweep 7200 -> 6856 B; both `result-monad-*-bind-typed-boundary`
+fixtures are fully clean. A dynamic dispatch (abstract receiver inside a constrained
 generic) is freed only after the emitter re-resolves the instance per
 monomorph -- the first round had read a representative instance's flag there,
 which was unsound. Details in
