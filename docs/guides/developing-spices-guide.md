@@ -805,11 +805,15 @@ Add two keys under `:build-opts`:
   to the vendored `.c` and to inline-C blocks in this spice's `.tur` modules
   (so an inline-C block can `#include "kissfft/kiss_fftr.h"`). They are **not**
   exported to consumers -- vendored headers are an implementation detail.
-- **`:c-sources` propagate across `:spices` deps.** If spice B vendors a `.c`
-  and spice A depends on B, building A links B's vendored sources into A's
-  binary automatically. Consumers see B only through its `.tur` exports, so a
-  consumer's inline-C should `extern`-declare any vendored symbol it calls
-  rather than relying on B's private headers.
+- **`:c-sources` propagate across the whole `:spices` closure.** If spice B
+  vendors a `.c` and spice A depends on B -- directly, or through any number
+  of intermediate spices -- building A links B's vendored sources into A's
+  binary automatically, exactly as far as `:cmake-deps` reach. Each source is
+  compiled once by resolved path, so a spice reached by two routes (a diamond)
+  or two deps vendoring the same third-party file never produce duplicate
+  symbols. Consumers see B only through its `.tur` exports, so a consumer's
+  inline-C should `extern`-declare any vendored symbol it calls rather than
+  relying on B's private headers.
 - **C++ is accepted but not auto-configured.** `.cc` / `.cpp` entries are
   allowed (some vendor libraries are C++ wearing a C name), but the build does
   not switch to a C++ driver for you -- add `-x c++` to `:c-flags` if needed.

@@ -1,0 +1,10 @@
+;; c-sources-propagate-only-one-level: a consumer TWO hops from the vendor
+;; (consumer-two-hops -> consumer-of-aux -> aux-c-vendor) with NO direct edge.
+;; The vendored c/vendor.c used to be dropped past one level, and the failure
+;; was an undefined `vendor_value` in this binary's link with nothing pointing
+;; at aux-c-vendor's manifest.
+(defpackage consumer-two-hops
+  :name "consumer-two-hops"
+  :spices #map{
+    "consumer-of-aux" #map{:path "../consumer-of-aux"}
+  })

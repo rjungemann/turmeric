@@ -1,5 +1,7 @@
 # `:c-sources` propagates one level, so a library spice's implementation TU is lost two hops away
 
+**Status: RESOLVED 2026-09-02** -- see the Resolution at the end.
+
 **Severity: medium** -- a spice that ships a hand-written C translation unit
 works for its direct consumers and silently fails to link for anyone further
 down the graph. Found 2026-08-29 while looking at whether
@@ -101,3 +103,23 @@ is precisely the asymmetry above.
 
 - docs/guides/developing-spices-guide.md -- the "Vendoring C Sources" section
   should state how far `:c-sources` propagates, which it currently does not.
+
+## Resolution (2026-09-02)
+
+Fix directions (1) and (2), as one change. `collect_spice_aux_c`
+(`src/main.c`) is now a worklist walk over the whole `:spices` closure with
+a realpath-keyed visited set -- the same shape as
+`pkg_collect_transitive_cmake_deps`, and using the same resolver
+(`pkg_resolve_spice_dep_dir`, now exported from `pkg.c`) so the two closures
+agree on what a dependency is: workspace sibling, `:path`, fetched, or
+`:global`. Every `:c-sources` entry is emitted once by resolved path, and
+every `:c-includes` dir likewise, so a spice reached by two routes or two deps
+vendoring the same file never produce duplicate symbols. Direction (3), a
+dedicated "dropped source" diagnostic, is moot: nothing is dropped any more.
+
+Pinned in `tests/spice-c-sources-tests.sh`: `consumer-two-hops` (the vendor
+is reachable only through `consumer-of-aux`; the old binary fails its link on
+`vendor_value`, the new one exits 7) and `consumer-diamond` (the vendor reached
+both directly and through the intermediate links once). The developing-spices
+guide's "Vendoring C Sources" rules now state the propagation depth. The
+raygui CMake shim this report was found under can now move to `:c-sources`.

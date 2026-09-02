@@ -440,6 +440,13 @@ char *pkg_workspace_member_path(const char *project_dir, const char *dep_name);
  * `tur build .` wants so it doesn't accidentally try to configure cmake-deps
  * from unrelated workspace members.  See
  * docs/archive/history/tur-build-cmake-deps-workspace-overreach.md. */
+/* Resolve one :spices entry to its on-disk directory (workspace sibling ->
+ * :path -> <root>/spices/<name>-<ref> -> <root>/spices/<name>; a :global dep
+ * from the install registry).  Heap-allocated; NULL when the directory does
+ * not exist.  Shared by the transitive :cmake-deps and :c-sources walks so
+ * the two agree on what a dependency IS. */
+char *pkg_resolve_spice_dep_dir(const char *root_project_dir, const PkgSpice *s);
+
 bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
                                        const PkgManifest *root_manifest,
                                        bool               include_workspace_siblings,

@@ -3532,64 +3532,84 @@ static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
  *     vendor's hand-written C into the final binary.
  * g_no_auto_spice disables manifest discovery entirely (matching every other
  * auto-spice convenience). */
+/* c-sources-propagate-only-one-level: gather every :spices dep's vendored
+ * `:c-sources` / `:c-includes` across the WHOLE closure, the way
+ * pkg_collect_transitive_cmake_deps already does for :cmake-deps -- a `.c`
+ * declared two spices away used to be dropped, and the failure was an
+ * undefined symbol in the consumer's link with nothing pointing at the
+ * manifest that owns it.  Worklist + visited set (realpath-keyed, so a
+ * diamond terminates), and every source is emitted ONCE by resolved path:
+ * the same spice reached by two routes, or two deps vendoring the same
+ * third-party file, must not turn a missing-symbol failure into a
+ * duplicate-symbol one. */
+static bool aux_c_seen(char ***seen, int *n, int *cap, const char *key) {
+    for (int i = 0; i < *n; i++) if (strcmp((*seen)[i], key) == 0) return true;
+    if (*n >= *cap) {
+        int nc = *cap ? *cap * 2 : 8;
+        char **ns = (char **)realloc(*seen, (size_t)nc * sizeof(char *));
+        if (!ns) return true;   /* oom: treat as seen (drop) */
+        *seen = ns; *cap = nc;
+    }
+    (*seen)[(*n)++] = strdup(key);
+    return false;
+}
 static void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources) {
     if (g_no_auto_spice || !root) return;
-    char mp[4096];
-    if (!pkg_resolve_manifest_path(root, mp, sizeof(mp))) return;
-    PkgManifest m; memset(&m, 0, sizeof(m));
-    if (!pkg_manifest_read(mp, &m)) return;
-
-    for (int i = 0; i < m.n_c_includes; i++)
-        buf_printf(includes, " -I%s/%s", root, m.c_includes[i]);
-    for (int i = 0; i < m.n_c_sources; i++)
-        buf_printf(sources, " %s/%s", root, m.c_sources[i]);
-
-    /* Propagate each :spices dep's :c-sources (resolved to the dep root). The
-     * dep-dir resolution mirrors resolve_include_dirs_from_manifest above. */
-    char spices_dir[4096];
-    snprintf(spices_dir, sizeof(spices_dir), "%s/spices", root);
-    for (int i = 0; i < m.n_spices; i++) {
-        const PkgSpice *s = &m.spices[i];
-        char dep_dir[4096];
-        if (s->is_global) {
-            /* global-spice-library-consumption: resolved from the install
-             * registry; skipped silently when not installed, exactly like a
-             * missing fetched dep here. */
-            if (!tur_installed_spice_dir(s->name, dep_dir, sizeof(dep_dir),
-                                         NULL, NULL))
-                continue;
-            goto have_dep_dir;
+    char **work = NULL; int n_work = 0, cap_work = 0;
+    char **visited = NULL; int n_vis = 0, cap_vis = 0;
+    char **src_seen = NULL; int n_src = 0, cap_src = 0;
+    char **inc_seen = NULL; int n_inc = 0, cap_inc = 0;
+    #define AUX_PUSH(d) do { if (n_work >= cap_work) { int nc = cap_work ? cap_work * 2 : 8; \
+        char **nw = (char **)realloc(work, (size_t)nc * sizeof(char *)); \
+        if (!nw) { free(d); break; } work = nw; cap_work = nc; } work[n_work++] = (d); } while (0)
+    AUX_PUSH(strdup(root));
+    while (n_work > 0) {
+        char *dir = work[--n_work];
+        char canon[4096];
+        const char *key = realpath(dir, canon) ? canon : dir;
+        if (aux_c_seen(&visited, &n_vis, &cap_vis, key)) { free(dir); continue; }
+        char mp[4096];
+        if (!pkg_resolve_manifest_path(dir, mp, sizeof(mp))) { free(dir); continue; }
+        PkgManifest m; memset(&m, 0, sizeof(m));
+        if (!pkg_manifest_read(mp, &m)) { free(dir); continue; }
+        for (int i = 0; i < m.n_c_includes; i++) {
+            char path[4096];
+            snprintf(path, sizeof(path), "%s/%s", dir, m.c_includes[i]);
+            char ic[4096];
+            const char *ikey = realpath(path, ic) ? ic : path;
+            if (aux_c_seen(&inc_seen, &n_inc, &cap_inc, ikey)) continue;
+            buf_printf(includes, " -I%s", path);
         }
-        char *ws_path = s->path ? NULL
-                                : pkg_workspace_member_path(root, s->name);
-        if (ws_path) {
-            snprintf(dep_dir, sizeof(dep_dir), "%s", ws_path);
-            free(ws_path);
-        } else if (s->path) {
-            snprintf(dep_dir, sizeof(dep_dir), "%s/%s", root, s->path);
-        } else if (s->ref) {
-            snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
-                     spices_dir, s->name, s->ref);
-        } else {
-            snprintf(dep_dir, sizeof(dep_dir), "%s/%s", spices_dir, s->name);
+        for (int i = 0; i < m.n_c_sources; i++) {
+            char path[4096];
+            snprintf(path, sizeof(path), "%s/%s", dir, m.c_sources[i]);
+            char sc[4096];
+            const char *skey = realpath(path, sc) ? sc : path;
+            if (aux_c_seen(&src_seen, &n_src, &cap_src, skey)) continue;
+            buf_printf(sources, " %s", path);
         }
-        if (s->subdir) {
-            char tmp[4096];
-            snprintf(tmp, sizeof(tmp), "%s/%s", dep_dir, s->subdir);
-            snprintf(dep_dir, sizeof(dep_dir), "%s", tmp);
+        /* Enqueue this manifest's own :spices for the next level.  The
+         * resolver is the one the :cmake-deps walk uses, so both closures
+         * agree on what a dependency is (workspace sibling, :path, fetched,
+         * :global); a dep that is not on disk is skipped silently, exactly
+         * like a missing fetched dep before. */
+        for (int i = 0; i < m.n_spices; i++) {
+            char *dep_dir = pkg_resolve_spice_dep_dir(dir, &m.spices[i]);
+            if (!dep_dir) continue;
+            AUX_PUSH(dep_dir);
         }
-have_dep_dir:;
-        char dmp[4096];
-        if (!pkg_resolve_manifest_path(dep_dir, dmp, sizeof(dmp))) continue;
-        PkgManifest dm; memset(&dm, 0, sizeof(dm));
-        if (!pkg_manifest_read(dmp, &dm)) continue;
-        for (int j = 0; j < dm.n_c_sources; j++)
-            buf_printf(sources, " %s/%s", dep_dir, dm.c_sources[j]);
-        for (int j = 0; j < dm.n_c_includes; j++)
-            buf_printf(includes, " -I%s/%s", dep_dir, dm.c_includes[j]);
-        pkg_manifest_free(&dm);
+        pkg_manifest_free(&m);
+        free(dir);
     }
-    pkg_manifest_free(&m);
+    #undef AUX_PUSH
+    for (int i = 0; i < n_work; i++) free(work[i]);
+    free(work);
+    for (int i = 0; i < n_vis; i++) free(visited[i]);
+    free(visited);
+    for (int i = 0; i < n_src; i++) free(src_seen[i]);
+    free(src_seen);
+    for (int i = 0; i < n_inc; i++) free(inc_seen[i]);
+    free(inc_seen);
 }
 
 /* Resolve a project's include search path by walking up from `dir` to find
