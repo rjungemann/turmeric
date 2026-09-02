@@ -5680,6 +5680,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase HRT1: full type annotations for rank-2 poly params (NULL if not poly) */
     Type **param_poly_types = (Type **)arena_alloc(e->arena, pcap * sizeof(Type *));
     for (uint32_t _i = 0; _i < pcap; _i++) param_poly_types[_i] = NULL;
+    /* typeclass-constrained-param-erases-adt-to-int64: the constraint binder
+     * whose type the following BARE parameters take.  `[^Show a x]` reads as
+     * `[^Show a x : a]` -- the binder was declared for those parameters, and
+     * an untyped `x` defaulting to `int` silently bound the dispatch to the
+     * int instance (or the single carrier-compatible instance) and erased a
+     * by-value ADT argument to the int64 carrier at the call.  The run ends
+     * at the first parameter that carries its own annotation. */
+    const Symbol *constraint_binder_run = NULL;
     /* sized-types-cross-param-unification: retain each parameter's raw type
      * annotation Form so call-site unification can re-extract size-index
      * templates (e.g. `(SizedVec n)`).  NULL when a param has no list-form
@@ -6072,6 +6080,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
             n_constraints = new_count;
             n_pending = 0;
+            /* A `^f`-declared constructor variable (`^Functor f`) has kind
+             * `* -> *` and is never a parameter's type; only a `*`-kinded
+             * binder types the bare parameters that follow it. */
+            constraint_binder_run = binder;
+            for (uint8_t kvi = 0; kvi < n_kind_vars; kvi++) {
+                if (kind_var_names[kvi] == binder) { constraint_binder_run = NULL; break; }
+            }
             continue;
         }
         
@@ -6090,6 +6105,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
                           "defn: type annotation without preceding parameter");
                 return NULL;
             }
+            constraint_binder_run = NULL;
+            /* An explicit annotation on a run-typed parameter replaces the
+             * binder type it was given above, poly slot included. */
+            param_poly_types[n_params - 1] = NULL;
             /* For F_TYPE_ANN, unwrap to the inner type form first */
             const Form *type_form = (p->tag == F_TYPE_ANN) ? p->as.list.items[0] : p;
             /* sized-types-cross-param-unification: record the raw type form so
@@ -6341,6 +6360,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
                           "defn: type annotation without preceding parameter");
                 return NULL;
             }
+            constraint_binder_run = NULL;
+            /* An explicit annotation on a run-typed parameter replaces the
+             * binder type it was given above, poly slot included. */
+            param_poly_types[n_params - 1] = NULL;
             /* Update the type of the last parameter */
             const Symbol *kw = p_eff->as.sym;
             uint8_t type_param_idx = 0;
@@ -6615,6 +6638,21 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * closure's result kind so the call types correctly off the tail. */
             b->bare_fat_result_kind = e->bare_fat_spec_active
                                     ? e->bare_fat_spec_kind : TY_INT;
+        }
+        /* Bare parameter inside a constraint binder's run: it IS the binder's
+         * type -- mirror the `: a` keyword branch exactly (a later explicit
+         * annotation on this same parameter still overrides, as it does
+         * there).  A `^fat` parameter keeps its fat-closure default. */
+        if (constraint_binder_run && !b->is_fat) {
+            uint8_t cb_idx = 0;
+            if (fn_type_param_index(fn_type_params, n_fn_type_params,
+                                    constraint_binder_run, &cb_idx)) {
+                param_kinds[n_params] = TY_TYVAR;
+                b->type = type_tyvar_named(constraint_binder_run->name);
+                b->type.hkt_kind = fn_type_param_kinds[cb_idx];
+                param_poly_types[n_params] = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *param_poly_types[n_params] = b->type;
+            }
         }
         if (n_params == 0) {
             params = (Binding **)arena_alloc(e->arena, pcap * sizeof(Binding *));

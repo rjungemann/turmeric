@@ -1,0 +1,48 @@
+;; typeclass-constrained-bare-param-adt -- a BARE parameter that follows a
+;; constraint binder takes the binder's type: `[^Show a x]` reads as
+;; `[^Show a x : a]`.  Before (docs/archive/typeclass-constrained-param-erases-
+;; adt-to-int64.md) the untyped `x` defaulted to `int`, so `display` was one
+;; erased int64 body that bound `(show x)` to whichever instance the carrier
+;; fallback picked (the only one, or the int one) -- a hard cc failure for a
+;; by-value `defdata` argument, and a silent "int" for the struct.  Now each
+;; aggregate instantiation gets its own `display__spec__*` clone and dispatches
+;; on the real type.  This is the tour's stop-02 program plus two more
+;; instances so the dispatch has something to get wrong.
+(defclass Show [a]
+  (show [x] : cstr))
+
+(defdata Color (Red) (Green) (Blue))
+(defstruct Pt [x : int y : int])
+
+(definstance Show [Color]
+  (show [c]
+    (match c
+      (Red)   "red"
+      (Green) "green"
+      (Blue)  "blue")))
+(definstance Show [Pt]
+  (show [p] "pt"))
+(definstance Show [int]
+  (show [i] "int"))
+
+;; ^Show means: x must have a Show instance
+(defn display [^Show a x] : void
+  (println (show x)))
+
+;; two bare params in one run, and a run ended by an annotated int param
+(defn show-both [^Show a x y] : void
+  (println (show x))
+  (println (show y)))
+(defn tagged [^Show a x n : int] : void
+  (println (show x))
+  (println n))
+
+(defn main [] : int
+  (display (Red))
+  (display (Blue))
+  (display (make-struct Pt :x 1 :y 2))
+  (display 3)
+  (show-both (Red) (Green))
+  (show-both (make-struct Pt :x 1 :y 2) (make-struct Pt :x 3 :y 4))
+  (tagged (Green) 7)
+  0)

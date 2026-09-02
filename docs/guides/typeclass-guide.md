@@ -172,6 +172,39 @@ definstance Functor [(Result _ B)]
 
 ---
 
+## Constrained Functions
+
+A `defn` asks for an instance with a caret constraint in its parameter
+vector: `^Class` names the class, the next symbol declares the type
+variable it constrains, and the parameters that follow use that variable.
+
+```turmeric
+(defn display [^Show a x : a] : void
+  (println (show x)))
+
+(defn same? [^Eq a x : a y : a] : bool
+  (eq? x y))
+```
+```sweet-exp
+defn display [^Show a x : a] : void
+  println(show(x))
+```
+
+Bare parameters that directly follow the binder take its type, so the
+annotation may be left off: `[^Show a x]` reads as `[^Show a x : a]`, and
+`[^Eq a x y]` as `[^Eq a x : a y : a]`. The run ends at the first parameter
+that carries its own annotation, which always wins -- `[^Show a x n : int]`
+is `x : a` and `n : int`. Several constraints on one variable are written in
+sequence (`[^Eq ^Show a x]`); a constructor variable (`[^f] [^Functor f
+xs : (f int)]`) is never a value parameter's type and does not start a run.
+
+Each call instantiates the variable at the argument's type and dispatches
+the class methods on that type: `(display (Red))` reaches `Show [Color]`
+and `(display 3)` reaches `Show [int]`, with a by-value `defdata` or
+`defstruct` argument passed as the aggregate it is.
+
+---
+
 ## Associated Types
 
 An **Associated Type** allows a typeclass to declare a placeholder type member using `(type Name : Type)`. Each concrete instance binds this member to a specific type with `(type Name = <type>)`.

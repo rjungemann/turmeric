@@ -4,7 +4,7 @@
 time, not a wrong answer at runtime; the diagnostic points at generated C, not
 at the user's source).
 
-**Status:** OPEN. Filed 2026-08-31 while verifying the code samples on
+**Status:** RESOLVED 2026-09-02 (see Resolution). Filed 2026-08-31 while verifying the code samples on
 `web/tour/index.html` against the compiler. Found on macOS/arm64 with
 `./build/tur` at v0.42.1.
 
@@ -77,3 +77,33 @@ remove the mismatch rather than patch the coercion.
 `web/tour/index.html` stop 02 (Typeclasses) shows exactly this program. The
 sample was never compilable; it is illustrative markup on the site, so no page
 change was made for this report.
+
+## Resolution (2026-09-02)
+
+The suspected root cause was one level too deep. The constrained parameter
+was not "left on the carrier by the hybrid split" -- it was never the
+constrained type at all. `[^Show a x]` declares the binder `a` and then a
+BARE parameter `x`, and a bare parameter defaulted to `int`. So `display` was
+an ordinary erased int64 body with no type parameter to specialize on, and
+`(show x)` inside it went through the carrier fallback: with one instance it
+silently bound that instance (the cc failure above, since the instance takes
+its ADT by value); with an `int` instance present it silently bound THAT one,
+so `(display (make-struct Pt ...))` printed `int`. The spelled-out form
+`[^Show a x : a]` always worked: it gets a `display__spec__*` clone per
+aggregate instantiation and dispatches on the real type.
+
+The fix makes the bare spelling mean what the tour says it means. In the
+`defn` parameter parser (`elab_fns.c`, `constraint_binder_run`) the bare
+parameters that directly follow a constraint binder take the binder's type
+variable, exactly as if annotated `: a` (same `TY_TYVAR` typing, same poly
+slot). The run ends at the first parameter that carries its own annotation,
+which still overrides: `[^Show a x n : int]` is `x : a, n : int`. A `^f`
+constructor binder (`^Functor f`) never types a value parameter, and a `^fat`
+parameter keeps its fat-closure default.
+
+Pinned by `tests/fixtures/typeclass-constrained-bare-param-adt`: the tour's
+program plus `Pt` and `int` instances (`red blue pt int`), a two-parameter run
+(`show-both`), and a run ended by an annotated int (`tagged`). Interpreter
+parity checked. The existing `typeclass-constraint` fixture (`[^MyEq a x y]`,
+body `true`) is unchanged in behaviour. The tour and the web REPL sample need
+no edit -- they were right, the compiler was not.
