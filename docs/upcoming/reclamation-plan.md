@@ -8,8 +8,9 @@ description: Freeing what the emitted program allocates -- the mechanism the sum
 
 **Status (2026-09-02): every phase has an outcome.** RM0 ran (census
 re-based as allocations; no workload -- see its section). RM1 is built and
-has been narrowed three times (erased sweep 8324 -> 6091 B; the audited-reader
-residue is fixture scaffolding and dictionary sites). RM2 and RM3 do not
+has been narrowed four times (erased sweep 8324 -> 5643 B; the residue is
+attributed in `docs/artifacts/leak-sweep-decomposition.md`: fixture
+scaffolding, recursive spines, dictionary sites). RM2 and RM3 do not
 start: no constituency, recorded rather than left pending. RM4 decided the
 SR4 default in favour of by value. What remains open on this track is
 recorded in the SR plans, not here.

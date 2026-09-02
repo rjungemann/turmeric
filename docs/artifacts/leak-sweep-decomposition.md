@@ -46,3 +46,30 @@ constructor whose body mallocs (11 fixtures), confirmed by building each under
 but they are per-EXECUTION totals for these specific fixtures -- they measure
 presence and shape, not severity in a real program, where every one of these
 is per-construction and grows in a loop.
+
+## Residual attribution, 2026-09-02 (after the RM1 rounds and the SR4 flip)
+
+Every leak record in the 27-fixture erased sweep, bucketed by the allocation
+site's shape rather than by fixture (`ctor_*` frames inlined at -O1 are
+attributed by the function that inlined them). Total 5,643 B, from 8,324 B
+when RM1 started.
+
+| bucket | bytes | what it is | whose |
+|---|---:|---|---|
+| fixture scaffolding | 3,630 | `httpd-req-string-opt`'s `fake-conn-*` C helpers | nobody's |
+| recursive spine | ~900 | `re-string`'s `RxPos`/`Regex` cells (406, inlined ctors), `constrained-defn-cons-return-monomorphize`'s `Cons` cells (432), `refined-nonempty`'s (64) | RM2, which RM0 closed: no constituency |
+| runtime values | 415 | `tur_string_from_bytes`, `vec_new`/`vec_push` -- Strings and Vecs fixtures allocate and never free | fixture-owned |
+| dictionary-dispatch sites | ~200 | closure envs and `Some`/`Err` boxes minted inside a constrained generic (`bind_then_pure__dict`, `poly-bind`) -- the callee is a dictionary slot, so no mask or freshness fact exists at the call site | by design (per-spec re-resolution recovers freshness; retention would need a per-instance emit-time mask) |
+| `:int` stand-in readers | ~150 | `res-ok [r : int]`, `opt-val`, `unwrap-or-carrier`: inline-C fixture readers that take the carrier as `:int` | fixture scaffolding (the pattern CLAUDE.md forbids in new code) |
+| zipper | 128 | `zipper-basic` never frees the zipper `zipper-move-right` returns | fixture-owned |
+
+What was closed on the way here today, in order: value-struct payload boxes
+(let-scope drop, inferred sum-param mask, statement-position drain, deep
+carrier free), the reinterpret and closure-wrap gaps in the escape walk, bind
+chains at static dispatch sites (instance masks, freshness through the
+continuation, owned-carrier bridge), the `do-m` route, the inline-C predicate's
+unmodeled kinds, the comparator shim boxes (`^borrow` on inline-C sinks, stack
+boxes for proven non-retaining sinks, a fixed point for recursive walkers), and
+the sum-param result gate widened to every copy-shaped result. There is no
+compiler-owned residue left in this sweep that is not either a recursive spine
+or a dictionary-dispatch site.

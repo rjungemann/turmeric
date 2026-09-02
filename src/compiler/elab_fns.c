@@ -5248,23 +5248,27 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
                 if (_is_sum) {
                     TypeKind _srk = (b->type.kind == TY_FN) ? b->type.as.fn.result_kind
                                                             : TY_UNKNOWN;
-                    bool _sres_safe = false;
+                    /* Unlike the pointer-scalar mask (where the PARAM is the
+                     * pointer and can be returned as-is), a sum param can only
+                     * reach the result by COPYING a payload word or struct out
+                     * through a reader, and the drop frees the box (and, for a
+                     * boxed value-struct arm, the arm box) -- neither of which
+                     * a copied-out word or aggregate can point into, since the
+                     * only ways to take the box's address are inline C
+                     * (excluded above) and a borrow / raw pointer result,
+                     * which are the kinds refused here.  So `describe : cstr`
+                     * and `ne-unwrap : (NonEmpty A)` both qualify; a `&T`,
+                     * `ptr<void>`, `any` or fn result does not. */
+                    bool _sres_safe;
                     switch (_srk) {
-                        case TY_NIL: case TY_INT: case TY_BOOL: case TY_FLOAT:
-                        case TY_INT64: case TY_UINT64: case TY_INT32: case TY_UINT32:
-                        case TY_INT16: case TY_UINT16: case TY_INT8: case TY_UINT8:
-                        case TY_FLOAT64: case TY_FLOAT32:
+                        case TY_UNKNOWN: case TY_PTR_VOID: case TY_FN:
+                        case TY_REF: case TY_RC: case TY_WEAK:
+                        case TY_REF_IMMUT: case TY_REF_MUT:
+                        case TY_ANY: case TY_NEVER:
+                        case TY_CONT: case TY_CLONEABLE_CONT: case TY_EXCEPTION:
+                            _sres_safe = false; break;
+                        default:
                             _sres_safe = true; break;
-                        /* Unlike the pointer-scalar mask (where the PARAM is
-                         * the cstr and can be returned as-is), a sum param
-                         * cannot become a cstr result except by copying a
-                         * payload word or struct out through a reader -- and
-                         * a cstr word points at characters, never into the arm
-                         * box the drop frees.  `describe : cstr` is the common
-                         * reader shape. */
-                        case TY_CSTR:
-                            _sres_safe = true; break;
-                        default: break;
                     }
                     if (_sres_safe && sum_param_is_nonretaining(body, _pb))
                         b->nonretain_sum_param_mask |= (1u << _pi);
