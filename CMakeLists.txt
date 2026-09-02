@@ -463,6 +463,17 @@ add_test(
   COMMAND bash tests/check-pipefail-grep-q.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# A `const char *` accessor that returns a function-scoped `static char buf[]`
+# is correct only while every caller consumes the name before asking for
+# another -- and emitters do the opposite, gathering one name per field before
+# writing the declaration, so every name becomes the LAST name.  No crash, no
+# ASan report, no diagnostic: just well-formed C with the wrong type in it.
+# Bitten twice; see docs/archive/c-name-accessors-share-static-buffers.md.
+add_test(
+  NAME tur_static_cname_buffer_lint
+  COMMAND bash tests/check-static-cname-buffers.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # docs/reported/README.md is the triage index: it must list every open finding
 # and nothing else.  It has drifted BOTH ways -- four rows left behind after
 # their reports were archived (so triage read four findings that were not open),

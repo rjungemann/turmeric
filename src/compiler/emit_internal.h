@@ -374,8 +374,16 @@ typedef struct EmitCtx {
      * normalized param (a 5e6-iteration `(apply1 add3 acc)` loop leaked
      * 122 MiB).  `fatbox_keys` dedups on "<shim>|<orig>"; the definitions land
      * in `thunk_typedefs` and the fill statements in `fatbox_init`, emitted as
-     * one `__tur_fatbox_init` registered in the earliest static-init band. */
+     * one `__tur_fatbox_init` registered in the earliest static-init band.
+     *
+     * `fatbox_names` holds the `__tur_fatbox_<i>` spelling ensure_static_fatbox
+     * returns, one owned string per key and freed with them.  It used to be a
+     * function-scoped `static char name[96]`, which is only correct while every
+     * caller consumes the name before asking for another -- correct by call-site
+     * discipline, not by construction; see
+     * docs/archive/c-name-accessors-share-static-buffers.md. */
     char    **fatbox_keys;
+    char    **fatbox_names;
     uint32_t  n_fatbox_keys;
     uint32_t  cap_fatbox_keys;
     Buf      *fatbox_init;

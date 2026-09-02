@@ -1572,25 +1572,34 @@ static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
          * reached for them.  The ctor heap-boxes the by-value param into the slot
          * (see the byval ctor branch's struct-pointer box). */
         if (adt_field_is_ros_pointer_box(owner, &resolved)) {
-            /* A ROTATING pool, not one shared static buffer.  Callers collect
-             * several of these before printing any of them -- the monomorph ctor
-             * emitter fills `val_ctype[]` for every field and only then writes
-             * the parameter list -- so a single buffer hands every field the LAST
-             * field's spelling.  That emitted
+            /* INTERNED, so the returned pointer is stable for the whole
+             * compilation -- the same contract type_c_name already honours, and
+             * the reason the distinction between the two was invisible at the
+             * call site.
+             *
+             * This used to be one function-scoped `static char ptrbuf[128]`.
+             * Callers collect several of these before printing any of them --
+             * the monomorph ctor emitter fills `val_ctype[]` for every field and
+             * only then writes the parameter list -- so a single buffer handed
+             * every field the LAST field's spelling.  That emitted
              * `ctor_Result__Rational__ArithError(bool, tur_adt_ArithError *,
-             * tur_adt_ArithError *)`, silently mistyping ok_val as the error arm.
+             * tur_adt_ArithError *)`, silently mistyping ok_val as the error
+             * arm: well-formed C with the wrong type in it, no crash, no ASan
+             * report, no diagnostic.  A 16-slot rotating pool fixed the two-field
+             * case in 2026-08-26; interning removes the bound entirely.
              *
              * Latent until two fields of one constructor could both take this
              * path: it needs a Result/Option monomorph whose OK and ERR arms are
              * both non-parametric by-value ADTs, which is what a by-value sum
-             * makes ordinary (`(Result Rational ArithError)`). */
-            enum { PTRBUF_N = 16, PTRBUF_LEN = 128 };
-            static char ptrbuf[PTRBUF_N][PTRBUF_LEN];
-            static unsigned ptrbuf_i = 0;
-            char *slot = ptrbuf[ptrbuf_i++ % PTRBUF_N];
-            snprintf(slot, PTRBUF_LEN, "%s *", type_c_name(resolved));
+             * makes ordinary (`(Result Rational ArithError)`).  See
+             * docs/archive/c-name-accessors-share-static-buffers.md. */
+            Buf pb; buf_init(&pb);
+            buf_printf(&pb, "%s *", type_c_name(resolved));
+            buf_putc(&pb, '\0');
+            const char *boxed = intern_type_name(pb.data);
+            buf_free(&pb);
             free_struct_app_type(resolved);
-            return slot;
+            return boxed;
         }
         const char *nm = type_c_name(resolved);
         free_struct_app_type(resolved);

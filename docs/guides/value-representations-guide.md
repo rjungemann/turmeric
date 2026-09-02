@@ -259,6 +259,53 @@ intervening `let` fixing the repro (verified for
 `class-method-result-into-generic-invalid-c` -- the binding applies the
 carrier->concrete bridge the direct composition skips).
 
+## C-name accessors: which result may I hold?
+
+Every representation in this guide has a **C spelling**, and the emitter reaches
+it through an accessor returning `const char *`. Whether you may HOLD that
+pointer across another call is part of the accessor's contract, and it is
+invisible at the call site -- two accessors that look identical can differ.
+
+The rule now, and it is uniform: **every C-name accessor returns a string that
+is stable for the whole compilation.**
+
+- `type_c_name` / `emit_type_c_name` intern every composed name via
+  `intern_type_name` (`types.c`), so the pointer is stable and may be collected,
+  stashed, and printed later.
+- `adt_field_c_type`'s ROS pointer-box spelling (`"T *"`) interns too. It used
+  to be a function-scoped `static char ptrbuf[128]`.
+- `ensure_static_fatbox` returns an owned per-`EmitCtx` string
+  (`ctx->fatbox_names[i]`), freed with the keys. It used to be a
+  function-scoped `static char name[96]`.
+
+Why this is worth a section rather than a comment: emitters routinely gather one
+name per field or per parameter into an array and only then write the
+declaration. Against a shared buffer every entry aliases it, so **every name is
+the LAST name** -- and the result is well-formed C with the wrong type in it. No
+crash, no ASan report, no compiler diagnostic. It surfaces downstream as a
+`-Wincompatible-pointer-types` at some unrelated call site, or not at all.
+
+The tree has been bitten twice: `EmitSigEntry.ret_ctype` handed out an interior
+pointer callers held across further emission (43 fixtures, caught by ASan), and
+`adt_field_c_type` mistyped a `(Result Rational ArithError)` monomorph's
+`ok_val` as the error arm. The second was found by a representation change, not
+by a test -- which is the point. **A by-value sum makes "two pointer-boxed
+fields on one constructor" ordinary**, so consolidating a representation is
+exactly what takes one of these latent and makes it live.
+
+Two guards:
+
+- `tests/check-static-cname-buffers.sh` (ctest `tur_static_cname_buffer_lint`)
+  fails on any `const char *` function in `src/compiler/` holding a
+  function-scoped `static char buf[]`, with the four audited-benign sites
+  allowlisted by name. This is the one that catches the NEXT instance.
+- `tests/fixtures/ros-pointer-box-distinct-arms/` pins the two-distinct-arms
+  shape at runtime; `run.sh` fails a fixture whose cc emits
+  `-Wincompatible-pointer-types`, so a regression is loud.
+
+Resolved report:
+[docs/archive/c-name-accessors-share-static-buffers.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/c-name-accessors-share-static-buffers.md).
+
 ## Finding more missing cells
 
 `tests/type-fuzz-src.py` walks this matrix mechanically: it generates

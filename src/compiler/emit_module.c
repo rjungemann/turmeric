@@ -870,9 +870,7 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
     for (uint32_t i = 0; i < ctx->n_fatbox_keys; i++) {
         if (strcmp(ctx->fatbox_keys[i], key.data) == 0) {
             buf_free(&key);
-            static char name[96];
-            snprintf(name, sizeof name, "__tur_fatbox_%u", (unsigned)i);
-            return name;
+            return ctx->fatbox_names[i];
         }
     }
     if (ctx->n_fatbox_keys >= ctx->cap_fatbox_keys) {
@@ -880,12 +878,27 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
         char **nn = (char **)realloc(ctx->fatbox_keys, nc * sizeof(char *));
         if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
         ctx->fatbox_keys = nn;
+        char **nm = (char **)realloc(ctx->fatbox_names, nc * sizeof(char *));
+        if (!nm) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatbox_names = nm;
         ctx->cap_fatbox_keys = nc;
     }
     uint32_t idx = ctx->n_fatbox_keys++;
     ctx->fatbox_keys[idx] = strdup(key.data);
     if (!ctx->fatbox_keys[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
     buf_free(&key);
+
+    /* One OWNED name per box, freed with the keys.  Not a function-scoped
+     * `static char[96]`: the caller that holds two of these -- or stashes one
+     * and emits later -- would then get the same spelling twice, with no crash
+     * and no diagnostic, just wrong C.  See
+     * docs/archive/c-name-accessors-share-static-buffers.md. */
+    {
+        char nb[96];
+        snprintf(nb, sizeof nb, "__tur_fatbox_%u", (unsigned)idx);
+        ctx->fatbox_names[idx] = strdup(nb);
+        if (!ctx->fatbox_names[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
 
     if (idx == 0) {
         buf_puts(ctx->thunk_typedefs,
@@ -918,9 +931,7 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
         "      __s[1] = (int64_t)(intptr_t)%s; }\n",
         (unsigned)idx, shim, fnptr);
 
-    static char name[96];
-    snprintf(name, sizeof name, "__tur_fatbox_%u", (unsigned)idx);
-    return name;
+    return ctx->fatbox_names[idx];
 }
 
 /* catch-unwind-aggregate-return-miscompiled: the per-type boxing trampoline a
@@ -12786,6 +12797,7 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.n_poly_fatshim_names = 0;
     ctx.cap_poly_fatshim_names = 0;
     ctx.fatbox_keys = NULL;
+    ctx.fatbox_names = NULL;
     ctx.n_fatbox_keys = 0;
     ctx.cap_fatbox_keys = 0;
     ctx.exbox_dict_names = NULL;
@@ -14304,8 +14316,12 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.any_scope_drops);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
-    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
+    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) {
+        free(ctx.fatbox_keys[i]);
+        free(ctx.fatbox_names[i]);
+    }
     free(ctx.fatbox_keys);
+    free(ctx.fatbox_names);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
     for (uint8_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
@@ -15204,6 +15220,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.n_poly_fatshim_names = 0;
     ctx.cap_poly_fatshim_names = 0;
     ctx.fatbox_keys = NULL;
+    ctx.fatbox_names = NULL;
     ctx.n_fatbox_keys = 0;
     ctx.cap_fatbox_keys = 0;
     ctx.exbox_dict_names = NULL;
@@ -15728,8 +15745,12 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     free(ctx.any_scope_drops);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
-    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
+    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) {
+        free(ctx.fatbox_keys[i]);
+        free(ctx.fatbox_names[i]);
+    }
     free(ctx.fatbox_keys);
+    free(ctx.fatbox_names);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
     for (uint8_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);

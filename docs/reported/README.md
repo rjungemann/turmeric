@@ -965,12 +965,35 @@ turned up a defect in the instrument that would have justified it.
 | ~~vec-of-parametric-sum-monomorph-ice~~ | -- | **Resolved 2026-08-27 (SR2b)**: `adt_app_is_byvalue_product`'s field loop now admits a concrete-monomorph field (types.c), so the Vec registration and the binder agree. Archived to [docs/archive/vec-of-parametric-sum-monomorph-ice.md](../archive/vec-of-parametric-sum-monomorph-ice.md) |
 | [carrier-sum-option-boxes-have-no-owner](carrier-sum-option-boxes-have-no-owner.md) | medium | SR2b made Option/Result real sums; on the default path every `(some x)`/`(ok x)`/`(none)` mallocs a tagged carrier box nothing frees (pre-sum these were non-allocating by-value records). Interim cost until byvalue graduation; callers that care free with `(option-free (:: o :int))` |
 | [duplicate-ctor-names-collide-in-emitted-c](duplicate-ctor-names-collide-in-emitted-c.md) | medium | two ADTs sharing a constructor name collide in the emitted C (`redefinition of 'ctor_Mk'`) -- the base ctor symbol lacks the ADT mangle. Pre-existing, but the trigger set grew with SR2b: an ADT naming a ctor `Some`/`None`/`Ok`/`Err` now always collides with the stdlib sums |
-| [c-name-accessors-share-static-buffers](c-name-accessors-share-static-buffers.md) | low | an accessor that spells a C type into a function-scoped `static` buffer is correct only while callers consume before asking again -- and emitters gather one name per field, then print. Two instances so far (`ret_ctype` interior pointer, `adt_field_c_type` mistyping a Result monomorph's ok arm as its err arm), both fixed; `ensure_static_fatbox` is still the shape, correct today only because it has exactly one caller. Fails as a silently wrong C type, not a crash |
 | [minikanren-example-implements-no-minikanren](minikanren-example-implements-no-minikanren.md) | low-medium | the example has no unification, logic vars or streams and never imports `stdlib/logic.tur`; that module's only coverage is 8 small fixtures, so the workload behind the ADT-allocation numbers has no real program exercising it |
 | [inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md) | medium | an Option built inside an inline-C body (`tur_some_ptr`/`tur_box_*`) allocates a carrier box no elaborated expression owns, so nothing frees it -- and that is the form the inline-C results guide and CLAUDE.md recommend. `arc.tur` documents the bug in a comment and works around it; the workaround does not transfer to `weak/upgrade` because `(some rc)` is rejected |
 | [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan and the congruence fixpoint is O(n^2) -- REASSESSED post-SX3: the "free fix with SX3" home is gone (SX3 trails the same arrays in place), and measurements say no fix is needed: real obligations peak at 10 of 512 terms, the one cap-pinned corpus case is a synthetic stress file deciding in 64 ms, and solver-on vs off is 21 vs 22 ms on the heaviest fixture |
 | [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) | medium | no suite walks `examples/`, so a shipped example that builds, links, runs and prints nothing looks exactly like a passing one; and a whole-program build with no entry point emits no diagnostic. The residue of the `-main` bug |
 | [workarounds-to-remove](workarounds-to-remove.md) | -- | checklist, not a defect: places the tree is deliberately doing the second-best thing (`StThunk` instead of a `:fn` field, a `known-leak` marker), each with its blocker and how to prove the workaround is no longer needed |
+
+`c-name-accessors-share-static-buffers` was resolved 2026-09-02 and moved to
+[docs/archive](../archive/c-name-accessors-share-static-buffers.md). All three
+fix directions landed: `ensure_static_fatbox` returns an owned per-`EmitCtx`
+string (`ctx->fatbox_names[]`, parallel to the dedup keys it already kept, so
+the name lives exactly as long as the box it names), `adt_field_c_type`'s
+pointer-box spelling is a one-line `intern_type_name` replacing the 16-slot
+rotating pool -- a pool has a bound and fails the same way past it, just later
+-- and `tests/check-static-cname-buffers.sh` (ctest
+`tur_static_cname_buffer_lint`) fails any `const char *` function in
+`src/compiler/` holding a function-scoped `static char buf[]`, with the four
+audited-benign sites allowlisted by name.
+
+Two things the report did not have. Its repro no longer reaches the branch
+(SR1/SR2a are default now, and `rational-arith`'s Result still lowers to the
+erased carrier), but a three-line `(Result Rat Oops)` over two by-value product
+ADTs does -- that is now `tests/fixtures/ros-pointer-box-distinct-arms/`, and
+it is a real pin rather than a demonstration, because `run.sh` FAILs a fixture
+whose cc emits `-Wincompatible-pointer-types`, which is exactly the signal a
+re-broken accessor produces. And the lint's first draft, whose header regex used
+a greedy `.*const char \*`, bound to the `const char *shim` in
+`ensure_static_fatbox`'s PARAMETER list and never recognised the function at
+all: it would have shipped GREEN on a tree that still had the bug in it. Both
+pre-fix bodies were reconstructed and re-run against the finished lint.
 
 `fat-dispatch-wide-byvalue-aggregate-argument` was resolved 2026-08-27 and
 moved to
