@@ -3894,8 +3894,19 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
     Buf out; buf_init(&out);
     switch (spec->shape) {
         case BS_BIN_INFIX:
-            buf_printf(&out, "(%s) %s (%s)",
-                       arg_strs[0], spec->c_op, arg_strs[1]);
+            /* bit-shr is documented (stdlib/docstrings.tur) as a LOGICAL
+             * (unsigned) right shift, but its int64_t operand is signed --
+             * a bare ">>" is an arithmetic shift on virtually every real C
+             * compiler, sign-extending instead of 0-filling. ">>" is used
+             * by no other builtin (grep src/compiler/builtins.c), so this
+             * cast is exact to bit-shr and cannot affect any other operator
+             * sharing BS_BIN_INFIX. */
+            if (strcmp(spec->c_op, ">>") == 0)
+                buf_printf(&out, "(int64_t)((uint64_t)(%s) >> (uint64_t)(%s))",
+                           arg_strs[0], arg_strs[1]);
+            else
+                buf_printf(&out, "(%s) %s (%s)",
+                           arg_strs[0], spec->c_op, arg_strs[1]);
             break;
         case BS_VARIADIC_FOLD: {
             /* ((a OP b) OP c) OP d ... -- no redundant outermost wrap */
