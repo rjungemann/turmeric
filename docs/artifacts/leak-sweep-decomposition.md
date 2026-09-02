@@ -122,3 +122,27 @@ release (a fixture-hygiene question as much as a compiler one: a HAMT has
 `hamt/free`, a Seq has no free at all), and `Show` returning owned strings
 through an interface that has no way to say so. Neither is a sum box; both
 are recorded here so the next sweep does not rediscover them.
+
+### After the two fixes (re-swept against the final compiler)
+
+| | fixtures leaking | bytes |
+|---|---:|---:|
+| first sweep | 735 | 31,408,175 |
+| after the stackless catch-box free and catch freshness | 731 | 608,023 |
+
+No fixture got worse. Every catch fixture in the corpus (49) now runs under
+ASan with no memory errors and no leaks. What remains, by shape and bytes:
+
+| shape | bytes | what it is | whose |
+|---|---:|---|---|
+| logic stream spine | ~340 K | `logic-lazy-infinite` alone is 220 K: `StCons`/`StInc`/`StNil` cells, `mreturn`/`st-take`/`st-append`, and the lazy thunk envs | RM2: no constituency (RM0) |
+| captured delimited continuations | ~120 K | `dk_new` frames and `tur_serial_cont_serialize` blobs held by `serial-shift`/`save-cont!` and the async fibers (`async-capturing-closure` alone 29 K with its futures); the capture APIs have no release call | the continuation runtime's ownership model, not a scope drop; recorded, not built |
+| persistent collections | ~108 K | `hamt_malloc`: maps and sets fixtures build and never `hamt/free`; `set-cstr-content`, `data-literal-set-*`, `ghe3-generic-map-key` | fixture-owned (a persistent HAMT is freed explicitly by design) |
+| GADT cells, products in containers | ~6 K | `Bound`/`Size`/`SizedVec` constructors | by design (tagged union kept) |
+| `Show` strings, Arrow instances | ~5 K | `show` returns a malloc'd cstr through an interface that cannot say who frees it | API design |
+| erased sum boxes | 16 B | the two class-method fixtures | glue route |
+
+The sum-box and closure-env classes this branch set out to own are gone from
+the corpus-wide picture; what is left is spine, capture, and collection
+ownership, each of which is a design decision recorded elsewhere rather than
+a missing drop.
