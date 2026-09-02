@@ -3672,7 +3672,11 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         if (strcmp(op, "|")  == 0) return turi_int(args[0].as_int |  args[1].as_int);
         if (strcmp(op, "^")  == 0) return turi_int(args[0].as_int ^  args[1].as_int);
         if (strcmp(op, "<<") == 0) return turi_int(args[0].as_int << args[1].as_int);
-        if (strcmp(op, ">>") == 0) return turi_int(args[0].as_int >> args[1].as_int);
+        /* bit-shr is documented as a LOGICAL (unsigned) right shift; see the
+         * matching comment in emit_core.c's BS_BIN_INFIX case -- this is the
+         * same bug in the interpreter's copy of the same operator. */
+        if (strcmp(op, ">>") == 0)
+            return turi_int((int64_t)((uint64_t)args[0].as_int >> (uint64_t)args[1].as_int));
         return turi_errorf("eval: unknown infix builtin '%s'", op);
     }
 

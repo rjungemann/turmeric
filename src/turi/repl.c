@@ -30,6 +30,7 @@
 #include "eval.h"
 #include "preload.h"       /* shared stdlib preload (macros + typed collections) */
 #include "interpreter_natives.h"  /* wk_register_* interpreter native overrides */
+#include "collections_native.h"   /* turi_register_collection_natives re-assert */
 #include "spice_loader.h"  /* RP3: auto-discover + load the enclosing spice */
 #include "elab_internal.h" /* :expand -- MacroDef registry + elab_expand_macro */
 #include "ffi_thunk.h"     /* RP4: install per-export TuriNativeFn bindings */
@@ -892,6 +893,10 @@ static void repl_preload_stdlib_and_natives(TuriEnv *env) {
      * stdlib with it (web-repl-lang-switch-drops-stdlib). */
     turi_env_pin_prelude(env);
     turi_env_register_interpreter_natives(env);
+    /* Re-assert collection natives (vec/set/map/hamt) after preload -- see
+     * the matching call in main.c for why (turi_register_collection_natives
+     * is otherwise only ever registered once, before any preload runs). */
+    turi_register_collection_natives(env);
     tur_ffi_register_reload_native(env);
 }
 

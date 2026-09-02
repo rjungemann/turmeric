@@ -7410,6 +7410,15 @@ static int cmd_eval_h(const char *path, bool use_color,
      * src/turi/interpreter_natives.c so the WASM REPL and `tur repl` register
      * the same block and cannot drift.  Must run AFTER turi_env_preload_*. */
     turi_env_register_interpreter_natives(env);
+    /* Re-assert the collection natives (vec/set/map/hamt) for the same
+     * reason: unlike turi_env_register_interpreter_natives, this registry is
+     * otherwise only populated once, at env-creation time (turi/env.c),
+     * before any preload runs. Every name it owns that also gets a
+     * Turmeric-level defn during preload -- currently only vec-new-filled,
+     * whose stub lives in turi_env_preload_collections -- would otherwise
+     * keep running that stub body instead of the native. See
+     * docs/reported/turi-vec-new-filled-native-override-lost.md. */
+    turi_register_collection_natives(env);
     /* Build *args* as a cons-cell list of C-string pointers. */
     {
         typedef struct { int64_t value; int64_t next; } TurCons;

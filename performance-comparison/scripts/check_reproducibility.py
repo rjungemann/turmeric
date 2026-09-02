@@ -129,9 +129,15 @@ def main() -> None:
 
         status = "FLAG" if flag else "ok  "
         cv_str = f"{cv:.1%}" if cv is not None else "  n/a"
+        # mean/stdev are None when every raw record for this group is an
+        # absent/failed/timed-out status JSON (write_status_json's
+        # timing_s: null) -- the key is present, so load_raw_results' schema
+        # check doesn't filter it out, but there is no timing to report.
+        mean_str  = f"{stats['mean']:.4f}s"  if stats['mean']  is not None else "n/a   "
+        stdev_str = f"{stats['stdev']:.4f}s" if stats['stdev'] is not None else "n/a   "
         print(
             f"  [{status}] {cat}/{bench} {lang:8s} {size:6s}"
-            f"  mean={stats['mean']:.4f}s  stdev={stats['stdev']:.4f}s  CV={cv_str}"
+            f"  mean={mean_str}  stdev={stdev_str}  CV={cv_str}"
             f"  n={stats['n']}"
         )
         if flag:
