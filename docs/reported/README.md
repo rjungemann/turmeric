@@ -1044,6 +1044,32 @@ at the return, where `e.adt_defs` is already freed. A missed site in a change
 like this is always an undefined symbol or a lifetime error, never a wrong
 answer, which is what made the suite a sufficient verifier.
 
+`cps-let-binder-bridge-lacks-position-check` was filed and resolved 2026-09-02
+and moved to
+[docs/archive](../archive/cps-let-binder-bridge-lacks-position-check.md). Both
+fix directions landed. The check is extracted as `emit_value_is_recorded_as` --
+and there were more copies than the report knew: TWO inline hand-rolled ones at
+separate let-binding init sites, plus the arm sites' wrapper, plus the CPS mirror
+with none. Four sites, three different answers to one question; one copy now.
+
+The report warns against adding the missing term without a repro, because "a
+change to a path with no failing case is unverifiable in the direction that
+matters". The way past that was not to find a repro but to make the change
+**provably inert**: instrumenting the bridge and sweeping all 2131 fixtures, only
+33 reach it with a by-value init type, and in every one either the Expr-level
+predicate already suppresses it or the init is recorded as `int64_t` / a pointer
+/ nothing -- never the aggregate. Emitted C is byte-identical across the corpus;
+suite 2752 passed / 0 failed, zero churn. It is a consistency repair that stops
+the two sites drifting a third time, NOT a fix for an observed miscompile, and
+the archived note says so.
+
+The substantive finding is why no repro exists: the two conditions look
+structurally exclusive. The dangerous shape needs an `if` init whose arms are
+carrier producers, and when that sits in a CPS-transformed body the transform
+splits the `if` before the bridge sees it -- a targeted repro reached the bridge
+as two separate hits, one per branch, each recorded `int64_t`, never a merge
+temp. Recorded so the search is not repeated.
+
 `control-form-around-if-double-unboxes-carrier-arms` was resolved 2026-09-02 and
 moved to
 [docs/archive](../archive/control-form-around-if-double-unboxes-carrier-arms.md).
@@ -1457,7 +1483,6 @@ churn.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [cps-let-binder-bridge-lacks-position-check](cps-let-binder-bridge-lacks-position-check.md) | low | LATENT, found by the sweep the control-form report asked for. `emit_cps_ir.c:6507` mirrors the direct emitter's `init_carrier_to_byval` bridge and its comment says "same gate as the direct site" -- which stopped being true when the direct site gained its position check (`init_val_recorded_byval_agg`). The divergence is verified by reading; NO repro was found, because the CPS binder comes out as the carrier so the gate is inert before the predicate is consulted. Deliberately not fixed blind: that gate guards `cps-result-unbox-dropped`'s fixtures. Fix wants the hand-rolled check extracted once and shared by all four bridging sites |
 | [spices-ci-fetch-failure-downgraded-to-warning](spices-ci-fetch-failure-downgraded-to-warning.md) | medium | (spice repo) `tur fetch` failure becomes a `::warning::`, so a failed native-dep build surfaces two steps later as `ld: library 'mbedtls' not found` in six jobs at once. **Deliberate and correctly so** -- making it fatal risks Linux, since optional `:spices` routinely fail. The fix is to put the captured output *in* the annotation, and to give `tur fetch` an exit code that separates optional-dep failure from required-dep failure |
 
 ## Windows port

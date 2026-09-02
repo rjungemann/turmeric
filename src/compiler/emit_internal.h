@@ -715,6 +715,11 @@ bool emit_c_type_is_scalar(const char *cname);
  * the panic-propagation return emits one per hoisted call -- 75-139 per TU. */
 char *emit_c_zero_of(const char *cname);
 bool emit_str_is_bare_ident(const char *s);
+/* cps-let-binder-bridge-lacks-position-check: the single position-level test --
+ * is `v` a bare identifier whose RECORDED emitted C type is exactly
+ * `want_ctype`, and is that type a by-value aggregate?  Shared by every
+ * carrier->concrete bridge so the copies cannot drift.  See emit_expr.c. */
+bool emit_value_is_recorded_as(const char *v, const char *want_ctype);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);

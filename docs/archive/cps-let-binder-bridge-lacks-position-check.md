@@ -5,7 +5,11 @@
 Filed for the next person who hits a double-unbox in a CPS-transformed body, so
 they start here instead of re-deriving it.
 
-**Status:** OPEN. Filed 2026-09-02 by the sweep that
+**Status: RESOLVED 2026-09-02** -- both fix directions landed, and the missing
+repro was replaced by a corpus-wide measurement that explains why there is not
+one. See the Resolution section at the bottom.
+
+Filed 2026-09-02 by the sweep that
 [control-form-around-if-double-unboxes-carrier-arms](../archive/control-form-around-if-double-unboxes-carrier-arms.md)
 asked for in its "Related" section -- "worth a sweep for the remaining
 `fn_body_tail_emits_byvalue_carrier_abi` callers rather than a fifth round of
@@ -123,3 +127,79 @@ question. This report is the remaining site:
 
 - [docs/guides/value-representations-guide.md](../guides/value-representations-guide.md)
   -- its closed-cells table is where this family is tracked.
+
+## Resolution (2026-09-02)
+
+Both fix directions landed, in the order the report specifies.
+
+### 1. The check is extracted, and there were more copies than the report knew
+
+`emit_value_is_recorded_as(v, want_ctype)` is now the single answer to "does the
+value in hand already HAVE the by-value aggregate representation, here?". It
+takes the wanted C type as a STRING, because that is what the binder sites hold
+(`bind_c`, `bct`); `emit_arm_is_recorded_byval_agg` is a thin Type-taking wrapper
+over it for the arm sites.
+
+The report says the direct site "hand-rolls the check inline rather than calling
+it". There were **two** such inline copies, not one -- two separate let-binding
+init sites, each with its own `lvty2` block spelling the same three comparisons.
+With the CPS mirror having none, that is four sites and three different answers
+to one question. There is one copy now.
+
+### 2. The term is added, justified by measurement rather than by a repro
+
+The report warns: *"Do NOT add the term speculatively without a repro ... a
+change to a path with no failing case is unverifiable in the direction that
+matters."* That is the right instinct, and the way past it was not to find a
+repro but to make the change **provably inert**, which is a different and
+achievable bar.
+
+Instrumenting the bridge and sweeping **all 2131 fixtures**: only 33 reach it
+with a by-value init type at all, and in every one of them either
+
+- `tailabi=1` -- the existing Expr-level predicate already suppresses the bridge,
+  or
+- the init is recorded as `int64_t`, a pointer, or nothing -- never as the
+  aggregate, so the new term answers false and changes nothing.
+
+The single fixture that hands the bridge a **recorded by-value merge temp**
+(`option-construct-byvalue-return-spec`, `rhs=__t211`,
+`recorded_lv=tur_adt_Option__int`) has `tailabi=1`, so it never fires. And
+`cps-result-carrier-unbox` -- the fixture the gate exists for -- fires with
+`recorded_lv=int64_t`, so the term leaves it alone, which is what keeps that
+regression pinned.
+
+Result: **the emitted C is byte-identical across the corpus.** Suite 2752 passed
+/ 0 failed with zero snapshot churn, and the five fixtures nearest this gate were
+checked individually for matching OUTPUT, not merely building.
+
+Be clear about what that does and does not establish: this is a **consistency
+repair**, not a fix for an observed miscompile. It restores the "same gate as the
+direct site" claim the mirror's own comment makes, so the two cannot drift a
+third time. It is not evidence that anything was broken.
+
+### Why there is no repro, which is the substantive finding
+
+Two conditions must hold together, and they appear to be **structurally
+exclusive** in the CPS path rather than merely rare:
+
+The dangerous shape needs the init to be an `if` whose arms are carrier
+producers -- that is what makes the Expr-level predicate answer false while
+`emit_if` has already bridged the arms into a recorded by-value merge temp. But
+when such an `if` is a `let` init inside a CPS-transformed body, the CPS
+transform restructures it before the bridge sees it: a targeted repro built to
+that recipe (an inline-C `(Result H cstr)` producer in each arm, plus a
+higher-order call to force the transform, modelled on
+`cps-result-carrier-unbox`) reached the bridge as **two separate hits** with
+`rhs=__ps_174` / `__ps_175`, each recorded `int64_t` -- one per branch, the `if`
+already split. Never a merge temp.
+
+So the guard's absence was not reachable through the shape that motivated
+looking for it. Recorded here so the next person does not repeat the search: the
+question to answer first is whether the CPS transform can ever leave an `EX_IF`
+as a `letraw` init, and the evidence above says it does not for this shape.
+
+### What would still be worth doing
+
+Nothing in this report. If a double-unbox ever does surface in a CPS-transformed
+body, the term is already there and the shared helper is the place to look.

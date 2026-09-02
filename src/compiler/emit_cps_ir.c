@@ -6496,7 +6496,23 @@ static void emit_letraw(CE *ce, const CTerm *t) {
          *
          * and every caller of a higher-order function (which is what forces the
          * CPS transform) hit it.  Same gate as the direct site, so it is inert
-         * whenever the init already yields the aggregate. */
+         * whenever the init already yields the aggregate.
+         *
+         * cps-let-binder-bridge-lacks-position-check: "same gate as the direct
+         * site" stopped being true when that site gained a POSITION check --
+         * `fn_body_tail_emits_byvalue_carrier_abi` asks what the Expr would
+         * naturally emit, not what the value in hand already is, and a value
+         * something else already bridged needs the second question.  The term is
+         * restored below, so the claim above holds again.
+         *
+         * Measured before adding it, since a change to a path with no failing
+         * case is otherwise unverifiable: across all 2131 fixtures only 33 reach
+         * this bridge with a by-value init type at all, and in every one of them
+         * either the tail predicate already suppresses it or the init is recorded
+         * as `int64_t` / a pointer / nothing -- never as the aggregate.  So this
+         * term changes no emitted byte in the corpus today; it is a consistency
+         * repair that keeps the two sites from drifting again, not a fix for an
+         * observed miscompile. */
         const char *bct = binder_ctype_full(ce->ctx, t->as.letraw.x.ty,
                                             t->as.letraw.x.type);
         Type init_bv = fn_body_tail_byvalue_carrier_type(ce->ctx, t->as.letraw.e);
@@ -6504,6 +6520,7 @@ static void emit_letraw(CE *ce, const CTerm *t) {
         if (rhs && bct && strcmp(bct, "int64_t") != 0 &&
             strchr(bct, '*') == NULL &&
             init_bv.kind != TY_UNKNOWN &&
+            !emit_value_is_recorded_as(rhs, bct) &&
             !fn_body_tail_emits_byvalue_carrier_abi(ce->ctx, t->as.letraw.e)) {
             int saved = ce->ctx->indent;
             ce->ctx->indent = ce->indent;

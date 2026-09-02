@@ -2014,14 +2014,31 @@ static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
  * Same shape as the `init_val_recorded_byval_agg` check on the let-binding
  * path; this is the emit_if merge companion, which can only ask it because the
  * arm's emitted text exists by this point. */
-static bool emit_arm_is_recorded_byval_agg(EmitCtx *ctx, const char *v,
-                                            Type bv) {
-    if (!v || bv.kind == TY_UNKNOWN || !emit_str_is_bare_ident(v)) return false;
+/* cps-let-binder-bridge-lacks-position-check: the ONE answer to "does the value
+ * in hand already HAVE the by-value aggregate representation, here?".
+ *
+ * Every carrier->concrete bridge needs this, and each site used to ask it its own
+ * way: the emit_if arms and the do/let companion through
+ * emit_arm_is_recorded_byval_agg, TWO let-binding init sites through separate
+ * inline copies of the same three comparisons, and the CPS letraw mirror not at
+ * all -- even though its comment claimed "same gate as the direct site".
+ * Divergence between copies of one question is what this family keeps
+ * rediscovering, so there is one copy now.
+ *
+ * Takes the wanted C type as a STRING because that is what the binder sites have
+ * (`bind_c`, `bct`); the Type-taking wrapper below serves the arm sites. */
+bool emit_value_is_recorded_as(const char *v, const char *want_ctype) {
+    if (!v || !want_ctype || !emit_str_is_bare_ident(v)) return false;
     const char *lv = emit_localvar_lookup_ctype(v);
     if (!lv) return false;
-    const char *want = emit_type_c_name(ctx, bv);
-    return want && strcmp(lv, want) == 0 &&
+    return strcmp(lv, want_ctype) == 0 &&
            strcmp(lv, "int64_t") != 0 && strchr(lv, '*') == NULL;
+}
+
+static bool emit_arm_is_recorded_byval_agg(EmitCtx *ctx, const char *v,
+                                            Type bv) {
+    if (bv.kind == TY_UNKNOWN) return false;
+    return emit_value_is_recorded_as(v, emit_type_c_name(ctx, bv));
 }
 
 /* SR1 companion to emit_arm_is_recorded_byval_agg: the arm is a bare VARIABLE
@@ -2661,14 +2678,10 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * above); a recorded by-value aggregate type equal to the
              * binding's own suppresses the re-bridge -- consult the recorded
              * representation instead of re-deciding from the tail. */
-            bool init_val_recorded_byval_agg = false;
-            if (emit_str_is_bare_ident(iv)) {
-                const char *lvty2 = emit_localvar_lookup_ctype(iv);
-                init_val_recorded_byval_agg =
-                    lvty2 && strcmp(lvty2, bind_c) == 0 &&
-                    strcmp(lvty2, "int64_t") != 0 &&
-                    strchr(lvty2, '*') == NULL;
-            }
+            /* Was an inline copy of emit_value_is_recorded_as -- there were two,
+             * and the CPS mirror had none.  Shared now so they cannot drift. */
+            bool init_val_recorded_byval_agg =
+                emit_value_is_recorded_as(iv, bind_c);
             bool init_carrier_to_byval = !bind_is_ptr_repr &&
                 strcmp(bind_c, "int64_t") != 0 &&
                 init_bv.kind != TY_UNKNOWN &&
@@ -3045,14 +3058,10 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * above); a recorded by-value aggregate type equal to the
              * binding's own suppresses the re-bridge -- consult the recorded
              * representation instead of re-deciding from the tail. */
-            bool init_val_recorded_byval_agg = false;
-            if (emit_str_is_bare_ident(iv)) {
-                const char *lvty2 = emit_localvar_lookup_ctype(iv);
-                init_val_recorded_byval_agg =
-                    lvty2 && strcmp(lvty2, bind_c) == 0 &&
-                    strcmp(lvty2, "int64_t") != 0 &&
-                    strchr(lvty2, '*') == NULL;
-            }
+            /* Was an inline copy of emit_value_is_recorded_as -- there were two,
+             * and the CPS mirror had none.  Shared now so they cannot drift. */
+            bool init_val_recorded_byval_agg =
+                emit_value_is_recorded_as(iv, bind_c);
             bool init_carrier_to_byval = !bind_is_ptr_repr &&
                 strcmp(bind_c, "int64_t") != 0 &&
                 init_bv.kind != TY_UNKNOWN &&
