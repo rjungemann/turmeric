@@ -71,3 +71,18 @@ is already heading.
 Callers that care (long-lived processes, leak-checked binaries) free the box
 explicitly: `(option-free (:: o :int))` / `(result-free (:: r :int))` after
 the payload has been read out.
+
+## Narrowed again: bind chains (2026-09-02)
+
+The erased residue's largest rows were `bind` / `fmap` chains over the stdlib
+`Result` / `Option` instances. They are owned now, at statically resolved
+dispatch sites only: instance methods carry the same inferred non-retaining
+masks a defn does, freshness is tracked through a continuation parameter
+(`fresh_sum_via_param_mask`), a fresh producer read back by value marks its
+carrier owned for the bridge to free, and the closure-argument hoist reaches
+dispatch calls. Corpus sweep 7200 -> 6984 B; `result-monad-bind-typed-boundary`
+is fully clean. A dynamic dispatch (abstract receiver inside a constrained
+generic) is freed only after the emitter re-resolves the instance per
+monomorph -- the first round had read a representative instance's flag there,
+which was unsound. Details in
+[reclamation-plan.md](../upcoming/reclamation-plan.md), RM1.
