@@ -62,6 +62,18 @@ static bool fresh_sum_walk(const Expr *e, Binding **params, uint32_t n_params,
             for (uint32_t i = 0; r && i < e->as.match_.n_arms; i++)
                 r = fresh_sum_walk(e->as.match_.arms[i].body, params, n_params, need);
             break;
+        /* residual-leaks (2026-09-02): a catch always mints its Result box --
+         * tur_catch_unwind_box returns tur_box_ok / tur_box_err of a fresh
+         * allocation on both paths, and an aggregate thunk's payload is a
+         * fresh __tur_catchbox_* allocation whose pointer is the Ok word, the
+         * same layout as a boxed value-struct arm.  So a defn whose body is a
+         * catch (`(defn struct-ok [] : (Result Q int) (catch-unwind ...))`) is
+         * a fresh producer, and its result passed to a non-retaining reader
+         * gets the same drop a ctor's would. */
+        case EX_CATCH_UNWIND:
+        case EX_CATCH_PANIC_OF:
+            r = true;
+            break;
         case EX_CALL: {
             if (params && need) {
                 const Expr *fe = e->as.call_.fn_expr;
