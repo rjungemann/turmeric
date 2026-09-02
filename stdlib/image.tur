@@ -20,12 +20,14 @@
 ;; stdlib/image.tur -- depends on the Phase 21 serial primitives
 ;; (tur_serial_cont_serialize / _deserialize / _resume, emitted as a C prelude
 ;; whenever a program uses serial-reset). Self-contained otherwise: the
-;; SHA-256 and the 72-byte header codec are inline-C so `(load
-;; "stdlib/image.tur")` needs no other stdlib file.
+;; SHA-256 and the 72-byte header codec are inline-C.  The one stdlib
+;; dependency is serial.tur: `defimage-global` (AI3) marshals a declared global
+;; through its Serializable instance.
 ;;
 ;; The header layout mirrors src/runtime/image.h byte-for-byte; the C unit test
 ;; (tests/image_unit.c) pins the canonical implementation and the two must stay
 ;; in lockstep.
+(load "stdlib/serial.tur")
 ;; ---------------------------------------------------------------------------
 ;; Build stamp (AI4): SHA-256 of the running executable.
 ;;
@@ -263,15 +265,288 @@
 
 (defmacro defimage-finalize-hook [name body] `(defn ~name [] : int ~body))
 ;; ---------------------------------------------------------------------------
+;; Image globals (AI3).
+;;
+;; The image is the captured CONTINUATION, so a top-level `def ^mut` that the
+;; captured frames do not close over is not in it: a global written during
+;; cold-start init is silently back at its initial value after a warm start.
+;; `defimage-global` declares a global that IS in the image.  The declaration
+;; leaves three named defns behind -- a serializer and a deserializer (the
+;; global's Serializable instance, monomorphically) and a tracker that
+;; registers the pair by name -- and, like the hooks above, the tracker must be
+;; called at the top of `main` (on both cold and warm starts) because compiled
+;; top-level forms do not execute: `(image/track-globals! a b c)`.
+;;
+;; On save the registry is snapshotted into a second TSER section written after
+;; the continuation bytes (the header's globals_offset locates it); on load it
+;; is restored BEFORE the continuation resumes, so the resumed code reads the
+;; post-init values.  Both sections ride inside payload_len.
+;;
+;; Section layout: [int64 n] then per global [int64 name_len][name]
+;; [int64 bytes_len][bytes], where bytes is the Serializable payload.  A record
+;; whose name is not registered in the loading process is skipped; a registered
+;; global absent from the image keeps its current value.
+;; ---------------------------------------------------------------------------
+;;; image/global-registry -- backing store for image globals (internal).
+;;;
+;;; op 0: register (or replace by name) the ser/deser pair; returns the count.
+;;; op 1: snapshot every registered global; returns a fresh bytes value
+;;;       ({len; data}, caller frees with image/free-bytes) or NULL if none.
+;;; op 2: restore globals from the bytes value in `bytes`; returns the number
+;;;       of globals restored.
+;;; op 3: the registered count.
+
+(defn image/global-registry [op : int name : cstr ser : int deser : int bytes : ptr<void>] : int
+  ```c
+  static char *names[64]; static int64_t sers[64]; static int64_t desers[64]; static int gn = 0;
+  switch (op) {
+    case 0: {
+      int i; for (i = 0; i < gn; i++) if (strcmp(names[i], name) == 0) break;
+      if (i == gn) { if (gn >= 64) return -1; names[gn] = strdup(name); gn++; }
+      sers[i] = ser; desers[i] = deser; return gn;
+    }
+    case 1: {
+      if (gn == 0) return 0;
+      int64_t **bufs = (int64_t **)malloc(sizeof(int64_t *) * (size_t)gn);
+      if (!bufs) return 0;
+      int64_t total = 8;
+      for (int i = 0; i < gn; i++) {
+        bufs[i] = (int64_t *)(intptr_t)TUR_APPLY0(sers[i]);
+        int64_t bl = bufs[i] ? bufs[i][0] : 0;
+        total += 8 + (int64_t)strlen(names[i]) + 8 + bl;
+      }
+      int64_t *out = (int64_t *)malloc((size_t)(8 + total));
+      if (!out) { for (int i = 0; i < gn; i++) free(bufs[i]); free(bufs); return 0; }
+      out[0] = total;
+      uint8_t *c = (uint8_t *)(out + 1);
+      int64_t n = gn; memcpy(c, &n, 8); c += 8;
+      for (int i = 0; i < gn; i++) {
+        int64_t nl = (int64_t)strlen(names[i]);
+        memcpy(c, &nl, 8); c += 8;
+        memcpy(c, names[i], (size_t)nl); c += nl;
+        int64_t bl = bufs[i] ? bufs[i][0] : 0;
+        memcpy(c, &bl, 8); c += 8;
+        if (bl) { memcpy(c, bufs[i] + 1, (size_t)bl); c += bl; }
+        free(bufs[i]);
+      }
+      free(bufs);
+      return (int64_t)(intptr_t)out;
+    }
+    case 2: {
+      const int64_t *in = (const int64_t *)bytes;
+      if (!in || in[0] < 8) return 0;
+      const uint8_t *c = (const uint8_t *)(in + 1), *end = c + in[0];
+      int64_t n; memcpy(&n, c, 8); c += 8;
+      int64_t restored = 0;
+      for (int64_t k = 0; k < n; k++) {
+        int64_t nl, bl;
+        if (end - c < 8) break;
+        memcpy(&nl, c, 8); c += 8;
+        if (nl < 0 || end - c < nl) break;
+        const char *nm = (const char *)c; c += nl;
+        if (end - c < 8) break;
+        memcpy(&bl, c, 8); c += 8;
+        if (bl < 0 || end - c < bl) break;
+        for (int i = 0; i < gn; i++) {
+          if ((int64_t)strlen(names[i]) != nl || memcmp(names[i], nm, (size_t)nl) != 0) continue;
+          int64_t *bb = (int64_t *)malloc((size_t)(8 + bl));
+          if (!bb) return restored;
+          bb[0] = bl;
+          if (bl) memcpy(bb + 1, c, (size_t)bl);
+          (void)TUR_APPLY1(desers[i], (int64_t)(intptr_t)bb);
+          free(bb);
+          restored++;
+          break;
+        }
+        c += bl;
+      }
+      return restored;
+    }
+    case 3: return gn;
+    default: return -1;
+  }
+  ```)
+;;; image/free-bytes -- free a bytes value returned by image/snapshot-globals.
+
+(defn image/free-bytes [b : ptr<void>] : void
+  ```c
+  if (b) free(b);
+  ```)
+;;; image/bytes-null? -- true when a bytes/blob value is NULL.
+
+(defn image/bytes-null? [b : ptr<void>] : bool
+  ```c
+  return b == NULL;
+  ```)
+;;; image/register-global! -- register a global's ser/deser pair by name.
+;;;
+;;; The low-level registration behind `defimage-global`; call it directly only
+;;; when you hand-roll the pair.  A second registration under the same name
+;;; replaces the first, so tracking at the top of `main` is idempotent.
+;;;
+;;; Parameters:
+;;;   name  -- the global's name, the key the image section is matched on
+;;;   ser   -- (fn [] ptr<void>): the global's current value as Serializable bytes
+;;;   deser -- (fn [ptr<void>] int): overwrite the global from Serializable bytes
+;;;
+;;; Returns:
+;;;   The number of globals registered so far.
+;;;
+;;; Since: Phase AI (AI3.2)
+
+(defn image/register-global! [name : cstr ^fat ser : (fn [] ptr<void>) ^fat deser : (fn [ptr<void>] int)] : int
+  (image/global-registry 0 name ser deser (image/null-bytes)))
+;;; image/null-bytes -- the NULL bytes value (internal).
+
+(defn image/null-bytes [] : ptr<void>
+  ```c
+  return NULL;
+  ```)
+;;; image/global-count -- how many image globals are registered.
+;;;
+;;; Since: Phase AI (AI3.2)
+
+(defn image/global-count [] : int
+  (image/global-registry 3 "" 0 0 (image/null-bytes)))
+;;; image/snapshot-globals -- serialise every registered global into one bytes value.
+;;;
+;;; Returns a fresh {len; data} bytes value holding the globals section, or NULL
+;;; when no global is registered.  Free it with image/free-bytes.  Called for
+;;; you by save-image! and the with-image-cache combinators.
+;;;
+;;; Since: Phase AI (AI3.3)
+
+(defn image/snapshot-globals [] : ptr<void>
+  (image/bytes-of (image/global-registry 1 "" 0 0 (image/null-bytes))))
+;;; image/bytes-of -- reinterpret an int carrier as a bytes value (internal).
+
+(defn image/bytes-of [p : int] : ptr<void>
+  ```c
+  return (void *)(intptr_t)p;
+  ```)
+;;; image/restore-globals! -- overwrite registered globals from a globals section.
+;;;
+;;; Parameters:
+;;;   bytes -- a globals section as written by image/snapshot-globals (NULL is a no-op)
+;;;
+;;; Returns:
+;;;   The number of globals restored.
+;;;
+;;; Since: Phase AI (AI3.3)
+
+(defn image/restore-globals! [bytes : ptr<void>] : int
+  (image/global-registry 2 "" 0 0 bytes))
+;;; defimage-global -- declare a mutable global that rides in the image.
+;;;
+;;; `(defimage-global name :T initial)` is `(def ^mut name :T initial)` plus
+;;; the machinery that puts the global in the image: it also defines
+;;; `name/image-ser` and `name/image-deser` (the global's Serializable
+;;; instance, monomorphically -- T must have one) and `name/image-track!`,
+;;; which registers the pair.  Because compiled top-level forms do not run,
+;;; the tracker is NOT called for you: put `(image/track-globals! name ...)`
+;;; at the top of `main`, before the with-image-cache call, so the global is
+;;; registered on both the cold start that writes the image and the warm
+;;; start that restores it.
+;;;
+;;; Example:
+;;;   (defimage-global counter :int 0)
+;;;   (defn do-init [] : int (do (set! counter 42) 0))
+;;;   (defn main [] : int
+;;;     (do (image/track-globals! counter)
+;;;         (with-image-cache-after-init "app.img" do-init do-loop)))
+;;;   ;; a warm start sees counter = 42, not 0
+;;;
+;;; Since: Phase AI (AI3.2)
+
+(defmacro defimage-global [name ty init]
+  (let [ser   (str->sym (str-append (symbol-name name) "/image-ser"))
+        deser (str->sym (str-append (symbol-name name) "/image-deser"))
+        track (str->sym (str-append (symbol-name name) "/image-track!"))]
+    `(do
+       (def ^mut ~name ~ty ~init)
+       (defn ~ser [] : ptr<void> (serialize ~name))
+       (defn ~deser [b : ptr<void>] : int (do (set! ~name (:: (deserialize b) ~ty)) 0))
+       (defn ~track [] : int (image/register-global! ~(symbol-name name) ~ser ~deser)))))
+;;; image/track-globals! -- register the named image globals (call at the top of main).
+;;;
+;;; `(image/track-globals! a b c)` expands to the `a/image-track!` ... calls
+;;; that `defimage-global` defined.  Idempotent; evaluates to 0.
+;;;
+;;; Since: Phase AI (AI3.2)
+
+(defmacro image/track-globals! [& names]
+  (if (empty? names)
+    0
+    `(do
+       (~(str->sym (str-append (symbol-name (first names)) "/image-track!")))
+       (image/track-globals! ~@(rest names)))))
+;; ---------------------------------------------------------------------------
 ;; File I/O at the continuation boundary. All pointer juggling lives in C so
 ;; the Turmeric surface stays in plain ints/handles. The 4-line CRC-32 loop is
 ;; inlined at each site (no nested helper function, which the compiled backend
 ;; rejects as an invalid storage class).
 ;; ---------------------------------------------------------------------------
+;;; image/write-image-file! -- frame continuation k (+ globals) and write to path.
+;;;
+;;; The C half of image/save-cont-to-file!: marshals k via the Phase 21 serial
+;;; codec, writes the 72-byte header carrying `stamp`, the continuation bytes,
+;;; and -- when `globals` is non-NULL -- the AI3 globals section
+;;; ([int64 len][bytes]) that the header's globals_offset (byte 56) locates.
+;;; payload_len covers both sections.
+;;;
+;;; Parameters:
+;;;   path    -- destination path
+;;;   k       -- the serial-continuation handle from serial-shift
+;;;   stamp   -- 32-byte build stamp pointer (image/build-stamp), or 0 to zero-fill
+;;;   globals -- a globals section from image/snapshot-globals, or NULL for none
+;;;
+;;; Returns:
+;;;   1 on success, 0 on failure (nil k, unwritable path, short write).
+;;;
+;;; Since: Phase AI (AI3.3)
+
+(defn image/write-image-file! [path : cstr k : ptr<void> stamp : int globals : ptr<void>] : int
+  ```c
+  #include <stdint.h>
+  #include <time.h>
+  if (!k) return 0;
+  uint8_t *bb = (uint8_t *)(intptr_t)tur_serial_cont_serialize((int64_t)(intptr_t)k);
+  if (!bb) return 0;
+  int64_t plen; memcpy(&plen, bb, 8);
+  const uint8_t *payload = bb + 8;
+  if (plen < 0) { free(bb); return 0; }
+  const int64_t *gsec = (const int64_t *)globals;
+  int64_t glen = gsec ? gsec[0] : 0;
+  if (glen < 0) { free(bb); return 0; }
+  uint64_t goff = gsec ? (uint64_t)(72 + plen) : 0u;
+  uint64_t total = (uint64_t)plen + (gsec ? 8u + (uint64_t)glen : 0u);
+  FILE *f = fopen(path, "wb");
+  if (!f) { free(bb); return 0; }
+  uint8_t hdr[72]; memset(hdr, 0, 72);
+  uint32_t magic=0x54555249u, ver=1u;
+  memcpy(hdr+0,&magic,4); memcpy(hdr+4,&ver,4);
+  if (stamp) memcpy(hdr+8,(const void*)(intptr_t)stamp,32);
+  memcpy(hdr+40,&total,8);
+  struct timespec ts; uint64_t cns=0;
+  if (clock_gettime(CLOCK_REALTIME,&ts)==0) cns=(uint64_t)ts.tv_sec*1000000000ull+(uint64_t)ts.tv_nsec;
+  memcpy(hdr+48,&cns,8);
+  memcpy(hdr+56,&goff,8);
+  { uint32_t crc=0xFFFFFFFFu; for (int i=0;i<68;i++){ crc^=hdr[i]; for(int b=0;b<8;b++) crc=(crc>>1)^(0xEDB88320u&(uint32_t)(-(int32_t)(crc&1))); } crc=~crc; memcpy(hdr+68,&crc,4); }
+  int ok = (fwrite(hdr,1,72,f)==72);
+  if (ok && plen>0) ok = (fwrite(payload,1,(size_t)plen,f)==(size_t)plen);
+  if (ok && gsec) {
+    ok = (fwrite(&glen,1,8,f)==8);
+    if (ok && glen>0) ok = (fwrite(gsec+1,1,(size_t)glen,f)==(size_t)glen);
+  }
+  fclose(f);
+  free(bb);
+  return ok ? 1 : 0;
+  ```)
 ;;; image/save-cont-to-file! -- serialise continuation k and write it to path.
 ;;;
 ;;; Marshals k via the Phase 21 serial codec, frames the resulting payload with
-;;; a 72-byte header carrying `stamp`, and writes it to `path`.
+;;; a 72-byte header carrying `stamp`, appends the registered image globals as
+;;; a second section (AI3), and writes it to `path`.
 ;;;
 ;;; Parameters:
 ;;;   path  -- destination path
@@ -283,34 +558,10 @@
 ;;;
 ;;; Since: Phase AI
 
-
 (defn image/save-cont-to-file! [path : cstr k : ptr<void> stamp : int] : int
-  ```c
-  #include <stdint.h>
-  #include <time.h>
-  if (!k) return 0;
-  uint8_t *bb = (uint8_t *)(intptr_t)tur_serial_cont_serialize((int64_t)(intptr_t)k);
-  if (!bb) return 0;
-  int64_t plen; memcpy(&plen, bb, 8);
-  const uint8_t *payload = bb + 8;
-  if (plen < 0) { free(bb); return 0; }
-  FILE *f = fopen(path, "wb");
-  if (!f) { free(bb); return 0; }
-  uint8_t hdr[72]; memset(hdr, 0, 72);
-  uint32_t magic=0x54555249u, ver=1u;
-  memcpy(hdr+0,&magic,4); memcpy(hdr+4,&ver,4);
-  if (stamp) memcpy(hdr+8,(const void*)(intptr_t)stamp,32);
-  uint64_t pl=(uint64_t)plen; memcpy(hdr+40,&pl,8);
-  struct timespec ts; uint64_t cns=0;
-  if (clock_gettime(CLOCK_REALTIME,&ts)==0) cns=(uint64_t)ts.tv_sec*1000000000ull+(uint64_t)ts.tv_nsec;
-  memcpy(hdr+48,&cns,8);
-  { uint32_t crc=0xFFFFFFFFu; for (int i=0;i<68;i++){ crc^=hdr[i]; for(int b=0;b<8;b++) crc=(crc>>1)^(0xEDB88320u&(uint32_t)(-(int32_t)(crc&1))); } crc=~crc; memcpy(hdr+68,&crc,4); }
-  int ok = (fwrite(hdr,1,72,f)==72);
-  if (ok && plen>0) ok = (fwrite(payload,1,(size_t)plen,f)==(size_t)plen);
-  fclose(f);
-  free(bb);
-  return ok ? 1 : 0;
-  ```)
+  (let [g  (image/snapshot-globals)
+        ok (image/write-image-file! path k stamp g)]
+    (do (image/free-bytes g) ok)))
 ;;; image/loadable? -- 1 if path is a structurally valid image for `stamp`.
 ;;;
 ;;; Validates magic + version + CRC and then requires the header build-stamp to
@@ -340,11 +591,87 @@
   if (stored_crc != crc) return 0;
   return memcmp(hdr+8, (const void*)(intptr_t)stamp, 32) == 0 ? 1 : 0;
   ```)
+;;; image/read-image-file -- read + validate an image into a blob (internal).
+;;;
+;;; Validates magic / version / CRC and, when `stamp` is non-zero, the build
+;;; stamp.  Returns a malloc'd blob laid out as [int64 cont_len][cont bytes]
+;;; [int64 globals_len][globals bytes] (globals_len is 0 for an image with no
+;;; globals section), or NULL on any validation / I-O failure.  The blob's head
+;;; is exactly the buffer tur_serial_cont_deserialize consumes.
+;;;
+;;; Since: Phase AI (AI3.3)
+
+(defn image/read-image-file [path : cstr stamp : int] : ptr<void>
+  ```c
+  #include <stdint.h>
+  FILE *f = fopen(path, "rb");
+  if (!f) return NULL;
+  uint8_t hdr[72];
+  if (fread(hdr,1,72,f)!=72) { fclose(f); return NULL; }
+  uint32_t magic; memcpy(&magic,hdr+0,4);
+  if (magic != 0x54555249u) { fclose(f); return NULL; }
+  uint32_t stored_crc; memcpy(&stored_crc,hdr+68,4);
+  uint32_t crc=0xFFFFFFFFu; for (int i=0;i<68;i++){ crc^=hdr[i]; for(int b=0;b<8;b++) crc=(crc>>1)^(0xEDB88320u&(uint32_t)(-(int32_t)(crc&1))); } crc=~crc;
+  if (stored_crc != crc) { fclose(f); return NULL; }
+  uint32_t ver; memcpy(&ver,hdr+4,4);
+  if (ver != 1u) { fclose(f); return NULL; }
+  if (stamp && memcmp(hdr+8,(const void*)(intptr_t)stamp,32)!=0) { fclose(f); return NULL; }
+  int64_t plen; { uint64_t pl; memcpy(&pl,hdr+40,8); plen=(int64_t)pl; }
+  int64_t goff; { uint64_t go; memcpy(&go,hdr+56,8); goff=(int64_t)go; }
+  if (plen < 0) { fclose(f); return NULL; }
+  /* The continuation section is everything before globals_offset (or the
+   * whole payload when there is no globals section). */
+  int64_t clen = plen;
+  if (goff) {
+    if (goff < 72 || goff - 72 > plen) { fclose(f); return NULL; }
+    clen = goff - 72;
+  }
+  int64_t grest = plen - clen;   /* [int64 glen][bytes] on disk, or 0 */
+  uint8_t *buf = (uint8_t *)malloc((size_t)(8 + clen + (grest ? grest : 8)));
+  if (!buf) { fclose(f); return NULL; }
+  memcpy(buf, &clen, 8);
+  if (clen>0 && fread(buf+8,1,(size_t)clen,f)!=(size_t)clen) { free(buf); fclose(f); return NULL; }
+  if (grest) {
+    if (grest < 8 || fread(buf+8+clen,1,(size_t)grest,f)!=(size_t)grest) { free(buf); fclose(f); return NULL; }
+    int64_t glen; memcpy(&glen, buf+8+clen, 8);
+    if (glen < 0 || glen != grest - 8) { free(buf); fclose(f); return NULL; }
+  } else {
+    int64_t zero = 0; memcpy(buf+8+clen, &zero, 8);
+  }
+  fclose(f);
+  return (void *)buf;
+  ```)
+;;; image/blob-globals -- the globals section inside a read blob (internal).
+;;;
+;;; Returns a bytes view ({len; data}) into the blob, or NULL when the image
+;;; carried no globals.  The view borrows the blob; do not free it.
+
+(defn image/blob-globals [blob : ptr<void>] : ptr<void>
+  ```c
+  if (!blob) return NULL;
+  int64_t clen; memcpy(&clen, blob, 8);
+  int64_t *g = (int64_t *)((uint8_t *)blob + 8 + clen);
+  return g[0] > 0 ? (void *)g : NULL;
+  ```)
+;;; image/blob-resume! -- deserialise the blob's continuation and resume it on v.
+;;;
+;;; Consumes (frees) the blob.  Returns the resumed continuation's value.
+
+(defn image/blob-resume! [blob : ptr<void> v : int] : int
+  ```c
+  if (!blob) return 0;
+  int64_t kk = tur_serial_cont_deserialize((int64_t)(intptr_t)blob);
+  int64_t r = tur_serial_cont_resume(kk, (int64_t)v);
+  free(blob);
+  return (int64_t)r;
+  ```)
 ;;; image/load-resume-file! -- read + validate an image and resume it on v.
 ;;;
 ;;; Validates magic / version / CRC. When `stamp` is non-zero, also requires
 ;;; the header build-stamp to equal it (build-stamp safety, AI4); pass 0 to
 ;;; skip the stamp check (the --unsafe-image-skip-build-check escape hatch).
+;;; Registered image globals (AI3) are restored from the image's globals
+;;; section BEFORE the continuation resumes.
 ;;;
 ;;; Parameters:
 ;;;   path  -- source path
@@ -358,32 +685,12 @@
 ;;; Since: Phase AI
 
 (defn image/load-resume-file! [path : cstr stamp : int v : int] : int
-  ```c
-  #include <stdint.h>
-  FILE *f = fopen(path, "rb");
-  if (!f) return 0;
-  uint8_t hdr[72];
-  if (fread(hdr,1,72,f)!=72) { fclose(f); return 0; }
-  uint32_t magic; memcpy(&magic,hdr+0,4);
-  if (magic != 0x54555249u) { fclose(f); return 0; }
-  uint32_t stored_crc; memcpy(&stored_crc,hdr+68,4);
-  uint32_t crc=0xFFFFFFFFu; for (int i=0;i<68;i++){ crc^=hdr[i]; for(int b=0;b<8;b++) crc=(crc>>1)^(0xEDB88320u&(uint32_t)(-(int32_t)(crc&1))); } crc=~crc;
-  if (stored_crc != crc) { fclose(f); return 0; }
-  uint32_t ver; memcpy(&ver,hdr+4,4);
-  if (ver != 1u) { fclose(f); return 0; }
-  if (stamp && memcmp(hdr+8,(const void*)(intptr_t)stamp,32)!=0) { fclose(f); return 0; }
-  int64_t plen; { uint64_t pl; memcpy(&pl,hdr+40,8); plen=(int64_t)pl; }
-  if (plen < 0) { fclose(f); return 0; }
-  uint8_t *buf = (uint8_t *)malloc((size_t)(8 + plen));
-  if (!buf) { fclose(f); return 0; }
-  memcpy(buf, &plen, 8);
-  if (plen>0 && fread(buf+8,1,(size_t)plen,f)!=(size_t)plen) { free(buf); fclose(f); return 0; }
-  fclose(f);
-  int64_t kk = tur_serial_cont_deserialize((int64_t)(intptr_t)buf);
-  int64_t r = tur_serial_cont_resume(kk, (int64_t)v);
-  free(buf);
-  return (int64_t)r;
-  ```)
+  (let [blob (image/read-image-file path stamp)]
+    (if (image/bytes-null? blob)
+      0
+      (do
+        (image/restore-globals! (image/blob-globals blob))
+        (image/blob-resume! blob v)))))
 ;; ---------------------------------------------------------------------------
 ;; High-level API (AI2).
 ;; ---------------------------------------------------------------------------

@@ -2199,6 +2199,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * Same deferral rationale as the crossings themselves: a frame's callees may
      * be defined later in the unit. */
     wf_resolve_write_frames(&e);
+    wf_lint_image_globals(&e);   /* AI3.1: TUR-W0706, after every site exists */
     /* R4 slice 2: verify `#reads` frames against their elaborated bodies,
      * stamping reads_checked where every read attributes to the frame.  Emits
      * nothing but the optional --dump-read-frames dump plus slice 3's

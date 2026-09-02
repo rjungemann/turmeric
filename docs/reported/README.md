@@ -46,7 +46,6 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [image-dumps-globals-registry-missing](image-dumps-globals-registry-missing.md) | medium | plan AI3 unbuilt: mutable globals silently fall out of image dumps |
 | [guestbook-example-has-no-import-graph](guestbook-example-has-no-import-graph.md) | medium | the guestbook's 7 files are one problem: nothing loads them (its CMake `DEPENDS` is not an import), plus stale `extern-c`/`unit`/`Serializable` syntax, plus a dependency on the unimplemented serializable-continuation surface |
 | ~~perform-inside-loop-has-no-lowering~~ | -- | **Resolved 2026-09-02**: a tail-position `while` now reaches the loop lowering, a conditional `perform` in statement position reifies its join as a DK resume-frame, a conditionally or repeatedly assigned loop-carried `^mut` rides a shared cell, a loop followed by statements reifies its continuation as a join, and `extern-c` callees no longer color their callers. `examples/snake` passes `tur check`. Archived to [docs/archive](../archive/perform-inside-loop-has-no-lowering.md) |
 | [serializable-continuations-aspirational-surface](serializable-continuations-aspirational-surface.md) | medium | `serial-resume`/`serial-cont->bytes`/`bytes->serial-cont` documented in four guides, unimplemented |
@@ -492,6 +491,7 @@ into a frame env again.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| ~~image-dumps-globals-registry-missing~~ | -- | **Resolved 2026-09-02**: plan AI3 built -- `defimage-global` + `image/track-globals!` registry, globals snapshot written as a second TSER section (header `globals_offset`) and restored before resume, `TUR-W0706` lint on the `init` root of `with-image-cache-after-init`; stdlib float `deserialize` fixed on the way. Archived to [docs/archive](../archive/image-dumps-globals-registry-missing.md) |
 | ~~debugger-and-tracer-only-instrument-main~~ | -- | **Resolved 2026-09-02**: a program with no `main` is now debugged and traced as a top-level program -- the CLI launch arms the debugger around the load itself (the wasm glue already did), so stopOnEntry stops on the first form, breakpoints in called functions fire, and the recorder records steps. Top-level DAP scenario and trace case added. Archived to [docs/archive](../archive/debugger-and-tracer-only-instrument-main.md) |
 
 `turi-catch-unwind-aggregate-payload` was filed and resolved 2026-08-21 and

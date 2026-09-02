@@ -25,8 +25,9 @@ image file in between. On a later run, if a valid image exists, it restores
 that continuation and jumps straight into `loop`, skipping `init` entirely.
 
 The image file is a fixed 72-byte header (`src/runtime/image.h`) followed by
-the Phase 21 TSER payload bytes of the captured continuation. No new wire
-format -- it frames Phase 21's serial codec.
+the Phase 21 TSER payload bytes of the captured continuation and, when the
+program declares `defimage-global`s, a second section holding their values
+(see "Globals"). No new wire format -- it frames Phase 21's serial codec.
 
 ## When to use it
 
@@ -80,16 +81,67 @@ internally) rather than on the return value.
 ## Globals: why your `def` isn't in the image
 
 The image captures *the continuation*, which means **only values transitively
-closed over by the captured frames** are in it. A top-level `def` that the
+closed over by the captured frames** are in it. A top-level `def ^mut` that the
 captured continuation doesn't reference is **not** in the image -- a foot-gun
-if you expect whole-heap Lisp-image semantics.
+if you expect whole-heap Lisp-image semantics: a global written during `init`
+is silently back at its initial value after a warm start, because `init` is
+exactly the code a warm start skips.
 
-> **Status:** A first-class `defimage-global` registry (plan AI3) that
-> serialises declared mutable globals alongside the continuation, and a
-> `TUR-W0706` lint for unregistered mutation reachable from a cache body, are
-> **not yet implemented**. Until then, thread any post-init mutable state you
-> need *through the captured continuation* (as a frame env), so it rides in the
-> image. See `docs/archive/history/application-image-dumps-plan.md` AI3.
+`defimage-global` declares a global that **is** in the image:
+
+```turmeric
+(defimage-global counter  :int   0)       ; T must have a Serializable instance
+(defimage-global greeting :cstr  "cold")
+(defimage-global ratio    :float 1.5)
+
+(defn do-init [] :int
+  (set! counter 42)                       ; written on the cold start only ...
+  (set! ratio 7.1)
+  0)
+
+(defn main [] :int
+  (image/track-globals! counter greeting ratio)   ; at the TOP of main
+  (with-image-cache-after-init "/var/cache/app.img" do-init do-loop))
+  ;; ... and a warm start's do-loop sees counter = 42, ratio = 7.1
+```
+
+`(defimage-global name :T initial)` is `(def ^mut name :T initial)` plus three
+generated defns: `name/image-ser` and `name/image-deser` (the global's
+`Serializable` instance for `T`, monomorphically) and `name/image-track!`, which
+registers the pair by name. **Tracking is not automatic**: compiled top-level
+forms do not execute, so `(image/track-globals! name ...)` goes at the top of
+`main`, before the cache call -- the same rule as the hooks below, and for the
+same reason (it has to run on the warm start too). `image/global-count` tells
+you how many are registered.
+
+On save, the registry is snapshotted through each global's `serialize` into a
+**second TSER section** written after the continuation bytes; the header's
+`globals_offset` locates it and `payload_len` covers both. On load, the section
+is restored through each `deserialize` **before** the continuation resumes, so
+the resumed `loop` reads the post-init values. A record whose name is not
+tracked in the loading process is skipped; a tracked global absent from the
+image keeps its current value. An image with no globals has `globals_offset`
+0 and reads exactly as before.
+
+### `TUR-W0706`: an `init` write that the image will not carry
+
+The compiler lints the cold-start root of every `with-image-cache-after-init`
+call: if `init` -- or any named function it calls -- does `set!` on a top-level
+global that no `defimage-global` declared, it warns at the call:
+
+```
+warning [TUR-W0706]: `do-init` writes the global `hidden`, which is not an
+image global: the image holds the captured continuation, not the heap, and
+init is skipped on a warm start, so the write is silently absent after load
+-- declare it with (defimage-global hidden :T initial) and track it at the
+top of main, or thread the value through the captured continuation
+```
+
+The walk is the same one `#writes` frames use (transitive over named callees;
+a call through a function-typed parameter is opaque and does not warn). Only
+`init` is linted: `loop` runs on both paths, so its writes are not a warm-start
+hazard. The single-body `with-image-cache` takes a closure and is not linted --
+prefer the after-init combinator when you have mutable globals.
 
 ## Resources: the reload-hook pattern
 
@@ -236,7 +288,7 @@ cross the boundary.
 
 - `docs/guides/serializable-continuations-guide.md` -- the Phase 21 substrate.
 - `docs/archive/history/application-image-dumps-plan.md` -- the full plan (AI0--AI8),
-  including the phases not yet implemented (AI3 globals, AI6.1
-  `tur run --image`, perf benchmarks).
+  including the phases not yet implemented (AI6.1 `tur run --image`, perf
+  benchmarks).
 - `src/runtime/image.h` -- the canonical header layout; `tests/image_unit.c`
   pins it.

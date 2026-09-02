@@ -255,7 +255,10 @@
       | ((uint64_t)p[7] << 56);
     double dv;
     memcpy(&dv, &bits, 8);
-    return *(int64_t*)&dv;
+    /* The instance is emitted with its NATIVE signature (`double f(void*)`),
+     * so hand back the double itself.  Returning the bit pattern through an
+     * int64 lvalue converted it numerically (7.1 came back as 4.6e18). */
+    return dv;
     ```))
 ;; cstr -- length-prefixed UTF-8 string (4-byte little-endian length + bytes)
 ;;; Serializable [cstr] -- serialize/deserialize a cstr as a 4-byte LE length prefix followed by UTF-8 bytes.

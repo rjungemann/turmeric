@@ -2329,6 +2329,60 @@ void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_param
     s->annot      = annot;
 }
 
+void wf_note_image_cache_root(Elab *e, const Symbol *root, Span span) {
+    if (!e || !root) return;
+    if (e->n_image_cache_roots == e->cap_image_cache_roots) {
+        uint32_t ncap = e->cap_image_cache_roots ? e->cap_image_cache_roots * 2 : 4;
+        ImageCacheRoot *nb = (ImageCacheRoot *)arena_alloc(
+            e->arena, ncap * sizeof(ImageCacheRoot));
+        if (e->image_cache_roots)
+            memcpy(nb, e->image_cache_roots,
+                   e->n_image_cache_roots * sizeof(ImageCacheRoot));
+        e->image_cache_roots     = nb;
+        e->cap_image_cache_roots = ncap;
+    }
+    ImageCacheRoot *r = &e->image_cache_roots[e->n_image_cache_roots++];
+    r->root = root;
+    r->span = span;
+}
+
+/* AI3.1 (application-image-dumps-plan): TUR-W0706.  The image written by
+ * with-image-cache-after-init is the CONTINUATION that runs `loop`; a
+ * top-level global that `init` (or anything it calls) writes is not in it
+ * unless a `defimage-global` declared it -- and init is exactly the code a
+ * warm start skips, so the write is silently gone on the run that needed it.
+ * A declared image global leaves a `<name>/image-deser` defn behind (that is
+ * what the macro expands to), so registration is a global-scope lookup.
+ * Reuses the G1 global-write walk, which is transitive over named callees
+ * and answers UNKNOWN for indirect calls (no warning: nothing was seen). */
+void wf_lint_image_globals(Elab *e) {
+    if (!e || e->n_image_cache_roots == 0) return;
+    for (uint32_t i = 0; i < e->n_image_cache_roots; i++) {
+        const ImageCacheRoot *r = &e->image_cache_roots[i];
+        Binding *fn = scope_lookup(&e->global, r->root);
+        if (!fn) continue;
+        WgSet seen = { { 0 }, 0, false };
+        (void)wf_fn_writes_global(e, fn, &seen);
+        for (uint32_t gi = 0; gi < seen.n; gi++) {
+            const Symbol *g = seen.names[gi];
+            char probe[512];
+            snprintf(probe, sizeof probe, "%s/image-deser", g->name);
+            const Symbol *ps = symtab_intern(e->st, strslice(probe, (uint32_t)strlen(probe)));
+            if (scope_lookup(&e->global, ps)) continue;
+            diag_emit_with_code(DIAG_WARNING, r->span,
+                                TUR_W0706_IMAGE_GLOBAL_UNREGISTERED,
+                                "`%s` writes the global `%s`, which is not an "
+                                "image global: the image holds the captured "
+                                "continuation, not the heap, and init is skipped "
+                                "on a warm start, so the write is silently absent "
+                                "after load -- declare it with (defimage-global %s "
+                                ":T initial) and track it at the top of main, or "
+                                "thread the value through the captured continuation",
+                                r->root->name, g->name, g->name);
+        }
+    }
+}
+
 void wf_resolve_write_frames(Elab *e) {
     if (!e || e->n_wf_frame_sites == 0) return;
     /* Iterate to a fixed point: channel 3 consults a callee's `writes_checked`,
