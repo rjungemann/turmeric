@@ -83,65 +83,41 @@ the `_int` / `_ptr` builder that names your intent.
 
 ## Who frees the box
 
-**Every builder here `malloc`s, and nothing frees it for you.** A `defn` whose
-declared return is a GENERIC `(Option A)` / `(Result A B)` -- a type variable in
-the payload, so the erased carrier path -- returns a pointer to a 16-byte tagged
-box, and the elaborator adds no owner. Measured: `stdlib/result.tur`'s
-`result-bimap` leaks exactly 16 bytes per call, and `stdlib/weak.tur`'s
-`weak/upgrade` the same.
+**Ownership of the box is being settled by in-flight work; do not add manual
+frees on the strength of this section.**
 
-The box IS ownable, contrary to what you might assume from "no elaborated
-expression corresponds to it". The caller frees it:
+The builders `malloc` a 16-byte carrier box. On `main` as of 2026-09-02 nothing
+frees it on the erased path -- a generic signature whose payload is a type
+variable -- so `stdlib/result.tur`'s `result-bimap` and `stdlib/weak.tur`'s
+`weak/upgrade` each leak one box per call (measured).
 
-```turmeric
-(let [r (my-inline-c-thing)]
-  (println (ok-val r))
-  (result-free (:: r :int)))      ; option-free for an Option
-```
+`origin/claude/sum-representation-option-niche-nh58fn` fixes this, under a
+contract worth knowing before you write such a body: **an inline-C body whose
+DECLARED return is `(Option T)` / `(Result T E)` transfers ownership of the box
+to its caller**, and the compiler frees it at read-back. Two consequences it
+records -- return a FRESH box (a cached static returned twice becomes a double
+free), and a BORROWED box needs a different signature (declare the element type
+and let the caller wrap it, as `vec-get` does).
 
-Measured on `result-bimap`: freeing nothing leaks 32 bytes (the input box and
-the returned one), freeing the input alone leaves 16, freeing both is clean.
+So the useful advice today is about what you return, not about freeing:
 
-### The free is only correct on the erased path
+- Return a fresh box from each call.
+- If the box belongs to something else, do not declare the result as an
+  Option/Result.
 
-`result-free` / `option-free` call `free()` on the carrier pointer. When the
-`(Result T E)` is a **concrete monomorph** it flows BY VALUE -- a struct, no
-allocation -- and freeing it is a bad free, not a no-op:
+**Do not sprinkle `option-free` / `result-free` to chase the current leak.**
+They become double frees when that branch lands -- the same trap `arc.tur` hit
+from the other side, where its explicit `option-free` calls had to be REMOVED
+once its Option became by-value. And they are already wrong on a concrete
+monomorph, which flows BY VALUE with no allocation at all:
 
 ```
 ERROR: AddressSanitizer: attempting free on address which was not malloc()-ed
 ```
 
-So the rule is not "always free what an inline-C builder returns". It is:
-
-| the value's `(Option A)` / `(Result A B)` is ... | allocation | free it? |
-|---|---|---|
-| generic -- payload is a type variable (erased carrier) | 16-byte box | yes, `option-free` / `result-free` |
-| a concrete monomorph (`(Result int int)`, `(Option Arc)`) | none, by value | **no** -- doing so is a bad free |
-
-The erased case is what an inline-C `defn` with a generic signature produces,
-so if you are following this guide you are usually in the first row. If you are
-not sure which you have, the emitted C tells you: the erased carrier is
-`int64_t`, a by-value monomorph is `tur_adt_Result__...`.
-
-### The alternative: build the value in Turmeric instead
-
-When the result monomorphizes by value, keep the inline C down to a raw
-predicate and construct the Option/Result in ordinary Turmeric, which removes
-the allocation rather than assigning it an owner. `stdlib/arc.tur` does this
-(`arc-try-upgrade` + `arc-weak->arc`, composed by a Turmeric `arc-upgrade`), and
-`stdlib/env.tur` does the same for `env/get` over `env/get-raw`.
-
-Two limits worth knowing before reaching for it:
-
-- **It does not help on the erased path.** A Turmeric `(ok x)` in a generic
-  function allocates the same box the builder does. The split removes an
-  allocation only where the result is a concrete monomorph.
-- **It cannot express an owning payload.** `(Option rc<A>)` is accepted as a
-  return type and can be built from inline C, but `(some r)` where `r : rc<A>`
-  is rejected -- "cannot store an owning value (rc) in a collection". That is
-  why `weak/upgrade` still uses the builder form. Tracked in
-  [docs/reported/inline-c-option-carrier-box-leaks.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/inline-c-option-carrier-box-leaks.md).
+Background: [docs/upcoming/reclamation-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/reclamation-plan.md)
+on that branch, and
+[docs/reported/inline-c-option-carrier-box-leaks.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/inline-c-option-carrier-box-leaks.md).
 
 ## Worked example: an rtmidi-shaped port constructor
 

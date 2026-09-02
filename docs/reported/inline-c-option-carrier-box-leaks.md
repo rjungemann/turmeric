@@ -159,11 +159,29 @@ says the residue "shrinks further with each site that monomorphizes; end-to-end
 monomorphization is where it reaches zero". These two are that residue, reached
 through inline C rather than through `(some x)`.
 
-Direction 2 is **split out into its own report**, because it is not a leak fix
-(per correction 2) and deserves to be triaged on its own:
-[option-rc-payload-legal-to-return-illegal-to-build](option-rc-payload-legal-to-return-illegal-to-build.md).
-It is a decision rather than a diagnosis -- the mechanism is fully located
-(`own_carry_for_arg` in `src/compiler/elab_call.c` is an allowlist; `some`/`ok`/
-`err` are simply not on it) and what is missing is a ruling on whether an owning
-`rc<A>` may move into an Option payload. It matters here only because it is what
-keeps `weak/upgrade` on the builder form.
+Direction 2 is NOT open work here. It was already filed on 2026-08-30, three
+days before this note, as `option-rc-payload-constructible-only-from-inline-c`
+on `origin/claude/sum-representation-option-niche-nh58fn`, with a better
+diagnosis than the one sketched above: the rejection is not the
+`own_carry_for_arg` allowlist but the **tyvar parameter erasure** at
+`elab_call.c:5613`, and the diagnostic's stated rationale is measurably stale --
+a concrete monomorph's payload slot is a typed pointer
+(`RcControlBlock * _0;`), not an int64 carrier, so there is no count to lose.
+That report also covers the READ half, which this one never mentions: the
+generic `unwrap` is rejected on the same value for the same reason.
+
+## This whole report is superseded by in-flight work
+
+`origin/claude/sum-representation-option-niche-nh58fn` (27 commits ahead of
+main) has **already archived this report as fixed** (2026-08-30): the compiler
+now frees the box, under the contract that an inline-C body with a declared
+`(Option T)` / `(Result T E)` return transfers ownership to its caller, freed at
+read-back. Its `docs/upcoming/reclamation-plan.md` is the plan for the wider
+mechanism (RM1 built; the erased-path sweep went 8324 -> 5643 bytes).
+
+**Do not act on this report against that branch.** In particular do not add
+manual `option-free` / `result-free` calls on the strength of the measurements
+below -- once that fix lands they become double frees, exactly as `arc.tur`'s
+explicit `option-free` calls "had to be REMOVED" when its Option became
+by-value. The measurements are accurate for `main` as of 2026-09-02 and
+nothing more.

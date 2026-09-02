@@ -97,13 +97,15 @@ carrier-level `tur_box_*`) that construct the canonical Result/Option
 layout, so a fallible C constructor hands back a real `(Result Handle E)`
 / `(Option Handle)` with no struct hand-rolling and no sentinel integer.
 
-**But know who frees the box.** On the ERASED path -- a generic signature whose
-payload is a type variable -- every one of those builders `malloc`s a 16-byte
-tagged box and the elaborator adds no owner, so the caller must
-`option-free` / `result-free` it. Measured: `result-bimap` and `weak/upgrade`
-each leak 16 bytes per call today. The free is correct ONLY there: a concrete
-monomorph flows by value, and freeing that is a bad free, not a no-op. The
-guide's "Who frees the box" section has the rule and the measurements.
+**Know the ownership contract, and do not add manual frees.** These builders
+`malloc` a carrier box. On the erased path (a generic signature whose payload is
+a type variable) nothing frees it on `main` today, but the fix in flight on
+`claude/sum-representation-option-niche` makes an inline-C body with a declared
+`(Option T)` / `(Result T E)` return TRANSFER ownership to its caller, freed at
+read-back -- so return a FRESH box per call, and give a borrowed box a different
+signature. Sprinkling `option-free` / `result-free` to chase the current leak
+becomes a double free when that lands, and is already a bad free on a concrete
+by-value monomorph.
 See [docs/guides/inline-c-results-guide.md](docs/guides/inline-c-results-guide.md).
 
 ### When you notice this in existing code
