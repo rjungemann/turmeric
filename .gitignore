@@ -160,7 +160,7 @@ performance-comparison/analysis/
 performance-comparison/results/processed/
 performance-comparison/results/raw/
 performance-comparison/results/validation_report.json
-performance-comparison/benchmarks/rust-workspace/
+performance-comparison/benchmarks/rust-workspace/target/
 performance-comparison/inputs/large/
 
 # Test fixture runtime artifacts (interpreter stdout/stderr captured per run).
