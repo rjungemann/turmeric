@@ -120,11 +120,23 @@ The census backing that decision is snapshotted at the end of elaboration
 their constructors are attached and a nested procedural-macro elaboration frees
 the arena the defs live in.
 
-Residual, shared with the pre-existing type-arg suffix convention: every
-non-alphanumeric character folds to `_`, so ADT `a-b` constructor `c` and ADT
-`a` constructor `b-c` both spell `ctor_a_b_c`. That needs two ADTs whose names
-differ by exactly where one separator falls; the bug this replaced needed only a
-shared constructor name.
+**Residual, and one arm of it is not loud.** Every non-alphanumeric character
+folds to `_` while emitted names join their parts with `_`/`__`, so the joiner
+is inside the folded alphabet and the split is ambiguous: ADT `a-b` constructor
+`c` and ADT `a` constructor `b-c` both spell `ctor_a_b_c`, and a user ADT named
+`Foo__int` is the `(Foo int)` monomorph's type name. Those are cc errors.
+
+The bare-name alias above is the arm that is **silent**: it tests uniqueness on
+the RAW constructor name but guards its `#define` on the MANGLED one, so `b-c`
+and `b_c` in two different ADTs both qualify as unique, and the second
+`#define` is dropped by its own `#ifndef`. Inline C calling `ctor_b_c` then
+reaches the other ADT's constructor with no diagnostic at any layer -- when both
+ADTs lower to the `int64_t` carrier, C's type system cannot see it either.
+
+Open finding, with repros and fix directions:
+[docs/reported/separator-fold-collides-emitted-c-names.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/separator-fold-collides-emitted-c-names.md).
+Until its direction 1 lands, do not give two ADTs constructor names that differ
+only by a separator.
 
 See
 [docs/archive/duplicate-ctor-names-collide-in-emitted-c.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/duplicate-ctor-names-collide-in-emitted-c.md).
