@@ -2382,6 +2382,8 @@ static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr);
 static bool adt_app_has_boxed_struct_payload(EmitCtx *ctx, Type t);
 static void emit_boxed_struct_payload_free(EmitCtx *ctx, Buf *body,
                                            const char *name, Type t);
+static void emit_carrier_sum_free(EmitCtx *ctx, Buf *body, const char *name,
+                                  Type t);
 
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if body contains return or throw first */
@@ -2424,6 +2426,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * path (which shares the recorded-i64 pattern) is conservatively skipped
      * -- a recursive binding's box can be re-entered by a later iteration. */
     char **sum_free_names = NULL;
+    Type *sum_free_types = NULL;
     uint32_t n_sum_free = 0;
     /* value-struct-payload-sum-monomorph-box-has-no-owner: let-bound by-value
      * Result/Option monomorphs whose arms hold a boxed value-struct payload,
@@ -2667,7 +2670,11 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (!sib) {
                         sum_free_names = (char **)realloc(sum_free_names,
                             (n_sum_free + 1) * sizeof(char *));
-                        sum_free_names[n_sum_free++] = name_for_binding(ctx, b);
+                        sum_free_types = (Type *)realloc(sum_free_types,
+                            (n_sum_free + 1) * sizeof(Type));
+                        sum_free_names[n_sum_free] = name_for_binding(ctx, b);
+                        sum_free_types[n_sum_free] = b->type;
+                        n_sum_free++;
                     }
                 }
             }
@@ -2920,16 +2927,15 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     free(box_free_names);
 
     /* RM1: release non-escaping erased sum-carrier boxes -- the body was their
-     * last use.  SHALLOW free, null-guarded: the None carrier is NULL (slice
-     * A), and the payload word was copied out by the accessors, so the box is
-     * all this scope owns. */
+     * last use.  Null-guarded (the None carrier is NULL, slice A); shallow
+     * unless the arm holds a boxed value-struct payload, which the cell owns
+     * (see emit_carrier_sum_free). */
     for (uint32_t i = 0; i < n_sum_free; i++) {
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "if (%s) free((void *)(intptr_t)%s);\n",
-                   sum_free_names[i], sum_free_names[i]);
+        emit_carrier_sum_free(ctx, body, sum_free_names[i], sum_free_types[i]);
         free(sum_free_names[i]);
     }
     free(sum_free_names);
+    free(sum_free_types);
 
     /* value-struct-payload-sum-monomorph-box-has-no-owner: release the live
      * arm's payload box. */
@@ -4187,7 +4193,12 @@ static char *emit_any_drop_arm(EmitCtx *ctx, Buf *body, char *v);
  * applies -- and measured itself firing on nothing; that is why this is
  * spelled as the single call and nothing else. */
 static bool boxed_struct_payload_walk(EmitCtx *ctx, Buf *body, const char *name,
-                                      Type t, bool emit) {
+                                      Type t, bool emit, const char *access) {
+    /* `access` spells how the aggregate's members are reached: NULL means the
+     * by-value `name.`; the carrier client passes the cell dereference. */
+    char pfx[320];
+    if (access) snprintf(pfx, sizeof pfx, "%s", access);
+    else snprintf(pfx, sizeof pfx, "%s.", name ? name : "");
     Type rt = emit_resolve_type(ctx, t);
     AdtDef *def = NULL;
     Type args[16];
@@ -4198,7 +4209,7 @@ static bool boxed_struct_payload_walk(EmitCtx *ctx, Buf *body, const char *name,
     bool tagged = def->n_ctors > 1;
     if (emit && tagged) {
         indent_buf(body, ctx->indent);
-        buf_printf(body, "switch (%s.tag) {\n", name);
+        buf_printf(body, "switch (%stag) {\n", pfx);
     }
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         const CtorDef *c = def->ctors[ci];
@@ -4215,8 +4226,8 @@ static bool boxed_struct_payload_walk(EmitCtx *ctx, Buf *body, const char *name,
             if (!emit) return true;
             char *mp = adt_field_member_path(def, c, fi);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "    if (%s.%s) free((void *)(intptr_t)%s.%s);\n",
-                       name, mp, name, mp);
+            buf_printf(body, "    if (%s%s) free((void *)(intptr_t)%s%s);\n",
+                       pfx, mp, pfx, mp);
             free(mp);
         }
         if (emit && tagged) { indent_buf(body, ctx->indent); buf_puts(body, "    break;\n"); }
@@ -4225,32 +4236,69 @@ static bool boxed_struct_payload_walk(EmitCtx *ctx, Buf *body, const char *name,
     return any;
 }
 static bool adt_app_has_boxed_struct_payload(EmitCtx *ctx, Type t) {
-    return boxed_struct_payload_walk(ctx, NULL, NULL, t, false);
+    return boxed_struct_payload_walk(ctx, NULL, NULL, t, false, NULL);
 }
 static void emit_boxed_struct_payload_free(EmitCtx *ctx, Buf *body,
                                            const char *name, Type t) {
-    boxed_struct_payload_walk(ctx, body, name, t, true);
+    boxed_struct_payload_walk(ctx, body, name, t, true, NULL);
+}
+
+/* RM1: free an erased sum-carrier cell.  Shallow by default (the accessors
+ * copy the payload word out first; None IS NULL).  When the carrier's static
+ * type says the live arm holds a boxed value-struct payload -- the erased
+ * `(Option User)` whose `some__spec__int64_t_...` mallocs a `User` copy and
+ * stores the pointer in the cell -- freeing the cell alone turns that box from
+ * an indirect leak into a direct one, so the arm is freed first through the
+ * same tag walk the by-value monomorph drop uses, reached via the cell. */
+static void emit_carrier_sum_free(EmitCtx *ctx, Buf *body, const char *name,
+                                  Type t) {
+    Type rt = emit_resolve_type(ctx, t);
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    bool deep = type_extract_adt_app(&rt, &def, args, &n_args) && def &&
+                def->name && adt_app_has_boxed_struct_payload(ctx, t);
+    if (!deep) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "if (%s) free((void *)(intptr_t)%s);\n", name, name);
+        return;
+    }
+    char access[320];
+    snprintf(access, sizeof access, "((tur_adt_%s *)(intptr_t)%s)->", def->name, name);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "if (%s) {\n", name);
+    ctx->indent += 4;
+    boxed_struct_payload_walk(ctx, body, name, t, true, access);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "free((void *)(intptr_t)%s);\n", name);
+    ctx->indent -= 4;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "}\n");
 }
 
 /* RM1: the sum-box twin of the any_pending pair below -- same mark/drain
  * discipline, draining as a null-guarded shallow free (the None carrier IS
  * NULL, and the accessors copy the payload word out before the drain runs). */
-static void sum_pending_push(EmitCtx *ctx, const char *name) {
+static void sum_pending_push(EmitCtx *ctx, const char *name, Type t) {
     if (ctx->n_sum_pending >= ctx->cap_sum_pending) {
         uint32_t nc = ctx->cap_sum_pending ? ctx->cap_sum_pending * 2 : 8;
         char **nn = (char **)realloc(ctx->sum_pending, nc * sizeof(char *));
-        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        Type *nt = (Type *)realloc(ctx->sum_pending_types, nc * sizeof(Type));
+        if (!nn || !nt) { fprintf(stderr, "tur: oom\n"); abort(); }
         ctx->sum_pending = nn;
+        ctx->sum_pending_types = nt;
         ctx->cap_sum_pending = nc;
     }
-    ctx->sum_pending[ctx->n_sum_pending++] = strdup(name);
+    ctx->sum_pending[ctx->n_sum_pending] = strdup(name);
+    ctx->sum_pending_types[ctx->n_sum_pending] = t;
+    ctx->n_sum_pending++;
 }
 
 static void sum_pending_drain(EmitCtx *ctx, Buf *body, uint32_t mark) {
     while (ctx->n_sum_pending > mark) {
-        char *nm = ctx->sum_pending[--ctx->n_sum_pending];
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "if (%s) free((void *)(intptr_t)%s);\n", nm, nm);
+        --ctx->n_sum_pending;
+        char *nm = ctx->sum_pending[ctx->n_sum_pending];
+        emit_carrier_sum_free(ctx, body, nm, ctx->sum_pending_types[ctx->n_sum_pending]);
         free(nm);
     }
 }
@@ -4695,7 +4743,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * __auto_type, i.e. we could not prove the spelling, so no free either;
      * both misses are status-quo leaks, never a double free. */
     if (e->sum_box_drop_after && ret_ct && strcmp(ret_ct, "int64_t") == 0)
-        sum_pending_push(ctx, tmp);
+        sum_pending_push(ctx, tmp, e->type);
     /* ... and the by-value twin: the temp IS the monomorph aggregate (not the
      * carrier word, not a pointer), and its arm holds a boxed value-struct
      * payload.  The consumer was proven non-retaining at elab (allowlist or

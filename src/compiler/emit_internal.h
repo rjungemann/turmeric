@@ -352,6 +352,7 @@ typedef struct EmitCtx {
      * arguments -- the any_pending discipline (mark before children, drain
      * after the call materializes), draining as a null-guarded free. */
     char    **sum_pending;
+    Type     *sum_pending_types;
     uint32_t  n_sum_pending;
     uint32_t  cap_sum_pending;
     /* value-struct-payload-sum-monomorph-box-has-no-owner: pending frees for

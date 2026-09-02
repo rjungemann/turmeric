@@ -4,15 +4,12 @@ LEAK hkt-constrained-byvalue-bind-pure 80B SUM-BOX
 LEAK hkt-constrained-byvalue-carrier 32B other
 LEAK hkt-constrained-hole-headed-instance-head 32B SUM-BOX
 LEAK hkt-constrained-spec-reresolves-instance 16B other
-LEAK hkt-partial-app-wildcard-byvalue 32B SUM-BOX
 LEAK hkt-stdlib-option-result-instances 40B SUM-BOX
 LEAK hkt-stdlib-result-ok-biased 96B SUM-BOX
 LEAK httpd-req-string-opt 3756B other
 LEAK option-map-capturing-closure 40B SUM-BOX
 LEAK option-niche-crossings 322B other
 LEAK option-niche-string 41B other
-LEAK rational-basics 20B other
-LEAK rational-overflow 112B other
 LEAK re-string 1281B other
 LEAK refined-nonempty 80B SUM-BOX
 LEAK result-monad-bind-typed-boundary 48B SUM-BOX
@@ -22,4 +19,4 @@ LEAK coerce-carrier-to-struct 32B SUM-BOX
 LEAK result-basic 288B SUM-BOX
 LEAK zipper-basic 64B other
 LEAK zipper-basic 64B other
----- leaky:24 clean:3 build-failed:0 total-bytes:7364
+---- leaky:21 clean:6 build-failed:0 total-bytes:7200

@@ -244,6 +244,57 @@ freeing the arm at the consumer's scope exit regardless of what the consumer
 is), which is still the fix that scales. Suite 2749/0, leak-check 65/0/0,
 option-niche seam 9/0, SR4 seam 24/0.
 
+## Direction 3, third round: 7 of the 9 (2026-09-02, later)
+
+**465 -> 125 bytes** on the same sweep (9 leaking fixtures -> 2; the spec-ctor
+frames themselves now account for 16 bytes). Three changes, each found by
+reading the next residue rather than assumed:
+
+**The `cstr` result gate did not transfer.** The pointer-scalar mask excludes
+a `cstr` result because there the PARAM is the cstr and can be returned as-is.
+A sum param cannot become a `cstr` result except by copying a payload word or
+struct out through a reader, and a cstr word points at characters, never into
+the arm box the drop frees. The sum mask now admits `TY_CSTR` results, which
+is exactly the `describe [r : (Result User cstr)] : cstr` shape.
+
+**The let-scope walk did not consult the mask.** The argument-position stamp
+(elab) did, but the let-bound shape goes through `binding_escapes_impl`,
+whose call arm only knew `nonretain_param_mask`. Under the sum walk it now
+also skips a `b` argument in a slot the callee's `nonretain_sum_param_mask`
+covers.
+
+**`EX_REINTERPRET` was an unmodeled kind.** The escape walk fell to its
+conservative `default` on the carrier-retyping wrap elab puts around an
+argument to a polymorphic accessor (`(unwrap o1)` on an erased
+`(Option User)`), so every such use read as an escape. The walk now models
+the reinterpret as its operand, and the accessor / masked-callee argument
+check peels a non-retaining reinterpret before asking whether the argument
+is `b`. This is an RM1 fix as much as a payload one: it moved the erased
+sweep 7364 -> 7200 and cleared `hkt-partial-app-wildcard-byvalue`.
+
+Freeing that carrier cell then exposed the next layer: the erased
+`some__spec__int64_t_tur_adt_User` mallocs the `User` copy and stores the
+pointer in the cell, so a shallow cell free turned a 24-byte indirect leak
+into a direct one. `emit_carrier_sum_free` now frees the live arm through the
+cell first (the same tag walk as the by-value monomorph drop, reached via
+`((tur_adt_Option *)(intptr_t)o)->`) when the carrier's static type has a
+boxed value-struct payload, and stays shallow otherwise. Both the let-scope
+list and the pending list carry the type for this.
+
+Fully ASan-clean and carrying `requires.leak-check` from this round:
+`conv-defstruct-result-struct-field-typedef-order`,
+`result-over-struct-with-option-field-typedef-order`,
+`hkt-partial-app-wildcard-byvalue`.
+
+**The remaining 2 are the class-method shape** and stay by design:
+`constrained-instance-element-dispatch` (`(enc (some box))`) and
+`nested-construct-byvalue-decode` (`ob (ok-val (:: (dec 0) ...))`). A class
+method call is rewritten to `elab_method_call` and dispatched through a
+dictionary slot; there is no `Binding` at the call site to carry a mask or a
+freshness flag, and the instance bodies here are inline C in any case. The
+glue route is the fix for these. Suite 2749/0, leak-check 68/0/0, both
+seams green.
+
 ## Related
 
 - [carrier-sum-option-boxes-have-no-owner](carrier-sum-option-boxes-have-no-owner.md)

@@ -1079,9 +1079,34 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 }
                 for (uint32_t i = 0; i < cur->as.call_.n_args; i++) {
                     const Expr *arg = cur->as.call_.args[i];
-                    if (box_accessor && arg &&
-                        arg->kind == EX_VAR && arg->as.var.binding == b)
+                    /* value-struct-payload-sum-monomorph-box-has-no-owner: a
+                     * carrier argument to a polymorphic accessor arrives under
+                     * an EX_ASCRIBE / non-retaining EX_REINTERPRET wrap (the
+                     * int64 carrier re-typed for the tyvar slot); the wrap is a
+                     * re-typing of the same word, not a use of it, so peel it
+                     * before asking whether this argument is `b`.  An rc-RETAIN
+                     * reinterpret is a real retention and is left in place. */
+                    const Expr *barg = arg;
+                    while (barg && (barg->kind == EX_ASCRIBE ||
+                                    (barg->kind == EX_REINTERPRET &&
+                                     !barg->as.reinterpret_.retain)))
+                        barg = (barg->kind == EX_ASCRIBE) ? barg->as.ascribe_.inner
+                                                          : barg->as.reinterpret_.expr;
+                    bool arg_is_b = barg && barg->kind == EX_VAR &&
+                                    barg->as.var.binding == b;
+                    if (box_accessor && arg_is_b)
                         continue;
+                    /* ... and a USER callee whose body was inferred not to
+                     * retain this sum-typed parameter (nonretain_sum_param_mask)
+                     * confines it exactly as the audited readers do.  Only under
+                     * the sum walk: the mask is a statement about the arm box,
+                     * which is what that walk's client frees. */
+                    if (g_esc_allow_sum_accessors && arg_is_b && !fe) {
+                        const Binding *sfb = cur->as.call_.fn_binding;
+                        if (sfb && i < 32 &&
+                            (sfb->nonretain_sum_param_mask & (1u << i)))
+                            continue;
+                    }
                     /* closure-drop-glue S1: a `^borrow` fn-param (FA_BORROW) is
                      * borrowed, not retained -- the callee invokes but does not
                      * store/return it.  So `b` passed to a borrowed param does NOT
@@ -1343,6 +1368,14 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 break;
             case EX_CAST:
                 ESC_PUSH(cur->as.cast_.expr);
+                break;
+            /* A bit reinterpret re-types its operand's word; whether `b`
+             * escapes through it is whether `b` escapes through the operand
+             * (a bare reinterpret of `b` reaches EX_VAR and is an escape, as a
+             * bare `b` is).  It used to fall to `default`, which reported every
+             * carrier-typed accessor argument as an escape. */
+            case EX_REINTERPRET:
+                ESC_PUSH(cur->as.reinterpret_.expr);
                 break;
 
             /* ---- leaves: cannot reference `b` ---- */

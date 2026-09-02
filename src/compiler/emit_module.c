@@ -14379,6 +14379,7 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.any_pending);
     for (uint32_t _i = 0; _i < ctx.n_sum_pending; _i++) free(ctx.sum_pending[_i]);
     free(ctx.sum_pending);
+    free(ctx.sum_pending_types);
     for (uint32_t _i = 0; _i < ctx.n_vsp_pending; _i++) free(ctx.vsp_pending[_i]);
     free(ctx.vsp_pending);
     free(ctx.vsp_pending_types);
@@ -15808,6 +15809,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     free(ctx.any_pending);
     for (uint32_t _i = 0; _i < ctx.n_sum_pending; _i++) free(ctx.sum_pending[_i]);
     free(ctx.sum_pending);
+    free(ctx.sum_pending_types);
     for (uint32_t _i = 0; _i < ctx.n_vsp_pending; _i++) free(ctx.vsp_pending[_i]);
     free(ctx.vsp_pending);
     free(ctx.vsp_pending_types);

@@ -8447,6 +8447,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         case TY_INT16: case TY_UINT16: case TY_INT8: case TY_UINT8:
                         case TY_FLOAT64: case TY_FLOAT32:
                             _sres_safe = true; break;
+                        /* Unlike the pointer-scalar mask (where the PARAM is
+                         * the cstr and can be returned as-is), a sum param
+                         * cannot become a cstr result except by copying a
+                         * payload word or struct out through a reader -- and
+                         * a cstr word points at characters, never into the arm
+                         * box the drop frees.  `describe : cstr` is the common
+                         * reader shape. */
+                        case TY_CSTR:
+                            _sres_safe = true; break;
                         default: break;
                     }
                     if (_sres_safe && sum_param_is_nonretaining(body, _pb))

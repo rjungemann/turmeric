@@ -345,8 +345,20 @@ Two consumers, mirroring the `any` family's two cases:
   accessor-only uses (a widened `catch_box_binding_escapes`) is freed at
   trailing scope exit.  letrec conservatively skipped.
 
-All frees are null-guarded (the None carrier IS NULL) and shallow (accessors
-copy payload words out; the box owns nothing else).
+All frees are null-guarded (the None carrier IS NULL) and shallow -- accessors
+copy payload words out -- with one exception: a carrier whose static type says
+the live arm holds a boxed value-struct payload (`(Option User)` erased, whose
+`some__spec__int64_t_...` mallocs a `User` copy into the cell) frees that arm
+first through the cell, since freeing the cell alone only turns the payload
+box from an indirect leak into a direct one (`emit_carrier_sum_free`).
+
+Follow-up (2026-09-02): the escape walk fell to its conservative `default`
+on `EX_REINTERPRET` -- the carrier re-typed for a polymorphic accessor's
+tyvar slot -- so every `(unwrap o)` on a carrier `(Option <struct>)` read as
+an escape and the drop never fired there.  The walk now models the
+reinterpret as its operand, and the accessor / non-retaining-callee argument
+check peels it.  **7364 -> 7200 bytes**; `hkt-partial-app-wildcard-byvalue`
+left the leak list and carries `requires.leak-check`.
 
 **Measured: 8324 -> 7364 bytes** across the 27 erased-base callers (the
 null-None mirror above contributed 112 of that; the drops the rest), with the
