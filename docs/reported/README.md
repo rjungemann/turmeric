@@ -1044,6 +1044,31 @@ at the return, where `e.adt_defs` is already freed. A missed site in a change
 like this is always an undefined symbol or a lifetime error, never a wrong
 answer, which is what made the suite a sufficient verifier.
 
+`control-form-around-if-double-unboxes-carrier-arms` was resolved 2026-09-02 and
+moved to
+[docs/archive](../archive/control-form-around-if-double-unboxes-carrier-arms.md).
+It took TWO changes, not the one it specifies. The stated fix --
+`emit_arm_is_recorded_byval_agg` in `bridge_control_value_to_byvalue_temp` -- is
+correct and on its own changed nothing, because the precondition the report
+asserts does not hold: the merge temp's recorded C type lookup returns NOTHING.
+`emit_if` declares its by-value merge temp with `emit_temp_decl` directly,
+bypassing `emit_control_result_temp_decl`, which is the wrapper carrying the
+`emit_localvar_record_ctype` bookkeeping -- so the temp was by-value in the
+emitted C and invisible to the side table the predicate consults. Recording it is
+the second half. The generalisable lesson: a position-sensitive predicate is only
+as good as the recording that feeds it, and one site declaring a temp outside the
+recording wrapper silently disables it.
+
+All ten fixtures the predecessor's resolution named pass with MATCHING OUTPUT,
+as its blast-radius argument predicted. Suite 2751 passed / 0 failed, zero
+snapshot churn. Pinned by `tests/fixtures/control-form-around-if-carrier-arms/`
+covering both the `let` and `do` wrappers and asserting field values, verified to
+fail against a reverted compiler once per wrapper.
+
+Its requested sweep of the remaining `fn_body_tail_emits_byvalue_carrier_abi`
+callers is done, and found one bridging site that still asks only the Expr-level
+question -- filed as the `cps-let-binder-bridge-lacks-position-check` row above.
+
 `fat-dispatch-wide-byvalue-aggregate-argument` was resolved 2026-08-27 and
 moved to
 [docs/archive](../archive/fat-dispatch-wide-byvalue-aggregate-argument.md):
@@ -1432,7 +1457,7 @@ churn.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [control-form-around-if-double-unboxes-carrier-arms](control-form-around-if-double-unboxes-carrier-arms.md) | medium | `let`/`do` wrapping an `if` whose arms are carrier producers bridges carrier->concrete twice. Fourth report in this family; fix direction is the one-predicate change that already fixed the `emit_if` arms, plus a sweep of the remaining `fn_body_tail_emits_byvalue_carrier_abi` callers rather than a fifth round |
+| [cps-let-binder-bridge-lacks-position-check](cps-let-binder-bridge-lacks-position-check.md) | low | LATENT, found by the sweep the control-form report asked for. `emit_cps_ir.c:6507` mirrors the direct emitter's `init_carrier_to_byval` bridge and its comment says "same gate as the direct site" -- which stopped being true when the direct site gained its position check (`init_val_recorded_byval_agg`). The divergence is verified by reading; NO repro was found, because the CPS binder comes out as the carrier so the gate is inert before the predicate is consulted. Deliberately not fixed blind: that gate guards `cps-result-unbox-dropped`'s fixtures. Fix wants the hand-rolled check extracted once and shared by all four bridging sites |
 | [spices-ci-fetch-failure-downgraded-to-warning](spices-ci-fetch-failure-downgraded-to-warning.md) | medium | (spice repo) `tur fetch` failure becomes a `::warning::`, so a failed native-dep build surfaces two steps later as `ld: library 'mbedtls' not found` in six jobs at once. **Deliberate and correctly so** -- making it fatal risks Linux, since optional `:spices` routinely fail. The fix is to put the captured output *in* the annotation, and to give `tur fetch` an exit code that separates optional-dep failure from required-dep failure |
 
 ## Windows port

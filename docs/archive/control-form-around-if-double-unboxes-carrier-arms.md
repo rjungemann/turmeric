@@ -4,6 +4,8 @@
 attribution). Found 2026-08-28 getting `turmeric-spices` CI green, against
 `tur v0.40.0` / turmeric `5c9d533`.
 
+**Status: RESOLVED 2026-09-02** -- see the Resolution section at the bottom.
+
 **Verified 2026-08-28** on a freshly built `v0.40.0` (macOS arm64 / Apple
 clang), with the four-variant narrowing and the source-level root cause below.
 
@@ -204,3 +206,90 @@ this.
 - docs/guides/value-representations-guide.md -- the carrier/by-value seam rules.
 - docs/guides/inline-c-results-guide.md -- it recommends the
   `tur_ok_int`/`tur_err_int` builders that produce the arms in this repro.
+
+## Resolution (2026-09-02)
+
+Fixed, and it took **two** changes, not the one the report specifies.
+
+### The stated fix, which is correct but not sufficient
+
+`bridge_control_value_to_byvalue_temp` gained
+`!emit_arm_is_recorded_byval_agg(ctx, v, bv)` exactly as written above. On its
+own it changed nothing: the repro still failed identically.
+
+### The precondition the report asserts does NOT hold
+
+> The preconditions hold: `v` is `__t165`, a bare identifier, and its recorded C
+> type is the by-value struct, so the lookup answers correctly.
+
+The first two hold. The third does not -- the lookup returns nothing. Traced
+directly:
+
+```
+[bridge] v=__t174 bv=tur_adt_Result__Handle__int bare=1 lv=(none) recorded=0
+```
+
+`emit_if` declares its by-value merge temp by calling `emit_temp_decl`
+**directly** (`emit_expr.c`, the `if_bv.kind != TY_UNKNOWN` branch), bypassing
+`emit_control_result_temp_decl` -- which is the wrapper that carries the
+`emit_localvar_record_ctype` bookkeeping. Every other merge-temp path goes
+through the wrapper and is recorded; this one branch does not, so the temp was
+declared as the aggregate and stayed invisible to the side table.
+
+So the temp was by-value in the emitted C and unknown to the predicate that
+exists to notice exactly that. Recording it is the second half:
+
+```c
+emit_temp_decl(ctx, body, if_bv, tmp, NULL);
+emit_localvar_record_ctype(tmp, emit_type_c_name(ctx, if_bv));   /* <-- added */
+```
+
+With both, `__t172 = (*(tur_adt_... *)(intptr_t)(__t174));` becomes
+`__t172 = __t174;` -- each arm bridges once, the enclosing form assigns.
+
+This is worth keeping because the report's reasoning was otherwise exactly
+right, and a fix that stopped at the stated one-liner would have looked applied
+while doing nothing. The lesson generalises: **a position-sensitive predicate is
+only as good as the recording that feeds it**, and one site declaring a temp
+outside the recording wrapper silently disables it.
+
+### Blast radius: as the archived predecessor predicted
+
+All ten fixtures its resolution named pass with **matching output**, not merely
+building -- the position-keyed check answers false at the vec/map multiword
+element and assoc-type seams (where the recorded type IS the carrier), so the
+bridge those need still fires. Suite 2751 passed / 0 failed, zero snapshot
+churn: the change only reaches shapes that previously failed to compile.
+
+### Pinned by
+
+`tests/fixtures/control-form-around-if-carrier-arms/`, covering **both** the
+`let` and `do` wrappers as the report asks, and asserting field VALUES with a
+distinct payload per arm (7/11, 21/33, 5/6) -- a double-unbox that happened to
+type-check would still read the wrong bytes. Verified to fail against a reverted
+compiler, twice: once per wrapper.
+
+### The sweep, and what it found
+
+The report closes by asking for a sweep of the remaining
+`fn_body_tail_emits_byvalue_carrier_abi` callers "rather than a fifth round of
+this". Done. Every caller falls into one of three groups:
+
+- **Declaration decisions** (`emit_control_result_temp_decl`, its ctype mirror,
+  the binding-repr chooser at `emit_expr.c:613`) -- these choose what C type to
+  DECLARE, which is genuinely a type-level question. Correct as they are.
+- **Bridging sites that now ask the position question** -- the two `emit_if`
+  arms (2026-08-21), `bridge_control_value_to_byvalue_temp` (here), and the
+  direct let-binding init, which hand-rolls the check inline as
+  `init_val_recorded_byval_agg` instead of calling the shared predicate.
+- **One bridging site that does not**: `emit_cps_ir.c:6507`, whose own comment
+  says "same gate as the direct site" -- which stopped being true when the
+  direct site gained its position check. Filed as
+  [cps-let-binder-bridge-lacks-position-check](../reported/cps-let-binder-bridge-lacks-position-check.md),
+  LATENT: the divergence is verified by reading, but no repro was found (the
+  CPS path is reached, and its binder comes out as the carrier, so the gate is
+  inert before the predicate is consulted). Deliberately not "fixed" blind --
+  that gate guards `cps-result-unbox-dropped`'s fixtures, and a change to a path
+  with no failing case cannot be verified in the direction that matters.
+
+So the fifth round is not prevented, but it is now located and written down.

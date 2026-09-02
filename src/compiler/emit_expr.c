@@ -2118,7 +2118,31 @@ static char *fat_dispatch_box_arg(EmitCtx *ctx, Buf *body, const Expr *arg,
 static char *bridge_control_value_to_byvalue_temp(EmitCtx *ctx, Buf *body,
                                                    char *v, const Expr *last) {
     Type bv = fn_body_tail_byvalue_carrier_type(ctx, last);
+    /* control-form-around-if-double-unboxes-carrier-arms: ask what
+     * representation the value in hand HAS here, before asking what its Expr
+     * would naturally emit.
+     *
+     * `fn_body_tail_emits_byvalue_carrier_abi` is an Expr-level predicate: for
+     * an EX_IF it recurses into the arms, and when both are carrier-producing
+     * inline-C calls it answers false -- so the bridge fires.  But by then
+     * emit_if has ALREADY bridged each arm into the merge temp, whose declared C
+     * type is the by-value struct, and bridging again dereferences a struct
+     * (`operand of type 'tur_adt_...' where arithmetic or pointer type is
+     * required`).  `without-let` -- the same `if` as the whole body -- compiled
+     * fine, so the seam itself was sound; only the extra control-form nesting
+     * inserted the second unwrap.
+     *
+     * emit_arm_is_recorded_byval_agg answers the position question by consulting
+     * the localvar side table.  It is the same one-predicate change that fixed
+     * the two emit_if arms in 2026-08-21 (byvalue-product-tail-var-double-
+     * unboxed-nonparametric), applied to the companion that fix did not reach --
+     * this function's own comment already called itself "the do/let companion".
+     *
+     * Position-keyed, not type-keyed, which is what keeps the vec/map multiword
+     * -element seams working: there the value's RECORDED type is the carrier, so
+     * this answers false and the bridge those fixtures need still fires. */
     if (bv.kind != TY_UNKNOWN &&
+        !emit_arm_is_recorded_byval_agg(ctx, v, bv) &&
         !fn_body_tail_emits_byvalue_carrier_abi(ctx, last))
         return emit_carrier_bridge(ctx, body, v, CK_CARRIER, CK_CONCRETE, bv);
     return v;
@@ -3163,10 +3187,23 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     if (!nil_result && ( !any_has_return_or_throw || only_then_diverges || only_else_diverges)) {
         tmp = fresh_tmp(ctx);
         if_bv = fn_body_tail_byvalue_carrier_type(ctx, e);
-        if (if_bv.kind != TY_UNKNOWN)
+        if (if_bv.kind != TY_UNKNOWN) {
             emit_temp_decl(ctx, body, if_bv, tmp, NULL);
-        else
+            /* control-form-around-if-double-unboxes-carrier-arms: RECORD the
+             * merge temp's emitted C type.  This branch calls emit_temp_decl
+             * directly rather than going through emit_control_result_temp_decl,
+             * which is the wrapper that does this bookkeeping -- so the temp was
+             * declared by-value but stayed invisible to every later
+             * "what representation does this value have HERE" question.
+             *
+             * That is what made an enclosing `let`/`do` unbox it a second time:
+             * emit_arm_is_recorded_byval_agg consults this table, found nothing
+             * for the temp, and the do/let companion bridge fired on a value
+             * that emit_if had already bridged. */
+            emit_localvar_record_ctype(tmp, emit_type_c_name(ctx, if_bv));
+        } else {
             emit_control_result_temp_decl(ctx, body, e->type, e, tmp);
+        }
     }
     char *cond = emit_value(ctx, body, e->as.if_.cond);
     indent_buf(body, ctx->indent);

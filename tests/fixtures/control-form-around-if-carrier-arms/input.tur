@@ -1,0 +1,57 @@
+; A control form (let/do) wrapping an `if` whose arms are carrier-producing
+; inline-C helpers used to unbox one time too many: each arm was bridged
+; carrier->concrete by emit_if, and then the enclosing let/do bridged the
+; already-concrete merge temp AGAIN.
+;
+;   __t172 = (*(tur_adt_Result__Handle__int *)(intptr_t)(__t174));
+;                                                        ^ already a struct
+;
+; The same `if` as the whole function body was always fine, so the carrier
+; seam itself was sound -- only the extra control-form nesting inserted the
+; second unwrap.
+;
+; This asserts field VALUES, not just that it compiles: a double-unbox that
+; happened to type-check would still read the wrong bytes.
+;
+; See docs/archive/control-form-around-if-double-unboxes-carrier-arms.md.
+(defmodule cf (export)
+  (defopaque Handle :int)
+
+  (defn mk-ok  [n : int] : (Result Handle int) ```c return tur_ok_int(n); ```)
+  (defn mk-err [n : int] : (Result Handle int) ```c return tur_err_int(n); ```)
+  (defn probe  [] : int ```c return 0; ```)
+
+  ; let around if -- the reported shape.
+  (defn via-let [take-ok : bool] : (Result Handle int)
+    (let [c (probe)]
+      (if (= c 0)
+        (if take-ok (mk-ok 7) (mk-err 11))
+        (mk-err 99))))
+
+  ; do around if -- row 2 of the report's narrowing table, the same defect.
+  (defn via-do [take-ok : bool] : (Result Handle int)
+    (do
+      (probe)
+      (if take-ok (mk-ok 21) (mk-err 33))))
+
+  ; The `if` as the whole body: the control that always worked.
+  (defn direct [take-ok : bool] : (Result Handle int)
+    (if take-ok (mk-ok 5) (mk-err 6)))
+
+  ; Reads the payload back out of BOTH arms.  A double-unbox that happened to
+  ; type-check would still read the wrong bytes, so the values are the assertion.
+  (defn handle->int [h : Handle] : int ```c return (int64_t)h; ```)
+
+  (defn show [r : (Result Handle int)] : void
+    (if (ok? r)
+      (println (handle->int (ok-val r)))
+      (println (err-val r))))
+
+  (defn main [] : int
+    (show (via-let true))
+    (show (via-let false))
+    (show (via-do true))
+    (show (via-do false))
+    (show (direct true))
+    (show (direct false))
+    0))
