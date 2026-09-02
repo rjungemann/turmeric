@@ -3818,6 +3818,44 @@ static bool emit_var_spec_arg_type(EmitCtx *ctx, const Expr *var_expr,
  * instance body constructs exactly the family the method returns, so the spec's
  * concrete result element (`(ReF bool)`) names the right ctor variant.  Returns a
  * malloc'd suffix (caller frees) or NULL when not applicable. */
+/* duplicate-ctor-names-collide-in-emitted-c: the AdtDef whose name qualifies a
+ * constructor's emitted C symbol at a CALL site.  Every caller must agree with
+ * the definition, so the answer cannot come from just one place:
+ *
+ *   1. The resolved CtorDef, when elaboration recorded one (`call_.ctor`).
+ *   2. Otherwise the call's own result type -- a SYNTHESIZED ctor call has no
+ *      CtorDef.  elab_partial_apply builds exactly this shape: currying a
+ *      constructor emits a `__pap` lambda whose body calls the ctor, with
+ *      `call_.ctor` unset and the result type patched to the ADT.  Missing this
+ *      case emitted a bare `ctor_Person(...)` against the qualified definition
+ *      (`implicit declaration of function 'ctor_Person'`), which is why
+ *      struct-curry-ctor and the sized-GADT fixtures caught it.
+ *   3. Otherwise the callee binding's own type, which IS the ADT in the 0-arg
+ *      branch.
+ *
+ * NULL means "could not resolve", and mangle_ctor_symbol then leaves the name
+ * unqualified -- the pre-fix spelling.  That is a compiler defect rather than a
+ * supported outcome: it surfaces at cc as an implicit declaration, never as a
+ * wrong answer. */
+static const AdtDef *emit_ctor_owner_adt(EmitCtx *ctx, const Expr *e,
+                                         const Binding *fn_binding) {
+    if (e && e->kind == EX_CALL && e->as.call_.ctor && e->as.call_.ctor->adt)
+        return e->as.call_.ctor->adt;
+    if (e) {
+        Type rt = emit_resolve_type(ctx, e->type);
+        if (rt.kind == TY_ADT && rt.as.adt_.def) return rt.as.adt_.def;
+        if (rt.kind == TY_APP) {
+            AdtDef *d = NULL;
+            Type as[16];
+            uint8_t na = 0;
+            if (type_extract_adt_app(&rt, &d, as, &na) && d) return d;
+        }
+    }
+    if (fn_binding && fn_binding->type.kind == TY_ADT && fn_binding->type.as.adt_.def)
+        return fn_binding->type.as.adt_.def;
+    return NULL;
+}
+
 static char *emit_hkt_spec_ctor_suffix(EmitCtx *ctx, const Expr *e) {
     if (!ctx || !e || e->kind != EX_CALL || !e->as.call_.ctor ||
         !e->as.call_.ctor->adt)
@@ -6637,7 +6675,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
 
             /* Phase G0: 0-arg constructor call — emit ctor_Name() */
             if (fn_binding->type.kind == TY_ADT) {
-                char *_mc = mangle_field_name(fn_binding->name->name);
+                /* duplicate-ctor-names-collide-in-emitted-c: the callee symbol is
+                 * ADT-qualified, so name it from the constructor's owning ADT. */
+                char *_mc = mangle_ctor_symbol(emit_ctor_owner_adt(ctx, e, fn_binding),
+                                               fn_binding->name->name);
                 /* TS4P2: use per-instance ctor if the call result is a concrete ADT app.
                  * Resolve the construct's type through the active ABI spec first
                  * (M7 by-value HKT, gap G6): inside `__inst_Functor_fmap_T__spec__*`
@@ -6760,7 +6801,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * signature-table lookup at the end of the arg loop. */
                 char *ctor_cname;
                 {
-                    char *_lmc = mangle_field_name(fn_binding->name->name);
+                    /* duplicate-ctor-names-collide-in-emitted-c: this string is
+                     * the signature-table KEY, so it must spell the callee symbol
+                     * exactly as the definition does -- ADT-qualified. */
+                    char *_lmc = mangle_ctor_symbol(
+                        emit_ctor_owner_adt(ctx, e, fn_binding),
+                        fn_binding->name->name);
                     Buf cnb; buf_init(&cnb);
                     buf_printf(&cnb, "ctor_%s%s", _lmc, suffix ? suffix : "");
                     buf_putc(&cnb, '\0');
@@ -7410,7 +7456,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                 }
                 free(ctor_cname);
-                char *_mc = mangle_field_name(fn_binding->name->name);
+                /* duplicate-ctor-names-collide-in-emitted-c: same ADT-qualified
+                 * symbol as the key built above and as the definition. */
+                char *_mc = mangle_ctor_symbol(
+                    emit_ctor_owner_adt(ctx, e, fn_binding),
+                    fn_binding->name->name);
                 Buf out; buf_init(&out);
                 if (suffix) {
                     buf_printf(&out, "ctor_%s%s(", _mc, suffix);

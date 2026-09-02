@@ -19,8 +19,17 @@
 ;;;     } as;
 ;;;   } tur_adt_Either;
 ;;; Construct with ctor_Left(v) / ctor_Right(v); both heap-allocate and return
-;;; an int64_t handle.  Payloads are erased to int64_t at the C boundary, the
-;;; same way Option[A] / Result[A B] erase theirs.
+;;; an int64_t handle.  The emitted C symbol is ADT-qualified --
+;;; ctor_Either_Left / ctor_Either_Right -- so two ADTs sharing a constructor
+;;; name do not collide; the bare spelling above stays available as a macro
+;;; alias because no other ADT in the program defines `Left` or `Right`.  Give
+;;; an ADT of your own a constructor named `Left` and the bare alias is gone
+;;; (a cc error naming it), because there is then no unambiguous meaning for
+;;; it -- use the qualified symbol.  See
+;;; docs/archive/duplicate-ctor-names-collide-in-emitted-c.md.
+;;;
+;;; Payloads are erased to int64_t at the C boundary, the same way
+;;; Option[A] / Result[A B] erase theirs.
 ;;;
 ;;; Since: Phase sum-types-either
 ;; load-not-expanded-in-imported-or-project-modules: either.tur's Functor

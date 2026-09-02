@@ -1880,6 +1880,170 @@ char *mangle_field_name(const char *name) {
     return p;
 }
 
+/* duplicate-ctor-names-collide-in-emitted-c: a program-wide census of which
+ * constructor NAMES are owned by more than one ADT.
+ *
+ * The emitted C symbol is `ctor_<Adt>_<Ctor>` so two ADTs sharing a constructor
+ * name no longer collide.  But that symbol has a second life: hand-written
+ * inline C calls constructors by their emitted name, and stdlib documents it
+ * (`stdlib/either.tur`: "Construct with ctor_Left(v) / ctor_Right(v)").  So a
+ * constructor name owned by exactly ONE ADT also gets a bare-name alias, and
+ * that inline C keeps working untouched -- in this tree and out of it.
+ *
+ * When a name IS owned by two ADTs there is no correct bare alias, so none is
+ * emitted: inline C naming it then fails at cc with an implicit declaration
+ * pointing at the ambiguous constructor, instead of silently binding to
+ * whichever ADT was emitted first.  Fail-closed is deliberate -- a missing
+ * alias is a loud compile error, a wrong one is a silent wrong answer.
+ *
+ * Ambiguity is keyed on the ADT NAME, not the AdtDef pointer: re-elaboration
+ * and module reloads legitimately produce two AdtDefs for one ADT, and those
+ * spell the SAME qualified symbol, so they are not a conflict.
+ *
+ * Fed from elab_register_adt_def, the single chokepoint every ADT passes
+ * through, so the census is complete before any emission starts. */
+/* Snapshotted at the END of elaboration, not during it.  Two reasons, both
+ * found the hard way:
+ *
+ *  - An ADT is REGISTERED when its AdtDef is created, which is before its
+ *    constructors are attached, so reading `def->ctors` at registration
+ *    recorded nothing at all.
+ *  - Holding the AdtDef pointers instead and reading them at emit time is a
+ *    use-after-poison: a procedural macro runs a nested elaboration whose arena
+ *    is released, and the census then walks freed defs (ASan caught this on the
+ *    eight macro-procedural fixtures).
+ *
+ * So the census owns COPIES of the (ADT name, constructor name) pairs, taken
+ * at the one moment both are live and complete.  A nested elaboration snapshots
+ * too, but the outer one returns last, so the final census is the real
+ * program's. */
+typedef struct {
+    char *adt_name;
+    char *ctor_name;
+} CtorCensusRow;
+
+static CtorCensusRow *g_ctor_census     = NULL;
+static uint32_t       g_n_ctor_census   = 0;
+static uint32_t       g_cap_ctor_census = 0;
+
+void ctor_census_reset(void) {
+    for (uint32_t i = 0; i < g_n_ctor_census; i++) {
+        free(g_ctor_census[i].adt_name);
+        free(g_ctor_census[i].ctor_name);
+    }
+    free(g_ctor_census);
+    g_ctor_census = NULL;
+    g_n_ctor_census = 0;
+    g_cap_ctor_census = 0;
+}
+
+static void ctor_census_push(const char *adt_name, const char *ctor_name) {
+    if (g_n_ctor_census >= g_cap_ctor_census) {
+        uint32_t nc = g_cap_ctor_census ? g_cap_ctor_census * 2 : 64;
+        CtorCensusRow *nr = (CtorCensusRow *)realloc(g_ctor_census,
+                                                    nc * sizeof(CtorCensusRow));
+        if (!nr) { fprintf(stderr, "tur: oom\n"); abort(); }
+        g_ctor_census = nr;
+        g_cap_ctor_census = nc;
+    }
+    char *a = strdup(adt_name), *c = strdup(ctor_name);
+    if (!a || !c) { fprintf(stderr, "tur: oom\n"); abort(); }
+    g_ctor_census[g_n_ctor_census].adt_name  = a;
+    g_ctor_census[g_n_ctor_census].ctor_name = c;
+    g_n_ctor_census++;
+}
+
+/* Replace the census with the constructor names of `defs`.  Called from
+ * elaborate_program_session's success return, where every def is live and its
+ * constructors are attached. */
+void ctor_census_snapshot(struct AdtDef *const *defs, uint32_t n_defs) {
+    ctor_census_reset();
+    if (!defs) return;
+    for (uint32_t i = 0; i < n_defs; i++) {
+        const AdtDef *d = defs[i];
+        if (!d || !d->name || !d->ctors) continue;
+        for (uint32_t ci = 0; ci < d->n_ctors; ci++) {
+            const CtorDef *c = d->ctors[ci];
+            if (!c || !c->name) continue;
+            ctor_census_push(d->name, c->name);
+        }
+    }
+}
+
+/* True when exactly one ADT owns this constructor name, so a bare-name alias
+ * for the ADT-qualified symbol is unambiguous.  A name the census never saw
+ * answers false -- fail closed, because a missing alias is a loud compile error
+ * and a wrong one is a silent wrong answer. */
+bool ctor_base_name_is_unique(const char *ctor_name) {
+    if (!ctor_name) return false;
+    const char *owner = NULL;
+    for (uint32_t i = 0; i < g_n_ctor_census; i++) {
+        if (strcmp(g_ctor_census[i].ctor_name, ctor_name) != 0) continue;
+        /* Keyed on the ADT NAME, not identity: re-elaboration and module
+         * reloads legitimately yield two entries for one ADT, and both spell
+         * the SAME qualified symbol, so they are not a conflict. */
+        if (!owner) owner = g_ctor_census[i].adt_name;
+        else if (strcmp(owner, g_ctor_census[i].adt_name) != 0) return false;
+    }
+    return owner != NULL;
+}
+
+/* Emit the bare-name compatibility alias for `ctor`, when its name is
+ * unambiguous.  A macro rather than a forwarder function: it works for any
+ * arity and return type, costs nothing, and needs no signature duplication.
+ * Header-guarded so a re-emitted ADT does not redefine it. */
+void emit_ctor_bare_alias(Buf *out, const AdtDef *def, const CtorDef *ctor) {
+    if (!out || !def || !ctor || !ctor->name) return;
+    if (!ctor_base_name_is_unique(ctor->name)) return;
+    char *bare = mangle_field_name(ctor->name);
+    char *qual = mangle_ctor_symbol(def, ctor->name);
+    if (strcmp(bare, qual) != 0) {
+        buf_printf(out, "#ifndef TUR_CTORALIAS_%s\n", bare);
+        buf_printf(out, "#define TUR_CTORALIAS_%s\n", bare);
+        buf_printf(out, "#define ctor_%s ctor_%s\n", bare, qual);
+        buf_printf(out, "#endif\n");
+    }
+    free(bare);
+    free(qual);
+}
+
+/* duplicate-ctor-names-collide-in-emitted-c: the base token of a constructor's
+ * emitted C FUNCTION symbol -- `<Adt>_<Ctor>`, so the full symbol is
+ * `ctor_<Adt>_<Ctor>` (plus a monomorph's type-arg suffix).  Caller frees.
+ *
+ * The owning ADT has to be part of the symbol.  Without it two ADTs that share
+ * a constructor name emit one C function twice (`redefinition of 'ctor_Mk'`) --
+ * elaboration handles the shadowing correctly, so this is purely the emitted C
+ * merging two distinct constructors.  SR2b widened the trigger from "two of
+ * your own ADTs happen to collide" to "your ADT names a constructor Some, None,
+ * Ok or Err", because stdlib Option/Result are sums now and their constructors
+ * are always in the program.
+ *
+ * This is the FUNCTION symbol only.  A constructor's union MEMBER name inside
+ * its own ADT's struct (`as.<Ctor>._N`) is already scoped by that struct and
+ * stays bare -- see adt_field_member_path just below.
+ *
+ * Residual, and shared with the pre-existing type-arg suffix convention: every
+ * non-alphanumeric character mangles to '_', so an ADT `a-b` with constructor
+ * `c` and an ADT `a` with constructor `b-c` both spell `ctor_a_b_c`.  That
+ * needs two ADTs whose names differ by exactly where one separator falls; the
+ * bug being fixed here needed only a shared constructor name, which is
+ * ordinary. */
+char *mangle_ctor_symbol(const AdtDef *adt, const char *ctor_name) {
+    char *mctor = mangle_field_name(ctor_name);
+    if (!adt || !adt->name) return mctor;   /* nothing to namespace against */
+    char *madt = mangle_field_name(adt->name);
+    Buf b; buf_init(&b);
+    buf_printf(&b, "%s_%s", madt, mctor);
+    buf_putc(&b, '\0');
+    char *r = strdup(b.data);
+    if (!r) { fprintf(stderr, "tur: oom\n"); abort(); }
+    buf_free(&b);
+    free(madt);
+    free(mctor);
+    return r;
+}
+
 /* CONV-S1 seam 4: build the C member-access path (without a leading '.'/'->')
  * for constructor field `fi`.  A flat, named-layout ADT (adt_uses_named_layout)
  * is accessed by its mangled field name (`value`, `max_age`); every other ADT

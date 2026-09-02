@@ -913,6 +913,15 @@ void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,
 void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out);
 char *mangle_dynvar_name(const char *name);
 char *mangle_field_name(const char *name);
+char *mangle_ctor_symbol(const struct AdtDef *adt, const char *ctor_name);
+/* duplicate-ctor-names-collide-in-emitted-c: program-wide census of constructor
+ * names, so an UNAMBIGUOUS one keeps its bare-name alias for hand-written
+ * inline C.  Fed from elab_register_adt_def; see emit_core.c. */
+void ctor_census_reset(void);
+void ctor_census_snapshot(struct AdtDef *const *defs, uint32_t n_defs);
+bool ctor_base_name_is_unique(const char *ctor_name);
+void emit_ctor_bare_alias(Buf *out, const struct AdtDef *def,
+                          const struct CtorDef *ctor);
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
 char *raw_name_for_binding(const Binding *b);
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b);

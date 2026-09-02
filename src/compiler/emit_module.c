@@ -7286,7 +7286,10 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
     /* Emit constructor functions */
     for (uint32_t ci = 0; ci < def->n_ctors && !skip_heap_generic_base; ci++) {
         CtorDef *ctor = def->ctors[ci];
-        char *mctor = mangle_field_name(ctor->name);
+        /* duplicate-ctor-names-collide-in-emitted-c: the FUNCTION symbol carries
+         * the owning ADT (`ctor_<Adt>_<Ctor>`).  The union member inside this
+         * ADT's own struct stays bare -- it is already scoped by the struct. */
+        char *mctor = mangle_ctor_symbol(def, ctor->name);
         const char *ctor_ret_c = heap ? adt_ptr_name : byval ? adt_c_name : "int64_t";
         buf_printf(out, "static %s ctor_%s(",
                    ctor_ret_c, mctor);
@@ -7357,6 +7360,11 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
             buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
         }
         buf_printf(out, "}\n\n");
+        /* duplicate-ctor-names-collide-in-emitted-c: keep the bare `ctor_<Ctor>`
+         * spelling working for hand-written inline C when exactly one ADT owns
+         * the name (stdlib/either.tur documents `ctor_Left(v)`).  Ambiguous
+         * names get no alias -- see emit_ctor_bare_alias. */
+        emit_ctor_bare_alias(out, def, ctor);
         free(mctor);
     }
 }
@@ -13043,7 +13051,10 @@ int emit_program(Buf *out, const Expr *program) {
             /* Emit constructor functions */
             for (uint32_t ci = 0; ci < def->n_ctors && !skip_heap_generic_base; ci++) {
                 CtorDef *ctor = def->ctors[ci];
-                char *mctor = mangle_field_name(ctor->name);
+                /* duplicate-ctor-names-collide-in-emitted-c: same ADT-qualified
+                 * FUNCTION symbol as emit_adt_typedef_and_ctors above.  These two
+                 * sites must agree or the call names a symbol nothing defines. */
+                char *mctor = mangle_ctor_symbol(def, ctor->name);
                 const char *ctor_ret_c2 =
                     heap ? adt_ptr_name : byval ? adt_c_name : "int64_t";
                 buf_printf(&early_file, "static %s ctor_%s(", ctor_ret_c2, mctor);
@@ -13099,6 +13110,10 @@ int emit_program(Buf *out, const Expr *program) {
                     buf_printf(&early_file, "    return (int64_t)(intptr_t)__r;\n");
                 }
                 buf_printf(&early_file, "}\n\n");
+                /* duplicate-ctor-names-collide-in-emitted-c: mirror of the alias
+                 * emitted by emit_adt_typedef_and_ctors -- both paths define the
+                 * ctor, so both must offer the same bare-name compatibility. */
+                emit_ctor_bare_alias(&early_file, def, ctor);
                 free(mctor);
             }
         }

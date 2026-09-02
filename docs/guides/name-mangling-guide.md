@@ -90,6 +90,45 @@ two-letter mnemonic, remaining bytes get `_xHH`. Crucially, a literal `_` is
 lossy fold is safe there. Struct fields are scoped to their struct, so no
 linker collision is possible.
 
+### ADT constructors -- two names, and only one of them is scoped
+
+A constructor gets **two** emitted names, and the distinction is the whole
+reason it earns a section:
+
+| What | Spelling | Scoped by |
+|---|---|---|
+| Union **member** inside the ADT's own struct | `as.<Ctor>._N` | the struct -- bare is correct |
+| C **function** symbol | `ctor_<Adt>_<Ctor>` (+ a monomorph's `__<arg>` suffix) | nothing -- must carry the ADT |
+
+Both went through the legacy fold on the constructor name alone, so two ADTs
+sharing a constructor name emitted one C function twice
+(`redefinition of 'ctor_Mk'`). Elaboration resolved the shadowing correctly the
+whole time -- only the emitted C merged them. Build the function symbol with
+`mangle_ctor_symbol(def, ctor->name)` (emit_core.c); every definition site, call
+site, and signature-table key must use it, or the call names a symbol nothing
+defines.
+
+**The bare `ctor_<Ctor>` spelling still resolves**, as a macro alias, whenever
+exactly one ADT in the program owns that constructor name. That is deliberate:
+hand-written inline C calls constructors by their emitted name and stdlib
+documents it (`stdlib/either.tur`: "Construct with `ctor_Left(v)`"). When two
+ADTs own the name there is no correct bare alias, so none is emitted and inline
+C naming it fails at cc with an implicit declaration pointing at the ambiguous
+constructor -- rather than silently binding to whichever ADT was emitted first.
+The census backing that decision is snapshotted at the end of elaboration
+(`ctor_census_snapshot`); it holds copies, because ADTs are registered before
+their constructors are attached and a nested procedural-macro elaboration frees
+the arena the defs live in.
+
+Residual, shared with the pre-existing type-arg suffix convention: every
+non-alphanumeric character folds to `_`, so ADT `a-b` constructor `c` and ADT
+`a` constructor `b-c` both spell `ctor_a_b_c`. That needs two ADTs whose names
+differ by exactly where one separator falls; the bug this replaced needed only a
+shared constructor name.
+
+See
+[docs/archive/duplicate-ctor-names-collide-in-emitted-c.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/duplicate-ctor-names-collide-in-emitted-c.md).
+
 ## The `tur_u_` guard prefix -- names C already owns
 
 Both schemes above pass a pure `[A-Za-z0-9_]` name through byte for byte. That

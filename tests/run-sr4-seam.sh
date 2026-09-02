@@ -14,7 +14,7 @@
 #
 # Two checks:
 #   1. A CANARY: emit-c of a logic fixture must show the by-value ctor
-#      signature (`static tur_adt_Subst ctor_SBind(`).  Under the carrier the
+#      signature (`static tur_adt_Subst ctor_Subst_SBind(`).  Under the carrier the
 #      same ctor returns int64_t, so if the env var is ever renamed or the
 #      gate stops reading it, this harness fails LOUDLY instead of silently
 #      re-testing the default path.
@@ -60,11 +60,11 @@ canary_c="$WORKDIR/canary.c"
 if ! $TIMEOUT "$TUR" emit-c tests/fixtures/logic-unify-basic/input.tur \
         > "$canary_c" 2>/dev/null; then
     fail "sr4-seam-canary" "emit-c of logic-unify-basic failed under the seam"
-elif grep -q "static tur_adt_Subst ctor_SBind(" "$canary_c"; then
-    pass "sr4-seam-canary (ctor_SBind returns tur_adt_Subst by value)"
+elif grep -q "static tur_adt_Subst ctor_Subst_SBind(" "$canary_c"; then
+    pass "sr4-seam-canary (ctor_Subst_SBind returns tur_adt_Subst by value)"
 else
     fail "sr4-seam-canary" \
-        "ctor_SBind is not by-value -- the seam did not bite.  If \
+        "ctor_Subst_SBind is not by-value -- the seam did not bite.  If \
 TUR_SR4_RECURSIVE_BYVALUE was renamed or the is_self_recursive gate moved, \
 update this harness in the same change."
 fi

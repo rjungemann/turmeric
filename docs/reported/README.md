@@ -964,7 +964,6 @@ turned up a defect in the instrument that would have justified it.
 | --- | --- | --- |
 | ~~vec-of-parametric-sum-monomorph-ice~~ | -- | **Resolved 2026-08-27 (SR2b)**: `adt_app_is_byvalue_product`'s field loop now admits a concrete-monomorph field (types.c), so the Vec registration and the binder agree. Archived to [docs/archive/vec-of-parametric-sum-monomorph-ice.md](../archive/vec-of-parametric-sum-monomorph-ice.md) |
 | [carrier-sum-option-boxes-have-no-owner](carrier-sum-option-boxes-have-no-owner.md) | medium | SR2b made Option/Result real sums; on the default path every `(some x)`/`(ok x)`/`(none)` mallocs a tagged carrier box nothing frees (pre-sum these were non-allocating by-value records). Interim cost until byvalue graduation; callers that care free with `(option-free (:: o :int))` |
-| [duplicate-ctor-names-collide-in-emitted-c](duplicate-ctor-names-collide-in-emitted-c.md) | medium | two ADTs sharing a constructor name collide in the emitted C (`redefinition of 'ctor_Mk'`) -- the base ctor symbol lacks the ADT mangle. Pre-existing, but the trigger set grew with SR2b: an ADT naming a ctor `Some`/`None`/`Ok`/`Err` now always collides with the stdlib sums |
 | [minikanren-example-implements-no-minikanren](minikanren-example-implements-no-minikanren.md) | low-medium | the example has no unification, logic vars or streams and never imports `stdlib/logic.tur`; that module's only coverage is 8 small fixtures, so the workload behind the ADT-allocation numbers has no real program exercising it |
 | [inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md) | medium | an Option built inside an inline-C body (`tur_some_ptr`/`tur_box_*`) allocates a carrier box no elaborated expression owns, so nothing frees it -- and that is the form the inline-C results guide and CLAUDE.md recommend. `arc.tur` documents the bug in a comment and works around it; the workaround does not transfer to `weak/upgrade` because `(some rc)` is rejected |
 | [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan and the congruence fixpoint is O(n^2) -- REASSESSED post-SX3: the "free fix with SX3" home is gone (SX3 trails the same arrays in place), and measurements say no fix is needed: real obligations peak at 10 of 512 terms, the one cap-pinned corpus case is a synthetic stress file deciding in 64 ms, and solver-on vs off is 21 vs 22 ms on the heaviest fixture |
@@ -994,6 +993,33 @@ a greedy `.*const char \*`, bound to the `const char *shim` in
 `ensure_static_fatbox`'s PARAMETER list and never recognised the function at
 all: it would have shipped GREEN on a tree that still had the bug in it. Both
 pre-fix bodies were reconstructed and re-run against the finished lint.
+
+`duplicate-ctor-names-collide-in-emitted-c` was resolved 2026-09-02 and moved
+to [docs/archive](../archive/duplicate-ctor-names-collide-in-emitted-c.md). The
+base constructor's C FUNCTION symbol is `ctor_<Adt>_<Ctor>` now, built in one
+place (`mangle_ctor_symbol`) and used by every definition site, call site and
+signature-table key; the union MEMBER name stays bare, being already scoped by
+the ADT's own struct. 148 snapshots regenerated in the same change; suite 2748
+passed / 0 failed.
+
+The fix direction did not anticipate that **the bare spelling is an API
+surface**: hand-written inline C calls constructors by their emitted name and
+`stdlib/either.tur` documents it ("Construct with `ctor_Left(v)`"), across five
+stdlib files, seven fixtures, and possibly out-of-tree spices. So a constructor
+name owned by exactly ONE ADT also keeps a bare-name macro alias; an ambiguous
+one gets none, and inline C naming it fails at cc pointing at that constructor
+rather than silently binding to whichever ADT was emitted first.
+
+Three lifetime/resolution traps, each surfacing only as a suite failure and each
+looking like an unrelated area: a curried constructor's synthesized call carries
+no CtorDef (so the owner must fall back to the call's result type); ADTs are
+registered BEFORE their constructors are attached, so a census read at
+registration records nothing at all; and holding the AdtDef pointers instead is
+a use-after-poison, because a procedural macro's nested elaboration frees the
+arena. The census owns string copies taken above the elaborator teardown -- not
+at the return, where `e.adt_defs` is already freed. A missed site in a change
+like this is always an undefined symbol or a lifetime error, never a wrong
+answer, which is what made the suite a sufficient verifier.
 
 `fat-dispatch-wide-byvalue-aggregate-argument` was resolved 2026-08-27 and
 moved to
