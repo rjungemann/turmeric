@@ -1,0 +1,8 @@
+17
+-1
+15
+15
+bytes->serial-cont: bad frame tag
+bytes->serial-cont: unknown frame (written by a different program?)
+bytes->serial-cont: truncated frame
+bytes->serial-cont: null bytes

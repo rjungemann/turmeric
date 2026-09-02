@@ -27,6 +27,10 @@ The concrete surface is small:
 - `save-cont!` / `resume-cont!` in `stdlib/workflow.tur` -- serialize a
   captured continuation to a bytes value, and rebuild + resume one from
   bytes. `workflow-suspend` / `workflow-resume` are aliases.
+- `serial-cont->bytes` / `bytes->serial-cont` / `serial-resume` in
+  `stdlib/serial.tur` -- the typed spellings: marshal a `serial-cont`,
+  rebuild one as a `(Result serial-cont cstr)` (a foreign or damaged buffer
+  is an `Err`, never an abort), and resume (`(k v)`).
 - `cont-to-file` / `cont-from-file` in `stdlib/serial.tur` -- write/read
   the bytes value to/from disk.
 

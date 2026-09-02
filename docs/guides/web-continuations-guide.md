@@ -16,23 +16,20 @@ For a full step-by-step walkthrough with a complete guestbook example, see [web-
 
 The canonical idiom for a page in a multi-step flow:
 
-```turmeric
-(defn send-form-and-wait [render-fn : (-> cstr cstr)] : cstr
-  (serial-shift [k]
-    (def token  (store-continuation k))
-    (def action (str "/submit?k=" token))
-    (def html   (render-fn action))
-    (perform HttpEffect (send-html html))))
+```turmeric no-check
+(defn send-form-and-wait [render-fn : (fn [cstr] cstr)] : cstr
+  (serial-shift (fn [k : serial-cont] : cstr
+                  (let [token  (store-continuation k)
+                        action (str "/submit?k=" token)
+                        html   (render-fn action)]
+                    (perform HttpEffect (send-html html))))
+                0))
 ```
 
-```sweet-exp
-defn send-form-and-wait [render-fn : (-> cstr cstr)] : cstr
-  serial-shift [k]
-    def token  store-continuation(k)
-    def action str("/submit?k=" token)
-    def html   render-fn(action)
-    perform HttpEffect send-html(html)
-```
+`(serial-shift handler default)` hands the rest of the enclosing `serial-reset`
+to `handler` as a `serial-cont`; the handler here never resumes it, so the
+request ends with the rendered form and the continuation lives on only as
+the stored bytes.
 
 **Parameters:**
 - `render-fn` -- a function that takes the form `action` URL and returns an HTML string
@@ -58,7 +55,7 @@ The continuation store (`conts.tur`) must satisfy:
 (store-continuation k)  : cstr
 
 ;; Look up k by token. Returns None if missing or expired.
-(load-continuation token) : (Option (serial-continuation cstr))
+(load-continuation token) : (Option serial-cont)
 ```
 
 ```sweet-exp
@@ -66,7 +63,7 @@ The continuation store (`conts.tur`) must satisfy:
 store-continuation(k)  : cstr
 
 ;; Look up k by token. Returns None if missing or expired.
-load-continuation(token) : (Option (serial-continuation cstr))
+load-continuation(token) : (Option serial-cont)
 ```
 
 ### Token Format
@@ -248,11 +245,11 @@ If a continuation token is stored in one HTTP request and resumed in a completel
 | Concept | Racket | Turmeric |
 |---------|--------|----------|
 | Boundary | `(send/suspend proc)` | `(serial-reset ...)` |
-| Pause and hand URL to renderer | `send/suspend` calls `proc` with the resume URL | `(serial-shift [k] ...)` serializes `k`, builds the URL, calls `render-fn` |
+| Pause and hand URL to renderer | `send/suspend` calls `proc` with the resume URL | `(serial-shift handler 0)` hands `k` to the handler, which serializes it, builds the URL, calls `render-fn` |
 | Resume URL token | Racket generates a URL using an in-memory store | `store-continuation` generates a hex token backed by files |
 | Resume | Browser follows URL -> Racket resumes heap closure | Browser POSTs token -> router calls `serial-resume k body` |
 | Persistence | Continuations lost on server restart (default) | Continuations persist across restarts (files on disk) |
-| Type safety | Dynamic | `k : serial-continuation cstr` -- typed resume value |
+| Type safety | Dynamic | `k : serial-cont` -- an opaque, typed handle; `bytes->serial-cont` validates before resuming |
 | Back navigation | Re-using an earlier URL | Re-using an earlier token (same mechanism) |
 
 ---
@@ -269,4 +266,4 @@ If a continuation token is stored in one HTTP request and resumed in a completel
 
 **Single-threaded listener.** The tutorial HTTP listener handles one request at a time. Two simultaneous form submissions are serialized at the socket level. For concurrent flows, run multiple server processes or switch to a multi-threaded listener with per-request effect handlers.
 
-**Schema versioning.** If you change the structure of a captured type after tokens have been written to disk, `bytes->serial-cont` will return `Err (SchemaMismatch ...)`. Either drain all pending continuations before deploying, or implement a migration layer. See [serializable-continuations-guide.md](serializable-continuations-guide.md) -- Error Handling.
+**Schema versioning.** If you change the code between writing a token and resuming it, the frame names in the stored bytes may no longer exist in the running program; `bytes->serial-cont` then returns `Err "bytes->serial-cont: unknown frame (written by a different program?)"` rather than resuming garbage. Either drain all pending continuations before deploying, or keep a version beside each token and reject stale ones up front. See [serializable-continuations-guide.md](serializable-continuations-guide.md) -- Error Handling.

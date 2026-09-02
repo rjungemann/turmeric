@@ -663,12 +663,13 @@ This helper encapsulates the pattern:
 ;;;   (def body (send-form-and-wait (fn [action] (render-name-form action))))
 ;;;
 ;;; Since: Guestbook example
-(defn send-form-and-wait [render-fn : (-> cstr cstr)] : cstr
-  (serial-shift [k]
-    (def token  (store-continuation k))
-    (def action (str "/submit?k=" token))
-    (def html   (render-fn action))
-    (perform HttpEffect (send-html html))))
+(defn send-form-and-wait [render-fn : (fn [cstr] cstr)] : cstr
+  (serial-shift (fn [k : serial-cont] : cstr
+                  (let [token  (store-continuation k)
+                        action (str "/submit?k=" token)
+                        html   (render-fn action)]
+                    (perform HttpEffect (send-html html))))
+                0))
 ```
 ```sweet-exp
 ;;; send-form-and-wait -- render a form page and suspend until it is submitted.
@@ -683,16 +684,17 @@ This helper encapsulates the pattern:
 ;;;   def body send-form-and-wait(fn [action] render-name-form(action))
 ;;;
 ;;; Since: Guestbook example
-defn send-form-and-wait [render-fn : (-> cstr cstr)] : cstr
-  serial-shift [k]
-    def token  store-continuation(k)
-    def action str("/submit?k=" token)
-    def html   render-fn(action)
-    perform HttpEffect
-      send-html(html)
+defn send-form-and-wait [render-fn : (fn [cstr] cstr)] : cstr
+  serial-shift
+    fn [k : serial-cont] : cstr
+      let [token  store-continuation(k)
+           action str("/submit?k=" token)
+           html   render-fn(action)]
+        perform HttpEffect send-html(html)
+    0
 ```
 
-After `perform HttpEffect (send-html html)`, the current fiber is done -- the HTTP loop will call `serial-resume k body` the next time that token is POSTed.
+After `perform HttpEffect (send-html html)`, the current fiber is done -- the handler returned without resuming `k`, and the HTTP loop will call `serial-resume k body` the next time that token is POSTed. `(serial-shift handler default)` is the real shape of the form: the handler is a function of one `serial-cont`, and `0` is the placeholder default.
 
 ### Token Generation and Storage
 
@@ -702,13 +704,13 @@ After `perform HttpEffect (send-html html)`, the current fiber is done -- the HT
 ;;; store-continuation -- serialize k and save to data/conts/<token>.bin.
 ;;;
 ;;; Parameters:
-;;;   k -- a serial-continuation to persist
+;;;   k -- the serial-cont to persist
 ;;;
 ;;; Returns:
 ;;;   A random hex token string (64 hex characters).
 ;;;
 ;;; Since: Guestbook example
-(defn store-continuation [k : (serial-continuation cstr)] : cstr
+(defn store-continuation [k : serial-cont] : cstr
   (def token (random-hex-64))
   (def bytes (serial-cont->bytes k))
   (file-write (str "data/conts/" token ".bin") bytes)
@@ -720,10 +722,10 @@ After `perform HttpEffect (send-html html)`, the current fiber is done -- the HT
 ;;;   token -- hex token returned by store-continuation
 ;;;
 ;;; Returns:
-;;;   (Option (serial-continuation cstr)) -- Some(k) if found, None if missing.
+;;;   (Option serial-cont) -- Some(k) if found, None if missing.
 ;;;
 ;;; Since: Guestbook example
-(defn load-continuation [token : cstr] : (Option (serial-continuation cstr))
+(defn load-continuation [token : cstr] : (Option serial-cont)
   (def path (str "data/conts/" token ".bin"))
   (match (file-read path)
     (Err _) -> (None)
@@ -736,13 +738,13 @@ After `perform HttpEffect (send-html html)`, the current fiber is done -- the HT
 ;;; store-continuation -- serialize k and save to data/conts/<token>.bin.
 ;;;
 ;;; Parameters:
-;;;   k -- a serial-continuation to persist
+;;;   k -- the serial-cont to persist
 ;;;
 ;;; Returns:
 ;;;   A random hex token string (64 hex characters).
 ;;;
 ;;; Since: Guestbook example
-defn store-continuation [k : (serial-continuation cstr)] : cstr
+defn store-continuation [k : serial-cont] : cstr
   def token random-hex-64()
   def bytes serial-cont->bytes(k)
   file-write(str("data/conts/" token ".bin") bytes)
@@ -754,10 +756,10 @@ defn store-continuation [k : (serial-continuation cstr)] : cstr
 ;;;   token -- hex token returned by store-continuation
 ;;;
 ;;; Returns:
-;;;   (Option (serial-continuation cstr)) -- Some(k) if found, None if missing.
+;;;   (Option serial-cont) -- Some(k) if found, None if missing.
 ;;;
 ;;; Since: Guestbook example
-defn load-continuation [token : cstr] : (Option (serial-continuation cstr))
+defn load-continuation [token : cstr] : (Option serial-cont)
   def path str("data/conts/" token ".bin")
   match file-read(path)
     Err(_)
