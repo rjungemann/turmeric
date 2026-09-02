@@ -210,6 +210,15 @@ add_test(
   COMMAND bash tests/run-tur-completion.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Recipe attributes and the shebang/`[script]` path: every attribute tur run
+# claims to support is matched by name and does what it says, and an unknown
+# attribute is refused rather than silently ignored (the silent-ignore hole in
+# docs/archive/tur-run-silently-ignores-parameterized-attributes.md).
+add_test(
+  NAME tur_run_attrs
+  COMMAND bash tests/run-tur-run-attrs.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 add_test(
   NAME tur_fmt_tests
   COMMAND bash tests/run-fmt.sh

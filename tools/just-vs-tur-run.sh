@@ -60,4 +60,15 @@ for fixture_dir in "$FIXTURES_DIR"/ok-*/; do
 done
 
 echo "just-vs-tur-run: $PASS passed, $FAIL failed, $SKIP skipped"
+
+# A missing/empty fixture tree used to make this script a silent no-op: the
+# `ok-*/` glob matched nothing, every iteration `continue`d, and it exited 0
+# having compared nothing.  That is indistinguishable from "parity holds" in
+# CI, and it is how tests/tur/run/fixtures/ stayed absent unnoticed.
+if [ "$PASS" -eq 0 ] && [ "$FAIL" -eq 0 ]; then
+    echo "just-vs-tur-run: ERROR -- no recipes were compared." >&2
+    echo "  Expected fixtures in $FIXTURES_DIR/ok-*/Justfile" >&2
+    exit 1
+fi
+
 [ "$FAIL" -eq 0 ]

@@ -267,6 +267,10 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
  * Defined near the end of this file, after the value printer they rely on. */
 static void turi_dbg_before_node(TuriEnv *env, EvalFrame *frame,
                                   const Expr *e, bool from_driver);
+/* Suppress the next hook for exactly this node.  The driver calls it before
+ * handing a black-box node to eval_expr, which would otherwise hook a node the
+ * driver has already hooked. */
+static void turi_dbg_skip_next(TuriEnv *env, const Expr *e);
 static void turi_dbg_push(TuriEnv *env, const FnDef *fn, EvalFrame *cf);
 static void turi_dbg_pop(TuriEnv *env);
 static void turi_dbg_set_top(TuriEnv *env, const FnDef *fn, EvalFrame *cf);
@@ -7889,7 +7893,15 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     tail = false;   /* operand is non-tail */
                     break;          /* keep descending */
                 }
-                /* Black box: evaluate any other kind via the recursive path. */
+                /* Black box: evaluate any other kind via the recursive path.
+                 * The driver already hooked `control` on the way in, and
+                 * eval_expr hooks every node it is handed, so without this the
+                 * node is stopped at twice.  Marked here rather than at the
+                 * driver's hook because this is the one arm that reaches
+                 * eval_expr -- the others break away first, and a mark set on
+                 * a path that never consumes it is a mark that swallows some
+                 * later stop. */
+                if (env->debugger) turi_dbg_skip_next(env, control);
                 cur = eval_expr(env, cf, control);
                 descending = false;
                 break;
@@ -12544,10 +12556,22 @@ void turi_value_repr(char *buf, size_t cap, TuriValue v) {
  * On a breakpoint or a satisfied step predicate the loop yields to a small
  * command REPL (dbg_repl) reading from dbg->in and writing to dbg->out.
  *
- * Stepping is line-granular: STEP_IN stops at the next node on a different
- * source line; STEP_OVER additionally requires the call depth to be <= the
- * depth we stepped from (so a call on the current line is run to completion);
- * STEP_OUT stops once the depth drops below the stepped-from depth.
+ * Interactive stepping is line-granular: STEP_IN stops at the next node on a
+ * different source line; STEP_OVER additionally requires the call depth to be
+ * <= the depth we stepped from (so a call on the current line is run to
+ * completion); STEP_OUT stops once the depth drops below the stepped-from
+ * depth.  That is the granularity DAP speaks and editors draw, and it is the
+ * one a human wants to drive by hand.
+ *
+ * STEP_NODE is the exception, and it exists for the recorder rather than for a
+ * human: it stops at *every* located node.  A line is not a unit of evaluation
+ * in a Lisp -- `(let [a (f (g 3))]` is one line and four evaluations -- so a
+ * line-granular recording collapses whole expression trees, and collapses a
+ * loop whose body fits on one line into a single step with the induction
+ * variable jumping from its first value to its last.  That is precisely the
+ * question a time-travel trace exists to answer, so the recorder asks for
+ * every node and the format carries the column span to say which one.  See
+ * turi/trace.h.
  * ========================================================================= */
 
 #define DBG_MAX_BPS     64
@@ -12558,6 +12582,7 @@ typedef enum {
     DBG_STEP_IN,        /* stop at the next line, any depth */
     DBG_STEP_OVER,      /* stop at the next line at depth <= step_depth */
     DBG_STEP_OUT,       /* stop once depth < step_depth */
+    DBG_STEP_NODE,      /* stop at the next expression, any depth */
 } DbgStep;
 
 typedef struct {
@@ -12937,13 +12962,23 @@ static void turi_dbg_before_node(TuriEnv *env, EvalFrame *frame,
     TuriDebugger *dbg = (TuriDebugger *)env->debugger;
     if (!dbg || dbg->in_repl || !e) return;
 
-    /* Dedup: eval_expr hooks a node, then immediately dispatches the
-     * driver-folded kinds (let/if/do/program/call/match) to eval_drive, which
-     * would re-hook the very same node.  Mark it on the eval_expr pass and
-     * swallow the driver's duplicate. */
-    if (from_driver) {
-        if (e == dbg->skip_node) { dbg->skip_node = NULL; return; }
-    } else {
+    /* Dedup.  A node can reach this hook twice, from either direction:
+     *
+     *   - eval_expr hooks a node, then immediately dispatches the driver-folded
+     *     kinds (let/if/do/program/call/match) to eval_drive, which re-hooks it.
+     *     Marked below on the eval_expr pass; the driver's pass swallows it.
+     *   - the driver hooks a node on descent and then hands the black-box kinds
+     *     (everything it does not fold -- variable refs, literals, ...) to
+     *     eval_expr, which hooks it again.  Marked by the driver via
+     *     turi_dbg_skip_next; this pass swallows it.
+     *
+     * So the mark is consumed from whichever side arrives second, and only the
+     * folded-kind mark is set here.  Line-granular stepping hid the second case
+     * entirely -- the duplicate shares a line with the original, so
+     * dbg_line_changed was false -- and it surfaced as doubled records the
+     * moment the recorder started asking for every node. */
+    if (e == dbg->skip_node) { dbg->skip_node = NULL; return; }
+    if (!from_driver) {
         switch (e->kind) {
         case EX_LET: case EX_LETREC: case EX_IF: case EX_DO:
         case EX_PROGRAM: case EX_CALL: case EX_MATCH:
@@ -12998,6 +13033,11 @@ static void turi_dbg_before_node(TuriEnv *env, EvalFrame *frame,
         case DBG_STEP_OVER: hit = dbg_line_changed(dbg, s) &&
                                   dbg->depth <= dbg->step_depth; break;
         case DBG_STEP_OUT:  hit = dbg->depth < dbg->step_depth; break;
+        /* Every located node, not every line.  The `s.line == 0` guard above
+         * has already dropped the synthetic nodes, and the skip_node dedup has
+         * dropped the driver's re-hook of a folded kind, so what is left is one
+         * stop per evaluation -- which is the unit the recorder wants. */
+        case DBG_STEP_NODE: hit = true; break;
         case DBG_STEP_NONE: default: break;
         }
         if (hit) reason = TURI_DBG_STOP_STEP;
@@ -13165,6 +13205,16 @@ void turi_debug_resume_step_over(TuriEnv *env) {
 void turi_debug_resume_step_out(TuriEnv *env) {
     TuriDebugger *d = dbg_of(env);
     if (d) { d->step = DBG_STEP_OUT;  d->step_depth = d->depth; }
+}
+
+static void turi_dbg_skip_next(TuriEnv *env, const Expr *e) {
+    TuriDebugger *dbg = (TuriDebugger *)env->debugger;
+    if (dbg) dbg->skip_node = e;
+}
+
+void turi_debug_resume_step_node(TuriEnv *env) {
+    TuriDebugger *d = dbg_of(env);
+    if (d) { d->step = DBG_STEP_NODE; d->step_depth = d->depth; }
 }
 
 int turi_debug_frame_count(TuriEnv *env) {

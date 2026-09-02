@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.42.0` -- `tur trace` records an interpreted run, `tur dap` replays it backwards, and Try Turmeric scrubs it on a timeline; the language server gained real lexical scope, so rename and references work.
+**Latest release:** `v0.42.2` -- `tur dap` serves a recording as a scrubbable timeline (`replayInfo`/`replaySeek`/`replaySites`) and the replay console rewinds; the website is rebuilt around one canonical site map.
 
 ## What
 

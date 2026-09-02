@@ -63,7 +63,8 @@ fi
 
 # The recorder is not a muzzle: `(println (fib 6))` still prints 8.
 expect "the program's own output still reaches stdout" "8" "$rec_out"
-expect "the summary reports the step count"    "65 steps"     "$rec_out"
+expect "the summary reports the step count"    "226 steps"    "$rec_out"
+expect "the summary names the granularity"     "(per expression)" "$rec_out"
 expect "the summary reports frame entries"     "26 enters"    "$rec_out"
 expect "the summary reports frame exits"       "25 pops"      "$rec_out"
 expect "the summary reports the peak depth"    "peak depth 7" "$rec_out"
@@ -91,12 +92,25 @@ if [ $rc -ne 0 ]; then
   exit 1
 fi
 
-expect "the header round-trips"          "turtrace v1"  "$dump"
+expect "the header round-trips"          "turtrace v2"  "$dump"
+expect "the header records the granularity" "steps=per expression" "$dump"
 expect "frame entries decode"            "ENTER  depth=1" "$dump"
 expect "frame exits decode"              "POP    depth=" "$dump"
 expect "sites resolve to file and line"  "input.tur:9:3" "$dump"
 expect "sites resolve to a function name" "fib"          "$dump"
 expect "program output is interleaved"   "OUTPUT 2 bytes" "$dump"
+
+# A site is a column RANGE, not a point. Under line-granular recording the
+# column was whichever node landed first on a newly entered line -- a number
+# with no referent. One step per expression gives it one.
+expect "a site carries the expression's column span" "input.tur:9:3-57" "$dump"
+
+# The sub-expressions of `(< n 2)` are steps in their own right: the test, then
+# `n`, then `2`. This is the collapse that line granularity caused -- the whole
+# condition was one stop, and "how did this value come to be" had no answer
+# below the line.
+expect "a nested test is its own step"   "input.tur:9:7-14"  "$dump"
+expect "an operand of that test is too"  "input.tur:9:10-11" "$dump"
 
 # Deltas, not states: `n` is carried on the step that binds it and on no
 # later step of the same frame, because its rendering has not moved.
@@ -107,6 +121,61 @@ if [ "$n_hits" -eq 1 ]; then
 else
   bad "an unchanged binding is not repeated on every step" \
       "n=6 appears $n_hits times, expected 1"
+fi
+
+# ---------------------------------------------------------------------------
+# Granularity: a step is one expression, not one source line
+#
+# The regression this guards is the reason the recorder moved off line
+# granularity. Two spellings of ONE program -- the same loop with the body on
+# one line and broken across four -- have to record the same run, because where
+# the newlines went is not something a debugging record is allowed to have an
+# opinion about. Line-granularly they recorded 3 steps and 23.
+# ---------------------------------------------------------------------------
+
+steps_of() {  # file, extra flags... -> the step count from the summary
+  local f="$1"; shift
+  "$TUR" trace "$f" "$@" 2>&1 | sed -n 's/^trace: \([0-9]*\) steps.*/\1/p'
+}
+
+one=$(steps_of tests/fixtures/trace/loop-oneline.tur)
+many=$(steps_of tests/fixtures/trace/loop-multiline.tur)
+if [ -n "$one" ] && [ "$one" = "$many" ]; then
+  ok "formatting does not change the recording ($one steps either way)"
+else
+  bad "formatting does not change the recording" \
+      "one-line recorded $one steps, multi-line recorded $many"
+fi
+
+# The induction variable is visible on every pass. Line-granularly the one-line
+# spelling recorded `i` exactly twice -- 0, then 5 -- so the question the whole
+# recording exists to answer ("how did this come to be 5") had no answer in it.
+one_dump=$("$TUR" trace tests/fixtures/trace/loop-oneline.tur -o "$WORK/one.turtrace" 2>/dev/null; \
+           "$TUR" trace --dump "$WORK/one.turtrace")
+for v in "i=0" "i=1" "i=2" "i=3" "i=4" "i=5"; do
+  expect "a one-line loop records $v" "$v" "$one_dump"
+done
+
+# Each iteration's print lands between the steps that produced it, rather than
+# five of them arriving in one drain at the end.
+out_records=$(grep -c "^OUTPUT" <<< "$one_dump")
+if [ "$out_records" -eq 5 ]; then
+  ok "each iteration's output is interleaved where it happened"
+else
+  bad "each iteration's output is interleaved where it happened" \
+      "expected 5 OUTPUT records, got $out_records"
+fi
+
+# --lines is the opt-out, for a program too big to record per expression under
+# the cap. It is coarser by construction, and says which it was.
+lines_out=$("$TUR" trace tests/fixtures/trace/loop-oneline.tur --lines 2>&1)
+expect "--lines says it recorded per line" "(per line)" "$lines_out"
+lines_steps=$(sed -n 's/^trace: \([0-9]*\) steps.*/\1/p' <<< "$lines_out")
+if [ -n "$lines_steps" ] && [ "$lines_steps" -lt "$one" ]; then
+  ok "--lines is coarser than the default ($lines_steps vs $one steps)"
+else
+  bad "--lines is coarser than the default" \
+      "--lines recorded $lines_steps, default recorded $one"
 fi
 
 # ---------------------------------------------------------------------------

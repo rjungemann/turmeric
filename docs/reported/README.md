@@ -288,6 +288,7 @@ the plan links. File a new repr cell there as well as here.
 | ~~inline-c-carrier-producer-byval-container-element~~ | -- | **Resolved 2026-08-30**: it was a FAMILY of five store sites, not one `vec-of` row -- match scrutinee, call argument, if-merge binding, ctor argument, escaping element -- each now bridged on the value's RECORDED emitted spelling, the mechanism the niche crossings established. The if-merge one was not a missing bridge at all: `emit_if_value` declared its by-value merge temp without recording its C type, unlike its sibling declarer, so the double-deref guard had nothing to look up. Archived to [docs/archive/inline-c-carrier-producer-byval-container-element.md](../archive/inline-c-carrier-producer-byval-container-element.md) |
 | [option-niche-graduation-breaks-carrier-some-null](option-niche-graduation-breaks-carrier-some-null.md) | low today, breaking at graduation | A carrier `Some(NULL)` (`tur_some_ptr(0)`) is legal on the default path and `some?` answers true on it; under `--enable=option-niche` it aborts at either the niche `Some` ctor (`types.c:2062`) or the carrier crossing (`tur_opt_value_checked`, `emit_module.c:7584`). Both aborts are deliberate and pinned -- what is missing is the release-notes entry, and it is a graduation prerequisite because the break lands on code that opted in to nothing. The report carries the drafted entry so the flip is a copy-paste. Hold reason 2 of the option-niche graduation |
 | [option-niche-container-elements-box-at-parity](option-niche-container-elements-box-at-parity.md) | low | The niche's 16 -> 8 does not reach container elements: a `(Vec (Option String))` is 79.8 MB with the experiment on AND off, because both representations materialize the same carrier box at the erased `vec-push!` boundary (`emit_carrier_bridge`). Not a bug -- store and read agree -- but it confines the win to direct positions and is hold reason 3 of the graduation. Fix is CE, whose CE0 census is done (zero undecidable sites reachable with a niche element) and whose CE1-CE5 are unbuilt |
+| [typeclass-constrained-param-erases-adt-to-int64](typeclass-constrained-param-erases-adt-to-int64.md) | medium | A `^Show a x` constrained parameter instantiated at an ADT stays on the `int64_t` carrier while the generated `__inst_Show_show_Color` takes the ADT by value, so the dispatch call is a cc `incompatible types` error; `tur check` is silent and the instance body itself is emitted correctly -- only the call site inside the constrained function disagrees. Instantiating at `int` works (erasure is a no-op there), which is why the pattern looks fine in the common case |
 
 `option-niche-inline-c-carrier-crossings-incomplete` was resolved 2026-08-28
 (same day it was filed) and moved to
@@ -469,6 +470,7 @@ into a frame env again.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [debugger-and-tracer-only-instrument-main](debugger-and-tracer-only-instrument-main.md) | medium | `tur dap` and `tur trace` attach around `(main)` only, so a file whose work is at the top level stops nowhere and records nothing -- and `setBreakpoints` still answers `verified: true`, so the client draws a bound breakpoint that can never hit. |
 
 `turi-catch-unwind-aggregate-payload` was filed and resolved 2026-08-21 and
 moved to
@@ -1216,7 +1218,9 @@ the report's own named-let snippet does not compile (its `if` branches are
 
 ## Try Turmeric / web REPL (filed 2026-08-25)
 
-*(empty -- the one row here is resolved)*
+| Report | Severity | One line |
+|---|---|---|
+| [try-turmeric-browser-suites-green-while-failing](try-turmeric-browser-suites-green-while-failing.md) | medium | The browser job is marked passed with 5 Playwright tests failing (both suite steps exited 1). Three mechanisms: the steps are `continue-on-error`; the report upload is `if: failure()`, which is mutually exclusive with that, so the Playwright report is uploaded only when nothing failed; and the suites contribute no rows to `timings.jsonl`, so `/ci` does not report them the way it reports every ctest suite. Three of the five failures are test-side (unscoped `.monaco-editor` now that `#repl-input` hosts a second Monaco; `location.reload` no longer redefinable); the two mobile ones ("Failed to load WASM" after `page.reload()` on WebKit) are unattributed and may be a real mobile product bug |
 
 `try-docs-pane-forgets-scroll-position` was resolved 2026-08-26 and moved to
 [docs/archive](../archive/try-docs-pane-forgets-scroll-position.md), along its

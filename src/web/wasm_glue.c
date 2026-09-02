@@ -869,6 +869,10 @@ int turi_wasm_trace_run(const char *input, uint32_t max_steps, int has_main) {
      * not a muzzle"), so the console still streams live while the OUTPUT
      * records accumulate for the scrub. */
     opts.capture_output = true;
+    /* The memset leaves grain at TUR_TRACE_GRAIN_NODE, which is what the
+     * timeline wants: a browser scrub is the one client that can actually show
+     * sub-expression movement, because it owns the editor and the site carries
+     * a column range. */
 
     g_trace = turi_trace_begin(g_env, &opts);
     if (!g_trace) {
@@ -994,8 +998,11 @@ const char *turi_wasm_trace_state(void) {
         wasm_json_escape(&b, f.fn_name);
         buf_puts(&b, "\",\"file\":\"");
         wasm_json_escape(&b, f.file_path);
-        buf_printf(&b, "\",\"line\":%u,\"col\":%u,\"locals\":[",
-                   (unsigned)f.line, (unsigned)f.col);
+        /* endCol is exclusive, and 0 when the recording carries no range (a v1
+         * file).  A client that wants to highlight the expression rather than
+         * the line checks for 0 rather than assuming a range is there. */
+        buf_printf(&b, "\",\"line\":%u,\"col\":%u,\"endCol\":%u,\"locals\":[",
+                   (unsigned)f.line, (unsigned)f.col, (unsigned)f.col_end);
         int nlocals = turi_trace_replay_local_count(g_replay, i);
         for (int j = 0; j < nlocals; j++) {
             const char *name = NULL, *repr = NULL;

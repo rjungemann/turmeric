@@ -2,6 +2,120 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.42.2] -- 2026-09-01
+
+### Added
+
+- **`tur dap` serves a recording as a timeline**, not just as a sequence of
+  steps. DAP describes execution as one step after another and has no
+  vocabulary for an axis -- correct for a live debuggee, where there is nowhere
+  to scrub to, and wrong for a recording, which is an axis. Three custom
+  requests add one, advertised as `supportsTurmericReplayTimeline`:
+  `replayInfo` (how many steps, where the cursor is), `replaySeek` (jump to
+  step N, clamped, reporting where it landed) and `replaySites` (where steps
+  are and how deep, by explicit index or downsampled to a bucket count). All
+  three refuse in a live session naming the reason, because a client that asks
+  has a scrubber in mind.
+
+  `replaySites` returns position and depth **together**, which is the shape Try
+  Turmeric's `trace-site-at` already uses: a timeline's cursor readout wants
+  `file:line` and a depth ribbon wants `depth`, over the same steps. A bucket
+  reports its range's *maximum* depth and the site of the step where that
+  maximum occurred, so a deep call between two samples is not erased and
+  clicking a ribbon spike lands where the spike is.
+
+  None of this is new capability in the reader -- `turi_trace_replay_seek`,
+  `_steps`, `_depth_at` and `_site_at` already existed, and the last two are
+  index reads. What was missing was any way to reach them over the wire, and
+  the alternatives are worse than they look: a slider whose range is a guess,
+  and a seek approximated by repeated `stepBack`, which rebuilds state from the
+  start of the stream once per candidate and turns a scan of an 80k recording
+  from milliseconds into a hang.
+
+- **The replay console rewinds.** Forward motion still appends through ordinary
+  `output` events. Backward motion could not: the transcript at the new cursor
+  is a prefix of what the client was already sent, and a delta cannot express a
+  truncation -- so the old code sent nothing and left the console showing
+  output from steps the cursor had rewound past. A backwards seek now emits a
+  `replayOutput` event carrying the whole transcript to be used in its place.
+  Whole-transcript rather than a cut offset, because a client that missed an
+  earlier event would otherwise cut in the wrong place and never know. Clients
+  that do not recognise the event are exactly as they were.
+
+### Changed
+
+- **The website is rebuilt around one canonical site map.** The topbar,
+  sidebar, mobile drawer and footer are generated from a single pair of lists
+  shared by `web/site.js` and the three page generators (`tools/gendocs.py`,
+  `tools/genguides.py`, `tools/genspices.py`), so hand-written pages and
+  generated ones -- guides, API docs, spices -- can no longer disagree about
+  what is on the site. Every chrome link carries a `title` describing where it
+  goes, the mobile drawer shows the same site map the desktop rail does, and
+  the home page's install step became a tabbed set of install methods. The
+  tour was reworked to match.
+
+### Fixed
+
+- **A recording's last step now shows what the program printed.** A replay
+  transcript holds the output produced strictly before the cursor's step, and a
+  program whose final act is a `println` drains it after the final STEP -- so
+  the last index reported an empty transcript. Measured: `outputLength: 0` at
+  step 24020 of 24021 for a fixture that prints "done" and exits. An empty
+  console at the end of a run that printed reads as a broken timeline rather
+  than a precise one. The final step now concatenates every OUTPUT record, the
+  same special case and for the same reason as Try Turmeric's
+  `turi_wasm_trace_output_full`.
+
+## [0.42.1] -- 2026-08-31
+
+### Changed
+
+- **`tur trace` records one step per expression, not per source line.** The
+  recorder drove the debugger with step-in, whose stop predicate is
+  line-granular, so a recording's resolution was a source line -- the wrong unit
+  in a Lisp, and more so in Turmeric, where neoteric `f(g(x))` and sweet-exp `$`
+  chains exist to put more on a line rather than less. A loop whose body fit on
+  one line collapsed into a single step, with the induction variable jumping
+  from its first value to its last in one delta and every iteration's output
+  arriving in one drain; and fidelity depended on formatting, the same loop
+  recording 3 steps on one line and 23 across four. Both spellings now record
+  58. `tur debug` stepping is unchanged -- line granularity is what a human
+  drives by hand and what DAP speaks -- and `--lines` selects the old
+  granularity.
+
+- **The `.turtrace` format is v2.** A site carries a column range rather than a
+  bare column, and the header records which granularity a recording was taken
+  at. The column was always in the format but named nothing under line stepping:
+  it was whichever node landed first on a newly entered line. v1 recordings
+  still read back. The step cap moved with the unit (200,000 -> 1,000,000
+  native, 50,000 -> 250,000 in the browser) -- a cap bounds the recording, but
+  what it means is how much of a program fits under it.
+
+- **`tur run` matches attributes by name and refuses unknown ones**, and aborts
+  on a builtin failure rather than continuing with an empty string.
+
+### Added
+
+- **`tur run` gains Justfile parity on parameters, modules and builtins**: named
+  and flag parameters via `[arg(...)]`, `mod` and imports, backtick evaluation,
+  and `os_family` / `path_exists` / `replace` / `join` / `error`.
+
+- **The Try Turmeric timeline highlights the expression** inside the current
+  line, which is the visible half of recording per expression; the toolbar
+  scrolls when it overflows.
+
+### Fixed
+
+- **Two silent-ignore holes in `tur run`** where a parameterized attribute was
+  accepted and then quietly dropped.
+
+- **`tur run` runs recipes from the Justfile's directory** and honors `[no-cd]`.
+
+- **A node was hooked twice by the interpreter's debugger** when the driver
+  handed a black-box node to `eval_expr`. Line-granular stepping hid it -- the
+  duplicate shares a line -- so it surfaced as doubled records the moment the
+  recorder began asking for every node.
+
 ## [0.42.0] -- 2026-08-30
 
 ### Added

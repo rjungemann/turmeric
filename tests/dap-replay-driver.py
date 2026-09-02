@@ -167,7 +167,93 @@ locals_of(0, "again")
 req("reverseContinue", threadId=1); stop("rev")
 stack("rev")
 
-# 7) Run off the end. Nothing asserts a duration here, but the fixture is
+# 7) The timeline extension: a recording is an axis, and DAP has no vocabulary
+#    for one. `replayInfo` gives it a length, `replaySeek` a way to jump to an
+#    arbitrary point, and `replaySites` position-and-depth per step. Together
+#    they are what a scrubber and a depth ribbon need.
+#
+#    Shapes follow Try Turmeric's `trace-site-at`, which returns position and
+#    depth together and batches over many indices -- the two callers want the
+#    same data, and asking separately doubles the traffic for nothing.
+print("CAP supportsTurmericReplayTimeline=%s" %
+      str(caps.get("supportsTurmericReplayTimeline", False)).lower())
+
+info = req("replayInfo")["body"]
+print("INFO steps-positive=%s" % ("yes" if info["steps"] > 0 else "no"))
+n_steps = info["steps"]
+
+# The ribbon. Its peak must be at least as deep as the deepest stack the
+# forward pass actually saw -- a downsample that reports each bucket's maximum
+# cannot lose that; one that sampled or averaged would.
+sites = req("replaySites", buckets=16)["body"]["sites"]
+print("SITES bucketed-len=%d" % len(sites))
+print("SITES peak-at-least-2=%s" %
+      ("yes" if max(s["depth"] for s in sites) >= 2 else "no"))
+# Position comes back with depth, which is the whole point of the shape: a
+# ribbon spike is clickable because the entry says where it was.
+print("SITES carry-position=%s" %
+      ("yes" if all(s["line"] > 0 for s in sites) else "no"))
+print("SITES carry-file=%s" %
+      ("yes" if all(s["file"] for s in sites) else "no"))
+# A bucket reports the step where its maximum occurred, not its first step --
+# so the deepest bucket's own index must really be that deep.
+deepest = max(sites, key=lambda s: s["depth"])
+one = req("replaySites", indices=[deepest["index"]])["body"]["sites"]
+print("SITES peak-index-is-the-peak=%s" %
+      ("yes" if one and one[0]["depth"] == deepest["depth"] else "no"))
+# Explicit indices: the other way to ask, for a cursor readout or a tooltip.
+few = req("replaySites", indices=[0, 1, n_steps - 1])["body"]["sites"]
+print("SITES explicit-len=%d" % len(few))
+print("SITES explicit-indices-echo=%s" %
+      ("yes" if [s["index"] for s in few] == [0, 1, n_steps - 1] else "no"))
+# Default bucket count when the client does not ask.
+dflt = req("replaySites")["body"]["sites"]
+print("SITES default-len=%d" % len(dflt))
+
+# Seek to the last step. The reader clamps and reports where it landed, which
+# is the value to believe over the client's own arithmetic.
+seek = req("replaySeek", index=n_steps - 1)["body"]
+# The transcript arrives between the response and the stop. Read it here: it
+# is the only place the final `println` is observable, and asserting on its
+# text rather than on a length is what distinguishes "the full-transcript path
+# ran" from "some bytes turned up".
+end_out = event("output")["body"]["output"]
+event("stopped")
+print("SEEK end-index-matches=%s" %
+      ("yes" if seek["index"] == n_steps - 1 else "no"))
+print("SEEK final-println-visible=%s" % ("yes" if "done" in end_out else "no"))
+at_end = req("replayInfo")["body"]
+print("SEEK cursor-followed=%s" %
+      ("yes" if at_end["index"] == n_steps - 1 else "no"))
+# The last step's transcript is the WHOLE recording's, not the cursor's. The
+# fixture's only println is its final act and drains after the final STEP, so
+# a cursor-relative answer reports nothing here -- an empty console at the end
+# of a run that printed reads as a broken timeline. This is the assertion that
+# the full-transcript path exists.
+print("SEEK output-at-end=%s" % ("yes" if at_end["outputLength"] > 0 else "no"))
+
+# Out of range clamps rather than erroring: a scrubber dragged past the end
+# means "the end".
+huge = req("replaySeek", index=10 ** 9)["body"]
+event("stopped")
+print("SEEK clamps-high=%s" % ("yes" if huge["index"] == n_steps - 1 else "no"))
+
+# 8) The output rewind. Seeking backwards shortens the transcript, and a delta
+#    cannot express a truncation -- the client has only ever been told what to
+#    append. A shrink therefore re-sends the whole transcript as
+#    `replayOutput`, which is the event a rewinding console needs.
+_send("replaySeek", index=0)
+ro = event("replayOutput")
+print("REWIND replayOutput-length=%d" % ro["body"]["length"])
+print("REWIND transcript-emptied=%s" %
+      ("yes" if ro["body"]["output"] == "" else "no"))
+event("stopped")
+back0 = req("replayInfo")["body"]
+print("REWIND cursor-at-start=%s" % ("yes" if back0["index"] == 0 else "no"))
+print("REWIND output-length-agrees=%s" %
+      ("yes" if back0["outputLength"] == ro["body"]["length"] else "no"))
+
+# 9) Run off the end. Nothing asserts a duration here, but the fixture is
 #    large enough (~8k steps) that a scan which re-derives the interpreter
 #    state at every candidate step -- which is what the first version did --
 #    does not finish inside the driver's timeout. Reaching `exited` at all is

@@ -142,6 +142,16 @@ req("continue", threadId=1); show_stop("cond")
 show_locals(0, "cond")
 print("EVAL i=%s" % req("evaluate", expression="i", frameId=0, context="hover")["body"]["result"])
 
+# 5b) the timeline extension is meaningless without a recording, and says so.
+#     A client that asks has a scrubber in mind, so the answer names the thing
+#     to do about it rather than falling through to the generic "not supported
+#     while paused" -- which reads like a bug in the adapter.
+tl = req("replayInfo")
+print("LIVE replayInfo success=%s message=%s" %
+      (str(tl.get("success", False)).lower(), tl.get("message", "")))
+tl = req("replaySeek", index=0)
+print("LIVE replaySeek success=%s" % str(tl.get("success", False)).lower())
+
 # 6) run to completion: program prints "done" (an output event) and exits
 req("continue", threadId=1)
 out = event("output")

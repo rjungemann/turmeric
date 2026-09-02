@@ -3512,7 +3512,25 @@ function initHScrollDragRow(el) {
     };
     updateOverflow();
     if (typeof ResizeObserver !== 'undefined') {
-        new ResizeObserver(updateOverflow).observe(el);
+        // The row's own box never changes when a button appears -- its width
+        // comes from the pane -- so observing only `el` misses the overflow
+        // that Solve or Back-from-definition unhiding creates. Watch the
+        // children too, and re-attach as the child list changes (tabs are
+        // re-rendered wholesale by renderTabs()).
+        const ro = new ResizeObserver(updateOverflow);
+        const observeChildren = () => {
+            ro.disconnect();
+            ro.observe(el);
+            for (const child of el.children) ro.observe(child);
+        };
+        observeChildren();
+        if (typeof MutationObserver !== 'undefined') {
+            new MutationObserver(() => {
+                observeChildren();
+                updateOverflow();
+            }).observe(el, { childList: true, attributes: true, subtree: true,
+                             attributeFilter: ['hidden', 'style'] });
+        }
     }
     window.addEventListener('resize', updateOverflow);
 
@@ -5416,12 +5434,19 @@ window.turmericApp = {
  * `tur dap` answers stepBack with.  One decoder for one format.
  * ------------------------------------------------------------------------- */
 
-/* The browser's cap is deliberately far below the recorder's own 200,000
+/* The browser's cap is deliberately far below the recorder's own 1,000,000
  * default.  That number was chosen for a native process; here the interpreter
- * retains roughly 4 KiB per step of a trampolined loop on top of the ~15 bytes
- * a step costs the recording itself, and the tab is what pays.  50,000 steps
- * is about 750 KB of trace and a session that stays responsive. */
-const TRACE_MAX_STEPS = 50000;
+ * retains roughly 4 KiB per step of a trampolined loop on top of the ~13 bytes
+ * a step costs the recording itself, and the tab is what pays.
+ *
+ * Raised from 50,000 alongside the recorder's move from line to expression
+ * granularity.  A cap is a bound on the recording, but what it MEANS is how
+ * much of a program fits under it, and a step is now about a third to a fifth
+ * of what it used to be -- so holding 50,000 would have quietly cut the reach
+ * of every recording by that factor.  The interpreter-side retention at the
+ * cap is unchanged by construction: this is the same amount of program.
+ * 250,000 steps is about 3 MB of trace and a session that stays responsive. */
+const TRACE_MAX_STEPS = 250000;
 
 const traceState = {
     active: false,
@@ -5668,7 +5693,7 @@ function traceRender(state) {
 
     traceRenderFrames();
     traceRenderOutput(state.fullOutput !== undefined ? state.fullOutput : (state.output || ''));
-    traceHighlight(top ? traceEditorLine(top.line) : 0);
+    traceHighlight(top ? traceEditorLine(top.line) : 0, top);
 }
 
 /* Interpreter line -> editor line.  The env accumulates every eval into one
@@ -5719,7 +5744,18 @@ function traceRenderOutput(output) {
     consoleEl.scrollTop = consoleEl.scrollHeight;
 }
 
-function traceHighlight(line) {
+/**
+ * Mark where the cursor is: the line always, and the expression within it when
+ * the recording says which one.
+ *
+ * The second decoration is the visible half of recording per expression rather
+ * than per line.  A step is one evaluation, so several consecutive steps share
+ * a line and the line marker alone would sit still through all of them --
+ * looking stuck rather than looking like progress.  `endCol` is 0 on a v1
+ * recording (and absent on a wasm build older than the field), in which case
+ * there is no range to draw and the line marker is the whole story.
+ */
+function traceHighlight(line, frame) {
     if (!editor) return;
     if (!traceState.decorations) {
         traceState.decorations = editor.createDecorationsCollection([]);
@@ -5728,7 +5764,7 @@ function traceHighlight(line) {
         traceState.decorations.set([]);
         return;
     }
-    traceState.decorations.set([{
+    const decorations = [{
         range: new monaco.Range(line, 1, line, 1),
         options: {
             isWholeLine: true,
@@ -5737,7 +5773,16 @@ function traceHighlight(line) {
              * margin, and turning one on would shift the whole gutter. */
             linesDecorationsClassName: 'trace-current-marker',
         },
-    }]);
+    }];
+    const col = frame ? (frame.col | 0) : 0;
+    const endCol = frame ? (frame.endCol | 0) : 0;
+    if (col > 0 && endCol > col) {
+        decorations.push({
+            range: new monaco.Range(line, col, line, endCol),
+            options: { className: 'trace-current-expr' },
+        });
+    }
+    traceState.decorations.set(decorations);
     editor.revealLineInCenterIfOutsideViewport(line);
 }
 

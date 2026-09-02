@@ -27,10 +27,6 @@
   text-align: center;
 }
 
-.hero-grid {
-  mask-image: radial-gradient(ellipse 80% 80% at 50% 30%, black 0%, transparent 80%);
-}
-
 .hero-inner {
   max-width: 760px;
   margin: 0 auto;
@@ -68,6 +64,12 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   font-weight: 300;
 }
 
+/* The hero description runs to more than one paragraph. Only the last one
+   carries the 40px that sets the gap before .hero-actions -- the rest get
+   ordinary paragraph spacing (1em, the UA default for a <p>, resolved against
+   this element's own font-size). */
+.hero-desc:not(:last-of-type) { margin-bottom: 1em; }
+
 .section-title { font-size: clamp(32px, 3.5vw, 48px); }
 .section-desc { max-width: 440px; }
 
@@ -94,30 +96,29 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 .tour-index-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 1px;
-  background: var(--border);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  overflow: hidden;
+  gap: 64px 32px;
+  /* Cards size to their own content: a two-line label in one cell must not
+     stretch its neighbours and float their icons away from their labels. */
+  align-items: start;
 }
 
 .tour-index-card {
-  background: var(--bg-card);
-  padding: 24px 20px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  transition: background 0.14s;
+  gap: 8px;
+  min-width: 0;
   color: inherit;
 }
-.tour-index-card:hover { background: var(--bg-hover); }
+.tour-index-card .tour-card-label { transition: color 0.14s; }
+.tour-index-card:hover .tour-card-label { color: var(--gold-bright); }
 
 .tour-stop-num {
-  font-family: 'Iosevka', monospace;
-  font-size: 10px;
-  color: var(--gold-dim);
+  font-size: 11px;
   letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--green);
   font-weight: 500;
+  margin-bottom: 16px;
 }
 
 .tour-card-label {
@@ -132,8 +133,16 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 .tour-card-icon {
   font-size: 18px;
   opacity: 0.7;
-  margin-top: auto;
   line-height: 1;
+}
+
+/* Portrait product shot -- the Trowel stop shows the editor instead of a code
+   card, so it sits in the same split-section slot a .code-card would. Sizing
+   only; the shadow and spotlight come from .product-shot in site.css. */
+.tour-shot {
+  justify-self: center;
+  max-width: 420px;
+  width: 100%;
 }
 
 /* ── RESPONSIVE: TOUR ──────────────────── */
@@ -142,6 +151,8 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 
   .tour-index { padding: 0 24px 60px; }
   .tour-index-grid { grid-template-columns: repeat(2, 1fr); }
+
+  .tour-shot { max-width: 380px; }
 }
 
 @media (max-width: 480px) {
@@ -160,23 +171,19 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 
 <!-- ── HERO ───────────────────────────── -->
 <div class="hero">
-  <div class="hero-grid"></div>
-  <div class="hero-glow"></div>
   <div class="hero-inner">
-    <div class="hero-eyebrow">
-      <span class="eyebrow-dot"></span>
-      Language Tour
-    </div>
-    <h1>Fourteen things about <em>turmeric</em>.</h1>
+    <h1>A quick tour of Turmeric</h1>
     <p class="hero-subtitle">A walkthrough of what makes Turmeric tick.</p>
     <p class="hero-desc">
-      From algebraic effects to refinement types, each stop in this tour
-      shows you real language features with real code -- and the last one
-      shows you the editor to write it in.
+      From algebraic effects to refinement types, each stop in this tour shows you real language features with real code.
+    </p>
+    <p class="hero-desc">
+      Stick around to the end to learn how to install Turmeric in one step, no setup required.
     </p>
     <div class="hero-actions">
-      <a href="/try" class="btn-hero btn-hero-primary">Try in browser <span style="font-size:16px;">→</span></a>
-      <a href="/" class="btn-hero btn-hero-secondary">← Back to home</a>
+      <a href="/try" class="btn-hero btn-hero-primary">Try in Browser</a>
+      <a href="#install" class="btn-hero btn-hero-secondary">Install</a>
+      <a href="/docs/html/guides/" class="btn-hero btn-hero-secondary">Read the Guides</a>
     </div>
   </div>
 </div>
@@ -184,50 +191,50 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <!-- ── TOUR INDEX ─────────────────────── -->
 <div class="tour-index reveal">
   <div class="tour-index-grid">
-    <a href="#effects" class="tour-index-card">
+    <a href="#neoteric" class="tour-index-card">
       <span class="tour-stop-num">01</span>
+      <span class="tour-card-label">Sweet-Exp Syntax</span>
+      <span class="tour-card-icon"><t-icon name="align-left"></t-icon></span>
+    </a>
+    <a href="#effects" class="tour-index-card">
+      <span class="tour-stop-num">02</span>
       <span class="tour-card-label">Algebraic Effects</span>
       <span class="tour-card-icon"><t-icon name="sparkles"></t-icon></span>
     </a>
     <a href="#typeclasses" class="tour-index-card">
-      <span class="tour-stop-num">02</span>
+      <span class="tour-stop-num">03</span>
       <span class="tour-card-label">Typeclasses</span>
       <span class="tour-card-icon"><t-icon name="target"></t-icon></span>
     </a>
     <a href="#adts" class="tour-index-card">
-      <span class="tour-stop-num">03</span>
+      <span class="tour-stop-num">04</span>
       <span class="tour-card-label">ADTs &amp; Pattern Matching</span>
       <span class="tour-card-icon"><t-icon name="git-branch"></t-icon></span>
     </a>
     <a href="#continuations" class="tour-index-card">
-      <span class="tour-stop-num">04</span>
+      <span class="tour-stop-num">05</span>
       <span class="tour-card-label">Delimited Continuations</span>
       <span class="tour-card-icon"><t-icon name="waypoints"></t-icon></span>
     </a>
     <a href="#macros" class="tour-index-card">
-      <span class="tour-stop-num">05</span>
+      <span class="tour-stop-num">06</span>
       <span class="tour-card-label">Macro System</span>
       <span class="tour-card-icon"><t-icon name="braces"></t-icon></span>
     </a>
     <a href="#rc" class="tour-index-card">
-      <span class="tour-stop-num">06</span>
+      <span class="tour-stop-num">07</span>
       <span class="tour-card-label">Reference Counting</span>
       <span class="tour-card-icon"><t-icon name="recycle"></t-icon></span>
     </a>
     <a href="#gc" class="tour-index-card">
-      <span class="tour-stop-num">07</span>
+      <span class="tour-stop-num">08</span>
       <span class="tour-card-label">Optional GC</span>
       <span class="tour-card-icon"><t-icon name="trash-2"></t-icon></span>
     </a>
     <a href="#hof" class="tour-index-card">
-      <span class="tour-stop-num">08</span>
+      <span class="tour-stop-num">09</span>
       <span class="tour-card-label">Higher-Order Functions</span>
       <span class="tour-card-icon"><t-icon name="function-square"></t-icon></span>
-    </a>
-    <a href="#neoteric" class="tour-index-card">
-      <span class="tour-stop-num">09</span>
-      <span class="tour-card-label">Sweet-Exp Syntax</span>
-      <span class="tour-card-icon"><t-icon name="align-left"></t-icon></span>
     </a>
     <a href="#contracts" class="tour-index-card">
       <span class="tour-stop-num">10</span>
@@ -259,353 +266,441 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 
 <hr class="divider">
 
-<!-- ── 01 ALGEBRAIC EFFECTS ──────────── -->
-<div class="split-section reveal" id="effects">
-  <div>
-    <p class="section-label">01 -- Algebraic Effects</p>
-    <h2 class="section-title">Effects declared.<br>Handlers <em>swapped.</em></h2>
-    <p class="section-desc">Your functions declare what side effects they may perform. Their callers decide how to handle them -- in production, in tests, or as mocks.</p>
-    <p class="section-desc">The type system ensures no effect goes unhandled. Swap between handlers at the call site without touching the core logic.</p>
-  </div>
-  <div class="code-card">
-    <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
-      <span class="code-card-filename">effects.tur</span>
-    </div>
-    <div class="code-card-body"><span class="cmt">;; Declare effects as first-class operations</span>
-<span class="pnc">(</span><span class="kw">defeffect</span> <span class="tp">Ask</span> <span class="pnc">[]</span> <span class="tp">:int</span><span class="pnc">)</span>
-<span class="pnc">(</span><span class="kw">defeffect</span> <span class="tp">Log</span> <span class="pnc">[</span>msg <span class="tp">:str</span><span class="pnc">]</span> <span class="tp">:void</span><span class="pnc">)</span>
-
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">compute</span> <span class="pnc">[]</span> <span class="tp">:int</span>
-  <span class="pnc">(</span>perform <span class="pnc">(</span><span class="tp">Log</span> <span class="str">"computing..."</span><span class="pnc">))</span>
-  <span class="pnc">(</span><span class="op">*</span> <span class="pnc">(</span>perform <span class="pnc">(</span><span class="tp">Ask</span><span class="pnc">))</span> <span class="num">2</span><span class="pnc">))</span>
-
-<span class="cmt">;; Production: logs to stdout, asks for real value</span>
-<span class="pnc">(</span>handle <span class="pnc">(</span><span class="fn">compute</span><span class="pnc">)</span>
-  <span class="pnc">(</span><span class="tp">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span>       <span class="pnc">(</span>resume k <span class="num">21</span><span class="pnc">)</span>
-  <span class="pnc">(</span><span class="tp">Log</span> <span class="pnc">[</span>msg<span class="pnc">]</span> k<span class="pnc">)</span>   <span class="pnc">(</span><span class="kw">do</span> <span class="pnc">(</span>println msg<span class="pnc">)</span> <span class="pnc">(</span>resume k<span class="pnc">)))</span>
-<span class="cmt">;; prints: computing...   returns: 42</span>
-
-<span class="cmt">;; Test: suppress logs, supply fixed value</span>
-<span class="pnc">(</span>handle <span class="pnc">(</span><span class="fn">compute</span><span class="pnc">)</span>
-  <span class="pnc">(</span><span class="tp">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span>       <span class="pnc">(</span>resume k <span class="num">0</span><span class="pnc">)</span>
-  <span class="pnc">(</span><span class="tp">Log</span> <span class="pnc">[</span>_<span class="pnc">]</span> k<span class="pnc">)</span>     <span class="pnc">(</span>resume k<span class="pnc">))</span>
-<span class="cmt">;; (silent)              returns: 0</span></div>
-  </div>
-</div>
-
-<hr class="divider">
-
-<!-- ── 02 TYPECLASSES ─────────────────── -->
-<div class="split-section reverse reveal" id="typeclasses">
-  <div>
-    <p class="section-label">02 -- Typeclasses</p>
-    <h2 class="section-title">Compile-time dispatch.<br>Zero <em>overhead.</em></h2>
-    <p class="section-desc">Typeclass dispatch resolves to a concrete instance at compile time -- no virtual tables, no runtime cost. Define a typeclass once and the compiler verifies every call site has a valid instance.</p>
-    <p class="section-desc">The <code>^Show</code> constraint syntax expresses type requirements without sacrificing precision or performance.</p>
-  </div>
-  <div class="code-card" style="font-size:12.5px;">
-    <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
-      <span class="code-card-filename">typeclasses.tur</span>
-    </div>
-    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="pnc">(</span><span class="kw">defclass</span> <span class="fn">Show</span> <span class="pnc">[</span>a<span class="pnc">]</span>
-  <span class="pnc">(</span><span class="fn">show</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="tp">:str</span><span class="pnc">))</span>
-
-<span class="pnc">(</span><span class="kw">defdata</span> <span class="tp">Color</span> <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Green</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">))</span>
-
-<span class="pnc">(</span><span class="kw">definstance</span> <span class="fn">Show</span> <span class="pnc">[</span><span class="tp">Color</span><span class="pnc">]</span>
-  <span class="pnc">(</span><span class="fn">show</span> <span class="pnc">[</span>c<span class="pnc">]</span>
-    <span class="pnc">(</span><span class="kw">match</span> c
-      <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">)</span>   <span class="str">"red"</span>
-      <span class="pnc">(</span><span class="tp">Green</span><span class="pnc">)</span> <span class="str">"green"</span>
-      <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">)</span>  <span class="str">"blue"</span><span class="pnc">)))</span>
-
-<span class="cmt">;; ^Show means: x must have a Show instance</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">display</span> <span class="pnc">[</span><span class="tp">^Show</span> a x<span class="pnc">]</span> <span class="tp">:void</span>
-  <span class="pnc">(</span>println <span class="pnc">(</span><span class="fn">show</span> x<span class="pnc">)))</span>
-
-<span class="pnc">(</span><span class="fn">display</span> <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">))</span>    <span class="cmt">;; => "red"</span>
-<span class="pnc">(</span><span class="fn">display</span> <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">))</span>   <span class="cmt">;; => "blue"</span></div>
-  </div>
-</div>
-
-<hr class="divider">
-
-<!-- ── 03 ADTs & PATTERN MATCHING ─────── -->
-<div class="split-section reveal" id="adts">
-  <div>
-    <p class="section-label">03 -- ADTs, GADTs &amp; Pattern Matching</p>
-    <h2 class="section-title">A missing case<br>is a <em>compile error.</em></h2>
-    <p class="section-desc"><code>defdata</code> declares sum types; <code>defgadt</code> lets each constructor specialize its own type parameters. Every <code>match</code> arm refines what the checker knows -- no casts, no runtime tags.</p>
-    <p class="section-desc">Missing branches are compile errors, not runtime surprises. Every case is statically verified before your program runs.</p>
-  </div>
-  <div class="code-card">
-    <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
-      <span class="code-card-filename">expr.tur</span>
-    </div>
-    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="cmt">;; GADT: each constructor carries its own return type.</span>
-<span class="cmt">;; The type-checker refines what it knows per match arm.</span>
-<span class="cmt">;; Requires: -Xgadt</span>
-<span class="pnc">(</span><span class="kw">defgadt</span> <span class="tp">Expr</span> <span class="pnc">[</span>a<span class="pnc">]</span>
-  <span class="pnc">(</span><span class="tp">Lit</span> <span class="tp">int</span>                         <span class="tp">: (Expr int)</span><span class="pnc">)</span>
-  <span class="pnc">(</span><span class="tp">Add</span> <span class="pnc">(</span><span class="tp">Expr int</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Expr int</span><span class="pnc">)</span>   <span class="tp">: (Expr int)</span><span class="pnc">)</span>
-  <span class="pnc">(</span><span class="tp">Mul</span> <span class="pnc">(</span><span class="tp">Expr int</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Expr int</span><span class="pnc">)</span>   <span class="tp">: (Expr int)</span><span class="pnc">))</span>
-
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">eval</span> <span class="pnc">[</span>e<span class="pnc">]</span> <span class="tp">:int</span>
-  <span class="pnc">(</span><span class="kw">match</span> e
-    <span class="pnc">(</span><span class="tp">Lit</span> n<span class="pnc">)</span>    n
-    <span class="pnc">(</span><span class="tp">Add</span> l r<span class="pnc">)</span>  <span class="pnc">(</span><span class="op">+</span> <span class="pnc">(</span><span class="fn">eval</span> l<span class="pnc">)</span> <span class="pnc">(</span><span class="fn">eval</span> r<span class="pnc">))</span>
-    <span class="pnc">(</span><span class="tp">Mul</span> l r<span class="pnc">)</span>  <span class="pnc">(</span><span class="op">*</span> <span class="pnc">(</span><span class="fn">eval</span> l<span class="pnc">)</span> <span class="pnc">(</span><span class="fn">eval</span> r<span class="pnc">))))</span>
-
-<span class="cmt">;; (2 + 3) * 4  =>  20</span>
-<span class="pnc">(</span>println
-  <span class="pnc">(</span><span class="fn">eval</span> <span class="pnc">(</span><span class="tp">Mul</span> <span class="pnc">(</span><span class="tp">Add</span> <span class="pnc">(</span><span class="tp">Lit</span> <span class="num">2</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Lit</span> <span class="num">3</span><span class="pnc">))</span>
-             <span class="pnc">(</span><span class="tp">Lit</span> <span class="num">4</span><span class="pnc">))))</span>
-<span class="cmt">;; => 20</span></div>
-  </div>
-</div>
-
-<hr class="divider">
-
-<!-- ── 04 DELIMITED CONTINUATIONS ─────── -->
-<div class="split-section reverse reveal" id="continuations">
-  <div>
-    <p class="section-label">04 -- Delimited Continuations</p>
-    <h2 class="section-title">Coroutines are<br>plain <em>library code.</em></h2>
-    <p class="section-desc">Turmeric reifies a slice of the call stack as an ordinary value. <code>reset</code> delimits the region; <code>shift</code> captures it.</p>
-    <p class="section-desc">Generators, async/await, and backtracking are all built on those two primitives -- no special syntax, no compiler magic.</p>
-  </div>
-  <div class="code-card">
-    <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
-      <span class="code-card-filename">gen.tur</span>
-    </div>
-    <div class="code-card-body"><span class="cmt">;; Build a list lazily with shift/reset</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">yield</span> <span class="pnc">[</span>v<span class="pnc">]</span> <span class="tp">:any</span>
-  <span class="pnc">(</span>shift k <span class="pnc">(</span>cons v <span class="pnc">(</span>k<span class="pnc">))))</span>
-
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">collect</span> <span class="pnc">[</span>thunk<span class="pnc">]</span> <span class="tp">:list</span>
-  <span class="pnc">(</span>reset <span class="pnc">(</span><span class="kw">do</span> <span class="pnc">(</span>thunk<span class="pnc">)</span> nil<span class="pnc">)))</span>
-
-<span class="cmt">;; Generator that yields three values</span>
-<span class="pnc">(</span>println
-  <span class="pnc">(</span><span class="fn">collect</span>
-    <span class="pnc">(</span><span class="kw">fn</span> <span class="pnc">[]</span>
-      <span class="pnc">(</span><span class="fn">yield</span> <span class="num">10</span><span class="pnc">)</span>
-      <span class="pnc">(</span><span class="fn">yield</span> <span class="num">20</span><span class="pnc">)</span>
-      <span class="pnc">(</span><span class="fn">yield</span> <span class="num">30</span><span class="pnc">))))</span>
-<span class="cmt">;; => (10 20 30)</span>
-
-<span class="cmt">;; Same primitives power backtracking,</span>
-<span class="cmt">;; async/await, and cooperative scheduling.</span></div>
-  </div>
-</div>
-
-<hr class="divider">
-
-<!-- ── 05 MACRO SYSTEM ────────────────── -->
-<div class="split-section reveal" id="macros">
-  <div>
-    <p class="section-label">05 -- Macro System</p>
-    <h2 class="section-title">Compile-time transforms.<br>Zero runtime <em>cost.</em></h2>
-    <p class="section-desc">Macros in Turmeric operate directly on the syntax tree at compile time. New control flow, DSLs, and syntactic sugar are defined with <code>defmacro</code> -- the output is indistinguishable from hand-written code.</p>
-    <p class="section-desc">Quasiquote (<code>`</code>) and unquote (<code>~</code>) make code templates readable. No runtime overhead, ever.</p>
-  </div>
-  <div class="code-card">
-    <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
-      <span class="code-card-filename">macros.tur</span>
-    </div>
-    <div class="code-card-body"><span class="cmt">;; `unless` -- inverse of when</span>
-<span class="pnc">(</span><span class="kw">defmacro</span> <span class="fn">unless</span> <span class="pnc">[</span>test <span class="op">&amp;</span> body<span class="pnc">]</span>
-  <span class="str">`</span><span class="pnc">(</span><span class="kw">when</span> <span class="pnc">(</span>not <span class="str">~</span>test<span class="pnc">)</span> <span class="str">~@</span>body<span class="pnc">))</span>
-
-<span class="cmt">;; multi-branch conditional -- `cond`</span>
-<span class="pnc">(</span><span class="kw">defmacro</span> <span class="fn">cond</span> <span class="pnc">[</span><span class="op">&amp;</span> clauses<span class="pnc">]</span>
-  <span class="pnc">(</span><span class="kw">if</span> <span class="pnc">(</span>nil? clauses<span class="pnc">)</span> nil
-    <span class="str">`</span><span class="pnc">(</span><span class="kw">if</span> <span class="str">~</span><span class="pnc">(</span>first clauses<span class="pnc">)</span>
-         <span class="str">~</span><span class="pnc">(</span>second clauses<span class="pnc">)</span>
-         <span class="pnc">(</span><span class="fn">cond</span> <span class="str">~@</span><span class="pnc">(</span>rest <span class="pnc">(</span>rest clauses<span class="pnc">)))))</span>
-
-<span class="cmt">;; Usage: clean multi-branch dispatch</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">sign</span> <span class="pnc">[</span>n <span class="tp">:int</span><span class="pnc">]</span> <span class="tp">:str</span>
-  <span class="pnc">(</span><span class="fn">cond</span>
-    <span class="pnc">(</span><span class="op">&lt;</span> n <span class="num">0</span><span class="pnc">)</span>  <span class="str">"negative"</span>
-    <span class="pnc">(</span><span class="op">=</span> n <span class="num">0</span><span class="pnc">)</span>  <span class="str">"zero"</span>
-    <span class="pnc">(</span><span class="op">&gt;</span> n <span class="num">0</span><span class="pnc">)</span>  <span class="str">"positive"</span><span class="pnc">))</span></div>
-  </div>
-</div>
-
-<hr class="divider">
-
-<!-- ── 06 REFERENCE COUNTING ──────────── -->
-<div class="split-section reverse reveal" id="rc">
-  <div>
-    <p class="section-label">06 -- Reference Counting</p>
-    <h2 class="section-title">Freed immediately<br>when count <em>hits zero.</em></h2>
-    <p class="section-desc">Turmeric uses reference counting with compiler-assisted elision. <code>rc/clone</code> increments; <code>rc/drop</code> decrements. Cleanup is deterministic -- no GC pauses, no dangling pointers.</p>
-    <p class="section-desc">When the count hits zero, the value is freed right there, at that line. You can see exactly where memory is released.</p>
-  </div>
-  <div class="code-card">
-    <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
-      <span class="code-card-filename">memory.tur</span>
-    </div>
-    <div class="code-card-body"><span class="cmt">;; Heap-allocate a value with rc/of</span>
-<span class="pnc">(</span><span class="kw">let</span> <span class="pnc">[</span>data <span class="pnc">(</span>rc/of <span class="num">42</span><span class="pnc">)]</span>
-  <span class="pnc">(</span>println <span class="pnc">(</span>rc/strong-count data<span class="pnc">))</span>  <span class="cmt">;; => 1</span>
-
-  <span class="cmt">;; Clone increments the reference count</span>
-  <span class="pnc">(</span><span class="kw">let</span> <span class="pnc">[</span>alias <span class="pnc">(</span>rc/clone data<span class="pnc">)]</span>
-    <span class="pnc">(</span>println <span class="pnc">(</span>rc/strong-count data<span class="pnc">))</span>  <span class="cmt">;; => 2</span>
-    <span class="pnc">(</span>println <span class="pnc">(</span><span class="op">=</span> <span class="op">@</span>data <span class="op">@</span>alias<span class="pnc">))</span>         <span class="cmt">;; => true</span>
-    <span class="pnc">(</span>rc/drop alias<span class="pnc">))</span>                   <span class="cmt">;; count -> 1</span>
-
-  <span class="pnc">(</span>println <span class="pnc">(</span>rc/strong-count data<span class="pnc">))</span>  <span class="cmt">;; => 1</span>
-  <span class="pnc">(</span>rc/drop data<span class="pnc">))</span>                    <span class="cmt">;; freed here, no GC</span></div>
-  </div>
-</div>
-
-<hr class="divider">
-
-<!-- ── 07 OPTIONAL GC ─────────────────── -->
-<div class="split-section reveal" id="gc">
-  <div>
-    <p class="section-label">07 -- Optional GC</p>
-    <h2 class="section-title">A collector you<br>turn <em>on.</em></h2>
-    <p class="section-desc">Reference counting leaks cycles -- every RC language has this problem. Turmeric's answer is a Bacon-Rajan trial-deletion collector layered <em>on top</em> of RC, and it is <strong>off by default</strong>. Nothing traces, nothing pauses, until you ask.</p>
-    <p class="section-desc">Turn it on and you choose the trigger: <code>(gc!)</code> to collect right here, a suspect-count threshold, or fully automatic at allocation checkpoints. Only <code>rc&lt;T&gt;</code> values participate -- stack values, arenas, and by-value structs are never involved.</p>
-  </div>
-  <div class="code-card">
-    <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
-      <span class="code-card-filename">cycles.tur</span>
-    </div>
-    <div class="code-card-body"><span class="cmt">;; Two nodes pointing at each other: RC alone</span>
-<span class="cmt">;; can never free this -- both counts stay at 1.</span>
-<span class="pnc">(</span><span class="kw">defstruct</span> <span class="tp">Node</span> <span class="pnc">[</span>next <span class="tp">: rc&lt;Node&gt;</span><span class="pnc">])</span>
-
-<span class="cmt">;; Default: GC_DISABLED. RC does all the work,</span>
-<span class="cmt">;; cycles simply accumulate. Zero overhead.</span>
-<span class="pnc">(</span>make-cycle!<span class="pnc">)</span>
-<span class="pnc">(</span>println <span class="pnc">(</span>gc-live-blocks<span class="pnc">))</span>      <span class="cmt">;; => 2</span>
-
-<span class="cmt">;; Opt in, then collect on demand</span>
-<span class="pnc">(</span>gc-enable!<span class="pnc">)</span>
-<span class="pnc">(</span>gc!<span class="pnc">)</span>
-<span class="pnc">(</span>println <span class="pnc">(</span>gc-objects-freed<span class="pnc">))</span>    <span class="cmt">;; => 2</span>
-<span class="pnc">(</span>println <span class="pnc">(</span>gc-live-blocks<span class="pnc">))</span>      <span class="cmt">;; => 0</span>
-
-<span class="cmt">;; ...or hand the timing over entirely.</span>
-<span class="cmt">;; Opt-in, always: nothing collects until you call this.</span>
-<span class="pnc">(</span>gc-auto!<span class="pnc">)</span>
-
-<span class="cmt">;; Back to no collector at all, any time</span>
-<span class="pnc">(</span>gc-disable!<span class="pnc">)</span></div>
-  </div>
-</div>
-
-<hr class="divider">
-
-<!-- ── 08 HIGHER-ORDER FUNCTIONS ─────── -->
-<div class="split-section reverse reveal" id="hof">
-  <div>
-    <p class="section-label">08 -- Higher-Order Functions</p>
-    <h2 class="section-title">Closures capture<br>their <em>environment.</em></h2>
-    <p class="section-desc">Functions are first-class values in Turmeric -- pass them, return them, store them, compose them. Closures capture their lexical environment with full type inference.</p>
-    <p class="section-desc">The standard library's <code>map</code>, <code>filter</code>, and <code>reduce</code> work uniformly over any foldable structure, not just lists.</p>
-  </div>
-  <div class="code-card">
-    <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
-      <span class="code-card-filename">closures.tur</span>
-    </div>
-    <div class="code-card-body"><span class="cmt">;; Closures capture their lexical environment</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">make-adder</span> <span class="pnc">[</span>n <span class="tp">:int</span><span class="pnc">]</span> <span class="tp">:(fn [:int] :int)</span>
-  <span class="pnc">(</span><span class="kw">fn</span> <span class="pnc">[</span>x <span class="tp">:int</span><span class="pnc">]</span> <span class="pnc">(</span><span class="op">+</span> n x<span class="pnc">)))</span>
-
-<span class="pnc">(</span><span class="kw">let</span> <span class="pnc">[</span>add5  <span class="pnc">(</span><span class="fn">make-adder</span> <span class="num">5</span><span class="pnc">)</span>
-      add10 <span class="pnc">(</span><span class="fn">make-adder</span> <span class="num">10</span><span class="pnc">)]</span>
-  <span class="pnc">(</span>println <span class="pnc">(</span>add5  <span class="num">3</span><span class="pnc">))</span>   <span class="cmt">;; => 8</span>
-  <span class="pnc">(</span>println <span class="pnc">(</span>add10 <span class="num">7</span><span class="pnc">)))</span>  <span class="cmt">;; => 17</span>
-
-<span class="cmt">;; Pipeline transformations with map + filter</span>
-<span class="pnc">(</span><span class="kw">let</span> <span class="pnc">[</span>nums <span class="pnc">[</span><span class="num">1</span> <span class="num">2</span> <span class="num">3</span> <span class="num">4</span> <span class="num">5</span><span class="pnc">]]</span>
-  <span class="pnc">(</span>println
-    <span class="pnc">(</span>map <span class="pnc">(</span><span class="kw">fn</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="pnc">(</span><span class="op">*</span> x x<span class="pnc">))</span>
-         <span class="pnc">(</span>filter <span class="pnc">(</span><span class="kw">fn</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="pnc">(</span><span class="op">=</span> <span class="pnc">(</span><span class="op">%</span> x <span class="num">2</span><span class="pnc">)</span> <span class="num">0</span><span class="pnc">))</span>
-                 nums<span class="pnc">))))</span>
-<span class="cmt">;; => (4 16)</span></div>
-  </div>
-</div>
-
-<hr class="divider">
-
-<!-- ── 08 NEOTERIC SYNTAX ─────────────── -->
+<!-- ── 01 SWEET-EXP SYNTAX ────────────────── -->
 <div class="split-section reveal" id="neoteric">
   <div>
-    <p class="section-label">09 -- Sweet-Exp Syntax</p>
-    <h2 class="section-title">Two syntaxes,<br>one <em>AST.</em></h2>
+    <p class="section-label">01 -- Sweet-Exp Syntax</p>
+    <h2 class="section-title">Choose your syntax to taste</h2>
     <p class="section-desc">A single <code>#lang</code> declaration switches from Lisp-style parentheses to Sweet-Exp notation -- indentation-sensitive, with <code>f(args)</code> for inline calls and <code>$</code> to avoid extra nesting.</p>
     <p class="section-desc">Both syntaxes compile to the same AST. Sweet-Exp code and classic Turmeric code share libraries freely and can coexist in the same project.</p>
   </div>
   <div class="code-card">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
-      <span class="code-card-filename" id="neoteric-filename" data-turmeric="classic.tur" data-sweet-exp="neoteric.tur">classic.tur</span>
-      <div class="code-syntax-toggle">
-        <button class="seg-btn active" data-syntax="turmeric">turmeric</button>
-        <button class="seg-btn" data-syntax="sweet-exp">sweet-exp</button>
+      <span class="code-card-filename" id="neoteric-filename" data-turmeric="factorial.tur" data-sweet-exp="factorial.tur.sweet">factorial.tur</span>
+      <div class="code-syntax-toggle" role="tablist">
+        <button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button>
+        <button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button>
       </div>
     </div>
-    <div class="code-card-body" style="padding:20px 22px;font-size:12px;"><div class="code-version turmeric-version"><span class="cmt">;; Standard Lisp-style syntax</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">factorial</span> <span class="pnc">[</span>n <span class="tp">:int</span><span class="pnc">]</span> <span class="tp">:int</span>
-  <span class="pnc">(</span><span class="kw">if</span> <span class="pnc">(</span><span class="op">&lt;=</span> n <span class="num">1</span><span class="pnc">)</span>
-    <span class="num">1</span>
-    <span class="pnc">(</span><span class="op">*</span> n <span class="pnc">(</span><span class="fn">factorial</span> <span class="pnc">(</span><span class="op">-</span> n <span class="num">1</span><span class="pnc">)))))</span>
+    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><div class="code-version turmeric-version">;; Standard Lisp-style syntax
+(defn factorial [n : int] : int
+  (if (&lt;= n 1)
+    1
+    (* n (factorial (- n 1)))))
 
-<span class="pnc">(</span>println <span class="pnc">(</span><span class="fn">factorial</span> <span class="num">10</span><span class="pnc">))</span>  <span class="cmt">;; => 3628800</span>
+(println (factorial 10))  ;; => 3628800
 
-<span class="pnc">(</span><span class="kw">let</span> <span class="pnc">[</span>xs <span class="pnc">[</span><span class="num">1</span> <span class="num">2</span> <span class="num">3</span> <span class="num">4</span> <span class="num">5</span><span class="pnc">]]</span>
-  <span class="pnc">(</span>println
-    <span class="pnc">(</span>filter <span class="pnc">(</span><span class="kw">fn</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="pnc">(</span><span class="op">&gt;</span> x <span class="num">2</span><span class="pnc">))</span> xs<span class="pnc">)))</span>
-<span class="cmt">;; => (3 4 5)</span></div><div class="code-version sweet-exp-version" style="display:none;"><span class="cmt">#lang turmeric/neoteric</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">factorial</span> <span class="pnc">[</span>n <span class="tp">:int</span><span class="pnc">]</span> <span class="tp">:int</span>
-  <span class="pnc">(</span><span class="kw">if</span> <span class="op">&lt;=</span><span class="pnc">(</span>n <span class="num">1</span><span class="pnc">)</span>
-    <span class="num">1</span>
-    <span class="op">*</span><span class="pnc">(</span>n <span class="fn">factorial</span><span class="pnc">(</span><span class="op">-</span><span class="pnc">(</span>n <span class="num">1</span><span class="pnc">)))))</span>
+(let [xs [1 2 3 4 5]]
+  (println
+    (filter (fn [x] (&gt; x 2)) xs)))
+;; => (3 4 5)</div><div class="code-version sweet-exp-version" style="display:none;">#lang sweet-exp
+defn factorial [n : int] : int
+  if {n &lt;= 1}
+    1
+    {n * factorial({n - 1})}
 
-println<span class="pnc">(</span><span class="fn">factorial</span><span class="pnc">(</span><span class="num">10</span><span class="pnc">))</span>  <span class="cmt">;; => 3628800</span>
+println $ factorial 10  ;; => 3628800
 
-<span class="pnc">(</span><span class="kw">let</span> <span class="pnc">[</span>xs <span class="pnc">[</span><span class="num">1</span> <span class="num">2</span> <span class="num">3</span> <span class="num">4</span> <span class="num">5</span><span class="pnc">]]</span>
-  println<span class="pnc">(</span>filter<span class="pnc">(</span><span class="pnc">(</span><span class="kw">fn</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="op">&gt;</span><span class="pnc">(</span>x <span class="num">2</span><span class="pnc">))</span> xs<span class="pnc">)))</span>
-<span class="cmt">;; => (3 4 5)</span></div></div>
+let [xs [1 2 3 4 5]]
+  println $ filter (fn [x] {x &gt; 2}) xs
+;; => (3 4 5)</div></div>
   </div>
 </div>
 
 <hr class="divider">
 
-<!-- ── 09 RUNTIME CONTRACTS ──────────── -->
+<!-- ── 02 ALGEBRAIC EFFECTS ───────────────── -->
+<div class="split-section reverse reveal" id="effects">
+  <div>
+    <p class="section-label">02 -- Algebraic Effects</p>
+    <h2 class="section-title">Let the consumer determine how <code>handle</code> side-effects themselves.</h2>
+    <p class="section-desc">Your functions declare what side effects they may perform. Their callers decide how to handle them, depending on context. For example, let behavior change in tests, for mocking, or create wizard-like workflows where the consumer handles the in-between.</p>
+    <p class="section-desc">The type system ensures any effect that needs handling gets handled. Swap between handlers at the call site without touching the core logic.</p>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar"><span class="code-card-filename" data-turmeric="effects.tur" data-sweet-exp="effects.tur.sweet">effects.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
+    <div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel">;; Declare effects as first-class operations
+(defeffect Ask [] : int)
+(defeffect Log [msg : str] : void)
+
+(defn compute [] : int
+  (perform (Log "computing..."))
+  (* (perform (Ask)) 2))
+
+;; Production: logs to stdout, asks for real value
+(handle (compute)
+  (Ask [] k)       (resume k 21)
+  (Log [msg] k)   (do (println msg) (resume k 0)))
+;; prints: computing...   returns: 42
+
+;; Test: suppress logs, supply fixed value
+(handle (compute)
+  (Ask [] k)       (resume k 0)
+  (Log [_] k)     (resume k 0))
+;; (silent)              returns: 0</div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none">;; Declare effects as first-class operations
+defeffect Ask [] : int
+defeffect Log [msg : str] : void
+
+defn compute [] : int
+  perform $ Log "computing..."
+  {perform(Ask()) * 2}
+
+;; Production: logs to stdout, asks for real value
+handle compute()
+  \\ (Ask [] k)     resume(k 21)
+  \\ (Log [msg] k)  do(println(msg) resume(k 0))
+;; prints: computing...   returns: 42
+
+;; Test: suppress logs, supply fixed value
+handle compute()
+  \\ (Ask [] k)     resume(k 0)
+  \\ (Log [_] k)    resume(k 0)
+;; (silent)              returns: 0</div></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 03 TYPECLASSES ─────────────────────── -->
+<div class="split-section reveal" id="typeclasses">
+  <div>
+    <p class="section-label">03 -- Typeclasses</p>
+    <h2 class="section-title">Compile-time dispatch.<br>Zero <em>overhead.</em></h2>
+    <p class="section-desc">Typeclass dispatch resolves to a concrete instance at compile time -- no virtual tables, no runtime cost. Define a typeclass once and the compiler verifies every call site has a valid instance.</p>
+    <p class="section-desc">The <code>^Show</code> constraint syntax expresses type requirements without sacrificing precision or performance.</p>
+  </div>
+  <div class="code-card" style="font-size:12.5px;">
+    <div class="code-card-bar"><span class="code-card-filename" data-turmeric="typeclasses.tur" data-sweet-exp="typeclasses.tur.sweet">typeclasses.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
+    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><div class="code-version turmeric-version" role="tabpanel">(defclass Show [a]
+  (show [x] : str))
+
+(defdata Color (Red) (Green) (Blue))
+
+(definstance Show [Color]
+  (show [c]
+    (match c
+      (Red)   "red"
+      (Green) "green"
+      (Blue)  "blue")))
+
+;; ^Show means: x must have a Show instance
+(defn display [^Show a x] : void
+  (println (show x)))
+
+(display (Red))    ;; => "red"
+(display (Blue))   ;; => "blue"</div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none">defclass Show [a]
+  show [x] : str
+
+defdata Color (Red) (Green) (Blue)
+
+definstance Show [Color]
+  show [c]
+    match c
+      \\ (Red)   "red"
+      \\ (Green) "green"
+      \\ (Blue)  "blue"
+
+;; ^Show means: x must have a Show instance
+defn display [^Show a x] : void
+  println $ show x
+
+display(Red())     ;; =&gt; "red"
+display(Blue())    ;; =&gt; "blue"</div></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 04 ADTS, GADTS & PATTERN MATCHING ──── -->
+<div class="split-section reverse reveal" id="adts">
+  <div>
+    <p class="section-label">04 -- ADTs, GADTs &amp; Pattern Matching</p>
+    <h2 class="section-title">A missing case<br>is a <em>compile error.</em></h2>
+    <p class="section-desc"><code>defdata</code> declares sum types; <code>defgadt</code> lets each constructor specialize its own type parameters. Every <code>match</code> arm refines what the checker knows -- no casts, no runtime tags.</p>
+    <p class="section-desc">Missing branches are compile errors, not runtime surprises. Every case is statically verified before your program runs.</p>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar"><span class="code-card-filename" data-turmeric="expr.tur" data-sweet-exp="expr.tur.sweet">expr.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
+    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><div class="code-version turmeric-version" role="tabpanel">;; GADT: each constructor carries its own return type.
+;; The type-checker refines what it knows per match arm.
+;; Requires: -Xgadt
+(defgadt Expr [a]
+  (Lit int                         : (Expr int))
+  (Add (Expr int) (Expr int)   : (Expr int))
+  (Mul (Expr int) (Expr int)   : (Expr int)))
+
+(defn eval [e] : int
+  (match e
+    (Lit n)    n
+    (Add l r)  (+ (eval l) (eval r))
+    (Mul l r)  (* (eval l) (eval r))))
+
+;; (2 + 3) * 4  =>  20
+(println
+  (eval (Mul (Add (Lit 2) (Lit 3))
+             (Lit 4))))
+;; => 20</div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none">;; GADT: each constructor carries its own return type.
+;; The type-checker refines what it knows per match arm.
+;; Requires: -Xgadt
+defgadt Expr [a]
+  Lit int                    : (Expr int)
+  Add (Expr int) (Expr int)  : (Expr int)
+  Mul (Expr int) (Expr int)  : (Expr int)
+
+defn eval [e] : int
+  match e
+    \\ (Lit n)    n
+    \\ (Add l r)  {eval(l) + eval(r)}
+    \\ (Mul l r)  {eval(l) * eval(r)}
+
+;; (2 + 3) * 4  =&gt;  20
+println $ eval(Mul(Add(Lit(2) Lit(3)) Lit(4)))
+;; =&gt; 20</div></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 05 DELIMITED CONTINUATIONS ─────────── -->
+<div class="split-section reveal" id="continuations">
+  <div>
+    <p class="section-label">05 -- Delimited Continuations</p>
+    <h2 class="section-title">Coroutines are<br>plain <em>library code.</em></h2>
+    <p class="section-desc">Turmeric reifies a slice of the call stack as an ordinary value. <code>reset</code> delimits the region; <code>shift</code> captures it.</p>
+    <p class="section-desc">Generators, async/await, and backtracking are all built on those two primitives -- no special syntax, no compiler magic.</p>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar"><span class="code-card-filename" data-turmeric="gen.tur" data-sweet-exp="gen.tur.sweet">gen.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
+    <div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel">;; Build a list lazily with shift/reset
+(defn yield [v] : any
+  (shift k (cons v (k))))
+
+(defn collect [thunk] : list
+  (reset (do (thunk) nil)))
+
+;; Generator that yields three values
+(println
+  (collect
+    (fn []
+      (yield 10)
+      (yield 20)
+      (yield 30))))
+;; => (10 20 30)
+
+;; Same primitives power backtracking,
+;; async/await, and cooperative scheduling.</div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none">;; Build a list lazily with shift/reset
+defn yield [v] : any
+  shift k $ cons v (k)
+
+defn collect [thunk] : list
+  reset $ do thunk() nil
+
+;; Generator that yields three values
+println
+  collect
+    fn []
+      yield(10)
+      yield(20)
+      yield(30)
+;; =&gt; (10 20 30)
+
+;; Same primitives power backtracking,
+;; async/await, and cooperative scheduling.</div></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 06 MACRO SYSTEM ────────────────────── -->
+<div class="split-section reverse reveal" id="macros">
+  <div>
+    <p class="section-label">06 -- Macro System</p>
+    <h2 class="section-title">Compile-time transforms.<br>Zero runtime <em>cost.</em></h2>
+    <p class="section-desc">Macros in Turmeric operate directly on the syntax tree at compile time. New control flow, DSLs, and syntactic sugar are defined with <code>defmacro</code> -- the output is indistinguishable from hand-written code.</p>
+    <p class="section-desc">Quasiquote (<code>`</code>) and unquote (<code>~</code>) make code templates readable. No runtime overhead, ever.</p>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar"><span class="code-card-filename" data-turmeric="macros.tur" data-sweet-exp="macros.tur.sweet">macros.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
+    <div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel">;; `unless` -- inverse of when
+(defmacro unless [test &amp; body]
+  `(when (not ~test) ~@body))
+
+;; multi-branch conditional -- `cond`
+(defmacro cond [&amp; clauses]
+  (if (nil? clauses) nil
+    `(if ~(first clauses)
+         ~(second clauses)
+         (cond ~@(rest (rest clauses)))))
+
+;; Usage: clean multi-branch dispatch
+(defn sign [n : int] : str
+  (cond
+    (&lt; n 0)  "negative"
+    (= n 0)  "zero"
+    (&gt; n 0)  "positive"))</div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none">;; `unless` -- inverse of when
+defmacro unless [test &amp; body]
+  `(when (not ~test) ~@body)
+
+;; multi-branch conditional -- `cond`
+defmacro cond [&amp; clauses]
+  if nil?(clauses)
+    nil
+    `(if ~(first clauses)
+         ~(second clauses)
+         (cond ~@(rest (rest clauses))))
+
+;; Usage: clean multi-branch dispatch
+defn sign [n : int] : str
+  cond
+    \\ {n &lt; 0}  "negative"
+    \\ {n = 0}  "zero"
+    \\ {n &gt; 0}  "positive"</div></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 07 REFERENCE COUNTING ──────────────── -->
+<div class="split-section reveal" id="rc">
+  <div>
+    <p class="section-label">07 -- Reference Counting</p>
+    <h2 class="section-title">Freed immediately<br>when count <em>hits zero.</em></h2>
+    <p class="section-desc">Turmeric uses reference counting with compiler-assisted elision. <code>rc/clone</code> increments; <code>rc/drop</code> decrements. Cleanup is deterministic -- no GC pauses, no dangling pointers.</p>
+    <p class="section-desc">When the count hits zero, the value is freed right there, at that line. You can see exactly where memory is released.</p>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar"><span class="code-card-filename" data-turmeric="memory.tur" data-sweet-exp="memory.tur.sweet">memory.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
+    <div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel">;; Heap-allocate a value with rc/of
+(let [data (rc/of 42)]
+  (println (rc/strong-count data))  ;; => 1
+
+  ;; Clone increments the reference count
+  (let [alias (rc/clone data)]
+    (println (rc/strong-count data))  ;; => 2
+    (println (= @data @alias))         ;; => true
+    (rc/drop alias))                   ;; count -> 1
+
+  (println (rc/strong-count data))  ;; => 1
+  (rc/drop data))                    ;; freed here, no GC</div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none">;; Heap-allocate a value with rc/of
+let [data rc/of(42)]
+  println $ rc/strong-count data     ;; =&gt; 1
+
+  ;; Clone increments the reference count
+  let [alias rc/clone(data)]
+    println $ rc/strong-count data   ;; =&gt; 2
+    println $ = @data @alias         ;; =&gt; true
+    rc/drop(alias)                   ;; count -&gt; 1
+
+  println $ rc/strong-count data     ;; =&gt; 1
+  rc/drop(data)                      ;; freed here, no GC</div></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 08 OPTIONAL GC ─────────────────────── -->
+<div class="split-section reverse reveal" id="gc">
+  <div>
+    <p class="section-label">08 -- Optional GC</p>
+    <h2 class="section-title">A collector you<br>turn <em>on.</em></h2>
+    <p class="section-desc">Reference counting leaks cycles -- every RC language has this problem. Turmeric's answer is a Bacon-Rajan trial-deletion collector layered <em>on top</em> of RC, and it is <strong>off by default</strong>. Nothing traces, nothing pauses, until you ask.</p>
+    <p class="section-desc">Turn it on and you choose the trigger: <code>(gc!)</code> to collect right here, a suspect-count threshold, or fully automatic at allocation checkpoints. Only <code>rc&lt;T&gt;</code> values participate -- stack values, arenas, and by-value structs are never involved.</p>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar"><span class="code-card-filename" data-turmeric="cycles.tur" data-sweet-exp="cycles.tur.sweet">cycles.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
+    <div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel">;; Two nodes pointing at each other: RC alone
+;; can never free this -- both counts stay at 1.
+(defstruct Node [next : rc&lt;Node&gt;])
+
+;; Default: GC_DISABLED. RC does all the work,
+;; cycles simply accumulate. Zero overhead.
+(make-cycle!)
+(println (gc-live-blocks))      ;; => 2
+
+;; Opt in, then collect on demand
+(gc-enable!)
+(gc!)
+(println (gc-objects-freed))    ;; => 2
+(println (gc-live-blocks))      ;; => 0
+
+;; ...or hand the timing over entirely.
+;; Opt-in, always: nothing collects until you call this.
+(gc-auto!)
+
+;; Back to no collector at all, any time
+(gc-disable!)</div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none">;; Two nodes pointing at each other: RC alone
+;; can never free this -- both counts stay at 1.
+defstruct Node [next : rc&lt;Node&gt;]
+
+;; Default: GC_DISABLED. RC does all the work,
+;; cycles simply accumulate. Zero overhead.
+make-cycle!()
+println(gc-live-blocks())      ;; =&gt; 2
+
+;; Opt in, then collect on demand
+gc-enable!()
+gc!()
+println(gc-objects-freed())    ;; =&gt; 2
+println(gc-live-blocks())      ;; =&gt; 0
+
+;; ...or hand the timing over entirely.
+;; Opt-in, always: nothing collects until you call this.
+gc-auto!()
+
+;; Back to no collector at all, any time
+gc-disable!()</div></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 09 HIGHER-ORDER FUNCTIONS ──────────── -->
+<div class="split-section reveal" id="hof">
+  <div>
+    <p class="section-label">09 -- Higher-Order Functions</p>
+    <h2 class="section-title">Closures capture<br>their <em>environment.</em></h2>
+    <p class="section-desc">Functions are first-class values in Turmeric -- pass them, return them, store them, compose them. Closures capture their lexical environment with full type inference.</p>
+    <p class="section-desc">The standard library's <code>map</code>, <code>filter</code>, and <code>reduce</code> work uniformly over any foldable structure, not just lists.</p>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar"><span class="code-card-filename" data-turmeric="closures.tur" data-sweet-exp="closures.tur.sweet">closures.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
+    <div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel">;; Closures capture their lexical environment
+(defn make-adder [n : int] : (fn [int] int)
+  (fn [x : int] (+ n x)))
+
+(let [add5  (make-adder 5)
+      add10 (make-adder 10)]
+  (println (add5  3))   ;; => 8
+  (println (add10 7)))  ;; => 17
+
+;; Pipeline transformations with map + filter
+(let [nums [1 2 3 4 5]]
+  (println
+    (map (fn [x] (* x x))
+         (filter (fn [x] (= (% x 2) 0))
+                 nums))))
+;; => (4 16)</div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none">;; Closures capture their lexical environment
+defn make-adder [n : int] : (fn [int] int)
+  fn [x : int] {n + x}
+
+let [add5  make-adder(5)
+     add10 make-adder(10)]
+  println $ add5 3     ;; =&gt; 8
+  println $ add10 7    ;; =&gt; 17
+
+;; Pipeline transformations with map + filter
+let [nums [1 2 3 4 5]]
+  println
+    map
+      fn [x] {x * x}
+      filter (fn [x] {%(x 2) = 0}) nums
+;; =&gt; (4 16)</div></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 10 CONTRACT TYPES ──────────────────── -->
 <div class="split-section reverse reveal" id="contracts">
   <div>
     <p class="section-label">10 -- Contract Types</p>
@@ -614,31 +709,38 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
     <p class="section-desc">Declare invariants once in the signature with <code>:pre</code> and <code>:post</code>. The compiler inserts the checks -- you don't have to remember to. Strip them from release builds with no code changes.</p>
   </div>
   <div class="code-card">
-    <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
-      <span class="code-card-filename">contracts.tur</span>
-    </div>
-    <div class="code-card-body"><span class="cmt">;; Named contract types -- predicates as types</span>
-<span class="pnc">(</span><span class="kw">deftype</span> <span class="tp">Nat</span>     <span class="pnc">#refine{</span> x <span class="tp">: int</span> <span class="op">|</span> <span class="pnc">(</span><span class="op">&gt;=</span> x <span class="num">0</span><span class="pnc">)</span> <span class="pnc">}</span><span class="pnc">)</span>
-<span class="pnc">(</span><span class="kw">deftype</span> <span class="tp">NonZero</span> <span class="pnc">#refine{</span> x <span class="tp">: int</span> <span class="op">|</span> <span class="pnc">(</span><span class="op">!=</span> x <span class="num">0</span><span class="pnc">)</span> <span class="pnc">}</span><span class="pnc">)</span>
+    <div class="code-card-bar"><span class="code-card-filename" data-turmeric="contracts.tur" data-sweet-exp="contracts.tur.sweet">contracts.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
+    <div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel">;; Named contract types -- predicates as types
+(deftype Nat     #refine{ x : int | (&gt;= x 0) })
+(deftype NonZero #refine{ x : int | (!= x 0) })
 
-<span class="cmt">;; Predicates live in the signature, not the body</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">safe-div</span> <span class="pnc">[</span>x <span class="tp">: Nat</span>  y <span class="tp">: NonZero</span><span class="pnc">]</span> <span class="tp">: Nat</span>
-  <span class="tp">:post</span> <span class="pnc">(</span><span class="op">=</span> <span class="pnc">(</span><span class="op">*</span> result y<span class="pnc">)</span> x<span class="pnc">)</span>
-  <span class="pnc">(</span><span class="op">/</span> x y<span class="pnc">))</span>
+;; Predicates live in the signature, not the body
+(defn safe-div [x : Nat  y : NonZero] : Nat
+  :post (= (* result y) x)
+  (/ x y))
 
-<span class="cmt">;; Compiler inserts the checks -- always on, no flag.</span>
-<span class="cmt">;; Strip them from a release with --no-contracts.</span>
-<span class="pnc">(</span><span class="fn">safe-div</span> <span class="num">10</span> <span class="num">2</span><span class="pnc">)</span>  <span class="cmt">;; => 5</span>
-<span class="pnc">(</span><span class="fn">safe-div</span> <span class="num">10</span> <span class="num">0</span><span class="pnc">)</span>  <span class="cmt">;; contract violated: y != 0</span></div>
+;; Compiler inserts the checks -- always on, no flag.
+;; Strip them from a release with --no-contracts.
+(safe-div 10 2)  ;; => 5
+(safe-div 10 0)  ;; contract violated: y != 0</div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none">;; Named contract types -- predicates as types
+deftype Nat     #refine{ x : int | (&gt;= x 0) }
+deftype NonZero #refine{ x : int | (!= x 0) }
+
+;; Predicates live in the signature, not the body
+defn safe-div [x : Nat  y : NonZero] : Nat
+  :post (= (* result y) x)
+  {x / y}
+
+;; Compiler inserts the checks -- always on, no flag.
+;; Strip them from a release with --no-contracts.
+safe-div(10 2)   ;; =&gt; 5
+safe-div(10 0)   ;; contract violated: y != 0</div></div>
   </div>
 </div>
 
 <hr class="divider">
 
-<!-- ── 11 REFINEMENT TYPES ────────────── -->
+<!-- ── 11 REFINEMENT TYPES ────────────────── -->
 <div class="split-section reveal" id="refinements">
   <div>
     <p class="section-label">11 -- Refinement Types</p>
@@ -647,35 +749,45 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
     <p class="section-desc">Because every refinement already has a runtime meaning, the prover is free to give up on any obligation and stay sound -- it just falls back to the check the value would have had anyway. Turning it on can never make a correct program wrong. There is no Z3 to install: the solver is a small staged decision procedure built into the compiler, so it works in the browser playground too.</p>
   </div>
   <div class="code-card">
-    <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
-      <span class="code-card-filename">refined.tur</span>
-    </div>
-    <div class="code-card-body"><span class="cmt">;; Proved: x &gt; 0 entails 2x &gt; 0.</span>
-<span class="cmt">;; No runtime check is emitted for the return.</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">double-pos</span> <span class="pnc">[</span>x <span class="tp">: #refine{ v : int | (&gt; v 0) }</span><span class="pnc">]</span>
-                <span class="tp">: #refine{ r : int | (&gt; r 0) }</span>
-  <span class="pnc">(</span><span class="op">*</span> x <span class="num">2</span><span class="pnc">))</span>
+    <div class="code-card-bar"><span class="code-card-filename" data-turmeric="refined.tur" data-sweet-exp="refined.tur.sweet">refined.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
+    <div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel">;; Proved: x &gt; 0 entails 2x &gt; 0.
+;; No runtime check is emitted for the return.
+(defn double-pos [x : #refine{ v : int | (&gt; v 0) }]
+                : #refine{ r : int | (&gt; r 0) }
+  (* x 2))
 
-<span class="cmt">;; Results carry their refinements, so proofs compose</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">twice</span> <span class="pnc">[</span>y <span class="tp">: Pos</span><span class="pnc">]</span> <span class="tp">: int</span> <span class="pnc">(</span><span class="op">*</span> y <span class="num">2</span><span class="pnc">))</span>
-<span class="pnc">(</span><span class="fn">twice</span> <span class="pnc">(</span><span class="fn">double-pos</span> p<span class="pnc">))</span>   <span class="cmt">;; proved</span>
+;; Results carry their refinements, so proofs compose
+(defn twice [y : Pos] : int (* y 2))
+(twice (double-pos p))   ;; proved
 
-<span class="cmt">;; A bad argument is a COMPILE error, not a panic</span>
-<span class="pnc">(</span><span class="fn">safe-div</span> <span class="num">10</span> <span class="num">0</span><span class="pnc">)</span>
-<span class="cmt">;; error[TUR-E0371]: refinement on argument 2</span>
-<span class="cmt">;; note: (not= x 0) is false for the value given here</span>
+;; A bad argument is a COMPILE error, not a panic
+(safe-div 10 0)
+;; error[TUR-E0371]: refinement on argument 2
+;; note: (not= x 0) is false for the value given here
 
-<span class="cmt">;; Can't prove it? You get the check, and a hint.</span>
-<span class="cmt">;; help: (&lt; i n) would discharge it</span></div>
+;; Can't prove it? You get the check, and a hint.
+;; help: (&lt; i n) would discharge it</div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none">;; Proved: x &gt; 0 entails 2x &gt; 0.
+;; No runtime check is emitted for the return.
+defn double-pos [x : #refine{ v : int | (&gt; v 0) }] : #refine{ r : int | (&gt; r 0) }
+  {x * 2}
+
+;; Results carry their refinements, so proofs compose
+defn twice [y : Pos] : int {y * 2}
+twice(double-pos(p))   ;; proved
+
+;; A bad argument is a COMPILE error, not a panic
+safe-div(10 0)
+;; error[TUR-E0371]: refinement on argument 2
+;; note: (not= x 0) is false for the value given here
+
+;; Can't prove it? You get the check, and a hint.
+;; help: (&lt; i n) would discharge it</div></div>
   </div>
 </div>
 
 <hr class="divider">
 
-<!-- ── 12 SPICE PACKAGE MANAGER ───────── -->
+<!-- ── 12 SPICE -- PACKAGE MANAGER ────────── -->
 <div class="split-section reverse reveal" id="spice">
   <div>
     <p class="section-label">12 -- Spice -- Package Manager</p>
@@ -685,37 +797,34 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
   </div>
   <div class="code-card" style="font-size:12.5px;">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename">build.tur</span>
     </div>
-    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="pnc">(</span><span class="kw">defpackage</span> <span class="fn">my-app</span>
-  <span class="tp">:name</span>    <span class="str">"my-app"</span>
-  <span class="tp">:version</span> <span class="str">"0.1.0"</span>
-  <span class="tp">:entry</span>   <span class="str">"src/main.tur"</span>
+    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><div class="code-version turmeric-version">(defpackage my-app
+  :name    "my-app"
+  :version "0.1.0"
+  :entry   "src/main.tur"
 
-  <span class="cmt">;; Turmeric dependencies -- called spices</span>
-  <span class="tp">:spices</span> <span class="pnc">{</span>
-    <span class="str">"json"</span>  <span class="pnc">{</span><span class="tp">:url</span> <span class="str">"https://github.com/alice/tur-json"</span>
-             <span class="tp">:ref</span> <span class="str">"v1.2.0"</span><span class="pnc">}</span>
-    <span class="str">"http"</span>  <span class="pnc">{</span><span class="tp">:url</span> <span class="str">"https://github.com/bob/tur-http"</span>
-             <span class="tp">:ref</span> <span class="str">"v3.0.0"</span><span class="pnc">}</span>
-  <span class="pnc">}</span>
+  ;; Turmeric dependencies -- called spices
+  :spices {
+    "json"  {:url "https://github.com/alice/tur-json"
+             :ref "v1.2.0"}
+    "http"  {:url "https://github.com/bob/tur-http"
+             :ref "v3.0.0"}
+  }
 
-  <span class="cmt">;; C/CMake dependencies (CPM-compatible)</span>
-  <span class="tp">:cmake-deps</span> <span class="pnc">{</span>
-    <span class="str">"sqlite3"</span> <span class="pnc">{</span><span class="tp">:url</span> <span class="str">"https://github.com/sqlite/sqlite"</span>
-               <span class="tp">:ref</span> <span class="str">"version-3.45.0"</span><span class="pnc">}</span>
-    <span class="str">"raylib"</span>  <span class="pnc">{</span><span class="tp">:url</span> <span class="str">"https://github.com/raysan5/raylib"</span>
-               <span class="tp">:ref</span> <span class="str">"5.0"</span><span class="pnc">}</span>
-  <span class="pnc">}</span><span class="pnc">)</span></div>
+  ;; C/CMake dependencies (CPM-compatible)
+  :cmake-deps {
+    "sqlite3" {:url "https://github.com/sqlite/sqlite"
+               :ref "version-3.45.0"}
+    "raylib"  {:url "https://github.com/raysan5/raylib"
+               :ref "5.0"}
+  })</div></div>
   </div>
 </div>
 
 <hr class="divider">
 
-<!-- ── 13 STRUCTURAL TYPING ──────────── -->
+<!-- ── 13 STRUCTURAL TYPING ───────────────── -->
 <div class="split-section reveal" id="structural">
   <div>
     <p class="section-label">13 -- Structural Typing</p>
@@ -724,38 +833,54 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
     <p class="section-desc">The <code>any</code> top type enables gradual typing: every concrete type is a subtype of <code>any</code>. Inspect the tag at runtime with <code>type-of</code>. Both are standard -- no flag required.</p>
   </div>
   <div class="code-card">
-    <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
-      <span class="code-card-filename">structural.tur</span>
-    </div>
-    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="cmt">;; Union types -- structural dispatch, not nominal</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">describe</span> <span class="pnc">[</span>x <span class="tp">: (int | bool)</span><span class="pnc">]</span> <span class="tp">:int</span>
-  <span class="pnc">(</span><span class="kw">match</span> x
-    <span class="pnc">(</span>n <span class="tp">: int</span><span class="pnc">)</span>   <span class="pnc">(</span><span class="kw">do</span> <span class="pnc">(</span>println n<span class="pnc">)</span>  <span class="num">0</span><span class="pnc">)</span>
-    <span class="pnc">(</span>b <span class="tp">: bool</span><span class="pnc">)</span>  <span class="pnc">(</span><span class="kw">do</span> <span class="pnc">(</span>println b<span class="pnc">)</span>  <span class="num">0</span><span class="pnc">)))</span>
+    <div class="code-card-bar"><span class="code-card-filename" data-turmeric="structural.tur" data-sweet-exp="structural.tur.sweet">structural.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
+    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><div class="code-version turmeric-version" role="tabpanel">;; Union types -- structural dispatch, not nominal
+(defn describe [x : (int | bool)] : int
+  (match x
+    (n : int)   (do (println n)  0)
+    (b : bool)  (do (println b)  0)))
 
-<span class="pnc">(</span><span class="fn">describe</span> <span class="num">42</span><span class="pnc">)</span>    <span class="cmt">;; => 42</span>
-<span class="pnc">(</span><span class="fn">describe</span> <span class="kw">true</span><span class="pnc">)</span>  <span class="cmt">;; => true</span>
+(describe 42)    ;; => 42
+(describe true)  ;; => true
 
-<span class="cmt">;; Typeclass dispatch through a union --</span>
-<span class="cmt">;; compiler generates the tag-dispatch call</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">print-any</span> <span class="pnc">[</span>x <span class="tp">: (int | bool)</span><span class="pnc">]</span> <span class="tp">:int</span>
-  <span class="pnc">(</span>println <span class="pnc">(</span>.show x<span class="pnc">))</span>  <span class="num">0</span><span class="pnc">)</span>
+;; Typeclass dispatch through a union --
+;; compiler generates the tag-dispatch call
+(defn print-any [x : (int | bool)] : int
+  (println (.show x))  0)
 
-<span class="cmt">;; `any` top type -- gradual typing</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">show-type</span> <span class="pnc">[</span>x <span class="tp">: any</span><span class="pnc">]</span> <span class="tp">:int</span>
-  <span class="pnc">(</span>println <span class="pnc">(</span>type-of x<span class="pnc">))</span>  <span class="num">0</span><span class="pnc">)</span>
+;; `any` top type -- gradual typing
+(defn show-type [x : any] : int
+  (println (type-of x))  0)
 
-<span class="pnc">(</span><span class="fn">show-type</span> <span class="num">42</span><span class="pnc">)</span>       <span class="cmt">;; => "int"</span>
-<span class="pnc">(</span><span class="fn">show-type</span> <span class="str">"hello"</span><span class="pnc">)</span>  <span class="cmt">;; => "cstr"</span></div>
+(show-type 42)       ;; => "int"
+(show-type "hello")  ;; => "cstr"</div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none">;; Union types -- structural dispatch, not nominal
+defn describe [x : (int | bool)] : int
+  match x
+    \\ (n : int)   do(println(n)  0)
+    \\ (b : bool)  do(println(b)  0)
+
+describe(42)     ;; =&gt; 42
+describe(true)   ;; =&gt; true
+
+;; Typeclass dispatch through a union --
+;; compiler generates the tag-dispatch call
+defn print-any [x : (int | bool)] : int
+  println $ .show x
+  0
+
+;; `any` top type -- gradual typing
+defn show-type [x : any] : int
+  println $ type-of x
+  0
+
+show-type(42)        ;; =&gt; "int"
+show-type("hello")   ;; =&gt; "cstr"</div></div>
   </div>
 </div>
 
 <hr class="divider">
 
-<!-- ── 14 TROWEL ─────────────────────── -->
+<!-- ── 14 TROWEL -- THE EDITOR ────────────── -->
 <div class="split-section reverse reveal" id="trowel">
   <div>
     <p class="section-label">14 -- Trowel -- The Editor</p>
@@ -767,36 +892,16 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
       <a href="https://github.com/rjungemann/trowel" class="btn-hero btn-hero-secondary">View on GitHub</a>
     </div>
   </div>
-  <div class="code-card">
-    <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
-      <span class="code-card-filename">macOS &amp; Linux</span>
-    </div>
-    <div class="code-card-body"><span class="cmt"># Install the editor and the compiler in one step</span>
-<span class="fn">brew</span> install --cask rjungemann/trowel/trowel
-
-<span class="cmt"># ...or grab a build straight from Releases:</span>
-<span class="cmt">#   github.com/rjungemann/trowel/releases/latest</span>
-
-<span class="cmt"># Then: File -&gt; New Project, pick a template,</span>
-<span class="cmt"># and press Run. That is the whole setup.</span>
-
-<span class="cmt">;; hello.tur</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">main</span> <span class="pnc">[]</span> <span class="tp">: int</span>
-  <span class="pnc">(</span>println <span class="str">"Hello from Trowel"</span><span class="pnc">)</span>
-  <span class="num">0</span><span class="pnc">)</span>
-
-<span class="cmt">;; Run  -> Hello from Trowel</span>
-<span class="cmt">;; REPL -&gt; (+ 1 1)  =&gt; 2</span></div>
+  <div class="tour-shot product-shot">
+    <img src="/trowel-screenshot.png" width="1132" height="1664" loading="lazy"
+         alt="The Trowel editor showing lens-example.tur in a tabbed editor above a live REPL pane, where :run has printed 'Updated boss name: Alice'">
   </div>
 </div>
 
 <!-- ── CTA ───────────────────────────── -->
 <div class="cta-section reveal">
   <div class="cta-box">
-    <h2 class="cta-title">Ready to try<br><em>Turmeric?</em></h2>
+    <h2 class="cta-title">Ready to try Turmeric?</h2>
     <p class="cta-desc">Open the playground and try any of these features right in your browser -- or download Trowel and build them locally.</p>
     <div class="cta-actions">
       <a href="/try" class="btn-hero btn-hero-primary">Open Playground →</a>

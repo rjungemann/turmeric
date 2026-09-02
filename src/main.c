@@ -7500,11 +7500,13 @@ static void trace_on_done_cb(TuriEnv *env, void *ud) {
 }
 
 static int cmd_trace(const char *path, const char *out_path,
-                     char **extra_argv, int extra_argc, uint32_t max_steps) {
+                     char **extra_argv, int extra_argc, uint32_t max_steps,
+                     TurTraceGrain grain) {
     TraceCtx ctx;
     memset(&ctx, 0, sizeof ctx);
     ctx.opts.max_steps      = max_steps;
     ctx.opts.capture_output = true;
+    ctx.opts.grain          = grain;
 
     EvalHooks hooks = { trace_on_ready_cb, trace_on_done_cb, &ctx };
     /* debug=true is what installs the debugger and arms it; the tracer's
@@ -7543,9 +7545,10 @@ static int cmd_trace(const char *path, const char *out_path,
     }
 
     fprintf(stderr,
-            "trace: %u steps, %u enters, %u pops, %u changes, "
+            "trace: %u steps (%s), %u enters, %u pops, %u changes, "
             "peak depth %u, %zu bytes, %u bytes of output, truncated %s\n",
-            st.steps, st.enters, st.pops, st.changes, st.peak_depth,
+            st.steps, grain == TUR_TRACE_GRAIN_LINE ? "per line" : "per expression",
+            st.enters, st.pops, st.changes, st.peak_depth,
             len, st.output_bytes, st.truncated ? "yes" : "no");
     if (out_path && wrote)
         fprintf(stderr, "trace: wrote %s\n", out_path);
@@ -7580,8 +7583,10 @@ static int cmd_trace_dump(const char *path) {
         free(buf);
         return 1;
     }
-    printf("turtrace v%u  names=%u sites=%u records=%zu bytes  truncated=%s\n",
+    printf("turtrace v%u  names=%u sites=%u records=%zu bytes  "
+           "steps=%s  truncated=%s\n",
            r.version, r.name_count, r.site_count, r.record_bytes,
+           r.node_grain ? "per expression" : "per line",
            r.truncated ? "yes" : "no");
 
     TurTraceRecord rec;
@@ -7589,21 +7594,30 @@ static int cmd_trace_dump(const char *path) {
         TurTraceSite site;
         uint16_t fl = 0, nl = 0;
         const char *file = "", *fn = "";
+        char span[32];
+        span[0] = '\0';
         if (turi_trace_site(&r, rec.site, &site)) {
             file = turi_trace_name(&r, site.file_name, &fl);
             fn   = turi_trace_name(&r, site.fn_name, &nl);
+            /* `line:col-end` when the recording carries a range, `line:col`
+             * when it is a v1 file that only ever had a point. */
+            if (site.col_end > site.col)
+                snprintf(span, sizeof span, "%u:%u-%u",
+                         site.line, site.col, site.col_end);
+            else
+                snprintf(span, sizeof span, "%u:%u", site.line, site.col);
         }
         switch (rec.tag) {
         case TUR_TRACE_ENTER:
-            printf("ENTER  depth=%u %.*s:%u:%u %.*s\n", rec.depth,
-                   (int)fl, file, site.line, site.col, (int)nl, fn);
+            printf("ENTER  depth=%u %.*s:%s %.*s\n", rec.depth,
+                   (int)fl, file, span, (int)nl, fn);
             break;
         case TUR_TRACE_POP:
             printf("POP    depth=%u\n", rec.depth);
             break;
         case TUR_TRACE_STEP:
-            printf("STEP   depth=%u %.*s:%u:%u %.*s", rec.depth,
-                   (int)fl, file, site.line, site.col, (int)nl, fn);
+            printf("STEP   depth=%u %.*s:%s %.*s", rec.depth,
+                   (int)fl, file, span, (int)nl, fn);
             for (uint16_t i = 0; i < rec.n_changes; i++) {
                 uint32_t nid = 0;
                 const char *repr = "";
@@ -10761,6 +10775,7 @@ int main(int argc, char **argv) {
         const char *file = NULL, *out_path = NULL;
         uint32_t    max_steps = 0;
         bool        dump = false;
+        TurTraceGrain grain = TUR_TRACE_GRAIN_NODE;
         char      **prog_argv = NULL;
         int         prog_argc = 0;
         for (int i = 2; i < argc; i++) {
@@ -10773,6 +10788,11 @@ int main(int argc, char **argv) {
                 max_steps = (uint32_t)strtoul(argv[i] + 12, NULL, 10);
                 continue;
             }
+            /* The old granularity, for a program too big to record per
+             * expression under the cap.  Not the default: see TurTraceGrain. */
+            if (strcmp(argv[i], "--lines") == 0) {
+                grain = TUR_TRACE_GRAIN_LINE; continue;
+            }
             if (!file) { file = argv[i]; continue; }
             /* Everything after the program is the program's own argv. */
             prog_argv = &argv[i];
@@ -10782,12 +10802,16 @@ int main(int argc, char **argv) {
         if (!file) {
             fprintf(stderr,
                 "usage: tur trace <file.tur> [-o out.turtrace] "
-                "[--max-steps=N] [-- args...]\n"
-                "       tur trace --dump <file.turtrace>\n");
+                "[--max-steps=N] [--lines] [-- args...]\n"
+                "       tur trace --dump <file.turtrace>\n"
+                "\n"
+                "  A step is one expression.  --lines records one step per\n"
+                "  source line instead, which is coarser: nested calls on one\n"
+                "  line collapse into a single step.\n");
             return 1;
         }
         if (dump) return cmd_trace_dump(file);
-        return cmd_trace(file, out_path, prog_argv, prog_argc, max_steps);
+        return cmd_trace(file, out_path, prog_argv, prog_argc, max_steps, grain);
     }
     /* lsp-lite: completion/calltip/doc backend for lightweight editors.
      * Newline-delimited JSON over stdio; stdout is reserved for protocol

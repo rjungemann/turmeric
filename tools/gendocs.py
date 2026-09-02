@@ -22,6 +22,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import packlib  # noqa: E402  (sibling module, path fixed up just above)
+# The site chrome -- nav list, sidebar groups, tooltips -- lives in genguides
+# so guides, API docs and the spices site show the same links in the same order
+# and describe the same page the same way.
+from genguides import (build_page_header, build_sidebar,  # noqa: E402
+                       SIDEBAR_DRAWER_JS)
 
 
 # ---------------------------------------------------------------------------
@@ -662,6 +667,12 @@ CSS = """\
   --syn-str:       #D9735A;
   --syn-type:      #7AC4B8;
   --syn-num:       #A8C98A;
+
+  /* Secondary accent -- gold leads, green answers it. Same pairing the home
+     page uses, so emphasis reads the same across the whole site. */
+  --green:         #A8C98A;
+  --green-subtle:  rgba(168,201,138,0.10);
+  --green-line:    rgba(168,201,138,0.25);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -678,6 +689,10 @@ body {
 
 a { color: var(--gold-bright); text-decoration: none; }
 a:hover { text-decoration: underline; }
+
+/* Emphasis is green here for the same reason it is green on the home page:
+   gold is the site's primary, and prose emphasis wants the second voice. */
+em { color: var(--green); font-style: italic; }
 
 /* Header */
 .site-header {
@@ -702,15 +717,51 @@ a:hover { text-decoration: underline; }
   text-decoration: none;
 }
 .site-header .nav-logo:hover { text-decoration: none; }
-.site-header nav { display: flex; gap: 2px; font-size: 0.875rem; }
-.site-header nav a {
+.site-header .nav-links { display: flex; gap: 2px; font-size: 0.875rem; }
+.site-header .nav-links a {
   color: var(--text-sec);
   padding: 6px 12px;
   border-radius: 6px;
   transition: color 0.12s, background 0.12s;
+  white-space: nowrap;
 }
-.site-header nav a:hover { color: var(--text-primary); background: var(--bg-hover); text-decoration: none; }
-.site-header nav a.active { color: var(--gold-bright); }
+.site-header .nav-links a:hover { color: var(--text-primary); background: var(--bg-hover); text-decoration: none; }
+.site-header .nav-links a.active { color: var(--gold-bright); }
+
+/* Right-hand cluster -- same GitHub / Try it pair the hand-written pages show */
+.site-header .nav-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+/* When a page has a filter box, that box takes the free space and the button
+   cluster tucks in beside it instead of fighting it for the same auto margin. */
+.site-header .search-wrap + .nav-right { margin-left: 0; }
+
+.btn-ghost, .btn-gold {
+  font-family: inherit;
+  font-size: 0.84rem;
+  padding: 7px 14px;
+  border-radius: 7px;
+  white-space: nowrap;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.btn-ghost {
+  color: var(--text-sec);
+  border: 1px solid var(--border-str);
+  background: transparent;
+}
+.btn-ghost:hover { color: var(--text-primary); background: var(--bg-hover); text-decoration: none; }
+.btn-gold {
+  font-weight: 500;
+  color: #000;
+  padding: 7px 18px;
+  border: 1px solid var(--gold);
+  background: var(--gold);
+}
+.btn-gold:hover { background: var(--gold-bright); border-color: var(--gold-bright); text-decoration: none; }
 
 /* Search */
 .search-wrap { margin-left: auto; }
@@ -765,20 +816,33 @@ a:hover { text-decoration: underline; }
 .sidebar h3:first-child { margin-top: 0; }
 .sidebar ul { list-style: none; }
 .sidebar li { margin: 0.15rem 0; }
-.sidebar a { font-size: 0.825rem; color: var(--text-sec); font-family: 'Iosevka', 'Fira Code', monospace; }
+.sidebar a { font-size: 0.825rem; color: var(--text-sec); }
+/* Navigation links read as prose; a link that names a definition is an
+   identifier and stays in the code face. */
+.sidebar a.sidebar-def, .sidebar code { font-family: 'Iosevka', 'Fira Code', monospace; }
 .sidebar a:hover { color: var(--gold-bright); text-decoration: none; }
-.sidebar-back {
+/* An ordinary link, not a button: nothing here submits or toggles, it just
+   navigates like every other entry in the rail. Selector carries the `a` so it
+   outranks the `.sidebar a` colour rule below it. */
+.sidebar a.sidebar-back {
   display: block;
   font-size: 0.85rem;
   color: var(--text-primary);
   font-family: inherit;
-  padding: 0.45rem 0.65rem;
   margin-bottom: 1rem;
-  border: 1px solid var(--border-mid);
-  border-radius: 6px;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  transition: color 0.12s;
 }
-.sidebar-back:hover { color: var(--gold-bright); background: var(--bg-hover); border-color: var(--gold-line); text-decoration: none; }
+.sidebar a.sidebar-back:hover { color: var(--gold-bright); text-decoration: none; }
+/* "Up" links -- All Guides / All Modules / All Spices. One row, directly under
+   the Home button, so every page offers the same two steps back out of itself. */
+.sidebar-uplinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  margin-bottom: 1.25rem;
+}
+.sidebar-uplinks a { font-size: 0.8rem; color: var(--green); }
+.sidebar-uplinks a:hover { color: var(--gold-bright); text-decoration: none; }
 .sidebar-divider {
   border: none;
   border-top: 1px solid var(--border);
@@ -881,11 +945,13 @@ a:hover { text-decoration: underline; }
 }
 
 .def-section { margin-top: 0.75rem; }
+/* Parameters / Returns / Example -- structure inside a card, so the secondary
+   accent rather than the gold that marks the definition itself. */
 .def-section-label {
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--text-dim);
+  color: var(--green);
   margin-bottom: 0.4rem;
   font-weight: 500;
 }
@@ -921,7 +987,7 @@ a:hover { text-decoration: underline; }
   padding: 1rem 1.25rem;
   background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--gold);
+  border-left: 3px solid var(--green);
   border-radius: 6px;
 }
 .module-doc-summary {
@@ -1035,10 +1101,15 @@ details.internal-section summary {
 .sidebar-overlay.is-open { display: block; }
 
 /* Responsive */
+@media (max-width: 1080px) {
+  /* Six nav links plus two buttons stop fitting before the drawer breakpoint;
+     drop the buttons first -- both are reachable from the sidebar groups. */
+  .site-header .nav-right { display: none; }
+}
 @media (max-width: 768px) {
   .hamburger { display: block; }
   .site-header { padding: 0 1rem; }
-  .site-header nav { display: none; }
+  .site-header .nav-links { display: none; }
   .search-wrap { display: none; }
   .page-layout { grid-template-columns: 1fr; }
   .sidebar {
@@ -1061,20 +1132,11 @@ details.internal-section summary {
 """
 
 
-_SIDEBAR_TOGGLE_JS = """\
-<div class="sidebar-overlay"></div>
+# The drawer itself comes from genguides so the hamburger behaves identically
+# on an API page, a guide and a spice; only the search filter below is specific
+# to these pages.
+_SIDEBAR_TOGGLE_JS = SIDEBAR_DRAWER_JS + """
 <script>
-  document.addEventListener('DOMContentLoaded', function(){
-    var btn = document.querySelector('.hamburger');
-    var sidebar = document.querySelector('.sidebar');
-    var overlay = document.querySelector('.sidebar-overlay');
-    if (!btn || !sidebar) return;
-    function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
-    function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
-    btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
-    overlay && overlay.addEventListener('click', close);
-  });
-
   // Search filtering
   document.addEventListener('DOMContentLoaded', function(){
     var input = document.querySelector('.search-input');
@@ -1138,24 +1200,22 @@ _SIDEBAR_TOGGLE_JS = """\
 </script>"""
 
 
-SIDEBAR_GLOBALS = """\
-  <hr class="sidebar-divider">
-  <h3>Language</h3>
-  <ul>
-    <li><a href="/tour">Tour</a></li>
-    <li><a href="/try">Try It</a></li>
-  </ul>
-  <h3>Ecosystem</h3>
-  <ul>
-    <li><a href="/docs/html/guides/">Guides</a></li>
-    <li><a href="/docs/html/api/">API Docs</a></li>
-    <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
-  </ul>
-  <h3>Community</h3>
-  <ul>
-    <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
-  </ul>
-"""
+def _sidebar_tip(defn) -> str:
+    """Tooltip for a sidebar definition link: its docstring summary if it has
+    one, else a plain 'jump to' so every entry carries something useful."""
+    doc = defn.get('docstring')
+    if doc and doc.get('summary'):
+        s = doc['summary']
+        dash_idx = s.find(' -- ')
+        tip = s[dash_idx + 4:] if dash_idx != -1 else s
+        if tip.strip():
+            return html_module.escape(tip.strip(), quote=True)
+    return html_module.escape(f'Jump to {defn["name"]}', quote=True)
+
+
+# Host that the chrome's site-relative links resolve against. Set by
+# `render_tree`; only the spices subdomain ever makes it non-empty.
+SITE_BASE = ''
 
 
 def _html_header(title, css_path='style.css'):
@@ -1180,24 +1240,7 @@ def _html_header(title, css_path='style.css'):
 <link rel="stylesheet" href="{css_path}">
 </head>
 <body>
-<header class="site-header">
-  <button class="hamburger" aria-label="Toggle navigation">
-    <span></span><span></span><span></span>
-  </button>
-  <a class="nav-logo" href="/">
-    <img src="/logo-icon.svg" width="28" height="28" alt="">
-    <img src="/logo.svg" width="101" height="28" alt="Turmeric">
-  </a>
-  <nav>
-    <a href="/docs/html/guides/">Guides</a>
-    <a href="index.html" class="active">API Docs</a>
-    <a href="https://spices.turmeric-lang.com">Spices</a>
-    <a href="/try">Try It</a>
-  </nav>
-  <div class="search-wrap">
-    <input class="search-input" type="search" placeholder="Filter... (/)" aria-label="Filter definitions">
-  </div>
-</header>
+{build_page_header(active='API Docs', base=SITE_BASE, search='Filter definitions', indent='')}
 <p class="search-no-results">No matching definitions.</p>
 {_SIDEBAR_TOGGLE_JS}
 """
@@ -1418,21 +1461,28 @@ def render_module_page(module, out_dir, brand='stdlib'):
     internal = [d for d in module['definitions'] if not d['exported']]
 
     # Build sidebar TOC (exported only)
-    sidebar = '<div class="sidebar">\n'
-    sidebar += '  <a class="sidebar-back" href="/">← Back to home</a>\n'
-    sidebar += '  <hr class="sidebar-divider">\n'
-    sidebar += '  <h3>Exported</h3>\n  <ul>\n'
+    toc = '      <h3>Exported</h3>\n      <ul>\n'
     for defn in exported:
         anchor = re.sub(r'[^a-zA-Z0-9_\-]', '_', defn['name'])
-        sidebar += f'    <li><a href="#{html_module.escape(anchor)}">{html_module.escape(defn["name"])}</a></li>\n'
-    sidebar += '  </ul>\n'
+        toc += (f'        <li><a class="sidebar-def" href="#{html_module.escape(anchor)}"'
+                f' title="{_sidebar_tip(defn)}">'
+                f'{html_module.escape(defn["name"])}</a></li>\n')
+    toc += '      </ul>\n'
     if internal:
-        sidebar += '  <h3>Internal</h3>\n  <ul>\n'
+        toc += '      <h3>Internal</h3>\n      <ul>\n'
         for defn in internal:
-            sidebar += f'    <li><a href="#{html_module.escape(defn["name"])}" style="color:var(--faint)">{html_module.escape(defn["name"])}</a></li>\n'
-        sidebar += '  </ul>\n'
-    sidebar += SIDEBAR_GLOBALS
-    sidebar += '</div>\n'
+            toc += (f'        <li><a class="sidebar-def" href="#{html_module.escape(defn["name"])}"'
+                    f' style="color:var(--faint)" title="{_sidebar_tip(defn)}">'
+                    f'{html_module.escape(defn["name"])}</a></li>\n')
+        toc += '      </ul>\n'
+
+    sidebar = ('<div class="sidebar">\n'
+               + build_sidebar(
+                   toc=toc,
+                   uplinks=[('index.html', 'All Modules')],
+                   base=SITE_BASE,
+                   extra_titles={'index.html': 'Every module in this API reference'})
+               + '\n</div>\n')
 
     content = build_module_content(module, brand=brand)
 
@@ -1479,7 +1529,8 @@ def _index_card_html(module):
     return h
 
 
-def render_index_page(modules, out_dir, brand='stdlib', brand_label=None):
+def render_index_page(modules, out_dir, brand='stdlib', brand_label=None,
+                      uplinks=None, uplink_titles=None):
     """Render the module index page, grouped by subdirectory."""
     if brand_label is None:
         brand_label = 'Turmeric Standard Library' if brand == 'stdlib' else f'{brand} API'
@@ -1510,10 +1561,10 @@ def render_index_page(modules, out_dir, brand='stdlib', brand_label=None):
 
     content += '</div>\n'
 
-    sidebar = '<div class="sidebar">\n'
-    sidebar += '  <a class="sidebar-back" href="/">← Back to home</a>\n'
-    sidebar += SIDEBAR_GLOBALS
-    sidebar += '</div>\n'
+    sidebar = ('<div class="sidebar">\n'
+               + build_sidebar(uplinks=uplinks, base=SITE_BASE,
+                               extra_titles=uplink_titles)
+               + '\n</div>\n')
 
     page = _html_header(f'{brand_label} | API Docs', css_path='style.css')
     page += '<div class="page-layout">\n'
@@ -1911,7 +1962,8 @@ def collect_tur_files(source):
 
 def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
                 emit_tur=None, emit_json=None, extra_json_entries=None,
-                emit_pack=None, pack_section='api', pack_slug_prefix=''):
+                emit_pack=None, pack_section='api', pack_slug_prefix='',
+                site_base='', index_uplinks=None, index_uplink_titles=None):
     """
     Generate an HTML doc tree from a .tur source root.
 
@@ -1923,7 +1975,13 @@ def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
                     or '<brand> API' otherwise.
     emit_tur     -- optional Path; when set, also emit a docstrings.tur lookup.
     emit_json    -- optional Path; when set, also emit a JSON name list.
+    site_base    -- host to re-root the chrome's site-relative links onto. Empty
+                    for turmeric-lang.com itself; the spices subdomain passes the
+                    main host, because a bare `/tour` there would resolve against
+                    spices.turmeric-lang.com and 404.
     """
+    global SITE_BASE
+    SITE_BASE = site_base
     source = Path(source)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1992,7 +2050,8 @@ def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
         print(f'  Wrote {out_dir}/{page}')
 
     # Render index
-    render_index_page(modules, out_dir, brand=brand, brand_label=brand_label)
+    render_index_page(modules, out_dir, brand=brand, brand_label=brand_label,
+                      uplinks=index_uplinks, uplink_titles=index_uplink_titles)
     print(f'  Wrote {out_dir}/index.html')
 
     # Optionally emit docstrings.tur

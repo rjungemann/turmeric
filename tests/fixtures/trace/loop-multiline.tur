@@ -1,0 +1,12 @@
+;; Fixture for tests/run-trace.sh -- granularity, the airy spelling.
+;;
+;; Byte-for-byte the same program as loop-oneline.tur with the body broken
+;; across lines. The line-granular recorder made this one 23 steps against the
+;; other one's 3; per expression they agree.
+(defn main [] : int
+  (let [^mut i 0]
+    (while (< i 5)
+      (do
+        (println "tick")
+        (set! i (+ i 1))))
+    i))
