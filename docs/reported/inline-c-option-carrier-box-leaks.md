@@ -159,15 +159,11 @@ says the residue "shrinks further with each site that monomorphizes; end-to-end
 monomorphization is where it reaches zero". These two are that residue, reached
 through inline C rather than through `(some x)`.
 
-Direction 2 stays worth doing on its own merits -- not as a leak fix (it is not
-one, per correction 2) but because the inconsistency is real: `(Option rc<A>)`
-is a legal return type and buildable from inline C, while `(some r)` on the same
-value is rejected. The mechanism is now located: `own_carry_for_arg` in
-`src/compiler/elab_call.c` is an allowlist mapping a callee name + arg index to
-an ownership decision (`vec-push!` and `map-assoc-eq-o` are RETAIN,
-`tur-vec-homog__` is BORROW), and everything not on it is `OWN_CARRY_REJECT`,
-which is what rejects `(some r)`. Adding `some`/`ok`/`err` would be a one-line
-change per entry, but the carry has to be BORROW rather than RETAIN -- nothing
-releases an Option's payload when the Option dies, so a retain would leak a
-count -- and a discarded Option would then leak the moved rc. That is a real
-ownership decision, not a mechanical fix, which is why it is not taken here.
+Direction 2 is **split out into its own report**, because it is not a leak fix
+(per correction 2) and deserves to be triaged on its own:
+[option-rc-payload-legal-to-return-illegal-to-build](option-rc-payload-legal-to-return-illegal-to-build.md).
+It is a decision rather than a diagnosis -- the mechanism is fully located
+(`own_carry_for_arg` in `src/compiler/elab_call.c` is an allowlist; `some`/`ok`/
+`err` are simply not on it) and what is missing is a ruling on whether an owning
+`rc<A>` may move into an Option payload. It matters here only because it is what
+keeps `weak/upgrade` on the builder form.
