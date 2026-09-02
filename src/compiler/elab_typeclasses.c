@@ -4520,9 +4520,14 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 (mp->ret_was_class_var && !m7_type_has_free_tyvar(mp->ret_full))
                     ? RET_CLASS_COMMITTED
                     : RET_CLASS_CARRIER_METHOD;
+            /* nil-tail-not-checked-against-declared-return: `false` keeps the
+             * nil-body check OFF for instance methods for now.  A class-decl
+             * return IS always written down, so `true` would be defensible --
+             * but it is a separate blast radius from the defn case this closes,
+             * and mixing them would make a regression here unattributable. */
             ReturnConflict rc = return_position_conflict(
                 mp->ret_adt, mp->ret_kind, method_body->type,
-                meth_cls);
+                meth_cls, /*check_nil_body=*/false);
             if (rc != RET_CONFLICT_NONE) {
                 const char *want = mp->ret_adt ? mp->ret_adt->name
                                  : typekind_to_string(mp->ret_kind);
@@ -4592,6 +4597,12 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                             "int64 carrier, so there is no representation these "
                             "two share and nothing to bridge them",
                             meth, want, gb.data);
+                        break;
+                    case RET_CONFLICT_NIL_BODY:
+                        /* Unreachable while the call above passes
+                         * ret_annotated=false; present so the switch stays
+                         * exhaustive and so turning that on is a one-line
+                         * change with a diagnostic already waiting. */
                         break;
                     case RET_CONFLICT_NONE: break;  /* unreachable */
                 }

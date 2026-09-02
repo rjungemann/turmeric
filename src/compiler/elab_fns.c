@@ -6325,6 +6325,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Parse return type annotation and body */
     /* body_start is the index of the first element after params (could be return type or body) */
     TypeKind return_kind = TY_NIL;
+    /* nil-tail-not-checked-against-declared-return: `return_kind` starts at
+     * TY_NIL, so "declared nil/void" and "not annotated" are the SAME value
+     * here.  The nil-tail check below needs to tell them apart -- a `: void`
+     * function must keep accepting a nil tail, an unannotated one infers its
+     * return from the body -- so record whether a return type was written down.
+     * Mirrors `return_annotated` in elab_fn. */
+    bool return_annotated = false;
     AdtDef *return_adt_def = NULL; /* Phase G3: set when return type is an ADT name */
     /* structdef-retirement DS-C: return_struct_def (LT4) removed -- a struct
      * return name is a record ADT (return_adt_def); no StructDef is produced. */
@@ -6629,6 +6636,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
 
     /* Check for : return-type annotation */
     if (call->as.list.len >= (body_start + 1)) {
+        /* nil-tail-not-checked-against-declared-return: an annotation is
+         * consumed exactly when this block advances body_start, on every one of
+         * its exits (three `goto done_return_annotation` paths, the keyword
+         * ladder's fallthrough, and the F_TYPE_ANN branch).  Reading the cursor
+         * once here beats setting a flag at five sites and missing one. */
+        uint32_t ret_annot_bs_before = body_start;
         Form *ret_f = call->as.list.items[body_start];
         /* Spaced `: T` where T is a single symbol or keyword: treat as if
          * fused so the full F_KEYWORD lookup ladder (alias / ADT / struct /
@@ -6862,6 +6875,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
             body_start++;
         }
+        return_annotated = (body_start > ret_annot_bs_before);
     }
 
     /* Ergonomics: a misplaced effect annotation -- `: int #{Unsafe}` instead
@@ -7577,8 +7591,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
         ReturnClass ret_cls = (n_fn_type_params == 0 && !fn_declared_unsafe)
                                   ? RET_CLASS_COMMITTED
                                   : RET_CLASS_CARRIER_FN;
+        /* nil-tail-not-checked-against-declared-return: check a nil tail only
+         * when the return was WRITTEN DOWN (return_kind starts TY_NIL, so
+         * unannotated and `: void` are indistinguishable by kind) and the tail is
+         * a nil LITERAL.  EX_NIL_LIT is what `defmacro` / `defclass` / `deftype`
+         * collapse to once registered, and what a missing close paren leaves
+         * behind -- the shapes that made this hole expensive.  A merely
+         * nil-TYPED tail (a `println` call) is deliberately not checked; see the
+         * predicate's comment for the measurement behind that line. */
+        bool check_nil_body = return_annotated && body_tail_is_nil_literal(body);
         ReturnConflict rc = return_position_conflict(
-            return_adt_def, return_kind, body->type, ret_cls);
+            return_adt_def, return_kind, body->type, ret_cls, check_nil_body);
         if (rc != RET_CONFLICT_NONE) {
             const char *want = return_adt_def ? return_adt_def->name
                              : typekind_to_string(return_kind);
@@ -7639,6 +7662,23 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         "is no representation these two share and nothing to "
                         "bridge them",
                         name_f->as.sym->name, want, gb.data);
+                    break;
+                case RET_CONFLICT_NIL_BODY:
+                    /* The message names the two causes that actually produce
+                     * this, because the bare type mismatch is not enough to find
+                     * either: a void-returning call in tail position, and a
+                     * missing close paren that swallowed the real tail.  The
+                     * second is what made this hole expensive -- see TUR-E0713,
+                     * the targeted diagnostic for the definition-in-tail case. */
+                    diag_emit_with_code(DIAG_ERROR, body->span,
+                        TUR_E0709_RETURN_TYPE_MISMATCH,
+                        "function '%s' declares return type '%s' but its body "
+                        "produces no value (nil) -- a tail that is a void call "
+                        "(println, a set!, a while loop) or a definition returns "
+                        "nothing, and a missing close paren can swallow the real "
+                        "tail into the form above it. Declare ': void' if the "
+                        "function is meant to return nothing",
+                        name_f->as.sym->name, want);
                     break;
                 case RET_CONFLICT_NONE: break;  /* unreachable */
             }

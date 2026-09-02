@@ -1381,9 +1381,35 @@ framing would miss cases:
   that fix guarded both `emit_if` arms and not the do/let companion 900 lines
   earlier. Root cause pinned to `emit_expr.c:2106`.
 
+`nil-tail-not-checked-against-declared-return` was resolved 2026-09-02 and
+moved to
+[docs/archive](../archive/nil-tail-not-checked-against-declared-return.md).
+`RET_CONFLICT_NIL_BODY` joins the return-position dispatcher, so
+`(defn f [] : int nil)` is a TUR-E0709. Its root-cause guess was right on the
+mechanism and off on the shape: there was no `TY_NIL` *exemption* -- the
+dispatcher is a list of predicates each targeted at one confusable PAIR
+(float-vs-int register class, cstr-vs-int, bool-vs-integer) and nil simply had
+no predicate, which is why one added predicate closes it with no re-plumbing.
+Its warning about `return_kind` starting at TY_NIL was load-bearing and correct.
+
+The scope line came from a measurement: the check fires on a nil LITERAL tail,
+not any nil-TYPED tail, because checking every nil-typed tail also rejects
+`(defn main [] : int (println ...))` -- **25 fixtures**, and the idiomatic entry
+point where the 0 a nil tail produces is the wanted exit code. Every shape the
+report argues from lands on the literal. `body_tail_is_nil_literal` peels
+EX_DO/EX_LET/EX_LETREC, without which the multi-form and single-form cases
+disagreed -- the inconsistency the report says does not exist.
+
+Both diagnostics stay: a definition written literally in tail position still
+gets TUR-E0713's paren message (it fires first), and the general check closes
+the residual the report identified but could not fix -- a definition arriving via
+MACRO EXPANSION has collapsed to EX_NIL_LIT and slipped past E0713's exact-head
+match. The typeclass instance-method caller passes `check_nil_body = false`
+deliberately, as a separate blast radius. Suite 2751 passed / 0 failed, zero
+churn.
+
 | Report | Severity | One line |
 | --- | --- | --- |
-| [nil-tail-not-checked-against-declared-return](nil-tail-not-checked-against-declared-return.md) | medium | the body-tail return-type check (TUR-E0707/E0709) fires for a `cstr`, `float` or `bool` tail and **not** for a `nil` one, so `(defn f [] : int nil)` is accepted and returns 0. Filed 2026-08-29 while fixing `nested-defn-accepted-outer-returns-zero`, which is one instance of it -- definitions collapse to nil-ish, which is why that defect had no diagnostic at all. Fixing this subsumes TUR-E0713's job, though that should survive as the specific diagnostic since a bare type mismatch cannot name the missing paren |
 | [control-form-around-if-double-unboxes-carrier-arms](control-form-around-if-double-unboxes-carrier-arms.md) | medium | `let`/`do` wrapping an `if` whose arms are carrier producers bridges carrier->concrete twice. Fourth report in this family; fix direction is the one-predicate change that already fixed the `emit_if` arms, plus a sweep of the remaining `fn_body_tail_emits_byvalue_carrier_abi` callers rather than a fifth round |
 | [spices-ci-fetch-failure-downgraded-to-warning](spices-ci-fetch-failure-downgraded-to-warning.md) | medium | (spice repo) `tur fetch` failure becomes a `::warning::`, so a failed native-dep build surfaces two steps later as `ld: library 'mbedtls' not found` in six jobs at once. **Deliberate and correctly so** -- making it fatal risks Linux, since optional `:spices` routinely fail. The fix is to put the captured output *in* the annotation, and to give `tur fetch` an exit code that separates optional-dep failure from required-dep failure |
 

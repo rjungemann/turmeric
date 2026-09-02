@@ -1447,6 +1447,7 @@ typedef enum {
     RET_CONFLICT_TYPE_REVERSE,
     RET_CONFLICT_BOOL_INTEGER,
     RET_CONFLICT_CARRIER_AGGREGATE,
+    RET_CONFLICT_NIL_BODY,
 } ReturnConflict;
 
 /* carrier-aware-return-unification: single dispatcher over the return-position
@@ -1456,9 +1457,17 @@ typedef enum {
  * widen an int-literal -> float body in place with
  * rc_widen_int_literal_to_float_return BEFORE calling, and should skip the
  * lazy-probe placeholder and inline-C (fiat TY_NIL) bodies as before. */
+/* nil-tail-not-checked-against-declared-return: `checkable` is the caller's
+ * decision and carries two facts -- the return type was written down, and the
+ * tail is a nil LITERAL rather than merely nil-typed.  See elab_core.c. */
+bool return_type_nil_body_conflict(TypeKind declared, Type body,
+                                   bool checkable);
+/* True when this body's TAIL is a nil literal, peeling the EX_DO / EX_LET /
+ * EX_LETREC wrappers a multi-form or scope-opening body adds. */
+bool body_tail_is_nil_literal(const Expr *e);
 ReturnConflict return_position_conflict(const AdtDef *ret_adt,
                                         TypeKind ret_kind, Type body,
-                                        ReturnClass cls);
+                                        ReturnClass cls, bool check_nil_body);
 
 /* TY4: if `e` is a borrow (&x / &mut x) of a named binding, return that
  * binding (the referent); otherwise NULL.  Used by the borrow-escape check. */

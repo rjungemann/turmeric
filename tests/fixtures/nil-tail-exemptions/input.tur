@@ -1,0 +1,34 @@
+; The three shapes a nil tail must STILL be accepted in.  Each is a separate
+; reason, and getting any of them wrong turns the fix for
+; nil-tail-not-checked-against-declared-return into a language break.
+;
+; See docs/archive/nil-tail-not-checked-against-declared-return.md.
+
+; 1. An explicit `: void`.  `return_kind` is initialized to TY_NIL, so "declared
+;    void" and "not annotated" are the same TypeKind in the elaborator -- the
+;    check has to read a separate "was it written down" flag rather than infer
+;    it from the kind.
+(defn writes-nothing [] : void
+  (println "void tail")
+  nil)
+
+; 2. No annotation at all.  This function's return type is INFERRED from its
+;    body; holding it to a return it never declared would reject every
+;    unannotated function in the language.
+(defn unannotated []
+  nil)
+
+; 3. A void call in tail position under a non-nil return.  This is nil-TYPED but
+;    not a nil LITERAL, and it is the idiomatic entry point -- `main` returning
+;    the exit code 0 that a nil tail already produces.  Rejecting it is a much
+;    larger question than the reported defect; 25 fixtures in this corpus have
+;    this shape.
+(defn prints-and-returns-int [] : int
+  (println "void call in tail position"))
+
+(defn main [] : int
+  (writes-nothing)
+  (unannotated)
+  (println (prints-and-returns-int))
+  (println "ok")
+  0)
