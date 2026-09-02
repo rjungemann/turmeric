@@ -11295,12 +11295,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * diag_had_error().  See
              * docs/archive/handler-clause-statement-if-ices-emitter.md for the
              * shapes that still reach this. */
+            /* perform-inside-loop-has-no-lowering: the old text blamed "a loop
+             * inside a handle clause" and prescribed hoisting into a helper,
+             * which does not escape the shapes that actually evict (the rule is
+             * about the whole enclosing function's shape, not the perform's
+             * position).  Name the mechanism and the switch that prints the
+             * real reason instead. */
             diag_emit(DIAG_ERROR, e->span,
                       "this effect operation has no lowering here: the enclosing "
                       "function left the CPS backend's supported subset, and the "
-                      "direct emitter cannot lower `perform`. The usual cause is a "
-                      "loop inside a `handle` clause -- hoist that work into a "
-                      "helper function and call it from the clause. This is a "
+                      "direct emitter cannot lower `perform`. Run with "
+                      "TUR_TRACE_EVICT=1 to see which form evicted the function. "
+                      "Known unsupported shapes: a `while` that assigns a "
+                      "loop-carried `^mut` inside an `if`/`match` arm or more than "
+                      "once per iteration, nested `while` loops, a `set!` of a "
+                      "loop-carried variable inside a `handle` body, and a `while` "
+                      "that performs an outer-handled effect from inside a handler "
+                      "clause. Restructuring "
+                      "so the loop body returns a status and the effect is "
+                      "performed after the loop usually avoids them. This is a "
                       "compiler limitation, not a mistake in this expression.");
             return atom_nil();
         case EX_HANDLE:          return emit_effects_handle(ctx, body, e);

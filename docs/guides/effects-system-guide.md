@@ -437,6 +437,42 @@ reach a control operator (`shift`/`perform`/`call/cc`/...) are CPS-converted
 code keeps its native calling convention and pays no trampoline or allocation
 cost. See the plan for the full model.
 
+### Performs inside loops and conditionals
+
+A `perform` reachable from a `while` body is the shape of every event loop
+and every "perform per item" traversal, and it is supported: the loop lowers
+to a recursive `__cps` helper that threads the enclosing handler chain, so an
+interior effect reaches an outer handler and the loop resumes where it left
+off. A `perform` inside an `if`/`when` arm in statement position is likewise
+fine -- the code after the conditional runs exactly once per resume.
+
+```turmeric
+(defeffect Done [score : int] : nil)
+
+(defn run [] : nil
+  (let [^mut i 0]
+    (while (< i 10)
+      (when (= i 3) (perform (Done i)))   ; abort or resume, either way
+      (set! i (+ i 1)))))
+```
+
+The lowering keeps loop-carried `^mut` state in the helper's parameters, and
+that is where its limits come from. A function evicts to the direct emitter,
+with a located error at the `perform`, when a loop:
+
+- assigns a loop-carried `^mut` inside an `if`/`match` arm, or more than once
+  per iteration;
+- assigns a loop-carried `^mut` inside a `handle` body or clause that the loop
+  spans;
+- nests another `while` that also performs;
+- sits inside a handler clause and performs an effect handled further out
+  (hoisting the loop into a helper does not escape this one: the helper is
+  evicted with its caller).
+
+`TUR_TRACE_EVICT=1` prints which form evicted which function. The usual
+restructuring is to compute the next state into a fresh `let` binding and
+assign the carried variable once, unconditionally, at the end of the body.
+
 ## Continuations (`call/cc`, `escape`)
 
 `call/cc` and `escape` capture an **undelimited** continuation against the

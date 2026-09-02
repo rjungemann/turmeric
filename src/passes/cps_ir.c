@@ -2969,8 +2969,22 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     if (rest->kind != CT_APPCONT) return NULL;
     CKont rk = rest->as.appcont.kont;
     if (rk.kind != KK_RET && rk.kind != KK_PROMPT) return NULL;
-    if (rest->as.appcont.v.kind != CA_VAR || !rest->as.appcont.v.var) return NULL;
-    const Binding *result_bd = rest->as.appcont.v.var;
+    /* perform-inside-loop-has-no-lowering: a loop with NOTHING live after it
+     * -- the while is the function's (or the prompt's) last form, so the
+     * continuation delivers the while's own unit result (its CVar `x`, or a
+     * unit literal) -- is the same shape with a unit exit.  Every event loop
+     * and "perform per item" traversal is written this way. */
+    const Binding *result_bd = NULL;
+    bool unit_exit = false;
+    if (rest->as.appcont.v.kind == CA_VAR && rest->as.appcont.v.var) {
+        result_bd = rest->as.appcont.v.var;
+    } else if (rest->as.appcont.v.kind == CA_UNIT ||
+               (rest->as.appcont.v.kind == CA_CVAR &&
+                rest->as.appcont.v.cvar_id == x.id)) {
+        unit_exit = true;
+    } else {
+        return NULL;
+    }
 
     /* Loop-carried vars = the ^mut set! targets (excluding loop-body locals). */
     const Binding *locals[64]; uint32_t n_locals = 0;
@@ -2981,7 +2995,7 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
 
     /* The delivered result var must itself be loop-carried (it is the loop's
      * output; a non-carried result is not this shape). */
-    if (loop_idx(vars, nv, result_bd) < 0) return NULL;
+    if (!unit_exit && loop_idx(vars, nv, result_bd) < 0) return NULL;
 
     /* Soundness guard: reads resolve to loop-entry versions; unconditional single
      * set per carried var. */
@@ -3022,12 +3036,17 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     b->rs_n = saved_rs_n;       /* drop this loop's read-set entries */
     b->n_loop = saved_n_loop;   /* restore (no nesting) */
 
-    /* Exit arm: deliver the live-after var (as its param) to the helper's KK_RET. */
-    CKont hret = kont_ret(result_bd->type.kind);
+    /* Exit arm: deliver the live-after var (as its param) -- or unit, when
+     * nothing is live after the loop -- to the helper's KK_RET. */
+    CKont hret = kont_ret(unit_exit ? TY_NIL : result_bd->type.kind);
     CTerm *exit = new_term(b, CT_APPCONT);
     exit->as.appcont.kont = hret;
     CAtom rv; memset(&rv, 0, sizeof rv);
-    rv.kind = CA_VAR; rv.ty = result_bd->type.kind; rv.type = &result_bd->type; rv.var = result_bd;
+    if (unit_exit) {
+        rv.kind = CA_UNIT; rv.ty = TY_NIL;
+    } else {
+        rv.kind = CA_VAR; rv.ty = result_bd->type.kind; rv.type = &result_bd->type; rv.var = result_bd;
+    }
     exit->as.appcont.v = rv;
 
     /* Body = fold(cond pending) around CT_IF(cond, iter, exit), re-evaluated each
@@ -3643,6 +3662,23 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
             CTerm *nat = build_callcc(b, e, x, ac);
             return nat ? nat : build_letraw(b, e, x, ac);
+        }
+        case EX_WHILE: {
+            /* perform-inside-loop-has-no-lowering: a `while` in TAIL position
+             * (the last form of a nil-returning function, or of a handle body)
+             * used to fall to the default below, which cannot delegate a loop
+             * that performs and so evicted the whole function -- while the
+             * same loop followed by a live value went through cps_bind and
+             * build_loop.  Route the tail loop through build_loop too; its
+             * continuation delivers the loop's own unit result, which
+             * build_loop admits as a unit exit. */
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            CTerm *loop = build_loop(b, e, x, ac);
+            if (loop) return loop;
+            if (safe_to_delegate(b, e)) return build_letraw(b, e, x, ac);
+            return unsupported_form(b, e);
         }
         default: {
             /* N6.1: a control-op-free, colored-call-free form -- emit it wholesale

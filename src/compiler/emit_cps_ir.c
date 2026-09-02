@@ -3285,6 +3285,62 @@ static bool jbody_has_delim(const CTerm *t) {
  * a cps->cps tail call (the lifted frame fn has no `k` to thread), or a KK_VAR
  * cps->cps tail call not sitting directly under its CT_LETCONT (e.g. inside an
  * if branch). */
+/* perform-inside-loop-has-no-lowering: does a delivery to join `jid` occur
+ * INSIDE a region of `t` that the emitter lifts into its own C function (the
+ * continuation of a perform / await / resume, a reset or handle continuation,
+ * a shift / callcc / cloneable body, a loop helper)?  A label join cannot be
+ * reached from there (`goto L<j>` would name a label in the parent function;
+ * the join parameter is not in scope either), so such a join is reified as a
+ * DK resume-frame instead -- see emit_escaping_join.  Over-approximating
+ * "lifted" is safe: the frame lowering is valid from the parent frame too. */
+static bool join_escapes_lifted_rec(const CTerm *t, uint32_t jid, bool lifted) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_APPCONT:
+            return lifted && t->as.appcont.kont.kind == KK_VAR
+                && t->as.appcont.kont.id == jid;
+        case CT_TAILCALL:
+            return lifted && t->as.tailcall.kont.kind == KK_VAR
+                && t->as.tailcall.kont.id == jid;
+        case CT_LETVAL:  return join_escapes_lifted_rec(t->as.letval.body, jid, lifted);
+        case CT_LETPRIM: return join_escapes_lifted_rec(t->as.letprim.body, jid, lifted);
+        case CT_LETCALL: return join_escapes_lifted_rec(t->as.letcall.body, jid, lifted);
+        case CT_LETRAW:  return join_escapes_lifted_rec(t->as.letraw.body, jid, lifted);
+        case CT_LETCONT:
+            return join_escapes_lifted_rec(t->as.letcont.jbody, jid, lifted)
+                || join_escapes_lifted_rec(t->as.letcont.body, jid, lifted);
+        case CT_IF:
+            return join_escapes_lifted_rec(t->as.if_.then_, jid, lifted)
+                || join_escapes_lifted_rec(t->as.if_.else_, jid, lifted);
+        case CT_MATCH:
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (join_escapes_lifted_rec(t->as.match.arms[i].body, jid, lifted)) return true;
+            return false;
+        case CT_PERFORM:   return join_escapes_lifted_rec(t->as.perform.body, jid, true);
+        case CT_AWAIT:     return join_escapes_lifted_rec(t->as.await.body, jid, true);
+        case CT_RESUME:    return join_escapes_lifted_rec(t->as.resume.body, jid, true);
+        case CT_RESET:
+            return join_escapes_lifted_rec(t->as.reset.delim, jid, true)
+                || join_escapes_lifted_rec(t->as.reset.body, jid, true);
+        case CT_SHIFT:     return join_escapes_lifted_rec(t->as.shift.body, jid, true);
+        case CT_HANDLE: {
+            if (join_escapes_lifted_rec(t->as.handle.delim, jid, true)
+                || join_escapes_lifted_rec(t->as.handle.body, jid, true)) return true;
+            for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++)
+                if (join_escapes_lifted_rec(t->as.handle.cases[ci].case_body, jid, true)) return true;
+            return false;
+        }
+        case CT_CLONEABLE: return join_escapes_lifted_rec(t->as.cloneable.body, jid, true);
+        case CT_CALLCC:    return join_escapes_lifted_rec(t->as.callcc.body, jid, true);
+        case CT_LOOP:      return join_escapes_lifted_rec(t->as.loop.body, jid, true);
+        default: return false;
+    }
+}
+static bool letcont_is_escaping_join(const CTerm *t) {
+    return !letcont_is_heap_join(t)
+        && join_escapes_lifted_rec(t->as.letcont.body, t->as.letcont.j.id, false);
+}
+
 static bool needs_heap_join(const CTerm *t) {
     if (!t) return false;
     switch (t->kind) {
@@ -3336,6 +3392,18 @@ static bool needs_heap_join(const CTerm *t) {
                         return true;
                 }
                 return needs_heap_join(t->as.letcont.jbody);
+            }
+            if (letcont_is_escaping_join(t)) {
+                /* The join is reified as a resume-frame (emit_escaping_join):
+                 * its body must capture only slot values and must not itself
+                 * deliver to an OUTER join -- the same closedness the heap join
+                 * above requires.  Otherwise evict, as before. */
+                CapSet _ecs;
+                if (!collect_caps(t->as.letcont.jbody, t->as.letcont.param.id, &_ecs))
+                    return true;
+                uint32_t _edef[CC_MAX_BOUND];
+                if (!joins_closed_rec(t->as.letcont.jbody, _edef, 0))
+                    return true;
             }
             return needs_heap_join(t->as.letcont.jbody)
                 || needs_heap_join(t->as.letcont.body);
@@ -5350,6 +5418,15 @@ typedef struct {
     struct { uint32_t id; const char *param; const char *cty; } joins[MAX_JOINS];
     int         n_joins;
     const char *cur_k;       /* C expr for the innermost prompt chain (KK_PROMPT target) */
+    /* perform-inside-loop-has-no-lowering (escaping joins): joins reified as DK
+     * resume-frames because a delivery to them sits inside a LIFTED region of
+     * their body (a perform continuation, ...).  `frame` is the C local holding
+     * the frame node in the frame that created it (`out` identifies that
+     * frame); a delivery from that frame runs the node, a delivery from any
+     * lifted sub-frame returns through its own downstream chain, which was
+     * spliced onto the node (cur_k was the node while the body emitted). */
+    struct { uint32_t id; char frame[24]; const Buf *out; } hjoins[MAX_JOINS];
+    int         n_hjoins;
     const char *cur_loop_name; /* cps-while-native: enclosing CT_LOOP helper `<name>__cps`
                                 * so a CT_CONTINUE back-edge (possibly inside a lifted
                                 * handle continuation) re-enters it. */
@@ -5803,6 +5880,7 @@ static void emit_resume(CE *ce, const CTerm *t);
 static void emit_letraw(CE *ce, const CTerm *t);
 static void emit_callcc(CE *ce, const CTerm *t);
 static void emit_heap_join(CE *ce, const CTerm *t);
+static void emit_escaping_join(CE *ce, const CTerm *t);  /* escaping joins */
 static void emit_loop(CE *ce, const CTerm *t);       /* cps-while-native */
 static void emit_continue(CE *ce, const CTerm *t);   /* cps-while-native */
 static void emit_match(CE *ce, const CTerm *t);      /* B4 */
@@ -5868,7 +5946,25 @@ static void emit_deliver_ty(CE *ce, const CKont *kont, const char *v, const Type
         else
             ce_line(ce, "return dk_run(%s, %s);", ce->cur_k, sv);
         free(sv);
-    } else { /* KK_VAR: an inline join */
+    } else {
+        /* perform-inside-loop-has-no-lowering: a join reified as a resume-frame
+         * (emit_escaping_join).  From the frame that created it, run the node;
+         * from a lifted sub-frame the node IS this frame's downstream chain
+         * (it was cur_k when the sub-frame was spliced), so deliver exactly as
+         * a KK_RET would. */
+        for (int i = ce->n_hjoins - 1; i >= 0; i--) {
+            if (ce->hjoins[i].id != kont->id) continue;
+            char *sv = slot_store_reap(ce->ctx, kont->ty, vty, v);
+            if (ce->hjoins[i].out == ce->out)
+                ce_line(ce, "return dk_run(%s, %s); /* escaping join */", ce->hjoins[i].frame, sv);
+            else if (ce->ret_mode)
+                ce_line(ce, "return %s; /* escaping join via downstream */", sv);
+            else
+                ce_line(ce, "return dk_run(__kont, %s); /* escaping join via downstream */", sv);
+            free(sv);
+            return;
+        }
+        /* KK_VAR: an inline join */
         ce_line(ce, "%s = %s;", join_param(ce, kont->id), v);
         ce_line(ce, "goto L%u;", kont->id);
     }
@@ -6242,6 +6338,7 @@ static void emit_term(CE *ce, const CTerm *t) {
         }
         case CT_LETCONT: {
             if (letcont_is_heap_join(t)) { emit_heap_join(ce, t); break; }
+            if (letcont_is_escaping_join(t)) { emit_escaping_join(ce, t); break; }
             /* Name the join-param SLOT the way every reference to it is named
              * (cvar_cname -> name_for_binding when the param carries a source
              * Binding, so a kebab-case `let` binder like `first-results` mangles
@@ -6606,6 +6703,11 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
         case CT_TAILCALL: break;
         case CT_LETCONT: {
             if (letcont_is_heap_join(t)) break;  /* param + jbody are lifted into a frame helper */
+            if (letcont_is_escaping_join(t)) {
+                /* param + jbody live in the resume-frame helper; the body stays. */
+                emit_binder_decls(ce, t->as.letcont.body);
+                break;
+            }
             /* Name the slot via cvar_cname so a source-Binding param mangles
              * consistently with the delivery + the join body's references (see
              * the CT_LETCONT emit in emit_term); the raw param.name would be an
@@ -7085,6 +7187,54 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
  * self-recursion and the interior handle's lifted continuation (which carries the
  * back-edge) can call it before its definition appears in the buffer.  At the loop
  * site, the caller emits `return <helper>__cps(<inits>, <thread>)`. */
+/* perform-inside-loop-has-no-lowering: a join that a LIFTED region of its body
+ * delivers to -- `letcont j(x) = rest in if c then (perform ...; j unit) else
+ * (j unit)`, the statement-position conditional perform of every "if
+ * collision, perform GameOver" loop body.  The perform continuation is its own
+ * C function, so it can neither assign the join slot nor `goto L<j>` (it used
+ * to emit exactly that: `0 = __t5; goto L4;`).  Reify the join as an
+ * LH_RESUME_CONT frame spliced onto cur_k and make it cur_k while the body
+ * emits: a perform inside splices its continuation onto the join node, so the
+ * continuation's downstream delivery (KK_RET or a `(j v)` seen from a lifted
+ * frame, emit_deliver_ty) lands in the join body; the parent frame's own
+ * `(j v)` runs the node directly.  The join body delivers through the node's
+ * next -- the cur_k it was created under -- exactly once. */
+static void emit_escaping_join(CE *ce, const CTerm *t) {
+    int id = (*ce->helper_ctr)++;
+    char jname[256];
+    snprintf(jname, sizeof(jname), "%s_ej%d", ce->fn_cn, id);
+    char *xn = cvar_cname(ce, t->as.letcont.param);
+    CapSet cs;
+    bool caps_ok = collect_caps(t->as.letcont.jbody, t->as.letcont.param.id, &cs);
+    const CapSet *caps = (caps_ok && cs.n > 0) ? &cs : NULL;
+    emit_lifted(ce, jname, LH_RESUME_CONT, xn, t->as.letcont.param.ty,
+                t->as.letcont.param.type, t->as.letcont.jbody, NULL, caps);
+    free(xn);
+    char *envexpr = emit_cont_env(ce, jname, caps);   /* caps-only env */
+    char fv[24];
+    snprintf(fv, sizeof fv, "__ej%d", id);
+    /* Single spliced node, reaped at the outermost entry boundary like every
+     * other structural node (docs/archive/cps-delimited-dk-node-leak.md). */
+    ce_line(ce, "DK *%s = __dk_reap_node(dk_frame_resume(%s, %s, %s));",
+            fv, jname, envexpr, ce->cur_k);
+    free(envexpr);
+    if (ce->n_hjoins >= MAX_JOINS) {
+        /* Table full: fall back to a plain label join (the term was admitted,
+         * so this is a capacity limit, not a shape). */
+        emit_term(ce, t->as.letcont.body);
+        return;
+    }
+    int slot = ce->n_hjoins++;
+    ce->hjoins[slot].id = t->as.letcont.j.id;
+    snprintf(ce->hjoins[slot].frame, sizeof ce->hjoins[slot].frame, "%s", fv);
+    ce->hjoins[slot].out = ce->out;
+    const char *saved_k = ce->cur_k;
+    ce->cur_k = ce->hjoins[slot].frame;   /* lives while the body emits */
+    emit_term(ce, t->as.letcont.body);
+    ce->cur_k = saved_k;
+    ce->n_hjoins--;
+}
+
 static void emit_loop(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
     char lname[256];
