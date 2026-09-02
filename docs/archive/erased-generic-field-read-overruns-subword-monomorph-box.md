@@ -94,10 +94,28 @@ reverted compiler with the same `heap-buffer-overflow`, and to pass with the
 fix. The original fixture is clean under ASan. Suite 2755/0 with one
 snapshot regenerated; leak-check 76/0/0; both seams green.
 
-**Residue, recorded.** `float32` keeps its 4-byte width in every monomorph
-(the existing policy: an implicit float-to-int64 store would VALUE-convert),
-so a `(Identity float32)` read through an erased body still overreads by
-four bytes and is right only by little-endian luck; closing it needs a
-bit-reinterpreting store and read at the slot. No fixture exercises it
-today (the corpus census found `Box__float32` in one fixture, never read
-through erased code).
+**Residue, closed (2026-09-02).** `float32` keeps its 4-byte width in every
+monomorph (the existing policy: an implicit float-to-int64 store would
+VALUE-convert), so a `(Identity float32)` read through an erased body
+overread by four bytes. Two defects hid behind it, fixed together:
+
+- **Layout.** A record monomorph now pads a type-parameter-typed `float32`
+  field to the word (`emit_registered_adt_app_rec`, `int32_t __pad_<f>`), so
+  the erased int64 read stays inside the aggregate on any endianness. The
+  erased reader recovers the float from the slot's FIRST four bytes
+  (`tur_sc_f32_from_bits` is a memcpy -- byte position, not value), which
+  is exactly where the typed store put it.
+- **ABI.** With the overrun gone the values were still garbage: the
+  `__poly_N` wrapper that boxes a float-typed named fn (or non-capturing
+  lambda) carries the float NATIVELY (`static float __poly_N(void *,
+  float)`, xmm0) so it agrees with a typed `:fn` cast and the typed
+  poly-to-fat shim -- but an erased typeclass-method sink (`g : (fn [a] b)`
+  in `Functor`) is compiled once for every `a` and invokes it through
+  `((int64_t (*)(void*, int64_t))g.fn)`: integer registers in, RAX out.
+  Same defect for a capturing lambda's own `float`/`double` thunk. See
+  [history/erased-fn-sink-float-wrapper-carrier-mismatch.md](history/erased-fn-sink-float-wrapper-carrier-mismatch.md).
+
+Pinned by `tests/fixtures/erased-reader-float32-record-monomorph` (`2.5`
+and `-7.25` through the dict-clone crossing; a `float` twin, a capturing
+lambda, a non-capturing lambda and concrete dispatch were probed by hand
+under ASan).

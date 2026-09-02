@@ -1965,6 +1965,17 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             free_struct_app_type(fres);
             char *fname = mangle_field_name(fld->name);
             buf_printf(out, "    %s %s;\n", ctype, fname);
+            /* erased-generic-field-read-overruns-subword-monomorph-box, the
+             * float32 residue: a type-parameter field instantiated at float32
+             * stays a 4-byte `float` (widening it to the int64 slot would
+             * VALUE-convert on every implicit store), so pad it to the word.
+             * The erased twin reads this slot as int64 and recovers the float
+             * with a 4-byte memcpy from the slot's FIRST bytes -- byte position,
+             * not value -- which is exactly where the float sits; the pad only
+             * keeps that 8-byte read inside the aggregate on any endianness. */
+            if (fld->full_type && fld->full_type->kind == TY_TYVAR &&
+                ctype && strcmp(ctype, "float") == 0)
+                buf_printf(out, "    int32_t __pad_%s;\n", fname);
             free(fname);
         }
         buf_printf(out, "} %s;\n", adt_inst_name);
@@ -2002,6 +2013,10 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                 : adt_field_c_type(def, fld, args);
             free_struct_app_type(fres);
             buf_printf(out, " %s _%u;", ctype, fi);
+            /* float32 residue: same word pad as the named layout above. */
+            if (fld->full_type && fld->full_type->kind == TY_TYVAR &&
+                ctype && strcmp(ctype, "float") == 0)
+                buf_printf(out, " int32_t __pad_%u;", fi);
         }
         buf_printf(out, " } %s;\n", mctor);
         free(mctor);

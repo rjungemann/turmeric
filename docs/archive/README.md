@@ -262,6 +262,7 @@ Post-v0.18.0 sweep:
 - **[borrow-param-forwarding-drop.md](history/borrow-param-forwarding-drop.md)** -- LT1 linear-drop check spuriously firing on `^borrow` param forwarding; resolved
 - **[defgadt-malformed-pattern-segfault.md](history/defgadt-malformed-pattern-segfault.md)** -- NULL-deref SEGV on malformed `defgadt` constructor; regression fixture in place
 - **[bare-fat-sink-poly-box-slot0-int64-mismatch.md](history/bare-fat-sink-poly-box-slot0-int64-mismatch.md)** -- Poly box / bare `^fat` sink slot-0 int64 shim vs `double` invoke cast; fixed (2026-06-04)
+- **[erased-fn-sink-float-wrapper-carrier-mismatch.md](history/erased-fn-sink-float-wrapper-carrier-mismatch.md)** -- native-float `__poly_N` wrapper / capturing-lambda thunk invoked through the int64 carrier cast by an erased `(fn [a] b)` typeclass-method sink; bridged through bits, fixed (2026-09-02)
 - **[poly-wrapper-forces-int64-args-non-int-fat-sink.md](history/poly-wrapper-forces-int64-args-non-int-fat-sink.md)** -- `make_poly_wrapper` forcing int64 arg params on float-class methods; fixed (2026-06-04)
 - **[poly-to-fat-drops-args-beyond-first-multiarg-method.md](history/poly-to-fat-drops-args-beyond-first-multiarg-method.md)** -- N-ary `__tur_poly_to_fat*` carriers / shims for multi-arg typeclass methods; fixed
 - **[polymorphic-return-type-instantiation-collapses-to-first-tyvar.md](history/polymorphic-return-type-instantiation-collapses-to-first-tyvar.md)** -- Polymorphic accessor return type wrongly collapsed to first tyvar; fixed (2026-06-04)

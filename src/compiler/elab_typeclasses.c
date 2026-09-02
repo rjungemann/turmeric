@@ -5397,6 +5397,30 @@ static bool obj_is_unascribed_carrier_elem(const Expr *obj) {
     return false;
 }
 
+
+/* erased-float-carrier: stamp a poly-wrap headed for typeclass-method param
+ * `param` with the positions of its DECLARED `:fn` signature that are type
+ * variables.  The instance body is compiled once for every `a`/`b`, so it
+ * invokes such a param through the int64 carrier cast; the emitter routes a
+ * float-class wrapper through a bits shim at exactly those positions (see
+ * ensure_float_carrier_shim).  Concrete positions keep the native thunk ABI
+ * the typed poly-to-fat shim and the F5 typed `:fn` cast already rely on. */
+static void poly_wrap_stamp_carrier_erased(Expr *wrap, const Binding *param) {
+    const Type *pt = param ? param->poly_type : NULL;
+    if (pt && pt->kind == TY_FORALL) pt = pt->as.forall_.body;
+    if (!pt || pt->kind != TY_FN) return;
+    uint64_t mask = 0;
+    for (uint8_t i = 0; i < pt->as.fn.arity; i++) {
+        const Type *a = pt->as.fn.arg_full_types ? pt->as.fn.arg_full_types[i] : NULL;
+        bool erased = a ? (a->kind == TY_TYVAR) : (pt->as.fn.arg_kinds[i] == TY_TYVAR);
+        if (erased) mask |= ARG_IDX_BIT(i);
+    }
+    const Type *r = pt->as.fn.result_full_type;
+    bool res_erased = r ? (r->kind == TY_TYVAR) : (pt->as.fn.result_kind == TY_TYVAR);
+    wrap->as.poly_wrap_.carrier_erased_arg_mask = mask;
+    wrap->as.poly_wrap_.carrier_erased_result = res_erased;
+}
+
 Expr *elab_method_call(Elab *e, const Form *call) {
     /* call is (.method obj arg1 arg2 ...)
      * call->as.list.items[0] is the symbol .method
@@ -6597,6 +6621,7 @@ resolved_user_fallback:;
                 cwrap->as.poly_wrap_.inner = obj;
                 cwrap->as.poly_wrap_.wrapper_binding = NULL;
                 cwrap->as.poly_wrap_.is_closure = true;
+                poly_wrap_stamp_carrier_erased(cwrap, best_method->params[0]);
                 obj = cwrap;
             } else {
                 diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
@@ -6606,6 +6631,7 @@ resolved_user_fallback:;
         } else {
             Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, obj->span);
             wrap->as.poly_wrap_.inner = obj;
+            poly_wrap_stamp_carrier_erased(wrap, best_method->params[0]);
             if (inner_b->is_poly_fn) {
                 wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
             } else {
@@ -6635,6 +6661,7 @@ resolved_user_fallback:;
                     cwrap->as.poly_wrap_.inner = orig2;
                     cwrap->as.poly_wrap_.wrapper_binding = NULL;
                     cwrap->as.poly_wrap_.is_closure = true;
+                    poly_wrap_stamp_carrier_erased(cwrap, best_method->params[param_idx]);
                     args[i] = cwrap;
                     continue;
                 }
@@ -6645,6 +6672,7 @@ resolved_user_fallback:;
             Expr *orig = args[i];
             Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig->span);
             wrap->as.poly_wrap_.inner = orig;
+            poly_wrap_stamp_carrier_erased(wrap, best_method->params[param_idx]);
             /* constrained-hkt-byvalue-carriers: when the receiver is the ABSTRACT
              * type constructor of a constrained poly fn, this method call lowers to
              * a dictionary-slot dispatch, whose method pointer returns the int64

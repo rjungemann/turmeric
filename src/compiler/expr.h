@@ -1498,6 +1498,18 @@ struct Expr {
              * carrier.  False for a typed `:fn` carrier / monad continuation,
              * which the concrete-cast call site consumes by value (no spill). */
             bool            boxes_aggregate;
+            /* erased-float-carrier (float32 residue of erased-generic-field-
+             * read): the sink is a typeclass-method `:fn` param whose DECLARED
+             * signature is erased at these positions (`g : (fn [a] b)` --
+             * the instance body invokes it through the int64 carrier cast,
+             * `((int64_t (*)(void*, int64_t))g.fn)`), so a float-class value
+             * the wrapper carries natively there must cross as its BITS in an
+             * int64 (tur_sc_bits_f32 / _f64) rather than in xmm0.  Bit i =
+             * declared arg i is a tyvar; the result flag likewise.  A typed
+             * `:fn` / `^fat` sink leaves both clear and keeps the native
+             * thunk. */
+            uint64_t        carrier_erased_arg_mask;
+            bool            carrier_erased_result;
         } poly_wrap_;
         struct { struct Expr *inner; } ascribe_; /* (:: expr type) — type erased at codegen */
         /* A#1: fat-closure auto-shim.  inner is a bare (non-capturing) fn value;

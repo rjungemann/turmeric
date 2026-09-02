@@ -1442,6 +1442,150 @@ char *ensure_fat_aggregate_spill_shim(EmitCtx *ctx, Type result_type,
     return name;
 }
 
+/* erased-float-carrier (the float32 residue of erased-generic-field-read-
+ * overruns-subword-monomorph-box): a poly wrapper carries a float-class
+ * argument/result NATIVELY (`float`/`double`, xmm0) so it agrees with a typed
+ * `:fn` cast or a typed poly-to-fat shim -- but an ERASED typeclass-method
+ * sink (`g : (fn [a] b)`) is compiled once for every `a` and invokes the thunk
+ * through `((int64_t (*)(void*, int64_t))g.fn)`: integer registers in, RAX
+ * out.  The two ABIs cannot both be the thunk, so at the positions the sink
+ * reads as the carrier we bridge: the shim takes/returns the int64 BITS of
+ * the float (tur_sc_bits_f32 / tur_sc_f32_from_bits and the f64 twins -- a
+ * memcpy, byte-positioned, so a float32 lands in the first four bytes, the
+ * same bytes the erased field reader recovers it from) and calls the native
+ * wrapper.  Non-erased positions keep the wrapper's own C type and are
+ * forwarded untouched. */
+static const char *float_carrier_kind(const char *cn) {
+    if (!cn) return NULL;
+    if (strcmp(cn, "float") == 0) return "f32";
+    if (strcmp(cn, "double") == 0) return "f64";
+    return NULL;
+}
+
+static bool float_carrier_shim_needed(Type result_type, Type *param_types,
+                                      uint8_t n_params, uint64_t erased_mask,
+                                      bool erased_result) {
+    if (erased_result && float_carrier_kind(type_c_name(result_type))) return true;
+    for (uint8_t i = 0; i < n_params; i++) {
+        if ((erased_mask & ARG_IDX_BIT(i)) &&
+            float_carrier_kind(type_c_name(param_types[i])))
+            return true;
+    }
+    return false;
+}
+
+static bool float_carrier_shim_register(EmitCtx *ctx, const char *name) {
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return false;
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    return true;
+}
+
+/* Spell the shim's own signature and the argument/result bridges.  `callee`
+ * is the expression that names the native thunk (a wrapper name, or a cast
+ * `__f` read out of the env). */
+static void float_carrier_shim_body(Buf *target, const char *name,
+                                    const char *callee, Type result_type,
+                                    Type *param_types, uint8_t n_params,
+                                    uint64_t erased_mask, bool erased_result) {
+    const char *rc = type_c_name(result_type);
+    const char *rk = erased_result ? float_carrier_kind(rc) : NULL;
+    buf_printf(target, "static %s %s(void *__e", rk ? "int64_t" : rc, name);
+    for (uint8_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        bool bits = (erased_mask & ARG_IDX_BIT(i)) && float_carrier_kind(pc);
+        buf_printf(target, ", %s a%u", bits ? "int64_t" : pc, (unsigned)i);
+    }
+    buf_puts(target, ") {\n    ");
+    buf_printf(target, "%s __r = %s(__e", rc, callee);
+    for (uint8_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        const char *pk = (erased_mask & ARG_IDX_BIT(i)) ? float_carrier_kind(pc) : NULL;
+        if (pk) buf_printf(target, ", tur_sc_%s_from_bits(a%u)", pk, (unsigned)i);
+        else buf_printf(target, ", a%u", (unsigned)i);
+    }
+    buf_puts(target, ");\n    ");
+    if (rk) buf_printf(target, "return tur_sc_bits_%s(__r);\n}\n", rk);
+    else buf_puts(target, "return __r;\n}\n");
+}
+
+char *ensure_float_carrier_shim(EmitCtx *ctx, const char *real_fn,
+                                Type result_type, Type *param_types,
+                                uint8_t n_params, uint64_t erased_mask,
+                                bool erased_result) {
+    if (!float_carrier_shim_needed(result_type, param_types, n_params,
+                                   erased_mask, erased_result))
+        return NULL;
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_fltcarrier_");
+    append_sanitized_c_token(&nb, real_fn);
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    if (!float_carrier_shim_register(ctx, name)) return name;
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    /* Early section, ahead of the wrapper's own forward declaration: prototype
+     * it first (same reason as the aggregate spill shim). */
+    buf_printf(target, "static %s %s(void *", type_c_name(result_type), real_fn);
+    for (uint8_t i = 0; i < n_params; i++)
+        buf_printf(target, ", %s", type_c_name(param_types[i]));
+    buf_puts(target, ");\n");
+    float_carrier_shim_body(target, name, real_fn, result_type, param_types,
+                            n_params, erased_mask, erased_result);
+    return name;
+}
+
+char *ensure_fat_float_carrier_shim(EmitCtx *ctx, Type result_type,
+                                    Type *param_types, uint8_t n_params,
+                                    uint64_t erased_mask, bool erased_result) {
+    if (!float_carrier_shim_needed(result_type, param_types, n_params,
+                                   erased_mask, erased_result))
+        return NULL;
+    const char *rc = type_c_name(result_type);
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_fatfltcarrier_");
+    append_sanitized_c_token(&nb, rc);
+    for (uint8_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        if (!pc) { buf_free(&nb); return NULL; }
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, pc);
+    }
+    buf_printf(&nb, "_m%llx%s", (unsigned long long)erased_mask,
+               erased_result ? "r" : "");
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    if (!float_carrier_shim_register(ctx, name)) return name;
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    /* The native thunk is `__fn`, slot 0 of every closure env (the offset the
+     * uncast fat-closure emit reads); cast it to its real signature inside the
+     * call expression so the bridged call is a single statement. */
+    Buf callee; buf_init(&callee);
+    buf_printf(&callee, "((%s (*)(void *", rc);
+    for (uint8_t i = 0; i < n_params; i++)
+        buf_printf(&callee, ", %s", type_c_name(param_types[i]));
+    buf_puts(&callee, "))(intptr_t)((int64_t *)__e)[0])");
+    buf_putc(&callee, '\0');
+    float_carrier_shim_body(target, name, callee.data, result_type, param_types,
+                            n_params, erased_mask, erased_result);
+    buf_free(&callee);
+    return name;
+}
+
 /* let-bound-noncapturing-lambda-segfaults-as-fn-arg: adapter for a `:fn` value
  * that is a BARE C function pointer rather than a closure box.
  *

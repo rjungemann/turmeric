@@ -11825,6 +11825,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * (The outer, non-capturing continuation goes through the
                      * named-wrapper path and was already paired correctly.) */
                     char *fat_spill = NULL;
+                    /* The float-carrier shim keeps a NON-erased float position
+                     * native, so its pointer type differs from the field's
+                     * and needs the explicit cast (the aggregate spill is
+                     * all-int64 and needs none -- keep its spelling). */
+                    bool fat_spill_cast = false;
                     if (thunk_binding && thunk_binding->type.kind == TY_FN) {
                         thunk_arity = thunk_binding->type.as.fn.arity > 0
                             ? (uint8_t)(thunk_binding->type.as.fn.arity - 1) : 0;
@@ -11850,6 +11855,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             fat_spill = ensure_fat_aggregate_spill_shim(
                                 ctx, spill_result,
                                 thunk_arity ? spill_params : NULL, thunk_arity);
+                        }
+                        /* erased-float-carrier: the fat twin of the named-
+                         * wrapper bridge below -- a capturing lambda over a
+                         * float reaching an erased `(fn [a] b)` method param. */
+                        if (!fat_spill &&
+                            (e->as.poly_wrap_.carrier_erased_arg_mask ||
+                             e->as.poly_wrap_.carrier_erased_result) &&
+                            (e->as.poly_wrap_.boxes_aggregate ||
+                             ctx->poly_wrap_callee_carrier)) {
+                            Type fc_result = emit_resolve_type(ctx, thunk_result);
+                            Type fc_params[MAX_FN_ARITY];
+                            for (uint8_t i = 0; i < thunk_arity; i++)
+                                fc_params[i] = emit_resolve_type(ctx, thunk_params[i]);
+                            fat_spill = ensure_fat_float_carrier_shim(
+                                ctx, fc_result,
+                                thunk_arity ? fc_params : NULL, thunk_arity,
+                                e->as.poly_wrap_.carrier_erased_arg_mask,
+                                e->as.poly_wrap_.carrier_erased_result);
+                            fat_spill_cast = fat_spill != NULL;
                         }
                     }
                     /* let-bound-noncapturing-lambda-segfaults-as-fn-arg: a
@@ -11896,7 +11920,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(body, "void *%s = (void *)(intptr_t)(%s);\n", tmp, fat);
                     free(fat);
                     Buf out; buf_init(&out);
-                    if (fat_spill) {
+                    if (fat_spill && fat_spill_cast) {
+                        buf_printf(&out, "(tur_poly_fn_t){ %s, "
+                                         "(int64_t(*)(void*,int64_t))%s }",
+                                   tmp, fat_spill);
+                    } else if (fat_spill) {
                         buf_printf(&out, "(tur_poly_fn_t){ %s, %s }", tmp, fat_spill);
                     } else if (thunk_typedef) {
                         buf_printf(&out,
@@ -11966,6 +11994,36 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 for (uint8_t i = 1; i < warity && nwp < MAX_FN_ARITY; i++)
                     wparams[nwp++] = emit_fn_arg_type_from_type(wbnd->type, i);
                 spill = ensure_aggregate_spill_shim(ctx, wn, wres, wparams, nwp);
+            }
+            /* erased-float-carrier: the sink is an erased typeclass-method
+             * `:fn` param (`g : (fn [a] b)`) that invokes the thunk through
+             * the int64 carrier cast, while the wrapper carries a float-class
+             * arg/result natively (xmm0).  Bridge the erased float positions
+             * through their bits.  NULL when no such position exists. */
+            if (!spill &&
+                (e->as.poly_wrap_.carrier_erased_arg_mask ||
+                 e->as.poly_wrap_.carrier_erased_result) &&
+                /* Same entry-point pairing as the aggregate spill: only an
+                 * ERASED callee (abstract-receiver dict dispatch, or the
+                 * carrier base instance) reads the position as int64; a
+                 * per-spec instance clone (`__inst_*__spec__*`) invokes the
+                 * thunk natively and must keep the plain wrapper. */
+                (e->as.poly_wrap_.boxes_aggregate ||
+                 ctx->poly_wrap_callee_carrier) &&
+                wbnd && wbnd->type.kind == TY_FN) {
+                Type wres = wbnd->type.as.fn.result_full_type
+                    ? *wbnd->type.as.fn.result_full_type
+                    : emit_type_from_kind(wbnd->type.as.fn.result_kind);
+                wres = emit_resolve_type(ctx, wres);
+                uint32_t warity = wbnd->type.as.fn.arity;
+                Type wparams[MAX_FN_ARITY];
+                uint8_t nwp = 0;
+                for (uint8_t i = 1; i < warity && nwp < MAX_FN_ARITY; i++)
+                    wparams[nwp++] = emit_fn_arg_type_from_type(wbnd->type, i);
+                spill = ensure_float_carrier_shim(
+                    ctx, wn, wres, wparams, nwp,
+                    e->as.poly_wrap_.carrier_erased_arg_mask,
+                    e->as.poly_wrap_.carrier_erased_result);
             }
             /* E2 (fat-closure fn-value threading): when the wrapped inner fn is
              * EFFECTFUL (CPS-colored -- it performs or calls a colored fn), emit a

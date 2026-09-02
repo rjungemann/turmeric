@@ -1,0 +1,33 @@
+;; erased-reader-float32-record-monomorph -- the float32 residue of
+;; docs/archive/erased-generic-field-read-overruns-subword-monomorph-box.md.
+;;
+;; A type-parameter field instantiated at float32 stays a 4-byte `float` in the
+;; monomorph (an int64 slot would VALUE-convert on every implicit store), so the
+;; monomorph pads it to the word instead.  The erased generic reader `run-id`
+;; reads the slot as int64 and recovers the float from its FIRST four bytes
+;; (`tur_sc_f32_from_bits`, a memcpy) -- byte position, not value -- so the pad
+;; keeps that read inside the aggregate on any endianness.  Before the pad it
+;; overran a 4-byte box (ASan heap-buffer-overflow).
+;;
+;; The second half (docs/archive/history/erased-fn-sink-float-wrapper-carrier-
+;; mismatch.md): `keep-f32` is boxed by a poly wrapper that carries the float
+;; NATIVELY (xmm0), but the erased `fmap` instance invokes `g` through the int64
+;; carrier cast.  The pack site bridges the erased positions through their bits
+;; (`__tur_fltcarrier_*`).  VALUES are asserted, including a negative with a
+;; fractional part.  No inline C.
+(defstruct Identity :copy [a] (wrapped : a))
+(defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x))
+(defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+(defn keep-f32 [v : float32] : float32 v)
+(defn poly-f32 [^f] [^Functor f x : (f float32)] : (f float32) (fmap x keep-f32))
+(defn use-f32 [g (forall [(f :: * -> *)] [(Functor f)] (-> (f float32) (f float32)))
+               v : float32] : float32
+  (run-id (g (mk-id v))))
+
+(defn main [] : int
+  (println (use-f32 poly-f32 2.5f32))     ; 2.5
+  (println (use-f32 poly-f32 -7.25f32))   ; -7.25
+  0)
