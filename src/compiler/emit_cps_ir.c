@@ -1478,12 +1478,73 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
 /* Collect the scalar source captures of `body` (excluding the value param
  * `exclude`).  Returns true and fills `cs` when every capture is collectable;
  * false means the zero-capture fallback must be kept. */
+/* cps-while-native (cell-carried vars): the enclosing loop helper's
+ * loop-INVARIANT extra params (emit_loop's `inv`) while its body emits.  A
+ * lifted frame inside the body that carries the back-edge (CT_CONTINUE)
+ * re-enters the helper with those names appended (emit_continue), so they
+ * must ride the frame's env even though the frame's own term never mentions
+ * them.  NULL outside a loop body. */
+static const CapSet *g_loop_inv;
+
+static bool term_has_continue(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_CONTINUE: return true;
+        case CT_LETVAL:  return term_has_continue(t->as.letval.body);
+        case CT_LETPRIM: return term_has_continue(t->as.letprim.body);
+        case CT_LETCALL: return term_has_continue(t->as.letcall.body);
+        case CT_LETRAW:  return term_has_continue(t->as.letraw.body);
+        case CT_LETCONT: return term_has_continue(t->as.letcont.jbody)
+                             || term_has_continue(t->as.letcont.body);
+        case CT_IF:      return term_has_continue(t->as.if_.then_)
+                             || term_has_continue(t->as.if_.else_);
+        case CT_MATCH:   for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                             if (term_has_continue(t->as.match.arms[i].body)) return true;
+                         return false;
+        case CT_RESET:   return term_has_continue(t->as.reset.delim)
+                             || term_has_continue(t->as.reset.body);
+        case CT_SHIFT:   return term_has_continue(t->as.shift.body);
+        case CT_HANDLE:
+            if (term_has_continue(t->as.handle.delim) || term_has_continue(t->as.handle.body))
+                return true;
+            for (uint32_t i = 0; i < t->as.handle.n_cases; i++)
+                if (term_has_continue(t->as.handle.cases[i].case_body)) return true;
+            return false;
+        case CT_PERFORM: return term_has_continue(t->as.perform.body);
+        case CT_AWAIT:   return term_has_continue(t->as.await.body);
+        case CT_RESUME:  return term_has_continue(t->as.resume.body);
+        case CT_CLONEABLE: return term_has_continue(t->as.cloneable.body);
+        case CT_CALLCC:  return term_has_continue(t->as.callcc.body);
+        default: return false;
+    }
+}
+
 static bool collect_caps(const CTerm *body, uint32_t exclude, CapSet *cs) {
     uint32_t bound[CC_MAX_BOUND];
     cs->n = 0; cs->ok = true;
     g_cap_single_shot = true;   /* a reset/handle/perform continuation or shift body */
     collect_caps_rec(body, exclude, bound, 0, cs);
     g_cap_single_shot = false;
+    if (cs->ok && g_loop_inv && g_loop_inv->n > 0 && term_has_continue(body)) {
+        for (int i = 0; i < g_loop_inv->n && cs->ok; i++) {
+            bool dup = false;
+            for (int k = 0; k < cs->n; k++) {
+                if (g_loop_inv->b[i] ? (cs->b[k] == g_loop_inv->b[i])
+                                     : (!cs->b[k] && cs->cvid[k] == g_loop_inv->cvid[i]))
+                    { dup = true; break; }
+            }
+            if (dup) continue;
+            if (cs->n >= CC_MAX_CAPS) { cs->ok = false; break; }
+            cs->b[cs->n] = g_loop_inv->b[i];
+            cs->cvname[cs->n] = g_loop_inv->cvname[i];
+            cs->cvid[cs->n] = g_loop_inv->cvid[i];
+            cs->ty[cs->n] = g_loop_inv->ty[i];
+            cs->type[cs->n] = g_loop_inv->type[i];
+            cs->polyfn[cs->n] = g_loop_inv->polyfn[i];
+            cs->owning[cs->n] = false;
+            cs->n++;
+        }
+    }
     return cs->ok;
 }
 
@@ -1694,7 +1755,12 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
          * CT_LOOP's internal joins are a separate scope (checked when its own body
          * is admitted).  Neither leaves an outer join open here. */
         case CT_CONTINUE: return true;
-        case CT_LOOP:     return true;
+        case CT_LOOP:
+            if (t->as.loop.result_kont.kind == KK_VAR) {
+                for (int i = 0; i < nd; i++) if (def[i] == t->as.loop.result_kont.id) return true;
+                return false;
+            }
+            return true;
         default: return false;
     }
 }
@@ -2263,7 +2329,19 @@ static bool letraw_ok(const CTerm *t) {
 /* Recursively check that every node lies in the C1 core subset.  Does not
  * consult the emittable set -- the cps->cps join clause is handled separately
  * by the fixpoint (needs_heap_join). */
+static bool term_core_ok_impl(const CTerm *t);
+/* TUR_TRACE_CORE=1: print the kind of every node the structural core check
+ * rejects, innermost first -- the eviction trace's BODY-STRUCT-CORE names the
+ * function, this names the form. */
 static bool term_core_ok(const CTerm *t) {
+    bool ok = term_core_ok_impl(t);
+    if (!ok && t && getenv("TUR_TRACE_CORE"))
+        fprintf(stderr, "[CORE-FAIL] kind=%d%s\n", (int)t->kind,
+                t->kind == CT_UNSUPPORTED && t->as.unsupported.why
+                    ? t->as.unsupported.why : "");
+    return ok;
+}
+static bool term_core_ok_impl(const CTerm *t) {
     if (!t) return false;
     switch (t->kind) {
         case CT_APPCONT:
@@ -2390,8 +2468,28 @@ static bool term_core_ok(const CTerm *t) {
                     for (uint32_t pi = 0; pi < c->n_params; pi++)
                         if (!slot_ok_t(&c->params[pi]->type, c->params[pi]->type.kind))
                             return false;
-                if (!handle_case_ok(c->case_body)) return false;
-                if (!collect_caps_case(c->case_body, c, &ccs)) return false;
+                if (!handle_case_ok(c->case_body)) {
+                    if (getenv("TUR_TRACE_CORE")) {
+                        fprintf(stderr, "[CORE-FAIL] handle case %u: handle_case_ok; body kinds:", ci);
+                        for (const CTerm *w = c->case_body; w; ) {
+                            fprintf(stderr, " %d", (int)w->kind);
+                            switch (w->kind) {
+                                case CT_LETVAL: w = w->as.letval.body; break;
+                                case CT_LETPRIM: w = w->as.letprim.body; break;
+                                case CT_LETCALL: w = w->as.letcall.body; break;
+                                case CT_LETRAW: w = w->as.letraw.body; break;
+                                case CT_LETCONT: fprintf(stderr, "(jbody:"); for (const CTerm *v = w->as.letcont.jbody; v; ) { fprintf(stderr, " %d", (int)v->kind); if (v->kind == CT_LETVAL) v = v->as.letval.body; else if (v->kind == CT_LETPRIM) v = v->as.letprim.body; else if (v->kind == CT_LETCALL) v = v->as.letcall.body; else if (v->kind == CT_LETRAW) v = v->as.letraw.body; else v = NULL; } fprintf(stderr, ")"); w = w->as.letcont.body; break;
+                                default: w = NULL;
+                            }
+                        }
+                        fprintf(stderr, "\n");
+                    }
+                    return false;
+                }
+                if (!collect_caps_case(c->case_body, c, &ccs)) {
+                    if (getenv("TUR_TRACE_CORE")) fprintf(stderr, "[CORE-FAIL] handle case %u: collect_caps_case\n", ci);
+                    return false;
+                }
             }
             return true;
         }
@@ -3293,6 +3391,8 @@ static bool jbody_has_delim(const CTerm *t) {
  * the join parameter is not in scope either), so such a join is reified as a
  * DK resume-frame instead -- see emit_escaping_join.  Over-approximating
  * "lifted" is safe: the frame lowering is valid from the parent frame too. */
+static bool letcont_is_heap_join(const CTerm *t);
+static bool letcont_is_escaping_join(const CTerm *t);
 static bool join_escapes_lifted_rec(const CTerm *t, uint32_t jid, bool lifted) {
     if (!t) return false;
     switch (t->kind) {
@@ -3306,9 +3406,13 @@ static bool join_escapes_lifted_rec(const CTerm *t, uint32_t jid, bool lifted) {
         case CT_LETPRIM: return join_escapes_lifted_rec(t->as.letprim.body, jid, lifted);
         case CT_LETCALL: return join_escapes_lifted_rec(t->as.letcall.body, jid, lifted);
         case CT_LETRAW:  return join_escapes_lifted_rec(t->as.letraw.body, jid, lifted);
-        case CT_LETCONT:
-            return join_escapes_lifted_rec(t->as.letcont.jbody, jid, lifted)
+        case CT_LETCONT: {
+            /* A nested join that is itself reified (heap or escaping) lifts its
+             * jbody into a frame, so a delivery to `jid` from there is lifted. */
+            bool jl = lifted || letcont_is_heap_join(t) || letcont_is_escaping_join(t);
+            return join_escapes_lifted_rec(t->as.letcont.jbody, jid, jl)
                 || join_escapes_lifted_rec(t->as.letcont.body, jid, lifted);
+        }
         case CT_IF:
             return join_escapes_lifted_rec(t->as.if_.then_, jid, lifted)
                 || join_escapes_lifted_rec(t->as.if_.else_, jid, lifted);
@@ -3332,7 +3436,10 @@ static bool join_escapes_lifted_rec(const CTerm *t, uint32_t jid, bool lifted) {
         }
         case CT_CLONEABLE: return join_escapes_lifted_rec(t->as.cloneable.body, jid, true);
         case CT_CALLCC:    return join_escapes_lifted_rec(t->as.callcc.body, jid, true);
-        case CT_LOOP:      return join_escapes_lifted_rec(t->as.loop.body, jid, true);
+        case CT_LOOP:
+            /* The helper's exit delivers to result_kont from its own function. */
+            return (t->as.loop.result_kont.kind == KK_VAR && t->as.loop.result_kont.id == jid)
+                || join_escapes_lifted_rec(t->as.loop.body, jid, true);
         default: return false;
     }
 }
@@ -3340,6 +3447,11 @@ static bool letcont_is_escaping_join(const CTerm *t) {
     return !letcont_is_heap_join(t)
         && join_escapes_lifted_rec(t->as.letcont.body, t->as.letcont.j.id, false);
 }
+
+/* Escaping joins enclosing the term needs_heap_join is currently walking (a
+ * nested escaping join may deliver to one of these through its chain). */
+static uint32_t g_esc_joins[64];
+static int      g_esc_join_n;
 
 static bool needs_heap_join(const CTerm *t) {
     if (!t) return false;
@@ -3395,15 +3507,25 @@ static bool needs_heap_join(const CTerm *t) {
             }
             if (letcont_is_escaping_join(t)) {
                 /* The join is reified as a resume-frame (emit_escaping_join):
-                 * its body must capture only slot values and must not itself
-                 * deliver to an OUTER join -- the same closedness the heap join
-                 * above requires.  Otherwise evict, as before. */
+                 * its body must capture only slot values and must not deliver
+                 * to an OUTER join -- except an outer ESCAPING join, which the
+                 * frame reaches through its downstream chain (the outer frame
+                 * was cur_k when this one was spliced).  Otherwise evict. */
                 CapSet _ecs;
                 if (!collect_caps(t->as.letcont.jbody, t->as.letcont.param.id, &_ecs))
                     return true;
                 uint32_t _edef[CC_MAX_BOUND];
-                if (!joins_closed_rec(t->as.letcont.jbody, _edef, 0))
+                int _end = 0;
+                for (int i = 0; i < g_esc_join_n && _end < CC_MAX_BOUND; i++)
+                    _edef[_end++] = g_esc_joins[i];
+                if (!joins_closed_rec(t->as.letcont.jbody, _edef, _end))
                     return true;
+                if (needs_heap_join(t->as.letcont.jbody)) return true;
+                bool pushed = g_esc_join_n < 64;
+                if (pushed) g_esc_joins[g_esc_join_n++] = t->as.letcont.j.id;
+                bool r = needs_heap_join(t->as.letcont.body);
+                if (pushed) g_esc_join_n--;
+                return r;
             }
             return needs_heap_join(t->as.letcont.jbody)
                 || needs_heap_join(t->as.letcont.body);
@@ -5357,6 +5479,58 @@ static void case_mut_scan(const CTerm *t, uint32_t *bound, int nb) {
     #undef MUT_B
 }
 
+/* perform-inside-loop-has-no-lowering (cell-carried loop vars): inside a
+ * CT_LOOP body, a delegated `(set! m v)` whose target is an enclosing `^mut`
+ * that is NOT a loop parameter is a var build_loop classified as CELL-carried
+ * (assigned conditionally or more than once per iteration).  Promote it to the
+ * B7 shared heap cell so the helper, every lifted frame inside it, and the code
+ * after the loop read and write one location.  A mutable bound INSIDE the loop
+ * body (a per-iteration local) is left alone. */
+static void loop_cell_scan(const CTerm *t, uint32_t *bound, int nb) {
+    if (!t || nb >= CC_MAX_BOUND) return;
+    #define LCS_BIND(x, body) do { bound[nb] = (x).id; loop_cell_scan((body), bound, nb + 1); } while (0)
+    switch (t->kind) {
+        case CT_LETRAW: {
+            const Binding *tgt = set_mut_target(t->as.letraw.e);
+            if (tgt && tgt->is_mut && !tgt->is_global && !is_byref_mut(tgt)
+                && !is_loop_carried(tgt) && g_byref_muts_n < 64) {
+                bool inner = false;
+                for (int i = 0; i < nb; i++) if (bound[i] == tgt->id) { inner = true; break; }
+                if (!inner) g_byref_muts[g_byref_muts_n++] = tgt;
+            }
+            LCS_BIND(t->as.letraw.x, t->as.letraw.body); return;
+        }
+        case CT_LETVAL:  LCS_BIND(t->as.letval.x, t->as.letval.body); return;
+        case CT_LETPRIM: LCS_BIND(t->as.letprim.x, t->as.letprim.body); return;
+        case CT_LETCALL: LCS_BIND(t->as.letcall.x, t->as.letcall.body); return;
+        case CT_LETCONT:
+            loop_cell_scan(t->as.letcont.body, bound, nb);
+            LCS_BIND(t->as.letcont.param, t->as.letcont.jbody); return;
+        case CT_IF:      loop_cell_scan(t->as.if_.then_, bound, nb);
+                         loop_cell_scan(t->as.if_.else_, bound, nb); return;
+        case CT_MATCH:   for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                             loop_cell_scan(t->as.match.arms[i].body, bound, nb);
+                         return;
+        case CT_RESET:   loop_cell_scan(t->as.reset.delim, bound, nb);
+                         LCS_BIND(t->as.reset.x, t->as.reset.body); return;
+        case CT_SHIFT:   loop_cell_scan(t->as.shift.body, bound, nb); return;
+        case CT_HANDLE:
+            loop_cell_scan(t->as.handle.delim, bound, nb);
+            loop_cell_scan(t->as.handle.body, bound, nb);
+            for (uint32_t i = 0; i < t->as.handle.n_cases; i++)
+                loop_cell_scan(t->as.handle.cases[i].case_body, bound, nb);
+            return;
+        case CT_PERFORM: LCS_BIND(t->as.perform.x, t->as.perform.body); return;
+        case CT_AWAIT:   LCS_BIND(t->as.await.x, t->as.await.body); return;
+        case CT_RESUME:  LCS_BIND(t->as.resume.x, t->as.resume.body); return;
+        case CT_CLONEABLE: loop_cell_scan(t->as.cloneable.body, bound, nb); return;
+        case CT_CALLCC:  LCS_BIND(t->as.callcc.x, t->as.callcc.body); return;
+        case CT_LOOP:    loop_cell_scan(t->as.loop.body, bound, nb); return;
+        default: return;
+    }
+    #undef LCS_BIND
+}
+
 /* Populate g_byref_muts by scanning the whole function term for a delegated
  * `(set! m k)` continuation store. */
 static void byref_scan(const CTerm *t) {
@@ -5401,7 +5575,11 @@ static void byref_scan(const CTerm *t) {
         case CT_RESUME:  byref_scan(t->as.resume.body); return;
         case CT_CLONEABLE: byref_scan(t->as.cloneable.body); return;
         case CT_CALLCC:  byref_scan(t->as.callcc.body); return;
-        case CT_LOOP:    byref_scan(t->as.loop.body); return;
+        case CT_LOOP: {
+            uint32_t lb[CC_MAX_BOUND];
+            loop_cell_scan(t->as.loop.body, lb, 0);
+            byref_scan(t->as.loop.body); return;
+        }
         default: return;
     }
 }
@@ -7294,9 +7472,17 @@ static void emit_loop(CE *ce, const CTerm *t) {
      * never reads.  This is what lets a `while` live inside a handler clause:
      * the case helper returns the loop helper's return, and dk_perform routes
      * it exactly as it routes a straight-line case value. */
+    /* A KK_VAR result kont is an ESCAPING join (the loop is followed by more
+     * statements, reified as a resume-frame by emit_escaping_join): thread
+     * that frame as the helper's kont; the exit's KK_RET delivery runs it. */
+    const char *join_frame = NULL;
+    if (t->as.loop.result_kont.kind == KK_VAR) {
+        for (int i = ce->n_hjoins - 1; i >= 0; i--)
+            if (ce->hjoins[i].id == t->as.loop.result_kont.id) { join_frame = ce->hjoins[i].frame; break; }
+    }
     bool ret_direct = (t->as.loop.result_kont.kind == KK_PROMPT)
                           ? ce->shift_mode
-                          : ce->ret_mode;
+                          : (t->as.loop.result_kont.kind == KK_RET ? ce->ret_mode : false);
     CE hc = *ce;
     hc.out = &tmp;
     hc.indent = 4;
@@ -7310,9 +7496,15 @@ static void emit_loop(CE *ce, const CTerm *t) {
     hc.case_tail_resume = false;
     /* The exit arm delivers the live-after var to the helper's KK_RET; its
      * crossing type matches what the caller's continuation expects. */
-    hc.ret_ty = (t->as.loop.result_kont.kind == KK_PROMPT) ? ce->cur_ty : ce->ret_ty;
+    hc.ret_ty = (t->as.loop.result_kont.kind == KK_PROMPT) ? ce->cur_ty
+              : (t->as.loop.result_kont.kind == KK_RET ? ce->ret_ty : NULL);
+    /* Frames lifted out of the body that take the back-edge need the
+     * invariants in their env (collect_caps merges g_loop_inv). */
+    const CapSet *saved_inv = g_loop_inv;
+    g_loop_inv = (inv.n > 0) ? &inv : NULL;
     emit_binder_decls(&hc, t->as.loop.body);
     emit_term(&hc, t->as.loop.body);
+    g_loop_inv = saved_inv;
     buf_putc(&tmp, '\0');
 
     /* 3. Emit the helper definition. */
@@ -7342,7 +7534,8 @@ static void emit_loop(CE *ce, const CTerm *t) {
     /* ret_direct: the helper returns its exit value and never reads its kont
      * param -- see the mode note above. */
     const char *thread = ret_direct ? "NULL"
-        : (t->as.loop.result_kont.kind == KK_PROMPT) ? ce->cur_k : "__kont";
+        : (t->as.loop.result_kont.kind == KK_PROMPT) ? ce->cur_k
+        : join_frame ? join_frame : "__kont";
     if (np && inv_names)
         ce_line(ce, "return %s__cps(%s, %s, %s); /* cps-while-native loop entry */", lname, argv, inv_names, thread);
     else if (np)
@@ -8997,7 +9190,14 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
                 if (inline_c)          { cat = "SIG-INLINE-C"; }  /* permanent: inline-C can't thread a DK cont */
                 else if (u) { cat = "BODY-UNSUPPORTED"; why = u->as.unsupported.why ? u->as.unsupported.why : "?"; }
                 else if (perm_tainted) { cat = "SIG-TAINT"; }
-                else   cat = "BODY-STRUCT-OR-TAINT";
+                else {
+                    /* Say which of the two it is: the structural core check
+                     * (term_core_ok), the heap-join / escaping-join rules
+                     * (needs_heap_join), or neither -- pure effect taint. */
+                    bool core = se ? term_core_ok(se->term) : false;
+                    bool hj = se ? needs_heap_join(se->term) : false;
+                    cat = !core ? "BODY-STRUCT-CORE" : hj ? "BODY-STRUCT-JOIN" : "BODY-TAINT";
+                }
             }
             if (getenv("TUR_TRACE_EVICT")) {
                 /* Stage F (v2): an `eff=1` column marks a fn that performs or

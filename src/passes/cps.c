@@ -623,8 +623,16 @@ static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
                  * spuriously coloring an otherwise-pure function, which then
                  * SIG-REJECTs and cascades its callers onto the fiber path (the
                  * sized-bitvec/matrix `main`s tail-call such a contract helper). */
+                /* perform-inside-loop-has-no-lowering (examples/snake): an
+                 * `extern-c` callee is the same leaf -- a foreign C function
+                 * with no Turmeric control op in it.  Treating it as an
+                 * indirect call colored every helper that touched the FFI
+                 * (`render-frame`, `show-game-over`), and a colored helper
+                 * called from a handler clause is a heap join the clause
+                 * grammar does not admit, so the whole game loop evicted. */
                 bool callee_inline_c = e->as.call_.fn_binding
-                    && e->as.call_.fn_binding->body_is_inline_c;
+                    && (e->as.call_.fn_binding->body_is_inline_c
+                        || e->as.call_.fn_binding->is_extern_c);
                 if (e->as.call_.ctor == NULL && !callee_inline_c)
                     self->has_indirect = true;
             }

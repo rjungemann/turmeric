@@ -51,6 +51,10 @@ typedef struct CpsB {
     const Binding *loop_vars[16];
     CVar           loop_nexts[16];
     uint32_t       n_loop;
+    /* cps-while-native (cell-carried vars): >0 while lowering a loop body.
+     * Nested loops are detected here rather than by n_loop, which is 0 for a
+     * loop whose every carried var is a cell. */
+    uint32_t       loop_depth;
     /* cps-while-native read-after-set: a forward pre-pass over the straight-line
      * loop body records, by Expr-node identity, each carried-var READ that occurs
      * AFTER that var's `set!` this iteration -- such a read must resolve to the
@@ -2963,27 +2967,37 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     Expr *body = e->as.while_.body;
     if (!cond || !body) return NULL;
 
-    /* The continuation must be a trivial delivery of a single loop-carried var to
-     * an enclosing continuation (KK_RET / KK_PROMPT) -- the loop's live-after
-     * value.  Anything richer is out of the conservative subset. */
-    if (rest->kind != CT_APPCONT) return NULL;
-    CKont rk = rest->as.appcont.kont;
-    if (rk.kind != KK_RET && rk.kind != KK_PROMPT) return NULL;
-    /* perform-inside-loop-has-no-lowering: a loop with NOTHING live after it
-     * -- the while is the function's (or the prompt's) last form, so the
-     * continuation delivers the while's own unit result (its CVar `x`, or a
-     * unit literal) -- is the same shape with a unit exit.  Every event loop
-     * and "perform per item" traversal is written this way. */
+    /* The continuation is a trivial delivery of a single loop-carried var to an
+     * enclosing continuation (KK_RET / KK_PROMPT) -- the loop's live-after
+     * value -- or, perform-inside-loop-has-no-lowering, a loop with NOTHING
+     * live after it (the while is the function's or the prompt's last form, so
+     * the continuation delivers the while's own unit result: its CVar `x`, or
+     * a unit literal): a unit exit.  Anything richer -- the loop is followed by
+     * more statements -- is reified as a JOIN whose body is that continuation
+     * (`join_mode` below): the helper delivers unit to the join, which the
+     * emitter lifts as an escaping-join resume-frame, and every carried var
+     * becomes a shared cell so the code after the loop reads its final value. */
     const Binding *result_bd = NULL;
     bool unit_exit = false;
-    if (rest->as.appcont.v.kind == CA_VAR && rest->as.appcont.v.var) {
-        result_bd = rest->as.appcont.v.var;
-    } else if (rest->as.appcont.v.kind == CA_UNIT ||
-               (rest->as.appcont.v.kind == CA_CVAR &&
-                rest->as.appcont.v.cvar_id == x.id)) {
-        unit_exit = true;
+    bool join_mode = false;
+    CKont rk;
+    if (rest->kind == CT_APPCONT &&
+        (rest->as.appcont.kont.kind == KK_RET || rest->as.appcont.kont.kind == KK_PROMPT) &&
+        ((rest->as.appcont.v.kind == CA_VAR && rest->as.appcont.v.var) ||
+         rest->as.appcont.v.kind == CA_UNIT ||
+         (rest->as.appcont.v.kind == CA_CVAR && rest->as.appcont.v.cvar_id == x.id))) {
+        rk = rest->as.appcont.kont;
+        if (rest->as.appcont.v.kind == CA_VAR) result_bd = rest->as.appcont.v.var;
+        else unit_exit = true;
     } else {
-        return NULL;
+        /* A control-free loop followed by statements keeps its whole-form
+         * delegation; the join reification is for loops that perform. */
+        if (safe_to_delegate(b, e)) return NULL;
+        join_mode = true;
+        unit_exit = true;
+        CVar j = fresh_cvar(b, x.type);
+        j.name = arena_strdup(b->a, "j", 1);
+        rk = kont_var(j);
     }
 
     /* Loop-carried vars = the ^mut set! targets (excluding loop-body locals). */
@@ -2991,23 +3005,63 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     loop_collect_let_binders(body, locals, &n_locals, 64);
     const Binding *vars[16]; uint32_t nv = 0;
     if (!loop_collect_carried(body, locals, n_locals, vars, &nv, 16)) return NULL;
-    if (nv == 0 || nv > 16) return NULL;
-
-    /* The delivered result var must itself be loop-carried (it is the loop's
-     * output; a non-carried result is not this shape). */
-    if (!unit_exit && loop_idx(vars, nv, result_bd) < 0) return NULL;
+    if (nv > 16) return NULL;
+    if (b->loop_depth) return NULL;   /* nested loops: out of subset */
 
     /* Soundness guard: reads resolve to loop-entry versions; unconditional single
      * set per carried var. */
     uint32_t mask = 0;
-    if (!loop_guard(body, vars, nv, &mask, false)) return NULL;
-    for (uint32_t i = 0; i < nv; i++)
-        if (!(mask & (1u << i))) return NULL;   /* every carried var set once */
+    bool strict = loop_guard(body, vars, nv, &mask, false);
+    for (uint32_t i = 0; strict && i < nv; i++)
+        if (!(mask & (1u << i))) strict = false;   /* every carried var set once */
+
+    /* perform-inside-loop-has-no-lowering (the snake residue): a var the strict
+     * guard rejects -- assigned inside an `if`/`match` arm, more than once per
+     * iteration, or read in a branch after its set -- has no sound home in the
+     * helper's parameters, whose reads resolve to the loop-entry version.  Give
+     * it the B7 by-reference CELL instead of evicting the loop: its set!s lower
+     * as ordinary delegated `(set! m v)` (a write through the shared cell) and
+     * its reads deref the cell, so every frame -- the helper, a lifted perform
+     * continuation, an escaping join -- sees one location.  The emitter promotes
+     * exactly these (a letraw set! in a loop body whose target is not a loop
+     * param: byref_scan's CT_LOOP case).  Vars the guard accepts stay params, so
+     * the strict shape's codegen is unchanged. */
+    const Binding *cells[16]; uint32_t ncell = 0;
+    if (join_mode) {
+        /* The code after the loop reads the carried vars by name; a param
+         * would leave the outer local at its entry value.  Cells, all of them. */
+        for (uint32_t i = 0; i < nv; i++) cells[ncell++] = vars[i];
+        nv = 0;
+        strict = true;
+    }
+    if (!strict) {
+        const Binding *keep[16]; uint32_t nk = 0;
+        for (uint32_t i = 0; i < nv; i++) {
+            uint32_t m = 0;
+            const Binding *one = vars[i];
+            if (loop_guard(body, &one, 1, &m, false) && (m & 1u)) keep[nk++] = vars[i];
+            else cells[ncell++] = vars[i];
+        }
+        for (uint32_t i = 0; i < nk; i++) vars[i] = keep[i];
+        nv = nk;
+        /* The kept set must still pass jointly (a kept var read in a branch
+         * after another kept var's set, ...). */
+        mask = 0;
+        if (!loop_guard(body, vars, nv, &mask, false)) return NULL;
+        for (uint32_t i = 0; i < nv; i++)
+            if (!(mask & (1u << i))) return NULL;
+    }
+
+    /* The delivered result var must itself be loop-carried (a param, or a cell
+     * whose value the exit reads through the cell); a non-carried result is not
+     * this shape. */
+    if (!unit_exit && loop_idx(vars, nv, result_bd) < 0 &&
+        loop_idx(cells, ncell, result_bd) < 0) return NULL;
 
     /* Params carry their source Binding so in-body reads name the param via
      * name_for_binding; inits are the entry values (the vars as currently bound). */
-    CVar *params = arena_alloc(b->a, nv * sizeof(CVar));
-    CAtom *inits = arena_alloc(b->a, nv * sizeof(CAtom));
+    CVar *params = arena_alloc(b->a, (nv ? nv : 1) * sizeof(CVar));
+    CAtom *inits = arena_alloc(b->a, (nv ? nv : 1) * sizeof(CAtom));
     for (uint32_t i = 0; i < nv; i++) {
         params[i] = cvar_of_binding(vars[i]);
         CAtom a; memset(&a, 0, sizeof a);
@@ -3017,12 +3071,12 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
 
     /* Pre-create the $next CVars (stable identity -> build-order independent). */
     uint32_t saved_n_loop = b->n_loop;
-    if (saved_n_loop != 0) return NULL;   /* nested loops: out of subset */
     for (uint32_t i = 0; i < nv; i++) {
         b->loop_vars[i]  = vars[i];
         b->loop_nexts[i] = fresh_cvar(b, &vars[i]->type);
     }
     b->n_loop = nv;
+    b->loop_depth++;
 
     /* Read-after-set pre-pass: record straight-line carried-var reads that follow
      * that var's set! so atomize resolves them to `$next` (see loop_rs_scan). */
@@ -3035,6 +3089,7 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
 
     b->rs_n = saved_rs_n;       /* drop this loop's read-set entries */
     b->n_loop = saved_n_loop;   /* restore (no nesting) */
+    b->loop_depth--;
 
     /* Exit arm: deliver the live-after var (as its param) -- or unit, when
      * nothing is live after the loop -- to the helper's KK_RET. */
@@ -3065,6 +3120,15 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     t->as.loop.inits = inits;
     t->as.loop.body = loopbody;
     t->as.loop.result_kont = rk;
+    if (join_mode) {
+        /* letcont j(x) = rest in LOOP -- the loop's exit delivers unit to j. */
+        CTerm *lc = new_term(b, CT_LETCONT);
+        CVar jv; memset(&jv, 0, sizeof jv);
+        jv.id = rk.id; jv.name = "j"; jv.ty = rk.ty; jv.type = x.type;
+        lc->as.letcont.j = jv; lc->as.letcont.param = x;
+        lc->as.letcont.jbody = rest; lc->as.letcont.body = t;
+        return lc;
+    }
     return t;
 }
 
@@ -3200,6 +3264,22 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         t->as.appcont.kont = kont;
         t->as.appcont.v = atom_of(e);
         return t;
+    }
+    /* perform-inside-loop-has-no-lowering: a NON-structural form in loop-tail
+     * position (a call, a set! of a cell-carried var, a handle, a match, ...).
+     * The arms below that deliver `(kont, x)` have no KK_LOOP spelling -- an
+     * APPCONT to the loop kont reached the emitter as a join jump -- so bind the
+     * form's value and take the back-edge instead.  The structural forms
+     * (do/let/if/return) thread the loop kont into their own tails. */
+    if (kont.kind == KK_LOOP) {
+        switch (e->kind) {
+            case EX_DO: case EX_LET: case EX_LETREC: case EX_IF: case EX_RETURN:
+                break;
+            default: {
+                CVar x = fresh_cvar(b, &e->type);
+                return cps_bind(b, e, x, make_continue(b));
+            }
+        }
     }
     if (is_delegatable_owning(e) || is_delegatable_struct(e) || is_delegatable_value(e)) {
         /* bind the delegated op's result, then deliver it to the continuation. */
@@ -3675,9 +3755,11 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
             ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            /* A control-free loop keeps its whole-form delegation (as the
+             * default arm gave it); only a loop that performs needs the helper. */
+            if (safe_to_delegate(b, e)) return build_letraw(b, e, x, ac);
             CTerm *loop = build_loop(b, e, x, ac);
             if (loop) return loop;
-            if (safe_to_delegate(b, e)) return build_letraw(b, e, x, ac);
             return unsupported_form(b, e);
         }
         default: {

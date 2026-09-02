@@ -30,10 +30,10 @@ build it and diff. `minikanren` is a pure computation and would work today.
 already covers exactly this case.
 
 **A build-only check would already pay for itself**, before any output diffing:
-`examples/snake` does not currently compile. It fails on
-[perform-inside-loop-has-no-lowering](perform-inside-loop-has-no-lowering.md),
-which has been open since 2026-08-21 and names snake as the program it was
-found on. A shipped example has been un-buildable for days without anything
+`examples/snake` did not compile from 2026-08-21 until 2026-09-02. It failed on
+[perform-inside-loop-has-no-lowering](../archive/perform-inside-loop-has-no-lowering.md),
+which named snake as the program it was found on and is now resolved (`tur
+check` passes). A shipped example was un-buildable for days without anything
 saying so, which is the same gap as the silent no-op wearing a different
 face.
 

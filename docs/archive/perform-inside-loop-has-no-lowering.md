@@ -1,5 +1,8 @@
 # `perform` reached from inside a `while` has no lowering
 
+**Status: RESOLVED 2026-09-02** -- see the Progress section and the Resolution
+at the end; `examples/snake` passes `tur check`.
+
 **Severity: medium** (expressiveness hole with a clear diagnostic, no silent
 wrong answer). Found 2026-08-21 while working
 `docs/reported/examples-tree-does-not-run.md` -- it is what
@@ -122,18 +125,54 @@ function and a loop, resuming). Guides updated: effects-system-guide gains
 "Performs inside loops and conditionals"; effects-vs-monads no longer
 prescribes the hoist.
 
-**Still open -- `examples/snake` itself.** Its loop assigns `tick` twice per
-iteration, once inside a `when` arm (`(set! tick (- tick MOVE_INTERVAL))`),
-and `loop_guard` rejects a conditional or repeated assignment of a
-loop-carried variable: the lowering resolves reads to the loop-entry version
-and writes one `$next` slot per variable, so a second or conditional write has
-no sound home. The fix direction is to carry such a variable in a shared cell
-(the B7 by-reference mechanism handler clauses already use) rather than in
-the helper's parameters, so reads and writes anywhere in the body -- lifted
-frames included -- see one location. Until then snake needs the
-restructuring the guide describes: compute the next `tick` into a `let` and
-assign once at the end of the body.
+**The snake residue, closed the same day.** Its loop assigns `tick` twice
+per iteration, once inside a `when` arm, and `loop_guard` rejects a
+conditional or repeated assignment of a loop-carried variable (the helper's
+parameters resolve reads to the loop-entry version and give each variable one
+`$next` slot). Four more pieces, each found by the next eviction:
 
-## Guides to update when fixed
+- **Cell-carried variables.** A variable the strict guard rejects is carried
+  in the B7 shared heap cell instead of evicting the loop (`build_loop`
+  classifies per variable; `byref_scan`'s CT_LOOP case promotes exactly the
+  delegated `set!` targets that are not loop params). Its `set!`s lower as
+  ordinary delegated writes through the cell and its reads deref it, so the
+  helper, every lifted frame inside it, and the code after the loop see one
+  location. Variables the guard accepts stay parameters, so the strict
+  shape's codegen is unchanged.
+- **A loop followed by more statements.** `build_loop` admitted only a
+  continuation that was a bare delivery. It now reifies any other
+  continuation as an escaping join (`letcont j(x) = rest in LOOP`, the loop
+  delivering unit to `j`), with every carried variable a cell so the code
+  after the loop reads its final value; `emit_loop` threads the join frame
+  as the helper's kont.
+- **Nested escaping joins.** A join reached from inside another escaping
+  join's frame is itself escaping (`join_escapes_lifted_rec` treats a
+  reified nested join's body as lifted), and its frame delivers to the outer
+  one through its own downstream chain; `needs_heap_join` seeds the
+  closedness check with the enclosing escaping joins.
+- **Back-edges from lifted frames.** A frame that takes the loop's back-edge
+  re-enters the helper with its loop-invariant extra arguments (the cell
+  pointer, a param read but never assigned), so `collect_caps` merges the
+  enclosing loop's invariants into such a frame's captures.
+- **A call in loop-tail position** (`(render-frame)` at the end of the body)
+  reached the emitter as a join jump; `cps_tail` now binds a non-structural
+  tail form under the loop kont and takes the back-edge.
 
-- docs/guides/effects-guide.md -- it does not currently state this limit.
+And one coloring fix that had nothing to do with loops: the coloring pass
+treated a call to an `extern-c` binding as an unresolved indirect call, so
+every helper touching the FFI (`render-frame`, `show-game-over`) was colored,
+and a colored helper called from the handler clause is a heap join the clause
+grammar does not admit. An `extern-c` callee is the same opaque-C leaf as an
+inline-C body and is now exempt.
+
+Pinned by `tests/fixtures/effect-perform-in-loop-conditional-set` (the snake
+loop: abortive and resuming, plus the loop-followed-by-statements form).
+`examples/snake/src/main.tur` passes `tur check`. `TUR_TRACE_CORE=1` names
+the form the structural check rejects; the eviction trace's
+`BODY-STRUCT-OR-TAINT` splits into `BODY-STRUCT-CORE`, `BODY-STRUCT-JOIN`
+and `BODY-TAINT`.
+
+## Guides updated
+
+- docs/guides/effects-system-guide.md -- "Performs inside loops and conditionals".
+- docs/guides/effects-vs-monads.md -- handler-clause restrictions no longer prescribe the hoist.

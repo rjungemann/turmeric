@@ -456,22 +456,24 @@ fine -- the code after the conditional runs exactly once per resume.
       (set! i (+ i 1)))))
 ```
 
-The lowering keeps loop-carried `^mut` state in the helper's parameters, and
-that is where its limits come from. A function evicts to the direct emitter,
-with a located error at the `perform`, when a loop:
+The lowering carries a loop's `^mut` state in the helper's parameters when a
+variable is assigned once and unconditionally, and in a shared cell otherwise
+(assigned inside an `if`/`match` arm, more than once per iteration, or read
+in a branch after its assignment), so the game-loop shape -- a tick
+accumulator decremented inside a `when` -- lowers as written. A loop followed
+by more statements that read the carried state is fine too. The limits that
+remain evict the function to the direct emitter, with a located error at the
+`perform`:
 
-- assigns a loop-carried `^mut` inside an `if`/`match` arm, or more than once
-  per iteration;
-- assigns a loop-carried `^mut` inside a `handle` body or clause that the loop
-  spans;
-- nests another `while` that also performs;
-- sits inside a handler clause and performs an effect handled further out
-  (hoisting the loop into a helper does not escape this one: the helper is
-  evicted with its caller).
+- a `while` nested inside a `while` that performs;
+- a conditional assignment whose value itself performs (`(when c (set! x
+  (perform ...)))` -- assign the performed value to a `let` first);
+- a loop that sits inside a handler clause and performs an effect handled
+  further out (hoisting the loop into a helper does not escape this one: the
+  helper is evicted with its caller).
 
-`TUR_TRACE_EVICT=1` prints which form evicted which function. The usual
-restructuring is to compute the next state into a fresh `let` binding and
-assign the carried variable once, unconditionally, at the end of the body.
+`TUR_TRACE_EVICT=1` prints which form evicted which function, and
+`TUR_TRACE_CORE=1` names the form the structural check rejected.
 
 ## Continuations (`call/cc`, `escape`)
 

@@ -667,10 +667,10 @@ one:
   payload instead (as the nondeterminism example above does).
 - Loops and conditionals in a clause are supported -- including a `while` that
   `resume`s per iteration (the multi-shot fold above). A `perform` from inside
-  a loop, in a clause or anywhere else, is supported too; what still evicts is
-  a loop that assigns a loop-carried `^mut` conditionally or more than once per
-  iteration (see "Performs inside loops and conditionals" in the effects
-  system guide, and `TUR_TRACE_EVICT=1` for the exact form).
+  a loop, in a clause or anywhere else, is supported too, including a loop that
+  assigns its carried `^mut` conditionally or more than once per iteration (see
+  "Performs inside loops and conditionals" in the effects system guide, and
+  `TUR_TRACE_EVICT=1` for the exact form when something still evicts).
 
 The second is a compiler limitation; the first and third are designed
 evictions with their own diagnostics.

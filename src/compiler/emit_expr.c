@@ -11306,14 +11306,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                       "function left the CPS backend's supported subset, and the "
                       "direct emitter cannot lower `perform`. Run with "
                       "TUR_TRACE_EVICT=1 to see which form evicted the function. "
-                      "Known unsupported shapes: a `while` that assigns a "
-                      "loop-carried `^mut` inside an `if`/`match` arm or more than "
-                      "once per iteration, nested `while` loops, a `set!` of a "
-                      "loop-carried variable inside a `handle` body, and a `while` "
-                      "that performs an outer-handled effect from inside a handler "
-                      "clause. Restructuring "
-                      "so the loop body returns a status and the effect is "
-                      "performed after the loop usually avoids them. This is a "
+                      "Known unsupported shapes: a `while` nested inside a `while` "
+                      "that performs, a `set!` whose value itself performs when the "
+                      "assignment is conditional, and a `while` that performs an "
+                      "outer-handled effect from inside a handler clause. "
+                      "Restructuring so the loop body returns a status and the "
+                      "effect is performed after the loop usually avoids them. This is a "
                       "compiler limitation, not a mistake in this expression.");
             return atom_nil();
         case EX_HANDLE:          return emit_effects_handle(ctx, body, e);
