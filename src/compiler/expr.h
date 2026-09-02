@@ -345,6 +345,12 @@ struct Binding {
      * self-recursion (the flag is read before it is set).  A false negative
      * is a status-quo leak, never a use-after-free. */
     bool          returns_fresh_sum_box;
+    /* RM1 (bind chains): the body's every value path is a fresh sum box OR a
+     * call through fn-typed parameter i (bit i set) -- `bind`'s `(k v)` arm.
+     * A call site is then fresh exactly when every masked argument is itself
+     * a fresh producer (call_returns_fresh_sum_box).  Zero when the body is
+     * unconditionally fresh (returns_fresh_sum_box) or not fresh at all. */
+    uint32_t      fresh_sum_via_param_mask;
     /* class-defn-constraint-not-discharged-at-call-site: backlink to the owning
      * FnDef's typeclass constraint set (`^Encode T`, or the `[(Encode T)]`
      * middle-vector form), or NULL for a binding with no constraints.  Stamped
@@ -1663,6 +1669,27 @@ const char *tur_stdlib_load_hint(const char *name);
  * name.  Drives TUR-W0042; see the table in elab_call.c for the membership
  * rule (deliberately-shadowable and arity-gated forms are excluded). */
 bool tur_name_is_reserved_special_form(const char *name);
+
+/* RM1: does this EX_CALL mint a fresh Option/Result box the caller owns?  A
+ * ctor, a callee flagged returns_fresh_sum_box, or a callee whose freshness
+ * rides its continuation parameters (fresh_sum_via_param_mask) with every such
+ * argument a fresh producer -- a closure literal whose body is fresh, or a
+ * defn so flagged.  Defined in elab_fns.c; shared with the emitter. */
+bool call_returns_fresh_sum_box(const Expr *call);
+/* The same question with the callee supplied by the caller -- the emitter's
+ * per-spec re-resolution of a dictionary dispatch hands in the instance
+ * method that actually runs. */
+bool call_returns_fresh_sum_box_as(const Expr *call, const Binding *fb);
+
+/* Is this call's callee the function its fn_binding names?  An ordinary call,
+ * yes.  A typeclass dispatch (dict_arg set) carries the RESOLVED instance
+ * method as fn_binding, but inside a constrained generic the receiver is the
+ * constrained type variable and the call goes through the dictionary
+ * parameter at emit -- fn_binding is then only a representative, and its
+ * masks / freshness say nothing about the instance that actually runs.
+ * Static exactly when the receiver's type head is a concrete nominal type or
+ * a scalar.  Defined in elab_fns.c. */
+bool call_dispatch_is_static(const Expr *call);
 
 /* Emit TUR-W0042 at `span` when `name` collides with a reserved special form.
  * `form_kind` names the definition form in the message ("defn", "defmacro"). */

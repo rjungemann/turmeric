@@ -1087,11 +1087,20 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                      * before asking whether this argument is `b`.  An rc-RETAIN
                      * reinterpret is a real retention and is left in place. */
                     const Expr *barg = arg;
-                    while (barg && (barg->kind == EX_ASCRIBE ||
-                                    (barg->kind == EX_REINTERPRET &&
-                                     !barg->as.reinterpret_.retain)))
-                        barg = (barg->kind == EX_ASCRIBE) ? barg->as.ascribe_.inner
-                                                          : barg->as.reinterpret_.expr;
+                    for (;;) {
+                        if (!barg) break;
+                        if (barg->kind == EX_ASCRIBE) barg = barg->as.ascribe_.inner;
+                        else if (barg->kind == EX_REINTERPRET && !barg->as.reinterpret_.retain)
+                            barg = barg->as.reinterpret_.expr;
+                        /* RM1 (bind chains): the poly / fat packing around a
+                         * continuation is a re-packing of the same env, not a
+                         * use of it; a non-retaining slot does not retain it
+                         * through the wrap either. */
+                        else if (barg->kind == EX_POLY_WRAP) barg = barg->as.poly_wrap_.inner;
+                        else if (barg->kind == EX_FN_TO_FAT) barg = barg->as.fn_to_fat_.inner;
+                        else if (barg->kind == EX_POLY_TO_FAT) barg = barg->as.poly_to_fat_.inner;
+                        else break;
+                    }
                     bool arg_is_b = barg && barg->kind == EX_VAR &&
                                     barg->as.var.binding == b;
                     if (box_accessor && arg_is_b)
@@ -1101,7 +1110,8 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                      * confines it exactly as the audited readers do.  Only under
                      * the sum walk: the mask is a statement about the arm box,
                      * which is what that walk's client frees. */
-                    if (g_esc_allow_sum_accessors && arg_is_b && !fe) {
+                    if (g_esc_allow_sum_accessors && arg_is_b && !fe &&
+                        call_dispatch_is_static(cur)) {
                         const Binding *sfb = cur->as.call_.fn_binding;
                         if (sfb && i < 32 &&
                             (sfb->nonretain_sum_param_mask & (1u << i)))
@@ -1121,7 +1131,7 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                      * no `^borrow` annotation.  Soundness rides the same escape
                      * analysis that set the bit: if the callee let the closure
                      * escape, the bit is clear and the arg is walked as an escape. */
-                    if (arg && arg->kind == EX_VAR && arg->as.var.binding == b) {
+                    if (arg_is_b && call_dispatch_is_static(cur)) {
                         const Binding *fb = cur->as.call_.fn_binding;
                         if (fb && fb->type.kind == TY_FN
                             && i < fb->type.as.fn.arity
@@ -1344,16 +1354,20 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
              * closure's capture set.  A catch-unwind thunk reaches the analysis
              * wrapped in EX_FN_TO_FAT, so the catch-box variant descends; the
              * fat-closure-env variant keeps defaulting to escape (unchanged). */
+            /* RM1 (bind chains): the env variant now descends too.  A packing
+             * re-packs its operand, so `b` escapes through it exactly when it
+             * escapes through the operand -- a bare `b` inside reaches EX_VAR
+             * and is still an escape, and `b` in a non-retaining slot was
+             * already admitted by the call arm's peel.  Defaulting to escape
+             * here made any lambda argument ANYWHERE in the body an escape of
+             * an unrelated let-bound closure (`scale4` beside a literal). */
             case EX_FN_TO_FAT:
-                if (!allow_box_accessors) { escapes = true; goto esc_done; }
                 ESC_PUSH(cur->as.fn_to_fat_.inner);
                 break;
             case EX_POLY_TO_FAT:
-                if (!allow_box_accessors) { escapes = true; goto esc_done; }
                 ESC_PUSH(cur->as.poly_to_fat_.inner);
                 break;
             case EX_POLY_WRAP:
-                if (!allow_box_accessors) { escapes = true; goto esc_done; }
                 ESC_PUSH(cur->as.poly_wrap_.inner);
                 break;
             case EX_MATCH:
@@ -1581,9 +1595,10 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
                  * retain one and print the other.  Under the sum flag the
                  * callee's SUM mask answers the same question for a sum-typed
                  * argument -- this is what lets `res-ok?` -> `ok?` chain. */
+                bool fb_static = fb && call_dispatch_is_static(e);
                 bool arg_sink = sink ||
-                    (fb && i < 32 && (fb->nonretain_ptr_param_mask & (1u << i))) ||
-                    (g_esc_allow_sum_accessors && fb && i < 32 &&
+                    (fb_static && i < 32 && (fb->nonretain_ptr_param_mask & (1u << i))) ||
+                    (g_esc_allow_sum_accessors && fb_static && i < 32 &&
                      (fb->nonretain_sum_param_mask & (1u << i)));
                 if (a && a->kind == EX_VAR && a->as.var.binding == b) {
                     if (acc) continue;             /* scalar result cannot alias */

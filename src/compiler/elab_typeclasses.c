@@ -4475,8 +4475,15 @@ Expr *elab_definstance(Elab *e, const Form *call) {
              * leak sweep found actually come from (`ap`'s some(..) arms), so
              * the freshness flag matters most here -- and `alt-or`, which
              * returns an argument, is exactly what it must stay false for. */
-            method_fd->binding->returns_fresh_sum_box =
-                elab_body_returns_fresh_sum_box(method_body);
+            elab_stamp_sum_freshness(method_fd->binding, method_fd->params,
+                                     method_fd->n_params, method_body);
+            /* ... and the non-retaining parameter masks, so a statically
+             * resolved dispatch site (`fn_binding` = this binding) gets the
+             * same closure-env / sum-box drops a defn call site does.  `bind`
+             * only CALLS its continuation, and a bind chain's envs were the
+             * bulk of the RM1 residue. */
+            elab_infer_nonretain_masks(method_fd->binding, method_fd->params,
+                                       method_fd->n_params, method_body);
         }
 
         /* Arrow head: the method's declared return was the class variable (the

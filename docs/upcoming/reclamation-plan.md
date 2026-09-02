@@ -360,6 +360,54 @@ reinterpret as its operand, and the accessor / non-retaining-callee argument
 check peels it.  **7364 -> 7200 bytes**; `hkt-partial-app-wildcard-byvalue`
 left the leak list and carries `requires.leak-check`.
 
+Bind chains (2026-09-02, later): the largest remaining erased entries were
+`bind` / `fmap` chains over stdlib `Result` / `Option` -- `result-monad-*`,
+`hkt-stdlib-*`.  Each chained `bind` hands back a fresh box (the continuation's
+by-value result crosses the poly boundary through the `__tur_fatspill` shim,
+the `Err` arm mints `(err e)`) that the typed-boundary bridge copied out and
+never freed, and the continuation's closure env was never dropped either.
+Four pieces, all keyed on facts about the INSTANCE METHOD at a statically
+resolved dispatch site (`fn_binding` is the instance method's binding there):
+
+- Instance methods now get the same inferred masks a defn gets
+  (`elab_infer_nonretain_masks`, shared), so `bind`'s continuation slot is
+  known non-retaining and the closure-argument hoist applies to dispatch
+  calls too (through the poly / fat wrap, which the hoist and the escape walk
+  now see through).  The hoisted `__borrowc` var keeps its lambda in
+  `hoist_closure_fn_binding`, which the poly-wrap emitter and the per-spec
+  passed-closure finder (M6 / G6(c)) now read -- without that the by-value
+  aggregate spill shim was skipped and the erased base instance read a struct
+  return as an int64 (NULL deref), and `re-cata`'s recursive closure lost its
+  per-spec clone.
+- Freshness through a continuation: `Binding.fresh_sum_via_param_mask`
+  records that a body's every value path is fresh OR a call through
+  parameter i (`bind`'s `(k v)`); `call_returns_fresh_sum_box` then asks the
+  call site whether every such argument is itself a fresh producer (a closure
+  literal with a fresh body, a flagged defn, or a hoisted closure var).
+- A fresh Turmeric-level producer read back by value now marks its carrier
+  temp owned exactly as the inline-C contract does, so the existing bridge
+  consumption frees it after the copy (`explicit-r`'s `return *(T *)box`).
+- The scope-exit env free admits a closure whose result is a sum / product /
+  cstr when its body has no inline C (a copy cannot point into the env).
+
+**Soundness correction found on the way.** A dictionary dispatch inside a
+constrained generic carries a REPRESENTATIVE instance's binding as
+`fn_binding`; the first RM1 round read its freshness flag as if it were the
+callee's, and freed `(one i)`'s box in `rec [A] [(C A)]` on the strength of
+`C [int]` alone.  Every consumer of instance-method facts is now gated on
+`call_dispatch_is_static` (concrete receiver / result head), and the accessor
+stamp on a dynamic dispatch is tentative: the emitter re-resolves the instance
+per monomorph (`emit_reresolve_method_fndef`) and asks THAT binding.  The
+`van-laarhoven-lens-*` family (rank-2 dict clones) and
+`hkt-cata-fmap-byvalue-carrier` were the fixtures that caught it.
+
+**7200 -> 6984 bytes**; `result-monad-bind-typed-boundary` fully clean and
+carrying `requires.leak-check`; `result-monad-nested-bind-typed-boundary`
+272 -> 128 (the `do-m` continuations' envs, which are not hoisted -- the
+macro's `(list .bind ...)` route into `elab_method_call` bypasses the hoist);
+`option-map-capturing-closure` 40 -> 16.  The audited-reader residue of the
+erased sweep (rows tagged SUM-BOX) is 704 B.
+
 **Measured: 8324 -> 7364 bytes** across the 27 erased-base callers (the
 null-None mirror above contributed 112 of that; the drops the rest), with the
 `hkt-stdlib-*` fixtures leaving the leak list entirely and

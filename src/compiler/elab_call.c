@@ -1238,18 +1238,35 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
     Expr **args = call->as.call_.args;
     uint32_t n_args = call->as.call_.n_args;
     uint32_t n_hoist = 0;
+    /* RM1 (bind chains): a continuation into a poly / fat slot arrives under
+     * an EX_POLY_WRAP / EX_FN_TO_FAT / EX_POLY_TO_FAT; the closure to hoist is
+     * the wrap's INNER, and the wrap stays in place around the hoisted var so
+     * the call site still packs it the way the slot expects. */
+#define HOIST_PEEL_SLOT(slot_)                                                  \
+    do {                                                                       \
+        for (;;) {                                                             \
+            Expr *_x = *(slot_);                                               \
+            if (!_x) break;                                                    \
+            if (_x->kind == EX_ASCRIBE) (slot_) = &_x->as.ascribe_.inner;      \
+            else if (_x->kind == EX_POLY_WRAP) (slot_) = &_x->as.poly_wrap_.inner; \
+            else if (_x->kind == EX_FN_TO_FAT) (slot_) = &_x->as.fn_to_fat_.inner; \
+            else if (_x->kind == EX_POLY_TO_FAT) (slot_) = &_x->as.poly_to_fat_.inner; \
+            else break;                                                        \
+        }                                                                      \
+    } while (0)
     for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
-        Expr *a = args[i];
-        while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
-        if (arg_is_freeable_closure_source(fb, i, a))
+        Expr **slot = &args[i];
+        HOIST_PEEL_SLOT(slot);
+        if (arg_is_freeable_closure_source(fb, i, *slot))
             n_hoist++;
     }
     if (n_hoist == 0) return call;
     LetBinding *lbs = (LetBinding *)arena_alloc(e->arena, n_hoist * sizeof(LetBinding));
     uint32_t h = 0;
     for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
-        Expr *a = args[i];
-        while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        Expr **slot = &args[i];
+        HOIST_PEEL_SLOT(slot);
+        Expr *a = *slot;
         if (!arg_is_freeable_closure_source(fb, i, a))
             continue;
         char nm[48];
@@ -1272,8 +1289,9 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
         h++;
         Expr *v = expr_new(e->arena, EX_VAR, a->type, span);
         v->as.var.binding = cb;
-        args[i] = v;                     /* the call now references the binding */
+        *slot = v;                       /* the call (or its wrap) now references the binding */
     }
+#undef HOIST_PEEL_SLOT
     Expr *let = expr_new(e->arena, EX_LET, call->type, span);
     let->as.let_.bindings = lbs;
     let->as.let_.n = n_hoist;
@@ -2974,7 +2992,13 @@ Expr *elab_call(Elab *e, Form *call) {
             items[0] = form_sym(e->arena, head->span, dot_sym);
             for (uint32_t i = 1; i < n_items; i++) items[i] = call->as.list.items[i];
             Form *dotcall = form_list(e->arena, call->span, items, n_items);
-            return elab_method_call(e, dotcall);
+            /* A statically resolved dispatch carries the instance method as
+             * fn_binding, so its inferred non-retaining mask makes an inline
+             * continuation's env freeable at this scope -- the same hoist a
+             * defn call gets. */
+            Expr *mc = elab_method_call(e, dotcall);
+            return (mc && call_dispatch_is_static(mc))
+                ? hoist_borrowed_closure_args(e, mc, call->span) : mc;
         }
     }
 
@@ -5554,10 +5578,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              (i < 32 && (fn_binding->nonretain_sum_param_mask & (1u << i))))) {
             Expr *a = args[i];
             while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
-            if (a && a->kind == EX_CALL &&
-                (a->as.call_.ctor ||
-                 (a->as.call_.fn_binding &&
-                  a->as.call_.fn_binding->returns_fresh_sum_box)))
+            /* A dictionary dispatch (abstract receiver / return type) is
+             * stamped TENTATIVELY: the callee that runs is only known per
+             * monomorph at emit, which re-resolves it and asks the freshness
+             * question of that binding before freeing anything. */
+            if (call_returns_fresh_sum_box(a) ||
+                (a && a->kind == EX_CALL && a->as.call_.dict_arg &&
+                 !call_dispatch_is_static(a)))
                 a->sum_box_drop_after = true;
         }
 

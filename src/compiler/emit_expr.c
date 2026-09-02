@@ -2283,6 +2283,19 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
         if (b->type.kind != TY_FN) return false;
         switch (b->type.as.fn.result_kind) {
             case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_NIL: break;
+            /* RM1 (bind chains): a sum / product / cstr result too, when the
+             * body has no inline C.  A by-value aggregate is COPIED out, a
+             * carrier box is a separate malloc, and a cstr points at
+             * characters; none can point into the env allocation unless the
+             * body took the env's address, which only inline C can do.  This
+             * is the `(fn [b] (ok (+ a b)))` continuation a `bind` chain
+             * hoists into a `__borrowc` let. */
+            case TY_APP: case TY_ADT: case TY_CSTR: {
+                const struct Closure *c = init->as.closure_.closure;
+                if (!c || !c->fn || expr_subtree_has_inline_c(c->fn->body))
+                    return false;
+                break;
+            }
             default: return false;
         }
     }
@@ -2384,6 +2397,21 @@ static void emit_boxed_struct_payload_free(EmitCtx *ctx, Buf *body,
                                            const char *name, Type t);
 static void emit_carrier_sum_free(EmitCtx *ctx, Buf *body, const char *name,
                                   Type t);
+
+/* RM1: does this call mint a fresh sum box, asked with the callee the ACTIVE
+ * spec resolves it to?  A static call answers from its own binding; a
+ * dictionary dispatch inside a monomorph re-resolves to the instance method
+ * that runs there (emit_reresolve_method_fndef), and only that binding's
+ * freshness counts -- the AST's fn_binding is a representative instance and
+ * says nothing about the one selected for this spec. */
+static bool emit_call_returns_fresh_sum_box(EmitCtx *ctx, const Expr *e) {
+    if (!e || e->kind != EX_CALL) return false;
+    if (call_returns_fresh_sum_box(e)) return true;
+    if (!e->as.call_.dict_arg || call_dispatch_is_static(e)) return false;
+    FnDef *fd = emit_reresolve_method_fndef(ctx, e);
+    if (!fd || !fd->binding) return false;
+    return call_returns_fresh_sum_box_as(e, fd->binding);
+}
 
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if body contains return or throw first */
@@ -2657,10 +2685,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 init_val_recorded_i64) {
                 const Expr *fin = e->as.let_.bindings[i].init;
                 while (fin && fin->kind == EX_ASCRIBE) fin = fin->as.ascribe_.inner;
-                bool fresh = fin && fin->kind == EX_CALL &&
-                    (fin->as.call_.ctor ||
-                     (fin->as.call_.fn_binding &&
-                      fin->as.call_.fn_binding->returns_fresh_sum_box));
+                bool fresh = emit_call_returns_fresh_sum_box(ctx, fin);
                 if (fresh && !sum_box_binding_escapes(e->as.let_.body, b)) {
                     bool sib = false;
                     for (uint32_t j = 0; j < e->as.let_.n && !sib; j++)
@@ -2691,10 +2716,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 adt_app_has_boxed_struct_payload(ctx, b->type)) {
                 const Expr *win = e->as.let_.bindings[i].init;
                 while (win && win->kind == EX_ASCRIBE) win = win->as.ascribe_.inner;
-                bool wfresh = win && win->kind == EX_CALL &&
-                    (win->as.call_.ctor ||
-                     (win->as.call_.fn_binding &&
-                      win->as.call_.fn_binding->returns_fresh_sum_box));
+                bool wfresh = emit_call_returns_fresh_sum_box(ctx, win);
                 if (wfresh && !sum_box_binding_escapes(e->as.let_.body, b)) {
                     bool wsib = false;
                     for (uint32_t j = 0; j < e->as.let_.n && !wsib; j++)
@@ -4605,6 +4627,46 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              strcmp(_rd->name, "Result") == 0))
             emit_owned_carrier_mark(tmp);
     }
+    /* RM1 (bind chains): the Turmeric-level twin.  A call the freshness
+     * analysis proves mints its box (a ctor, a flagged defn, or a `bind`
+     * whose continuation is itself fresh) hands the caller a box to own just
+     * as the inline-C contract above does, so the same bridge consumption
+     * applies when the carrier is read back by value -- `explicit-r`'s
+     * `return *(T *)box` tail, which is where every chained `bind` leaked.
+     * Not when the call is already a stamped accessor argument
+     * (sum_box_drop_after): that path frees the temp after the consuming
+     * call, and a second owner would be a double free.  Keyed on the call's
+     * own type being an Option/Result: the analysis counts any ctor as
+     * fresh, and the bridge's free is specific to the sum carrier. */
+    else if (ret_ct && strcmp(ret_ct, "int64_t") == 0 &&
+             e->kind == EX_CALL && !e->sum_box_drop_after &&
+             emit_call_returns_fresh_sum_box(ctx, e)) {
+        /* The call's own type first; a class-method dispatch carries the
+         * class variable's application (a NULL-headed app), so fall back to
+         * the callee's declared result, which for an instance method is the
+         * instance head applied (`(Result A B)`).  A bare TY_ADT is the
+         * erased, argument-free spelling of the same sum. */
+        const Type *_declt = (e->as.call_.fn_binding &&
+                              e->as.call_.fn_binding->type.kind == TY_FN)
+            ? e->as.call_.fn_binding->type.as.fn.result_full_type : NULL;
+        AdtDef *_rd = NULL;
+        Type _ra[16];
+        uint8_t _rn = 0;
+        Type _rt = emit_resolve_type(ctx, e->type);
+        if (!type_extract_adt_app(&_rt, &_rd, _ra, &_rn)) {
+            _rd = (_rt.kind == TY_ADT) ? _rt.as.adt_.def : NULL;
+            if (!_rd && _declt) {
+                Type _dt = emit_resolve_type(ctx, *_declt);
+                if (!type_extract_adt_app(&_dt, &_rd, _ra, &_rn))
+                    _rd = (_dt.kind == TY_ADT) ? _dt.as.adt_.def : NULL;
+            }
+        }
+        bool _ok = _rd && _rd->name &&
+            (strcmp(_rd->name, "Option") == 0 ||
+             strcmp(_rd->name, "Result") == 0);
+        if (_ok)
+            emit_owned_carrier_mark(tmp);
+    }
     /* SR2b: the RETURNED string is now just `tmp`, so the caller can no longer
      * read the value's emitted C type off the text.  Leave the note set to the
      * temp's declared type: an ARGUMENT emission that cleared the note before
@@ -4742,13 +4804,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * a typed pointer) and there is nothing to free.  ret_ct NULL means
      * __auto_type, i.e. we could not prove the spelling, so no free either;
      * both misses are status-quo leaks, never a double free. */
-    if (e->sum_box_drop_after && ret_ct && strcmp(ret_ct, "int64_t") == 0)
+    bool drop_after_resolved = e->sum_box_drop_after &&
+                               emit_call_returns_fresh_sum_box(ctx, e);
+    if (drop_after_resolved && ret_ct && strcmp(ret_ct, "int64_t") == 0)
         sum_pending_push(ctx, tmp, e->type);
     /* ... and the by-value twin: the temp IS the monomorph aggregate (not the
      * carrier word, not a pointer), and its arm holds a boxed value-struct
      * payload.  The consumer was proven non-retaining at elab (allowlist or
      * inferred mask), so the box is dead once that call returns. */
-    else if (e->sum_box_drop_after && ret_ct &&
+    else if (drop_after_resolved && ret_ct &&
              strcmp(ret_ct, "int64_t") != 0 && strchr(ret_ct, '*') == NULL &&
              adt_app_has_boxed_struct_payload(ctx, e->type))
         vsp_pending_push(ctx, tmp, e->type);
@@ -11677,6 +11741,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *fat = emit_value(ctx, body, e->as.poly_wrap_.inner);
                     char *tmp = fresh_tmp(ctx);
                     Binding *thunk_binding = emit_expr_closure_fn_binding(e->as.poly_wrap_.inner);
+                    /* RM1 (bind chains): a capturing continuation hoisted into a
+                     * `__borrowc` let (so its env can be freed at scope exit)
+                     * reaches this slot as a bare var.  The hoist deliberately
+                     * records the lambda in hoist_closure_fn_binding, not
+                     * closure_fn_binding (which would reroute direct dispatch),
+                     * so read it here: without the lambda's signature the
+                     * by-value aggregate spill below is skipped and the carrier
+                     * base instance reads a struct return as an int64. */
+                    if (!thunk_binding) {
+                        const Expr *hi = e->as.poly_wrap_.inner;
+                        while (hi && hi->kind == EX_ASCRIBE) hi = hi->as.ascribe_.inner;
+                        if (hi && hi->kind == EX_VAR && hi->as.var.binding)
+                            thunk_binding = hi->as.var.binding->hoist_closure_fn_binding;
+                    }
                     char *thunk_typedef = NULL;
                     Type thunk_params[MAX_FN_ARITY];
                     uint8_t thunk_arity = 0;

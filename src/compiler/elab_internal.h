@@ -1788,5 +1788,13 @@ bool any_expr_is_owned_temp(const Expr *x, int depth);
 /* RM1 (reclamation-plan): the per-callee freshness analysis -- see the walker
  * in elab_fns.c and the flag's comment in expr.h. */
 bool elab_body_returns_fresh_sum_box(const Expr *e);
+/* ... and its stamping form: sets both returns_fresh_sum_box and
+ * fresh_sum_via_param_mask on `b` from the elaborated body. */
+void elab_stamp_sum_freshness(Binding *b, Binding **params, uint32_t n_params,
+                              const Expr *body);
+/* The non-retaining parameter masks (fn / ptr-scalar / sum), inferred from the
+ * elaborated body.  Shared by defn and instance-method elaboration. */
+void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
+                                Expr *body);
 
 #endif

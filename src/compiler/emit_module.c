@@ -1972,8 +1972,17 @@ static Binding *emit_find_passed_spec_closure(const Expr *e,
             return emit_find_passed_spec_closure(e->as.fn_to_fat_.inner, bindings, n_bindings, arena);
         case EX_POLY_TO_FAT:
             return emit_find_passed_spec_closure(e->as.poly_to_fat_.inner, bindings, n_bindings, arena);
-        case EX_LET:
+        case EX_LET: {
+            /* RM1 (bind chains): a passed closure the call-site hoist moved
+             * into a `__borrowc` let now sits in the let's INIT, with the
+             * call referencing the binding -- so look at the inits too. */
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                Binding *r = emit_find_passed_spec_closure(
+                    e->as.let_.bindings[i].init, bindings, n_bindings, arena);
+                if (r) return r;
+            }
             return emit_find_passed_spec_closure(e->as.let_.body, bindings, n_bindings, arena);
+        }
         case EX_DO: {
             for (uint32_t i = 0; i < e->as.do_.n; i++) {
                 Binding *r = emit_find_passed_spec_closure(
@@ -2051,6 +2060,10 @@ static void emit_collect_passed_spec_closures(
                                               n_bindings, arena, out, cap, n_out);
             return;
         case EX_LET:
+            /* As in the single-result finder: a hoisted `__borrowc` init. */
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                emit_collect_passed_spec_closures(e->as.let_.bindings[i].init, bindings,
+                                                  n_bindings, arena, out, cap, n_out);
             emit_collect_passed_spec_closures(e->as.let_.body, bindings,
                                               n_bindings, arena, out, cap, n_out);
             return;

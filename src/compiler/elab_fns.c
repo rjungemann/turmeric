@@ -30,43 +30,163 @@ bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
  * so guards need no special case.  Anything unrecognized is NOT fresh: the
  * polarity is that a wrong `false` leaks (status quo) and a wrong `true`
  * frees a live box, so every default answers false. */
-bool elab_body_returns_fresh_sum_box(const Expr *e) {
+/* The freshness walk.  `params`/`n_params` name the enclosing function's
+ * parameters so a call THROUGH one of them (`(k v)`) can count as fresh
+ * contingent on that parameter -- recorded in *need -- rather than as not
+ * fresh.  NULL params is the unconditional question. */
+static bool fresh_sum_walk(const Expr *e, Binding **params, uint32_t n_params,
+                           uint32_t *need) {
     static int depth = 0;
     if (!e || depth > 64) return false;
     bool r = false;
     depth++;
     switch (e->kind) {
         case EX_ASCRIBE:
-            r = elab_body_returns_fresh_sum_box(e->as.ascribe_.inner);
+            r = fresh_sum_walk(e->as.ascribe_.inner, params, n_params, need);
             break;
         case EX_DO:
             r = e->as.do_.n > 0 &&
-                elab_body_returns_fresh_sum_box(e->as.do_.items[e->as.do_.n - 1]);
+                fresh_sum_walk(e->as.do_.items[e->as.do_.n - 1], params, n_params, need);
             break;
         case EX_LET:
-            r = elab_body_returns_fresh_sum_box(e->as.let_.body);
+            r = fresh_sum_walk(e->as.let_.body, params, n_params, need);
             break;
         case EX_IF:
             r = e->as.if_.else_or_null &&
-                elab_body_returns_fresh_sum_box(e->as.if_.then_) &&
-                elab_body_returns_fresh_sum_box(e->as.if_.else_or_null);
+                fresh_sum_walk(e->as.if_.then_, params, n_params, need) &&
+                fresh_sum_walk(e->as.if_.else_or_null, params, n_params, need);
             break;
         case EX_MATCH:
             if (e->as.match_.n_arms == 0) break;
             r = true;
             for (uint32_t i = 0; r && i < e->as.match_.n_arms; i++)
-                r = elab_body_returns_fresh_sum_box(e->as.match_.arms[i].body);
+                r = fresh_sum_walk(e->as.match_.arms[i].body, params, n_params, need);
             break;
-        case EX_CALL:
-            if (e->as.call_.ctor) { r = true; break; }
-            r = e->as.call_.fn_binding &&
-                e->as.call_.fn_binding->returns_fresh_sum_box;
+        case EX_CALL: {
+            if (params && need) {
+                const Expr *fe = e->as.call_.fn_expr;
+                while (fe && fe->kind == EX_ASCRIBE) fe = fe->as.ascribe_.inner;
+                for (uint32_t i = 0; i < n_params && i < 32; i++) {
+                    const Binding *pb = params[i];
+                    if (!pb) continue;
+                    if (e->as.call_.fn_binding == pb ||
+                        (fe && fe->kind == EX_VAR && fe->as.var.binding == pb)) {
+                        *need |= (1u << i);
+                        r = true;
+                        break;
+                    }
+                }
+                if (r) break;
+            }
+            r = call_returns_fresh_sum_box(e);
             break;
+        }
         default:
             break;
     }
     depth--;
     return r;
+}
+
+bool elab_body_returns_fresh_sum_box(const Expr *e) {
+    return fresh_sum_walk(e, NULL, 0, NULL);
+}
+
+void elab_stamp_sum_freshness(Binding *b, Binding **params, uint32_t n_params,
+                              const Expr *body) {
+    if (!b) return;
+    uint32_t need = 0;
+    bool fresh = fresh_sum_walk(body, params, n_params, &need);
+    b->returns_fresh_sum_box = fresh && need == 0;
+    b->fresh_sum_via_param_mask = fresh ? need : 0;
+}
+
+/* Peel the wraps elab puts around a function-valued argument on its way into
+ * a fn-typed / ^fat / poly parameter slot. */
+static const Expr *peel_fn_arg_wraps(const Expr *a) {
+    while (a) {
+        if (a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        else if (a->kind == EX_FN_TO_FAT) a = a->as.fn_to_fat_.inner;
+        else if (a->kind == EX_POLY_TO_FAT) a = a->as.poly_to_fat_.inner;
+        else if (a->kind == EX_POLY_WRAP) a = a->as.poly_wrap_.inner;
+        else break;
+    }
+    return a;
+}
+
+static bool type_head_is_concrete(const Type *t) {
+    const Type *h = t;
+    while (h && h->kind == TY_APP) h = h->as.app.fn;
+    if (!h) return false;
+    switch (h->kind) {
+        case TY_ADT: return h->as.adt_.def != NULL;
+        case TY_STRUCT: return true;
+        case TY_NIL: case TY_INT: case TY_BOOL: case TY_FLOAT: case TY_CSTR:
+        case TY_INT64: case TY_UINT64: case TY_INT32: case TY_UINT32:
+        case TY_INT16: case TY_UINT16: case TY_INT8: case TY_UINT8:
+        case TY_FLOAT64: case TY_FLOAT32:
+            return true;
+        default: return false;
+    }
+}
+
+bool call_dispatch_is_static(const Expr *call) {
+    if (!call || call->kind != EX_CALL) return false;
+    if (!call->as.call_.dict_arg) return true;
+    /* A return-dispatched method (`pure`) keeps the abstract class variable
+     * as the call's type; a concrete instance call's type is the instance
+     * head applied (or a NULL-headed app, which decides nothing). */
+    {
+        const Type *h = &call->type;
+        while (h && h->kind == TY_APP) h = h->as.app.fn;
+        if (h && h->kind != TY_ADT && h->kind != TY_STRUCT &&
+            !type_head_is_concrete(h))
+            return false;
+    }
+    if (call->as.call_.n_args == 0 || !call->as.call_.args[0]) return false;
+    const Expr *recv = call->as.call_.args[0];
+    while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
+    return recv && type_head_is_concrete(&recv->type);
+}
+
+bool call_returns_fresh_sum_box_as(const Expr *call, const Binding *fb) {
+    if (!call || call->kind != EX_CALL) return false;
+    if (call->as.call_.ctor) return true;
+    if (!fb) return false;
+    if (fb->returns_fresh_sum_box) return true;
+    uint32_t m = fb->fresh_sum_via_param_mask;
+    if (!m) return false;
+    for (uint32_t i = 0; i < 32; i++) {
+        if (!(m & (1u << i))) continue;
+        if (i >= call->as.call_.n_args) return false;
+        const Expr *a = peel_fn_arg_wraps(call->as.call_.args[i]);
+        if (!a) return false;
+        if (a->kind == EX_CLOSURE) {
+            const struct Closure *c = a->as.closure_.closure;
+            bool cf = c && c->fn && elab_body_returns_fresh_sum_box(c->fn->body);
+            if (!cf) return false;
+        } else if (a->kind == EX_VAR) {
+            /* A defn so flagged, or a let-bound closure (the hoisted-borrow
+             * shape) whose anonymous fn binding is. */
+            const Binding *ab = a->as.var.binding;
+            bool vf = ab && (ab->returns_fresh_sum_box ||
+                             (ab->closure_fn_binding &&
+                              ab->closure_fn_binding->returns_fresh_sum_box) ||
+                             (ab->hoist_closure_fn_binding &&
+                              ab->hoist_closure_fn_binding->returns_fresh_sum_box));
+            if (!vf) return false;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool call_returns_fresh_sum_box(const Expr *call) {
+    if (!call || call->kind != EX_CALL) return false;
+    if (call->as.call_.ctor) return true;
+    if (!call_dispatch_is_static(call)) return false;
+    return call_returns_fresh_sum_box_as(call, call->as.call_.fn_binding);
 }
 
 
@@ -5070,6 +5190,100 @@ static void elab_normalize_fn_tail_leaves(Elab *e, Expr **slot,
     }
 }
 
+void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
+                                Expr *body) {
+    b->nonretain_param_mask = 0;
+    /* An inline-C body can STORE a fn-param invisibly to the AST escape analysis
+     * (a param is a C-visible formal, not an AST capture), so a body containing
+     * any inline-C is never treated as non-retaining -- otherwise its stored
+     * closure arg would be freed while the C-side copy is still live (UAF). */
+    /* catch-box-reader-confinement-whitelist: the same inference, for the
+     * pointer-carrying scalars (cstr / ptr<void>) that a caught-Result box
+     * hands out.  Trusting a hardcoded print-family name list made the
+     * confinement check a soundness-maintenance footgun AND needlessly leaked
+     * for a user-defined logger that is every bit as safe; inferring it from
+     * the body makes it a checked property.  The inline-C guard above is
+     * load-bearing here too -- a C body can stash the pointer where no AST
+     * walk can see it.
+     *
+     * The result gate mirrors catch_box_binding_reader_confined: the param may
+     * only be treated as non-retained if the function's own result cannot carry
+     * it back out. */
+    b->nonretain_ptr_param_mask = 0;
+    b->nonretain_sum_param_mask = 0;
+    if (body && !expr_subtree_has_inline_c(body)) {
+        for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
+            Binding *_pb = params[_pi];
+            if (!_pb) continue;
+            /* value-struct-payload-sum-monomorph-box-has-no-owner: a stdlib
+             * Option/Result-typed parameter joins the inference.  Same result
+             * gate as the pointer-scalar case (a non-pointer scalar result
+             * cannot carry the param or its arm pointer back out), same
+             * inline-C exclusion (enforced by the enclosing `if`). */
+            {
+                const AdtDef *_sd = NULL;
+                if (_pb->type.kind == TY_APP) _sd = type_adt_app_def(&_pb->type);
+                else if (_pb->type.kind == TY_ADT) _sd = _pb->type.as.adt_.def;
+                bool _is_sum = _sd && _sd->name &&
+                    (strcmp(_sd->name, "Option") == 0 || strcmp(_sd->name, "Result") == 0);
+                if (_is_sum) {
+                    TypeKind _srk = (b->type.kind == TY_FN) ? b->type.as.fn.result_kind
+                                                            : TY_UNKNOWN;
+                    bool _sres_safe = false;
+                    switch (_srk) {
+                        case TY_NIL: case TY_INT: case TY_BOOL: case TY_FLOAT:
+                        case TY_INT64: case TY_UINT64: case TY_INT32: case TY_UINT32:
+                        case TY_INT16: case TY_UINT16: case TY_INT8: case TY_UINT8:
+                        case TY_FLOAT64: case TY_FLOAT32:
+                            _sres_safe = true; break;
+                        /* Unlike the pointer-scalar mask (where the PARAM is
+                         * the cstr and can be returned as-is), a sum param
+                         * cannot become a cstr result except by copying a
+                         * payload word or struct out through a reader -- and
+                         * a cstr word points at characters, never into the arm
+                         * box the drop frees.  `describe : cstr` is the common
+                         * reader shape. */
+                        case TY_CSTR:
+                            _sres_safe = true; break;
+                        default: break;
+                    }
+                    if (_sres_safe && sum_param_is_nonretaining(body, _pb))
+                        b->nonretain_sum_param_mask |= (1u << _pi);
+                }
+            }
+            bool _is_fnparam = _pb->is_fat || _pb->is_poly_fn ||
+                               _pb->type.kind == TY_FN;
+            if (_is_fnparam && !closure_binding_escapes(body, _pb))
+                b->nonretain_param_mask |= (1u << _pi);
+            /* any-struct-box-leak-per-widen: an `any` parameter joins the same
+             * inference, and means the same thing -- "this body does not retain
+             * a pointer this parameter carries".  A tur_tagged_t whose payload
+             * is a heap-boxed by-value struct carries exactly such a pointer, so
+             * the caller may keep that payload in its own frame rather than
+             * mallocing a box nothing frees.  Reusing this mask rather than
+             * adding a parallel one keeps a single answer to a single question. */
+            bool _is_ptr_scalar = _pb->type.kind == TY_CSTR ||
+                                  _pb->type.kind == TY_PTR_VOID ||
+                                  _pb->type.kind == TY_ANY;
+            if (_is_ptr_scalar) {
+                TypeKind _rk = (b->type.kind == TY_FN) ? b->type.as.fn.result_kind
+                                                       : TY_UNKNOWN;
+                bool _result_safe = false;
+                switch (_rk) {
+                    case TY_NIL: case TY_INT: case TY_BOOL: case TY_FLOAT:
+                    case TY_INT64: case TY_UINT64: case TY_INT32: case TY_UINT32:
+                    case TY_INT16: case TY_UINT16: case TY_INT8: case TY_UINT8:
+                    case TY_FLOAT64: case TY_FLOAT32:
+                        _result_safe = true; break;
+                    default: break;
+                }
+                if (_result_safe && ptr_param_is_nonretaining(body, _pb, true))
+                    b->nonretain_ptr_param_mask |= (1u << _pi);
+            }
+        }
+    }
+}
+
 Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase R5: Check for #[no-unwind] attribute before name.
      * #[used]: retain with external C linkage (see Binding.retain_c_linkage).
@@ -8403,96 +8617,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * freed at the call scope's exit (like a ^borrow param).  Infer the mask now,
      * from the just-elaborated body; the conservative escape analysis only ever
      * clears the bit (a false "escapes" merely preserves the status-quo leak). */
-    b->nonretain_param_mask = 0;
-    /* An inline-C body can STORE a fn-param invisibly to the AST escape analysis
-     * (a param is a C-visible formal, not an AST capture), so a body containing
-     * any inline-C is never treated as non-retaining -- otherwise its stored
-     * closure arg would be freed while the C-side copy is still live (UAF). */
-    /* catch-box-reader-confinement-whitelist: the same inference, for the
-     * pointer-carrying scalars (cstr / ptr<void>) that a caught-Result box
-     * hands out.  Trusting a hardcoded print-family name list made the
-     * confinement check a soundness-maintenance footgun AND needlessly leaked
-     * for a user-defined logger that is every bit as safe; inferring it from
-     * the body makes it a checked property.  The inline-C guard above is
-     * load-bearing here too -- a C body can stash the pointer where no AST
-     * walk can see it.
-     *
-     * The result gate mirrors catch_box_binding_reader_confined: the param may
-     * only be treated as non-retained if the function's own result cannot carry
-     * it back out. */
-    b->nonretain_ptr_param_mask = 0;
-    b->nonretain_sum_param_mask = 0;
-    if (body && !expr_subtree_has_inline_c(body)) {
-        for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
-            Binding *_pb = params[_pi];
-            if (!_pb) continue;
-            /* value-struct-payload-sum-monomorph-box-has-no-owner: a stdlib
-             * Option/Result-typed parameter joins the inference.  Same result
-             * gate as the pointer-scalar case (a non-pointer scalar result
-             * cannot carry the param or its arm pointer back out), same
-             * inline-C exclusion (enforced by the enclosing `if`). */
-            {
-                const AdtDef *_sd = NULL;
-                if (_pb->type.kind == TY_APP) _sd = type_adt_app_def(&_pb->type);
-                else if (_pb->type.kind == TY_ADT) _sd = _pb->type.as.adt_.def;
-                bool _is_sum = _sd && _sd->name &&
-                    (strcmp(_sd->name, "Option") == 0 || strcmp(_sd->name, "Result") == 0);
-                if (_is_sum) {
-                    TypeKind _srk = (b->type.kind == TY_FN) ? b->type.as.fn.result_kind
-                                                            : TY_UNKNOWN;
-                    bool _sres_safe = false;
-                    switch (_srk) {
-                        case TY_NIL: case TY_INT: case TY_BOOL: case TY_FLOAT:
-                        case TY_INT64: case TY_UINT64: case TY_INT32: case TY_UINT32:
-                        case TY_INT16: case TY_UINT16: case TY_INT8: case TY_UINT8:
-                        case TY_FLOAT64: case TY_FLOAT32:
-                            _sres_safe = true; break;
-                        /* Unlike the pointer-scalar mask (where the PARAM is
-                         * the cstr and can be returned as-is), a sum param
-                         * cannot become a cstr result except by copying a
-                         * payload word or struct out through a reader -- and
-                         * a cstr word points at characters, never into the arm
-                         * box the drop frees.  `describe : cstr` is the common
-                         * reader shape. */
-                        case TY_CSTR:
-                            _sres_safe = true; break;
-                        default: break;
-                    }
-                    if (_sres_safe && sum_param_is_nonretaining(body, _pb))
-                        b->nonretain_sum_param_mask |= (1u << _pi);
-                }
-            }
-            bool _is_fnparam = _pb->is_fat || _pb->is_poly_fn ||
-                               _pb->type.kind == TY_FN;
-            if (_is_fnparam && !closure_binding_escapes(body, _pb))
-                b->nonretain_param_mask |= (1u << _pi);
-            /* any-struct-box-leak-per-widen: an `any` parameter joins the same
-             * inference, and means the same thing -- "this body does not retain
-             * a pointer this parameter carries".  A tur_tagged_t whose payload
-             * is a heap-boxed by-value struct carries exactly such a pointer, so
-             * the caller may keep that payload in its own frame rather than
-             * mallocing a box nothing frees.  Reusing this mask rather than
-             * adding a parallel one keeps a single answer to a single question. */
-            bool _is_ptr_scalar = _pb->type.kind == TY_CSTR ||
-                                  _pb->type.kind == TY_PTR_VOID ||
-                                  _pb->type.kind == TY_ANY;
-            if (_is_ptr_scalar) {
-                TypeKind _rk = (b->type.kind == TY_FN) ? b->type.as.fn.result_kind
-                                                       : TY_UNKNOWN;
-                bool _result_safe = false;
-                switch (_rk) {
-                    case TY_NIL: case TY_INT: case TY_BOOL: case TY_FLOAT:
-                    case TY_INT64: case TY_UINT64: case TY_INT32: case TY_UINT32:
-                    case TY_INT16: case TY_UINT16: case TY_INT8: case TY_UINT8:
-                    case TY_FLOAT64: case TY_FLOAT32:
-                        _result_safe = true; break;
-                    default: break;
-                }
-                if (_result_safe && ptr_param_is_nonretaining(body, _pb, true))
-                    b->nonretain_ptr_param_mask |= (1u << _pi);
-            }
-        }
-    }
+    elab_infer_nonretain_masks(b, params, n_params, body);
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
 
     /* closure-drop-glue S1c (fresh-closure-returning fn): a fn whose body is a
@@ -8681,7 +8806,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Mirror emit_fns.c:377's predicate on the binding so call sites can
      * detect an inline-C callee without walking back to the FnDef. */
     b->body_is_inline_c = (body && body->kind == EX_INLINE_C);
-    b->returns_fresh_sum_box = elab_body_returns_fresh_sum_box(body);
+    elab_stamp_sum_freshness(b, params, n_params, body);
     fd->closure = NULL;
     fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
     /* Phase 19: Store declared effect row (ERK_UNRESOLVED until PASS_EFFECT_ROW_INFER). */
