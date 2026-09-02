@@ -174,6 +174,28 @@ the residual allocating population and (b) either names a workload or
 concludes there is not one. *Validation:* zero behavior change; the corpus
 untouched.
 
+**RM0 ran on 2026-09-02.** Both deliverables are in
+[benchmarks/sum-census/RESULTS.md](../../benchmarks/sum-census/RESULTS.md)
+(the RM0(a) section) and
+[benchmarks/adt-alloc/RESULTS.md](../../benchmarks/adt-alloc/RESULTS.md).
+
+- **(a)** The ceiling re-runs unchanged with the same ordering (F 13.1x,
+  G 7.0x over A on this box). The corpus census, reported as ALLOCATIONS:
+  2206 attempted, 555 construct anything; 22,176 allocations outside the
+  two GC stress fixtures, of which `heap` and `gadt` are by design,
+  `sum-flat` is down to **202** (90% of flat-sum constructions are by value
+  now -- SR2a/b did their job; the 202 are RM1's erased residue), and the
+  **recursive spine is 4,205 across 16 fixtures**: one lazy-stream fixture
+  (2,731) and one regex engine (1,336) are 97% of it.
+- **(b)** No workload. `datalog` constructs ~110 `:heap` values per run
+  (typed pointers by design); `minikanren` constructs nothing; the spice
+  profile could not be re-run here (sibling checkout absent) and the SR0
+  grep stands (20 `defdata` in 727 files). **RM2 and RM3 have no
+  constituency today.** This is the outcome the gate said must be
+  reportable, and it is reported: they do not start. The record to reopen
+  on is a real program whose recursive-sum construction shows up in a
+  profile, not a fixture.
+
 ### RM1 -- drop the boxed residue at scope exit
 
 The row B mechanism, local, no whole-program analysis, as the fourth client of
