@@ -7,11 +7,12 @@
 # docs/reported/examples-tree-does-not-run.md.
 #
 # The five datalog files and cli_args_demo left this list on 2026-08-21. Of
-# what remains, only ONE entry is example code being wrong -- snake's is a
-# compiler limitation with its own report, and the guestbook seven are
+# what remains, only ONE entry is example code being wrong -- the guestbook
+# seven are
 # arguably the wrong invocation (they are a multi-file program with no
 # import/load between the files, compiled as a unit by their CMakeLists, so
-# `tur check <one member>` was never going to work).
+# `tur check <one member>` was never going to work).  snake left this list on
+# 2026-09-02 when perform-inside-loop-has-no-lowering was resolved.
 
 examples/guestbook/src/conts.tur    needs its project context / stdlib loads
 examples/guestbook/src/handlers.tur needs its project context / stdlib loads
@@ -20,4 +21,3 @@ examples/guestbook/src/router.tur   needs its project context / stdlib loads
 examples/guestbook/src/security.tur needs its project context / stdlib loads
 examples/guestbook/src/store.tur    typeclass 'Serializable' is not defined (stdlib/serial.tur not loaded)
 examples/guestbook/src/templates.tur needs its project context / stdlib loads
-examples/snake/src/main.tur         perform inside a `while` has no lowering (compiler limitation; see docs/reported/perform-inside-loop-has-no-lowering.md)

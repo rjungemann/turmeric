@@ -332,6 +332,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0621_TUR_VERSION_BELOW_FLOOR:   return "TUR-E0621";
         case TUR_E0622_TUR_VERSION_MALFORMED:     return "TUR-E0622";
         case TUR_W0623_TUR_VERSION_ABOVE_CEILING: return "TUR-W0623";
+        case TUR_W0624_NO_ENTRY_POINT_NEAR_MISS:   return "TUR-W0624";
         default:                          return "";
     }
 }
@@ -497,6 +498,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0621") == 0) return TUR_E0621_TUR_VERSION_BELOW_FLOOR;
     if (strcmp(s, "TUR-E0622") == 0) return TUR_E0622_TUR_VERSION_MALFORMED;
     if (strcmp(s, "TUR-W0623") == 0) return TUR_W0623_TUR_VERSION_ABOVE_CEILING;
+    if (strcmp(s, "TUR-W0624") == 0) return TUR_W0624_NO_ENTRY_POINT_NEAR_MISS;
     return DIAG_CODE_NONE;
 }
 

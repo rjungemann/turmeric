@@ -5,7 +5,7 @@
 whose headline defect is fixed. That bug survived in two shipped examples for
 as long as it did because of the two gaps below, and neither is closed.
 
-**Status:** OPEN. Not fixed -- filed while resolving the `-main` report.
+**Status:** RESOLVED 2026-09-02 -- see the Resolution at the end.
 
 ## 1. `examples/` is not exercised by any suite
 
@@ -62,3 +62,36 @@ something else entirely.
 **Not done here** because it is new diagnostic surface (a code assignment, a
 fixture, a docs entry) rather than the doc correction the `-main` report was
 resolved with.
+
+## Resolution (2026-09-02)
+
+**Section 1 was already half closed when this was filed, and is now closed.**
+`tests/check-examples.sh` (registered as the `tur_examples_check` ctest
+target) walks every `.tur` under `examples/`, `tur check`s each against the
+`examples/examples-check-baseline.txt` ratchet, and then RUNS every example
+that checks clean, against `examples/examples-run-baseline.txt` (which lists
+only what genuinely cannot run in CI). Both ratchets fail in both directions,
+so neither list can decay. What this report added on top: `examples/snake`
+left the check baseline the day
+[perform-inside-loop-has-no-lowering](perform-inside-loop-has-no-lowering.md)
+was resolved, and joined the run baseline with its reason (it opens a raylib
+window and needs the display and the C shim its own CMakeLists links). The
+sweep is 27/0. Output diffing per example (an `expected.stdout` next to each)
+remains a nice-to-have; the run phase already catches the silent-no-op class
+this report was filed for, because a program that prints nothing and exits 0
+is exactly what the near-miss diagnostic below now refuses to let pass
+silently.
+
+**Section 2 is closed by `TUR-W0624`.** A whole-program build with no `main`
+and no top-level statements to fold into one synthesizes an empty entry
+point; when a top-level function is a near-miss of `main` (`-main`, `main-`,
+`Main`, `_main`, `MAIN`, `--main`) the build now warns at that function's
+definition that it is never called, and still produces the do-nothing program
+(`emit_module.c`, at the synthesis site). The general version -- warn on
+every main-less, statement-less whole-program build -- was rejected on
+purpose: `tur check` of any library module is exactly that shape, and a
+warning that fires on every stdlib file is one nobody reads. Pinned by
+`tests/fixtures/warn-no-entry-point-near-miss` (empty stdout, the warning on
+stderr; `requires.compiled` since the interpreter does not synthesize an entry
+point). Documented in the package-management guide's "Entry point
+resolution".

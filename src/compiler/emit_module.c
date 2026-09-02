@@ -13187,14 +13187,24 @@ int emit_program(Buf *out, const Expr *program) {
 
     /* Check if user defined a main function */
     bool user_has_main = false;
+    /* examples-have-no-suite-coverage (section 2): a top-level fn whose name
+     * is a near-miss of `main` -- the tell that an entry point was intended
+     * when none is invoked (see the W0624 emission below). */
+    const FnDef *near_miss_main = NULL;
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
         if (e->kind == EX_FN_DEF) {
             FnDef *fd = e->as.fn_def_.fn;
-            if (strcmp(fd->binding->name->name, "main") == 0) {
+            const char *nm = fd->binding->name->name;
+            if (strcmp(nm, "main") == 0) {
                 user_has_main = true;
                 break;
             }
+            if (!near_miss_main &&
+                (strcmp(nm, "-main") == 0 || strcmp(nm, "main-") == 0 ||
+                 strcmp(nm, "Main") == 0 || strcmp(nm, "_main") == 0 ||
+                 strcmp(nm, "MAIN") == 0 || strcmp(nm, "--main") == 0))
+                near_miss_main = fd;
         }
     }
 
@@ -14558,6 +14568,22 @@ int emit_program(Buf *out, const Expr *program) {
 
     if (!user_has_main) {
         /* Only generate main() if user didn't define one */
+        /* examples-have-no-suite-coverage (section 2): the synthesized main
+         * runs static init and returns 0.  With NO top-level statements to
+         * fold into it, the program does nothing -- which is what
+         * `examples/minikanren` and `examples/snake` silently did for weeks
+         * with a `-main` nobody called.  A near-miss name is the signal an
+         * entry point was intended; say so at its definition. */
+        if (!body.len && near_miss_main) {
+            diag_emit_with_code(DIAG_WARNING, near_miss_main->binding->span,
+                                TUR_W0624_NO_ENTRY_POINT_NEAR_MISS,
+                                "no `main` and no top-level statements: the "
+                                "synthesized entry point does nothing, so this "
+                                "program will run and print nothing. `%s` is "
+                                "never called -- name it `main`, or call it from "
+                                "a top-level form",
+                                near_miss_main->binding->name->name);
+        }
         buf_puts(out, "int main(int argc, char **argv) {\n");
         /* S1b: first statement, matching where the constructors used to run
          * (before the Windows stdio mode switch and before g_panic_trace). */
