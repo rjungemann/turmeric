@@ -12,7 +12,7 @@
 > emission behind `--debug` (`src/compiler/emit_core.c:461`), and the
 > `static_init_register` bands in the emitted `main`
 > (`src/compiler/emit_module.c:13620`). All three already exist.
-> **Related:** [`post-jit-benchmark-resurrection-plan.md`](post-jit-benchmark-resurrection-plan.md)
+> **Related:** [`post-jit-benchmark-resurrection-plan.md`](../archive/post-jit-benchmark-resurrection-plan.md)
 > (owns `tur jit --timing-json`, which this plan absorbs without breaking),
 > [`suite-timing-trends-plan.md`](suite-timing-trends-plan.md) (suite-level
 > wall clock; complementary, not overlapping),
@@ -295,7 +295,7 @@ conclusion "elaboration is slow", which nobody can act on.
 ### 3.5 Absorbing `--timing-json`
 
 `tur jit --timing-json` (`src/main.c:3642`, owned by
-[`post-jit-benchmark-resurrection-plan.md`](post-jit-benchmark-resurrection-plan.md))
+[`post-jit-benchmark-resurrection-plan.md`](../archive/post-jit-benchmark-resurrection-plan.md))
 keeps working byte-for-byte -- the benchmark harness parses `compile_ms`,
 `run_ms`, and the `"engine": "cc-fallback"` marker. C4 additionally makes
 `tur jit --timings` emit a full `kind: "compiler"` document whose `phases`

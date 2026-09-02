@@ -1,6 +1,19 @@
 # Setting up the runtimes for the benchmark sweep
 
-Setup memo for [post-jit-benchmark-resurrection-plan.md](../upcoming/post-jit-benchmark-resurrection-plan.md)
+**All four blockers below are resolved as of 2026-09-01** (same machine).
+`rust-workspace/` is now in the repo (`.gitignore` narrowed to `.../target/`
+only); the mise `_.path` fix landed in the global config; `turmeric` was
+bumped from a stale mise-pinned 0.36.0 to 0.42.2 (matching this repo's
+`VERSION`, after that mismatch caused a `TUR_STDLIB_DIR` version-mismatch
+build failure during the sweep); `check_environment.sh`'s off-by-one `tur`
+path is fixed. Java for Clojure is still not installed -- still genuinely
+optional, per §2.4. See
+[post-jit-benchmark-resurrection-plan.md](../archive/post-jit-benchmark-resurrection-plan.md)'s
+B5 execution note for the sweep this unblocked. Left as a historical record
+of what each fix looked like and why; a fresh machine hitting the same
+symptoms can still follow it step by step.
+
+Setup memo for [post-jit-benchmark-resurrection-plan.md](../archive/post-jit-benchmark-resurrection-plan.md)
 B5 -- "a full sweep on a dedicated machine with all toolchains."  This is what
 "all toolchains" actually means, how to get each one (via `mise` where that
 works), and the four things that are broken or missing on a machine that looks

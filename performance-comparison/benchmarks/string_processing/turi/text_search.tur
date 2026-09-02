@@ -13,13 +13,13 @@
             111))))))
 
 ;; fill-hay -- fill vec v of size n with the haystack pattern.
-(defn fill-hay [v :int i :int n :int] :nil
+(defn fill-hay [v : (Vec int) i :int n :int] :nil
   (if (< i n)
     (do (vec-set! v i (hay-byte i))
         (fill-hay v (+ i 1) n))))
 
 ;; check-hello -- 1 if v[pos..pos+4] spells "hello" (104 101 108 108 111), 0 otherwise.
-(defn check-hello [v :int pos :int] :int
+(defn check-hello [v : (Vec int) pos :int] :int
   (if (= (vec-get v pos) 104)
     (if (= (vec-get v (+ pos 1)) 101)
       (if (= (vec-get v (+ pos 2)) 108)
@@ -33,7 +33,7 @@
     0))
 
 ;; search-loop -- count "hello" occurrences scanning pos from 0 to end-5 (inclusive).
-(defn search-loop [v :int pos :int end :int count :int] :int
+(defn search-loop [v : (Vec int) pos :int end :int count :int] :int
   (if (> (+ pos 5) end)
     count
     (search-loop v (+ pos 1) end (+ count (check-hello v pos)))))

@@ -2,7 +2,7 @@
 ;; Uses vec as a byte buffer instead of inline-C malloc/realloc.
 
 ;; fill-hello -- write "hello" bytes at position pos in vec v.
-(defn fill-hello [v :int pos :int] :nil
+(defn fill-hello [v : (Vec int) pos :int] :nil
   (do (vec-set! v pos       104)
       (vec-set! v (+ pos 1) 101)
       (vec-set! v (+ pos 2) 108)
@@ -10,7 +10,7 @@
       (vec-set! v (+ pos 4) 111)))
 
 ;; concat-loop -- fill "hello" at offsets 0, 5, 10, ... in v.
-(defn concat-loop [v :int i :int n :int] :nil
+(defn concat-loop [v : (Vec int) i :int n :int] :nil
   (if (< i n)
     (do (fill-hello v (* i 5))
         (concat-loop v (+ i 1) n))))

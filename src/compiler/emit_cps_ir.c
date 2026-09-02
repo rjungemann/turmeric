@@ -5420,7 +5420,12 @@ static char *prim_expr(const BuiltinSpec *sp, char **as, uint32_t n) {
     Buf b; buf_init(&b);
     switch (sp->shape) {
         case BS_BIN_INFIX:
-            buf_printf(&b, "(%s) %s (%s)", as[0], sp->c_op, as[1]);
+            /* bit-shr is documented as a LOGICAL (unsigned) right shift;
+             * see the matching comment in emit_core.c's BS_BIN_INFIX case. */
+            if (strcmp(sp->c_op, ">>") == 0)
+                buf_printf(&b, "(int64_t)((uint64_t)(%s) >> (uint64_t)(%s))", as[0], as[1]);
+            else
+                buf_printf(&b, "(%s) %s (%s)", as[0], sp->c_op, as[1]);
             break;
         case BS_VARIADIC_FOLD: {
             uint32_t opens = (n >= 2) ? n - 2 : 0;

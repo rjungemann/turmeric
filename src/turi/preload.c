@@ -83,13 +83,27 @@ void turi_env_preload_native_stubs(TuriEnv *env) {
         /* vec operations.  vec-get/vec-set!/vec-free are dropped here -- the real
          * vec.tur (preloaded next) defines them, and a stub would collide with
          * "already defined by an auto-loaded stdlib module".  vec-new-filled is
-         * benchmark-only (no module defn). */
-        "(defn vec-new-filled [n :int v :int] :int 0)\n"
-        /* numeric helpers.  cstr->parse-int / int->float / bit-shr / bit-xor
-         * stubs are dropped: all are native-backed and/or kind-preserving
-         * builtins the bare call resolves at elaboration -- a :int stub would
-         * shadow the narrow-int builtin behavior. */
+         * benchmark-only (no module defn) and its stub is declared below, in
+         * turi_env_preload_collections, AFTER vec.tur loads -- see the comment
+         * there for why it cannot be declared here. */
+        /* numeric helpers.  cstr->parse-int / bit-shr / bit-xor stubs are
+         * dropped: cstr->parse-int is a documented interpreter-only native
+         * (c-integration-guide.md) that runtime-dispatches by design;
+         * bit-shr/bit-xor are real compiler builtins (src/compiler/
+         * builtins.c) the elaborator already knows the signature of. A
+         * :int stub for either would shadow that builtin behavior.
+         *
+         * int->float is NOT a compiler builtin (no builtins.c entry,
+         * despite this comment previously claiming otherwise) -- it is a
+         * plain native (native_int_to_float, interpreter_natives.c) with no
+         * stub at all, so the elaborator has never seen its signature: a
+         * bare call warns TUR-W0040 "unknown name" and the result types as
+         * unconstrained, which then fails as "mixed-width numeric
+         * arithmetic" the moment it feeds a float context (e.g.
+         * monte_carlo_pi.tur's turi variant). Needs the same real stub
+         * int->unit-float/tur-sqrt already get below. */
         "(defn println-float [x :float d :int] :nil nil)\n"
+        "(defn int->float [x :int] : float 0.0)\n"
         "(defn int->unit-float [x :int] :float 0.0)\n"
         "(defn tur-sqrt [x :float] :float 0.0)\n"
         /* HAMT operations for hash_map benchmark */
@@ -173,6 +187,35 @@ void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root) {
     TuriValue sv = turi_eval(env, src.data);
     (void)sv;
     buf_free(&src);
+
+    /* vec-new-filled: benchmark-only native (native_vec_new_filled in
+     * collections_native.c), no module defn of its own.  Its stub cannot live
+     * in turi_env_preload_native_stubs above -- that runs BEFORE vec.tur (just
+     * loaded here) defines the Vec struct, so a `(Vec A)` return-type
+     * annotation there hits "cannot apply a type of kind '*' as a type
+     * constructor" (Vec unbound).  native_vec_new_filled builds the exact
+     * {data,len,cap} layout defstruct Vec expects, so once Vec exists the
+     * stub can and must return (Vec A) -- typing it :int (as it did
+     * previously) type-checks vec-new-filled's own call site but then fails
+     * every downstream vec-get/vec-set!/vec-free call on the same value,
+     * since those are real vec.tur functions requiring (Vec A), not a raw
+     * int handle.
+     *
+     * NOTE: this fixes the static type only. At runtime the interpreter
+     * still executes this stub's own body (an empty vec-new) instead of
+     * native_vec_new_filled, because turi_register_collection_natives (which
+     * owns this native) is registered exactly once, at env-creation time
+     * (turi/env.c), with no later re-assertion after preload -- unlike
+     * turi_env_register_interpreter_natives, which is deliberately called a
+     * second time in main.c AFTER all turi_env_preload_* calls specifically
+     * so a native shim wins over any stub/module body declared in between.
+     * A real fix re-registers (at minimum) vec-new-filled -- or all of
+     * turi_register_collection_natives -- at that same late point. See
+     * docs/reported/turi-vec-new-filled-native-override-lost.md. */
+    TuriValue sv2 = turi_eval(env,
+        "(defn vec-new-filled [A] [n :int v :A] : (Vec A) (:: (vec-new) (Vec A)))\n"
+    );
+    (void)sv2;
     g_turi_stdlib_preload = saved_preload;
 }
 

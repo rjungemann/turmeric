@@ -172,8 +172,8 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <!-- ── HERO ───────────────────────────── -->
 <div class="hero">
   <div class="hero-inner">
-    <h1>A quick tour of Turmeric</h1>
-    <p class="hero-subtitle">A walkthrough of what makes Turmeric tick.</p>
+    <h1>A tour of Turmeric</h1>
+    <p class="hero-subtitle">A curated list of some of Turmeric's best features</p>
     <p class="hero-desc">
       From algebraic effects to refinement types, each stop in this tour shows you real language features with real code.
     </p>
@@ -236,15 +236,15 @@ h1 em { font-style: italic; color: var(--gold-bright); }
       <span class="tour-card-label">Higher-Order Functions</span>
       <span class="tour-card-icon"><t-icon name="function-square"></t-icon></span>
     </a>
-    <a href="#contracts" class="tour-index-card">
-      <span class="tour-stop-num">10</span>
-      <span class="tour-card-label">Contract Types</span>
-      <span class="tour-card-icon"><t-icon name="shield-check"></t-icon></span>
-    </a>
     <a href="#refinements" class="tour-index-card">
-      <span class="tour-stop-num">11</span>
+      <span class="tour-stop-num">10</span>
       <span class="tour-card-label">Refinement Types</span>
       <span class="tour-card-icon"><t-icon name="sigma"></t-icon></span>
+    </a>
+    <a href="#contracts" class="tour-index-card">
+      <span class="tour-stop-num">11</span>
+      <span class="tour-card-label">Contract Types</span>
+      <span class="tour-card-icon"><t-icon name="shield-check"></t-icon></span>
     </a>
     <a href="#spice" class="tour-index-card">
       <span class="tour-stop-num">12</span>
@@ -271,8 +271,8 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   <div>
     <p class="section-label">01 -- Sweet-Exp Syntax</p>
     <h2 class="section-title">Choose your syntax to taste</h2>
-    <p class="section-desc">A single <code>#lang</code> declaration switches from Lisp-style parentheses to Sweet-Exp notation -- indentation-sensitive, with <code>f(args)</code> for inline calls and <code>$</code> to avoid extra nesting.</p>
-    <p class="section-desc">Both syntaxes compile to the same AST. Sweet-Exp code and classic Turmeric code share libraries freely and can coexist in the same project.</p>
+    <p class="section-desc">A single <code>#lang</code> declaration switches from Lisp-style parentheses to Sweet-Exp notation. It provides a less intimidating syntax, which is indentation-sensitive, with <code>f(args)</code> for inline calls, among other small enhancements, while being fully backwards-compatible.</p>
+    <p class="section-desc">Both syntaxes compile to the same AST. Sweet-Exp code and classic Turmeric code share libraries freely and can coexist in the same project, and other <code>#lang</code>s and "language layers" may be released in the future.</p>
   </div>
   <div class="code-card">
     <div class="code-card-bar">
@@ -365,9 +365,8 @@ handle compute()
 <div class="split-section reveal" id="typeclasses">
   <div>
     <p class="section-label">03 -- Typeclasses</p>
-    <h2 class="section-title">Compile-time dispatch.<br>Zero <em>overhead.</em></h2>
-    <p class="section-desc">Typeclass dispatch resolves to a concrete instance at compile time -- no virtual tables, no runtime cost. Define a typeclass once and the compiler verifies every call site has a valid instance.</p>
-    <p class="section-desc">The <code>^Show</code> constraint syntax expresses type requirements without sacrificing precision or performance.</p>
+    <h2 class="section-title">Like operator overloading on steroids</h2>
+    <p class="section-desc">Typeclass dispatch resolves to a concrete instance at compile time, with no virtual tables, or additional runtime cost. Define a typeclass once and the compiler verifies every call site has a valid instance.</p>
   </div>
   <div class="code-card" style="font-size:12.5px;">
     <div class="code-card-bar"><span class="code-card-filename" data-turmeric="typeclasses.tur" data-sweet-exp="typeclasses.tur.sweet">typeclasses.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
@@ -415,9 +414,9 @@ display(Blue())    ;; =&gt; "blue"</div></div>
 <div class="split-section reverse reveal" id="adts">
   <div>
     <p class="section-label">04 -- ADTs, GADTs &amp; Pattern Matching</p>
-    <h2 class="section-title">A missing case<br>is a <em>compile error.</em></h2>
-    <p class="section-desc"><code>defdata</code> declares sum types; <code>defgadt</code> lets each constructor specialize its own type parameters. Every <code>match</code> arm refines what the checker knows -- no casts, no runtime tags.</p>
-    <p class="section-desc">Missing branches are compile errors, not runtime surprises. Every case is statically verified before your program runs.</p>
+    <h2 class="section-title">Writing data structures is made easy, while making sure nothing goes unchecked.</h2>
+    <p class="section-desc"><code>defdata</code> declares sum types, while <code>defgadt</code> lets each constructor specialize its own type parameters. Every <code>match</code> arm refines what the checker knows. There's no casts, and there's no runtime tags.</p>
+    <p class="section-desc">Missing branches are caught at compile time. Every case is statically verified before the program runs.</p>
   </div>
   <div class="code-card">
     <div class="code-card-bar"><span class="code-card-filename" data-turmeric="expr.tur" data-sweet-exp="expr.tur.sweet">expr.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
@@ -465,9 +464,9 @@ println $ eval(Mul(Add(Lit(2) Lit(3)) Lit(4)))
 <div class="split-section reveal" id="continuations">
   <div>
     <p class="section-label">05 -- Delimited Continuations</p>
-    <h2 class="section-title">Coroutines are<br>plain <em>library code.</em></h2>
-    <p class="section-desc">Turmeric reifies a slice of the call stack as an ordinary value. <code>reset</code> delimits the region; <code>shift</code> captures it.</p>
-    <p class="section-desc">Generators, async/await, and backtracking are all built on those two primitives -- no special syntax, no compiler magic.</p>
+    <h2 class="section-title">Write your own flow-control primitives.</h2>
+    <p class="section-desc">Turmeric reifies a slice of the call stack as an ordinary value. <code>reset</code> delimits the region and <code>shift</code> captures it.</p>
+    <p class="section-desc">Generators, async/await, and backtracking are all built on those two primitives.</p>
   </div>
   <div class="code-card">
     <div class="code-card-bar"><span class="code-card-filename" data-turmeric="gen.tur" data-sweet-exp="gen.tur.sweet">gen.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
@@ -515,9 +514,9 @@ println
 <div class="split-section reverse reveal" id="macros">
   <div>
     <p class="section-label">06 -- Macro System</p>
-    <h2 class="section-title">Compile-time transforms.<br>Zero runtime <em>cost.</em></h2>
-    <p class="section-desc">Macros in Turmeric operate directly on the syntax tree at compile time. New control flow, DSLs, and syntactic sugar are defined with <code>defmacro</code> -- the output is indistinguishable from hand-written code.</p>
-    <p class="section-desc">Quasiquote (<code>`</code>) and unquote (<code>~</code>) make code templates readable. No runtime overhead, ever.</p>
+    <h2 class="section-title">Compile-time transforms without losing type safety.</h2>
+    <p class="section-desc">Macros in Turmeric operate directly on the syntax tree at compile time. New control flow, DSLs, and syntactic sugar are defined with <code>defmacro</code>, and a macro may generate any valid type-safe Turmeric code.</p>
+    <p class="section-desc">Quasiquote (<code>`</code>) and unquote (<code>~</code>) is a lightweight syntax that will hopefully feel familiar to Clojurians, at least.</p>
   </div>
   <div class="code-card">
     <div class="code-card-bar"><span class="code-card-filename" data-turmeric="macros.tur" data-sweet-exp="macros.tur.sweet">macros.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
@@ -564,8 +563,8 @@ defn sign [n : int] : str
 <div class="split-section reveal" id="rc">
   <div>
     <p class="section-label">07 -- Reference Counting</p>
-    <h2 class="section-title">Freed immediately<br>when count <em>hits zero.</em></h2>
-    <p class="section-desc">Turmeric uses reference counting with compiler-assisted elision. <code>rc/clone</code> increments; <code>rc/drop</code> decrements. Cleanup is deterministic -- no GC pauses, no dangling pointers.</p>
+    <h2 class="section-title">Optional reference counting means less manual memory bookkeeping.</h2>
+    <p class="section-desc">Turmeric uses reference counting with compiler-assisted elision. <code>rc/clone</code> increments, while <code>rc/drop</code> decrements. Cleanup is deterministic, and there are never any GC pauses or dangling pointers.</p>
     <p class="section-desc">When the count hits zero, the value is freed right there, at that line. You can see exactly where memory is released.</p>
   </div>
   <div class="code-card">
@@ -602,8 +601,8 @@ let [data rc/of(42)]
 <div class="split-section reverse reveal" id="gc">
   <div>
     <p class="section-label">08 -- Optional GC</p>
-    <h2 class="section-title">A collector you<br>turn <em>on.</em></h2>
-    <p class="section-desc">Reference counting leaks cycles -- every RC language has this problem. Turmeric's answer is a Bacon-Rajan trial-deletion collector layered <em>on top</em> of RC, and it is <strong>off by default</strong>. Nothing traces, nothing pauses, until you ask.</p>
+    <h2 class="section-title">Garbage collection, but only when you want it.</h2>
+    <p class="section-desc">Reference counting leaks cycles, and every RC language has this problem. Turmeric's answer is a Bacon-Rajan trial-deletion collector layered <em>on top</em> of RC, and it is <strong>off by default</strong>. Nothing traces, nothing pauses, until you ask.</p>
     <p class="section-desc">Turn it on and you choose the trigger: <code>(gc!)</code> to collect right here, a suspect-count threshold, or fully automatic at allocation checkpoints. Only <code>rc&lt;T&gt;</code> values participate -- stack values, arenas, and by-value structs are never involved.</p>
   </div>
   <div class="code-card">
@@ -658,8 +657,8 @@ gc-disable!()</div></div>
 <div class="split-section reveal" id="hof">
   <div>
     <p class="section-label">09 -- Higher-Order Functions</p>
-    <h2 class="section-title">Closures capture<br>their <em>environment.</em></h2>
-    <p class="section-desc">Functions are first-class values in Turmeric -- pass them, return them, store them, compose them. Closures capture their lexical environment with full type inference.</p>
+    <h2 class="section-title">Create functions with context: Closures.</h2>
+    <p class="section-desc">Functions are first-class values in Turmeric, and you can pass them, return them, store them, and compose them. Closures capture their lexical environment with full type inference.</p>
     <p class="section-desc">The standard library's <code>map</code>, <code>filter</code>, and <code>reduce</code> work uniformly over any foldable structure, not just lists.</p>
   </div>
   <div class="code-card">
@@ -700,53 +699,13 @@ let [nums [1 2 3 4 5]]
 
 <hr class="divider">
 
-<!-- ── 10 CONTRACT TYPES ──────────────────── -->
-<div class="split-section reverse reveal" id="contracts">
+<!-- ── 10 REFINEMENT TYPES ────────────────── -->
+<div class="split-section reverse reveal" id="refinements">
   <div>
-    <p class="section-label">10 -- Contract Types</p>
-    <h2 class="section-title">Predicates live<br>in the <em>type.</em></h2>
-    <p class="section-desc"><code>#refine{ x : T | p }</code> is a contract type -- a value of type <code>T</code> that satisfies predicate <code>p</code>, checked automatically at every call site. Name them with <code>deftype</code> or write them inline in any parameter or return position.</p>
-    <p class="section-desc">Declare invariants once in the signature with <code>:pre</code> and <code>:post</code>. The compiler inserts the checks -- you don't have to remember to. Strip them from release builds with no code changes.</p>
-  </div>
-  <div class="code-card">
-    <div class="code-card-bar"><span class="code-card-filename" data-turmeric="contracts.tur" data-sweet-exp="contracts.tur.sweet">contracts.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
-    <div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel">;; Named contract types -- predicates as types
-(deftype Nat     #refine{ x : int | (&gt;= x 0) })
-(deftype NonZero #refine{ x : int | (!= x 0) })
-
-;; Predicates live in the signature, not the body
-(defn safe-div [x : Nat  y : NonZero] : Nat
-  :post (= (* result y) x)
-  (/ x y))
-
-;; Compiler inserts the checks -- always on, no flag.
-;; Strip them from a release with --no-contracts.
-(safe-div 10 2)  ;; => 5
-(safe-div 10 0)  ;; contract violated: y != 0</div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none">;; Named contract types -- predicates as types
-deftype Nat     #refine{ x : int | (&gt;= x 0) }
-deftype NonZero #refine{ x : int | (!= x 0) }
-
-;; Predicates live in the signature, not the body
-defn safe-div [x : Nat  y : NonZero] : Nat
-  :post (= (* result y) x)
-  {x / y}
-
-;; Compiler inserts the checks -- always on, no flag.
-;; Strip them from a release with --no-contracts.
-safe-div(10 2)   ;; =&gt; 5
-safe-div(10 0)   ;; contract violated: y != 0</div></div>
-  </div>
-</div>
-
-<hr class="divider">
-
-<!-- ── 11 REFINEMENT TYPES ────────────────── -->
-<div class="split-section reveal" id="refinements">
-  <div>
-    <p class="section-label">11 -- Refinement Types</p>
-    <h2 class="section-title">The check that<br><em>never runs.</em></h2>
-    <p class="section-desc">The same <code>#refine{...}</code> predicate, one step further: the compiler tries to <em>prove</em> it, and emits a runtime check only where the proof fails. A parameter's predicate becomes a hypothesis; a return type becomes a goal.</p>
-    <p class="section-desc">Because every refinement already has a runtime meaning, the prover is free to give up on any obligation and stay sound -- it just falls back to the check the value would have had anyway. Turning it on can never make a correct program wrong. There is no Z3 to install: the solver is a small staged decision procedure built into the compiler, so it works in the browser playground too.</p>
+    <p class="section-label">10 -- Refinement Types</p>
+    <h2 class="section-title">Check <em>values</em> at compile-time when possible&hellip;</h2>
+    <p class="section-desc"><code>#refine{ x : T | p }</code> is a refinement type -- a value of type <code>T</code> that satisfies predicate <code>p</code>, checked automatically at compile-time (if possible). A parameter's predicate becomes a hypothesis, and a return type becomes a goal, so a bad argument is a compile error.</p>
+    <p class="section-desc">There is no external solver to install. The solver is built into compiler, so it works in the browser playground too.</p>
   </div>
   <div class="code-card">
     <div class="code-card-bar"><span class="code-card-filename" data-turmeric="refined.tur" data-sweet-exp="refined.tur.sweet">refined.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
@@ -787,13 +746,53 @@ safe-div(10 0)
 
 <hr class="divider">
 
+<!-- ── 11 CONTRACT TYPES ──────────────────── -->
+<div class="split-section reveal" id="contracts">
+  <div>
+    <p class="section-label">11 -- Contract Types</p>
+    <h2 class="section-title">&hellip;and check values at run-time when needed.</h2>
+    <p class="section-desc">The same <code>#refine{...}</code> predicate has a runtime meaning too. Name one with <code>deftype</code>, or declare invariants directly in the signature with <code>:pre</code> and <code>:post</code>, and the compiler inserts the checks for you.</p>
+        <p class="section-desc">The runtime meaning is what keeps the prover honest: it can give up on an obligation and stay sound, falling back to the check the value would have had anyway. Turning it on can never make a correct program wrong, and you can strip the checks from a release build with no code changes. <em>Refinements and contracts are optional.</em></p>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar"><span class="code-card-filename" data-turmeric="contracts.tur" data-sweet-exp="contracts.tur.sweet">contracts.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
+    <div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel">;; Named contract types -- predicates as types
+(deftype Nat     #refine{ x : int | (&gt;= x 0) })
+(deftype NonZero #refine{ x : int | (!= x 0) })
+
+;; Predicates live in the signature, not the body
+(defn safe-div [x : Nat  y : NonZero] : Nat
+  :post (= (* result y) x)
+  (/ x y))
+
+;; Compiler inserts the checks -- always on, no flag.
+;; Strip them from a release with --no-contracts.
+(safe-div 10 2)  ;; => 5
+(safe-div 10 0)  ;; contract violated: y != 0</div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none">;; Named contract types -- predicates as types
+deftype Nat     #refine{ x : int | (&gt;= x 0) }
+deftype NonZero #refine{ x : int | (!= x 0) }
+
+;; Predicates live in the signature, not the body
+defn safe-div [x : Nat  y : NonZero] : Nat
+  :post (= (* result y) x)
+  {x / y}
+
+;; Compiler inserts the checks -- always on, no flag.
+;; Strip them from a release with --no-contracts.
+safe-div(10 2)   ;; =&gt; 5
+safe-div(10 0)   ;; contract violated: y != 0</div></div>
+  </div>
+</div>
+
+<hr class="divider">
+
 <!-- ── 12 SPICE -- PACKAGE MANAGER ────────── -->
 <div class="split-section reverse reveal" id="spice">
   <div>
     <p class="section-label">12 -- Spice -- Package Manager</p>
-    <h2 class="section-title">One file.<br>Every dependency <em>resolved.</em></h2>
+    <h2 class="section-title">One file tracks your project's dependencies.</h2>
     <p class="section-desc">One <code>build.tur</code> file describes your package and all its spices -- Turmeric fetches, builds, and links them automatically. Git URLs and version refs are all you need.</p>
-    <p class="section-desc">C and CMake dependencies go under <code>:cmake-deps</code> and are wired in via CPM -- no manual CMake configuration required.</p>
+    <p class="section-desc">C and CMake dependencies go under <code>:cmake-deps</code> and are wired in automatically via CPM.cmake.</p>
   </div>
   <div class="code-card" style="font-size:12.5px;">
     <div class="code-card-bar">
@@ -828,9 +827,9 @@ safe-div(10 0)
 <div class="split-section reveal" id="structural">
   <div>
     <p class="section-label">13 -- Structural Typing</p>
-    <h2 class="section-title">Union types are structural.<br>Every branch <em>checked.</em></h2>
-    <p class="section-desc"><code>(int | bool)</code> is a structural union -- the compiler generates exhaustiveness-checked dispatch for every member with no boxing or runtime overhead. Every union member must be handled.</p>
-    <p class="section-desc">The <code>any</code> top type enables gradual typing: every concrete type is a subtype of <code>any</code>. Inspect the tag at runtime with <code>type-of</code>. Both are standard -- no flag required.</p>
+    <h2 class="section-title">Union types make sure every branch of a conditional is covered.</h2>
+    <p class="section-desc"><code>(int | bool)</code> is a structural union, for which the compiler generates exhaustiveness-checked dispatch for every member with no boxing or runtime overhead. Every union member must be handled.</p>
+    <p class="section-desc">The <code>any</code> top type enables gradual typing: every concrete type is a subtype of <code>any</code>. Inspect the tag at runtime with <code>type-of</code>. Both are built right into the language.</p>
   </div>
   <div class="code-card">
     <div class="code-card-bar"><span class="code-card-filename" data-turmeric="structural.tur" data-sweet-exp="structural.tur.sweet">structural.tur</span><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div>
@@ -884,9 +883,9 @@ show-type("hello")   ;; =&gt; "cstr"</div></div>
 <div class="split-section reverse reveal" id="trowel">
   <div>
     <p class="section-label">14 -- Trowel -- The Editor</p>
-    <h2 class="section-title">One download.<br>Nothing else to <em>install.</em></h2>
-    <p class="section-desc">Trowel is a fast, native desktop editor for Turmeric -- not Electron -- with the compiler shipped inside the bundle. Open a file, press Run, see the output in the pane below. A live REPL sits in the split underneath your code.</p>
-    <p class="section-desc">Docstrings and completion for stdlib and buffer-local names come from the bundled compiler's own doc index, so they always match the compiler you are building with. Toggle between classic s-expressions and sweet-exp from the toolbar, and scaffold a new binary, sweet-exp, or library project without touching a terminal.</p>
+    <h2 class="section-title">One download, with nothing else to install.</h2>
+    <p class="section-desc">Trowel is a fast, native desktop editor for Turmeric -- not Electron! -- with the compiler shipped inside the bundle. Open a file, press Run, see the output in the pane below. A live REPL sits in the split underneath your code.</p>
+    <p class="section-desc">Docstrings and completion for stdlib and buffer-local names come from the bundled compiler's own doc index, so they always match the compiler you are building with. Toggle between languages from the toolbar, or sccaffold a new project without touching the terminal.</p>
     <div class="hero-actions" style="justify-content:flex-start;margin-top:28px;">
       <a href="/trowel" class="btn-hero btn-hero-primary">Get Trowel <span style="font-size:16px;">→</span></a>
       <a href="https://github.com/rjungemann/trowel" class="btn-hero btn-hero-secondary">View on GitHub</a>
