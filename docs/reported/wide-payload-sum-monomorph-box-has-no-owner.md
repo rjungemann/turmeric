@@ -100,9 +100,22 @@ by construction.
    monomorph value, so releasing it belongs with that value's lifetime --
    `needs_drop_glue` already exists for `TY_RC`/`TY_REF`/`TY_WEAK`/boxed-fn
    fields and for a nested owning aggregate (`elab_structs.c`), and a
-   wide-payload arm is the same kind of owning field. The blocker is the one
-   `elab_effects.c:30` states: the gate is `n_ctors == 1`, so it never fires
-   for a sum. Widening that gate is the shape of the fix.
+   wide-payload arm is the same kind of owning field.
+
+   **Correction (2026-08-30): `elab_effects.c:30`'s `n_ctors == 1` is NOT the
+   blocker**, as an earlier draft of this report claimed. That predicate is
+   `owning_byvalue_agg`, which governs effect/multishot admissibility. The
+   drop-glue EMITTER already handles multi-variant defs -- `adt_glue_is_tagged`
+   (`def->n_ctors > 1`) emits a `switch (s->tag)` with per-variant field loops.
+
+   The real gap is one level earlier, in what MARKS a def as owning
+   (`elab_structs.c`): a field is flagged `drop_inner_def` only when the INNER
+   def itself `needs_drop_glue`. That tracks boxes whose *contents* need
+   releasing; it has no rule for a box that is merely an owned allocation, which
+   is what a wide payload is (`Rational` is two int64s and needs no glue of its
+   own). And for a parametric monomorph the arms come from tyvars, so this
+   field-level machinery never sees `Rational` at all -- `elab_structs.c:1425`
+   already flags monomorph glue as "separate work".
 2. **Do not box at all.** Store the wide payload inline in the union and let
    the monomorph be wider than 16 bytes. Removes the allocation instead of
    owning it, at the cost of a bigger by-value value on every crossing -- the
@@ -115,6 +128,37 @@ by construction.
 
 Direction 1 is the one that scales, because the box has a single owner and the
 machinery for single-owner release already exists.
+
+## Attempted and reverted: direction 3 (2026-08-30)
+
+Direction 3 (scope-exit drop, keyed on the monomorph binding) was built and
+**measured to fire on nothing** -- the spec-payload leak total was 465 bytes
+before and 465 after -- so it was reverted rather than shipped as dead
+emitter code. Two things it established, both useful to whoever takes this up:
+
+**The consumption shape is mostly not a let binding.** `rational-basics`
+leaks through `(res-ok? (rat/of 3 4))` -- the Result is an argument to a USER
+function, not a binding. RM1's accessor-argument mechanism does not reach it
+either, and correctly so: `res-ok?` is not a known reader, and a by-value
+struct argument could in principle have its arm pointer retained by the
+callee. Freeing there needs a non-retention fact about the callee, which is
+what `nonretain_param_mask` supplies for closures and would have to be
+extended to cover this.
+
+**A drop-site predicate copied from the ctor emitter does not reproduce the
+emitter's own boxing decision**, which is worth knowing before trying again.
+The emitter boxes when `type_is_wide_byval_adt(fres) &&
+!adt_field_is_ros_pointer_box(def, &fres)` over `fres =
+substitute_adt_app_type_owned(fld->full_type, def, args)`. Asking exactly that
+at the drop site, for a binding of type `(Result User cstr)` whose emitted arm
+IS `tur_adt_User *`, returns FALSE: the substitution succeeds
+(`def=Result`, 2 args, the Ok field resolves to a `TY_ADT`) but
+`type_is_wide_byval_adt` declines it, so `adt_byval_value_size_bytes` is not
+seeing the 16 bytes the emitted typedef shows. Either the boxing is decided
+somewhere other than the pair above, or the type reaching the drop site is not
+the one the ctor emitter had. That discrepancy should be resolved FIRST --
+any fix keyed on a predicate that disagrees with the emitter will free the
+wrong arms or none.
 
 ## Related
 
