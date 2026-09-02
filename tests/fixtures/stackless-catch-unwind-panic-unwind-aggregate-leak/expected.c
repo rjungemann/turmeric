@@ -8304,7 +8304,7 @@ static int64_t f(tur_adt_Option__int acc, int64_t n) {
            } else {
                __t180 = INT64_C(222);
            }
-           tur_result_box_free((int64_t)(intptr_t)__box178);
+           tur_result_box_free((int64_t)(intptr_t)r_1440);
            __v = (int64_t)(intptr_t)(__t180); __pc = __k->tag; break;
           }
           case 4: {

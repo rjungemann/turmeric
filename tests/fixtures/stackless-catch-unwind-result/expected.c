@@ -8230,7 +8230,7 @@ static int64_t f(int64_t n) {
            } else {
                __t178 = INT64_C(0);
            }
-           tur_result_box_free((int64_t)(intptr_t)__box176);
+           tur_result_box_free((int64_t)(intptr_t)r_1439);
            __v = (int64_t)(intptr_t)(__t178); __pc = __k->tag; break;
           }
          }

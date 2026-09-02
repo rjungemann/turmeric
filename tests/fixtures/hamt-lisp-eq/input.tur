@@ -33,13 +33,19 @@
                       (hamt/free m2)
                       (hamt/free m3)
                       (hamt/free m4)
-                      (free k1)
-                      (free v1)
-                      (if (and (= cnt2 1)
-                               (= cnt4 1)
-                               (= (int-val v-from-m2) (int-val v-from-m4)))
-                        1
-                        0))))))))))))
+                      ;; Read the values BEFORE freeing them: v-from-m2 and
+                      ;; v-from-m4 are v1 itself (the map stores the pointer), so
+                      ;; freeing v1 first made the comparison a use-after-free
+                      ;; (ASan: heap-use-after-free in int-val; the corpus leak
+                      ;; sweep of 2026-09-02 found it).
+                      (let [same (= (int-val v-from-m2) (int-val v-from-m4))]
+                        (free k1)
+                        (free v1)
+                        (if (and (= cnt2 1)
+                                 (= cnt4 1)
+                                 same)
+                          1
+                          0)))))))))))))
 
 ;; Test: maps with different keys are different
 (defn test-neq-content [] :int

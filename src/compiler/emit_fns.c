@@ -2109,12 +2109,30 @@ static void gs_catch_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sin
             if (sink->kind == GSK_ASSIGN && sink->bi >= 1 &&
                 sink->bi == sink->bn && sink->cont && sink->body) {
                 const Binding *boxbind = sink->binds[sink->bi - 1].binding;
-                if (boxbind && !gs_suspends_live(gs, sink->body) &&
+                /* residual-leaks (2026-09-02): the straight-line gate is no
+                 * longer needed when the box has a machine VARIABLE to be
+                 * freed through.  The gate existed because the free named
+                 * `__box<id>`, a local of THIS resume segment, which a later
+                 * segment (after a self-call descend in BODY) cannot see; but
+                 * gs_save / gs_restore carry every machine var across a
+                 * descend, so naming `sink->dest` -- the let-bound var the box
+                 * is assigned to -- is valid in whichever segment BODY's
+                 * terminal delivery lands in, and that delivery runs exactly
+                 * once per activation (branches are exclusive).  A nested
+                 * catch and a panic in BODY stay excluded: a panic unwinds
+                 * past the delivery (a leak, not a UAF), a nested catch's own
+                 * resume must not be confused with this one.  `(let [r
+                 * (catch-unwind ...)] (if (err? r) (+ 1 (h (- n 1))) 999))` --
+                 * the stackless panic stress fixtures, 53 B x 200k iterations
+                 * -- is the shape this admits. */
+                bool through_var = sink->dest != NULL;
+                if (boxbind &&
+                    (through_var || !gs_suspends_live(gs, sink->body)) &&
                     !gs_has_catch(sink->body, gs->fd) &&
                     !gs_has_panic(sink->body) &&
                     !catch_box_binding_escapes(sink->body, boxbind)) {
                     cont_copy = *sink->cont;
-                    cont_copy.free_box = boxnm;
+                    cont_copy.free_box = through_var ? sink->dest : boxnm;
                     assign_copy = *sink;
                     assign_copy.cont = &cont_copy;
                     dsink = &assign_copy;

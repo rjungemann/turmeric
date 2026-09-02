@@ -73,3 +73,52 @@ boxes for proven non-retaining sinks, a fixed point for recursive walkers), and
 the sum-param result gate widened to every copy-shaped result. There is no
 compiler-owned residue left in this sweep that is not either a recursive spine
 or a dictionary-dispatch site.
+
+## Corpus-wide sweep, 2026-09-02
+
+The 27-fixture list above was the erased-base callers only. Every fixture
+(2,186 built; 7 did not build under the ASan flags) was then run under
+AddressSanitizer with leak detection for the first time. Two findings that
+are not leaks came first:
+
+- **`hamt-lisp-eq` had a real use-after-free in the fixture itself**: it
+  freed the value it had stored in the map, then compared it through the
+  map. Fixed by reading before freeing. Pre-existing on `main`.
+- **`van-laarhoven-lens-wide-functor-show` reads 8 bytes from a 1-byte
+  box**: the aggregate return spill boxes a `(Identity bool)` monomorph at
+  `sizeof` 1 and the erased generic reader dereferences it as the int64
+  layout. Pre-existing on `main`, right answer by little-endian luck; filed as
+  [erased-generic-field-read-overruns-subword-monomorph-box](../reported/erased-generic-field-read-overruns-subword-monomorph-box.md).
+
+Then the leaks: 735 of 2,186 fixtures leaked something, 31.4 MB in total --
+and 30.8 MB of that was ONE shape in three fixtures. The stackless
+catch-unwind stress loops (`stackless-catch-unwind-panic-caught` and its two
+siblings, 200k caught panics each) leaked the caught `Result` box plus its
+panic payload and message, 53 B per iteration. The stackless emitter already
+had a scope-exit free for a let-bound caught box, gated on the body being
+straight-line, because the free named the resume segment's local temp;
+naming the machine variable instead (which `gs_save`/`gs_restore` carry
+across every descend) lets a body that self-calls qualify. All three are
+fully clean and carry `requires.leak-check`.
+
+The rest, by allocation-site shape (record counts; bytes are in the raw
+sweep and are small everywhere but `logic-lazy-infinite`'s 219 KB stream
+spine):
+
+| shape | records | fixtures | what it is |
+|---|---:|---:|---|
+| user functions | 1,800 | 453 | dominated by `dk_new` / `seq-new` / `range-new` (generator and continuation frames the fixtures never close), `json/decode` nodes never `json/free`d, `mreturn` (logic stream spine) |
+| runtime values | 580 | 137 | `hamt_malloc` (378: persistent maps and sets never freed), `vec-push!`, `tur_string_from_bytes` |
+| ADT constructors | 472 | 141 | GADT `Bound`/`Size`/`SizedVec` cells (by design), `Cons`/`Stream` spines (RM2), `Point` products in containers |
+| fixture `main` | 258 | 122 | allocations inlined into `main` at -O1, mostly the same runtime values |
+| runtime other | 227 | 139 | `tur_cloneable_cont_alloc`/`clone` (multi-shot continuations, process-lifetime by design), `__tur_cons_of`, `tur_box_ok`/`err` from inline C |
+| instance bodies | 124 | 90 | `Show`'s `show` returning a malloc'd cstr nobody frees (29), Arrow instances |
+| closure envs / spills | 42 | 30 | dictionary-dispatch sites and aggregate spills |
+| erased sum boxes | 2 | 2 | the two class-method fixtures from the value-struct payload report |
+
+The compiler-owned classes visible here that no phase owns yet are the
+persistent-collection and generator frames the fixtures allocate and never
+release (a fixture-hygiene question as much as a compiler one: a HAMT has
+`hamt/free`, a Seq has no free at all), and `Show` returning owned strings
+through an interface that has no way to say so. Neither is a sum box; both
+are recorded here so the next sweep does not rediscover them.

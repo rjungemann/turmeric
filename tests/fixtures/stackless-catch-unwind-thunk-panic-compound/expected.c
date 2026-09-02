@@ -8228,6 +8228,7 @@ static int64_t f(int64_t n) {
             n = __ra177_0;
             __k = __n177; __pc = 1; break;
            } else {
+            tur_result_box_free((int64_t)(intptr_t)r_1436);
             __v = (int64_t)(intptr_t)(INT64_C(999)); __pc = __k->tag; break;
            }
           }
@@ -8238,6 +8239,7 @@ static int64_t f(int64_t n) {
            __t174 = (int64_t)(intptr_t)(__k->saved[3]);
            __t174 = (int64_t)(intptr_t)(__v);
            { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
+           tur_result_box_free((int64_t)(intptr_t)r_1436);
            __v = (int64_t)(intptr_t)((INT64_C(1)) + (__t174)); __pc = __k->tag; break;
           }
          }
