@@ -207,6 +207,25 @@ else
 fi
 
 echo
+# ---------------------------------------------------------------------------
+# debugger-and-tracer-only-instrument-main: a TOP-LEVEL program (no `main`)
+# is debuggable too -- stopOnEntry stops on its first form, a breakpoint in a
+# function the top level calls fires, output and exit still arrive.  It used
+# to run to completion with no `stopped` event at all.
+# ---------------------------------------------------------------------------
+TLFIX="tests/fixtures/dap-toplevel/input.tur"
+tl_out=$(python3 tests/dap-toplevel-driver.py "$TUR" "$TLFIX" 2>&1)
+dap_main_out="$out"
+out="$tl_out"
+expect "top-level: breakpoint verified"        "BPSET line=6 verified=true"
+expect "top-level: entry stop reported"        "STOP entry reason=entry"
+expect "top-level: entry frame is the top level" "FRAME entry #0 <top> input.tur:3"
+expect "top-level: breakpoint fires in callee" "STOP bp reason=breakpoint"
+expect "top-level: callee frame"               "FRAME bp #0 use-ask input.tur:6"
+expect "top-level: output still arrives"       "OUTPUT 42"
+expect "top-level: exit code"                  "EXIT code=0"
+out="$dap_main_out"
+
 if [ "$fail" -ne 0 ]; then
   echo "FAIL dap: $fail assertion(s) failed ($pass passed)"
   echo "---- transcript ----"

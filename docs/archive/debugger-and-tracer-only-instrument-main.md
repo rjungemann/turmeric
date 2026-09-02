@@ -1,5 +1,7 @@
 # `tur dap` and `tur trace` only instrument `(main)`; top-level work is invisible
 
+**Status: RESOLVED 2026-09-02** -- see the Resolution at the end.
+
 **Severity: medium** (no wrong answers, but the two debugging tools report
 nothing for a whole shape of program, and `setBreakpoints` actively claims
 otherwise -- see "The part that misleads").
@@ -135,3 +137,34 @@ refusing or warning about programs that have by then become debuggable.
 If (1) alone lands — honest `verified: false` — neither workaround becomes
 wrong, but both can lean on the adapter's own answer instead of re-deriving it
 from the source text, which is the more robust place for it to live.
+
+## Resolution (2026-09-02)
+
+Fix direction (2), the real one. `cmd_eval_h` (`src/main.c`, the launch path
+both `tur dap` and `tur trace` go through) attached the debugger and let the
+embedder install its pause handler BEFORE the user file loaded, but only
+*armed* it right before `(main)` -- so a top-level program's forms ran with
+the debugger idle: no entry stop, no breakpoints, `0 steps`. It now pre-scans
+the file for a top-level `main` (`file_defines_main`: `(defn main` or the
+sweet-exp `defn main` at a line start -- the rule Try Turmeric and Trowel
+already re-derived client-side) and, when there is none, arms the debugger
+around the load itself: the entry stop lands on the program's first located
+form (`<top> input.tur:3`), a breakpoint inside a function the top level calls
+fires, and the recorder records the steps. A file WITH a `main` keeps arming
+right before `(main)`, so its definitions still load without stopping and the
+existing DAP transcript (entry frame `main`) is unchanged. The wasm glue
+(`turi_wasm_trace_run`) already had exactly this split; the CLI was the hole.
+
+Direction (1) -- `verified: false` on the top-level file -- is moot: the
+breakpoint the report shows as falsely verified now genuinely binds.
+
+Pinned by `tests/fixtures/dap-toplevel` (the report's `toplevel.tur`) driven
+by `tests/dap-toplevel-driver.py` from `tests/run-dap.sh` (entry stop at the
+first form, breakpoint in `use-ask` line 6, output `42`, exit 0: 68/0), and
+by `tests/run-trace.sh` (a top-level program records 12 steps, not 0: 36/0).
+The time-travel tracing guide states the rule.
+
+Downstreams: Try Turmeric's Run/Trace rule (load, then `(main)` if defined,
+else the top-level forms are the program) is the same rule and stays. Trowel's
+`DefinesMainEntry` warning before a debug session ("a top-level file will not
+stop") is now wrong and should be retired; its `TraceOutcome::NoMain` likewise.

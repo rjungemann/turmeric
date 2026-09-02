@@ -61,6 +61,13 @@ if [ $rc -ne 0 ]; then
   exit 1
 fi
 
+# debugger-and-tracer-only-instrument-main: a TOP-LEVEL program (no `main`)
+# records its steps too; it used to summarise "0 steps".
+tl_out=$("$TUR" trace tests/fixtures/dap-toplevel/input.tur -o "$REC.toplevel" 2>&1)
+expect "a top-level program records steps"     "12 steps"     "$tl_out"
+reject "a top-level program is not empty"   "0 steps"      "$tl_out"
+rm -f "$REC.toplevel"
+
 # The recorder is not a muzzle: `(println (fib 6))` still prints 8.
 expect "the program's own output still reaches stdout" "8" "$rec_out"
 expect "the summary reports the step count"    "226 steps"    "$rec_out"

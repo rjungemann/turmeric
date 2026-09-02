@@ -1627,6 +1627,7 @@ static int cmd_build(const char *input, const char *out_path,
                      int n_reader_macro_paths);
 static char *find_project_root(const char *start);
 static void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources);
+static bool file_defines_main(const char *path);
 /* used-attr-whole-program: collect slash-separated names of -I-reachable
  * modules carrying a #[used] attribute, so cmd_build can force-load them into
  * the whole-program TU (defined after collect_tur_recursive/file_has_used_attr
@@ -7500,6 +7501,15 @@ static int cmd_eval_h(const char *path, bool use_color,
      * broke every `#lang`/sweet-exp fixture that did not also carry a
      * dialect-bearing extension. */
     TuriValue result;
+    /* debugger-and-tracer-only-instrument-main: a file with no `main` is a
+     * top-level program, so arm around the load itself -- the entry stop
+     * lands on its first located node, breakpoints in it and in what it calls
+     * fire, and the recorder records its steps (it used to report 0 steps and
+     * `tur dap` never stopped, not even for stopOnEntry).  A file WITH a main
+     * keeps arming right before `(main)` below, so its top-level definitions
+     * still load without stopping. */
+    bool has_main = file_defines_main(path);
+    if (debug && !has_main) turi_debug_arm(env);
     {
         char load_form[4200];
         snprintf(load_form, sizeof load_form, "(load \"%s\")", path);
@@ -7545,6 +7555,32 @@ static int cmd_eval_h(const char *path, bool use_color,
     if (hooks && hooks->on_done) hooks->on_done(env, hooks->ud);
     turi_env_free(env);
     return rc;
+}
+
+/* debugger-and-tracer-only-instrument-main: does the file define a top-level
+ * `main`?  A textual scan -- `(defn main` / `defn main` at a line start (the
+ * sweet-exp spelling) -- because the answer is needed BEFORE the file is
+ * loaded: it decides whether the debugger is armed around the whole load (a
+ * top-level program: its forms ARE the program, so the entry stop, the
+ * breakpoints and the recorder must see them) or, as before, only around the
+ * `(main)` call.  The same rule Try Turmeric and Trowel re-derive on the
+ * client side; deriving it here lets them stop. */
+static bool file_defines_main(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    char line[4096];
+    bool found = false;
+    while (!found && fgets(line, sizeof line, f)) {
+        const char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (strncmp(p, "(defn main", 10) == 0 || strncmp(p, "defn main", 9) == 0) {
+            char c = p[(p[0] == '(') ? 10 : 9];
+            if (c == ' ' || c == '\t' || c == '[' || c == '(' || c == '\n' || c == '\r')
+                found = true;
+        }
+    }
+    fclose(f);
+    return found;
 }
 
 /* Back-compat wrapper: the common case with no embedder hooks. */

@@ -492,7 +492,7 @@ into a frame env again.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [debugger-and-tracer-only-instrument-main](debugger-and-tracer-only-instrument-main.md) | medium | `tur dap` and `tur trace` attach around `(main)` only, so a file whose work is at the top level stops nowhere and records nothing -- and `setBreakpoints` still answers `verified: true`, so the client draws a bound breakpoint that can never hit. |
+| ~~debugger-and-tracer-only-instrument-main~~ | -- | **Resolved 2026-09-02**: a program with no `main` is now debugged and traced as a top-level program -- the CLI launch arms the debugger around the load itself (the wasm glue already did), so stopOnEntry stops on the first form, breakpoints in called functions fire, and the recorder records steps. Top-level DAP scenario and trace case added. Archived to [docs/archive](../archive/debugger-and-tracer-only-instrument-main.md) |
 
 `turi-catch-unwind-aggregate-payload` was filed and resolved 2026-08-21 and
 moved to
