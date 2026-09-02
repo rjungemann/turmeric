@@ -53,11 +53,33 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [wss-client-cert-verification](wss-client-cert-verification.md) | medium | (spice repo) `wss://` client uses MBEDTLS_SSL_VERIFY_NONE -- no cert verification |
 | [webkit-sw-controlled-reload-fails-wasm-init](webkit-sw-controlled-reload-fails-wasm-init.md) | medium | Try Turmeric shows "Failed to load WASM" on a WebKit *reload*, once the service worker controls the page and the wasm assets come from the Cache API instead of the network. Not the SharedArrayBuffer path (main.js:1178, not :1168). First load is fine, so it hits returning visitors, and the "Please refresh the page" advice cannot work. Root cause not established; unconfirmed on real iOS Safari, which is what decides the severity |
 | [c-sources-propagate-only-one-level](c-sources-propagate-only-one-level.md) | medium | `:build-opts :c-sources` is collected from the root manifest and its **direct** `:spices` deps only -- no recursion, no visited set -- so a library spice that ships an implementation TU links fine for its direct consumers and fails two hops away with undefined symbols that name a dependency the app never mentions. `:cmake-deps` **is** fully transitive, which is what makes it surprising. Blocks retiring `spices/raygui`'s CMake shim in favor of `:c-sources` |
-| [stdlib-dir-guard-accepts-mismatched-stdlib](stdlib-dir-guard-accepts-mismatched-stdlib.md) | medium | `resolve_stdlib_root` (`main.c:263`) accepts `$TUR_STDLIB_DIR` on a readable `macros.tur` alone, so a stdlib from a *different release* passes and the current compiler silently builds against it. Surfaces as `no member named 'is_ok' in 'tur_result_box_t'` with nothing naming the variable -- it reads as a Result-lowering bug. This is what `type-fuzz-src-red-on-clang-21` (now archived) actually was; a version manager whose `python3` is a shim can inject the variable into a process whose shell never had it |
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | **`#json-str?<T>` landed 2026-08-21**; `#json-file<T>` still unimplemented (RD2 blocker 2: read-file's `ptr<void>`/NULL, ownership, unreadable-file semantics) |
 | [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
+
+`stdlib-dir-guard-accepts-mismatched-stdlib` was resolved 2026-09-02 and moved
+to [docs/archive](../archive/stdlib-dir-guard-accepts-mismatched-stdlib.md) by
+fix direction (1). `stdlib/VERSION` is written beside the top-level `VERSION`,
+ships with the stdlib, and `resolve_stdlib_root` compares it against
+`TUR_VERSION`; a mismatch names both versions and the variable.
+
+It also closed the report's OTHER complaint, which only became visible once the
+stamp existed: fix direction (2)'s "differs from the walk-up" notice fired even
+when the two stdlibs were the SAME release, telling the user a mismatch "will
+miscompile" when it demonstrably would not. The three verdicts are separated
+now -- a confirmed MISMATCH gets the definite message, an UNKNOWN (unstamped)
+stdlib falls back to the heuristic, and a confirmed MATCH is silent wherever it
+sits. That last one is what makes deliberately pointing at another tree usable.
+
+The real risk is the stamp rotting: a stale one makes a mismatched stdlib look
+like a match AND makes the correct one warn, so it is worse than no stamp
+because it is trusted. `tests/check-stdlib-version-stamp.sh` (ctest
+`tur_stdlib_version_stamp`) fails on drift, emptiness, or absence, and the three
+`cut-*-release` commands bump it alongside `VERSION`. Note the report's "Guides
+to update" names `docs/guides/troubleshooting-guide.md`, which does not exist and
+never has (checked against `origin/main`); the material went to
+`docs/guides/tvm-guide.md`, since tvm is the tool that SETS the variable.
 
 `spices-carry-pre-sum-option-result-layout` was resolved 2026-08-27 in
 `rjungemann/turmeric-spices` ("migrate every spice off the pre-sum

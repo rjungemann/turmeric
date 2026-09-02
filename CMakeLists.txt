@@ -485,6 +485,15 @@ add_test(
   COMMAND bash tests/check-ctor-alias-ambiguity.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# stdlib/VERSION is what lets tur tell its own stdlib from another release's.
+# A stamp that drifts is worse than no stamp, because it is trusted: a stale one
+# makes a mismatched stdlib look like a match AND makes the correct one warn.
+# See docs/archive/stdlib-dir-guard-accepts-mismatched-stdlib.md.
+add_test(
+  NAME tur_stdlib_version_stamp
+  COMMAND bash tests/check-stdlib-version-stamp.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # docs/reported/README.md is the triage index: it must list every open finding
 # and nothing else.  It has drifted BOTH ways -- four rows left behind after
 # their reports were archived (so triage read four findings that were not open),

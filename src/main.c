@@ -305,6 +305,50 @@ static bool same_dir(const char *a, const char *b) {
     return strcmp(a, b) == 0;
 }
 
+/* stdlib-dir-guard-accepts-mismatched-stdlib: does this stdlib belong to THIS
+ * compiler?  `<root>/VERSION` carries the release the stdlib shipped with,
+ * written beside the top-level VERSION and kept in lockstep with it by
+ * tests/check-stdlib-version-stamp.sh (ctest `tur_stdlib_version_stamp`).
+ *
+ * The older probe (a readable macros.tur) proves the directory IS a stdlib.  It
+ * does not prove it is OURS, and a stdlib from another release is the more
+ * common stale case -- a version manager keeps every install on disk.  The
+ * mismatch then surfaces far downstream as something like "no member named
+ * 'is_ok' in 'tur_result_box_t'", naming neither the stdlib nor the variable,
+ * and reads as a codegen bug.  That cost a full investigation once; see
+ * docs/archive/type-fuzz-src-red-on-clang-21.md. */
+typedef enum {
+    STDLIB_VER_MATCH,      /* stamped, and it is ours */
+    STDLIB_VER_MISMATCH,   /* stamped, and it is someone else's */
+    STDLIB_VER_UNKNOWN,    /* no stamp: predates the check, or an odd layout */
+} StdlibVerdict;
+
+/* Reads `<root>/VERSION`.  On MISMATCH, `out_ver` receives the stamp found. */
+static StdlibVerdict stdlib_version_verdict(const char *root, char *out_ver,
+                                            size_t cap) {
+    char path[4096];
+    int n = snprintf(path, sizeof path, "%s/VERSION", root);
+    if (n <= 0 || (size_t)n >= sizeof path) return STDLIB_VER_UNKNOWN;
+
+    FILE *f = fopen(path, "r");
+    if (!f) return STDLIB_VER_UNKNOWN;
+    char buf[256];
+    char *got = fgets(buf, sizeof buf, f);
+    fclose(f);
+    if (!got) return STDLIB_VER_UNKNOWN;
+
+    /* Strip trailing whitespace; the file is written with a trailing newline. */
+    size_t len = strlen(buf);
+    while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r' ||
+                       buf[len-1] == ' '  || buf[len-1] == '\t')) {
+        buf[--len] = '\0';
+    }
+    if (len == 0) return STDLIB_VER_UNKNOWN;
+    if (strcmp(buf, TUR_VERSION) == 0) return STDLIB_VER_MATCH;
+    snprintf(out_ver, cap, "%s", buf);
+    return STDLIB_VER_MISMATCH;
+}
+
 static const char *resolve_stdlib_root(void) {
     if (g_stdlib_root_state != 0) {
         return g_stdlib_root[0] ? g_stdlib_root : "stdlib";
@@ -344,15 +388,39 @@ static const char *resolve_stdlib_root(void) {
                  * with no walk-up result there is nothing to disagree with
                  * (the wasm/LSP embedder sets the variable deliberately and
                  * has no exe path), so that case stays silent. */
-                char beside[4096];
-                if (find_stdlib_beside_exe(beside, sizeof(beside))
-                    && !same_dir(env, beside)) {
+                char found[64];
+                found[0] = '\0';
+                StdlibVerdict v = stdlib_version_verdict(env, found, sizeof found);
+                if (v == STDLIB_VER_MISMATCH) {
                     fprintf(stderr,
-                        "tur: TUR_STDLIB_DIR=%s overrides the stdlib beside "
-                        "this binary (%s).\n"
-                        "tur: a stdlib from a different release will "
-                        "miscompile against this compiler; unset it if that "
-                        "was not deliberate.\n", env, beside);
+                        "tur: TUR_STDLIB_DIR=%s is turmeric %s, but this "
+                        "compiler is v%s.\n"
+                        "tur: a mismatched stdlib miscompiles in ways that name "
+                        "neither the stdlib nor this variable; unset it if that "
+                        "was not deliberate.\n", env, found, TUR_VERSION);
+                } else if (v == STDLIB_VER_UNKNOWN) {
+                    /* No stamp to compare, so fall back to the older heuristic:
+                     * report only when a stdlib beside this binary exists AND
+                     * differs.  With no walk-up result there is nothing to
+                     * disagree with (the wasm/LSP embedder sets the variable
+                     * deliberately and has no exe path), so that stays silent.
+                     *
+                     * This used to fire whenever the two directories differed,
+                     * including when they were the same release -- "someone who
+                     * deliberately points at another tree gets a notice they do
+                     * not need", which is what the stamp is for.  A CONFIRMED
+                     * match now says nothing at all. */
+                    char beside[4096];
+                    if (find_stdlib_beside_exe(beside, sizeof(beside))
+                        && !same_dir(env, beside)) {
+                        fprintf(stderr,
+                            "tur: TUR_STDLIB_DIR=%s overrides the stdlib beside "
+                            "this binary (%s), and carries no VERSION stamp to "
+                            "check it against v%s.\n"
+                            "tur: a stdlib from a different release will "
+                            "miscompile against this compiler; unset it if that "
+                            "was not deliberate.\n", env, beside, TUR_VERSION);
+                    }
                 }
                 memcpy(g_stdlib_root, env, n + 1);
                 g_stdlib_root_state = 1;
@@ -371,6 +439,20 @@ static const char *resolve_stdlib_root(void) {
 
     if (find_stdlib_beside_exe(g_stdlib_root, sizeof(g_stdlib_root))) {
         g_stdlib_root_state = 1;
+        /* The stdlib beside the binary should always be ours.  Only a confirmed
+         * MISMATCH is reported: an unstamped one here is an odd or partial
+         * install layout, which should not nag on every invocation. */
+        {
+            char found[64];
+            found[0] = '\0';
+            if (stdlib_version_verdict(g_stdlib_root, found, sizeof found)
+                    == STDLIB_VER_MISMATCH) {
+                fprintf(stderr,
+                    "tur: the stdlib at %s is turmeric %s, but this compiler is "
+                    "v%s -- they must match.\n",
+                    g_stdlib_root, found, TUR_VERSION);
+            }
+        }
         /* Propagate to TUR_STDLIB_DIR so the elaborator (elab_toplevel.c)
          * sees the same value without needing its own copy of this
          * resolver.  Use overwrite=0 so an explicit user override wins;
