@@ -5212,6 +5212,25 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
     b->nonretain_ptr_param_mask = 0;
     b->nonretain_sum_param_mask = 0;
     if (body && !expr_subtree_has_inline_c(body)) {
+      /* residual-leaks (2026-09-02): a GREATEST fixed point for the fn-param
+       * mask.  `list-eq?` hands `cmp-fn` to its own recursive call; with the
+       * mask still zero during inference that self-call read as an escape and
+       * the mask never set, so every comparator into a recursive stdlib walker
+       * leaked its shim box.  Start with every fn-typed param assumed
+       * non-retaining, clear the bits the walk proves escape, and repeat
+       * until nothing changes: bits only ever clear, so this terminates, and
+       * a bit that survives is one no use of the param can contradict --
+       * including a pass-through into a slot that also survived. */
+      for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
+          Binding *_pb = params[_pi];
+          if (_pb && (_pb->is_fat || _pb->is_poly_fn || _pb->type.kind == TY_FN))
+              b->nonretain_param_mask |= (1u << _pi);
+      }
+      uint32_t _prev_fn_mask;
+      do {
+        _prev_fn_mask = b->nonretain_param_mask;
+        b->nonretain_ptr_param_mask = 0;
+        b->nonretain_sum_param_mask = 0;
         for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
             Binding *_pb = params[_pi];
             if (!_pb) continue;
@@ -5253,8 +5272,8 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
             }
             bool _is_fnparam = _pb->is_fat || _pb->is_poly_fn ||
                                _pb->type.kind == TY_FN;
-            if (_is_fnparam && !closure_binding_escapes(body, _pb))
-                b->nonretain_param_mask |= (1u << _pi);
+            if (_is_fnparam && closure_binding_escapes(body, _pb))
+                b->nonretain_param_mask &= ~(1u << _pi);
             /* any-struct-box-leak-per-widen: an `any` parameter joins the same
              * inference, and means the same thing -- "this body does not retain
              * a pointer this parameter carries".  A tur_tagged_t whose payload
@@ -5281,6 +5300,7 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
                     b->nonretain_ptr_param_mask |= (1u << _pi);
             }
         }
+      } while (b->nonretain_param_mask != _prev_fn_mask);
     }
 }
 

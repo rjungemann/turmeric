@@ -391,6 +391,7 @@ typedef struct EmitCtx {
      * in `thunk_typedefs` and the fill statements in `fatbox_init`, emitted as
      * one `__tur_fatbox_init` registered in the earliest static-init band. */
     char    **fatbox_keys;
+    bool      fatbox_keep_emitted;   /* __tur_fatbox_keep glue is in thunk_typedefs */
     uint32_t  n_fatbox_keys;
     uint32_t  cap_fatbox_keys;
     Buf      *fatbox_init;
@@ -1025,6 +1026,9 @@ const char *emit_env_struct_fn_typedef(EmitCtx *ctx, const Symbol *env_name);
  * __tur_fatshim<arity> shim instead) -- this keeps int64 fixtures churn-free. */
 const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
                                  const char *fnptr);
+/* Emit the no-op drop glue the static / stack fat boxes carry as their
+ * header, once.  False when there is nowhere to put it. */
+bool ensure_fatbox_keep(EmitCtx *ctx);
 /* catch-unwind-aggregate-return-miscompiled: per-type boxing trampoline for an
  * aggregate-returning catch-unwind / catch-panic-of thunk. */
 /* type-of-cast-kind-granularity: the `any` box tag for a type -- its TypeKind

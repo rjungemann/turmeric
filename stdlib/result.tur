@@ -173,7 +173,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn result-eq? [r1 : int r2 : int ^fat ok-cmp ^fat err-cmp]
+(defn result-eq? [r1 : int r2 : int ^borrow ^fat ok-cmp ^borrow ^fat err-cmp]
   #fx{}
   : bool
   ```c

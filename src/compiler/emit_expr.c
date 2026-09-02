@@ -12091,7 +12091,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
 
             char *fat_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            {
+            if (e->as.fn_to_fat_.stack_ok && ensure_fatbox_keep(ctx)) {
+                /* residual-leaks (2026-09-02): the sink was proven not to retain
+                 * this value (inferred mask, or a declared ^borrow on an
+                 * inline-C sink such as `result-eq?`), so the box is dead the
+                 * moment the call returns -- give it the call's own stack
+                 * frame instead of a malloc nothing ever freed (a let-bound
+                 * comparator is not a link-time constant, so the static box
+                 * above cannot take it).  Header is the no-op keep glue, so a
+                 * drop through any path is harmless rather than a free() of
+                 * the stack. */
+                char *base_tmp = fresh_tmp(ctx);
+                buf_printf(body,
+                           "union { void *__a; int64_t __b; char __c[sizeof(void *) + 2 * sizeof(int64_t)]; } "
+                           "%s = { .__a = (void *)__tur_fatbox_keep };\n", base_tmp);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "int64_t *%s = (int64_t *)((char *)&%s + sizeof(void *));\n",
+                           fat_tmp, base_tmp);
+                free(base_tmp);
+            } else {
                 /* closure-drop-glue (Model R): give the bare-fn-to-fat box the same
                  * env[-1] drop-glue header as a capturing env, so TUR_CLOSURE_DROP
                  * releases ANY fat handle uniformly (a captured handle may be either

@@ -859,6 +859,20 @@ static char *typed_fatshim_name(Type result_type, Type *param_types, uint8_t n_p
  * Filled from __tur_static_init rather than a static initializer: casting a
  * function pointer to int64_t is not an address constant, and S1b exists
  * precisely so startup work survives any C11 front end (c2mir included). */
+bool ensure_fatbox_keep(EmitCtx *ctx) {
+    if (!ctx || !ctx->thunk_typedefs) return false;
+    if (ctx->fatbox_keep_emitted) return true;
+    ctx->fatbox_keep_emitted = true;
+    buf_puts(ctx->thunk_typedefs,
+        "/* fn-value-fat-normalization: no-op drop glue for statically (or, for\n"
+        " * a proven non-retaining sink, stack-) allocated { shim, orig } boxes.\n"
+        " * tur_closure_drop treats a NULL header as \"free the base allocation\",\n"
+        " * which would free() a non-heap address; this makes every drop of such\n"
+        " * a box a no-op. */\n"
+        "static void __tur_fatbox_keep(void *__e) { (void)__e; }\n");
+    return true;
+}
+
 const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
                                         const char *fnptr) {
     if (!ctx || !ctx->fatbox_init || !ctx->thunk_typedefs) return NULL;
@@ -887,14 +901,7 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
     if (!ctx->fatbox_keys[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
     buf_free(&key);
 
-    if (idx == 0) {
-        buf_puts(ctx->thunk_typedefs,
-            "/* fn-value-fat-normalization: no-op drop glue for statically\n"
-            " * allocated { shim, orig } boxes.  tur_closure_drop treats a NULL\n"
-            " * header as \"free the base allocation\", which would free() a\n"
-            " * static address; this makes every drop of such a box a no-op. */\n"
-            "static void __tur_fatbox_keep(void *__e) { (void)__e; }\n");
-    }
+    ensure_fatbox_keep(ctx);
     /* The drop-glue header is a STATIC initializer, not a fill: `__a` is the
      * union's first member and occupies exactly the header slot, and a
      * function-pointer-to-void* conversion is an address constant (the

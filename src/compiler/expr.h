@@ -1514,7 +1514,12 @@ struct Expr {
          * reports `'free' called on unallocated object`.  Only the normalized
          * NOMINAL param slot sets this -- nothing drops a box handed to one,
          * which is exactly why that slot leaked a box per call. */
-        struct { struct Expr *inner; bool static_ok; } fn_to_fat_;
+        /* stack_ok: the sink was PROVEN non-retaining (inferred mask or a
+         * declared ^borrow), so the { shim, orig } box is dead when the call
+         * returns and may live on the stack.  static_ok alone also covers a
+         * normalized nominal param, which never drops but MAY store the
+         * value -- fine for an immortal static box, not for a stack one. */
+        struct { struct Expr *inner; bool static_ok; bool stack_ok; } fn_to_fat_;
         /* SC7: convert a tur_poly_fn_t {env,fn} (a typeclass-method closure
          * param) into a single-int64 fat-closure handle so a ^fat consumer can
          * fat-call it.  inner is the tur_poly_fn_t value; the emitter heap-boxes

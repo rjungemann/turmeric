@@ -664,7 +664,7 @@
 ;; carrier and is an allowed Phase 5 bridge crossing.  See
 ;; docs/archive/phase4-carrier-helper-inventory.md.
 
-(defn map-eq-raw? [m1 : int m2 : int ^fat val-cmp]
+(defn map-eq-raw? [m1 : int m2 : int ^borrow ^fat val-cmp]
   #fx{}
   : bool
   ```c
@@ -706,7 +706,7 @@
 ;;; MapKey[K] comparator here is what makes structural equality content-correct
 ;;; for :cstr keys (distinct pointers with equal text match).
 
-(defn map-eq-raw-k? [m1 : int m2 : int keyeq ^fat val-cmp]
+(defn map-eq-raw-k? [m1 : int m2 : int keyeq ^borrow ^fat val-cmp]
   #fx{}
   : bool
   ```c
@@ -756,7 +756,7 @@
 ;;; is used -- which is correct for :int keys.
 
 
-(defn map-eq-dynamic [m1 : int m2 : int ^fat val-cmp] : bool
+(defn map-eq-dynamic [m1 : int m2 : int ^borrow ^fat val-cmp] : bool
   ;; CRU B-3: val-cmp is a fat closure box; threaded as int64 to the runtime,
   ;; which fat-dispatches it (tur_hamt_eq_dynamic reads slot 0).
   ```c return tur_hamt_eq_dynamic(m1, m2, (int64_t)(intptr_t)val_cmp); ```)

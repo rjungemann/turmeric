@@ -500,7 +500,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-eq? [v1 : int v2 : int ^fat cmp-fn]
+(defn vec-eq? [v1 : int v2 : int ^borrow ^fat cmp-fn]
   #fx{}
   : bool
   ```c

@@ -6188,12 +6188,25 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                      * call, 822 MiB over 4e6 iterations.  See the static_ok
                      * comment in expr.h and
                      * docs/archive/fat-sink-shim-box-leaks-per-call.md. */
+                    /* residual-leaks (2026-09-02): a DECLARED `^borrow` on the
+                     * sink is the same fact stated by the callee -- the only way
+                     * an inline-C body (whose inferred mask is zero by
+                     * construction) can say it invokes and never retains.  The
+                     * stdlib comparators (`result-eq?`, `vec-eq?`, `map-eq-raw?`
+                     * ...) declare it; without this each call minted a 24-byte
+                     * shim box nothing freed. */
                     bool sink_is_nonretaining =
                         fn_binding && i < 32 &&
-                        (fn_binding->nonretain_param_mask & (1u << i)) != 0;
+                        ((fn_binding->nonretain_param_mask & (1u << i)) != 0 ||
+                         (fn_binding->type.kind == TY_FN &&
+                          i < fn_binding->type.as.fn.arity &&
+                          fn_binding->type.as.fn.arg_flags &&
+                          FN_ARG_FLAG(fn_binding->type.as.fn, i, FA_BORROW)));
                     shim->as.fn_to_fat_.static_ok =
                         (slot_nominal && !slot_fat_decl) ||
                         (slot_fat_decl && sink_is_nonretaining);
+                    shim->as.fn_to_fat_.stack_ok =
+                        slot_fat_decl && sink_is_nonretaining;
                     args[i] = shim;
                 } else if (ak == TY_PTR_VOID || (ak == TY_FN && args[i]->type.as.fn.boxed) ||
                            ak == TY_NIL ||
