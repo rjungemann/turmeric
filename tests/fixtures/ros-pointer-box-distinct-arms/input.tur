@@ -1,0 +1,38 @@
+; A Result monomorph whose OK and ERR arms are BOTH non-parametric by-value
+; product ADTs.  Both fields then take adt_field_c_type's ROS pointer-box
+; branch, so the monomorph typedef and the two constructors collect two C
+; names before printing either of them.
+;
+; That is the shape that broke when the branch spelled its name into one
+; function-scoped `static char ptrbuf[128]`: every field got the LAST field's
+; spelling, emitting
+;
+;   ctor_Result__Rat__Oops(bool, tur_adt_Oops *, tur_adt_Oops *)
+;
+; which silently mistypes ok_val as the error arm.  Well-formed C with the
+; wrong type in it -- no crash, no ASan report, no diagnostic.  It surfaces
+; only as a cc -Wincompatible-pointer-types at the call site, which run.sh
+; fails a fixture on, so this fixture is the assertion.
+;
+; Latent until two fields of one constructor could both take the path, which
+; is what a by-value sum makes ordinary.  See
+; docs/archive/c-name-accessors-share-static-buffers.md.
+
+(defdata Rat :copy (MkRat :int :int))
+(defdata Oops :copy (MkOops :int))
+
+(defn classify [n : int] : (Result Rat Oops)
+  (if (> n 0)
+    (ok (MkRat n 2))
+    (err (MkOops 7))))
+
+(defn main [] : int
+  ; The OK arm: the payload must come back as a Rat, not as an Oops.
+  (let [good (classify 3)]
+    (match (ok-val good)
+      (MkRat a b) (do (println a) (println b))))
+  ; The ERR arm, so both pointer-boxed field spellings are exercised.
+  (let [bad (classify -1)]
+    (match (err-val bad)
+      (MkOops c) (println c)))
+  0)

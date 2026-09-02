@@ -389,9 +389,17 @@ typedef struct EmitCtx {
      * normalized param (a 5e6-iteration `(apply1 add3 acc)` loop leaked
      * 122 MiB).  `fatbox_keys` dedups on "<shim>|<orig>"; the definitions land
      * in `thunk_typedefs` and the fill statements in `fatbox_init`, emitted as
-     * one `__tur_fatbox_init` registered in the earliest static-init band. */
+     * one `__tur_fatbox_init` registered in the earliest static-init band.
+     *
+     * `fatbox_names` holds the `__tur_fatbox_<i>` spelling ensure_static_fatbox
+     * returns, one owned string per key and freed with them.  It used to be a
+     * function-scoped `static char name[96]`, which is only correct while every
+     * caller consumes the name before asking for another -- correct by call-site
+     * discipline, not by construction; see
+     * docs/archive/c-name-accessors-share-static-buffers.md. */
     char    **fatbox_keys;
     bool      fatbox_keep_emitted;   /* __tur_fatbox_keep glue is in thunk_typedefs */
+    char    **fatbox_names;
     uint32_t  n_fatbox_keys;
     uint32_t  cap_fatbox_keys;
     Buf      *fatbox_init;
@@ -731,6 +739,11 @@ bool emit_c_type_is_scalar(const char *cname);
  * the panic-propagation return emits one per hoisted call -- 75-139 per TU. */
 char *emit_c_zero_of(const char *cname);
 bool emit_str_is_bare_ident(const char *s);
+/* cps-let-binder-bridge-lacks-position-check: the single position-level test --
+ * is `v` a bare identifier whose RECORDED emitted C type is exactly
+ * `want_ctype`, and is that type a by-value aggregate?  Shared by every
+ * carrier->concrete bridge so the copies cannot drift.  See emit_expr.c. */
+bool emit_value_is_recorded_as(const char *v, const char *want_ctype);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);
@@ -941,6 +954,15 @@ void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,
 void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out);
 char *mangle_dynvar_name(const char *name);
 char *mangle_field_name(const char *name);
+char *mangle_ctor_symbol(const struct AdtDef *adt, const char *ctor_name);
+/* duplicate-ctor-names-collide-in-emitted-c: program-wide census of constructor
+ * names, so an UNAMBIGUOUS one keeps its bare-name alias for hand-written
+ * inline C.  Fed from elab_register_adt_def; see emit_core.c. */
+void ctor_census_reset(void);
+void ctor_census_snapshot(struct AdtDef *const *defs, uint32_t n_defs);
+bool ctor_base_name_is_unique(const char *mangled_ctor_name);
+void emit_ctor_bare_alias(Buf *out, const struct AdtDef *def,
+                          const struct CtorDef *ctor);
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
 char *raw_name_for_binding(const Binding *b);
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b);

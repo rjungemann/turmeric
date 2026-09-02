@@ -227,6 +227,52 @@ reporting an issue. Common failures it flags:
 
 ---
 
+## When `tur` says the stdlib does not match
+
+`TUR_STDLIB_DIR` is an ordinary environment variable, so it is inherited by
+everything a shell spawns and it outlives the install that set it. `tvm use`
+sets it deliberately; the trouble is a *stale* value pointing a current `tur` at
+an older release's stdlib. That compiles, and fails much later as something like
+
+```
+error: no member named 'is_ok' in 'tur_result_box_t'
+```
+
+which names neither the stdlib nor the variable, and reads as a compiler bug. It
+cost a full investigation once before the check below existed.
+
+Every stdlib now carries a `VERSION` stamp beside its sources, and `tur` compares
+it against its own version at startup. Three things it can say:
+
+```
+tur: TUR_STDLIB_DIR=<dir> is turmeric 0.36.0, but this compiler is v0.42.2.
+```
+A confirmed mismatch. Unset the variable, or `tvm use` the version you meant.
+
+```
+tur: TUR_STDLIB_DIR=<dir> overrides the stdlib beside this binary (<dir>), and
+     carries no VERSION stamp to check it against v0.42.2.
+```
+The stdlib predates the stamp, so it is from an older release. Same fix.
+
+```
+tur: the stdlib at <dir> is turmeric 0.36.0, but this compiler is v0.42.2 --
+     they must match.
+```
+No variable involved: the stdlib shipped beside the binary disagrees with it,
+which means a broken or half-updated install rather than a shell problem.
+
+A stdlib whose stamp **matches** is silent, including when it sits somewhere
+other than beside the binary -- pointing a compiler at another tree deliberately
+is a legitimate thing to do, and it no longer warns for it.
+
+Worth knowing about the acquisition path, because it does not look like an
+environment problem: a version manager whose `python3` is a shim can re-export
+its tool environment into the process it launches, so a shell with no
+`TUR_STDLIB_DIR` can spawn one that has it.
+
+---
+
 ## Shell completion
 
 ```sh

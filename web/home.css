@@ -360,9 +360,9 @@ section {
   color: var(--text-dim);
   letter-spacing: 0.02em;
   transition: color 0.14s;
-  cursor: default;
 }
-.infl-item:hover { color: var(--text-sec); }
+.infl-item:hover,
+.infl-item:focus-visible { color: var(--text-sec); }
 
 /* ── CTA ───────────────────────────────── */
 .cta-title { font-size: clamp(36px, 4vw, 56px); }

@@ -73,8 +73,15 @@ check "clojure" "$CLOJURE_VER" "$EXPECTED_CLOJURE"
 RACKET_VER=$(racket --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "not found")
 check "racket" "$RACKET_VER" "$EXPECTED_RACKET"
 
-# Turmeric
-TUR="$(pwd)/../../build-rel/tur"
+# Turmeric -- same build-rel/build-release/build fallback chain as
+# run_all.sh (CLAUDE.md documents build-release; the Justfile's release
+# recipe uses build-rel; accept both plus the plain Debug build rather
+# than reporting an honest binary as absent).
+TUR=""
+for _cand in "$(pwd)/../build-rel/tur" "$(pwd)/../build-release/tur" "$(pwd)/../build/tur"; do
+    if [ -x "$_cand" ]; then TUR="$_cand"; break; fi
+done
+TUR="${TUR:-$(pwd)/../build-rel/tur}"
 if [ -x "$TUR" ]; then
     TUR_VER=$("$TUR" --version 2>/dev/null | head -1 || echo "(no --version)")
     printf "  [ok  ] %-20s %s\n" "turmeric (tur)" "$TUR_VER"

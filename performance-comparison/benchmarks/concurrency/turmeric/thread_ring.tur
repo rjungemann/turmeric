@@ -44,6 +44,13 @@
   }
   ```)
 
+;; run-ring -- pass a token around n_threads pthreads, decrementing it each
+;; hop, until it reaches zero. ring-worker is a sibling defn referenced from
+;; this block's pthread_create call via the documented __TUR_CNAME_<name>__
+;; splice (docs/guides/c-integration-guide.md) rather than a hand-spelled
+;; mangled name -- the mangler is an internal detail (e.g. `ring-worker`
+;; does not mangle to `ring_worker`) and a stale guess fails the C compile
+;; with no Turmeric-level warning.
 (defn run-ring [n_threads :int messages :int] :void
   ```c
   typedef struct {
@@ -64,7 +71,7 @@
   }
   pthread_t *threads = (pthread_t *)malloc((size_t)n_threads * sizeof(pthread_t));
   for (int i = 0; i < n_threads; i++)
-    pthread_create(&threads[i], NULL, ring_worker, &targs[i]);
+    pthread_create(&threads[i], NULL, __TUR_CNAME_ring-worker__, &targs[i]);
   pthread_mutex_lock(&ring[0].mu);
   ring[0].token = messages; ring[0].ready = 1;
   pthread_cond_signal(&ring[0].cv);

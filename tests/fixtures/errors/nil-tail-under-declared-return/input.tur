@@ -1,0 +1,16 @@
+; A nil tail under a declared non-nil return used to be accepted silently, and
+; the function returned 0 -- while every OTHER wrong tail was already rejected
+; ("hello" -> TUR-E0709, 1.5 -> TUR-E0707, true -> TUR-E0709).  The dispatcher's
+; predicates are each targeted at one confusable PAIR of types, and nil had no
+; predicate at all.
+;
+; The tail here is a nil literal reached through a multi-form body, because that
+; is the shape a missing close paren leaves behind -- and because the single-form
+; and multi-form cases must behave identically.
+;
+; See docs/archive/nil-tail-not-checked-against-declared-return.md.
+(defn f [] : int
+  (println "work")
+  nil)
+
+(defn main [] : int (f))

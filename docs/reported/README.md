@@ -53,11 +53,33 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [wss-client-cert-verification](wss-client-cert-verification.md) | medium | (spice repo) `wss://` client uses MBEDTLS_SSL_VERIFY_NONE -- no cert verification |
 | [webkit-sw-controlled-reload-fails-wasm-init](webkit-sw-controlled-reload-fails-wasm-init.md) | medium | Try Turmeric shows "Failed to load WASM" on a WebKit *reload*, once the service worker controls the page and the wasm assets come from the Cache API instead of the network. Not the SharedArrayBuffer path (main.js:1178, not :1168). First load is fine, so it hits returning visitors, and the "Please refresh the page" advice cannot work. Root cause not established; unconfirmed on real iOS Safari, which is what decides the severity |
 | [c-sources-propagate-only-one-level](c-sources-propagate-only-one-level.md) | medium | `:build-opts :c-sources` is collected from the root manifest and its **direct** `:spices` deps only -- no recursion, no visited set -- so a library spice that ships an implementation TU links fine for its direct consumers and fails two hops away with undefined symbols that name a dependency the app never mentions. `:cmake-deps` **is** fully transitive, which is what makes it surprising. Blocks retiring `spices/raygui`'s CMake shim in favor of `:c-sources` |
-| [stdlib-dir-guard-accepts-mismatched-stdlib](stdlib-dir-guard-accepts-mismatched-stdlib.md) | medium | `resolve_stdlib_root` (`main.c:263`) accepts `$TUR_STDLIB_DIR` on a readable `macros.tur` alone, so a stdlib from a *different release* passes and the current compiler silently builds against it. Surfaces as `no member named 'is_ok' in 'tur_result_box_t'` with nothing naming the variable -- it reads as a Result-lowering bug. This is what `type-fuzz-src-red-on-clang-21` (now archived) actually was; a version manager whose `python3` is a shim can inject the variable into a process whose shell never had it |
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
 | [json-str-result-and-file-readers-missing](json-str-result-and-file-readers-missing.md) | low | **`#json-str?<T>` landed 2026-08-21**; `#json-file<T>` still unimplemented (RD2 blocker 2: read-file's `ptr<void>`/NULL, ownership, unreadable-file semantics) |
 | [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
+
+`stdlib-dir-guard-accepts-mismatched-stdlib` was resolved 2026-09-02 and moved
+to [docs/archive](../archive/stdlib-dir-guard-accepts-mismatched-stdlib.md) by
+fix direction (1). `stdlib/VERSION` is written beside the top-level `VERSION`,
+ships with the stdlib, and `resolve_stdlib_root` compares it against
+`TUR_VERSION`; a mismatch names both versions and the variable.
+
+It also closed the report's OTHER complaint, which only became visible once the
+stamp existed: fix direction (2)'s "differs from the walk-up" notice fired even
+when the two stdlibs were the SAME release, telling the user a mismatch "will
+miscompile" when it demonstrably would not. The three verdicts are separated
+now -- a confirmed MISMATCH gets the definite message, an UNKNOWN (unstamped)
+stdlib falls back to the heuristic, and a confirmed MATCH is silent wherever it
+sits. That last one is what makes deliberately pointing at another tree usable.
+
+The real risk is the stamp rotting: a stale one makes a mismatched stdlib look
+like a match AND makes the correct one warn, so it is worse than no stamp
+because it is trusted. `tests/check-stdlib-version-stamp.sh` (ctest
+`tur_stdlib_version_stamp`) fails on drift, emptiness, or absence, and the three
+`cut-*-release` commands bump it alongside `VERSION`. Note the report's "Guides
+to update" names `docs/guides/troubleshooting-guide.md`, which does not exist and
+never has (checked against `origin/main`); the material went to
+`docs/guides/tvm-guide.md`, since tvm is the tool that SETS the variable.
 
 `spices-carry-pre-sum-option-result-layout` was resolved 2026-08-27 in
 `rjungemann/turmeric-spices` ("migrate every spice off the pre-sum
@@ -965,16 +987,117 @@ turned up a defect in the instrument that would have justified it.
 | Report | Severity | One line |
 | --- | --- | --- |
 | ~~vec-of-parametric-sum-monomorph-ice~~ | -- | **Resolved 2026-08-27 (SR2b)**: `adt_app_is_byvalue_product`'s field loop now admits a concrete-monomorph field (types.c), so the Vec registration and the binder agree. Archived to [docs/archive/vec-of-parametric-sum-monomorph-ice.md](../archive/vec-of-parametric-sum-monomorph-ice.md) |
+| [separator-fold-collides-emitted-c-names](separator-fold-collides-emitted-c-names.md) | low | the joiner is inside the folded alphabet: every non-alphanumeric character folds to `_` and emitted names join their parts with `_`/`__`, so the split is ambiguous -- ADT `a-b` ctor `c` and ADT `a` ctor `b-c` both spell `ctor_a_b_c`, and a user ADT named `Foo__int` is the `(Foo int)` monomorph's type name. All loud cc errors, but with a message that never mentions the two ADTs involved. **Partially resolved 2026-09-02**: direction 1 landed, closing the one SILENT arm (the bare-name ctor alias tested uniqueness on the raw name and guarded on the mangled one, so inline C calling `ctor_b_c` reached the other ADT's constructor with no diagnostic at any layer). Severity medium -> low; nothing remaining is a wrong answer. Direction 3 (an injective scheme) is the real fix and wants its own regen window |
 | [carrier-sum-option-boxes-have-no-owner](carrier-sum-option-boxes-have-no-owner.md) | medium | SR2b made Option/Result real sums; on the default path every `(some x)`/`(ok x)`/`(none)` mallocs a tagged carrier box nothing frees (pre-sum these were non-allocating by-value records). Interim cost until byvalue graduation; callers that care free with `(option-free (:: o :int))`. **Narrowed 3x 2026-08-30 (RM1)**: the erased residue is owned for the audited accessor consumers (freshness analysis + two drop mechanisms, 8324 -> 7364 B corpus-wide); open only for unstampable consumers, until monomorphization. **Narrowed again 2026-09-02**: `bind`/`fmap` chains over the stdlib instances are owned at static dispatch sites (instance-method masks, freshness through the continuation, per-spec re-resolution for dynamic dispatch), then comparator shim boxes and a widened result gate: 7200 -> 5643 B. Residue attributed in `docs/artifacts/leak-sweep-decomposition.md`: scaffolding, spines, dictionary sites |
 | [value-struct-payload-sum-monomorph-box-has-no-owner](value-struct-payload-sum-monomorph-box-has-no-owner.md) | medium | SR2a's "a concrete monomorph flows by value, so there is no box to own" holds for scalar/pointer payloads only. A stdlib `Result`/`Option` monomorph over a VALUE-STRUCT payload stores the arm as a POINTER (`adt_field_is_ros_pointer_box`, keyed on the owner's NAME -- width is irrelevant, an 8-byte struct boxes too) and the specialized ctor mallocs a fresh copy that nothing frees. DEFAULT path, no experiment. 11 fixtures emit the shape; 9 leaked (465 B), now 2 (125 B) after a let-scope drop, an inferred non-retaining sum-param mask for the argument shape (admitting `cstr` results), a statement-position drain for void consumers, an `EX_REINTERPRET` arm in the escape walk, and a deep carrier free for a boxed struct arm. The 2 left are dictionary-dispatched inline-C class methods; drop glue on the monomorph is the fix that scales, and monomorph glue is `elab_structs.c:1425`'s "separate work" |
-| [duplicate-ctor-names-collide-in-emitted-c](duplicate-ctor-names-collide-in-emitted-c.md) | medium | two ADTs sharing a constructor name collide in the emitted C (`redefinition of 'ctor_Mk'`) -- the base ctor symbol lacks the ADT mangle. Pre-existing, but the trigger set grew with SR2b: an ADT naming a ctor `Some`/`None`/`Ok`/`Err` now always collides with the stdlib sums |
-| [c-name-accessors-share-static-buffers](c-name-accessors-share-static-buffers.md) | low | an accessor that spells a C type into a function-scoped `static` buffer is correct only while callers consume before asking again -- and emitters gather one name per field, then print. Two instances so far (`ret_ctype` interior pointer, `adt_field_c_type` mistyping a Result monomorph's ok arm as its err arm), both fixed; `ensure_static_fatbox` is still the shape, correct today only because it has exactly one caller. Fails as a silently wrong C type, not a crash |
 | [minikanren-example-implements-no-minikanren](minikanren-example-implements-no-minikanren.md) | low-medium | the example has no unification, logic vars or streams and never imports `stdlib/logic.tur`; that module's only coverage is 8 small fixtures, so the workload behind the ADT-allocation numbers has no real program exercising it |
 | ~~inline-c-option-carrier-box-leaks~~ | -- | **Resolved 2026-08-30** by fix direction 1: the compiler now owns an inline-C-returned carrier. Ownership is marked once at the call-result temp (callee body inline C + DECLARED return an Option/Result app + temp spelled int64_t) and consumed at the carrier->concrete bridge, which copies the contents out and frees the box -- so every consumer position gets it at once. Keying on the RESOLVED type instead of the declared one is a double free, not a leak: `vec-get` is also inline C and its box belongs to the vector. Leak-check now 60/0/0. Archived to [docs/archive/inline-c-option-carrier-box-leaks.md](../archive/inline-c-option-carrier-box-leaks.md) |
 | ~~option-rc-payload-constructible-only-from-inline-c~~ | -- | **Resolved 2026-08-30** by fix direction 3, which proved to be the correct framing rather than the cheap one: the safe/unsafe distinction is not by-value-ness but whether the callee stores the value somewhere with an INDEPENDENT LIFETIME. A collection does; a sum constructor wraps the value in a result the caller owns. `some`/`ok`/`err` are now OWN_CARRY_BORROW rows in `own_carry_for_arg` (RETAIN would leak -- nothing releases an Option's payload at scope exit). Extraction via the generic `unwrap` stays rejected ON PURPOSE: BORROW double-drops on a second read, RETAIN leaks, and the missing piece is drop glue (RM1). Archived to [docs/archive/option-rc-payload-constructible-only-from-inline-c.md](../archive/option-rc-payload-constructible-only-from-inline-c.md) |
 | [solver-hot-structures-linear-scans](solver-hot-structures-linear-scans.md) | low | `euf_index` interns terms by linear scan and the congruence fixpoint is O(n^2) -- REASSESSED post-SX3: the "free fix with SX3" home is gone (SX3 trails the same arrays in place), and measurements say no fix is needed: real obligations peak at 10 of 512 terms, the one cap-pinned corpus case is a synthetic stress file deciding in 64 ms, and solver-on vs off is 21 vs 22 ms on the heaviest fixture |
 | [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) | medium | no suite walks `examples/`, so a shipped example that builds, links, runs and prints nothing looks exactly like a passing one; and a whole-program build with no entry point emits no diagnostic. The residue of the `-main` bug |
 | [workarounds-to-remove](workarounds-to-remove.md) | -- | checklist, not a defect: places the tree is deliberately doing the second-best thing (`StThunk` instead of a `:fn` field, a `known-leak` marker), each with its blocker and how to prove the workaround is no longer needed |
+
+`c-name-accessors-share-static-buffers` was resolved 2026-09-02 and moved to
+[docs/archive](../archive/c-name-accessors-share-static-buffers.md). All three
+fix directions landed: `ensure_static_fatbox` returns an owned per-`EmitCtx`
+string (`ctx->fatbox_names[]`, parallel to the dedup keys it already kept, so
+the name lives exactly as long as the box it names), `adt_field_c_type`'s
+pointer-box spelling is a one-line `intern_type_name` replacing the 16-slot
+rotating pool -- a pool has a bound and fails the same way past it, just later
+-- and `tests/check-static-cname-buffers.sh` (ctest
+`tur_static_cname_buffer_lint`) fails any `const char *` function in
+`src/compiler/` holding a function-scoped `static char buf[]`, with the four
+audited-benign sites allowlisted by name.
+
+Two things the report did not have. Its repro no longer reaches the branch
+(SR1/SR2a are default now, and `rational-arith`'s Result still lowers to the
+erased carrier), but a three-line `(Result Rat Oops)` over two by-value product
+ADTs does -- that is now `tests/fixtures/ros-pointer-box-distinct-arms/`, and
+it is a real pin rather than a demonstration, because `run.sh` FAILs a fixture
+whose cc emits `-Wincompatible-pointer-types`, which is exactly the signal a
+re-broken accessor produces. And the lint's first draft, whose header regex used
+a greedy `.*const char \*`, bound to the `const char *shim` in
+`ensure_static_fatbox`'s PARAMETER list and never recognised the function at
+all: it would have shipped GREEN on a tree that still had the bug in it. Both
+pre-fix bodies were reconstructed and re-run against the finished lint.
+
+`duplicate-ctor-names-collide-in-emitted-c` was resolved 2026-09-02 and moved
+to [docs/archive](../archive/duplicate-ctor-names-collide-in-emitted-c.md). The
+base constructor's C FUNCTION symbol is `ctor_<Adt>_<Ctor>` now, built in one
+place (`mangle_ctor_symbol`) and used by every definition site, call site and
+signature-table key; the union MEMBER name stays bare, being already scoped by
+the ADT's own struct. 148 snapshots regenerated in the same change; suite 2748
+passed / 0 failed.
+
+The fix direction did not anticipate that **the bare spelling is an API
+surface**: hand-written inline C calls constructors by their emitted name and
+`stdlib/either.tur` documents it ("Construct with `ctor_Left(v)`"), across five
+stdlib files, seven fixtures, and possibly out-of-tree spices. So a constructor
+name owned by exactly ONE ADT also keeps a bare-name macro alias; an ambiguous
+one gets none, and inline C naming it fails at cc pointing at that constructor
+rather than silently binding to whichever ADT was emitted first.
+
+Three lifetime/resolution traps, each surfacing only as a suite failure and each
+looking like an unrelated area: a curried constructor's synthesized call carries
+no CtorDef (so the owner must fall back to the call's result type); ADTs are
+registered BEFORE their constructors are attached, so a census read at
+registration records nothing at all; and holding the AdtDef pointers instead is
+a use-after-poison, because a procedural macro's nested elaboration frees the
+arena. The census owns string copies taken above the elaborator teardown -- not
+at the return, where `e.adt_defs` is already freed. A missed site in a change
+like this is always an undefined symbol or a lifetime error, never a wrong
+answer, which is what made the suite a sufficient verifier.
+
+`cps-let-binder-bridge-lacks-position-check` was filed and resolved 2026-09-02
+and moved to
+[docs/archive](../archive/cps-let-binder-bridge-lacks-position-check.md). Both
+fix directions landed. The check is extracted as `emit_value_is_recorded_as` --
+and there were more copies than the report knew: TWO inline hand-rolled ones at
+separate let-binding init sites, plus the arm sites' wrapper, plus the CPS mirror
+with none. Four sites, three different answers to one question; one copy now.
+
+The report warns against adding the missing term without a repro, because "a
+change to a path with no failing case is unverifiable in the direction that
+matters". The way past that was not to find a repro but to make the change
+**provably inert**: instrumenting the bridge and sweeping all 2131 fixtures, only
+33 reach it with a by-value init type, and in every one either the Expr-level
+predicate already suppresses it or the init is recorded as `int64_t` / a pointer
+/ nothing -- never the aggregate. Emitted C is byte-identical across the corpus;
+suite 2752 passed / 0 failed, zero churn. It is a consistency repair that stops
+the two sites drifting a third time, NOT a fix for an observed miscompile, and
+the archived note says so.
+
+The substantive finding is why no repro exists: the two conditions look
+structurally exclusive. The dangerous shape needs an `if` init whose arms are
+carrier producers, and when that sits in a CPS-transformed body the transform
+splits the `if` before the bridge sees it -- a targeted repro reached the bridge
+as two separate hits, one per branch, each recorded `int64_t`, never a merge
+temp. Recorded so the search is not repeated.
+
+`control-form-around-if-double-unboxes-carrier-arms` was resolved 2026-09-02 and
+moved to
+[docs/archive](../archive/control-form-around-if-double-unboxes-carrier-arms.md).
+It took TWO changes, not the one it specifies. The stated fix --
+`emit_arm_is_recorded_byval_agg` in `bridge_control_value_to_byvalue_temp` -- is
+correct and on its own changed nothing, because the precondition the report
+asserts does not hold: the merge temp's recorded C type lookup returns NOTHING.
+`emit_if` declares its by-value merge temp with `emit_temp_decl` directly,
+bypassing `emit_control_result_temp_decl`, which is the wrapper carrying the
+`emit_localvar_record_ctype` bookkeeping -- so the temp was by-value in the
+emitted C and invisible to the side table the predicate consults. Recording it is
+the second half. The generalisable lesson: a position-sensitive predicate is only
+as good as the recording that feeds it, and one site declaring a temp outside the
+recording wrapper silently disables it.
+
+All ten fixtures the predecessor's resolution named pass with MATCHING OUTPUT,
+as its blast-radius argument predicted. Suite 2751 passed / 0 failed, zero
+snapshot churn. Pinned by `tests/fixtures/control-form-around-if-carrier-arms/`
+covering both the `let` and `do` wrappers and asserting field values, verified to
+fail against a reverted compiler once per wrapper.
+
+Its requested sweep of the remaining `fn_body_tail_emits_byvalue_carrier_abi`
+callers is done, and found one bridging site that still asks only the Expr-level
+question -- filed as the `cps-let-binder-bridge-lacks-position-check` row above.
 
 `fat-dispatch-wide-byvalue-aggregate-argument` was resolved 2026-08-27 and
 moved to
@@ -1045,8 +1168,8 @@ taken on a local Apple-silicon box, not the `macos-latest` runner image.
 updated: the opt-in set went from 2 fixtures to **54**, and the gate is wired to
 ctest as `tur_leak_check`. It had also been held back on the grounds that one
 leak is still marked known -- but that leak is
-[inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md)'s to
-carry, and removing the marker is row 2 of
+[inline-c-option-carrier-box-leaks](../archive/inline-c-option-carrier-box-leaks.md)'s
+to carry (since resolved 2026-08-30), and removing the marker is row 2 of
 [workarounds-to-remove](workarounds-to-remove.md).
 
 `logic-streams-are-strict` was resolved 2026-08-26 and moved to
@@ -1094,8 +1217,8 @@ are reverted.
 
 `rc-ref-conversion-and-weak-upgrade-leak` was resolved 2026-08-23 and moved to
 [docs/archive/](../archive/rc-ref-conversion-and-weak-upgrade-leak.md). Its
-residue -- an Option built inside inline C -- is open as
-`inline-c-option-carrier-box-leaks` above.
+residue -- an Option built inside inline C -- was
+`inline-c-option-carrier-box-leaks`, resolved 2026-08-30 and archived.
 
 `byvalue-adt-app-rejects-nested-monomorphs` was filed and resolved on
 2026-08-22 and moved to
@@ -1336,10 +1459,35 @@ framing would miss cases:
   that fix guarded both `emit_if` arms and not the do/let companion 900 lines
   earlier. Root cause pinned to `emit_expr.c:2106`.
 
+`nil-tail-not-checked-against-declared-return` was resolved 2026-09-02 and
+moved to
+[docs/archive](../archive/nil-tail-not-checked-against-declared-return.md).
+`RET_CONFLICT_NIL_BODY` joins the return-position dispatcher, so
+`(defn f [] : int nil)` is a TUR-E0709. Its root-cause guess was right on the
+mechanism and off on the shape: there was no `TY_NIL` *exemption* -- the
+dispatcher is a list of predicates each targeted at one confusable PAIR
+(float-vs-int register class, cstr-vs-int, bool-vs-integer) and nil simply had
+no predicate, which is why one added predicate closes it with no re-plumbing.
+Its warning about `return_kind` starting at TY_NIL was load-bearing and correct.
+
+The scope line came from a measurement: the check fires on a nil LITERAL tail,
+not any nil-TYPED tail, because checking every nil-typed tail also rejects
+`(defn main [] : int (println ...))` -- **25 fixtures**, and the idiomatic entry
+point where the 0 a nil tail produces is the wanted exit code. Every shape the
+report argues from lands on the literal. `body_tail_is_nil_literal` peels
+EX_DO/EX_LET/EX_LETREC, without which the multi-form and single-form cases
+disagreed -- the inconsistency the report says does not exist.
+
+Both diagnostics stay: a definition written literally in tail position still
+gets TUR-E0713's paren message (it fires first), and the general check closes
+the residual the report identified but could not fix -- a definition arriving via
+MACRO EXPANSION has collapsed to EX_NIL_LIT and slipped past E0713's exact-head
+match. The typeclass instance-method caller passes `check_nil_body = false`
+deliberately, as a separate blast radius. Suite 2751 passed / 0 failed, zero
+churn.
+
 | Report | Severity | One line |
 | --- | --- | --- |
-| [nil-tail-not-checked-against-declared-return](nil-tail-not-checked-against-declared-return.md) | medium | the body-tail return-type check (TUR-E0707/E0709) fires for a `cstr`, `float` or `bool` tail and **not** for a `nil` one, so `(defn f [] : int nil)` is accepted and returns 0. Filed 2026-08-29 while fixing `nested-defn-accepted-outer-returns-zero`, which is one instance of it -- definitions collapse to nil-ish, which is why that defect had no diagnostic at all. Fixing this subsumes TUR-E0713's job, though that should survive as the specific diagnostic since a bare type mismatch cannot name the missing paren |
-| [control-form-around-if-double-unboxes-carrier-arms](control-form-around-if-double-unboxes-carrier-arms.md) | medium | `let`/`do` wrapping an `if` whose arms are carrier producers bridges carrier->concrete twice. Fourth report in this family; fix direction is the one-predicate change that already fixed the `emit_if` arms, plus a sweep of the remaining `fn_body_tail_emits_byvalue_carrier_abi` callers rather than a fifth round |
 | [spices-ci-fetch-failure-downgraded-to-warning](spices-ci-fetch-failure-downgraded-to-warning.md) | medium | (spice repo) `tur fetch` failure becomes a `::warning::`, so a failed native-dep build surfaces two steps later as `ld: library 'mbedtls' not found` in six jobs at once. **Deliberate and correctly so** -- making it fatal risks Linux, since optional `:spices` routinely fail. The fix is to put the captured output *in* the annotation, and to give `tur fetch` an exit code that separates optional-dep failure from required-dep failure |
 
 ## Windows port

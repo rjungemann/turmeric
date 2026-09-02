@@ -884,9 +884,7 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
     for (uint32_t i = 0; i < ctx->n_fatbox_keys; i++) {
         if (strcmp(ctx->fatbox_keys[i], key.data) == 0) {
             buf_free(&key);
-            static char name[96];
-            snprintf(name, sizeof name, "__tur_fatbox_%u", (unsigned)i);
-            return name;
+            return ctx->fatbox_names[i];
         }
     }
     if (ctx->n_fatbox_keys >= ctx->cap_fatbox_keys) {
@@ -894,12 +892,27 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
         char **nn = (char **)realloc(ctx->fatbox_keys, nc * sizeof(char *));
         if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
         ctx->fatbox_keys = nn;
+        char **nm = (char **)realloc(ctx->fatbox_names, nc * sizeof(char *));
+        if (!nm) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatbox_names = nm;
         ctx->cap_fatbox_keys = nc;
     }
     uint32_t idx = ctx->n_fatbox_keys++;
     ctx->fatbox_keys[idx] = strdup(key.data);
     if (!ctx->fatbox_keys[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
     buf_free(&key);
+
+    /* One OWNED name per box, freed with the keys.  Not a function-scoped
+     * `static char[96]`: the caller that holds two of these -- or stashes one
+     * and emits later -- would then get the same spelling twice, with no crash
+     * and no diagnostic, just wrong C.  See
+     * docs/archive/c-name-accessors-share-static-buffers.md. */
+    {
+        char nb[96];
+        snprintf(nb, sizeof nb, "__tur_fatbox_%u", (unsigned)idx);
+        ctx->fatbox_names[idx] = strdup(nb);
+        if (!ctx->fatbox_names[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
 
     ensure_fatbox_keep(ctx);
     /* The drop-glue header is a STATIC initializer, not a fill: `__a` is the
@@ -925,9 +938,7 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
         "      __s[1] = (int64_t)(intptr_t)%s; }\n",
         (unsigned)idx, shim, fnptr);
 
-    static char name[96];
-    snprintf(name, sizeof name, "__tur_fatbox_%u", (unsigned)idx);
-    return name;
+    return ctx->fatbox_names[idx];
 }
 
 /* catch-unwind-aggregate-return-miscompiled: the per-type boxing trampoline a
@@ -7352,7 +7363,10 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
     /* Emit constructor functions */
     for (uint32_t ci = 0; ci < def->n_ctors && !skip_heap_generic_base; ci++) {
         CtorDef *ctor = def->ctors[ci];
-        char *mctor = mangle_field_name(ctor->name);
+        /* duplicate-ctor-names-collide-in-emitted-c: the FUNCTION symbol carries
+         * the owning ADT (`ctor_<Adt>_<Ctor>`).  The union member inside this
+         * ADT's own struct stays bare -- it is already scoped by the struct. */
+        char *mctor = mangle_ctor_symbol(def, ctor->name);
         const char *ctor_ret_c = heap ? adt_ptr_name : byval ? adt_c_name : "int64_t";
         buf_printf(out, "static %s ctor_%s(",
                    ctor_ret_c, mctor);
@@ -7423,6 +7437,11 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
             buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
         }
         buf_printf(out, "}\n\n");
+        /* duplicate-ctor-names-collide-in-emitted-c: keep the bare `ctor_<Ctor>`
+         * spelling working for hand-written inline C when exactly one ADT owns
+         * the name (stdlib/either.tur documents `ctor_Left(v)`).  Ambiguous
+         * names get no alias -- see emit_ctor_bare_alias. */
+        emit_ctor_bare_alias(out, def, ctor);
         free(mctor);
     }
 }
@@ -12863,6 +12882,7 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.n_poly_fatshim_names = 0;
     ctx.cap_poly_fatshim_names = 0;
     ctx.fatbox_keys = NULL;
+    ctx.fatbox_names = NULL;
     ctx.n_fatbox_keys = 0;
     ctx.cap_fatbox_keys = 0;
     ctx.exbox_dict_names = NULL;
@@ -13108,7 +13128,10 @@ int emit_program(Buf *out, const Expr *program) {
             /* Emit constructor functions */
             for (uint32_t ci = 0; ci < def->n_ctors && !skip_heap_generic_base; ci++) {
                 CtorDef *ctor = def->ctors[ci];
-                char *mctor = mangle_field_name(ctor->name);
+                /* duplicate-ctor-names-collide-in-emitted-c: same ADT-qualified
+                 * FUNCTION symbol as emit_adt_typedef_and_ctors above.  These two
+                 * sites must agree or the call names a symbol nothing defines. */
+                char *mctor = mangle_ctor_symbol(def, ctor->name);
                 const char *ctor_ret_c2 =
                     heap ? adt_ptr_name : byval ? adt_c_name : "int64_t";
                 buf_printf(&early_file, "static %s ctor_%s(", ctor_ret_c2, mctor);
@@ -13184,6 +13207,10 @@ int emit_program(Buf *out, const Expr *program) {
                     buf_printf(&early_file, "    return (int64_t)(intptr_t)__r;\n");
                 }
                 buf_printf(&early_file, "}\n\n");
+                /* duplicate-ctor-names-collide-in-emitted-c: mirror of the alias
+                 * emitted by emit_adt_typedef_and_ctors -- both paths define the
+                 * ctor, so both must offer the same bare-name compatibility. */
+                emit_ctor_bare_alias(&early_file, def, ctor);
                 free(mctor);
             }
         }
@@ -14407,8 +14434,12 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.any_scope_drops);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
-    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
+    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) {
+        free(ctx.fatbox_keys[i]);
+        free(ctx.fatbox_names[i]);
+    }
     free(ctx.fatbox_keys);
+    free(ctx.fatbox_names);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
     for (uint8_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
@@ -15307,6 +15338,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.n_poly_fatshim_names = 0;
     ctx.cap_poly_fatshim_names = 0;
     ctx.fatbox_keys = NULL;
+    ctx.fatbox_names = NULL;
     ctx.n_fatbox_keys = 0;
     ctx.cap_fatbox_keys = 0;
     ctx.exbox_dict_names = NULL;
@@ -15837,8 +15869,12 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     free(ctx.any_scope_drops);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
-    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
+    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) {
+        free(ctx.fatbox_keys[i]);
+        free(ctx.fatbox_names[i]);
+    }
     free(ctx.fatbox_keys);
+    free(ctx.fatbox_names);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
     for (uint8_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);

@@ -2014,14 +2014,31 @@ static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
  * Same shape as the `init_val_recorded_byval_agg` check on the let-binding
  * path; this is the emit_if merge companion, which can only ask it because the
  * arm's emitted text exists by this point. */
-static bool emit_arm_is_recorded_byval_agg(EmitCtx *ctx, const char *v,
-                                            Type bv) {
-    if (!v || bv.kind == TY_UNKNOWN || !emit_str_is_bare_ident(v)) return false;
+/* cps-let-binder-bridge-lacks-position-check: the ONE answer to "does the value
+ * in hand already HAVE the by-value aggregate representation, here?".
+ *
+ * Every carrier->concrete bridge needs this, and each site used to ask it its own
+ * way: the emit_if arms and the do/let companion through
+ * emit_arm_is_recorded_byval_agg, TWO let-binding init sites through separate
+ * inline copies of the same three comparisons, and the CPS letraw mirror not at
+ * all -- even though its comment claimed "same gate as the direct site".
+ * Divergence between copies of one question is what this family keeps
+ * rediscovering, so there is one copy now.
+ *
+ * Takes the wanted C type as a STRING because that is what the binder sites have
+ * (`bind_c`, `bct`); the Type-taking wrapper below serves the arm sites. */
+bool emit_value_is_recorded_as(const char *v, const char *want_ctype) {
+    if (!v || !want_ctype || !emit_str_is_bare_ident(v)) return false;
     const char *lv = emit_localvar_lookup_ctype(v);
     if (!lv) return false;
-    const char *want = emit_type_c_name(ctx, bv);
-    return want && strcmp(lv, want) == 0 &&
+    return strcmp(lv, want_ctype) == 0 &&
            strcmp(lv, "int64_t") != 0 && strchr(lv, '*') == NULL;
+}
+
+static bool emit_arm_is_recorded_byval_agg(EmitCtx *ctx, const char *v,
+                                            Type bv) {
+    if (bv.kind == TY_UNKNOWN) return false;
+    return emit_value_is_recorded_as(v, emit_type_c_name(ctx, bv));
 }
 
 /* SR1 companion to emit_arm_is_recorded_byval_agg: the arm is a bare VARIABLE
@@ -2118,35 +2135,33 @@ static char *fat_dispatch_box_arg(EmitCtx *ctx, Buf *body, const Expr *arg,
 static char *bridge_control_value_to_byvalue_temp(EmitCtx *ctx, Buf *body,
                                                    char *v, const Expr *last) {
     Type bv = fn_body_tail_byvalue_carrier_type(ctx, last);
+    /* control-form-around-if-double-unboxes-carrier-arms: ask what
+     * representation the value in hand HAS here, before asking what its Expr
+     * would naturally emit.
+     *
+     * `fn_body_tail_emits_byvalue_carrier_abi` is an Expr-level predicate: for
+     * an EX_IF it recurses into the arms, and when both are carrier-producing
+     * inline-C calls it answers false -- so the bridge fires.  But by then
+     * emit_if has ALREADY bridged each arm into the merge temp, whose declared C
+     * type is the by-value struct, and bridging again dereferences a struct
+     * (`operand of type 'tur_adt_...' where arithmetic or pointer type is
+     * required`).  `without-let` -- the same `if` as the whole body -- compiled
+     * fine, so the seam itself was sound; only the extra control-form nesting
+     * inserted the second unwrap.
+     *
+     * emit_arm_is_recorded_byval_agg answers the position question by consulting
+     * the localvar side table.  It is the same one-predicate change that fixed
+     * the two emit_if arms in 2026-08-21 (byvalue-product-tail-var-double-
+     * unboxed-nonparametric), applied to the companion that fix did not reach --
+     * this function's own comment already called itself "the do/let companion".
+     *
+     * Position-keyed, not type-keyed, which is what keeps the vec/map multiword
+     * -element seams working: there the value's RECORDED type is the carrier, so
+     * this answers false and the bridge those fixtures need still fires. */
     if (bv.kind != TY_UNKNOWN &&
-        !fn_body_tail_emits_byvalue_carrier_abi(ctx, last)) {
-        /* inline-c-carrier-producer-byval-container-element (control-merge
-         * position).  This function decides from the TAIL EXPRESSION -- "does
-         * `last` produce a carrier?" -- but the value in hand may already be
-         * the aggregate, because emit_control_result_temp_decl declared the
-         * merge temp by value and each arm bridged into it.  Re-deriving from
-         * the tail then bridges a second time and emits
-         * `(int64_t)(intptr_t)(<aggregate>)`: "aggregate value used where an
-         * integer was expected".
-         *
-         * `(let [o (if flag (mk-c 1) (mk-c 0))] ...)` over an inline-C Option
-         * producer is the shape -- both arms are carrier producers, so the
-         * tail says "carrier" however many times it is asked.
-         *
-         * The let-init path already guards exactly this with the recorded
-         * emitted spelling (`init_val_recorded_byval_agg`); this is the same
-         * key at the one site that re-asks the tail. emit_control_result_temp_decl
-         * records the temp's real C type when it declares it by value, which
-         * is what makes the lookup authoritative here. */
-        if (emit_str_is_bare_ident(v)) {
-            const char *vty = emit_localvar_lookup_ctype(v);
-            const char *bvn = emit_type_c_name(ctx, bv);
-            if (vty && bvn && strcmp(vty, bvn) == 0 &&
-                strcmp(vty, "int64_t") != 0 && strchr(vty, '*') == NULL)
-                return v;
-        }
+        !emit_arm_is_recorded_byval_agg(ctx, v, bv) &&
+        !fn_body_tail_emits_byvalue_carrier_abi(ctx, last))
         return emit_carrier_bridge(ctx, body, v, CK_CARRIER, CK_CONCRETE, bv);
-    }
     return v;
 }
 
@@ -2783,14 +2798,10 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * above); a recorded by-value aggregate type equal to the
              * binding's own suppresses the re-bridge -- consult the recorded
              * representation instead of re-deciding from the tail. */
-            bool init_val_recorded_byval_agg = false;
-            if (emit_str_is_bare_ident(iv)) {
-                const char *lvty2 = emit_localvar_lookup_ctype(iv);
-                init_val_recorded_byval_agg =
-                    lvty2 && strcmp(lvty2, bind_c) == 0 &&
-                    strcmp(lvty2, "int64_t") != 0 &&
-                    strchr(lvty2, '*') == NULL;
-            }
+            /* Was an inline copy of emit_value_is_recorded_as -- there were two,
+             * and the CPS mirror had none.  Shared now so they cannot drift. */
+            bool init_val_recorded_byval_agg =
+                emit_value_is_recorded_as(iv, bind_c);
             bool init_carrier_to_byval = !bind_is_ptr_repr &&
                 strcmp(bind_c, "int64_t") != 0 &&
                 init_bv.kind != TY_UNKNOWN &&
@@ -3188,14 +3199,10 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * above); a recorded by-value aggregate type equal to the
              * binding's own suppresses the re-bridge -- consult the recorded
              * representation instead of re-deciding from the tail. */
-            bool init_val_recorded_byval_agg = false;
-            if (emit_str_is_bare_ident(iv)) {
-                const char *lvty2 = emit_localvar_lookup_ctype(iv);
-                init_val_recorded_byval_agg =
-                    lvty2 && strcmp(lvty2, bind_c) == 0 &&
-                    strcmp(lvty2, "int64_t") != 0 &&
-                    strchr(lvty2, '*') == NULL;
-            }
+            /* Was an inline copy of emit_value_is_recorded_as -- there were two,
+             * and the CPS mirror had none.  Shared now so they cannot drift. */
+            bool init_val_recorded_byval_agg =
+                emit_value_is_recorded_as(iv, bind_c);
             bool init_carrier_to_byval = !bind_is_ptr_repr &&
                 strcmp(bind_c, "int64_t") != 0 &&
                 init_bv.kind != TY_UNKNOWN &&
@@ -3332,25 +3339,21 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         if_bv = fn_body_tail_byvalue_carrier_type(ctx, e);
         if (if_bv.kind != TY_UNKNOWN) {
             emit_temp_decl(ctx, body, if_bv, tmp, NULL);
-            /* inline-c-carrier-producer-byval-container-element (control-merge
-             * position).  RECORD the temp's actual emitted C type, exactly as
-             * the sibling declarer emit_control_result_temp_decl does for its
-             * own by-value branch.  Without this the two declarers disagree
-             * about a fact only one of them writes down, and every consumer
-             * keying on the recorded spelling -- the let-init double-deref
-             * guard above all -- looks the temp up, finds nothing, and falls
-             * back to re-deriving "is this a carrier producer?" from the TAIL.
-             * The tail of `(if flag (mk-c 1) (mk-c 0))` says carrier however
-             * many times it is asked, so the already-bridged aggregate got
-             * bridged a second time: `(int64_t)(intptr_t)(<aggregate>)`,
-             * "aggregate value used where an integer was expected".
+            /* control-form-around-if-double-unboxes-carrier-arms: RECORD the
+             * merge temp's emitted C type.  This branch calls emit_temp_decl
+             * directly rather than going through emit_control_result_temp_decl,
+             * which is the wrapper that does this bookkeeping -- so the temp was
+             * declared by-value but stayed invisible to every later
+             * "what representation does this value have HERE" question.
              *
-             * The arms below bridge each carrier-producing arm INTO this temp,
-             * so by the time anyone reads it the value really is the
-             * aggregate the declaration says it is. */
+             * That is what made an enclosing `let`/`do` unbox it a second time:
+             * emit_arm_is_recorded_byval_agg consults this table, found nothing
+             * for the temp, and the do/let companion bridge fired on a value
+             * that emit_if had already bridged. */
             emit_localvar_record_ctype(tmp, emit_type_c_name(ctx, if_bv));
-        } else
+        } else {
             emit_control_result_temp_decl(ctx, body, e->type, e, tmp);
+        }
     }
     char *cond = emit_value(ctx, body, e->as.if_.cond);
     indent_buf(body, ctx->indent);
@@ -4002,6 +4005,44 @@ static bool emit_var_spec_arg_type(EmitCtx *ctx, const Expr *var_expr,
  * instance body constructs exactly the family the method returns, so the spec's
  * concrete result element (`(ReF bool)`) names the right ctor variant.  Returns a
  * malloc'd suffix (caller frees) or NULL when not applicable. */
+/* duplicate-ctor-names-collide-in-emitted-c: the AdtDef whose name qualifies a
+ * constructor's emitted C symbol at a CALL site.  Every caller must agree with
+ * the definition, so the answer cannot come from just one place:
+ *
+ *   1. The resolved CtorDef, when elaboration recorded one (`call_.ctor`).
+ *   2. Otherwise the call's own result type -- a SYNTHESIZED ctor call has no
+ *      CtorDef.  elab_partial_apply builds exactly this shape: currying a
+ *      constructor emits a `__pap` lambda whose body calls the ctor, with
+ *      `call_.ctor` unset and the result type patched to the ADT.  Missing this
+ *      case emitted a bare `ctor_Person(...)` against the qualified definition
+ *      (`implicit declaration of function 'ctor_Person'`), which is why
+ *      struct-curry-ctor and the sized-GADT fixtures caught it.
+ *   3. Otherwise the callee binding's own type, which IS the ADT in the 0-arg
+ *      branch.
+ *
+ * NULL means "could not resolve", and mangle_ctor_symbol then leaves the name
+ * unqualified -- the pre-fix spelling.  That is a compiler defect rather than a
+ * supported outcome: it surfaces at cc as an implicit declaration, never as a
+ * wrong answer. */
+static const AdtDef *emit_ctor_owner_adt(EmitCtx *ctx, const Expr *e,
+                                         const Binding *fn_binding) {
+    if (e && e->kind == EX_CALL && e->as.call_.ctor && e->as.call_.ctor->adt)
+        return e->as.call_.ctor->adt;
+    if (e) {
+        Type rt = emit_resolve_type(ctx, e->type);
+        if (rt.kind == TY_ADT && rt.as.adt_.def) return rt.as.adt_.def;
+        if (rt.kind == TY_APP) {
+            AdtDef *d = NULL;
+            Type as[16];
+            uint8_t na = 0;
+            if (type_extract_adt_app(&rt, &d, as, &na) && d) return d;
+        }
+    }
+    if (fn_binding && fn_binding->type.kind == TY_ADT && fn_binding->type.as.adt_.def)
+        return fn_binding->type.as.adt_.def;
+    return NULL;
+}
+
 static char *emit_hkt_spec_ctor_suffix(EmitCtx *ctx, const Expr *e) {
     if (!ctx || !e || e->kind != EX_CALL || !e->as.call_.ctor ||
         !e->as.call_.ctor->adt)
@@ -7106,7 +7147,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
 
             /* Phase G0: 0-arg constructor call — emit ctor_Name() */
             if (fn_binding->type.kind == TY_ADT) {
-                char *_mc = mangle_field_name(fn_binding->name->name);
+                /* duplicate-ctor-names-collide-in-emitted-c: the callee symbol is
+                 * ADT-qualified, so name it from the constructor's owning ADT. */
+                char *_mc = mangle_ctor_symbol(emit_ctor_owner_adt(ctx, e, fn_binding),
+                                               fn_binding->name->name);
                 /* TS4P2: use per-instance ctor if the call result is a concrete ADT app.
                  * Resolve the construct's type through the active ABI spec first
                  * (M7 by-value HKT, gap G6): inside `__inst_Functor_fmap_T__spec__*`
@@ -7229,7 +7273,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * signature-table lookup at the end of the arg loop. */
                 char *ctor_cname;
                 {
-                    char *_lmc = mangle_field_name(fn_binding->name->name);
+                    /* duplicate-ctor-names-collide-in-emitted-c: this string is
+                     * the signature-table KEY, so it must spell the callee symbol
+                     * exactly as the definition does -- ADT-qualified. */
+                    char *_lmc = mangle_ctor_symbol(
+                        emit_ctor_owner_adt(ctx, e, fn_binding),
+                        fn_binding->name->name);
                     Buf cnb; buf_init(&cnb);
                     buf_printf(&cnb, "ctor_%s%s", _lmc, suffix ? suffix : "");
                     buf_putc(&cnb, '\0');
@@ -7908,7 +7957,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                 }
                 free(ctor_cname);
-                char *_mc = mangle_field_name(fn_binding->name->name);
+                /* duplicate-ctor-names-collide-in-emitted-c: same ADT-qualified
+                 * symbol as the key built above and as the definition. */
+                char *_mc = mangle_ctor_symbol(
+                    emit_ctor_owner_adt(ctx, e, fn_binding),
+                    fn_binding->name->name);
                 Buf out; buf_init(&out);
                 if (suffix) {
                     buf_printf(&out, "ctor_%s%s(", _mc, suffix);

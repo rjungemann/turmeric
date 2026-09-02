@@ -462,6 +462,37 @@ add_test(
   COMMAND bash tests/check-pipefail-grep-q.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# A `const char *` accessor that returns a function-scoped `static char buf[]`
+# is correct only while every caller consumes the name before asking for
+# another -- and emitters do the opposite, gathering one name per field before
+# writing the declaration, so every name becomes the LAST name.  No crash, no
+# ASan report, no diagnostic: just well-formed C with the wrong type in it.
+# Bitten twice; see docs/archive/c-name-accessors-share-static-buffers.md.
+add_test(
+  NAME tur_static_cname_buffer_lint
+  COMMAND bash tests/check-static-cname-buffers.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# The bare-name constructor alias must fail CLOSED: no alias when the name has
+# more than one meaning, so inline C naming it fails at cc instead of silently
+# reaching whichever ADT was emitted first.  It did not, when the uniqueness
+# test keyed on the raw name and the #ifndef guard on the mangled one -- a
+# silent wrong constructor with no diagnostic at any layer.  See
+# docs/reported/separator-fold-collides-emitted-c-names.md.
+add_test(
+  NAME tur_ctor_alias_ambiguity
+  COMMAND bash tests/check-ctor-alias-ambiguity.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# stdlib/VERSION is what lets tur tell its own stdlib from another release's.
+# A stamp that drifts is worse than no stamp, because it is trusted: a stale one
+# makes a mismatched stdlib look like a match AND makes the correct one warn.
+# See docs/archive/stdlib-dir-guard-accepts-mismatched-stdlib.md.
+add_test(
+  NAME tur_stdlib_version_stamp
+  COMMAND bash tests/check-stdlib-version-stamp.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # docs/reported/README.md is the triage index: it must list every open finding
 # and nothing else.  It has drifted BOTH ways -- four rows left behind after
 # their reports were archived (so triage read four findings that were not open),

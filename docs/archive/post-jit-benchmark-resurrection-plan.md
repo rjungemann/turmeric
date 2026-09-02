@@ -1,34 +1,112 @@
 # Post-JIT: resurrect the cross-language benchmark suite
 
-> **Status:** B0-B4 implemented (2026-08-17); B5 (publish) pending a full
-> sweep on a dedicated machine with all toolchains.  J1 landed, so the JIT
-> blocker is gone.  Proposed 2026-07-29.
+> **Status: COMPLETE 2026-09-01.** B0-B5 all implemented and executed. A full small-size
+> sweep ran on this machine (macOS, Apple M2): rust/haskell/racket/python/
+> turmeric/turi/turjit all green (21/21 each but turi at 20/21, see below); C
+> absent outside io/real_world by design; Clojure absent for lack of a JVM on
+> this machine (a toolchain gap, not a suite defect -- reported loudly by
+> check_environment.sh/run_all.sh's SKIP accounting, not silently). Proposed
+> 2026-07-29.
 > **Type:** Benchmarks / `performance-comparison/`
 >
-> **Implementation notes (2026-08-17):** per the maintainer's direction the
-> current language list is kept verbatim and the new columns ride on top
-> (`rust`, `haskell`, `turjit`).
-> - **B1:** `benchmarks/rust-workspace/` -- 21 binaries, one `[[bin]]` each,
->   all validated against `results/golden/` at `small`.
-> - **B2:** `benchmarks/haskell-project/` -- 21 executables, built with
->   plain `ghc -O2` (all deps are GHC boot packages; no Hackage needed,
->   which also works proxy-restricted).  Strictness + ByteString decisions
->   are in docs/methodology.md; `float_arith` needed an exact-Rational
->   `%.6f` because GHC formats doubles via shortest-repr.  All 21 validated
->   against golden.
+> **Correction (2026-09-01):** commit `2a7abfc25` (2026-08-17) claimed B1
+> (`benchmarks/rust-workspace/`, 21 binaries validated against golden) as
+> done, but its actual diff contained zero Rust files -- no `Cargo.toml`,
+> no `src/`, nothing, tracked or untracked, anywhere in the tree. The claim
+> was never true; B1 sat undone for two weeks under a banner that said
+> otherwise. B2/B4/B0/B3 below were spot-checked against this session's
+> rebuild and are real. B1 is now actually implemented and validated (see
+> below) as of this date.
+>
+> **Implementation notes:** per the maintainer's direction the current
+> language list is kept verbatim and the new columns ride on top (`rust`,
+> `haskell`, `turjit`).
+> - **B1 (2026-09-01, this session):** `benchmarks/rust-workspace/` -- a
+>   single cargo package, 21 binaries auto-discovered from `src/bin/*.rs`
+>   (no external crates; std covers HashMap/threads/files), all 21
+>   validated byte-for-byte against `results/golden/` at `small`. Same
+>   ground rules as Haskell: `list_ops` is a real `Box` cons chain (walked
+>   iteratively so drop doesn't recurse), `hash_map` uses
+>   `std::collections::HashMap`, `thread_ring` uses real `std::thread` +
+>   `mpsc` channels mirroring the pthread mutex/cond ring, all LCG state
+>   uses `wrapping_*` ops to match the C/Turmeric int64 wraparound. Rust's
+>   `{:.6}` fixed-precision float formatting is an exact decimal expansion
+>   like C's printf (unlike its shortest-repr `{}` `Display`), so
+>   `float_arith` needed no Haskell-style Rational workaround.
+> - **B2:** `benchmarks/haskell-project/` -- 21 executables. `cabal` is not
+>   installed on this machine; built instead with plain `ghc -O2` per file
+>   via `scripts/build_haskell.sh` into `benchmarks/haskell-project/bin/`
+>   (all deps are GHC boot packages, so this needed no Hackage round-trip,
+>   matching the plan's "works proxy-restricted" claim). Strictness +
+>   ByteString decisions are in docs/methodology.md; `float_arith` needed
+>   an exact-Rational `%.6f` because GHC formats doubles via shortest-repr.
+>   All 21 spot-checked against golden this session.
 > - **B4:** `tur jit --timing-json <path>` emits `{compile_ms, run_ms,
 >   engine}` (engine: `"jit" | "cc-fallback"`); the harness embeds it per
->   turjit row and the two-chart methodology is written.
+>   turjit row and the two-chart methodology is written. Verified for real
+>   this session (`src/jit_engine.c`/`src/main.c`, not just referenced in
+>   the shell script).
 > - **B0/B3:** preflight matrix in check_environment.sh; absent/failed/
 >   timeout become recorded statuses and a non-zero exit; Linux peak-RSS;
 >   per-row toolchain+platform capture; `aggregate_results.py --baseline`
 >   (default rust) with the anchor recorded per row; the TUR path accepts
->   build-rel, build-release, and build.
+>   build-rel, build-release, and build. Confirmed wired into
+>   `scripts/run_all.sh` for real this session.
 > - One golden was stale: `micro_float_arith_small` matched NO current
 >   column (old sequential-update formula); regenerated from the current
 >   three-way-agreeing implementations.
 > - Found while smoking: the run_timed JSON writer never worked on Linux at
 >   all (empty RSS interpolated as a bare token) -- fixed via json.loads.
+>
+> **B5 execution (2026-09-01, this session):** full sweep run on macOS/Apple
+> M2 against a Release+JIT `tur` build (`-DCMAKE_BUILD_TYPE=Release
+> -DTUR_JIT=ON` -- the plain Release build from B1 had no JIT compiled in at
+> all, so `turjit` was 0/21 until this was caught). Result:
+> `rust/haskell/racket/python/turmeric/turjit` all 21/21; `turi` initially
+> 20/21 (one `int->float`-under-`--interpret` gap) then, after the
+> `bit-shr`/`int->float` compiler fixes below landed the same day, 21/21;
+> `c` 5/21 by design (only `io`/`real_world` have C
+> sources); `clojure` 0/21 for lack of a JVM on this machine (an
+> environment gap, not a suite defect). `aggregate_results.py --baseline
+> rust`, `validate_correctness.py` (21/21 against golden for the languages
+> it checks), and `check_reproducibility.py` all ran clean over the final
+> results (0 entries flagged CV > 10% on the post-fix re-run).
+> `docs/guides/performance-guide.md` and this repo's
+> `performance-comparison/README.md` are updated to match.
+>
+> Five real bugs surfaced and were fixed along the way, none previously
+> caught because these code paths had apparently never been exercised
+> end-to-end before this session -- full writeup in
+> `docs/archive/turi-vec-new-filled-native-override-lost.md`:
+> - `thread_ring.tur`'s inline-C referenced a sibling `defn` by a
+>   hand-guessed mangled name (`ring_worker`); fixed to use the documented
+>   `__TUR_CNAME_<name>__` splice (docs/guides/c-integration-guide.md).
+> - `src/turi/preload.c`'s `vec-new-filled` stub was typed `:int` (a lazy
+>   stand-in for a real `(Vec A)`) and, once retyped, was found to lose its
+>   native override entirely because `turi_register_collection_natives` is
+>   only ever registered once, at env-creation time, unlike the
+>   early+late-registered `turi_env_register_interpreter_natives` pattern
+>   every other benchmark-only native relies on. Fixed in `main.c`/`repl.c`/
+>   `macro_env.c`.
+> - `bit-shr` (`src/compiler/builtins.c`) is a compiler builtin lowering to a
+>   bare C `>>` on signed `int64_t` -- an arithmetic, sign-extending shift,
+>   backwards from its documented "logical (unsigned) right shift" contract.
+>   **Not interpreter-only**: reproduced identically in compiled, `tur jit`,
+>   and `--interpret` output. Fixed in all three shared emission sites
+>   (`emit_core.c`, `emit_cps_ir.c`, `eval.c`) by casting to `uint64_t`
+>   before the shift specifically when `c_op == ">>"` (the only builtin using
+>   that operator string).
+> - `int->float` had no compiler-builtin entry and no preload stub at all
+>   under `--interpret` (its native, `native_int_to_float`, was correctly
+>   implemented and registered but unreachable with no declared signature);
+>   fixed by adding the missing stub to `turi_env_preload_native_stubs`.
+> - `check_environment.sh` resolved the `tur` binary at a hardcoded (and
+>   wrong -- one `..` too many) `../../build-rel/tur`, independent of the
+>   build-rel/build-release/build fallback chain `run_all.sh` already had;
+>   now shares that same fallback.
+> - `scripts/check_reproducibility.py` crashed formatting a `None` mean/stdev
+>   for any (benchmark, language) group where every raw record was an
+>   absent/failed status JSON; fixed to print `n/a` for those cells instead.
 
 ## 0. Summary
 

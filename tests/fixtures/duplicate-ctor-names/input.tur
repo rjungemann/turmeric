@@ -1,0 +1,47 @@
+; Two ADTs sharing a constructor name, plus a user ADT naming its constructors
+; after the stdlib sums.  Both used to emit one C function twice
+; (`redefinition of 'ctor_Mk'`) -- elaboration resolved the shadowing correctly
+; all along, so this was purely the emitted C merging two distinct
+; constructors.  The symbol is `ctor_<Adt>_<Ctor>` now.
+;
+; SR2b is what made the second half ordinary: stdlib Option/Result are sums, so
+; their constructors are always in the program and any ADT naming a ctor Some /
+; None / Ok / Err collided with them.
+;
+; See docs/archive/duplicate-ctor-names-collide-in-emitted-c.md.
+
+(defdata A1 [t] (Mk t) (Nil1))
+(defdata A2 [t] (Mk t) (Nil2))
+
+; Collides with the stdlib Option/Result constructors.
+(defdata Opt [a] (None) (Some a))
+(defdata Res [a] (Ok a) (Err a))
+
+; Both ADTs' `Mk` constructors are DEFINED -- which is where the redefinition
+; error fired; the report's own repro never calls one.  A bare `Mk` resolves to
+; the most-recently-registered ADT (A2), which is the shadowing the elaborator
+; already got right, so that is the one exercised here.
+(defn use-a2 [] : int
+  (match (Mk 7)
+    (Mk v) v
+    (Nil2) 0))
+
+(defn use-opt [] : int
+  (match (Some 41)
+    (Some v) v
+    (None)   0))
+
+(defn use-res [] : int
+  (match (Ok 5)
+    (Ok v)  v
+    (Err e) e))
+
+(defn main [] : int
+  ; Each constructor must reach its OWN ADT: a merged symbol would send one of
+  ; these to the other ADT's constructor and print the wrong number.
+  (println (use-a2))
+  (println (use-opt))
+  (println (use-res))
+  ; The stdlib sums still work alongside the shadowing user ADTs.
+  (println (unwrap-or (some 3) 0))
+  0)

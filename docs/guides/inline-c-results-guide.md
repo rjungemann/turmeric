@@ -208,6 +208,28 @@ these helpers: the payload has to fit the single `int64_t` carrier slot.
 Wrap the value behind an opaque pointer handle (the rtmidi pattern above)
 or construct the `Result` in Turmeric instead.
 
+## A control form around an `if` over these builders
+
+The builders below return the int64 CARRIER, and the consumer bridges it to the
+by-value aggregate. When an `if`'s arms are both carrier producers, `emit_if`
+bridges each arm into its merge temp -- and a `let` or `do` wrapping that `if`
+used to bridge the already-concrete result a second time:
+
+```c
+__t172 = (*(tur_adt_Result__Handle__int *)(intptr_t)(__t174));  /* already a struct */
+```
+
+`tur check` was silent; it failed at `cc` with `operand of type 'tur_adt_...'
+where arithmetic or pointer type is required`, naming no `.tur` line. The same
+`if` as the whole function body always worked, which is what made the workaround
+("hoist the block into its own defn") effective and the cause obscure.
+
+Fixed 2026-09-02; both the `let` and `do` wrappers are pinned by
+`tests/fixtures/control-form-around-if-carrier-arms/`. Nothing about how you
+write the inline C changes -- this is recorded because the shape it broke is the
+one this guide recommends, so an older compiler will still reject it. See
+[docs/archive/control-form-around-if-double-unboxes-carrier-arms.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/control-form-around-if-double-unboxes-carrier-arms.md).
+
 ## See also
 
 - [opaques-guide.md](opaques-guide.md) -- the `defopaque` handles these

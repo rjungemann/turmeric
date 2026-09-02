@@ -5420,7 +5420,12 @@ static char *prim_expr(const BuiltinSpec *sp, char **as, uint32_t n) {
     Buf b; buf_init(&b);
     switch (sp->shape) {
         case BS_BIN_INFIX:
-            buf_printf(&b, "(%s) %s (%s)", as[0], sp->c_op, as[1]);
+            /* bit-shr is documented as a LOGICAL (unsigned) right shift;
+             * see the matching comment in emit_core.c's BS_BIN_INFIX case. */
+            if (strcmp(sp->c_op, ">>") == 0)
+                buf_printf(&b, "(int64_t)((uint64_t)(%s) >> (uint64_t)(%s))", as[0], as[1]);
+            else
+                buf_printf(&b, "(%s) %s (%s)", as[0], sp->c_op, as[1]);
             break;
         case BS_VARIADIC_FOLD: {
             uint32_t opens = (n >= 2) ? n - 2 : 0;
@@ -6491,7 +6496,23 @@ static void emit_letraw(CE *ce, const CTerm *t) {
          *
          * and every caller of a higher-order function (which is what forces the
          * CPS transform) hit it.  Same gate as the direct site, so it is inert
-         * whenever the init already yields the aggregate. */
+         * whenever the init already yields the aggregate.
+         *
+         * cps-let-binder-bridge-lacks-position-check: "same gate as the direct
+         * site" stopped being true when that site gained a POSITION check --
+         * `fn_body_tail_emits_byvalue_carrier_abi` asks what the Expr would
+         * naturally emit, not what the value in hand already is, and a value
+         * something else already bridged needs the second question.  The term is
+         * restored below, so the claim above holds again.
+         *
+         * Measured before adding it, since a change to a path with no failing
+         * case is otherwise unverifiable: across all 2131 fixtures only 33 reach
+         * this bridge with a by-value init type at all, and in every one of them
+         * either the tail predicate already suppresses it or the init is recorded
+         * as `int64_t` / a pointer / nothing -- never as the aggregate.  So this
+         * term changes no emitted byte in the corpus today; it is a consistency
+         * repair that keeps the two sites from drifting again, not a fix for an
+         * observed miscompile. */
         const char *bct = binder_ctype_full(ce->ctx, t->as.letraw.x.ty,
                                             t->as.letraw.x.type);
         Type init_bv = fn_body_tail_byvalue_carrier_type(ce->ctx, t->as.letraw.e);
@@ -6499,6 +6520,7 @@ static void emit_letraw(CE *ce, const CTerm *t) {
         if (rhs && bct && strcmp(bct, "int64_t") != 0 &&
             strchr(bct, '*') == NULL &&
             init_bv.kind != TY_UNKNOWN &&
+            !emit_value_is_recorded_as(rhs, bct) &&
             !fn_body_tail_emits_byvalue_carrier_abi(ce->ctx, t->as.letraw.e)) {
             int saved = ce->ctx->indent;
             ce->ctx->indent = ce->indent;

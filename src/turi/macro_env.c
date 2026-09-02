@@ -35,6 +35,7 @@
 #include "turi/eval.h"
 #include "turi/env.h"
 #include "turi/interpreter_natives.h"
+#include "turi/collections_native.h"
 #include "turi/preload.h"
 
 #include "elab.h"
@@ -198,6 +199,9 @@ struct TuriEnv *elab_macro_env_get(ElabSession *session) {
         }
         turi_env_pin_prelude(env);
         turi_env_register_interpreter_natives(env);
+        /* Re-assert collection natives (vec/set/map/hamt) after preload --
+         * see the matching call in main.c for why. */
+        turi_register_collection_natives(env);
         /* Stage 4 / R3: bounded type reflection, macro-env only -- the
          * native reads the enclosing compile's ADT registry through the
          * reflection window call_proc opens around each expansion. */

@@ -49,6 +49,12 @@ Arena *tur_type_arena(void) {
  * single-variant record monomorph emit routes its field stores through the same
  * member-path the typedef / field-read / match sites use. */
 char *mangle_field_name(const char *name);
+/* duplicate-ctor-names-collide-in-emitted-c: the ADT-qualified base token
+ * of a constructor's emitted C FUNCTION symbol.  Defined in emit_core.c;
+ * forward-declared here (types.c does not include emit_internal.h) so the
+ * monomorph ctor emit spells the symbol exactly as the base-ctor emit and
+ * every call site do. */
+char *mangle_ctor_symbol(const struct AdtDef *adt, const char *ctor_name);
 char *adt_field_member_path(const struct AdtDef *def, const struct CtorDef *ctor,
                             uint32_t fi);
 
@@ -1572,25 +1578,34 @@ static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
          * reached for them.  The ctor heap-boxes the by-value param into the slot
          * (see the byval ctor branch's struct-pointer box). */
         if (adt_field_is_ros_pointer_box(owner, &resolved)) {
-            /* A ROTATING pool, not one shared static buffer.  Callers collect
-             * several of these before printing any of them -- the monomorph ctor
-             * emitter fills `val_ctype[]` for every field and only then writes
-             * the parameter list -- so a single buffer hands every field the LAST
-             * field's spelling.  That emitted
+            /* INTERNED, so the returned pointer is stable for the whole
+             * compilation -- the same contract type_c_name already honours, and
+             * the reason the distinction between the two was invisible at the
+             * call site.
+             *
+             * This used to be one function-scoped `static char ptrbuf[128]`.
+             * Callers collect several of these before printing any of them --
+             * the monomorph ctor emitter fills `val_ctype[]` for every field and
+             * only then writes the parameter list -- so a single buffer handed
+             * every field the LAST field's spelling.  That emitted
              * `ctor_Result__Rational__ArithError(bool, tur_adt_ArithError *,
-             * tur_adt_ArithError *)`, silently mistyping ok_val as the error arm.
+             * tur_adt_ArithError *)`, silently mistyping ok_val as the error
+             * arm: well-formed C with the wrong type in it, no crash, no ASan
+             * report, no diagnostic.  A 16-slot rotating pool fixed the two-field
+             * case in 2026-08-26; interning removes the bound entirely.
              *
              * Latent until two fields of one constructor could both take this
              * path: it needs a Result/Option monomorph whose OK and ERR arms are
              * both non-parametric by-value ADTs, which is what a by-value sum
-             * makes ordinary (`(Result Rational ArithError)`). */
-            enum { PTRBUF_N = 16, PTRBUF_LEN = 128 };
-            static char ptrbuf[PTRBUF_N][PTRBUF_LEN];
-            static unsigned ptrbuf_i = 0;
-            char *slot = ptrbuf[ptrbuf_i++ % PTRBUF_N];
-            snprintf(slot, PTRBUF_LEN, "%s *", type_c_name(resolved));
+             * makes ordinary (`(Result Rational ArithError)`).  See
+             * docs/archive/c-name-accessors-share-static-buffers.md. */
+            Buf pb; buf_init(&pb);
+            buf_printf(&pb, "%s *", type_c_name(resolved));
+            buf_putc(&pb, '\0');
+            const char *boxed = intern_type_name(pb.data);
+            buf_free(&pb);
             free_struct_app_type(resolved);
-            return slot;
+            return boxed;
         }
         const char *nm = type_c_name(resolved);
         free_struct_app_type(resolved);
@@ -1715,14 +1730,18 @@ static void record_adt_app_ctor_sigs(AdtDef *def, Type *args, uint8_t n_args,
                          : app_byval ? name.data : "int64_t";
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
+        /* duplicate-ctor-names-collide-in-emitted-c: this table is keyed by the
+         * emitted FUNCTION symbol, so it has to spell it the same way
+         * emit_registered_adt_app_rec does -- through the shared builder, which
+         * qualifies the constructor with its owning ADT.  A key that disagrees
+         * silently misses, and the call site then falls back to re-deriving a
+         * ctype the prototype does not carry. */
+        char *csym = mangle_ctor_symbol(def, ctor->name);
         char ctor_sym[512];
-        int off = snprintf(ctor_sym, sizeof ctor_sym, "ctor_");
-        size_t mlen = strlen(ctor->name);
-        for (size_t mi = 0; mi < mlen && off < (int)sizeof ctor_sym - 1; mi++) {
-            char c = ctor->name[mi];
-            ctor_sym[off++] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                               (c >= '0' && c <= '9') || c == '_') ? c : '_';
-        }
+        int off = snprintf(ctor_sym, sizeof ctor_sym, "ctor_%s", csym);
+        free(csym);
+        if (off < 0) off = 0;
+        if (off > (int)sizeof ctor_sym - 1) off = (int)sizeof ctor_sym - 1;
         ctor_sym[off] = '\0';
         if (off + suffix.len < sizeof ctor_sym)
             memcpy(ctor_sym + off, suffix.data, suffix.len);   /* includes NUL */
@@ -2011,6 +2030,16 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                          (c >= '0' && c <= '9') || c == '_') ? c : '_';
         }
         mctor[mlen] = '\0';
+        /* duplicate-ctor-names-collide-in-emitted-c: two different names, and
+         * they were the same variable before.  `csym` is the FUNCTION symbol and
+         * carries the owning ADT (`ctor_<Adt>_<Ctor><suffix>`); `mctor` stays the
+         * bare union MEMBER name (`__r.as.<Ctor>`), which is already scoped by
+         * this monomorph's own struct and must NOT be qualified.  Using the
+         * shared builder for the symbol also puts this site on the same C-keyword
+         * guard as the call sites -- the hand-rolled mangle above has none, so a
+         * constructor named after a C keyword used to spell its definition and
+         * its calls differently. */
+        char *csym = mangle_ctor_symbol(def, ctor->name);
 
         /* B4 (slice 2): a wide by-value ADT element is passed to the ctor by
          * VALUE (the aggregate) but STORED as an int64 heap box -- so the ctor
@@ -2046,7 +2075,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                              : app_heap ? heap_ptr_c_name(adt_inst_name)
                              : app_byval ? adt_inst_name : "int64_t";
         if (app_niche) {
-            buf_printf(out, "static %s ctor_%s%s(", ctor_ret, mctor, suffix.data);
+            buf_printf(out, "static %s ctor_%s%s(", ctor_ret, csym, suffix.data);
             if (ctor->n_fields == 1)
                 buf_printf(out, "%s _0", niche_ctype);
             buf_printf(out, ") {\n");
@@ -2070,10 +2099,10 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                 buf_printf(out, "    return (%s)0;\n", niche_ctype);
             }
             buf_printf(out, "}\n\n");
-            free(wide_box); free(val_ctype); free(mctor);
+            free(wide_box); free(val_ctype); free(mctor); free(csym);
             continue;
         }
-        buf_printf(out, "static %s ctor_%s%s(", ctor_ret, mctor, suffix.data);
+        buf_printf(out, "static %s ctor_%s%s(", ctor_ret, csym, suffix.data);
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             if (fi > 0) buf_puts(out, ", ");
             buf_printf(out, "%s _%u", val_ctype[fi], fi);
@@ -2160,6 +2189,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         free(wide_box);
         free(val_ctype);
         free(mctor);
+        free(csym);
     }
     buf_printf(out, "#endif\n");
 

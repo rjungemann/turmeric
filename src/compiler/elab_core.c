@@ -2438,6 +2438,50 @@ bool return_type_pointer_scalar_reverse_conflict(TypeKind declared, Type body) {
     return body.kind == TY_CSTR;
 }
 
+/* nil-tail-not-checked-against-declared-return: a `nil`-typed body under a
+ * declared non-nil return.  The dispatcher's other predicates are each targeted
+ * at one confusable PAIR of types, and TY_NIL had no predicate at all -- so
+ * `(defn f [] : int nil)` was accepted and returned 0, while every other wrong
+ * tail (`"hello"`, `1.5`, `true`) was already rejected.
+ *
+ * Worth more than its repro's arity suggests: `nil` is what a lot of things
+ * collapse to.  `defmacro` / `defclass` / `deftype` all elaborate to
+ * EX_NIL_LIT once registered, and a void-returning call (`println`) is nil-typed
+ * too, so this hole is what made OTHER mistakes silent -- a missing close paren
+ * that swallowed the real tail among them.
+ *
+ * The caller decides `checkable`, and it carries TWO facts this predicate
+ * cannot see:
+ *
+ *  - **The return was written down.** `return_kind` is initialized to TY_NIL, so
+ *    an unannotated function and an explicit `: void` are the same TypeKind
+ *    here.  An unannotated function infers its return from its body and must not
+ *    be held to a return it never declared.
+ *  - **The tail is a nil LITERAL** (EX_NIL_LIT), not merely nil-TYPED.  This is
+ *    the deliberate scope line.  Widening to any nil-typed tail also rejects
+ *    `(defn main [] : int (println ...))` -- a void call in tail position -- which
+ *    is the idiomatic entry point here and 25 fixtures in this corpus.  Whether
+ *    that shape should be an error is a real question, but a much larger one
+ *    than this check, and the reported defect does not need it: the shapes that
+ *    made this hole expensive (`defmacro` / `defclass` / `deftype` collapsing to
+ *    EX_NIL_LIT once registered, a missing close paren swallowing the real tail)
+ *    all land on the literal.  See the report's "What narrows it" section.
+ *
+ * `: void` / `: nil` keeps accepting a nil tail either way -- that is this
+ * predicate's own job, below. */
+bool return_type_nil_body_conflict(TypeKind declared, Type body,
+                                   bool checkable) {
+    if (!checkable) return false;
+    if (body.kind != TY_NIL) return false;
+    if (declared == TY_NIL) return false;   /* `: void` / `: nil` -- correct */
+    /* A tyvar return is inferred or substituted later; TY_ANY absorbs anything;
+     * TY_NEVER is unreachable-typed.  None of the three is a commitment this
+     * check can hold the body to. */
+    if (declared == TY_TYVAR || declared == TY_ANY || declared == TY_NEVER)
+        return false;
+    return true;
+}
+
 /* carrier-aware-return-unification Phase 2b: a `bool`-vs-non-bool-integer return
  * mismatch.  `bool` and the integer family share the int64 0/1 representation,
  * so the carrier ABI cannot see the swap -- but the language already treats them
@@ -2535,9 +2579,20 @@ bool return_type_carrier_aggregate_conflict(Type declared, Type body) {
  * float widening is the caller's pre-step. */
 ReturnConflict return_position_conflict(const AdtDef *ret_adt,
                                         TypeKind ret_kind, Type body,
-                                        ReturnClass cls) {
+                                        ReturnClass cls, bool check_nil_body) {
     if (ret_adt && return_type_nominal_conflict(ret_adt, body))
         return RET_CONFLICT_NOMINAL;
+
+    /* nil-tail-not-checked-against-declared-return: checked BEFORE the
+     * representation-pair predicates below, and NOT gated on the return class.
+     * Every tolerance those classes buy is a bridge between two things that are
+     * both int64_t in the emitted C and both carry a value; a nil body carries
+     * no value to bridge, so a generic or `#{Unsafe}` function is as wrong here
+     * as a committed one.  An ADT-declared return reaches this too: `ret_adt`
+     * non-NULL with a nil body is the same defect. */
+    if (return_type_nil_body_conflict(ret_adt ? TY_ADT : ret_kind, body,
+                                      check_nil_body))
+        return RET_CONFLICT_NIL_BODY;
 
     /* Register-class: commit-direction-only for a typeclass instance method;
      * symmetric otherwise.  The predicate already tolerates a same-register-class
@@ -2604,6 +2659,34 @@ ReturnConflict return_position_conflict(const AdtDef *ret_adt,
     }
 
     return RET_CONFLICT_NONE;
+}
+
+/* nil-tail-not-checked-against-declared-return: is this body's TAIL a nil
+ * literal?  A multi-form body is wrapped (EX_DO), and a body that opens a scope
+ * is wrapped again (EX_LET / EX_LETREC), so the literal the check cares about is
+ * not the body Expr itself -- testing `body->kind == EX_NIL_LIT` directly let
+ * `(defn f [] : int (println "x") nil)` through while rejecting the single-form
+ * `(defn f [] : int nil)`, which is exactly the inconsistency the report says
+ * does not exist ("multi-form bodies behave identically").
+ *
+ * EX_IF is deliberately NOT peeled.  Its branch types are already unified and
+ * checked against each other, `!`-typed (panic) arms included, and a nil branch
+ * under a non-nil peer is that check's business, not this one's. */
+bool body_tail_is_nil_literal(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_NIL_LIT:
+            return true;
+        case EX_DO:
+            return e->as.do_.n
+                 ? body_tail_is_nil_literal(e->as.do_.items[e->as.do_.n - 1])
+                 : false;
+        case EX_LET:
+        case EX_LETREC:
+            return body_tail_is_nil_literal(e->as.let_.body);
+        default:
+            return false;
+    }
 }
 
 /* TY4: borrow referent extraction -- see elab_internal.h.
