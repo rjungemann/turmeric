@@ -510,13 +510,39 @@ refuses to time a program whose three engines disagree, and the fixture
 corpus runs under all three harnesses (`tests/run.sh`, `tests/run-turi.sh`,
 `tests/run-jit.sh`).
 
-## Benchmarking methodology
+## Cross-language comparison
 
-> Corrected on 2026-08-20. This section previously described a
-> `scripts/run_all.sh` / `analyze_results.py` / `check_environment.sh` harness
-> and a benchmark template built on `time/now-ns`, `args/parse-int`,
-> `args/get` and `str/format`. None of those scripts or functions exist.
-> `scripts/` contains only `wait-for-release.sh`.
+A separate suite, `performance-comparison/` at the project root, runs the
+same 21 benchmarks (numerical, data structures, string processing,
+concurrency, memory, recursion, I/O, real-world, micro) across up to nine
+columns: C, Turmeric (`tur build`), turi (`tur --interpret`), `tur jit`,
+Rust, Haskell, Clojure, Racket, and Python. This is the `scripts/run_all.sh`
+/ `aggregate_results.py` / `check_environment.sh` harness -- it lives under
+`performance-comparison/`, not the top-level `benchmarks/` this guide's
+methodology section otherwise describes, and answers a different question:
+not "did this Turmeric change regress," but "how does Turmeric's output
+compare to a native-compiled, a JVM-hosted, and a scripting-language peer
+doing the same work." See
+[performance-comparison/README.md](https://github.com/rjungemann/turmeric/blob/main/performance-comparison/README.md)
+and its `docs/methodology.md` for the full setup, same-algorithm ground
+rules, and how to run it.
+
+Two things any reading of that suite's numbers should keep in view:
+
+- **Every column runs the same algorithm**, not each language's idiomatic
+  rewrite -- a linked cons chain in Rust for `list_ops`, not a `Vec`; a real
+  `std::thread` + `pthread`-equivalent ring for `thread_ring`, not a
+  green-thread substitute. Where a language's natural analogue genuinely
+  differs (`Data.IntMap.Strict` / `std::collections::HashMap` / Turmeric's
+  HAMT for `hash_map`), that's stated in the methodology doc, not picked
+  silently for whichever looks fastest.
+- **A column can be absent for toolchain reasons that have nothing to do
+  with the language's performance** -- Clojure needs a JVM; not having one
+  installed makes every Clojure row `absent`, not `0ms`. `check_environment.sh`
+  prints this matrix before a sweep starts specifically so an incomplete
+  toolchain reads as an incomplete report, not a suspiciously fast column.
+
+## Benchmarking methodology
 
 ### The real harness
 
