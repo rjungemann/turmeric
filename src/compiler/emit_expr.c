@@ -12311,7 +12311,38 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 ? *sft->as.fn.arg_full_types[i]
                                 : emit_type_from_kind(sft->as.fn.arg_kinds[i]);
                 }
-                poly_shim = ensure_typed_poly_to_fat(ctx, pr, pa, poly_arity);
+                /* erased-float-carrier: inside the ERASED instance base body
+                 * (no active specialization) a method param `g : (fn [a] b)`
+                 * holds a thunk that speaks the int64 carrier at its erased
+                 * positions -- the pack site bridged a float-class wrapper
+                 * through its bits (ensure_float_carrier_shim), and `(g x)`
+                 * here reads it back the same way.  The sink's typed-thunk
+                 * cast is native, so slot 0 must bridge bits -> float at
+                 * exactly those positions.  A spec clone keeps the plain
+                 * typed shim: its box was packed for a native callee. */
+                const Expr *pin = inner;
+                while (pin && pin->kind == EX_ASCRIBE) pin = pin->as.ascribe_.inner;
+                const Binding *pb = (pin && pin->kind == EX_VAR) ? pin->as.var.binding : NULL;
+                const Type *decl = (pb && pb->is_param) ? pb->poly_type : NULL;
+                if (decl && decl->kind == TY_FORALL) decl = decl->as.forall_.body;
+                if (decl && decl->kind == TY_FN && !ctx->current_abi_specialization) {
+                    uint64_t emask = 0;
+                    for (uint8_t i = 0; i < decl->as.fn.arity; i++) {
+                        const Type *a = decl->as.fn.arg_full_types
+                            ? decl->as.fn.arg_full_types[i] : NULL;
+                        bool er = a ? (a->kind == TY_TYVAR)
+                                    : (decl->as.fn.arg_kinds[i] == TY_TYVAR);
+                        if (er) emask |= ARG_IDX_BIT(i);
+                    }
+                    const Type *r = decl->as.fn.result_full_type;
+                    bool eres = r ? (r->kind == TY_TYVAR)
+                                  : (decl->as.fn.result_kind == TY_TYVAR);
+                    if (emask || eres) {
+                        char *es = ensure_typed_poly_to_fat_erased(
+                            ctx, pr, pa, poly_arity, emask, eres);
+                        if (es) { free(poly_shim); poly_shim = es; }
+                    }
+                }
             }
             indent_buf(body, ctx->indent);
             if (poly_shim) {

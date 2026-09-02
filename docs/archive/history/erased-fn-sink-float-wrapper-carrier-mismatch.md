@@ -82,9 +82,18 @@ Pinned by `tests/fixtures/erased-reader-float32-record-monomorph`
 lambda (`+ v k`, 3.75), a non-capturing lambda (`* v 2.0f32`, -14.5) and
 concrete dispatch `(fmap (mk-id 2.5f32) keep-f32)`.
 
-## Not covered
+## The follow-on shape, closed the same day
 
-An erased `(fn [a] b)` box that the instance body then hands to a TYPED
-float `^fat` sink would see the bits shim through the typed poly-to-fat
-cast. No fixture does this; it needs a bits-to-native bridge at the
-poly-to-fat site if it ever surfaces.
+An erased `(fn [a] b)` box that the instance body hands to a TYPED float
+`^fat` sink (`(call-ff g 3.5)` with `^fat f :(fn [float] #fx{} float)`) goes
+through the poly-to-fat box, whose slot-0 typed shim read slot 1 as a native
+`double` thunk. With the bits shim now in slot 1 that printed `0` (it printed
+`7` before the fix above, by the native wrapper). In the erased instance base
+body -- no active specialization, and the box is a parameter whose declared
+signature is a type variable at a float-class sink position -- the emitter
+now selects `ensure_typed_poly_to_fat_erased`, which bridges bits to the
+sink's native float at exactly those positions
+(`__tur_poly_to_fat1_double_double_erased_m1r`). A per-spec instance clone
+keeps the plain typed shim, since its box was packed for a native callee.
+Pinned by `tests/fixtures/erased-fn-param-to-typed-fat-sink` (named fn,
+capturing lambda, and concrete dispatch).

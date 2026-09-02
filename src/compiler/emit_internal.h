@@ -1141,6 +1141,16 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
  * __tur_poly_to_fat<N> shim instead), keeping int64 poly boxes churn-free. */
 char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type,
                                const Type *arg_types, uint32_t n_args);
+/* erased-float-carrier: the typed poly-to-fat shim for a box whose stored thunk
+ * speaks the int64 carrier at `erased_mask` / `erased_result` (a method param
+ * `g : (fn [a] b)` inside the ERASED instance base body, where the pack site
+ * bridged a float-class wrapper through its bits).  Bridges those positions
+ * back from bits to the sink's native float type; the rest forward as the
+ * plain typed shim does.  Returns NULL when no erased position is float-class
+ * (the plain typed shim already matches). */
+char *ensure_typed_poly_to_fat_erased(EmitCtx *ctx, Type result_type,
+                                      const Type *arg_types, uint32_t n_args,
+                                      uint64_t erased_mask, bool erased_result);
 
 /* ------------ emit_effects.c: effects/CPS expression emission ------------ */
 /* Region C -- algebraic effects (EX_DEFECT, EX_PERFORM, EX_HANDLE, EX_RESUME,

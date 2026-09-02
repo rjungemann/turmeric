@@ -1761,6 +1761,82 @@ char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type,
     return name;
 }
 
+char *ensure_typed_poly_to_fat_erased(EmitCtx *ctx, Type result_type,
+                                      const Type *arg_types, uint32_t n_args,
+                                      uint64_t erased_mask, bool erased_result) {
+    if (!use_typed_thunk_abi(result_type, (Type *)arg_types, (uint8_t)n_args)) return NULL;
+    const char *rc = type_c_name(result_type);
+    const char *rk = erased_result ? float_carrier_kind(rc) : NULL;
+    bool any = rk != NULL;
+    for (uint32_t i = 0; !any && i < n_args; i++) {
+        if ((erased_mask & ARG_IDX_BIT(i)) &&
+            float_carrier_kind(thunk_param_slot_c_name(arg_types[i])))
+            any = true;
+    }
+    if (!any) return NULL;
+
+    char *base = typed_poly_to_fat_name(result_type, arg_types, n_args);
+    Buf nb; buf_init(&nb);
+    buf_printf(&nb, "%s_erased_m%llx%s", base, (unsigned long long)erased_mask,
+               erased_result ? "r" : "");
+    buf_putc(&nb, '\0');
+    free(base);
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < ctx->n_poly_fatshim_names; i++) {
+        if (strcmp(ctx->poly_fatshim_names[i], name) == 0) return name;
+    }
+    if (ctx->n_poly_fatshim_names >= ctx->cap_poly_fatshim_names) {
+        uint32_t new_cap = ctx->cap_poly_fatshim_names ? ctx->cap_poly_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->poly_fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->poly_fatshim_names = nn;
+        ctx->cap_poly_fatshim_names = new_cap;
+    }
+    ctx->poly_fatshim_names[ctx->n_poly_fatshim_names++] = strdup(name);
+    if (!ctx->poly_fatshim_names[ctx->n_poly_fatshim_names - 1]) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+
+    /* static R name(void *__e, A0 a0, ...) {
+     *     int64_t *__b = (int64_t *)__e;
+     *     <R'> __r = ((R' (*)(void *, A0', ...))(intptr_t)__b[1])((void *)__b[2], a0', ...);
+     *     return <bridge>(__r);
+     * }
+     * where an erased float position is int64_t in the stored thunk's
+     * signature and crosses through the tur_sc bits helpers. */
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
+    buf_printf(target, "static %s %s(void *__e", rc, name);
+    for (uint32_t i = 0; i < n_args; i++)
+        buf_printf(target, ", %s a%u", thunk_param_slot_c_name(arg_types[i]), (unsigned)i);
+    buf_puts(target, ") {\n    int64_t *__b = (int64_t *)__e;\n    ");
+    const char *inner_rc = rk ? "int64_t" : rc;
+    if (has_ret) buf_printf(target, "%s __r = ", inner_rc);
+    buf_printf(target, "((%s (*)(void *", inner_rc);
+    for (uint32_t i = 0; i < n_args; i++) {
+        const char *pc = thunk_param_slot_c_name(arg_types[i]);
+        bool bits = (erased_mask & ARG_IDX_BIT(i)) && float_carrier_kind(pc);
+        buf_printf(target, ", %s", bits ? "int64_t" : pc);
+    }
+    buf_puts(target, "))(intptr_t)__b[1])((void *)(intptr_t)__b[2]");
+    for (uint32_t i = 0; i < n_args; i++) {
+        const char *pc = thunk_param_slot_c_name(arg_types[i]);
+        const char *pk = (erased_mask & ARG_IDX_BIT(i)) ? float_carrier_kind(pc) : NULL;
+        if (pk) buf_printf(target, ", tur_sc_bits_%s(a%u)", pk, (unsigned)i);
+        else buf_printf(target, ", a%u", (unsigned)i);
+    }
+    buf_puts(target, ");\n");
+    if (has_ret) {
+        if (rk) buf_printf(target, "    return tur_sc_%s_from_bits(__r);\n", rk);
+        else buf_puts(target, "    return __r;\n");
+    }
+    buf_puts(target, "}\n");
+    return name;
+}
+
 static bool emit_abi_type_has_named_tyvar(const Type *t) {
     if (!t) return false;
     switch (t->kind) {
