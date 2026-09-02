@@ -1308,7 +1308,7 @@ which is the evidence against the module-docstring claim.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [fmt-drops-comments-in-handle-and-binding-modifier-gaps](fmt-drops-comments-in-handle-and-binding-modifier-gaps.md) | medium | the residue of the row below, in the printers its fix did not reach: `handle`/`case` arm gaps and the other fixed-index header loops still drop comments, and `fmt_vec_let_bindings_broken` mis-pairs a `^mut` binding. 8 files in a 2997-file sweep, down from 70 |
+| ~~fmt-drops-comments-in-handle-and-binding-modifier-gaps~~ | -- | **Resolved 2026-09-02**: every header/arm printer re-emits gap comments (shared `fmt_header_items`, cond-style arm loops), `^mut` takes the name slot in binding vectors, a trailing comment before a closing paren survives, and `&mut x` prints back as the sugar (its paren form re-reads doubled). Residue list 0 lost / 0 non-idempotent; seven harness cases. Archived to [docs/archive](../archive/fmt-drops-comments-in-handle-and-binding-modifier-gaps.md) |
 
 `fmt-drops-comments-inside-bracket-vectors` was resolved 2026-08-26 and moved
 to [docs/archive](../archive/fmt-drops-comments-inside-bracket-vectors.md). The

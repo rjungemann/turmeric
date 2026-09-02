@@ -174,6 +174,19 @@ static void fmt_form_flat(Buf *b, const Form *f) {
             buf_write(b, f->as.sym->name, f->as.sym->len);
             break;
         case F_LIST:
+            /* fmt-drops-comments-in-handle-and-binding-modifier-gaps: the
+             * reader's `&mut x` borrow sugar reads as the list `(&mut x)`, and
+             * that list has no paren spelling -- `(&mut x)` written out reads
+             * as `((&mut x))` (reader.c: "the explicit form must be written
+             * as &mut x").  Print it back as the sugar, or a second format
+             * pass wraps it in another pair of parens. */
+            if (f->as.list.len == 2 && f->as.list.items[0]->tag == F_SYM
+                && f->as.list.items[0]->as.sym->len == 4
+                && memcmp(f->as.list.items[0]->as.sym->name, "&mut", 4) == 0) {
+                buf_puts(b, "&mut ");
+                fmt_form_flat(b, f->as.list.items[1]);
+                break;
+            }
             buf_putc(b, '(');
             for (uint32_t i = 0; i < f->as.list.len; i++) {
                 if (i) buf_putc(b, ' ');
@@ -400,6 +413,8 @@ static uint32_t emit_comments_indented(FmtState *s, uint32_t from_off,
                                        uint32_t to_off, uint32_t col,
                                        bool *must_break);
 static bool span_has_comment(FmtState *s, const Form *f);
+static void emit_trailing_gap_comments(FmtState *s, uint32_t prev_end,
+                                       const Form *f, uint32_t col);
 
 /* fmt_measure, plus: a form whose source span carries a comment is reported as
  * unmeasurable.  The flat printer has no way to re-emit a comment (the parsed
@@ -440,6 +455,12 @@ static void fmt_body_forms(FmtState *s, const Form *f, uint32_t start,
         fmt_form(s, child);
         if (have_src) prev_end = child->span.off_end;
     }
+    /* fmt-drops-comments-in-handle-and-binding-modifier-gaps: a comment
+     * after the LAST body form, before the closing paren
+     * (`(println @rm)))  ; deref` with the `)` on the next line), sits in
+     * no inter-form gap and used to be dropped.  Re-emit it; the closing
+     * paren then lands on its own line, which is where the source had it. */
+    if (have_src) emit_trailing_gap_comments(s, prev_end, f, body_col);
 }
 
 /* Offset one past a collection's opening delimiter (`[`, `#{`, `#map{`, `#s(`,
@@ -629,6 +650,32 @@ static uint32_t defn_params_index(const Form *f) {
     return 3;
 }
 
+/* fmt-drops-comments-in-handle-and-binding-modifier-gaps: emit header items
+ * [0, end) of a special form on the opening line, re-emitting any source
+ * comment sitting in the gap between two of them instead of writing a bare
+ * ' ' over it (the `handle` scrutinee / first-arm gap, a `;;` between a defn
+ * name and its params, ...).  A gap that carried a comment ends inside that
+ * comment, so the next item starts a fresh line at body_col -- the same
+ * shape fmt_call's head/first-arg pair uses.  `params_idx` (or UINT32_MAX)
+ * names the parameter vector, printed through fmt_param_vec. */
+static void fmt_header_items(FmtState *s, const Form *f, uint32_t end,
+                             uint32_t body_col, uint32_t params_idx) {
+    uint32_t n = f->as.list.len;
+    uint32_t prev_end = 0;
+    for (uint32_t i = 0; i < end && i < n; i++) {
+        const Form *cur = f->as.list.items[i];
+        if (i) {
+            if (emit_gap_comments_before(s, prev_end, cur, body_col))
+                fs_newline_indent(s, body_col);
+            else
+                fs_putc(s, ' ');
+        }
+        if (i == params_idx && cur->tag == F_VEC) fmt_param_vec(s, cur);
+        else                                       fmt_form(s, cur);
+        prev_end = cur->span.off_end;
+    }
+}
+
 /* (defn name [params] :ret\n  body...) */
 static void fmt_defn(FmtState *s, const Form *f) {
     uint32_t n = f->as.list.len;
@@ -645,13 +692,7 @@ static void fmt_defn(FmtState *s, const Form *f) {
                         || f->as.list.items[header_end]->tag == F_TYPE_ANN))
         header_end++;
 
-    for (uint32_t i = 0; i < header_end && i < n; i++) {
-        if (i) fs_putc(s, ' ');
-        if (i == params_idx && f->as.list.items[i]->tag == F_VEC)
-            fmt_param_vec(s, f->as.list.items[i]);
-        else
-            fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_header_items(s, f, header_end, body_col, params_idx);
 
     fmt_body_forms(s, f, header_end, body_col);
 
@@ -671,13 +712,7 @@ static void fmt_fn(FmtState *s, const Form *f) {
     if (n > 2 && (f->as.list.items[2]->tag == F_KEYWORD
                || f->as.list.items[2]->tag == F_TYPE_ANN)) header_end = 3;
 
-    for (uint32_t i = 0; i < header_end && i < n; i++) {
-        if (i) fs_putc(s, ' ');
-        if (i == 1 && f->as.list.items[i]->tag == F_VEC)
-            fmt_param_vec(s, f->as.list.items[i]);
-        else
-            fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_header_items(s, f, header_end, body_col, 1);
 
     fmt_body_forms(s, f, header_end, body_col);
 
@@ -697,10 +732,26 @@ static void fmt_vec_let_bindings_broken(FmtState *s, const Form *f) {
      * single column. Single-line names are common; if a name itself spans
      * lines (unusual), skip it from the width calculation -- the value on
      * that row will just sit one space after the name's final column. */
+    /* A leading modifier (`^mut y 0`, `^fat f ...`) prefixes the NAME slot:
+     * it and the name print together (`^mut y`) and take one pair position,
+     * exactly as fmt_vec_params_broken treats it.  Consuming it as a pair
+     * element desynchronised the walk (`^mut`=name, `y`=value, `0`=name),
+     * which split the binding from its value and made the layout
+     * non-idempotent. */
     uint32_t max_name = 0;
-    for (uint32_t i = 0; i + 1 < n; i += 2) {
-        uint32_t w = fmt_measure(f->as.list.items[i]);
-        if (w != UINT32_MAX && w > max_name) max_name = w;
+    for (uint32_t i = 0; i < n; i += 2) {
+        uint32_t w = 0;
+        if (param_is_leading_modifier(f->as.list.items[i]) && i + 1 < n) {
+            uint32_t mw = fmt_measure(f->as.list.items[i]);
+            if (mw == UINT32_MAX) continue;
+            w = mw + 1;
+            i++;
+        }
+        if (i >= n) break;
+        uint32_t nw = fmt_measure(f->as.list.items[i]);
+        if (nw == UINT32_MAX) continue;
+        w += nw;
+        if (w > max_name) max_name = w;
     }
     uint32_t value_col = inner + max_name + 1;
 
@@ -711,6 +762,15 @@ static void fmt_vec_let_bindings_broken(FmtState *s, const Form *f) {
         const Form *name = f->as.list.items[i];
         if (emit_gap_comments_before(s, prev_end, name, inner) || i) {
             fs_newline_indent(s, inner);
+        }
+        if (param_is_leading_modifier(name) && i + 1 < n) {
+            fmt_form(s, name); i++;
+            prev_end = name->span.off_end;
+            name = f->as.list.items[i];
+            if (emit_gap_comments_before(s, prev_end, name, inner))
+                fs_newline_indent(s, inner);
+            else
+                fs_putc(s, ' ');
         }
         fmt_form(s, name); i++;
         prev_end = name->span.off_end;
@@ -736,6 +796,10 @@ static void fmt_vec_let_bindings_broken(FmtState *s, const Form *f) {
     fs_putc(s, ']');
 }
 
+static uint32_t prev_end_head(const Form *f) {
+    return f->as.list.len ? f->as.list.items[0]->span.off_end : 0;
+}
+
 /* (let [bindings]\n  body...) — also used for loop */
 static void fmt_let(FmtState *s, const Form *f) {
     uint32_t n = f->as.list.len;
@@ -753,8 +817,14 @@ static void fmt_let(FmtState *s, const Form *f) {
      * single pair also falls to the pair-per-line formatter rather than letting
      * the generic vector formatter split every element onto its own line. */
     if (n >= 2) {
-        fs_putc(s, ' ');
         const Form *bindings = f->as.list.items[1];
+        /* A comment between the head and the bindings (a `loop` whose first
+         * body form follows a `; note`, examples/guestbook) used to be
+         * dropped by the bare ' ' here. */
+        if (emit_gap_comments_before(s, prev_end_head(f), bindings, body_col))
+            fs_newline_indent(s, body_col);
+        else
+            fs_putc(s, ' ');
         if (bindings->tag == F_VEC) {
             uint32_t w = fmt_measure_src(s, bindings);
             bool single_pair = bindings->as.list.len <= 2;
@@ -776,17 +846,14 @@ static void fmt_let(FmtState *s, const Form *f) {
 
 /* (if test\n  then\n  else) */
 static void fmt_if(FmtState *s, const Form *f) {
-    uint32_t n = f->as.list.len;
+    (void)f->as.list.len;
     uint32_t paren_col = s->col;
     uint32_t body_col  = paren_col + s->opts.indent_width;
 
     fs_putc(s, '(');
 
     /* "if" and test on the same first line */
-    for (uint32_t i = 0; i < 2 && i < n; i++) {
-        if (i) fs_putc(s, ' ');
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_header_items(s, f, 2, body_col, UINT32_MAX);
 
     /* then and optional else on separate indented lines */
     fmt_body_forms(s, f, 2, body_col);
@@ -796,16 +863,13 @@ static void fmt_if(FmtState *s, const Form *f) {
 
 /* (when test\n  body...) — also for unless */
 static void fmt_when(FmtState *s, const Form *f) {
-    uint32_t n = f->as.list.len;
+    (void)f->as.list.len;
     uint32_t paren_col = s->col;
     uint32_t body_col  = paren_col + s->opts.indent_width;
 
     fs_putc(s, '(');
 
-    for (uint32_t i = 0; i < 2 && i < n; i++) {
-        if (i) fs_putc(s, ' ');
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_header_items(s, f, 2, body_col, UINT32_MAX);
 
     fmt_body_forms(s, f, 2, body_col);
 
@@ -836,23 +900,35 @@ static void fmt_case(FmtState *s, const Form *f) {
     fs_putc(s, '(');
 
     /* "case" + expr on first line */
-    for (uint32_t i = 0; i < 2 && i < n; i++) {
-        if (i) fs_putc(s, ' ');
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_header_items(s, f, 2, body_col, UINT32_MAX);
 
-    /* Arms: each pat+result pair on its own line */
+    /* Arms: each pat+result pair on its own line.  A comment before an arm
+     * (an arm's trailing `;; note`, or one between the scrutinee and the
+     * first arm) is re-emitted from the gap, as fmt_cond does; a comment
+     * between a pattern and its result goes above the result rather than
+     * being dropped. */
+    uint32_t prev_end = (n >= 2) ? f->as.list.items[1]->span.off_end
+                                 : (n >= 1 ? f->as.list.items[0]->span.off_end : 0);
     uint32_t i = 2;
     while (i < n) {
+        const Form *pat = f->as.list.items[i];
+        emit_gap_comments_before(s, prev_end, pat, body_col);
         fs_newline_indent(s, body_col);
-        fmt_form(s, f->as.list.items[i]);
+        fmt_form(s, pat);
         i++;
+        prev_end = pat->span.off_end;
         if (i < n) {
-            fs_putc(s, ' ');
-            fmt_form(s, f->as.list.items[i]);
+            const Form *res = f->as.list.items[i];
+            if (emit_gap_comments_before(s, prev_end, res, body_col))
+                fs_newline_indent(s, body_col + s->opts.indent_width);
+            else
+                fs_putc(s, ' ');
+            fmt_form(s, res);
             i++;
+            prev_end = res->span.off_end;
         }
     }
+    emit_trailing_gap_comments(s, prev_end, f, body_col);
 
     fs_putc(s, ')');
 }
@@ -915,16 +991,13 @@ static void fmt_cond(FmtState *s, const Form *f) {
 
 /* (handle expr\n  arm...) */
 static void fmt_handle(FmtState *s, const Form *f) {
-    uint32_t n = f->as.list.len;
+    (void)f->as.list.len;
     uint32_t paren_col = s->col;
     uint32_t body_col  = paren_col + s->opts.indent_width;
 
     fs_putc(s, '(');
 
-    for (uint32_t i = 0; i < 2 && i < n; i++) {
-        if (i) fs_putc(s, ' ');
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_header_items(s, f, 2, body_col, UINT32_MAX);
 
     fmt_body_forms(s, f, 2, body_col);
 
@@ -933,16 +1006,13 @@ static void fmt_handle(FmtState *s, const Form *f) {
 
 /* (defclass Name [params]\n  method...) */
 static void fmt_defclass(FmtState *s, const Form *f) {
-    uint32_t n = f->as.list.len;
+    (void)f->as.list.len;
     uint32_t paren_col = s->col;
     uint32_t body_col  = paren_col + s->opts.indent_width;
 
     fs_putc(s, '(');
 
-    for (uint32_t i = 0; i < 3 && i < n; i++) {
-        if (i) fs_putc(s, ' ');
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_header_items(s, f, 3, body_col, UINT32_MAX);
 
     fmt_body_forms(s, f, 3, body_col);
 
@@ -954,16 +1024,13 @@ static void fmt_defclass(FmtState *s, const Form *f) {
  * implementation goes on its own indented body line (2-space body indent,
  * matching the documented special-form style). */
 static void fmt_definstance(FmtState *s, const Form *f) {
-    uint32_t n = f->as.list.len;
+    (void)f->as.list.len;
     uint32_t paren_col = s->col;
     uint32_t body_col  = paren_col + s->opts.indent_width;
 
     fs_putc(s, '(');
 
-    for (uint32_t i = 0; i < 3 && i < n; i++) {
-        if (i) fs_putc(s, ' ');
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_header_items(s, f, 3, body_col, UINT32_MAX);
 
     fmt_body_forms(s, f, 3, body_col);
 
@@ -1107,15 +1174,25 @@ static void fmt_map_block(FmtState *s, const Form *f,
                            uint32_t entry_col, uint32_t close_col) {
     uint32_t n = f->as.list.len;
     fs_puts(s, "#{");
+    uint32_t prev_end = collection_body_start(s, f);
     uint32_t i = 0;
     while (i < n) {
+        const Form *key = f->as.list.items[i];
+        emit_gap_comments_before(s, prev_end, key, entry_col);
         fs_newline_indent(s, entry_col);
-        fmt_form(s, f->as.list.items[i]); i++;
+        fmt_form(s, key); i++;
+        prev_end = key->span.off_end;
         if (i < n) {
-            fs_putc(s, ' ');
-            fmt_form(s, f->as.list.items[i]); i++;
+            const Form *val = f->as.list.items[i];
+            if (emit_gap_comments_before(s, prev_end, val, entry_col))
+                fs_newline_indent(s, entry_col + s->opts.indent_width);
+            else
+                fs_putc(s, ' ');
+            fmt_form(s, val); i++;
+            prev_end = val->span.off_end;
         }
     }
+    emit_gap_comments_range(s, prev_end, f->span.off_end, entry_col);
     fs_newline_indent(s, close_col);
     fs_putc(s, '}');
 }
@@ -1133,20 +1210,26 @@ static void fmt_defpackage(FmtState *s, const Form *f) {
     fs_putc(s, '(');
 
     /* head (defpackage/deflockfile) + package name */
-    for (uint32_t i = 0; i < 2 && i < n; i++) {
-        if (i) fs_putc(s, ' ');
-        fmt_form(s, f->as.list.items[i]);
-    }
+    fmt_header_items(s, f, 2, body_col, UINT32_MAX);
 
-    /* keyword-value pairs starting at index 2 */
+    /* keyword-value pairs starting at index 2, re-emitting any comment in
+     * the gaps (a `;; why this dep` above a :spices entry). */
+    uint32_t prev_end = (n >= 2) ? f->as.list.items[1]->span.off_end
+                                 : (n >= 1 ? f->as.list.items[0]->span.off_end : 0);
     uint32_t i = 2;
     while (i < n) {
+        const Form *kw = f->as.list.items[i];
+        emit_gap_comments_before(s, prev_end, kw, body_col);
         fs_newline_indent(s, body_col);
-        fmt_form(s, f->as.list.items[i]); /* keyword */
+        fmt_form(s, kw); /* keyword */
         i++;
+        prev_end = kw->span.off_end;
         if (i < n) {
             const Form *val = f->as.list.items[i];
-            fs_putc(s, ' ');
+            if (emit_gap_comments_before(s, prev_end, val, body_col))
+                fs_newline_indent(s, body_col + s->opts.indent_width);
+            else
+                fs_putc(s, ' ');
             /* Non-empty map value: try inline, fall back to block */
             if (val->tag == F_MAP && val->as.list.len > 0) {
                 uint32_t w = fmt_measure_src(s, val);
@@ -1161,8 +1244,10 @@ static void fmt_defpackage(FmtState *s, const Form *f) {
                 fmt_form(s, val);
             }
             i++;
+            prev_end = val->span.off_end;
         }
     }
+    emit_trailing_gap_comments(s, prev_end, f, body_col);
 
     fs_putc(s, ')');
 }

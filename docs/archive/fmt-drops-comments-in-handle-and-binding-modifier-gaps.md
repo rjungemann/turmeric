@@ -1,5 +1,7 @@
 # `tur fmt` still deletes comments in `handle`/`case` arm gaps and in `^mut` binding pairs
 
+**Status: RESOLVED 2026-09-02** -- see the Resolution at the end.
+
 **Severity: medium** -- the same silent-source-deletion defect as
 [fmt-drops-comments-inside-bracket-vectors](../archive/fmt-drops-comments-inside-bracket-vectors.md),
 in the printers that fix did not reach. Downgraded from HIGH because the
@@ -134,3 +136,42 @@ Found while fixing
 [fmt-drops-comments-inside-bracket-vectors](../archive/fmt-drops-comments-inside-bracket-vectors.md),
 by re-running that report's corpus sweep before and after (70 -> 8 files losing
 comments, 9 -> 7 non-idempotent). This report is the 8.
+
+## Resolution (2026-09-02)
+
+Measured on the report's own residue list (the eight fixtures plus
+`examples/guestbook/src/main.tur`), two-pass `tur fmt` each, counting comment
+lines and comparing pass 2 to pass 1: **every file now preserves every
+comment line and is idempotent** (before: six lost a line, seven were
+non-idempotent). `src/compiler/fmt.c`:
+
+- **Family (1), the header/arm loops.** A shared `fmt_header_items` prints a
+  special form's opening-line items re-emitting any gap comment (the
+  `fmt_call` head/first-arg pattern), and replaces the fixed-index loops in
+  `fmt_defn`, `fmt_fn`, `fmt_if`, `fmt_when`, `fmt_handle`, `fmt_defclass`
+  and `fmt_definstance`; `fmt_case`'s arm loop, `fmt_defpackage`'s pair loop
+  and `fmt_map_block`'s entry loop take the two-slot `fmt_cond` pattern with a
+  trailing-gap emission; `fmt_let`'s head/bindings gap (a `loop` whose first
+  body form follows a comment -- the guestbook loss) is scanned too.
+- **Family (2), `^mut` in a binding vector.** `fmt_vec_let_bindings_broken`
+  now consumes a leading modifier into the NAME slot (and its width into the
+  value-column pre-pass), so `[^mut y 0]` stays one pair on one line.
+- **Two more the report did not have.** A comment after the LAST body form,
+  before the closing paren (`(println @rm)))  ; deref` with the `)` on the next
+  line), sat in no inter-form gap: `fmt_body_forms` now re-emits the trailing
+  gap, including for a call whose arguments all fit the opening line. And the
+  borrow fixtures' non-idempotence was not the `^mut` split alone: the
+  reader's `&mut x` sugar reads as the list `(&mut x)`, which has no paren
+  spelling (`(&mut x)` written out reads as `((&mut x))`), so the flat
+  printer now prints that list back as the sugar.
+
+Six stdlib files were reformatted with the fixed formatter: the `^mut i` /
+`s` splits in `range.tur` and `seq/*.tur` were the old bug baked into
+self-formatted sources, and `pair.tur`'s 84-column parameter vector had been
+hand-widened by a later edit. `tests/run-fmt.sh` gains seven cases -- one per
+shape above, each asserting preservation and idempotence -- and its stdlib
+self-format check passes again (29/0).
+
+The two adjacent notes stand: the borrow fixtures still carry non-ASCII
+glyphs, and `tur fmt` still rewrites `@r` to `(deref r)` (stable under
+re-formatting, so not a preservation defect).

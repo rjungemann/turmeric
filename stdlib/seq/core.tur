@@ -229,8 +229,7 @@
 
 (defn seq-from-vec [v : int] : int
   (seq-new (fn []
-             (let [^mut i
-                   0]
+             (let [^mut i 0]
                (gen []
                  (while (< i (seq-vec-len v))
                    (yield (seq-vec-get v i))
@@ -251,8 +250,7 @@
 
 (defn seq-from-list [l : int] : int
   (seq-new (fn []
-             (let [^mut node
-                   l]
+             (let [^mut node l]
                (gen []
                  (while (not (seq-list-nil? node))
                    (yield (seq-list-head node))
