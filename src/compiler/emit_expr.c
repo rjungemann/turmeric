@@ -2377,6 +2377,12 @@ bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) {
 
 static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr);
 
+/* value-struct-payload-sum-monomorph-box-has-no-owner: defined beside the RM1
+ * drop helpers below; used by emit_let_value's scope-exit collection. */
+static bool adt_app_has_boxed_struct_payload(EmitCtx *ctx, Type t);
+static void emit_boxed_struct_payload_free(EmitCtx *ctx, Buf *body,
+                                           const char *name, Type t);
+
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if body contains return or throw first */
     bool body_has_return_or_throw = expr_contains_return_or_throw(e->as.let_.body);
@@ -2419,6 +2425,13 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * -- a recursive binding's box can be re-entered by a later iteration. */
     char **sum_free_names = NULL;
     uint32_t n_sum_free = 0;
+    /* value-struct-payload-sum-monomorph-box-has-no-owner: let-bound by-value
+     * Result/Option monomorphs whose arms hold a boxed value-struct payload,
+     * released by a tag-dispatched free at scope exit (name + type pairs; the
+     * arm layout is per-monomorph). */
+    char **vsp_free_names = NULL;
+    Type  *vsp_free_types = NULL;
+    uint32_t n_vsp_free = 0;
     uint32_t n_any_free = 0;
     uint32_t n_box_free = 0;
     /* local-struct-drop (fn-field): C names + struct C types of let-bound owning
@@ -2658,6 +2671,40 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                 }
             }
+            /* value-struct-payload-sum-monomorph-box-has-no-owner: the same
+             * shape one level in -- the BINDING is the by-value aggregate and
+             * what leaks is the payload box its arm points at.  Ownership is
+             * unambiguous (the spec ctor mallocs a FRESH copy; no pass-through
+             * hazard), the accessors deref-COPY (`ok-val` emits
+             * `T v = *(T *)(...)`), so the same accessor-whitelist walk that
+             * guards the carrier drop guards this one.  Trailing-only. */
+            if (!body_has_return_or_throw &&
+                strcmp(bind_c, "int64_t") != 0 &&
+                strchr(bind_c, '*') == NULL &&
+                adt_app_has_boxed_struct_payload(ctx, b->type)) {
+                const Expr *win = e->as.let_.bindings[i].init;
+                while (win && win->kind == EX_ASCRIBE) win = win->as.ascribe_.inner;
+                bool wfresh = win && win->kind == EX_CALL &&
+                    (win->as.call_.ctor ||
+                     (win->as.call_.fn_binding &&
+                      win->as.call_.fn_binding->returns_fresh_sum_box));
+                if (wfresh && !sum_box_binding_escapes(e->as.let_.body, b)) {
+                    bool wsib = false;
+                    for (uint32_t j = 0; j < e->as.let_.n && !wsib; j++)
+                        if (j != i && sum_box_binding_escapes(
+                                e->as.let_.bindings[j].init, b))
+                            wsib = true;
+                    if (!wsib) {
+                        vsp_free_names = (char **)realloc(vsp_free_names,
+                            (n_vsp_free + 1) * sizeof(char *));
+                        vsp_free_types = (Type *)realloc(vsp_free_types,
+                            (n_vsp_free + 1) * sizeof(Type));
+                        vsp_free_names[n_vsp_free] = name_for_binding(ctx, b);
+                        vsp_free_types[n_vsp_free] = b->type;
+                        n_vsp_free++;
+                    }
+                }
+            }
             /* gcc14-int-conversion (carrier-representation-tracking): the init
              * VALUE is a `void *` union-default read (`((union { int64_t s; void *
              * d; }){.s = ..}).d`, emitted for a `(:: <int> :ptr<void>)` carrier
@@ -2883,6 +2930,16 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         free(sum_free_names[i]);
     }
     free(sum_free_names);
+
+    /* value-struct-payload-sum-monomorph-box-has-no-owner: release the live
+     * arm's payload box. */
+    for (uint32_t i = 0; i < n_vsp_free; i++) {
+        emit_boxed_struct_payload_free(ctx, body, vsp_free_names[i],
+                                       vsp_free_types[i]);
+        free(vsp_free_names[i]);
+    }
+    free(vsp_free_names);
+    free(vsp_free_types);
 
     /* any-struct-box-leak-per-widen: release the payload box of each
      * non-escaping `any` local now that the body -- its last use -- is emitted. */
@@ -4117,6 +4174,63 @@ static void any_pending_push(EmitCtx *ctx, const char *name) {
 /* Hoist a non-call `any` value into a named temp so the enclosing call has
  * something to drop, and register it. */
 static char *emit_any_drop_arm(EmitCtx *ctx, Buf *body, char *v);
+
+/* value-struct-payload-sum-monomorph-box-has-no-owner.  A stdlib
+ * Result/Option monomorph over a non-parametric by-value product stores that
+ * payload as a POINTER (adt_field_is_ros_pointer_box, keyed on the owner's
+ * NAME -- width is irrelevant), and the specialized ctor mallocs a fresh copy
+ * into it.  The value in hand is that box's only owner.
+ *
+ * The predicate below is the ONE rule the typedef, the ctor-argument
+ * promotion and this drop all key on.  The first attempt at this tested the
+ * B4 wide rule AND-NOT this one -- i.e. it negated the exact predicate that
+ * applies -- and measured itself firing on nothing; that is why this is
+ * spelled as the single call and nothing else. */
+static bool boxed_struct_payload_walk(EmitCtx *ctx, Buf *body, const char *name,
+                                      Type t, bool emit) {
+    Type rt = emit_resolve_type(ctx, t);
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(&rt, &def, args, &n_args) || !def) return false;
+    if (def->is_heap || def->n_ctors == 0) return false;
+    bool any = false;
+    bool tagged = def->n_ctors > 1;
+    if (emit && tagged) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "switch (%s.tag) {\n", name);
+    }
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        const CtorDef *c = def->ctors[ci];
+        if (!c) continue;
+        if (emit && tagged) { indent_buf(body, ctx->indent); buf_printf(body, "case %u:\n", ci); }
+        for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+            const CtorField *fld = &c->fields[fi];
+            if (!fld->full_type) continue;
+            Type resolved = substitute_adt_app_type_owned(fld->full_type, def, args);
+            bool boxed = adt_field_is_ros_pointer_box(def, &resolved);
+            free_struct_app_type(resolved);
+            if (!boxed) continue;
+            any = true;
+            if (!emit) return true;
+            char *mp = adt_field_member_path(def, c, fi);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "    if (%s.%s) free((void *)(intptr_t)%s.%s);\n",
+                       name, mp, name, mp);
+            free(mp);
+        }
+        if (emit && tagged) { indent_buf(body, ctx->indent); buf_puts(body, "    break;\n"); }
+    }
+    if (emit && tagged) { indent_buf(body, ctx->indent); buf_puts(body, "}\n"); }
+    return any;
+}
+static bool adt_app_has_boxed_struct_payload(EmitCtx *ctx, Type t) {
+    return boxed_struct_payload_walk(ctx, NULL, NULL, t, false);
+}
+static void emit_boxed_struct_payload_free(EmitCtx *ctx, Buf *body,
+                                           const char *name, Type t) {
+    boxed_struct_payload_walk(ctx, body, name, t, true);
+}
 
 /* RM1: the sum-box twin of the any_pending pair below -- same mark/drain
  * discipline, draining as a null-guarded shallow free (the None carrier IS

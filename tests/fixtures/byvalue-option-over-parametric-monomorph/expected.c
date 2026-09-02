@@ -8472,6 +8472,13 @@ int main(int argc, char **argv) {
             int64_t __t209;
             __t209 = INT64_C(0);
             __t184 = __t209;
+            switch (p_1445.tag) {
+            case 0:
+                break;
+            case 1:
+                if (p_1445.as.Some._0) free((void *)(intptr_t)p_1445.as.Some._0);
+                break;
+            }
         }
         return (int)__t184;
 }

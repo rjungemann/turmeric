@@ -1,9 +1,10 @@
-# A by-value sum monomorph with a WIDE payload still heap-boxes it, and nothing frees the box
+# A stdlib `Result`/`Option` monomorph over a value-struct payload heap-boxes it, and nothing frees the box
 
 **Severity: medium.** On the DEFAULT path, post-SR2a, with no experiment
 involved -- so it affects ordinary `(Result MyStruct MyErr)` code rather than
 an erased corner. Filed 2026-08-30, found sweeping the leaks RM1's measurement
-turned up.
+turned up. **Retitled the same day** (was `wide-payload-...`): the first draft
+blamed the B4 ">8 bytes" rule, and that was wrong -- see "The rule, precisely".
 
 ## Summary
 
@@ -14,13 +15,14 @@ as:
 > A CONCRETE `(Option T)` / `(Result T E)` monomorph now flows by value, so its
 > constructor is a struct literal and there is no box to own.
 
-**That holds only for payloads of 8 bytes or less.** A wider by-value payload
-is stored in the arm as a POINTER (the B4 "wide by-value element" rule,
-`type_is_wide_byval_adt`), so the specialized constructor mallocs the payload
-and hands back a monomorph that owns it -- and nothing releases it.
+**That holds for scalar and pointer payloads, not for value-struct payloads.**
+When `T` is a non-parametric by-value product (a `defstruct`, or a
+single-variant `defdata`), the monomorph's arm stores it as a POINTER and the
+specialized constructor mallocs a fresh copy of its argument -- and nothing
+releases it.
 
 ```c
-/* `Rational` is {int64 num; int64 den} = 16 bytes, so the arm holds a pointer */
+/* (Result Rational ArithError): both payloads are value-structs */
 typedef struct tur_adt_Result__Rational__ArithError {
     int tag;
     union {
@@ -39,6 +41,28 @@ ok__spec__tur_adt_Result__Rational__ArithError_tur_adt_Rational(tur_adt_Rational
 
 The Result value itself is by value, exactly as SR2a says. The payload under
 it is not.
+
+## The rule, precisely
+
+Width is irrelevant. Probed with an 8-byte `(defstruct S8 [a : int])` and a
+16-byte `S16`: **both** arms are `tur_adt_S* * _0` and **both** spec ctors
+malloc. The rule is `adt_field_is_ros_pointer_box` (types.c):
+
+- the OWNER is `Result` or `Option` **by name** -- a user-defined
+  `(defdata MyEither [A B] ...)` over the same payload does NOT take it; and
+- the resolved payload is a non-`:heap`, non-parametric, by-value product.
+
+It is deliberate, and `adt_field_c_type`'s comment gives the two reasons: the
+monomorph then references `T` only by pointer, so a guarded forward typedef
+suffices (the struct-with-Option-field typedef-ordering blocker), and the
+8-byte slot matches the carrier-box layout the preamble helpers
+(`tur_box_ok`/`tur_box_some`) produce. The malloc that fills the slot is the
+`box_adt` promotion in emit_expr.c's ctor-argument path, keyed on the same
+three conditions. So "do not box at all" (fix direction 2 below) would be
+undoing a layout contract, not just removing an allocation.
+
+"ros" is not width and not read-only-string: it is this rule's own name for
+"stdlib Result/Option value-struct payload, stored boxed".
 
 ## Repro
 
@@ -129,12 +153,22 @@ by construction.
 Direction 1 is the one that scales, because the box has a single owner and the
 machinery for single-owner release already exists.
 
-## Attempted and reverted: direction 3 (2026-08-30)
+## Direction 3, built: it reaches 2 of the 9 (2026-08-30)
 
-Direction 3 (scope-exit drop, keyed on the monomorph binding) was built and
-**measured to fire on nothing** -- the spec-payload leak total was 465 bytes
-before and 465 after -- so it was reverted rather than shipped as dead
-emitter code. Two things it established, both useful to whoever takes this up:
+The scope-exit drop (RM1's mechanism keyed on the monomorph BINDING, freeing
+the live arm's payload box through a `switch` on the tag) is in, and it is
+kept because it is measured rather than assumed: **465 -> 361 bytes**, the
+9 leaking fixtures down to 7. It fires in exactly two --
+`polymorphic-ok-err-value-struct-payload` (both arms; now fully ASan-clean and
+carrying `requires.leak-check`, so the fix has 32 bytes of teeth) and
+`byvalue-option-over-parametric-monomorph`. Predicate:
+`adt_field_is_ros_pointer_box` over the substituted field type and nothing
+else; conditions and escape walk identical to RM1's carrier drop (fresh
+producer, by-value binding, accessor-only uses, trailing-only). Snapshot churn:
+one fixture. Suite 2748/0 + that one regenerated; leak-check 63/0/0.
+
+A first version of this was reverted the same day after measuring 465 -> 465.
+Two findings from that round explain both the miss and the residue:
 
 **The consumption shape is mostly not a let binding.** `rational-basics`
 leaks through `(res-ok? (rat/of 3 4))` -- the Result is an argument to a USER
@@ -145,20 +179,15 @@ callee. Freeing there needs a non-retention fact about the callee, which is
 what `nonretain_param_mask` supplies for closures and would have to be
 extended to cover this.
 
-**A drop-site predicate copied from the ctor emitter does not reproduce the
-emitter's own boxing decision**, which is worth knowing before trying again.
-The emitter boxes when `type_is_wide_byval_adt(fres) &&
-!adt_field_is_ros_pointer_box(def, &fres)` over `fres =
-substitute_adt_app_type_owned(fld->full_type, def, args)`. Asking exactly that
-at the drop site, for a binding of type `(Result User cstr)` whose emitted arm
-IS `tur_adt_User *`, returns FALSE: the substitution succeeds
-(`def=Result`, 2 args, the Ok field resolves to a `TY_ADT`) but
-`type_is_wide_byval_adt` declines it, so `adt_byval_value_size_bytes` is not
-seeing the 16 bytes the emitted typedef shows. Either the boxing is decided
-somewhere other than the pair above, or the type reaching the drop site is not
-the one the ctor emitter had. That discrepancy should be resolved FIRST --
-any fix keyed on a predicate that disagrees with the emitter will free the
-wrong arms or none.
+**The predicate discrepancy is resolved, and it was self-inflicted.** The
+first attempt tested `type_is_wide_byval_adt(fres) &&
+!adt_field_is_ros_pointer_box(def, &fres)` at the drop site -- copied from the
+monomorph ctor emitter's `wide_box[]`, which is the B4 rule for a DIFFERENT
+boxing. The arm in question is boxed by exactly the predicate that expression
+NEGATES. The correct drop-site test is `adt_field_is_ros_pointer_box(def,
+&resolved)` over the substituted field type, and nothing else; asked that way
+it agrees with the typedef and the ctor-argument path (all three key on the
+same rule).
 
 ## Related
 

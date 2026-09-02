@@ -17,7 +17,7 @@ hiding a real default-path defect in the other.
 | fixture scaffolding | `httpd-req-string-opt`'s `fake-conn-cookie` / `fake-conn-body` | ~3.5 K | **nobody's** -- the fixture's own `calloc`'d `HttpdConn` and `strdup`'d headers, never freed by the test |
 | fixture-owned runtime values | `option-niche-crossings` (`vec_new`, `vec_push_ex`, `tur_string_from_bytes`) | ~0.4 K | **nobody's** -- Vecs and Strings the fixture allocates and never `vec-free`s |
 | recursive sum spine | `re-string`'s `ctor_RxCons` / `ctor_REmpty` / `ctor_RxNil` | ~0.6 K | **RM2** (the recursive spine), not RM1 |
-| **wide payload box** | `rational-*`'s `ok__spec__...` / `err__spec__...` | 0.46 K | **a defect**, newly filed: [wide-payload-sum-monomorph-box-has-no-owner](../reported/wide-payload-sum-monomorph-box-has-no-owner.md) |
+| **value-struct payload box** | `rational-*`'s `ok__spec__...` / `err__spec__...` | 0.46 K -> 0.36 K | **a defect**, filed: [value-struct-payload-sum-monomorph-box-has-no-owner](../reported/value-struct-payload-sum-monomorph-box-has-no-owner.md); a scope-exit drop now covers the let-bound shape (2 of 9 fixtures), the rest flow into user functions |
 | erased sum carrier | `hkt-*`, `result-basic` | ~1.0 K remaining | **RM1**, partially closed 2026-08-30 |
 
 ## The two things worth carrying forward
@@ -28,7 +28,7 @@ hiding a real default-path defect in the other.
 subtract this class first; otherwise a fixture that allocates more test data
 looks like a regression.
 
-**The smallest entry is the most serious.** The wide-payload box is on the
+**The smallest entry is the most serious.** The value-struct payload box is on the
 DEFAULT path with no experiment involved, and it falsifies a narrowing claim
 that was being relied on -- SR2a's "a concrete monomorph flows by value, so
 there is no box to own" is true only for payloads of 8 bytes or less. It is
