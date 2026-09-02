@@ -96,6 +96,14 @@ return `:int`" escape hatch. The codegen preamble carries typed builders
 carrier-level `tur_box_*`) that construct the canonical Result/Option
 layout, so a fallible C constructor hands back a real `(Result Handle E)`
 / `(Option Handle)` with no struct hand-rolling and no sentinel integer.
+
+**But know who frees the box.** On the ERASED path -- a generic signature whose
+payload is a type variable -- every one of those builders `malloc`s a 16-byte
+tagged box and the elaborator adds no owner, so the caller must
+`option-free` / `result-free` it. Measured: `result-bimap` and `weak/upgrade`
+each leak 16 bytes per call today. The free is correct ONLY there: a concrete
+monomorph flows by value, and freeing that is a bad free, not a no-op. The
+guide's "Who frees the box" section has the rule and the measurements.
 See [docs/guides/inline-c-results-guide.md](docs/guides/inline-c-results-guide.md).
 
 ### When you notice this in existing code

@@ -3,8 +3,42 @@
 **Severity:** medium. The leaking pattern is the one the docs recommend, so
 every user who follows the inline-C results guide leaks a box per call.
 
-**Status:** OPEN. Known and worked around in one place already; the obvious
-workaround does not transfer to the other.
+**Status:** OPEN, and its central claim is CORRECTED below (2026-09-02). The
+hazard is documented now -- fix direction 3's documentation half -- but the
+underlying allocation is untouched, so this stays open for direction 1.
+
+**Corrected 2026-09-02 by measurement.** Two things this report asserts turned
+out to be wrong, and both change what the right advice is:
+
+1. **The box IS ownable.** "no elaborated expression corresponds to it, so
+   nothing can be given ownership of it and nothing frees it" is half right --
+   nothing frees it *automatically*, but `option-free` / `result-free` on the
+   returned carrier frees it correctly. Measured on `result-bimap`: freeing
+   nothing leaks 32 bytes (the input box and the returned one), freeing the
+   input alone leaves 16, freeing both is **clean**. So this is the general
+   [carrier-sum-option-boxes-have-no-owner](carrier-sum-option-boxes-have-no-owner.md)
+   situation reached through inline C, not a distinct unownability.
+
+2. **The split does not fix an erased-path site.** Fix direction 3 says "convert
+   both stdlib sites to the split", but a Turmeric `(ok x)` in a GENERIC
+   function allocates the same box the builder does. The split works for
+   `arc-upgrade` because `Arc` is a `defopaque` and the Option monomorphizes
+   BY VALUE -- no allocation at all. It removes an allocation only where the
+   result is concrete, which is not the case for `result-bimap` or
+   `weak/upgrade`.
+
+**And one hazard neither this report nor the guide had.** `result-free` /
+`option-free` are correct ONLY on the erased carrier. On a concrete monomorph
+the value flows by value, and freeing it is a bad free:
+
+```
+ERROR: AddressSanitizer: attempting free on address which was not malloc()-ed
+```
+
+So "free what the builder returned" is not safe advice on its own; it needs the
+erased-vs-monomorph rule, which
+[docs/guides/inline-c-results-guide.md](../guides/inline-c-results-guide.md)
+("Who frees the box") and `CLAUDE.md` now carry.
 
 Found by the widened `requires.leak-check` gate. It is the residue of
 [rc-ref-conversion-and-weak-upgrade-leak](../archive/rc-ref-conversion-and-weak-upgrade-leak.md)
@@ -96,7 +130,7 @@ call count:
 | site | leaks |
 |---|---|
 | `stdlib/weak.tur:100` (`weak/upgrade`) | yes -- `tests/fixtures/weak-upgrade-after-drop`, marked `known-leak` |
-| `stdlib/result.tur:262` (`tur_box_ok` in `result/bimap`) | not yet probed |
+| `stdlib/result.tur:262` (`tur_box_ok` in `result-bimap`) | **yes, measured 2026-09-02** -- 16 bytes per call; clean once the caller `result-free`s the returned carrier. Note the function is named `result-bimap`, not `result/bimap`, and its answers are correct: its hand-rolled `struct { int tag; int64_t payload; }` still matches the post-SR2b layout |
 
 ## Fix directions
 
@@ -107,5 +141,33 @@ call count:
 2. **Lift the restriction that blocks the split**, so `(some rc)` is
    expressible and `weak/upgrade` can use arc's pattern. Narrower, and it
    resolves the return-type/construction inconsistency above.
-3. **Document the hazard** and convert both stdlib sites to the split. Cheapest,
-   but leaves the trap armed for users.
+3. ~~**Document the hazard**~~ -- **documentation half DONE 2026-09-02.** The
+   guide gained a "Who frees the box" section with the measurements, the
+   erased-vs-monomorph free rule, and the bad-free hazard; `CLAUDE.md`'s
+   "first-class" paragraph now says who frees it. The *conversion* half is
+   struck: per correction 2 above, the split does not remove the allocation at
+   either of these two sites, so there is nothing to convert. It leaves the trap
+   documented rather than disarmed, which is why this report stays open.
+
+## What actually closes this
+
+Direction 1, or the general carrier campaign reaching these sites. Both stdlib
+instances are on the ERASED path -- a generic signature whose payload is a type
+variable -- and the narrowing note on
+[carrier-sum-option-boxes-have-no-owner](carrier-sum-option-boxes-have-no-owner.md)
+says the residue "shrinks further with each site that monomorphizes; end-to-end
+monomorphization is where it reaches zero". These two are that residue, reached
+through inline C rather than through `(some x)`.
+
+Direction 2 stays worth doing on its own merits -- not as a leak fix (it is not
+one, per correction 2) but because the inconsistency is real: `(Option rc<A>)`
+is a legal return type and buildable from inline C, while `(some r)` on the same
+value is rejected. The mechanism is now located: `own_carry_for_arg` in
+`src/compiler/elab_call.c` is an allowlist mapping a callee name + arg index to
+an ownership decision (`vec-push!` and `map-assoc-eq-o` are RETAIN,
+`tur-vec-homog__` is BORROW), and everything not on it is `OWN_CARRY_REJECT`,
+which is what rejects `(some r)`. Adding `some`/`ok`/`err` would be a one-line
+change per entry, but the carry has to be BORROW rather than RETAIN -- nothing
+releases an Option's payload when the Option dies, so a retain would leak a
+count -- and a discarded Option would then leak the moved rc. That is a real
+ownership decision, not a mechanical fix, which is why it is not taken here.
