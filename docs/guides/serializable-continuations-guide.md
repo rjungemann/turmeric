@@ -97,9 +97,11 @@ Two further rules follow from how the frames are marshalled by name:
   anything it calls. A multi-page flow therefore does not nest resets: each
   page's callee returns a code and the code that runs *outside* the reset
   starts the next one (the guestbook example's `advance`).
-- **The handler must be a named, uncolored top-level function or a closure
-  that captures something.** A `(fn [k] ...)` literal that captures nothing is
-  neither, and is rejected (`docs/reported/serial-shift-non-capturing-lambda-receiver-rejected.md`).
+- **The handler, and everything it calls, must be uncolored too** -- whether
+  it is a named top-level function or a `(fn [k] ...)` literal (capturing or
+  not). It runs once at capture and is never marshalled, so this is a
+  limitation of how the emitter calls it, not of the bytes
+  (`docs/reported/serial-shift-colored-receiver-rejected.md`).
 
 `TUR_TRACE_CORE=1` names the collector rule (`[CTX-REJECT] cps_ir.c:<line>`)
 that rejected a context, which is faster than guessing.

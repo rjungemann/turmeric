@@ -21,9 +21,9 @@
 ;;; they read the post, stash what the next page needs in flow-name /
 ;;; flow-message, and return a step code; `advance` (called by the router,
 ;;; outside any reset) starts the next page's reset from that code.  (2) The
-;;; serial-shift receiver is a NAMED, uncolored top-level function (or a
-;;; capturing closure); a lambda that captures nothing is neither, and the
-;;; context is rejected.
+;;; serial-shift receiver -- named here, but a lambda is held to the same
+;;; rule -- must be uncolored too, so it calls the templates and the store
+;;; directly rather than through a fn-value parameter.
 ;;;
 ;;; Since: Guestbook example
 (defmodule handlers
@@ -115,10 +115,10 @@
 
   ;; -------------------------------------------------------------------------
   ;; Receivers: what serial-shift hands the captured continuation to.  Each
-  ;; is a NAMED, uncolored top-level function (the marshaler keys frames and
-  ;; receivers by name; a receiver that called through a fn value would be
-  ;; colored and rejected) that stores k, renders its page from the flow
-  ;; globals, and sends it -- and returns without resuming k.
+  ;; is a named, uncolored top-level function (a receiver that called through
+  ;; a fn value would be colored and rejected) that stores k, renders its
+  ;; page from the flow globals, and sends it -- and returns without
+  ;; resuming k.
   ;; -------------------------------------------------------------------------
 
   ;;; suspend-name-page -- page 1's receiver.

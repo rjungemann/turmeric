@@ -123,8 +123,8 @@ the example was worth repairing, and it was rewritten rather than patched:
    now in the guide's "Capture scope": the context callee (and everything it
    calls) must be uncolored, so the `*-submitted` leaves return a step code
    and `advance` starts the next page's reset outside any reset; and the
-   receiver must be a named uncolored function (a capture-free lambda is
-   rejected -- `serial-shift-non-capturing-lambda-receiver-rejected`). Back
+   receiver must be uncolored too (a receiver that calls colored code is
+   rejected -- `serial-shift-colored-receiver-rejected`). Back
    navigation is one continuation with a `decision` field, not two tokens.
 
 Two compiler defects surfaced and are fixed in the same change: a
