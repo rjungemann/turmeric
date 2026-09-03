@@ -1,6 +1,6 @@
 # Graduating `--enable=option-niche` makes a legal `Some(NULL)` abort, and no release note says so
 
-**Severity: low today, breaking at graduation.** The niche is flag-gated, so
+**Severity: low today, breaking at graduation.** (RESOLVED 2026-09-02 -- see the end.) The niche is flag-gated, so
 nothing in the corpus or in user code hits this until the flag defaults on.
 Filed 2026-08-30, split out of the option-niche graduation hold (reason 2),
 which is currently the only place this break is written down.
@@ -115,3 +115,16 @@ entry that got this right:
   `option-niche-container-elements-box-at-parity` is condition 3.
 - `tests/fixtures/option-niche-null-payload-aborts` -- the construction door.
 - `tests/fixtures/errors/ascribe-zero-into-non-null-opaque` -- the provable form.
+
+## Resolution (2026-09-02)
+
+The entry is written, and written before the flip: `CHANGELOG.md` now opens
+with an `[Unreleased]` section whose `### Changed` carries the draft above,
+led "Announced ahead of the flip" so a reader of today's notes learns that a
+value which is legal now will stop being representable, what the diagnostic
+will say, and the one-word opt-out (`:non-null` removed). The entry names
+the diagnostic as a diagnostic, not a crash, and keeps the opt-out in the
+entry. When the experiment graduates, the entry moves under that release's
+`### Changed` with the lead removed -- a copy-paste, as the plan wanted.
+`docs/upcoming/sr3-option-niche-plan.md` hold reason 2 points here and
+records it as satisfied; reasons 1 and 3 are unchanged.

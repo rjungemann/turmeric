@@ -209,9 +209,10 @@ used to carry; closed, pinned by
    the flip.
 2. **Default-on is a semantic break, not just a representation change.**
    Filed 2026-08-30 as
-   [option-niche-graduation-breaks-carrier-some-null](../reported/option-niche-graduation-breaks-carrier-some-null.md),
-   which carries the drafted release-notes entry so the flip is a copy-paste
-   rather than a prose exercise.  On
+   [option-niche-graduation-breaks-carrier-some-null](../archive/option-niche-graduation-breaks-carrier-some-null.md)
+   and **resolved 2026-09-02**: the release-notes entry is written and
+   published under `CHANGELOG.md` `[Unreleased]` as an announced-ahead
+   breaking change; the flip moves it under the graduating release.  On
    today's default a carrier `Some(NULL)` is a legal, distinct value
    (`tur_some_ptr(0)`; `some?` true).  Under the niche it is an abort at the
    construction or crossing door.  That is the `:non-null` declaration being
@@ -226,7 +227,8 @@ used to carry; closed, pinned by
    shape, which was measured and deliberately NOT defaulted.
 
 **The flip becomes right when:** the seam harness has run quiet across a
-release cycle (0.41), the `Some(NULL)` break has a release-notes entry, and
+release cycle (0.41), the `Some(NULL)` break has a release-notes entry (it
+does, since 2026-09-02 -- `CHANGELOG.md` `[Unreleased]`), and
 -- ideally -- end-to-end monomorphization shrinks the erased boundary so
 container elements stop boxing under EITHER representation, at which point the
 niche's 8-byte word is what lands in the slot and the container row stops

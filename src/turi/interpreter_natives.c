@@ -1332,6 +1332,44 @@ static TuriValue native_json_decode(TuriEnv *e, TuriValue *a, uint32_t n, void *
     return turi_int(result);
 }
 
+/* json/decode-file!: the file-reading half of #json-file<T>.  Mirrors the
+ * stdlib inline-C: read the whole file, parse it as json/decode does, panic
+ * (catchably) with the path when the file cannot be read. */
+static TuriValue native_json_decode_file(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1) return turi_int(0);
+    const char *path = json_arg_cstr(a[0]);
+    FILE *f = path ? fopen(path, "rb") : NULL;
+    if (!f) {
+        char msg[512];
+        snprintf(msg, sizeof msg, "json/decode-file!: cannot read %s", path ? path : "(null)");
+        turi_runtime_panic(e, msg);
+        return turi_int(0);
+    }
+    size_t cap = 4096, len = 0;
+    char *buf = (char *)malloc(cap);
+    if (!buf) { fclose(f); return turi_int(0); }
+    size_t got;
+    while ((got = fread(buf + len, 1, cap - len - 1, f)) > 0) {
+        len += got;
+        if (cap - len - 1 == 0) {
+            cap *= 2;
+            char *nb = (char *)realloc(buf, cap);
+            if (!nb) { free(buf); fclose(f); return turi_int(0); }
+            buf = nb;
+        }
+    }
+    fclose(f);
+    buf[len] = 0;
+    tur_json_ctx ctx; ctx.s = buf; ctx.pos = 0; ctx.err = 0;
+    int64_t result = json_dec_parse_value(&ctx);
+    /* The node tree copies what it needs out of the source, as json/decode's
+     * does; the buffer is ours to release. */
+    free(buf);
+    if (ctx.err) return turi_int(0);
+    return turi_int(result);
+}
+
 /* --- free: no-op under the interpreter's process-lifetime policy (match the
  * signature so a call type-checks and is a harmless no-op). --- */
 static TuriValue native_json_free(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
@@ -1364,6 +1402,7 @@ static void wk_register_json_natives(TuriEnv *env) {
     turi_env_register_native(env, "json/encode",     native_json_encode,     NULL);
     turi_env_register_native(env, "json/decode",     native_json_decode,     NULL);
     turi_env_register_native(env, "json/free",       native_json_free,       NULL);
+    turi_env_register_native(env, "json/decode-file!", native_json_decode_file, NULL);
 }
 
 /* SCHEMA (stdlib/schema.tur): the runtime schema validator built on top of the

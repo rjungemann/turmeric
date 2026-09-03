@@ -1,6 +1,6 @@
 # #json-str?<T> and #json-file<T> readers unimplemented
 
-**Severity: low** (the guide already flags them as future work);
+**Severity: low** (RESOLVED 2026-09-02; the guide already flagged them as future work);
 `#json-str?` emits a "not yet implemented" diagnostic. Found in the
 2026-08-20 docs audit.
 
@@ -131,3 +131,28 @@ parts worth designing rather than bolting on, and nothing above decides them.
 consequences of the catch-boundary design: violation detail still goes to
 stderr on the recovered path, and the err payload is the panic handle carried
 as `:int`.
+
+## Resolution (2026-09-02): `#json-file<T>` and `#json-file?<T>` landed
+
+Blocker 2's four parts, decided rather than bolted on:
+
+1. **No autoload change and no `ptr<void` bridge.** The expansion does not go
+   through `read-file` at all. `json/decode-file!` (stdlib/json.tur, already
+   in the reader family's preload) reads the file into a private buffer,
+   parses it with the same C parser `json/decode` uses, frees the buffer and
+   returns the nodes -- a `:cstr` in, a node out.
+2. **An unreadable file is its own panic**, `json/decode-file!: cannot read
+   <path>`, raised through `tur_panic` (compiled) / `turi_runtime_panic`
+   (interpreter), so it is catchable and distinct from a schema violation.
+3. **Ownership:** the buffer never leaves `json/decode-file!`; the caller
+   owns the node tree exactly as after `json/decode`.
+4. **The `?` form** reuses the `#json-str?` catch boundary unchanged --
+   `try_read_json_str` (src/compiler/reader.c) now parses one grammar for
+   both prefixes and swaps the decoder name, so "no such file" and "wrong
+   shape" are both `(err? r)`.
+
+The interpreter has a matching native (`native_json_decode_file`), so
+`--interpret` agrees with the compiled path. Pinned by
+`tests/fixtures/schema-reader-json-file` (the `!` form, the `?` form on a
+good file, on a file that fails the schema, and on a missing file). Guide
+section added under `#json-str`.

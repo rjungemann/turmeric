@@ -680,6 +680,58 @@
   if (ctx.err) return 0;
   return result;
   ```)
+;;; json/decode-file! -- read a whole file and decode it as JSON.
+;;;
+;;; The file-reading half of the `#json-file<T>(path)` reader macro.  Reads
+;;; the file into a private buffer, parses it exactly as json/decode would,
+;;; frees the buffer, and returns the node tree -- so the caller owns nothing
+;;; but the nodes (json/free).  An unreadable file is a panic with the path
+;;; in the message: catchable (`#json-file?<T>` turns it into an err), and
+;;; distinct from a schema violation, which is what decode! raises on the
+;;; nodes afterwards.  Malformed JSON returns 0, as json/decode does.
+;;;
+;;; Parameters:
+;;;   path -- the file to read
+;;;
+;;; Returns:
+;;;   The root JSON node, or 0 on malformed JSON.
+;;;
+;;; Example:
+;;;   (json/decode-file! "config.json")   ; => node, or a panic if unreadable
+;;;
+;;; Since: json-str-result-and-file-readers-missing (2026-09-02)
+
+(defn json/decode-file! [path : cstr] : int
+  ```c
+  FILE *f = fopen(path, "rb");
+  if (!f) {
+    char msg[512];
+    snprintf(msg, sizeof msg, "json/decode-file!: cannot read %s", path);
+    tur_panic(msg);
+    return 0;
+  }
+  size_t cap = 4096, len = 0;
+  char *buf = (char *)malloc(cap);
+  if (!buf) { fclose(f); tur_panic("json/decode-file!: out of memory"); return 0; }
+  size_t got;
+  while ((got = fread(buf + len, 1, cap - len - 1, f)) > 0) {
+    len += got;
+    if (cap - len - 1 == 0) {
+      cap *= 2;
+      char *nb = (char *)realloc(buf, cap);
+      if (!nb) { free(buf); fclose(f); tur_panic("json/decode-file!: out of memory"); return 0; }
+      buf = nb;
+    }
+  }
+  fclose(f);
+  buf[len] = 0;
+  struct tur_json_ctx { const char *s; size_t pos; int err; };
+  struct tur_json_ctx ctx; ctx.s = buf; ctx.pos = 0; ctx.err = 0;
+  int64_t result = json_hydec_hyparse_hyvalue_hy((void *)&ctx);
+  free(buf);
+  if (ctx.err) return 0;
+  return result;
+  ```)
 ;;; json/free -- recursively free a JSON node tree.
 ;;;
 ;;; Parameters:

@@ -2717,9 +2717,19 @@ static bool loop_collect_carried(const Expr *e, const Binding **locals, uint32_t
     switch (e->kind) {
         case EX_SET: {
             const Binding *tg = e->as.set_.target;
-            if (!tg || !tg->is_mut) return false;
+            if (!tg || !tg->is_mut) {
+                if (getenv("TUR_TRACE_CORE"))
+                    fprintf(stderr, "[LOOP-CARRIED] set! target %s is not ^mut (is_mut=%d)\n",
+                            tg && tg->name ? tg->name->name : "?", tg ? (int)tg->is_mut : -1);
+                return false;
+            }
             for (uint32_t i = 0; i < n_locals; i++)
-                if (locals[i] == tg) return false;   /* loop-body-local ^mut */
+                if (locals[i] == tg) {
+                    if (getenv("TUR_TRACE_CORE"))
+                        fprintf(stderr, "[LOOP-CARRIED] set! target %s is a loop-body local\n",
+                                tg->name ? tg->name->name : "?");
+                    return false;   /* loop-body-local ^mut */
+                }
             bool seen = false;
             for (uint32_t i = 0; i < *n; i++) if (out[i] == tg) seen = true;
             if (!seen) { if (*n >= cap) return false; out[(*n)++] = tg; }
@@ -2970,11 +2980,19 @@ static void loop_rs_scan(CpsB *b, const Expr *e, uint32_t *mask, bool in_branch)
 
 /* Build the CT_LOOP for an EX_WHILE in bind position (its unit result discarded
  * into `x`, the continuation `rest`).  Returns NULL to EVICT. */
+/* TUR_TRACE_CORE=1: name the build_loop rule that refused to lower a `while`
+ * natively (the eviction then reads BODY-UNSUPPORTED "EX_WHILE"). */
+#define LOOP_REJECT() do { \
+        if (getenv("TUR_TRACE_CORE")) \
+            fprintf(stderr, "[LOOP-REJECT] cps_ir.c:%d\n", (int)__LINE__); \
+        return NULL; \
+    } while (0)
+
 static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     (void)x;   /* the while's unit result is subsumed by the loop's exit delivery */
     Expr *cond = e->as.while_.cond;
     Expr *body = e->as.while_.body;
-    if (!cond || !body) return NULL;
+    if (!cond || !body) LOOP_REJECT();
 
     /* The continuation is a trivial delivery of a single loop-carried var to an
      * enclosing continuation (KK_RET / KK_PROMPT) -- the loop's live-after
@@ -3001,7 +3019,7 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     } else {
         /* A control-free loop followed by statements keeps its whole-form
          * delegation; the join reification is for loops that perform. */
-        if (safe_to_delegate(b, e)) return NULL;
+        if (safe_to_delegate(b, e)) LOOP_REJECT();
         join_mode = true;
         unit_exit = true;
         CVar j = fresh_cvar(b, x.type);
@@ -3013,9 +3031,9 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     const Binding *locals[64]; uint32_t n_locals = 0;
     loop_collect_let_binders(body, locals, &n_locals, 64);
     const Binding *vars[16]; uint32_t nv = 0;
-    if (!loop_collect_carried(body, locals, n_locals, vars, &nv, 16)) return NULL;
-    if (nv > 16) return NULL;
-    if (b->loop_depth) return NULL;   /* nested loops: out of subset */
+    if (!loop_collect_carried(body, locals, n_locals, vars, &nv, 16)) LOOP_REJECT();
+    if (nv > 16) LOOP_REJECT();
+    if (b->loop_depth) LOOP_REJECT();   /* nested loops: out of subset */
 
     /* Soundness guard: reads resolve to loop-entry versions; unconditional single
      * set per carried var. */
@@ -3056,16 +3074,16 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         /* The kept set must still pass jointly (a kept var read in a branch
          * after another kept var's set, ...). */
         mask = 0;
-        if (!loop_guard(body, vars, nv, &mask, false)) return NULL;
+        if (!loop_guard(body, vars, nv, &mask, false)) LOOP_REJECT();
         for (uint32_t i = 0; i < nv; i++)
-            if (!(mask & (1u << i))) return NULL;
+            if (!(mask & (1u << i))) LOOP_REJECT();
     }
 
     /* The delivered result var must itself be loop-carried (a param, or a cell
      * whose value the exit reads through the cell); a non-carried result is not
      * this shape. */
     if (!unit_exit && loop_idx(vars, nv, result_bd) < 0 &&
-        loop_idx(cells, ncell, result_bd) < 0) return NULL;
+        loop_idx(cells, ncell, result_bd) < 0) LOOP_REJECT();
 
     /* Params carry their source Binding so in-body reads name the param via
      * name_for_binding; inits are the entry values (the vars as currently bound). */
@@ -4173,7 +4191,13 @@ static bool whole_body_delegatable(CpsB *b, const Expr *body) {
 
 CTerm *cps_ir_translate_fn(Arena *a, Expr *program, FnDef *fd) {
     if (!fd || !fd->body) return NULL;
+    /* Zero the whole builder first.  `loop_depth` (cps-while-native nesting)
+     * was added without an initializer here, so whether a `while` lowered
+     * natively depended on stack garbage: the same fixture passed under
+     * `tur check` and was evicted ("unsupported form: EX_WHILE") under
+     * `tur build`, and any unrelated stdlib addition flipped it. */
     CpsB b;
+    memset(&b, 0, sizeof b);
     b.a = a; b.program = program; b.counter = 0;
     b.retk.kind = KK_RET; b.retk.id = 0; b.retk.ty = fd->return_type.kind;
     b.cur_fn = fd->binding;

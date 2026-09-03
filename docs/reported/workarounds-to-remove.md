@@ -30,6 +30,18 @@ a `defdata` with a `:fn` field holding a *capturing* lambda -- runs instead of
 segfaulting. Note the *non*-capturing version already works, so a probe that
 does not capture proves nothing.
 
+**Probed 2026-09-02 -- blocked by a second thing.** The original blocker is
+resolved (archived): a bare `:fn` field now *refuses* a capturing closure at
+compile time, and a field declared with its full signature stores one
+correctly -- `(defdata Box (BInc (fn [] int)))` holding a capturing lambda
+runs. But the honest declaration here is `(StInc (fn [] Stream))`, and every
+construction site then fails `TUR-E0295: cannot reinterpret by-value aggregate
+'Stream' as a one-word carrier` -- the closure is called through the erased
+fat-closure path, which returns an int64, and `Stream` is a `:copy` by-value
+struct. The `:ptr<void>` carrier plus `(:: th (fn [] Stream))` at the force
+site is what bridges that today. Strike this row when a closure field can
+return a by-value aggregate (or when `Stream` stops being one).
+
 ## 2. `weak-upgrade-after-drop` carries a `known-leak` marker
 
 **Where:** `tests/fixtures/weak-upgrade-after-drop/known-leak`.

@@ -1918,19 +1918,34 @@ static Form *try_read_json(Reader *r) {
  * docs/archive/catch-unwind-aggregate-return-miscompiled.md); a typed decode
  * lands in a struct by definition, so it hit that every time.
  *
- * The file-reading #json-file<T> remains future work. */
+ * #json-file<T>(path) / #json-file?<T>(path) are the same family over
+ * json/decode-file!, which panics on an unreadable path. */
 static Form *try_read_json_str(Reader *r) {
-    if (!(peek_at(r, 1) == 'j' && peek_at(r, 2) == 's' && peek_at(r, 3) == 'o' &&
-          peek_at(r, 4) == 'n' && peek_at(r, 5) == '-' && peek_at(r, 6) == 's' &&
-          peek_at(r, 7) == 't' && peek_at(r, 8) == 'r')) {
-        return NULL;
+    /* Two spellings share one grammar and one expansion shape:
+     *   #json-str<T>(e)    decodes the JSON text e      -- (json/decode e)
+     *   #json-file<T>(p)   decodes the JSON file at p   -- (json/decode-file! p)
+     * The file form's own failure (an unreadable path) is a panic inside
+     * json/decode-file!, so the `?` variant's catch boundary turns it into an
+     * err exactly as it does a schema violation -- nothing here has to know. */
+    static const char PFX_STR[]  = "#json-str";
+    static const char PFX_FILE[] = "#json-file";
+    const char *pfx = NULL; int plen = 0; const char *decoder = NULL;
+    if (peek_at(r, 1) == 'j' && peek_at(r, 2) == 's' && peek_at(r, 3) == 'o' &&
+        peek_at(r, 4) == 'n' && peek_at(r, 5) == '-') {
+        if (peek_at(r, 6) == 's' && peek_at(r, 7) == 't' && peek_at(r, 8) == 'r') {
+            pfx = PFX_STR; plen = 9; decoder = "json/decode";
+        } else if (peek_at(r, 6) == 'f' && peek_at(r, 7) == 'i' && peek_at(r, 8) == 'l' &&
+                   peek_at(r, 9) == 'e') {
+            pfx = PFX_FILE; plen = 10; decoder = "json/decode-file!";
+        }
     }
-    int after = peek_at(r, 9);
+    if (!pfx) return NULL;
+    int after = peek_at(r, plen);
     if (after != '<' && after != '?') return NULL;
 
     uint32_t sl = r->line, sc = r->col;
     size_t   so = r->pos;
-    for (int k = 0; k < 9; k++) advance(r); /* "#json-str" */
+    for (int k = 0; k < plen; k++) advance(r); /* the prefix */
 
     bool result_form = false;
     if (peek(r) == '?') {
@@ -1941,7 +1956,7 @@ static Form *try_read_json_str(Reader *r) {
     /* <Type> hint (required). */
     if (peek(r) != '<') {
         diag_emit(DIAG_ERROR, span_point(r),
-                  "#json-str must be followed by a <Type> hint (TUR-E0270)");
+                  "%s must be followed by a <Type> hint (TUR-E0270)", pfx);
         r->error = true; return NULL;
     }
     advance(r); /* consume '<' */
@@ -1953,12 +1968,12 @@ static Form *try_read_json_str(Reader *r) {
     size_t name_len = r->pos - name_off;
     if (name_len == 0) {
         diag_emit(DIAG_ERROR, span_point(r),
-                  "#json-str<...>: expected a type name after '<' (TUR-E0270)");
+                  "%s<...>: expected a type name after '<' (TUR-E0270)", pfx);
         r->error = true; return NULL;
     }
     if (peek(r) != '>') {
         diag_emit(DIAG_ERROR, span_point(r),
-                  "#json-str<...>: expected '>' to close the type hint (TUR-E0270)");
+                  "%s<...>: expected '>' to close the type hint (TUR-E0270)", pfx);
         r->error = true; return NULL;
     }
     Span tspan = span_from_to(r, sl, sc, name_off, r->pos);
@@ -1968,7 +1983,7 @@ static Form *try_read_json_str(Reader *r) {
 
     if (peek(r) != '(') {
         diag_emit(DIAG_ERROR, span_point(r),
-                  "#json-str<T> must be followed by '(' (TUR-E0270)");
+                  "%s<T> must be followed by '(' (TUR-E0270)", pfx);
         r->error = true; return NULL;
     }
     advance(r); /* consume '(' */
@@ -1979,15 +1994,15 @@ static Form *try_read_json_str(Reader *r) {
     skip_ws_and_comments(r);
     if (peek(r) != ')') {
         diag_emit(DIAG_ERROR, span_point(r),
-                  "#json-str<T>(expr): expected ')' to close the expression (TUR-E0271)");
+                  "%s<T>(expr): expected ')' to close the expression (TUR-E0271)", pfx);
         r->error = true; return NULL;
     }
     advance(r); /* consume ')' */
 
     Span s = span_from_to(r, sl, sc, so, r->pos);
-    /* (json/decode expr) */
+    /* (json/decode expr) -- or (json/decode-file! path) for the file form */
     Form *decode_arg = expr;
-    Form *json_decode = json_call(r, s, "json/decode", &decode_arg, 1);
+    Form *json_decode = json_call(r, s, decoder, &decode_arg, 1);
     /* (decode! (json/decode expr)) */
     Form *decoded = json_call(r, s, "decode!", &json_decode, 1);
     /* (:: (decode! (json/decode expr)) Type) */
