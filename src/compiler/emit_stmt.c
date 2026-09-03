@@ -139,7 +139,7 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         const char *recv_cn = type_c_name(recv_rty);
         bool recv_is_ptr = recv_cn && strchr(recv_cn, '*') != NULL;
         if (e->as.set_field_.receiver_is_rc) {
-            char *madt = mangle_field_name(adt->name);
+            char *madt = mangle_adt_name(adt->name);
             buf_printf(&lhs, "((tur_adt_%s *)((RcControlBlock *)(%s))->value)->%s",
                        madt, rv, mp);
             free(madt);

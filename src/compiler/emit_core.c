@@ -1999,6 +1999,34 @@ char *mangle_field_name(const char *name) {
     return p;
 }
 
+/* separator-fold-collides-emitted-c-names: the C spelling of an ADT or
+ * constructor NAME.  These names are joined into larger symbols with `_`
+ * (`ctor_<Adt>_<Ctor>`) and `__` (`tur_adt_<Adt>__<arg>__<arg>`), so the
+ * per-name fold must never PRODUCE the joiner: the legacy field fold above
+ * maps `-`, `/` and a literal `_` all to `_`, which made `a-b`+`c` and
+ * `a`+`b-c` one `ctor_a_b_c`, and a user ADT named `Foo__int` the same C type
+ * as the `(Foo int)` monomorph.  This uses the injective scheme from
+ * mangle.h (`-` -> `_hy`, `_` -> `_un`, `/` -> `_sl`, sigils by mnemonic), so a
+ * single `_` in the output always introduces an escape and `_` / `__` are
+ * structural only.  Every site that spells an ADT / constructor name --
+ * typedefs, ctor symbols, the `as.<Ctor>._N` member path, drop glue, the
+ * bare-ctor alias -- goes through here or through types.c's
+ * append_c_ident_mangled, which must agree byte for byte.  FIELD names keep
+ * mangle_field_name: inline-C reads them by that spelling.  A name that is
+ * already a plain identifier (letters, digits, no `_`) spells the same under
+ * both, which is every ADT and ctor name in the tree.  Caller frees. */
+char *mangle_adt_name(const char *name) {
+    size_t len = strlen(name);
+    size_t pre = tur_name_is_c_keyword(name, len) ? TUR_NAME_GUARD_PREFIX_LEN : 0;
+    char *p = (char *)malloc(pre + tur_mangle_bound(len) + 1);
+    if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+    size_t k = 0;
+    if (pre) { memcpy(p, TUR_NAME_GUARD_PREFIX, pre); k = pre; }
+    tur_mangle_append(p, &k, name, len);
+    p[k] = '\0';
+    return p;
+}
+
 /* duplicate-ctor-names-collide-in-emitted-c: a program-wide census of which
  * constructor NAMES are owned by more than one ADT.
  *
@@ -2076,7 +2104,7 @@ static void ctor_census_push(const char *adt_name, const char *ctor_name) {
         g_ctor_census = nr;
         g_cap_ctor_census = nc;
     }
-    char *a = mangle_field_name(adt_name), *c = mangle_field_name(ctor_name);
+    char *a = mangle_adt_name(adt_name), *c = mangle_adt_name(ctor_name);
     if (!a || !c) { fprintf(stderr, "tur: oom\n"); abort(); }
     g_ctor_census[g_n_ctor_census].adt_name  = a;
     g_ctor_census[g_n_ctor_census].ctor_name = c;
@@ -2136,7 +2164,7 @@ void emit_ctor_bare_alias(Buf *out, const AdtDef *def, const CtorDef *ctor) {
     /* Ask the census about the same string the guard below uses -- the MANGLED
      * name.  These two disagreeing is what made the alias bind silently to the
      * wrong ADT; keeping the query and the guard on one spelling is the fix. */
-    char *bare = mangle_field_name(ctor->name);
+    char *bare = mangle_adt_name(ctor->name);
     if (!ctor_base_name_is_unique(bare)) { free(bare); return; }
     char *qual = mangle_ctor_symbol(def, ctor->name);
     if (strcmp(bare, qual) != 0) {
@@ -2172,9 +2200,9 @@ void emit_ctor_bare_alias(Buf *out, const AdtDef *def, const CtorDef *ctor) {
  * bug being fixed here needed only a shared constructor name, which is
  * ordinary. */
 char *mangle_ctor_symbol(const AdtDef *adt, const char *ctor_name) {
-    char *mctor = mangle_field_name(ctor_name);
+    char *mctor = mangle_adt_name(ctor_name);
     if (!adt || !adt->name) return mctor;   /* nothing to namespace against */
-    char *madt = mangle_field_name(adt->name);
+    char *madt = mangle_adt_name(adt->name);
     Buf b; buf_init(&b);
     buf_printf(&b, "%s_%s", madt, mctor);
     buf_putc(&b, '\0');
@@ -2195,7 +2223,7 @@ char *mangle_ctor_symbol(const AdtDef *adt, const char *ctor_name) {
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi) {
     if (adt_uses_named_layout(def))
         return mangle_field_name(ctor->fields[fi].name);
-    char *mctor = mangle_field_name(ctor->name);
+    char *mctor = mangle_adt_name(ctor->name);
     Buf b; buf_init(&b);
     buf_printf(&b, "as.%s._%u", mctor, fi);
     buf_putc(&b, '\0');

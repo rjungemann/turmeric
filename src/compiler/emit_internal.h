@@ -954,6 +954,9 @@ void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,
 void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out);
 char *mangle_dynvar_name(const char *name);
 char *mangle_field_name(const char *name);
+/* separator-fold-collides-emitted-c-names: injective spelling for ADT and
+ * constructor NAMES (typedefs, ctor symbols, member paths, drop glue). */
+char *mangle_adt_name(const char *name);
 char *mangle_ctor_symbol(const struct AdtDef *adt, const char *ctor_name);
 /* duplicate-ctor-names-collide-in-emitted-c: program-wide census of constructor
  * names, so an UNAMBIGUOUS one keeps its bare-name alias for hand-written

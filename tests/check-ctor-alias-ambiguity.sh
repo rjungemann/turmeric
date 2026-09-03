@@ -60,11 +60,35 @@ fi
 
 # Both qualified symbols must still exist and be distinct -- the alias is what
 # is withheld, not the constructors.
-if grep -q 'ctor_X_b_c(' "$out" && grep -q 'ctor_Y_b_c(' "$out"; then
-    pass "ambiguous-qualified-symbols-distinct (ctor_X_b_c and ctor_Y_b_c both emitted)"
+# separator-fold-collides-emitted-c-names (direction 3, 2026-09-02): ADT and
+# constructor names now use the injective mangler, so `b-c` and `b_c` are
+# DIFFERENT C names (`b_hyc` / `b_unc`) -- each gets its own bare alias and the
+# qualified symbols carry the escapes.  The ambiguity this file guards is now
+# only the genuine one: two ADTs owning the SAME constructor spelling (below).
+if grep -q 'ctor_X_b_hyc(' "$out" && grep -q 'ctor_Y_b_unc(' "$out" \
+   && grep -q '^#define ctor_b_hyc ' "$out" && grep -q '^#define ctor_b_unc ' "$out"; then
+    pass "distinct-under-injective-mangling (ctor_X_b_hyc / ctor_Y_b_unc, each with its bare alias)"
 else
-    fail "ambiguous-qualified-symbols-distinct" \
-        "withholding the alias must not withhold the constructors themselves"
+    fail "distinct-under-injective-mangling" \
+        "b-c and b_c must mangle to distinct qualified symbols (b_hyc / b_unc), each with a bare alias"
+fi
+src_same="$WORKDIR/same-name.tur"
+cat > "$src_same" <<'EOF'
+(defdata P [t] (PNil) (Mk t))
+(defdata Q [t] (Mk t) (QNil))
+(defn main [] : int 0)
+EOF
+out_same="$WORKDIR/same-name.c"
+if ! "$TUR" emit-c "$src_same" > "$out_same" 2>/dev/null; then
+    fail "same-name-no-alias" "emit-c failed"
+elif grep -q '^#define ctor_Mk ' "$out_same"; then
+    fail "same-name-no-alias" \
+        "a bare \`ctor_Mk\` alias was emitted for a constructor name two ADTs own; \
+only one #define can win, so inline C naming ctor_Mk silently reaches one ADT."
+elif grep -q 'ctor_P_Mk(' "$out_same" && grep -q 'ctor_Q_Mk(' "$out_same"; then
+    pass "same-name-no-alias (no bare ctor_Mk; ctor_P_Mk and ctor_Q_Mk both emitted)"
+else
+    fail "same-name-no-alias" "withholding the alias must not withhold the constructors themselves"
 fi
 
 # --- 2. Inline C naming the ambiguous bare name must FAIL, loudly. ----------

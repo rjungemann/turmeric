@@ -33,6 +33,7 @@ static const char *byref_cell_ptr_ctype(EmitCtx *ctx, const Binding *b);
  * emit_match can spell `(tur_adt_<Name> *)->as.<Ctor>._N` field reads exactly as
  * the direct emitter (emit_expr.c) does. */
 char *mangle_field_name(const char *name);
+char *mangle_adt_name(const char *name);
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
 /* S1/findings 16: ground-truth return-type lookup for cps->direct call temps. */
 const char *emit_sig_lookup_ret_ctype(const char *cname);
@@ -6588,7 +6589,7 @@ static void emit_term(CE *ce, const CTerm *t) {
 static void emit_match(CE *ce, const CTerm *t) {
     const AdtDef *adt = t->as.match.adt;
     char *scrut = atom_str(ce, &t->as.match.scrut);
-    char *mn = mangle_field_name(adt->name);
+    char *mn = mangle_adt_name(adt->name);
     char *sv = fresh_tmp(ce->ctx);
     /* SR1: a by-value sum scrutinee is an AGGREGATE, not a carrier pointer --
      * casting it through intptr_t trips "aggregate value used where an integer

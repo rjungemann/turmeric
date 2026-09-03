@@ -4,7 +4,7 @@
 was closed. Every remaining arm is a loud cc error and needs contrived names to
 reach.
 
-**Status:** OPEN, partially resolved. Filed 2026-09-02 while resolving
+**Status:** RESOLVED 2026-09-02 (direction 3 landed; see the end). Previously OPEN, partially resolved. Filed 2026-09-02 while resolving
 [duplicate-ctor-names-collide-in-emitted-c](../archive/duplicate-ctor-names-collide-in-emitted-c.md),
 whose fix qualifies the constructor symbol with its ADT and explicitly leaves
 this open.
@@ -211,3 +211,31 @@ constructors remain reachable by their qualified symbols
   its "ADT constructors" section carries the residual; updated 2026-09-02 to
   record that the silent arm is closed. It needs rewriting entirely if
   direction 3 lands.
+
+## Resolution (2026-09-02): direction 3, the scheme is injective
+
+ADT and constructor NAMES no longer use the legacy fold. `mangle_adt_name`
+(emit_core.c) spells them with mangle.h's injective scheme (`-` -> `_hy`,
+literal `_` -> `_un`, `/` -> `_sl`, sigils by mnemonic) and types.c's
+`append_c_ident_mangled` does the same, so the two spell every name alike
+and a single `_` in an emitted name always introduces an escape: the `_` and
+`__` joiners are structural only. All 25 sites that spell an ADT or
+constructor name -- typedefs (`tur_adt_<Adt>`, the monomorph suffix), ctor
+symbols (`ctor_<Adt>_<Ctor>`), the `as.<Ctor>._N` member path, drop / walk
+glue names, the bare-ctor alias, the CPS emitter's match scrutinee casts, and
+one raw `def->name` cast in emit_expr.c that had never been mangled at all --
+go through it. Field names keep `mangle_field_name`: inline C reads them by
+that spelling.
+
+Repros A, B and C are pinned by `tests/fixtures/separator-fold-distinct-names`
+(`a-b`+`c` is `ctor_a_hyb_c`, `a`+`b-c` is `ctor_a_b_hyc`; `Foo__int` is
+`tur_adt_Foo_un_unint` beside the `(Foo int)` monomorph). The report's cost
+estimate for this direction was wrong in the useful direction: every ADT and
+constructor name in the tree is plain letters and digits, which spell
+identically under both schemes, so **zero** `expected.c` snapshots moved and
+no hand-written inline C changed. `tests/check-ctor-alias-ambiguity.sh` now
+asserts that `b-c` / `b_c` are two names with two aliases and guards the one
+ambiguity that remains real -- two ADTs owning the same spelling, which still
+gets no bare alias. The name-mangling guide's constructor section is
+rewritten. Direction 2 (a collision diagnostic) is moot: there is nothing left
+to collide.

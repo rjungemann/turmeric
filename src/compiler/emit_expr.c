@@ -2517,7 +2517,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (!sb || !sb->drops_fn_fields || sb->type.kind != TY_ADT ||
                     !sb->type.as.adt_.def)
                     continue;
-                char *mn = mangle_field_name(sb->type.as.adt_.def->name);
+                char *mn = mangle_adt_name(sb->type.as.adt_.def->name);
                 size_t tl = strlen(mn) + 16;
                 char *tn = (char *)malloc(tl);
                 snprintf(tn, tl, "tur_adt_%s", mn);
@@ -4327,7 +4327,13 @@ static void emit_carrier_sum_free(EmitCtx *ctx, Buf *body, const char *name,
         return;
     }
     char access[320];
-    snprintf(access, sizeof access, "((tur_adt_%s *)(intptr_t)%s)->", def->name, name);
+    {
+        /* Through the ADT-name mangler like every other typedef spelling: the
+         * raw name was one cast away from a kebab-named ADT failing to compile. */
+        char *_mn = mangle_adt_name(def->name);
+        snprintf(access, sizeof access, "((tur_adt_%s *)(intptr_t)%s)->", _mn, name);
+        free(_mn);
+    }
     indent_buf(body, ctx->indent);
     buf_printf(body, "if (%s) {\n", name);
     ctx->indent += 4;
@@ -10371,7 +10377,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * could not trace through the box.  The glue emitter now
                  * dispatches on the tag, so both shapes are covered. */
                 if (adef && adef->needs_drop_glue) {
-                    char *mn = mangle_field_name(adef->name);
+                    char *mn = mangle_adt_name(adef->name);
                     snprintf(dg_name_buf, sizeof(dg_name_buf), "drop_glue_tur_adt_%s", mn);
                     snprintf(wg_name_buf, sizeof(wg_name_buf), "walk_glue_tur_adt_%s", mn);
                     free(mn);
@@ -11383,8 +11389,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (e->as.get_field_.adt_def) {
                 const AdtDef *adt = e->as.get_field_.adt_def;
                 const CtorDef *ctor = e->as.get_field_.adt_ctor;
-                char *adt_mn = mangle_field_name(adt->name);
-                char *mctor  = mangle_field_name(ctor->name);
+                char *adt_mn = mangle_adt_name(adt->name);
+                char *mctor  = mangle_adt_name(ctor->name);
                 /* CONV-S1 seam 4: member-access path -- a flat named record reads
                  * `.value`; a tagged/positional ADT reads `.as.<Ctor>._N`. */
                 char *mp = adt_field_member_path(adt, ctor, e->as.get_field_.field_idx);
@@ -13408,7 +13414,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 } else if (inst_name) {
                     snprintf(adt_c_name, sizeof(adt_c_name), "%s", inst_name);
                 } else {
-                    char *_mn = mangle_field_name(adt->name);
+                    char *_mn = mangle_adt_name(adt->name);
                     snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
                     free(_mn);
                 }
@@ -13667,7 +13673,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
 
                     /* Bind fields */
                     if (!pat->is_wildcard && !pat->is_var && pat->ctor) {
-                        char *_mctor = mangle_field_name(pat->ctor->name);
+                        char *_mctor = mangle_adt_name(pat->ctor->name);
                         /* CONV-S1: by-value scrutinee reads fields with `.`; a
                          * carrier or (slice 3) pass-by-pointer scrutinee is a
                          * pointer, so it reads with `->`. */
@@ -13895,7 +13901,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
 
                     /* Bind field variables for constructor patterns */
                     if (!pat->is_wildcard && !pat->is_var && pat->ctor) {
-                        char *_mctor = mangle_field_name(pat->ctor->name);
+                        char *_mctor = mangle_adt_name(pat->ctor->name);
                         for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
                             Binding *fb = pat->bindings[bi];
                             const char *ctype = type_c_name(fb->type);

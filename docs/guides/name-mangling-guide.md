@@ -72,6 +72,9 @@ malformed input.
 
 ## The legacy fold (function-local names, struct fields, file basenames)
 
+> ADT and constructor names left this fold on 2026-09-02 -- see "ADT
+> constructors" below.
+
 Some contexts intentionally use the older lossy fold:
 
 | Context | Scheme | Reason |
@@ -100,7 +103,7 @@ reason it earns a section:
 | Union **member** inside the ADT's own struct | `as.<Ctor>._N` | the struct -- bare is correct |
 | C **function** symbol | `ctor_<Adt>_<Ctor>` (+ a monomorph's `__<arg>` suffix) | nothing -- must carry the ADT |
 
-Both went through the legacy fold on the constructor name alone, so two ADTs
+Both went through the constructor name alone, so two ADTs
 sharing a constructor name emitted one C function twice
 (`redefinition of 'ctor_Mk'`). Elaboration resolved the shadowing correctly the
 whole time -- only the emitted C merged them. Build the function symbol with
@@ -120,25 +123,34 @@ The census backing that decision is snapshotted at the end of elaboration
 their constructors are attached and a nested procedural-macro elaboration frees
 the arena the defs live in.
 
-**Residual, and one arm of it is not loud.** Every non-alphanumeric character
-folds to `_` while emitted names join their parts with `_`/`__`, so the joiner
-is inside the folded alphabet and the split is ambiguous: ADT `a-b` constructor
-`c` and ADT `a` constructor `b-c` both spell `ctor_a_b_c`, and a user ADT named
-`Foo__int` is the `(Foo int)` monomorph's type name. Those are cc errors.
+**The fold ambiguity, closed (2026-09-02).** ADT and constructor *names* no
+longer go through the legacy fold at all: `mangle_adt_name` (emit_core.c) and
+`append_c_ident_mangled` (types.c) spell them with the injective scheme from
+the top of this guide (`-` -> `_hy`, a literal `_` -> `_un`, `/` -> `_sl`), so
+a single `_` in an emitted ADT/constructor name always introduces an escape
+and the `_` / `__` joiners in `ctor_<Adt>_<Ctor>` and
+`tur_adt_<Adt>__<arg>__<arg>` are structural only. ADT `a-b` + constructor `c`
+is `ctor_a_hyb_c`; ADT `a` + constructor `b-c` is `ctor_a_b_hyc`; a user ADT
+named `Foo__int` is `tur_adt_Foo_un_unint`, which cannot collide with the
+`(Foo int)` monomorph's `tur_adt_Foo__int`. Every name in the tree is plain
+letters and digits, which spell identically under both schemes, so no emitted
+name moved. `tests/fixtures/separator-fold-distinct-names` pins the two
+formerly-colliding shapes.
 
-The bare-name alias above used to add a **silent** arm: it tested uniqueness on
-the RAW constructor name but guarded its `#define` on the MANGLED one, so `b-c`
-and `b_c` in two different ADTs both qualified as unique and the second
-`#define` was dropped by its own `#ifndef` -- inline C calling `ctor_b_c` then
-reached the other ADT's constructor with no diagnostic at any layer, invisible
-to C too whenever both ADTs lower to the `int64_t` carrier. **Fixed:** the
-census stores mangled names and `ctor_base_name_is_unique` takes the mangled
-name, so the uniqueness test and the guard cannot disagree. Pinned by
-`tests/check-ctor-alias-ambiguity.sh` (ctest `tur_ctor_alias_ambiguity`).
+Two consequences for hand-written inline C:
 
-That leaves the fold ambiguity itself, which is still open (all loud):
-[docs/reported/separator-fold-collides-emitted-c-names.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/separator-fold-collides-emitted-c-names.md).
-Do not name an ADT after a monomorph spelling (`Foo__int`).
+- A kebab-case or underscored constructor's emitted spelling carries the
+  escape: `b-c` is `ctor_X_b_hyc` / bare `ctor_b_hyc`, and its union member is
+  `as.b_hyc._0`. `b-c` and `b_c` in two ADTs are two names, each with its own
+  bare alias.
+- The bare alias is withheld only for the genuine ambiguity -- two ADTs owning
+  the *same* spelling -- and inline C naming it fails at cc pointing at it.
+  `tests/check-ctor-alias-ambiguity.sh` (ctest `tur_ctor_alias_ambiguity`)
+  asserts both halves.
+
+The history of the silent arm this replaced (a uniqueness test on the raw name
+guarding a `#define` on the folded one) is in
+[docs/archive/separator-fold-collides-emitted-c-names.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/separator-fold-collides-emitted-c-names.md).
 
 See
 [docs/archive/duplicate-ctor-names-collide-in-emitted-c.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/duplicate-ctor-names-collide-in-emitted-c.md).

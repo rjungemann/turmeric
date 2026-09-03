@@ -49,6 +49,7 @@ Arena *tur_type_arena(void) {
  * single-variant record monomorph emit routes its field stores through the same
  * member-path the typedef / field-read / match sites use. */
 char *mangle_field_name(const char *name);
+char *mangle_adt_name(const char *name);
 /* duplicate-ctor-names-collide-in-emitted-c: the ADT-qualified base token
  * of a constructor's emitted C FUNCTION symbol.  Defined in emit_core.c;
  * forward-declared here (types.c does not include emit_internal.h) so the
@@ -869,18 +870,23 @@ bool fn_result_type_is_fat_normalized(const Type *t) {
  * emitted C identifier (`tur_adt_Lens'__...` is not valid C). */
 static void append_c_ident_mangled(Buf *b, const char *name) {
     /* c-keyword-function-names-not-mangled: keep this byte-for-byte in lockstep
-     * with mangle_field_name in emit_core.c, which spells the same names at the
+     * with mangle_adt_name in emit_core.c, which spells the same names at the
      * declaration sites. A keyword-named ADT is not itself a C collision here
      * (every use is prefixed, `tur_adt_enum`), but if the two manglers disagree
-     * the typedef and its use sites name different types. */
-    if (name && tur_name_is_c_keyword(name, strlen(name)))
-        buf_puts(b, TUR_NAME_GUARD_PREFIX);
-    for (const char *p = name; p && *p; p++) {
-        char c = *p;
-        bool ident = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                     (c >= '0' && c <= '9') || c == '_';
-        buf_putc(b, ident ? c : '_');
-    }
+     * the typedef and its use sites name different types.
+     * separator-fold-collides-emitted-c-names: the injective scheme (mangle.h),
+     * so the `_` / `__` joiners around this name are structural only -- a
+     * user ADT `Foo__int` no longer spells the `(Foo int)` monomorph's name. */
+    if (!name) return;
+    size_t len = strlen(name);
+    if (tur_name_is_c_keyword(name, len)) buf_puts(b, TUR_NAME_GUARD_PREFIX);
+    char *tmp = (char *)malloc(tur_mangle_bound(len) + 1);
+    if (!tmp) { fprintf(stderr, "tur: oom\n"); abort(); }
+    size_t k = 0;
+    tur_mangle_append(tmp, &k, name, len);
+    tmp[k] = '\0';
+    buf_puts(b, tmp);
+    free(tmp);
 }
 
 /* Mangle a bare TypeKind by routing it through append_type_mangle, so a
@@ -1916,7 +1922,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                  * so a forward `typedef struct tur_adt_<Name> ...;` would dangle. */
                 !resolved.as.adt_.def->is_opaque &&
                 resolved.as.adt_.def->n_type_params == 0) {
-                char *un = mangle_field_name(resolved.as.adt_.def->name);
+                char *un = mangle_adt_name(resolved.as.adt_.def->name);
                 buf_printf(out, "#ifndef TUR_FWD_tur_adt_%s\n", un);
                 buf_printf(out, "#define TUR_FWD_tur_adt_%s\n", un);
                 buf_printf(out, "typedef struct tur_adt_%s tur_adt_%s;\n", un, un);
@@ -3215,7 +3221,7 @@ const char *adt_heap_ptr_c_name(const AdtDef *def) {
 /* CONV-S1: the stable C typedef name (`tur_adt_<mangled>`) for the BY-VALUE
  * representation of a non-parametric flat-product ADT.  Mirrors the name the
  * emitters build for the base typedef (emit_module.c:emit_adt_typedef_and_ctors)
- * -- `tur_adt_` + mangle_field_name(def->name) -- so signatures, constructors,
+ * -- `tur_adt_` + mangle_adt_name(def->name) -- so signatures, constructors,
  * `match`, and field-access all agree on one spelling.  The mangler (replace any
  * non `[A-Za-z0-9_]` byte with `_`) is replicated inline here so the type layer
  * does not have to reach up into the emit layer; the result is interned (same

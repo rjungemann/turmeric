@@ -1,0 +1,27 @@
+;; separator-fold-collides-emitted-c-names, repros A and B: distinct source
+;; names must be distinct C symbols.
+;;
+;; A: ADT `a-b` + ctor `c` and ADT `a` + ctor `b-c` used to both spell
+;;    `ctor_a_b_c` ("conflicting types for 'ctor_a_b_c'").  ADT and ctor
+;;    names now use the injective mangler (`-` -> `_hy`, `_` -> `_un`), so the
+;;    `_` joiner in `ctor_<Adt>_<Ctor>` is structural only.
+;; B: a user ADT named `Foo__int` and the monomorph of `(Foo int)` used to be
+;;    one C type (`redefinition of 'struct tur_adt_Foo__int'`); the literal
+;;    underscores now spell `_un_un`, so the `__` type-arg joiner is unique.
+(defdata a-b (c :int))
+(defdata a   (b-c :int))
+
+(defdata Foo [t] (MkFoo t))
+(defdata Foo__int (MkOther :int))
+
+(defn use-ab [x : a-b] : int (match x (c n) n))
+(defn use-a  [x : a]   : int (match x (b-c n) (* n 10)))
+(defn use-foo [] : int (match (MkFoo 7) (MkFoo v) v))
+(defn use-other [] : int (match (MkOther 8) (MkOther v) v))
+
+(defn main [] : int
+  (println (use-ab (c 1)))
+  (println (use-a (b-c 2)))
+  (println (use-foo))
+  (println (use-other))
+  0)

@@ -7185,7 +7185,7 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
     const CtorDef *fdc = def->ctors[ci];
     for (uint32_t fi = 0; fi < fdc->n_fields; fi++) {
         if (fdc->fields[fi].drop_inner_def) {
-            char *imn = mangle_field_name(fdc->fields[fi].drop_inner_def->name);
+            char *imn = mangle_adt_name(fdc->fields[fi].drop_inner_def->name);
             buf_printf(out, "static void drop_glue_tur_adt_%s(void *);\n", imn);
             buf_printf(out, "static void walk_glue_tur_adt_%s(void *, RcWalkChildFn, void *);\n",
                        imn);
@@ -7222,7 +7222,7 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
              * aggregate.  Its own drop glue releases the box's owners and frees
              * the box (it is a plain heap allocation, uniquely owned by this
              * value under the same move discipline a direct rc field relies on). */
-            char *imn = mangle_field_name(ctor->fields[fi].drop_inner_def->name);
+            char *imn = mangle_adt_name(ctor->fields[fi].drop_inner_def->name);
             buf_printf(out,
                        "    if (s->%s) drop_glue_tur_adt_%s((void *)(intptr_t)s->%s);\n",
                        mp, imn, mp);
@@ -7304,7 +7304,7 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
         } else if (ctor->fields[fi].drop_inner_def) {
             /* Recurse into the boxed sub-aggregate so its own rc children are
              * enumerated for the cycle collector. */
-            char *imn = mangle_field_name(ctor->fields[fi].drop_inner_def->name);
+            char *imn = mangle_adt_name(ctor->fields[fi].drop_inner_def->name);
             buf_printf(out,
                        "    if (s->%s) walk_glue_tur_adt_%s((void *)(intptr_t)s->%s, cb, ctx);\n",
                        mp, imn, mp);
@@ -7421,7 +7421,7 @@ static void emit_byval_ctor_prologue(Buf *out, const char *adt_c_name,
                                      const CtorDef *ctor, bool flat) {
     buf_printf(out, "    %s __r;\n", adt_c_name);
     if (flat) return;
-    char *mctor = mangle_field_name(ctor->name);
+    char *mctor = mangle_adt_name(ctor->name);
     buf_printf(out, "    __r.tag = %u;\n", ctor->tag);
     buf_printf(out,
         "    memset((char *)&__r + sizeof(__r.tag), 0, "
@@ -7458,7 +7458,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
     if (def && def->is_opaque) return;
     char adt_c_name[256];
     {
-        char *_mn = mangle_field_name(def->name);
+        char *_mn = mangle_adt_name(def->name);
         snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
         free(_mn);
     }
@@ -7493,7 +7493,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
         }
         buf_printf(out, "} %s;\n", adt_c_name);
         /* Surface alias so inline-C `sizeof(<Name>)` / `(<Name> *)p` resolve. */
-        char *sname = mangle_field_name(def->name);
+        char *sname = mangle_adt_name(def->name);
         buf_printf(out, "typedef %s %s;\n\n", adt_c_name, sname);
         free(sname);
     } else {
@@ -7502,7 +7502,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
     buf_printf(out, "    union {\n");
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
-        char *mctor = mangle_field_name(ctor->name);
+        char *mctor = mangle_adt_name(ctor->name);
         buf_printf(out, "        struct {");
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
@@ -7535,7 +7535,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
         for (uint32_t fi = 0; fi < crec->n_fields; fi++)
             if (!crec->fields[fi].name) { all_named = false; break; }
         if (all_named) {
-            char *sname = mangle_field_name(def->name);
+            char *sname = mangle_adt_name(def->name);
             buf_printf(out, "#ifndef TUR_COMPAT_%s\n#define TUR_COMPAT_%s\n",
                        sname, sname);
             buf_printf(out, "typedef struct %s {\n", sname);
@@ -13231,7 +13231,7 @@ int emit_program(Buf *out, const Expr *program) {
             if (def && def->superseded) continue;
             char adt_c_name[256];
             {
-                char *_mn = mangle_field_name(def->name);
+                char *_mn = mangle_adt_name(def->name);
                 snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
                 free(_mn);
             }
@@ -13302,7 +13302,7 @@ int emit_program(Buf *out, const Expr *program) {
                     free(fname);
                 }
                 buf_printf(&early_file, "} %s;\n", adt_c_name);
-                char *sname = mangle_field_name(def->name);
+                char *sname = mangle_adt_name(def->name);
                 buf_printf(&early_file, "typedef %s %s;\n\n", adt_c_name, sname);
                 free(sname);
             } else {
@@ -13311,7 +13311,7 @@ int emit_program(Buf *out, const Expr *program) {
             buf_printf(&early_file, "    union {\n");
             for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
                 CtorDef *ctor = def->ctors[ci];
-                char *mctor = mangle_field_name(ctor->name);
+                char *mctor = mangle_adt_name(ctor->name);
                 buf_printf(&early_file, "        struct {");
                 for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                     const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
@@ -13337,7 +13337,7 @@ int emit_program(Buf *out, const Expr *program) {
                 for (uint32_t fi = 0; fi < crec->n_fields; fi++)
                     if (!crec->fields[fi].name) { all_named = false; break; }
                 if (all_named) {
-                    char *sname = mangle_field_name(def->name);
+                    char *sname = mangle_adt_name(def->name);
                     buf_printf(&early_file,
                                "#ifndef TUR_COMPAT_%s\n#define TUR_COMPAT_%s\n",
                                sname, sname);
