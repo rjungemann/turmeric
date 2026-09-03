@@ -1,0 +1,9 @@
+stacked: sat unsat sat 
+flat:    sat unsat sat 
+differential: agree
+multi: unsat sat 
+stacked exit: 1
+no check-sat: answer=unsat exit=0
+unmatched pop: exit=3 pop with no matching push
+bad level: exit=3 malformed push/pop level
+interactive: sat unsat sat

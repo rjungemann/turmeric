@@ -38,7 +38,11 @@ phase's acceptance tests were going to want a door for.
 phase's landing note for what moved and the two compiler bugs the work
 surfaced).  **SX3 has landed** -- one EUF state with mark/undo per cube,
 verdict-identical to the rebuild path, `TUR_REFINE_EUF=rebuild` kept as the
-replay seam.  With those two down, every live phase of this plan is done:
+replay seam.  **SX8b has landed** (2026-09-03) -- `tur smt` runs a script as a
+session with a real assertion stack, plus `--interactive`; its own premise
+turned out to be wrong (push/pop do NOT map onto the trail, and could not) and
+the phase records the correction and the differential acceptance test that
+replaced it.  With those down, every live phase of this plan is done:
 what remains is parked on evidence (SX4, SX6, and their dependents) or is
 follow-up filed in its own right (`#fx{Bt}` for precision, the self-recursion
 bug below).  Details under
@@ -1474,17 +1478,58 @@ Independent of everything else; can land right after SX0.
   agrees with the ctest harness on all 125 labels; the JSON dump round-trips
   through `python3 -m json.tool`; both are exercised by fixtures.
 
-**SX8b -- incremental queries.** After SX3/SX4 land marks, the textual surface
-grows the SMT-LIB2 incremental commands, because the trail is exactly what
-makes them implementable: `(push)` / `(pop)` map onto `euf_mark` +
-`la_mark` / undo, `(get-model)` onto the bounded search, and -- after the 3.7
-machinery -- `(get-unsat-core)` onto the conflict explanation and
-`(get-proof)` onto the certificate. This tier is the *external witness* that
-the trail works: a `push`/`assert`/`check-sat`/`pop` script exercises
-mark/undo through a public door, and SX3/SX4's acceptance suites should
-include such scripts once the tier exists. `tur smt --interactive` (read
-commands from stdin) makes `tur` usable as a backend for anything that speaks
-the protocol subset.
+**SX8b -- incremental queries. LANDED 2026-09-03.**
+
+`tur smt` now runs a script as a SESSION: `(push [n])` / `(pop [n])` scope the
+assertions, each `(check-sat)` is answered where it appears, `(get-model)`
+reprints the last witness, `(exit)` ends the session, and
+`tur smt --interactive` reads the same commands from stdin and answers as they
+arrive. The exit code is the last answer.
+
+**The premise below is wrong, and this is the correction.** The tier was
+specced as "after SX3/SX4 land marks... `(push)` / `(pop)` map onto `euf_mark`
++ `la_mark` / undo", making it "the *external witness* that the trail works".
+They do not map onto the trail, and no amount of SX4 would change that: each
+`check-sat` runs the chain from the current assertion set, which rebuilds the
+DNF cubes, and **adding one hypothesis changes the cube set wholesale** -- so
+there is no solver-side mark that spans two checks. `euf_mark`/`euf_undo_to`
+bracket cubes *within* one check, which is SX3 and is already exercised by
+every compile. What is incremental here is the ASSERTION SET: a `pop` restores
+exactly the hypotheses in scope at the matching `push`, with nothing re-read or
+re-translated. That is what the protocol means by incremental, and it is worth
+having on its own; it is just not a witness for the trail.
+
+**So the acceptance criterion was replaced with one that bites.** The property
+that makes an incremental interface worth having is that it answers the SAME as
+the non-incremental one, so `tests/fixtures/sx8b-smt-push-pop` is a
+DIFFERENTIAL check: every answer a stacked script gives is compared against a
+flat script with the same assertions in scope, run as a separate process with
+no stack at all. A `pop` that kept a popped assertion, or dropped a live one,
+fails there and would pass any single-script test.
+
+**What landed, in one sentence of design:** one command executor serves both
+doors, and they differ in a single `stack_ok` bit -- batch
+(`refine_smtlib_read`, unchanged for the corpus) says `push`/`pop` are outside
+the fragment because it folds a script into one assertion set; sessions say
+they are protocol. Keeping one executor is what makes the two doors agree about
+the accepted fragment by construction rather than by parallel maintenance.
+
+**Two limits, both deliberate and both documented in the guide:** only
+hypotheses are scoped (a `declare-fun` survives its `pop` -- sound in this
+direction, since an unconstrained variable cannot turn `sat` into `unsat`, and
+truncating `n_vars` would leave hash-consed terms pointing at reusable slots);
+and a script with no `(check-sat)` is still decided once at the end, which is
+SX8a's contract and what every corpus benchmark relies on.
+
+**Validation:** the corpus replay is unmoved (125 benchmarks, 68 proved, 56
+sat-correct, 1 skipped, 0 soundness failures -- the SX8a figures exactly), the
+`sx8a-tur-smt` fixture passes byte-identically, `bash tests/run.sh` is 2780/0,
+and `ctest -R refine` is 4/4. The new fixture agrees byte-for-byte between the
+Release and the ASan Debug build.
+
+**Still not built, and still needing what they always needed:**
+`(get-unsat-core)` wants the 3.7 conflict explanation and `(get-proof)` wants
+the certificate; both are SX6b-shaped and parked behind it.
 
 **SX8c -- in-language and playground access.**
 

@@ -9745,9 +9745,72 @@ static void xf_json_puts(FILE *f, const char *s) {
 enum { SMT_EXIT_UNSAT = 0, SMT_EXIT_SAT = 1, SMT_EXIT_UNKNOWN = 2,
        SMT_EXIT_ERROR = 3 };
 
+/* Decide the assertion set currently in `vc` and print one SMT-LIB answer.
+ * Shared by the batch path, each `(check-sat)` of a script, and the
+ * interactive prompt, so all three answer the same way through the same
+ * chain -- a window onto the solver has to show the same solver from every
+ * angle. `*model_out` receives the witness when the answer is `sat`, for a
+ * later `(get-model)`. */
+static void smt_print_model(const RefineModel *m) {
+    if (!m || !m->n) return;
+    printf("(model\n");
+    for (uint32_t i = 0; i < m->n; i++) {
+        const RefineModelBinding *b = &m->bindings[i];
+        if (b->is_real)
+            printf("  (define-fun %s () Real %g)\n", b->name, b->rval);
+        else
+            printf("  (define-fun %s () Int %lld)\n", b->name, (long long)b->ival);
+    }
+    printf(")\n");
+}
+
+static int smt_answer(RefineVC *vc, Arena *arena, RefineModel **model_out) {
+    /* The same chain, in the same order, as the compile path -- running a
+     * different one here would make this window show something other than the
+     * solver it is a window onto. */
+    static const struct { const char *name; RefineBackend fn; } CHAIN[] = {
+        { "S0 (trivial)",       refine_s0_decide },
+        { "S1 (EUF)",           refine_s1_decide },
+        { "S2 (arithmetic)",    refine_s2_decide },
+        { "S3 (Nelson-Oppen)",  refine_s3_decide },
+    };
+    const char *decided_by = NULL;
+    RefineVerdict v = RT_UNKNOWN;
+    for (size_t i = 0; i < sizeof(CHAIN)/sizeof(CHAIN[0]); i++) {
+        RefineDecision d = CHAIN[i].fn(vc, arena);
+        if (d.verdict != RT_UNKNOWN) { v = d.verdict; decided_by = CHAIN[i].name; break; }
+    }
+
+    /* The goal is `false`, so `hyps |- false` VALID means the assertion set is
+     * UNSAT.  The stages only ever prove; a model has to come from the bounded
+     * counterexample search, which is the only thing in the solver allowed to
+     * answer INVALID -- and it does so with a witness, never a guess. */
+    int rc;
+    if (model_out) *model_out = NULL;
+    if (v == RT_VALID) {
+        printf("unsat\n");
+        rc = SMT_EXIT_UNSAT;
+    } else {
+        RefineModel *m = refine_model_search(vc, arena);
+        if (m) {
+            printf("sat\n");
+            decided_by = "bounded model search";
+            smt_print_model(m);
+            if (model_out) *model_out = m;
+            rc = SMT_EXIT_SAT;
+        } else {
+            printf("unknown\n");
+            rc = SMT_EXIT_UNKNOWN;
+        }
+    }
+    if (decided_by) fprintf(stderr, "tur smt: decided by %s\n", decided_by);
+    return rc;
+}
+
 static int usage_smt(void) {
     fprintf(stderr,
         "usage: tur smt <file.smt2>\n"
+        "       tur smt --interactive\n"
         "\n"
         "Run an SMT-LIB2 script through tur's in-house staged decision\n"
         "procedure (S0 trivial -> S1 EUF -> S2 linear arithmetic -> S3\n"
@@ -9762,7 +9825,13 @@ static int usage_smt(void) {
         "`unknown` is a first-class answer, not a failure. Parity with a\n"
         "production SMT solver is a non-goal.\n"
         "\n"
-        "exit codes:\n"
+        "The script is run as a SESSION: (push)/(pop) scope the assertions and\n"
+        "each (check-sat) is answered where it appears, so one script can ask\n"
+        "several questions. A script with no (check-sat) at all is decided once\n"
+        "at the end. --interactive reads the same commands from stdin and\n"
+        "answers as they arrive.\n"
+        "\n"
+        "exit codes (the LAST answer, when a script asks more than once):\n"
         "  0  unsat      the assertion set is contradictory (proved)\n"
         "  1  sat        a model was found\n"
         "  2  unknown    no stage decided it\n"
@@ -9770,14 +9839,126 @@ static int usage_smt(void) {
     return SMT_EXIT_ERROR;
 }
 
+/* Drive a fed session to exhaustion, answering each `(check-sat)`.  Returns the
+ * last answer's exit code, or SMT_EXIT_ERROR on a refusal.  `*answered` says
+ * whether any `(check-sat)` was seen, which is what lets a script that asks
+ * nothing still get the single end-of-script answer SX8a's contract promises.
+ *
+ * `*last_model` and `*saw_exit` are the caller's, not locals, because the
+ * interactive driver calls this once per typed form: a `(get-model)` arrives in
+ * a later call than the `(check-sat)` whose witness it wants, and an `(exit)`
+ * has to stop a loop this function does not own. */
+static int smt_drive(SmtlibSession *s, Arena *arena, bool *answered, bool flush,
+                     RefineModel **last_model, bool *saw_exit) {
+    int rc = SMT_EXIT_UNKNOWN;
+    for (;;) {
+        SmtlibEvent ev = refine_smtlib_session_step(s);
+        if (ev == SMT_EV_EXIT) { if (saw_exit) *saw_exit = true; }
+        if (ev == SMT_EV_END || ev == SMT_EV_EXIT) return *answered ? rc : SMT_EXIT_UNKNOWN;
+        if (ev == SMT_EV_ERROR) {
+            printf("unknown\n");
+            fprintf(stderr, "tur smt: outside the accepted fragment: %s\n",
+                    refine_smtlib_session_err(s) ? refine_smtlib_session_err(s)
+                                                 : "unsupported script");
+            if (flush) fflush(stdout);
+            return SMT_EXIT_ERROR;
+        }
+        if (ev == SMT_EV_CHECK_SAT) {
+            rc = smt_answer(refine_smtlib_session_vc(s), arena, last_model);
+            *answered = true;
+        } else if (ev == SMT_EV_GET_MODEL) {
+            /* Only meaningful after a `sat`; SMT-LIB leaves it an error
+             * otherwise, and saying so is better than printing an empty
+             * model that reads like "no bindings". */
+            if (last_model && *last_model) smt_print_model(*last_model);
+            else fprintf(stderr, "tur smt: (get-model) with no model in hand\n");
+        }
+        if (flush) fflush(stdout);
+    }
+}
+
+/* Read one complete top-level s-expression from `in`, honouring `;` comments
+ * and `|quoted|` / "string" atoms so a paren inside one does not throw the
+ * balance off.  Returns false at EOF with nothing buffered.  This lives here
+ * rather than in the reader because it is a TERMINAL concern: the reader parses
+ * a buffer, and only an interactive driver needs to know when the user has
+ * finished typing a form. */
+static bool smt_read_form(FILE *in, char **buf, size_t *cap, size_t *len) {
+    int depth = 0;
+    bool any = false, in_line_comment = false, in_str = false, in_pipe = false;
+    *len = 0;
+    for (;;) {
+        int c = fgetc(in);
+        /* EOF mid-form still hands the buffered text to the reader rather than
+         * dropping it: an unterminated form is a refusal the caller should see
+         * ("unterminated list"), and silently discarding it would make a
+         * truncated pipe look like a clean end of session. */
+        if (c == EOF) return any && *len > 0;
+        if (*len + 2 > *cap) {
+            size_t nc = *cap ? *cap * 2 : 256;
+            char *nb = (char *)realloc(*buf, nc);
+            if (!nb) return false;
+            *buf = nb; *cap = nc;
+        }
+        (*buf)[(*len)++] = (char)c;
+        (*buf)[*len] = '\0';
+
+        if (in_line_comment) { if (c == '\n') in_line_comment = false; continue; }
+        if (in_str)  { if (c == '"') in_str  = false; continue; }
+        if (in_pipe) { if (c == '|') in_pipe = false; continue; }
+        if (c == ';') { in_line_comment = true; continue; }
+        if (c == '"') { in_str  = true; any = true; continue; }
+        if (c == '|') { in_pipe = true; any = true; continue; }
+        if (c == '(') { depth++; any = true; continue; }
+        if (c == ')') {
+            depth--;
+            if (depth <= 0) return true;         /* one complete form */
+            continue;
+        }
+        if (!isspace((unsigned char)c)) any = true;
+    }
+}
+
+static int cmd_smt_interactive(void) {
+    Arena arena;
+    arena_init(&arena, 1 << 20);
+    SmtlibSession *s = refine_smtlib_session_new(&arena);
+
+    char  *line = NULL;
+    size_t cap = 0, len = 0;
+    int rc = SMT_EXIT_UNKNOWN;
+    bool answered = false, saw_exit = false;
+    RefineModel *last_model = NULL;
+    while (!saw_exit && smt_read_form(stdin, &line, &cap, &len)) {
+        refine_smtlib_session_feed(s, line, len);
+        bool got = false;
+        int r = smt_drive(s, &arena, &got, /*flush=*/true, &last_model, &saw_exit);
+        if (r == SMT_EXIT_ERROR) { rc = r; break; }
+        if (got) { rc = r; answered = true; }
+    }
+    free(line);
+    arena_free(&arena);
+    /* An interactive run that was never asked anything is not an error. */
+    return answered || rc == SMT_EXIT_ERROR ? rc : SMT_EXIT_UNKNOWN;
+}
+
 static int cmd_smt(int argc, char **argv) {
     const char *input = NULL;
+    bool interactive = false;
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
             return usage_smt();
+        if (strcmp(argv[i], "--interactive") == 0 || strcmp(argv[i], "-i") == 0) {
+            interactive = true;
+            continue;
+        }
         if (argv[i][0] == '-' && argv[i][1]) return usage_smt();
         if (input) return usage_smt();
         input = argv[i];
+    }
+    if (interactive) {
+        if (input) return usage_smt();
+        return cmd_smt_interactive();
     }
     if (!input) return usage_smt();
 
@@ -9799,71 +9980,25 @@ static int cmd_smt(int argc, char **argv) {
     Arena arena;
     arena_init(&arena, 1 << 20);
 
-    SmtlibQuery q;
-    refine_smtlib_read(&q, text, got, &arena);
-    if (q.skipped || !q.vc) {
-        printf("unknown\n");
-        fprintf(stderr, "tur smt: outside the accepted fragment: %s\n",
-                q.skip_reason ? q.skip_reason : "unsupported script");
-        arena_free(&arena); free(text);
-        return SMT_EXIT_ERROR;
-    }
-
-    /* The same chain, in the same order, as the compile path -- running a
-     * different one here would make this window show something other than the
-     * solver it is a window onto. */
-    static const struct { const char *name; RefineBackend fn; } CHAIN[] = {
-        { "S0 (trivial)",       refine_s0_decide },
-        { "S1 (EUF)",           refine_s1_decide },
-        { "S2 (arithmetic)",    refine_s2_decide },
-        { "S3 (Nelson-Oppen)",  refine_s3_decide },
-    };
-    const char *decided_by = NULL;
-    RefineVerdict v = RT_UNKNOWN;
-    for (size_t i = 0; i < sizeof(CHAIN)/sizeof(CHAIN[0]); i++) {
-        RefineDecision d = CHAIN[i].fn(q.vc, &arena);
-        if (d.verdict != RT_UNKNOWN) { v = d.verdict; decided_by = CHAIN[i].name; break; }
-    }
-
-    /* The goal is `false`, so `hyps |- false` VALID means the assertion set is
-     * UNSAT.  The stages only ever prove; a model has to come from the bounded
-     * counterexample search, which is the only thing in the solver allowed to
-     * answer INVALID -- and it does so with a witness, never a guess. */
-    int rc;
-    if (v == RT_VALID) {
-        printf("unsat\n");
-        rc = SMT_EXIT_UNSAT;
-    } else {
-        RefineModel *m = refine_model_search(q.vc, &arena);
-        if (m) {
-            printf("sat\n");
-            decided_by = "bounded model search";
-            if (m->n) {
-                printf("(model\n");
-                for (uint32_t i = 0; i < m->n; i++) {
-                    const RefineModelBinding *b = &m->bindings[i];
-                    if (b->is_real)
-                        printf("  (define-fun %s () Real %g)\n", b->name, b->rval);
-                    else
-                        printf("  (define-fun %s () Int %lld)\n", b->name,
-                               (long long)b->ival);
-                }
-                printf(")\n");
-            }
-            rc = SMT_EXIT_SAT;
-        } else {
-            printf("unknown\n");
-            rc = SMT_EXIT_UNKNOWN;
-        }
-    }
-    if (decided_by) fprintf(stderr, "tur smt: decided by %s\n", decided_by);
+    /* SX8b: the script runs as a session, so `(push)`/`(pop)` scope the
+     * assertions and each `(check-sat)` is answered where it appears.  A script
+     * that never asks is still decided once at the end, which is SX8a's
+     * contract and what every corpus benchmark relies on. */
+    SmtlibSession *s = refine_smtlib_session_new(&arena);
+    refine_smtlib_session_feed(s, text, got);
+    bool answered = false;
+    RefineModel *last_model = NULL;
+    int rc = smt_drive(s, &arena, &answered, /*flush=*/false, &last_model, NULL);
+    if (rc != SMT_EXIT_ERROR && !answered)
+        rc = smt_answer(refine_smtlib_session_vc(s), &arena, NULL);
 
     /* What the script CLAIMED, when it claimed anything.  Reported, never
      * enforced: this command answers queries, it does not grade them, and a
      * disagreement here is for the caller to interpret. */
-    if (q.status == SMT_STATUS_SAT || q.status == SMT_STATUS_UNSAT)
+    SmtlibStatus status = refine_smtlib_session_status(s);
+    if (status == SMT_STATUS_SAT || status == SMT_STATUS_UNSAT)
         fprintf(stderr, "tur smt: script claims :status %s\n",
-                q.status == SMT_STATUS_SAT ? "sat" : "unsat");
+                status == SMT_STATUS_SAT ? "sat" : "unsat");
 
     arena_free(&arena);
     free(text);

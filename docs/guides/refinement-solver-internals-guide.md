@@ -593,6 +593,55 @@ parsing stdout. They are deliberately **not** the 0-is-success convention --
 | 2 | `unknown` -- no stage decided it |
 | 3 | error -- unreadable, or outside the accepted fragment |
 
+When a script asks more than once, the exit code is the **last** answer.
+
+#### The assertion stack -- `push` / `pop`, and `--interactive`
+
+A script runs as a **session**: `(push)` and `(pop)` scope the assertions, and
+each `(check-sat)` is answered where it appears, so one script can ask several
+questions.
+
+```sh
+$ cat scoped.smt2
+(set-logic QF_LIA)
+(declare-fun x () Int)
+(assert (> x 10))
+(check-sat)          ; sat
+(push 1)
+(assert (< x 5))
+(check-sat)          ; unsat -- contradicts x > 10
+(pop 1)
+(check-sat)          ; sat again; the contradiction was scoped
+
+$ tur smt --interactive     # the same commands, read from stdin
+```
+
+`(push n)` / `(pop n)` take an optional level count defaulting to 1, and an
+unmatched `pop` or a malformed level is a refusal (exit 3), never a guess.
+`(get-model)` reprints the witness from the last `sat`. `(exit)` ends the
+session.
+
+Two limits, both deliberate:
+
+- **Only hypotheses are scoped.** A `declare-fun` inside a scope survives the
+  `pop`. That is a divergence from SMT-LIB, and a sound one in this direction:
+  a declared symbol appearing in no assertion is an unconstrained variable, and
+  an unconstrained variable cannot make an assertion set *less* satisfiable, so
+  it can never turn a `sat` into an `unsat`. The reason not to scope them is
+  concrete: hypotheses are hash-consed terms holding variable *indices*, and
+  truncating `n_vars` would leave interned terms pointing at slots a later
+  declaration could reuse with a different sort.
+- **The assertion set is incremental; the solver state is not.** A `pop`
+  restores exactly the hypotheses in scope at the matching `push`, with nothing
+  re-read or re-translated. But each `check-sat` runs the chain from the current
+  assertion set, which rebuilds the DNF cubes -- adding one hypothesis changes
+  the cube set wholesale, so there is no solver-side mark to undo between two
+  checks. `euf_mark` / `euf_undo_to` bracket cubes *within* a single check
+  (see S1 above); they are not what `push` and `pop` map onto.
+
+A script that contains no `(check-sat)` at all is still decided once at the end,
+which is what the corpus benchmarks rely on.
+
 The JSON dump carries, per obligation: source location, the predicate as
 written, the verdict, which stage decided it, whether the RT7 memo answered it,
 the counterexample when there was one, which caps bit **for that obligation**,
