@@ -105,12 +105,14 @@ wasm assets are replayed from the Cache API instead of fetched.**
 
 ## Fix directions
 
-1. **Get the actual error first.** The CI logs carry no browser console. Add a
-   `page.on('console')` / `page.on('pageerror')` dump to the two failing tests,
-   or read `#console` (the page prints
-   `Error: Failed to load WASM module` there, and `main.js:1164` has already
-   `console.error`'d the real one). Everything below is guesswork until this
-   is done, and it is ten minutes of work.
+1. **Get the actual error first.** ~~The CI logs carry no browser console.~~
+   **Done 2026-09-02:** `mobile.split-and-pwa.spec.js` now collects
+   `page.on('console')` / `page.on('pageerror')` for every test and, on a
+   failure, attaches the dump plus the page's `#console` text to the
+   Playwright report (`browser-console` attachment) and echoes it into the
+   job log, so the next CI run names the `init-error` (`main.js:1164` has
+   already `console.error`'d the real one). Everything below is guesswork
+   until that run is read.
 2. **Confirm on real Safari.** Playwright's WebKit is not Safari -- it is
    WebKit built for Linux, and service-worker plus COEP behaviour is exactly
    the area where the two can differ. If real iOS Safari reproduces it, this
