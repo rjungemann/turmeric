@@ -36,15 +36,26 @@ function value rather than a plain closure, and matches neither arm.
 
 The receiver runs exactly once, at capture time, and is never marshalled, so
 nothing about the *continuation* requires it to be uncolored. The
-restriction is about how the emitter calls it: as a direct C function, with
-no continuation to thread into a `__cps` entry.
+restriction is about how the emitter calls it (`emit_cl_shift_bodyfn`,
+src/compiler/emit_cps_ir.c): the shift-body helper calls the receiver as a
+plain C function -- the named receiver through its fn pointer, a closure
+through its thunk. A colored function's plain entry is its **direct-entry
+wrapper**, which starts a fresh DK root; a `perform` inside it would then be
+handled under that fresh root, not by the handler enclosing the reset --
+the same escape the coloring pass guards against for address-taken
+effectful functions (`g_addr_taken`). So the refusal is a soundness rule
+today, not an oversight: admitting a colored receiver as-is would turn a
+compile-time `TUR-E0706` into a run-time escaped effect.
 
 ## Fix direction
 
-Call a colored receiver through its `__cps` entry with a fresh continuation
-at the reset site (the value it returns is the reset's result when it does
-not resume), or lift the colored receiver's body into a delegated
-(`CT_LETRAW`-style) region. Until then the guide says "the receiver, and
+Call a colored receiver through its `__cps` entry from the shift-body
+helper, threading the helper's own downstream chain (`subk`'s continuation)
+as the receiver's `DK *` so a `perform` inside it reaches the enclosing
+handler; the value it returns when it does not resume is the reset's result.
+The shape already exists for colored *callees* of colored functions
+(`CT_TAILCALL` with a `KK_VAR` continuation), so this is plumbing the
+receiver call through the same path rather than the direct entry. Until then the guide says "the receiver, and
 everything it calls, stays uncolored": in the guestbook that means the
 receivers call the templates and the store directly rather than through a
 `(fn [cstr] cstr)` parameter.
