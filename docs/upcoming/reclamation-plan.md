@@ -560,6 +560,25 @@ record is in the SR plan's SR4 section. The erased sweep moved with it,
 6856 -> 6091 B, all of it `re-string`'s payload boxes (1281 -> 516); the
 spine boxes are what remain there.
 
+**Addendum 2026-09-03 -- the re-measurement swept the wrong axis.** Both
+`logic.tur` rows are ONE chain length (n=8) over varying pass count, and the
+by-value / carrier ratio turns out not to be constant in n: parity at n=1,
+1.39x at n=8, 2.9x at n=64, and **6.8x at n=512**, still climbing at the top of
+the sweep
+([benchmarks/logic-subst-results.md](../../benchmarks/logic-subst-results.md)).
+The cost is per-link copying in the emitted walk -- 120 bytes per `SBind` link
+against the carrier's one word, two thirds of it redundant. Filed as
+[../reported/sr4-byvalue-recursive-sum-walk-copies-per-link.md](../reported/sr4-byvalue-recursive-sum-walk-copies-per-link.md).
+
+RM4's construction and memory findings stand and **the flip is not reopened** --
+the two redundant copies are removable with no default change. But the next
+person to price this should sweep chain length rather than pass count;
+`benchmarks/bench-logic-subst.tur` reports that A/B directly. Recorded here as
+well as in the SR plan because RM4 is the phase that owns the decision, and
+because the plan's own risk list ("do not price RM on `logic.tur` alone") was
+aimed at the choice of workload when the trap this time was the choice of axis
+within it.
+
 ## 4. What this plan does not do
 
 - **Region inference.** Named as the hard part by the benchmark's own caveat.

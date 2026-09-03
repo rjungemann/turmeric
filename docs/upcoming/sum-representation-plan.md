@@ -583,6 +583,24 @@ THAT path green with the inverted canary. Full suite 2749/0 under the flip
 with no snapshot drift; leak-check 70/0/0; both seams green. The section
 below is the pre-flip record.
 
+**One term the table above does not price, found 2026-09-03.** Both `logic.tur`
+rows are a single chain length (n=8) swept over pass count. The by-value /
+carrier ratio is not a constant in n: re-running
+`benchmarks/bench-logic-subst.tur` across n=1..512 on one box with one binary
+per arm gives parity at n=1, 1.39x at n=8, 2.9x at n=64 and **6.8x at n=512**,
+still climbing. The cause is per-link copying in the emitted walk -- 120 bytes
+per `SBind` link against the carrier's one word, two thirds of it redundant
+(a dead field binder, and a node copied out of its box and then copied again
+to take its address). Filed as
+[../reported/sr4-byvalue-recursive-sum-walk-copies-per-link.md](../reported/sr4-byvalue-recursive-sum-walk-copies-per-link.md),
+with the A/B in
+[benchmarks/logic-subst-results.md](../../benchmarks/logic-subst-results.md).
+
+**The decision is not reopened by this**, and the report says so: the two
+redundant copies are removable with no default change, and RM4's construction
+and memory findings are untouched. But a re-measurement should sweep chain
+length, not pass count, and `bench-logic-subst.tur` reports that A/B directly.
+
 ### SR4 (pre-flip record) -- UNBLOCKED AND MEASURED 2026-08-27; default stayed carrier
 
 **The blocker is fixed.** The fat-dispatch ABI disagreement is

@@ -993,6 +993,35 @@ only once its O(n) lookup dominated. It never wins. So the conditional in "why
 it is in this plan at all" resolves the other way: SX3/SX4 **should** build on
 the shared trail rather than proceeding as plain C.
 
+**Re-measured 2026-09-03 at v0.43.0, after the whole SR programme landed.** The
+table above predates SR1, SR2a/b, SR3 and the SR4 default flip -- every
+representation change that touches `logic.tur`'s `Term`/`Subst`/`Stream` -- and
+the benchmark had bit-rotted into a build error in the meantime (the trail
+natives are compiler-predeclared now, so its own `extern-c` rows collided).
+Fixed and re-run; full table in
+[benchmarks/logic-subst-results.md](../../benchmarks/logic-subst-results.md).
+
+**The gate verdict is unchanged and the margin widened by an order of
+magnitude: 11x at n=1 to 215x at n=512.** Nothing here reopens SX2.
+
+The second finding above -- "a large per-operation CONSTANT, not the linear
+scan, is what dominates" -- **no longer holds on the default.** The persistent
+curve is flat only to n=4 and cleanly linear from n=8 (2.0x per doubling from
+n=64). The constant was the allocator and the SR programme took most of it
+away. But the new slope is mostly not asymptotics either: an A/B against
+`TUR_SR4_RECURSIVE_CARRIER=1` on one box puts **6.8x of the n=512 cost on the
+by-value recursive-sum lowering**, which copies 120 bytes per chain link where
+the carrier moved one word, two thirds of it redundantly. Filed as
+[../reported/sr4-byvalue-recursive-sum-walk-copies-per-link.md](../reported/sr4-byvalue-recursive-sum-walk-copies-per-link.md).
+`TUR_SR1_SUM_BYVALUE=0` on top moves nothing, which is the control: these types
+are all self-recursive, so SR4 is the entire effect.
+
+**Nothing on the compiler side of this plan is affected.** SX3's EUF, SX4's
+simplex and SX0(b)'s cap sweep live in `src/compiler/refine_solver_*.c` -- C
+compiled by CMake, not Turmeric lowered by `tur` -- so no representation change
+reaches them, and their gates stand exactly as recorded. The SR programme moves
+the SX2/stdlib half of this plan only.
+
 The shape carries a second finding. The persistent path's cost is roughly FLAT
 at ~190-230 ns/op from n=1 to n=16 and only climbs past n=128, so what dominates
 at every size a real query reaches is a large per-operation CONSTANT, not the
