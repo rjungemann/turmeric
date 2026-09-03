@@ -60,7 +60,7 @@ All notable changes to Turmeric are documented here.
   that a `vec-eq?` comparator ascribes back to `(Option String)` reads the
   slot word as a carrier box -- write the element type on the parameter
   (`docs/reported/erased-closure-param-over-niche-vec-slot-reads-box.md`).
-  Plan: `docs/upcoming/sr3-option-niche-plan.md`.
+  Plan: `docs/archive/sr3-option-niche-plan.md`.
 
 - **Recursive sum types now default to by-value representation (RM4/SR4
   flip)**, matching the non-recursive default and avoiding the carrier
@@ -473,7 +473,7 @@ All notable changes to Turmeric are documented here.
   because "this payload's valid values exclude 0" is a hand-maintained
   allowlist rather than something the type system records; graduating it means
   making non-nullness declarable. `Cons` remains ineligible for the reason the
-  0.40.0 entry gives. Plan: `docs/upcoming/sr3-option-niche-plan.md`.
+  0.40.0 entry gives. Plan: `docs/archive/sr3-option-niche-plan.md`.
 
 ### Fixed
 

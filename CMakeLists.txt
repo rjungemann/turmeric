@@ -239,7 +239,7 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # option-niche seam-rot gate, the same argument as tur_sr4_seam above.
-# The niche graduated 2026-09-03 (docs/upcoming/sr3-option-niche-plan.md);
+# The niche graduated 2026-09-03 (docs/archive/sr3-option-niche-plan.md);
 # TUR_OPTION_NICHE=0 restores the tagged monomorph and this harness keeps THAT
 # path green with an inverted canary, exactly as tur_sr4_seam does.
 add_test(

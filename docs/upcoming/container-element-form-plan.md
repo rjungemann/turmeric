@@ -10,7 +10,7 @@ description: Extend per-monomorph specialization from container RECEIVERS (done,
 niche graduated the same day; CE3 mostly moot, CE4 deferred, CE5 done for
 the container row.** The word convention, the TUR-E0714 backstop and the
 erased-closure residue below are default-path facts now. The refinement of the "monomorphization
-dependency" the [option-niche graduation hold](sr3-option-niche-plan.md)
+dependency" the [option-niche graduation hold](../archive/sr3-option-niche-plan.md)
 points at, sketched 2026-08-28 in that plan's container-boxing section.
 
 **The exit gate is met.** The container row that read parity before CE2
@@ -48,7 +48,7 @@ because their carrier form IS their natural word, but a niche `(Option P)` is
 the first eligible element type whose carrier form (a heap-allocated tagged
 box) differs from its natural word (the payload pointer) -- so it pays a
 malloc per element that its whole representation exists to remove, and the
-[graduation measurement](sr3-option-niche-plan.md) shows exact container
+[graduation measurement](../archive/sr3-option-niche-plan.md) shows exact container
 parity with the by-value default.
 
 ## Why the box is where it is
@@ -256,10 +256,10 @@ says whether any real code puts niche options in maps. Default disposition:
 defer -- Vec was 100% of the measured parity cost.
 
 **CE5 -- fold the result into the graduation calculus.** Re-run the
-[measurement](sr3-option-niche-plan.md) container row; update the graduation
+[measurement](../archive/sr3-option-niche-plan.md) container row; update the graduation
 section. This plan does not itself argue for the flip.
 **Container row re-measured 2026-09-03** (table at the top); the
-graduation section in sr3-option-niche-plan.md records it. The flip is
+graduation section in docs/archive/sr3-option-niche-plan.md records it. The flip is
 still not argued here.
 
 ## Non-goals
@@ -270,8 +270,8 @@ still not argued here.
   form the niche stores.
 - **A per-vec runtime form flag** -- priced and declined in the
   container-boxing sketch.
-- **Changing anything with the experiment off.** Every phase is inert
-  without `--enable=option-niche`; the default path's element convention is
+- **Changing anything under `TUR_OPTION_NICHE=0`.** Every phase is inert
+  when the niche is off; the tagged-form path's element convention is
   untouched.
 
 ## Risks, named
@@ -279,7 +279,7 @@ still not argued here.
 - **The recorded-spelling keys.** The option-niche crossings key on the
   localvar side table; CE2's "skip the box" must use the same keys or the
   double-bridge class returns. Every CE2 site cites the crossing table in
-  sr3-option-niche-plan.md.
+  docs/archive/sr3-option-niche-plan.md.
 - **`vec-pop!` ownership transfer.** Its box-ownership contract (docstring)
   becomes form-dependent; CE3 owns updating both the glue and the docstring
   in the same commit.

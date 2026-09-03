@@ -81,7 +81,7 @@ initializing a by-value monomorph slot, because the store keys on the type and
 not on the value's recorded emitted spelling), at a site the original filing
 did not name. So the fix direction above should be read as a **family** of
 store sites rather than the one `vec-of` row: the crossing table in
-`docs/upcoming/sr3-option-niche-plan.md` lists five positions the niche path
+`docs/archive/sr3-option-niche-plan.md` lists five positions the niche path
 bridges, and the default path needs the same treatment at each.
 
 **It is invisible to CI, and structurally so.** The fixture carries

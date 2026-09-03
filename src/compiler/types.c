@@ -1426,7 +1426,7 @@ bool adt_ctor_is_null_none(const AdtDef *def, const CtorDef *ctor) {
 }
 
 /* SR3 slice B (the Option niche -- default since 2026-09-03, TUR_OPTION_NICHE=0
- * restores the tagged form; docs/upcoming/sr3-option-niche-plan.md):
+ * restores the tagged form; docs/archive/sr3-option-niche-plan.md):
  * represents an `(Option P)` monomorph whose payload is a NON-NULLABLE pointer
  * as the bare payload pointer -- 16 bytes down to 8, with `(none)` as the null
  * pointer.  Slice A already made the CARRIER None the null pointer, so the two

@@ -29,7 +29,7 @@ description: What happened when `(defopaque T :ptr<void>)` c-named as `void *` i
 > Step (3) -- re-run the SR3 slice B gate -- was also done, and the
 > inline-C carrier-builder hole this document predicted is exactly what it
 > found. Slice B is unshelved as `--enable=option-niche`; see
-> [sr3-option-niche-plan.md](../upcoming/sr3-option-niche-plan.md).
+> [sr3-option-niche-plan.md](sr3-option-niche-plan.md).
 
 Follow-up (1) from
 [sr3-slice-b-gate-results.md](sr3-slice-b-gate-results.md), which shelved SR3

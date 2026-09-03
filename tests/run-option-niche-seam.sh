@@ -4,7 +4,7 @@
 #
 # An eligible `(Option P)` is carried as its payload pointer by default since
 # the experiment graduated out of --enable=option-niche on 2026-09-03
-# (docs/upcoming/sr3-option-niche-plan.md), and a Vec stores such an element
+# (docs/archive/sr3-option-niche-plan.md), and a Vec stores such an element
 # as that word (container-element-form-plan, CE2).  TUR_OPTION_NICHE=0 restores
 # the tagged 16-byte monomorph and the boxed slot for bisection -- which means
 # nothing in the ordinary suite compiles the eligible population through the

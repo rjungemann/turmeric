@@ -12,7 +12,7 @@ description: SR3 item 4. The per-value claim is exact and confirmed (16 -> 8, ha
 > niche side on the default, and "default" in the tables below means the
 > tagged form.
 
-Item 4 of [sr3-option-niche-plan.md](../../docs/upcoming/sr3-option-niche-plan.md):
+Item 4 of [sr3-option-niche-plan.md](../../docs/archive/sr3-option-niche-plan.md):
 *"A size measurement worth the name. The gate measured correctness, not bytes.
 The claim is 16 -> 8 per value on the eligible population; nobody has run
 SR0(a)'s instrument over it since the population changed."*
