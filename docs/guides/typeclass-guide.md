@@ -188,6 +188,9 @@ variable it constrains, and the parameters that follow use that variable.
 ```sweet-exp
 defn display [^Show a x : a] : void
   println(show(x))
+
+defn same? [^Eq a x : a y : a] : bool
+  eq?(x y)
 ```
 
 Bare parameters that directly follow the binder take its type, so the
