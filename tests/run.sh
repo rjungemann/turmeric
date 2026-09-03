@@ -165,8 +165,13 @@ fi
 # hardcoded to build/src -- otherwise a non-default build tree (Windows uses
 # build-win/) can't resolve the `-lturi` autolink that reactor/async fixtures
 # emit, and every one of them fails to link.
+# `-Werror=implicit-function-declaration`: an undeclared call in emitted C is
+# always a codegen bug (a runtime prelude the program-scan gate did not emit).
+# Apple clang rejects it outright, so the macOS leg went red on six fixtures
+# that loaded stdlib/serial.tur while gcc 13 on the Linux leg only warned and
+# linked; promoting it to an error here makes both legs see the same thing.
 _tur_build_dir=$(dirname "$TUR")
-export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -fno-strict-aliasing -L${_tur_build_dir}/src}"
+export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -Werror=implicit-function-declaration -fno-strict-aliasing -L${_tur_build_dir}/src}"
 
 # T19: ThreadSanitizer (TSan) support.
 # Set TUR_TSAN=1 to compile and run all fixtures with -fsanitize=thread.

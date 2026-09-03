@@ -8472,6 +8472,17 @@ static bool preamble_uses_serial(const Expr *e) {
         case EX_RETURN: return e->as.return_.value && preamble_uses_serial(e->as.return_.value);
         case EX_DEFER:  return preamble_uses_serial(e->as.defer_.body);
         case EX_BUILTIN:
+            /* A resume/serialize/deserialize on a serial-cont value is also a
+             * reference to the serial runtime: stdlib serial-resume is `(k v)`
+             * on a `k : serial-cont`, which elab_call lowers straight onto
+             * tur_serial_cont_resume.  A program that loads stdlib/serial.tur
+             * for its Serializable instances (no serial-shift of its own)
+             * still emits that defn, and without this case the call is
+             * undeclared -- a warning under gcc, a hard error under Apple
+             * clang (the macOS CI leg failed exactly there). */
+            if (e->as.builtin.spec && e->as.builtin.spec->c_op &&
+                strncmp(e->as.builtin.spec->c_op, "tur_serial_cont_", 16) == 0)
+                return true;
             for (uint32_t i = 0; i < e->as.builtin.n; i++)
                 if (preamble_uses_serial(e->as.builtin.args[i])) return true;
             return false;

@@ -374,7 +374,9 @@ the SemVer contract:
 carried as `ptr<void>`; `serial-cont` is the same handle with its own name).
 These are thin shims over the
 `tur_serial_cont_serialize`/`_deserialize`/`_resume` runtime, which is emitted
-whenever a program contains serial syntax.
+whenever a program contains serial syntax or calls one of those three on a
+`serial-cont` (so loading `stdlib/serial.tur` for `serial-resume` alone is
+enough; the emitted C never references the runtime undeclared).
 
 A workflow step that waits for an outside decision is the handler-that-does-
 not-resume shape:
