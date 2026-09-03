@@ -5171,6 +5171,55 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
          * through.  Same key as every other inline-C-producer bridge (the
          * localvar side table), so a genuine niche value -- whose recorded
          * spelling is the payload's pointer type -- still materializes. */
+        /* container-element-form-plan CE2: a Vec slot holds a niche element
+         * as its payload WORD (container_elem_form == CE_WORD), not as a
+         * carrier box.  The store half: the argument loop flags a Vec element
+         * store sink (ctx->ce_word_store_sink) and the value goes into the
+         * slot as the pointer it already is.  An inline-C producer's box
+         * (recorded int64 spelling -- `(vec-push! v (mk-c 1))`) is unboxed to
+         * its payload first and released: the box was the caller's by the
+         * inline-C contract, and nothing else ever holds it.  The read half:
+         * a temp the hoist marked as a raw slot word (vec-get / vec-pop! /
+         * vec-data-get-checked__) IS the niche form and is cast, never
+         * unwrapped.  Both halves are one convention; every other position
+         * keeps the boxing crossing below, so a niche value handed to an
+         * erased READER still meets the tagged layout that reader expects. */
+        if (src_ck == CK_CONCRETE && sink_ck == CK_CARRIER &&
+            ctx->ce_word_store_sink &&
+            container_elem_form(concrete_ty) == CE_WORD) {
+            const char *rec = emit_str_is_bare_ident(src_str)
+                ? emit_localvar_lookup_ctype(src_str) : NULL;
+            char *wtmp = fresh_tmp(ctx);
+            if (rec && strcmp(rec, "int64_t") == 0) {
+                char *btmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
+                           btmp, src_str);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "int64_t %s = (%s ? tur_opt_value_checked(%s) : (int64_t)0);\n",
+                           wtmp, btmp, btmp);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "if (%s) free((void *)(intptr_t)(%s));\n", btmp, btmp);
+                emit_owned_carrier_clear(src_str);
+                free(btmp);
+            } else {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
+                           wtmp, src_str);
+            }
+            free(src_str);
+            buf_free(&out);
+            return wtmp;
+        }
+        if (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE &&
+            emit_str_is_bare_ident(src_str) && emit_slot_word_is(src_str) &&
+            container_elem_form(concrete_ty) == CE_WORD) {
+            buf_printf(&out, "((%s)(intptr_t)(%s))", cname, src_str);
+            free(src_str);
+            char *wres = strdup(out.data);
+            buf_free(&out);
+            return wres;
+        }
         if (src_ck == CK_CONCRETE && sink_ck == CK_CARRIER &&
             emit_str_is_bare_ident(src_str)) {
             const char *rec = emit_localvar_lookup_ctype(src_str);

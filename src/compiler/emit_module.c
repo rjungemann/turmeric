@@ -6775,6 +6775,39 @@ void emit_owned_carrier_clear(const char *cname) {
         }
 }
 
+/* container-element-form-plan CE2 (read half): C temp names that hold a RAW
+ * Vec slot word -- the hoist temp of `vec-get` / `vec-pop!` / the
+ * `vec-data-get-checked__` core.  Under --enable=option-niche a niche
+ * `(Option P)` element is stored in its slot as the payload pointer itself
+ * (CE_WORD), so when such a temp is bridged carrier->niche the value is
+ * already the niche form and must NOT be unboxed.  Keyed on the recorded
+ * value, never on the type: the same discipline as the owned-carrier and
+ * localvar tables above, and the reason a temp cannot be double-bridged. */
+static char   **g_slot_tab;
+static uint32_t g_slot_tab_n;
+static uint32_t g_slot_tab_cap;
+
+void emit_slot_word_mark(const char *cname) {
+    if (!cname) return;
+    for (uint32_t i = 0; i < g_slot_tab_n; i++)
+        if (strcmp(g_slot_tab[i], cname) == 0) return;
+    if (g_slot_tab_n == g_slot_tab_cap) {
+        uint32_t nc = g_slot_tab_cap ? g_slot_tab_cap * 2 : 64;
+        char **nt = (char **)realloc(g_slot_tab, nc * sizeof(char *));
+        if (!nt) return;
+        g_slot_tab = nt;
+        g_slot_tab_cap = nc;
+    }
+    g_slot_tab[g_slot_tab_n++] = strdup(cname);
+}
+
+bool emit_slot_word_is(const char *cname) {
+    if (!cname) return false;
+    for (uint32_t i = 0; i < g_slot_tab_n; i++)
+        if (strcmp(g_slot_tab[i], cname) == 0) return true;
+    return false;
+}
+
 void emit_localvar_reset(void) {
     for (uint32_t i = 0; i < g_lv_tab_n; i++) {
         free(g_lv_tab[i].cname);
@@ -6789,6 +6822,11 @@ void emit_localvar_reset(void) {
     g_own_tab = NULL;
     g_own_tab_n = 0;
     g_own_tab_cap = 0;
+    for (uint32_t i = 0; i < g_slot_tab_n; i++) free(g_slot_tab[i]);
+    free(g_slot_tab);
+    g_slot_tab = NULL;
+    g_slot_tab_n = 0;
+    g_slot_tab_cap = 0;
 }
 
 void emit_localvar_record_ctype(const char *cname, const char *ctype) {

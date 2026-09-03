@@ -3657,6 +3657,15 @@ bool type_is_b4box_closure_slot(Type t) {
     return false;
 }
 
+ContainerElemForm container_elem_form(Type elem) {
+    /* CE1: one chokepoint, defined AS repr_of's container answer so the two
+     * cannot drift (the retired-shadow argument below applies here too).  A
+     * niche option resolves to REPR_HEAP_PTR in repr_of's SR3 arm, which is
+     * what makes it CE_WORD; a by-value aggregate is REPR_BOXED_AGG. */
+    return repr_of(&elem, REPR_POS_CONTAINER_ELEM) == REPR_BOXED_AGG ? CE_BOX
+                                                                     : CE_WORD;
+}
+
 /* Increment 3 (representation-consolidation meta-plan): the CONTAINER-ELEMENT
  * boxing predicate.  True when `t` is a non-heap by-value ADT product of ANY
  * width -- the class of element that must be heap-boxed when stored into a

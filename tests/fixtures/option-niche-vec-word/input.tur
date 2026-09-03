@@ -1,0 +1,74 @@
+;; option-niche-vec-word -- container-element-form-plan CE2: under
+;; --enable=option-niche a niche `(Option String)` element lands in its Vec
+;; slot as its payload WORD (the String pointer; None is 0), not as a heap
+;; carrier box, and every read hands the word back as the niche value.
+;;
+;; Four things asserted at the language level:
+;;   1. the slot holds the payload pointer itself (`raw-slot` reads the
+;;      int64 slot; it equals the unwrapped String's address);
+;;   2. a generic helper's spec (`push-it` / `get-it`, class-2 sites) uses the
+;;      same convention as a direct call (class 1) -- before CE2 the spec
+;;      store double-wrapped the element (a `void **` cell inside a
+;;      `tur_box_some` box) while its read did no unwrapping, so `get-it`
+;;      returned garbage;
+;;   3. an inline-C producer's carrier box (`mk-c`, tur_some_ptr) is unboxed
+;;      to the word on the way into the slot;
+;;   4. `vec-of`, `vec-pop!`, an unascribed read into a parameter, a match
+;;      scrutinee and a struct field all agree.
+(load "stdlib/string.tur")
+
+(defn raw-slot [v : int i : int] : int
+  ```c
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void *)(intptr_t)v;
+  return vec->data[i];
+  ```)
+
+(defn mk-c [n : int] : (Option String)
+  ```c
+  if (n == 0) return tur_none();
+  return tur_some_ptr(tur_string_from_bytes("ic", 2));
+  ```)
+
+(defn show-opt [o : (Option String)] : void
+  (if (some? o) (println (string/to-cstr (unwrap o))) (println "none")))
+
+(defn push-it [A] [v : (Vec A) x : A] : nil
+  (vec-push! v x))
+
+(defn get-it [A] [v : (Vec A) i : int] : A
+  (vec-get v i))
+
+(defstruct Holder [name : (Option String)])
+
+(defn main [] : int
+  (let [v (:: (vec-new) (Vec (Option String)))
+        s (string/from-cstr "aa")]
+    (push-it v (some s))
+    (vec-push! v (some (string/from-cstr "bb")))
+    (vec-push! v (mk-c 1))
+    (push-it v (:: (none) (Option String)))
+    ;; 1. word form: the slot IS the String pointer
+    (println (if (= (raw-slot (:: v :int) 0) (:: s :int)) "word" "box"))
+    (println (if (= (raw-slot (:: v :int) 3) 0) "none-is-0" "none-boxed"))
+    ;; 2. class-2 read agrees with class-1 store and vice versa
+    (show-opt (:: (get-it v 0) (Option String)))
+    (show-opt (:: (get-it v 1) (Option String)))
+    (show-opt (:: (vec-get v 0) (Option String)))
+    ;; 3. inline-C producer unboxed into the slot
+    (show-opt (:: (vec-get v 2) (Option String)))
+    (println (if (= (raw-slot (:: v :int) 2) (:: (unwrap (:: (vec-get v 2) (Option String))) :int)) "word" "box"))
+    ;; 4. the other read positions
+    (show-opt (vec-get v 1))
+    (match (vec-get v 2)
+      (Some t) (println (string/to-cstr t))
+      (None)   (println "none"))
+    (let [h (Holder (vec-get v 0))]
+      (show-opt (.name h)))
+    (show-opt (:: (vec-get v 3) (Option String)))
+    (show-opt (:: (vec-pop! v) (Option String)))
+    (let [w (vec-of (some (string/from-cstr "x1")) (mk-c 1) (:: (none) (Option String)))]
+      (show-opt (vec-get w 0))
+      (show-opt (vec-get w 1))
+      (show-opt (vec-get w 2))
+      (println (if (= (raw-slot (:: w :int) 0) (:: (unwrap (:: (vec-get w 0) (Option String))) :int)) "word" "box")))
+    0))

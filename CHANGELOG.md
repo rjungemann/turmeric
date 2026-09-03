@@ -72,6 +72,19 @@ All notable changes to Turmeric are documented here.
   instead of leaking; the guide states the contract (the payload must be a
   fresh allocation, like the box).
 
+- **`--enable=option-niche`: a niche `(Option P)` Vec element is stored as its
+  payload word (CE1/CE2 of the container-element-form plan).** A
+  `(Vec (Option String))` used to pay a heap carrier box per element under the
+  niche exactly as the by-value default does; the element now lands in its
+  slot as the String pointer (None is 0), and every read hands it back. 2e6
+  elements: 17.8 MB / 0.018 s against 79.7 MB / 0.08 s. `TUR-E0714` refuses a
+  niche element stored through a fully erased receiver, the one shape that
+  cannot decide the slot convention. Also fixed on the way: a generic
+  `(defn push-it [A] [v : (Vec A) x : A] (vec-push! v x))` specialized for an
+  Option element double-wrapped the value -- a silent blank read under the
+  niche and a `cc` error on the default path.
+  `docs/upcoming/container-element-form-plan.md`.
+
 ## [0.42.2] -- 2026-09-01
 
 ### Added

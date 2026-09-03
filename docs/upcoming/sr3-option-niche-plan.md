@@ -171,6 +171,7 @@ representation is in the loop):
 |---|---|---|---|
 | direct positions (construct + `some?` + branch) | 11-14 ms | 2-3 ms | **~5x faster** |
 | 2e6 `(Option String)` vec elements | 0.080 s / 79.8 MB | 0.071 s / 79.8 MB | **parity** |
+| ... the same row after CE2 (2026-09-03) | 0.081-0.096 s / 79.7 MB | 0.018-0.019 s / 17.8 MB | **4.4x less memory, ~4.5x faster** |
 
 The direct-position number carries a caveat -- at -O2 a one-word value inlines
 and registers where a 16-byte aggregate does not, so a synthetic loop
@@ -220,11 +221,14 @@ used to carry; closed, pinned by
    a release-notes entry and a deliberate decision, not a default flipped in
    passing.
 3. **The measurement removes the urgency.** Filed 2026-08-30 as
-   [option-niche-container-elements-box-at-parity](../reported/option-niche-container-elements-box-at-parity.md).
-   Parity at container elements and
-   a direct-position win that is real but synthetic-loop-amplified is not the
-   SR2a shape (3.6x + 71x RSS on real workloads); it is closer to the SR4
-   shape, which was measured and deliberately NOT defaulted.
+   [option-niche-container-elements-box-at-parity](../archive/option-niche-container-elements-box-at-parity.md)
+   and **resolved 2026-09-03 by CE1/CE2**
+   ([container-element-form-plan](container-element-form-plan.md)): a niche
+   element now lands in its Vec slot as the payload word, and the container
+   row reads 17.8 MB against 79.7 MB (table above). The direct-position win
+   was already real; the container win is now real too, and it is not
+   synthetic-loop-amplified -- it is one malloc per element that no longer
+   happens. This hold reason no longer holds.
 
 **The flip becomes right when:** the seam harness has run quiet across a
 release cycle (0.41), the `Some(NULL)` break has a release-notes entry (it
@@ -233,6 +237,15 @@ does, since 2026-09-02 -- `CHANGELOG.md` `[Unreleased]`), and
 container elements stop boxing under EITHER representation, at which point the
 niche's 8-byte word is what lands in the slot and the container row stops
 being parity.  `expires_at` 0.44.0 leaves room for exactly that sequence.
+
+**2026-09-03:** the third condition landed without waiting for end-to-end
+monomorphization -- CE2 puts the word in the slot at every decidable site
+and refuses (TUR-E0714) the one erased shape that cannot decide.  Two of
+the three conditions are now met; what is left is the soak (condition 1),
+and the CE2 commit is itself a data point for it: it found the class-2
+(spec) path had been storing a double-wrapped element and reading it back
+unwrapped -- a silent wrong answer that had been there since the unshelving,
+caught by a two-line generic helper no fixture had written.
 
 ## The container-boxing story -- sketched 2026-08-28
 
@@ -315,7 +328,7 @@ container parity row breaking.
    more (the `vec-of` first-element heap-promotion and the `vec-push!`
    double-box); captures clean, rest args unreachable. One ADJACENT finding
    stays open on the DEFAULT path --
-   [inline-c-carrier-producer-byval-container-element](../reported/inline-c-carrier-producer-byval-container-element.md)
+   [inline-c-carrier-producer-byval-container-element](../archive/inline-c-carrier-producer-byval-container-element.md)
    (a loud compile error, not a wrong answer; the niche path already handles
    the shape, which is the fix template).
 2. ~~Static enforcement of `:non-null`~~ -- **closed 2026-08-28.** A literal 0

@@ -247,6 +247,14 @@ typedef enum DiagCode {
      * the cause is always a missing close paren, which makes the following
      * definitions parse as nested ones. */
     TUR_E0713_DEFINITION_IN_TAIL_POSITION,
+    /* container-element-form-plan CE1: a niche-represented `(Option P)`
+     * element (--enable=option-niche) is stored into a Vec whose element
+     * type is still ERASED at this site (a raw-`:int` or unresolved
+     * receiver).  The slot convention is per element monomorph -- a word for
+     * a niche element, a box otherwise -- and an erased store cannot know
+     * which, so it would put a second convention into the same vec that a
+     * concrete reader cannot tell apart.  Refuses loudly instead of guessing. */
+    TUR_E0714_NICHE_ELEMENT_ERASED_STORE,
     /* Deprecation band (TUR-D####): syntax accepted for backward
      * compatibility but slated for removal.  Emitted as DIAG_WARNING;
      * promoted to DIAG_ERROR under --Werror=deprecated. */

@@ -84,6 +84,7 @@ fi
 FIXTURES="
 option-niche-string
 option-niche-crossings
+option-niche-vec-word
 httpd-req-string-opt
 bound-string
 inline-c-option-byval-param

@@ -4724,6 +4724,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         buf_printf(body, "%s %s = (%s);\n", ret_ct, tmp, v);
     else
         buf_printf(body, "__auto_type %s = (%s);\n", tmp, v);
+    /* container-element-form-plan CE2 (read half): the hoist temp of a RAW
+     * Vec slot read is the slot's word verbatim.  Mark it so the carrier->
+     * niche bridge hands it back as the niche pointer it already is instead
+     * of unwrapping a box that was never there (the store half puts the
+     * payload word in the slot).  Keyed on the value, like every other
+     * side-table fact; inert for a non-niche element, whose bridge rows never
+     * consult the mark. */
+    if (e->kind == EX_CALL && e->as.call_.fn_binding &&
+        e->as.call_.fn_binding->name && e->as.call_.fn_binding->name->name) {
+        const char *rn = e->as.call_.fn_binding->name->name;
+        if (strcmp(rn, "vec-get") == 0 || strcmp(rn, "vec-pop!") == 0 ||
+            strcmp(rn, "vec-data-get-checked__") == 0)
+            emit_slot_word_mark(tmp);
+    }
     /* inline-c-option-carrier-box-leaks: mark a call temp that holds a carrier
      * box an inline-C body malloc'd, so the carrier->concrete bridge can free
      * it after copying the contents out.
@@ -5051,6 +5065,56 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
  * sibling and is correctly NOT counted: it is not a `(Vec A)` and CE is
  * scoped to Vec.
  * ========================================================================*/
+/* container-element-form-plan CE1: is argument `i` of call `e` a Vec ELEMENT
+ * STORE?  The CE0 census discriminator, kept as a decision: the callee's
+ * DECLARED signature has a `(Vec A)` parameter and declares this slot as that
+ * same `A` (`vec-push! [A] [v : (Vec A) val : A]`, `vec-set!`, ...).  On a
+ * hit, *cls is the site class (1 concrete / 2 spec / 3 erased -- still a
+ * tyvar after resolution) and *elem the resolved element type (meaningless
+ * for class 3).  Vec-scoped: CE4 defers Map/Set. */
+static bool emit_call_vec_elem_store(EmitCtx *ctx, const Expr *e, uint32_t i,
+                                     const Binding *fn_binding, int *cls,
+                                     Type *elem) {
+    if (!e || e->kind != EX_CALL || i >= e->as.call_.n_args) return false;
+    if (!fn_binding || fn_binding->type.kind != TY_FN) return false;
+    Type **decl = fn_binding->type.as.fn.arg_full_types;
+    if (!decl) return false;
+    uint32_t arity = fn_binding->type.as.fn.arity;
+    if (i >= arity || !decl[i]) return false;
+    if (decl[i]->kind != TY_TYVAR || !decl[i]->as.tyvar_.name) return false;
+    uint32_t cont_param = UINT32_MAX;
+    for (uint32_t j = 0; j < arity; j++) {
+        if (j == i || !decl[j]) continue;
+        AdtDef *cdef = NULL;
+        Type cargs[16];
+        uint8_t cn = 0;
+        Type cj = *decl[j];
+        if (!type_extract_adt_app(&cj, &cdef, cargs, &cn) || !cdef || !cdef->name)
+            continue;
+        if (cn == 0 || strcmp(cdef->name, "Vec") != 0) continue;
+        Type ce = cargs[cn - 1];
+        if (ce.kind != TY_TYVAR || !ce.as.tyvar_.name) continue;
+        if (strcmp(ce.as.tyvar_.name, decl[i]->as.tyvar_.name) != 0) continue;
+        cont_param = j;
+        break;
+    }
+    if (cont_param == UINT32_MAX || !e->as.call_.args[cont_param]) return false;
+    Type cont = emit_resolve_type(ctx, e->as.call_.args[cont_param]->type);
+    Type el;
+    if (cont.kind == TY_APP && cont.as.app.arg)
+        el = emit_resolve_type(ctx, *cont.as.app.arg);
+    else if (e->as.call_.args[i])
+        el = emit_resolve_type(ctx, e->as.call_.args[i]->type);
+    else
+        return false;
+    if (el.kind == TY_TYVAR || el.kind == TY_UNKNOWN || el.kind == TY_EXISTS)
+        *cls = 3;
+    else
+        *cls = ctx->current_abi_specialization ? 2 : 1;
+    *elem = el;
+    return true;
+}
+
 static void ce0_trace_elem_store(EmitCtx *ctx, const Expr *e, uint32_t i,
                                  const Binding *fn_binding) {
     if (!g_emit_abi_trace || !e || e->kind != EX_CALL) return;
@@ -8310,6 +8374,35 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 char *raw = emit_value(ctx, body, emit_arg);
                 ctx->sum_drop_admit = admit_prev;
+                /* container-element-form-plan CE1/CE2 (store half): is this
+                 * argument a Vec ELEMENT STORE whose slot form is CE_WORD for
+                 * a niche element?  Then the bridges below hand the slot the
+                 * payload word (ctx->ce_word_store_sink, read by the niche row
+                 * of emit_carrier_bridge).  Set AFTER the argument's own
+                 * emission so nothing nested sees it, cleared before the next
+                 * argument.  A class-3 site -- the element type still erased
+                 * here while the stored value is a niche option -- is the one
+                 * shape that cannot decide the convention, and is refused
+                 * (TUR-E0714) rather than guessed. */
+                bool ce_sink_prev = ctx->ce_word_store_sink;
+                {
+                    int ce_cls = 0;
+                    Type ce_elem;
+                    if (emit_call_vec_elem_store(ctx, e, i, fn_binding, &ce_cls, &ce_elem)) {
+                        Type ce_val = emit_resolve_type(ctx, e->as.call_.args[i]->type);
+                        if (ce_cls == 3 && adt_app_is_niche_option(ce_val)) {
+                            diag_emit_with_code(DIAG_ERROR, e->as.call_.args[i]->span,
+                                TUR_E0714_NICHE_ELEMENT_ERASED_STORE,
+                                "cannot store a niche-represented element (%s) through a "
+                                "fully erased container access -- ascribe the receiver "
+                                "to its concrete element type",
+                                type_name(ce_val));
+                        } else if (ce_cls != 3 && adt_app_is_niche_option(ce_elem) &&
+                                   container_elem_form(ce_elem) == CE_WORD) {
+                            ctx->ce_word_store_sink = true;
+                        }
+                    }
+                }
                 ctx->poly_wrap_callee_carrier = saved_pwc;
                 /* SR2b: the C spelling this argument's emission actually
                  * produced (the panic-hoist temp's declared type), captured
@@ -8680,6 +8773,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         if (bridge_ty.kind == TY_UNKNOWN && spec_byval)
                             bridge_ty = spec_byval_ty;
                         if (bridge_ty.kind == TY_UNKNOWN) bridge_ty = emit_arg->type;
+                        /* CE2: inside a spec clone the argument's static type
+                         * is still the tyvar (`x : A`); bridging at the
+                         * UNRESOLVED type skipped the escaping bridge's niche /
+                         * heap delegation and heap-promoted a `void *` niche
+                         * pointer into a `void **` cell -- which the by-value-
+                         * spec-param arm below then boxed a second time, so a
+                         * generic `(vec-push! v x)` stored box(cell(x)) while
+                         * every reader expected the element.  Resolve first. */
+                        bridge_ty = emit_resolve_type(ctx, bridge_ty);
                         raw = emit_carrier_bridge_escaping(ctx, body, raw,
                                                            CK_CONCRETE, CK_CARRIER,
                                                            bridge_ty);
@@ -9670,7 +9772,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * expression's static type, and gated by the callee's slot
                  * actually being the int64 carrier -- so a monomorphic by-value
                  * sink is never spuriously spilled. */
-                else if (!needs_fn_cast && !matched_spec &&
+                else if (!needs_fn_cast && !matched_spec && !arg_carrier_boxed &&
                          !callee_param_is_typed_heap_ptr &&
                          emit_arg &&
                          arg_is_spec_byvalue_param(ctx, emit_arg) &&
@@ -10148,6 +10250,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                     buf_free(&_rb);
                 }
+                ctx->ce_word_store_sink = ce_sink_prev;
                 arg_strs[i] = raw;
             }
             Buf out; buf_init(&out);

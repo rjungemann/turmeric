@@ -1874,6 +1874,17 @@ typedef enum ReprForm {
 } ReprForm;
 
 ReprForm     repr_of(const Type *t, ReprPosition pos);
+/* container-element-form-plan CE1: the ONE answer every Vec element site
+ * consults.  CE_WORD: the value's one-word form is stored in the slot
+ * directly -- scalars, cstr, :heap pointers, pointer opaques, and (under
+ * --enable=option-niche) a niche `(Option P)`, whose word IS its payload
+ * pointer.  CE_BOX: the slot holds a heap box pointer -- by-value aggregates
+ * (16-byte Option monomorphs, wide products), exactly as today.  Everything
+ * but the niche row restates current behavior: with the experiment off
+ * adt_app_is_niche_option is false everywhere and this is repr_of's
+ * container answer verbatim, so the default path cannot move. */
+typedef enum { CE_WORD = 0, CE_BOX = 1 } ContainerElemForm;
+ContainerElemForm container_elem_form(Type elem);
 /* Increment 4 stage 3: the binding-context sibling the param-position
  * boundary note pre-registered.  A fn-typed value's representation is decided
  * by per-BINDING flags (`is_poly_fn`, `is_fat`) that elaboration sets and that
