@@ -804,6 +804,14 @@ Two instruments, no language or runtime change:
   2026-08-25**, so the table above is the pre-raise record; the current
   telemetry is whatever `benchmarks/run-cap-sweep.sh` last wrote.
 
+  **Re-run 2026-09-03 at v0.43.0** (the gate re-run SX4 and SX6 each ask for
+  before reconsidering): **byte-identical to the 2026-08-26 baseline** apart
+  from the generated-at header -- same 124 / 85 / 200 units, same peaks, the
+  same single capped unit (`qf_lra_deep_arith_chain_sat`, the 1000-deep
+  regression artifact). Both gates stay shut, now on current evidence rather
+  than on a nine-day-old file. Re-running it is cheap and is the right first
+  move any time this plan's right-hand side comes up again.
+
 **Size:** small. **Gate:** none (benchmarks and stats are not compiler
 features).
 
@@ -1533,9 +1541,24 @@ one dishonest failure mode a query surface can have.
   And prepending trail.tur to every compile moved **148 codegen snapshots**,
   regenerated in the same change per the fixture rule.
 
-  Still open in this phase: graduate `solver-lazy-smt` on the SX6a corpus
-  criterion. Move this plan to `docs/archive/` when the last phase lands, per
-  the archiving rule.
+  ~~Still open in this phase: graduate `solver-lazy-smt` on the SX6a corpus
+  criterion.~~ **Moot, corrected 2026-09-03:** there is no `solver-lazy-smt`
+  row to graduate. SX6a never started (its gate came back shut), so the row it
+  would have registered was never written -- `grep solver-lazy-smt src/` is
+  empty. This line becomes live again only if SX6a's gate reopens.
+
+  **Still open in this phase, and actually open:** the internals guide's
+  incrementality story was stale for a release cycle after SX3 landed -- the
+  S1 section still described the rebuild-per-cube state, `TUR_REFINE_EUF` was
+  documented nowhere but here, and the caps table still read `NO_MAX_SHARED`
+  8 against the source's 16. Fixed 2026-09-03. The `"schema": 0` -> `1` stamp
+  on the `--dump-refine=json` record is the remaining SX9 item; `tur smt` and
+  the JSON dump are documented in the internals guide rather than a separate
+  `solver-query-guide.md`, which is where they read better and is treated as
+  closing that deliverable.
+
+  Move this plan to `docs/archive/` when the last phase lands, per the
+  archiving rule.
 
 ### Recommended order
 

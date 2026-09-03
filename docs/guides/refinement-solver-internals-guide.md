@@ -310,6 +310,21 @@ Naive `O(n^2)` fixpoint; real obligations carry a handful of terms.
 `REFINE_MAX_EUF_TERMS` bounds the rest. Textbook treatment: Harrison; Bradley &
 Manna (see References).
 
+**The state is incremental across cubes.** S1 and S3 hold ONE `EufState` and
+bracket each cube with `euf_mark` / `euf_undo_to` rather than building a fresh
+one per cube out of the arena, which is what they did before 2026-08-26. Every
+`parent[]` write is trailed, path compression included, so the merge history a
+proof-producing congruence closure would need stays recoverable. Each cube still
+starts from the empty partition, so verdicts are identical to the rebuild path
+by construction -- the change deletes per-cube allocation churn, not answers.
+The trail is `src/compiler/trail_c.h`; `TUR_REFINE_EUF=rebuild` restores the old
+path for replay (see Debugging).
+
+Note the congruence *fixpoint* above is unaffected: it is still the naive
+all-pairs sweep, which is the algorithm rather than the state discipline.
+`LaState` is still rebuilt per cube -- making it incremental is the plan's SX4,
+which is parked on the cap evidence.
+
 ### S2 -- linear arithmetic (`refine_solver_arith.c`)
 
 **Fourier-Motzkin elimination over exact rationals** (`int64` num/den, every
@@ -337,7 +352,7 @@ decides conjunctions of linear constraints outright.
 Neither theory alone decides a mixed cube. S3 runs both S1 and S2 over the same
 cube and has them **exchange the equalities each entails over their shared
 terms** (the purified opaque terms, which EUF also holds as nodes), iterating to
-a fixpoint (`NO_MAX_ROUNDS = 4`, `NO_MAX_SHARED = 8`). EUF and LRA are both
+a fixpoint (`NO_MAX_ROUNDS = 4`, `NO_MAX_SHARED = 16`). EUF and LRA are both
 convex, so this deterministic exchange is complete for them. Integers are
 non-convex, which in general forces case-splitting on disjunctions of
 equalities; S3 does **not** do that -- it reaches a fixpoint and, if neither
@@ -474,7 +489,7 @@ Every cap, when hit, degrades to `RT_UNKNOWN` -> runtime check
 | `REFINE_MAX_LA_VARS` | 32 | linear-arithmetic variables |
 | `REFINE_MAX_LA_CONSTR` | 512 | linear-arithmetic constraints |
 | `REFINE_MAX_EUF_TERMS` | 512 | congruence-closure terms |
-| `NO_MAX_SHARED` | 8 | terms in the S3 equality exchange |
+| `NO_MAX_SHARED` | 16 | terms in the S3 equality exchange |
 | `NO_MAX_ROUNDS` | 4 | S3 exchange rounds before giving up |
 | `MODEL_MAX_VARS` | 3 | counterexample-search variables |
 | `MODEL_MAX_CANDS` | 16 | counterexample candidate values |
@@ -502,6 +517,12 @@ TUR_REFINE_DUMP=1 tur emit-c main.tur
 # Suppress static discharge entirely: every obligation declines, so nothing is
 # elided and every refinement keeps its runtime check.
 TUR_REFINE_NO_DISCHARGE=1 tur build main.tur
+
+# Replay S1/S3 against the pre-2026-08-26 rebuild-per-cube EUF state instead of
+# the incremental mark/undo default. Verdicts are identical by construction, so
+# any output difference between the two is a bug in the incremental path -- this
+# is the seam to bisect one with.
+TUR_REFINE_EUF=rebuild tur build main.tur
 ```
 
 ### Reading the cap lines
