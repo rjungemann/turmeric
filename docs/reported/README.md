@@ -1191,10 +1191,10 @@ Paper trail:
 `dash-main-entry-point-never-invoked` was resolved 2026-08-25 and moved to
 [docs/archive/](../archive/dash-main-entry-point-never-invoked.md): both
 examples' entries renamed `-main` -> `main` and the snake tutorial corrected, so
-the documented entry point is now the one the compiler calls. Its residue is
-open as [examples-have-no-suite-coverage](examples-have-no-suite-coverage.md) --
-nothing exercises `examples/` and nothing diagnoses a build with no entry point,
-which is why it survived as long as it did.
+the documented entry point is now the one the compiler calls. Its residue,
+`examples-have-no-suite-coverage` (nothing exercised `examples/` and nothing
+diagnosed a build with no entry point), was resolved 2026-09-02 and lives in
+[docs/archive/](../archive/examples-have-no-suite-coverage.md).
 
 `self-recursive-fn-returning-call-into-fat-sink` was resolved 2026-08-27 and
 moved to [docs/archive/](../archive/self-recursive-fn-returning-call-into-fat-sink.md):
