@@ -301,7 +301,7 @@ Both fix directions, plus the three test-side failures:
 5. **Failures 4 + 5** (mobile/WebKit "Failed to load WASM" after
    `page.reload()`) are **not** diagnosed here -- there is no WebKit in this
    environment. They have their own report,
-   `docs/reported/try-turmeric-mobile-reload-fails-wasm-init.md`, and the
+   `docs/reported/webkit-sw-controlled-reload-fails-wasm-init.md` (the existing report; the duplicate filed from this log was folded into it), and the
    always-uploaded report plus the `web_mobile` row are what make triaging
    it cheap.
 

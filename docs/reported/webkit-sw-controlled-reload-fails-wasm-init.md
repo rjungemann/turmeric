@@ -135,3 +135,17 @@ Nor is it a regression, as far as the history goes. `web/public/sw.js` and
 then until `9a6ee5c7`. So these two tests have never once executed, on any
 head, and there is no green run of them to bisect back to. Whatever this is,
 it has been true for the whole life of the service worker.
+
+## Seen again 2026-09-01 / triage is cheap now (2026-09-02)
+
+The same two failures were re-observed in the browser job on run
+33460242737 while resolving
+[try-turmeric-browser-suites-green-while-failing](../archive/try-turmeric-browser-suites-green-while-failing.md)
+(a duplicate report filed from that log was folded into this one). What
+changed on the CI side makes step 1 cheaper: the browser job now always
+uploads the `playwright-report` artifact (the `error-context.md` for each
+failure is in it), and the `web_mobile` row on `/ci` carries the failure
+count, so a regression or a fix shows as a trend rather than a log dig. The
+desktop `sw-dev` / `docs-offline` specs pass, so it is not a general
+service-worker fault; the mobile project may simply be the one place a
+controlled reload is exercised on WebKit.
