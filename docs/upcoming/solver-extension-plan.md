@@ -1323,10 +1323,33 @@ stepping stone may be where it permanently stops:
 
 **SX6a -- lazy cubes, then offline lazy SMT.**
 
-- Step zero, available today with no new machinery: *stream* cubes off an
+- ~~Step zero, available today with no new machinery: *stream* cubes off an
   explicit stack instead of materializing up to 64, so a time budget replaces
   the `overflow` flag. No semantic change; retires the cube-count cap as a
-  cliff.
+  cliff.~~ **RETIRED 2026-09-03 on measurement: there is nothing to stream.**
+  The premise is "materializing up to 64", and nothing in any measured
+  population comes near it. Counting cube-set width directly (a temporary
+  probe in `refine_cubes_build`, over `tur smt` on the corpus and `tur check`
+  in-tree), the widest SINGLE cube set anywhere is **16** -- on three corpus
+  benchmarks (`qf_lra_ite_int_numerals_{sat,unsat}`, `qf_lia_ite_nested_sat`)
+  -- and the heaviest in-tree refinement fixture
+  (`refine-crossing-path-conditions`) peaks at **4**, producing 71 cubes total
+  across 48 builds in 117 expand frames. An explicit stack would save neither
+  memory nor time over an array that never exceeds sixteen entries, and the
+  cap it would retire as a cliff is the one SX0(b) already found never fires.
+  This item is not deferred; it is answered.
+
+  **The same probe found the thing actually worth changing here, and it is not
+  a boolean-structure phase at all:** the chain expands the IDENTICAL DNF once
+  per stage, because S0/S1/S2/S3 each open with their own
+  `refine_cubes_build` on an unchanged VC. The first row above reads `builds=4
+  cubes=64 peak=16` -- one 16-cube DNF, expanded four times, three of them
+  discarded. Filed with a fix direction (build once in the chain driver and
+  pass it down; do NOT cache on the `RefineVC`, which SX8b's `pop` makes
+  unsound) as
+  [../reported/refine-chain-expands-the-same-dnf-four-times.md](../reported/refine-chain-expands-the-same-dnf-four-times.md).
+  It is a simplification rather than a speedup -- the solver is compile-time
+  noise either way -- so it waits for someone touching this code.
 - Then offline lazy SMT: Tseitin-encode the (already-NNF) refutation formula,
   run a plain CDCL SAT core as a **black box**, hand each full boolean model --
   which *is* a cube -- to the existing **non-incremental** S1-S3, and on
@@ -1343,9 +1366,13 @@ stepping stone may be where it permanently stops:
   cube caps biting on real obligations.
   **Measured: they do not.** Zero cube-cap hits across all three populations;
   in-tree refinement code peaks at 4 cubes of 64. SX6 is **parked**, and SX6b
-  is parked behind it. The step-zero item above (streaming cubes off an
+  is parked behind it. ~~The step-zero item above (streaming cubes off an
   explicit stack) is still a fine cleanup on its own merits, but it is now a
-  cleanup rather than a cap-driven necessity.
+  cleanup rather than a cap-driven necessity.~~ **And step zero is retired
+  too, 2026-09-03** -- see the item above: the widest cube set in any measured
+  population is 16, so there is no materialization to stream. With that gone,
+  nothing under SX6 is available to build; the whole phase waits on its gate
+  reopening.
 
 **SX6b -- CDCL(T) proper.** Only if SX6a's blocking-clause loop measurably
 thrashes (many iterations rediscovering the same theory conflict) on real
