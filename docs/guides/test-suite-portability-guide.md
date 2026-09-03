@@ -460,6 +460,52 @@ bug.
 
 ---
 
+## 7d. What `run-turi.sh` does not run -- and how it says so
+
+`tests/run-turi.sh` (ctest `turi_fixture_tests`) walks the same
+`tests/fixtures/` tree as `run.sh` but interprets instead of compiling, and it
+deliberately does not run about a quarter of what it discovers. Two kinds of
+skip, both counted:
+
+- **The inline-C carve-out.** A fixture whose program contains a user ` ```c `
+  block (in its own file or one `(load ...)` deep) cannot run under the
+  tree-walking interpreter (TI7). It is detected, printed as
+  `SKIP <name> (inline-c carve-out)`, and counted. The small allowlist
+  `TURI_INLINEC_RUN` names the inline-C fixtures that *do* interpret (native
+  overrides / the simple inline-C evaluator).
+- **Marker skips.** `requires.compiled`, `requires.tur-only`,
+  `requires.dedicated-runner`, `requires.spices` (when `../turmeric-spices` is
+  absent) and `requires.tsan` (when `TUR_TSAN` is not `1`) -- the same set
+  `run.sh` honours -- applied by one helper (`marker_skip`) to **both** the
+  positive pass and the `errors/` diag pass.
+
+The `errors/` pass asserts `expected.diag`, or `run.sh`'s other substring
+file `expected.stderr`; an `errors/` fixture with neither is a **FAIL**
+("asserts nothing"), the negative-pass equivalent of the loose-`.tur`-files
+rule in section 6.
+
+Every discovered fixture lands in exactly one bucket, and the summary says so:
+
+```
+turi fixture summary: 1898 passed, 0 failed, 843 skipped of 2741 discovered
+  (of which 743 inline-c carve-outs -- TI7, never run under turi)
+TUR_SKIP_PARTIAL: inline-c carve-out (743 fixtures)
+  (and 100 requires.* marker skips)
+```
+
+`passed + failed + skipped` must equal `discovered`, or the run fails with
+`FAIL run-turi accounting: ...` -- a fixture that printed a line and fell
+into no bucket is the failure mode this exists to catch (it happened to 99
+fixtures at once; see
+`docs/archive/turi-suite-accounting-and-reporting-gaps.md`). The
+`TUR_SKIP_PARTIAL:` line is what `tools/ci/collect-suite-timings.py` reads,
+and it now also parses the census counts into the suite's row
+(`passed` / `failed` / `skipped` / `discovered`), so a suite that silently
+starts skipping shows up as a trend. A `TURI_ERRORS_DENY` entry that names no
+fixture is a startup error, not a no-op. The seven `tests/turi/eval-async-*.sh`
+scripts are their own ctest targets and are no longer folded into this
+suite's counts.
+
 ## 8. Harness environment parity
 
 `tests/run.sh` exports `TUR_BIND_LOOPBACK=1`; `stdlib/httpd.tur` and

@@ -7,7 +7,7 @@ running things -- which is the same failure mode as
 (resolved 2026-08-05, on `run.sh`) and KB-001 (`docs/archive/history/known-bugs.md`,
 on this same harness), wearing a third face.
 
-**Status:** OPEN. Filed 2026-08-29 from a question about whether
+**Status:** RESOLVED 2026-09-02 (see the end). Filed 2026-08-29 from a question about whether
 `turi_fixture_tests` should be split into its own ctest target. It should not --
 **it already is one** (`CMakeLists.txt:833-841`, `RUN_SERIAL`, entirely separate
 from `tur_tests`). What prompted the question is the reporting, and the
@@ -181,3 +181,44 @@ pass at all.
   `requires.interp` carefully but says nothing about which markers
   `run-turi.sh` honours, which items 1 and 3 show is not the same set
   `run.sh` honours.
+
+## Resolution (2026-09-02)
+
+All six items, in `tests/run-turi.sh` unless noted:
+
+1. **Marker skips are counted.** One helper, `marker_skip`, prints the SKIP
+   line and writes a `SKIP_MARKER` result; the tally has a bucket for it and
+   the summary prints the count (`(and N requires.* marker skips)`).
+2. **The error pass records everything.** Marker skips and the denylist skip
+   write results; a fixture with no non-empty `expected.diag` now falls back
+   to `expected.stderr` (the seven `fh-*` / `borrow-immut-assign` fixtures
+   use only that file, and are real assertions under the interpreter now),
+   and one with neither is a loud `FAIL ... asserts nothing`.
+3. **One marker set for both passes** -- the same helper, so
+   `requires.dedicated-runner` / `requires.tsan` are honoured on the error
+   pass and `requires.spices` is conditional on the sibling checkout there
+   too.
+4. **The stale denylist entry.** `git log` shows
+   `errors/defdata-malformed-ctor-field-type` was deleted by the parser
+   combinator tutorial commit; restoring it from history shows why that was
+   fine -- `(defdata Acc (MkAcc int))` is legal now (a bare type name in a
+   defdata field), so the program is not an error on either path and there
+   is nothing to pin. The entry is gone, the divergence *shape* is recorded
+   in the comment above the (now empty) list, and an entry that names no
+   fixture is a startup error (`exit 2`).
+5. **The async scripts are not folded in.** The block is deleted; the seven
+   `tur_eval_async_*` ctest targets were already the only place they should
+   run.
+6. **The count reaches CI.** The summary is a census --
+   `P passed, F failed, S skipped of D discovered` -- and the run fails when
+   the buckets do not add up to the discovered total. The inline-C carve-out
+   prints `TUR_SKIP_PARTIAL: inline-c carve-out (N fixtures)`, which the
+   existing ingest already understood; and `tools/ci/collect-suite-timings.py`
+   now parses the census line of every fixture suite (`run.sh`'s
+   `summary: P passed, F failed` included) into `passed` / `failed` /
+   `skipped` / `discovered` row fields, additively, so the numbers become a
+   trend.
+
+Docs: `docs/guides/test-suite-portability-guide.md` section 7d states what
+the interpreter suite does not run and how it says so; `CLAUDE.md`'s
+`requires.*` table notes which markers `run-turi.sh` honours.

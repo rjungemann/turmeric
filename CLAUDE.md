@@ -634,6 +634,15 @@ PASS-skip it under certain conditions:
 | `requires.posix-apis` | the host is producing Windows binaries (`TUR_HOST_WINDOWS=1`) |
 | `requires.spices` | the sibling `../turmeric-spices/` checkout is absent |
 
+`tests/run-turi.sh` honours the same five markers (`requires.compiled`,
+`requires.tur-only`, `requires.dedicated-runner`, `requires.spices`,
+`requires.tsan`) on both its positive pass and its `errors/` pass, through one
+helper, and counts every skip: its summary reads `P passed, F failed, S
+skipped of D discovered` and the run fails if those do not add up. It also
+PASS-skips any fixture whose program (own file or one `load` deep) contains
+a user inline-C block -- see
+[docs/guides/test-suite-portability-guide.md](docs/guides/test-suite-portability-guide.md#7d-what-run-turish-does-not-run----and-how-it-says-so).
+
 Note `requires.interp` and `requires.interp-only` are near-homographs that do
 opposite things: the first keeps the fixture in `run.sh` (routing it through
 the compiling `tur run` path), the second removes it from `run.sh` entirely so

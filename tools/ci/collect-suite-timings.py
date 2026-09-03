@@ -33,6 +33,16 @@ import xml.etree.ElementTree as ET
 
 SKIP_RE = re.compile(r"^TUR_SKIP:[ \t]*(.*)$", re.MULTILINE)
 SKIP_PARTIAL_RE = re.compile(r"^TUR_SKIP_PARTIAL:[ \t]*(.*)$", re.MULTILINE)
+# The fixture-suite census line, e.g.
+#   summary: 2767 passed, 0 failed                          (tests/run.sh)
+#   turi fixture summary: 1898 passed, 0 failed, 743 skipped of 2741 discovered
+# Turning the counts into row fields is what lets a silent drop in what a
+# suite runs show up as a trend instead of a number nobody reads
+# (turi-suite-accounting-and-reporting-gaps, item 6).
+SUMMARY_RE = re.compile(
+    r"^(?:[\w -]*?)summary:[ \t]*(\d+) passed, (\d+) failed"
+    r"(?:, (\d+) skipped)?(?: of (\d+) discovered)?",
+    re.MULTILINE)
 
 
 def warn(msg):
@@ -118,8 +128,22 @@ def classify(testcase):
     return "pass"
 
 
+def parse_summary(sysout):
+    """The suite's own pass/fail/skip/discovered counts, or None."""
+    m = SUMMARY_RE.search(sysout or "")
+    if not m:
+        return None
+    passed, failed, skipped, discovered = m.groups()
+    return {
+        "passed": int(passed),
+        "failed": int(failed),
+        "skipped": int(skipped) if skipped is not None else None,
+        "discovered": int(discovered) if discovered is not None else None,
+    }
+
+
 def parse_junit(path):
-    """Yield (suite, status, duration_ms, skip_reason, partial_reason)."""
+    """Yield (suite, status, duration_ms, skip_reason, partial_reason, counts)."""
     try:
         tree = ET.parse(path)
     except (OSError, ET.ParseError) as e:
@@ -149,7 +173,7 @@ def parse_junit(path):
             if p:
                 partial_reason = p.group(1).strip() or None
 
-        yield name, status, duration_ms, skip_reason, partial_reason
+        yield name, status, duration_ms, skip_reason, partial_reason, parse_summary(sysout)
 
 
 def main():
@@ -178,7 +202,7 @@ def main():
     seen = {}
     order = []
     for path in args.xml:
-        for name, status, dur, reason, partial in parse_junit(path):
+        for name, status, dur, reason, partial, census in parse_junit(path):
             if name in seen:
                 # A -R/-E pattern drift could run one suite in both
                 # invocations.  Two rows for one suite in one run would
@@ -186,10 +210,10 @@ def main():
                 warn(f"duplicate suite {name!r} in {path}; keeping first occurrence")
                 continue
             seen[name] = True
-            order.append((name, status, dur, reason, partial))
+            order.append((name, status, dur, reason, partial, census))
 
     counts = {}
-    for name, status, dur, reason, partial in order:
+    for name, status, dur, reason, partial, census in order:
         counts[status] = counts.get(status, 0) + 1
         row = dict(row_base)
         row.update({
@@ -198,6 +222,10 @@ def main():
             "skip_reason": reason,
             "duration_ms": dur,
         })
+        if census:
+            # Additive: only the fixture suites print a census line; every
+            # other row simply lacks these keys.
+            row.update(census)
         if partial:
             row["partial_skip_reason"] = partial
         print(json.dumps(row, sort_keys=True))
