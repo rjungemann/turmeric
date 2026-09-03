@@ -1680,11 +1680,20 @@ bool ptr_param_is_nonretaining(const Expr *body, const Binding *p,
 
 /* value-struct-payload-sum-monomorph-box-has-no-owner: the same walk for a
  * stdlib Option/Result-typed parameter, with the sum accessor family admitted
- * and callees' sum masks consulted.  Same posture: only ever clears a bit. */
-bool sum_param_is_nonretaining(const Expr *body, const Binding *p) {
+ * and callees' sum masks consulted.  Same posture: only ever clears a bit.
+ *
+ * `result_cannot_carry` plays the role it plays for the pointer walk: the
+ * body's result position starts confined only when the function's result is
+ * a non-pointer scalar.  An aggregate result (`(Option S)` back out of an
+ * `(Option S)` parameter) walks unconfined instead, so a bare `v` in result
+ * position -- the identity pass-through, arm box included -- fails, while
+ * `result-map`, whose result is rebuilt from `ok-val` / `err-val` reads,
+ * still qualifies. */
+bool sum_param_is_nonretaining(const Expr *body, const Binding *p,
+                               bool result_cannot_carry) {
     if (!body || !p) return false;
     g_esc_allow_sum_accessors = true;
-    bool r = box_uses_confined(body, p, /*confined=*/true);
+    bool r = box_uses_confined(body, p, /*confined=*/result_cannot_carry);
     g_esc_allow_sum_accessors = false;
     return r;
 }

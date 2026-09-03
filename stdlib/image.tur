@@ -296,7 +296,11 @@
 ;;;       of globals restored.
 ;;; op 3: the registered count.
 
-(defn image/global-registry [op : int name : cstr ser : int deser : int bytes : ptr<void>] : int
+(defn image/global-registry [op : int
+                             name : cstr
+                             ser : int
+                             deser : int
+                             bytes : ptr<void>] : int
   ```c
   static char *names[64]; static int64_t sers[64]; static int64_t desers[64]; static int gn = 0;
   switch (op) {
@@ -394,7 +398,9 @@
 ;;;
 ;;; Since: Phase AI (AI3.2)
 
-(defn image/register-global! [name : cstr ^fat ser : (fn [] ptr<void>) ^fat deser : (fn [ptr<void>] int)] : int
+(defn image/register-global! [name : cstr
+                              ^fat ser : (fn [] ptr<void>)
+                              ^fat deser : (fn [ptr<void>] int)] : int
   (image/global-registry 0 name ser deser (image/null-bytes)))
 ;;; image/null-bytes -- the NULL bytes value (internal).
 
@@ -465,8 +471,10 @@
     `(do
        (def ^mut ~name ~ty ~init)
        (defn ~ser [] : ptr<void> (serialize ~name))
-       (defn ~deser [b : ptr<void>] : int (do (set! ~name (:: (deserialize b) ~ty)) 0))
-       (defn ~track [] : int (image/register-global! ~(symbol-name name) ~ser ~deser)))))
+       (defn ~deser [b : ptr<void>] : int
+         (do (set! ~name (:: (deserialize b) ~ty)) 0))
+       (defn ~track [] : int
+         (image/register-global! ~(symbol-name name) ~ser ~deser)))))
 ;;; image/track-globals! -- register the named image globals (call at the top of main).
 ;;;
 ;;; `(image/track-globals! a b c)` expands to the `a/image-track!` ... calls
@@ -505,7 +513,10 @@
 ;;;
 ;;; Since: Phase AI (AI3.3)
 
-(defn image/write-image-file! [path : cstr k : ptr<void> stamp : int globals : ptr<void>] : int
+(defn image/write-image-file! [path : cstr
+                               k : ptr<void>
+                               stamp : int
+                               globals : ptr<void>] : int
   ```c
   #include <stdint.h>
   #include <time.h>

@@ -101,21 +101,25 @@ else
     "tur_adt_Result__int__cstr" "tag" "Ok" "Err"
 
   # -- N2) pretty-printers render Turmeric shapes ----------------------------
-  # SR2b: Option/Result ride the int64 carrier on the default path, so `probe`
-  # keeps its plain symbol (no by-value ABI clone) and its params are carrier
-  # words.  The debugger inspection point is the DEREF'd tagged monomorph --
-  # `print *(tur_adt_Result__int__cstr *) r` -- which is also exactly how a
-  # user inspects a carrier value at a breakpoint.  The printers dispatch on
-  # the monomorph typedef name as before.
+  # RM4: Option/Result monomorphs are by value by default, so `probe` exists
+  # only as its by-value ABI clone (`probe__spec__<Option__int>_<Option__int>_
+  # <Result__int__cstr>`; the erased base is DCE'd) and its params are the
+  # tagged aggregates themselves -- which -Og scalarizes away, so a parameter
+  # is `<optimized out>` at the breakpoint.  The reliable inspection points are
+  # the two by-value RETURN VALUES: `finish` out of `parse` (the Result) and
+  # `finish` out of the probe clone (the Option), each rendered by the
+  # printers through the monomorph typedef name.  `rbreak ^probe` lands on
+  # whichever spelling of `probe` the build emits.
   pretty=$(gdb -batch -nx \
     -ex "source $PP" \
-    -ex "break probe" \
+    -ex "break parse" \
+    -ex "rbreak ^probe" \
     -ex run \
-    -ex "print *(tur_adt_Result__int__cstr *) r" \
     -ex "finish" \
-    -ex 'print *(tur_adt_Option__int *) $' "$BIN" 2>&1)
-  expect "gdb renders the deref'd Result carrier as (ok 14)"  "$pretty" "(ok 14)"
-  expect "gdb renders the deref'd returned Option as (some 42)" "$pretty" "(some 42)"
+    -ex "continue" \
+    -ex "finish" "$BIN" 2>&1)
+  expect "gdb renders the by-value Result returned from parse as (ok 14)" "$pretty" "(ok 14)"
+  expect "gdb renders the by-value Option returned from probe as (some 42)" "$pretty" "(some 42)"
 fi
 
 rm -f "$BIN"

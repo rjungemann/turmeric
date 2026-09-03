@@ -1,0 +1,40 @@
+;; value-struct-payload-sum-monomorph-box-has-no-owner, the pass-through hole:
+;; a callee whose result is the SAME Option/Result monomorph as its parameter
+;; can hand the argument back as-is (arm box included).  The caller must not
+;; free that arm after the call -- its own result still points at it.  The
+;; result-kind gate on the sum non-retention mask is a scalar allowlist for
+;; exactly this reason; the type fuzzer (seed 1, cases 12 and 17) caught the
+;; denylist version printing the freed box's stale word.
+(defstruct Pt [a : int])
+
+(defn mk [x : int] : (Option Pt) (some (Pt x)))
+
+(defn read [o : (Option Pt)] : int (.a (unwrap-or o (Pt -9999))))
+
+(defn read-match [o : (Option Pt)] : int (match o (Some s) (.a s) None -9999))
+
+;; identity pass-through: every value path returns the parameter itself
+(defn pass [n : int v : (Option Pt)] : (Option Pt)
+  (if (= n 0) v (pass (- n 1) v)))
+
+(defn mk-res [x : int] : (Result Pt int) (ok (Pt x)))
+
+(defn read-res [r : (Result Pt int)] : int
+  (if (ok? r) (.a (ok-val r)) -9999))
+
+(defn pass-res [n : int v : (Result Pt int)] : (Result Pt int)
+  (if (= n 0) v (pass-res (- n 1) v)))
+
+(defn via-fat [^fat f : (fn [] (Result Pt int))] : (Result Pt int) (f))
+
+;; a scalar-result consumer still qualifies for the drop (no leak regression)
+(defn describe [o : (Option Pt)] : cstr (if (some? o) "some" "none"))
+
+(defn main [] : int
+  (println (read (pass 0 (mk 3))))
+  (println (read (pass 3 (mk 4))))
+  (println (read-match (pass 2 (mk 5))))
+  (println (read-res (pass-res 3 (mk-res -13))))
+  (println (read-res (let [c (pass-res 1 (mk-res 7))] (via-fat (fn [] c)))))
+  (println (describe (mk 1)))
+  0)

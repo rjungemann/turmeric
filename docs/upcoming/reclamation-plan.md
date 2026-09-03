@@ -389,6 +389,21 @@ reinterpret as its operand, and the accessor / non-retaining-callee argument
 check peels it.  **7364 -> 7200 bytes**; `hkt-partial-app-wildcard-byvalue`
 left the leak list and carries `requires.leak-check`.
 
+Pass-through hole (2026-09-03): the user-callee half of the pending case
+(`nonretain_sum_param_mask`) admits a bare use of the parameter in the body's
+result position, on the argument that the callee's RESULT cannot carry the
+box out.  That gate was a denylist of result kinds and let `TY_APP` /
+`TY_ADT` through, so `(defn pass [n : int v : (Option S)] : (Option S) (if
+(= n 0) v (pass (- n 1) v)))` -- which returns `v` as-is, arm box included --
+was stamped non-retaining and the caller freed the arm its own result still
+pointed at (`tur_type_fuzz_src` seed 1, cases 12 and 17: a freed box's stale
+word printed where 3 and -13 were expected).  The gate is now a scalar
+allowlist (nil / bool / int family / float family / cstr / sym); an
+aggregate-result callee is never stamped, and the box it hands back is a
+status-quo leak rather than a use-after-free -- the same trade `alt-or`
+already makes on the producer side.  `sum-passthrough-param-not-dropped`
+pins the shape.
+
 Bind chains (2026-09-02, later): the largest remaining erased entries were
 `bind` / `fmap` chains over stdlib `Result` / `Option` -- `result-monad-*`,
 `hkt-stdlib-*`.  Each chained `bind` hands back a fresh box (the continuation's

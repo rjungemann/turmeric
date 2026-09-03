@@ -18,6 +18,17 @@
 ;; payload comes from `seed` (a volatile inline-C value) so the optimizer cannot
 ;; constant-fold the option away.  Driven by tests/run-phase5-gdb.sh.
 ;;
+;; RM4 (reclamation-plan): Option/Result monomorphs are by value by default, so
+;; `probe` is emitted only as its by-value ABI clone `probe__spec__...` (the
+;; erased base is unreferenced and DCE'd), and `o` / `r` are the aggregates
+;; themselves, not carrier words.  Under -Og gcc scalarizes the by-value `r`
+;; away (`<optimized out>` at the breakpoint, whether or not the body reads
+;; it), so the parameter is no longer an inspection point; the two RETURN
+;; VALUES are: `finish` out of `parse` renders `(ok 14)`, `finish` out of the
+;; probe clone renders `(some 42)`.  `parse`'s argument comes from `seed` so
+;; the call is not folded into `main` and `parse` keeps its symbol.  The
+;; driver breaks on `parse` by name and on the clone with `rbreak ^probe`.
+;;
 ;; The Result parameter is a CONCRETE instantiation `(Result int cstr)`, which
 ;; monomorphizes to the by-value carrier struct `tur_adt_Result__int__cstr`
 ;; (matching how `(Option A)` monomorphizes to `tur_adt_Option__int` at A=int).
@@ -44,5 +55,5 @@
   o)
 
 (defn main [] : int
-  (let [res (probe (some (seed)) (parse 7))]
+  (let [res (probe (some (seed)) (parse (- (seed) 35)))]
     (unwrap res)))

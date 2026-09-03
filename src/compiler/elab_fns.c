@@ -204,7 +204,8 @@ bool call_returns_fresh_sum_box(const Expr *call) {
 
 bool ptr_param_is_nonretaining(const Expr *body, const Binding *p,
                                bool result_cannot_carry);
-bool sum_param_is_nonretaining(const Expr *body, const Binding *p);
+bool sum_param_is_nonretaining(const Expr *body, const Binding *p,
+                               bool result_cannot_carry);
 
 /* closure-capture-escapes-linearity: one enclosing linear/unique binding's
  * substructural state, recorded before a lambda body is elaborated so the body's
@@ -5314,29 +5315,49 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
                 if (_is_sum) {
                     TypeKind _srk = (b->type.kind == TY_FN) ? b->type.as.fn.result_kind
                                                             : TY_UNKNOWN;
-                    /* Unlike the pointer-scalar mask (where the PARAM is the
-                     * pointer and can be returned as-is), a sum param can only
-                     * reach the result by COPYING a payload word or struct out
-                     * through a reader, and the drop frees the box (and, for a
-                     * boxed value-struct arm, the arm box) -- neither of which
-                     * a copied-out word or aggregate can point into, since the
-                     * only ways to take the box's address are inline C
-                     * (excluded above) and a borrow / raw pointer result,
-                     * which are the kinds refused here.  So `describe : cstr`
-                     * and `ne-unwrap : (NonEmpty A)` both qualify; a `&T`,
-                     * `ptr<void>`, `any` or fn result does not. */
-                    bool _sres_safe;
+                    /* Two result-kind facts feed the walk.  `_sres_refuse`:
+                     * a result that can carry a pointer the walk does not
+                     * model (borrow / raw pointer / any / fn / unknown) --
+                     * refused outright, as before.  `_sres_scalar`: a
+                     * non-pointer scalar result cannot carry the box or its
+                     * arm pointer at all (a payload word or cstr field copied
+                     * out does not point INTO the box's malloc), so the body's
+                     * result position starts CONFINED and a bare `p` there is
+                     * a read.  Everything else -- an aggregate such as the
+                     * parameter's own `(Option S)` -- walks with the result
+                     * position UNCONFINED: `(defn f [n : int v : (Option S)] :
+                     * (Option S) (if (= n 0) v (f (- n 1) v)))` returns `v`
+                     * as-is, arm box included, and the first version of this
+                     * gate (a denylist that started every non-refused kind
+                     * confined) stamped it non-retaining, so the caller freed
+                     * the arm its own result still pointed at -- the type
+                     * fuzzer printed the freed box's stale word.  `result-map`
+                     * keeps its bit: its result is rebuilt from `ok-val` /
+                     * `err-val` reads, which the walk admits unconfined. */
+                    bool _sres_refuse;
                     switch (_srk) {
                         case TY_UNKNOWN: case TY_PTR_VOID: case TY_FN:
                         case TY_REF: case TY_RC: case TY_WEAK:
                         case TY_REF_IMMUT: case TY_REF_MUT:
                         case TY_ANY: case TY_NEVER:
                         case TY_CONT: case TY_CLONEABLE_CONT: case TY_EXCEPTION:
-                            _sres_safe = false; break;
+                            _sres_refuse = true; break;
                         default:
-                            _sres_safe = true; break;
+                            _sres_refuse = false; break;
                     }
-                    if (_sres_safe && sum_param_is_nonretaining(body, _pb))
+                    bool _sres_scalar;
+                    switch (_srk) {
+                        case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT:
+                        case TY_CSTR: case TY_SYM:
+                        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+                        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                        case TY_FLOAT32: case TY_FLOAT64:
+                            _sres_scalar = true; break;
+                        default:
+                            _sres_scalar = false; break;
+                    }
+                    if (!_sres_refuse &&
+                        sum_param_is_nonretaining(body, _pb, _sres_scalar))
                         b->nonretain_sum_param_mask |= (1u << _pi);
                 }
             }

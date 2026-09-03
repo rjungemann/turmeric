@@ -597,7 +597,7 @@
 
 (defn bytes->serial-cont [b : ptr<void>] : (Result serial-cont cstr)
   ```c
-#ifndef SK_TAG_CALL
+  #ifndef SK_TAG_CALL
   /* No serial syntax in this program: nothing registered a frame, so no
    * buffer can name one (see serial-cont->bytes). */
   (void)b;
@@ -670,5 +670,4 @@
 ;;;
 ;;; Since: Phase 21 (typed surface 2026-09-02)
 
-(defn serial-resume [k : serial-cont v : int] : int
-  (k v))
+(defn serial-resume [k : serial-cont v : int] : int (k v))
