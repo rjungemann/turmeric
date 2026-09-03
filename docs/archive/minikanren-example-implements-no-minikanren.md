@@ -3,7 +3,7 @@
 **Severity:** low as a docs/accuracy issue, medium as a coverage gap -- it is
 why the workload behind the ADT-allocation report has nothing exercising it.
 
-**Status:** OPEN.
+**Status:** RESOLVED 2026-09-02 (see the end).
 
 Found while censusing construction sites for
 [SR0](../upcoming/sum-representation-plan.md).
@@ -76,3 +76,20 @@ is a large part of why SR0's census could not close its gate.
 Note the example does not currently run at all, for an unrelated reason --
 see [dash-main-entry-point-never-invoked](dash-main-entry-point-never-invoked.md).
 Fixing that first is what makes any of the above observable.
+
+## Resolution (2026-09-02)
+
+Fix direction 1. `examples/minikanren/src/main.tur` is now a miniKanren
+program over `stdlib/logic.tur`: `parento` is a disjunction of `lequal`
+facts queried in every direction (parents of, children of, every pair),
+`grandparento` is `fresh` + `conjoined` over it, and `appendo` -- `fresh`
+x3, `conjoined`, a `zzz`-delayed recursive branch -- runs forwards,
+backwards, and with both inputs unknown (every split of `(1 2 3)`). Answers
+are read off the lazy `run-logic` stream with `st-pull` / `logic-walk`, and
+list terms are rendered by walking `TPair` / `TNil`. The header comment says
+what the program is. The example needs nothing beyond `logic.tur` (two
+inline-C string helpers), builds and runs under `tests/check-examples.sh`,
+and is the tree's real workload over `Term` / `Subst` / `Stream` for the
+sum-representation numbers. The logic-programming guide's "Example: Logic
+Programming with miniKanren" section now shows this code instead of the
+pseudo-code it carried.
