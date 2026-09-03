@@ -12328,6 +12328,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 ? *sft->as.fn.arg_full_types[i]
                                 : emit_type_from_kind(sft->as.fn.arg_kinds[i]);
                 }
+                /* The plain typed shim for a concrete float/cstr-class sink
+                 * signature (NULL for an all-int64 one, where the preamble shim
+                 * already matches).  This selection was dropped when the erased
+                 * override below was added, so a `(fn [] float)` handed back
+                 * from a poly param went through __tur_poly_to_fat0's int64
+                 * ABI and the sink read its double from whatever xmm0 held --
+                 * right under gcc's tail call, `false` under clang -O2 (type
+                 * fuzzer seed 1, case 35). */
+                poly_shim = ensure_typed_poly_to_fat(ctx, pr, pa, poly_arity);
                 /* erased-float-carrier: inside the ERASED instance base body
                  * (no active specialization) a method param `g : (fn [a] b)`
                  * holds a thunk that speaks the int64 carrier at its erased

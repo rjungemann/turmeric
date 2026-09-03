@@ -1,0 +1,25 @@
+;; poly-to-fat typed shim, float-class sink: a `(fn [] float)` value that
+;; arrives as a poly-carrier param and is handed back at a declared
+;; `(fn [] float)` result crosses EX_POLY_TO_FAT.  The box's slot-0 shim must
+;; speak the sink's typed-thunk ABI (double in xmm0), so it has to be the
+;; typed `__tur_poly_to_fat0_double`, not the int64 preamble shim.  The int64
+;; shim happened to work under gcc (its tail call left the double in xmm0)
+;; and read garbage under clang -O2 -- the type fuzzer's seed-1 case 35 on
+;; the macOS leg.  The selection was dropped when the erased-instance
+;; override was layered on; this pins it, for a thunk and for a unary float
+;; fn, through a let alias and a direct param return.
+(defn mk-thunk [x : float] : (fn [] float) (fn [] x))
+
+(defn through-alias [v : (fn [] float)] : (fn [] float) (let [w v] w))
+
+(defn through-direct [v : (fn [] float)] : (fn [] float) v)
+
+(defn mk-scale [k : float] : (fn [float] float) (fn [y : float] (* k y)))
+
+(defn through-unary [v : (fn [float] float)] : (fn [float] float) v)
+
+(defn main [] : int
+  (println (= ((through-alias (mk-thunk 10.5))) 10.5))
+  (println ((through-direct (mk-thunk 2.25))))
+  (println ((through-unary (mk-scale 1.5)) 3.0))
+  0)
