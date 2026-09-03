@@ -1,0 +1,75 @@
+;; option-niche-vec-closure-cmp -- the closure-comparator shapes over a
+;; `(Vec (Option String))`, whose niche element sits in its slot as the
+;; payload word (container-element-form-plan CE2, the default since
+;; option-niche graduated).  Three shapes, each of which reads the slot
+;; word back INSIDE a closure rather than at a hoisted `vec-get`:
+;;
+;;   1. a user comparator with TYPED params through the inline-C `vec-eq?`
+;;      loop -- the closure's C params are the by-value element, so the
+;;      words are bridged at the closure boundary;
+;;   2. a let-bound raw word ascribed later (`(let [x (vec-get v 0)] ...)`);
+;;   3. `(eq? v w)` on the Vec itself: the constrained-Eq synthesizer
+;;      builds `(fn [__cmp_slot_a __cmp_slot_b] (.eq? (:: a T) (:: b T)))`
+;;      and `vec-eq?` feeds it raw slot words.  Before the graduation the
+;;      bridge unboxed that word as a carrier box (`tur_opt_value_checked`
+;;      on a String pointer), and the inner `Eq[Option]` instance body
+;;      compared its `(Some vx)` binders through the representative
+;;      `Eq[int]` (pointer equality) on BOTH paths -- so `(eq? v w)` said
+;;      "eq" for the wrong reason and `(eq? (some "aa") (some "aa"))`
+;;      said "ne".  The slot-word mark on the synthesized params and the
+;;      `(:: vx A)` ascription in the Option/Result instances fix both.
+;;
+;; The one shape deliberately NOT here is an UNTYPED user comparator that
+;; ascribes the word itself, `(fn [a b] (eq? (:: a (Option String)) ...))`:
+;; an erased closure param carries no convention, and the bridge reads it
+;; as a carrier box -- docs/reported/erased-closure-param-over-niche-vec-
+;; slot-reads-box.md.  Write the element type on the params (shape 1).
+(load "stdlib/string.tur")
+
+(defn show-opt [o : (Option String)] : void
+  (if (some? o) (println (string/to-cstr (unwrap o))) (println "none")))
+
+(defn same-shape? [a : (Option String) b : (Option String)] : bool
+  (= (some? a) (some? b)))
+
+(defn main [] : int
+  (let [v (:: (vec-new) (Vec (Option String)))
+        w (:: (vec-new) (Vec (Option String)))
+        u (:: (vec-new) (Vec (Option String)))]
+    (vec-push! v (some (string/from-cstr "aa")))
+    (vec-push! v (:: (none) (Option String)))
+    (vec-push! w (some (string/from-cstr "aa")))
+    (vec-push! w (:: (none) (Option String)))
+    (vec-push! u (some (string/from-cstr "ab")))
+    (vec-push! u (:: (none) (Option String)))
+    ;; 1. typed comparator through the inline-C vec-eq? loop
+    (println (if (vec-eq? v w (fn [a : (Option String) b : (Option String)] : bool (same-shape? a b))) "shape-eq" "shape-ne"))
+    (println (if (vec-eq? v w (fn [a : (Option String) b : (Option String)] : bool (eq? a b))) "typed-eq" "typed-ne"))
+    (println (if (vec-eq? v u (fn [a : (Option String) b : (Option String)] : bool (eq? a b))) "typed-eq" "typed-ne"))
+    ;; 2. let-bound raw word, ascribed later
+    (let [x (vec-get v 0)
+          y (vec-get v 1)]
+      (show-opt (:: x (Option String)))
+      (show-opt (:: y (Option String))))
+    ;; 3. Eq[Vec] over the niche element: content equality of the payloads
+    (println (if (eq? v w) "vec-eq" "vec-ne"))
+    (println (if (eq? v u) "vec-eq" "vec-ne"))
+    ;; the instances the synthesized comparator lands in, on their own
+    (let [a (:: (some (string/from-cstr "aa")) (Option String))
+          b (:: (some (string/from-cstr "aa")) (Option String))
+          c (:: (some (string/from-cstr "ab")) (Option String))
+          n (:: (none) (Option String))]
+      (println (if (eq? a b) "opt-eq" "opt-ne"))
+      (println (if (eq? a c) "opt-eq" "opt-ne"))
+      (println (if (eq? a n) "opt-eq" "opt-ne"))
+      (println (if (eq? n n) "opt-eq" "opt-ne")))
+    (let [r1 (:: (ok (string/from-cstr "aa")) (Result String cstr))
+          r2 (:: (ok (string/from-cstr "aa")) (Result String cstr))
+          r3 (:: (ok (string/from-cstr "ab")) (Result String cstr))
+          e1 (:: (err "bad") (Result String cstr))
+          e2 (:: (err "bad") (Result String cstr))]
+      (println (if (eq? r1 r2) "res-eq" "res-ne"))
+      (println (if (eq? r1 r3) "res-eq" "res-ne"))
+      (println (if (eq? r1 e1) "res-eq" "res-ne"))
+      (println (if (eq? e1 e2) "res-eq" "res-ne")))
+    0))

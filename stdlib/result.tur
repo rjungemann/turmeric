@@ -211,15 +211,19 @@
 ;;; Eq [Result] -- equality using the ok and err types' Eq instances.
 ;; TC1-22: Phase PTC4 -- constrained Eq instance for Result[A B].
 ;; SR2b: match on the sum instead of reading record fields.
+;; The payload binders are ascribed to the class var so the inner `eq?`
+;; re-dispatches per ABI specialization: a bare binder is typed by the
+;; representative (int) at elaboration, and the spec then pointer-compared
+;; String/struct payloads (`(eq? (some "aa") (some "aa"))` said false).
 
 (definstance Eq [Result]
   [(Eq A) (Eq B)]
   (eq? [x y]
     (match x
       (Ok vx)
-      (match y (Ok vy) (eq? vx vy) (Err _) false)
+      (match y (Ok vy) (eq? (:: vx A) (:: vy A)) (Err _) false)
       (Err ex)
-      (match y (Ok _) false (Err ey) (eq? ex ey)))))
+      (match y (Ok _) false (Err ey) (eq? (:: ex B) (:: ey B))))))
 ;;; result-bimap -- map fn-left over the err arm and fn-right over the ok arm.
 ;;;
 ;;; Follows the Either convention: the err arm is the "left" side and the ok

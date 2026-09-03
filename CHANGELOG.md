@@ -6,15 +6,18 @@ All notable changes to Turmeric are documented here.
 
 ### Changed
 
-- **Announced ahead of the flip: `(some p)` over a `:non-null` payload will
-  no longer be able to carry NULL once the Option niche graduates.** The
-  niche is still `--enable=option-niche` today, and nothing changes until it
-  defaults on; this entry exists so the break is in the release notes before
-  the release that makes it, not discovered in it. When it lands, an
-  `(Option P)` for a `:non-null` opaque or a compiler-lowered heap collection
-  is carried AS its payload pointer -- 16 bytes to 8, `(none)` as NULL, no tag
-  word. The representation spends the bit pattern `0` on `None`, so a `Some`
-  whose payload is null has nowhere left to live.
+- **The Option niche is the default representation, and `(some p)` over a
+  `:non-null` payload can no longer carry NULL.** `--enable=option-niche`
+  graduated on 2026-09-03 (the name is accepted as a `TUR-W0063` no-op for
+  one minor line; `TUR_OPTION_NICHE=0` restores the tagged form for
+  bisection, and `tests/run-option-niche-seam.sh` keeps that path green).
+  An `(Option P)` for a `:non-null` opaque (`String`) or a compiler-lowered
+  heap collection (`(Option (Vec int))`) is carried AS its payload pointer --
+  16 bytes to 8, `(none)` as NULL, no tag word -- and a `(Vec (Option
+  String))` stores each element as that word in its slot with no per-element
+  box (2e6 elements: 17.8 MB / 0.018 s against 79.7 MB / 0.08 s before). The
+  representation spends the bit pattern `0` on `None`, so a `Some` whose
+  payload is null has nowhere left to live.
 
   **Breaking for inline-C that builds an Option over such a payload.**
   `tur_some_ptr(0)` produces a legal value today that `some?` answers true
@@ -29,13 +32,29 @@ All notable changes to Turmeric are documented here.
   16-byte tagged form, at no other cost.
 
   A *provable* violation (the literal `0` ascribed into a `:non-null` handle)
-  has been `TUR-E0303` at elaboration since 0.41.0 and is unaffected. The
-  flip itself is tracked in `docs/upcoming/sr3-option-niche-plan.md`; when it
-  happens, this entry moves under that release's `### Changed` with the
-  "Announced ahead of the flip" lead removed.
+  has been `TUR-E0303` at elaboration since 0.41.0 and is unaffected. One
+  shape is a known residue rather than a bridge: an UNTYPED closure parameter
+  that a `vec-eq?` comparator ascribes back to `(Option String)` reads the
+  slot word as a carrier box -- write the element type on the parameter
+  (`docs/reported/erased-closure-param-over-niche-vec-slot-reads-box.md`).
+  Plan: `docs/upcoming/sr3-option-niche-plan.md`.
 
 ### Fixed
 
+- **`(eq? (some s) (some t))` over a String or struct payload compared
+  pointers.** The `Eq[Option]` and `Eq[Result]` instance bodies dispatched
+  the payload `eq?` on a match binder the elaborator had typed by the
+  representative (`int`), so every ABI specialization ran `Eq[int]`:
+  `(eq? (:: (some "aa") (Option String)) (:: (some "aa") (Option String)))`
+  was false, with a `-Wint-conversion` warning in the emitted C as the only
+  symptom. The binders are now ascribed to the class var, which re-drives
+  the dispatch per specialization. Independent of the niche (both paths).
+- **`(eq? v w)` over a `(Vec (Option String))` read each slot word as a
+  carrier box.** The constrained-Eq synthesizer's `vec-eq?` comparator
+  names its parameters as slot words now (`__cmp_slot_a`), so the bridge
+  reinterprets the word exactly as a hoisted `vec-get` temp is. Pinned by
+  `tests/fixtures/option-niche-vec-closure-cmp`, which joins the seam
+  population with the typed-comparator and let-bound-word shapes.
 - **A fresh `Option`/`Result` over a value struct passed to a class method
   no longer leaks its payload box.** `(enc (some (make-struct Box ..)))`
   kept the `Box` copy for the process lifetime although the instance only
@@ -72,14 +91,14 @@ All notable changes to Turmeric are documented here.
   instead of leaking; the guide states the contract (the payload must be a
   fresh allocation, like the box).
 
-- **`--enable=option-niche`: a niche `(Option P)` Vec element is stored as its
-  payload word (CE1/CE2 of the container-element-form plan).** A
-  `(Vec (Option String))` used to pay a heap carrier box per element under the
-  niche exactly as the by-value default does; the element now lands in its
-  slot as the String pointer (None is 0), and every read hands it back. 2e6
-  elements: 17.8 MB / 0.018 s against 79.7 MB / 0.08 s. `TUR-E0714` refuses a
-  niche element stored through a fully erased receiver, the one shape that
-  cannot decide the slot convention. Also fixed on the way: a generic
+- **A niche `(Option P)` Vec element is stored as its payload word (CE1/CE2
+  of the container-element-form plan; default, since the niche graduated in
+  the same release).** A `(Vec (Option String))` used to pay a heap carrier
+  box per element; the element now lands in its slot as the String pointer
+  (None is 0), and every read hands it back. 2e6 elements: 17.8 MB / 0.018 s
+  against 79.7 MB / 0.08 s. `TUR-E0714` refuses a niche element stored
+  through a fully erased receiver, the one shape that cannot decide the slot
+  convention. Also fixed on the way: a generic
   `(defn push-it [A] [v : (Vec A) x : A] (vec-push! v x))` specialized for an
   Option element double-wrapped the value -- a silent blank read under the
   niche and a `cc` error on the default path.

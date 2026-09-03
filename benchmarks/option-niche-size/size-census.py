@@ -8,7 +8,8 @@ became eligible 2026-08-28), so this counts BOTH: how many distinct eligible
 one occupies.
 
 Eligibility is decided by the COMPILER, not re-derived here.  Each input is
-emitted twice -- default and `--enable=option-niche` -- and a monomorph is
+emitted twice -- tagged (`TUR_OPTION_NICHE=0`; the niche is the default since
+2026-09-03, and `--enable=option-niche` is a no-op) and niche -- and a monomorph is
 eligible exactly when its `tur_adt_Option__*` typedef is present in the first
 emission and absent from the second.  That is the same discipline SR0(b) used
 (the type checker as the oracle rather than grep), and it cannot drift from
@@ -44,14 +45,13 @@ def declarator_re(name):
 
 def emit(tur, path, niche, timeout=60):
     """Emit C for one input.  Returns the source, or None if it did not emit."""
-    cmd = [tur]
-    if niche:
-        # --enable is a GLOBAL flag: before the subcommand, as tests/run.sh
-        # passes it.  After the subcommand it is silently not an enable.
-        cmd.append('--enable=option-niche')
-    cmd += ['emit-c', path]
+    cmd = [tur, 'emit-c', path]
+    # The niche is the default (graduated 2026-09-03); the tagged emission is
+    # the TUR_OPTION_NICHE=0 bisection hatch.
+    env = dict(os.environ)
+    env['TUR_OPTION_NICHE'] = '1' if niche else '0'
     try:
-        r = subprocess.run(cmd, capture_output=True, timeout=timeout)
+        r = subprocess.run(cmd, capture_output=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         return None
     if r.returncode != 0:

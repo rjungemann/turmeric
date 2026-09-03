@@ -248,7 +248,7 @@ typedef enum DiagCode {
      * definitions parse as nested ones. */
     TUR_E0713_DEFINITION_IN_TAIL_POSITION,
     /* container-element-form-plan CE1: a niche-represented `(Option P)`
-     * element (--enable=option-niche) is stored into a Vec whose element
+     * element (the default representation since 2026-09-03) is stored into a Vec whose element
      * type is still ERASED at this site (a raw-`:int` or unresolved
      * receiver).  The slot convention is per element monomorph -- a word for
      * a niche element, a box otherwise -- and an erased store cannot know

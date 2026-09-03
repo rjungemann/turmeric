@@ -1,13 +1,15 @@
 ---
 title: Container Element Form (CE) -- per-monomorph element words in Vec
 category: Planning
-description: Extend per-monomorph specialization from container RECEIVERS (done, the typed-pointer producer slice) to container ELEMENT STORAGE, so a niche `(Option String)` element lands in the Vec slot as its 8-byte word instead of a heap carrier box. Scoped to Vec, inside `--enable=option-niche` (the form only diverges for niche elements, so no new flag). The soundness invariant, the one chokepoint, a census phase before any codegen, and the never-silent rule for the erased residue.
+description: Extend per-monomorph specialization from container RECEIVERS (done, the typed-pointer producer slice) to container ELEMENT STORAGE, so a niche `(Option String)` element lands in the Vec slot as its 8-byte word instead of a heap carrier box. Scoped to Vec; the form only diverges for niche elements (so no new flag), and it is the default since the niche graduated on 2026-09-03. The soundness invariant, the one chokepoint, a census phase before any codegen, and the never-silent rule for the erased residue.
 ---
 
 # Container Element Form (CE)
 
-**Status: CE0, CE1 and CE2 BUILT (2026-09-03); CE3 mostly moot, CE4 deferred,
-CE5 done for the container row.** The refinement of the "monomorphization
+**Status: CE0, CE1 and CE2 BUILT (2026-09-03) and DEFAULT since the option
+niche graduated the same day; CE3 mostly moot, CE4 deferred, CE5 done for
+the container row.** The word convention, the TUR-E0714 backstop and the
+erased-closure residue below are default-path facts now. The refinement of the "monomorphization
 dependency" the [option-niche graduation hold](sr3-option-niche-plan.md)
 points at, sketched 2026-08-28 in that plan's container-boxing section.
 
@@ -235,9 +237,18 @@ CE_WORD there is nothing to free, which is exactly what the folds already
 do. `vec-eq-loop` / `vec-show-loop` read through `vec-get` + ascription in a
 class-2 clone and take the marked-temp path. What remains for CE3 is the
 inline-C raw-comparator `vec-eq?` handing slot words to an ERASED closure
-(one compiled against the int64 carrier, expecting a box): not reached by
-any in-tree program, and the closure form is the residue the diagnostic
-cannot see. Recorded, not built.
+(one compiled against the int64 carrier, expecting a box). The graduation
+(2026-09-03) split that residue in two. The SYNTHESIZED comparator -- what
+`(eq? v w)` on a `(Vec (Option String))` lowers to -- is bridged: the
+constrained-Eq synthesizer names its params `__cmp_slot_a`/`__cmp_slot_b`
+and `emit_slot_word_is` recognises the prefix, so the value-keyed bridge
+reinterprets the word (pinned by `option-niche-vec-closure-cmp`, seam
+population). A USER comparator with untyped params that ascribes the word
+itself, `(fn [a b] (eq? (:: a (Option String)) ...))`, is the residue the
+diagnostic cannot see and the bridge cannot key: filed as
+[erased-closure-param-over-niche-vec-slot-reads-box](../reported/erased-closure-param-over-niche-vec-slot-reads-box.md);
+the fix on the user's side is to type the params, which the same fixture
+pins.
 
 **CE4 -- decide Map/Set/HAMT by evidence, not momentum.** Keys need
 hash/cmp over the word and the HAMT's own boxing story; the census from CE0

@@ -6,6 +6,12 @@ description: SR3 item 4. The per-value claim is exact and confirmed (16 -> 8, ha
 
 # Option niche -- size measurement
 
+> Measured 2026-08-30, when the niche was `--enable=option-niche` and the
+> tagged form the default.  The niche graduated on 2026-09-03; the
+> instruments here now key the tagged side on `TUR_OPTION_NICHE=0` and the
+> niche side on the default, and "default" in the tables below means the
+> tagged form.
+
 Item 4 of [sr3-option-niche-plan.md](../../docs/upcoming/sr3-option-niche-plan.md):
 *"A size measurement worth the name. The gate measured correctness, not bytes.
 The claim is 16 -> 8 per value on the eligible population; nobody has run

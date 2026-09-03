@@ -25,8 +25,10 @@ printf '%-44s %10s %10s %9s  %s\n' fixture default niche delta unit
 for input in "$@"; do
     name="$(basename "$(dirname "$input")")"
 
-    "$TUR" emit-c "$input" > "$W/d.c" 2>/dev/null || { echo "$name: emit-c failed (default)"; continue; }
-    "$TUR" --enable=option-niche emit-c "$input" > "$W/n.c" 2>/dev/null || { echo "$name: emit-c failed (niche)"; continue; }
+    # The niche is the default since 2026-09-03; the tagged side is the
+    # TUR_OPTION_NICHE=0 bisection hatch.  Column names kept (default = tagged).
+    TUR_OPTION_NICHE=0 "$TUR" emit-c "$input" > "$W/d.c" 2>/dev/null || { echo "$name: emit-c failed (tagged, TUR_OPTION_NICHE=0)"; continue; }
+    "$TUR" emit-c "$input" > "$W/n.c" 2>/dev/null || { echo "$name: emit-c failed (niche, default)"; continue; }
 
     # Compile to an OBJECT, not a linked binary.  Linking would pull in
     # libturi, which is identical between the two runs and so cancels in the

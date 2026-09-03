@@ -5053,9 +5053,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
  *                        site would put two conventions in one vec.
  *
  * CE0's gate is the class-3 count reachable with a niche-eligible element.
- * `niche=` is only ever `yes` under --enable=option-niche (adt_app_is_niche_
- * option is false with the experiment off), which is also why this census
- * must be swept with the flag ON to mean anything.
+ * `niche=` is `yes` for a niche-eligible element (adt_app_is_niche_option;
+ * false everywhere under TUR_OPTION_NICHE=0), which is also why this census
+ * must be swept with the niche ON -- the default since 2026-09-03 -- to mean
+ * anything.
  *
  * The container-store discriminator is deliberately the SAME one the
  * escaping-bridge sites below already use -- "a sibling argument is a heap

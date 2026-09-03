@@ -238,12 +238,22 @@ static const Symbol *helper_eq_symbol_for_struct(Elab *e, const AdtDef *sd,
  * (thanks to F3-7's sticky ascription) terminates the recursion at
  * the right level.  Returns NULL if `elem_type` cannot be
  * round-tripped to a Form. */
-static Form *build_comparator_lambda(Elab *e, const Type *elem_type, Span span) {
+/* container-element-form-plan CE2 (default since option-niche graduated):
+ * `slot_words` says the helper hands the comparator RAW Vec slot words
+ * (`vec-eq?` reads `a->data[i]` straight out of the buffer).  A niche
+ * `(Option P)` element sits in its slot as the payload pointer itself, so the
+ * `(:: __cmp_slot_a (Option P))` bridge must reinterpret the word, never unbox
+ * it as a carrier box.  The `__cmp_slot_` prefix is the mark: emit_slot_word_is
+ * recognises it exactly as it does the hoist temp of a `vec-get`.  Every other
+ * helper (map/option/list/pair/result-eq?) hands the comparator a value that
+ * crossed the carrier boundary (boxed), so those keep the plain names. */
+static Form *build_comparator_lambda(Elab *e, const Type *elem_type, Span span,
+                                     bool slot_words) {
     Form *elem_form = type_to_form(e, elem_type, span);
     if (!elem_form) return NULL;
 
-    const Symbol *sym_a       = intern_cstr(e->st, "__cmp_a");
-    const Symbol *sym_b       = intern_cstr(e->st, "__cmp_b");
+    const Symbol *sym_a       = intern_cstr(e->st, slot_words ? "__cmp_slot_a" : "__cmp_a");
+    const Symbol *sym_b       = intern_cstr(e->st, slot_words ? "__cmp_slot_b" : "__cmp_b");
     const Symbol *sym_dot_eq  = intern_cstr(e->st, ".eq?");
 
     Form **asc_a_items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
@@ -436,7 +446,7 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
             kf = build_mapkey_cmp_form(e, k_type, span);
         }
         if (kf) {
-            Form *vf = build_comparator_lambda(e, v_type, span);
+            Form *vf = build_comparator_lambda(e, v_type, span, false);
             if (!vf) return NULL;
             Expr *kcmp = elab_form(e, kf);
             Expr *vcmp = elab_form(e, vf);
@@ -516,7 +526,8 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
      * type errors surface before we commit to the synthesised call. */
     Expr *lambdas[2] = {0};
     for (uint8_t i = 0; i < n_comparators; i++) {
-        Form *lf = build_comparator_lambda(e, args_collected[i], span);
+        Form *lf = build_comparator_lambda(e, args_collected[i], span,
+                                           strcmp(sd->name, "Vec") == 0);
         if (!lf) return NULL;
         lambdas[i] = elab_form(e, lf);
         if (!lambdas[i]) return NULL;

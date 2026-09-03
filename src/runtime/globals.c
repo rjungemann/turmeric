@@ -118,7 +118,7 @@ bool g_sized_types_enabled = true;
 bool g_dump_sizes = false;
 bool g_dump_refine_json = false;
 bool g_trail_autoloaded = false;
-bool g_opt_option_niche = false;
+bool g_opt_option_niche = true;   /* graduated 2026-09-03; TUR_OPTION_NICHE=0 restores the tagged monomorph */
 bool g_adt_slab = false;
 bool g_sr1_sum_byvalue = true;
 bool g_sr2_app_sum_byvalue = true;

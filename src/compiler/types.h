@@ -1829,7 +1829,8 @@ bool         adt_field_is_ros_pointer_box(const struct AdtDef *owner,
  * ctors return 0 instead of mallocing a box whose only content is tag 0. */
 bool         adt_ctor_is_null_none(const struct AdtDef *def,
                                    const struct CtorDef *ctor);
-/* SR3 slice B (option niche, --enable=option-niche, default OFF): true when
+/* SR3 slice B (option niche, default ON since 2026-09-03; TUR_OPTION_NICHE=0
+ * restores the tagged form): true when
  * `t` is an `(Option P)` monomorph carried AS its payload pointer -- 8 bytes,
  * `(none)` == NULL, no tag word.  Eligibility is an explicit allowlist of
  * payload types whose valid values exclude 0; see the definition for why
@@ -1876,11 +1877,11 @@ typedef enum ReprForm {
 ReprForm     repr_of(const Type *t, ReprPosition pos);
 /* container-element-form-plan CE1: the ONE answer every Vec element site
  * consults.  CE_WORD: the value's one-word form is stored in the slot
- * directly -- scalars, cstr, :heap pointers, pointer opaques, and (under
- * --enable=option-niche) a niche `(Option P)`, whose word IS its payload
+ * directly -- scalars, cstr, :heap pointers, pointer opaques, and a niche
+ * `(Option P)` (the default since 2026-09-03), whose word IS its payload
  * pointer.  CE_BOX: the slot holds a heap box pointer -- by-value aggregates
- * (16-byte Option monomorphs, wide products), exactly as today.  Everything
- * but the niche row restates current behavior: with the experiment off
+ * (16-byte Option monomorphs, wide products), exactly as before.  Everything
+ * but the niche row restates prior behavior: under TUR_OPTION_NICHE=0
  * adt_app_is_niche_option is false everywhere and this is repr_of's
  * container answer verbatim, so the default path cannot move. */
 typedef enum { CE_WORD = 0, CE_BOX = 1 } ContainerElemForm;

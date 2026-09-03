@@ -6,8 +6,12 @@ description: An `(Option P)` over a non-nullable pointer carried AS that pointer
 
 # SR3 slice B -- Option niche filling
 
-**Status:** prototype, behind `--enable=option-niche`. Introduced 0.41.0,
-`expires_at` 0.44.0 (advisory -- it never blocks a release).
+**Status:** GRADUATED -- default-on since 2026-09-03. Introduced 0.41.0 as
+`--enable=option-niche`; the name is a `TUR-W0063` no-op for one minor line.
+`TUR_OPTION_NICHE=0` restores the tagged 16-byte form for bisection, and
+`tests/run-option-niche-seam.sh` keeps that OFF path green (canary plus the
+eligible population, now including the generic-helper and closure-comparator
+shapes).
 
 Slice B of [sum-representation-plan.md](sum-representation-plan.md) SR3. Slice A
 (nullary `None` as the null carrier) shipped default-on 2026-08-27. This is the
@@ -246,6 +250,26 @@ and the CE2 commit is itself a data point for it: it found the class-2
 (spec) path had been storing a double-wrapped element and reading it back
 unwrapped -- a silent wrong answer that had been there since the unshelving,
 caught by a two-line generic helper no fixture had written.
+
+**GRADUATED 2026-09-03.** The flip was taken without the release-cycle soak
+of condition 1, trading it for two things: the seam population now carries
+the shapes that had been finding the defects (a generic `push-it`/`get-it`
+spec in `option-niche-vec-word`; a typed `vec-eq?` comparator, a let-bound
+slot word and `(eq? v w)` through the synthesized comparator in
+`option-niche-vec-closure-cmp`), and the seam harness inverted -- it runs
+that population with `TUR_OPTION_NICHE=0` so the bisection hatch cannot rot
+the way an unused flag does. Writing the closure-comparator shape found one
+more niche crossing (the synthesized `(fn [__cmp_a __cmp_b] ...)` comparator
+unboxed a slot word as a carrier box; fixed by naming its params as slot
+words) and one defect that was NOT the niche's: the `Eq[Option]` /
+`Eq[Result]` instance bodies compared their `(Some vx)` binders through
+`Eq[int]` on both paths (fixed by ascribing the binders to the class var).
+One residue is filed rather than bridged --
+[erased-closure-param-over-niche-vec-slot-reads-box](../reported/erased-closure-param-over-niche-vec-slot-reads-box.md):
+an UNTYPED user comparator param ascribed back to the element reads the slot
+word as a box, because an erased closure param carries no convention for
+the value-keyed bridge to read. The `Some(NULL)` entry moved under
+`[Unreleased]` `### Changed` as the flip entry.
 
 ## The container-boxing story -- sketched 2026-08-28
 

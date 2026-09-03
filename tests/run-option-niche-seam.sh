@@ -1,25 +1,27 @@
 #!/usr/bin/env bash
-# tests/run-option-niche-seam.sh -- keep the option-niche experiment's green
-# state from rotting while it soaks toward a graduation call.
+# tests/run-option-niche-seam.sh -- keep the option niche's OFF path from
+# rotting, now that the niche is the default.
 #
-# `--enable=option-niche` carries an eligible `(Option P)` as its payload
-# pointer (docs/upcoming/sr3-option-niche-plan.md).  The experiment is OFF by
-# default, so the ordinary suite only exercises the niche path through the
-# three fixtures that carry a `flags` file; everything else -- the
-# (Option String) census population, the inline-C Option builders, the
-# eligible-collection shapes -- compiles the default representation.  A gate
-# nobody turns on decays to a gate nobody notices (the SR4 seam harness's
-# lesson), and five silent-wrong-answer crossings were found in this
-# representation's first two days; this harness is what makes "no new crossing
-# defects over the soak window" a checkable claim instead of a mood.
+# An eligible `(Option P)` is carried as its payload pointer by default since
+# the experiment graduated out of --enable=option-niche on 2026-09-03
+# (docs/upcoming/sr3-option-niche-plan.md), and a Vec stores such an element
+# as that word (container-element-form-plan, CE2).  TUR_OPTION_NICHE=0 restores
+# the tagged 16-byte monomorph and the boxed slot for bisection -- which means
+# nothing in the ordinary suite compiles the eligible population through the
+# tagged form any more.  A gate nobody turns on decays to a gate nobody
+# notices (the SR4 seam's lesson); this harness keeps the OFF path green so a
+# bisection stays a one-variable switch instead of a re-excavation.  Before the
+# flip it kept the niche path green the same way, and it is where the class-2
+# double-wrap defect of 2026-09-03 should have been caught -- the population
+# now carries the generic-helper and closure-comparator shapes that found it.
 #
 # Two checks, mirroring run-sr4-seam.sh:
-#   1. A CANARY: emit-c of httpd-req-string-opt under the flag must show the
-#      niche ctor (`static void * ctor_Option_Some__String(`) and must NOT mint the
-#      tagged monomorph typedef.  If the flag is renamed or the gate stops
-#      reading it, this fails LOUDLY instead of silently re-testing default.
-#   2. The niche-eligible population, compiled and RUN under the flag against
-#      each fixture's committed expected.stdout.
+#   1. A CANARY: emit-c of httpd-req-string-opt under TUR_OPTION_NICHE=0 must
+#      mint the tagged `tur_adt_Option__String` typedef and must NOT emit the
+#      niche identity ctor.  If the env var is renamed or the gate stops reading
+#      it, this fails LOUDLY instead of silently re-testing the default.
+#   2. The niche-eligible population, compiled and RUN with the niche OFF
+#      against each fixture's committed expected.stdout.
 #
 # Exit status: 0 if all checks pass, 1 otherwise.
 
@@ -29,7 +31,7 @@ cd "$(dirname "$0")/.."
 export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 
 TUR="${TUR:-./build/tur}"
-ENABLE="--enable=option-niche"
+export TUR_OPTION_NICHE=0
 PASS=0
 FAIL=0
 
@@ -56,24 +58,32 @@ export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -fno-strict-aliasing -L$
 
 # --- 1. Canary: the flag must actually bite. ------------------------------
 canary_c="$WORKDIR/canary.c"
-if ! $TIMEOUT "$TUR" $ENABLE emit-c tests/fixtures/httpd-req-string-opt/input.tur \
+if ! $TIMEOUT "$TUR" emit-c tests/fixtures/httpd-req-string-opt/input.tur \
         > "$canary_c" 2>/dev/null; then
-    fail "option-niche-canary" "emit-c of httpd-req-string-opt failed under $ENABLE"
-elif ! grep -q "static void \* ctor_Option_Some__String(" "$canary_c"; then
+    fail "option-niche-canary" "emit-c of httpd-req-string-opt failed under TUR_OPTION_NICHE=0"
+elif grep -q "static void \* ctor_Option_Some__String(" "$canary_c"; then
     fail "option-niche-canary" \
-        "ctor_Option_Some__String is not the niche identity -- the flag did not bite.  If \
-the experiment was renamed or adt_app_is_niche_option moved, update this \
-harness in the same change."
-elif grep -q "typedef struct tur_adt_Option__String" "$canary_c"; then
+        "ctor_Option_Some__String is still the niche identity -- TUR_OPTION_NICHE=0 did not bite.  If \
+the env var was renamed or sr3_option_niche moved, update this harness in the \
+same change."
+elif ! grep -q "typedef struct tur_adt_Option__String" "$canary_c"; then
     fail "option-niche-canary" \
-        "the tagged tur_adt_Option__String typedef was minted despite the niche"
+        "the tagged tur_adt_Option__String typedef was not minted with the niche off"
 else
-    pass "option-niche-canary (ctor_Option_Some__String is the identity, no typedef)"
+    pass "option-niche-canary (tagged Option__String typedef present, no identity ctor)"
 fi
 
-# --- 2. The eligible population, compiled and RUN under the flag. ---------
-# option-niche-*: the experiment's own fixtures (their flags files make the
-#   ordinary suite cover them; running them here too is deliberate overlap).
+# --- 2. The eligible population, compiled and RUN with the niche OFF. -------
+# option-niche-*: the niche's own fixtures (the ordinary suite covers them on
+#   the default path; running them here with the niche off is the point).
+#   option-niche-vec-closure-cmp carries the closure-comparator shapes
+#   (typed `vec-eq?` comparator, let-bound slot word, `(eq? v w)` through
+#   the synthesized `__cmp_slot_` comparator); its output is the same either
+#   way.  The generic-helper shape (option-niche-vec-word, a `push-it`/
+#   `get-it` spec) is NOT here: it asserts the word form itself ("word" vs
+#   "box"), and its `get-it` spec does not even build with the niche off --
+#   docs/reported/generic-vec-read-wrapper-spec-returns-carrier-word.md, the
+#   pre-existing tagged-element defect.  The ordinary suite covers it.
 # httpd-req-string-opt / bound-string / inline-c-option-byval-param: the
 #   (Option String) census shapes -- header lookups, bounds, inline-C
 #   builders straddling the by-value param ABI.
@@ -84,7 +94,7 @@ fi
 FIXTURES="
 option-niche-string
 option-niche-crossings
-option-niche-vec-word
+option-niche-vec-closure-cmp
 httpd-req-string-opt
 bound-string
 inline-c-option-byval-param
@@ -103,16 +113,16 @@ for fx in $FIXTURES; do
     fi
     exe="$WORKDIR/$fx.bin"
     mkdir -p "$(dirname "$exe")"
-    if ! $TIMEOUT "$TUR" $ENABLE build "$input" -o "$exe" > /dev/null 2>"$WORKDIR/err"; then
-        fail "$fx" "build failed under $ENABLE: $(tail -2 "$WORKDIR/err" | head -1)"
+    if ! $TIMEOUT "$TUR" build "$input" -o "$exe" > /dev/null 2>"$WORKDIR/err"; then
+        fail "$fx" "build failed with the niche off: $(tail -2 "$WORKDIR/err" | head -1)"
         continue
     fi
     if ! $TIMEOUT "$exe" > "$WORKDIR/out" 2>/dev/null; then
-        fail "$fx" "run failed (nonzero exit) under $ENABLE"
+        fail "$fx" "run failed (nonzero exit) with the niche off"
         continue
     fi
     if ! diff -q "$expected" "$WORKDIR/out" > /dev/null 2>&1; then
-        fail "$fx" "stdout mismatch under $ENABLE"
+        fail "$fx" "stdout mismatch with the niche off"
         continue
     fi
     pass "$fx"

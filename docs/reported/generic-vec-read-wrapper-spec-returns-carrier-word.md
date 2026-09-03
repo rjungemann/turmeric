@@ -9,22 +9,27 @@ independent of the option-niche experiment.
 ## Repro
 
 ```turmeric
-(load "stdlib/string.tur")
+(defstruct Pt [x : int])
 (defn get-it [A] [v : (Vec A) i : int] : A
   (vec-get v i))
 (defn main [] : int
-  (let [v (:: (vec-new) (Vec (Option String)))]
-    (vec-push! v (some (string/from-cstr "bb")))
-    (println (string/to-cstr (unwrap (:: (get-it v 0) (Option String)))))
+  (let [v (:: (vec-new) (Vec (Option Pt)))]
+    (vec-push! v (some (make-struct Pt :x 7)))
+    (println (if (some? (:: (get-it v 0) (Option Pt))) "some" "none"))
     0))
 ```
 
 ```
-error: incompatible types when returning type 'int64_t' but 'tur_adt_Option__String' was expected
+error: incompatible types when returning type 'int64_t' but 'tur_adt_Option__Pt' was expected
 ```
 
-The Path A spec `get_it__spec__..._Option__String` is declared to return the
-by-value `tur_adt_Option__String` (right: that is the element monomorph),
+(Filed against `(Option String)`; since the niche graduated on 2026-09-03
+that element is the niche word and the wrapper works by default, so the
+repro is any BOXED by-value element -- a struct payload here.  Re-verified
+2026-09-03 on `(Option Pt)`.)
+
+The Path A spec `get_it__spec__..._Option__Pt` is declared to return the
+by-value `tur_adt_Option__Pt` (right: that is the element monomorph),
 but its body's tail is `vec_hyget(...)` -- the raw int64 slot word, which for
 a by-value aggregate element holds the element's heap box pointer -- and no
 carrier->concrete readback (`*(tur_adt_Option__String *)(intptr_t)w`) is
@@ -32,9 +37,9 @@ emitted at the return.  A direct `(:: (vec-get v 0) (Option String))` at a
 concrete site gets that readback from the ascription bridge; the spec's
 return position does not.
 
-Under `--enable=option-niche` the same wrapper is FINE after CE2: the slot
-word is the niche pointer, and `(void *)(intptr_t)w` is the correct
-readback (the `option-niche-vec-word` fixture pins it).  So the gap is
+For a niche element (`(Option String)`, the default now) the same wrapper is
+FINE after CE2: the slot word is the niche pointer, and `(void *)(intptr_t)w`
+is the correct readback (the `option-niche-vec-word` fixture pins it).  So the gap is
 specifically "a spec whose declared result is a BOXED by-value aggregate
 element, with the raw slot read in tail position".
 

@@ -6,7 +6,7 @@ description: Lowering multi-variant ADTs by value, converting Option and Result 
 
 # Sum Representation (SR)
 
-**Status: SR1 is BUILT and ON by default (2026-08-26).** SR2a/b built and default; SR3 slice A default, slice B behind `--enable=option-niche`; SR4 default flipped to by value 2026-09-02 (RM4).
+**Status: SR1 is BUILT and ON by default (2026-08-26).** SR2a/b built and default; SR3 slice A default, slice B (the Option niche) graduated default-on 2026-09-03 (`TUR_OPTION_NICHE=0` is the bisection hatch); SR4 default flipped to by value 2026-09-02 (RM4).
 
 **SR0's verdict -- "do not start SR1 for performance" -- was wrong, and section
 5 of this plan says why.** SR0(a) and the SR1 gate both priced SR1 against

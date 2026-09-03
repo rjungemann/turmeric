@@ -1425,7 +1425,8 @@ bool adt_ctor_is_null_none(const AdtDef *def, const CtorDef *ctor) {
            strcmp(ctor->name, "None") == 0;
 }
 
-/* SR3 slice B (--enable=option-niche, docs/upcoming/sr3-option-niche-plan.md):
+/* SR3 slice B (the Option niche -- default since 2026-09-03, TUR_OPTION_NICHE=0
+ * restores the tagged form; docs/upcoming/sr3-option-niche-plan.md):
  * represents an `(Option P)` monomorph whose payload is a NON-NULLABLE pointer
  * as the bare payload pointer -- 16 bytes down to 8, with `(none)` as the null
  * pointer.  Slice A already made the CARRIER None the null pointer, so the two
@@ -1438,9 +1439,9 @@ bool adt_ctor_is_null_none(const AdtDef *def, const CtorDef *ctor) {
  * read.  `experiment_warn_if_used` is once-per-compile guarded, so calling it
  * from this hot predicate costs one index lookup after the first. */
 static bool sr3_option_niche(void) {
-    if (!g_opt_option_niche) return false;
-    experiment_warn_if_used("option-niche");
-    return true;
+    /* Graduated 2026-09-03: default-on, no lifecycle warning.  The global is
+     * only ever cleared by TUR_OPTION_NICHE=0 (main.c), the bisection hatch. */
+    return g_opt_option_niche;
 }
 
 /* opaque-pointer-c-spelling (GRADUATED 2026-08-28, docs/archive/opaque-pointer-

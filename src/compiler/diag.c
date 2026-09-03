@@ -607,7 +607,8 @@ static const DiagExplanation diag_explanations_[] = {
     { TUR_E0714_NICHE_ELEMENT_ERASED_STORE,
       "TUR-E0714: Niche-represented element stored through an erased container access\n"
       "\n"
-      "Under --enable=option-niche an eligible (Option P) is carried as its\n"
+      "By default (the Option niche; TUR_OPTION_NICHE=0 restores the tagged\n"
+      "form) an eligible (Option P) is carried as its\n"
       "payload pointer, and a Vec stores such an element in its slot as that\n"
       "one word (container-element-form-plan, CE2).  The slot convention is\n"
       "decided per element monomorph, so every store and read must be able to\n"
@@ -1320,7 +1321,7 @@ static const DiagExplanation diag_explanations_[] = {
       "  (:: 0 :String)                 ; error\n"
       "  (:: (:: 0 :ptr<void>) String)  ; error -- peeled through the relabel\n"
       "\n"
-      "Why this matters: under `--enable=option-niche`, an `(Option T)` over a\n"
+      "Why this matters: by default (the Option niche), an `(Option T)` over a\n"
       ":non-null T is carried AS the payload pointer with `(none)` as NULL.  A\n"
       "null smuggled into T makes `(some x)` and `(none)` the same value.  The\n"
       "niche `Some` constructor also checks at runtime (a null there aborts\n"

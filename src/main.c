@@ -10145,6 +10145,13 @@ int main(int argc, char **argv) {
         const char *__sr2 = getenv("TUR_SR2_APP_SUM_BYVALUE");
         if (__sr2 && __sr2[0] == '0') g_sr2_app_sum_byvalue = false;
         else if (__sr2 && __sr2[0] == '1') g_sr2_app_sum_byvalue = true;
+        /* SR3 slice B (the Option niche) is ON by default since its graduation
+         * out of --enable=option-niche (2026-09-03).  `=0` restores the tagged
+         * 16-byte Option monomorph and the boxed Vec slot for bisection and
+         * for tests/run-option-niche-seam.sh, which keeps that path green. */
+        const char *__sr3 = getenv("TUR_OPTION_NICHE");
+        if (__sr3 && __sr3[0] == '0') g_opt_option_niche = false;
+        else if (__sr3 && __sr3[0] == '1') g_opt_option_niche = true;
     }
 
 #ifdef _WIN32
