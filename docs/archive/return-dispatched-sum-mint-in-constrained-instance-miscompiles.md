@@ -1,9 +1,12 @@
 # A return-dispatched class method that mints an Option over a value struct miscompiles in a constrained instance
 
+**Resolved 2026-09-03** -- all three, see the resolution at the end; pinned by
+`tests/fixtures/return-dispatched-sum-mint-constrained-instance` (leak-checked).
+
 **Severity: medium** -- a hard `cc` error (never a wrong answer) on the
 DEFAULT path, in a shape that `tur check` accepts.  Found 2026-09-03 while
 writing a fixture for the fourth round of
-[value-struct-payload-sum-monomorph-box-has-no-owner](../archive/value-struct-payload-sum-monomorph-box-has-no-owner.md):
+[value-struct-payload-sum-monomorph-box-has-no-owner](value-struct-payload-sum-monomorph-box-has-no-owner.md):
 the shape needed was "a class method whose result IS the class variable
 mints a fresh `(Option Box)`", and every spelling of it failed to build.  Three
 spellings, three different failures.
@@ -107,3 +110,38 @@ value-struct-payload fixture pins instead.
   the specs only.
 - Repro 3 is a separate elaboration gap (concrete applied instance heads) and
   may be worth its own report if anyone needs the shape.
+
+## Resolution (2026-09-03)
+
+All three were one-line disagreements between sites that are supposed to
+move in lockstep, and each fix is at the site that was wrong:
+
+- **Repro 1** -- the carrier-producer argument disjunct (emit_expr.c, the
+  by-value spec-param bridge) treats any `__inst_` callee without a matched
+  spec as "emits the carrier".  A return-dispatched call re-resolved to a
+  CONCRETE instance whose declared result is a by-value aggregate returns
+  that aggregate; `emit_reresolved_returns_byvalue_aggregate` asks the
+  re-resolved binding and the deref is skipped.  (The hoist temp is not in
+  the recorded-spelling table -- only pointer spellings are recorded there
+  -- so the general recorded-spelling guard could not see it.)
+- **Repro 2** -- the definition header (emit_fns.c), the forward declaration
+  (emit_module.c) and the panic-return type all conditioned "this base clone
+  spills to the int64 dict slot" on `type_uses_carrier_abi(body type)`.  A
+  body that constructs the representative monomorph BY VALUE (`(Option
+  int)`) is not carrier-ABI, so the header said `tur_adt_Option__int` while
+  the tail (whose fallback is the result kind, int64) spilled.  The
+  conjunct is gone: with no `result_full_type`, any by-value aggregate body
+  of an `__inst_` method is spilled, so its header is int64.
+- **Repro 3** -- two halves.  Both instance-head argument parsers
+  (`parse_instance_head_arg` and the single-argument applied-head path) used
+  the value-preferring `scope_lookup`, which for a lowered defstruct returns
+  the constructor function; the type namespace is consulted as the
+  two-parameter path already did.  And a RESOLVED applied head took a
+  blanket `CK_MOVE`, so the instance method's own parameter was move-only
+  and `(some? x)` consumed it; a resolved head now takes its type's own
+  discipline (copy, or the opaque's linear/affine lift via
+  `propagate_app_discipline`) and only an unresolved head keeps `CK_MOVE`.
+
+With these, the value-struct report's dynamic-receiver admission has its
+in-tree program: `enc-mk`'s `(Option Box)` spec frees the re-dispatched
+`mk`'s payload after `enc` returns.

@@ -2434,6 +2434,26 @@ static bool emit_call_returns_fresh_sum_box(EmitCtx *ctx, const Expr *e) {
  * resolved non-retaining callee), or the enclosing class-method call's
  * argument loop admitted this exact node after re-resolving the instance
  * that runs in the current monomorph (ctx->sum_drop_admit). */
+/* return-dispatched-sum-mint-in-constrained-instance-miscompiles (repro 1):
+ * does this return-dispatched class-method call, re-resolved for the active
+ * monomorph, run an instance whose DECLARED result is a by-value aggregate
+ * (`Box` for `EncMk [Box]`'s `mk`)?  Its hoist temp is then the aggregate
+ * itself, not the carrier, whatever the call's own abstract type says. */
+static bool emit_reresolved_returns_byvalue_aggregate(EmitCtx *ctx, const Expr *e) {
+    if (!e || e->kind != EX_CALL || !e->as.call_.dict_arg ||
+        call_dispatch_is_static(e))
+        return false;
+    FnDef *fd = emit_reresolve_method_fndef(ctx, e);
+    if (!fd || !fd->binding || fd->binding->type.kind != TY_FN ||
+        !fd->binding->type.as.fn.result_full_type)
+        return false;
+    Type rt = emit_resolve_type(ctx, *fd->binding->type.as.fn.result_full_type);
+    if (rt.kind != TY_ADT && rt.kind != TY_APP) return false;
+    if (type_is_heap_struct(rt) || type_is_heap_adt(rt)) return false;
+    const char *cn = emit_type_c_name(ctx, rt);
+    return cn && strcmp(cn, "int64_t") != 0 && strchr(cn, '*') == NULL;
+}
+
 static bool emit_call_drop_after_stamped(EmitCtx *ctx, const Expr *e) {
     if (!e) return false;
     if (e->sum_box_drop_after) return true;
@@ -4725,9 +4745,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * else still holds.  A body that cached and returned a shared box would
      * break it -- which is why the guide now states the contract rather than
      * leaving it implied. */
+    /* inline-C producers are fresh by declaration now (elab_stamp_sum_freshness),
+     * so a STAMPED accessor argument takes the pending-drain route below (cell
+     * AND boxed arm, after the consumer) exactly as a Turmeric producer does;
+     * marking it owned here as well would have the readback bridge free the
+     * cell a second time.  Unstamped ones keep the bridge consumption. */
     if (ret_ct && strcmp(ret_ct, "int64_t") == 0 &&
         e->kind == EX_CALL && e->as.call_.fn_binding &&
-        e->as.call_.fn_binding->body_is_inline_c) {
+        e->as.call_.fn_binding->body_is_inline_c &&
+        !(emit_call_drop_after_stamped(ctx, e) &&
+          emit_call_returns_fresh_sum_box(ctx, e))) {
         /* Ask the callee's DECLARED result, never the call's resolved type.
          * That distinction is the whole safety argument, and getting it wrong
          * is a double free rather than a leak: `vec-get [A] (v : (Vec A)) : A`
@@ -9193,7 +9220,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                       fn_body_tail_is_carrier_producer(emit_arg) &&
                       !find_matched_abi_spec(ctx, emit_arg,
                                              emit_arg->as.call_.fn_binding) &&
-                      !expr_emits_byvalue_carrier_abi(ctx, emit_arg)) ||
+                      !expr_emits_byvalue_carrier_abi(ctx, emit_arg) &&
+                      /* return-dispatched-sum-mint-in-constrained-instance-
+                       * miscompiles (repro 1): a return-dispatched `(:: (mk n)
+                       * A)` re-resolves per monomorph to a CONCRETE instance
+                       * (`__inst_EncMk_mk_Box`, `tur_adt_Box` by value) --
+                       * an `__inst_` producer by name with no matched spec,
+                       * which the disjunct reads as "emits the carrier".  The
+                       * hoist temp's RECORDED spelling says otherwise; an
+                       * aggregate-spelled temp is already the value and is
+                       * never deref'd (the recorded-spelling key the niche
+                       * and container bridges use, applied as a guard). */
+                      !(emit_str_is_bare_ident(raw) &&
+                        emit_localvar_lookup_ctype(raw) &&
+                        strcmp(emit_localvar_lookup_ctype(raw), "int64_t") != 0 &&
+                        strchr(emit_localvar_lookup_ctype(raw), '*') == NULL) &&
+                      /* The hoist records only pointer spellings, so an
+                       * aggregate temp is invisible to the guard above; ask
+                       * the instance the dispatch re-resolves to whether its
+                       * declared result is a by-value aggregate instead. */
+                      !emit_reresolved_returns_byvalue_aggregate(ctx, emit_arg)) ||
                      emit_arg_holds_carrier_byval ||
                      /* inline-c-carrier-producer-byval-container-element
                       * (call-argument position).  The disjuncts above all ask

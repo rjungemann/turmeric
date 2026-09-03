@@ -48,6 +48,30 @@ All notable changes to Turmeric are documented here.
   the instance that ran, so the struct copy inside it is freed too. Closes
   `docs/archive/value-struct-payload-sum-monomorph-box-has-no-owner.md`.
 
+- **A callee that stores its `Option`/`Result` argument is no longer inferred
+  non-retaining.** `(defn stash [o : (Option Box)] : int (vec-push! store o) 1)`
+  got the non-retention bit because the confinement walk modelled a callee
+  only through its result, so the caller freed its fresh `(some Box)` after
+  the call and the container read it back freed (a use-after-free since
+  2026-09-02, silent without ASan). Under the sum walk a hand-off to a callee
+  that is neither an audited reader nor proven non-retaining is an escape.
+  Pinned by `sum-payload-stashing-callee-not-dropped`.
+
+- **A class method whose result is the class variable can mint an `Option`
+  over a value struct in a constrained instance.** Three `cc` errors on a
+  shape `tur check` accepted: the ctor-argument seam deref'd a re-dispatched
+  by-value result as the carrier; a dictionary slot's base clone was declared
+  with a by-value result while its tail spilled to the carrier; and
+  `[(Option Box)]` as an instance head read `Box` as a type variable and made
+  the method's own parameter move-only. All three fixed;
+  `docs/archive/return-dispatched-sum-mint-in-constrained-instance-miscompiles.md`.
+
+- **An inline-C body that boxes a value-struct payload into a declared
+  `(Option T)` / `(Result T E)` hands that payload over with the box.** Such a
+  producer is fresh by declaration now, so the payload is freed with the cell
+  instead of leaking; the guide states the contract (the payload must be a
+  fresh allocation, like the box).
+
 ## [0.42.2] -- 2026-09-01
 
 ### Added

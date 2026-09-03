@@ -2166,6 +2166,17 @@ static bool parse_instance_head_arg(Elab *e, const Form *f, Type *out) {
     if (asb && asb->type.kind == TY_ADT && asb->type.as.adt_.def) {
         *out = asb->type; return true;
     }
+    /* return-dispatched-sum-mint-in-constrained-instance-miscompiles (repro
+     * 3): scope_lookup is value-preferring, so for a lowered defstruct (and
+     * any `(defdata T ... (T ...))`) the name resolves to the constructor
+     * FUNCTION and the fall-through below turned `Box` in `[(Option Box)]`
+     * into a type VARIABLE named Box.  Ask the type namespace, as the
+     * two-parameter head path (`elab_lookup_type_by_name`, below) already
+     * does; only a name known to neither is a genuine head tyvar. */
+    Type *aty = elab_lookup_type_by_name(e, akw);
+    if (aty && aty->kind == TY_ADT && aty->as.adt_.def) {
+        *out = *aty; return true;
+    }
     *out = type_tyvar_named(akw->name);
     return true;
 }
@@ -2534,11 +2545,21 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                  * resolves here. */
                                 TypeKind ank = typekind_from_symbol(akw->name);
                                 Binding *asb = scope_lookup(e->scope, akw);
+                                /* return-dispatched-sum-mint-in-constrained-instance-
+                                 * miscompiles (repro 3): scope_lookup is value-
+                                 * preferring, so a lowered defstruct's name resolves
+                                 * to its constructor FUNCTION and `Box` in
+                                 * `[(Option Box)]` fell through to a type VARIABLE
+                                 * named Box.  Ask the type namespace as well. */
+                                Type *aty = elab_lookup_type_by_name(e, akw);
                                 if (ank != TY_UNKNOWN) {
                                     app_arg_type = type_simple(ank, CK_COPY);
                                 } else if (asb && asb->type.kind == TY_ADT &&
                                            asb->type.as.adt_.def) {
                                     app_arg_type = asb->type;
+                                } else if (aty && aty->kind == TY_ADT &&
+                                           aty->as.adt_.def) {
+                                    app_arg_type = *aty;
                                 } else {
                                     /* Unknown name in an applied instance head
                                      * (`A` in `(Dense A)`) is the instance's own
@@ -2627,7 +2648,20 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         /* Assemble TY_APP */
                         memset(&type_args[i], 0, sizeof(type_args[i]));
                         type_args[i].kind = TY_APP;
-                        type_args[i].copy_kind = CK_MOVE;
+                        /* return-dispatched-sum-mint-in-constrained-instance-
+                         * miscompiles (repro 3): a RESOLVED head takes the
+                         * discipline `(Option Box)` has everywhere else (copy,
+                         * or the opaque's own linear/affine lift); the blanket
+                         * CK_MOVE made the instance method's own parameter
+                         * move-only, so `(some? x)` consumed it and `(unwrap
+                         * x)` was a use-after-move -- the same body as a defn
+                         * is accepted.  An unresolved head keeps CK_MOVE. */
+                        if (have_head_ct) {
+                            type_args[i].copy_kind = CK_COPY;
+                            propagate_app_discipline(&type_args[i], fn_type);
+                        } else {
+                            type_args[i].copy_kind = CK_MOVE;
+                        }
                         /* Result kind = constructor kind with one arg applied
                          * (ARROW2 -> ARROW for a binary head; ARROW -> STAR for a
                          * fully-applied unary head). */

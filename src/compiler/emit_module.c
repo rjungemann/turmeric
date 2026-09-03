@@ -6976,11 +6976,14 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                                                     || fd->body->type.kind == TY_STRUCT))
                     ? type_c_name(fd->body->type) : NULL;
                 /* Direction (1): mirror emit_fns.c. */
+                /* repro 2 (return-dispatched-sum-mint-in-constrained-instance-
+                 * miscompiles): mirror emit_fns.c -- no carrier-ABI conjunct; a
+                 * by-value aggregate body with no result_full_type is spilled
+                 * to the int64 dict slot at the tail, so the prototype is int64. */
                 bool inst_method_app_body =
                     fd->binding && fd->binding->name && fd->binding->name->name &&
                     strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
-                    _body_c && strcmp(_body_c, "int64_t") != 0 &&
-                    type_uses_carrier_abi(fd->body->type);
+                    _body_c && strcmp(_body_c, "int64_t") != 0;
                 /* M5 straddle (root cause C): mirror emit_fns.c -- a lifted
                  * lambda whose tail value is a carrier-int64 producer
                  * (some/ok/err/none or an __inst_ method) is dispatched through

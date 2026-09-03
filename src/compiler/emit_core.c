@@ -1617,6 +1617,19 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
                 if (a && a->kind == EX_VAR && a->as.var.binding == b) {
                     if (acc) continue;             /* scalar result cannot alias */
                     if (arg_sink) continue;        /* printed, not retained */
+                    /* sum-payload-stashing-callee-not-dropped: under the SUM
+                     * walk a callee that is neither an audited reader nor
+                     * proven non-retaining may STORE the box -- `(vec-push!
+                     * store o)` in `(defn stash [o : (Option Box)] : int ...)`
+                     * -- and the "general reader" rule below only models the
+                     * callee's RESULT aliasing the box, not the callee keeping
+                     * it.  That stamped `stash` non-retaining, the caller
+                     * freed its fresh `(some Box)` after the call, and the
+                     * container read it back freed (ASan heap-use-after-free).
+                     * The arm box is what this walk's clients free, so such a
+                     * hand-off is an escape; the pointer/any walks keep their
+                     * reader model. */
+                    if (g_esc_allow_sum_accessors) return false;
                     /* general reader: its result aliases box memory -- safe only
                      * if THIS call's result is itself confined. */
                     if (!confined) return false;

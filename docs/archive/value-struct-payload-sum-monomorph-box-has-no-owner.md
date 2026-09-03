@@ -348,7 +348,7 @@ let-bound reader shape, and the return-dispatched cell) and
 the retained box).  The dynamic-receiver admission has no in-tree program:
 every spelling of "a method returning the class variable mints an Option
 over a value struct" trips a pre-existing construct-seam miscompile, filed
-as [return-dispatched-sum-mint-in-constrained-instance-miscompiles](../reported/return-dispatched-sum-mint-in-constrained-instance-miscompiles.md).
+as [return-dispatched-sum-mint-in-constrained-instance-miscompiles](return-dispatched-sum-mint-in-constrained-instance-miscompiles.md).
 The path is polarity-safe -- it frees only when the re-resolved instance's
 inferred mask says the slot is not retained -- and the type fuzzer (seeds 1
 and 7) is clean over it.
@@ -389,6 +389,46 @@ which is not this report's:
 
 So the route as written is declined; what was built instead closes the
 class.
+
+### Addendum (2026-09-03, later): the walk accepted a storing callee
+
+Writing the dynamic-receiver fixture turned up a hole in the round-2 mask
+that is a use-after-free, not a leak.  `box_uses_confined` models a callee
+only through its RESULT: `b` passed to any static call was accepted as long
+as the current call's result was a scalar, so
+
+```turmeric
+(def store (:: (vec-new) (Vec (Option Box))))
+(defn stash [o : (Option Box)] : int (vec-push! store o) 1)
+```
+
+was stamped non-retaining, the caller freed its fresh `(some Box)` after
+`stash` returned, and the container read it back freed (ASan
+heap-use-after-free, printed garbage without ASan).  Under the sum walk a
+hand-off to a callee that is neither an audited reader nor proven
+non-retaining is now an escape; the pointer/any walks keep their reader
+model.  Pinned by `tests/fixtures/sum-payload-stashing-callee-not-dropped`
+(asserts the value read back through the container).  The 11-fixture sweep
+is unchanged by it: every consumer there reads through the audited
+accessors or a masked callee.
+
+Also from the same fixture: a fresh sum handed to a TYPE-VARIABLE parameter
+(`w : a` in a constrained generic) was never classified, since the mask
+inference asked only declared Option/Result params.  A tyvar param joins
+the inference now; the stamp still keys on the argument being a fresh sum,
+so the bit is inert for every other instantiation.  And the
+dynamic-receiver admission has its in-tree program after all
+([return-dispatched-sum-mint-in-constrained-instance-miscompiles](return-dispatched-sum-mint-in-constrained-instance-miscompiles.md),
+resolved the same day): `enc-mk`'s `(Option Box)` spec frees the
+re-dispatched `mk`'s payload after `enc` returns.
+
+Out of class but closed alongside: an inline-C body that boxes a
+value-struct payload behind `tur_box_ok` is a fresh producer by
+declaration now, so the pending drain frees that payload with the cell
+(`nested-construct-byvalue-decode`'s last Box); the guide states the
+contract.  The `rc/of` path over such a monomorph was probed and is filed
+separately ([rc-of-byvalue-sum-monomorph-reads-first-word](../reported/rc-of-byvalue-sum-monomorph-reads-first-word.md)):
+it segfaults before any drop-glue question arises.
 
 ## Related
 

@@ -19,11 +19,11 @@
 ;;      producer: the copy is the payload's only holder, freed at scope exit.
 ;;
 ;; The third shape the fix covers -- a consumer whose receiver IS the
-;; abstract class var, admitted per monomorph at emit -- has no in-tree
-;; program: writing one needs a return-dispatched method that mints a sum
-;; over a value struct, and every spelling of that trips a pre-existing
-;; construct-seam miscompile (docs/reported/return-dispatched-sum-mint-in-
-;; constrained-instance-miscompiles.md).
+;; abstract class var, admitted per monomorph at emit -- is pinned by
+;; return-dispatched-sum-mint-constrained-instance (its `enc-mk`), once the
+;; three construct-seam miscompiles that blocked writing it were fixed
+;; (docs/archive/return-dispatched-sum-mint-in-constrained-instance-
+;; miscompiles.md).
 
 (defstruct Box [n : int])
 

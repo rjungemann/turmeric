@@ -415,6 +415,13 @@ producer's cell is now drained against its RE-RESOLVED instance's declared
 result, which is also what lets the erased `ok__spec__int64_t_<struct>` copy
 inside it be freed -- an RM1 residue shape as much as a payload one.
 
+Storing callee (2026-09-03, later): the round-2 sum mask accepted a
+parameter handed to any callee whose result was a scalar -- a use-after-free
+once the callee stored it (`vec-push!`).  Under the sum walk that hand-off is
+an escape now; a tyvar-typed parameter joins the inference; inline-C
+Option/Result producers are fresh by declaration.  See the value-struct
+report's addendum.
+
 Bind chains (2026-09-02, later): the largest remaining erased entries were
 `bind` / `fmap` chains over stdlib `Result` / `Option` -- `result-monad-*`,
 `hkt-stdlib-*`.  Each chained `bind` hands back a fresh box (the continuation's
