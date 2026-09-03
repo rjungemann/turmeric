@@ -1,0 +1,173 @@
+;;; strutil -- the small cstr toolkit the guestbook is written against.
+;;;
+;;; Concatenation, search, slicing, integer conversion, the two pointer casts
+;;; that carry a cstr through a serial continuation's int hole, and
+;;; application/x-www-form-urlencoded field lookup.
+;;;
+;;; Since: Guestbook example
+(defmodule strutil
+  (export str+ cstr-len cstr-eq? cstr-index-of cstr-slice int->cstr cstr->int-or
+          cstr-as-int int-as-cstr percent-decode form-field env-or)
+
+  ;;; str-cons-concat -- concatenate first and every cstr in a rest list (internal).
+  (defn str-cons-concat [first : cstr rest : int] : cstr
+    ```c
+    typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+    size_t total = strlen(first);
+    for (__tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)rest; p;
+         p = (__tur_cons_cell *)(intptr_t)p->tail)
+      total += strlen((const char *)(intptr_t)p->head);
+    char *out = (char *)malloc(total + 1);
+    if (!out) return "";
+    char *w = out;
+    size_t l = strlen(first); memcpy(w, first, l); w += l;
+    for (__tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)rest; p;
+         p = (__tur_cons_cell *)(intptr_t)p->tail) {
+      const char *s = (const char *)(intptr_t)p->head;
+      l = strlen(s); memcpy(w, s, l); w += l;
+    }
+    *w = 0;
+    return out;
+    ```)
+
+  ;;; str+ -- concatenate any number of cstrs into a fresh string.
+  ;;;
+  ;;; Example:
+  ;;;   (str+ "/submit?k=" token)   ; => "/submit?k=abc..."
+  ;;;
+  ;;; Since: Guestbook example
+  (defn str+ [first : cstr & rest : cstr] : cstr
+    (str-cons-concat first rest))
+
+  ;;; cstr-len -- byte length of s.
+  (defn cstr-len [s : cstr] : int
+    ```c return (int64_t)strlen(s); ```)
+
+  ;;; cstr-eq? -- true when a and b hold the same bytes.
+  (defn cstr-eq? [a : cstr b : cstr] : bool
+    ```c return strcmp(a, b) == 0; ```)
+
+  ;;; cstr-index-of -- index of needle in s at or after from, or -1.
+  (defn cstr-index-of [s : cstr needle : cstr from : int] : int
+    ```c
+    size_t n = strlen(s);
+    if (from < 0 || (size_t)from > n) return -1;
+    const char *hit = strstr(s + from, needle);
+    return hit ? (int64_t)(hit - s) : -1;
+    ```)
+
+  ;;; cstr-slice -- the bytes of s in [start, end) as a fresh string.
+  (defn cstr-slice [s : cstr start : int end : int] : cstr
+    ```c
+    int64_t n = (int64_t)strlen(s);
+    if (start < 0) start = 0;
+    if (end > n) end = n;
+    if (end < start) end = start;
+    char *out = (char *)malloc((size_t)(end - start) + 1);
+    if (!out) return "";
+    memcpy(out, s + start, (size_t)(end - start));
+    out[end - start] = 0;
+    return out;
+    ```)
+
+  ;;; int->cstr -- decimal rendering of i.
+  (defn int->cstr [i : int] : cstr
+    ```c char *b = (char *)malloc(24); snprintf(b, 24, "%lld", (long long)i); return b; ```)
+
+  ;;; cstr->int-or -- parse a decimal integer, or fall back to dflt.
+  (defn cstr->int-or [s : cstr dflt : int] : int
+    ```c
+    if (!s || !*s) return dflt;
+    char *end = NULL;
+    long long v = strtoll(s, &end, 10);
+    return (end && *end == 0) ? (int64_t)v : dflt;
+    ```)
+
+  ;;; cstr-as-int -- the pointer itself, as the int a serial hole carries.
+  ;;;
+  ;;; A serial continuation is resumed with an int; the guestbook resumes with
+  ;;; the POST body, so the body travels as its address and the resumed page
+  ;;; reads it back with int-as-cstr.  Both sides are the same process.
+  (defn cstr-as-int [s : cstr] : int
+    ```c return (int64_t)(intptr_t)s; ```)
+
+  ;;; int-as-cstr -- the inverse of cstr-as-int.
+  (defn int-as-cstr [i : int] : cstr
+    ```c return i ? (const char *)(intptr_t)i : ""; ```)
+
+  ;;; percent-decode -- decode %XX escapes and '+' in a form value.
+  (defn percent-decode [s : cstr] : cstr
+    ```c
+    size_t n = strlen(s);
+    char *out = (char *)malloc(n + 1);
+    if (!out) return "";
+    size_t w = 0;
+    for (size_t i = 0; i < n; i++) {
+      char c = s[i];
+      if (c == '+') { out[w++] = ' '; continue; }
+      if (c == '%' && i + 2 < n + 0 && i + 2 <= n - 1) {
+        int hi = -1, lo = -1;
+        char h = s[i + 1], l = s[i + 2];
+        if (h >= '0' && h <= '9') hi = h - '0'; else if (h >= 'a' && h <= 'f') hi = h - 'a' + 10; else if (h >= 'A' && h <= 'F') hi = h - 'A' + 10;
+        if (l >= '0' && l <= '9') lo = l - '0'; else if (l >= 'a' && l <= 'f') lo = l - 'a' + 10; else if (l >= 'A' && l <= 'F') lo = l - 'A' + 10;
+        if (hi >= 0 && lo >= 0) { out[w++] = (char)(hi * 16 + lo); i += 2; continue; }
+      }
+      out[w++] = c;
+    }
+    out[w] = 0;
+    return out;
+    ```)
+
+  ;;; form-field -- the percent-decoded value of name in a form body / query.
+  ;;;
+  ;;; Parameters:
+  ;;;   encoded -- "a=1&b=two+words" style text (a POST body or a query string)
+  ;;;   name    -- the field to look up
+  ;;;
+  ;;; Returns:
+  ;;;   (Some value) for the first matching field, (None) when absent.
+  ;;;
+  ;;; Example:
+  ;;;   (form-field "name=Al+B&x=1" "name")   ; => (Some "Al B")
+  ;;;
+  ;;; Since: Guestbook example
+  (defn form-field [encoded : cstr name : cstr] : (Option cstr)
+    ```c
+    size_t nl = strlen(name);
+    const char *p = encoded;
+    while (*p) {
+      const char *amp = strchr(p, '&');
+      size_t seg = amp ? (size_t)(amp - p) : strlen(p);
+      const char *eq = memchr(p, '=', seg);
+      size_t kl = eq ? (size_t)(eq - p) : seg;
+      if (kl == nl && memcmp(p, name, nl) == 0) {
+        size_t vl = eq ? seg - kl - 1 : 0;
+        char *raw = (char *)malloc(vl + 1);
+        if (!raw) return tur_none();
+        if (vl) memcpy(raw, eq + 1, vl);
+        raw[vl] = 0;
+        /* decode in place: %XX and '+' */
+        size_t w = 0;
+        for (size_t i = 0; i < vl; i++) {
+          char c = raw[i];
+          if (c == '+') { raw[w++] = ' '; continue; }
+          if (c == '%' && i + 2 < vl + 1 && i + 2 <= vl - 1) {
+            int hi = -1, lo = -1; char h = raw[i+1], l = raw[i+2];
+            if (h >= '0' && h <= '9') hi = h - '0'; else if (h >= 'a' && h <= 'f') hi = h - 'a' + 10; else if (h >= 'A' && h <= 'F') hi = h - 'A' + 10;
+            if (l >= '0' && l <= '9') lo = l - '0'; else if (l >= 'a' && l <= 'f') lo = l - 'a' + 10; else if (l >= 'A' && l <= 'F') lo = l - 'A' + 10;
+            if (hi >= 0 && lo >= 0) { raw[w++] = (char)(hi * 16 + lo); i += 2; continue; }
+          }
+          raw[w++] = c;
+        }
+        raw[w] = 0;
+        return tur_some_ptr(raw);
+      }
+      if (!amp) break;
+      p = amp + 1;
+    }
+    return tur_none();
+    ```)
+
+  ;;; env-or -- the environment variable name, or dflt when unset / empty.
+  (defn env-or [name : cstr dflt : cstr] : cstr
+    ```c const char *v = getenv(name); return (v && *v) ? v : dflt; ```))

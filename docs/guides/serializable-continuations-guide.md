@@ -85,10 +85,24 @@ interpreter's structural path; pass `0`.
 
 **Capture scope.** The continuation must be a *supported delimited context*: a
 single-scalar-hole chain of `let` prelude + `+ - * /` + 2-arg calls + one `if`.
-Contexts outside that grammar do not capture (see
+Contexts outside that grammar are rejected with `TUR-E0706` (see
 `docs/archive/history/serial-shift-unsupported-context-miscompile.md`). Design
 the region around the shift so the "rest" is a named call: the image-dump
 combinator does exactly this (`(serial-shift handler 0)` followed by `(loop)`).
+Two further rules follow from how the frames are marshalled by name:
+
+- **The callee in the context must be uncolored** for the CPS backend: it
+  cannot contain a `serial-reset` of its own, perform an effect, use an
+  `unsafe` block, or call through a function value -- and neither can
+  anything it calls. A multi-page flow therefore does not nest resets: each
+  page's callee returns a code and the code that runs *outside* the reset
+  starts the next one (the guestbook example's `advance`).
+- **The handler must be a named, uncolored top-level function or a closure
+  that captures something.** A `(fn [k] ...)` literal that captures nothing is
+  neither, and is rejected (`docs/reported/serial-shift-non-capturing-lambda-receiver-rejected.md`).
+
+`TUR_TRACE_CORE=1` names the collector rule (`[CTX-REJECT] cps_ir.c:<line>`)
+that rejected a context, which is faster than guessing.
 
 ### The `Serializable` Typeclass
 

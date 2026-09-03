@@ -1,64 +1,45 @@
 cmake_minimum_required(VERSION 3.20)
-project(guestbook LANGUAGES C)
 
 # ---------------------------------------------------------------------------
 # guestbook -- multi-page web form via serializable continuations
 # ---------------------------------------------------------------------------
 #
-# Requires: Turmeric compiler (tur) built in the parent build tree.
-# No external HTTP library -- uses the bundled httpd.c raw-socket shim.
+# Requires: the Turmeric compiler (tur) built in the parent build tree.
+# No external HTTP library -- the bundled httpd.c raw-socket shim is the
+# listener.  The same program builds without CMake at all:
 #
-# Build:
-#   just configure-examples
-#   cmake --build build --target guestbook
+#   tur build examples/guestbook          # -> examples/guestbook/build/bin/guestbook
+#   tur run   examples/guestbook/src/main.tur
+#
+# (build.tur's :c-sources links httpd.c on both paths.)  This target exists so
+# `cmake --build build --target guestbook` works alongside the other examples.
 #
 # Run:
 #   GUESTBOOK_SECRET="my-secret" ./build/examples/guestbook/guestbook
 
-# Locate the Turmeric compiler from the parent build.
-set(TUR_BINARY "$<TARGET_FILE:tur>")
+set(TUR_SRCDIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
+set(TUR_OUTDIR "${CMAKE_CURRENT_BINARY_DIR}")
 
-# Source files to compile with the Turmeric compiler.
-set(TUR_SOURCES
-    src/main.tur
-    src/handlers.tur
-    src/router.tur
-    src/conts.tur
-    src/store.tur
-    src/templates.tur
-    src/security.tur
-)
-
-# The C shim that provides the HTTP listener.
-set(C_SOURCES
-    httpd.c
-)
-
-# Emit C from Turmeric sources, then compile and link with the C shim.
+# main.tur imports the other modules; `tur emit-c` resolves them through the
+# enclosing build.tur (auto-spice discovery) and emits one translation unit.
+file(GLOB TUR_SOURCES "${TUR_SRCDIR}/*.tur")
 add_custom_command(
-    OUTPUT  "${CMAKE_CURRENT_BINARY_DIR}/guestbook_tur.c"
-    COMMAND "${TUR_BINARY}" emit-c
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/main.tur"
-            --output "${CMAKE_CURRENT_BINARY_DIR}/guestbook_tur.c"
-    DEPENDS tur ${TUR_SOURCES}
-    COMMENT "Compiling Turmeric sources -> guestbook_tur.c"
+  OUTPUT  "${TUR_OUTDIR}/guestbook_gen.c"
+  COMMAND /bin/sh -c "$<TARGET_FILE:tur> emit-c \"${TUR_SRCDIR}/main.tur\" > \"${TUR_OUTDIR}/guestbook_gen.c\""
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  DEPENDS tur ${TUR_SOURCES}
+  COMMENT "Compiling main.tur -> guestbook_gen.c"
+  VERBATIM
 )
 
-add_executable(guestbook
-    "${CMAKE_CURRENT_BINARY_DIR}/guestbook_tur.c"
-    ${C_SOURCES}
+add_executable(guestbook EXCLUDE_FROM_ALL
+  "${TUR_OUTDIR}/guestbook_gen.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/httpd.c"
 )
-
-target_include_directories(guestbook PRIVATE
-    "${CMAKE_SOURCE_DIR}/src"
-)
-
-target_link_libraries(guestbook PRIVATE turi_static)
+target_compile_options(guestbook PRIVATE -w)   # suppress warnings in generated C
+target_include_directories(guestbook PRIVATE "${CMAKE_SOURCE_DIR}/src")
 
 # On Windows, link Winsock.
 if(WIN32)
-    target_link_libraries(guestbook PRIVATE ws2_32)
+  target_link_libraries(guestbook PRIVATE ws2_32)
 endif()
-
-# Create the data directories at configure time so they exist on first run.
-file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/data/conts")

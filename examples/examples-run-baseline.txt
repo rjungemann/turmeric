@@ -15,3 +15,4 @@
 # finding the sweep exists to produce.
 
 examples/snake/src/main.tur   opens a raylib window (needs a display and the raylib C shim linked by its own CMakeLists)
+examples/guestbook/src/main.tur   binds an HTTP listener and serves forever (tests/run-guestbook.sh drives it with GUESTBOOK_MAX_REQUESTS instead)

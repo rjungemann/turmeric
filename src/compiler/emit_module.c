@@ -8431,6 +8431,15 @@ static bool preamble_uses_serial(const Expr *e) {
             for (uint32_t i = 0; i < e->as.program.n; i++)
                 if (preamble_uses_serial(e->as.program.items[i])) return true;
             return false;
+        case EX_DEFMODULE:
+            /* guestbook-example-has-no-import-graph: a serial-reset inside a
+             * (defmodule ...) body was invisible here, so a module program
+             * that captured a continuation was emitted without the DK serial
+             * runtime and failed at cc with an implicit __sk_register. */
+            if (e->as.defmodule_.mod)
+                for (uint32_t i = 0; i < e->as.defmodule_.mod->n_body; i++)
+                    if (preamble_uses_serial(e->as.defmodule_.mod->body[i])) return true;
+            return false;
         case EX_FN_DEF:
             return e->as.fn_def_.fn && preamble_uses_serial(e->as.fn_def_.fn->body);
         case EX_FN:

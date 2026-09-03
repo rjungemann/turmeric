@@ -1,155 +1,125 @@
 ---
 title: Web Continuations Guide
 category: Advanced Control Flow
-description: Compact reference: `send-form-and-wait`, continuation store, routing model
+description: Compact reference: one continuation per page, the continuation store, routing model
 ---
 
 # Web Continuations Guide
 
-A compact reference for building multi-page web applications in Turmeric using serializable continuations. This guide assumes you understand `serial-reset` / `serial-shift` / `serial-resume` -- see [serializable-continuations-guide.md](serializable-continuations-guide.md) for that background.
+A compact reference for building multi-page web applications in Turmeric using serializable continuations. This guide assumes you understand `serial-reset` / `serial-shift` / `serial-resume` and the capture grammar -- see [serializable-continuations-guide.md](serializable-continuations-guide.md) for that background.
 
-For a full step-by-step walkthrough with a complete guestbook example, see [web-continuations-tutorial.md](web-continuations-tutorial.md).
+For a full step-by-step walkthrough with the complete guestbook example (`examples/guestbook/`), see [web-continuations-tutorial.md](web-continuations-tutorial.md).
 
 ---
 
-## The `send-form-and-wait` Pattern
+## The One-Continuation-Per-Page Pattern
 
-The canonical idiom for a page in a multi-step flow:
+The unit of a flow is a page: a `serial-reset` whose rest is a call to that
+page's *submitted* function with the hole in argument position, and a named
+receiver that stores the continuation and sends the form.
 
 ```turmeric no-check
-(defn send-form-and-wait [render-fn : (fn [cstr] cstr)] : cstr
-  (serial-shift (fn [k : serial-cont] : cstr
-                  (let [token  (store-continuation k)
-                        action (str "/submit?k=" token)
-                        html   (render-fn action)]
-                    (perform HttpEffect (send-html html))))
-                0))
+;; The page: capture "what happens when the message form is posted".
+(defn page-message [] : int
+  (serial-reset
+    (message-submitted flow-name (serial-shift suspend-message-page 0))))
+
+;; The receiver: store k under a signed token, send the form whose action
+;; carries the token.  It returns WITHOUT resuming k -- the request is over.
+(defn suspend-message-page [k : serial-cont] : int
+  (send-html (render-message-form (action-for k) flow-name flow-message)))
+
+;; The leaf: runs when the browser posts.  `name` is the frame's env (what
+;; page-message captured), `body-i` is the POST body arriving through the hole.
+(defn message-submitted [name : cstr body-i : int] : int
+  (let [body (int-as-cstr body-i)]
+    (do
+      (set! flow-name name)
+      (set! flow-message (html-escape (field-or body "message" "")))
+      (step-preview))))
 ```
 
-`(serial-shift handler default)` hands the rest of the enclosing `serial-reset`
-to `handler` as a `serial-cont`; the handler here never resumes it, so the
-request ends with the rendered form and the continuation lives on only as
-the stored bytes.
+Three rules of the capture grammar shape this:
 
-**Parameters:**
-- `render-fn` -- a function that takes the form `action` URL and returns an HTML string
+- **The frame carries one environment value** (`name` above, an `int` or a
+  `cstr`, or a value with a `Serializable` instance). Pack more than one into
+  one `cstr` (the preview page carries `name<TAB>message`).
+- **The hole is an `int`.** The POST body travels as its address
+  (`cstr-as-int` / `int-as-cstr`); both ends are the same process, and the
+  bytes on disk hold the frame, not the body.
+- **The leaf and the receiver must be uncolored**: no `serial-reset` of their
+  own, no effects, no `unsafe` block, no call through a function value --
+  transitively. So a leaf does not start the next page; it returns a **step
+  code**, and `advance`, called by the router outside every reset, starts the
+  next page's reset (or renders a terminal page):
 
-**Returns:**
-- The raw POST body that the browser submitted when the form was filled in
+```turmeric no-check
+(defn advance [step : int] : int
+  (cond
+    (= step (step-message))  (page-message)
+    (= step (step-preview))  (page-preview)
+    (= step (step-thankyou)) (send-html (render-thankyou (store-lines)))
+    :else 0))
+```
 
-**When to use it:**
-- Any time the flow needs to pause, show a page to the user, and resume when the user submits a form
-- Works for GET-style "click to continue" pages too -- just render a form with no visible fields and a single submit button
+**When to use it:** any time the flow needs to pause, show a page, and resume
+when the user submits a form -- "click to continue" pages included (a form
+with one submit button).
 
-**When not to use it:**
-- For pages that do not need to resume a continuation (e.g., a static about page or a 404 error) -- just send the HTML response directly
+**When not to use it:** for pages that resume nothing (a static about page, a
+404) -- send the HTML directly.
 
 ---
 
 ## Continuation Store Contract
 
-The continuation store (`conts.tur`) must satisfy:
+The continuation store (`conts.tur`) satisfies:
 
 ```turmeric no-check
-;; Store k and return a token that can be used to resume it.
-(store-continuation k)  : cstr
+;; Store k and return the signed token that resumes it.
+(store-continuation k) : cstr
 
-;; Look up k by token. Returns None if missing or expired.
-(load-continuation token) : (Option serial-cont)
-```
+;; Rebuild the continuation a signed token names.
+(load-continuation signed) : (Result serial-cont cstr)
 
-```sweet-exp
-;; Store k and return a token that can be used to resume it.
-store-continuation(k)  : cstr
-
-;; Look up k by token. Returns None if missing or expired.
-load-continuation(token) : (Option serial-cont)
+;; Delete continuation files older than the TTL; returns how many.
+(evict-expired-conts!) : int
 ```
 
 ### Token Format
 
-Tokens are 64 hex characters (256 bits of randomness). When HMAC signing is enabled (see [web-continuations-tutorial.md](web-continuations-tutorial.md) Step 9), tokens have the form `<64-hex-chars>.<64-hex-chars>` (raw token + HMAC-SHA256 signature).
+`<64 hex chars>.<64 hex chars>`: 256 bits of randomness (the file name)
+followed by the HMAC-SHA256 of it under `GUESTBOOK_SECRET`. `verify-token`
+compares signatures in constant time; a token the server did not issue never
+reaches the filesystem.
 
 ### Storage Interface
 
-The tutorial uses file-per-token storage in `data/conts/`:
+File-per-token storage in `data/conts/`:
 
 | Operation | Path | Notes |
 |-----------|------|-------|
-| `store-continuation k` | Writes `data/conts/<token>.bin` | Atomic write via temp-then-rename |
-| `load-continuation token` | Reads `data/conts/<token>.bin` | Returns `None` on missing file or schema mismatch |
+| `store-continuation k` | Writes `data/conts/<token>.bin` | `serial-cont->bytes` framed by `cont-to-file` |
+| `load-continuation signed` | Reads `data/conts/<token>.bin` | `Err` for a bad signature, a missing file, a file older than the TTL, or bytes `bytes->serial-cont` cannot rebuild |
 
 ### Eviction Policy
 
-The tutorial implementation does not evict tokens automatically. For a production deployment, add a background sweep that deletes `.bin` files older than the TTL:
-
-```turmeric
-(defn evict-expired-conts [] : unit
-  (def dir-entries (dir-list "data/conts/"))
-  (Vec.for-each dir-entries
-                (fn [entry]
-                  (when (> (- (unix-now) (file-mtime entry)) CONT-TTL-SECONDS)
-                    (file-delete entry)))))
-```
-
-```sweet-exp
-defn evict-expired-conts [] : unit
-  def dir-entries dir-list("data/conts/")
-  Vec.for-each(dir-entries fn([entry]
-    when(>(-(unix-now() file-mtime(entry)) CONT-TTL-SECONDS)
-      file-delete(entry))))
-```
-
-Alternatively use the `StoredCont` struct (tutorial Step 9) to embed the creation timestamp inside the file itself, making expiry checks independent of filesystem mtime.
+The main loop calls `evict-expired-conts!` after every request; it removes
+files whose mtime is older than the TTL (30 minutes). `load-continuation`
+applies the same age check, so a token that outlived the sweep is still
+refused.
 
 ---
 
-## Serializable Structs for Flow State
+## What Crosses the Boundary
 
-Any value captured inside a `serial-reset` boundary must implement `Serializable`. For custom structs, write a `definstance`:
-
-```turmeric
-;; Pattern: serialize as a Vec cstr (one field per element).
-(definstance Serializable MyStruct
-  (serialize [s]
-    (serialize (Vec.of [s.field-a
-                        s.field-b
-                        (int64->cstr s.field-c)])))
-  (deserialize [b]
-    (match (deserialize b : (Result (Vec cstr) cstr))
-      (Err msg) -> (Err msg)
-      (Ok parts) ->
-        (if (< (Vec.len parts) 3)
-          (Err "MyStruct: not enough fields")
-          (Ok (MyStruct
-                :field-a (Vec.get parts 0)
-                :field-b (Vec.get parts 1)
-                :field-c (cstr->int64 (Vec.get parts 2))))))))
-```
-
-```sweet-exp
-;; Pattern: serialize as a Vec cstr (one field per element).
-definstance Serializable MyStruct
-  serialize [s]
-    serialize(Vec.of([s.field-a
-                      s.field-b
-                      int64->cstr(s.field-c)]))
-  deserialize [b]
-    match(deserialize(b : (Result (Vec cstr) cstr))
-      (Err msg) -> Err(msg)
-      (Ok parts) ->
-        if({Vec.len(parts) < 3}
-          Err("MyStruct: not enough fields")
-          Ok((MyStruct
-               :field-a Vec.get(parts 0)
-               :field-b Vec.get(parts 1)
-               :field-c cstr->int64(Vec.get(parts 2))))))
-```
-
-**Rules:**
-- All fields must themselves implement `Serializable`
-- Resource types (file handles, sockets) cannot be captured -- restructure to move them outside the `serial-reset` boundary
-- The elaborator will produce a clear error if you accidentally capture a non-serializable value
+A frame's environment marshals **by value**: an `int` inline, a `cstr` as its
+bytes, anything else through its `Serializable` instance. The guestbook keeps
+every captured value a `cstr` (already HTML-escaped) so no instance is needed;
+a flow that captures a struct writes one (`serializable-continuations-guide.md`,
+"The `Serializable` Typeclass"). Resource types (file handles, sockets) cannot
+be captured -- the listener lives outside every reset, in `httpd.tur`'s static
+storage.
 
 ---
 
@@ -159,34 +129,23 @@ The router maps `POST /submit?k=TOKEN` to `serial-resume`:
 
 ```turmeric no-check
 POST /submit?k=TOKEN
-  -> parse TOKEN from query string
-  -> verify HMAC signature (if signing enabled)
-  -> load continuation from store -> k
-  -> serial-resume k req.body
-  -> flow resumes where send-form-and-wait was called
-  -> eventually calls perform HttpEffect (send-html ...)
-  -> HTTP response sent
+  -> parse TOKEN from the query string           (form-field (httpd/query) "k")
+  -> verify the signature, age and bytes         (load-continuation t)
+  -> resume with the POST body                   (serial-resume k (cstr-as-int (httpd/body)))
+  -> the page's leaf runs, returns a step code
+  -> advance starts the next page's reset        (advance step)
+  -> its receiver sends the next form (or the thank-you page is sent)
 ```
 
-```sweet-exp
-POST /submit?k=TOKEN
-  -> parse TOKEN from query string
-  -> verify HMAC signature (if signing enabled)
-  -> load continuation from store -> k
-  -> serial-resume(k req.body)
-  -> flow resumes where send-form-and-wait was called
-  -> eventually calls perform HttpEffect send-html(...)
-  -> HTTP response sent
-```
-
-The flow never explicitly returns a response. All output goes through `HttpEffect`. The effect handler in the main loop sends the response and loops back to `httpd-next-request`.
+Every response is sent by whoever produces it (`httpd/send!`); a request's
+response is exactly one send.
 
 ### Routing Table
 
 | Method | Path | Handler |
 |--------|------|---------|
-| GET | `/` | Start a new flow (`run-guestbook-flow`) |
-| POST | `/submit` | Resume a continuation (`resume-handler`) |
+| GET | `/` | Start a new flow (`start-flow`, page 1) |
+| POST | `/submit` | Resume a continuation (`resume-handler`, then `advance`) |
 | GET | `/entries` | List all entries (no continuation needed) |
 | anything else | any | 404 |
 
@@ -194,49 +153,34 @@ The flow never explicitly returns a response. All output goes through `HttpEffec
 
 ## Composing Flows
 
-### Sequential Sub-Flows
+### Sequential Pages
 
-A helper function that calls `send-form-and-wait` internally can be called from within any `serial-reset` boundary:
+Pages compose through step codes, not through nesting: a leaf returns the
+code of the page that should follow, and `advance` is the one place that
+knows the order. Adding a page is one leaf, one receiver, one page function,
+one `cond` arm.
 
-```turmeric
-;; Sub-flow: collect a name and return it.
-(defn collect-name [] : cstr
-  (def body (send-form-and-wait (fn [a] (render-name-form a))))
-  (or (parse-form-field body "name") "Anonymous"))
+### Back Navigation
 
-;; Main flow: call sub-flows in sequence.
-(defn checkout-flow [req : HttpRequest] : unit
-  (serial-reset
-    (def name    (collect-name))
-    (def address (collect-address))
-    (def card    (collect-payment))
-    (finalize-order name address card)))
-```
-
-```sweet-exp
-;; Sub-flow: collect a name and return it.
-defn collect-name [] : cstr
-  def body send-form-and-wait(fn([a] render-name-form(a)))
-  or(parse-form-field(body "name") "Anonymous")
-
-;; Main flow: call sub-flows in sequence.
-defn checkout-flow [req : HttpRequest] : unit
-  serial-reset
-    def name    collect-name()
-    def address collect-address()
-    def card    collect-payment()
-    finalize-order(name address card)
-```
-
-Each helper is just a function -- `serial-shift` works correctly across call boundaries because the entire continuation stack within the `serial-reset` region is serialized.
+The preview page's form has two submit buttons posting the same
+continuation, distinguished by a `decision` field. `preview-decided` reads
+it: `back` stashes name and message and returns `step-message` (the message
+form comes back prefilled), `confirm` appends the entry and returns
+`step-thankyou`. One token per page; the browser's own Back button reaching an
+older form works the same way, since an unexpired token can be posted again.
 
 ### Nested Boundaries
 
-Do not nest `serial-reset` inside another `serial-reset`. The inner boundary creates a separate continuation scope, and `serial-shift` inside it captures only up to the inner boundary. Use a single `serial-reset` per logical flow.
+Do not nest `serial-reset` inside a reset context, and do not call a function
+that contains one from a leaf: the context collector rejects the capture
+(`TUR-E0706`). One reset per page, started from outside.
 
-### Passing Continuations Across Handler Boundaries
+### Resuming From a Different Code Path
 
-If a continuation token is stored in one HTTP request and resumed in a completely different code path (e.g., an admin approval endpoint), the continuation still works -- the serialized bytes carry the full execution context independently of the handler that resumes them.
+A token stored by one request can be resumed by any code path that can read
+the file -- an admin approval endpoint, a CLI -- as long as it is the same
+program: frames are marshalled by name and `bytes->serial-cont` validates
+every name against the running program's registry.
 
 ---
 
@@ -244,9 +188,9 @@ If a continuation token is stored in one HTTP request and resumed in a completel
 
 | Concept | Racket | Turmeric |
 |---------|--------|----------|
-| Boundary | `(send/suspend proc)` | `(serial-reset ...)` |
-| Pause and hand URL to renderer | `send/suspend` calls `proc` with the resume URL | `(serial-shift handler 0)` hands `k` to the handler, which serializes it, builds the URL, calls `render-fn` |
-| Resume URL token | Racket generates a URL using an in-memory store | `store-continuation` generates a hex token backed by files |
+| Boundary | `(send/suspend proc)` | `(serial-reset ...)` per page |
+| Pause and hand URL to renderer | `send/suspend` calls `proc` with the resume URL | `(serial-shift receiver 0)` hands `k` to the named receiver, which stores it and renders the form with `/submit?k=<token>` |
+| Resume URL token | Racket generates a URL using an in-memory store | `store-continuation` generates a signed hex token backed by files |
 | Resume | Browser follows URL -> Racket resumes heap closure | Browser POSTs token -> router calls `serial-resume k body` |
 | Persistence | Continuations lost on server restart (default) | Continuations persist across restarts (files on disk) |
 | Type safety | Dynamic | `k : serial-cont` -- an opaque, typed handle; `bytes->serial-cont` validates before resuming |
@@ -258,12 +202,14 @@ If a continuation token is stored in one HTTP request and resumed in a completel
 
 **No true call/cc semantics.** `serial-shift` is a *delimited* shift -- it captures only up to the enclosing `serial-reset`. You cannot capture the continuation of the entire program.
 
-**Deep-copy cost.** Serialization performs a full deep copy of all values in the continuation. Large data structures captured inside `serial-reset` will produce large `.bin` files. Move bulky data outside the boundary (e.g., store it in the guestbook store and capture only an ID).
+**One frame, one env, one int hole.** The capture grammar is a single-scalar-hole chain; a page's state is one `cstr` (or `Serializable` value) and the resume value is an `int`. Pack state, and pass bulky data by reference (an id into the store), not by value.
 
-**Token size.** A typical serialized continuation for the guestbook flow is a few kilobytes. Deeply nested flows with large intermediate values can grow larger. Monitor file sizes in `data/conts/` during development.
+**Uncolored leaves and receivers.** Anything the reset context calls must stay out of the CPS backend's colored set; the page-transition work that needs colored code (templates that concatenate through `str+`, effects) happens in `advance`.
 
-**No sharing.** If the same value is reachable via two different paths in a captured continuation (e.g., two bindings pointing to the same `ref`), serialization produces two independent copies. On resume, mutations to one copy do not affect the other.
+**Token size.** A guestbook continuation is one frame: a few hundred bytes. Monitor `data/conts/` if a flow captures larger values.
 
-**Single-threaded listener.** The tutorial HTTP listener handles one request at a time. Two simultaneous form submissions are serialized at the socket level. For concurrent flows, run multiple server processes or switch to a multi-threaded listener with per-request effect handlers.
+**No sharing.** If the same value is reachable via two different paths in a captured continuation, serialization produces two independent copies. On resume, mutations to one copy do not affect the other.
 
-**Schema versioning.** If you change the code between writing a token and resuming it, the frame names in the stored bytes may no longer exist in the running program; `bytes->serial-cont` then returns `Err "bytes->serial-cont: unknown frame (written by a different program?)"` rather than resuming garbage. Either drain all pending continuations before deploying, or keep a version beside each token and reject stale ones up front. See [serializable-continuations-guide.md](serializable-continuations-guide.md) -- Error Handling.
+**Single-threaded listener.** The tutorial HTTP listener handles one request at a time. Two simultaneous form submissions are serialized at the socket level. For concurrent flows, run multiple server processes or switch to a multi-threaded listener.
+
+**Schema versioning.** If you change the code between writing a token and resuming it, the frame names in the stored bytes may no longer exist in the running program; `bytes->serial-cont` then returns `Err "bytes->serial-cont: unknown frame (written by a different program?)"` rather than resuming garbage, and the router shows it as a 404 page. Either drain all pending continuations before deploying, or keep a version beside each token and reject stale ones up front. See [serializable-continuations-guide.md](serializable-continuations-guide.md) -- Error Handling.

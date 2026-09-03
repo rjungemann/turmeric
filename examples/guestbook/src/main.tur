@@ -1,140 +1,43 @@
-;;; main.tur -- entry point for the guestbook server.
-;;;
-;;; Starts the HTTP listener, loads the entry store, then runs the main
-;;; request loop. Each request is dispatched to the router. The HttpEffect
-;;; algebraic effect is handled here by calling httpd-send-response.
+;;; main -- entry point: start the listener and serve requests forever.
 ;;;
 ;;; Usage:
-;;;   GUESTBOOK_SECRET="my-real-secret" ./guestbook
+;;;   GUESTBOOK_SECRET="a long random string" tur run src/main.tur
 ;;;
-;;; The server listens on http://127.0.0.1:8080 by default.
-;;; Set PORT to override. Set GUESTBOOK_SECRET to a strong random string
-;;; in production -- the default "dev-insecure-secret" is for local testing only.
-;;;
-;;; Since: Guestbook example
-
-; ---------------------------------------------------------------------------
-; C FFI -- minimal HTTP listener (httpd.c)
-; ---------------------------------------------------------------------------
-
-;;; httpd-start -- bind an HTTP listener on the given port.
-;;;
-;;; Parameters:
-;;;   port -- TCP port number (1-65535)
-;;;
-;;; Returns:
-;;;   0 on success, -1 on error.
+;;; Listens on http://127.0.0.1:8080/ (PORT overrides).  Every request is
+;;; read by httpd/wait! and routed by dispatch; expired continuation files are
+;;; swept after each one.  GUESTBOOK_MAX_REQUESTS=N serves N requests and
+;;; exits, which is how the smoke test drives a whole flow with curl.
 ;;;
 ;;; Since: Guestbook example
-(extern-c httpd-start [(port : int64)] : int64
-  "httpd_start")
+(defmodule main
+  (import strutil :refer [str+ env-or cstr->int-or int->cstr])
+  (import httpd :refer [httpd/start httpd/wait!])
+  (import store :refer [store-init!])
+  (import conts :refer [evict-expired-conts!])
+  (import router :refer [dispatch])
 
-;;; httpd-next-request -- block until the next HTTP request arrives.
-;;;
-;;; Parameters:
-;;;   out-method -- pointer to receive the HTTP method string
-;;;   out-path   -- pointer to receive the URL path
-;;;   out-query  -- pointer to receive the raw query string
-;;;   out-body   -- pointer to receive the POST body
-;;;
-;;; Returns:
-;;;   unit
-;;;
-;;; Since: Guestbook example
-(extern-c httpd-next-request
-  [(out-method : ptr<cstr>)
-   (out-path   : ptr<cstr>)
-   (out-query  : ptr<cstr>)
-   (out-body   : ptr<cstr>)] : unit
-  "httpd_next_request")
+  ;;; serve-loop -- read, dispatch, sweep; max = 0 means forever.
+  (defn serve-loop [max : int] : int
+    (let [^mut served 0]
+      (do
+        (while (or (= max 0) (< served max))
+          (do
+            (httpd/wait!)
+            (dispatch)
+            (evict-expired-conts!)
+            (set! served (+ served 1))))
+        served)))
 
-;;; httpd-send-response-raw -- write an HTTP response to the open connection.
-;;;
-;;; Parameters:
-;;;   status       -- HTTP status code
-;;;   content-type -- MIME type string
-;;;   body         -- response body
-;;;
-;;; Returns:
-;;;   unit
-;;;
-;;; Since: Guestbook example
-(extern-c httpd-send-response-raw
-  [(status       : int64)
-   (content-type : cstr)
-   (body         : cstr)] : unit
-  "httpd_send_response")
-
-; ---------------------------------------------------------------------------
-; Server configuration
-; ---------------------------------------------------------------------------
-
-;;; SERVER-SECRET -- HMAC key for signing continuation tokens.
-;;; Override via the GUESTBOOK_SECRET environment variable in production.
-(def SERVER-SECRET : bytes
-  (cstr->bytes (or (getenv "GUESTBOOK_SECRET") "dev-insecure-secret")))
-
-;;; DEFAULT-PORT -- TCP port to listen on. Override via PORT env var.
-(def DEFAULT-PORT : int64 8080)
-
-; ---------------------------------------------------------------------------
-; Main request loop
-; ---------------------------------------------------------------------------
-
-;;; run-loop -- accept and dispatch HTTP requests indefinitely.
-;;;
-;;; Handles the HttpEffect algebraic effect by calling httpd-send-response-raw.
-;;;
-;;; Returns:
-;;;   unit (does not return -- runs forever)
-;;;
-;;; Since: Guestbook example
-(defn run-loop [] : unit
-  (loop
-    ; Allocate out-params for the next request.
-    (def out-method (ptr-alloc cstr))
-    (def out-path   (ptr-alloc cstr))
-    (def out-query  (ptr-alloc cstr))
-    (def out-body   (ptr-alloc cstr))
-
-    ; Block until a request arrives.
-    (httpd-next-request out-method out-path out-query out-body)
-
-    ; Construct the Turmeric request value.
-    (def req (HttpRequest
-               :method (ptr-deref out-method)
-               :path   (ptr-deref out-path)
-               :query  (ptr-deref out-query)
-               :body   (ptr-deref out-body)))
-
-    ; Dispatch the request, handling HttpEffect by sending the real response.
-    (handle
-      (dispatch req)
-      (HttpEffect.send-html [html] ->
-        (httpd-send-response-raw 200 "text/html" html)
-        (resume unit)))))
-
-;;; main -- server entry point.
-;;;
-;;; Returns:
-;;;   unit
-;;;
-;;; Since: Guestbook example
-(defn main [] : unit
-  (def port (or (cstr->int64-maybe (getenv "PORT")) DEFAULT-PORT))
-
-  ; Ensure the data directories exist.
-  (dir-create-all "data/conts")
-
-  ; Load the entry store from disk.
-  (store-load)
-
-  ; Bind the listener socket.
-  (def result (httpd-start port))
-  (when (< result 0)
-    (eprintln "guestbook: failed to start HTTP listener on port "
-              (int64->cstr port))
-    (exit 1))
-
-  ; Enter the request loop.
-  (run-loop))
+  ;;; main -- bind the port and serve.
+  (defn main [] : int
+    (let [port (cstr->int-or (env-or "PORT" "8080") 8080)
+          max  (cstr->int-or (env-or "GUESTBOOK_MAX_REQUESTS" "0") 0)]
+      (do
+        (store-init!)
+        (if (< (httpd/start port) 0)
+          (do (println (str+ "guestbook: failed to start HTTP listener on port " (int->cstr port)))
+              1)
+          (do
+            (println (str+ "guestbook: listening on http://127.0.0.1:" (int->cstr port) "/"))
+            (serve-loop max)
+            0))))))

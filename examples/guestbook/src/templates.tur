@@ -1,168 +1,89 @@
-;;; templates.tur -- HTML rendering helpers for each page of the guestbook.
+;;; templates -- HTML rendering for every guestbook page.
 ;;;
-;;; All functions return raw HTML strings. User-supplied content must be
-;;; HTML-escaped (via html-escape from security.tur) before being passed in.
+;;; Every renderer returns a complete document.  User text is escaped by the
+;;; caller (security/html-escape) before it reaches these functions; the
+;;; renderers only assemble markup.
 ;;;
 ;;; Since: Guestbook example
+(defmodule templates
+  (import strutil :refer [str+ cstr-index-of cstr-slice cstr-len])
+  (export page-shell render-name-form render-message-form render-preview
+          render-thankyou render-entries render-error)
 
-;;; page-shell -- wrap content in a minimal HTML document shell.
-;;;
-;;; Parameters:
-;;;   title   -- page title shown in the browser tab
-;;;   content -- inner HTML body content
-;;;
-;;; Returns:
-;;;   Complete HTML document string.
-;;;
-;;; Since: Guestbook example
-(defn page-shell [title : cstr, content : cstr] : cstr
-  (str "<!DOCTYPE html><html lang='en'><head>"
-       "<meta charset='utf-8'/>"
-       "<meta name='viewport' content='width=device-width,initial-scale=1'/>"
-       "<title>" title " -- Turmeric Guestbook</title>"
-       "<style>"
-       "body{font-family:sans-serif;max-width:600px;margin:2em auto;padding:0 1em}"
-       "h2{border-bottom:1px solid #ccc;padding-bottom:.3em}"
-       "input,textarea{width:100%;box-sizing:border-box;margin:.4em 0;padding:.4em}"
-       "button{margin-top:.6em;padding:.4em 1em}"
-       "ul{list-style:none;padding:0}"
-       "li{border:1px solid #eee;border-radius:4px;padding:.6em;margin:.4em 0}"
-       "li strong{display:block}"
-       "</style>"
-       "</head><body>" content "</body></html>"))
+  ;;; page-shell -- wrap content in the shared document skeleton.
+  (defn page-shell [title : cstr content : cstr] : cstr
+    (str+ "<!doctype html><html><head><meta charset=\"utf-8\"><title>" title
+          "</title><style>body{font-family:sans-serif;max-width:40em;margin:2em auto}"
+          "label{display:block;margin:.5em 0}textarea,input{width:100%}"
+          "li{margin:.5em 0}.muted{color:#666}</style></head><body><h1>" title
+          "</h1>" content "<p class=\"muted\"><a href=\"/\">Sign the guestbook</a> &middot; "
+          "<a href=\"/entries\">Read the entries</a></p></body></html>"))
 
-;;; render-name-form -- render the name-entry page.
-;;;
-;;; Parameters:
-;;;   action -- form action URL (e.g. "/submit?k=TOKEN")
-;;;
-;;; Returns:
-;;;   HTML string for the name-entry page.
-;;;
-;;; Example:
-;;;   (render-name-form "/submit?k=abc123")
-;;;
-;;; Since: Guestbook example
-(defn render-name-form [action : cstr] : cstr
-  (page-shell "Sign the Guestbook"
-    (str "<h2>Sign the Guestbook</h2>"
-         "<form method='POST' action='" action "'>"
-         "<label>Your name:"
-         "<input name='name' autofocus maxlength='120'/>"
-         "</label>"
-         "<br/>"
-         "<button type='submit'>Next &rarr;</button>"
-         "</form>")))
+  ;;; render-name-form -- page 1: ask for the visitor's name.
+  ;;;
+  ;;; Parameters:
+  ;;;   action -- the form action URL carrying this page's continuation token
+  (defn render-name-form [action : cstr] : cstr
+    (page-shell "Guestbook"
+      (str+ "<form method=\"post\" action=\"" action "\">"
+            "<label>Your name <input name=\"name\" autofocus></label>"
+            "<button>Next</button></form>")))
 
-;;; render-message-form -- render the message-entry page.
-;;;
-;;; Parameters:
-;;;   action -- form action URL
-;;;   name   -- HTML-escaped author name (shown as a greeting)
-;;;
-;;; Returns:
-;;;   HTML string for the message-entry page.
-;;;
-;;; Example:
-;;;   (render-message-form "/submit?k=def456" "Alice")
-;;;
-;;; Since: Guestbook example
-(defn render-message-form [action : cstr, name : cstr] : cstr
-  (page-shell "Your Message"
-    (str "<h2>Hello, " name "! Leave a message.</h2>"
-         "<form method='POST' action='" action "'>"
-         "<label>Message:"
-         "<textarea name='message' rows='4' maxlength='500' autofocus></textarea>"
-         "</label>"
-         "<br/>"
-         "<button type='submit'>Preview &rarr;</button>"
-         "</form>")))
+  ;;; render-message-form -- page 2: ask for the message.
+  ;;;
+  ;;; Parameters:
+  ;;;   action  -- the form action URL
+  ;;;   name    -- the (escaped) name from page 1, shown as a greeting
+  ;;;   message -- prefill (escaped) when the visitor came back from the preview
+  (defn render-message-form [action : cstr name : cstr message : cstr] : cstr
+    (page-shell (str+ "Hello, " name)
+      (str+ "<form method=\"post\" action=\"" action "\">"
+            "<label>Your message <textarea name=\"message\" rows=\"5\">" message
+            "</textarea></label><button>Preview</button></form>")))
 
-;;; render-preview -- render the preview page with confirm and back links.
-;;;
-;;; Parameters:
-;;;   name      -- HTML-escaped author name
-;;;   message   -- HTML-escaped message text
-;;;   t-back    -- continuation token for the "Edit" action
-;;;   t-confirm -- continuation token for the "Confirm" action
-;;;
-;;; Returns:
-;;;   HTML string for the preview page.
-;;;
-;;; Example:
-;;;   (render-preview "Alice" "Hello!" "t2b" "t3")
-;;;
-;;; Since: Guestbook example
-(defn render-preview [name      : cstr,
-                      message   : cstr,
-                      t-back    : cstr,
-                      t-confirm : cstr] : cstr
-  (page-shell "Preview Your Entry"
-    (str "<h2>Preview Your Entry</h2>"
-         "<div style='background:#f9f9f9;border:1px solid #ddd;border-radius:4px;padding:.8em;margin:1em 0'>"
-         "<p><strong>Name:</strong> " name "</p>"
-         "<p><strong>Message:</strong> " message "</p>"
-         "</div>"
-         "<form method='POST' action='/submit?k=" t-confirm "' style='display:inline'>"
-         "<button type='submit'>Confirm and Post</button>"
-         "</form>"
-         "&nbsp;"
-         "<form method='POST' action='/submit?k=" t-back "' style='display:inline'>"
-         "<button type='submit'>&#8592; Edit Message</button>"
-         "</form>")))
+  ;;; render-preview -- page 3: show the entry with Confirm and Back buttons.
+  ;;;
+  ;;; Both buttons post to the same continuation; the `decision` field tells
+  ;;; the resumed page which one was pressed.
+  (defn render-preview [action : cstr name : cstr message : cstr] : cstr
+    (page-shell "Preview"
+      (str+ "<blockquote><p>" message "</p><footer>&mdash; " name "</footer></blockquote>"
+            "<form method=\"post\" action=\"" action "\">"
+            "<button name=\"decision\" value=\"confirm\">Confirm</button> "
+            "<button name=\"decision\" value=\"back\">Back</button></form>")))
 
-;;; render-thankyou -- render the thank-you page with the full guestbook.
-;;;
-;;; Parameters:
-;;;   entries -- all guestbook entries to display
-;;;
-;;; Returns:
-;;;   HTML string for the thank-you page.
-;;;
-;;; Since: Guestbook example
-(defn render-thankyou [entries : (Vec GuestEntry)] : cstr
-  (def rows
-    (Vec.map entries (fn [e]
-      (str "<li><strong>" e.name "</strong>" e.message "</li>"))))
-  (page-shell "Thank You!"
-    (str "<h2>Thank you! Your entry has been posted.</h2>"
-         "<p><a href='/'>Add another entry</a>"
-         " &nbsp;|&nbsp; "
-         "<a href='/entries'>View all entries</a></p>"
-         "<h3>Guestbook</h3>"
-         "<ul>" (cstr-join rows "") "</ul>")))
+  ;;; entry-rows -- one <li> per "posted-at\tname\tmessage" line (internal).
+  (defn entry-rows [lines : cstr] : cstr
+    (let [^mut html ""
+          ^mut pos  0
+          n         (cstr-len lines)]
+      (do
+        (while (< pos n)
+          (let [nl   (cstr-index-of lines "\n" pos)
+                end  (if (< nl 0) n nl)
+                line (cstr-slice lines pos end)
+                t1   (cstr-index-of line "\t" 0)
+                t2   (if (< t1 0) -1 (cstr-index-of line "\t" (+ t1 1)))]
+            (do
+              (when (>= t2 0)
+                (set! html (str+ html "<li><p>" (cstr-slice line (+ t2 1) (cstr-len line))
+                                 "</p><footer class=\"muted\">&mdash; "
+                                 (cstr-slice line (+ t1 1) t2) "</footer></li>")))
+              (set! pos (+ end 1)))))
+        html)))
 
-;;; render-entries -- render the full guestbook listing page.
-;;;
-;;; Parameters:
-;;;   entries -- all guestbook entries to display
-;;;
-;;; Returns:
-;;;   HTML string for the entries listing page.
-;;;
-;;; Since: Guestbook example
-(defn render-entries [entries : (Vec GuestEntry)] : cstr
-  (def rows
-    (Vec.map entries (fn [e]
-      (str "<li><strong>" e.name "</strong>" e.message "</li>"))))
-  (page-shell "Guestbook Entries"
-    (str "<h2>Guestbook</h2>"
-         "<p><a href='/'>Sign the guestbook</a></p>"
-         (if (= (Vec.len entries) 0)
-           "<p><em>No entries yet. Be the first!</em></p>"
-           (str "<ul>" (cstr-join rows "") "</ul>")))))
+  ;;; render-thankyou -- page 4: confirmation plus the current entries.
+  (defn render-thankyou [lines : cstr] : cstr
+    (page-shell "Thank you!"
+      (str+ "<p>Your entry has been added.</p><ul>" (entry-rows lines) "</ul>")))
 
-;;; render-error -- render a simple error page.
-;;;
-;;; Parameters:
-;;;   msg -- HTML-escaped error message
-;;;
-;;; Returns:
-;;;   HTML string for the error page.
-;;;
-;;; Since: Guestbook example
-(defn render-error [msg : cstr] : cstr
-  (page-shell "Error"
-    (str "<h2>Something went wrong</h2>"
-         "<p>" msg "</p>"
-         "<p><a href='/'>Start over</a></p>")))
+  ;;; render-entries -- GET /entries: every entry, oldest first.
+  (defn render-entries [lines : cstr] : cstr
+    (page-shell "Entries"
+      (if (= (cstr-len lines) 0)
+        "<p>No entries yet.</p>"
+        (str+ "<ul>" (entry-rows lines) "</ul>"))))
+
+  ;;; render-error -- an error page with the (already escaped) message.
+  (defn render-error [msg : cstr] : cstr
+    (page-shell "Sorry" (str+ "<p>" msg "</p>"))))

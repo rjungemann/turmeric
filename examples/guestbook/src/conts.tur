@@ -1,123 +1,107 @@
-;;; conts.tur -- continuation store: token generation, file-based load/save,
-;;; and optional expiry.
+;;; conts -- the continuation store: one file per token under data/conts/.
 ;;;
-;;; Continuations are stored as one file per token under data/conts/.
-;;; The file contains a serialized StoredCont struct (bytes + creation time).
-;;;
-;;; Since: Guestbook example
-
-(def CONTS-DIR        "data/conts/")
-(def CONT-TTL-SECONDS 1800) ; 30 minutes
-
-; ---------------------------------------------------------------------------
-; StoredCont -- a continuation blob with a creation timestamp
-; ---------------------------------------------------------------------------
-
-;;; StoredCont -- wraps serialized continuation bytes with a timestamp.
-;;; Since: Guestbook example
-(defstruct StoredCont
-  [cont-bytes : bytes   ; output of serial-cont->bytes
-   created-at : int64]) ; unix-now at time of storage
-
-;;; Serializable instance for StoredCont.
-(definstance Serializable StoredCont
-  (serialize [sc]
-    (serialize (Pair sc.cont-bytes (int64->cstr sc.created-at))))
-  (deserialize [b]
-    (match (deserialize b : (Result (Pair bytes cstr) cstr))
-      (Err msg) -> (Err msg)
-      (Ok pair) ->
-        (Ok (StoredCont
-              :cont-bytes (Pair.first pair)
-              :created-at (cstr->int64 (Pair.second pair)))))))
-
-; ---------------------------------------------------------------------------
-; Internal helpers
-; ---------------------------------------------------------------------------
-
-;;; cont-path -- return the file path for a given token.
-(defn cont-path [token : cstr] : cstr
-  (str CONTS-DIR token ".bin"))
-
-;;; continuation-expired? -- true if the stored continuation is too old.
-(defn continuation-expired? [sc : StoredCont] : bool
-  (> (- (unix-now) sc.created-at) CONT-TTL-SECONDS))
-
-; ---------------------------------------------------------------------------
-; Public API
-; ---------------------------------------------------------------------------
-
-;;; store-continuation -- serialize k and save to data/conts/<token>.bin.
-;;;
-;;; Parameters:
-;;;   k -- a serial-continuation whose resume value is cstr (the POST body)
-;;;
-;;; Returns:
-;;;   A signed hex token string identifying this continuation.
-;;;
-;;; Example:
-;;;   (def token (store-continuation k))
-;;;   ; token = "abc123.<hmac>"
+;;; store-continuation marshals a captured continuation to bytes, writes them
+;;; under a fresh random token and returns the token signed with the server
+;;; secret.  load-continuation checks the signature, the file's age and the
+;;; bytes themselves (bytes->serial-cont validates every frame against this
+;;; program's frame registry) before handing back something resumable.
 ;;;
 ;;; Since: Guestbook example
-(defn store-continuation [k : (serial-continuation cstr)] : cstr
-  (def raw-token (random-hex-64))
-  (def sc (StoredCont
-             :cont-bytes (serial-cont->bytes k)
-             :created-at (unix-now)))
-  (file-write (cont-path raw-token) (serialize sc))
-  (sign-token raw-token SERVER-SECRET))
+(load "stdlib/serial.tur")
+(defmodule conts
+  (import strutil :refer [str+])
+  (import security :refer [sign-token verify-token server-secret random-hex-64])
+  (export store-continuation load-continuation evict-expired-conts! cont-ttl-seconds)
 
-;;; load-continuation -- deserialize a continuation from disk.
-;;;
-;;; Parameters:
-;;;   signed -- signed token string returned by store-continuation
-;;;
-;;; Returns:
-;;;   (Option (serial-continuation cstr)) --
-;;;     Some(k) if the token is valid and not expired,
-;;;     None if missing, tampered, expired, or schema mismatch.
-;;;
-;;; Example:
-;;;   (match (load-continuation token)
-;;;     (None)  -> (send-error "Unknown or expired token")
-;;;     (Some k) -> (serial-resume k body))
-;;;
-;;; Since: Guestbook example
-(defn load-continuation [signed : cstr]
-    : (Option (serial-continuation cstr))
-  (match (verify-token signed SERVER-SECRET)
-    (None) -> (None)
-    (Some raw-token) ->
-      (match (file-read (cont-path raw-token))
-        (Err _) -> (None)
-        (Ok file-bytes) ->
-          (match (deserialize file-bytes : (Result StoredCont cstr))
-            (Err _) -> (None)
-            (Ok sc) ->
-              (if (continuation-expired? sc)
-                (None)
-                (match (bytes->serial-cont sc.cont-bytes
-                          : (Result (serial-continuation cstr) cstr))
-                  (Err _)  -> (None)
-                  (Ok k)   -> (Some k)))))))
+  ;;; cont-ttl-seconds -- how long a token stays resumable (30 minutes).
+  (defn cont-ttl-seconds [] : int 1800)
 
-;;; evict-expired-conts -- delete continuation files older than the TTL.
-;;;
-;;; Call this periodically (e.g., once per minute) to reclaim disk space.
-;;;
-;;; Returns:
-;;;   unit
-;;;
-;;; Since: Guestbook example
-(defn evict-expired-conts [] : unit
-  (def files (dir-list CONTS-DIR))
-  (Vec.for-each files (fn [path]
-    (match (file-read path)
-      (Err _) -> (unit) ; skip unreadable files
-      (Ok file-bytes) ->
-        (match (deserialize file-bytes : (Result StoredCont cstr))
-          (Err _) -> (file-delete path)  ; corrupt file -- remove it
-          (Ok sc) ->
-            (when (continuation-expired? sc)
-              (file-delete path)))))))
+  ;;; bytes-release -- free a bytes buffer serial-cont->bytes handed us.
+  (defn bytes-release [b : ptr<void>] : int
+    ```c
+    if (b) free(b);
+    return 0;
+    ```)
+
+  ;;; cont-path -- data/conts/<token>.bin
+  (defn cont-path [token : cstr] : cstr
+    (str+ "data/conts/" token ".bin"))
+
+  ;;; file-age-seconds -- seconds since path was last written, or -1 if absent.
+  (defn file-age-seconds [path : cstr] : int
+    ```c
+    #include <sys/stat.h>
+    #include <time.h>
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    return (int64_t)(time(NULL) - st.st_mtime);
+    ```)
+
+  ;;; store-continuation -- persist k and return its signed token.
+  ;;;
+  ;;; Parameters:
+  ;;;   k -- the continuation the serial-shift handler was handed
+  ;;;
+  ;;; Returns:
+  ;;;   "<token>.<signature>", the value to put in the form's action URL.
+  ;;;
+  ;;; Since: Guestbook example
+  (defn store-continuation [k : serial-cont] : cstr
+    (let [token (random-hex-64)
+          bytes (serial-cont->bytes k)]
+      (do
+        (cont-to-file bytes (cont-path token))
+        (bytes-release bytes)
+        (sign-token token (server-secret)))))
+
+  ;;; load-continuation -- rebuild the continuation a signed token names.
+  ;;;
+  ;;; Returns:
+  ;;;   (Ok k) for a token the server issued, still within the TTL, whose
+  ;;;   bytes rebuild; otherwise (Err reason) with a user-facing reason.
+  ;;;
+  ;;; Since: Guestbook example
+  (defn load-continuation [signed : cstr] : (Result serial-cont cstr)
+    (match (verify-token signed (server-secret))
+      (None) (err "That link was not issued by this server.")
+      (Some token)
+        (let [path (cont-path token)
+              age  (file-age-seconds path)]
+          (if (< age 0)
+            (err "Unknown or already used link. Please start over.")
+            (if (> age (cont-ttl-seconds))
+              (err "That link has expired. Please start over.")
+              (bytes->serial-cont (cont-from-file path)))))))
+
+  ;;; evict-expired-conts! -- delete continuation files older than the TTL.
+  ;;;
+  ;;; Returns the number of files removed.  Called once per request from the
+  ;;; main loop; cheap because the directory is small.
+  ;;;
+  ;;; Since: Guestbook example
+  (defn evict-expired-conts! [] : int
+    ```c
+    #include <sys/stat.h>
+    #include <time.h>
+    #ifndef _WIN32
+    #include <dirent.h>
+    DIR *d = opendir("data/conts");
+    if (!d) return 0;
+    int64_t removed = 0;
+    struct dirent *e;
+    time_t now = time(NULL);
+    while ((e = readdir(d)) != NULL) {
+      if (e->d_name[0] == '.') continue;
+      char path[512];
+      snprintf(path, sizeof path, "data/conts/%s", e->d_name);
+      struct stat st;
+      if (stat(path, &st) == 0 && now - st.st_mtime > 1800) {
+        if (remove(path) == 0) removed++;
+      }
+    }
+    closedir(d);
+    return removed;
+    #else
+    return 0;
+    #endif
+    ```))

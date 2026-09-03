@@ -1,97 +1,67 @@
-;;; store.tur -- guestbook entry store: load, append, and list.
+;;; store -- the guestbook entries, one line per entry on disk.
 ;;;
-;;; Entries are persisted to data/entries.bin as a serialized (Vec GuestEntry).
-;;; Writes are atomic: the file is written to a temp path then renamed over
-;;; the live file, so a crash during a write leaves the previous data intact.
-;;;
-;;; Since: Guestbook example
-
-(def ENTRIES-PATH "data/entries.bin")
-(def ENTRIES-TMP  "data/entries.tmp")
-
-; ---------------------------------------------------------------------------
-; GuestEntry struct and Serializable instance
-; ---------------------------------------------------------------------------
-
-;;; GuestEntry -- a single guestbook post.
+;;; data/entries.txt holds "posted-at<TAB>name<TAB>message\n" per entry, oldest
+;;; first.  Name and message are HTML-escaped before they get here (which also
+;;; removes tabs and newlines), so the file needs no quoting.  Appends go
+;;; through a temp file + rename, so a crash mid-write leaves the previous
+;;; file intact.
 ;;;
 ;;; Since: Guestbook example
-(defstruct GuestEntry
-  [name      : cstr    ; HTML-escaped author name
-   message   : cstr    ; HTML-escaped message text
-   posted-at : int64]) ; Unix timestamp (seconds since epoch)
+(defmodule store
+  (export store-init! store-append! store-lines)
 
-;;; Serializable instance for GuestEntry.
-;;; Serialized as a Vec of three cstr values: name, message, posted-at string.
-(definstance Serializable GuestEntry
-  (serialize [e]
-    (serialize (Vec.of [e.name e.message (int64->cstr e.posted-at)])))
-  (deserialize [b]
-    (match (deserialize b : (Result (Vec cstr) cstr))
-      (Err msg) -> (Err msg)
-      (Ok parts) ->
-        (if (< (Vec.len parts) 3)
-          (Err "GuestEntry: expected 3 fields in serialized Vec")
-          (Ok (GuestEntry
-                :name      (Vec.get parts 0)
-                :message   (Vec.get parts 1)
-                :posted-at (cstr->int64 (Vec.get parts 2))))))))
+  ;;; store-init! -- create the data directories (mkdir -p) so writes succeed.
+  (defn store-init! [] : int
+    ```c
+    #include <sys/stat.h>
+    #ifdef _WIN32
+    #include <direct.h>
+    #define TUR_GB_MKDIR(p) _mkdir(p)
+    #else
+    #define TUR_GB_MKDIR(p) mkdir(p, 0755)
+    #endif
+    TUR_GB_MKDIR("data");
+    TUR_GB_MKDIR("data/conts");
+    return 0;
+    ```)
 
-; ---------------------------------------------------------------------------
-; In-memory snapshot (simple global ref -- single-threaded server)
-; ---------------------------------------------------------------------------
+  ;;; store-lines -- the whole entries file, or "" when there is none yet.
+  (defn store-lines [] : cstr
+    ```c
+    FILE *f = fopen("data/entries.txt", "rb");
+    if (!f) return "";
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    if (n < 0) { fclose(f); return ""; }
+    rewind(f);
+    char *buf = (char *)malloc((size_t)n + 1);
+    if (!buf) { fclose(f); return ""; }
+    size_t got = fread(buf, 1, (size_t)n, f);
+    fclose(f);
+    buf[got] = 0;
+    return buf;
+    ```)
 
-(def entries-cache : (ref (Vec GuestEntry)) (ref (Vec.new)))
-
-; ---------------------------------------------------------------------------
-; Public API
-; ---------------------------------------------------------------------------
-
-;;; store-load -- load all guestbook entries from disk.
-;;;
-;;; Populates the in-memory cache and returns the entries.
-;;; Returns an empty Vec if the entries file does not exist yet.
-;;;
-;;; Returns:
-;;;   (Vec GuestEntry) -- all entries, oldest first.
-;;;
-;;; Since: Guestbook example
-(defn store-load [] : (Vec GuestEntry)
-  (match (file-read ENTRIES-PATH)
-    (Err _) ->
-      (set! entries-cache (ref (Vec.new)))
-      (Vec.new)
-    (Ok bytes) ->
-      (match (deserialize bytes : (Result (Vec GuestEntry) cstr))
-        (Err _) ->
-          (set! entries-cache (ref (Vec.new)))
-          (Vec.new)
-        (Ok entries) ->
-          (set! entries-cache (ref entries))
-          entries)))
-
-;;; store-append -- append a new entry and flush to disk.
-;;;
-;;; Parameters:
-;;;   entry -- the GuestEntry to append
-;;;
-;;; Returns:
-;;;   unit
-;;;
-;;; Since: Guestbook example
-(defn store-append [entry : GuestEntry] : unit
-  (def current (deref entries-cache))
-  (def updated (Vec.append current entry))
-  (set! entries-cache (ref updated))
-  (def bytes (serialize updated))
-  (file-write ENTRIES-TMP bytes)
-  (file-rename ENTRIES-TMP ENTRIES-PATH))
-
-;;; store-all -- return a snapshot of all current entries.
-;;;
-;;; Returns:
-;;;   (Vec GuestEntry) -- most-recent entry last.
-;;;
-;;; Since: Guestbook example
-(defn store-all [] : (Vec GuestEntry)
-  (deref entries-cache))
+  ;;; store-append! -- add an entry and rewrite the file atomically.
+  ;;;
+  ;;; Parameters:
+  ;;;   name    -- escaped author name
+  ;;;   message -- escaped message
+  ;;;
+  ;;; Returns:
+  ;;;   1 on success, 0 when the file could not be written.
+  (defn store-append! [name : cstr message : cstr] : int
+    ```c
+    #include <time.h>
+    FILE *old = fopen("data/entries.txt", "rb");
+    FILE *tmp = fopen("data/entries.tmp", "wb");
+    if (!tmp) { if (old) fclose(old); return 0; }
+    if (old) {
+      char buf[4096]; size_t n;
+      while ((n = fread(buf, 1, sizeof buf, old)) > 0) fwrite(buf, 1, n, tmp);
+      fclose(old);
+    }
+    fprintf(tmp, "%lld\t%s\t%s\n", (long long)time(NULL), name, message);
+    fclose(tmp);
+    return rename("data/entries.tmp", "data/entries.txt") == 0 ? 1 : 0;
+    ```))

@@ -273,6 +273,16 @@ add_test(
   COMMAND bash tests/check-examples.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# examples/guestbook end to end: build it with `tur run` (build.tur's
+# :c-sources links the httpd.c shim), serve a bounded number of requests on a
+# private port, and walk the four-page flow with curl -- every hop resumes a
+# continuation rebuilt from bytes on disk.  Skips itself when curl is absent.
+add_test(
+  NAME tur_guestbook_smoke
+  COMMAND bash tests/run-guestbook.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_guestbook_smoke PROPERTIES SKIP_RETURN_CODE 2)
 # parse-check subcommand: AST-equality of turmeric + sweet-exp file pairs,
 # the backing check for tools/check-guide-pairs.py.
 add_test(

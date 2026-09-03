@@ -1,76 +1,48 @@
-;;; router.tur -- dispatch HTTP requests to the appropriate handler.
+;;; router -- dispatch the current request to a page.
 ;;;
 ;;; Routes:
-;;;   GET  /         -> run-guestbook-flow (starts a new flow)
-;;;   GET  /entries  -> show-entries-handler (no continuation)
-;;;   POST /submit   -> resume-handler (loads and resumes a continuation)
-;;;   anything else  -> 404
+;;;   GET  /                -> start-flow (page 1)
+;;;   GET  /entries         -> list-entries
+;;;   POST /submit?k=TOKEN  -> rebuild the token's continuation and resume it
+;;;                            with the POST body
+;;;   anything else         -> 404
 ;;;
 ;;; Since: Guestbook example
+(defmodule router
+  (import strutil :refer [form-field cstr-eq? cstr-as-int])
+  (import templates :refer [render-error])
+  (import conts :refer [load-continuation])
+  (import handlers :refer [start-flow advance list-entries])
+  (import httpd :refer [httpd/method httpd/path httpd/query httpd/body httpd/send!])
+  (export dispatch)
 
-; ---------------------------------------------------------------------------
-; resume-handler -- POST /submit?k=TOKEN
-; ---------------------------------------------------------------------------
+  ;;; send-error -- an error page with the given status.
+  (defn send-error [status : int msg : cstr] : int
+    (httpd/send! status "text/html" (render-error msg)))
 
-;;; resume-handler -- look up the continuation token and resume it.
-;;;
-;;; Extracts the token from the query string, verifies the HMAC signature,
-;;; loads the serialized continuation from disk, and calls serial-resume
-;;; with the POST body as the resume value.
-;;;
-;;; Parameters:
-;;;   req -- the POST request containing the token in req.query
-;;;
-;;; Returns:
-;;;   unit (side effect: resumes the continuation, which eventually sends HTML)
-;;;
-;;; Since: Guestbook example
-(defn resume-handler [req : HttpRequest] : unit
-  (def token (parse-form-field req.query "k"))
-  (match token
-    (None) ->
-      (perform HttpEffect
-        (send-html (render-error "Missing continuation token.")))
-    (Some t) ->
-      (match (load-continuation t)
-        (None) ->
-          (perform HttpEffect
-            (send-html (render-error
-              "Unknown or expired token. Please start over.")))
-        (Some k) ->
-          (serial-resume k req.body))))
+  ;;; resume-handler -- POST /submit?k=TOKEN.
+  ;;;
+  ;;; The token is verified, aged and rebuilt by load-continuation; the
+  ;;; continuation is then resumed with the POST body (its address rides in
+  ;;; the int hole).  The page the flow was waiting on runs, and the step code
+  ;;; it returns tells `advance` which page to show next.
+  (defn resume-handler [] : int
+    (match (form-field (httpd/query) "k")
+      (None) (send-error 400 "Missing continuation token.")
+      (Some t)
+        (match (load-continuation t)
+          (Err m) (send-error 404 m)
+          (Ok k)  (advance (serial-resume k (cstr-as-int (httpd/body)))))))
 
-; ---------------------------------------------------------------------------
-; dispatch -- route an HTTP request to the appropriate handler
-; ---------------------------------------------------------------------------
-
-;;; dispatch -- route a request to the correct handler.
-;;;
-;;; Parameters:
-;;;   req -- the parsed HTTP request
-;;;
-;;; Returns:
-;;;   unit (side effect: sends an HTTP response via HttpEffect)
-;;;
-;;; Since: Guestbook example
-(defn dispatch [req : HttpRequest] : unit
-  (cond
-    ;; GET / -> start a new guestbook flow
-    (and (cstr-eq? req.method "GET")
-         (cstr-eq? req.path "/"))
-    (run-guestbook-flow req)
-
-    ;; GET /entries -> list all entries
-    (and (cstr-eq? req.method "GET")
-         (cstr-eq? req.path "/entries"))
-    (show-entries-handler req)
-
-    ;; POST /submit?k=TOKEN -> resume a stored continuation
-    (and (cstr-eq? req.method "POST")
-         (cstr-eq? req.path "/submit"))
-    (resume-handler req)
-
-    ;; 404 for everything else
-    :else
-    (perform HttpEffect
-      (send-html (render-error "Page not found.")))))
+  ;;; dispatch -- route the request httpd/wait! just read.
+  ;;;
+  ;;; Since: Guestbook example
+  (defn dispatch [] : int
+    (let [get?  (cstr-eq? (httpd/method) "GET")
+          post? (cstr-eq? (httpd/method) "POST")
+          path  (httpd/path)]
+      (cond
+        (and get? (cstr-eq? path "/"))         (start-flow)
+        (and get? (cstr-eq? path "/entries"))  (list-entries)
+        (and post? (cstr-eq? path "/submit"))  (resume-handler)
+        :else (send-error 404 "Page not found.")))))

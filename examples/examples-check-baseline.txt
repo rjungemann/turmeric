@@ -14,10 +14,3 @@
 # `tur check <one member>` was never going to work).  snake left this list on
 # 2026-09-02 when perform-inside-loop-has-no-lowering was resolved.
 
-examples/guestbook/src/conts.tur    needs its project context / stdlib loads
-examples/guestbook/src/handlers.tur needs its project context / stdlib loads
-examples/guestbook/src/main.tur     needs its project context / stdlib loads
-examples/guestbook/src/router.tur   needs its project context / stdlib loads
-examples/guestbook/src/security.tur needs its project context / stdlib loads
-examples/guestbook/src/store.tur    typeclass 'Serializable' is not defined (stdlib/serial.tur not loaded)
-examples/guestbook/src/templates.tur needs its project context / stdlib loads

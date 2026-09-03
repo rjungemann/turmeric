@@ -1089,6 +1089,15 @@ static bool cps_serializable_exists(const Expr *program, Type t) {
  * is CT_CLONEABLE with `serial` set, so the emit path handles both families off
  * the shared fields.  Returns NULL for any richer shape -- the caller then
  * either evicts (cps_tail) or falls back to the CT_LETRAW delegation (cps_bind). */
+/* TUR_TRACE_CORE=1: name the collector line that rejected a serial / cloneable
+ * context, so an eviction traced as BODY-UNSUPPORTED "?" says which rule of the
+ * DK lowering grammar the shape fell out of (guestbook-example-has-no-import-graph). */
+#define SK_REJECT() do { \
+        if (getenv("TUR_TRACE_CORE")) \
+            fprintf(stderr, "[CTX-REJECT] cps_ir.c:%d\n", (int)__LINE__); \
+        return NULL; \
+    } while (0)
+
 static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                                   bool serial) {
     const ExprKind shift_kind = serial ? EX_SERIAL_SHIFT : EX_CLONEABLE_SHIFT;
@@ -1103,7 +1112,7 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
 
     for (;;) {
         cur = ascribe_peel(cur);
-        if (!cur) return NULL;
+        if (!cur) SK_REJECT();
 
         /* Arithmetic frame: single-hole int binop.  Cloneable reifies it as a
          * per-site DK frame; serial as a shared tagged-marshaler frame -- the
@@ -1115,9 +1124,9 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
             const Expr *a1 = ascribe_peel(cur->as.builtin.args[1]);
             bool h0 = ctx_reaches_shift(a0, shift_kind);
             bool h1 = ctx_reaches_shift(a1, shift_kind);
-            if (h0 == h1) return NULL;               /* need exactly one hole side */
+            if (h0 == h1) SK_REJECT();               /* need exactly one hole side */
             const Expr *other = h0 ? a1 : a0;
-            if (!other || other->type.kind != TY_INT) return NULL;
+            if (!other || other->type.kind != TY_INT) SK_REJECT();
             /* D6a: the non-hole operand may be non-atomic (e.g. a call `(id 3)`)
              * as long as it is shift-free and pure/emit_value-able.  It is
              * emit_value'd once at the reset site and its value rides the frame's
@@ -1126,8 +1135,8 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
              * atomic operand rides `operand` directly; env_expr stays NULL.) */
             bool arith_atom = is_atomic(other);
             if (!arith_atom && (ctx_reaches_shift(other, shift_kind)
-                          || !safe_to_delegate(b, other))) return NULL;
-            if (nf >= CL_IR_MAX_FRAMES) return NULL;
+                          || !safe_to_delegate(b, other))) SK_REJECT();
+            if (nf >= CL_IR_MAX_FRAMES) SK_REJECT();
             memset(&frames[nf], 0, sizeof(CloneFrame));
             frames[nf].op        = cur->as.builtin.spec->c_op;   /* stable string */
             frames[nf].operand   = atom_of(other);
@@ -1144,14 +1153,14 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
         if (cur->kind == EX_CALL && cur->as.call_.n_args == 1
             && cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
             const Binding *fb = cur->as.call_.fn_binding;
-            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 1) return NULL;
-            if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) return NULL;         /* not a fat closure */
-            if (callee_colored(b, fb)) return NULL;          /* uncolored target */
-            if (!cps_scalar_kind_ok(cur->type.kind)) return NULL;         /* result */
-            if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[0])) return NULL;  /* arg */
+            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 1) SK_REJECT();
+            if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) SK_REJECT();         /* not a fat closure */
+            if (callee_colored(b, fb)) SK_REJECT();          /* uncolored target */
+            if (!cps_scalar_kind_ok(cur->type.kind)) SK_REJECT();         /* result */
+            if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[0])) SK_REJECT();  /* arg */
             const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
-            if (!ctx_reaches_shift(a0, shift_kind)) return NULL;  /* sole arg is hole */
-            if (nf >= CL_IR_MAX_FRAMES) return NULL;
+            if (!ctx_reaches_shift(a0, shift_kind)) SK_REJECT();  /* sole arg is hole */
+            if (nf >= CL_IR_MAX_FRAMES) SK_REJECT();
             memset(&frames[nf], 0, sizeof(CloneFrame));
             frames[nf].op        = NULL;
             frames[nf].call_fn   = fb;
@@ -1172,26 +1181,26 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
         if (cur->kind == EX_CALL && cur->as.call_.n_args == 2
             && cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
             const Binding *fb = cur->as.call_.fn_binding;
-            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 2) return NULL;
-            if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) return NULL;         /* not a fat closure */
-            if (callee_colored(b, fb)) return NULL;          /* uncolored target */
-            if (!cps_scalar_kind_ok(cur->type.kind)) return NULL;   /* result: scalar */
+            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 2) SK_REJECT();
+            if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) SK_REJECT();         /* not a fat closure */
+            if (callee_colored(b, fb)) SK_REJECT();          /* uncolored target */
+            if (!cps_scalar_kind_ok(cur->type.kind)) SK_REJECT();   /* result: scalar */
             const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
             const Expr *a1 = ascribe_peel(cur->as.call_.args[1]);
             bool h0 = ctx_reaches_shift(a0, shift_kind);
             bool h1 = ctx_reaches_shift(a1, shift_kind);
-            if (h0 == h1) return NULL;               /* exactly one hole side */
+            if (h0 == h1) SK_REJECT();               /* exactly one hole side */
             if (serial) {
                 /* the hole slot's param is the resume value -- a scalar (int/cstr) */
                 if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[h0 ? 0 : 1]))
-                    return NULL;
+                    SK_REJECT();
             } else {
                 /* The hole param takes the resumed value -- always a scalar.  The
                  * non-hole (env) param may be a scalar, OR -- under the E3a gate --
                  * an owning `rc` the callee takes ^borrow (checked on the operand
                  * below; ^borrow guarantees the frame never drops it). */
                 if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[h0 ? 0 : 1]))
-                    return NULL;
+                    SK_REJECT();
                 TypeKind envk = fb->type.as.fn.arg_kinds[h0 ? 1 : 0];
                 const Expr *env_op = ascribe_peel(h0 ? a1 : a0);
                 bool env_borrow = FN_ARG_FLAG(fb->type.as.fn, (h0 ? 1 : 0), FA_BORROW);
@@ -1204,18 +1213,18 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                     env_op && !env_borrow && cloneable_consume_env_ok(&env_op->type);
                 if (!cps_scalar_kind_ok(envk)
                     && !owning_borrow_env && !owning_consume_env)
-                    return NULL;
+                    SK_REJECT();
             }
             const Expr *other = h0 ? a1 : a0;        /* the captured env operand */
-            if (!other) return NULL;
+            if (!other) SK_REJECT();
             bool env_atom = is_atomic(other);
             if (serial) {
-                if (ctx_reaches_shift(other, shift_kind)) return NULL;
+                if (ctx_reaches_shift(other, shift_kind)) SK_REJECT();
                 TypeKind ek = other->type.kind;
                 if (!cps_scalar_kind_ok(ek)
                     && !cps_serializable_exists(b->program, other->type))
-                    return NULL;
-                if (!env_atom && !safe_to_delegate(b, other)) return NULL;
+                    SK_REJECT();
+                if (!env_atom && !safe_to_delegate(b, other)) SK_REJECT();
             } else {
                 /* E3a: an owning env frame is admitted in two modes:
                  *  - BORROW (any admissible owning kind + ^borrow callee param):
@@ -1236,15 +1245,15 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                     !env_borrow && cloneable_consume_env_ok(&other->type);
                 if (!cps_scalar_kind_ok(other->type.kind)
                     && !owning_borrow_env && !owning_consume_env)
-                    return NULL;
+                    SK_REJECT();
                 /* A multi-word owning AGGREGATE env is captured by ADDRESS (`&o`),
                  * so its operand must be an atomic lvalue (a bare local) -- a
                  * computed/non-atomic aggregate has no stable address to take. */
-                if (cloneable_owning_agg(&other->type) && !env_atom) return NULL;
+                if (cloneable_owning_agg(&other->type) && !env_atom) SK_REJECT();
                 if (!env_atom && (ctx_reaches_shift(other, shift_kind)
-                              || !safe_to_delegate(b, other))) return NULL;
+                              || !safe_to_delegate(b, other))) SK_REJECT();
             }
-            if (nf >= CL_IR_MAX_FRAMES) return NULL;
+            if (nf >= CL_IR_MAX_FRAMES) SK_REJECT();
             memset(&frames[nf], 0, sizeof(CloneFrame));
             frames[nf].op        = NULL;
             frames[nf].call_fn   = fb;
@@ -1270,19 +1279,19 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
             int32_t m = -1;
             for (uint32_t i = 0; i < N; i++) {
                 if (ctx_reaches_shift(cur->as.do_.items[i], shift_kind)) {
-                    if (m >= 0) return NULL;             /* at most one hole */
+                    if (m >= 0) SK_REJECT();             /* at most one hole */
                     m = (int32_t)i;
                 }
             }
-            if (m < 0) return NULL;
+            if (m < 0) SK_REJECT();
             const Expr *shift_item = ascribe_peel(cur->as.do_.items[m]);
-            if (!shift_item || shift_item->kind != shift_kind) return NULL;
+            if (!shift_item || shift_item->kind != shift_kind) SK_REJECT();
             /* Prelude items [0, m): direct-emitted for side effect at the reset site. */
             for (int32_t i = 0; i < m; i++) {
                 const Expr *pre = cur->as.do_.items[i];
-                if (ctx_reaches_shift(pre, shift_kind)) return NULL;
-                if (!safe_to_delegate(b, pre)) return NULL;
-                if (nl >= CL_IR_MAX_LETS) return NULL;
+                if (ctx_reaches_shift(pre, shift_kind)) SK_REJECT();
+                if (!safe_to_delegate(b, pre)) SK_REJECT();
+                if (nl >= CL_IR_MAX_LETS) SK_REJECT();
                 lets[nl].binding = NULL;                 /* side-effect prelude */
                 lets[nl].init    = pre;
                 nl++;
@@ -1293,13 +1302,13 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
             for (int32_t i = (int32_t)N - 1; i > m; i--) {
                 const Expr *tail = ascribe_peel(cur->as.do_.items[i]);
                 if (!tail || tail->kind != EX_CALL ||
-                    !tail->as.call_.fn_binding || tail->as.call_.fn_expr) return NULL;
+                    !tail->as.call_.fn_binding || tail->as.call_.fn_expr) SK_REJECT();
                 const Binding *fb = tail->as.call_.fn_binding;
-                if (fb->type.kind != TY_FN) return NULL;
-                if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) return NULL;    /* not a fat closure */
-                if (callee_colored(b, fb)) return NULL;     /* uncolored target */
-                if (tail->type.kind != TY_INT) return NULL; /* result: int */
-                if (nf >= CL_IR_MAX_FRAMES) return NULL;
+                if (fb->type.kind != TY_FN) SK_REJECT();
+                if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) SK_REJECT();    /* not a fat closure */
+                if (callee_colored(b, fb)) SK_REJECT();     /* uncolored target */
+                if (tail->type.kind != TY_INT) SK_REJECT(); /* result: int */
+                if (nf >= CL_IR_MAX_FRAMES) SK_REJECT();
                 if (fb->type.as.fn.arity == 0 && tail->as.call_.n_args == 0) {
                     /* 0-arg ignore-value tail `(f)`: run f() on resume, no env. */
                     memset(&frames[nf], 0, sizeof(CloneFrame));
@@ -1317,14 +1326,14 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                      * ignoring the resumed value -- what lets a real loop `(loop cfg)`
                      * receive its config through the saved continuation. */
                     const Expr *cap = ascribe_peel(tail->as.call_.args[0]);
-                    if (!cap || ctx_reaches_shift(cap, shift_kind)) return NULL;
-                    if (!is_atomic(cap)) return NULL;
+                    if (!cap || ctx_reaches_shift(cap, shift_kind)) SK_REJECT();
+                    if (!is_atomic(cap)) SK_REJECT();
                     TypeKind ek = cap->type.kind;
                     bool inline_ok = (ek == TY_INT || ek == TY_CSTR);  /* inline codec */
                     bool ser_ok = !inline_ok
                         && cps_serializable_exists(b->program, cap->type);  /* SER codec */
-                    if (!inline_ok && !ser_ok) return NULL;
-                    if (fb->type.as.fn.arg_kinds[0] != ek) return NULL;
+                    if (!inline_ok && !ser_ok) SK_REJECT();
+                    if (fb->type.as.fn.arg_kinds[0] != ek) SK_REJECT();
                     memset(&frames[nf], 0, sizeof(CloneFrame));
                     frames[nf].op           = NULL;
                     frames[nf].call_fn      = fb;
@@ -1332,7 +1341,7 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                     frames[nf].operand      = atom_of(cap);   /* real captured env */
                     frames[nf].hole_left    = true;
                 } else {
-                    return NULL;
+                    SK_REJECT();
                 }
                 nf++;
             }
@@ -1350,14 +1359,14 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
          * capture, which the shift admission rejects. */
         if (cur->kind == EX_LET) {
             const Expr *lbody = cur->as.let_.body;
-            if (!ctx_reaches_shift(lbody, shift_kind)) return NULL;
+            if (!ctx_reaches_shift(lbody, shift_kind)) SK_REJECT();
             for (uint32_t i = 0; i < cur->as.let_.n; i++) {
                 const Expr    *init = cur->as.let_.bindings[i].init;
                 const Binding *bd   = cur->as.let_.bindings[i].binding;
-                if (ctx_reaches_shift(init, shift_kind)) return NULL;
-                if (!bd || !clone_let_ty_ok(bd->type.kind)) return NULL;
-                if (!safe_to_delegate(b, init)) return NULL;   /* pure, emit_value-able */
-                if (nl >= CL_IR_MAX_LETS) return NULL;
+                if (ctx_reaches_shift(init, shift_kind)) SK_REJECT();
+                if (!bd || !clone_let_ty_ok(bd->type.kind)) SK_REJECT();
+                if (!safe_to_delegate(b, init)) SK_REJECT();   /* pure, emit_value-able */
+                if (nl >= CL_IR_MAX_LETS) SK_REJECT();
                 lets[nl].binding = bd;
                 lets[nl].init    = init;
                 nl++;
@@ -1369,20 +1378,20 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
         /* One `if` branch point: pure condition, exactly one shift-bearing arm;
          * the pure arm is direct-emitted on the opposite branch. */
         if (cur->kind == EX_IF) {
-            if (saw_if) return NULL;                  /* only one branch point */
+            if (saw_if) SK_REJECT();                  /* only one branch point */
             const Expr *cond = cur->as.if_.cond;
             const Expr *thn  = cur->as.if_.then_;
             const Expr *els  = cur->as.if_.else_or_null;
-            if (!cond || !thn || !els) return NULL;   /* need both arms */
-            if (ctx_reaches_shift(cond, shift_kind)) return NULL;
-            if (!safe_to_delegate(b, cond)) return NULL;
+            if (!cond || !thn || !els) SK_REJECT();   /* need both arms */
+            if (ctx_reaches_shift(cond, shift_kind)) SK_REJECT();
+            if (!safe_to_delegate(b, cond)) SK_REJECT();
             bool ht = ctx_reaches_shift(thn, shift_kind);
             bool he = ctx_reaches_shift(els, shift_kind);
-            if (ht == he) return NULL;                /* exactly one shift arm */
+            if (ht == he) SK_REJECT();                /* exactly one shift arm */
             const Expr *shift_arm = ht ? thn : els;
             const Expr *pure_arm  = ht ? els : thn;
-            if (ctx_reaches_shift(pure_arm, shift_kind)) return NULL;   /* defensive */
-            if (!safe_to_delegate(b, pure_arm)) return NULL;
+            if (ctx_reaches_shift(pure_arm, shift_kind)) SK_REJECT();   /* defensive */
+            if (!safe_to_delegate(b, pure_arm)) SK_REJECT();
             if_cond = cond; if_pure = pure_arm; if_when = ht; saw_if = true;
             n_outer = nf;   /* frames so far are OUTSIDE the if; later frames are inner */
             cur = shift_arm;
@@ -1392,7 +1401,7 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
         break;
     }
 
-    if (!cur || cur->kind != shift_kind) return NULL;
+    if (!cur || cur->kind != shift_kind) SK_REJECT();
     /* Shape 2 (nf >= 1) reifies the delimited context as a DK frame chain, so a
      * captured continuation genuinely re-runs the context and references the
      * captured locals -- native Shape 2 has no env-carrying prelude, so a live-
@@ -1421,7 +1430,7 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
         const Expr *kf = ascribe_peel(serial ? cur->as.serial_shift_.k_fn
                                              : cur->as.cloneable_shift_.k_fn);
         if (kf && kf->kind == EX_CLOSURE) recv_expr = kf;
-        else return NULL;
+        else SK_REJECT();
     }
 
     CTerm *t = new_term(b, CT_CLONEABLE);

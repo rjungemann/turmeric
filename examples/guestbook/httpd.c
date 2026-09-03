@@ -14,9 +14,19 @@
  *                            const char *body)
  */
 
+/* strdup / strncasecmp are POSIX, not ISO C: without this the compiler sees no
+ * prototype under -std=c11, assumes `int strdup()`, and truncates the returned
+ * pointer -- which crashed the very first request. */
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE 1
+#endif
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <errno.h>
 
 #ifdef _WIN32

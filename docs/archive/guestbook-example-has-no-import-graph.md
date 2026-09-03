@@ -1,6 +1,6 @@
 # The guestbook example has rotted through: no import graph, and stale syntax in every file
 
-**Severity: medium** (a shipped, CMake-registered example that cannot be built
+**Severity: medium** (RESOLVED 2026-09-02; a shipped, CMake-registered example that cannot be built
 at all). Split out of `docs/archive/examples-tree-does-not-run.md` on
 2026-08-21, which is where the "seven guestbook files fail `tur check`" row
 came from. Those seven are one problem, not seven, and the problem is bigger
@@ -91,3 +91,53 @@ project, not seven for its members, once the invocation question is settled.
 
 - docs/guides/serializable-continuations-guide.md (and the three other guides
   that quote this example) -- see the report linked in layer 3.
+
+## Resolution (2026-09-02)
+
+Layer 3 landed first (`serializable-continuations-aspirational-surface`:
+`serial-cont->bytes` / `bytes->serial-cont` / `serial-resume` are real), so
+the example was worth repairing, and it was rewritten rather than patched:
+
+1. **Import graph.** `examples/guestbook/build.tur` makes it a spice
+   (`:c-sources ["httpd.c"]` links the shim), every file is a `defmodule`
+   with explicit `import`s, and `main.tur` is the root. `tur check <file>`
+   works on each member, `tur run src/main.tur` and `tur build
+   examples/guestbook` both produce the server, and the CMake target emits
+   one C unit from `main.tur` (auto-spice discovery resolves the imports).
+   `examples/CMakeLists.txt` now actually adds the subdirectory; the old
+   target linked a `turi_static` that does not exist.
+2. **Syntax.** Rewritten in the shipped language: `extern-c`-free inline-C
+   bindings (`httpd.tur`), `int`/`cstr`/`ptr<void>` types, `(Option cstr)` /
+   `(Result serial-cont cstr)` via the typed inline-C builders, `match` arms
+   without arrows, `cond` with `:else`, `while` loops. HMAC-SHA256, percent
+   decoding, form parsing and the entries file are small inline-C helpers in
+   `strutil.tur` / `security.tur` / `store.tur`. `httpd.c` itself declared
+   no POSIX feature macros, so `strdup` came back truncated to `int` and the
+   first request segfaulted -- fixed.
+3. **Continuations, as the capture grammar allows.** One continuation per
+   page: `(serial-reset (message-submitted name (serial-shift
+   suspend-message-page 0)))` -- the frame carries the page's state as its
+   cstr env, the POST body arrives through the int hole (as its address), the
+   receiver stores the bytes under a signed token and sends the form, and
+   `POST /submit?k=TOKEN` rebuilds and resumes. Two rules found on the way,
+   now in the guide's "Capture scope": the context callee (and everything it
+   calls) must be uncolored, so the `*-submitted` leaves return a step code
+   and `advance` starts the next page's reset outside any reset; and the
+   receiver must be a named uncolored function (a capture-free lambda is
+   rejected -- `serial-shift-non-capturing-lambda-receiver-rejected`). Back
+   navigation is one continuation with a `decision` field, not two tokens.
+
+Two compiler defects surfaced and are fixed in the same change: a
+`serial-reset` inside a `defmodule` body was invisible to the preamble
+predicate, so module programs were emitted without the serial runtime
+(`tests/fixtures/serial-reset-in-defmodule`); and the context collector's
+sixty rejections were anonymous (`BODY-UNSUPPORTED ?`) -- `TUR_TRACE_CORE=1`
+now prints `[CTX-REJECT] cps_ir.c:<line>`.
+
+Coverage: `tests/run-guestbook.sh` (ctest `tur_guestbook_smoke`) builds the
+example, serves nine requests on a private port and walks the whole flow
+with curl -- name, message, Back, new message, Confirm, a tampered token
+refused, `/entries` -- 10/10; the seven `examples-check-baseline.txt` rows
+are gone (38/0 with the manifest excluded from the sweep) and `main.tur` has
+its run-baseline row. The web-continuations guide and tutorial describe the
+code that ships.
