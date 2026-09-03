@@ -121,6 +121,7 @@ plan was filed against).
 | `emit_module.c` `emit_abi_register_call` constraint-binding augmentation | MIGRATED | same `param_idx`->element kernel; any-TY_APP extraction stays site-local |
 | `emit_core.c`/`emit_module.c` constraint-var vs. `emit_ground_constraint_var` | NOT MERGED (by design) | `emit_ground_constraint_var` differs (param_idx<0 + concreteness gating); merge would change instance selection |
 | `emit_module.c:2164` scan-time dispatch recovery | ALREADY ROUTED | calls `emit_reresolve_disp_type`; redirect helpers consume its result |
+| `emit_expr.c` return-dispatched sum-cell drain type (value-struct-payload round 4) | ROUTED | added 2026-09-03; a stamped `(:: (dec tag) (Result A cstr))` producer carries the abstract class var as its own type, so the pending free could not see the boxed arm -- the re-resolved instance's declared result with the class var substituted by the dispatch type (an owned spine, freed at the drain) is the cell's real layout; never resolved through the active spec, which binds that var to the OUTER receiver |
 
 ### R0 inventory -- fn-value (closure-thunk) axis
 

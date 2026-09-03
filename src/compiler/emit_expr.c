@@ -2428,6 +2428,47 @@ static bool emit_call_returns_fresh_sum_box(EmitCtx *ctx, const Expr *e) {
     return call_returns_fresh_sum_box_as(e, fd->binding);
 }
 
+/* value-struct-payload-sum-monomorph-box-has-no-owner (dictionary sites): is
+ * this call stamped for the drop-after-consumer free?  Either elab decided
+ * (sum_box_drop_after: the consumer was a known reader or a statically
+ * resolved non-retaining callee), or the enclosing class-method call's
+ * argument loop admitted this exact node after re-resolving the instance
+ * that runs in the current monomorph (ctx->sum_drop_admit). */
+static bool emit_call_drop_after_stamped(EmitCtx *ctx, const Expr *e) {
+    if (!e) return false;
+    if (e->sum_box_drop_after) return true;
+    return ctx->sum_drop_admit != NULL && ctx->sum_drop_admit == e;
+}
+
+/* value-struct-payload-sum-monomorph-box-has-no-owner (the let-bound reader
+ * shape): does this let INIT hand the binding a sum value nothing else holds?
+ * A fresh producer does (emit_call_returns_fresh_sum_box).  So does a COPYING
+ * READER of one: `ok-val` / `err-val` / `unwrap` deref-copy their payload out
+ * of the argument (`T v = *(T *)...` / the by-value arm copy), so when that
+ * argument is itself a fresh temp -- `(ok-val (:: (dec 0) (Result (Option
+ * Box) cstr)))` -- the copy is the only holder of any arm box the payload
+ * carries.  The outer temp's own arm is never the same allocation: a nested
+ * sum payload is stored INLINE in the union (adt_field_is_ros_pointer_box
+ * boxes only a non-parametric value struct), so the outer's tag walk cannot
+ * reach the inner's box and no drop is duplicated.  `unwrap-or` is not a
+ * copying reader in this sense -- its None path returns the DEFAULT argument,
+ * which may be a live binding -- and stays out. */
+static bool emit_init_owns_fresh_sum(EmitCtx *ctx, const Expr *init) {
+    for (int depth = 0; depth < 8; depth++) {
+        while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+        if (!init || init->kind != EX_CALL) return false;
+        if (emit_call_returns_fresh_sum_box(ctx, init)) return true;
+        if (!call_dispatch_is_static(init) || init->as.call_.n_args < 1) return false;
+        const Binding *fb = init->as.call_.fn_binding;
+        const char *nm = (fb && fb->name) ? fb->name->name : NULL;
+        if (!nm || (strcmp(nm, "ok-val") != 0 && strcmp(nm, "err-val") != 0 &&
+                    strcmp(nm, "unwrap") != 0))
+            return false;
+        init = init->as.call_.args[0];
+    }
+    return false;
+}
+
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if body contains return or throw first */
     bool body_has_return_or_throw = expr_contains_return_or_throw(e->as.let_.body);
@@ -2700,7 +2741,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 init_val_recorded_i64) {
                 const Expr *fin = e->as.let_.bindings[i].init;
                 while (fin && fin->kind == EX_ASCRIBE) fin = fin->as.ascribe_.inner;
-                bool fresh = emit_call_returns_fresh_sum_box(ctx, fin);
+                bool fresh = emit_init_owns_fresh_sum(ctx, fin);
                 if (fresh && !sum_box_binding_escapes(e->as.let_.body, b)) {
                     bool sib = false;
                     for (uint32_t j = 0; j < e->as.let_.n && !sib; j++)
@@ -2731,7 +2772,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 adt_app_has_boxed_struct_payload(ctx, b->type)) {
                 const Expr *win = e->as.let_.bindings[i].init;
                 while (win && win->kind == EX_ASCRIBE) win = win->as.ascribe_.inner;
-                bool wfresh = emit_call_returns_fresh_sum_box(ctx, win);
+                bool wfresh = emit_init_owns_fresh_sum(ctx, win);
                 if (wfresh && !sum_box_binding_escapes(e->as.let_.body, b)) {
                     bool wsib = false;
                     for (uint32_t j = 0; j < e->as.let_.n && !wsib; j++)
@@ -4348,18 +4389,24 @@ static void emit_carrier_sum_free(EmitCtx *ctx, Buf *body, const char *name,
 /* RM1: the sum-box twin of the any_pending pair below -- same mark/drain
  * discipline, draining as a null-guarded shallow free (the None carrier IS
  * NULL, and the accessors copy the payload word out before the drain runs). */
-static void sum_pending_push(EmitCtx *ctx, const char *name, Type t) {
+/* `owned`: the Type is a malloc'd spine (emit_subst_classvar_owned) that the
+ * drain releases once it has been spelled; every other entry aliases an
+ * arena-backed Type and must not be freed. */
+static void sum_pending_push(EmitCtx *ctx, const char *name, Type t, bool owned) {
     if (ctx->n_sum_pending >= ctx->cap_sum_pending) {
         uint32_t nc = ctx->cap_sum_pending ? ctx->cap_sum_pending * 2 : 8;
         char **nn = (char **)realloc(ctx->sum_pending, nc * sizeof(char *));
         Type *nt = (Type *)realloc(ctx->sum_pending_types, nc * sizeof(Type));
-        if (!nn || !nt) { fprintf(stderr, "tur: oom\n"); abort(); }
+        bool *no = (bool *)realloc(ctx->sum_pending_owned, nc * sizeof(bool));
+        if (!nn || !nt || !no) { fprintf(stderr, "tur: oom\n"); abort(); }
         ctx->sum_pending = nn;
         ctx->sum_pending_types = nt;
+        ctx->sum_pending_owned = no;
         ctx->cap_sum_pending = nc;
     }
     ctx->sum_pending[ctx->n_sum_pending] = strdup(name);
     ctx->sum_pending_types[ctx->n_sum_pending] = t;
+    ctx->sum_pending_owned[ctx->n_sum_pending] = owned;
     ctx->n_sum_pending++;
 }
 
@@ -4368,7 +4415,41 @@ static void sum_pending_drain(EmitCtx *ctx, Buf *body, uint32_t mark) {
         --ctx->n_sum_pending;
         char *nm = ctx->sum_pending[ctx->n_sum_pending];
         emit_carrier_sum_free(ctx, body, nm, ctx->sum_pending_types[ctx->n_sum_pending]);
+        if (ctx->sum_pending_owned[ctx->n_sum_pending])
+            free_struct_app_type(ctx->sum_pending_types[ctx->n_sum_pending]);
         free(nm);
+    }
+}
+
+/* value-struct-payload-sum-monomorph-box-has-no-owner (round 4): `t` with
+ * every tyvar named `name` replaced by `with`, as an OWNED spine
+ * (substitute_adt_app_type_owned's discipline: the replacement leaf is
+ * deep-cloned, TY_APP nodes are malloc'd, everything else is returned by
+ * value) -- release with free_struct_app_type. */
+static Type emit_subst_classvar_owned(const Type *t, const char *name, Type with) {
+    if (!t) return emit_type_from_kind(TY_UNKNOWN);
+    switch (t->kind) {
+        case TY_TYVAR:
+            if (t->as.tyvar_.name && name && strcmp(t->as.tyvar_.name, name) == 0)
+                return clone_struct_app_type(with);
+            return *t;
+        case TY_APP: {
+            Type fn  = emit_subst_classvar_owned(t->as.app.fn,  name, with);
+            Type arg = emit_subst_classvar_owned(t->as.app.arg, name, with);
+            Type out = {0};
+            out.kind = TY_APP;
+            out.copy_kind = CK_COPY;
+            out.hkt_kind = KIND_STAR;
+            propagate_app_discipline(&out, &fn);
+            out.as.app.fn  = (Type *)malloc(sizeof(Type));
+            out.as.app.arg = (Type *)malloc(sizeof(Type));
+            if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
+            *out.as.app.fn  = fn;
+            *out.as.app.arg = arg;
+            return out;
+        }
+        default:
+            return *t;
     }
 }
 
@@ -4686,7 +4767,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * own type being an Option/Result: the analysis counts any ctor as
      * fresh, and the bridge's free is specific to the sum carrier. */
     else if (ret_ct && strcmp(ret_ct, "int64_t") == 0 &&
-             e->kind == EX_CALL && !e->sum_box_drop_after &&
+             e->kind == EX_CALL && !emit_call_drop_after_stamped(ctx, e) &&
              emit_call_returns_fresh_sum_box(ctx, e)) {
         /* The call's own type first; a class-method dispatch carries the
          * class variable's application (a NULL-headed app), so fall back to
@@ -4851,10 +4932,52 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * a typed pointer) and there is nothing to free.  ret_ct NULL means
      * __auto_type, i.e. we could not prove the spelling, so no free either;
      * both misses are status-quo leaks, never a double free. */
-    bool drop_after_resolved = e->sum_box_drop_after &&
+    bool drop_after_resolved = emit_call_drop_after_stamped(ctx, e) &&
                                emit_call_returns_fresh_sum_box(ctx, e);
-    if (drop_after_resolved && ret_ct && strcmp(ret_ct, "int64_t") == 0)
-        sum_pending_push(ctx, tmp, e->type);
+    if (drop_after_resolved && ret_ct && strcmp(ret_ct, "int64_t") == 0) {
+        /* value-struct-payload-sum-monomorph-box-has-no-owner (round 4): the
+         * drain frees the arm box too when the cell's STATIC type says the
+         * live arm is a boxed value struct -- but a return-dispatched call
+         * (`(:: (dec tag) (Result A cstr))` inside a constrained instance)
+         * carries the abstract class variable as its own type, which
+         * resolves to nothing the tag walk can read, so the cell was freed
+         * shallow and the `ok__spec__int64_t_tur_adt_Box` copy inside it
+         * leaked.  The instance that runs is known here (the same
+         * re-resolution that just proved the box fresh), and its DECLARED
+         * result -- `(Result Box cstr)` for `Dec [Box]` -- is the cell's real
+         * layout.  Used only when it is fully concrete: a declared result
+         * that still mentions the instance's own tyvars would be resolved
+         * against the CALLER's spec, whose same-named tyvars are unrelated. */
+        Type push_t = e->type;
+        bool push_owned = false;
+        if (e->as.call_.dict_arg && !call_dispatch_is_static(e)) {
+            FnDef *rfd = emit_reresolve_method_fndef(ctx, e);
+            const Type *decl = (rfd && rfd->binding &&
+                                rfd->binding->type.kind == TY_FN)
+                ? rfd->binding->type.as.fn.result_full_type : NULL;
+            /* The instance method's declared result still spells the CLASS
+             * variable (`(Result a cstr)` for `Dec [Box]`); the dispatch
+             * type the re-resolution just grounded (`Box`) is what `a`
+             * stands for here.  Substituted into an OWNED spine (the pending
+             * list frees it at the drain), never resolved through the active
+             * spec, which binds `a` to the OUTER receiver. */
+            Type disp; const Expr *dict = NULL;
+            if (decl && emit_reresolve_disp_type(ctx, e, &disp, &dict) && dict &&
+                dict->as.dict_.instance && dict->as.dict_.instance->typeclass &&
+                dict->as.dict_.instance->typeclass->n_type_params >= 1 &&
+                dict->as.dict_.instance->typeclass->type_params[0]) {
+                const char *cv = dict->as.dict_.instance->typeclass->type_params[0]->name;
+                Type sub = emit_subst_classvar_owned(decl, cv, disp);
+                if (!emit_repr_type_mentions_tyvar(&sub)) {
+                    push_t = sub;
+                    push_owned = true;
+                } else {
+                    free_struct_app_type(sub);
+                }
+            }
+        }
+        sum_pending_push(ctx, tmp, push_t, push_owned);
+    }
     /* ... and the by-value twin: the temp IS the monomorph aggregate (not the
      * carrier word, not a pointer), and its arm holds a boxed value-struct
      * payload.  The consumer was proven non-retaining at elab (allowlist or
@@ -8127,7 +8250,39 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     ctx->poly_wrap_callee_carrier = true;
                 }
                 ctx->call_ret_note[0] = '\0';
+                /* value-struct-payload-sum-monomorph-box-has-no-owner
+                 * (dictionary sites): a fresh sum argument elab could only
+                 * stamp TENTATIVELY (sum_box_drop_after_dyn -- the receiver
+                 * was abstract there) is admitted for the drop-after free
+                 * here, where the instance that runs in this monomorph is
+                 * known.  The same three facts elab checks for a static
+                 * dispatch, asked of the RE-RESOLVED binding: non-suspending,
+                 * and its inferred nonretain_sum_param_mask covers slot i
+                 * (param i is argument i; the receiver is both 0).  No
+                 * re-resolution, no mask, no admission -- the status-quo
+                 * leak, never a free on the representative's say-so. */
+                const Expr *admit_prev = ctx->sum_drop_admit;
+                {
+                    const Expr *ac = emit_arg;
+                    for (;;) {
+                        if (!ac) break;
+                        if (ac->kind == EX_ASCRIBE) ac = ac->as.ascribe_.inner;
+                        else if (ac->kind == EX_REINTERPRET &&
+                                 !ac->as.reinterpret_.retain)
+                            ac = ac->as.reinterpret_.expr;
+                        else break;
+                    }
+                    if (ac && ac->kind == EX_CALL && ac->sum_box_drop_after_dyn &&
+                        i < 32 && reresolved_callee && reresolved_callee->binding) {
+                        const Binding *rb = reresolved_callee->binding;
+                        if (rb->type.kind == TY_FN &&
+                            effect_row_is_empty(rb->type.as.fn.effect_row) &&
+                            (rb->nonretain_sum_param_mask & (1u << i)))
+                            ctx->sum_drop_admit = ac;
+                    }
+                }
                 char *raw = emit_value(ctx, body, emit_arg);
+                ctx->sum_drop_admit = admit_prev;
                 ctx->poly_wrap_callee_carrier = saved_pwc;
                 /* SR2b: the C spelling this argument's emission actually
                  * produced (the panic-hoist temp's declared type), captured

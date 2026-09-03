@@ -7166,6 +7166,45 @@ resolved_user_fallback:;
     out->as.call_.args    = call_args;
     out->as.call_.n_args  = n_args + 1;
     out->as.call_.dict_arg = dict_expr;  /* annotation for downstream passes */
+    /* value-struct-payload-sum-monomorph-box-has-no-owner (dictionary sites):
+     * the drop-after stamp elab_call.c puts on a fresh sum argument of a
+     * non-retaining defn, for a CLASS-METHOD consumer.  This path never runs
+     * elab_call's argument loop, so `(enc (some (make-struct Box ..)))` kept
+     * its payload box for the process lifetime although the instance body
+     * only reads `x` -- the one shape left after three rounds of that report.
+     *
+     * Same three facts as the defn stamp, asked of the instance that was
+     * resolved here: a non-suspending consumer, a fresh producer in the slot,
+     * and the consumer's inferred nonretain_sum_param_mask bit for it.
+     * Param index i IS argument index i -- params[0] is the receiver and so is
+     * call_args[0].  When the dispatch is STATIC (receiver head concrete) the
+     * resolved binding is the method that runs and the stamp is final.  When
+     * it is not -- inside a constrained generic body, where fn_binding is a
+     * representative -- the argument is flagged TENTATIVELY
+     * (sum_box_drop_after_dyn) and the consumer's emission re-resolves the
+     * instance per monomorph before admitting the drop, exactly as the
+     * freshness question is re-asked there. */
+    {
+        const Binding *cb = out->as.call_.fn_binding;
+        if (cb && cb->type.kind == TY_FN &&
+            effect_row_is_empty(cb->type.as.fn.effect_row)) {
+            bool static_disp = call_dispatch_is_static(out);
+            for (uint32_t ai = 0; ai < out->as.call_.n_args && ai < 32; ai++) {
+                Expr *a = out->as.call_.args[ai];
+                while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+                if (!a || a->kind != EX_CALL) continue;
+                bool fresh_arg = call_returns_fresh_sum_box(a) ||
+                    (a->as.call_.dict_arg && !call_dispatch_is_static(a));
+                if (!fresh_arg) continue;
+                if (static_disp) {
+                    if (cb->nonretain_sum_param_mask & (1u << ai))
+                        a->sum_box_drop_after = true;
+                } else {
+                    a->sum_box_drop_after_dyn = true;
+                }
+            }
+        }
+    }
     /* M4c Path A step 1 (docs/archive/m4c-execution-plan.md): bind the
      * class variable to the CALL SITE'S receiver type so
      * emit_abi_register_call mints a per-instantiation spec.  HKT carve-out

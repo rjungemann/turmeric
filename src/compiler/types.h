@@ -1799,6 +1799,9 @@ Type         substitute_adt_app_type_owned(const Type *t,
  * clone_struct_app_type allocate for a compound (TY_APP) result.  A no-op on a
  * leaf Type, so it is safe to call unconditionally on any substitute result. */
 void         free_struct_app_type(Type t);
+/* Deep-clone a Type as an OWNED spine (TY_APP nodes malloc'd, leaves by value)
+ * -- release with free_struct_app_type.  A leaf is returned unchanged. */
+Type         clone_struct_app_type(Type t);
 /* TS4P1: ADT-app (polymorphic ADT monomorphisation) registry. */
 void         type_codegen_reset_adt_apps(void);
 void         type_codegen_emit_adt_apps(Buf *out);

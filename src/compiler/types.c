@@ -1160,7 +1160,7 @@ static void append_type_mangle(Buf *b, Type t) {
     }
 }
 
-static Type clone_struct_app_type(Type t) {
+Type clone_struct_app_type(Type t) {
     if (t.kind != TY_APP) return t;
     Type out = t;
     out.as.app.fn = (Type *)malloc(sizeof(Type));

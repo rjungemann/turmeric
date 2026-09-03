@@ -34,6 +34,20 @@ All notable changes to Turmeric are documented here.
   happens, this entry moves under that release's `### Changed` with the
   "Announced ahead of the flip" lead removed.
 
+### Fixed
+
+- **A fresh `Option`/`Result` over a value struct passed to a class method
+  no longer leaks its payload box.** `(enc (some (make-struct Box ..)))`
+  kept the `Box` copy for the process lifetime although the instance only
+  read its argument: the drop-after-consumer stamp lived in the ordinary
+  call path and a class-method call never ran it. The resolved instance's
+  inferred non-retention mask now decides there (per monomorph at emit when
+  the receiver is abstract). A let binding through `ok-val` / `err-val` /
+  `unwrap` of a fresh producer is freed at scope exit as the payload's only
+  holder, and a return-dispatched producer's carrier cell is drained against
+  the instance that ran, so the struct copy inside it is freed too. Closes
+  `docs/archive/value-struct-payload-sum-monomorph-box-has-no-owner.md`.
+
 ## [0.42.2] -- 2026-09-01
 
 ### Added
