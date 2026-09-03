@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.42.2` -- `tur dap` serves a recording as a scrubbable timeline (`replayInfo`/`replaySeek`/`replaySites`) and the replay console rewinds; the website is rebuilt around one canonical site map.
+**Latest release:** `v0.43.0` -- the Option niche graduates to the default representation (`Option<NonNull>` and `Vec<Option>` collapse to a bare pointer, no tag word), recursive sums switch to by-value by default, and serializable continuations gain a documented typed surface.
 
 ## What
 

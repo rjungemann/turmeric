@@ -2,7 +2,30 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.43.0] -- 2026-09-03
+
+### Added
+
+- **Serializable continuations gained a documented typed surface.** The
+  guestbook example was rewritten as a spice with one continuation per page
+  to demonstrate it, and the serial runtime now emits whenever a serial-cont
+  builtin is referenced (rather than unconditionally), with the
+  colored-receiver rejection tightened to the actual soundness rule
+  (colored, not merely capture-free, is what's refused).
+- **Image globals**: a `defimage-global` registry and a second image
+  section, with `TUR-W0706` diagnosing misuse.
+- **`tur dap` and `tur trace` now instrument top-level programs, not only
+  `(main)`.** A program whose work happens at the top level previously ran
+  with the debugger idle (no `stopped` event, `0 steps` recorded); the
+  launch path now pre-scans for a top-level `main` and arms the debugger
+  around the file load itself when there isn't one.
+- **`#json-file<T>` readers** for loading typed JSON directly from a file
+  path.
+- **A `stdlib/VERSION` stamp is checked at resolve time**, so a `tur` binary
+  built against one stdlib version and pointed at another's
+  `TUR_STDLIB_DIR` now fails closed with a version-mismatch diagnostic
+  instead of silently compiling against the wrong stdlib.
+- **A real miniKanren example** over `stdlib/logic.tur`.
 
 ### Changed
 
@@ -38,6 +61,10 @@ All notable changes to Turmeric are documented here.
   slot word as a carrier box -- write the element type on the parameter
   (`docs/reported/erased-closure-param-over-niche-vec-slot-reads-box.md`).
   Plan: `docs/upcoming/sr3-option-niche-plan.md`.
+
+- **Recursive sum types now default to by-value representation (RM4/SR4
+  flip)**, matching the non-recursive default and avoiding the carrier
+  allocation cost measured to have no compensating benefit.
 
 ### Fixed
 
@@ -103,6 +130,42 @@ All notable changes to Turmeric are documented here.
   Option element double-wrapped the value -- a silent blank read under the
   niche and a `cc` error on the default path.
   `docs/upcoming/container-element-form-plan.md`.
+- **ADT and constructor names could collide when emitted to C.** The
+  separator fold and the emitted joiner shared the same alphabet
+  (`_`/`__`), so distinct ADT/constructor name pairs could mangle to the
+  same C symbol; two ADTs sharing a constructor name could also emit the
+  same C function twice (`redefinition of 'ctor_Mk'`). Constructor symbols
+  are now qualified by their owning ADT and mangled injectively, and a bare
+  ctor alias whose name mangles like another's now fails closed at compile
+  time instead of picking one silently.
+- **`bit-shr`'s `>>` did an arithmetic (sign-extending) shift** instead of
+  the documented logical right shift, reproducible identically under
+  compiled output, `tur jit`, and `--interpret`. Also under `--interpret`:
+  `vec-new-filled`'s native override was silently lost after preload (a
+  registration-ordering bug), and `int->float` had no builtin entry or
+  preload stub at all and was unreachable.
+- **`(defn f [] : int nil)` was accepted and returned 0** instead of being
+  rejected like every other wrong tail (`"hello"`, `1.5`, `true`); a nil
+  literal tail under a declared non-nil return is now a compile error.
+- **Several leaks and miscompiles in the sum/carrier reclamation sweep**,
+  found via a corpus-wide ASan sweep (2,186 fixtures, 31.4 MB -> 608 KB of
+  leaks): a stackless let-bound caught box now frees through its machine
+  variable; a catch-unwind is now treated as a fresh sum producer;
+  value-struct payload boxes are now freed in argument position and under
+  void consumers; bind-chain boxes and envs are now owned at statically
+  resolved dispatch sites; a let/do wrapping an `if` no longer
+  double-unboxes carrier arms; a fat-closure shim box handed to a proven
+  non-retaining sink (e.g. `result-eq?`, `vec-eq?`) no longer leaks; and
+  cstr readers, reinterprets, and boxed carrier arms are now correctly
+  modeled in the escape walk.
+- **`tur fmt` now preserves comments in header/arm gaps, around `^mut`
+  pairs, and immediately before a closing form**, which it previously
+  dropped.
+- **`:c-sources` now propagates across the whole `:spices` dependency
+  closure**, not just direct deps.
+- **Shared static buffers were retired from C-name accessors**, which were
+  not stable across calls in the same compilation (a latent aliasing
+  hazard).
 
 ## [0.42.2] -- 2026-09-01
 
