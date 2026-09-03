@@ -105,12 +105,14 @@ wasm assets are replayed from the Cache API instead of fetched.**
 
 ## Fix directions
 
-1. **Get the actual error first.** The CI logs carry no browser console. Add a
-   `page.on('console')` / `page.on('pageerror')` dump to the two failing tests,
-   or read `#console` (the page prints
-   `Error: Failed to load WASM module` there, and `main.js:1164` has already
-   `console.error`'d the real one). Everything below is guesswork until this
-   is done, and it is ten minutes of work.
+1. **Get the actual error first.** ~~The CI logs carry no browser console.~~
+   **Done 2026-09-02:** `mobile.split-and-pwa.spec.js` now collects
+   `page.on('console')` / `page.on('pageerror')` for every test and, on a
+   failure, attaches the dump plus the page's `#console` text to the
+   Playwright report (`browser-console` attachment) and echoes it into the
+   job log, so the next CI run names the `init-error` (`main.js:1164` has
+   already `console.error`'d the real one). Everything below is guesswork
+   until that run is read.
 2. **Confirm on real Safari.** Playwright's WebKit is not Safari -- it is
    WebKit built for Linux, and service-worker plus COEP behaviour is exactly
    the area where the two can differ. If real iOS Safari reproduces it, this
@@ -135,3 +137,17 @@ Nor is it a regression, as far as the history goes. `web/public/sw.js` and
 then until `9a6ee5c7`. So these two tests have never once executed, on any
 head, and there is no green run of them to bisect back to. Whatever this is,
 it has been true for the whole life of the service worker.
+
+## Seen again 2026-09-01 / triage is cheap now (2026-09-02)
+
+The same two failures were re-observed in the browser job on run
+33460242737 while resolving
+[try-turmeric-browser-suites-green-while-failing](../archive/try-turmeric-browser-suites-green-while-failing.md)
+(a duplicate report filed from that log was folded into this one). What
+changed on the CI side makes step 1 cheaper: the browser job now always
+uploads the `playwright-report` artifact (the `error-context.md` for each
+failure is in it), and the `web_mobile` row on `/ci` carries the failure
+count, so a regression or a fix shows as a trend rather than a log dig. The
+desktop `sw-dev` / `docs-offline` specs pass, so it is not a general
+service-worker fault; the mobile project may simply be the one place a
+controlled reload is exercised on WebKit.

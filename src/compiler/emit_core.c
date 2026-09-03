@@ -852,6 +852,20 @@ bool expr_subtree_has_inline_c(const Expr *e) {
          * conservative for everything still unlisted. */
         case EX_GET_FIELD:   return expr_subtree_has_inline_c(e->as.get_field_.struct_expr);
         case EX_RETURN:  return expr_subtree_has_inline_c(e->as.return_.value);
+        /* RM1 (bind chains): a nested closure literal is walked INTO -- its
+         * captures are copies of this body's values, so inline C in there can
+         * stash them just as inline C here could -- and the packings around a
+         * function value / a carrier reinterpret are walked through.  Left to
+         * `default`, a body holding any lambda (every hoisted `bind`
+         * continuation) read as "may hide inline C" and lost every inference
+         * that keys on this predicate. */
+        case EX_CLOSURE:
+            return e->as.closure_.closure && e->as.closure_.closure->fn &&
+                   expr_subtree_has_inline_c(e->as.closure_.closure->fn->body);
+        case EX_POLY_WRAP:   return expr_subtree_has_inline_c(e->as.poly_wrap_.inner);
+        case EX_FN_TO_FAT:   return expr_subtree_has_inline_c(e->as.fn_to_fat_.inner);
+        case EX_POLY_TO_FAT: return expr_subtree_has_inline_c(e->as.poly_to_fat_.inner);
+        case EX_REINTERPRET: return expr_subtree_has_inline_c(e->as.reinterpret_.expr);
         default:
             /* Unmodeled kind -- conservatively assume it may hide inline-C. */
             return true;
@@ -949,6 +963,31 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                                    bool allow_box_accessors,
                                    const Expr *ignore, bool allow_any_cast);
 
+/* RM1 (reclamation-plan): widens the accessor whitelist for the sum-carrier
+ * scope drop.  Every name here READS its Option/Result argument and returns a
+ * copy of a payload word or a bool -- never a pointer INTO the box -- so the
+ * box may be freed at scope exit after such uses.  The catch-box caller keeps
+ * its narrower set: its free is DEEP (tur_result_box_free walks the payload),
+ * which is why err-val is scalar-restricted there and unrestricted here. */
+static bool g_esc_allow_sum_accessors = false;
+bool sum_box_reader_name(const char *nm) {
+    /* Concrete stdlib defns only, each body audited for "reads, never
+     * retains": the accessors copy a payload word or return a bool; the two
+     * eq? comparators read both boxes through match / inline-C and return a
+     * bool; option-map reads its input and mints a fresh result.  A CLASS
+     * METHOD name (bind, fmap, eq?) must never appear here -- the callee is
+     * dictionary-dispatched, and a user instance could retain its argument,
+     * turning the drop into a use-after-free. */
+    static const char *const names[] = {
+        "some?", "none?", "ok?", "err?",
+        "unwrap", "unwrap-or", "ok-val", "err-val",
+        "result-eq?", "option-eq?", "option-map", NULL,
+    };
+    for (int i = 0; names[i]; i++)
+        if (strcmp(nm, names[i]) == 0) return true;
+    return false;
+}
+
 static bool binding_escapes_impl(const Expr *e, const Binding *b,
                                  bool allow_box_accessors,
                                  const Expr *ignore) {
@@ -1044,6 +1083,8 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                     box_accessor = nm && (strcmp(nm, "ok?") == 0 ||
                                           strcmp(nm, "err?") == 0 ||
                                           strcmp(nm, "ok-val") == 0);
+                    if (!box_accessor && g_esc_allow_sum_accessors && nm)
+                        box_accessor = sum_box_reader_name(nm);
                     /* Part A: err-val is a non-escape only when its scalar result
                      * cannot alias the payload tur_result_box_free reclaims. */
                     if (!box_accessor && nm && strcmp(nm, "err-val") == 0 &&
@@ -1052,9 +1093,44 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 }
                 for (uint32_t i = 0; i < cur->as.call_.n_args; i++) {
                     const Expr *arg = cur->as.call_.args[i];
-                    if (box_accessor && arg &&
-                        arg->kind == EX_VAR && arg->as.var.binding == b)
+                    /* value-struct-payload-sum-monomorph-box-has-no-owner: a
+                     * carrier argument to a polymorphic accessor arrives under
+                     * an EX_ASCRIBE / non-retaining EX_REINTERPRET wrap (the
+                     * int64 carrier re-typed for the tyvar slot); the wrap is a
+                     * re-typing of the same word, not a use of it, so peel it
+                     * before asking whether this argument is `b`.  An rc-RETAIN
+                     * reinterpret is a real retention and is left in place. */
+                    const Expr *barg = arg;
+                    for (;;) {
+                        if (!barg) break;
+                        if (barg->kind == EX_ASCRIBE) barg = barg->as.ascribe_.inner;
+                        else if (barg->kind == EX_REINTERPRET && !barg->as.reinterpret_.retain)
+                            barg = barg->as.reinterpret_.expr;
+                        /* RM1 (bind chains): the poly / fat packing around a
+                         * continuation is a re-packing of the same env, not a
+                         * use of it; a non-retaining slot does not retain it
+                         * through the wrap either. */
+                        else if (barg->kind == EX_POLY_WRAP) barg = barg->as.poly_wrap_.inner;
+                        else if (barg->kind == EX_FN_TO_FAT) barg = barg->as.fn_to_fat_.inner;
+                        else if (barg->kind == EX_POLY_TO_FAT) barg = barg->as.poly_to_fat_.inner;
+                        else break;
+                    }
+                    bool arg_is_b = barg && barg->kind == EX_VAR &&
+                                    barg->as.var.binding == b;
+                    if (box_accessor && arg_is_b)
                         continue;
+                    /* ... and a USER callee whose body was inferred not to
+                     * retain this sum-typed parameter (nonretain_sum_param_mask)
+                     * confines it exactly as the audited readers do.  Only under
+                     * the sum walk: the mask is a statement about the arm box,
+                     * which is what that walk's client frees. */
+                    if (g_esc_allow_sum_accessors && arg_is_b && !fe &&
+                        call_dispatch_is_static(cur)) {
+                        const Binding *sfb = cur->as.call_.fn_binding;
+                        if (sfb && i < 32 &&
+                            (sfb->nonretain_sum_param_mask & (1u << i)))
+                            continue;
+                    }
                     /* closure-drop-glue S1: a `^borrow` fn-param (FA_BORROW) is
                      * borrowed, not retained -- the callee invokes but does not
                      * store/return it.  So `b` passed to a borrowed param does NOT
@@ -1069,7 +1145,7 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                      * no `^borrow` annotation.  Soundness rides the same escape
                      * analysis that set the bit: if the callee let the closure
                      * escape, the bit is clear and the arg is walked as an escape. */
-                    if (arg && arg->kind == EX_VAR && arg->as.var.binding == b) {
+                    if (arg_is_b && call_dispatch_is_static(cur)) {
                         const Binding *fb = cur->as.call_.fn_binding;
                         if (fb && fb->type.kind == TY_FN
                             && i < fb->type.as.fn.arity
@@ -1292,16 +1368,20 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
              * closure's capture set.  A catch-unwind thunk reaches the analysis
              * wrapped in EX_FN_TO_FAT, so the catch-box variant descends; the
              * fat-closure-env variant keeps defaulting to escape (unchanged). */
+            /* RM1 (bind chains): the env variant now descends too.  A packing
+             * re-packs its operand, so `b` escapes through it exactly when it
+             * escapes through the operand -- a bare `b` inside reaches EX_VAR
+             * and is still an escape, and `b` in a non-retaining slot was
+             * already admitted by the call arm's peel.  Defaulting to escape
+             * here made any lambda argument ANYWHERE in the body an escape of
+             * an unrelated let-bound closure (`scale4` beside a literal). */
             case EX_FN_TO_FAT:
-                if (!allow_box_accessors) { escapes = true; goto esc_done; }
                 ESC_PUSH(cur->as.fn_to_fat_.inner);
                 break;
             case EX_POLY_TO_FAT:
-                if (!allow_box_accessors) { escapes = true; goto esc_done; }
                 ESC_PUSH(cur->as.poly_to_fat_.inner);
                 break;
             case EX_POLY_WRAP:
-                if (!allow_box_accessors) { escapes = true; goto esc_done; }
                 ESC_PUSH(cur->as.poly_wrap_.inner);
                 break;
             case EX_MATCH:
@@ -1316,6 +1396,14 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 break;
             case EX_CAST:
                 ESC_PUSH(cur->as.cast_.expr);
+                break;
+            /* A bit reinterpret re-types its operand's word; whether `b`
+             * escapes through it is whether `b` escapes through the operand
+             * (a bare reinterpret of `b` reaches EX_VAR and is an escape, as a
+             * bare `b` is).  It used to fall to `default`, which reported every
+             * carrier-typed accessor argument as an escape. */
+            case EX_REINTERPRET:
+                ESC_PUSH(cur->as.reinterpret_.expr);
                 break;
 
             /* ---- leaves: cannot reference `b` ---- */
@@ -1352,6 +1440,16 @@ bool closure_binding_escapes(const Expr *e, const Binding *b) {
  * greenlights a free). */
 bool catch_box_binding_escapes(const Expr *e, const Binding *b) {
     return binding_escapes_impl(e, b, /*allow_box_accessors=*/true, NULL);
+}
+
+/* RM1: the catch-box walk with the sum-accessor whitelist widened.  The flag
+ * is file-scope rather than a sixth parameter because exactly one caller sets
+ * it and the walk is not reentrant (iterative, no callbacks). */
+bool sum_box_binding_escapes(const Expr *e, const Binding *b) {
+    g_esc_allow_sum_accessors = true;
+    bool r = binding_escapes_impl(e, b, /*allow_box_accessors=*/true, NULL);
+    g_esc_allow_sum_accessors = false;
+    return r;
 }
 
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
@@ -1496,6 +1594,11 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
             if (!acc && nm && strcmp(nm, "err-val") == 0 &&
                 err_val_result_is_freeable_scalar(e->type.kind))
                 acc = true;
+            /* value-struct-payload sum drop: under the sum flag the whole
+             * audited reader family is an accessor (their results are copies
+             * or bools, never a pointer into the arm box). */
+            if (!acc && g_esc_allow_sum_accessors && nm && sum_box_reader_name(nm))
+                acc = true;
             bool sink = box_reader_result_void_sink(nm);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 const Expr *a = e->as.call_.args[i];
@@ -1503,9 +1606,14 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
                  * print family, a USER-DEFINED callee confines this argument
                  * when its body was inferred not to retain that parameter.
                  * Per-argument rather than per-call: a two-parameter logger may
-                 * retain one and print the other. */
+                 * retain one and print the other.  Under the sum flag the
+                 * callee's SUM mask answers the same question for a sum-typed
+                 * argument -- this is what lets `res-ok?` -> `ok?` chain. */
+                bool fb_static = fb && call_dispatch_is_static(e);
                 bool arg_sink = sink ||
-                    (fb && i < 32 && (fb->nonretain_ptr_param_mask & (1u << i)));
+                    (fb_static && i < 32 && (fb->nonretain_ptr_param_mask & (1u << i))) ||
+                    (g_esc_allow_sum_accessors && fb_static && i < 32 &&
+                     (fb->nonretain_sum_param_mask & (1u << i)));
                 if (a && a->kind == EX_VAR && a->as.var.binding == b) {
                     if (acc) continue;             /* scalar result cannot alias */
                     if (arg_sink) continue;        /* printed, not retained */
@@ -1568,6 +1676,26 @@ bool ptr_param_is_nonretaining(const Expr *body, const Binding *p,
                                bool result_cannot_carry) {
     if (!body || !p) return false;
     return box_uses_confined(body, p, result_cannot_carry);
+}
+
+/* value-struct-payload-sum-monomorph-box-has-no-owner: the same walk for a
+ * stdlib Option/Result-typed parameter, with the sum accessor family admitted
+ * and callees' sum masks consulted.  Same posture: only ever clears a bit.
+ *
+ * `result_cannot_carry` plays the role it plays for the pointer walk: the
+ * body's result position starts confined only when the function's result is
+ * a non-pointer scalar.  An aggregate result (`(Option S)` back out of an
+ * `(Option S)` parameter) walks unconfined instead, so a bare `v` in result
+ * position -- the identity pass-through, arm box included -- fails, while
+ * `result-map`, whose result is rebuilt from `ok-val` / `err-val` reads,
+ * still qualifies. */
+bool sum_param_is_nonretaining(const Expr *body, const Binding *p,
+                               bool result_cannot_carry) {
+    if (!body || !p) return false;
+    g_esc_allow_sum_accessors = true;
+    bool r = box_uses_confined(body, p, /*confined=*/result_cannot_carry);
+    g_esc_allow_sum_accessors = false;
+    return r;
 }
 
 /* Check whether the fall-through point after `e` is unreachable -- i.e. every
@@ -1880,6 +2008,221 @@ char *mangle_field_name(const char *name) {
     return p;
 }
 
+/* separator-fold-collides-emitted-c-names: the C spelling of an ADT or
+ * constructor NAME.  These names are joined into larger symbols with `_`
+ * (`ctor_<Adt>_<Ctor>`) and `__` (`tur_adt_<Adt>__<arg>__<arg>`), so the
+ * per-name fold must never PRODUCE the joiner: the legacy field fold above
+ * maps `-`, `/` and a literal `_` all to `_`, which made `a-b`+`c` and
+ * `a`+`b-c` one `ctor_a_b_c`, and a user ADT named `Foo__int` the same C type
+ * as the `(Foo int)` monomorph.  This uses the injective scheme from
+ * mangle.h (`-` -> `_hy`, `_` -> `_un`, `/` -> `_sl`, sigils by mnemonic), so a
+ * single `_` in the output always introduces an escape and `_` / `__` are
+ * structural only.  Every site that spells an ADT / constructor name --
+ * typedefs, ctor symbols, the `as.<Ctor>._N` member path, drop glue, the
+ * bare-ctor alias -- goes through here or through types.c's
+ * append_c_ident_mangled, which must agree byte for byte.  FIELD names keep
+ * mangle_field_name: inline-C reads them by that spelling.  A name that is
+ * already a plain identifier (letters, digits, no `_`) spells the same under
+ * both, which is every ADT and ctor name in the tree.  Caller frees. */
+char *mangle_adt_name(const char *name) {
+    size_t len = strlen(name);
+    size_t pre = tur_name_is_c_keyword(name, len) ? TUR_NAME_GUARD_PREFIX_LEN : 0;
+    char *p = (char *)malloc(pre + tur_mangle_bound(len) + 1);
+    if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+    size_t k = 0;
+    if (pre) { memcpy(p, TUR_NAME_GUARD_PREFIX, pre); k = pre; }
+    tur_mangle_append(p, &k, name, len);
+    p[k] = '\0';
+    return p;
+}
+
+/* duplicate-ctor-names-collide-in-emitted-c: a program-wide census of which
+ * constructor NAMES are owned by more than one ADT.
+ *
+ * The emitted C symbol is `ctor_<Adt>_<Ctor>` so two ADTs sharing a constructor
+ * name no longer collide.  But that symbol has a second life: hand-written
+ * inline C calls constructors by their emitted name, and stdlib documents it
+ * (`stdlib/either.tur`: "Construct with ctor_Left(v) / ctor_Right(v)").  So a
+ * constructor name owned by exactly ONE ADT also gets a bare-name alias, and
+ * that inline C keeps working untouched -- in this tree and out of it.
+ *
+ * When a name IS owned by two ADTs there is no correct bare alias, so none is
+ * emitted: inline C naming it then fails at cc with an implicit declaration
+ * pointing at the ambiguous constructor, instead of silently binding to
+ * whichever ADT was emitted first.  Fail-closed is deliberate -- a missing
+ * alias is a loud compile error, a wrong one is a silent wrong answer.
+ *
+ * Ambiguity is keyed on the ADT NAME, not the AdtDef pointer: re-elaboration
+ * and module reloads legitimately produce two AdtDefs for one ADT, and those
+ * spell the SAME qualified symbol, so they are not a conflict.
+ *
+ * Fed from elab_register_adt_def, the single chokepoint every ADT passes
+ * through, so the census is complete before any emission starts. */
+/* Snapshotted at the END of elaboration, not during it.  Two reasons, both
+ * found the hard way:
+ *
+ *  - An ADT is REGISTERED when its AdtDef is created, which is before its
+ *    constructors are attached, so reading `def->ctors` at registration
+ *    recorded nothing at all.
+ *  - Holding the AdtDef pointers instead and reading them at emit time is a
+ *    use-after-poison: a procedural macro runs a nested elaboration whose arena
+ *    is released, and the census then walks freed defs (ASan caught this on the
+ *    eight macro-procedural fixtures).
+ *
+ * So the census owns COPIES of the (ADT name, constructor name) pairs, taken
+ * at the one moment both are live and complete.  A nested elaboration snapshots
+ * too, but the outer one returns last, so the final census is the real
+ * program's. */
+typedef struct {
+    char *adt_name;
+    char *ctor_name;
+} CtorCensusRow;
+
+static CtorCensusRow *g_ctor_census     = NULL;
+static uint32_t       g_n_ctor_census   = 0;
+static uint32_t       g_cap_ctor_census = 0;
+
+void ctor_census_reset(void) {
+    for (uint32_t i = 0; i < g_n_ctor_census; i++) {
+        free(g_ctor_census[i].adt_name);
+        free(g_ctor_census[i].ctor_name);
+    }
+    free(g_ctor_census);
+    g_ctor_census = NULL;
+    g_n_ctor_census = 0;
+    g_cap_ctor_census = 0;
+}
+
+/* Both names are stored MANGLED.  The alias the census gates expands to
+ * `ctor_<mangled adt>_<mangled ctor>` and is guarded on `<mangled ctor>`, so
+ * the mangled spelling is the only one that answers the question being asked.
+ * Storing the raw name made the uniqueness test and its guard disagree about
+ * what "the same name" means: `b-c` and `b_c` in two different ADTs read as two
+ * distinct unique names, both emitted an alias, and the second `#define` was
+ * dropped by its own `#ifndef` -- so `ctor_b_c` in inline C silently reached
+ * the FIRST ADT's constructor.  With both ADTs on the int64 carrier, C's type
+ * system could not see it either: no turmeric error, no cc warning, no ASan
+ * report, just the wrong constructor.  See
+ * docs/reported/separator-fold-collides-emitted-c-names.md. */
+static void ctor_census_push(const char *adt_name, const char *ctor_name) {
+    if (g_n_ctor_census >= g_cap_ctor_census) {
+        uint32_t nc = g_cap_ctor_census ? g_cap_ctor_census * 2 : 64;
+        CtorCensusRow *nr = (CtorCensusRow *)realloc(g_ctor_census,
+                                                    nc * sizeof(CtorCensusRow));
+        if (!nr) { fprintf(stderr, "tur: oom\n"); abort(); }
+        g_ctor_census = nr;
+        g_cap_ctor_census = nc;
+    }
+    char *a = mangle_adt_name(adt_name), *c = mangle_adt_name(ctor_name);
+    if (!a || !c) { fprintf(stderr, "tur: oom\n"); abort(); }
+    g_ctor_census[g_n_ctor_census].adt_name  = a;
+    g_ctor_census[g_n_ctor_census].ctor_name = c;
+    g_n_ctor_census++;
+}
+
+/* Replace the census with the constructor names of `defs`.  Called from
+ * elaborate_program_session's success return, where every def is live and its
+ * constructors are attached. */
+void ctor_census_snapshot(struct AdtDef *const *defs, uint32_t n_defs) {
+    ctor_census_reset();
+    if (!defs) return;
+    for (uint32_t i = 0; i < n_defs; i++) {
+        const AdtDef *d = defs[i];
+        if (!d || !d->name || !d->ctors) continue;
+        for (uint32_t ci = 0; ci < d->n_ctors; ci++) {
+            const CtorDef *c = d->ctors[ci];
+            if (!c || !c->name) continue;
+            ctor_census_push(d->name, c->name);
+        }
+    }
+}
+
+/* True when every constructor whose MANGLED name is `mangled_ctor_name` belongs
+ * to one ADT -- so the bare-name alias for it has exactly one meaning.
+ *
+ * `mangled_ctor_name` must already be mangled: it is compared against the
+ * census's mangled rows, and it is the same string the alias is guarded on.
+ * Two constructors that differ only by a separator (`b-c`, `b_c`) mangle alike
+ * and are correctly a conflict here, because they would fight over one macro.
+ *
+ * A name the census never saw answers false -- fail closed, because a missing
+ * alias is a loud compile error and a wrong one is a silent wrong answer. */
+bool ctor_base_name_is_unique(const char *mangled_ctor_name) {
+    if (!mangled_ctor_name) return false;
+    const char *owner = NULL;
+    for (uint32_t i = 0; i < g_n_ctor_census; i++) {
+        if (strcmp(g_ctor_census[i].ctor_name, mangled_ctor_name) != 0) continue;
+        /* Compared on the mangled ADT name, not identity: re-elaboration and
+         * module reloads legitimately yield two entries for one ADT, and both
+         * spell the SAME qualified symbol, so they are not a conflict.  Two
+         * ADTs whose names differ but mangle alike are likewise not a conflict
+         * for the ALIAS -- they already collide at the qualified symbol, which
+         * is the other half of the same report. */
+        if (!owner) owner = g_ctor_census[i].adt_name;
+        else if (strcmp(owner, g_ctor_census[i].adt_name) != 0) return false;
+    }
+    return owner != NULL;
+}
+
+/* Emit the bare-name compatibility alias for `ctor`, when its name is
+ * unambiguous.  A macro rather than a forwarder function: it works for any
+ * arity and return type, costs nothing, and needs no signature duplication.
+ * Header-guarded so a re-emitted ADT does not redefine it. */
+void emit_ctor_bare_alias(Buf *out, const AdtDef *def, const CtorDef *ctor) {
+    if (!out || !def || !ctor || !ctor->name) return;
+    /* Ask the census about the same string the guard below uses -- the MANGLED
+     * name.  These two disagreeing is what made the alias bind silently to the
+     * wrong ADT; keeping the query and the guard on one spelling is the fix. */
+    char *bare = mangle_adt_name(ctor->name);
+    if (!ctor_base_name_is_unique(bare)) { free(bare); return; }
+    char *qual = mangle_ctor_symbol(def, ctor->name);
+    if (strcmp(bare, qual) != 0) {
+        buf_printf(out, "#ifndef TUR_CTORALIAS_%s\n", bare);
+        buf_printf(out, "#define TUR_CTORALIAS_%s\n", bare);
+        buf_printf(out, "#define ctor_%s ctor_%s\n", bare, qual);
+        buf_printf(out, "#endif\n");
+    }
+    free(bare);
+    free(qual);
+}
+
+/* duplicate-ctor-names-collide-in-emitted-c: the base token of a constructor's
+ * emitted C FUNCTION symbol -- `<Adt>_<Ctor>`, so the full symbol is
+ * `ctor_<Adt>_<Ctor>` (plus a monomorph's type-arg suffix).  Caller frees.
+ *
+ * The owning ADT has to be part of the symbol.  Without it two ADTs that share
+ * a constructor name emit one C function twice (`redefinition of 'ctor_Mk'`) --
+ * elaboration handles the shadowing correctly, so this is purely the emitted C
+ * merging two distinct constructors.  SR2b widened the trigger from "two of
+ * your own ADTs happen to collide" to "your ADT names a constructor Some, None,
+ * Ok or Err", because stdlib Option/Result are sums now and their constructors
+ * are always in the program.
+ *
+ * This is the FUNCTION symbol only.  A constructor's union MEMBER name inside
+ * its own ADT's struct (`as.<Ctor>._N`) is already scoped by that struct and
+ * stays bare -- see adt_field_member_path just below.
+ *
+ * Residual, and shared with the pre-existing type-arg suffix convention: every
+ * non-alphanumeric character mangles to '_', so an ADT `a-b` with constructor
+ * `c` and an ADT `a` with constructor `b-c` both spell `ctor_a_b_c`.  That
+ * needs two ADTs whose names differ by exactly where one separator falls; the
+ * bug being fixed here needed only a shared constructor name, which is
+ * ordinary. */
+char *mangle_ctor_symbol(const AdtDef *adt, const char *ctor_name) {
+    char *mctor = mangle_adt_name(ctor_name);
+    if (!adt || !adt->name) return mctor;   /* nothing to namespace against */
+    char *madt = mangle_adt_name(adt->name);
+    Buf b; buf_init(&b);
+    buf_printf(&b, "%s_%s", madt, mctor);
+    buf_putc(&b, '\0');
+    char *r = strdup(b.data);
+    if (!r) { fprintf(stderr, "tur: oom\n"); abort(); }
+    buf_free(&b);
+    free(madt);
+    free(mctor);
+    return r;
+}
+
 /* CONV-S1 seam 4: build the C member-access path (without a leading '.'/'->')
  * for constructor field `fi`.  A flat, named-layout ADT (adt_uses_named_layout)
  * is accessed by its mangled field name (`value`, `max_age`); every other ADT
@@ -1889,7 +2232,7 @@ char *mangle_field_name(const char *name) {
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi) {
     if (adt_uses_named_layout(def))
         return mangle_field_name(ctor->fields[fi].name);
-    char *mctor = mangle_field_name(ctor->name);
+    char *mctor = mangle_adt_name(ctor->name);
     Buf b; buf_init(&b);
     buf_printf(&b, "as.%s._%u", mctor, fi);
     buf_putc(&b, '\0');
@@ -5045,14 +5388,67 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                 if (_adt && _adt->ctors && _adt->ctors[0] &&
                     adt_ctor_is_null_none(_adt, _adt->ctors[0])) {
                     /* Bind the carrier once: src_str may be a call. */
+                    bool owns_box = emit_str_is_bare_ident(src_str) &&
+                                    emit_owned_carrier_is(src_str);
                     char *ctmp = fresh_tmp(ctx);
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
                                ctmp, src_str);
                     char *z = emit_c_zero_of(cname);
-                    buf_printf(&out, "(%s ? (*(%s *)(intptr_t)(%s)) : %s)",
-                               ctmp, cname, ctmp, z);
+                    if (owns_box) {
+                        /* inline-c-option-carrier-box-leaks: the box was
+                         * malloc'd by an inline-C body and this readback is
+                         * what consumes it.  The deref COPIES the contents
+                         * into the aggregate, so once the copy is
+                         * materialized the box is dead -- but the expression
+                         * form below cannot free it (there is nowhere in a
+                         * ternary to put a statement), which is exactly why
+                         * it leaked.  Materialize into a temp, then free.
+                         *
+                         * The null test does double duty: `tur_none()` is the
+                         * null carrier (SR3 slice A), so a None allocates
+                         * nothing and must not be freed. */
+                        char *vtmp = fresh_tmp(ctx);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s %s = (%s ? (*(%s *)(intptr_t)(%s)) : %s);\n",
+                                   cname, vtmp, ctmp, cname, ctmp, z);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "if (%s) free((void *)(intptr_t)(%s));\n",
+                                   ctmp, ctmp);
+                        buf_printf(&out, "%s", vtmp);
+                        /* Consume the mark: a temp bridged twice must not be
+                         * freed twice. */
+                        emit_owned_carrier_clear(src_str);
+                        free(vtmp);
+                    } else {
+                        buf_printf(&out, "(%s ? (*(%s *)(intptr_t)(%s)) : %s)",
+                                   ctmp, cname, ctmp, z);
+                    }
                     free(z);
+                    free(ctmp);
+                } else if (emit_str_is_bare_ident(src_str) &&
+                           emit_owned_carrier_is(src_str)) {
+                    /* inline-c-option-carrier-box-leaks, the Result half.  Same
+                     * consumption as the Option branch above, minus the null
+                     * test: a Result has no null value to produce (both
+                     * variants carry a payload, which is also why SR3's niche
+                     * is Option-only), so the box is always there to free.
+                     * `stdlib/result.tur`'s `tur_box_ok` in `result/bimap` is
+                     * the in-tree site the report names for this branch. */
+                    char *ctmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
+                               ctmp, src_str);
+                    char *vtmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s %s = (*(%s *)(intptr_t)(%s));\n",
+                               cname, vtmp, cname, ctmp);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "if (%s) free((void *)(intptr_t)(%s));\n",
+                               ctmp, ctmp);
+                    buf_printf(&out, "%s", vtmp);
+                    emit_owned_carrier_clear(src_str);
+                    free(vtmp);
                     free(ctmp);
                 } else {
                     /* Pointer carrier: dereference the heap pointer. */
@@ -5121,6 +5517,27 @@ char *emit_carrier_bridge_escaping(EmitCtx *ctx, Buf *body,
             return emit_carrier_bridge(ctx, body, src_str, src_ck, sink_ck,
                                        concrete_ty);
         default: break;
+    }
+
+    /* inline-c-carrier-producer-byval-container-element, the position the
+     * report is named for.  The heap-promote below copies the value in hand
+     * into a `T *` cell -- but an inline-C Option producer hands back the
+     * CARRIER word, so `*tmp = <int64_t>` against an aggregate cell is
+     * "incompatible types when assigning".  The niche row above escapes this
+     * by delegating; the by-value monomorph had no such row and fell straight
+     * into the promote.
+     *
+     * Normalize FIRST, promote second: bridge the carrier word to the
+     * aggregate, then box the aggregate.  Keyed on the value's recorded
+     * emitted spelling, so a value that already IS the aggregate -- every
+     * pre-existing caller of this path -- is untouched and cannot be
+     * double-bridged. */
+    if (emit_str_is_bare_ident(src_str)) {
+        const char *sty = emit_localvar_lookup_ctype(src_str);
+        if (sty && strcmp(sty, "int64_t") == 0)
+            src_str = emit_carrier_bridge(ctx, body, src_str,
+                                          CK_CARRIER, CK_CONCRETE,
+                                          concrete_ty);
     }
 
     /* By-value aggregate flowing into an escaping heap container: heap-promote

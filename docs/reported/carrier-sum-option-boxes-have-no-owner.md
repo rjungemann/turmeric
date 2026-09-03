@@ -17,6 +17,21 @@ now -- its explicit `option-free` calls had to be REMOVED, because by value
 they free a stack slot.  The residue shrinks further with each site that
 monomorphizes; end-to-end monomorphization is where it reaches zero.
 
+**Narrowed a third time 2026-08-30 (RM1), and this is most of what was
+left.**  The erased residue now HAS an owner for the audited consumer set:
+`returns_fresh_sum_box` (a per-callee freshness analysis -- every value path
+mints a fresh box or NULL) plus two drop mechanisms (free-after-accessor-call
+and free-at-scope-exit) close the `(ok? (ok 1))` / instance-body shapes, which
+the corpus sweep showed were the bulk: 8324 -> 7364 bytes across every
+erased-base caller in the tree, with the `hkt-stdlib-*` fixtures leaving the
+leak list entirely.  What remains open is exactly the unstampable residue: a
+box handed to a consumer OUTSIDE the audited read-only allowlist (user-defined
+readers, dictionary-dispatched `bind`/`fmap` chains -- a user instance may
+retain its argument, so those can never be stamped by name).  That residue
+reaches zero where this report always said it would: end-to-end
+monomorphization.  Mechanism and measurements:
+[reclamation-plan.md](../upcoming/reclamation-plan.md), RM1.
+
 ## Summary
 
 SR2b made stdlib Option/Result real sums.  On the default path a `(some x)` /
@@ -56,3 +71,22 @@ is already heading.
 Callers that care (long-lived processes, leak-checked binaries) free the box
 explicitly: `(option-free (:: o :int))` / `(result-free (:: r :int))` after
 the payload has been read out.
+
+## Narrowed again: bind chains (2026-09-02)
+
+The erased residue's largest rows were `bind` / `fmap` chains over the stdlib
+`Result` / `Option` instances. They are owned now, at statically resolved
+dispatch sites only: instance methods carry the same inferred non-retaining
+masks a defn does, freshness is tracked through a continuation parameter
+(`fresh_sum_via_param_mask`), a fresh producer read back by value marks its
+carrier owned for the bridge to free, and the closure-argument hoist reaches
+dispatch calls. Corpus sweep 7200 -> 5643 B (with the SR4 flip and the comparator shim-box
+fix); both `result-monad-*-bind-typed-boundary` fixtures, `result-typed-basic`
+and `typed/result-basic` are fully clean. The residual attribution is in
+[leak-sweep-decomposition.md](../artifacts/leak-sweep-decomposition.md): what
+is left is fixture scaffolding, recursive spines, and dictionary-dispatch
+sites. A dynamic dispatch (abstract receiver inside a constrained
+generic) is freed only after the emitter re-resolves the instance per
+monomorph -- the first round had read a representative instance's flag there,
+which was unsound. Details in
+[reclamation-plan.md](../upcoming/reclamation-plan.md), RM1.

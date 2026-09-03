@@ -96,6 +96,11 @@ return `:int`" escape hatch. The codegen preamble carries typed builders
 carrier-level `tur_box_*`) that construct the canonical Result/Option
 layout, so a fallible C constructor hands back a real `(Result Handle E)`
 / `(Option Handle)` with no struct hand-rolling and no sentinel integer.
+The box those builders malloc is **owned by the caller**: a body whose
+declared return type is `option`/`result` transfers it, and the compiler frees
+it when the value is read back. So return a FRESH box, and do not declare
+`option`/`result` for a box something else owns (a container's element) --
+give that a borrow-shaped signature instead, as `vec-get` does.
 See [docs/guides/inline-c-results-guide.md](docs/guides/inline-c-results-guide.md).
 
 ### When you notice this in existing code
@@ -628,6 +633,15 @@ PASS-skip it under certain conditions:
 | `requires.dedicated-runner` | always under `run.sh`; the fixture is owned by its own ctest target (e.g. `tur_eval_import`) |
 | `requires.posix-apis` | the host is producing Windows binaries (`TUR_HOST_WINDOWS=1`) |
 | `requires.spices` | the sibling `../turmeric-spices/` checkout is absent |
+
+`tests/run-turi.sh` honours the same five markers (`requires.compiled`,
+`requires.tur-only`, `requires.dedicated-runner`, `requires.spices`,
+`requires.tsan`) on both its positive pass and its `errors/` pass, through one
+helper, and counts every skip: its summary reads `P passed, F failed, S
+skipped of D discovered` and the run fails if those do not add up. It also
+PASS-skips any fixture whose program (own file or one `load` deep) contains
+a user inline-C block -- see
+[docs/guides/test-suite-portability-guide.md](docs/guides/test-suite-portability-guide.md#7d-what-run-turish-does-not-run----and-how-it-says-so).
 
 Note `requires.interp` and `requires.interp-only` are near-homographs that do
 opposite things: the first keeps the fixture in `run.sh` (routing it through

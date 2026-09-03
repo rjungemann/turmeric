@@ -1,0 +1,9 @@
+;; dap-toplevel -- docs/reported/debugger-and-tracer-only-instrument-main.md:
+;; a TOP-LEVEL program (no `main`).  Driven by tests/dap-toplevel-driver.py.
+(defeffect Ask [] :int)
+
+(defn use-ask [] :int
+  (+ 1 (perform (Ask))))
+
+(println (handle (use-ask)
+  (Ask [] k) (resume k 41)))

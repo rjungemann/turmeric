@@ -3696,13 +3696,17 @@ typedef struct tur_adt_Slice {
 } tur_adt_Slice;
 typedef tur_adt_Slice Slice;
 
-static int64_t ctor_Slice(void * _0, int64_t _1) {
+static int64_t ctor_Slice_Slice(void * _0, int64_t _1) {
     tur_adt_Slice *__r = (tur_adt_Slice *)malloc(sizeof(tur_adt_Slice));
     __r->ptr = _0;
     __r->len = _1;
     return (int64_t)(intptr_t)__r;
 }
 
+#ifndef TUR_CTORALIAS_Slice
+#define TUR_CTORALIAS_Slice
+#define ctor_Slice ctor_Slice_Slice
+#endif
 typedef struct tur_adt_Option {
     int tag;
     union {
@@ -3711,19 +3715,25 @@ typedef struct tur_adt_Option {
     } as;
 } tur_adt_Option;
 
-static int64_t ctor_None() {
-    tur_adt_Option *__r = (tur_adt_Option *)malloc(sizeof(tur_adt_Option));
-    __r->tag = 0;
-    return (int64_t)(intptr_t)__r;
+static int64_t ctor_Option_None() {
+    return 0;
 }
 
-static int64_t ctor_Some(int64_t _0) {
+#ifndef TUR_CTORALIAS_None
+#define TUR_CTORALIAS_None
+#define ctor_None ctor_Option_None
+#endif
+static int64_t ctor_Option_Some(int64_t _0) {
     tur_adt_Option *__r = (tur_adt_Option *)malloc(sizeof(tur_adt_Option));
     __r->tag = 1;
     __r->as.Some._0 = _0;
     return (int64_t)(intptr_t)__r;
 }
 
+#ifndef TUR_CTORALIAS_Some
+#define TUR_CTORALIAS_Some
+#define ctor_Some ctor_Option_Some
+#endif
 typedef struct tur_adt_Result {
     int tag;
     union {
@@ -3732,46 +3742,62 @@ typedef struct tur_adt_Result {
     } as;
 } tur_adt_Result;
 
-static int64_t ctor_Ok(int64_t _0) {
+static int64_t ctor_Result_Ok(int64_t _0) {
     tur_adt_Result *__r = (tur_adt_Result *)malloc(sizeof(tur_adt_Result));
     __r->tag = 0;
     __r->as.Ok._0 = _0;
     return (int64_t)(intptr_t)__r;
 }
 
-static int64_t ctor_Err(int64_t _0) {
+#ifndef TUR_CTORALIAS_Ok
+#define TUR_CTORALIAS_Ok
+#define ctor_Ok ctor_Result_Ok
+#endif
+static int64_t ctor_Result_Err(int64_t _0) {
     tur_adt_Result *__r = (tur_adt_Result *)malloc(sizeof(tur_adt_Result));
     __r->tag = 1;
     __r->as.Err._0 = _0;
     return (int64_t)(intptr_t)__r;
 }
 
+#ifndef TUR_CTORALIAS_Err
+#define TUR_CTORALIAS_Err
+#define ctor_Err ctor_Result_Err
+#endif
 typedef struct tur_adt_Pair {
     int64_t fst;
     int64_t snd;
 } tur_adt_Pair;
 typedef tur_adt_Pair Pair;
 
-static int64_t ctor_Pair(int64_t _0, int64_t _1) {
+static int64_t ctor_Pair_Pair(int64_t _0, int64_t _1) {
     tur_adt_Pair *__r = (tur_adt_Pair *)malloc(sizeof(tur_adt_Pair));
     __r->fst = _0;
     __r->snd = _1;
     return (int64_t)(intptr_t)__r;
 }
 
+#ifndef TUR_CTORALIAS_Pair
+#define TUR_CTORALIAS_Pair
+#define ctor_Pair ctor_Pair_Pair
+#endif
 typedef struct tur_adt_Tuple2 {
     int64_t e1;
     int64_t e2;
 } tur_adt_Tuple2;
 typedef tur_adt_Tuple2 Tuple2;
 
-static int64_t ctor_Tuple2(int64_t _0, int64_t _1) {
+static int64_t ctor_Tuple2_Tuple2(int64_t _0, int64_t _1) {
     tur_adt_Tuple2 *__r = (tur_adt_Tuple2 *)malloc(sizeof(tur_adt_Tuple2));
     __r->e1 = _0;
     __r->e2 = _1;
     return (int64_t)(intptr_t)__r;
 }
 
+#ifndef TUR_CTORALIAS_Tuple2
+#define TUR_CTORALIAS_Tuple2
+#define ctor_Tuple2 ctor_Tuple2_Tuple2
+#endif
 typedef struct tur_adt_Tuple3 {
     int64_t e1;
     int64_t e2;
@@ -3779,7 +3805,7 @@ typedef struct tur_adt_Tuple3 {
 } tur_adt_Tuple3;
 typedef tur_adt_Tuple3 Tuple3;
 
-static int64_t ctor_Tuple3(int64_t _0, int64_t _1, int64_t _2) {
+static int64_t ctor_Tuple3_Tuple3(int64_t _0, int64_t _1, int64_t _2) {
     tur_adt_Tuple3 *__r = (tur_adt_Tuple3 *)malloc(sizeof(tur_adt_Tuple3));
     __r->e1 = _0;
     __r->e2 = _1;
@@ -3787,6 +3813,10 @@ static int64_t ctor_Tuple3(int64_t _0, int64_t _1, int64_t _2) {
     return (int64_t)(intptr_t)__r;
 }
 
+#ifndef TUR_CTORALIAS_Tuple3
+#define TUR_CTORALIAS_Tuple3
+#define ctor_Tuple3 ctor_Tuple3_Tuple3
+#endif
 typedef struct tur_adt_Tuple4 {
     int64_t e1;
     int64_t e2;
@@ -3795,7 +3825,7 @@ typedef struct tur_adt_Tuple4 {
 } tur_adt_Tuple4;
 typedef tur_adt_Tuple4 Tuple4;
 
-static int64_t ctor_Tuple4(int64_t _0, int64_t _1, int64_t _2, int64_t _3) {
+static int64_t ctor_Tuple4_Tuple4(int64_t _0, int64_t _1, int64_t _2, int64_t _3) {
     tur_adt_Tuple4 *__r = (tur_adt_Tuple4 *)malloc(sizeof(tur_adt_Tuple4));
     __r->e1 = _0;
     __r->e2 = _1;
@@ -3804,6 +3834,10 @@ static int64_t ctor_Tuple4(int64_t _0, int64_t _1, int64_t _2, int64_t _3) {
     return (int64_t)(intptr_t)__r;
 }
 
+#ifndef TUR_CTORALIAS_Tuple4
+#define TUR_CTORALIAS_Tuple4
+#define ctor_Tuple4 ctor_Tuple4_Tuple4
+#endif
 typedef struct tur_adt_Tuple5 {
     int64_t e1;
     int64_t e2;
@@ -3813,7 +3847,7 @@ typedef struct tur_adt_Tuple5 {
 } tur_adt_Tuple5;
 typedef tur_adt_Tuple5 Tuple5;
 
-static int64_t ctor_Tuple5(int64_t _0, int64_t _1, int64_t _2, int64_t _3, int64_t _4) {
+static int64_t ctor_Tuple5_Tuple5(int64_t _0, int64_t _1, int64_t _2, int64_t _3, int64_t _4) {
     tur_adt_Tuple5 *__r = (tur_adt_Tuple5 *)malloc(sizeof(tur_adt_Tuple5));
     __r->e1 = _0;
     __r->e2 = _1;
@@ -3823,6 +3857,10 @@ static int64_t ctor_Tuple5(int64_t _0, int64_t _1, int64_t _2, int64_t _3, int64
     return (int64_t)(intptr_t)__r;
 }
 
+#ifndef TUR_CTORALIAS_Tuple5
+#define TUR_CTORALIAS_Tuple5
+#define ctor_Tuple5 ctor_Tuple5_Tuple5
+#endif
 typedef struct tur_adt_Tuple6 {
     int64_t e1;
     int64_t e2;
@@ -3833,7 +3871,7 @@ typedef struct tur_adt_Tuple6 {
 } tur_adt_Tuple6;
 typedef tur_adt_Tuple6 Tuple6;
 
-static int64_t ctor_Tuple6(int64_t _0, int64_t _1, int64_t _2, int64_t _3, int64_t _4, int64_t _5) {
+static int64_t ctor_Tuple6_Tuple6(int64_t _0, int64_t _1, int64_t _2, int64_t _3, int64_t _4, int64_t _5) {
     tur_adt_Tuple6 *__r = (tur_adt_Tuple6 *)malloc(sizeof(tur_adt_Tuple6));
     __r->e1 = _0;
     __r->e2 = _1;
@@ -3844,6 +3882,10 @@ static int64_t ctor_Tuple6(int64_t _0, int64_t _1, int64_t _2, int64_t _3, int64
     return (int64_t)(intptr_t)__r;
 }
 
+#ifndef TUR_CTORALIAS_Tuple6
+#define TUR_CTORALIAS_Tuple6
+#define ctor_Tuple6 ctor_Tuple6_Tuple6
+#endif
 typedef struct tur_adt_Tuple7 {
     int64_t e1;
     int64_t e2;
@@ -3855,7 +3897,7 @@ typedef struct tur_adt_Tuple7 {
 } tur_adt_Tuple7;
 typedef tur_adt_Tuple7 Tuple7;
 
-static int64_t ctor_Tuple7(int64_t _0, int64_t _1, int64_t _2, int64_t _3, int64_t _4, int64_t _5, int64_t _6) {
+static int64_t ctor_Tuple7_Tuple7(int64_t _0, int64_t _1, int64_t _2, int64_t _3, int64_t _4, int64_t _5, int64_t _6) {
     tur_adt_Tuple7 *__r = (tur_adt_Tuple7 *)malloc(sizeof(tur_adt_Tuple7));
     __r->e1 = _0;
     __r->e2 = _1;
@@ -3867,6 +3909,10 @@ static int64_t ctor_Tuple7(int64_t _0, int64_t _1, int64_t _2, int64_t _3, int64
     return (int64_t)(intptr_t)__r;
 }
 
+#ifndef TUR_CTORALIAS_Tuple7
+#define TUR_CTORALIAS_Tuple7
+#define ctor_Tuple7 ctor_Tuple7_Tuple7
+#endif
 typedef struct tur_adt_Tuple8 {
     int64_t e1;
     int64_t e2;
@@ -3879,7 +3925,7 @@ typedef struct tur_adt_Tuple8 {
 } tur_adt_Tuple8;
 typedef tur_adt_Tuple8 Tuple8;
 
-static int64_t ctor_Tuple8(int64_t _0, int64_t _1, int64_t _2, int64_t _3, int64_t _4, int64_t _5, int64_t _6, int64_t _7) {
+static int64_t ctor_Tuple8_Tuple8(int64_t _0, int64_t _1, int64_t _2, int64_t _3, int64_t _4, int64_t _5, int64_t _6, int64_t _7) {
     tur_adt_Tuple8 *__r = (tur_adt_Tuple8 *)malloc(sizeof(tur_adt_Tuple8));
     __r->e1 = _0;
     __r->e2 = _1;
@@ -3892,6 +3938,10 @@ static int64_t ctor_Tuple8(int64_t _0, int64_t _1, int64_t _2, int64_t _3, int64
     return (int64_t)(intptr_t)__r;
 }
 
+#ifndef TUR_CTORALIAS_Tuple8
+#define TUR_CTORALIAS_Tuple8
+#define ctor_Tuple8 ctor_Tuple8_Tuple8
+#endif
 typedef struct tur_adt_Cons {
     int64_t head;
     int64_t tail;
@@ -3907,7 +3957,7 @@ typedef struct tur_adt_Grid {
 } tur_adt_Grid;
 typedef tur_adt_Grid Grid;
 
-static int64_t ctor_Grid(void * _0, int64_t _1, int64_t _2, int64_t _3, int64_t _4) {
+static int64_t ctor_Grid_Grid(void * _0, int64_t _1, int64_t _2, int64_t _3, int64_t _4) {
     tur_adt_Grid *__r = (tur_adt_Grid *)malloc(sizeof(tur_adt_Grid));
     __r->data = _0;
     __r->width = _1;
@@ -3917,6 +3967,10 @@ static int64_t ctor_Grid(void * _0, int64_t _1, int64_t _2, int64_t _3, int64_t 
     return (int64_t)(intptr_t)__r;
 }
 
+#ifndef TUR_CTORALIAS_Grid
+#define TUR_CTORALIAS_Grid
+#define ctor_Grid ctor_Grid_Grid
+#endif
 typedef struct tur_adt_Set {
     void * hamt;
 } tur_adt_Set;
@@ -3932,38 +3986,50 @@ typedef struct tur_adt_Schema {
 } tur_adt_Schema;
 typedef tur_adt_Schema Schema;
 
-static int64_t ctor_Schema(int64_t _0) {
+static int64_t ctor_Schema_Schema(int64_t _0) {
     tur_adt_Schema *__r = (tur_adt_Schema *)malloc(sizeof(tur_adt_Schema));
     __r->raw = _0;
     return (int64_t)(intptr_t)__r;
 }
 
+#ifndef TUR_CTORALIAS_Schema
+#define TUR_CTORALIAS_Schema
+#define ctor_Schema ctor_Schema_Schema
+#endif
 typedef struct tur_adt_Identity {
     int64_t wrapped;
     int64_t tag;
 } tur_adt_Identity;
 typedef tur_adt_Identity Identity;
 
-static int64_t ctor_Identity(int64_t _0, int64_t _1) {
+static int64_t ctor_Identity_Identity(int64_t _0, int64_t _1) {
     tur_adt_Identity *__r = (tur_adt_Identity *)malloc(sizeof(tur_adt_Identity));
     __r->wrapped = _0;
     __r->tag = _1;
     return (int64_t)(intptr_t)__r;
 }
 
+#ifndef TUR_CTORALIAS_Identity
+#define TUR_CTORALIAS_Identity
+#define ctor_Identity ctor_Identity_Identity
+#endif
 typedef struct tur_adt_Point {
     int64_t x;
     int64_t y;
 } tur_adt_Point;
 typedef tur_adt_Point Point;
 
-static tur_adt_Point * ctor_Point(int64_t _0, int64_t _1) {
+static tur_adt_Point * ctor_Point_Point(int64_t _0, int64_t _1) {
     tur_adt_Point *__r = (tur_adt_Point *)malloc(sizeof(tur_adt_Point));
     __r->x = _0;
     __r->y = _1;
     return __r;
 }
 
+#ifndef TUR_CTORALIAS_Point
+#define TUR_CTORALIAS_Point
+#define ctor_Point ctor_Point_Point
+#endif
 
 /* SYM1 (runtime-symbols-plan): interned runtime symbol records. */
 #ifndef TUR_SYM_DEFINED
@@ -3986,7 +4052,7 @@ typedef struct tur_adt_Identity__int {
 
 #ifndef TUR_FN_tur_adt_Identity__int
 #define TUR_FN_tur_adt_Identity__int
-static tur_adt_Identity__int ctor_Identity__int(int64_t _0, int64_t _1) {
+static tur_adt_Identity__int ctor_Identity_Identity__int(int64_t _0, int64_t _1) {
     tur_adt_Identity__int __r;
     __r.wrapped = _0;
     __r.tag = _1;
@@ -4004,7 +4070,7 @@ typedef struct tur_adt_Cons__int {
 
 #ifndef TUR_FN_tur_adt_Cons__int
 #define TUR_FN_tur_adt_Cons__int
-static tur_adt_Cons__int * ctor_Cons__int(int64_t _0, int64_t _1) {
+static tur_adt_Cons__int * ctor_Cons_Cons__int(int64_t _0, int64_t _1) {
     tur_adt_Cons__int *__r = (tur_adt_Cons__int *)malloc(sizeof(tur_adt_Cons__int));
     __r->head = _0;
     __r->tail = _1;
@@ -4023,7 +4089,7 @@ typedef struct tur_adt_Vec__int {
 
 #ifndef TUR_FN_tur_adt_Vec__int
 #define TUR_FN_tur_adt_Vec__int
-static tur_adt_Vec__int * ctor_Vec__int(void * _0, int64_t _1, int64_t _2) {
+static tur_adt_Vec__int * ctor_Vec_Vec__int(void * _0, int64_t _1, int64_t _2) {
     tur_adt_Vec__int *__r = (tur_adt_Vec__int *)malloc(sizeof(tur_adt_Vec__int));
     __r->data = _0;
     __r->len = _1;
@@ -4042,7 +4108,7 @@ typedef struct tur_adt_Identity__Point {
 
 #ifndef TUR_FN_tur_adt_Identity__Point
 #define TUR_FN_tur_adt_Identity__Point
-static tur_adt_Identity__Point ctor_Identity__Point(tur_adt_Point * _0, int64_t _1) {
+static tur_adt_Identity__Point ctor_Identity_Identity__Point(tur_adt_Point * _0, int64_t _1) {
     tur_adt_Identity__Point __r;
     __r.wrapped = _0;
     __r.tag = _1;
@@ -4063,7 +4129,7 @@ typedef struct tur_adt_Option__fn1_int__int {
 
 #ifndef TUR_FN_tur_adt_Option__fn1_int__int
 #define TUR_FN_tur_adt_Option__fn1_int__int
-static tur_adt_Option__fn1_int__int ctor_None__fn1_int__int() {
+static tur_adt_Option__fn1_int__int ctor_Option_None__fn1_int__int() {
     tur_adt_Option__fn1_int__int __r;
     __r.tag = 0;
     memset((char *)&__r + sizeof(__r.tag), 0, offsetof(tur_adt_Option__fn1_int__int, as) - sizeof(__r.tag));
@@ -4071,7 +4137,7 @@ static tur_adt_Option__fn1_int__int ctor_None__fn1_int__int() {
     return __r;
 }
 
-static tur_adt_Option__fn1_int__int ctor_Some__fn1_int__int(void * _0) {
+static tur_adt_Option__fn1_int__int ctor_Option_Some__fn1_int__int(void * _0) {
     tur_adt_Option__fn1_int__int __r;
     __r.tag = 1;
     memset((char *)&__r + sizeof(__r.tag), 0, offsetof(tur_adt_Option__fn1_int__int, as) - sizeof(__r.tag));
@@ -4090,7 +4156,7 @@ typedef struct tur_adt_Schema__int {
 
 #ifndef TUR_FN_tur_adt_Schema__int
 #define TUR_FN_tur_adt_Schema__int
-static tur_adt_Schema__int ctor_Schema__int(int64_t _0) {
+static tur_adt_Schema__int ctor_Schema_Schema__int(int64_t _0) {
     tur_adt_Schema__int __r;
     __r.raw = _0;
     return __r;
@@ -4110,11 +4176,11 @@ typedef struct tur_adt_Option__Zipper__struct {
 
 #ifndef TUR_FN_tur_adt_Option__Zipper__struct
 #define TUR_FN_tur_adt_Option__Zipper__struct
-static int64_t ctor_None__Zipper__struct() {
+static int64_t ctor_Option_None__Zipper__struct() {
     return 0;
 }
 
-static int64_t ctor_Some__Zipper__struct(int64_t _0) {
+static int64_t ctor_Option_Some__Zipper__struct(int64_t _0) {
     tur_adt_Option__Zipper__struct *__r = (tur_adt_Option__Zipper__struct *)malloc(sizeof(tur_adt_Option__Zipper__struct));
     __r->tag = 1;
     __r->as.Some._0 = _0;
@@ -4126,6 +4192,18 @@ static int64_t ctor_Some__Zipper__struct(int64_t _0) {
 static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
     return ((bool (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);
 }
+/* fn-value-fat-normalization: no-op drop glue for statically (or, for
+ * a proven non-retaining sink, stack-) allocated { shim, orig } boxes.
+ * tur_closure_drop treats a NULL header as "free the base allocation",
+ * which would free() a non-heap address; this makes every drop of such
+ * a box a no-op. */
+static void __tur_fatbox_keep(void *__e) { (void)__e; }
+static union { void *__a; int64_t __b;
+               char __c[sizeof(void *) + 2 * sizeof(int64_t)]; }
+    __tur_fatbox_0 = { .__a = (void *)__tur_fatbox_keep };
+static union { void *__a; int64_t __b;
+               char __c[sizeof(void *) + 2 * sizeof(int64_t)]; }
+    __tur_fatbox_1 = { .__a = (void *)__tur_fatbox_keep };
 typedef tur_adt_Point * (*tur_thunk_tur_adt_Point___int64_t_t)(void *, int64_t);
 typedef bool (*tur_thunk_bool_int64_t_int64_t_t)(void *, int64_t, int64_t);
 typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
@@ -4236,7 +4314,7 @@ static int64_t __inst_MapKey_mk_hyowned_qu_float32(float);
 static int64_t __inst_MapKey_mk_hybox_float(double);
 static int64_t __inst_MapKey_mk_hycmp_float(double);
 static int64_t __inst_MapKey_mk_hyowned_qu_float(double);
-static bool __fn_834(int64_t, int64_t);
+static bool __fn_835(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Map(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Vec(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Option(int64_t, int64_t);
@@ -4247,7 +4325,7 @@ static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Tuple2(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Cons(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Set(int64_t, int64_t);
-static bool __fn_1247(int64_t, int64_t);
+static bool __fn_1248(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_MutableMap(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Sym(const struct __tur_sym *, const struct __tur_sym *);
 static int64_t __inst_Hash_hash_Sym(const struct __tur_sym *);
@@ -4255,13 +4333,13 @@ static int64_t __inst_MapKey_mk_hybox_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hycmp_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hyowned_qu_Sym(const struct __tur_sym *);
 static int64_t __inst_Functor_fmap_Identity(int64_t, tur_poly_fn_t);
-static tur_adt_Point * __fn_1451(void *, int64_t);
-static tur_adt_Point * __fn_1460(void *, int64_t);
-static int64_t __fn_1469(void *, int64_t);
-static int64_t point_hyx_un_undict_un1478(int64_t, int64_t, int64_t);
-static int64_t __poly_1482(void *, int64_t, int64_t, int64_t);
-static int64_t point_hyy_un_undict_un1493(int64_t, int64_t, int64_t);
-static int64_t __poly_1497(void *, int64_t, int64_t, int64_t);
+static tur_adt_Point * __fn_1453(void *, int64_t);
+static tur_adt_Point * __fn_1462(void *, int64_t);
+static int64_t __fn_1471(void *, int64_t);
+static int64_t point_hyx_un_undict_un1480(int64_t, int64_t, int64_t);
+static int64_t __poly_1484(void *, int64_t, int64_t, int64_t);
+static int64_t point_hyy_un_undict_un1495(int64_t, int64_t, int64_t);
+static int64_t __poly_1499(void *, int64_t, int64_t, int64_t);
 static void * array_hyget(void *, int64_t);
 static int64_t array_hyset(void *, int64_t, int64_t);
 static void * array_hyslice(void *, int64_t, int64_t);
@@ -4426,6 +4504,7 @@ static void json_hydec_hyskip_hyws_hy(void *);
 static void * json_hydec_hyparse_hystring_hy(void *);
 static int64_t json_hydec_hyparse_hyvalue_hy(void *);
 static int64_t json_sldecode(const char *);
+static int64_t json_sldecode_hyfile_ex(const char *);
 static void json_hyfree_hynode_hy(int64_t);
 static void json_slfree(int64_t);
 static int64_t schema_slstr();
@@ -4511,7 +4590,7 @@ static tur_adt_Identity__Point mk_id__spec__tur_adt_Identity__Point_tur_adt_Poin
 static int64_t run_id__spec__int64_t_tur_adt_Identity__int(tur_adt_Identity__int);
 static tur_adt_Identity__Point point_y__mono_29dc1a87dc9f86df(int64_t, int64_t);
 static tur_adt_Identity__Point __inst_Functor_fmap_Identity__spec__tur_adt_Identity__Point_int64_t_int64_t__h1(tur_adt_Identity__int, tur_poly_fn_t);
-static tur_adt_Identity__int __fn_1469__byval(void *, int64_t);
+static tur_adt_Identity__int __fn_1471__byval(void *, int64_t);
 static tur_adt_Point * set_px__lens_89e16e7f8669ca4e(int64_t, tur_adt_Point *);
 static tur_adt_Point * set_px__lens_29dc1a87dc9f86df(int64_t, tur_adt_Point *);
 static tur_adt_Point * tweak__lens_89e16e7f8669ca4e(int64_t, tur_adt_Point *);
@@ -4689,7 +4768,7 @@ static int64_t __inst_MapKey_mk_hyowned_qu_float(double x) {
         return INT64_C(0);
 }
 
-static bool __fn_834(int64_t a, int64_t b) {
+static bool __fn_835(int64_t a, int64_t b) {
         bool __ps_2 = (__inst_Eq_eq_qu_int(a, b));
         if (tur_panicking) return ((bool)0);
         return __ps_2;
@@ -4702,132 +4781,127 @@ static bool __inst_Eq_eq_qu_Map(int64_t x, int64_t y) {
         if (tur_panicking) return ((bool)0);
         bool __t3 = (__ps_4) == (__ps_5);
         if (__t3) {
-            void *__t7 = malloc(sizeof(void *) + 2 * sizeof(int64_t));
-            *(void (**)(void *))__t7 = 0;
-            int64_t *__t6 = (int64_t *)((char *)__t7 + sizeof(void *));
-            __t6[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-            __t6[1] = (int64_t)(intptr_t)__fn_834;
-            void *__t8 = __t6;
-            bool __ps_9 = (map_hyeq_hydriver(x, y, (int64_t)(intptr_t)(__t8)));
+            void *__t6 = (void *)((char *)&__tur_fatbox_0 + sizeof(void *));
+            bool __ps_7 = (map_hyeq_hydriver(x, y, (int64_t)(intptr_t)(__t6)));
             if (tur_panicking) return ((bool)0);
-            __t3 = __ps_9;
+            __t3 = __ps_7;
         }
         return __t3;
 }
 
 static bool __inst_Eq_eq_qu_Vec(int64_t x, int64_t y) {
-        int64_t __ps_11 = (vec_hylen(x));
+        int64_t __ps_9 = (vec_hylen(x));
         if (tur_panicking) return ((bool)0);
-        int64_t __ps_12 = (vec_hylen(y));
+        int64_t __ps_10 = (vec_hylen(y));
         if (tur_panicking) return ((bool)0);
-        bool __t10 = (__ps_11) == (__ps_12);
-        if (__t10) {
-            int64_t __ps_13 = (vec_hylen(x));
+        bool __t8 = (__ps_9) == (__ps_10);
+        if (__t8) {
+            int64_t __ps_11 = (vec_hylen(x));
             if (tur_panicking) return ((bool)0);
-            bool __ps_14 = (vec_hyeq_hyloop(x, y, INT64_C(0), __ps_13));
+            bool __ps_12 = (vec_hyeq_hyloop(x, y, INT64_C(0), __ps_11));
             if (tur_panicking) return ((bool)0);
-            __t10 = __ps_14;
+            __t8 = __ps_12;
         }
-        return __t10;
+        return __t8;
 }
 
 static bool __inst_Eq_eq_qu_Option(int64_t x, int64_t y) {
-        bool __t15 = 0;
+        bool __t13 = 0;
         {
             tur_adt_Option *__scrut = (tur_adt_Option *)(intptr_t)(x);
             switch (__scrut ? __scrut->tag : 0) {
             case 1: {
-                int64_t vx_911 = (int64_t)__scrut->as.Some._0;
-                bool __t16 = 0;
+                int64_t vx_912 = (int64_t)__scrut->as.Some._0;
+                bool __t14 = 0;
                 {
                     tur_adt_Option *__scrut = (tur_adt_Option *)(intptr_t)(y);
                     switch (__scrut ? __scrut->tag : 0) {
                     case 1: {
-                        int64_t vy_912 = (int64_t)__scrut->as.Some._0;
-                        bool __ps_17 = (__inst_Eq_eq_qu_int(vx_911, vy_912));
+                        int64_t vy_913 = (int64_t)__scrut->as.Some._0;
+                        bool __ps_15 = (__inst_Eq_eq_qu_int(vx_912, vy_913));
                         if (tur_panicking) return ((bool)0);
-                        __t16 = __ps_17;
+                        __t14 = __ps_15;
                         break;
                     }
                     case 0: {
-                        __t16 = false;
+                        __t14 = false;
                         break;
                     }
                     default: break;
                     }
                 }
-                __t15 = __t16;
+                __t13 = __t14;
                 break;
             }
             case 0: {
-                bool __ps_18 = (none_qu(y));
+                bool __ps_16 = (none_qu(y));
                 if (tur_panicking) return ((bool)0);
-                __t15 = __ps_18;
+                __t13 = __ps_16;
                 break;
             }
             default: break;
             }
         }
-        return __t15;
+        return __t13;
 }
 
 static bool __inst_Eq_eq_qu_Result(int64_t x, int64_t y) {
-        bool __t19 = 0;
+        bool __t17 = 0;
         {
             tur_adt_Result *__scrut = (tur_adt_Result *)(intptr_t)(x);
             switch (__scrut ? __scrut->tag : 0) {
             case 0: {
-                int64_t vx_964 = (int64_t)__scrut->as.Ok._0;
+                int64_t vx_965 = (int64_t)__scrut->as.Ok._0;
+                bool __t18 = 0;
+                {
+                    tur_adt_Result *__scrut = (tur_adt_Result *)(intptr_t)(y);
+                    switch (__scrut ? __scrut->tag : 0) {
+                    case 0: {
+                        int64_t vy_966 = (int64_t)__scrut->as.Ok._0;
+                        bool __ps_19 = (__inst_Eq_eq_qu_int(vx_965, vy_966));
+                        if (tur_panicking) return ((bool)0);
+                        __t18 = __ps_19;
+                        break;
+                    }
+                    case 1: {
+                        int64_t _un_967 = (int64_t)__scrut->as.Err._0;
+                        __t18 = false;
+                        break;
+                    }
+                    default: break;
+                    }
+                }
+                __t17 = __t18;
+                break;
+            }
+            case 1: {
+                int64_t ex_968 = (int64_t)__scrut->as.Err._0;
                 bool __t20 = 0;
                 {
                     tur_adt_Result *__scrut = (tur_adt_Result *)(intptr_t)(y);
                     switch (__scrut ? __scrut->tag : 0) {
                     case 0: {
-                        int64_t vy_965 = (int64_t)__scrut->as.Ok._0;
-                        bool __ps_21 = (__inst_Eq_eq_qu_int(vx_964, vy_965));
+                        int64_t _un_969 = (int64_t)__scrut->as.Ok._0;
+                        __t20 = false;
+                        break;
+                    }
+                    case 1: {
+                        int64_t ey_970 = (int64_t)__scrut->as.Err._0;
+                        bool __ps_21 = (__inst_Eq_eq_qu_int(ex_968, ey_970));
                         if (tur_panicking) return ((bool)0);
                         __t20 = __ps_21;
                         break;
                     }
-                    case 1: {
-                        int64_t _un_966 = (int64_t)__scrut->as.Err._0;
-                        __t20 = false;
-                        break;
-                    }
                     default: break;
                     }
                 }
-                __t19 = __t20;
-                break;
-            }
-            case 1: {
-                int64_t ex_967 = (int64_t)__scrut->as.Err._0;
-                bool __t22 = 0;
-                {
-                    tur_adt_Result *__scrut = (tur_adt_Result *)(intptr_t)(y);
-                    switch (__scrut ? __scrut->tag : 0) {
-                    case 0: {
-                        int64_t _un_968 = (int64_t)__scrut->as.Ok._0;
-                        __t22 = false;
-                        break;
-                    }
-                    case 1: {
-                        int64_t ey_969 = (int64_t)__scrut->as.Err._0;
-                        bool __ps_23 = (__inst_Eq_eq_qu_int(ex_967, ey_969));
-                        if (tur_panicking) return ((bool)0);
-                        __t22 = __ps_23;
-                        break;
-                    }
-                    default: break;
-                    }
-                }
-                __t19 = __t22;
+                __t17 = __t20;
                 break;
             }
             default: break;
             }
         }
-        return __t19;
+        return __t17;
 }
 
 static int64_t __inst_MonadError_throw_hyerror_Result_tyvar(int64_t err) {
@@ -4842,87 +4916,82 @@ static int64_t __inst_MonadError_catch_hyerror_Result_tyvar(int64_t ma, tur_poly
 }
 
 static bool __inst_Eq_eq_qu_Pair(int64_t x, int64_t y) {
-        bool __ps_25 = (__inst_Eq_eq_qu_int((int64_t)((tur_adt_Pair *)(intptr_t)(x))->fst, (int64_t)((tur_adt_Pair *)(intptr_t)(y))->fst));
+        bool __ps_23 = (__inst_Eq_eq_qu_int((int64_t)((tur_adt_Pair *)(intptr_t)(x))->fst, (int64_t)((tur_adt_Pair *)(intptr_t)(y))->fst));
         if (tur_panicking) return ((bool)0);
-        bool __t24 = __ps_25;
-        if (__t24) {
-            bool __ps_26 = (__inst_Eq_eq_qu_int((int64_t)((tur_adt_Pair *)(intptr_t)(x))->snd, (int64_t)((tur_adt_Pair *)(intptr_t)(y))->snd));
+        bool __t22 = __ps_23;
+        if (__t22) {
+            bool __ps_24 = (__inst_Eq_eq_qu_int((int64_t)((tur_adt_Pair *)(intptr_t)(x))->snd, (int64_t)((tur_adt_Pair *)(intptr_t)(y))->snd));
             if (tur_panicking) return ((bool)0);
-            __t24 = __ps_26;
+            __t22 = __ps_24;
         }
-        return __t24;
+        return __t22;
 }
 
 static bool __inst_Eq_eq_qu_Tuple2(int64_t x, int64_t y) {
-        bool __ps_28 = (__inst_Eq_eq_qu_int((int64_t)((tur_adt_Tuple2 *)(intptr_t)(x))->e1, (int64_t)((tur_adt_Tuple2 *)(intptr_t)(y))->e1));
+        bool __ps_26 = (__inst_Eq_eq_qu_int((int64_t)((tur_adt_Tuple2 *)(intptr_t)(x))->e1, (int64_t)((tur_adt_Tuple2 *)(intptr_t)(y))->e1));
         if (tur_panicking) return ((bool)0);
-        bool __t27 = __ps_28;
-        if (__t27) {
-            bool __ps_29 = (__inst_Eq_eq_qu_int((int64_t)((tur_adt_Tuple2 *)(intptr_t)(x))->e2, (int64_t)((tur_adt_Tuple2 *)(intptr_t)(y))->e2));
+        bool __t25 = __ps_26;
+        if (__t25) {
+            bool __ps_27 = (__inst_Eq_eq_qu_int((int64_t)((tur_adt_Tuple2 *)(intptr_t)(x))->e2, (int64_t)((tur_adt_Tuple2 *)(intptr_t)(y))->e2));
             if (tur_panicking) return ((bool)0);
-            __t27 = __ps_29;
+            __t25 = __ps_27;
         }
-        return __t27;
+        return __t25;
 }
 
 static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
-        bool __t30;
+        bool __t28;
         {
-            int64_t t1_1111 = x;
-            (void)t1_1111;
-            int64_t t2_1112 = y;
-            (void)t2_1112;
-            bool __t31;
-            if ((t1_1111) == (INT64_C(0))) {
-                __t31 = (t2_1112) == (INT64_C(0));
+            int64_t t1_1112 = x;
+            (void)t1_1112;
+            int64_t t2_1113 = y;
+            (void)t2_1113;
+            bool __t29;
+            if ((t1_1112) == (INT64_C(0))) {
+                __t29 = (t2_1113) == (INT64_C(0));
             } else {
-                bool __t32;
-                if ((t2_1112) == (INT64_C(0))) {
-                    __t32 = false;
+                bool __t30;
+                if ((t2_1113) == (INT64_C(0))) {
+                    __t30 = false;
                 } else {
-                    bool __ps_33 = (cons_hyeq_hygo(t1_1111, t2_1112));
+                    bool __ps_31 = (cons_hyeq_hygo(t1_1112, t2_1113));
                     if (tur_panicking) return ((bool)0);
-                    __t32 = __ps_33;
+                    __t30 = __ps_31;
                 }
-                __t31 = __t32;
+                __t29 = __t30;
             }
-            __t30 = __t31;
+            __t28 = __t29;
         }
-        return __t30;
+        return __t28;
 }
 
 static bool __inst_Eq_eq_qu_Set(int64_t x, int64_t y) {
-        bool __ps_34 = (set_hyeq_hyfull(x, y));
+        bool __ps_32 = (set_hyeq_hyfull(x, y));
         if (tur_panicking) return ((bool)0);
-        return __ps_34;
+        return __ps_32;
 }
 
-static bool __fn_1247(int64_t a, int64_t b) {
-        bool __ps_35 = (__inst_Eq_eq_qu_int(a, b));
+static bool __fn_1248(int64_t a, int64_t b) {
+        bool __ps_33 = (__inst_Eq_eq_qu_int(a, b));
         if (tur_panicking) return ((bool)0);
-        return __ps_35;
+        return __ps_33;
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
-        int64_t __ps_37 = (mutmap_hylen(x));
+        int64_t __ps_35 = (mutmap_hylen(x));
         if (tur_panicking) return ((bool)0);
-        int64_t __ps_38 = (mutmap_hylen(y));
+        int64_t __ps_36 = (mutmap_hylen(y));
         if (tur_panicking) return ((bool)0);
-        bool __t36 = (__ps_37) == (__ps_38);
-        if (__t36) {
-            int64_t __ps_39 = (mutmap_hycap(x));
+        bool __t34 = (__ps_35) == (__ps_36);
+        if (__t34) {
+            int64_t __ps_37 = (mutmap_hycap(x));
             if (tur_panicking) return ((bool)0);
-            void *__t41 = malloc(sizeof(void *) + 2 * sizeof(int64_t));
-            *(void (**)(void *))__t41 = 0;
-            int64_t *__t40 = (int64_t *)((char *)__t41 + sizeof(void *));
-            __t40[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-            __t40[1] = (int64_t)(intptr_t)__fn_1247;
-            void *__t42 = __t40;
-            bool __ps_43 = (mutmap_hyeq_hyloop(x, y, INT64_C(0), __ps_39, (int64_t)(intptr_t)(__t42)));
+            void *__t38 = (void *)((char *)&__tur_fatbox_1 + sizeof(void *));
+            bool __ps_39 = (mutmap_hyeq_hyloop(x, y, INT64_C(0), __ps_37, (int64_t)(intptr_t)(__t38)));
             if (tur_panicking) return ((bool)0);
-            __t36 = __ps_43;
+            __t34 = __ps_39;
         }
-        return __t36;
+        return __t34;
 }
 
 static bool __inst_Eq_eq_qu_Sym(const struct __tur_sym * x, const struct __tur_sym * y) {
@@ -4948,13 +5017,13 @@ static int64_t __inst_MapKey_mk_hyowned_qu_Sym(const struct __tur_sym * x) {
 }
 
 static int64_t __inst_Functor_fmap_Identity(int64_t i, tur_poly_fn_t g) {
-        int64_t __ps_44 = (run_hyid(i));
+        int64_t __ps_40 = (run_hyid(i));
         if (tur_panicking) return ((int64_t)0);
-        int64_t __ps_45 = (((int64_t (*)(void*, int64_t))g.fn)(g.env, __ps_44));
+        int64_t __ps_41 = (((int64_t (*)(void*, int64_t))g.fn)(g.env, __ps_40));
         if (tur_panicking) return ((int64_t)0);
-        int64_t __ps_46 = (mk_hyid(__ps_45));
+        int64_t __ps_42 = (mk_hyid(__ps_41));
         if (tur_panicking) return ((int64_t)0);
-        return (int64_t)(intptr_t)__ps_46;
+        return (int64_t)(intptr_t)__ps_42;
 }
 
 typedef struct dict_Functor_Identity {
@@ -4965,82 +5034,82 @@ static dict_Functor_Identity dict_Functor_Identity_singleton = {
     .fmap = __inst_Functor_fmap_Identity,
 };
 
-struct __env_1453 { tur_thunk_tur_adt_Point___int64_t_t __fn; tur_adt_Point * s; };
-static void drop_glue___env_1453(void *__p) {
-    struct __env_1453 *__e = (struct __env_1453 *)__p; (void)__e;
+struct __env_1455 { tur_thunk_tur_adt_Point___int64_t_t __fn; tur_adt_Point * s; };
+static void drop_glue___env_1455(void *__p) {
+    struct __env_1455 *__e = (struct __env_1455 *)__p; (void)__e;
     free((void *)((char *)__p - sizeof(void *)));
 }
-static tur_adt_Point * __fn_1451(void * __env_p_1454, int64_t nx) {
-        struct __env_1453 *__env___env_1453 = (struct __env_1453 *)__env_p_1454;
-        tur_adt_Point * __ps_47 = (ctor_Point(nx, (int64_t)((tur_adt_Point *)(intptr_t)(__env___env_1453->s))->y));
+static tur_adt_Point * __fn_1453(void * __env_p_1456, int64_t nx) {
+        struct __env_1455 *__env___env_1455 = (struct __env_1455 *)__env_p_1456;
+        tur_adt_Point * __ps_43 = (ctor_Point_Point(nx, (int64_t)((tur_adt_Point *)(intptr_t)(__env___env_1455->s))->y));
         if (tur_panicking) return ((tur_adt_Point *)0);
-        return __ps_47;
+        return __ps_43;
 }
 
-struct __env_1462 { tur_thunk_tur_adt_Point___int64_t_t __fn; tur_adt_Point * s; };
-static void drop_glue___env_1462(void *__p) {
-    struct __env_1462 *__e = (struct __env_1462 *)__p; (void)__e;
+struct __env_1464 { tur_thunk_tur_adt_Point___int64_t_t __fn; tur_adt_Point * s; };
+static void drop_glue___env_1464(void *__p) {
+    struct __env_1464 *__e = (struct __env_1464 *)__p; (void)__e;
     free((void *)((char *)__p - sizeof(void *)));
 }
-static tur_adt_Point * __fn_1460(void * __env_p_1463, int64_t ny) {
-        struct __env_1462 *__env___env_1462 = (struct __env_1462 *)__env_p_1463;
-        tur_adt_Point * __ps_48 = (ctor_Point((int64_t)((tur_adt_Point *)(intptr_t)(__env___env_1462->s))->x, ny));
+static tur_adt_Point * __fn_1462(void * __env_p_1465, int64_t ny) {
+        struct __env_1464 *__env___env_1464 = (struct __env_1464 *)__env_p_1465;
+        tur_adt_Point * __ps_44 = (ctor_Point_Point((int64_t)((tur_adt_Point *)(intptr_t)(__env___env_1464->s))->x, ny));
         if (tur_panicking) return ((tur_adt_Point *)0);
-        return __ps_48;
+        return __ps_44;
 }
 
-struct __env_1471 { int64_t __fn; int64_t b; };
-static void drop_glue___env_1471(void *__p) {
-    struct __env_1471 *__e = (struct __env_1471 *)__p; (void)__e;
+struct __env_1473 { int64_t __fn; int64_t b; };
+static void drop_glue___env_1473(void *__p) {
+    struct __env_1473 *__e = (struct __env_1473 *)__p; (void)__e;
     free((void *)((char *)__p - sizeof(void *)));
 }
-static int64_t __fn_1469(void * __env_p_1472, int64_t a) {
-        struct __env_1471 *__env___env_1471 = (struct __env_1471 *)__env_p_1472;
-        tur_adt_Identity__int __ps_49 = (mk_id__spec__tur_adt_Identity__int_int64_t(__env___env_1471->b));
+static int64_t __fn_1471(void * __env_p_1474, int64_t a) {
+        struct __env_1473 *__env___env_1473 = (struct __env_1473 *)__env_p_1474;
+        tur_adt_Identity__int __ps_45 = (mk_id__spec__tur_adt_Identity__int_int64_t(__env___env_1473->b));
         if (tur_panicking) return ((int64_t)0);
-        { tur_adt_Identity__int *__tur_ret_p = (tur_adt_Identity__int *)malloc(sizeof(tur_adt_Identity__int)); *__tur_ret_p = __ps_49; return (int64_t)(intptr_t)__tur_ret_p; }
+        { tur_adt_Identity__int *__tur_ret_p = (tur_adt_Identity__int *)malloc(sizeof(tur_adt_Identity__int)); *__tur_ret_p = __ps_45; return (int64_t)(intptr_t)__tur_ret_p; }
 }
 
-static int64_t point_hyx_un_undict_un1478(int64_t __dict_1479, int64_t g, int64_t s) {
-        int64_t __ps_50 = (((int64_t (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(g)))[0])((void *)(intptr_t)(g), (int64_t)((tur_adt_Point *)(intptr_t)(s))->x));
+static int64_t point_hyx_un_undict_un1480(int64_t __dict_1481, int64_t g, int64_t s) {
+        int64_t __ps_46 = (((int64_t (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(g)))[0])((void *)(intptr_t)(g), (int64_t)((tur_adt_Point *)(intptr_t)(s))->x));
         if (tur_panicking) return ((int64_t)0);
-        void *__t52 = malloc(sizeof(void *) + sizeof(struct __env_1453));
-        *(void (**)(void *))__t52 = drop_glue___env_1453;
-        struct __env_1453 *__t51 = (struct __env_1453 *)((char *)__t52 + sizeof(void *));
-        __t51->__fn = (tur_thunk_tur_adt_Point___int64_t_t)__fn_1451;
-        __t51->s = (tur_adt_Point *)(intptr_t)s;
-        void *__t53 = __t51;
-        void *__t54 = (void *)(intptr_t)(__t53);
-        int64_t __ps_55 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_1479)[0])(__ps_50, (tur_poly_fn_t){ __t54, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t54)) }));
+        void *__t48 = malloc(sizeof(void *) + sizeof(struct __env_1455));
+        *(void (**)(void *))__t48 = drop_glue___env_1455;
+        struct __env_1455 *__t47 = (struct __env_1455 *)((char *)__t48 + sizeof(void *));
+        __t47->__fn = (tur_thunk_tur_adt_Point___int64_t_t)__fn_1453;
+        __t47->s = (tur_adt_Point *)(intptr_t)s;
+        void *__t49 = __t47;
+        void *__t50 = (void *)(intptr_t)(__t49);
+        int64_t __ps_51 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_1481)[0])(__ps_46, (tur_poly_fn_t){ __t50, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t50)) }));
         if (tur_panicking) return ((int64_t)0);
-        return (int64_t)(intptr_t)__ps_55;
+        return (int64_t)(intptr_t)__ps_51;
 }
 
-static int64_t __poly_1482(void * __poly_env_1483, int64_t __poly_x0_1485, int64_t __poly_x1_1487, int64_t __poly_x2_1489) {
-        int64_t __ps_56 = (point_hyx_un_undict_un1478(__poly_x0_1485, __poly_x1_1487, __poly_x2_1489));
+static int64_t __poly_1484(void * __poly_env_1485, int64_t __poly_x0_1487, int64_t __poly_x1_1489, int64_t __poly_x2_1491) {
+        int64_t __ps_52 = (point_hyx_un_undict_un1480(__poly_x0_1487, __poly_x1_1489, __poly_x2_1491));
         if (tur_panicking) return ((int64_t)0);
-        return __ps_56;
+        return __ps_52;
 }
 
-static int64_t point_hyy_un_undict_un1493(int64_t __dict_1494, int64_t g, int64_t s) {
-        int64_t __ps_57 = (((int64_t (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(g)))[0])((void *)(intptr_t)(g), (int64_t)((tur_adt_Point *)(intptr_t)(s))->y));
+static int64_t point_hyy_un_undict_un1495(int64_t __dict_1496, int64_t g, int64_t s) {
+        int64_t __ps_53 = (((int64_t (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(g)))[0])((void *)(intptr_t)(g), (int64_t)((tur_adt_Point *)(intptr_t)(s))->y));
         if (tur_panicking) return ((int64_t)0);
-        void *__t59 = malloc(sizeof(void *) + sizeof(struct __env_1462));
-        *(void (**)(void *))__t59 = drop_glue___env_1462;
-        struct __env_1462 *__t58 = (struct __env_1462 *)((char *)__t59 + sizeof(void *));
-        __t58->__fn = (tur_thunk_tur_adt_Point___int64_t_t)__fn_1460;
-        __t58->s = (tur_adt_Point *)(intptr_t)s;
-        void *__t60 = __t58;
-        void *__t61 = (void *)(intptr_t)(__t60);
-        int64_t __ps_62 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_1494)[0])(__ps_57, (tur_poly_fn_t){ __t61, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t61)) }));
+        void *__t55 = malloc(sizeof(void *) + sizeof(struct __env_1464));
+        *(void (**)(void *))__t55 = drop_glue___env_1464;
+        struct __env_1464 *__t54 = (struct __env_1464 *)((char *)__t55 + sizeof(void *));
+        __t54->__fn = (tur_thunk_tur_adt_Point___int64_t_t)__fn_1462;
+        __t54->s = (tur_adt_Point *)(intptr_t)s;
+        void *__t56 = __t54;
+        void *__t57 = (void *)(intptr_t)(__t56);
+        int64_t __ps_58 = (((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_1496)[0])(__ps_53, (tur_poly_fn_t){ __t57, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t57)) }));
         if (tur_panicking) return ((int64_t)0);
-        return (int64_t)(intptr_t)__ps_62;
+        return (int64_t)(intptr_t)__ps_58;
 }
 
-static int64_t __poly_1497(void * __poly_env_1498, int64_t __poly_x0_1500, int64_t __poly_x1_1502, int64_t __poly_x2_1504) {
-        int64_t __ps_63 = (point_hyy_un_undict_un1493(__poly_x0_1500, __poly_x1_1502, __poly_x2_1504));
+static int64_t __poly_1499(void * __poly_env_1500, int64_t __poly_x0_1502, int64_t __poly_x1_1504, int64_t __poly_x2_1506) {
+        int64_t __ps_59 = (point_hyy_un_undict_un1495(__poly_x0_1502, __poly_x1_1504, __poly_x2_1506));
         if (tur_panicking) return ((int64_t)0);
-        return __ps_63;
+        return __ps_59;
 }
 
 static void * array_hyget(void * arr, int64_t idx) {
@@ -5135,766 +5204,214 @@ static int64_t with_hycontract_hyhandler(int64_t h, int64_t body) {
   
 }
 
-static int64_t hamt_slnew__cps(DK *__kont);
-static int64_t hamt_slfree__cps(void * m_517, DK *__kont);
-static int64_t hamt_slretain__cps(void * m_518, DK *__kont);
-static int64_t hamt_slset__cps(void * m_519, int64_t hash_520, void * key_521, void * val_522, DK *__kont);
-static int64_t hamt_sldel__cps(void * m_523, int64_t hash_524, void * key_525, DK *__kont);
-static int64_t hamt_slget__cps(void * m_526, int64_t hash_527, void * key_528, DK *__kont);
-static int64_t hamt_slhas_qu__cps(void * m_529, int64_t hash_530, void * key_531, DK *__kont);
-static int64_t hamt_slset_hycstr__cps(void * m_532, const char * key_533, void * val_534, DK *__kont);
-static int64_t hamt_sldel_hycstr__cps(void * m_535, const char * key_536, DK *__kont);
-static int64_t hamt_slget_hycstr__cps(void * m_537, const char * key_538, DK *__kont);
-static int64_t hamt_slhas_hycstr_qu__cps(void * m_539, const char * key_540, DK *__kont);
-static int64_t hamt_slcount__cps(void * m_541, DK *__kont);
-static int64_t hamt_slmerge__cps(void * a_542, void * b_543, DK *__kont);
-static int64_t hamt_slhash_hystr__cps(const char * str_544, DK *__kont);
-static int64_t hamt_slhash_hyptr__cps(void * ptr_545, DK *__kont);
-static int64_t hamt_sliter_hyinit__cps(void * iter_546, void * m_547, DK *__kont);
-static int64_t hamt_sliter_hyfree__cps(void * iter_548, DK *__kont);
-static int64_t hamt_sliter_hynext__cps(void * iter_549, void * hash_hyout_550, void * key_hyout_551, void * val_hyout_552, DK *__kont);
-static int64_t hamt_sliter_hyalloc__cps(void * m_577, DK *__kont);
-static int64_t hamt_sliter_hydestroy_ex__cps(void * box_578, DK *__kont);
-static int64_t hamt_sliter_hyadvance_ex__cps(void * box_579, DK *__kont);
-static int64_t hamt_sliter_hycur_hyhash__cps(void * box_580, DK *__kont);
-static int64_t hamt_sliter_hycur_hykey__cps(void * box_581, DK *__kont);
-static int64_t hamt_sliter_hycur_hyval__cps(void * box_582, DK *__kont);
-static int64_t hamt_slkeyeq__cps(void * m_583, DK *__kont);
-static int64_t hamt_slget_hydynamic__cps(void * m_584, int64_t hash_585, void * key_586, void * keyeq_587, DK *__kont);
-static int64_t hamt_slhas_hydynamic_qu__cps(void * m_588, int64_t hash_589, void * key_590, void * keyeq_591, DK *__kont);
-static int64_t hamt_slmap__cps(void * m_610, void * fn_611, void * ctx_612, DK *__kont);
-static int64_t hamt_slfilter__cps(void * m_613, void * fn_614, void * ctx_615, DK *__kont);
-static int64_t hamt_slreduce__cps(void * m_616, void * fn_617, void * init_618, void * ctx_619, DK *__kont);
-static int64_t hamt_slmerge_hywith__cps(void * a_620, void * b_621, void * fn_622, void * ctx_623, DK *__kont);
-static int64_t hamt_slshow__cps(void * m_626, DK *__kont);
-static int64_t hamt_sldump__cps(void * m_632, DK *__kont);
-static int64_t hamt_sltransient__cps(void * m_646, DK *__kont);
-static int64_t hamt_sltransient_hyset_ex__cps(void * t_647, int64_t hash_648, void * key_649, void * val_650, DK *__kont);
-static int64_t hamt_sltransient_hydel_ex__cps(void * t_651, int64_t hash_652, void * key_653, DK *__kont);
-static int64_t hamt_slpersistent_ex__cps(void * t_654, DK *__kont);
-static int64_t map_hyeq_hyloop__cps(void * iter_817, void * m2_hyhamt_818, void * keyeq_819, int64_t val_cmp, DK *__kont);
-static int64_t list_hyeq_qu__cps(int64_t l1_1101, int64_t l2_1102, int64_t cmp_fn, DK *__kont);
-static int64_t _un_uncons_hyfmap__cps(int64_t cell_1113, void * f_1114, DK *__kont);
-static int64_t set_hyeq_hyloop__cps(void * iter_1190, void * s2_hyhamt_1191, void * keyeq_1192, DK *__kont);
-static int64_t hamt_slnew__cps(DK *__kont) {
-    void * __t0;
-    void * __ps_64 = (tur_hamt_new());
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_64;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_slnew() {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slnew__cps(__root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slfree__cps(void * m, DK *__kont) {
-    int64_t __t0;
-    tur_hamt_free((void *)(intptr_t)(m));
-    __t0 = 0;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void hamt_slfree(void * m) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { (void)hamt_slfree__cps(m, __root); }
-    else { (void)__dk_drive_after(); }
-    g_dk_driver = __dksave;
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return;
-}
-static int64_t hamt_slretain__cps(void * m, DK *__kont) {
-    void * __t0;
-    void * __ps_65 = (tur_hamt_retain((void *)(intptr_t)(m)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_65;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_slretain(void * m) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slretain__cps(m, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slset__cps(void * m, int64_t hash, void * key, void * val, DK *__kont) {
-    void * __t0;
-    void * __ps_66 = (tur_hamt_set((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(val)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_66;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_slset(void * m, int64_t hash, void * key, void * val) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slset__cps(m, hash, key, val, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_sldel__cps(void * m, int64_t hash, void * key, DK *__kont) {
-    void * __t0;
-    void * __ps_67 = (tur_hamt_del((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_67;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_sldel(void * m, int64_t hash, void * key) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_sldel__cps(m, hash, key, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slget__cps(void * m, int64_t hash, void * key, DK *__kont) {
-    void * __t0;
-    void * __ps_68 = (tur_hamt_get((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_68;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_slget(void * m, int64_t hash, void * key) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slget__cps(m, hash, key, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slhas_qu__cps(void * m, int64_t hash, void * key, DK *__kont) {
-    bool __t0;
-    bool __ps_69 = (tur_hamt_has((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_69;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static bool hamt_slhas_qu(void * m, int64_t hash, void * key) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slhas_qu__cps(m, hash, key, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    bool __ret = (bool)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slset_hycstr__cps(void * m, const char * key, void * val, DK *__kont) {
-    void * __t0;
-    void * __ps_70 = (tur_hamt_set_cstr((void *)(intptr_t)(m), key, (void *)(intptr_t)(val)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_70;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_slset_hycstr(void * m, const char * key, void * val) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slset_hycstr__cps(m, key, val, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_sldel_hycstr__cps(void * m, const char * key, DK *__kont) {
-    void * __t0;
-    void * __ps_71 = (tur_hamt_del_cstr((void *)(intptr_t)(m), key));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_71;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_sldel_hycstr(void * m, const char * key) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_sldel_hycstr__cps(m, key, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slget_hycstr__cps(void * m, const char * key, DK *__kont) {
-    void * __t0;
-    void * __ps_72 = (tur_hamt_get_cstr((void *)(intptr_t)(m), key));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_72;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_slget_hycstr(void * m, const char * key) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slget_hycstr__cps(m, key, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slhas_hycstr_qu__cps(void * m, const char * key, DK *__kont) {
-    bool __t0;
-    bool __ps_73 = (tur_hamt_has_cstr((void *)(intptr_t)(m), key));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_73;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static bool hamt_slhas_hycstr_qu(void * m, const char * key) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slhas_hycstr_qu__cps(m, key, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    bool __ret = (bool)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slcount__cps(void * m, DK *__kont) {
-    int64_t __t0;
-    int64_t __ps_74 = (tur_hamt_count((void *)(intptr_t)(m)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_74;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static int64_t hamt_slcount(void * m) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slcount__cps(m, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    int64_t __ret = (int64_t)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slmerge__cps(void * a, void * b, DK *__kont) {
-    void * __t0;
-    void * __ps_75 = (tur_hamt_merge((void *)(intptr_t)(a), (void *)(intptr_t)(b)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_75;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_slmerge(void * a, void * b) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slmerge__cps(a, b, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slhash_hystr__cps(const char * str, DK *__kont) {
-    int64_t __t0;
-    int64_t __ps_76 = (tur_hamt_hash_str(str));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_76;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static int64_t hamt_slhash_hystr(const char * str) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slhash_hystr__cps(str, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    int64_t __ret = (int64_t)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slhash_hyptr__cps(void * ptr, DK *__kont) {
-    int64_t __t0;
-    int64_t __ps_77 = (tur_hamt_hash_ptr((void *)(intptr_t)(ptr)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_77;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static int64_t hamt_slhash_hyptr(void * ptr) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slhash_hyptr__cps(ptr, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    int64_t __ret = (int64_t)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_sliter_hyinit__cps(void * iter, void * m, DK *__kont) {
-    int64_t __t0;
-    tur_hamt_iter_init((void *)(intptr_t)(iter), (void *)(intptr_t)(m));
-    __t0 = 0;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void hamt_sliter_hyinit(void * iter, void * m) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { (void)hamt_sliter_hyinit__cps(iter, m, __root); }
-    else { (void)__dk_drive_after(); }
-    g_dk_driver = __dksave;
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return;
-}
-static int64_t hamt_sliter_hyfree__cps(void * iter, DK *__kont) {
-    int64_t __t0;
-    tur_hamt_iter_free((void *)(intptr_t)(iter));
-    __t0 = 0;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void hamt_sliter_hyfree(void * iter) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { (void)hamt_sliter_hyfree__cps(iter, __root); }
-    else { (void)__dk_drive_after(); }
-    g_dk_driver = __dksave;
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return;
-}
-static int64_t hamt_sliter_hynext__cps(void * iter, void * hash_out, void * key_out, void * val_out, DK *__kont) {
-    bool __t0;
-    bool __ps_78 = (tur_hamt_iter_next((void *)(intptr_t)(iter), (void *)(intptr_t)(hash_out), (void *)(intptr_t)(key_out), (void *)(intptr_t)(val_out)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_78;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static bool hamt_sliter_hynext(void * iter, void * hash_out, void * key_out, void * val_out) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hynext__cps(iter, hash_out, key_out, val_out, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    bool __ret = (bool)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_sliter_hyalloc__cps(void * m, DK *__kont) {
-    void * __t0;
-    void * __ps_79 = (tur_hamt_iter_alloc((void *)(intptr_t)(m)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_79;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_sliter_hyalloc(void * m) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hyalloc__cps(m, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_sliter_hydestroy_ex__cps(void * box, DK *__kont) {
-    int64_t __t0;
-    tur_hamt_iter_destroy((void *)(intptr_t)(box));
-    __t0 = 0;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void hamt_sliter_hydestroy_ex(void * box) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { (void)hamt_sliter_hydestroy_ex__cps(box, __root); }
-    else { (void)__dk_drive_after(); }
-    g_dk_driver = __dksave;
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return;
-}
-static int64_t hamt_sliter_hyadvance_ex__cps(void * box, DK *__kont) {
-    bool __t0;
-    bool __ps_80 = (tur_hamt_iter_advance((void *)(intptr_t)(box)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_80;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static bool hamt_sliter_hyadvance_ex(void * box) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hyadvance_ex__cps(box, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    bool __ret = (bool)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_sliter_hycur_hyhash__cps(void * box, DK *__kont) {
-    int64_t __t0;
-    int64_t __ps_81 = (tur_hamt_iter_cur_hash((void *)(intptr_t)(box)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_81;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static int64_t hamt_sliter_hycur_hyhash(void * box) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hycur_hyhash__cps(box, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    int64_t __ret = (int64_t)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_sliter_hycur_hykey__cps(void * box, DK *__kont) {
-    void * __t0;
-    void * __ps_82 = (tur_hamt_iter_cur_key((void *)(intptr_t)(box)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_82;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_sliter_hycur_hykey(void * box) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hycur_hykey__cps(box, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_sliter_hycur_hyval__cps(void * box, DK *__kont) {
-    void * __t0;
-    void * __ps_83 = (tur_hamt_iter_cur_val((void *)(intptr_t)(box)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_83;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_sliter_hycur_hyval(void * box) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hycur_hyval__cps(box, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slkeyeq__cps(void * m, DK *__kont) {
-    void * __t0;
-    void * __ps_84 = (tur_hamt_keyeq((void *)(intptr_t)(m)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_84;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_slkeyeq(void * m) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slkeyeq__cps(m, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slget_hydynamic__cps(void * m, int64_t hash, void * key, void * keyeq, DK *__kont) {
-    void * __t0;
-    void * __ps_85 = (tur_hamt_get_dynamic((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(keyeq)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_85;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_slget_hydynamic(void * m, int64_t hash, void * key, void * keyeq) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slget_hydynamic__cps(m, hash, key, keyeq, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slhas_hydynamic_qu__cps(void * m, int64_t hash, void * key, void * keyeq, DK *__kont) {
-    bool __t0;
-    bool __ps_86 = (tur_hamt_has_dynamic((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(keyeq)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_86;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static bool hamt_slhas_hydynamic_qu(void * m, int64_t hash, void * key, void * keyeq) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slhas_hydynamic_qu__cps(m, hash, key, keyeq, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    bool __ret = (bool)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slmap__cps(void * m, void * fn, void * ctx, DK *__kont) {
-    void * __t0;
-    void * __ps_87 = (tur_hamt_map((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_87;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_slmap(void * m, void * fn, void * ctx) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slmap__cps(m, fn, ctx, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slfilter__cps(void * m, void * fn, void * ctx, DK *__kont) {
-    void * __t0;
-    void * __ps_88 = (tur_hamt_filter((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_88;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_slfilter(void * m, void * fn, void * ctx) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slfilter__cps(m, fn, ctx, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slreduce__cps(void * m, void * fn, void * init, void * ctx, DK *__kont) {
-    void * __t0;
-    void * __ps_89 = (tur_hamt_reduce((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(init), (void *)(intptr_t)(ctx)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_89;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_slreduce(void * m, void * fn, void * init, void * ctx) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slreduce__cps(m, fn, init, ctx, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slmerge_hywith__cps(void * a, void * b, void * fn, void * ctx, DK *__kont) {
-    void * __t0;
-    void * __ps_90 = (tur_hamt_merge_with((void *)(intptr_t)(a), (void *)(intptr_t)(b), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_90;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_slmerge_hywith(void * a, void * b, void * fn, void * ctx) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slmerge_hywith__cps(a, b, fn, ctx, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_slshow__cps(void * m, DK *__kont) {
-    const char * __t0;
-    const char * __ps_91 = (tur_hamt_show((void *)(intptr_t)(m)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_91;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static const char * hamt_slshow(void * m) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slshow__cps(m, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    const char * __ret = (const char *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_sldump__cps(void * m, DK *__kont) {
-    int64_t __t0;
-    tur_hamt_dump_dot_stderr((void *)(intptr_t)(m));
-    __t0 = 0;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void hamt_sldump(void * m) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { (void)hamt_sldump__cps(m, __root); }
-    else { (void)__dk_drive_after(); }
-    g_dk_driver = __dksave;
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return;
-}
-static int64_t hamt_sltransient__cps(void * m, DK *__kont) {
-    void * __t0;
-    void * __ps_92 = (tur_hamt_transient((void *)(intptr_t)(m)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_92;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_sltransient(void * m) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_sltransient__cps(m, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static int64_t hamt_sltransient_hyset_ex__cps(void * t, int64_t hash, void * key, void * val, DK *__kont) {
-    int64_t __t0;
-    tur_hamt_transient_set((void *)(intptr_t)(t), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(val));
-    __t0 = 0;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void hamt_sltransient_hyset_ex(void * t, int64_t hash, void * key, void * val) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { (void)hamt_sltransient_hyset_ex__cps(t, hash, key, val, __root); }
-    else { (void)__dk_drive_after(); }
-    g_dk_driver = __dksave;
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return;
-}
-static int64_t hamt_sltransient_hydel_ex__cps(void * t, int64_t hash, void * key, DK *__kont) {
-    int64_t __t0;
-    tur_hamt_transient_del((void *)(intptr_t)(t), hash, (void *)(intptr_t)(key));
-    __t0 = 0;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void hamt_sltransient_hydel_ex(void * t, int64_t hash, void * key) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { (void)hamt_sltransient_hydel_ex__cps(t, hash, key, __root); }
-    else { (void)__dk_drive_after(); }
-    g_dk_driver = __dksave;
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return;
-}
-static int64_t hamt_slpersistent_ex__cps(void * t, DK *__kont) {
-    void * __t0;
-    void * __ps_93 = (tur_hamt_persistent((void *)(intptr_t)(t)));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    __t0 = __ps_93;
-    return dk_run(__kont, (intptr_t)(__t0));
-}
-__attribute__((unused)) static void * hamt_slpersistent_ex(void * t) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = hamt_slpersistent_ex__cps(t, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    void * __ret = (void *)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
+static void * hamt_slnew() {
+        void * __ps_60 = (tur_hamt_new());
+        if (tur_panicking) return ((void *)0);
+        return __ps_60;
+}
+
+static void hamt_slfree(void * m) {
+        tur_hamt_free((void *)(intptr_t)(m));
+}
+
+static void * hamt_slretain(void * m) {
+        void * __ps_61 = (tur_hamt_retain((void *)(intptr_t)(m)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_61;
+}
+
+static void * hamt_slset(void * m, int64_t hash, void * key, void * val) {
+        void * __ps_62 = (tur_hamt_set((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(val)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_62;
+}
+
+static void * hamt_sldel(void * m, int64_t hash, void * key) {
+        void * __ps_63 = (tur_hamt_del((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_63;
+}
+
+static void * hamt_slget(void * m, int64_t hash, void * key) {
+        void * __ps_64 = (tur_hamt_get((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_64;
+}
+
+static bool hamt_slhas_qu(void * m, int64_t hash, void * key) {
+        bool __ps_65 = (tur_hamt_has((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key)));
+        if (tur_panicking) return ((bool)0);
+        return __ps_65;
+}
+
+static void * hamt_slset_hycstr(void * m, const char * key, void * val) {
+        void * __ps_66 = (tur_hamt_set_cstr((void *)(intptr_t)(m), key, (void *)(intptr_t)(val)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_66;
+}
+
+static void * hamt_sldel_hycstr(void * m, const char * key) {
+        void * __ps_67 = (tur_hamt_del_cstr((void *)(intptr_t)(m), key));
+        if (tur_panicking) return ((void *)0);
+        return __ps_67;
+}
+
+static void * hamt_slget_hycstr(void * m, const char * key) {
+        void * __ps_68 = (tur_hamt_get_cstr((void *)(intptr_t)(m), key));
+        if (tur_panicking) return ((void *)0);
+        return __ps_68;
+}
+
+static bool hamt_slhas_hycstr_qu(void * m, const char * key) {
+        bool __ps_69 = (tur_hamt_has_cstr((void *)(intptr_t)(m), key));
+        if (tur_panicking) return ((bool)0);
+        return __ps_69;
+}
+
+static int64_t hamt_slcount(void * m) {
+        int64_t __ps_70 = (tur_hamt_count((void *)(intptr_t)(m)));
+        if (tur_panicking) return ((int64_t)0);
+        return __ps_70;
+}
+
+static void * hamt_slmerge(void * a, void * b) {
+        void * __ps_71 = (tur_hamt_merge((void *)(intptr_t)(a), (void *)(intptr_t)(b)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_71;
+}
+
+static int64_t hamt_slhash_hystr(const char * str) {
+        int64_t __ps_72 = (tur_hamt_hash_str(str));
+        if (tur_panicking) return ((int64_t)0);
+        return __ps_72;
+}
+
+static int64_t hamt_slhash_hyptr(void * ptr) {
+        int64_t __ps_73 = (tur_hamt_hash_ptr((void *)(intptr_t)(ptr)));
+        if (tur_panicking) return ((int64_t)0);
+        return __ps_73;
+}
+
+static void hamt_sliter_hyinit(void * iter, void * m) {
+        tur_hamt_iter_init((void *)(intptr_t)(iter), (void *)(intptr_t)(m));
+}
+
+static void hamt_sliter_hyfree(void * iter) {
+        tur_hamt_iter_free((void *)(intptr_t)(iter));
+}
+
+static bool hamt_sliter_hynext(void * iter, void * hash_out, void * key_out, void * val_out) {
+        bool __ps_74 = (tur_hamt_iter_next((void *)(intptr_t)(iter), (void *)(intptr_t)(hash_out), (void *)(intptr_t)(key_out), (void *)(intptr_t)(val_out)));
+        if (tur_panicking) return ((bool)0);
+        return __ps_74;
+}
+
+static void * hamt_sliter_hyalloc(void * m) {
+        void * __ps_75 = (tur_hamt_iter_alloc((void *)(intptr_t)(m)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_75;
+}
+
+static void hamt_sliter_hydestroy_ex(void * box) {
+        tur_hamt_iter_destroy((void *)(intptr_t)(box));
+}
+
+static bool hamt_sliter_hyadvance_ex(void * box) {
+        bool __ps_76 = (tur_hamt_iter_advance((void *)(intptr_t)(box)));
+        if (tur_panicking) return ((bool)0);
+        return __ps_76;
+}
+
+static int64_t hamt_sliter_hycur_hyhash(void * box) {
+        int64_t __ps_77 = (tur_hamt_iter_cur_hash((void *)(intptr_t)(box)));
+        if (tur_panicking) return ((int64_t)0);
+        return __ps_77;
+}
+
+static void * hamt_sliter_hycur_hykey(void * box) {
+        void * __ps_78 = (tur_hamt_iter_cur_key((void *)(intptr_t)(box)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_78;
+}
+
+static void * hamt_sliter_hycur_hyval(void * box) {
+        void * __ps_79 = (tur_hamt_iter_cur_val((void *)(intptr_t)(box)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_79;
+}
+
+static void * hamt_slkeyeq(void * m) {
+        void * __ps_80 = (tur_hamt_keyeq((void *)(intptr_t)(m)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_80;
+}
+
+static void * hamt_slget_hydynamic(void * m, int64_t hash, void * key, void * keyeq) {
+        void * __ps_81 = (tur_hamt_get_dynamic((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(keyeq)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_81;
+}
+
+static bool hamt_slhas_hydynamic_qu(void * m, int64_t hash, void * key, void * keyeq) {
+        bool __ps_82 = (tur_hamt_has_dynamic((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(keyeq)));
+        if (tur_panicking) return ((bool)0);
+        return __ps_82;
+}
+
+static void * hamt_slmap(void * m, void * fn, void * ctx) {
+        void * __ps_83 = (tur_hamt_map((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_83;
+}
+
+static void * hamt_slfilter(void * m, void * fn, void * ctx) {
+        void * __ps_84 = (tur_hamt_filter((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_84;
+}
+
+static void * hamt_slreduce(void * m, void * fn, void * init, void * ctx) {
+        void * __ps_85 = (tur_hamt_reduce((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(init), (void *)(intptr_t)(ctx)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_85;
+}
+
+static void * hamt_slmerge_hywith(void * a, void * b, void * fn, void * ctx) {
+        void * __ps_86 = (tur_hamt_merge_with((void *)(intptr_t)(a), (void *)(intptr_t)(b), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_86;
+}
+
+static const char * hamt_slshow(void * m) {
+        const char * __ps_87 = (tur_hamt_show((void *)(intptr_t)(m)));
+        if (tur_panicking) return ((const char *)0);
+        return __ps_87;
+}
+
+static void hamt_sldump(void * m) {
+        tur_hamt_dump_dot_stderr((void *)(intptr_t)(m));
+}
+
+static void * hamt_sltransient(void * m) {
+        void * __ps_88 = (tur_hamt_transient((void *)(intptr_t)(m)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_88;
+}
+
+static void hamt_sltransient_hyset_ex(void * t, int64_t hash, void * key, void * val) {
+        tur_hamt_transient_set((void *)(intptr_t)(t), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(val));
+}
+
+static void hamt_sltransient_hydel_ex(void * t, int64_t hash, void * key) {
+        tur_hamt_transient_del((void *)(intptr_t)(t), hash, (void *)(intptr_t)(key));
+}
+
+static void * hamt_slpersistent_ex(void * t) {
+        void * __ps_89 = (tur_hamt_persistent((void *)(intptr_t)(t)));
+        if (tur_panicking) return ((void *)0);
+        return __ps_89;
+}
+
 static int64_t hamt_slautolink_hyhint() {
         /* __tur_autolink__: src/runtime/hamt.c -Isrc/runtime */
   return 0;
@@ -6016,98 +5533,47 @@ static int64_t map_hyget_hydynamic_hyas(void * m, int64_t hash, void * key, void
         return (int64_t)(intptr_t)tur_hamt_get_dynamic((void*)(intptr_t)m, hash, (void*)(intptr_t)key, (void*)(intptr_t)keyeq); 
 }
 
-typedef struct { int64_t f0; void * f1; void * f2; int64_t f3; void * f4; void * f5; } map_hyeq_hyloop_j3_env;
-static intptr_t map_hyeq_hyloop_j3(intptr_t env, intptr_t __t1__slot, DK *__kont) {
-    map_hyeq_hyloop_j3_env *__cap = (map_hyeq_hyloop_j3_env *)(intptr_t)env;
-    int64_t val_cmp = __cap->f0;
-    void * iter = __cap->f1;
-    void * m2_hamt = __cap->f2;
-    int64_t h_821 = __cap->f3;
-    void * k_822 = __cap->f4;
-    void * keyeq = __cap->f5;
-    bool __t1 = (bool)(__t1__slot);
+static int64_t map_hyeq_hyloop__cps(void * iter_818, void * m2_hyhamt_819, void * keyeq_820, int64_t val_cmp, DK *__kont);
+static int64_t list_hyeq_qu__cps(int64_t l1_1102, int64_t l2_1103, int64_t cmp_fn, DK *__kont);
+static int64_t _un_uncons_hyfmap__cps(int64_t cell_1114, void * f_1115, DK *__kont);
+static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, int64_t val_cmp, DK *__kont) {
+    bool __t0;
+    int64_t h_822;
+    void * k_823;
+    bool __t1;
     bool __t2;
-    if (__t1) {
-        int64_t __ps_94 = (map_hyiter_hycur_hyval_hyas((void *)(intptr_t)(iter)));
+    bool __ps_90 = (hamt_sliter_hyadvance_ex((void *)(intptr_t)(iter)));
+    /* panic-return-signal: ret ctype unknown; no propagation here */
+    __t0 = __ps_90;
+    if (__t0) {
+        int64_t __ps_91 = (hamt_sliter_hycur_hyhash((void *)(intptr_t)(iter)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        int64_t __ps_95 = (map_hyget_hydynamic_hyas((void *)(intptr_t)(m2_hamt), h_821, (void *)(intptr_t)(k_822), (void *)(intptr_t)(keyeq)));
+        h_822 = __ps_91;
+        void * __ps_92 = (hamt_sliter_hycur_hykey((void *)(intptr_t)(iter)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        bool __ps_96 = (((bool (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_94, __ps_95));
+        k_823 = __ps_92;
+        bool __ps_93 = (hamt_slhas_hydynamic_qu((void *)(intptr_t)(m2_hamt), h_822, (void *)(intptr_t)(k_823), (void *)(intptr_t)(keyeq)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        __t2 = __ps_96;
-        if (__t2) {
-            return map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, (int64_t)(intptr_t)val_cmp, __kont); /* cps->cps */
+        __t1 = __ps_93;
+        if (__t1) {
+            int64_t __ps_94 = (map_hyiter_hycur_hyval_hyas((void *)(intptr_t)(iter)));
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+            int64_t __ps_95 = (map_hyget_hydynamic_hyas((void *)(intptr_t)(m2_hamt), h_822, (void *)(intptr_t)(k_823), (void *)(intptr_t)(keyeq)));
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+            bool __ps_96 = (((bool (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_94, __ps_95));
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+            __t2 = __ps_96;
+            if (__t2) {
+                return map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, (int64_t)(intptr_t)val_cmp, __kont); /* cps->cps */
+            } else {
+                return dk_run(__kont, (intptr_t)(false));
+            }
         } else {
             return dk_run(__kont, (intptr_t)(false));
         }
     } else {
-        return dk_run(__kont, (intptr_t)(false));
-    }
-}
-typedef struct { int64_t f0; void * f1; void * f2; int64_t f3; void * f4; } map_hyeq_hyloop_j2_env;
-static intptr_t map_hyeq_hyloop_j2(intptr_t env, intptr_t k_822__slot, DK *__kont) {
-    map_hyeq_hyloop_j2_env *__cap = (map_hyeq_hyloop_j2_env *)(intptr_t)env;
-    int64_t val_cmp = __cap->f0;
-    void * iter = __cap->f1;
-    void * m2_hamt = __cap->f2;
-    int64_t h_821 = __cap->f3;
-    void * keyeq = __cap->f4;
-    void * k_822 = (void *)(k_822__slot);
-    map_hyeq_hyloop_j3_env *__ce_map_hyeq_hyloop_j3 = (map_hyeq_hyloop_j3_env *)malloc(sizeof(map_hyeq_hyloop_j3_env));
-    __ce_map_hyeq_hyloop_j3->f0 = val_cmp;
-    __ce_map_hyeq_hyloop_j3->f1 = iter;
-    __ce_map_hyeq_hyloop_j3->f2 = m2_hamt;
-    __ce_map_hyeq_hyloop_j3->f3 = h_821;
-    __ce_map_hyeq_hyloop_j3->f4 = k_822;
-    __ce_map_hyeq_hyloop_j3->f5 = keyeq;
-    __dk_reap_ptr((intptr_t)__ce_map_hyeq_hyloop_j3);
-    return hamt_slhas_hydynamic_qu__cps(m2_hamt, h_821, k_822, keyeq, __dk_reap_node(dk_frame_resume(map_hyeq_hyloop_j3, (intptr_t)__ce_map_hyeq_hyloop_j3, __kont))); /* cps->cps heap join */
-}
-typedef struct { int64_t f0; void * f1; void * f2; void * f3; } map_hyeq_hyloop_j1_env;
-static intptr_t map_hyeq_hyloop_j1(intptr_t env, intptr_t h_821__slot, DK *__kont) {
-    map_hyeq_hyloop_j1_env *__cap = (map_hyeq_hyloop_j1_env *)(intptr_t)env;
-    int64_t val_cmp = __cap->f0;
-    void * iter = __cap->f1;
-    void * m2_hamt = __cap->f2;
-    void * keyeq = __cap->f3;
-    int64_t h_821 = (int64_t)(h_821__slot);
-    map_hyeq_hyloop_j2_env *__ce_map_hyeq_hyloop_j2 = (map_hyeq_hyloop_j2_env *)malloc(sizeof(map_hyeq_hyloop_j2_env));
-    __ce_map_hyeq_hyloop_j2->f0 = val_cmp;
-    __ce_map_hyeq_hyloop_j2->f1 = iter;
-    __ce_map_hyeq_hyloop_j2->f2 = m2_hamt;
-    __ce_map_hyeq_hyloop_j2->f3 = h_821;
-    __ce_map_hyeq_hyloop_j2->f4 = keyeq;
-    __dk_reap_ptr((intptr_t)__ce_map_hyeq_hyloop_j2);
-    return hamt_sliter_hycur_hykey__cps(iter, __dk_reap_node(dk_frame_resume(map_hyeq_hyloop_j2, (intptr_t)__ce_map_hyeq_hyloop_j2, __kont))); /* cps->cps heap join */
-}
-typedef struct { int64_t f0; void * f1; void * f2; void * f3; } map_hyeq_hyloop_j0_env;
-static intptr_t map_hyeq_hyloop_j0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
-    map_hyeq_hyloop_j0_env *__cap = (map_hyeq_hyloop_j0_env *)(intptr_t)env;
-    int64_t val_cmp = __cap->f0;
-    void * iter = __cap->f1;
-    void * m2_hamt = __cap->f2;
-    void * keyeq = __cap->f3;
-    bool __t0 = (bool)(__t0__slot);
-    if (__t0) {
-        map_hyeq_hyloop_j1_env *__ce_map_hyeq_hyloop_j1 = (map_hyeq_hyloop_j1_env *)malloc(sizeof(map_hyeq_hyloop_j1_env));
-        __ce_map_hyeq_hyloop_j1->f0 = val_cmp;
-        __ce_map_hyeq_hyloop_j1->f1 = iter;
-        __ce_map_hyeq_hyloop_j1->f2 = m2_hamt;
-        __ce_map_hyeq_hyloop_j1->f3 = keyeq;
-        __dk_reap_ptr((intptr_t)__ce_map_hyeq_hyloop_j1);
-        return hamt_sliter_hycur_hyhash__cps(iter, __dk_reap_node(dk_frame_resume(map_hyeq_hyloop_j1, (intptr_t)__ce_map_hyeq_hyloop_j1, __kont))); /* cps->cps heap join */
-    } else {
         return dk_run(__kont, (intptr_t)(true));
     }
-}
-static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, int64_t val_cmp, DK *__kont) {
-    map_hyeq_hyloop_j0_env *__ce_map_hyeq_hyloop_j0 = (map_hyeq_hyloop_j0_env *)malloc(sizeof(map_hyeq_hyloop_j0_env));
-    __ce_map_hyeq_hyloop_j0->f0 = val_cmp;
-    __ce_map_hyeq_hyloop_j0->f1 = iter;
-    __ce_map_hyeq_hyloop_j0->f2 = m2_hamt;
-    __ce_map_hyeq_hyloop_j0->f3 = keyeq;
-    __dk_reap_ptr((intptr_t)__ce_map_hyeq_hyloop_j0);
-    return hamt_sliter_hyadvance_ex__cps(iter, __dk_reap_node(dk_frame_resume(map_hyeq_hyloop_j0, (intptr_t)__ce_map_hyeq_hyloop_j0, __kont))); /* cps->cps heap join */
 }
 __attribute__((unused)) static bool map_hyeq_hyloop(void * iter, void * m2_hamt, void * keyeq, int64_t val_cmp) {
     __dk_entry_depth++;
@@ -6129,23 +5595,23 @@ static bool map_hyeq_hydriver(int64_t m1, int64_t m2, int64_t val_cmp) {
             if (tur_panicking) return ((bool)0);
             void * __ps_99 = (hamt_sliter_hyalloc((void *)(intptr_t)(__ps_98)));
             if (tur_panicking) return ((bool)0);
-            void * iter_826 = __ps_99;
-            (void)iter_826;
+            void * iter_827 = __ps_99;
+            (void)iter_827;
             void * __ps_100 = (map_hyhamt(m1));
             if (tur_panicking) return ((bool)0);
             void * __ps_101 = (hamt_slkeyeq((void *)(intptr_t)(__ps_100)));
             if (tur_panicking) return ((bool)0);
-            void * keyeq_827 = __ps_101;
-            (void)keyeq_827;
+            void * keyeq_828 = __ps_101;
+            (void)keyeq_828;
             void * __ps_102 = (map_hyhamt(m2));
             if (tur_panicking) return ((bool)0);
-            bool __ps_103 = (map_hyeq_hyloop((void *)(intptr_t)(iter_826), (void *)(intptr_t)(__ps_102), (void *)(intptr_t)(keyeq_827), (int64_t)(intptr_t)(val_cmp)));
+            bool __ps_103 = (map_hyeq_hyloop((void *)(intptr_t)(iter_827), (void *)(intptr_t)(__ps_102), (void *)(intptr_t)(keyeq_828), (int64_t)(intptr_t)(val_cmp)));
             if (tur_panicking) return ((bool)0);
-            bool result_828 = __ps_103;
-            (void)result_828;
-            hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_826));
+            bool result_829 = __ps_103;
+            (void)result_829;
+            hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_827));
             bool __t104;
-            __t104 = result_828;
+            __t104 = result_829;
             __t97 = __t104;
         }
         return __t97;
@@ -6288,7 +5754,7 @@ static bool slice_hyeq_qu(int64_t s1, int64_t s2, int64_t cmp_fn) {
 }
 
 static int64_t none() {
-        int64_t __ps_111 = (ctor_None());
+        int64_t __ps_111 = (ctor_Option_None());
         if (tur_panicking) return ((int64_t)0);
         return __ps_111;
 }
@@ -6299,7 +5765,7 @@ static bool none_qu(int64_t o) {
             tur_adt_Option *__scrut = (tur_adt_Option *)(intptr_t)(o);
             switch (__scrut ? __scrut->tag : 0) {
             case 1: {
-                int64_t _un_891 = (int64_t)__scrut->as.Some._0;
+                int64_t _un_892 = (int64_t)__scrut->as.Some._0;
                 __t112 = false;
                 break;
             }
@@ -6471,19 +5937,19 @@ static bool cons_hyeq_hygo(int64_t c1, int64_t c2) {
         if (__ps_122) {
             bool __t123;
             {
-                int64_t t1_1106 = (int64_t)((tur_adt_Cons *)(intptr_t)(c1))->tail;
-                (void)t1_1106;
-                int64_t t2_1107 = (int64_t)((tur_adt_Cons *)(intptr_t)(c2))->tail;
-                (void)t2_1107;
+                int64_t t1_1107 = (int64_t)((tur_adt_Cons *)(intptr_t)(c1))->tail;
+                (void)t1_1107;
+                int64_t t2_1108 = (int64_t)((tur_adt_Cons *)(intptr_t)(c2))->tail;
+                (void)t2_1108;
                 bool __t124;
-                if ((t1_1106) == (INT64_C(0))) {
-                    __t124 = (t2_1107) == (INT64_C(0));
+                if ((t1_1107) == (INT64_C(0))) {
+                    __t124 = (t2_1108) == (INT64_C(0));
                 } else {
                     bool __t125;
-                    if ((t2_1107) == (INT64_C(0))) {
+                    if ((t2_1108) == (INT64_C(0))) {
                         __t125 = false;
                     } else {
-                        bool __ps_126 = (cons_hyeq_hygo(t1_1106, t2_1107));
+                        bool __ps_126 = (cons_hyeq_hygo(t1_1107, t2_1108));
                         if (tur_panicking) return ((bool)0);
                         __t125 = __ps_126;
                     }
@@ -6503,9 +5969,9 @@ static intptr_t _un_uncons_hyfmap_j0(intptr_t env, intptr_t __t2__slot, DK *__ko
     _un_uncons_hyfmap_j0_env *__cap = (_un_uncons_hyfmap_j0_env *)(intptr_t)env;
     int64_t __t1 = __cap->f0;
     int64_t __t2 = (int64_t)(__t2__slot);
-    int64_t out_1115;
-    out_1115 = (int64_t)(intptr_t)tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__t1, __t2); /* cps->direct */
-    return dk_run(__kont, (intptr_t)(out_1115));
+    int64_t out_1116;
+    out_1116 = (int64_t)(intptr_t)tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__t1, __t2); /* cps->direct */
+    return dk_run(__kont, (intptr_t)(out_1116));
 }
 static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
     bool __t0;
@@ -6577,9 +6043,9 @@ static int64_t list_hyconcat(int64_t l1, int64_t l2) {
                 if (tur_panicking) return ((int64_t)0);
                 tur_adt_Cons__int * __ps_137 = (tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__ps_134, __ps_136));
                 if (tur_panicking) return ((int64_t)0);
-                int64_t out_1122 = (int64_t)(intptr_t)(__ps_137);
-                (void)out_1122;
-                __t133 = out_1122;
+                int64_t out_1123 = (int64_t)(intptr_t)(__ps_137);
+                (void)out_1123;
+                __t133 = out_1123;
             }
             __t131 = __t133;
         }
@@ -6786,129 +6252,80 @@ static void * set_hyhamt(int64_t s) {
         struct { void *hamt; } *set = (void*)(intptr_t)s; return (void *)(intptr_t)set->hamt; 
 }
 
-typedef struct { void * f0; void * f1; void * f2; } set_hyeq_hyloop_j3_env;
-static intptr_t set_hyeq_hyloop_j3(intptr_t env, intptr_t __t1__slot, DK *__kont) {
-    set_hyeq_hyloop_j3_env *__cap = (set_hyeq_hyloop_j3_env *)(intptr_t)env;
-    void * iter = __cap->f0;
-    void * s2_hamt = __cap->f1;
-    void * keyeq = __cap->f2;
-    bool __t1 = (bool)(__t1__slot);
-    if (__t1) {
-        return set_hyeq_hyloop__cps(iter, s2_hamt, keyeq, __kont); /* cps->cps */
-    } else {
-        return dk_run(__kont, (intptr_t)(false));
-    }
-}
-typedef struct { void * f0; void * f1; void * f2; int64_t f3; } set_hyeq_hyloop_j2_env;
-static intptr_t set_hyeq_hyloop_j2(intptr_t env, intptr_t k_1194__slot, DK *__kont) {
-    set_hyeq_hyloop_j2_env *__cap = (set_hyeq_hyloop_j2_env *)(intptr_t)env;
-    void * iter = __cap->f0;
-    void * s2_hamt = __cap->f1;
-    void * keyeq = __cap->f2;
-    int64_t h_1193 = __cap->f3;
-    void * k_1194 = (void *)(k_1194__slot);
-    set_hyeq_hyloop_j3_env *__ce_set_hyeq_hyloop_j3 = (set_hyeq_hyloop_j3_env *)malloc(sizeof(set_hyeq_hyloop_j3_env));
-    __ce_set_hyeq_hyloop_j3->f0 = iter;
-    __ce_set_hyeq_hyloop_j3->f1 = s2_hamt;
-    __ce_set_hyeq_hyloop_j3->f2 = keyeq;
-    __dk_reap_ptr((intptr_t)__ce_set_hyeq_hyloop_j3);
-    return hamt_slhas_hydynamic_qu__cps(s2_hamt, h_1193, k_1194, keyeq, __dk_reap_node(dk_frame_resume(set_hyeq_hyloop_j3, (intptr_t)__ce_set_hyeq_hyloop_j3, __kont))); /* cps->cps heap join */
-}
-typedef struct { void * f0; void * f1; void * f2; } set_hyeq_hyloop_j1_env;
-static intptr_t set_hyeq_hyloop_j1(intptr_t env, intptr_t h_1193__slot, DK *__kont) {
-    set_hyeq_hyloop_j1_env *__cap = (set_hyeq_hyloop_j1_env *)(intptr_t)env;
-    void * iter = __cap->f0;
-    void * s2_hamt = __cap->f1;
-    void * keyeq = __cap->f2;
-    int64_t h_1193 = (int64_t)(h_1193__slot);
-    set_hyeq_hyloop_j2_env *__ce_set_hyeq_hyloop_j2 = (set_hyeq_hyloop_j2_env *)malloc(sizeof(set_hyeq_hyloop_j2_env));
-    __ce_set_hyeq_hyloop_j2->f0 = iter;
-    __ce_set_hyeq_hyloop_j2->f1 = s2_hamt;
-    __ce_set_hyeq_hyloop_j2->f2 = keyeq;
-    __ce_set_hyeq_hyloop_j2->f3 = h_1193;
-    __dk_reap_ptr((intptr_t)__ce_set_hyeq_hyloop_j2);
-    return hamt_sliter_hycur_hykey__cps(iter, __dk_reap_node(dk_frame_resume(set_hyeq_hyloop_j2, (intptr_t)__ce_set_hyeq_hyloop_j2, __kont))); /* cps->cps heap join */
-}
-typedef struct { void * f0; void * f1; void * f2; } set_hyeq_hyloop_j0_env;
-static intptr_t set_hyeq_hyloop_j0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
-    set_hyeq_hyloop_j0_env *__cap = (set_hyeq_hyloop_j0_env *)(intptr_t)env;
-    void * iter = __cap->f0;
-    void * s2_hamt = __cap->f1;
-    void * keyeq = __cap->f2;
-    bool __t0 = (bool)(__t0__slot);
-    if (__t0) {
-        set_hyeq_hyloop_j1_env *__ce_set_hyeq_hyloop_j1 = (set_hyeq_hyloop_j1_env *)malloc(sizeof(set_hyeq_hyloop_j1_env));
-        __ce_set_hyeq_hyloop_j1->f0 = iter;
-        __ce_set_hyeq_hyloop_j1->f1 = s2_hamt;
-        __ce_set_hyeq_hyloop_j1->f2 = keyeq;
-        __dk_reap_ptr((intptr_t)__ce_set_hyeq_hyloop_j1);
-        return hamt_sliter_hycur_hyhash__cps(iter, __dk_reap_node(dk_frame_resume(set_hyeq_hyloop_j1, (intptr_t)__ce_set_hyeq_hyloop_j1, __kont))); /* cps->cps heap join */
-    } else {
-        return dk_run(__kont, (intptr_t)(true));
-    }
-}
-static int64_t set_hyeq_hyloop__cps(void * iter, void * s2_hamt, void * keyeq, DK *__kont) {
-    set_hyeq_hyloop_j0_env *__ce_set_hyeq_hyloop_j0 = (set_hyeq_hyloop_j0_env *)malloc(sizeof(set_hyeq_hyloop_j0_env));
-    __ce_set_hyeq_hyloop_j0->f0 = iter;
-    __ce_set_hyeq_hyloop_j0->f1 = s2_hamt;
-    __ce_set_hyeq_hyloop_j0->f2 = keyeq;
-    __dk_reap_ptr((intptr_t)__ce_set_hyeq_hyloop_j0);
-    return hamt_sliter_hyadvance_ex__cps(iter, __dk_reap_node(dk_frame_resume(set_hyeq_hyloop_j0, (intptr_t)__ce_set_hyeq_hyloop_j0, __kont))); /* cps->cps heap join */
-}
-__attribute__((unused)) static bool set_hyeq_hyloop(void * iter, void * s2_hamt, void * keyeq) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = set_hyeq_hyloop__cps(iter, s2_hamt, keyeq, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    bool __ret = (bool)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
-static bool set_hyeq_hydriver(int64_t s1, int64_t s2) {
-        bool __t142;
-        {
-            void * __ps_143 = (set_hyhamt(s1));
-            if (tur_panicking) return ((bool)0);
-            void * __ps_144 = (hamt_sliter_hyalloc((void *)(intptr_t)(__ps_143)));
-            if (tur_panicking) return ((bool)0);
-            void * iter_1197 = __ps_144;
-            (void)iter_1197;
-            void * __ps_145 = (set_hyhamt(s1));
-            if (tur_panicking) return ((bool)0);
-            void * __ps_146 = (hamt_slkeyeq((void *)(intptr_t)(__ps_145)));
-            if (tur_panicking) return ((bool)0);
-            void * keyeq_1198 = __ps_146;
-            (void)keyeq_1198;
-            void * __ps_147 = (set_hyhamt(s2));
-            if (tur_panicking) return ((bool)0);
-            bool __ps_148 = (set_hyeq_hyloop((void *)(intptr_t)(iter_1197), (void *)(intptr_t)(__ps_147), (void *)(intptr_t)(keyeq_1198)));
-            if (tur_panicking) return ((bool)0);
-            bool result_1199 = __ps_148;
-            (void)result_1199;
-            hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_1197));
-            bool __t149;
-            __t149 = result_1199;
-            __t142 = __t149;
+static bool set_hyeq_hyloop(void * iter, void * s2_hamt, void * keyeq) {
+        __tur_tailcall:;
+        bool __ps_142 = (hamt_sliter_hyadvance_ex((void *)(intptr_t)(iter)));
+        if (tur_panicking) return ((bool)0);
+        if (__ps_142) {
+            {
+                int64_t __ps_143 = (hamt_sliter_hycur_hyhash((void *)(intptr_t)(iter)));
+                if (tur_panicking) return ((bool)0);
+                int64_t h_1194 = __ps_143;
+                (void)h_1194;
+                void * __ps_144 = (hamt_sliter_hycur_hykey((void *)(intptr_t)(iter)));
+                if (tur_panicking) return ((bool)0);
+                void * k_1195 = __ps_144;
+                (void)k_1195;
+                bool __ps_145 = (hamt_slhas_hydynamic_qu((void *)(intptr_t)(s2_hamt), h_1194, (void *)(intptr_t)(k_1195), (void *)(intptr_t)(keyeq)));
+                if (tur_panicking) return ((bool)0);
+                if (__ps_145) {
+                    void * __t146 = iter;
+                    void * __t147 = s2_hamt;
+                    void * __t148 = keyeq;
+                    iter = __t146;
+                    s2_hamt = __t147;
+                    keyeq = __t148;
+                    goto __tur_tailcall;
+                } else {
+                    return false;
+                }
+            }
+        } else {
+            return true;
         }
-        return __t142;
+}
+
+static bool set_hyeq_hydriver(int64_t s1, int64_t s2) {
+        bool __t149;
+        {
+            void * __ps_150 = (set_hyhamt(s1));
+            if (tur_panicking) return ((bool)0);
+            void * __ps_151 = (hamt_sliter_hyalloc((void *)(intptr_t)(__ps_150)));
+            if (tur_panicking) return ((bool)0);
+            void * iter_1198 = __ps_151;
+            (void)iter_1198;
+            void * __ps_152 = (set_hyhamt(s1));
+            if (tur_panicking) return ((bool)0);
+            void * __ps_153 = (hamt_slkeyeq((void *)(intptr_t)(__ps_152)));
+            if (tur_panicking) return ((bool)0);
+            void * keyeq_1199 = __ps_153;
+            (void)keyeq_1199;
+            void * __ps_154 = (set_hyhamt(s2));
+            if (tur_panicking) return ((bool)0);
+            bool __ps_155 = (set_hyeq_hyloop((void *)(intptr_t)(iter_1198), (void *)(intptr_t)(__ps_154), (void *)(intptr_t)(keyeq_1199)));
+            if (tur_panicking) return ((bool)0);
+            bool result_1200 = __ps_155;
+            (void)result_1200;
+            hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_1198));
+            bool __t156;
+            __t156 = result_1200;
+            __t149 = __t156;
+        }
+        return __t149;
 }
 
 static bool set_hyeq_hyfull(int64_t s1, int64_t s2) {
-        int64_t __ps_151 = (set_hycount(s1));
+        int64_t __ps_158 = (set_hycount(s1));
         if (tur_panicking) return ((bool)0);
-        int64_t __ps_152 = (set_hycount(s2));
+        int64_t __ps_159 = (set_hycount(s2));
         if (tur_panicking) return ((bool)0);
-        bool __t150 = (__ps_151) == (__ps_152);
-        if (__t150) {
-            bool __ps_153 = (set_hyeq_hydriver(s1, s2));
+        bool __t157 = (__ps_158) == (__ps_159);
+        if (__t157) {
+            bool __ps_160 = (set_hyeq_hydriver(s1, s2));
             if (tur_panicking) return ((bool)0);
-            __t150 = __ps_153;
+            __t157 = __ps_160;
         }
-        return __t150;
+        return __t157;
 }
 
 static int64_t mutmap_hylen(int64_t m) {
@@ -7038,53 +6455,53 @@ static bool mutmap_hyeq_hystorage_qu(void * pa, void * pb, int64_t val_cmp) {
 }
 
 static bool mutmap_hyeq_hyloop(int64_t m1, int64_t m2, int64_t i, int64_t cap, int64_t val_cmp) {
-        bool __t154;
+        bool __t161;
         if ((i) == (cap)) {
-            __t154 = true;
+            __t161 = true;
         } else {
-            bool __t155;
-            bool __ps_156 = (mutmap_hyslot_hyoccupied_qu(m1, i));
+            bool __t162;
+            bool __ps_163 = (mutmap_hyslot_hyoccupied_qu(m1, i));
             if (tur_panicking) return ((bool)0);
-            if (__ps_156) {
-                bool __t157;
-                int64_t __ps_158 = (mutmap_hyslot_hyhash(m1, i));
+            if (__ps_163) {
+                bool __t164;
+                int64_t __ps_165 = (mutmap_hyslot_hyhash(m1, i));
                 if (tur_panicking) return ((bool)0);
-                int64_t __ps_159 = (mutmap_hyslot_hykey(m1, i));
+                int64_t __ps_166 = (mutmap_hyslot_hykey(m1, i));
                 if (tur_panicking) return ((bool)0);
-                bool __ps_160 = (mutmap_hyhas_qu(m2, __ps_158, __ps_159));
+                bool __ps_167 = (mutmap_hyhas_qu(m2, __ps_165, __ps_166));
                 if (tur_panicking) return ((bool)0);
-                if (__ps_160) {
-                    bool __t161;
-                    int64_t __ps_162 = (mutmap_hyslot_hyvalue(m1, i));
+                if (__ps_167) {
+                    bool __t168;
+                    int64_t __ps_169 = (mutmap_hyslot_hyvalue(m1, i));
                     if (tur_panicking) return ((bool)0);
-                    int64_t __ps_163 = (mutmap_hyslot_hyhash(m1, i));
+                    int64_t __ps_170 = (mutmap_hyslot_hyhash(m1, i));
                     if (tur_panicking) return ((bool)0);
-                    int64_t __ps_164 = (mutmap_hyslot_hykey(m1, i));
+                    int64_t __ps_171 = (mutmap_hyslot_hykey(m1, i));
                     if (tur_panicking) return ((bool)0);
-                    int64_t __ps_165 = (mutmap_hyget(m2, __ps_163, __ps_164));
+                    int64_t __ps_172 = (mutmap_hyget(m2, __ps_170, __ps_171));
                     if (tur_panicking) return ((bool)0);
-                    bool __ps_166 = (((bool (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_162, __ps_165));
+                    bool __ps_173 = (((bool (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_169, __ps_172));
                     if (tur_panicking) return ((bool)0);
-                    if (__ps_166) {
-                        bool __ps_167 = (mutmap_hyeq_hyloop(m1, m2, (i) + (INT64_C(1)), cap, (int64_t)(intptr_t)(val_cmp)));
+                    if (__ps_173) {
+                        bool __ps_174 = (mutmap_hyeq_hyloop(m1, m2, (i) + (INT64_C(1)), cap, (int64_t)(intptr_t)(val_cmp)));
                         if (tur_panicking) return ((bool)0);
-                        __t161 = __ps_167;
+                        __t168 = __ps_174;
                     } else {
-                        __t161 = false;
+                        __t168 = false;
                     }
-                    __t157 = __t161;
+                    __t164 = __t168;
                 } else {
-                    __t157 = false;
+                    __t164 = false;
                 }
-                __t155 = __t157;
+                __t162 = __t164;
             } else {
-                bool __ps_168 = (mutmap_hyeq_hyloop(m1, m2, (i) + (INT64_C(1)), cap, (int64_t)(intptr_t)(val_cmp)));
+                bool __ps_175 = (mutmap_hyeq_hyloop(m1, m2, (i) + (INT64_C(1)), cap, (int64_t)(intptr_t)(val_cmp)));
                 if (tur_panicking) return ((bool)0);
-                __t155 = __ps_168;
+                __t162 = __ps_175;
             }
-            __t154 = __t155;
+            __t161 = __t162;
         }
-        return __t154;
+        return __t161;
 }
 
 static int64_t json_slnull() {
@@ -7493,6 +6910,38 @@ static int64_t json_sldecode(const char * s) {
   
 }
 
+static int64_t json_sldecode_hyfile_ex(const char * path) {
+        FILE *f = fopen(path, "rb");
+  if (!f) {
+    char msg[512];
+    snprintf(msg, sizeof msg, "json/decode-file!: cannot read %s", path);
+    tur_panic(msg);
+    return 0;
+  }
+  size_t cap = 4096, len = 0;
+  char *buf = (char *)malloc(cap);
+  if (!buf) { fclose(f); tur_panic("json/decode-file!: out of memory"); return 0; }
+  size_t got;
+  while ((got = fread(buf + len, 1, cap - len - 1, f)) > 0) {
+    len += got;
+    if (cap - len - 1 == 0) {
+      cap *= 2;
+      char *nb = (char *)realloc(buf, cap);
+      if (!nb) { free(buf); fclose(f); tur_panic("json/decode-file!: out of memory"); return 0; }
+      buf = nb;
+    }
+  }
+  fclose(f);
+  buf[len] = 0;
+  struct tur_json_ctx { const char *s; size_t pos; int err; };
+  struct tur_json_ctx ctx; ctx.s = buf; ctx.pos = 0; ctx.err = 0;
+  int64_t result = json_hydec_hyparse_hyvalue_hy((void *)&ctx);
+  free(buf);
+  if (ctx.err) return 0;
+  return result;
+  
+}
+
 static void json_hyfree_hynode_hy(int64_t node) {
         if (!node) return;
   int64_t *np = (int64_t*)(intptr_t)node;
@@ -7524,23 +6973,23 @@ static void json_slfree(int64_t node) {
   
 }
 
-static int64_t SCHEMA_unSTR_1287;
-static int64_t SCHEMA_unINT_1288;
-static int64_t SCHEMA_unFLOAT_1289;
-static int64_t SCHEMA_unBOOL_1290;
-static int64_t SCHEMA_unNIL_1291;
-static int64_t SCHEMA_unLITERAL_1292;
-static int64_t SCHEMA_unOBJECT_1293;
-static int64_t SCHEMA_unARRAY_1294;
-static int64_t SCHEMA_unOPTIONAL_1295;
-static int64_t SCHEMA_unUNION_1296;
-static int64_t SCHEMA_unTRANSFORM_1297;
-static int64_t SCHEMA_unREC_1298;
-static int64_t SCHEMA_unALWAYS_1299;
-static int64_t SCHEMA_unNEVER_1300;
-static int64_t SCHEMA_unAP_1301;
-static int64_t SCHEMA_unFIELD_1302;
-static int64_t SCHEMA_unAP_unFAT_1303;
+static int64_t SCHEMA_unSTR_1289;
+static int64_t SCHEMA_unINT_1290;
+static int64_t SCHEMA_unFLOAT_1291;
+static int64_t SCHEMA_unBOOL_1292;
+static int64_t SCHEMA_unNIL_1293;
+static int64_t SCHEMA_unLITERAL_1294;
+static int64_t SCHEMA_unOBJECT_1295;
+static int64_t SCHEMA_unARRAY_1296;
+static int64_t SCHEMA_unOPTIONAL_1297;
+static int64_t SCHEMA_unUNION_1298;
+static int64_t SCHEMA_unTRANSFORM_1299;
+static int64_t SCHEMA_unREC_1300;
+static int64_t SCHEMA_unALWAYS_1301;
+static int64_t SCHEMA_unNEVER_1302;
+static int64_t SCHEMA_unAP_1303;
+static int64_t SCHEMA_unFIELD_1304;
+static int64_t SCHEMA_unAP_unFAT_1305;
 static int64_t schema_slstr() {
         int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 0; s[1] = 0; s[2] = 0; s[3] = 0;
@@ -7713,27 +7162,27 @@ static int64_t schema_slfmap(int64_t inner, int64_t f) {
 }
 
 static int64_t schema_slalt(int64_t a, int64_t b) {
-        tur_adt_Vec__int * __t169;
+        tur_adt_Vec__int * __t176;
         {
-            int64_t _un_unvw_1326 = a;
-            (void)_un_unvw_1326;
-            tur_adt_Vec__int * __t170;
+            int64_t _un_unvw_1328 = a;
+            (void)_un_unvw_1328;
+            tur_adt_Vec__int * __t177;
             {
-                tur_adt_Vec__int * __ps_171 = (vec_empty_like____spec__tur_adt_Vec__int___int64_t(_un_unvw_1326));
+                tur_adt_Vec__int * __ps_178 = (vec_empty_like____spec__tur_adt_Vec__int___int64_t(_un_unvw_1328));
                 if (tur_panicking) return ((int64_t)0);
-                tur_adt_Vec__int * _un_unv_1327 = __ps_171;
-                (void)_un_unv_1327;
-                vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1327))), _un_unvw_1326);
-                vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1327))), b);
-                tur_adt_Vec__int * __t172;
-                __t172 = _un_unv_1327;
-                __t170 = __t172;
+                tur_adt_Vec__int * _un_unv_1329 = __ps_178;
+                (void)_un_unv_1329;
+                vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1329))), _un_unvw_1328);
+                vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1329))), b);
+                tur_adt_Vec__int * __t179;
+                __t179 = _un_unv_1329;
+                __t177 = __t179;
             }
-            __t169 = __t170;
+            __t176 = __t177;
         }
-        int64_t __ps_173 = (schema_slunion((int64_t)(intptr_t)((int64_t)(intptr_t)(__t169))));
+        int64_t __ps_180 = (schema_slunion((int64_t)(intptr_t)((int64_t)(intptr_t)(__t176))));
         if (tur_panicking) return ((int64_t)0);
-        return __ps_173;
+        return __ps_180;
 }
 
 static int64_t schema_slap_hyfat(int64_t sf, int64_t sa) {
@@ -8082,38 +7531,38 @@ static int64_t schema_hydecode_hyreport(int64_t errs) {
 }
 
 static int64_t schema_hydecode_hyabort(int64_t errs) {
-        int64_t __ps_174 = (schema_hydecode_hyreport(errs));
+        int64_t __ps_181 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
-        (void)(__ps_174);
+        (void)(__ps_181);
         tur_panic("schema-decode!: validation failed");
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
 
 static int64_t schema_hydecode_ex(int64_t schema, int64_t node) {
-        int64_t __t175;
+        int64_t __t182;
         {
-            int64_t __ps_176 = (schema_hydecode(schema, node));
+            int64_t __ps_183 = (schema_hydecode(schema, node));
             if (tur_panicking) return ((int64_t)0);
-            int64_t r_1377 = __ps_176;
-            (void)r_1377;
-            int64_t __t177;
-            bool __ps_178 = (schema_hydecode_hyok_qu(r_1377));
+            int64_t r_1379 = __ps_183;
+            (void)r_1379;
+            int64_t __t184;
+            bool __ps_185 = (schema_hydecode_hyok_qu(r_1379));
             if (tur_panicking) return ((int64_t)0);
-            if (__ps_178) {
-                int64_t __ps_179 = (schema_hydecode_hyvalue(r_1377));
+            if (__ps_185) {
+                int64_t __ps_186 = (schema_hydecode_hyvalue(r_1379));
                 if (tur_panicking) return ((int64_t)0);
-                __t177 = __ps_179;
+                __t184 = __ps_186;
             } else {
-                int64_t __ps_180 = (schema_hydecode_hyerrors(r_1377));
+                int64_t __ps_187 = (schema_hydecode_hyerrors(r_1379));
                 if (tur_panicking) return ((int64_t)0);
-                int64_t __ps_181 = (schema_hydecode_hyabort(__ps_180));
+                int64_t __ps_188 = (schema_hydecode_hyabort(__ps_187));
                 if (tur_panicking) return ((int64_t)0);
-                __t177 = __ps_181;
+                __t184 = __ps_188;
             }
-            __t175 = __t177;
+            __t182 = __t184;
         }
-        return __t175;
+        return __t182;
 }
 
 static const char * sym_hy_gtstr(const struct __tur_sym * s) {
@@ -8127,9 +7576,9 @@ static bool sym_eq_qu(const struct __tur_sym * a, const struct __tur_sym * b) {
 }
 
 static int64_t consume(int64_t x, int64_t f) {
-        int64_t __ps_182 = (((int64_t (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(f)))[0])((void *)(intptr_t)(f), x));
+        int64_t __ps_189 = (((int64_t (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(f)))[0])((void *)(intptr_t)(f), x));
         if (tur_panicking) return ((int64_t)0);
-        return __ps_182;
+        return __ps_189;
 }
 
 static int64_t replace(int64_t old, int64_t new) {
@@ -8226,42 +7675,42 @@ static void untrailed_hyend() {
 }
 
 static int64_t bt_hyscope(int64_t body) {
-        int64_t __t183;
+        int64_t __t190;
         {
-            int64_t __ps_184 = (bt_hymark());
+            int64_t __ps_191 = (bt_hymark());
             if (tur_panicking) return ((int64_t)0);
-            int64_t m_1436 = __ps_184;
-            (void)m_1436;
-            int64_t __ps_185 = (((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body)));
+            int64_t m_1438 = __ps_191;
+            (void)m_1438;
+            int64_t __ps_192 = (((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body)));
             if (tur_panicking) return ((int64_t)0);
-            int64_t r_1437 = __ps_185;
-            (void)r_1437;
-            bool __ps_186 = (bt_hyundo_hyto_ex(m_1436));
+            int64_t r_1439 = __ps_192;
+            (void)r_1439;
+            bool __ps_193 = (bt_hyundo_hyto_ex(m_1438));
             if (tur_panicking) return ((int64_t)0);
-            (void)(__ps_186);
-            int64_t __t187;
-            __t187 = r_1437;
-            __t183 = __t187;
+            (void)(__ps_193);
+            int64_t __t194;
+            __t194 = r_1439;
+            __t190 = __t194;
         }
-        return __t183;
+        return __t190;
 }
 
 static int64_t with_hyuntrailed(int64_t body) {
         untrailed_hybegin();
-        int64_t __t188;
-        int64_t __t189;
+        int64_t __t195;
+        int64_t __t196;
         {
-            int64_t __ps_190 = (((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body)));
+            int64_t __ps_197 = (((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body)));
             if (tur_panicking) return ((int64_t)0);
-            int64_t r_1439 = __ps_190;
-            (void)r_1439;
+            int64_t r_1441 = __ps_197;
+            (void)r_1441;
             untrailed_hyend();
-            int64_t __t191;
-            __t191 = r_1439;
-            __t189 = __t191;
+            int64_t __t198;
+            __t198 = r_1441;
+            __t196 = __t198;
         }
-        __t188 = __t189;
-        return __t188;
+        __t195 = __t196;
+        return __t195;
 }
 
 static void trail_hyreset_ex() {
@@ -8276,9 +7725,9 @@ static int64_t trail_slautolink_hyhint() {
 }
 
 static int64_t mk_hyid(int64_t x) {
-        int64_t __ps_192 = (ctor_Identity(x, INT64_C(0)));
+        int64_t __ps_199 = (ctor_Identity_Identity(x, INT64_C(0)));
         if (tur_panicking) return ((int64_t)0);
-        return __ps_192;
+        return __ps_199;
 }
 
 static int64_t run_hyid(int64_t i) {
@@ -8286,23 +7735,23 @@ static int64_t run_hyid(int64_t i) {
 }
 
 static tur_adt_Point * set_hypx(tur_poly_fn_t l, int64_t b, tur_adt_Point * s) {
-        void *__t194 = malloc(sizeof(void *) + sizeof(struct __env_1471));
-        *(void (**)(void *))__t194 = drop_glue___env_1471;
-        struct __env_1471 *__t193 = (struct __env_1471 *)((char *)__t194 + sizeof(void *));
-        __t193->__fn = (int64_t)(intptr_t)__fn_1469;
-        __t193->b = b;
-        void *__t195 = __t193;
-        tur_adt_Identity__Point __ps_196 = ((*(tur_adt_Identity__Point *)(intptr_t)(((int64_t(*)(void*, int64_t, int64_t, int64_t))l.fn)(l.env, (int64_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Functor_Identity_singleton))), (int64_t)((int64_t)(intptr_t)(__t195)), (int64_t)(s)))));
+        void *__t201 = malloc(sizeof(void *) + sizeof(struct __env_1473));
+        *(void (**)(void *))__t201 = drop_glue___env_1473;
+        struct __env_1473 *__t200 = (struct __env_1473 *)((char *)__t201 + sizeof(void *));
+        __t200->__fn = (int64_t)(intptr_t)__fn_1471;
+        __t200->b = b;
+        void *__t202 = __t200;
+        tur_adt_Identity__Point __ps_203 = ((*(tur_adt_Identity__Point *)(intptr_t)(((int64_t(*)(void*, int64_t, int64_t, int64_t))l.fn)(l.env, (int64_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Functor_Identity_singleton))), (int64_t)((int64_t)(intptr_t)(__t202)), (int64_t)(s)))));
         if (tur_panicking) return ((tur_adt_Point *)0);
-        tur_adt_Point * __ps_197 = (run_id__spec__tur_adt_Point___tur_adt_Identity__Point(__ps_196));
+        tur_adt_Point * __ps_204 = (run_id__spec__tur_adt_Point___tur_adt_Identity__Point(__ps_203));
         if (tur_panicking) return ((tur_adt_Point *)0);
-        return __ps_197;
+        return __ps_204;
 }
 
 static tur_adt_Point * tweak(tur_poly_fn_t l, int64_t b, tur_adt_Point * s) {
-        tur_adt_Point * __ps_198 = (set_hypx(l, b, (tur_adt_Point *)(intptr_t)(s)));
+        tur_adt_Point * __ps_205 = (set_hypx(l, b, (tur_adt_Point *)(intptr_t)(s)));
         if (tur_panicking) return ((tur_adt_Point *)0);
-        return __ps_198;
+        return __ps_205;
 }
 
 int main(int argc, char **argv) {
@@ -8320,47 +7769,47 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        int64_t __t199;
+        int64_t __t206;
         {
-            tur_adt_Point * __ps_200 = (ctor_Point(INT64_C(3), INT64_C(4)));
+            tur_adt_Point * __ps_207 = (ctor_Point_Point(INT64_C(3), INT64_C(4)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            tur_adt_Point * p_1477 = __ps_200;
-            (void)p_1477;
-            tur_adt_Point * __ps_201 = (tweak__lens_89e16e7f8669ca4e(INT64_C(99), (tur_adt_Point *)(intptr_t)(p_1477)));
+            tur_adt_Point * p_1479 = __ps_207;
+            (void)p_1479;
+            tur_adt_Point * __ps_208 = (tweak__lens_89e16e7f8669ca4e(INT64_C(99), (tur_adt_Point *)(intptr_t)(p_1479)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            tur_adt_Point * p1_1492 = __ps_201;
-            (void)p1_1492;
-            tur_adt_Point * __ps_202 = (tweak__lens_29dc1a87dc9f86df(INT64_C(88), (tur_adt_Point *)(intptr_t)(p_1477)));
+            tur_adt_Point * p1_1494 = __ps_208;
+            (void)p1_1494;
+            tur_adt_Point * __ps_209 = (tweak__lens_29dc1a87dc9f86df(INT64_C(88), (tur_adt_Point *)(intptr_t)(p_1479)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            tur_adt_Point * p2_1507 = __ps_202;
-            (void)p2_1507;
-            printf("%lld\n", (long long)((int64_t)((tur_adt_Point *)(intptr_t)(p1_1492))->x));
-            printf("%lld\n", (long long)((int64_t)((tur_adt_Point *)(intptr_t)(p1_1492))->y));
-            printf("%lld\n", (long long)((int64_t)((tur_adt_Point *)(intptr_t)(p2_1507))->x));
-            printf("%lld\n", (long long)((int64_t)((tur_adt_Point *)(intptr_t)(p2_1507))->y));
-            int64_t __t203;
-            __t203 = INT64_C(0);
-            __t199 = __t203;
+            tur_adt_Point * p2_1509 = __ps_209;
+            (void)p2_1509;
+            printf("%lld\n", (long long)((int64_t)((tur_adt_Point *)(intptr_t)(p1_1494))->x));
+            printf("%lld\n", (long long)((int64_t)((tur_adt_Point *)(intptr_t)(p1_1494))->y));
+            printf("%lld\n", (long long)((int64_t)((tur_adt_Point *)(intptr_t)(p2_1509))->x));
+            printf("%lld\n", (long long)((int64_t)((tur_adt_Point *)(intptr_t)(p2_1509))->y));
+            int64_t __t210;
+            __t210 = INT64_C(0);
+            __t206 = __t210;
         }
-        return (int)__t199;
+        return (int)__t206;
 }
 
 static tur_adt_Identity__int mk_id__spec__tur_adt_Identity__int_int64_t(int64_t x) {
-        tur_adt_Identity__int __ps_204 = (ctor_Identity__int(x, INT64_C(0)));
+        tur_adt_Identity__int __ps_211 = (ctor_Identity_Identity__int(x, INT64_C(0)));
         if (tur_panicking) return (tur_adt_Identity__int){0};
-        return __ps_204;
+        return __ps_211;
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
-        tur_adt_Cons__int * __ps_205 = (ctor_Cons__int(h, t));
+        tur_adt_Cons__int * __ps_212 = (ctor_Cons_Cons__int(h, t));
         if (tur_panicking) return ((tur_adt_Cons__int *)0);
-        return __ps_205;
+        return __ps_212;
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        tur_adt_Vec__int * __ps_206 = (vec_new__spec__tur_adt_Vec__int__());
+        tur_adt_Vec__int * __ps_213 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return ((tur_adt_Vec__int *)0);
-        return __ps_206;
+        return __ps_213;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
@@ -8377,19 +7826,19 @@ static tur_adt_Point * run_id__spec__tur_adt_Point___tur_adt_Identity__Point(tur
 }
 
 static tur_adt_Identity__Point __inst_Functor_fmap_Identity__spec__tur_adt_Identity__Point_int64_t_int64_t(tur_adt_Identity__int i, tur_poly_fn_t g) {
-        int64_t __ps_207 = (run_id__spec__int64_t_tur_adt_Identity__int(i));
+        int64_t __ps_214 = (run_id__spec__int64_t_tur_adt_Identity__int(i));
         if (tur_panicking) return (tur_adt_Identity__Point){0};
-        tur_adt_Point * __ps_208 = (((tur_adt_Point * (*)(void*, int64_t))g.fn)(g.env, __ps_207));
+        tur_adt_Point * __ps_215 = (((tur_adt_Point * (*)(void*, int64_t))g.fn)(g.env, __ps_214));
         if (tur_panicking) return (tur_adt_Identity__Point){0};
-        tur_adt_Identity__Point __ps_209 = (mk_id__spec__tur_adt_Identity__Point_tur_adt_Point__(__ps_208));
+        tur_adt_Identity__Point __ps_216 = (mk_id__spec__tur_adt_Identity__Point_tur_adt_Point__(__ps_215));
         if (tur_panicking) return (tur_adt_Identity__Point){0};
-        return __ps_209;
+        return __ps_216;
 }
 
 static tur_adt_Identity__Point mk_id__spec__tur_adt_Identity__Point_tur_adt_Point__(tur_adt_Point * x) {
-        tur_adt_Identity__Point __ps_210 = (ctor_Identity__Point(x, INT64_C(0)));
+        tur_adt_Identity__Point __ps_217 = (ctor_Identity_Identity__Point(x, INT64_C(0)));
         if (tur_panicking) return (tur_adt_Identity__Point){0};
-        return __ps_210;
+        return __ps_217;
 }
 
 static int64_t run_id__spec__int64_t_tur_adt_Identity__int(tur_adt_Identity__int i) {
@@ -8397,116 +7846,127 @@ static int64_t run_id__spec__int64_t_tur_adt_Identity__int(tur_adt_Identity__int
 }
 
 static tur_adt_Identity__Point point_x__mono_89e16e7f8669ca4e(int64_t g, int64_t s) {
-        tur_adt_Identity__int __ps_211 = (((tur_adt_Identity__int (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(g)))[0])((void *)(intptr_t)(g), (int64_t)((tur_adt_Point *)(intptr_t)(s))->x));
+        tur_adt_Identity__int __ps_218 = (((tur_adt_Identity__int (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(g)))[0])((void *)(intptr_t)(g), (int64_t)((tur_adt_Point *)(intptr_t)(s))->x));
         if (tur_panicking) return (tur_adt_Identity__Point){0};
-        void *__t213 = malloc(sizeof(void *) + sizeof(struct __env_1453));
-        *(void (**)(void *))__t213 = drop_glue___env_1453;
-        struct __env_1453 *__t212 = (struct __env_1453 *)((char *)__t213 + sizeof(void *));
-        __t212->__fn = (tur_thunk_tur_adt_Point___int64_t_t)__fn_1451;
-        __t212->s = (tur_adt_Point *)(intptr_t)s;
-        void *__t214 = __t212;
-        void *__t215 = (void *)(intptr_t)(__t214);
-        tur_adt_Identity__Point __ps_216 = (__inst_Functor_fmap_Identity__spec__tur_adt_Identity__Point_int64_t_int64_t(__ps_211, (tur_poly_fn_t){ __t215, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t215)) }));
+        void *__t220 = malloc(sizeof(void *) + sizeof(struct __env_1455));
+        *(void (**)(void *))__t220 = drop_glue___env_1455;
+        struct __env_1455 *__t219 = (struct __env_1455 *)((char *)__t220 + sizeof(void *));
+        __t219->__fn = (tur_thunk_tur_adt_Point___int64_t_t)__fn_1453;
+        __t219->s = (tur_adt_Point *)(intptr_t)s;
+        void *__t221 = __t219;
+        void *__t222 = (void *)(intptr_t)(__t221);
+        tur_adt_Identity__Point __ps_223 = (__inst_Functor_fmap_Identity__spec__tur_adt_Identity__Point_int64_t_int64_t(__ps_218, (tur_poly_fn_t){ __t222, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t222)) }));
         if (tur_panicking) return (tur_adt_Identity__Point){0};
-        return __ps_216;
+        return __ps_223;
 }
 
 static tur_adt_Identity__Point __inst_Functor_fmap_Identity__spec__tur_adt_Identity__Point_int64_t_int64_t__h1(tur_adt_Identity__int i, tur_poly_fn_t g) {
-        int64_t __ps_217 = (run_id__spec__int64_t_tur_adt_Identity__int(i));
+        int64_t __ps_224 = (run_id__spec__int64_t_tur_adt_Identity__int(i));
         if (tur_panicking) return (tur_adt_Identity__Point){0};
-        tur_adt_Point * __ps_218 = (((tur_adt_Point * (*)(void*, int64_t))g.fn)(g.env, __ps_217));
+        tur_adt_Point * __ps_225 = (((tur_adt_Point * (*)(void*, int64_t))g.fn)(g.env, __ps_224));
         if (tur_panicking) return (tur_adt_Identity__Point){0};
-        tur_adt_Identity__Point __ps_219 = (mk_id__spec__tur_adt_Identity__Point_tur_adt_Point__(__ps_218));
+        tur_adt_Identity__Point __ps_226 = (mk_id__spec__tur_adt_Identity__Point_tur_adt_Point__(__ps_225));
         if (tur_panicking) return (tur_adt_Identity__Point){0};
-        return __ps_219;
-}
-
-static tur_adt_Identity__Point point_y__mono_29dc1a87dc9f86df(int64_t g, int64_t s) {
-        tur_adt_Identity__int __ps_220 = (((tur_adt_Identity__int (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(g)))[0])((void *)(intptr_t)(g), (int64_t)((tur_adt_Point *)(intptr_t)(s))->y));
-        if (tur_panicking) return (tur_adt_Identity__Point){0};
-        void *__t222 = malloc(sizeof(void *) + sizeof(struct __env_1462));
-        *(void (**)(void *))__t222 = drop_glue___env_1462;
-        struct __env_1462 *__t221 = (struct __env_1462 *)((char *)__t222 + sizeof(void *));
-        __t221->__fn = (tur_thunk_tur_adt_Point___int64_t_t)__fn_1460;
-        __t221->s = (tur_adt_Point *)(intptr_t)s;
-        void *__t223 = __t221;
-        void *__t224 = (void *)(intptr_t)(__t223);
-        tur_adt_Identity__Point __ps_225 = (__inst_Functor_fmap_Identity__spec__tur_adt_Identity__Point_int64_t_int64_t__h1(__ps_220, (tur_poly_fn_t){ __t224, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t224)) }));
-        if (tur_panicking) return (tur_adt_Identity__Point){0};
-        return __ps_225;
-}
-
-struct __env_1471__byval { int64_t __fn; int64_t b; };
-static void drop_glue___env_1471__byval(void *__p) {
-    struct __env_1471__byval *__e = (struct __env_1471__byval *)__p; (void)__e;
-    free((void *)((char *)__p - sizeof(void *)));
-}
-static tur_adt_Identity__int __fn_1469__byval(void * __env_p_1472, int64_t a) {
-        struct __env_1471__byval *__env___env_1471__byval = (struct __env_1471__byval *)__env_p_1472;
-        tur_adt_Identity__int __ps_226 = (mk_id__spec__tur_adt_Identity__int_int64_t(__env___env_1471__byval->b));
-        if (tur_panicking) return (tur_adt_Identity__int){0};
         return __ps_226;
 }
 
+static tur_adt_Identity__Point point_y__mono_29dc1a87dc9f86df(int64_t g, int64_t s) {
+        tur_adt_Identity__int __ps_227 = (((tur_adt_Identity__int (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(g)))[0])((void *)(intptr_t)(g), (int64_t)((tur_adt_Point *)(intptr_t)(s))->y));
+        if (tur_panicking) return (tur_adt_Identity__Point){0};
+        void *__t229 = malloc(sizeof(void *) + sizeof(struct __env_1464));
+        *(void (**)(void *))__t229 = drop_glue___env_1464;
+        struct __env_1464 *__t228 = (struct __env_1464 *)((char *)__t229 + sizeof(void *));
+        __t228->__fn = (tur_thunk_tur_adt_Point___int64_t_t)__fn_1462;
+        __t228->s = (tur_adt_Point *)(intptr_t)s;
+        void *__t230 = __t228;
+        void *__t231 = (void *)(intptr_t)(__t230);
+        tur_adt_Identity__Point __ps_232 = (__inst_Functor_fmap_Identity__spec__tur_adt_Identity__Point_int64_t_int64_t__h1(__ps_227, (tur_poly_fn_t){ __t231, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t231)) }));
+        if (tur_panicking) return (tur_adt_Identity__Point){0};
+        return __ps_232;
+}
+
+struct __env_1473__byval { int64_t __fn; int64_t b; };
+static void drop_glue___env_1473__byval(void *__p) {
+    struct __env_1473__byval *__e = (struct __env_1473__byval *)__p; (void)__e;
+    free((void *)((char *)__p - sizeof(void *)));
+}
+static tur_adt_Identity__int __fn_1471__byval(void * __env_p_1474, int64_t a) {
+        struct __env_1473__byval *__env___env_1473__byval = (struct __env_1473__byval *)__env_p_1474;
+        tur_adt_Identity__int __ps_233 = (mk_id__spec__tur_adt_Identity__int_int64_t(__env___env_1473__byval->b));
+        if (tur_panicking) return (tur_adt_Identity__int){0};
+        return __ps_233;
+}
+
 static tur_adt_Point * set_px__lens_89e16e7f8669ca4e(int64_t b, tur_adt_Point * s) {
-        void *__t228 = malloc(sizeof(void *) + sizeof(struct __env_1471__byval));
-        *(void (**)(void *))__t228 = drop_glue___env_1471__byval;
-        struct __env_1471__byval *__t227 = (struct __env_1471__byval *)((char *)__t228 + sizeof(void *));
-        __t227->__fn = (int64_t)(intptr_t)__fn_1469__byval;
-        __t227->b = b;
-        void *__t229 = __t227;
-        tur_adt_Identity__Point __ps_230 = (point_x__mono_89e16e7f8669ca4e((int64_t)(intptr_t)(__t229), (int64_t)(intptr_t)(s)));
+        void *__t235 = malloc(sizeof(void *) + sizeof(struct __env_1473__byval));
+        *(void (**)(void *))__t235 = drop_glue___env_1473__byval;
+        struct __env_1473__byval *__t234 = (struct __env_1473__byval *)((char *)__t235 + sizeof(void *));
+        __t234->__fn = (int64_t)(intptr_t)__fn_1471__byval;
+        __t234->b = b;
+        void *__t236 = __t234;
+        tur_adt_Identity__Point __ps_237 = (point_x__mono_89e16e7f8669ca4e((int64_t)(intptr_t)(__t236), (int64_t)(intptr_t)(s)));
         if (tur_panicking) return ((tur_adt_Point *)0);
-        tur_adt_Point * __ps_231 = (run_id__spec__tur_adt_Point___tur_adt_Identity__Point(__ps_230));
-        if (tur_panicking) return ((tur_adt_Point *)0);
-        return __ps_231;
-}
-
-static tur_adt_Point * set_px__lens_29dc1a87dc9f86df(int64_t b, tur_adt_Point * s) {
-        void *__t233 = malloc(sizeof(void *) + sizeof(struct __env_1471__byval));
-        *(void (**)(void *))__t233 = drop_glue___env_1471__byval;
-        struct __env_1471__byval *__t232 = (struct __env_1471__byval *)((char *)__t233 + sizeof(void *));
-        __t232->__fn = (int64_t)(intptr_t)__fn_1469__byval;
-        __t232->b = b;
-        void *__t234 = __t232;
-        tur_adt_Identity__Point __ps_235 = (point_y__mono_29dc1a87dc9f86df((int64_t)(intptr_t)(__t234), (int64_t)(intptr_t)(s)));
-        if (tur_panicking) return ((tur_adt_Point *)0);
-        tur_adt_Point * __ps_236 = (run_id__spec__tur_adt_Point___tur_adt_Identity__Point(__ps_235));
-        if (tur_panicking) return ((tur_adt_Point *)0);
-        return __ps_236;
-}
-
-static tur_adt_Point * tweak__lens_89e16e7f8669ca4e(int64_t b, tur_adt_Point * s) {
-        tur_adt_Point * __ps_237 = (set_px__lens_89e16e7f8669ca4e(b, (tur_adt_Point *)(intptr_t)(s)));
-        if (tur_panicking) return ((tur_adt_Point *)0);
-        return __ps_237;
-}
-
-static tur_adt_Point * tweak__lens_29dc1a87dc9f86df(int64_t b, tur_adt_Point * s) {
-        tur_adt_Point * __ps_238 = (set_px__lens_29dc1a87dc9f86df(b, (tur_adt_Point *)(intptr_t)(s)));
+        tur_adt_Point * __ps_238 = (run_id__spec__tur_adt_Point___tur_adt_Identity__Point(__ps_237));
         if (tur_panicking) return ((tur_adt_Point *)0);
         return __ps_238;
 }
 
+static tur_adt_Point * set_px__lens_29dc1a87dc9f86df(int64_t b, tur_adt_Point * s) {
+        void *__t240 = malloc(sizeof(void *) + sizeof(struct __env_1473__byval));
+        *(void (**)(void *))__t240 = drop_glue___env_1473__byval;
+        struct __env_1473__byval *__t239 = (struct __env_1473__byval *)((char *)__t240 + sizeof(void *));
+        __t239->__fn = (int64_t)(intptr_t)__fn_1471__byval;
+        __t239->b = b;
+        void *__t241 = __t239;
+        tur_adt_Identity__Point __ps_242 = (point_y__mono_29dc1a87dc9f86df((int64_t)(intptr_t)(__t241), (int64_t)(intptr_t)(s)));
+        if (tur_panicking) return ((tur_adt_Point *)0);
+        tur_adt_Point * __ps_243 = (run_id__spec__tur_adt_Point___tur_adt_Identity__Point(__ps_242));
+        if (tur_panicking) return ((tur_adt_Point *)0);
+        return __ps_243;
+}
+
+static tur_adt_Point * tweak__lens_89e16e7f8669ca4e(int64_t b, tur_adt_Point * s) {
+        tur_adt_Point * __ps_244 = (set_px__lens_89e16e7f8669ca4e(b, (tur_adt_Point *)(intptr_t)(s)));
+        if (tur_panicking) return ((tur_adt_Point *)0);
+        return __ps_244;
+}
+
+static tur_adt_Point * tweak__lens_29dc1a87dc9f86df(int64_t b, tur_adt_Point * s) {
+        tur_adt_Point * __ps_245 = (set_px__lens_29dc1a87dc9f86df(b, (tur_adt_Point *)(intptr_t)(s)));
+        if (tur_panicking) return ((tur_adt_Point *)0);
+        return __ps_245;
+}
+
 
 static void __tur_module_def_init(void) {
-    SCHEMA_unSTR_1287 = INT64_C(0);
-    SCHEMA_unINT_1288 = INT64_C(1);
-    SCHEMA_unFLOAT_1289 = INT64_C(2);
-    SCHEMA_unBOOL_1290 = INT64_C(3);
-    SCHEMA_unNIL_1291 = INT64_C(4);
-    SCHEMA_unLITERAL_1292 = INT64_C(5);
-    SCHEMA_unOBJECT_1293 = INT64_C(6);
-    SCHEMA_unARRAY_1294 = INT64_C(7);
-    SCHEMA_unOPTIONAL_1295 = INT64_C(8);
-    SCHEMA_unUNION_1296 = INT64_C(9);
-    SCHEMA_unTRANSFORM_1297 = INT64_C(10);
-    SCHEMA_unREC_1298 = INT64_C(11);
-    SCHEMA_unALWAYS_1299 = INT64_C(12);
-    SCHEMA_unNEVER_1300 = INT64_C(13);
-    SCHEMA_unAP_1301 = INT64_C(14);
-    SCHEMA_unFIELD_1302 = INT64_C(15);
-    SCHEMA_unAP_unFAT_1303 = INT64_C(16);
+    SCHEMA_unSTR_1289 = INT64_C(0);
+    SCHEMA_unINT_1290 = INT64_C(1);
+    SCHEMA_unFLOAT_1291 = INT64_C(2);
+    SCHEMA_unBOOL_1292 = INT64_C(3);
+    SCHEMA_unNIL_1293 = INT64_C(4);
+    SCHEMA_unLITERAL_1294 = INT64_C(5);
+    SCHEMA_unOBJECT_1295 = INT64_C(6);
+    SCHEMA_unARRAY_1296 = INT64_C(7);
+    SCHEMA_unOPTIONAL_1297 = INT64_C(8);
+    SCHEMA_unUNION_1298 = INT64_C(9);
+    SCHEMA_unTRANSFORM_1299 = INT64_C(10);
+    SCHEMA_unREC_1300 = INT64_C(11);
+    SCHEMA_unALWAYS_1301 = INT64_C(12);
+    SCHEMA_unNEVER_1302 = INT64_C(13);
+    SCHEMA_unAP_1303 = INT64_C(14);
+    SCHEMA_unFIELD_1304 = INT64_C(15);
+    SCHEMA_unAP_unFAT_1305 = INT64_C(16);
+}
+
+static void __tur_fatbox_init(void) {
+    { char *__b = (char *)&__tur_fatbox_0;
+      int64_t *__s = (int64_t *)(__b + sizeof(void *));
+      __s[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+      __s[1] = (int64_t)(intptr_t)__fn_835; }
+    { char *__b = (char *)&__tur_fatbox_1;
+      int64_t *__s = (int64_t *)(__b + sizeof(void *));
+      __s[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
+      __s[1] = (int64_t)(intptr_t)__fn_1248; }
 }
 
 /* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md.
@@ -8516,6 +7976,7 @@ static void __tur_static_init(void) {
     static int __tur_static_init_done = 0;
     if (__tur_static_init_done) return;
     __tur_static_init_done = 1;
+    __tur_fatbox_init();
     __tur_module_def_init();
 }
 __attribute__((constructor))

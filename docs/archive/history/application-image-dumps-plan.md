@@ -15,10 +15,19 @@
 > both `with-image-cache` combinators; `stdlib/image_hooks.tur` standard
 > hooks -- tracked-file table + stdio flush), **AI7.3**
 > (`tests/fixtures/image-reload-hook`, `tests/fixtures/image-hooks-tracked`).
-> **Still open:** AI3 (`defimage-global` + `TUR-W0706` lint),
-> AI6.1/AI6.2 (`tur run --image` + `--unsafe-image-skip-build-check`),
-> AI4.1 linker-section stamp, AI7.2/AI7.4/AI7.5 (globals/error fixtures +
-> perf benchmark). See the guide for the design deltas (build-stamp method;
+> **AI3** landed 2026-09-02 (`defimage-global` + `image/track-globals!`
+> registry in `stdlib/image.tur`; the globals snapshot rides inside
+> `payload_len` as a second section located by the header's `globals_offset`
+> and is restored before resume; `TUR-W0706` lints the `init` root of
+> `with-image-cache-after-init` via the G1 global-write walk; **AI7.2**
+> `tests/fixtures/image-globals-roundtrip` +
+> `tests/fixtures/warn-image-global-unregistered`). Two deltas from the sketch:
+> tracking is a call at the top of `main` (same reason as the hooks), and the
+> stdlib inline-C codec is the one that writes/reads the section -- the C
+> `tur_image_write` still emits `globals_offset` 0.
+> **Still open:** AI6.1/AI6.2 (`tur run --image` +
+> `--unsafe-image-skip-build-check`), AI4.1 linker-section stamp,
+> AI7.4/AI7.5 (error fixtures + perf benchmark). See the guide for the design deltas (build-stamp method;
 > named-continuation constraint on the resumed tail; hooks register at the top
 > of `main` rather than self-registering, since compiled top-level forms do not
 > execute and warm starts skip `init`).

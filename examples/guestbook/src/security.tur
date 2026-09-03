@@ -1,134 +1,190 @@
-;;; security.tur -- HMAC token signing, token verification, HTML escaping,
-;;; and URL percent-decoding for the guestbook example.
+;;; security -- HTML escaping and signed continuation tokens.
+;;;
+;;; A token is `<64 hex chars>.<hmac-sha256 hex>`: the random half names the
+;;; continuation file, the signature (keyed by GUESTBOOK_SECRET) proves the
+;;; server issued it, so a client cannot probe data/conts/ by guessing names.
+;;; The SHA-256 core is inline-C (no dependency); HMAC is the standard
+;;; ipad/opad construction over it.
 ;;;
 ;;; Since: Guestbook example
+(defmodule security
+  (import strutil :refer [str+ cstr-index-of cstr-slice cstr-len env-or])
+  (export html-escape random-hex-64 hmac-sha256-hex sign-token verify-token
+          server-secret)
 
-; ---------------------------------------------------------------------------
-; HTML escaping
-; ---------------------------------------------------------------------------
+  ;;; server-secret -- the HMAC key: GUESTBOOK_SECRET, or a dev-only default.
+  ;;;
+  ;;; Set GUESTBOOK_SECRET to a long random string in production; with the
+  ;;; default anyone who reads this source can forge tokens.
+  (defn server-secret [] : cstr
+    (env-or "GUESTBOOK_SECRET" "dev-insecure-secret"))
 
-;;; html-escape -- escape HTML special characters in a string.
-;;;
-;;; Parameters:
-;;;   s -- raw user input
-;;;
-;;; Returns:
-;;;   HTML-safe cstr with &, <, >, and " replaced by named entities.
-;;;
-;;; Example:
-;;;   (html-escape "<script>alert(1)</script>")
-;;;   ; => "&lt;script&gt;alert(1)&lt;/script&gt;"
-;;;
-;;; Since: Guestbook example
-(defn html-escape [s : cstr] : cstr
-  (def s1 (cstr-replace-all s "&"  "&amp;"))
-  (def s2 (cstr-replace-all s1 "<"  "&lt;"))
-  (def s3 (cstr-replace-all s2 ">"  "&gt;"))
-  (cstr-replace-all s3 "\"" "&quot;"))
+  ;;; html-escape -- escape & < > " and newlines so user text is inert in HTML.
+  ;;;
+  ;;; A newline becomes <br>, so multi-line messages keep their breaks.
+  ;;;
+  ;;; Example:
+  ;;;   (html-escape "<b>")   ; => "&lt;b&gt;"
+  ;;;
+  ;;; Since: Guestbook example
+  (defn html-escape [s : cstr] : cstr
+    ```c
+    size_t n = strlen(s);
+    char *out = (char *)malloc(n * 6 + 1);
+    if (!out) return "";
+    char *w = out;
+    for (size_t i = 0; i < n; i++) {
+      char c = s[i];
+      const char *rep = NULL;
+      switch (c) {
+        case '&': rep = "&amp;"; break;
+        case '<': rep = "&lt;"; break;
+        case '>': rep = "&gt;"; break;
+        case '"': rep = "&quot;"; break;
+        case '\n': rep = "<br>"; break;
+        case '\r': rep = ""; break;
+        case '\t': rep = " "; break;
+        default: break;
+      }
+      if (rep) { size_t l = strlen(rep); memcpy(w, rep, l); w += l; }
+      else *w++ = c;
+    }
+    *w = 0;
+    return out;
+    ```)
 
-; ---------------------------------------------------------------------------
-; URL percent-decoding
-; ---------------------------------------------------------------------------
+  ;;; random-hex-64 -- 32 random bytes as 64 lowercase hex characters.
+  ;;;
+  ;;; Reads /dev/urandom; falls back to the C library's rand() seeded from the
+  ;;; clock only when that is unavailable (Windows without a urandom device).
+  ;;;
+  ;;; Since: Guestbook example
+  (defn random-hex-64 [] : cstr
+    ```c
+    #include <time.h>
+    unsigned char buf[32];
+    FILE *f = fopen("/dev/urandom", "rb");
+    size_t got = f ? fread(buf, 1, 32, f) : 0;
+    if (f) fclose(f);
+    if (got != 32) {
+      static int seeded = 0;
+      if (!seeded) { srand((unsigned)time(NULL) ^ (unsigned)(intptr_t)buf); seeded = 1; }
+      for (int i = 0; i < 32; i++) buf[i] = (unsigned char)(rand() & 0xff);
+    }
+    char *out = (char *)malloc(65);
+    if (!out) return "";
+    for (int i = 0; i < 32; i++) snprintf(out + i * 2, 3, "%02x", buf[i]);
+    return out;
+    ```)
 
-;;; hex-digit-val -- return the numeric value of a hex character (0-15),
-;;; or -1 if the character is not a valid hex digit.
-(defn hex-digit-val [c : int64] : int64
-  (cond
-    (and (>= c 48) (<= c 57))  (- c 48)       ; '0'-'9'
-    (and (>= c 65) (<= c 70))  (- c 55)       ; 'A'-'F'
-    (and (>= c 97) (<= c 102)) (- c 87)       ; 'a'-'f'
-    :else -1))
+  ;;; hmac-sha256-hex -- HMAC-SHA256(key, msg) as 64 lowercase hex characters.
+  ;;;
+  ;;; Parameters:
+  ;;;   key -- the secret (any length; longer than 64 bytes is hashed first)
+  ;;;   msg -- the text to authenticate
+  ;;;
+  ;;; Since: Guestbook example
+  (defn hmac-sha256-hex [key : cstr msg : cstr] : cstr
+    ```c
+    static const uint32_t K[64] = {
+      0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+      0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+      0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+      0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+      0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+      0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+      0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+      0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2 };
+    /* Three SHA-256 passes at most: (key if > 64 bytes), inner, outer.  Each
+     * pass hashes one contiguous message assembled below; the compression
+     * loop is written once and run per pass. */
+    size_t kl = strlen(key), ml = strlen(msg);
+    unsigned char kblock[64]; memset(kblock, 0, 64);
+    unsigned char digest[32];
+    unsigned char *msgbuf = NULL; size_t msglen = 0;
+    int pass;
+    for (pass = 0; pass < 3; pass++) {
+      if (pass == 0) {
+        if (kl <= 64) { memcpy(kblock, key, kl); continue; }
+        msgbuf = (unsigned char *)malloc(kl); memcpy(msgbuf, key, kl); msglen = kl;
+      } else if (pass == 1) {
+        msgbuf = (unsigned char *)malloc(64 + ml);
+        for (int i = 0; i < 64; i++) msgbuf[i] = kblock[i] ^ 0x36;
+        memcpy(msgbuf + 64, msg, ml); msglen = 64 + ml;
+      } else {
+        msgbuf = (unsigned char *)malloc(64 + 32);
+        for (int i = 0; i < 64; i++) msgbuf[i] = kblock[i] ^ 0x5c;
+        memcpy(msgbuf + 64, digest, 32); msglen = 96;
+      }
+      size_t total = (((msglen + 8) / 64) + 1) * 64;
+      unsigned char *P = (unsigned char *)calloc(total, 1);
+      memcpy(P, msgbuf, msglen); free(msgbuf); msgbuf = NULL;
+      P[msglen] = 0x80;
+      uint64_t bits = (uint64_t)msglen * 8;
+      for (int j = 0; j < 8; j++) P[total - 1 - j] = (unsigned char)(bits >> (8 * j));
+      uint32_t st[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
+      for (size_t off = 0; off < total; off += 64) {
+        const unsigned char *blk = P + off;
+        uint32_t w[64];
+        for (int i=0;i<16;i++) w[i]=((uint32_t)blk[i*4]<<24)|((uint32_t)blk[i*4+1]<<16)|((uint32_t)blk[i*4+2]<<8)|(uint32_t)blk[i*4+3];
+        for (int i=16;i<64;i++) {
+          uint32_t s0=((w[i-15]>>7)|(w[i-15]<<25))^((w[i-15]>>18)|(w[i-15]<<14))^(w[i-15]>>3);
+          uint32_t s1=((w[i-2]>>17)|(w[i-2]<<15))^((w[i-2]>>19)|(w[i-2]<<13))^(w[i-2]>>10);
+          w[i]=w[i-16]+s0+w[i-7]+s1;
+        }
+        uint32_t a=st[0],b=st[1],c=st[2],d=st[3],e=st[4],f=st[5],g=st[6],h=st[7];
+        for (int i=0;i<64;i++) {
+          uint32_t S1=((e>>6)|(e<<26))^((e>>11)|(e<<21))^((e>>25)|(e<<7));
+          uint32_t ch=(e&f)^(~e&g);
+          uint32_t t1=h+S1+ch+K[i]+w[i];
+          uint32_t S0=((a>>2)|(a<<30))^((a>>13)|(a<<19))^((a>>22)|(a<<10));
+          uint32_t mj=(a&b)^(a&c)^(b&c);
+          uint32_t t2=S0+mj;
+          h=g;g=f;f=e;e=d+t1;d=c;c=b;b=a;a=t1+t2;
+        }
+        st[0]+=a;st[1]+=b;st[2]+=c;st[3]+=d;st[4]+=e;st[5]+=f;st[6]+=g;st[7]+=h;
+      }
+      free(P);
+      for (int j=0;j<8;j++) { digest[j*4]=(st[j]>>24)&0xff; digest[j*4+1]=(st[j]>>16)&0xff; digest[j*4+2]=(st[j]>>8)&0xff; digest[j*4+3]=st[j]&0xff; }
+      if (pass == 0) memcpy(kblock, digest, 32);   /* long key: use its hash */
+    }
+    char *out = (char *)malloc(65);
+    if (!out) return "";
+    for (int i = 0; i < 32; i++) snprintf(out + i * 2, 3, "%02x", digest[i]);
+    return out;
+    ```)
 
-;;; percent-decode -- decode a URL percent-encoded string.
-;;;
-;;; Parameters:
-;;;   s -- percent-encoded input (e.g. "Hello%20World" or "Hello+World")
-;;;
-;;; Returns:
-;;;   Decoded cstr. '+' is converted to space. Invalid %XX sequences are
-;;;   passed through unchanged.
-;;;
-;;; Example:
-;;;   (percent-decode "Hello%20World")  ; => "Hello World"
-;;;   (percent-decode "a+b")            ; => "a b"
-;;;
-;;; Since: Guestbook example
-(defn percent-decode [s : cstr] : cstr
-  (def len (cstr-len s))
-  (def out (vec-byte-alloc len))
-  (def i (ref 0))
-  (loop
-    (when (>= (deref i) len)
-      (break))
-    (def c (cstr-byte-at s (deref i)))
-    (cond
-      ; '+' -> space
-      (= c 43)
-      (do
-        (vec-byte-push out 32)
-        (set! i (+ (deref i) 1)))
-      ; '%XX' -> decoded byte
-      (and (= c 37) (<= (+ (deref i) 2) (- len 1)))
-      (do
-        (def hi (hex-digit-val (cstr-byte-at s (+ (deref i) 1))))
-        (def lo (hex-digit-val (cstr-byte-at s (+ (deref i) 2))))
-        (if (and (>= hi 0) (>= lo 0))
-          (do
-            (vec-byte-push out (+ (* hi 16) lo))
-            (set! i (+ (deref i) 3)))
-          (do
-            (vec-byte-push out c)
-            (set! i (+ (deref i) 1)))))
-      ; Ordinary character
-      :else
-      (do
-        (vec-byte-push out c)
-        (set! i (+ (deref i) 1)))))
-  (vec-byte->cstr out))
+  ;;; cstr-eq-ct -- constant-time equality, so comparing signatures leaks no timing.
+  (defn cstr-eq-ct [a : cstr b : cstr] : bool
+    ```c
+    size_t la = strlen(a), lb = strlen(b);
+    unsigned diff = (unsigned)(la ^ lb);
+    for (size_t i = 0; i < la && i < lb; i++) diff |= (unsigned)(a[i] ^ b[i]);
+    return diff == 0;
+    ```)
 
-; ---------------------------------------------------------------------------
-; HMAC token signing
-; ---------------------------------------------------------------------------
+  ;;; sign-token -- "<token>.<hmac-sha256 hex>" for a raw token under secret.
+  ;;;
+  ;;; Example:
+  ;;;   (sign-token "ab12" "s3cret")   ; => "ab12.<64 hex chars>"
+  ;;;
+  ;;; Since: Guestbook example
+  (defn sign-token [token : cstr secret : cstr] : cstr
+    (str+ token "." (hmac-sha256-hex secret token)))
 
-;;; sign-token -- append an HMAC-SHA256 signature to a raw token.
-;;;
-;;; Parameters:
-;;;   token  -- raw hex token string (64 hex chars)
-;;;   secret -- server secret bytes
-;;;
-;;; Returns:
-;;;   "token.signature" where signature is the hex-encoded HMAC-SHA256.
-;;;
-;;; Example:
-;;;   (sign-token "abc123" my-secret)  ; => "abc123.<hex-hmac>"
-;;;
-;;; Since: Guestbook example
-(defn sign-token [token : cstr, secret : bytes] : cstr
-  (def sig (hex-encode (hmac-sha256 secret (cstr->bytes token))))
-  (str token "." sig))
-
-;;; verify-token -- verify the HMAC signature and return the raw token.
-;;;
-;;; Parameters:
-;;;   signed -- "token.signature" cstr produced by sign-token
-;;;   secret -- server secret bytes
-;;;
-;;; Returns:
-;;;   (Option cstr) -- Some(raw-token) if valid, None if tampered or malformed.
-;;;
-;;; Example:
-;;;   (verify-token "abc123.<hex-hmac>" my-secret)  ; => (Some "abc123")
-;;;   (verify-token "abc123.bad-sig"   my-secret)   ; => (None)
-;;;
-;;; Since: Guestbook example
-(defn verify-token [signed : cstr, secret : bytes] : (Option cstr)
-  (def dot-idx (cstr-find signed "."))
-  (match dot-idx
-    (None) -> (None)
-    (Some idx) ->
-      (def token    (cstr-take signed idx))
-      (def sig      (cstr-drop signed (+ idx 1)))
-      (def expected (hex-encode (hmac-sha256 secret (cstr->bytes token))))
-      (if (cstr-eq? sig expected)
-        (Some token)
-        (None))))
+  ;;; verify-token -- (Some raw-token) when signed carries a valid signature.
+  ;;;
+  ;;; Returns (None) for a token with no signature, a malformed one, or one
+  ;;; whose signature does not match the secret.  The comparison is
+  ;;; constant-time.
+  ;;;
+  ;;; Since: Guestbook example
+  (defn verify-token [signed : cstr secret : cstr] : (Option cstr)
+    (let [dot (cstr-index-of signed "." 0)]
+      (if (< dot 0)
+        (none)
+        (let [token (cstr-slice signed 0 dot)
+              sig   (cstr-slice signed (+ dot 1) (cstr-len signed))]
+          (if (cstr-eq-ct sig (hmac-sha256-hex secret token))
+            (some token)
+            (none)))))))

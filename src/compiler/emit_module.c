@@ -859,6 +859,20 @@ static char *typed_fatshim_name(Type result_type, Type *param_types, uint8_t n_p
  * Filled from __tur_static_init rather than a static initializer: casting a
  * function pointer to int64_t is not an address constant, and S1b exists
  * precisely so startup work survives any C11 front end (c2mir included). */
+bool ensure_fatbox_keep(EmitCtx *ctx) {
+    if (!ctx || !ctx->thunk_typedefs) return false;
+    if (ctx->fatbox_keep_emitted) return true;
+    ctx->fatbox_keep_emitted = true;
+    buf_puts(ctx->thunk_typedefs,
+        "/* fn-value-fat-normalization: no-op drop glue for statically (or, for\n"
+        " * a proven non-retaining sink, stack-) allocated { shim, orig } boxes.\n"
+        " * tur_closure_drop treats a NULL header as \"free the base allocation\",\n"
+        " * which would free() a non-heap address; this makes every drop of such\n"
+        " * a box a no-op. */\n"
+        "static void __tur_fatbox_keep(void *__e) { (void)__e; }\n");
+    return true;
+}
+
 const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
                                         const char *fnptr) {
     if (!ctx || !ctx->fatbox_init || !ctx->thunk_typedefs) return NULL;
@@ -870,9 +884,7 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
     for (uint32_t i = 0; i < ctx->n_fatbox_keys; i++) {
         if (strcmp(ctx->fatbox_keys[i], key.data) == 0) {
             buf_free(&key);
-            static char name[96];
-            snprintf(name, sizeof name, "__tur_fatbox_%u", (unsigned)i);
-            return name;
+            return ctx->fatbox_names[i];
         }
     }
     if (ctx->n_fatbox_keys >= ctx->cap_fatbox_keys) {
@@ -880,6 +892,9 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
         char **nn = (char **)realloc(ctx->fatbox_keys, nc * sizeof(char *));
         if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
         ctx->fatbox_keys = nn;
+        char **nm = (char **)realloc(ctx->fatbox_names, nc * sizeof(char *));
+        if (!nm) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatbox_names = nm;
         ctx->cap_fatbox_keys = nc;
     }
     uint32_t idx = ctx->n_fatbox_keys++;
@@ -887,14 +902,19 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
     if (!ctx->fatbox_keys[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
     buf_free(&key);
 
-    if (idx == 0) {
-        buf_puts(ctx->thunk_typedefs,
-            "/* fn-value-fat-normalization: no-op drop glue for statically\n"
-            " * allocated { shim, orig } boxes.  tur_closure_drop treats a NULL\n"
-            " * header as \"free the base allocation\", which would free() a\n"
-            " * static address; this makes every drop of such a box a no-op. */\n"
-            "static void __tur_fatbox_keep(void *__e) { (void)__e; }\n");
+    /* One OWNED name per box, freed with the keys.  Not a function-scoped
+     * `static char[96]`: the caller that holds two of these -- or stashes one
+     * and emits later -- would then get the same spelling twice, with no crash
+     * and no diagnostic, just wrong C.  See
+     * docs/archive/c-name-accessors-share-static-buffers.md. */
+    {
+        char nb[96];
+        snprintf(nb, sizeof nb, "__tur_fatbox_%u", (unsigned)idx);
+        ctx->fatbox_names[idx] = strdup(nb);
+        if (!ctx->fatbox_names[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
     }
+
+    ensure_fatbox_keep(ctx);
     /* The drop-glue header is a STATIC initializer, not a fill: `__a` is the
      * union's first member and occupies exactly the header slot, and a
      * function-pointer-to-void* conversion is an address constant (the
@@ -918,9 +938,7 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
         "      __s[1] = (int64_t)(intptr_t)%s; }\n",
         (unsigned)idx, shim, fnptr);
 
-    static char name[96];
-    snprintf(name, sizeof name, "__tur_fatbox_%u", (unsigned)idx);
-    return name;
+    return ctx->fatbox_names[idx];
 }
 
 /* catch-unwind-aggregate-return-miscompiled: the per-type boxing trampoline a
@@ -1424,6 +1442,150 @@ char *ensure_fat_aggregate_spill_shim(EmitCtx *ctx, Type result_type,
     return name;
 }
 
+/* erased-float-carrier (the float32 residue of erased-generic-field-read-
+ * overruns-subword-monomorph-box): a poly wrapper carries a float-class
+ * argument/result NATIVELY (`float`/`double`, xmm0) so it agrees with a typed
+ * `:fn` cast or a typed poly-to-fat shim -- but an ERASED typeclass-method
+ * sink (`g : (fn [a] b)`) is compiled once for every `a` and invokes the thunk
+ * through `((int64_t (*)(void*, int64_t))g.fn)`: integer registers in, RAX
+ * out.  The two ABIs cannot both be the thunk, so at the positions the sink
+ * reads as the carrier we bridge: the shim takes/returns the int64 BITS of
+ * the float (tur_sc_bits_f32 / tur_sc_f32_from_bits and the f64 twins -- a
+ * memcpy, byte-positioned, so a float32 lands in the first four bytes, the
+ * same bytes the erased field reader recovers it from) and calls the native
+ * wrapper.  Non-erased positions keep the wrapper's own C type and are
+ * forwarded untouched. */
+static const char *float_carrier_kind(const char *cn) {
+    if (!cn) return NULL;
+    if (strcmp(cn, "float") == 0) return "f32";
+    if (strcmp(cn, "double") == 0) return "f64";
+    return NULL;
+}
+
+static bool float_carrier_shim_needed(Type result_type, Type *param_types,
+                                      uint8_t n_params, uint64_t erased_mask,
+                                      bool erased_result) {
+    if (erased_result && float_carrier_kind(type_c_name(result_type))) return true;
+    for (uint8_t i = 0; i < n_params; i++) {
+        if ((erased_mask & ARG_IDX_BIT(i)) &&
+            float_carrier_kind(type_c_name(param_types[i])))
+            return true;
+    }
+    return false;
+}
+
+static bool float_carrier_shim_register(EmitCtx *ctx, const char *name) {
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return false;
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    return true;
+}
+
+/* Spell the shim's own signature and the argument/result bridges.  `callee`
+ * is the expression that names the native thunk (a wrapper name, or a cast
+ * `__f` read out of the env). */
+static void float_carrier_shim_body(Buf *target, const char *name,
+                                    const char *callee, Type result_type,
+                                    Type *param_types, uint8_t n_params,
+                                    uint64_t erased_mask, bool erased_result) {
+    const char *rc = type_c_name(result_type);
+    const char *rk = erased_result ? float_carrier_kind(rc) : NULL;
+    buf_printf(target, "static %s %s(void *__e", rk ? "int64_t" : rc, name);
+    for (uint8_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        bool bits = (erased_mask & ARG_IDX_BIT(i)) && float_carrier_kind(pc);
+        buf_printf(target, ", %s a%u", bits ? "int64_t" : pc, (unsigned)i);
+    }
+    buf_puts(target, ") {\n    ");
+    buf_printf(target, "%s __r = %s(__e", rc, callee);
+    for (uint8_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        const char *pk = (erased_mask & ARG_IDX_BIT(i)) ? float_carrier_kind(pc) : NULL;
+        if (pk) buf_printf(target, ", tur_sc_%s_from_bits(a%u)", pk, (unsigned)i);
+        else buf_printf(target, ", a%u", (unsigned)i);
+    }
+    buf_puts(target, ");\n    ");
+    if (rk) buf_printf(target, "return tur_sc_bits_%s(__r);\n}\n", rk);
+    else buf_puts(target, "return __r;\n}\n");
+}
+
+char *ensure_float_carrier_shim(EmitCtx *ctx, const char *real_fn,
+                                Type result_type, Type *param_types,
+                                uint8_t n_params, uint64_t erased_mask,
+                                bool erased_result) {
+    if (!float_carrier_shim_needed(result_type, param_types, n_params,
+                                   erased_mask, erased_result))
+        return NULL;
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_fltcarrier_");
+    append_sanitized_c_token(&nb, real_fn);
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    if (!float_carrier_shim_register(ctx, name)) return name;
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    /* Early section, ahead of the wrapper's own forward declaration: prototype
+     * it first (same reason as the aggregate spill shim). */
+    buf_printf(target, "static %s %s(void *", type_c_name(result_type), real_fn);
+    for (uint8_t i = 0; i < n_params; i++)
+        buf_printf(target, ", %s", type_c_name(param_types[i]));
+    buf_puts(target, ");\n");
+    float_carrier_shim_body(target, name, real_fn, result_type, param_types,
+                            n_params, erased_mask, erased_result);
+    return name;
+}
+
+char *ensure_fat_float_carrier_shim(EmitCtx *ctx, Type result_type,
+                                    Type *param_types, uint8_t n_params,
+                                    uint64_t erased_mask, bool erased_result) {
+    if (!float_carrier_shim_needed(result_type, param_types, n_params,
+                                   erased_mask, erased_result))
+        return NULL;
+    const char *rc = type_c_name(result_type);
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_fatfltcarrier_");
+    append_sanitized_c_token(&nb, rc);
+    for (uint8_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        if (!pc) { buf_free(&nb); return NULL; }
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, pc);
+    }
+    buf_printf(&nb, "_m%llx%s", (unsigned long long)erased_mask,
+               erased_result ? "r" : "");
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    if (!float_carrier_shim_register(ctx, name)) return name;
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    /* The native thunk is `__fn`, slot 0 of every closure env (the offset the
+     * uncast fat-closure emit reads); cast it to its real signature inside the
+     * call expression so the bridged call is a single statement. */
+    Buf callee; buf_init(&callee);
+    buf_printf(&callee, "((%s (*)(void *", rc);
+    for (uint8_t i = 0; i < n_params; i++)
+        buf_printf(&callee, ", %s", type_c_name(param_types[i]));
+    buf_puts(&callee, "))(intptr_t)((int64_t *)__e)[0])");
+    buf_putc(&callee, '\0');
+    float_carrier_shim_body(target, name, callee.data, result_type, param_types,
+                            n_params, erased_mask, erased_result);
+    buf_free(&callee);
+    return name;
+}
+
 /* let-bound-noncapturing-lambda-segfaults-as-fn-arg: adapter for a `:fn` value
  * that is a BARE C function pointer rather than a closure box.
  *
@@ -1596,6 +1758,82 @@ char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type,
     buf_puts(target, "))(intptr_t)__b[1])((void *)(intptr_t)__b[2]");
     for (uint32_t i = 0; i < n_args; i++) buf_printf(target, ", a%u", (unsigned)i);
     buf_puts(target, ");\n}\n");
+    return name;
+}
+
+char *ensure_typed_poly_to_fat_erased(EmitCtx *ctx, Type result_type,
+                                      const Type *arg_types, uint32_t n_args,
+                                      uint64_t erased_mask, bool erased_result) {
+    if (!use_typed_thunk_abi(result_type, (Type *)arg_types, (uint8_t)n_args)) return NULL;
+    const char *rc = type_c_name(result_type);
+    const char *rk = erased_result ? float_carrier_kind(rc) : NULL;
+    bool any = rk != NULL;
+    for (uint32_t i = 0; !any && i < n_args; i++) {
+        if ((erased_mask & ARG_IDX_BIT(i)) &&
+            float_carrier_kind(thunk_param_slot_c_name(arg_types[i])))
+            any = true;
+    }
+    if (!any) return NULL;
+
+    char *base = typed_poly_to_fat_name(result_type, arg_types, n_args);
+    Buf nb; buf_init(&nb);
+    buf_printf(&nb, "%s_erased_m%llx%s", base, (unsigned long long)erased_mask,
+               erased_result ? "r" : "");
+    buf_putc(&nb, '\0');
+    free(base);
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < ctx->n_poly_fatshim_names; i++) {
+        if (strcmp(ctx->poly_fatshim_names[i], name) == 0) return name;
+    }
+    if (ctx->n_poly_fatshim_names >= ctx->cap_poly_fatshim_names) {
+        uint32_t new_cap = ctx->cap_poly_fatshim_names ? ctx->cap_poly_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->poly_fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->poly_fatshim_names = nn;
+        ctx->cap_poly_fatshim_names = new_cap;
+    }
+    ctx->poly_fatshim_names[ctx->n_poly_fatshim_names++] = strdup(name);
+    if (!ctx->poly_fatshim_names[ctx->n_poly_fatshim_names - 1]) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+
+    /* static R name(void *__e, A0 a0, ...) {
+     *     int64_t *__b = (int64_t *)__e;
+     *     <R'> __r = ((R' (*)(void *, A0', ...))(intptr_t)__b[1])((void *)__b[2], a0', ...);
+     *     return <bridge>(__r);
+     * }
+     * where an erased float position is int64_t in the stored thunk's
+     * signature and crosses through the tur_sc bits helpers. */
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
+    buf_printf(target, "static %s %s(void *__e", rc, name);
+    for (uint32_t i = 0; i < n_args; i++)
+        buf_printf(target, ", %s a%u", thunk_param_slot_c_name(arg_types[i]), (unsigned)i);
+    buf_puts(target, ") {\n    int64_t *__b = (int64_t *)__e;\n    ");
+    const char *inner_rc = rk ? "int64_t" : rc;
+    if (has_ret) buf_printf(target, "%s __r = ", inner_rc);
+    buf_printf(target, "((%s (*)(void *", inner_rc);
+    for (uint32_t i = 0; i < n_args; i++) {
+        const char *pc = thunk_param_slot_c_name(arg_types[i]);
+        bool bits = (erased_mask & ARG_IDX_BIT(i)) && float_carrier_kind(pc);
+        buf_printf(target, ", %s", bits ? "int64_t" : pc);
+    }
+    buf_puts(target, "))(intptr_t)__b[1])((void *)(intptr_t)__b[2]");
+    for (uint32_t i = 0; i < n_args; i++) {
+        const char *pc = thunk_param_slot_c_name(arg_types[i]);
+        const char *pk = (erased_mask & ARG_IDX_BIT(i)) ? float_carrier_kind(pc) : NULL;
+        if (pk) buf_printf(target, ", tur_sc_bits_%s(a%u)", pk, (unsigned)i);
+        else buf_printf(target, ", a%u", (unsigned)i);
+    }
+    buf_puts(target, ");\n");
+    if (has_ret) {
+        if (rk) buf_printf(target, "    return tur_sc_%s_from_bits(__r);\n", rk);
+        else buf_puts(target, "    return __r;\n");
+    }
+    buf_puts(target, "}\n");
     return name;
 }
 
@@ -1972,8 +2210,17 @@ static Binding *emit_find_passed_spec_closure(const Expr *e,
             return emit_find_passed_spec_closure(e->as.fn_to_fat_.inner, bindings, n_bindings, arena);
         case EX_POLY_TO_FAT:
             return emit_find_passed_spec_closure(e->as.poly_to_fat_.inner, bindings, n_bindings, arena);
-        case EX_LET:
+        case EX_LET: {
+            /* RM1 (bind chains): a passed closure the call-site hoist moved
+             * into a `__borrowc` let now sits in the let's INIT, with the
+             * call referencing the binding -- so look at the inits too. */
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                Binding *r = emit_find_passed_spec_closure(
+                    e->as.let_.bindings[i].init, bindings, n_bindings, arena);
+                if (r) return r;
+            }
             return emit_find_passed_spec_closure(e->as.let_.body, bindings, n_bindings, arena);
+        }
         case EX_DO: {
             for (uint32_t i = 0; i < e->as.do_.n; i++) {
                 Binding *r = emit_find_passed_spec_closure(
@@ -2051,6 +2298,10 @@ static void emit_collect_passed_spec_closures(
                                               n_bindings, arena, out, cap, n_out);
             return;
         case EX_LET:
+            /* As in the single-result finder: a hoisted `__borrowc` init. */
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                emit_collect_passed_spec_closures(e->as.let_.bindings[i].init, bindings,
+                                                  n_bindings, arena, out, cap, n_out);
             emit_collect_passed_spec_closures(e->as.let_.body, bindings,
                                               n_bindings, arena, out, cap, n_out);
             return;
@@ -6472,6 +6723,58 @@ static EmitLocalVarEntry *g_lv_tab;
 static uint32_t           g_lv_tab_n;
 static uint32_t           g_lv_tab_cap;
 
+/* inline-c-option-carrier-box-leaks: the OWNED-CARRIER side table.
+ *
+ * An inline-C body declared `: (Option T)` builds its result with
+ * `tur_some_ptr` / `tur_box_*`, which malloc the carrier box.  The allocation
+ * happens inside a C body, so no elaborated expression corresponds to it and
+ * nothing could be given ownership -- the box leaked once per call, and that
+ * is the form the inline-C results guide recommends.
+ *
+ * Ownership is recorded ONCE, where the fact is known (the call-result temp in
+ * emit_value), and consumed at ONE place (the carrier->concrete bridge, which
+ * copies the box's contents into an aggregate and previously abandoned it).
+ * Routing it through the bridge is what makes every consumer position -- let
+ * binding, call argument, match scrutinee, ctor argument, container element --
+ * free the box without each one needing its own rule.
+ *
+ * Marks are CLEARED when consumed, so a temp bridged twice cannot double-free.
+ * Same lifetime and shape as the localvar table above; reset with it. */
+static char   **g_own_tab;
+static uint32_t g_own_tab_n;
+static uint32_t g_own_tab_cap;
+
+void emit_owned_carrier_mark(const char *cname) {
+    if (!cname) return;
+    for (uint32_t i = 0; i < g_own_tab_n; i++)
+        if (strcmp(g_own_tab[i], cname) == 0) return;
+    if (g_own_tab_n == g_own_tab_cap) {
+        uint32_t nc = g_own_tab_cap ? g_own_tab_cap * 2 : 64;
+        char **nt = (char **)realloc(g_own_tab, nc * sizeof(char *));
+        if (!nt) return;
+        g_own_tab = nt;
+        g_own_tab_cap = nc;
+    }
+    g_own_tab[g_own_tab_n++] = strdup(cname);
+}
+
+bool emit_owned_carrier_is(const char *cname) {
+    if (!cname) return false;
+    for (uint32_t i = 0; i < g_own_tab_n; i++)
+        if (strcmp(g_own_tab[i], cname) == 0) return true;
+    return false;
+}
+
+void emit_owned_carrier_clear(const char *cname) {
+    if (!cname) return;
+    for (uint32_t i = 0; i < g_own_tab_n; i++)
+        if (strcmp(g_own_tab[i], cname) == 0) {
+            free(g_own_tab[i]);
+            g_own_tab[i] = g_own_tab[--g_own_tab_n];
+            return;
+        }
+}
+
 void emit_localvar_reset(void) {
     for (uint32_t i = 0; i < g_lv_tab_n; i++) {
         free(g_lv_tab[i].cname);
@@ -6481,6 +6784,11 @@ void emit_localvar_reset(void) {
     g_lv_tab = NULL;
     g_lv_tab_n = 0;
     g_lv_tab_cap = 0;
+    for (uint32_t i = 0; i < g_own_tab_n; i++) free(g_own_tab[i]);
+    free(g_own_tab);
+    g_own_tab = NULL;
+    g_own_tab_n = 0;
+    g_own_tab_cap = 0;
 }
 
 void emit_localvar_record_ctype(const char *cname, const char *ctype) {
@@ -6877,7 +7185,7 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
     const CtorDef *fdc = def->ctors[ci];
     for (uint32_t fi = 0; fi < fdc->n_fields; fi++) {
         if (fdc->fields[fi].drop_inner_def) {
-            char *imn = mangle_field_name(fdc->fields[fi].drop_inner_def->name);
+            char *imn = mangle_adt_name(fdc->fields[fi].drop_inner_def->name);
             buf_printf(out, "static void drop_glue_tur_adt_%s(void *);\n", imn);
             buf_printf(out, "static void walk_glue_tur_adt_%s(void *, RcWalkChildFn, void *);\n",
                        imn);
@@ -6914,7 +7222,7 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
              * aggregate.  Its own drop glue releases the box's owners and frees
              * the box (it is a plain heap allocation, uniquely owned by this
              * value under the same move discipline a direct rc field relies on). */
-            char *imn = mangle_field_name(ctor->fields[fi].drop_inner_def->name);
+            char *imn = mangle_adt_name(ctor->fields[fi].drop_inner_def->name);
             buf_printf(out,
                        "    if (s->%s) drop_glue_tur_adt_%s((void *)(intptr_t)s->%s);\n",
                        mp, imn, mp);
@@ -6996,7 +7304,7 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
         } else if (ctor->fields[fi].drop_inner_def) {
             /* Recurse into the boxed sub-aggregate so its own rc children are
              * enumerated for the cycle collector. */
-            char *imn = mangle_field_name(ctor->fields[fi].drop_inner_def->name);
+            char *imn = mangle_adt_name(ctor->fields[fi].drop_inner_def->name);
             buf_printf(out,
                        "    if (s->%s) walk_glue_tur_adt_%s((void *)(intptr_t)s->%s, cb, ctx);\n",
                        mp, imn, mp);
@@ -7113,7 +7421,7 @@ static void emit_byval_ctor_prologue(Buf *out, const char *adt_c_name,
                                      const CtorDef *ctor, bool flat) {
     buf_printf(out, "    %s __r;\n", adt_c_name);
     if (flat) return;
-    char *mctor = mangle_field_name(ctor->name);
+    char *mctor = mangle_adt_name(ctor->name);
     buf_printf(out, "    __r.tag = %u;\n", ctor->tag);
     buf_printf(out,
         "    memset((char *)&__r + sizeof(__r.tag), 0, "
@@ -7150,7 +7458,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
     if (def && def->is_opaque) return;
     char adt_c_name[256];
     {
-        char *_mn = mangle_field_name(def->name);
+        char *_mn = mangle_adt_name(def->name);
         snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
         free(_mn);
     }
@@ -7185,7 +7493,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
         }
         buf_printf(out, "} %s;\n", adt_c_name);
         /* Surface alias so inline-C `sizeof(<Name>)` / `(<Name> *)p` resolve. */
-        char *sname = mangle_field_name(def->name);
+        char *sname = mangle_adt_name(def->name);
         buf_printf(out, "typedef %s %s;\n\n", adt_c_name, sname);
         free(sname);
     } else {
@@ -7194,7 +7502,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
     buf_printf(out, "    union {\n");
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
-        char *mctor = mangle_field_name(ctor->name);
+        char *mctor = mangle_adt_name(ctor->name);
         buf_printf(out, "        struct {");
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
@@ -7227,7 +7535,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
         for (uint32_t fi = 0; fi < crec->n_fields; fi++)
             if (!crec->fields[fi].name) { all_named = false; break; }
         if (all_named) {
-            char *sname = mangle_field_name(def->name);
+            char *sname = mangle_adt_name(def->name);
             buf_printf(out, "#ifndef TUR_COMPAT_%s\n#define TUR_COMPAT_%s\n",
                        sname, sname);
             buf_printf(out, "typedef struct %s {\n", sname);
@@ -7275,7 +7583,10 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
     /* Emit constructor functions */
     for (uint32_t ci = 0; ci < def->n_ctors && !skip_heap_generic_base; ci++) {
         CtorDef *ctor = def->ctors[ci];
-        char *mctor = mangle_field_name(ctor->name);
+        /* duplicate-ctor-names-collide-in-emitted-c: the FUNCTION symbol carries
+         * the owning ADT (`ctor_<Adt>_<Ctor>`).  The union member inside this
+         * ADT's own struct stays bare -- it is already scoped by the struct. */
+        char *mctor = mangle_ctor_symbol(def, ctor->name);
         const char *ctor_ret_c = heap ? adt_ptr_name : byval ? adt_c_name : "int64_t";
         buf_printf(out, "static %s ctor_%s(",
                    ctor_ret_c, mctor);
@@ -7346,6 +7657,11 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
             buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
         }
         buf_printf(out, "}\n\n");
+        /* duplicate-ctor-names-collide-in-emitted-c: keep the bare `ctor_<Ctor>`
+         * spelling working for hand-written inline C when exactly one ADT owns
+         * the name (stdlib/either.tur documents `ctor_Left(v)`).  Ambiguous
+         * names get no alias -- see emit_ctor_bare_alias. */
+        emit_ctor_bare_alias(out, def, ctor);
         free(mctor);
     }
 }
@@ -8115,6 +8431,15 @@ static bool preamble_uses_serial(const Expr *e) {
             for (uint32_t i = 0; i < e->as.program.n; i++)
                 if (preamble_uses_serial(e->as.program.items[i])) return true;
             return false;
+        case EX_DEFMODULE:
+            /* guestbook-example-has-no-import-graph: a serial-reset inside a
+             * (defmodule ...) body was invisible here, so a module program
+             * that captured a continuation was emitted without the DK serial
+             * runtime and failed at cc with an implicit __sk_register. */
+            if (e->as.defmodule_.mod)
+                for (uint32_t i = 0; i < e->as.defmodule_.mod->n_body; i++)
+                    if (preamble_uses_serial(e->as.defmodule_.mod->body[i])) return true;
+            return false;
         case EX_FN_DEF:
             return e->as.fn_def_.fn && preamble_uses_serial(e->as.fn_def_.fn->body);
         case EX_FN:
@@ -8147,6 +8472,17 @@ static bool preamble_uses_serial(const Expr *e) {
         case EX_RETURN: return e->as.return_.value && preamble_uses_serial(e->as.return_.value);
         case EX_DEFER:  return preamble_uses_serial(e->as.defer_.body);
         case EX_BUILTIN:
+            /* A resume/serialize/deserialize on a serial-cont value is also a
+             * reference to the serial runtime: stdlib serial-resume is `(k v)`
+             * on a `k : serial-cont`, which elab_call lowers straight onto
+             * tur_serial_cont_resume.  A program that loads stdlib/serial.tur
+             * for its Serializable instances (no serial-shift of its own)
+             * still emits that defn, and without this case the call is
+             * undeclared -- a warning under gcc, a hard error under Apple
+             * clang (the macOS CI leg failed exactly there). */
+            if (e->as.builtin.spec && e->as.builtin.spec->c_op &&
+                strncmp(e->as.builtin.spec->c_op, "tur_serial_cont_", 16) == 0)
+                return true;
             for (uint32_t i = 0; i < e->as.builtin.n; i++)
                 if (preamble_uses_serial(e->as.builtin.args[i])) return true;
             return false;
@@ -12786,6 +13122,7 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.n_poly_fatshim_names = 0;
     ctx.cap_poly_fatshim_names = 0;
     ctx.fatbox_keys = NULL;
+    ctx.fatbox_names = NULL;
     ctx.n_fatbox_keys = 0;
     ctx.cap_fatbox_keys = 0;
     ctx.exbox_dict_names = NULL;
@@ -12870,14 +13207,24 @@ int emit_program(Buf *out, const Expr *program) {
 
     /* Check if user defined a main function */
     bool user_has_main = false;
+    /* examples-have-no-suite-coverage (section 2): a top-level fn whose name
+     * is a near-miss of `main` -- the tell that an entry point was intended
+     * when none is invoked (see the W0624 emission below). */
+    const FnDef *near_miss_main = NULL;
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
         if (e->kind == EX_FN_DEF) {
             FnDef *fd = e->as.fn_def_.fn;
-            if (strcmp(fd->binding->name->name, "main") == 0) {
+            const char *nm = fd->binding->name->name;
+            if (strcmp(nm, "main") == 0) {
                 user_has_main = true;
                 break;
             }
+            if (!near_miss_main &&
+                (strcmp(nm, "-main") == 0 || strcmp(nm, "main-") == 0 ||
+                 strcmp(nm, "Main") == 0 || strcmp(nm, "_main") == 0 ||
+                 strcmp(nm, "MAIN") == 0 || strcmp(nm, "--main") == 0))
+                near_miss_main = fd;
         }
     }
 
@@ -12895,7 +13242,7 @@ int emit_program(Buf *out, const Expr *program) {
             if (def && def->superseded) continue;
             char adt_c_name[256];
             {
-                char *_mn = mangle_field_name(def->name);
+                char *_mn = mangle_adt_name(def->name);
                 snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
                 free(_mn);
             }
@@ -12966,7 +13313,7 @@ int emit_program(Buf *out, const Expr *program) {
                     free(fname);
                 }
                 buf_printf(&early_file, "} %s;\n", adt_c_name);
-                char *sname = mangle_field_name(def->name);
+                char *sname = mangle_adt_name(def->name);
                 buf_printf(&early_file, "typedef %s %s;\n\n", adt_c_name, sname);
                 free(sname);
             } else {
@@ -12975,7 +13322,7 @@ int emit_program(Buf *out, const Expr *program) {
             buf_printf(&early_file, "    union {\n");
             for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
                 CtorDef *ctor = def->ctors[ci];
-                char *mctor = mangle_field_name(ctor->name);
+                char *mctor = mangle_adt_name(ctor->name);
                 buf_printf(&early_file, "        struct {");
                 for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                     const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
@@ -13001,7 +13348,7 @@ int emit_program(Buf *out, const Expr *program) {
                 for (uint32_t fi = 0; fi < crec->n_fields; fi++)
                     if (!crec->fields[fi].name) { all_named = false; break; }
                 if (all_named) {
-                    char *sname = mangle_field_name(def->name);
+                    char *sname = mangle_adt_name(def->name);
                     buf_printf(&early_file,
                                "#ifndef TUR_COMPAT_%s\n#define TUR_COMPAT_%s\n",
                                sname, sname);
@@ -13031,7 +13378,10 @@ int emit_program(Buf *out, const Expr *program) {
             /* Emit constructor functions */
             for (uint32_t ci = 0; ci < def->n_ctors && !skip_heap_generic_base; ci++) {
                 CtorDef *ctor = def->ctors[ci];
-                char *mctor = mangle_field_name(ctor->name);
+                /* duplicate-ctor-names-collide-in-emitted-c: same ADT-qualified
+                 * FUNCTION symbol as emit_adt_typedef_and_ctors above.  These two
+                 * sites must agree or the call names a symbol nothing defines. */
+                char *mctor = mangle_ctor_symbol(def, ctor->name);
                 const char *ctor_ret_c2 =
                     heap ? adt_ptr_name : byval ? adt_c_name : "int64_t";
                 buf_printf(&early_file, "static %s ctor_%s(", ctor_ret_c2, mctor);
@@ -13071,6 +13421,26 @@ int emit_program(Buf *out, const Expr *program) {
                         free(mp);
                     }
                     buf_printf(&early_file, "    return __r;\n");
+                } else if (adt_ctor_is_null_none(def, ctor)) {
+                    /* SR3 slice A, the mirror that was missed.  Slice A made
+                     * the carrier None the null pointer at three producers --
+                     * the monomorph ctor (types.c), the base ctor in
+                     * emit_adt_typedef_and_ctors, and the preamble's
+                     * tur_none() -- but emit_program emits base ctors HERE
+                     * instead, and this copy never got the branch.  So an
+                     * ERASED `(none)` still malloc'd a `tag = 0` box that
+                     * nothing frees: measured leaking in the corpus from
+                     * `ctor_None -> none -> ...` traces.
+                     *
+                     * The read side has accepted NULL as tag 0 since slice A
+                     * (`__scrut ? __scrut->tag : 0`, tur_is_some(0) false), so
+                     * this is purely removing an allocation nobody wanted.
+                     *
+                     * The branch order matches the other site exactly --
+                     * byval, then null-None, then the boxed default -- because
+                     * these two emitters are supposed to be mirrors and the
+                     * whole defect is that they had drifted. */
+                    buf_puts(&early_file, "    return 0;\n");
                 } else {
                     /* Mirror of the emit_adt_typedef_and_ctors site: slab only
                      * when nothing will ever free this box. */
@@ -13087,6 +13457,10 @@ int emit_program(Buf *out, const Expr *program) {
                     buf_printf(&early_file, "    return (int64_t)(intptr_t)__r;\n");
                 }
                 buf_printf(&early_file, "}\n\n");
+                /* duplicate-ctor-names-collide-in-emitted-c: mirror of the alias
+                 * emitted by emit_adt_typedef_and_ctors -- both paths define the
+                 * ctor, so both must offer the same bare-name compatibility. */
+                emit_ctor_bare_alias(&early_file, def, ctor);
                 free(mctor);
             }
         }
@@ -14214,6 +14588,22 @@ int emit_program(Buf *out, const Expr *program) {
 
     if (!user_has_main) {
         /* Only generate main() if user didn't define one */
+        /* examples-have-no-suite-coverage (section 2): the synthesized main
+         * runs static init and returns 0.  With NO top-level statements to
+         * fold into it, the program does nothing -- which is what
+         * `examples/minikanren` and `examples/snake` silently did for weeks
+         * with a `-main` nobody called.  A near-miss name is the signal an
+         * entry point was intended; say so at its definition. */
+        if (!body.len && near_miss_main) {
+            diag_emit_with_code(DIAG_WARNING, near_miss_main->binding->span,
+                                TUR_W0624_NO_ENTRY_POINT_NEAR_MISS,
+                                "no `main` and no top-level statements: the "
+                                "synthesized entry point does nothing, so this "
+                                "program will run and print nothing. `%s` is "
+                                "never called -- name it `main`, or call it from "
+                                "a top-level form",
+                                near_miss_main->binding->name->name);
+        }
         buf_puts(out, "int main(int argc, char **argv) {\n");
         /* S1b: first statement, matching where the constructors used to run
          * (before the Windows stdio mode switch and before g_panic_trace). */
@@ -14300,12 +14690,22 @@ int emit_program(Buf *out, const Expr *program) {
      * never materialized (a void-returning consumer), so free the names too. */
     for (uint32_t _i = 0; _i < ctx.n_any_pending; _i++) free(ctx.any_pending[_i]);
     free(ctx.any_pending);
+    for (uint32_t _i = 0; _i < ctx.n_sum_pending; _i++) free(ctx.sum_pending[_i]);
+    free(ctx.sum_pending);
+    free(ctx.sum_pending_types);
+    for (uint32_t _i = 0; _i < ctx.n_vsp_pending; _i++) free(ctx.vsp_pending[_i]);
+    free(ctx.vsp_pending);
+    free(ctx.vsp_pending_types);
     for (uint32_t _i = 0; _i < ctx.n_any_scope_drops; _i++) free(ctx.any_scope_drops[_i]);
     free(ctx.any_scope_drops);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
-    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
+    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) {
+        free(ctx.fatbox_keys[i]);
+        free(ctx.fatbox_names[i]);
+    }
     free(ctx.fatbox_keys);
+    free(ctx.fatbox_names);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
     for (uint8_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
@@ -15204,6 +15604,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.n_poly_fatshim_names = 0;
     ctx.cap_poly_fatshim_names = 0;
     ctx.fatbox_keys = NULL;
+    ctx.fatbox_names = NULL;
     ctx.n_fatbox_keys = 0;
     ctx.cap_fatbox_keys = 0;
     ctx.exbox_dict_names = NULL;
@@ -15724,12 +16125,22 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
      * never materialized (a void-returning consumer), so free the names too. */
     for (uint32_t _i = 0; _i < ctx.n_any_pending; _i++) free(ctx.any_pending[_i]);
     free(ctx.any_pending);
+    for (uint32_t _i = 0; _i < ctx.n_sum_pending; _i++) free(ctx.sum_pending[_i]);
+    free(ctx.sum_pending);
+    free(ctx.sum_pending_types);
+    for (uint32_t _i = 0; _i < ctx.n_vsp_pending; _i++) free(ctx.vsp_pending[_i]);
+    free(ctx.vsp_pending);
+    free(ctx.vsp_pending_types);
     for (uint32_t _i = 0; _i < ctx.n_any_scope_drops; _i++) free(ctx.any_scope_drops[_i]);
     free(ctx.any_scope_drops);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
-    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
+    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) {
+        free(ctx.fatbox_keys[i]);
+        free(ctx.fatbox_names[i]);
+    }
     free(ctx.fatbox_keys);
+    free(ctx.fatbox_names);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
     for (uint8_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);

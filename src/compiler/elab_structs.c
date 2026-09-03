@@ -4870,6 +4870,18 @@ match_fail:
         for (uint32_t ai = 0; ai < n_arms; ai++) free(arm_lin_states[ai]);
         free(arm_lin_states);
     }
+    /* The match-arm move-state snapshot (taken above, released on the normal
+     * path after the merge) was not released here, so every match that failed
+     * to elaborate -- an unknown function in an arm body, a bad pattern --
+     * leaked it, and a Debug `tur check` on such a program ended in a
+     * LeakSanitizer report on top of the diagnostic.  All three are NULLed
+     * after their normal free, so this is safe on either path. */
+    if (arm_move_states) {
+        for (uint32_t ai = 0; ai < n_arms; ai++) free(arm_move_states[ai]);
+        free(arm_move_states);
+    }
+    free(match_move_before);
+    free(match_move_bindings);
     free(arm_diverges);
     free(match_lin_before);
     free(match_lin_bindings);

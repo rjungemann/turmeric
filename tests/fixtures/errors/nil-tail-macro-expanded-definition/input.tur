@@ -1,0 +1,18 @@
+; The residual the report named: TUR-E0713 rejects a definition in tail position,
+; but only for definition kinds that keep a distinct Expr kind AND match an exact
+; source head -- so a definition that arrives via MACRO EXPANSION, and has
+; already collapsed to EX_NIL_LIT by the time the body is checked, slipped past
+; it and returned 0 silently.
+;
+; The general nil-tail check catches it, which is the argument the report made
+; for doing the general fix rather than extending TUR-E0713's head list.
+; A definition written literally in tail position still gets TUR-E0713's more
+; specific "check for a missing close paren" message -- that diagnostic is not
+; subsumed, it fires first.
+;
+; See docs/archive/nil-tail-not-checked-against-declared-return.md.
+(defmacro make-a-class [] (quote (defclass Foo [a] (bar [x] : int))))
+
+(defn f [] : int (make-a-class))
+
+(defn main [] : int (f))

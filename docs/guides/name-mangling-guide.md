@@ -72,6 +72,9 @@ malformed input.
 
 ## The legacy fold (function-local names, struct fields, file basenames)
 
+> ADT and constructor names left this fold on 2026-09-02 -- see "ADT
+> constructors" below.
+
 Some contexts intentionally use the older lossy fold:
 
 | Context | Scheme | Reason |
@@ -89,6 +92,68 @@ two-letter mnemonic, remaining bytes get `_xHH`. Crucially, a literal `_` is
 **Locals cannot collide across the program** (they are block-scoped), so the
 lossy fold is safe there. Struct fields are scoped to their struct, so no
 linker collision is possible.
+
+### ADT constructors -- two names, and only one of them is scoped
+
+A constructor gets **two** emitted names, and the distinction is the whole
+reason it earns a section:
+
+| What | Spelling | Scoped by |
+|---|---|---|
+| Union **member** inside the ADT's own struct | `as.<Ctor>._N` | the struct -- bare is correct |
+| C **function** symbol | `ctor_<Adt>_<Ctor>` (+ a monomorph's `__<arg>` suffix) | nothing -- must carry the ADT |
+
+Both went through the constructor name alone, so two ADTs
+sharing a constructor name emitted one C function twice
+(`redefinition of 'ctor_Mk'`). Elaboration resolved the shadowing correctly the
+whole time -- only the emitted C merged them. Build the function symbol with
+`mangle_ctor_symbol(def, ctor->name)` (emit_core.c); every definition site, call
+site, and signature-table key must use it, or the call names a symbol nothing
+defines.
+
+**The bare `ctor_<Ctor>` spelling still resolves**, as a macro alias, whenever
+exactly one ADT in the program owns that constructor name. That is deliberate:
+hand-written inline C calls constructors by their emitted name and stdlib
+documents it (`stdlib/either.tur`: "Construct with `ctor_Left(v)`"). When two
+ADTs own the name there is no correct bare alias, so none is emitted and inline
+C naming it fails at cc with an implicit declaration pointing at the ambiguous
+constructor -- rather than silently binding to whichever ADT was emitted first.
+The census backing that decision is snapshotted at the end of elaboration
+(`ctor_census_snapshot`); it holds copies, because ADTs are registered before
+their constructors are attached and a nested procedural-macro elaboration frees
+the arena the defs live in.
+
+**The fold ambiguity, closed (2026-09-02).** ADT and constructor *names* no
+longer go through the legacy fold at all: `mangle_adt_name` (emit_core.c) and
+`append_c_ident_mangled` (types.c) spell them with the injective scheme from
+the top of this guide (`-` -> `_hy`, a literal `_` -> `_un`, `/` -> `_sl`), so
+a single `_` in an emitted ADT/constructor name always introduces an escape
+and the `_` / `__` joiners in `ctor_<Adt>_<Ctor>` and
+`tur_adt_<Adt>__<arg>__<arg>` are structural only. ADT `a-b` + constructor `c`
+is `ctor_a_hyb_c`; ADT `a` + constructor `b-c` is `ctor_a_b_hyc`; a user ADT
+named `Foo__int` is `tur_adt_Foo_un_unint`, which cannot collide with the
+`(Foo int)` monomorph's `tur_adt_Foo__int`. Every name in the tree is plain
+letters and digits, which spell identically under both schemes, so no emitted
+name moved. `tests/fixtures/separator-fold-distinct-names` pins the two
+formerly-colliding shapes.
+
+Two consequences for hand-written inline C:
+
+- A kebab-case or underscored constructor's emitted spelling carries the
+  escape: `b-c` is `ctor_X_b_hyc` / bare `ctor_b_hyc`, and its union member is
+  `as.b_hyc._0`. `b-c` and `b_c` in two ADTs are two names, each with its own
+  bare alias.
+- The bare alias is withheld only for the genuine ambiguity -- two ADTs owning
+  the *same* spelling -- and inline C naming it fails at cc pointing at it.
+  `tests/check-ctor-alias-ambiguity.sh` (ctest `tur_ctor_alias_ambiguity`)
+  asserts both halves.
+
+The history of the silent arm this replaced (a uniqueness test on the raw name
+guarding a `#define` on the folded one) is in
+[docs/archive/separator-fold-collides-emitted-c-names.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/separator-fold-collides-emitted-c-names.md).
+
+See
+[docs/archive/duplicate-ctor-names-collide-in-emitted-c.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/duplicate-ctor-names-collide-in-emitted-c.md).
 
 ## The `tur_u_` guard prefix -- names C already owns
 

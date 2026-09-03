@@ -68,7 +68,10 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 shopt -s nullglob
-marked=(tests/fixtures/*/requires.leak-check)
+# One nested level too (`tests/fixtures/typed/result-basic`); the work-dir
+# name flattens the path so a nested fixture cannot collide with a top-level
+# one of the same basename.
+marked=(tests/fixtures/*/requires.leak-check tests/fixtures/*/*/requires.leak-check)
 if [ ${#marked[@]} -eq 0 ]; then
     echo "leak-check: no fixture carries requires.leak-check"
     exit 0
@@ -76,9 +79,10 @@ fi
 
 for marker in "${marked[@]}"; do
     dir="$(dirname "$marker")"
-    name="$(basename "$dir")"
+    base="$(basename "$dir")"
+    name="$(printf '%s' "${dir#tests/fixtures/}" | tr '/' '_')"
     input="$dir/input.tur"
-    [ -f "$input" ] || input="$dir/$name.tur"
+    [ -f "$input" ] || input="$dir/$base.tur"
     if [ ! -f "$input" ]; then
         fail "$name" "no input.tur"
         continue

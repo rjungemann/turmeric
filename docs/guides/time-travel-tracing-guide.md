@@ -19,6 +19,13 @@ tur trace hello.tur --lines                # coarser: one step per source line
 tur trace --dump run.turtrace              # read one back, record by record
 ```
 
+A program that defines a top-level `main` records the run of `(main)`: its
+definitions load first, un-recorded, and the recording starts at `main`'s
+first form. A program with no `main` is a top-level program -- its forms are
+the run -- so the recording (and, under `tur dap`, the entry stop and any
+breakpoints) starts at the file's first form instead. The same rule decides
+where `tur run` starts, so the two never disagree.
+
 ## Why record, when the debugger already pauses
 
 `tur debug` and `tur dap` both pause a live program today, with frames, locals

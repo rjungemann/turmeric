@@ -2,6 +2,38 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **Announced ahead of the flip: `(some p)` over a `:non-null` payload will
+  no longer be able to carry NULL once the Option niche graduates.** The
+  niche is still `--enable=option-niche` today, and nothing changes until it
+  defaults on; this entry exists so the break is in the release notes before
+  the release that makes it, not discovered in it. When it lands, an
+  `(Option P)` for a `:non-null` opaque or a compiler-lowered heap collection
+  is carried AS its payload pointer -- 16 bytes to 8, `(none)` as NULL, no tag
+  word. The representation spends the bit pattern `0` on `None`, so a `Some`
+  whose payload is null has nowhere left to live.
+
+  **Breaking for inline-C that builds an Option over such a payload.**
+  `tur_some_ptr(0)` produces a legal value today that `some?` answers true
+  on; under the niche it is a diagnostic naming the type and the violated
+  declaration (`a carrier Some with a NULL payload crossed into a
+  niche-represented Option -- the payload type's :non-null declaration was
+  violated`), raised at construction or at the carrier crossing, whichever
+  comes first. It is a diagnostic with a message, not a crash. The fix is one
+  line and is almost always what the code meant: return `tur_none()` for the
+  absent case. If a payload type genuinely has a valid null, drop `:non-null`
+  from its `defopaque` -- that un-elects it from the niche and restores the
+  16-byte tagged form, at no other cost.
+
+  A *provable* violation (the literal `0` ascribed into a `:non-null` handle)
+  has been `TUR-E0303` at elaboration since 0.41.0 and is unaffected. The
+  flip itself is tracked in `docs/upcoming/sr3-option-niche-plan.md`; when it
+  happens, this entry moves under that release's `### Changed` with the
+  "Announced ahead of the flip" lead removed.
+
 ## [0.42.2] -- 2026-09-01
 
 ### Added

@@ -4471,6 +4471,19 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         if (method_fd->binding) {
             method_fd->binding->body_is_inline_c =
                 (method_body && method_body->kind == EX_INLINE_C);
+            /* RM1: instance-method bodies are where the erased sum boxes the
+             * leak sweep found actually come from (`ap`'s some(..) arms), so
+             * the freshness flag matters most here -- and `alt-or`, which
+             * returns an argument, is exactly what it must stay false for. */
+            elab_stamp_sum_freshness(method_fd->binding, method_fd->params,
+                                     method_fd->n_params, method_body);
+            /* ... and the non-retaining parameter masks, so a statically
+             * resolved dispatch site (`fn_binding` = this binding) gets the
+             * same closure-env / sum-box drops a defn call site does.  `bind`
+             * only CALLS its continuation, and a bind chain's envs were the
+             * bulk of the RM1 residue. */
+            elab_infer_nonretain_masks(method_fd->binding, method_fd->params,
+                                       method_fd->n_params, method_body);
         }
 
         /* Arrow head: the method's declared return was the class variable (the
@@ -4520,9 +4533,14 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 (mp->ret_was_class_var && !m7_type_has_free_tyvar(mp->ret_full))
                     ? RET_CLASS_COMMITTED
                     : RET_CLASS_CARRIER_METHOD;
+            /* nil-tail-not-checked-against-declared-return: `false` keeps the
+             * nil-body check OFF for instance methods for now.  A class-decl
+             * return IS always written down, so `true` would be defensible --
+             * but it is a separate blast radius from the defn case this closes,
+             * and mixing them would make a regression here unattributable. */
             ReturnConflict rc = return_position_conflict(
                 mp->ret_adt, mp->ret_kind, method_body->type,
-                meth_cls);
+                meth_cls, /*check_nil_body=*/false);
             if (rc != RET_CONFLICT_NONE) {
                 const char *want = mp->ret_adt ? mp->ret_adt->name
                                  : typekind_to_string(mp->ret_kind);
@@ -4592,6 +4610,12 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                             "int64 carrier, so there is no representation these "
                             "two share and nothing to bridge them",
                             meth, want, gb.data);
+                        break;
+                    case RET_CONFLICT_NIL_BODY:
+                        /* Unreachable while the call above passes
+                         * ret_annotated=false; present so the switch stays
+                         * exhaustive and so turning that on is a one-line
+                         * change with a diagnostic already waiting. */
                         break;
                     case RET_CONFLICT_NONE: break;  /* unreachable */
                 }
@@ -5371,6 +5395,30 @@ static bool obj_is_unascribed_carrier_elem(const Expr *obj) {
             return extracted.kind == TY_TYVAR;
     }
     return false;
+}
+
+
+/* erased-float-carrier: stamp a poly-wrap headed for typeclass-method param
+ * `param` with the positions of its DECLARED `:fn` signature that are type
+ * variables.  The instance body is compiled once for every `a`/`b`, so it
+ * invokes such a param through the int64 carrier cast; the emitter routes a
+ * float-class wrapper through a bits shim at exactly those positions (see
+ * ensure_float_carrier_shim).  Concrete positions keep the native thunk ABI
+ * the typed poly-to-fat shim and the F5 typed `:fn` cast already rely on. */
+static void poly_wrap_stamp_carrier_erased(Expr *wrap, const Binding *param) {
+    const Type *pt = param ? param->poly_type : NULL;
+    if (pt && pt->kind == TY_FORALL) pt = pt->as.forall_.body;
+    if (!pt || pt->kind != TY_FN) return;
+    uint64_t mask = 0;
+    for (uint8_t i = 0; i < pt->as.fn.arity; i++) {
+        const Type *a = pt->as.fn.arg_full_types ? pt->as.fn.arg_full_types[i] : NULL;
+        bool erased = a ? (a->kind == TY_TYVAR) : (pt->as.fn.arg_kinds[i] == TY_TYVAR);
+        if (erased) mask |= ARG_IDX_BIT(i);
+    }
+    const Type *r = pt->as.fn.result_full_type;
+    bool res_erased = r ? (r->kind == TY_TYVAR) : (pt->as.fn.result_kind == TY_TYVAR);
+    wrap->as.poly_wrap_.carrier_erased_arg_mask = mask;
+    wrap->as.poly_wrap_.carrier_erased_result = res_erased;
 }
 
 Expr *elab_method_call(Elab *e, const Form *call) {
@@ -6573,6 +6621,7 @@ resolved_user_fallback:;
                 cwrap->as.poly_wrap_.inner = obj;
                 cwrap->as.poly_wrap_.wrapper_binding = NULL;
                 cwrap->as.poly_wrap_.is_closure = true;
+                poly_wrap_stamp_carrier_erased(cwrap, best_method->params[0]);
                 obj = cwrap;
             } else {
                 diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
@@ -6582,6 +6631,7 @@ resolved_user_fallback:;
         } else {
             Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, obj->span);
             wrap->as.poly_wrap_.inner = obj;
+            poly_wrap_stamp_carrier_erased(wrap, best_method->params[0]);
             if (inner_b->is_poly_fn) {
                 wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
             } else {
@@ -6611,6 +6661,7 @@ resolved_user_fallback:;
                     cwrap->as.poly_wrap_.inner = orig2;
                     cwrap->as.poly_wrap_.wrapper_binding = NULL;
                     cwrap->as.poly_wrap_.is_closure = true;
+                    poly_wrap_stamp_carrier_erased(cwrap, best_method->params[param_idx]);
                     args[i] = cwrap;
                     continue;
                 }
@@ -6621,6 +6672,7 @@ resolved_user_fallback:;
             Expr *orig = args[i];
             Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig->span);
             wrap->as.poly_wrap_.inner = orig;
+            poly_wrap_stamp_carrier_erased(wrap, best_method->params[param_idx]);
             /* constrained-hkt-byvalue-carriers: when the receiver is the ABSTRACT
              * type constructor of a constrained poly fn, this method call lowers to
              * a dictionary-slot dispatch, whose method pointer returns the int64

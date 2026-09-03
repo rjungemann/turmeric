@@ -6,6 +6,7 @@
 #define _GNU_SOURCE
 #endif
 #include "elab_internal.h"
+bool sum_box_reader_name(const char *nm);  /* emit_core.c; see emit_internal.h */
 #include "experiments.h"  /* Slice 3 (constrained-hkt-forall): hkt-hrt gate */
 #include "mono_specs.h"   /* VBM1 (van-laarhoven-monomorphization): spec registry */
 
@@ -1007,6 +1008,28 @@ static OwnCarry own_carry_for_arg(const char *fn, uint32_t idx) {
      * the `owned` flag, which routes the insert through tur_hamt_set_eq_vo with
      * the emitted rc ops). */
     if (strcmp(fn, "map-assoc-eq-o") == 0 && idx == 3) return OWN_CARRY_RETAIN;
+    /* option-rc-payload-constructible-only-from-inline-c: the SUM
+     * CONSTRUCTORS.  `(some x)` / `(ok x)` / `(err x)` wrap the value in a
+     * result the CALLER receives and owns -- there is no second, longer-lived
+     * holder the way a collection is one, so the reference MOVES in and
+     * nothing is minted.  That is OWN_CARRY_BORROW by this enum's own
+     * definition ("crossing moves the existing reference and mints nothing").
+     *
+     * RETAIN would be wrong in the other direction: nothing releases an
+     * Option's payload when the value goes out of scope, so a count minted
+     * here would never come back down.  BORROW keeps exactly one owner, which
+     * is the contract `weak/upgrade` and `weak/unwrap` already document ("the
+     * caller owns it and must rc/drop it").
+     *
+     * Without these rows the default REJECT fired on a construction with no
+     * collection anywhere in the program -- so `(Option rc<A>)` could be
+     * RETURNED, built in inline C and matched, but not built in Turmeric.  The
+     * inline-C form is the one that shipped, and it leaked a box per call
+     * until 2026-08-30, so the language was rejecting the safe spelling and
+     * accepting the unsafe one. */
+    if (strcmp(fn, "some") == 0 && idx == 0) return OWN_CARRY_BORROW;
+    if (strcmp(fn, "ok")   == 0 && idx == 0) return OWN_CARRY_BORROW;
+    if (strcmp(fn, "err")  == 0 && idx == 0) return OWN_CARRY_BORROW;
     return OWN_CARRY_REJECT;
 }
 
@@ -1068,6 +1091,25 @@ static Expr *call_wrap_reinterpret_owning(Elab *e, Expr *inner, TypeKind target_
                       "collection would have to own. Store a plain handle, or keep "
                       "the value outside the collection",
                       typekind_to_string(owning_src ? source_kind : target_kind));
+            /* option-rc-payload-constructible-only-from-inline-c, fix
+             * direction 2.  The line above names a COLLECTION, which is where
+             * this fires most often and reads correctly there -- but the check
+             * is really about crossing a GENERIC boundary, so it also fires
+             * with no collection anywhere in the program (`(unwrap o)` over an
+             * `(Option rc<A>)`).  Rather than reword a message that is right
+             * for its common case, say what the rule actually is and name the
+             * spellings that work. */
+            diag_emit(DIAG_NOTE, span,
+                      "the restriction is about crossing a GENERIC boundary, "
+                      "not about collections as such: a tyvar parameter or "
+                      "result is erased to the int64 carrier, which has no "
+                      "room for the reference count");
+            diag_emit(DIAG_NOTE, span,
+                      "the sum constructors are allowed -- `(some x)` / "
+                      "`(ok x)` / `(err x)` MOVE the reference into a value "
+                      "the caller owns.  To read an owning payload back out, "
+                      "destructure with `match` rather than the generic "
+                      "accessor, as stdlib's `weak/unwrap` does");
             return NULL;
         }
         /* Only rc<T> is refcount-accounted today.  A weak/ref crossing has no
@@ -1196,18 +1238,35 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
     Expr **args = call->as.call_.args;
     uint32_t n_args = call->as.call_.n_args;
     uint32_t n_hoist = 0;
+    /* RM1 (bind chains): a continuation into a poly / fat slot arrives under
+     * an EX_POLY_WRAP / EX_FN_TO_FAT / EX_POLY_TO_FAT; the closure to hoist is
+     * the wrap's INNER, and the wrap stays in place around the hoisted var so
+     * the call site still packs it the way the slot expects. */
+#define HOIST_PEEL_SLOT(slot_)                                                  \
+    do {                                                                       \
+        for (;;) {                                                             \
+            Expr *_x = *(slot_);                                               \
+            if (!_x) break;                                                    \
+            if (_x->kind == EX_ASCRIBE) (slot_) = &_x->as.ascribe_.inner;      \
+            else if (_x->kind == EX_POLY_WRAP) (slot_) = &_x->as.poly_wrap_.inner; \
+            else if (_x->kind == EX_FN_TO_FAT) (slot_) = &_x->as.fn_to_fat_.inner; \
+            else if (_x->kind == EX_POLY_TO_FAT) (slot_) = &_x->as.poly_to_fat_.inner; \
+            else break;                                                        \
+        }                                                                      \
+    } while (0)
     for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
-        Expr *a = args[i];
-        while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
-        if (arg_is_freeable_closure_source(fb, i, a))
+        Expr **slot = &args[i];
+        HOIST_PEEL_SLOT(slot);
+        if (arg_is_freeable_closure_source(fb, i, *slot))
             n_hoist++;
     }
     if (n_hoist == 0) return call;
     LetBinding *lbs = (LetBinding *)arena_alloc(e->arena, n_hoist * sizeof(LetBinding));
     uint32_t h = 0;
     for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
-        Expr *a = args[i];
-        while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        Expr **slot = &args[i];
+        HOIST_PEEL_SLOT(slot);
+        Expr *a = *slot;
         if (!arg_is_freeable_closure_source(fb, i, a))
             continue;
         char nm[48];
@@ -1230,8 +1289,9 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
         h++;
         Expr *v = expr_new(e->arena, EX_VAR, a->type, span);
         v->as.var.binding = cb;
-        args[i] = v;                     /* the call now references the binding */
+        *slot = v;                       /* the call (or its wrap) now references the binding */
     }
+#undef HOIST_PEEL_SLOT
     Expr *let = expr_new(e->arena, EX_LET, call->type, span);
     let->as.let_.bindings = lbs;
     let->as.let_.n = n_hoist;
@@ -2624,7 +2684,13 @@ Expr *elab_call(Elab *e, Form *call) {
     }
     /* Phase 15: Method call syntax - (.method obj arg1 arg2) */
     if (name->len > 0 && name->name[0] == '.') {
-        return elab_method_call(e, call);
+        /* RM1 (bind chains): `do-m` expands to `(.bind m (fn [x] ...))`, so
+         * this route needs the same closure-argument hoist the bare-name
+         * dispatch route applies -- gated, as there, on a statically resolved
+         * instance whose masks are the callee's own. */
+        Expr *mc = elab_method_call(e, call);
+        return (mc && call_dispatch_is_static(mc))
+            ? hoist_borrowed_closure_args(e, mc, call->span) : mc;
     }
     /* Phase 6 */
     if (name == e->sym_defmacro) return elab_defmacro(e, call);
@@ -2932,7 +2998,13 @@ Expr *elab_call(Elab *e, Form *call) {
             items[0] = form_sym(e->arena, head->span, dot_sym);
             for (uint32_t i = 1; i < n_items; i++) items[i] = call->as.list.items[i];
             Form *dotcall = form_list(e->arena, call->span, items, n_items);
-            return elab_method_call(e, dotcall);
+            /* A statically resolved dispatch carries the instance method as
+             * fn_binding, so its inferred non-retaining mask makes an inline
+             * continuation's env freeable at this scope -- the same hoist a
+             * defn call gets. */
+            Expr *mc = elab_method_call(e, dotcall);
+            return (mc && call_dispatch_is_static(mc))
+                ? hoist_borrowed_closure_args(e, mc, call->span) : mc;
         }
     }
 
@@ -5482,6 +5554,46 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 args[i]->any_drop_after = true;
         }
 
+        /* RM1 (reclamation-plan): the sum-box temporary case, the any rule one
+         * type over.  `(ok? (ok 1))` mallocs a carrier box on the erased path
+         * that nothing owns -- the sweep's dominant leak shape.  Stamp the
+         * argument call when the CONSUMER is a read-only accessor (argument 0,
+         * pure -- the same non-suspending condition the any rule carries) and
+         * the PRODUCER's every value path mints a fresh box (the callee-side
+         * freshness fact; a pass-through like alt-or stays unstamped, exactly
+         * as `keep-it` does for any).  Emit frees the temp after the accessor
+         * call materializes, gated there on the temp's recorded int64 spelling
+         * so a specialized by-value call is never touched. */
+        if (args[i] && fn_binding && fn_binding->name &&
+            fn_binding->type.kind == TY_FN &&
+            effect_row_is_empty(fn_binding->type.as.fn.effect_row) &&
+            ((sum_box_reader_name(fn_binding->name->name) &&
+              /* Which argument POSITIONS hold a readable box differs per
+               * callee, and the restriction is load-bearing: unwrap-or's arg 1
+               * is the DEFAULT, which the callee RETURNS on the None path --
+               * stamping it would free a value the caller receives.  The eq?
+               * comparators read boxes at 0 and 1; everything else at 0 only. */
+              (i == 0 ||
+               (i == 1 && (strcmp(fn_binding->name->name, "result-eq?") == 0 ||
+                           strcmp(fn_binding->name->name, "option-eq?") == 0)))) ||
+             /* value-struct-payload-sum-monomorph-box-has-no-owner: or a USER
+              * callee whose body was inferred not to retain this sum-typed
+              * parameter (and whose result cannot carry it out) -- the same
+              * fact the name allowlist asserts, checked instead of trusted.
+              * Zero for inline-C bodies and dictionary-dispatched methods. */
+             (i < 32 && (fn_binding->nonretain_sum_param_mask & (1u << i))))) {
+            Expr *a = args[i];
+            while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+            /* A dictionary dispatch (abstract receiver / return type) is
+             * stamped TENTATIVELY: the callee that runs is only known per
+             * monomorph at emit, which re-resolves it and asks the freshness
+             * question of that binding before freeing anything. */
+            if (call_returns_fresh_sum_box(a) ||
+                (a && a->kind == EX_CALL && a->as.call_.dict_arg &&
+                 !call_dispatch_is_static(a)))
+                a->sum_box_drop_after = true;
+        }
+
         /* LT2: When both expected and actual argument types are function types,
          * verify that their arg_linear flags match.  This catches attempts to
          * pass a (-> T R) function where (-> ^linear T R) is required (or vice
@@ -6076,12 +6188,25 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                      * call, 822 MiB over 4e6 iterations.  See the static_ok
                      * comment in expr.h and
                      * docs/archive/fat-sink-shim-box-leaks-per-call.md. */
+                    /* residual-leaks (2026-09-02): a DECLARED `^borrow` on the
+                     * sink is the same fact stated by the callee -- the only way
+                     * an inline-C body (whose inferred mask is zero by
+                     * construction) can say it invokes and never retains.  The
+                     * stdlib comparators (`result-eq?`, `vec-eq?`, `map-eq-raw?`
+                     * ...) declare it; without this each call minted a 24-byte
+                     * shim box nothing freed. */
                     bool sink_is_nonretaining =
                         fn_binding && i < 32 &&
-                        (fn_binding->nonretain_param_mask & (1u << i)) != 0;
+                        ((fn_binding->nonretain_param_mask & (1u << i)) != 0 ||
+                         (fn_binding->type.kind == TY_FN &&
+                          i < fn_binding->type.as.fn.arity &&
+                          fn_binding->type.as.fn.arg_flags &&
+                          FN_ARG_FLAG(fn_binding->type.as.fn, i, FA_BORROW)));
                     shim->as.fn_to_fat_.static_ok =
                         (slot_nominal && !slot_fat_decl) ||
                         (slot_fat_decl && sink_is_nonretaining);
+                    shim->as.fn_to_fat_.stack_ok =
+                        slot_fat_decl && sink_is_nonretaining;
                     args[i] = shim;
                 } else if (ak == TY_PTR_VOID || (ak == TY_FN && args[i]->type.as.fn.boxed) ||
                            ak == TY_NIL ||

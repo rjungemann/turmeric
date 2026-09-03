@@ -1,0 +1,10 @@
+;; guestbook -- multi-page web form via serializable continuations.
+;;
+;; The HTTP listener is the vendored httpd.c shim, compiled and linked through
+;; :c-sources, so `tur run src/main.tur`, `tur build .` and the CMake target
+;; all produce the same binary.  See docs/guides/web-continuations-tutorial.md.
+(defpackage guestbook
+  :name "guestbook"
+  :build-opts #map{
+    :c-sources ["httpd.c"]
+  })

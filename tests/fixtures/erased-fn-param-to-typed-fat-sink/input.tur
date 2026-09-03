@@ -1,0 +1,27 @@
+;; erased-fn-param-to-typed-fat-sink -- the "not covered" shape of
+;; docs/archive/history/erased-fn-sink-float-wrapper-carrier-mismatch.md, now
+;; covered.  Inside the ERASED Functor instance body the method param
+;; `g : (fn [a] b)` holds a thunk that speaks the int64 carrier at its erased
+;; positions (the pack site bridged the float wrapper through its bits, and a
+;; direct `(g x)` reads it back the same way).  Handing that box to a TYPED
+;; float ^fat sink goes through the poly-to-fat box, whose slot-0 shim must
+;; therefore bridge bits -> double at exactly those positions
+;; (`__tur_poly_to_fat1_double_double_erased_m1r`); the plain typed shim read
+;; slot 1 as a native double thunk and the sink saw 0.  A named fn and a
+;; capturing lambda both cross; a per-spec instance clone (concrete receiver,
+;; native box) keeps the plain typed shim.
+(defstruct Identity :copy [a] (wrapped : a))
+(defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x))
+(defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
+(defn call-ff [^fat f :(fn [float] #fx{} float) x : float] : float (f x))
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (call-ff g 3.5))))
+(defn dbl [v : float] : float (* v 2.0))
+(defn poly-named [^f] [^Functor f x : (f float)] : (f float) (fmap x dbl))
+(defn poly-cap [^f] [^Functor f x : (f float) k : float] : (f float)
+  (fmap x (fn [v : float] : float (+ v k))))
+(defn main [] : int
+  (println (run-id (poly-named (mk-id 1.0))))       ; 7
+  (println (run-id (poly-cap (mk-id 1.0) 0.25)))    ; 3.75
+  (println (run-id (fmap (mk-id 1.0) dbl)))         ; 7 (concrete dispatch)
+  0)

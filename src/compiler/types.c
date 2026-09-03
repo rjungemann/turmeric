@@ -49,6 +49,13 @@ Arena *tur_type_arena(void) {
  * single-variant record monomorph emit routes its field stores through the same
  * member-path the typedef / field-read / match sites use. */
 char *mangle_field_name(const char *name);
+char *mangle_adt_name(const char *name);
+/* duplicate-ctor-names-collide-in-emitted-c: the ADT-qualified base token
+ * of a constructor's emitted C FUNCTION symbol.  Defined in emit_core.c;
+ * forward-declared here (types.c does not include emit_internal.h) so the
+ * monomorph ctor emit spells the symbol exactly as the base-ctor emit and
+ * every call site do. */
+char *mangle_ctor_symbol(const struct AdtDef *adt, const char *ctor_name);
 char *adt_field_member_path(const struct AdtDef *def, const struct CtorDef *ctor,
                             uint32_t fi);
 
@@ -863,18 +870,23 @@ bool fn_result_type_is_fat_normalized(const Type *t) {
  * emitted C identifier (`tur_adt_Lens'__...` is not valid C). */
 static void append_c_ident_mangled(Buf *b, const char *name) {
     /* c-keyword-function-names-not-mangled: keep this byte-for-byte in lockstep
-     * with mangle_field_name in emit_core.c, which spells the same names at the
+     * with mangle_adt_name in emit_core.c, which spells the same names at the
      * declaration sites. A keyword-named ADT is not itself a C collision here
      * (every use is prefixed, `tur_adt_enum`), but if the two manglers disagree
-     * the typedef and its use sites name different types. */
-    if (name && tur_name_is_c_keyword(name, strlen(name)))
-        buf_puts(b, TUR_NAME_GUARD_PREFIX);
-    for (const char *p = name; p && *p; p++) {
-        char c = *p;
-        bool ident = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                     (c >= '0' && c <= '9') || c == '_';
-        buf_putc(b, ident ? c : '_');
-    }
+     * the typedef and its use sites name different types.
+     * separator-fold-collides-emitted-c-names: the injective scheme (mangle.h),
+     * so the `_` / `__` joiners around this name are structural only -- a
+     * user ADT `Foo__int` no longer spells the `(Foo int)` monomorph's name. */
+    if (!name) return;
+    size_t len = strlen(name);
+    if (tur_name_is_c_keyword(name, len)) buf_puts(b, TUR_NAME_GUARD_PREFIX);
+    char *tmp = (char *)malloc(tur_mangle_bound(len) + 1);
+    if (!tmp) { fprintf(stderr, "tur: oom\n"); abort(); }
+    size_t k = 0;
+    tur_mangle_append(tmp, &k, name, len);
+    tmp[k] = '\0';
+    buf_puts(b, tmp);
+    free(tmp);
 }
 
 /* Mangle a bare TypeKind by routing it through append_type_mangle, so a
@@ -1572,25 +1584,34 @@ static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
          * reached for them.  The ctor heap-boxes the by-value param into the slot
          * (see the byval ctor branch's struct-pointer box). */
         if (adt_field_is_ros_pointer_box(owner, &resolved)) {
-            /* A ROTATING pool, not one shared static buffer.  Callers collect
-             * several of these before printing any of them -- the monomorph ctor
-             * emitter fills `val_ctype[]` for every field and only then writes
-             * the parameter list -- so a single buffer hands every field the LAST
-             * field's spelling.  That emitted
+            /* INTERNED, so the returned pointer is stable for the whole
+             * compilation -- the same contract type_c_name already honours, and
+             * the reason the distinction between the two was invisible at the
+             * call site.
+             *
+             * This used to be one function-scoped `static char ptrbuf[128]`.
+             * Callers collect several of these before printing any of them --
+             * the monomorph ctor emitter fills `val_ctype[]` for every field and
+             * only then writes the parameter list -- so a single buffer handed
+             * every field the LAST field's spelling.  That emitted
              * `ctor_Result__Rational__ArithError(bool, tur_adt_ArithError *,
-             * tur_adt_ArithError *)`, silently mistyping ok_val as the error arm.
+             * tur_adt_ArithError *)`, silently mistyping ok_val as the error
+             * arm: well-formed C with the wrong type in it, no crash, no ASan
+             * report, no diagnostic.  A 16-slot rotating pool fixed the two-field
+             * case in 2026-08-26; interning removes the bound entirely.
              *
              * Latent until two fields of one constructor could both take this
              * path: it needs a Result/Option monomorph whose OK and ERR arms are
              * both non-parametric by-value ADTs, which is what a by-value sum
-             * makes ordinary (`(Result Rational ArithError)`). */
-            enum { PTRBUF_N = 16, PTRBUF_LEN = 128 };
-            static char ptrbuf[PTRBUF_N][PTRBUF_LEN];
-            static unsigned ptrbuf_i = 0;
-            char *slot = ptrbuf[ptrbuf_i++ % PTRBUF_N];
-            snprintf(slot, PTRBUF_LEN, "%s *", type_c_name(resolved));
+             * makes ordinary (`(Result Rational ArithError)`).  See
+             * docs/archive/c-name-accessors-share-static-buffers.md. */
+            Buf pb; buf_init(&pb);
+            buf_printf(&pb, "%s *", type_c_name(resolved));
+            buf_putc(&pb, '\0');
+            const char *boxed = intern_type_name(pb.data);
+            buf_free(&pb);
             free_struct_app_type(resolved);
-            return slot;
+            return boxed;
         }
         const char *nm = type_c_name(resolved);
         free_struct_app_type(resolved);
@@ -1610,7 +1631,21 @@ static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
          * member types (they have no generic-union twin), and float/double
          * keep theirs (an implicit float->int64 store would VALUE-convert;
          * double is already 8-aligned). */
-        if (owner && owner->n_ctors > 1 && nm &&
+        /* erased-generic-field-read-overruns-subword-monomorph-box: the
+         * single-variant record DOES have a generic twin after all.  The base
+         * typedef of a parametric record (`tur_adt_Identity { int64_t
+         * wrapped; }`) is what every erased generic body reads through --
+         * `(defn run-id [A] [i : (Identity A)] : A (.wrapped i))` -- and a
+         * `(Identity bool)` monomorph boxed at an aggregate spill with a 1-byte
+         * `bool wrapped;` is then read 8 bytes wide (ASan heap-buffer-overflow;
+         * the right answer only by little-endian luck).  So the widening applies
+         * to a record too, but ONLY for a field whose DECLARED type is a type
+         * parameter: that is the field the twin spells as int64_t.  A record
+         * field declared concretely (`:bool`) is `bool` in both layouts and
+         * keeps its width. */
+        bool declared_tyvar = field->full_type &&
+                              field->full_type->kind == TY_TYVAR;
+        if (owner && (owner->n_ctors > 1 || declared_tyvar) && nm &&
             (strcmp(nm, "bool") == 0 ||
              strcmp(nm, "int8_t") == 0 || strcmp(nm, "uint8_t") == 0 ||
              strcmp(nm, "int16_t") == 0 || strcmp(nm, "uint16_t") == 0 ||
@@ -1715,14 +1750,18 @@ static void record_adt_app_ctor_sigs(AdtDef *def, Type *args, uint8_t n_args,
                          : app_byval ? name.data : "int64_t";
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
+        /* duplicate-ctor-names-collide-in-emitted-c: this table is keyed by the
+         * emitted FUNCTION symbol, so it has to spell it the same way
+         * emit_registered_adt_app_rec does -- through the shared builder, which
+         * qualifies the constructor with its owning ADT.  A key that disagrees
+         * silently misses, and the call site then falls back to re-deriving a
+         * ctype the prototype does not carry. */
+        char *csym = mangle_ctor_symbol(def, ctor->name);
         char ctor_sym[512];
-        int off = snprintf(ctor_sym, sizeof ctor_sym, "ctor_");
-        size_t mlen = strlen(ctor->name);
-        for (size_t mi = 0; mi < mlen && off < (int)sizeof ctor_sym - 1; mi++) {
-            char c = ctor->name[mi];
-            ctor_sym[off++] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                               (c >= '0' && c <= '9') || c == '_') ? c : '_';
-        }
+        int off = snprintf(ctor_sym, sizeof ctor_sym, "ctor_%s", csym);
+        free(csym);
+        if (off < 0) off = 0;
+        if (off > (int)sizeof ctor_sym - 1) off = (int)sizeof ctor_sym - 1;
         ctor_sym[off] = '\0';
         if (off + suffix.len < sizeof ctor_sym)
             memcpy(ctor_sym + off, suffix.data, suffix.len);   /* includes NUL */
@@ -1883,7 +1922,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                  * so a forward `typedef struct tur_adt_<Name> ...;` would dangle. */
                 !resolved.as.adt_.def->is_opaque &&
                 resolved.as.adt_.def->n_type_params == 0) {
-                char *un = mangle_field_name(resolved.as.adt_.def->name);
+                char *un = mangle_adt_name(resolved.as.adt_.def->name);
                 buf_printf(out, "#ifndef TUR_FWD_tur_adt_%s\n", un);
                 buf_printf(out, "#define TUR_FWD_tur_adt_%s\n", un);
                 buf_printf(out, "typedef struct tur_adt_%s tur_adt_%s;\n", un, un);
@@ -1932,6 +1971,17 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             free_struct_app_type(fres);
             char *fname = mangle_field_name(fld->name);
             buf_printf(out, "    %s %s;\n", ctype, fname);
+            /* erased-generic-field-read-overruns-subword-monomorph-box, the
+             * float32 residue: a type-parameter field instantiated at float32
+             * stays a 4-byte `float` (widening it to the int64 slot would
+             * VALUE-convert on every implicit store), so pad it to the word.
+             * The erased twin reads this slot as int64 and recovers the float
+             * with a 4-byte memcpy from the slot's FIRST bytes -- byte position,
+             * not value -- which is exactly where the float sits; the pad only
+             * keeps that 8-byte read inside the aggregate on any endianness. */
+            if (fld->full_type && fld->full_type->kind == TY_TYVAR &&
+                ctype && strcmp(ctype, "float") == 0)
+                buf_printf(out, "    int32_t __pad_%s;\n", fname);
             free(fname);
         }
         buf_printf(out, "} %s;\n", adt_inst_name);
@@ -1969,6 +2019,10 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                 : adt_field_c_type(def, fld, args);
             free_struct_app_type(fres);
             buf_printf(out, " %s _%u;", ctype, fi);
+            /* float32 residue: same word pad as the named layout above. */
+            if (fld->full_type && fld->full_type->kind == TY_TYVAR &&
+                ctype && strcmp(ctype, "float") == 0)
+                buf_printf(out, " int32_t __pad_%u;", fi);
         }
         buf_printf(out, " } %s;\n", mctor);
         free(mctor);
@@ -2011,6 +2065,16 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                          (c >= '0' && c <= '9') || c == '_') ? c : '_';
         }
         mctor[mlen] = '\0';
+        /* duplicate-ctor-names-collide-in-emitted-c: two different names, and
+         * they were the same variable before.  `csym` is the FUNCTION symbol and
+         * carries the owning ADT (`ctor_<Adt>_<Ctor><suffix>`); `mctor` stays the
+         * bare union MEMBER name (`__r.as.<Ctor>`), which is already scoped by
+         * this monomorph's own struct and must NOT be qualified.  Using the
+         * shared builder for the symbol also puts this site on the same C-keyword
+         * guard as the call sites -- the hand-rolled mangle above has none, so a
+         * constructor named after a C keyword used to spell its definition and
+         * its calls differently. */
+        char *csym = mangle_ctor_symbol(def, ctor->name);
 
         /* B4 (slice 2): a wide by-value ADT element is passed to the ctor by
          * VALUE (the aggregate) but STORED as an int64 heap box -- so the ctor
@@ -2046,7 +2110,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                              : app_heap ? heap_ptr_c_name(adt_inst_name)
                              : app_byval ? adt_inst_name : "int64_t";
         if (app_niche) {
-            buf_printf(out, "static %s ctor_%s%s(", ctor_ret, mctor, suffix.data);
+            buf_printf(out, "static %s ctor_%s%s(", ctor_ret, csym, suffix.data);
             if (ctor->n_fields == 1)
                 buf_printf(out, "%s _0", niche_ctype);
             buf_printf(out, ") {\n");
@@ -2070,10 +2134,10 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                 buf_printf(out, "    return (%s)0;\n", niche_ctype);
             }
             buf_printf(out, "}\n\n");
-            free(wide_box); free(val_ctype); free(mctor);
+            free(wide_box); free(val_ctype); free(mctor); free(csym);
             continue;
         }
-        buf_printf(out, "static %s ctor_%s%s(", ctor_ret, mctor, suffix.data);
+        buf_printf(out, "static %s ctor_%s%s(", ctor_ret, csym, suffix.data);
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             if (fi > 0) buf_puts(out, ", ");
             buf_printf(out, "%s _%u", val_ctype[fi], fi);
@@ -2160,6 +2224,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         free(wide_box);
         free(val_ctype);
         free(mctor);
+        free(csym);
     }
     buf_printf(out, "#endif\n");
 
@@ -3156,7 +3221,7 @@ const char *adt_heap_ptr_c_name(const AdtDef *def) {
 /* CONV-S1: the stable C typedef name (`tur_adt_<mangled>`) for the BY-VALUE
  * representation of a non-parametric flat-product ADT.  Mirrors the name the
  * emitters build for the base typedef (emit_module.c:emit_adt_typedef_and_ctors)
- * -- `tur_adt_` + mangle_field_name(def->name) -- so signatures, constructors,
+ * -- `tur_adt_` + mangle_adt_name(def->name) -- so signatures, constructors,
  * `match`, and field-access all agree on one spelling.  The mangler (replace any
  * non `[A-Za-z0-9_]` byte with `_`) is replicated inline here so the type layer
  * does not have to reach up into the emit layer; the result is interned (same
@@ -3297,8 +3362,8 @@ static bool adt_sr1_sum_candidate(const AdtDef *def) {
     if (!def || def->is_gadt || def->is_heap) return false;
     if (def->n_ctors < 2 || def->n_type_params != 0) return false;
     if (!def->ctors) return false;
-    /* SR4 measurement seam (2026-08-27): TUR_SR4_RECURSIVE_BYVALUE=1 admits
-     * recursive sums to the by-value path.  The suite is GREEN with it on --
+    /* SR4 measurement seam (2026-08-27): TUR_SR4_RECURSIVE_BYVALUE=1 admitted
+     * recursive sums to the by-value path (the default since RM4, below).  The suite is GREEN with it on --
      * every codegen blocker is fixed (the fat-dispatch ABI disagreement,
      * resolved by unifying every fat boundary on the b4box convention via
      * thunk_param_slot_c_name; see the archived
@@ -3324,7 +3389,16 @@ static bool adt_sr1_sum_candidate(const AdtDef *def) {
      * reasonably take it, but the default stays carrier until one asks.  is_self_recursive is the
      * boundary; adt_graph_reaches below is the separate SOUNDNESS gate over
      * inline-field cycles and is never bypassed. */
-    if (def->is_self_recursive && !getenv("TUR_SR4_RECURSIVE_BYVALUE"))
+    /* RM4 (reclamation-plan.md, 2026-09-02): the default FLIPPED to by value.
+     * Re-measured on the same two workloads after RM0 established that no
+     * arena is coming to make the carrier's mallocs cheap (RM2/RM3 have no
+     * constituency): logic bind+walk 400k passes carrier 0.49s / by-value
+     * 0.51s (~1.03x) at 370 MB -> 202 MB peak RSS; re compile+match 5k passes
+     * 68-90 ms / 65-71 ms (no slower) at 41 MB -> 33 MB.  The time side of the
+     * trade shrank to noise while the memory side held, and the premise for
+     * waiting is gone.  TUR_SR4_RECURSIVE_CARRIER=1 restores the carrier for
+     * A/B measurement; tests/run-sr4-seam.sh keeps THAT path from rotting now. */
+    if (def->is_self_recursive && getenv("TUR_SR4_RECURSIVE_CARRIER"))
         return false;
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         const CtorDef *c = def->ctors[ci];

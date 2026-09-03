@@ -857,8 +857,7 @@
                          b hb
                          e he]
                      (gen []
-                       (let [^mut i
-                             s]
+                       (let [^mut i s]
                          (while (if b (<= i e) true) (yield i) (set! i (+ i 1))))))))))))
 ;;; seq/from-range-step -- convert a bounded integer Range to a Seq with a custom step.
 ;;;
@@ -903,8 +902,7 @@
                          b  hb
                          e  he]
                      (gen []
-                       (let [^mut i
-                             s]
+                       (let [^mut i s]
                          (while (if b (if (> st 0) (<= i e) (>= i e)) true)
                            (yield i)
                            (set! i (+ i st))))))))))))

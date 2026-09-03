@@ -666,10 +666,11 @@ one:
   expecting a `cont<...>`. Route the resumption strategy through the effect
   payload instead (as the nondeterminism example above does).
 - Loops and conditionals in a clause are supported -- including a `while` that
-  `resume`s per iteration (the multi-shot fold above). The remaining exception
-  is a `perform` of an *outer-handled effect* from inside such a loop: the
-  compiler rejects that with a located error naming the workaround (hoist the
-  loop into a helper function and call it from the clause).
+  `resume`s per iteration (the multi-shot fold above). A `perform` from inside
+  a loop, in a clause or anywhere else, is supported too, including a loop that
+  assigns its carried `^mut` conditionally or more than once per iteration (see
+  "Performs inside loops and conditionals" in the effects system guide, and
+  `TUR_TRACE_EVICT=1` for the exact form when something still evicts).
 
 The second is a compiler limitation; the first and third are designed
 evictions with their own diagnostics.

@@ -1,0 +1,10 @@
+;; warn-no-entry-point-near-miss -- docs/reported/examples-have-no-suite-
+;; coverage.md, section 2.  A whole-program build with no `main` and no
+;; top-level statements synthesizes an EMPTY main: the program builds, runs,
+;; exits 0 and prints nothing.  `-main` is the Clojure spelling that shipped in
+;; two examples for weeks without anyone noticing; it is never called.  The
+;; build now warns at its definition (TUR-W0624) and still produces the
+;; do-nothing program (expected.stdout is empty).
+(defn -main [] : int
+  (println "you will not see this")
+  0)

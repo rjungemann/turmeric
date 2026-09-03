@@ -348,6 +348,21 @@ typedef struct EmitCtx {
     char    **any_pending;
     uint32_t  n_any_pending;
     uint32_t  cap_any_pending;
+    /* RM1: pending frees for fresh sum-carrier boxes consumed as accessor
+     * arguments -- the any_pending discipline (mark before children, drain
+     * after the call materializes), draining as a null-guarded free. */
+    char    **sum_pending;
+    Type     *sum_pending_types;
+    uint32_t  n_sum_pending;
+    uint32_t  cap_sum_pending;
+    /* value-struct-payload-sum-monomorph-box-has-no-owner: pending frees for
+     * fresh BY-VALUE sum monomorph temps whose arm holds a boxed value-struct
+     * payload, consumed as a non-retaining argument.  Name + type pairs (the
+     * arm layout is per-monomorph); same mark/drain discipline. */
+    char    **vsp_pending;
+    Type     *vsp_pending_types;
+    uint32_t  n_vsp_pending;
+    uint32_t  cap_vsp_pending;
     /* any-struct-box-leak-per-widen: C names of `any` locals whose payload box
      * the ENCLOSING SCOPES own, innermost last.  The scope-exit drop is a
      * trailing free, so an early exit -- a `return`, or a self-tail-call's
@@ -374,8 +389,17 @@ typedef struct EmitCtx {
      * normalized param (a 5e6-iteration `(apply1 add3 acc)` loop leaked
      * 122 MiB).  `fatbox_keys` dedups on "<shim>|<orig>"; the definitions land
      * in `thunk_typedefs` and the fill statements in `fatbox_init`, emitted as
-     * one `__tur_fatbox_init` registered in the earliest static-init band. */
+     * one `__tur_fatbox_init` registered in the earliest static-init band.
+     *
+     * `fatbox_names` holds the `__tur_fatbox_<i>` spelling ensure_static_fatbox
+     * returns, one owned string per key and freed with them.  It used to be a
+     * function-scoped `static char name[96]`, which is only correct while every
+     * caller consumes the name before asking for another -- correct by call-site
+     * discipline, not by construction; see
+     * docs/archive/c-name-accessors-share-static-buffers.md. */
     char    **fatbox_keys;
+    bool      fatbox_keep_emitted;   /* __tur_fatbox_keep glue is in thunk_typedefs */
+    char    **fatbox_names;
     uint32_t  n_fatbox_keys;
     uint32_t  cap_fatbox_keys;
     Buf      *fatbox_init;
@@ -689,6 +713,14 @@ void emit_inline_c_raw_locals_collect(const struct Expr *body,
 void emit_localvar_reset(void);
 void emit_localvar_record_ctype(const char *cname, const char *ctype);
 const char *emit_localvar_lookup_ctype(const char *cname);
+
+/* inline-c-option-carrier-box-leaks: the owned-carrier side table.  A call
+ * temp holding a carrier box an inline-C body malloc'd is marked here, and the
+ * carrier->concrete bridge frees the box after copying its contents out.  See
+ * the table's comment in emit_module.c. */
+void emit_owned_carrier_mark(const char *cname);
+bool emit_owned_carrier_is(const char *cname);
+void emit_owned_carrier_clear(const char *cname);
 /* S1 (jit-engine-plan section 4): true when an emitted C type NAME denotes a
  * scalar -- any pointer, or one of the primitive/stdint spellings the emitter
  * produces.  Anything else (a struct typedef such as `Option__int` or
@@ -707,6 +739,11 @@ bool emit_c_type_is_scalar(const char *cname);
  * the panic-propagation return emits one per hoisted call -- 75-139 per TU. */
 char *emit_c_zero_of(const char *cname);
 bool emit_str_is_bare_ident(const char *s);
+/* cps-let-binder-bridge-lacks-position-check: the single position-level test --
+ * is `v` a bare identifier whose RECORDED emitted C type is exactly
+ * `want_ctype`, and is that type a by-value aggregate?  Shared by every
+ * carrier->concrete bridge so the copies cannot drift.  See emit_expr.c. */
+bool emit_value_is_recorded_as(const char *v, const char *want_ctype);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);
@@ -874,10 +911,23 @@ bool expr_tail_diverges(const Expr *e);
  * closure value) is used as a value rather than only as a direct-call callee
  * within `e`.  See emit_core.c. */
 bool closure_binding_escapes(const Expr *e, const Binding *b);
+/* Does any inline-C block occur under `e`?  (emit_core.c) */
+bool expr_subtree_has_inline_c(const Expr *e);
 /* catch-unwind-thunk-closure-leak scoped-free escape analysis: like
  * closure_binding_escapes, but a use of `b` as a read-only ok?/err?/ok-val
  * argument is not an escape.  See emit_core.c. */
 bool catch_box_binding_escapes(const Expr *e, const Binding *b);
+bool sum_box_binding_escapes(const Expr *e, const Binding *b);
+/* RM1: the read-only Option/Result accessor family -- shared between the
+ * escape walk's whitelist and elab_call.c's drop-after stamp so the two
+ * cannot drift. */
+bool sum_box_reader_name(const char *nm);
+bool sum_param_is_nonretaining(const Expr *body, const Binding *p,
+                               bool result_cannot_carry);
+/* The pending-drop bracket for a call at STATEMENT position (emit_stmt.c);
+ * see emit_pending_drops_mark's comment in emit_expr.c. */
+void emit_pending_drops_mark(EmitCtx *ctx, uint32_t m[3]);
+void emit_pending_drops_drain(EmitCtx *ctx, Buf *body, const uint32_t m[3]);
 /* catch-unwind-return-bridge-residuals (Part B): like catch_box_binding_escapes
  * but the single occurrence `ignore` (the return-tail use the caller is about to
  * copy out and free) is not counted as an escape.  Used to prove a returned
@@ -905,6 +955,18 @@ void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,
 void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out);
 char *mangle_dynvar_name(const char *name);
 char *mangle_field_name(const char *name);
+/* separator-fold-collides-emitted-c-names: injective spelling for ADT and
+ * constructor NAMES (typedefs, ctor symbols, member paths, drop glue). */
+char *mangle_adt_name(const char *name);
+char *mangle_ctor_symbol(const struct AdtDef *adt, const char *ctor_name);
+/* duplicate-ctor-names-collide-in-emitted-c: program-wide census of constructor
+ * names, so an UNAMBIGUOUS one keeps its bare-name alias for hand-written
+ * inline C.  Fed from elab_register_adt_def; see emit_core.c. */
+void ctor_census_reset(void);
+void ctor_census_snapshot(struct AdtDef *const *defs, uint32_t n_defs);
+bool ctor_base_name_is_unique(const char *mangled_ctor_name);
+void emit_ctor_bare_alias(Buf *out, const struct AdtDef *def,
+                          const struct CtorDef *ctor);
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
 char *raw_name_for_binding(const Binding *b);
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b);
@@ -990,6 +1052,9 @@ const char *emit_env_struct_fn_typedef(EmitCtx *ctx, const Symbol *env_name);
  * __tur_fatshim<arity> shim instead) -- this keeps int64 fixtures churn-free. */
 const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
                                  const char *fnptr);
+/* Emit the no-op drop glue the static / stack fat boxes carry as their
+ * header, once.  False when there is nowhere to put it. */
+bool ensure_fatbox_keep(EmitCtx *ctx);
 /* catch-unwind-aggregate-return-miscompiled: per-type boxing trampoline for an
  * aggregate-returning catch-unwind / catch-panic-of thunk. */
 /* type-of-cast-kind-granularity: the `any` box tag for a type -- its TypeKind
@@ -1054,6 +1119,20 @@ char *ensure_bare_fnptr_poly_shim(EmitCtx *ctx, Type result_type,
                                   Type *param_types, uint8_t n_params);
 char *ensure_fat_aggregate_spill_shim(EmitCtx *ctx, Type result_type,
                                       Type *param_types, uint8_t n_params);
+/* erased-float-carrier: shims that carry a float-class param/result of a poly
+ * thunk as its BITS in the int64 carrier at the positions an erased typeclass-
+ * method sink reads as int64 (`erased_mask` bit i / `erased_result`).  The
+ * named form wraps `real_fn` (a __poly_ wrapper); the fat form is keyed on the
+ * signature and reads the closure's `__fn` out of slot 0 of its env.  Both
+ * return NULL when no erased position is float-class (the plain wrapper /
+ * typed thunk already agrees with the consumer).  Defined in emit_module.c. */
+char *ensure_float_carrier_shim(EmitCtx *ctx, const char *real_fn,
+                                Type result_type, Type *param_types,
+                                uint8_t n_params, uint64_t erased_mask,
+                                bool erased_result);
+char *ensure_fat_float_carrier_shim(EmitCtx *ctx, Type result_type,
+                                    Type *param_types, uint8_t n_params,
+                                    uint64_t erased_mask, bool erased_result);
 /* E2 (fat-closure fn-value threading): ensure a `<wrapper>__cps` twin exists for
  * a poly-wrap thunk boxing an effectful named fn, DK-threading its call through
  * the direct->CPS registry.  Returns the malloc'd twin name (caller uses it for
@@ -1066,6 +1145,16 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
  * __tur_poly_to_fat<N> shim instead), keeping int64 poly boxes churn-free. */
 char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type,
                                const Type *arg_types, uint32_t n_args);
+/* erased-float-carrier: the typed poly-to-fat shim for a box whose stored thunk
+ * speaks the int64 carrier at `erased_mask` / `erased_result` (a method param
+ * `g : (fn [a] b)` inside the ERASED instance base body, where the pack site
+ * bridged a float-class wrapper through its bits).  Bridges those positions
+ * back from bits to the sink's native float type; the rest forward as the
+ * plain typed shim does.  Returns NULL when no erased position is float-class
+ * (the plain typed shim already matches). */
+char *ensure_typed_poly_to_fat_erased(EmitCtx *ctx, Type result_type,
+                                      const Type *arg_types, uint32_t n_args,
+                                      uint64_t erased_mask, bool erased_result);
 
 /* ------------ emit_effects.c: effects/CPS expression emission ------------ */
 /* Region C -- algebraic effects (EX_DEFECT, EX_PERFORM, EX_HANDLE, EX_RESUME,

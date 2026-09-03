@@ -345,6 +345,18 @@ typedef enum DiagCode {
     TUR_E0621_TUR_VERSION_BELOW_FLOOR,
     TUR_E0622_TUR_VERSION_MALFORMED,
     TUR_W0623_TUR_VERSION_ABOVE_CEILING,
+    /* examples-have-no-suite-coverage (section 2): a whole-program build with
+     * no `main` and no top-level statements synthesizes an EMPTY main -- the
+     * program builds, runs, and does nothing.  A top-level function whose name
+     * is a near-miss of `main` (`-main`, `main-`, `Main`, `_main`) is the
+     * tell that an entry point was intended; warn at its definition. */
+    TUR_W0624_NO_ENTRY_POINT_NEAR_MISS,
+    /* application-image-dumps-plan AI3.1: the `init` root of a
+     * with-image-cache-after-init expansion writes a top-level global that no
+     * `defimage-global` declared.  init runs only on a cold start and the
+     * image carries the continuation, not the heap, so the write is silently
+     * absent after a warm start. */
+    TUR_W0706_IMAGE_GLOBAL_UNREGISTERED,
 } DiagCode;
 
 typedef enum DiagLevel {

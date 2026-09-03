@@ -8,7 +8,7 @@ description: Validate untyped boundary data (HTTP bodies, config, IPC) with comp
 
 > **Scope:** scalar/object/array/optional/union/literal/transform/recursive
 > schemas with accumulating path-tagged errors; the `HasSchema` typeclass with
-> return-type-directed `decode!` and the `#json-str<T>(...)` reader macro; a
+> return-type-directed `decode!` and the `#json-str<T>(...)` / `#json-file<T>(...)` reader macros; a
 > combinator layer (`always`/`never`/`ap`/`field-of`/`fmap`/`alt`, Validation
 > semantics); and `Functor`/`Applicative`/`Alternative` typeclass instances
 > over the phantom `(Schema a)` wrapper -- so object decoders can be assembled
@@ -350,10 +350,34 @@ reader macro to branch on. Two consequences worth knowing:
   `(Result T int)`. Branch with `ok?` / `err?`; there is no structured error
   value to destructure yet.
 
-The file-reading `#json-file<T>` remains future work: `read-file` returns
-`ptr<void>` (NULL on any error) rather than `:cstr`, so it needs a defined
-answer for an unreadable file and an owner for the buffer -- see
-[docs/reported/json-str-result-and-file-readers-missing.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/json-str-result-and-file-readers-missing.md).
+### `#json-file<T>(...)` and `#json-file?<T>(...)` -- reading a file
+
+The same family over a path instead of a string:
+
+```turmeric no-check
+(defn load-config [] :Config
+  #json-file<Config>("config.json"))
+
+(defn try-load-config [] :(Result Config int)
+  #json-file?<Config>("config.json"))
+```
+
+`#json-file<T>(path)` desugars to `(:: (decode! (json/decode-file! path)) T)`.
+`json/decode-file!` (stdlib/json.tur) reads the whole file into a private
+buffer, parses it exactly as `json/decode` would, frees the buffer, and hands
+back the node tree -- so there is no `ptr<void>` to bridge and nothing for
+the caller to free but the nodes. Two failure modes, kept distinct:
+
+- **An unreadable path** is a panic raised by `json/decode-file!` itself,
+  with the path in the message (`json/decode-file!: cannot read config.json`).
+- **A file that does not satisfy the schema** is the same `schema-decode!`
+  panic the string form raises, violation paths printed first.
+
+The `?` form puts one catch boundary around both, so `(err? r)` covers "no
+such file" and "wrong shape" alike -- the `Result` says *that* it failed and
+stderr says *what*. Malformed JSON in a readable file decodes to the null
+node and then fails the schema, as with `#json-str`. The interpreter runs the
+same function as a native, so `--interpret` agrees.
 
 ## Applicative combinators
 

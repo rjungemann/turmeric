@@ -19,7 +19,14 @@
  *   [build_stamp     32B]  binary identity (AI4); foreign image -> clean Err
  *   [payload_len     u64]  bytes of TSER payload following the header
  *   [created_unix_ns u64]  informational; not validated
- *   [globals_offset  u64]  reserved for AI3 globals section (0 == none)
+ *   [globals_offset  u64]  AI3: file offset of the image-globals section
+ *                          (72 + continuation bytes), 0 == no section.  The
+ *                          section is [i64 len][len bytes] and sits INSIDE
+ *                          payload_len, after the continuation bytes; its
+ *                          bytes are the defimage-global registry snapshot
+ *                          (stdlib/image.tur image/global-registry): [i64 n]
+ *                          then per global [i64 name_len][name][i64 blen]
+ *                          [Serializable bytes].
  *   [flags           u32]  reserved, must be 0
  *   [header_crc32    u32]  CRC32 of header bytes [0, header_crc32) -- catches
  *                          truncation/corruption of the header itself
@@ -43,7 +50,7 @@ typedef struct TurImageHeader {
     uint8_t  build_stamp[TUR_IMAGE_STAMP_LEN]; /* SHA-256 of the binary (AI4) */
     uint64_t payload_len;                    /* bytes of TSER data after header */
     uint64_t created_unix_ns;                /* informational; not validated */
-    uint64_t globals_offset;                 /* reserved (AI3); 0 == no globals */
+    uint64_t globals_offset;                 /* AI3 globals section offset; 0 == none */
     uint32_t flags;                          /* reserved, must be 0 */
     uint32_t header_crc32;                   /* CRC32 of bytes [0, header_crc32) */
 } TurImageHeader;

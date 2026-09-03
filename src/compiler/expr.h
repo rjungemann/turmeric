@@ -332,6 +332,25 @@ struct Binding {
      * wrap, keeping the two ABI emitters in sync. Set in elab_fns.c when
      * the FnDef is built. */
     bool          body_is_inline_c;
+    /* RM1 (reclamation-plan): true when every VALUE PATH of this defn's body
+     * ends in a sum-constructor application, or in a call to a binding this
+     * flag is already true for.  On the ERASED path such a callee hands back
+     * either a freshly-malloc'd carrier box or NULL (the slice-A None), so the
+     * caller owns the result and may free it at scope exit -- which is what
+     * separates `ap` (every arm returns some(..)/none()) from `alt-or`
+     * (returns an ARGUMENT; freeing its result frees a box the caller still
+     * holds).  Stamped beside body_is_inline_c in elab_fns.c /
+     * elab_typeclasses.c; false for inline-C bodies (their contract lives in
+     * the owned-carrier table instead), false conservatively for
+     * self-recursion (the flag is read before it is set).  A false negative
+     * is a status-quo leak, never a use-after-free. */
+    bool          returns_fresh_sum_box;
+    /* RM1 (bind chains): the body's every value path is a fresh sum box OR a
+     * call through fn-typed parameter i (bit i set) -- `bind`'s `(k v)` arm.
+     * A call site is then fresh exactly when every masked argument is itself
+     * a fresh producer (call_returns_fresh_sum_box).  Zero when the body is
+     * unconditionally fresh (returns_fresh_sum_box) or not fresh at all. */
+    uint32_t      fresh_sum_via_param_mask;
     /* class-defn-constraint-not-discharged-at-call-site: backlink to the owning
      * FnDef's typeclass constraint set (`^Encode T`, or the `[(Encode T)]`
      * middle-vector form), or NULL for a binding with no constraints.  Stamped
@@ -559,6 +578,17 @@ struct Binding {
      * callee's body rather than trusted from a name list.  Params beyond bit 31
      * are left unset (conservative -- no free). */
     uint32_t            nonretain_ptr_param_mask;
+    /* value-struct-payload-sum-monomorph-box-has-no-owner: the same inference
+     * for a stdlib Option/Result-typed parameter -- "this body reads that sum
+     * value (accessors, non-retaining callees) and never keeps it or its arm
+     * pointer".  Lets a caller free a FRESH sum argument's payload box right
+     * after the call, exactly as the reader allowlist does, but inferred from
+     * the callee body instead of trusted by name -- which is what reaches a
+     * user wrapper like `(defn res-ok? [r] (ok? r))`.  Zero for any body
+     * containing inline C (a C body can stash the pointer), and only set when
+     * the function's own result is a non-pointer scalar, so it cannot carry
+     * the param or its arm back out. */
+    uint32_t            nonretain_sum_param_mask;
     /* closure-drop-glue S1c (fresh-closure-returning fn): true when this function
      * binding's body is a bare capturing EX_CLOSURE with only scalar (Copy)
      * captures and a scalar result -- so every call mallocs a FRESH, uniquely
@@ -1205,6 +1235,14 @@ struct Expr {
      * been materialized.  Outside the union because the argument can be any
      * node kind. */
     bool     any_drop_after;
+    /* RM1 (reclamation-plan), same architecture one type over: this CALL
+     * produces an erased sum-carrier box nothing else owns (its callee's
+     * returns_fresh_sum_box flag), and it flows into argument 0 of a pure
+     * read-only accessor -- so the box dies as soon as that call returns.
+     * Stamped by elab_call.c beside the any stamp; consumed at emit_value's
+     * call hoist, which frees the temp (null-guarded; None IS NULL) once the
+     * consuming call has been materialized. */
+    bool     sum_box_drop_after;
     union {
         bool         b;
         int64_t      i;
@@ -1460,6 +1498,18 @@ struct Expr {
              * carrier.  False for a typed `:fn` carrier / monad continuation,
              * which the concrete-cast call site consumes by value (no spill). */
             bool            boxes_aggregate;
+            /* erased-float-carrier (float32 residue of erased-generic-field-
+             * read): the sink is a typeclass-method `:fn` param whose DECLARED
+             * signature is erased at these positions (`g : (fn [a] b)` --
+             * the instance body invokes it through the int64 carrier cast,
+             * `((int64_t (*)(void*, int64_t))g.fn)`), so a float-class value
+             * the wrapper carries natively there must cross as its BITS in an
+             * int64 (tur_sc_bits_f32 / _f64) rather than in xmm0.  Bit i =
+             * declared arg i is a tyvar; the result flag likewise.  A typed
+             * `:fn` / `^fat` sink leaves both clear and keeps the native
+             * thunk. */
+            uint64_t        carrier_erased_arg_mask;
+            bool            carrier_erased_result;
         } poly_wrap_;
         struct { struct Expr *inner; } ascribe_; /* (:: expr type) — type erased at codegen */
         /* A#1: fat-closure auto-shim.  inner is a bare (non-capturing) fn value;
@@ -1476,7 +1526,12 @@ struct Expr {
          * reports `'free' called on unallocated object`.  Only the normalized
          * NOMINAL param slot sets this -- nothing drops a box handed to one,
          * which is exactly why that slot leaked a box per call. */
-        struct { struct Expr *inner; bool static_ok; } fn_to_fat_;
+        /* stack_ok: the sink was PROVEN non-retaining (inferred mask or a
+         * declared ^borrow), so the { shim, orig } box is dead when the call
+         * returns and may live on the stack.  static_ok alone also covers a
+         * normalized nominal param, which never drops but MAY store the
+         * value -- fine for an immortal static box, not for a stack one. */
+        struct { struct Expr *inner; bool static_ok; bool stack_ok; } fn_to_fat_;
         /* SC7: convert a tur_poly_fn_t {env,fn} (a typeclass-method closure
          * param) into a single-int64 fat-closure handle so a ^fat consumer can
          * fat-call it.  inner is the tur_poly_fn_t value; the emitter heap-boxes
@@ -1631,6 +1686,27 @@ const char *tur_stdlib_load_hint(const char *name);
  * name.  Drives TUR-W0042; see the table in elab_call.c for the membership
  * rule (deliberately-shadowable and arity-gated forms are excluded). */
 bool tur_name_is_reserved_special_form(const char *name);
+
+/* RM1: does this EX_CALL mint a fresh Option/Result box the caller owns?  A
+ * ctor, a callee flagged returns_fresh_sum_box, or a callee whose freshness
+ * rides its continuation parameters (fresh_sum_via_param_mask) with every such
+ * argument a fresh producer -- a closure literal whose body is fresh, or a
+ * defn so flagged.  Defined in elab_fns.c; shared with the emitter. */
+bool call_returns_fresh_sum_box(const Expr *call);
+/* The same question with the callee supplied by the caller -- the emitter's
+ * per-spec re-resolution of a dictionary dispatch hands in the instance
+ * method that actually runs. */
+bool call_returns_fresh_sum_box_as(const Expr *call, const Binding *fb);
+
+/* Is this call's callee the function its fn_binding names?  An ordinary call,
+ * yes.  A typeclass dispatch (dict_arg set) carries the RESOLVED instance
+ * method as fn_binding, but inside a constrained generic the receiver is the
+ * constrained type variable and the call goes through the dictionary
+ * parameter at emit -- fn_binding is then only a representative, and its
+ * masks / freshness say nothing about the instance that actually runs.
+ * Static exactly when the receiver's type head is a concrete nominal type or
+ * a scalar.  Defined in elab_fns.c. */
+bool call_dispatch_is_static(const Expr *call);
 
 /* Emit TUR-W0042 at `span` when `name` collides with a reserved special form.
  * `form_kind` names the definition form in the message ("defn", "defmacro"). */

@@ -19,7 +19,192 @@ bool expr_subtree_has_inline_c(const Expr *e);
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
                                       const Expr *ignore);
 
+/* RM1 (reclamation-plan): the freshness analysis, on the elaborated body.
+ * True iff every VALUE PATH ends in a sum-constructor application or a call
+ * to a binding already proven fresh.  Callees elaborate before callers within
+ * a load order (stdlib first), so `some`/`ok`/`err`/`none` -- whose bodies are
+ * bare ctor applications -- are stamped before the instance bodies that call
+ * them; a self-recursive body reads its own flag before it is set and fails
+ * conservatively.  Guarded match fall-through yields the zero-initialized
+ * merge temp, i.e. the NULL carrier, which the null-guarded free ignores --
+ * so guards need no special case.  Anything unrecognized is NOT fresh: the
+ * polarity is that a wrong `false` leaks (status quo) and a wrong `true`
+ * frees a live box, so every default answers false. */
+/* The freshness walk.  `params`/`n_params` name the enclosing function's
+ * parameters so a call THROUGH one of them (`(k v)`) can count as fresh
+ * contingent on that parameter -- recorded in *need -- rather than as not
+ * fresh.  NULL params is the unconditional question. */
+static bool fresh_sum_walk(const Expr *e, Binding **params, uint32_t n_params,
+                           uint32_t *need) {
+    static int depth = 0;
+    if (!e || depth > 64) return false;
+    bool r = false;
+    depth++;
+    switch (e->kind) {
+        case EX_ASCRIBE:
+            r = fresh_sum_walk(e->as.ascribe_.inner, params, n_params, need);
+            break;
+        case EX_DO:
+            r = e->as.do_.n > 0 &&
+                fresh_sum_walk(e->as.do_.items[e->as.do_.n - 1], params, n_params, need);
+            break;
+        case EX_LET:
+            r = fresh_sum_walk(e->as.let_.body, params, n_params, need);
+            break;
+        case EX_IF:
+            r = e->as.if_.else_or_null &&
+                fresh_sum_walk(e->as.if_.then_, params, n_params, need) &&
+                fresh_sum_walk(e->as.if_.else_or_null, params, n_params, need);
+            break;
+        case EX_MATCH:
+            if (e->as.match_.n_arms == 0) break;
+            r = true;
+            for (uint32_t i = 0; r && i < e->as.match_.n_arms; i++)
+                r = fresh_sum_walk(e->as.match_.arms[i].body, params, n_params, need);
+            break;
+        /* residual-leaks (2026-09-02): a catch always mints its Result box --
+         * tur_catch_unwind_box returns tur_box_ok / tur_box_err of a fresh
+         * allocation on both paths, and an aggregate thunk's payload is a
+         * fresh __tur_catchbox_* allocation whose pointer is the Ok word, the
+         * same layout as a boxed value-struct arm.  So a defn whose body is a
+         * catch (`(defn struct-ok [] : (Result Q int) (catch-unwind ...))`) is
+         * a fresh producer, and its result passed to a non-retaining reader
+         * gets the same drop a ctor's would. */
+        case EX_CATCH_UNWIND:
+        case EX_CATCH_PANIC_OF:
+            r = true;
+            break;
+        case EX_CALL: {
+            if (params && need) {
+                const Expr *fe = e->as.call_.fn_expr;
+                while (fe && fe->kind == EX_ASCRIBE) fe = fe->as.ascribe_.inner;
+                for (uint32_t i = 0; i < n_params && i < 32; i++) {
+                    const Binding *pb = params[i];
+                    if (!pb) continue;
+                    if (e->as.call_.fn_binding == pb ||
+                        (fe && fe->kind == EX_VAR && fe->as.var.binding == pb)) {
+                        *need |= (1u << i);
+                        r = true;
+                        break;
+                    }
+                }
+                if (r) break;
+            }
+            r = call_returns_fresh_sum_box(e);
+            break;
+        }
+        default:
+            break;
+    }
+    depth--;
+    return r;
+}
+
+bool elab_body_returns_fresh_sum_box(const Expr *e) {
+    return fresh_sum_walk(e, NULL, 0, NULL);
+}
+
+void elab_stamp_sum_freshness(Binding *b, Binding **params, uint32_t n_params,
+                              const Expr *body) {
+    if (!b) return;
+    uint32_t need = 0;
+    bool fresh = fresh_sum_walk(body, params, n_params, &need);
+    b->returns_fresh_sum_box = fresh && need == 0;
+    b->fresh_sum_via_param_mask = fresh ? need : 0;
+}
+
+/* Peel the wraps elab puts around a function-valued argument on its way into
+ * a fn-typed / ^fat / poly parameter slot. */
+static const Expr *peel_fn_arg_wraps(const Expr *a) {
+    while (a) {
+        if (a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        else if (a->kind == EX_FN_TO_FAT) a = a->as.fn_to_fat_.inner;
+        else if (a->kind == EX_POLY_TO_FAT) a = a->as.poly_to_fat_.inner;
+        else if (a->kind == EX_POLY_WRAP) a = a->as.poly_wrap_.inner;
+        else break;
+    }
+    return a;
+}
+
+static bool type_head_is_concrete(const Type *t) {
+    const Type *h = t;
+    while (h && h->kind == TY_APP) h = h->as.app.fn;
+    if (!h) return false;
+    switch (h->kind) {
+        case TY_ADT: return h->as.adt_.def != NULL;
+        case TY_STRUCT: return true;
+        case TY_NIL: case TY_INT: case TY_BOOL: case TY_FLOAT: case TY_CSTR:
+        case TY_INT64: case TY_UINT64: case TY_INT32: case TY_UINT32:
+        case TY_INT16: case TY_UINT16: case TY_INT8: case TY_UINT8:
+        case TY_FLOAT64: case TY_FLOAT32:
+            return true;
+        default: return false;
+    }
+}
+
+bool call_dispatch_is_static(const Expr *call) {
+    if (!call || call->kind != EX_CALL) return false;
+    if (!call->as.call_.dict_arg) return true;
+    /* A return-dispatched method (`pure`) keeps the abstract class variable
+     * as the call's type; a concrete instance call's type is the instance
+     * head applied (or a NULL-headed app, which decides nothing). */
+    {
+        const Type *h = &call->type;
+        while (h && h->kind == TY_APP) h = h->as.app.fn;
+        if (h && h->kind != TY_ADT && h->kind != TY_STRUCT &&
+            !type_head_is_concrete(h))
+            return false;
+    }
+    if (call->as.call_.n_args == 0 || !call->as.call_.args[0]) return false;
+    const Expr *recv = call->as.call_.args[0];
+    while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
+    return recv && type_head_is_concrete(&recv->type);
+}
+
+bool call_returns_fresh_sum_box_as(const Expr *call, const Binding *fb) {
+    if (!call || call->kind != EX_CALL) return false;
+    if (call->as.call_.ctor) return true;
+    if (!fb) return false;
+    if (fb->returns_fresh_sum_box) return true;
+    uint32_t m = fb->fresh_sum_via_param_mask;
+    if (!m) return false;
+    for (uint32_t i = 0; i < 32; i++) {
+        if (!(m & (1u << i))) continue;
+        if (i >= call->as.call_.n_args) return false;
+        const Expr *a = peel_fn_arg_wraps(call->as.call_.args[i]);
+        if (!a) return false;
+        if (a->kind == EX_CLOSURE) {
+            const struct Closure *c = a->as.closure_.closure;
+            bool cf = c && c->fn && elab_body_returns_fresh_sum_box(c->fn->body);
+            if (!cf) return false;
+        } else if (a->kind == EX_VAR) {
+            /* A defn so flagged, or a let-bound closure (the hoisted-borrow
+             * shape) whose anonymous fn binding is. */
+            const Binding *ab = a->as.var.binding;
+            bool vf = ab && (ab->returns_fresh_sum_box ||
+                             (ab->closure_fn_binding &&
+                              ab->closure_fn_binding->returns_fresh_sum_box) ||
+                             (ab->hoist_closure_fn_binding &&
+                              ab->hoist_closure_fn_binding->returns_fresh_sum_box));
+            if (!vf) return false;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool call_returns_fresh_sum_box(const Expr *call) {
+    if (!call || call->kind != EX_CALL) return false;
+    if (call->as.call_.ctor) return true;
+    if (!call_dispatch_is_static(call)) return false;
+    return call_returns_fresh_sum_box_as(call, call->as.call_.fn_binding);
+}
+
+
 bool ptr_param_is_nonretaining(const Expr *body, const Binding *p,
+                               bool result_cannot_carry);
+bool sum_param_is_nonretaining(const Expr *body, const Binding *p,
                                bool result_cannot_carry);
 
 /* closure-capture-escapes-linearity: one enclosing linear/unique binding's
@@ -2143,6 +2328,60 @@ void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_param
     s->defn_form  = defn_form;
     s->body_start = body_start;
     s->annot      = annot;
+}
+
+void wf_note_image_cache_root(Elab *e, const Symbol *root, Span span) {
+    if (!e || !root) return;
+    if (e->n_image_cache_roots == e->cap_image_cache_roots) {
+        uint32_t ncap = e->cap_image_cache_roots ? e->cap_image_cache_roots * 2 : 4;
+        ImageCacheRoot *nb = (ImageCacheRoot *)arena_alloc(
+            e->arena, ncap * sizeof(ImageCacheRoot));
+        if (e->image_cache_roots)
+            memcpy(nb, e->image_cache_roots,
+                   e->n_image_cache_roots * sizeof(ImageCacheRoot));
+        e->image_cache_roots     = nb;
+        e->cap_image_cache_roots = ncap;
+    }
+    ImageCacheRoot *r = &e->image_cache_roots[e->n_image_cache_roots++];
+    r->root = root;
+    r->span = span;
+}
+
+/* AI3.1 (application-image-dumps-plan): TUR-W0706.  The image written by
+ * with-image-cache-after-init is the CONTINUATION that runs `loop`; a
+ * top-level global that `init` (or anything it calls) writes is not in it
+ * unless a `defimage-global` declared it -- and init is exactly the code a
+ * warm start skips, so the write is silently gone on the run that needed it.
+ * A declared image global leaves a `<name>/image-deser` defn behind (that is
+ * what the macro expands to), so registration is a global-scope lookup.
+ * Reuses the G1 global-write walk, which is transitive over named callees
+ * and answers UNKNOWN for indirect calls (no warning: nothing was seen). */
+void wf_lint_image_globals(Elab *e) {
+    if (!e || e->n_image_cache_roots == 0) return;
+    for (uint32_t i = 0; i < e->n_image_cache_roots; i++) {
+        const ImageCacheRoot *r = &e->image_cache_roots[i];
+        Binding *fn = scope_lookup(&e->global, r->root);
+        if (!fn) continue;
+        WgSet seen = { { 0 }, 0, false };
+        (void)wf_fn_writes_global(e, fn, &seen);
+        for (uint32_t gi = 0; gi < seen.n; gi++) {
+            const Symbol *g = seen.names[gi];
+            char probe[512];
+            snprintf(probe, sizeof probe, "%s/image-deser", g->name);
+            const Symbol *ps = symtab_intern(e->st, strslice(probe, (uint32_t)strlen(probe)));
+            if (scope_lookup(&e->global, ps)) continue;
+            diag_emit_with_code(DIAG_WARNING, r->span,
+                                TUR_W0706_IMAGE_GLOBAL_UNREGISTERED,
+                                "`%s` writes the global `%s`, which is not an "
+                                "image global: the image holds the captured "
+                                "continuation, not the heap, and init is skipped "
+                                "on a warm start, so the write is silently absent "
+                                "after load -- declare it with (defimage-global %s "
+                                ":T initial) and track it at the top of main, or "
+                                "thread the value through the captured continuation",
+                                r->root->name, g->name, g->name);
+        }
+    }
 }
 
 void wf_resolve_write_frames(Elab *e) {
@@ -5018,6 +5257,144 @@ static void elab_normalize_fn_tail_leaves(Elab *e, Expr **slot,
     }
 }
 
+void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
+                                Expr *body) {
+    b->nonretain_param_mask = 0;
+    /* An inline-C body can STORE a fn-param invisibly to the AST escape analysis
+     * (a param is a C-visible formal, not an AST capture), so a body containing
+     * any inline-C is never treated as non-retaining -- otherwise its stored
+     * closure arg would be freed while the C-side copy is still live (UAF). */
+    /* catch-box-reader-confinement-whitelist: the same inference, for the
+     * pointer-carrying scalars (cstr / ptr<void>) that a caught-Result box
+     * hands out.  Trusting a hardcoded print-family name list made the
+     * confinement check a soundness-maintenance footgun AND needlessly leaked
+     * for a user-defined logger that is every bit as safe; inferring it from
+     * the body makes it a checked property.  The inline-C guard above is
+     * load-bearing here too -- a C body can stash the pointer where no AST
+     * walk can see it.
+     *
+     * The result gate mirrors catch_box_binding_reader_confined: the param may
+     * only be treated as non-retained if the function's own result cannot carry
+     * it back out. */
+    b->nonretain_ptr_param_mask = 0;
+    b->nonretain_sum_param_mask = 0;
+    if (body && !expr_subtree_has_inline_c(body)) {
+      /* residual-leaks (2026-09-02): a GREATEST fixed point for the fn-param
+       * mask.  `list-eq?` hands `cmp-fn` to its own recursive call; with the
+       * mask still zero during inference that self-call read as an escape and
+       * the mask never set, so every comparator into a recursive stdlib walker
+       * leaked its shim box.  Start with every fn-typed param assumed
+       * non-retaining, clear the bits the walk proves escape, and repeat
+       * until nothing changes: bits only ever clear, so this terminates, and
+       * a bit that survives is one no use of the param can contradict --
+       * including a pass-through into a slot that also survived. */
+      for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
+          Binding *_pb = params[_pi];
+          if (_pb && (_pb->is_fat || _pb->is_poly_fn || _pb->type.kind == TY_FN))
+              b->nonretain_param_mask |= (1u << _pi);
+      }
+      uint32_t _prev_fn_mask;
+      do {
+        _prev_fn_mask = b->nonretain_param_mask;
+        b->nonretain_ptr_param_mask = 0;
+        b->nonretain_sum_param_mask = 0;
+        for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
+            Binding *_pb = params[_pi];
+            if (!_pb) continue;
+            /* value-struct-payload-sum-monomorph-box-has-no-owner: a stdlib
+             * Option/Result-typed parameter joins the inference.  Same result
+             * gate as the pointer-scalar case (a non-pointer scalar result
+             * cannot carry the param or its arm pointer back out), same
+             * inline-C exclusion (enforced by the enclosing `if`). */
+            {
+                const AdtDef *_sd = NULL;
+                if (_pb->type.kind == TY_APP) _sd = type_adt_app_def(&_pb->type);
+                else if (_pb->type.kind == TY_ADT) _sd = _pb->type.as.adt_.def;
+                bool _is_sum = _sd && _sd->name &&
+                    (strcmp(_sd->name, "Option") == 0 || strcmp(_sd->name, "Result") == 0);
+                if (_is_sum) {
+                    TypeKind _srk = (b->type.kind == TY_FN) ? b->type.as.fn.result_kind
+                                                            : TY_UNKNOWN;
+                    /* Two result-kind facts feed the walk.  `_sres_refuse`:
+                     * a result that can carry a pointer the walk does not
+                     * model (borrow / raw pointer / any / fn / unknown) --
+                     * refused outright, as before.  `_sres_scalar`: a
+                     * non-pointer scalar result cannot carry the box or its
+                     * arm pointer at all (a payload word or cstr field copied
+                     * out does not point INTO the box's malloc), so the body's
+                     * result position starts CONFINED and a bare `p` there is
+                     * a read.  Everything else -- an aggregate such as the
+                     * parameter's own `(Option S)` -- walks with the result
+                     * position UNCONFINED: `(defn f [n : int v : (Option S)] :
+                     * (Option S) (if (= n 0) v (f (- n 1) v)))` returns `v`
+                     * as-is, arm box included, and the first version of this
+                     * gate (a denylist that started every non-refused kind
+                     * confined) stamped it non-retaining, so the caller freed
+                     * the arm its own result still pointed at -- the type
+                     * fuzzer printed the freed box's stale word.  `result-map`
+                     * keeps its bit: its result is rebuilt from `ok-val` /
+                     * `err-val` reads, which the walk admits unconfined. */
+                    bool _sres_refuse;
+                    switch (_srk) {
+                        case TY_UNKNOWN: case TY_PTR_VOID: case TY_FN:
+                        case TY_REF: case TY_RC: case TY_WEAK:
+                        case TY_REF_IMMUT: case TY_REF_MUT:
+                        case TY_ANY: case TY_NEVER:
+                        case TY_CONT: case TY_CLONEABLE_CONT: case TY_EXCEPTION:
+                            _sres_refuse = true; break;
+                        default:
+                            _sres_refuse = false; break;
+                    }
+                    bool _sres_scalar;
+                    switch (_srk) {
+                        case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT:
+                        case TY_CSTR: case TY_SYM:
+                        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+                        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                        case TY_FLOAT32: case TY_FLOAT64:
+                            _sres_scalar = true; break;
+                        default:
+                            _sres_scalar = false; break;
+                    }
+                    if (!_sres_refuse &&
+                        sum_param_is_nonretaining(body, _pb, _sres_scalar))
+                        b->nonretain_sum_param_mask |= (1u << _pi);
+                }
+            }
+            bool _is_fnparam = _pb->is_fat || _pb->is_poly_fn ||
+                               _pb->type.kind == TY_FN;
+            if (_is_fnparam && closure_binding_escapes(body, _pb))
+                b->nonretain_param_mask &= ~(1u << _pi);
+            /* any-struct-box-leak-per-widen: an `any` parameter joins the same
+             * inference, and means the same thing -- "this body does not retain
+             * a pointer this parameter carries".  A tur_tagged_t whose payload
+             * is a heap-boxed by-value struct carries exactly such a pointer, so
+             * the caller may keep that payload in its own frame rather than
+             * mallocing a box nothing frees.  Reusing this mask rather than
+             * adding a parallel one keeps a single answer to a single question. */
+            bool _is_ptr_scalar = _pb->type.kind == TY_CSTR ||
+                                  _pb->type.kind == TY_PTR_VOID ||
+                                  _pb->type.kind == TY_ANY;
+            if (_is_ptr_scalar) {
+                TypeKind _rk = (b->type.kind == TY_FN) ? b->type.as.fn.result_kind
+                                                       : TY_UNKNOWN;
+                bool _result_safe = false;
+                switch (_rk) {
+                    case TY_NIL: case TY_INT: case TY_BOOL: case TY_FLOAT:
+                    case TY_INT64: case TY_UINT64: case TY_INT32: case TY_UINT32:
+                    case TY_INT16: case TY_UINT16: case TY_INT8: case TY_UINT8:
+                    case TY_FLOAT64: case TY_FLOAT32:
+                        _result_safe = true; break;
+                    default: break;
+                }
+                if (_result_safe && ptr_param_is_nonretaining(body, _pb, true))
+                    b->nonretain_ptr_param_mask |= (1u << _pi);
+            }
+        }
+      } while (b->nonretain_param_mask != _prev_fn_mask);
+    }
+}
+
 Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase R5: Check for #[no-unwind] attribute before name.
      * #[used]: retain with external C linkage (see Binding.retain_c_linkage).
@@ -5378,6 +5755,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase HRT1: full type annotations for rank-2 poly params (NULL if not poly) */
     Type **param_poly_types = (Type **)arena_alloc(e->arena, pcap * sizeof(Type *));
     for (uint32_t _i = 0; _i < pcap; _i++) param_poly_types[_i] = NULL;
+    /* typeclass-constrained-param-erases-adt-to-int64: the constraint binder
+     * whose type the following BARE parameters take.  `[^Show a x]` reads as
+     * `[^Show a x : a]` -- the binder was declared for those parameters, and
+     * an untyped `x` defaulting to `int` silently bound the dispatch to the
+     * int instance (or the single carrier-compatible instance) and erased a
+     * by-value ADT argument to the int64 carrier at the call.  The run ends
+     * at the first parameter that carries its own annotation. */
+    const Symbol *constraint_binder_run = NULL;
     /* sized-types-cross-param-unification: retain each parameter's raw type
      * annotation Form so call-site unification can re-extract size-index
      * templates (e.g. `(SizedVec n)`).  NULL when a param has no list-form
@@ -5770,6 +6155,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
             n_constraints = new_count;
             n_pending = 0;
+            /* A `^f`-declared constructor variable (`^Functor f`) has kind
+             * `* -> *` and is never a parameter's type; only a `*`-kinded
+             * binder types the bare parameters that follow it. */
+            constraint_binder_run = binder;
+            for (uint8_t kvi = 0; kvi < n_kind_vars; kvi++) {
+                if (kind_var_names[kvi] == binder) { constraint_binder_run = NULL; break; }
+            }
             continue;
         }
         
@@ -5788,6 +6180,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
                           "defn: type annotation without preceding parameter");
                 return NULL;
             }
+            constraint_binder_run = NULL;
+            /* An explicit annotation on a run-typed parameter replaces the
+             * binder type it was given above, poly slot included. */
+            param_poly_types[n_params - 1] = NULL;
             /* For F_TYPE_ANN, unwrap to the inner type form first */
             const Form *type_form = (p->tag == F_TYPE_ANN) ? p->as.list.items[0] : p;
             /* sized-types-cross-param-unification: record the raw type form so
@@ -6039,6 +6435,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
                           "defn: type annotation without preceding parameter");
                 return NULL;
             }
+            constraint_binder_run = NULL;
+            /* An explicit annotation on a run-typed parameter replaces the
+             * binder type it was given above, poly slot included. */
+            param_poly_types[n_params - 1] = NULL;
             /* Update the type of the last parameter */
             const Symbol *kw = p_eff->as.sym;
             uint8_t type_param_idx = 0;
@@ -6314,6 +6714,21 @@ Expr *elab_defn(Elab *e, const Form *call) {
             b->bare_fat_result_kind = e->bare_fat_spec_active
                                     ? e->bare_fat_spec_kind : TY_INT;
         }
+        /* Bare parameter inside a constraint binder's run: it IS the binder's
+         * type -- mirror the `: a` keyword branch exactly (a later explicit
+         * annotation on this same parameter still overrides, as it does
+         * there).  A `^fat` parameter keeps its fat-closure default. */
+        if (constraint_binder_run && !b->is_fat) {
+            uint8_t cb_idx = 0;
+            if (fn_type_param_index(fn_type_params, n_fn_type_params,
+                                    constraint_binder_run, &cb_idx)) {
+                param_kinds[n_params] = TY_TYVAR;
+                b->type = type_tyvar_named(constraint_binder_run->name);
+                b->type.hkt_kind = fn_type_param_kinds[cb_idx];
+                param_poly_types[n_params] = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *param_poly_types[n_params] = b->type;
+            }
+        }
         if (n_params == 0) {
             params = (Binding **)arena_alloc(e->arena, pcap * sizeof(Binding *));
         }
@@ -6325,6 +6740,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Parse return type annotation and body */
     /* body_start is the index of the first element after params (could be return type or body) */
     TypeKind return_kind = TY_NIL;
+    /* nil-tail-not-checked-against-declared-return: `return_kind` starts at
+     * TY_NIL, so "declared nil/void" and "not annotated" are the SAME value
+     * here.  The nil-tail check below needs to tell them apart -- a `: void`
+     * function must keep accepting a nil tail, an unannotated one infers its
+     * return from the body -- so record whether a return type was written down.
+     * Mirrors `return_annotated` in elab_fn. */
+    bool return_annotated = false;
     AdtDef *return_adt_def = NULL; /* Phase G3: set when return type is an ADT name */
     /* structdef-retirement DS-C: return_struct_def (LT4) removed -- a struct
      * return name is a record ADT (return_adt_def); no StructDef is produced. */
@@ -6629,6 +7051,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
 
     /* Check for : return-type annotation */
     if (call->as.list.len >= (body_start + 1)) {
+        /* nil-tail-not-checked-against-declared-return: an annotation is
+         * consumed exactly when this block advances body_start, on every one of
+         * its exits (three `goto done_return_annotation` paths, the keyword
+         * ladder's fallthrough, and the F_TYPE_ANN branch).  Reading the cursor
+         * once here beats setting a flag at five sites and missing one. */
+        uint32_t ret_annot_bs_before = body_start;
         Form *ret_f = call->as.list.items[body_start];
         /* Spaced `: T` where T is a single symbol or keyword: treat as if
          * fused so the full F_KEYWORD lookup ladder (alias / ADT / struct /
@@ -6862,6 +7290,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
             body_start++;
         }
+        return_annotated = (body_start > ret_annot_bs_before);
     }
 
     /* Ergonomics: a misplaced effect annotation -- `: int #{Unsafe}` instead
@@ -7577,8 +8006,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
         ReturnClass ret_cls = (n_fn_type_params == 0 && !fn_declared_unsafe)
                                   ? RET_CLASS_COMMITTED
                                   : RET_CLASS_CARRIER_FN;
+        /* nil-tail-not-checked-against-declared-return: check a nil tail only
+         * when the return was WRITTEN DOWN (return_kind starts TY_NIL, so
+         * unannotated and `: void` are indistinguishable by kind) and the tail is
+         * a nil LITERAL.  EX_NIL_LIT is what `defmacro` / `defclass` / `deftype`
+         * collapse to once registered, and what a missing close paren leaves
+         * behind -- the shapes that made this hole expensive.  A merely
+         * nil-TYPED tail (a `println` call) is deliberately not checked; see the
+         * predicate's comment for the measurement behind that line. */
+        bool check_nil_body = return_annotated && body_tail_is_nil_literal(body);
         ReturnConflict rc = return_position_conflict(
-            return_adt_def, return_kind, body->type, ret_cls);
+            return_adt_def, return_kind, body->type, ret_cls, check_nil_body);
         if (rc != RET_CONFLICT_NONE) {
             const char *want = return_adt_def ? return_adt_def->name
                              : typekind_to_string(return_kind);
@@ -7639,6 +8077,23 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         "is no representation these two share and nothing to "
                         "bridge them",
                         name_f->as.sym->name, want, gb.data);
+                    break;
+                case RET_CONFLICT_NIL_BODY:
+                    /* The message names the two causes that actually produce
+                     * this, because the bare type mismatch is not enough to find
+                     * either: a void-returning call in tail position, and a
+                     * missing close paren that swallowed the real tail.  The
+                     * second is what made this hole expensive -- see TUR-E0713,
+                     * the targeted diagnostic for the definition-in-tail case. */
+                    diag_emit_with_code(DIAG_ERROR, body->span,
+                        TUR_E0709_RETURN_TYPE_MISMATCH,
+                        "function '%s' declares return type '%s' but its body "
+                        "produces no value (nil) -- a tail that is a void call "
+                        "(println, a set!, a while loop) or a definition returns "
+                        "nothing, and a missing close paren can swallow the real "
+                        "tail into the form above it. Declare ': void' if the "
+                        "function is meant to return nothing",
+                        name_f->as.sym->name, want);
                     break;
                 case RET_CONFLICT_NONE: break;  /* unreachable */
             }
@@ -8351,59 +8806,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * freed at the call scope's exit (like a ^borrow param).  Infer the mask now,
      * from the just-elaborated body; the conservative escape analysis only ever
      * clears the bit (a false "escapes" merely preserves the status-quo leak). */
-    b->nonretain_param_mask = 0;
-    /* An inline-C body can STORE a fn-param invisibly to the AST escape analysis
-     * (a param is a C-visible formal, not an AST capture), so a body containing
-     * any inline-C is never treated as non-retaining -- otherwise its stored
-     * closure arg would be freed while the C-side copy is still live (UAF). */
-    /* catch-box-reader-confinement-whitelist: the same inference, for the
-     * pointer-carrying scalars (cstr / ptr<void>) that a caught-Result box
-     * hands out.  Trusting a hardcoded print-family name list made the
-     * confinement check a soundness-maintenance footgun AND needlessly leaked
-     * for a user-defined logger that is every bit as safe; inferring it from
-     * the body makes it a checked property.  The inline-C guard above is
-     * load-bearing here too -- a C body can stash the pointer where no AST
-     * walk can see it.
-     *
-     * The result gate mirrors catch_box_binding_reader_confined: the param may
-     * only be treated as non-retained if the function's own result cannot carry
-     * it back out. */
-    b->nonretain_ptr_param_mask = 0;
-    if (body && !expr_subtree_has_inline_c(body)) {
-        for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
-            Binding *_pb = params[_pi];
-            if (!_pb) continue;
-            bool _is_fnparam = _pb->is_fat || _pb->is_poly_fn ||
-                               _pb->type.kind == TY_FN;
-            if (_is_fnparam && !closure_binding_escapes(body, _pb))
-                b->nonretain_param_mask |= (1u << _pi);
-            /* any-struct-box-leak-per-widen: an `any` parameter joins the same
-             * inference, and means the same thing -- "this body does not retain
-             * a pointer this parameter carries".  A tur_tagged_t whose payload
-             * is a heap-boxed by-value struct carries exactly such a pointer, so
-             * the caller may keep that payload in its own frame rather than
-             * mallocing a box nothing frees.  Reusing this mask rather than
-             * adding a parallel one keeps a single answer to a single question. */
-            bool _is_ptr_scalar = _pb->type.kind == TY_CSTR ||
-                                  _pb->type.kind == TY_PTR_VOID ||
-                                  _pb->type.kind == TY_ANY;
-            if (_is_ptr_scalar) {
-                TypeKind _rk = (b->type.kind == TY_FN) ? b->type.as.fn.result_kind
-                                                       : TY_UNKNOWN;
-                bool _result_safe = false;
-                switch (_rk) {
-                    case TY_NIL: case TY_INT: case TY_BOOL: case TY_FLOAT:
-                    case TY_INT64: case TY_UINT64: case TY_INT32: case TY_UINT32:
-                    case TY_INT16: case TY_UINT16: case TY_INT8: case TY_UINT8:
-                    case TY_FLOAT64: case TY_FLOAT32:
-                        _result_safe = true; break;
-                    default: break;
-                }
-                if (_result_safe && ptr_param_is_nonretaining(body, _pb, true))
-                    b->nonretain_ptr_param_mask |= (1u << _pi);
-            }
-        }
-    }
+    elab_infer_nonretain_masks(b, params, n_params, body);
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
 
     /* closure-drop-glue S1c (fresh-closure-returning fn): a fn whose body is a
@@ -8592,6 +8995,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Mirror emit_fns.c:377's predicate on the binding so call sites can
      * detect an inline-C callee without walking back to the FnDef. */
     b->body_is_inline_c = (body && body->kind == EX_INLINE_C);
+    elab_stamp_sum_freshness(b, params, n_params, body);
     fd->closure = NULL;
     fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
     /* Phase 19: Store declared effect row (ERK_UNRESOLVED until PASS_EFFECT_ROW_INFER). */
@@ -9723,6 +10127,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* Mirror emit_fns.c:377's predicate so call sites referencing this
      * anonymous fn binding can see the same flag a defn binding would. */
     b->body_is_inline_c = (body && body->kind == EX_INLINE_C);
+    b->returns_fresh_sum_box = elab_body_returns_fresh_sum_box(body);
     fd->closure = NULL;
     fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
     /* Phase 19: Store declared effect row (ERK_UNRESOLVED until PASS_EFFECT_ROW_INFER). */

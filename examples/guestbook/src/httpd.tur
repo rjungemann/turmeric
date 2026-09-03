@@ -1,0 +1,89 @@
+;;; httpd -- Turmeric bindings for the vendored httpd.c listener.
+;;;
+;;; httpd.c is a raw-socket HTTP/1.1 listener that handles one request at a
+;;; time.  It is linked through the manifest's :c-sources, so these bindings
+;;; are plain inline-C wrappers over its three exported functions.  The parsed
+;;; request lives in the wrapper's own static storage: httpd/wait! accepts and
+;;; parses the next connection, and the accessors read the fields until the
+;;; next wait.
+;;;
+;;; Since: Guestbook example
+(defmodule httpd
+  (export httpd/start httpd/wait! httpd/method httpd/path httpd/query httpd/body
+          httpd/send!)
+
+  ;;; httpd/request-slot -- static request storage (internal).
+  ;;;
+  ;;; op 0: accept + parse the next request (frees the previous one); returns 0.
+  ;;; op 1..4: method / path / query / body of the current request.
+  (defn httpd/request-slot [op : int] : cstr
+    ```c
+    extern void httpd_next_request(char **m, char **p, char **q, char **b);
+    static char *method = NULL, *path = NULL, *query = NULL, *body = NULL;
+    switch (op) {
+      case 0:
+        free(method); free(path); free(query); free(body);
+        method = path = query = body = NULL;
+        httpd_next_request(&method, &path, &query, &body);
+        return "";
+      case 1: return method ? method : "";
+      case 2: return path   ? path   : "";
+      case 3: return query  ? query  : "";
+      case 4: return body   ? body   : "";
+      default: return "";
+    }
+    ```)
+
+  ;;; httpd/start -- bind an HTTP listener on the given port.
+  ;;;
+  ;;; Parameters:
+  ;;;   port -- TCP port number (1-65535)
+  ;;;
+  ;;; Returns:
+  ;;;   0 on success, -1 on error.
+  ;;;
+  ;;; Example:
+  ;;;   (httpd/start 8080)
+  ;;;
+  ;;; Since: Guestbook example
+  (defn httpd/start [port : int] : int
+    ```c
+    extern int httpd_start(int port);
+    return httpd_start((int)port);
+    ```)
+
+  ;;; httpd/wait! -- block until the next HTTP request has been read.
+  ;;;
+  ;;; After it returns, httpd/method, httpd/path, httpd/query and httpd/body
+  ;;; describe the request until the next call.  Returns 0.
+  ;;;
+  ;;; Since: Guestbook example
+  (defn httpd/wait! [] : int
+    (do (httpd/request-slot 0) 0))
+
+  ;;; httpd/method -- the current request's method ("GET" / "POST").
+  (defn httpd/method [] : cstr (httpd/request-slot 1))
+  ;;; httpd/path -- the current request's URL path, e.g. "/submit".
+  (defn httpd/path [] : cstr (httpd/request-slot 2))
+  ;;; httpd/query -- the current request's raw query string, e.g. "k=abc".
+  (defn httpd/query [] : cstr (httpd/request-slot 3))
+  ;;; httpd/body -- the current request's raw POST body ("" for GET).
+  (defn httpd/body [] : cstr (httpd/request-slot 4))
+
+  ;;; httpd/send! -- write an HTTP response to the open connection and close it.
+  ;;;
+  ;;; Parameters:
+  ;;;   status       -- HTTP status code (200, 404, ...)
+  ;;;   content-type -- MIME type, e.g. "text/html"
+  ;;;   body         -- the response body
+  ;;;
+  ;;; Returns:
+  ;;;   The status code, so a handler can end with the send.
+  ;;;
+  ;;; Since: Guestbook example
+  (defn httpd/send! [status : int content-type : cstr body : cstr] : int
+    ```c
+    extern void httpd_send_response(int status, const char *ct, const char *body);
+    httpd_send_response((int)status, content_type, body);
+    return status;
+    ```))

@@ -486,7 +486,7 @@ jobs:
   # a git push.
   publish-timings:
     name: Publish suite timings
-    needs: [test, jit]
+    needs: [test, jit, web-smoke]
     # always(): a red run's timings are the interesting ones (a suite that
     # regressed into a timeout), so publish regardless of upstream job status.
     # Restricted to main pushes: PR runs -- especially from forks, whose token
@@ -888,10 +888,17 @@ jobs:
       # (try-turmeric-navigation-and-minimap-plan §8) were written against a
       # bundle CI is the first place to actually build, so they are named here
       # rather than left to be discovered.
+      # Each non-blocking suite also writes JUnit (one <testcase> per test)
+      # for the timings step below, so the suites get /ci rows like every
+      # ctest suite -- including an honest `status: fail` on a run whose job
+      # stayed green (docs/archive/try-turmeric-browser-suites-green-while-failing.md).
       - name: Run broader smoke suite (desktop, non-blocking)
+        id: desktop
         working-directory: web
         continue-on-error: true
-        run: npx playwright test --project=desktop
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: results-desktop.xml
+        run: npx playwright test --project=desktop --reporter=list,junit
           tests/smoke.spec.js tests/diag.spec.js tests/guide-toggle.spec.js
           tests/meta-commands.spec.js tests/docs-pane.spec.js
           tests/docs-offline.spec.js tests/lsp.spec.js
@@ -899,14 +906,60 @@ jobs:
           tests/lang-picker.spec.js tests/sw-dev.spec.js tests/trace.spec.js
 
       - name: Run mobile smoke suite (non-blocking)
+        id: mobile
         working-directory: web
         continue-on-error: true
-        run: npx playwright test --project=mobile
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: results-mobile.xml
+        run: npx playwright test --project=mobile --reporter=list,junit
 
-      - name: Upload Playwright report on failure
-        if: failure()
+      # A non-blocking failure must still announce itself: on the job summary
+      # and as a workflow annotation, not five thousand lines down a log.
+      - name: Report browser suite outcomes
+        if: always()
+        run: |
+          {
+            echo "### Try Turmeric browser suites"
+            echo
+            echo "| suite | outcome |"
+            echo "|---|---|"
+            echo "| deploy-gate (blocking) | passed |"
+            echo "| desktop (non-blocking) | ${{ steps.desktop.outcome }} |"
+            echo "| mobile (non-blocking) | ${{ steps.mobile.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.desktop.outcome }}" = "failure" ]; then
+            echo "::warning title=Try Turmeric desktop suite failed::non-blocking, but see the playwright-report artifact and the web_desktop row on /ci"
+          fi
+          if [ "${{ steps.mobile.outcome }}" = "failure" ]; then
+            echo "::warning title=Try Turmeric mobile suite failed::non-blocking, but see the playwright-report artifact and the web_mobile row on /ci"
+          fi
+
+      - name: Collect browser suite timings
+        if: always()
+        run: |
+          python3 tools/ci/collect-playwright-timings.py \
+            --suite web_desktop web/results-desktop.xml \
+            --suite web_mobile  web/results-mobile.xml > timings.jsonl || true
+          echo "collected $(wc -l < timings.jsonl) browser suite rows"
+
+      - name: Upload browser suite timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timings-web
+          path: timings.jsonl
+          if-no-files-found: warn
+          retention-days: 7
+
+      # `!cancelled()`, not `failure()`: the suites are continue-on-error, so a
+      # failing suite never put the job into a failure state and the report
+      # was uploaded only when nothing had failed -- the one case it was not
+      # needed.  The report is the evidence; upload it every time.
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: web/playwright-report/
+          if-no-files-found: ignore
           retention-days: 7

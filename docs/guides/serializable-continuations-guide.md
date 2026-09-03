@@ -24,34 +24,87 @@ Use cases include:
 
 ### What is a Serializable Continuation?
 
-A **continuation** represents "the rest of the computation" -- a suspended state that can be resumed later. A **serializable continuation** can be converted to bytes and restored, even in a different process.
+A **continuation** represents "the rest of the computation" -- a suspended state
+that can be resumed later. A **serializable continuation** can be converted to
+bytes and restored, even in a different process running the same program.
+
+`serial-reset` delimits the region; `serial-shift` captures the rest of that
+region and hands it to a **handler function** as an opaque `serial-cont`. The
+handler decides what happens: resume it now with `(k v)` / `(serial-resume k v)`,
+or marshal it with `serial-cont->bytes`, put the bytes somewhere, and let
+another process rebuild it with `bytes->serial-cont`:
 
 ```turmeric
-;; Capture a serializable continuation
-(serial-reset
-  (let [x 42]
-    (serial-shift k
-      ;; k is a serializable continuation expecting an int64
-      (save-to-disk k "my-continuation.bin")
-      0)))
+(load "stdlib/serial.tur")
 
-;; Later, in another process:
-(def k (load-from-disk "my-continuation.bin"))
-(serial-resume k 100)  ; Resumes computation with x=42, returns 142
+;; The handler: keep the continuation on disk, do not resume it now.
+(defn save-to-disk [k : serial-cont] : int
+  (do (cont-to-file (serial-cont->bytes k) "my-continuation.bin")
+      0))
+
+;; The reset yields the handler's value (0) because the handler did not resume.
+(defn capture [] : int
+  (serial-reset (let [x 42] (+ x (serial-shift save-to-disk 0)))))
+
+;; Later, in another process: rebuild and resume with 100 -> 142.
+(defn restore [] : int
+  (match (bytes->serial-cont (cont-from-file "my-continuation.bin"))
+    (Ok k)  (serial-resume k 100)
+    (Err m) (do (println m) 0)))
 ```
 ```sweet-exp
-;; Capture a serializable continuation
-serial-reset
-  let [x 42]
-    serial-shift k
-      ;; k is a serializable continuation expecting an int64
-      save-to-disk(k "my-continuation.bin")
-      0
+load("stdlib/serial.tur")
 
-;; Later, in another process:
-def k load-from-disk("my-continuation.bin")
-serial-resume(k 100)  ; Resumes computation with x=42, returns 142
+;; The handler: keep the continuation on disk, do not resume it now.
+defn save-to-disk [k : serial-cont] : int
+  do
+    cont-to-file(serial-cont->bytes(k) "my-continuation.bin")
+    0
+
+;; The reset yields the handler's value (0) because the handler did not resume.
+defn capture [] : int
+  serial-reset $ let [x 42] {x + serial-shift(save-to-disk 0)}
+
+;; Later, in another process: rebuild and resume with 100 -> 142.
+defn restore [] : int
+  match bytes->serial-cont(cont-from-file("my-continuation.bin"))
+    Ok(k)
+    serial-resume(k 100)
+    Err(m)
+    do
+      println(m)
+      0
 ```
+
+`(serial-shift handler default)` takes exactly two arguments: the handler (a
+top-level `defn` or a `fn` literal taking one `serial-cont`) and a default
+value. If the handler resumes the continuation, the resumed computation's result
+becomes the value of the enclosing `serial-reset`; if it does not, the handler's
+own return value is. The `default` is the value the hole takes on the
+interpreter's structural path; pass `0`.
+
+**Capture scope.** The continuation must be a *supported delimited context*: a
+single-scalar-hole chain of `let` prelude + `+ - * /` + 2-arg calls + one `if`.
+Contexts outside that grammar are rejected with `TUR-E0706` (see
+`docs/archive/history/serial-shift-unsupported-context-miscompile.md`). Design
+the region around the shift so the "rest" is a named call: the image-dump
+combinator does exactly this (`(serial-shift handler 0)` followed by `(loop)`).
+Two further rules follow from how the frames are marshalled by name:
+
+- **The callee in the context must be uncolored** for the CPS backend: it
+  cannot contain a `serial-reset` of its own, perform an effect, use an
+  `unsafe` block, or call through a function value -- and neither can
+  anything it calls. A multi-page flow therefore does not nest resets: each
+  page's callee returns a code and the code that runs *outside* the reset
+  starts the next one (the guestbook example's `advance`).
+- **The handler, and everything it calls, must be uncolored too** -- whether
+  it is a named top-level function or a `(fn [k] ...)` literal (capturing or
+  not). It runs once at capture and is never marshalled, so this is a
+  limitation of how the emitter calls it, not of the bytes
+  (`docs/reported/serial-shift-colored-receiver-rejected.md`).
+
+`TUR_TRACE_CORE=1` names the collector rule (`[CTX-REJECT] cps_ir.c:<line>`)
+that rejected a context, which is faster than guessing.
 
 ### The `Serializable` Typeclass
 
@@ -82,32 +135,23 @@ two containers:
 (definstance Serializable [Option] ...)
 ```
 
-Types that **do not** implement `Serializable` (file handles, raw pointers, `Mutex<T>`) cannot be captured in a serializable continuation. The elaborator enforces this at the `serial-reset` boundary.
+Types that **do not** implement `Serializable` (file handles, raw pointers,
+`Mutex<T>`) cannot be captured in a serializable continuation. The elaborator
+enforces this at the `serial-reset` boundary (`TUR-E0018`). A captured
+environment marshals **by value**: an `int` inline, a `cstr` as its bytes, and
+any other type through its `Serializable` instance -- so a resumed continuation
+holds fresh copies, never the writer's heap addresses.
 
 ### Resource Types
 
-System resources like file handles can implement custom marshal/unmarshal logic:
-
-```turmeric
-(defclass ResourceSerializable [a]
-  (marshal   [x : a] : value)
-  (unmarshal [v : value] : a))
-
-;; Example: serialize a file handle by its path, reopen on resume
-(definstance ResourceSerializable FileHandle
-  (marshal [fh] (file-handle-path fh))
-  (unmarshal [path] (open-file path ReadOnly)))
-```
-```sweet-exp
-defclass ResourceSerializable [a]
-  marshal   [x : a] : value
-  unmarshal [v : value] : a
-
-;; Example: serialize a file handle by its path, reopen on resume
-definstance ResourceSerializable FileHandle
-  marshal [fh] file-handle-path(fh)
-  unmarshal [path] open-file(path ReadOnly)
-```
+File handles, sockets, and other system resources cannot be serialized
+directly, and there is no separate "resource" typeclass. The pattern is to
+serialize a **stable representation** and re-acquire the resource on resume --
+a `Serializable` instance for a file-handle wrapper that serializes the *path*
+and re-opens the file in `deserialize`. Keep the raw handle out of the captured
+frame and carry the wrapper. For process-level resources, the image-dump
+reload hooks (`docs/guides/image-dumps-guide.md`, "Resources") do this at the
+load boundary.
 
 ## Surface API
 
@@ -117,292 +161,146 @@ definstance ResourceSerializable FileHandle
 ;; Delimit a serializable region
 (serial-reset body)
 
-;; Capture the continuation
-(serial-shift [k] body)  ; k : serial-continuation<T>
+;; Capture the rest of the region and hand it to handler as a serial-cont
+(serial-shift handler default)      ; handler : (fn [serial-cont] T)
 
-;; Serialize a continuation to bytes
-(serial-cont->bytes k) : bytes
+;; Serialize a continuation to bytes ({int64 len; data}, caller-owned)
+(serial-cont->bytes k) : ptr<void>
 
-;; Deserialize bytes to a continuation
-(bytes->serial-cont b) : (Result (serial-continuation<T>) cstr)
+;; Rebuild a continuation from bytes (validated; a foreign/damaged buffer is Err)
+(bytes->serial-cont b) : (Result serial-cont cstr)
 
-;; Resume a continuation with a value
-(serial-resume k v) : T
-```
-```sweet-exp
-;; Delimit a serializable region
-serial-reset body
+;; Resume a continuation with a value -- the same thing as (k v)
+(serial-resume k v) : int
 
-;; Capture the continuation
-serial-shift [k] body  ; k : serial-continuation<T>
-
-;; Serialize a continuation to bytes
-serial-cont->bytes(k) : bytes
-
-;; Deserialize bytes to a continuation
-bytes->serial-cont(b) : (Result (serial-continuation<T>) cstr)
-
-;; Resume a continuation with a value
-serial-resume(k v) : T
+;; File helpers over the bytes
+(cont-to-file b path) : int          ; 1 on success
+(cont-from-file path) : ptr<void>    ; NULL on failure
 ```
 
-### The `serial-continuation<T>` Type
+`save-cont!` / `resume-cont!` in `stdlib/workflow.tur` are the older spellings
+of `serial-cont->bytes` and "rebuild then resume" (`resume-cont!` aborts on a
+malformed buffer where `bytes->serial-cont` returns `Err`); both surfaces stay.
 
-```turmeric
-(defstruct serial-continuation<T>
-  [resume    : (-> T serial-continuation<T>)
-   to-bytes  : (-> bytes)
-   schema-id : cstr])  ; Stable hash of frame chain shape
-```
-```sweet-exp
-defstruct serial-continuation<T>
-  [resume    : (-> T serial-continuation<T>)
-   to-bytes  : (-> bytes)
-   schema-id : cstr]  ; Stable hash of frame chain shape
-```
+### The `serial-cont` Type
 
-> **`schema-id` should be an owned `String`.** The comment calls it a *stable
-> hash of the frame chain shape* -- a **computed** value, stored in the struct and
-> serialized alongside the continuation. A `cstr` field here borrows a pointer
-> that dangles once the buffer that produced the hash is freed; only a hash that
-> is always a static literal could stay `cstr`. Since it is computed, use
-> `schema-id : String` so the continuation owns its own copy. See
-> [strings-guide.md](strings-guide.md).
+`serial-cont` is the opaque handle to a captured frame chain. There is no
+struct to look inside: it is applied like a function (`(k v)`), marshalled with
+`serial-cont->bytes`, and typed at handler parameters (`[k : serial-cont]`).
+The value it is resumed with is an `int`-carried scalar -- the hole grammar
+above -- and the result of resuming is the enclosing reset's result.
 
 ## Examples
 
+Every example below is the same shape: a named handler that stashes the bytes
+and a resume site that rebuilds them. Helpers such as `save-checkpoint` are the
+application's own.
+
 ### Persistent Workflow
 
-A multi-step business process that survives crashes:
+A multi-step business process that survives crashes. Each step's continuation
+is written under a checkpoint name; on restart the latest checkpoint is
+rebuilt and resumed with the value the step was waiting for:
 
-```turmeric
-(defn process-order [order-id : int64] : unit
+```turmeric no-check
+(defn after-validation [k : serial-cont] : int
+  (do (save-checkpoint "order-validated" (serial-cont->bytes k)) 0))
+
+(defn process-order [order-id : int] : int
   (serial-reset
-    ;; Step 1: Validate
-    (def order (load-order order-id))
-    (unless (valid-order? order)
-      (throw (validation-error "Invalid order")))
-    
-    ;; Checkpoint after validation
-    (serial-shift [k]
-      (save-checkpoint "order-validated" k order)
-      (continue k order))
-    
-    ;; Step 2: Charge payment
-    (def charge-result (charge-payment order.payment-info))
-    
-    (serial-shift [k]
-      (save-checkpoint "payment-charged" k charge-result)
-      (continue k charge-result))
-    
-    ;; Step 3: Fulfill
-    (fulfill order charge-result)))
+    (fulfill order-id (serial-shift after-validation 0))))
 
-;; Resume from last checkpoint
-(defn resume-order [order-id : int64] : unit
-  (let? [checkpoint (load-latest-checkpoint order-id)
-         k (bytes->serial-cont checkpoint.bytes)]
-    (serial-resume k checkpoint.value)))
-```
-```sweet-exp
-defn process-order [order-id : int64] : unit
-  serial-reset
-    ;; Step 1: Validate
-    def order load-order(order-id)
-    unless valid-order?(order)
-      throw(validation-error("Invalid order"))
-
-    ;; Checkpoint after validation
-    serial-shift [k]
-      save-checkpoint("order-validated" k order)
-      continue(k order)
-
-    ;; Step 2: Charge payment
-    def charge-result charge-payment(order.payment-info)
-
-    serial-shift [k]
-      save-checkpoint("payment-charged" k charge-result)
-      continue(k charge-result)
-
-    ;; Step 3: Fulfill
-    fulfill(order charge-result)
-
-;; Resume from last checkpoint
-defn resume-order [order-id : int64] : unit
-  let? [checkpoint load-latest-checkpoint(order-id)
-        k bytes->serial-cont(checkpoint.bytes)]
-    serial-resume(k checkpoint.value)
+;; Resume from the last checkpoint with the value the step was waiting for.
+(defn resume-order [order-id : int charge-result : int] : int
+  (match (bytes->serial-cont (load-latest-checkpoint order-id))
+    (Ok k)  (serial-resume k charge-result)
+    (Err m) (do (println m) 0)))
 ```
 
 ### Distributed Task Migration
 
-Send a half-finished computation to another node:
+Send a half-finished computation to another node. Node B runs the same binary,
+so the frame names in the bytes resolve there:
 
-```turmeric
-;; Node A: Start computation
+```turmeric no-check
+;; Node A: capture, ship the bytes, do not resume locally.
+(defn migrate [k : serial-cont] : int
+  (do (send-to-node-b (serial-cont->bytes k)) 0))
+
 (def result
-  (serial-reset
-    (def task1 (run-task1))
-    (def task2 (run-task2 task1))
-    (serial-shift [k]
-      ;; Serialize and send to Node B
-      (def bytes (serial-cont->bytes k))
-      (send-to-node-b bytes task2)
-      (continue k (recv-from-node-b)))))
+  (serial-reset (+ (run-task1) (serial-shift migrate 0))))
 
-;; Node B: Resume computation
-(defn handle-migration [bytes : bytes, input : any] : bytes
-  (let? [k (bytes->serial-cont bytes)]
-    (def result (serial-resume k input))
-    (serial-cont->bytes (serial-shift [k'] (continue k' result)))))
-```
-```sweet-exp
-;; Node A: Start computation
-def result
-  serial-reset
-    def task1 run-task1()
-    def task2 run-task2(task1)
-    serial-shift [k]
-      ;; Serialize and send to Node B
-      def bytes serial-cont->bytes(k)
-      send-to-node-b(bytes task2)
-      continue(k recv-from-node-b())
-
-;; Node B: Resume computation
-defn handle-migration [bytes : bytes, input : any] : bytes
-  let? [k bytes->serial-cont(bytes)]
-    def result serial-resume(k input)
-    serial-cont->bytes $ serial-shift [k'] (continue k' result)
+;; Node B: rebuild and resume with its own input.
+(defn handle-migration [bytes : ptr<void> input : int] : int
+  (match (bytes->serial-cont bytes)
+    (Ok k)  (serial-resume k input)
+    (Err m) (do (println m) -1)))
 ```
 
 ### Web Continuations (Racket-style)
 
-Serialize "what to do when form is submitted" as a URL token:
+Serialize "what to do when the form is submitted" as a URL token. The handler
+stores the bytes under a fresh token and renders the form whose action carries
+it; the submit route rebuilds the continuation and resumes it with the posted
+value. `docs/guides/web-continuations-guide.md` is the full treatment.
 
-```turmeric
-;; Generate a form page with continuation token
-(defn get-checkout [req : HttpRequest] : HttpResponse
-  (serial-reset
-    (def cart (get-cart req.session))
-    (serial-shift [k]
-      ;; Save continuation, return URL with token
-      (def token (save-continuation k))
-      (render-page
-        (form :action (str "/checkout-submit?token=" token))
-          (label "Credit Card") (input :type "text" :name "cc")
-          (submit)))))
+```turmeric no-check
+(defn suspend-for-form [k : serial-cont] : int
+  (let [token (store-continuation (serial-cont->bytes k))]
+    (do (render-form (str "/checkout-submit?token=" token)) 0)))
 
-;; Handle form submission
-(defn post-checkout-submit [req : HttpRequest] : HttpResponse
-  (let? [token (parse-token req.query.token)
-         k (load-continuation token)]
-    (def cc-number (parse-form-data req))
-    (serial-resume k cc-number))
-  (render-page (h1 "Thank you for your order!")))
-```
-```sweet-exp
-;; Generate a form page with continuation token
-defn get-checkout [req : HttpRequest] : HttpResponse
-  serial-reset
-    def cart get-cart(req.session)
-    serial-shift [k]
-      ;; Save continuation, return URL with token
-      def token save-continuation(k)
-      render-page
-        (form :action str("/checkout-submit?token=" token))
-        label("Credit Card")
-        input(:type "text" :name "cc")
-        submit()
+(defn get-checkout [] : int
+  (serial-reset (finish-checkout (serial-shift suspend-for-form 0))))
 
-;; Handle form submission
-defn post-checkout-submit [req : HttpRequest] : HttpResponse
-  let? [token parse-token(req.query.token)
-        k load-continuation(token)]
-    def cc-number parse-form-data(req)
-    serial-resume(k cc-number)
-  render-page(h1("Thank you for your order!"))
+(defn post-checkout-submit [token : cstr cc-number : int] : int
+  (match (bytes->serial-cont (load-continuation token))
+    (Ok k)  (serial-resume k cc-number)
+    (Err m) (do (println m) 0)))
 ```
 
-### Checkpointing Long-Running Computation
+### Checkpointing a Long-Running Computation
 
-Periodic snapshots for crash recovery:
+Periodic snapshots for crash recovery: capture at the top of each chunk, keep
+going, and on restart resume the latest one. See
+`docs/guides/checkpointing-guide.md` for the complete worked example.
 
-```turmeric
-(defn analyze-dataset [data : (Vec Record)] : Report
-  (defn checkpoint-every [n : int64, items : (Vec Record)] : Report
-    (let [processed (Vec.new)]
-      (for-each-with-index items
-        (fn [i item]
-          (Vec.push processed (process item))
-          (when (= (mod (+ i 1) n) 0)
-            (serial-shift [k]
-              (save-checkpoint (str "checkpoint-" i) k)
-              (continue k)))))
-      (compute-report processed)))
-  
-  (checkpoint-every 1000 data))
+```turmeric no-check
+(defn checkpoint [k : serial-cont] : int
+  (do (cont-to-file (serial-cont->bytes k) "checkpoint.bin")
+      (serial-resume k 0)))            ; keep going right away
 
-;; On restart: find latest checkpoint and resume
-(defn recover-analysis [] : Report
-  (def latest (find-latest-checkpoint))
-  (let? [k (bytes->serial-cont latest.bytes)]
-    (serial-resume k)))
-```
-```sweet-exp
-defn analyze-dataset [data : (Vec Record)] : Report
-  defn checkpoint-every [n : int64, items : (Vec Record)] : Report
-    let [processed Vec.new()]
-      for-each-with-index items
-        fn [i item]
-          Vec.push(processed process(item))
-          when {mod({i + 1} n) = 0}
-            serial-shift [k]
-              save-checkpoint(str("checkpoint-" i) k)
-              continue(k)
-      compute-report(processed)
+(defn analyze-chunk [i : int] : int
+  (serial-reset (process-chunk i (serial-shift checkpoint 0))))
 
-  checkpoint-every(1000 data)
-
-;; On restart: find latest checkpoint and resume
-defn recover-analysis [] : Report
-  def latest find-latest-checkpoint()
-  let? [k bytes->serial-cont(latest.bytes)]
-    serial-resume(k)
+(defn recover-analysis [] : int
+  (match (bytes->serial-cont (cont-from-file "checkpoint.bin"))
+    (Ok k)  (serial-resume k 0)
+    (Err m) (do (println m) 0)))
 ```
 
 ## Error Handling
 
-### Schema Versioning
+### A buffer the program cannot rebuild
 
-Continuation frames carry a schema version. If the code changes between serialization and deserialization, an error is returned:
+Frames marshal by **stable name**, and `bytes->serial-cont` validates the whole
+record stream against this program's frame registry before rebuilding
+anything. A buffer written by a different program -- or by an earlier build
+whose frame names moved -- comes back as `Err`, never as an abort or a resumed
+garbage chain:
 
-```turmeric
-(try-with
-  (fn []
-    (def k (bytes->serial-cont bytes))
-    (serial-resume k value))
-  (fn [e k]
-    (match e
-      (SchemaMismatch old new) ->
-        (error "Cannot resume: checkpoint uses schema " old 
-               "but current code uses schema " new)
-      _ -> (raise e))))
+```turmeric no-check
+(match (bytes->serial-cont bytes)
+  (Ok k)  (serial-resume k value)
+  (Err m) (println m))
+;; "bytes->serial-cont: unknown frame (written by a different program?)"
 ```
-```sweet-exp
-try-with
-  fn []
-    def k bytes->serial-cont(bytes)
-    serial-resume(k value)
-  fn [e k]
-    match e
-      (SchemaMismatch old new)
-      ->
-      error("Cannot resume: checkpoint uses schema " old
-            "but current code uses schema " new)
-      _
-      ->
-      raise(e)
-```
+
+The messages are static strings, each prefixed `bytes->serial-cont: `:
+`null bytes`, `short buffer`, `bad frame count`, `truncated frame`,
+`frame name too long`, `unknown frame (written by a different program?)`,
+`truncated env`, `bad env kind`, `bad frame tag`. `resume-cont!` performs no
+such check; prefer `bytes->serial-cont` for anything read from disk or the
+network.
 
 ### Handling Unserializable Types
 
@@ -413,96 +311,49 @@ error: binding `handle : file-handle` captured inside `serial-reset`
        but `file-handle` does not implement `Serializable`
   --> src/main.tur:42:5
    |
-42 |   (serial-shift [k] (save-cont! k) 0)
+42 |   (serial-shift stash 0)
    |                 ^ `handle` captured here
    = help: use resource marshalling or move outside serial-reset boundary
 ```
 
-To fix: either implement `Serializable`/`ResourceSerializable` for the type, or restructure your code to avoid capturing it.
+To fix: implement `Serializable` for a wrapper that carries a stable
+representation (see "Resource Types"), or restructure so the handle is not in
+scope at the shift.
 
-### Circular References
+### Sharing and cycles
 
-Serialization performs a **deep copy** of all captured state. Circular reference structures are detected and produce an error:
-
-```turmeric
-(def circular : (Option (Box circular)))
-(set-box! circular (Some (Box.new circular)))
-
-;; This will fail with a circular reference error
-(serial-reset
-  (serial-shift [k] (save-cont k) 0))
-```
-```sweet-exp
-def circular : (Option (Box circular))
-set-box!(circular Some(Box.new(circular)))
-
-;; This will fail with a circular reference error
-serial-reset
-  serial-shift [k]
-    save-cont(k)
-    0
-```
+The bytes hold each frame's environment **by value**, so there is nothing to
+share and nothing to cycle: two frames that captured the same `cstr` write it
+twice and rebuild two strings. A `Serializable` instance for your own type
+decides what its bytes contain; an instance that walks a cyclic structure
+without a visited set will not terminate, so give such a type an
+identifier-based representation instead.
 
 ## Interaction with Ownership
 
-### Deep Copy Semantics
+`serial-cont->bytes` copies: an `int` environment is written inline, a `cstr`
+as its bytes, and any other environment type through its `Serializable`
+instance. Rebuilding allocates fresh values. Consequences:
 
-Serialization always performs a **deep clone**. Reference-counted values are fully copied into the wire encoding, not shared. On resume, fresh heap allocations are created.
-
-```turmeric
-(def r (ref 42))
-(serial-reset
-  (serial-shift [k]
-    ;; Serialization deep-copies r
-    (def bytes (serial-cont->bytes k))
-    (continue k)))
-
-;; After deserialization, the resumed continuation has a NEW ref
-;; with the same value (42), but it's a different cell in memory
-```
-```sweet-exp
-def r ref(42)
-serial-reset
-  serial-shift [k]
-    ;; Serialization deep-copies r
-    def bytes serial-cont->bytes(k)
-    continue(k)
-
-;; After deserialization, the resumed continuation has a NEW ref
-;; with the same value (42), but it's a different cell in memory
-```
-
-### `ref<T>` and `rc<T>` Behavior
-
-- `ref<T>` may be captured only if `T: Serializable`
-- On serialization, the **current value** is snapshotted
-- On resume, a **fresh** `ref` cell is created with that value
-- Sharing between multiple captures of the same `ref` is **not** preserved -- each resumed continuation gets its own independent copy
+- A resumed continuation never aliases the writer's heap -- mutating the
+  original after capture does not change what the bytes hold.
+- Two captures of the same value are two independent copies on resume.
+- Reference-counted values are cloned into the encoding, not shared; the
+  `Serializable` instance for the pointee is what runs.
 
 ## Standard Library Support
 
 ### `stdlib/serial.tur`
 
-File I/O helpers over the serialised `bytes` buffers produced by
-`save-cont!`:
+The `Serializable` class and instances, the typed continuation trio, and the
+file helpers:
 
 ```turmeric no-check
-;; Write a serialised continuation bytes value to a file; returns 1 on
-;; success, 0 on failure.
-(cont-to-file b "/tmp/checkpoint.bin")
-
-;; Read one back; returns the bytes :ptr<void>, or NULL on any I/O or
-;; allocation failure.
-(cont-from-file "/tmp/checkpoint.bin")
-```
-```sweet-exp
-;; Write a serialised continuation bytes value to a file; returns 1 on
-;; success, 0 on failure.
-cont-to-file(b "/tmp/checkpoint.bin")
-
-;; Read one back; returns the bytes :ptr<void>, or NULL on any I/O or
-;; allocation failure.
-cont-from-file("/tmp/checkpoint.bin")
+(serial-cont->bytes k)                 ; k : serial-cont -> bytes
+(bytes->serial-cont b)                 ; bytes -> (Result serial-cont cstr)
+(serial-resume k v)                    ; = (k v)
+(cont-to-file b "/tmp/checkpoint.bin") ; 1 on success, 0 on failure
+(cont-from-file "/tmp/checkpoint.bin") ; bytes, or NULL on any I/O failure
 ```
 
 ### `stdlib/workflow.tur`
@@ -520,126 +371,63 @@ the SemVer contract:
 | `workflow-resume` | `[b : ptr<void> v : int] : int` | alias of `resume-cont!` |
 
 `k` is the opaque handle the `serial-shift` receiver is passed (a DK chain
-carried as `ptr<void>`). These are thin shims over the
+carried as `ptr<void>`; `serial-cont` is the same handle with its own name).
+These are thin shims over the
 `tur_serial_cont_serialize`/`_deserialize`/`_resume` runtime, which is emitted
-whenever a program contains serial syntax. **Capture scope:** the continuation
-must be a *supported delimited context* (a single-scalar-hole chain of `let`
-prelude + `+ - * /` + 2-arg calls + one `if`); contexts outside that grammar do
-not capture (see
-`docs/archive/history/serial-shift-unsupported-context-miscompile.md`).
+whenever a program contains serial syntax or calls one of those three on a
+`serial-cont` (so loading `stdlib/serial.tur` for `serial-resume` alone is
+enough; the emitted C never references the runtime undeclared).
 
-A higher-level API for persistent workflows:
+A workflow step that waits for an outside decision is the handler-that-does-
+not-resume shape:
 
-```turmeric
-;; Define a workflow step that can be suspended and resumed
-(defworkflow-step process-approval [order-id : int64] : bool
-  (def approved?
-    (serial-shift [k]
-      (db-save-continuation order-id k)
-      false))
-  (when approved?
-    (fulfill-order! order-id))
-  approved?)
+```turmeric no-check
+;; Suspend: persist the step, answer "pending" (0) for now.
+(defn await-approval [k : serial-cont] : int
+  (do (db-save-continuation order-id (serial-cont->bytes k)) 0))
 
-;; Resume a workflow from the database
-(defn resume-approval [order-id : int64, approved? : bool] : unit
-  (let? [k (db-load-continuation order-id)]
-    (serial-resume k approved?)))
-```
-```sweet-exp
-;; Define a workflow step that can be suspended and resumed
-defworkflow-step process-approval [order-id : int64] : bool
-  def approved?
-    serial-shift [k]
-      db-save-continuation(order-id k)
-      false
-  when approved?
-    fulfill-order!(order-id)
-  approved?
+(defn process-approval [order-id : int] : int
+  (serial-reset (fulfill-if order-id (serial-shift await-approval 0))))
 
-;; Resume a workflow from the database
-defn resume-approval [order-id : int64, approved? : bool] : unit
-  let? [k db-load-continuation(order-id)]
-    serial-resume(k approved?)
+;; Resume from the database with the decision (1 = approved).
+(defn resume-approval [order-id : int approved : int] : int
+  (match (bytes->serial-cont (db-load-continuation order-id))
+    (Ok k)  (serial-resume k approved)
+    (Err m) (do (println m) 0)))
 ```
 
 ## Best Practices
 
 ### Minimize Captured State
 
-Only capture what you need. Use identifiers instead of entire objects:
-
-```turmeric
-;; Good: capture only the ID
-(serial-reset
-  (def order-id 12345)
-  (serial-shift [k]
-    (save-cont k)
-    (process-order order-id)))
-
-;; Less good: capture the entire order object
-(serial-reset
-  (def order (load-order 12345))  ; Large object
-  (serial-shift [k]
-    (save-cont k)
-    (continue k)))
-```
-```sweet-exp
-;; Good: capture only the ID
-serial-reset
-  def order-id 12345
-  serial-shift [k]
-    save-cont(k)
-    process-order(order-id)
-
-;; Less good: capture the entire order object
-serial-reset
-  def order load-order(12345)  ; Large object
-  serial-shift [k]
-    save-cont(k)
-    continue(k)
-```
+Only capture what you need. Use identifiers instead of entire objects: a
+handler that closes over an `order-id` writes eight bytes; one whose frame
+holds a large record writes the whole record through its instance.
 
 ### Limit Continuation Depth
 
-Deep call stacks increase serialization time and size. Design workflows with shallow stacks where possible.
+Deep call stacks increase serialization time and size. Design workflows with
+shallow stacks where possible -- and remember the capture grammar above: the
+rest of the region should be a short chain ending in a named call.
 
-### Use Schema Versioning for Long-Term Storage
+### Version Long-Term Storage
 
-If storing continuations long-term, consider implementing custom schema evolution logic:
-
-```turmeric
-;; Wrap continuation with version info
-(defn save-versioned [k : serial-continuation<T>, version : int64] : unit
-  (def bytes (serial-cont->bytes k))
-  (save-to-disk (struct [version version, data bytes])))
-
-;; On load, verify version compatibility
-(defn load-versioned [path : cstr] : (Result (serial-continuation<T>) cstr)
-  (def stored (load-from-disk path))
-  (when (= stored.version CURRENT_VERSION)
-    (bytes->serial-cont stored.data)))
-```
-```sweet-exp
-;; Wrap continuation with version info
-defn save-versioned [k : serial-continuation<T>, version : int64] : unit
-  def bytes serial-cont->bytes(k)
-  save-to-disk $ struct [version version, data bytes]
-
-;; On load, verify version compatibility
-defn load-versioned [path : cstr] : (Result (serial-continuation<T>) cstr)
-  def stored load-from-disk(path)
-  when {stored.version = CURRENT_VERSION}
-    bytes->serial-cont(stored.data)
-```
+`bytes->serial-cont` rejects a buffer whose frame names this program does not
+know, which is the common failure after a deploy. To fail earlier and with a
+better message, keep your own version beside the bytes -- a version in the
+file name, or a header your storage layer writes -- and check it before
+calling `bytes->serial-cont`.
 
 ### Security Considerations
 
-Deserializing from an untrusted source is analogous to Java deserialization vulnerabilities. Consider:
+Rebuilding a continuation from bytes is `eval` of whatever the bytes name.
+`bytes->serial-cont` guarantees structural validity and that every frame is one
+this program registered; it does not authenticate the writer. For anything
+that crosses a trust boundary:
 
-- Validating continuation bytes before deserialization
-- Using a capability token or allowlist of permitted symbol keys
-- Running deserialized continuations in a sandboxed environment
+- sign the bytes (an HMAC over the buffer) and verify before rebuilding;
+- keep an allowlist of the tokens/paths you will rebuild from;
+- treat stored continuations like stored code, not like stored data.
 
 ## Comparison to Alternatives
 

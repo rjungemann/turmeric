@@ -112,3 +112,11 @@ call site that already exists.
 
 Generalising to arbitrary user `defdata` is a different and much larger
 question, and nothing here answers it.
+
+## Re-run 2026-09-02 (RM0(a))
+
+Same harness, unchanged, 16k passes, one process per row, on a slower box
+(`A` = 103.4 ns/op here). Ratios over A: B 2.6x, C 1.3x, D 3.9x, E 1.4x,
+F 13.1x, G 7.0x. Checksums identical (1472000). The ordering and the
+mechanism-over-ABI finding hold; absolute numbers are not comparable across
+the two boxes and are not added to the CSV.

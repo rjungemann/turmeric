@@ -15,7 +15,7 @@
 #
 # Two checks, mirroring run-sr4-seam.sh:
 #   1. A CANARY: emit-c of httpd-req-string-opt under the flag must show the
-#      niche ctor (`static void * ctor_Some__String(`) and must NOT mint the
+#      niche ctor (`static void * ctor_Option_Some__String(`) and must NOT mint the
 #      tagged monomorph typedef.  If the flag is renamed or the gate stops
 #      reading it, this fails LOUDLY instead of silently re-testing default.
 #   2. The niche-eligible population, compiled and RUN under the flag against
@@ -59,16 +59,16 @@ canary_c="$WORKDIR/canary.c"
 if ! $TIMEOUT "$TUR" $ENABLE emit-c tests/fixtures/httpd-req-string-opt/input.tur \
         > "$canary_c" 2>/dev/null; then
     fail "option-niche-canary" "emit-c of httpd-req-string-opt failed under $ENABLE"
-elif ! grep -q "static void \* ctor_Some__String(" "$canary_c"; then
+elif ! grep -q "static void \* ctor_Option_Some__String(" "$canary_c"; then
     fail "option-niche-canary" \
-        "ctor_Some__String is not the niche identity -- the flag did not bite.  If \
+        "ctor_Option_Some__String is not the niche identity -- the flag did not bite.  If \
 the experiment was renamed or adt_app_is_niche_option moved, update this \
 harness in the same change."
 elif grep -q "typedef struct tur_adt_Option__String" "$canary_c"; then
     fail "option-niche-canary" \
         "the tagged tur_adt_Option__String typedef was minted despite the niche"
 else
-    pass "option-niche-canary (ctor_Some__String is the identity, no typedef)"
+    pass "option-niche-canary (ctor_Option_Some__String is the identity, no typedef)"
 fi
 
 # --- 2. The eligible population, compiled and RUN under the flag. ---------

@@ -1,0 +1,11 @@
+;; A match whose arm body fails to elaborate (an unknown function) must report
+;; the diagnostic and nothing else.  The match-arm move-state snapshot was not
+;; released on the failure path, so a Debug `tur check` on this program ended
+;; in a LeakSanitizer report after the error -- and run.sh runs the compiler
+;; with leak detection ON, which is what pins it here.
+(defdata T (A :int) (B))
+(defn f [t : T] : int
+  (match t
+    (A n) (nosuch n)
+    _ 0))
+(defn main [] : int (f (A 1)))

@@ -1,0 +1,41 @@
+;; RM1 (reclamation-plan): erased sum-carrier boxes get an owner.
+;;
+;; On the erased path `(ok 1)` / `(err e)` malloc a tagged carrier box that
+;; historically nothing freed -- the leak sweep measured 8.3 KB of exactly
+;; this across the corpus, none of it visible to run.sh.  The shapes below
+;; stay ERASED (no ascription, no concrete binding type), which is what makes
+;; this fixture non-vacuous: an ascribed `(:: (ok 1) (Result int int))`
+;; specializes to a by-value monomorph and never boxes at all.
+;;
+;; Two mechanisms, both keyed on the callee-side freshness fact
+;; (`returns_fresh_sum_box`: every value path of the callee mints a fresh box
+;; or NULL):
+;;
+;;   pending -- `(ok? (ok 1))`: the box is an accessor argument; freed right
+;;     after the accessor call materializes (the any_pending discipline).
+;;   (the comparator shape -- `(result-eq? (ok 1) (ok 1) ..)` -- is also
+;;   covered by the mechanism, but its ^fat cmp argument boxes a closure shim
+;;   this fixture cannot keep leak-clean; its delta is pinned by the sweep in
+;;   docs/artifacts/, not here.)
+;;
+;; Leak-checked because the leak half is what a stdout diff cannot see; the
+;; printed values are what a WRONG free cannot fake -- a freed-too-early box
+;; is an ASan abort at the accessor read, not a quiet pass.
+(defn test-ok [] : bool
+  (ok? (ok 1)))
+
+(defn test-err [] : bool
+  (err? (err 5)))
+
+(defn test-ok-val [] : int
+  (ok-val (ok 42)))
+
+(defn test-err-val [] : int
+  (err-val (err 404)))
+
+(defn main [] : int
+  (println (test-ok))
+  (println (test-err))
+  (println (test-ok-val))
+  (println (test-err-val))
+  0)

@@ -1,0 +1,32 @@
+;; application-image-dumps-plan (AI3.1): TUR-W0706.
+;;
+;; `do-init` is the cold-start root of a with-image-cache-after-init call.  It
+;; writes two globals: `tracked`, declared with defimage-global (in the image,
+;; silent), and `hidden`, a plain def ^mut reached through a callee (NOT in the
+;; image -- a warm start silently sees 0).  Exactly one warning, for `hidden`,
+;; at the macro call.  The program still builds and runs.
+
+(load "stdlib/image.tur")
+
+(defn img-rm [path : cstr] : void
+  ```c remove(path); ```)
+
+(def ^mut hidden 0)
+(defimage-global tracked :int 0)
+
+(defn bump-hidden [] : int
+  (do (set! hidden (+ hidden 1)) 0))
+
+(defn do-init [] : int
+  (do (bump-hidden) (set! tracked 5) 0))
+
+(defn do-loop [] : int
+  (do (println hidden) (println tracked) 0))
+
+(defn main [] : int
+  (do
+    (image/track-globals! tracked)
+    (img-rm "/tmp/tur-warn-image-global.img")
+    (with-image-cache-after-init "/tmp/tur-warn-image-global.img" do-init do-loop)
+    (img-rm "/tmp/tur-warn-image-global.img")
+    0))

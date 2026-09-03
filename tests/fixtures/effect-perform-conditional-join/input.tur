@@ -1,0 +1,33 @@
+;; effect-perform-conditional-join -- the general bug under docs/reported/
+;; perform-inside-loop-has-no-lowering.md: a `perform` inside an `if` arm in
+;; STATEMENT position.  The arms deliver to a join `j` (a C label + slot in the
+;; enclosing frame), but a perform continuation is lifted into its own C
+;; function, so its `(j unit)` emitted `0 = __t4; goto L3;` -- a label in the
+;; parent function -- a hard cc failure in a plain function, a loop or not.
+;; Such a join is now reified as a DK resume-frame (emit_escaping_join) that the
+;; parent frame runs directly and a lifted frame reaches through its downstream
+;; chain, so the code after the conditional perform runs exactly once per
+;; resume, with the loop-carried state it expects.
+(defeffect Done [score : int] : nil)
+
+(defn step [n : int] : nil
+  (do
+    (when (= n 3) (perform (Done n)))
+    (println "after")))
+
+(defn count-up-to [] : int
+  (let [^mut i 0]
+    (while (< i 10)
+      (when (= i 3) (perform (Done i)))
+      (set! i (+ i 1)))
+    i))
+
+(defn main [] : int
+  (do
+    (handle
+      (do (step 3) (step 4))
+      (Done [score] k) (do (println score) (resume k 0)))
+    (handle
+      (println (count-up-to))
+      (Done [score] k) (do (println score) (resume k 0)))
+    0))

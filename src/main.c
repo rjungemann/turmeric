@@ -305,6 +305,50 @@ static bool same_dir(const char *a, const char *b) {
     return strcmp(a, b) == 0;
 }
 
+/* stdlib-dir-guard-accepts-mismatched-stdlib: does this stdlib belong to THIS
+ * compiler?  `<root>/VERSION` carries the release the stdlib shipped with,
+ * written beside the top-level VERSION and kept in lockstep with it by
+ * tests/check-stdlib-version-stamp.sh (ctest `tur_stdlib_version_stamp`).
+ *
+ * The older probe (a readable macros.tur) proves the directory IS a stdlib.  It
+ * does not prove it is OURS, and a stdlib from another release is the more
+ * common stale case -- a version manager keeps every install on disk.  The
+ * mismatch then surfaces far downstream as something like "no member named
+ * 'is_ok' in 'tur_result_box_t'", naming neither the stdlib nor the variable,
+ * and reads as a codegen bug.  That cost a full investigation once; see
+ * docs/archive/type-fuzz-src-red-on-clang-21.md. */
+typedef enum {
+    STDLIB_VER_MATCH,      /* stamped, and it is ours */
+    STDLIB_VER_MISMATCH,   /* stamped, and it is someone else's */
+    STDLIB_VER_UNKNOWN,    /* no stamp: predates the check, or an odd layout */
+} StdlibVerdict;
+
+/* Reads `<root>/VERSION`.  On MISMATCH, `out_ver` receives the stamp found. */
+static StdlibVerdict stdlib_version_verdict(const char *root, char *out_ver,
+                                            size_t cap) {
+    char path[4096];
+    int n = snprintf(path, sizeof path, "%s/VERSION", root);
+    if (n <= 0 || (size_t)n >= sizeof path) return STDLIB_VER_UNKNOWN;
+
+    FILE *f = fopen(path, "r");
+    if (!f) return STDLIB_VER_UNKNOWN;
+    char buf[256];
+    char *got = fgets(buf, sizeof buf, f);
+    fclose(f);
+    if (!got) return STDLIB_VER_UNKNOWN;
+
+    /* Strip trailing whitespace; the file is written with a trailing newline. */
+    size_t len = strlen(buf);
+    while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r' ||
+                       buf[len-1] == ' '  || buf[len-1] == '\t')) {
+        buf[--len] = '\0';
+    }
+    if (len == 0) return STDLIB_VER_UNKNOWN;
+    if (strcmp(buf, TUR_VERSION) == 0) return STDLIB_VER_MATCH;
+    snprintf(out_ver, cap, "%s", buf);
+    return STDLIB_VER_MISMATCH;
+}
+
 static const char *resolve_stdlib_root(void) {
     if (g_stdlib_root_state != 0) {
         return g_stdlib_root[0] ? g_stdlib_root : "stdlib";
@@ -344,15 +388,39 @@ static const char *resolve_stdlib_root(void) {
                  * with no walk-up result there is nothing to disagree with
                  * (the wasm/LSP embedder sets the variable deliberately and
                  * has no exe path), so that case stays silent. */
-                char beside[4096];
-                if (find_stdlib_beside_exe(beside, sizeof(beside))
-                    && !same_dir(env, beside)) {
+                char found[64];
+                found[0] = '\0';
+                StdlibVerdict v = stdlib_version_verdict(env, found, sizeof found);
+                if (v == STDLIB_VER_MISMATCH) {
                     fprintf(stderr,
-                        "tur: TUR_STDLIB_DIR=%s overrides the stdlib beside "
-                        "this binary (%s).\n"
-                        "tur: a stdlib from a different release will "
-                        "miscompile against this compiler; unset it if that "
-                        "was not deliberate.\n", env, beside);
+                        "tur: TUR_STDLIB_DIR=%s is turmeric %s, but this "
+                        "compiler is v%s.\n"
+                        "tur: a mismatched stdlib miscompiles in ways that name "
+                        "neither the stdlib nor this variable; unset it if that "
+                        "was not deliberate.\n", env, found, TUR_VERSION);
+                } else if (v == STDLIB_VER_UNKNOWN) {
+                    /* No stamp to compare, so fall back to the older heuristic:
+                     * report only when a stdlib beside this binary exists AND
+                     * differs.  With no walk-up result there is nothing to
+                     * disagree with (the wasm/LSP embedder sets the variable
+                     * deliberately and has no exe path), so that stays silent.
+                     *
+                     * This used to fire whenever the two directories differed,
+                     * including when they were the same release -- "someone who
+                     * deliberately points at another tree gets a notice they do
+                     * not need", which is what the stamp is for.  A CONFIRMED
+                     * match now says nothing at all. */
+                    char beside[4096];
+                    if (find_stdlib_beside_exe(beside, sizeof(beside))
+                        && !same_dir(env, beside)) {
+                        fprintf(stderr,
+                            "tur: TUR_STDLIB_DIR=%s overrides the stdlib beside "
+                            "this binary (%s), and carries no VERSION stamp to "
+                            "check it against v%s.\n"
+                            "tur: a stdlib from a different release will "
+                            "miscompile against this compiler; unset it if that "
+                            "was not deliberate.\n", env, beside, TUR_VERSION);
+                    }
                 }
                 memcpy(g_stdlib_root, env, n + 1);
                 g_stdlib_root_state = 1;
@@ -371,6 +439,20 @@ static const char *resolve_stdlib_root(void) {
 
     if (find_stdlib_beside_exe(g_stdlib_root, sizeof(g_stdlib_root))) {
         g_stdlib_root_state = 1;
+        /* The stdlib beside the binary should always be ours.  Only a confirmed
+         * MISMATCH is reported: an unstamped one here is an odd or partial
+         * install layout, which should not nag on every invocation. */
+        {
+            char found[64];
+            found[0] = '\0';
+            if (stdlib_version_verdict(g_stdlib_root, found, sizeof found)
+                    == STDLIB_VER_MISMATCH) {
+                fprintf(stderr,
+                    "tur: the stdlib at %s is turmeric %s, but this compiler is "
+                    "v%s -- they must match.\n",
+                    g_stdlib_root, found, TUR_VERSION);
+            }
+        }
         /* Propagate to TUR_STDLIB_DIR so the elaborator (elab_toplevel.c)
          * sees the same value without needing its own copy of this
          * resolver.  Use overwrite=0 so an explicit user override wins;
@@ -1545,6 +1627,7 @@ static int cmd_build(const char *input, const char *out_path,
                      int n_reader_macro_paths);
 static char *find_project_root(const char *start);
 static void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources);
+static bool file_defines_main(const char *path);
 /* used-attr-whole-program: collect slash-separated names of -I-reachable
  * modules carrying a #[used] attribute, so cmd_build can force-load them into
  * the whole-program TU (defined after collect_tur_recursive/file_has_used_attr
@@ -3450,64 +3533,84 @@ static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
  *     vendor's hand-written C into the final binary.
  * g_no_auto_spice disables manifest discovery entirely (matching every other
  * auto-spice convenience). */
+/* c-sources-propagate-only-one-level: gather every :spices dep's vendored
+ * `:c-sources` / `:c-includes` across the WHOLE closure, the way
+ * pkg_collect_transitive_cmake_deps already does for :cmake-deps -- a `.c`
+ * declared two spices away used to be dropped, and the failure was an
+ * undefined symbol in the consumer's link with nothing pointing at the
+ * manifest that owns it.  Worklist + visited set (realpath-keyed, so a
+ * diamond terminates), and every source is emitted ONCE by resolved path:
+ * the same spice reached by two routes, or two deps vendoring the same
+ * third-party file, must not turn a missing-symbol failure into a
+ * duplicate-symbol one. */
+static bool aux_c_seen(char ***seen, int *n, int *cap, const char *key) {
+    for (int i = 0; i < *n; i++) if (strcmp((*seen)[i], key) == 0) return true;
+    if (*n >= *cap) {
+        int nc = *cap ? *cap * 2 : 8;
+        char **ns = (char **)realloc(*seen, (size_t)nc * sizeof(char *));
+        if (!ns) return true;   /* oom: treat as seen (drop) */
+        *seen = ns; *cap = nc;
+    }
+    (*seen)[(*n)++] = strdup(key);
+    return false;
+}
 static void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources) {
     if (g_no_auto_spice || !root) return;
-    char mp[4096];
-    if (!pkg_resolve_manifest_path(root, mp, sizeof(mp))) return;
-    PkgManifest m; memset(&m, 0, sizeof(m));
-    if (!pkg_manifest_read(mp, &m)) return;
-
-    for (int i = 0; i < m.n_c_includes; i++)
-        buf_printf(includes, " -I%s/%s", root, m.c_includes[i]);
-    for (int i = 0; i < m.n_c_sources; i++)
-        buf_printf(sources, " %s/%s", root, m.c_sources[i]);
-
-    /* Propagate each :spices dep's :c-sources (resolved to the dep root). The
-     * dep-dir resolution mirrors resolve_include_dirs_from_manifest above. */
-    char spices_dir[4096];
-    snprintf(spices_dir, sizeof(spices_dir), "%s/spices", root);
-    for (int i = 0; i < m.n_spices; i++) {
-        const PkgSpice *s = &m.spices[i];
-        char dep_dir[4096];
-        if (s->is_global) {
-            /* global-spice-library-consumption: resolved from the install
-             * registry; skipped silently when not installed, exactly like a
-             * missing fetched dep here. */
-            if (!tur_installed_spice_dir(s->name, dep_dir, sizeof(dep_dir),
-                                         NULL, NULL))
-                continue;
-            goto have_dep_dir;
+    char **work = NULL; int n_work = 0, cap_work = 0;
+    char **visited = NULL; int n_vis = 0, cap_vis = 0;
+    char **src_seen = NULL; int n_src = 0, cap_src = 0;
+    char **inc_seen = NULL; int n_inc = 0, cap_inc = 0;
+    #define AUX_PUSH(d) do { if (n_work >= cap_work) { int nc = cap_work ? cap_work * 2 : 8; \
+        char **nw = (char **)realloc(work, (size_t)nc * sizeof(char *)); \
+        if (!nw) { free(d); break; } work = nw; cap_work = nc; } work[n_work++] = (d); } while (0)
+    AUX_PUSH(strdup(root));
+    while (n_work > 0) {
+        char *dir = work[--n_work];
+        char canon[4096];
+        const char *key = realpath(dir, canon) ? canon : dir;
+        if (aux_c_seen(&visited, &n_vis, &cap_vis, key)) { free(dir); continue; }
+        char mp[4096];
+        if (!pkg_resolve_manifest_path(dir, mp, sizeof(mp))) { free(dir); continue; }
+        PkgManifest m; memset(&m, 0, sizeof(m));
+        if (!pkg_manifest_read(mp, &m)) { free(dir); continue; }
+        for (int i = 0; i < m.n_c_includes; i++) {
+            char path[4096];
+            snprintf(path, sizeof(path), "%s/%s", dir, m.c_includes[i]);
+            char ic[4096];
+            const char *ikey = realpath(path, ic) ? ic : path;
+            if (aux_c_seen(&inc_seen, &n_inc, &cap_inc, ikey)) continue;
+            buf_printf(includes, " -I%s", path);
         }
-        char *ws_path = s->path ? NULL
-                                : pkg_workspace_member_path(root, s->name);
-        if (ws_path) {
-            snprintf(dep_dir, sizeof(dep_dir), "%s", ws_path);
-            free(ws_path);
-        } else if (s->path) {
-            snprintf(dep_dir, sizeof(dep_dir), "%s/%s", root, s->path);
-        } else if (s->ref) {
-            snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
-                     spices_dir, s->name, s->ref);
-        } else {
-            snprintf(dep_dir, sizeof(dep_dir), "%s/%s", spices_dir, s->name);
+        for (int i = 0; i < m.n_c_sources; i++) {
+            char path[4096];
+            snprintf(path, sizeof(path), "%s/%s", dir, m.c_sources[i]);
+            char sc[4096];
+            const char *skey = realpath(path, sc) ? sc : path;
+            if (aux_c_seen(&src_seen, &n_src, &cap_src, skey)) continue;
+            buf_printf(sources, " %s", path);
         }
-        if (s->subdir) {
-            char tmp[4096];
-            snprintf(tmp, sizeof(tmp), "%s/%s", dep_dir, s->subdir);
-            snprintf(dep_dir, sizeof(dep_dir), "%s", tmp);
+        /* Enqueue this manifest's own :spices for the next level.  The
+         * resolver is the one the :cmake-deps walk uses, so both closures
+         * agree on what a dependency is (workspace sibling, :path, fetched,
+         * :global); a dep that is not on disk is skipped silently, exactly
+         * like a missing fetched dep before. */
+        for (int i = 0; i < m.n_spices; i++) {
+            char *dep_dir = pkg_resolve_spice_dep_dir(dir, &m.spices[i]);
+            if (!dep_dir) continue;
+            AUX_PUSH(dep_dir);
         }
-have_dep_dir:;
-        char dmp[4096];
-        if (!pkg_resolve_manifest_path(dep_dir, dmp, sizeof(dmp))) continue;
-        PkgManifest dm; memset(&dm, 0, sizeof(dm));
-        if (!pkg_manifest_read(dmp, &dm)) continue;
-        for (int j = 0; j < dm.n_c_sources; j++)
-            buf_printf(sources, " %s/%s", dep_dir, dm.c_sources[j]);
-        for (int j = 0; j < dm.n_c_includes; j++)
-            buf_printf(includes, " -I%s/%s", dep_dir, dm.c_includes[j]);
-        pkg_manifest_free(&dm);
+        pkg_manifest_free(&m);
+        free(dir);
     }
-    pkg_manifest_free(&m);
+    #undef AUX_PUSH
+    for (int i = 0; i < n_work; i++) free(work[i]);
+    free(work);
+    for (int i = 0; i < n_vis; i++) free(visited[i]);
+    free(visited);
+    for (int i = 0; i < n_src; i++) free(src_seen[i]);
+    free(src_seen);
+    for (int i = 0; i < n_inc; i++) free(inc_seen[i]);
+    free(inc_seen);
 }
 
 /* Resolve a project's include search path by walking up from `dir` to find
@@ -7398,6 +7501,15 @@ static int cmd_eval_h(const char *path, bool use_color,
      * broke every `#lang`/sweet-exp fixture that did not also carry a
      * dialect-bearing extension. */
     TuriValue result;
+    /* debugger-and-tracer-only-instrument-main: a file with no `main` is a
+     * top-level program, so arm around the load itself -- the entry stop
+     * lands on its first located node, breakpoints in it and in what it calls
+     * fire, and the recorder records its steps (it used to report 0 steps and
+     * `tur dap` never stopped, not even for stopOnEntry).  A file WITH a main
+     * keeps arming right before `(main)` below, so its top-level definitions
+     * still load without stopping. */
+    bool has_main = file_defines_main(path);
+    if (debug && !has_main) turi_debug_arm(env);
     {
         char load_form[4200];
         snprintf(load_form, sizeof load_form, "(load \"%s\")", path);
@@ -7443,6 +7555,32 @@ static int cmd_eval_h(const char *path, bool use_color,
     if (hooks && hooks->on_done) hooks->on_done(env, hooks->ud);
     turi_env_free(env);
     return rc;
+}
+
+/* debugger-and-tracer-only-instrument-main: does the file define a top-level
+ * `main`?  A textual scan -- `(defn main` / `defn main` at a line start (the
+ * sweet-exp spelling) -- because the answer is needed BEFORE the file is
+ * loaded: it decides whether the debugger is armed around the whole load (a
+ * top-level program: its forms ARE the program, so the entry stop, the
+ * breakpoints and the recorder must see them) or, as before, only around the
+ * `(main)` call.  The same rule Try Turmeric and Trowel re-derive on the
+ * client side; deriving it here lets them stop. */
+static bool file_defines_main(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    char line[4096];
+    bool found = false;
+    while (!found && fgets(line, sizeof line, f)) {
+        const char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (strncmp(p, "(defn main", 10) == 0 || strncmp(p, "defn main", 9) == 0) {
+            char c = p[(p[0] == '(') ? 10 : 9];
+            if (c == ' ' || c == '\t' || c == '[' || c == '(' || c == '\n' || c == '\r')
+                found = true;
+        }
+    }
+    fclose(f);
+    return found;
 }
 
 /* Back-compat wrapper: the common case with no embedder hooks. */

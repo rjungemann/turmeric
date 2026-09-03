@@ -13,3 +13,6 @@
 # cannot run in CI -- one that needs a display, a network listener, or an
 # interactive input. "It crashes" is not a reason to add a row; it is the
 # finding the sweep exists to produce.
+
+examples/snake/src/main.tur   opens a raylib window (needs a display and the raylib C shim linked by its own CMakeLists)
+examples/guestbook/src/main.tur   binds an HTTP listener and serves forever (tests/run-guestbook.sh drives it with GUESTBOOK_MAX_REQUESTS instead)

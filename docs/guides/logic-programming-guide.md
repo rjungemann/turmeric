@@ -285,68 +285,79 @@ defn parse-expr [input]
 
 ## Example: Logic Programming with miniKanren
 
-Relational queries that work in multiple directions:
+`stdlib/logic.tur` is a miniKanren: logic variables (`term-var`), unification
+(`lequal`), `fresh`, conjunction (`conjoined`), interleaving disjunction
+(`disjoined`), delayed recursion (`zzz`) and lazy solution streams
+(`run-logic`, `st-pull`). `examples/minikanren/src/main.tur` is the worked
+program; the pieces below are lifted from it.
+
+A relation is a function from terms to a goal. A fact table is a disjunction
+of unifications, and because either argument may be a variable the same
+relation answers "parents of", "children of" and "every pair":
 
 ```turmeric no-check
-;; Unification: make two values equal
-(defn unify [x y subst]
-  (cond
-    [(== x y) (return subst)]
-    [(lvar? x) (ext-s x y subst)]
-    [(lvar? y) (ext-s y x subst)]
-    [(and (pair? x) (pair? y))
-     (bind (fn [s] (unify (cdr x) (cdr y) s))
-           (unify (car x) (car y) subst))]
-    [:else mzero]))
+(load "stdlib/logic.tur")
 
-;; Relation: append(x, y, z) :- z = x ++ y
-(defn appendo [x y z]
-  (<|>
-    ;; Base case: x = [], z = y
-    (bind (fn [s] (unify y z s)) (unify x [] {}))
-    ;; Recursive: x = [h|t], z = [h|r], append(t, y, r)
-    (bind (fn [s]
-            (let [h (lvar 'h)
-                  t (lvar 't)
-                  r (lvar 'r)]
-              (appendo t y r)))
-          (unify x (cons (lvar 'h) (lvar 't)) {}))))
+;;; fact -- the goal "p is PARENT and c is CHILD", one row of the table.
+(defn fact [p : Term c : Term parent : int child : int] : (Goal int)
+  (conjoined (lequal p (term-int parent)) (lequal c (term-int child))))
 
-;; Query: (appendo [1 2] [3 4] X) => X = [1 2 3 4]
-(run 1 [x]
-  (appendo [1 2] [3 4] x))
+(defn parento [p : Term c : Term] : (Goal int)
+  (disjoined (fact p c 0 1)                      ; abe   -> homer
+    (disjoined (fact p c 5 1)                    ; mona  -> homer
+      (disjoined (fact p c 1 2)                  ; homer -> bart
+                 (fact p c 1 3)))))              ; homer -> lisa
+
+;;; grandparento -- some m is g's child and c's parent.
+(defn grandparento [g : Term c : Term] : (Goal int)
+  (fresh (fn [m] (conjoined (parento g m) (parento m c)))))
+
+;; Who are bart's grandparents?  The fresh variable is query variable 0.
+(run-logic 10 (fresh (fn [g] (grandparento g (term-int 2)))))
 ```
 
-```sweet-exp
-;; Unification: make two values equal
-defn unify [x y subst]
-  cond
-    ==(x y)  return(subst)
-    lvar?(x)  ext-s(x y subst)
-    lvar?(y)  ext-s(y x subst)
-    and(pair?(x) pair?(y))
-      bind(fn [s] unify(cdr(x) cdr(y) s)
-           unify(car(x) car(y) subst))
-    :else  mzero
+`run-logic n goal` returns a lazy `Stream` of at most `n` substitutions; each
+is one answer, read back by walking the query variable:
 
-;; Relation: append(x, y, z) :- z = x ++ y
-defn appendo [x y z]
-  <|>
-    ;; Base case: x = [], z = y
-    bind(fn [s] unify(y z s)  unify(x [] {}))
-    ;; Recursive: x = [h|t], z = [h|r], append(t, y, r)
-    bind
-      fn [s]
-        let [h lvar('h)
-             t lvar('t)
-             r lvar('r)]
-          appendo(t y r)
-      unify(x cons(lvar('h) lvar('t)) {})
-
-;; Query: (appendo [1 2] [3 4] X) => X = [1 2 3 4]
-run 1 [x]
-  appendo([1 2] [3 4] x)
+```turmeric no-check
+(defn print-people [results : Stream v : int] : int
+  (match (st-pull results)
+    (StCons s rest)
+      (do
+        (println (person-name (term-int-val (logic-walk (term-var v) s))))
+        (print-people rest v))
+    _ 0))
 ```
+
+The classic `appendo` shows the part a function cannot do. Lists are
+`term-pair` / `term-nil` terms; the recursive branch is wrapped in `zzz` so
+the goal can be *built* without diverging, and the search unfolds it one
+step per pull:
+
+```turmeric no-check
+(defn appendo [l : Term s : Term out : Term] : (Goal int)
+  (disjoined
+    (conjoined (lequal l (term-nil)) (lequal s out))
+    (fresh (fn [a]
+      (fresh (fn [d]
+        (fresh (fn [res]
+          (conjoined (lequal l (term-pair a d))
+            (conjoined (lequal out (term-pair a res))
+                       (zzz (appendo d s res))))))))))))
+
+;; forwards:  (1 2) ++ (3 4) = ?          -> (1 2 3 4)
+(run-logic 5 (fresh (fn [out] (appendo (list2 1 2) (list2 3 4) out))))
+;; backwards: ? ++ (3 4) = (1 2 3 4)      -> (1 2)
+(run-logic 5 (fresh (fn [l] (appendo l (list2 3 4) (list4 1 2 3 4)))))
+;; both unknown: every split of (1 2 3)   -> () ++ (1 2 3), (1) ++ (2 3), ...
+(run-logic 10 (fresh (fn [l] (fresh (fn [s] (appendo l s (list3 1 2 3)))))))
+```
+
+`disjoined` interleaves, so a relation with infinitely many solutions still
+yields the ones you ask for (`tests/fixtures/logic-lazy-infinite`);
+`disjoined-dfs` keeps depth-first order and is only complete when the left
+branch is finite. Goals are also a `Monad` / `Alternative`, so `do-m` and
+`alt-or` spell conjunction and disjunction (see "Typeclass instances").
 
 ## Example: Constraint Solving (Sudoku)
 

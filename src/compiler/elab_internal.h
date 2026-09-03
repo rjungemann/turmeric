@@ -883,6 +883,13 @@ typedef struct Elab {
     struct WriteFrameSite *wf_frame_sites;
     uint32_t               n_wf_frame_sites;
     uint32_t               cap_wf_frame_sites;
+    /* AI3.1 (application-image-dumps-plan): the `init` root of every
+     * with-image-cache-after-init expansion, noted at macro expansion and
+     * checked by wf_lint_image_globals after every defn's frame site exists
+     * (init's callees may be defined later in the unit). */
+    struct ImageCacheRoot *image_cache_roots;
+    uint32_t               n_image_cache_roots;
+    uint32_t               cap_image_cache_roots;
     /* R4 slice 2 (trusted-refinement-claims-plan): every `#reads`-annotated
      * function, recorded during elaboration for the deferred read-frame
      * verification pass (rf_resolve_read_frames).  Same deferral rationale
@@ -1026,6 +1033,12 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
  * "every callee's declared frame stays inside this one" is a question about
  * functions that may be defined later in the file, and a check that answered it
  * differently depending on definition order would be worthless. */
+/* AI3.1: one with-image-cache-after-init expansion's cold-start root. */
+typedef struct ImageCacheRoot {
+    const Symbol *root;   /* the `init` argument (a top-level defn name) */
+    Span          span;   /* the macro call, where TUR-W0706 is reported */
+} ImageCacheRoot;
+
 typedef struct WriteFrameSite {
     Binding      *fn;          /* the annotated function; where the verdict lands */
     Binding     **params;      /* its parameters, for arg -> frame-slot mapping */
@@ -1043,6 +1056,9 @@ void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_param
 /* Verify every recorded frame against its body, stamping `writes_checked` on
  * the ones that hold and emitting TUR-E0382 on the ones that do not. */
 void wf_resolve_write_frames(Elab *e);
+/* AI3.1: record a with-image-cache-after-init `init` root / run TUR-W0706. */
+void wf_note_image_cache_root(Elab *e, const Symbol *root, Span span);
+void wf_lint_image_globals(Elab *e);
 
 /* R4 slice 2 (trusted-refinement-claims-plan): one `#reads`-annotated
  * function, recorded during elaboration and verified AFTER it
@@ -1447,6 +1463,7 @@ typedef enum {
     RET_CONFLICT_TYPE_REVERSE,
     RET_CONFLICT_BOOL_INTEGER,
     RET_CONFLICT_CARRIER_AGGREGATE,
+    RET_CONFLICT_NIL_BODY,
 } ReturnConflict;
 
 /* carrier-aware-return-unification: single dispatcher over the return-position
@@ -1456,9 +1473,17 @@ typedef enum {
  * widen an int-literal -> float body in place with
  * rc_widen_int_literal_to_float_return BEFORE calling, and should skip the
  * lazy-probe placeholder and inline-C (fiat TY_NIL) bodies as before. */
+/* nil-tail-not-checked-against-declared-return: `checkable` is the caller's
+ * decision and carries two facts -- the return type was written down, and the
+ * tail is a nil LITERAL rather than merely nil-typed.  See elab_core.c. */
+bool return_type_nil_body_conflict(TypeKind declared, Type body,
+                                   bool checkable);
+/* True when this body's TAIL is a nil literal, peeling the EX_DO / EX_LET /
+ * EX_LETREC wrappers a multi-form or scope-opening body adds. */
+bool body_tail_is_nil_literal(const Expr *e);
 ReturnConflict return_position_conflict(const AdtDef *ret_adt,
                                         TypeKind ret_kind, Type body,
-                                        ReturnClass cls);
+                                        ReturnClass cls, bool check_nil_body);
 
 /* TY4: if `e` is a borrow (&x / &mut x) of a named binding, return that
  * binding (the referent); otherwise NULL.  Used by the borrow-escape check. */
@@ -1784,5 +1809,17 @@ Expr *elab_session_recv_timeout(Elab *e, const Form *call);
 /* any-struct-box-leak-per-widen: does this expression evaluate to an `any` whose
  * payload box the evaluating expression owns?  See elab_call.c. */
 bool any_expr_is_owned_temp(const Expr *x, int depth);
+
+/* RM1 (reclamation-plan): the per-callee freshness analysis -- see the walker
+ * in elab_fns.c and the flag's comment in expr.h. */
+bool elab_body_returns_fresh_sum_box(const Expr *e);
+/* ... and its stamping form: sets both returns_fresh_sum_box and
+ * fresh_sum_via_param_mask on `b` from the elaborated body. */
+void elab_stamp_sum_freshness(Binding *b, Binding **params, uint32_t n_params,
+                              const Expr *body);
+/* The non-retaining parameter masks (fn / ptr-scalar / sum), inferred from the
+ * elaborated body.  Shared by defn and instance-method elaboration. */
+void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
+                                Expr *body);
 
 #endif

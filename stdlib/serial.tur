@@ -255,7 +255,10 @@
       | ((uint64_t)p[7] << 56);
     double dv;
     memcpy(&dv, &bits, 8);
-    return *(int64_t*)&dv;
+    /* The instance is emitted with its NATIVE signature (`double f(void*)`),
+     * so hand back the double itself.  Returning the bit pattern through an
+     * int64 lvalue converted it numerically (7.1 came back as 4.6e18). */
+    return dv;
     ```))
 ;; cstr -- length-prefixed UTF-8 string (4-byte little-endian length + bytes)
 ;;; Serializable [cstr] -- serialize/deserialize a cstr as a 4-byte LE length prefix followed by UTF-8 bytes.
@@ -523,3 +526,148 @@
   fclose(f);
   return buf;
   ```)
+;; ---------------------------------------------------------------------------
+;; Typed continuation surface (serializable-continuations-aspirational-surface).
+;;
+;; The three names the guides use, over the same runtime save-cont! /
+;; resume-cont! wrap: a `serial-cont` is the opaque DK chain the serial-shift
+;; receiver is handed, `bytes` is the {int64 len; data} buffer the codec
+;; produces, and rebuilding a continuation from bytes is fallible -- so it
+;; returns a Result instead of aborting inside tur_serial_cont_deserialize.
+;; ---------------------------------------------------------------------------
+;;; serial-cont->bytes -- marshal a captured continuation to a bytes value.
+;;;
+;;; The typed spelling of save-cont!: walks the frame chain k and writes each
+;;; frame's stable tag/name plus its environment (int inline, cstr and
+;;; Serializable envs by value) to a length-prefixed buffer.  No code address
+;;; is written, so the bytes are valid in another process running the SAME
+;;; program.
+;;;
+;;; Parameters:
+;;;   k -- the continuation the serial-shift receiver was passed
+;;;
+;;; Returns:
+;;;   A caller-owned bytes :ptr<void> ({int64 len; data}), or NULL if k is nil.
+;;;
+;;; Example:
+;;;   (defn stash [k : serial-cont] : int
+;;;     (do (cont-to-file (serial-cont->bytes k) "/tmp/k.bin") 0))
+;;;   (serial-reset (+ 10 (serial-shift stash 0)))
+;;;
+;;; Since: Phase 21 (typed surface 2026-09-02)
+
+(defn serial-cont->bytes [k : serial-cont] : ptr<void>
+  ```c
+  /* The serial DK runtime (tur_serial_cont_serialize and the SK_* frame
+   * vocabulary) is emitted only when the program contains serial-reset /
+   * serial-shift.  A program that merely loads this file has no continuation
+   * to marshal, so the body compiles to a NULL return there. */
+#ifdef SK_TAG_CALL
+  if (!k) return NULL;
+  return (void *)(intptr_t)tur_serial_cont_serialize((int64_t)(intptr_t)k);
+#else
+  (void)k;
+  return NULL;
+#endif
+  ```)
+;;; bytes->serial-cont -- rebuild a continuation from bytes, or say why not.
+;;;
+;;; Validates the buffer before touching the runtime: every frame record must
+;;; fit, carry a known tag, and -- for a call frame -- name a frame this
+;;; program registered.  A buffer written by a different program (or a
+;;; different build whose frame names moved) is therefore an Err naming the
+;;; problem rather than an abort or a resumed garbage chain.
+;;;
+;;; Parameters:
+;;;   b -- a bytes value from serial-cont->bytes / save-cont! / cont-from-file
+;;;
+;;; Returns:
+;;;   (Ok k) with a resumable serial-cont, or (Err msg) with a static cstr:
+;;;   "null bytes", "short buffer", "bad frame count", "truncated frame",
+;;;   "frame name too long", "unknown frame (written by a different
+;;;   program?)", "truncated env", "bad env kind", "bad frame tag" -- each
+;;;   prefixed with "bytes->serial-cont: ".
+;;;
+;;; Example:
+;;;   (match (bytes->serial-cont (cont-from-file "/tmp/k.bin"))
+;;;     (Ok k)  (serial-resume k 5)
+;;;     (Err m) (do (println m) 0))
+;;;
+;;; Since: Phase 21 (typed surface 2026-09-02)
+
+(defn bytes->serial-cont [b : ptr<void>] : (Result serial-cont cstr)
+  ```c
+  #ifndef SK_TAG_CALL
+  /* No serial syntax in this program: nothing registered a frame, so no
+   * buffer can name one (see serial-cont->bytes). */
+  (void)b;
+  return tur_err_ptr((void *)"bytes->serial-cont: this program captures no continuations");
+#else
+  const int64_t *in = (const int64_t *)b;
+  if (!in) return tur_err_ptr((void *)"bytes->serial-cont: null bytes");
+  int64_t len = in[0];
+  if (len < 8) return tur_err_ptr((void *)"bytes->serial-cont: short buffer");
+  const uint8_t *c = (const uint8_t *)(in + 1), *end = c + len;
+  int64_t n; memcpy(&n, c, 8); c += 8;
+  if (n < 0) return tur_err_ptr((void *)"bytes->serial-cont: bad frame count");
+  for (int64_t i = 0; i < n; i++) {
+    int64_t tag;
+    if (end - c < 8) return tur_err_ptr((void *)"bytes->serial-cont: truncated frame");
+    memcpy(&tag, c, 8); c += 8;
+    if (tag == SK_TAG_CALL) {
+      int64_t L, ek;
+      if (end - c < 8) return tur_err_ptr((void *)"bytes->serial-cont: truncated frame");
+      memcpy(&L, c, 8); c += 8;
+      if (L < 0 || end - c < L) return tur_err_ptr((void *)"bytes->serial-cont: truncated frame");
+      {
+        char nm[256];
+        if (L >= (int64_t)sizeof nm) return tur_err_ptr((void *)"bytes->serial-cont: frame name too long");
+        memcpy(nm, c, (size_t)L); nm[L] = 0; c += L;
+        if (!__sk_reg_by_name(nm))
+          return tur_err_ptr((void *)"bytes->serial-cont: unknown frame (written by a different program?)");
+      }
+      if (end - c < 8) return tur_err_ptr((void *)"bytes->serial-cont: truncated frame");
+      memcpy(&ek, c, 8); c += 8;
+      if (ek == SK_ENV_INT) {
+        if (end - c < 8) return tur_err_ptr((void *)"bytes->serial-cont: truncated env");
+        c += 8;
+      } else if (ek == SK_ENV_CSTR || ek == SK_ENV_SER) {
+        int64_t sl;
+        if (end - c < 8) return tur_err_ptr((void *)"bytes->serial-cont: truncated env");
+        memcpy(&sl, c, 8); c += 8;
+        if (sl < 0 || end - c < sl) return tur_err_ptr((void *)"bytes->serial-cont: truncated env");
+        c += sl;
+      } else {
+        return tur_err_ptr((void *)"bytes->serial-cont: bad env kind");
+      }
+    } else if (tag >= 1 && tag <= 6) {
+      if (end - c < 8) return tur_err_ptr((void *)"bytes->serial-cont: truncated env");
+      c += 8;
+    } else {
+      return tur_err_ptr((void *)"bytes->serial-cont: bad frame tag");
+    }
+  }
+  return tur_ok_ptr((void *)(intptr_t)tur_serial_cont_deserialize((int64_t)(intptr_t)b));
+#endif
+  ```)
+;;; serial-resume -- resume a continuation with a value.
+;;;
+;;; `(serial-resume k v)` is `(k v)`: the enclosing serial-reset's rest of the
+;;; computation runs with v in the hole and its result comes back.  Works on
+;;; the continuation the serial-shift receiver was handed and on one rebuilt
+;;; by bytes->serial-cont alike.
+;;;
+;;; Parameters:
+;;;   k -- a serial-cont
+;;;   v -- the value to fill the hole with
+;;;
+;;; Returns:
+;;;   The resumed computation's result.
+;;;
+;;; Example:
+;;;   (defn sk [k : serial-cont] : int (serial-resume k 5))
+;;;   (serial-reset (+ 10 (serial-shift sk 0)))   ; => 15
+;;;
+;;; Since: Phase 21 (typed surface 2026-09-02)
+
+(defn serial-resume [k : serial-cont v : int] : int (k v))

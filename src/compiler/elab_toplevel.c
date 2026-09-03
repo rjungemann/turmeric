@@ -6,6 +6,11 @@
 #include "refine_discharge.h" /* RT3: final refinement discharge + stats */
 #include "refine_report.h"    /* SX8a-3: --dump-refine=json obligation dump */
 
+/* duplicate-ctor-names-collide-in-emitted-c: the constructor-name census lives
+ * in emit_core.c; declared here because elab_toplevel.c does not include
+ * emit_internal.h. */
+void ctor_census_snapshot(struct AdtDef *const *defs, uint32_t n_defs);
+
 Expr *elab_as_cast(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -2194,6 +2199,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * Same deferral rationale as the crossings themselves: a frame's callees may
      * be defined later in the unit. */
     wf_resolve_write_frames(&e);
+    wf_lint_image_globals(&e);   /* AI3.1: TUR-W0706, after every site exists */
     /* R4 slice 2: verify `#reads` frames against their elaborated bodies,
      * stamping reads_checked where every read attributes to the frame.  Emits
      * nothing but the optional --dump-read-frames dump plus slice 3's
@@ -2211,6 +2217,18 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         buf_to_file(&rb, stdout);
         buf_free(&rb);
     }
+
+    /* duplicate-ctor-names-collide-in-emitted-c: the emitted constructor symbol
+     * is ADT-qualified, and a constructor name owned by exactly ONE ADT also
+     * keeps a bare-name alias so hand-written inline C (`ctor_Left(v)`, which
+     * stdlib/either.tur documents) still resolves.  Deciding "exactly one" needs
+     * every ADT in the program.
+     *
+     * Taken HERE, above the teardown, and not at the return: the non-session
+     * path frees `e.adt_defs` a few lines down, so snapshotting after it read
+     * freed memory (ASan heap-use-after-free).  The census copies the names it
+     * needs, so nothing downstream holds an elaborator pointer. */
+    ctor_census_snapshot(e.adt_defs, e.n_adt_defs);
 
     if (sess) {
         /* TR2: the accumulated state IS the session -- hand it back instead of

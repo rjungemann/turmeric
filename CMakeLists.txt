@@ -224,16 +224,15 @@ add_test(
   COMMAND bash tests/run-fmt.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
-# SR4 seam-rot gate: recursive sums by value (TUR_SR4_RECURSIVE_BYVALUE=1) are
-# OFF by default -- a measured performance decision, not a correctness one --
-# so nothing else in CI ever compiles a recursive sum by value, and the seam's
-# 2708-green state (2026-08-27) would rot silently as the compiler moves.
-# This harness re-runs the recursive-sum fixture population under the seam
-# (build + run + stdout compare, ~22 fixtures) behind a canary that asserts
-# the seam actually bites (ctor_SBind returns the aggregate, not int64_t), so
-# an env-var rename can't quietly turn it into a re-test of the default path.
-# See the is_self_recursive decision record in src/compiler/types.c and the
-# SR plan's SR4 section for why the seam exists at all.
+# SR4 seam-rot gate.  Recursive sums flow BY VALUE by default since RM4
+# (2026-09-02); TUR_SR4_RECURSIVE_CARRIER=1 restores the int64 carrier for A/B
+# measurement, so nothing else in CI ever compiles a recursive sum through the
+# carrier and that path would rot silently as the compiler moves.  This harness
+# re-runs the recursive-sum fixture population under the seam (build + run +
+# stdout compare, ~22 fixtures) behind a canary that asserts the seam actually
+# bit (the logic ctor returns int64_t), so a renamed env var fails loudly
+# instead of silently re-testing the default path.  RUN_SERIAL for the same
+# reason as the suites above.
 add_test(
   NAME tur_sr4_seam
   COMMAND bash tests/run-sr4-seam.sh
@@ -274,6 +273,16 @@ add_test(
   COMMAND bash tests/check-examples.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# examples/guestbook end to end: build it with `tur run` (build.tur's
+# :c-sources links the httpd.c shim), serve a bounded number of requests on a
+# private port, and walk the four-page flow with curl -- every hop resumes a
+# continuation rebuilt from bytes on disk.  Skips itself when curl is absent.
+add_test(
+  NAME tur_guestbook_smoke
+  COMMAND bash tests/run-guestbook.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_guestbook_smoke PROPERTIES SKIP_RETURN_CODE 2)
 # parse-check subcommand: AST-equality of turmeric + sweet-exp file pairs,
 # the backing check for tools/check-guide-pairs.py.
 add_test(
@@ -461,6 +470,37 @@ add_test(
 add_test(
   NAME tur_pipefail_grep_q_lint
   COMMAND bash tests/check-pipefail-grep-q.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# A `const char *` accessor that returns a function-scoped `static char buf[]`
+# is correct only while every caller consumes the name before asking for
+# another -- and emitters do the opposite, gathering one name per field before
+# writing the declaration, so every name becomes the LAST name.  No crash, no
+# ASan report, no diagnostic: just well-formed C with the wrong type in it.
+# Bitten twice; see docs/archive/c-name-accessors-share-static-buffers.md.
+add_test(
+  NAME tur_static_cname_buffer_lint
+  COMMAND bash tests/check-static-cname-buffers.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# The bare-name constructor alias must fail CLOSED: no alias when the name has
+# more than one meaning, so inline C naming it fails at cc instead of silently
+# reaching whichever ADT was emitted first.  It did not, when the uniqueness
+# test keyed on the raw name and the #ifndef guard on the mangled one -- a
+# silent wrong constructor with no diagnostic at any layer.  See
+# docs/reported/separator-fold-collides-emitted-c-names.md.
+add_test(
+  NAME tur_ctor_alias_ambiguity
+  COMMAND bash tests/check-ctor-alias-ambiguity.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# stdlib/VERSION is what lets tur tell its own stdlib from another release's.
+# A stamp that drifts is worse than no stamp, because it is trusted: a stale one
+# makes a mismatched stdlib look like a match AND makes the correct one warn.
+# See docs/archive/stdlib-dir-guard-accepts-mismatched-stdlib.md.
+add_test(
+  NAME tur_stdlib_version_stamp
+  COMMAND bash tests/check-stdlib-version-stamp.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # docs/reported/README.md is the triage index: it must list every open finding

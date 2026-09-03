@@ -1,0 +1,42 @@
+;; erased-reader-subword-record-monomorph -- pins
+;; docs/reported/erased-generic-field-read-overruns-subword-monomorph-box.md.
+;;
+;; A parametric RECORD monomorph whose type-parameter field is narrower than a
+;; word (`(Identity bool)`, `(Identity int8)`, `(Identity int32)`) crosses the
+;; rank-2 dict-clone boundary heap-boxed by the aggregate return spill, and the
+;; ERASED generic reader `run-id` reads that box through the base typedef
+;; (`tur_adt_Identity { int64_t wrapped; }`).  Before the fix the monomorph
+;; stored the field at its native width, so the erased read overran a 1-byte
+;; box (ASan heap-buffer-overflow) and was right only by little-endian luck.
+;; The monomorph now widens a type-parameter-typed sub-word integer field to
+;; the int64 slot, exactly as the multi-variant monomorphs already did.
+;;
+;; The VALUES are asserted, with a negative int8 (sign extension must hold) and
+;; an int32 with non-zero high bytes (a byte-punned read cannot be right by
+;; accident).  No inline C.
+(defstruct Identity :copy [a] (wrapped : a))
+(defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x))
+(defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+(defn keep-bool [v : bool]  : bool  v)
+(defn keep-i8   [v : int8]  : int8  v)
+(defn keep-i32  [v : int32] : int32 v)
+
+(defn poly-bool [^f] [^Functor f x : (f bool)]  : (f bool)  (fmap x keep-bool))
+(defn poly-i8   [^f] [^Functor f x : (f int8)]  : (f int8)  (fmap x keep-i8))
+(defn poly-i32  [^f] [^Functor f x : (f int32)] : (f int32) (fmap x keep-i32))
+
+(defn use-bool [g (forall [(f :: * -> *)] [(Functor f)] (-> (f bool) (f bool)))] : bool
+  (run-id (g (mk-id true))))
+(defn use-i8 [g (forall [(f :: * -> *)] [(Functor f)] (-> (f int8) (f int8)))] : int8
+  (run-id (g (mk-id (:: -5 int8)))))
+(defn use-i32 [g (forall [(f :: * -> *)] [(Functor f)] (-> (f int32) (f int32)))] : int32
+  (run-id (g (mk-id (:: 100000 int32)))))
+
+(defn main [] : int
+  (println (use-bool poly-bool))   ; true
+  (println (use-i8 poly-i8))       ; -5
+  (println (use-i32 poly-i32))     ; 100000
+  0)

@@ -38,10 +38,18 @@ That left `option<Vec T>` / `option<Map ...>` / `option<Set ...>`: one fixture.
 **The second disqualification is gone.** `defopaque` over a pointer now c-names
 as `void *` ([gate results](../archive/opaque-pointer-c-spelling-gate-results.md),
 graduated 2026-08-28), so `String` and `StringBuilder` are eligible and the
-`(Option String)` census the plan named -- `env` (5 spellings), `httpd-string`
-(5), `args` (2), `re` (2), `docstrings` (2) -- is in scope. The first
-disqualification stands; `Cons` is still ineligible -- and item (2) of the
-original recommendation is now closed as DECLINED (see What is left, item 3).
+~~`(Option String)` census the plan named -- `env` (5 spellings), `httpd-string`
+(5), `args` (2), `re` (2), `docstrings` (2) -- is in scope.~~ **That census is
+wrong, and item 4's measurement is what found it**
+([results](../../benchmarks/option-niche-size/RESULTS.md)): `env`, `args` and
+`re` are `(Option cstr)`, not `(Option String)` -- verified ineligible against
+the emitter, since a `cstr` is a raw `const char *` that cannot carry
+`:non-null` -- and the `docstrings` hits are inside string LITERALS, the
+documentation text of two httpd functions. `httpd-string` is the only real
+row of the five, and it is the one file the emitted census independently
+found. The first disqualification stands; `Cons` is still ineligible -- and
+item (2) of the original recommendation is now closed as DECLINED (see What
+is left, item 3).
 
 ## What the phase is
 
@@ -199,20 +207,28 @@ used to carry; closed, pinned by
    the eligible population run under the flag); "no new crossing defects over
    a release cycle" is now a checkable claim, and it should be checked before
    the flip.
-2. **Default-on is a semantic break, not just a representation change.** On
+2. **Default-on is a semantic break, not just a representation change.**
+   Filed 2026-08-30 as
+   [option-niche-graduation-breaks-carrier-some-null](../archive/option-niche-graduation-breaks-carrier-some-null.md)
+   and **resolved 2026-09-02**: the release-notes entry is written and
+   published under `CHANGELOG.md` `[Unreleased]` as an announced-ahead
+   breaking change; the flip moves it under the graduating release.  On
    today's default a carrier `Some(NULL)` is a legal, distinct value
    (`tur_some_ptr(0)`; `some?` true).  Under the niche it is an abort at the
    construction or crossing door.  That is the `:non-null` declaration being
    enforced -- but code that never opted in would start aborting, which wants
    a release-notes entry and a deliberate decision, not a default flipped in
    passing.
-3. **The measurement removes the urgency.** Parity at container elements and
+3. **The measurement removes the urgency.** Filed 2026-08-30 as
+   [option-niche-container-elements-box-at-parity](../reported/option-niche-container-elements-box-at-parity.md).
+   Parity at container elements and
    a direct-position win that is real but synthetic-loop-amplified is not the
    SR2a shape (3.6x + 71x RSS on real workloads); it is closer to the SR4
    shape, which was measured and deliberately NOT defaulted.
 
 **The flip becomes right when:** the seam harness has run quiet across a
-release cycle (0.41), the `Some(NULL)` break has a release-notes entry, and
+release cycle (0.41), the `Some(NULL)` break has a release-notes entry (it
+does, since 2026-09-02 -- `CHANGELOG.md` `[Unreleased]`), and
 -- ideally -- end-to-end monomorphization shrinks the erased boundary so
 container elements stop boxing under EITHER representation, at which point the
 niche's 8-byte word is what lands in the slot and the container row stops
@@ -352,6 +368,98 @@ container parity row breaking.
    on a population of approximately zero. Verified both ways:
    `(some (tnil))` is a legal, distinguishable value with the experiment on
    and off, and the one census fixture is bit-identical under the flag.
-4. **A size measurement worth the name.** The gate measured correctness, not
-   bytes. The claim is 16 -> 8 per value on the eligible population; nobody has
-   run SR0(a)'s instrument over it since the population changed.
+4. ~~A size measurement worth the name~~ -- **DONE 2026-08-30.** Instruments
+   and full results in
+   [benchmarks/option-niche-size/](../../benchmarks/option-niche-size/RESULTS.md).
+   Three findings:
+
+   **The per-value claim is exact: 16 -> 8, measured from the emitted
+   typedef.** Composition the plan never recorded -- a 4-byte tag, 4 bytes of
+   ALIGNMENT PADDING, and the 8-byte payload -- so half of what the niche
+   recovers is padding the tag's alignment forces, and the win would not
+   shrink if the tag were narrowed to a byte.
+
+   **The eligible population is two monomorphs in eight files**, out of 4736
+   Option monomorph instances the corpus emits: `Option__String` (7 files,
+   `stdlib/httpd-string.tur` plus 6 fixtures) and `Option__Vec__int` (1
+   fixture). Eligibility was decided by the compiler rather than re-derived --
+   a monomorph is eligible exactly when its typedef is present by default and
+   absent under the flag. Zero inputs emit by default and fail under the flag.
+   This is also what corrected the census above.
+
+   **And the size trade is not one-directional.** The niche costs 184-310
+   bytes of emitted `.text` per translation unit that uses it, because it must
+   ENFORCE what the default representation can simply represent: a null
+   payload is a legal value in a 16-byte tagged Option and an impossibility in
+   an 8-byte niche one, so the `:non-null` checks are emitted at the `Some`
+   ctor and at the carrier crossing. Three ineligible control fixtures are
+   byte-identical under the flag (+0), which is an object-code proof of the
+   inertness the corpus result asserts at the level of test outcomes.
+
+   No aggregate "bytes saved" figure is produced, deliberately: per-value
+   bytes need live values rather than emission sites (a corpus-wide sum would
+   be one stdlib body times the file count -- the CE0 trap), and container
+   elements are already known to be at exact parity.
+
+5. **`(Option cstr)` is 2.6x the eligible population, and reaching it is an
+   API decision rather than a compiler feature.** INVESTIGATED 2026-08-30;
+   probes in
+   [benchmarks/option-niche-size/probes/](../../benchmarks/option-niche-size/probes/README.md).
+
+   Surfaced by item 4's payload tally: 34 `(Option cstr)` spellings against 13
+   `(Option String)` (8 against 2 counting only stdlib API). The plan unshelved
+   slice B on the reasoning that making `String` eligible "is the whole
+   census"; `String` was made eligible and it is not.
+
+   **`#refine{}` is NOT the key, and the reason is documented rather than
+   incidental.** A refinement in type-argument position -- the payload slot of
+   a container, which is exactly the position at issue -- is peeled to its base
+   with `TUR-W0380` (`rt_peel_type_arg_contract`, elab_types.c:640). It is
+   peeled because keeping it is worse: a live `TY_CONTRACT` inside a type
+   application makes ordinary uses of the payload fail, since operator lookup,
+   overload resolution and return-type checking all compare kinds without
+   peeling. The diagnostic names what enforcement would take -- the refinement
+   surviving as a type argument down to the unpacking binder, plus a checked
+   crossing at the constructor -- and says it is "a real feature, not an
+   oversight, and it is not built."
+
+   **`:non-null` on `cstr` is not the key either, and should not be.**
+   `opaque_base_is_ptr` admits `ptr` / `ptr<...>` only, and more fundamentally
+   `cstr` is `TY_CSTR` -- a builtin TypeKind with no declaration site. But the
+   deeper reason is that the claim would be FALSE: `env/get-raw` returns a null
+   `cstr` for an unset variable, so "every `cstr` is non-null" is not a fact
+   about the type. Nullability here is per-BOUNDARY, not per-type.
+
+   **What does work, today, with no compiler change: a `defopaque` newtype at
+   that boundary.** Measured, all four ways:
+
+   ```turmeric
+   (defopaque Cstr! :ptr<void> :non-null)
+
+   (defn env-get [name : cstr] : (Option Cstr!)
+     (let [v (getenv-raw name)]
+       (if (= v 0) (none) (some (:: v Cstr!)))))
+   ```
+
+   The monomorph's typedef is emitted by default and ABSENT under the flag --
+   it takes the niche -- with identical correct output both ways. A consumer
+   pays one `::` ascription to get a usable `cstr` back, the same ceremony
+   `String` consumers already pay. And the declaration is enforced on a
+   user-defined newtype at both doors with nothing added: `TUR-E0303` at
+   elaboration for a literal zero, the ctor abort under the niche for a
+   computed one.
+
+   This is not a workaround; it is the granularity the invariant actually has.
+   `env/get` already tests its raw pointer against 0 and maps null to
+   `(none)`, so the value inside its `Some` is non-null BY CONSTRUCTION and
+   the newtype merely writes down what the function already guarantees.
+
+   **And on size grounds it is still not worth doing.** The trade is 8 bytes
+   per live value against 184-310 bytes of `.text` per translation unit, on
+   functions called a handful of times per program. If these sites are ever
+   retyped it should be for the reason section 4 of
+   [sum-representation-plan.md](sum-representation-plan.md) gives for the whole
+   SR programme -- expressiveness, an invariant the type currently cannot
+   state -- and the niche then follows for free. Retyping stdlib's `(Option
+   cstr)` API to chase 8 bytes would be a breaking change to a public surface
+   bought with a rounding error.

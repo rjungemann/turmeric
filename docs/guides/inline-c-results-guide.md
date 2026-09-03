@@ -167,6 +167,37 @@ through spices (see
   `task-group-new` abort), but it is wrong for routine, recoverable
   failures like a port that is busy or a connection that is refused.
 
+## Who owns the box
+
+`tur_some_ptr` / `tur_ok_ptr` / `tur_box_*` **malloc** the option/result
+carrier box. Until 2026-08-30 nothing freed it: the allocation happens inside a
+C body, so no elaborated expression corresponded to it and the compiler had
+nothing to give ownership to -- every call through the idiom this guide
+recommends leaked one box.
+
+That is fixed, and the fix is a contract worth stating explicitly:
+
+> **A function whose body is inline C and whose DECLARED return type is
+> `(Option T)` / `(Result T E)` transfers ownership of the box to its caller.**
+> The compiler frees it at the point the value is read back into an ordinary
+> Turmeric value.
+
+Two consequences for anyone writing such a body:
+
+- **Return a FRESH box.** `tur_some_ptr(...)`, `tur_ok_ptr(...)`, `tur_none()`
+  (which is the null carrier and allocates nothing) all satisfy this. A body
+  that cached a box in a static and returned it twice would hand the same
+  allocation to two owners -- a double free, not a leak.
+- **Returning a BORROWED box needs a different signature.** If the box belongs
+  to something else -- a container, a cache -- do not declare the result
+  `(Option T)`. Declare the element type and let the caller wrap it, which is
+  what `vec-get [A] (v : (Vec A)) : A` does: the vector owns the box and frees
+  it in `vec-free`, and the borrow-shaped signature is what tells the compiler
+  so.
+
+The distinction is the DECLARED type, not the type at a particular call site:
+`(:: (vec-get v 0) (Option int))` resolves to an Option and is still a borrow.
+
 ## Limitation: only `_int` and `_ptr` payloads
 
 v1 ships the monomorphised `_int` / `_ptr` builders, which cover an integer
@@ -176,6 +207,28 @@ user-defined *by-value* types is **not** constructible from inline-C with
 these helpers: the payload has to fit the single `int64_t` carrier slot.
 Wrap the value behind an opaque pointer handle (the rtmidi pattern above)
 or construct the `Result` in Turmeric instead.
+
+## A control form around an `if` over these builders
+
+The builders below return the int64 CARRIER, and the consumer bridges it to the
+by-value aggregate. When an `if`'s arms are both carrier producers, `emit_if`
+bridges each arm into its merge temp -- and a `let` or `do` wrapping that `if`
+used to bridge the already-concrete result a second time:
+
+```c
+__t172 = (*(tur_adt_Result__Handle__int *)(intptr_t)(__t174));  /* already a struct */
+```
+
+`tur check` was silent; it failed at `cc` with `operand of type 'tur_adt_...'
+where arithmetic or pointer type is required`, naming no `.tur` line. The same
+`if` as the whole function body always worked, which is what made the workaround
+("hoist the block into its own defn") effective and the cause obscure.
+
+Fixed 2026-09-02; both the `let` and `do` wrappers are pinned by
+`tests/fixtures/control-form-around-if-carrier-arms/`. Nothing about how you
+write the inline C changes -- this is recorded because the shape it broke is the
+one this guide recommends, so an older compiler will still reject it. See
+[docs/archive/control-form-around-if-double-unboxes-carrier-arms.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/control-form-around-if-double-unboxes-carrier-arms.md).
 
 ## See also
 

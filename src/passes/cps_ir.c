@@ -51,6 +51,10 @@ typedef struct CpsB {
     const Binding *loop_vars[16];
     CVar           loop_nexts[16];
     uint32_t       n_loop;
+    /* cps-while-native (cell-carried vars): >0 while lowering a loop body.
+     * Nested loops are detected here rather than by n_loop, which is 0 for a
+     * loop whose every carried var is a cell. */
+    uint32_t       loop_depth;
     /* cps-while-native read-after-set: a forward pre-pass over the straight-line
      * loop body records, by Expr-node identity, each carried-var READ that occurs
      * AFTER that var's `set!` this iteration -- such a read must resolve to the
@@ -1085,6 +1089,15 @@ static bool cps_serializable_exists(const Expr *program, Type t) {
  * is CT_CLONEABLE with `serial` set, so the emit path handles both families off
  * the shared fields.  Returns NULL for any richer shape -- the caller then
  * either evicts (cps_tail) or falls back to the CT_LETRAW delegation (cps_bind). */
+/* TUR_TRACE_CORE=1: name the collector line that rejected a serial / cloneable
+ * context, so an eviction traced as BODY-UNSUPPORTED "?" says which rule of the
+ * DK lowering grammar the shape fell out of (guestbook-example-has-no-import-graph). */
+#define SK_REJECT() do { \
+        if (getenv("TUR_TRACE_CORE")) \
+            fprintf(stderr, "[CTX-REJECT] cps_ir.c:%d\n", (int)__LINE__); \
+        return NULL; \
+    } while (0)
+
 static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                                   bool serial) {
     const ExprKind shift_kind = serial ? EX_SERIAL_SHIFT : EX_CLONEABLE_SHIFT;
@@ -1099,7 +1112,7 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
 
     for (;;) {
         cur = ascribe_peel(cur);
-        if (!cur) return NULL;
+        if (!cur) SK_REJECT();
 
         /* Arithmetic frame: single-hole int binop.  Cloneable reifies it as a
          * per-site DK frame; serial as a shared tagged-marshaler frame -- the
@@ -1111,9 +1124,9 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
             const Expr *a1 = ascribe_peel(cur->as.builtin.args[1]);
             bool h0 = ctx_reaches_shift(a0, shift_kind);
             bool h1 = ctx_reaches_shift(a1, shift_kind);
-            if (h0 == h1) return NULL;               /* need exactly one hole side */
+            if (h0 == h1) SK_REJECT();               /* need exactly one hole side */
             const Expr *other = h0 ? a1 : a0;
-            if (!other || other->type.kind != TY_INT) return NULL;
+            if (!other || other->type.kind != TY_INT) SK_REJECT();
             /* D6a: the non-hole operand may be non-atomic (e.g. a call `(id 3)`)
              * as long as it is shift-free and pure/emit_value-able.  It is
              * emit_value'd once at the reset site and its value rides the frame's
@@ -1122,8 +1135,8 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
              * atomic operand rides `operand` directly; env_expr stays NULL.) */
             bool arith_atom = is_atomic(other);
             if (!arith_atom && (ctx_reaches_shift(other, shift_kind)
-                          || !safe_to_delegate(b, other))) return NULL;
-            if (nf >= CL_IR_MAX_FRAMES) return NULL;
+                          || !safe_to_delegate(b, other))) SK_REJECT();
+            if (nf >= CL_IR_MAX_FRAMES) SK_REJECT();
             memset(&frames[nf], 0, sizeof(CloneFrame));
             frames[nf].op        = cur->as.builtin.spec->c_op;   /* stable string */
             frames[nf].operand   = atom_of(other);
@@ -1140,14 +1153,14 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
         if (cur->kind == EX_CALL && cur->as.call_.n_args == 1
             && cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
             const Binding *fb = cur->as.call_.fn_binding;
-            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 1) return NULL;
-            if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) return NULL;         /* not a fat closure */
-            if (callee_colored(b, fb)) return NULL;          /* uncolored target */
-            if (!cps_scalar_kind_ok(cur->type.kind)) return NULL;         /* result */
-            if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[0])) return NULL;  /* arg */
+            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 1) SK_REJECT();
+            if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) SK_REJECT();         /* not a fat closure */
+            if (callee_colored(b, fb)) SK_REJECT();          /* uncolored target */
+            if (!cps_scalar_kind_ok(cur->type.kind)) SK_REJECT();         /* result */
+            if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[0])) SK_REJECT();  /* arg */
             const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
-            if (!ctx_reaches_shift(a0, shift_kind)) return NULL;  /* sole arg is hole */
-            if (nf >= CL_IR_MAX_FRAMES) return NULL;
+            if (!ctx_reaches_shift(a0, shift_kind)) SK_REJECT();  /* sole arg is hole */
+            if (nf >= CL_IR_MAX_FRAMES) SK_REJECT();
             memset(&frames[nf], 0, sizeof(CloneFrame));
             frames[nf].op        = NULL;
             frames[nf].call_fn   = fb;
@@ -1168,26 +1181,26 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
         if (cur->kind == EX_CALL && cur->as.call_.n_args == 2
             && cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
             const Binding *fb = cur->as.call_.fn_binding;
-            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 2) return NULL;
-            if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) return NULL;         /* not a fat closure */
-            if (callee_colored(b, fb)) return NULL;          /* uncolored target */
-            if (!cps_scalar_kind_ok(cur->type.kind)) return NULL;   /* result: scalar */
+            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 2) SK_REJECT();
+            if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) SK_REJECT();         /* not a fat closure */
+            if (callee_colored(b, fb)) SK_REJECT();          /* uncolored target */
+            if (!cps_scalar_kind_ok(cur->type.kind)) SK_REJECT();   /* result: scalar */
             const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
             const Expr *a1 = ascribe_peel(cur->as.call_.args[1]);
             bool h0 = ctx_reaches_shift(a0, shift_kind);
             bool h1 = ctx_reaches_shift(a1, shift_kind);
-            if (h0 == h1) return NULL;               /* exactly one hole side */
+            if (h0 == h1) SK_REJECT();               /* exactly one hole side */
             if (serial) {
                 /* the hole slot's param is the resume value -- a scalar (int/cstr) */
                 if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[h0 ? 0 : 1]))
-                    return NULL;
+                    SK_REJECT();
             } else {
                 /* The hole param takes the resumed value -- always a scalar.  The
                  * non-hole (env) param may be a scalar, OR -- under the E3a gate --
                  * an owning `rc` the callee takes ^borrow (checked on the operand
                  * below; ^borrow guarantees the frame never drops it). */
                 if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[h0 ? 0 : 1]))
-                    return NULL;
+                    SK_REJECT();
                 TypeKind envk = fb->type.as.fn.arg_kinds[h0 ? 1 : 0];
                 const Expr *env_op = ascribe_peel(h0 ? a1 : a0);
                 bool env_borrow = FN_ARG_FLAG(fb->type.as.fn, (h0 ? 1 : 0), FA_BORROW);
@@ -1200,18 +1213,18 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                     env_op && !env_borrow && cloneable_consume_env_ok(&env_op->type);
                 if (!cps_scalar_kind_ok(envk)
                     && !owning_borrow_env && !owning_consume_env)
-                    return NULL;
+                    SK_REJECT();
             }
             const Expr *other = h0 ? a1 : a0;        /* the captured env operand */
-            if (!other) return NULL;
+            if (!other) SK_REJECT();
             bool env_atom = is_atomic(other);
             if (serial) {
-                if (ctx_reaches_shift(other, shift_kind)) return NULL;
+                if (ctx_reaches_shift(other, shift_kind)) SK_REJECT();
                 TypeKind ek = other->type.kind;
                 if (!cps_scalar_kind_ok(ek)
                     && !cps_serializable_exists(b->program, other->type))
-                    return NULL;
-                if (!env_atom && !safe_to_delegate(b, other)) return NULL;
+                    SK_REJECT();
+                if (!env_atom && !safe_to_delegate(b, other)) SK_REJECT();
             } else {
                 /* E3a: an owning env frame is admitted in two modes:
                  *  - BORROW (any admissible owning kind + ^borrow callee param):
@@ -1232,15 +1245,15 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                     !env_borrow && cloneable_consume_env_ok(&other->type);
                 if (!cps_scalar_kind_ok(other->type.kind)
                     && !owning_borrow_env && !owning_consume_env)
-                    return NULL;
+                    SK_REJECT();
                 /* A multi-word owning AGGREGATE env is captured by ADDRESS (`&o`),
                  * so its operand must be an atomic lvalue (a bare local) -- a
                  * computed/non-atomic aggregate has no stable address to take. */
-                if (cloneable_owning_agg(&other->type) && !env_atom) return NULL;
+                if (cloneable_owning_agg(&other->type) && !env_atom) SK_REJECT();
                 if (!env_atom && (ctx_reaches_shift(other, shift_kind)
-                              || !safe_to_delegate(b, other))) return NULL;
+                              || !safe_to_delegate(b, other))) SK_REJECT();
             }
-            if (nf >= CL_IR_MAX_FRAMES) return NULL;
+            if (nf >= CL_IR_MAX_FRAMES) SK_REJECT();
             memset(&frames[nf], 0, sizeof(CloneFrame));
             frames[nf].op        = NULL;
             frames[nf].call_fn   = fb;
@@ -1266,19 +1279,19 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
             int32_t m = -1;
             for (uint32_t i = 0; i < N; i++) {
                 if (ctx_reaches_shift(cur->as.do_.items[i], shift_kind)) {
-                    if (m >= 0) return NULL;             /* at most one hole */
+                    if (m >= 0) SK_REJECT();             /* at most one hole */
                     m = (int32_t)i;
                 }
             }
-            if (m < 0) return NULL;
+            if (m < 0) SK_REJECT();
             const Expr *shift_item = ascribe_peel(cur->as.do_.items[m]);
-            if (!shift_item || shift_item->kind != shift_kind) return NULL;
+            if (!shift_item || shift_item->kind != shift_kind) SK_REJECT();
             /* Prelude items [0, m): direct-emitted for side effect at the reset site. */
             for (int32_t i = 0; i < m; i++) {
                 const Expr *pre = cur->as.do_.items[i];
-                if (ctx_reaches_shift(pre, shift_kind)) return NULL;
-                if (!safe_to_delegate(b, pre)) return NULL;
-                if (nl >= CL_IR_MAX_LETS) return NULL;
+                if (ctx_reaches_shift(pre, shift_kind)) SK_REJECT();
+                if (!safe_to_delegate(b, pre)) SK_REJECT();
+                if (nl >= CL_IR_MAX_LETS) SK_REJECT();
                 lets[nl].binding = NULL;                 /* side-effect prelude */
                 lets[nl].init    = pre;
                 nl++;
@@ -1289,13 +1302,13 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
             for (int32_t i = (int32_t)N - 1; i > m; i--) {
                 const Expr *tail = ascribe_peel(cur->as.do_.items[i]);
                 if (!tail || tail->kind != EX_CALL ||
-                    !tail->as.call_.fn_binding || tail->as.call_.fn_expr) return NULL;
+                    !tail->as.call_.fn_binding || tail->as.call_.fn_expr) SK_REJECT();
                 const Binding *fb = tail->as.call_.fn_binding;
-                if (fb->type.kind != TY_FN) return NULL;
-                if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) return NULL;    /* not a fat closure */
-                if (callee_colored(b, fb)) return NULL;     /* uncolored target */
-                if (tail->type.kind != TY_INT) return NULL; /* result: int */
-                if (nf >= CL_IR_MAX_FRAMES) return NULL;
+                if (fb->type.kind != TY_FN) SK_REJECT();
+                if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) SK_REJECT();    /* not a fat closure */
+                if (callee_colored(b, fb)) SK_REJECT();     /* uncolored target */
+                if (tail->type.kind != TY_INT) SK_REJECT(); /* result: int */
+                if (nf >= CL_IR_MAX_FRAMES) SK_REJECT();
                 if (fb->type.as.fn.arity == 0 && tail->as.call_.n_args == 0) {
                     /* 0-arg ignore-value tail `(f)`: run f() on resume, no env. */
                     memset(&frames[nf], 0, sizeof(CloneFrame));
@@ -1313,14 +1326,14 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                      * ignoring the resumed value -- what lets a real loop `(loop cfg)`
                      * receive its config through the saved continuation. */
                     const Expr *cap = ascribe_peel(tail->as.call_.args[0]);
-                    if (!cap || ctx_reaches_shift(cap, shift_kind)) return NULL;
-                    if (!is_atomic(cap)) return NULL;
+                    if (!cap || ctx_reaches_shift(cap, shift_kind)) SK_REJECT();
+                    if (!is_atomic(cap)) SK_REJECT();
                     TypeKind ek = cap->type.kind;
                     bool inline_ok = (ek == TY_INT || ek == TY_CSTR);  /* inline codec */
                     bool ser_ok = !inline_ok
                         && cps_serializable_exists(b->program, cap->type);  /* SER codec */
-                    if (!inline_ok && !ser_ok) return NULL;
-                    if (fb->type.as.fn.arg_kinds[0] != ek) return NULL;
+                    if (!inline_ok && !ser_ok) SK_REJECT();
+                    if (fb->type.as.fn.arg_kinds[0] != ek) SK_REJECT();
                     memset(&frames[nf], 0, sizeof(CloneFrame));
                     frames[nf].op           = NULL;
                     frames[nf].call_fn      = fb;
@@ -1328,7 +1341,7 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                     frames[nf].operand      = atom_of(cap);   /* real captured env */
                     frames[nf].hole_left    = true;
                 } else {
-                    return NULL;
+                    SK_REJECT();
                 }
                 nf++;
             }
@@ -1346,14 +1359,14 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
          * capture, which the shift admission rejects. */
         if (cur->kind == EX_LET) {
             const Expr *lbody = cur->as.let_.body;
-            if (!ctx_reaches_shift(lbody, shift_kind)) return NULL;
+            if (!ctx_reaches_shift(lbody, shift_kind)) SK_REJECT();
             for (uint32_t i = 0; i < cur->as.let_.n; i++) {
                 const Expr    *init = cur->as.let_.bindings[i].init;
                 const Binding *bd   = cur->as.let_.bindings[i].binding;
-                if (ctx_reaches_shift(init, shift_kind)) return NULL;
-                if (!bd || !clone_let_ty_ok(bd->type.kind)) return NULL;
-                if (!safe_to_delegate(b, init)) return NULL;   /* pure, emit_value-able */
-                if (nl >= CL_IR_MAX_LETS) return NULL;
+                if (ctx_reaches_shift(init, shift_kind)) SK_REJECT();
+                if (!bd || !clone_let_ty_ok(bd->type.kind)) SK_REJECT();
+                if (!safe_to_delegate(b, init)) SK_REJECT();   /* pure, emit_value-able */
+                if (nl >= CL_IR_MAX_LETS) SK_REJECT();
                 lets[nl].binding = bd;
                 lets[nl].init    = init;
                 nl++;
@@ -1365,20 +1378,20 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
         /* One `if` branch point: pure condition, exactly one shift-bearing arm;
          * the pure arm is direct-emitted on the opposite branch. */
         if (cur->kind == EX_IF) {
-            if (saw_if) return NULL;                  /* only one branch point */
+            if (saw_if) SK_REJECT();                  /* only one branch point */
             const Expr *cond = cur->as.if_.cond;
             const Expr *thn  = cur->as.if_.then_;
             const Expr *els  = cur->as.if_.else_or_null;
-            if (!cond || !thn || !els) return NULL;   /* need both arms */
-            if (ctx_reaches_shift(cond, shift_kind)) return NULL;
-            if (!safe_to_delegate(b, cond)) return NULL;
+            if (!cond || !thn || !els) SK_REJECT();   /* need both arms */
+            if (ctx_reaches_shift(cond, shift_kind)) SK_REJECT();
+            if (!safe_to_delegate(b, cond)) SK_REJECT();
             bool ht = ctx_reaches_shift(thn, shift_kind);
             bool he = ctx_reaches_shift(els, shift_kind);
-            if (ht == he) return NULL;                /* exactly one shift arm */
+            if (ht == he) SK_REJECT();                /* exactly one shift arm */
             const Expr *shift_arm = ht ? thn : els;
             const Expr *pure_arm  = ht ? els : thn;
-            if (ctx_reaches_shift(pure_arm, shift_kind)) return NULL;   /* defensive */
-            if (!safe_to_delegate(b, pure_arm)) return NULL;
+            if (ctx_reaches_shift(pure_arm, shift_kind)) SK_REJECT();   /* defensive */
+            if (!safe_to_delegate(b, pure_arm)) SK_REJECT();
             if_cond = cond; if_pure = pure_arm; if_when = ht; saw_if = true;
             n_outer = nf;   /* frames so far are OUTSIDE the if; later frames are inner */
             cur = shift_arm;
@@ -1388,7 +1401,7 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
         break;
     }
 
-    if (!cur || cur->kind != shift_kind) return NULL;
+    if (!cur || cur->kind != shift_kind) SK_REJECT();
     /* Shape 2 (nf >= 1) reifies the delimited context as a DK frame chain, so a
      * captured continuation genuinely re-runs the context and references the
      * captured locals -- native Shape 2 has no env-carrying prelude, so a live-
@@ -1417,7 +1430,7 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
         const Expr *kf = ascribe_peel(serial ? cur->as.serial_shift_.k_fn
                                              : cur->as.cloneable_shift_.k_fn);
         if (kf && kf->kind == EX_CLOSURE) recv_expr = kf;
-        else return NULL;
+        else SK_REJECT();
     }
 
     CTerm *t = new_term(b, CT_CLONEABLE);
@@ -2704,9 +2717,19 @@ static bool loop_collect_carried(const Expr *e, const Binding **locals, uint32_t
     switch (e->kind) {
         case EX_SET: {
             const Binding *tg = e->as.set_.target;
-            if (!tg || !tg->is_mut) return false;
+            if (!tg || !tg->is_mut) {
+                if (getenv("TUR_TRACE_CORE"))
+                    fprintf(stderr, "[LOOP-CARRIED] set! target %s is not ^mut (is_mut=%d)\n",
+                            tg && tg->name ? tg->name->name : "?", tg ? (int)tg->is_mut : -1);
+                return false;
+            }
             for (uint32_t i = 0; i < n_locals; i++)
-                if (locals[i] == tg) return false;   /* loop-body-local ^mut */
+                if (locals[i] == tg) {
+                    if (getenv("TUR_TRACE_CORE"))
+                        fprintf(stderr, "[LOOP-CARRIED] set! target %s is a loop-body local\n",
+                                tg->name ? tg->name->name : "?");
+                    return false;   /* loop-body-local ^mut */
+                }
             bool seen = false;
             for (uint32_t i = 0; i < *n; i++) if (out[i] == tg) seen = true;
             if (!seen) { if (*n >= cap) return false; out[(*n)++] = tg; }
@@ -2957,43 +2980,115 @@ static void loop_rs_scan(CpsB *b, const Expr *e, uint32_t *mask, bool in_branch)
 
 /* Build the CT_LOOP for an EX_WHILE in bind position (its unit result discarded
  * into `x`, the continuation `rest`).  Returns NULL to EVICT. */
+/* TUR_TRACE_CORE=1: name the build_loop rule that refused to lower a `while`
+ * natively (the eviction then reads BODY-UNSUPPORTED "EX_WHILE"). */
+#define LOOP_REJECT() do { \
+        if (getenv("TUR_TRACE_CORE")) \
+            fprintf(stderr, "[LOOP-REJECT] cps_ir.c:%d\n", (int)__LINE__); \
+        return NULL; \
+    } while (0)
+
 static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     (void)x;   /* the while's unit result is subsumed by the loop's exit delivery */
     Expr *cond = e->as.while_.cond;
     Expr *body = e->as.while_.body;
-    if (!cond || !body) return NULL;
+    if (!cond || !body) LOOP_REJECT();
 
-    /* The continuation must be a trivial delivery of a single loop-carried var to
-     * an enclosing continuation (KK_RET / KK_PROMPT) -- the loop's live-after
-     * value.  Anything richer is out of the conservative subset. */
-    if (rest->kind != CT_APPCONT) return NULL;
-    CKont rk = rest->as.appcont.kont;
-    if (rk.kind != KK_RET && rk.kind != KK_PROMPT) return NULL;
-    if (rest->as.appcont.v.kind != CA_VAR || !rest->as.appcont.v.var) return NULL;
-    const Binding *result_bd = rest->as.appcont.v.var;
+    /* The continuation is a trivial delivery of a single loop-carried var to an
+     * enclosing continuation (KK_RET / KK_PROMPT) -- the loop's live-after
+     * value -- or, perform-inside-loop-has-no-lowering, a loop with NOTHING
+     * live after it (the while is the function's or the prompt's last form, so
+     * the continuation delivers the while's own unit result: its CVar `x`, or
+     * a unit literal): a unit exit.  Anything richer -- the loop is followed by
+     * more statements -- is reified as a JOIN whose body is that continuation
+     * (`join_mode` below): the helper delivers unit to the join, which the
+     * emitter lifts as an escaping-join resume-frame, and every carried var
+     * becomes a shared cell so the code after the loop reads its final value. */
+    const Binding *result_bd = NULL;
+    bool unit_exit = false;
+    bool join_mode = false;
+    CKont rk;
+    if (rest->kind == CT_APPCONT &&
+        (rest->as.appcont.kont.kind == KK_RET || rest->as.appcont.kont.kind == KK_PROMPT) &&
+        ((rest->as.appcont.v.kind == CA_VAR && rest->as.appcont.v.var) ||
+         rest->as.appcont.v.kind == CA_UNIT ||
+         (rest->as.appcont.v.kind == CA_CVAR && rest->as.appcont.v.cvar_id == x.id))) {
+        rk = rest->as.appcont.kont;
+        if (rest->as.appcont.v.kind == CA_VAR) result_bd = rest->as.appcont.v.var;
+        else unit_exit = true;
+    } else {
+        /* A control-free loop followed by statements keeps its whole-form
+         * delegation; the join reification is for loops that perform. */
+        if (safe_to_delegate(b, e)) LOOP_REJECT();
+        join_mode = true;
+        unit_exit = true;
+        CVar j = fresh_cvar(b, x.type);
+        j.name = arena_strdup(b->a, "j", 1);
+        rk = kont_var(j);
+    }
 
     /* Loop-carried vars = the ^mut set! targets (excluding loop-body locals). */
     const Binding *locals[64]; uint32_t n_locals = 0;
     loop_collect_let_binders(body, locals, &n_locals, 64);
     const Binding *vars[16]; uint32_t nv = 0;
-    if (!loop_collect_carried(body, locals, n_locals, vars, &nv, 16)) return NULL;
-    if (nv == 0 || nv > 16) return NULL;
-
-    /* The delivered result var must itself be loop-carried (it is the loop's
-     * output; a non-carried result is not this shape). */
-    if (loop_idx(vars, nv, result_bd) < 0) return NULL;
+    if (!loop_collect_carried(body, locals, n_locals, vars, &nv, 16)) LOOP_REJECT();
+    if (nv > 16) LOOP_REJECT();
+    if (b->loop_depth) LOOP_REJECT();   /* nested loops: out of subset */
 
     /* Soundness guard: reads resolve to loop-entry versions; unconditional single
      * set per carried var. */
     uint32_t mask = 0;
-    if (!loop_guard(body, vars, nv, &mask, false)) return NULL;
-    for (uint32_t i = 0; i < nv; i++)
-        if (!(mask & (1u << i))) return NULL;   /* every carried var set once */
+    bool strict = loop_guard(body, vars, nv, &mask, false);
+    for (uint32_t i = 0; strict && i < nv; i++)
+        if (!(mask & (1u << i))) strict = false;   /* every carried var set once */
+
+    /* perform-inside-loop-has-no-lowering (the snake residue): a var the strict
+     * guard rejects -- assigned inside an `if`/`match` arm, more than once per
+     * iteration, or read in a branch after its set -- has no sound home in the
+     * helper's parameters, whose reads resolve to the loop-entry version.  Give
+     * it the B7 by-reference CELL instead of evicting the loop: its set!s lower
+     * as ordinary delegated `(set! m v)` (a write through the shared cell) and
+     * its reads deref the cell, so every frame -- the helper, a lifted perform
+     * continuation, an escaping join -- sees one location.  The emitter promotes
+     * exactly these (a letraw set! in a loop body whose target is not a loop
+     * param: byref_scan's CT_LOOP case).  Vars the guard accepts stay params, so
+     * the strict shape's codegen is unchanged. */
+    const Binding *cells[16]; uint32_t ncell = 0;
+    if (join_mode) {
+        /* The code after the loop reads the carried vars by name; a param
+         * would leave the outer local at its entry value.  Cells, all of them. */
+        for (uint32_t i = 0; i < nv; i++) cells[ncell++] = vars[i];
+        nv = 0;
+        strict = true;
+    }
+    if (!strict) {
+        const Binding *keep[16]; uint32_t nk = 0;
+        for (uint32_t i = 0; i < nv; i++) {
+            uint32_t m = 0;
+            const Binding *one = vars[i];
+            if (loop_guard(body, &one, 1, &m, false) && (m & 1u)) keep[nk++] = vars[i];
+            else cells[ncell++] = vars[i];
+        }
+        for (uint32_t i = 0; i < nk; i++) vars[i] = keep[i];
+        nv = nk;
+        /* The kept set must still pass jointly (a kept var read in a branch
+         * after another kept var's set, ...). */
+        mask = 0;
+        if (!loop_guard(body, vars, nv, &mask, false)) LOOP_REJECT();
+        for (uint32_t i = 0; i < nv; i++)
+            if (!(mask & (1u << i))) LOOP_REJECT();
+    }
+
+    /* The delivered result var must itself be loop-carried (a param, or a cell
+     * whose value the exit reads through the cell); a non-carried result is not
+     * this shape. */
+    if (!unit_exit && loop_idx(vars, nv, result_bd) < 0 &&
+        loop_idx(cells, ncell, result_bd) < 0) LOOP_REJECT();
 
     /* Params carry their source Binding so in-body reads name the param via
      * name_for_binding; inits are the entry values (the vars as currently bound). */
-    CVar *params = arena_alloc(b->a, nv * sizeof(CVar));
-    CAtom *inits = arena_alloc(b->a, nv * sizeof(CAtom));
+    CVar *params = arena_alloc(b->a, (nv ? nv : 1) * sizeof(CVar));
+    CAtom *inits = arena_alloc(b->a, (nv ? nv : 1) * sizeof(CAtom));
     for (uint32_t i = 0; i < nv; i++) {
         params[i] = cvar_of_binding(vars[i]);
         CAtom a; memset(&a, 0, sizeof a);
@@ -3003,12 +3098,12 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
 
     /* Pre-create the $next CVars (stable identity -> build-order independent). */
     uint32_t saved_n_loop = b->n_loop;
-    if (saved_n_loop != 0) return NULL;   /* nested loops: out of subset */
     for (uint32_t i = 0; i < nv; i++) {
         b->loop_vars[i]  = vars[i];
         b->loop_nexts[i] = fresh_cvar(b, &vars[i]->type);
     }
     b->n_loop = nv;
+    b->loop_depth++;
 
     /* Read-after-set pre-pass: record straight-line carried-var reads that follow
      * that var's set! so atomize resolves them to `$next` (see loop_rs_scan). */
@@ -3021,13 +3116,19 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
 
     b->rs_n = saved_rs_n;       /* drop this loop's read-set entries */
     b->n_loop = saved_n_loop;   /* restore (no nesting) */
+    b->loop_depth--;
 
-    /* Exit arm: deliver the live-after var (as its param) to the helper's KK_RET. */
-    CKont hret = kont_ret(result_bd->type.kind);
+    /* Exit arm: deliver the live-after var (as its param) -- or unit, when
+     * nothing is live after the loop -- to the helper's KK_RET. */
+    CKont hret = kont_ret(unit_exit ? TY_NIL : result_bd->type.kind);
     CTerm *exit = new_term(b, CT_APPCONT);
     exit->as.appcont.kont = hret;
     CAtom rv; memset(&rv, 0, sizeof rv);
-    rv.kind = CA_VAR; rv.ty = result_bd->type.kind; rv.type = &result_bd->type; rv.var = result_bd;
+    if (unit_exit) {
+        rv.kind = CA_UNIT; rv.ty = TY_NIL;
+    } else {
+        rv.kind = CA_VAR; rv.ty = result_bd->type.kind; rv.type = &result_bd->type; rv.var = result_bd;
+    }
     exit->as.appcont.v = rv;
 
     /* Body = fold(cond pending) around CT_IF(cond, iter, exit), re-evaluated each
@@ -3046,6 +3147,15 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     t->as.loop.inits = inits;
     t->as.loop.body = loopbody;
     t->as.loop.result_kont = rk;
+    if (join_mode) {
+        /* letcont j(x) = rest in LOOP -- the loop's exit delivers unit to j. */
+        CTerm *lc = new_term(b, CT_LETCONT);
+        CVar jv; memset(&jv, 0, sizeof jv);
+        jv.id = rk.id; jv.name = "j"; jv.ty = rk.ty; jv.type = x.type;
+        lc->as.letcont.j = jv; lc->as.letcont.param = x;
+        lc->as.letcont.jbody = rest; lc->as.letcont.body = t;
+        return lc;
+    }
     return t;
 }
 
@@ -3181,6 +3291,22 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         t->as.appcont.kont = kont;
         t->as.appcont.v = atom_of(e);
         return t;
+    }
+    /* perform-inside-loop-has-no-lowering: a NON-structural form in loop-tail
+     * position (a call, a set! of a cell-carried var, a handle, a match, ...).
+     * The arms below that deliver `(kont, x)` have no KK_LOOP spelling -- an
+     * APPCONT to the loop kont reached the emitter as a join jump -- so bind the
+     * form's value and take the back-edge instead.  The structural forms
+     * (do/let/if/return) thread the loop kont into their own tails. */
+    if (kont.kind == KK_LOOP) {
+        switch (e->kind) {
+            case EX_DO: case EX_LET: case EX_LETREC: case EX_IF: case EX_RETURN:
+                break;
+            default: {
+                CVar x = fresh_cvar(b, &e->type);
+                return cps_bind(b, e, x, make_continue(b));
+            }
+        }
     }
     if (is_delegatable_owning(e) || is_delegatable_struct(e) || is_delegatable_value(e)) {
         /* bind the delegated op's result, then deliver it to the continuation. */
@@ -3644,6 +3770,25 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             CTerm *nat = build_callcc(b, e, x, ac);
             return nat ? nat : build_letraw(b, e, x, ac);
         }
+        case EX_WHILE: {
+            /* perform-inside-loop-has-no-lowering: a `while` in TAIL position
+             * (the last form of a nil-returning function, or of a handle body)
+             * used to fall to the default below, which cannot delegate a loop
+             * that performs and so evicted the whole function -- while the
+             * same loop followed by a live value went through cps_bind and
+             * build_loop.  Route the tail loop through build_loop too; its
+             * continuation delivers the loop's own unit result, which
+             * build_loop admits as a unit exit. */
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            /* A control-free loop keeps its whole-form delegation (as the
+             * default arm gave it); only a loop that performs needs the helper. */
+            if (safe_to_delegate(b, e)) return build_letraw(b, e, x, ac);
+            CTerm *loop = build_loop(b, e, x, ac);
+            if (loop) return loop;
+            return unsupported_form(b, e);
+        }
         default: {
             /* N6.1: a control-op-free, colored-call-free form -- emit it wholesale
              * via the direct emitter, then deliver its result to the continuation. */
@@ -4046,7 +4191,13 @@ static bool whole_body_delegatable(CpsB *b, const Expr *body) {
 
 CTerm *cps_ir_translate_fn(Arena *a, Expr *program, FnDef *fd) {
     if (!fd || !fd->body) return NULL;
+    /* Zero the whole builder first.  `loop_depth` (cps-while-native nesting)
+     * was added without an initializer here, so whether a `while` lowered
+     * natively depended on stack garbage: the same fixture passed under
+     * `tur check` and was evicted ("unsupported form: EX_WHILE") under
+     * `tur build`, and any unrelated stdlib addition flipped it. */
     CpsB b;
+    memset(&b, 0, sizeof b);
     b.a = a; b.program = program; b.counter = 0;
     b.retk.kind = KK_RET; b.retk.id = 0; b.retk.ty = fd->return_type.kind;
     b.cur_fn = fd->binding;

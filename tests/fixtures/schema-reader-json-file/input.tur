@@ -1,0 +1,47 @@
+;; json-str-result-and-file-readers-missing: #json-file<T>(path) and
+;; #json-file?<T>(path) -- the file-reading members of the #json-str family.
+;;
+;;   #json-file<T>(p)   ==>  (:: (decode! (json/decode-file! p)) T)
+;;   #json-file?<T>(p)  ==>  the same behind catch-unwind, as (Result T int)
+;;
+;; json/decode-file! reads the file into a private buffer, parses it, frees
+;; the buffer and hands back the nodes; an unreadable path is a catchable
+;; panic naming the path, so the `?` form's err covers "no such file" and
+;; "does not satisfy the schema" alike.  The two files live beside this
+;; fixture; run.sh runs from the repo root.
+
+(defstruct User :copy [name : cstr age : int])
+
+(defn user-schema [] : int
+  (schema/field
+    (schema/field (schema/object-new) "name" (schema/str))
+    "age" (schema/int)))
+
+(definstance HasSchema [User]
+  (decode! [node]
+    (let [v (schema-decode! (user-schema) node)]
+      (make-struct User
+        (json/get-string (json/get! v "name"))
+        (json/get-int    (json/get! v "age"))))))
+
+(defn load-user [path : cstr] : User
+  #json-file<User>(path))
+
+(defn try-load-user [path : cstr] : (Result User int)
+  #json-file?<User>(path))
+
+(defn report [r : (Result User int)] : int
+  (if (ok? r)
+    (do (println (.name (ok-val r))) (println (.age (ok-val r))) 0)
+    (do (println "err") 0)))
+
+(defn main [] : int
+  (let [u (load-user "tests/fixtures/schema-reader-json-file/user.json")]
+    (println (.name u))
+    (println (.age u)))
+  (report (try-load-user "tests/fixtures/schema-reader-json-file/user.json"))
+  ;; a file that does not satisfy the schema
+  (report (try-load-user "tests/fixtures/schema-reader-json-file/bad.json"))
+  ;; a file that does not exist
+  (report (try-load-user "tests/fixtures/schema-reader-json-file/missing.json"))
+  0)

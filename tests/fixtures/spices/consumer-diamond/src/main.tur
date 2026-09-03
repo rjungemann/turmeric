@@ -1,0 +1,11 @@
+(defmodule main
+  ;; vendor_value lives in aux-c-vendor's c/vendor.c, two :spices hops away
+  ;; (and also one hop away, directly). The binary exits 7.
+  (defn vendor-value [] #fx{Unsafe} : int
+    ```c
+    extern int vendor_value(void);
+    return vendor_value();
+    ```)
+
+  (defn main [] : int
+    (unsafe (vendor-value))))

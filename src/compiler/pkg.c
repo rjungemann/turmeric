@@ -2868,8 +2868,8 @@ static bool str_eq_or_both_null(const char *a, const char *b) {
  * NULL when the resolved directory does not exist (best-effort silent
  * skip, matching pkg_fetch_all's "continuing with healthy deps" policy).
  * Caller frees. */
-static char *resolve_spice_dep_dir(const char *root_project_dir,
-                                   const PkgSpice *s) {
+char *pkg_resolve_spice_dep_dir(const char *root_project_dir,
+                                const PkgSpice *s) {
     if (!root_project_dir || !s || !s->name) return NULL;
     char dep_dir[4096];
     /* global-spice-library-consumption: an explicitly `:global` dep resolves
@@ -3163,7 +3163,7 @@ bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
      * exists; otherwise the input. */
     /* Seed: the root's own :spices entries. */
     for (int i = 0; i < root_manifest->n_spices; i++) {
-        char *sib_dir = resolve_spice_dep_dir(root_project_dir,
+        char *sib_dir = pkg_resolve_spice_dep_dir(root_project_dir,
                                               &root_manifest->spices[i]);
         if (!sib_dir) continue;
         GROW_WORK_TO(n_work + 1);
@@ -3235,7 +3235,7 @@ bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
 
         /* Enqueue this sibling's own :spices for the next level. */
         for (int j = 0; j < sm.n_spices; j++) {
-            char *grand_dir = resolve_spice_dep_dir(sib_dir, &sm.spices[j]);
+            char *grand_dir = pkg_resolve_spice_dep_dir(sib_dir, &sm.spices[j]);
             if (!grand_dir) continue;
             GROW_WORK_TO(n_work + 1);
             worklist[n_work++] = grand_dir;

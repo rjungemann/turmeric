@@ -74,7 +74,7 @@ while IFS= read -r f; do
         fi
     fi
 done <<EOF
-$(find examples -name '*.tur' | sort)
+$(find examples -name '*.tur' ! -name 'build.tur' | sort)
 EOF
 
 # ---------------------------------------------------------------------------

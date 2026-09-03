@@ -128,16 +128,14 @@
 ;;; Since: LZ3
 
 (defn seq/into-list [s : int] : int
-  (let [g    (seq-iter s)
-        ^mut lst
-        0]
+  (let [g        (seq-iter s)
+        ^mut lst 0]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)]
         (when (seq-val-some? v)
           (set! lst (seq-make-cons (seq-val-unwrap v) lst)))))
-    (let [^mut cur
-          lst  ^mut
-          rev  0]
+    (let [^mut cur lst
+          ^mut rev 0]
       (while (not (seq-list-nil? cur))
         (let [nxt (seq-list-tail cur)]
           (set! rev (seq-make-cons (seq-list-head cur) rev))
@@ -162,9 +160,8 @@
 
 
 (defn seq/nth [n : int s : int] : int
-  (let [g    (seq-iter s)
-        ^mut count
-        0]
+  (let [g          (seq-iter s)
+        ^mut count 0]
     (while (and (< count n) (not (seq-gen-done g)))
       (let [_skip (seq-gen-next g)] (set! count (+ count 1))))
     (if (seq-gen-done g)
@@ -204,9 +201,8 @@
 ;;; Since: LZ3
 
 (defn seq/last [s : int] : int
-  (let [g    (seq-iter s)
-        ^mut result
-        (seq-make-none)]
+  (let [g           (seq-iter s)
+        ^mut result (seq-make-none)]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)]
         (when (seq-val-some? v)
@@ -230,9 +226,8 @@
 
 
 (defn seq/count [s : int] : int
-  (let [g    (seq-iter s)
-        ^mut n
-        0]
+  (let [g      (seq-iter s)
+        ^mut n 0]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)] (when (seq-val-some? v) (set! n (+ n 1)))))
     n))
@@ -259,8 +254,7 @@
       (let [v (seq-gen-next g)]
         (if (not (seq-val-some? v))
           (seq-make-none)
-          (let [^mut acc
-                (seq-val-unwrap v)]
+          (let [^mut acc (seq-val-unwrap v)]
             (while (not (seq-gen-done g))
               (let [v2 (seq-gen-next g)]
                 (when (seq-val-some? v2)
@@ -283,9 +277,8 @@
 ;;; Since: LZ3
 
 (defn seq/foldl [init : int ^fat f : int s : int] : int
-  (let [g    (seq-iter s)
-        ^mut acc
-        init]
+  (let [g        (seq-iter s)
+        ^mut acc init]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)]
         (when (seq-val-some? v)
@@ -400,9 +393,8 @@
 ;;; Since: LZ3
 
 (defn seq/find-index [^fat pred : int s : int] : int
-  (let [g    (seq-iter s)
-        ^mut idx
-        0]
+  (let [g        (seq-iter s)
+        ^mut idx 0]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)]
         (when (seq-val-some? v)

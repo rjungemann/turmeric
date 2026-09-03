@@ -496,6 +496,26 @@ tur run: :entry "src/nope.tur" in build.tur does not name a file
 project). `tur run <file>` names its entry directly, and `tur build <dir>`
 compiles every module under `src/` rather than picking one.
 
+#### A program with no entry point
+
+A single-file (or whole-program) build that defines no `main` and has no
+top-level statements still builds: the compiler synthesizes an empty `main`
+that runs static init and returns 0, so the program runs, prints nothing, and
+exits 0. When a top-level function is spelled like an entry point but is not
+one -- `-main` (the Clojure spelling), `main-`, `Main`, `_main` -- the build
+warns at that definition:
+
+```
+warning [TUR-W0624]: no `main` and no top-level statements: the synthesized
+entry point does nothing, so this program will run and print nothing.
+`-main` is never called -- name it `main`, or call it from a top-level form
+```
+
+Rename it `main`, or call it from a top-level form. A module that is meant
+to be loaded rather than run (every stdlib file, a spice's `src/`) has no
+near-miss and stays quiet.
+
+
 ### Compile without running
 
 ```sh

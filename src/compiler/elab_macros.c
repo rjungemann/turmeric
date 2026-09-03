@@ -1373,6 +1373,13 @@ Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args) 
     }
     e->macro_expansion_stack[e->n_macro_expansion_stack++] =
         macro->defining_module_name;
+    /* AI3.1 (application-image-dumps-plan): the image-cache combinator's
+     * `init` root is the code whose global writes a warm start silently
+     * drops.  Note it here, at the one place the call is still visible by
+     * name; the check itself runs after the whole unit is elaborated. */
+    if (n_args == 3 && args[1] && args[1]->tag == F_SYM && args[1]->as.sym &&
+        macro->name && strcmp(macro->name->name, "with-image-cache-after-init") == 0)
+        wf_note_image_cache_root(e, args[1]->as.sym, args[1]->span);
 
 #define EXPAND_RESTORE() do { \
         e->macro_expansion_module = saved_expansion_mod; \

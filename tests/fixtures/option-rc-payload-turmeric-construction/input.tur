@@ -1,0 +1,53 @@
+;; option-rc-payload-constructible-only-from-inline-c: `(some rc)` in Turmeric.
+;;
+;; `(Option rc<A>)` used to be returnable, buildable in inline C, and
+;; matchable -- but NOT constructible in Turmeric: `(some x)` over an owning
+;; payload was rejected with "cannot store an owning value (rc) in a
+;; collection", with no collection anywhere in the program. The check fires on
+;; a generic callee's tyvar-parameter erasure, which `vec-push!` reaches the
+;; same way; the sum constructors just had no policy row and fell to the
+;; default REJECT.
+;;
+;; They are OWN_CARRY_BORROW: `(some x)` wraps the value in a result the CALLER
+;; receives and owns, so the reference MOVES in and nothing is minted. RETAIN
+;; would leak -- nothing releases an Option's payload at scope exit.
+;;
+;; What this pins is the COUNTS, because a wrong carry is silent: an unnecessary
+;; retain leaks and a missing one double-frees, and neither changes the printed
+;; `some?`. The sequence below is the same one weak-upgrade-after-drop asserts
+;; through the inline-C form, so the two spellings are held to one contract.
+;; Leak-checked, which is the half a stdout diff cannot see.
+
+
+(load "stdlib/weak.tur")
+
+;; the arc.tur split, now expressible for an rc payload
+(defn weak-try-up [A] [^borrow w : weak<A>] : bool
+  ```c
+  RcControlBlock *cb = rc_upgrade(w);
+  if (!cb) return false;
+  rc_strong_decrement(cb);
+  return true;
+  ```)
+(defn weak-up-raw [A] [^borrow w : weak<A>] : rc<A>
+  ```c
+  return rc_upgrade(w);
+  ```)
+(defn weak-up [A] [^borrow w : weak<A>] : (Option rc<A>)
+  (if (weak-try-up w) (some (weak-up-raw w)) (none)))
+
+(defn main [] : int
+  (let [r (rc/of 42)]
+    (let [w (rc/downgrade r)]
+      (println (rc/strong-count r))          ; 1
+      (let [o (weak-up w)]
+        (println (some? o))                  ; true
+        (let [s (weak/unwrap o)]
+          (println (rc/strong-count s))      ; 2 -- the upgrade minted one
+          (rc/drop s)))
+      (println (rc/strong-count r))          ; 1 -- and it came back down
+      (weak/drop w)))
+  (let [w2 (let [r2 (rc/of 99)] (rc/downgrade r2))]
+    (println (some? (weak-up w2)))           ; false
+    (weak/drop w2))
+  0)

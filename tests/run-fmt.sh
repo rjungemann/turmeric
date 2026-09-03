@@ -356,6 +356,86 @@ fi
 # --emit-tur) whose inline-C literal bodies the formatter does not round-trip,
 # matching the exclusion in the FT8 idempotence check below.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# fmt-drops-comments-in-handle-and-binding-modifier-gaps: comments in the gaps
+# the header/arm printers walked with a bare ' ' -- a `handle` scrutinee/arm
+# gap, a `case` arm, a `defpackage` entry, a `loop` head, a trailing comment
+# inside a call before its `)` -- and a `^mut` binding pair, which the pair
+# walk split as name=`^mut` value=`y`.  Each case asserts the comment survives
+# AND the second pass equals the first.
+# ---------------------------------------------------------------------------
+fmt_gap_case() {
+    local name="$1" needle="$2" input="$3"
+    local actual roundtrip
+    actual=$(printf '%s\n' "$input" | "$TUR" fmt --stdin 2>/dev/null)
+    roundtrip=$(printf '%s\n' "$actual" | "$TUR" fmt --stdin 2>/dev/null)
+    if printf '%s\n' "$actual" | grep -qF -- "$needle" && [ "$actual" = "$roundtrip" ]; then
+        pass "$name"
+    else
+        fail "$name" "comment dropped or not idempotent; got: $actual"
+    fi
+}
+read -r -d '' GAP_HANDLE <<'EOF'
+(defn run [] : int
+  (handle (perform (Ask))
+    ;; the arm below re-opens Write
+    (Ask [] k) (resume k 1)))
+EOF
+fmt_gap_case "fmt-preserves-handle-arm-gap-comment" ";; the arm below re-opens Write" "$GAP_HANDLE"
+read -r -d '' GAP_MUT <<'EOF'
+(defn main [] : int
+  (let [^mut y 0]
+    (println y)) ; trailing on the last body form
+  0)
+EOF
+fmt_gap_case "fmt-preserves-mut-binding-and-trailing-comment" "; trailing on the last body form" "$GAP_MUT"
+ACTUAL=$(printf '%s\n' "$GAP_MUT" | "$TUR" fmt --stdin 2>/dev/null)
+if printf '%s\n' "$ACTUAL" | grep -qF "(let [^mut y 0]"; then
+    pass "fmt-keeps-mut-binding-pair-on-one-line"
+else
+    fail "fmt-keeps-mut-binding-pair-on-one-line" "^mut pair split; got: $ACTUAL"
+fi
+read -r -d '' GAP_CASE <<'EOF'
+(defn f [x : int] : int
+  (case x
+    ;; the zero arm
+    0 10
+    1 20 ;; the one arm
+    _ 0))
+EOF
+fmt_gap_case "fmt-preserves-case-arm-comments" ";; the one arm" "$GAP_CASE"
+read -r -d '' GAP_PKG <<'EOF'
+(defpackage app
+  :name "app"
+  ;; pinned for the raygui shim
+  :version "0.1.0")
+EOF
+fmt_gap_case "fmt-preserves-defpackage-entry-comment" ";; pinned for the raygui shim" "$GAP_PKG"
+read -r -d '' GAP_LOOP <<'EOF'
+(defn run-loop [] : int
+  (loop
+    ; Allocate out-params for the next request.
+    (def out-method 1)
+    (recur)))
+EOF
+fmt_gap_case "fmt-preserves-loop-head-comment" "; Allocate out-params for the next request." "$GAP_LOOP"
+read -r -d '' GAP_CALL <<'EOF'
+(defn main [] : int
+  (let [n 40]
+    (println (* n 2)) ;; 80
+    )
+  0)
+EOF
+fmt_gap_case "fmt-preserves-trailing-comment-before-close" ";; 80" "$GAP_CALL"
+read -r -d '' MUT_SUGAR <<'EOF'
+(defn main [] : int
+  (let [x 42]
+    (let [r &mut x] ; a mutable borrow
+      (println 1)))
+  0)
+EOF
+fmt_gap_case "fmt-mut-borrow-sugar-idempotent" "; a mutable borrow" "$MUT_SUGAR"
+
 NAME="fmt-bootstrap-stdlib"
 BOOTSTRAP_DIRTY=""
 BOOTSTRAP_SEEN=0

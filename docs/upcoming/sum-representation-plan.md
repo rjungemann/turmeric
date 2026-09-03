@@ -6,7 +6,7 @@ description: Lowering multi-variant ADTs by value, converting Option and Result 
 
 # Sum Representation (SR)
 
-**Status: SR1 is BUILT and ON by default (2026-08-26).** SR2-SR4 unstarted.
+**Status: SR1 is BUILT and ON by default (2026-08-26).** SR2a/b built and default; SR3 slice A default, slice B behind `--enable=option-niche`; SR4 default flipped to by value 2026-09-02 (RM4).
 
 **SR0's verdict -- "do not start SR1 for performance" -- was wrong, and section
 5 of this plan says why.** SR0(a) and the SR1 gate both priced SR1 against
@@ -40,6 +40,14 @@ trains its users toward `defopaque` and `defstruct` -- which is the
 distribution observed"). It says nothing about what the change is worth *per
 construction*, and per construction it removes the allocation outright. The
 expressiveness case SR0(b) collects still stands on its own for SR2.
+
+**The reclamation half now has a plan of its own:**
+[reclamation-plan.md](reclamation-plan.md) (RM). It carries the arena and
+drop-glue work this document repeatedly defers to, and its first phase is a
+re-measurement -- SR1, SR2a and SR3 slice A have removed the allocation
+outright for most of the population the 7.64x was measured over, so the rows
+in section 2 now price the recursive sums and the erased residue rather than
+the language as a whole.
 
 **Not on the critical path to v1.** Every phase is a representation change to
 code that already compiles and runs correctly. Read section 4 for what to do
@@ -446,6 +454,11 @@ show the volume is there.
 pointer-payload Option shapes are real but concentrated -- `env` (5 spellings),
 `httpd-string` (5), `args` (2), `re` (2), `docstrings` (2), plus the
 `(Option String)` / `(Option (Vec ...))` idioms, and ~19 fixture files.
+**Corrected 2026-08-30 -- most of that list is not the eligible shape**
+([results](../../benchmarks/option-niche-size/RESULTS.md)): `env` / `args` /
+`re` are `(Option cstr)` and ineligible, and the `docstrings` rows are string
+literals. Emitted, the eligible population is TWO monomorphs across eight
+files.
 **Result gets no niche at all**: both of its variants carry a payload, so NULL
 cannot discriminate `Ok` from `Err` -- SR3 is Option-only.
 
@@ -548,7 +561,29 @@ the erased-crossing bridges are the ones that graduation must harden anyway.
 Building it before then doubles the bridge states for an 8-byte win on a
 non-default tier.
 
-### SR4 -- recursive sums -- UNBLOCKED AND MEASURED 2026-08-27; default stays carrier
+### SR4 -- recursive sums -- DEFAULT FLIPPED TO BY VALUE 2026-09-02 (RM4)
+
+**Decision: by value is the default.** RM4 in
+[reclamation-plan.md](reclamation-plan.md) owned this and re-measured the same
+two workloads after RM0 established that no arena is coming (RM2/RM3 have no
+constituency), which was the premise for waiting:
+
+| workload | carrier | by value | |
+|---|---:|---:|---|
+| logic.tur bind+walk, 400k passes, n=8 | 0.49-0.51 s | 0.51-0.52 s | ~1.03x |
+| ... peak RSS | 370 MB | 202 MB | 1.8x less |
+| re.tur compile+match, 5k passes | 68-90 ms | 65-71 ms | not slower |
+| ... peak RSS | 41 MB | 33 MB | 1.2x less |
+
+The time side of the trade shrank to noise while the memory side held, so
+the one-line flip was made (`is_self_recursive` in `adt_sr1_sum_candidate`,
+types.c). `TUR_SR4_RECURSIVE_CARRIER=1` restores the carrier for A/B
+measurement, and `tests/run-sr4-seam.sh` (ctest `tur_sr4_seam`) now keeps
+THAT path green with the inverted canary. Full suite 2749/0 under the flip
+with no snapshot drift; leak-check 70/0/0; both seams green. The section
+below is the pre-flip record.
+
+### SR4 (pre-flip record) -- UNBLOCKED AND MEASURED 2026-08-27; default stayed carrier
 
 **The blocker is fixed.** The fat-dispatch ABI disagreement is
 [resolved](../archive/fat-dispatch-wide-byvalue-aggregate-argument.md) --
@@ -592,7 +627,8 @@ never the whole cost.
 close (7-13% time for 2.2x memory) --
 (`is_self_recursive` in `adt_sr1_sum_candidate`, types.c, where the decision
 record lives) waiting on either a workload that wants memory over speed, or
-reclamation landing first -- an arena makes the carrier's mallocs cheap AND
+reclamation landing first ([reclamation-plan.md](reclamation-plan.md), RM4
+owns this decision) -- an arena makes the carrier's mallocs cheap AND
 keeps one-word copies, at which point by-value recursive sums may have no
 constituency at all. Measure again then; the seam reproduces everything.
 
@@ -650,8 +686,9 @@ travels by value; only the self-referential field stays a pointer. This is what
 pointer), so **1.41x is this phase's number, not SR1's** (re-measured
 2026-08-25; it was published as 1.8x).
 
-**Gate:** reclamation first -- and on the re-measured numbers that is no longer
-a sequencing preference but the substance of the whole thing.
+**Gate:** reclamation first ([reclamation-plan.md](reclamation-plan.md)) --
+and on the re-measured numbers that is no longer a sequencing preference
+but the substance of the whole thing.
 
 **The reclamation half is no longer blocked**, and it is worth far more than
 this phase. It was described here as blocked on the `rc/of` coupling that parked

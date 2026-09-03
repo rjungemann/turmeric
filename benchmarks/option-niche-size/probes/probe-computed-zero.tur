@@ -1,0 +1,6 @@
+(defopaque Cstr! :ptr<void> :non-null)
+(defn zero [] : int 0)
+(defn main [] : int
+  (let [bad (some (:: (zero) Cstr!))]
+    (if (some? bad) (println "some") (println "none"))
+    0))
