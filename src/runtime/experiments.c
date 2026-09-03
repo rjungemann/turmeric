@@ -37,28 +37,17 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * re-entry, which is now DECIDED: the checked error is permanent and
      * snapshotting the live trail segment is declined.  Do not re-add a gate
      * for it. */
-    /* SR3 slice B (sum-representation-plan): an `(Option P)` over a non-nullable
-     * pointer payload is carried AS that pointer -- 16 bytes to 8, `(none)` as
-     * NULL, no tag word.  Unshelved 2026-08-28 once `defopaque` over a pointer
-     * got a pointer C spelling, which is what makes a niche value tellable from
-     * a carrier box and what admits `(Option String)` -- the whole of the
-     * phase's census.
-     *
-     * PROTOTYPE, and the reason is the eligibility rule rather than the codegen,
-     * which is small and done.  "P's valid values exclude 0" is not a fact the
-     * type system records, so `sr3_payload_is_nonnull_pointer` is a hand-
-     * maintained ALLOWLIST; a wrong entry makes `(some x)` and `(none)` the same
-     * value, silently.  `Cons` is the standing proof that :heap-ness is not the
-     * condition -- its empty list IS the null pointer.  The open question this
-     * has to answer before graduating is whether non-nullness can be DECLARED
-     * (an attribute the checker enforces at the constructor) instead of listed. */
-    { "option-niche",
-      "carry (Option P) as its payload pointer for non-nullable P",
-      "docs/upcoming/sr3-option-niche-plan.md",
-      "0.41.0",                  /* introduced */
-      "0.44.0",                  /* expires_at (soft deadline) */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_option_niche },
+    /* option-niche GRADUATED 2026-09-03 -- an `(Option P)` over a non-nullable
+     * pointer payload is carried AS that pointer unconditionally (16 bytes to 8,
+     * `(none)` as NULL), and a Vec stores such an element as that word (CE2).
+     * The prototype's open question -- can non-nullness be DECLARED rather than
+     * listed -- was answered 2026-08-28 (`:non-null` on a defopaque, TUR-E0303
+     * at elaboration, the Some ctor and the carrier crossing at runtime); the
+     * container parity that removed the urgency was broken by CE1/CE2
+     * 2026-09-03.  The gate lives in sr3_option_niche (types.c);
+     * TUR_OPTION_NICHE=0 restores the tagged 16-byte monomorph for bisection.
+     * The name moves to GRADUATED[] below (a lingering --enable is a
+     * TUR-W0063 no-op).  See docs/upcoming/sr3-option-niche-plan.md. */
     /* defstruct-as-defadt GRADUATED 2026-06-28 -- a `defstruct` now lowers to a
      * single-variant record `defadt` unconditionally (always-on; the gate lives
      * in defstruct_lowers_to_adt, elab_structs.c).  See
@@ -401,6 +390,7 @@ static const char *const GRADUATED[] = {
      * the narrow one the backend names above describe -- but it shipped as a
      * user-facing `--enable` for a full release, so it keeps the window. */
     "parametric-sum-byvalue",
+    "option-niche",  /* graduated 2026-09-03; TUR_OPTION_NICHE=0 restores the tagged monomorph */
     NULL,
 };
 

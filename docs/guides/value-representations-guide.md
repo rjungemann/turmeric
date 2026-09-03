@@ -185,7 +185,6 @@ add the row.
 
 | Open cell (producer -> boundary) | Report |
 | --- | --- |
-| inline-C carrier producer (`int64_t`) -> by-value monomorph slot for a `vec-of` element, on the default path; binding the value in a `let` first works, and `--enable=option-niche` already bridges the same shape | [`inline-c-carrier-producer-byval-container-element`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/inline-c-carrier-producer-byval-container-element.md) |
 | `^Class`-constrained parameter (carrier `int64_t`) -> generated instance method taking a `defdata` ADT by value; instantiating at `int` is a no-op erasure and works | [`typeclass-constrained-param-erases-adt-to-int64`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/typeclass-constrained-param-erases-adt-to-int64.md) |
 
 The table was empty between 2026-08-21 and these two filings. The pair that

@@ -1,5 +1,8 @@
 # The Option niche's 16 -> 8 does not reach container elements: both representations box at parity
 
+**Resolved 2026-09-03 by CE1/CE2** -- the container row reads 17.8 MB against
+79.7 MB now; see the Resolution at the end.
+
 **Severity: low** as a defect -- no wrong answer, no diagnostic, just an
 optimisation that does not fire where the census said the value was. It is
 load-bearing anyway: it is condition 3 of the option-niche graduation hold and
@@ -103,3 +106,22 @@ and filing it as a cell would misreport a working bridge as a broken one.
 - `docs/artifacts/ce0-container-element-census.md` -- and read its "What this
   census does NOT cover" section before relying on the zero: it counts emission
   sites, not call reachability.
+
+## Resolution (2026-09-03)
+
+CE1 and CE2 of the container-element-form plan are built. `container_elem_form`
+(types.c) is the one chokepoint; the argument loop flags a Vec element-store
+sink and the bridge's niche row hands the slot the payload word; the hoist
+marks raw slot reads and the same row casts them back. Both halves through the
+one crossing they already shared, so a double-bridge is unrepresentable.
+
+| representation | wall | peak RSS |
+|---|---:|---:|
+| default (boxed per element) | 0.081-0.096 s | 79.7 MB |
+| niche, word in slot | 0.018-0.019 s | 17.8 MB |
+
+The exit gate named in this report -- niche allocations per element drop to
+zero and the container row stops reading parity -- is met. On the way CE2
+found the class-2 (spec) path had been double-wrapping the element and
+reading it back unwrapped, under the experiment AND (as a build failure) on
+the default path; both fixed. Pinned by `tests/fixtures/option-niche-vec-word`.

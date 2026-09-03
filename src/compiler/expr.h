@@ -1243,6 +1243,18 @@ struct Expr {
      * call hoist, which frees the temp (null-guarded; None IS NULL) once the
      * consuming call has been materialized. */
     bool     sum_box_drop_after;
+    /* value-struct-payload-sum-monomorph-box-has-no-owner (dictionary sites):
+     * the same stamp, TENTATIVE on the CONSUMER.  This fresh-producer call is
+     * an argument of a class-method call whose receiver is still abstract at
+     * elab, so the instance that runs -- and therefore whose
+     * nonretain_sum_param_mask decides the drop -- is only known per
+     * monomorph at emit.  The consumer's argument loop re-resolves the
+     * dispatch (emit_reresolve_method_fndef, exactly as the freshness question
+     * is re-asked) and admits this node for the drop only when THAT binding's
+     * mask covers the slot; nothing is ever freed on the representative's
+     * say-so.  Distinct from sum_box_drop_after so an unadmitted node stays a
+     * status-quo leak, never a free. */
+    bool     sum_box_drop_after_dyn;
     union {
         bool         b;
         int64_t      i;

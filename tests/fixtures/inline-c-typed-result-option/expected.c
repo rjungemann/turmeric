@@ -7707,26 +7707,25 @@ int main(int argc, char **argv) {
         int64_t __ps_198 = (maybe_hyopen(INT64_C(-1)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         int64_t __t199 = (int64_t)(intptr_t)(__ps_198);
-        tur_adt_Option__Device __t200 = (__t199 ? (*(tur_adt_Option__Device *)(intptr_t)(__t199)) : (tur_adt_Option__Device){0});
-        if (__t199) free((void *)(intptr_t)(__t199));
-        bool __ps_201 = (some___spec__bool_tur_adt_Option__Device(__t200));
+        bool __ps_200 = (some___spec__bool_tur_adt_Option__Device((__t199 ? (*(tur_adt_Option__Device *)(intptr_t)(__t199)) : (tur_adt_Option__Device){0})));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        puts((__ps_201) ? "true" : "false");
-        int64_t __t202;
-        __t202 = INT64_C(0);
-        return (int)__t202;
+        if (__ps_198) free((void *)(intptr_t)__ps_198);
+        puts((__ps_200) ? "true" : "false");
+        int64_t __t201;
+        __t201 = INT64_C(0);
+        return (int)__t201;
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
-        tur_adt_Cons__int * __ps_203 = (ctor_Cons_Cons__int(h, t));
+        tur_adt_Cons__int * __ps_202 = (ctor_Cons_Cons__int(h, t));
         if (tur_panicking) return ((tur_adt_Cons__int *)0);
-        return __ps_203;
+        return __ps_202;
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        tur_adt_Vec__int * __ps_204 = (vec_new__spec__tur_adt_Vec__int__());
+        tur_adt_Vec__int * __ps_203 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return ((tur_adt_Vec__int *)0);
-        return __ps_204;
+        return __ps_203;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
@@ -7739,19 +7738,41 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
 }
 
 static bool ok___spec__bool_tur_adt_Result__Device__int(tur_adt_Result__Device__int r) {
-        bool __t205 = 0;
+        bool __t204 = 0;
         {
             tur_adt_Result__Device__int __scrut_v = (r);
             tur_adt_Result__Device__int *__scrut = &__scrut_v;
             switch (__scrut->tag) {
             case 0: {
                 void * _un_937 = (void *)__scrut->as.Ok._0;
-                __t205 = true;
+                __t204 = true;
                 break;
             }
             case 1: {
                 int64_t _un_938 = (int64_t)__scrut->as.Err._0;
-                __t205 = false;
+                __t204 = false;
+                break;
+            }
+            default: break;
+            }
+        }
+        return __t204;
+}
+
+static void * ok_val__spec__void___tur_adt_Result__Device__int(tur_adt_Result__Device__int r) {
+        void * __t205 = 0;
+        {
+            tur_adt_Result__Device__int __scrut_v = (r);
+            tur_adt_Result__Device__int *__scrut = &__scrut_v;
+            switch (__scrut->tag) {
+            case 0: {
+                void * v_943 = (void *)__scrut->as.Ok._0;
+                __t205 = v_943;
+                break;
+            }
+            case 1: {
+                int64_t _un_944 = (int64_t)__scrut->as.Err._0;
+                __t205 = ((void *)0);
                 break;
             }
             default: break;
@@ -7760,20 +7781,20 @@ static bool ok___spec__bool_tur_adt_Result__Device__int(tur_adt_Result__Device__
         return __t205;
 }
 
-static void * ok_val__spec__void___tur_adt_Result__Device__int(tur_adt_Result__Device__int r) {
-        void * __t206 = 0;
+static bool err___spec__bool_tur_adt_Result__Device__int(tur_adt_Result__Device__int r) {
+        bool __t206 = 0;
         {
             tur_adt_Result__Device__int __scrut_v = (r);
             tur_adt_Result__Device__int *__scrut = &__scrut_v;
             switch (__scrut->tag) {
             case 0: {
-                void * v_943 = (void *)__scrut->as.Ok._0;
-                __t206 = v_943;
+                void * _un_940 = (void *)__scrut->as.Ok._0;
+                __t206 = false;
                 break;
             }
             case 1: {
-                int64_t _un_944 = (int64_t)__scrut->as.Err._0;
-                __t206 = ((void *)0);
+                int64_t _un_941 = (int64_t)__scrut->as.Err._0;
+                __t206 = true;
                 break;
             }
             default: break;
@@ -7782,20 +7803,20 @@ static void * ok_val__spec__void___tur_adt_Result__Device__int(tur_adt_Result__D
         return __t206;
 }
 
-static bool err___spec__bool_tur_adt_Result__Device__int(tur_adt_Result__Device__int r) {
-        bool __t207 = 0;
+static int64_t err_val__spec__int64_t_tur_adt_Result__Device__int(tur_adt_Result__Device__int r) {
+        int64_t __t207 = 0;
         {
             tur_adt_Result__Device__int __scrut_v = (r);
             tur_adt_Result__Device__int *__scrut = &__scrut_v;
             switch (__scrut->tag) {
             case 0: {
-                void * _un_940 = (void *)__scrut->as.Ok._0;
-                __t207 = false;
+                void * _un_946 = (void *)__scrut->as.Ok._0;
+                __t207 = ((int64_t)0);
                 break;
             }
             case 1: {
-                int64_t _un_941 = (int64_t)__scrut->as.Err._0;
-                __t207 = true;
+                int64_t e_947 = (int64_t)__scrut->as.Err._0;
+                __t207 = e_947;
                 break;
             }
             default: break;
@@ -7804,20 +7825,19 @@ static bool err___spec__bool_tur_adt_Result__Device__int(tur_adt_Result__Device_
         return __t207;
 }
 
-static int64_t err_val__spec__int64_t_tur_adt_Result__Device__int(tur_adt_Result__Device__int r) {
-        int64_t __t208 = 0;
+static bool some___spec__bool_tur_adt_Option__Device(tur_adt_Option__Device o) {
+        bool __t208 = 0;
         {
-            tur_adt_Result__Device__int __scrut_v = (r);
-            tur_adt_Result__Device__int *__scrut = &__scrut_v;
+            tur_adt_Option__Device __scrut_v = (o);
+            tur_adt_Option__Device *__scrut = &__scrut_v;
             switch (__scrut->tag) {
-            case 0: {
-                void * _un_946 = (void *)__scrut->as.Ok._0;
-                __t208 = ((int64_t)0);
+            case 1: {
+                void * _un_887 = (void *)__scrut->as.Some._0;
+                __t208 = true;
                 break;
             }
-            case 1: {
-                int64_t e_947 = (int64_t)__scrut->as.Err._0;
-                __t208 = e_947;
+            case 0: {
+                __t208 = false;
                 break;
             }
             default: break;
@@ -7826,46 +7846,25 @@ static int64_t err_val__spec__int64_t_tur_adt_Result__Device__int(tur_adt_Result
         return __t208;
 }
 
-static bool some___spec__bool_tur_adt_Option__Device(tur_adt_Option__Device o) {
-        bool __t209 = 0;
-        {
-            tur_adt_Option__Device __scrut_v = (o);
-            tur_adt_Option__Device *__scrut = &__scrut_v;
-            switch (__scrut->tag) {
-            case 1: {
-                void * _un_887 = (void *)__scrut->as.Some._0;
-                __t209 = true;
-                break;
-            }
-            case 0: {
-                __t209 = false;
-                break;
-            }
-            default: break;
-            }
-        }
-        return __t209;
-}
-
 static void * unwrap__spec__void___tur_adt_Option__Device(tur_adt_Option__Device o) {
-        void * __t210 = 0;
+        void * __t209 = 0;
         {
             tur_adt_Option__Device __scrut_v = (o);
             tur_adt_Option__Device *__scrut = &__scrut_v;
             switch (__scrut->tag) {
             case 1: {
                 void * v_891 = (void *)__scrut->as.Some._0;
-                __t210 = v_891;
+                __t209 = v_891;
                 break;
             }
             case 0: {
-                __t210 = ((void *)0);
+                __t209 = ((void *)0);
                 break;
             }
             default: break;
             }
         }
-        return __t210;
+        return __t209;
 }
 
 

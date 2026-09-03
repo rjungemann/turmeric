@@ -1,5 +1,8 @@
 # A stdlib `Result`/`Option` monomorph over a value-struct payload heap-boxes it, and nothing frees the box
 
+**Resolved 2026-09-03 -- 9 of 9, see the fourth round below; the glue route
+is assessed there and declined.**
+
 **Severity: medium.** On the DEFAULT path, post-SR2a, with no experiment
 involved -- so it affects ordinary `(Result MyStruct MyErr)` code rather than
 an erased corner. Filed 2026-08-30, found sweeping the leaks RM1's measurement
@@ -295,9 +298,141 @@ freshness flag, and the instance bodies here are inline C in any case. The
 glue route is the fix for these. Suite 2749/0, leak-check 68/0/0, both
 seams green.
 
+## Direction 3, fourth round: 9 of 9 (2026-09-03) -- and the glue route, assessed
+
+**465 -> 0 bytes** of this class on the same sweep.  The two class-method
+fixtures were the last, and both were the SITE, not the mechanism:
+
+**Class-method consumers never ran the stamp.**  `elab_call.c`'s
+drop-after stamp lives in the ordinary call's argument loop; a class-method
+call is built by `elab_method_call` (elab_typeclasses.c) and never passes
+through it, so `(enc (some (make-struct Box :n 99)))` had no stamp to
+resolve even though the Option instance's mask for `x` was inferred and set.
+The same three facts are now asked there: a non-suspending consumer, a
+fresh producer in the slot, and the RESOLVED instance's
+`nonretain_sum_param_mask` bit.  Static dispatch (receiver head concrete --
+`(Option a)` is enough, since the Option instance is the one that runs
+whatever `a` is) stamps `sum_box_drop_after` as before.  A receiver that IS
+the abstract class var is stamped `sum_box_drop_after_dyn` and admitted
+per monomorph by the consumer's argument loop after
+`emit_reresolve_method_fndef` -- the same re-resolution the freshness
+question already uses -- against that binding's mask
+(`EmitCtx.sum_drop_admit`).
+
+**A let binding through a copying reader.**  `ob (ok-val (:: (dec 0)
+(Result (Option Box) cstr)))` was never "fresh": `ok-val`'s own body is a
+match returning its binder.  But `ok-val` / `err-val` / `unwrap` COPY the
+payload out, so when their argument is a fresh temp the copy is the only
+holder of any arm box the payload carries -- and a nested sum payload is
+stored INLINE in the outer's union (the ros rule boxes only a non-parametric
+value struct), so the outer's tag walk can never reach the same box.
+`emit_init_owns_fresh_sum` peels those three readers for both let-scope
+drops.  `unwrap-or` is excluded: its None path returns the DEFAULT, which may
+be a live binding.
+
+**A return-dispatched producer's cell was freed shallow.**  The new fixture
+found one more: `(:: (dec tag) (Result A cstr))` inside the Option
+instance, resolved to `Dec [Box]`, carries the abstract class variable as
+its own type, so `emit_carrier_sum_free` could not see the boxed arm and
+freed only the cell, leaking the `ok__spec__int64_t_tur_adt_Box` copy.  The
+instance's declared result (`(Result a cstr)`) with `a` substituted by the
+re-resolved dispatch type is the cell's real layout; it is built as an
+owned spine and the pending list frees it at the drain.  It is never
+resolved through the active spec, which binds `a` to the OUTER receiver.
+
+Pinned by `tests/fixtures/sum-payload-drop-dictionary-dispatch`
+(`requires.leak-check`: main-level and generic-body static dispatch, the
+let-bound reader shape, and the return-dispatched cell) and
+`tests/fixtures/sum-payload-dictionary-retaining-instance-not-dropped`
+(a `hold [x] x` instance keeps its argument; asserts the VALUE read through
+the retained box).  The dynamic-receiver admission has no in-tree program:
+every spelling of "a method returning the class variable mints an Option
+over a value struct" trips a pre-existing construct-seam miscompile, filed
+as [return-dispatched-sum-mint-in-constrained-instance-miscompiles](return-dispatched-sum-mint-in-constrained-instance-miscompiles.md).
+The path is polarity-safe -- it frees only when the re-resolved instance's
+inferred mask says the slot is not retained -- and the type fuzzer (seeds 1
+and 7) is clean over it.
+
+What is left in the two original fixtures is out of class:
+`constrained-instance-element-dispatch` leaks the `cstr` buffers its
+inline-C `enc` instances malloc and never free (user code), and
+`nested-construct-byvalue-decode` leaks the Box its inline-C `Dec [Box]`
+mallocs behind `tur_box_ok` -- a shape
+[inline-c-results-guide.md](../guides/inline-c-results-guide.md) says is not
+constructible from inline C, so its ownership is undocumented and the
+compiler does not free it.
+
+### The glue route, assessed
+
+Direction 1 -- "drop glue on the monomorph, freeing the arm at the
+consumer's scope exit regardless of what the consumer is" -- was the fix
+this report kept naming as the one that scales.  Looked at against the
+tree, it decomposes into two things, one of which already exists and one of
+which is not this report's:
+
+- **The glue exists.**  `boxed_struct_payload_walk` (emit_expr.c) IS the
+  per-monomorph drop glue: a `switch` on the tag freeing the ros-boxed arm,
+  keyed on the one predicate the typedef and ctor key on, reachable by value
+  and through a carrier cell.  Every drop site in all four rounds calls it.
+  A separately emitted `drop_glue_tur_adt_Result__Rational__ArithError`
+  function would only add a symbol for the `rc/of` control-block path,
+  which no in-tree program takes for a monomorph.
+- **"Regardless of what the consumer is" is an ownership discipline, not
+  glue.**  Freeing at the consumer's scope exit needs the consumer to OWN
+  its parameter -- a move on call, with the caller forbidden to touch the
+  value afterwards -- which is the `needs_drop_glue` move-only discipline
+  (`Binding.is_moved`, TUR-E0005) applied to every `(Result Struct E)`.
+  That is a language-visible change to the two most-used types: a value
+  passed to any function could not be read again.  The residue never needed
+  it; it needed the existing per-site analysis to reach the class-method
+  site.
+
+So the route as written is declined; what was built instead closes the
+class.
+
+### Addendum (2026-09-03, later): the walk accepted a storing callee
+
+Writing the dynamic-receiver fixture turned up a hole in the round-2 mask
+that is a use-after-free, not a leak.  `box_uses_confined` models a callee
+only through its RESULT: `b` passed to any static call was accepted as long
+as the current call's result was a scalar, so
+
+```turmeric
+(def store (:: (vec-new) (Vec (Option Box))))
+(defn stash [o : (Option Box)] : int (vec-push! store o) 1)
+```
+
+was stamped non-retaining, the caller freed its fresh `(some Box)` after
+`stash` returned, and the container read it back freed (ASan
+heap-use-after-free, printed garbage without ASan).  Under the sum walk a
+hand-off to a callee that is neither an audited reader nor proven
+non-retaining is now an escape; the pointer/any walks keep their reader
+model.  Pinned by `tests/fixtures/sum-payload-stashing-callee-not-dropped`
+(asserts the value read back through the container).  The 11-fixture sweep
+is unchanged by it: every consumer there reads through the audited
+accessors or a masked callee.
+
+Also from the same fixture: a fresh sum handed to a TYPE-VARIABLE parameter
+(`w : a` in a constrained generic) was never classified, since the mask
+inference asked only declared Option/Result params.  A tyvar param joins
+the inference now; the stamp still keys on the argument being a fresh sum,
+so the bit is inert for every other instantiation.  And the
+dynamic-receiver admission has its in-tree program after all
+([return-dispatched-sum-mint-in-constrained-instance-miscompiles](return-dispatched-sum-mint-in-constrained-instance-miscompiles.md),
+resolved the same day): `enc-mk`'s `(Option Box)` spec frees the
+re-dispatched `mk`'s payload after `enc` returns.
+
+Out of class but closed alongside: an inline-C body that boxes a
+value-struct payload behind `tur_box_ok` is a fresh producer by
+declaration now, so the pending drain frees that payload with the cell
+(`nested-construct-byvalue-decode`'s last Box); the guide states the
+contract.  The `rc/of` path over such a monomorph was probed and is filed
+separately ([rc-of-byvalue-sum-monomorph-reads-first-word](../reported/rc-of-byvalue-sum-monomorph-reads-first-word.md)):
+it segfaults before any drop-glue question arises.
+
 ## Related
 
-- [carrier-sum-option-boxes-have-no-owner](carrier-sum-option-boxes-have-no-owner.md)
+- [carrier-sum-option-boxes-have-no-owner](../reported/carrier-sum-option-boxes-have-no-owner.md)
   -- the erased-path sibling, whose SR2a narrowing this report qualifies.
 - [reclamation-plan.md](../upcoming/reclamation-plan.md) -- RM1 (built, erased
   path) and RM2 (the recursive spine, which `re-string`'s `ctor_RxCons` leaks

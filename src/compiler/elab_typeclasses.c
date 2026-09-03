@@ -238,12 +238,22 @@ static const Symbol *helper_eq_symbol_for_struct(Elab *e, const AdtDef *sd,
  * (thanks to F3-7's sticky ascription) terminates the recursion at
  * the right level.  Returns NULL if `elem_type` cannot be
  * round-tripped to a Form. */
-static Form *build_comparator_lambda(Elab *e, const Type *elem_type, Span span) {
+/* container-element-form-plan CE2 (default since option-niche graduated):
+ * `slot_words` says the helper hands the comparator RAW Vec slot words
+ * (`vec-eq?` reads `a->data[i]` straight out of the buffer).  A niche
+ * `(Option P)` element sits in its slot as the payload pointer itself, so the
+ * `(:: __cmp_slot_a (Option P))` bridge must reinterpret the word, never unbox
+ * it as a carrier box.  The `__cmp_slot_` prefix is the mark: emit_slot_word_is
+ * recognises it exactly as it does the hoist temp of a `vec-get`.  Every other
+ * helper (map/option/list/pair/result-eq?) hands the comparator a value that
+ * crossed the carrier boundary (boxed), so those keep the plain names. */
+static Form *build_comparator_lambda(Elab *e, const Type *elem_type, Span span,
+                                     bool slot_words) {
     Form *elem_form = type_to_form(e, elem_type, span);
     if (!elem_form) return NULL;
 
-    const Symbol *sym_a       = intern_cstr(e->st, "__cmp_a");
-    const Symbol *sym_b       = intern_cstr(e->st, "__cmp_b");
+    const Symbol *sym_a       = intern_cstr(e->st, slot_words ? "__cmp_slot_a" : "__cmp_a");
+    const Symbol *sym_b       = intern_cstr(e->st, slot_words ? "__cmp_slot_b" : "__cmp_b");
     const Symbol *sym_dot_eq  = intern_cstr(e->st, ".eq?");
 
     Form **asc_a_items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
@@ -436,7 +446,7 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
             kf = build_mapkey_cmp_form(e, k_type, span);
         }
         if (kf) {
-            Form *vf = build_comparator_lambda(e, v_type, span);
+            Form *vf = build_comparator_lambda(e, v_type, span, false);
             if (!vf) return NULL;
             Expr *kcmp = elab_form(e, kf);
             Expr *vcmp = elab_form(e, vf);
@@ -516,7 +526,8 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
      * type errors surface before we commit to the synthesised call. */
     Expr *lambdas[2] = {0};
     for (uint8_t i = 0; i < n_comparators; i++) {
-        Form *lf = build_comparator_lambda(e, args_collected[i], span);
+        Form *lf = build_comparator_lambda(e, args_collected[i], span,
+                                           strcmp(sd->name, "Vec") == 0);
         if (!lf) return NULL;
         lambdas[i] = elab_form(e, lf);
         if (!lambdas[i]) return NULL;
@@ -2166,6 +2177,17 @@ static bool parse_instance_head_arg(Elab *e, const Form *f, Type *out) {
     if (asb && asb->type.kind == TY_ADT && asb->type.as.adt_.def) {
         *out = asb->type; return true;
     }
+    /* return-dispatched-sum-mint-in-constrained-instance-miscompiles (repro
+     * 3): scope_lookup is value-preferring, so for a lowered defstruct (and
+     * any `(defdata T ... (T ...))`) the name resolves to the constructor
+     * FUNCTION and the fall-through below turned `Box` in `[(Option Box)]`
+     * into a type VARIABLE named Box.  Ask the type namespace, as the
+     * two-parameter head path (`elab_lookup_type_by_name`, below) already
+     * does; only a name known to neither is a genuine head tyvar. */
+    Type *aty = elab_lookup_type_by_name(e, akw);
+    if (aty && aty->kind == TY_ADT && aty->as.adt_.def) {
+        *out = *aty; return true;
+    }
     *out = type_tyvar_named(akw->name);
     return true;
 }
@@ -2534,11 +2556,21 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                  * resolves here. */
                                 TypeKind ank = typekind_from_symbol(akw->name);
                                 Binding *asb = scope_lookup(e->scope, akw);
+                                /* return-dispatched-sum-mint-in-constrained-instance-
+                                 * miscompiles (repro 3): scope_lookup is value-
+                                 * preferring, so a lowered defstruct's name resolves
+                                 * to its constructor FUNCTION and `Box` in
+                                 * `[(Option Box)]` fell through to a type VARIABLE
+                                 * named Box.  Ask the type namespace as well. */
+                                Type *aty = elab_lookup_type_by_name(e, akw);
                                 if (ank != TY_UNKNOWN) {
                                     app_arg_type = type_simple(ank, CK_COPY);
                                 } else if (asb && asb->type.kind == TY_ADT &&
                                            asb->type.as.adt_.def) {
                                     app_arg_type = asb->type;
+                                } else if (aty && aty->kind == TY_ADT &&
+                                           aty->as.adt_.def) {
+                                    app_arg_type = *aty;
                                 } else {
                                     /* Unknown name in an applied instance head
                                      * (`A` in `(Dense A)`) is the instance's own
@@ -2627,7 +2659,20 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         /* Assemble TY_APP */
                         memset(&type_args[i], 0, sizeof(type_args[i]));
                         type_args[i].kind = TY_APP;
-                        type_args[i].copy_kind = CK_MOVE;
+                        /* return-dispatched-sum-mint-in-constrained-instance-
+                         * miscompiles (repro 3): a RESOLVED head takes the
+                         * discipline `(Option Box)` has everywhere else (copy,
+                         * or the opaque's own linear/affine lift); the blanket
+                         * CK_MOVE made the instance method's own parameter
+                         * move-only, so `(some? x)` consumed it and `(unwrap
+                         * x)` was a use-after-move -- the same body as a defn
+                         * is accepted.  An unresolved head keeps CK_MOVE. */
+                        if (have_head_ct) {
+                            type_args[i].copy_kind = CK_COPY;
+                            propagate_app_discipline(&type_args[i], fn_type);
+                        } else {
+                            type_args[i].copy_kind = CK_MOVE;
+                        }
                         /* Result kind = constructor kind with one arg applied
                          * (ARROW2 -> ARROW for a binary head; ARROW -> STAR for a
                          * fully-applied unary head). */
@@ -7166,6 +7211,45 @@ resolved_user_fallback:;
     out->as.call_.args    = call_args;
     out->as.call_.n_args  = n_args + 1;
     out->as.call_.dict_arg = dict_expr;  /* annotation for downstream passes */
+    /* value-struct-payload-sum-monomorph-box-has-no-owner (dictionary sites):
+     * the drop-after stamp elab_call.c puts on a fresh sum argument of a
+     * non-retaining defn, for a CLASS-METHOD consumer.  This path never runs
+     * elab_call's argument loop, so `(enc (some (make-struct Box ..)))` kept
+     * its payload box for the process lifetime although the instance body
+     * only reads `x` -- the one shape left after three rounds of that report.
+     *
+     * Same three facts as the defn stamp, asked of the instance that was
+     * resolved here: a non-suspending consumer, a fresh producer in the slot,
+     * and the consumer's inferred nonretain_sum_param_mask bit for it.
+     * Param index i IS argument index i -- params[0] is the receiver and so is
+     * call_args[0].  When the dispatch is STATIC (receiver head concrete) the
+     * resolved binding is the method that runs and the stamp is final.  When
+     * it is not -- inside a constrained generic body, where fn_binding is a
+     * representative -- the argument is flagged TENTATIVELY
+     * (sum_box_drop_after_dyn) and the consumer's emission re-resolves the
+     * instance per monomorph before admitting the drop, exactly as the
+     * freshness question is re-asked there. */
+    {
+        const Binding *cb = out->as.call_.fn_binding;
+        if (cb && cb->type.kind == TY_FN &&
+            effect_row_is_empty(cb->type.as.fn.effect_row)) {
+            bool static_disp = call_dispatch_is_static(out);
+            for (uint32_t ai = 0; ai < out->as.call_.n_args && ai < 32; ai++) {
+                Expr *a = out->as.call_.args[ai];
+                while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+                if (!a || a->kind != EX_CALL) continue;
+                bool fresh_arg = call_returns_fresh_sum_box(a) ||
+                    (a->as.call_.dict_arg && !call_dispatch_is_static(a));
+                if (!fresh_arg) continue;
+                if (static_disp) {
+                    if (cb->nonretain_sum_param_mask & (1u << ai))
+                        a->sum_box_drop_after = true;
+                } else {
+                    a->sum_box_drop_after_dyn = true;
+                }
+            }
+        }
+    }
     /* M4c Path A step 1 (docs/archive/m4c-execution-plan.md): bind the
      * class variable to the CALL SITE'S receiver type so
      * emit_abi_register_call mints a per-instantiation spec.  HKT carve-out

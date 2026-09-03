@@ -198,6 +198,17 @@ Two consequences for anyone writing such a body:
 The distinction is the DECLARED type, not the type at a particular call site:
 `(:: (vec-get v 0) (Option int))` resolves to an Option and is still a borrow.
 
+**The payload follows the box (since 2026-09-03).** A body that boxes a
+*value-struct* payload as a pointer -- `Box *b = malloc(sizeof *b); ...;
+return tur_box_ok((int64_t)(intptr_t)b);` for a declared `(Result Box cstr)`
+-- hands that allocation over too: the monomorph stores such a payload as a
+pointer slot, and the compiler frees the live arm together with the cell once
+the value has been read back or its consumer has returned. So the payload must
+be a FRESH allocation as well; boxing the address of a static or of something
+else's field is a double free, not a leak. This is the same rule the
+freshness analysis applies to a Turmeric producer, extended to inline C by
+declaration (`elab_stamp_sum_freshness`).
+
 ## Limitation: only `_int` and `_ptr` payloads
 
 v1 ships the monomorphised `_int` / `_ptr` builders, which cover an integer

@@ -5,8 +5,10 @@ The four probes behind item 5 of
 They answer, by measurement rather than by reading the predicate: can the
 largest pointer-payload Option population in the tree reach the niche?
 
-Run each both ways -- `./build/tur run <probe>` and
-`./build/tur --enable=option-niche run <probe>`.
+Run each both ways -- `./build/tur run <probe>` (the niche, default since
+2026-09-03) and `TUR_OPTION_NICHE=0 ./build/tur run <probe>` (the tagged
+form; the probes were written when that was the default and the niche was
+`--enable=option-niche`).
 
 | probe | question | answer |
 |---|---|---|

@@ -239,19 +239,9 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # option-niche seam-rot gate, the same argument as tur_sr4_seam above.
-# `--enable=option-niche` (PROTOTYPE, docs/upcoming/sr3-option-niche-plan.md)
-# carries an eligible `(Option P)` as its bare payload pointer, and it is OFF
-# by default -- so `bash tests/run.sh` only reaches the niche through the three
-# fixtures carrying a `flags` file, and compiles the default representation for
-# the whole rest of the eligible population.  The experiment is soaking toward
-# a graduation call whose standing claim is "no new silent-wrong-answer
-# crossings over the window"; five such crossings were found in its first two
-# days, so that claim needs something re-running the population, not a mood.
-# Unregistered, this harness exists but never runs, and the soak measures
-# nothing.  Like the SR4 harness it leads with a canary that asserts the flag
-# actually bites (ctor_Some__String is the niche identity and no tagged
-# Option__String typedef is minted), so a rename cannot quietly demote it to a
-# second run of the default path.
+# The niche graduated 2026-09-03 (docs/upcoming/sr3-option-niche-plan.md);
+# TUR_OPTION_NICHE=0 restores the tagged monomorph and this harness keeps THAT
+# path green with an inverted canary, exactly as tur_sr4_seam does.
 add_test(
   NAME tur_option_niche_seam
   COMMAND bash tests/run-option-niche-seam.sh

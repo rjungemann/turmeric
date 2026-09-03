@@ -109,6 +109,28 @@ void elab_stamp_sum_freshness(Binding *b, Binding **params, uint32_t n_params,
     if (!b) return;
     uint32_t need = 0;
     bool fresh = fresh_sum_walk(body, params, n_params, &need);
+    /* inline-c-results-guide, "Who owns the box": a body that is inline C
+     * and whose DECLARED result is an Option/Result application hands its
+     * caller a FRESH carrier box -- that is the contract the guide states
+     * (`tur_some_ptr` / `tur_box_*` malloc it; a borrowed box wants a
+     * borrow-shaped `: A` signature, which is a tyvar and stays out).  The
+     * walk cannot see into C, so it answered "not fresh" and every such
+     * producer was consumed by the readback bridge's cell-only free, leaving
+     * a value-struct payload the body boxed as a pointer (`tur_box_ok((int64_t)
+     * malloc'd_struct)`) unowned.  Fresh by declaration lets the pending
+     * drain free the arm through the cell like any Turmeric producer's. */
+    if (!fresh && b->body_is_inline_c && b->type.kind == TY_FN &&
+        b->type.as.fn.result_full_type) {
+        Type rt = *b->type.as.fn.result_full_type;
+        AdtDef *rd = NULL;
+        Type ra[16];
+        uint8_t rn = 0;
+        if (type_extract_adt_app(&rt, &rd, ra, &rn) && rd && rd->name &&
+            (strcmp(rd->name, "Option") == 0 || strcmp(rd->name, "Result") == 0)) {
+            fresh = true;
+            need = 0;
+        }
+    }
     b->returns_fresh_sum_box = fresh && need == 0;
     b->fresh_sum_via_param_mask = fresh ? need : 0;
 }
@@ -5312,6 +5334,13 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
                 else if (_pb->type.kind == TY_ADT) _sd = _pb->type.as.adt_.def;
                 bool _is_sum = _sd && _sd->name &&
                     (strcmp(_sd->name, "Option") == 0 || strcmp(_sd->name, "Result") == 0);
+                /* A TYPE-VARIABLE parameter joins too (`w : a` in a constrained
+                 * generic): the caller may hand it a fresh `(Option Box)`, and
+                 * the stamp at that call site keys on the ARGUMENT being a
+                 * fresh sum, so a bit here only ever matters for one.  The
+                 * walk asks the same question of `w` it asks of a declared
+                 * sum param -- every use confined, result unable to carry it. */
+                if (_pb->type.kind == TY_TYVAR) _is_sum = true;
                 if (_is_sum) {
                     TypeKind _srk = (b->type.kind == TY_FN) ? b->type.as.fn.result_kind
                                                             : TY_UNKNOWN;

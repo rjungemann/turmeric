@@ -353,6 +353,7 @@ typedef struct EmitCtx {
      * after the call materializes), draining as a null-guarded free. */
     char    **sum_pending;
     Type     *sum_pending_types;
+    bool     *sum_pending_owned;   /* entry's Type is a malloc'd spine to free at drain */
     uint32_t  n_sum_pending;
     uint32_t  cap_sum_pending;
     /* value-struct-payload-sum-monomorph-box-has-no-owner: pending frees for
@@ -363,6 +364,21 @@ typedef struct EmitCtx {
     Type     *vsp_pending_types;
     uint32_t  n_vsp_pending;
     uint32_t  cap_vsp_pending;
+    /* value-struct-payload-sum-monomorph-box-has-no-owner (dictionary sites):
+     * the one argument node the enclosing class-method call has ADMITTED for
+     * the drop-after stamp (Expr.sum_box_drop_after_dyn resolved against the
+     * re-resolved instance's mask).  Set by the consumer's argument loop
+     * around that argument's emission and restored after; the call hoist
+     * treats pointer-identity with this as the stamp.  A nested call inside
+     * the argument never matches (it is a different node). */
+    const Expr *sum_drop_admit;
+    /* container-element-form-plan CE2 (store half): set by the call argument
+     * loop while it emits an argument that is a Vec ELEMENT STORE (the
+     * callee declares `(Vec A)` and this slot as `A`) whose resolved element
+     * form is CE_WORD and whose element is a niche option; the bridge's niche
+     * row then hands the slot the payload WORD instead of materializing a
+     * carrier box.  Restored after the argument, so nothing nested sees it. */
+    bool ce_word_store_sink;
     /* any-struct-box-leak-per-widen: C names of `any` locals whose payload box
      * the ENCLOSING SCOPES own, innermost last.  The scope-exit drop is a
      * trailing free, so an early exit -- a `return`, or a self-tail-call's
@@ -721,6 +737,9 @@ const char *emit_localvar_lookup_ctype(const char *cname);
 void emit_owned_carrier_mark(const char *cname);
 bool emit_owned_carrier_is(const char *cname);
 void emit_owned_carrier_clear(const char *cname);
+/* CE2: raw Vec slot-word temps (see emit_module.c). */
+void emit_slot_word_mark(const char *cname);
+bool emit_slot_word_is(const char *cname);
 /* S1 (jit-engine-plan section 4): true when an emitted C type NAME denotes a
  * scalar -- any pointer, or one of the primitive/stdint spellings the emitter
  * produces.  Anything else (a struct typedef such as `Option__int` or

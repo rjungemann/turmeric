@@ -404,6 +404,24 @@ status-quo leak rather than a use-after-free -- the same trade `alt-or`
 already makes on the producer side.  `sum-passthrough-param-not-dropped`
 pins the shape.
 
+Class-method sites (2026-09-03): the same pending case reached the one
+call shape neither mask could see -- a class-method consumer, built by
+`elab_method_call` outside the argument loop that stamps -- and a let
+bound through a copying reader (`ok-val` / `err-val` / `unwrap`) of a fresh
+producer.  The value-struct report is closed at 9 of 9 and archived; its
+"glue route" is assessed there and declined (the tag walk is the glue; the
+remainder is a move-only discipline on Option/Result).  A return-dispatched
+producer's cell is now drained against its RE-RESOLVED instance's declared
+result, which is also what lets the erased `ok__spec__int64_t_<struct>` copy
+inside it be freed -- an RM1 residue shape as much as a payload one.
+
+Storing callee (2026-09-03, later): the round-2 sum mask accepted a
+parameter handed to any callee whose result was a scalar -- a use-after-free
+once the callee stored it (`vec-push!`).  Under the sum walk that hand-off is
+an escape now; a tyvar-typed parameter joins the inference; inline-C
+Option/Result producers are fresh by declaration.  See the value-struct
+report's addendum.
+
 Bind chains (2026-09-02, later): the largest remaining erased entries were
 `bind` / `fmap` chains over stdlib `Result` / `Option` -- `result-monad-*`,
 `hkt-stdlib-*`.  Each chained `bind` hands back a fresh box (the continuation's

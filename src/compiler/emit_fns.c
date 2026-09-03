@@ -3028,7 +3028,11 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             current_fn_ret_ctype_eff = fn_ret_td ? fn_ret_td : emit_type_c_name(ctx, rft);
         } else if (fd->binding && fd->binding->name && fd->binding->name->name &&
                    strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
-                   fd->body && type_uses_carrier_abi(fd->body->type)) {
+                   fd->body && (fd->body->type.kind == TY_APP ||
+                                fd->body->type.kind == TY_STRUCT ||
+                                type_uses_carrier_abi(fd->body->type))) {
+            /* repro 2 (see the signature site): a by-value aggregate body
+             * with no result_full_type is spilled to the carrier at the tail. */
             const char *_body_c2 = emit_type_c_name(ctx, fd->body->type);
             if (_body_c2 && strcmp(_body_c2, "int64_t") != 0) {
                 current_fn_ret_ctype_eff = "int64_t";
@@ -3406,11 +3410,20 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * signature; the body return is heap-spilled below.  If the
              * body codegen is already int64_t (TY_APP that lowered to a
              * carrier handle), the existing int64_t path is correct. */
+            /* return-dispatched-sum-mint-in-constrained-instance-miscompiles
+             * (repro 2): NOT conditioned on type_uses_carrier_abi(body type).
+             * A base clone whose declared result is the bare class variable
+             * has no result_full_type, and its body constructs the
+             * representative monomorph BY VALUE (`(Option int)`, carrier-ABI
+             * false), so the conjunct made the header say `tur_adt_Option__int`
+             * while the dict slot (emit_stmt.c: result_kind -> int64) and the
+             * body's tail (ret_ctype fallback -> int64, heap-spilled) both say
+             * the carrier.  Any by-value aggregate body here is spilled at the
+             * tail, so the header is int64 whenever the body is one. */
             bool inst_method_struct_body =
                 fd->binding && fd->binding->name && fd->binding->name->name &&
                 strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
-                _body_c && strcmp(_body_c, "int64_t") != 0 &&
-                type_uses_carrier_abi(fd->body->type);
+                _body_c && strcmp(_body_c, "int64_t") != 0;
             /* M5 straddle (root cause C): a lifted lambda with no
              * result_full_type whose body's tail value comes from a
              * carrier-int64 producer (some/ok/err/none or an __inst_ method)
@@ -4100,10 +4113,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 ret_ctype = fn_ret_td ? fn_ret_td : emit_type_c_name(ctx, rft);
             } else if (fd->binding && fd->binding->name && fd->binding->name->name &&
                        strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
-                       fd->body && type_uses_carrier_abi(fd->body->type)) {
+                       fd->body && (fd->body->type.kind == TY_APP ||
+                                    fd->body->type.kind == TY_STRUCT ||
+                                    type_uses_carrier_abi(fd->body->type))) {
                 /* Direction (1): non-spec instance method, result_full_type
                  * absent.  Spill only when body codegen is by-value struct
-                 * (matching the signature fallback above). */
+                 * (matching the signature fallback above).  repro 2: a by-value
+                 * monomorph body (carrier-ABI false) is included -- the dict
+                 * slot is int64 regardless, so it must spill too. */
                 const char *_body_c2 = emit_type_c_name(ctx, fd->body->type);
                 if (_body_c2 && strcmp(_body_c2, "int64_t") != 0) {
                     ret_ctype = "int64_t";

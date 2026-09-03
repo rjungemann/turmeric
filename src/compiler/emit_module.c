@@ -6775,6 +6775,43 @@ void emit_owned_carrier_clear(const char *cname) {
         }
 }
 
+/* container-element-form-plan CE2 (read half): C temp names that hold a RAW
+ * Vec slot word -- the hoist temp of `vec-get` / `vec-pop!` / the
+ * `vec-data-get-checked__` core.  By default (the Option niche) a niche
+ * `(Option P)` element is stored in its slot as the payload pointer itself
+ * (CE_WORD), so when such a temp is bridged carrier->niche the value is
+ * already the niche form and must NOT be unboxed.  Keyed on the recorded
+ * value, never on the type: the same discipline as the owned-carrier and
+ * localvar tables above, and the reason a temp cannot be double-bridged. */
+static char   **g_slot_tab;
+static uint32_t g_slot_tab_n;
+static uint32_t g_slot_tab_cap;
+
+void emit_slot_word_mark(const char *cname) {
+    if (!cname) return;
+    for (uint32_t i = 0; i < g_slot_tab_n; i++)
+        if (strcmp(g_slot_tab[i], cname) == 0) return;
+    if (g_slot_tab_n == g_slot_tab_cap) {
+        uint32_t nc = g_slot_tab_cap ? g_slot_tab_cap * 2 : 64;
+        char **nt = (char **)realloc(g_slot_tab, nc * sizeof(char *));
+        if (!nt) return;
+        g_slot_tab = nt;
+        g_slot_tab_cap = nc;
+    }
+    g_slot_tab[g_slot_tab_n++] = strdup(cname);
+}
+
+bool emit_slot_word_is(const char *cname) {
+    if (!cname) return false;
+    /* The synthesized `vec-eq?` comparator's params (elab_typeclasses.c
+     * build_comparator_lambda, slot_words): the helper feeds them raw slot
+     * words, so they carry the mark by name. */
+    if (strncmp(cname, "__cmp_slot_", 11) == 0) return true;
+    for (uint32_t i = 0; i < g_slot_tab_n; i++)
+        if (strcmp(g_slot_tab[i], cname) == 0) return true;
+    return false;
+}
+
 void emit_localvar_reset(void) {
     for (uint32_t i = 0; i < g_lv_tab_n; i++) {
         free(g_lv_tab[i].cname);
@@ -6789,6 +6826,11 @@ void emit_localvar_reset(void) {
     g_own_tab = NULL;
     g_own_tab_n = 0;
     g_own_tab_cap = 0;
+    for (uint32_t i = 0; i < g_slot_tab_n; i++) free(g_slot_tab[i]);
+    free(g_slot_tab);
+    g_slot_tab = NULL;
+    g_slot_tab_n = 0;
+    g_slot_tab_cap = 0;
 }
 
 void emit_localvar_record_ctype(const char *cname, const char *ctype) {
@@ -6976,11 +7018,14 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                                                     || fd->body->type.kind == TY_STRUCT))
                     ? type_c_name(fd->body->type) : NULL;
                 /* Direction (1): mirror emit_fns.c. */
+                /* repro 2 (return-dispatched-sum-mint-in-constrained-instance-
+                 * miscompiles): mirror emit_fns.c -- no carrier-ABI conjunct; a
+                 * by-value aggregate body with no result_full_type is spilled
+                 * to the int64 dict slot at the tail, so the prototype is int64. */
                 bool inst_method_app_body =
                     fd->binding && fd->binding->name && fd->binding->name->name &&
                     strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
-                    _body_c && strcmp(_body_c, "int64_t") != 0 &&
-                    type_uses_carrier_abi(fd->body->type);
+                    _body_c && strcmp(_body_c, "int64_t") != 0;
                 /* M5 straddle (root cause C): mirror emit_fns.c -- a lifted
                  * lambda whose tail value is a carrier-int64 producer
                  * (some/ok/err/none or an __inst_ method) is dispatched through
@@ -14693,6 +14738,7 @@ int emit_program(Buf *out, const Expr *program) {
     for (uint32_t _i = 0; _i < ctx.n_sum_pending; _i++) free(ctx.sum_pending[_i]);
     free(ctx.sum_pending);
     free(ctx.sum_pending_types);
+    free(ctx.sum_pending_owned);
     for (uint32_t _i = 0; _i < ctx.n_vsp_pending; _i++) free(ctx.vsp_pending[_i]);
     free(ctx.vsp_pending);
     free(ctx.vsp_pending_types);
@@ -16128,6 +16174,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     for (uint32_t _i = 0; _i < ctx.n_sum_pending; _i++) free(ctx.sum_pending[_i]);
     free(ctx.sum_pending);
     free(ctx.sum_pending_types);
+    free(ctx.sum_pending_owned);
     for (uint32_t _i = 0; _i < ctx.n_vsp_pending; _i++) free(ctx.vsp_pending[_i]);
     free(ctx.vsp_pending);
     free(ctx.vsp_pending_types);

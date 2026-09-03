@@ -1,14 +1,44 @@
 ---
 title: Container Element Form (CE) -- per-monomorph element words in Vec
 category: Planning
-description: Extend per-monomorph specialization from container RECEIVERS (done, the typed-pointer producer slice) to container ELEMENT STORAGE, so a niche `(Option String)` element lands in the Vec slot as its 8-byte word instead of a heap carrier box. Scoped to Vec, inside `--enable=option-niche` (the form only diverges for niche elements, so no new flag). The soundness invariant, the one chokepoint, a census phase before any codegen, and the never-silent rule for the erased residue.
+description: Extend per-monomorph specialization from container RECEIVERS (done, the typed-pointer producer slice) to container ELEMENT STORAGE, so a niche `(Option String)` element lands in the Vec slot as its 8-byte word instead of a heap carrier box. Scoped to Vec; the form only diverges for niche elements (so no new flag), and it is the default since the niche graduated on 2026-09-03. The soundness invariant, the one chokepoint, a census phase before any codegen, and the never-silent rule for the erased residue.
 ---
 
 # Container Element Form (CE)
 
-**Status: proposal.** The refinement of the "monomorphization dependency" the
-[option-niche graduation hold](sr3-option-niche-plan.md) points at, sketched
-2026-08-28 in that plan's container-boxing section. Nothing here is built.
+**Status: CE0, CE1 and CE2 BUILT (2026-09-03) and DEFAULT since the option
+niche graduated the same day; CE3 mostly moot, CE4 deferred, CE5 done for
+the container row.** The word convention, the TUR-E0714 backstop and the
+erased-closure residue below are default-path facts now. The refinement of the "monomorphization
+dependency" the [option-niche graduation hold](sr3-option-niche-plan.md)
+points at, sketched 2026-08-28 in that plan's container-boxing section.
+
+**The exit gate is met.** The container row that read parity before CE2
+(`2e6 (Option String) vec elements: 0.080 s / 79.8 MB` both ways) now reads:
+
+| representation | wall | peak RSS |
+|---|---:|---:|
+| default (16 B by-value, boxed per element) | 0.081-0.096 s | 79.7 MB |
+| niche, CE_WORD slot | 0.018-0.019 s | 17.8 MB |
+
+Niche allocations per element are zero -- 2e6 x 8 B of slots is the whole
+RSS delta over the baseline. Same probe shape as the graduation measurement
+(one shared String payload, -O2, three runs each).
+
+**What CE2 found on the way, and fixed.** The class-2 (spec) path was
+already WRONG under the experiment, on both halves: a generic
+`(defn push-it [A] [v : (Vec A) x : A] (vec-push! v x))` specialized for
+`(Option String)` heap-promoted the niche pointer into a `void **` cell
+(the escaping bridge was asked at the still-unresolved tyvar, so its niche /
+heap delegation never fired) and then the by-value-spec-param arm boxed the
+cell pointer a second time, while the matching `get-it` spec did no
+unwrapping at all -- so the first element read back blank. CE0's
+"store/read agree" was measured only at class 1 and at `vec-eq-loop`'s read.
+The same push spec failed to BUILD on the default path (a by-value
+`(Option String)` element) for the same double-bridge reason; resolving the
+bridge type inside the spec and gating the second arm fixed both. The read
+half of the default-path wrapper is a separate pre-existing defect, filed as
+[generic-vec-read-wrapper-spec-returns-carrier-word](../reported/generic-vec-read-wrapper-spec-returns-carrier-word.md).
 
 ## The problem, in one sentence
 
@@ -130,6 +160,21 @@ niche-represented element through a fully erased container access -- ascribe
 the receiver"), emitted only where CE0 says the shape is reachable.
 *Validation:* errors fixture; suite green with the experiment off AND on
 (the function restates current behavior until CE2 consumes it).
+**BUILT 2026-09-03.** `container_elem_form(Type)` (types.c) is defined AS
+`repr_of(REPR_POS_CONTAINER_ELEM) == REPR_BOXED_AGG ? CE_BOX : CE_WORD`, so
+the two cannot drift. The Vec element-store discriminator is the CE0
+census's, kept as a decision (`emit_call_vec_elem_store`, emit_expr.c): the
+callee declares `(Vec A)` and the slot as that `A`; class 1/2/3 as CE0
+defines them. The class-3 diagnostic is **TUR-E0714**, raised at emit when
+the STORED VALUE's resolved type is a niche option and the receiver's
+element is still erased at the site (`tur explain TUR-E0714`). It is the
+backstop the census said it would be: no in-tree program reaches it, a
+concrete niche value unifies the receiver's element at any typed site, and a
+raw-`:int` receiver is rejected by the checker before emit
+(`(vec-push! v x)` with `v : int` is TUR-E0001) -- so no errors fixture can
+be written for it from source today. It stays as the guard for a future
+erased route (an existential element, a helper the checker admits), where
+the silent alternative is two conventions in one vec.
 
 **CE2 -- Vec store/read under the experiment.** Store: the arg-loop /
 ctor-loop / escaping-bridge sites that currently materialize the carrier for
@@ -143,6 +188,39 @@ first-element bug, where two store sites disagreed within one expression).
 `option-niche-crossings` extended with word-form assertions; the seam
 harness; the container benchmark re-run -- the exit gate is the parity row
 BREAKING (niche allocations per element drop to zero).
+**BUILT 2026-09-03, one commit, both halves through the ONE crossing
+they already shared.** No `vec-push-word__` twin was needed: every niche
+store and read already funnels through `emit_carrier_bridge`'s niche row
+(emit_core.c), so the convention lives there.
+
+- *Store.* The argument loop flags a Vec element-store argument whose
+  resolved element is a CE_WORD niche option (`EmitCtx.ce_word_store_sink`,
+  set after the argument's own emission and restored before the next); the
+  niche row then hands the slot the payload word -- `(int64_t)(intptr_t)p`
+  -- instead of `tur_box_some(p)`. An inline-C producer's box (recorded
+  int64 spelling, `(vec-push! v (mk-c 1))`) is unboxed with
+  `tur_opt_value_checked` and released, since the inline-C contract makes it
+  the caller's. Every non-container crossing keeps the box, so an erased
+  READER (`some?` base) still meets the tagged layout.
+- *Read.* The call hoist marks the temp of a raw slot read (`vec-get`,
+  `vec-pop!`, `vec-data-get-checked__` -- the latter is `vec-get-byval`'s
+  core, which covers the spec path) in a side table
+  (`emit_slot_word_mark`); the niche row's carrier->niche direction casts a
+  marked temp instead of unwrapping it. `vec-of`, an unascribed read into a
+  parameter, a match scrutinee, a struct field and `vec-pop!` all reach the
+  same row.
+- *Keys.* Both halves are keyed on the value (a side-table mark, a
+  recorded spelling) or on the sink (the flag), never on a type alone, per
+  the Risks section; a double-bridge is unrepresentable because the marked
+  temp is consumed by exactly one bridge.
+
+*Validation:* `tests/fixtures/option-niche-vec-word` (in the seam
+population) asserts the word form at the language level -- a raw slot read
+equals the unwrapped String's address, None is 0, the generic push/get
+specs agree with the direct calls, the inline-C producer is unboxed into the
+slot, and vec-of / pop / match / field / parameter reads all agree.
+`option-niche-crossings` still passes with zero `tur_box_some` at its push
+sites. Seam harness 10/10.
 
 **CE3 -- higher-order and ownership.** `vec-eq?` (raw-comparator path),
 Show/Eq instance loops, `vec-free` / `vec-pop!`: CE_WORD elements are
@@ -150,6 +228,27 @@ borrowed handles (nothing to free; ownership rules match today's heap
 elements), CE_BOX unchanged. *Validation:* leak-check fixture
 (`tests/run-leak-check.sh` marker) for a vec of niche options; vec-eq/show
 fixtures under the flag.
+**Mostly moot after CE2 (2026-09-03).** Ownership needed no change:
+`vec-free` / `vec-pop!` / `vec-drop-last!` fold `tur-vec-elem-wide?` from
+`repr_of`'s container answer, which already reports a niche element as
+HEAP_PTR (not boxed), so they never freed a per-element box -- under the old
+convention that was a LEAK of every carrier box the store minted, and under
+CE_WORD there is nothing to free, which is exactly what the folds already
+do. `vec-eq-loop` / `vec-show-loop` read through `vec-get` + ascription in a
+class-2 clone and take the marked-temp path. What remains for CE3 is the
+inline-C raw-comparator `vec-eq?` handing slot words to an ERASED closure
+(one compiled against the int64 carrier, expecting a box). The graduation
+(2026-09-03) split that residue in two. The SYNTHESIZED comparator -- what
+`(eq? v w)` on a `(Vec (Option String))` lowers to -- is bridged: the
+constrained-Eq synthesizer names its params `__cmp_slot_a`/`__cmp_slot_b`
+and `emit_slot_word_is` recognises the prefix, so the value-keyed bridge
+reinterprets the word (pinned by `option-niche-vec-closure-cmp`, seam
+population). A USER comparator with untyped params that ascribes the word
+itself, `(fn [a b] (eq? (:: a (Option String)) ...))`, is the residue the
+diagnostic cannot see and the bridge cannot key: filed as
+[erased-closure-param-over-niche-vec-slot-reads-box](../reported/erased-closure-param-over-niche-vec-slot-reads-box.md);
+the fix on the user's side is to type the params, which the same fixture
+pins.
 
 **CE4 -- decide Map/Set/HAMT by evidence, not momentum.** Keys need
 hash/cmp over the word and the HAMT's own boxing story; the census from CE0
@@ -159,6 +258,9 @@ defer -- Vec was 100% of the measured parity cost.
 **CE5 -- fold the result into the graduation calculus.** Re-run the
 [measurement](sr3-option-niche-plan.md) container row; update the graduation
 section. This plan does not itself argue for the flip.
+**Container row re-measured 2026-09-03** (table at the top); the
+graduation section in sr3-option-niche-plan.md records it. The flip is
+still not argued here.
 
 ## Non-goals
 

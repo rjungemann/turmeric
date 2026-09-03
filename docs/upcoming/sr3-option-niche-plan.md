@@ -6,8 +6,12 @@ description: An `(Option P)` over a non-nullable pointer carried AS that pointer
 
 # SR3 slice B -- Option niche filling
 
-**Status:** prototype, behind `--enable=option-niche`. Introduced 0.41.0,
-`expires_at` 0.44.0 (advisory -- it never blocks a release).
+**Status:** GRADUATED -- default-on since 2026-09-03. Introduced 0.41.0 as
+`--enable=option-niche`; the name is a `TUR-W0063` no-op for one minor line.
+`TUR_OPTION_NICHE=0` restores the tagged 16-byte form for bisection, and
+`tests/run-option-niche-seam.sh` keeps that OFF path green (canary plus the
+eligible population, now including the generic-helper and closure-comparator
+shapes).
 
 Slice B of [sum-representation-plan.md](sum-representation-plan.md) SR3. Slice A
 (nullary `None` as the null carrier) shipped default-on 2026-08-27. This is the
@@ -171,6 +175,7 @@ representation is in the loop):
 |---|---|---|---|
 | direct positions (construct + `some?` + branch) | 11-14 ms | 2-3 ms | **~5x faster** |
 | 2e6 `(Option String)` vec elements | 0.080 s / 79.8 MB | 0.071 s / 79.8 MB | **parity** |
+| ... the same row after CE2 (2026-09-03) | 0.081-0.096 s / 79.7 MB | 0.018-0.019 s / 17.8 MB | **4.4x less memory, ~4.5x faster** |
 
 The direct-position number carries a caveat -- at -O2 a one-word value inlines
 and registers where a 16-byte aggregate does not, so a synthetic loop
@@ -220,11 +225,14 @@ used to carry; closed, pinned by
    a release-notes entry and a deliberate decision, not a default flipped in
    passing.
 3. **The measurement removes the urgency.** Filed 2026-08-30 as
-   [option-niche-container-elements-box-at-parity](../reported/option-niche-container-elements-box-at-parity.md).
-   Parity at container elements and
-   a direct-position win that is real but synthetic-loop-amplified is not the
-   SR2a shape (3.6x + 71x RSS on real workloads); it is closer to the SR4
-   shape, which was measured and deliberately NOT defaulted.
+   [option-niche-container-elements-box-at-parity](../archive/option-niche-container-elements-box-at-parity.md)
+   and **resolved 2026-09-03 by CE1/CE2**
+   ([container-element-form-plan](container-element-form-plan.md)): a niche
+   element now lands in its Vec slot as the payload word, and the container
+   row reads 17.8 MB against 79.7 MB (table above). The direct-position win
+   was already real; the container win is now real too, and it is not
+   synthetic-loop-amplified -- it is one malloc per element that no longer
+   happens. This hold reason no longer holds.
 
 **The flip becomes right when:** the seam harness has run quiet across a
 release cycle (0.41), the `Some(NULL)` break has a release-notes entry (it
@@ -233,6 +241,35 @@ does, since 2026-09-02 -- `CHANGELOG.md` `[Unreleased]`), and
 container elements stop boxing under EITHER representation, at which point the
 niche's 8-byte word is what lands in the slot and the container row stops
 being parity.  `expires_at` 0.44.0 leaves room for exactly that sequence.
+
+**2026-09-03:** the third condition landed without waiting for end-to-end
+monomorphization -- CE2 puts the word in the slot at every decidable site
+and refuses (TUR-E0714) the one erased shape that cannot decide.  Two of
+the three conditions are now met; what is left is the soak (condition 1),
+and the CE2 commit is itself a data point for it: it found the class-2
+(spec) path had been storing a double-wrapped element and reading it back
+unwrapped -- a silent wrong answer that had been there since the unshelving,
+caught by a two-line generic helper no fixture had written.
+
+**GRADUATED 2026-09-03.** The flip was taken without the release-cycle soak
+of condition 1, trading it for two things: the seam population now carries
+the shapes that had been finding the defects (a generic `push-it`/`get-it`
+spec in `option-niche-vec-word`; a typed `vec-eq?` comparator, a let-bound
+slot word and `(eq? v w)` through the synthesized comparator in
+`option-niche-vec-closure-cmp`), and the seam harness inverted -- it runs
+that population with `TUR_OPTION_NICHE=0` so the bisection hatch cannot rot
+the way an unused flag does. Writing the closure-comparator shape found one
+more niche crossing (the synthesized `(fn [__cmp_a __cmp_b] ...)` comparator
+unboxed a slot word as a carrier box; fixed by naming its params as slot
+words) and one defect that was NOT the niche's: the `Eq[Option]` /
+`Eq[Result]` instance bodies compared their `(Some vx)` binders through
+`Eq[int]` on both paths (fixed by ascribing the binders to the class var).
+One residue is filed rather than bridged --
+[erased-closure-param-over-niche-vec-slot-reads-box](../reported/erased-closure-param-over-niche-vec-slot-reads-box.md):
+an UNTYPED user comparator param ascribed back to the element reads the slot
+word as a box, because an erased closure param carries no convention for
+the value-keyed bridge to read. The `Some(NULL)` entry moved under
+`[Unreleased]` `### Changed` as the flip entry.
 
 ## The container-boxing story -- sketched 2026-08-28
 
@@ -315,7 +352,7 @@ container parity row breaking.
    more (the `vec-of` first-element heap-promotion and the `vec-push!`
    double-box); captures clean, rest args unreachable. One ADJACENT finding
    stays open on the DEFAULT path --
-   [inline-c-carrier-producer-byval-container-element](../reported/inline-c-carrier-producer-byval-container-element.md)
+   [inline-c-carrier-producer-byval-container-element](../archive/inline-c-carrier-producer-byval-container-element.md)
    (a loud compile error, not a wrong answer; the niche path already handles
    the shape, which is the fix template).
 2. ~~Static enforcement of `:non-null`~~ -- **closed 2026-08-28.** A literal 0

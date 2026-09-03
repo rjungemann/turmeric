@@ -191,13 +191,17 @@
 ;;; Eq [Option] -- equality using the inner type's Eq instance.
 ;; TC1-17: Phase PTC4 -- constrained Eq instance for Option[A].
 ;; SR2b: match on the sum instead of reading record fields.
+;; The payload binders are ascribed to the class var so the inner `eq?`
+;; re-dispatches per ABI specialization: a bare binder is typed by the
+;; representative (int) at elaboration, and the spec then pointer-compared
+;; String/struct payloads (`(eq? (some "aa") (some "aa"))` said false).
 
 (definstance Eq [Option]
   [(Eq A)]
   (eq? [x y]
     (match x
       (Some vx)
-      (match y (Some vy) (eq? vx vy) (None) false)
+      (match y (Some vy) (eq? (:: vx A) (:: vy A)) (None) false)
       (None)
       (none? y))))
 ;; ---------------------------------------------------------------------------
