@@ -118,11 +118,10 @@ test.describe('Try Turmeric smoke tests', () => {
             if (navigator.serviceWorker) {
                 navigator.serviceWorker.getRegistrations = async () => [];
             }
-            // reload is non-configurable on some engines; override via defineProperty.
-            Object.defineProperty(window.location, 'reload', {
-                configurable: true,
-                value: () => { window.__reloaded = true; },
-            });
+            // `location.reload` is non-configurable in current Chromium, so it
+            // cannot be stubbed; the app reloads through `hardReload`, which
+            // defers to this hook when a test installs one.
+            window.__turiReload = () => { window.__reloaded = true; };
         });
 
         await page.locator('#more-btn').click();

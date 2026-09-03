@@ -4381,6 +4381,17 @@ async function forceUpdatePWA() {
         console.warn('Force update failed:', err);
     }
     // Reload from the network now that no SW/cache can serve stale assets.
+    hardReload();
+}
+
+/**
+ * Reload the page.  The one indirection exists for the smoke test: current
+ * Chromium makes `location.reload` non-configurable, so a test cannot stub
+ * it -- it installs `window.__turiReload` instead and observes the intent
+ * without navigating away.
+ */
+function hardReload() {
+    if (typeof window.__turiReload === 'function') { window.__turiReload(); return; }
     window.location.reload();
 }
 

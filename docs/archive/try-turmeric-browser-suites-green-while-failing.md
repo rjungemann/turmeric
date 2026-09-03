@@ -4,7 +4,7 @@
 check mark is not evidence the browser suites passed, and one of the failures
 it is currently hiding may be a real mobile product bug.)
 
-**Status:** OPEN. Filed 2026-09-01 while investigating the red
+**Status:** RESOLVED 2026-09-02 (see the end; the mobile WebKit reload failure is now its own open report). Filed 2026-09-01 while investigating the red
 `tur_reported_index_lint` on
 [run 33460242737](https://github.com/rjungemann/turmeric/actions/runs/33460242737)
 (that lint failure is separate and already fixed). Found by reading the job
@@ -270,3 +270,42 @@ out of `web/main.js` in the tree. **No local browser run was attempted**, so
 the triage in "the five failures" is a reading of the evidence and not a
 reproduction; item 4+5 in particular is explicitly unattributed. Anyone picking
 this up should reproduce before fixing.
+
+## Resolution (2026-09-02)
+
+Both fix directions, plus the three test-side failures:
+
+1. **The report is always uploaded.** The step is `if: ${{ !cancelled() }}`
+   (with `if-no-files-found: ignore`), so the artifact exists precisely when
+   a suite failed -- the case `failure()` could never see behind
+   `continue-on-error`.
+2. **The browser suites have `/ci` rows.** Each non-blocking suite step has
+   an `id` and writes Playwright JUnit (`--reporter=list,junit`,
+   `PLAYWRIGHT_JUNIT_OUTPUT_NAME`); `tools/ci/collect-playwright-timings.py`
+   aggregates each file into ONE row shaped like the ctest rows
+   (`web_desktop` / `web_mobile`, with `passed` / `failed` / `skipped` /
+   `discovered` like the fixture suites), uploaded as `timings-web`, and
+   `publish-timings` now `needs: [test, jit, web-smoke]`. `status` is
+   honest: `fail` when any test failed even though the job stayed green;
+   `skip` with a reason when the suite never produced JUnit (the WebKit
+   download case), so the skip ledger sees it. A "Report browser suite
+   outcomes" step writes the three outcomes to the job summary and raises a
+   `::warning::` annotation for a failed non-blocking suite, so the next
+   regression announces itself on the run page.
+3. **Failures 1 + 2** (`minimap.spec.js`): the selectors are scoped to
+   `#editor .monaco-editor ...`; the REPL prompt is a second Monaco instance.
+4. **Failure 3** (`smoke.spec.js` Force update): `location.reload` is
+   non-configurable in current Chromium, so the app reloads through a small
+   `hardReload()` that defers to `window.__turiReload` when a test installs
+   one; the spec installs it instead of `Object.defineProperty`.
+5. **Failures 4 + 5** (mobile/WebKit "Failed to load WASM" after
+   `page.reload()`) are **not** diagnosed here -- there is no WebKit in this
+   environment. They have their own report,
+   `docs/reported/try-turmeric-mobile-reload-fails-wasm-init.md`, and the
+   always-uploaded report plus the `web_mobile` row are what make triaging
+   it cheap.
+
+Not verified end to end: the browser job needs Emscripten and a Playwright
+install, neither available locally. The specs and `main.js` pass
+`node --check`, the collector was exercised on a synthetic Playwright JUnit
+file (fail / skip aggregation, a missing file), and the workflow parses.
