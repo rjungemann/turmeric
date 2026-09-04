@@ -740,6 +740,15 @@ void emit_owned_carrier_clear(const char *cname);
 /* CE2: raw Vec slot-word temps (see emit_module.c). */
 void emit_slot_word_mark(const char *cname);
 bool emit_slot_word_is(const char *cname);
+/* CE2: true when `e` is a call to one of the container reads that hands back
+ * the RAW slot word -- the value the slot holds verbatim, which for a CE_BOX
+ * element is the element's heap-box pointer and for a CE_WORD element is the
+ * value itself.  One fact, consulted wherever such a word has to be recognised
+ * before it is used as if it were the element: the hoist that marks the temp
+ * (emit_expr.c) and the spec return bridge (emit_fns.c).  `vec-get-byval` is
+ * deliberately absent -- its own body already ascribes the word back to the
+ * element, so it hands back the element, not the slot. */
+bool emit_call_is_raw_slot_read(const struct Expr *e);
 /* S1 (jit-engine-plan section 4): true when an emitted C type NAME denotes a
  * scalar -- any pointer, or one of the primitive/stdint spellings the emitter
  * produces.  Anything else (a struct typedef such as `Option__int` or

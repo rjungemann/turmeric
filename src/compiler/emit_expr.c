@@ -4731,13 +4731,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * payload word in the slot).  Keyed on the value, like every other
      * side-table fact; inert for a non-niche element, whose bridge rows never
      * consult the mark. */
-    if (e->kind == EX_CALL && e->as.call_.fn_binding &&
-        e->as.call_.fn_binding->name && e->as.call_.fn_binding->name->name) {
-        const char *rn = e->as.call_.fn_binding->name->name;
-        if (strcmp(rn, "vec-get") == 0 || strcmp(rn, "vec-pop!") == 0 ||
-            strcmp(rn, "vec-data-get-checked__") == 0)
-            emit_slot_word_mark(tmp);
-    }
+    if (emit_call_is_raw_slot_read(e)) emit_slot_word_mark(tmp);
     /* inline-c-option-carrier-box-leaks: mark a call temp that holds a carrier
      * box an inline-C body malloc'd, so the carrier->concrete bridge can free
      * it after copying the contents out.

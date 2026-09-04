@@ -536,15 +536,46 @@ static bool catch_box_tail_sole_owned(const Expr *fnbody, const Expr *e) {
  * #{Construct} tail (`ok`/`err`/`some`/`none`) too -- is what keeps this from
  * mis-firing on the ordinary Result constructors the M4c/M5 branches own. */
 static bool fn_return_needs_carrier_result_bridge(EmitCtx *ctx, const FnDef *fd,
+                                                  const Expr *fn_e,
                                                   const char *ret_ctype,
                                                   bool ret_is_int64_carrier) {
-    (void)ctx;
     if (ret_is_int64_carrier || !ret_ctype || !fd || !fd->body) return false;
     if (fd->body->type.kind == TY_NEVER) return false;
     if (strchr(ret_ctype, '*') || strcmp(ret_ctype, "int64_t") == 0 ||
         strcmp(ret_ctype, "void") == 0)
         return false;
-    return expr_tail_is_catch_box(fd->body, fd->body);
+    if (expr_tail_is_catch_box(fd->body, fd->body)) return true;
+    /* generic-vec-read-wrapper-spec-returns-carrier-word: a generic wrapper
+     * whose tail is a RAW container read --
+     *
+     *   (defn get-it [A] [v : (Vec A) i : int] : A (vec-get v i))
+     *
+     * -- specialized to a CE_BOX element.  `vec-get` hands back the slot word,
+     * which for a boxed by-value element is the element's heap-box pointer, so
+     * the spec's tail is an `int64_t` where its declared result is the element
+     * aggregate: `incompatible types when returning type 'int64_t'`, a hard cc
+     * error for a shape `tur check` accepts.  A direct
+     * `(:: (vec-get v 0) (Option Pt))` at a concrete site gets the box readback
+     * from the ascription bridge; the spec's return position had no
+     * counterpart.  Route it through the same bridge, which emits the same
+     * NULL-guarded deref the concrete site gets.
+     *
+     * A CE_WORD element (a niche option, the default since 2026-09-03) is
+     * excluded and must be: there the slot word IS the value and the readback
+     * would unbox a box that was never there -- the same distinction the
+     * carrier->concrete bridge's own niche row draws, asked here about the
+     * DECLARED result rather than about a marked temp. */
+    if (emit_call_is_raw_slot_read(fd->body)) {
+        /* The DECLARED result, never the body's type: `vec-get`'s result is
+         * already lowered to the int64 carrier, so `fd->body->type` reads back
+         * as plain `int` and would answer this question about the wrong type. */
+        if (!fn_e || fn_e->type.kind != TY_FN ||
+            !fn_e->type.as.fn.result_full_type)
+            return false;
+        Type rt = emit_resolve_type(ctx, *fn_e->type.as.fn.result_full_type);
+        return repr_of(&rt, REPR_POS_CONTAINER_ELEM) == REPR_BOXED_AGG;
+    }
+    return false;
 }
 
 /* macos-int-conversion-carrier-pointer-straddles (case B): true when the
@@ -4443,7 +4474,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             buf_printf(file, "return (%s)(intptr_t)%s;\n",
                        ctx->current_fn_ret_ctype, ret_val);
         } else if (fn_return_needs_carrier_result_bridge(
-                       ctx, fd, ret_ctype, ret_is_int64_carrier)) {
+                       ctx, fd, e, ret_ctype, ret_is_int64_carrier)) {
             /* catch-unwind-byvalue-result-return-mismatch: the body value is the
              * int64 carrier (a heap Result box, e.g. a let-bound catch-unwind
              * result returned directly) but the declared return is the by-value

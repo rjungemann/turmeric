@@ -6812,6 +6812,15 @@ bool emit_slot_word_is(const char *cname) {
     return false;
 }
 
+bool emit_call_is_raw_slot_read(const Expr *e) {
+    if (!e || e->kind != EX_CALL) return false;
+    const Binding *fb = e->as.call_.fn_binding;
+    if (!fb || !fb->name || !fb->name->name) return false;
+    const char *n = fb->name->name;
+    return strcmp(n, "vec-get") == 0 || strcmp(n, "vec-pop!") == 0 ||
+           strcmp(n, "vec-data-get-checked__") == 0;
+}
+
 void emit_localvar_reset(void) {
     for (uint32_t i = 0; i < g_lv_tab_n; i++) {
         free(g_lv_tab[i].cname);

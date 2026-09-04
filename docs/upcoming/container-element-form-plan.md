@@ -37,8 +37,13 @@ unwrapping at all -- so the first element read back blank. CE0's
 The same push spec failed to BUILD on the default path (a by-value
 `(Option String)` element) for the same double-bridge reason; resolving the
 bridge type inside the spec and gating the second arm fixed both. The read
-half of the default-path wrapper is a separate pre-existing defect, filed as
-[generic-vec-read-wrapper-spec-returns-carrier-word](../reported/generic-vec-read-wrapper-spec-returns-carrier-word.md).
+half of the default-path wrapper was a separate pre-existing defect, filed as
+[generic-vec-read-wrapper-spec-returns-carrier-word](../archive/generic-vec-read-wrapper-spec-returns-carrier-word.md)
+and resolved 2026-09-04: a spec whose declared result is a CE_BOX element and
+whose tail is a raw container read now takes the same carrier->concrete return
+bridge a catch-box tail already did, so it emits the readback the concrete
+ascription site has always emitted. CE_WORD is excluded, which is what keeps
+the niche wrapper -- correct since CE2 -- correct.
 
 ## The problem, in one sentence
 
