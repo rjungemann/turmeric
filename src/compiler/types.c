@@ -3826,8 +3826,14 @@ bool type_is_byvalue_adt_product(Type t) {
  * by-value ADT-app value boxes into / unboxes out of a carrier ctor field
  * slot via emit_type_is_byvalue_adt).  The M7 by-value-HKT carriers
  * (`ReF`/`ExprF`) carry a residual tyvar field and are excluded by the
- * predicate, so this never touches that machinery (B4 remains separate). */
-static const bool g_adt_app_byvalue = true;
+ * predicate, so this never touches that machinery (B4 remains separate).
+ *
+ * The `g_adt_app_byvalue` bool this paragraph used to introduce is GONE
+ * (2026-09-04).  It was `static const bool ... = true`, written nowhere and read
+ * once as `if (!g_adt_app_byvalue) return false;` -- a gate frozen open when P2-P4
+ * went live, which the compiler had been folding away ever since.  The prose is
+ * kept because it still describes the predicate below; only the dead bit is
+ * removed. */
 
 /* SR2a (docs/upcoming/sum-representation-plan.md SR2): a MULTI-VARIANT
  * parametric sum monomorph (`(Opt2 int)`, and above all `(Option int)` /
@@ -3849,7 +3855,6 @@ static bool sr2_app_sum_byvalue(void) {
 }
 
 bool adt_app_is_byvalue_product(Type t) {
-    if (!g_adt_app_byvalue) return false;
     AdtDef *def = NULL;
     Type args[16];
     uint8_t n_args = 0;
