@@ -22,6 +22,14 @@ All notable changes to Turmeric are documented here.
   corpus replay are unchanged. Guide:
   `docs/guides/refinement-solver-internals-guide.md`.
 
+- **The refinement solver is answerable from the browser** (SX8c):
+  `turi_smt_check` runs an SMT-LIB2 script through the same reader, chain and
+  bounded model search as `tur smt`, including the `(push)`/`(pop)` assertion
+  stack, and returns JSON. The solver was already in the WASM module -- the
+  refine sources are core sources -- so this exposes what was shipping rather
+  than adding weight. Read-only: nothing reachable from it can elide a runtime
+  check.
+
 ### Fixed
 
 - **The internals guide's solver documentation was a release cycle stale.**

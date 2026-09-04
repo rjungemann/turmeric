@@ -642,6 +642,29 @@ Two limits, both deliberate:
 A script that contains no `(check-sat)` at all is still decided once at the end,
 which is what the corpus benchmarks rely on.
 
+#### From the browser -- `turi_smt_check`
+
+The solver is already in the WASM module (`compiler/refine_*.c` are
+`TUR_CORE_SOURCES`), so the playground has been shipping S0-S3 all along.
+`turi_smt_check` is the door onto it:
+
+```js
+const json = Module.ccall('turi_smt_check', 'string', ['string'], [script]);
+// {"schema":0,"results":[{"answer":"unsat","decided_by":"S2 (arithmetic)"}]}
+```
+
+Same reader, same chain, same bounded model search and same push/pop semantics
+as `tur smt` -- two doors onto one solver should not disagree. One `results`
+entry per `(check-sat)` in script order; a `sat` entry carries its `model`
+inline (the witness belongs with the answer, so nothing has to ask twice). A
+script outside the fragment returns an `error` key and an **empty** `results`
+array -- refused whole, never partially parsed. `schema` is 0 while the shape is
+unstable, matching `--dump-refine=json`.
+
+The result is malloc'd; free it from JS with `Module._free`. Nothing reachable
+from this entry point touches elaboration or discharge, so no answer it gives
+can elide a runtime check.
+
 The JSON dump carries, per obligation: source location, the predicate as
 written, the verdict, which stage decided it, whether the RT7 memo answered it,
 the counterexample when there was one, which caps bit **for that obligation**,

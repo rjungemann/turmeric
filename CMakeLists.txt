@@ -1192,6 +1192,14 @@ add_test(
 # stdlib from the cwd-relative "stdlib" root, mirroring the MEMFS mount.
 # The interpreter env's closures/natives are process-lifetime by design, so
 # leak detection is off, matching the other turi-driving harnesses.
+# SX8c: turi_smt_check, the playground's door onto the refinement solver.
+add_test(
+  NAME tur_wasm_glue_smt_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_wasm_glue_smt_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_wasm_glue_smt_unit PROPERTIES TIMEOUT 120)
+
 add_test(
   NAME tur_wasm_glue_lang_unit
   COMMAND "${CMAKE_BINARY_DIR}/tur_wasm_glue_lang_unit"

@@ -1558,18 +1558,64 @@ Release and the ASan Debug build.
 `(get-unsat-core)` wants the 3.7 conflict explanation and `(get-proof)` wants
 the certificate; both are SX6b-shaped and parked behind it.
 
-**SX8c -- in-language and playground access.**
+**SX8c -- in-language and playground access. HALF LANDED 2026-09-04.**
 
-- A compile-time API for the 3.6 search layer: expose the discharge seam to
+- ~~A compile-time API for the 3.6 search layer: expose the discharge seam to
   Turmeric compile-time code as `(solver/check hyps goal)` returning
-  valid/invalid/unknown plus model. This is not extra work on top of SX7 --
-  it *is* the seam SX7's Turmeric-side prototype needs, named and documented.
-  Read-only by construction: per 3.7 nothing reachable from this API can
-  elide a check; interrogation proposes, the C chain decides.
-- A WASM export (`turi_smt_check` in `src/web/wasm_glue.c`, next to
-  `turi_doc_lookup`) so the playground can answer queries -- the "static
-  checking at zero download cost" story already ships the solver to the
-  browser; this makes it visible there.
+  valid/invalid/unknown plus model.~~ **NOT BUILT, and deliberately: it has no
+  consumer and it carries an unmade design decision.** Its own justification
+  here is that it "*is* the seam SX7's Turmeric-side prototype needs" -- and
+  SX7 is item 6 of the recommended order, marked "deferrable indefinitely",
+  with nobody having started it. Building a seam to fit a prototype that does
+  not exist is how a surface gets shaped wrong and then has to be kept.
+
+  The undecided part is the signature, not the plumbing. `hyps` and `goal` as
+  written imply TURMERIC-LEVEL terms, and there is no Turmeric representation
+  of a `VCTerm` -- the only translation into one that exists is the SMT-LIB2
+  reader, from text. So the API is either a new term-building surface (real
+  design work, and SX7 is the only thing that could say what shape it wants)
+  or it is `(solver/check "<smtlib>")`, which is the string door below bound as
+  an interpreter native -- cheap, but not what this bullet asks for, and
+  calling it done would be overclaiming. Left for SX7 to drive.
+
+- **A WASM export -- `turi_smt_check` in `src/web/wasm_glue.c`, next to
+  `turi_doc_lookup`. LANDED.** The premise checked out: `compiler/refine_*.c`
+  are already in `TUR_CORE_SOURCES` (src/CMakeLists.txt:199-208), so every
+  browser session has been shipping S0..S3 all along with no way to see it.
+
+  The semantics are `tur smt`'s to the letter -- the same SX8b session reader
+  (so `(push)`/`(pop)` scope assertions and each `(check-sat)` is answered
+  where it appears), the same chain in the same order, the same bounded model
+  search, and the same "a script with no `(check-sat)` is decided once at the
+  end". Two doors onto one solver that disagreed would be a second solver
+  wearing the first one's name, and the browser is exactly where nobody would
+  notice. Returns JSON (`{"schema":0,"results":[...]}`, `schema` 0 while
+  unstable, matching `--dump-refine=json`); a script outside the fragment gets
+  an `error` key and an EMPTY `results` array -- refused whole, never partially
+  parsed. Read-only as the spec requires: nothing reachable from it touches
+  elaboration or discharge, so no answer can elide a runtime check.
+
+  **Tested natively, which is the point.** `tests/wasm_glue_smt_unit.c` (ctest
+  `tur_wasm_glue_smt_unit`) links `libturi_wasm` and calls the real function
+  against the real chain -- the `tur_wasm_glue_lang_unit` precedent, and the
+  reason a defect here does not have to be found by a person with an
+  Emscripten toolchain in the way of every diagnosis. Every case is one whose
+  CLI answer is pinned by `sx8a-tur-smt` or `sx8b-smt-push-pop`, so the two
+  doors are checked against each other rather than only against themselves.
+  It earned its keep immediately: the first version returned `Buf.data`
+  straight back as a C string, and `Buf` carries a length and does NOT
+  NUL-terminate -- valid JSON with heap garbage trailing the closing brace,
+  which in a browser panel would have read as a rendering bug.
+
+  **Not verified end to end, and this is the honest limit:** `emcc` is not
+  installed on the box this landed from, so the Emscripten link was never run.
+  The symbol is confirmed present (`nm libturi_wasm.a` shows
+  `T turi_smt_check`) and `_turi_smt_check` is added to `EXPORTED_FUNCTIONS`,
+  but the first person with a toolchain should run `just wasm` once. A wrong
+  name in that list fails the link loudly rather than silently, which is the
+  failure mode to expect if it is wrong at all. The `tur_refine_wasm` ctest
+  (which compiles the refine TUs under emcc) skips on this box for the same
+  reason.
 
 **Scope honesty, so the surface never overpromises:** `tur smt` accepts the
 corpus subset of SMT-LIB2 over `QF_UFLIA`/`QF_UFLRA`, answers `unknown`
