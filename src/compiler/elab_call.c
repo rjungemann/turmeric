@@ -4380,6 +4380,110 @@ bool any_expr_is_owned_temp(const Expr *x, int depth) {
     return false;
 }
 
+/* erased-closure-param-over-niche-vec-slot-reads-box.
+ *
+ * `vec-eq?` is the one stdlib helper that hands a user comparator RAW Vec slot
+ * words: its inline-C loop passes `a->data[i]` straight through.  Every other
+ * *-eq? helper (map/option/list/pair/result/set) hands over a value that has
+ * already crossed the carrier boundary, i.e. a box.  For a niche `(Option P)`
+ * element the slot holds the payload pointer ITSELF (container-element-form
+ * plan, CE2), so a comparator that ascribes its parameter back to the element
+ * type must REINTERPRET that word; unboxing it as a carrier box reads the
+ * payload's own first words as a tag and a value and answers silently wrong.
+ *
+ * The synthesized comparator (elab_typeclasses.c build_comparator_lambda) says
+ * this by naming its parameters `__cmp_slot_*` -- the prefix emit_slot_word_is
+ * recognises.  A user's lambda in that position is the same value reached the
+ * same way, so it earns the same mark.  Keep this predicate in step with
+ * build_comparator_lambda's `strcmp(sd->name, "Vec") == 0`: the two encode one
+ * fact, that Vec is the slot-word container. */
+static bool call_comparator_gets_slot_words(const Binding *fn_binding,
+                                            uint32_t argi) {
+    return fn_binding && fn_binding->name && fn_binding->name->name &&
+           argi == 2 && strcmp(fn_binding->name->name, "vec-eq?") == 0;
+}
+
+/* The element type of a `(Vec E)` argument, peeled back through whatever
+ * coercion the carrier-typed `v1 : int` parameter wrapped it in.  Returns a
+ * TY_NIL type when the argument is not a Vec application. */
+static Type comparator_vec_elem_type(const Expr *a) {
+    while (a && (a->kind == EX_ASCRIBE || a->kind == EX_REINTERPRET)) {
+        if (a->type.kind == TY_APP) break;
+        a = (a->kind == EX_ASCRIBE) ? a->as.ascribe_.inner
+                                    : a->as.reinterpret_.expr;
+    }
+    if (a && a->type.kind == TY_APP && a->type.as.app.arg)
+        return *a->type.as.app.arg;
+    return TYPE_NIL;
+}
+
+/* Mark a comparator LAMBDA's parameters as raw slot words, by renaming them
+ * into the `__cmp_slot_` namespace.  The name is the whole mechanism: emit
+ * derives the C parameter name from `binding->name` at the declaration and at
+ * every use, so definition and uses move together, and the mark is
+ * self-scoping -- unlike the value table, which is program-wide and would make
+ * every unrelated local named `a` look like a slot word.
+ *
+ * Unconditional for a lambda in this position, and ACCURATE rather than merely
+ * inert for a non-niche element: a `vec-eq?` comparator parameter is a raw slot
+ * word whatever the element type is.  The mark is consulted by exactly one
+ * carrier->concrete bridge row, whose sink form must be CE_WORD, so every other
+ * element type reaches byte-identical code.
+ *
+ * Returns true when the argument was a lambda literal (markable), false when it
+ * is a name -- a named function is elaborated once and may also be called with
+ * genuine boxes, so it cannot carry this mark and gets the diagnostic instead. */
+static bool mark_comparator_slot_word_params(Elab *e, Expr *arg) {
+    Expr *inner = arg;
+    while (inner && (inner->kind == EX_ASCRIBE || inner->kind == EX_FN_TO_FAT))
+        inner = (inner->kind == EX_ASCRIBE) ? inner->as.ascribe_.inner
+                                            : inner->as.fn_to_fat_.inner;
+    if (!inner) return false;
+    FnDef *fd = NULL;
+    if (inner->kind == EX_CLOSURE && inner->as.closure_.closure) {
+        /* A CAPTURING lambda written at the call. */
+        fd = inner->as.closure_.closure->fn;
+    } else if (inner->kind == EX_VAR && inner->as.var.binding &&
+               inner->as.var.binding->is_lifted_lambda) {
+        /* A CAPTURELESS lambda written at the call: elab_fn lifts it to a
+         * file-scope `__fn_N` and hands back a reference to it.  The lift is
+         * what makes this shape look like a name; `is_lifted_lambda` is what
+         * separates it from one.  The binding is minted for this argument and
+         * reachable from nowhere else, so marking its parameters cannot reach
+         * another caller -- which is exactly what a real name cannot promise. */
+        fd = inner->as.var.binding->source_fn_def;
+    }
+    if (!fd || !fd->params) return false;
+    /* An inline-C body names its parameters by their source spelling, so a
+     * rename would desync the body text from the emitted signature. */
+    if (fd->body && fd->body->kind == EX_INLINE_C) return true;
+    for (uint32_t p = 0; p < fd->n_params; p++) {
+        Binding *pb = fd->params[p];
+        if (!pb || !pb->name || !pb->name->name) continue;
+        /* Skip every synthesized parameter: a lifted closure's env pointer
+         * (params[0]) and an already-marked comparator param both live in the
+         * reserved `__` namespace, which users cannot write. */
+        if (pb->name->name[0] == '_' && pb->name->name[1] == '_') continue;
+        /* The MARK IS THE EMITTED NAME, so it has to survive name mangling
+         * intact.  A pure C identifier is emitted verbatim (raw_name_for_binding
+         * passes reserved-prefix identifiers through); anything carrying a
+         * kebab or sigil byte would go through the injective mangler, which
+         * would rewrite the prefix itself and silently lose the mark.  Fall
+         * back to the parameter index for those. */
+        bool pure = true;
+        for (const char *c = pb->name->name; *c; c++)
+            if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+                  (*c >= '0' && *c <= '9') || *c == '_')) { pure = false; break; }
+        char buf[256];
+        if (pure)
+            snprintf(buf, sizeof buf, "__cmp_slot_%s", pb->name->name);
+        else
+            snprintf(buf, sizeof buf, "__cmp_slot_p%u", (unsigned)p);
+        pb->name = intern_cstr(e->st, buf);
+    }
+    return true;
+}
+
 static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
 
@@ -6075,6 +6179,49 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 }
             }
             if (slot_fat_decl || slot_nominal) {
+                /* erased-closure-param-over-niche-vec-slot-reads-box: the
+                 * comparator of a `vec-eq?` is fed raw Vec slot words.  Mark a
+                 * lambda's parameters so an ascription back to the element type
+                 * reinterprets the word instead of unboxing a box that is not
+                 * there.  A name cannot carry the mark; when the element is a
+                 * niche option -- the one element form whose slot word is not a
+                 * box -- that shape has no decidable convention, so say so
+                 * rather than compile a silent wrong answer.  This is the read
+                 * side of the store side's TUR-E0714. */
+                if (call_comparator_gets_slot_words(fn_binding, i) &&
+                    !mark_comparator_slot_word_params(e, args[i]) &&
+                    n_args > 0 && args[i]->type.kind == TY_FN &&
+                    args[i]->type.as.fn.arity > 0 &&
+                    args[i]->type.as.fn.arg_kinds &&
+                    /* Only an ERASED parameter is undecidable.  A comparator
+                     * whose parameters are declared as the element type already
+                     * bridges at the closure boundary and is correct. */
+                    args[i]->type.as.fn.arg_kinds[0] == (uint8_t)TY_INT) {
+                    Type et = comparator_vec_elem_type(args[0]);
+                    if (adt_app_is_niche_option(et)) {
+                        /* type_name spells a TY_APP in the internal
+                         * `(type-app Option String)` form; a diagnostic the
+                         * user has to act on quotes the surface spelling. */
+                        char ebuf[256];
+                        snprintf(ebuf, sizeof ebuf, "(%s %s)",
+                                 et.as.app.fn ? type_name(*et.as.app.fn) : "?",
+                                 et.as.app.arg ? type_name(*et.as.app.arg) : "?");
+                        const char *ets = ebuf;
+                        diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                            TUR_E0715_NICHE_ELEMENT_ERASED_COMPARATOR,
+                            "the comparator passed to 'vec-eq?' over a "
+                            "'(Vec %s)' is named rather than written inline, so "
+                            "its parameters cannot be marked as the raw slot "
+                            "words this helper hands them. A niche '%s' rides "
+                            "its slot as the payload pointer, not as a carrier "
+                            "box, so an erased parameter has no decidable "
+                            "convention here. Declare the parameter types -- "
+                            "(fn [a : %s b : %s] ...) -- or write the "
+                            "comparator inline at the call",
+                            ets, ets, ets, ets);
+                        return NULL;
+                    }
+                }
                 /* fat-closure-ascription: an *already-fat* closure value that is
                  * carried as a one-word :int/:ptr<void> (e.g. a list-head result,
                  * or a handler threaded around as :int) and ascribed to a (fn ...)

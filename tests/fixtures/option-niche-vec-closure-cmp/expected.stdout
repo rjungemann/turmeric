@@ -1,6 +1,10 @@
 shape-eq
 typed-eq
 typed-ne
+raw-eq
+raw-ne
+cap-eq
+cap-ne
 aa
 none
 vec-eq
