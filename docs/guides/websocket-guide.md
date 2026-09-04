@@ -115,7 +115,7 @@ The client API lives in `ws-client/client`:
 
 ```turmeric
 (import ws-client/client
-  :refer [ws-connect ws-conn-null? ws-last-error
+  :refer [ws-connect ws-connect-with-ca ws-connect-insecure ws-conn-null? ws-last-error
           ws-send ws-send-bytes ws-recv
           ws-close ws-free ws-set-timeout
           ws-frame-kind ws-frame-data ws-frame-len ws-frame-text
@@ -380,9 +380,21 @@ TLS is fully optional in both directions. Build the spice with mbedTLS
 on the include path (the bundled `cmake-deps` entry handles this when
 you `tur fetch`) and:
 
-- **Client:** `ws-connect "wss://..."` works transparently. Certificate
-  verification is currently disabled (`MBEDTLS_SSL_VERIFY_NONE`); see
-  "Limitations" below.
+- **Client:** `ws-connect "wss://..."` verifies the server certificate
+  against the platform's system CA store by default (and checks the
+  hostname), so an untrusted, expired, or mismatched certificate fails
+  the connect rather than silently succeeding. Three entry points fix
+  the trust policy at the call site:
+
+  ```turmeric
+  (ws-connect "wss://example.com/feed")                      ;; system CA store (default)
+  (ws-connect-with-ca "wss://localhost:8443/socket" ca-path)  ;; a caller-supplied CA bundle
+  (ws-connect-insecure "wss://localhost:8443/socket")         ;; UNSAFE: skip verification (dev only)
+  ```
+
+  Use `ws-connect-with-ca` for a private or self-signed CA (e.g. a local
+  dev server); reach for `ws-connect-insecure` only as an explicit,
+  greppable opt-out -- never in production.
 - **Server:** drive the listener with `httpd/tls`'s
   `server-start-tls-conn`. The httpd `Conn` carries a TLS context in
   its `tls` slot; `ws-upgrade` reads it via `conn-tls` and runs the
@@ -402,12 +414,36 @@ Mix WebSocket and ordinary REST endpoints in the same handler -- the
 headers, and falls through (`0`) otherwise. Route on `req-path` in your
 handler exactly as the echo example does.
 
-`tur-tourist` is built on httpd's one-arg handler shape (`Request ->
-Response`), so it does not currently expose the `Conn` that `ws-upgrade`
-requires. Use `tur-httpd` directly for WebSocket endpoints, or run a
-tourist app and a websocket-aware httpd listener on separate ports for
-now. Future work: a `tourist-ws` adapter that surfaces `Conn` to
-tourist handlers.
+`tur-tourist`'s default one-arg handler shape (`Request -> Response`)
+does not expose the `Conn` that `ws-upgrade` requires, but the
+**`tourist-ws`** spice adapts around that: `ws-route!` declares a
+WebSocket endpoint that slots into an ordinary tourist item list next to
+`get!`/`post!`/`use!`, sharing the same middleware chain.
+
+```turmeric
+(import tourist/app      :refer [tourist-conn])
+(import tourist/dsl      :refer [get!])
+(import tourist-ws/route :refer [ws-route!])
+(import ws-server/server :refer [ws-server-recv ws-server-send ws-server-close])
+(import ws-core/conn     :refer [WsConn])
+
+(tourist-conn 8080
+  (get! "/api" (fn [ctx] (text "hello from REST")))
+  (ws-route! "/ws"
+    (fn [ws : WsConn] : void
+      (let [f (ws-server-recv ws)]
+        (ws-server-send ws (ws-frame-text f))
+        (ws-server-close ws)))))
+```
+
+Serve with **`tourist-conn`**, not `tourist` -- `ws-route!` needs the
+underlying httpd `Conn` to perform the upgrade, and only the Conn-aware
+`tourist-conn` entry point makes it available (`tourist-conn` is
+otherwise a drop-in for `tourist`: same item list, same middleware
+chain, same dispatch). A `ws-route!` served under plain `tourist` has no
+`Conn` to upgrade and answers `400 Bad Request`. See the
+[tourist-ws spice](https://github.com/rjungemann/turmeric-spices/tree/main/spices/tourist-ws)
+for the full API and the REST+WebSocket coexistence fixture.
 
 ## Limitations and gotchas
 
@@ -421,10 +457,10 @@ tourist handlers.
 - **Blocking I/O.** Both spices are synchronous. One thread per
   connection on the server side; one connection per process on the
   client side (no async / event-loop variant yet).
-- **No certificate verification on the client.** `wss://` currently
-  uses `MBEDTLS_SSL_VERIFY_NONE`. Fine for dev and trusted networks;
-  not yet suitable for connecting to arbitrary public endpoints. Future
-  work: opt-in CA bundle and `verify-peer` flag.
+- **Client certificate verification is on by default.** `ws-connect`
+  verifies against the system CA store; use `ws-connect-with-ca` for a
+  private CA, or the explicitly-named `ws-connect-insecure` to opt out
+  (development only -- never in production).
 - **Shared opaque names across spices.** Both `ws-client` and
   `ws-server` export their own `WsConn` and `WsFrame` opaques. They
   cannot be imported into the same program; the test suite intentionally

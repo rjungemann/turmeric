@@ -577,7 +577,17 @@ the handler borrow it back with `string/to-cstr` for `html`. See
 
 ---
 
+## WebSocket endpoints
+
+`tourist`'s one-arg handler shape has no `Conn` to upgrade, but the
+`tourist-ws` spice adds `ws-route!`, a route constructor that upgrades to
+a WebSocket and shares the item list and middleware chain with `get!` /
+`post!` / `use!` -- served via `tourist-conn` rather than `tourist`. See
+the [WebSockets guide](websocket-guide.md#composing-with-httpd--tourist)
+for the full pattern.
+
 ## See also
 
 - [Threading Guide](threading-guide.md) -- OS threads, Mutex, Arc (used by tur-httpd internally)
 - [Error Handling Guide](error-handling-guide.md) -- `result<:cstr>` unwrapping patterns
+- [WebSockets Guide](websocket-guide.md) -- `ws-client` / `ws-server` / `tourist-ws`
