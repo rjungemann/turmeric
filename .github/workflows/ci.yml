@@ -528,7 +528,7 @@ jobs:
           bash tools/ci/publish-timings.sh all-timings.jsonl
 
   windows:
-    name: Windows build (MSYS2/UCRT64)
+    name: Windows build + suite (MSYS2/UCRT64)
     runs-on: windows-latest
 
     # Windows had NO CI coverage: `test` and `jit` both pin

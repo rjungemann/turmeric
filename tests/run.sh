@@ -76,6 +76,30 @@ case "${MSYSTEM:-}" in
 esac
 export TUR_HOST_WINDOWS
 
+# Windows: make <workspace-drive>:\tmp exist before any fixture runs.
+#
+# stdlib's fs/tmpfile does mkstemp("/tmp/tur_XXXXXX") and a dozen fixtures write
+# hardcoded "/tmp/..." paths.  Those are POSIX spellings, and the MSYS *shell*
+# maps /tmp to %LOCALAPPDATA%\Temp -- but the fixture binaries are NATIVE
+# Windows executables, so their CRT resolves "/tmp/foo" against the CURRENT
+# DRIVE ROOT instead: C:\tmp\foo, D:\tmp\foo.  If that directory does not exist
+# the open fails, the program prints nothing, and the fixture reports a stdout
+# mismatch that looks nothing like "your temp dir is missing".
+#
+# This bit us exactly once, in the most expensive way available: the suite was
+# green on a developer box that happened to have C:\tmp (left by earlier runs)
+# and came back 12 red on a fresh CI runner whose workspace is on D:.  Creating
+# the directory here is provisioning, in the same spirit as installing diffutils
+# -- the real fix is portable temp paths in stdlib + fixtures, tracked in
+# docs/reported/windows-hardcoded-tmp-resolves-to-drive-root.md.
+if [ "$TUR_HOST_WINDOWS" = "1" ]; then
+    _tur_drive=$(pwd -W 2>/dev/null | cut -c1 | tr 'A-Z' 'a-z')
+    if [ -n "$_tur_drive" ]; then
+        mkdir -p "/$_tur_drive/tmp" 2>/dev/null || true
+    fi
+    unset _tur_drive
+fi
+
 # Force server fixtures to bind 127.0.0.1 instead of INADDR_ANY. On Windows this
 # stops the Defender Firewall "allow this app" dialog from popping for every
 # freshly-built fixture binary; elsewhere it is a harmless tightening (the
