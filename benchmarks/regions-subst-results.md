@@ -1,7 +1,7 @@
 ---
 title: RM3 R4 -- what a declared lifetime is worth on the persistent Subst
 category: Benchmark
-description: bench-regions-subst A/B, same binary source compiled with and without --enable=regions. Leaked bytes go 2,668,800 -> 0 and allocation count 82,785 -> 27,190; time is 17-23% better for small substitutions and at parity from n=64 up. Peak RSS is HIGHER with the flag on. Checksums identical in every row.
+description: bench-regions-subst A/B, same binary source compiled with and without --enable=regions. Leaked bytes go 2,668,800 -> 0, allocation count 82,785 -> 27,190, and peak RSS 7,340 -> 3,892 kB; time is 17-23% better for small substitutions and at parity from n=64 up. Checksums identical in every row.
 ---
 
 # bench-regions-subst -- `--enable=regions` A/B
@@ -47,14 +47,34 @@ reachable rather than lost. It is not returned at process exit because nothing
 in an emitted program calls `tur_region_shutdown` -- an honest cost to state,
 not a leak, and worth closing before graduation.
 
-**Peak RSS is HIGHER with the flag on: 2,076 kB off, 2,360 kB on.** Say that
-plainly rather than leading with the block count. A region trades a growing leak
-for a fixed 64 KiB slab, and on a benchmark whose chains are short and whose
-pass counts are tuned to hold total work constant, the leak never grows large
-enough for the trade to pay in peak footprint. What the block and byte counts
-show is the SHAPE -- unbounded versus bounded -- and that is the claim RM3 rests
-on. A workload that runs longer, or holds longer chains, crosses over; this one
-does not, and a reader should not be told it does.
+**Peak RSS: 7,340 kB off, 3,892 kB on** -- 47% lower with the flag on, and
+bit-stable across five runs of each arm. `/bin/true` measures 1,320 kB on the
+same harness, so net of process baseline it is 6,020 kB against 2,572 kB.
+
+### How that number was got wrong once, and how it is measured now
+
+An earlier revision of this file reported the opposite -- "peak RSS is HIGHER
+with the flag on, 2,076 vs 2,360 kB" -- and led with it. That was a measurement
+artifact, not a result. It came from a shell loop polling `/proc/<pid>/status`
+for `VmHWM` every 50 ms against a program that runs in 21 ms: most runs sampled
+once or not at all, and repeating it produced 240, 1584, 2424, 2484 and 2500 kB
+for the SAME binary. A poller cannot measure the peak of a program shorter than
+its polling interval, and the spread said so plainly before anyone read the
+numbers.
+
+The figures above come from `wait4(2)`'s `ru_maxrss` -- the kernel's own
+high-water mark for the child, sampled by nobody and exact by construction:
+
+```c
+pid_t p = fork();
+if (p == 0) { execv(argv[1], argv + 1); _exit(127); }
+int st; struct rusage ru;
+wait4(p, &st, 0, &ru);
+fprintf(stderr, "%ld\n", ru.ru_maxrss);   /* kB on Linux */
+```
+
+Five runs of each arm return the identical value. Use this, not a poller, for
+any program that finishes in less than a second.
 
 ## Time -- median of three, ns per (bind + walk)
 

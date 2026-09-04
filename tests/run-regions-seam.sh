@@ -39,6 +39,7 @@ sx2-dfs-driver
 self-recursive-goal-into-fat-sink
 region-scope-value-survives
 region-scope-escape-refused
+region-scope-void-body
 "
 pass=0; fail=0; skip=0
 for name in $FIXTURES; do

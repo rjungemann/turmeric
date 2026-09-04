@@ -6,7 +6,8 @@ description: A scope form over the arena that already ships, so a persistent str
 
 # Regions (RM3)
 
-**Status: PROTOTYPE, started 2026-09-04.** Gated behind `--enable=regions`.
+**Status: PROTOTYPE, R1-R5 landed 2026-09-04.** Gated behind `--enable=regions`,
+and staying gated -- see R5 for the decision and for what graduation needs.
 
 RM3 of [reclamation-plan.md](reclamation-plan.md). Read that plan's RM2
 section first -- this phase exists because RM2's question has no answer at RM2.
@@ -256,24 +257,31 @@ variable (full numbers in `benchmarks/regions-subst-results.md`):
 | allocations | 82,785 | 27,190 |
 | ns/op, 2 <= n <= 32 | -- | **0.77-0.92x** |
 | ns/op, n >= 64 | -- | ~parity |
-| peak RSS | 2,076 kB | 2,360 kB |
+| peak RSS | 7,340 kB | **3,892 kB** |
 
 Checksums identical in every row, which is the column that would catch a rewind
 of something still live.
 
-**Peak RSS goes UP, and that belongs in the summary rather than the footnotes.**
-A region trades an unbounded leak for a fixed 64 KiB slab; on a benchmark whose
-pass counts are tuned to hold total work constant, the leak never grows large
-enough for the trade to pay in footprint. The block and byte counts show the
-SHAPE -- unbounded versus bounded -- which is the claim RM3 rests on, and R5
-should not be handed a memory win this measurement does not support.
+**The peak-RSS row was reported backwards once.** An earlier revision of this
+plan and of the results doc said footprint went UP (2,076 -> 2,360 kB) and told
+R5 to weigh that. It was a measurement artifact: a shell poller reading `VmHWM`
+every 50 ms from a program that runs in 21 ms, which returned 240, 1584, 2424,
+2484 and 2500 kB for the same binary on repeat. `wait4`'s `ru_maxrss` gives the
+kernel's own high-water mark, is bit-stable across five runs of each arm, and
+says the flag CUTS peak footprint by 47%. The lesson is the cheap one: a spread
+that wide is the measurement failing, and it was visible before the number was
+believed.
 
 ### Known gaps R5 has to price
 
-- **A `:void` bracket is not wrapped at all.** Such a call is not hoisted into a
-  temp, so `emit_value` has no statement seam to close after it. A missed
-  saving, conservative, but `(bt-scope (fn [] ... ))` for effect is a normal
-  spelling.
+- ~~**A `:void` bracket is not wrapped at all.**~~ **Filed here in error and
+  withdrawn.** `emit_value` does skip a TY_NIL/TY_NEVER call -- there is no
+  hoist temp and so no statement seam -- but that guard never fires for this
+  callee: `bt-scope` emits as `int64_t bt_hyscope(int64_t)`, the erased carrier,
+  so `(bt-scope (fn [] (println ...)))` types as a word and IS bracketed on both
+  paths. Checked, after writing it down as a cost without checking.
+  `tests/fixtures/region-scope-void-body` pins it so the claim cannot be
+  re-derived. The guard stays as a guard.
 - **The pooled slab is never returned.** 64 KiB stays reachable at exit because
   no emitted program calls `tur_region_shutdown`. O(1), reported as reachable
   rather than lost, and worth closing before graduation.
@@ -283,21 +291,55 @@ should not be handed a memory win this measurement does not support.
   the static walk already refuses.
 - **The CPS `CT_LETCALL` arm carries no bracket** (see above). Probing did not
   reach it with a `bt-scope` callee; if a shape does, it is a missed saving.
-- **Peak RSS on this workload goes up, not down** (see the table). The shape is
-  right and the footprint is not, which is a real thing for R5 to weigh.
 
 The report R4 filed against a `bt-scope` in a non-main defn is fixed and
 archived (`docs/archive/cps-direct-bt-scope-closure-temp-undeclared.md`); both
 fixtures and the benchmark are on the natural spelling now.
 
-**R5 -- decide.** Graduate, shelve, or bump, against the leak sweep and the
-`bench-regions-subst` A/B. Shelving was a real outcome and R4 has now retired
-the reason it was most likely: the solver's region DOES rewind, and takes the
-whole per-link spine with it (2,668,800 leaked bytes to zero). What R5 weighs is
-therefore no longer "does this ever pay" but the four gaps listed under R4 --
-the `:void` bracket, the unreturned slab, argument-position allocation, and how
-much of the language the static walk has to accept before the flag is worth
-turning on by default.
+**R5 -- decide. DECIDED 2026-09-04: keep it, gated, at `prototype`.**
+
+Shelving was a real outcome and R4 retired the reason it was most likely: the
+solver's region DOES rewind, takes the whole per-link spine with it (2,668,800
+leaked bytes to zero), and cuts peak RSS 47% on the workload RM0(b) named. So
+the phase is not shelved.
+
+Nor is it graduated, and the reason is a SURFACE question rather than any of the
+measurements:
+
+> **`bt-scope` is the trail bracket, and a region is not a trail level.**
+
+R4 chose it because the reclamation plan did, and the choice is right for a
+solver: one query is one generation. But it conflates two things a user might
+want separately. A caller who wants a region and no trail level has no spelling;
+a caller who wants a trail level and no region -- a `bt-scope` around code whose
+allocations must outlive it -- gets a region anyway and pays the escape check to
+find out it cannot rewind. Graduating would make that second case everyone's
+default, silently, behind a form they wrote for backtracking. `prototype`
+(TUR-W0060, "breaking changes likely") is the accurate label while the boundary
+form is still the wrong shape, and promoting to `beta` would advertise a frozen
+surface plus a graduation date this does not have.
+
+`expires_at` stays 0.47.0 against a 0.43.0 tree -- no pressure either way, and
+per the standing rule it would not block a release if there were.
+
+### What graduation requires, in the order that matters
+
+1. **A boundary form of its own.** Either a `with-region` bracket that means
+   only the lifetime, or an explicit statement that `bt-scope` means both and a
+   documented way to opt one out. This is the blocker; everything below is
+   ordinary work.
+2. **Widen the static walk deliberately, with a fixture per shape admitted.**
+   It accepts scalars, `cstr`, and non-heap ADTs whose every field it can walk.
+   Structs, containers, refs and closures are refused wholesale -- sound, and it
+   means a bracket returning a `Vec` of scalars never rewinds.
+3. **Close or price the residue** named under R4: the unbracketed CPS
+   `CT_LETCALL` arm, argument-position allocation landing in the generation, and
+   the pooled slab that is never returned (reachable at exit, not lost -- a pool,
+   not a leak, and freeing it needs care about `atexit` ordering against module
+   defers that may still read retired generations).
+4. **Soak the existing `bt-scope` callers.** `dfs-solve` and the sx2 fixtures
+   become region users the moment this is on by default; the seam test covers
+   twelve fixtures today, which is a floor, not a soak.
 
 ## What this does NOT do
 

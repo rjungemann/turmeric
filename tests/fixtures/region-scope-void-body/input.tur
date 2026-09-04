@@ -1,0 +1,43 @@
+;; RM3 R4: a bracket whose body is run for EFFECT, not for a value.
+;;
+;; The plan listed this as a known gap -- "a `:void` bracket is not wrapped at
+;; all, because such a call is not hoisted into a temp and there is no statement
+;; seam to close after it" -- written down as a cost without being checked.  It
+;; is not one: `bt-scope` emits as `int64_t bt_hyscope(int64_t)`, the erased
+;; carrier, so the call types as a WORD however void its source-level result is,
+;; and both emit paths bracket it.
+;;
+;; This fixture is the pin.  If the erasure ever changes and the TY_NIL guard in
+;; emit_value starts firing here, the region silently stops being opened for
+;; every effect-only bracket -- a saving lost with no symptom, which is exactly
+;; the kind of thing a claim in a plan document will not catch.
+;;
+;; Both spellings, because they take different emitters: `shout` is a non-main
+;; defn (CPS `CT_TAILCALL` cps->direct arm), the bare call in `main` is the
+;; direct path (`emit_value`).
+
+(defdata Link :heap (Link [v : int nxt : int]))
+
+(defn build [n : int acc : int] : int
+  (if (<= n 0)
+    acc
+    (build (- n 1) (:: (Link n acc) :int))))
+
+(defn chain-sum [c : int] : int
+  ```c
+  struct { int64_t v; int64_t nxt; } *p = (void *)(intptr_t)c;
+  int64_t acc = 0;
+  while (p) { acc += p->v; p = (void *)(intptr_t)p->nxt; }
+  return acc;
+  ```)
+
+;;; shout -- the whole point is the println; the bracket yields nothing.
+(defn shout [n : int] : void
+  (bt-scope (fn [] (println (chain-sum (build n 0))))))
+
+(defn main [] : int
+  (shout 4)                                                ;; 10
+  (shout 100)                                              ;; 5050
+  ;; ... and the same shape straight in main, which is the other emitter.
+  (bt-scope (fn [] (println (chain-sum (build 8 0)))))     ;; 36
+  0)
