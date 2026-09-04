@@ -23,7 +23,8 @@ void refine_caps_reset(void) { memset(&g_caps, 0, sizeof(g_caps)); }
 bool refine_caps_any(void) {
     return g_caps.cubes_hits || g_caps.cube_lits_hits || g_caps.expand_depth_hits ||
            g_caps.la_vars_hits || g_caps.la_constr_hits || g_caps.la_fm_hits ||
-           g_caps.euf_terms_hits || g_caps.no_shared_hits || g_caps.no_rounds_hits;
+           g_caps.euf_terms_hits || g_caps.no_shared_hits || g_caps.no_rounds_hits ||
+           g_caps.path_hyps_hits;
 }
 
 /* ------------------------------------------------------------------------- *

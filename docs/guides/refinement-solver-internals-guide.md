@@ -478,8 +478,12 @@ survives either way. `tur explain TUR-W0372` prints the long form of any code.
 
 ## Caps reference
 
-Every cap, when hit, degrades to `RT_UNKNOWN` -> runtime check
-(`refine_solver.h:28`, `refine_solver.c:221`):
+The solver is bounded in two places, and only the first tier used to be written
+down. Every cap in both tiers degrades to `RT_UNKNOWN` -> runtime check: they
+cost **completeness, never soundness**, because a capped obligation keeps the
+check it would otherwise have elided.
+
+### Tier 1 -- solver caps (`refine_solver.h`)
 
 | Cap | Value | Guards |
 |---|---|---|
@@ -494,8 +498,78 @@ Every cap, when hit, degrades to `RT_UNKNOWN` -> runtime check
 | `MODEL_MAX_VARS` | 3 | counterexample-search variables |
 | `MODEL_MAX_CANDS` | 16 | counterexample candidate values |
 
-Every cap except the two `MODEL_MAX_*` ones is counted at runtime under
-`TUR_REFINE_STATS=1` -- see "Reading the cap lines" below.
+`MODEL_MAX_VARS` is the one most likely to surprise: `refine_model_search`
+returns `NULL` outright for a VC with more than three variables, so such an
+obligation can only ever be *proved* or *unknown* -- it can never be refuted
+with a counterexample, however obviously false it is.
+
+### Tier 2 -- collection caps (upstream of the solver)
+
+These bound what reaches the solver rather than what it does, and they live in
+the elaborator and the encoder. **The tightest cap in the whole refinement path
+is here, not in tier 1.**
+
+| Cap | Value | Where | Bounds |
+|---|---|---|---|
+| `RT_CS_PATH_MAX_HYPS` | 8 | `refine_solver.h` | path conditions recovered per call-site crossing |
+| `RT_CS_PATH_MAX_DEPTH` | 24 | `elab_fns.c` | how deep the walk looks for them |
+| `ENC_MAX_MEASURES` | 32 | `refine_collect.c` | names in the per-VC sort table |
+| `ENC_MAX_SUBST` | 8 | `refine_collect.c` | substitutions while encoding a predicate |
+| `ENC_MAX_DEPTH` | 64 | `refine_collect.c` | predicate nesting |
+| `ENC_MAX_PROPAGATE` | 4 | `refine_collect.c` | return-refinement propagation depth |
+| `VCID_MAX_SYMS` | 256 | `refine_vc.c` | symbols in the RT7 memo fingerprint |
+| `RT_PURE_MAX_DEPTH` | 64 | `elab_fns.c` | purity walk |
+| `RT_SET_SCAN_MAX_DEPTH` | 24 | `elab_fns.c` | set-membership scan |
+
+They are sound in the same one direction, and the encoder says so where it
+drops a hypothesis it cannot encode: *"fewer hypotheses can only make the goal
+HARDER to prove, never easier"*. The two whose overflow could plausibly go the
+other way are handled explicitly rather than by luck:
+
+- **`VCID_MAX_SYMS`** overflow makes the fingerprint **0, which is never a memo
+  key**, so the VC is re-decided rather than matched against a truncated
+  identity. A memo collision here would be a genuine wrong answer.
+- **`ENC_MAX_MEASURES`** overflow leaves the name out of the sort table and
+  falls back to the callee's own declared sort -- still exactly one sort per
+  name, which is the invariant that keeps a symbol from being Int in a
+  hypothesis and Bool in the goal.
+
+### What is counted
+
+Every tier-1 cap except the two `MODEL_MAX_*` ones is counted under
+`TUR_REFINE_STATS=1`, plus `RT_CS_PATH_MAX_HYPS` from tier 2 -- see "Reading
+the cap lines" below. The rest of tier 2 is uninstrumented; if one of them is
+ever suspected, it needs a counter first.
+
+### The limits that are not numbers
+
+Raising a cap cannot reach any of these. They are what the solver is, not how
+much of it there is, and on today's evidence they bound its usefulness far more
+than any number above.
+
+- **Fragment: quantifier-free `QF_UFLIA` / `QF_UFLRA`.** A quantifier is
+  refused outright, not approximated.
+- **Nonlinear arithmetic is abstracted, not decided.** `x * y` becomes an
+  uninterpreted term (`TUR-W0373` says so), so S2 can reason about its
+  occurrences but never about its value.
+- **Integers are non-convex and S3 does not case-split.** Deciding a mixed
+  integer cube in general needs splitting on disjunctions of equalities; S3
+  reaches a fixpoint and answers `RT_UNKNOWN` instead. This is the largest
+  completeness hole, and it is deliberate -- see S2c in the design of record.
+- **No DPLL(T).** Boolean structure is naive DNF: no clause learning, no theory
+  propagation, no conflict-driven search. The cube caps exist because of this,
+  not the other way round.
+- **The congruence fixpoint is a naive `O(n^2)` all-pairs sweep**, which is the
+  right tradeoff at the sizes measured (peak 25 terms of 512) and would not be
+  at a hundred times that.
+
+**`path hyps` reads differently from the others.** Its peak *saturates*: the
+walk stops collecting once the array is full, so the peak reads 8 whatever the
+real demand was. Read `hits` for whether it bit; the peak is a headroom reading
+only while hits is 0. Counting past the cap would mean restructuring a
+recursive walk with early returns, which risks changing *which* guards get
+collected -- a verdict change bought for a measurement, which is the wrong
+trade.
 
 ---
 
@@ -509,6 +583,7 @@ TUR_REFINE_STATS=1 tur build main.tur
 # refine: caps (none hit)
 # refine:   cubes           peak      4 / 64
 # refine:   cube literals   peak      7 / 64
+# refine:   path hyps       peak      4 / 8
 # ...
 
 # Dump each VC as SMT-LIB2 (the refutation form shown earlier).

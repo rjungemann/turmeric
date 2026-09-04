@@ -3729,7 +3729,9 @@ void refine_fill_call_site_env(Elab *e, uint32_t from, RefineEnv *env,
  * ------------------------------------------------------------------------- */
 
 #define RT_CS_PATH_MAX_DEPTH 24
-#define RT_CS_PATH_MAX_HYPS  8
+/* RT_CS_PATH_MAX_HYPS lives in refine_solver.h beside the other capped
+ * quantities, so the TUR_REFINE_STATS reporter can name the limit its peak is
+ * a peak of. */
 
 /* Crossing identity that survives macro expansion.
  *
@@ -3840,7 +3842,10 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
             if (!rt_collect_path_conds(e, env, node->as.list.items[br], target,
                                        hyps, n, shadowed, depth + 1))
                 continue;
-            if (*n >= RT_CS_PATH_MAX_HYPS) return true;  /* deep enough */
+            if (*n >= RT_CS_PATH_MAX_HYPS) {
+                refine_caps()->path_hyps_hits++;   /* a guard dropped */
+                return true;                        /* deep enough */
+            }
             if (br == 2) {
                 hyps[(*n)++] = c;
             } else {
@@ -3878,7 +3883,10 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
             if (!rt_collect_path_conds(e, env, body, target, hyps, n, shadowed, depth + 1))
                 return false;
             if (rt_env_has_name(env, x->as.sym)) { *shadowed = true; return true; }
-            if (*n >= RT_CS_PATH_MAX_HYPS) return true;
+            if (*n >= RT_CS_PATH_MAX_HYPS) {
+                refine_caps()->path_hyps_hits++;   /* a let-equation dropped */
+                return true;
+            }
             /* A bound FUNCTION is not an arithmetic fact, and asserting it
              * actively costs: the encoder abstracts the lambda to an
              * uninterpreted symbol, and `refine_model_search` declines any VC
@@ -3932,10 +3940,15 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
                         return true;
                     }
                 }
-            if (guard && *n < RT_CS_PATH_MAX_HYPS) hyps[(*n)++] = guard;
-            if (pat && (pat->tag == F_INT || pat->tag == F_FLOAT) &&
-                *n < RT_CS_PATH_MAX_HYPS)
-                hyps[(*n)++] = rt_form_eq(e, pat->span, scrut, pat);
+            if (guard) {
+                if (*n < RT_CS_PATH_MAX_HYPS) hyps[(*n)++] = guard;
+                else refine_caps()->path_hyps_hits++;
+            }
+            if (pat && (pat->tag == F_INT || pat->tag == F_FLOAT)) {
+                if (*n < RT_CS_PATH_MAX_HYPS)
+                    hyps[(*n)++] = rt_form_eq(e, pat->span, scrut, pat);
+                else refine_caps()->path_hyps_hits++;
+            }
             return true;
         }
         return false;
@@ -4019,9 +4032,13 @@ static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs,
     const Form *hyps[RT_CS_PATH_MAX_HYPS];
     uint32_t n = 0;
     bool shadowed = false;
-    if (!rt_collect_path_conds(e, cs->env, cs->caller_body, cs->call_form,
-                               hyps, &n, &shadowed, 0))
-        return saved;
+    bool reached = rt_collect_path_conds(e, cs->env, cs->caller_body,
+                                         cs->call_form, hyps, &n, &shadowed, 0);
+    /* Recorded on every crossing, not only the capped ones: a cap that never
+     * fires still has to report how close it came.  Saturates at the limit --
+     * see RefineCapStats.path_hyps_peak for why it cannot do better. */
+    refine_cap_peak(&refine_caps()->path_hyps_peak, n);
+    if (!reached) return saved;
     if (shadowed) { *skip = true; return saved; }
     for (uint32_t i = 0; i < n; i++) {
         bool stale = false;

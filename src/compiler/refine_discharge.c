@@ -689,6 +689,11 @@ static void refine_report_caps(void) {
         { "LA constraints",c->la_constr_hits,    c->la_constr_peak,    REFINE_MAX_LA_CONSTR    },
         { "NO shared",     c->no_shared_hits,    c->no_shared_peak,    NO_MAX_SHARED           },
         { "EUF terms",     c->euf_terms_hits,    c->euf_terms_peak,    REFINE_MAX_EUF_TERMS    },
+        /* Collection side, not a stage: the branch guards recovered for a
+         * call-site crossing.  Its peak SATURATES at the limit (the walk stops
+         * collecting once full), so read `hits` for whether it bit and the
+         * peak only for headroom while hits is 0. */
+        { "path hyps",     c->path_hyps_hits,    c->path_hyps_peak,    RT_CS_PATH_MAX_HYPS     },
     };
     fprintf(stderr, "refine: caps %s\n",
             refine_caps_any() ? "(one or more BIT -- those obligations answered "

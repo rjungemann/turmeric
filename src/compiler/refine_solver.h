@@ -55,6 +55,19 @@
  * docs/archive/history/no-max-shared-raise.md. */
 #define NO_MAX_SHARED           16
 
+/* A COLLECTION cap, not a solver one, and it lives here for the same reason
+ * the two NO_MAX_* ones do: the telemetry below reports a peak against the
+ * limit it is a peak of, and the reporter cannot see elab_fns.c's internals.
+ *
+ * It bounds the PATH CONDITIONS recovered for a call-site crossing -- the
+ * branch guards that had to hold to reach the call.  It is the tightest cap
+ * in the whole refinement path, and until 2026-09-04 it was also the only one
+ * with no telemetry, so nobody could say whether it bit.  Dropping a guard is
+ * sound in the one direction that matters (fewer hypotheses make the goal
+ * HARDER to prove, never easier), so a hit costs a proof, not a wrong answer.
+ * Enforced in rt_collect_path_conds (elab_fns.c). */
+#define RT_CS_PATH_MAX_HYPS     8
+
 /* ------------------------------------------------------------------------- *
  * Cap telemetry
  * ------------------------------------------------------------------------- */
@@ -85,6 +98,15 @@ typedef struct RefineCapStats {
     uint32_t euf_terms_hits,    euf_terms_peak;
     uint32_t no_shared_hits,    no_shared_peak;
     uint32_t no_rounds_hits;    /* exchange still progressing when rounds ran out */
+    /* Collection side (RT_CS_PATH_MAX_HYPS).  `peak` SATURATES at the limit --
+     * the walk stops collecting when it fills, so there is no way to know how
+     * many guards a crossing would have produced.  So peak is a headroom
+     * reading only while hits is 0; once it bites, `hits` is the signal and
+     * peak just reads 8.  Counting past the cap would mean restructuring a
+     * recursive walk with early returns, which risks changing WHICH guards get
+     * collected -- a verdict change for a measurement, which is the wrong
+     * trade. */
+    uint32_t path_hyps_hits,    path_hyps_peak;
 } RefineCapStats;
 
 /* Mutable on purpose: the stages bump their own counters in place, which is
@@ -116,6 +138,8 @@ static inline void refine_caps_delta(RefineCapStats *out,
     out->euf_terms_hits    = now->euf_terms_hits    - before->euf_terms_hits;
     out->no_shared_hits    = now->no_shared_hits    - before->no_shared_hits;
     out->no_rounds_hits    = now->no_rounds_hits    - before->no_rounds_hits;
+    out->path_hyps_hits    = now->path_hyps_hits    - before->path_hyps_hits;
+    out->path_hyps_peak    = now->path_hyps_peak;
     out->cubes_peak        = now->cubes_peak;
     out->cube_lits_peak    = now->cube_lits_peak;
     out->expand_depth_peak = now->expand_depth_peak;
@@ -138,6 +162,8 @@ static inline void refine_caps_add_hits(RefineCapStats *a,
     a->euf_terms_hits    += b->euf_terms_hits;
     a->no_shared_hits    += b->no_shared_hits;
     a->no_rounds_hits    += b->no_rounds_hits;
+    a->path_hyps_hits    += b->path_hyps_hits;
+    refine_cap_peak(&a->path_hyps_peak,    b->path_hyps_peak);
     refine_cap_peak(&a->cubes_peak,        b->cubes_peak);
     refine_cap_peak(&a->cube_lits_peak,    b->cube_lits_peak);
     refine_cap_peak(&a->expand_depth_peak, b->expand_depth_peak);

@@ -106,11 +106,22 @@ work, out, fuzz_n, fuzz_seed, corpus_rc = sys.argv[1], sys.argv[2], sys.argv[3],
 # One row per cap.  `limit` is filled from whichever source names it -- the
 # corpus emitter does not print limits, the per-compile summary does.
 CAPS = ["cubes", "cube_lits", "expand_depth", "la_vars", "la_constr",
-        "euf_terms", "no_shared"]
+        "euf_terms", "no_shared", "path_hyps"]
 PRETTY = {"cubes": "cubes", "cube literals": "cube_lits",
           "expand depth": "expand_depth", "LA vars": "la_vars",
           "LA constraints": "la_constr", "EUF terms": "euf_terms",
-          "NO shared": "no_shared"}
+          "NO shared": "no_shared", "path hyps": "path_hyps"}
+
+# Caps that only exist on the COMPILED path.  RT_CS_PATH_MAX_HYPS bounds the
+# branch guards recovered for a call-site crossing, and the SMT-LIB corpus
+# never elaborates anything -- it feeds VCs straight to the chain.  Reporting a
+# flat 0 there would read as "measured, never bit" when the truth is "this
+# population cannot exercise it", so the corpus table says n/a instead.
+COMPILED_ONLY = {"path_hyps"}
+
+# Caps whose peak saturates at the limit because the producer stops at it.
+# Their headroom column is only meaningful while hits is 0.
+SATURATING = {"path_hyps"}
 
 def blank():
     return {c: {"hits": 0, "peak": 0, "worst": "", "limit": 0} for c in CAPS} | \
@@ -191,11 +202,20 @@ L.append("Every cap below degrades to `RT_UNKNOWN` -> the runtime check survives
          "costs a real proof matters.  `peak` is the high-water mark of the quantity the\n"
          "cap bounds, recorded on every query rather than only on the ones that overflow,\n"
          "so a cap that never fires still reports its headroom.\n")
+L.append("`path_hyps` is a COLLECTION cap (RT_CS_PATH_MAX_HYPS -- the branch guards\n"
+         "recovered for a call-site crossing), not a solver stage.  It reads `n/a` for the\n"
+         "SMT-LIB corpus because that population feeds VCs straight to the chain and never\n"
+         "elaborates anything, and its peak SATURATES at the limit, so the headroom column\n"
+         "means something only while its hits are 0.\n")
 for name, acc, n, tag in pops:
     L.append("\n## %s -- %d unit(s), %d with a cap hit\n" % (name, n, capped_units[tag]))
     L.append("| cap | hits | peak | limit | headroom | worst unit |")
     L.append("|---|---:|---:|---:|---:|---|")
     for c in CAPS:
+        if c in COMPILED_ONLY and tag == "corpus":
+            L.append("| %s | n/a | n/a | %d | n/a | this population does not elaborate |"
+                     % (c, acc[c]["limit"]))
+            continue
         r = acc[c]
         lim = r["limit"]
         # A peak ABOVE the limit is not negative headroom, it is the count of
@@ -204,6 +224,10 @@ for name, acc, n, tag in pops:
         if not lim:                head = "-"
         elif r["peak"] > lim:      head = "OVER by %d" % (r["peak"] - lim)
         else:                      head = "%d%%" % round(100.0 * (lim - r["peak"]) / lim)
+        # A saturating peak cannot report headroom once it has bitten: the
+        # producer stopped at the limit, so the peak reads the limit whatever
+        # the real demand was.
+        if c in SATURATING and r["hits"]: head = "saturated -- see hits"
         L.append("| %s | %d | %d | %d | %s | %s |"
                  % (c, r["hits"], r["peak"], lim, head, r["worst"] or "-"))
     L.append("| la_fm (FM blow-up) | %d | - | - | - | - |" % acc["la_fm"]["hits"])
