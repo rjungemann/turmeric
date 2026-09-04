@@ -495,13 +495,11 @@
 ;;; element whose word is not a box, a niche (Option P) above all: it rides
 ;;; its slot as the payload pointer itself.
 ;;;
-;;; Here, either spelling works: declare the comparator's parameter types, or
-;;; write the comparator inline at the call, and the word is bridged for you.
-;;; A NAMED comparator with erased parameters over such an element cannot be
-;;; given the convention and is refused with TUR-E0715. Note the typed
-;;; spelling is currently WRONG over map-eq? / set-eq-cmp? for a niche element
-;;; (it compares box addresses) --
-;;; docs/reported/typed-comparator-over-hamt-box-compares-box-addresses.md.
+;;; Either spelling works, here and at every one of those helpers: declare the
+;;; comparator's parameter types, or write the comparator inline at the call,
+;;; and the value is bridged for you whichever convention it arrived in. A
+;;; NAMED comparator with erased parameters over such an element cannot be
+;;; given the convention and is refused with TUR-E0715.
 ;;;
 ;;; Parameters:
 ;;;   v1     -- first Vec[A]

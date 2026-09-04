@@ -3562,6 +3562,15 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             free((void*)pn);
             continue;
         }
+        /* typed-comparator-over-hamt-box: a niche-typed parameter whose caller
+         * hands over a carrier box arrives as the carrier and is unboxed at
+         * body entry (below), exactly like the B4 load above. */
+        if (fd->params[i]->arrives_as_carrier_box) {
+            const char *pn = raw_name_for_binding(fd->params[i]);
+            buf_printf(file, "int64_t __tur_nbox_%s", pn);
+            free((void*)pn);
+            continue;
+        }
         /* Phase HRT1: poly fn params use tur_poly_fn_t in signature */
         if (fd->params[i]->is_poly_fn) {
             buf_puts(file, "tur_poly_fn_t");
@@ -3700,6 +3709,28 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         indent_buf(file, ctx->indent + 4);
         buf_printf(file, "%s %s = *(%s *)(intptr_t)__tur_b4box_%s;\n",
                    ctype, pn, ctype, pn);
+        free((void*)pn);
+    }
+
+    /* typed-comparator-over-hamt-box: materialize each niche-typed parameter
+     * whose caller hands over a carrier box.  The CHECKED read, for the same
+     * reason the carrier->niche bridge uses it: a box can hold Some(NULL), and
+     * the unchecked value would hand the niche a 0 payload -- silently turning
+     * a value `some?` calls true into `(none)`.  Borrow only, like the B4 load
+     * above: the box belongs to the container that stored it. */
+    for (uint32_t i = 0; i < fd->n_params; i++) {
+        if (!fd->params[i]->arrives_as_carrier_box) continue;
+        Type pty = use_abi_spec
+            ? ctx->current_abi_specialization->arg_types[i]
+            : ((e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[i])
+                   ? *e->type.as.fn.arg_full_types[i] : fd->param_types[i]);
+        const char *ctype = emit_type_c_name(ctx, emit_resolve_type(ctx, pty));
+        const char *pn = raw_name_for_binding(fd->params[i]);
+        indent_buf(file, ctx->indent + 4);
+        buf_printf(file,
+                   "%s %s = (__tur_nbox_%s ? (%s)(intptr_t)"
+                   "tur_opt_value_checked(__tur_nbox_%s) : (%s)0);\n",
+                   ctype, pn, pn, ctype, pn, ctype);
         free((void*)pn);
     }
 

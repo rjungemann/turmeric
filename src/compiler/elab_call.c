@@ -4415,6 +4415,57 @@ static bool call_comparator_gets_slot_words(const Binding *fn_binding,
     return (argi == 2 || argi == 3) && strcmp(n, "result-eq?") == 0;
 }
 
+/* The other half of the same fact: `map-eq?` / `map-eq-raw-k?` /
+ * `set-eq-cmp?` iterate a HAMT and hand the comparator the stored value or key
+ * VERBATIM, and a HAMT stores a niche `(Option P)` as a carrier box rather than
+ * as the payload word.  So a comparator here is in the mirror-image position of
+ * one at `vec-eq?`: its ERASED parameter is already right (the ascription
+ * unboxes a box that really is there), and its parameter DECLARED as the
+ * element type is the broken one -- it is emitted as the niche pointer and
+ * receives a box address, so a value compares unequal to itself.
+ *
+ * That the HAMT boxes where a Vec slot does not is CE4, still deferred
+ * (docs/upcoming/container-element-form-plan.md).  This rule does not decide
+ * that question; it only makes the read side agree with whatever the container
+ * currently stores. */
+static bool call_comparator_gets_carrier_box(const Binding *fn_binding,
+                                             uint32_t argi) {
+    if (!fn_binding || !fn_binding->name || !fn_binding->name->name) return false;
+    const char *n = fn_binding->name->name;
+    if (argi == 2 && (strcmp(n, "map-eq?") == 0 || strcmp(n, "set-eq-cmp?") == 0))
+        return true;
+    return argi == 3 && strcmp(n, "map-eq-raw-k?") == 0;
+}
+
+/* Mark a comparator lambda's parameters that are DECLARED as a niche option, so
+ * emit unboxes the carrier at body entry.  Returns true when the argument was a
+ * lambda literal (markable) -- a name cannot carry the mark for the same reason
+ * it cannot carry the slot-word one: the same function may be called elsewhere
+ * with a value that really is the niche word. */
+static bool mark_comparator_carrier_box_params(Expr *arg) {
+    Expr *inner = arg;
+    while (inner && (inner->kind == EX_ASCRIBE || inner->kind == EX_FN_TO_FAT))
+        inner = (inner->kind == EX_ASCRIBE) ? inner->as.ascribe_.inner
+                                            : inner->as.fn_to_fat_.inner;
+    if (!inner) return false;
+    FnDef *fd = NULL;
+    if (inner->kind == EX_CLOSURE && inner->as.closure_.closure)
+        fd = inner->as.closure_.closure->fn;
+    else if (inner->kind == EX_VAR && inner->as.var.binding &&
+             inner->as.var.binding->is_lifted_lambda)
+        fd = inner->as.var.binding->source_fn_def;
+    if (!fd || !fd->params) return false;
+    if (fd->body && fd->body->kind == EX_INLINE_C) return true;
+    for (uint32_t p = 0; p < fd->n_params; p++) {
+        Binding *pb = fd->params[p];
+        if (!pb) continue;
+        /* Only a parameter declared AS the element type is affected.  An erased
+         * (`int`) parameter is bridged by its own ascription and is correct. */
+        if (adt_app_is_niche_option(pb->type)) pb->arrives_as_carrier_box = true;
+    }
+    return true;
+}
+
 /* The element type of a `(Vec E)` argument, peeled back through whatever
  * coercion the carrier-typed `v1 : int` parameter wrapped it in.  Returns a
  * TY_NIL type when the argument is not a Vec application. */
@@ -6207,6 +6258,8 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                  * element erased at the call, so a named erased comparator over
                  * a list stays undiagnosable.  Marking still covers every list
                  * comparator written inline. */
+                if (call_comparator_gets_carrier_box(fn_binding, i))
+                    mark_comparator_carrier_box_params(args[i]);
                 if (call_comparator_gets_slot_words(fn_binding, i) &&
                     !mark_comparator_slot_word_params(e, args[i]) &&
                     n_args > 0 && args[i]->type.kind == TY_FN &&

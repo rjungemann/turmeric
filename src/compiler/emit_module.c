@@ -7087,6 +7087,12 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 fd->param_types[j].kind != TY_FN &&
                 type_is_wide_byval_adt(emit_resolve_type(ctx, _b4_pty))) {
                 buf_puts(out, "int64_t");
+            } else if (fd->params[j]->arrives_as_carrier_box) {
+                /* typed-comparator-over-hamt-box: declared as a niche option,
+                 * but the caller hands over the carrier box -- the definition
+                 * takes `int64_t __tur_nbox_<p>` and unboxes at entry, so the
+                 * forward declaration has to agree. */
+                buf_puts(out, "int64_t");
             } else if (fd->params[j]->is_poly_fn) {
                 buf_puts(out, "tur_poly_fn_t");
             } else if (fd->param_types[j].kind == TY_FN

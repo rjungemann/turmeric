@@ -24,11 +24,16 @@
 ;; broken path answered "eq" for both, so an equal-only probe passes while the
 ;; comparison is doing nothing at all.
 ;;
-;; Map and Set are deliberately absent: their comparators take the opposite
-;; convention and their TYPED spelling is still wrong --
-;; docs/reported/typed-comparator-over-hamt-box-compares-box-addresses.md.
+;; Map and Set take the OPPOSITE convention and so are the other half of this
+;; fixture: their erased comparator is the one that is right (the ascription
+;; unboxes a box that really is there) and their TYPED one was wrong, emitted
+;; as the niche pointer while receiving a box address -- so a value compared
+;; unequal to ITSELF.  A niche-typed parameter whose caller hands over a box
+;; now arrives as the carrier and is unboxed at body entry.
 (load "stdlib/string.tur")
 (load "stdlib/pair.tur")
+(load "stdlib/map.tur")
+(load "stdlib/set.tur")
 
 (defn main [] : int
   (let [aa1 (:: (some (string/from-cstr "aa")) (Option String))
@@ -74,7 +79,30 @@
       (println (if (list-eq? l1 l2 (fn [p : (Option String) q : (Option String)] : bool (eq? p q))) "lt-eq" "lt-ne"))
       (println (if (list-eq? l1 l3 (fn [p : (Option String) q : (Option String)] : bool (eq? p q))) "lt-eq" "lt-ne")))
 
-    ;; 4. a NON-niche element through the same helpers: the mark must be inert
+    ;; 4. the BOX-passing half: Map and Set, both spellings.  The third pair in
+    ;;    each group puts the SAME String pointer on both sides -- no convention
+    ;;    can make a value unequal to itself, which is what made the typed
+    ;;    verdict a defect rather than a judgement about intended semantics.
+    (let [m1 (:: (map-assoc (map-new) 1 aa1) (Map int (Option String)))
+          m2 (:: (map-assoc (map-new) 1 aa2) (Map int (Option String)))
+          m3 (:: (map-assoc (map-new) 1 bb)  (Map int (Option String)))
+          ms (:: (map-assoc (map-new) 1 aa1) (Map int (Option String)))]
+      (println (if (map-eq? m1 m2 (fn [p q] : bool (eq? (:: p (Option String)) (:: q (Option String))))) "mu-eq" "mu-ne"))
+      (println (if (map-eq? m1 m3 (fn [p q] : bool (eq? (:: p (Option String)) (:: q (Option String))))) "mu-eq" "mu-ne"))
+      (println (if (map-eq? m1 m2 (fn [p : (Option String) q : (Option String)] : bool (eq? p q))) "mt-eq" "mt-ne"))
+      (println (if (map-eq? m1 m3 (fn [p : (Option String) q : (Option String)] : bool (eq? p q))) "mt-eq" "mt-ne"))
+      (println (if (map-eq? m1 ms (fn [p : (Option String) q : (Option String)] : bool (eq? p q))) "mt-eq" "mt-ne")))
+    (let [s1 (:: (set-add-eq-o (set-new) 1 aa1 0 0) (Set (Option String)))
+          s2 (:: (set-add-eq-o (set-new) 1 aa2 0 0) (Set (Option String)))
+          s3 (:: (set-add-eq-o (set-new) 1 bb 0 0)  (Set (Option String)))
+          ss (:: (set-add-eq-o (set-new) 1 aa1 0 0) (Set (Option String)))]
+      (println (if (set-eq-cmp? s1 s2 (fn [p q] : bool (eq? (:: p (Option String)) (:: q (Option String))))) "su-eq" "su-ne"))
+      (println (if (set-eq-cmp? s1 s3 (fn [p q] : bool (eq? (:: p (Option String)) (:: q (Option String))))) "su-eq" "su-ne"))
+      (println (if (set-eq-cmp? s1 s2 (fn [p : (Option String) q : (Option String)] : bool (eq? p q))) "st-eq" "st-ne"))
+      (println (if (set-eq-cmp? s1 s3 (fn [p : (Option String) q : (Option String)] : bool (eq? p q))) "st-eq" "st-ne"))
+      (println (if (set-eq-cmp? s1 ss (fn [p : (Option String) q : (Option String)] : bool (eq? p q))) "st-eq" "st-ne")))
+
+    ;; 5. a NON-niche element through the same helpers: the mark must be inert
     (let [a (cons 1 (cons 2 0))
           b (cons 1 (cons 2 0))
           c (cons 1 (cons 3 0))]

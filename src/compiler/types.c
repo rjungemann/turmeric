@@ -2828,13 +2828,26 @@ static void type_name_buf(Buf *b, Type t) {
         /* IT4: Top type */
         case TY_ANY:     buf_puts(b, "any"); break;
         case TY_FN: {
+            /* Print each parameter from its FULL type when one is recorded,
+             * falling back to the bare kind.  Rendering the kind alone collapses
+             * every composite to its constructor and a type variable to nothing,
+             * which is how `option-eq?` came to reject a lambda with
+             * "expected (fn [int int] : bool), got (fn [int int] : bool)" -- the
+             * two types differ, and the message showed neither difference.  A
+             * diagnostic a reader cannot act on is worse than none. */
             buf_puts(b, t.as.fn.cfnptr ? "(c-fn [" : "(fn [");
             for (uint32_t i = 0; i < t.as.fn.arity; i++) {
                 if (i > 0) buf_puts(b, " ");
-                type_name_buf(b, type_from_kind(t.as.fn.arg_kinds[i]));
+                if (t.as.fn.arg_full_types && t.as.fn.arg_full_types[i])
+                    type_name_buf(b, *t.as.fn.arg_full_types[i]);
+                else
+                    type_name_buf(b, type_from_kind(t.as.fn.arg_kinds[i]));
             }
             buf_puts(b, "] : ");
-            type_name_buf(b, type_from_kind(t.as.fn.result_kind));
+            if (t.as.fn.result_full_type)
+                type_name_buf(b, *t.as.fn.result_full_type);
+            else
+                type_name_buf(b, type_from_kind(t.as.fn.result_kind));
             buf_puts(b, ")");
             break;
         }

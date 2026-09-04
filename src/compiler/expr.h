@@ -245,6 +245,16 @@ struct Binding {
     bool          is_affine;       /* true if annotated with ^affine (no duplication) */
     bool          is_relevant;     /* true if annotated with ^relevant (must be used) */
     bool          is_fat;          /* A#1: ^fat -- param consumes a fat closure */
+    /* typed-comparator-over-hamt-box: this parameter is DECLARED as a niche
+     * `(Option P)` but its caller hands over a carrier BOX -- the shape a
+     * comparator passed to `map-eq?` / `set-eq-cmp?` is in, since those iterate
+     * a HAMT and pass the stored value/key verbatim.  Without it the parameter
+     * is declared as the niche pointer and the box address flows in as if it
+     * were the payload, so a value compares unequal to itself.  Set at the call
+     * that establishes the convention (elab_call.c); emit_fns.c declares such a
+     * parameter as the carrier and unboxes it at body entry, the same shape the
+     * B4 wide-by-value box load uses. */
+    bool          arrives_as_carrier_box;
     /* ST1: Usage tracking for substructural discipline checking */
     UsageState    usage_state;     /* how many times this binding has been referenced */
     /* UT1: alias tracking -- current alias state for this binding */

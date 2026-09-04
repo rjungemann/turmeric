@@ -1,13 +1,19 @@
 ---
 title: Comparator conventions over niche elements are still inconsistent in three places
-category: Reported
-description: The *-eq? family splits on whether a helper passes its comparator the stored word or a HAMT box. The word half is fixed; the box half (map-eq?, set-eq-cmp?) breaks the TYPED spelling, the pair-eq? macro applies its comparator directly so nothing can mark it, and option-eq? rejects a hand-written lambda with a diagnostic that prints the same type twice.
+category: Archive
+description: The *-eq? family splits on whether a helper passes its comparator the stored word or a HAMT box. RESOLVED 2026-09-04 -- the box half's typed comparator now arrives as the carrier and unboxes at body entry, and fn types print their full parameter types instead of collapsing to bare kinds. One residue, the pair-eq? macro, is refiled on its own.
 ---
 
 # Comparator conventions over niche elements are still inconsistent in three places
 
 **Severity: medium** -- silent wrong answers on the DEFAULT path in two of the
-three, for spellings the docs recommend.  Found 2026-09-04 while verifying a
+three, for spellings the docs recommend.
+
+**RESOLVED 2026-09-04** for items 1 and 3; item 2 (the `pair-eq?` macro) is
+refiled on its own as
+[pair-eq-macro-applies-comparator-directly](../reported/pair-eq-macro-applies-comparator-directly.md),
+because it is a different shape rather than a smaller piece of the same one.
+Resolution notes are at the bottom.  Found 2026-09-04 while verifying a
 scope claim in
 [erased-closure-param-over-niche-vec-slot-reads-box](../archive/erased-closure-param-over-niche-vec-slot-reads-box.md).
 That claim -- "`vec-eq?` is the one helper that hands over raw words, every
@@ -147,3 +153,71 @@ answered "eq" for every input, so an equal-only probe reports success).
 - `src/compiler/diag.c` -- the TUR-E0715 explanation, same reason.
 - `docs/upcoming/container-element-form-plan.md` -- CE3 is recorded closed for
   the word-passing half; this is the rest of the same question.
+
+
+## Resolution (2026-09-04)
+
+### 1. The typed comparator over Map/Set -- FIXED
+
+The mirror image needed a mirrored mechanism, not a new idea.  The word half
+marks an ERASED parameter so its ascription reinterprets; the box half marks a
+parameter DECLARED as a niche option so it arrives as the carrier and unboxes
+at body entry.  `Binding.arrives_as_carrier_box` is set at the call that
+establishes the convention (`call_comparator_gets_carrier_box`: `map-eq?` and
+`set-eq-cmp?` at argument 2, `map-eq-raw-k?` at 3), and emit declares such a
+parameter `int64_t __tur_nbox_<p>` and materializes it at entry:
+
+```c
+static bool __fn_2009(int64_t __tur_nbox_p, int64_t __tur_nbox_q) {
+    void * p = (__tur_nbox_p ? (void *)(intptr_t)tur_opt_value_checked(__tur_nbox_p) : (void *)0);
+    ...
+```
+
+That is deliberately the same shape as the B4 wide-by-value box load two loops
+above it, and it borrows the same way: the box belongs to the container that
+stored it, so nothing is freed here.  The read is the CHECKED one for the same
+reason the carrier->niche bridge uses it -- a box can hold `Some(NULL)`, and
+the unchecked value would silently turn a value `some?` calls true into
+`(none)`.
+
+Two things this cost that the report did not anticipate:
+
+- **The forward declaration has to move with the definition.**  The first
+  build failed at `cc` with the prototype still spelling `void *` -- B4 keeps
+  its two sides in step through a TYPE-level predicate
+  (`type_is_b4box_closure_slot`), which a per-binding mark cannot reuse, so
+  `emit_fn_forward_decls` needed the branch explicitly.
+- **Only a lambda written at the call can be marked**, the same limit the word
+  half has and for the same reason: a named comparator is elaborated once and
+  may be called elsewhere with a value that really is the niche word.  Unlike
+  the word half there is no diagnostic for the named case here, because
+  TUR-E0715 needs an element type from a `(Vec A)` receiver and `map-eq?`
+  declares `m1 : int`.
+
+### 3. `option-eq?`'s same-type-twice diagnostic -- FIXED
+
+Not a convention problem at all, and wider than `option-eq?`: `type_name_buf`'s
+`TY_FN` case rendered each parameter as `type_from_kind(arg_kinds[i])`,
+discarding `arg_full_types`.  That collapses every composite to its constructor
+and a type variable to nothing, which is how two genuinely different types
+printed identically.  It now prints the full parameter and result types when
+recorded:
+
+```
+expected (fn [tyvar 'A' tyvar 'A'] : bool), got (fn [int int] : bool)
+```
+
+The rejection itself is correct -- `A` binds to `(Option String)` from the
+receiver and the lambda declares `int` -- and the typed spelling works.  Only
+the message was unactionable.  This improves every fn-type diagnostic in the
+compiler, and no fixture depended on the collapsed form (2786 passed, zero
+`expected.diag` changes).
+
+### Validation
+
+`bash tests/run.sh` 2786 passed / 0 failed, zero snapshot drift; option-niche
+seam 10/0, sr2 55/0, sr4 24/0, leak-check 79/0.
+`tests/fixtures/niche-elem-comparator-conventions` now carries both halves of
+the family -- five Map and five Set assertions alongside the word-passing ones,
+each group ending with the same-pointer case that makes the verdict a fact
+rather than a judgement about intended semantics.
