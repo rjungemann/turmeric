@@ -38,7 +38,11 @@ phase's acceptance tests were going to want a door for.
 phase's landing note for what moved and the two compiler bugs the work
 surfaced).  **SX3 has landed** -- one EUF state with mark/undo per cube,
 verdict-identical to the rebuild path, `TUR_REFINE_EUF=rebuild` kept as the
-replay seam.  With those two down, every live phase of this plan is done:
+replay seam.  **SX8b has landed** (2026-09-03) -- `tur smt` runs a script as a
+session with a real assertion stack, plus `--interactive`; its own premise
+turned out to be wrong (push/pop do NOT map onto the trail, and could not) and
+the phase records the correction and the differential acceptance test that
+replaced it.  With those down, every live phase of this plan is done:
 what remains is parked on evidence (SX4, SX6, and their dependents) or is
 follow-up filed in its own right (`#fx{Bt}` for precision, the self-recursion
 bug below).  Details under
@@ -804,6 +808,14 @@ Two instruments, no language or runtime change:
   2026-08-25**, so the table above is the pre-raise record; the current
   telemetry is whatever `benchmarks/run-cap-sweep.sh` last wrote.
 
+  **Re-run 2026-09-03 at v0.43.0** (the gate re-run SX4 and SX6 each ask for
+  before reconsidering): **byte-identical to the 2026-08-26 baseline** apart
+  from the generated-at header -- same 124 / 85 / 200 units, same peaks, the
+  same single capped unit (`qf_lra_deep_arith_chain_sat`, the 1000-deep
+  regression artifact). Both gates stay shut, now on current evidence rather
+  than on a nine-day-old file. Re-running it is cheap and is the right first
+  move any time this plan's right-hand side comes up again.
+
 **Size:** small. **Gate:** none (benchmarks and stats are not compiler
 features).
 
@@ -992,6 +1004,35 @@ would win at small n -- it is O(1) to extend and free to backtrack -- and lose
 only once its O(n) lookup dominated. It never wins. So the conditional in "why
 it is in this plan at all" resolves the other way: SX3/SX4 **should** build on
 the shared trail rather than proceeding as plain C.
+
+**Re-measured 2026-09-03 at v0.43.0, after the whole SR programme landed.** The
+table above predates SR1, SR2a/b, SR3 and the SR4 default flip -- every
+representation change that touches `logic.tur`'s `Term`/`Subst`/`Stream` -- and
+the benchmark had bit-rotted into a build error in the meantime (the trail
+natives are compiler-predeclared now, so its own `extern-c` rows collided).
+Fixed and re-run; full table in
+[benchmarks/logic-subst-results.md](../../benchmarks/logic-subst-results.md).
+
+**The gate verdict is unchanged and the margin widened by an order of
+magnitude: 11x at n=1 to 215x at n=512.** Nothing here reopens SX2.
+
+The second finding above -- "a large per-operation CONSTANT, not the linear
+scan, is what dominates" -- **no longer holds on the default.** The persistent
+curve is flat only to n=4 and cleanly linear from n=8 (2.0x per doubling from
+n=64). The constant was the allocator and the SR programme took most of it
+away. But the new slope is mostly not asymptotics either: an A/B against
+`TUR_SR4_RECURSIVE_CARRIER=1` on one box puts **6.8x of the n=512 cost on the
+by-value recursive-sum lowering**, which copies 120 bytes per chain link where
+the carrier moved one word, two thirds of it redundantly. Filed as
+[../reported/sr4-byvalue-recursive-sum-walk-copies-per-link.md](../reported/sr4-byvalue-recursive-sum-walk-copies-per-link.md).
+`TUR_SR1_SUM_BYVALUE=0` on top moves nothing, which is the control: these types
+are all self-recursive, so SR4 is the entire effect.
+
+**Nothing on the compiler side of this plan is affected.** SX3's EUF, SX4's
+simplex and SX0(b)'s cap sweep live in `src/compiler/refine_solver_*.c` -- C
+compiled by CMake, not Turmeric lowered by `tur` -- so no representation change
+reaches them, and their gates stand exactly as recorded. The SR programme moves
+the SX2/stdlib half of this plan only.
 
 The shape carries a second finding. The persistent path's cost is roughly FLAT
 at ~190-230 ns/op from n=1 to n=16 and only climbs past n=128, so what dominates
@@ -1282,10 +1323,33 @@ stepping stone may be where it permanently stops:
 
 **SX6a -- lazy cubes, then offline lazy SMT.**
 
-- Step zero, available today with no new machinery: *stream* cubes off an
+- ~~Step zero, available today with no new machinery: *stream* cubes off an
   explicit stack instead of materializing up to 64, so a time budget replaces
   the `overflow` flag. No semantic change; retires the cube-count cap as a
-  cliff.
+  cliff.~~ **RETIRED 2026-09-03 on measurement: there is nothing to stream.**
+  The premise is "materializing up to 64", and nothing in any measured
+  population comes near it. Counting cube-set width directly (a temporary
+  probe in `refine_cubes_build`, over `tur smt` on the corpus and `tur check`
+  in-tree), the widest SINGLE cube set anywhere is **16** -- on three corpus
+  benchmarks (`qf_lra_ite_int_numerals_{sat,unsat}`, `qf_lia_ite_nested_sat`)
+  -- and the heaviest in-tree refinement fixture
+  (`refine-crossing-path-conditions`) peaks at **4**, producing 71 cubes total
+  across 48 builds in 117 expand frames. An explicit stack would save neither
+  memory nor time over an array that never exceeds sixteen entries, and the
+  cap it would retire as a cliff is the one SX0(b) already found never fires.
+  This item is not deferred; it is answered.
+
+  **The same probe found the thing actually worth changing here, and it is not
+  a boolean-structure phase at all:** the chain expands the IDENTICAL DNF once
+  per stage, because S0/S1/S2/S3 each open with their own
+  `refine_cubes_build` on an unchanged VC. The first row above reads `builds=4
+  cubes=64 peak=16` -- one 16-cube DNF, expanded four times, three of them
+  discarded. Filed with a fix direction (build once in the chain driver and
+  pass it down; do NOT cache on the `RefineVC`, which SX8b's `pop` makes
+  unsound) as
+  [../reported/refine-chain-expands-the-same-dnf-four-times.md](../reported/refine-chain-expands-the-same-dnf-four-times.md).
+  It is a simplification rather than a speedup -- the solver is compile-time
+  noise either way -- so it waits for someone touching this code.
 - Then offline lazy SMT: Tseitin-encode the (already-NNF) refutation formula,
   run a plain CDCL SAT core as a **black box**, hand each full boolean model --
   which *is* a cube -- to the existing **non-incremental** S1-S3, and on
@@ -1302,9 +1366,13 @@ stepping stone may be where it permanently stops:
   cube caps biting on real obligations.
   **Measured: they do not.** Zero cube-cap hits across all three populations;
   in-tree refinement code peaks at 4 cubes of 64. SX6 is **parked**, and SX6b
-  is parked behind it. The step-zero item above (streaming cubes off an
+  is parked behind it. ~~The step-zero item above (streaming cubes off an
   explicit stack) is still a fine cleanup on its own merits, but it is now a
-  cleanup rather than a cap-driven necessity.
+  cleanup rather than a cap-driven necessity.~~ **And step zero is retired
+  too, 2026-09-03** -- see the item above: the widest cube set in any measured
+  population is 16, so there is no materialization to stream. With that gone,
+  nothing under SX6 is available to build; the whole phase waits on its gate
+  reopening.
 
 **SX6b -- CDCL(T) proper.** Only if SX6a's blocking-clause loop measurably
 thrashes (many iterations rediscovering the same theory conflict) on real
@@ -1437,30 +1505,117 @@ Independent of everything else; can land right after SX0.
   agrees with the ctest harness on all 125 labels; the JSON dump round-trips
   through `python3 -m json.tool`; both are exercised by fixtures.
 
-**SX8b -- incremental queries.** After SX3/SX4 land marks, the textual surface
-grows the SMT-LIB2 incremental commands, because the trail is exactly what
-makes them implementable: `(push)` / `(pop)` map onto `euf_mark` +
-`la_mark` / undo, `(get-model)` onto the bounded search, and -- after the 3.7
-machinery -- `(get-unsat-core)` onto the conflict explanation and
-`(get-proof)` onto the certificate. This tier is the *external witness* that
-the trail works: a `push`/`assert`/`check-sat`/`pop` script exercises
-mark/undo through a public door, and SX3/SX4's acceptance suites should
-include such scripts once the tier exists. `tur smt --interactive` (read
-commands from stdin) makes `tur` usable as a backend for anything that speaks
-the protocol subset.
+**SX8b -- incremental queries. LANDED 2026-09-03.**
 
-**SX8c -- in-language and playground access.**
+`tur smt` now runs a script as a SESSION: `(push [n])` / `(pop [n])` scope the
+assertions, each `(check-sat)` is answered where it appears, `(get-model)`
+reprints the last witness, `(exit)` ends the session, and
+`tur smt --interactive` reads the same commands from stdin and answers as they
+arrive. The exit code is the last answer.
 
-- A compile-time API for the 3.6 search layer: expose the discharge seam to
+**The premise below is wrong, and this is the correction.** The tier was
+specced as "after SX3/SX4 land marks... `(push)` / `(pop)` map onto `euf_mark`
++ `la_mark` / undo", making it "the *external witness* that the trail works".
+They do not map onto the trail, and no amount of SX4 would change that: each
+`check-sat` runs the chain from the current assertion set, which rebuilds the
+DNF cubes, and **adding one hypothesis changes the cube set wholesale** -- so
+there is no solver-side mark that spans two checks. `euf_mark`/`euf_undo_to`
+bracket cubes *within* one check, which is SX3 and is already exercised by
+every compile. What is incremental here is the ASSERTION SET: a `pop` restores
+exactly the hypotheses in scope at the matching `push`, with nothing re-read or
+re-translated. That is what the protocol means by incremental, and it is worth
+having on its own; it is just not a witness for the trail.
+
+**So the acceptance criterion was replaced with one that bites.** The property
+that makes an incremental interface worth having is that it answers the SAME as
+the non-incremental one, so `tests/fixtures/sx8b-smt-push-pop` is a
+DIFFERENTIAL check: every answer a stacked script gives is compared against a
+flat script with the same assertions in scope, run as a separate process with
+no stack at all. A `pop` that kept a popped assertion, or dropped a live one,
+fails there and would pass any single-script test.
+
+**What landed, in one sentence of design:** one command executor serves both
+doors, and they differ in a single `stack_ok` bit -- batch
+(`refine_smtlib_read`, unchanged for the corpus) says `push`/`pop` are outside
+the fragment because it folds a script into one assertion set; sessions say
+they are protocol. Keeping one executor is what makes the two doors agree about
+the accepted fragment by construction rather than by parallel maintenance.
+
+**Two limits, both deliberate and both documented in the guide:** only
+hypotheses are scoped (a `declare-fun` survives its `pop` -- sound in this
+direction, since an unconstrained variable cannot turn `sat` into `unsat`, and
+truncating `n_vars` would leave hash-consed terms pointing at reusable slots);
+and a script with no `(check-sat)` is still decided once at the end, which is
+SX8a's contract and what every corpus benchmark relies on.
+
+**Validation:** the corpus replay is unmoved (125 benchmarks, 68 proved, 56
+sat-correct, 1 skipped, 0 soundness failures -- the SX8a figures exactly), the
+`sx8a-tur-smt` fixture passes byte-identically, `bash tests/run.sh` is 2780/0,
+and `ctest -R refine` is 4/4. The new fixture agrees byte-for-byte between the
+Release and the ASan Debug build.
+
+**Still not built, and still needing what they always needed:**
+`(get-unsat-core)` wants the 3.7 conflict explanation and `(get-proof)` wants
+the certificate; both are SX6b-shaped and parked behind it.
+
+**SX8c -- in-language and playground access. HALF LANDED 2026-09-04.**
+
+- ~~A compile-time API for the 3.6 search layer: expose the discharge seam to
   Turmeric compile-time code as `(solver/check hyps goal)` returning
-  valid/invalid/unknown plus model. This is not extra work on top of SX7 --
-  it *is* the seam SX7's Turmeric-side prototype needs, named and documented.
-  Read-only by construction: per 3.7 nothing reachable from this API can
-  elide a check; interrogation proposes, the C chain decides.
-- A WASM export (`turi_smt_check` in `src/web/wasm_glue.c`, next to
-  `turi_doc_lookup`) so the playground can answer queries -- the "static
-  checking at zero download cost" story already ships the solver to the
-  browser; this makes it visible there.
+  valid/invalid/unknown plus model.~~ **NOT BUILT, and deliberately: it has no
+  consumer and it carries an unmade design decision.** Its own justification
+  here is that it "*is* the seam SX7's Turmeric-side prototype needs" -- and
+  SX7 is item 6 of the recommended order, marked "deferrable indefinitely",
+  with nobody having started it. Building a seam to fit a prototype that does
+  not exist is how a surface gets shaped wrong and then has to be kept.
+
+  The undecided part is the signature, not the plumbing. `hyps` and `goal` as
+  written imply TURMERIC-LEVEL terms, and there is no Turmeric representation
+  of a `VCTerm` -- the only translation into one that exists is the SMT-LIB2
+  reader, from text. So the API is either a new term-building surface (real
+  design work, and SX7 is the only thing that could say what shape it wants)
+  or it is `(solver/check "<smtlib>")`, which is the string door below bound as
+  an interpreter native -- cheap, but not what this bullet asks for, and
+  calling it done would be overclaiming. Left for SX7 to drive.
+
+- **A WASM export -- `turi_smt_check` in `src/web/wasm_glue.c`, next to
+  `turi_doc_lookup`. LANDED.** The premise checked out: `compiler/refine_*.c`
+  are already in `TUR_CORE_SOURCES` (src/CMakeLists.txt:199-208), so every
+  browser session has been shipping S0..S3 all along with no way to see it.
+
+  The semantics are `tur smt`'s to the letter -- the same SX8b session reader
+  (so `(push)`/`(pop)` scope assertions and each `(check-sat)` is answered
+  where it appears), the same chain in the same order, the same bounded model
+  search, and the same "a script with no `(check-sat)` is decided once at the
+  end". Two doors onto one solver that disagreed would be a second solver
+  wearing the first one's name, and the browser is exactly where nobody would
+  notice. Returns JSON (`{"schema":0,"results":[...]}`, `schema` 0 while
+  unstable, matching `--dump-refine=json`); a script outside the fragment gets
+  an `error` key and an EMPTY `results` array -- refused whole, never partially
+  parsed. Read-only as the spec requires: nothing reachable from it touches
+  elaboration or discharge, so no answer can elide a runtime check.
+
+  **Tested natively, which is the point.** `tests/wasm_glue_smt_unit.c` (ctest
+  `tur_wasm_glue_smt_unit`) links `libturi_wasm` and calls the real function
+  against the real chain -- the `tur_wasm_glue_lang_unit` precedent, and the
+  reason a defect here does not have to be found by a person with an
+  Emscripten toolchain in the way of every diagnosis. Every case is one whose
+  CLI answer is pinned by `sx8a-tur-smt` or `sx8b-smt-push-pop`, so the two
+  doors are checked against each other rather than only against themselves.
+  It earned its keep immediately: the first version returned `Buf.data`
+  straight back as a C string, and `Buf` carries a length and does NOT
+  NUL-terminate -- valid JSON with heap garbage trailing the closing brace,
+  which in a browser panel would have read as a rendering bug.
+
+  **Not verified end to end, and this is the honest limit:** `emcc` is not
+  installed on the box this landed from, so the Emscripten link was never run.
+  The symbol is confirmed present (`nm libturi_wasm.a` shows
+  `T turi_smt_check`) and `_turi_smt_check` is added to `EXPORTED_FUNCTIONS`,
+  but the first person with a toolchain should run `just wasm` once. A wrong
+  name in that list fails the link loudly rather than silently, which is the
+  failure mode to expect if it is wrong at all. The `tur_refine_wasm` ctest
+  (which compiles the refine TUs under emcc) skips on this box for the same
+  reason.
 
 **Scope honesty, so the surface never overpromises:** `tur smt` accepts the
 corpus subset of SMT-LIB2 over `QF_UFLIA`/`QF_UFLRA`, answers `unknown`
@@ -1504,9 +1659,24 @@ one dishonest failure mode a query surface can have.
   And prepending trail.tur to every compile moved **148 codegen snapshots**,
   regenerated in the same change per the fixture rule.
 
-  Still open in this phase: graduate `solver-lazy-smt` on the SX6a corpus
-  criterion. Move this plan to `docs/archive/` when the last phase lands, per
-  the archiving rule.
+  ~~Still open in this phase: graduate `solver-lazy-smt` on the SX6a corpus
+  criterion.~~ **Moot, corrected 2026-09-03:** there is no `solver-lazy-smt`
+  row to graduate. SX6a never started (its gate came back shut), so the row it
+  would have registered was never written -- `grep solver-lazy-smt src/` is
+  empty. This line becomes live again only if SX6a's gate reopens.
+
+  **Still open in this phase, and actually open:** the internals guide's
+  incrementality story was stale for a release cycle after SX3 landed -- the
+  S1 section still described the rebuild-per-cube state, `TUR_REFINE_EUF` was
+  documented nowhere but here, and the caps table still read `NO_MAX_SHARED`
+  8 against the source's 16. Fixed 2026-09-03. The `"schema": 0` -> `1` stamp
+  on the `--dump-refine=json` record is the remaining SX9 item; `tur smt` and
+  the JSON dump are documented in the internals guide rather than a separate
+  `solver-query-guide.md`, which is where they read better and is treated as
+  closing that deliverable.
+
+  Move this plan to `docs/archive/` when the last phase lands, per the
+  archiving rule.
 
 ### Recommended order
 

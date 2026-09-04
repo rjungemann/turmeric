@@ -673,32 +673,46 @@ static bool tr_sort(const Sx *s, VCSort *out) {
 }
 
 /* ------------------------------------------------------------------------- *
- * The reader entry point
+ * The command dispatcher, and the two doors onto it
+ *
+ * One command executor serves both the BATCH reader (`refine_smtlib_read`,
+ * the corpus/`tur smt` door since SX8a) and the SESSION reader (SX8b, the
+ * assertion-stack door).  They differ in exactly one bit -- `stack_ok` --
+ * which decides whether `push`/`pop`/`check-sat` are protocol commands or
+ * outside the fragment.  Batch mode says outside, and must: it folds a whole
+ * script into ONE assertion set, and a stack has no meaning there.  Keeping
+ * one executor is what makes the two doors agree about the fragment by
+ * construction rather than by parallel maintenance.
  * ------------------------------------------------------------------------- */
 
-void refine_smtlib_read(SmtlibQuery *b, const char *text, size_t len, Arena *a) {
-    memset(b, 0, sizeof(*b));
-    b->status = SMT_STATUS_NONE;
+#define SMT_MAX_STACK 256
 
-    g_n_sorts = 0;                      /* sorts are per-benchmark */
-    g_n_defs  = 0;                      /* and so are macros */
-    SxReader r = { text, text + len, a, NULL };
-    RefineVC *vc = vc_new(a);
-    b->vc = vc;
-    Tr t; memset(&t, 0, sizeof(t));
-    t.vc = vc;
-    t.arena = a;
-    t.cap_lets = TR_MAX_LET_BINDS;
-    t.lets = (LetBind *)arena_alloc(a, t.cap_lets * sizeof(LetBind));
+struct SmtlibSession {
+    Arena       *arena;
+    RefineVC    *vc;
+    Tr           t;
+    SxReader     r;
+    SmtlibQuery  q;            /* status + the skip flag the executor sets */
+    /* The assertion stack: `n_hyps` as it stood at each open `push`.  A `pop`
+     * truncates back to it, which is the whole undo -- hypotheses are a plain
+     * array of hash-consed, arena-allocated terms, so dropping the tail
+     * releases exactly the assertions in scope and nothing dangles. */
+    uint32_t     stack[SMT_MAX_STACK];
+    uint32_t     depth;
+};
 
-    for (;;) {
-        Sx *cmd = sx_read(&r);
-        if (!cmd) {
-            if (r.err) { b->skipped = true; b->skip_reason = r.err; }
-            break;
-        }
-        if (cmd->kind != SX_LIST || cmd->n == 0) continue;
-
+/* Execute ONE top-level command.  Errors are reported the way the batch reader
+ * has always reported them -- `b->skipped` plus a reason -- so every
+ * out-of-fragment path below is unchanged from when this was a loop body.
+ * `*ev` is only ever raised above SMT_EV_OK in session mode. */
+static void smt_exec_cmd(SmtlibSession *s, SmtlibQuery *b, const Sx *cmd,
+                         bool stack_ok, SmtlibEvent *ev) {
+    Tr t = s->t;                       /* by value: `n_lets` is per-command */
+    RefineVC *vc = s->vc;
+    *ev = SMT_EV_OK;
+    /* do/while(0) so the `continue`s below still read as "this command is
+     * finished" -- they are the original loop body's, unedited. */
+    do {
         if (sx_head_is(cmd, "set-info")) {
             if (cmd->n >= 3 && sx_is(cmd->kids[1], ":status")) {
                 if (sx_is(cmd->kids[2], "sat"))        b->status = SMT_STATUS_SAT;
@@ -722,10 +736,67 @@ void refine_smtlib_read(SmtlibQuery *b, const char *text, size_t len, Arena *a) 
             }
             continue;
         }
-        if (sx_head_is(cmd, "set-option") ||
-            sx_head_is(cmd, "check-sat") || sx_head_is(cmd, "exit") ||
-            sx_head_is(cmd, "get-model") || sx_head_is(cmd, "get-info"))
+        /* In BATCH mode these are all inert: the whole script is one assertion
+         * set decided once by the caller, so a `check-sat` in the middle of it
+         * has nothing distinct to answer.  In SESSION mode each becomes an
+         * event the driver acts on at the point it appears. */
+        if (sx_head_is(cmd, "check-sat")) {
+            if (stack_ok) *ev = SMT_EV_CHECK_SAT;
             continue;
+        }
+        if (sx_head_is(cmd, "get-model")) {
+            if (stack_ok) *ev = SMT_EV_GET_MODEL;
+            continue;
+        }
+        if (sx_head_is(cmd, "exit")) {
+            if (stack_ok) *ev = SMT_EV_EXIT;
+            continue;
+        }
+        if (sx_head_is(cmd, "set-option") || sx_head_is(cmd, "get-info"))
+            continue;
+
+        /* (push [n]) / (pop [n]) -- session mode only.  `n` defaults to 1.
+         *
+         * Only the HYPOTHESES are scoped.  Declarations made inside a scope
+         * survive the `pop`, which is a deliberate divergence from SMT-LIB and
+         * a sound one in this direction: a declared symbol that appears in no
+         * assertion is an unconstrained variable, and an unconstrained variable
+         * cannot make an assertion set less satisfiable -- so it can never turn
+         * a `sat` into an `unsat`, which is the only error that would matter.
+         * The reason not to scope them is concrete rather than lazy: hypotheses
+         * are hash-consed terms holding var INDICES, and truncating `n_vars`
+         * would leave interned terms pointing at slots a later declaration
+         * could reuse with a different sort. */
+        if (sx_head_is(cmd, "push") || sx_head_is(cmd, "pop")) {
+            if (!stack_ok) {
+                b->skipped = true; b->skip_reason = "unsupported command"; return;
+            }
+            uint32_t n = 1;
+            if (cmd->n == 2) {
+                int64_t v;
+                if (cmd->kids[1]->kind != SX_ATOM ||
+                    !tr_numeral(cmd->kids[1]->atom, &v) || v < 0) {
+                    b->skipped = true; b->skip_reason = "malformed push/pop level"; return;
+                }
+                n = (uint32_t)v;
+            } else if (cmd->n != 1) {
+                b->skipped = true; b->skip_reason = "malformed push/pop"; return;
+            }
+            if (sx_head_is(cmd, "push")) {
+                if (s->depth + n > SMT_MAX_STACK) {
+                    b->skipped = true; b->skip_reason = "push nested too deeply"; return;
+                }
+                for (uint32_t i = 0; i < n; i++) s->stack[s->depth++] = vc->n_hyps;
+            } else {
+                if (n > s->depth) {
+                    b->skipped = true; b->skip_reason = "pop with no matching push"; return;
+                }
+                /* Truncating to the OUTERMOST of the popped scopes; popping n
+                 * levels at once must land where n separate pops would. */
+                for (uint32_t i = 0; i < n; i++) vc->n_hyps = s->stack[--s->depth];
+            }
+            continue;
+        }
 
         if (sx_head_is(cmd, "declare-sort")) {
             /* (declare-sort NAME ARITY) -- arity 0 only. */
@@ -783,8 +854,7 @@ void refine_smtlib_read(SmtlibQuery *b, const char *text, size_t len, Arena *a) 
             continue;
         }
 
-        if (sx_head_is(cmd, "push") || sx_head_is(cmd, "pop") ||
-            sx_head_is(cmd, "define-sort") || sx_head_is(cmd, "assert-soft") ||
+        if (sx_head_is(cmd, "define-sort") || sx_head_is(cmd, "assert-soft") ||
             sx_head_is(cmd, "minimize") || sx_head_is(cmd, "maximize")) {
             b->skipped = true; b->skip_reason = "unsupported command"; return;
         }
@@ -839,8 +909,103 @@ void refine_smtlib_read(SmtlibQuery *b, const char *text, size_t len, Arena *a) 
         }
 
         b->skipped = true; b->skip_reason = "unknown command"; return;
+    } while (0);
+
+    /* Write the translator back: `reals_only` (set by set-logic) and `n_ite`
+     * (the serial minting fresh ite-lifting variables) both have to persist
+     * across commands -- restarting the serial would let two commands mint the
+     * same fresh symbol and silently conflate two different lifted terms. */
+    s->t = t;
+}
+
+/* ------------------------------------------------------------------------- *
+ * Door 1: the batch reader (SX8a)
+ * ------------------------------------------------------------------------- */
+
+/* Shared construction.  The goal is NOT set here: batch mode sets it once at
+ * the end, exactly as it always has, and a session sets it up front because a
+ * session must be decidable at every `check-sat`. */
+static void smt_session_init(SmtlibSession *s, Arena *a) {
+    memset(s, 0, sizeof(*s));
+    s->arena = a;
+    s->vc    = vc_new(a);
+    s->q.status = SMT_STATUS_NONE;
+    s->t.vc    = s->vc;
+    s->t.arena = a;
+    s->t.cap_lets = TR_MAX_LET_BINDS;
+    s->t.lets = (LetBind *)arena_alloc(a, s->t.cap_lets * sizeof(LetBind));
+    g_n_sorts = 0;                      /* sorts are per-script */
+    g_n_defs  = 0;                      /* and so are macros */
+}
+
+void refine_smtlib_read(SmtlibQuery *b, const char *text, size_t len, Arena *a) {
+    memset(b, 0, sizeof(*b));
+    b->status = SMT_STATUS_NONE;
+
+    SmtlibSession s;
+    smt_session_init(&s, a);
+    b->vc = s.vc;
+    s.r = (SxReader){ text, text + len, a, NULL };
+
+    for (;;) {
+        Sx *cmd = sx_read(&s.r);
+        if (!cmd) {
+            if (s.r.err) { b->skipped = true; b->skip_reason = s.r.err; }
+            break;
+        }
+        if (cmd->kind != SX_LIST || cmd->n == 0) continue;
+        SmtlibEvent ev;
+        smt_exec_cmd(&s, b, cmd, /*stack_ok=*/false, &ev);
+        if (b->skipped) return;         /* skip whole, never partially parsed */
     }
 
     /* `hyps |- false` is VALID exactly when the assertion set is UNSAT. */
-    vc_set_goal(vc, vc_bool(vc, false));
+    vc_set_goal(s.vc, vc_bool(s.vc, false));
 }
+
+/* ------------------------------------------------------------------------- *
+ * Door 2: sessions (SX8b)
+ * ------------------------------------------------------------------------- */
+
+SmtlibSession *refine_smtlib_session_new(Arena *a) {
+    SmtlibSession *s = (SmtlibSession *)arena_alloc(a, sizeof(*s));
+    smt_session_init(s, a);
+    /* Fixed for the session's life, so every `check-sat` decides
+     * `hyps |- false` over whatever is in scope at that moment. */
+    vc_set_goal(s->vc, vc_bool(s->vc, false));
+    return s;
+}
+
+void refine_smtlib_session_feed(SmtlibSession *s, const char *text, size_t len) {
+    s->r = (SxReader){ text, text + len, s->arena, NULL };
+}
+
+SmtlibEvent refine_smtlib_session_step(SmtlibSession *s) {
+    for (;;) {
+        Sx *cmd = sx_read(&s->r);
+        if (!cmd) {
+            if (s->r.err) { s->q.skipped = true; s->q.skip_reason = s->r.err;
+                            return SMT_EV_ERROR; }
+            return SMT_EV_END;
+        }
+        if (cmd->kind != SX_LIST || cmd->n == 0) continue;
+        SmtlibEvent ev;
+        smt_exec_cmd(s, &s->q, cmd, /*stack_ok=*/true, &ev);
+        if (s->q.skipped) return SMT_EV_ERROR;
+        if (ev != SMT_EV_OK) return ev;
+        /* An ordinary command (declare, assert, push, pop): keep reading until
+         * something the driver has to act on, or the text runs out. */
+    }
+}
+
+RefineVC *refine_smtlib_session_vc(SmtlibSession *s) { return s->vc; }
+
+const char *refine_smtlib_session_err(const SmtlibSession *s) {
+    return s->q.skip_reason;
+}
+
+SmtlibStatus refine_smtlib_session_status(const SmtlibSession *s) {
+    return s->q.status;
+}
+
+uint32_t refine_smtlib_session_depth(const SmtlibSession *s) { return s->depth; }

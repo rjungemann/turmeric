@@ -58,7 +58,17 @@ a3b=$(action "$p3b")
 p4=$(curl -s --data 'decision=confirm' "http://127.0.0.1:$PORT$a3b")     # 7
 check "Confirm shows the thank-you page with the entry" 'Hello, world!' "$p4"
 
-bad=$(curl -s --data 'decision=confirm' "http://127.0.0.1:$PORT${a3b%?}0")   # 8: tampered signature
+# 8: tampered signature.  The substitute character has to DIFFER from the one
+# it replaces: the signature is lowercase hex (line 41 pins the shape), so a
+# fixed `0` left the URL untouched whenever the last digit was already `0` --
+# one run in sixteen, in which the server correctly accepted a validly-signed
+# token and the check failed on a product that had done nothing wrong.  That is
+# a 6% flake in CI and, worse, a test that silently asserted nothing whenever it
+# passed for that reason.
+tamper_last() { case "${1: -1}" in 0) printf '%s1' "${1%?}";; *) printf '%s0' "${1%?}";; esac; }
+a3b_bad=$(tamper_last "$a3b")
+[ "$a3b_bad" != "$a3b" ] || { echo "FAIL tamper did not change the token"; FAIL=$((FAIL+1)); }
+bad=$(curl -s --data 'decision=confirm' "http://127.0.0.1:$PORT$a3b_bad")
 check "a tampered token is refused" 'not issued by this server' "$bad"
 
 entries=$(curl -s "http://127.0.0.1:$PORT/entries")                       # 9

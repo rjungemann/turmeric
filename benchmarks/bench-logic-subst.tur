@@ -27,9 +27,11 @@
 (load "stdlib/logic.tur")
 
 (extern-c tur_monotonic_ns [] :int)
-(extern-c tur_trail_mark_packed [] :int)
-(extern-c tur_trail_undo_to_packed [p :int] :bool)
-(extern-c tur_trail_reset [] :void)
+;; tur_trail_mark_packed / tur_trail_undo_to_packed / tur_trail_reset are
+;; PREDECLARED by the compiler now, so re-declaring them here is a hard
+;; "already defined" error.  The inline-C below still calls them directly --
+;; the preamble carries their prototypes.  The `tur_uf_*` family is not
+;; predeclared, so it still needs its own rows.
 (extern-c tur_uf_new [n :int] :ptr)
 (extern-c tur_uf_free [uf :ptr] :void)
 (extern-c tur_uf_bind [uf :ptr var :int val :int] :bool)

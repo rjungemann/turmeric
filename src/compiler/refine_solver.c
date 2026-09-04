@@ -23,7 +23,8 @@ void refine_caps_reset(void) { memset(&g_caps, 0, sizeof(g_caps)); }
 bool refine_caps_any(void) {
     return g_caps.cubes_hits || g_caps.cube_lits_hits || g_caps.expand_depth_hits ||
            g_caps.la_vars_hits || g_caps.la_constr_hits || g_caps.la_fm_hits ||
-           g_caps.euf_terms_hits || g_caps.no_shared_hits || g_caps.no_rounds_hits;
+           g_caps.euf_terms_hits || g_caps.no_shared_hits || g_caps.no_rounds_hits ||
+           g_caps.path_hyps_hits || g_caps.model_vars_hits;
 }
 
 /* ------------------------------------------------------------------------- *
@@ -251,7 +252,10 @@ bool refine_cubes_build(RefineVC *vc, Arena *a, VCCubeSet *out) {
  * obligation stays Unknown -> runtime check.
  * ------------------------------------------------------------------------- */
 
-#define MODEL_MAX_VARS  3
+/* MODEL_MAX_VARS lives in refine_solver.h beside the other capped quantities,
+ * so the TUR_REFINE_STATS reporter can name the limit its peak is a peak of.
+ * MODEL_MAX_CANDS stays here and is uninstrumented: it bounds the candidate
+ * VALUE set rather than a structural quantity, and nothing has asked. */
 #define MODEL_MAX_CANDS 16
 
 typedef struct {
@@ -336,7 +340,23 @@ RefineModel *refine_model_search(RefineVC *vc, Arena *a) {
      * evaluation decides it outright.  The odometer below runs exactly once and
      * the model is empty -- there is nothing to bind, the arguments already
      * say it. */
-    if (vc->n_vars > MODEL_MAX_VARS) return NULL;
+    /* Past the uninterpreted-symbol gate, so this VC could plausibly use the
+     * search at SOME cap -- which is what makes its width worth recording.
+     * The peak is real, not saturating: n_vars is known before the check. */
+    refine_cap_peak(&g_caps.model_vars_peak, vc->n_vars);
+    if (vc->n_vars > MODEL_MAX_VARS) {
+        g_caps.model_vars_hits++;
+        /* Would a higher cap actually let this one search?  Only if every
+         * variable is also an integer -- the sort gate below would otherwise
+         * decline it anyway, and counting it as "the cap cost us this" would
+         * overstate what a raise buys.  This is the number a raise has to be
+         * argued from. */
+        bool all_int = true;
+        for (uint32_t i = 0; i < vc->n_vars; i++)
+            if (vc->vars[i].sort != VS_INT) { all_int = false; break; }
+        if (all_int) g_caps.model_vars_would_run++;
+        return NULL;
+    }
     for (uint32_t i = 0; i < vc->n_vars; i++)
         if (vc->vars[i].sort != VS_INT) return NULL;
 

@@ -1167,3 +1167,181 @@ EMSCRIPTEN_KEEPALIVE
 void turi_wasm_trace_release(void) {
     wasm_trace_clear();
 }
+
+/* ---------------------------------------------------------------------------
+ * SX8c: the solver, answerable from the playground
+ *
+ * The refinement solver is already IN the wasm module -- `compiler/refine_*.c`
+ * are `TUR_CORE_SOURCES`, so every browser session has been shipping S0..S3 all
+ * along.  This makes it visible: the "static checking at zero download cost"
+ * story is hard to believe from a page that cannot demonstrate it.
+ *
+ * The semantics are `tur smt`'s, deliberately and to the letter -- the same
+ * session reader (so `(push)`/`(pop)` scope assertions and each `(check-sat)`
+ * is answered where it appears), the same S0..S3 chain in the same order, the
+ * same bounded model search, and the same "a script with no `(check-sat)` is
+ * decided once at the end".  A window onto the solver has to show the same
+ * solver from every angle; a browser build that answered differently from the
+ * CLI would be a second solver wearing the first one's name.
+ *
+ * Read-only by construction, which is what SX8c's own spec asks for: nothing
+ * here touches elaboration or discharge, so no answer from this API can elide
+ * a runtime check.  Interrogation proposes; the C chain in a real compile
+ * decides.
+ * ---------------------------------------------------------------------------
+ */
+
+#include "compiler/refine_smtlib.h"
+#include "compiler/refine_solver.h"
+
+static void smt_json_str(Buf *out, const char *s) {
+    buf_putc(out, '"');
+    for (const unsigned char *p = (const unsigned char *)(s ? s : ""); *p; p++) {
+        switch (*p) {
+            case '"':  buf_puts(out, "\\\""); break;
+            case '\\': buf_puts(out, "\\\\"); break;
+            case '\n': buf_puts(out, "\\n");  break;
+            case '\r': buf_puts(out, "\\r");  break;
+            case '\t': buf_puts(out, "\\t");  break;
+            default:
+                if (*p < 0x20) buf_printf(out, "\\u%04x", *p);
+                else           buf_putc(out, (char)*p);
+        }
+    }
+    buf_putc(out, '"');
+}
+
+static void smt_json_model(Buf *out, const RefineModel *m) {
+    buf_puts(out, "[");
+    for (uint32_t i = 0; m && i < m->n; i++) {
+        const RefineModelBinding *b = &m->bindings[i];
+        if (i) buf_puts(out, ",");
+        buf_puts(out, "{\"name\":");
+        smt_json_str(out, b->name);
+        if (b->is_real) buf_printf(out, ",\"sort\":\"Real\",\"value\":%g", b->rval);
+        else            buf_printf(out, ",\"sort\":\"Int\",\"value\":%lld",
+                                   (long long)b->ival);
+        buf_puts(out, "}");
+    }
+    buf_puts(out, "]");
+}
+
+/* One `(check-sat)`'s worth of work: run the chain, then the bounded search if
+ * nothing proved it.  Mirrors `smt_answer` in main.c. */
+static void smt_one_answer(RefineVC *vc, Arena *arena, Buf *out) {
+    static const struct { const char *name; RefineBackend fn; } CHAIN[] = {
+        { "S0 (trivial)",       refine_s0_decide },
+        { "S1 (EUF)",           refine_s1_decide },
+        { "S2 (arithmetic)",    refine_s2_decide },
+        { "S3 (Nelson-Oppen)",  refine_s3_decide },
+    };
+    const char *decided_by = NULL;
+    RefineVerdict v = RT_UNKNOWN;
+    for (size_t i = 0; i < sizeof(CHAIN)/sizeof(CHAIN[0]); i++) {
+        RefineDecision d = CHAIN[i].fn(vc, arena);
+        if (d.verdict != RT_UNKNOWN) { v = d.verdict; decided_by = CHAIN[i].name; break; }
+    }
+
+    /* The goal is `false`, so VALID means the assertion set is UNSAT.  The
+     * stages only ever prove; `sat` has to come from the bounded search, which
+     * is the only thing in the solver allowed to answer INVALID -- and it does
+     * so with a witness rather than a guess, which is why the model rides
+     * along here instead of being a separate call. */
+    buf_puts(out, "{\"answer\":");
+    if (v == RT_VALID) {
+        smt_json_str(out, "unsat");
+    } else {
+        RefineModel *m = refine_model_search(vc, arena);
+        if (m) {
+            smt_json_str(out, "sat");
+            decided_by = "bounded model search";
+            buf_puts(out, ",\"model\":");
+            smt_json_model(out, m);
+        } else {
+            smt_json_str(out, "unknown");
+        }
+    }
+    if (decided_by) {
+        buf_puts(out, ",\"decided_by\":");
+        smt_json_str(out, decided_by);
+    }
+    buf_puts(out, "}");
+}
+
+/* `Buf` carries a length and does NOT NUL-terminate -- it is written for
+ * buf_to_file, where the length is the contract.  Handing `b->data` straight
+ * back as a C string is therefore an overread, and a silent one: the JSON
+ * parses fine and trailing heap garbage rides along behind the closing brace.
+ * Every exit from turi_smt_check goes through here.  (`grow` is realloc-backed,
+ * so the result is free()-able, which is what the JS side does.) */
+static char *smt_finish(Buf *b) {
+    buf_putc(b, '\0');
+    return b->data ? b->data : turi_wasm_strdup("");
+}
+
+/* Answer an SMT-LIB2 script.  Returns a malloc'd JSON string the caller frees
+ * with turi_wasm_free_string (JS: Module._free).
+ *
+ *   {"schema":0,"results":[{"answer":"unsat","decided_by":"S2 (arithmetic)"}]}
+ *   {"schema":0,"results":[],"error":"outside the accepted fragment: ..."}
+ *
+ * `schema` is 0 while the shape is unstable, matching `--dump-refine=json`.
+ * `results` carries one entry per `(check-sat)`, in script order.
+ */
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+char *turi_smt_check(const char *smtlib) {
+    Buf out; buf_init(&out);
+    buf_puts(&out, "{\"schema\":0,\"results\":[");
+    if (!smtlib) {
+        buf_puts(&out, "],\"error\":\"no input\"}");
+        return smt_finish(&out);
+    }
+
+    Arena arena;
+    arena_init(&arena, 1 << 20);
+    SmtlibSession *s = refine_smtlib_session_new(&arena);
+    refine_smtlib_session_feed(s, smtlib, strlen(smtlib));
+
+    const char *err = NULL;
+    bool answered = false;
+    for (bool done = false; !done; ) {
+        switch (refine_smtlib_session_step(s)) {
+            case SMT_EV_CHECK_SAT:
+                if (answered) buf_puts(&out, ",");
+                smt_one_answer(refine_smtlib_session_vc(s), &arena, &out);
+                answered = true;
+                break;
+            case SMT_EV_ERROR:
+                err = refine_smtlib_session_err(s);
+                if (!err) err = "unsupported script";
+                done = true;
+                break;
+            case SMT_EV_END:
+            case SMT_EV_EXIT:
+                done = true;
+                break;
+            /* `(get-model)` is a no-op here: the witness already rides along
+             * with the `sat` it belongs to, so a caller never has to ask. */
+            case SMT_EV_GET_MODEL:
+            case SMT_EV_OK:
+                break;
+        }
+    }
+
+    /* A script that never asked is still decided once, exactly as `tur smt`
+     * does it -- every corpus benchmark relies on that, and two doors onto one
+     * solver should not disagree about what an unasked script means. */
+    if (!err && !answered)
+        smt_one_answer(refine_smtlib_session_vc(s), &arena, &out);
+
+    buf_puts(&out, "]");
+    if (err) {
+        buf_puts(&out, ",\"error\":");
+        smt_json_str(&out, err);
+    }
+    buf_puts(&out, "}");
+    arena_free(&arena);
+    return smt_finish(&out);
+}

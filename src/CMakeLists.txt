@@ -1463,6 +1463,34 @@ set_target_properties(tur_wasm_glue_lang_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
+# SX8c: the playground's solver entry point, exercised natively.
+# `turi_smt_check` otherwise only runs inside a wasm module, where nothing in
+# CI can look at it.  Nothing in wasm_glue.c is wasm-specific, so linking
+# libturi_wasm runs the real thing -- against the same S0..S3 chain the browser
+# build links.  See docs/upcoming/solver-extension-plan.md (SX8c).
+add_executable(tur_wasm_glue_smt_unit
+    ${CMAKE_SOURCE_DIR}/tests/wasm_glue_smt_unit.c
+)
+target_include_directories(tur_wasm_glue_smt_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_wasm_glue_smt_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
+    -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_wasm_glue_smt_unit PRIVATE
+    -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_wasm_glue_smt_unit PRIVATE libturi_wasm m ${CMAKE_DL_LIBS})
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_wasm_glue_smt_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_wasm_glue_smt_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_wasm_glue_smt_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
 # Injective name-mangler round-trip + injectivity unit test
 # (reversible-name-mangling-plan, task T2).
 add_executable(tur_mangle_unit
@@ -1570,7 +1598,7 @@ if(TUR_WASM)
                 # go-to-definition can open a stdlib buffer without the page
                 # gaining a general filesystem (wasm_lsp.c,
                 # try-turmeric-navigation-and-minimap-plan M4).
-                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_turi_wasm_lsp_request,_turi_wasm_lsp_flush,_turi_wasm_lsp_reset,_turi_wasm_read_file,_turi_wasm_set_lang,_turi_wasm_get_lang,_turi_wasm_lang_registry,_turi_doc_lookup,_turi_type_of,_turi_explain,_turi_wasm_trace_run,_turi_wasm_trace_stats,_turi_wasm_trace_seek,_turi_wasm_trace_state,_turi_wasm_trace_site_at,_turi_wasm_trace_find_line,_turi_wasm_trace_output_full,_turi_wasm_trace_buffer,_turi_wasm_trace_buffer_len,_turi_wasm_trace_release,_malloc,_free
+                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_turi_wasm_lsp_request,_turi_wasm_lsp_flush,_turi_wasm_lsp_reset,_turi_wasm_read_file,_turi_wasm_set_lang,_turi_wasm_get_lang,_turi_wasm_lang_registry,_turi_doc_lookup,_turi_smt_check,_turi_type_of,_turi_explain,_turi_wasm_trace_run,_turi_wasm_trace_stats,_turi_wasm_trace_seek,_turi_wasm_trace_state,_turi_wasm_trace_site_at,_turi_wasm_trace_find_line,_turi_wasm_trace_output_full,_turi_wasm_trace_buffer,_turi_wasm_trace_buffer_len,_turi_wasm_trace_release,_malloc,_free
                 -sEXPORTED_RUNTIME_METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8
                 -sEXPORT_NAME=TurmericModule
                 -sMODULARIZE=1

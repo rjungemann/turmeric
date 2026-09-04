@@ -176,6 +176,31 @@ const char *turi_doc_lookup(const char *name);
  * The result must be freed with turi_wasm_free_string(). */
 char *turi_wasm_strdup(const char *s);
 
+/* SX8c: answer an SMT-LIB2 script with the refinement solver already linked
+ * into this module.
+ *
+ * The semantics are `tur smt`'s to the letter -- the same session reader (so
+ * `(push)`/`(pop)` scope assertions and each `(check-sat)` is answered where it
+ * appears), the same S0..S3 chain, the same bounded model search, and the same
+ * "a script with no `(check-sat)` is decided once at the end".  Scope is the
+ * corpus subset of SMT-LIB2 over QF_UFLIA / QF_UFLRA; a script outside it is
+ * refused WHOLE (an `error` key, no results) rather than partially parsed, and
+ * `unknown` is a first-class answer.
+ *
+ * Read-only: nothing reachable from here touches elaboration or discharge, so
+ * no answer can elide a runtime check.
+ *
+ * Returns a malloc'd JSON string; free it with turi_wasm_free_string.
+ *
+ *   {"schema":0,"results":[{"answer":"unsat","decided_by":"S2 (arithmetic)"}]}
+ *   {"schema":0,"results":[{"answer":"sat","model":[{"name":"x","sort":"Int","value":1}],
+ *                           "decided_by":"bounded model search"}]}
+ *   {"schema":0,"results":[],"error":"unsupported command"}
+ *
+ * `schema` is 0 while the shape is unstable, matching --dump-refine=json.
+ */
+char *turi_smt_check(const char *smtlib);
+
 /* ---------------------------------------------------------------------------
  * Time-travel tracer (docs/archive/try-turmeric-tracer-plan.md, T3)
  *

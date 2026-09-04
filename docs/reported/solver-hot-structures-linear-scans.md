@@ -75,7 +75,33 @@ over `n` bindings is O(n^2) and `logic-walk` is O(n) per variable. This is
 exactly what SX2 of the solver-extension plan exists to measure a replacement
 for -- see that phase rather than treating it as a separate finding.
 
-## 4. The persistent-structure per-operation constant (~200 ns) -- DIAGNOSED
+## 4. The persistent-structure per-operation constant (~200 ns) -- DIAGNOSED, then SUPERSEDED
+
+> **Superseded 2026-09-03.** The conclusion below -- "a per-operation constant
+> rather than the linear scan dominates at every size a real query reaches" --
+> was true of the compiler that measured it and is **no longer true of the
+> default**. Re-running `benchmarks/bench-logic-subst.tur` at v0.43.0 finds the
+> persistent path flat only to n=4 and cleanly LINEAR from n=8 up (2.0x per
+> doubling from n=64, reaching 3298 ns/op at n=512). The allocator constant that
+> used to mask the scan is largely gone -- SR1/SR2/SR4 removed it -- so on
+> today's default the chain walk itself is what dominates, which is the opposite
+> of what this section concludes.
+>
+> Two consequences, and neither one revives the term-index work in #1 above:
+>
+> - The linear scan that now dominates is `subst-lookup`'s walk of a persistent
+>   `SBind` chain in `stdlib/logic.tur` -- a stdlib data structure -- not
+>   `euf_index`'s term scan in the compiler's own C. #1, #2 and #3 are in
+>   `src/compiler/refine_solver_*.c`, which no representation change touches;
+>   their status note above stands unaltered.
+> - Most of the new slope is not the scan's asymptotics either. It is a
+>   per-link aggregate copy the by-value recursive-sum lowering emits, worth
+>   6.8x at n=512 against `TUR_SR4_RECURSIVE_CARRIER=1` and filed separately as
+>   [sr4-byvalue-recursive-sum-walk-copies-per-link](sr4-byvalue-recursive-sum-walk-copies-per-link.md).
+>
+> Numbers, method and the representation A/B are in
+> [benchmarks/logic-subst-results.md](../../benchmarks/logic-subst-results.md).
+> The original diagnosis follows, unedited.
 
 SX2's head-to-head measured `stdlib/logic.tur`'s real `Subst` at ~175-230 ns per
 bind+walk, flat in n up to n=16, which said a per-operation constant rather than

@@ -310,6 +310,21 @@ Naive `O(n^2)` fixpoint; real obligations carry a handful of terms.
 `REFINE_MAX_EUF_TERMS` bounds the rest. Textbook treatment: Harrison; Bradley &
 Manna (see References).
 
+**The state is incremental across cubes.** S1 and S3 hold ONE `EufState` and
+bracket each cube with `euf_mark` / `euf_undo_to` rather than building a fresh
+one per cube out of the arena, which is what they did before 2026-08-26. Every
+`parent[]` write is trailed, path compression included, so the merge history a
+proof-producing congruence closure would need stays recoverable. Each cube still
+starts from the empty partition, so verdicts are identical to the rebuild path
+by construction -- the change deletes per-cube allocation churn, not answers.
+The trail is `src/compiler/trail_c.h`; `TUR_REFINE_EUF=rebuild` restores the old
+path for replay (see Debugging).
+
+Note the congruence *fixpoint* above is unaffected: it is still the naive
+all-pairs sweep, which is the algorithm rather than the state discipline.
+`LaState` is still rebuilt per cube -- making it incremental is the plan's SX4,
+which is parked on the cap evidence.
+
 ### S2 -- linear arithmetic (`refine_solver_arith.c`)
 
 **Fourier-Motzkin elimination over exact rationals** (`int64` num/den, every
@@ -337,7 +352,7 @@ decides conjunctions of linear constraints outright.
 Neither theory alone decides a mixed cube. S3 runs both S1 and S2 over the same
 cube and has them **exchange the equalities each entails over their shared
 terms** (the purified opaque terms, which EUF also holds as nodes), iterating to
-a fixpoint (`NO_MAX_ROUNDS = 4`, `NO_MAX_SHARED = 8`). EUF and LRA are both
+a fixpoint (`NO_MAX_ROUNDS = 4`, `NO_MAX_SHARED = 16`). EUF and LRA are both
 convex, so this deterministic exchange is complete for them. Integers are
 non-convex, which in general forces case-splitting on disjunctions of
 equalities; S3 does **not** do that -- it reaches a fixpoint and, if neither
@@ -463,8 +478,12 @@ survives either way. `tur explain TUR-W0372` prints the long form of any code.
 
 ## Caps reference
 
-Every cap, when hit, degrades to `RT_UNKNOWN` -> runtime check
-(`refine_solver.h:28`, `refine_solver.c:221`):
+The solver is bounded in two places, and only the first tier used to be written
+down. Every cap in both tiers degrades to `RT_UNKNOWN` -> runtime check: they
+cost **completeness, never soundness**, because a capped obligation keeps the
+check it would otherwise have elided.
+
+### Tier 1 -- solver caps (`refine_solver.h`)
 
 | Cap | Value | Guards |
 |---|---|---|
@@ -474,13 +493,112 @@ Every cap, when hit, degrades to `RT_UNKNOWN` -> runtime check
 | `REFINE_MAX_LA_VARS` | 32 | linear-arithmetic variables |
 | `REFINE_MAX_LA_CONSTR` | 512 | linear-arithmetic constraints |
 | `REFINE_MAX_EUF_TERMS` | 512 | congruence-closure terms |
-| `NO_MAX_SHARED` | 8 | terms in the S3 equality exchange |
+| `NO_MAX_SHARED` | 16 | terms in the S3 equality exchange |
 | `NO_MAX_ROUNDS` | 4 | S3 exchange rounds before giving up |
 | `MODEL_MAX_VARS` | 3 | counterexample-search variables |
 | `MODEL_MAX_CANDS` | 16 | counterexample candidate values |
 
-Every cap except the two `MODEL_MAX_*` ones is counted at runtime under
-`TUR_REFINE_STATS=1` -- see "Reading the cap lines" below.
+`MODEL_MAX_VARS` is the one most likely to surprise, because it does not cost a
+proof -- it costs a **refutation**. The proving stages only ever answer Valid or
+Unknown, so a counterexample can come from nowhere but the bounded search, and
+`refine_model_search` returns `NULL` outright for a VC with more than three
+variables. A four-parameter function with a refined return therefore stays
+`unknown` (silent, runtime check kept) where the same function with three
+parameters reports `TUR-E0371` with a witness. Verified both ways: raising the
+cap to 4 turns that exact obligation from `unknown` into the error.
+
+It is instrumented as `model vars` under `TUR_REFINE_STATS=1`, with a second
+line that is the one a raise has to be argued from:
+
+```
+refine:   model vars      peak      4 / 3      ** HIT
+refine:   model vars run  1 (of 1 over the cap)
+```
+
+`model vars` counts every decline at the cap. **`model vars run` counts the
+subset a higher cap would actually help** -- a VC over the cap may also carry a
+non-int variable, and the sort gate sits *after* the count gate, so raising the
+limit buys those nothing. The cost of raising is exponential
+(`n_cand ** n_vars`, and `n_cand` is up to 16), which is why the distinction
+matters rather than being pedantry.
+
+### Tier 2 -- collection caps (upstream of the solver)
+
+These bound what reaches the solver rather than what it does, and they live in
+the elaborator and the encoder. **The tightest cap in the whole refinement path
+is here, not in tier 1.**
+
+| Cap | Value | Where | Bounds |
+|---|---|---|---|
+| `RT_CS_PATH_MAX_HYPS` | 8 | `refine_solver.h` | path conditions recovered per call-site crossing |
+| `RT_CS_PATH_MAX_DEPTH` | 24 | `elab_fns.c` | how deep the walk looks for them |
+| `ENC_MAX_MEASURES` | 32 | `refine_collect.c` | names in the per-VC sort table |
+| `ENC_MAX_SUBST` | 8 | `refine_collect.c` | substitutions while encoding a predicate |
+| `ENC_MAX_DEPTH` | 64 | `refine_collect.c` | predicate nesting |
+| `ENC_MAX_PROPAGATE` | 4 | `refine_collect.c` | return-refinement propagation depth |
+| `VCID_MAX_SYMS` | 256 | `refine_vc.c` | symbols in the RT7 memo fingerprint |
+| `RT_PURE_MAX_DEPTH` | 64 | `elab_fns.c` | purity walk |
+| `RT_SET_SCAN_MAX_DEPTH` | 24 | `elab_fns.c` | set-membership scan |
+
+They are sound in the same one direction, and the encoder says so where it
+drops a hypothesis it cannot encode: *"fewer hypotheses can only make the goal
+HARDER to prove, never easier"*. The two whose overflow could plausibly go the
+other way are handled explicitly rather than by luck:
+
+- **`VCID_MAX_SYMS`** overflow makes the fingerprint **0, which is never a memo
+  key**, so the VC is re-decided rather than matched against a truncated
+  identity. A memo collision here would be a genuine wrong answer.
+- **`ENC_MAX_MEASURES`** overflow leaves the name out of the sort table and
+  falls back to the callee's own declared sort -- still exactly one sort per
+  name, which is the invariant that keeps a symbol from being Int in a
+  hypothesis and Bool in the goal.
+
+### What is counted
+
+Every tier-1 cap except `MODEL_MAX_CANDS` is counted under
+`TUR_REFINE_STATS=1`, plus `RT_CS_PATH_MAX_HYPS` from tier 2 -- see "Reading
+the cap lines" below. `MODEL_MAX_CANDS` bounds a candidate *value* set rather
+than a structural quantity and nothing has asked for it; the rest of tier 2 is
+uninstrumented too, and if one is ever suspected it needs a counter first.
+
+**A population that cannot reach a cap is not evidence the cap never bites.**
+Two rows in `benchmarks/cap-sweep-results.md` read `n/a` for the SMT-LIB corpus
+for exactly this reason -- it never elaborates (so no `path_hyps`) and its
+harness never runs the model search (so no `model_vars`). The subtler case is
+the fuzzer population, which *does* report `model_vars` and reports it at 0%
+headroom: `tests/refine-fuzz-src.py` generates at most two parameters, so a
+generated VC structurally cannot exceed three variables. That peak is the
+generator's ceiling, not a finding. The sweep file says so in place.
+
+### The limits that are not numbers
+
+Raising a cap cannot reach any of these. They are what the solver is, not how
+much of it there is, and on today's evidence they bound its usefulness far more
+than any number above.
+
+- **Fragment: quantifier-free `QF_UFLIA` / `QF_UFLRA`.** A quantifier is
+  refused outright, not approximated.
+- **Nonlinear arithmetic is abstracted, not decided.** `x * y` becomes an
+  uninterpreted term (`TUR-W0373` says so), so S2 can reason about its
+  occurrences but never about its value.
+- **Integers are non-convex and S3 does not case-split.** Deciding a mixed
+  integer cube in general needs splitting on disjunctions of equalities; S3
+  reaches a fixpoint and answers `RT_UNKNOWN` instead. This is the largest
+  completeness hole, and it is deliberate -- see S2c in the design of record.
+- **No DPLL(T).** Boolean structure is naive DNF: no clause learning, no theory
+  propagation, no conflict-driven search. The cube caps exist because of this,
+  not the other way round.
+- **The congruence fixpoint is a naive `O(n^2)` all-pairs sweep**, which is the
+  right tradeoff at the sizes measured (peak 25 terms of 512) and would not be
+  at a hundred times that.
+
+**`path hyps` reads differently from the others.** Its peak *saturates*: the
+walk stops collecting once the array is full, so the peak reads 8 whatever the
+real demand was. Read `hits` for whether it bit; the peak is a headroom reading
+only while hits is 0. Counting past the cap would mean restructuring a
+recursive walk with early returns, which risks changing *which* guards get
+collected -- a verdict change bought for a measurement, which is the wrong
+trade.
 
 ---
 
@@ -494,6 +612,8 @@ TUR_REFINE_STATS=1 tur build main.tur
 # refine: caps (none hit)
 # refine:   cubes           peak      4 / 64
 # refine:   cube literals   peak      7 / 64
+# refine:   path hyps       peak      4 / 8
+# refine:   model vars      peak      2 / 3
 # ...
 
 # Dump each VC as SMT-LIB2 (the refutation form shown earlier).
@@ -502,6 +622,12 @@ TUR_REFINE_DUMP=1 tur emit-c main.tur
 # Suppress static discharge entirely: every obligation declines, so nothing is
 # elided and every refinement keeps its runtime check.
 TUR_REFINE_NO_DISCHARGE=1 tur build main.tur
+
+# Replay S1/S3 against the pre-2026-08-26 rebuild-per-cube EUF state instead of
+# the incremental mark/undo default. Verdicts are identical by construction, so
+# any output difference between the two is a bug in the incremental path -- this
+# is the seam to bisect one with.
+TUR_REFINE_EUF=rebuild tur build main.tur
 ```
 
 ### Reading the cap lines
@@ -571,6 +697,78 @@ parsing stdout. They are deliberately **not** the 0-is-success convention --
 | 1 | `sat` -- a model was found |
 | 2 | `unknown` -- no stage decided it |
 | 3 | error -- unreadable, or outside the accepted fragment |
+
+When a script asks more than once, the exit code is the **last** answer.
+
+#### The assertion stack -- `push` / `pop`, and `--interactive`
+
+A script runs as a **session**: `(push)` and `(pop)` scope the assertions, and
+each `(check-sat)` is answered where it appears, so one script can ask several
+questions.
+
+```sh
+$ cat scoped.smt2
+(set-logic QF_LIA)
+(declare-fun x () Int)
+(assert (> x 10))
+(check-sat)          ; sat
+(push 1)
+(assert (< x 5))
+(check-sat)          ; unsat -- contradicts x > 10
+(pop 1)
+(check-sat)          ; sat again; the contradiction was scoped
+
+$ tur smt --interactive     # the same commands, read from stdin
+```
+
+`(push n)` / `(pop n)` take an optional level count defaulting to 1, and an
+unmatched `pop` or a malformed level is a refusal (exit 3), never a guess.
+`(get-model)` reprints the witness from the last `sat`. `(exit)` ends the
+session.
+
+Two limits, both deliberate:
+
+- **Only hypotheses are scoped.** A `declare-fun` inside a scope survives the
+  `pop`. That is a divergence from SMT-LIB, and a sound one in this direction:
+  a declared symbol appearing in no assertion is an unconstrained variable, and
+  an unconstrained variable cannot make an assertion set *less* satisfiable, so
+  it can never turn a `sat` into an `unsat`. The reason not to scope them is
+  concrete: hypotheses are hash-consed terms holding variable *indices*, and
+  truncating `n_vars` would leave interned terms pointing at slots a later
+  declaration could reuse with a different sort.
+- **The assertion set is incremental; the solver state is not.** A `pop`
+  restores exactly the hypotheses in scope at the matching `push`, with nothing
+  re-read or re-translated. But each `check-sat` runs the chain from the current
+  assertion set, which rebuilds the DNF cubes -- adding one hypothesis changes
+  the cube set wholesale, so there is no solver-side mark to undo between two
+  checks. `euf_mark` / `euf_undo_to` bracket cubes *within* a single check
+  (see S1 above); they are not what `push` and `pop` map onto.
+
+A script that contains no `(check-sat)` at all is still decided once at the end,
+which is what the corpus benchmarks rely on.
+
+#### From the browser -- `turi_smt_check`
+
+The solver is already in the WASM module (`compiler/refine_*.c` are
+`TUR_CORE_SOURCES`), so the playground has been shipping S0-S3 all along.
+`turi_smt_check` is the door onto it:
+
+```js
+const json = Module.ccall('turi_smt_check', 'string', ['string'], [script]);
+// {"schema":0,"results":[{"answer":"unsat","decided_by":"S2 (arithmetic)"}]}
+```
+
+Same reader, same chain, same bounded model search and same push/pop semantics
+as `tur smt` -- two doors onto one solver should not disagree. One `results`
+entry per `(check-sat)` in script order; a `sat` entry carries its `model`
+inline (the witness belongs with the answer, so nothing has to ask twice). A
+script outside the fragment returns an `error` key and an **empty** `results`
+array -- refused whole, never partially parsed. `schema` is 0 while the shape is
+unstable, matching `--dump-refine=json`.
+
+The result is malloc'd; free it from JS with `Module._free`. Nothing reachable
+from this entry point touches elaboration or discharge, so no answer it gives
+can elide a runtime check.
 
 The JSON dump carries, per obligation: source location, the predicate as
 written, the verdict, which stage decided it, whether the RT7 memo answered it,

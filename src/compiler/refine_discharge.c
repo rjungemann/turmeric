@@ -689,6 +689,15 @@ static void refine_report_caps(void) {
         { "LA constraints",c->la_constr_hits,    c->la_constr_peak,    REFINE_MAX_LA_CONSTR    },
         { "NO shared",     c->no_shared_hits,    c->no_shared_peak,    NO_MAX_SHARED           },
         { "EUF terms",     c->euf_terms_hits,    c->euf_terms_peak,    REFINE_MAX_EUF_TERMS    },
+        /* Collection side, not a stage: the branch guards recovered for a
+         * call-site crossing.  Its peak SATURATES at the limit (the walk stops
+         * collecting once full), so read `hits` for whether it bit and the
+         * peak only for headroom while hits is 0. */
+        { "path hyps",     c->path_hyps_hits,    c->path_hyps_peak,    RT_CS_PATH_MAX_HYPS     },
+        /* The counterexample search's width.  A hit here costs a REFUTATION,
+         * not a proof: the obligation stays Unknown rather than reporting the
+         * counterexample it has.  See the `would run` line below. */
+        { "model vars",    c->model_vars_hits,   c->model_vars_peak,   MODEL_MAX_VARS          },
     };
     fprintf(stderr, "refine: caps %s\n",
             refine_caps_any() ? "(one or more BIT -- those obligations answered "
@@ -705,6 +714,13 @@ static void refine_report_caps(void) {
             "FM blow-ups", c->la_fm_hits);
     fprintf(stderr, "refine:   %-15s %u (of %u rounds)\n",
             "NO rounds out", c->no_rounds_hits, (unsigned)NO_MAX_ROUNDS);
+    /* The subset of `model vars` hits that a higher cap would actually help:
+     * the rest carry a non-int variable and would be declined by the sort gate
+     * whatever the limit.  Printed separately rather than folded into the row
+     * above because the row counts what the cap TURNED AWAY and this counts
+     * what raising it would BUY -- and only the second justifies a raise. */
+    fprintf(stderr, "refine:   %-15s %u (of %u over the cap)\n",
+            "model vars run", c->model_vars_would_run, c->model_vars_hits);
 }
 
 void refine_discharge_all(RefineObligationVec *v, Arena *a) {

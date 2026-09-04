@@ -2,6 +2,52 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **`tur smt` runs a script as a session, with a real assertion stack**
+  (solver-extension plan, SX8b). `(push [n])` and `(pop [n])` scope the
+  assertions, each `(check-sat)` is answered where it appears, `(get-model)`
+  reprints the last witness and `(exit)` ends the session; the exit code is
+  the last answer. `tur smt --interactive` reads the same commands from stdin
+  and answers as they arrive, which makes `tur` usable as a backend for
+  anything speaking the protocol subset.
+
+  Two limits are deliberate and documented: only hypotheses are scoped (a
+  `declare-fun` survives its `pop` -- an unconstrained variable can never turn
+  a `sat` into an `unsat`), and the assertion set is incremental while the
+  solver state is not (each check rebuilds its DNF cubes). A script with no
+  `(check-sat)` is still decided once at the end, so SX8a's contract and the
+  corpus replay are unchanged. Guide:
+  `docs/guides/refinement-solver-internals-guide.md`.
+
+- **The refinement solver is answerable from the browser** (SX8c):
+  `turi_smt_check` runs an SMT-LIB2 script through the same reader, chain and
+  bounded model search as `tur smt`, including the `(push)`/`(pop)` assertion
+  stack, and returns JSON. The solver was already in the WASM module -- the
+  refine sources are core sources -- so this exposes what was shipping rather
+  than adding weight. Read-only: nothing reachable from it can elide a runtime
+  check.
+
+- **Two more solver caps are now instrumented** under `TUR_REFINE_STATS=1` and
+  in `benchmarks/run-cap-sweep.sh`: `path hyps` (`RT_CS_PATH_MAX_HYPS`, the
+  branch guards recovered per call-site crossing -- the tightest cap in the
+  refinement path, and previously invisible) and `model vars`
+  (`MODEL_MAX_VARS`, the counterexample search's width). The latter carries a
+  second `model vars run` line counting the subset a higher cap would actually
+  help, since a VC over the cap may also carry a non-int variable the sort gate
+  declines at any limit.
+
+### Fixed
+
+- **The internals guide's solver documentation was a release cycle stale.**
+  The caps table gave `NO_MAX_SHARED` as 8 where the source says 16 (raised
+  2026-08-25), in two places; the S1 section still described the
+  rebuild-per-cube EUF state that incremental EUF replaced; and
+  `TUR_REFINE_EUF=rebuild`, the seam for bisecting the incremental path, was
+  undocumented.
+
 ## [0.43.0] -- 2026-09-03
 
 ### Added
