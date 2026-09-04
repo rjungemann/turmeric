@@ -731,6 +731,7 @@ Pinned by four `errors/` negatives and
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [codegen-gcc14-permerrors](codegen-gcc14-permerrors.md) | medium | Latent today; breaks every `tur build` the moment CI's compiler crosses GCC 14, which promotes several emitted-C warnings to errors. Worked around, not fixed. Not Windows-specific |
 
 `env-doctests-are-machine-dependent` was resolved 2026-08-21 and moved to
 [docs/archive](../archive/env-doctests-are-machine-dependent.md). The five
@@ -1513,6 +1514,19 @@ these are fixture-watched. Two of the original three are resolved and archived:
 | [windows-subprocess-and-shared-lib-gaps](windows-subprocess-and-shared-lib-gaps.md) | high (for Windows users) | `tur install` / `fetch` / `new` / `build --shared` / REPL spice loading all fail -- the subprocess and shared-library layers are unported. Read-verified by audit, **not** exercised end-to-end. `build --shared` half is now done (emits a real `.dll`) |
 | [win64-aggregate-return-threshold-is-sysv](win64-aggregate-return-threshold-is-sysv.md) | medium | The fat-dispatch shim selector reads register-return-vs-sret off a hardcoded SysV `> 16` threshold; Win64's is 1/2/4/8, so a 16-byte monomorph is sret there, keeps the generic forwarding shim, and SIGSEGVs with no diagnostic. Skipped via `requires.win64-aggregate-abi` |
 | [windows-longjmp-remaining-fiber-sites](windows-longjmp-remaining-fiber-sites.md) | low-medium | `call/cc`, panic-in-fiber and cancellation still `longjmp` on a fiber stack, which is `STATUS_BAD_STACK` on win64. The DK tail-resume site was fixed with `__builtin_setjmp`; these three were left because no fixture covers them |
+| [windows-hardcoded-tmp-resolves-to-drive-root](windows-hardcoded-tmp-resolves-to-drive-root.md) | medium | `fs/tmpfile` and ~12 fixtures spell `/tmp/...` literally; a NATIVE Windows binary resolves that against the current DRIVE ROOT, not the MSYS `/tmp`. Green locally (the box had `C:\tmp`), 12 red on a clean runner. `tests/run.sh` provisions the dir; the real fix is `GetTempPath` in stdlib |
+| [windows-httpd-async-limit-hangs-on-ci](windows-httpd-async-limit-hangs-on-ci.md) | low | Hangs on GitHub's Windows runners (no output, killed at both 10s and 30s) while passing locally 4/4. Skipped via `requires.win-concurrent-loopback`. Best suspect is runner core count, untested |
+| [jit-windows-support-spike](jit-windows-support-spike.md) | research | Spike EXECUTED: the Windows JIT builds, and a program runs natively under `TUR_JIT_GEN=eager` via a c2mir compat prelude. Remaining: the lazy-thunk SIGILL and full-TU `__va_start` |
+
+## Godot embedding
+
+Filed 2026-08 while bringing the `turmeric-godot` GDExtension up on Windows.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [godot-baked-in-prelude-fails-to-eval](godot-baked-in-prelude-fails-to-eval.md) | high | The GDExtension loads and registers correctly but no script ever evaluates -- the baked-in prelude fails |
+| [godot-aot-staged-build-lacks-godot-natives](godot-aot-staged-build-lacks-godot-natives.md) | high (AOT) | The staged transient project has no `godot-*` natives, so the AOT path cannot compile a script that touches the engine. Interpreter path unaffected |
+| [jit-godot-embedding-spike](jit-godot-embedding-spike.md) | research | Whether the JIT can replace the AOT stage-and-subprocess cache in the GDExtension |
 
 ## Platform-independent, found on a platform sweep
 

@@ -64,11 +64,11 @@ EOF
 sleep 1
 touch "$P1/.tur-repl-cache/$CACHE_LIB"
 out=$(cd "$P1" && echo ':quit' | "$TUR_BIN" repl 2>&1)
-if   echo "$out" | grep -q "stale exports.manifest" \
-  && echo "$out" | grep -q "sh__ghost" \
-  && echo "$out" | grep -qF "$CACHE_LIB" \
-  && echo "$out" | grep -q "(reload)" \
-  && echo "$out" | grep -q "rm -rf .tur-repl-cache"; then
+if   grep -q "stale exports.manifest" <<< "$out" \
+  && grep -q "sh__ghost" <<< "$out" \
+  && grep -qF "$CACHE_LIB" <<< "$out" \
+  && grep -q "(reload)" <<< "$out" \
+  && grep -q "rm -rf .tur-repl-cache" <<< "$out"; then
     pass "rp7-stale-manifest-hint"
 else
     fail "rp7-stale-manifest-hint" "$out"
