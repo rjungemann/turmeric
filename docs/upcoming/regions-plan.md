@@ -119,9 +119,54 @@ a routing bug returning uninitialised memory would still link. That is the
 property R2 is built to have and the one a later increment is most likely to
 break by accident.
 
-**R3 -- the escape check and the rewind.** The conservative walk: prove every
-value crossing the boundary is relocatable or leave the generation intact.
-Rewind only when proven. This is where the turi precedent's shape is copied.
+**R3 -- the escape check and the rewind. LANDED 2026-09-04 (runtime half).**
+
+`tur_region_note_escape(p)` records a value crossing out of the innermost
+generation; `tur_region_pop_checked(depth)` reclaims only when no noted escape
+pointed INTO it, and retires otherwise. It returns which it did, so a caller
+can report whether a region paid for itself.
+
+**Reclaiming rewinds rather than releases.** `arena_reset` keeps the slabs and
+the arena is pooled for the next push, so a per-query region inside a loop pays
+for its slabs once -- and the reset is what gets the Debug poison, which
+`arena_free` would not. The unit test pins the reuse (`second == first`), not
+just that reclaim happened.
+
+### What the runtime check does and does not establish
+
+This is the part to read before extending it. The check proves the escaping
+pointer ITSELF does not point into the generation. **It proves nothing about
+what that pointer transitively reaches** -- a malloc'd struct whose field
+points at a region node passes and would dangle after a rewind.
+
+So it is the SECOND lock. The first is static, and lands with R4 where there
+is a form to attach it to: a region reclaims only when its result TYPE cannot
+transitively reach a region-allocated node, which is a compile-time question
+with a decidable conservative answer. The runtime check then catches the direct
+case cheaply and makes a static mistake loud rather than silent. Neither alone
+is the safety argument, and neither should be removed on the strength of the
+other.
+
+Erring the right way is what the tests assert: a region-owned escape must BLOCK
+the rewind, and a heap escape must NOT -- one direction is unsafe, the other
+makes the check useless.
+
+### The backstop is verified, not asserted
+
+The claim this phase rests on is that a value outliving its generation crashes
+loudly rather than reading stale-but-mapped data. Checked directly: a canary
+that reads reclaimed region memory reports
+
+```
+ERROR: AddressSanitizer: use-after-poison on address 0x531000000818
+READ of size 1 ... #0 in main canary.c:10
+```
+
+`tests/check-region-poison.sh` (ctest `tur_region_poison`) is that canary, kept
+because a backstop that silently stops firing -- an ASan flag dropped from the
+Debug build, `TUR_DEBUG_ARENA_POISON` turned off, `arena_reset` changed to skip
+the poison -- looks exactly like a program with no stragglers. Same reasoning
+as `check-cc-warn-ratchet.sh`, and the same failure it was written for.
 
 **R4 -- wire `bt-scope`.** Not a new surface form: the solver's existing
 bracket becomes a region boundary. Measure on `logic.tur`, which is the

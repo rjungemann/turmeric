@@ -91,6 +91,53 @@ int main(void) {
     check(tur_region_owns(inr), "inside a region it is region memory");
     tur_region_pop_reclaim(d3);
 
+    /* ---- R3: the escape check ------------------------------------------
+     *
+     * The decision procedure is "reclaim only if nothing region-owned was
+     * noted as escaping".  What matters is that it errs the RIGHT way: a
+     * region-owned escape must block the rewind, and a heap escape must not,
+     * or the check is either unsafe or useless. */
+
+    /* (a) a region-owned escape BLOCKS the rewind, and the memory survives. */
+    int e1 = tur_region_push();
+    void *kept = tur_region_alloc(32);
+    check(kept != NULL, "escape case: alloc");
+    memset(kept, 0x5A, 32);
+    tur_region_note_escape(kept);
+    check(tur_region_pop_checked(e1) == false, "region-owned escape blocks reclaim");
+    check(tur_region_owns(kept), "blocked generation is retired, still owned");
+    check(((unsigned char *)kept)[0] == 0x5A, "escaped value survives the refusal");
+
+    /* (b) a HEAP escape does not block: this is what makes the check worth
+     * having rather than a blanket refusal. */
+    int e2 = tur_region_push();
+    void *inregion = tur_region_alloc(32);
+    void *offheap  = malloc(32);
+    check(inregion && offheap, "mixed case: allocs");
+    tur_region_note_escape(offheap);      /* not region memory -- harmless */
+    check(tur_region_pop_checked(e2) == true, "heap escape does not block reclaim");
+    check(!tur_region_owns(inregion), "reclaimed memory is no longer owned");
+    free(offheap);
+
+    /* (c) no escape at all -> reclaim.  And the rewind REUSES the arena, so a
+     * region in a loop pays for its slabs once; the second push takes the
+     * pooled one rather than asking the allocator again. */
+    int e3 = tur_region_push();
+    void *first = tur_region_alloc(64);
+    check(first != NULL && tur_region_owns(first), "loop case: alloc owned");
+    check(tur_region_pop_checked(e3) == true, "no escape -> reclaim");
+    int e4 = tur_region_push();
+    void *second = tur_region_alloc(64);
+    check(second == first, "a reclaimed generation's memory is reused");
+    check(tur_region_pop_checked(e4) == true, "second round reclaims too");
+
+    /* (d) a mismatched depth is refused rather than reclaiming the wrong
+     * generation -- the same rule the unchecked pops follow. */
+    int e5 = tur_region_push();
+    check(tur_region_pop_checked(e5 + 1) == false, "checked pop refuses a bad depth");
+    check(tur_region_active(), "refused checked pop left the generation open");
+    check(tur_region_pop_checked(e5) == true, "correct depth then reclaims");
+
     tur_region_shutdown();
 
     if (failures == 0) printf("region_unit: all checks passed\n");

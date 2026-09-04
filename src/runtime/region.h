@@ -45,10 +45,43 @@ int  tur_region_push(void);
  * saving, which is the safe half of the rule above. */
 void tur_region_pop(int depth);
 
-/* Pop AND rewind.  The caller asserts that nothing allocated in this
- * generation is still reachable.  R3 makes that assertion checkable; until
- * then this is only reached from code that owns both ends of the scope. */
+/* Pop AND rewind, unconditionally.  The caller asserts that nothing allocated
+ * in this generation is still reachable.  Prefer `tur_region_pop_checked`,
+ * which asks rather than asserts; this one remains for a caller that owns both
+ * ends of the scope and has its own proof. */
 void tur_region_pop_reclaim(int depth);
+
+/* --- R3: the escape check ---------------------------------------------- *
+ *
+ * Note that `p` crosses out of the innermost generation.  A value that is NOT
+ * region memory (a malloc'd box, a static, a scalar cast to a pointer) is
+ * recorded and harmless; one that IS marks the generation non-reclaimable.
+ *
+ * WHAT THIS DOES AND DOES NOT ESTABLISH, because the difference is the whole
+ * safety argument:
+ *
+ *   It proves the escaping pointer ITSELF does not point into the generation.
+ *   It proves nothing about what that pointer TRANSITIVELY reaches -- a
+ *   malloc'd struct whose field points at a region node passes this check and
+ *   would dangle after a rewind.
+ *
+ * So this is the SECOND lock, not the first.  The first is static: the region
+ * form only reclaims when its result TYPE cannot transitively reach a
+ * region-allocated node, which is a compile-time question with a decidable
+ * conservative answer.  This runtime check catches the direct case cheaply and
+ * makes a static mistake loud rather than silent.  Neither alone is the
+ * argument; do not remove one on the strength of the other. */
+void tur_region_note_escape(const void *p);
+
+/* Pop, reclaiming ONLY if no noted escape pointed into the generation.
+ * Returns true when it reclaimed, false when it retired instead -- the caller
+ * can use that to report whether a region paid for itself.
+ *
+ * Reclaiming REWINDS rather than releases: the arena is reset (which poisons
+ * its bytes in a Debug build, so a straggler traps at the deref under ASan
+ * instead of reading stale data) and kept for the next push.  A per-query
+ * region in a loop therefore allocates its slabs once. */
+bool tur_region_pop_checked(int depth);
 
 /* Allocate `n` bytes in the innermost live generation.  Returns NULL when no
  * region is open, which every caller must treat as "use malloc instead" -- a

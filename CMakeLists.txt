@@ -173,6 +173,13 @@ add_test(
   COMMAND bash tests/run-regions-seam.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# RM3 R3: the poison backstop must actually fire.  A backstop that silently
+# stops firing looks exactly like a program with no stragglers.
+add_test(
+  NAME tur_region_poison
+  COMMAND bash tests/check-region-poison.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # NW6 acceptance gate: a freshly scaffolded spice (`tur new`) passes its own
 # `tur run ci` (clean + check + test) end-to-end. Hermetic: no git, no
 # network, no ../turmeric-spices, no `just`. See docs/tur-new-ci-bootstrap-plan.md.

@@ -33,6 +33,23 @@ static Arena  **g_retired;
 static int      g_retired_n;
 static int      g_retired_cap;
 
+/* Reclaimed generations, reset and available for the next push.  Reclaiming
+ * REWINDS rather than releases: arena_reset keeps the slabs (and poisons them
+ * in a Debug build), so a per-query region inside a loop pays for its slabs
+ * once instead of per iteration.  A pooled arena is dead memory -- deliberately
+ * NOT reported by tur_region_owns, which answers about live and retired
+ * generations only. */
+static Arena  **g_pool;
+static int      g_pool_n;
+static int      g_pool_cap;
+
+/* R3: set on the innermost generation when a noted escape points into it.
+ * Parallel to g_live, one flag per open generation.  Sticky: once a generation
+ * has leaked a pointer it can never be reclaimed, however many safe escapes
+ * follow. */
+static bool    *g_escaped;
+static int      g_escaped_cap;
+
 static bool push_ptr(Arena ***vec, int *n, int *cap, Arena *a) {
     if (*n == *cap) {
         int nc = *cap ? *cap * 2 : 8;
@@ -46,15 +63,51 @@ static bool push_ptr(Arena ***vec, int *n, int *cap, Arena *a) {
 }
 
 int tur_region_push(void) {
-    Arena *a = (Arena *)calloc(1, sizeof(Arena));
-    if (!a) return 0;
-    arena_init(a, TUR_REGION_SLAB);
+    Arena *a;
+    if (g_pool_n > 0) {
+        a = g_pool[--g_pool_n];    /* already reset by the reclaim that pooled it */
+    } else {
+        a = (Arena *)calloc(1, sizeof(Arena));
+        if (!a) return 0;
+        arena_init(a, TUR_REGION_SLAB);
+    }
     if (!push_ptr(&g_live, &g_live_n, &g_live_cap, a)) {
         arena_free(a);
         free(a);
         return 0;
     }
+    /* A fresh generation has escaped nothing.  Grow the flag vector alongside
+     * the live stack; a failure to grow it is treated as "escaped", so the
+     * generation is never reclaimed on the strength of a flag we could not
+     * store -- the conservative direction. */
+    if (g_live_n > g_escaped_cap) {
+        int nc = g_escaped_cap ? g_escaped_cap * 2 : 8;
+        if (nc < g_live_n) nc = g_live_n;
+        bool *nf = (bool *)realloc(g_escaped, (size_t)nc * sizeof(bool));
+        if (!nf) return g_live_n;   /* flag missing -> read as escaped below */
+        g_escaped = nf;
+        g_escaped_cap = nc;
+    }
+    g_escaped[g_live_n - 1] = false;
     return g_live_n;   /* 1-based depth */
+}
+
+void tur_region_note_escape(const void *p) {
+    if (g_live_n <= 0 || !p) return;
+    /* Only an escape that IS region memory matters.  A malloc'd or static
+     * pointer crossing the boundary is ordinary and blocks nothing -- which is
+     * what makes this check worth having rather than a blanket refusal. */
+    if (arena_owns(g_live[g_live_n - 1], p)) {
+        if (g_live_n <= g_escaped_cap) g_escaped[g_live_n - 1] = true;
+    }
+}
+
+/* Read the flag conservatively: a generation whose flag we could not store is
+ * treated as having escaped. */
+static bool generation_escaped(int idx0) {
+    if (idx0 < 0) return true;
+    if (idx0 >= g_escaped_cap) return true;
+    return g_escaped[idx0];
 }
 
 /* Both pops take the depth back so a mismatched pair is a no-op rather than a
@@ -81,11 +134,25 @@ void tur_region_pop(int depth) {
 void tur_region_pop_reclaim(int depth) {
     Arena *a = detach(depth);
     if (!a) return;
-    /* arena_free releases the slabs.  In a Debug build arena_reset poisons
-     * first; here the memory is unmapped outright, so a survivor faults rather
-     * than reading stale bytes -- the louder of the two backstops. */
-    arena_free(a);
-    free(a);
+    /* Rewind, do not release.  arena_reset keeps the slabs and, in a Debug
+     * build, poisons them -- so a straggler traps at the deref under ASan
+     * instead of reading stale bytes, and the next push reuses the memory
+     * rather than asking the allocator again. */
+    arena_reset(a);
+    if (!push_ptr(&g_pool, &g_pool_n, &g_pool_cap, a)) {
+        arena_free(a);
+        free(a);
+    }
+}
+
+bool tur_region_pop_checked(int depth) {
+    if (depth <= 0 || depth != g_live_n) return false;   /* mismatched: refuse */
+    if (generation_escaped(depth - 1)) {
+        tur_region_pop(depth);       /* retire: correctness over saving */
+        return false;
+    }
+    tur_region_pop_reclaim(depth);
+    return true;
 }
 
 void *tur_region_alloc(size_t n) {
@@ -112,6 +179,9 @@ bool tur_region_active(void) { return g_live_n > 0; }
 void tur_region_shutdown(void) {
     for (int i = 0; i < g_live_n; i++)    { arena_free(g_live[i]);    free(g_live[i]); }
     for (int i = 0; i < g_retired_n; i++) { arena_free(g_retired[i]); free(g_retired[i]); }
+    for (int i = 0; i < g_pool_n; i++)    { arena_free(g_pool[i]);    free(g_pool[i]); }
     free(g_live);    g_live = NULL;    g_live_n = g_live_cap = 0;
     free(g_retired); g_retired = NULL; g_retired_n = g_retired_cap = 0;
+    free(g_pool);    g_pool = NULL;    g_pool_n = g_pool_cap = 0;
+    free(g_escaped); g_escaped = NULL; g_escaped_cap = 0;
 }
