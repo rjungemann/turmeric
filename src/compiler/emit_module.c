@@ -3503,6 +3503,25 @@ static bool emit_abi_try_nested_instance_dispatch_redirect(
     for (uint8_t i = 0; i < n_spec_args; i++) {
         if (i == 0 && !return_dispatch) {
             arg_types[0] = *resolved;
+        } else if (!return_dispatch && n_spec_args > 1 &&
+                   type_eq(fd->params[i]->type, fd->params[0]->type)) {
+            /* eq-on-pair-of-niche-option-segfaults: a BINARY method whose other
+             * parameter is ALSO the class variable -- `(eq? [x y] ...)` -- had
+             * only parameter 0 forced to the resolved receiver.  Every other
+             * parameter instantiated its DECLARED type through the element
+             * bindings, and the class variable is not an element tyvar, so it
+             * stayed the erased carrier: one `Eq[Option]` spec minted
+             * `(void *, int64_t)`, matching x as a niche and y as a tagged box.
+             * The second binder then handed `Eq[String]` an integer where it
+             * wants a pointer -- a -Wint-conversion cc WARNING, so it reached a
+             * running binary and segfaulted there.
+             *
+             * A parameter declared with the receiver's own erased type IS the
+             * class variable: the tyvar was erased at instance elaboration (the
+             * same fact the sibling substitution at the owned-path loop relies
+             * on), so inside an instance body that spelling has no other
+             * meaning.  It resolves to the same concrete receiver. */
+            arg_types[i] = *resolved;
         } else {
             arg_types[i] = emit_abi_instantiate_type(&fd->params[i]->type, eb, enb,
                                                      ctx->type_arena);
