@@ -30,6 +30,15 @@ All notable changes to Turmeric are documented here.
   than adding weight. Read-only: nothing reachable from it can elide a runtime
   check.
 
+- **Two more solver caps are now instrumented** under `TUR_REFINE_STATS=1` and
+  in `benchmarks/run-cap-sweep.sh`: `path hyps` (`RT_CS_PATH_MAX_HYPS`, the
+  branch guards recovered per call-site crossing -- the tightest cap in the
+  refinement path, and previously invisible) and `model vars`
+  (`MODEL_MAX_VARS`, the counterexample search's width). The latter carries a
+  second `model vars run` line counting the subset a higher cap would actually
+  help, since a VC over the cap may also carry a non-int variable the sort gate
+  declines at any limit.
+
 ### Fixed
 
 - **The internals guide's solver documentation was a release cycle stale.**

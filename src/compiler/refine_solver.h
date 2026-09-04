@@ -55,6 +55,20 @@
  * docs/archive/history/no-max-shared-raise.md. */
 #define NO_MAX_SHARED           16
 
+/* The bounded counterexample search's scope.  Here rather than beside its own
+ * code for the telemetry reason the NO_MAX_* ones are: the reporter names the
+ * limit its peak is a peak of.
+ *
+ * This is the cap most likely to SURPRISE, because it does not cost a proof --
+ * it costs a REFUTATION.  The proving stages only ever answer Valid or
+ * Unknown, so a counterexample can come from nowhere else; a VC with more
+ * variables than this can therefore never be reported as definitely wrong,
+ * however obviously wrong it is.  Raising it costs enumeration exponentially
+ * (n_cand ** n_vars), which is why it wants a measurement rather than a
+ * guess -- see model_vars_hits below for what that measurement has to
+ * separate. */
+#define MODEL_MAX_VARS          3
+
 /* A COLLECTION cap, not a solver one, and it lives here for the same reason
  * the two NO_MAX_* ones do: the telemetry below reports a peak against the
  * limit it is a peak of, and the reporter cannot see elab_fns.c's internals.
@@ -107,6 +121,20 @@ typedef struct RefineCapStats {
      * collected -- a verdict change for a measurement, which is the wrong
      * trade. */
     uint32_t path_hyps_hits,    path_hyps_peak;
+    /* The counterexample search's variable cap.  Unlike path_hyps, the peak
+     * here is REAL rather than saturating: `n_vars` is known before the check,
+     * so a declined VC still reports how wide it actually was.  It is recorded
+     * only for VCs that got past the uninterpreted-symbol gate, since the
+     * others could not use the search at any cap.
+     *
+     * Two hit counters, and the second is the one that decides anything.
+     * `model_vars_hits` counts every decline at the cap; `model_vars_would_run`
+     * counts the subset that would ACTUALLY start searching at a higher cap --
+     * a VC over the cap may also carry a non-int variable, and the sort gate
+     * sits after the count gate, so raising the limit would buy those nothing.
+     * A raise is justified by the second number, never the first. */
+    uint32_t model_vars_hits,   model_vars_peak;
+    uint32_t model_vars_would_run;
 } RefineCapStats;
 
 /* Mutable on purpose: the stages bump their own counters in place, which is
@@ -140,6 +168,9 @@ static inline void refine_caps_delta(RefineCapStats *out,
     out->no_rounds_hits    = now->no_rounds_hits    - before->no_rounds_hits;
     out->path_hyps_hits    = now->path_hyps_hits    - before->path_hyps_hits;
     out->path_hyps_peak    = now->path_hyps_peak;
+    out->model_vars_hits      = now->model_vars_hits      - before->model_vars_hits;
+    out->model_vars_would_run = now->model_vars_would_run - before->model_vars_would_run;
+    out->model_vars_peak      = now->model_vars_peak;
     out->cubes_peak        = now->cubes_peak;
     out->cube_lits_peak    = now->cube_lits_peak;
     out->expand_depth_peak = now->expand_depth_peak;
@@ -163,7 +194,10 @@ static inline void refine_caps_add_hits(RefineCapStats *a,
     a->no_shared_hits    += b->no_shared_hits;
     a->no_rounds_hits    += b->no_rounds_hits;
     a->path_hyps_hits    += b->path_hyps_hits;
+    a->model_vars_hits      += b->model_vars_hits;
+    a->model_vars_would_run += b->model_vars_would_run;
     refine_cap_peak(&a->path_hyps_peak,    b->path_hyps_peak);
+    refine_cap_peak(&a->model_vars_peak,   b->model_vars_peak);
     refine_cap_peak(&a->cubes_peak,        b->cubes_peak);
     refine_cap_peak(&a->cube_lits_peak,    b->cube_lits_peak);
     refine_cap_peak(&a->expand_depth_peak, b->expand_depth_peak);

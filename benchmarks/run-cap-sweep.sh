@@ -106,18 +106,20 @@ work, out, fuzz_n, fuzz_seed, corpus_rc = sys.argv[1], sys.argv[2], sys.argv[3],
 # One row per cap.  `limit` is filled from whichever source names it -- the
 # corpus emitter does not print limits, the per-compile summary does.
 CAPS = ["cubes", "cube_lits", "expand_depth", "la_vars", "la_constr",
-        "euf_terms", "no_shared", "path_hyps"]
+        "euf_terms", "no_shared", "path_hyps", "model_vars"]
 PRETTY = {"cubes": "cubes", "cube literals": "cube_lits",
           "expand depth": "expand_depth", "LA vars": "la_vars",
           "LA constraints": "la_constr", "EUF terms": "euf_terms",
-          "NO shared": "no_shared", "path hyps": "path_hyps"}
+          "NO shared": "no_shared", "path hyps": "path_hyps",
+          "model vars": "model_vars"}
 
-# Caps that only exist on the COMPILED path.  RT_CS_PATH_MAX_HYPS bounds the
-# branch guards recovered for a call-site crossing, and the SMT-LIB corpus
-# never elaborates anything -- it feeds VCs straight to the chain.  Reporting a
-# flat 0 there would read as "measured, never bit" when the truth is "this
-# population cannot exercise it", so the corpus table says n/a instead.
-COMPILED_ONLY = {"path_hyps"}
+# Caps the SMT-LIB corpus population cannot exercise at all.  Reporting a flat
+# 0 for them would read as "measured, never bit" when the truth is "this
+# population cannot reach it", so the corpus table says n/a and why.
+COMPILED_ONLY = {
+    "path_hyps":  "this population does not elaborate",
+    "model_vars": "this harness does not run the model search",
+}
 
 # Caps whose peak saturates at the limit because the producer stops at it.
 # Their headroom column is only meaningful while hits is 0.
@@ -125,7 +127,7 @@ SATURATING = {"path_hyps"}
 
 def blank():
     return {c: {"hits": 0, "peak": 0, "worst": "", "limit": 0} for c in CAPS} | \
-           {"la_fm": {"hits": 0}, "no_rounds": {"hits": 0}}
+           {"la_fm": {"hits": 0}, "no_rounds": {"hits": 0}, "model_run": {"hits": 0}}
 
 def note(acc, cap, hits, peak, limit, who):
     r = acc[cap]
@@ -165,6 +167,13 @@ def parse_summary(path, acc, tag):
             note(acc, cap, 1 if hit else 0, int(m.group(2)), int(m.group(3)), who)
             if hit: seen.add(who)
             continue
+        m = re.match(r"model vars run\s+(\d+)", rest)
+        if m:
+            # NOT a cap hit of its own -- it is the SUBSET of `model vars` hits a
+            # higher cap would actually help, so it must never add to the capped
+            # unit count or a unit would be tallied twice.
+            acc["model_run"]["hits"] += int(m.group(1))
+            continue
         m = re.match(r"(FM blow-ups|NO rounds out)\s+(\d+)", rest)
         if m and int(m.group(2)):
             acc["la_fm" if m.group(1).startswith("FM") else "no_rounds"]["hits"] += int(m.group(2))
@@ -202,6 +211,20 @@ L.append("Every cap below degrades to `RT_UNKNOWN` -> the runtime check survives
          "costs a real proof matters.  `peak` is the high-water mark of the quantity the\n"
          "cap bounds, recorded on every query rather than only on the ones that overflow,\n"
          "so a cap that never fires still reports its headroom.\n")
+L.append("`model_vars` bounds the counterexample SEARCH, so a hit there costs a\n"
+         "refutation rather than a proof: the obligation stays `unknown` instead of\n"
+         "reporting the counterexample it has.  Its `would run` row is the subset a\n"
+         "higher cap would actually help -- a VC over the cap may also carry a non-int\n"
+         "variable, which the sort gate declines at any limit.  Argue a raise from that\n"
+         "row, never from the hits.\n")
+L.append("**Do not read the fuzzer population's `model_vars` headroom as a signal.**\n"
+         "`tests/refine-fuzz-src.py` generates at most TWO parameters per program\n"
+         "(`rng.randint(0, 2)` / `randint(1, 2)` in its shape methods), so a generated\n"
+         "VC structurally cannot exceed those plus `r`.  A peak that sits exactly on the\n"
+         "limit there is the generator's ceiling, not evidence about real code, and 0\n"
+         "hits from that population is not evidence the cap never bites.  A four-\n"
+         "parameter function with a refined return trips it immediately -- which is an\n"
+         "ordinary shape none of the three swept populations happens to contain.\n")
 L.append("`path_hyps` is a COLLECTION cap (RT_CS_PATH_MAX_HYPS -- the branch guards\n"
          "recovered for a call-site crossing), not a solver stage.  It reads `n/a` for the\n"
          "SMT-LIB corpus because that population feeds VCs straight to the chain and never\n"
@@ -213,8 +236,8 @@ for name, acc, n, tag in pops:
     L.append("|---|---:|---:|---:|---:|---|")
     for c in CAPS:
         if c in COMPILED_ONLY and tag == "corpus":
-            L.append("| %s | n/a | n/a | %d | n/a | this population does not elaborate |"
-                     % (c, acc[c]["limit"]))
+            L.append("| %s | n/a | n/a | %d | n/a | %s |"
+                     % (c, acc[c]["limit"], COMPILED_ONLY[c]))
             continue
         r = acc[c]
         lim = r["limit"]
@@ -232,6 +255,11 @@ for name, acc, n, tag in pops:
                  % (c, r["hits"], r["peak"], lim, head, r["worst"] or "-"))
     L.append("| la_fm (FM blow-up) | %d | - | - | - | - |" % acc["la_fm"]["hits"])
     L.append("| no_rounds (exchange budget) | %d | - | - | - | - |" % acc["no_rounds"]["hits"])
+    if tag == "corpus":
+        L.append("| model_vars would run | n/a | - | - | - | %s |" % COMPILED_ONLY["model_vars"])
+    else:
+        L.append("| model_vars would run | %d | - | - | - | of the %d over the cap |"
+                 % (acc["model_run"]["hits"], acc["model_vars"]["hits"]))
 L.append("\nCorpus harness exit code: %s (0 = PASS, no soundness failure).\n" % corpus_rc)
 L.append("Fuzzer population: n=%s seed=%s, generated by `tests/refine-fuzz-src.py`'s own `Gen`.\n"
          % (fuzz_n, fuzz_seed))

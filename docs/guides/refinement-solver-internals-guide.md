@@ -498,10 +498,29 @@ check it would otherwise have elided.
 | `MODEL_MAX_VARS` | 3 | counterexample-search variables |
 | `MODEL_MAX_CANDS` | 16 | counterexample candidate values |
 
-`MODEL_MAX_VARS` is the one most likely to surprise: `refine_model_search`
-returns `NULL` outright for a VC with more than three variables, so such an
-obligation can only ever be *proved* or *unknown* -- it can never be refuted
-with a counterexample, however obviously false it is.
+`MODEL_MAX_VARS` is the one most likely to surprise, because it does not cost a
+proof -- it costs a **refutation**. The proving stages only ever answer Valid or
+Unknown, so a counterexample can come from nowhere but the bounded search, and
+`refine_model_search` returns `NULL` outright for a VC with more than three
+variables. A four-parameter function with a refined return therefore stays
+`unknown` (silent, runtime check kept) where the same function with three
+parameters reports `TUR-E0371` with a witness. Verified both ways: raising the
+cap to 4 turns that exact obligation from `unknown` into the error.
+
+It is instrumented as `model vars` under `TUR_REFINE_STATS=1`, with a second
+line that is the one a raise has to be argued from:
+
+```
+refine:   model vars      peak      4 / 3      ** HIT
+refine:   model vars run  1 (of 1 over the cap)
+```
+
+`model vars` counts every decline at the cap. **`model vars run` counts the
+subset a higher cap would actually help** -- a VC over the cap may also carry a
+non-int variable, and the sort gate sits *after* the count gate, so raising the
+limit buys those nothing. The cost of raising is exponential
+(`n_cand ** n_vars`, and `n_cand` is up to 16), which is why the distinction
+matters rather than being pedantry.
 
 ### Tier 2 -- collection caps (upstream of the solver)
 
@@ -536,10 +555,20 @@ other way are handled explicitly rather than by luck:
 
 ### What is counted
 
-Every tier-1 cap except the two `MODEL_MAX_*` ones is counted under
+Every tier-1 cap except `MODEL_MAX_CANDS` is counted under
 `TUR_REFINE_STATS=1`, plus `RT_CS_PATH_MAX_HYPS` from tier 2 -- see "Reading
-the cap lines" below. The rest of tier 2 is uninstrumented; if one of them is
-ever suspected, it needs a counter first.
+the cap lines" below. `MODEL_MAX_CANDS` bounds a candidate *value* set rather
+than a structural quantity and nothing has asked for it; the rest of tier 2 is
+uninstrumented too, and if one is ever suspected it needs a counter first.
+
+**A population that cannot reach a cap is not evidence the cap never bites.**
+Two rows in `benchmarks/cap-sweep-results.md` read `n/a` for the SMT-LIB corpus
+for exactly this reason -- it never elaborates (so no `path_hyps`) and its
+harness never runs the model search (so no `model_vars`). The subtler case is
+the fuzzer population, which *does* report `model_vars` and reports it at 0%
+headroom: `tests/refine-fuzz-src.py` generates at most two parameters, so a
+generated VC structurally cannot exceed three variables. That peak is the
+generator's ceiling, not a finding. The sweep file says so in place.
 
 ### The limits that are not numbers
 
@@ -584,6 +613,7 @@ TUR_REFINE_STATS=1 tur build main.tur
 # refine:   cubes           peak      4 / 64
 # refine:   cube literals   peak      7 / 64
 # refine:   path hyps       peak      4 / 8
+# refine:   model vars      peak      2 / 3
 # ...
 
 # Dump each VC as SMT-LIB2 (the refutation form shown earlier).
