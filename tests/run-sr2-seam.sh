@@ -204,22 +204,23 @@ constrained-loop-vec-push-byvalue-result-element
 stdlib-result
 stdlib-result-runtime
 httpd-req-string-opt
+sum-passthrough-param-not-dropped
 "
 
-# DELIBERATELY EXCLUDED -- red under the seam as of 2026-09-04, both filed in
-# docs/reported/sr2-carrier-seam-rotted.md.  They are left out rather than
-# carried red so this harness answers "has the carrier path rotted FURTHER",
-# which is the question it exists to answer.  Re-add each as its defect closes.
+# DELIBERATELY EXCLUDED -- still red under the seam, filed in
+# docs/reported/sr2-carrier-seam-rotted.md.  Left out rather than carried red so
+# this harness answers "has the carrier path rotted FURTHER", which is the
+# question it exists to answer.  Re-add each as its defect closes.
 #
-#   sum-passthrough-param-not-dropped -- a hard C compile error under the seam
-#     ("invalid initializer", an aggregate bound from a carrier match slot).
-#     Fails with the niche off OR on, so it is the carrier path's own rot and
-#     not the layering above.
-#   option-niche-vec-closure-cmp -- a SILENT wrong answer, and the sharper of
-#     the two: it passes with the niche off alone, so TUR_SR2_APP_SUM_BYVALUE=0
-#     is what breaks it.  run-option-niche-seam.sh carries it green on its own
-#     axis, which is exactly how a two-axis rot hides from two one-axis
-#     harnesses.
+#   option-niche-vec-closure-cmp -- a SILENT wrong answer: `(eq? (some "aa")
+#     (some "aa"))` is false on the carrier because no ABI specialization is
+#     minted, so the generic Eq[Option] body keeps the `int` representative and
+#     compares String payloads by pointer.  Root cause established (defect 3 in
+#     the report); the fix is in the spec-minting trigger, not here.
+#
+# sum-passthrough-param-not-dropped was excluded here on 2026-09-04 and is now
+# IN the list above -- its "invalid initializer" was the ROS pointer-box slot
+# read inline by the nested-carrier-match binder, fixed the same day.
 #
 # NOT excluded-as-defect, by design on the niche axis and covered as such by
 # run-option-niche-seam.sh: option-niche-vec-word (asserts the word form

@@ -1,7 +1,7 @@
 ---
 title: The SR2 carrier seam has rotted -- a compile error, a silent wrong answer, and a layering crash
 category: Reported
-description: TUR_SR2_APP_SUM_BYVALUE=0, the bisection hatch left behind when parametric-sum-byvalue graduated, no longer produces correct programs. Three distinct defects, found by restoring the harness that was retired at graduation. The layering crash (1) is fixed; the carrier-path compile error (2) and the silent wrong answer (3) remain open.
+description: TUR_SR2_APP_SUM_BYVALUE=0, the bisection hatch left behind when parametric-sum-byvalue graduated, no longer produces correct programs. Three distinct defects, found by restoring the harness that was retired at graduation. The layering crash (1) and the carrier-path compile error (2) are fixed; the silent wrong answer (3) is root-caused and open.
 ---
 
 # The SR2 carrier seam has rotted
@@ -75,7 +75,29 @@ the niche back on underneath a disabled SR2, because that is precisely the
 combination that aborted. `tests/run-sr2-seam.sh` sets both hatches anyway, so
 it pins the fix rather than depending on it.
 
-## 2. `sum-passthrough-param-not-dropped`: a hard C compile error
+## 2. `sum-passthrough-param-not-dropped`: a hard C compile error -- **FIXED 2026-09-04**
+
+**Resolved.** The match binder's `nested-carrier-match` branch read an
+Option/Result **ROS pointer-box** slot inline, initializing an aggregate from a
+pointer. That branch assumes the typedef emitter lays a non-wide by-value ADT
+field out inline ("exactly as the typedef emitter lays it out"), but
+`adt_field_is_ros_pointer_box` overrides that width heuristic for an
+Option/Result owner and spells the member `tur_adt_T *` however narrow `T` is.
+
+The dedicated pointer-box branch that handles this correctly sits earlier in the
+same chain, but is guarded on `adt_byval` -- true only when the OWNER flows by
+value. That is why the default path never saw it and the carrier did. Both
+binder sites (`emit_expr.c`) now exclude a ROS pointer-box field from the inline
+read, falling through to B3, whose deref is byte-identical to what the
+pointer-box branch emits.
+
+Default path unaffected: 2781/0 with zero snapshot drift, because on that path
+the `adt_byval` branch already caught these fields first. The fixture is now in
+`tests/run-sr2-seam.sh` (55 passed, 0 failed).
+
+The defect as found follows.
+
+### The defect as found
 
 Independent of the niche (fails with it off **or** on), so this is the carrier
 path's own rot:

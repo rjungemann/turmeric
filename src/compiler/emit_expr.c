@@ -14045,7 +14045,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                            ctype, bname, ctype, acc, mp);
                             } else if (emit_type_is_byvalue_adt(ctx, fb->type)) {
                                 if (scrut_is_app_monomorph &&
-                                    !emit_type_is_wide_byval_adt(ctx, fb->type)) {
+                                    !emit_type_is_wide_byval_adt(ctx, fb->type) &&
+                                    !match_field_is_ros_pointer_box(ctx, pat->ctor, fb)) {
                                     /* nested-carrier-match: in a monomorph-app
                                      * scrutinee a non-wide by-value ADT field
                                      * (e.g. `(Pair2 int int)`) is stored INLINE as
@@ -14053,7 +14054,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                      * lays it out (!type_is_wide_byval_adt ->
                                      * aggregate, not int64).  Read it directly -- a
                                      * deref / intptr_t cast of an aggregate is
-                                     * invalid C. */
+                                     * invalid C.
+                                     *
+                                     * EXCEPT when the owner is Option/Result and the
+                                     * field takes the ROS POINTER-BOX slot: that rule
+                                     * (adt_field_is_ros_pointer_box) overrides the
+                                     * width heuristic in the typedef emitter, which
+                                     * spells the member `tur_adt_T *` however narrow
+                                     * T is.  Reading it inline then initializes an
+                                     * aggregate from a pointer -- "invalid
+                                     * initializer".  The pointer-box branch above
+                                     * catches this first whenever the OWNER flows by
+                                     * value, which is why the default path never saw
+                                     * it; on the int64 carrier `adt_byval` is false,
+                                     * the branch is skipped, and the contradiction
+                                     * surfaces here.  Fall through to B3, whose deref
+                                     * is exactly what the pointer-box branch emits.
+                                     * (sum-passthrough-param-not-dropped under
+                                     * TUR_SR2_APP_SUM_BYVALUE=0;
+                                     * docs/reported/sr2-carrier-seam-rotted.md) */
                                     buf_printf(body, "%s %s = __scrut%s%s;\n",
                                                ctype, bname, acc, mp);
                                 } else {
@@ -14397,13 +14416,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                            ctype, bname, ctype, mp);
                             } else if (emit_type_is_byvalue_adt(ctx, fb->type)) {
                                 if (scrut_is_app_monomorph &&
-                                    !emit_type_is_wide_byval_adt(ctx, fb->type)) {
+                                    !emit_type_is_wide_byval_adt(ctx, fb->type) &&
+                                    !match_field_is_ros_pointer_box(ctx, pat->ctor, fb)) {
                                     /* nested-carrier-match: in a monomorph-app
                                      * scrutinee a non-wide by-value ADT field
                                      * (e.g. `(Pair2 int int)`) is stored INLINE as
                                      * the aggregate, exactly as the typedef emitter
                                      * lays it out -- read it directly; a deref /
-                                     * intptr_t cast of an aggregate is invalid C. */
+                                     * intptr_t cast of an aggregate is invalid C.
+                                     *
+                                     * The ROS pointer-box exception is the same one
+                                     * the sibling binder site documents at length:
+                                     * an Option/Result owner spells the member
+                                     * `tur_adt_T *` regardless of width, so an
+                                     * inline read is an aggregate-from-pointer
+                                     * initializer.  Fall through to B3's deref. */
                                     buf_printf(body, "%s %s = __scrut->%s;\n",
                                                ctype, bname, mp);
                                 } else {
