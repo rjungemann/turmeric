@@ -7715,34 +7715,32 @@ int main(int argc, char **argv) {
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Box b_1456 = __ps_195;
             (void)b_1456;
-            tur_adt_Line __t196 = l_1454;
-            double __ps_197 = (first_hyx(&__t196));
+            double __ps_196 = (first_hyx(&l_1454));
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+            printf("%g\n", (double)(__ps_196));
+            double __ps_197 = (second_hyy(&m_1455));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             printf("%g\n", (double)(__ps_197));
-            tur_adt_Line __t198 = m_1455;
-            double __ps_199 = (second_hyy(&__t198));
+            double __ps_198 = (box_hyx(b_1456));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            printf("%g\n", (double)(__ps_199));
-            double __ps_200 = (box_hyx(b_1456));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
-            printf("%g\n", (double)(__ps_200));
-            int64_t __t201;
-            __t201 = INT64_C(0);
-            __t187 = __t201;
+            printf("%g\n", (double)(__ps_198));
+            int64_t __t199;
+            __t199 = INT64_C(0);
+            __t187 = __t199;
         }
         return (int)__t187;
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
-        tur_adt_Cons__int * __ps_202 = (ctor_Cons_Cons__int(h, t));
+        tur_adt_Cons__int * __ps_200 = (ctor_Cons_Cons__int(h, t));
         if (tur_panicking) return ((tur_adt_Cons__int *)0);
-        return __ps_202;
+        return __ps_200;
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        tur_adt_Vec__int * __ps_203 = (vec_new__spec__tur_adt_Vec__int__());
+        tur_adt_Vec__int * __ps_201 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return ((tur_adt_Vec__int *)0);
-        return __ps_203;
+        return __ps_201;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {

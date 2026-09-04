@@ -9903,6 +9903,47 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         !fn_body_tail_emits_byvalue_carrier_abi(ctx, emit_arg))
                         raw = emit_carrier_bridge(ctx, body, raw,
                                                   CK_CARRIER, CK_CONCRETE, _pbp_bv);
+                    /* sr4-byvalue-recursive-sum-walk-copies-per-link (1): the
+                     * spill exists only to give the call an addressable lvalue
+                     * for a `const T *` formal.  A bare VARIABLE reference
+                     * already is one, so the copy buys nothing and costs
+                     * sizeof(T) at every call.  Walking a self-recursive sum
+                     * that is 48 of the 120 bytes copied per link:
+                     * `tur_adt_Subst __t = rest; f(&__t)` where `&rest` is the
+                     * same pointer.
+                     *
+                     * Both conditions are load-bearing.  EX_VAR says the operand
+                     * is a variable rather than a value the emitter converted on
+                     * the way here, and a bare identifier says no cast was
+                     * applied on top -- together they mean `raw` names storage.
+                     * The C names must then agree, or the copy was performing an
+                     * implicit conversion that `&` would skip (a `:heap` binding
+                     * emitted as `T *` against a `T` formal is exactly that).
+                     * The formal is `const T *` -- that is what `_callee_pbp`
+                     * means -- so handing over the original rather than a copy
+                     * cannot let the callee write through it. */
+                    const char *_wantc = emit_type_c_name(
+                        ctx, e->as.call_.args[i]->type);
+                    char _wantbuf[256];
+                    bool _already_lvalue = false;
+                    if (_wantc && emit_str_is_bare_ident(raw) &&
+                        emit_arg->kind == EX_VAR && emit_arg->as.var.binding) {
+                        /* emit_type_c_name hands back a shared static buffer for
+                         * some kinds, so copy before asking it a second time. */
+                        snprintf(_wantbuf, sizeof _wantbuf, "%s", _wantc);
+                        Type _vt = emit_resolve_type(
+                            ctx, emit_arg->as.var.binding->type);
+                        const char *_vc = emit_type_c_name(ctx, _vt);
+                        _already_lvalue = _vc && strcmp(_vc, _wantbuf) == 0;
+                    }
+                    if (_already_lvalue) {
+                        Buf _ab; buf_init(&_ab);
+                        buf_printf(&_ab, "&%s", raw);
+                        buf_putc(&_ab, '\0');
+                        free(raw);
+                        raw = strdup(_ab.data);
+                        buf_free(&_ab);
+                    } else {
                     char *_tmp = fresh_tmp(ctx);
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "%s %s = %s;\n",
@@ -9914,6 +9955,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     raw = strdup(_ab.data);
                     buf_free(&_ab);
                     free(_tmp);
+                    }
                 }
                 /* GHE struct-receiver: a constrained-generic method call
                  * (`(render-to b ...)` with `b : B`, `^Backend B`) re-resolved
