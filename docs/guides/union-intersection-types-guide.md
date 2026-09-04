@@ -389,6 +389,21 @@ fields, and cache pressure.
 Widening (passing `42` where `(int | cstr)` is expected) requires constructing
 the tagged union at the call site -- it is not a free annotation.
 
+> **Where the by-value heap box does and does not happen.** In ARGUMENT
+> position, widening a by-value member for a call that provably neither retains
+> the payload nor suspends puts the copy in the caller's frame instead, so there
+> is no allocation at all -- the same rule, and the same inference, that makes an
+> `any` widen allocation-free. Every other position (a union bound to a local,
+> returned, or held as a temporary) still boxes, and that box has no owner: one
+> leak per widen. Pinned by `tests/fixtures/union-widen-frame-box` under
+> LeakSanitizer; see `docs/reported/union-tagged-union-c-emission.md` for what
+> the remaining positions need.
+
+Two member kinds do not ride the `val` slot as an integer, and both the inject
+and the `match` binder account for it: a by-value aggregate is heap-boxed and
+the slot holds a pointer, and a `float` rides as its IEEE-754 bit pattern rather
+than a numeric conversion.
+
 ### `if`-Guard Narrowing (`any`)
 
 Flow-sensitive narrowing works in `if` guards on an `any`-typed variable. A

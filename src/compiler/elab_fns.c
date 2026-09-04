@@ -5417,10 +5417,20 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
              * is a heap-boxed by-value struct carries exactly such a pointer, so
              * the caller may keep that payload in its own frame rather than
              * mallocing a box nothing frees.  Reusing this mask rather than
-             * adding a parallel one keeps a single answer to a single question. */
+             * adding a parallel one keeps a single answer to a single question.
+             *
+             * union-tagged-union-c-emission: a TY_UNION parameter is the same
+             * tur_tagged_t carrying the same kind of payload pointer, and the
+             * widen that builds it heap-boxes a by-value member exactly as the
+             * `any` widen does -- so it answers the same question and joins the
+             * same mask.  It was left out when this rule was written, which is
+             * why the union path still leaked one box per widen after the `any`
+             * path stopped: not because a union box is harder to own, but
+             * because the inference never ran for it. */
             bool _is_ptr_scalar = _pb->type.kind == TY_CSTR ||
                                   _pb->type.kind == TY_PTR_VOID ||
-                                  _pb->type.kind == TY_ANY;
+                                  _pb->type.kind == TY_ANY ||
+                                  _pb->type.kind == TY_UNION;
             if (_is_ptr_scalar) {
                 TypeKind _rk = (b->type.kind == TY_FN) ? b->type.as.fn.result_kind
                                                        : TY_UNKNOWN;

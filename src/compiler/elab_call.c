@@ -5408,6 +5408,29 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                                     *union_t, args[i]->span);
                             inject->as.union_inject_.tag_idx = (int64_t)um;
                             inject->as.union_inject_.value = args[i];
+                            /* union-tagged-union-c-emission: the frame-box rule,
+                             * verbatim from the `any` widen below -- same widen,
+                             * same tur_tagged_t, same unowned malloc when the
+                             * member is a by-value aggregate.  See the comment
+                             * there for why each of the three conditions is
+                             * required; all three only ever DECLINE, so an
+                             * unmodelled shape keeps the status-quo allocation.
+                             *
+                             * The extra condition here is the closure guard: the
+                             * mask is indexed by the CALLEE's own parameter
+                             * vector, and this branch is one of several at this
+                             * call site that shift by one for a closure's env
+                             * parameter.  Rather than decide which convention the
+                             * mask follows, refuse a closure callee outright --
+                             * a wrong bit here would hand a callee that retains
+                             * the payload a pointer into a frame that is about to
+                             * die, turning a leak into a dangling pointer. */
+                            if (fn_binding && !fn_binding->closure_fn_binding &&
+                                i < 32 &&
+                                (fn_binding->nonretain_ptr_param_mask & (1u << i)) &&
+                                fn_binding->type.kind == TY_FN &&
+                                effect_row_is_empty(fn_binding->type.as.fn.effect_row))
+                                inject->as.union_inject_.frame_box = true;
                             args[i] = inject;
                             break;
                         }

@@ -5481,7 +5481,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* structdef-retirement DS-C: box_struct (a StructDef*) is always NULL
              * now -- a by-value struct is a record ADT, heap-boxed by the
              * byvalue-ADT branch below; the StructDef heap-box arm is removed. */
-            if (tag == (int64_t)TY_FLOAT) {
+            /* union-tagged-union-c-emission: the float test asks about the
+             * PAYLOAD, not about the tag.  It used to read `tag == TY_FLOAT`,
+             * which is the same question only for an `any` box, whose tag IS
+             * any_box_tag_for_type (i.e. the payload's TypeKind, modulo the
+             * struct-lowering rename that cannot produce TY_FLOAT).  A TY_UNION
+             * inject's tag is a MEMBER INDEX, so that comparison asked whether
+             * the float member happened to sit at position 12 -- it never does,
+             * and every union float member was truncated by the integer cast in
+             * the final branch: `(pick 7.1)` stored 7.  Keying on the payload
+             * type is exactly equivalent for `any` and correct for a union. */
+            Type inj_pt = emit_resolve_type(ctx, e->as.union_inject_.value->type);
+            if (inj_pt.kind == TY_FLOAT) {
                 /* TY2.2: a double does not survive an integer cast -- store its
                  * IEEE-754 bit pattern in the payload via a union reinterpret. */
                 buf_printf(&out,
@@ -13459,14 +13470,42 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     first_arm = false;
                     ctx->indent += 4;
 
-                    /* Bind the narrowed variable: untagged value cast to the arm type */
+                    /* Bind the narrowed variable: untagged value cast to the arm
+                     * type.  union-tagged-union-c-emission: the plain scalar
+                     * cast is right only for a payload that RIDES the value
+                     * slot.  Two kinds do not, and the inject site above already
+                     * spells both out -- this is the reading half of the same
+                     * two rules, and it was missing, so each arm was a defect:
+                     *
+                     *   - a by-value aggregate is heap-boxed into the slot, so
+                     *     the slot holds a POINTER.  `(T)(intptr_t)` on it is
+                     *     "conversion to non-scalar type requested" -- a hard C
+                     *     compile error, which is why every union fixture in the
+                     *     tree either ignores its payload or carries only
+                     *     scalars.  Deref it, exactly as EX_ANY_CAST does.
+                     *   - a float rides as its IEEE-754 bit pattern, so it comes
+                     *     back through the reverse reinterpret, not a numeric
+                     *     conversion.  This arm also corrects an `any` match on
+                     *     a float, which had the same mismatch with its inject. */
                     if (pat->n_bindings > 0 && pat->bindings[0]) {
                         Binding *fb = pat->bindings[0];
+                        Type fbt = emit_resolve_type(ctx, fb->type);
                         const char *ctype = type_c_name(fb->type);
                         char *bname = name_for_binding(ctx, fb);
                         indent_buf(body, ctx->indent);
-                        buf_printf(body, "%s %s = (%s)(intptr_t)TUR_UNTAG(%s);\n",
-                                   ctype, bname, ctype, scrut_tmp);
+                        if (fbt.kind == TY_FLOAT) {
+                            buf_printf(body,
+                                "%s %s = ((union { int64_t i; double d; })"
+                                "{.i = TUR_UNTAG(%s)}).d;\n",
+                                ctype, bname, scrut_tmp);
+                        } else if (emit_type_is_byvalue_adt(ctx, fbt)) {
+                            const char *cn = emit_type_c_name(ctx, fbt);
+                            buf_printf(body, "%s %s = *(%s *)(intptr_t)TUR_UNTAG(%s);\n",
+                                       ctype, bname, cn, scrut_tmp);
+                        } else {
+                            buf_printf(body, "%s %s = (%s)(intptr_t)TUR_UNTAG(%s);\n",
+                                       ctype, bname, ctype, scrut_tmp);
+                        }
                         free(bname);
                     }
 
