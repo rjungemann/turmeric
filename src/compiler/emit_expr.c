@@ -280,6 +280,29 @@ bool emit_spec_result_mismatch(Type call_result, Type spec_result) {
  * EX_CALL resolves to, or NULL.  Factored out of the EX_CALL emit path so the
  * let-binding type can discover that a call returns a concrete struct by value
  * (e.g. a `tuple2`/`ok`/`thead` clone) rather than the int64_t carrier. */
+/* Does the spec named by `clone` belong to `fn_binding`?
+ *
+ * eq-two-pair-monomorphs-sharing-a-component-cross-bind: the cross-spec
+ * fallback below keys on the source `Expr*` alone, and a DICT-DISPATCHED call
+ * re-resolves to a different concrete instance method per monomorph -- so one
+ * recorded entry can name a clone of an entirely different function.  That is
+ * how `Eq [Pair]`'s `(eq? (.snd x) (.snd y))`, emitting under the
+ * `(Pair (Option String) int)` spec with `Eq[int]` as its callee, adopted the
+ * `Eq[Option]` clone recorded under the sibling `(Pair ... (Option String))`
+ * spec, and bridged two plain ints as niche options.
+ *
+ * The Expr* is shared; the callee is not.  Require both. */
+static bool emit_spec_clone_belongs_to(const EmitCtx *ctx, const char *clone,
+                                       const Binding *fn_binding) {
+    if (!ctx || !clone || !fn_binding) return false;
+    for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
+        const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
+        if (!spec->clone_name || strcmp(spec->clone_name, clone) != 0) continue;
+        return spec->binding == fn_binding;
+    }
+    return false;
+}
+
 static const EmitAbiSpecialization *find_matched_abi_spec(
         EmitCtx *ctx, const Expr *e, const Binding *fn_binding) {
     if (!ctx || !e || e->kind != EX_CALL) return NULL;
@@ -315,6 +338,8 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
     const char *fallback_clone = NULL;
     bool saw_call = false;
     bool saw_any = false;
+    const char *other_clone = NULL;   /* first entry under a DIFFERENT outer */
+    uint32_t n_other = 0;             /* how many such entries exist */
     for (uint32_t i = 0; i < ctx->n_specialized_calls; i++) {
         if (ctx->specialized_call_exprs[i] != e) continue;
         saw_any = true;
@@ -323,27 +348,45 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
             saw_call = true;
             break;
         }
-        /* Cross-spec fallback (M5 Finding 7) only applies when we are emitting
-         * INSIDE some spec; a carrier base / top-level emit (active_outer==NULL)
-         * must not pick up a spec-scoped entry, else e.g. the int64-returning
-         * carrier base routes `(ok v)` to a by-value `ok__spec` (return-type
-         * mismatch).  See the M2-completion primitive-payload construct path.
-         *
-         * Phase 5 carrier-bridge deletion: NEVER apply the cross-spec fallback to
-         * a `#{Construct}` callee.  emit_call_name disambiguates a construct only
-         * by the exact Expr* recording (a by-value spec and the carrier base
-         * differ ONLY in return ABI), so the same shared `(some ...)` Expr*
-         * recorded under a by-value option_map spec must NOT be reported as
-         * by-value when this lookup runs under the sibling int64-result spec --
-         * that disagreement made the if-merge temp by-value while the branch
-         * emitted the carrier `some()` (a cc type error). Keep this lookup in
-         * lockstep with emit by requiring an exact outer match for constructs. */
-        if (active_outer != NULL && !saw_call &&
-            !(fn_binding && fn_binding->is_construct_template)) {
-            fallback_clone = ctx->specialized_call_names[i];
-            saw_call = true;
-        }
+        if (!other_clone) other_clone = ctx->specialized_call_names[i];
+        n_other++;
     }
+    /* Cross-spec fallback (M5 Finding 7) only applies when we are emitting
+     * INSIDE some spec; a carrier base / top-level emit (active_outer==NULL)
+     * must not pick up a spec-scoped entry, else e.g. the int64-returning
+     * carrier base routes `(ok v)` to a by-value `ok__spec` (return-type
+     * mismatch).  See the M2-completion primitive-payload construct path.
+     *
+     * Phase 5 carrier-bridge deletion: NEVER apply the cross-spec fallback to
+     * a `#{Construct}` callee.  emit_call_name disambiguates a construct only
+     * by the exact Expr* recording (a by-value spec and the carrier base
+     * differ ONLY in return ABI), so the same shared `(some ...)` Expr*
+     * recorded under a by-value option_map spec must NOT be reported as
+     * by-value when this lookup runs under the sibling int64-result spec --
+     * that disagreement made the if-merge temp by-value while the branch
+     * emitted the carrier `some()` (a cc type error). Keep this lookup in
+     * lockstep with emit by requiring an exact outer match for constructs.
+     *
+     * eq-two-pair-monomorphs-sharing-a-component-cross-bind: the fallback is
+     * for the case its own comment names -- "no outer-matched entry exists
+     * (top-level / single-spec case)" -- and that is only unambiguous when
+     * there is exactly ONE entry to fall back to.  With TWO sibling specs over
+     * one shared body, a call specialized under one and not the other silently
+     * adopted the sibling's clone: `Eq [Pair]`'s `(eq? (.snd x) (.snd y))` is
+     * recorded under the `(Pair (Option String) (Option String))` spec, where
+     * `.snd` really is an Option, and nothing is recorded under the
+     * `(Pair (Option String) int)` spec, where `Eq[int]` needs no clone.  The
+     * `.snd` argument was then bridged to `(Option String)` -- an
+     * `Eq[int]` call handed two unboxed String payloads.  Ambiguity is not a
+     * licence to guess: with more than one candidate and none matching, the
+     * call is simply not specialized here. */
+    if (!saw_call && active_outer != NULL && other_clone &&
+        !(fn_binding && fn_binding->is_construct_template) &&
+        emit_spec_clone_belongs_to(ctx, other_clone, fn_binding)) {
+        fallback_clone = other_clone;
+        saw_call = true;
+    }
+    (void)n_other;
     if (saw_call) {
         for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
             const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];

@@ -1,10 +1,12 @@
 ---
 title: Two Pair monomorphs sharing a component cross-bind their per-component Eq dispatch
-category: Reported
-description: A (Pair (Option String) int) and a (Pair (Option String) (Option String)) each work alone, but in ONE program the Eq[Pair] spec bodies cross-contaminate -- the .snd dispatch of one binds the other's instance and receives the first component's unboxed payloads. cc warns, the program crashes.
+category: Archive
+description: The spec lookup's cross-spec fallback keys on the source Expr* alone, but a dict-dispatched call re-resolves its callee per monomorph -- so one sibling spec's recorded clone was adopted for a call to an entirely different function. RESOLVED 2026-09-04: the fallback now requires the clone to belong to this callee.
 ---
 
 # Two Pair monomorphs sharing a component cross-bind their per-component Eq dispatch
+
+**RESOLVED 2026-09-04.**  Root cause and resolution at the bottom.
 
 **Severity: medium** -- a crash on the DEFAULT path for a shape `tur check`
 accepts.  Found 2026-09-04 while pinning
@@ -96,3 +98,65 @@ absent from it.
 ## Guides to update when fixed
 
 - None known; a codegen defect with no documented behaviour attached.
+
+
+## Root cause (established 2026-09-04)
+
+Not instance selection, and not the spec KEY: the emitted callee was right
+(`__inst_Eq_eq_qu_int`) and only the ARGUMENT was bridged wrong.  A gdb
+breakpoint on the niche unbox put the sink type at
+`emit_expr.c`'s dispatch-argument bridge, `matched_spec->arg_types[i]` -- so
+`find_matched_abi_spec` had returned the wrong spec.
+
+That lookup keys on the source `Expr*`, with a cross-spec fallback:
+
+```c
+if (active_outer != NULL && !saw_call && !construct) {
+    fallback_clone = ctx->specialized_call_names[i];   /* first entry, any outer */
+}
+```
+
+Its own comment names the case it is for -- "no outer-matched entry exists
+(top-level / single-spec case)".  With two sibling specs over one shared
+instance body that case is no longer unambiguous, and worse, the entry it
+grabs need not even belong to the same FUNCTION: a dict-dispatched call
+re-resolves to a different concrete instance method per monomorph.  So
+`Eq [Pair]`'s `(eq? (.snd x) (.snd y))`, emitting under the
+`(Pair (Option String) int)` spec with `Eq[int]` as its callee, adopted the
+`Eq[Option]` clone recorded under the sibling `(Pair ... (Option String))`
+spec -- and bridged two plain ints as niche options.
+
+The trace that settled it:
+
+```
+[fms] fn=__inst_Eq_eq_qu_int active_outer=...Pair__Option__String__int...
+      saw_call=0 n_other=1 other=__inst_Eq_eq_qu_Option__spec__bool_void___void__
+```
+
+A clone named for `Eq[Option]` handed to a call whose callee is `Eq[int]`.
+
+**The Expr\* is shared; the callee is not.**  The fallback now requires both:
+`emit_spec_clone_belongs_to` resolves the candidate clone back to its spec and
+checks `spec->binding == fn_binding`.  A genuine cross-spec fallback -- the
+same callee under a different outer -- still passes; a cross-CALLEE one no
+longer does.
+
+A first attempt guarded on "only one candidate entry" instead, on the theory
+that ambiguity was the problem.  It did not fix the repro (the trace above
+shows `n_other=1`), and it was the wrong question: one candidate is not safer
+than two if it names the wrong function.  Worth recording, because the count
+heuristic looks plausible right up until the trace is read.
+
+## Validation
+
+- `bash tests/run.sh` **2787 passed / 0 failed, zero snapshot drift** -- for a
+  change to a lookup this widely called (a dozen call sites in emit_expr.c
+  alone), the snapshot suite is the gate, and it moved nothing.
+- `tests/fixtures/eq-nested-binary-class-method-spec` group 2 now carries the
+  sibling-spec case that the fix for the previous report had to omit.  Its last
+  line varies ONLY the int component, so a re-crossing of the two dispatches
+  fails loudly rather than silently agreeing.
+- `run.sh` already fails any fixture whose build stderr carries
+  `-Wint-conversion`, which is the primary guard here; the printed answers are
+  secondary.
+- option-niche seam 10/0, sr2 55/0, sr4 24/0, leak-check 79/0.

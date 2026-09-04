@@ -17,11 +17,13 @@
 ;; whole reason it survived.  So the C-level guard is the primary assertion here
 ;; and the printed answers are the secondary one.
 ;;
-;; Deliberately NOT here: a `(Pair (Option String) (Option String))` alongside
-;; group 1.  Each compiles and answers correctly on its own, but two Pair
-;; monomorphs that share a first component and differ in the second hit a
-;; SEPARATE spec defect this fix does not close --
-;; docs/reported/eq-two-pair-monomorphs-sharing-a-component-cross-bind.md.
+;; Group 2 is the SIBLING-SPEC case, and it was a second defect: two Pair
+;; monomorphs that share a first component and differ in the second made the
+;; `.snd` dispatch of one adopt the other's recorded clone, because the
+;; cross-spec fallback in the spec lookup keys on the source `Expr*` alone
+;; while a dict-dispatched call re-resolves its callee per monomorph.  The
+;; last line of that group varies ONLY the int, so it fails loudly if the two
+;; components' dispatches are ever crossed again.
 ;;
 ;; The `(Pair (Vec int) int)` group is the same defect where it did NOT crash:
 ;; both representations are pointers to the same layout, so the mismatched spec
@@ -45,14 +47,26 @@
       (println (if (eq? p1 p3) "eq" "ne"))     ;; ne -- first component differs
       (println (if (eq? p1 p4) "eq" "ne")))    ;; ne -- second component differs
 
-    ;; 2. nested one level further: Pair inside Pair
+    ;; 2. two Pair monomorphs sharing a component, in ONE program
+    (let [s1 (:: (pair a 1) (Pair (Option String) int))
+          s2 (:: (pair b 1) (Pair (Option String) int))
+          s3 (:: (pair b 2) (Pair (Option String) int))
+          t1 (:: (pair a a) (Pair (Option String) (Option String)))
+          t2 (:: (pair b b) (Pair (Option String) (Option String)))
+          t3 (:: (pair a c) (Pair (Option String) (Option String)))]
+      (println (if (eq? s1 s2) "eq" "ne"))     ;; eq
+      (println (if (eq? t1 t2) "eq" "ne"))     ;; eq
+      (println (if (eq? t1 t3) "eq" "ne"))     ;; ne
+      (println (if (eq? s1 s3) "eq" "ne")))    ;; ne -- ONLY the int differs
+
+    ;; 3. nested one level further: Pair inside Pair
     (let [n1 (:: (pair (:: (pair a 1) (Pair (Option String) int)) 2) (Pair (Pair (Option String) int) int))
           n2 (:: (pair (:: (pair b 1) (Pair (Option String) int)) 2) (Pair (Pair (Option String) int) int))
           n3 (:: (pair (:: (pair c 1) (Pair (Option String) int)) 2) (Pair (Pair (Option String) int) int))]
       (println (if (eq? n1 n2) "eq" "ne"))     ;; eq
       (println (if (eq? n1 n3) "eq" "ne")))    ;; ne
 
-    ;; 3. a Pair reached through a container's own Eq
+    ;; 4. a Pair reached through a container's own Eq
     (let [v (:: (vec-new) (Vec (Pair (Option String) int)))
           w (:: (vec-new) (Vec (Pair (Option String) int)))
           u (:: (vec-new) (Vec (Pair (Option String) int)))]
@@ -64,7 +78,7 @@
     (vec-pair-check)
     0))
 
-;; 4. the warning-only twin: both representations are pointers, so the
+;; 5. the warning-only twin: both representations are pointers, so the
 ;;    mismatched spec answered correctly and only -Wint-conversion showed it.
 (defn vec-pair-check [] : void
   (let [va (:: (vec-new) (Vec int))
