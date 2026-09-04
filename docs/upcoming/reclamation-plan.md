@@ -497,6 +497,32 @@ is CLAUDE.md's documented gap ("a leak in EMITTED code passes run.sh
 silently") turning up 8.3 KB of real leaks the moment anyone looks. Widening
 the marker set is cheap and is not gated on RM1.
 
+**Taken up 2026-09-04, and the aside was half right.**  Full decomposition in
+[rm1-leak-sweep-decomposed-2026-09-04.md](../artifacts/rm1-leak-sweep-decomposed-2026-09-04.md).
+Widening the marker set is cheap, but not as simple as adding markers: the
+sweep's byte totals attribute nothing, and the largest single entry --
+`httpd-req-string-opt` at 1285 B, 2.3x the next -- was **1176 B of the
+fixture's own hand-written `calloc(1, sizeof(HttpdConn))`**, three fake conns
+it built and never freed.  A marker on a fixture that leaks its own test rig
+measures the rig.  Fixed by giving that fixture the `free-conn` it never had
+(1285 -> 109 B, output unchanged); the rest need their category resolved before
+a marker on them means anything.
+
+Broken down by allocating function rather than by fixture, the 1790 B that
+remain are:
+
+| category | bytes | whose |
+|---|---:|---|
+| recursive sum spine | ~990 | **RM2** |
+| `tur_string_from_bytes` payloads | ~250 | String ownership |
+| **RM1 sum boxes** | **~240** | this phase |
+| poly aggregate-spill shim | ~48 | RM1-adjacent |
+| program-owned containers | ~100 | the program's |
+
+So RM1's own residue is ~240 B in 16-48 B units, which matches this section's
+account of what is unstampable by design.  **The largest real category is
+RM2's** -- see the note added there.
+
 ### RM2 -- the recursive spine
 
 The per-node spine box of a self-recursive sum, which is what `logic.tur`
@@ -511,6 +537,28 @@ inferred.
 
 *Gate:* RM0(b). If there is no workload, this phase does not start, and the
 reason is recorded rather than the phase being left implicitly pending.
+
+**The gate's evidence, revisited 2026-09-04.** RM0 closed this phase as "no
+constituency".  Two measurements now argue otherwise, and they are recorded
+here rather than acted on, because RM2's own blocker is unchanged:
+
+1. **It is the biggest real category left.** Once `httpd-req-string-opt`'s
+   test scaffold is out of the RM1 sweep, per-node spine boxes
+   (`ctor_Cons_Cons__*`, `re-string`'s regex cells) are ~990 of the remaining
+   1790 bytes -- 55%, against RM1's own ~240.
+2. **It GROWS, and the corpus sweep could not see that.** A 64-link `Subst`
+   chain leaks 64 boxes; 100 rounds of an 8-link chain leak 800, not 8.  A
+   program that builds and discards recursive values in a loop grows without
+   bound.  RM0 priced the spine as an allocation COUNT across a corpus where
+   every fixture builds its structure once -- an axis on which unbounded
+   growth and a one-shot allocation are indistinguishable.  A backtracking
+   solver is the workload the gate asked for.
+
+This does not reopen the phase on its own: "a tree's nodes escape their
+constructor by construction" is still true, per-node free still needs
+ownership the emitter does not have, and Row B's 2.49x is still measured with
+frees written by hand.  What has changed is that the gate's premise -- that
+nobody is paying for this -- no longer holds.
 
 ### RM3 -- declared regions
 
