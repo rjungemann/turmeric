@@ -206,3 +206,39 @@ Fix (1) stands on its own terms regardless: it removes work that was doing
 nothing, at zero risk, and it is pinned by the two regenerated snapshots
 (`conv-byval-adt-nested-inline`, `conv-multi-variant-tagged`) which now show
 `area(&c_1442)` where they showed a temp and a copy.
+
+## Does any of this leak? (checked 2026-09-04)
+
+Asked because a report about copying a boxed spine invites the question, and
+because fix (1) removed a temp.
+
+**Fix (1) does not.** The spill it skips was a plain stack local with no drop
+glue -- the `free()` beside it in the emitter frees the temp's NAME string at
+compile time, not memory at run time -- so removing it cannot remove a runtime
+free.  Verified rather than reasoned: both regenerated fixtures leak-check
+clean under ASan with a compiler built from `059b44a1~1` and with one built
+from `059b44a1`, no delta.
+
+**The spine does, and it is RM2, not a new finding.** A 64-link `Subst` chain
+leaks 64 allocations, one per link, and it GROWS per discarded round -- 100
+rounds of an 8-link chain leak 800 boxes, not 8:
+
+| arm | 64-link chain | per link |
+|---|---:|---:|
+| by value (default) | 3072 B in 64 allocations | 48 B |
+| `TUR_SR4_RECURSIVE_CARRIER=1` | 1536 B in 64 allocations | 24 B |
+
+**The counts are equal**, so this is not something the SR4 default flip
+introduced -- by value makes each leaked box bigger, not more numerous.  It is
+[reclamation-plan.md](../upcoming/reclamation-plan.md)'s **RM2**, which names
+this exact allocation ("the per-node spine box of a self-recursive sum, which
+is what `logic.tur` allocates") and explains why RM1's scope-exit rule cannot
+reach it: "a tree's nodes escape their constructor by construction". RM2 is
+gated on RM0(b) and was deliberately not started -- `leak-sweep-decomposition`
+records "RM2, which RM0 closed: no constituency".
+
+So: nothing to file. The one thing this adds to RM2's record is the growth
+shape, since RM0 priced the spine as an allocation count and not as unbounded
+growth in a program that builds and discards chains in a loop -- which is what
+a solver backtracking does. If RM2's gate is ever revisited, that is the
+measurement to revisit it with.
