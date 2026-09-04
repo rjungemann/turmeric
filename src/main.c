@@ -2029,7 +2029,8 @@ static void stable_c_path(const char *input, char *out, size_t cap) {
  * -lturi from stdlib/turi/eval.tur).  The marker format is:
  *   slash-star __tur_autolink__: FLAGS star-slash
  * On return `autolink` holds the raw space-joined flag string (NUL-terminated
- * content when non-empty), before any SDK/ASan/anchor resolution.  Shared by
+ * content when non-empty), before any SDK/ASan/anchor resolution -- except that
+ * on Windows `-ldl` is dropped here (see below).  Shared by
  * cmd_build and cmd_compile so the two cannot drift. */
 static void scan_autolink_markers(const Buf *csrc, Buf *autolink) {
     const char *marker = "/* __tur_autolink__: ";
@@ -2043,6 +2044,40 @@ static void scan_autolink_markers(const Buf *csrc, Buf *autolink) {
         buf_write(autolink, p, (size_t)(end - p));
         p = end + 3;
     }
+#ifdef _WIN32
+    /* Windows has no libdl.  dlopen/dlsym/dlclose are not a separate library
+     * there; the emitted C reaches them through the tree's platform_dl.h shim
+     * over kernel32, so there is nothing to link and the flag is simply absent
+     * ("cannot find -ldl", which killed every jit-ffi fixture at link time).
+     *
+     * The marker itself is emitted UNCONDITIONALLY on purpose.  Its <dlfcn.h>
+     * neighbour in emit_module.c is `#ifndef _WIN32`-guarded, but the marker
+     * must not be: the emitted C is portable by design (WIN1 -- the platform
+     * split lives in the OUTPUT as #ifdef, not in whichever host ran emit-c),
+     * so a snapshot generated on Linux still has to carry it.  And this scanner
+     * is a plain strstr over the text; it does not evaluate the preprocessor,
+     * so wrapping the marker in a guard would not hide it from here anyway.
+     *
+     * Dropping it therefore belongs HERE, in the driver -- the first place that
+     * knows the target.  The JIT engine's autolink loader already skips its
+     * `dl` entry for the same reason. */
+    if (autolink->len > 0) {
+        Buf keep; buf_init(&keep);
+        const char *q = autolink->data, *lim = autolink->data + autolink->len;
+        while (q < lim) {
+            while (q < lim && *q == ' ') q++;
+            const char *tok = q;
+            while (q < lim && *q != ' ') q++;
+            size_t tlen = (size_t)(q - tok);
+            if (tlen == 0) continue;
+            if (tlen == 4 && strncmp(tok, "-ldl", 4) == 0) continue;
+            if (keep.len > 0) buf_putc(&keep, ' ');
+            buf_write(&keep, tok, tlen);
+        }
+        buf_free(autolink);
+        *autolink = keep;
+    }
+#endif
     if (autolink->len > 0) buf_putc(autolink, '\0');
 }
 
