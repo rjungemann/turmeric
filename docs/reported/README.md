@@ -48,12 +48,12 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | --- | --- | --- |
 | [serial-shift-colored-receiver-rejected](serial-shift-colored-receiver-rejected.md) | low | a serial-shift receiver (named or lambda) that calls anything colored -- a fn-value call, an effect, an `unsafe` block -- is rejected with TUR-E0706 although it runs once at capture and is never marshalled; keep its callees uncolored |
 | ~~perform-inside-loop-has-no-lowering~~ | -- | **Resolved 2026-09-02**: a tail-position `while` now reaches the loop lowering, a conditional `perform` in statement position reifies its join as a DK resume-frame, a conditionally or repeatedly assigned loop-carried `^mut` rides a shared cell, a loop followed by statements reifies its continuation as a join, and `extern-c` callees no longer color their callers. `examples/snake` passes `tur check`. Archived to [docs/archive](../archive/perform-inside-loop-has-no-lowering.md) |
-| [wss-client-cert-verification](wss-client-cert-verification.md) | medium | (spice repo) `wss://` client uses MBEDTLS_SSL_VERIFY_NONE -- no cert verification |
+| ~~wss-client-cert-verification~~ | -- | **Resolved (already fixed at filing; docs updated 2026-09-04)**: `ws-client`'s TLS-V0 (turmeric-spices commit `95eae7a4`, 2026-06-23) predates this report and already verifies against the system CA store by default, with `ws-connect-with-ca` / `ws-connect-insecure` opt-outs. Only the guide had drifted. Archived to [docs/archive](../archive/wss-client-cert-verification.md) |
 | [webkit-sw-controlled-reload-fails-wasm-init](webkit-sw-controlled-reload-fails-wasm-init.md) | medium | Try Turmeric shows "Failed to load WASM" on a WebKit *reload*, once the service worker controls the page and the wasm assets come from the Cache API instead of the network. Not the SharedArrayBuffer path (main.js:1178, not :1168). First load is fine, so it hits returning visitors, and the "Please refresh the page" advice cannot work. Root cause not established; unconfirmed on real iOS Safari, which is what decides the severity |
 | ~~c-sources-propagate-only-one-level~~ | -- | **Resolved 2026-09-02**: `:c-sources` / `:c-includes` now propagate across the whole `:spices` closure (worklist + realpath visited set, the `:cmake-deps` shape, sharing its dep resolver), each source linked once by resolved path. Two-hop and diamond fixtures in the spice c-sources harness. Archived to [docs/archive](../archive/c-sources-propagate-only-one-level.md) |
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | unions never get the documented per-member C union; everything rides tur_tagged_t |
-| [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
+| ~~tourist-ws-conn-adapter~~ | -- | **Resolved (already fixed at filing; docs updated 2026-09-04)**: the `tourist-ws` spice (`ws-route!` + `tourist-conn`, TOUR-V0, turmeric-spices commit `95eae7a4`, 2026-06-23) predates this report. Only the guide had drifted, still describing it as unbuilt future work. Archived to [docs/archive](../archive/tourist-ws-conn-adapter.md) |
 
 `stdlib-dir-guard-accepts-mismatched-stdlib` was resolved 2026-09-02 and moved
 to [docs/archive](../archive/stdlib-dir-guard-accepts-mismatched-stdlib.md) by
@@ -1394,13 +1394,16 @@ retrying; the remaining open row is the mbedTLS one:
 | Class | Spices | Owner |
 | --- | --- | --- |
 | Frameworks not expressible in the manifest | `raygui`, `opengl` | **fixed** -- `docs/archive/cmake-deps-cannot-express-framework.md` |
-| `ld: library 'mbedtls' not found`, cause not established | `tls`, `http`, `httpd`, `ws-client`, `ws-server`, `tourist-ws` | diagnosability blocked by `spices-ci-fetch-failure-downgraded-to-warning` |
+| `ld: library 'mbedtls' not found`, cause not established | `tls`, `http`, `httpd`, `ws-client`, `ws-server`, `tourist-ws` | diagnosability item fixed -- `docs/archive/spices-ci-fetch-failure-downgraded-to-warning.md`; root cause itself still open |
 | `dyld: @rpath/libz.1.dylib` -- static/shared preference | `zlib` | **fixed** -- `docs/archive/cmake-deps-link-name-not-overridable.md` |
 | Genuine platform behavior differences (kqueue vs inotify, etc.) | `tourist`, `watch`, `wav`, `plot`, part of `tourist-session` | spice repo |
 
-The mbedTLS class is six jobs presenting the *identical* misleading error, and
-the reason it is still undiagnosed is the CI row below -- which is worth reading
-before anyone spends a CI round-trip on it.
+The mbedTLS class is six jobs presenting the *identical* misleading error. Why
+it was undiagnosed is the CI row below, now fixed -- the `::warning::`
+annotation carries the real `tur fetch` output instead of a generic message,
+so the next occurrence should name the actual failure directly rather than
+requiring a CI round-trip to find it. The root cause of the macOS mbedTLS
+build failure itself is still open.
 
 Two rows carry a **root cause that differs from how they were originally
 reported** -- the narrowing is in the report, and a fix keyed on the original
@@ -1496,7 +1499,8 @@ churn.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [spices-ci-fetch-failure-downgraded-to-warning](spices-ci-fetch-failure-downgraded-to-warning.md) | medium | (spice repo) `tur fetch` failure becomes a `::warning::`, so a failed native-dep build surfaces two steps later as `ld: library 'mbedtls' not found` in six jobs at once. **Deliberate and correctly so** -- making it fatal risks Linux, since optional `:spices` routinely fail. The fix is to put the captured output *in* the annotation, and to give `tur fetch` an exit code that separates optional-dep failure from required-dep failure |
+| ~~spices-ci-fetch-failure-downgraded-to-warning~~ | -- | **Resolved 2026-09-04, item (1)**: turmeric-spices commit `e24a41a8` tees `tur fetch`'s output and folds it into the `::warning::` annotation, dropping the "often optional" editorializing. Archived to [docs/archive](../archive/spices-ci-fetch-failure-downgraded-to-warning.md). The durable fix (an exit code from `tur fetch` distinguishing optional vs required failures) is split out to [tur-fetch-exit-code-optional-vs-required](tur-fetch-exit-code-optional-vs-required.md) |
+| [tur-fetch-exit-code-optional-vs-required](tur-fetch-exit-code-optional-vs-required.md) | low | `tur fetch` returns the same exit code whether a failed dep was optional or required, so CI can only warn-and-continue, never fail on a real required-dep break |
 
 ## Windows port
 
