@@ -1,0 +1,83 @@
+;; rc-of-byvalue-sum-monomorph-reads-first-word: two defects, one shape.
+;;
+;; `rc-payload` is ONE inline-C body shared by every `A`, and it did the scalar
+;; thing unconditionally -- `*(int64_t *)rc_get_value(r)`.  That is right when
+;; the value cell holds an int64.  When it holds an AGGREGATE the carrier is the
+;; POINTER to the cell (that is what the caller's `*(T *)(intptr_t)x` readback
+;; dereferences), so reading the word handed back the struct's first 8 bytes --
+;; a `Result`'s tag, 0 for Ok -- and the caller dereferenced null.  A `Some`
+;; would read tag 1 and dereference address 1.
+;;
+;; `rc/of` now records "cb->value IS the carrier" in the control block's
+;; reserved[2], which is the only place the fact is known: the compiler emits
+;; the cell and knows what went in it, and the shared accessor cannot be
+;; specialized on `A`.
+;;
+;; The second defect is the leak, and it is why this carries requires.leak-check
+;; rather than trusting the printed numbers: `(ok (make-struct Rat ...))` boxes
+;; the `Rat` into the Ok arm, and the control block had NO drop glue, so
+;; `rc/drop` freed the cell and orphaned the box -- 16 bytes per construction.
+;; The `drop_glue_tur_adt_<Name>` path above it never applied: it is the
+;; non-parametric glue, and it is guarded on `type.kind == TY_ADT` while a
+;; parametric payload's type is TY_APP.
+;;
+;; The scalar controls are not decoration.  The fix is a BRANCH, so a fixture
+;; that only covers the aggregate side would pass just as well with the branch
+;; inverted.
+
+(load "stdlib/rc.tur")
+
+(defstruct Rat [n : int d : int])
+(defdata Plain :copy (PA :int) (PB :int))
+
+;;; tag-of -- read the first word of a carrier, which for a by-value sum is its
+;;; tag.  Deliberately raw: it asserts what the CARRIER is, which is the thing
+;;; that was wrong.
+(defn tag-of [p : int] : int
+  ```c
+  return *(int64_t *)(intptr_t)p;
+  ```)
+
+(defn num [x : Rat] : int (.n x))
+
+(defn mk [] : (Result Rat int)
+  (ok (make-struct Rat :n 1 :d 2)))
+
+(defn main [] : int
+  ;; A parametric by-value sum whose arm holds a boxed struct: the report's
+  ;; repro, which segfaulted at a null deref.
+  (let [r (rc/of (mk))]
+    (println (.n (ok-val (:: (rc-payload r) (Result Rat int)))))   ;; 1
+    (println (.d (ok-val (:: (rc-payload r) (Result Rat int)))))   ;; 2
+    (rc/drop r))
+
+  ;; A NON-parametric `:copy` sum reaches the same wrapper-cell shape, so it
+  ;; segfaulted too -- the report's repro was narrower than the defect.
+  (let [p (rc/of (PA 7))]
+    (println (tag-of (rc-payload p)))                              ;; 0
+    (rc/drop p))
+  (let [q (rc/of (PB 9))]
+    (println (tag-of (rc-payload q)))                              ;; 1
+    (rc/drop q))
+
+  ;; A plain by-value struct payload.
+  (let [g (rc/of (make-struct Rat :n 3 :d 4))]
+    (println (.d (:: (rc-payload g) Rat)))                         ;; 4
+    (rc/drop g))
+
+  ;; rc.tur's OWN Foldable/Functor instances route through `rc-payload`, so this
+  ;; was never a probe-only shape: `(foldl rc ...)` over any aggregate payload
+  ;; segfaulted through the stdlib API.  Verified against the pre-fix compiler.
+  (let [h (rc/of (make-struct Rat :n 5 :d 6))]
+    (println (foldl h 0 (fn [acc : int x : Rat] : int (+ acc (num x)))))  ;; 5
+    (rc/drop h))
+
+  ;; Scalar controls: the cell holds the value, so the dereference is the RIGHT
+  ;; answer here and must survive.
+  (let [a (rc/of 42)]
+    (println (rc-payload a))                                       ;; 42
+    (rc/drop a))
+  (let [f (rc/of 7.25)]
+    (println (:: (rc-payload f) float))                            ;; 7.25
+    (rc/drop f))
+  0)

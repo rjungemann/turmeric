@@ -31,6 +31,14 @@
 (defn rc-payload [A] [^borrow r : rc<A>] : A
   ```c
   if (!r || !r->value) return 0;
+  /* rc-of-byvalue-sum-monomorph-reads-first-word: for an AGGREGATE payload the
+     carrier is the pointer to the value cell, not the first word of it -- that
+     is what the caller's `*(T *)(intptr_t)x` readback dereferences.  Reading
+     the word instead handed back a `Result`'s tag (0 for Ok) and the caller
+     dereferenced null.  `rc/of` sets reserved[2] when it stored an aggregate;
+     it is zero for a scalar cell and for every block allocated elsewhere, so
+     the scalar path below is unchanged. */
+  if (r->reserved[2]) return (int64_t)(intptr_t)rc_get_value(r);
   return *(int64_t *)rc_get_value(r);
   ```)
 ;; Functor instance for rc

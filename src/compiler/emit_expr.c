@@ -10953,6 +10953,48 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     struct_with_rc_fields = true;
                 }
             }
+            /* rc-of-byvalue-sum-monomorph-reads-first-word, second defect: a
+             * by-value sum whose live arm holds a BOXED value-struct payload
+             * -- `(ok (make-struct Rat ...))`, whose `ok__spec__...` mallocs a
+             * `Rat` copy and stores the pointer in the arm -- had no drop glue
+             * at all, so `rc/drop` freed the cell and orphaned the box (16
+             * bytes per construction, measured).
+             *
+             * `drop_glue_tur_adt_<Name>` above is the NON-parametric glue keyed
+             * on the def name, and it is not reachable here anyway: the guard
+             * asks `type.kind == TY_ADT`, while a parametric payload's type is
+             * TY_APP.  Rather than mint a monomorph twin of that glue, emit the
+             * walk the carrier path already uses (`boxed_struct_payload_walk`)
+             * as a per-site static function -- the control block wants a
+             * function POINTER, which is the one thing an inline walk cannot
+             * be.
+             *
+             * Only when there is no glue already: a def with rc/ref/weak fields
+             * takes the branch above, and composing the two would need the
+             * monomorph twin this deliberately avoids.  Only for the wrapper
+             * cell: the adopted-pointer and `:heap` arms hand `rc_set_value` a
+             * pointer somebody else's release path owns. */
+            char rcglue_buf[64];
+            if (!struct_with_rc_fields && !payload_is_boxed_adt && !payload_is_heap_adt &&
+                adt_app_has_boxed_struct_payload(ctx, e->as.rc_of_.expr->type)) {
+                Buf *gout = ctx->pending_handler_fns ? ctx->pending_handler_fns
+                                                     : ctx->file;
+                snprintf(rcglue_buf, sizeof rcglue_buf,
+                         "__tur_rc_dropglue_%d", ctx->tmp_n++);
+                char acc[320];
+                snprintf(acc, sizeof acc, "((%s *)v)->", inner_type_c);
+                buf_printf(gout, "static void %s(void *v) {\n", rcglue_buf);
+                uint32_t saved_indent = ctx->indent;
+                ctx->indent = 4;
+                boxed_struct_payload_walk(ctx, gout, NULL,
+                                          e->as.rc_of_.expr->type, true, acc);
+                ctx->indent = saved_indent;
+                /* Frees the cell too: with no explicit glue `rc_set_value`
+                 * would have re-derived `default_rc_drop_fn`, which does
+                 * exactly that, so this replaces it rather than adding to it. */
+                buf_printf(gout, "    free(v);\n}\n");
+                drop_fn_name = rcglue_buf;
+            }
             if (struct_with_rc_fields) {
                 buf_printf(body, "RcControlBlock *%s = rc_cb_alloc_struct(0, %d, %s, %s);\n",
                            cb_tmp, e->as.rc_of_.expr->type.kind,
@@ -10971,6 +11013,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the cell on every drop.  An explicit struct drop glue is passed
              * through unchanged, exactly as the alloc installed it. */
             buf_printf(body, "rc_set_value(%s, %s, %s);\n", cb_tmp, val_tmp, drop_fn_name);
+
+            /* rc-of-byvalue-sum-monomorph-reads-first-word: record whether
+             * `cb->value` IS the payload's int64 carrier.
+             *
+             * `rc-payload` is one inline-C body shared by every `A` and cannot
+             * be specialized on it, so it has to ask the block.  The three
+             * arms above are the answer: an adopted ctor pointer and a `:heap`
+             * handle ARE the carrier, and so is the wrapper cell whenever the
+             * payload it holds is an aggregate -- a by-value readback of an
+             * aggregate dereferences the carrier, so the carrier is the
+             * pointer.  Only a scalar cell wants the dereference `rc-payload`
+             * used to do unconditionally.
+             *
+             * `emit_c_type_is_scalar` counts a pointer as scalar, which is why
+             * the heap arm is tested separately rather than left to it: its
+             * `inner_type_c` is already `T *`. */
+            {
+                bool value_is_carrier = payload_is_boxed_adt || payload_is_heap_adt ||
+                                        !emit_c_type_is_scalar(inner_type_c);
+                if (value_is_carrier) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body,
+                               "%s->reserved[2] = 1; /* RC_RESERVED_VALUE_IS_CARRIER */\n",
+                               cb_tmp);
+                }
+            }
 
             free(inner);
             free(inner_type_c);

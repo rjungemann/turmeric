@@ -139,6 +139,31 @@ struct RcControlBlock {
  * non-NULL) enumerates them so the cycle walker can trace through. */
 #define RCK_STRUCT        2
 
+/* rc-of-byvalue-sum-monomorph-reads-first-word: `cb->reserved[2]` is a boolean
+ * -- "cb->value IS the payload's int64 carrier, do not dereference it".
+ *
+ * A control block's value cell holds one of two things, and only the compiler
+ * knows which:
+ *
+ *   a SCALAR payload -- the cell holds the int64/double bits, and the carrier
+ *   is `*(int64_t *)cb->value`;
+ *
+ *   an AGGREGATE payload (a by-value struct or ADT, an adopted ctor pointer, a
+ *   `:heap` handle) -- the carrier is the POINTER, `cb->value` itself, because
+ *   that is what every by-value readback in the emitter dereferences.
+ *
+ * `rc-payload` used to do the scalar thing unconditionally, so an aggregate
+ * payload returned its first 8 bytes -- a `Result`'s tag, 0 for Ok -- and the
+ * caller's `*(T *)(intptr_t)x` readback dereferenced null.  A `Some` read tag 1
+ * and dereferenced address 1.
+ *
+ * A separate byte rather than a new RCK_* kind: this fact is orthogonal to the
+ * kind (an RCK_STRUCT block with a walker holds an aggregate too), so folding
+ * it into reserved[0] would make the two mutually exclusive.  Zero is the
+ * scalar default, so every block allocated before this existed reads correctly.
+ */
+#define RC_RESERVED_VALUE_IS_CARRIER 2
+
 /* EXG5-1: Payload descriptor for RCK_EXISTENTIAL blocks.
  * Describes the type of bits stored in tur_existential_t::value, so the
  * cycle walker (gc_mark_phase) knows whether to follow it as a pointer.
