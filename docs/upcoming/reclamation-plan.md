@@ -560,6 +560,81 @@ ownership the emitter does not have, and Row B's 2.49x is still measured with
 frees written by hand.  What has changed is that the gate's premise -- that
 nobody is paying for this -- no longer holds.
 
+#### How RM2 gets unblocked (assessed 2026-09-04)
+
+**Not by a better analysis.**  The blocker is structural, not a missing pass.
+A persistent spine has no unique owner *by construction* -- that is what
+persistent means.  `(SBind v t rest)` shares `rest` with every older chain and
+backtracking depends on that sharing, so "is this the last reference?" is a
+RUNTIME fact.  No static per-node rule can answer it, and looking harder for
+one is the wrong move.
+
+So the question changes rather than the analysis.  Three answers, and this
+tree already has substrate for all three:
+
+**A. Give each node a runtime owner -- refcount.**  `rc<T>`,
+`RcControlBlock`, and a Bacon-Rajan cycle collector (`src/runtime/gc.c`) all
+ship today.  Deterministic, and sharing is exactly what it is for.  But a
+control block per node is wider than the 48-byte node being reclaimed, and the
+inc/dec lands on the walk -- the hot path this plan's sibling report already
+measures at 8.8x.  Almost certainly a net loss for `Subst`.  Worth stating so
+nobody re-derives it.
+
+**B. Give the spine a LIFETIME instead of an owner -- RM3, and it is the
+fit.**  Every node of one query dies together; that is the whole shape.  What
+already exists:
+
+- `arena_reset` -- O(slabs) rewind, and in a Debug build it POISONS the
+  reclaimed bytes, so a survivor crashes loudly under ASan instead of reading
+  stale-but-mapped data.  That is this phase's stated worst risk, already
+  instrumented.
+- `arena_owns` -- the guard RM3 says must sit on every free path.
+- **A precedent with the same shape, already running.**  turi's value-pool
+  scratch/permanent split (`eval.c`, `turi-value-pool-scratch-promotion-plan`)
+  does reset-with-promotion: walk the escapees out, then rewind.  Its
+  conservatism rule is precisely the one RM3 needs --
+
+  > Correctness never depends on catching every shape: a missed shape means
+  > "this eval does not shrink", never "use-after-reset".
+
+  A region that cannot prove a value safe to relocate simply does not rewind.
+  That turns RM3's "most able to produce a silent wrong answer" into "most
+  able to produce no saving", which is a different risk class.  The code is
+  the interpreter's and does not transfer directly; the discipline does, and
+  it has been load-bearing here before.
+- **The boundary already exists in the language.**  `bt-scope`
+  (stdlib/trail.tur) brackets exactly the region a solver query occupies.
+  This plan already said as much -- "not region inference; it is one
+  `arena_reset()` at a call site that already exists".
+
+**C. Make the box never exist.**  The direction the report prefers and the one
+RM1 already cashed once (the null-None mirror).  For a spine that means
+unboxing the recursive field, which SR4 explored: by value halves the mallocs
+and the per-node box remains.  Exhausted, short of a representation change
+bigger than this plan.
+
+**Recommendation: RM2 is unblocked by doing RM3, not by unblocking RM2.**
+
+RM3's gate is "RM0(b), and RM1 landed".  RM1 is now landed to its unstampable
+residue (~240 B), and the constituency measurement above is RM0(b)'s missing
+input.  After RM3, what is left of RM2 is "spines that escape their region" --
+a far smaller set, and one where per-node ownership may actually be
+inferable because the escaping cases are the ones the promotion walk already
+had to identify.
+
+Sequencing this the other way round is what the RM3 gate warns against:
+"shipping both orderings at once is how two sites end up disagreeing about who
+frees."
+
+*First increment if this is taken up:* an `EXPERIMENTS[]` row (`regions`) with
+every descriptor field, `experiment_warn_if_used` at the elaboration entry,
+and `plan_path` here -- it is user-visible, so CLAUDE.md requires the gate.
+Then wire the EXISTING `bt-scope` to an arena generation rather than inventing
+a surface form, and measure on `logic.tur`, which is the workload.  Fixtures
+assert the VALUE across the boundary, plus a negative where an escapee is
+poisoned -- "asserts the value, not merely that it builds" is the SR4 lesson
+and this section already says it applies here with more force.
+
 ### RM3 -- declared regions
 
 An explicit scope form over the existing arena. `arena_owns` guards every free
