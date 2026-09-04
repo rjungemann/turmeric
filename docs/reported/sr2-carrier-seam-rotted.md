@@ -1,7 +1,7 @@
 ---
 title: The SR2 carrier seam has rotted -- a compile error, a silent wrong answer, and a layering crash
 category: Reported
-description: TUR_SR2_APP_SUM_BYVALUE=0, the bisection hatch left behind when parametric-sum-byvalue graduated, no longer produces correct programs. Three distinct defects, found by restoring the harness that was retired at graduation.
+description: TUR_SR2_APP_SUM_BYVALUE=0, the bisection hatch left behind when parametric-sum-byvalue graduated, no longer produces correct programs. Three distinct defects, found by restoring the harness that was retired at graduation. The layering crash (1) is fixed; the carrier-path compile error (2) and the silent wrong answer (3) remain open.
 ---
 
 # The SR2 carrier seam has rotted
@@ -20,7 +20,26 @@ graduation (`c26e38a8`). Both sibling seams -- `run-sr4-seam.sh` and
 uncovered path instead of deleting it; SR2's was the one that did not, and
 this is what accumulated in the year-equivalent of release lines since.
 
-## 1. Layering: `TUR_SR2_APP_SUM_BYVALUE=0` alone aborts the compiler
+## 1. Layering: `TUR_SR2_APP_SUM_BYVALUE=0` alone aborts the compiler -- **FIXED 2026-09-04**
+
+**Resolved.** `sr3_option_niche()` (`types.c`) now returns false when
+`g_sr2_app_sum_byvalue` is clear, so the niche follows its substrate down and
+`TUR_SR2_APP_SUM_BYVALUE=0` is a complete one-variable switch again. All four
+compiler aborts and the `httpd-req-string-opt` wrong answer are gone; the
+comments in `main.c` and `globals.h` now state the direction of the coupling
+(clearing SR2 clears the niche; clearing the niche leaves SR2 alone). Default
+path byte-identical -- both globals are true in every shipping build, so the
+added test is dead weight there, and the suite is 2781/0 before and after with
+zero snapshot drift.
+
+The one fixture that does not recover is `option-niche-vec-closure-cmp`, which
+is **defect 3 below**, not this one: with the fix, `SR2=0` *is* the both-off
+state, which is the diagonal where defect 3 already lived. The abort simply
+stopped hiding it.
+
+The original report follows.
+
+### The defect as found
 
 SR3's Option niche (`TUR_OPTION_NICHE`, default ON since 2026-09-03) is built
 **on top of** by-value parametric sums: it narrows an eligible `(Option P)` to
@@ -43,12 +62,18 @@ Nothing in the tree says the two hatches must move together. `main.c` reads
 them as two independent two-way overrides in the same block, and each one's
 comment describes it as a self-contained bisection switch.
 
-**Fix directions.** Cheapest correct thing: make `sr3_option_niche()`
-(`types.c:1441`) return false when `g_sr2_app_sum_byvalue` is off, so the niche
-cannot outlive its substrate, and say so in both comments in `main.c`. That
-makes `TUR_SR2_APP_SUM_BYVALUE=0` a genuine one-variable switch again, which is
-what a bisection hatch has to be. The alternative -- documenting "always set
-both" -- leaves a compiler abort as the failure mode for getting it wrong.
+**Fix, as applied.** `sr3_option_niche()` returns false when
+`g_sr2_app_sum_byvalue` is off, so the niche cannot outlive its substrate, with
+the coupling stated in `main.c` and `globals.h`. That makes
+`TUR_SR2_APP_SUM_BYVALUE=0` a genuine one-variable switch again, which is what a
+bisection hatch has to be. The alternative considered and rejected --
+documenting "always set both" -- leaves a compiler abort as the failure mode for
+getting it wrong.
+
+Note the fix is deliberately one-directional: `TUR_OPTION_NICHE=1` cannot force
+the niche back on underneath a disabled SR2, because that is precisely the
+combination that aborted. `tests/run-sr2-seam.sh` sets both hatches anyway, so
+it pins the fix rather than depending on it.
 
 ## 2. `sum-passthrough-param-not-dropped`: a hard C compile error
 

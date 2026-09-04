@@ -299,7 +299,12 @@ extern bool g_trail_autoloaded;
  * hand-maintained allowlist in `sr3_payload_is_nonnull_pointer` (types.c), and
  * an entry added in error makes `(some x)` and `(none)` the same value.  The
  * polarity is deliberate -- an unrecognised payload merely misses the
- * optimisation. */
+ * optimisation.
+ *
+ * Layered on g_sr2_app_sum_byvalue below: sr3_option_niche (types.c) reads this
+ * bit only after that one, because a niche narrows a BY-VALUE Option and is
+ * meaningless -- and, measured, crashing -- over the int64 carrier.  Clearing
+ * SR2 therefore clears the niche too; clearing the niche leaves SR2 alone. */
 extern bool g_opt_option_niche;
 /* SR2a: a MULTI-VARIANT parametric sum monomorph -- `(Opt2 int)`, `(PRes
  * cstr)`, and above all `(Option int)` / `(Result int cstr)` -- flows by value

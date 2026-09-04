@@ -1439,6 +1439,25 @@ bool adt_ctor_is_null_none(const AdtDef *def, const CtorDef *ctor) {
  * read.  `experiment_warn_if_used` is once-per-compile guarded, so calling it
  * from this hot predicate costs one index lookup after the first. */
 static bool sr3_option_niche(void) {
+    /* The niche is layered ON TOP of SR2: narrowing `(Option P)` to its payload
+     * pointer only means anything if that Option is a by-value parametric sum in
+     * the first place.  With SR2 off, the same type rides the int64 carrier as a
+     * pointer to a tagged box -- and a niche value is then byte-identical to a
+     * carrier box, which is precisely the confusion the payload-must-be-a-pointer
+     * test above exists to prevent, arriving through the other door.
+     *
+     * So the niche follows its substrate down.  Without this,
+     * TUR_SR2_APP_SUM_BYVALUE=0 is not the one-variable switch a bisection hatch
+     * has to be: it ABORTED the compiler on four fixtures and silently
+     * wrong-answered httpd-req-string-opt, all of which recover when the niche
+     * comes off too, and none of which points at the niche from the switch the
+     * user actually flipped.  Measured and filed 2026-09-04 in
+     * docs/reported/sr2-carrier-seam-rotted.md; tests/run-sr2-seam.sh pins it.
+     *
+     * This is a HATCH interaction, not a default one: both globals are true in
+     * every shipping build, so the added test is dead weight on the default path
+     * and changes no emitted byte there. */
+    if (!g_sr2_app_sum_byvalue) return false;
     /* Graduated 2026-09-03: default-on, no lifecycle warning.  The global is
      * only ever cleared by TUR_OPTION_NICHE=0 (main.c), the bisection hatch. */
     return g_opt_option_niche;
