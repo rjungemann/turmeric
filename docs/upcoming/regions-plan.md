@@ -84,11 +84,40 @@ and with it on the entry point warns and does nothing yet. Landing the gate
 first is what CLAUDE.md requires for a user-visible feature, and it means every
 later increment is measurable against a flag rather than a rebuild.
 
-**R2 -- an allocation generation.** A region handle over the existing `Arena`,
-with spine-node allocation routed to it inside a region and to `malloc`
-outside. `arena_owns` on the free paths. No escape analysis yet: R2's region
-never rewinds, so it is pure plumbing that can be measured for allocation-path
-cost in isolation.
+**R2 -- an allocation generation. LANDED 2026-09-04.** Spine-node allocation
+routed to the innermost open generation, and to `malloc` outside one. No
+escape analysis and no rewind: pure plumbing.
+
+`tur_region_alloc_or_malloc` is the routing point, so the emitted constructor
+needs ONE call site rather than a branch -- it allocates by generation inside a
+region and exactly as it does today outside one. The consequence a caller must
+carry is that the result is not necessarily region memory, which is why
+`tur_region_owns` has to gate every free path rather than the allocation being
+assumed.
+
+**Two ctor emitters, and only finding one is how this nearly shipped wrong.**
+A `:heap` ADT's node is emitted by the base ctor (`emit_module.c`,
+`emit_adt_typedef_and_ctors`) AND by the monomorph ctor (`types.c`). The first
+pass changed only the base emitter, and `ctor_Cons_Cons__int` -- the ctor the
+leak sweep actually blames -- kept its plain `malloc`. Caught because the
+verification asked the emitted C rather than trusting the edit. This is
+verbatim the standing habit RM1 wrote down after the null-None mirror ("when a
+representation change lands in a ctor or temp emitter, grep for the other
+emitter before calling it done"), and it cost a round anyway; the two sites now
+cross-reference each other by name.
+
+`region.c` and `arena.c` also had to join `TURT_RUNTIME_SOURCES`, not just the
+compiler's own object list: an emitted program LINKS the routing helper, so a
+definition only the compiler can see is an undefined reference at the fixture's
+link step. With the flag off nothing references it and the linker never
+extracts the member -- the same reasoning the rc/gc members carry.
+
+*Validation:* `tests/run-regions-seam.sh` (ctest `tur_regions_seam`) asserts
+that `--enable=regions` with no region open changes nothing OBSERVABLE across
+six spine-carrying fixtures -- output equality, not that both arms build, since
+a routing bug returning uninitialised memory would still link. That is the
+property R2 is built to have and the one a later increment is most likely to
+break by accident.
 
 **R3 -- the escape check and the rewind.** The conservative walk: prove every
 value crossing the boundary is relocatable or leave the generation intact.

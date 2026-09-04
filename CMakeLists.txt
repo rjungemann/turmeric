@@ -167,6 +167,12 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_region_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# RM3 R2: --enable=regions with no region open must change nothing observable.
+add_test(
+  NAME tur_regions_seam
+  COMMAND bash tests/run-regions-seam.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # NW6 acceptance gate: a freshly scaffolded spice (`tur new`) passes its own
 # `tur run ci` (clean + check + test) end-to-end. Hermetic: no git, no
 # network, no ../turmeric-spices, no `just`. See docs/tur-new-ci-bootstrap-plan.md.

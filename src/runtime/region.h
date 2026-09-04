@@ -55,6 +55,16 @@ void tur_region_pop_reclaim(int depth);
  * region is an optimisation, never a requirement. */
 void *tur_region_alloc(size_t n);
 
+/* Allocate `n` bytes in the innermost live generation if one is open, and from
+ * the heap otherwise.  The routing point for RM3 R2: a spine-node constructor
+ * calls this instead of `malloc`, so the SAME emitted code allocates by
+ * generation inside a region and exactly as it does today outside one.
+ *
+ * A caller must therefore never assume the result is region memory -- pair it
+ * with `tur_region_owns` before any `free()`.  That guard is the whole reason
+ * the two allocators can share one call site. */
+void *tur_region_alloc_or_malloc(size_t n);
+
 /* True when `p` points into any live generation.  The guard the reclamation
  * plan requires on every free path: a pointer into region memory must never
  * reach `free()`, because the slab, not the pointer, owns it. */

@@ -602,6 +602,13 @@ set(TURT_RUNTIME_SOURCES
     runtime/rc.c
     runtime/gc.c
     runtime/rc_free_queue.c
+    # RM3 regions: an emitted spine ctor calls tur_region_alloc_or_malloc when
+    # --enable=regions is on, so the definition has to be linkable by the
+    # program, not only by the compiler.  Same reasoning as the rc/gc members
+    # above; with the flag off nothing references it and the linker never
+    # extracts this member.
+    runtime/region.c
+    runtime/arena.c
 )
 add_library(turt_runtime STATIC ${TURT_RUNTIME_SOURCES})
 set_target_properties(turt_runtime PROPERTIES OUTPUT_NAME "turt_runtime")

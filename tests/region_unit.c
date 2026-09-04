@@ -22,6 +22,7 @@
  * See docs/upcoming/regions-plan.md.
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "region.h"
@@ -73,6 +74,22 @@ int main(void) {
     check(!tur_region_active(), "no region active after popping the last one");
     check(tur_region_owns(a), "retired generation still owns its allocation");
     check(tur_region_alloc(8) == NULL, "alloc after last pop returns NULL");
+
+    /* The R2 routing point: the same call allocates by generation inside a
+     * region and from the heap outside one, so a spine-node constructor needs
+     * one call site rather than a branch.  The consequence a caller must not
+     * forget is that the result is NOT necessarily region memory -- which is
+     * exactly why every free path has to ask tur_region_owns first. */
+    void *heap = tur_region_alloc_or_malloc(48);
+    check(heap != NULL, "alloc_or_malloc succeeds with no region");
+    check(!tur_region_owns(heap), "with no region open it is heap memory");
+    free(heap);
+
+    int d3 = tur_region_push();
+    void *inr = tur_region_alloc_or_malloc(48);
+    check(inr != NULL, "alloc_or_malloc succeeds inside a region");
+    check(tur_region_owns(inr), "inside a region it is region memory");
+    tur_region_pop_reclaim(d3);
 
     tur_region_shutdown();
 

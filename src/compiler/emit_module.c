@@ -7689,8 +7689,27 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
         if (heap) {
             /* malloc the by-value header, store fields inline, return the typed
              * pointer (no int64 carrier cast -- the pointer IS the value). */
-            buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
-                       adt_c_name, adt_c_name, adt_c_name);
+            /* RM3 R2 (docs/upcoming/regions-plan.md): this is the spine node.
+             * A `:heap` ADT's monomorph ctor mallocs one per link, and it is
+             * the allocation RM1 cannot reach (it escapes its constructor by
+             * construction) and RM2 cannot own (a persistent tail is shared).
+             * Route it to the innermost open generation when regions are
+             * enabled; `tur_region_alloc_or_malloc` falls back to malloc when
+             * none is open, so the SAME emitted ctor works inside and outside
+             * a region and R2 needs no branch here.
+             *
+             * Gated: a default build emits the identical `malloc` it always
+             * has, so this changes no byte of the default path.
+             *
+             * Its sibling is the MONOMORPH ctor in types.c (search RM3 R2
+             * there); the two mirror each other and a change to one belongs in
+             * both.  Changing only this one is what the first R2 pass did, and
+             * the monomorph ctor -- which is the one the leak sweep blames --
+             * kept its plain malloc. */
+            buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
+                       adt_c_name, adt_c_name,
+                       regions_enabled() ? "tur_region_alloc_or_malloc" : "malloc",
+                       adt_c_name);
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);
@@ -7993,6 +8012,7 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
 "extern void tur_region_pop(int depth);\n"
 "extern void tur_region_pop_reclaim(int depth);\n"
 "extern void *tur_region_alloc(size_t n);\n"
+"extern void *tur_region_alloc_or_malloc(size_t n);\n"
 "extern bool tur_region_owns(const void *p);\n"
 "extern bool tur_region_active(void);\n");
     }

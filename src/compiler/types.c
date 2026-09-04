@@ -2185,8 +2185,22 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
          * and a positional one writes `__r->as.<Ctor>._N`, in lockstep with the
          * typedef + field-read sites. */
         if (app_heap) {
-            buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
-                       adt_inst_name, adt_inst_name, adt_inst_name);
+            /* RM3 R2 (docs/upcoming/regions-plan.md): the spine node, at the
+             * MONOMORPH ctor.  Its sibling is the base ctor in emit_module.c
+             * (`emit_adt_typedef_and_ctors`) -- the two mirror each other and a
+             * change to one belongs in both.  That is not a general caution: it
+             * is what happened here.  The first R2 pass changed only the base
+             * emitter, and `ctor_Cons_Cons__int` -- the ctor the leak sweep
+             * actually blames -- kept its plain malloc, which the reclamation
+             * plan's own standing habit predicts ("when a representation change
+             * lands in a ctor or temp emitter, grep for the other emitter
+             * before calling it done").
+             *
+             * Gated, so a default build emits the identical malloc. */
+            buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
+                       adt_inst_name, adt_inst_name,
+                       regions_enabled() ? "tur_region_alloc_or_malloc" : "malloc",
+                       adt_inst_name);
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);

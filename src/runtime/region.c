@@ -93,6 +93,11 @@ void *tur_region_alloc(size_t n) {
     return arena_alloc(g_live[g_live_n - 1], n);
 }
 
+void *tur_region_alloc_or_malloc(size_t n) {
+    void *p = tur_region_alloc(n);
+    return p ? p : malloc(n);
+}
+
 bool tur_region_owns(const void *p) {
     if (!p) return false;
     for (int i = 0; i < g_live_n; i++)

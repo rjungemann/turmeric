@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# RM3 R2 parity gate (docs/upcoming/regions-plan.md).
+#
+# With `--enable=regions` and NO region open, every emitted spine constructor
+# routes through tur_region_alloc_or_malloc, which falls back to malloc.  So
+# the flag must change nothing observable until a region is actually pushed --
+# that is the property R2 is built to have, and the one a later increment is
+# most likely to break by accident.
+#
+# Asserts OUTPUT equality, not that both arms build: a routing bug that
+# returned uninitialised memory would still link.
+set -u
+cd "$(dirname "$0")/.."
+TUR="${TUR:-./build/tur}"
+[ -x "$TUR" ] || { echo "run-regions-seam: $TUR not built" >&2; exit 2; }
+
+# Fixtures whose emitted C contains a `:heap` ADT monomorph ctor -- the spine
+# node R2 routes.  Kept explicit rather than swept: this gate is about the
+# routing, and a fixture with no spine tests nothing.
+FIXTURES="
+refined-nonempty
+constrained-defn-cons-return-monomorphize
+zipper-basic
+re-string
+option-niche-crossings
+hkt-stdlib-result-ok-biased
+
+"
+pass=0; fail=0; skip=0
+for name in $FIXTURES; do
+    d="tests/fixtures/$name"; in="$d/input.tur"
+    [ -f "$in" ] || { echo "SKIP $name (absent)"; skip=$((skip+1)); continue; }
+    off=$("$TUR" run "$in" 2>/dev/null)
+    on=$("$TUR" run --enable=regions "$in" 2>/dev/null)
+    if [ -z "$off" ] && [ -z "$on" ]; then
+        echo "SKIP $name (no output either way)"; skip=$((skip+1)); continue
+    fi
+    if [ "$off" = "$on" ]; then
+        echo "PASS $name"; pass=$((pass+1))
+    else
+        echo "FAIL $name -- output differs with --enable=regions"
+        diff <(printf '%s\n' "$off") <(printf '%s\n' "$on") | head -10
+        fail=$((fail+1))
+    fi
+done
+echo
+echo "regions-seam summary: $pass passed, $fail failed, $skip skipped"
+[ "$fail" -eq 0 ]
