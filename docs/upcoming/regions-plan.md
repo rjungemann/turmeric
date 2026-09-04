@@ -168,14 +168,112 @@ Debug build, `TUR_DEBUG_ARENA_POISON` turned off, `arena_reset` changed to skip
 the poison -- looks exactly like a program with no stragglers. Same reasoning
 as `check-cc-warn-ratchet.sh`, and the same failure it was written for.
 
-**R4 -- wire `bt-scope`.** Not a new surface form: the solver's existing
-bracket becomes a region boundary. Measure on `logic.tur`, which is the
-workload RM0(b) asked for and this plan's sibling report has already
-benchmarked at n=1..512.
+**R4 -- wire `bt-scope`. LANDED 2026-09-04.** Not a new surface form: the
+solver's existing bracket became the region boundary, so a caller opts in by
+using the bracket it would use anyway. `emit_value` opens a generation around a
+call to `bt-scope` and closes it after the call's hoist temp.
+
+### The static lock, which is the half R3 could not have
+
+`region_type_reaches_node` (emit_expr.c) walks the call's RESULT type and
+refuses unless it can prove the type cannot transitively reach a
+region-allocated node. Scalars and `cstr` pass; a `:heap` ADT fails on sight; a
+non-heap ADT is walked through its type arguments and every constructor field,
+with a **self-recursive field's NULL `full_type` read as "reaches"** -- which is
+exactly the spine, so a recursive result is refused. Pointers, refs, closures,
+structs, containers and type variables are refused outright: R4 needs none of
+them to say no, and refusing costs a saving rather than correctness.
+
+An unproven result emits `tur_region_pop` (retire), which is byte-for-byte what
+a flag-off build does.
+
+### Both locks are load-bearing, and that was checked rather than argued
+
+R3's header claims the runtime note is a second lock, not decoration. R4 has the
+case that proves it: a carrier-ERASED `:heap` pointer is spelled `:int`, so the
+static walk sees a scalar and clears the rewind. Only
+`tur_region_note_escape` catches it. Deleting the note from
+`tests/fixtures/region-scope-escape-refused`'s emitted C turns it into
+
+```
+ERROR: AddressSanitizer: use-after-poison ... READ of size 8 ... #0 in chain_hysum
+```
+
+so the fixture is a live test of the lock and not a shape that happens to work.
+
+### R2's "spine-node allocation is routed" did not cover the workload
+
+The single most valuable thing R4 did was measure the saving instead of
+re-reading the claim. Two allocation sites had to be found by looking at emitted
+C and at valgrind block counts:
+
+- **A THIRD ctor emitter.** `emit_program` emits base ctors at its own site
+  (emit_module.c, near the SR3 slice-A note that records this exact miss one
+  representation change earlier), so a NON-parametric `:heap` ADT -- `(defdata
+  Link :heap ...)`, the plainest spine there is -- still called `malloc` after
+  R2. Symptom: valgrind reported 913 live blocks with the flag on against 909
+  with it off. The region was pushed, popped, and never allocated into.
+- **The SR4 recursive-field box, which is not a ctor at all.** `Subst` is
+  `:copy`, not `:heap`, so its per-link box is the `tur_adt_Subst *__t =
+  malloc(...)` that emit_expr.c writes when a by-value aggregate flows into a
+  recursive constructor field. That is the allocation the RM1 leak sweep
+  actually blames, and none of the three ctor emitters reach it. Until it was
+  routed, R4 on `logic.tur` saved nothing at all.
+
+Four allocation sites now, then, and they do not resemble each other. The habit
+this keeps re-teaching is not "grep for the other emitter" -- that was already
+written down twice and still missed both of these. It is: **a routing change is
+verified by measuring the saving, never by reading the diff.**
+
+### The free side had to move with it
+
+From R2 onward a node allocated inside a region is arena memory while the same
+emitted drop glue still ended in `free(ptr)`. That is an allocator mismatch --
+glibc aborts -- not a leak. `tur_region_free` (free unless `tur_region_owns`) is
+the mirror of `tur_region_alloc_or_malloc`, spelled by `region_free_fn()` at the
+node free paths and resolving to plain `free` in a default build.
+
+### What it is worth
+
+`benchmarks/bench-regions-subst.tur`, same source both arms, flag as the only
+variable (full numbers in `benchmarks/regions-subst-results.md`):
+
+| | flag off | flag on |
+|---|---|---|
+| leaked at exit | 2,668,800 B in 55,600 blocks | **0** |
+| allocations | 64,645 | 9,050 |
+| ns/op, n <= 16 | -- | **0.75-0.80x** |
+| ns/op, n >= 64 | -- | ~parity |
+
+Checksums identical in every row, which is the column that would catch a rewind
+of something still live.
+
+### Known gaps R5 has to price
+
+- **A `:void` bracket is not wrapped at all.** Such a call is not hoisted into a
+  temp, so `emit_value` has no statement seam to close after it. A missed
+  saving, conservative, but `(bt-scope (fn [] ... ))` for effect is a normal
+  spelling.
+- **The pooled slab is never returned.** 64 KiB stays reachable at exit because
+  no emitted program calls `tur_region_shutdown`. O(1), reported as reachable
+  rather than lost, and worth closing before graduation.
+- **Argument-position allocation lands in the generation**, because the push has
+  to precede the argument emissions -- the call text embeds their temps. Sound
+  for this form's thunk; the shapes it is not sound for are the transitive ones
+  the static walk already refuses.
+- **A `bt-scope` in a non-main defn whose thunk calls another user function
+  miscompiles**, independently of this flag --
+  `docs/reported/cps-direct-bt-scope-closure-temp-undeclared.md`. Both R4
+  fixtures and the benchmark carry a workaround for it.
 
 **R5 -- decide.** Graduate, shelve, or bump, against the leak sweep and the
-`bench-logic-subst` A/B. Shelving is a real outcome: if R3's conservatism
-means the solver's region never actually rewinds, the phase says so and stops.
+`bench-regions-subst` A/B. Shelving was a real outcome and R4 has now retired
+the reason it was most likely: the solver's region DOES rewind, and takes the
+whole per-link spine with it (2,668,800 leaked bytes to zero). What R5 weighs is
+therefore no longer "does this ever pay" but the four gaps listed under R4 --
+the `:void` bracket, the unreturned slab, argument-position allocation, and how
+much of the language the static walk has to accept before the flag is worth
+turning on by default.
 
 ## What this does NOT do
 

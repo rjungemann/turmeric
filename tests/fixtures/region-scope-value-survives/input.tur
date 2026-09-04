@@ -1,0 +1,60 @@
+;; RM3 R4 (docs/upcoming/regions-plan.md): `bt-scope` is a region boundary, and
+;; the VALUE read back across it is what this asserts.
+;;
+;; That is the SR4 lesson, and the reclamation plan says it applies here with
+;; more force: a fixture that only checks the program builds would pass with a
+;; rewind that reclaimed memory still in use, because the wrong answer is a
+;; stale read, not a link error.  So every number below is read AFTER the pop.
+;;
+;; The loop is the point of the second half.  A region inside a loop is the
+;; shape RM3 exists for -- 100 rounds of an 8-link chain leak 800 boxes today,
+;; not 8 -- and it is also the shape a rewind gets wrong most cheaply: the
+;; second round reuses the first round's slabs (region.c pools a reclaimed
+;; arena), so a straggler from round 1 is overwritten by round 2 rather than
+;; sitting undisturbed.  If the reclaim were wrong these totals would drift.
+;;
+;; Every `bt-scope` sits in `main` on purpose: a bt-scope in a NON-main defn
+;; whose thunk calls another user function miscompiles today, independently of
+;; regions (see docs/reported/cps-direct-bt-scope-closure-temp-undeclared.md).
+
+(defdata Link :heap (Link [v : int nxt : int]))
+
+;;; build -- an n-link spine, carrier-erased, 0 for the end.
+(defn build [n : int acc : int] : int
+  (if (<= n 0)
+    acc
+    (build (- n 1) (:: (Link n acc) :int))))
+
+;;; chain-sum -- walk the spine.  Single-ctor `:heap` ADTs are flat (no tag),
+;;; which is the same layout conv-heap-adt-carrier-ascribe reads.
+(defn chain-sum [c : int] : int
+  ```c
+  struct { int64_t v; int64_t nxt; } *p = (void *)(intptr_t)c;
+  int64_t acc = 0;
+  while (p) { acc += p->v; p = (void *)(intptr_t)p->nxt; }
+  return acc;
+  ```)
+
+(defn main [] : int
+  ;; The result of each bracket is an `:int` SUM, not the chain: nothing that
+  ;; points into the generation crosses the boundary, so both locks pass and
+  ;; the pop rewinds.
+  (println (bt-scope (fn [] (chain-sum (build 4 0)))))     ;; 1+2+3+4   = 10
+  (println (bt-scope (fn [] (chain-sum (build 100 0)))))   ;; 100*101/2 = 5050
+
+  ;; 100 generations, each an 8-link chain (8*9/2 = 36), all reusing the same
+  ;; reclaimed slabs.
+  (let [total (g-cell-new 0)
+        i     (g-cell-new 0)]
+    (while (< (g-get i) 100)
+      (do (g-set! total (+ (g-get total)
+                           (bt-scope (fn [] (chain-sum (build 8 0))))))
+          (g-set! i (+ (g-get i) 1))))
+    (println (g-get total))                                ;; 3600
+    (g-cell-free total)
+    (g-cell-free i))
+
+  ;; Once more after all that reuse, to catch a rewind that corrupted the
+  ;; pooled arena rather than one that returned a wrong sum immediately.
+  (println (bt-scope (fn [] (chain-sum (build 4 0)))))     ;; 10
+  0)

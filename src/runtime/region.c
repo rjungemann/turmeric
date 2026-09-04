@@ -174,6 +174,16 @@ bool tur_region_owns(const void *p) {
     return false;
 }
 
+void tur_region_free(void *p) {
+    if (!p) return;
+    /* Region memory is owned by the generation, not by this pointer: handing it
+     * to free() is an allocator mismatch (glibc aborts), so the guard is not a
+     * leak-avoidance nicety but the thing that keeps a region-allocated node
+     * survivable at all once a drop path runs over it. */
+    if (tur_region_owns(p)) return;
+    free(p);
+}
+
 bool tur_region_active(void) { return g_live_n > 0; }
 
 void tur_region_shutdown(void) {

@@ -4427,7 +4427,10 @@ static void emit_carrier_sum_free(EmitCtx *ctx, Buf *body, const char *name,
                 def->name && adt_app_has_boxed_struct_payload(ctx, t);
     if (!deep) {
         indent_buf(body, ctx->indent);
-        buf_printf(body, "if (%s) free((void *)(intptr_t)%s);\n", name, name);
+        /* RM3 R4: the cell may BE a `:heap` node when the erased carrier is a
+         * heap ADT, and inside a region that is arena memory. */
+        buf_printf(body, "if (%s) %s((void *)(intptr_t)%s);\n", name,
+                   region_free_fn(), name);
         return;
     }
     char access[320];
@@ -4443,7 +4446,7 @@ static void emit_carrier_sum_free(EmitCtx *ctx, Buf *body, const char *name,
     ctx->indent += 4;
     boxed_struct_payload_walk(ctx, body, name, t, true, access);
     indent_buf(body, ctx->indent);
-    buf_printf(body, "free((void *)(intptr_t)%s);\n", name);
+    buf_printf(body, "%s((void *)(intptr_t)%s);\n", region_free_fn(), name);
     ctx->indent -= 4;
     indent_buf(body, ctx->indent);
     buf_puts(body, "}\n");
@@ -4612,6 +4615,90 @@ void emit_pending_drops_drain(EmitCtx *ctx, Buf *body, const uint32_t m[3]) {
     vsp_pending_drain(ctx, body, m[2]);
 }
 
+/* ---- RM3 R4: the region boundary, and the STATIC half of the escape check --
+ *
+ * `bt-scope` (stdlib/trail.tur) is the boundary.  R4 does not invent a surface
+ * form: the solver already brackets exactly the generation a region wants --
+ * "one query" -- and the reclamation plan said so before this phase existed
+ * ("not region inference; it is one arena_reset() at a call site that already
+ * exists").  A caller opts in by using the bracket it would use anyway.
+ *
+ * `region_type_reaches_node` is the first of the two locks R3's header
+ * describes.  The runtime check (`tur_region_note_escape`) proves only that the
+ * escaping pointer ITSELF is not region memory; it proves nothing about what
+ * that pointer transitively reaches.  This answers the transitive question the
+ * only way it can be answered soundly -- statically, over the result TYPE --
+ * and refuses everything it cannot walk.
+ *
+ * Refusing costs a SAVING, never correctness: an unproven result type retires
+ * the generation (`tur_region_pop`) instead of rewinding it, which is byte-for-
+ * byte the behaviour of a build with the flag off. */
+static bool region_type_reaches_node(EmitCtx *ctx, Type t,
+                                     const AdtDef **seen, uint32_t *n_seen,
+                                     int depth) {
+    if (depth <= 0) return true;
+    Type rt = emit_resolve_type(ctx, t);
+    switch (rt.kind) {
+        /* Scalars hold no pointer, so there is nothing for them to reach. */
+        case TY_NIL:  case TY_NEVER: case TY_BOOL:
+        case TY_INT:  case TY_INT8:  case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+            return false;
+        /* A C string is never region memory: no path routes a char buffer
+         * through the generation allocator. */
+        case TY_CSTR:
+            return false;
+        case TY_ADT: {
+            AdtDef *def = NULL;
+            Type args[16];
+            uint8_t n_args = 0;
+            Type probe = rt;
+            if (!type_extract_adt_app(&probe, &def, args, &n_args) || !def)
+                return true;
+            if (def->is_heap) return true;       /* THE node R2 routes */
+            for (uint32_t i = 0; i < *n_seen; i++)
+                if (seen[i] == def) return false;   /* already fully explored */
+            if (*n_seen >= 32) return true;         /* out of budget */
+            seen[(*n_seen)++] = def;
+            for (uint8_t i = 0; i < n_args; i++)
+                if (region_type_reaches_node(ctx, args[i], seen, n_seen, depth - 1))
+                    return true;
+            if (!def->ctors) return true;
+            for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+                const CtorDef *c = def->ctors[ci];
+                if (!c) return true;             /* ctor array still filling */
+                for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+                    const Type *ft = c->fields[fi].full_type;
+                    /* A SELF-RECURSIVE field's full_type is deliberately NULL
+                     * (see AdtDef.is_recursive in types.h: recording a carrier
+                     * full_type there would misclassify the field read).  That
+                     * is precisely the spine -- and precisely what the R4 boxing
+                     * site allocates -- so unknown reads as "reaches" and a
+                     * recursive result is refused. */
+                    if (!ft) return true;
+                    if (region_type_reaches_node(ctx, *ft, seen, n_seen, depth - 1))
+                        return true;
+                }
+            }
+            return false;
+        }
+        default:
+            /* Pointers, refs, rc, closures, structs, containers, type
+             * variables, existentials: every one of them can hold or capture a
+             * node, and R4 needs none of them to say no. */
+            return true;
+    }
+}
+
+static bool emit_call_is_region_scope(const Expr *e) {
+    if (e->kind != EX_CALL) return false;
+    if (!regions_enabled()) return false;
+    const Binding *b = e->as.call_.fn_binding;
+    return b && b->name && b->name->name &&
+           strcmp(b->name->name, "bt-scope") == 0;
+}
+
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* G3 general catch-unwind splitter: a registered hole emits its C temp name
      * verbatim (the suspended sub-expression's already-delivered value). */
@@ -4635,6 +4722,30 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         /* A valid C expression, so the rest of emission stays well-formed --
          * the build fails on the diagnostic, not on malformed output. */
         return strdup("0");
+    }
+    /* RM3 R4: open a generation around a `bt-scope` call.  The push has to
+     * precede the argument emissions -- the call text embeds their temps, so
+     * there is no seam between them and the call -- which means an allocation
+     * made in ARGUMENT position also lands in the generation.  That is sound
+     * for the thunk this form takes (its closure env is a plain malloc, and
+     * anything it captures was built by the caller before the push), and the
+     * shapes it is not sound for are the transitive ones the static check
+     * refuses anyway.
+     *
+     * A `:void`/`!` result is not bracketed at all: such a call is not hoisted
+     * into a temp, so there is no statement seam here to close after it.  A
+     * missed saving, in the conservative direction, and the one shape R5 should
+     * price before graduating. */
+    int  rgn_id      = -1;
+    bool rgn_reclaim = false;
+    if (emit_call_is_region_scope(e) &&
+        e->type.kind != TY_NIL && e->type.kind != TY_NEVER) {
+        const AdtDef *seen[32];
+        uint32_t n_seen = 0;
+        rgn_reclaim = !region_type_reaches_node(ctx, e->type, seen, &n_seen, 24);
+        rgn_id = ctx->tmp_n++;
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "int __tur_rgn_%d = tur_region_push();\n", rgn_id);
     }
     g_emit_expr_depth++;
     /* Mark before the children run: everything they push belongs to THIS node. */
@@ -5064,6 +5175,42 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              strcmp(ret_ct, "int64_t") != 0 && strchr(ret_ct, '*') == NULL &&
              adt_app_has_boxed_struct_payload(ctx, e->type))
         vsp_pending_push(ctx, tmp, e->type);
+    /* RM3 R4: close the generation.  Two locks, and neither substitutes for
+     * the other (see region.h):
+     *
+     *   static  -- `rgn_reclaim` says the result TYPE cannot transitively reach
+     *              a region-allocated node.  Without it, retire: the generation
+     *              stays mapped, which is exactly what happens today.
+     *   runtime -- note the result itself, so a value that IS region memory
+     *              blocks the rewind even when the static walk cleared it.  It
+     *              is not decoration: a carrier-ERASED `:heap` pointer is spelled
+     *              `:int`, the static walk sees a scalar and clears the rewind,
+     *              and only this catches it.  Deleting the note turns
+     *              tests/fixtures/region-scope-escape-refused into an ASan
+     *              use-after-poison -- checked, not assumed.
+     *
+     * The note casts through `intptr_t`, so a genuinely scalar result is
+     * compared as an address and simply will not be region memory.  A false
+     * positive there refuses a rewind -- the safe direction -- not permits one. */
+    if (rgn_id >= 0) {
+        /* Only a WORD can be noted: C has no cast from a by-value aggregate to
+         * a pointer, and an __auto_type temp whose spelling we could not prove
+         * might be one.  Skipping the note there loses the second lock, not the
+         * first -- the static walk still had to pass to get here. */
+        bool notable = ret_ct && (strchr(ret_ct, '*') != NULL ||
+                                  strcmp(ret_ct, "int64_t") == 0 ||
+                                  strcmp(ret_ct, "intptr_t") == 0);
+        indent_buf(body, ctx->indent);
+        if (rgn_reclaim && notable)
+            buf_printf(body,
+                       "tur_region_note_escape((const void *)(intptr_t)%s); "
+                       "(void)tur_region_pop_checked(__tur_rgn_%d);\n",
+                       tmp, rgn_id);
+        else if (rgn_reclaim)
+            buf_printf(body, "(void)tur_region_pop_checked(__tur_rgn_%d);\n", rgn_id);
+        else
+            buf_printf(body, "tur_region_pop(__tur_rgn_%d);\n", rgn_id);
+    }
     return strdup(tmp);
 }
 
@@ -7800,8 +7947,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         const char *cn = type_c_name(emit_resolve_type(ctx, box_ty));
                         char *tmp = fresh_tmp(ctx);
                         indent_buf(body, ctx->indent);
-                        buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
-                                   cn, tmp, cn, cn);
+                        /* RM3 R4 (docs/upcoming/regions-plan.md): THIS is the
+                         * per-link spine box the RM1 leak sweep blames -- the
+                         * `tur_adt_Subst *__t = malloc(...)` that boxes an
+                         * SR4 recursive ctor field.  It is NOT a `:heap` ADT
+                         * node, so none of R2's three ctor emitters reach it,
+                         * and R2's "spine-node allocation is routed" therefore
+                         * did not cover the workload the phase was written for.
+                         * Found by measuring bench-logic-subst's emitted C
+                         * rather than re-reading R2's claim. */
+                        buf_printf(body, "%s *%s = (%s *)%s(sizeof(%s));\n",
+                                   cn, tmp, cn,
+                                   regions_enabled() ? "tur_region_alloc_or_malloc"
+                                                     : "malloc",
+                                   cn);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "*%s = (%s);\n", tmp, arg_strs[i]);
                         Buf c; buf_init(&c);

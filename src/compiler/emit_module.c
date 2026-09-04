@@ -7323,7 +7323,10 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
     if (tagged) buf_printf(out, "        break;\n");
     }
     if (tagged) buf_printf(out, "    }\n");
-    buf_printf(out, "    free(ptr);\n");
+    /* RM3 R4: `ptr` is the node the two ctor emitters allocate, so inside a
+     * region it is arena memory and plain `free` would be an allocator
+     * mismatch, not a leak.  `region_free_fn` is `free` in a default build. */
+    buf_printf(out, "    %s(ptr);\n", region_free_fn());
     buf_printf(out, "}\n\n");
     ctor = def->ctors[0];   /* restore for the sections below */
 
@@ -8011,9 +8014,12 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
 "extern int  tur_region_push(void);\n"
 "extern void tur_region_pop(int depth);\n"
 "extern void tur_region_pop_reclaim(int depth);\n"
+"extern void  tur_region_note_escape(const void *p);\n"
+"extern bool tur_region_pop_checked(int depth);\n"
 "extern void *tur_region_alloc(size_t n);\n"
 "extern void *tur_region_alloc_or_malloc(size_t n);\n"
 "extern bool tur_region_owns(const void *p);\n"
+"extern void tur_region_free(void *p);\n"
 "extern bool tur_region_active(void);\n");
     }
     buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) __attribute__((unused));\n");
@@ -13520,8 +13526,26 @@ int emit_program(Buf *out, const Expr *program) {
                 }
                 buf_printf(&early_file, ") {\n");
                 if (heap) {
-                    buf_printf(&early_file, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
-                               adt_c_name, adt_c_name, adt_c_name);
+                    /* RM3 R2/R4 (docs/upcoming/regions-plan.md): the THIRD
+                     * spine-node ctor emitter.  `emit_program` emits base ctors
+                     * HERE rather than through emit_adt_typedef_and_ctors, so a
+                     * NON-parametric `:heap` ADT -- `(defdata Link :heap ...)`,
+                     * the plainest spine there is -- came out of R2 still
+                     * calling malloc while both of the other two routed.
+                     *
+                     * Found because R4's fixture measured the SAVING rather
+                     * than asserting the routing: valgrind reported 913 blocks
+                     * live with the flag on against 909 with it off, so the
+                     * region was pushed, popped, and never allocated into.  The
+                     * SR3 slice-A note a few lines below records this exact
+                     * miss at this exact site, one representation change
+                     * earlier.  All three emitters mirror each other; a change
+                     * to one belongs in all three. */
+                    buf_printf(&early_file, "    %s *__r = (%s *)%s(sizeof(%s));\n",
+                               adt_c_name, adt_c_name,
+                               regions_enabled() ? "tur_region_alloc_or_malloc"
+                                                 : "malloc",
+                               adt_c_name);
                     if (!flat) buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                         char *mp = adt_field_member_path(def, ctor, fi);

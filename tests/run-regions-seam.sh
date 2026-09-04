@@ -26,6 +26,20 @@ option-niche-crossings
 hkt-stdlib-result-ok-biased
 
 "
+
+# R4: fixtures that actually OPEN a region -- every `bt-scope` is a boundary
+# now, so these run push / (checked) pop for real, and the spine nodes their
+# bodies allocate land in the generation rather than on the heap.  The
+# assertion is the same one and it is the stronger one here: a rewind that
+# reclaimed something still live would print a wrong answer (or trap on the
+# Debug poison), not merely allocate differently.
+FIXTURES="$FIXTURES
+sx2-trail-combinators
+sx2-dfs-driver
+self-recursive-goal-into-fat-sink
+region-scope-value-survives
+region-scope-escape-refused
+"
 pass=0; fail=0; skip=0
 for name in $FIXTURES; do
     d="tests/fixtures/$name"; in="$d/input.tur"

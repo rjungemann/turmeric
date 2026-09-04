@@ -427,7 +427,9 @@ so the rejected shape was not in use anywhere in the corpus.
 
 ## Effect handlers
 
-*(No open reports.)*
+| Report | Severity | One line |
+|---|---|---|
+| [cps-direct-bt-scope-closure-temp-undeclared](cps-direct-bt-scope-closure-temp-undeclared.md) | medium | a `bt-scope` in a NON-main defn whose thunk calls another user function CPS-lowers, and the `/* cps->direct */` bridge emits the call while dropping the statements that build its `^fat` closure argument -- so the emitted C names an undeclared `_un_unborrowc_un*` temp and `cc` fails. Flag-independent (nothing to do with `--enable=regions`, which is where it surfaced). Three neighbours work, which narrows it: the same bracket inlined into `main`, a thunk that calls nothing, and a self-recursive caller. Every in-tree caller happened to be one of those, which is why nothing caught it. Workaround (bt-scope in `main`) is carried with a pointer here by both R4 fixtures and `benchmarks/bench-regions-subst.tur` |
 
 `handler-clause-setbang-enclosing-mut-undeclared` was resolved 2026-08-05 and
 moved to

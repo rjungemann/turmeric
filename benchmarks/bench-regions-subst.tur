@@ -1,0 +1,112 @@
+;; bench-regions-subst -- RM3 R4: what a declared lifetime is worth on the
+;; workload the reclamation plan named.
+;;
+;; This is bench-logic-subst's PERSISTENT path and nothing else.  The trailed
+;; path is not here: that comparison (trail vs assoc list) is a different
+;; question and bench-logic-subst already answers it.  The question here is
+;; narrower and is the one R5 has to decide on --
+;;
+;;   the persistent path builds an n-link `Subst` per pass and drops it.  Every
+;;   link is a `malloc`'d box that nothing frees: 100 passes over an 8-link
+;;   chain leak 800 boxes, not 8.  Does bracketing the pass in `bt-scope` --
+;;   the bracket a solver already writes -- reclaim them, and what does the
+;;   bracket cost when it does?
+;;
+;; So the A/B is the FLAG, not the source: the same program, compiled with and
+;; without `--enable=regions`.  With it off, `bt-scope` is the trail bracket it
+;; has always been and the spine leaks; with it on, the same bracket is also a
+;; region and the pass's whole generation is rewound at the pop.
+;;
+;;   ./build/tur build            benchmarks/bench-regions-subst.tur -o /tmp/b-off
+;;   ./build/tur build --enable=regions benchmarks/bench-regions-subst.tur -o /tmp/b-on
+;;   /usr/bin/time -v /tmp/b-off    # ns_per_op, and Maximum resident set size
+;;   /usr/bin/time -v /tmp/b-on
+;;
+;; Peak RSS is half the measurement and the more important half: a reclamation
+;; phase that makes the program faster but not smaller has not done its job,
+;; and one that makes it smaller at a tolerable cost has.
+;;
+;; Every `bt-scope` is in `main`, and the loops are `while` rather than
+;; recursion, because a bt-scope in a non-main defn whose thunk calls another
+;; user function miscompiles today -- see
+;; docs/reported/cps-direct-bt-scope-closure-temp-undeclared.md.  That is a
+;; workaround, not a property of the benchmark.
+
+(load "stdlib/logic.tur")
+
+(extern-c tur_monotonic_ns [] :int)
+
+(defn now-ns [] : int
+  ```c
+  return tur_monotonic_ns();
+  ```)
+
+;;; build-subst -- extend a Subst with `n` bindings, var i -> int i.
+(defn build-subst [n : int acc : Subst] : Subst
+  (if (<= n 0)
+    acc
+    (build-subst (- n 1) (SBind (- n 1) (TInt (- n 1)) acc))))
+
+;;; walk-all -- walk every variable in 0..n-1 once, summing to keep it live.
+(defn walk-all [n : int subs : Subst acc : int] : int
+  (if (<= n 0)
+    acc
+    (walk-all (- n 1) subs
+              (+ acc (term-int-val (logic-walk (TVar (- n 1)) subs))))))
+
+(defn emit-header [] : void
+  ```c
+  printf("bindings,passes,total_ns,ns_per_op,checksum\n");
+  ```)
+
+(defn emit-row [n : int passes : int ns : int sum : int] : void
+  ```c
+  double ops = (double)n * (double)passes;
+  printf("%lld,%lld,%lld,%.2f,%lld\n", (long long)n, (long long)passes,
+         (long long)ns, ops > 0 ? (double)ns / ops : 0.0, (long long)sum);
+  ```)
+
+;;; passes-for -- hold total work roughly constant across the sweep, exactly as
+;;; bench-logic-subst does, so the two are readable side by side.
+(defn passes-for [n : int] : int
+  ```c
+  int64_t p = 200000 / (n * n + 1);
+  if (p > 2000) p = 2000;
+  if (p < 3) p = 3;
+  return p;
+  ```)
+
+(defn main [] : int
+  (emit-header)
+  (let [n   (g-cell-new 1)
+        p   (g-cell-new 0)
+        acc (g-cell-new 0)
+        t0  (g-cell-new 0)]
+    (while (<= (g-get n) 512)
+      (do
+        (g-set! p 0)
+        (g-set! acc 0)
+        (g-set! t0 (now-ns))
+        (while (< (g-get p) (passes-for (g-get n)))
+          (do
+            ;; ONE generation per pass.  The result is the walk SUM -- an
+            ;; `:int` -- so nothing that points into the generation crosses
+            ;; the boundary and the static check clears the rewind; the
+            ;; whole n-link spine dies at the pop.
+            (g-set! acc (+ (g-get acc)
+                           (bt-scope
+                             (fn [] (walk-all (g-get n)
+                                              (build-subst (g-get n) (subs-empty))
+                                              0)))))
+            (g-set! p (+ (g-get p) 1))))
+        ;; The checksum is printed so a rewind that reclaimed something still
+        ;; live shows as a WRONG NUMBER rather than as a faster run.  It must
+        ;; be identical in both arms.
+        (emit-row (g-get n) (passes-for (g-get n))
+                  (- (now-ns) (g-get t0)) (g-get acc))
+        (g-set! n (* (g-get n) 2))))
+    (g-cell-free n)
+    (g-cell-free p)
+    (g-cell-free acc)
+    (g-cell-free t0))
+  0)

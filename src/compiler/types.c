@@ -1455,6 +1455,19 @@ bool regions_enabled(void) {
     return true;
 }
 
+/* RM3 R4: the free-side twin of the ctor routing above.
+ *
+ * From R2 onward a `:heap` ADT node allocated inside a region is ARENA memory,
+ * while the same emitted drop glue still ends in `free(ptr)`.  That is not a
+ * leak if it goes wrong -- it is an allocator mismatch, and glibc aborts.  So
+ * every node free path spells this instead of `free`, and it resolves to plain
+ * `free` in a default build, exactly as `region_alloc_fn` does on the other
+ * side.  Keep the two in step: a new node allocation site needs a matching
+ * free site, and vice versa. */
+const char *region_free_fn(void) {
+    return regions_enabled() ? "tur_region_free" : "free";
+}
+
 static bool sr3_option_niche(void) {
     /* The niche is layered ON TOP of SR2: narrowing `(Option P)` to its payload
      * pointer only means anything if that Option is a by-value parametric sum in

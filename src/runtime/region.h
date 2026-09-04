@@ -103,6 +103,19 @@ void *tur_region_alloc_or_malloc(size_t n);
  * reach `free()`, because the slab, not the pointer, owns it. */
 bool tur_region_owns(const void *p);
 
+/* `free(p)` unless `p` is region memory, in which case the generation owns it
+ * and the pop reclaims it.
+ *
+ * R4 makes this load-bearing rather than advisory.  R2 routed the spine-node
+ * constructor through `tur_region_alloc_or_malloc`, so from R2 onward a node
+ * inside a region is arena memory while the SAME emitted drop glue still ends
+ * in `free(ptr)` -- an allocator mismatch that aborts, not a leak.  Every node
+ * free path therefore spells this instead of `free` when regions are enabled,
+ * exactly mirroring the allocation side's one-call-site routing.
+ *
+ * A NULL is a no-op, like `free`. */
+void tur_region_free(void *p);
+
 /* True when at least one generation is open. */
 bool tur_region_active(void);
 

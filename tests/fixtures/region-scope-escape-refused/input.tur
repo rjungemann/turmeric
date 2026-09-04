@@ -1,0 +1,69 @@
+;; RM3 R4 (docs/upcoming/regions-plan.md): a value that ESCAPES its generation
+;; must block the rewind, and this reads the escapee afterwards to prove it did.
+;;
+;; The assertion has teeth because `arena_reset` memsets the reclaimed bytes to
+;; 0xDE under `#ifndef NDEBUG` (src/runtime/arena.c) and the fixture links the
+;; Debug libturi.  So a generation that reclaimed while something still pointed
+;; into it does not "probably work" here -- the walk reads 0xDEDEDEDE.. links
+;; and the sums below come out garbage or the program segfaults.  Erring the
+;; wrong way is loud, which is the property this fixture exists to keep.
+;;
+;; Two cases, and they are refused by DIFFERENT locks -- which is the whole
+;; reason region.h insists there are two and that neither may be removed on the
+;; strength of the other:
+;;
+;;   escape-by-carrier  The result is spelled `:int`.  The STATIC walk sees a
+;;                      scalar, finds nothing that reaches a node, and clears
+;;                      the rewind -- a real hole, because a carrier-erased
+;;                      `:heap` pointer is an `:int` as far as the type says.
+;;                      The RUNTIME note catches it: the returned word IS
+;;                      region memory, so the generation retires.
+;;
+;;   escape-by-type     The result is the `:heap` ADT itself.  The STATIC walk
+;;                      refuses before the program runs (`def->is_heap`), and
+;;                      the pop never even asks the runtime.
+;;
+;; A third case is here to keep the refusals honest: a bracket that returns a
+;; plain sum still reclaims.  Without it a compiler that simply never rewound
+;; would pass this fixture.
+
+(defdata Link :heap (Link [v : int nxt : int]))
+
+(defn build [n : int acc : int] : int
+  (if (<= n 0)
+    acc
+    (build (- n 1) (:: (Link n acc) :int))))
+
+(defn link-v [l : Link] : int (.v l))
+
+(defn chain-sum [c : int] : int
+  ```c
+  struct { int64_t v; int64_t nxt; } *p = (void *)(intptr_t)c;
+  int64_t acc = 0;
+  while (p) { acc += p->v; p = (void *)(intptr_t)p->nxt; }
+  return acc;
+  ```)
+
+(defn main [] : int
+  ;; escape-by-carrier: the chain crosses the boundary as an `:int`, and is
+  ;; walked AFTER the pop.  10, not garbage.
+  (let [escaped (bt-scope (fn [] (build 4 0)))]
+    (println (chain-sum escaped)))
+
+  ;; The same generation shape again, so a retirement that quietly corrupted
+  ;; the stack of generations would show up on the next round rather than
+  ;; never.  5050, walked after its own pop.
+  (let [escaped2 (bt-scope (fn [] (build 100 0)))]
+    (println (chain-sum escaped2)))
+
+  ;; escape-by-type: the result IS the `:heap` ADT, so the static walk refuses
+  ;; before the program runs and the emitted pop is the unchecked, retiring
+  ;; one -- no runtime question asked.  7.
+  (let [node (bt-scope (fn [] (Link 7 0)))]
+    (println (link-v node)))
+
+  ;; The control: nothing escapes, so this one really does rewind -- and it
+  ;; reuses the slabs the two refusals did NOT release, which is the
+  ;; interesting adjacency.  10.
+  (println (bt-scope (fn [] (chain-sum (build 4 0)))))
+  0)
