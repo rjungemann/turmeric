@@ -1500,18 +1500,19 @@ churn.
 
 ## Windows port
 
-Filed 2026-07-31 during the Windows-support sweep on `main`; they arrived in
-this directory with that work. The Windows CI leg that watches them was itself
-broken until 2026-08-01 -- it installed a nonexistent `libedit` package and
-never reached Configure -- which is now fixed (report archived at
-`docs/archive/windows-ci-leg-installs-nonexistent-libedit.md`). Note the leg is
-build-only by design, so these three are still not FIXTURE-watched on Windows.
+Originally filed 2026-07-31 during the Windows-support sweep on `main`. The
+Windows CI leg that watches them was build-only until 2026-09-04 and now runs
+the **full fixture suite** (`windows` job in `.github/workflows/ci.yml`), so
+these are fixture-watched. Two of the original three are resolved and archived:
+`windows-posix-inline-c-gaps` and
+`windows-pipe-reactor-fixtures-do-not-build` (both superseded by main's
+`requires.posix-apis` skip marker).
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [windows-subprocess-and-shared-lib-gaps](windows-subprocess-and-shared-lib-gaps.md) | high (for Windows users) | `tur install` / `fetch` / `new` / `build --shared` / REPL spice loading all fail -- the subprocess and shared-library layers are unported. Read-verified by audit, **not** exercised end-to-end |
-| [windows-posix-inline-c-gaps](windows-posix-inline-c-gaps.md) | low | 5 fixtures; three unrelated POSIX APIs reached from stdlib inline-C with no Windows path (`_mkdir` conflicting decl, one real port, one probably should not be ported) |
-| [windows-pipe-reactor-fixtures-do-not-build](windows-pipe-reactor-fixtures-do-not-build.md) | low | 9 pipe-reactor fixtures fail at **build**, not runtime -- the value here is the correction to the plan doc, which documents them as a runtime limitation |
+| [windows-subprocess-and-shared-lib-gaps](windows-subprocess-and-shared-lib-gaps.md) | high (for Windows users) | `tur install` / `fetch` / `new` / `build --shared` / REPL spice loading all fail -- the subprocess and shared-library layers are unported. Read-verified by audit, **not** exercised end-to-end. `build --shared` half is now done (emits a real `.dll`) |
+| [win64-aggregate-return-threshold-is-sysv](win64-aggregate-return-threshold-is-sysv.md) | medium | The fat-dispatch shim selector reads register-return-vs-sret off a hardcoded SysV `> 16` threshold; Win64's is 1/2/4/8, so a 16-byte monomorph is sret there, keeps the generic forwarding shim, and SIGSEGVs with no diagnostic. Skipped via `requires.win64-aggregate-abi` |
+| [windows-longjmp-remaining-fiber-sites](windows-longjmp-remaining-fiber-sites.md) | low-medium | `call/cc`, panic-in-fiber and cancellation still `longjmp` on a fiber stack, which is `STATUS_BAD_STACK` on win64. The DK tail-resume site was fixed with `__builtin_setjmp`; these three were left because no fixture covers them |
 
 ## Platform-independent, found on a platform sweep
 

@@ -1,43 +1,59 @@
 # Windows Support -- Remaining Work
 
-**Status (revised 2026-07-31):** WIN0 (compiler/runtime), WIN1 (generated-code
+**Status (revised 2026-09-04):** WIN0 (compiler/runtime), WIN1 (generated-code
 portability), and the hard core of WIN3 (async I/O + fiber context switches) are
 done and **merged to `main`** -- squash-merged as `7a16ef1de` ("Windows Bringup
-(#682)"). The `windows-bringup` branch is stale (~900 commits behind main); do
-not work from it.
+(#682)").
+
+**The `windows-bringup` branch is live again, and is where the current work is.**
+An earlier revision of this header said it was "~900 commits behind main; do not
+work from it" -- that was true when written and is no longer. It has since been
+merged up twice (most recently 584 commits, v0.33.2 -> v0.43.0) and carries the
+JIT bring-up, the `__builtin_setjmp` fiber fix, the `-ldl` autolink fix, and the
+CI change below.
 
 `tur.exe` builds under MSYS2/UCRT64, and `tur build` compiles and runs real
-programs. Measured on main at `f630230e5` with gcc 16.1.0:
+programs. Measured on `windows-bringup` with gcc 16.1.0, Debug:
 
 ```
 TUR=./build-win/tur.exe bash tests/run.sh
-# summary: 2478 passed, 21 failed
+# summary: 2781 passed, 0 failed
 ```
 
-That is the whole fixture tree, not the async subset -- roughly 99%. (An earlier
-revision of this plan cited "~65 fixtures"; that was the async/reactor/httpd
-subset at bring-up time, not a ceiling.)
+Run the suite against a **Debug** build. A Release `tur` compiles out contract
+checks (`rt_contracts_emitted` is `#ifdef NDEBUG`), so every fixture pinning a
+contract panic fails against it with the wrong runtime error -- which looks
+exactly like a product regression and is not one.
 
-The 21 are four known classes and nothing else: 9 pipe-fd fixtures, 5
-carrier<->pointer straddles (not Windows-specific; **all five fixed 2026-08-01**,
-though not re-measured on Windows -- see below), 5 POSIX-only inline-C, and 2
-scheduler stdout mismatches. Each is a section below. The run was 2445/54 before
-the Winsock setsockopt/getsockopt shim landed; the whole `httpd-*` family moved
-in one change.
+The remaining known-bad fixtures PASS-skip behind markers rather than sitting
+red, so a new failure is unambiguous:
+
+| marker | what it covers |
+| --- | --- |
+| `requires.posix-apis` | POSIX-only APIs (11 fixtures) -- pipe-fd reactor family, `childhandle`, `term-raw-cooked` |
+| `requires.win64-aggregate-abi` | the SysV-vs-Win64 aggregate-return threshold ([report](../../reported/win64-aggregate-return-threshold-is-sysv.md)) |
 
 **WIN0 regressed between the merge and 2026-07-31 and had to be re-fixed.** Five
 independent breaks accumulated, three of them within five days, because nothing
-guards Windows in CI. The compiler did not build at all. See
+guarded Windows in CI. The compiler did not build at all. See
 `docs/reported/windows-*.md` and the `fix(windows): restore the Windows build on
 main` commit.
 
-**The single highest-value item in this plan is therefore a `windows-latest` CI
-job**, which is not otherwise listed here -- `.github/workflows/ci.yml` runs
-`[ubuntu-latest, macos-latest]` on both the `test` and `jit` legs, and
-`release.yml` ships no Windows artifact. Without a guard, everything below
-rots as fast as it is fixed. Note also that `src/CMakeLists.txt:45-49` disables
-`-Werror` on Windows pending a warning-clean port, so a new job runs with
-warnings unpromoted until that is revisited.
+**That guard now exists, and as of this branch it runs the fixture suite, not
+just the build.** `.github/workflows/ci.yml` has a `windows` job (MSYS2/UCRT64).
+It was build-only by deliberate choice while ~54 fixtures were failing -- a
+permanently-red job teaches people to ignore it -- with the stated exit
+condition "turn the suite on here once those classes are closed". They are
+closed, so it is on.
+
+Build-only was not sufficient, and the gap was not hypothetical: `-ldl` (Windows
+has no libdl) reached main in three new `jit-ffi` fixtures and the job stayed
+green through it, because that failure is a LINK error when building a FIXTURE,
+not when building `tur.exe`.
+
+Still missing: `release.yml` ships no Windows artifact, and
+`src/CMakeLists.txt:45-49` disables `-Werror` on Windows pending a warning-clean
+port, so the job runs with warnings unpromoted.
 
 This plan tracks what is left.
 
@@ -174,7 +190,7 @@ create a `pipe()` and register the pipe fds with the reactor.
 **Correction (2026-07-31): these fail at `cc`, not at runtime.** MinGW does not
 declare `pipe()` -- it ships `_pipe`, with a different signature -- and
 `-Wimplicit-function-declaration` is a hard error on gcc >= 14. No reactor code
-is reached. See `docs/reported/windows-pipe-reactor-fixtures-do-not-build.md`.
+is reached. See `docs/archive/windows-pipe-reactor-fixtures-do-not-build.md`.
 
 The runtime limitation below is still real and still applies the moment they do
 compile, so the two causes compound rather than compete: **Windows `select()` is
@@ -236,7 +252,7 @@ it.
   contains only includes/defines/comments -- also unblocks the natural port of
   `term/width`/`term/height`, which would otherwise break the same way the moment
   their `#include <sys/ioctl.h>` is wrapped in an `#ifdef`. See
-  [docs/reported/windows-posix-inline-c-gaps.md](../../reported/windows-posix-inline-c-gaps.md).
+  [docs/archive/windows-posix-inline-c-gaps.md](../../archive/windows-posix-inline-c-gaps.md).
 
 ## Subprocess and shared-library layers (not fixture-visible)
 

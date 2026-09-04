@@ -538,15 +538,25 @@ jobs:
     # before anyone noticed.  This job exists so that cannot happen silently
     # again.
     #
-    # It BUILDS ONLY.  It deliberately does not run the fixture suite: ~54
-    # fixtures fail on Windows today for known, pre-existing reasons (Winsock
-    # setsockopt in stdlib/httpd.tur, POSIX-only inline-C, and carrier<->pointer
-    # straddles that are not Windows-specific at all).  Those are tracked in
-    # docs/reported/windows-*.md and docs/upcoming/v1/windows-remaining-plan.md.
-    # A permanently-red job teaches people to ignore it, which is strictly worse
-    # than no job; every one of the five breaks above was a COMPILE error, so
-    # building is what actually guards this platform.  Turn the suite on here
-    # once those classes are closed.
+    # It BUILDS **AND RUNS THE FIXTURE SUITE**.  It used to build only, because
+    # ~54 fixtures failed on Windows for known pre-existing reasons and a
+    # permanently-red job teaches people to ignore it -- strictly worse than no
+    # job.  That comment ended "turn the suite on here once those classes are
+    # closed"; they are now closed, so this is that flip.
+    #
+    # Building alone is NOT enough, and the gap is not hypothetical.  `-ldl`
+    # (Windows has no libdl) reached main in three new jit-ffi fixtures and this
+    # job stayed green through it, because the failure is a LINK error when
+    # building a FIXTURE, not when building tur.exe.  Compile-only coverage
+    # cannot see that class, and that class is what accumulates while nobody is
+    # looking.
+    #
+    # The remaining known-bad fixtures PASS-skip through markers rather than
+    # being tolerated as red, so a NEW failure is unambiguous:
+    #   requires.posix-apis          -- POSIX-only APIs (11 fixtures)
+    #   requires.win64-aggregate-abi -- the SysV/Win64 aggregate-return
+    #                                   threshold (docs/reported/
+    #                                   win64-aggregate-return-threshold-is-sysv.md)
     #
     # Separate job rather than a third entry in the `test` matrix because
     # nothing in that job's shape transfers: it wants apt/brew, a POSIX ccache
@@ -579,6 +589,13 @@ jobs:
       # `mingw-w64-ucrt-x86_64-libedit`: the leg produced zero Windows signal
       # while still appearing green-adjacent in the checks list.  Optional
       # packages go in the non-fatal step below instead.
+      # diffutils and python are for the FIXTURE SUITE, not the build.
+      # tests/run.sh compares every fixture with `diff`, and MSYS2 does not ship
+      # it in the base image -- this job already learned that the hard way (see
+      # the end-to-end step below, where a missing `diff` reported itself as a
+      # codegen failure).  Two hook.sh fixtures shell out to `python3`.
+      # Both are REQUIRED here, so they belong in this all-or-nothing
+      # transaction rather than the non-fatal optional step below.
       - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -587,6 +604,8 @@ jobs:
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
+            diffutils
+            python
 
       # Optional: line editing for the REPL (HAVE_EDITLINE in
       # src/CMakeLists.txt).  The package is `wineditline`, NOT `libedit` --
@@ -668,6 +687,39 @@ jobs:
             exit 1
           fi
           echo "fixture 'arith' compiled, ran, and matched expected.stdout"
+
+      # The actual platform guard.  Build-only coverage cannot see a fixture
+      # that fails to LINK or to RUN, which is how `-ldl` reached main.
+      #
+      # TUR= points the harness at this build tree; it derives the libturi -L
+      # from that path and exports TUR_BIND_LOOPBACK=1 so socket fixtures do not
+      # trip the Defender firewall dialog.  Debug build on purpose: a Release
+      # tur elides contract checks (rt_contracts_emitted is #ifdef NDEBUG), so
+      # every fixture pinning a contract panic would fail against it.
+      - name: Fixture suite
+        run: |
+          TUR=./build-win/tur.exe bash tests/run.sh 2>&1 | tee ./suite.log
+          # tee returns tee's status, so read the harness's own summary line
+          # rather than $? -- and treat a MISSING summary as failure, so a
+          # harness that dies early cannot pass by printing nothing.
+          summary=$(grep -E '^summary: ' ./suite.log | tail -1)
+          if [ -z "$summary" ]; then
+            echo "::error::suite produced no summary line (harness died early?)"
+            exit 1
+          fi
+          echo "$summary"
+          case "$summary" in
+            *" 0 failed") echo "suite clean" ;;
+            *) echo "::error::$summary"; exit 1 ;;
+          esac
+
+      - name: Upload suite log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suite-log-windows
+          path: ./suite.log
+          if-no-files-found: ignore
 
   check-guides:
     name: Check guide toggle pairs
