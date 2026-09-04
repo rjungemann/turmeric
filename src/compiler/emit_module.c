@@ -7976,6 +7976,26 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * other door.  A hand-rolled tagged-None box (tag 0, non-null pointer --
      * the historical layout the read side still accepts) maps to the niche
      * null rather than reading its uninitialised payload word. */
+    /* RM3 regions (docs/upcoming/regions-plan.md), R1 plumbing: with
+     * `--enable=regions` the emitted program can reach the region allocator, so
+     * R2 has something to route allocation to and R4 something for `bt-scope`
+     * to bracket.  Declared, not called: R1 changes no allocation.  Off by
+     * default, so a default build emits nothing here and this costs an
+     * already-false bool test. */
+    if (regions_enabled()) {
+        buf_puts(out,
+"/* RM3 regions: declared lifetimes over the runtime arena.  A generation is\n"
+" * reclaimed whole or not at all -- tur_region_pop retires without freeing and\n"
+" * tur_region_pop_reclaim rewinds, so a shape the escape check cannot prove\n"
+" * costs a saving rather than correctness.  tur_region_owns guards every free\n"
+" * path: a pointer into region memory must never reach free(). */\n"
+"extern int  tur_region_push(void);\n"
+"extern void tur_region_pop(int depth);\n"
+"extern void tur_region_pop_reclaim(int depth);\n"
+"extern void *tur_region_alloc(size_t n);\n"
+"extern bool tur_region_owns(const void *p);\n"
+"extern bool tur_region_active(void);\n");
+    }
     buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) {\n");
     buf_puts(out, "    tur_option_t *__p = (tur_option_t *)(intptr_t)__o;\n");

@@ -1438,6 +1438,23 @@ bool adt_ctor_is_null_none(const AdtDef *def, const CtorDef *ctor) {
  * user who turns it on should get the TUR-W0060 lifecycle warning and a plan to
  * read.  `experiment_warn_if_used` is once-per-compile guarded, so calling it
  * from this hot predicate costs one index lookup after the first. */
+/* RM3 regions (docs/upcoming/regions-plan.md): declared lifetimes over the
+ * arena, for values whose owner is a SCOPE rather than another value -- the
+ * per-node spine box of a persistent recursive structure, which RM1 cannot
+ * reach and RM2 cannot own.
+ *
+ * A real experiment rather than an env seam, per the CLAUDE.md rule for an
+ * in-flight feature: it is user-visible surface and it is the reclamation
+ * phase most able to produce a silent wrong answer, so a user who turns it on
+ * gets the TUR-W0060 lifecycle warning and a plan to read.
+ * `experiment_warn_if_used` is once-per-compile guarded, so consulting this
+ * from a hot path would cost one index lookup after the first. */
+bool regions_enabled(void) {
+    if (!g_opt_regions) return false;
+    experiment_warn_if_used("regions");
+    return true;
+}
+
 static bool sr3_option_niche(void) {
     /* The niche is layered ON TOP of SR2: narrowing `(Option P)` to its payload
      * pointer only means anything if that Option is a by-value parametric sum in

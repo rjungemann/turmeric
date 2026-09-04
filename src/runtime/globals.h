@@ -306,6 +306,20 @@ extern bool g_trail_autoloaded;
  * meaningless -- and, measured, crashing -- over the int64 carrier.  Clearing
  * SR2 therefore clears the niche too; clearing the niche leaves SR2 alone. */
 extern bool g_opt_option_niche;
+/* RM3 regions (docs/upcoming/regions-plan.md): declared lifetimes over the
+ * arena that already ships, for values with no unique owner -- the per-node
+ * spine box of a persistent recursive structure, which RM1's scope-exit rule
+ * cannot reach (the nodes escape their constructor by construction) and RM2
+ * cannot own (sharing makes "is this the last reference?" a runtime fact).
+ *
+ * Off by default and gated behind `--enable=regions`: this is user-visible
+ * surface, and it is the reclamation phase most able to produce a silent wrong
+ * answer if it rewinds a generation something still points into.  The plan's
+ * safety rule is that a region which cannot PROVE every escaping value
+ * relocatable does not rewind at all, so a missed shape costs a saving rather
+ * than correctness -- the same discipline turi's value-pool promotion walk
+ * already runs on. */
+extern bool g_opt_regions;
 /* SR2a: a MULTI-VARIANT parametric sum monomorph -- `(Opt2 int)`, `(PRes
  * cstr)`, and above all `(Option int)` / `(Result int cstr)` -- flows by value
  * instead of riding the int64 heap-pointer carrier.  The parametric sibling of

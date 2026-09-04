@@ -1836,6 +1836,9 @@ bool         adt_ctor_is_null_none(const struct AdtDef *def,
  * payload types whose valid values exclude 0; see the definition for why
  * `:heap`-ness is not the condition and `Cons` fails it. */
 bool         adt_app_is_niche_option(Type t);
+/* RM3: true when `--enable=regions` is on.  Warns once per compile (TUR-W0060)
+ * on first consult; see docs/upcoming/regions-plan.md. */
+bool         regions_enabled(void);
 /* opaque-pointer-c-spelling (GRADUATED 2026-08-28): true when `def` is an
  * opaque newtype declared over a pointer (`(defopaque String :ptr<void>)`), so
  * type_c_name spells it `void *` instead of the `int64_t` carrier word --

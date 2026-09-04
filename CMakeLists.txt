@@ -161,6 +161,12 @@ add_test(
   COMMAND bash tests/run-demangle.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# RM3: the region allocator's safety properties (docs/upcoming/regions-plan.md).
+add_test(
+  NAME tur_region_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_region_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # NW6 acceptance gate: a freshly scaffolded spice (`tur new`) passes its own
 # `tur run ci` (clean + check + test) end-to-end. Hermetic: no git, no
 # network, no ../turmeric-spices, no `just`. See docs/tur-new-ci-bootstrap-plan.md.
