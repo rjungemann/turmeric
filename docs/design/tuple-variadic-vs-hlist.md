@@ -4,7 +4,7 @@
 
 **Speculative.** This is a design-comparison note, not a plan. It
 contrasts the approach sketched in
-`docs/upcoming/tuple-variadic-type-plan.md` (Option B: a primitive
+`docs/archive/tuple-variadic-type-plan.md` (Option B: a primitive
 variadic `TY_TUPLE` kind) with a hypothetical HList-style approach
 (kind-level list of types, in the Haskell `HList` tradition).
 
@@ -26,7 +26,7 @@ system is unchanged: `Tuple` is "the variadic constructor that, given
 N type arguments, yields a type." Partial application
 (`Tuple[int, _]`) is most likely rejected as a kind error.
 
-See `docs/upcoming/tuple-variadic-type-plan.md` for the full sketch.
+See `docs/archive/tuple-variadic-type-plan.md` for the full sketch.
 
 ## HList in one paragraph
 
@@ -126,7 +126,8 @@ cost.
    results are still often bad.
 
 4. **HKT plumbing has to be redone, not extended.** The S1-S8 HKT
-   work (see `MEMORY.md`) was sized against a kind system where
+   work (see `docs/guides/hkt-guide.md` for the shipped feature) was
+   sized against a kind system where
    constructors have ordinary arrow kinds. HList changes the shape of
    what a "type constructor" is -- the HKT machinery doesn't just
    need new arms, it needs to be re-derived against a richer kind
@@ -200,8 +201,10 @@ optimising for.
 
 ## See also
 
-- `docs/tuple-type-plan.md` -- Option A, the shipped/shippable plan.
-- `docs/upcoming/tuple-variadic-type-plan.md` -- Option B, deferred.
-- `MEMORY.md` entries on HKT (S1-S8) and sized types -- the closest
-  prior art for "we extended the type system and it cost what we
-  thought it would cost."
+- `docs/archive/history/tuple-type-plan.md` -- Option A, shipped
+  (`Tuple2`..`Tuple5`).
+- `docs/archive/tuple-variadic-type-plan.md` -- Option B, deferred.
+- `docs/guides/hkt-guide.md` -- the shipped HKT feature (S1-S8); the
+  closest prior art for "we extended the type system and it cost what
+  we thought it would cost." (The per-phase S1-S8 notes lived in
+  developer-local session memory, not in the repo.)

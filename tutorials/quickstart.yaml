@@ -114,33 +114,33 @@ steps:
   - id: option_constructors
     title: "Option: constructors and predicates"
     instruction: |
-      option-some wraps a value; option-none represents absence.
-      Check: (option-some? (option-some 42))
-    expected: "(option-some? (option-some 42))"
+      some wraps a value; none represents absence.
+      Check: (some? (some 42))
+    expected: "(some? (some 42))"
     alternate_accept:
-      - "(option-none? (option-none))"
-      - "(option-some? (option-none))"
-      - "(option-none? (option-some 0))"
+      - "(none? (none))"
+      - "(some? (none))"
+      - "(none? (some 0))"
     hints:
-      - "option-some wraps a value; option-some? tests for it."
-      - "Try (option-some? (option-some 42))"
-    success_message: "Correct! option-some holds a value; option-none is the empty case."
-    verify: "(option-some? (option-some 42))"
+      - "some wraps a value; some? tests for it."
+      - "Try (some? (some 42))"
+    success_message: "Correct! some holds a value; none is the empty case."
+    verify: "(some? (some 42))"
 
   - id: option_unwrap
     title: "Option: safe unwrapping"
     instruction: |
-      option-unwrap-or provides a fallback instead of panicking.
-        (option-unwrap-or (option-none) -1)
-    expected: "(option-unwrap-or (option-none) -1)"
+      unwrap-or provides a fallback instead of panicking.
+        (unwrap-or (none) -1)
+    expected: "(unwrap-or (none) -1)"
     alternate_accept:
-      - "(option-unwrap (option-some 99))"
-      - "(defn safe-div [a :int b :int] (if (= b 0) (option-none) (option-some (/ a b))))"
+      - "(unwrap (some 99))"
+      - "(defn safe-div [a :int b :int] (if (= b 0) (none) (some (/ a b))))"
     hints:
-      - "option-unwrap-or takes an option and a fallback value."
-      - "Try (option-unwrap-or (option-none) -1)"
-    success_message: "Correct! option-unwrap-or is safe -- it never panics."
-    verify: "(option-unwrap-or (option-none) -1)"
+      - "unwrap-or takes an option and a fallback value."
+      - "Try (unwrap-or (none) -1)"
+    success_message: "Correct! unwrap-or is safe -- it never panics."
+    verify: "(unwrap-or (none) -1)"
 
   - id: result_constructors
     title: "Result: success or failure"
@@ -193,20 +193,21 @@ steps:
     success_message: "Correct! The ! suffix on vec-push! signals in-place mutation."
     verify: "(let [v (vec-new)] (vec-push! v 42) (vec-len v))"
 
-  - id: for_macro
-    title: The for macro
+  - id: counted_loop
+    title: Counting with while
     instruction: |
-      for counts from lo to hi (exclusive). Type:
-        (for i 0 5 (println i))
-    expected: "(for i 0 5 (println i))"
+      Turmeric has no counted for; loops are while plus a mutable binding.
+      Type:
+        (let [^mut i 0] (while (< i 5) (println i) (set! i (+ i 1))))
+    expected: "(let [^mut i 0] (while (< i 5) (println i) (set! i (+ i 1))))"
     alternate_accept:
-      - "(for i 1 6 (println i))"
-      - "(for i 0 3 (println (* i i)))"
+      - "(let [^mut i 0] (while (< i 3) (println i) (set! i (+ i 1))))"
+      - "(let [^mut n 1] (while (<= n 5) (println (* n n)) (set! n (+ n 1))))"
     hints:
-      - "The form is (for variable lo hi body)."
-      - "Try (for i 0 5 (println i))"
-    success_message: "Correct! for binds i to 0, 1, 2, 3, 4 in turn."
-    verify: "(for i 0 5 (println i))"
+      - "^mut marks the binding writable; set! updates it."
+      - "Try (let [^mut i 0] (while (< i 5) (println i) (set! i (+ i 1))))"
+    success_message: "Correct! ^mut plus set! is how a loop counter advances."
+    verify: "(let [^mut i 0] (while (< i 5) (println i) (set! i (+ i 1))))"
 
   - id: closures
     title: Closures and fn
@@ -244,16 +245,16 @@ steps:
     instruction: |
       defstruct declares a record type. Define Point and read its fields:
         (defstruct Point [x :int y :int])
-        (let [p (Point 3 4)] (Point-x p))
-    expected: "(let [p (Point 3 4)] (Point-x p))"
+        (let [p (Point 3 4)] (.x p))
+    expected: "(let [p (Point 3 4)] (.x p))"
     alternate_accept:
       - "(defstruct Point [x :int y :int])"
-      - "(let [p (Point 3 4)] (Point-y p))"
+      - "(let [p (Point 3 4)] (.y p))"
     hints:
       - "Define the struct first: (defstruct Point [x :int y :int])"
-      - "The accessor is StructName-fieldname: (Point-x p)"
-    success_message: "Correct! defstruct generates a constructor and field accessors automatically."
-    verify: "(let [p (Point 3 4)] (Point-x p))"
+      - "Field access is (.fieldname value): (.x p)"
+    success_message: "Correct! defstruct generates a constructor; fields are read with (.name v)."
+    verify: "(let [p (Point 3 4)] (.x p))"
 
   - id: defeffect_perform
     title: Declaring and performing effects

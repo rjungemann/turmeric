@@ -1,0 +1,60 @@
+;; cps-join-point-emits-invalid-assignment regression.
+;;
+;; A non-tail cps->cps call reifies its join continuation as a DK frame, and
+;; that lifted frame fn has NO enclosing join in scope -- only its own __kont
+;; (a KK_RET delivery) and joins it defines itself. A jbody that delivers to
+;; an OUTER join therefore had nowhere to go, and the emitter fell through to
+;; its "unreachable when the term is well-formed" placeholders:
+;;
+;;     0 = __t5;     <- not an lvalue
+;;     goto L4;      <- the label lives in the PARENT function
+;;
+;; Shape required to reach it: an `if` whose merge value is consumed by an
+;; enclosing call (so the merge is a join), with a then-branch that binds a
+;; HIGHER-ORDER call result (forcing the CPS split and the heap join) and then
+;; yields a value through a `do`.
+;;
+;; The fix makes such a jbody evict the function to the direct emitter, which
+;; is the established handling -- the lifted reset/handler bodies already carry
+;; the same closedness requirement (joins_closed_rec).
+
+(defmodule cps_heap_join_outer_join_escape
+  (export)
+
+(defn mk [n : int] : (Result int cstr)
+  (if (< n 1) (err "bad") (ok n)))
+
+(defn release [x : int] : void
+  ```c
+  (void)x;
+  ```)
+
+;; Higher-order: forces the CPS transform in every caller.
+(defn hof [x : int f : (fn [int] int)] : int
+  (f x))
+
+(defn double- [x : int] : int
+  (* x 2))
+
+;; Consumes the if's merge value, so the merge becomes a join.
+(defn check [desc : cstr result : bool] : bool
+  result)
+
+(defn probe [n : int] : bool
+  (check "probe"
+    (let [r (mk n)]
+      (if (ok? r)
+        (let [k  (ok-val r)
+              nz (hof k double-)]
+          (do
+            (release k)
+            (> nz 0)))
+        false))))
+
+(defn main [] : int
+  (do
+    (println (if (probe 64) "pos" "neg"))
+    (println (if (probe 0)  "pos" "neg"))
+    0))
+
+) ;; end defmodule cps_heap_join_outer_join_escape

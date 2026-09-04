@@ -10,7 +10,7 @@
 ;;
 ;; NOTE: the direct-style (fiber) effect path currently TRUNCATES a float effect
 ;; result to an integer (prints 8), a pre-existing bug tracked in
-;; docs/reported/fiber-effect-float-result-truncated.md.  The CPS backend does
+;; docs/archive/fiber-effect-float-result-truncated.md.  The CPS backend does
 ;; NOT have that bug -- it reinterprets the float bits correctly -- so this
 ;; fixture asserts the correct value (8.6), which the CPS build produces.
 

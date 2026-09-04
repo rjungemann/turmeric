@@ -26,7 +26,7 @@
 ;; Eq [Bound]). This is safe now that definstance is idempotent -- the primitive
 ;; instances typeclass.tur shares with the auto-loaded partial stubs
 ;; (Clone [int], ...) dedupe instead of colliding; see
-;; docs/reported/load-not-idempotent-typeclass.md. range.tur is on-demand (not
+;; docs/archive/history/load-not-idempotent-typeclass.md. range.tur is on-demand (not
 ;; auto-loaded, not pulled by `for`/`#r{}`), so the extra instances reach only
 ;; programs that actually use ranges. (range-gadt-typeclass-migration-plan B2.)
 
@@ -39,7 +39,7 @@
 ;;; The internal endpoint representation (range-gadt-typeclass-migration-plan
 ;;; B1).  Declared `:copy` so a shared endpoint can be read by many predicates
 ;;; without affine move tracking complaining; see
-;;; docs/reported/defgadt-copy-and-shared-bounds.md.
+;;; docs/archive/history/defgadt-copy-and-shared-bounds.md.
 ;;;
 ;;; Since: LZ4 (GADT form: range-gadt-typeclass-migration-plan B1)
 
@@ -857,8 +857,7 @@
                          b hb
                          e he]
                      (gen []
-                       (let [^mut i
-                             s]
+                       (let [^mut i s]
                          (while (if b (<= i e) true) (yield i) (set! i (+ i 1))))))))))))
 ;;; seq/from-range-step -- convert a bounded integer Range to a Seq with a custom step.
 ;;;
@@ -903,8 +902,7 @@
                          b  hb
                          e  he]
                      (gen []
-                       (let [^mut i
-                             s]
+                       (let [^mut i s]
                          (while (if b (if (> st 0) (<= i e) (>= i e)) true)
                            (yield i)
                            (set! i (+ i st))))))))))))

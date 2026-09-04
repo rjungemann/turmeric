@@ -1,0 +1,43 @@
+;;; type-of-cast-kind-granularity: an `any` box carries a per-monomorph type id,
+;;; not the payload's TypeKind.
+;;;
+;;; Before this, every struct boxed as TY_STRUCT and every ADT as TY_ADT, so
+;;; `type-of` answered "struct" / "adt" for all of them and -- the part that
+;;; mattered -- `(cast a OtherStruct)` on an `any` holding a Point PASSED its
+;;; check and handed back a reinterpreted payload.  The two struct types were
+;;; indistinguishable at run time.
+;;;
+;;; Primitives are unchanged: their tag is still their TypeKind, which is what
+;;; the preamble's name switch and the float/bool box special cases key on.
+
+(defstruct Point [x : int y : int])
+(defstruct Other [a : int b : int])
+
+(defdata Shape (Circle :int) (Square :int))
+(defdata Color (Red) (Blue))
+
+(defn area [s : Shape] : int
+  (match s
+    (Circle r) (* r r)
+    (Square w) (* w w)))
+
+(defn main [] : int
+  (let [p (make-struct Point 3 4)
+        a (:: p any)]
+    (println (type-of a))         ; Point, not "struct"
+    (println (is? a Point))       ; true
+    (println (is? a Other))       ; false -- was true for every struct
+    (println (.x (cast a Point))))
+
+  (let [s (:: (Circle 5) any)]
+    (println (type-of s))         ; Shape, not "adt"
+    (println (is? s Shape))
+    (println (is? s Color))       ; false -- was true for every ADT
+    (println (area (cast s Shape))))
+
+  ;; primitives keep their TypeKind tag
+  (let [n (:: 7 any)]
+    (println (type-of n))
+    (println (is? n int))
+    (println (is? n cstr)))
+  0)

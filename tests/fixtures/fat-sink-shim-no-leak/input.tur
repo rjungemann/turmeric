@@ -1,0 +1,35 @@
+;; A bare fn passed to a `^fat` sink must not allocate a box per call.
+;;
+;; EX_FN_TO_FAT boxes a bare fn into a { shim, orig } fat handle.  At a `^fat`
+;; parameter nothing frees it -- the box is handed to the callee, the callee
+;; returns, and the allocation is unreachable -- so a loop grew without bound:
+;; 109 MiB over 4e6 iterations, ~28 bytes each.
+;;
+;; The box was kept on the heap because a `^fat` callee MAY take ownership and
+;; drop its argument, and that was thought invisible at the call site.  It is
+;; not: dropping goes through TUR_CLOSURE_DROP, a C macro reachable only from
+;; inline-C, and any body containing inline-C has nonretain_param_mask == 0 by
+;; construction.  So a set nonretain bit already means "neither retains nor
+;; drops", and the box can be the shared file-scope one.
+;;
+;; `callit` below is deliberately inline-C-free, which is what makes it
+;; eligible; the sibling fixture closure-drop-glue-fatshim has an inline-C body
+;; that DOES drop, and must keep its heap box.
+;;
+;; Run under LeakSanitizer by tests/run-fat-shim-leak.sh -- tests/run.sh
+;; compiles the emitted program without ASan, so a runtime leak there is
+;; invisible to it.
+;; See docs/archive/fat-sink-shim-box-leaks-per-call.md
+
+(defn callit [^fat f : (fn [int] int) x : int] : int (f x))
+
+(defn add3 [n : int] : int (+ n 3))
+
+(defn main [] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i 2000)
+      (set! acc (callit add3 acc))
+      (set! i (+ i 1)))
+    (println acc))
+  0)

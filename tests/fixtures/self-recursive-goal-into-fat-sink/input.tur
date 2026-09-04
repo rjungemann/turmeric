@@ -1,0 +1,35 @@
+;; self-recursive-goal-into-fat-sink -- a defn whose DIRECT self-call result
+;; feeds a ^fat parameter, in both the direct and let-bound spellings.
+;;
+;; Regression (docs/archive/self-recursive-fn-returning-call-into-fat-sink.md):
+;; stage-2 fat-result normalization marked the declared fn result `boxed` only
+;; AFTER the body elaborated, so a self-call inside the body consulted a
+;; still-unboxed result type, took the bare-fn auto-shim branch at its ^fat
+;; sink, and double-boxed the already-fat handle -- slot 0 of the outer box is
+;; a shim that calls the inner box as code (SIGSEGV).  A one-line forwarder
+;; "worked" because the forwarder's completed binding carried the marking; the
+;; fix forwards it to the recursion binding too (elab_fns.c RR1 block).
+
+(load "stdlib/backtrack-dfs.tur")
+
+(defn mk-succeed [] : (fn [(fn [] bool)] bool) (dfs-succeed))
+
+;; direct self-call into dfs-and's ^fat slot
+(defn chain [c : BtCell d : int] : (fn [(fn [] bool)] bool)
+  (if (<= d 0) (mk-succeed)
+    (dfs-and (dfs-choose-int c 1 2) (chain c (- d 1)))))
+
+;; let-bound self-call (binding first did not help before the fix)
+(defn chain-let [c : BtCell d : int] : (fn [(fn [] bool)] bool)
+  (if (<= d 0) (mk-succeed)
+    (let [rest (chain-let c (- d 1))]
+      (dfs-and (dfs-choose-int c 1 2) rest))))
+
+(defn main [] : int
+  (let [c (bt-cell-new 0)]
+    (println (dfs-solve (chain c 0) (fn [] true)))       ;; 1
+    (println (dfs-solve (chain c 1) (fn [] true)))       ;; 2
+    (println (dfs-solve (chain c 3) (fn [] true)))       ;; 8
+    (println (dfs-solve (chain-let c 2) (fn [] true)))   ;; 4
+    (bt-cell-free c))
+  0)

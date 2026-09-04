@@ -1,0 +1,33 @@
+;; effect-perform-in-tail-while -- docs/reported/perform-inside-loop-has-no-
+;; lowering.md, the report's own repro: a `while` that performs is the LAST form
+;; of a nil-returning function (nothing live after it).  cps_tail had no
+;; EX_WHILE arm, so a tail-position loop fell to the default and evicted the
+;; function ("unsupported form: EX_WHILE"), while the same loop followed by a
+;; live value went through build_loop.  build_loop now admits a unit exit and
+;; cps_tail routes a tail loop through it.  The abortive handler stops the loop
+;; at 3; the resuming variant counts to 10.
+(defeffect Done [score : int] : nil)
+(defeffect Tick [i : int] : nil)
+
+(defn run [] : nil
+  (let [^mut i 0]
+    (while (< i 10)
+      (when (= i 3) (perform (Done i)))
+      (set! i (+ i 1)))))
+
+(defn count-up [] : nil
+  (let [^mut i 0]
+    (while (< i 10)
+      (perform (Tick i))
+      (set! i (+ i 1)))))
+
+(defn main [] : int
+  (do
+    (handle
+      (run)
+      (Done [score] k) (println score))
+    (handle
+      (count-up)
+      (Tick [i] k) (do (when (= i 9) (println i)) (resume k 0)))
+    (println "done")
+    0))

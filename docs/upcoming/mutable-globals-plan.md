@@ -1,19 +1,31 @@
 # Mutable globals -- making `^mut` global state visible to the disciplines that already exist
 
-> **Status:** **G1, G2, G3, G4a (`^atomic`) LANDED 2026-08-05** (see §10, §15,
-> §16, §17). **G4b LANDED** (§18) and **G5a LANDED** (§19). Only G5b
-> (graduation) remains -- a judgement wanting adoption evidence, not work.
+> **Status: COMPLETE.** **G1, G2, G3, G4a (`^atomic`) LANDED 2026-08-05** (see
+> §10, §15, §16, §17). **G4b LANDED** (§18) and **G5a LANDED** (§19). **The
+> adjacent small items closed 2026-08-17** (see §20): §12.3's classifier
+> shipped as the §13.1 warning (`TUR-W0383`), §13.3's unchecked dynvar
+> `pthread_key_create` fixed, and §14's read-side plan drafted
+> ([`trusted-refinement-claims-plan.md`](trusted-refinement-claims-plan.md)).
+> **G5b closed 2026-08-18: `global-state` GRADUATED in 0.35.0** (§21) -- every
+> feature is unconditional and the row is retired. Every phase is done; this
+> plan is a record rather than open work.
+> **Addendum 2026-08-20: `write-frames` GRADUATED in 0.37.0.** Read every
+> "behind `--enable=write-frames`" below as historical -- a `#writes` frame
+> is checked unconditionally now, including the G1 global-write downgrade and
+> the §22 blast-radius argument, which was scoped to the gate that no longer
+> exists. Nothing else in this plan changes; see
+> [`checked-write-frames-plan.md`](../archive/checked-write-frames-plan.md).
 > All open questions in §9 are answered: §11 (thread-local init), §12 (`#reads`
 > strength), §13 (the remainder), §14 (whether the read side gets its own plan).
 > Written as the follow-up
-> [`def-define-consolidation-plan.md`](def-define-consolidation-plan.md) §8.4
+> [`def-define-consolidation-plan.md`](../archive/def-define-consolidation-plan.md) §8.4
 > named ("giving mutable globals a concurrency story is its own plan, not a
 > rider on this one").
 > **Type:** Language / elaboration / effects
 > **Depends on:** `^mut` on a top-level `def`, landed 2026-08-05 (D4).
-> **Related:** [`checked-write-frames-plan.md`](checked-write-frames-plan.md)
+> **Related:** [`checked-write-frames-plan.md`](../archive/checked-write-frames-plan.md)
 > (this plan is scoped to the globals half of its step 3),
-> [`sealed-opaque-plan.md`](sealed-opaque-plan.md) (the same encapsulation
+> [`sealed-opaque-plan.md`](../archive/sealed-opaque-plan.md) (the same encapsulation
 > argument, applied to handles rather than globals).
 
 ## 0. Summary
@@ -71,7 +83,7 @@ static void __tur_module_def_init(void) {
     ratio_1328   = 1.5;
 }
 
-/* S1b: explicit static initialization -- see docs/upcoming/jit-engine-plan.md. */
+/* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md. */
 static void __tur_static_init(void) {
     static int __tur_static_init_done = 0;
     if (__tur_static_init_done) return;
@@ -1390,7 +1402,7 @@ running nothing. Four directories are in that state -- `sandbox/` (17 files),
 `stm/` (7, including atomicity and deadlock-freedom), `module-transitive-imports/`
 (4), `typeclass/` (2) -- and no other harness picks them up. 30 `.tur` files
 that the summary line counts as passing. Filed as
-[docs/reported/fixture-dirs-with-loose-tur-files-pass-without-running.md](../reported/fixture-dirs-with-loose-tur-files-pass-without-running.md).
+[docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md](../archive/fixture-dirs-with-loose-tur-files-pass-without-running.md).
 Found because `module-transitive-imports` looked like the multi-module fixture
 precedent and turned out not to run; the shape G3's fixtures actually use is
 `errors/sealed-opaque-cross-module-fabricate`'s.
@@ -1618,3 +1630,202 @@ Only the judgement. The docs are written, so "a feature should not graduate
 undocumented" is discharged -- and §5's G5b entry now carries the sweep table
 for deleting the gating language if and when the row is retired, because every
 "behind `--enable=global-state`" stops being true at that moment.
+
+---
+
+## 20. Adjacent-items execution record (2026-08-17)
+
+The three small pieces this plan recommended but did not count as phases, all
+closed in one change.  None of them touches the `global-state` experiment, so
+G5b's soak clock is unaffected.
+
+### 20.1 §12.3's classifier, shipped as §13.1's warning -- `TUR-W0383`
+
+Landed **gateless**, exactly per §13.1: a `#reads` measure whose body
+directly reads a mutable global warns at its definition ("`#reads w` omits
+mutable state the body reads"), and nothing proved changes -- the congruence
+override still pays out.  `reads_scan_mut_global` (`src/compiler/elab_fns.c`,
+beside the `rt_classify_expr` walk it borrows its shape from) is
+default-deny in both of the ways that matter:
+
+- **Positive evidence only.**  Unmodeled expression kinds are not descended,
+  so an inline-C body -- every pre-existing measure -- yields no evidence and
+  no warning.  §13.1's zero-risk claim for the nine strict fixtures was
+  verified by running them: no `TUR-W0383` on any.
+- **Direct reads only.**  A global read inside a callee is not followed;
+  the transitive walk belongs to the gated refusal step, where "could not
+  see" must become a distinct answer first (the `WG_UNKNOWN` discipline G1's
+  write walk needed).
+
+Mutable *locals* and parameters deliberately do not warn: they are fresh per
+call, so they cannot make two calls differ -- the cross-call state §12.2's
+hole turns on is global by construction.  A negative probe (immutable global
+plus `^mut` local accumulator) stays silent.
+
+`refine-reads-frame-omits-global` now asserts the warning via
+`expected.stderr`, and its header was rewritten from "EXPECTED TO CHANGE" to
+"PARTIALLY CHANGED, DELIBERATELY" -- the program still prints 7, because
+warning-first means the elision survives; the header now says the *refusal*
+landing is what should flip it.  The warning fires identically under
+`--interpret` (shared elaborator).  `tur --explain TUR-W0383` carries the
+full story, including the §12.2 example.
+
+### 20.2 §13.3's defect: dynvar `pthread_key_create` is now checked
+
+`_dynvar_init_*` aborts with a message naming the process key limit instead
+of ignoring the return code -- the exact mirror of what G4b's
+`__tur_tl_key_init` already did (§18.2), so the mechanism this plan
+recommends no longer ships with its one failure mode unhandled on the older
+path.  No fixture snapshot carries `_dynvar_init_` (checked), so no regen.
+The stale "(The dynvar path still ignores it)" comment beside the
+thread-local emitter was corrected in the same change.
+
+### 20.3 §14's read-side plan: drafted
+
+[`trusted-refinement-claims-plan.md`](trusted-refinement-claims-plan.md),
+named for the tier rather than the annotation, seeded from §§12.1-12.3 and
+§13.5 as §14 specified.  Its phases: R1 the warning (landed, above), R2 the
+gated refusal (which `refine-reads-frame-omits-global` is now written to
+flip on), R3 the bracket form, R4 the general checked `#reads` -- recorded as
+a pointer whose real bill is the ECS/spice measure layer, not this compiler.
+
+### 20.4 What remains of this plan
+
+G5b alone, unchanged: graduate / shelve / bump `global-state` at the 0.38.0
+review, on adoption evidence. **Closed 2026-08-18 -- graduated early; see §21.**
+
+---
+
+## 21. G5b execution record -- graduation (2026-08-18)
+
+**`global-state` GRADUATED in 0.35.0.** Every feature the row gated is now
+unconditional: a `#writes` frame may name a mutable global (G2), an exported
+global is read-only outside its defining module (G3), and `^atomic` /
+`^thread-local` are ordinary global annotations (G4a/G4b). Suite results are in
+§21.6; the one behaviour change graduation carried is §21.4.
+
+### 21.1 Graduated early, on purpose
+
+`expires_at` was 0.38.0 and the version at graduation is 0.35.0. That is not a
+missed deadline read backwards: `expires_at` is a **deadline, not an earliest
+date**, and CLAUDE.md says graduating early is routine. The row had nothing
+left to decide -- all five phases landed on 2026-08-05, the adjacent items
+closed 2026-08-17, and G5a discharged "a feature should not graduate
+undocumented".
+
+The soak G3 wanted (§5: it is "the one phase that can reject code that compiles
+today") is the one thing worth stating honestly. It got two weeks behind a gate
+rather than a full minor line, and the risk that buys is bounded by how narrow
+the rule is: it fires only on a `set!` crossing a **real module boundary** into
+a global whose owner did not write `(export (mut g))`. A single-file program
+cannot trip it, and neither can a write from inside the owning module. No
+in-tree code or spice needed the escape hatch.
+
+### 21.2 The sweep, per §5's table
+
+Every "behind `--enable=global-state`" is a statement that stopped being true at
+this commit, so the gating language went in the same change rather than a
+follow-up:
+
+| Where | What happened |
+|---|---|
+| `src/runtime/experiments.c` | row deleted; `"global-state"` added to `GRADUATED[]` |
+| `src/runtime/globals.{c,h}` | `g_opt_global_state` deleted |
+| `src/compiler/elab_fns.c` | three gate sites unconditional (frame verdict, frame-entry global lookup, `^atomic` / `^thread-local` annotations) |
+| `src/compiler/elab_forms.c` | G3's cross-module `set!` rule unconditional; the now-unused `experiments.h` include dropped |
+| `docs/guides/mutable-globals-guide.md` | status banner rewritten; the two prose mentions and the quick-reference Gate column corrected |
+| `docs/guides/binding-forms-guide.md` | `^atomic` and `^thread-local` gate mentions dropped |
+| `docs/guides/stateful-refinements-guide.md` | "Behind `--enable=global-state`" dropped from "Naming a global in the frame" |
+| `CHANGELOG.md` | nothing removed -- historical entries stay accurate as written |
+
+`grep -rn 'enable=global-state' docs/ src/` now returns only `GRADUATED[]`'s
+comment and this plan's own history sections, as §5 specified.
+
+Two stale references outside the table were corrected on the way:
+`docs/upcoming/hold/loop-invariants-plan.md` pointed at the `global-state` row
+by file:line as a template for its own future row, and `docs/archive/README.md`
+listed `global-state` (and `jit`, already graduated 2026-08-17) as awaiting
+graduation. The latter now states the rule without naming rows, so it stops
+going stale on every graduation.
+
+### 21.3 A lingering `--enable` is a no-op, not an error
+
+`"global-state"` joins `GRADUATED[]`, so a `build.tur` `:experiments` key, a
+`~/.config/turmeric/experiments.tur` entry, or a CLI `--enable=global-state`
+left over from the gated era is accepted with `TUR-W0063` rather than the hard
+`TUR-E0310` an unknown name gets. Verified:
+
+```
+warning [TUR-W0063]: experiment 'global-state' graduated and is now on by
+default; --enable is no longer needed
+```
+
+Per the `GRADUATED[]` header the entry can age out one minor line after
+graduation, once downstream configs have dropped the flag.
+
+### 21.4 The one behaviour change, found by the suite
+
+Graduation is not purely subtractive, and the two G1 fixtures are where that
+showed up. `g1-writes-global-unverified` and `g1-writes-global-transitive` both
+declared `#writes []` over bodies that write a global, and pinned the resulting
+**silent UNVERIFIED**. That was G1-with-the-gate-off. With G2 unconditional the
+same programs are `TUR-E0382` -- exactly the tightening the experiment row
+existed to hold back ("with it on, writing a global the frame does not name is
+TUR-E0382, where G1 merely declined to verify").
+
+**The blast radius is confined to `--enable=write-frames`.** A frame is only
+*checked* under that gate, which is still experimental and did not graduate
+here, so no unflagged program changed meaning. Worth stating plainly rather than
+leaving as an inference from two fixture diffs.
+
+Both were rewritten rather than deleted, because the walk they exercise is still
+real -- only its verdict moved:
+
+- **`g1-writes-global-transitive`** now declares `#writes [hidden]` on the three
+  writers. This is a *stronger* assertion than the version it replaces: VERIFIED
+  requires the walk to have found the global through a parameterless callee
+  **and** matched it against the declared name, where before it only had to
+  notice that some global was written. A walk that lost the transitive fact
+  would report `global=NO` and still be VERIFIED (declared-but-unwritten is a
+  legal upper bound), so the `global=YES` column is what catches it -- which is
+  why the fixture asserts the whole line.
+- **`g1-writes-global-unverified`** now pins all three answers the `global=`
+  column can give, built around the route that is *still* silent after
+  graduation: `global=UNKNOWN`. A call through a fn-typed **parameter** is
+  opaque to the walk -- the callee is whatever the caller passed -- so the
+  verdict is UNVERIFIED with no diagnostic, because nothing was exceeded; the
+  question was unanswerable. Nothing else in the suite pinned that route.
+
+### 21.5 The rest of the fixtures
+
+Three asserted the gate's own rejection and had nothing left to test, so they
+were deleted rather than rewritten: `errors/g2-writes-global-needs-gate`,
+`errors/g4-atomic-needs-gate`, `errors/g4b-thread-local-needs-gate`.
+
+That is not a loss of coverage: what they pinned was that the annotation is
+refused **without** the gate, which is not a property that survives graduation.
+What each feature *does* is still pinned by its positive fixture
+(`g2-writes-global-frame`, `g3-export-mut-permits-write`, `g4-atomic-global`,
+`g4b-thread-local-global`) and by the rejections that are about the feature
+rather than the gate -- `^atomic` without `^mut`, `^atomic` on a non-scalar,
+`^thread-local` with `^atomic`, a `^thread-local` initializer referencing
+another, a cross-module write, and `(export (mut ...))` on a function or an
+immutable global.
+
+The thirteen `flags` files carrying `--enable=global-state` were stripped of it
+(nine became empty and were deleted; `g2-writes-global-frame` and the two
+`g2-writes-global-*` error fixtures keep `--enable=write-frames`, which is a
+**different** gate and still live -- it is what *checks* a frame). Four fixture
+header comments that opened "behind --enable=global-state" were reworded, and
+the two rewritten G1 headers carry a "SINCE GRADUATION" paragraph so the next
+reader sees why the verdicts differ from the plan's §10.5 description.
+
+No `expected.c` snapshot moved: graduation removes a gate, it does not change
+what gated code emits.
+
+### 21.6 Suites
+
+`bash tests/run.sh` -> **2616 passed, 0 failed**. `bash tests/run-turi.sh` ->
+**1798 passed, 0 failed, 707 skipped**. Both run after the fixture rewrites
+above; the five failures the first run surfaced were the two G1 verdict changes
+and the three deleted directories, all resolved rather than carried.

@@ -15,6 +15,7 @@
 static const SourceFile *files_[MAX_FILES];
 static size_t            file_count_;
 static bool              had_error_;
+static uint64_t          error_serial_;   /* count of SHOWN (uncaptured) errors */
 static bool              use_color_ = false;
 static bool              json_output_ = false;  /* Phase 8: JSON diagnostics mode */
 
@@ -45,6 +46,14 @@ void diag_register_file(const SourceFile *file) {
 }
 
 bool diag_had_error(void) { return had_error_; }
+
+/* Re-mark the error flag after a nested evaluation's diag_reset cleared it.
+ * Used by macro-time evaluation (src/turi/macro_env.c, read-string): the
+ * nested eval resets the diagnostic slate for its own parse/elaborate, which
+ * would otherwise let a compile that already reported errors exit 0. */
+void diag_force_had_error(void) { had_error_ = true; }
+
+uint64_t diag_error_serial(void) { return error_serial_; }
 
 /* Speculative-elaboration capture frames (see diag.h). */
 #define MAX_CAPTURE_DEPTH 16
@@ -80,7 +89,15 @@ uint32_t diag_pop_capture(void) {
  * pre-capture behavior.  Errors and their subordinate notes/help are
  * suppressed together so a swallowed error never leaves orphaned notes. */
 static bool diag_intercept(DiagLevel level) {
-    if (capture_depth_ <= 0) return false;
+    if (capture_depth_ <= 0) {
+        /* An error that reaches the user.  Counted here -- the one gate every
+         * emit entry point passes through -- so callers can bracket a window
+         * and ask "did this elaboration surface an error?" without treating a
+         * captured-and-swallowed speculative error as one.  Consumed by the
+         * macro-expansion provenance note (elab_call.c). */
+        if (level == DIAG_ERROR) error_serial_++;
+        return false;
+    }
     if (level == DIAG_WARNING) return false;
     if (level == DIAG_ERROR && capture_depth_ <= MAX_CAPTURE_DEPTH)
         capture_err_[capture_depth_ - 1]++;
@@ -102,6 +119,25 @@ void diag_reset(void) {
     had_error_ = false;
     file_count_ = 0;
     for (size_t i = 0; i < MAX_FILES; i++) files_[i] = NULL;
+}
+
+size_t diag_files_capacity(void) { return MAX_FILES; }
+
+size_t diag_files_save(const SourceFile **out, size_t cap) {
+    size_t n = (cap < MAX_FILES) ? cap : MAX_FILES;
+    for (size_t i = 0; i < n; i++) out[i] = files_[i];
+    return n;
+}
+
+void diag_files_restore(const SourceFile **in, size_t n) {
+    if (n > MAX_FILES) n = MAX_FILES;
+    /* Skip id 0: the caller has just registered THIS turn's source blob there,
+     * and the saved entry is the previous turn's, which must not clobber it. */
+    for (size_t i = 1; i < n; i++) {
+        if (!in[i] || files_[i]) continue;
+        files_[i] = in[i];
+        if (i >= file_count_) file_count_ = i + 1;
+    }
 }
 
 /* Check if stderr is a TTY (for auto-color detection) */
@@ -191,6 +227,10 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH:   return "TUR-E0708";
         case TUR_E0709_RETURN_TYPE_MISMATCH:             return "TUR-E0709";
         case TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE: return "TUR-E0710";
+        case TUR_E0711_MODULE_TOPLEVEL_EXPR:             return "TUR-E0711";
+        case TUR_E0712_EXPR_NESTING_TOO_DEEP:            return "TUR-E0712";
+        case TUR_E0713_DEFINITION_IN_TAIL_POSITION:      return "TUR-E0713";
+        case TUR_E0714_NICHE_ELEMENT_ERASED_STORE:       return "TUR-E0714";
         /* ET4: effect scope errors */
         case TUR_E0250_ROW_VAR_ESCAPES_SCOPE:            return "TUR-E0250";
         case TUR_E0253_EFFECT_NOT_IN_SCOPE:              return "TUR-E0253";
@@ -237,6 +277,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0300_UNION_TYPE_MISMATCH:        return "TUR-E0300";
         case TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH: return "TUR-E0301";
         case TUR_E0302_SEALED_OPAQUE_CAST:         return "TUR-E0302";
+        case TUR_E0303_NON_NULL_OPAQUE_ZERO:       return "TUR-E0303";
         /* IT3: Intersection type errors */
         case TUR_E0350_INTERSECTION_UNSATISFIABLE:   return "TUR-E0350";
         case TUR_E0351_INTERSECTION_MEMBER_MISMATCH: return "TUR-E0351";
@@ -254,6 +295,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0380_REFINE_TYPE_ARG_UNENFORCED: return "TUR-W0380";
         case TUR_E0381_WRITES_FRAME_INVALID:       return "TUR-E0381";
         case TUR_E0382_WRITES_FRAME_EXCEEDED:      return "TUR-E0382";
+        case TUR_W0383_READS_FRAME_OMITS_MUTABLE:  return "TUR-W0383";
         /* MS2: Multi-shot continuation capture analysis */
         case TUR_E0500_MULTISHOT_UNIQUE_CAPTURE:      return "TUR-E0500";
         case TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER: return "TUR-E0501";
@@ -282,12 +324,17 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_D0003_FX_ROW_LEGACY_AT:          return "TUR-D0003";
         /* XF: experimental-flag mechanism */
         case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
+        case TUR_E0311_UNKNOWN_ENGINE:            return "TUR-E0311";
         case TUR_W0060_EXPERIMENTAL_PROTOTYPE:    return "TUR-W0060";
         case TUR_W0061_EXPERIMENTAL_BETA:         return "TUR-W0061";
+        case TUR_E0023_BIND_VOID_EXPRESSION:      return "TUR-E0023";
+        case TUR_E0024_READS_FRAME_INVALID:       return "TUR-E0024";
         case TUR_E0620_EXPORTS_FX_ROW:            return "TUR-E0620";
         case TUR_E0621_TUR_VERSION_BELOW_FLOOR:   return "TUR-E0621";
         case TUR_E0622_TUR_VERSION_MALFORMED:     return "TUR-E0622";
         case TUR_W0623_TUR_VERSION_ABOVE_CEILING: return "TUR-W0623";
+        case TUR_W0624_NO_ENTRY_POINT_NEAR_MISS:   return "TUR-W0624";
+        case TUR_W0706_IMAGE_GLOBAL_UNREGISTERED:  return "TUR-W0706";
         default:                          return "";
     }
 }
@@ -352,6 +399,10 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0708") == 0) return TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH;
     if (strcmp(s, "TUR-E0709") == 0) return TUR_E0709_RETURN_TYPE_MISMATCH;
     if (strcmp(s, "TUR-E0710") == 0) return TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE;
+    if (strcmp(s, "TUR-E0711") == 0) return TUR_E0711_MODULE_TOPLEVEL_EXPR;
+    if (strcmp(s, "TUR-E0712") == 0) return TUR_E0712_EXPR_NESTING_TOO_DEEP;
+    if (strcmp(s, "TUR-E0713") == 0) return TUR_E0713_DEFINITION_IN_TAIL_POSITION;
+    if (strcmp(s, "TUR-E0714") == 0) return TUR_E0714_NICHE_ELEMENT_ERASED_STORE;
     /* ET4: effect scope errors */
     if (strcmp(s, "TUR-E0250") == 0) return TUR_E0250_ROW_VAR_ESCAPES_SCOPE;
     if (strcmp(s, "TUR-E0253") == 0) return TUR_E0253_EFFECT_NOT_IN_SCOPE;
@@ -394,6 +445,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0300") == 0) return TUR_E0300_UNION_TYPE_MISMATCH;
     if (strcmp(s, "TUR-E0301") == 0) return TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH;
     if (strcmp(s, "TUR-E0302") == 0) return TUR_E0302_SEALED_OPAQUE_CAST;
+    if (strcmp(s, "TUR-E0303") == 0) return TUR_E0303_NON_NULL_OPAQUE_ZERO;
     /* IT3: Intersection type errors */
     if (strcmp(s, "TUR-E0350") == 0) return TUR_E0350_INTERSECTION_UNSATISFIABLE;
     if (strcmp(s, "TUR-E0351") == 0) return TUR_E0351_INTERSECTION_MEMBER_MISMATCH;
@@ -411,6 +463,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0380") == 0) return TUR_W0380_REFINE_TYPE_ARG_UNENFORCED;
     if (strcmp(s, "TUR-E0381") == 0) return TUR_E0381_WRITES_FRAME_INVALID;
     if (strcmp(s, "TUR-E0382") == 0) return TUR_E0382_WRITES_FRAME_EXCEEDED;
+    if (strcmp(s, "TUR-W0383") == 0) return TUR_W0383_READS_FRAME_OMITS_MUTABLE;
     /* MS2: Multi-shot continuation capture analysis */
     if (strcmp(s, "TUR-E0500") == 0) return TUR_E0500_MULTISHOT_UNIQUE_CAPTURE;
     if (strcmp(s, "TUR-E0501") == 0) return TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER;
@@ -439,12 +492,17 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-D0003") == 0) return TUR_D0003_FX_ROW_LEGACY_AT;
     /* XF: experimental-flag mechanism */
     if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
+    if (strcmp(s, "TUR-E0311") == 0) return TUR_E0311_UNKNOWN_ENGINE;
     if (strcmp(s, "TUR-W0060") == 0) return TUR_W0060_EXPERIMENTAL_PROTOTYPE;
     if (strcmp(s, "TUR-W0061") == 0) return TUR_W0061_EXPERIMENTAL_BETA;
+    if (strcmp(s, "TUR-E0023") == 0) return TUR_E0023_BIND_VOID_EXPRESSION;
+    if (strcmp(s, "TUR-E0024") == 0) return TUR_E0024_READS_FRAME_INVALID;
     if (strcmp(s, "TUR-E0620") == 0) return TUR_E0620_EXPORTS_FX_ROW;
     if (strcmp(s, "TUR-E0621") == 0) return TUR_E0621_TUR_VERSION_BELOW_FLOOR;
     if (strcmp(s, "TUR-E0622") == 0) return TUR_E0622_TUR_VERSION_MALFORMED;
     if (strcmp(s, "TUR-W0623") == 0) return TUR_W0623_TUR_VERSION_ABOVE_CEILING;
+    if (strcmp(s, "TUR-W0624") == 0) return TUR_W0624_NO_ENTRY_POINT_NEAR_MISS;
+    if (strcmp(s, "TUR-W0706") == 0) return TUR_W0706_IMAGE_GLOBAL_UNREGISTERED;
     return DIAG_CODE_NONE;
 }
 
@@ -546,6 +604,23 @@ static const DiagExplanation diag_explanations_[] = {
       "using a top-level-only form (defn, defstruct) inside an expression\n"
       "context, or a control-flow form outside a function body.\n"
     },
+    { TUR_E0714_NICHE_ELEMENT_ERASED_STORE,
+      "TUR-E0714: Niche-represented element stored through an erased container access\n"
+      "\n"
+      "By default (the Option niche; TUR_OPTION_NICHE=0 restores the tagged\n"
+      "form) an eligible (Option P) is carried as its\n"
+      "payload pointer, and a Vec stores such an element in its slot as that\n"
+      "one word (container-element-form-plan, CE2).  The slot convention is\n"
+      "decided per element monomorph, so every store and read must be able to\n"
+      "name the element type.  This store cannot: the receiver's element type\n"
+      "is still erased here (a raw :int-typed receiver, or an unresolved type\n"
+      "variable), so it would put a second convention into the same vec that\n"
+      "no reader can tell apart from the first.\n"
+      "\n"
+      "Ascribe the receiver to its concrete element type at this site, e.g.\n"
+      "  (vec-push! (:: v (Vec (Option String))) x)\n"
+      "or give the helper a typed (Vec A) parameter so the call specializes.\n"
+    },
     { TUR_E0005_USE_AFTER_MOVE,
       "TUR-E0005: Use after move\n"
       "\n"
@@ -570,6 +645,14 @@ static const DiagExplanation diag_explanations_[] = {
       "Effect handler case bodies are emitted as separate C functions with\n"
       "no access to the enclosing stack frame, so borrow-typed (&T / &mut T)\n"
       "variables from the enclosing scope cannot be captured by them.\n"
+      "\n"
+      "A capturing closure also cannot be passed to an effect-annotated\n"
+      "(fn ...) parameter that is cfnptr, variadic, or has more than 5\n"
+      "parameters: those shapes keep the thin calling convention, which\n"
+      "has no slot for a closure environment.  Reduce the signature, or\n"
+      "pass the captured state as explicit arguments.  (Ordinary\n"
+      "effect-annotated parameters take capturing closures as of the\n"
+      "2026-08-16 fat-normalization increment.)\n"
     },
     { TUR_E0009_EFFECT_ROW_MISMATCH,
       "TUR-E0009: Effect-row mismatch\n"
@@ -1227,6 +1310,29 @@ static const DiagExplanation diag_explanations_[] = {
       "as a one-word handle; `(cast h T)` reads it back as T.  See\n"
       "docs/archive/byvalue-adt-int-cast-plan.md.\n",
     },
+    { TUR_E0303_NON_NULL_OPAQUE_ZERO,
+      "TUR-E0303: Cannot ascribe the literal 0 into a :non-null opaque\n"
+      "\n"
+      "`(defopaque String :ptr<void> :non-null)` is the type author's claim\n"
+      "that the handle's valid values exclude the null pointer -- no producer\n"
+      "returns 0.  Ascribing the literal 0 into such a type is a provable\n"
+      "violation of that claim, so it is rejected at compile time:\n"
+      "\n"
+      "  (:: 0 :String)                 ; error\n"
+      "  (:: (:: 0 :ptr<void>) String)  ; error -- peeled through the relabel\n"
+      "\n"
+      "Why this matters: by default (the Option niche), an `(Option T)` over a\n"
+      ":non-null T is carried AS the payload pointer with `(none)` as NULL.  A\n"
+      "null smuggled into T makes `(some x)` and `(none)` the same value.  The\n"
+      "niche `Some` constructor also checks at runtime (a null there aborts\n"
+      "with a message naming the type) for the paths elaboration cannot see --\n"
+      "inline-C bodies and computed values -- but a violation visible in the\n"
+      "source should not wait for runtime.\n"
+      "\n"
+      "Fix: express absence as `(none)` / `option<T>`, or construct the value\n"
+      "through the type's real constructors.  If the type genuinely has a null\n"
+      "state, its declaration should not say :non-null.\n",
+    },
     { TUR_E0302_SEALED_OPAQUE_CAST,
       "TUR-E0302: Cannot cast across a sealed opaque's representation boundary\n"
       "\n"
@@ -1254,9 +1360,11 @@ static const DiagExplanation diag_explanations_[] = {
       "representation outside, that module should export a function for it --\n"
       "which makes the escape explicit and reviewable instead of implicit.\n"
       "\n"
-      "This check is part of the `sealed-opaque` experiment; without\n"
-      "--enable=sealed-opaque, `:sealed` parses but imposes nothing.  See\n"
-      "docs/upcoming/sealed-opaque-plan.md.\n",
+      "This check is unconditional.  It was the `sealed-opaque` experiment\n"
+      "until 0.34.0, where `:sealed` parsed but imposed nothing unless you\n"
+      "passed --enable=sealed-opaque; it now enforces in every build.  Only\n"
+      "code that deliberately wrote `:sealed` is affected.  See\n"
+      "docs/archive/sealed-opaque-plan.md.\n",
     },
     { TUR_E0296_WITH_NOT_COPY,
       "TUR-E0296: `with` requires a :copy type\n"
@@ -1555,6 +1663,45 @@ static const DiagExplanation diag_explanations_[] = {
       "Only a body with no inline C is checked.  An inline-C body cannot be\n"
       "walked, so its frame stays trusted-with-declaration and never reports\n"
       "this code -- checked-when-checkable, never checked-by-pretending.\n" },
+    { TUR_W0383_READS_FRAME_OMITS_MUTABLE,
+      "TUR-W0383: `#reads` frame omits mutable state the body reads\n"
+      "\n"
+      "A measure declared `#reads <param>` (or `#reads [a b]`) promises that\n"
+      "the named parameters are the only mutable state it depends on.  The\n"
+      "promise is TRUSTED, not\n"
+      "checked, and it pays out in proofs: inside a `frozen` region the\n"
+      "refinement solver treats two calls of the measure as one value and\n"
+      "elides the caller-side crossing check.\n"
+      "\n"
+      "This body also reads mutable state the frame omits -- a mutable\n"
+      "global (which no frame can name), or state rooted in a PARAMETER the\n"
+      "frame does not list -- so the promise is broken as written:\n"
+      "\n"
+      "    (def ^mut fudge 1)\n"
+      "    (defn alive? [^borrow w : World e : int] #reads w : bool\n"
+      "      (> fudge 0))   ;; TUR-W0383: reads `fudge`, frame says only `w`\n"
+      "\n"
+      "    (defn linked? [^borrow w : World ^borrow g : Grid e : int]\n"
+      "                  #reads w : bool\n"
+      "      (> (.m g) 0))  ;; TUR-W0383: reads g's state, frame omits g\n"
+      "\n"
+      "Another function can mutate that state between two calls the solver\n"
+      "proved identical, and the elided check will not catch it -- the program\n"
+      "silently crosses on a predicate that is false.  The measure's own\n"
+      "internal safety check (if it has one) still runs; only the caller-side\n"
+      "proof is unearned.\n"
+      "\n"
+      "Fix a global read by threading the state through a parameter the frame\n"
+      "can name, or by making the global immutable; fix an omitted-parameter\n"
+      "read by naming the parameter (`#reads [w g]` -- the grant then\n"
+      "requires BOTH frozen at the site).\n"
+      "\n"
+      "The same evidence also REFUSES the congruence override, so the\n"
+      "crossing must be proven some other way; an undecided one is TUR-W0372\n"
+      "(an error under --strict-refine).  Only a demonstrable read does this:\n"
+      "an inline-C body is unwalkable, yields no evidence, stays silent, and\n"
+      "keeps the trusted grant.  See\n"
+      "docs/upcoming/trusted-refinement-claims-plan.md.\n" },
     { TUR_W0373_REFINE_NONLINEAR,
       "TUR-W0373: Nonlinear predicate subterm treated as uninterpreted\n"
       "\n"
@@ -2098,6 +2245,23 @@ static const DiagExplanation diag_explanations_[] = {
       "correct the spelling (or drop the flag if the feature has graduated and no\n"
       "longer needs a gate).\n",
     },
+    /* engine-selection-plan: unknown :engine value */
+    { TUR_E0311_UNKNOWN_ENGINE,
+      "TUR-E0311: unknown :engine value\n"
+      "\n"
+      "build.tur's `:engine` key (or the --engine flag / TUR_ENGINE env var)\n"
+      "named an execution engine outside the recognized set: \"cc\" (compile\n"
+      "via the C emitter and run the binary -- the default and the reference),\n"
+      "\"jit\" (the in-process MIR engine; needs a -DTUR_JIT=ON build and the\n"
+      "`jit` experiment), or \"interp\" (the tree-walking interpreter).\n"
+      "\n"
+      "Unknown values are a hard error rather than a fallback: the engines\n"
+      "differ in SEMANTICS (see `#?(:tur ... :turi ...)`, inline-C carve-outs,\n"
+      "c2mir divergences), so silently substituting one is the worst outcome.\n"
+      "\n"
+      "Fix: correct the spelling.  The precedence ladder is\n"
+      "  --engine > TUR_ENGINE env > build.tur :engine > \"cc\".\n",
+    },
     /* XF: prototype experimental feature in use */
     { TUR_W0060_EXPERIMENTAL_PROTOTYPE,
       "TUR-W0060: experimental feature (prototype) in use\n"
@@ -2124,6 +2288,61 @@ static const DiagExplanation diag_explanations_[] = {
       "code written against the beta surface keeps compiling.  The warning fires\n"
       "regardless of how the experiment was enabled -- there is no gate to\n"
       "silence it.\n",
+    },
+    /* multiple-reads-params */
+    { TUR_E0024_READS_FRAME_INVALID,
+      "TUR-E0024: malformed or duplicated `#reads` frame\n"
+      "\n"
+      "`#reads` names the `^borrow` parameters whose mutable state a measure\n"
+      "reads.  It takes one name or a vector, exactly like `#writes`:\n"
+      "\n"
+      "  (defn alive? [^borrow w : W e : int] #reads w : bool ...)        ; ok\n"
+      "  (defn f [^borrow w : W ^borrow g : G] #reads [w g] : bool ...)   ; ok\n"
+      "\n"
+      "Rejected shapes:\n"
+      "\n"
+      "  #reads w #reads g   two frames -- name every parameter in ONE frame\n"
+      "  #reads [w w]        a name repeated\n"
+      "  #reads [w zz]       a name that is not a parameter\n"
+      "  #reads []           an empty frame\n"
+      "\n"
+      "An empty frame is rejected where `#writes []` is allowed, because the two\n"
+      "annotations claim different things.  `#writes []` usefully asserts *this\n"
+      "body writes nothing*; an empty read frame says exactly what omitting the\n"
+      "annotation says, and one claim with two spellings gives the solver two\n"
+      "ways to ask the same question.\n"
+      "\n"
+      "A multi-parameter frame is CONJUNCTIVE where it matters: the congruence\n"
+      "grant applies only when EVERY named parameter is frozen at the call site.\n"
+      "One unfrozen parameter is enough for two occurrences of the measure to\n"
+      "denote different values, which is the crossing check the grant elides.\n",
+    },
+    /* let-binding-void-call-emits-invalid-c */
+    { TUR_E0023_BIND_VOID_EXPRESSION,
+      "TUR-E0023: cannot bind an expression of type :void\n"
+      "\n"
+      "A `let` binding names a value, and a `:void` expression does not produce\n"
+      "one -- there is nothing for the name to refer to, and the binding could\n"
+      "never be legally read.\n"
+      "\n"
+      "This usually comes up when sequencing a side effect inside a binding\n"
+      "list, which is natural to reach for when the `let` body has to end in a\n"
+      "particular value:\n"
+      "\n"
+      "  (let [buf (alloc-buf 32)\n"
+      "        _   (fill-buf! buf 32 255)]   ; :void -- rejected\n"
+      "    (check buf))\n"
+      "\n"
+      "Sequence it with `do` instead:\n"
+      "\n"
+      "  (let [buf (alloc-buf 32)]\n"
+      "    (do\n"
+      "      (fill-buf! buf 32 255)\n"
+      "      (check buf)))\n"
+      "\n"
+      "Or give the helper a return value it is useful to bind (a count, a\n"
+      "status, the buffer itself), which also lets it be threaded through a\n"
+      "binding list.\n",
     },
     /* exports-map-syntax-tighten-plan */
     { TUR_E0620_EXPORTS_FX_ROW,
@@ -2306,6 +2525,39 @@ bool diag_explain(DiagCode code, FILE *out) {
     return false;
 }
 
+
+Span diag_translate_span(Span span) {
+    const SourceFile *f = diag_source_file(span.file_id);
+    if (!f) return span;
+    if (!f->xform_map || !f->orig_src) {
+        /* No syntax transform, but a stripped `#lang` line still shifts every
+         * offset relative to the file on disk. */
+        span.off_start += (uint32_t)f->head_offset;
+        span.off_end   += (uint32_t)f->head_offset;
+        return span;
+    }
+
+    size_t orig_start = sweet_map_translate_offset(f->xform_map, span.off_start);
+    size_t orig_end   = sweet_map_translate_offset(f->xform_map, span.off_end);
+    if (orig_end < orig_start) orig_end = orig_start;
+
+    uint32_t line = 1, col = 1;
+    for (size_t i = 0; i < orig_start && i < f->orig_len; i++) {
+        if (f->orig_src[i] == '\n') { line++; col = 1; }
+        else col++;
+    }
+    uint32_t col_e = col;
+    for (size_t i = orig_start; i < orig_end && i < f->orig_len; i++) {
+        if (f->orig_src[i] == '\n') col_e = 1;
+        else col_e++;
+    }
+    span.line      = line;
+    span.col_start = col;
+    span.col_end   = col_e;
+    span.off_start = (uint32_t)(orig_start + f->head_offset);
+    span.off_end   = (uint32_t)(orig_end + f->head_offset);
+    return span;
+}
 
 /* Render a multi-line snippet with context, underlines, and colors.
    Phase 8: Enhanced with configurable options and multi-span support. */

@@ -20,6 +20,14 @@ import sys
 import html as html_module
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import packlib  # noqa: E402  (sibling module, path fixed up just above)
+# The site chrome -- nav list, sidebar groups, tooltips -- lives in genguides
+# so guides, API docs and the spices site show the same links in the same order
+# and describe the same page the same way.
+from genguides import (build_page_header, build_sidebar,  # noqa: E402
+                       SIDEBAR_DRAWER_JS)
+
 
 # ---------------------------------------------------------------------------
 # Parser
@@ -190,6 +198,64 @@ def _parse_docstring(lines):
     return sections
 
 
+def strip_line_comment(line):
+    """Return `line` with any `;` comment removed, respecting string literals.
+
+    Used when scanning source for forms: a form written inside a comment (a
+    docstring example, a commented-out declaration) is prose, not code, and
+    must not be read as the real thing.
+    """
+    out = []
+    in_str = False
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if in_str:
+            if c == '\\':
+                # Copy the escape AND what it escapes: a `\"` keeps the string
+                # open, so the `;` after it is still string content, and the
+                # text this returns has to stay verbatim for any other caller.
+                out.append(line[i:i + 2])
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == ';':
+            break
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
+
+def apply_path_fallback_name(module, rel_parts):
+    """Refine a filename-derived module name with the file's subdirectory.
+
+    Only applies when the file declares no `(defmodule ...)`: a declared name is
+    the module's identity and its page URL, and neither is ours to rewrite.
+
+    The bare-stem fallback is keyed on the *basename*, so any two same-named
+    files anywhere under the source root resolve to one module name and one
+    page -- whichever renders last wins and the other silently does not exist.
+    That is not hypothetical: `stdlib/capability.tur` and
+    `stdlib/test/capability.tur` both became `tur/capability`, and the shipped
+    `tur-capability.html` held the *test* mocks while the real module had no
+    page. Everything under a subdirectory is a same-named sibling waiting to
+    happen, so the fallback carries the subdirectory:
+
+        stdlib/capability.tur       -> tur/capability
+        stdlib/test/capability.tur  -> tur/test/capability
+        stdlib/seq/core.tur         -> tur/seq/core
+    """
+    if module.get('name_declared'):
+        return
+    if not rel_parts or len(rel_parts) < 2:
+        return
+    stem = Path(rel_parts[-1]).stem
+    module['name'] = 'tur/' + '/'.join([*rel_parts[:-1], stem])
+
+
 def parse_tur_file(path):
     """
     Parse a .tur file and return a module description dict:
@@ -221,6 +287,7 @@ def parse_tur_file(path):
 
     module = {
         'name': None,
+        'name_declared': False,
         'file_stem': file_stem,
         'file_path': str(path),
         'exports': set(),
@@ -230,16 +297,27 @@ def parse_tur_file(path):
 
     # ------------------------------------------------------------------
     # Step 1: Find (defmodule tur/name ...)
+    #
+    # Scan code only.  A `defmodule` written inside a `;;` comment -- as an
+    # example in a module docstring, which is exactly where one gets written --
+    # used to win, because it appears before the real form.  That is how
+    # stdlib/turi/eval.tur came to publish itself as `myplugin/core`: its
+    # docstring shows `(defmodule myplugin/core ...)` at line 5 and its own
+    # declaration sits at line 20.  The result was a bogus myplugin-core.html
+    # on the site and no page at all for turi/eval.
     # ------------------------------------------------------------------
     module_re = re.compile(r'\(\s*defmodule\s+([\w/\-]+)')
     for line in lines:
-        m = module_re.search(line)
+        m = module_re.search(strip_line_comment(line))
         if m:
             module['name'] = m.group(1)
+            module['name_declared'] = True
             break
 
     if module['name'] is None:
-        # Derive pseudo-name from filename
+        # Derive a pseudo-name from the filename.  Callers that know the file's
+        # position under the source root refine this via apply_path_fallback_name
+        # -- the bare stem collides across subdirectories.
         module['name'] = 'tur/' + file_stem
 
     # ------------------------------------------------------------------
@@ -474,6 +552,19 @@ TESTABLE_RE = re.compile(
     r'^(-?[0-9]+\.[0-9]+|-?[0-9]+|true|false|"[^"]*"|nil)$'
 )
 
+# An explicit opt-out for an example whose output is correct as documentation
+# but not reproducible in the doctest harness -- e.g. one that depends on
+# stdout being a tty. Spelled as a trailing `; doctest: <reason>` on the
+# `; =>` line:
+#
+#   ;;;   (term/bold "hello")  ; => "\x1b[1mhello\x1b[0m"  ; doctest: requires a tty
+#
+# Without this the case is still dropped -- TESTABLE_RE is anchored, so any
+# trailing text stops it matching -- but silently and by accident. Declaring
+# it keeps the reason in the docstring, where the reader of the rendered docs
+# also benefits from knowing the output is environment-dependent.
+DOCTEST_ANNOT_RE = re.compile(r';\s*doctest:\s*(.+?)\s*$')
+
 
 class DocTestCase:
     """A single testable docstring example."""
@@ -505,6 +596,7 @@ def extract_doctest_cases(module_name, defn_name, doc):
     lines = [l.strip() for l in doc['example'].splitlines() if l.strip()]
     cases = []
     pending_setup = []
+    skipped = extract_doctest_cases.last_skipped = []
 
     for line in lines:
         if '; =>' not in line:
@@ -513,6 +605,12 @@ def extract_doctest_cases(module_name, defn_name, doc):
         expr_part, expected_raw = line.split('; =>', 1)
         expr_part = expr_part.strip()
         expected_raw = expected_raw.strip()
+        annot = DOCTEST_ANNOT_RE.search(expected_raw)
+        if annot:
+            # Declared un-runnable here; not a failure and not a silent drop.
+            skipped.append((defn_name, annot.group(1)))
+            pending_setup = []
+            continue
         if TESTABLE_RE.match(expected_raw):
             # Quoted string: strip outer quotes since println prints the raw
             # cstr value without surrounding quotes.
@@ -569,6 +667,12 @@ CSS = """\
   --syn-str:       #D9735A;
   --syn-type:      #7AC4B8;
   --syn-num:       #A8C98A;
+
+  /* Secondary accent -- gold leads, green answers it. Same pairing the home
+     page uses, so emphasis reads the same across the whole site. */
+  --green:         #A8C98A;
+  --green-subtle:  rgba(168,201,138,0.10);
+  --green-line:    rgba(168,201,138,0.25);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -585,6 +689,10 @@ body {
 
 a { color: var(--gold-bright); text-decoration: none; }
 a:hover { text-decoration: underline; }
+
+/* Emphasis is green here for the same reason it is green on the home page:
+   gold is the site's primary, and prose emphasis wants the second voice. */
+em { color: var(--green); font-style: italic; }
 
 /* Header */
 .site-header {
@@ -609,15 +717,51 @@ a:hover { text-decoration: underline; }
   text-decoration: none;
 }
 .site-header .nav-logo:hover { text-decoration: none; }
-.site-header nav { display: flex; gap: 2px; font-size: 0.875rem; }
-.site-header nav a {
+.site-header .nav-links { display: flex; gap: 2px; font-size: 0.875rem; }
+.site-header .nav-links a {
   color: var(--text-sec);
   padding: 6px 12px;
   border-radius: 6px;
   transition: color 0.12s, background 0.12s;
+  white-space: nowrap;
 }
-.site-header nav a:hover { color: var(--text-primary); background: var(--bg-hover); text-decoration: none; }
-.site-header nav a.active { color: var(--gold-bright); }
+.site-header .nav-links a:hover { color: var(--text-primary); background: var(--bg-hover); text-decoration: none; }
+.site-header .nav-links a.active { color: var(--gold-bright); }
+
+/* Right-hand cluster -- same GitHub / Try it pair the hand-written pages show */
+.site-header .nav-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+/* When a page has a filter box, that box takes the free space and the button
+   cluster tucks in beside it instead of fighting it for the same auto margin. */
+.site-header .search-wrap + .nav-right { margin-left: 0; }
+
+.btn-ghost, .btn-gold {
+  font-family: inherit;
+  font-size: 0.84rem;
+  padding: 7px 14px;
+  border-radius: 7px;
+  white-space: nowrap;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.btn-ghost {
+  color: var(--text-sec);
+  border: 1px solid var(--border-str);
+  background: transparent;
+}
+.btn-ghost:hover { color: var(--text-primary); background: var(--bg-hover); text-decoration: none; }
+.btn-gold {
+  font-weight: 500;
+  color: #000;
+  padding: 7px 18px;
+  border: 1px solid var(--gold);
+  background: var(--gold);
+}
+.btn-gold:hover { background: var(--gold-bright); border-color: var(--gold-bright); text-decoration: none; }
 
 /* Search */
 .search-wrap { margin-left: auto; }
@@ -672,20 +816,33 @@ a:hover { text-decoration: underline; }
 .sidebar h3:first-child { margin-top: 0; }
 .sidebar ul { list-style: none; }
 .sidebar li { margin: 0.15rem 0; }
-.sidebar a { font-size: 0.825rem; color: var(--text-sec); font-family: 'Iosevka', 'Fira Code', monospace; }
+.sidebar a { font-size: 0.825rem; color: var(--text-sec); }
+/* Navigation links read as prose; a link that names a definition is an
+   identifier and stays in the code face. */
+.sidebar a.sidebar-def, .sidebar code { font-family: 'Iosevka', 'Fira Code', monospace; }
 .sidebar a:hover { color: var(--gold-bright); text-decoration: none; }
-.sidebar-back {
+/* An ordinary link, not a button: nothing here submits or toggles, it just
+   navigates like every other entry in the rail. Selector carries the `a` so it
+   outranks the `.sidebar a` colour rule below it. */
+.sidebar a.sidebar-back {
   display: block;
   font-size: 0.85rem;
   color: var(--text-primary);
   font-family: inherit;
-  padding: 0.45rem 0.65rem;
   margin-bottom: 1rem;
-  border: 1px solid var(--border-mid);
-  border-radius: 6px;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  transition: color 0.12s;
 }
-.sidebar-back:hover { color: var(--gold-bright); background: var(--bg-hover); border-color: var(--gold-line); text-decoration: none; }
+.sidebar a.sidebar-back:hover { color: var(--gold-bright); text-decoration: none; }
+/* "Up" links -- All Guides / All Modules / All Spices. One row, directly under
+   the Home button, so every page offers the same two steps back out of itself. */
+.sidebar-uplinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  margin-bottom: 1.25rem;
+}
+.sidebar-uplinks a { font-size: 0.8rem; color: var(--green); }
+.sidebar-uplinks a:hover { color: var(--gold-bright); text-decoration: none; }
 .sidebar-divider {
   border: none;
   border-top: 1px solid var(--border);
@@ -788,11 +945,13 @@ a:hover { text-decoration: underline; }
 }
 
 .def-section { margin-top: 0.75rem; }
+/* Parameters / Returns / Example -- structure inside a card, so the secondary
+   accent rather than the gold that marks the definition itself. */
 .def-section-label {
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--text-dim);
+  color: var(--green);
   margin-bottom: 0.4rem;
   font-weight: 500;
 }
@@ -828,7 +987,7 @@ a:hover { text-decoration: underline; }
   padding: 1rem 1.25rem;
   background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--gold);
+  border-left: 3px solid var(--green);
   border-radius: 6px;
 }
 .module-doc-summary {
@@ -942,10 +1101,15 @@ details.internal-section summary {
 .sidebar-overlay.is-open { display: block; }
 
 /* Responsive */
+@media (max-width: 1080px) {
+  /* Six nav links plus two buttons stop fitting before the drawer breakpoint;
+     drop the buttons first -- both are reachable from the sidebar groups. */
+  .site-header .nav-right { display: none; }
+}
 @media (max-width: 768px) {
   .hamburger { display: block; }
   .site-header { padding: 0 1rem; }
-  .site-header nav { display: none; }
+  .site-header .nav-links { display: none; }
   .search-wrap { display: none; }
   .page-layout { grid-template-columns: 1fr; }
   .sidebar {
@@ -968,20 +1132,11 @@ details.internal-section summary {
 """
 
 
-_SIDEBAR_TOGGLE_JS = """\
-<div class="sidebar-overlay"></div>
+# The drawer itself comes from genguides so the hamburger behaves identically
+# on an API page, a guide and a spice; only the search filter below is specific
+# to these pages.
+_SIDEBAR_TOGGLE_JS = SIDEBAR_DRAWER_JS + """
 <script>
-  document.addEventListener('DOMContentLoaded', function(){
-    var btn = document.querySelector('.hamburger');
-    var sidebar = document.querySelector('.sidebar');
-    var overlay = document.querySelector('.sidebar-overlay');
-    if (!btn || !sidebar) return;
-    function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
-    function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
-    btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
-    overlay && overlay.addEventListener('click', close);
-  });
-
   // Search filtering
   document.addEventListener('DOMContentLoaded', function(){
     var input = document.querySelector('.search-input');
@@ -1045,24 +1200,22 @@ _SIDEBAR_TOGGLE_JS = """\
 </script>"""
 
 
-SIDEBAR_GLOBALS = """\
-  <hr class="sidebar-divider">
-  <h3>Language</h3>
-  <ul>
-    <li><a href="/tour">Tour</a></li>
-    <li><a href="/try">Try It</a></li>
-  </ul>
-  <h3>Ecosystem</h3>
-  <ul>
-    <li><a href="/docs/html/guides/">Guides</a></li>
-    <li><a href="/docs/html/api/">API Docs</a></li>
-    <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
-  </ul>
-  <h3>Community</h3>
-  <ul>
-    <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
-  </ul>
-"""
+def _sidebar_tip(defn) -> str:
+    """Tooltip for a sidebar definition link: its docstring summary if it has
+    one, else a plain 'jump to' so every entry carries something useful."""
+    doc = defn.get('docstring')
+    if doc and doc.get('summary'):
+        s = doc['summary']
+        dash_idx = s.find(' -- ')
+        tip = s[dash_idx + 4:] if dash_idx != -1 else s
+        if tip.strip():
+            return html_module.escape(tip.strip(), quote=True)
+    return html_module.escape(f'Jump to {defn["name"]}', quote=True)
+
+
+# Host that the chrome's site-relative links resolve against. Set by
+# `render_tree`; only the spices subdomain ever makes it non-empty.
+SITE_BASE = ''
 
 
 def _html_header(title, css_path='style.css'):
@@ -1087,24 +1240,7 @@ def _html_header(title, css_path='style.css'):
 <link rel="stylesheet" href="{css_path}">
 </head>
 <body>
-<header class="site-header">
-  <button class="hamburger" aria-label="Toggle navigation">
-    <span></span><span></span><span></span>
-  </button>
-  <a class="nav-logo" href="/">
-    <img src="/logo-icon.svg" width="28" height="28" alt="">
-    <img src="/logo.svg" width="101" height="28" alt="Turmeric">
-  </a>
-  <nav>
-    <a href="/docs/html/guides/">Guides</a>
-    <a href="index.html" class="active">API Docs</a>
-    <a href="https://spices.turmeric-lang.com">Spices</a>
-    <a href="/try">Try It</a>
-  </nav>
-  <div class="search-wrap">
-    <input class="search-input" type="search" placeholder="Filter... (/)" aria-label="Filter definitions">
-  </div>
-</header>
+{build_page_header(active='API Docs', base=SITE_BASE, search='Filter definitions', indent='')}
 <p class="search-no-results">No matching definitions.</p>
 {_SIDEBAR_TOGGLE_JS}
 """
@@ -1242,31 +1378,22 @@ def _render_def_card(defn, anchor_prefix=''):
     return h
 
 
-def render_module_page(module, out_dir, brand='stdlib'):
-    """Render a per-module HTML page and return the filename."""
-    mod_name = module['name']
-    # tur/list -> tur-list.html
-    page_name = mod_name.replace('/', '-') + '.html'
+def module_page_name(module):
+    """The per-module page/fragment filename: tur/list -> tur-list.html."""
+    return module['name'].replace('/', '-') + '.html'
 
+
+def build_module_content(module, brand='stdlib'):
+    """Render a module's article body -- the `<div class="content">` and nothing else.
+
+    This is the single rendering pass for a module's API page: the site wraps
+    it in chrome (`render_module_page`), and the docs pack ships it verbatim as
+    a fragment for Try Turmeric's in-app docs pane (`--emit-pack`). Rendering
+    it once is what keeps the two from drifting.
+    """
+    mod_name = module['name']
     exported = [d for d in module['definitions'] if d['exported']]
     internal = [d for d in module['definitions'] if not d['exported']]
-
-    # Build sidebar TOC (exported only)
-    sidebar = '<div class="sidebar">\n'
-    sidebar += '  <a class="sidebar-back" href="/">← Back to home</a>\n'
-    sidebar += '  <hr class="sidebar-divider">\n'
-    sidebar += '  <h3>Exported</h3>\n  <ul>\n'
-    for defn in exported:
-        anchor = re.sub(r'[^a-zA-Z0-9_\-]', '_', defn['name'])
-        sidebar += f'    <li><a href="#{html_module.escape(anchor)}">{html_module.escape(defn["name"])}</a></li>\n'
-    sidebar += '  </ul>\n'
-    if internal:
-        sidebar += '  <h3>Internal</h3>\n  <ul>\n'
-        for defn in internal:
-            sidebar += f'    <li><a href="#{html_module.escape(defn["name"])}" style="color:var(--faint)">{html_module.escape(defn["name"])}</a></li>\n'
-        sidebar += '  </ul>\n'
-    sidebar += SIDEBAR_GLOBALS
-    sidebar += '</div>\n'
 
     # Path display: prefer the relative path stored on the module (when generated
     # by render_tree); fall back to "<brand>/<stem>.tur" for legacy callers.
@@ -1322,6 +1449,42 @@ def render_module_page(module, out_dir, brand='stdlib'):
         content += '  </div>\n</details>\n'
 
     content += '</div>\n'
+    return content
+
+
+def render_module_page(module, out_dir, brand='stdlib'):
+    """Render a per-module HTML page and return the filename."""
+    mod_name = module['name']
+    page_name = module_page_name(module)
+
+    exported = [d for d in module['definitions'] if d['exported']]
+    internal = [d for d in module['definitions'] if not d['exported']]
+
+    # Build sidebar TOC (exported only)
+    toc = '      <h3>Exported</h3>\n      <ul>\n'
+    for defn in exported:
+        anchor = re.sub(r'[^a-zA-Z0-9_\-]', '_', defn['name'])
+        toc += (f'        <li><a class="sidebar-def" href="#{html_module.escape(anchor)}"'
+                f' title="{_sidebar_tip(defn)}">'
+                f'{html_module.escape(defn["name"])}</a></li>\n')
+    toc += '      </ul>\n'
+    if internal:
+        toc += '      <h3>Internal</h3>\n      <ul>\n'
+        for defn in internal:
+            toc += (f'        <li><a class="sidebar-def" href="#{html_module.escape(defn["name"])}"'
+                    f' style="color:var(--faint)" title="{_sidebar_tip(defn)}">'
+                    f'{html_module.escape(defn["name"])}</a></li>\n')
+        toc += '      </ul>\n'
+
+    sidebar = ('<div class="sidebar">\n'
+               + build_sidebar(
+                   toc=toc,
+                   uplinks=[('index.html', 'All Modules')],
+                   base=SITE_BASE,
+                   extra_titles={'index.html': 'Every module in this API reference'})
+               + '\n</div>\n')
+
+    content = build_module_content(module, brand=brand)
 
     page = _html_header(f'{html_module.escape(mod_name)} | Turmeric API')
     page += '<div class="page-layout">\n'
@@ -1366,7 +1529,8 @@ def _index_card_html(module):
     return h
 
 
-def render_index_page(modules, out_dir, brand='stdlib', brand_label=None):
+def render_index_page(modules, out_dir, brand='stdlib', brand_label=None,
+                      uplinks=None, uplink_titles=None):
     """Render the module index page, grouped by subdirectory."""
     if brand_label is None:
         brand_label = 'Turmeric Standard Library' if brand == 'stdlib' else f'{brand} API'
@@ -1397,10 +1561,10 @@ def render_index_page(modules, out_dir, brand='stdlib', brand_label=None):
 
     content += '</div>\n'
 
-    sidebar = '<div class="sidebar">\n'
-    sidebar += '  <a class="sidebar-back" href="/">← Back to home</a>\n'
-    sidebar += SIDEBAR_GLOBALS
-    sidebar += '</div>\n'
+    sidebar = ('<div class="sidebar">\n'
+               + build_sidebar(uplinks=uplinks, base=SITE_BASE,
+                               extra_titles=uplink_titles)
+               + '\n</div>\n')
 
     page = _html_header(f'{brand_label} | API Docs', css_path='style.css')
     page += '<div class="page-layout">\n'
@@ -1481,13 +1645,72 @@ def _build_doc_entry(defn):
     return '\n'.join(parts)
 
 
+VERIFIED_MANIFEST = Path('tests/doctest-generated/verified.txt')
+VERIFIED_COMPLETE_MARKER = '# complete:'
+
+
+def read_verified_manifest(path=VERIFIED_MANIFEST):
+    """
+    Read the doctest manifest.  Returns (names, reason) where `names` is a set
+    when the manifest is authoritative and None when it is not.
+
+    None is not the empty set, and the distinction is the whole point of this
+    function.  `verified.txt` is a GITIGNORED build artifact
+    (.gitignore: tests/doctest-generated/) but its contents are stamped into
+    stdlib/docstrings.tur, which is TRACKED.  Treating "I have no doctest
+    results" as "no function passes its doctests" is what let a plain
+    `just docs` in a fresh clone delete the whole table -- silently, into a
+    tracked file, on the release path, for most of the feature's life.
+    See docs/reported/docstrings-verified-table-zeroed-by-regen.md.
+
+    A manifest is authoritative only when run-doctests.sh finished and said so
+    with its `# complete:` header.  Anything else -- absent, or present without
+    the marker (an interrupted run, or one written by the pre-2026-08-20
+    append-as-you-go script) -- is no data.
+    """
+    if not path.exists():
+        return None, f'{path} not found'
+    text = path.read_text(encoding='utf-8')
+    complete = any(l.startswith(VERIFIED_COMPLETE_MARKER) for l in text.splitlines())
+    if not complete:
+        return None, f'{path} has no "{VERIFIED_COMPLETE_MARKER}" header (partial or stale run)'
+    names = set(
+        l.strip() for l in text.splitlines()
+        if l.strip() and not l.lstrip().startswith('#')
+    )
+    return names, None
+
+
+def read_existing_verified(out_path):
+    """
+    Recover the verified name list already embedded in `out_path`, so a regen
+    with no manifest can carry it forward instead of dropping it.  Returns a
+    set (possibly empty) or None when the file does not exist or has no block.
+    """
+    p = Path(out_path)
+    if not p.exists():
+        return None
+    names, in_block = set(), False
+    for line in p.read_text(encoding='utf-8').splitlines():
+        if 'static const char *verified[] = {' in line:
+            in_block = True
+            continue
+        if in_block:
+            if 'NULL' in line:
+                break
+            m = re.match(r'\s*"((?:[^"\\]|\\.)*)"\s*,\s*$', line)
+            if m:
+                names.add(m.group(1).replace('\\"', '"').replace('\\\\', '\\'))
+    return names if in_block else None
+
+
 def emit_docstrings_tur(modules, out_path, verified_names=None):
     """
     Emit stdlib/docstrings.tur with C-backed doc-lookup and doc-verified? functions.
 
-    verified_names -- optional set of function names that have passing doctests.
-    When provided, a doc-verified? function is exported that returns true for
-    those names.  When absent (or empty), doc-verified? always returns false.
+    verified_names -- the set of function names with passing doctests, or None
+    for "no authoritative data".  None carries the existing file's list forward
+    rather than emitting an empty one; see read_verified_manifest.
     """
     entries = []
     for module in modules:
@@ -1554,7 +1777,14 @@ def emit_docstrings_tur(modules, out_path, verified_names=None):
         '',
     ]
 
-    # Phase D5: emit doc-verified? backed by the verified names set
+    # Phase D5: emit doc-verified? backed by the verified names set.
+    # verified_names is None when no authoritative manifest was found; carry the
+    # existing file's list forward rather than silently emptying it.
+    carried = False
+    if verified_names is None:
+        prior = read_existing_verified(out_path)
+        if prior:
+            verified_names, carried = prior, True
     vnames = sorted(verified_names) if verified_names else []
     lines += [
         '(defn doc-verified? [name : cstr] : bool',
@@ -1579,7 +1809,8 @@ def emit_docstrings_tur(modules, out_path, verified_names=None):
     ]
 
     Path(out_path).write_text('\n'.join(lines) + '\n', encoding='utf-8')
-    print(f'  Wrote {out_path} ({len(deduped)} entries, {len(vnames)} verified)')
+    how = ' carried forward' if carried else ''
+    print(f'  Wrote {out_path} ({len(deduped)} entries, {len(vnames)} verified{how})')
 
 
 # ---------------------------------------------------------------------------
@@ -1654,6 +1885,64 @@ def emit_doc_names_json(modules, out_path, extra_entries=None):
 
 
 # ---------------------------------------------------------------------------
+# Docs pack  (--emit-pack)
+# ---------------------------------------------------------------------------
+
+def emit_pack_api(modules, pack_dir, *, section='api', slug_prefix=''):
+    """Write chrome-free per-module fragments into the docs pack.
+
+    `section` names both the pack subdirectory and the sidecar that
+    tools/genpack.py merges into index.json. `slug_prefix` disambiguates spice
+    modules from stdlib ones when a spice tree is folded into the pack.
+    """
+    pack_dir = Path(pack_dir)
+    entries = []
+    seen_slugs = {}
+    for module in modules:
+        page = module_page_name(module)
+        slug = f'{slug_prefix}{page[:-len(".html")]}'
+        rel = f'{section}/{slug}.html'
+        # Two modules with the same name render to the same page. The site has
+        # always resolved that by letting the last one win silently; say so
+        # here rather than letting the pack quietly carry one fewer page than
+        # it parsed.
+        if slug in seen_slugs:
+            raise SystemExit(
+                f'  error: {module.get("rel_path") or module["name"]} and '
+                f'{seen_slugs[slug]} both render to {rel}; the last one would '
+                f'win and the other would silently have no page. Give one of '
+                f'them a distinct (defmodule ...) name.')
+        seen_slugs[slug] = module.get('rel_path') or module['name']
+        content = build_module_content(module)
+        size = packlib.write_fragment(pack_dir, rel, content)
+
+        exported = [d['name'] for d in module['definitions'] if d['exported']]
+        summary = ''
+        if module.get('docstring') and module['docstring'].get('summary'):
+            s = module['docstring']['summary']
+            dash_idx = s.find(' -- ')
+            summary = s[dash_idx + 4:] if dash_idx != -1 else s
+
+        entries.append({
+            'slug': slug,
+            'path': rel,
+            'module': module['name'],
+            'title': module['name'],
+            'category': module.get('subdir') or 'core',
+            'description': summary,
+            'symbols': exported,
+            'bytes': size,
+            'words': packlib.search_string(
+                module['name'], summary, ' '.join(exported),
+                prose=packlib.strip_tags(content)),
+        })
+
+    packlib.write_sidecar(pack_dir, section, entries)
+    print(f'  pack: {len(entries)} {section} fragments -> {pack_dir}/{section}/')
+    return entries
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1672,7 +1961,9 @@ def collect_tur_files(source):
 
 
 def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
-                emit_tur=None, emit_json=None, extra_json_entries=None):
+                emit_tur=None, emit_json=None, extra_json_entries=None,
+                emit_pack=None, pack_section='api', pack_slug_prefix='',
+                site_base='', index_uplinks=None, index_uplink_titles=None):
     """
     Generate an HTML doc tree from a .tur source root.
 
@@ -1684,7 +1975,13 @@ def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
                     or '<brand> API' otherwise.
     emit_tur     -- optional Path; when set, also emit a docstrings.tur lookup.
     emit_json    -- optional Path; when set, also emit a JSON name list.
+    site_base    -- host to re-root the chrome's site-relative links onto. Empty
+                    for turmeric-lang.com itself; the spices subdomain passes the
+                    main host, because a bare `/tour` there would resolve against
+                    spices.turmeric-lang.com and 404.
     """
+    global SITE_BASE
+    SITE_BASE = site_base
     source = Path(source)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1718,6 +2015,7 @@ def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
                     rel_parts = Path(f).resolve().relative_to(source_root).parts
                     module['subdir'] = rel_parts[0] if len(rel_parts) > 1 else None
                     module['rel_path'] = f'{path_prefix}/' + '/'.join(rel_parts)
+                    apply_path_fallback_name(module, rel_parts)
                 except ValueError:
                     module['subdir'] = None
                     module['rel_path'] = None
@@ -1730,30 +2028,52 @@ def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
         except Exception as e:
             print(f'  Warning: failed to parse {f}: {e}', file=sys.stderr)
 
+    # Two modules that resolve to the same page name are a silent data loss:
+    # whichever renders second overwrites the first, the index still shows both
+    # cards, and one of those two links 404s. That shipped for as long as
+    # stdlib/capability.tur and stdlib/test/capability.tur both existed, and
+    # the only signal was a page count one short of the module count. Fail
+    # here, where the message can name both files.
+    seen_pages = {}
+    for module in modules:
+        page = module_page_name(module)
+        if page in seen_pages:
+            print(f'  error: {module.get("rel_path") or module["file_path"]} and '
+                  f'{seen_pages[page]} both render to {page}; give one of them a '
+                  f'distinct (defmodule ...) name', file=sys.stderr)
+            sys.exit(1)
+        seen_pages[page] = module.get('rel_path') or module['file_path']
+
     # Render per-module pages
     for module in modules:
         page = render_module_page(module, out_dir, brand=brand)
         print(f'  Wrote {out_dir}/{page}')
 
     # Render index
-    render_index_page(modules, out_dir, brand=brand, brand_label=brand_label)
+    render_index_page(modules, out_dir, brand=brand, brand_label=brand_label,
+                      uplinks=index_uplinks, uplink_titles=index_uplink_titles)
     print(f'  Wrote {out_dir}/index.html')
 
     # Optionally emit docstrings.tur
     if emit_tur:
-        # Phase D5: read verified function names from doctest manifest if present
-        verified_names = None
-        verified_path = Path('tests/doctest-generated/verified.txt')
-        if verified_path.exists():
-            verified_names = set(
-                l.strip() for l in verified_path.read_text(encoding='utf-8').splitlines()
-                if l.strip()
-            )
+        # Phase D5: read verified function names from the doctest manifest.
+        # A missing or partial manifest is "no data", NOT "nothing is verified"
+        # -- emit_docstrings_tur carries the existing table forward for it.
+        verified_names, why = read_verified_manifest()
+        if why:
+            print(f'  note: no doctest manifest ({why});', file=sys.stderr)
+            print(f'        carrying the existing doc-verified? table forward. '
+                  f'Run `just doctest` to refresh it.', file=sys.stderr)
         emit_docstrings_tur(modules, emit_tur, verified_names=verified_names)
 
     # Optionally emit doc-names.json for the web search bar
     if emit_json:
         emit_doc_names_json(modules, emit_json, extra_entries=extra_json_entries)
+
+    # Optionally emit chrome-free fragments into the docs pack
+    if emit_pack:
+        emit_pack_api(modules, emit_pack, section=pack_section,
+                      slug_prefix=pack_slug_prefix)
 
     print(f'\nDone. {len(modules)} modules -> {out_dir}/')
     return modules
@@ -1799,6 +2119,12 @@ def main():
              'them into the --emit-json output. Used to fold spice symbols '
              'into the stdlib payload.',
     )
+    parser.add_argument(
+        '--emit-pack',
+        metavar='DIR',
+        help='Also write chrome-free per-module fragments into the docs pack '
+             'at DIR (see tools/genpack.py)',
+    )
     args = parser.parse_args()
 
     extra_entries = None
@@ -1816,6 +2142,7 @@ def main():
         emit_tur=args.emit_tur,
         emit_json=args.emit_json,
         extra_json_entries=extra_entries,
+        emit_pack=args.emit_pack,
     )
 
 

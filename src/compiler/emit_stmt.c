@@ -139,7 +139,7 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         const char *recv_cn = type_c_name(recv_rty);
         bool recv_is_ptr = recv_cn && strchr(recv_cn, '*') != NULL;
         if (e->as.set_field_.receiver_is_rc) {
-            char *madt = mangle_field_name(adt->name);
+            char *madt = mangle_adt_name(adt->name);
             buf_printf(&lhs, "((tur_adt_%s *)((RcControlBlock *)(%s))->value)->%s",
                        madt, rv, mp);
             free(madt);
@@ -209,8 +209,6 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
         case EX_FLOAT_LIT: case EX_CSTR_LIT: case EX_SYM_LIT: case EX_VAR:
         case EX_DEFAULT_OF:    /* M2b: pure zero-initializer, no side effects */
-        case EX_CAST:         /* pure expression, no stmt-level side effects */
-        case EX_REINTERPRET:  /* compiler-only pure reinterpret node */
         case EX_UNION_INJECT: /* IT4: pure struct literal, no stmt-level side effects */
         case EX_ANY_TYPE_OF:  /* IT4: pure read, no stmt-level side effects */
         case EX_ANY_CAST:     /* IT4: pure unbox, no stmt-level side effects */
@@ -223,13 +221,29 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_PANIC_PAYLOAD_FILE:
         case EX_PANIC_PAYLOAD_LINE:
         case EX_PANIC_PAYLOAD_DOWNS:
-        case EX_POLY_WRAP:   /* Phase HRT1: pure struct literal, no stmt-level side effects */
-        case EX_ASCRIBE:     /* Phase HRT1: type erased, delegate to inner */
         case EX_EXISTS_PACK: /* Phase HRT2: pure boxing, no stmt-level side effects */
         case EX_DEFGADT:     /* Phase G1: ADT definition — handled in Pass 0 */
         case EX_CPS_CONT_APP: /* CPS2: continuation application — emit via emit_value if side-effecting */
             /* No side effects — emit nothing. */
             return;
+        /* poly-call-in-statement-position-dropped: these four are pure WRAPPER
+         * nodes -- the wrapper itself has no effect, but the expression inside
+         * it may.  They used to sit in the emit-nothing group above, which
+         * silently deleted the wrapped expression, effects and all.  The bug's
+         * signature asymmetry came straight from here: a discarded parametric
+         * call instantiated at non-int has its carrier result wrapped in
+         * `(reinterpret int -> T <call>)` by elaboration, while an int
+         * instantiation needs no wrapper -- so only int calls survived
+         * statement position.  A discarded `(:: (call) :T)` ascription and a
+         * cast wrapping a call were the same hole.  Delegate to the inner
+         * expression: emit ITS statement form (running its effects, and its
+         * own discard handling -- e.g. the catch-unwind box free), and let the
+         * pure wrapper vanish, which was the only part of the old behavior
+         * that was right. */
+        case EX_REINTERPRET: emit_stmt(ctx, body, e->as.reinterpret_.expr); return;
+        case EX_CAST:        emit_stmt(ctx, body, e->as.cast_.expr);        return;
+        case EX_ASCRIBE:     emit_stmt(ctx, body, e->as.ascribe_.inner);    return;
+        case EX_POLY_WRAP:   emit_stmt(ctx, body, e->as.poly_wrap_.inner);  return;
         case EX_EXISTS_OPEN: { /* Phase HRT2: run open body for side effects */
             char *v = emit_value(ctx, body, e);
             free(v);
@@ -273,8 +287,11 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             return;
         }
         case EX_CALLCC: {   /* call-cc-completion: run for effect, discard value */
+            uint32_t pd_mark[3];
+            emit_pending_drops_mark(ctx, pd_mark);
             char *v = emit_value(ctx, body, e);
             free(v);
+            emit_pending_drops_drain(ctx, body, pd_mark);
             return;
         }
         case EX_WHILE: emit_while_stmt(ctx, body, e); return;
@@ -461,7 +478,12 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                 }
             }
-            /* Emit as expression statement */
+            /* Emit as expression statement.  Bracketed by the pending-drop
+             * mark/drain: a VOID callee never materializes in emit_value, so a
+             * fresh sum-box argument's free (stamped sum_box_drop_after) would
+             * otherwise be orphaned here -- see emit_pending_drops_mark. */
+            uint32_t pd_mark[3];
+            emit_pending_drops_mark(ctx, pd_mark);
             char *v = emit_value(ctx, body, e);
             indent_buf(body, ctx->indent);
             if (e->type.kind == TY_NIL) {
@@ -470,6 +492,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "(void)(%s);\n", v);
             }
             free(v);
+            emit_pending_drops_drain(ctx, body, pd_mark);
             return;
         }
         case EX_FN:
@@ -853,7 +876,37 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "tur_frame_fire_chain(&%s);\n", ctx->frame_var);
             }
 
-            /* Emit the return statement */
+            /* Emit the return statement.
+             *
+             * any-struct-box-leak-per-widen: an `any` local owned by an
+             * enclosing scope is released here, because the trailing free at
+             * that scope's end is about to be jumped past.  The drop must come
+             * AFTER the return value is computed -- `(return (reads a))` reads
+             * the box -- so the value is hoisted to a temp first when there is
+             * anything to drop.  Zero drops keeps the emitted form byte-identical
+             * to before. */
+            if (ctx->n_any_scope_drops > 0 && e->as.return_.value) {
+                char *val = emit_value(ctx, body, e->as.return_.value);
+                char *rv = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                /* Name the type rather than reach for __auto_type: this frame's
+                 * C return type is exactly what the temp holds, and c2mir does
+                 * not take __auto_type -- a JIT run silently falls back to cc
+                 * for the whole fixture when it appears.  __auto_type stays as
+                 * the last resort for the shapes that do not record a return
+                 * ctype, matching the panic-signal hoist next door. */
+                buf_printf(body, "%s %s = (%s);\n",
+                           ctx->current_fn_ret_ctype ? ctx->current_fn_ret_ctype
+                                                     : "__auto_type",
+                           rv, val);
+                free(val);
+                emit_any_scope_drops(ctx, body);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "return %s;\n", rv);
+                free(rv);
+                return;
+            }
+            if (ctx->n_any_scope_drops > 0) emit_any_scope_drops(ctx, body);
             indent_buf(body, ctx->indent);
             if (e->as.return_.value) {
                 char *val = emit_value(ctx, body, e->as.return_.value);
@@ -997,7 +1050,16 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
              * run, without forcing the value through a typed temp (whose
              * carrier-vs-struct type we cannot recover here).  The value
              * position is handled in emit_effects_handle. */
-            if (e->as.handle_.handle &&
+            /* `e->kind == EX_HANDLE` is NOT redundant: this block is shared
+             * with EX_GEN / EX_GEN_NEXT / EX_GEN_DONE / EX_PERFORM above, and
+             * `as` is a union.  Without the test, a `(perform ...)` in
+             * statement position reinterpreted its PerformExpr as a
+             * HandleExpr and read `is_unsafe_marker` out of unrelated bytes --
+             * UBSan: "load of value 190, which is not a valid value for type
+             * '_Bool'".  A non-zero byte there sent the emitter down the
+             * pure-Unsafe path and made it emit `handle->body`, a pointer read
+             * from the wrong union member. */
+            if (e->kind == EX_HANDLE && e->as.handle_.handle &&
                 emit_handle_is_pure_unsafe(e->as.handle_.handle)) {
                 emit_stmt(ctx, body, e->as.handle_.handle->body);
                 return;

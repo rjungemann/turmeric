@@ -176,10 +176,19 @@ defn main [] :int
   0
 ```
 
-The pack/open sites stay inline; passing a constrained existential
-through a function parameter erases the constraint info and prevents
-`open` from extracting the boxed value (use the value at the
-construction site for now).
+A constrained existential is a first-class value: it can be returned
+from a function, passed as an argument through a parameter typed with
+the full existential form, and opened inside the callee:
+
+```turmeric
+(defn use-ex [e : (exists [a] [(Show a)] a)] : int
+  (open e [_ v]
+    (println (.show v)))
+  0)
+```
+
+Only an untyped parameter (`:ptr<void>`) erases the constraint info --
+see the limitations below.
 
 ## Heterogeneous dispatch through the packed witness
 
@@ -261,16 +270,23 @@ required by the elaborator.
   set (`Show`, `Eq`, `Display`, ...) but not a concrete type.
 - **Opaque handles** where the caller must not inspect the internal
   representation -- the constraint set defines the entire public API.
-- **Hiding size indices** (planned, EX2): `Vec[A] = (exists [n] (SizedVec [n A]))`
-  unifies length-indexed and length-erased vectors.
+- **Hiding size indices**: an existential over a *phantom* type-level
+  index -- `(exists [n] (SizedVec [n A]))`, or the sized-world resize
+  result `(exists [n'] (GameWorld n'))` -- hides the index while the
+  value variable keeps its concrete runtime carrier.
 
-## What is not (yet) supported
+## Memory management
+
+Constrained packs allocate a heap record carrying the boxed value and
+the constraint witnesses. The record is reference-counted: a local
+pack is auto-dropped at scope exit, and a pack that flows cross-scope
+(returned, passed as an argument, stored) keeps its control block
+alive. See
+[`existential-gc-followup-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/existential-gc-followup-plan.md).
+
+## What is not supported
 
 - **Passing constrained existentials through `:ptr<void>` parameters.**
   The static type loses its constraint info and `open` can no longer
-  extract the boxed value from the runtime record. Open at the
-  construction site, or pass through a binding typed with the full
-  existential form.
-- **Reclaiming existential records.** Constrained packs allocate a
-  `tur_existential_t` on the heap; the deferred memory-management work
-  is tracked in [`../existential-gc-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/existential-gc-plan.md).
+  extract the boxed value from the runtime record. Pass through a
+  binding or parameter typed with the full existential form instead.

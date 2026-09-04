@@ -1,3 +1,7 @@
+;; CloneI: a LOCAL carrier-slot class (method declared `: int`).  This used
+;; to be spelled `Clone`, silently merging with the identical stdlib class;
+;; stdlib Clone is now `(clone [x : a] : a)` (committed, per-instance typed),
+;; so the carrier-slot shape this fixture exercises needs its own class.
 ;; A constrained instance over a struct: `Clone [KV]` requires `Clone int`, and
 ;; the body clones the fields through the constrained instance.
 ;;
@@ -11,17 +15,17 @@
 ;; docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md.
 (defstruct KV [first : int second : int])
 
-(defclass Clone [a]
-  (clone [x] : int))
+(defclass CloneI [a]
+  (clonei [x] : int))
 
-(definstance Clone [int]
-  (clone [x] x))
+(definstance CloneI [int]
+  (clonei [x] x))
 
-(definstance Clone [KV]
-  [Clone int]
-  (clone [x] (+ (.clone (.first x)) (.clone (.second x)))))
+(definstance CloneI [KV]
+  [CloneI int]
+  (clonei [x] (+ (.clonei (.first x)) (.clonei (.second x)))))
 
 (defn main [] : int
-  (println (.clone (KV 3 4)))    ; 7
-  (println (.clone 5))           ; 5
+  (println (.clonei (KV 3 4)))    ; 7
+  (println (.clonei 5))           ; 5
   0)

@@ -4,7 +4,7 @@
 ; the free defn otherwise.  This is the case that used to force the Arrow
 ; typeclass layer into a separate file.
 ;
-; See docs/reported/typeclass-methods-share-value-namespace-with-defns.md
+; See docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md
 
 ; Free combinator named `arr` (the bare arrow-identity helper).
 (defn arr [f] f)

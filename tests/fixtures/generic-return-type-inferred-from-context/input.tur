@@ -2,8 +2,7 @@
 ;; type* now picks up `A` from three caller contexts -- (:: e :T) ascription,
 ;; typed-`let [p : T (call)]` binding, and the enclosing defn's declared return
 ;; type -- so the call specializes at A = T instead of falling back to the
-;; carrier int64 form and reinterpreting random bits.  See
-;; docs/reported/generic-return-type-not-inferred-from-context.md.
+;; carrier int64 form and reinterpreting random bits.
 
 (defstruct Pos [x : int y : int])
 

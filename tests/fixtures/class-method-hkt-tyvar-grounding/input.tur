@@ -3,7 +3,7 @@
 ;; result position -- the "target functor" `b` in a Traversable-style
 ;; `trav : (t a) -> (fn [a] (Opt b)) -> (Opt (t b))` -- must ground that
 ;; method-level tyvar through the instance body's `match`.  Before the fix the
-;; arm-join unifier treated `b` as rigid: one arm typed `(Some (None))` as
+;; arm-join unifier treated `b` as rigid: one arm typed `(OSome (ONone))` as
 ;; `(Opt (t b))` with `b` ungrounded while the peer arm produced a concrete
 ;; `(Opt (Opt int))`, and the join rejected them with
 ;; "match: arm types are incompatible -- expected app, got app".
@@ -13,27 +13,27 @@
 
 (defmodule main)
 
-(defdata Opt [a] (None) (Some a))
+(defdata Opt [a] (ONone) (OSome a))
 
 ;; `b` is introduced by the method, not by the class parameter list `[^t]`.
 (defclass Traversable2 [^t]
   (trav [ta : (t a) g : (fn [a] (Opt b))] : (Opt (t b))))
 
 (defn dbl [x : int] : (Opt int)
-  (Some (+ x x)))
+  (OSome (+ x x)))
 
 (definstance Traversable2 [Opt]
   (trav [ta g]
     (match ta
-      (None)   (Some (None))
-      (Some x) (match (g x)
-                 (None)   (None)
-                 (Some y) (Some (Some y))))))
+      (ONone)   (OSome (ONone))
+      (OSome x) (match (g x)
+                 (ONone)   (ONone)
+                 (OSome y) (OSome (OSome y))))))
 
 (defn main [] : int
-  (match (trav (Some 21) dbl)
-    (None)       (println "outer-none")
-    (Some inner) (match inner
-                   (None)   (println "inner-none")
-                   (Some v) (println "42")))
+  (match (trav (OSome 21) dbl)
+    (ONone)       (println "outer-none")
+    (OSome inner) (match inner
+                   (ONone)   (println "inner-none")
+                   (OSome v) (println "42")))
   0)

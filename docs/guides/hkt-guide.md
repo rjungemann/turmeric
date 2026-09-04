@@ -163,33 +163,30 @@ __bind_option(opt fn([x] __opt_some({x * 2})))
 
 ## Container Values at Runtime
 
-HKT container values (like `Option<int>`) are stored as opaque `int64_t` handles.
-Use inline C blocks to allocate and dereference them:
+A hand-rolled HKT container (like the `__opt_*` Option used throughout this
+guide) can be represented as an opaque `int64_t` handle. Build and read the
+handles through the codegen preamble's Option helpers (`tur_box_some` /
+`tur_is_some` / `tur_opt_value` / `TUR_NONE`), which construct the canonical
+tagged layout -- SR2b retired the old hand-rolled
+`{ bool is_some; int64_t value; }` struct, and spelling any layout by hand is
+exactly the drift the helpers exist to prevent. (Built-in containers such as
+`Option`/`Result` use the by-value monomorphized ABI instead -- see the
+[monomorphization ABI guide](monomorphization-abi-guide.md)):
 
 ```turmeric
 (defn __opt_some [x] : int
-  ```c
-  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
-  r->is_some = true;
-  r->value = x;
-  return (int64_t)(intptr_t)r;
-  ```)
+  ```c return tur_box_some(x); ```)
 
 (defn __opt_none [] : int
-  ```c return 0; ```)
+  ```c return TUR_NONE; ```)
 ```
 
 ```sweet-exp
 defn __opt_some [x] :int
-  ```c
-  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
-  r->is_some = true;
-  r->value = x;
-  return (int64_t)(intptr_t)r;
-  ```
+  ```c return tur_box_some(x); ```
 
 defn __opt_none [] :int
-  ```c return 0; ```
+  ```c return TUR_NONE; ```
 ```
 
 Implement `fmap` and `bind` using inline C to call the closure function pointer:
@@ -197,42 +194,30 @@ Implement `fmap` and `bind` using inline C to call the closure function pointer:
 ```turmeric
 (defn __fmap_option [container fn] : int
   ```c
-  struct { bool is_some; int64_t value; } *c =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
-  if (!c || !c->is_some) return 0;
-  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
-  r->is_some = true;
-  r->value = ((int64_t(*)(int64_t))(intptr_t)fn)(c->value);
-  return (int64_t)(intptr_t)r;
+  if (!tur_is_some(container)) return TUR_NONE;
+  return tur_box_some(
+      ((int64_t(*)(int64_t))(intptr_t)fn)(tur_opt_value(container)));
   ```)
 
 (defn __bind_option [ma fn] : int
   ```c
-  struct { bool is_some; int64_t value; } *opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)ma;
-  if (!opt || !opt->is_some) return 0;
-  return ((int64_t(*)(int64_t))(intptr_t)fn)(opt->value);
+  if (!tur_is_some(ma)) return TUR_NONE;
+  return ((int64_t(*)(int64_t))(intptr_t)fn)(tur_opt_value(ma));
   ```)
 ```
 
 ```sweet-exp
 defn __fmap_option [container fn] :int
   ```c
-  struct { bool is_some; int64_t value; } *c =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
-  if (!c || !c->is_some) return 0;
-  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
-  r->is_some = true;
-  r->value = ((int64_t(*)(int64_t))(intptr_t)fn)(c->value);
-  return (int64_t)(intptr_t)r;
+  if (!tur_is_some(container)) return TUR_NONE;
+  return tur_box_some(
+      ((int64_t(*)(int64_t))(intptr_t)fn)(tur_opt_value(container)));
   ```
 
 defn __bind_option [ma fn] :int
   ```c
-  struct { bool is_some; int64_t value; } *opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)ma;
-  if (!opt || !opt->is_some) return 0;
-  return ((int64_t(*)(int64_t))(intptr_t)fn)(opt->value);
+  if (!tur_is_some(ma)) return TUR_NONE;
+  return ((int64_t(*)(int64_t))(intptr_t)fn)(tur_opt_value(ma));
   ```
 ```
 
@@ -657,7 +642,7 @@ let you control that step:
 | Variable | Default | Effect |
 |---|---|---|
 | `CC` | `cc` | C compiler executable |
-| `TUR_CC_FLAGS` | `-O2 -std=c99 -Wall` | Flags passed to every `cc` invocation |
+| `TUR_CC_FLAGS` | `-O2 -std=c99 -Wall -fno-strict-aliasing` | Flags passed to every `cc` invocation |
 
 Examples:
 
@@ -689,32 +674,26 @@ BENCHMINIT=10000 ./tests/run-bench.sh # increase minimum iterations
 
 Results are written to `tests/benchmarks/output/`.
 
-### Planned: `-O` monomorphization flag
+### Monomorphization
 
-> **Status: planned, not yet implemented.**
-
-In a future release, passing `-O` to `tur build` will trigger
-**monomorphization**: the compiler will specialise each typeclass method call
-for the concrete type known at the call site, eliminating the dictionary
-indirection entirely:
-
-```sh
-# planned syntax -- not yet available
-tur build -O app.tur -o app
-```
-
-Under `-O`, a call like `.fmap opt f` where `opt` is a known `option` container
-is lowered directly to `__fmap_option(opt, f)` with no dictionary lookup.
-Dictionary passing remains the default and is safe for all cases;
-`-O` is intended as a manual hot-path annotation for tight loops where the
-profiler shows typeclass dispatch is a bottleneck.
+There is no separate `-O` flag for this: the compiler monomorphizes by
+default. The elaborator specialises polymorphic defns and by-value HKT
+instance methods per concrete type at each call site, emitting
+`__spec__`-suffixed symbols (e.g. `Functor_fmap__spec__Option__int`)
+with no dictionary indirection on the specialised path. Dictionary
+passing remains the mechanism for the residual cases that have no
+by-value rewrite (see the
+[monomorphization ABI guide](monomorphization-abi-guide.md) for the
+full model, the spec-symbol naming rules, and the remaining carrier
+bridge).
 
 ## Recursive Types
 
 Turmeric supports self-referential and mutually-recursive `defdata`/`defstruct`
-definitions. Because all user-defined type values are stored as opaque `int64_t`
-pointers, recursive field types require no special C-level treatment -- the
-elaborator simply recognises the type name and records it as `TY_INT`.
+definitions. Recursive `defdata` payloads are heap-boxed and referenced as
+opaque `int64_t` pointers, so recursive field types require no special
+C-level treatment -- the elaborator recognises the type name and records the
+field as the pointer-width carrier.
 
 ### Self-referential ADTs
 

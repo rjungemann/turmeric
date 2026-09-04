@@ -5,7 +5,7 @@
 ;; unary and a binary function both round-trip through `arr`.
 ;;
 ;; Regression for
-;; docs/reported/instance-method-returning-untyped-param-loses-result-type.md.
+;; docs/archive/history/instance-method-returning-untyped-param-loses-result-type.md.
 
 (load "stdlib/arrow.tur")
 

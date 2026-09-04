@@ -1,0 +1,12 @@
+cold:
+init ran
+loop: counter =
+42
+set during init
+7.1
+warm:
+loop: counter =
+42
+set during init
+7.1
+3

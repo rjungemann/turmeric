@@ -16,11 +16,11 @@
 ;; let-init merge
 (defn pick-let [b : bool] : int
   (let [o (if b (some 11) (none))]
-    (if (.is-some o) (.value o) -1)))
+    (if (some? o) (unwrap o) -1)))
 
 ;; argument-position merge: the if feeds a by-value `(Option int)` param
 (defn unwrap-or-zero [o : (Option int)] : int
-  (if (.is-some o) (.value o) 0))
+  (if (some? o) (unwrap o) 0))
 
 (defn pick-arg [b : bool] : int
   (unwrap-or-zero (if b (some 7) (none))))

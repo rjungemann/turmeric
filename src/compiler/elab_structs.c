@@ -1,6 +1,5 @@
 /* elab_structs.c -- struct/ADT/GADT definitions, pattern matching, and borrow traits. */
 #include "elab_internal.h"
-#include "experiments.h"  /* sealed-opaque: experiment_warn_if_used */
 #include <assert.h>   /* structdef-retirement slice 5 DS-B: zero-producer guard */
 
 /* ---- file-local helper forward declarations ---- */
@@ -287,7 +286,7 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
          * `arrow` (`->`), `handler`, the borrow family, and the value-carrying
          * session heads `Session`/`project`/`Role` (EF-4) DO lower and are handled
          * below.  Tracked in
-         * docs/upcoming/structdef-exotic-field-forms-plan.md. */
+         * docs/archive/history/structdef-exotic-field-forms-plan.md. */
         if (head == e->sym_forall || head == e->sym_forall_u ||
             head == e->sym_session_Send ||
             head == e->sym_session_Recv || head == e->sym_session_Choose ||
@@ -301,7 +300,7 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
                       "is only meaningful nested inside `(Session ...)`; `Global` "
                       "is a compile-time-only choreography type; `forall` is the "
                       "EF-3 gate).  See "
-                      "docs/upcoming/structdef-exotic-field-forms-plan.md",
+                      "docs/archive/history/structdef-exotic-field-forms-plan.md",
                       (int)head->len, head->name);
             return NULL;
         }
@@ -681,7 +680,7 @@ static bool defstruct_field_type_lowerable(Elab *e, const Form *type_tok) {
          * legacy StructDef path.  Returning true here is what makes the residual
          * StructDef producer path unreachable (the deletion precondition); the
          * eventual lowering of those forms is tracked in
-         * docs/upcoming/structdef-exotic-field-forms-plan.md. */
+         * docs/archive/history/structdef-exotic-field-forms-plan.md. */
         return true;
     }
     if (type_tok->tag != F_KEYWORD && type_tok->tag != F_SYM)
@@ -1016,7 +1015,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
      *     (defstruct Box [A] (val A))           -> (defdata Box [A] (Box [val : A]))
      * and dispatch to elab_defdata, reusing all the AdtDef machinery.  Anything
      * the gate rejects (:heap / :linear outer structs) still elaborates as a
-     * struct.  See docs/upcoming/defstruct-as-defadt-plan.md. */
+     * struct.  See docs/archive/defstruct-as-defadt-plan.md. */
     if (defstruct_lowers_to_adt(e, call)) {
         /* Redefinition guard -- must run BEFORE dispatching into elab_defdata.
          * A `defstruct` that redefines a fully-defined name (commonly an
@@ -1198,6 +1197,7 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
     bool opaque_linear = false;
     bool opaque_affine = false;
     bool opaque_sealed = false;
+    bool opaque_non_null = false;
     for (uint32_t ai = base_idx + 1; ai < call->as.list.len; ai++) {
         Form *attr = call->as.list.items[ai];
         if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_linear) {
@@ -1206,16 +1206,15 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
             opaque_affine = true;
         } else if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_sealed) {
             opaque_sealed = true;
+        } else if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_non_null) {
+            opaque_non_null = true;
         } else {
             diag_emit(DIAG_ERROR, attr->span,
                       "defopaque: unexpected attribute -- expected :linear, "
-                      ":affine or :sealed");
+                      ":affine, :sealed or :non-null");
             return NULL;
         }
     }
-    /* Lifecycle warning (TUR-W0060/W0061) fires where the feature is USED --
-     * declaring a sealed opaque -- not where the check happens to run. */
-    if (opaque_sealed) experiment_warn_if_used("sealed-opaque");
     if (opaque_linear && opaque_affine) {
         diag_emit(DIAG_ERROR, call->span,
                   "defopaque: :linear and :affine are mutually exclusive "
@@ -1248,6 +1247,34 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
     def->is_linear = opaque_linear;
     def->is_affine = opaque_affine;
     def->is_opaque = true;
+    /* opaque-pointer-c-spelling gate: record whether the DECLARED base type is
+     * a pointer.  Until now `base_idx` located the base form only so the
+     * attribute scan could start after it -- the form itself was never read, so
+     * `(defopaque String :ptr<void>)` and `(defopaque UserId :int)` were
+     * indistinguishable downstream.  The base is a type keyword (`:ptr`,
+     * `:ptr<void>`, `:ptr<T>`, `:int`, ...), so the test is a prefix match on
+     * the keyword's own name. */
+    {
+        const Form *base_form = call->as.list.items[base_idx];
+        if (base_form->tag == F_KEYWORD && base_form->as.sym) {
+            const char *bn = base_form->as.sym->name;
+            def->opaque_base_is_ptr =
+                (strcmp(bn, "ptr") == 0 || strcmp(bn, "ptr-void") == 0 ||
+                 strncmp(bn, "ptr<", 4) == 0);
+        }
+    }
+    /* option-niche: `:non-null` declares "this handle's valid values exclude
+     * the null pointer", which only means anything over a pointer base -- on an
+     * int newtype 0 is just a number, and accepting the attribute there would
+     * let a later base-type edit silently keep a stale claim. */
+    if (opaque_non_null && !def->opaque_base_is_ptr) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defopaque: :non-null requires a pointer base type "
+                  "(:ptr or :ptr<...>) -- it declares that the handle's valid "
+                  "values exclude the null pointer");
+        return NULL;
+    }
+    def->opaque_non_null = opaque_non_null;
     /* sealed-opaque: assigned UNCONDITIONALLY, like the flags above -- the
      * forward-declared-stub path reuses an existing def rather than the
      * freshly memset one, so a conditional assignment would silently leave a
@@ -1297,11 +1324,33 @@ void elab_register_adt_def(Elab *e, AdtDef *def) {
  * Shared by positional-style variants (`(Just :int)`) and record-style variants
  * (`(Circle [radius : float])`); the record path also sets ctor->fields[fi].name.
  * Returns false (diag already emitted) on an unresolvable field type. */
+/* SR1: does this field-type form name `def` itself?  See AdtDef.is_self_recursive
+ * -- a recursive field's resolved full_type is deliberately NULL, so the only
+ * place the fact is observable is here, against the form the user wrote.  Walks
+ * a compound form (`(Vec Term)`, `(Pair Term int)`) so a self-reference nested
+ * inside a type application counts too. */
+static bool ctor_field_form_names_adt(const Form *ft_form, const char *adt_name) {
+    if (!ft_form || !adt_name) return false;
+    if (ft_form->tag == F_SYM || ft_form->tag == F_KEYWORD) {
+        const Symbol *s = ft_form->as.sym;
+        return s && s->name && strlen(adt_name) == s->len &&
+               memcmp(s->name, adt_name, s->len) == 0;
+    }
+    if (ft_form->tag == F_LIST) {
+        for (uint32_t i = 0; i < ft_form->as.list.len; i++)
+            if (ctor_field_form_names_adt(ft_form->as.list.items[i], adt_name))
+                return true;
+    }
+    return false;
+}
+
 static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
                                Form *ft_form, const Symbol **tp_syms,
                                uint32_t n_type_params, bool record_style) {
     ctor->fields[fi].full_type = NULL;
     if (ctor->field_forms) ctor->field_forms[fi] = NULL;
+    if (ctor_field_form_names_adt(ft_form, def->name))
+        def->is_self_recursive = true;
 
     /* TP1: a bare symbol (non-keyword) may be a declared type parameter.
      * E.g. `a` in `(defdata Opt2 [a] (Yep a))`. */
@@ -1335,12 +1384,17 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
          * the fat dispatch (TUR_APPLY*); the make-struct store shims a bare/thin
          * fn into a fat handle (elab_call.c constructor arg loop).  Storage stays
          * the int64 carrier -- only the dispatch/representation changes. */
-        /* Bound to arity 1..4: the store shim (elab_call.c) shims arity >=1 and
-         * the field-call fat dispatch (emit_expr.c TUR_APPLY<N>_T) covers N<=4, so
-         * boxing outside that range would make the store and read disagree.  A
-         * nullary or >4-arg fn field stays on the pre-existing thin path. */
+        /* Bound to arity 0..4: the field-call fat dispatch (emit_expr.c,
+         * TUR_APPLY<N>_T) covers N<=4; the store shim (elab_call.c) covers the
+         * same range.  Arity 0 was originally excluded alongside >4, which
+         * left a THUNK field -- the lazy-stream shape, and the one the
+         * closure-in-defdata-field report was filed about -- on the thin path,
+         * where a capturing closure stored into it segfaulted at force time
+         * (TUR_APPLY0_T existed all along; the exclusion was stale).  A >4-arg
+         * fn field stays thin, and a capturing store into one is rejected at
+         * elaboration rather than left to crash. */
         if (t && t->kind == TY_FN && !t->as.fn.boxed &&
-            t->as.fn.arity >= 1 && t->as.fn.arity <= 4) {
+            t->as.fn.arity <= 4) {
             Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
             *bt = *t;
             bt->as.fn.boxed = true;
@@ -1669,6 +1723,13 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def = adt_binding->type.as.adt_.def;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        /* Zero the array: predicates reached MID-DEFINITION (a recursive field
+         * probing adt_is_byvalue_product while this def's ctors are still being
+         * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
+         * -- the guard only ever worked on lucky fresh pages.  turi's
+         * longer-lived arena handed back dirty memory and the guard read a
+         * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
+        memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->is_heap = is_heap;
         def->is_linear = is_linear; /* LT4 (structdef-retirement slice 4) */
@@ -1704,6 +1765,13 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def->name = name->name;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        /* Zero the array: predicates reached MID-DEFINITION (a recursive field
+         * probing adt_is_byvalue_product while this def's ctors are still being
+         * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
+         * -- the guard only ever worked on lucky fresh pages.  turi's
+         * longer-lived arena handed back dirty memory and the guard read a
+         * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
+        memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->is_heap = is_heap;
         def->is_linear = is_linear; /* LT4 (structdef-retirement slice 4) */
@@ -2469,6 +2537,13 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         def = adt_binding->type.as.adt_.def;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        /* Zero the array: predicates reached MID-DEFINITION (a recursive field
+         * probing adt_is_byvalue_product while this def's ctors are still being
+         * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
+         * -- the guard only ever worked on lucky fresh pages.  turi's
+         * longer-lived arena handed back dirty memory and the guard read a
+         * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
+        memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->needs_drop_glue = false;
         def->is_gadt = true;
@@ -2499,6 +2574,13 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         def->name = name->name;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        /* Zero the array: predicates reached MID-DEFINITION (a recursive field
+         * probing adt_is_byvalue_product while this def's ctors are still being
+         * filled) guard on `ctors[ci] == NULL`, and arena memory is not zeroed
+         * -- the guard only ever worked on lucky fresh pages.  turi's
+         * longer-lived arena handed back dirty memory and the guard read a
+         * garbage CtorDef (SEGV in adt_sr1_sum_candidate). */
+        memset(def->ctors, 0, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->is_gadt = true;
         def->type_params = type_params;
@@ -2771,7 +2853,7 @@ ctor_parse_error:
      * scope. The slots `[ci, n_ctors)` are still NULL, but `def->n_ctors`
      * advertises the full declared count, so a later `(match ...)` on this
      * type would dereference a NULL CtorDef and crash (see
-     * docs/reported/defgadt-malformed-pattern-segfault.md). Truncate the
+     * docs/archive/history/defgadt-malformed-pattern-segfault.md). Truncate the
      * count to the slots we actually filled. Compilation has already failed
      * (a diagnostic was emitted), so this only prevents the crash. */
     def->n_ctors = ci;
@@ -2906,6 +2988,13 @@ static bool arm_arg_join(Elab *e, Type a, Type b, Type *out) {
 
 static bool match_arm_type_compatible(Elab *e, Type a, Type b, Type *out) {
     if (type_eq(a, b)) { *out = a; return true; }
+    /* `!` (TY_NEVER) is bottom: an arm that diverges -- `(panic ...)`, a
+     * `return`, a call to a `!`-returning function -- produces no value, so it
+     * is compatible with any peer arm and contributes nothing to the result
+     * type.  Without this a `(match x (A) 1 (B) (panic "no"))` is rejected
+     * with "arm types are incompatible -- expected int, got !". */
+    if (a.kind == TY_NEVER) { *out = b; return true; }
+    if (b.kind == TY_NEVER) { *out = a; return true; }
     AdtDef *ad = (a.kind == TY_ADT) ? a.as.adt_.def
                : (a.kind == TY_APP) ? type_adt_app_def(&a) : NULL;
     AdtDef *bd = (b.kind == TY_ADT) ? b.as.adt_.def
@@ -2923,7 +3012,460 @@ static bool match_arm_type_compatible(Elab *e, Type a, Type b, Type *out) {
             return arm_arg_join(e, a, b, out);
         }
     }
+    /* SR2b: one arm's type is an application headed by an UNGROUNDED tyvar --
+     * `(m b)` from `(k v)` in a Monad bind's Some arm -- and the peer is a
+     * concrete ADT application (`(Option A)` from the None arm's `(none)`).
+     * The class variable `m` is grounded by the INSTANCE, not by this join,
+     * so the abstract head can never win here: take the concrete side.  This
+     * is the class-method-hkt-tyvar-grounding rule one level up -- that fix
+     * grounds a method tyvar BELOW a shared concrete head (arm_arg_join);
+     * this grounds the head itself.  Reachable once Option/Result are sums,
+     * because a sum's empty arm is a bare constructor call rather than an
+     * accessor whose type the record head already fixed. */
+    if (a.kind == TY_APP && b.kind == TY_APP && (ad != NULL) != (bd != NULL)) {
+        const Type *abs = ad ? &b : &a;
+        const Type *spine = abs;
+        while (spine->kind == TY_APP && spine->as.app.fn) spine = spine->as.app.fn;
+        if (spine->kind == TY_TYVAR) {
+            *out = ad ? a : b;
+            return true;
+        }
+    }
     return false;
+}
+
+/* ---------------------------------------------------------------------------
+ * match-nested-constructor-patterns: nested constructor patterns in match arms
+ *
+ * `(match e (Add (Lit 0) r) ...)` used to be rejected with "match: field
+ * binding must be a symbol": an arm could bind exactly one constructor level,
+ * so every nested test had to be hand-flattened into an inner `match`.
+ *
+ * The flattening is mechanical, so the lowering below does it -- at the FORM
+ * level, before anything is elaborated.  All the arms for one constructor fold
+ * into a single arm binding fresh field names, whose body is a chain of tests
+ * over the nested sub-patterns, each falling through to the next candidate arm
+ * on failure:
+ *
+ *   (match e                        (let [__ms0 e]
+ *     (Lit v)         v      =>       (match __ms0
+ *     (Add (Lit 0) r) r                 (Lit v) v
+ *     (Add l r)       (f l r))          (Add __mp1 __mp2)
+ *                                         (match __mp1
+ *                                           (Lit __mp3)
+ *                                             (if (= __mp3 0)
+ *                                               (let [r __mp2] r)
+ *                                               (let [l __mp1 r __mp2] (f l r)))
+ *                                           _ (let [l __mp1 r __mp2] (f l r)))))
+ *
+ * Depth needs no special handling: the inner `match` forms emitted here go
+ * back through elab_match and are lowered again if they nest further.  The
+ * fallback is duplicated per failing test -- that costs code size, never
+ * execution: exactly one copy runs.
+ *
+ * The scrutinee is let-bound to a temp only when a fallback needs the whole
+ * value (a variable catch-all arm); otherwise the original scrutinee form is
+ * passed through untouched.
+ * ------------------------------------------------------------------------- */
+
+/* A sub-pattern that is a TEST rather than a plain binder. */
+static bool match_subpat_is_test(const Form *q) {
+    return q->tag == F_LIST || q->tag == F_INT || q->tag == F_BOOL ||
+           q->tag == F_FLOAT;
+}
+
+/* Does this arm pattern carry a nested sub-pattern?  Gated on the head
+ * resolving to a real constructor, so union / session-offer patterns (whose
+ * shapes also start with a symbol) are never touched. */
+static bool match_pattern_has_nested(Elab *e, const Form *pat) {
+    if (pat->tag != F_LIST || pat->as.list.len < 2) return false;
+    if (pat->as.list.items[0]->tag != F_SYM) return false;
+    if (!elab_lookup_ctor(e, pat->as.list.items[0]->as.sym)) return false;
+    if (pat->as.list.items[1]->tag == F_KEYWORD) return false;  /* by-name form */
+    for (uint32_t i = 1; i < pat->as.list.len; i++)
+        if (pat->as.list.items[i]->tag != F_SYM) return true;
+    return false;
+}
+
+static Form *mlist(Elab *e, Span sp, Form **items, uint32_t n) {
+    Form **it = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+    for (uint32_t i = 0; i < n; i++) it[i] = items[i];
+    return form_list(e->arena, sp, it, n);
+}
+
+static Form *mk_fresh_sym(Elab *e, Span sp, const char *prefix) {
+    char buf[48];
+    snprintf(buf, sizeof(buf), "%s%u", prefix, e->next_gensym_id++);
+    const Symbol *s = symtab_intern(e->st, strslice(buf, (uint32_t)strlen(buf)));
+    return form_sym(e->arena, sp, s);
+}
+
+/* (let [n0 v0 n1 v1 ...] body) */
+static Form *mk_let(Elab *e, Span sp, Form **pairs, uint32_t n_pairs, Form *body) {
+    if (n_pairs == 0) return body;
+    Form **bv = (Form **)arena_alloc(e->arena, n_pairs * 2 * sizeof(Form *));
+    for (uint32_t i = 0; i < n_pairs * 2; i++) bv[i] = pairs[i];
+    Form *vec = form_vec(e->arena, sp, bv, n_pairs * 2);
+    Form *items[3];
+    items[0] = form_sym(e->arena, sp, e->sym_let);
+    items[1] = vec;
+    items[2] = body;
+    return mlist(e, sp, items, 3);
+}
+
+/* Do these constructor patterns, all applying to one value position, cover
+ * every constructor of `adt`?  A plain binder covers everything; a constructor
+ * pattern covers its own constructor when its own nested positions are covered
+ * in turn, which is the recursion.  A literal sub-pattern covers only itself,
+ * so a position holding only literals is never provably exhaustive.
+ *
+ * Conservative by construction: anything this cannot prove reports "not
+ * covered", which costs the user an explicit catch-all arm and never
+ * mis-accepts a genuinely partial match. */
+static bool match_pats_cover_adt(Elab *e, const Form **pats, uint32_t n,
+                                 AdtDef *adt, int depth);
+
+/* One constructor's group of arm patterns: are the values of that constructor
+ * fully covered?  `pats` are whole patterns `(C f1 ... fm)`. */
+static bool match_ctor_group_covers(Elab *e, const Form **pats, uint32_t n,
+                                    int depth) {
+    if (depth > 16 || n == 0) return false;
+    int field = -1;
+    for (uint32_t i = 0; i < n; i++) {
+        const Form *p = pats[i];
+        if (p->tag != F_LIST) return false;
+        int this_field = -1;
+        bool two = false;
+        for (uint32_t f = 1; f < p->as.list.len; f++) {
+            if (p->as.list.items[f]->tag == F_SYM) continue;
+            if (this_field >= 0) { two = true; break; }
+            this_field = (int)f;
+        }
+        if (two) return false;                 /* two nested fields: not analysed */
+        if (this_field < 0) return true;       /* all binders: matches every value */
+        if (field < 0) field = this_field;
+        else if (field != this_field) return false;
+    }
+    /* Every pattern nests at the same single position: recurse there. */
+    const Form *subs[256];
+    uint32_t n_subs = 0;
+    AdtDef *sub_adt = NULL;
+    for (uint32_t i = 0; i < n && n_subs < 256; i++) {
+        const Form *q = pats[i]->as.list.items[field];
+        subs[n_subs++] = q;
+        if (q->tag == F_LIST && q->as.list.len >= 1 &&
+            q->as.list.items[0]->tag == F_SYM) {
+            CtorDef *qc = elab_lookup_ctor(e, q->as.list.items[0]->as.sym);
+            if (qc && qc->adt) {
+                if (sub_adt && sub_adt != qc->adt) return false;
+                sub_adt = qc->adt;
+            }
+        }
+    }
+    return match_pats_cover_adt(e, subs, n_subs, sub_adt, depth + 1);
+}
+
+static bool match_pats_cover_adt(Elab *e, const Form **pats, uint32_t n,
+                                 AdtDef *adt, int depth) {
+    if (depth > 16) return false;
+    for (uint32_t i = 0; i < n; i++)
+        if (pats[i]->tag == F_SYM) return true;   /* a binder covers everything */
+    if (!adt || adt->n_ctors == 0) return false;  /* literals only, or unknown */
+    for (uint32_t t = 0; t < adt->n_ctors; t++) {
+        const Form *group[256];
+        uint32_t n_group = 0;
+        for (uint32_t i = 0; i < n && n_group < 256; i++) {
+            const Form *q = pats[i];
+            if (q->tag != F_LIST || q->as.list.len < 1 ||
+                q->as.list.items[0]->tag != F_SYM) continue;
+            CtorDef *qc = elab_lookup_ctor(e, q->as.list.items[0]->as.sym);
+            if (qc && qc->tag == t && qc->adt == adt) group[n_group++] = q;
+        }
+        if (n_group == 0) return false;
+        if (!match_ctor_group_covers(e, group, n_group, depth)) return false;
+    }
+    return true;
+}
+
+/* Can the arms of one constructor group fail to match a value of that
+ * constructor?  A trailing plain, unguarded arm always matches; so does a
+ * group whose nested sub-patterns provably cover the sub-ADT. */
+static bool match_group_falls_through(Elab *e, const Form *call,
+                                      const uint32_t *arm_pat,
+                                      Form *const *arm_guard,
+                                      const uint32_t *group, uint32_t n_group) {
+    const Form *last = call->as.list.items[arm_pat[group[n_group - 1]]];
+    if (!arm_guard[group[n_group - 1]] && !match_pattern_has_nested(e, last))
+        return false;
+    const Form *pats[256];
+    uint32_t n = 0;
+    for (uint32_t gi = 0; gi < n_group && n < 256; gi++) {
+        if (arm_guard[group[gi]]) return true;   /* a guard can always fail */
+        pats[n++] = call->as.list.items[arm_pat[group[gi]]];
+    }
+    return !match_ctor_group_covers(e, pats, n, 0);
+}
+
+/* Build the test chain for ONE arm of a group: bind the arm's symbol
+ * sub-patterns, run its guard, and thread `next` through every failure edge. */
+static Form *match_build_arm_test(Elab *e, const Form *pat, Form *guard,
+                                  Form *body, Form **field_syms, Form *next,
+                                  bool *err) {
+    Span sp = pat->span;
+    Form *inner = body;
+    if (guard) {
+        Form *items[4];
+        items[0] = form_sym(e->arena, sp, e->sym_if);
+        items[1] = guard;
+        items[2] = inner;
+        items[3] = next;
+        inner = mlist(e, sp, items, 4);
+    }
+    /* Alias the plain-binder positions to the user's names. */
+    {
+        uint32_t n_pairs = 0;
+        Form *pairs[2 * 64];
+        const Symbol *sym_wc = intern_cstr(e->st, "_");
+        for (uint32_t f = 1; f < pat->as.list.len && n_pairs < 64; f++) {
+            const Form *q = pat->as.list.items[f];
+            if (q->tag != F_SYM || q->as.sym == sym_wc) continue;
+            pairs[n_pairs * 2]     = (Form *)q;
+            pairs[n_pairs * 2 + 1] = field_syms[f - 1];
+            n_pairs++;
+        }
+        inner = mk_let(e, sp, pairs, n_pairs, inner);
+    }
+    /* Wrap the tests outermost-first (field order). */
+    for (uint32_t f = pat->as.list.len; f-- > 1; ) {
+        const Form *q = pat->as.list.items[f];
+        if (!match_subpat_is_test(q)) continue;
+        Form *fv = field_syms[f - 1];
+        if (q->tag == F_LIST) {
+            if (q->as.list.len < 1 || q->as.list.items[0]->tag != F_SYM ||
+                !elab_lookup_ctor(e, q->as.list.items[0]->as.sym)) {
+                diag_emit(DIAG_ERROR, q->span,
+                          "match: nested pattern must be a constructor "
+                          "application or a scalar literal");
+                *err = true;
+                return NULL;
+            }
+            /* (match fv <subpat> inner _ next) */
+            Form *items[6];
+            items[0] = form_sym(e->arena, sp, e->sym_match);
+            items[1] = fv;
+            items[2] = (Form *)q;
+            items[3] = inner;
+            items[4] = form_sym(e->arena, sp, intern_cstr(e->st, "_"));
+            items[5] = next;
+            inner = mlist(e, sp, items, 6);
+        } else {
+            /* (if (= fv <lit>) inner next) */
+            Form *cmp[3];
+            cmp[0] = form_sym(e->arena, sp, intern_cstr(e->st, "="));
+            cmp[1] = fv;
+            cmp[2] = (Form *)q;
+            Form *test = mlist(e, sp, cmp, 3);
+            Form *items[4];
+            items[0] = form_sym(e->arena, sp, e->sym_if);
+            items[1] = test;
+            items[2] = inner;
+            items[3] = next;
+            inner = mlist(e, sp, items, 4);
+        }
+    }
+    return inner;
+}
+
+/* Lower every nesting constructor group in `call`.  Returns the rewritten
+ * form, NULL when there is nothing to lower (the caller proceeds with the
+ * original), and NULL with *err set when a diagnostic was emitted.
+ * `arms_base` is the index of the first arm (2, or 3 behind a marker). */
+static Form *match_lower_nested_patterns(Elab *e, const Form *call,
+                                         uint32_t arms_base, bool *err) {
+    *err = false;
+    uint32_t len = call->as.list.len;
+    uint32_t arm_pat[256], arm_body[256];
+    Form    *arm_guard[256];
+    uint32_t n_arms = 0;
+    {
+        uint32_t idx = arms_base;
+        while (idx < len) {
+            if (n_arms >= 256) return NULL;   /* the caller diagnoses the cap */
+            arm_pat[n_arms]   = idx++;
+            arm_guard[n_arms] = NULL;
+            if (idx + 1 < len && call->as.list.items[idx]->tag == F_SYM &&
+                call->as.list.items[idx]->as.sym == e->sym_when) {
+                arm_guard[n_arms] = call->as.list.items[idx + 1];
+                idx += 2;
+            }
+            if (idx >= len) return NULL;      /* malformed; the caller diagnoses */
+            arm_body[n_arms] = idx++;
+            n_arms++;
+        }
+    }
+    bool any_nested = false;
+    for (uint32_t i = 0; i < n_arms && !any_nested; i++)
+        any_nested = match_pattern_has_nested(e, call->as.list.items[arm_pat[i]]);
+    if (!any_nested) return NULL;
+
+    CtorDef *arm_ctor[256];
+    bool     arm_generic[256];
+    for (uint32_t i = 0; i < n_arms; i++) {
+        const Form *p = call->as.list.items[arm_pat[i]];
+        arm_ctor[i]    = NULL;
+        arm_generic[i] = (p->tag == F_SYM);
+        if (p->tag == F_LIST && p->as.list.len >= 1 &&
+            p->as.list.items[0]->tag == F_SYM)
+            arm_ctor[i] = elab_lookup_ctor(e, p->as.list.items[0]->as.sym);
+    }
+
+    Form *scrut_sym = mk_fresh_sym(e, call->span, "__ms_");
+    bool  used_scrut_sym = false;
+
+    /* Output arms: pattern/body pairs (guards are folded into the chain). */
+    Form *out_pat[256], *out_body[256];
+    Form *out_guard[256];
+    uint32_t n_out = 0;
+    bool consumed[256];
+    for (uint32_t i = 0; i < n_arms; i++) consumed[i] = false;
+
+    for (uint32_t i = 0; i < n_arms; i++) {
+        if (consumed[i]) continue;
+        CtorDef *c = arm_ctor[i];
+        bool group_nests = false;
+        uint32_t group[256], n_group = 0;
+        if (c) {
+            for (uint32_t j = i; j < n_arms; j++) {
+                if (arm_ctor[j] != c) continue;
+                group[n_group++] = j;
+                if (match_pattern_has_nested(e, call->as.list.items[arm_pat[j]]))
+                    group_nests = true;
+            }
+        }
+        if (!c || !group_nests) {
+            out_pat[n_out]   = call->as.list.items[arm_pat[i]];
+            out_guard[n_out] = arm_guard[i];
+            out_body[n_out]  = call->as.list.items[arm_body[i]];
+            n_out++;
+            continue;
+        }
+        for (uint32_t gi = 0; gi < n_group; gi++) consumed[group[gi]] = true;
+
+        Span sp = call->as.list.items[arm_pat[i]]->span;
+        /* A by-name (`:field var`) arm inside a nesting group is not lowered. */
+        for (uint32_t gi = 0; gi < n_group; gi++) {
+            const Form *p = call->as.list.items[arm_pat[group[gi]]];
+            if (p->as.list.len >= 2 && p->as.list.items[1]->tag == F_KEYWORD) {
+                diag_emit(DIAG_ERROR, p->span,
+                          "match: by-name (`:field var`) and nested patterns "
+                          "cannot be mixed in the arms for constructor '%s'",
+                          c->name);
+                *err = true;
+                return NULL;
+            }
+            if (p->as.list.len - 1 != c->n_fields) {
+                diag_emit(DIAG_ERROR, p->span,
+                          "match: constructor '%s' expects %u fields, got %u",
+                          c->name, c->n_fields, p->as.list.len - 1);
+                *err = true;
+                return NULL;
+            }
+        }
+
+        /* Fresh binders for the constructor's fields. */
+        Form *field_syms[64];
+        if (c->n_fields > 64) {
+            diag_emit(DIAG_ERROR, sp,
+                      "match: nested patterns support at most 64 fields");
+            *err = true;
+            return NULL;
+        }
+        for (uint32_t f = 0; f < c->n_fields; f++)
+            field_syms[f] = mk_fresh_sym(e, sp, "__mp_");
+
+        /* Fallback: the first generic arm after the group's last arm. */
+        Form *fallback = NULL;
+        uint32_t last = group[n_group - 1];
+        for (uint32_t j = last + 1; j < n_arms; j++) {
+            if (!arm_generic[j]) continue;
+            if (arm_guard[j]) break;   /* a guarded catch-all can fail too */
+            const Form *gp = call->as.list.items[arm_pat[j]];
+            Form *gb = call->as.list.items[arm_body[j]];
+            if (gp->as.sym == intern_cstr(e->st, "_")) {
+                fallback = gb;
+            } else {
+                Form *pairs[2];
+                pairs[0] = (Form *)gp;
+                pairs[1] = scrut_sym;
+                used_scrut_sym = true;
+                fallback = mk_let(e, gp->span, pairs, 1, gb);
+            }
+            break;
+        }
+        bool falls = match_group_falls_through(e, call, arm_pat, arm_guard,
+                                               group, n_group);
+        if (!fallback) {
+            if (falls) {
+                diag_emit(DIAG_ERROR, sp,
+                          "match: the nested patterns for constructor '%s' are "
+                          "not exhaustive -- add a `(%s ...)` arm binding plain "
+                          "names, or a `_` arm after it",
+                          c->name, c->name);
+                *err = true;
+                return NULL;
+            }
+            /* Unreachable: the group provably covers every value of '%s'. */
+            Form *items[2];
+            items[0] = form_sym(e->arena, sp, intern_cstr(e->st, "panic"));
+            items[1] = form_str(e->arena, sp,
+                                "match: nested pattern fallthrough (unreachable)",
+                                (uint32_t)strlen(
+                                "match: nested pattern fallthrough (unreachable)"));
+            fallback = mlist(e, sp, items, 2);
+        }
+
+        /* Chain the group's arms, last first. */
+        Form *chain = fallback;
+        for (uint32_t gi = n_group; gi-- > 0; ) {
+            uint32_t ai = group[gi];
+            chain = match_build_arm_test(e, call->as.list.items[arm_pat[ai]],
+                                         arm_guard[ai],
+                                         call->as.list.items[arm_body[ai]],
+                                         field_syms, chain, err);
+            if (!chain) return NULL;
+        }
+
+        /* (C __mp_0 ... __mp_{n-1}) */
+        Form *pitems[65];
+        pitems[0] = call->as.list.items[arm_pat[i]]->as.list.items[0];
+        for (uint32_t f = 0; f < c->n_fields; f++) pitems[f + 1] = field_syms[f];
+        out_pat[n_out]   = mlist(e, sp, pitems, c->n_fields + 1);
+        out_guard[n_out] = NULL;
+        out_body[n_out]  = chain;
+        n_out++;
+    }
+
+    /* Rebuild the match form. */
+    uint32_t cap = arms_base + n_out * 4;
+    Form **items = (Form **)arena_alloc(e->arena, cap * sizeof(Form *));
+    uint32_t k = 0;
+    for (uint32_t b = 0; b < arms_base; b++) items[k++] = call->as.list.items[b];
+    if (used_scrut_sym) items[arms_base - 1] = scrut_sym;
+    for (uint32_t a = 0; a < n_out; a++) {
+        items[k++] = out_pat[a];
+        if (out_guard[a]) {
+            items[k++] = form_sym(e->arena, out_pat[a]->span, e->sym_when);
+            items[k++] = out_guard[a];
+        }
+        items[k++] = out_body[a];
+    }
+    Form *lowered = form_list(e->arena, call->span, items, k);
+    if (!used_scrut_sym) return lowered;
+
+    Form *pairs[2];
+    pairs[0] = scrut_sym;
+    pairs[1] = call->as.list.items[arms_base - 1];
+    return mk_let(e, call->span, pairs, 1, lowered);
 }
 
 Expr *elab_match(Elab *e, const Form *call) {
@@ -2974,6 +3516,52 @@ Expr *elab_match(Elab *e, const Form *call) {
             new_items[k - 1] = call->as.list.items[k];
         call = form_list(e->arena, call->span, new_items, new_len);
     }
+    /* match-nested-constructor-patterns: fold nested constructor / literal
+     * sub-patterns into the flat one-level-per-arm shape the rest of this
+     * function understands.  A no-op (and a single pattern scan) for every
+     * match that does not nest. */
+    {
+        bool lower_err = false;
+        Form *lowered = match_lower_nested_patterns(e, call, 2, &lower_err);
+        if (lower_err) return NULL;
+        if (lowered) {
+            if (nonexhaustive_optout) {
+                /* Re-attach the marker the splice above removed. */
+                Form *m_items[1];
+                m_items[0] = form_sym(e->arena, call->span,
+                                      intern_cstr(e->st, "NonExhaustive"));
+                Form *marker = form_map(e->arena, call->span, m_items, 1);
+                const Form *inner = lowered;
+                bool wrapped = (inner->as.list.items[0]->tag == F_SYM &&
+                                inner->as.list.items[0]->as.sym == e->sym_let);
+                const Form *m = wrapped ? inner->as.list.items[2] : inner;
+                uint32_t n = m->as.list.len + 1;
+                Form **mi = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+                mi[0] = m->as.list.items[0];
+                mi[1] = marker;
+                for (uint32_t q = 1; q < m->as.list.len; q++) mi[q + 1] = m->as.list.items[q];
+                Form *m2 = form_list(e->arena, m->span, mi, n);
+                if (wrapped) {
+                    Form *li[3];
+                    li[0] = inner->as.list.items[0];
+                    li[1] = inner->as.list.items[1];
+                    li[2] = m2;
+                    lowered = form_list(e->arena, inner->span, li, 3);
+                } else {
+                    lowered = m2;
+                }
+            }
+            if (getenv("TUR_DUMP_MATCH_LOWER")) {
+                Buf db; buf_init(&db);
+                form_print(&db, lowered);
+                buf_putc(&db, '\0');
+                fprintf(stderr, "match lowered:\n%s\n", db.data);
+                buf_free(&db);
+            }
+            return elab_form(e, lowered);
+        }
+    }
+
     /* Phase G4: Pre-scan arms to count and find per-arm start indices.
      * Arms can be (pat body) or (pat when guard body). */
     uint32_t arm_start[256];    /* start index of each arm's pattern */
@@ -3477,8 +4065,24 @@ Expr *elab_match(Elab *e, const Form *call) {
                                                  &match_lin_before);
     if (n_match_lin > 0) {
         arm_lin_states = (bool **)calloc(n_arms, sizeof(bool *));
-        arm_diverges   = (bool  *)calloc(n_arms, sizeof(bool));
     }
+    arm_diverges = (bool *)calloc(n_arms, sizeof(bool));
+
+    /* match-arm move state: arms are ALTERNATIVES, exactly like the two
+     * branches of an `if`, so a value consumed in one arm must not read as
+     * moved in the next.  `if` has rewound and merged this since forever
+     * (elab_forms.c: before || (then && else)); `match` rewound only the
+     * LINEAR state, so `(match t (TA) (f x) (TB) (f x))` was a spurious
+     * TUR-E0005 while the identical if/else was accepted.  Snapshot here,
+     * rewind before each arm, and merge with the same rule below -- a
+     * diverging arm cannot reach the merge, so it does not vote. */
+    Binding **match_move_bindings = NULL;
+    bool     *match_move_before   = NULL;
+    bool    **arm_move_states     = NULL;
+    uint32_t  n_match_move = move_state_snapshot_bindings(e->scope,
+                                 &match_move_bindings, &match_move_before);
+    if (n_match_move > 0)
+        arm_move_states = (bool **)calloc(n_arms, sizeof(bool *));
 
     for (uint32_t ai = 0; ai < n_arms; ai++) {
         uint32_t base = arm_start[ai];
@@ -3501,28 +4105,60 @@ Expr *elab_match(Elab *e, const Form *call) {
                 pat->is_wildcard = true;
                 has_wildcard = true;
             } else {
-                /* Variable binding — captures entire scrutinee */
+                /* Variable binding — captures entire scrutinee.
+                 *
+                 * match-adt-var-arm-does-not-bind: this used to record
+                 * `is_var`/`var_sym` and then elaborate the body with NO
+                 * binding and no scope, so `(match o (OA n) n whole (g whole))`
+                 * was "unbound symbol 'whole'" -- the ADT path's only usable
+                 * catch-all was `_`, while the literal path 500 lines above
+                 * bound its var arm properly.  Bind it to the scrutinee's type,
+                 * exactly as that path does. */
                 pat->is_var = true;
                 pat->var_sym = sym;
                 has_wildcard = true; /* covers all remaining */
+                pat->var_binding = binding_new(e, sym, scrutinee->type,
+                                               false, false, pat_form->span);
             }
-            /* No new scope needed; elaborate body directly */
             /* LT1: Restore outer linear state before this arm's body. */
             if (n_match_lin > 0) {
                 linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
             }
+            if (n_match_move > 0) {
+                move_state_restore(match_move_bindings, match_move_before, n_match_move);
+            }
             bool _s_wc = e->in_match_arm; e->in_match_arm = true;
-            Expr *body = elab_form(e, body_form);
+            Expr *body = NULL;
+            if (pat->is_var && pat->var_binding) {
+                /* The binder must be visible to the arm body (and, once guards
+                 * reach this path, to its own when-guard -- the same order the
+                 * literal path was corrected to). */
+                Scope var_scope;
+                scope_init(&var_scope, e->scope);
+                Scope *saved_var_scope = e->scope;
+                e->scope = &var_scope;
+                scope_add(&var_scope, pat->var_binding);
+                body = elab_form(e, body_form);
+                e->scope = saved_var_scope;
+                scope_free(&var_scope);
+            } else {
+                body = elab_form(e, body_form);
+            }
             e->in_match_arm = _s_wc;
             if (!body) { goto match_fail; }
             /* LT1: Capture outer linear state after this arm's body. */
             if (n_match_lin > 0) {
                 arm_lin_states[ai] = linear_state_capture_current(match_lin_bindings, n_match_lin);
-                arm_diverges[ai] = (body->type.kind == TY_NEVER) ||
-                                   (body->kind == EX_RETURN) ||
-                                   (body->kind == EX_PANIC)  ||
-                                   (body->kind == EX_PANIC_WITH);
                 linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
+            }
+            arm_diverges[ai] = (body->type.kind == TY_NEVER) ||
+                               (body->kind == EX_RETURN) ||
+                               (body->kind == EX_PANIC)  ||
+                               (body->kind == EX_PANIC_WITH);
+            if (n_match_move > 0) {
+                arm_move_states[ai] = move_state_capture_current(match_move_bindings,
+                                                                 n_match_move);
+                move_state_restore(match_move_bindings, match_move_before, n_match_move);
             }
             /* Phase G0: Arm body type consistency check for wildcard/variable arms. */
             Type _wc_unified;
@@ -3808,11 +4444,23 @@ Expr *elab_match(Elab *e, const Form *call) {
                  * closure value is already a fat box.  Mark the extracted match
                  * binding `boxed` so an application `(f env)` fat-dispatches
                  * through slot 0 (ER2, emit_expr.c) instead of jumping into the
-                 * box as thin code -> SIGSEGV.  A concrete (non-tyvar) TY_FN
-                 * field is NOT auto-boxed at construction, so it stays thin. */
+                 * box as thin code -> SIGSEGV.
+                 *
+                 * A concrete BOXED `(fn ...)` field is the same case: since
+                 * resolve_ctor_field started boxing concrete arity<=4 fn
+                 * fields, construction stores a fat handle there too -- but
+                 * this site still said "a concrete TY_FN field is NOT
+                 * auto-boxed" and marked only tyvar fields, so a match-arm
+                 * extraction called the fat box THIN and jumped into the env
+                 * block as code.  That store/read disagreement is why the
+                 * defdata half of closure-in-defdata-field crashed at every
+                 * arity while the defstruct field-read half worked at 1..4:
+                 * the two force paths consulted different facts. */
                 if (fb->type.kind == TY_FN &&
                     ctor->fields[bi].full_type &&
-                    ctor->fields[bi].full_type->kind == TY_TYVAR) {
+                    (ctor->fields[bi].full_type->kind == TY_TYVAR ||
+                     (ctor->fields[bi].full_type->kind == TY_FN &&
+                      ctor->fields[bi].full_type->as.fn.boxed))) {
                     fb->is_fat = true;
                 }
                 /* LT1: Propagate linearity from the field's type to its binding */
@@ -3861,8 +4509,27 @@ Expr *elab_match(Elab *e, const Form *call) {
             if (n_match_lin > 0) {
                 linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
             }
+            if (n_match_move > 0) {
+                move_state_restore(match_move_bindings, match_move_before, n_match_move);
+            }
             bool _s_ctor = e->in_match_arm; e->in_match_arm = true;
+            /* SR2b: sibling-arm bidirectional inference, the match twin of the
+             * if-form's have_sibling_ty push (elab_forms.c).  Once an earlier
+             * arm established a concrete parametric-app result -- `(k v)` in a
+             * Monad bind grounding `(Option b)` -- push it as the expected type
+             * so a later arm that is a bare parametric constructor (`(none)`,
+             * `(err e)`) selects its monomorph from the join instead of
+             * failing it with an ungrounded fresh tyvar.  Narrowed to a TY_APP
+             * join so every non-app match elaborates exactly as before, and
+             * restored immediately. */
+            Type *_arm_saved_expected = e->expected_type;
+            bool  _arm_pushed = false;
+            if (result_type.kind == TY_APP && !e->expected_type) {
+                e->expected_type = &result_type;
+                _arm_pushed = true;
+            }
             Expr *body = elab_form(e, body_form);
+            if (_arm_pushed) e->expected_type = _arm_saved_expected;
             e->in_match_arm = _s_ctor;
 
             /* Phase G4: Elaborate optional when-guard while arm scope is still live */
@@ -4026,11 +4693,16 @@ Expr *elab_match(Elab *e, const Form *call) {
             /* LT1: Capture outer linear state after this arm's body. */
             if (n_match_lin > 0) {
                 arm_lin_states[ai] = linear_state_capture_current(match_lin_bindings, n_match_lin);
-                arm_diverges[ai] = (body->type.kind == TY_NEVER) ||
-                                   (body->kind == EX_RETURN) ||
-                                   (body->kind == EX_PANIC)  ||
-                                   (body->kind == EX_PANIC_WITH);
                 linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
+            }
+            arm_diverges[ai] = (body->type.kind == TY_NEVER) ||
+                               (body->kind == EX_RETURN) ||
+                               (body->kind == EX_PANIC)  ||
+                               (body->kind == EX_PANIC_WITH);
+            if (n_match_move > 0) {
+                arm_move_states[ai] = move_state_capture_current(match_move_bindings,
+                                                                 n_match_move);
+                move_state_restore(match_move_bindings, match_move_before, n_match_move);
             }
         } else {
             diag_emit(DIAG_ERROR, pat_form->span,
@@ -4038,6 +4710,30 @@ Expr *elab_match(Elab *e, const Form *call) {
             goto match_fail;
         }
     }
+
+    /* Merge the per-arm move state, with `if`'s rule: a binding is moved after
+     * the match only if it was moved before it, or every arm that can reach the
+     * merge point moved it.  Arms are alternatives, so consuming a value in two
+     * different arms is one move at run time, not two. */
+    if (n_match_move > 0 && arm_move_states) {
+        for (uint32_t mi = 0; mi < n_match_move; mi++) {
+            if (match_move_before[mi]) {
+                match_move_bindings[mi]->is_moved = true;
+                continue;
+            }
+            bool all = true, any_voter = false;
+            for (uint32_t ai = 0; ai < n_arms; ai++) {
+                if (!arm_move_states[ai] || arm_diverges[ai]) continue;
+                any_voter = true;
+                if (!arm_move_states[ai][mi]) { all = false; break; }
+            }
+            match_move_bindings[mi]->is_moved = any_voter && all;
+        }
+        for (uint32_t ai = 0; ai < n_arms; ai++) free(arm_move_states[ai]);
+        free(arm_move_states); arm_move_states = NULL;
+    }
+    free(match_move_before);   match_move_before   = NULL;
+    free(match_move_bindings); match_move_bindings = NULL;
 
     /* LT1: Verify consistent outer-scope linear consumption across match arms */
     if (n_match_lin > 0 && arm_lin_states) {
@@ -4072,7 +4768,6 @@ Expr *elab_match(Elab *e, const Form *call) {
         }
         for (uint32_t ai = 0; ai < n_arms; ai++) free(arm_lin_states[ai]);
         free(arm_lin_states);   arm_lin_states   = NULL;
-        free(arm_diverges);     arm_diverges     = NULL;
         free(match_lin_before); match_lin_before = NULL;
         free(match_lin_bindings); match_lin_bindings = NULL;
         if (!lin_ok) { goto match_fail; }
@@ -4152,6 +4847,7 @@ Expr *elab_match(Elab *e, const Form *call) {
         }
     }
     free(covered);
+    free(arm_diverges);
 
     if (result_type.kind == TY_UNKNOWN) result_type = TYPE_NIL;
 
@@ -4174,6 +4870,18 @@ match_fail:
         for (uint32_t ai = 0; ai < n_arms; ai++) free(arm_lin_states[ai]);
         free(arm_lin_states);
     }
+    /* The match-arm move-state snapshot (taken above, released on the normal
+     * path after the merge) was not released here, so every match that failed
+     * to elaborate -- an unknown function in an arm body, a bad pattern --
+     * leaked it, and a Debug `tur check` on such a program ended in a
+     * LeakSanitizer report on top of the diagnostic.  All three are NULLed
+     * after their normal free, so this is safe on either path. */
+    if (arm_move_states) {
+        for (uint32_t ai = 0; ai < n_arms; ai++) free(arm_move_states[ai]);
+        free(arm_move_states);
+    }
+    free(match_move_before);
+    free(match_move_bindings);
     free(arm_diverges);
     free(match_lin_before);
     free(match_lin_bindings);

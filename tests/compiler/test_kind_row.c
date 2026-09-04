@@ -3,7 +3,7 @@
  * KIND_TYPEROW (0xFFFE) is the kind of a *row of types* -- the `[Pos Vel]`
  * component row of an ECS Query, a relation's column tuple, a data-frame
  * schema. It is the first elaborator-level building block of the variadic-HKT-
- * rows work tracked in docs/reported/variadic-hkt-rows-missing.md (Direction 1).
+ * rows work tracked in docs/archive/history/variadic-hkt-rows-missing.md (Direction 1).
  *
  * Like KIND_ROW (the effect-row sentinel), KIND_TYPEROW is *not* an arrow kind:
  * a row is a first-class kind, not a constructor you apply. These tests pin the
@@ -23,8 +23,9 @@ static int failures = 0;
 
 /* Stub required by the tur_core link dependency (mirrors the other
  * compiler-internals unit tests). */
-int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
-                        int *count_out) {
+int tur_collect_symbols(const char *source_path, const char *logical_path,
+                        LspSymbol *out, int cap, int *count_out) {
+    (void)logical_path;
     (void)source_path; (void)out; (void)cap;
     if (count_out) *count_out = 0;
     return 0;

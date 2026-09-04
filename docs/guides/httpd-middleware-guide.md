@@ -92,6 +92,7 @@ entry links to its docstring in the source for the full surface.
 | `mw-rate-limit`           | Sliding-window per-IP rate limiter (429 + Retry-After) | MW2 |
 | `mw-static`               | Fall back to static files when `next` returned 404 (with ETag + 304) | MW2 |
 | `mw-compress` / `mw-compress-with` | gzip the response body when client sends `Accept-Encoding: gzip` (requires `tur/zlib` spice) | M6 |
+| `mw-recover`              | Catch a downstream panic and respond 500; the server keeps serving | MW3 |
 
 ### mw-body-size (MW1)
 
@@ -145,7 +146,7 @@ lookups within one request do not re-`getpeername(2)`.
 ### mw-static (MW2)
 
 Defers to `next` first; only serves a file when `next` returned 404
-(the default no-route signal from `router-mw`). The file path is the
+(the default no-route signal from `router-dispatch`). The file path is the
 request path joined onto the configured `root-dir`; any `..` segment
 is rejected as a path-traversal guard.
 
@@ -252,6 +253,43 @@ Notes:
   deflate are out of scope for v0.1.
 
 See also: the [`tur-zlib` README](https://github.com/rjungemann/turmeric-spices/tree/main/spices/zlib).
+
+### mw-recover (MW3)
+
+`mw-recover` runs `next` under `catch-unwind`. When a downstream
+handler panics, the unwind is caught at the middleware boundary, the
+worker thread survives, and the client gets a `500 Internal Server
+Error` instead of a dropped connection.
+
+```turmeric
+(let [base     (fn [c : ptr<void>] : nil
+                 (httpd-resp-body! c (render-page c)))   ; may panic
+      composed (compose-middleware base mw-recover mw-log)]
+  (httpd-new 0 composed))
+```
+
+```sweet-exp
+let [base     fn([c :ptr<void>] :nil
+                 httpd-resp-body!(c render-page(c)))
+     composed compose-middleware(base mw-recover mw-log)]
+  httpd-new(0 composed)
+```
+
+Notes:
+
+- Put it OUTERMOST (leftmost in `compose-middleware`) among the layers
+  you want protected -- it can only recover panics raised by handlers
+  it wraps. Anything outside it still runs its post-processing on the
+  500 response, which is usually what you want for `mw-log`.
+- The 500 is only written when the handler had **not** already set a
+  status before it panicked. A handler that got as far as
+  `(httpd-resp-status! c 201)` and then blew up keeps its own status
+  rather than having it silently rewritten.
+- It recovers the *request*, not the *state*: a panic partway through a
+  handler may have left application state half-updated. Use it as a
+  last line of defence, not as control flow.
+- The panic message still goes to stderr, so a recovered panic is
+  visible in the server log rather than swallowed.
 
 ## Request attributes (MW2)
 
@@ -397,14 +435,6 @@ but not yet in stdlib:
   handler/timer race; today's worker-pool path has no portable
   cancellation primitive, and the async path needs a `with-deadline`
   combinator before this can ship cleanly.
-- **`mw-recover`** -- catch a downstream panic and respond 500. The
-  primitive `(catch-unwind thunk)` exists at the surface level but
-  its current lowering does not propagate the closure env -- the
-  thunk cannot capture `next`. Tracked in
-  [`src/compiler/emit_expr.c`](https://github.com/rjungemann/turmeric/blob/main/src/compiler/emit_expr.c) under
-  `EX_CATCH_UNWIND`.
-- **Compression middleware** -- spun out into its own plan
-  [`docs/archive/history/httpd-compression-zlib-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/httpd-compression-zlib-spice-plan.md).
 
 ## See also
 

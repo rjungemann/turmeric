@@ -68,6 +68,19 @@ typedef struct Elab ElabSession;
 ElabSession *elab_session_new(void);
 void         elab_session_free(ElabSession *session);
 
+/* Stage 1 (macro-system-direction-plan): the session's macro-time
+ * interpreter env -- a capability-denied (TURI_CAP_NONE), fuel-limited turi
+ * env created lazily on first use and torn down with the session (or at the
+ * end of a non-session elaborate_program call).  Creation brackets
+ * turi_env_new's g_interpret_mode side effect so the enclosing compile's
+ * mode is untouched; each eval against the env brackets the flag, the diag
+ * sink, and the diag file registry itself (turi_eval_with_sink).
+ * Implemented in src/turi/macro_env.c -- `struct TuriEnv` stays opaque
+ * here to keep the compiler -> turi include surface at zero. */
+struct TuriEnv;
+struct TuriEnv *elab_macro_env_get(ElabSession *session);
+void            elab_macro_env_dispose(struct TuriEnv *env);
+
 /* As elaborate_program, but threads `session`. When `session` is NULL this is
  * exactly elaborate_program (every compiler path), so behavior there is
  * unchanged. When non-NULL, state accumulates into the session instead of being

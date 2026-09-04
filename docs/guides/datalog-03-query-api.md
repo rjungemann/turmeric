@@ -19,7 +19,7 @@ implementation with:
 Run the example:
 
 ```sh
-./build/tur examples/datalog/query.tur
+./build/tur run examples/datalog/query.tur
 ```
 
 ---

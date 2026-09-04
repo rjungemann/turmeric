@@ -11,7 +11,7 @@
 ;; (the positive fixture) is trampolined.
 ;; step(ok 3)=3+describe(ok)=3+1=4 ; step(err 3)=3+describe(err)=3+0=3.
 (defn leak [r : (Result int int)] : (Result int int) r)
-(defn describe [r : (Result int int)] : int (if (.is-ok (leak r)) 1 0))
+(defn describe [r : (Result int int)] : int (if (ok? (leak r)) 1 0))
 
 (defn step [acc : (Result int int) n : int] : int
   (if (= n 0)

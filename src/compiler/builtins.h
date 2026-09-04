@@ -67,6 +67,30 @@ const BuiltinSpec *builtin_lookup(const Symbol *name, Type first_arg_type,
  * regardless of arity/type. NULL if no entry exists with this name. */
 const BuiltinSpec *builtin_first_with_name(const Symbol *name);
 
+/* Describe a builtin by its spelled name, for hover and signature help.
+ *
+ * Writes up to `cap` bytes of NUL-terminated text into `out`: one
+ * "(name : (fn [T ...] : R))" line per distinct overload, and a trailing
+ * count when the overload set is longer than the lines shown. Returns the
+ * total number of table rows with this name; 0 means it is not a builtin and
+ * `out` is set to the empty string.
+ *
+ * Keyed by string rather than by Symbol: the language server holds a word
+ * scraped out of a buffer, not an interned name, and it has no SymbolTable of
+ * its own to intern into. */
+int builtin_describe(const char *name, char *out, size_t cap);
+
+/* True when a BS_DIV_CHECK spec divides floating-point operands.
+ *
+ * BS_DIV_CHECK backs both integer and float `/`. Integer division by zero is
+ * UB in C and has no value to produce, so it keeps the runtime guard. Float
+ * division by zero is well-defined in IEEE 754 (inf / NaN), so guarding it
+ * turns a legitimate value into a process abort -- and the guard is emitted as
+ * `(b) ? ... : ...`, which additionally costs a branch per division and draws
+ * -Wliteral-conversion when the divisor is a constant like 8.0. Callers use
+ * this to emit a bare `(a) / (b)` for the float rows. */
+bool builtin_div_is_ieee(const BuiltinSpec *spec);
+
 /* Collect overloads for a builtin name.
  * Returns number of entries written to `out` (up to max_out). */
 uint32_t builtin_collect_with_name(const Symbol *name,

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # tests/check-no-c-complex.sh -- standing guard from the numeric-tower plan
-# (docs/upcoming/numeric-tower-rational-complex-plan.md §1).
+# (docs/archive/numeric-tower-rational-complex-plan.md §1).
 #
 # The emitted C must never contain C's `_Complex` type, `<complex.h>`, or the
 # `__mul*c3` / `__div*c3` compiler-runtime helpers.  Two independent reasons:
 #
-#   * `c2mir` (the JIT front end selected by docs/upcoming/jit-engine-plan.md)
+#   * `c2mir` (the JIT front end selected by docs/archive/jit-engine-plan.md)
 #     implements a C11 subset, and `_Complex` is an OPTIONAL C11 feature that is
 #     not part of it.  Emitting it would simply not compile under the JIT.
 #   * Even on a C compiler that does support `_Complex`, `a * b` and `a / b` on
@@ -75,7 +75,7 @@ rm -f /tmp/tur-c-complex-snap.$$
 if [ "$fail" -ne 0 ]; then
     echo "" >&2
     echo "Complex arithmetic must stay hand-written in stdlib/complex.tur." >&2
-    echo "See docs/upcoming/numeric-tower-rational-complex-plan.md section 1." >&2
+    echo "See docs/archive/numeric-tower-rational-complex-plan.md section 1." >&2
     exit 1
 fi
 

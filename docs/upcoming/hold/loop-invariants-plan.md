@@ -1,11 +1,13 @@
 # Plan: Loop Invariants for Refinement Types (`:invariant`)
 
-> **Status:** Deferred -- placeholder for later elaboration. Not started, and
-> deliberately not scheduled; see "Why not now" for the bar it has to clear.
-> **Last Updated:** 2026-07-25
+> **Status:** Elaborated 2026-08-17 -- phased and sized against the real
+> elaborator, still **on hold** pending the trigger below. Not started.
+> **Last Updated:** 2026-08-17
 > **Type:** Compiler / Refinement types
-> **Depends on:** [refinement-types-plan.md](../v1/refinement-types-plan.md)
-> (RT0--RT7 + S0--S4, all landed) and on the `refined` experiment graduating.
+> **Depends on:** [refinement-types-plan.md](../../archive/refinement-types-plan.md)
+> (RT0--RT7 + S0--S4, all landed). The `refined` graduation this plan used to
+> wait on **happened 2026-08-01** (`bb7cbef61`, shipped v0.33.0); static
+> discharge is unconditional and the old experiment clock is gone.
 
 ## Goal
 
@@ -30,10 +32,10 @@ The runtime check stays and the program is correct; what is lost is the proof.
 
 ## The decision that is already made
 
-**Checking, not inference.** This is not an open question and should not be
-reopened during elaboration -- it is the founding decision of the refinement
-design (see "Why checking, not inference" in the parent plan), and it is what
-makes the whole feature shippable without a heavyweight solver.
+**Checking, not inference.** This is not an open question and was not reopened
+during elaboration -- it is the founding decision of the refinement design
+(see "Why checking, not inference" in the parent plan), and it is what makes
+the whole feature shippable without a heavyweight solver.
 
 So this plan is about an invariant the USER WRITES:
 
@@ -43,126 +45,416 @@ So this plan is about an invariant the USER WRITES:
   (set! i   (+ i 1)))
 ```
 
-Inferring the invariant is out of scope permanently, not deferred. An earlier
-note in the parent plan said loop support "needs invariants, which the
-prototype excludes"; that conflated the two, and the correction is the reason
-this file exists. A written invariant is checking, is the same shape as the
-`:pre` / `:post` annotations that already ship, and is a bounded feature rather
-than a multi-week analysis.
+Inferring the invariant is out of scope permanently, not deferred. A written
+invariant is checking, is the same shape as the `:pre` / `:post` annotations
+that already ship, and is a bounded feature rather than a multi-week analysis.
 
----
-
-## Sketch
-
-Everything below is a sketch to be firmed up at elaboration time, not a
-decision. The pieces the parent plan already provides -- obligation collection,
-the normalized VC, the staged solver, path splitting -- are expected to carry
-this with no change; only the obligation SOURCES are new.
-
-A `while` with an invariant `p` generates three obligations, which is the
-standard Hoare rule and is why this is small:
+A `while` with an invariant `p` generates the standard Hoare-rule obligations:
 
 | # | Obligation | Meaning |
 |---|---|---|
-| 1 | `env \|- p` | `p` holds on entry, before the first test |
-| 2 | `env, p, c \|- p'` | the body re-establishes `p` (`p'` is `p` after the body's assignments) |
-| 3 | -- | after the loop, `p AND (not c)` is available to what follows |
-
-Obligation 2 is the only genuinely new machinery. It needs the body's
-assignments modelled as a substitution -- `acc` after the body is
-`acc + 1` -- which is the same "assert `x = v`, alpha-rename on shadow"
-shape the `let` splitting already implements, applied to `set!` instead of a
-binding form. That similarity is the main reason to believe the estimate.
+| 1 | `env \|- p` | **Initiation:** `p` holds on entry, before the first test |
+| 2 | `env, p, c \|- p'` | **Preservation:** the body re-establishes `p` (`p'` is `p` after the body's assignments) |
+| 3 | -- | **Use:** after the loop, `p AND (not c)` is available to what follows |
 
 Obligation 3 is what makes the feature worth anything: without it the loop
 proves its own invariant and then nothing downstream can use it.
 
 ---
 
-## Why not now
+## Demand status -- the trigger has partially fired
 
-Three reasons, in order of weight. All three are measured, not assumed.
+The 2026-07-25 version of this file recorded zero measured demand. That is no
+longer quite true:
 
-1. **No demand.** As of 2026-07-25 there are 48 refinement fixtures and
-   `stdlib/refine.tur`, and **zero** of them contain a loop that touches a
-   refinement. The stdlib refinement layer is entirely scalar aliases --
-   `Nat`, `Pos`, `NonZero`, `Neg`, `Byte`, `Percent`, `NonNegFloat`,
-   `PosFloat`, `UnitFloat` -- with no bounded-index type at all, which is the
-   canonical loop-shaped motivation for refinement types. The `while` gap was
-   found by writing a synthetic probe, not by hitting it in real code.
+- [ecs-refinement-typed-apis-plan.md](../v1/ecs-refinement-typed-apis-plan.md)
+  (on the v1 track) names user-written `while` invariants as its prerequisite
+  **C3** and states "this plan is that signal". Its RE2 phase (bounds-checked
+  slot access on sized worlds) is the concrete consumer: `for-each` lowers to
+  a `while` over slot indices, and probe 6 there measured the crossing as
+  `0 proven, 1 unknown`.
+- **But** a later probe (2026-07-26, recorded in RE2) found the tail-recursion
+  shape discharges the same bounds TODAY with no new syntax: the upper bound
+  rides the guard as a path condition and the lower bound rides a refined
+  parameter inductively. So C3 gates only the `while`/`for-each` *lowering*,
+  and RE2 itself "does not start without a profile".
 
-2. **The experiment has a clock.** `refined` carries `expires_at = 0.34.0`
-   against a `VERSION` of `0.30.8`. Adding new surface syntax to an experiment
-   that must graduate or be shelved is the wrong direction while the priority
-   is graduating what already exists. This plan should not start before that
-   resolves.
+Net: demand exists on the v1 track but is not blocking it. This plan is
+elaborated so it can start the moment RE2's profile (or any of the triggers
+below) says go; it should not start before that.
 
-3. **Something else is worth more and costs less.** Path conditions for
-   call-site crossings is a larger measured gap (the canonical
-   decreasing-argument recursion cannot discharge its own recursive call) and
-   needs no new syntax.
+### The trigger (unchanged in substance)
 
-## The trigger
+Start when any one of:
 
-Start this when a real program wants it. Concretely, any one of:
-
-- A bounded-index type lands in `stdlib/refine.tur` and gets used to walk a
-  vector -- that is the shape that makes loop-carried refinements ordinary
-  rather than hypothetical.
+- RE2's profile shows the per-access bounds re-check is a real cost and the
+  `while` lowering (not the recursion shape) is where the call sites live.
+- A bounded-index type in `stdlib/refine.tur` gets used to walk a vector with
+  a `while`.
 - Two or more distinct callers ask for it, or a spice hits it in real code.
-- `refined` graduates and the loop gap is the top item on what is left.
-
-Until then this file is the record, and "no measured demand" is the answer.
 
 ---
 
-## Open questions for elaboration
+## Settled design decisions
 
-1. **Syntax and placement.** `:invariant` after the condition, as sketched?
-   That reads consistently with `:pre` / `:post` but `while` has no existing
-   keyword-argument position, so the reader work is real. Alternatives: a
-   leading `(invariant p)` form inside the body, or an attribute on the
-   enclosing `defn`.
+Elaboration settled the six open questions of the previous version. Each
+answer below is grounded in the current source, not sketched.
 
-2. **Which loops.** `while` only, or also `loop` / `for` / the tail-recursive
-   idiom? `for` desugars, so the invariant would have to survive the
-   expansion. Starting with `while` alone is the obvious first cut.
+### 1. Syntax: `:invariant` after the condition -- and it is NOT reader work
 
-3. **Modelling the body's assignments.** Obligation 2 needs `p` after the
-   body. A `set!` to a local is a substitution; a `set!` through a field or a
-   reference is not, and the honest first cut is to DECLINE the split when the
-   body writes anything the substitution cannot model -- the same
-   conservative posture as the `do`-block assignment scan already in
-   `rt_prove_paths`.
+`while` today has no keyword position: `elab_while`
+(`src/compiler/elab_forms.c:3182-3214`) elaborates item 1 as the condition and
+everything from item 2 on as body forms. A stray `:invariant` keyword would
+fail elaboration rather than be silently absorbed -- so the syntax is
+backward-compatible and purely an `elab_while` change, mirroring the
+`:pre`/`:post` scan loop that `defn` already carries
+(`src/compiler/elab_fns.c:6051-6071`). No reader change of any kind.
 
-4. **`break` / early exit.** An early exit leaves the loop without `(not c)`
-   holding, so obligation 3's post-condition is wrong for that path. Either
-   require the invariant alone downstream (weaker but always sound) or decline
-   loops containing an early exit.
+The scan accepts `:invariant <pred>` immediately after the condition only --
+not interleaved with body forms -- and at most once. A second `:invariant` is
+a plain diagnostic.
 
-5. **Diagnostics.** A failed obligation 2 is the interesting one and the
-   message has to say WHICH iteration-carried fact broke, not just "unknown".
-   RT6's counterexample translation is the machinery; the wording is new.
+### 2. Storage: a third field on the `while_` payload
 
-6. **Interaction with `--strict-refine`.** An unproven invariant under strict
-   mode is an error. Is a loop with no `:invariant` at all also an error there,
-   or silently Unknown as today? Silently Unknown, most likely -- strict mode
-   should not turn every existing loop into a build failure.
+`EX_WHILE`'s payload is `struct { Expr *cond; Expr *body; }`
+(`src/compiler/expr.h:1119`). All ~30 visitors (`elab_core.c`, `emit_*.c`,
+`mono_specs.c`, `span_audit.c`, turi's `DK_WHILE` continuation at
+`src/turi/eval.c:6693`) touch only `cond` and `body`, so adding
+`const Form *invariant;` (the raw predicate form, kept as a `Form` exactly as
+`TY_CONTRACT` keeps its predicate) is safe with zero visitor churn. Codegen
+(`emit_stmt.c:5-19`) emits nothing for it; the runtime checks of LI1 are
+injected as ordinary body/preamble forms during elaboration, not by the
+emitter.
+
+### 3. Which loops: `while` only, and the alternatives genuinely do not apply
+
+- `for` is not a loop: it is the monadic-comprehension macro
+  (`stdlib/macros.tur:64-104`) expanding to `.bind`/`.pure` closures.
+- `loop`/`continue` exist only as the `defprotocol` session-type DSL
+  (`src/compiler/elab_global.c:254-333`), not control flow.
+- Nothing in the language desugars to `while`; the idiomatic functional loop
+  is tail recursion, which path conditions already serve (see the RE2 probe).
+
+So "`while` only" is not a first cut that will grow -- it is the complete
+surface. A macro that *expands* to a `while` (the ECS `for-each` lowering)
+gets the feature for free by emitting `:invariant` in its expansion.
+
+### 4. Modelling the body's assignments: reuse `rt_collect_set_targets`
+
+Obligation 2 needs `p'` = `p` after the body. The machinery exists:
+
+- `rt_collect_set_targets` (`src/compiler/elab_fns.c:975-1021`, built for
+  WF3) walks a form and returns the set of `set!`-assigned names, declining
+  (return `false`) on place-expression targets (`(set! (.f s) v)`), an
+  assignment symbol in non-head position, depth overflow, or more than 16
+  targets. That decline list is exactly this plan's conservative posture.
+- The substitution itself composes sequentially: walk the body's statements
+  in order; for `(set! x rhs)`, rewrite `x -> rhs'` where `rhs'` is `rhs`
+  with all *earlier* substitutions applied. The rewriting reuses
+  `rt_rename_free`'s traversal shape (`elab_fns.c:2005-2037`), and the
+  obligation carries the result in the existing `RefineObligation.subst` /
+  `RefineSubst` fields (`src/compiler/refine_collect.h:140-150`) -- the same
+  carrier call-site sibling-parameter substitution already uses.
+
+**Decline list for the first cut** (each falls back to "invariant not proven,
+runtime check kept" -- never a wrong proof):
+
+- any `set!` through a place expression or `(@ ...)` deref (per
+  `rt_collect_set_targets`);
+- a `set!` to a dynamic var (`elab_forms.c:3081-3120` is a fourth `set!`
+  path the scanners do not model);
+- a body that borrows an assigned local (`rt_form_borrows_name`,
+  `elab_fns.c:1046-1062` -- the one channel through which a callee writes a
+  caller slot);
+- control flow inside the body other than straight-line statements: an `if`
+  whose branches assign differently is deferred to LI3+ (path-split the
+  preservation obligation the same way the branching-`let`-value split works
+  at `elab_fns.c:2136-2162`); first cut declines;
+- nested `while` (inner loop havocs its own targets; declining is simplest
+  and costs precision only);
+- early exit anywhere in the body -- see next item.
+
+### 5. Early exit: the language has no `break`, but `return` / `?` are real
+
+There is no `break` or `continue` form (checked: neither is interned,
+dispatched, or reserved; the strings appear only in the C-keyword mangler
+avoid-list and the turi debugger). The early exits that DO exist are
+`(return v)` (`EX_RETURN`, dispatched at `elab_call.c:2204`), the `?`
+Result-propagation form, and `panic`.
+
+A `return`/`?` inside the body leaves the loop without `(not c)` holding, so
+obligation 3's post-condition is wrong for that path. First cut: a Form-level
+scan for those heads (mirroring `rt_form_mentions_set`, `elab_fns.c:886-909`,
+including its macro-expansion lateral hop) and **decline the post-loop fact**
+when found. Obligations 1 and 2 remain sound in their presence (a body that
+exits early still may not break the invariant before exiting -- preservation
+over the straight-line prefix is not checked in the first cut, so decline
+those too: any early-exit head declines the whole feature for that loop).
+`panic` diverges rather than exits, so it alone does not decline.
+
+### 6. `--strict-refine`: a loop with no `:invariant` stays silent, for free
+
+The strict-mode pattern is unambiguous in `refine_discharge.c` (three sites:
+`:494`, `:601`, `:617`): strict mode only raises the severity of an existing
+report, never creates a report where there was none. A `while` without
+`:invariant` generates no obligation, hence no report, hence no strict-mode
+error -- with zero code written to ensure it. An unproven written invariant
+under strict mode is an error like any other W-to-E promotion.
+
+### 7. Gating: `--enable=loop-invariants`, annotation always parses
+
+Per the CLAUDE.md rule, in-flight semantics ship behind `--enable=<name>`.
+`refined` has graduated and its row is gone, so this needs a fresh row --
+`loop-invariants` -- modelled on the live rows (`write-frames`,
+`checked-reads` in `src/runtime/experiments.c`; all seven descriptor
+fields, `g_opt_loop_invariants`, `expires_at` one minor line out per current
+convention, i.e. set `introduced`/`expires_at` when work starts). Follow the
+`#writes` precedent exactly: **the annotation always parses; the gate
+withholds the acting** (obligations, runtime-check injection, post-loop
+fact). `plan_path` points at this file. `experiment_warn_if_used` fires from
+the `elab_while` scan when an `:invariant` is actually written.
+
+### 8. Diagnostics: no new codes -- report through `TUR-E0371` / `TUR-W0372`
+
+`:pre` and `:post` obligations do not mint codes; they flow through the two
+verdict-carrying codes with a `what` string ("the postcondition of 'f'",
+`elab_fns.c:6706`). Invariant obligations take the identical route: a refuted
+or closed-false invariant is `TUR-E0371` and an undecided one is `TUR-W0372`,
+with `what` = "the invariant of the while loop in 'f' (entry)" /
+"... (preservation)". This keeps `tur explain` accurate (both codes' texts
+already describe exactly this situation), gets `--strict-refine` promotion
+for free (same discharge path), and leaves the freshly freed `0383+` band to
+the sibling reflected-measures plan.
+
+One measured caveat for the wording: `MODEL_MAX_VARS` is 3
+(`refine_solver.c:221`), so a multi-conjunct invariant under a body
+substitution will usually exceed the counterexample search's variable budget
+and land on `TUR-W0372` without a model. The remedy is in LI4: split the
+invariant into conjuncts and discharge each separately, so the message can
+say *which* iteration-carried fact broke -- conjunct-level reporting matters
+more here than counterexample translation.
+
+---
+
+## Runtime semantics: the invariant is a contract first
+
+Consistent with the whole contract/refinement design ("fails toward a runtime
+check", never silently unenforced -- the reasoning that produced
+`TUR-W0380`), a written `:invariant p` is dynamically enforced from day one:
+
+- `(tur-contract-check p "Loop invariant failed on entry")` immediately
+  before the loop;
+- the same check as the last statement of the body (re-establishment).
+
+Static discharge then *elides* these exactly as a proven `:pre`/`:post`
+elides its check (`elab_fns.c:6741-6790` is the template): obligation 1
+proven elides the entry check; obligation 2 proven elides the body check.
+This gives the feature value even on programs the solver declines, keeps the
+turi interpreter path correct with no interpreter change (turi walks the
+elaborated `Expr`, and the checks are ordinary injected forms), and makes
+"the annotation quietly does nothing" impossible. The predicate must pass the
+same purity gate as any contract predicate (`TUR-E0375` on an effectful
+invariant) and must elaborate to `:bool`.
+
+---
+
+## Phases
+
+### LI0 -- Gate, syntax, storage
+
+**Goal:** `:invariant` parses, is stored, is validated, and does nothing else.
+
+- `EXPERIMENTS[]` row `loop-invariants` (all seven fields), `g_opt_loop_invariants`
+  in `globals.{h,c}`, `experiment_warn_if_used("loop-invariants")` from the
+  scan. Annotation parses with the gate off; acting is withheld.
+- `elab_while` keyword scan after the condition: at most one
+  `:invariant <pred>`; the predicate form is stored on the new
+  `while_.invariant` field. Duplicate/misplaced `:invariant` is a plain
+  diagnostic; `:invariant` with no following form likewise.
+- Predicate validation: elaborate the predicate in the loop's scope, require
+  `:bool` (reusing the condition's own check shape at `elab_forms.c:3188`),
+  require purity (the `TUR-E0375` path contract predicates already take).
+  The validated form is kept as a `Form` for the refinement machinery; the
+  elaborated `Expr` is discarded except for the LI1 checks.
+
+**Acceptance:** fixture `refine-loop-invariant-parses` (gate on, invariant
+written, program compiles and runs unchanged); `errors/loop-invariant-effectful`
+(`TUR-E0375`); `errors/loop-invariant-not-bool`; gate-off fixture pinning
+that the annotation parses and warns nothing.
+
+### LI1 -- Dynamic semantics (runtime checks)
+
+**Goal:** an `:invariant` is enforced at runtime, before any solver work.
+
+- Inject the entry check before the loop and the re-establishment check at
+  the end of the body, under the gate, during `elab_while` -- injected as
+  source forms so compiled and interpreted paths agree for free.
+- Panic message names the loop's source location and says entry vs.
+  re-establishment.
+
+**Acceptance:** fixture where a deliberately false invariant panics on entry;
+one where it panics after the first iteration; one where a true invariant
+runs clean under `--interpret` and compiled alike (the turi harness picks
+this up with no interpreter change).
+
+### LI2 -- Static discharge: initiation and preservation
+
+**Goal:** obligations 1 and 2 are collected, discharged, and elide the LI1
+checks when proven. This is the core of the plan.
+
+- **Obligation 1 (initiation):** goal `p`, env from `rt_build_env`
+  (`elab_fns.c:677-701`: parameters' refinements + `:pre`), collected at the
+  loop site via `refine_collect_obligation`. `runtime_guarded = false` -- the
+  invariant is the user's own claim (same "who owes the proof" logic as a
+  return refinement), and the LI1 check is the fallback.
+- **Obligation 2 (preservation):** hypotheses `p` and `c`; goal `p` under the
+  body's composed `set!` substitution, carried in `RefineObligation.subst`.
+  Assignment modelling and the decline list exactly as settled above
+  (`rt_collect_set_targets` + sequential composition + borrow/dynvar/
+  early-exit/nested-loop declines). A shadowing hazard does not arise here
+  the way it does in the `let` splitter -- the substitution rewrites the
+  *predicate*, not the env -- but the fresh-name idiom (`"%s~%u"`,
+  `elab_fns.c:2113`) is available if conjunct splitting in LI4 needs it.
+- **Elision:** obligation 1 proven drops the entry check; obligation 2 proven
+  drops the body check. Either unproven keeps its check and reports
+  `TUR-W0372` (a warning, since the runtime check backstops it).
+- New `RefineStats` counters (`refine_discharge.h:30-41` precedent:
+  `proven_by_path`) so `TUR_REFINE_STATS=1` shows invariant obligations
+  separately.
+
+**Acceptance:** `count-up` from the header still reports its *return*
+obligation Unknown (LI3 owns that) but shows `invariant: 2 proven` under
+stats; entry-check and body-check elision visible in emitted C (fixture
+pins the absence of `tur_contract_check` in the loop body); a false
+invariant at a closed initiation site is `TUR-E0371` with a model
+(zero-variable evaluation, the `(safe-div 10 0)` shape); decline cases
+(field write in body, `return` in body, borrowed accumulator) each stay
+`TUR-W0372` + kept checks -- pinned as fixtures so the conservative posture
+is a tested property, not an accident.
+
+### LI3 -- The post-loop fact (obligation 3)
+
+**Goal:** code after the loop can use `p AND (not c)` -- the phase that makes
+the feature worth shipping, and the one with the only genuinely new
+soundness reasoning.
+
+- Extend `rt_prove_paths`' `do` case (`elab_fns.c:2171-2187`). Today any
+  `set!` in a non-final statement declines the whole split. New rule: a
+  non-final statement that is a `while` **with a proven invariant** (both
+  obligations from LI2) is stepped over with havoc-and-assume:
+  1. collect the loop's assigned names (already known from LI2);
+  2. alpha-rename each assigned name `x` to a fresh `x~N` in the *remaining*
+     statements and the goal (`rt_rename_free`), declare `x~N`
+     (`refine_env_declare`) -- this is the havoc: downstream `x` is a new
+     value the old hypotheses do not constrain;
+  3. push `p[x~N/x] AND (not c)[x~N/x]` as hypotheses.
+  A loop whose invariant is unproven, or that hit any LI2 decline, keeps
+  today's behavior (the `rt_form_mentions_set` decline).
+- Same havoc-and-assume in `rt_collect_path_conds`
+  (`elab_fns.c:2694-2826`), which today has no `while` case at all, so
+  call-site crossings *after* a proven loop gain the fact too.
+- Early-exit loops were already declined wholesale in LI2, so this phase
+  never sees one.
+
+**Acceptance:** `count-up` proves end to end (`1 proven` on the return
+obligation, no `TUR-W0372`); the RE2 shape proves -- a
+`sized-get-at`-style callee with
+`#refine{ x : Slot | (and (>= x 0) (< x n)) }` called inside
+`(while (< i n) :invariant (>= i 0) ...)` discharges both bounds under
+`--strict-refine`; negative control with an off-by-one guard `(< i (+ n 1))`
+rejects; a sabotage run confirms the havoc is load-bearing (strip step 2 and
+the `errors/` fixture asserting a staled pre-loop hypothesis must wrongly
+pass, per the WF sabotage convention).
+
+### LI4 -- Diagnostics, conjunct splitting, strict mode
+
+**Goal:** a failed preservation names the conjunct that broke.
+
+- Sharpen the `what` strings so entry vs. preservation is unambiguous, and
+  extend the `TUR-E0371`/`TUR-W0372` `tur explain` texts with a loop-invariant
+  paragraph each (no new codes; see settled decision 8).
+- Split a top-level `(and ...)` invariant into per-conjunct preservation
+  obligations (memoized via RT7, so cost is bounded); report the failing
+  conjunct by source span: "the loop does not preserve `(>= acc 0)`", plus
+  the RT6 hint machinery (`refine_hint_search`) unchanged.
+- `--strict-refine` promotion needs no new work (same three-site pattern in
+  `refine_discharge.c`, same codes); a loop with no invariant stays silent
+  (already free, but pinned by a fixture).
+
+**Acceptance:** `errors/loop-invariant-not-preserved` shows the conjunct in
+its `expected.diag` needles; the extended `tur explain` texts print; strict-mode
+fixture pair (promoted error / silent bare loop).
+
+### LI5 -- Breadth: fixtures, fuzzer, docs, ECS handoff
+
+**Goal:** the feature is exercised beyond its own unit tests and the shipped
+docs stop saying "deferred".
+
+- Fuzzer: teach `tests/refine-fuzz-src.py` to emit `while`+`:invariant`
+  shapes (true invariants, sabotaged invariants, bodies with declined
+  writes); run `--n 400` at two seeds, require 0 soundness bugs -- the
+  encoder history (both prior soundness bugs lived there) makes this
+  non-optional.
+- Docs: rewrite the `[deferred] A while loop is not analysed` bullet in
+  `docs/guides/refinement-types-guide.md:954`; add the invariant rule,
+  obligations table, and decline list to
+  `docs/guides/refinement-solver-internals-guide.md`; syntax-guide note.
+- Hand C3 to the ECS plan: update
+  `docs/upcoming/v1/ecs-refinement-typed-apis-plan.md`'s prerequisite table,
+  and prototype the `for-each` macro emitting `:invariant` in its expansion
+  (the macro-expansion lateral hop in the scanners already handles expanded
+  forms; verify with a fixture rather than assume).
+- Graduation is a separate later decision per the experiment lifecycle;
+  the row's `expires_at` forces it to be taken, not when it lands.
+
+**Acceptance:** suite green modulo known-red fixtures; fuzz clean at two
+seeds; guide text updated in the same PR as the code it describes.
+
+---
+
+## Effort
+
+LI0+LI1 are small and mechanical (the `:pre`/`:post` scan and check-injection
+templates are copy-adjacent). LI2 is the bulk: the sequential substitution
+composer is new code, though every decline it needs is already implemented.
+LI3 is small in lines but carries the only new soundness argument
+(havoc-and-assume) -- budget the sabotage fixtures as first-class work, not
+cleanup. LI4/LI5 are routine. No solver-stage changes anywhere: S0--S3 and
+the caps carry the new obligations untouched, which was the original sketch's
+bet and elaboration confirmed it.
 
 ## Explicitly not in scope
 
-- **Invariant inference** of any kind, including "guess `>= 0` and see". See
-  above; this is permanent, not deferred.
-- **Termination.** A refinement says nothing about whether the loop finishes,
-  and nothing here should imply it does. A non-terminating loop with a true
-  invariant is perfectly well-typed.
-- **Ranking functions / decreasing measures.** Same reason.
+- **Invariant inference** of any kind, including "guess `>= 0` and see".
+  Permanent, not deferred.
+- **Termination.** A refinement says nothing about whether the loop finishes.
+  A non-terminating loop with a true invariant is perfectly well-typed.
+- **Ranking functions / decreasing measures.** Same reason. (A measure's
+  *definition* entering the logic is the separate
+  [reflected-measures-plan.md](reflected-measures-plan.md), which carves out
+  its own totality obligation without touching program termination.)
+- **`for` / `loop` surface support.** Nothing to support -- see settled
+  decision 3. Macros that expand to `while` compose for free.
+- **Preservation through arbitrary body control flow** (branching bodies,
+  nested loops). Declined conservatively in the first cut; the
+  branching-`let` split is the template if demand appears.
 
 ---
 
 ## References
 
-- [refinement-types-plan.md](../v1/refinement-types-plan.md) -- the parent
-  plan; "Why checking, not inference" is the constraint this one inherits.
+- [refinement-types-plan.md](../../archive/refinement-types-plan.md) -- the
+  parent plan; "Why checking, not inference" is the constraint this one
+  inherits.
 - [../../guides/refinement-types-guide.md](../../guides/refinement-types-guide.md)
-  -- the user-facing write-up; the `while` limitation is documented there.
+  -- the user-facing write-up; the `while` limitation is documented at
+  line 954 and is what LI5 rewrites.
+- [../../guides/refinement-solver-internals-guide.md](../../guides/refinement-solver-internals-guide.md)
+  -- pipeline, staged solver, caps.
+- [../v1/ecs-refinement-typed-apis-plan.md](../v1/ecs-refinement-typed-apis-plan.md)
+  -- the demand signal (C3) and the RE2 consumer.
+- [checked-write-frames-plan.md](../../archive/checked-write-frames-plan.md) -- WF3's
+  `rt_collect_set_targets` is the assignment model this plan reuses; a landed
+  `#writes` frame would later let a call in the loop body stop declining.
+- Hoare (1969) -- the while rule; Floyd-Hoare initiation/preservation/use is
+  the entire logical content of this plan.

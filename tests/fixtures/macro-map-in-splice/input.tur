@@ -1,4 +1,4 @@
-;; Regression for docs/reported/ct-macro-evaluator-no-function-call-in-splice.md
+;; Regression for docs/archive/history/ct-macro-evaluator-no-function-call-in-splice.md
 ;;
 ;; The compile-time macro evaluator could not call `map` from inside a `~@`
 ;; splice: `map` was unbound at macro-eval time, so a template could only

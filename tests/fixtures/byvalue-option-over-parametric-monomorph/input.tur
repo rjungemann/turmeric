@@ -1,0 +1,53 @@
+;; byvalue-option-over-parametric-monomorph -- `option<T>` / `result<T,E>` whose
+;; type ARGUMENT is itself a monomorph must lower by value, not onto the int64
+;; heap carrier.
+;;
+;; Regression (docs/archive/byvalue-adt-app-rejects-nested-monomorphs.md):
+;; adt_app_is_byvalue_product and type_app_is_concrete_adt both required every
+;; type argument to satisfy type_has_concrete_codegen_layout, whose TY_APP arm
+;; is an unconditional `return false`, and admitted a nested by-value app only
+;; for a :heap outer.  So `(Option P)` over a non-parametric struct went by
+;; value while `(Option (Q int))` -- an equally concrete layout, passed to the
+;; ctor BY VALUE as its argument -- mallocd a box to store it.  The three
+;; predicates must move together: representation (adt_app_is_byvalue_product),
+;; ctor-name selection (type_app_is_concrete_adt), and the return-only-poly
+;; accessor result recovery.
+;;
+;; Expected: every value below round-trips, and none of the four constructions
+;; needs the heap carrier.
+
+(defstruct P [x : int y : int])
+(defstruct Q [A] [v : A])
+
+;; (Option P) -- non-parametric struct argument; was already by value.
+(defn mk-p [a : int] : (Option P)
+  (some (P a (+ a 1))))
+
+;; (Option (Q int)) -- parametric-monomorph argument; the regression.
+(defn mk-q [a : int] : (Option (Q int))
+  (some (Q a)))
+
+;; (Result (Vec int) cstr) -- a :heap container as the argument.
+(defn mk-v [n : int] : (Result (Vec int) cstr)
+  (let [v (:: (vec-new) (Vec int))]
+    (vec-push! v n)
+    (ok v)))
+
+;; (Option (Option int)) -- nested twice.
+(defn mk-oo [a : int] : (Option (Option int))
+  (some (:: (some a) (Option int))))
+
+(defn main [] : int
+  (let [p  (mk-p 4)
+        q  (mk-q 7)
+        v  (mk-v 9)
+        oo (mk-oo 5)]
+    (println (if (some? p) (.x (unwrap p)) (- 0 1)))        ;; 4
+    (println (if (some? p) (.y (unwrap p)) (- 0 1)))        ;; 5
+    (println (if (some? q) (.v (unwrap q)) (- 0 1)))        ;; 7
+    (println (if (ok? v) (vec-get (ok-val v) 0) (- 0 1)))  ;; 9
+    (println (if (some? oo)
+               (let [inner (:: (unwrap oo) (Option int))]
+                 (if (some? inner) (unwrap inner) (- 0 1)))
+               (- 0 1)))                                        ;; 5
+    0))

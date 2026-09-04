@@ -1,0 +1,45 @@
+;; arrow-loop-delay -- ArrowLoop feedback through a unit delay.
+;;
+;; The third member of the family: the fed-back d persists ACROSS calls, so
+;; call n sees the d that call n-1 produced and the first call sees the seed.
+;; There is no black hole and no iteration -- this one is total -- and it is
+;; the feedback shape signal-processing and state-machine arrows want, where
+;; the loop is closed over time rather than inside a single step.
+
+(load "stdlib/arrow.tur")
+(load "stdlib/tuple.tur")
+
+;; Running total: d' = c = d + b.
+(defn sum-step [p] : int
+  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  typedef struct { int64_t filled; int64_t value; } LC;
+  P *s  = (P *)(intptr_t)p;
+  LC *c = (LC *)(intptr_t)s->e2;
+  int64_t total = c->value + s->e1;
+  P *r = (P *)malloc(sizeof(P));
+  r->e1 = total;
+  r->e2 = total;
+  return (int64_t)(intptr_t)r; ```)
+
+;; Unit delay: emit the PREVIOUS input, feed the current one back.
+(defn prev-step [p : int] : int
+  (let [t (:: p (Tuple2 int int))
+        b (tuple2-1st t)
+        d (loop-cell-force (loop-cell-of (tuple2-2nd t)))]
+    (:: (tuple2 d b) :int)))
+
+(defn main [] : int
+  (let [acc (arrow-loop-delay sum-step 0)]
+    (println (acc 1))        ;; 1
+    (println (acc 2))        ;; 3
+    (println (acc 3)))       ;; 6
+  ;; Each arrow-loop-delay owns its own feedback line, so a second accumulator
+  ;; starts over rather than continuing the first.
+  (let [acc2 (arrow-loop-delay sum-step 100)]
+    (println (acc2 5))       ;; 105
+    (println (acc2 5)))      ;; 110
+  (let [dly (arrow-loop-delay prev-step 0)]
+    (println (dly 11))       ;; 0  -- the seed
+    (println (dly 22))       ;; 11
+    (println (dly 33)))      ;; 22
+  0)

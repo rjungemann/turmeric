@@ -13,7 +13,7 @@
 #
 # Plus two cases for the *include-path* walk, which is a separate traversal
 # over the same :spices graph and needed its own visited set
-# (docs/archive/spice-cycle-include-path-blowup.md):
+# (docs/archive/history/spice-cycle-include-path-blowup.md):
 #   4. spice-cycle-three-hop          -- a -> b -> c -> a; terminates, and
 #                                        every src/ on the ring still lands on
 #                                        the include path.
@@ -92,13 +92,23 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Workspace member seeding (workspace-transitive-native-deps-plan):
-#    member-b does NOT list member-a in :spices, reaching it only through
-#    the workspace :members resolution.  The transitive resolver must seed
-#    member-a's :cmake-deps from :members; because both members declare the
-#    same-named "fakelib" with different :refs, building member-b must emit
-#    the conflict diagnostic.  Before the fix member-b saw only its own dep
-#    and `tur fetch` succeeded (no conflict) -- this asserts the new seeding.
+# 3. Workspace members are NOT seeded by default, and the escape hatch still
+#    seeds them.
+#
+#    member-b does not list member-a in :spices, reaching it only through the
+#    workspace :members resolution.  Both members declare the same-named
+#    "fakelib" with different :refs, so seeding member-a makes the conflict
+#    diagnostic fire -- which makes this fixture a precise probe for whether
+#    seeding happened at all.
+#
+#    workspace-transitive-native-deps-plan originally seeded every member, so
+#    the diagnostic was the assertion.  That was reverted: seeding all members
+#    means building ONE spice configures EVERY member's native deps, which is
+#    wasteful and fatal two ways -- one dep that cannot configure aborts the
+#    whole build, and unrelated members collide in the single CMake target
+#    namespace.  See pkg_workspace_wide_cmake_deps().  The declared :spices
+#    closure (case 2 above) is the supported way to inherit a sibling's native
+#    dep.  Both directions are pinned here so neither default drifts silently.
 WMD_SRC="tests/fixtures/workspace-member-cmake-deps"
 WMD_DIR="$WORK/wmd"
 cp -r "$WMD_SRC" "$WMD_DIR"
@@ -106,15 +116,24 @@ cp -r "$WMD_SRC" "$WMD_DIR"
     cd "$WMD_DIR/member-b" || exit 3
     "$TUR_ABS" fetch >fetch.log 2>&1
 )
-wmd_rc=$?
-if [ "$wmd_rc" -eq 0 ]; then
-    fail "workspace-member-cmake-deps-seed" \
-         "expected non-zero exit (sibling dep should conflict); got rc=$wmd_rc, log=$(cat "$WMD_DIR/member-b/fetch.log")"
-elif ! grep -q 'conflicting :cmake-deps for "fakelib"' "$WMD_DIR/member-b/fetch.log"; then
-    fail "workspace-member-cmake-deps-seed" \
-         "missing conflict diagnostic (sibling :cmake-deps not seeded from :members); got: $(cat "$WMD_DIR/member-b/fetch.log")"
+if grep -q 'conflicting :cmake-deps for "fakelib"' "$WMD_DIR/member-b/fetch.log"; then
+    fail "workspace-member-cmake-deps-not-seeded-by-default" \
+         "member-a's :cmake-deps was seeded from :members; expected only member-b's own closure. log=$(cat "$WMD_DIR/member-b/fetch.log")"
 else
-    pass "workspace-member-cmake-deps-seed"
+    pass "workspace-member-cmake-deps-not-seeded-by-default"
+fi
+
+rm -rf "$WMD_DIR"
+cp -r "$WMD_SRC" "$WMD_DIR"
+(
+    cd "$WMD_DIR/member-b" || exit 3
+    TUR_CMAKE_DEPS_WORKSPACE_WIDE=1 "$TUR_ABS" fetch >fetch.log 2>&1
+)
+if grep -q 'conflicting :cmake-deps for "fakelib"' "$WMD_DIR/member-b/fetch.log"; then
+    pass "workspace-member-cmake-deps-seed-escape-hatch"
+else
+    fail "workspace-member-cmake-deps-seed-escape-hatch" \
+         "TUR_CMAKE_DEPS_WORKSPACE_WIDE=1 did not seed sibling :cmake-deps; got: $(cat "$WMD_DIR/member-b/fetch.log")"
 fi
 
 # ---------------------------------------------------------------------------

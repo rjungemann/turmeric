@@ -1,0 +1,52 @@
+;; fat-dispatch-parametric-monomorph-return: a bare fn RETURNING a concrete
+;; parametric ADT monomorph -- `(Box2 int)`, `(Big3 int)` -- boxed into a `^fat`
+;; sink and dispatched through slot 0.
+;;
+;; `thunk_type_has_concrete_c_abi` answered only for TY_ADT, so a TY_APP result
+;; declined the typed fatshim and left slot 0 holding the generic
+;; `__tur_fatshim<arity>`, declared `int64_t (*)(void *, int64_t...)`, which the
+;; dispatch site then casts to the aggregate-returning signature.
+;;
+;; That lie is invisible at the narrow widths because the generic shim is a
+;; transparent forwarding tail-call -- whatever registers the real function
+;; reads and writes pass through untouched -- so a <= 16 byte aggregate came
+;; back correct by register-class LUCK (RAX:RDX for two ints, XMM0:XMM1 for two
+;; doubles).  Past 16 bytes SysV switches the return to the hidden-pointer
+;; (sret) convention, which shifts every argument right by one: the shim reads
+;; the caller's sret destination as its env and the program jumps to 0.
+;;
+;; All three widths are spelled here on purpose.  The two narrow ones passed
+;; before the fix and must keep passing; the 24-byte one is the case that
+;; SEGVed on the DEFAULT path, with no seam involved.  Values are checked, not
+;; just the build -- the whole failure class hides behind a function-pointer
+;; cast that cc cannot see through.
+
+;; 16 bytes, two ints -- returned in RAX:RDX.
+(defdata Box2 :copy [a] (Box2 [v : a w : a]))
+
+;; 16 bytes, two doubles -- returned in XMM0:XMM1.
+(defdata BoxF :copy [a] (BoxF [v : a w : a]))
+
+;; 24 bytes -- past the SysV threshold, returned via hidden pointer.
+(defdata Big3 :copy [a] (Big3 [x : a y : a z : a]))
+
+(defn mk [n : int] : (Box2 int) (Box2 n (* n 10)))
+
+(defn mkf [n : float] : (BoxF float) (BoxF n (* n 10.0)))
+
+(defn mk3 [n : int] : (Big3 int) (Big3 n (* n 2) (* n 3)))
+
+(defn apply2 [^fat f : (fn [int] (Box2 int)) n : int] : int
+  (match (f n) (Box2 v w) (+ v w)))
+
+(defn apply2f [^fat f : (fn [float] (BoxF float)) n : float] : float
+  (match (f n) (BoxF v w) (+ v w)))
+
+(defn apply3 [^fat f : (fn [int] (Big3 int)) n : int] : int
+  (match (f n) (Big3 x y z) (+ x (+ y z))))
+
+(defn main [] : int
+  (println (apply2 mk 7))       ; 77    RAX:RDX
+  (println (apply2f mkf 7.1))   ; 78.1  XMM0:XMM1
+  (println (apply3 mk3 5))      ; 30    sret -- SEGVed before the fix
+  0)

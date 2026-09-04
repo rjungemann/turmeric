@@ -26,7 +26,7 @@
 (definstance Dec [Option] [(Dec A)]
   (dec [seed]
     (let [r (:: (dec seed) (Result A cstr))]
-      (if (.is-ok r)
+      (if (ok? r)
         (:: (ok (some (ok-val r))) (Result (Option A) cstr))
         (:: (err (err-val r)) (Result (Option A) cstr))))))
 
@@ -35,19 +35,19 @@
   (if (>= i n)
     (:: (ok acc) (Result (Vec A) cstr))
     (let [r (:: (dec i) (Result A cstr))]
-      (if (.is-ok r)
+      (if (ok? r)
         (do (vec-push! acc (ok-val r)) (build n (+ i 1) acc))
         (:: (err (err-val r)) (Result (Vec A) cstr))))))
 
 ;; recover the inner int of the by-value (Option int) stored at index `idx`.
 (defn elem-at [v : (Vec (Option int)) idx : int] : int
   (let [o (:: (vec-get v idx) (Option int))]
-    (if (.is-some o) (.value o) (- 0 1))))
+    (if (some? o) (unwrap o) (- 0 1))))
 
 (defn main [] : int
   (let [r (:: (build 3 0 (:: (vec-new) (Vec (Option int))))
               (Result (Vec (Option int)) cstr))]
-    (if (.is-ok r)
+    (if (ok? r)
       (let [v (:: (ok-val r) (Vec (Option int)))]
         (println (vec-len v))      ;; 3
         (println (elem-at v 0))    ;; 0

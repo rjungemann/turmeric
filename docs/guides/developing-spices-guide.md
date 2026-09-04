@@ -111,7 +111,7 @@ defpackage tur-mylib
 | `:exports` | Yes (library) | Map of module path to exported symbol names |
 | `:spices` | If needed | Turmeric package dependencies |
 | `:cmake-deps` | If needed | C/C++ library dependencies |
-| `:build-opts` | Rarely | `:c-flags` / `:link-libs`, plus `:c-sources` / `:c-includes` for [vendored C](#vendoring-c-sources-c-sources--c-includes) |
+| `:build-opts` | Rarely | `:c-flags` / `:link-libs` / `:link-flags`, plus `:c-sources` / `:c-includes` for [vendored C](#vendoring-c-sources-c-sources--c-includes) |
 
 ---
 
@@ -293,7 +293,7 @@ in isolation without imports:
 ```turmeric
 ;; src/mylib/io.tur -- ANTI-PATTERN
 ;; Stub copy of make-widget from core.tur; real body is return NULL.
-(defn make-widget [v :int] #{Unsafe} :Widget
+(defn make-widget [v :int] #fx{Unsafe} :Widget
   ```c
   return NULL;
   ```)
@@ -313,12 +313,8 @@ This pattern fails in three ways:
   `tur check`/`tur emit-c` on a single file passes while the combined build
   fails.
 
-The `scscm` spice used this pattern across all five of its source files.
-It was eliminated in the 2026-05 import refactor by converting each file to
-`defmodule` + `import`. See
-[scscm-spice-import-refactor-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/scscm-spice-import-refactor-plan.md)
-for the full migration. If you encounter the stub pattern in other spices,
-the fix is the same: add a `(defmodule ...)` + `(export ...)` header and
+If you encounter the stub pattern in an existing spice, the fix is
+mechanical: add a `(defmodule ...)` + `(export ...)` header to each file and
 replace each stub block with `(import <module> :refer [...])`.
 
 ---
@@ -570,6 +566,26 @@ defn db-open [path :cstr] (result :ptr)
 actual C header. No `-I` or `-L` flags are needed in your source; `tur build`
 injects them from `cmake/spice-deps-manifest.json`.
 
+### Constants: `#define`s do not survive linking -- re-export them
+
+A C library's `#define ZMQ_REP 4` / `SQLITE_OK 0` constants never reach a
+symbol table, so neither `extern-c` nor the dynamic FFI can resolve them --
+consumers of your spice (and REPL users) would otherwise have to restate
+magic numbers. Wrap each constant the library's API needs as a plain
+definition, **adjacent to the `extern-c` block it belongs to** so drift
+against the upstream header stays reviewable in one place:
+
+```turmeric no-check
+;; sqlite3.h result codes the API surface uses (keep next to the externs).
+(defn SQLITE-OK   [] :int 0)
+(defn SQLITE-ROW  [] :int 100)
+(defn SQLITE-DONE [] :int 101)
+```
+
+Exported like any other defn, these are callable from consumers and from
+the REPL, and a header bump that renumbers something is a one-line,
+reviewable diff instead of a scavenger hunt through call sites.
+
 ### Inline C for small wrappers
 
 When a binding is simpler to write directly in C, use an inline-C block:
@@ -595,6 +611,95 @@ When the CMake `find_package` name or target name differs from the key in
                 :ref        "version-3.47.2"
                 :cmake-name "SQLite3"
                 :targets    ["SQLite::SQLite3"]}
+}
+```
+
+### How the link line is derived
+
+When a dep declares `:targets`, `tur` asks CMake what each target actually is
+rather than guessing from its name. Two generator expressions do the work, and
+both are evaluated when `cmake/spice-deps-manifest.json` is generated:
+
+- **`$<TARGET_FILE:tgt>`** -- the exact file the target produces, linked by
+  full path. This resolves `OUTPUT_NAME` (glfw's target is `glfw`, its archive
+  is `libglfw3.a`), namespace aliasing (`PostgreSQL::PostgreSQL` is `libpq`),
+  and static-vs-shared preference (zlib builds `libz.a` and `libz.1.dylib`
+  into one directory, where a `-lz` would pick the dylib) in one move. A
+  header-only `INTERFACE` target has no artifact and contributes nothing here.
+- **`$<TARGET_PROPERTY:tgt,INTERFACE_LINK_LIBRARIES>`** -- the target's
+  transitive requirements, recorded in the manifest's `link_flags` array.
+  This is where `-framework Cocoa` and `-framework IOKit` come from, which is
+  what makes the Objective-C macOS backends of glfw and raylib link at all: a
+  framework cannot be spelled as `-l`.
+
+The `INTERFACE_LINK_LIBRARIES` walk happens **in CMake, at configure time**,
+because its entries cannot be classified afterwards. A bare entry may be a
+library name (`m`) or a target name (raylib's property lists `glfw`) -- the
+same shape, opposite handling -- and only `if(TARGET ...)` can tell them apart.
+The walk:
+
+- unwraps `$<LINK_ONLY:...>` and skips any other generator expression;
+- for an entry that is a target with a linkable artifact, takes
+  `$<TARGET_FILE:...>` (plus an rpath if it is shared);
+- for an entry that is a target *without* one -- an `OBJECT_LIBRARY` or
+  `INTERFACE_LIBRARY` -- **recurses into its requirements** rather than
+  dropping it. raylib vendors glfw as an `OBJECT_LIBRARY`: its objects are
+  already inside `libraylib.a`, so it contributes no library to link, but the
+  Cocoa and IOKit frameworks its macOS backend needs are reachable no other
+  way;
+- passes anything else through as written.
+
+Those tokens then become cc flags: a flag (`-framework Cocoa`, `-Wl,...`) or an
+absolute path goes through verbatim, and a bare name becomes `-l<name>`. One
+translation is applied -- an Apple framework arrives as an absolute path to the
+`.framework` *directory*, which cannot be passed as a link input (`ld: file
+cannot be mmap()ed`), so it is respelled `-framework <name>`.
+
+A shared-library dependency also gets `-Wl,-rpath` pointing at its build
+directory, which makes the binary runnable where it was built. That rpath is
+not relocatable: a binary copied elsewhere still needs its shared dependency
+installed or bundled.
+
+### `:link-libs` and `:link-flags` overrides
+
+When the derived link line is wrong, or when there is no target to ask about,
+override it per dep:
+
+```turmeric
+:cmake-deps #map{
+  ;; Header-only: contributes include dirs, links nothing.
+  "raygui" #map{:url "https://github.com/raysan5/raygui" :ref "4.0"
+                :link-libs []}
+
+  ;; Link a specific name instead of the derived artifact.
+  "libpq"  #map{:prefer-system true :cmake-name "PostgreSQL"
+                :targets   ["PostgreSQL::PostgreSQL"]
+                :link-libs ["pq"]}
+
+  ;; Verbatim tokens, no prefix added.
+  "audio"  #map{:url "https://example.invalid/audio" :ref "v1"
+                :link-flags ["-framework AudioToolbox"]}
+}
+```
+
+- **`:link-libs [...]`** replaces the derived link entirely -- both the `-l`
+  name and the `$<TARGET_FILE:...>` artifact path. The empty list is a
+  meaningful value, distinct from omitting the key: `:link-libs []` says
+  "contribute include dirs, link nothing", which is the only way to express a
+  header-only dep (raygui) or a code generator that builds no library at all
+  (glad). Transitive `link_flags` are still emitted.
+- **`:link-flags [...]`** appends verbatim tokens with no prefix added. This is
+  the escape hatch for anything the structured keys cannot describe.
+
+A project's own link needs the same escape hatch when it has no `:cmake-deps`
+entry to hang it on -- for instance inline-C that calls a system framework
+directly. That spelling is `:build-opts :link-flags`, the verbatim sibling of
+`:build-opts :link-libs`:
+
+```turmeric
+:build-opts #map{
+  :link-libs  ["m"]                     ;; -lm
+  :link-flags ["-framework Foundation"] ;; passed through as written
 }
 ```
 
@@ -658,7 +763,7 @@ in the manifest.
 > [tur-fetch-system-first-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/tur-fetch-system-first-plan.md) for the
 > design rationale and open questions.
 
-For the full `:cmake-deps` field reference, the generated `SpiceDeps.cmake`
+For the full `:cmake-deps` field reference, the generated `cmake/CMakeLists.txt`
 format, the `spice-deps-manifest.json` schema, and hash locking, see the
 [CMake/CPM integration notes](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
 
@@ -700,11 +805,15 @@ Add two keys under `:build-opts`:
   to the vendored `.c` and to inline-C blocks in this spice's `.tur` modules
   (so an inline-C block can `#include "kissfft/kiss_fftr.h"`). They are **not**
   exported to consumers -- vendored headers are an implementation detail.
-- **`:c-sources` propagate across `:spices` deps.** If spice B vendors a `.c`
-  and spice A depends on B, building A links B's vendored sources into A's
-  binary automatically. Consumers see B only through its `.tur` exports, so a
-  consumer's inline-C should `extern`-declare any vendored symbol it calls
-  rather than relying on B's private headers.
+- **`:c-sources` propagate across the whole `:spices` closure.** If spice B
+  vendors a `.c` and spice A depends on B -- directly, or through any number
+  of intermediate spices -- building A links B's vendored sources into A's
+  binary automatically, exactly as far as `:cmake-deps` reach. Each source is
+  compiled once by resolved path, so a spice reached by two routes (a diamond)
+  or two deps vendoring the same third-party file never produce duplicate
+  symbols. Consumers see B only through its `.tur` exports, so a consumer's
+  inline-C should `extern`-declare any vendored symbol it calls rather than
+  relying on B's private headers.
 - **C++ is accepted but not auto-configured.** `.cc` / `.cpp` entries are
   allowed (some vendor libraries are C++ wearing a C name), but the build does
   not switch to a C++ driver for you -- add `-x c++` to `:c-flags` if needed.
@@ -758,7 +867,7 @@ definition. The standard format (from CLAUDE.md):
 ;;; Example:
 ;;;   (match (db-open "app.db")
 ;;;     (ok db) (println "opened")
-;;;     (err m) (println "failed:" m))
+;;;     (err m) (do (println "failed:") (println m)))
 ;;;
 ;;; Since: Phase P2
 (defn db-open [path :cstr] (result :ptr)
@@ -831,11 +940,11 @@ instead of an untyped `:int`:
   ...)
 ```
 
-The old workaround of declaring the rest as `:int` and casting handles back
-inside the body is no longer needed. For an interface that mixes distinct
-handle types (e.g. middlewares and routes), use two explicit `:list<T>`
-parameters rather than one untyped rest -- a single `& rest` is one
-homogeneous element type by design.
+Do not declare the rest as `:int` and cast handles back inside the body --
+write the real type (a bare `:int` rest rejects opaque/struct/ADT values).
+For an interface that mixes distinct handle types (e.g. middlewares and
+routes), use two explicit `:list<T>` parameters rather than one untyped
+rest -- a single `& rest` is one homogeneous element type by design.
 
 ---
 
@@ -966,6 +1075,16 @@ the manifest dir). Precedence runs CLI flag > env > manifest > default.
 The build dir is auto-created with a `.gitignore` of `*`, so its
 contents never leak into VCS even if the dir itself gets tracked. (See
 [manifest-driven-build-descent-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/manifest-driven-build-descent-plan.md).)
+
+`:engine "cc" | "jit" | "interp"` selects the default EXECUTION engine for
+`tur run`, on the same ladder: `--engine` flag > `TUR_ENGINE` env >
+manifest > `"cc"`.  An unknown value is a hard error (TUR-E0311); a `"jit"`
+selection needs a `-DTUR_JIT=ON` build (the former `jit` experiment gate has
+graduated -- only the build-time gate remains).  The engines differ in
+semantics, not just speed
+(`#?(:tur ... :turi ...)`, inline-C carve-outs), so when the choice is
+load-bearing, pair it with a `:tur-version` floor: older binaries silently
+ignore unknown manifest keys and would run under cc.
 The per-file subcommands `tur check`, `tur emit-c`, `tur emit-h`,
 `tur build <file>`, and `tur run <file>` get the same module resolution
 automatically -- they walk up from the input file looking for a sibling
@@ -1053,9 +1172,10 @@ For the complete step-by-step see
 
 ## Emscripten / WASM Support
 
-Once `tur build --target wasm` lands, all cmake-deps spices will get WASM
-builds automatically when the underlying C library supports Emscripten.
-To make your spice Emscripten-compatible:
+`tur build --target wasm` compiles via `emcc` (Emscripten must be
+installed), and `:cmake-deps` are configured through `emcmake`, so a
+cmake-deps spice gets a WASM build automatically when the underlying C
+library supports Emscripten. To make your spice Emscripten-compatible:
 
 - Prefer C libraries with documented Emscripten support (yyjson, mbedTLS,
   PCRE2, and the SQLite amalgamation all qualify).
@@ -1066,18 +1186,16 @@ To make your spice Emscripten-compatible:
 
 ---
 
-## Global Spices as Libraries (v2)
+## Global Spices as Libraries
 
-A spice installed globally with `tur install` is currently usable as a
-**command-line tool only**: its `:bin` entries are symlinked into
-`~/.local/bin/` and become available as `tur-<cmd>` (or via the
-`tur <cmd>` fallthrough). The same install is **not** automatically
-visible as a library to other projects -- the global `spices/` root is
-left out of the default module-resolution path to preserve build
-reproducibility.
+A spice installed with `tur install` is a command-line tool by default: its
+`:bin` entries are symlinked into `~/.local/bin/` and become available as
+`tur-<cmd>` (or via the `tur <cmd>` fallthrough). The global `spices/` root is
+deliberately **not** on the default module-resolution path -- that would make
+every build depend on what happens to be installed on the machine.
 
-A future v2 will let a project opt in to consuming a globally-installed
-spice as a library by naming it in its `build.tur`:
+A project opts in per dependency, by declaring it `:global` in its
+`build.tur`:
 
 ```turmeric
 :spices #map{
@@ -1085,10 +1203,29 @@ spice as a library by naming it in its `build.tur`:
 }
 ```
 
-`tur fetch` would then validate the global install exists at a matching
-version and record its resolved SHA in `tur.lock`. A project-level
-`:global-policy` knob would decide whether a missing global install gets
-auto-installed or errors out.
+That entry resolves through the install registry (`state.tur`), so the spice's
+`src/` joins the project's module-resolution path and `(import notebook/core)`
+works. Four things follow from where it resolves:
+
+- **It is never fetched.** `tur install` owns the checkout, so `tur fetch`
+  has nothing to do for a `:global` dep and writes no `tur.lock` row for it --
+  the same treatment a `:path` dep gets.
+- **A missing install is a hard error**, not a silent skip:
+  `spice: 'notebook' declares :global true but no such spice is installed --
+  run \`tur install <source>\` first`. Failing here is the point; the
+  alternative surfaces a hundred lines later as `module 'notebook/core' not
+  found` with no hint that a spice was never installed.
+- **`:global` takes no `:url` and no `:path`.** They name a different
+  resolution source, so declaring both is a manifest error rather than a
+  silent precedence rule.
+- **The spice must be installable**, which today means it declares at least
+  one `:bin` entry -- `tur install` is a binary installer. A library-only
+  spice cannot be registered yet, so it cannot be a `:global` dep either.
+
+Not built: the `:global-policy` knob that would decide whether a missing
+global install is auto-installed rather than reported, and version-range
+validation against the installed version (the registry records a `:version`,
+but nothing checks it against a requested range yet).
 
 This is **deferred**; until it ships, a spice that wants to be reused as
 a library should be added the normal way with `tur add`. See the
@@ -1122,7 +1259,7 @@ abstractions in your spice:
 
 ```turmeric
 ;; Wrong (TUR-D0001):
-(defn map-fn [^fat g :(fn [int] int) n :int] :int (g n))
+(defn map-fn [^fat g :(fn [:int] :int) n :int] :int (g n))
 
 ;; Right:
 (defn map-fn [^fat g :(fn [int] int) n :int] :int (g n))
@@ -1130,8 +1267,8 @@ abstractions in your spice:
 
 The structural `name : type` colon (the one separating a parameter name from
 its type) is unaffected -- the rule only forbids colons **inside** a `(fn ...)`
-type. If you are migrating an older spice forward, run the codemod from
-`#270` (`bf3445e5`) over your tree, or fix the hits by hand.
+type. If you are migrating an older spice forward, run
+`tools/rewrite_fn_type_colons.py` over your tree, or fix the hits by hand.
 
 ### Name mangling and inline-C
 

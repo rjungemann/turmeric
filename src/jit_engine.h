@@ -1,10 +1,10 @@
 /* jit_engine.h -- the in-process MIR JIT engine behind `tur jit` (Phase J1).
  *
  * Built under -DTUR_JIT=ON into tur_jit_obj, which BOTH `tur` and libturi
- * pick up (I4, docs/upcoming/mir-interp-tier-plan.md section 2.4).  cmd_jit
+ * pick up (I4, docs/archive/mir-interp-tier-plan.md section 2.4).  cmd_jit
  * in main.c compiles against this header unconditionally and reports the
  * missing capability when TUR_HAVE_JIT is not defined.  See jit_engine.c and
- * docs/upcoming/jit-engine-plan.md section 3.2.
+ * docs/archive/jit-engine-plan.md section 3.2.
  *
  * ---------------------------------------------------------------------
  * EMBEDDING (I4)
@@ -62,6 +62,13 @@ enum {
 int tur_jit_execute(const char *csrc, size_t csrc_len, const char *autolink,
                     const char **include_dirs, int n_include_dirs,
                     int prog_argc, char **prog_argv, int *prog_rc);
+
+/* B4 (post-jit-benchmark-resurrection-plan): phase timings of the most
+ * recent tur_jit_execute in this process.  compile_ms covers c2mir +
+ * MIR_link (+ eager generation when TUR_JIT_GEN=eager); run_ms is the entry
+ * thread's wall time, which under the default lazy gen interface includes
+ * first-call code generation.  Backs `tur jit --timing-json`. */
+void tur_jit_last_timings(double *compile_ms, double *run_ms);
 
 /* ------------------------------------------------------------------ */
 /* J2 (plan section 3.3): persistent image mode for the REPL.          */

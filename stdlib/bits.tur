@@ -21,6 +21,63 @@
   ```c
   return (int64_t)((uint64_t)x >> (unsigned)n);
   ```)
+;;; float->bits -- reinterpret a float's IEEE-754 bit pattern as an :int.
+;;;
+;;; This is the WRITE half of the int64 carrier round-trip.  A cons cell, a
+;;; variadic rest list and a HAMT slot all hold their elements in an :int-typed
+;;; word, so a float stored there travels as its bits, not as a number.
+;;;
+;;; Not a conversion: `(float->bits 1.5)` is 4609434218613702656, not 1.  Use
+;;; `int->float` / `float->int` (stdlib/math.tur) when you want the NUMBER.
+;;; `::` between an int and a float kind used to pick between these two
+;;; readings silently and is now a compile error -- see
+;;; docs/archive/ascribe-int-to-float-expression-ambiguity.md.
+;;;
+;;; Parameters:
+;;;   x -- the float whose bit pattern is wanted
+;;;
+;;; Returns:
+;;;   The 64 bits of x, as an :int.
+;;;
+;;; Example:
+;;;   (bits->float (float->bits 1.5))  ; => 1.5
+;;;
+;;; Since: 2026-08-29
+
+(defn float->bits [x : float] : int
+  ```c
+  union { double d; int64_t i; } u;
+  u.d = x;
+  return u.i;
+  ```)
+;;; bits->float -- reinterpret an :int's bit pattern as a float.
+;;;
+;;; The READ half of the carrier round-trip, and the inverse of `float->bits`.
+;;; Reading a float back out of a cons cell or a variadic rest list is exactly
+;;; this: `(bits->float (list-head c))`.
+;;;
+;;; Not a conversion: `(bits->float 1)` is 5e-324, a denormal, not 1.0.  A
+;;; denormal contributes nothing to a sum, which is what made the old
+;;; `(:: <int expr> :float)` spelling of this misread as a DROPPED term rather
+;;; than a garbage one.  Use `int->float` (stdlib/math.tur) for the number.
+;;;
+;;; Parameters:
+;;;   b -- the 64 bits to read as a float
+;;;
+;;; Returns:
+;;;   The float those bits denote.
+;;;
+;;; Example:
+;;;   (bits->float (float->bits 2.25))  ; => 2.25
+;;;
+;;; Since: 2026-08-29
+
+(defn bits->float [b : int] : float
+  ```c
+  union { double d; int64_t i; } u;
+  u.i = b;
+  return u.d;
+  ```)
 ;;; println-float -- print a float with the specified number of decimal places.
 ;;;
 ;;; Parameters:

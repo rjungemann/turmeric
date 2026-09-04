@@ -51,7 +51,7 @@ defclass Comonad [^w]
   duplicate [wa]     :int
 ```
 
-Because Turmeric v1 represents all container values as `int64_t` (holding heap pointers), every method returns `:int`. The `fn` argument to `extend` is a Turmeric closure: `(fn [wa] ...)`.
+This comonad library represents its container values as `int64_t` heap handles, so every method returns `:int`. The `fn` argument to `extend` is a Turmeric closure: `(fn [wa] ...)`.
 
 The implementation lives in [`stdlib/comonad.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/comonad.tur), which also provides Identity and Pair comonad instances as examples.
 
@@ -363,7 +363,7 @@ To run it:
 Run all CA-related tests:
 
 ```bash
-TUR_TEST_FILTER="grid\|game-of-life\|zipper-comonad\|comonad-identity\|flat-array" bash tests/run.sh
+TUR_TEST_FILTER="grid|game-of-life|zipper-comonad|comonad-identity|flat-array" bash tests/run.sh
 ```
 
 ---

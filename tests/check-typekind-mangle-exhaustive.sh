@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/check-typekind-mangle-exhaustive.sh
 #
-# Guard for docs/archive/concrete-codegen-layout-kind-enumerations-drift.md.
+# Guard for docs/archive/history/concrete-codegen-layout-kind-enumerations-drift.md.
 #
 # `append_type_mangle` (src/compiler/types.c) names a TypeKind inside a
 # monomorph's C identifier. It used to end in `default: "opaque"`, which did not
@@ -247,6 +247,6 @@ echo
 if [ "$FAIL" -eq 0 ]; then
     echo "typekind-mangle: all checks passed"
 else
-    echo "typekind-mangle: FAILED -- see docs/archive/concrete-codegen-layout-kind-enumerations-drift.md"
+    echo "typekind-mangle: FAILED -- see docs/archive/history/concrete-codegen-layout-kind-enumerations-drift.md"
 fi
 exit "$FAIL"

@@ -2,7 +2,7 @@
 #define TURI_WASM_GLUE_H
 
 /* Version string for the WASM module */
-#define TURMERIC_VERSION "0.33.2"
+#define TURMERIC_VERSION "0.43.0"
 
 #ifdef __cplusplus
 extern "C" {
@@ -111,14 +111,18 @@ void turi_wasm_free_string(char *s);
 /* Set the reader language mode for subsequent evaluations.
  *
  * Arguments:
- *   name - one of: "turmeric", "turmeric/curly-infix",
- *                  "turmeric/neoteric", "sweet-exp"
+ *   name - the full `#lang` directive tail: a base name ("turmeric",
+ *          "turmeric/curly-infix", "turmeric/neoteric", "turmeric/sweet",
+ *          or the legacy alias "sweet-exp"), optionally followed by
+ *          space-separated layer tokens, e.g. "turmeric/sweet stringed".
  *
  * Returns:
- *   0 on success, 1 if name is not a recognised language.
+ *   0 on success, 1 if the base or any layer token is not recognised.
  *
- * When the mode changes the accumulated session source is cleared (same
- * behaviour as typing '#lang ...' in the interactive REPL).
+ * When the base or the layer set changes the accumulated session source is
+ * cleared (same behaviour as typing '#lang ...' in the interactive REPL).
+ * The layer set is assigned, not accumulated, so a previously-enabled layer
+ * absent from `name` is turned off.
  * This function is equivalent to including a '#lang <name>' line at the top
  * of a submitted code block and is useful for programmatic mode-switching
  * (e.g. a language selector in the web REPL UI).
@@ -128,6 +132,18 @@ int turi_wasm_set_lang(const char *name);
 /* Return the current reader language name as a static string.
  * The returned pointer must NOT be freed. */
 const char *turi_wasm_get_lang(void);
+
+/* Return the `#lang` registry (base dialects + curated layers) as a JSON
+ * string:
+ *
+ *   {"bases":[{"name":"turmeric","label":"S-expression"},...],
+ *    "layers":[{"name":"stringed","kind":"reader","summary":"...",
+ *               "since":"v1","available":true},...]}
+ *
+ * Built live from the C-side tables (lang_base_from_name's canonical set and
+ * LANG_LAYERS[]) so a UI rendering it never becomes a second source of
+ * truth.  The returned pointer is owned by the module; do NOT free it. */
+const char *turi_wasm_lang_registry(void);
 
 /* ---------------------------------------------------------------------------
  * Doc lookup (D6: autodoc bridge)
@@ -159,6 +175,56 @@ const char *turi_doc_lookup(const char *name);
 /* Allocate a copy of a string using malloc.
  * The result must be freed with turi_wasm_free_string(). */
 char *turi_wasm_strdup(const char *s);
+
+/* SX8c: answer an SMT-LIB2 script with the refinement solver already linked
+ * into this module.
+ *
+ * The semantics are `tur smt`'s to the letter -- the same session reader (so
+ * `(push)`/`(pop)` scope assertions and each `(check-sat)` is answered where it
+ * appears), the same S0..S3 chain, the same bounded model search, and the same
+ * "a script with no `(check-sat)` is decided once at the end".  Scope is the
+ * corpus subset of SMT-LIB2 over QF_UFLIA / QF_UFLRA; a script outside it is
+ * refused WHOLE (an `error` key, no results) rather than partially parsed, and
+ * `unknown` is a first-class answer.
+ *
+ * Read-only: nothing reachable from here touches elaboration or discharge, so
+ * no answer can elide a runtime check.
+ *
+ * Returns a malloc'd JSON string; free it with turi_wasm_free_string.
+ *
+ *   {"schema":0,"results":[{"answer":"unsat","decided_by":"S2 (arithmetic)"}]}
+ *   {"schema":0,"results":[{"answer":"sat","model":[{"name":"x","sort":"Int","value":1}],
+ *                           "decided_by":"bounded model search"}]}
+ *   {"schema":0,"results":[],"error":"unsupported command"}
+ *
+ * `schema` is 0 while the shape is unstable, matching --dump-refine=json.
+ */
+char *turi_smt_check(const char *smtlib);
+
+/* ---------------------------------------------------------------------------
+ * Time-travel tracer (docs/archive/try-turmeric-tracer-plan.md, T3)
+ *
+ * turi_wasm_trace_run records a program; everything else answers questions
+ * about the recording it left behind.  The JSON returns are owned by the glue
+ * layer and are invalidated by the next call to the same function -- do NOT
+ * free them.
+ * ---------------------------------------------------------------------------
+ */
+
+#include <stdint.h>
+
+int             turi_wasm_trace_run(const char *input, uint32_t max_steps,
+                                    int has_main);
+const char     *turi_wasm_trace_stats(void);
+uint32_t        turi_wasm_trace_seek(uint32_t index);
+const char     *turi_wasm_trace_state(void);
+const char     *turi_wasm_trace_site_at(uint32_t index);
+const char     *turi_wasm_trace_find_line(int dir, const char *file,
+                                          uint32_t line);
+const char     *turi_wasm_trace_output_full(void);
+const uint8_t  *turi_wasm_trace_buffer(void);
+uint32_t        turi_wasm_trace_buffer_len(void);
+void            turi_wasm_trace_release(void);
 
 #ifdef __cplusplus
 }

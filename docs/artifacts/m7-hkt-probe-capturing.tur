@@ -9,7 +9,7 @@
 ;; param.  Previously the by-value HKT path lowered it to the bare int64 carrier
 ;; and bare-called a raw fn pointer, dropping the env (segfault).
 ;;
-;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-capturing.tur; echo $?
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/artifacts/m7-hkt-probe-capturing.tur; echo $?
 ;;   (by-value HKT is default-on, so the env var is optional)
 ;;   -> 121  (TARGET)
 ;;

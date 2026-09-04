@@ -6,6 +6,1130 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`tur smt` runs a script as a session, with a real assertion stack**
+  (solver-extension plan, SX8b). `(push [n])` and `(pop [n])` scope the
+  assertions, each `(check-sat)` is answered where it appears, `(get-model)`
+  reprints the last witness and `(exit)` ends the session; the exit code is
+  the last answer. `tur smt --interactive` reads the same commands from stdin
+  and answers as they arrive, which makes `tur` usable as a backend for
+  anything speaking the protocol subset.
+
+  Two limits are deliberate and documented: only hypotheses are scoped (a
+  `declare-fun` survives its `pop` -- an unconstrained variable can never turn
+  a `sat` into an `unsat`), and the assertion set is incremental while the
+  solver state is not (each check rebuilds its DNF cubes). A script with no
+  `(check-sat)` is still decided once at the end, so SX8a's contract and the
+  corpus replay are unchanged. Guide:
+  `docs/guides/refinement-solver-internals-guide.md`.
+
+- **The refinement solver is answerable from the browser** (SX8c):
+  `turi_smt_check` runs an SMT-LIB2 script through the same reader, chain and
+  bounded model search as `tur smt`, including the `(push)`/`(pop)` assertion
+  stack, and returns JSON. The solver was already in the WASM module -- the
+  refine sources are core sources -- so this exposes what was shipping rather
+  than adding weight. Read-only: nothing reachable from it can elide a runtime
+  check.
+
+- **Two more solver caps are now instrumented** under `TUR_REFINE_STATS=1` and
+  in `benchmarks/run-cap-sweep.sh`: `path hyps` (`RT_CS_PATH_MAX_HYPS`, the
+  branch guards recovered per call-site crossing -- the tightest cap in the
+  refinement path, and previously invisible) and `model vars`
+  (`MODEL_MAX_VARS`, the counterexample search's width). The latter carries a
+  second `model vars run` line counting the subset a higher cap would actually
+  help, since a VC over the cap may also carry a non-int variable the sort gate
+  declines at any limit.
+
+### Fixed
+
+- **The internals guide's solver documentation was a release cycle stale.**
+  The caps table gave `NO_MAX_SHARED` as 8 where the source says 16 (raised
+  2026-08-25), in two places; the S1 section still described the
+  rebuild-per-cube EUF state that incremental EUF replaced; and
+  `TUR_REFINE_EUF=rebuild`, the seam for bisecting the incremental path, was
+  undocumented.
+
+## [0.43.0] -- 2026-09-03
+
+### Added
+
+- **Serializable continuations gained a documented typed surface.** The
+  guestbook example was rewritten as a spice with one continuation per page
+  to demonstrate it, and the serial runtime now emits whenever a serial-cont
+  builtin is referenced (rather than unconditionally), with the
+  colored-receiver rejection tightened to the actual soundness rule
+  (colored, not merely capture-free, is what's refused).
+- **Image globals**: a `defimage-global` registry and a second image
+  section, with `TUR-W0706` diagnosing misuse.
+- **`tur dap` and `tur trace` now instrument top-level programs, not only
+  `(main)`.** A program whose work happens at the top level previously ran
+  with the debugger idle (no `stopped` event, `0 steps` recorded); the
+  launch path now pre-scans for a top-level `main` and arms the debugger
+  around the file load itself when there isn't one.
+- **`#json-file<T>` readers** for loading typed JSON directly from a file
+  path.
+- **A `stdlib/VERSION` stamp is checked at resolve time**, so a `tur` binary
+  built against one stdlib version and pointed at another's
+  `TUR_STDLIB_DIR` now fails closed with a version-mismatch diagnostic
+  instead of silently compiling against the wrong stdlib.
+- **A real miniKanren example** over `stdlib/logic.tur`.
+
+### Changed
+
+- **The Option niche is the default representation, and `(some p)` over a
+  `:non-null` payload can no longer carry NULL.** `--enable=option-niche`
+  graduated on 2026-09-03 (the name is accepted as a `TUR-W0063` no-op for
+  one minor line; `TUR_OPTION_NICHE=0` restores the tagged form for
+  bisection, and `tests/run-option-niche-seam.sh` keeps that path green).
+  An `(Option P)` for a `:non-null` opaque (`String`) or a compiler-lowered
+  heap collection (`(Option (Vec int))`) is carried AS its payload pointer --
+  16 bytes to 8, `(none)` as NULL, no tag word -- and a `(Vec (Option
+  String))` stores each element as that word in its slot with no per-element
+  box (2e6 elements: 17.8 MB / 0.018 s against 79.7 MB / 0.08 s before). The
+  representation spends the bit pattern `0` on `None`, so a `Some` whose
+  payload is null has nowhere left to live.
+
+  **Breaking for inline-C that builds an Option over such a payload.**
+  `tur_some_ptr(0)` produces a legal value today that `some?` answers true
+  on; under the niche it is a diagnostic naming the type and the violated
+  declaration (`a carrier Some with a NULL payload crossed into a
+  niche-represented Option -- the payload type's :non-null declaration was
+  violated`), raised at construction or at the carrier crossing, whichever
+  comes first. It is a diagnostic with a message, not a crash. The fix is one
+  line and is almost always what the code meant: return `tur_none()` for the
+  absent case. If a payload type genuinely has a valid null, drop `:non-null`
+  from its `defopaque` -- that un-elects it from the niche and restores the
+  16-byte tagged form, at no other cost.
+
+  A *provable* violation (the literal `0` ascribed into a `:non-null` handle)
+  has been `TUR-E0303` at elaboration since 0.41.0 and is unaffected. One
+  shape is a known residue rather than a bridge: an UNTYPED closure parameter
+  that a `vec-eq?` comparator ascribes back to `(Option String)` reads the
+  slot word as a carrier box -- write the element type on the parameter
+  (`docs/reported/erased-closure-param-over-niche-vec-slot-reads-box.md`).
+  Plan: `docs/upcoming/sr3-option-niche-plan.md`.
+
+- **Recursive sum types now default to by-value representation (RM4/SR4
+  flip)**, matching the non-recursive default and avoiding the carrier
+  allocation cost measured to have no compensating benefit.
+
+### Fixed
+
+- **`(eq? (some s) (some t))` over a String or struct payload compared
+  pointers.** The `Eq[Option]` and `Eq[Result]` instance bodies dispatched
+  the payload `eq?` on a match binder the elaborator had typed by the
+  representative (`int`), so every ABI specialization ran `Eq[int]`:
+  `(eq? (:: (some "aa") (Option String)) (:: (some "aa") (Option String)))`
+  was false, with a `-Wint-conversion` warning in the emitted C as the only
+  symptom. The binders are now ascribed to the class var, which re-drives
+  the dispatch per specialization. Independent of the niche (both paths).
+- **`(eq? v w)` over a `(Vec (Option String))` read each slot word as a
+  carrier box.** The constrained-Eq synthesizer's `vec-eq?` comparator
+  names its parameters as slot words now (`__cmp_slot_a`), so the bridge
+  reinterprets the word exactly as a hoisted `vec-get` temp is. Pinned by
+  `tests/fixtures/option-niche-vec-closure-cmp`, which joins the seam
+  population with the typed-comparator and let-bound-word shapes.
+- **A fresh `Option`/`Result` over a value struct passed to a class method
+  no longer leaks its payload box.** `(enc (some (make-struct Box ..)))`
+  kept the `Box` copy for the process lifetime although the instance only
+  read its argument: the drop-after-consumer stamp lived in the ordinary
+  call path and a class-method call never ran it. The resolved instance's
+  inferred non-retention mask now decides there (per monomorph at emit when
+  the receiver is abstract). A let binding through `ok-val` / `err-val` /
+  `unwrap` of a fresh producer is freed at scope exit as the payload's only
+  holder, and a return-dispatched producer's carrier cell is drained against
+  the instance that ran, so the struct copy inside it is freed too. Closes
+  `docs/archive/value-struct-payload-sum-monomorph-box-has-no-owner.md`.
+
+- **A callee that stores its `Option`/`Result` argument is no longer inferred
+  non-retaining.** `(defn stash [o : (Option Box)] : int (vec-push! store o) 1)`
+  got the non-retention bit because the confinement walk modelled a callee
+  only through its result, so the caller freed its fresh `(some Box)` after
+  the call and the container read it back freed (a use-after-free since
+  2026-09-02, silent without ASan). Under the sum walk a hand-off to a callee
+  that is neither an audited reader nor proven non-retaining is an escape.
+  Pinned by `sum-payload-stashing-callee-not-dropped`.
+
+- **A class method whose result is the class variable can mint an `Option`
+  over a value struct in a constrained instance.** Three `cc` errors on a
+  shape `tur check` accepted: the ctor-argument seam deref'd a re-dispatched
+  by-value result as the carrier; a dictionary slot's base clone was declared
+  with a by-value result while its tail spilled to the carrier; and
+  `[(Option Box)]` as an instance head read `Box` as a type variable and made
+  the method's own parameter move-only. All three fixed;
+  `docs/archive/return-dispatched-sum-mint-in-constrained-instance-miscompiles.md`.
+
+- **An inline-C body that boxes a value-struct payload into a declared
+  `(Option T)` / `(Result T E)` hands that payload over with the box.** Such a
+  producer is fresh by declaration now, so the payload is freed with the cell
+  instead of leaking; the guide states the contract (the payload must be a
+  fresh allocation, like the box).
+
+- **A niche `(Option P)` Vec element is stored as its payload word (CE1/CE2
+  of the container-element-form plan; default, since the niche graduated in
+  the same release).** A `(Vec (Option String))` used to pay a heap carrier
+  box per element; the element now lands in its slot as the String pointer
+  (None is 0), and every read hands it back. 2e6 elements: 17.8 MB / 0.018 s
+  against 79.7 MB / 0.08 s. `TUR-E0714` refuses a niche element stored
+  through a fully erased receiver, the one shape that cannot decide the slot
+  convention. Also fixed on the way: a generic
+  `(defn push-it [A] [v : (Vec A) x : A] (vec-push! v x))` specialized for an
+  Option element double-wrapped the value -- a silent blank read under the
+  niche and a `cc` error on the default path.
+  `docs/upcoming/container-element-form-plan.md`.
+- **ADT and constructor names could collide when emitted to C.** The
+  separator fold and the emitted joiner shared the same alphabet
+  (`_`/`__`), so distinct ADT/constructor name pairs could mangle to the
+  same C symbol; two ADTs sharing a constructor name could also emit the
+  same C function twice (`redefinition of 'ctor_Mk'`). Constructor symbols
+  are now qualified by their owning ADT and mangled injectively, and a bare
+  ctor alias whose name mangles like another's now fails closed at compile
+  time instead of picking one silently.
+- **`bit-shr`'s `>>` did an arithmetic (sign-extending) shift** instead of
+  the documented logical right shift, reproducible identically under
+  compiled output, `tur jit`, and `--interpret`. Also under `--interpret`:
+  `vec-new-filled`'s native override was silently lost after preload (a
+  registration-ordering bug), and `int->float` had no builtin entry or
+  preload stub at all and was unreachable.
+- **`(defn f [] : int nil)` was accepted and returned 0** instead of being
+  rejected like every other wrong tail (`"hello"`, `1.5`, `true`); a nil
+  literal tail under a declared non-nil return is now a compile error.
+- **Several leaks and miscompiles in the sum/carrier reclamation sweep**,
+  found via a corpus-wide ASan sweep (2,186 fixtures, 31.4 MB -> 608 KB of
+  leaks): a stackless let-bound caught box now frees through its machine
+  variable; a catch-unwind is now treated as a fresh sum producer;
+  value-struct payload boxes are now freed in argument position and under
+  void consumers; bind-chain boxes and envs are now owned at statically
+  resolved dispatch sites; a let/do wrapping an `if` no longer
+  double-unboxes carrier arms; a fat-closure shim box handed to a proven
+  non-retaining sink (e.g. `result-eq?`, `vec-eq?`) no longer leaks; and
+  cstr readers, reinterprets, and boxed carrier arms are now correctly
+  modeled in the escape walk.
+- **`tur fmt` now preserves comments in header/arm gaps, around `^mut`
+  pairs, and immediately before a closing form**, which it previously
+  dropped.
+- **`:c-sources` now propagates across the whole `:spices` dependency
+  closure**, not just direct deps.
+- **Shared static buffers were retired from C-name accessors**, which were
+  not stable across calls in the same compilation (a latent aliasing
+  hazard).
+
+## [0.42.2] -- 2026-09-01
+
+### Added
+
+- **`tur dap` serves a recording as a timeline**, not just as a sequence of
+  steps. DAP describes execution as one step after another and has no
+  vocabulary for an axis -- correct for a live debuggee, where there is nowhere
+  to scrub to, and wrong for a recording, which is an axis. Three custom
+  requests add one, advertised as `supportsTurmericReplayTimeline`:
+  `replayInfo` (how many steps, where the cursor is), `replaySeek` (jump to
+  step N, clamped, reporting where it landed) and `replaySites` (where steps
+  are and how deep, by explicit index or downsampled to a bucket count). All
+  three refuse in a live session naming the reason, because a client that asks
+  has a scrubber in mind.
+
+  `replaySites` returns position and depth **together**, which is the shape Try
+  Turmeric's `trace-site-at` already uses: a timeline's cursor readout wants
+  `file:line` and a depth ribbon wants `depth`, over the same steps. A bucket
+  reports its range's *maximum* depth and the site of the step where that
+  maximum occurred, so a deep call between two samples is not erased and
+  clicking a ribbon spike lands where the spike is.
+
+  None of this is new capability in the reader -- `turi_trace_replay_seek`,
+  `_steps`, `_depth_at` and `_site_at` already existed, and the last two are
+  index reads. What was missing was any way to reach them over the wire, and
+  the alternatives are worse than they look: a slider whose range is a guess,
+  and a seek approximated by repeated `stepBack`, which rebuilds state from the
+  start of the stream once per candidate and turns a scan of an 80k recording
+  from milliseconds into a hang.
+
+- **The replay console rewinds.** Forward motion still appends through ordinary
+  `output` events. Backward motion could not: the transcript at the new cursor
+  is a prefix of what the client was already sent, and a delta cannot express a
+  truncation -- so the old code sent nothing and left the console showing
+  output from steps the cursor had rewound past. A backwards seek now emits a
+  `replayOutput` event carrying the whole transcript to be used in its place.
+  Whole-transcript rather than a cut offset, because a client that missed an
+  earlier event would otherwise cut in the wrong place and never know. Clients
+  that do not recognise the event are exactly as they were.
+
+### Changed
+
+- **The website is rebuilt around one canonical site map.** The topbar,
+  sidebar, mobile drawer and footer are generated from a single pair of lists
+  shared by `web/site.js` and the three page generators (`tools/gendocs.py`,
+  `tools/genguides.py`, `tools/genspices.py`), so hand-written pages and
+  generated ones -- guides, API docs, spices -- can no longer disagree about
+  what is on the site. Every chrome link carries a `title` describing where it
+  goes, the mobile drawer shows the same site map the desktop rail does, and
+  the home page's install step became a tabbed set of install methods. The
+  tour was reworked to match.
+
+### Fixed
+
+- **A recording's last step now shows what the program printed.** A replay
+  transcript holds the output produced strictly before the cursor's step, and a
+  program whose final act is a `println` drains it after the final STEP -- so
+  the last index reported an empty transcript. Measured: `outputLength: 0` at
+  step 24020 of 24021 for a fixture that prints "done" and exits. An empty
+  console at the end of a run that printed reads as a broken timeline rather
+  than a precise one. The final step now concatenates every OUTPUT record, the
+  same special case and for the same reason as Try Turmeric's
+  `turi_wasm_trace_output_full`.
+
+## [0.42.1] -- 2026-08-31
+
+### Changed
+
+- **`tur trace` records one step per expression, not per source line.** The
+  recorder drove the debugger with step-in, whose stop predicate is
+  line-granular, so a recording's resolution was a source line -- the wrong unit
+  in a Lisp, and more so in Turmeric, where neoteric `f(g(x))` and sweet-exp `$`
+  chains exist to put more on a line rather than less. A loop whose body fit on
+  one line collapsed into a single step, with the induction variable jumping
+  from its first value to its last in one delta and every iteration's output
+  arriving in one drain; and fidelity depended on formatting, the same loop
+  recording 3 steps on one line and 23 across four. Both spellings now record
+  58. `tur debug` stepping is unchanged -- line granularity is what a human
+  drives by hand and what DAP speaks -- and `--lines` selects the old
+  granularity.
+
+- **The `.turtrace` format is v2.** A site carries a column range rather than a
+  bare column, and the header records which granularity a recording was taken
+  at. The column was always in the format but named nothing under line stepping:
+  it was whichever node landed first on a newly entered line. v1 recordings
+  still read back. The step cap moved with the unit (200,000 -> 1,000,000
+  native, 50,000 -> 250,000 in the browser) -- a cap bounds the recording, but
+  what it means is how much of a program fits under it.
+
+- **`tur run` matches attributes by name and refuses unknown ones**, and aborts
+  on a builtin failure rather than continuing with an empty string.
+
+### Added
+
+- **`tur run` gains Justfile parity on parameters, modules and builtins**: named
+  and flag parameters via `[arg(...)]`, `mod` and imports, backtick evaluation,
+  and `os_family` / `path_exists` / `replace` / `join` / `error`.
+
+- **The Try Turmeric timeline highlights the expression** inside the current
+  line, which is the visible half of recording per expression; the toolbar
+  scrolls when it overflows.
+
+### Fixed
+
+- **Two silent-ignore holes in `tur run`** where a parameterized attribute was
+  accepted and then quietly dropped.
+
+- **`tur run` runs recipes from the Justfile's directory** and honors `[no-cd]`.
+
+- **A node was hooked twice by the interpreter's debugger** when the driver
+  handed a black-box node to `eval_expr`. Line-granular stepping hid it -- the
+  duplicate shares a line -- so it surfaced as doubled records the moment the
+  recorder began asking for every node.
+
+## [0.42.0] -- 2026-08-30
+
+### Added
+
+- **`tur trace` -- a time-travel recorder, and reverse execution in `tur dap`.**
+  `src/turi/trace.c` records every node the tree-walker evaluates as deltas
+  rather than states: a step carries only the bindings whose rendered value
+  moved, so 80006 steps cost 1.2 MB -- 15 bytes a step. `tur dap` `launch` with
+  `"replay": true` then serves the whole session from that recording, so
+  `stackTrace`, `scopes` and `variables` answer from a trace cursor. That is
+  what makes `stepBack`, `reverseContinue` and `reverseNext` answerable at all
+  -- a pause cannot go back. VS Code and nvim-dap draw the reverse-execution UI
+  off `supportsStepBack`, so there is no editor-side widget here.
+
+- **A time-travel timeline in Try Turmeric.** Trace is a second button beside
+  Run (and a `:trace` command at the prompt): it records the tab's program under
+  the interpreter and turns the console area into a scrubber -- a slider over
+  the run, step forward and backward, the editor gutter following the cursor,
+  each live frame's bindings at that point, and the transcript rewinding with
+  it. The recorder was already compiled into the wasm module and simply
+  unexported; the module is byte-identical in size either way, so this costs no
+  download.
+
+- **The Try Turmeric prompt gets completion, hover and its own LSP document.**
+  The `turi>` prompt is a single-line Monaco editor backed by
+  `file:///project/repl.tur` rather than an `<input>` -- not for the look, but
+  so that completion, hover and signature help at the prompt are the providers
+  that already exist instead of a second widget stack built over a text field.
+
+- **Lexical scope in the language server -- scope-aware highlight, rename and
+  references.** The symbol index knew only global bindings, so every consumer
+  answered a textual question when it had been asked a lexical one: a parameter
+  named `x` highlighted every `x` in the file, and rename could not be written
+  at all. Each local binding now carries the region it is visible in, as two
+  ranges whose gap is the binding's own initializer -- so `(let [x (+ x 1)] x)`
+  resolves the init's `x` to the OUTER binding while a caret on the binder still
+  resolves to the inner one.
+
+- **Serializing a continuation inside an open `bt-scope` is refused.** Both the
+  host codec and the emitted `tur_serial_cont_serialize` now report the trail
+  depth and the count of outstanding trailed writes instead of producing a blob.
+  A serialized continuation carries control; the undo information that would put
+  the scope's writes back is process-local and does not travel with it, so such a
+  blob would deserialize into a world where those writes either never happened or
+  can never be unwound.
+
+### Changed
+
+- **`backtrackable-state` graduated -- `stdlib/trail.tur` is always available.**
+  The trail (mark/undo cells with per-cell, per-write and per-level opt-out) no
+  longer needs `--enable=backtrackable-state`; the experiment row is deleted and
+  the module is an ordinary autoload. What held it at `prototype` was one open
+  question -- plan 3.5's multi-shot re-entry -- now decided: **the checked error
+  is permanent and snapshotting the live trail segment on capture is declined.**
+  The SX0 curve settled the cost half (a snapshot is at best at parity with
+  replaying the writes at 5.0 ns each, and is paid at *every* capture rather than
+  only on the branch taken), and the semantics half went the same way (a
+  symmetric snapshot restores the learned clause away, which is the one thing a
+  backjump must keep). Writing the fixtures turned up a stronger guard than
+  either: `Mark`, `BtCell` and `GCell` have no `Clone` instance, so a multi-shot
+  `cloneable-shift` **cannot capture a trail handle at all** -- `TUR-E0014` at
+  compile time, now pinned so it cannot regress.
+
+  Because trail.tur now prepends to every compile, 148 codegen snapshots moved.
+
+- **The trail works under `--interpret`.** `stdlib/trail.tur` is entirely
+  inline-C, which the tree-walker cannot execute, so making it an unconditional
+  autoload would have left a whole module resolving to nothing outside the
+  compiled path. It is now shimmed for the interpreter -- and shimmed by
+  *calling the same `src/runtime/trail.c`* rather than reimplementing it, so
+  there is one trail, not two that can drift. `tur --interpret`, `tur eval`,
+  `tur repl` and the web REPL all have the full surface; five fixtures now run
+  under both harnesses and produce byte-identical output, including the
+  `bt-depth` counts that pin "a thousand writes cost one trail entry".
+
+  Serializing a continuation is the one compiled-only behavior, and it is not a
+  gap: under `--interpret` `tur_serial_cont_serialize` is an in-process deep
+  copy rather than a byte codec, so no blob outlives the trail and there is
+  nothing to refuse.
+
+- **`::` between an integer kind and a float kind is refused, and both meanings
+  are named.** It meant two different things depending on where the value came
+  from -- `(:: (.n m) :float)` means the NUMBER, `(:: (list-head c) :float)`
+  means the BIT PATTERN -- and both operands are statically `:int`, so the
+  same-size rule answered "bits" for both, silently. A small integer read as
+  IEEE bits is a denormal, so `mixedfold` returned 0.25 instead of 3.25: a
+  dropped term, not a garbage one. Say which you mean -- `int->float` /
+  `float->int` (`stdlib/math.tur`) to convert the number, the new `float->bits`
+  / `bits->float` (`stdlib/bits.tur`) to reinterpret. Integer literals stay
+  exempt and keep converting. The interpreter registers the new pair as natives,
+  which closes a compiled-vs-interpreted divergence rather than adding one: the
+  tagged model could never implement a bit-reinterpreting `::`, but once the
+  author has said which reading they meant there is nothing left to guess. All
+  four spellings now agree on both paths.
+
+- **`stdlib/arrow`: real `ArrowLoop` feedback via `LoopCell`.** The fed-back `d`
+  of `ArrowLoop` at `(->)` was a sentinel `0`, so the instance was only correct
+  when the looped arrow never read it. Turmeric is strict, so `d` cannot simply
+  BE the value the same run is about to produce -- but indirecting through a
+  two-word heap cell `{ filled, value }` splits "the value is written" from "the
+  value is read", which is the only thing laziness was buying here.
+  `arrow-loop` / `arrow-loop-lazy` fill it with the `d` output when the run
+  returns (knot-tying, so a deferred read observes the `d` this run produced);
+  `arrow-loop-fix` seeds it and refills per pass until `d` stops moving or fuel
+  runs out. One shared protocol, so a single looped arrow works under any of
+  them.
+
+### Fixed
+
+- **`any` payload boxes leaked once per widen.** A value RETURNED as `any`, or
+  handed back by a callee that boxed it, leaked 16 bytes a turn under
+  LeakSanitizer in three residual shapes -- the earlier argument-position fix
+  could not help there, because a caller-frame copy would dangle. Ownership is
+  now settled where the value lands: a non-escaping local's box dies with its
+  scope, an owned temporary is dropped after the call that consumes it, the drop
+  fires at early exits as well as the normal one, and a non-retained widen stays
+  in the caller's frame. `any` also joins the CPS subset, so a `perform` beside
+  one lowers.
+
+- **A local callee was spelled as two different C identifiers.** Calling an
+  ascribed `:fn` param -- `((:: f (fn [int] int)) v)` -- hoists the callable head
+  into a synthetic binding whose declaration and use went through different
+  naming rules, so cc rejected the undeclared one: a clean build break on a
+  documented spelling. Both ends now name it by the same rule.
+
+- **Wide by-value aggregates crossing the poly-to-fat boundary.** The three
+  poly-to-fat ABIs disagreed about an argument too wide for the carrier; they now
+  bridge it through the fat-box carrier and agree.
+
+- **`bt-level` and `bt-depth` read an unspecified upper half.** Both C functions
+  return `uint32_t` while `stdlib/trail.tur` declared them `:int` (`int64_t`), so
+  the result's high 32 bits were whatever the callee left in the register -- a
+  level could in principle read as 4294967297. Found while writing the serialize
+  guard. Both now go through `tur_trail_level_i64` / `tur_trail_depth_i64`,
+  matching how a mark is already packed across that boundary.
+
+- **Editor-side resolution fixes.** DAP breakpoints match against the recorded
+  site rather than a rebuilt state; the language server resolves a buffer's
+  spice from where the file lives rather than where it was written; a local
+  whose scope start cannot be computed is dropped instead of indexed. Try
+  Turmeric starts a recording from a fresh session, aligns the dialect button
+  with the rest of the toolbar, and does not register the service worker on
+  localhost.
+
+## [0.41.0] -- 2026-08-28
+
+### Added
+
+- **Three structural diagnostics for shapes that previously compiled into
+  nothing.** `TUR-E0711` rejects a non-definition form at `defmodule` top level
+  (it was silently never evaluated); `TUR-E0713` rejects a definition in tail
+  position of a function body (there is nothing to return); `TUR-E0712` bounds
+  the emitter's expression walk so a pathologically nested expression reports
+  instead of running the C stack out. See `docs/guides/syntax-guide.md`.
+
+- **`:non-null` is declarable on a `defopaque`,** replacing the option-niche
+  allowlist's hand-maintained opaque rows. Ascribing the literal `0` into such a
+  type is now `TUR-E0303` at elaboration rather than an abort at the niche `Some`
+  constructor at runtime; a *computed* zero is not provable there and still falls
+  through to the runtime check. `tur explain TUR-E0303` carries the rationale.
+
+### Changed
+
+- **A `defopaque` over a pointer c-names as `void *`, not `int64_t`.**
+  `(defopaque String :ptr<void>)` used to lower to the same `int64_t` carrier
+  word as every other handle, so an opaque handle was byte-indistinguishable
+  from a tagged carrier box at the emitter's ~94 `strcmp(cname, "int64_t")`
+  sites. It now says what it is. The declared base type had to start being
+  recorded for this: `defopaque` parsed it only to find where the trailing
+  `:linear` / `:affine` / `:sealed` attributes start, and then threw it away, so
+  `:ptr<void>` and `:int` were indistinguishable downstream.
+
+  **Breaking for inline-C over a pointer `defopaque`**, and deliberately loudly
+  so: a body that ends `return (int64_t)(intptr_t)p;` in a function returning
+  such a handle is now a `-Wint-conversion` (which the suite's ratchet fails on),
+  and a hand-written `extern` declaring the handle as `int64_t` is a hard
+  `conflicting types`. Both fixes are one line -- return `(void *)(intptr_t)p`,
+  declare the parameter `void *`. Stdlib took 66 such edits across 21 files;
+  `stdlib/string.tur` took none, because it was already written as
+  `(:: (tur_string_adopt_cstr s) String)` over `ptr<void>`-typed externs, which
+  is the pattern to copy. Gate results:
+  `docs/archive/opaque-pointer-c-spelling-gate-results.md`.
+
+- **SR3's Option niche is unshelved, as `--enable=option-niche`.** The
+  0.40.0 entry below shelved it because `String` -- the whole of the phase's
+  census -- could not take the niche while it c-named to `int64_t`. The change
+  above removes that, so `(Option String)` is carried as its payload pointer:
+  16 bytes to 8, `(none)` as NULL, no tag word, and no
+  `tur_adt_Option__String` typedef emitted at all. It stays behind a flag
+  because "this payload's valid values exclude 0" is a hand-maintained
+  allowlist rather than something the type system records; graduating it means
+  making non-nullness declarable. `Cons` remains ineligible for the reason the
+  0.40.0 entry gives. Plan: `docs/upcoming/sr3-option-niche-plan.md`.
+
+### Fixed
+
+- **`:cmake-deps` link lines are resolved by CMake instead of guessed
+  downstream.** `INTERFACE_LINK_LIBRARIES` is now walked recursively inside the
+  generated `CMakeLists.txt`, where `if(TARGET ...)` can tell a library name
+  (`m` -> `-lm`) from a CMake target name (raylib lists `glfw`) -- identical
+  shape, opposite handling, and the C-side guess emitted a `-lglfw` that does
+  not exist. An Apple framework arrives as an absolute path to the `.framework`
+  *directory* and is now respelled `-framework <name>` rather than passed as a
+  link input, which `ld` rejects with `file cannot be mmap()ed, errno=22`.
+  Alongside: the walk is scoped to the declared `:spices` closure instead of
+  every workspace member (building `spices/opengl` configured 15 unrelated
+  native deps, and a single one that could not configure aborted the whole
+  build); a transitive `:path` dep is no longer absolutized and then
+  re-prefixed; a shared-library dep gets its `-rpath`; `:path` resolves against
+  `cmake/`; and CMake 4's policy floor is passed through. A raylib spice now
+  builds and runs on macOS with no `cmake-deps/` shim.
+
+- **An inline-C body that builds an `(Option T)` produced the wrong value under
+  the niche.** `tur_some_ptr` returns the carrier -- a pointer to a tagged box --
+  and a niche consumer read that word as the payload, so
+  `(string/to-cstr (unwrap o))` printed blank rather than the string. Silent,
+  not a crash. The let-binding and call-argument crossings now bridge through
+  `emit_carrier_bridge` like every other. Only reachable with
+  `--enable=option-niche`.
+
+- **`: nil` forward declarations no longer collapse to the `int` placeholder.**
+  A statement-position call to a `: nil` function the elaborator had not yet
+  reached was emitted as `__auto_type __ps_N = <void call>;`, which `cc` rejects
+  with "variable has incomplete type 'void'" and no `.tur` attribution. `: void`
+  was immune, and moving the callee above the caller made it disappear. The root
+  cause was in the elaborator: the reader parses a bare `nil` in type position
+  as `F_NIL`, not `F_SYM`, so the forward-declaration pre-passes did not match it.
+
+- **A module-level `def` of an opaque-typed value emits its global.**
+
+- **Two diagnostics now name what they could not find:** a hoisted inline-C
+  `#include` that does not resolve names the header, and `tur` says so when
+  `TUR_STDLIB_DIR` overrides the stdlib sitting beside the binary.
+
+## [0.40.0] -- 2026-08-28
+
+### Added
+
+- **Try Turmeric navigation (M0-M5, F1).** A minimap with blocks and a
+  three-lane overview ruler, gated on measured editor width with a persisted
+  override; a Symbols popover fed by the `documentSymbol` provider, sorted by
+  position, kind-labelled and caret-tracking; go-to-definition into the stdlib,
+  opening a read-only padlocked buffer excluded from downloads, persistence and
+  the server's document set, with F12, Cmd+click and a Back button that appears
+  only when there is somewhere to go; `documentHighlight` that skips comments,
+  strings and inline-C fences; hover that falls back to the documentation table
+  when the checker has nothing, marked as docs-sourced; and `builtin_describe`,
+  so `println`, `+`, `=` and `not` hover to something at all. A C-interpreter
+  link joins the site footer, the `/try` footer and the sidebar's Ecosystem
+  list.
+
+- **CI metrics page at `/ci`.** Every push to `main` publishes each ctest
+  suite's wall time to the `ci-metrics` branch; the page reads one build
+  environment at a time and shows duration trends, per-suite sparklines and the
+  skip ledger.
+
+### Changed
+
+- **Parametric sum monomorphs flow by value by default (SR2a graduated).**
+  `--enable=parametric-sum-byvalue` is retired -- `(Option int)`,
+  `(Result float cstr)` and every other concrete parametric sum monomorph are
+  aggregates with no per-ctor malloc, where they used to ride the int64 heap
+  carrier. Measured on the seam: 3.6x faster and 71x less peak RSS on a
+  narrow-sum loop, 3.2x/145x on a wide one, and one leaked allocation per
+  construction eliminated. Shapes the predicate declines (self-recursive,
+  `:heap`, GADT, fixpoint partners) and erased generic bases still use the
+  carrier. `--enable=parametric-sum-byvalue` remains accepted as a TUR-W0063
+  no-op for one minor line; `TUR_SR2_APP_SUM_BYVALUE=0` restores the carrier
+  for bisection. Plan: `docs/upcoming/sum-representation-plan.md` (SR2c).
+
+- **`ok?` and `err?` take `(Result A B)`, not `:int`.** They were the last
+  carrier-typed Result accessors; `some?`, `ok-val` and `err-val` were already
+  parametric. An `:int` parameter stops being a harmless erasure once the value
+  flows by value, so inline-C code that hands back a carrier value declared
+  `: int` now names its type at the boundary -- `(ok? (:: r (Result int int)))`
+  -- exactly as it already did for `some?`.
+
+- **SR3's Option niche is shelved, not shipped.** The representation was gated
+  behind `TUR_SR3_OPTION_NICHE=1` (default off) and measured. It works, and one
+  erased-crossing bug it exposed is fixed regardless -- a typeclass `Eq`
+  dictionary read the low half of a spilled niche pointer as a tag and returned
+  a silent wrong answer for two equal `(some v)`. What shelves the phase is the
+  population: the niche claims `0` for `None`, so every payload that has already
+  spent its null (`Cons`'s `nil` *is* `0`) is ineligible.
+
+### Fixed
+
+- **Seven representation-crossing defects** the by-value default exposed, each
+  one a place where two spellings agreed only because a parametric sum monomorph
+  and a type variable both c-named to `int64_t`. The sharpest: the
+  carrier-to-by-value readback's NULL guard lived in the pre-sum record branch,
+  so reading a `(none)` built by inline-C dereferenced the null carrier. Also a
+  match on an erased instance base's parameter binding an aggregate from an
+  `int64_t` slot, a match resolving its element from a different instantiation
+  than the active specialization, an Option/Result pointer-box payload bound as
+  a value, an argument spilled to a carrier sink at its static rather than its
+  specialized type, a poly-wrapper argument unboxed twice, and the catch-unwind
+  group trampoline saving an aggregate-returning member through a scalar cast.
+
+- **CI suites that were passing by not running.** The browser job's desktop step
+  runs a fixed spec list, so `minimap.spec.js`, `footer.spec.js` and
+  `lsp.spec.js` asserted nothing until they were named (51 tests -> 87). The
+  mobile project is WebKit but the job only installed Chromium, so all 32 of its
+  tests died at launch behind a `continue-on-error`. Also `tur fmt`'s canonical
+  one-line form for the retyped `ok?`/`err?`, and a `docs/reported/README.md`
+  row left pointing at an archived report.
+
+## [0.39.0] -- 2026-08-27
+
+### Added
+
+- **Offline documentation, in the browser and out (OD1-OD5).** The guides and
+  API pages are rendered once and wrapped twice: the site keeps its chrome, and
+  a chrome-free *docs pack* feeds an in-app docs browser in Try Turmeric, so
+  reading a guide no longer navigates away from your editor buffer, console
+  history, or WASM session. The pack is precached unconditionally on install --
+  no toggle, no first-run prompt -- with `#doc=guides/...` deep links, one
+  search box over pages and symbols, "Load into editor" on every runnable code
+  block, and a remembered scroll position per page. Outside the browser,
+  `tur doc <symbol>` answers from the stdlib docstring table rather than just
+  the builtin list, and `tur docs [--open|--serve]` locates the rendered
+  documentation (`$TUR_DOCS_DIR`, then `<prefix>/share/doc/turmeric`, then
+  `<repo>/docs/html`); `--serve` is a loopback-only, GET-only static server for
+  the browsers that refuse `file://` navigation.
+
+- **`--enable=parametric-sum-byvalue` (beta).** Parametric sum monomorphs
+  (`(Option int)`, `(Result float cstr)`, ...) flow by value with no per-ctor
+  malloc, instead of riding the int64 heap carrier. The default path is
+  unchanged; the experiment is the staging ground for making by-value the
+  default (SR2 graduation). Plan: `docs/upcoming/sr2-gate-results.md`.
+
+- **Lazy solution streams in `stdlib/logic.tur`.** `Stream` gained the immature
+  constructor `(StInc :StThunk)` plus `st-force` / `st-pull`, so `run-logic n`
+  now costs n solutions instead of running the whole search and truncating the
+  result. `st-append` swaps on an immature stream, which is fair interleaving;
+  `st-bind` defers through one rather than forcing it. **A relation with
+  infinitely many solutions is now expressible at all** -- previously
+  `(defn nats [] (disjoined (succeed) (nats)))` did not merely diverge, it
+  SIGSEGVed while the goal was being *built*.
+- **`zzz`, a delay macro for recursive relations.** `(disjoined (succeed) (zzz
+  (nats)))` terminates where the undelayed form crashes. It is a macro by
+  necessity: a function would evaluate its argument at the call site, which is
+  the divergence it exists to prevent.
+- **`disjoined-dfs` / `st-append-dfs` -- depth-first search that is still
+  lazy.** `disjoined` interleaves and is complete; this pair keeps depth-first
+  order for goals whose left branch is known finite, reaching a solution at
+  depth 18 in 0.012s against 3.5s interleaved. Incomplete by construction -- it
+  never reaches the right branch of a goal whose left branch is infinite.
+- **`stdlib/trail.tur` -- backtrackable state**, behind
+  `--enable=backtrackable-state`. Trailed cells whose writes undo to a mark,
+  with the opt-out at three granularities: per cell (`g-cell-new`, never
+  trailed), per write (`untrailed-begin` / `untrailed-end`), and per level
+  (`bt-commit-to!`). `BtCell` and `GCell` are distinct types so opting out is
+  visible in a signature. Recording and undoing state measures ~5ns per write,
+  roughly 5x cheaper per unit of live state than capturing and restoring
+  control.
+- **`tur smt <file.smt2>`** runs an SMT-LIB2 script through the refinement
+  solver's staged chain and prints `sat` / `unsat` / `unknown`, which stage
+  decided, and a model when the bounded search finds one. Exit codes mirror the
+  answer (0 unsat, 1 sat, 2 unknown, 3 error) so a shell harness can branch on
+  `$?` without parsing stdout.
+- **`--dump-refine=json`** emits one record per refinement obligation --
+  location, predicate, verdict, deciding stage, counterexample, the replayable
+  VC as SMT-LIB2, and which caps bit for that obligation. Works on `check` as
+  well as `emit-c`. The schema is explicitly unstable and says so in every
+  record (`"schema": 0`).
+- **`tests/run-leak-check.sh`** runs compiled fixtures under LeakSanitizer, opt
+  in per fixture with a `requires.leak-check` marker. This generalizes three
+  bespoke per-regression harnesses; coverage went from 2 fixtures to 54.
+
+### Changed
+
+- **`Option` and `Result` are real sums now** (SR2b,
+  `docs/upcoming/sum-representation-plan.md`). `(defdata Option :copy [A]
+  (None) (Some A))` and `(defdata Result :copy [A B] (Ok A) (Err B))` replace
+  the discriminated records; every stdlib accessor and instance is
+  match-based, and you can `match` the variants directly. The runtime layout
+  is the tagged monomorph `{ int tag; union { ... } as; }` -- 16 bytes for
+  both (`Result` down from 24), tags in declaration order, payload at offset
+  8. The dead-arm write is gone, so an error type no longer needs a zero
+  value. **Inline-C contract:** hand-rolled `{ bool is_ok; ... }` /
+  `{ bool is_some; ... }` structs read the wrong bytes now -- build and read
+  through the preamble helpers (`tur_box_ok` / `tur_is_ok` / `tur_box_some` /
+  `tur_is_some` / ...), which carry the canonical layout and a
+  `_Static_assert` pinning it. The interpreter builds and matches the same
+  constructors, with the legacy box shapes still readable.
+- **`(none)` allocates nothing** (SR3 slice A). The carrier `None` is the
+  null pointer -- every reader already treated NULL as none, so the tagged
+  box whose only content was `tag = 0` was pure allocation. A 2e6-iteration
+  `(none)` loop peaks at 10.3 MB RSS where the still-boxing `(some i)` twin
+  peaks at 64 MB. A tagged None box remains valid on the read side.
+- **`Option` and `Result` monomorphs lower by value when a type argument is
+  itself a monomorph.** `option<list<int>>`, `result<vec<T>, cstr>` and
+  `option<(Pair a b)>` previously fell back to the heap carrier -- a silent
+  representation downgrade that reintroduced a `malloc` per construction on some
+  of the most common shapes in the language.
+- **`NO_MAX_SHARED` raised 8 -> 16.** It was the only cap in the refinement
+  solver with a live signal, turning away eligible terms on four units and
+  always by exactly one. No verdict moved on the 125-benchmark corpus or the 89
+  in-tree refinement fixtures, and the corpus replay did not slow measurably.
+- **`-main` is no longer documented as an entry point.** Nothing ever called it:
+  both shipped examples and the snake tutorial used it, and `examples/minikanren`
+  built, linked, ran, exited 0 and printed nothing. Both examples and all 24 of
+  the tutorial's listings now use `main`.
+
+### Removed
+
+- **Twelve graduated `--enable=` compatibility shims retired.** A `GRADUATED[]`
+  entry is a migration window, not a permanent alias: a name ages out one minor
+  line after graduation and goes back to being the hard `TUR-E0310` an unknown
+  name gets. Five backend names went first (`cps-effects`, `cps-tramp-resume`,
+  `cps-async`, `owning-cloneable-capture`, `closure-drop-glue`) -- no source
+  syntax to adopt, so nobody had reason to name one in a build. Then the seven
+  that gated source syntax and had each had a full minor line: `refined`,
+  `cycle-gc`, `jit`, `sealed-opaque`, `global-state`, `write-frames`,
+  `checked-reads`. `#lang turmeric refined` is `TUR-E0330` again -- a semantic
+  layer *is* its experiment, so the two shims retire together. `jit-ffi`
+  graduated at 0.38.0, so its window opens now and it is the sole survivor.
+  **If a `build.tur` or `experiments.tur` still names a retired flag, drop the
+  name** -- the feature it gated needs no enable at all.
+
+### Fixed
+
+- **Statement position deleted wrapped expressions -- a high-severity
+  miscompile.** `emit_stmt` treats four pure *wrappers* (`EX_REINTERPRET`,
+  `EX_CAST`, `EX_ASCRIBE`, `EX_POLY_WRAP`) as pure in statement position and
+  emitted nothing for them. The wrapper is pure; the call inside it is not, so a
+  discarded parametric call -- whose result rides the int64 carrier and is
+  therefore wrapped by elaboration to restore its instantiation type -- vanished
+  along with its effects.
+- **The aarch64 HFA ABI is correct in the JIT.** AAPCS64 passes a struct or
+  array of 1-4 same-typed FP members in `v0..v7`, one per register; MIR's
+  aarch64 back end had no HFA concept and routed every aggregate through the
+  integer argument registers. Self-consistent inside one c2mir compilation and
+  wrong the instant c2mir code met natively compiled code. The MIR pin moves to
+  the upstream fix, and both interim refusals it forced are dropped. The
+  compiled `tur jit` path, which had no check at all, miscalled an ordinary
+  `extern-c` with a record parameter; it now refuses (`TUR-E0711`) where the fix
+  does not reach.
+- **One convention for wide by-value aggregates at every fat boundary.** A
+  lifted thunk and its dispatch site could disagree about how a >8-byte
+  by-value aggregate parameter crosses a fat-closure boundary: a hard `cc` error
+  through a `^fat` sink, a **silent wrong answer** through the untyped `:fn`
+  carrier, and a SIGSEGV through a typed fn-field, whose cast is exactly what
+  hid the disagreement from the C compiler.
+- **`tur fmt` silently deleted comments inside bracket vectors.** Every `;` /
+  `;;` / `;;;` comment inside a `defstruct` field vector, a `defn`/`fn`
+  parameter vector, or a `let`/`loop` binding vector was dropped in place, exit
+  0, no diagnostic. The non-idempotence (`tur fmt` then `tur fmt --check`
+  exiting 1 on the file `fmt` just wrote) was the downstream symptom.
+- **`(fn name [...])` points at `letrec` instead of a bracket error.** The
+  Scheme/Racket/CL spelling of a self-recursive lambda was rejected with
+  "parameter list must be a vector", caret on the name, with a well-formed
+  vector sitting one token later -- a message that invited the reading that
+  Turmeric has no recursive lambdas. It has two, and the diagnostic now names
+  both.
+- **Two modules could silently share one API page.** `just docs` wrote 147 pages
+  for 148 modules: the filename-derived fallback name keys on the *basename*, so
+  `stdlib/capability.tur` and `stdlib/test/capability.tur` both rendered to
+  `tur-capability.html` -- the shipped page held the test mocks and the real
+  module had none, while the index still showed both cards.
+- **`vec-of` over a parametric sum monomorph no longer ICEs.**
+  `(vec-of (Yep 8) ...)` over a two-variant sum died at the let binder on the
+  default path (the Vec registration and the binder disagreed about the
+  element's representation); `vec<option<T>>` is that shape. Fixed by the
+  SR2b representation predicates; the report is archived.
+- **`rc/of` did not release a multi-variant ADT payload.** It allocated a second
+  box for the carrier word and freed only that wrapper, so the payload leaked --
+  code doing exactly the documented thing lost 16 bytes per value.
+- **`ref/from-rc` and `(upgrade w)` leaked at the ownership handoff.** Two
+  unrelated call sites, one shape: a heap allocation handed across an ownership
+  boundary to something that never freed it.
+- **A closure stored in an ADT field emitted C that warned.** A `defopaque`
+  over `:ptr<void>` is a named `int64_t` carrier, and a closure ascribed to one
+  still lowers to a pointer, so the store was an int/pointer straddle the
+  emitted C complained about. This is what any ADT holding a callback hits.
+- **`fat_captures_borrowed` was read out of uninitialized memory.** The flag
+  suppresses one specific use-after-free; 60 fixtures were reading it as garbage
+  on every compile, and nothing failed because UBSan here prints and continues
+  rather than aborting.
+
+### Docs
+
+- **Eight dead guide cross-links fixed, and `--strict-links` armed** so the next
+  one fails the docs build instead of shipping a 404 to turmeric-lang.com.
+- **The logic guide no longer tells you to hand-write an interleaving `mplus`.**
+  `st-append` is the interleaving one now, and the section explains why the
+  hand-written version it used to recommend could never have worked: it swapped
+  its arguments but built a strict cell, and interleaving without an immature
+  result is half a mechanism.
+- **The test-suite portability guide gained a section on what the sanitizers
+  actually catch** -- ASan aborts, UBSan does not, and the suite now collects
+  UBSan findings from the compiler and reports them after the summary
+  (`TUR_SANITIZER_GATE=1` makes them fatal).
+
+## [0.38.0] -- 2026-08-21
+
+### Added
+
+- **Dynamic FFI carries by-value records in every direction.** `call-ptr` and
+  `callback-ptr` take and return records (including nested ones), a callback can
+  receive and return aggregates, and `extern-c` gained by-value record
+  parameters and returns. Under `--interpret` this routes through the c2mir
+  thunk provider and needs a `-DTUR_JIT=ON` build; compiled code needs nothing.
+- **Nested constructor patterns in `match` arms**, and `#json-str?<T>` -- a
+  `Result`-returning typed JSON decode.
+- **`:global` spice dependencies** -- consume a globally installed spice as a
+  library.
+- **`mw-recover` in httpd**, and a panic boundary around every task: a panic
+  inside an `(async ...)` body no longer unwinds the spawner and aborts the
+  process; `await` re-raises it instead.
+
+### Changed
+
+- **`jit-ffi` graduated: `call-ptr` and `callback-ptr` need no `--enable`.**
+  They are ordinary `unsafe` forms (a lingering `--enable=jit-ffi` is a
+  `TUR-W0063` no-op). The gate existed only so the signature vocabulary could
+  move; that vocabulary is now settled and measured. The `-DTUR_JIT=ON` build
+  gate on the interpreter path is unchanged, and `unsafe` is still required.
+  `EXPERIMENTS[]` is now empty.
+- **`stdlib/args` names real handle types.** `ArgSpec` / `ArgResult` are
+  `defopaque` instead of bare `:int` across all 18 entry points, and an option
+  default is `(Option cstr)` rather than a `cstr` smuggled through `:int`.
+- **Float division no longer emits the integer divide-by-zero guard**, so IEEE
+  inf/NaN semantics survive instead of trapping.
+
+### Fixed
+
+- **`(cast a OtherStruct)` on an `any` succeeded and reinterpreted the
+  payload.** Every struct boxed as `TY_STRUCT` and every ADT as `TY_ADT`, so the
+  tag check compared equal between unrelated types, and `type-of` answered
+  "struct" / "adt" for all of them. A struct/ADT payload now interns its own
+  type.
+- **A narrow C return value was read as garbage.** A callee returning `int`
+  leaves the upper half of the return register unspecified, so a thunk declared
+  `long long` read whatever was there -- `neg_int(1234)` came back as
+  `4294966062`. The FFI signature vocabulary is exact-width now.
+- **Nested by-value record fields were marshalled to the wrong shape under
+  `--interpret`**, on every architecture -- `{{ww}w}` passed as `{qw}`, silently
+  wrong answers. Found by the x86-64 verification that had never been run.
+- **`match` binds the variable of an ADT catch-all arm.**
+- **`catch` keeps the payload's representation on both engines**, including an
+  aggregate-returning thunk and a float payload read from the erased `Result`
+  carrier.
+- Codegen: a divergent-tail function's trailing `return`, inline C naming a
+  local, forward-declared globals a lifted lambda reads, and the fn-typed
+  if-merge temp.
+
+### Docs
+
+- Every example that compiles is now also run in CI, and the ECS benchmark
+  landed.
+
+## [0.37.0] -- 2026-08-20
+
+### Added
+
+- **`tur audit` -- where this build fetches code from.** Reads `build.tur` plus
+  `tur.lock` and prints every origin, spices and `:cmake-deps` in separate
+  sections, with URL, ref, subdir, and the resolved commit and SHA-256 where
+  the lock has pinned it. Unpinned origins are called out with the fix. It
+  verifies nothing, and says so on every run.
+- **A concurrency stdlib layer**: `arc.tur` (the language surface over the Arc
+  runtime), `barrier.tur` (a reusable counting barrier), `stm-sync.tur`
+  (`TMVar` and `TChan` over `tvar` + `check`), and `with-lock` /
+  `with-read-lock` / `with-write-lock`.
+- **`(export-from <mod> name ...)`** -- re-export a name from another module
+  without importing it locally.
+- **`:entry` in `build.tur`**, `#map{}:(K V)` typed-empty map literals, and
+  `cstr-eq?` / `cstr-free` in `stdlib/cstr`.
+- **A verification tier for `#reads` frames.** A deferred footprint walk
+  reports VERIFIED / EXCEEDED / UNVERIFIED per frame via `--dump-read-frames`,
+  and an EXCEEDED reached through a callee's own frame -- a read the
+  definition-site scans cannot see -- joins the `TUR-W0383` evidence tier.
+
+### Changed
+
+- **`write-frames` graduated: a `#writes` frame is checked without
+  `--enable`.** WF2's three verdicts (VERIFIED, EXCEEDED -> `TUR-E0382`,
+  silent UNVERIFIED) and WF3's borrow widening are now unconditional. WF4's
+  entry-check elision was retired before graduation -- the check it proposed
+  to elide does not exist -- so what graduated is a checker that reports a
+  broken promise, not an optimization acting on one.
+- **`checked-reads` graduated: a broken `#reads` frame no longer buys a
+  proof.** When a measure's body demonstrably reads mutable state its frame
+  omits, the congruence override is refused and the crossing becomes the
+  ordinary `TUR-W0372` (a hard error under `--strict-refine`). Refusal keys on
+  "saw a read", never "could not see", so an inline-C measure -- essentially
+  every measure predating mutable globals -- is unaffected. Note what this does
+  not do: a `#reads` crossing is proof-only, so refusing buys a diagnostic
+  rather than a check, and outside `--strict-refine` the program still runs.
+- **`schan-recv` returns `(Pair T (SChan R))`** instead of writing through an
+  out-parameter.
+- **An int literal ascribed to a float is the number, not its bits.**
+  `(:: 3 :float)` printed `1.4822e-323` -- the double whose bit pattern is
+  `0x3` -- and now folds to `3.0`. The tell that this was an accident rather
+  than a semantic: `(:: 3 :float32)` already printed `3`, because the
+  same-width reinterpret rule missed at 8 != 4.
+- **The Send-across-await check runs at every await point**, not just the
+  first.
+
+### Fixed
+
+- **A SIGSEGV passing a let-bound non-capturing lambda as a `:fn` argument.**
+- **`TUR-W0033` fired on the very `(unsafe ...)` block it requires.**
+- **`tur run test` now reaches ctest** and passes 108/108.
+
+### Docs
+
+- **A repo-wide documentation accuracy pass.** The guides that had drifted from
+  the shipping API were rewritten against it (performance, logic,
+  checkpointing, the quickstart tutorial, the datalog examples), and 33 reports
+  were filed for what could not be fixed in place.
+
+## [0.36.0] -- 2026-08-19
+
+### Added
+
+- **`defmacro*` -- procedural macros that run on a macro-time interpreter
+  environment.** A macro body is ordinary Turmeric evaluated at expansion time
+  over a first-class `Syntax` value (a new `TY_SYNTAX` compile-time kind, syntax
+  natives, and quasiquote that produces `Syntax`), with the stdlib preloaded
+  into the macro env; the derive-family migrated onto it as proof.
+- **`(import m :for-macros)` -- cross-module macro-time dependencies.** A module
+  imported for macros is loaded into the expansion env rather than the runtime
+  one, so a procedural macro can call helpers defined elsewhere. Macro-time I/O
+  is denied by default.
+- **Procedural reader macros by composition, plus R3-bounded reflection** -- a
+  reader macro is an ordinary `defmacro*` composed into the read step.
+- **`tur expand` and REPL `:expand`** -- one expansion step at the command line
+  and at the prompt. `defmacro` bodies may now hold multiple forms, and gensym
+  is unified across the expander.
+- **jit-ffi F4/F5 -- struct-by-value through `call-ptr`, and callbacks.** A
+  `(unsafe (call-ptr ...))` signature can now pass and return structs by value,
+  and a Turmeric function can be handed to C as a callback on both the compiled
+  and the interpreted path. The aarch64 FP-aggregate ABI wall F4 hit is
+  reported in `docs/reported/mir-aarch64-fp-aggregate-abi.md`.
+- **`tur completion <zsh|bash>` -- shell completion.** Completes subcommands,
+  per-subcommand flags, and `.tur` file arguments; for `tur run` it completes
+  recipe names out of whatever Justfile encloses the directory being completed,
+  using their doc comments as descriptions. The scripts are embedded in the
+  binary, so `source <(tur completion zsh)` bootstraps anywhere with no
+  install-prefix lookup. The Homebrew formula installs both.
+- **`tur run --list --all`** shows recipes that are normally hidden.
+
+### Changed
+
+- **`#reads` may name multiple parameters** (`#reads [a b]`), and a mutable
+  global is never frozen by a `#reads` frame -- a callee's write to a global the
+  frame named no longer survives as an unearned congruence grant (soundness).
+- **`[private]` and `_`-prefixed recipes are honored rather than rejected**,
+  matching `just`: hidden from `tur run --list`, still runnable by name.
+
+### Fixed
+
+- **Two Result box/struct bridging codegen bugs** -- a CPS-path Result unbox was
+  dropped, and a by-value product tail in a `result` block was double-unboxed.
+  Every parametric by-value product tail is now covered; the remaining
+  non-parametric shape is reported rather than miscompiled.
+- **A heap join whose body escapes to an enclosing join** emitted an invalid
+  assignment; it is now evicted to the direct emitter.
+- **`__TUR_CNAME_` broke on leading underscores**, and a `let` binding of a
+  `:void` expression emitted invalid C -- now a clean TUR-E0023.
+- **Malformed or duplicated `#reads` frames** are diagnosed (TUR-E0024).
+- **`tur run --list` omitted aliases.** `alias b := build` is runnable --
+  `find_recipe` resolves it, and the "recipe not found" error even printed
+  aliases in its `available:` line -- but the listing walked only the recipe
+  table, so aliases were invisible to any tooling built on it.
+- **One unsupported Justfile feature blanked the whole listing.** A `[private]`
+  recipe or a `mod` line -- both fine under real `just` -- aborted the parse
+  with exit 2 and no output. Unsupported features now degrade `--list` (note on
+  stderr, remaining recipes still listed) while staying fatal when a recipe is
+  actually executed.
+- **`tur run --list --json` escaped only `doc`.** Recipe names and parameter
+  defaults were emitted raw and control characters passed through, so a default
+  like `flags='-DFOO="bar"'` produced invalid JSON.
+
+## [0.35.0] -- 2026-08-18
+
+### Added
+
+- **`(unsafe (call-ptr p [T1 T2 -> R] args...))` -- call a raw function pointer
+  through a JIT-compiled thunk**, behind `--enable=jit-ffi`. The thunk is
+  rendered from the signature string, compiled through c2mir, and cached per
+  unique signature, so a JIT build calls a C function of any arity with no
+  `--max-arity` ceiling. It is not a new expression kind -- the signature hangs
+  off the ordinary call node, so every walker traverses it unchanged. F1-F3 of
+  docs/upcoming/jit-ffi-c2mir-plan.md; struct-by-value (F4) and callbacks (F5)
+  deliberately trail.
+- **`extern-c` stops lying under `--interpret`.** In a JIT build an `extern-c`
+  registration resolves the symbol via `dlsym` and binds a thunk-backed native,
+  so `(strtol "123abc" 0 10)` is `123` where everything outside a 7-entry known
+  table used to silently return nil. The known table stays as the
+  semantics-bearing override (`free` no-op, `exit`, `printf` marshalling).
+- **A dialect picker and layer toggles in Try Turmeric.** The editor header
+  gains a Language control -- a radio group for the four base dialects and
+  checkboxes for the curated `#lang` layers -- rendered from a new WASM registry
+  export so the UI never becomes a second source of truth. The `#lang` line
+  stays authoritative: typing it by hand and using the picker are the same
+  operation, and one Ctrl+Z undoes a switch. Turning a reader layer off now
+  genuinely deactivates its `#`-dispatch, where `#s"..."` used to keep reading
+  as `String` after `stringed` was switched off.
+- **Variadic spice exports are callable from the REPL**, and a spice that
+  declares its C dependency the recommended way (`:cmake-deps` / `:link-libs`,
+  no `__tur_autolink__` marker) now loads through the REPL's in-process JIT
+  hook, falling back to the subprocess build when the hook cannot handle it
+  (vendored `:c-sources`, static-only cmake deps).
+- **Rust and Haskell benchmark columns, and `tur jit --timing-json`.** 21
+  programs each, validated byte-for-byte against the existing goldens, plus a
+  phase record (`compile_ms` / `run_ms` / `engine`) so a chart can subtract
+  compile time and a `cc` fallback is detected rather than averaged in. The
+  existing language list is unchanged; the new columns ride on top.
+
+### Changed
+
+- **`global-state` graduated -- four mutable-global features work without a
+  flag.** A `#writes` frame may name a mutable global, an exported global is
+  read-only outside its defining module (write it from another module and you
+  get a diagnostic naming the owner and `(export (mut g))`), and `^atomic` /
+  `^thread-local` are ordinary annotations on a top-level `def`. Every phase of
+  docs/upcoming/mutable-globals-plan.md had landed, so the row had nothing left
+  to decide. A lingering `--enable=global-state` is a `TUR-W0063` no-op for one
+  minor line, not an error.
+
+  One tightening rides along, and it is confined to `--enable=write-frames`
+  (still experimental, and what *checks* a frame at all): a body that declares a
+  frame and writes a global the frame does not name is now `TUR-E0382`, where it
+  previously just declined to verify.
+
+### Fixed
+
+- **The macOS CI 45-minute hang.** `httpd-stop-async` left the listen fd open
+  until `httpd-async-free`, so the kernel kept completing handshakes into the
+  backlog after the stop; a client that got one blocked forever in `recv()`,
+  deadlocking `main` in `pthread_join`. Both stop paths now close the listener,
+  so pending backlog connections are reset and late connects refused rather than
+  black-holed. Reproduced 100% by delaying one client 300ms, 0% after, and
+  stressed 200 runs at 6x thread oversubscription.
+- **`kqueue` write knotes were never deleted.** `EV_DELETE` passed
+  `EVFILT_READ | EVFILT_WRITE`, but kqueue filters are enum values (-1, -2), not
+  a bitmask, so the OR collapsed to `EVFILT_READ` and a stale WRITE knote could
+  deliver a wake on a reused fd.
+- **`:build-opts :link-libs` reaches the link line.** It was parsed, documented,
+  and round-tripped by `tur init` -- and consumed by nothing.
+
+### Docs
+
+- **A dynamic FFI guide**, with a worked `libzmq` example, plus a plan for
+  spice-level FFI integration.
+
+## [0.34.0] -- 2026-08-17
+
+### Added
+
+- **`TUR-W0383`: a `#reads` frame that omits mutable state the body reads now
+  warns at the definition.** `#reads` is trusted, and its one consumer grants
+  congruence -- so a measure declared `#reads w` whose body also reads a
+  mutable global was silently buying proofs it had not earned (the elided
+  caller-side crossing check the `refine-reads-frame-omits-global` fixture
+  pair pins). The warning is gateless and changes nothing proved: it reports
+  positive evidence of the broken promise (a direct read of a `^mut` global in
+  the elaborated body) without yet refusing the override. An inline-C body
+  yields no evidence and stays silent, so every pre-existing measure is
+  unaffected. `tur --explain TUR-W0383` has the full story.
+- **`--enable=checked-reads`: refuse the `#reads` congruence override on
+  broken-frame evidence.** The gated escalation of TUR-W0383: on the same
+  positive evidence (the measure's body directly reads a mutable global), the
+  refinement encoder declines the congruence grant, so a crossing that used to
+  be proved from the broken promise becomes an undischarged TUR-W0372 -- with
+  wording that says the *frame* failed, not the region ("fix the frame, not
+  the region"), since the usual "guard it inside a `frozen` region" advice is
+  misleading when the region is present. A hard error under `--strict-refine`.
+  Refusal keys on "saw a read", never "could not see": an inline-C measure --
+  essentially every measure that predates mutable globals -- carries no
+  evidence and keeps today's trusted behavior even with the gate on. R2 of
+  docs/upcoming/trusted-refinement-claims-plan.md.
+- **An execution engine can be selected per project.** `:engine "cc" | "jit" |
+  "interp"` in `build.tur`, `--engine <name>` on the command line, or
+  `TUR_ENGINE` in the environment, resolved in that precedence with `"cc"`
+  last -- the same ladder `:build-dir` already used. `tur init` round-trips the
+  key. There is **no silent substitution**: an unknown value is a hard error
+  (`TUR-E0311`, with its own `tur explain` entry) and asking for `"jit"` on a
+  build without the engine names `-DTUR_JIT=ON` and the override spellings
+  rather than quietly falling back, because the engines differ in *semantics*
+  and not just speed. Unknown manifest *keys* are still silently ignored, which
+  is the documented compatibility story.
+- **`tur repl --engine <name>`.** Selects the engine that builds the enclosing
+  spice: `"cc"` (the `tur build --shared` subprocess, still the default) or
+  `"jit"` (compile the whole spice in process through MIR, no `.so`, no
+  `dlopen`). Reads the same precedence ladder as above, so `TUR_ENGINE=jit` or
+  `:engine "jit"` in `build.tur` work too.
+- **An error inside macro-generated code now names the call that generated
+  it.** Template spans survive expansion, so a diagnostic used to point into
+  the `defmacro` body with nothing tying it to the code the user actually
+  wrote. One note is appended at the call site -- "in expansion of macro
+  'name' -- the diagnostics above are inside code this call generated" -- on the
+  outermost frame only, so nested macros get a single note at the user-visible
+  call and a clean expansion followed by an unrelated error gets none.
+- **`maximum macro expansion depth exceeded` carries a hint** naming the two
+  measured causes of a base case that never fires: `nil?` on an empty `^syntax`
+  rest (an empty rest is an empty *list*, so `empty?` is the predicate), and
+  counting-driven recursion (the compile-time evaluator has no arithmetic, so a
+  spliced `(- n 1)` recurses on the unevaluated form).
 - **`^thread-local` on a top-level `def`**, behind `--enable=global-state`.
   Each thread gets its own copy, materialized on first access and initialized by
   running the declared initializer *on that thread* -- so
@@ -65,6 +1189,64 @@ All notable changes to Turmeric are documented here.
 
 ### Changed
 
+- **Three experiments graduated: `cycle-gc`, `sealed-opaque`, and `jit`.** Each
+  gate had nothing left to decide. Existing opt-ins keep working and can be
+  deleted at leisure -- `--enable=<name>`, `:experiments [<name>]` in
+  `build.tur`, and the user experiments file are all accepted as no-ops with
+  `TUR-W0063`.
+
+  - **`(gc-auto!)` is an ordinary call form.** What graduated is the *call*, not
+    a default. `GC_AUTO` remains strictly opt-in, permanently: a program that
+    never calls `(gc-auto!)` still runs the pure-RC path with no collector
+    overhead, and the AUTO-only allocation cost is conditional on the mode at
+    run time. **Automatic GC is not becoming the default in this language**,
+    before or after v1. That the two decisions were separable is the whole
+    reason ungating cost a non-calling program nothing. Baked from 0.30.8 across
+    the 0.31-0.33 lines, with pause time fixed, the allocation-path cost
+    measured (~10%, fixed overhead rather than per-byte), and steady-state
+    residue on a real-shape workload measured at ~60 blocks.
+  - **`:sealed` on a `defopaque` now enforces on every compile.** Outside the
+    declaring module, `::` refuses both the unwrap and the fabricate direction
+    (`TUR-E0302`), closing the extract-and-re-wrap aliasing hole that otherwise
+    bounds every guarantee built on an opaque handle. Unusually low-risk for a
+    graduation: with the gate off `:sealed` already parsed and imposed nothing,
+    so this reaches only code that deliberately *wrote* `:sealed`. The
+    two-direction rule the gate existed to question survived the one spice that
+    adopted it, so it graduates as designed rather than narrowed to
+    fabrication-only. Still a compile-time discipline over the `::` surface --
+    inline-C can cast an `int64_t` to anything, so this raises the bypass from
+    "one `::` away in ordinary code" to "requires deliberate inline-C" and does
+    not claim more.
+  - **`tur jit` no longer needs a run-time flag.** The parity condition the gate
+    was holding for is discharged: the whole fixture corpus runs through the
+    engine on both hosts with an empty denylist. **The build-time gate stays and
+    is now the only one** -- `-DTUR_JIT=ON` vendors MIR at configure time, a
+    default build carries neither the fetch nor the dependency, and `tur jit` on
+    such a binary says so. `cc` is still the default engine; the JIT runs when
+    you invoke `tur jit` or when engine selection asks for it.
+
+  One thing moved rather than being deleted: `--enable=jit` was the only switch
+  that turned on the in-process REPL spice loader, so removing it would have
+  forced a choice between making that path the default and losing it. It now
+  hangs off engine selection (`tur repl --engine jit`), which is why `tur repl`
+  grew `--engine` in this release. Unset, the subprocess path is unchanged.
+- **A capturing closure passed to an effect-row'd `(fn ...)` parameter is now
+  `TUR-E0007`.** Such a parameter keeps the thin calling convention, which has
+  nowhere to carry a closure environment, so the callee jumped into the
+  environment box as code -- a clean compile and a SIGBUS at run time. Only the
+  capturing, non-performing shape reached the crash (a capturing callback that
+  *performs* already died loudly at CPS-subset eviction). Concrete, empty, and
+  row-variable rows all rode thin and all crashed; all three are now refused at
+  the call site. Annotating the parameter `^fat` is the way to accept one.
+- **`tur build <dir>`, `tur check <dir>` and `tur test <dir>` walk
+  subdirectories.** They used a flat `readdir`, so a spice whose modules live
+  one level down -- `src/demo/lib.tur`, the layout `:exports "demo/lib"` implies
+  -- reported `no .tur files found in 'src/'`. That was the exact invocation the
+  `module not found` diagnostic recommends, so the advertised recovery from one
+  confusing error produced a second one. Project mode already recursed, so the
+  two spellings of "build this spice" disagreed. `<dir>` also goes on the
+  include path as its own module root now, without which finding the files
+  merely moved the failure to `module 'demo/lib' not found`.
 - **`def` and `define` are one form; position, not spelling, selects the
   meaning.** `def` at the top level is a global binding (unchanged, and
   redefining is still an error); `def` in a body is a binding scoped over the
@@ -72,7 +1254,7 @@ All notable changes to Turmeric are documented here.
   alias for `def` in both positions. Nothing that compiled before compiles
   differently: every change is a position or spelling that used to be an error
   becoming legal. See
-  [docs/upcoming/def-define-consolidation-plan.md](docs/upcoming/def-define-consolidation-plan.md).
+  [docs/archive/def-define-consolidation-plan.md](docs/archive/def-define-consolidation-plan.md).
 - **A name defined at the REPL prompt with `define` now survives to the next
   turn.** `define` used to error at the top level, so the REPL worked around it
   by wrapping each turn containing one in an implicit `(do ...)` -- which also
@@ -101,6 +1283,79 @@ All notable changes to Turmeric are documented here.
   the mechanism, so the split keeps plain `setjmp`. `call/cc` and panic-in-fiber
   have the same defect and are still open.
 
+- **A runaway macro on a sanitizer-instrumented (Debug) build now reports
+  `maximum macro expansion depth exceeded` instead of aborting with an ASan
+  stack-overflow.** The 256-level depth counter is a proxy for stack
+  headroom, and ASan's redzone-inflated frames could exhaust the real stack
+  first (observed on macOS/arm64 Debug; reproducible anywhere with
+  `ulimit -s 4096`).  The guard now also measures the thread's actual
+  remaining stack (glibc/macOS/Windows queries; the SP register is read
+  directly because ASan's fake stack makes local addresses useless for this)
+  and raises the same diagnostic pair -- plus a note naming the early stop --
+  when headroom is nearly gone
+  (docs/archive/macro-depth-guard-loses-race-with-asan-stack.md).
+- **`tur emit-c` output now links at `-O0`.** The dead base generic thunk
+  chain (a generic fn returning a closure over a type application, e.g.
+  `(fn [] (Cons A))`) referenced the base `ctor_X` of a heap parametric ADT,
+  a symbol that is never defined -- only per-spec monomorphs are.  `-O2`
+  dead-stripped the chain, but a hand `-O0` compile of `emit-c` output died
+  with `undefined reference to ctor_Cons`.  The emitter now flushes static
+  trap stand-ins (fprintf + abort naming the ctor) for those never-defined
+  base ctors into the forward-decl band, covering the n-arg and 0-arg ctor
+  branches and both drivers (whole-program and per-TU), so the emitted C is
+  self-contained at any -O level.  A genuinely live base-ctor call -- a
+  compiler defect, previously an unconditional link error -- now aborts
+  loudly at runtime instead
+  (docs/archive/dead-base-thunk-chain-references-undefined-ctor.md).
+- **A dynamic variable's `pthread_key_create` failure now aborts with a
+  message instead of being ignored.** On `EAGAIN` (the process key budget --
+  `PTHREAD_KEYS_MAX`, 1024 on glibc, one key per `defdynamic` plus one shared
+  by every `^thread-local` -- is exhausted) the key was left uninitialized and
+  every later `pthread_getspecific` on it was undefined behaviour: a silent
+  wrong-value failure. The emitted `_dynvar_init_*` now checks and aborts,
+  mirroring what `^thread-local`'s key init already did
+  (docs/upcoming/mutable-globals-plan.md section 13.3).
+- **The rational/complex numeric tower now runs on all three engines.** Measured
+  under the MIR engine for the first time: every rational and complex fixture
+  passes with **zero** `cc` fallbacks, from one pure-Turmeric implementation
+  against the same expected output. The 16-byte-struct ABI problem this was
+  expected to hit never materialized, so the by-pointer workaround sketched for
+  it was never needed. The standing rule that no `_Complex`, `<complex.h>`, or
+  `__mul*c3`/`__div*c3` reaches the generated C is now enforced by every plain
+  `bash tests/run.sh`, not only by its own ctest target.
+- **The interpreter resolves typeclass dictionaries the same way the compiler
+  does.** All three recovery heuristics turi used to guess an instance from a
+  receiver's runtime tag are retired, the last one covering an unascribed
+  carrier-helper read inside a constrained container instance. Where the
+  compiled path had solved these statically, the interpreter was pattern-matching
+  on runtime tags and could disagree with it; dictionary passing now carries all
+  of them, so the two engines agree by construction rather than by coincidence.
+- **Several float and carrier miscompiles.** A method result declared `:float`
+  keyed off the *body* rather than the declared result type; a float literal
+  ascribed to a narrower float width was not retyped in place; a `float32`
+  generic-call result had no admitted carrier pair; and the int-slot/float-body
+  engine divergence (`TUR-E0707`) was asymmetric between engines. Also a silent
+  per-push leak in the container-element path, and seven mismatched fat-closure
+  function-pointer types.
+- **A multi-shot resume across a nested handler delivers once.** The handler
+  chain carried two separate spines, so a resume crossing a nested `handle`
+  could deliver twice or not at all. `while` loops and statement-position
+  conditionals inside a handler clause work now too -- the latter used to hit an
+  internal compiler error rather than a diagnostic.
+- **A malformed `build.tur` fails the command instead of vanishing.** A manifest
+  that failed to parse was treated as absent, so the command proceeded with
+  whatever defaults applied and the real problem never surfaced.
+- **Assorted correctness fixes.** A `^borrow` parameter passed where `^unique
+  ^mut` is required is rejected; an explicit `: nil` return on a lambda is
+  honoured; generic instance resolution survives a `#lang` switch; an HKT type
+  variable is pinned from the argument type across a rank-2 `forall`; a return
+  type disagreeing with an aggregate body is rejected; `definstance` constraint
+  types resolve through the real type resolver; `println` prefers a resolved
+  `bool` shape over the runtime tag; a hoisted inline-C include no longer
+  disables the JIT's split-preamble fast path; the REPL's source-file registry
+  survives incremental eval turns; elaborator-minted names stay out of the LSP
+  symbol index; and `term/set-cooked` restores the saved terminal mode rather
+  than a zeroed one.
 - **A `#writes` frame is no longer VERIFIED when the body writes a mutable
   global** (behind `--enable=write-frames`). A frame's vocabulary is
   *parameters*; a global is written by name rather than passed, so `#writes []`

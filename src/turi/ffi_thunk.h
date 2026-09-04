@@ -38,6 +38,83 @@ extern "C" {
  * with NULL img -- returns 0. */
 uint32_t tur_ffi_install_spice_bindings(TuriEnv *env, TurSpiceImage *img);
 
+/* jit-ffi-c2mir-plan F2: bind `name` to a thunk-backed native that calls
+ * the resolved C function `fn` with the signature described by `ret_class`
+ * + `arg_classes[n]` (the 'i'/'f'/'F'/'v' vocabulary of turi/jit_ffi.h).
+ * The call goes through the JIT provider's per-signature thunk at each
+ * invocation, so registration is cheap and a provider that appears later
+ * (or a compile failure) surfaces per-call, as a clean error value.  The
+ * classes buffer is copied; `name` must outlive the env (interned symbol
+ * name).  Calls are gated on TURI_CAP_FFI.  Returns 0 on success, -1 on
+ * OOM. */
+int tur_ffi_register_extern_thunk(TuriEnv *env, const char *name, void *fn,
+                                  char ret_class, const char *arg_classes,
+                                  uint32_t n);
+
+/* ------------------------------------------------------------------ */
+/* jit-ffi-c2mir-plan F5: callbacks (C calling back into Turmeric)     */
+/* ------------------------------------------------------------------ */
+
+/* The context a generated callback carries.  Its ADDRESS is baked into the
+ * generated C as a literal, so it must outlive every C library that holds
+ * the function pointer -- i.e. the process.  Allocated by
+ * tur_ffi_cb_ctx_new and never freed, matching turi's closure policy. */
+typedef struct TurFfiCbCtx {
+    TuriEnv  *env;
+    TuriValue fn;
+    char      ret_class;              /* 'i' / 'f' / 'F' / 'v' / '{' */
+    char     *arg_classes;            /* n entries, owned ('{' = aggregate) */
+    uint32_t  n_args;
+    /* Aggregate slots (F4 follow-on).  NULL/unset for scalar-only
+     * signatures.  `sig` is the full signature (inline `{...}` layouts);
+     * arg_at[k] is the sig offset of parameter k's slot; arg_defs[k] is the
+     * record def of an aggregate parameter (NULL for scalars); ret_def is
+     * the aggregate return's def.  All owned; set once via
+     * tur_ffi_cb_ctx_set_agg. */
+    char                 *sig;
+    size_t               *arg_at;
+    const struct AdtDef **arg_defs;
+    const struct AdtDef  *ret_def;
+} TurFfiCbCtx;
+
+/* Build a process-lifetime callback context.  Returns NULL on OOM. */
+TurFfiCbCtx *tur_ffi_cb_ctx_new(TuriEnv *env, TuriValue fn, char ret_class,
+                                const char *arg_classes, uint32_t n);
+
+/* Attach aggregate-slot information to a context whose classes include
+ * '{'.  Takes ownership of `sig` and `arg_at` (malloc'd by the caller);
+ * copies `arg_defs`.  Returns 0 on success, nonzero on OOM (ownership is
+ * NOT taken on failure). */
+int tur_ffi_cb_ctx_set_agg(TurFfiCbCtx *ctx, char *sig, size_t *arg_at,
+                           const struct AdtDef **arg_defs,
+                           const struct AdtDef *ret_def);
+
+/* The fixed entry point every generated callback calls.  Deliberately NOT
+ * static and spelled with a stable name: the generated C declares it
+ * `extern` and resolves it against this process (the `tur` executable links
+ * with ENABLE_EXPORTS), so renaming it breaks every compiled callback.
+ *
+ * Unpacks the position-indexed `iv`/`fv` buffers into TuriValues per the
+ * context's classes -- an aggregate parameter's bytes arrive through the
+ * `sv` pointer channel and are rebuilt into a record value -- calls the
+ * Turmeric function, and writes the result back through *out_i / *out_f by
+ * the return class (an aggregate return is packed through `out_s`, which
+ * the generated callback points at its own return slot).  A Turmeric-side
+ * error is reported on stderr and yields a zero result -- there is no error
+ * channel back through a C callback slot, and unwinding through foreign
+ * frames is not something we can do safely. */
+void tur_ffi_cb_dispatch(void *ctx, const long long *iv, const double *fv,
+                         const void *const *sv, long long *out_i,
+                         double *out_f, void *out_s);
+
+/* eval.c bridges for the aggregate directions of tur_ffi_cb_dispatch: the
+ * pack/unpack marshaller lives with eval_call_ptr (it needs the record
+ * machinery), the dispatch lives here. */
+TuriValue tur_eval_agg_from_bytes(TuriEnv *env, const struct AdtDef *def,
+                                  const char *sig, const void *bytes);
+bool tur_eval_agg_to_bytes(const struct AdtDef *def, const char *sig,
+                           TuriValue v, void *bytes);
+
 /* RP5: register the `reload` native so the user can type `(reload)`
  * at the prompt. Available even when no spice is currently loaded
  * (the call surfaces a clean "no spice loaded" error in that case).

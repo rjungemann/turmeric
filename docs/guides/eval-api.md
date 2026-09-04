@@ -74,7 +74,7 @@ available.
 ### `TuriEnv *turi_env_new_sandboxed(void)`
 
 Creates a sandboxed environment.  I/O builtins (`println`, `read-async`,
-`write-async`, …) and inline-C expressions are disabled.  Suitable for
+`write-async`, ...) and inline-C expressions are disabled.  Suitable for
 evaluating untrusted code.
 
 ### `void turi_env_free(TuriEnv *env)`
@@ -154,11 +154,17 @@ typedef struct TuriValue {
 | `TURI_FLOAT`  | 64-bit float (double) |
 | `TURI_CSTR`   | NUL-terminated C string |
 | `TURI_CLOSURE`| First-class function |
-| `TURI_ERROR`  | Runtime / parse error (not catchable by `try/catch`) |
+| `TURI_ERROR`  | Runtime / parse error (`as_error` holds the message) |
 | `TURI_EFFECT_CONT` | Live algebraic-effect continuation |
 | `TURI_STRUCT` | Struct instance |
-| `TURI_THROW`  | In-flight exception (catchable by `try/catch`) |
+| `TURI_THROW`  | Vestigial -- no evaluation path produces it (the `throw`/`try`/`catch` surface was removed from the language) |
 | `TURI_FUTURE` | Async future handle |
+| `TURI_REF`    | Mutable borrow reference |
+| `TURI_STRUCT_TYPE` | Struct type descriptor (`as_cstr` holds the name) |
+| `TURI_GEN`    | Generator instance |
+| `TURI_HANDLER`| First-class handler value |
+| `TURI_REJECTION` | Async-task rejection (`as_error` holds the message). Distinct from `TURI_ERROR` so a rejected future value observed via `(error? r)` / `(error-message r)` does not short-circuit evaluation |
+| `TURI_SYNTAX` | Syntax object (wraps a compiler `Form*`) -- produced by `read-string` and the `syntax-*` natives; the value vocabulary of `defmacro*` macro bodies (see [macros-guide.md](macros-guide.md)) |
 
 ### Constructors
 
@@ -218,8 +224,7 @@ typedef TuriValue (*TuriNativeFn)(TuriEnv *env, TuriValue *args,
 - `ud` -- the `void *ud` passed to `turi_env_register_native`.
 - Return `turi_nil()` for void functions; return an appropriate `TuriValue`
   for functions that produce results.
-- To raise a catchable exception call `turi_native_throw` then return
-  `turi_nil()`.
+- Signal failure by returning `turi_error("message")` / `turi_errorf(...)`.
 
 ```c
 static TuriValue native_add(TuriEnv *env, TuriValue *args,
@@ -232,20 +237,6 @@ static TuriValue native_add(TuriEnv *env, TuriValue *args,
 turi_env_register_native(env, "my-add", native_add, NULL);
 TuriValue r = turi_eval(env, "(my-add 10 32)");
 /* r.as_int == 42 */
-```
-
-### `void turi_native_throw(TuriEnv *env, const char *msg)`
-
-Raises a catchable Turmeric exception from inside a `TuriNativeFn`.  Sets
-`env->throwing` and `env->throw_value`; the native must return `turi_nil()`
-immediately afterwards.
-
-```c
-static TuriValue native_fail(TuriEnv *env, TuriValue *args,
-                              uint32_t n, void *ud) {
-    turi_native_throw(env, "something went wrong");
-    return turi_nil();
-}
 ```
 
 ---
@@ -430,8 +421,8 @@ Returns a `TURI_FUTURE` value.
 
 ### `void turi_task_cancel(TuriEnv *env, TuriFuture *f)`
 
-Cancels the fiber owning `f`.  The future is rejected; any `(await f)` will
-throw a cancellation exception.
+Cancels the fiber owning `f`.  The future is rejected; any `(await f)` yields
+a `TURI_REJECTION` value, observed with `(error? r)` / `(error-message r)`.
 
 ### `TuriValue turi_future_poll_val(TuriFuture *f)`
 
@@ -462,9 +453,8 @@ if (turi_is_error(v)) {
 ```
 
 Note: `TURI_ERROR` is a value-level error (parse failure, unbound variable).
-`TURI_THROW` is a Turmeric exception thrown by `(throw ...)` or
-`turi_native_throw`.  Uncaught throws surface as `TURI_THROW` values returned
-from `turi_eval`; check with `turi_is_throw(v)`.
+Async-task rejection surfaces as a distinct `TURI_REJECTION` value; check with
+`turi_is_rejection(v)` and read the message with `turi_error_message(v)`.
 
 ---
 
@@ -473,8 +463,8 @@ from `turi_eval`; check with `turi_is_throw(v)`.
 The tree-walking interpreter (`turi`, behind `tur interpret`, `tur repl`,
 sandbox `turi_eval`, and the WASM REPL) holds values as **tagged** `TuriValue`s
 (`TURI_INT` carries a 64-bit word, `TURI_FLOAT` carries a `double`), whereas the
-compiled path carries every scalar as a raw `int64_t`.  This difference is
-invisible except in one spot: a `::` ascription that crosses the **float/int
+compiled path carries every scalar as a raw `int64_t`.  This difference used to
+be observable in one spot: a `::` ascription that crossed the **float/int
 representation boundary**.
 
 `(:: expr T)` between two **same-size but distinct** scalar kinds lowers to a
@@ -484,7 +474,7 @@ observable depends on the pair:
 | `::` between kinds                                          | Bits change meaning? | turi vs compiled |
 | ---------------------------------------------------------- | -------------------- | ---------------- |
 | `int`<->`cstr`, `int`<->`ptr<void>`, `int`<->opaque newtype, `int8`<->`uint8`, `sym`<->`ptr` | no                   | **identical**    |
-| `float`<->`int` (8-byte), `float32`<->`int32` (4-byte)         | **yes**              | **diverges**     |
+| `float`<->`int` (8-byte), `float32`<->`int32` (4-byte)         | **yes**              | **rejected at compile time** |
 
 For the first group -- which is the overwhelming majority of real `::` use
 (unwrapping `defopaque`/refined newtypes like `Fd`, `Pid`, `EventSourceId`,
@@ -492,32 +482,42 @@ For the first group -- which is the overwhelming majority of real `::` use
 so the interpreter's tag-preserving passthrough produces exactly the compiled
 result.
 
-Only the float/int pair differs, and only when you use `::` to **observe the
-reinterpreted bit pattern as a result**:
+**The float/int pair no longer diverges, because `::` no longer spells it.**
+That ascription is a hard error on both paths: the operator cannot tell a
+genuine integer being *converted* from a carrier slot holding float bits being
+*reinterpreted*, and the two readings disagree about the answer, so the author
+writes which one they meant.
 
 ```turmeric
-(:: 7 :float)     ; compiled: 3.45846e-323 (the int's bits as a double)
-                  ; turi:     7
-(:: 7.1 :int)     ; compiled: 4619679907765970534 (the IEEE-754 bits)
-                  ; turi:     7.1
+(:: 7.1 :int)     ; error: `::` between an integer and a float kind is ambiguous
+(float->int 7.1)  ; 7                    -- the NUMBER   (stdlib/math.tur)
+(float->bits 7.1) ; 4619679907765970534  -- the IEEE-754 BITS (stdlib/bits.tur)
 ```
 
-A float carried **through** the int64 carrier and back -- the common case, e.g.
-an ADT/cons/tyvar payload or `(:: f int)` then `(:: thru float)` -- round-trips
-correctly under turi, because the float keeps its tag the whole way.  The
-divergence is strictly "type-pun a float to read or synthesize its IEEE bits."
+(An integer *literal* ascribed to a float still converts -- `(:: 7 :float)` is
+`7.0` -- since a written constant has no carried bit pattern to mean.  See
+[docs/archive/ascribe-int-to-float-expression-ambiguity.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ascribe-int-to-float-expression-ambiguity.md).)
 
-**Why it is this way.** A `TURI_INT` cannot be distinguished as "a genuine
-integer" from "a carrier holding float bits", so any partial bit-reinterpret
-breaks the round-trips that rely on tag preservation (it would corrupt a
-`Cons[float]`'s `.head` to its integer bit pattern).  Fully value-preserving is
-the only self-consistent choice for the tagged model; closing the gap would
-require a typed-carrier value representation.  See
-[docs/reported/turi-map-nonint-value-carrier-ascription.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/turi-map-nonint-value-carrier-ascription.md).
+All four spellings behave **identically under turi and compiled**.  The
+interpreter registers `float->bits` / `bits->float` as natives, exactly as it
+already did for `int->float` / `float->int`: once the author has said which
+reading they meant, the tagged model can answer precisely -- hand back the other
+tag over the same 64 bits -- so both observing a bit pattern and round-tripping
+a float through an `:int` carrier agree with the compiled path.
 
-**Practical guidance.** Code that uses `::` for its bit pattern (bit-level float
-hashing, representation-exact serialization, manual IEEE/NaN-boxing) must run on
-the compiled path (`tur build` / `tur run`).  Note the stdlib's own float
+**Why `::` could not simply pick one.** A `TURI_INT` cannot be distinguished as
+"a genuine integer" from "a carrier holding float bits", so a bit-reinterpreting
+`::` breaks the round-trips that rely on tag preservation (it would corrupt a
+`Cons[float]`'s `.head` to its integer bit pattern), while a converting `::`
+breaks the carrier read-backs that typed slots, variadic rest collection and the
+cons/HAMT carriers depend on.  Value-preserving was the only self-consistent
+choice for the tagged model as long as one operator had to serve both; splitting
+the spelling removed the need to choose.  See
+[docs/archive/history/turi-map-nonint-value-carrier-ascription.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/turi-map-nonint-value-carrier-ascription.md).
+
+**Practical guidance.** Bit-level float work (hashing, representation-exact
+serialization, manual IEEE/NaN-boxing) goes through `float->bits` /
+`bits->float` and runs on either path.  Note the stdlib's own float
 `Hash`/`MapKey` reinterprets go through inline-C `union`s that the interpreter
 overrides with **natives**, not through `::`, so float-keyed maps and sets hash
 correctly under the interpreter.

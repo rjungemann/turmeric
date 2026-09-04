@@ -7,7 +7,7 @@
 ;; passed by value into the int64 parameter.
 ;;
 ;; Gap G3 of docs/carrier-concrete-abi-crossing-audit-plan.md
-;; (docs/archive/instance-method-byvalue-struct-field-receiver-abi-mismatch.md):
+;; (docs/archive/history/instance-method-byvalue-struct-field-receiver-abi-mismatch.md):
 ;; the call `(enc (.nick r))` emitted `__inst_Enc_enc_Option_cstr((r).nick)`,
 ;; passing an `Option__cstr` aggregate to an `int64_t` parameter -- a hard cc
 ;; type error.
@@ -20,7 +20,7 @@
 (defclass Enc [a] (enc [x] : cstr))
 
 (definstance Enc [(Option cstr)]
-  (enc [x] : cstr (if (.is-some x) "s" "n")))
+  (enc [x] : cstr (if (some? x) "s" "n")))
 
 (defstruct Rec [nick : (Option cstr)])
 

@@ -20,12 +20,13 @@
  *   - each parameter declared with a contract type (`v` renamed to the param)
  *   - the function's `:pre` predicate
  *
- * See docs/upcoming/v1/refinement-types-plan.md (phase RT1). */
+ * See docs/archive/refinement-types-plan.md (phase RT1). */
 
 #include <stdbool.h>
 #include <stdint.h>
 
 #include "forms.h"
+#include "refine_solver.h"   /* RefineCapStats, for the per-obligation caps */
 #include "refine_vc.h"
 #include "runtime/arena.h"
 
@@ -80,14 +81,25 @@ typedef struct RefineFnInfo {
      * VS_INT is the zero value, so a resolver that never touches this field
      * keeps the old behaviour. */
     VCSort       ret_sort;
-    /* C2 / #reads: 1-based index of the ^borrow parameter this measure reads
-     * the mutable state of (`#reads w`), or 0 for none.  When that argument at
-     * a call site is a value FROZEN in scope (a live borrow -- the `(& w)` a
-     * `frozen` region holds), the measure is a function of frozen state and its
-     * pure arguments, so the encoder may treat it as congruent even though its
-     * body is impure.  Sound only because the callee's own entry check is never
-     * elided; see docs/guides/stateful-refinements-guide.md. */
-    uint32_t     reads_param_plus1;
+    /* C2 / #reads: bitmask of the ^borrow parameters this measure reads the
+     * mutable state of (`#reads w` / `#reads [w g]`), bit i == param i, or 0
+     * for none.  When EVERY such argument at a call site is a value FROZEN in
+     * scope (a live borrow -- the `(& w)` a `frozen` region holds), the measure
+     * is a function of frozen state and its pure arguments, so the encoder may
+     * treat it as congruent even though its body is impure.
+     *
+     * The quantifier is the load-bearing part: one unfrozen named parameter is
+     * enough for two occurrences to denote different values, so the grant is
+     * conjunctive over the mask, never disjunctive.  Sound only because the
+     * callee's own entry check is never elided; see
+     * docs/guides/stateful-refinements-guide.md. */
+    uint64_t     reads_params_mask;
+    /* R2 + R4 slice 1 (trusted-refinement-claims-plan): positive evidence
+     * the `#reads` frame above is broken (the body directly reads a mutable
+     * global, or mutable state rooted in a parameter the frame omits).
+     * Mirrors Binding.reads_frame_omits_state.  Refuses the congruence grant;
+     * false means "no evidence", never "verified clean". */
+    bool         reads_frame_omits_state;
     /* WF1/WF2 / #writes: this callee's declared write frame, mirroring the
      * Binding fields of the same names.  `writes_declared` distinguishes "the
      * frame is empty" from "there is no frame" -- see expr.h.  WF3 uses these
@@ -175,6 +187,12 @@ typedef struct RefineObligation {
      * kept".  When set, runtime_guarded is false (the crossing is proof-only)
      * and the W0372 text branches to the no-fallback wording. */
     bool         reads_no_runtime;
+    /* R2: the `#reads` measure this crossing depends on carries broken-frame
+     * evidence, so the congruence grant was REFUSED.  Only refines the W0372
+     * wording: "guard
+     * it inside a `frozen` region" is misleading advice when the crossing IS
+     * frozen and the frame is what failed. */
+    bool         reads_grant_refused;
     /* A speculative probe (RT4 template inference): decide it, report nothing,
      * count nothing.  The caller only wants the verdict. */
     bool         speculative;
@@ -193,6 +211,30 @@ typedef struct RefineObligation {
     bool         discharged;     /* RT3: a verdict was reached */
     bool         proven;         /* RT3: a backend returned RT_VALID */
     RefineModel *counterex;      /* RT3: model when a backend said RT_INVALID */
+
+    /* SX8a: provenance for the JSON obligation dump.  Recorded always rather
+     * than under the flag -- the cost is three stores per obligation, and a
+     * dump that can only be produced by re-running the compile with a
+     * different flag is not much of an interrogation surface. */
+    const char    *decided_by;   /* which stage answered ("S2 (arithmetic)"), or NULL */
+    bool           memo_hit;     /* RT7: the chain was skipped, answer remembered */
+    RefineCapStats caps;         /* caps this obligation alone hit (SX0(b) deltas) */
+    /* Caps hit by the RT4 path-splitting probes run on this site's behalf,
+     * BEFORE this obligation existed.
+     *
+     * `caps` above is a delta around this obligation's own chain run, which is
+     * the right window for the question "what did deciding this cost" -- but
+     * it is not all the solver work the site paid for. Path splitting tries
+     * each path silently first; those probes are separate obligations,
+     * discharged earlier, and their cap hits used to land in the global
+     * counters and be attributed to nobody: the per-compile summary said a cap
+     * bit and every obligation's `caps_hit` read empty.
+     *
+     * Kept as a second field rather than folded into `caps` because a probe
+     * asks a different question (one path, not the whole body) -- a consumer
+     * deciding whether a cap is worth raising wants to know which. Summing
+     * them is one addition; separating them after the fact is impossible. */
+    RefineCapStats caps_probe;
 } RefineObligation;
 
 typedef struct RefineObligationVec {

@@ -21,6 +21,9 @@
 /* ── RESET ─────────────────────────────── */
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* Use green for emphasis by default */
+em { color: var(--green); }
+
 /* ── ICONS (<t-icon>, Lucide set) ──────── */
 /* Sized by font-size (1em); the CSS width/height override the SVG's baked-in
  * 24x24 attributes. Stroke inherits `color` via currentColor. */
@@ -137,57 +140,9 @@ nav {
 .btn-gold:hover { background: var(--gold-bright); border-color: var(--gold-bright); }
 .btn-gold:active { transform: scale(0.98); }
 
-/* ── HERO COMPONENTS ───────────────────── */
+/* ── HERO BUTTONS ──────────────────────── */
 /* Note: .hero layout itself is page-specific (min-height, flex, padding differ) */
 
-.hero-glow {
-  position: absolute;
-  top: 20%;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 600px;
-  height: 400px;
-  background: radial-gradient(ellipse at center, rgba(212,139,28,0.07) 0%, transparent 70%);
-  pointer-events: none;
-}
-
-.hero-grid {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(var(--border) 1px, transparent 1px),
-    linear-gradient(90deg, var(--border) 1px, transparent 1px);
-  background-size: 60px 60px;
-  opacity: 0.4;
-  pointer-events: none;
-}
-
-.hero-eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--gold);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  font-weight: 500;
-  margin-bottom: 28px;
-  padding: 5px 14px;
-  border: 1px solid var(--gold-line);
-  border-radius: 100px;
-  background: var(--gold-subtle);
-}
-
-.eyebrow-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--gold);
-  animation: eyeblink 2.5s ease-in-out infinite;
-}
-@keyframes eyeblink { 0%,100%{opacity:1} 50%{opacity:0.3} }
-
-/* ── HERO BUTTONS ──────────────────────── */
 .btn-hero {
   font-family: 'DM Sans', sans-serif;
   font-size: 15px;
@@ -238,16 +193,10 @@ nav {
   gap: 6px;
 }
 
-.win-dot { width: 10px; height: 10px; border-radius: 50%; }
-.wd-r { background: #3A2520; }
-.wd-y { background: #3A3020; }
-.wd-g { background: #1E3020; }
-
 .code-card-filename {
   font-family: 'Iosevka', monospace;
   font-size: 11px;
   color: var(--text-dim);
-  margin-left: 8px;
 }
 
 .code-card-body {
@@ -275,7 +224,7 @@ nav {
   font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--gold);
+  color: var(--green);
   font-weight: 500;
   margin-bottom: 16px;
 }
@@ -289,7 +238,7 @@ nav {
   letter-spacing: -0.03em;
 }
 
-.section-title em { font-style: italic; color: var(--gold-bright); }
+.section-title em { font-style: italic; color: var(--green); }
 
 .section-desc {
   font-size: 15px;
@@ -321,6 +270,55 @@ nav {
 
 .split-section.reverse { direction: rtl; }
 .split-section.reverse > * { direction: ltr; }
+
+/* ── PRODUCT SHOT ──────────────────────── */
+/* A screenshot standing in for a code card. The PNG is a tight crop: rounded
+ * corners live in its alpha and it carries no baked-in shadow, so both the
+ * lift and the edge separation are drawn here. Used by /trowel and the Trowel
+ * stop on /tour, which supply their own sizing.
+ *
+ * The window is near-black on a near-black page, so its outline would
+ * otherwise dissolve into the background. The spotlight is what makes the
+ * edges legible: it sits behind the image and is sized so its bright core is
+ * hidden BEHIND the window, leaving only the falloff visible as a halo around
+ * the perimeter. Light the backdrop, not the subject -- the screenshot's own
+ * pixels stay untouched. */
+.product-shot {
+  position: relative;
+  isolation: isolate;
+}
+
+.product-shot::before {
+  content: "";
+  position: absolute;
+  /* The pool has to reach well past the window on every side. Kept tighter
+   * than the sides, so the light stays a pool around the window rather than
+   * washing into the copy in the opposite column. */
+  inset: -26% -46%;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 62% 58% at 50% 46%,
+    rgba(240, 232, 220, 0.13) 0%,
+    rgba(236, 214, 178, 0.10) 38%,
+    rgba(212, 139, 28, 0.045) 62%,
+    transparent 82%
+  );
+}
+
+.product-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* Both alpha-following (drop-shadow, not box-shadow, or the rounded corners
+   * would be boxed in a rectangle): a hairline rim tracing the window outline,
+   * then a contact shadow. The shadow is offset DOWN rather than spread evenly
+   * -- an even 40px halo of black sits exactly where the spotlight's falloff
+   * is and the two cancel, which is what made the first attempt read flat. */
+  filter:
+    drop-shadow(0 0 1px rgba(240, 232, 220, 0.30))
+    drop-shadow(0 30px 46px rgba(0, 0, 0, 0.55));
+}
 
 /* ── CODE SYNTAX TOGGLE ───────────────── */
 .code-syntax-toggle {
@@ -378,31 +376,8 @@ nav {
 }
 
 .cta-box {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-mid);
-  border-radius: 16px;
-  padding: 72px 48px;
+  padding: 56px 0;
   position: relative;
-  overflow: hidden;
-}
-
-.cta-box::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 20%; right: 20%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--gold-line), transparent);
-}
-
-.cta-box::after {
-  content: '';
-  position: absolute;
-  top: -80px; left: 50%;
-  transform: translateX(-50%);
-  width: 400px;
-  height: 300px;
-  background: radial-gradient(ellipse at center, rgba(212,139,28,0.06) 0%, transparent 70%);
-  pointer-events: none;
 }
 
 .cta-title {
@@ -415,7 +390,7 @@ nav {
   position: relative;
   z-index: 1;
 }
-.cta-title em { font-style: italic; color: var(--gold-bright); }
+.cta-title em { font-style: italic; color: var(--green); }
 
 .cta-desc {
   font-size: 16px;
@@ -563,6 +538,9 @@ nav.nav-open .nav-mobile-panel {
   transform: translateY(0);
   pointer-events: auto;
 }
+/* On a page whose sidebar is serving as the drawer, the panel would be a second
+   copy of the same links sliding in over the first. */
+nav.nav-drawer .nav-mobile-panel { display: none; }
 .nav-mobile-panel a {
   font-size: 15px;
   color: var(--text-sec);
@@ -581,21 +559,29 @@ nav.nav-open .nav-mobile-panel {
   border-radius: 0;
   padding-bottom: 10px;
 }
-.nav-mobile-cta {
-  display: flex;
-  gap: 8px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+/* The panel renders SIDEBAR_GROUPS, so it needs the sidebar's group headings */
+.nav-mobile-panel h3 {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  font-weight: 500;
+  margin: 14px 0 4px 12px;
 }
-.nav-mobile-cta a { flex: 1; text-align: center; justify-content: center; }
-.nav-mobile-cta .btn-gold { color: #000; }
+.nav-mobile-panel ul { list-style: none; margin: 0; padding: 0; }
+.nav-mobile-panel li { display: flex; }
+.nav-mobile-panel li a { flex: 1; }
 
 /* ── RESPONSIVE ────────────────────────── */
+@media (max-width: 1080px) {
+  /* Six nav links plus two buttons stop fitting before the drawer breakpoint;
+     drop the buttons first -- both are reachable from the sidebar groups. */
+  .nav-right { display: none; }
+}
+
 @media (max-width: 768px) {
   nav { padding: 0 20px; }
   .nav-links { display: none; }
-  .nav-right { display: none; }
   .nav-hamburger { display: flex; }
   .nav-mobile-panel { display: flex; }
 
@@ -607,8 +593,14 @@ nav.nav-open .nav-mobile-panel {
   .split-section.reverse { direction: ltr; }
   .split-section.reverse > * { direction: ltr; }
 
+  /* A percentage inset this narrow runs the pool off both edges of the
+     viewport, which reads as a wash rather than a spotlight -- and leaves the
+     page relying on body's overflow-x clip not to become pannable. Pin the
+     sides to a fixed gutter instead, so the falloff still lands on-screen. */
+  .product-shot::before { inset: -14% -20px; }
+
   .cta-section { padding: 48px 24px 80px; }
-  .cta-box { padding: 48px 28px; }
+  .cta-box { padding: 40px 0; }
 
   footer { padding: 40px 24px 32px; }
   .footer-inner {
@@ -622,10 +614,9 @@ nav.nav-open .nav-mobile-panel {
 @media (max-width: 480px) {
   nav { padding: 0 16px; }
 
-  .hero-actions { flex-direction: column; align-items: stretch; }
   .btn-hero { justify-content: center; }
 
-  .cta-box { padding: 40px 20px; }
+  .cta-box { padding: 32px 0; }
 
   footer { padding: 36px 16px 28px; }
   .footer-inner { grid-template-columns: 1fr; }
@@ -690,21 +681,17 @@ site-sidebar {
   z-index: 10;
   font-family: 'DM Sans', sans-serif;
 }
-site-sidebar .sidebar-back {
+/* An ordinary link, not a button: nothing here submits or toggles, it just
+   navigates like every other entry in the rail. Selector carries the `a` so it
+   outranks the `site-sidebar a` colour rule below it. */
+site-sidebar a.sidebar-back {
   display: block;
   font-size: 0.85rem;
   color: var(--text-primary);
-  padding: 0.45rem 0.65rem;
   margin-bottom: 1rem;
-  border: 1px solid var(--border-mid);
-  border-radius: 6px;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  transition: color 0.12s;
 }
-site-sidebar .sidebar-back:hover {
-  color: var(--gold-bright);
-  background: var(--bg-hover);
-  border-color: var(--gold-line);
-}
+site-sidebar a.sidebar-back:hover { color: var(--gold-bright); }
 site-sidebar .sidebar-divider {
   border: none;
   border-top: 1px solid var(--border);
@@ -724,7 +711,6 @@ site-sidebar li { margin: 0.15rem 0; }
 site-sidebar a {
   font-size: 0.825rem;
   color: var(--text-sec);
-  font-family: 'Iosevka', 'Fira Code', monospace;
 }
 site-sidebar a:hover { color: var(--gold-bright); }
 site-sidebar .sidebar-toc ul { padding-left: 0; }
@@ -732,9 +718,29 @@ site-sidebar .sidebar-toc li { font-size: 0.825rem; }
 
 body:has(site-sidebar) { padding-left: 240px; }
 
-@media (max-width: 900px) {
-  site-sidebar { display: none; }
+/* Mobile drawer -- same behaviour, breakpoint and overlay as the generated doc
+   pages: the topbar hamburger slides the sidebar in rather than hiding its
+   contents outright, so the page's own table of contents and the global groups
+   stay reachable on a phone. */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 99;
+}
+.sidebar-overlay.is-open { display: block; }
+
+@media (max-width: 768px) {
   body:has(site-sidebar) { padding-left: 0; }
+  site-sidebar {
+    width: 280px;
+    z-index: 100;
+    background: var(--bg-surface);
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+  }
+  site-sidebar.is-open { transform: translateX(0); }
 }
 
 /* ── UTILITIES ─────────────────────────── */

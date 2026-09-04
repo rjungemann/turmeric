@@ -1,122 +1,180 @@
-;;; handlers.tur -- page handler functions for the guestbook.
+;;; handlers -- the four-page sign-in flow, one continuation per page.
 ;;;
-;;; The central export is run-guestbook-flow, which is a single straight-line
-;;; function spanning all four pages. Each call to send-form-and-wait
-;;; serializes the continuation and hands control back to the HTTP loop.
+;;; Each page is a `serial-reset` whose rest is a call to that page's
+;;; "submitted" function with the hole in argument position:
 ;;;
-;;; Since: Guestbook example
-
-; ---------------------------------------------------------------------------
-; HttpEffect -- algebraic effect for sending HTML responses
-; ---------------------------------------------------------------------------
-
-;;; HttpEffect -- algebraic effect for sending HTTP responses.
-;;; Since: Guestbook example
-(defeffect HttpEffect
-  (send-html [body : cstr] : unit))
-
-; ---------------------------------------------------------------------------
-; send-form-and-wait -- the core continuation idiom
-; ---------------------------------------------------------------------------
-
-;;; send-form-and-wait -- render a form page and suspend until it is submitted.
+;;;   (serial-reset (message-submitted name (serial-shift suspend 0)))
 ;;;
-;;; Captures the current continuation, stores it under a signed token, builds
-;;; the form action URL, and sends the rendered HTML. Control returns to the
-;;; HTTP loop. When the browser POSTs to /submit?k=TOKEN, the router calls
-;;; serial-resume, and this function returns with the raw POST body.
+;;; The handler given to serial-shift stores the continuation under a signed
+;;; token, renders the page whose form posts to /submit?k=<token>, sends it,
+;;; and returns WITHOUT resuming -- the request is over.  When the browser
+;;; posts, the router rebuilds the continuation and resumes it with the POST
+;;; body, which lands in the hole: `message-submitted` runs with the `name`
+;;; that was captured in the frame and the body just posted.  State the next
+;;; page needs (the name; then name + message) rides in that frame as a cstr
+;;; environment, so a resumed request needs no session store.
 ;;;
-;;; Parameters:
-;;;   render-fn -- a function from action URL to HTML string
-;;;
-;;; Returns:
-;;;   The raw POST body submitted by the browser.
-;;;
-;;; Example:
-;;;   (def body (send-form-and-wait (fn [action] (render-name-form action))))
-;;;   (def name (or (parse-form-field body "name") "Anonymous"))
+;;; Two rules shape the module.  (1) The function called from inside a reset
+;;; context must be UNCOLORED for the CPS backend: no serial-reset of its own
+;;; and no call into anything colored (an `unsafe` block, a call through a
+;;; function value, an effect).  So the *-submitted functions are leaves:
+;;; they read the post, stash what the next page needs in flow-name /
+;;; flow-message, and return a step code; `advance` (called by the router,
+;;; outside any reset) starts the next page's reset from that code.  (2) The
+;;; serial-shift receiver -- named here, but a lambda is held to the same
+;;; rule -- must be uncolored too, so it calls the templates and the store
+;;; directly rather than through a fn-value parameter.
 ;;;
 ;;; Since: Guestbook example
-(defn send-form-and-wait [render-fn : (-> cstr cstr)] : cstr
-  (serial-shift [k]
-    (def token  (store-continuation k))
-    (def action (str "/submit?k=" token))
-    (def html   (render-fn action))
-    (perform HttpEffect (send-html html))))
+(defmodule handlers
+  (import strutil :refer [str+ int-as-cstr form-field cstr-index-of cstr-slice
+                          cstr-len cstr-eq?])
+  (import security :refer [html-escape])
+  (import templates :refer [render-name-form render-message-form render-preview
+                            render-thankyou render-entries])
+  (import conts :refer [store-continuation])
+  (import store :refer [store-append! store-lines])
+  (import httpd :refer [httpd/send!])
+  (export start-flow advance list-entries step-done step-message step-preview step-thankyou)
 
-; ---------------------------------------------------------------------------
-; show-entries-handler -- GET /entries (no continuation needed)
-; ---------------------------------------------------------------------------
+  ;; Step codes a resumed page returns to the router.
+  ;;; step-done -- the resumed page sent its own response; nothing follows.
+  (defn step-done [] : int 0)
+  ;;; step-message -- show the message form for flow-name (prefilled with flow-message).
+  (defn step-message [] : int 1)
+  ;;; step-preview -- show the preview of flow-name / flow-message.
+  (defn step-preview [] : int 2)
+  ;;; step-thankyou -- the entry was posted; show the thank-you page.
+  (defn step-thankyou [] : int 3)
 
-;;; show-entries-handler -- list all guestbook entries.
-;;;
-;;; Parameters:
-;;;   req -- the incoming HTTP request
-;;;
-;;; Returns:
-;;;   unit (side effect: sends an HTML response via HttpEffect)
-;;;
-;;; Since: Guestbook example
-(defn show-entries-handler [req : HttpRequest] : unit
-  (perform HttpEffect (send-html (render-entries (store-all)))))
+  ;; What the next page needs, handed from a resumed page to `advance`.
+  (def ^mut flow-name    : cstr "")
+  (def ^mut flow-message : cstr "")
 
-; ---------------------------------------------------------------------------
-; run-guestbook-flow -- the main multi-page continuation flow
-; ---------------------------------------------------------------------------
+  ;;; send-html -- 200 text/html.
+  (defn send-html [html : cstr] : int
+    (httpd/send! 200 "text/html" html))
 
-;;; run-guestbook-flow -- run the four-page guestbook sign-in flow.
-;;;
-;;; This single function covers pages 1-4:
-;;;   1. Name form
-;;;   2. Message form
-;;;   3. Preview (with confirm + back)
-;;;   4. Thank-you / confirmation
-;;;
-;;; Each page is driven by a call to send-form-and-wait, which serializes
-;;; the continuation and returns the submitted POST body when the browser
-;;; fills in the form.
-;;;
-;;; Parameters:
-;;;   req -- the initial GET / request (path/query unused; only starts flow)
-;;;
-;;; Returns:
-;;;   unit (side effect: sends HTML pages, eventually writes a GuestEntry)
-;;;
-;;; Since: Guestbook example
-(defn run-guestbook-flow [req : HttpRequest] : unit
-  (serial-reset
+  ;;; field-or -- a form field's decoded value, or dflt when absent.
+  (defn field-or [body : cstr name : cstr dflt : cstr] : cstr
+    (match (form-field body name)
+      (Some v) v
+      (None)   dflt))
 
-    ;; Page 1: collect the visitor's name.
-    (def name-body
-      (send-form-and-wait (fn [action]
-        (render-name-form action))))
-    (def name
-      (html-escape (or (parse-form-field name-body "name") "Anonymous")))
+  ;;; action-for -- store k and return the form action URL that resumes it.
+  ;;;
+  ;;; The first half of every receiver: the token names the continuation
+  ;;; file and the action carries it back to /submit.
+  (defn action-for [k : serial-cont] : cstr
+    (str+ "/submit?k=" (store-continuation k)))
 
-    ;; Page 2: collect the visitor's message.
-    (def msg-body
-      (send-form-and-wait (fn [action]
-        (render-message-form action name))))
-    (def message
-      (html-escape (or (parse-form-field msg-body "message") "")))
+  ;; -------------------------------------------------------------------------
+  ;; Leaves: run when a page's form is posted.  No serial-reset in here.
+  ;; -------------------------------------------------------------------------
 
-    ;; Page 3: show a preview.
-    ;; Two continuations are stored here:
-    ;;   k-back    -- resumes at this serial-shift (re-enters message form)
-    ;;   k-confirm -- resumes at the outer serial-shift (proceeds to thank-you)
-    ;; The preview page links to both tokens. The router decides which to
-    ;; resume based on which token appears in the POST's query string.
-    (serial-shift [k-back]
-      (serial-shift [k-confirm]
-        (def t-back    (store-continuation k-back))
-        (def t-confirm (store-continuation k-confirm))
-        (perform HttpEffect
-          (send-html (render-preview name message t-back t-confirm)))))
+  ;;; name-submitted -- page 1 posted: read the name, ask for the message.
+  ;;;
+  ;;; Parameters:
+  ;;;   ignored -- page 1 carries no state (the frame env is "")
+  ;;;   body-i  -- the POST body, as the int the hole carries
+  (defn name-submitted [ignored : cstr body-i : int] : int
+    (let [body (int-as-cstr body-i)]
+      (do
+        (set! flow-name (html-escape (field-or body "name" "Anonymous")))
+        (set! flow-message "")
+        (step-message))))
 
-    ;; Page 4: confirmed -- write the entry and show thank-you.
-    (store-append (GuestEntry
-                    :name      name
-                    :message   message
-                    :posted-at (unix-now)))
-    (perform HttpEffect
-      (send-html (render-thankyou (store-all))))))
+  ;;; message-submitted -- page 2 posted: read the message, ask for a preview.
+  (defn message-submitted [name : cstr body-i : int] : int
+    (let [body (int-as-cstr body-i)]
+      (do
+        (set! flow-name name)
+        (set! flow-message (html-escape (field-or body "message" "")))
+        (step-preview))))
+
+  ;;; preview-decided -- page 3 posted: Back re-asks the message, Confirm posts.
+  ;;;
+  ;;; The preview's frame carries both name and message as one tab-separated
+  ;;; cstr (a frame holds one environment value).  Confirm appends the entry
+  ;;; here and leaves the thank-you page to `advance`, like every other page
+  ;;; transition.
+  (defn preview-decided [state : cstr body-i : int] : int
+    (let [body     (int-as-cstr body-i)
+          tab      (cstr-index-of state "\t" 0)
+          name     (cstr-slice state 0 tab)
+          message  (cstr-slice state (+ tab 1) (cstr-len state))
+          decision (field-or body "decision" "confirm")]
+      (do
+        (set! flow-name name)
+        (set! flow-message message)
+        (if (cstr-eq? decision "back")
+          (step-message)
+          (do
+            (store-append! name message)
+            (step-thankyou))))))
+
+  ;; -------------------------------------------------------------------------
+  ;; Receivers: what serial-shift hands the captured continuation to.  Each
+  ;; is a named, uncolored top-level function (a receiver that called through
+  ;; a fn value would be colored and rejected) that stores k, renders its
+  ;; page from the flow globals, and sends it -- and returns without
+  ;; resuming k.
+  ;; -------------------------------------------------------------------------
+
+  ;;; suspend-name-page -- page 1's receiver.
+  (defn suspend-name-page [k : serial-cont] : int
+    (send-html (render-name-form (action-for k))))
+
+  ;;; suspend-message-page -- page 2's receiver (greets flow-name, prefills flow-message).
+  (defn suspend-message-page [k : serial-cont] : int
+    (send-html (render-message-form (action-for k) flow-name flow-message)))
+
+  ;;; suspend-preview-page -- page 3's receiver.
+  (defn suspend-preview-page [k : serial-cont] : int
+    (send-html (render-preview (action-for k) flow-name flow-message)))
+
+  ;; -------------------------------------------------------------------------
+  ;; Pages: each starts the reset whose rest is the leaf above.
+  ;; -------------------------------------------------------------------------
+
+  ;;; start-flow -- GET /: page 1, the name form.
+  ;;;
+  ;;; Since: Guestbook example
+  (defn start-flow [] : int
+    (serial-reset
+      (name-submitted "" (serial-shift suspend-name-page 0))))
+
+  ;;; page-message -- page 2: the message form for flow-name.
+  (defn page-message [] : int
+    (serial-reset
+      (message-submitted flow-name (serial-shift suspend-message-page 0))))
+
+  ;;; pack-state -- name and message as the one cstr a frame can carry.
+  (defn pack-state [name : cstr message : cstr] : cstr
+    (str+ name "\t" message))
+
+  ;;; page-preview -- page 3: the preview of flow-name / flow-message.
+  (defn page-preview [] : int
+    (let [state (pack-state flow-name flow-message)]
+      (serial-reset
+        (preview-decided state (serial-shift suspend-preview-page 0)))))
+
+  ;;; advance -- start the page a resumed leaf asked for.
+  ;;;
+  ;;; Called by the router with the value serial-resume returned.  Runs
+  ;;; outside every reset, which is what lets it start a new one (and call
+  ;;; the templates freely).
+  ;;;
+  ;;; Since: Guestbook example
+  (defn advance [step : int] : int
+    (cond
+      (= step (step-message))  (page-message)
+      (= step (step-preview))  (page-preview)
+      (= step (step-thankyou)) (send-html (render-thankyou (store-lines)))
+      :else 0))
+
+  ;;; list-entries -- GET /entries: every entry, no continuation involved.
+  ;;;
+  ;;; Since: Guestbook example
+  (defn list-entries [] : int
+    (send-html (render-entries (store-lines)))))

@@ -2,7 +2,7 @@
 ;; (tur_frame_fire_chain): same-scope LIFO, and on an early exit scopes fire
 ;; outer-first.  Covers a tail-position scope (the let is f's tail body) with
 ;; multiple defers, plus a nested inner scope with its own defers and an early
-;; `return`.  See docs/reported/turi-tail-scope-defers-fire-fifo-not-lifo.md.
+;; `return`.  See docs/archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md.
 
 ;; (1) Normal exit, multiple defers in a TAIL-position let -> same-scope LIFO.
 (defn normal-tail [] : int

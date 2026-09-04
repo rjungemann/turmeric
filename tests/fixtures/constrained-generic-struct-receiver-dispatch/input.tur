@@ -3,7 +3,7 @@
 ;; (render-to b))`) now dispatches per-monomorphization to each concrete
 ;; struct-receiver instance.
 ;;
-;; Regression for docs/archive/constrained-generic-struct-receiver-by-ptr.md:
+;; Regression for docs/archive/history/constrained-generic-struct-receiver-by-ptr.md:
 ;; a struct receiver above the pass-by-pointer threshold is emitted as
 ;; `__inst_<Class>_<method>_<T>(const T *self, ...)`, but the ABI-specialized
 ;; clone held the receiver by value, so it passed a `T` to a `const T *` formal

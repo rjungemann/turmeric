@@ -1,0 +1,32 @@
+;; jit-ffi-c2mir-plan F3: (unsafe (call-ptr p [T1 T2 -> R] args...)) -- call
+;; an arbitrary function pointer with a signature stated at the call site.
+;; The pointers here come from inline-C address-of (libc symbols the emitted
+;; preamble already declares) so the fixture is portable; the dlopen/dlsym ->
+;; call-ptr loop is asserted by tests/run-flags.sh, where it can be
+;; platform-guarded.  requires.compiled: under --interpret this form needs a
+;; JIT-enabled build, which run-turi.sh's binary need not be (run-flags.sh
+;; probes and covers that path).
+(defn addr-of-strlen [] : int
+  ```c
+  return (int64_t)(intptr_t)&strlen;
+  ```)
+
+(defn addr-of-strtol [] : int
+  ```c
+  return (int64_t)(intptr_t)&strtol;
+  ```)
+
+(defn addr-of-strtod [] : int
+  ```c
+  return (int64_t)(intptr_t)&strtod;
+  ```)
+
+(defn main [] : int
+  (unsafe
+    ;; int-class args + int return
+    (println (call-ptr (addr-of-strlen) [:cstr -> :int] "hello"))
+    ;; three-arg mixed: cstr + int-class NULL + int base
+    (println (call-ptr (addr-of-strtol) [:cstr :int :int -> :int] "123abc" 0 10))
+    ;; float return
+    (println (call-ptr (addr-of-strtod) [:cstr :int -> :float] "2.5xyz" 0)))
+  0)

@@ -27,7 +27,7 @@ against the pre-fix binary. See "How the fix works" at the end.
 
 ## Summary
 
-The §2.1 fix in [docs/upcoming/lsp-client-gaps-plan.md](../../upcoming/lsp-client-gaps-plan.md)
+The §2.1 fix in [docs/archive/lsp-client-gaps-plan.md](../lsp-client-gaps-plan.md)
 retains the previous symbol index when a compile yields nothing, so completion
 survives the unbalanced-paren state that is normal while typing. It works --
 **but only once a successful analysis has run at least once for that document.**

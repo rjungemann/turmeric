@@ -9,10 +9,10 @@
 (load "stdlib/math.tur")
 
 (defn takes-byval [o : (Option int)] : int
-  (if (.is-some o) (.value o) -1))
+  (if (some? o) (unwrap o) -1))
 
 (defn takes-byval-f [o : (Option float)] : float
-  (if (.is-some o) (.value o) -1.0))
+  (if (some? o) (unwrap o) -1.0))
 
 (defn main [] : int
   ;; some + none through a by-value (Option int) param

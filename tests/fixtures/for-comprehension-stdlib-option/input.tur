@@ -1,0 +1,43 @@
+;; `for` against the AUTO-LOADED stdlib Option, not a bespoke single-instance
+;; class.  This is fix direction 4 of
+;; docs/archive/for-comprehension-pure-ambiguous-against-stdlib.md, and it is
+;; the fixture whose absence let `for` ship as dead surface.
+;;
+;; `for` desugars its body to `.pure`.  The dot form means "dispatch on the
+;; first argument", which is the wrong question for a return-directed method:
+;; `pure`'s first argument is the payload, not the class type, so the receiver
+;; is an erased int64 and every instance matches by name.  With two Applicative
+;; instances auto-loaded (Schema and Option) that was ambiguous, from a call
+;; site INSIDE stdlib/macros.tur where no caller could annotate.
+;;
+;; The existing hkt-for-comprehension fixtures cannot catch this by
+;; construction: they declare their own single-instance TestApplicative and
+;; never load the stdlib ones, so the unique-instance fallback covers them no
+;; matter what the multi-instance path does.
+;;
+;; `:when` is exercised too -- it goes through `.empty`, which is return-directed
+;; for the same reason.
+
+(defn half [x : int] : (Option int)
+  (if (= x (* 2 (/ x 2))) (some (/ x 2)) (none)))
+
+;; two binders: (.bind c1 (fn [x] (.bind c2 (fn [y] (.pure body)))))
+(defn sums [] : (Option int)
+  (for [x (half 20) y (half x)] (+ x y)))
+
+;; a binder that fails partway: half of 5 is not an integer, so `none`
+(defn short-circuits [] : (Option int)
+  (for [x (half 10) y (half x)] (+ x y)))
+
+;; :when, both ways
+(defn kept [] : (Option int)
+  (for [x (half 20) :when (> x 5)] x))
+(defn dropped [] : (Option int)
+  (for [x (half 20) :when (> x 500)] x))
+
+(defn main [] : int
+  (println (unwrap-or (sums) -1))            ; 10 + 5  = 15
+  (println (unwrap-or (short-circuits) -1))  ; -1
+  (println (unwrap-or (kept) -1))            ; 10
+  (println (unwrap-or (dropped) -1))         ; -1
+  0)

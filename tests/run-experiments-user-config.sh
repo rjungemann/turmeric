@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/run-experiments-user-config.sh -- UC-3 integration test for the
-# user-level experiments file (docs/upcoming/user-config-experiments-plan.md).
+# user-level experiments file (docs/archive/history/user-config-experiments-plan.md).
 #
 # Drives the built `tur` against a synthetic $XDG_CONFIG_HOME so no real user
 # file is touched.

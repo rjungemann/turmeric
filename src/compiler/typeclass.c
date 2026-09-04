@@ -368,7 +368,7 @@ bool typeclass_instance_constraints_satisfied(const TypeClassInstance *inst,
         } else {
             required_type = inst->type_param_constraints[i].type_arg;
         }
-        /* M5 (docs/reported/m5-constrained-poly-spec-wrong-dispatch-for-
+        /* M5 (docs/archive/history/m5-constrained-poly-spec-wrong-dispatch-for-
          * parametric-receiver.md): when the substituted required_type is a
          * type variable, we're at elab time inside a constrained-polymorphic
          * defn whose own constraints (e.g. `(Eq A)` on `defn f [A] [(Eq A)]

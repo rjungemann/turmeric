@@ -8,7 +8,7 @@ description: Writing custom effects
 
 A step-by-step guide to algebraic effects in Turmeric. Each section builds on the previous one, starting from the simplest possible effect and working up to real-world patterns like mock I/O and dependency injection.
 
-> **Prerequisites**: Working `build/tur` binary (run `make`). No prior knowledge of algebraic effects is required.
+> **Prerequisites**: Working `build/tur` binary (run `just build`, or the CMake bootstrap in the README). No prior knowledge of algebraic effects is required.
 
 ---
 
@@ -24,7 +24,7 @@ A step-by-step guide to algebraic effects in Turmeric. Each section builds on th
 [Effects with `defer`](#effects-with-defer)
 [Effects with refs and rc](#effects-with-refs-and-rc)
 [Wrapping a handler in a macro](#wrapping-a-handler-in-a-macro)
-[Bridging effects to exceptions](#bridging-effects-to-exceptions)
+[Bridging effects to panics](#bridging-effects-to-panics)
 [Checking the continuation with `cont?`](#checking-the-continuation-with-cont)
 [Real-world pattern: mock I/O](#real-world-pattern-mock-io)
 [Real-world pattern: injectable logging](#real-world-pattern-injectable-logging)
@@ -90,8 +90,6 @@ handle greet()
 ```
 hello!
 hello!
-```turmeric no-check
-```sweet-exp
 ```
 
 Key points:
@@ -450,49 +448,44 @@ This is the standard pattern used in `stdlib/effects.tur` for `with-write`, `wit
 
 ---
 
-## Bridging effects to exceptions
+## Bridging effects to panics
 
-An effect handler can abort the computation (not resume) and throw an exception instead.
+An effect handler can abort the computation (not resume) and panic instead.
+`stdlib/effects.tur` ships this pattern as `with-fail-panic`:
 
 ```turmeric
 (defeffect Fail [msg :cstr] :nil)
 
-(defmacro with-fail-throw [body]
+(defmacro with-fail-panic [body]
   (handle body
-    (Fail [msg] k) (throw! msg)))   ; no resume -- aborts the computation
+    (Fail [msg] k) (panic msg)))   ; no resume -- aborts the computation
 
-(try
-  (with-fail-throw
-    (do
-      (println "before fail")
-      (perform (Fail "something went wrong"))
-      (println "after fail")))          ; never reached
-  (catch [err :cstr]
-    (println err)))
+(with-fail-panic
+  (do
+    (println "before fail")
+    (perform (Fail "something went wrong"))
+    (println "after fail")))          ; never reached
 ; before fail
-; something went wrong
+; panic: something went wrong
 ```
 ```sweet-exp
 defeffect Fail [msg :cstr] :nil
 
-defmacro with-fail-throw [body]
+defmacro with-fail-panic [body]
   handle body
     (Fail [msg] k)
-    throw!(msg)   ; no resume -- aborts the computation
+    panic(msg)   ; no resume -- aborts the computation
 
-try
-  with-fail-throw
-    do
-      println("before fail")
-      perform(Fail("something went wrong"))
-      println("after fail")          ; never reached
-  catch [err :cstr]
-    println(err)
+with-fail-panic
+  do
+    println("before fail")
+    perform(Fail("something went wrong"))
+    println("after fail")          ; never reached
 ; before fail
-; something went wrong
+; panic: something went wrong
 ```
 
-Not calling `resume` at all is valid -- the computation past the `perform` is simply abandoned. This lets you implement abort-style error signalling over the exception mechanism.
+Not calling `resume` at all is valid -- the computation past the `perform` is simply abandoned. To turn the panic back into a value at a boundary, wrap the whole thing in `catch-unwind` (see the [Error Handling Guide](error-handling-guide.md)).
 
 ---
 
@@ -543,7 +536,7 @@ Replace real I/O with a test double by swapping the handler. The business logic 
 ;; Pure business logic -- no I/O primitives.
 (defn echo-doubled [] : int
   (let [n (perform (Read))]
-    (perform (Write (int->cstr (* n 2))))
+    (perform (Write (int->str (* n 2))))
     0))
 
 ;; Production handler: real stdin/stdout.
@@ -573,7 +566,7 @@ defeffect Write [s :cstr] :nil
 ;; Pure business logic -- no I/O primitives.
 defn echo-doubled [] :int
   let [n perform(Read())]
-    perform(Write(int->cstr({n * 2})))
+    perform(Write(int->str({n * 2})))
     0
 
 ;; Production handler: real stdin/stdout.
@@ -700,12 +693,12 @@ with-stderr-log
 | Perform an effect | `(perform (Name arg ...))` |
 | Handle effects | `(handle expr (Name [p ...] k) body ...)` |
 | Resume computation | `(resume k value)` |
-| Abort computation | Omit `resume` (e.g. throw instead) |
+| Abort computation | Omit `resume` (e.g. panic instead) |
 | Multiple effects | Multiple clauses in one `handle` |
 | Nested scoping | Inner `handle` shadows outer for same effect |
 | Macro wrappers | `(defmacro with-x [body] (handle body ...))` |
 | Interop with defer/ref/rc | Works transparently across perform/resume |
-| Bridge to exceptions | Handler calls `throw!` instead of `resume` |
+| Bridge to panics | Handler calls `panic` instead of `resume` |
 
 ### stdlib effects
 
@@ -714,13 +707,13 @@ with-stderr-log
 | Effect | Handler macro | What it does |
 |---|---|---|
 | `Write [s :cstr]` | `with-write` | Routes writes to `println` |
-| `Fail [msg :cstr]` | `with-fail-throw` | Converts failures to exceptions |
+| `Fail [msg :cstr]` | `with-fail-panic` | Converts failures to panics |
 | `Read []` | `with-read-console` | Reads an int from stdin |
 | `GetEnv [key :cstr]` | `with-getenv` | Delegates to C `getenv(3)` |
 
 ### Further reading
 
-- `docs/turmeric-plan.md` §10.18–10.19 -- Phase 18 (shift/reset) and Phase 19 (algebraic effects) design details
+- [effects-system-guide.md](effects-system-guide.md) -- algebraic effects reference: effect rows, capability effects, deep vs shallow handlers
 - [`tests/fixtures/effect-*`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- full fixture test suite for every effect feature
-- `docs/archive/async-await-plan.md` -- planned async/await built on the effect substrate
-- `docs/archive/stm-plan.md` -- planned STM built on the effect substrate
+- [`stdlib/future.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/future.tur) -- async/await built on the effect substrate
+- [`stdlib/stm.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/stm.tur) -- STM built on the effect substrate

@@ -156,9 +156,16 @@ static int kqueue_modify(IOBackend *backend, int fd, int events) {
     int filters = io_events_to_kqueue_filters(events);
     if (filters == 0) return 0;
     
-    /* First remove old registration */
+    /* First remove old registration. kqueue filters are enum VALUES, not a
+     * bitmask: EVFILT_READ | EVFILT_WRITE collapses to EVFILT_READ
+     * (-1 | -2 == -1), which left WRITE knotes registered forever. Delete
+     * each filter individually. */
     struct kevent remove_kev;
-    EV_SET(&remove_kev, fd, EVFILT_READ | EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+    EV_SET(&remove_kev, fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+    if (kevent(kb->kq_fd, &remove_kev, 1, NULL, 0, NULL) != 0 && errno != ENOENT) {
+        return -1;
+    }
+    EV_SET(&remove_kev, fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
     if (kevent(kb->kq_fd, &remove_kev, 1, NULL, 0, NULL) != 0 && errno != ENOENT) {
         return -1;
     }
@@ -176,9 +183,14 @@ static int kqueue_modify(IOBackend *backend, int fd, int events) {
 static int kqueue_unregister(IOBackend *backend, int fd) {
     struct KqueueBackend *kb = (struct KqueueBackend *)backend;
     
-    /* Remove from kqueue */
+    /* Remove from kqueue -- one EV_DELETE per filter (filters are values,
+     * not flags; see kqueue_modify). */
     struct kevent kev;
-    EV_SET(&kev, fd, EVFILT_READ | EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+    EV_SET(&kev, fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+    if (kevent(kb->kq_fd, &kev, 1, NULL, 0, NULL) != 0 && errno != ENOENT) {
+        return -1;
+    }
+    EV_SET(&kev, fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
     if (kevent(kb->kq_fd, &kev, 1, NULL, 0, NULL) != 0 && errno != ENOENT) {
         return -1;
     }

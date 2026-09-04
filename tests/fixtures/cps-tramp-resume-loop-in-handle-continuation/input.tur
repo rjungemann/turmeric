@@ -2,7 +2,7 @@
 ;; free vars (a fn param `base`, the handle result `n`) that are not loop-carried.
 ;; The loop helper must thread those invariants as extra params (entry + each
 ;; back-edge).  Regression guard for
-;; docs/reported/cps-loop-in-handle-continuation-invariant-threading.md.
+;; docs/archive/cps-loop-in-handle-continuation-invariant-threading.md.
 ;;
 ;; g performs E, handled to resume 3 -> n=3; the loop adds base (10) n times to
 ;; acc(=base): 10 + 10*3 = 40.

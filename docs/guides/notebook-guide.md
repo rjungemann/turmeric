@@ -167,7 +167,7 @@ existing file (exit code 1 if the path already exists).
 
 ---
 
-## Image Hook (NB11)
+## Image Hook
 
 Cells can advertise image files to the TUI via the image hook convention:
 

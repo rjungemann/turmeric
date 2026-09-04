@@ -66,7 +66,7 @@ Opaques are *not* for:
 (defopaque Name :rep-type)
 (defopaque Name :rep-type :linear)
 (defopaque Name :rep-type :affine)
-(defopaque Name :rep-type :sealed)          ; experiment; see below
+(defopaque Name :rep-type :sealed)          ; see below
 (defopaque Name :rep-type :affine :sealed)  ; attributes compose
 ```
 
@@ -147,11 +147,11 @@ Conventions worth following:
 
 ## Sealing an opaque: `:sealed`
 
-> **Experiment.** Requires `--enable=sealed-opaque` (or `:experiments` in
-> `build.tur`). Without it `:sealed` still parses but imposes nothing --
-> deliberately, so adopting it in a library is not a breaking change for
-> consumers who have not opted in. See
-> [sealed-opaque-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/sealed-opaque-plan.md).
+> `:sealed` enforces unconditionally. `--enable=sealed-opaque` (the retired
+> experiment gate) was a warning-only no-op through 0.37.0 and is a hard
+> `TUR-E0310` from 0.38.0 -- a `build.tur` still naming it needs the flag
+> removed. See
+> [sealed-opaque-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/sealed-opaque-plan.md).
 
 `::` is a **coercing** cast, not a checked one. That means a plain
 `defopaque` does *not* encapsulate its handle: any module can unwrap a
@@ -191,9 +191,15 @@ code" to "requires deliberate inline-C" -- which is a real improvement,
 and is the honest claim to make in your module's docs. If you document a
 sealed handle as an adversarial guarantee, you are overselling it.
 
-One limitation: a `defopaque` outside any `defmodule` belongs to the
-implicit top-level module, so two moduleless files are not separated by
-this check. Single-file programs are where sealing has the least to
+**Moduleless code is not separated, and that is the accepted behavior --
+not a gap waiting to be closed.** A `defopaque` outside any `defmodule`
+belongs to the implicit top-level module, so two moduleless files both
+count as "the declaring module" and `::` is allowed between them. This
+matches how the rest of the module system treats moduleless code, and
+changing it would mean inventing a per-file notion of module that exists
+only for this one check. If you want a handle sealed, put it in a
+`defmodule` -- which is where a library that has something worth sealing
+already lives. Single-file programs are where sealing has the least to
 offer anyway.
 
 ## Inline-C and the ABI
@@ -263,12 +269,20 @@ and wraps back:
   (:: (+ (:: c :float) 273.15) :Kelvin))
 ```
 
-## Known limitations
+## Phantom type parameters
 
-`defopaque` does not currently accept type parameters --
-`(defopaque Box[T] :int)` is rejected. The same effect can be achieved
-with a phantom-typed `defstruct` today; the open ticket is
-[`docs/reported/parameterized-defopaque.md`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/parameterized-defopaque.md).
+`defopaque` accepts an optional type-parameter vector between the name and
+the base type:
+
+```turmeric
+(defopaque NonEmpty [A] :int)
+(defopaque Const [r a] :int)
+```
+
+The carrier stays the declared base type (always `int64_t` at the C
+level), but the newtype becomes a type constructor -- it can be spelled
+`(NonEmpty A)` in annotations and track an element or index type at the
+type level without storing it.
 
 ## Real-world examples
 
@@ -287,7 +301,7 @@ with a phantom-typed `defstruct` today; the open ticket is
 | [`stdlib/atomic.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/atomic.tur) | `AtomicCell` | `:ptr<void>` -- pointer to a heap-allocated atomic word |
 | [`stdlib/stm.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/stm.tur) | `TVar` | `:ptr` -- transactional-variable handle, distinct from the boxed `:ptr` values it holds |
 | [`stdlib/timer.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/timer.tur) | `TimerId` | `:int` -- branded handle returned by `reactor-add-timer` |
-| [`stdlib/fs.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/fs.tur) | `StatInfo`, `TmpFile` | `:int` -- stat block vs temp-file handle; can no longer be transposed |
+| [`stdlib/fs.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/fs.tur) | `StatInfo`, `TmpFile` | `:int` -- stat block vs temp-file handle; cannot be transposed |
 | [`stdlib/io.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/io.tur) | `FileHandle`, `FileStream`, `DirListing`, `FileSystem` | `:ptr<void>` -- `FileHandle` is `:linear`; `FileStream` wraps `FILE*` |
 | [`stdlib/ref.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/ref.tur) | `RefHandle` | `:int` -- heap pointer from `ref-new`, distinct from the `Ref` struct |
 

@@ -43,7 +43,7 @@ fi
 # once and skip cleanly rather than reporting spurious failures.  (Detected at
 # runtime via the diagnostic re-run added in run-leak-gate; see commit history.)
 probe=$(ASAN_OPTIONS="detect_leaks=1:exitcode=23" "$TUR" --version 2>&1)
-if printf '%s' "$probe" | grep -q "detect_leaks is not supported"; then
+if grep -q "detect_leaks is not supported" <<< "$probe"; then
     echo "PASS leak-gate (skipped: LeakSanitizer unsupported on this platform)"
     echo "leak-gate summary: skipped -- no LSan on this platform"
     exit 0
@@ -57,7 +57,7 @@ check_leak_clean() {
     rc=$?
 
     # Sanity: we must actually be exercising the diagnostic path.
-    if ! printf '%s' "$out" | grep -F -q "$needle"; then
+    if ! grep -F -q "$needle" <<< "$out"; then
         fail "$name" "expected diagnostic '$needle' not emitted -- not on the error path"
         # Divergence diagnostics (this has reproduced on macOS CI but not on
         # Linux).  Surface enough to tell apart the two candidate causes:
@@ -71,13 +71,13 @@ check_leak_clean() {
         # divergence; if still absent, it is (1).
         echo "    exit code : $rc   (ASAN_OPTIONS=$ASAN_OPTIONS)"
         echo "    output    : ${#out} bytes captured (stdout+stderr)"
-        if printf '%s' "$out" | grep -q "LeakSanitizer"; then
+        if grep -q "LeakSanitizer" <<< "$out"; then
             echo "    note      : output contains a LeakSanitizer report"
         fi
         printf '%s\n' "$out" | sed 's/^/    > /'
         local out_nolsan
         out_nolsan=$(ASAN_OPTIONS="detect_leaks=0" "$TUR" -Xeffect-types check "$input" 2>&1)
-        if printf '%s' "$out_nolsan" | grep -F -q "$needle"; then
+        if grep -F -q "$needle" <<< "$out_nolsan"; then
             echo "    verdict   : '$needle' DOES appear with detect_leaks=0 --"
             echo "                cause is the leak-check exit truncating output,"
             echo "                NOT a type-checker divergence."
@@ -90,7 +90,7 @@ check_leak_clean() {
         return
     fi
     # The real assertion: no LeakSanitizer report.
-    if printf '%s' "$out" | grep -q "LeakSanitizer: detected memory leaks"; then
+    if grep -q "LeakSanitizer: detected memory leaks" <<< "$out"; then
         fail "$name" "LeakSanitizer reported a leak on a composite-type diagnostic"
         printf '%s\n' "$out" | sed 's/^/    /'
         return

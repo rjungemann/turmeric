@@ -1,0 +1,8 @@
+;; A deliberately leak-clean program, so tests/run-leak-check.sh is exercised in
+;; the passing direction as well as the failing one. If this ever reports a
+;; leak, something in the emitted prelude started leaking on every program.
+(defn add [a : int b : int] : int (+ a b))
+
+(defn main [] : int
+  (println (add 2 3))
+  0)

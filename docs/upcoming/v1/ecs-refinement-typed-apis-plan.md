@@ -14,7 +14,7 @@ description: Rewritten after refinement types landed. What the shipped `#refine{
 >
 > RT0--RT7 and S0--S4 landed 2026-07-24/25 behind `--enable=refined` /
 > `#lang turmeric refined` (see
-> [`refinement-types-plan.md`](refinement-types-plan.md) and
+> [`refinement-types-plan.md`](../../archive/refinement-types-plan.md) and
 > [the guide](../../guides/refinement-types-guide.md)). So this plan can stop
 > speculating and start measuring. **Everything asserted below about compiler
 > behaviour was checked against `build-release/tur` at VERSION 0.30.8**; each
@@ -57,7 +57,7 @@ the single most load-bearing gap for ECS, because *every* domain predicate an
 ECS wants -- alive, has-component, in-bounds-for-this-world -- is naturally a
 `bool`-returning function.
 
-Tracked in [`refine-predicate-measures-plan.md`](refine-predicate-measures-plan.md).
+Tracked in [`refine-predicate-measures-plan.md`](../../archive/refine-predicate-measures-plan.md).
 
 ### 2. The int-valued workaround **works today**
 
@@ -97,7 +97,7 @@ diagnostic reads as pure and congruence reads as impure. So the failure mode
 here is silent loss of the proof, not a rejection.
 
 This is the wall. Tracked in
-[`refine-stateful-measures-plan.md`](refine-stateful-measures-plan.md).
+[`refine-stateful-measures-plan.md`](../../archive/refine-stateful-measures-plan.md).
 
 ### 4. A `#refine{...}` on a `defopaque` parameter compiles
 
@@ -199,7 +199,7 @@ Explicitly **not** a goal: making refinement types the default way to use
 > (TUR-W0063 / TUR-W0064) whose shim ages out one minor line later. So the
 > refined surface no longer costs its consumers a flag, and "opt-in" here means
 > an API choice rather than a compiler gate. See
-> [`refined-graduation-plan.md`](refined-graduation-plan.md).
+> [`refined-graduation-plan.md`](../../archive/refined-graduation-plan.md).
 
 ---
 
@@ -211,8 +211,8 @@ it.
 
 | # | Gap | Needed for | Plan |
 |---|---|---|---|
-| C1 | Boolean-sorted measures -- `(alive? w e)` usable as a predicate atom | ergonomics of every ECS predicate | [`refine-predicate-measures-plan.md`](refine-predicate-measures-plan.md) -- **RM-B1 LANDED 2026-07-26** |
-| C2 | A sound route for a measure over mutable world state | RE1 at all | [`refine-stateful-measures-plan.md`](refine-stateful-measures-plan.md) -- **LANDED 2026-07-26** (`#reads` + the `frozen` region) |
+| C1 | Boolean-sorted measures -- `(alive? w e)` usable as a predicate atom | ergonomics of every ECS predicate | [`refine-predicate-measures-plan.md`](../../archive/refine-predicate-measures-plan.md) -- **RM-B1 LANDED 2026-07-26** |
+| C2 | A sound route for a measure over mutable world state | RE1 at all | [`refine-stateful-measures-plan.md`](../../archive/refine-stateful-measures-plan.md) -- **LANDED 2026-07-26** (`#reads` + the `frozen` region) |
 | C3 | User-written `while` invariants | RE2's bounds elimination | [`loop-invariants-plan.md`](../hold/loop-invariants-plan.md) |
 
 **C1 is not strictly blocking** -- probe 2 shows the `(= (alive-i w x) 1)`
@@ -250,6 +250,30 @@ question is answered.~~
 > every acceptance fixture in the C2 plan is marked DONE. RE1 is complete and
 > promoted to the real sized-world stack as `ecs/sized-refined`; see the RE1
 > phase banners below.
+
+> **Trigger note 2026-08-17 -- the `#reads` trust tier now has its own plan,
+> and ONE ECS DECISION IS ITS TRIGGER.**
+> [`trusted-refinement-claims-plan.md`](../trusted-refinement-claims-plan.md)
+> covers the promise C2's answer rests on. Two pieces are already live and
+> cost the ECS nothing today: `TUR-W0383` warns when a `#reads` measure's
+> body *demonstrably* reads a mutable global, and the same evidence refuses
+> the congruence grant (gated as `--enable=checked-reads` when this note was
+> written; unconditional since it graduated in 0.37.0) -- every ECS measure
+> is inline-C, which yields no evidence, so both stay silent for the spice as
+> it stands, graduation included.
+>
+> The piece that waits on this plan is **R4, the general checked `#reads`**:
+> it is blocked on the measure layer holding its state in Turmeric-visible
+> structs instead of a malloc'd block behind inline C -- which is *exactly*
+> option "(b) making the RE0 unwrappers pure primitives" in the C1 purity
+> caveat above, reached from the other direction. **If that rewrite is ever
+> undertaken** (RE0 unwrappers become pure, the `gens` block becomes a
+> struct field or vec), do it with R4 in hand: the same change that makes
+> the accessor predicates congruent-as-pure is the one that makes `#reads`
+> *checkable*, and the two should land as one design rather than
+> rediscover each other. Conversely, a new pure-Turmeric ECS measure that
+> reads a `^mut` global will draw `TUR-W0383` immediately -- that is the
+> trust boundary being reported, not a lint to silence.
 
 **C3 is blocking for RE2 only.** RE1 does not need it.
 
@@ -386,7 +410,7 @@ expected and fails to elaborate.
 > bypass can despawn inside the region. That is the same trust boundary `#reads`
 > already carries (sound for ordinary code, not adversarial code); a hard
 > guarantee needs a language feature (module-private construction / a `::`-sealed
-> newtype). Filed as `docs/reported/frozen-region-aliasing-via-coercing-cast.md`.
+> newtype). Filed as `docs/archive/frozen-region-aliasing-via-coercing-cast.md`.
 >
 > **Update 2026-07-26 -- (a) tooling built, but auto-running BLOCKED by a
 > compiler bug; (c) pattern proven.**
@@ -402,7 +426,7 @@ expected and fails to elaborate.
 > segfaults nondeterministically** (6-8/8 crashes; ASan-silent -> arena/stack, not
 > heap). A partial fix landed (`cmd_build` now calls `refine_discharge_reset()` --
 > the memo held stale per-compile-arena VC pointers), but a second channel
-> remains. Filed as `docs/reported/refined-multi-compile-memory-corruption.md`.
+> remains. Filed as `docs/archive/history/refined-multi-compile-memory-corruption.md`.
 > So the RE1 refined tests are kept in `spices/ecs/tests/refined/` (a subdir
 > `tur test tests` does not descend into) and verified **individually** (each
 > passes on its own `tur run`/`tur check`), NOT auto-run. Auto-running is blocked
@@ -440,7 +464,7 @@ expected and fails to elaborate.
 > blocks an ergonomic `for-each-alive` MACRO is a different bug: a macro that
 > *generates* a refined guard/crossing (via the quasiquote template, not `~@body`
 > splicing the user's forms) does not discharge -- spurious `TUR-W0372`. Filed as
-> `docs/reported/macro-generated-refined-crossings-do-not-discharge.md`.
+> `docs/archive/history/macro-generated-refined-crossings-do-not-discharge.md`.
 >
 > **Remaining for RE1:** fix the refined-multi-compile corruption (unblocks
 > auto-running all refined tests); fix macro-generated refined-crossing discharge
@@ -563,12 +587,65 @@ it becomes an ordinary path-splitting obligation.
 > decline (unblocking the `while` form), and `frozen` + `#reads` extends
 > bounds elimination to RESIZABLE storage, where `(in-bounds? buf i)` reads
 > mutable capacity (see stateful-refinements-guide.md "Where this
-> generalizes").
+> generalizes"). The trajectory's trusted-tier half now has its own plan --
+> [`trusted-refinement-claims-plan.md`](../trusted-refinement-claims-plan.md);
+> see the trigger note under C2 above before touching how measures hold
+> state.
 
 Deliberately sequenced last: it is the only phase whose payoff is measured in
 nanoseconds, and the parent plan's benchmarking section is a standing warning
 that this class of win tends to evaporate under `cc -O2`, which already proves
 locally-derived bounds for free. **RE2 does not start without a profile.**
+
+> **THE PROFILE EXISTS AS OF 2026-08-20, and it reframes RE2 rather than
+> greenlighting it.** `turmeric-spices/spices/ecs/bench/` -- 100k entities x
+> 100 frames of dense float `Pos`/`Vel` integration, against a hand-rolled C
+> baseline. Best of 5 on an M2, `tur` v0.37.0:
+>
+> | variant | ms | vs C |
+> |---|---|---|
+> | `c-baseline` (flat arrays, hand-rolled C) | 4.4 | 1.00x |
+> | `manual` (raw Turmeric, flat buffers, no ECS) | 4.6 | 1.04x |
+> | `ecs-unsized` (`defworld` + `for-each2`) | 36.9 | 8.42x |
+> | `ecs-sized` (`sized-defworld` + `sized-for-each`) | 15.3 | 3.50x |
+>
+> Three findings bear on RE2, in decreasing order of comfort:
+>
+> 1. **The archived parent plan's within-2x target is missed by a wide
+>    margin** -- 8.42x unsized, 3.50x sized. This is the first measurement
+>    and it is worse than the plan assumed. Worth recording plainly.
+> 2. **The cost is not where RE2 is aiming.** It is not codegen (`manual`
+>    runs 1.04x C) and not the query macro (a hand-written loop with no
+>    `for-each` anywhere ties it, despite `for-each2` doing strictly more work
+>    per slot). Reading `ecs/storage.tur`, the unsized `dense-set!`
+>    emits per write: an `elem_sz` init test, a capacity test guarding a
+>    `realloc` auto-grow path, the store, a second array write to
+>    `present[idx]`, and a `len` update branch. RE2 refines a slot index to
+>    discharge `0 <= i < cap`; that maps onto the **auto-grow guard**, not a
+>    pure bounds check, and removing it leaves the `present[]` write and the
+>    `len` update untouched.
+> 3. **`ecs-sized` already banks most of the available win, with no
+>    refinement types at all.** A sized world's capacity is static, so its
+>    grow branch is already dead -- and it still runs 3.50x. So the
+>    36.9 -> 15.3 part of the gap is had today, and the remaining
+>    15.3 -> 4.4 is not something a refined index addresses.
+>
+> **What this changes.** RE2's *performance* justification does not survive
+> this profile: the cheaper first move, if speed is the goal, is a
+> `dense-reserve!` / non-growing write path on the unsized storage, which is
+> ordinary spice work and needs no compiler feature. RE2's *correctness*
+> justification -- compile-time rejection of an out-of-range slot -- is
+> untouched and stands on its own; it just should not be sold on this
+> benchmark. The probe update above (bounds discharge works today in the
+> recursion shape, no C3 needed) still holds, so if RE2 is built for the
+> type-level property it remains cheap to build.
+>
+> Not separately measured: the per-cost attribution *inside* `dense-set!`.
+> An ablation that removes the grow branch and the `present[]` write
+> independently would settle how much of the 36.9 -> 15.3 each accounts for,
+> and is the obvious next probe. (`ecs-sized` still does a `present[]` write
+> and a struct copy per store, so its 3.50x is not the grow branch alone.)
+> See `spices/ecs/bench/README.md`.
 
 ### RE3 -- Documentation (DONE 2026-07-26)
 
@@ -670,9 +747,9 @@ work), then RE1 as the dogfooding vehicle, then C3/RE2 only against a profile.
 ## References
 
 - Parent plan (archived): [`ecs-spice-plan`](../../archive/ecs-spice-plan.md)
-- [`refinement-types-plan.md`](refinement-types-plan.md) -- what landed
+- [`refinement-types-plan.md`](../../archive/refinement-types-plan.md) -- what landed
 - [`refinement-types-guide.md`](../../guides/refinement-types-guide.md) -- the surface
-- [`refined-graduation-plan.md`](refined-graduation-plan.md)
+- [`refined-graduation-plan.md`](../../archive/refined-graduation-plan.md)
 - [`refined-dogfooding-plan.md`](../../archive/refined-dogfooding-plan.md)
 - [`loop-invariants-plan.md`](../hold/loop-invariants-plan.md)
 - `docs/guides/ecs-guide.md`, `docs/guides/ecs-vs-haskell-ecs.md`,

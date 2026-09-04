@@ -1,6 +1,9 @@
 /* elab_unsafe.c -- unsafe pointer ops, casts, raw memory, and C FFI primitives. */
 #include "elab_internal.h"
 
+#include "globals.h"            /* g_needs_dlfcn */
+#include "turi/jit_ffi.h"       /* signature vocabulary (class_for_kind) */
+
 /* Phase U3: Unsafe primitives implementations */
 
 Expr *elab_ptr_deref(Elab *e, const Form *call) {
@@ -709,7 +712,445 @@ Expr *elab_c_call(Elab *e, const Form *call) {
     return out;
 }
 
+/* jit-ffi-c2mir-plan F4: a `call-ptr` signature slot may name a by-value
+ * aggregate.  A `defstruct` lowers to a single-variant record ADT whose C
+ * emission is already an exact by-value struct with the declared field types
+ * (`struct tur_adt_Vec2 { double x; double y; }`), so the compiled path
+ * passes one by naming the type -- there is no marshalling step and no
+ * layout guesswork.  The interpreter builds the bytes itself; see
+ * eval_call_ptr.
+ *
+ * Returns the resolved TY_ADT type, or a TY_UNKNOWN type when `name` does
+ * not name a struct at all (caller falls through to its own diagnostic).
+ * `*fatal` is set when the name IS a struct but cannot cross the boundary,
+ * in which case a diagnostic has already been emitted. */
+static Type call_ptr_aggregate_type(Elab *e, const Symbol *name, Span span,
+                                    bool *fatal) {
+    Type unknown = type_from_kind(TY_UNKNOWN);
+    *fatal = false;
+    Type *t = elab_lookup_type_by_name(e, name);
+    if (!t || t->kind != TY_ADT || !t->as.adt_.def) return unknown;
+
+    const AdtDef *def = t->as.adt_.def;
+    /* Only a product type has a by-value C layout.  A multi-constructor sum
+     * carries a tag and (in the general case) a union; that is a real ABI
+     * shape but not one any C API declares, so it is out of scope rather
+     * than mis-described. */
+    if (def->n_ctors != 1 || !def->ctors[0]->is_record) {
+        diag_emit(DIAG_ERROR, span,
+                  "call-ptr: '%s' is not a by-value aggregate -- only a "
+                  "single-constructor record (a defstruct, or a defdata with "
+                  "one record variant) has a C struct layout",
+                  def->name ? def->name : name->name);
+        *fatal = true;
+        return unknown;
+    }
+    /* A `:heap` record's natural ABI is a pointer to a header, not the
+     * aggregate itself; passing it by value would pass the header. */
+    if (def->is_heap) {
+        diag_emit(DIAG_ERROR, span,
+                  "call-ptr: '%s' is a :heap record -- its ABI is a pointer, "
+                  "not a by-value aggregate; declare the slot :ptr instead",
+                  def->name ? def->name : name->name);
+        *fatal = true;
+        return unknown;
+    }
+    if (def->n_type_params != 0) {
+        diag_emit(DIAG_ERROR, span,
+                  "call-ptr: '%s' is parametric -- a by-value aggregate slot "
+                  "needs a monomorphic layout",
+                  def->name ? def->name : name->name);
+        *fatal = true;
+        return unknown;
+    }
+
+    const CtorDef *ct = def->ctors[0];
+    if (ct->n_fields == 0) {
+        diag_emit(DIAG_ERROR, span,
+                  "call-ptr: '%s' has no fields -- an empty aggregate has no "
+                  "portable C layout", def->name ? def->name : name->name);
+        *fatal = true;
+        return unknown;
+    }
+    for (uint32_t i = 0; i < ct->n_fields; i++) {
+        if (tur_jit_ffi_member_code_for_kind(ct->fields[i].kind) == 0) {
+            diag_emit(DIAG_ERROR, span,
+                      "call-ptr: field '%s' of '%s' is %s, which has no "
+                      "by-value C member type -- aggregate fields must be "
+                      "scalars (:int, :float, :float32, :bool, :cstr, :ptr, "
+                      "sized ints)",
+                      ct->fields[i].name ? ct->fields[i].name : "(positional)",
+                      def->name ? def->name : name->name,
+                      typekind_to_string(ct->fields[i].kind));
+            *fatal = true;
+            return unknown;
+        }
+    }
+    return *t;
+}
+
+/* Parse a `[T1 T2 -> R]` C-signature vector, shared by `call-ptr` (F3/F4)
+ * and `callback-ptr` (F5) -- the two directions describe the same boundary,
+ * so they read the same notation.  The vocabulary is the FFI thunk's
+ * (turi/jit_ffi.h): int-class scalars, floats, cstr, ptr, the name of a
+ * by-value record, and (return position only) :void.  Zero-parameter form is
+ * `[-> R]`.  `what` names the form in diagnostics.  Returns false with a
+ * diagnostic already emitted. */
+static bool elab_c_sig_vector(Elab *e, const Form *sig_f, const char *what,
+                              Type *out_ret, Type **out_params,
+                              uint32_t *out_n) {
+    if (sig_f->tag != F_VEC) {
+        diag_emit(DIAG_ERROR, sig_f->span,
+                  "%s: signature must be a vector [T1 T2 -> R]", what);
+        return false;
+    }
+    uint32_t sig_len = sig_f->as.list.len;
+    uint32_t arrow_at = sig_len;
+    for (uint32_t i = 0; i < sig_len; i++) {
+        const Form *t = sig_f->as.list.items[i];
+        if (t->tag == F_SYM && t->as.sym->len == 2 &&
+            memcmp(t->as.sym->name, "->", 2) == 0) {
+            arrow_at = i;
+            break;
+        }
+    }
+    if (arrow_at == sig_len || arrow_at + 2 != sig_len) {
+        diag_emit(DIAG_ERROR, sig_f->span,
+                  "%s: signature needs `->` followed by exactly one "
+                  "return type: [T1 T2 -> R]", what);
+        return false;
+    }
+
+    uint32_t n_params = arrow_at;
+    Type *param_types =
+        (Type *)arena_alloc(e->arena, (n_params ? n_params : 1) * sizeof(Type));
+    Type ret_type = type_from_kind(TY_NIL);
+    for (uint32_t i = 0; i <= n_params; i++) {
+        bool is_return = (i == n_params);
+        const Form *t = sig_f->as.list.items[is_return ? n_params + 1 : i];
+        TypeKind k = TY_UNKNOWN;
+        if (t->tag == F_KEYWORD || t->tag == F_SYM) {
+            const char *nm = t->as.sym->name;
+            k = typekind_from_symbol(nm);
+            if (k == TY_UNKNOWN) {
+                if (strcmp(nm, "void") == 0)      k = TY_NIL;
+                else if (strcmp(nm, "ptr") == 0)  k = TY_PTR_VOID;
+            }
+        }
+        /* F4: a bare name that is not a scalar keyword may be a by-value
+         * aggregate.  Tried before the '?' diagnostic so a struct name gets
+         * the specific reason it was rejected, not the scalar-list message. */
+        if (k == TY_UNKNOWN && t->tag == F_SYM) {
+            bool fatal = false;
+            Type agg = call_ptr_aggregate_type(e, t->as.sym, t->span, &fatal);
+            if (fatal) return false;
+            if (agg.kind == TY_ADT) {
+                if (is_return) ret_type = agg;
+                else           param_types[i] = agg;
+                continue;
+            }
+        }
+        char cls = (k == TY_UNKNOWN)
+                       ? '?'
+                       : tur_jit_ffi_class_for_kind(k, is_return);
+        if (cls == '?') {
+            diag_emit(DIAG_ERROR, t->span,
+                      "%s: unsupported %s type in signature -- expected "
+                      "a scalar (:int, :float, :float32, :bool, :cstr, :ptr, "
+                      "sized ints%s) or the name of a by-value record",
+                      what, is_return ? "return" : "parameter",
+                      is_return ? ", :void" : "");
+            return false;
+        }
+        if (is_return) ret_type = type_from_kind(k);
+        else           param_types[i] = type_from_kind(k);
+    }
+    *out_ret    = ret_type;
+    *out_params = param_types;
+    *out_n      = n_params;
+    return true;
+}
+
+/* jit-ffi-c2mir-plan F3: `(call-ptr p [T1 T2 -> R] args...)` -- call an
+ * arbitrary function pointer with a signature stated at the site.  The
+ * pointer typically comes from dlsym, which until this form existed had no
+ * way to be invoked at all.  AOT codegen is a pure cast-and-call; turi
+ * routes through the JIT FFI thunk provider.  Requires an `unsafe` block
+ * (exactly like c-call); the `jit-ffi` experiment graduated 2026-08-21, so
+ * there is no longer an enable gate.  The turi path still needs a
+ * `-DTUR_JIT=ON` build and says so cleanly when it does not have one. */
+Expr *elab_call_ptr(Elab *e, const Form *call) {
+    g_needs_dlfcn = true;   /* emitted C needs <dlfcn.h> + -ldl */
+    if (e->unsafe_depth == 0) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "call-ptr requires an enclosing (unsafe ...) block");
+        return NULL;
+    }
+    if (call->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "call-ptr requires a pointer and a signature: "
+                  "(call-ptr p [T1 T2 -> R] args...)");
+        return NULL;
+    }
+
+    uint32_t n_params = 0;
+    Type *param_types = NULL;
+    Type  ret_type    = type_from_kind(TY_NIL);
+    if (!elab_c_sig_vector(e, call->as.list.items[2], "call-ptr",
+                           &ret_type, &param_types, &n_params))
+        return NULL;
+
+    /* The pointer expression: a dlsym result (:ptr<void>) or a raw :int
+     * address. */
+    Expr *pexpr = elab_form(e, call->as.list.items[1]);
+    if (!pexpr) return NULL;
+    if (pexpr->type.kind != TY_PTR_VOID && pexpr->type.kind != TY_INT) {
+        diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                  "call-ptr: pointer must be ptr<void> (dlsym result) or "
+                  ":int, got %s", type_name(pexpr->type));
+        return NULL;
+    }
+
+    /* Arguments, checked count- and class-wise against the signature; each
+     * is cast to its stated C parameter type by codegen. */
+    uint32_t n_args = call->as.list.len - 3;
+    if (n_args != n_params) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "call-ptr: signature declares %u parameter%s, got %u "
+                  "argument%s", (unsigned)n_params, n_params == 1 ? "" : "s",
+                  (unsigned)n_args, n_args == 1 ? "" : "s");
+        return NULL;
+    }
+    Expr **args =
+        (Expr **)arena_alloc(e->arena, (n_args ? n_args : 1) * sizeof(Expr *));
+    for (uint32_t a = 0; a < n_args; a++) {
+        args[a] = elab_form(e, call->as.list.items[3 + a]);
+        if (!args[a]) return NULL;
+        /* F4: an aggregate slot is matched by IDENTITY, not by class -- two
+         * records with the same field kinds still describe different C
+         * types, and silently accepting one for the other is exactly the
+         * mis-call this form exists to make impossible. */
+        if (param_types[a].kind == TY_ADT) {
+            if (args[a]->type.kind != TY_ADT ||
+                args[a]->type.as.adt_.def != param_types[a].as.adt_.def) {
+                diag_emit(DIAG_ERROR, call->as.list.items[3 + a]->span,
+                          "call-ptr: argument %u is %s, but the signature "
+                          "declares the by-value record %s",
+                          (unsigned)a, type_name(args[a]->type),
+                          param_types[a].as.adt_.def->name);
+                return NULL;
+            }
+            continue;
+        }
+        char want = tur_jit_ffi_class_for_kind(param_types[a].kind, 0);
+        char got  = tur_jit_ffi_class_for_kind(args[a]->type.kind, 0);
+        /* int-class accepts any int-class value -- the exact-width codes
+         * (scalar-width-fidelity) distinguish the C declaration the thunk
+         * emits, not what an argument may be passed as; the width cast
+         * happens at the boundary.  Float-class also accepts ints
+         * (widened, matching the interpreter's marshaller). */
+        bool okc = (tur_jit_ffi_class_is_int(want) &&
+                    tur_jit_ffi_class_is_int(got)) ||
+                   (want == got) ||
+                   ((want == 'f' || want == 'F') &&
+                    tur_jit_ffi_class_is_int(got));
+        if (!okc) {
+            diag_emit(DIAG_ERROR, call->as.list.items[3 + a]->span,
+                      "call-ptr: argument %u is %s, but the signature "
+                      "declares %s", (unsigned)a, type_name(args[a]->type),
+                      type_name(param_types[a]));
+            return NULL;
+        }
+    }
+
+    CallPtrSig *ps = (CallPtrSig *)arena_alloc(e->arena, sizeof(CallPtrSig));
+    ps->return_type = ret_type;
+    ps->param_types = param_types;
+    ps->n_params    = n_params;
+    ps->is_callback = false;
+
+    Expr *out = expr_new(e->arena, EX_CALL, ret_type, call->span);
+    out->as.call_.fn_binding = NULL;
+    out->as.call_.fn_expr    = pexpr;
+    out->as.call_.args       = args;
+    out->as.call_.n_args     = n_args;
+    out->as.call_.ptr_sig    = ps;
+    return out;
+}
+
+/* jit-ffi-c2mir-plan F5: `(callback-ptr f [T1 T2 -> R])` -- the reverse of
+ * call-ptr.  Produces a raw C function pointer with the stated signature
+ * that, when a C library calls it, runs the Turmeric closure `f`.  This is
+ * what lets a C API that takes a callback (qsort's comparator, an event
+ * loop's handler) be driven from Turmeric at all.
+ *
+ * Compiled: a per-site static trampoline plus a static slot holding the
+ * closure -- see emit_expr.c.  Interpreted: the provider synthesizes one
+ * with c2mir, with the context address baked in as a literal.
+ *
+ * Lifetime is the PROCESS, deliberately, matching turi's existing closure
+ * policy: a C library that holds a callback pointer has no way to tell us it
+ * is done with it, so there is no safe moment to reclaim one.  The plan's
+ * optional `callback-free!` is not implemented -- it would be a no-op on the
+ * compiled path (where the trampoline is a static function, not an
+ * allocation), and a use-after-free primitive on the other. */
+Expr *elab_callback_ptr(Elab *e, const Form *call) {
+    if (e->unsafe_depth == 0) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "callback-ptr requires an enclosing (unsafe ...) block");
+        return NULL;
+    }
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "callback-ptr requires a function and a signature: "
+                  "(callback-ptr f [T1 T2 -> R])");
+        return NULL;
+    }
+
+    uint32_t n_params = 0;
+    Type *param_types = NULL;
+    Type  ret_type    = type_from_kind(TY_NIL);
+    if (!elab_c_sig_vector(e, call->as.list.items[2], "callback-ptr",
+                           &ret_type, &param_types, &n_params))
+        return NULL;
+
+    Expr *fexpr = elab_form(e, call->as.list.items[1]);
+    if (!fexpr) return NULL;
+    if (fexpr->type.kind != TY_FN) {
+        diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                  "callback-ptr: first argument must be a function, got %s",
+                  type_name(fexpr->type));
+        return NULL;
+    }
+    /* Deliberately narrow: the function must lower to a PLAIN C FUNCTION.
+     * That admits a top-level defn and an inline non-capturing lambda (which
+     * is lifted to exactly such a function) -- both land as a global binding
+     * -- and rejects anything carrying an environment.
+     *
+     * A C callback slot is a bare function pointer with no room for an
+     * environment, so a capturing closure would need the trampoline to
+     * recover the env from the closure's runtime representation.  That
+     * representation is not currently uniform -- a `:fn` value is variously a
+     * bare function pointer, a boxed closure whose slot 0 is the code
+     * pointer, or a `__poly_` adapter, and one of those combinations already
+     * SIGSEGVs on the ordinary argument path
+     * (docs/reported/let-bound-noncapturing-lambda-segfaults-as-fn-arg.md).
+     * Building an FFI trampoline on top of that would turn a representation
+     * mismatch into a wild jump from inside a C library.
+     *
+     * Enforced HERE rather than in codegen so both paths agree: the
+     * interpreter could accept any closure, but a form that means different
+     * things under `tur run` and `tur --interpret` is worse than one that is
+     * uniformly narrow.  Note this rejects a LET-BOUND non-capturing lambda
+     * even though it could in principle work -- the binding is local, and
+     * that is the very shape the SIGSEGV above lives in. */
+    if (fexpr->kind != EX_VAR || !fexpr->as.var.binding ||
+        !fexpr->as.var.binding->is_global) {
+        diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                  "callback-ptr: the callback must be a top-level function, "
+                  "named directly or written inline with no captures -- a C "
+                  "callback slot is a bare function pointer with no room for "
+                  "a captured environment");
+        return NULL;
+    }
+    if (fexpr->type.as.fn.arity != n_params) {
+        diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                  "callback-ptr: the signature declares %u parameter%s but the "
+                  "function takes %u", (unsigned)n_params,
+                  n_params == 1 ? "" : "s",
+                  (unsigned)fexpr->type.as.fn.arity);
+        return NULL;
+    }
+    /* Class-check each slot against the closure's own type.  A mismatch here
+     * is a register-class error at the C boundary -- the callee would read an
+     * xmm register for a value the caller left in a general-purpose one --
+     * so it is worth catching at the site rather than at the crash. */
+    for (uint32_t i = 0; i < n_params; i++) {
+        TypeKind fk = (TypeKind)fexpr->type.as.fn.arg_kinds[i];
+        /* F4 follow-on: a record slot requires the function to take a record
+         * there too.  The fn type carries per-arg KINDS only, so identity
+         * (same record, not just "a record") is enforced where the type
+         * survives: the interpreter's dispatch builds the SIG's record and
+         * the compiled adapter passes the aggregate through uncast, so a
+         * wrong record is a C type error in the generated adapter. */
+        if (param_types[i].kind == TY_ADT) {
+            if (fk != TY_ADT) {
+                diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                          "callback-ptr: parameter %u is the by-value record "
+                          "%s in the signature but %s in the function",
+                          (unsigned)i, type_name(param_types[i]),
+                          typekind_to_string(fk));
+                return NULL;
+            }
+            continue;
+        }
+        char want = tur_jit_ffi_class_for_kind(param_types[i].kind, 0);
+        char got  = tur_jit_ffi_class_for_kind(fk, 0);
+        bool okc = (tur_jit_ffi_class_is_int(want) &&
+                    tur_jit_ffi_class_is_int(got)) ||
+                   (want == got) ||
+                   ((want == 'f' || want == 'F') && (got == 'f' || got == 'F'));
+        if (!okc) {
+            diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                      "callback-ptr: parameter %u is %s in the signature but "
+                      "%s in the function", (unsigned)i,
+                      type_name(param_types[i]),
+                      typekind_to_string(fk));
+            return NULL;
+        }
+    }
+    {
+        TypeKind fr = fexpr->type.as.fn.result_kind;
+        bool okc;
+        if (ret_type.kind == TY_ADT) {
+            /* F4 follow-on: an aggregate return requires an aggregate-
+             * returning function, and identity when the fn type carries it. */
+            const Type *rft = fexpr->type.as.fn.result_full_type;
+            okc = (fr == TY_ADT) &&
+                  (!rft || rft->kind != TY_ADT ||
+                   rft->as.adt_.def == ret_type.as.adt_.def);
+        } else {
+            char want = tur_jit_ffi_class_for_kind(ret_type.kind, 1);
+            char got  = tur_jit_ffi_class_for_kind(fr, 1);
+            okc = (tur_jit_ffi_class_is_int(want) &&
+                   tur_jit_ffi_class_is_int(got)) ||
+                  (want == got) ||
+                  ((want == 'f' || want == 'F') && (got == 'f' || got == 'F'));
+            /* A :void C return discards whatever the closure produced, which
+             * is the ordinary way to adapt a value-returning function to a
+             * void callback slot -- allowed rather than an error. */
+            if (want == 'v') okc = true;
+        }
+        if (!okc) {
+            diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                      "callback-ptr: the signature returns %s but the function "
+                      "returns %s", type_name(ret_type),
+                      typekind_to_string(fr));
+            return NULL;
+        }
+    }
+
+    CallPtrSig *ps = (CallPtrSig *)arena_alloc(e->arena, sizeof(CallPtrSig));
+    ps->return_type = ret_type;
+    ps->param_types = param_types;
+    ps->n_params    = n_params;
+    ps->is_callback = true;
+
+    /* The node's VALUE is the function pointer, so its type is ptr<void> --
+     * not the signature's return type, which describes the callback's own
+     * calls.  fn_expr carries the closure; there are no arguments. */
+    Expr *out = expr_new(e->arena, EX_CALL, type_from_kind(TY_PTR_VOID),
+                         call->span);
+    out->as.call_.fn_binding = NULL;
+    out->as.call_.fn_expr    = fexpr;
+    out->as.call_.args       = NULL;
+    out->as.call_.n_args     = 0;
+    out->as.call_.ptr_sig    = ps;
+    return out;
+}
+
 Expr *elab_dlopen(Elab *e, const Form *call) {
+    g_needs_dlfcn = true;   /* emitted C needs <dlfcn.h> + -ldl */
     /* (dlopen path) - dynamic library open
      * For v1, we emit a call to dlopen with RTLD_LAZY flag
      * Returns ptr<void> (the library handle) */
@@ -746,6 +1187,7 @@ Expr *elab_dlopen(Elab *e, const Form *call) {
 }
 
 Expr *elab_dlsym(Elab *e, const Form *call) {
+    g_needs_dlfcn = true;   /* emitted C needs <dlfcn.h> + -ldl */
     /* (dlsym handle symbol) - get symbol address from dynamic library
      * For v1, we emit a call to dlsym
      * Returns ptr<void> (the symbol address) */
@@ -791,6 +1233,7 @@ Expr *elab_dlsym(Elab *e, const Form *call) {
 }
 
 Expr *elab_dlclose(Elab *e, const Form *call) {
+    g_needs_dlfcn = true;   /* emitted C needs <dlfcn.h> + -ldl */
     /* (dlclose handle) - close dynamic library
      * For v1, we emit a call to dlclose
      * Returns int (0 on success, non-zero on error) */
@@ -894,6 +1337,10 @@ Expr *elab_unsafe(Elab *e, const Form *call) {
     /* Create handle expression with Unsafe handler
      * The handler just resumes with nil (Unsafe effect carries no value) */
     HandleCase *unsafe_case = arena_alloc(e->arena, sizeof(HandleCase));
+    /* Arena memory is not zeroed; every field this site does not set
+     * (resumable_payload, cont_kind, ...) must still hold a valid value for
+     * any reader -- same rule as the memset'd HandleExpr below. */
+    memset(unsafe_case, 0, sizeof(HandleCase));
     unsafe_case->effect_name = e->sym_effect_unsafe;
     unsafe_case->n_params = 0;
     unsafe_case->param_names = NULL;
@@ -925,6 +1372,7 @@ Expr *elab_unsafe(Elab *e, const Form *call) {
 
     /* Create handle expression */
     HandleExpr *handle = arena_alloc(e->arena, sizeof(HandleExpr));
+    memset(handle, 0, sizeof(HandleExpr));   /* arena memory is not zeroed */
     handle->body = body;
     handle->cases = unsafe_case;
     handle->n_cases = 1;

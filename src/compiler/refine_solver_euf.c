@@ -18,7 +18,9 @@
  * terms, so this is the right tradeoff; REFINE_MAX_EUF_TERMS bounds the rest. */
 
 #include "refine_solver.h"
+#include "trail_c.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 struct EufState {
@@ -26,9 +28,23 @@ struct EufState {
     Arena    *a;
     VCTerm  **terms;   /* every subterm, deduplicated by pointer (hash-consed) */
     uint32_t *parent;  /* union-find over term indices */
+    uint32_t *pstamp;  /* SX3: per-slot trail stamps, parallel to parent */
     uint32_t  n, cap;
     bool      unsat;
+    TrailC    trail;   /* SX3: value trail over parent[]; see trail_c.h */
 };
+
+/* SX3: every parent[] write funnels through here so mark/undo see all of
+ * them -- the union in uf_union AND the path compression in uf_find.
+ * Trailing compression too is what keeps undo exact; the alternative
+ * (compression-free find) costs more than it saves at these sizes.  The
+ * merge history a Nieuwenhuis-Oliveras proof forest would need (SX6b's
+ * euf_explain) is recoverable from these entries, which is the
+ * representation choice the plan asked to keep open. */
+static inline void euf_pset(EufState *st, uint32_t i, uint32_t v) {
+    trailc_note(&st->trail, i, st->parent[i], &st->pstamp[i]);
+    st->parent[i] = v;
+}
 
 /* ------------------------------------------------------------------------- *
  * Term registry + union-find
@@ -37,20 +53,28 @@ struct EufState {
 static uint32_t euf_index(EufState *st, VCTerm *t);
 
 static void euf_add(EufState *st, VCTerm *t) {
-    if (st->n >= REFINE_MAX_EUF_TERMS) { st->unsat = false; return; }
+    if (st->n >= REFINE_MAX_EUF_TERMS) {
+        refine_caps()->euf_terms_hits++;
+        refine_cap_peak(&refine_caps()->euf_terms_peak, REFINE_MAX_EUF_TERMS);
+        st->unsat = false; return;
+    }
     if (st->n == st->cap) {
         uint32_t ncap = st->cap ? st->cap * 2 : 32;
         VCTerm **nt = (VCTerm **)arena_alloc(st->a, ncap * sizeof(VCTerm *));
         uint32_t *np = (uint32_t *)arena_alloc(st->a, ncap * sizeof(uint32_t));
+        uint32_t *ns = (uint32_t *)arena_alloc(st->a, ncap * sizeof(uint32_t));
         if (st->n) {
             memcpy(nt, st->terms, st->n * sizeof(VCTerm *));
             memcpy(np, st->parent, st->n * sizeof(uint32_t));
+            memcpy(ns, st->pstamp, st->n * sizeof(uint32_t));
         }
-        st->terms = nt; st->parent = np; st->cap = ncap;
+        st->terms = nt; st->parent = np; st->pstamp = ns; st->cap = ncap;
     }
     st->terms[st->n]  = t;
     st->parent[st->n] = st->n;
+    st->pstamp[st->n] = 0;      /* SX3: never stamped at any live level */
     st->n++;
+    refine_cap_peak(&refine_caps()->euf_terms_peak, st->n);
 }
 
 /* Register `t` and every subterm; returns t's index (UINT32_MAX if capped). */
@@ -58,20 +82,28 @@ static uint32_t euf_index(EufState *st, VCTerm *t) {
     if (!t) return UINT32_MAX;
     for (uint32_t i = 0; i < st->n; i++) if (st->terms[i] == t) return i;
     for (uint32_t i = 0; i < t->n; i++) euf_index(st, t->kids[i]);
-    if (st->n >= REFINE_MAX_EUF_TERMS) return UINT32_MAX;
+    if (st->n >= REFINE_MAX_EUF_TERMS) {
+        refine_caps()->euf_terms_hits++;
+        refine_cap_peak(&refine_caps()->euf_terms_peak, REFINE_MAX_EUF_TERMS);
+        return UINT32_MAX;
+    }
     euf_add(st, t);
     return st->n - 1;
 }
 
 static uint32_t uf_find(EufState *st, uint32_t i) {
-    while (st->parent[i] != i) { st->parent[i] = st->parent[st->parent[i]]; i = st->parent[i]; }
+    while (st->parent[i] != i) {
+        uint32_t gp = st->parent[st->parent[i]];
+        euf_pset(st, i, gp);        /* path compression, trailed (SX3) */
+        i = gp;
+    }
     return i;
 }
 
 static bool uf_union(EufState *st, uint32_t i, uint32_t j) {
     uint32_t ri = uf_find(st, i), rj = uf_find(st, j);
     if (ri == rj) return false;
-    st->parent[rj] = ri;
+    euf_pset(st, rj, ri);
     return true;
 }
 
@@ -139,7 +171,37 @@ EufState *euf_new(RefineVC *vc, Arena *a) {
     EufState *st = (EufState *)arena_alloc(a, sizeof(EufState));
     memset(st, 0, sizeof(*st));
     st->vc = vc; st->a = a;
+    trailc_init(&st->trail, a);
     return st;
+}
+
+/* SX3: mark / undo-to-mark.  The trail restores parent[]; the mark itself
+ * restores the append-only pieces (n, unsat) by truncation.  Terms above the
+ * mark are simply forgotten -- euf_add re-initializes parent/pstamp on reuse,
+ * and trailc_undo_to skips entries for truncated slots. */
+EufMark euf_mark(EufState *st) {
+    TrailCMark tm = trailc_mark(&st->trail);
+    EufMark m = { tm.len, tm.level, st->n, st->unsat };
+    return m;
+}
+
+void euf_undo_to(EufState *st, EufMark m) {
+    TrailCMark tm = { m.trail_len, m.trail_level };
+    trailc_undo_to(&st->trail, tm, st->parent, m.n);
+    st->n     = m.n;
+    st->unsat = m.unsat;
+}
+
+/* SX3 seam: TUR_REFINE_EUF=rebuild restores the per-cube euf_new path so the
+ * corpus can be replayed against both.  Env-only, like
+ * TUR_REFINE_NO_DISCHARGE; default is incremental. */
+bool euf_incremental_mode(void) {
+    static int mode = -1;
+    if (mode < 0) {
+        const char *e = getenv("TUR_REFINE_EUF");
+        mode = !(e && strcmp(e, "rebuild") == 0);
+    }
+    return mode != 0;
 }
 
 bool euf_assert_eq(EufState *st, VCTerm *x, VCTerm *y) {
@@ -203,9 +265,23 @@ RefineDecision refine_s1_decide(RefineVC *vc, Arena *a) {
     if (!refine_cubes_build(vc, a, &cs)) return refine_unknown();
     if (cs.trivial || cs.n == 0) return refine_valid();
 
+    /* SX3: one state, mark/undo per cube, instead of a fresh euf_new per
+     * cube -- the arrays and trail grow once and are reused.  Each cube still
+     * starts from the empty partition (the mark is taken on the empty state),
+     * so verdicts and cap telemetry are identical to the rebuild path by
+     * construction. */
+    EufState *inc = euf_incremental_mode() ? euf_new(vc, a) : NULL;
     for (uint32_t i = 0; i < cs.n; i++) {
-        EufState *st = euf_new(vc, a);
-        if (euf_assert_cube(st, &cs.cubes[i])) return refine_unknown();  /* cube survived */
+        bool survived;
+        if (inc) {
+            EufMark m = euf_mark(inc);
+            survived = euf_assert_cube(inc, &cs.cubes[i]);
+            euf_undo_to(inc, m);
+        } else {
+            EufState *st = euf_new(vc, a);
+            survived = euf_assert_cube(st, &cs.cubes[i]);
+        }
+        if (survived) return refine_unknown();  /* cube survived */
     }
     return refine_valid();
 }

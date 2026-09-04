@@ -1,6 +1,14 @@
 name: CI
 
 on:
+  # `branches: [main]` is load-bearing beyond the obvious: it is what keeps this
+  # workflow off the `ci-metrics` orphan branch, which tools/ci/publish-timings.sh
+  # pushes to on every green `main` run.  That branch carries no source at all
+  # (one JSONL file per year plus a README), so a build there would be both
+  # meaningless and self-perpetuating -- each publish would trigger a run whose
+  # own publish triggers another.  Do NOT widen this to `branches-ignore` or an
+  # unfiltered `push:` without excluding ci-metrics explicitly.  The publish
+  # commits additionally carry [skip ci] as a second, independent layer.
   push:
     branches: [main]
   pull_request:
@@ -101,16 +109,119 @@ jobs:
 
       - name: Run fixture suite (single shard)
         # Sharding temporarily disabled -- run the whole fixture corpus in one
-        # shard. To re-enable, restore the shard matrix axis above and add back:
-        #   env:
-        #     TUR_TEST_SHARD: ${{ matrix.shard }}
-        run: ctest --output-on-failure --progress --test-dir build -R '^tur_tests$'
+        # shard. To re-enable, restore the shard matrix axis above and add
+        # `TUR_TEST_SHARD: ${{ matrix.shard }}` to the env block below.
+        #
+        # TUR_SANITIZER_GATE makes a UBSan/ASan finding from `tur` ITSELF fail
+        # the run, rather than printing into a log nobody reads. That
+        # silent-report mode is how `fat_captures_borrowed` was read
+        # uninitialized on 60 fixtures, on every run, for as long as it existed,
+        # without anything ever going red
+        # (docs/archive/history/fat-captures-borrowed-read-uninitialized.md).
+        #
+        # Armed on BOTH legs. It was Linux-only for exactly one PR, because the
+        # zero-findings measurement behind arming it had only been taken on
+        # Linux/GCC and UBSan findings are precisely the class of thing that
+        # varies with toolchain -- different struct padding, different
+        # uninitialized bytes, different implementation-defined corners. The
+        # macOS half has since been measured: 0 findings across 2703 fixtures on
+        # macOS 27.0 / Apple clang 21 / arm64, and confirmed to be a REAL zero
+        # rather than a broken detector by a positive control (a planted signed
+        # overflow in main() is caught, attributed to its fixture and phase, and
+        # fails the run). A gate that reports nothing because its pattern does
+        # not match the local sanitizer looks exactly like a clean tree, and
+        # this gate has already had that failure once -- note_sanitizer was
+        # missing from run.sh's `export -f` list.
+        #
+        # Caveat if this reddens the macOS leg and not a local run: the
+        # measurement was taken on a local Apple-silicon Mac, NOT on the
+        # `macos-latest` runner image, whose macOS and Xcode versions differ.
+        # Same libubsan lineage and architecture, so strong evidence and not a
+        # proof. A first finding here is more likely a genuine version-specific
+        # one than a broken gate -- read the uploaded sanitizer-findings
+        # artifact before assuming otherwise.
+        # See docs/archive/sanitizer-gate-not-armed-in-ci.md.
+        #
+        # --output-junit: per-suite name/status/duration for the timing trend
+        # (docs/upcoming/suite-timing-trends-plan.md).  It writes its OWN file
+        # rather than sharing one with the auxiliary step below, because a
+        # single path would let that second ctest invocation overwrite this
+        # one and silently drop tur_tests -- the most valuable series here.
+        # The XML also embeds each test's stdout in <system-out>, even under
+        # --output-on-failure, which is where the TUR_SKIP markers are read
+        # from; no -V or tee plumbing is needed.
+        env:
+          TUR_SANITIZER_GATE: "1"
+        run: ctest --output-on-failure --progress --test-dir build -R '^tur_tests$' --output-junit results-main.xml
 
       - name: Run auxiliary suites (once per OS)
         # Sharding temporarily disabled -- previously gated on `matrix.shard == '1/4'`
         # so the auxiliary suites ran only on the first shard. With a single shard
         # this runs unconditionally once per OS.
-        run: ctest --output-on-failure --progress --test-dir build -E '^tur_tests$'
+        #
+        # -j: this step runs ~105 targets, so without it wall time is their sum.
+        # The count must be explicit -- through CMake 3.28 a bare `-j` is
+        # accepted silently and does nothing (see the Justfile `test` recipe).
+        # getconf _NPROCESSORS_ONLN is portable across the Linux and macOS
+        # runners; nproc is GNU-only.
+        # Safe for the harnesses that fan out across nproc internally
+        # (turi_fixture_tests, tur_jit_fixture_tests) because those ARE marked
+        # RUN_SERIAL in CMakeLists.txt, so ctest never co-schedules two of them.
+        # Note the repl-spice targets are NOT uniformly RUN_SERIAL -- only
+        # reload/watch/jit are; call/load/linklibs run in parallel. They drive a
+        # single REPL rather than fanning out, so that is fine, but it does mean
+        # they no longer run one-at-a-time: each needs its own leak-detection
+        # opt-out for the interpreter's process-lifetime bindings, which they
+        # now carry. The step above is a single RUN_SERIAL target, so -j would
+        # do nothing there.
+        # --output-junit to a DISTINCT path from the step above -- see the note
+        # there. The two files are merged by the collect step.
+        run: ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build -E '^tur_tests$' --output-junit results-aux.xml
+
+      # `always()`, NOT `continue-on-error` on the ctest steps: a suite that
+      # regressed into a timeout is exactly the signal this exists to catch, so
+      # the timings must be collected on a red run too -- but making the test
+      # steps non-fatal to achieve that would turn the repo's main gate green
+      # while tests fail. This gets the same data without touching the gate.
+      - name: Collect suite timings
+        if: always()
+        run: |
+          # NOTE the build/ prefix: a RELATIVE --output-junit path is resolved
+          # against --test-dir, not the working directory, so ctest wrote these
+          # into build/. Reading them from the workspace root instead yields
+          # zero rows and (because the script only warns) a silently empty
+          # dashboard -- which is exactly how this would have shipped broken.
+          python3 tools/ci/collect-suite-timings.py --build-dir build \
+            build/results-main.xml build/results-aux.xml > timings.jsonl || true
+          if [ ! -s timings.jsonl ]; then
+            echo "::warning::no suite timings collected -- check the ctest --output-junit paths above"
+          else
+            echo "collected $(wc -l < timings.jsonl) suite rows"
+          fi
+
+      - name: Upload suite timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timings-test-${{ matrix.os }}
+          path: timings.jsonl
+          if-no-files-found: warn
+          retention-days: 7
+
+      # The gate armed above prints only the ten most common findings to the
+      # console; the per-fixture attribution for ALL of them is in this file.
+      # Without it a red gate on a toolchain that is not to hand -- which, given
+      # the whole reason this took a macOS measurement, is the likely case --
+      # says "N findings" and nothing about where. `if-no-files-found: ignore`
+      # because a green run writes no such file, which is the normal outcome.
+      - name: Upload compiler sanitizer findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitizer-findings-${{ matrix.os }}
+          path: build/sanitizer-findings.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       # Save after everything (incl. the fixture suite, which also feeds ccache
       # via run.sh) regardless of whether the suite passed. The exact key never
@@ -140,8 +251,11 @@ jobs:
     #      the engine.  It is fast (~2 min on Apple Silicon, run serially and
     #      fanned out internally), but it is a second full corpus pass and
     #      belongs on its own clock.
-    #   3. `jit` is still an experiment (--enable=jit, TUR-W0060), so it should
-    #      not gate merges at the same strength as the AOT suite.
+    #   3. The `jit` experiment graduated 2026-08-17, but the ENGINE is still
+    #      opt-in at build time (-DTUR_JIT=ON) and `cc` is still the default
+    #      engine, so this leg exercises a configuration most builds do not
+    #      have.  It should not gate merges at the same strength as the AOT
+    #      suite, which covers what everyone actually ships.
     timeout-minutes: 45
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -200,7 +314,7 @@ jobs:
       # no coreutils `timeout`), matching the smoke check in the `test` job.
       - name: Verify the JIT engine is actually present
         run: |
-          out=$(perl -e 'alarm 30; exec @ARGV' ./build/tur --enable=jit jit 2>&1) || true
+          out=$(perl -e 'alarm 30; exec @ARGV' ./build/tur jit 2>&1) || true
           echo "$out"
           case "$out" in
             *"usage: tur jit"*)
@@ -297,9 +411,26 @@ jobs:
           # any other break in test registration would sail through as a green
           # step that ran no tests -- the same vacuous-pass shape that step
           # exists to prevent.
+          # tur_flags_tests is here as well as in the `test` job, and the
+          # duplication is the point: it is the only harness carrying the
+          # `jit-ffi-*` cases, and EVERY one of them is gated on the engine
+          # being present (`HAS_JIT`), so in the `test` job -- which builds
+          # without -DTUR_JIT=ON -- they all SKIP.  Before this line nothing
+          # in CI ran run-flags.sh against a JIT build on any runner, which
+          # meant the interpreter's whole dynamic-FFI surface (call-ptr,
+          # thunk-backed extern-c, callbacks, struct-by-value) was asserted
+          # only by hand.  The aarch64 HFA refusal in particular is
+          # `#if defined(__aarch64__)` and had NEVER executed anywhere: this
+          # macOS leg is the only arm64 machine in the matrix, so this line
+          # is what turns that case from documentation into a test.
+          #
+          # --output-junit rides along for the suite-timing trend
+          # (docs/upcoming/suite-timing-trends-plan.md).  These rows carry
+          # jit=true from the build cache, so they form their own series and
+          # are never averaged against the `test` job's jit=false rows.
           set +e
-          ctest --test-dir build -V --no-tests=error \
-                -R '^(tur_jit_fixture_tests|tur_repl_spice_jit)$' 2>&1 \
+          ctest --test-dir build -V --no-tests=error --output-junit results-jit.xml \
+                -R '^(tur_jit_fixture_tests|tur_repl_spice_jit|tur_flags_tests)$' 2>&1 \
             | tee jit-ctest.log \
             | grep --line-buffered -aE '^[0-9]+: (FAIL|.*passed,|.*fallback)|^ *Start +[0-9]+:|[0-9]+% tests passed|\*\*\*|Errors while running CTest'
           rc=${PIPESTATUS[0]}
@@ -316,12 +447,85 @@ jobs:
           path: jit-ctest.log
           if-no-files-found: warn
 
+      - name: Collect suite timings
+        if: always()
+        run: |
+          # build/ prefix: a relative --output-junit path resolves against
+          # --test-dir. See the same note in the `test` job.
+          python3 tools/ci/collect-suite-timings.py --build-dir build \
+            build/results-jit.xml > timings.jsonl || true
+          if [ ! -s timings.jsonl ]; then
+            echo "::warning::no suite timings collected -- check the ctest --output-junit paths above"
+          else
+            echo "collected $(wc -l < timings.jsonl) suite rows"
+          fi
+
+      - name: Upload suite timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timings-jit-${{ matrix.os }}
+          path: timings.jsonl
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Save ccache
         if: always()
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-jit-${{ runner.os }}-${{ github.sha }}
+
+  # Phase 3A/4 of docs/upcoming/suite-timing-trends-plan.md.
+  #
+  # A SEPARATE job, not a step on `test`, specifically because of the
+  # concurrency group.  `group: ci-metrics` serializes publishers so two runs
+  # cannot race the same branch -- but hung on the `test` job it would serialize
+  # the whole build-and-test matrix across runs, which is an enormous cost for a
+  # metrics feature.  Isolated here it serializes only an artifact download and
+  # a git push.
+  publish-timings:
+    name: Publish suite timings
+    needs: [test, jit, web-smoke]
+    # always(): a red run's timings are the interesting ones (a suite that
+    # regressed into a timeout), so publish regardless of upstream job status.
+    # Restricted to main pushes: PR runs -- especially from forks, whose token
+    # is read-only -- collect and upload artifacts but must never write.
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      # Scoped to this job rather than declared workflow-wide: a top-level block
+      # would silently re-scope every other job's token too.
+      contents: write
+    concurrency:
+      group: ci-metrics
+      cancel-in-progress: false
+    steps:
+      # Full history: the publish script pushes a branch, and a shallow clone
+      # can have a push rejected with "shallow update not allowed".
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: timings-*
+          path: timings-artifacts
+
+      - name: Merge and publish
+        run: |
+          set -euo pipefail
+          # Every leg of both matrices contributes a file; each row carries its
+          # own (build_type, os, cc, nproc, jit) tuple, so they coexist in one
+          # log and are separated at query time rather than at write time.
+          find timings-artifacts -name 'timings.jsonl' -print0 \
+            | xargs -0 cat > all-timings.jsonl 2>/dev/null || true
+          if [ ! -s all-timings.jsonl ]; then
+            echo "::warning::no suite timings collected; nothing to publish"
+            exit 0
+          fi
+          echo "collected $(wc -l < all-timings.jsonl) rows from $(find timings-artifacts -name timings.jsonl | wc -l) leg(s)"
+          bash tools/ci/publish-timings.sh all-timings.jsonl
 
   windows:
     name: Windows build (MSYS2/UCRT64)
@@ -593,7 +797,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python doc deps (markdown)
-        run: python3 -m pip install --upgrade markdown
+        run: python3 -m pip install --upgrade -r tools/requirements.txt
 
       - name: Set up Emscripten
         uses: mymindstorm/setup-emsdk@v14
@@ -640,25 +844,122 @@ jobs:
         working-directory: web
         run: npx playwright install --with-deps chromium
 
+      # The mobile project is devices['iPhone 13'], which is WebKit -- so with
+      # only Chromium installed, every one of its 32 tests died at
+      # `browserType.launch: Executable doesn't exist at .../webkit-*/pw_run.sh`
+      # before any test body ran, and the step's continue-on-error hid it.
+      # That is the whole mobile suite (tabs, project load/download, the split
+      # handle, the PWA manifest, mobile LSP) asserting nothing.
+      #
+      # Its own step, and non-blocking, because the job's gate is
+      # deploy-gate.spec.js on Chromium: a WebKit download that fails on a
+      # runner must leave the mobile suite exactly as unrun as it is today, not
+      # redden a job that was going to pass.
+      - name: Install Playwright WebKit (for the mobile project, non-blocking)
+        working-directory: web
+        continue-on-error: true
+        run: npx playwright install --with-deps webkit
+
       - name: Run deploy-gate smoke test
         working-directory: web
         run: npx playwright test deploy-gate.spec.js --project=desktop
 
+      # docs-offline.spec.js asserts a property of the *built* artefact: the
+      # service worker precaching the docs pack, and the app booting from cache
+      # with the origin gone. Vite's dev server rewrites the module graph on the
+      # fly, and none of those dev-only URLs are precached, so the spec skips
+      # itself unless a production build exists. Build one, or the spec passes
+      # by not running -- which looks identical to passing.
+      - name: Build the web bundle (for the offline docs spec)
+        working-directory: web
+        run: npm run build
+
+      # Paths, not bare filenames: Playwright treats a positional argument as a
+      # regex over the test file path, so `smoke.spec.js` also matches
+      # `prod-smoke.spec.js` -- which tests the *live* turmeric-lang.com, has
+      # its own config, and is meant to be run by `npm run test:prod`. Pulled in
+      # here it contributed three standing failures (two from being pointed at
+      # localhost instead of production, one from a stale hardcoded guide list),
+      # which this step's continue-on-error quietly absorbed.
+      # This list is the whole of what the desktop suite runs: Playwright only
+      # picks up the paths named here, so a spec file that is not on it passes
+      # by not running -- the same trap the docs-offline note above describes,
+      # one level up. lsp.spec.js and the navigation specs
+      # (try-turmeric-navigation-and-minimap-plan §8) were written against a
+      # bundle CI is the first place to actually build, so they are named here
+      # rather than left to be discovered.
+      # Each non-blocking suite also writes JUnit (one <testcase> per test)
+      # for the timings step below, so the suites get /ci rows like every
+      # ctest suite -- including an honest `status: fail` on a run whose job
+      # stayed green (docs/archive/try-turmeric-browser-suites-green-while-failing.md).
       - name: Run broader smoke suite (desktop, non-blocking)
+        id: desktop
         working-directory: web
         continue-on-error: true
-        run: npx playwright test --project=desktop
-          smoke.spec.js diag.spec.js guide-toggle.spec.js meta-commands.spec.js
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: results-desktop.xml
+        run: npx playwright test --project=desktop --reporter=list,junit
+          tests/smoke.spec.js tests/diag.spec.js tests/guide-toggle.spec.js
+          tests/meta-commands.spec.js tests/docs-pane.spec.js
+          tests/docs-offline.spec.js tests/lsp.spec.js
+          tests/minimap.spec.js tests/footer.spec.js
+          tests/lang-picker.spec.js tests/sw-dev.spec.js tests/trace.spec.js
 
       - name: Run mobile smoke suite (non-blocking)
+        id: mobile
         working-directory: web
         continue-on-error: true
-        run: npx playwright test --project=mobile
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: results-mobile.xml
+        run: npx playwright test --project=mobile --reporter=list,junit
 
-      - name: Upload Playwright report on failure
-        if: failure()
+      # A non-blocking failure must still announce itself: on the job summary
+      # and as a workflow annotation, not five thousand lines down a log.
+      - name: Report browser suite outcomes
+        if: always()
+        run: |
+          {
+            echo "### Try Turmeric browser suites"
+            echo
+            echo "| suite | outcome |"
+            echo "|---|---|"
+            echo "| deploy-gate (blocking) | passed |"
+            echo "| desktop (non-blocking) | ${{ steps.desktop.outcome }} |"
+            echo "| mobile (non-blocking) | ${{ steps.mobile.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.desktop.outcome }}" = "failure" ]; then
+            echo "::warning title=Try Turmeric desktop suite failed::non-blocking, but see the playwright-report artifact and the web_desktop row on /ci"
+          fi
+          if [ "${{ steps.mobile.outcome }}" = "failure" ]; then
+            echo "::warning title=Try Turmeric mobile suite failed::non-blocking, but see the playwright-report artifact and the web_mobile row on /ci"
+          fi
+
+      - name: Collect browser suite timings
+        if: always()
+        run: |
+          python3 tools/ci/collect-playwright-timings.py \
+            --suite web_desktop web/results-desktop.xml \
+            --suite web_mobile  web/results-mobile.xml > timings.jsonl || true
+          echo "collected $(wc -l < timings.jsonl) browser suite rows"
+
+      - name: Upload browser suite timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timings-web
+          path: timings.jsonl
+          if-no-files-found: warn
+          retention-days: 7
+
+      # `!cancelled()`, not `failure()`: the suites are continue-on-error, so a
+      # failing suite never put the job into a failure state and the report
+      # was uploaded only when nothing had failed -- the one case it was not
+      # needed.  The report is the evidence; upload it every time.
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: web/playwright-report/
+          if-no-files-found: ignore
           retention-days: 7

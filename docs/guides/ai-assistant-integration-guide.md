@@ -347,7 +347,7 @@ A clean file produces `"content":[{"type":"text","text":"[]"}]` in the response
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `tur: command not found` | `tur` not on PATH | Add `build/` to `PATH`, or run `just install` |
+| `tur: command not found` | `tur` not on PATH | Add the `build/` directory to `PATH` |
 | `tur mcp` produces no output at all | Wrong framing: client sent `Content-Length` headers instead of newline-delimited JSON | `tur mcp` speaks MCP stdio (newline-terminated JSON), not LSP. Check the [Transport framing](#transport-framing) section. |
 | Tools missing from Copilot/OpenCode | Config file not loaded | Confirm you opened the repo root, not a subdirectory |
 | Empty tool responses | File path not absolute | Use full `/path/to/file.tur` paths |
@@ -356,15 +356,11 @@ A clean file produces `"content":[{"type":"text","text":"[]"}]` in the response
 
 ---
 
-## Known limitations and open issues
-
-These are tracked concerns carried into the current release. They are
-documented here so AI assistants and contributors are aware of them when
-working with this integration.
+## Test coverage
 
 ### Automated test coverage
 
-End-to-end JSON-RPC coverage for the MCP server and the new LSP handlers
+End-to-end JSON-RPC coverage for the MCP server and the LSP handlers
 lives in `tests/lsp/mcp_lsp_test.py` (driven by `tests/lsp/run-mcp-lsp.sh`,
 wired into ctest as `tur_mcp_lsp_tests`). It spawns `tur mcp` and `tur lsp`
 as subprocesses and drives each with its correct framing: **newline-delimited
@@ -379,14 +375,6 @@ full project compile; if the rest of the test suite passes, the MCP
 `build` tool's only added behavior (subprocess launch + exit-status
 plumbing) is exercised by every other tool that uses the same
 `run_subprocess` helper.
-
-### Doc-purge commits should be reviewed separately
-
-The branch that introduced MCP+LSP support also deletes approximately 25
-`docs/guides/*-plan.md` and `docs/upcoming/*-plan.md` files (~9,645 lines
-removed). If you are reviewing a PR that bundles both changes, consider
-requesting that the doc purge be split into its own PR so the MCP/LSP feature
-diff stays focused.
 
 ### Build and test status
 

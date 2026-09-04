@@ -63,8 +63,8 @@
 
 #define REACTOR_INITIAL_CAP 16
 
-/* closure-drop-glue (async/reactor blocker): under `--enable=closure-drop-glue`
- * every heap fat-closure env the emitted program builds carries an 8-byte
+/* closure-drop-glue (async/reactor blocker): since closure-drop-glue graduated
+ * (2026-07-22) every heap fat-closure env the emitted program builds carries an 8-byte
  * drop-glue header at env[-1] and the fat pointer is handed back PAST it.  The
  * reactor and fiber group own such callback boxes and free them at teardown,
  * but this precompiled libturi C cannot name the per-program `tur_closure_drop`.
@@ -175,6 +175,41 @@ static int64_t now_ms(void) {
 /* ------------------------------------------------------------------ */
 
 /*
+ * The three fat-closure callback shapes the reactor invokes.
+ *
+ * These typedefs MUST match, exactly, the C signature the emitter gives the
+ * Turmeric callback -- `-fsanitize=function` (and CFI, CET/BTI, WASM
+ * `call_indirect`) compares the pointer type at the indirect call against the
+ * callee's real type, and a mismatch is UB even when the two happen to share
+ * an ABI slot, as `int64_t` and `void *` do on AArch64 and x86-64.
+ *
+ * The mapping follows the FAT-CLOSURE entry convention, not the plain-defn
+ * one: slot 0 of the fat box holds either a fatshim
+ * (`__tur_fatshim_void_int64_t...`) or a capturing lambda's lifted entry
+ * (`__fn_N(void *env, ...)`), and BOTH spell every value parameter in the
+ * int64 carrier -- a `ptr<void>` argument is `int64_t`, not `void *`.  (A
+ * bare top-level defn does emit `void *` for `ptr<void>`, but a callback
+ * never reaches this file as a bare entry: registration always wraps it in
+ * a fat box, and the box's slot-0 entry is what these typedefs must match.)
+ * Only the leading env parameter is `void *`.  A `nil` return is `void`.
+ *
+ * These typedefs previously spelled the trailing `user` parameter `void *`,
+ * which matched the pre-fat-normalization era; the 2026-08-16 effect-row
+ * fat-normalization moved lambda callbacks onto the carrier-typed entries
+ * and every reactor fixture then tripped clang's -fsanitize=function here.
+ * If you change a callback's Turmeric signature, change the matching typedef
+ * -- nothing cross-checks them, which is how these drift.  See
+ * docs/archive/reactor-fd-callback-fn-ptr-type-mismatch.md and
+ * docs/archive/emitter-thunk-type-return-mismatch.md.
+ */
+/* (env, id, events|signum|value, user) : nil -- fd, signal, and chan sources */
+typedef void (*TurFdCbFn)(void *, int64_t, int64_t, int64_t);
+/* (env, id, user) : nil -- timer sources */
+typedef void (*TurTimerCbFn)(void *, int64_t, int64_t);
+/* (env, user) : nil -- a fiber body */
+typedef void (*TurFiberBodyFn)(void *, int64_t);
+
+/*
  * Call a Turmeric closure with signature (id:int, events:int, user:ptr<void>)
  * using the fat-pointer calling convention.  Reused for signal and chan
  * callbacks where the second argument carries signum/value respectively.
@@ -183,8 +218,8 @@ static void call_tur_fd_cb(int64_t tur_cb, int64_t id, int events,
                             int64_t user_data) {
     if (!tur_cb) return;
     int64_t *fat = (int64_t *)(intptr_t)tur_cb;
-    typedef int64_t (*fn3_t)(void *, int64_t, int64_t, int64_t);
-    ((fn3_t)(intptr_t)fat[0])((void *)fat, id, (int64_t)events, user_data);
+    ((TurFdCbFn)(intptr_t)fat[0])((void *)fat, id, (int64_t)events,
+                                  user_data);
 }
 
 /*
@@ -194,8 +229,7 @@ static void call_tur_fd_cb(int64_t tur_cb, int64_t id, int events,
 static void call_tur_timer_cb(int64_t tur_cb, int64_t id, int64_t user_data) {
     if (!tur_cb) return;
     int64_t *fat = (int64_t *)(intptr_t)tur_cb;
-    typedef int64_t (*fn2_t)(void *, int64_t, int64_t);
-    ((fn2_t)(intptr_t)fat[0])((void *)fat, id, user_data);
+    ((TurTimerCbFn)(intptr_t)fat[0])((void *)fat, id, user_data);
 }
 
 /*
@@ -206,8 +240,7 @@ static void call_tur_chan_cb(int64_t tur_cb, int64_t id, int64_t value,
                               int64_t user_data) {
     if (!tur_cb) return;
     int64_t *fat = (int64_t *)(intptr_t)tur_cb;
-    typedef int64_t (*fn3_t)(void *, int64_t, int64_t, int64_t);
-    ((fn3_t)(intptr_t)fat[0])((void *)fat, id, value, user_data);
+    ((TurFdCbFn)(intptr_t)fat[0])((void *)fat, id, value, user_data);
 }
 
 /* ------------------------------------------------------------------ */
@@ -739,10 +772,17 @@ typedef struct LocalFiber {
     bool               done;        /* ran to completion */
     bool               in_ready;    /* currently linked into the ready queue */
     struct LocalFiberGroup *group;  /* owning group (for park callbacks) */
-    /* Park state. The park callback is a C fat-closure shaped to match the
-     * reactor's 3-arg fat-pointer convention: park_cb_fat[0] is the C handler
-     * and park_cb_fat[1] is this LocalFiber*, recovered as `self`. */
-    int64_t            park_cb_fat[2];
+    /* Park state.  Each park callback is a C fat-closure matching the
+     * reactor's fat-pointer convention: slot [0] is the C handler and slot [1]
+     * is this LocalFiber*, recovered as `self`.
+     *
+     * There are TWO because the reactor calls fd/chan sources with four
+     * arguments and timer sources with three, and one handler cannot carry
+     * both types.  `tur_local_park_fd` registers both at once (an fd source
+     * plus a companion timeout), so they must be separate storage rather than
+     * one array rewritten per registration. */
+    int64_t            park_cb_fat[2];        /* fd / chan wake */
+    int64_t            park_timer_cb_fat[2];  /* timeout wake */
     int64_t            park_fd_src;     /* reactor source id, or -1 */
     int64_t            park_timer_src;  /* reactor source id, or -1 */
     int64_t            park_chan_src;   /* reactor source id, or -1 */
@@ -875,8 +915,8 @@ static void local_fiber_trampoline(TurFiber *tf) {
     LocalFiber *lf = g ? g->current : NULL;
     if (!lf || !lf->tur_body) return;
     int64_t *fat = (int64_t *)(intptr_t)lf->tur_body;
-    typedef int64_t (*fn1_t)(void *, int64_t);
-    ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)lf->user_data);
+    ((TurFiberBodyFn)(intptr_t)fat[0])((void *)fat,
+                                       (int64_t)(intptr_t)lf->user_data);
 }
 
 int64_t tur_local_spawn(void *gp, int64_t tur_body, void *user_data) {
@@ -972,17 +1012,12 @@ int64_t tur_reactor_run_fibers(void *gp) {
 /* ---- park bridge (Phase F4-F5) ---- */
 
 /*
- * Wake callback for a parked fiber. Registered with the reactor as a C
- * fat-closure: park_cb_fat[0] is this handler, park_cb_fat[1] is the
- * LocalFiber*. The reactor invokes it via the fat-pointer convention --
- * fd/chan sources call it with 3 args (self, id, events/value, user) and
- * timer sources with 2 (self, id, user); we only read `arg2` for the
- * fd/chan path and disambiguate the timeout by source id, so the differing
- * arity is harmless.
+ * Wake a parked fiber.  Shared body behind the two entry points below.
+ *
+ * `arg2` is the fd event mask or the received chan value; a timer wake has no
+ * such argument and is disambiguated by source id instead.
  */
-static int64_t local_park_wake_cb(void *self, int64_t id, int64_t arg2,
-                                   int64_t user) {
-    (void)user;
+static void local_park_wake(void *self, int64_t id, int64_t arg2) {
     int64_t *fat = (int64_t *)self;
     LocalFiber *lf = (LocalFiber *)(intptr_t)fat[1];
     LocalFiberGroup *g = lf->group;
@@ -996,7 +1031,33 @@ static int64_t local_park_wake_cb(void *self, int64_t id, int64_t arg2,
     /* One-shot: drop the fd/chan source and any companion timeout source. */
     local_fiber_clear_park(lf);
     ready_push(g, lf);
-    return 0;
+}
+
+/*
+ * Wake callbacks for a parked fiber. Registered with the reactor as a C
+ * fat-closure: park_cb_fat[0] is one of these handlers, park_cb_fat[1] is the
+ * LocalFiber*.
+ *
+ * There are two because the reactor calls fd/chan sources with four arguments
+ * and timer sources with three.  A single four-parameter handler used to serve
+ * both, on the reasoning that the extra argument goes unread so "the differing
+ * arity is harmless" -- true of the ABI, false of the language: an indirect
+ * call through a mismatched function-pointer type is UB regardless of whether
+ * the callee reads the extra slot, and `-fsanitize=function` reports it (see
+ * docs/archive/reactor-fd-callback-fn-ptr-type-mismatch.md).  Each entry point
+ * now matches its call site's typedef exactly.
+ */
+static void local_park_wake_fd_cb(void *self, int64_t id, int64_t arg2,
+                                  int64_t user) {
+    (void)user;
+    local_park_wake(self, id, arg2);
+}
+
+static void local_park_wake_timer_cb(void *self, int64_t id, int64_t user) {
+    (void)user;
+    /* A timer wake carries no event mask; local_park_wake ignores arg2 on the
+     * timeout path, which `id == lf->park_timer_src` selects. */
+    local_park_wake(self, id, 0);
 }
 
 int64_t tur_local_park_fd(void *gp, int64_t fd, int64_t events,
@@ -1006,7 +1067,7 @@ int64_t tur_local_park_fd(void *gp, int64_t fd, int64_t events,
     LocalFiber *lf = g->current;
     if (!lf) return TUR_LOCAL_NOT_IN_FIBER; /* not inside a fiber */
 
-    lf->park_cb_fat[0] = (int64_t)(intptr_t)local_park_wake_cb;
+    lf->park_cb_fat[0] = (int64_t)(intptr_t)local_park_wake_fd_cb;
     lf->park_cb_fat[1] = (int64_t)(intptr_t)lf;
     int64_t cb = (int64_t)(intptr_t)lf->park_cb_fat;
 
@@ -1018,13 +1079,18 @@ int64_t tur_local_park_fd(void *gp, int64_t fd, int64_t events,
     tur_reactor_disown_cb(g->reactor, lf->park_fd_src);
 
     if (timeout_ms >= 0) {
+        /* A timer source is invoked with the 3-arg timer type, so it gets its
+         * own fat closure rather than sharing the fd one above. */
+        lf->park_timer_cb_fat[0] = (int64_t)(intptr_t)local_park_wake_timer_cb;
+        lf->park_timer_cb_fat[1] = (int64_t)(intptr_t)lf;
+        int64_t tcb = (int64_t)(intptr_t)lf->park_timer_cb_fat;
         lf->park_timer_src =
-            tur_reactor_add_timer(g->reactor, timeout_ms, cb, NULL);
+            tur_reactor_add_timer(g->reactor, timeout_ms, tcb, NULL);
         /* On timer-registration failure just park without a timeout. */
         tur_reactor_disown_cb(g->reactor, lf->park_timer_src);
     }
 
-    /* Yield to the driver; resumed by local_park_wake_cb. */
+    /* Yield to the driver; resumed by one of the local_park_wake_* handlers. */
     tur_fiber_yield(lf->fiber, NULL);
     return lf->park_result;
 }
@@ -1035,7 +1101,8 @@ int64_t tur_local_park_chan(void *gp, void *chan) {
     LocalFiber *lf = g->current;
     if (!lf) return TUR_LOCAL_NOT_IN_FIBER; /* not inside a fiber */
 
-    lf->park_cb_fat[0] = (int64_t)(intptr_t)local_park_wake_cb;
+    /* A chan source is invoked with the 4-arg fd/chan type. */
+    lf->park_cb_fat[0] = (int64_t)(intptr_t)local_park_wake_fd_cb;
     lf->park_cb_fat[1] = (int64_t)(intptr_t)lf;
     int64_t cb = (int64_t)(intptr_t)lf->park_cb_fat;
 
@@ -1046,7 +1113,7 @@ int64_t tur_local_park_chan(void *gp, void *chan) {
     /* cb is &lf->park_cb_fat (inline field), not a heap box -- disown. */
     tur_reactor_disown_cb(g->reactor, lf->park_chan_src);
 
-    /* Yield to the driver; resumed by local_park_wake_cb with the value.
+    /* Yield to the driver; resumed by local_park_wake_fd_cb with the value.
      * Like all reactor channel watchers, prompt delivery on the same thread
      * needs a reactor-wake after the chan-send (see reactor-add-chan). */
     tur_fiber_yield(lf->fiber, NULL);

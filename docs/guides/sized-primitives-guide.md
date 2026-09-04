@@ -178,25 +178,32 @@ of fully-known width.
 
 ## Bitwise Operations
 
-`bit-and`, `bit-or`, `bit-xor`, `bit-shl`, and `bit-shr` operate on the
-canonical `int` type. To use them on narrower types, cast to `int`, operate,
-then cast back:
+`bit-and`, `bit-or`, `bit-xor`, `bit-shl`, and `bit-shr` are
+**kind-preserving**: they operate on any integer kind, both operands must
+have the same kind, and the result has that kind -- no round-trip through
+`int` is needed:
 
 ```turmeric
-(let [x 0xF0u8
-      y 0x0Fu8]
-  (as uint8 (bit-and (as int x) (as int y))))  ; => 0u8
+(bit-and 0xF0u8 0x0Fu8)          ; uint8 & uint8 -> 0u8
+(bit-or  65280u16 255u16)        ; uint16 -> 65535u16
+(bit-shl 1u8 3u8)                ; uint8 -> 8u8
+(+ (bit-and 100u16 255u16) 1u16) ; result is uint16, usable in uint16 ops
 ```
 ```sweet-exp
-let [x 0xF0u8
-     y 0x0Fu8]
-  as(uint8 bit-and(as(int x) as(int y)))  ; => 0u8
+bit-and(0xF0u8 0x0Fu8)          ; uint8 & uint8 -> 0u8
+bit-or(65280u16 255u16)         ; uint16 -> 65535u16
+bit-shl(1u8 3u8)                ; uint8 -> 8u8
++(bit-and(100u16 255u16) 1u16)  ; result is uint16, usable in uint16 ops
 ```
 
-See Phase C of the unboxing plan for kind-preserving bitwise ops.
+`bit-shr` on an unsigned kind is a logical shift (0-fills the high bits).
+Mixing kinds is rejected like any other mixed-width arithmetic; cast one
+side with `(as ...)` first.
 
 ## Test Surface
 
 The `numeric-types-cast` fixture covers the main casting scenarios.  The
 `sized-mixed-arith-error` fixture covers every operator that rejects
-mixed-width operands and expects `TUR-E0042` on each.
+mixed-width operands and expects `TUR-E0042` on each.  The
+`sized-bitwise-narrow` fixture covers kind-preserving bitwise operations on
+narrow integer kinds.

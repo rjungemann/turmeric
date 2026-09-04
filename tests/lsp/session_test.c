@@ -22,6 +22,7 @@
 #include "buf.h"
 #include "diag.h"
 #include "lsp_session.h"
+#include "lsp_scope.h"
 #include "lsp_sym.h"
 #include "platform_fs.h"  /* setenv on Windows */
 
@@ -52,8 +53,11 @@ static int stub_emit_error = 0;
  * parse" state, which is the normal state while typing). */
 static int stub_yield_nothing = 0;
 
+static void stub_fill_scope(void);
+
 static void stub_sym(LspSymbol *s, const char *name, const char *type,
-                     const char *file, int line, int c0, int c1) {
+                     const char *file, int line, int c0, int c1,
+                     LspSymKind kind) {
     memset(s, 0, sizeof(*s));
     snprintf(s->name, sizeof(s->name), "%s", name);
     snprintf(s->type_str, sizeof(s->type_str), "%s", type);
@@ -61,10 +65,12 @@ static void stub_sym(LspSymbol *s, const char *name, const char *type,
     s->line = line;
     s->col_start = c0;
     s->col_end = c1;
+    s->kind = kind;
 }
 
-int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
-                        int *count_out) {
+int tur_collect_symbols(const char *source_path, const char *logical_path,
+                        LspSymbol *out, int cap, int *count_out) {
+    (void)logical_path;   /* the stub has no spice tree to resolve against */
     *count_out = 0;
 
     /* The stdlib prime analyses an empty scratch file, which always compiles
@@ -75,18 +81,31 @@ int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
     if (is_prime) {
         if (cap >= 1)
             stub_sym(&out[(*count_out)++], "cons", "(fn [int int] : int)",
-                     STUB_STDLIB_DIR "/list.tur", 12, 7, 11);
+                     STUB_STDLIB_DIR "/list.tur", 12, 7, 11,
+                     LSP_KIND_FUNCTION);
         return 0;
     }
 
     if (stub_yield_nothing) return 1;
 
+    /* Locals ride the same call the globals do, because in the real collector
+     * they ride the same walk (main.c's one elaboration hook). */
+    stub_fill_scope();
+
     if (cap >= 1)
         stub_sym(&out[(*count_out)++], "local-fn", "(fn [int int] : int)",
-                 source_path, 3, 7, 15);
+                 source_path, 3, 7, 15, LSP_KIND_FUNCTION);
     if (cap >= 2)
         stub_sym(&out[(*count_out)++], "cons", "(fn [int int] : int)",
-                 STUB_STDLIB_DIR "/list.tur", 12, 7, 11);
+                 STUB_STDLIB_DIR "/list.tur", 12, 7, 11, LSP_KIND_FUNCTION);
+    /* A record type, so the kind mapping has something to get wrong. Its
+     * type_str is deliberately not a function type *and* not a struct-shaped
+     * one: before the kind field, this and a plain `def` were the same entry,
+     * because the only question anyone could ask was "does the rendered type
+     * start with (fn". */
+    if (cap >= 3)
+        stub_sym(&out[(*count_out)++], "Point", "Point",
+                 source_path, 5, 12, 17, LSP_KIND_STRUCT);
 
     if (stub_emit_error) {
         /* Diagnostics are reported against the temp file the server wrote, and
@@ -337,6 +356,154 @@ static void test_document_symbol_is_file_scoped(void) {
     buf_free(&out);
 }
 
+/* -------------------------------------------------------------------------
+ * Symbol kinds, documentHighlight, builtin fallback
+ * (try-turmeric-navigation-and-minimap-plan, M5)
+ * --------------------------------------------------------------------- */
+
+static void test_document_symbol_reports_real_kinds(void) {
+    fresh_session();
+    session_open("file:///project/main.tur", "(defn local-fn [a b] : int a)");
+
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"textDocument/documentSymbol\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/main.tur\"}}}");
+
+    /* 12 = Function, 23 = Struct. The old mapping could only answer 12 or 13,
+     * so a defstruct and a def were indistinguishable in an outline -- which
+     * is most of what makes an outline scannable. */
+    CHECK(contains(&out, "\"name\":\"local-fn\",\"kind\":12"),
+          "a function reports SymbolKind.Function");
+    CHECK(contains(&out, "\"name\":\"Point\",\"kind\":23"),
+          "a record type reports SymbolKind.Struct, not Variable");
+    buf_free(&out);
+}
+
+static void test_completion_kind_follows_the_symbol_kind(void) {
+    fresh_session();
+    session_open("file:///project/main.tur", "(P");
+
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"textDocument/completion\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/main.tur\"},"
+        "\"position\":{\"line\":0,\"character\":2}}}");
+
+    /* CompletionItemKind is a *different* enum from SymbolKind for the same
+     * distinction: 22 = Struct here, not 23. */
+    CHECK(contains(&out, "\"label\":\"Point\",\"kind\":22"),
+          "a type completes with a type icon, not a variable one");
+    buf_free(&out);
+}
+
+static void test_document_highlight_skips_comments_and_strings(void) {
+    fresh_session();
+    /* Four textual occurrences of `local-fn`, two of them real. The other two
+     * -- one in a comment, one inside a string literal -- are the exact cases
+     * a regular expression over the source cannot tell apart from a use.
+     *
+     * The definition sits at 0-based line 2, column 6, which is where the stub
+     * collector claims it is (line 3, col_start 7, both 1-based). That
+     * agreement is what the Write/Text distinction is keyed on. */
+    session_open("file:///project/main.tur",
+                 "(local-fn 1 2) ; local-fn again\\n"
+                 "(def s \\\"local-fn\\\")\\n"
+                 "(defn local-fn [a b] : int a)");
+
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"textDocument/documentHighlight\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/main.tur\"},"
+        "\"position\":{\"line\":0,\"character\":2}}}");
+
+    CHECK(contains(&out, "\"range\""), "documentHighlight answers ranges");
+    /* Exactly two ranges: count the range objects. */
+    int n = 0;
+    for (const char *p = out.data; (p = strstr(p, "\"range\":")) != NULL; p++) n++;
+    CHECK(n == 2, "the comment and the string literal are not occurrences");
+    CHECK(contains(&out,
+        "{\"start\":{\"line\":0,\"character\":1},"
+         "\"end\":{\"line\":0,\"character\":9}},\"kind\":1}"),
+          "a use is reported as text");
+    /* The definition is Write, not Text -- "which of these is the definition"
+     * is the question a reader scanning a column of marks actually has. */
+    CHECK(contains(&out,
+        "{\"start\":{\"line\":2,\"character\":6},"
+         "\"end\":{\"line\":2,\"character\":14}},\"kind\":3}"),
+          "the defining occurrence is reported as a write");
+    buf_free(&out);
+}
+
+static void test_document_highlight_off_a_word_is_null(void) {
+    fresh_session();
+    session_open("file:///project/main.tur", "(local-fn 1 2)   ");
+
+    /* Character 15 is a space with a space after it. Not 9, the space before
+     * `1`: lsp_word_at_pos steps one character right when the cursor is not on
+     * an identifier, and a digit is an identifier character -- so that
+     * position resolves to the word "1", which is a different test. */
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":33,\"method\":\"textDocument/documentHighlight\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/main.tur\"},"
+        "\"position\":{\"line\":0,\"character\":15}}}");
+
+    /* `null` rather than `[]` so a client keeps what it was showing instead of
+     * flickering as the caret crosses whitespace. */
+    CHECK(contains(&out, "\"result\":null"),
+          "a position that is not on a word answers null");
+    buf_free(&out);
+}
+
+static void test_hover_falls_back_to_the_builtin_table(void) {
+    fresh_session();
+    session_open("file:///project/main.tur", "(println 1)");
+
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":34,\"method\":\"textDocument/hover\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/main.tur\"},"
+        "\"position\":{\"line\":0,\"character\":3}}}");
+
+    /* The index is built from Bindings and a compiler builtin has none, so
+     * this used to be `{"contents":""}` -- silent on the name a first-time
+     * visitor types first. */
+    CHECK(contains(&out, "(println : (fn [int] : nil))"),
+          "hover on a builtin renders its signature");
+    CHECK(contains(&out, "built-in operator"),
+          "hover says the answer came from the operator table, not analysis");
+    buf_free(&out);
+}
+
+static void test_signature_help_falls_back_to_the_builtin_table(void) {
+    fresh_session();
+    session_open("file:///project/main.tur", "(println ");
+
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":35,\"method\":\"textDocument/signatureHelp\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/main.tur\"},"
+        "\"position\":{\"line\":0,\"character\":9}}}");
+
+    CHECK(contains(&out, "\"signatures\""),
+          "signatureHelp answers for a builtin callee");
+    CHECK(contains(&out, "(println : (fn [int] : nil))"),
+          "the builtin's signature reaches the label");
+    buf_free(&out);
+}
+
+static void test_definition_on_a_builtin_is_still_null(void) {
+    fresh_session();
+    session_open("file:///project/main.tur", "(println 1)");
+
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":36,\"method\":\"textDocument/definition\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/main.tur\"},"
+        "\"position\":{\"line\":0,\"character\":3}}}");
+
+    /* A builtin has no source location. Inventing one -- pointing at
+     * builtins.c, or at the call site -- would be worse than answering
+     * nothing, because the editor would actually go there. */
+    CHECK(contains(&out, "\"result\":null"),
+          "a builtin has nowhere to go to");
+    buf_free(&out);
+}
+
 static void test_signature_help(void) {
     fresh_session();
     session_open("file:///project/main.tur", "(cons 1 ");
@@ -435,7 +602,10 @@ static void test_did_change_takes_the_last_element(void) {
 
 static void test_unknown_method_is_answered(void) {
     fresh_session();
-    Buf out = send_msg("{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"textDocument/rename\","
+    /* Something the server does not implement and, per the follow-through
+     * plan's out-of-scope list, is not about to. `textDocument/rename` used to
+     * stand here and stopped being unknown the day rename shipped. */
+    Buf out = send_msg("{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"textDocument/inlayHint\","
                        "\"params\":{}}");
     CHECK(contains(&out, "-32601"), "an unknown request gets Method not found");
     CHECK(contains(&out, "\"id\":42"), "the error echoes the request id");
@@ -612,6 +782,268 @@ static void test_escapes_are_decoded(void) {
 }
 
 /* -------------------------------------------------------------------------
+ * Scope, rename and references
+ * (editor-intelligence-follow-through-plan, S1/A1/A2/A3)
+ *
+ * The assertions here are about JSON shapes -- a WorkspaceEdit's `changes`
+ * map, a refusal's message -- which is what §6 of the plan says belongs in
+ * this harness rather than in a fixture: a fixture can only compare a
+ * program's printed output, and none of this produces any.
+ *
+ * The stub fills the binding table the same way it fills the symbol index.
+ * Offsets are computed from SCOPE_DOC with strstr rather than written down,
+ * so editing the document text cannot silently decouple what the stub claims
+ * from what the server scans.
+ * --------------------------------------------------------------------- */
+
+/* line 0:  (def total 9)
+ * line 1:  (defn f [n]
+ * line 2:    (let [total 1]
+ * line 3:      (+ total n)))          */
+#define SCOPE_DOC \
+    "(def total 9)\n(defn f [n]\n  (let [total 1]\n    (+ total n)))\n"
+
+#define SCOPE_URI "file:///project/scope.tur"
+
+/* Which locals the next analysis reports: none, the real two, one whose
+ * binder has no span (macro-introduced), or more than the table can hold. */
+static enum { SCOPE_NONE, SCOPE_REAL, SCOPE_MACRO, SCOPE_FLOOD } stub_scope =
+    SCOPE_NONE;
+
+/* Byte offset of the `nth` occurrence of `needle` in SCOPE_DOC. */
+static uint32_t doc_off(const char *needle, int nth) {
+    const char *p = SCOPE_DOC;
+    for (;;) {
+        p = strstr(p, needle);
+        if (!p) { fprintf(stderr, "FAIL: SCOPE_DOC has no %s\n", needle);
+                  failed++; return 0; }
+        if (nth-- == 0) return (uint32_t)(p - SCOPE_DOC);
+        p += strlen(needle);
+    }
+}
+
+static void stub_bind(const char *name, LspBindKind kind, int depth,
+                      uint32_t line, uint32_t col_start,
+                      uint32_t def_start, uint32_t def_end,
+                      uint32_t scope_start, uint32_t scope_end) {
+    LspBinding b;
+    memset(&b, 0, sizeof(b));
+    snprintf(b.name, sizeof(b.name), "%s", name);
+    b.kind            = kind;
+    b.depth           = depth;
+    b.def_line        = line;
+    b.def_col_start   = col_start;
+    b.def_col_end     = col_start + (uint32_t)strlen(name);
+    b.def_off_start   = def_start;
+    b.def_off_end     = def_end;
+    b.scope_start_off = scope_start;
+    b.scope_end_off   = scope_end;
+    lsp_scope_record(&b);
+}
+
+/* The two locals SCOPE_DOC really has, in the coordinates the real collector
+ * would report: `n`, the parameter of `f`, and `total`, the `let` binding
+ * that shadows the global of the same name. */
+static void stub_fill_scope(void) {
+    uint32_t doc_len   = (uint32_t)strlen(SCOPE_DOC);
+    uint32_t n_off     = doc_off("n]", 0);
+    uint32_t total_off = doc_off("total 1", 0);
+    /* The `let` binding is live from the end of its own init, not from its
+     * binder -- which is what keeps `(let [x (+ x 1)] ...)` honest. */
+    uint32_t total_scope = doc_off("1]", 0) + 1;
+
+    switch (stub_scope) {
+    case SCOPE_NONE:
+        break;
+    case SCOPE_REAL:
+        stub_bind("n", LSP_BIND_PARAM, 1, 2, 10,
+                  n_off, n_off + 1, n_off + 1, doc_len);
+        stub_bind("total", LSP_BIND_LET, 2, 3, 9,
+                  total_off, total_off + 5, total_scope, doc_len);
+        break;
+    case SCOPE_MACRO:
+        /* def_line 0 and no def range: a binder whose position is a point in
+         * expanded source that does not exist in this file. */
+        stub_bind("total", LSP_BIND_LET, 2, 0, 0, 0, 0, total_scope, doc_len);
+        break;
+    case SCOPE_FLOOD: {
+        /* Past the table's cap, so lsp_scope_truncated() latches. */
+        for (int i = 0; i < 6000; i++)
+            stub_bind("filler", LSP_BIND_LET, 1, 3, 1, 1, 2, 2, 3);
+        break;
+    }
+    }
+}
+
+/* Escape a raw document into a JSON string body and open it. */
+static void session_open_raw(const char *uri, const char *raw) {
+    Buf esc;
+    buf_init(&esc);
+    for (const char *p = raw; *p; p++) {
+        if (*p == '\n')      buf_puts(&esc, "\\n");
+        else if (*p == '"')  buf_puts(&esc, "\\\"");
+        else if (*p == '\\') buf_puts(&esc, "\\\\");
+        else                 buf_putc(&esc, *p);
+    }
+    buf_putc(&esc, '\0');
+    session_open(uri, esc.data);
+    buf_free(&esc);
+}
+
+static Buf scope_request(const char *method, int line, int ch,
+                         const char *extra) {
+    Buf b;
+    buf_init(&b);
+    buf_printf(&b, "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"%s\","
+                   "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+                   "\"position\":{\"line\":%d,\"character\":%d}%s}}",
+               method, SCOPE_URI, line, ch, extra ? extra : "");
+    buf_putc(&b, '\0');
+    Buf out = send_msg(b.data);
+    buf_free(&b);
+    return out;
+}
+
+static void scope_session(void) {
+    fresh_session();
+    session_open_raw(SCOPE_URI, SCOPE_DOC);
+}
+
+static void test_initialize_advertises_rename_and_references(void) {
+    lsp_session_reset();
+    Buf out = send_msg("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                       "\"params\":{}}");
+    CHECK(contains(&out, "\"renameProvider\":{\"prepareProvider\":true}"),
+          "rename is advertised in the prepare form, not as a bare boolean");
+    CHECK(contains(&out, "\"referencesProvider\":true"),
+          "initialize advertises references");
+    buf_free(&out);
+}
+
+static void test_highlight_local_stops_at_its_scope(void) {
+    stub_scope = SCOPE_REAL;
+    scope_session();
+    /* The caret on the `let`-bound `total` (line 2). */
+    Buf out = scope_request("textDocument/documentHighlight", 2, 9, NULL);
+    CHECK(contains(&out, "\"line\":2"), "the binder is reported");
+    CHECK(contains(&out, "\"line\":3"), "the use inside the let is reported");
+    CHECK(!contains(&out, "\"line\":0"),
+          "the global `total` on line 0 is a different variable");
+    CHECK(contains(&out, "\"kind\":3"),
+          "the binder is marked Write, not Text");
+    buf_free(&out);
+    stub_scope = SCOPE_NONE;
+}
+
+static void test_highlight_global_skips_the_shadowed_region(void) {
+    stub_scope = SCOPE_REAL;
+    scope_session();
+    /* The caret on the global `total` (line 0). Its uses are the whole file
+     * MINUS the region the `let` covers -- the half that, missing, makes
+     * renaming the outer name rewrite the inner one. */
+    Buf out = scope_request("textDocument/documentHighlight", 0, 5, NULL);
+    CHECK(contains(&out, "\"line\":0"), "the global's own definition");
+    CHECK(!contains(&out, "\"line\":2"),
+          "the shadowing binder is not a use of the global");
+    CHECK(!contains(&out, "\"line\":3"),
+          "the shadowed use is not a use of the global");
+    buf_free(&out);
+    stub_scope = SCOPE_NONE;
+}
+
+static void test_prepare_rename_answers_with_the_range(void) {
+    stub_scope = SCOPE_REAL;
+    scope_session();
+    Buf out = scope_request("textDocument/prepareRename", 2, 9, NULL);
+    CHECK(contains(&out, "\"placeholder\":\"total\""),
+          "prepareRename echoes the current name as the placeholder");
+    CHECK(contains(&out, "\"character\":8"),
+          "prepareRename reports the identifier's own start column");
+    buf_free(&out);
+    stub_scope = SCOPE_NONE;
+}
+
+static void test_rename_local_leaves_the_global_alone(void) {
+    stub_scope = SCOPE_REAL;
+    scope_session();
+    Buf out = scope_request("textDocument/rename", 2, 9,
+                            ",\"newName\":\"acc\"");
+    CHECK(contains(&out, "\"changes\""), "rename answers with a WorkspaceEdit");
+    CHECK(contains(&out, SCOPE_URI), "the edit names the document uri");
+    CHECK(contains(&out, "\"newText\":\"acc\""), "the new name is carried");
+    CHECK(!contains(&out, "\"line\":0"),
+          "the global `total` on line 0 is not rewritten");
+    buf_free(&out);
+    stub_scope = SCOPE_NONE;
+}
+
+static void test_prepare_rename_refuses_a_macro_binding(void) {
+    stub_scope = SCOPE_MACRO;
+    scope_session();
+    Buf out = scope_request("textDocument/prepareRename", 3, 8, NULL);
+    CHECK(contains(&out, "macro-introduced"),
+          "a binder with no span in this file refuses, with a reason");
+    CHECK(!contains(&out, "\"result\""),
+          "a refusal is an error, never a range the client can act on");
+    buf_free(&out);
+    stub_scope = SCOPE_NONE;
+}
+
+static void test_rename_refuses_a_macro_binding_too(void) {
+    stub_scope = SCOPE_MACRO;
+    scope_session();
+    /* A client that skipped prepareRename must still not get an edit. */
+    Buf out = scope_request("textDocument/rename", 3, 8,
+                            ",\"newName\":\"acc\"");
+    CHECK(contains(&out, "macro-introduced"),
+          "rename repeats the refusal rather than trusting the client asked");
+    CHECK(!contains(&out, "\"changes\""), "and produces no edit");
+    buf_free(&out);
+    stub_scope = SCOPE_NONE;
+}
+
+static void test_prepare_rename_refuses_a_truncated_table(void) {
+    stub_scope = SCOPE_FLOOD;
+    scope_session();
+    Buf out = scope_request("textDocument/prepareRename", 0, 5, NULL);
+    CHECK(contains(&out, "too large to rename safely"),
+          "an overflowed binding table refuses rather than guessing");
+    buf_free(&out);
+    stub_scope = SCOPE_NONE;
+}
+
+static void test_prepare_rename_refuses_a_stdlib_symbol(void) {
+    stub_scope = SCOPE_NONE;
+    fresh_session();
+    session_open_raw(SCOPE_URI, "(cons 1 2)\n");
+    Buf out = scope_request("textDocument/prepareRename", 0, 2, NULL);
+    CHECK(contains(&out, "stdlib symbol"),
+          "a name defined under the stdlib root refuses");
+    buf_free(&out);
+}
+
+static void test_references_are_scope_bounded(void) {
+    stub_scope = SCOPE_REAL;
+    scope_session();
+    Buf out = scope_request("textDocument/references", 2, 9,
+                            ",\"context\":{\"includeDeclaration\":true}");
+    CHECK(contains(&out, "\"uri\":\"" SCOPE_URI "\""),
+          "references answer with Locations, uri and all");
+    CHECK(contains(&out, "\"line\":2"), "the declaration is included");
+    CHECK(!contains(&out, "\"line\":0"),
+          "the global of the same name is not a reference to this local");
+    buf_free(&out);
+
+    out = scope_request("textDocument/references", 2, 9,
+                        ",\"context\":{\"includeDeclaration\":false}");
+    CHECK(!contains(&out, "\"line\":2"),
+          "includeDeclaration:false drops the declaration");
+    CHECK(contains(&out, "\"line\":3"), "and keeps the use");
+    buf_free(&out);
+    stub_scope = SCOPE_NONE;
+}
+
+/* -------------------------------------------------------------------------
  * main
  * --------------------------------------------------------------------- */
 
@@ -631,6 +1063,13 @@ int main(void) {
     test_hover();
     test_definition_reports_document_path();
     test_document_symbol_is_file_scoped();
+    test_document_symbol_reports_real_kinds();
+    test_completion_kind_follows_the_symbol_kind();
+    test_document_highlight_skips_comments_and_strings();
+    test_document_highlight_off_a_word_is_null();
+    test_hover_falls_back_to_the_builtin_table();
+    test_signature_help_falls_back_to_the_builtin_table();
+    test_definition_on_a_builtin_is_still_null();
     test_signature_help();
     test_did_change_republishes();
     test_stale_index_survives_unparseable_text();
@@ -645,6 +1084,16 @@ int main(void) {
     test_flush_with_nothing_dirty_is_empty();
     test_did_close_drops_the_document();
     test_escapes_are_decoded();
+    test_initialize_advertises_rename_and_references();
+    test_highlight_local_stops_at_its_scope();
+    test_highlight_global_skips_the_shadowed_region();
+    test_prepare_rename_answers_with_the_range();
+    test_rename_local_leaves_the_global_alone();
+    test_prepare_rename_refuses_a_macro_binding();
+    test_rename_refuses_a_macro_binding_too();
+    test_prepare_rename_refuses_a_truncated_table();
+    test_prepare_rename_refuses_a_stdlib_symbol();
+    test_references_are_scope_bounded();
 
     lsp_session_reset();
 

@@ -16,7 +16,7 @@
 
 Nothing web-specific remains. One check failing during that verification was a
 **separate, pre-existing defect**, filed as
-[lang-switch-breaks-generic-instance-resolution](../../reported/lang-switch-breaks-generic-instance-resolution.md)
+[lang-switch-breaks-generic-instance-resolution](../../archive/lang-switch-breaks-generic-instance-resolution.md)
 -- it is not tracked by this report.
 
 ## Summary
@@ -199,7 +199,7 @@ WASM -- `#map{:a 1}` => `#map{:a 1}`, `#map{"s" 1}` => `#map{s 1}`,
 That closes the third fix direction. Nothing web-specific remains here.
 
 **The one failing check is a separate, pre-existing bug**, now filed as
-[lang-switch-breaks-generic-instance-resolution](../../reported/lang-switch-breaks-generic-instance-resolution.md):
+[lang-switch-breaks-generic-instance-resolution](../../archive/lang-switch-breaks-generic-instance-resolution.md):
 after a reader switch, *generic* (constraint-resolved) typeclass instances stop
 resolving, permanently and un-symmetrically. It reproduces natively with an
 explicitly-annotated `(show (:: #map{:a 1} (Map Sym int)))`, so it is neither

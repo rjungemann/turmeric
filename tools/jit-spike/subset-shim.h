@@ -124,7 +124,7 @@
  *     the obvious next probe and was not tried -- it would also switch a lot of
  *     other headers onto GNU-builtin paths c2mir lacks.
  *
- * See docs/reported/jit-macos-full-corpus-extension-and-atexit.md.
+ * See docs/archive/history/jit-macos-full-corpus-extension-and-atexit.md.
  * Guarded on __APPLE__, which c2mir does predefine, so the shim stays a single
  * file across hosts.
  */

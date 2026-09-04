@@ -123,6 +123,14 @@ defmodule app
 | `(import math)`                     | Names available as fully-qualified: `math/sqrt`.         |
 | `(import math :as m)`               | Alias: `m/sqrt`.                                          |
 | `(import math :refer [sqrt abs])`   | Pull selected names directly into scope: `sqrt`, `abs`. |
+| `(import math :for-macros)`         | Macro-time only: `math`'s functions become callable from `defmacro*` bodies at expansion time; nothing is imported at runtime. |
+
+`:for-macros` cannot combine with `:as`/`:refer` -- a module needed in both
+phases is imported twice, one form per phase, so which code runs at compile
+time stays explicit in the source.  Inside the macro-time env the module's
+functions bind under their bare names.  A macro *defined* in another module
+needs no `:for-macros`; export it and `:refer` it like any macro.  See
+[macros-guide.md](macros-guide.md#macro-time-imports-for-macros).
 
 Self-qualification works inside a module too:
 `(defmodule geom/vector ... (geom/vector/magnitude p))` resolves
@@ -196,6 +204,62 @@ defmodule control-flow
 Imported macros expand correctly in the consumer module -- recursive macro
 calls inside an exported macro can still reach private helpers of the
 defining module (the elaborator tracks the "expansion module" for this).
+
+The same macro reaching a file by two import paths is **not** a conflict.
+Given a diamond where you import both `a` and `b`, and `b` also refers a
+macro from `a`, that macro arrives twice -- it is one definition, so the
+second arrival is ignored rather than reported. Two *different* modules
+exporting the same macro name is still an error.
+
+### `(export-from ...)` -- re-export without a wrapper
+
+A module can re-export names another module already exports, so a facade
+module can present a curated surface without a forwarding `defn` per name:
+
+```turmeric
+(defmodule geom
+  (import geom/vector :refer [v-add v-scale])
+  (import geom/matrix :refer [m-mul])
+  (export geom-version)
+  (export-from geom/vector v-add v-scale)
+  (export-from geom/matrix m-mul)
+  (defn geom-version [] : int 2))
+```
+
+```sweet-exp
+defmodule geom
+  import geom/vector :refer [v-add v-scale]
+  import geom/matrix :refer [m-mul]
+  export geom-version
+  export-from geom/vector v-add v-scale
+  export-from geom/matrix m-mul
+  defn geom-version [] : int
+    2
+```
+
+A consumer now writes `(import geom :refer [v-add m-mul])` and never names
+the inner modules.
+
+Rules:
+
+- **The source module must be imported.** `export-from` re-exports from a
+  module you already `import`; it does not load one. A second load path with
+  its own resolution rules is how two modules end up disagreeing about which
+  file a name came from.
+- **The name must be *exported* by the source, not merely defined there.**
+  Re-exporting a module-private name would smuggle it into the public surface
+  through a third party. The two cases get different diagnostics -- "defined
+  by 'X' but not exported from it" is one edit, "not exported by module 'X'"
+  is a typo.
+- **Chains work.** If `mid` re-exports from `low` and `hi` re-exports from
+  `mid`, a consumer of `hi` sees the name. The check is "does the source
+  module export it", not "did the source module define it".
+- **Defns and macros both.** A re-exported macro forwards the original
+  definition, so it expands exactly as it would when imported directly.
+- **No wrapper is emitted.** The consumer resolves to the *defining* module's
+  binding and calls its mangled symbol, so a re-export costs nothing at
+  runtime however many hops it travels. Pinned by
+  `tests/check-export-from-no-wrapper.sh`.
 
 ---
 
@@ -292,12 +356,19 @@ The argument must be a string literal.
 
 ## Auto-Loaded Stdlib Modules
 
-Two stdlib files are auto-loaded into every program:
+A set of stdlib files is auto-loaded into every program (the full list is
+`autoload_files_` in `src/compiler/stdlib_autoload.c`). It includes, among
+others:
 
 - `stdlib/macros.tur` -- `(defmodule tur/macros ...)`: `cond`, `when`,
   `unless`, `must!`, `must-msg!`, `ignore!`, `do-m`, `for`.
 - `stdlib/safe.tur`   -- `(defmodule tur/safe ...)`: `array-get`, `array-set`,
   `array-slice`, `with-c-string`, `from-c-string`, `box`, `unbox`.
+- `stdlib/contract.tur`, the core typeclass files (`typeclass-eq.tur`,
+  `typeclass-functor.tur`, `typeclass-monad.tur`, ...), the typed
+  collections (`map.tur`, `vec.tur`, `set.tur`, `list.tur`, ...),
+  `option.tur` / `result.tur` / `pair.tur` / `tuple.tur`, `json.tur`,
+  `schema.tur`, `sym.tur`, and `unique.tur`.
 
 After loading, the elaborator **promotes** every export from any module under
 the `tur/` namespace back to "stdlib pre-module" status (its
@@ -472,10 +543,7 @@ Build with `./build/tur build src/app.tur -o app`.
 - **No wildcard `:refer :all`**: explicit symbol lists only.
 - **Module-private types in public signatures**: not yet a hard error; the
   type system will eventually enforce it.
-- **No re-export shorthand**: re-exporting a name from a transitively imported
-  module currently requires defining a thin wrapper. A future `(export-from
-  other-module foo bar)` form is planned.
 - **Hot reload / dynamic loading**: not supported in v1.
 
-See `docs/archive/module-system-plan.md` for the full design history and
-deferred work items.
+The deferred items above are the full list; there is no separate design-history
+document for them.

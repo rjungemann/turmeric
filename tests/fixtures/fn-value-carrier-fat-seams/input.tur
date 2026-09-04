@@ -1,6 +1,6 @@
 ;; fn-value-carrier-fat-seams: the two residual carrier<->fat cells left open
 ;; by fat-normalization stage 2, plus the ascribed-alias variant found while
-;; fixing them (docs/archive/fn-value-carrier-fat-seam-residuals.md).
+;; fixing them (docs/archive/history/fn-value-carrier-fat-seam-residuals.md).
 ;;
 ;; Cell 1 -- a let-ALIAS of a carrier (tur_poly_fn_t) fn param in tail
 ;; position.  The stage-2 tail walkers resolve aliases to their origin, so

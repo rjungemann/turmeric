@@ -1,7 +1,101 @@
 /* elab_call.c -- function-call elaboration, partial application, polymorphic dispatch. */
+/* For pthread_getattr_np (the glibc branch of elab_stack_headroom below);
+ * must precede every include so <pthread.h> sees it wherever it is first
+ * pulled in. */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
 #include "elab_internal.h"
+bool sum_box_reader_name(const char *nm);  /* emit_core.c; see emit_internal.h */
 #include "experiments.h"  /* Slice 3 (constrained-hkt-forall): hkt-hrt gate */
 #include "mono_specs.h"   /* VBM1 (van-laarhoven-monomorphization): spec registry */
+
+/* macro-depth-guard-loses-race-with-asan-stack: platform stack introspection
+ * for the second trigger of the macro-expansion depth guard below. */
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+
+/* Approximate the REAL stack pointer.  The obvious probe -- the address of a
+ * local -- is wrong under ASan: with use-after-return detection (default in
+ * modern toolchains) address-taken locals live on the sanitizer's heap-side
+ * FAKE stack, so their addresses fall outside the thread stack entirely and
+ * say nothing about real consumption.  The SP register itself still tracks
+ * the real stack (it is the real stack that overflows), so read it directly
+ * on the architectures we build for and fall back to the local's address
+ * (correct whenever no fake stack is in play) elsewhere. */
+static uintptr_t elab_approx_sp(void) {
+#if defined(__GNUC__) && defined(__x86_64__)
+    uintptr_t sp; __asm__ ("movq %%rsp, %0" : "=r"(sp)); return sp;
+#elif defined(__GNUC__) && defined(__aarch64__)
+    uintptr_t sp; __asm__ ("mov %0, sp" : "=r"(sp)); return sp;
+#elif defined(__GNUC__) && defined(__i386__)
+    uintptr_t sp; __asm__ ("movl %%esp, %0" : "=r"(sp)); return sp;
+#else
+    volatile char probe = 0;
+    return (uintptr_t)&probe;
+#endif
+}
+
+/* Remaining C-stack headroom (bytes) for the calling thread, or SIZE_MAX when
+ * the platform cannot tell us.  `total_out` gets the thread's total stack
+ * size (0 when unknown).  The SP approximation is exact enough for a
+ * "nearly gone" test with a generous margin. */
+static size_t elab_stack_headroom(size_t *total_out) {
+    if (total_out) *total_out = 0;
+    uintptr_t sp = elab_approx_sp();
+#if defined(_WIN32)
+    ULONG_PTR lo = 0, hi = 0;
+    GetCurrentThreadStackLimits(&lo, &hi);
+    if (hi <= lo || sp <= (uintptr_t)lo || sp > (uintptr_t)hi) return SIZE_MAX;
+    if (total_out) *total_out = (size_t)(hi - lo);
+    return (size_t)(sp - (uintptr_t)lo);
+#elif defined(__APPLE__)
+    pthread_t self = pthread_self();
+    uintptr_t hi = (uintptr_t)pthread_get_stackaddr_np(self); /* HIGH end */
+    size_t size = pthread_get_stacksize_np(self);
+    if (!hi || !size) return SIZE_MAX;
+    uintptr_t lo = hi - size;
+    if (sp <= lo || sp > hi) return SIZE_MAX;
+    if (total_out) *total_out = size;
+    return (size_t)(sp - lo);
+#elif defined(__GLIBC__)
+    /* glibc reports the main thread's stack from RLIMIT_STACK + /proc maps,
+     * so a `ulimit -s` shrink is seen too. */
+    pthread_attr_t attr;
+    if (pthread_getattr_np(pthread_self(), &attr) != 0) return SIZE_MAX;
+    void *lo_addr = NULL; size_t size = 0;
+    int rc = pthread_attr_getstack(&attr, &lo_addr, &size);
+    pthread_attr_destroy(&attr);
+    if (rc != 0 || !lo_addr || size == 0) return SIZE_MAX;
+    uintptr_t lo = (uintptr_t)lo_addr;
+    if (sp <= lo || sp > lo + size) return SIZE_MAX;
+    if (total_out) *total_out = size;
+    return (size_t)(sp - lo);
+#else
+    (void)sp;
+    return SIZE_MAX;
+#endif
+}
+
+/* True when so little stack remains that another macro-expansion level (an
+ * elab_call -> elab_form recursion cycle, ASan-inflated in Debug) risks a
+ * hard stack-overflow abort before the depth counter can trip.  The margin
+ * scales with the thread's stack (an eighth), clamped to [256 KiB, 1 MiB]:
+ * far above one recursion cycle, far below a healthy stack, and lenient
+ * enough that a deliberately tiny `ulimit -s` does not trip it at trivial
+ * macro depth. */
+static bool elab_stack_nearly_exhausted(void) {
+    size_t total = 0;
+    size_t headroom = elab_stack_headroom(&total);
+    if (headroom == SIZE_MAX) return false;   /* unknown: depth counter only */
+    size_t margin = total ? total / 8 : (size_t)1 << 20;
+    if (margin > ((size_t)1 << 20)) margin = (size_t)1 << 20;
+    if (margin < ((size_t)256 << 10)) margin = (size_t)256 << 10;
+    return headroom < margin;
+}
 
 /* --- Slice 3 (constrained-hkt-forall-plan): higher-kinded rank-2 helpers ----
  *
@@ -17,7 +111,7 @@
  * carrier unchanged; a by-value *aggregate* product container does not fit the
  * carrier and would emit broken C, so it is rejected here as not-yet-supported
  * rather than miscompiled (deferred; see
- * docs/reported/hrt-hkt-aggregate-container-carrier.md). */
+ * docs/archive/history/hrt-hkt-aggregate-container-carrier.md). */
 
 /* Does this forall quantify a higher-kinded (arrow-kind) bound variable?
  * KIND_STAR (plain type var) and KIND_ROW/KIND_TYPEROW (effect/type rows) do
@@ -146,7 +240,7 @@ static const char *stdlib_load_hint_file(const Symbol *name) {
     return tur_stdlib_load_hint(name->name);
 }
 
-/* docs/archive/defn-shadows-return-special-form.md: head-position dispatch in
+/* docs/archive/history/defn-shadows-return-special-form.md: head-position dispatch in
  * elab_call (below) matches special forms by symbol identity *before* any
  * binding, macro, or typeclass-method lookup.  A user `(defn return ...)` is
  * therefore accepted, bound, and then never consulted: every bare
@@ -211,7 +305,8 @@ static const char *const reserved_special_forms_[] = {
     "ptr-deref", "ptr-write", "ptr-add", "ptr-sub", "ptr-null?", "ptr-of",
     "unsafe-cast", "reinterpret", "transmute", "array-get-unchecked",
     "array-set-unchecked", "raw-malloc", "raw-free", "raw-realloc",
-    "raw-memcpy", "raw-memset", "c-call", "dlopen", "dlsym", "dlclose",
+    "raw-memcpy", "raw-memset", "c-call", "call-ptr", "dlopen", "dlsym",
+    "dlclose",
     /* STM */
     "stm", "retry",
     /* GC */
@@ -913,6 +1008,28 @@ static OwnCarry own_carry_for_arg(const char *fn, uint32_t idx) {
      * the `owned` flag, which routes the insert through tur_hamt_set_eq_vo with
      * the emitted rc ops). */
     if (strcmp(fn, "map-assoc-eq-o") == 0 && idx == 3) return OWN_CARRY_RETAIN;
+    /* option-rc-payload-constructible-only-from-inline-c: the SUM
+     * CONSTRUCTORS.  `(some x)` / `(ok x)` / `(err x)` wrap the value in a
+     * result the CALLER receives and owns -- there is no second, longer-lived
+     * holder the way a collection is one, so the reference MOVES in and
+     * nothing is minted.  That is OWN_CARRY_BORROW by this enum's own
+     * definition ("crossing moves the existing reference and mints nothing").
+     *
+     * RETAIN would be wrong in the other direction: nothing releases an
+     * Option's payload when the value goes out of scope, so a count minted
+     * here would never come back down.  BORROW keeps exactly one owner, which
+     * is the contract `weak/upgrade` and `weak/unwrap` already document ("the
+     * caller owns it and must rc/drop it").
+     *
+     * Without these rows the default REJECT fired on a construction with no
+     * collection anywhere in the program -- so `(Option rc<A>)` could be
+     * RETURNED, built in inline C and matched, but not built in Turmeric.  The
+     * inline-C form is the one that shipped, and it leaked a box per call
+     * until 2026-08-30, so the language was rejecting the safe spelling and
+     * accepting the unsafe one. */
+    if (strcmp(fn, "some") == 0 && idx == 0) return OWN_CARRY_BORROW;
+    if (strcmp(fn, "ok")   == 0 && idx == 0) return OWN_CARRY_BORROW;
+    if (strcmp(fn, "err")  == 0 && idx == 0) return OWN_CARRY_BORROW;
     return OWN_CARRY_REJECT;
 }
 
@@ -974,6 +1091,25 @@ static Expr *call_wrap_reinterpret_owning(Elab *e, Expr *inner, TypeKind target_
                       "collection would have to own. Store a plain handle, or keep "
                       "the value outside the collection",
                       typekind_to_string(owning_src ? source_kind : target_kind));
+            /* option-rc-payload-constructible-only-from-inline-c, fix
+             * direction 2.  The line above names a COLLECTION, which is where
+             * this fires most often and reads correctly there -- but the check
+             * is really about crossing a GENERIC boundary, so it also fires
+             * with no collection anywhere in the program (`(unwrap o)` over an
+             * `(Option rc<A>)`).  Rather than reword a message that is right
+             * for its common case, say what the rule actually is and name the
+             * spellings that work. */
+            diag_emit(DIAG_NOTE, span,
+                      "the restriction is about crossing a GENERIC boundary, "
+                      "not about collections as such: a tyvar parameter or "
+                      "result is erased to the int64 carrier, which has no "
+                      "room for the reference count");
+            diag_emit(DIAG_NOTE, span,
+                      "the sum constructors are allowed -- `(some x)` / "
+                      "`(ok x)` / `(err x)` MOVE the reference into a value "
+                      "the caller owns.  To read an owning payload back out, "
+                      "destructure with `match` rather than the generic "
+                      "accessor, as stdlib's `weak/unwrap` does");
             return NULL;
         }
         /* Only rc<T> is refcount-accounted today.  A weak/ref crossing has no
@@ -1008,8 +1144,25 @@ static Expr *call_wrap_reinterpret_owning(Elab *e, Expr *inner, TypeKind target_
      * float<->int and cstr<->int). Mixing float with an integer at different
      * sizes is neither bit- nor value-meaningful, so bail in that case. */
     if (src_size != dst_size) {
-        if (!call_reinterpret_kind_is_integral(source_kind) ||
-            !call_reinterpret_kind_is_integral(target_kind)) {
+        /* float32-generic-call-result-printed-as-carrier: the int64 CARRIER
+         * holding float32 bits is the one mixed-size float pair that IS
+         * bit-meaningful -- the producing side already stores the low 4 bytes
+         * through the union overlay (`emit_carrier_bridge`'s inline arm covers
+         * TY_FLOAT32), so the read-back is the same overlay in reverse.
+         * Silently returning `inner` here was the root cause of that report:
+         * the tyvar-result path REQUESTED the reinterpret (`A := float32`
+         * collected fine) and this bail dropped it, so the call stayed typed
+         * `int` and printed 1088631603 -- while the float64 twin, being
+         * same-size, took the union arm and worked.  Note the bail was
+         * SILENT: the caller cannot tell a wrapped result from a dropped
+         * wrap, which is what made this an elaboration bug that read like an
+         * emit bug. */
+        bool carrier_f32 =
+            (source_kind == TY_INT && target_kind == TY_FLOAT32) ||
+            (source_kind == TY_FLOAT32 && target_kind == TY_INT);
+        if (!carrier_f32 &&
+            (!call_reinterpret_kind_is_integral(source_kind) ||
+             !call_reinterpret_kind_is_integral(target_kind))) {
             return inner;
         }
     }
@@ -1085,32 +1238,60 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
     Expr **args = call->as.call_.args;
     uint32_t n_args = call->as.call_.n_args;
     uint32_t n_hoist = 0;
+    /* RM1 (bind chains): a continuation into a poly / fat slot arrives under
+     * an EX_POLY_WRAP / EX_FN_TO_FAT / EX_POLY_TO_FAT; the closure to hoist is
+     * the wrap's INNER, and the wrap stays in place around the hoisted var so
+     * the call site still packs it the way the slot expects. */
+#define HOIST_PEEL_SLOT(slot_)                                                  \
+    do {                                                                       \
+        for (;;) {                                                             \
+            Expr *_x = *(slot_);                                               \
+            if (!_x) break;                                                    \
+            if (_x->kind == EX_ASCRIBE) (slot_) = &_x->as.ascribe_.inner;      \
+            else if (_x->kind == EX_POLY_WRAP) (slot_) = &_x->as.poly_wrap_.inner; \
+            else if (_x->kind == EX_FN_TO_FAT) (slot_) = &_x->as.fn_to_fat_.inner; \
+            else if (_x->kind == EX_POLY_TO_FAT) (slot_) = &_x->as.poly_to_fat_.inner; \
+            else break;                                                        \
+        }                                                                      \
+    } while (0)
     for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
-        Expr *a = args[i];
-        while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
-        if (arg_is_freeable_closure_source(fb, i, a))
+        Expr **slot = &args[i];
+        HOIST_PEEL_SLOT(slot);
+        if (arg_is_freeable_closure_source(fb, i, *slot))
             n_hoist++;
     }
     if (n_hoist == 0) return call;
     LetBinding *lbs = (LetBinding *)arena_alloc(e->arena, n_hoist * sizeof(LetBinding));
     uint32_t h = 0;
     for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
-        Expr *a = args[i];
-        while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        Expr **slot = &args[i];
+        HOIST_PEEL_SLOT(slot);
+        Expr *a = *slot;
         if (!arg_is_freeable_closure_source(fb, i, a))
             continue;
         char nm[48];
         snprintf(nm, sizeof nm, "__borrowc_%u", e->next_id++);
         const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
         Binding *cb = binding_new(e, sym, a->type, false, false, span);
+        /* fn-value-fat-normalization (effect-row increment): record the lifted
+         * lambda behind this hoist temp so the CPS coloring / threadability
+         * walks resolve the temp back to the lambda (without this, a capturing
+         * callback into an effectful param reads as an opaque var, is never
+         * force-colored or threadable, and perm-taints its effect row to the
+         * deleted fiber engine).  Deliberately NOT closure_fn_binding, which
+         * carries direct-call semantics at emit. */
+        if (a->kind == EX_CLOSURE && a->as.closure_.closure &&
+            a->as.closure_.closure->fn)
+            cb->hoist_closure_fn_binding = a->as.closure_.closure->fn->binding;
         lbs[h].binding = cb;
         lbs[h].init = a;                 /* ascribe-peeled EX_CLOSURE literal or a
                                           * fresh-closure-returning call */
         h++;
         Expr *v = expr_new(e->arena, EX_VAR, a->type, span);
         v->as.var.binding = cb;
-        args[i] = v;                     /* the call now references the binding */
+        *slot = v;                       /* the call (or its wrap) now references the binding */
     }
+#undef HOIST_PEEL_SLOT
     Expr *let = expr_new(e->arena, EX_LET, call->type, span);
     let->as.let_.bindings = lbs;
     let->as.let_.n = n_hoist;
@@ -1475,6 +1656,7 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
     Expr *call_expr = elab_call_fn(e, call, tmp_b);
     if (!call_expr) return NULL;
 
+    tmp_b->closure_head_init = head_expr;
     LetBinding *let_bs = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
     let_bs->binding = tmp_b;
     let_bs->init = head_expr;
@@ -1920,7 +2102,7 @@ static Expr *elab_try_num_operator_dispatch(Elab *e, const Form *call,
  * its result.  Used to keep float-carrier function composition (e.g. a float
  * `>>>` pipeline) on the register-class-correct free defn instead of the
  * type-erased (->) typeclass instance method -- see
- * docs/reported/sf-compose-typed-arrow-prints-garbage-floats.md.  The
+ * docs/archive/history/sf-compose-typed-arrow-prints-garbage-floats.md.  The
  * (->) instance body is emitted once with an int64 carrier thunk (rax), so a
  * float carrier (xmm0) would be a register-class miscompile that only works by
  * luck; the free typed combinator specializes per-carrier and is correct. */
@@ -1936,7 +2118,7 @@ static bool fn_type_has_float_carrier(const Type *t) {
 }
 
 /* Method/defn namespace separation (fix (1) of
- * docs/reported/typeclass-methods-share-value-namespace-with-defns.md).
+ * docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md).
  *
  * True when `name` is a method of a *user-defined* (non-stdlib) typeclass AND
  * some instance of that class matches the receiver type `recv`.  When this
@@ -2081,7 +2263,7 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Already established: call->tag == F_LIST and len >= 1. */
     Form *head = call->as.list.items[0];
 
-    /* docs/reported/list-macro-quote-vs-syntactic-symbol.md: a macro that
+    /* docs/archive/history/list-macro-quote-vs-syntactic-symbol.md: a macro that
      * builds an expansion via `(list 'foo args...)` lands here with the head
      * shaped as F_QUOTE wrapping F_SYM(foo) -- the same `'foo` literal the
      * macro body wrote. Without this unwrap the head elaborates to an
@@ -2328,7 +2510,7 @@ Expr *elab_call(Elab *e, Form *call) {
      * path below resolves it from the expected-type channel.  Stdlib never
      * declares a `default-of` class, so its `(default-of A)` make-struct payload
      * fills still hit the builtin.  See root cause B of
-     * docs/reported/m5-suite-residual-6-failures-2026-06-14.md. */
+     * docs/archive/history/m5-suite-residual-6-failures-2026-06-14.md. */
     if (name == e->sym_default_of && !elab_name_is_typeclass_method(e, name))
         return elab_default_of(e, call);
     /* SI4-C: defopaque */
@@ -2434,6 +2616,8 @@ Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_raw_memset)  return elab_raw_memset(e, call);
     /* Phase U3: Unsafe primitives - FFI */
     if (name == e->sym_c_call)      return elab_c_call(e, call);
+    if (name == e->sym_call_ptr)    return elab_call_ptr(e, call);
+    if (name == e->sym_callback_ptr) return elab_callback_ptr(e, call);
     if (name == e->sym_dlopen)      return elab_dlopen(e, call);
     if (name == e->sym_dlsym)       return elab_dlsym(e, call);
     if (name == e->sym_dlclose)     return elab_dlclose(e, call);
@@ -2500,10 +2684,18 @@ Expr *elab_call(Elab *e, Form *call) {
     }
     /* Phase 15: Method call syntax - (.method obj arg1 arg2) */
     if (name->len > 0 && name->name[0] == '.') {
-        return elab_method_call(e, call);
+        /* RM1 (bind chains): `do-m` expands to `(.bind m (fn [x] ...))`, so
+         * this route needs the same closure-argument hoist the bare-name
+         * dispatch route applies -- gated, as there, on a statically resolved
+         * instance whose masks are the callee's own. */
+        Expr *mc = elab_method_call(e, call);
+        return (mc && call_dispatch_is_static(mc))
+            ? hoist_borrowed_closure_args(e, mc, call->span) : mc;
     }
     /* Phase 6 */
     if (name == e->sym_defmacro) return elab_defmacro(e, call);
+    /* Stage 2 (macro-system-direction-plan): procedural macros. */
+    if (name == e->sym_defmacro_star) return elab_defmacro_star(e, call);
     if (name == e->sym_quote) {
         /* (quote x) -- mirrors F_QUOTE in elab_toplevel.c. Quoting a
          * bare symbol yields a :Sym literal so DSL helpers in defns
@@ -2542,8 +2734,53 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Phase 6: Check if it's a macro call */
     MacroDef *macro = elab_lookup_macro(e, name);
     if (macro) {
-        if (e->macro_expand_depth >= ELAB_MAX_MACRO_EXPANSION_DEPTH) {
+        /* macro-depth-guard-loses-race-with-asan-stack: the depth counter is a
+         * proxy for stack headroom, and on an ASan-instrumented build the
+         * redzone-inflated frames can exhaust the real stack before 256 levels
+         * -- the process then aborts with a sanitizer stack-overflow report
+         * instead of this diagnostic.  So measure the real thing too: once a
+         * genuine macro recursion is under way (depth >= 16 -- a runaway hits
+         * that instantly, and the floor keeps a legitimately shallow nest on a
+         * deliberately tiny `ulimit -s` from tripping), nearly-exhausted
+         * headroom raises the SAME diagnostic pair the counter does. */
+        bool stack_low = e->macro_expand_depth >= 16 &&
+                         e->macro_expand_depth < ELAB_MAX_MACRO_EXPANSION_DEPTH &&
+                         elab_stack_nearly_exhausted();
+        /* TUR_DEBUG_STACK_GUARD=1: trace what the guard sees (used to verify
+         * the trigger on a platform where the race reproduces). */
+        {
+            static int dbg = -1;
+            if (dbg < 0) dbg = getenv("TUR_DEBUG_STACK_GUARD") != NULL;
+            if (dbg) {
+                size_t t = 0, h = elab_stack_headroom(&t);
+                fprintf(stderr, "[stack-guard] depth=%u headroom=%zu total=%zu low=%d\n",
+                        e->macro_expand_depth, h, t, (int)stack_low);
+            }
+        }
+        if (e->macro_expand_depth >= ELAB_MAX_MACRO_EXPANSION_DEPTH || stack_low) {
             diag_emit(DIAG_ERROR, call->span, "maximum macro expansion depth exceeded");
+            /* The two ways a recursive macro's base case silently never fires,
+             * both measured in practice (see docs/guides/macros-guide.md):
+             * an empty `& ^syntax` rest is an EMPTY LIST, so `nil?` on it is
+             * always false (`empty?` is the right predicate); and the
+             * compile-time evaluator has no arithmetic, so a spliced
+             * `~(- n 1)` recurses on the unevaluated FORM `(- n 1)`, which
+             * never equals 0. */
+            diag_emit(DIAG_NOTE, call->span,
+                      "a recursive macro whose base case never fires is the "
+                      "usual cause: test an empty rest with (empty? xs), not "
+                      "(nil? xs), and note the compile-time evaluator has no "
+                      "arithmetic -- drive recursion by argument list "
+                      "structure, not by counting");
+            if (stack_low)
+                diag_emit(DIAG_NOTE, call->span,
+                          "expansion stopped at depth %u (limit %u): the "
+                          "compiler's C stack is nearly exhausted -- oversized "
+                          "native frames (e.g. a sanitizer-instrumented debug "
+                          "build) or a small stack limit reach the stack "
+                          "before the depth limit",
+                          e->macro_expand_depth,
+                          (unsigned)ELAB_MAX_MACRO_EXPANSION_DEPTH);
             return NULL;
         }
         /* ambiguous-dispatch-error-quality: record the OUTERMOST macro call site
@@ -2552,6 +2789,14 @@ Expr *elab_call(Elab *e, Form *call) {
          * they wrote the macro call rather than at stdlib/macros.tur. */
         if (e->macro_expand_depth == 0) e->macro_call_site_span = call->span;
         e->macro_expand_depth++;
+        /* macro-expansion provenance: template spans survive expansion, so an
+         * error inside generated code points at the DEFMACRO body -- useless
+         * to a caller who did not write the macro.  Bracket the whole
+         * expand+elaborate window with the shown-error serial and, on the
+         * OUTERMOST frame only, append one note naming the call the user
+         * actually wrote.  Inner frames stay silent so a nested-macro error
+         * gets a single note at the user-visible call, not one per layer. */
+        uint64_t mx_err_before = diag_error_serial();
         /* Expand the macro with arguments */
         /* Extract arguments (rest of list) */
         uint32_t n_args = call->as.list.len - 1;
@@ -2562,8 +2807,35 @@ Expr *elab_call(Elab *e, Form *call) {
         
         Form *expanded = elab_expand_macro(e, macro, args, n_args);
         if (!expanded) {
+            if (e->macro_expand_depth == 1 &&
+                diag_error_serial() != mx_err_before)
+                diag_emit(DIAG_NOTE, call->span,
+                          "in expansion of macro '%s' -- the diagnostics above "
+                          "are inside code this call generated",
+                          name->name);
             e->macro_expand_depth--;
             return NULL;
+        }
+
+        /* `tur expand`: trace each expansion as it happens.  Nested
+         * expansions print too (inner-first is elaboration order), each
+         * labeled with the macro name and the call site's line:col.
+         * Expansions inside the stdlib preload are noise, skip them. */
+        if (g_dump_expansion && !e->in_stdlib_load) {
+            Buf mb;
+            buf_init(&mb);
+            form_print(&mb, expanded);
+            /* Basename only: a full path would embed the build environment
+             * into output meant for golden-file comparison.  A recursive
+             * macro's inner calls carry the macro-definition file's spans,
+             * so the file name is what disambiguates them from user code. */
+            const char *dump_path = diag_file_path(call->span.file_id);
+            const char *dump_base = dump_path ? strrchr(dump_path, '/') : NULL;
+            dump_base = dump_base ? dump_base + 1 : (dump_path ? dump_path : "?");
+            printf(";; %s @ %s:%u:%u\n%.*s\n", name->name, dump_base,
+                   call->span.line, call->span.col_start,
+                   (int)mb.len, mb.data);
+            buf_free(&mb);
         }
 
         /* Re-attribute a macro-emitted top-level `definstance` to the macro
@@ -2605,9 +2877,25 @@ Expr *elab_call(Elab *e, Form *call) {
          * walk, so the crossing path walk can traverse macro-GENERATED
          * guards/crossings (see rt_macro_expansion in elab_fns.c). */
         refine_note_macro_expansion(e, call, expanded);
+        /* The expansion REPLACES this call, so it inherits its statement
+         * position: a top-level macro emitting `(do (defn ..) (def ..))` --
+         * the ECS defsystem shape -- is a top-level statement list, not an
+         * expression.  Without this hand-off the expanded Forms are fresh
+         * allocations unreachable from `e->toplevel_stmt` (still the macro
+         * CALL), and every `def` they emit is rejected as expression-position.
+         * Only re-point when this call IS the current statement; a macro
+         * called from inside an expression stays inside one. */
+        const Form *saved_tl_stmt = e->toplevel_stmt;
+        if (e->toplevel_stmt == call) e->toplevel_stmt = expanded;
         Expr *out = elab_form(e, expanded);
+        e->toplevel_stmt = saved_tl_stmt;
         e->macro_expansion_module = saved_expansion;
         if (e->n_macro_expansion_stack > 0) e->n_macro_expansion_stack--;
+        if (e->macro_expand_depth == 1 && diag_error_serial() != mx_err_before)
+            diag_emit(DIAG_NOTE, call->span,
+                      "in expansion of macro '%s' -- the diagnostics above are "
+                      "inside code this call generated",
+                      name->name);
         e->macro_expand_depth--;
         return out;
     }
@@ -2618,7 +2906,7 @@ Expr *elab_call(Elab *e, Form *call) {
     Binding *fn_binding = elab_lookup_sym(e, name, head->span, &fn_qual_err);
     if (!fn_binding && fn_qual_err) return NULL;
 
-    /* constrained-generic-as-value (docs/reported/constrained-generic-as-value-
+    /* constrained-generic-as-value (docs/archive/history/constrained-generic-as-value-
      * bakes-representative.md): a call through an immutable let-bound alias of a
      * global function -- `(let [g count-it] (g box))` -- was elaborated as an
      * indirect call through `g`, so the emit-side per-call-site generic-dict
@@ -2682,7 +2970,7 @@ Expr *elab_call(Elab *e, Form *call) {
      * stdlib classes (Eq/Hash/Show/Num/Functor/...).
      *
      * Namespace separation (fix (1) of
-     * docs/reported/typeclass-methods-share-value-namespace-with-defns.md):
+     * docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md):
      * when a free `defn` *and* a user-defined typeclass method share the name,
      * the `!fn_binding` gate alone would make the defn shadow the method at
      * every bare call site.  Instead, when an instance of the user class
@@ -2710,7 +2998,13 @@ Expr *elab_call(Elab *e, Form *call) {
             items[0] = form_sym(e->arena, head->span, dot_sym);
             for (uint32_t i = 1; i < n_items; i++) items[i] = call->as.list.items[i];
             Form *dotcall = form_list(e->arena, call->span, items, n_items);
-            return elab_method_call(e, dotcall);
+            /* A statically resolved dispatch carries the instance method as
+             * fn_binding, so its inferred non-retaining mask makes an inline
+             * continuation's env freeable at this scope -- the same hoist a
+             * defn call gets. */
+            Expr *mc = elab_method_call(e, dotcall);
+            return (mc && call_dispatch_is_static(mc))
+                ? hoist_borrowed_closure_args(e, mc, call->span) : mc;
         }
     }
 
@@ -2840,7 +3134,7 @@ Expr *elab_call(Elab *e, Form *call) {
              * function return type, a match arm's peer type, an ascription,
              * etc.), use it as the result type so bare `(PFail)` unifies
              * with concrete `(POK v rest)` peers.  See
-             * docs/reported/defdata-parametric-inference-and-elab-match-segv.md. */
+             * docs/archive/history/defdata-parametric-inference-and-elab-match-segv.md. */
             Type result_type = fn_binding->type;
             if (ctor->adt->n_type_params > 0 && e->expected_type &&
                 e->expected_type->kind == TY_APP) {
@@ -2994,13 +3288,54 @@ Expr *elab_call(Elab *e, Form *call) {
                          fn_param_type_is_fat_normalized(&fa->as.var.binding->type)))
                         continue;
                     uint32_t inner_arity = fa->type.as.fn.arity;
-                    if (inner_arity < 1 || inner_arity > 5) continue;
+                    /* Arity 0 admitted alongside the field-boxing change in
+                     * resolve_ctor_field: a thunk field is boxed now, so a
+                     * thin nullary fn stored into it needs the same shim. */
+                    if (inner_arity > 5) continue;
                     Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
                     *bt = fa->type;
                     bt->as.fn.boxed = true;
                     Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt, fa->span);
                     shim->as.fn_to_fat_.inner = fa;
                     call_expr->as.call_.args[fi] = shim;
+                }
+
+                /* closure-in-defdata-field, the residue: a field declared as
+                 * bare `:fn` (no signature -- full_type NULL) or as a >4-arity
+                 * `(fn ...)` stays on the THIN calling convention; there is no
+                 * signature (or no TUR_APPLY<N>_T) to box it with.  A
+                 * CAPTURING closure stored into such a field is a fat env
+                 * block that every force site will jump into as code --
+                 * a guaranteed runtime SIGSEGV with no diagnostic anywhere.
+                 * Reject the store instead.  Captureless lambdas lift to bare
+                 * function pointers and stay correct on the thin path, and
+                 * every in-tree `:fn` field stores exactly those, so this
+                 * rejects nothing that works today. */
+                for (uint32_t fi = 0; fi < ctor->n_fields && fi < n_call_args; fi++) {
+                    if (ctor->fields[fi].kind != TY_FN) continue;
+                    const Type *ft = ctor->fields[fi].full_type;
+                    bool thin_fn_field =
+                        !ft || (ft->kind == TY_FN && !ft->as.fn.boxed);
+                    if (!thin_fn_field) continue;
+                    const Expr *fa = call_expr->as.call_.args[fi];
+                    while (fa && fa->kind == EX_ASCRIBE) fa = fa->as.ascribe_.inner;
+                    if (fa && fa->kind == EX_CLOSURE && fa->as.closure_.closure &&
+                        fa->as.closure_.closure->n_captures > 0) {
+                        diag_emit(DIAG_ERROR, fa->span,
+                                  "constructor '%s': a capturing closure cannot be "
+                                  "stored in field %u, whose type ('%s') uses the "
+                                  "thin function-pointer representation\n"
+                                  "  = note: the closure's environment would be "
+                                  "called as code at every use -- a runtime crash\n"
+                                  "  = help: declare the field with a full "
+                                  "signature of arity <= 4, e.g. (fn [int] int), "
+                                  "which stores closures correctly; or wrap the "
+                                  "closure in an opaque carrier "
+                                  "((defopaque Th :ptr<void>)) as stdlib/logic.tur's "
+                                  "Goal does",
+                                  ctor->name, fi,
+                                  ft ? type_name(*ft) : "fn");
+                    }
                 }
 
                 /* closure-drop-glue S2 (Model U): storing a CAPTURING closure
@@ -3147,7 +3482,7 @@ Expr *elab_call(Elab *e, Form *call) {
          * stays the named tyvar.  In that case elab_call_fn already produced the
          * instantiated result type; overwriting it with the bare tyvar would
          * discard the per-call-site substitution.  See
-         * docs/reported/parameterized-defopaque.md. */
+         * docs/archive/history/parameterized-defopaque.md. */
         /* struct-return-through-closure-loses-type: gate on the call result
          * actually being the struct carrier.  An under-applied call returns a
          * closure value (TY_PTR_VOID); patching it to the struct result type
@@ -3311,7 +3646,7 @@ Expr *elab_call(Elab *e, Form *call) {
              * record their return type in the process-global signature registry;
              * consult it so a curated typed wrapper over a non-:int native
              * elaborates correctly.  See
-             * docs/archive/untyped-native-registration-blocks-curated-facades.md. */
+             * docs/archive/history/untyped-native-registration-blocks-curated-facades.md. */
             Type dispatch_result = TYPE_INT;
             const char *nm = name->name;
             bool native_registered = false;
@@ -3323,11 +3658,12 @@ Expr *elab_call(Elab *e, Form *call) {
                     if (tur_native_sig_lookup(nm, &nrt)) {
                         native_registered = true;
                         switch (nrt) {
-                            case TUR_NRT_FLOAT: dispatch_result = TYPE_FLOAT;    break;
-                            case TUR_NRT_BOOL:  dispatch_result = TYPE_BOOL;     break;
-                            case TUR_NRT_CSTR:  dispatch_result = TYPE_CSTR;     break;
-                            case TUR_NRT_VOID:  dispatch_result = TYPE_NIL;      break;
-                            case TUR_NRT_PTR:   dispatch_result = TYPE_PTR_VOID; break;
+                            case TUR_NRT_FLOAT:  dispatch_result = TYPE_FLOAT;    break;
+                            case TUR_NRT_BOOL:   dispatch_result = TYPE_BOOL;     break;
+                            case TUR_NRT_CSTR:   dispatch_result = TYPE_CSTR;     break;
+                            case TUR_NRT_VOID:   dispatch_result = TYPE_NIL;      break;
+                            case TUR_NRT_PTR:    dispatch_result = TYPE_PTR_VOID; break;
+                            case TUR_NRT_SYNTAX: dispatch_result = TYPE_SYNTAX;   break;
                             case TUR_NRT_INT:   /* fallthrough: keep TYPE_INT */
                             default:            dispatch_result = TYPE_INT;      break;
                         }
@@ -3342,7 +3678,7 @@ Expr *elab_call(Elab *e, Form *call) {
              * run).  When the name is neither bound nor in the typed-native
              * registry, warn so embedders consuming the diag sink surface it at
              * load time.  See
-             * docs/archive/eval-mode-unknown-call-deferred-to-runtime.md. */
+             * docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md. */
             if (!native_registered) {
                 diag_emit_with_code(DIAG_WARNING, head->span,
                                     TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH,
@@ -3365,7 +3701,7 @@ Expr *elab_call(Elab *e, Form *call) {
      * value for head and tail -- ints, cstrs, opaque handles, pointers --
      * since cells are pointer-as-int64.  Bypass the strict per-arg check for
      * it; codegen casts the args through intptr_t.  See
-     * docs/reported/cons-builtin-rejects-cstr-head.md. */
+     * docs/archive/history/cons-builtin-rejects-cstr-head.md. */
     bool cons_wildcard = (spec->shape == BS_FUNC_CALL && spec->c_op &&
                           strcmp(spec->c_op, "cons") == 0);
     /* All args must match the spec's arg type. */
@@ -3466,8 +3802,8 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
          *   - nominal-identity: a :B captured at a :A slot -- same kind,
          *     different nominal.  The saturated path only re-checks the
          *     *remaining* params, so the captured slot must be validated here.
-         * See docs/reported/partial-application-skips-captured-arg-type-check.md
-         * and docs/upcoming/positional-nominal-type-identity-fix-plan.md. */
+         * See docs/archive/history/partial-application-skips-captured-arg-type-check.md
+         * and docs/archive/history/positional-nominal-type-identity-fix-plan.md. */
         {
             Type *cap_full_chk = PAP_SLOT_FULL(i);
             bool slot_is_nominal =
@@ -3507,7 +3843,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
          * as int64_t (type_c_name of a nameless struct kind), the let-binding
          * init truncates the struct value, and the inner call passes an int64_t
          * where the callee expects the nominal struct -- a hard C compile error.
-         * See docs/upcoming/stdlib-type-erasure-cleanup-plan.md (A5). */
+         * See docs/archive/history/stdlib-type-erasure-cleanup-plan.md (A5). */
         {
             Type *cap_full_t = PAP_SLOT_FULL(i);
             if (cap_full_t &&
@@ -3716,6 +4052,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     pap_closure->n_captures = (uint8_t)n_pap_captures;
     pap_closure->env_name = pap_env_sym;
     pap_closure->is_shift_receiver = false;   /* arena mem is not zeroed */
+    pap_closure->fat_captures_borrowed = false;
     pap_closure->is_effect_payload = false;
     pap_closure->capture_drop_insts = NULL;   /* Model R #1b: no Drop resolution here */
     pap_closure->capture_clone_insts = NULL;
@@ -3779,7 +4116,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
 }
 
 /* bare-fat-result-monomorphization (Phase B) -------------------------------
- * See docs/upcoming/bare-fat-result-monomorphization-plan.md. */
+ * See docs/archive/history/bare-fat-result-monomorphization-plan.md. */
 
 /* Recover the result kind of a closure passed into a bare-^fat slot, from any
  * of its surface forms: a bare/auto-shimmed function value (TY_FN, possibly
@@ -3989,7 +4326,60 @@ static Expr *try_eta_expand_generic_fn_arg(Elab *e, const Form *arg_form,
     return r;
 }
 
+/* Bare-ctor expected type: is `f` literally a constructor call -- `(Empty)`,
+ * `(none)`, `(Some x)` -- of the SAME ADT that `app` applies?
+ *
+ * A nullary constructor of a parametric ADT carries no field arguments to bind
+ * its type parameters from, so it defaults to the bare TY_ADT and emits the
+ * un-monomorphised carrier ctor.  The consumer that fixes this already exists
+ * (see the "Parametric 0-arg constructor result-type inference" block), and the
+ * ascription path `(:: (Empty) (Box int))` already feeds it -- but nothing fed
+ * it from a call's ARGUMENT position, so `(getv (Empty))` against
+ * `getv [b : (Box int)]` still picked `ctor_Empty()`.
+ *
+ * Gated on the ctor's own ADT matching the parameter's, so the pushed type can
+ * only ever ground a constructor to a family it already belongs to. */
+static bool arg_form_is_ctor_call_of(Elab *e, const Form *f, const Type *app) {
+    if (!e || !f || !app || app->kind != TY_APP) return false;
+    const Symbol *name = NULL;
+    if (f->tag == F_LIST && f->as.list.len >= 1 &&
+        f->as.list.items[0]->tag == F_SYM)
+        name = f->as.list.items[0]->as.sym;
+    if (!name) return false;
+    CtorDef *c = elab_lookup_ctor(e, name);
+    return c && c->adt && c->adt->n_type_params > 0 &&
+           c->adt == type_adt_app_def(app);
+}
+
 /* Phase 2: Elaborate a function call (f a b c) */
+/* any-struct-box-leak-per-widen: does `x` evaluate to an `any` whose payload box
+ * THIS expression owns -- nothing else holds it, so the consumer may drop it?
+ *
+ * Two base cases and one step.  A widen performed here mints the box (a
+ * frame-boxed one is excluded: that payload is a stack address).  A call to a
+ * returns_fresh_any producer mints one per call.  And a call to a passthrough
+ * (returns_any_param_idx) forwards its argument without keeping it, so the
+ * question moves to that argument -- which is what makes `(alias tmp)` owned
+ * when `tmp` was, and NOT owned when the caller was handed it.
+ *
+ * Depth-bounded rather than recursive-without-limit: the chain is a syntactic
+ * one through named callees, so a handful of links is generous, and a bound
+ * removes any question about a pathological program.  Running out of depth
+ * answers "not owned", which only ever declines a drop. */
+bool any_expr_is_owned_temp(const Expr *x, int depth) {
+    if (!x || depth <= 0) return false;
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x || x->type.kind != TY_ANY) return false;
+    if (x->kind == EX_UNION_INJECT) return !x->as.union_inject_.frame_box;
+    if (x->kind != EX_CALL || !x->as.call_.fn_binding) return false;
+    const Binding *fb = x->as.call_.fn_binding;
+    if (fb->returns_fresh_any) return true;
+    int pi = fb->returns_any_param_idx;
+    if (pi >= 0 && (uint32_t)pi < x->as.call_.n_args && x->as.call_.args)
+        return any_expr_is_owned_temp(x->as.call_.args[pi], depth - 1);
+    return false;
+}
+
 static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
 
@@ -4039,6 +4429,34 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                            cbind, &n_cbind) && n_cbind > 0) {
                 fn_type = call_instantiate_type(e, &fn_type, cbind, n_cbind);
             }
+        }
+        /* generic-closure-return-type-app (Defect A): the thunk's
+         * result_full_type is NULL -- the "(type-app ? ?)" shell the lambda
+         * grounding gate deliberately leaves when the inferred body type
+         * mentions the enclosing fn's tyvar (elab_fns.c, closure-result-
+         * monomorphization Phase 2).  The recovery above is guarded on it
+         * being non-NULL, so it never fired and the call's result fell
+         * through to `type_from_kind(TY_APP)`: a zeroed app whose printer
+         * renders `(type-app ? ?)`.  But the BINDING's own type carries the
+         * correctly-instantiated result -- elab_call_head_expr copied the
+         * head expr's `(fn [] (Cons int))` onto the temp, and a user let
+         * records the grounded type the same way -- so graft that result
+         * onto the thunk signature.  Result slot only: the thunk's arg list
+         * includes the hidden env parameter and must not be replaced.  This
+         * is the report's "narrower change": the deliberate grounding
+         * invariant in elab_fns.c is untouched. */
+        if (fn_type.kind == TY_FN && !fn_type.as.fn.result_full_type &&
+            (fn_type.as.fn.result_kind == TY_APP ||
+             fn_type.as.fn.result_kind == TY_ADT) &&
+            fn_binding->type.kind == TY_FN &&
+            fn_binding->type.as.fn.result_full_type &&
+            fn_binding->type.as.fn.result_full_type->kind ==
+                fn_type.as.fn.result_kind &&
+            !call_type_has_named_tyvar(
+                fn_binding->type.as.fn.result_full_type)) {
+            Type *ground = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *ground = *fn_binding->type.as.fn.result_full_type;
+            fn_type.as.fn.result_full_type = ground;
         }
     } else if (fn_binding->type.kind == TY_PTR_VOID && !fn_binding->is_fat) {
         /* CRU B-4: retire the :ptr<void>-as-closure overload.  A *raw*
@@ -4483,11 +4901,18 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         const Form *arg_form = call->as.list.items[1 + i];
         /* Expected concrete fn type for this parameter (if any). */
         const Type *exp_param_fn = NULL;
+        /* The same slot, when it declares a parametric ADT application -- the
+         * channel a bare constructor argument needs.  See
+         * arg_form_is_ctor_call_of. */
+        const Type *exp_param_app = NULL;
         if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
             uint32_t idx = fn_binding->closure_fn_binding ? i + 1 : i;
-            if (idx < fn_type.as.fn.arity && fn_type.as.fn.arg_full_types[idx] &&
-                fn_type.as.fn.arg_full_types[idx]->kind == TY_FN)
-                exp_param_fn = fn_type.as.fn.arg_full_types[idx];
+            if (idx < fn_type.as.fn.arity && fn_type.as.fn.arg_full_types[idx]) {
+                if (fn_type.as.fn.arg_full_types[idx]->kind == TY_FN)
+                    exp_param_fn = fn_type.as.fn.arg_full_types[idx];
+                else if (fn_type.as.fn.arg_full_types[idx]->kind == TY_APP)
+                    exp_param_app = fn_type.as.fn.arg_full_types[idx];
+            }
         }
         /* poly-hof-constrained-arg-baked-carrier: when the function-typed
          * parameter is itself polymorphic (`f : (fn [A] int)` on a HOF
@@ -4579,6 +5004,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 (arg_form->as.list.items[0]->as.sym == e->sym_fn ||
                  arg_form->as.list.items[0]->as.sym == e->sym_lambda)) {
                 e->expected_type = (Type *)exp_param_fn;
+                pushed_expected = true;
+            } else if (arg_form_is_ctor_call_of(e, arg_form, exp_param_app)) {
+                /* Bare constructor argument: hand it the parameter's own
+                 * family so it selects that monomorph rather than the carrier
+                 * base.  Same channel the lambda case above uses, same
+                 * immediate restore. */
+                e->expected_type = (Type *)exp_param_app;
                 pushed_expected = true;
             }
             args[i] = elab_form(e, call->as.list.items[1 + i]);
@@ -4710,7 +5142,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * arg_full_types (Phase 1).  Placed before the escape hatches: those only
          * ever set arg_ok from false->true for cross-kind coercions, so demoting a
          * spurious same-kind match here cannot resurrect a real coercion.
-         * See docs/upcoming/positional-nominal-type-identity-fix-plan.md. */
+         * See docs/archive/history/positional-nominal-type-identity-fix-plan.md. */
         if (arg_ok && (expected_arg_kind == TY_STRUCT || expected_arg_kind == TY_ADT) &&
                 fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
             uint32_t nidx = fn_binding->closure_fn_binding ? i + 1 : i;
@@ -4752,7 +5184,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                      * than the opaque `ptr<void>` carrier.  This lets the HKT
                      * by-value monomorphization recover the result element of the
                      * Applicative `ap` shape
-                     * (docs/reported/m7-hkt-ap-fn-element-carrier-erasure.md).
+                     * (docs/archive/history/m7-hkt-ap-fn-element-carrier-erasure.md).
                      * The runtime value is still a fat box (EX_FN_TO_FAT emits a
                      * `void *` regardless, reading inner->type); only the static
                      * type changes.  The clone is marked `boxed` so downstream
@@ -5065,6 +5497,101 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         if (!arg_ok && expected_arg_kind == TY_ANY) {
             arg_ok = true;
             args[i] = elab_coerce_to_any(e, args[i]);
+            /* any-struct-box-leak-per-widen: a by-value payload widened here is
+             * heap-copied by the emitter, and nothing owns that copy -- one
+             * malloc leaked per widen, which a loop turns into linear growth.
+             * When the callee provably cannot keep the payload past this call,
+             * the copy belongs in the CALLER's frame instead, and then there is
+             * no allocation to own.  Three conditions, each of which only ever
+             * declines:
+             *
+             *   direct callee   -- given: elab_call_fn_inner is the
+             *                      statically-known-callee path, so an indirect
+             *                      call (no body to inspect) never arrives here;
+             *   non-retaining   -- the inferred mask (elab_fns.c) says the body
+             *                      does not keep a pointer this parameter
+             *                      carries, and its result cannot carry one out.
+             *                      Cleared for any body containing inline-C,
+             *                      which could stash the pointer where no AST
+             *                      walk can see it;
+             *   effect-free     -- a callee that can PERFORM may suspend, and
+             *                      its resumption must not reach back into a
+             *                      caller frame that the trampoline has left.
+             *                      A declared row variable reads as non-empty
+             *                      and is refused, so this is conservative.
+             *
+             * Same soundness posture as the closure-env and catch-box frees this
+             * inference already serves: it only ever greenlights, and every
+             * unmodelled shape keeps the status-quo allocation. */
+            if (args[i] && args[i]->kind == EX_UNION_INJECT &&
+                fn_binding && i < 32 &&
+                (fn_binding->nonretain_ptr_param_mask & (1u << i)) &&
+                fn_binding->type.kind == TY_FN &&
+                effect_row_is_empty(fn_binding->type.as.fn.effect_row)) {
+                args[i]->as.union_inject_.frame_box = true;
+            }
+        }
+
+        /* any-struct-box-leak-per-widen (the temporary case): the argument was
+         * ALREADY an `any` -- no widen here to frame-box -- but it is a fresh
+         * one this expression owns and nothing else does: the result of a call
+         * whose body's tail is a widen (returns_fresh_any).  Its payload box has
+         * no owner anywhere, so without this it leaks once per evaluation.
+         *
+         * The same two conditions as the frame-box rule make it safe to drop as
+         * soon as the consuming call returns -- the callee does not keep it, and
+         * cannot suspend between receiving it and returning.  What is NOT enough
+         * is "the argument is a call returning any": a callee that hands back an
+         * `any` it was GIVEN (`(defn keep-it [v : any] : any v)`) returns an
+         * alias, and dropping that would free a box its other holder still uses.
+         * returns_fresh_any is exactly the distinction, and it is why this needs
+         * a callee-side fact rather than a call-site shape. */
+        if (expected_arg_kind == TY_ANY && args[i] && i < 32 && fn_binding
+            && (fn_binding->nonretain_ptr_param_mask & (1u << i))
+            && fn_binding->type.kind == TY_FN
+            && effect_row_is_empty(fn_binding->type.as.fn.effect_row)) {
+            if (any_expr_is_owned_temp(args[i], 8))
+                args[i]->any_drop_after = true;
+        }
+
+        /* RM1 (reclamation-plan): the sum-box temporary case, the any rule one
+         * type over.  `(ok? (ok 1))` mallocs a carrier box on the erased path
+         * that nothing owns -- the sweep's dominant leak shape.  Stamp the
+         * argument call when the CONSUMER is a read-only accessor (argument 0,
+         * pure -- the same non-suspending condition the any rule carries) and
+         * the PRODUCER's every value path mints a fresh box (the callee-side
+         * freshness fact; a pass-through like alt-or stays unstamped, exactly
+         * as `keep-it` does for any).  Emit frees the temp after the accessor
+         * call materializes, gated there on the temp's recorded int64 spelling
+         * so a specialized by-value call is never touched. */
+        if (args[i] && fn_binding && fn_binding->name &&
+            fn_binding->type.kind == TY_FN &&
+            effect_row_is_empty(fn_binding->type.as.fn.effect_row) &&
+            ((sum_box_reader_name(fn_binding->name->name) &&
+              /* Which argument POSITIONS hold a readable box differs per
+               * callee, and the restriction is load-bearing: unwrap-or's arg 1
+               * is the DEFAULT, which the callee RETURNS on the None path --
+               * stamping it would free a value the caller receives.  The eq?
+               * comparators read boxes at 0 and 1; everything else at 0 only. */
+              (i == 0 ||
+               (i == 1 && (strcmp(fn_binding->name->name, "result-eq?") == 0 ||
+                           strcmp(fn_binding->name->name, "option-eq?") == 0)))) ||
+             /* value-struct-payload-sum-monomorph-box-has-no-owner: or a USER
+              * callee whose body was inferred not to retain this sum-typed
+              * parameter (and whose result cannot carry it out) -- the same
+              * fact the name allowlist asserts, checked instead of trusted.
+              * Zero for inline-C bodies and dictionary-dispatched methods. */
+             (i < 32 && (fn_binding->nonretain_sum_param_mask & (1u << i))))) {
+            Expr *a = args[i];
+            while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+            /* A dictionary dispatch (abstract receiver / return type) is
+             * stamped TENTATIVELY: the callee that runs is only known per
+             * monomorph at emit, which re-resolves it and asks the freshness
+             * question of that binding before freeing anything. */
+            if (call_returns_fresh_sum_box(a) ||
+                (a && a->kind == EX_CALL && a->as.call_.dict_arg &&
+                 !call_dispatch_is_static(a)))
+                a->sum_box_drop_after = true;
         }
 
         /* LT2: When both expected and actual argument types are function types,
@@ -5318,6 +5845,10 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                             e, clone, clone->type.as.fn.arity, 0, args[i]->span, false);
                         if (!wrapper_b) return NULL;
                         wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+                        /* turi-dict-passing-plan: let the interpreter target
+                         * the clone directly (it cannot execute the emit-side
+                         * __poly wrapper). */
+                        wrap->as.poly_wrap_.dict_clone_binding = clone;
                     } else {
                         uint32_t inner_arity = (inner_fn_b->type.kind == TY_FN)
                             ? inner_fn_b->type.as.fn.arity : 1;
@@ -5390,7 +5921,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                  * function whose signature has a float-class argument or result
                  * cannot round-trip through it without a register-class miscompile
                  * (xmm vs gp); reject the coercion rather than miscompile.  See
-                 * docs/reported/fn-first-class-float-carrier-gap.md. */
+                 * docs/archive/history/fn-first-class-float-carrier-gap.md. */
                 if (!param_typed_carrier && inner_fn_b && inner_fn_b->type.kind == TY_FN) {
                     const Type *ft = &inner_fn_b->type;
                     bool has_float = (kind_is_non_int_register_class(ft->as.fn.result_kind) ||
@@ -5485,6 +6016,40 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 fn_type.as.fn.arg_full_types) {
                 const Type *aft_nom = fn_type.as.fn.arg_full_types[fn_arg_idx_fat];
                 slot_nominal = aft_nom && fn_param_type_is_fat_normalized(aft_nom);
+                /* poly-result-hof-capturing-closure-sigbus, residual arm: the
+                 * effect-row exclusion was lifted 2026-08-16 (effect-annotated
+                 * fn params are fat-normalized; slot_nominal is true for them
+                 * and this diagnostic no longer fires there).  What remains
+                 * THIN is the predicate's other rejects -- cfnptr, variadic,
+                 * arity>5 -- and a capturing closure into an EFFECT-ANNOTATED
+                 * such param still has nowhere to carry its environment: the
+                 * callee would jump into the env box as code at run time
+                 * (SIGBUS/SIGSEGV).  Keep the call-site error for exactly
+                 * those shapes, placed before the `^borrow` hoist hides the
+                 * closure literal behind a temp. */
+                if (!slot_nominal && aft_nom && aft_nom->kind == TY_FN &&
+                    aft_nom->as.fn.effect_row && !aft_nom->as.fn.cfnptr) {
+                    Expr *cl = args[i];
+                    while (cl && cl->kind == EX_ASCRIBE)
+                        cl = cl->as.ascribe_.inner;
+                    if (cl && cl->kind == EX_CLOSURE &&
+                        cl->as.closure_.closure &&
+                        cl->as.closure_.closure->n_captures > 0) {
+                        diag_emit_with_code(DIAG_ERROR, cl->span,
+                            TUR_E0007_CAPTURE_ERROR,
+                            "capturing closure passed to effectful fn "
+                            "parameter %u of '%s': this parameter shape "
+                            "(cfnptr, variadic, or arity above 5) keeps the "
+                            "thin calling convention, which cannot carry a "
+                            "closure environment -- this call would crash at "
+                            "run time. Reduce the signature to 5 or fewer "
+                            "non-variadic parameters, or pass the captured "
+                            "state as explicit arguments",
+                            (unsigned)(i + 1),
+                            fn_binding->name ? fn_binding->name->name
+                                             : "<fn>");
+                    }
+                }
             }
             if (slot_fat_decl || slot_nominal) {
                 /* fat-closure-ascription: an *already-fat* closure value that is
@@ -5570,7 +6135,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                      * sink selects __tur_poly_to_fat<N>: the carrier's slot 1
                      * holds the method's real N-ary thunk (make_poly_wrapper), so
                      * every argument is forwarded.  (See
-                     * docs/reported/poly-to-fat-drops-args-beyond-first-multiarg-method.md.) */
+                     * docs/archive/history/poly-to-fat-drops-args-beyond-first-multiarg-method.md.) */
                     const Type *eft = (fn_type.as.fn.arg_full_types &&
                                        fn_arg_idx_fat < fn_type.as.fn.arity)
                         ? fn_type.as.fn.arg_full_types[fn_arg_idx_fat] : NULL;
@@ -5600,10 +6165,48 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     shim->as.fn_to_fat_.inner = args[i];
                     /* A normalized NOMINAL param never drops its argument --
                      * which is precisely why this shim leaked a box per call --
-                     * so its box may be the shared file-scope one.  A ^fat sink
-                     * (slot_fat_decl) may drop, so it keeps the heap box.  See
-                     * the static_ok comment in expr.h. */
-                    shim->as.fn_to_fat_.static_ok = slot_nominal && !slot_fat_decl;
+                     * so its box may be the shared file-scope one.
+                     *
+                     * A `^fat` sink (slot_fat_decl) used to be excluded outright,
+                     * on the grounds that such a callee MAY take ownership and
+                     * drop, and its droppedness is not visible at the call site.
+                     * The first half is true; the second is not, because the
+                     * only way to drop is `TUR_CLOSURE_DROP`, which is a C macro
+                     * and so reachable only from an inline-C body -- and a body
+                     * containing any inline-C has `nonretain_param_mask == 0` by
+                     * construction (elab_fns.c zeroes it there, precisely because
+                     * a C body can stash a param where no AST walk can see it).
+                     *
+                     * So a set nonretain bit already implies the callee neither
+                     * retains NOR drops this argument, which is exactly the
+                     * ownership fact the shared box needs.  It also sidesteps the
+                     * -Wfree-nonheap-object problem that ruled the static box out
+                     * before: no free is emitted for a callee that cannot drop.
+                     *
+                     * Without this, every `^fat` call site mallocs a fresh
+                     * {shim, orig} box that nothing ever frees -- ~205 bytes per
+                     * call, 822 MiB over 4e6 iterations.  See the static_ok
+                     * comment in expr.h and
+                     * docs/archive/fat-sink-shim-box-leaks-per-call.md. */
+                    /* residual-leaks (2026-09-02): a DECLARED `^borrow` on the
+                     * sink is the same fact stated by the callee -- the only way
+                     * an inline-C body (whose inferred mask is zero by
+                     * construction) can say it invokes and never retains.  The
+                     * stdlib comparators (`result-eq?`, `vec-eq?`, `map-eq-raw?`
+                     * ...) declare it; without this each call minted a 24-byte
+                     * shim box nothing freed. */
+                    bool sink_is_nonretaining =
+                        fn_binding && i < 32 &&
+                        ((fn_binding->nonretain_param_mask & (1u << i)) != 0 ||
+                         (fn_binding->type.kind == TY_FN &&
+                          i < fn_binding->type.as.fn.arity &&
+                          fn_binding->type.as.fn.arg_flags &&
+                          FN_ARG_FLAG(fn_binding->type.as.fn, i, FA_BORROW)));
+                    shim->as.fn_to_fat_.static_ok =
+                        (slot_nominal && !slot_fat_decl) ||
+                        (slot_fat_decl && sink_is_nonretaining);
+                    shim->as.fn_to_fat_.stack_ok =
+                        slot_fat_decl && sink_is_nonretaining;
                     args[i] = shim;
                 } else if (ak == TY_PTR_VOID || (ak == TY_FN && args[i]->type.as.fn.boxed) ||
                            ak == TY_NIL ||
@@ -5673,6 +6276,33 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                     arg_b->name->name);
                 return NULL;
             }
+            /* The binding is itself a `^borrow` PARAMETER.
+             *
+             * scope_borrow_conflicts only sees borrows registered in THIS frame
+             * by an explicit `(& x)`, and a `^borrow` parameter registers
+             * nothing -- the aliasing happened in the caller.  So a shared
+             * reference could be handed straight to an exclusive parameter with
+             * no diagnostic at all, and the callee's mutation was observable
+             * through the caller's borrow: exactly what ^unique ^mut exists to
+             * rule out.  A by-value struct hides it (the callee mutates a copy);
+             * a heap-backed carrier like `(Vec int)` shows it.
+             *
+             * Rejecting the crossing directly, rather than registering ^borrow
+             * params as frame-live borrows, is the narrower of the two fixes the
+             * report weighs: it says only "a shared reference cannot become an
+             * exclusive one", which is true independent of what the frame knows,
+             * and it cannot make any other borrow check noisier.
+             * See docs/archive/borrow-param-passed-as-unique-mut-undiagnosed.md. */
+            if (arg_b->is_borrow) {
+                diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                                    TUR_E0200_UNIQUE_ALIASED,
+                                    "cannot pass '%s' as ^unique ^mut -- it is a "
+                                    "^borrow parameter, so the caller still holds "
+                                    "it as a shared reference and the callee's "
+                                    "mutation would be visible through it",
+                                    arg_b->name->name);
+                return NULL;
+            }
         }
 
         /* Phase 11: Move tracking - if arg is a CK_MOVE binding reference, poison it.
@@ -5712,7 +6342,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * here means the borrow is legal, so roll back the consumption: the
          * single-consumption obligation is preserved for a later consuming op
          * (fs/tmpfile-free, mutex-free, ...).  This is the call-site half of
-         * the borrow form -- see docs/reported/stdlib-linear-handle-borrows.md. */
+         * the borrow form -- see docs/archive/history/stdlib-linear-handle-borrows.md. */
         if (args[i]->kind == EX_VAR && fn_type.kind == TY_FN) {
             uint32_t fn_borrow_idx = fn_binding->closure_fn_binding ? i + 1 : i;
             if (fn_borrow_idx < fn_type.as.fn.arity &&
@@ -5949,7 +6579,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * reinterpret cannot carry a composite anyway -- type_size_bytes is 0
          * for TY_APP/struct/ADT, so call_wrap_reinterpret would no-op and the
          * collapse to int would be pure loss.  See
-         * docs/reported/polymorphic-return-type-instantiation-collapses-to-first-tyvar.md
+         * docs/archive/history/polymorphic-return-type-instantiation-collapses-to-first-tyvar.md
          *
          * vec-get-existential-element-erased-to-int: an existential (or its
          * dual forall) is the same shape of carrier-ABI structural type -- a
@@ -5996,7 +6626,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * elaborated body, so the clone cannot recover their float register class --
      * a hard error is correct, not a silent miscompile.  Generalizing this
      * (per-spec re-elaboration of the inner body) is the remaining Stage E work;
-     * see docs/reported/poly-closure-inner-dispatch-result-erased.md. */
+     * see docs/archive/history/poly-closure-inner-dispatch-result-erased.md. */
     /* poly-closure-inner-dispatch-result-erased: fire E0705 only when the
      * dispatching inner body has untyped fat-calls that Direction 3 cannot
      * handle.  When all dispatches are through typed (fn [..] R) bindings with
@@ -6678,6 +7308,7 @@ static bool convert_mapper_to_dict_closure(Elab *e, Expr *pw, FnDef *M,
      * construction and are never dispatched here. */
     struct Closure *clo = (struct Closure *)arena_alloc(e->arena, sizeof(struct Closure));
     clo->fn = M;
+    clo->fat_captures_borrowed = false;   /* arena mem is not zeroed */
     Binding **caps = (Binding **)arena_alloc(e->arena, n_cap * sizeof(Binding *));
     for (uint8_t k = 0; k < n_cap; k++) caps[k] = cap_dicts[k];
     clo->captures = caps;
@@ -6834,7 +7465,7 @@ static void dict_clone_lower_nested_mappers(Elab *e, Expr *node,
  * captures the dict.  Beta-reduction is semantically neutral here (single
  * application, each argument bound once) and idempotent (the rewritten EX_LET no
  * longer matches).  See
- * docs/reported/forall-dict-direct-applied-nested-lambda-dispatch.md. */
+ * docs/archive/history/forall-dict-direct-applied-nested-lambda-dispatch.md. */
 typedef struct { const Binding *v; FnDef *fd; } LiftAlias;
 
 /* Resolve a callee binding to the captureless lifted-lambda FnDef it names --
@@ -7418,6 +8049,15 @@ Binding *poly_arg_fn_binding(Expr *arg) {
 static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
 
+    /* turi-dict-passing-plan probe (2026-08-16): snapshot the expected-type
+     * channel for THIS call (pushed by an ascription or typed let) for the
+     * MB1 dict pin and the result instantiation below.  Deliberately NOT
+     * cleared or restored: every fn-value invocation routes through this
+     * function (`(pred c)` on a plain fn param included), and perturbing the
+     * channel here starves sibling ctor inference in the enclosing body --
+     * measured as a parsec-tutorial if-branch mismatch on the first cut. */
+    Type *poly_expected = e->expected_type;
+
     /* Elaborate all arguments normally */
     Expr **args = (Expr **)arena_alloc(e->arena, (n_args ? n_args : 1) * sizeof(Expr *));
     for (uint32_t i = 0; i < n_args; i++) {
@@ -7432,7 +8072,7 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
      * it through the int64 carrier is a silent register-class miscompile.  Reject
      * it with a hard error rather than miscompile -- a typed `:fn` signature
      * (the F5 phase of the plan) is the proper fix.  See
-     * docs/reported/fn-first-class-float-carrier-gap.md. */
+     * docs/archive/history/fn-first-class-float-carrier-gap.md. */
     if (fn_binding->poly_type == NULL) {
         for (uint32_t i = 0; i < n_args; i++) {
             if (kind_is_non_int_register_class(args[i]->type.kind) ||
@@ -7628,7 +8268,58 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                         if (pinned) break;
                     }
                 }
-                if (!pinned) continue;   /* resolved via return context; defer */
+                /* turi-dict-passing-plan probe (2026-08-16): the constraint var
+                 * may appear ONLY in the forall body's RESULT type --
+                 * `make : (forall m. Applicative m => int -> (m int))` -- with
+                 * no argument to pin from.  The old code deferred with a
+                 * comment claiming the return context would resolve it, but
+                 * nothing downstream did: the dict was silently NOT prepended
+                 * while the callee wrapper still expects it as a leading arg,
+                 * so `(g 7)` called a 3-param wrapper with 2 args and the int
+                 * argument was dereferenced as the dict (SIGSEGV past a clean
+                 * compile; turi, which resolves per-instance at run time, got
+                 * it right).  Pin from the RT expected-type channel when the
+                 * call site carries one (ascription / typed let), structurally
+                 * matching the declared result exactly as MB4 matches an
+                 * argument. */
+                if (!pinned && poly_expected &&
+                    cbody->as.fn.result_full_type) {
+                    CallTypeBinding rbinds[16]; uint8_t rnb = 0;
+                    if (call_collect_type_bindings(cbody->as.fn.result_full_type,
+                                                   *poly_expected,
+                                                   rbinds, &rnb)) {
+                        for (uint8_t bi = 0; bi < rnb; bi++) {
+                            if (!rbinds[bi].name ||
+                                strcmp(rbinds[bi].name, vname) != 0)
+                                continue;
+                            const Type *base = &rbinds[bi].type;
+                            while (base->kind == TY_APP && base->as.app.fn)
+                                base = base->as.app.fn;
+                            if (base->kind != TY_TYVAR &&
+                                base->kind != TY_UNKNOWN) {
+                                concrete = *base;
+                                pinned = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+                /* Still unpinned: the instantiation is ambiguous at this call
+                 * site and the emitted call would be the silent ABI mismatch
+                 * above -- reject instead. */
+                if (!pinned) {
+                    diag_emit(DIAG_ERROR, call->span,
+                              "rank-2 constraint '%s %s' cannot be resolved at "
+                              "this call site: no argument mentions '%s', and "
+                              "no expected result type is in scope to pin it. "
+                              "Ascribe the call result (e.g. (:: (f ...) (T "
+                              "...))) or bind it with a typed let so the "
+                              "instance can be chosen",
+                              (tc->name && tc->name->name) ? tc->name->name
+                                                           : "?",
+                              vname, vname);
+                    return NULL;
+                }
                 /* Only discharge against a ground type -- a tyvar/unknown/applied
                  * binding means the call sits inside another generic body and the
                  * obligation is still abstract (same guard as elab_call.c:4975). */
@@ -7750,7 +8441,7 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                  * (The legacy anonymous TY_STRUCT{def=NULL} placeholder no longer
                  * exists; a bare-tyvar result is always the named TY_TYVAR from
                  * Direction A step 2a --
-                 * see docs/reported/open-binder-skolems-not-distinguishable.md.) */
+                 * see docs/archive/history/open-binder-skolems-not-distinguishable.md.) */
                 result_kind = (n_args > 0 && args[0]) ? args[0]->type.kind : TY_INT;
                 /* Slice 3 (constrained-hkt-forall codegen): when the result
                  * tyvar is instantiated to a by-value aggregate (e.g. `(Option
@@ -7794,6 +8485,14 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                             call_collect_type_bindings(body->as.fn.arg_full_types[j],
                                                        args[j]->type, binds, &nb);
                     }
+                    /* turi-dict-passing-plan probe: a bound var that no
+                     * argument mentions (`int -> (m int)`) instantiates from
+                     * the expected result type -- the same source the MB1
+                     * dict pin used above.  Args bind first, so an
+                     * arg-derived binding still wins. */
+                    if (poly_expected)
+                        call_collect_type_bindings(rfull, *poly_expected,
+                                                   binds, &nb);
                     Type inst = call_instantiate_type(e, rfull, binds, nb);
                     if (inst.kind == TY_APP || inst.kind == TY_ADT) {
                         Type *rf = (Type *)arena_alloc(e->arena, sizeof(Type));

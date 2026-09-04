@@ -1,0 +1,17 @@
+;; option-niche: the OTHER door for a null payload. tur_some_ptr(0) builds a
+;; legal CARRIER box -- tag Some, payload NULL, `some?` true on the carrier
+;; path -- and the carrier->niche crossing used to hand the niche its 0
+;; payload, silently turning a some into (none). The checked bridge read
+;; (tur_opt_value_checked) must abort before any output, mirroring the niche
+;; Some ctor's check at the construction door.
+(load "stdlib/string.tur")
+
+(defn evil [] : (Option String)
+  ```c
+  return tur_some_ptr(0);
+  ```)
+
+(defn main [] : int
+  (let [o (evil)]
+    (if (some? o) (println "some") (println "none"))
+    0))

@@ -4,16 +4,16 @@ category: Tutorials
 description: Create a database and a query system to go with it
 ---
 
-# EAVT Database: Minimal ImplementationDatalog Tutorial Pt. 2: Minimal Implementation
+# Datalog Tutorial Pt. 2: Minimal Implementation
 
 This session walks through `examples/datalog/minimal.tur` line by line. By the
 end you will have a working, append-only fact database with a predicate-based
-query interface in roughly 150 lines of Turmeric.
+query interface in roughly 250 lines of Turmeric.
 
 Run the complete example at any time:
 
 ```sh
-./build/tur examples/datalog/minimal.tur
+./build/tur run examples/datalog/minimal.tur
 ```
 
 ---
@@ -42,6 +42,33 @@ defdata Value
 so it can pass through the database machinery without triggering the borrow
 checker.
 `EntityVal` holds an entity ID, enabling typed cross-entity references.
+
+**A `defdata` value moves by default.** Binding one and then using it twice is
+an error:
+
+```
+error [TUR-E0201]: cannot copy unique value 'e-val' --
+unique values may be used at most once
+```
+
+That is the right default for an ADT that owns something, but a `Value` here
+is a tag plus a machine word -- there is nothing to own, and the later steps of
+this tutorial genuinely do want to use one twice (unify a term against it,
+*then* bind the term to it). Annotate the type `:copy` when you reach that
+point:
+
+```turmeric
+(defdata Value :copy
+  (LongVal :int)
+  (StrVal :int)
+  (EntityVal :int))
+```
+
+`examples/datalog/datalog.tur` carries the annotation for exactly this reason;
+`minimal.tur` does not need it, because nothing in it uses a `Value` twice.
+Reach for `:copy` when the checker asks for it, not before -- the error names
+the binding and the second use, so it is a precise instruction rather than a
+puzzle.
 
 Constructors wrap the raw int:
 
@@ -253,6 +280,15 @@ defn cstr-eq? [a :int b :int] :bool
 `cstr->int` turns a string literal (whose address is stable for the lifetime of
 the program) into an opaque integer for storage. `cstr-eq?` compares two such
 stored strings using `strcmp`.
+
+> **This local `cstr-eq?` is not the stdlib one.** `stdlib/cstr.tur` exports a
+> `cstr-eq? [a : cstr b : cstr] : bool` -- byte-wise content equality on real
+> `cstr` values, available via `(import cstr :refer [cstr-eq?])`. The helper
+> above takes the *erased* `:int` storage handles this tutorial stores in its
+> datums, so the two are not interchangeable and importing `cstr` into this
+> file would collide. Reach for the stdlib one in ordinary code: `=` has no
+> `cstr` overload at all, so `(= a b)` on two `cstr` values is a `TUR-E0006`
+> operator-lookup error rather than a comparison.
 
 ---
 

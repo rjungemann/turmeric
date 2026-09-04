@@ -1,0 +1,24 @@
+;; ascribe-int-to-float-expression-ambiguity: `::` between an integer kind and a
+;; float kind meant two different things depending on where the value came from,
+;; and nothing in the static types separated them.
+;;
+;;   (:: (.n m) :float)        -- a genuine integer; the author means the NUMBER
+;;   (:: (list-head c) :float) -- a float that reached an :int carrier slot;
+;;                                the author means the BIT PATTERN
+;;
+;; It used to answer "bits" for both, silently.  On the first reading that turns
+;; 3 into a denormal, which contributes nothing to a sum -- so the wrong value
+;; read as a DROPPED term rather than a garbage one.  Neither reading gets to
+;; win by default now; the spelling is refused and the author says which.
+;;
+;; Literals are exempt and keep converting: there is no carried value whose bits
+;; could be meant -- see tests/fixtures/ascribe-int-literal-to-float.
+
+(defstruct Mixed [n : int d : float])
+
+(defn mixedfold [m : Mixed] : float
+  (+ (:: (.n m) :float) (.d m)))
+
+(defn main [] : int
+  (println (mixedfold (Mixed 3 0.25)))
+  0)

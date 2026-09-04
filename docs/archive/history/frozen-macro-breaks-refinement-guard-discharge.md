@@ -103,7 +103,7 @@ RE1's accessor guards are meant to read `(frozen w (if (alive? w e) (get-Pos! w 
 Until this is fixed, RE1 must spell the region inline as
 `(let [_ (& w)] ...)` (sound and working) or the guard will not discharge. See
 `docs/upcoming/v1/ecs-refinement-typed-apis-plan.md` (RE1) and
-`docs/upcoming/v1/refine-stateful-measures-plan.md`.
+`docs/archive/refine-stateful-measures-plan.md`.
 
 ## Second RE1 dependency (noted here, separate issue)
 

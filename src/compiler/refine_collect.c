@@ -231,9 +231,8 @@ static bool enc_name_is_frozen(const Enc *E, const char *name) {
  * so a goal-predicate argument in a callee parameter name is checked against
  * the actual caller expression, and a shadowed binder cannot masquerade as the
  * frozen one -- then matched by name against the frozen set. */
-static bool enc_reads_arg_frozen(const Enc *E, const Form *f, uint32_t reads_plus1) {
-    if (!E || reads_plus1 == 0 || E->n_frozen == 0) return false;
-    uint32_t p = reads_plus1 - 1;                 /* 0-based param index */
+/* Is the argument at 0-based param index `p` a name frozen in scope here? */
+static bool enc_reads_one_arg_frozen(const Enc *E, const Form *f, uint32_t p) {
     if (!f || f->tag != F_LIST || (uint32_t)(p + 1) >= f->as.list.len) return false;
     const Form *arg = f->as.list.items[p + 1];    /* items[0] is the head */
     if (!arg || arg->tag != F_SYM || !arg->as.sym) return false;
@@ -246,6 +245,27 @@ static bool enc_reads_arg_frozen(const Enc *E, const Form *f, uint32_t reads_plu
         }
     }
     return nm && enc_name_is_frozen(E, nm);
+}
+
+/* multiple-reads-params: the congruence grant is CONJUNCTIVE over the frame.
+ *
+ * A `#reads` frame naming several parameters says the measure is a function of
+ * all of their mutable state.  Two occurrences denote one value only if every
+ * one of those states is pinned at this site -- a single unfrozen named
+ * parameter is enough for the measure to differ between them, which is exactly
+ * the crossing check this grant elides.  So: all frozen, or no grant.
+ *
+ * Reading this as "any frozen" would be unsound, and silently so: it would
+ * elide crossings for a measure whose other read state is free to change.  The
+ * mask is never empty when we get here (an empty `#reads` is TUR-E0024), so
+ * the all-quantifier cannot degenerate into a vacuous true. */
+static bool enc_reads_args_frozen(const Enc *E, const Form *f, uint64_t mask) {
+    if (!E || mask == 0 || E->n_frozen == 0) return false;
+    for (uint32_t p = 0; p < 64; p++) {
+        if (!(mask & (UINT64_C(1) << p))) continue;
+        if (!enc_reads_one_arg_frozen(E, f, p)) return false;
+    }
+    return true;
 }
 
 static VCTerm *enc(Enc *E, const Form *f);
@@ -458,16 +478,24 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
     RefineFnInfo info;
     bool pure = enc_callee_is_pure(E, head->as.sym->name, &info);
 
-    /* C2 / #reads: a measure declared `#reads w` is congruent when its world
-     * argument is FROZEN at this site -- a live borrow (the `(& w)` a `frozen`
+    /* C2 / #reads: a measure declared `#reads w` (or `#reads [w g]`) is
+     * congruent when EVERY named argument is FROZEN at this site -- a live borrow (the `(& w)` a `frozen`
      * region holds) proves the state it reads cannot change here, so two
      * occurrences denote one value.  This grants congruence to an otherwise
      * impure measure, and it is sound ONLY because the callee's own entry check
      * is never elided (this proof elides the caller-side crossing check, not
      * the safety check) -- see docs/guides/stateful-refinements-guide.md.  It
      * never turns a proof INTO impurity, so it cannot lose an existing one. */
-    if (!pure && info.reads_param_plus1 != 0 &&
-        enc_reads_arg_frozen(E, f, info.reads_param_plus1))
+    /* R2 (trusted-refinement-claims-plan, graduated 2026-08-20): refuse the
+     * grant on positive evidence that the frame omits mutable state the body
+     * reads (TUR-W0383's finding, carried on the resolved info).  The measure
+     * then encodes fresh-per-occurrence like any unframed impure callee, and
+     * the crossing gets the ordinary TUR-W0372.  Keys on "saw a read", never
+     * "could not see" -- an unwalkable (inline-C) body carries no evidence and
+     * keeps the trusted grant. */
+    if (!pure && info.reads_params_mask != 0 &&
+        !info.reads_frame_omits_state &&
+        enc_reads_args_frozen(E, f, info.reads_params_mask))
         pure = true;
 
     /* RM-B1/RM-B2: the sort this measure symbol is declared at.  Settled once

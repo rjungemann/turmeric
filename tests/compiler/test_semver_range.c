@@ -17,7 +17,7 @@
  * wrong: `^0.32.2` bounds the next MINOR (`<0.33.0`) because pre-1.0 minors are
  * breaking by convention, while `^1.2.3` bounds the next MAJOR.
  *
- * See docs/reported/no-compiler-version-constraint-in-manifest.md.
+ * See docs/archive/history/no-compiler-version-constraint-in-manifest.md.
  * Built via the tur_semver_range_unit CMake target.
  */
 #include <stdio.h>
@@ -32,8 +32,9 @@ static int failures = 0;
 
 /* Stub required by the tur_core link dependency (mirrors the other
  * compiler-internals unit tests). */
-int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
-                        int *count_out) {
+int tur_collect_symbols(const char *source_path, const char *logical_path,
+                        LspSymbol *out, int cap, int *count_out) {
+    (void)logical_path;
     (void)source_path; (void)out; (void)cap;
     if (count_out) *count_out = 0;
     return 0;

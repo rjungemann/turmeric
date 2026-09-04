@@ -4,7 +4,7 @@
 > experiment gate is gone). No flag is needed.
 > See [contract-types-guide.md](contract-types-guide.md) for the runtime half,
 > and
-> [../upcoming/v1/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refinement-types-plan.md)
+> [../archive/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refinement-types-plan.md)
 > for the design.
 
 Contract types (`#refine{ x : T | p }`) check their predicate at **runtime**.
@@ -33,14 +33,19 @@ Nothing to turn on -- static discharge runs on every compile. Write a
 `#refine{...}` and the compiler tries to prove it.
 
 It graduated from the `refined` experiment in v0.33.0. If you opted in
-earlier, the old spellings still work and are now no-ops you can delete:
+earlier, the old spellings must now be **deleted** -- their compatibility shims
+were retired in 0.38.0, one minor line after graduation, and each is a hard
+error again:
 
-| Old spelling | What it does now |
-|---|---|
-| `--enable=refined` | accepted, `TUR-W0063`, no effect |
-| `:experiments [:refined]` in `build.tur` | accepted, `TUR-W0063`, no effect |
-| `~/.config/turmeric/experiments.tur` `:enable [:refined]` | accepted, `TUR-W0063`, no effect |
-| `#lang turmeric refined` (first line of a file) | accepted, `TUR-W0064`, no effect |
+| Old spelling | Through 0.37.0 | From 0.38.0 |
+|---|---|---|
+| `--enable=refined` | accepted, `TUR-W0063`, no effect | `TUR-E0310` |
+| `:experiments [:refined]` in `build.tur` | accepted, `TUR-W0063`, no effect | `TUR-E0310` |
+| `~/.config/turmeric/experiments.tur` `:enable [:refined]` | accepted, `TUR-W0063`, no effect | `TUR-E0310` |
+| `#lang turmeric refined` (first line of a file) | accepted, `TUR-W0064`, no effect | `TUR-E0330` |
+
+Refinement checking itself is unaffected: `#refine{...}` has been unconditional
+since 0.33.0 and needs no flag or layer.
 
 These compatibility shims age out one minor line after graduation, so drop the
 flag when convenient rather than relying on it.
@@ -388,15 +393,13 @@ actually want to write works as written:
   (if (alive? w e) (use-it w e) 0))      ; the guard IS the proof
 ```
 
-Before this, every measure was declared integer-sorted. A `bool`-returning one
-was then rejected as "does not denote a proposition" and silently fell to
-unknown, which pushed people to the `(= (alive-i w x) 1)` spelling -- the exact
-`:int` stand-in `CLAUDE.md` forbids. A `float`-returning one was worse than
-incomplete: it was *mis*-sorted, and integer tightening (`e < 4` implies
-`e <= 3`, valid only over the integers) turned an unprovable goal into a proved
-one and elided a check that should have fired. `refine-bool-measure`,
-`refine-float-measure`, and `errors/refine-float-measure-not-tightened` pin all
-three.
+The sorting matters for soundness as well as expressiveness: a `bool` measure
+mis-sorted as an integer would push people to the `(= (alive-i w x) 1)`
+spelling -- the exact `:int` stand-in `CLAUDE.md` forbids -- and a `float`
+measure mis-sorted as an integer would let integer tightening (`e < 4` implies
+`e <= 3`, valid only over the integers) prove an unprovable goal and elide a
+check that should fire. `refine-bool-measure`, `refine-float-measure`, and
+`errors/refine-float-measure-not-tightened` pin all three behaviors.
 
 An **abstract** measure -- a name that resolves to no function at all -- has no
 return type to read, so its *position* decides: a proposition where the grammar
@@ -725,7 +728,7 @@ note: the predicate (not= x 0) is false for the value given here
 | `TUR-E0371` | the predicate genuinely does not hold: a function's own claim is falsifiable, or an argument is definitely wrong at its call site |
 | `TUR-W0372` | nothing decided it; the runtime check is kept |
 | `TUR-W0373` | a nonlinear subterm was abstracted; arithmetic reasoning is incomplete for it |
-| `TUR-W0060` | the `refined` experiment is in use (prototype lifecycle notice) |
+| `TUR-E0310` / `TUR-E0330` | a lingering `--enable=refined` / `#lang turmeric refined`; both shims retired in 0.38.0, so both are errors -- delete them |
 
 `TUR-E0371` and `TUR-W0372` both leave the program safe -- the runtime check
 survives in each case. Under `--strict-refine` both become hard errors.
@@ -933,10 +936,7 @@ anyway.
   `let` contributes `x = v`, a `match` arm contributes a literal pattern's
   equation and its guard. The caller's **whole** body is searched, so a call in
   any body form keeps its guards -- not only one in the form the function
-  returns. That distinction was a real gap: `caller_body` used to be the last
-  body form, which is the return obligation's subject and not the body, so a
-  zero-parameter caller like `main` had the walk searching its trailing `0` for
-  the call and every guard was lost.
+  returns.
 
   Four things are deliberately left out, and all four cost a diagnostic rather
   than soundness -- the callee's own entry check always remains:
@@ -976,8 +976,8 @@ anyway.
   There is no cross-build cache.
 - **[by design] Purity is a syntactic whitelist, not an analysis.** A function whose body
   steps outside the admitted forms is impure even when it is in fact pure --
-  a struct field read or a loop is still enough (`match` was, and no longer
-  is). Its calls are then not congruent and measure-style reasoning over it
+  a struct field read through a computed receiver or a loop is enough.
+  Its calls are then not congruent and measure-style reasoning over it
   does not go through. This costs completeness, never soundness. Widening the
   whitelist further is the natural next increment; the effect row cannot
   substitute for it, because an empty row is not a purity claim.
@@ -992,7 +992,13 @@ anyway.
   was always the enforcement, and that remains intact for ordinary code). A
   hard guarantee needs module-private construction / a `::`-sealed newtype --
   an independent language feature, tracked in
-  `docs/reported/frozen-region-aliasing-via-coercing-cast.md`. See the
+  `docs/archive/frozen-region-aliasing-via-coercing-cast.md`. Trust is no
+  longer the whole story, though: a demonstrably broken frame (a direct read
+  of a mutable global, or of state rooted in a parameter the frame omits)
+  draws `TUR-W0383` and is refused the congruence grant, and
+  `--dump-read-frames` shows the verification walk's verdict, which can stamp
+  a walkable body's frame VERIFIED. An inline-C body stays exactly as trusted
+  as this entry describes. See the
   [Stateful Refinements guide](stateful-refinements-guide.md).
 
 Every one of these fails toward a runtime check, never toward a wrong answer
@@ -1007,4 +1013,4 @@ states.
 - [contract-types-guide.md](contract-types-guide.md) -- the always-on runtime half
 - [experimental-flags-guide.md](experimental-flags-guide.md) -- the `--enable=` mechanism
 - [syntax-guide.md](syntax-guide.md) -- `#lang` layers
-- [../upcoming/v1/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refinement-types-plan.md) -- design, staging, and what is left
+- [../archive/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refinement-types-plan.md) -- design, staging, and what is left

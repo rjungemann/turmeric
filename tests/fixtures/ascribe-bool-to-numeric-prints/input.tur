@@ -32,8 +32,20 @@
   (println (:: 0 :bool))         ; false
   ;; an unascribed bool still renders as a bool
   (println true)                 ; true
-  ;; `::` over an int operand stays a bit-level reinterpret, not a conversion
-  (println (:: 1 :float))        ; 4.94066e-324
+  ;; An int LITERAL ascribed to a float converts -- it is the number, not its
+  ;; bit pattern.  This line used to assert 4.94066e-324 (the double whose bits
+  ;; are 0x...01) under the heading "`::` over an int operand stays a bit-level
+  ;; reinterpret, not a conversion".  That was not a designed semantic: it fell
+  ;; out of the same-size rule in elab_ascribe, and it did not even hold across
+  ;; widths -- `(:: 1 :float32)` printed 1 on the same build, because 8 != 4
+  ;; misses that rule.  One operator disagreeing with itself by target width is
+  ;; the tell.  See docs/archive/ascribe-int-to-float-reinterprets.md.
+  ;;
+  ;; Only literals changed.  `::` from an int-typed EXPRESSION to a float is
+  ;; still a bit-reinterpret, because the carrier round-trip depends on it --
+  ;; see tests/fixtures/typed-slots/ascribe-reinterpret.
+  (println (:: 1 :float))        ; 1
+  (println (:: 1 :float32))      ; 1 -- agreed with the line above all along
   ;; and the ascribed value is a number to everything downstream, not just print
   (let [n (:: true :int)]
     (println (+ n 41)))          ; 42

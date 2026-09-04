@@ -1,8 +1,15 @@
 /* elab_toplevel.c -- top-level form dispatch and the elaborate_program entry point. */
 #include "elab_internal.h"
 #include "platform_fs.h"  /* realpath() on Windows */
-#include "globals.h"      /* g_opt_cps_tramp_resume (top-level-main synthesis gate) */
+#include "globals.h"
+#include "mangle.h"   /* tur_cname_name_len */
 #include "refine_discharge.h" /* RT3: final refinement discharge + stats */
+#include "refine_report.h"    /* SX8a-3: --dump-refine=json obligation dump */
+
+/* duplicate-ctor-names-collide-in-emitted-c: the constructor-name census lives
+ * in emit_core.c; declared here because elab_toplevel.c does not include
+ * emit_internal.h. */
+void ctor_census_snapshot(struct AdtDef *const *defs, uint32_t n_defs);
 
 Expr *elab_as_cast(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
@@ -142,6 +149,7 @@ Expr *elab_is_q(Elab *e, const Form *call) {
         return NULL;
     }
     TypeKind test_kind = typekind_from_symbol(type_form->as.sym->name);
+    Type test_type = type_simple(TY_UNKNOWN, CK_COPY);
     if (test_kind == TY_UNKNOWN) {
         Type *named = elab_lookup_type_by_name(e, type_form->as.sym);
         if (!named) {
@@ -150,13 +158,21 @@ Expr *elab_is_q(Elab *e, const Form *call) {
             return NULL;
         }
         /* CONV-S1: struct-origin lowered ADT tests as TY_STRUCT, matching the
-         * box tag set by elab_coerce_to_any. */
+         * box tag set by elab_coerce_to_any.
+         * type-of-cast-kind-granularity: keep the named type too -- emit turns
+         * it into the same per-monomorph box id the inject site allocates, so
+         * `(is? a OtherStruct)` on an `any` holding a Point is false rather
+         * than true-for-every-struct. */
         test_kind = any_box_tag_for_type(named);
+        test_type = *named;
+    } else {
+        test_type = type_simple(test_kind, CK_COPY);
     }
     Type bool_t = type_simple(TY_BOOL, CK_COPY);
     Expr *out = expr_new(e->arena, EX_ANY_IS, bool_t, call->span);
     out->as.any_is_.value = val;
     out->as.any_is_.test_tag = (int64_t)test_kind;
+    out->as.any_is_.test_type = test_type;
     return out;
 }
 
@@ -229,12 +245,10 @@ static StrSlice elab_cblock_resolve_cnames(Elab *e, StrSlice code, Span span,
     for (uint32_t i = 0; i + 14 <= len; ) {
         if (memcmp(src + i, "__TUR_CNAME_", 12) != 0) { i++; continue; }
         uint32_t name_start = i + 12;
-        uint32_t j = name_start;
-        while (j + 1 < len && !(src[j] == '_' && src[j + 1] == '_')) j++;
-        if (!(j + 1 < len && src[j] == '_' && src[j + 1] == '_' && j > name_start)) {
-            i = name_start; continue;
-        }
-        uint32_t name_len = j - name_start;
+        /* tur_cname_name_len handles a <name> that itself begins with `__`. */
+        uint32_t name_len = tur_cname_name_len(src, len, name_start);
+        if (name_len == 0) { i = name_start; continue; }
+        uint32_t j = name_start + name_len;
         const Symbol *sym = symtab_intern(e->st, strslice(src + name_start, name_len));
         bool qual_err = false;
         Binding *b = elab_lookup_sym(e, sym, span, &qual_err);
@@ -257,10 +271,9 @@ static StrSlice elab_cblock_resolve_cnames(Elab *e, StrSlice code, Span span,
     for (uint32_t i = 0; i < len; ) {
         if (i + 14 <= len && memcmp(src + i, "__TUR_CNAME_", 12) == 0) {
             uint32_t name_start = i + 12;
-            uint32_t j = name_start;
-            while (j + 1 < len && !(src[j] == '_' && src[j + 1] == '_')) j++;
-            if (j + 1 < len && src[j] == '_' && src[j + 1] == '_' && j > name_start) {
-                uint32_t name_len = j - name_start;
+            uint32_t name_len = tur_cname_name_len(src, len, name_start);
+            if (name_len > 0) {
+                uint32_t j = name_start + name_len;
                 const Symbol *sym = symtab_intern(e->st,
                                                   strslice(src + name_start, name_len));
                 bool qual_err = false;
@@ -541,7 +554,7 @@ Expr *elab_form(Elab *e, Form *f) {
              * `:foo`. This lets DSL helpers in defns construct AST
              * nodes without TUR-E0003 chasing the inner symbol against
              * scope. See
-             * docs/reported/defgodot-script-macro-vec-quote-semantics.md. */
+             * docs/archive/history/defgodot-script-macro-vec-quote-semantics.md. */
             if (quoted->tag == F_SYM) {
                 Expr *out = expr_new(e->arena, EX_SYM_LIT, TYPE_SYM, f->span);
                 out->as.sym_lit_.sym = quoted->as.sym;
@@ -725,7 +738,7 @@ typedef struct {
      * this, the post-load stdlib boundary stays at the stale input count, and
      * the last auto-loaded defmodule's members fall past it (so the
      * stdlib macro-promotion sweep never reaches them).  See
-     * docs/reported/autoload-defmodule-macro-not-promoted.md. */
+     * docs/archive/history/autoload-defmodule-macro-not-promoted.md. */
     bool           track_boundary;
     uint32_t       boundary_in;
     uint32_t       boundary_out;
@@ -801,7 +814,7 @@ static void load_expand_emit(LoadExpandCtx *lx, Arena *arena, Form *f) {
  * when a sibling file later loads typeclass.tur explicitly. (The old
  * multi-pass fixpoint deferred transitive loads a pass behind sibling
  * explicit loads, letting the later one claim the path and relocate the
- * expansion; see docs/reported/load-not-idempotent-typeclass.md.) */
+ * expansion; see docs/archive/history/load-not-idempotent-typeclass.md.) */
 static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
                               SymbolTable *st, Form *const *forms, uint32_t nforms) {
     for (uint32_t i = 0; i < nforms; i++) {
@@ -1120,6 +1133,41 @@ static bool form_has_toplevel_unhandled_perform(const Elab *e, const Form *f) {
     return false;
 }
 
+/* True when `f` contains a `def`/`define` SUBFORM -- a `def` nested inside a
+ * top-level statement rather than heading a top-level form of its own.
+ *
+ * Such a `def` binds a GLOBAL: at file scope `(when true (def x 1))` and
+ * `(if c (def x 1) (def y 2))` both mint globals that later forms can see, and
+ * that is how the interpreter and the no-fold compiled path behave.  Folding
+ * the statement into the synthesized main body relocates the `def` INSIDE a
+ * function, where `e->scope != &e->global` makes elab_def emit "`def` here has
+ * nothing to scope over: ... binds a name no later form can see" -- a claim
+ * that is false about the code the user actually wrote.  So the fold turned a
+ * working program into a compile error, and only when no user `main` existed:
+ * adding `(defn main [] : int 0)` to the same file made the error disappear.
+ *
+ * This is the same hazard the `?`/`return` carve-out above guards, in the
+ * opposite direction (there, folding SUPPRESSES a correct rejection; here it
+ * CREATES a spurious one), so it takes the same remedy -- abort the fold and
+ * leave the form at top level, where it keeps its real meaning.
+ *
+ * A `def` inside a nested `fn`/lambda is a function-local binding either way
+ * and is genuinely rejected in both paths, so it does not block the fold.
+ * See docs/archive/turi-toplevel-expr-subforms-elaborate-in-global-scope.md. */
+static bool form_has_nested_def(const Elab *e, const Form *f, bool nested) {
+    if (!f || f->tag != F_LIST || f->as.list.len == 0) return false;
+    const Form *head = f->as.list.items[0];
+    if (head && head->tag == F_SYM) {
+        const Symbol *hs = head->as.sym;
+        if (nested && (hs == e->sym_def || hs == e->sym_define)) return true;
+        /* a nested fn/lambda body is its own scope, not file scope */
+        if (hs == e->sym_fn || hs == e->sym_lambda) return false;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (form_has_nested_def(e, f->as.list.items[i], true)) return true;
+    return false;
+}
+
 /* Classify a `(defmacro name [params] TEMPLATE)` form: does its expansion
  * produce a STATEMENT (fold-safe) rather than a top-level definition/directive?
  *
@@ -1292,7 +1340,7 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                                          * recursion) types the call as `int`, and a `match`
                                          * arm returning the ADT then reports a spurious
                                          * "arm types incompatible -- expected int, got adt".
-                                         * (docs/reported/logic-port-language-gaps.md GAP 2.) */
+                                         * (docs/archive/history/logic-port-language-gaps.md GAP 2.) */
                                         for (uint32_t ai = 0; ai < ep->n_adt_defs; ai++) {
                                             if (strcmp(ep->adt_defs[ai]->name, kw->name) == 0) {
                                                 Type adt_ty = type_adt(ep->adt_defs[ai]);
@@ -1382,7 +1430,7 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                              * params vector.  fwd_decl_scan_params skips
                              * `^`-prefixed markers (^fat/^mut/...) so the
                              * forward-declared arity is not over-stated (see
-                             * docs/reported/pap-defmodule-fat-fn-too-many-args.md). */
+                             * docs/archive/history/pap-defmodule-fat-fn-too-many-args.md). */
                             TypeKind *arg_kinds = NULL;
                             uint32_t param_arity = (name_idx + 1 < (uint32_t)f->as.list.len)
                                 ? fwd_decl_scan_params(arena, f->as.list.items[name_idx + 1], &arg_kinds)
@@ -1436,6 +1484,7 @@ void elab_session_free(ElabSession *session) {
         free(e->active_dynvar_bindings);
         free((void *)e->load_expanded_paths);
         free(e->file_scope_defs);
+        elab_macro_env_dispose(e->macro_env);
     }
     free(e);
 }
@@ -1676,7 +1725,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * emitted into a synthesized `int main()` that never reaches the CPS
      * classifier, so the top-level handle stays on the fiber, base_taints its
      * effect, and every performer of that effect is forced onto the fiber
-     * (SIG-TAINT).  See docs/reported/cps-toplevel-synthesized-main-bypasses-dk.md.
+     * (SIG-TAINT).  See docs/archive/cps-toplevel-synthesized-main-bypasses-dk.md.
      *
      * CONSERVATIVE + macro-safe: only fires when there is NO user `main` and
      * every user-region top-level form is cleanly classifiable WITHOUT expanding
@@ -1689,13 +1738,12 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * the fold and preserves the historical behaviour exactly.  Only the entry
      * unit is transformed (never a separately-compiled module).
      *
-     * GATED on --enable=cps-tramp-resume: flag-off, the base CPS admissible
-     * subset is narrower and the N6.5 direct/fiber fallback is retired, so a
-     * synthesized d2b `main` whose handle subtree leaves the subset would HARD-
-     * ERROR instead of gracefully fibering.  The historical synthesized-`int
-     * main()` path (never subject to the CPS classifier) stays the flag-off
-     * behaviour; the fold only fires under the experiment, keeping flag-off
-     * codegen byte-identical. */
+     * This used to be GATED on --enable=cps-tramp-resume, because flag-off the
+     * base CPS admissible subset was narrower and the N6.5 direct/fiber fallback
+     * is retired, so a synthesized d2b `main` whose handle subtree left the
+     * subset would HARD-ERROR instead of gracefully fibering.  cps-tramp-resume
+     * graduated 2026-07-19, so the fold is unconditional and the historical
+     * synthesized-`int main()` path it fell back to is gone. */
     /* Interpreter parity (tur-eval-prints-fn-main): the tree-walking interpreter
      * never reaches the CPS/DK backend this fold exists to feed, and folding a
      * bare top-level expression into `(defn main [] : int (do <expr> 0))` makes
@@ -1705,10 +1753,11 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * at all.  Under the interpreter every top-level form is evaluated directly
      * in turi_eval_impl's loop, so leaving statements top-level both runs their
      * side effects and surfaces the last expression's value.  The fold graduated
-     * to default-on with `cps-tramp-resume` (2026-07-19), which is what regressed
-     * the interpreter eval/REPL value display; suppress it under g_interpret_mode
-     * to restore correct value semantics while keeping the compiled-path fold. */
-    if (g_opt_cps_tramp_resume && !g_interpret_mode
+     * to default-on with `cps-tramp-resume` (2026-07-19, unconditional since it
+     * graduated), which is what regressed the interpreter eval/REPL value
+     * display; suppress it under g_interpret_mode to restore correct value
+     * semantics while keeping the compiled-path fold. */
+    if (!g_interpret_mode
         && !separate_compilation && stdlib_prefix <= nforms) {
         /* Collect every defmacro name (user + stdlib) so a macro-headed
          * top-level statement can be detected.  Also record each macro's
@@ -1771,6 +1820,10 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
              * top-level and keeps its correct diagnostic -- such a program is a
              * compile error either way, so the historical path is exactly right. */
             if (hs == e.sym_question || hs == e.sym_return) { ambiguous = true; break; }
+            /* A `def`/`define` nested inside the statement binds a global at
+             * file scope; folding it into main would relocate it into a
+             * function body and reject it.  Keep the form top-level. */
+            if (form_has_nested_def(&e, f, false)) { ambiguous = true; break; }
             int macro_idx = -1;
             for (uint32_t m = 0; m < n_macro; m++)
                 if (macro_names[m] == hs) { macro_idx = (int)m; break; }
@@ -1920,6 +1973,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         free(e.macros);
         free(e.macro_expansion_stack);
         free((void *)e.load_expanded_paths);
+        elab_macro_env_dispose(e.macro_env);
         return NULL;
     }
 
@@ -1927,7 +1981,12 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
     e.in_stdlib_load = (stdlib_prefix > 0);
     for (uint32_t i = 0; i < nforms; i++) {
         if (i == stdlib_prefix) e.in_stdlib_load = false;
+        /* Statement position for the def-position check: this form, and any
+         * form reachable from it through `do` chains, is a statement.  Anything
+         * deeper is an expression subform.  See def_form_is_statement_position. */
+        e.toplevel_stmt = forms[i];
         items[i] = elab_form(&e, forms[i]);
+        e.toplevel_stmt = NULL;
         if (!items[i]) { rc = -1; /* keep going to surface more diagnostics */ }
 
         /* Phase M7+: Each (load ...)-spliced file is conceptually its own
@@ -2091,7 +2150,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      *
      * A typeclass method and a free top-level `defn` share the same value
      * namespace.  The two now coexist (fix (1) of
-     * docs/reported/typeclass-methods-share-value-namespace-with-defns.md): a
+     * docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md): a
      * bare `(name x ...)` dispatches to the matching instance when the
      * receiver's static type selects one, and falls back to the free defn
      * otherwise (see the `prefer_method_dispatch` gate in elab_call.c).  The
@@ -2140,8 +2199,36 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * Same deferral rationale as the crossings themselves: a frame's callees may
      * be defined later in the unit. */
     wf_resolve_write_frames(&e);
+    wf_lint_image_globals(&e);   /* AI3.1: TUR-W0706, after every site exists */
+    /* R4 slice 2: verify `#reads` frames against their elaborated bodies,
+     * stamping reads_checked where every read attributes to the frame.  Emits
+     * nothing but the optional --dump-read-frames dump plus slice 3's
+     * EXCEEDED evidence (TUR-W0383). */
+    rf_resolve_read_frames(&e);
     refine_resolve_call_sites(&e);
     refine_discharge_all(&e.refine_obs, arena);
+    /* SX8a: the JSON obligation dump.  Emitted here rather than from the
+     * discharge pass so it sees every obligation the unit produced, including
+     * the crossings resolved just above.  Goes to stdout: it is the artifact
+     * the caller asked for, not a diagnostic about one. */
+    if (g_dump_refine_json) {
+        Buf rb; buf_init(&rb);
+        refine_report_json(&e.refine_obs, &rb);
+        buf_to_file(&rb, stdout);
+        buf_free(&rb);
+    }
+
+    /* duplicate-ctor-names-collide-in-emitted-c: the emitted constructor symbol
+     * is ADT-qualified, and a constructor name owned by exactly ONE ADT also
+     * keeps a bare-name alias so hand-written inline C (`ctor_Left(v)`, which
+     * stdlib/either.tur documents) still resolves.  Deciding "exactly one" needs
+     * every ADT in the program.
+     *
+     * Taken HERE, above the teardown, and not at the return: the non-session
+     * path frees `e.adt_defs` a few lines down, so snapshotting after it read
+     * freed memory (ASan heap-use-after-free).  The census copies the names it
+     * needs, so nothing downstream holds an elaborator pointer. */
+    ctor_census_snapshot(e.adt_defs, e.n_adt_defs);
 
     if (sess) {
         /* TR2: the accumulated state IS the session -- hand it back instead of
@@ -2160,6 +2247,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         free(e.dynvar_entries);
         free(e.active_dynvar_bindings);
         free((void *)e.load_expanded_paths);
+        elab_macro_env_dispose(e.macro_env);
     }
     if (rc != 0) return NULL;
 

@@ -14,6 +14,7 @@ typedef struct TuriStruct     TuriStruct;      /* defined in eval.c */
 typedef struct TuriThrow      TuriThrow;       /* defined in eval.c */
 typedef struct TuriFuture     TuriFuture;      /* defined in turi/fiber.h */
 typedef struct TuriEnv        TuriEnv;         /* from env.h */
+struct Form;                                   /* compiler/forms.h -- syntax object payload */
 
 /* Tagged value type for the eval runtime. */
 typedef enum TuriTag {
@@ -39,6 +40,13 @@ typedef enum TuriTag {
                           * ...)] ...)` -- callers observe it via (error?
                           * r) / (error-message r) and keep evaluating.
                           * (DEPR-R0; throw-deprecation-plan) */
+    TURI_SYNTAX,         /* syntax object: as_syntax holds a compiler Form*
+                          * (arena-resident -- the env's sym_arena or an
+                          * eval arena; never scratch, never individually
+                          * freed).  Stage 1 of
+                          * docs/upcoming/macro-system-direction-plan.md.
+                          * Appended at the end: "got tag %d" messages
+                          * bake tag numbers into error text. */
 } TuriTag;
 
 typedef struct TuriValue {
@@ -57,6 +65,7 @@ typedef struct TuriValue {
         TuriFuture       *as_future;  /* async future handle (Phase S7) */
         TuriGen          *as_gen;     /* generator instance (Phase TI2) */
         TuriHandlerVal   *as_handler; /* first-class handler value (TI6) */
+        struct Form      *as_syntax;  /* syntax object (compiler Form*) */
     };
 } TuriValue;
 
@@ -87,6 +96,10 @@ static inline TuriValue turi_gen_val(TuriGen *g) {
 static inline TuriValue turi_handler_val(TuriHandlerVal *h) {
     return (TuriValue){TURI_HANDLER, .as_handler = h};
 }
+static inline TuriValue turi_syntax_val(struct Form *f) {
+    return (TuriValue){TURI_SYNTAX, .as_syntax = f};
+}
+static inline bool turi_is_syntax(TuriValue v) { return v.tag == TURI_SYNTAX; }
 static inline bool turi_is_throw(TuriValue v) { return v.tag == TURI_THROW; }
 
 /* ---------------------------------------------------------------------------

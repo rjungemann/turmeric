@@ -1,0 +1,4 @@
+(defmodule m/low
+  (export low-add)
+  (defn low-add [a : int b : int] : int (+ a b))
+  (defn low-private [] : int 99))

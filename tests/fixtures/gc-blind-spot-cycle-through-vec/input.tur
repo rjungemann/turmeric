@@ -38,7 +38,7 @@
 ; now shipped as stdlib/rcvec.tur -- tests/fixtures/rcvec-cycle-is-collected
 ; reclaims this exact shape to 0 live.  The plain-Vec arm here keeps pinning
 ; what the UNOWNED buffer costs; see
-; docs/archive/collections-cannot-hold-rc-values.md.
+; docs/archive/history/collections-cannot-hold-rc-values.md.
 (defstruct D :move [peer : rc<D>])
 (defstruct Cell  :move [item : rc<CNode> next : rc<Cell>])
 (defstruct CNode :move [kids : rc<Cell>])

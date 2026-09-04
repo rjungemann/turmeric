@@ -4,8 +4,8 @@
 ;; fat-dispatch boundary.  Callers read it back with pair-fst / pair-snd,
 ;; both typed :float, with no :int round-trip.
 ;;
-;; Regression for docs/reported/fat-closure-dispatch-does-not-handle-struct
-;; -return.md: the fat-closure result type (Pair float float) is now
+;; Regression for
+;; docs/archive/history/fat-closure-dispatch-does-not-handle-struct-return.md: the fat-closure result type (Pair float float) is now
 ;; preserved through the fn-type annotation and the lambda return so the
 ;; lifted thunk's C return type matches its struct-returning body and the
 ;; dispatch site invokes it with the right signature.

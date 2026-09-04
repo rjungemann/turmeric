@@ -107,7 +107,7 @@ struct TypeClass {
      * class method with a same-named free defn is a documented, intentional
      * pattern, so the TUR-W0039 clash warning fires only for user-defined
      * classes (from_stdlib == false).  See
-     * docs/reported/typeclass-methods-share-value-namespace-with-defns.md. */
+     * docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md. */
     bool from_stdlib;
     /* For linking */
     TypeClass *next;             /* Next typeclass in global registry */

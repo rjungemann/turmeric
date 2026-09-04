@@ -53,6 +53,7 @@
 #include "symbols.h"
 
 #include "lsp/lsp_collect.h"
+#include "lsp/lsp_scope.h"
 #include "lsp/lsp_session.h"
 #include "lsp/lsp_sym.h"
 
@@ -116,8 +117,11 @@ static int read_whole_file(const char *path, char **out, size_t *out_len) {
  * clean parse has a complete binding table, and throwing it away would take
  * completion to zero at the moment it is most wanted.
  */
-int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
-                        int *count_out) {
+int tur_collect_symbols(const char *source_path, const char *logical_path,
+                        LspSymbol *out, int cap, int *count_out) {
+    /* The playground has no spice tree to walk up into -- every buffer is a
+     * tab, and the module search path is the bundled stdlib. */
+    (void)logical_path;
     wasm_lsp_init();
     lsp_collect_begin(out, cap, count_out);
 
@@ -149,6 +153,7 @@ int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
     file.path        = source_path;
     file.src         = src_adj;
     file.len         = len_adj;
+    file.head_offset = (size_t)(src_adj - src);
     file.file_id     = 0;
     file.reader_type = reader_type;
     file.lang_layers = layers;
@@ -186,6 +191,7 @@ int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
          * still fully built, and that tree is exactly what hover and completion
          * want to describe. */
         if (prog) lsp_collect_program(prog);
+        if (prog && lsp_scope_active()) lsp_scope_program(prog);
         if (!prog || diag_had_error()) rc = 1;
     }
 
@@ -268,4 +274,71 @@ char *turi_wasm_lsp_flush(void) {
 TUR_WASM_EXPORT
 void turi_wasm_lsp_reset(void) {
     lsp_session_reset();
+}
+
+/* -------------------------------------------------------------------------
+ * Stdlib source reader (try-turmeric-navigation-and-minimap-plan, M4)
+ * --------------------------------------------------------------------- */
+
+/* True when `path` names a file inside the stdlib mount and nothing else.
+ *
+ * The alternative to this export was adding `FS` to EXPORTED_RUNTIME_METHODS,
+ * which is one CMake word and hands the page a general filesystem. This is the
+ * same amount of work and keeps the exported surface a list of named
+ * operations, so the capability the page gains is "show me where `map` is
+ * defined" rather than "read any path in the module".
+ *
+ * Three things are checked, and the third is the one that matters:
+ *
+ *   - the path starts with the stdlib root, and the next character is a
+ *     separator (so `/stdlibx/secrets` is not inside `/stdlib`);
+ *   - it ends in `.tur` -- the only thing a definition can land in;
+ *   - it contains no `..` segment, so a prefix match cannot be walked back
+ *     out of the tree it was supposed to confine the caller to.
+ */
+static int is_stdlib_source_path(const char *path) {
+    if (!path || !*path) return 0;
+
+    const char *root = lsp_stdlib_dir();
+    size_t rlen = strlen(root);
+    if (rlen == 0) return 0;
+    /* A root written with a trailing slash still names the same directory. */
+    while (rlen > 1 && root[rlen - 1] == '/') rlen--;
+    if (strncmp(path, root, rlen) != 0) return 0;
+    if (path[rlen] != '/') return 0;
+    if (path[rlen + 1] == '\0') return 0;
+
+    size_t plen = strlen(path);
+    if (plen < 4 || strcmp(path + plen - 4, ".tur") != 0) return 0;
+
+    for (const char *p = path; *p; p++) {
+        if (p[0] != '.' || p[1] != '.') continue;
+        int at_start = (p == path) || (p[-1] == '/');
+        int at_end   = (p[2] == '\0') || (p[2] == '/');
+        if (at_start && at_end) return 0;
+    }
+    return 1;
+}
+
+/* Read one stdlib source file out of the module's virtual filesystem.
+ *
+ * Returns a malloc'd NUL-terminated string the caller frees with _free, or
+ * NULL for a path outside the stdlib, a file that does not exist, or a read
+ * that fails. NULL is the only failure signal on purpose: the page's answer to
+ * all three is the same -- do not open a tab -- and distinguishing them would
+ * only tell a caller which paths exist.
+ *
+ * Shape matches every other export here (one string in, one malloc'd string
+ * out), so the worker's callStringToString helper drives it with no new
+ * marshaling code. */
+TUR_WASM_EXPORT
+char *turi_wasm_read_file(const char *path) {
+    if (!path) return NULL;
+    wasm_lsp_init();   /* fixes TUR_STDLIB_DIR before is_stdlib_source_path reads it */
+    if (!is_stdlib_source_path(path)) return NULL;
+
+    char  *text = NULL;
+    size_t len  = 0;
+    if (read_whole_file(path, &text, &len) != 0) return NULL;
+    return text;   /* read_whole_file NUL-terminates; caller frees */
 }

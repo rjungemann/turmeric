@@ -6,7 +6,7 @@
 ;; resolves to a genuine named TY_TYVAR -- not the anonymous `<struct>`
 ;; placeholder the KB-026 demotion pass falls back to for an undeclared name.
 ;;
-;; Regression for docs/archive/constrained-generic-dispatch-tyvar-name-and-inlinec.md
+;; Regression for docs/archive/history/constrained-generic-dispatch-tyvar-name-and-inlinec.md
 ;; (Bug 1): the binder name used to be discarded ("for v1, we ignore the type
 ;; variable name"), so `b : Zz` only resolved as a tyvar when the spelling
 ;; happened to collide with some loaded ADT/struct's type-param name

@@ -1,0 +1,30 @@
+;; sum-payload-dictionary-retaining-instance-not-dropped -- the negative twin
+;; of sum-payload-drop-dictionary-dispatch.  A class-method consumer that
+;; RETAINS its sum argument (`hold` returns `x` as-is, arm box included) has
+;; no nonretain_sum_param_mask bit for it, so the fresh `(some Box)` argument
+;; must NOT be freed after the call: the caller's `k` is the same value and
+;; reads the Box through it.  Asserts the VALUE, per the SR4 lesson -- under
+;; the wrong answer this is a read of freed memory, which prints garbage or
+;; the stale word rather than failing to build.  Deliberately not
+;; leak-checked: the retained box has no owner by design (status quo).
+
+(defstruct Box [n : int])
+
+(defn show-int [n : int] : void ```c printf("%lld\n", (long long)n); ```)
+
+(defclass Hold [a] (hold [x : a] : a))
+
+(definstance Hold [Box]
+  (hold [b : Box] b))
+
+(definstance Hold [Option]
+  [(Hold A)]
+  (hold [x] x))
+
+(defn main [] : int
+  (let [k (:: (hold (some (make-struct Box :n 7))) (Option Box))]
+    (show-int (.n (unwrap k))))
+  (let [k2 (:: (hold (some (make-struct Box :n 8))) (Option Box))
+        k3 (:: (hold k2) (Option Box))]
+    (show-int (+ (.n (unwrap k2)) (.n (unwrap k3)))))
+  0)

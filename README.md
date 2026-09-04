@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.33.2` -- `#writes` write frames land behind `--enable=write-frames`, giving a checked per-argument write declaration that refinement hypotheses widen against; and the interpreter now copies by-value struct arguments, so a struct write no longer diverges between backends.
+**Latest release:** `v0.43.0` -- the Option niche graduates to the default representation (`Option<NonNull>` and `Vec<Option>` collapse to a bare pointer, no tag word), recursive sums switch to by-value by default, and serializable continuations gain a documented typed surface.
 
 ## What
 
@@ -95,7 +95,15 @@ docs, wasm, web-dev, ...) are runnable via `tur run <recipe>` -- no extra
 ./build/tur emit-c path/to/file.tur    # print generated C to stdout
 ./build/tur run path/to/file.tur       # compile and immediately execute
 ./build/tur repl                       # interactive REPL
+./build/tur doc vec-push!              # a symbol's docstring, no network needed
+./build/tur docs --open                # the rendered guides and API reference
 ```
+
+The documentation reads offline everywhere: `tur doc` and `tur docs` in a
+terminal, and the **Docs** browser inside
+[Try Turmeric](https://turmeric-lang.com/try), which precaches every guide and
+API page when you install it -- no toggle, no opt-in. See the
+[offline docs guide](docs/guides/offline-docs-guide.md).
 
 ## Package Management (Spice)
 
@@ -130,8 +138,8 @@ tur build                    # build the project
 tur test                     # run tests
 ```
 
-See [docs/package-management-plan.md](docs/package-management-plan.md) for the
-full design, and [docs/cmake-cpm-integration-plan.md](docs/cmake-cpm-integration-plan.md)
+See [docs/archive/package-management-plan.md](docs/archive/package-management-plan.md) for the
+full design, and [docs/archive/cmake-cpm-integration-plan.md](docs/archive/cmake-cpm-integration-plan.md)
 for C/CMake dependency details.
 
 ## Examples
@@ -204,11 +212,13 @@ for C/CMake dependency details.
 (def primes #s(2 3 5 7 11 13))
 ```
 
-**Structural equality:**
+**Structural equality** -- via the `Eq` typeclass, on any container whose
+element type is itself `Eq`:
 
 ```lisp
-(println (=struct= [1 2 3] [1 2 3]))   ; => true
-(println (=struct= {:a 1} {:a 2}))     ; => false
+(println (.eq? [1 2 3] [1 2 3]))            ; => true
+(println (.eq? #map{:a 1} #map{:a 2}))      ; => false
+(println (.eq? #set{1 2} #set{1 2}))        ; => true
 ```
 
 **Defer:**
@@ -252,16 +262,17 @@ for C/CMake dependency details.
 **Sized types (size-indexed vectors and buffers):**
 
 ```lisp
-; Requires: -Xsized-types
-(let [v (sized-vec-new (static-int 3))]
-  (let [v (sized-vec-push v 10)]
-    (let [v (sized-vec-push v 20)]
-      (println (sized-vec-get v 0)))))  ; => 10
+(load "stdlib/sized.tur")
+(load "stdlib/sized-buf.tur")
 
-; Flat buffer -- compile-time size annotation, heap or stack dispatch
-(let [buf (sized-buf-alloc (static-int 64))]
-  (sized-buf-set buf 0 42)
-  (println (sized-buf-get buf 0)))      ; => 42
+(println (sized-vec-len (sized-vec-cons 1 (sized-vec-cons 2 (sized-vec-nil)))))   ; => 2
+(println (sized-vec-sum (sized-vec-cons 1 (sized-vec-cons 2 (sized-vec-cons 3 (sized-vec-nil))))))  ; => 6
+
+; Flat buffer -- phantom size index, bounds-checked access
+(let [buf (:: (sized-buf-new-zeroed 64) :SizedBuf)]
+  (sized-buf-set! buf 0 42)
+  (println (sized-buf-get buf 0))       ; => 42
+  (sized-buf-free buf))
 ```
 
 **Literal match patterns:**
@@ -292,9 +303,11 @@ for C/CMake dependency details.
 (load "stdlib/args.tur")
 (let [spec (args/spec-new)]
   (args/spec-flag   spec "--verbose")
-  (args/spec-option spec "--output" "file" "out.txt")
+  (args/spec-option spec "--output" "string" (some "out.txt"))
   (let [result (args/parse spec *args*)]
-    (println (args/get result "--output"))))
+    (println (args/get-str result "output"))
+    (args/result-free result))
+  (args/spec-free spec))
 ```
 
 **Math and bitwise stdlib:**
@@ -311,7 +324,6 @@ for C/CMake dependency details.
 **GADTs (generalized algebraic data types):**
 
 ```lisp
-; Requires: -Xgadt
 (defgadt Expr [a]
   (Lit int                         : (Expr int))
   (Add (Expr int) (Expr int)       : (Expr int))
@@ -330,8 +342,6 @@ for C/CMake dependency details.
 **Structural union types and gradual typing:**
 
 ```lisp
-; Requires: -Xunion-types
-
 ; Union type -- exhaustiveness-checked dispatch
 (defn describe [x : (int | bool)] : int
   (match x
@@ -353,8 +363,6 @@ for C/CMake dependency details.
 **Effect row types and effect polymorphism:**
 
 ```lisp
-; Requires: -Xeffect-types
-
 (defeffect Write [s :cstr] :nil)
 (defeffect Read  []        :cstr)
 
@@ -377,11 +385,9 @@ for C/CMake dependency details.
 **Linear and substructural types:**
 
 ```lisp
-; Requires: -Xlinear
 ; ^linear: value must be used exactly once
 (defn use-once [^linear x : int] : int x)
 
-; Requires: -Xsubstructural (implies -Xlinear)
 ; ^affine:   may be dropped, cannot be duplicated
 ; ^relevant: must be used, may be duplicated
 (defn consume-affine [^affine  x : int] : int x)
@@ -405,8 +411,6 @@ for C/CMake dependency details.
 **Session types (binary and multi-party):**
 
 ```lisp
-; Requires: -Xsessions
-
 ; Binary: two-party echo -- one side sends int, other echoes it back
 (defn echo-client [^linear ch :(Session (Send int (Recv int Close)))] : int
   (let [ch       (send ch 42)]
@@ -436,7 +440,6 @@ for C/CMake dependency details.
 **Dynamic vars (dynamically-scoped mutable cells):**
 
 ```lisp
-; Requires: -Xdynamic-vars
 (load "stdlib/dynvar.tur")   ; provides *log-level*, *locale*, spawn-conveying
 
 (defdynamic *request-id* :cstr "none")
@@ -474,23 +477,23 @@ for C/CMake dependency details.
 | Macros (`defmacro`, quasiquote, threading macros) | ✅ |
 | `defstruct`, field access, copy/move annotations | ✅ |
 | ADTs (`defdata`, `match`, exhaustiveness checking) | ✅ |
-| GADTs (`defgadt`, per-constructor type refinement, equality witnesses, `coerce`, `-Xgadt`) | ✅ |
-| Structural union types (`A \| B`), `any` top type, gradual typing (`-Xunion-types`) | ✅ |
-| Intersection types (`A & B`, `-Xintersection-types`) | ✅ |
-| Higher-ranked types (Rank-2/N `forall`, existential `pack`/`open`, `-Xhrt`) | ✅ |
-| Linear types (`^linear`, `lref<T>`, `-Xlinear`) | ✅ |
-| Uniqueness types (`^unique`, `-Xunique-types`) | ✅ |
-| Substructural types (`^affine`, `^relevant`, `-Xsubstructural`) | ✅ |
-| Effect row types (`#{Effect}` in function types, `-Xeffect-types`) | ✅ |
+| GADTs (`defgadt`, per-constructor type refinement, equality witnesses, `coerce`) | ✅ |
+| Structural union types (`A \| B`), `any` top type, gradual typing | ✅ |
+| Intersection types (`A & B`) | ✅ |
+| Higher-ranked types (Rank-2/N `forall`, existential `pack`/`open`) | ✅ |
+| Linear types (`^linear`, `lref<T>`) | ✅ |
+| Uniqueness types (`^unique`) | ✅ |
+| Substructural types (`^affine`, `^relevant`) | ✅ |
+| Effect row types (`#{Effect}` in function types) | ✅ |
 | Effect polymorphism (`forall [e]`, implicit row generalisation) | ✅ |
 | Effect hierarchy (`^extends`, stdlib `Write ≤ IO` lattice) | ✅ |
 | Handler typing (`(handler Effect A B)` first-class handler types) | ✅ |
 | Linear continuations (`^linear k` one-shot, affine by default) | ✅ |
 | Multi-shot continuations (`^multishot k`, snapshot semantics) | ✅ |
-| Session types (binary `Session[P]`, `make-session`, `send`/`recv`/`close`/`offer`/`choose-*`; `-Xsessions`) | ✅ |
-| Multi-party session types (`defprotocol`, `Role`, `make-protocol`, `send-to`/`recv-from`; `-Xsessions`) | ✅ |
-| Dynamic vars (`defdynamic`, `binding`, `spawn-conveying`, stdlib common vars; `-Xdynamic-vars`) | ✅ |
-| Sized types (`StaticInt`, `SizedVec`, `SizedBuf`, `SizedMatrix`, `SizedBitVec`; `-Xsized-types`) | ✅ |
+| Session types (binary `Session[P]`, `make-session`, `send`/`recv`/`close`/`offer`/`choose-*`) | ✅ |
+| Multi-party session types (`defprotocol`, `Role`, `make-protocol`, `send-to`/`recv-from`) | ✅ |
+| Dynamic vars (`defdynamic`, `binding`, `spawn-conveying`, stdlib common vars) | ✅ |
+| Sized types (`StaticInt`, `SizedVec`, `SizedBuf`, `SizedMatrix`, `SizedBitVec`) | ✅ |
 | Literal match patterns (int, bool, float, str literals as match arms) | ✅ |
 | Borrow checker (`&`, `&mut`, reborrow, move semantics) | ✅ |
 | Reference counting (`rc/of`, `rc/clone`, `rc/drop`, weak refs) | ✅ |
@@ -499,13 +502,13 @@ for C/CMake dependency details.
 | Typeclasses with dictionary passing (`defclass`, `definstance`) | ✅ |
 | Built-in typeclasses: `Eq`, `Ord`, `Show`, `Num` | ✅ |
 | Capability passing (v1 effects via typeclasses) | ✅ |
-| Exceptions (`try` / `catch` / `finally` / `throw`) | ✅ |
+| Panics with an unwind boundary (`panic`, `catch-unwind`, `catch-panic-of`) | ✅ |
 | Delimited continuations (`shift` / `reset`) | ✅ |
 | Algebraic effects (`defeffect` / `perform` / `handle` / `resume`) | ✅ |
 | Serializable continuations | ✅ |
 | Backtracking / cloneable continuations | ✅ |
 | `extern-c`, inline-C blocks, FFI | ✅ |
-| Structural equality (`=struct=`) | ✅ |
+| Structural equality (`Eq` typeclass / `.eq?`) | ✅ |
 | Runtime contracts (`require!` / `ensure!` / `assert!` / `invariant!`) | ✅ |
 | Standard library: `option`, `result`, `vec`, `str`, `slice`, `io`, `log`, `test`, `math`, `bits`, `args` | ✅ |
 | Persistent collections (HAMT) | ✅ |

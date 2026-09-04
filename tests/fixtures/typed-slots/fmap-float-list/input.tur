@@ -6,6 +6,7 @@
 ;;  2. Float bit-pattern list fmap via TS2 bit-reinterpret closure => [3.0, 5.0]
 
 ;; Helper: print all int64_t heads of a raw cons list.
+(load "stdlib/bits.tur")
 (defn print-int-cons-list [lst : int] : void
   ```c
   struct _c { int64_t head; int64_t tail; };
@@ -43,8 +44,8 @@
   (let [scale 2.0]
     (let [xs (make-raw-float-list 1.5 2.5)]
       (let [float-fn (fn [x-bits : int] : int
-                       (let [xf (:: x-bits :float)]
+                       (let [xf (bits->float x-bits)]
                          (let [result (* xf scale)]
-                           (:: result :int))))]
+                           (float->bits result))))]
         (print-float-cons-list (__cons-fmap xs float-fn)))))
   0)

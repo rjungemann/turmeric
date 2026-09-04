@@ -366,6 +366,98 @@ else
     bad "list --outdated + --verbose rejected" "rc=$rc out: $out"
 fi
 
+# ------------------------------------------------------------------ #
+# global-spice-library-consumption: a spice installed here is consumable
+# as a LIBRARY through a `#{:global true}` manifest dep -- it resolves from
+# the install registry (state.tur), is never fetched, and its src/ joins the
+# consuming project's include path.
+# ------------------------------------------------------------------ #
+
+# 30. Give the sample spice a module and re-install it, so there is something
+#     to import.  (The :bin entry stays: `tur install` is a binary installer,
+#     so a library-only spice cannot be registered today.)
+mkdir -p "$SPICE/src/sample"
+cat > "$SPICE/src/sample/core.tur" <<'EOF'
+(defmodule sample/core
+  (export sample-answer)
+  (defn sample-answer [] : int 42))
+EOF
+out="$("$TUR" install "$SPICE" --path --force 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "re-install sample with a library module"
+else
+    bad "re-install sample with a library module" "rc=$rc out: $out"
+fi
+
+# 31. A project declaring the installed spice as :global builds against it.
+# These cases `cd` into the consuming project, so the compiler path must be
+# absolute -- $TUR is "./build/tur" by default.
+case "$TUR" in
+    /*) TUR_ABS="$TUR" ;;
+    *)  TUR_ABS="$(cd "$(dirname "$TUR")" && pwd)/$(basename "$TUR")" ;;
+esac
+
+APP="$WORK/global-consumer"
+mkdir -p "$APP/src"
+cat > "$APP/build.tur" <<'EOF'
+(defpackage app
+  :version "0.1.0"
+  :spices #map{"sample" #map{:global true}})
+EOF
+cat > "$APP/src/main.tur" <<'EOF'
+(defmodule app/main
+  (import sample/core :refer [sample-answer])
+  (defn main [] : int
+    (println (sample-answer))
+    0))
+EOF
+out="$(cd "$APP" && "$TUR_ABS" fetch 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "fetch accepts a :global dep (nothing to fetch)"
+else
+    bad "fetch accepts a :global dep" "rc=$rc out: $out"
+fi
+
+out="$(cd "$APP" && "$TUR_ABS" build . -o "$APP/appbin" 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && [ -x "$APP/appbin" ] && [ "$("$APP/appbin")" = "42" ]; then
+    ok "build resolves modules from a :global spice"
+else
+    bad "build resolves modules from a :global spice" "rc=$rc out: $out"
+fi
+
+# 32. A :global dep naming a spice that is NOT installed is a hard error,
+#     naming the fix rather than failing later as "module not found".
+cat > "$APP/build.tur" <<'EOF'
+(defpackage app
+  :version "0.1.0"
+  :spices #map{"nosuch" #map{:global true}})
+EOF
+out="$(cd "$APP" && "$TUR_ABS" fetch 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ] && [[ "$out" == *"no such spice is installed"* ]]; then
+    ok ":global dep for an uninstalled spice is rejected"
+else
+    bad ":global dep for an uninstalled spice is rejected" "rc=$rc out: $out"
+fi
+
+# 33. :global together with :url/:path is a manifest error -- the two describe
+#     different resolution sources.
+cat > "$APP/build.tur" <<'EOF'
+(defpackage app
+  :version "0.1.0"
+  :spices #map{"sample" #map{:global true :url "https://example.invalid/x.git"}})
+EOF
+out="$(cd "$APP" && "$TUR_ABS" fetch 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ] && [[ "$out" == *"takes neither"* ]]; then
+    ok ":global + :url is rejected"
+else
+    bad ":global + :url is rejected" "rc=$rc out: $out"
+fi
+
 echo
 echo "install summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

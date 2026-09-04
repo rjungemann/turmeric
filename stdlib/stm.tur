@@ -50,7 +50,10 @@
   : TVar
   ```c
   TVar *tv = tur_tvar_new(NULL, (void*)(intptr_t)init);
-  return (void*)tv;
+  /* TVar is a defopaque over :ptr, which lowers to int64_t -- returning the
+     bare `void *` is an int-to-pointer conversion warning under the cc-warn
+     ratchet. Surfaces only when stm.tur is explicitly (load ...)ed. */
+  return (void *)(intptr_t)tv;
   ```)
 ;;; tvar/read -- read the current value of a TVar within the active transaction.
 ;;;
@@ -86,8 +89,8 @@
   #fx{Unsafe}
   : nil
   ```c
-  tur_tvar_write(tur_stm_current_tx(), (TVar*)tv, (void*)val);
-  return 0;
+  tur_tvar_write(tur_stm_current_tx(), (TVar*)(intptr_t)tv, (void*)val);
+  /* `: nil` lowers to C `void`; `return 0;` here was a -Wreturn-type warning. */
   ```)
 ;;; tvar/swap -- atomically replace a TVar's value and return the old value.
 ;;;

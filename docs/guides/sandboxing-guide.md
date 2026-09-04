@@ -71,8 +71,8 @@ cooperative scheduler.
 
 ## Resource Limits
 
-A sandboxed environment sets tighter defaults for recursion depth and CPU usage
-to prevent infinite loops and stack overflows from hanging or crashing the host.
+A sandboxed environment caps total evaluation work so an infinite loop cannot
+hang the host.
 
 ### Step fuel
 
@@ -91,13 +91,13 @@ Fuel checking is skipped entirely in unrestricted environments
 
 ### Recursion depth
 
-```c
-/* Default sandboxed depth: TURI_DEFAULT_SANDBOX_DEPTH (256 frames).
- * Unrestricted environments default to 4096 frames. */
-turi_env_set_max_depth(env, 64);  /* tighter limit for simple scripts */
-```
+There is no recursion-depth guard: interpreter recursion is heap-bounded, so
+deep recursion cannot overflow the host's C stack. `turi_env_set_max_depth`
+is retained as a **no-op** for API/ABI compatibility -- bound total work with
+`turi_env_set_fuel` instead.
 
-Both constants are `#define`d in `eval.h` and can be overridden at compile time.
+`TURI_DEFAULT_SANDBOX_FUEL` is `#define`d in `eval.h` and can be overridden at
+compile time.
 
 ---
 
@@ -159,8 +159,11 @@ void turi_env_deny(TuriEnv *env, TuriCaps cap);
 /* Query whether a capability is currently granted. */
 bool turi_env_has_cap(TuriEnv *env, TuriCaps cap);
 
-/* Adjust resource limits. */
+/* Adjust the step-fuel limit. */
 void turi_env_set_fuel(TuriEnv *env, uint64_t steps);
+
+/* Retained as a no-op for API/ABI compatibility (the recursion-depth
+ * guard is retired; interpreter recursion is heap-bounded). */
 void turi_env_set_max_depth(TuriEnv *env, uint32_t depth);
 ```
 
@@ -237,12 +240,6 @@ Step-fuel exhaustion also surfaces as `TURI_ERROR`:
 sandbox error: eval: step fuel exhausted
 ```
 
-Recursion-depth overflow surfaces as:
-
-```
-sandbox error: eval: max recursion depth exceeded
-```
-
 ---
 
 ## Full Example -- Sandboxed Formula Evaluator
@@ -256,7 +253,6 @@ int main(void) {
 
     TuriEnv *env = turi_env_new_sandboxed();
     turi_env_set_fuel(env, 1000000);
-    turi_env_set_max_depth(env, 128);
 
     /* Expose a safe native. */
     turi_env_register_native(env, "safe-sqrt", safe_sqrt, NULL);

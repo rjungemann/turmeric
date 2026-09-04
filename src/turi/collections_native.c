@@ -1,7 +1,7 @@
 /* Collection native overrides for the tree-walking interpreter.  Relocated
  * verbatim from src/main.c so they land in tur_core / libturi and are available
  * to every interpreter env, not just the `tur` CLI.  See
- * docs/upcoming/turi-interp-collections-libturi-plan.md. */
+ * docs/archive/history/turi-interp-collections-libturi-plan.md. */
 
 #include "collections_native.h"
 #include "runtime/hamt.h"

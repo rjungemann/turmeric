@@ -1,0 +1,9 @@
+;; A type error inside macro-generated code must carry a note naming the
+;; call the user wrote, not just the template span (macro-expansion
+;; provenance, 2026-08-17).  Nested macros get ONE note, at the outermost
+;; user-visible call.
+(defmacro inner [e] `(+ ~e 1))
+(defmacro outer [e] `(inner ~e))
+(defn main [] : int
+  (println (outer "bad"))
+  0)

@@ -56,7 +56,7 @@ equivalent Haskell tutorial would have handed us.
 
 For a **byte-oriented** parser we want to walk the source one character
 at a time. The natural Turmeric type is a `:cstr` plus `cstr-nth` from
-`stdlib/cstr` (shipped 2026-07-01; not autoloaded, so it takes a
+`stdlib/cstr` (not autoloaded, so it takes a
 `(import cstr :refer [cstr-len cstr-nth])`). For the tutorial we keep
 the input as a **list of character codes** instead -- a plain
 `(cons int (cons int ...))` built with `stdlib/list`'s `list-head` and
@@ -152,12 +152,8 @@ freely. The tutorial spells each one *monomorphically* (one instance
 per element type: `or-int` / `or-expr`, `map-int-to-expr`) as a
 pedagogical choice -- the shapes are easier to read when the element
 type is spelled out. The polymorphic spelling `(or-parser [A] p q)`
-also works: both the codegen drop
-([archived](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/poly-defn-inner-lambda-codegen.md))
-and the follow-on call-site element inference
-([archived](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/poly-combinator-application-element-inference.md))
-were resolved on 2026-07-02, and the compiler now infers `A` through
-the returned closure at the application site.
+also works: the compiler infers `A` through the returned closure at
+the application site.
 
 ### Alternation -- `or-*`
 
@@ -335,14 +331,12 @@ and `map-int-to-expr` lifts it into a `Parser<Expr>`.
 `paren-expr` still needs to reach into `match` for the closing `)`
 handling; not every one-off pattern collapses into a combinator.
 
-One `(:: (POK inner (list-tail rest)) (PRes Expr))` ascription lingers
-in `paren-expr`. It was originally load-bearing because `expr-parse`
-is defined *later* in the file (mutual recursion) and the forward-decl
-pass didn't yet record the compound parametric return type, so the
-match binder fell back to a placeholder. That gap is resolved
-([archived](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/defdata-parametric-forward-decl-inference.md),
-2026-07-02); the ascription is now optional but the tutorial fixture
-still carries it verbatim.
+One `(:: (POK inner (list-tail rest)) (PRes Expr))` ascription appears
+in `paren-expr`. It is optional -- the forward-decl pass records
+`expr-parse`'s compound parametric return type even though `expr-parse`
+is defined *later* in the file (mutual recursion), so the match binder
+infers correctly without it -- but the tutorial fixture carries it
+verbatim.
 
 ### Left-associative chains -- `term` and `expr`
 
@@ -390,8 +384,7 @@ inlined `many` over `(op, factor)` pairs, folded left-to-right:
 
 The chain-fold pattern -- match the head, keep folding tails, wrap
 each application through `apply-op` -- is itself a candidate for a
-future `chainl1` combinator once the underlying compiler bugs close.
-Today it reads clearly enough as its own `defn`.
+`chainl1` combinator. Today it reads clearly enough as its own `defn`.
 
 ---
 
@@ -460,16 +453,11 @@ even for a tutorial-sized parser.
   loops.
 - **Real strings:** add `(import cstr :refer [cstr-len cstr-nth])` and
   the input list of ASCII ints goes away -- the parser takes a `:cstr`
-  directly. `stdlib/cstr.tur` shipped 2026-07-01
-  ([archived report](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/no-cstr-byte-primitives-pure-turmeric.md)).
+  directly.
 - **Polymorphic combinators:** the `or-int` / `or-expr` (and every
   other monomorphic pair in the tutorial) can be collapsed to a single
-  `(or-parser [A] p q)`. Both the codegen drop and the call-site
-  element inference gap that used to block this were resolved 2026-07-02
-  ([codegen](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/poly-defn-inner-lambda-codegen.md),
-  [inference](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/poly-combinator-application-element-inference.md));
-  keeping the monomorphic spelling in the tutorial is a pedagogical
-  choice, not a compiler limit.
+  `(or-parser [A] p q)`; keeping the monomorphic spelling in the
+  tutorial is a pedagogical choice, not a compiler limit.
 - **Error positions and recovery:** the current library returns "no
   result" on failure. A production parser threads the furthest position
   reached, so error messages can say *where* parsing died.

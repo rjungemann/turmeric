@@ -19,7 +19,7 @@ and publish a spice of your own.
 
 The canonical source for official spices is the
 [turmeric-spices](https://github.com/rjungemann/turmeric-spices) monorepo.
-It provides seven packages in three tiers:
+Its packages include:
 
 | Spice | Description | C deps? |
 |---|---|---|
@@ -31,8 +31,11 @@ It provides seven packages in three tiers:
 | `tur-http` | Async HTTP/HTTPS client | mbedTLS |
 | `tur-regex` | PCRE2 regular expression bindings | PCRE2 |
 
-Each spice lives in its own subdirectory and is versioned independently
-with a per-package tag: `<spice>-vMAJOR.MINOR.PATCH`.
+The web stack (`tur-httpd`, `tur-template`, `tur-tourist`, `tur-tls`,
+`tur-ws-client`/`tur-ws-server`) and the data/DSP spices (`tur-frame`,
+`tur-stats`, `tur-signal`, `tur-ecs`, ...) live there too -- see their
+per-spice guides. Each spice lives in its own subdirectory and is versioned
+independently with a per-package tag: `<spice>-vMAJOR.MINOR.PATCH`.
 
 ---
 
@@ -89,6 +92,26 @@ tur add ../tur-utils --path
 Use this while actively developing a dependency alongside your project.
 Local path spices are not recorded in `tur.lock` and are never fetched
 from the network.
+
+### Globally installed spices
+
+A spice you installed with `tur install` can be consumed as a library by
+declaring it `:global` -- there is no `tur add` flag for this yet, so write the
+entry by hand:
+
+```turmeric
+:spices #map{
+  "notebook" #map{:global true}
+}
+```
+
+It resolves through the install registry rather than `<project>/spices/`, so
+nothing is fetched and no `tur.lock` row is written (as with a `:path` dep). If
+the spice is not installed, `tur fetch` says so and fails rather than letting
+the build reach `module not found`. `:global` takes neither `:url` nor `:path`
+-- those name a different resolution source. See
+[Global Spices as Libraries](developing-spices-guide.md#global-spices-as-libraries)
+for the full rules.
 
 ---
 
@@ -275,8 +298,8 @@ You can also add a C library directly to your project without going through
 a spice:
 
 ```sh
-tur add --cmake https://github.com/raysan5/raylib --ref 5.5 \
-  --option BUILD_SHARED_LIBS=OFF --option BUILD_EXAMPLES=OFF
+tur add-cmake https://github.com/raysan5/raylib --ref 5.5 \
+  --opt BUILD_SHARED_LIBS=OFF --opt BUILD_EXAMPLES=OFF
 ```
 
 This appends a `:cmake-deps` entry to `build.tur`:
@@ -307,17 +330,29 @@ defpackage my-app
 
 When `tur build` runs it:
 
-1. Generates `cmake/SpiceDeps.cmake` from the `:cmake-deps` block.
+1. Generates `cmake/CMakeLists.txt` from the `:cmake-deps` block (via the
+   automatic `tur fetch`).
 2. Invokes CMake to fetch and compile the C library.
-3. Reads `cmake/spice-deps-manifest.json` for include dirs, lib dirs, and
-   link libs.
+3. Reads `cmake/spice-deps-manifest.json` for include dirs, lib dirs, link
+   libs, and link flags.
 4. Passes those flags to `cc` automatically.
 
-Declare the C symbols you need in Turmeric with `include-c` and `extern-c`:
+Step 3's link flags are what make a Cocoa- or Objective-C-backed library (glfw,
+raylib) link on macOS: they carry the `-framework Cocoa` / `-framework IOKit`
+entries CMake records on the target, which cannot be spelled as `-l`. They also
+carry the dep's artifact by full path, so a target whose name differs from its
+library's (glfw's target `glfw` builds `libglfw3.a`) resolves correctly. Both
+are derived automatically from `:targets`; see
+[`:link-libs` and `:link-flags` overrides](developing-spices-guide.md#link-libs-and-link-flags-overrides)
+for when you need to override them.
+
+Declare the C symbols you need in Turmeric with `extern-c` (no header
+include is needed for the declarations themselves; an inline-C body that
+wants the header can hoist `#include <raylib.h>` to file scope with a
+`__tur_include__` marker -- see the
+[C integration guide](c-integration-guide.md)):
 
 ```turmeric
-(include-c "raylib.h")
-
 (extern-c InitWindow        [:int :int :cstr] :void)
 (extern-c CloseWindow       [] :void)
 (extern-c WindowShouldClose [] :bool)
@@ -334,8 +369,6 @@ Declare the C symbols you need in Turmeric with `include-c` and `extern-c`:
 ```
 
 ```sweet-exp
-include-c "raylib.h"
-
 extern-c InitWindow        [:int :int :cstr] :void
 extern-c CloseWindow       [] :void
 extern-c WindowShouldClose [] :bool
@@ -343,7 +376,7 @@ extern-c BeginDrawing      [] :void
 extern-c EndDrawing        [] :void
 
 defn main [] :int
-  InitWindow(800, 600, "Hello")
+  InitWindow(800 600 "Hello")
   while not(WindowShouldClose())
     BeginDrawing()
     EndDrawing()
@@ -354,7 +387,7 @@ defn main [] :int
 No `-I` or `-L` flags are needed; `tur build` injects them from the manifest.
 
 CMake deps are also tracked in `tur.lock` with SHA-256 hashes for integrity
-verification. For the generated `SpiceDeps.cmake` format, the manifest
+verification. For the generated `cmake/CMakeLists.txt` format, the manifest
 schema, security considerations, and the outbound direction (publishing a
 Turmeric library so CMake projects can consume it), see the
 [CMake/CPM integration notes](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
@@ -368,8 +401,21 @@ Turmeric library so CMake projects can consume it), see the
 - Use git tags (not branch names) for `:ref` to avoid moving targets.
 - Any `:cmake-deps` entry is a trust decision equivalent to executing build
   scripts from that repository. Audit before adding.
-- `tur audit` (planned) will list all cmake-dep repositories and their
-  maintainer GPG keys.
+- `tur audit` lists every origin the build fetches code from -- Turmeric
+  spices and cmake-deps alike -- with each one's ref and, where `tur.lock`
+  has pinned it, the resolved commit and SHA-256. Origins with no lock entry
+  are called out, so "what am I trusting, and is it pinned?" is one command
+  rather than a manual reconciliation of `build.tur` against `tur.lock`.
+
+  ```sh
+  tur audit
+  ```
+
+  It **lists; it does not verify.** There is no signature or maintainer-key
+  checking -- an earlier version of this bullet promised GPG keys, and no key
+  infrastructure exists to check them against. A `:path` dep is reported but
+  not flagged as unpinned: it resolves from local source and has nothing to
+  pin, and flagging it would train you to ignore the warning that matters.
 
 ---
 
@@ -387,7 +433,7 @@ range.
 | Condition | Message |
 |---|---|
 | No `build.tur` in the directory tree | `No build.tur found. Run tur new <name> to create a project.` |
-| Spice already in the manifest | `'geom' is already a dependency. Use tur update geom to change the ref.` |
+| Spice already in the manifest | `'geom' is already a dependency. To change its ref, edit the :spices entry for 'geom' in build.tur, then run tur fetch --update.` |
 | Network failure | `Failed to reach https://github.com/...: <reason>` |
 | Ref not found | `Ref 'v99.0.0' not found in https://github.com/alice/tur-geom` |
 | SHA mismatch on re-fetch | `Integrity check failed for 'geom'. Run tur fetch --force to re-download.` |
@@ -410,8 +456,8 @@ tur add <url> --ref <ref> --subdir <path> --name <alias>
 tur add <path> --path
 
 # Add a C/CMake dependency
-tur add --cmake <url> --ref <ref>
-tur add --cmake <url> --ref <ref> --option KEY=VALUE
+tur add-cmake <url> --ref <ref>
+tur add-cmake <url> --ref <ref> --opt KEY=VALUE
 
 # Fetch and update
 tur fetch

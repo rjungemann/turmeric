@@ -57,8 +57,16 @@ typedef struct TurSpiceExport {
     TurFfiShimFn ffi_shim; /* dlsym'd `<mangled>__ffi` shim, or NULL (old .so) */
     char     ret_class;
     char    *arg_classes; /* heap array of length n_args (NULL iff n_args == 0) */
-    uint32_t n_args;      /* unbounded -- no fixed arity cap */
+    uint32_t n_args;      /* unbounded -- no fixed arity cap; for a variadic
+                           * export this INCLUDES the trailing rest-list slot
+                           * (class 'i': the callee receives one int64 cons-list
+                           * pointer) */
     bool     is_variadic; /* true when the manifest line had `& :tag` */
+    char     rest_class;  /* ffi-spices-integration-plan S2: the rest ELEMENT
+                           * class ('i' or 'f') from the manifest's `& :tag`,
+                           * so the REPL marshaller knows whether cons heads
+                           * carry integers or IEEE-754 bit patterns.  'i'
+                           * when not variadic / tag unknown. */
 } TurSpiceExport;
 
 /* Opaque image handle. */

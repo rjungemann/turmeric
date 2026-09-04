@@ -6,7 +6,7 @@
 ;; unique-instance fallback (return-type-dispatch-nullary-arrow plan, Mechanism
 ;; B) resolves `(ident)` to that instance even when no expected type is present
 ;; -- closing fix direction #3 of
-;; docs/reported/function-arrow-not-instantiable-as-typeclass-head.md.
+;; docs/archive/history/function-arrow-not-instantiable-as-typeclass-head.md.
 
 (defclass Category [a]
   (ident [] : a)            ;; nullary -- dispatch variable only in the result

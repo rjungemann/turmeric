@@ -97,6 +97,18 @@ assert_build_runs 7 \
     "cross-spice: consumer links dep's :c-sources (exit 7)" \
     "$SPICES/consumer-of-aux" "consumer-of-aux"
 
+# --- Two hops: the vendor's .c reaches a consumer that only knows it through
+# an intermediate spice (c-sources-propagate-only-one-level).
+assert_build_runs 7 \
+    "two hops: :c-sources reach a consumer via an intermediate spice (exit 7)" \
+    "$SPICES/consumer-two-hops" "consumer-two-hops"
+
+# --- Diamond: the vendor reached both directly and via the intermediate
+# contributes its source exactly once (no duplicate symbols).
+assert_build_runs 7 \
+    "diamond: a vendor reached by two routes links once (exit 7)" \
+    "$SPICES/consumer-diamond" "consumer-diamond"
+
 # --- Error cases: each must DIAG_ERROR and fail the build, not segfault.
 assert_build_fails "not found" \
     "error: missing :c-sources file fails the build" \

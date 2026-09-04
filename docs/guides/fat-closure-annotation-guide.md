@@ -8,7 +8,7 @@ description: When and why to mark function-typed parameters and return positions
 
 `^fat` is a one-token type annotation that controls how the compiler
 represents a function value at a specific source position. It is
-**purely a representation hint** — it does not change runtime semantics,
+**purely a representation hint** -- it does not change runtime semantics,
 arity, or signature compatibility. But omitting it where it belongs
 causes a SEGV at the call site, so it is worth understanding.
 
@@ -25,8 +25,8 @@ A function value in Turmeric compiles to one of two ABIs:
 
 | Representation | Layout | Call site |
 |---|---|---|
-| **Bare fn-pointer** | `int64_t (*)(int64_t...)` — a raw C function pointer | `f(arg)` |
-| **Fat closure** | Heap `int64_t[]` — slot 0 is a thunk pointer, slots 1..N are captured free vars | `apply-fat(f, arg)` / `TUR_APPLY1(fat, arg)` |
+| **Bare fn-pointer** | `int64_t (*)(int64_t...)` -- a raw C function pointer | `f(arg)` |
+| **Fat closure** | Heap `int64_t[]` -- slot 0 is a thunk pointer, slots 1..N are captured free vars | `apply-fat(f, arg)` / `TUR_APPLY1(fat, arg)` |
 
 The compiler picks the bare representation whenever a `(fn ...)` body
 captures **no** free variables, because there is nothing to put in
@@ -60,18 +60,10 @@ If a caller passes a captureless lambda here:
 (bind-parser p (fn [x] (mreturn (transform x))))   ;; captures nothing
 ```
 
-…the lambda lowers to a bare fn-pointer, `apply-fat` reads it as a fat
-closure, and the program crashes. Historically the workaround was to
-force a capture by hand:
-
-```turmeric
-(bind-parser p
-  (let [sentinel 0]
-    (fn [x] (let [_ sentinel]      ;; force a capture
-              (mreturn (transform x))))))
-```
-
-That workaround is obsolete. The replacement is `^fat`.
+...the lambda lowers to a bare fn-pointer, `apply-fat` reads it as a fat
+closure, and the program crashes. Do not force a capture by hand (the
+`(let [sentinel 0] (fn [x] (let [_ sentinel] ...)))` trick) -- the right
+tool is `^fat`.
 
 ## `^fat` on a parameter
 
@@ -89,7 +81,7 @@ call.
 
 - A capturing `fn` argument is already fat and passes through unchanged.
 - A bare `extern-c` C function flowing in is also auto-shimmed.
-- Plain `:int`/`:ptr<void>` arguments are unaffected — the marker only
+- Plain `:int`/`:ptr<void>` arguments are unaffected -- the marker only
   fires on function-typed parameters.
 
 Reach for `^fat` on a parameter whenever your function body invokes the
@@ -97,7 +89,7 @@ parameter via `apply-fat`, `TUR_APPLY1`, or any other fat-ABI form.
 
 ### `^fat` parameters inside inline-C
 
-Since #286, a `^fat` function-typed parameter is materialised in the
+A `^fat` function-typed parameter is materialised in the
 generated C signature as plain **`int64_t`** -- the unified closure handle
 (a pointer to the fat box, or, for the bare-shimmed case, a one-cell box
 whose slot 0 is the original fn-pointer). That means you can name it
@@ -117,7 +109,7 @@ The same rule applies in either direction: a Turmeric global declared
 `^fat` is callable from inline-C as `int64_t`, and an inline-C function
 that wants to *receive* a closure handle from Turmeric should take it as
 `int64_t`. Do not spell it as `void *` -- inline-C ascription is scanned
-for captures (#264) and the carrier type is what the codegen agrees on.
+for captures and the carrier type is what the codegen agrees on.
 
 ## `^fat` on a return type
 
@@ -136,7 +128,7 @@ segfaults. `^fat` on the return tells the compiler to box the
 captureless tail lambda into a one-cell fat closure before returning.
 
 A capturing tail lambda or a forwarded value that is already fat
-passes through unchanged — the shim only fires when the tail is a
+passes through unchanged -- the shim only fires when the tail is a
 bare `TY_FN`.
 
 Reach for `^fat` on a return type whenever your function constructs a
@@ -155,8 +147,7 @@ they know about the closure's **result type**:
 (defn run-with [^fat g :(fn [float] #{} float) x : float] : float (g x))  ;; annotated
 ```
 
-Under the unified closure representation (#276 and the typed-invocation
-refinements that followed: #283/#285/#287/#292/#293/`9588cda7`), every
+Under the unified closure representation, every
 closure value -- bare or fat, captureless or capturing -- is carried as a
 single `int64_t` handle. The remaining distinction is **what the call site
 knows about the result type** at the point where it dispatches the handle.
@@ -175,8 +166,8 @@ reads the integer register (rax). The bits do not line up, and you get
 garbage. (A `:cstr` or `:ptr<void>` result happens to share the integer
 register, so it round-trips -- but do not rely on that; annotate non-int
 results. For the integer/pointer carrier specifically, the SF-application
-call sites now bridge `int <-> ptr<void>` (`9588cda7`), so mixing the two
-no longer requires a manual `(::)` cast at the boundary.)
+call sites bridge `int <-> ptr<void>`, so mixing the two
+requires no manual `(::)` cast at the boundary.)
 
 For any non-int result, use the **annotated** form -- it carries the
 result type, and the compiler dispatches through a typed thunk that uses
@@ -187,12 +178,12 @@ the right register:
   (g x))                       ;; returns a real double
 ```
 
-As of the tail-position retype pass (shipped #208), a bare `^fat g` in the
-result *tail* of a `:float` function infers the result type from the
+The tail-position retype pass lets a bare `^fat g` in the
+result *tail* of a `:float` function infer the result type from the
 declared return -- no annotation required. The one case still left to the
 annotated form is a bare-`^fat` non-int result consumed in a **non-tail**
 position; that is tracked in
-`docs/upcoming/v1/bare-fat-result-monomorphization-plan.md` (deferred until
+`docs/archive/history/bare-fat-result-monomorphization-plan.md` (deferred until
 a real consumer exists). The annotated form remains the *checked* path in
 all positions.
 
@@ -213,7 +204,7 @@ certainly the cause.
 ## Arity bound
 
 The auto-shim ships with `__tur_fatshim0` through `__tur_fatshim5`,
-covering 0–5 argument lambdas. Higher arities are rejected at
+covering 0-5 argument lambdas. Higher arities are rejected at
 elaboration time. In practice every combinator in the stdlib that
 uses `^fat` is 1- or 2-ary, so this rarely binds.
 

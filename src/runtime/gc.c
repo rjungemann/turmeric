@@ -323,7 +323,7 @@ static RcControlBlock *gc_dequeue_grey(void) {
  * CG0: heap-allocated and grown on demand. The old fixed 4096-entry array made
  * gc_register_block a silent no-op past the cap, so every block beyond 4096 was
  * invisible to the collector -- a correctness cliff, not just a capacity limit
- * (docs/reported/gc-strong-cycles-not-collected.md). */
+ * (docs/archive/history/gc-strong-cycles-not-collected.md). */
 #define GC_GLOBAL_REGISTRY_INITIAL_CAPACITY 4096
 RcControlBlock **gc_all_blocks = NULL;
 uint32_t gc_all_blocks_count = 0;

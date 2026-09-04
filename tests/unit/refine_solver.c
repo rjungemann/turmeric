@@ -7,7 +7,7 @@
  * cases assert `verdict != RT_VALID` rather than a specific verdict -- a
  * future stage that legitimately decides one of them must not break this file.
  *
- * See docs/upcoming/v1/refinement-types-plan.md. */
+ * See docs/archive/refinement-types-plan.md. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,8 +22,9 @@
 /* Stub: tur_core's lsp.c references this; this test never touches LSP, but the
  * symbol must resolve when tur_core is linked into a standalone executable.
  * Matches the stub in tests/unit/experiments_user_config.c. */
-int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
-                        int *count_out) {
+int tur_collect_symbols(const char *source_path, const char *logical_path,
+                        LspSymbol *out, int cap, int *count_out) {
+    (void)logical_path;
     (void)source_path;
     (void)out;
     (void)cap;
@@ -340,11 +341,74 @@ static void test_smtlib(Arena *a) {
     buf_free(&b);
 }
 
+/* SX3: euf_mark / euf_undo_to.  The property is that undo restores the
+ * PARTITION, not merely the term count: an equality asserted after the mark
+ * must stop holding after undo, one asserted before must keep holding, and
+ * the unsat flag must roll back.  Nested marks exercise the monotonic-level
+ * discipline (trail_c.h) whose failure mode is a silently-skipped trail entry
+ * -- precisely what the runtime trail shipped and had to fix. */
+static void test_euf_mark_undo(Arena *a) {
+    RefineVC *vc = vc_new(a);
+    VCTerm *x = V(vc, "x"), *y = V(vc, "y"), *z = V(vc, "z");
+    EufState *st = euf_new(vc, a);
+
+    /* Base fact, below every mark. */
+    ok(euf_assert_eq(st, x, y), "SX3: base x = y asserts");
+
+    EufMark m1 = euf_mark(st);
+    ok(euf_assert_eq(st, y, z), "SX3: y = z asserts above mark");
+    ok(euf_equal(st, x, z), "SX3: x ~ z holds via transitivity");
+
+    /* Nested mark: assert a conflict, roll back only to m2. */
+    EufMark m2 = euf_mark(st);
+    VCTerm *c3 = vc_int(vc, 3), *c5 = vc_int(vc, 5);
+    (void)euf_assert_eq(st, x, c3);
+    bool conflicted = !euf_assert_eq(st, y, c5);   /* 3 = 5: contradiction */
+    ok(conflicted, "SX3: distinct literals conflict above m2");
+    euf_undo_to(st, m2);
+    ok(euf_equal(st, x, z), "SX3: undo-to-m2 keeps x ~ z");
+    ok(!euf_equal(st, x, c3), "SX3: undo-to-m2 forgets x = 3");
+
+    /* After the conflict was undone, the state must be usable again: the
+     * unsat flag rolled back with the mark. */
+    ok(euf_assert_eq(st, x, c3), "SX3: state usable after conflict undo");
+    euf_undo_to(st, m2);
+
+    euf_undo_to(st, m1);
+    ok(euf_equal(st, x, y), "SX3: undo-to-m1 keeps the base fact");
+    ok(!euf_equal(st, y, z), "SX3: undo-to-m1 forgets y = z");
+    ok(!euf_equal(st, x, z), "SX3: undo-to-m1 forgets x ~ z");
+
+    /* The stale-stamp trap, hit precisely.  It only bites when a write lands
+     * on a slot that (a) was registered BELOW the mark, so undo does not
+     * truncate it away and re-registration cannot refresh its stamp, and
+     * (b) was stamped between the previous mark and its undo.  A first draft
+     * of this test asserted y = z here instead -- undo had truncated z, the
+     * re-assertion re-registered it with a fresh stamp, and the
+     * no-level-bump mutation sailed through.  So: register two fresh vars
+     * below the marks (euf_equal registers without writing), write them
+     * under one mark, undo, and write them again under a second mark at the
+     * same depth.  If marks reuse levels, the second write is not trailed
+     * and the final undo silently keeps the union. */
+    VCTerm *p = V(vc, "p"), *q = V(vc, "q");
+    (void)euf_equal(st, p, q);              /* register below the marks */
+    EufMark mA = euf_mark(st);
+    ok(euf_assert_eq(st, p, q), "SX3: p = q under mark A");
+    euf_undo_to(st, mA);
+    ok(!euf_equal(st, p, q), "SX3: undo A forgets p = q");
+    EufMark mB = euf_mark(st);
+    ok(euf_assert_eq(st, p, q), "SX3: p = q under mark B (same depth)");
+    euf_undo_to(st, mB);
+    ok(!euf_equal(st, p, q),
+       "SX3: undo B forgets p = q (stale-stamp trap: stamped slots reused)");
+}
+
 int main(void) {
     Arena a;
     arena_init(&a, 1 << 20);
 
     test_hash_consing(&a);
+    test_euf_mark_undo(&a);
     test_constant_folding(&a);
     test_s0_trivial(&a);
     test_s2_linear(&a);

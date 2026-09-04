@@ -9,10 +9,10 @@
 ;; result unchanged: both the ok and err inputs yield 103.  (`boom` ends in a
 ;; catchable `panic`; the C build emits a benign -Wreturn-type note for it -- an
 ;; unrelated pre-existing panic-return-signal codegen gap, see
-;; docs/reported/panic-in-value-if-branch.md -- not an error, and absent from the
+;; docs/archive/history/panic-in-value-if-branch.md -- not an error, and absent from the
 ;; warning-free emit-c snapshot.)
 (defn boom [] : int (panic "boom"))
-(defn describe [r : (Result int int)] : int (if (.is-ok r) 10 (boom)))
+(defn describe [r : (Result int int)] : int (if (ok? r) 10 (boom)))
 
 (defn step [acc : (Result int int) n : int] : int
   (if (= n 0)

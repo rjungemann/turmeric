@@ -43,6 +43,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifndef _WIN32
+#  include <dlfcn.h>   /* jit-ffi-c2mir-plan: real dlopen/dlsym in turi */
+#endif
 
 #if defined(_WIN32)
 /* Windows: <sys/mman.h> and <ucontext.h> do not exist.  Both are shimmed --
@@ -88,6 +91,8 @@
 #include "../passes/effect_check.h"
 #include "../passes/borrow_check.h"
 #include "../runtime/globals.h"  /* Gap 7: g_interpret_mode (per-env snapshot) */
+#include "ffi_thunk.h"  /* jit-ffi-c2mir-plan F2: thunk-backed extern-c */
+#include "jit_ffi.h"    /* jit-ffi-c2mir-plan: provider + sig vocabulary */
 
 /* T1 (turi-eval-trampoline-plan): small inline arg/field buffer with a heap
  * spill above it.  Keeps the per-call scratch off the C stack for the common
@@ -164,7 +169,7 @@ void turi_env_register_native(TuriEnv *env, const char *name,
 /* Typed variant: install the native exactly as turi_env_register_native does,
  * then record its runtime return type in the process-global signature registry
  * so the elaborator can type calls to it (and typed wrappers over it).  See
- * docs/archive/untyped-native-registration-blocks-curated-facades.md. */
+ * docs/archive/history/untyped-native-registration-blocks-curated-facades.md. */
 void turi_env_register_native_typed(TuriEnv *env, const char *name,
                                     TuriNativeFn fn, void *ud,
                                     TurNativeRetType ret) {
@@ -262,6 +267,10 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
  * Defined near the end of this file, after the value printer they rely on. */
 static void turi_dbg_before_node(TuriEnv *env, EvalFrame *frame,
                                   const Expr *e, bool from_driver);
+/* Suppress the next hook for exactly this node.  The driver calls it before
+ * handing a black-box node to eval_expr, which would otherwise hook a node the
+ * driver has already hooked. */
+static void turi_dbg_skip_next(TuriEnv *env, const Expr *e);
 static void turi_dbg_push(TuriEnv *env, const FnDef *fn, EvalFrame *cf);
 static void turi_dbg_pop(TuriEnv *env);
 static void turi_dbg_set_top(TuriEnv *env, const FnDef *fn, EvalFrame *cf);
@@ -375,7 +384,13 @@ static TuriValue native_extern_puts(TuriEnv *env, TuriValue *args, uint32_t n, v
     return turi_int(0);
 }
 
-static void register_extern_c_known(TuriEnv *env, const char *fname) {
+/* Register the semantics-bearing overrides for well-known libc names.
+ * Returns true when `fname` was one of them.  These win over the JIT FFI
+ * thunk path deliberately: `free` must stay a no-op in turi (inline-C
+ * allocations are reproduced from the env value-arena, not raw malloc),
+ * `exit` must flush-and-_exit, and printf/puts marshal turi values rather
+ * than trusting a variadic ABI. */
+static bool register_extern_c_known(TuriEnv *env, const char *fname) {
     struct { const char *name; TuriNativeFn fn; } known[] = {
         { "exit",     native_extern_exit     },
         { "free",     native_extern_free     },
@@ -389,11 +404,340 @@ static void register_extern_c_known(TuriEnv *env, const char *fname) {
     for (int i = 0; known[i].name; i++) {
         if (strcmp(fname, known[i].name) == 0) {
             turi_env_register_native(env, fname, known[i].fn, NULL);
-            return;
+            return true;
         }
     }
+    return false;
+}
+
+/* Forward decls: the aggregate marshalling engine lives with eval_call_ptr
+ * below; extern-c registration (the F4 follow-on) reuses it wholesale. */
+static size_t agg_sig_len(const AdtDef *def);
+static size_t agg_sig_render(const AdtDef *def, char *buf);
+static bool   agg_collect_leaves(const AdtDef *def, TuriValue v,
+                                 TuriValue *out, int max, int *n);
+static TuriValue agg_build_value(TuriEnv *env, const AdtDef *def,
+                                 const void *base, const size_t *offs,
+                                 const char *codes, int nleaf, int *cur);
+static void agg_store_member(void *base, size_t off, char code, TuriValue v);
+
+/* The by-value record def an extern-c slot names, or NULL for a scalar
+ * slot.  A full TY_ADT type only reaches ec->param_types / return_type via
+ * elaboration's extern_c_aggregate_ok, so the def is already validated. */
+static const AdtDef *extern_slot_agg_def(Type t) {
+    if (t.kind != TY_ADT || !t.as.adt_.def) return NULL;
+    return t.as.adt_.def;
+}
+
+/* jit-ffi F4 follow-on: a thunk-backed extern-c native whose signature has
+ * at least one by-value aggregate slot.  The sig (with inline `{...}`
+ * layouts) is precomputed at registration; each call packs record args
+ * into C bytes and rebuilds a record from an aggregate return, exactly as
+ * eval_call_ptr does. */
+typedef struct ExternAggUd {
+    void          *fn;
+    const char    *name;   /* borrowed (interned symbol) */
+    const ExternC *ec;     /* elaboration arena; process-lifetime under turi */
+    char          *sig;
+    size_t        *arg_at; /* sig offset of each parameter's slot */
+} ExternAggUd;
+
+/* Env-lifetime teardown for the payload above (turi_env_register_native_ex).
+ * The ExternC itself belongs to the elaboration arena and is not ours. */
+static void extern_agg_ud_free(void *p) {
+    ExternAggUd *ud = (ExternAggUd *)p;
+    if (!ud) return;
+    free(ud->sig);
+    free(ud->arg_at);
+    free(ud);
+}
+
+static TuriValue extern_agg_thunk_native(TuriEnv *env, TuriValue *args,
+                                         uint32_t n, void *ud) {
+    const ExternAggUd *x = (const ExternAggUd *)ud;
+
+    if (!(env->caps & TURI_CAP_FFI))
+        return turi_errorf(
+            "ffi: extern-c '%s' is not allowed in a sandboxed environment",
+            x->name);
+    const TurJitFfiProvider *jp = tur_jit_ffi_provider();
+    if (!jp)
+        return turi_errorf(
+            "ffi: calling extern-c '%s' under --interpret requires a "
+            "JIT-enabled build (-DTUR_JIT=ON)", x->name);
+    if (n != x->ec->n_params)
+        return turi_errorf("ffi: '%s' expects %u arg%s, got %u", x->name,
+                           (unsigned)x->ec->n_params,
+                           x->ec->n_params == 1 ? "" : "s", (unsigned)n);
+
+    TuriValue result;
+    int64_t *i_vals   = (int64_t *)calloc(n ? n : 1, sizeof(int64_t));
+    double  *f_vals   = (double  *)calloc(n ? n : 1, sizeof(double));
+    void   **s_vals   = (void   **)calloc(n ? n : 1, sizeof(void *));
+    void   **agg_bufs = (void   **)calloc(n ? n : 1, sizeof(void *));
+    void    *out_s_buf = NULL;
+    if (!i_vals || !f_vals || !s_vals || !agg_bufs) {
+        result = turi_error("ffi: out of memory marshalling call");
+        goto cleanup;
+    }
+
+    for (uint32_t k = 0; k < n; k++) {
+        const AdtDef *pd = extern_slot_agg_def(x->ec->param_types[k]);
+        if (pd) {
+            size_t size = 0, align = 1, offs[64];
+            char   codes[64];
+            int    nleaf = 0;
+            if (!tur_jit_ffi_struct_layout(x->sig + x->arg_at[k], &size,
+                                           &align, offs, codes, 64, &nleaf)) {
+                result = turi_errorf("ffi: '%s' arg %u has an "
+                                     "unrepresentable aggregate layout",
+                                     x->name, (unsigned)k);
+                goto cleanup;
+            }
+            TuriValue leaves[64];
+            int       nl = 0;
+            if (!agg_collect_leaves(pd, args[k], leaves, 64, &nl) ||
+                nl != nleaf) {
+                result = turi_errorf("ffi: '%s' arg %u does not match the "
+                                     "shape '%s' declares", x->name,
+                                     (unsigned)k,
+                                     pd->name ? pd->name : "?");
+                goto cleanup;
+            }
+            void *bytes = calloc(1, size ? size : 1);
+            if (!bytes) {
+                result = turi_error("ffi: out of memory");
+                goto cleanup;
+            }
+            agg_bufs[k] = bytes;
+            s_vals[k]   = bytes;
+            for (int i = 0; i < nleaf; i++)
+                agg_store_member(bytes, offs[i], codes[i], leaves[i]);
+            continue;
+        }
+        char cls = tur_jit_ffi_class_for_kind(x->ec->param_types[k].kind, 0);
+        if (tur_jit_ffi_class_is_int(cls)) {
+            switch (args[k].tag) {
+                case TURI_INT:  i_vals[k] = args[k].as_int; break;
+                case TURI_BOOL: i_vals[k] = args[k].as_bool ? 1 : 0; break;
+                case TURI_CSTR:
+                    i_vals[k] = (int64_t)(intptr_t)args[k].as_cstr; break;
+                case TURI_NIL:  i_vals[k] = 0; break;
+                default:
+                    result = turi_errorf(
+                        "ffi: '%s' arg %u is not an int-class value",
+                        x->name, (unsigned)k);
+                    goto cleanup;
+            }
+        } else {   /* 'f' / 'F' */
+            if (args[k].tag == TURI_FLOAT)    f_vals[k] = args[k].as_float;
+            else if (args[k].tag == TURI_INT) f_vals[k] = (double)args[k].as_int;
+            else {
+                result = turi_errorf(
+                    "ffi: '%s' arg %u is not a float-class value",
+                    x->name, (unsigned)k);
+                goto cleanup;
+            }
+        }
+    }
+
+    {
+        char errbuf[256];
+        TurJitFfiThunkFn jt = jp->thunk_for(x->sig, errbuf, sizeof errbuf);
+        if (!jt) {
+            result = turi_errorf("ffi: '%s': %s", x->name, errbuf);
+            goto cleanup;
+        }
+        int64_t out_i = 0;
+        double  out_f = 0.0;
+
+        const AdtDef *rd = extern_slot_agg_def(x->ec->return_type);
+        size_t roffs[64];
+        char   rcodes[64];
+        int    rleaf = 0;
+        if (rd) {
+            size_t rsize = 0, ralign = 1;
+            if (!tur_jit_ffi_struct_layout(x->sig, &rsize, &ralign, roffs,
+                                           rcodes, 64, &rleaf)) {
+                result = turi_errorf("ffi: '%s' return has an "
+                                     "unrepresentable aggregate layout",
+                                     x->name);
+                goto cleanup;
+            }
+            out_s_buf = calloc(1, rsize ? rsize : 1);
+            if (!out_s_buf) {
+                result = turi_error("ffi: out of memory");
+                goto cleanup;
+            }
+        }
+
+        jt(x->fn, i_vals, f_vals, s_vals, &out_i, &out_f, out_s_buf);
+
+        if (rd) {
+            int cur = 0;
+            result = agg_build_value(env, rd, out_s_buf, roffs, rcodes,
+                                     rleaf, &cur);
+            if (!turi_is_error(result) && cur != rleaf)
+                result = turi_errorf("ffi: '%s' return layout is longer "
+                                     "than its record declares", x->name);
+            goto cleanup;
+        }
+        switch (x->ec->return_type.kind) {
+            case TY_NIL:     result = turi_nil(); break;
+            case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                result = turi_float(out_f); break;
+            case TY_BOOL:    result = turi_bool(out_i != 0); break;
+            case TY_CSTR:
+                result = out_i ? turi_cstr((const char *)(intptr_t)out_i)
+                               : turi_nil();
+                break;
+            default:         result = turi_int(out_i); break;
+        }
+    }
+
+cleanup:
+    if (agg_bufs)
+        for (uint32_t k = 0; k < n; k++) free(agg_bufs[k]);
+    free(agg_bufs);
+    free(out_s_buf);
+    free(s_vals);
+    free(i_vals);
+    free(f_vals);
+    return result;
+}
+
+/* Build a full sig string (with inline `{...}` layouts) for a return type
+ * and parameter list, recording each parameter slot's sig offset in
+ * `arg_at` (n entries, may be NULL).  Returns a malloc'd sig, or NULL when
+ * any slot has no representation. */
+static char *agg_sig_build(Type ret, const Type *params, uint32_t n,
+                           size_t *arg_at) {
+    const AdtDef *rd = extern_slot_agg_def(ret);
+    size_t cap = 3;
+    cap += rd ? agg_sig_len(rd) : 1;
+    for (uint32_t k = 0; k < n; k++) {
+        const AdtDef *pd = extern_slot_agg_def(params[k]);
+        cap += pd ? agg_sig_len(pd) : 1;
+    }
+    char *sig = (char *)malloc(cap);
+    if (!sig) return NULL;
+
+    size_t sp = 0;
+    if (rd) {
+        size_t w = agg_sig_render(rd, sig);
+        if (!w) { free(sig); return NULL; }
+        sp = w;
+    } else {
+        char c = tur_jit_ffi_class_for_kind(ret.kind, 1);
+        if (c == '?') { free(sig); return NULL; }
+        sig[sp++] = c;
+    }
+    sig[sp++] = ':';
+    for (uint32_t k = 0; k < n; k++) {
+        const AdtDef *pd = extern_slot_agg_def(params[k]);
+        if (arg_at) arg_at[k] = sp;
+        if (pd) {
+            size_t w = agg_sig_render(pd, sig + sp);
+            if (!w) { free(sig); return NULL; }
+            sp += w;
+        } else {
+            char c = tur_jit_ffi_class_for_kind(params[k].kind, 0);
+            if (c == '?' || c == 'v') { free(sig); return NULL; }
+            sig[sp++] = c;
+        }
+    }
+    sig[sp] = '\0';
+    return sig;
+}
+
+/* Register an aggregate-signature extern-c as a thunk-backed native.
+ * Returns 0 on success; nonzero falls back to the nil stub (an
+ * unrepresentable layout or an unresolvable symbol). */
+static int register_extern_c_agg(TuriEnv *env, const ExternC *ec,
+                                 const char *fname) {
+    const TurJitFfiProvider *jp = tur_jit_ffi_provider();
+    uint32_t n = ec->n_params;
+    size_t *arg_at = (size_t *)calloc(n ? n : 1, sizeof(size_t));
+    char   *sig    = arg_at ? agg_sig_build(ec->return_type, ec->param_types,
+                                            n, arg_at)
+                            : NULL;
+    if (!sig) goto fail;
+
+    {
+        void *fn = jp->resolve(ec->c_name ? ec->c_name->name : fname);
+        if (!fn) goto fail;
+        ExternAggUd *ud = (ExternAggUd *)calloc(1, sizeof(*ud));
+        if (!ud) goto fail;
+        ud->fn = fn; ud->name = fname; ud->ec = ec;
+        ud->sig = sig; ud->arg_at = arg_at;
+        /* Env-lifetime, not process-lifetime: a procedural macro's turi env
+         * is torn down per compile, and the compile path is leak-checked. */
+        turi_env_register_native_ex(env, fname, extern_agg_thunk_native, ud,
+                                    extern_agg_ud_free);
+        return 0;
+    }
+
+fail:
+    free(sig);
+    free(arg_at);
+    return -1;
+}
+
+/* jit-ffi-c2mir-plan F2: give an extern-c declaration a real
+ * implementation.  Precedence: the known-override table above; then, in a
+ * JIT build, a thunk-backed native calling the dlsym-resolved symbol for
+ * real; else today's nil stub.  The thunk upgrade is a correctness fix for
+ * --interpret -- the 7-entry table used to be the whole story and
+ * everything else silently returned nil. */
+static void register_extern_c_binding(TuriEnv *env, const ExternC *ec,
+                                      const char *fname) {
+    if (register_extern_c_known(env, fname)) return;
+
+    const TurJitFfiProvider *jp = tur_jit_ffi_provider();
+    if (jp && ec && !ec->is_variadic) {
+        /* F4 follow-on: a signature with a by-value aggregate slot takes
+         * the aggregate-aware registration; failure falls to the stub. */
+        bool any_agg = extern_slot_agg_def(ec->return_type) != NULL;
+        for (uint32_t i = 0; !any_agg && i < ec->n_params; i++)
+            if (extern_slot_agg_def(ec->param_types[i])) any_agg = true;
+        if (any_agg) {
+            if (register_extern_c_agg(env, ec, fname) == 0) return;
+            turi_env_register_native(env, fname, native_nil_stub, NULL);
+            return;
+        }
+        /* Classify the declared signature.  A '?' anywhere (ADT, carrier)
+         * means the thunk vocabulary cannot express it; fall back to the
+         * stub rather than mis-calling. */
+        char ret = tur_jit_ffi_class_for_kind(ec->return_type.kind, 1);
+        bool ok = (ret != '?');
+        uint32_t n = ec->n_params;
+        char inl[64];
+        char *classes = (n <= sizeof inl) ? inl : (char *)malloc(n);
+        if (!classes) ok = false;
+        for (uint32_t i = 0; ok && i < n; i++) {
+            char c = tur_jit_ffi_class_for_kind(ec->param_types[i].kind, 0);
+            if (c == '?' || c == 'v') ok = false;
+            else classes[i] = c;
+        }
+        /* Resolve against this process: the executable's exported runtime
+         * (ENABLE_EXPORTS) plus anything dlopened RTLD_GLOBAL.  A symbol
+         * from a lib the process never linked needs an explicit dlopen (or
+         * jit autolink) first -- documented resolution order. */
+        void *fn = ok ? jp->resolve(ec->c_name ? ec->c_name->name : fname)
+                      : NULL;
+        if (fn) {
+            int rc = tur_ffi_register_extern_thunk(env, fname, fn, ret,
+                                                   classes, n);
+            if (classes != inl) free(classes);
+            if (rc == 0) return;
+        } else if (classes != inl) {
+            free(classes);
+        }
+    }
+
     turi_env_register_native(env, fname, native_nil_stub, NULL);
 }
+
 
 /* -------------------------------------------------------------------------
  * Local variable frame (stack-allocated linked list)
@@ -408,17 +752,37 @@ typedef struct EvalBinding {
 /* generic-dict-dispatch: a runtime tyvar->concrete-type substitution captured at
  * a generic function's call site, so a typeclass method baked to the carrier
  * representative inside the body can re-resolve to the receiver's real instance.
- * See docs/reported/turi-generic-dict-dispatch-bakes-representative-instance.md. */
+ * See docs/archive/turi-generic-dict-dispatch-bakes-representative-instance.md. */
 typedef struct TyvarBind {
     const char       *name;   /* interned tyvar name, e.g. "A" */
     Type              type;   /* the concrete type bound to it at this call site */
     struct TyvarBind *next;
 } TyvarBind;
 
+/* turi-dict-passing-plan: a runtime dictionary bound at a dict-clone's apply --
+ * "constraint class TC is served by instance INST in this activation".  The
+ * tree-walking analogue of the compiled clone's leading `int64_t __dict` param;
+ * consulted with EXPLICIT precedence over the gde_* recovery heuristics, which
+ * reconstruct the same fact from pinned tyvars / runtime tags.  Chain-walked
+ * like tyvars, so a nested mapper lambda that captured the clone's frame reads
+ * the dict through its parent chain (the captured-dict case for free). */
+typedef struct DictBind {
+    struct TypeClass         *tc;
+    struct TypeClassInstance *inst;
+    /* Constraint tyvar name this dictionary serves, or NULL when unkeyed (a
+     * dict-clone param bind).  Distinguishes two same-class constraints on
+     * different tyvars -- `map-show-loop [^Show K ^Show V]` carries a Show
+     * dictionary for EACH of K and V, and a class-only key could not tell
+     * them apart at the dispatch site. */
+    const char               *tyvar;
+    struct DictBind          *next;
+} DictBind;
+
 struct EvalFrame {
     EvalBinding  *bindings;
     EvalFrame    *parent;
     TyvarBind    *tyvars;   /* generic-dict tyvar substitutions (usually NULL) */
+    DictBind     *dicts;    /* dict-clone runtime dictionaries (usually NULL) */
 };
 
 static EvalFrame *eval_frame_new(TuriEnv *env, EvalFrame *parent) {
@@ -429,7 +793,32 @@ static EvalFrame *eval_frame_new(TuriEnv *env, EvalFrame *parent) {
     f->bindings = NULL;
     f->parent   = parent;
     f->tyvars   = NULL;
+    f->dicts    = NULL;
     return f;
+}
+
+/* Resolve a typeclass to its runtime dictionary through the frame chain. */
+static struct TypeClassInstance *frame_lookup_dict(EvalFrame *f,
+                                                   const struct TypeClass *tc) {
+    for (EvalFrame *cur = f; cur; cur = cur->parent)
+        for (DictBind *db = cur->dicts; db; db = db->next)
+            if (db->tc == tc) return db->inst;
+    return NULL;
+}
+
+/* Resolve a typeclass dictionary for a SPECIFIC constraint tyvar.  Exact
+ * (class, tyvar-name) match first, so `[^Show K ^Show V]` dispatches K's
+ * dictionary for a K-directed method and V's for a V-directed one; falls back
+ * to the class-only walk (which also serves unkeyed dict-clone binds). */
+static struct TypeClassInstance *frame_lookup_dict_tyvar(
+        EvalFrame *f, const struct TypeClass *tc, const char *tyvar) {
+    if (tyvar)
+        for (EvalFrame *cur = f; cur; cur = cur->parent)
+            for (DictBind *db = cur->dicts; db; db = db->next)
+                if (db->tc == tc && db->tyvar &&
+                    (db->tyvar == tyvar || strcmp(db->tyvar, tyvar) == 0))
+                    return db->inst;
+    return frame_lookup_dict(f, tc);
 }
 
 /* Resolve a tyvar name to its concrete type through the frame chain. */
@@ -588,7 +977,7 @@ static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n,
  * `TuriStruct*` and used to bind the pointer straight through, which made the
  * same write visible to the caller -- one program printing 0 compiled and 3
  * interpreted.  See
- * docs/reported/struct-param-mutation-backend-divergence.md.
+ * docs/archive/struct-param-mutation-backend-divergence.md.
  *
  * Three kinds of value must NOT be copied, because for them sharing IS the
  * semantics rather than an artifact of the representation:
@@ -776,12 +1165,591 @@ static bool turi_struct_is_struct_like(TuriValue v) {
     return cd && cd->adt && cd->adt->from_struct_lowering;
 }
 
+/* type-of-cast-kind-granularity: the interpreter's counterpart of the compiled
+ * per-monomorph `any` box id.  The compiled tag names the ADT/struct now, so
+ * turi answers with the same name rather than "struct"/"adt" for everything.
+ * An ADT value reports its ADT's name (a `(Circle 5)` is a "Shape"), not the
+ * constructor's; a struct-lowered record reports its own. */
+static const char *turi_any_named_type(TuriValue v) {
+    if (v.tag != TURI_STRUCT || !v.as_struct) return NULL;
+    if (!turi_struct_is_struct_like(v) && v.as_struct->ctor &&
+        v.as_struct->ctor->adt && v.as_struct->ctor->adt->name)
+        return v.as_struct->ctor->adt->name;
+    return v.as_struct->name;
+}
+
 TuriValue turi_make_struct(TuriEnv *env, const char *name, TuriValue *fields, uint32_t n) {
     return make_struct_val_def(env, name, n, fields);
 }
 
 static TuriValue make_struct_val(TuriEnv *env, const char *name, uint32_t n, TuriValue *fields) {
     return make_struct_val_def(env, name, n, fields);
+}
+
+/* -------------------------------------------------------------------------
+ * jit-ffi-c2mir-plan F3: (call-ptr ...) evaluation
+ * ---------------------------------------------------------------------- */
+
+/* F4 struct-by-value.  The compiled path passes a record by naming its type
+ * (a defstruct already emits as the exact by-value C struct), but turi holds
+ * a TuriStruct -- a boxed array of tagged TuriValues -- so it has to build
+ * the C bytes itself.  The layout comes from the shared engine in
+ * jit_ffi_hook.c, which is also what renders the thunk's struct declaration,
+ * so both sides are computing offsets from one description.
+ *
+ * The per-field TYPES come from the record's own CtorFields rather than from
+ * the sig, which carries layout only -- that is what lets a :bool field read
+ * back as a boolean and a :cstr field as a string instead of both collapsing
+ * to an integer. */
+
+/* How one record field sits in the emitted C aggregate.  Must agree with
+ * codegen's adt_field_is_inline_byval -- that predicate is what decides the
+ * emitted layout, and a sig that disagrees with it describes a struct the
+ * callee does not have (the exact miscall F4 exists to prevent). */
+typedef enum {
+    AGGF_SCALAR,       /* a scalar member, or an int64 carrier (boxed /
+                        * :heap-pointer / drop-glue field) -- 8 bytes either
+                        * way, member_code_for_kind(kind) describes it */
+    AGGF_NESTED,       /* a by-value record inlined as a nested C struct */
+    AGGF_UNSUPPORTED,  /* inlined in the emitted C, but the interpreter
+                        * cannot render its layout (a TY_APP monomorph field
+                        * needs per-application substitution) -- refuse
+                        * rather than mis-describe */
+} AggFieldClass;
+
+static AggFieldClass agg_field_class(const CtorField *f,
+                                     const AdtDef **out_def) {
+    if (adt_field_is_inline_byval(f)) {
+        if (f->full_type->kind == TY_ADT) {
+            if (out_def) *out_def = f->full_type->as.adt_.def;
+            return AGGF_NESTED;
+        }
+        return AGGF_UNSUPPORTED;
+    }
+    return AGGF_SCALAR;
+}
+
+/* Number of sig bytes an aggregate for `def` needs, including braces. */
+static size_t agg_sig_len(const AdtDef *def) {
+    const CtorDef *ct = def->ctors[0];
+    size_t n = 2;
+    for (uint32_t i = 0; i < ct->n_fields; i++) {
+        const AdtDef *in = NULL;
+        n += (agg_field_class(&ct->fields[i], &in) == AGGF_NESTED)
+                 ? agg_sig_len(in)
+                 : 1;
+    }
+    return n;
+}
+
+/* Render `{...}` for a record ADT into buf (which must hold agg_sig_len
+ * bytes).  A nested by-value record field renders as its own inline
+ * `{...}`, matching the layout codegen inlines.  Returns the number of
+ * bytes written, or 0 if any field has no by-value member representation
+ * the interpreter can describe. */
+static size_t agg_sig_render(const AdtDef *def, char *buf) {
+    const CtorDef *ct = def->ctors[0];
+    size_t pos = 0;
+    buf[pos++] = '{';
+    for (uint32_t i = 0; i < ct->n_fields; i++) {
+        const AdtDef *in = NULL;
+        switch (agg_field_class(&ct->fields[i], &in)) {
+            case AGGF_NESTED: {
+                size_t w = agg_sig_render(in, buf + pos);
+                if (!w) return 0;
+                pos += w;
+                break;
+            }
+            case AGGF_SCALAR: {
+                char c = tur_jit_ffi_member_code_for_kind(ct->fields[i].kind);
+                if (!c) return 0;
+                buf[pos++] = c;
+                break;
+            }
+            default:
+                return 0;
+        }
+    }
+    buf[pos++] = '}';
+    return pos;
+}
+
+/* Store one TuriValue into `base + off` as member code `code`. */
+static void agg_store_member(void *base, size_t off, char code, TuriValue v) {
+    unsigned char *p = (unsigned char *)base + off;
+    int64_t iv = 0;
+    double  dv = 0.0;
+    switch (v.tag) {
+        case TURI_INT:   iv = v.as_int;  dv = (double)v.as_int; break;
+        case TURI_BOOL:  iv = v.as_bool ? 1 : 0; dv = (double)iv; break;
+        case TURI_FLOAT: dv = v.as_float; iv = (int64_t)v.as_float; break;
+        case TURI_CSTR:  iv = (int64_t)(intptr_t)v.as_cstr; break;
+        default:         iv = 0; break;   /* TURI_NIL and friends -> zero */
+    }
+    switch (code) {
+        case 'b': { int8_t  x = (int8_t)iv;  memcpy(p, &x, sizeof x); break; }
+        case 'h': { int16_t x = (int16_t)iv; memcpy(p, &x, sizeof x); break; }
+        case 'w': { int32_t x = (int32_t)iv; memcpy(p, &x, sizeof x); break; }
+        case 'q': { int64_t x = iv;          memcpy(p, &x, sizeof x); break; }
+        case 'p': { void   *x = (void *)(intptr_t)iv;
+                    memcpy(p, &x, sizeof x); break; }
+        case 'F': { float   x = (float)dv;   memcpy(p, &x, sizeof x); break; }
+        case 'f': { double  x = dv;          memcpy(p, &x, sizeof x); break; }
+        default:  break;
+    }
+}
+
+/* Read `base + off` back as a TuriValue, typed by the FIELD's declared kind
+ * (the sig code only says how many bytes to read and whether they are FP). */
+static TuriValue agg_load_member(const void *base, size_t off, char code,
+                                 TypeKind field_kind) {
+    const unsigned char *p = (const unsigned char *)base + off;
+    switch (code) {
+        case 'F': { float  x; memcpy(&x, p, sizeof x); return turi_float(x); }
+        case 'f': { double x; memcpy(&x, p, sizeof x); return turi_float(x); }
+        case 'p': {
+            void *x; memcpy(&x, p, sizeof x);
+            if (field_kind == TY_CSTR)
+                return x ? turi_cstr((const char *)x) : turi_nil();
+            return turi_int((int64_t)(intptr_t)x);
+        }
+        default: break;
+    }
+    /* Integer widths: sign- or zero-extend by the DECLARED field type, so a
+     * :uint32 0xFFFFFFFF reads back as 4294967295 rather than -1. */
+    bool is_unsigned = (field_kind == TY_UINT8  || field_kind == TY_UINT16 ||
+                        field_kind == TY_UINT32 || field_kind == TY_UINT64);
+    int64_t out = 0;
+    switch (code) {
+        case 'b': if (is_unsigned) { uint8_t x; memcpy(&x, p, sizeof x);
+                                     out = x; }
+                  else             { int8_t  x; memcpy(&x, p, sizeof x);
+                                     out = x; }
+                  break;
+        case 'h': if (is_unsigned) { uint16_t x; memcpy(&x, p, sizeof x);
+                                     out = x; }
+                  else             { int16_t  x; memcpy(&x, p, sizeof x);
+                                     out = x; }
+                  break;
+        case 'w': if (is_unsigned) { uint32_t x; memcpy(&x, p, sizeof x);
+                                     out = x; }
+                  else             { int32_t  x; memcpy(&x, p, sizeof x);
+                                     out = x; }
+                  break;
+        case 'q': { int64_t x; memcpy(&x, p, sizeof x); out = x; break; }
+        default:  break;
+    }
+    if (field_kind == TY_BOOL) return turi_bool(out != 0);
+    return turi_int(out);
+}
+
+/* Flatten `v` (a record value of type `def`) into leaf TuriValues in
+ * declaration order, recursing into nested by-value record fields -- the
+ * same flattening tur_jit_ffi_struct_layout applies to the sig, so leaf i
+ * here lands at offs[i]/codes[i] there.  Returns false on a shape mismatch
+ * (not a record, wrong field count, or a nested field that is not the
+ * record value its slot declares). */
+static bool agg_collect_leaves(const AdtDef *def, TuriValue v,
+                               TuriValue *out, int max, int *n) {
+    if (v.tag != TURI_STRUCT || !v.as_struct) return false;
+    const CtorDef *ct = def->ctors[0];
+    if (v.as_struct->n_fields != ct->n_fields) return false;
+    for (uint32_t i = 0; i < ct->n_fields; i++) {
+        const AdtDef *in = NULL;
+        if (agg_field_class(&ct->fields[i], &in) == AGGF_NESTED) {
+            if (!agg_collect_leaves(in, v.as_struct->fields[i], out, max, n))
+                return false;
+        } else {
+            if (*n >= max) return false;
+            out[(*n)++] = v.as_struct->fields[i];
+        }
+    }
+    return true;
+}
+
+/* Rebuild a record value of type `def` from the C bytes at `base`, reading
+ * leaves at offs[*cur]/codes[*cur] onward (the flattened order the layout
+ * engine produced) and reconstructing nested records recursively.  Advances
+ * *cur past the leaves consumed. */
+static TuriValue agg_build_value(TuriEnv *env, const AdtDef *def,
+                                 const void *base, const size_t *offs,
+                                 const char *codes, int nleaf, int *cur) {
+    const CtorDef *ct = def->ctors[0];
+    TuriValue fields[64];
+    if (ct->n_fields > 64)
+        return turi_error("call-ptr: aggregate return has too many fields");
+    for (uint32_t i = 0; i < ct->n_fields; i++) {
+        const AdtDef *in = NULL;
+        if (agg_field_class(&ct->fields[i], &in) == AGGF_NESTED) {
+            fields[i] = agg_build_value(env, in, base, offs, codes,
+                                        nleaf, cur);
+            if (turi_is_error(fields[i])) return fields[i];
+        } else {
+            if (*cur >= nleaf)
+                return turi_error("call-ptr: aggregate return layout is "
+                                  "shorter than its record declares");
+            fields[i] = agg_load_member(base, offs[*cur], codes[*cur],
+                                        ct->fields[i].kind);
+            (*cur)++;
+        }
+    }
+    TuriValue r = make_struct_val(env, ct->name, ct->n_fields, fields);
+    /* Carry the ctor so field access and `type-of` see a struct, the same
+     * thing adt_ctor_native does for a value built in turi. */
+    if (r.tag == TURI_STRUCT && r.as_struct)
+        r.as_struct->ctor = ct;
+    return r;
+}
+
+/* Bridge for tur_ffi_cb_dispatch (ffi_thunk.c): rebuild a record TuriValue
+ * of type `def` from the C bytes of the aggregate whose sig text begins at
+ * `sig` (points at '{').  An inbound callback argument arrives as raw
+ * struct bytes; this is the unpacking direction of the F4 marshaller. */
+TuriValue tur_eval_agg_from_bytes(TuriEnv *env, const AdtDef *def,
+                                  const char *sig, const void *bytes) {
+    size_t offs[64];
+    char   codes[64];
+    int    nleaf = 0;
+    if (!tur_jit_ffi_struct_layout(sig, NULL, NULL, offs, codes, 64, &nleaf))
+        return turi_error("callback: unrepresentable aggregate layout");
+    int cur = 0;
+    TuriValue r = agg_build_value(env, def, bytes, offs, codes, nleaf, &cur);
+    if (!turi_is_error(r) && cur != nleaf)
+        return turi_error("callback: aggregate layout is longer than its "
+                          "record declares");
+    return r;
+}
+
+/* Bridge for tur_ffi_cb_dispatch: pack a record TuriValue into the byte
+ * buffer a callback's aggregate return is stored through.  Returns false
+ * on a shape mismatch (the buffer is left zeroed by the caller). */
+bool tur_eval_agg_to_bytes(const AdtDef *def, const char *sig, TuriValue v,
+                           void *bytes) {
+    size_t offs[64];
+    char   codes[64];
+    int    nleaf = 0;
+    if (!tur_jit_ffi_struct_layout(sig, NULL, NULL, offs, codes, 64, &nleaf))
+        return false;
+    TuriValue leaves[64];
+    int       nl = 0;
+    if (!agg_collect_leaves(def, v, leaves, 64, &nl) || nl != nleaf)
+        return false;
+    for (int i = 0; i < nleaf; i++)
+        agg_store_member(bytes, offs[i], codes[i], leaves[i]);
+    return true;
+}
+
+/* jit-ffi-c2mir-plan F5: `(callback-ptr f [sig])` under the interpreter.
+ * Builds a process-lifetime context pinning the Turmeric function and asks
+ * the provider for a C function pointer whose generated body calls
+ * tur_ffi_cb_dispatch with that context's address baked in.  Gated on
+ * TURI_CAP_FFI like the rest of the FFI surface. */
+static TuriValue eval_callback_ptr(TuriEnv *env, EvalFrame *frame,
+                                   const Expr *e) {
+    const CallPtrSig *ps = e->as.call_.ptr_sig;
+
+    if (!(env->caps & TURI_CAP_FFI))
+        return turi_error(
+            "eval: callback-ptr not allowed in sandboxed environment");
+    const TurJitFfiProvider *jp = tur_jit_ffi_provider();
+    if (!jp || !jp->callback_for)
+        return turi_error(
+            "callback-ptr under --interpret requires a JIT-enabled build "
+            "(-DTUR_JIT=ON); the compiled path (tur build / tur run) "
+            "supports it in every build");
+
+    TuriValue fv = eval_expr(env, frame, e->as.call_.fn_expr);
+    if (turi_is_error(fv)) return fv;
+
+    uint32_t n = ps->n_params;
+    size_t *arg_at = (size_t *)calloc(n ? n : 1, sizeof(size_t));
+    char   *sig    = arg_at ? agg_sig_build(ps->return_type, ps->param_types,
+                                            n, arg_at)
+                            : NULL;
+    if (!sig) {
+        free(arg_at);
+        return turi_error("callback-ptr: signature is not representable");
+    }
+
+    /* Per-arg classes for the dispatch: '{' marks an aggregate slot, whose
+     * bytes arrive through the sv channel and are rebuilt into a record via
+     * the sig text at arg_at[k]. */
+    char inl_cls[64];
+    char *classes = (n <= sizeof inl_cls) ? inl_cls : (char *)malloc(n);
+    const AdtDef *inl_defs[64];
+    const AdtDef **arg_defs =
+        (n <= 64) ? inl_defs
+                  : (const AdtDef **)malloc(n * sizeof(const AdtDef *));
+    if (!classes || !arg_defs) {
+        free(sig); free(arg_at);
+        if (classes != inl_cls) free(classes);
+        if (arg_defs != inl_defs) free((void *)arg_defs);
+        return turi_error("callback-ptr: out of memory");
+    }
+    bool any_agg = false;
+    for (uint32_t k = 0; k < n; k++) {
+        arg_defs[k] = extern_slot_agg_def(ps->param_types[k]);
+        classes[k]  = arg_defs[k]
+                          ? '{'
+                          : tur_jit_ffi_class_for_kind(ps->param_types[k].kind,
+                                                       0);
+        if (arg_defs[k]) any_agg = true;
+    }
+    const AdtDef *ret_def = extern_slot_agg_def(ps->return_type);
+    char ret_class = ret_def ? '{'
+                             : tur_jit_ffi_class_for_kind(ps->return_type.kind,
+                                                          1);
+    if (ret_def) any_agg = true;
+
+    /* The context is never freed: its ADDRESS is compiled into the callback
+     * body, and a C library holding that pointer has no way to tell us it is
+     * done.  Same policy as turi's closures. */
+    TurFfiCbCtx *ctx = tur_ffi_cb_ctx_new(env, fv, ret_class, classes, n);
+    if (ctx && any_agg &&
+        tur_ffi_cb_ctx_set_agg(ctx, sig, arg_at, arg_defs, ret_def) != 0)
+        ctx = NULL;
+    if (classes != inl_cls) free(classes);
+    if (arg_defs != inl_defs) free((void *)arg_defs);
+    if (!ctx) {
+        free(sig); free(arg_at);
+        return turi_error("callback-ptr: out of memory");
+    }
+
+    char errbuf[256];
+    void *fn = jp->callback_for(sig, ctx, errbuf, sizeof errbuf);
+    if (!any_agg) { free(sig); free(arg_at); }  /* set_agg took ownership */
+    if (!fn) return turi_errorf("callback-ptr: %s", errbuf);
+    return turi_int((int64_t)(intptr_t)fn);
+}
+
+/* Evaluate an EX_CALL carrying a ptr_sig: an indirect call through a raw C
+ * address with the signature stated at the site.  Routes through the c2mir
+ * thunk provider; a non-JIT interpreter build reports a clean diagnostic,
+ * never nil.  Gated on TURI_CAP_FFI like dlopen/dlsym. */
+static TuriValue eval_call_ptr(TuriEnv *env, EvalFrame *frame,
+                               const Expr *e) {
+    const CallPtrSig *ps = e->as.call_.ptr_sig;
+
+    if (!(env->caps & TURI_CAP_FFI))
+        return turi_error(
+            "eval: call-ptr not allowed in sandboxed environment");
+    const TurJitFfiProvider *jp = tur_jit_ffi_provider();
+    if (!jp)
+        return turi_error(
+            "call-ptr under --interpret requires a JIT-enabled build "
+            "(-DTUR_JIT=ON); the compiled path (tur build / tur run) "
+            "supports it in every build");
+
+    TuriValue pv = eval_expr(env, frame, e->as.call_.fn_expr);
+    if (turi_is_error(pv)) return pv;
+    /* dlsym results ride the int64 carrier in turi. */
+    if (pv.tag != TURI_INT || pv.as_int == 0)
+        return turi_error("call-ptr: pointer is nil or not an address");
+    void *fn = (void *)(intptr_t)pv.as_int;
+
+    uint32_t n = e->as.call_.n_args;
+    TuriValue result;
+
+    /* Position-indexed marshalling buffers, one slot per parameter: arg k
+     * rides iv[k], fv[k] or sv[k] by its class.  sv[k]'s bytes are owned by
+     * agg_bufs[k] and freed on the way out; the return aggregate's buffer is
+     * out_s_buf. */
+    int64_t *i_vals    = NULL;
+    double  *f_vals    = NULL;
+    void   **s_vals    = NULL;
+    void   **agg_bufs  = NULL;
+    char    *sig       = NULL;
+    void    *out_s_buf = NULL;
+    /* Offset into `sig` where each aggregate parameter's '{' sits, so the
+     * pack step can read the layout back out of the sig it just wrote. */
+    size_t  *agg_at    = NULL;
+
+    /* Size the sig: one byte per scalar slot, `{fields}` per aggregate. */
+    size_t sig_cap = 2 + 1;   /* ret + ':' + NUL, ret widened below */
+    if (ps->return_type.kind == TY_ADT && ps->return_type.as.adt_.def)
+        sig_cap += agg_sig_len(ps->return_type.as.adt_.def) - 1;
+    for (uint32_t k = 0; k < n; k++) {
+        if (ps->param_types[k].kind == TY_ADT &&
+            ps->param_types[k].as.adt_.def)
+            sig_cap += agg_sig_len(ps->param_types[k].as.adt_.def);
+        else
+            sig_cap += 1;
+    }
+
+    i_vals   = (int64_t *)calloc(n ? n : 1, sizeof(int64_t));
+    f_vals   = (double  *)calloc(n ? n : 1, sizeof(double));
+    s_vals   = (void   **)calloc(n ? n : 1, sizeof(void *));
+    agg_bufs = (void   **)calloc(n ? n : 1, sizeof(void *));
+    agg_at   = (size_t  *)calloc(n ? n : 1, sizeof(size_t));
+    sig      = (char    *)malloc(sig_cap);
+    if (!i_vals || !f_vals || !s_vals || !agg_bufs || !agg_at || !sig) {
+        result = turi_error("call-ptr: out of memory marshalling call");
+        goto cleanup;
+    }
+
+    size_t sp = 0;
+    if (ps->return_type.kind == TY_ADT && ps->return_type.as.adt_.def) {
+        size_t w = agg_sig_render(ps->return_type.as.adt_.def, sig);
+        if (!w) {
+            result = turi_error("call-ptr: return record has a field with no "
+                                "by-value C member type");
+            goto cleanup;
+        }
+        sp = w;
+    } else {
+        sig[sp++] = tur_jit_ffi_class_for_kind(ps->return_type.kind, 1);
+    }
+    sig[sp++] = ':';
+
+    for (uint32_t k = 0; k < n; k++) {
+        const AdtDef *adef = (ps->param_types[k].kind == TY_ADT)
+                                 ? ps->param_types[k].as.adt_.def : NULL;
+        char cls = adef ? '{'
+                        : tur_jit_ffi_class_for_kind(ps->param_types[k].kind, 0);
+        agg_at[k] = sp;
+        if (adef) {
+            size_t w = agg_sig_render(adef, sig + sp);
+            if (!w) {
+                result = turi_errorf("call-ptr: arg %u's record has a field "
+                                     "with no by-value C member type",
+                                     (unsigned)k);
+                goto cleanup;
+            }
+            sp += w;
+        } else {
+            sig[sp++] = cls;
+        }
+
+        TuriValue av = eval_expr(env, frame, e->as.call_.args[k]);
+        if (turi_is_error(av)) { result = av; goto cleanup; }
+
+        if (cls == '{') {
+            if (av.tag != TURI_STRUCT || !av.as_struct) {
+                result = turi_errorf("call-ptr: arg %u is not a record value",
+                                     (unsigned)k);
+                goto cleanup;
+            }
+            size_t size = 0, align = 1, offs[64];
+            char   codes[64];
+            int    nleaf = 0;
+            if (!tur_jit_ffi_struct_layout(sig + agg_at[k], &size, &align,
+                                           offs, codes, 64, &nleaf)) {
+                result = turi_errorf("call-ptr: arg %u has an unrepresentable "
+                                     "aggregate layout", (unsigned)k);
+                goto cleanup;
+            }
+            TuriValue leaves[64];
+            int       n_leaves = 0;
+            if (!agg_collect_leaves(adef, av, leaves, 64, &n_leaves) ||
+                n_leaves != nleaf) {
+                result = turi_errorf("call-ptr: arg %u does not match the "
+                                     "shape '%s' declares", (unsigned)k,
+                                     adef->name ? adef->name : "?");
+                goto cleanup;
+            }
+            /* calloc, not malloc: tail padding is passed too, and handing
+             * the callee uninitialized padding bytes is exactly the kind of
+             * nondeterminism that makes an FFI bug unreproducible. */
+            void *bytes = calloc(1, size ? size : 1);
+            if (!bytes) {
+                result = turi_error("call-ptr: out of memory");
+                goto cleanup;
+            }
+            agg_bufs[k] = bytes;
+            s_vals[k]   = bytes;
+            for (int i = 0; i < nleaf; i++)
+                agg_store_member(bytes, offs[i], codes[i], leaves[i]);
+        } else if (tur_jit_ffi_class_is_int(cls)) {
+            switch (av.tag) {
+                case TURI_INT:  i_vals[k] = av.as_int; break;
+                case TURI_BOOL: i_vals[k] = av.as_bool ? 1 : 0; break;
+                case TURI_CSTR: i_vals[k] = (int64_t)(intptr_t)av.as_cstr; break;
+                case TURI_NIL:  i_vals[k] = 0; break;
+                default:
+                    result = turi_errorf(
+                        "call-ptr: arg %u is not an int-class value",
+                        (unsigned)k);
+                    goto cleanup;
+            }
+        } else {   /* 'f' / 'F' */
+            if (av.tag == TURI_FLOAT)      f_vals[k] = av.as_float;
+            else if (av.tag == TURI_INT)   f_vals[k] = (double)av.as_int;
+            else {
+                result = turi_errorf(
+                    "call-ptr: arg %u is not a float-class value",
+                    (unsigned)k);
+                goto cleanup;
+            }
+        }
+    }
+    sig[sp] = '\0';
+
+    {
+        char errbuf[256];
+        TurJitFfiThunkFn jt = jp->thunk_for(sig, errbuf, sizeof errbuf);
+        if (!jt) {
+            result = turi_errorf("call-ptr: %s", errbuf);
+            goto cleanup;
+        }
+        int64_t out_i = 0;
+        double  out_f = 0.0;
+
+        const AdtDef *rdef = (ps->return_type.kind == TY_ADT)
+                                 ? ps->return_type.as.adt_.def : NULL;
+        size_t roffs[64];
+        char   rcodes[64];
+        int    rleaf = 0;
+        if (rdef) {
+            size_t rsize = 0, ralign = 1;
+            if (!tur_jit_ffi_struct_layout(sig, &rsize, &ralign, roffs,
+                                           rcodes, 64, &rleaf)) {
+                result = turi_error("call-ptr: return record has an "
+                                    "unrepresentable aggregate layout");
+                goto cleanup;
+            }
+            out_s_buf = calloc(1, rsize ? rsize : 1);
+            if (!out_s_buf) {
+                result = turi_error("call-ptr: out of memory");
+                goto cleanup;
+            }
+        }
+
+        jt(fn, i_vals, f_vals, s_vals, &out_i, &out_f, out_s_buf);
+
+        if (rdef) {
+            int cur = 0;
+            result = agg_build_value(env, rdef, out_s_buf, roffs, rcodes,
+                                     rleaf, &cur);
+            if (!turi_is_error(result) && cur != rleaf)
+                result = turi_error("call-ptr: aggregate return layout is "
+                                    "longer than its record declares");
+            goto cleanup;
+        }
+
+        switch (ps->return_type.kind) {
+            case TY_NIL:     result = turi_nil(); break;
+            case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                result = turi_float(out_f); break;
+            case TY_BOOL:    result = turi_bool(out_i != 0); break;
+            case TY_CSTR:
+                result = out_i ? turi_cstr((const char *)(intptr_t)out_i)
+                               : turi_nil();
+                break;
+            default:         result = turi_int(out_i); break;
+        }
+    }
+
+cleanup:
+    if (agg_bufs)
+        for (uint32_t k = 0; k < n; k++) free(agg_bufs[k]);
+    free(agg_bufs);
+    free(agg_at);
+    free(out_s_buf);
+    free(s_vals);
+    free(sig);
+    free(i_vals);
+    free(f_vals);
+    return result;
 }
 
 /* panic? : (val) -> bool — true if val is the (panic) struct from catch-unwind */
@@ -806,7 +1774,7 @@ static TuriValue adt_ctor_native(TuriEnv *env, TuriValue *args, uint32_t n, void
 /* DEPR-D0: TuriThrow / make_throw_val / turi_native_throw deleted.  The
  * env->throwing / env->throw_value scratch slots remain wired through the
  * interpreter as never-set signals; no path produces a TURI_THROW value
- * after R0+D0.  See docs/upcoming/throw-deprecation-plan.md. */
+ * after R0+D0.  See docs/archive/history/throw-deprecation-plan.md. */
 
 /* Defer item: body expression + snapshot frame of captured values.
  *
@@ -816,7 +1784,7 @@ static TuriValue adt_ctor_native(TuriEnv *env, TuriValue *args, uint32_t n, void
  * same-scope LIFO, and, on an early exit (return / throw / panic), scopes
  * outer-first.  Markers carry no body and are never evaluated; they are simply
  * skipped (LIFO firing) or used to delimit segments (by-scope firing) and then
- * freed.  See docs/reported/turi-tail-scope-defers-fire-fifo-not-lifo.md. */
+ * freed.  See docs/archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md. */
 typedef struct DeferItem {
     Expr             *body;       /* NULL => scope-boundary marker (not fired) */
     EvalFrame        *snapshot;   /* captured variable values at defer-call time */
@@ -905,7 +1873,7 @@ static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
  * A flat item-reversal -- the previous implementation -- collapsed both axes
  * into one FIFO walk, so multiple defers in a single (e.g. tail-position) scope
  * came out oldest-first instead of LIFO.  See
- * docs/reported/turi-tail-scope-defers-fire-fifo-not-lifo.md. */
+ * docs/archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md. */
 static void fire_defers_to_mark_by_scope(TuriEnv *env, DeferItem *mark,
                                          EvalFrame *fallback_frame) {
     /* Collect [head .. mark) into an array, head-first (index 0 = newest). */
@@ -1083,12 +2051,27 @@ typedef struct TuriPanicPayload {
     int         line;       /* source line, or 0 */
 } TuriPanicPayload;
 
-/* Build the 3-int Result box { is_ok, ok_val, err_val } the native ok/err
- * helpers also use, in its Ok shape. */
-static TuriValue turi_ok_result_box(TuriEnv *env, int64_t ok_val) {
+/* Build the Result the native ok/err helpers also build, in its Ok shape.
+ *
+ * turi-catch-unwind-aggregate-payload: this used to take a bare `int64_t` and
+ * always build the 3-int box, which FLATTENS the payload -- exactly the trap
+ * `native_ok` documents and avoids.  A struct / cstr / closure / float payload
+ * lost its tag, so `(ok-val r)` handed back a TURI_INT and a downstream field
+ * read or `println` saw the raw handle: `(catch-unwind (fn [] : Q ...))`
+ * printed a pointer where the compiled path printed the field.  Same rule as
+ * `native_ok` now: a heap-tagged payload becomes a make-struct Result whose
+ * fields hold full TuriValues, everything else keeps the int64 box the
+ * carrier-ABI fixtures depend on.  `result_field` reads both shapes, so every
+ * accessor stays uniform. */
+static TuriValue turi_ok_result_box(TuriEnv *env, TuriValue ok_val) {
+    if (ok_val.tag == TURI_STRUCT || ok_val.tag == TURI_CSTR ||
+        ok_val.tag == TURI_CLOSURE || ok_val.tag == TURI_FLOAT) {
+        TuriValue fields[3] = { turi_bool(true), ok_val, turi_int(0) };
+        return turi_make_struct(env, "Result", fields, 3);
+    }
     /* Escaping payload: the box is returned as a Result carrier. */
     int64_t *box = (int64_t *)turi_val_alloc(env, 3 * sizeof(int64_t));
-    box[0] = 1; box[1] = ok_val; box[2] = 0;
+    box[0] = 1; box[1] = ok_val.as_int; box[2] = 0;
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)box;
     return v;
 }
@@ -1667,7 +2650,7 @@ static TuriValue gen_advance(TuriEnv *env, TuriGen *g) {
  * The context-capturing variants (serial-shift / cloneable-shift), which DO
  * hand a resumable continuation to f, are a separate, larger piece of work and
  * remain a documented interpreter carve-out -- see
- * docs/archive/turi-capturing-shift-unimplemented.md.  serial-reset and
+ * docs/archive/history/turi-capturing-shift-unimplemented.md.  serial-reset and
  * cloneable-reset establish a prompt boundary so the no-shift passthrough case
  * (e.g. (serial-reset 42)) evaluates correctly; a *-shift inside them still
  * errors cleanly until the capturing work lands.
@@ -1777,7 +2760,7 @@ static TuriValue eval_abortive_shift(TuriEnv *env, EvalFrame *frame,
  * cloneable and marshalable (in-process) for serial.  This mirrors collect_ctx;
  * shapes it does not model (do-sequence prelude, struct envs, call/cc*) fall
  * through to a clean error, matching the compiled grammar's own NULL returns.
- * See docs/archive/turi-capturing-shift-unimplemented.md.
+ * See docs/archive/history/turi-capturing-shift-unimplemented.md.
  * ---------------------------------------------------------------------- */
 #define TS_MAX_CTX_FRAMES 64
 
@@ -2043,7 +3026,7 @@ static bool ts_try_cont_builtin(TuriEnv *env, const BuiltinSpec *spec,
  * same diagnostic here so the interpreter rejects it rather than silently
  * miscompiling -- recovering the not-capturable negative fixtures on the
  * interpret path (the "decouple the TUR-E0706 negative path" slice of
- * docs/archive/turi-capturing-shift-unimplemented.md).  Returns an
+ * docs/archive/history/turi-capturing-shift-unimplemented.md).  Returns an
  * "elaboration error" sentinel so cmd_eval does not re-print the message. */
 static TuriValue ts_not_capturable(bool serial, Span span) {
     if (serial) {
@@ -2643,6 +3626,12 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
                 }
                 return turi_bool(false);
             }
+            if (args[0].tag == TURI_SYNTAX) {
+                /* Structural equality, same semantics as the compile-time
+                 * macro evaluator's `=` (forms.c form_equal). */
+                if (args[1].tag != TURI_SYNTAX) return turi_bool(false);
+                return turi_bool(form_equal(args[0].as_syntax, args[1].as_syntax));
+            }
             /* Fallback: compare as integer representation */
             return turi_bool(args[0].as_int == args[1].as_int);
         }
@@ -2683,7 +3672,11 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         if (strcmp(op, "|")  == 0) return turi_int(args[0].as_int |  args[1].as_int);
         if (strcmp(op, "^")  == 0) return turi_int(args[0].as_int ^  args[1].as_int);
         if (strcmp(op, "<<") == 0) return turi_int(args[0].as_int << args[1].as_int);
-        if (strcmp(op, ">>") == 0) return turi_int(args[0].as_int >> args[1].as_int);
+        /* bit-shr is documented as a LOGICAL (unsigned) right shift; see the
+         * matching comment in emit_core.c's BS_BIN_INFIX case -- this is the
+         * same bug in the interpreter's copy of the same operator. */
+        if (strcmp(op, ">>") == 0)
+            return turi_int((int64_t)((uint64_t)args[0].as_int >> (uint64_t)args[1].as_int));
         return turi_errorf("eval: unknown infix builtin '%s'", op);
     }
 
@@ -2779,6 +3772,29 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         }
         return turi_nil();
     }
+
+    /* --- FFI: dynamic library loading (jit-ffi-c2mir-plan) ---------------- */
+    /* Real dlopen/dlsym/dlclose under --interpret, mirroring the compiled
+     * path's RTLD_LAZY semantics (emit_core BS_DLOPEN).  Handles and symbol
+     * addresses ride the int64 carrier, which is exactly what call-ptr and
+     * the thunk layer consume.  Capability-gated above (TURI_CAP_FFI). */
+#ifndef _WIN32
+    case BS_DLOPEN: {
+        const char *path = (args[0].tag == TURI_CSTR) ? args[0].as_cstr : NULL;
+        void *h = path ? dlopen(path, RTLD_LAZY) : NULL;
+        return turi_int((int64_t)(intptr_t)h);
+    }
+    case BS_DLSYM: {
+        void *h = (void *)(intptr_t)args[0].as_int;
+        const char *nm = (args[1].tag == TURI_CSTR) ? args[1].as_cstr : NULL;
+        void *s = (h && nm) ? dlsym(h, nm) : NULL;
+        return turi_int((int64_t)(intptr_t)s);
+    }
+    case BS_DLCLOSE: {
+        void *h = (void *)(intptr_t)args[0].as_int;
+        return turi_int(h ? (int64_t)dlclose(h) : -1);
+    }
+#endif
 
     /* --- Unsafe pointer/memory operations -------------------------------- */
     case BS_RAW_MALLOC: {
@@ -3153,7 +4169,7 @@ static bool ic_eval_binexpr(const char **pp, int min_prec,
  * honest "inline-C not supported" path rather than silently returning a wrong
  * value.  (Previously this dropped any trailing binary operator -- e.g.
  * `return p != 0;` evaluated to `p` -- a silent miscompile; see
- * docs/reported/turi-inline-c-ignores-comparison-operator.md.) */
+ * docs/archive/history/turi-inline-c-ignores-comparison-operator.md.) */
 static bool ic_eval_assign_expr(const char *expr,
                                  FnDef *fn, uint32_t param_offset,
                                  TuriValue *args, uint32_t n_args,
@@ -3710,7 +4726,7 @@ static TuriValue ic_exec_accessor(TuriEnv *env, const char *body,
      * clean "inline-C not supported" error instead of a silent miscompile.
      * (The `var ? var->field : fallback` and `field ? field : "def"` shapes are
      * already handled above / below and contain none of these operators.)
-     * See docs/reported/turi-inline-c-accessor-miscompiles-boolean-returns.md. */
+     * See docs/archive/history/turi-inline-c-accessor-miscompiles-boolean-returns.md. */
     for (const char *p = ret; *p && *p != ';'; p++) {
         if (p[0] == '-' && p[1] == '>') { p++; continue; }   /* skip the arrow */
         if ((p[0] == '|' && p[1] == '|') ||                  /* || */
@@ -4137,7 +5153,7 @@ static TuriValue ic_exec_snprintf_fmt(TuriEnv *env, const char *body,
      *   if (kind == 1) snprintf(buf, 32, "[%lld", v);
      *   else           snprintf(buf, 32, "(%lld", v);
      * ) -- always taking the first emits "[7" where the Exclusive branch wants
-     * "(7" (see docs/reported/turi-pure-turi-silent-miscompiles.md). So first
+     * "(7" (see docs/archive/history/turi-pure-turi-silent-miscompiles.md). So first
      * try to resolve a guarding if/else and format only the live branch; fall
      * back to the linear "first matching snprintf" scan otherwise. */
     {
@@ -4309,7 +5325,7 @@ static TuriValue ic_exec_linked_list_print(const char *body,
 
 /* Top-level dispatcher */
 /* Diagnostic groundwork for the inline-C silent-miscompile tightening (W4, see
- * docs/reported/turi-inline-c-silent-miscompiles.md): when TUR_IC_TRACE is set,
+ * docs/archive/history/turi-inline-c-silent-miscompiles.md): when TUR_IC_TRACE is set,
  * log which ic_exec_* matcher claimed a body and what it returned. This makes
  * the per-cluster "refuse-rather-than-guess" work tractable -- you can see at a
  * glance which matcher mis-claims each fixture, and confirm a tightening flips a
@@ -4443,7 +5459,7 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
  * on emit-side per-call-site specialization to re-resolve.  The interpreter has
  * no such pass, so it must re-resolve at runtime from the tyvar's concrete type
  * captured at the call site (the call's abi_bindings).  See
- * docs/reported/turi-generic-dict-dispatch-bakes-representative-instance.md. */
+ * docs/archive/turi-generic-dict-dispatch-bakes-representative-instance.md. */
 
 /* Head constructor name of a concrete type (descends TY_APP to its base). */
 static const char *gde_type_head_name(const Type *t) {
@@ -4456,43 +5472,7 @@ static const char *gde_type_head_name(const Type *t) {
     }
 }
 
-/* Surface type name of a concrete `*`-kinded primitive, as a `definstance`
- * would spell it (`int`, `bool`, `cstr`, `float`).  Used so a primitive element
- * type can re-resolve to its OWN instance (e.g. Tag[bool], Enc[float]) instead
- * of the int-carrier representative baked by the elaborator.  NULL for kinds
- * that have no distinct user-instance surface name. */
-static const char *gde_primitive_type_name(const Type *t) {
-    if (!t) return NULL;
-    switch (t->kind) {
-    case TY_INT: case TY_INT64: return "int";
-    case TY_BOOL:               return "bool";
-    case TY_CSTR:               return "cstr";
-    case TY_FLOAT: case TY_FLOAT64: return "float";
-    case TY_FLOAT32:            return "float32";
-    case TY_SYM:                return "sym";
-    default:                    return NULL;
-    }
-}
 
-/* True for a concrete `*`-kinded primitive -- these dispatch to the int-carrier
- * representative, so they keep the elaborator's baked instance. */
-static bool gde_type_is_primitive_star(const Type *t) {
-    switch (t->kind) {
-    case TY_INT: case TY_BOOL: case TY_CSTR: case TY_NIL: case TY_FLOAT:
-    case TY_PTR_VOID: case TY_SYM:
-    case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
-    case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
-    case TY_FLOAT32: case TY_FLOAT64:
-        return true;
-    default:
-        return false;
-    }
-}
-
-/* Re-resolve a baked-representative typeclass method (carried by `dict_arg`) to
- * the instance matching the runtime-concrete receiver `concrete`.  Returns a
- * method closure, or nil if no better instance applies (caller keeps the baked
- * callee). */
 /* Build a closure for the dict node's method slot in instance `match`.  The dict
  * node's method_name is produced by the canonical injective mangler
  * (tur_mangle_ident), so a hyphen/sigil method renders as e.g. `render-to` ->
@@ -4526,186 +5506,56 @@ static TuriValue gde_method_closure(TuriEnv *env, const Expr *dict_arg,
     return turi_nil();
 }
 
-static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
-                                      const Type *concrete) {
-    if (!env || !env->last_tc_env || !dict_arg || !concrete) return turi_nil();
-    bool concrete_is_primitive = gde_type_is_primitive_star(concrete);
-    TypeClassInstance *rep = dict_arg->as.dict_.instance;
-    if (!rep || !rep->typeclass) return turi_nil();
-    TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
-    TypeClass   *tc      = rep->typeclass;
+/* gde_reresolve_method (receiver-directed) RETIRED 2026-08-17
+ * (turi-dict-passing-plan step 4, final round).  It recovered a
+ * baked-representative method's instance by head-name matching against the
+ * pinned frame tyvar, with by-name retries for duplicate/stale class objects
+ * (see docs/archive/lang-switch-breaks-generic-instance-resolution.md and
+ * docs/archive/turi-generic-dict-dispatch-bakes-representative-instance.md).
+ * Superseded by the apply-time constraint-dict path: once the `[^Class a]`
+ * defn spelling registers real TypeConstraints
+ * (docs/archive/caret-constraint-vector-not-registered.md),
+ * frame_bind_constraint_dicts covers every shape it served -- including the
+ * session-reset stale-class case, via the by-name canonical-class retry in
+ * the push, and the `[^Show K ^Show V]` same-class pair, via tyvar-keyed
+ * DictBinds.  Measured before removal: with the heuristic disabled, the FULL
+ * interpreter corpus (run-turi 1794/0), all 28 interpreter-side ctest
+ * targets (repl smoke's reader-switch scenarios included), and the hand-run
+ * constrained/hkt family pass.  The by-value heuristic below is NOT retired:
+ * 1 fixture (the carrier-collapsed unascribed receiver, which pins no tyvar
+ * for the dict push to read) still relies on it. */
 
-    TypeClassInstance *match = NULL;
-    /* Precise: match by the concrete type's head constructor name.  A primitive
-     * concrete (bool/cstr/float/...) may have its OWN instance distinct from the
-     * int-carrier representative the elaborator baked, so match it by surface
-     * name; if none exists the rep == match check below keeps the baked callee. */
-    const char *head = concrete_is_primitive ? gde_primitive_type_name(concrete)
-                                             : gde_type_head_name(concrete);
-    if (head) {
-        for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
-            if (inst->typeclass != tc || inst->n_type_args == 0) continue;
-            const char *ihead = (inst->type_arg_syms && inst->type_arg_syms[0])
-                                ? inst->type_arg_syms[0]->name : NULL;
-            if (!ihead) ihead = gde_type_head_name(&inst->type_args[0]);
-            if (!ihead) ihead = gde_primitive_type_name(&inst->type_args[0]);
-            if (ihead && strcmp(ihead, head) == 0) { match = inst; break; }
-        }
-    }
-    /* Duplicate-typeclass fallback (multi-word struct/ADT element dispatch): the
-     * elaborator can mint more than one `TypeClass` object for the same class --
-     * e.g. `Eq` from the auto-loaded typeclass-eq.tur AND again when the program
-     * loads typeclass.tur.  A generic body (e.g. the auto-loaded `vec-eq-loop`)
-     * elaborated under one copy bakes a `dict_arg` whose `instance->typeclass` is
-     * the OTHER copy than the one every user `definstance` registered under, so
-     * the pointer compare above finds NOTHING and `Eq[Vec]` over a struct element
-     * kept the baked int-carrier `Eq[int]`, comparing the two element BOX POINTERS
-     * instead of the struct content.  When the pointer match came up empty for a
-     * NON-primitive concrete, retry matching this class's instances BY NAME (class
-     * names are unique per program).  Restricted to non-primitives so a primitive
-     * concrete keeps its exact prior dispatch (a primitive that finds no by-name
-     * instance under its own tc pointer must keep the baked representative, never
-     * a stale duplicate's copy). */
-    if (!match && !concrete_is_primitive && head && tc->name) {
-        const char *tc_name = tc->name->name;
-        for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
-            if (inst->n_type_args == 0 || inst == rep) continue;
-            const char *itcn = inst->typeclass && inst->typeclass->name
-                               ? inst->typeclass->name->name : NULL;
-            if (!itcn || strcmp(itcn, tc_name) != 0) continue;
-            const char *ihead = (inst->type_arg_syms && inst->type_arg_syms[0])
-                                ? inst->type_arg_syms[0]->name : NULL;
-            if (!ihead) ihead = gde_type_head_name(&inst->type_args[0]);
-            if (ihead && strcmp(ihead, head) == 0) { match = inst; break; }
-        }
-    }
-    /* Fallback: structured dispatch key (ARROW -> first non-primitive instance).
-     * Skip for a primitive concrete -- a primitive that found no by-name instance
-     * keeps the baked representative rather than mis-matching an HKT instance. */
-    if (!match && !concrete_is_primitive) {
-        TypeClassDispatchKey key;
-        memset(&key, 0, sizeof(key));
-        key.typeclass       = tc;
-        key.type_args       = (Type *)concrete;
-        key.n_type_args     = 1;
-        key.constructor_kind = KIND_ARROW;
-        match = typeclass_env_lookup_instance_by_key(tc_env, &key);
-    }
-    if (!match || match == rep) return turi_nil();
-    return gde_method_closure(env, dict_arg, tc, match);
-}
+/* gde_reresolve_return_directed RETIRED 2026-08-16 (turi-dict-passing-plan
+ * step 4).  It recovered a return-directed method's instance (`pure`,
+ * `empty`, `default-of` -- class variable only in the result type, so no
+ * receiver pins anything) by trying every concretely-bound frame tyvar
+ * against the instance table.  Measured before removal: with the heuristic
+ * disabled the FULL interpreter corpus passes (run-turi 1793/0 plus the
+ * hand-run hkt-constrained family), and with the heuristic AND the dict
+ * path both disabled the constrained fixtures regress to the baked
+ * representative (`1 -1 1` / `207 207`) -- so the DictBind path is what
+ * carries these shapes now, which is exactly the plan's retirement
+ * criterion.  The receiver-directed and by-value heuristics followed it
+ * into retirement 2026-08-17 (see the records above and below). */
 
-/* Re-resolve a baked-representative method whose class variable appears ONLY in
- * the result type -- `pure`, `empty`, `default-of`.  These are RETURN-directed:
- * there is no receiver argument, so the call carries no `abi_bindings` at all
- * and the receiver-tyvar gate at the EX_CALL site cannot fire.  The elaborator's
- * baked representative then answers every call site, which is silently wrong for
- * any constrained generic that calls one (see
- * docs/reported/turi-return-directed-method-keeps-baked-instance.md: two
- * differently-tagged Applicatives both return the second instance's answer).
- *
- * The concrete type is already on the frame.  `frame_record_abi` pins the
- * caller's substitution when it enters the generic -- `(just-pure (some 0))`
- * records `m -> Option` -- so the class variable's binding is reachable by
- * walking the frame chain even though the call itself pins nothing.
- *
- * We do not know WHICH pinned tyvar is the class variable (the frame records the
- * callee's spelling, `m`, not the `defclass` spelling), so rather than guess we
- * let the instance table decide: try each concretely-bound tyvar, keep the ones
- * that resolve to a real instance of THIS class, and act only when exactly one
- * does.  A generic with two tyvars that both have an instance of the same class
- * is genuinely ambiguous from here -- bail and keep today's behaviour rather than
- * pick.  `gde_reresolve_method` already returns nil when the match IS the baked
- * representative, so a single-instance program is untouched. */
-static TuriValue gde_reresolve_return_directed(TuriEnv *env, EvalFrame *cf,
-                                               const Expr *dict_arg) {
-    if (!env || !cf || !dict_arg) return turi_nil();
-    TuriValue   found      = turi_nil();
-    const char *found_head = NULL;
-    for (EvalFrame *fr = cf; fr; fr = fr->parent) {
-        for (TyvarBind *tb = fr->tyvars; tb; tb = tb->next) {
-            if (tb->type.kind == TY_TYVAR) continue;   /* still abstract */
-            const char *head = gde_type_head_name(&tb->type);
-            if (!head) continue;
-            /* An outer frame re-binding the same concrete type (or the same
-             * tyvar shadowed inward) is not a second candidate. */
-            if (found_head && strcmp(found_head, head) == 0) continue;
-            TuriValue rv = gde_reresolve_method(env, dict_arg, &tb->type);
-            if (rv.tag != TURI_CLOSURE) continue;
-            if (found.tag == TURI_CLOSURE) return turi_nil();  /* ambiguous */
-            found      = rv;
-            found_head = head;
-        }
-    }
-    return found;
-}
-
-/* Re-resolve a baked-representative typeclass method using the RUNTIME type of
- * the receiver value, rather than a statically-pinned tyvar.  This catches the
- * constrained-instance element-dispatch case the static path misses: inside a
- * `(definstance C [Vec] [(C A)] ...)` body, `(c (:: (vec-get v i) A))` is baked
- * to the int-carrier representative, but at runtime the element value carries
- * its real tag (bool/float/cstr/struct) and there may be a distinct C[bool] /
- * C[float] / ... instance to dispatch to.
- *
- * SAFETY: only re-resolve for a *distinguishable* value -- bool/float/cstr or a
- * struct/ADT.  An int-carrier value (TURI_INT) is ambiguous: Vec/Map/Set and
- * other heap containers ride the int64 carrier too, so an int tag must keep the
- * baked instance (re-resolving a Vec receiver to C[int] would be wrong). */
-static TuriValue gde_reresolve_method_by_value(TuriEnv *env, const Expr *dict_arg,
-                                               TuriValue recv) {
-    if (!env || !env->last_tc_env || !dict_arg) return turi_nil();
-    TypeClassInstance *rep = dict_arg->as.dict_.instance;
-    if (!rep || !rep->typeclass) return turi_nil();
-    TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
-    TypeClass   *tc      = rep->typeclass;
-
-    /* Pick a head name from the receiver's runtime tag.
-     *   - PRIMITIVE (bool/float/cstr): re-dispatch freely; a primitive that found
-     *     no instance keeps the baked rep.
-     *   - STRUCT/ADT: re-dispatch ONLY when the head matches a single instance.
-     *     Multiple same-head instances (e.g. `Enc [(Option cstr)]` vs
-     *     `Enc [(Option int)]`) are discriminated by the full applied type, which
-     *     the static elaborator dispatch already does correctly -- a coarse
-     *     by-head match here would mis-select, so defer to it.
-     *   - int-carrier / other: ambiguous (Vec/Map ride the carrier); keep baked. */
-    const char *head = NULL;
-    bool struct_recv = false;
-    switch (recv.tag) {
-    case TURI_BOOL:  head = "bool";  break;
-    case TURI_FLOAT: head = "float"; break;
-    case TURI_CSTR:  head = "cstr";  break;
-    case TURI_STRUCT:
-        struct_recv = true;
-        if (recv.as_struct) {
-            if (recv.as_struct->ctor && recv.as_struct->ctor->adt)
-                head = recv.as_struct->ctor->adt->name;
-            if (!head) head = recv.as_struct->name;
-        }
-        break;
-    default: return turi_nil();
-    }
-    if (!head) return turi_nil();
-
-    TypeClassInstance *match = NULL;
-    int n_head_matches = 0;
-    for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
-        if (inst->typeclass != tc || inst->n_type_args == 0) continue;
-        const char *ihead = (inst->type_arg_syms && inst->type_arg_syms[0])
-                            ? inst->type_arg_syms[0]->name : NULL;
-        if (!ihead) ihead = gde_type_head_name(&inst->type_args[0]);
-        if (!ihead) ihead = gde_primitive_type_name(&inst->type_args[0]);
-        if (ihead && strcmp(ihead, head) == 0) {
-            if (!match) match = inst;
-            n_head_matches++;
-        }
-    }
-    /* A struct head with >1 candidate instance is element-discriminated -- leave
-     * it to the static dispatch rather than guess. */
-    if (struct_recv && n_head_matches > 1) return turi_nil();
-    if (!match || match == rep) return turi_nil();
-    return gde_method_closure(env, dict_arg, tc, match);
-}
+/* gde_reresolve_method_by_value RETIRED 2026-08-17 (turi-dict-passing-plan
+ * step 4, final heuristic).  It re-dispatched a baked-representative method
+ * on the RECEIVER VALUE's runtime tag, covering the one shape the static
+ * paths missed: an unascribed carrier-helper read (`(tag (vec-get v 0))`)
+ * whose elaborated type collapses to the int64 carrier, so no tyvar gate
+ * fires.  Superseded by the carrier-helper dispatch recovery in the driver's
+ * EX_CALL (the turi mirror of emit_reresolve_disp_type's last branch): the
+ * helper's own signature names the element tyvar, and the frame dictionary
+ * pushed from the instance's constraints names the instance.  Measured
+ * before removal: heuristic disabled -> run-turi 1798/0, all 28
+ * interpreter-side ctest targets, and the hand-run constrained/hkt family
+ * green; heuristic AND the recovery arm both disabled -> the unascribed
+ * fixture regresses to the baked representatives (`1 1 hello 3.25` for
+ * `1 2 hello F`), so the dict path is what carries the shape -- the plan's
+ * retirement criterion.  With this, all three recovery heuristics the plan
+ * set out to retire are gone; the map-show seeding stays as the dict push's
+ * PIN SOURCE on the C auto-show tier, and gde_method_closure stays as the
+ * shared method-slot resolver. */
 
 /* Record the concrete type substitutions a call site pins onto the callee's
  * tyvars (its abi_bindings), resolving any still-abstract tyvar through the
@@ -4723,6 +5573,55 @@ static void frame_record_abi(TuriEnv *env, EvalFrame *callee, EvalFrame *caller,
         TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
         tb->name = ab->name;
         tb->type = t;
+        tb->next = callee->tyvars;
+        callee->tyvars = tb;
+    }
+}
+
+/* Pin a callee's HKT tyvar from the STATIC type of the argument passed to it,
+ * for a call that pins nothing of its own.
+ *
+ * A constrained generic reached through a rank-2 `forall` parameter carries no
+ * abi_bindings: `(defn at-t1 [g (forall [(m :: * -> *)] ...)])` invokes it as
+ * `(g (mk-t1 0))`, and the elaborator has no call-site substitution to record
+ * because the callee is a parameter, not a named generic.  So nothing reaches
+ * the frame, gde_reresolve_return_directed finds no concrete tyvar, and the
+ * baked representative answers -- two differently-tagged Applicatives both
+ * returning the second instance's `pure`.
+ *
+ * The substitution is nonetheless right there in the types: the callee declares
+ * `x : (m int)` and the call site's argument has static type `(T1 int)`.  Match
+ * the two type applications and `m -> T1` follows.
+ *
+ * Deliberately narrow.  Only a declared `(tyvar arg)` against a concrete-headed
+ * `(Ctor arg)` is matched -- the higher-kinded shape this is about -- rather
+ * than general structural unification, whose extra reach would be untested and
+ * whose failure mode is a WRONG instance rather than today's conservative one.
+ * Only called when the call recorded no abi_bindings, so every call that pins
+ * something keeps its exact prior behaviour.
+ * See docs/archive/turi-return-directed-method-keeps-baked-instance.md. */
+static void frame_pin_hkt_tyvars_from_args(TuriEnv *env, EvalFrame *callee,
+                                           const FnDef *fn,
+                                           uint32_t param_offset,
+                                           uint32_t effective_params,
+                                           const Expr *call, uint32_t arg_base) {
+    if (!fn || !fn->params || !call || call->kind != EX_CALL) return;
+    for (uint32_t i = 0; i < effective_params; i++) {
+        uint32_t ai = arg_base + i;
+        if (ai >= call->as.call_.n_args || !call->as.call_.args[ai]) continue;
+        const Type *pt = &fn->params[param_offset + i]->type;
+        const Type *at = &call->as.call_.args[ai]->type;
+        if (pt->kind != TY_APP || at->kind != TY_APP) continue;
+        const Type *pf = pt->as.app.fn;
+        const Type *af = at->as.app.fn;
+        if (!pf || !af) continue;
+        if (pf->kind != TY_TYVAR || !pf->as.tyvar_.name) continue;
+        if (af->kind == TY_TYVAR) continue;   /* argument still abstract */
+        Type existing;
+        if (frame_lookup_tyvar(callee, pf->as.tyvar_.name, &existing)) continue;
+        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        tb->name = pf->as.tyvar_.name;
+        tb->type = *af;
         tb->next = callee->tyvars;
         callee->tyvars = tb;
     }
@@ -4765,6 +5664,116 @@ static void frame_bind_instance_constraint_tyvars(TuriEnv *env, EvalFrame *calle
         tb->type = bound;
         tb->next = callee->tyvars;
         callee->tyvars = tb;
+    }
+}
+
+/* Structurally match a declared type PATTERN against a concrete type and read
+ * the subtype at `varname`'s position -- matching `(Vec R)` against the actual
+ * `(Vec A)` yields `A`.  Mirror of emit_core.c:emit_pattern_extract_classvar
+ * (and elab_typeclasses.c's elab-side copy), for the interpreter's
+ * carrier-helper dispatch recovery below. */
+static bool turi_pattern_extract_var(const Type *pattern, const Type *concrete,
+                                     const char *varname, Type *out) {
+    if (!pattern || !concrete || !varname) return false;
+    if (pattern->kind == TY_TYVAR && pattern->as.tyvar_.name &&
+        strcmp(pattern->as.tyvar_.name, varname) == 0) {
+        *out = *concrete;
+        return true;
+    }
+    if (pattern->kind == TY_APP && concrete->kind == TY_APP) {
+        if (turi_pattern_extract_var(pattern->as.app.fn, concrete->as.app.fn,
+                                     varname, out))
+            return true;
+        if (turi_pattern_extract_var(pattern->as.app.arg, concrete->as.app.arg,
+                                     varname, out))
+            return true;
+    }
+    return false;
+}
+
+/* turi-dict-passing-plan (plain constrained generics): after a call's tyvar
+ * pins land on the callee frame, resolve each of the callee's typeclass
+ * constraints against its pinned concrete type using the ELABORATOR'S own
+ * instance lookup, and record the result as a DictBind.  This is the
+ * apply-time analogue of the dict-clone param binding: method dispatch inside
+ * the body then reads the frame dictionary with precedence over the gde_*
+ * recovery heuristics, instead of re-deriving the instance by head-name
+ * matching at every method call.
+ *
+ * Resolution order mirrors static dispatch: exact structural match first
+ * (disambiguates same-head instances like `(Option cstr)` vs `(Option int)`),
+ * then the kind-erased head-discriminated lookup (covers a bare-head
+ * `[Vec]` instance answering a `(Vec int)` query), then the KIND_ARROW
+ * structured key (an HKT constraint pinned to a bare carrier).
+ *
+ * Deliberately conservative: an unpinned tyvar or a failed lookup pushes
+ * nothing, leaving those shapes to the heuristics exactly as before.  Two
+ * constraints on the same class (`[^Show K ^Show V]`) each push their own
+ * bind, keyed by constraint tyvar name -- frame_lookup_dict_tyvar picks the
+ * one the dispatch site's tyvar names. */
+static void frame_bind_constraint_dicts(TuriEnv *env, EvalFrame *callee,
+                                        const TypeConstraint *constraints,
+                                        uint8_t n_constraints) {
+    if (!env || !env->last_tc_env || !constraints || n_constraints == 0) return;
+    TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
+    for (uint8_t i = 0; i < n_constraints; i++) {
+        const TypeConstraint *c = &constraints[i];
+        if (!c->typeclass) continue;
+        const char *tvname = NULL;
+        if (c->tyvar && c->tyvar->name) tvname = c->tyvar->name;
+        else if (c->type_arg.kind == TY_TYVAR && c->type_arg.as.tyvar_.name)
+            tvname = c->type_arg.as.tyvar_.name;
+        if (!tvname) continue;
+        Type concrete;
+        if (!frame_lookup_tyvar(callee, tvname, &concrete) ||
+            concrete.kind == TY_TYVAR)
+            continue;
+        TypeClass *lookup_tc = c->typeclass;
+        TypeClassInstance *inst = NULL;
+        for (int tc_try = 0; tc_try < 2 && !inst; tc_try++) {
+            if (tc_try == 1) {
+                /* All pointer-keyed lookups missed.  A session reset (#lang
+                 * reader switch) or a duplicate class object leaves the
+                 * constraint's TypeClass pointer pointing at a copy the live
+                 * registry's instances were not registered under -- see
+                 * docs/archive/lang-switch-breaks-generic-instance-resolution.md.
+                 * Class NAMES are unique per program, so re-resolve the class
+                 * by name and retry the same precise lookups under the
+                 * canonical copy.  The DictBind still keys on the ORIGINAL
+                 * pointer, which is what the body's baked dict_arg carries. */
+                if (!c->typeclass->name || !c->typeclass->name->name) break;
+                TypeClass *canon = NULL;
+                for (TypeClass *t = tc_env->typeclasses; t; t = t->next)
+                    if (t != c->typeclass && t->name && t->name->name &&
+                        strcmp(t->name->name, c->typeclass->name->name) == 0) {
+                        canon = t;
+                        break;
+                    }
+                if (!canon) break;
+                lookup_tc = canon;
+            }
+            inst = typeclass_env_lookup_instance_exact(
+                tc_env, lookup_tc, &concrete, 1);
+            if (!inst)
+                inst = typeclass_env_lookup_instance(tc_env, lookup_tc,
+                                                     &concrete, 1);
+            if (!inst) {
+                TypeClassDispatchKey key;
+                memset(&key, 0, sizeof(key));
+                key.typeclass        = lookup_tc;
+                key.type_args        = &concrete;
+                key.n_type_args      = 1;
+                key.constructor_kind = KIND_ARROW;
+                inst = typeclass_env_lookup_instance_by_key(tc_env, &key);
+            }
+        }
+        if (!inst) continue;
+        DictBind *db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+        db->tc    = c->typeclass;
+        db->inst  = inst;
+        db->tyvar = tvname;
+        db->next  = callee->dicts;
+        callee->dicts = db;
     }
 }
 
@@ -5195,6 +6204,23 @@ static TuriValue get_field_extract(const Expr *e, TuriValue sv) {
  * `(return)` with no value -- the caller runs the post directly on nil).
  * eval_unary_post applies the form's post-operand logic to the resolved value,
  * shared with eval_expr_impl so the two paths cannot diverge. */
+/* turi-dict-passing-plan: a rank-2 poly value wrapping a CONSTRAINED fn
+ * evaluates to its dict-clone's global closure -- the callee whose leading
+ * dict params the elaborated call site supplies.  Returns true (with *out
+ * set) when the clone resolves; false falls back to the plain unwrap. */
+static TuriValue eval_lookup(TuriEnv *env, EvalFrame *frame, const char *name);
+static bool poly_wrap_dict_clone_value(TuriEnv *env, EvalFrame *frame,
+                                       const Expr *e, TuriValue *out) {
+    if (!e || e->kind != EX_POLY_WRAP || !e->as.poly_wrap_.dict_clone_binding)
+        return false;
+    const Binding *cb = e->as.poly_wrap_.dict_clone_binding;
+    if (!cb->name || !cb->name->name) return false;
+    TuriValue v = eval_lookup(env, frame, cb->name->name);
+    if (v.tag != TURI_CLOSURE) return false;
+    *out = v;
+    return true;
+}
+
 static bool unary_operand(const Expr *e, const Expr **operand) {
     switch (e->kind) {
     case EX_CAST:         *operand = e->as.cast_.expr;          return true;
@@ -5363,7 +6389,7 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
          * recovered at the call site re-tags the carrier, matching the compiled
          * path's monomorphized re-dispatch.  This is what lets Show[Set] /
          * Show[Map] over cstr keys render the string rather than the raw HAMT
-         * carrier word (docs/reported/interp-hamt-key-show-dispatches-on-carrier). */
+         * carrier word (docs/archive/history/interp-hamt-key-show-dispatches-on-carrier.md). */
         switch (ascribe_effective_kind(frame, &e->type)) {
         case TY_BOOL:
             if (v.tag == TURI_INT) return turi_bool(v.as_int != 0);
@@ -6134,45 +7160,177 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 break;
             }
             case EX_CALL: {
+                /* jit-ffi-c2mir-plan F3/F5: a `(call-ptr ...)` node has no turi
+                 * callee to resolve -- the target is a raw C address.
+                 * Dispatch synchronously through the thunk provider; the
+                 * scalar args recurse via eval_expr, which is fine at FFI
+                 * arg depth. */
+                if (control->as.call_.ptr_sig) {
+                    cur = control->as.call_.ptr_sig->is_callback
+                              ? eval_callback_ptr(env, cf, control)
+                              : eval_call_ptr(env, cf, control);
+                    descending = false;
+                    break;
+                }
                 /* T3.2a: resolve the callee here, accumulate args on the
                  * work-stack, then apply via eval_apply (still recursive -- the
                  * body-in-loop + TCO fold is T3.2b).  The closure value rides in
                  * `last`; the arg accumulator in `aux`. */
                 TuriValue fn_val;
+                bool gde_resolved = false;
+                /* turi-dict-passing-plan (Piece 2): a method call dispatched on
+                 * the constraint's own type variable, inside an activation that
+                 * carries a runtime dictionary for the method's class, resolves
+                 * through THAT dictionary -- the caller-supplied instance --
+                 * with explicit precedence over every recovery heuristic below.
+                 * The tyvar gate mirrors the emit-side env-dict gate
+                 * (emit_call_dict_env_dispatch_index): receiver-directed keys
+                 * on a bare-tyvar receiver, return-directed on a tyvar-headed
+                 * result; a concrete same-class call in the same body stays
+                 * instance-resolved. */
+                if (control->as.call_.dict_arg &&
+                    control->as.call_.dict_arg->kind == EX_DICT &&
+                    control->as.call_.dict_arg->as.dict_.instance &&
+                    control->as.call_.dict_arg->as.dict_.instance->typeclass &&
+                    control->as.call_.dict_arg->as.dict_.method_name[0] != '\0') {
+                    bool recv_is_tyvar =
+                        control->as.call_.n_args >= 1 && control->as.call_.args &&
+                        control->as.call_.args[0] &&
+                        control->as.call_.args[0]->type.kind == TY_TYVAR;
+                    const Type *h = &control->type;
+                    while (h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
+                    if (recv_is_tyvar || h->kind == TY_TYVAR) {
+                        TypeClass *mtc =
+                            control->as.call_.dict_arg->as.dict_.instance->typeclass;
+                        /* Key the lookup by the dispatch tyvar's NAME so two
+                         * same-class dictionaries on the frame (`[^Show K
+                         * ^Show V]`) resolve to the one this call dispatches
+                         * on; a class-only walk here handed V's dictionary to
+                         * a K-directed method (map keys rendered via the
+                         * value instance). */
+                        const char *disp_tv =
+                            recv_is_tyvar
+                                ? control->as.call_.args[0]->type.as.tyvar_.name
+                                : h->as.tyvar_.name;
+                        struct TypeClassInstance *bound =
+                            frame_lookup_dict_tyvar(cf, mtc, disp_tv);
+                        if (bound) {
+                            TuriValue rv = gde_method_closure(
+                                env, control->as.call_.dict_arg, mtc, bound);
+                            if (rv.tag == TURI_CLOSURE) {
+                                fn_val = rv;
+                                gde_resolved = true;
+                            }
+                        }
+                    }
+                }
                 /* generic-dict-dispatch: a typeclass method baked to the carrier
                  * representative (dict_arg set, receiver tyvar in abi_bindings[0])
                  * re-resolves to the receiver's real instance using the concrete
                  * type the enclosing generic call pinned onto that tyvar. */
-                bool gde_resolved = false;
-                if (control->as.call_.dict_arg &&
+                if (!gde_resolved && control->as.call_.dict_arg &&
                     control->as.call_.n_abi_bindings >= 1 &&
                     control->as.call_.fn_binding) {
                     AbiTypeBinding *ab0 = &control->as.call_.abi_bindings[0];
                     if (ab0->type.kind == TY_TYVAR && ab0->type.as.tyvar_.name) {
-                        Type concrete;
-                        if (frame_lookup_tyvar(cf, ab0->type.as.tyvar_.name, &concrete) &&
-                            concrete.kind != TY_TYVAR) {
-                            TuriValue rv = gde_reresolve_method(
-                                env, control->as.call_.dict_arg, &concrete);
-                            if (rv.tag == TURI_CLOSURE) { fn_val = rv; gde_resolved = true; }
+                        /* turi-dict-passing-plan (plain constrained generics):
+                         * a method call still dispatched on a type variable
+                         * reads the enclosing activation's frame dictionary,
+                         * pushed at apply time by frame_bind_constraint_dicts
+                         * and keyed by the dispatch tyvar's name.  This is the
+                         * sole static re-resolution path -- the head-name
+                         * recovery heuristic it used to fall back to is
+                         * retired (see the note at its former definition). */
+                        if (control->as.call_.dict_arg->kind == EX_DICT &&
+                            control->as.call_.dict_arg->as.dict_.instance &&
+                            control->as.call_.dict_arg->as.dict_.instance->typeclass) {
+                            TypeClass *mtc2 = control->as.call_.dict_arg
+                                                  ->as.dict_.instance->typeclass;
+                            struct TypeClassInstance *bound2 =
+                                frame_lookup_dict_tyvar(cf, mtc2,
+                                                        ab0->type.as.tyvar_.name);
+                            if (bound2) {
+                                TuriValue rv = gde_method_closure(
+                                    env, control->as.call_.dict_arg, mtc2, bound2);
+                                if (rv.tag == TURI_CLOSURE) {
+                                    fn_val = rv;
+                                    gde_resolved = true;
+                                }
+                            }
                         }
                     }
                 }
-                /* Return-directed methods (`pure`, `empty`, `default-of`) pin
-                 * NOTHING at the call -- n_abi_bindings == 0 -- because the class
-                 * variable lives only in the result type.  The gate above needs a
-                 * receiver tyvar, so it never fires and the baked representative
-                 * survives.  Recover the concrete type from the enclosing
-                 * generic's frame instead.  Scoped to the zero-binding shape so a
-                 * receiver-directed call whose abi_bindings[0] merely failed to
-                 * match keeps its exact prior dispatch. */
+                /* unascribed-carrier-helper-read-collapses-element-tyvar
+                 * (turi mirror of emit_reresolve_disp_type's last branch): the
+                 * receiver may be an UNASCRIBED generic carrier-helper read --
+                 * `(tag (vec-get v 0))` -- whose declared `:R` result collapsed
+                 * to the int64 carrier at elaboration, so neither tyvar gate
+                 * above fires.  Recover the dispatch tyvar from the helper's
+                 * own signature: its `result_full_type` is the type-param `R`,
+                 * and `R` also appears inside a parameter's declared full type
+                 * (`v : (Vec R)`); matching that pattern against the ACTUAL
+                 * argument's static type yields the enclosing body's element
+                 * var (`A`), whose frame dictionary -- pushed at apply time
+                 * from the instance's `[(Tag A)]` constraints -- names the
+                 * right instance.  This closed the last reliance on the
+                 * runtime-tag heuristic (gde_reresolve_method_by_value). */
                 if (!gde_resolved && control->as.call_.dict_arg &&
-                    control->as.call_.n_abi_bindings == 0 &&
-                    control->as.call_.fn_binding) {
-                    TuriValue rv = gde_reresolve_return_directed(
-                        env, cf, control->as.call_.dict_arg);
-                    if (rv.tag == TURI_CLOSURE) { fn_val = rv; gde_resolved = true; }
+                    control->as.call_.dict_arg->kind == EX_DICT &&
+                    control->as.call_.dict_arg->as.dict_.instance &&
+                    control->as.call_.dict_arg->as.dict_.instance->typeclass &&
+                    control->as.call_.dict_arg->as.dict_.method_name[0] != '\0' &&
+                    control->as.call_.n_args >= 1 && control->as.call_.args) {
+                    const Expr *recv = control->as.call_.args[0];
+                    while (recv && recv->kind == EX_ASCRIBE)
+                        recv = recv->as.ascribe_.inner;
+                    if (recv && recv->kind == EX_CALL &&
+                        recv->as.call_.fn_binding && recv->as.call_.args) {
+                        const Type *ft = &recv->as.call_.fn_binding->type;
+                        if (ft->kind == TY_FN && ft->as.fn.arg_full_types &&
+                            ft->as.fn.result_full_type &&
+                            ft->as.fn.result_full_type->kind == TY_TYVAR &&
+                            ft->as.fn.result_full_type->as.tyvar_.name) {
+                            const char *rname =
+                                ft->as.fn.result_full_type->as.tyvar_.name;
+                            uint32_t np = ft->as.fn.arity;
+                            Type extracted;
+                            bool have_ex = false;
+                            for (uint8_t pi = 0;
+                                 pi < np && pi < recv->as.call_.n_args; pi++) {
+                                const Type *pft = ft->as.fn.arg_full_types[pi];
+                                const Expr *ae = recv->as.call_.args[pi];
+                                if (!pft || !ae) continue;
+                                if (turi_pattern_extract_var(pft, &ae->type,
+                                                             rname, &extracted)) {
+                                    have_ex = true;
+                                    break;
+                                }
+                            }
+                            if (have_ex && extracted.kind == TY_TYVAR &&
+                                extracted.as.tyvar_.name) {
+                                TypeClass *mtc3 = control->as.call_.dict_arg
+                                                      ->as.dict_.instance->typeclass;
+                                struct TypeClassInstance *bound3 =
+                                    frame_lookup_dict_tyvar(
+                                        cf, mtc3, extracted.as.tyvar_.name);
+                                if (bound3) {
+                                    TuriValue rv = gde_method_closure(
+                                        env, control->as.call_.dict_arg, mtc3,
+                                        bound3);
+                                    if (rv.tag == TURI_CLOSURE) {
+                                        fn_val = rv;
+                                        gde_resolved = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
+                /* Return-directed methods (`pure`, `empty`, `default-of`) are
+                 * served by the DictBind path above (turi-dict-passing-plan);
+                 * the frame-tyvar recovery that used to sit here
+                 * (gde_reresolve_return_directed) is retired -- see the
+                 * measurement note at its former definition. */
                 if (!gde_resolved && control->as.call_.fn_binding) {
                     fn_val = eval_lookup(env, cf,
                                  control->as.call_.fn_binding->name->name);
@@ -6717,6 +7875,14 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* SR N3: single-operand black-box forms descend their operand on
                  * the work-stack (DK_UNARY), so recursion threaded through a
                  * cast/ascribe/return/set/transparent-shim stays heap-bounded. */
+                {
+                    /* turi-dict-passing-plan: a constrained rank-2 poly value
+                     * resolves to its dict-clone, not the unwrapped original. */
+                    TuriValue dcv;
+                    if (poly_wrap_dict_clone_value(env, cf, control, &dcv)) {
+                        cur = dcv; descending = false; break;
+                    }
+                }
                 const Expr *operand = NULL;
                 if (unary_operand(control, &operand)) {
                     if (!operand) {
@@ -6731,7 +7897,15 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     tail = false;   /* operand is non-tail */
                     break;          /* keep descending */
                 }
-                /* Black box: evaluate any other kind via the recursive path. */
+                /* Black box: evaluate any other kind via the recursive path.
+                 * The driver already hooked `control` on the way in, and
+                 * eval_expr hooks every node it is handed, so without this the
+                 * node is stopped at twice.  Marked here rather than at the
+                 * driver's hook because this is the one arm that reaches
+                 * eval_expr -- the others break away first, and a mark set on
+                 * a path that never consumes it is a mark that swallows some
+                 * later stop. */
+                if (env->debugger) turi_dbg_skip_next(env, control);
                 cur = eval_expr(env, cf, control);
                 descending = false;
                 break;
@@ -6804,7 +7978,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 } else if (turi_is_error(cur) || env_signaled(env)) {
                     /* propagate cur unchanged */
                 } else {
-                    cur = turi_ok_result_box(env, cur.as_int);
+                    cur = turi_ok_result_box(env, cur);
                 }
                 free(b);
                 len--;
@@ -7127,20 +8301,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* All args ready (a zero-arg call reaches here directly with
                  * acc == NULL). */
                 TuriClosure *cl = top->last.as_closure;
-                /* generic-dict-dispatch by runtime value: a constrained-instance
-                 * element call (e.g. `(c (:: (vec-get v i) A))`) baked to the
-                 * int-carrier representative re-dispatches on the receiver's real
-                 * runtime tag.  The static (tyvar) re-resolution at call setup
-                 * misses this when the element tyvar is unbound in the frame; the
-                 * evaluated receiver value carries its concrete type, so resolve
-                 * from it here.  Only fires for a distinguishable receiver (see
-                 * gde_reresolve_method_by_value), so carrier containers keep the
-                 * baked instance. */
-                if (n >= 1 && acc && top->expr->as.call_.dict_arg) {
-                    TuriValue rv = gde_reresolve_method_by_value(
-                        env, top->expr->as.call_.dict_arg, acc[0]);
-                    if (rv.tag == TURI_CLOSURE && rv.as_closure) cl = rv.as_closure;
-                }
+                /* The runtime-tag re-dispatch that sat here
+                 * (gde_reresolve_method_by_value) is retired -- the
+                 * carrier-helper dispatch recovery at EX_CALL setup covers its
+                 * one shape statically; see the measurement record at its
+                 * former definition. */
                 FnDef       *fn = (FnDef *)cl->fn;
                 bool foldable = !cl->native && fn && fn->body &&
                                 fn->body->kind != EX_INLINE_C;
@@ -7174,14 +8339,95 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * poly fn param (is_poly_call) prepends one implicit dictionary
                  * actual per constraint on the poly param's type -- the compiled
                  * path binds these to the callee's dict-clone params.  The
-                 * tree-walker instead dispatches typeclass methods by the
-                 * receiver's runtime value (gde_reresolve_method_by_value), so
-                 * those leading dict actuals are redundant here.  Skip them and
+                 * tree-walker binds them as DictBinds in the apply prologue
+                 * below and dispatches through the frame dictionary, so the
+                 * leading dict actuals are not VALUE params.  Skip them and
                  * bind only the callee's declared value params.  See
                  * docs/archive/history/turi-interp-forall-dict-wide-consumer-arity.md. */
                 uint32_t arg_base = 0;
                 if (top->expr->as.call_.is_poly_call && n > effective_params)
                     arg_base = n - effective_params;
+                /* SR2b: baked-representative correction by RUNTIME ctor name.
+                 * A dict-carrying method call whose static dispatch stayed
+                 * abstract falls back to the elab-baked representative
+                 * instance, which is a registration-order accident (Monad's
+                 * flipped from Option to Result when the stdlib sums were
+                 * rewritten).  Pre-sum this was invisible: every instance body
+                 * was a field read over the same {flag, payload} box layout,
+                 * so the wrong instance still computed the right answer.  The
+                 * bodies are ctor MATCHES now, so a "Some" receiver entering
+                 * Result's `(match ma (Ok v) ...)` dies with "no arm matched".
+                 * With the receiver VALUE in hand, re-dispatch: if the owner
+                 * instance's head ADT does not declare the receiver's ctor,
+                 * swap to the same class's instance whose head does.  Sibling
+                 * method impls share arity, so the bound-args prologue below
+                 * is unaffected. */
+                if (fn->owner_instance && fn->owner_instance->typeclass &&
+                    env->last_tc_env && n - arg_base >= 1) {
+                    TuriValue __recv = acc[arg_base];
+                    const char *__sn = (__recv.tag == TURI_STRUCT)
+                                           ? turi_struct_name(__recv) : NULL;
+                    TypeClassInstance *__own = fn->owner_instance;
+                    AdtDef *__oh = NULL;
+                    if (__sn && __own->n_type_args >= 1 && __own->type_args) {
+                        const Type *__ht = &__own->type_args[0];
+                        while (__ht->kind == TY_APP && __ht->as.app.fn)
+                            __ht = __ht->as.app.fn;
+                        __oh = (__ht->kind == TY_ADT) ? __ht->as.adt_.def : NULL;
+                    }
+                    bool __owner_has = false;
+                    if (__oh) {
+                        for (uint32_t __ci = 0; __ci < __oh->n_ctors; __ci++)
+                            if (__oh->ctors[__ci] && __oh->ctors[__ci]->name &&
+                                strcmp(__oh->ctors[__ci]->name, __sn) == 0) {
+                                __owner_has = true;
+                                break;
+                            }
+                    }
+                    if (__oh && !__owner_has) {
+                        int __ms = -1;
+                        for (uint8_t __mi = 0; __mi < __own->n_method_impls; __mi++)
+                            if (__own->method_impls[__mi] == fn) { __ms = __mi; break; }
+                        if (__ms >= 0) {
+                            TypeClassEnv *__tce = (TypeClassEnv *)env->last_tc_env;
+                            for (TypeClassInstance *__ins = __tce->instances;
+                                 __ins; __ins = __ins->next) {
+                                if (__ins == __own) continue;
+                                bool __same_class =
+                                    __ins->typeclass == __own->typeclass ||
+                                    (__ins->typeclass && __ins->typeclass->name &&
+                                     __own->typeclass->name &&
+                                     strcmp(__ins->typeclass->name->name,
+                                            __own->typeclass->name->name) == 0);
+                                if (!__same_class) continue;
+                                AdtDef *__h = NULL;
+                                if (__ins->n_type_args >= 1 && __ins->type_args) {
+                                    const Type *__t = &__ins->type_args[0];
+                                    while (__t->kind == TY_APP && __t->as.app.fn)
+                                        __t = __t->as.app.fn;
+                                    __h = (__t->kind == TY_ADT) ? __t->as.adt_.def : NULL;
+                                }
+                                bool __has = false;
+                                if (__h) {
+                                    for (uint32_t __ci = 0; __ci < __h->n_ctors; __ci++)
+                                        if (__h->ctors[__ci] && __h->ctors[__ci]->name &&
+                                            strcmp(__h->ctors[__ci]->name, __sn) == 0) {
+                                            __has = true;
+                                            break;
+                                        }
+                                }
+                                if (!__has) continue;
+                                if (__ms < __ins->n_method_impls &&
+                                    __ins->method_impls[__ms] &&
+                                    __ins->method_impls[__ms]->body &&
+                                    __ins->method_impls[__ms]->body->kind != EX_INLINE_C) {
+                                    fn = __ins->method_impls[__ms];
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
                 if (effective_params != n - arg_base) {
                     cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
                                       fn->binding ? fn->binding->name->name : "<fn>",
@@ -7201,11 +8447,39 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                                fn->params[param_offset + i]->name->name,
                                turi_copy_byvalue_struct_arg(env, acc[arg_base + i]));
                 free(acc);
+                /* turi-dict-passing-plan: a DICT-CLONE's leading dict params
+                 * just bound as ordinary int args carry TypeClassInstance
+                 * pointers (the EX_DICT address-only value).  Record them as
+                 * class->instance DictBinds on the frame so method dispatch
+                 * inside the body reads the caller-supplied dictionary with
+                 * precedence over the gde_* recovery heuristics. */
+                if (fn->n_dict_clone > 0) {
+                    for (uint8_t dk2 = 0; dk2 < fn->n_dict_clone; dk2++) {
+                        Binding *dp = fn->dict_clone_params[dk2];
+                        if (!dp || !dp->name || !fn->dict_clone_classes[dk2])
+                            continue;
+                        TuriValue dv = eval_lookup(env, call_frame,
+                                                   dp->name->name);
+                        if (dv.tag != TURI_INT || dv.as_int == 0) continue;
+                        DictBind *db = (DictBind *)turi_val_alloc(
+                            env, sizeof(DictBind));
+                        db->tc    = fn->dict_clone_classes[dk2];
+                        db->inst  = (struct TypeClassInstance *)(intptr_t)
+                                        dv.as_int;
+                        db->tyvar = NULL;  /* unkeyed: class-only match */
+                        db->next  = call_frame->dicts;
+                        call_frame->dicts = db;
+                    }
+                }
                 /* generic-dict-dispatch: pin this call's concrete tyvar
                  * substitutions onto the callee frame so a baked-representative
                  * method call inside the body can re-resolve its instance. */
                 if (top->expr->as.call_.n_abi_bindings > 0)
                     frame_record_abi(env, call_frame, top->frame, top->expr);
+                else
+                    frame_pin_hkt_tyvars_from_args(env, call_frame, fn,
+                                                   param_offset, effective_params,
+                                                   top->expr, arg_base);
                 /* Bare-head constrained instance: bind its constraint tyvars
                  * (`(C A)`'s `A`) from the receiver arg's static type so a nested
                  * dispatch inside the body resolves the element's real instance
@@ -7213,6 +8487,23 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 if (fn->owner_instance && n > 0 && top->expr->as.call_.args)
                     frame_bind_instance_constraint_tyvars(
                         env, call_frame, fn, &top->expr->as.call_.args[0]->type);
+                /* turi-dict-passing-plan (plain constrained generics): with the
+                 * tyvar pins in place, resolve the callee's own constraints to
+                 * instances and record them as frame dictionaries, so method
+                 * dispatch in the body reads a dict instead of re-deriving the
+                 * instance heuristically.  Covers both a constrained defn's
+                 * constraint set and a constrained instance body's
+                 * type-param constraints. */
+                if (fn->constraints.n_constraints > 0)
+                    frame_bind_constraint_dicts(env, call_frame,
+                                                fn->constraints.constraints,
+                                                fn->constraints.n_constraints);
+                if (fn->owner_instance &&
+                    fn->owner_instance->n_type_param_constraints > 0)
+                    frame_bind_constraint_dicts(
+                        env, call_frame,
+                        fn->owner_instance->type_param_constraints,
+                        fn->owner_instance->n_type_param_constraints);
 
                 if (top->tail) {
                     /* F3: tail call -- REUSE the enclosing activation's
@@ -7282,7 +8573,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * (by-scope reversal); on normal completion fire head-first
                  * (innermost scope first, same-scope LIFO).  Both mirror the
                  * compiled tur_frame_fire_chain (see
-                 * docs/reported/turi-tail-scope-defers-fire-fifo-not-lifo.md). */
+                 * docs/archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md). */
                 if (env_signaled(env))
                     fire_defers_to_mark_by_scope(env, (DeferItem *)top->aux, NULL);
                 else
@@ -8232,7 +9523,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return v;
     }
 
-    /* --- Extern C declaration -- register nil stub in interpreter mode ----- */
+    /* --- Extern C declaration -- bind a real implementation --------------- */
     case EX_EXTERN_C: {
         ExternC *ec = e->as.extern_c_.ext;
         if (ec && ec->binding) {
@@ -8240,7 +9531,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             /* Only register if not already bound (avoid overwriting native impls). */
             TuriValue existing = turi_env_get(env, fname);
             if (existing.tag == TURI_ERROR)
-                register_extern_c_known(env, fname);
+                register_extern_c_binding(env, ec, fname);
         }
         return turi_nil();
     }
@@ -8289,6 +9580,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Function call --------------------------------------------------- */
     case EX_CALL:
+        /* jit-ffi-c2mir-plan F3/F5: a `(call-ptr ...)` call routes through the
+         * c2mir thunk provider, not the work-stack driver -- the callee is a
+         * raw C address, so there is no turi closure to apply. */
+        if (e->as.call_.ptr_sig)
+            return e->as.call_.ptr_sig->is_callback
+                       ? eval_callback_ptr(env, frame, e)
+                       : eval_call_ptr(env, frame, e);
         /* T3.2a: delegated to the explicit-stack driver (DK_CALL_ARG), which
          * resolves the callee and accumulates args on the work-stack, then
          * applies via eval_apply.  Semantics match the former inline loop; the
@@ -8890,6 +10188,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_DICT: {
         TypeClassInstance *inst = e->as.dict_.instance;
         const char *mname = e->as.dict_.method_name;
+        /* turi-dict-passing-plan: address-only mode (method_name == "") is the
+         * dict VALUE the elaborator prepends at a dict-clone call site.  The
+         * compiled path spells it `(int64_t)(intptr_t)&dict_C_T_singleton`;
+         * the interpreter's dictionary IS the TypeClassInstance, carried in
+         * the same int64 slot so the clone's dict param binds it like any
+         * other arg.  (Previously nil, which starved the dict params.) */
+        if (inst && (!mname || mname[0] == '\0'))
+            return turi_int((int64_t)(intptr_t)inst);
         if (!inst || !mname || mname[0] == '\0') return turi_nil();
         TypeClass *tc = inst->typeclass;
         if (!tc) return turi_nil();
@@ -8979,8 +10285,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     /* --- Phase N: poly wrap is transparent in the interpreter -------------- */
-    case EX_POLY_WRAP:
+    case EX_POLY_WRAP: {
+        /* turi-dict-passing-plan: a constrained rank-2 poly value resolves to
+         * its dict-clone (leading dict params supplied by the call site). */
+        TuriValue dcv;
+        if (poly_wrap_dict_clone_value(env, frame, e, &dcv)) return dcv;
         return eval_expr(env, frame, e->as.poly_wrap_.inner);
+    }
 
     /* --- A#1: fat-closure shim is transparent in the interpreter ----------- */
     case EX_FN_TO_FAT:
@@ -9111,7 +10422,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
              * Result-box layout { is_ok, ok_val, err_val } that the native
              * ok/err/ok?/err? helpers produce and read, so the value composes
              * with ok?/err?/ok-val just like any other Result (Phase R2). */
-            return turi_ok_result_box(env, result.as_int);
+            return turi_ok_result_box(env, result);
         } else {
             /* A panic was caught — restore env and return (err payload).  TI5:
              * the err slot carries a boxed TuriPanicPayload so panic-payload-*
@@ -9158,7 +10469,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             env->catch_jmp = prev_jmp;
             if (turi_is_error(result) || env_signaled(env))
                 return result;
-            return turi_ok_result_box(env, result.as_int);
+            return turi_ok_result_box(env, result);
         } else {
             /* A panic reached this boundary.  Restore the saved control state
              * (the payload fields in env still describe the in-flight panic). */
@@ -9460,18 +10771,27 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         case TY_BOOL: ok = (v.tag == TURI_BOOL); break;
         case TY_CSTR: ok = (v.tag == TURI_CSTR); break;
         case TY_STRUCT:
-            /* A defstruct lowered to a record ADT carries a from_struct_lowering
-             * CtorDef -- it is "struct" at the surface (CONV-S1). */
-            ok = (v.tag == TURI_STRUCT && v.as_struct && turi_struct_is_struct_like(v));
+        case TY_ADT: {
+            /* type-of-cast-kind-granularity: compare the TYPE, not the kind.
+             * Casting an `any` holding a Point to Other used to pass here and
+             * on the compiled path alike, handing back a reinterpreted value.
+             * `e->type` is the named target the elaborator resolved. */
+            const char *have = turi_any_named_type(v);
+            const char *want = type_name(e->type);
+            ok = (v.tag == TURI_STRUCT && have && want && strcmp(have, want) == 0);
             break;
-        case TY_ADT:
-            /* A genuine ADT value was not synthesized from a defstruct lowering. */
-            ok = (v.tag == TURI_STRUCT && v.as_struct && !turi_struct_is_struct_like(v));
-            break;
+        }
         default: ok = true; break;
         }
         if (!ok) {
-            turi_runtime_panic(env, "cast: any holds a value of a different type");
+            {
+                const char *have = turi_any_named_type(v);
+                char msg[160];
+                snprintf(msg, sizeof(msg), "cast: any holds %s, not %s",
+                         have ? have : "a value of a different type",
+                         type_name(e->type));
+                turi_runtime_panic(env, msg);
+            }
             return turi_nil(); /* unreachable: turi_runtime_panic never returns */
         }
         return v;
@@ -9488,14 +10808,16 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         case TURI_CSTR:    tname = "cstr";    break;
         case TURI_NIL:     tname = "nil";     break;
         case TURI_CLOSURE: tname = "fn";      break;
-        case TURI_STRUCT:
-            /* W4: match the compiled __tur_any_type_name, which carries only
-             * kind granularity -- every struct is "struct" and every ADT is
-             * "adt" (emit_module.c), NOT the specific type name.  A defstruct
-             * lowered to a record ADT reads as "struct" via its CtorDef. */
-            tname = (v.as_struct && turi_struct_is_struct_like(v))
-                        ? "struct" : "adt";
+        case TURI_STRUCT: {
+            /* Match the compiled __tur_any_type_name, which names the specific
+             * type now (type-of-cast-kind-granularity) rather than answering
+             * "struct" / "adt" for every struct and every ADT alike. */
+            const char *named = turi_any_named_type(v);
+            tname = named ? named
+                          : ((v.as_struct && turi_struct_is_struct_like(v))
+                                 ? "struct" : "adt");
             break;
+        }
         default: break;
         }
         return turi_cstr(tname);
@@ -9506,6 +10828,15 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue v = eval_expr(env, frame, e->as.any_is_.value);
         if (turi_is_error(v) || env_signaled(env)) return v;
         /* Map the runtime TuriValue tag to a TypeKind and compare to test_tag. */
+        /* A NAMED target compares by type identity, exactly as the compiled
+         * per-monomorph box id does -- `(is? a Other)` on an `any` holding a
+         * Point is false, where the old TypeKind compare said true for every
+         * struct.  Primitives keep the kind compare. */
+        const char *named = turi_any_named_type(v);
+        if (named && e->as.any_is_.test_type.kind != TY_UNKNOWN) {
+            const char *want = type_name(e->as.any_is_.test_type);
+            return turi_bool(want && strcmp(named, want) == 0);
+        }
         TypeKind vk = TY_UNKNOWN;
         switch (v.tag) {
         case TURI_INT:    vk = TY_INT;      break;
@@ -9735,10 +11066,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     case EX_TVAR_MODIFY: {
         /* Read-modify-write: r = fn(old); write r; return old.  NOTE: the
-         * compiled path (emit_expr.c EX_TVAR_MODIFY) currently emits a no-op
-         * stub returning NULL -- a latent bug filed in
-         * docs/reported/stm-tvar-modify-codegen-stub.md.  The interpreter
-         * implements the intended semantics. */
+         * compiled path never reaches its EX_TVAR_MODIFY arm -- elab_tvar_modify
+         * (elab_concurrent.c) lowers `(tvar/modify tv f)` to
+         * `(let [g tv] (tvar/swap g (f (tvar/read g))))` first, so the arm in
+         * emit_expr.c is a defensive stub, not a live no-op.  The interpreter
+         * implements the semantics directly. */
         if (!g_stm_tx)
             return turi_error("eval: tvar/modify used outside of an atomically block");
         TuriValue err = turi_nil();
@@ -10109,6 +11441,11 @@ static bool promo_check(TuriEnv *env, TuriValue v, PromoMap *seen) {
          * the only scratch object; copying it is always safe. */
         return true;
     }
+    case TURI_SYNTAX:
+        /* The wrapped Form* lives in an arena (env sym_arena / eval arena /
+         * elaborator arena), never in scratch; the value itself is trivially
+         * relocatable. */
+        return true;
     }
     return false;  /* unknown tag: refuse to rewind */
 }
@@ -10306,6 +11643,9 @@ static TuriValue promo_copy(TuriEnv *env, TuriValue v, PromoMap *fwd) {
         *nhv = *hv;
         return turi_handler_val(nhv);
     }
+    case TURI_SYNTAX:
+        /* Arena-resident Form* (never scratch): nothing to relocate. */
+        return v;
     default:
         /* Scalars and the shapes promo_check proved are non-scratch: unchanged. */
         return v;
@@ -10438,8 +11778,8 @@ static void collmark_value(TuriEnv *env, TuriValue v, PromoMap *seen,
         return;
     }
     default:
-        /* NIL/BOOL/FLOAT/CSTR/ERROR/STRUCT_TYPE/HANDLER/REJECTION carry no
-         * collection handles. */
+        /* NIL/BOOL/FLOAT/CSTR/ERROR/STRUCT_TYPE/HANDLER/REJECTION/SYNTAX
+         * carry no collection handles. */
         return;
     }
 }
@@ -10705,7 +12045,21 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     size_t      src_len  = combined->len;
     const char *src_copy = combined->data;
 
-    /* 4. Reset diagnostics; register the eval source file. */
+    /* 4. Reset diagnostics; register the eval source file.
+     *
+     * Snapshot the file registry first.  diag_reset() clears it, and on the
+     * incremental path the `(load ...)`ed files registered by an EARLIER turn
+     * are never re-registered -- that turn's Forms are reused rather than
+     * re-parsed, so the load splicing does not run again -- while those Forms
+     * still carry their file ids.  Without the restore below, every later
+     * diag_file_path() on such an id misses and the DAP debugger reports a
+     * frame as `?:19` with no `source` object.  Sound here because the
+     * interpreter retains its eval arenas for the life of the env, so the saved
+     * SourceFile pointers stay valid.
+     * See docs/archive/incremental-elab-loses-span-file-provenance.md. */
+    const SourceFile *saved_files[64];
+    size_t n_saved = diag_files_save(saved_files,
+                                     sizeof(saved_files) / sizeof(saved_files[0]));
     diag_reset();
 
     SourceFile *sfile = (SourceFile *)arena_alloc(eval_arena, sizeof(SourceFile));
@@ -10725,6 +12079,9 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     sfile->reader_type = env->reader_type;
     sfile->lang_layers = env->lang_layers;   /* lang-layers-plan L1 */
     diag_register_file(sfile);
+    /* Re-register the previous turn's loaded files (id 0, this turn's blob,
+     * is skipped) so spans in reused Forms still resolve to their real path. */
+    diag_files_restore(saved_files, n_saved);
 
     /* 5. Parse. RM Q#5: pass env->reader_macros so reader-macros defined
      * in earlier eval calls remain visible.
@@ -10786,7 +12143,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * which also scoped the binding to that one turn, so a name defined at the
      * prompt did not survive to the next one.  `define` is now a spelling of
      * `def`, so a top-level `define` is a genuine top-level binding and needs
-     * no workaround.  See docs/upcoming/def-define-consolidation-plan.md. */
+     * no workaround.  See docs/archive/def-define-consolidation-plan.md. */
     uint32_t prior = env->prior_toplevel;
 
     /* 6. Elaborate (read-only path: no borrow-check, no CPS, no emit).
@@ -10878,7 +12235,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
 
     /* Publish this elaboration's TypeClassEnv BEFORE evaluating the new forms,
      * not only at the successful end of the call.  Runtime typeclass dispatch
-     * (gde_reresolve_method / gde_reresolve_method_by_value / turi_try_show)
+     * (frame_bind_constraint_dicts / turi_try_show)
      * reads env->last_tc_env during evaluation.  Previously last_tc_env was set
      * only in the success epilogue below, so the FIRST program to introduce a
      * class's instances (e.g. `Show [String]`, loaded via string.tur) evaluated
@@ -11177,6 +12534,16 @@ static void turi_value_repr_d(char *buf, size_t cap, TuriValue v, int depth) {
     case TURI_REJECTION:
         snprintf(buf, cap, "#<rejection: %s>", v.as_error ? v.as_error : "");
         break;
+    case TURI_SYNTAX: {
+        /* Show the wrapped form's text: `#<syntax (+ 1 2)>`. */
+        if (!v.as_syntax) { snprintf(buf, cap, "#<syntax>"); break; }
+        Buf fb;
+        buf_init(&fb);
+        form_print(&fb, v.as_syntax);
+        snprintf(buf, cap, "#<syntax %.*s>", (int)fb.len, fb.data);
+        buf_free(&fb);
+        break;
+    }
     }
 }
 
@@ -11187,16 +12554,28 @@ void turi_value_repr(char *buf, size_t cap, TuriValue v) {
 /* =========================================================================
  * Debugger Phase 2 -- interactive interpreter debugger
  *
- * See docs/upcoming/debugger-plan.md (Phase 2).  A TuriDebugger is attached to
+ * See docs/archive/history/debugger-plan.md (Phase 2).  A TuriDebugger is attached to
  * a TuriEnv by turi_debug_enable(); the eval loop then calls turi_dbg_before_node
  * before each AST node and turi_dbg_push/pop around each turi-body activation.
  * On a breakpoint or a satisfied step predicate the loop yields to a small
  * command REPL (dbg_repl) reading from dbg->in and writing to dbg->out.
  *
- * Stepping is line-granular: STEP_IN stops at the next node on a different
- * source line; STEP_OVER additionally requires the call depth to be <= the
- * depth we stepped from (so a call on the current line is run to completion);
- * STEP_OUT stops once the depth drops below the stepped-from depth.
+ * Interactive stepping is line-granular: STEP_IN stops at the next node on a
+ * different source line; STEP_OVER additionally requires the call depth to be
+ * <= the depth we stepped from (so a call on the current line is run to
+ * completion); STEP_OUT stops once the depth drops below the stepped-from
+ * depth.  That is the granularity DAP speaks and editors draw, and it is the
+ * one a human wants to drive by hand.
+ *
+ * STEP_NODE is the exception, and it exists for the recorder rather than for a
+ * human: it stops at *every* located node.  A line is not a unit of evaluation
+ * in a Lisp -- `(let [a (f (g 3))]` is one line and four evaluations -- so a
+ * line-granular recording collapses whole expression trees, and collapses a
+ * loop whose body fits on one line into a single step with the induction
+ * variable jumping from its first value to its last.  That is precisely the
+ * question a time-travel trace exists to answer, so the recorder asks for
+ * every node and the format carries the column span to say which one.  See
+ * turi/trace.h.
  * ========================================================================= */
 
 #define DBG_MAX_BPS     64
@@ -11207,6 +12586,7 @@ typedef enum {
     DBG_STEP_IN,        /* stop at the next line, any depth */
     DBG_STEP_OVER,      /* stop at the next line at depth <= step_depth */
     DBG_STEP_OUT,       /* stop once depth < step_depth */
+    DBG_STEP_NODE,      /* stop at the next expression, any depth */
 } DbgStep;
 
 typedef struct {
@@ -11586,13 +12966,23 @@ static void turi_dbg_before_node(TuriEnv *env, EvalFrame *frame,
     TuriDebugger *dbg = (TuriDebugger *)env->debugger;
     if (!dbg || dbg->in_repl || !e) return;
 
-    /* Dedup: eval_expr hooks a node, then immediately dispatches the
-     * driver-folded kinds (let/if/do/program/call/match) to eval_drive, which
-     * would re-hook the very same node.  Mark it on the eval_expr pass and
-     * swallow the driver's duplicate. */
-    if (from_driver) {
-        if (e == dbg->skip_node) { dbg->skip_node = NULL; return; }
-    } else {
+    /* Dedup.  A node can reach this hook twice, from either direction:
+     *
+     *   - eval_expr hooks a node, then immediately dispatches the driver-folded
+     *     kinds (let/if/do/program/call/match) to eval_drive, which re-hooks it.
+     *     Marked below on the eval_expr pass; the driver's pass swallows it.
+     *   - the driver hooks a node on descent and then hands the black-box kinds
+     *     (everything it does not fold -- variable refs, literals, ...) to
+     *     eval_expr, which hooks it again.  Marked by the driver via
+     *     turi_dbg_skip_next; this pass swallows it.
+     *
+     * So the mark is consumed from whichever side arrives second, and only the
+     * folded-kind mark is set here.  Line-granular stepping hid the second case
+     * entirely -- the duplicate shares a line with the original, so
+     * dbg_line_changed was false -- and it surfaced as doubled records the
+     * moment the recorder started asking for every node. */
+    if (e == dbg->skip_node) { dbg->skip_node = NULL; return; }
+    if (!from_driver) {
         switch (e->kind) {
         case EX_LET: case EX_LETREC: case EX_IF: case EX_DO:
         case EX_PROGRAM: case EX_CALL: case EX_MATCH:
@@ -11647,6 +13037,11 @@ static void turi_dbg_before_node(TuriEnv *env, EvalFrame *frame,
         case DBG_STEP_OVER: hit = dbg_line_changed(dbg, s) &&
                                   dbg->depth <= dbg->step_depth; break;
         case DBG_STEP_OUT:  hit = dbg->depth < dbg->step_depth; break;
+        /* Every located node, not every line.  The `s.line == 0` guard above
+         * has already dropped the synthetic nodes, and the skip_node dedup has
+         * dropped the driver's re-hook of a folded kind, so what is left is one
+         * stop per evaluation -- which is the unit the recorder wants. */
+        case DBG_STEP_NODE: hit = true; break;
         case DBG_STEP_NONE: default: break;
         }
         if (hit) reason = TURI_DBG_STOP_STEP;
@@ -11814,6 +13209,16 @@ void turi_debug_resume_step_over(TuriEnv *env) {
 void turi_debug_resume_step_out(TuriEnv *env) {
     TuriDebugger *d = dbg_of(env);
     if (d) { d->step = DBG_STEP_OUT;  d->step_depth = d->depth; }
+}
+
+static void turi_dbg_skip_next(TuriEnv *env, const Expr *e) {
+    TuriDebugger *dbg = (TuriDebugger *)env->debugger;
+    if (dbg) dbg->skip_node = e;
+}
+
+void turi_debug_resume_step_node(TuriEnv *env) {
+    TuriDebugger *d = dbg_of(env);
+    if (d) { d->step = DBG_STEP_NODE; d->step_depth = d->depth; }
 }
 
 int turi_debug_frame_count(TuriEnv *env) {

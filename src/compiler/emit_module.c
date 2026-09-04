@@ -4,7 +4,6 @@
 #include "emit_dk_runtime.h" /* U7 step 1: relocated DK runtime prelude emitters */
 #include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn emittable-set gate */
 #include "globals.h"   /* Phase I: g_emit_abi_trace */
-#include "experiments.h" /* experiment_warn_if_used (closure-drop-glue) */
 #include "mangle.h"    /* tur_mangle_ident (constrained-byval witness thunks) */
 #include "mono_specs.h" /* VBM2b: by-value van Laarhoven lens mono spec registry */
 #include "rc.h"        /* DEDUP-4b: RC_VT_* -- pinned against TypeKind below */
@@ -328,7 +327,7 @@ static bool inline_c_emit_block_deduped(Buf *buf, InlineCDedup *d,
     return any_emitted;
 }
 
-static bool thunk_type_has_concrete_c_abi(Type t) {
+static bool thunk_type_has_concrete_c_abi(Type t, bool result_pos) {
     switch (t.kind) {
         case TY_NIL:
         case TY_BOOL:
@@ -364,15 +363,66 @@ static bool thunk_type_has_concrete_c_abi(Type t) {
             return true;
         case TY_ADT:
             return t.as.adt_.def != NULL;
+        case TY_APP:
+            /* A concrete parametric MONOMORPH -- `(Box2 int)`, `(PRes Expr)` --
+             * has a real C typedef (`tur_adt_Box2__int`) and belongs in a typed
+             * thunk signature exactly as a non-parametric ADT does.  Reporting
+             * false here declined the typed fatshim and left slot 0 holding the
+             * generic `__tur_fatshim<arity>`, whose `int64_t (*)(void *,
+             * int64_t...)` ABI the call site then casts to the aggregate's.
+             *
+             * That lie survived for as long as it did because the generic shim
+             * is a transparent forwarding tail-call: whatever registers the real
+             * function reads and writes pass through it untouched, so a <= 16
+             * byte aggregate (returned in RAX:RDX, or XMM0:XMM1) came back
+             * correct by luck.  Past 16 bytes the SysV hidden-pointer (sret)
+             * convention shifts every argument right by one, the shim reads the
+             * caller's sret destination as its env, and the program SEGVs --
+             * fat-dispatch-parametric-monomorph-generic-shim.
+             *
+             * An UNAPPLIED or non-concrete app has no such typedef.  The
+             * predicate for "this app names a real monomorph" is
+             * `type_app_is_concrete_adt`, NOT
+             * `type_has_concrete_codegen_layout` -- the latter answers false
+             * for every TY_APP by design (its struct-app branch defers to
+             * `type_extract_struct_app`), so gating on it reads as "no
+             * parametric app ever has a C ABI" and reinstates the bug.
+             *
+             * Admitted only PAST the 16-byte sret threshold
+             * (adt_app_byval_pass_by_ptr), for the mirror-image reason.  A
+             * rank-2 erased consumer (a dict clone's `(g s)`) always calls
+             * slot 0 through the generic `int64_t (*)(void *, int64_t...)`
+             * cast -- it cannot know the element type.  For a <= 16 byte
+             * monomorph both conventions are served by the generic forwarding
+             * shim (register-returned aggregates pass through the tail-call
+             * untouched -- the "luck" above, which SysV makes reliable at this
+             * width), but a TYPED aggregate-returning shim in slot 0 is UB
+             * under the erased cast, and c2mir turns that UB into a real
+             * wrong-sret crash (van-laarhoven-lens-wide-functor-show under
+             * the MIR JIT; cc on x86-64 happened to agree register-wise).
+             * Past 16 bytes the generic shim is the thing that crashes, no
+             * erased consumer ever worked there, and the typed shim + typed
+             * call-site cast pair is required -- exactly the case above.
+             *
+             * PARAMETER position keeps the full admission: the by-value seam's
+             * monomorphized thunks pass a <= 16 byte monomorph (`(ReF bool)`)
+             * as the aggregate, and demoting the param to the erased int64
+             * cast breaks that producer/consumer agreement the other way
+             * (hkt-cata-fmap-byvalue-carrier under TUR_SR2_APP_SUM_BYVALUE).
+             * Only the RESULT is the erased-consumer hazard. */
+            return type_app_is_concrete_adt(&t) &&
+                   (!result_pos || adt_app_byval_pass_by_ptr(t));
         default:
             return false;
     }
 }
 
 bool use_typed_thunk_abi(Type result_type, Type *param_types, uint8_t n_params) {
-    if (!thunk_type_has_concrete_c_abi(result_type)) return false;
+    if (!thunk_type_has_concrete_c_abi(result_type, /*result_pos=*/true))
+        return false;
     for (uint32_t i = 0; i < n_params; i++) {
-        if (!thunk_type_has_concrete_c_abi(param_types[i])) return false;
+        if (!thunk_type_has_concrete_c_abi(param_types[i], /*result_pos=*/false))
+            return false;
     }
     return true;
 }
@@ -407,6 +457,25 @@ void emit_vl_consumer_mono_name(Buf *out, const char *consumer_name,
     buf_printf(out, "__lens_%016llx", lens_hash);
 }
 
+/* SR-fat-abi: the C spelling of one typed-thunk PARAMETER slot.
+ *
+ * A WIDE (> 8 byte) by-value aggregate crosses every fat-closure boundary as
+ * an int64 heap-box POINTER -- the b4box convention the closure emitter
+ * (emit_fns.c needs_box_load) already gives the thunk bodies.  Until now the
+ * typedef spelled the aggregate itself, so the dispatch cast promised a
+ * signature nothing implemented: b4box closures take int64, bare fns take
+ * `const T *` (pbp) or the aggregate, and the callee read a struct out of the
+ * register holding a pointer (fat-dispatch-wide-byvalue-aggregate-argument).
+ * Spelling the slot int64 HERE makes every consulting site -- the env struct
+ * `__fn` field, the store casts, both typed dispatch sites, and the typed
+ * fatshims -- agree with the thunks by construction.  Narrow aggregates
+ * (<= 8 bytes) and results are untouched: both have working by-value
+ * conventions. */
+static const char *thunk_param_slot_c_name(Type t) {
+    if (type_is_b4box_closure_slot(t)) return "int64_t";
+    return type_c_name(t);
+}
+
 static char *typed_thunk_typedef_name(Type result_type, Type *param_types, uint8_t n_params) {
     Buf name;
     buf_init(&name);
@@ -414,7 +483,7 @@ static char *typed_thunk_typedef_name(Type result_type, Type *param_types, uint8
     append_sanitized_c_token(&name, type_c_name(result_type));
     for (uint32_t i = 0; i < n_params; i++) {
         buf_putc(&name, '_');
-        append_sanitized_c_token(&name, type_c_name(param_types[i]));
+        append_sanitized_c_token(&name, thunk_param_slot_c_name(param_types[i]));
     }
     buf_puts(&name, "_t");
     buf_putc(&name, '\0');
@@ -451,7 +520,7 @@ char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : out;
     buf_printf(target, "typedef %s (*%s)(void *", type_c_name(result_type), name);
     for (uint32_t i = 0; i < n_params; i++) {
-        buf_printf(target, ", %s", type_c_name(param_types[i]));
+        buf_printf(target, ", %s", thunk_param_slot_c_name(param_types[i]));
     }
     buf_puts(target, ");\n");
     return name;
@@ -631,6 +700,120 @@ char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
     return strdup(base);
 }
 
+/* type-of-cast-kind-granularity: per-monomorph `any` box tags.
+ *
+ * The tag used to be the payload's TypeKind, so every struct was `TY_STRUCT`
+ * and every ADT `TY_ADT`: `type-of` reported "struct" for all of them, and
+ * `(cast a OtherStruct)` on an `any` holding a `Point` PASSED the check and
+ * handed back a reinterpreted payload.  A struct/ADT now interns its monomorph
+ * C name and rides `TUR_ANY_ID_BASE + index`; primitives keep their TypeKind,
+ * which is what the preamble's name switch and the float/bool special cases
+ * still key on.  The inject site, the cast target and the is? target all route
+ * through this one function, so they cannot disagree. */
+#define TUR_ANY_ID_BASE 1000
+
+int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
+    Type r = ctx ? emit_resolve_type(ctx, t) : t;
+    AdtDef *app_def = (r.kind == TY_APP) ? type_adt_app_def(&r) : NULL;
+    bool named = (r.kind == TY_ADT && r.as.adt_.def) || app_def != NULL;
+    if (!ctx || !named) return (int64_t)any_box_tag_for_type(&r);
+
+    /* Identity is `type_name`, not the C name: a carrier ADT's C name is
+     * `int64_t`, which every carrier ADT shares -- keying on it would give two
+     * different ADTs the same id and reintroduce the very confusion this
+     * replaces.  `type_name` renders a TY_APP per instantiation
+     * ("(type-app Box int)"), so `(Box int)` and `(Box float)` are distinct. */
+    const char *key = type_name(r);
+    if (!key || !*key) return (int64_t)any_box_tag_for_type(&r);
+    /* What `type-of` reports: the source-level name.  A type application shows
+     * its head ("Box"), since the parenthesised internal rendering is not what
+     * a program printing a type name wants to see. */
+    const char *shown = (r.kind == TY_ADT && r.as.adt_.def)
+                            ? r.as.adt_.def->name
+                            : (app_def ? app_def->name : key);
+
+    for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
+        if (strcmp(ctx->any_type_names[i], key) == 0)
+            return (int64_t)(TUR_ANY_ID_BASE + i);
+    }
+    if (ctx->n_any_type_names >= ctx->cap_any_type_names) {
+        uint32_t nc = ctx->cap_any_type_names ? ctx->cap_any_type_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->any_type_names, nc * sizeof(char *));
+        char **ns = (char **)realloc(ctx->any_type_shown, nc * sizeof(char *));
+        bool  *nb = (bool  *)realloc(ctx->any_type_boxed, nc * sizeof(bool));
+        if (!nn || !ns || !nb) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->any_type_names = nn;
+        ctx->any_type_shown = ns;
+        ctx->any_type_boxed = nb;
+        ctx->cap_any_type_names = nc;
+    }
+    char *kdup = strdup(key);
+    char *sdup = strdup(shown ? shown : key);
+    if (!kdup || !sdup) { fprintf(stderr, "tur: oom\n"); abort(); }
+    ctx->any_type_names[ctx->n_any_type_names] = kdup;
+    ctx->any_type_shown[ctx->n_any_type_names] = sdup;
+    /* any-struct-box-leak-per-widen: record whether the widen site heap-boxes
+     * this payload.  Decided by the SAME predicate the inject uses
+     * (emit_type_is_byvalue_adt), so "the drop frees it" and "the widen
+     * allocated it" cannot disagree -- a heap-ADT handle rides the value word
+     * and must never be freed here. */
+    ctx->any_type_boxed[ctx->n_any_type_names] = emit_type_is_byvalue_adt(ctx, r);
+    ctx->n_any_type_names++;
+    return (int64_t)(TUR_ANY_ID_BASE + ctx->n_any_type_names - 1);
+}
+
+void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
+    if (!out) return;
+    /* any-struct-box-leak-per-widen: the drop side.  `__tur_any_drop` is the
+     * ONLY place an `any` payload box is released, and it releases one exactly
+     * when the widen allocated one -- the boxed flag interned by
+     * emit_any_type_id, from the same predicate the widen itself uses.  A
+     * primitive payload and a heap-ADT handle ride the tag's value word and own
+     * nothing, so both fall through untouched.
+     *
+     * Emitted BEFORE the nothing-to-name early return below, and
+     * unconditionally: a drop SITE exists whenever a scope owns an `any`, which
+     * does not require any struct/ADT payload to have been interned.  A program
+     * that widens only a primitive (`any-box-cstr` widens a cstr) interns no ids
+     * at all, took that early return, and emitted a call to a function that was
+     * never defined -- an undefined-reference link failure.  With no boxed ids
+     * the switch degenerates to `default: return;`, which is exactly right. */
+    buf_puts(out, "static void __tur_any_drop(tur_tagged_t __v) {\n");
+    buf_puts(out, "    switch (TUR_GETTAG(__v)) {\n");
+    if (ctx) {
+        bool any_boxed = false;
+        for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
+            if (!ctx->any_type_boxed[i]) continue;
+            any_boxed = true;
+            buf_printf(out, "        case %d:\n", (int)(TUR_ANY_ID_BASE + i));
+        }
+        if (any_boxed)
+            buf_puts(out, "            free((void *)(intptr_t)TUR_UNTAG(__v));\n"
+                          "            return;\n");
+    }
+    buf_puts(out, "        default: return;\n    }\n}\n");
+    buf_puts(out, "static void (*__tur_any_drop_keep)(tur_tagged_t) "
+                  "__attribute__((unused)) = __tur_any_drop;\n");
+    if (!ctx || ctx->n_any_type_names == 0) return;   /* nothing to name */
+    buf_puts(out, "static const char *__tur_any_name_ext(int64_t tag) {\n");
+    if (ctx && ctx->n_any_type_names) {
+        buf_puts(out, "    switch (tag) {\n");
+        for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
+            buf_printf(out, "        case %d: return \"%s\";\n",
+                       (int)(TUR_ANY_ID_BASE + i), ctx->any_type_shown[i]);
+        }
+        buf_puts(out, "        default: break;\n");
+        buf_puts(out, "    }\n");
+    }
+    buf_puts(out, "    (void)tag;\n    return \"unknown\";\n}\n");
+
+    /* Installed from __tur_static_init (the KEYS band runs before any user
+     * code), so the preamble's __tur_any_type_name can reach it. */
+    buf_puts(out, "static void __tur_any_names_init(void) {\n");
+    buf_puts(out, "    g_tur_any_name_ext = __tur_any_name_ext;\n}\n");
+    static_init_register("__tur_any_names_init", STATIC_INIT_KEYS);
+}
+
 static char *typed_fatshim_name(Type result_type, Type *param_types, uint8_t n_params) {
     Buf name;
     buf_init(&name);
@@ -676,6 +859,20 @@ static char *typed_fatshim_name(Type result_type, Type *param_types, uint8_t n_p
  * Filled from __tur_static_init rather than a static initializer: casting a
  * function pointer to int64_t is not an address constant, and S1b exists
  * precisely so startup work survives any C11 front end (c2mir included). */
+bool ensure_fatbox_keep(EmitCtx *ctx) {
+    if (!ctx || !ctx->thunk_typedefs) return false;
+    if (ctx->fatbox_keep_emitted) return true;
+    ctx->fatbox_keep_emitted = true;
+    buf_puts(ctx->thunk_typedefs,
+        "/* fn-value-fat-normalization: no-op drop glue for statically (or, for\n"
+        " * a proven non-retaining sink, stack-) allocated { shim, orig } boxes.\n"
+        " * tur_closure_drop treats a NULL header as \"free the base allocation\",\n"
+        " * which would free() a non-heap address; this makes every drop of such\n"
+        " * a box a no-op. */\n"
+        "static void __tur_fatbox_keep(void *__e) { (void)__e; }\n");
+    return true;
+}
+
 const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
                                         const char *fnptr) {
     if (!ctx || !ctx->fatbox_init || !ctx->thunk_typedefs) return NULL;
@@ -687,9 +884,7 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
     for (uint32_t i = 0; i < ctx->n_fatbox_keys; i++) {
         if (strcmp(ctx->fatbox_keys[i], key.data) == 0) {
             buf_free(&key);
-            static char name[96];
-            snprintf(name, sizeof name, "__tur_fatbox_%u", (unsigned)i);
-            return name;
+            return ctx->fatbox_names[i];
         }
     }
     if (ctx->n_fatbox_keys >= ctx->cap_fatbox_keys) {
@@ -697,6 +892,9 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
         char **nn = (char **)realloc(ctx->fatbox_keys, nc * sizeof(char *));
         if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
         ctx->fatbox_keys = nn;
+        char **nm = (char **)realloc(ctx->fatbox_names, nc * sizeof(char *));
+        if (!nm) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatbox_names = nm;
         ctx->cap_fatbox_keys = nc;
     }
     uint32_t idx = ctx->n_fatbox_keys++;
@@ -704,14 +902,19 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
     if (!ctx->fatbox_keys[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
     buf_free(&key);
 
-    if (idx == 0) {
-        buf_puts(ctx->thunk_typedefs,
-            "/* fn-value-fat-normalization: no-op drop glue for statically\n"
-            " * allocated { shim, orig } boxes.  tur_closure_drop treats a NULL\n"
-            " * header as \"free the base allocation\", which would free() a\n"
-            " * static address; this makes every drop of such a box a no-op. */\n"
-            "static void __tur_fatbox_keep(void *__e) { (void)__e; }\n");
+    /* One OWNED name per box, freed with the keys.  Not a function-scoped
+     * `static char[96]`: the caller that holds two of these -- or stashes one
+     * and emits later -- would then get the same spelling twice, with no crash
+     * and no diagnostic, just wrong C.  See
+     * docs/archive/c-name-accessors-share-static-buffers.md. */
+    {
+        char nb[96];
+        snprintf(nb, sizeof nb, "__tur_fatbox_%u", (unsigned)idx);
+        ctx->fatbox_names[idx] = strdup(nb);
+        if (!ctx->fatbox_names[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
     }
+
+    ensure_fatbox_keep(ctx);
     /* The drop-glue header is a STATIC initializer, not a fill: `__a` is the
      * union's first member and occupies exactly the header slot, and a
      * function-pointer-to-void* conversion is an address constant (the
@@ -735,8 +938,92 @@ const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
         "      __s[1] = (int64_t)(intptr_t)%s; }\n",
         (unsigned)idx, shim, fnptr);
 
-    static char name[96];
-    snprintf(name, sizeof name, "__tur_fatbox_%u", (unsigned)idx);
+    return ctx->fatbox_names[idx];
+}
+
+/* catch-unwind-aggregate-return-miscompiled: the per-type boxing trampoline a
+ * catch boundary uses for an aggregate-returning thunk.  Calls the fat box
+ * through slot 0 with the thunk's REAL signature (`T (*)(void *)`, which is
+ * what both the typed fatshim and a capturing closure's entry are) and returns
+ * a heap copy, so the int64 the result box carries really is a `T *`.
+ * Deduped by name in the same table as the typed fatshims. */
+const char *ensure_catch_box_shim(EmitCtx *ctx, Type result_type) {
+    if (!ctx) return NULL;
+    const char *ct = type_c_name(result_type);
+    if (!ct || !*ct) return NULL;
+
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_catchbox_");
+    append_sanitized_c_token(&nb, ct);
+    buf_putc(&nb, '\0');
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], nb.data) == 0) {
+            const char *found = ctx->fatshim_names[i];
+            buf_free(&nb);
+            return found;
+        }
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = name;
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static int64_t %s(void *__e) {\n", name);
+    buf_printf(target, "    %s *__b = (%s *)malloc(sizeof(%s));\n", ct, ct, ct);
+    buf_printf(target, "    *__b = ((%s (*)(void *))(intptr_t)((int64_t *)__e)[0])(__e);\n", ct);
+    buf_puts(target, "    return (int64_t)(intptr_t)__b;\n}\n");
+    return name;
+}
+
+/* catch-unwind-aggregate-return-miscompiled (float half): the same
+ * function-pointer mismatch bites a FLOAT-returning thunk -- the double comes
+ * back in a floating-point register while `TUR_APPLY0` reads the integer one,
+ * so `(catch-unwind (fn [] : float 7.5))` boxed whatever was in rax and the
+ * consumer's `((union { int64_t s; double d; }){.s = ok_val}).d` read it back
+ * as 0.  This trampoline calls with the real signature and returns the BITS,
+ * which is what that union expects.  Unlike the aggregate one it allocates
+ * nothing, so its `_via` call passes owns=0. */
+const char *ensure_catch_bits_shim(EmitCtx *ctx, Type result_type) {
+    if (!ctx) return NULL;
+    const char *ct = type_c_name(result_type);
+    if (!ct || !*ct) return NULL;
+
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_catchbits_");
+    append_sanitized_c_token(&nb, ct);
+    buf_putc(&nb, '\0');
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], nb.data) == 0) {
+            const char *found = ctx->fatshim_names[i];
+            buf_free(&nb);
+            return found;
+        }
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = name;
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static int64_t %s(void *__e) {\n", name);
+    buf_printf(target, "    union { int64_t s; %s f; } __u; __u.s = 0;\n", ct);
+    buf_printf(target, "    __u.f = ((%s (*)(void *))(intptr_t)((int64_t *)__e)[0])(__e);\n", ct);
+    buf_puts(target, "    return __u.s;\n}\n");
     return name;
 }
 
@@ -780,7 +1067,8 @@ char *ensure_typed_fatshim(EmitCtx *ctx,
     bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
     buf_printf(target, "static %s %s(void *__e", type_c_name(result_type), name);
     for (uint32_t i = 0; i < n_params; i++) {
-        buf_printf(target, ", %s a%u", type_c_name(param_types[i]), (unsigned)i);
+        buf_printf(target, ", %s a%u", thunk_param_slot_c_name(param_types[i]),
+                   (unsigned)i);
     }
     buf_puts(target, ") {\n    ");
     if (has_ret) buf_puts(target, "return ");
@@ -790,15 +1078,175 @@ char *ensure_typed_fatshim(EmitCtx *ctx,
     } else {
         for (uint32_t i = 0; i < n_params; i++) {
             if (i) buf_puts(target, ", ");
-            buf_puts(target, type_c_name(param_types[i]));
+            /* SR-fat-abi: the BARE fn behind the shim keeps its own ABI --
+             * `const T *` for a pbp aggregate, the aggregate by value below
+             * the pbp threshold.  The shim is where the box-pointer slot
+             * meets it. */
+            Type rp = param_types[i];
+            /* App-aware: a parametric monomorph reaches the pbp threshold the
+             * same way, via adt_app_byval_pass_by_ptr. */
+            bool rp_pbp = (rp.kind == TY_ADT && rp.as.adt_.def)
+                              ? adt_byval_pass_by_ptr(rp.as.adt_.def)
+                              : adt_app_byval_pass_by_ptr(rp);
+            if (type_is_b4box_closure_slot(rp) && rp_pbp)
+                buf_printf(target, "const %s *", type_c_name(rp));
+            else
+                buf_puts(target, type_c_name(rp));
         }
     }
     buf_puts(target, "))(intptr_t)((int64_t *)__e)[1])(");
     for (uint32_t i = 0; i < n_params; i++) {
         if (i) buf_puts(target, ", ");
-        buf_printf(target, "a%u", (unsigned)i);
+        Type rp = param_types[i];
+        bool rp_pbp = (rp.kind == TY_ADT && rp.as.adt_.def)
+                          ? adt_byval_pass_by_ptr(rp.as.adt_.def)
+                          : adt_app_byval_pass_by_ptr(rp);
+        if (type_is_b4box_closure_slot(rp) && rp_pbp)
+            /* pbp callee: the box pointer IS the address it wants. */
+            buf_printf(target, "(const %s *)(intptr_t)a%u",
+                       type_c_name(rp), (unsigned)i);
+        else if (type_is_b4box_closure_slot(rp))
+            /* by-value callee below the pbp threshold: deref the box. */
+            buf_printf(target, "*(%s *)(intptr_t)a%u",
+                       type_c_name(rp), (unsigned)i);
+        else
+            buf_printf(target, "a%u", (unsigned)i);
     }
     buf_puts(target, ");\n}\n");
+    return name;
+}
+
+/* arrow-struct-typed-arrow-abi: the CARRIER fatshim -- slot 0 spelled exactly
+ * as an erased consumer casts it (`int64_t (*)(void *, int64_t...)`), with each
+ * wide by-value parameter unboxed and a wide by-value result boxed.
+ *
+ * `use_typed_thunk_abi` ANDs the result and the parameters, so a result that
+ * thunk_type_has_concrete_c_abi declines -- an app monomorph at or below the
+ * 16-byte sret threshold, deliberately kept on the generic forwarding shim so
+ * the erased `int64_t` cast in slot 0 stays honest -- also took down the
+ * PARAMETER bridge that same signature needed.  Those are not one decision.  A
+ * wide by-value aggregate crosses a fat boundary as an int64 heap-box POINTER
+ * (thunk_param_slot_c_name); the generic shim's `int64_t (*)(int64_t)` cast
+ * instead handed the pointer straight to a callee that reads a by-value struct
+ * out of two registers, and read its aggregate return as the first eightbyte.
+ * Both halves silently wrong, because slot 0's own spelling never lied.
+ *
+ * This shim is the missing bridge, and it is deliberately NOT
+ * ensure_typed_fatshim with an int64 result: that would still cast the callee
+ * to int64-returning and hand back `e1`, where an erased consumer of a wide
+ * aggregate wants the carrier -- a `T *`, the same convention the parameter
+ * side and ensure_catch_box_shim already use.
+ *
+ * Applicability is kept to exactly the broken set: at least one parameter must
+ * be a b4box slot.  A signature whose parameters are all fine and whose result
+ * is merely a <= 16 byte monomorph keeps the generic forwarding shim it has
+ * today, where the register-returned aggregate passes through the tail-call to
+ * a typed consumer untouched.  Results other than a b4box aggregate or a plain
+ * int64 carrier decline too -- a `double` result would need a conversion here,
+ * not a reinterpret, and no caller has asked for one. */
+char *ensure_carrier_fatshim(EmitCtx *ctx,
+                             Type result_type, Type *param_types, uint8_t n_params) {
+    if (!ctx) return NULL;
+
+    bool any_b4box_param = false;
+    for (uint32_t i = 0; i < n_params; i++) {
+        if (!thunk_type_has_concrete_c_abi(param_types[i], /*result_pos=*/false))
+            return NULL;
+        if (type_is_b4box_closure_slot(param_types[i])) any_b4box_param = true;
+    }
+    if (!any_b4box_param) return NULL;
+
+    bool box_result = type_is_b4box_closure_slot(result_type);
+    if (!box_result &&
+        (!thunk_type_has_concrete_c_abi(result_type, /*result_pos=*/false) ||
+         strcmp(type_c_name(result_type), "int64_t") != 0))
+        return NULL;
+
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_fatshim_carrier_");
+    append_sanitized_c_token(&nb, type_c_name(result_type));
+    for (uint32_t i = 0; i < n_params; i++) {
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, type_c_name(param_types[i]));
+    }
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    const char *rc = type_c_name(result_type);
+
+    buf_printf(target, "static int64_t %s(void *__e", name);
+    for (uint32_t i = 0; i < n_params; i++) {
+        buf_printf(target, ", %s a%u", thunk_param_slot_c_name(param_types[i]),
+                   (unsigned)i);
+    }
+    buf_puts(target, ") {\n    ");
+    if (box_result) buf_printf(target, "%s __r = ", rc);
+    else            buf_puts(target, "return ");
+
+    /* The bare fn behind the shim keeps its own ABI, exactly as
+     * ensure_typed_fatshim spells it: `const T *` for a pbp aggregate, the
+     * aggregate by value below the pbp threshold. */
+    buf_printf(target, "((%s (*)(", rc);
+    if (n_params == 0) {
+        buf_puts(target, "void");
+    } else {
+        for (uint32_t i = 0; i < n_params; i++) {
+            if (i) buf_puts(target, ", ");
+            Type rp = param_types[i];
+            bool rp_pbp = (rp.kind == TY_ADT && rp.as.adt_.def)
+                              ? adt_byval_pass_by_ptr(rp.as.adt_.def)
+                              : adt_app_byval_pass_by_ptr(rp);
+            if (type_is_b4box_closure_slot(rp) && rp_pbp)
+                buf_printf(target, "const %s *", type_c_name(rp));
+            else
+                buf_puts(target, type_c_name(rp));
+        }
+    }
+    buf_puts(target, "))(intptr_t)((int64_t *)__e)[1])(");
+    for (uint32_t i = 0; i < n_params; i++) {
+        if (i) buf_puts(target, ", ");
+        Type rp = param_types[i];
+        bool rp_pbp = (rp.kind == TY_ADT && rp.as.adt_.def)
+                          ? adt_byval_pass_by_ptr(rp.as.adt_.def)
+                          : adt_app_byval_pass_by_ptr(rp);
+        if (type_is_b4box_closure_slot(rp) && rp_pbp)
+            buf_printf(target, "(const %s *)(intptr_t)a%u",
+                       type_c_name(rp), (unsigned)i);
+        else if (type_is_b4box_closure_slot(rp))
+            buf_printf(target, "*(%s *)(intptr_t)a%u",
+                       type_c_name(rp), (unsigned)i);
+        else
+            buf_printf(target, "a%u", (unsigned)i);
+    }
+    buf_puts(target, ");\n");
+    if (box_result) {
+        /* Hand the erased consumer the carrier it expects: a heap copy, so the
+         * int64 it reads really is a `T *`.  Same shape as ensure_catch_box_shim
+         * -- the box is owned by the consumer's carrier discipline, not by the
+         * shim. */
+        buf_printf(target,
+                   "    %s *__b = (%s *)malloc(sizeof *__b);\n"
+                   "    *__b = __r;\n"
+                   "    return (int64_t)(intptr_t)__b;\n",
+                   rc, rc);
+    }
+    buf_puts(target, "}\n");
     return name;
 }
 
@@ -994,6 +1442,225 @@ char *ensure_fat_aggregate_spill_shim(EmitCtx *ctx, Type result_type,
     return name;
 }
 
+/* erased-float-carrier (the float32 residue of erased-generic-field-read-
+ * overruns-subword-monomorph-box): a poly wrapper carries a float-class
+ * argument/result NATIVELY (`float`/`double`, xmm0) so it agrees with a typed
+ * `:fn` cast or a typed poly-to-fat shim -- but an ERASED typeclass-method
+ * sink (`g : (fn [a] b)`) is compiled once for every `a` and invokes the thunk
+ * through `((int64_t (*)(void*, int64_t))g.fn)`: integer registers in, RAX
+ * out.  The two ABIs cannot both be the thunk, so at the positions the sink
+ * reads as the carrier we bridge: the shim takes/returns the int64 BITS of
+ * the float (tur_sc_bits_f32 / tur_sc_f32_from_bits and the f64 twins -- a
+ * memcpy, byte-positioned, so a float32 lands in the first four bytes, the
+ * same bytes the erased field reader recovers it from) and calls the native
+ * wrapper.  Non-erased positions keep the wrapper's own C type and are
+ * forwarded untouched. */
+static const char *float_carrier_kind(const char *cn) {
+    if (!cn) return NULL;
+    if (strcmp(cn, "float") == 0) return "f32";
+    if (strcmp(cn, "double") == 0) return "f64";
+    return NULL;
+}
+
+static bool float_carrier_shim_needed(Type result_type, Type *param_types,
+                                      uint8_t n_params, uint64_t erased_mask,
+                                      bool erased_result) {
+    if (erased_result && float_carrier_kind(type_c_name(result_type))) return true;
+    for (uint8_t i = 0; i < n_params; i++) {
+        if ((erased_mask & ARG_IDX_BIT(i)) &&
+            float_carrier_kind(type_c_name(param_types[i])))
+            return true;
+    }
+    return false;
+}
+
+static bool float_carrier_shim_register(EmitCtx *ctx, const char *name) {
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return false;
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    return true;
+}
+
+/* Spell the shim's own signature and the argument/result bridges.  `callee`
+ * is the expression that names the native thunk (a wrapper name, or a cast
+ * `__f` read out of the env). */
+static void float_carrier_shim_body(Buf *target, const char *name,
+                                    const char *callee, Type result_type,
+                                    Type *param_types, uint8_t n_params,
+                                    uint64_t erased_mask, bool erased_result) {
+    const char *rc = type_c_name(result_type);
+    const char *rk = erased_result ? float_carrier_kind(rc) : NULL;
+    buf_printf(target, "static %s %s(void *__e", rk ? "int64_t" : rc, name);
+    for (uint8_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        bool bits = (erased_mask & ARG_IDX_BIT(i)) && float_carrier_kind(pc);
+        buf_printf(target, ", %s a%u", bits ? "int64_t" : pc, (unsigned)i);
+    }
+    buf_puts(target, ") {\n    ");
+    buf_printf(target, "%s __r = %s(__e", rc, callee);
+    for (uint8_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        const char *pk = (erased_mask & ARG_IDX_BIT(i)) ? float_carrier_kind(pc) : NULL;
+        if (pk) buf_printf(target, ", tur_sc_%s_from_bits(a%u)", pk, (unsigned)i);
+        else buf_printf(target, ", a%u", (unsigned)i);
+    }
+    buf_puts(target, ");\n    ");
+    if (rk) buf_printf(target, "return tur_sc_bits_%s(__r);\n}\n", rk);
+    else buf_puts(target, "return __r;\n}\n");
+}
+
+char *ensure_float_carrier_shim(EmitCtx *ctx, const char *real_fn,
+                                Type result_type, Type *param_types,
+                                uint8_t n_params, uint64_t erased_mask,
+                                bool erased_result) {
+    if (!float_carrier_shim_needed(result_type, param_types, n_params,
+                                   erased_mask, erased_result))
+        return NULL;
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_fltcarrier_");
+    append_sanitized_c_token(&nb, real_fn);
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    if (!float_carrier_shim_register(ctx, name)) return name;
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    /* Early section, ahead of the wrapper's own forward declaration: prototype
+     * it first (same reason as the aggregate spill shim). */
+    buf_printf(target, "static %s %s(void *", type_c_name(result_type), real_fn);
+    for (uint8_t i = 0; i < n_params; i++)
+        buf_printf(target, ", %s", type_c_name(param_types[i]));
+    buf_puts(target, ");\n");
+    float_carrier_shim_body(target, name, real_fn, result_type, param_types,
+                            n_params, erased_mask, erased_result);
+    return name;
+}
+
+char *ensure_fat_float_carrier_shim(EmitCtx *ctx, Type result_type,
+                                    Type *param_types, uint8_t n_params,
+                                    uint64_t erased_mask, bool erased_result) {
+    if (!float_carrier_shim_needed(result_type, param_types, n_params,
+                                   erased_mask, erased_result))
+        return NULL;
+    const char *rc = type_c_name(result_type);
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_fatfltcarrier_");
+    append_sanitized_c_token(&nb, rc);
+    for (uint8_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        if (!pc) { buf_free(&nb); return NULL; }
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, pc);
+    }
+    buf_printf(&nb, "_m%llx%s", (unsigned long long)erased_mask,
+               erased_result ? "r" : "");
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    if (!float_carrier_shim_register(ctx, name)) return name;
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    /* The native thunk is `__fn`, slot 0 of every closure env (the offset the
+     * uncast fat-closure emit reads); cast it to its real signature inside the
+     * call expression so the bridged call is a single statement. */
+    Buf callee; buf_init(&callee);
+    buf_printf(&callee, "((%s (*)(void *", rc);
+    for (uint8_t i = 0; i < n_params; i++)
+        buf_printf(&callee, ", %s", type_c_name(param_types[i]));
+    buf_puts(&callee, "))(intptr_t)((int64_t *)__e)[0])");
+    buf_putc(&callee, '\0');
+    float_carrier_shim_body(target, name, callee.data, result_type, param_types,
+                            n_params, erased_mask, erased_result);
+    buf_free(&callee);
+    return name;
+}
+
+/* let-bound-noncapturing-lambda-segfaults-as-fn-arg: adapter for a `:fn` value
+ * that is a BARE C function pointer rather than a closure box.
+ *
+ * A `tur_poly_fn_t` consumer always calls `f.fn(f.env, args...)`, and every
+ * other lowering of a `:fn` value satisfies that: a capturing closure boxes
+ * its env with the code pointer in slot 0, and an inline lambda gets a
+ * `__poly_` wrapper with the env parameter spliced in.  A let-bound
+ * NON-capturing lambda is the third lowering -- it binds the raw
+ * `int64_t (*)(int64_t)` with no box at all, so reading "slot 0" read the
+ * first eight bytes of the function's own machine code and jumped to them.
+ *
+ * The fix keeps one consumer contract instead of teaching the consumer a
+ * second one: stash the bare pointer in the `env` slot, where it fits (it is
+ * pointer-sized), and pair it with this shim, which casts `env` back to the
+ * env-less signature and calls it with the arguments only.  The shim is keyed
+ * by signature and references no local, so it lives at file scope like the
+ * spill shims above. */
+char *ensure_bare_fnptr_poly_shim(EmitCtx *ctx, Type result_type,
+                                  Type *param_types, uint8_t n_params) {
+    const char *rc = type_c_name(result_type);
+    if (!rc) return NULL;
+
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_barefn_");
+    append_sanitized_c_token(&nb, rc);
+    for (uint8_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        if (!pc) { buf_free(&nb); return NULL; }
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, pc);
+    }
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static %s %s(void *__e", rc, name);
+    for (uint32_t i = 0; i < n_params; i++)
+        buf_printf(target, ", %s a%u", type_c_name(param_types[i]), (unsigned)i);
+    buf_puts(target, ") {\n    ");
+    buf_printf(target, "%s (*__f)(", rc);
+    if (n_params == 0) buf_puts(target, "void");
+    for (uint32_t i = 0; i < n_params; i++) {
+        if (i) buf_puts(target, ", ");
+        buf_puts(target, type_c_name(param_types[i]));
+    }
+    buf_printf(target, ") = (%s (*)(", rc);
+    if (n_params == 0) buf_puts(target, "void");
+    for (uint32_t i = 0; i < n_params; i++) {
+        if (i) buf_puts(target, ", ");
+        buf_puts(target, type_c_name(param_types[i]));
+    }
+    buf_puts(target, "))(intptr_t)__e;\n    return __f(");
+    for (uint32_t i = 0; i < n_params; i++) {
+        if (i) buf_puts(target, ", ");
+        buf_printf(target, "a%u", (unsigned)i);
+    }
+    buf_puts(target, ");\n}\n");
+    return name;
+}
+
 static char *typed_poly_to_fat_name(Type result_type, const Type *arg_types,
                                     uint32_t n_args) {
     Buf name;
@@ -1023,9 +1690,17 @@ char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type,
     /* All-int64_t carrier signatures are likewise served by the preamble shim
      * (its int64_t (*)(void *, int64_t...) ABI equals the typed-thunk cast), so
      * emit nothing new and keep int64/pointer poly boxes churn-free. */
+    /* poly-to-fat-wide-byval-arg: compare on the SLOT spelling, not the type's
+     * own C name.  A wide by-value aggregate occupies an int64 slot here (it
+     * crosses as a heap-box pointer), so `(fn [(Tuple2 int int)] int)` really
+     * is an all-int64 signature and the preamble shim already serves it --
+     * better than the typed shim did, which used to declare the aggregate by
+     * value and survive only because the caller's pointer happened to sit in
+     * the register the struct's first eightbyte was read from. */
     bool all_int64 = strcmp(type_c_name(result_type), "int64_t") == 0;
     for (uint32_t i = 0; all_int64 && i < n_args; i++) {
-        if (strcmp(type_c_name(arg_types[i]), "int64_t") != 0) all_int64 = false;
+        if (strcmp(thunk_param_slot_c_name(arg_types[i]), "int64_t") != 0)
+            all_int64 = false;
     }
     if (all_int64) return NULL;
 
@@ -1054,21 +1729,111 @@ char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type,
      * The carrier erases the signature to int64_t (*)(void *, int64_t...); this
      * shim re-types it back to the true R (*)(void *, A0..An) so the sink's
      * typed-thunk cast at slot 0 matches the actual ABI and every argument is
-     * forwarded. */
+     * forwarded.
+     *
+     * poly-to-fat-wide-byval-arg: each PARAMETER is spelled with
+     * thunk_param_slot_c_name, the same routine the sink's typed-thunk typedef
+     * uses, so the two agree by construction -- a wide by-value aggregate is an
+     * int64 heap-box pointer on both sides.  It is also what slot 1 wants: the
+     * poly wrapper (make_poly_wrapper) declares such a parameter as the int64
+     * carrier and does its own deref.  So unlike the bare-fn typed fatshim,
+     * this shim never bridges an argument -- it forwards the slot word as-is.
+     * Spelling the aggregate by value here instead put the caller's pointer and
+     * the callee's read in different registers (and, for a float-field
+     * aggregate, different register CLASSES); it survived only because the shim
+     * happened not to clobber the register the pointer arrived in. */
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
     const char *rc = type_c_name(result_type);
     bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
     buf_printf(target, "static %s %s(void *__e", rc, name);
     for (uint32_t i = 0; i < n_args; i++) {
-        buf_printf(target, ", %s a%u", type_c_name(arg_types[i]), (unsigned)i);
+        buf_printf(target, ", %s a%u", thunk_param_slot_c_name(arg_types[i]),
+                   (unsigned)i);
     }
     buf_puts(target, ") {\n    int64_t *__b = (int64_t *)__e;\n    ");
     if (has_ret) buf_puts(target, "return ");
     buf_printf(target, "((%s (*)(void *", rc);
-    for (uint32_t i = 0; i < n_args; i++) buf_printf(target, ", %s", type_c_name(arg_types[i]));
+    for (uint32_t i = 0; i < n_args; i++)
+        buf_printf(target, ", %s", thunk_param_slot_c_name(arg_types[i]));
     buf_puts(target, "))(intptr_t)__b[1])((void *)(intptr_t)__b[2]");
     for (uint32_t i = 0; i < n_args; i++) buf_printf(target, ", a%u", (unsigned)i);
     buf_puts(target, ");\n}\n");
+    return name;
+}
+
+char *ensure_typed_poly_to_fat_erased(EmitCtx *ctx, Type result_type,
+                                      const Type *arg_types, uint32_t n_args,
+                                      uint64_t erased_mask, bool erased_result) {
+    if (!use_typed_thunk_abi(result_type, (Type *)arg_types, (uint8_t)n_args)) return NULL;
+    const char *rc = type_c_name(result_type);
+    const char *rk = erased_result ? float_carrier_kind(rc) : NULL;
+    bool any = rk != NULL;
+    for (uint32_t i = 0; !any && i < n_args; i++) {
+        if ((erased_mask & ARG_IDX_BIT(i)) &&
+            float_carrier_kind(thunk_param_slot_c_name(arg_types[i])))
+            any = true;
+    }
+    if (!any) return NULL;
+
+    char *base = typed_poly_to_fat_name(result_type, arg_types, n_args);
+    Buf nb; buf_init(&nb);
+    buf_printf(&nb, "%s_erased_m%llx%s", base, (unsigned long long)erased_mask,
+               erased_result ? "r" : "");
+    buf_putc(&nb, '\0');
+    free(base);
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < ctx->n_poly_fatshim_names; i++) {
+        if (strcmp(ctx->poly_fatshim_names[i], name) == 0) return name;
+    }
+    if (ctx->n_poly_fatshim_names >= ctx->cap_poly_fatshim_names) {
+        uint32_t new_cap = ctx->cap_poly_fatshim_names ? ctx->cap_poly_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->poly_fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->poly_fatshim_names = nn;
+        ctx->cap_poly_fatshim_names = new_cap;
+    }
+    ctx->poly_fatshim_names[ctx->n_poly_fatshim_names++] = strdup(name);
+    if (!ctx->poly_fatshim_names[ctx->n_poly_fatshim_names - 1]) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+
+    /* static R name(void *__e, A0 a0, ...) {
+     *     int64_t *__b = (int64_t *)__e;
+     *     <R'> __r = ((R' (*)(void *, A0', ...))(intptr_t)__b[1])((void *)__b[2], a0', ...);
+     *     return <bridge>(__r);
+     * }
+     * where an erased float position is int64_t in the stored thunk's
+     * signature and crosses through the tur_sc bits helpers. */
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
+    buf_printf(target, "static %s %s(void *__e", rc, name);
+    for (uint32_t i = 0; i < n_args; i++)
+        buf_printf(target, ", %s a%u", thunk_param_slot_c_name(arg_types[i]), (unsigned)i);
+    buf_puts(target, ") {\n    int64_t *__b = (int64_t *)__e;\n    ");
+    const char *inner_rc = rk ? "int64_t" : rc;
+    if (has_ret) buf_printf(target, "%s __r = ", inner_rc);
+    buf_printf(target, "((%s (*)(void *", inner_rc);
+    for (uint32_t i = 0; i < n_args; i++) {
+        const char *pc = thunk_param_slot_c_name(arg_types[i]);
+        bool bits = (erased_mask & ARG_IDX_BIT(i)) && float_carrier_kind(pc);
+        buf_printf(target, ", %s", bits ? "int64_t" : pc);
+    }
+    buf_puts(target, "))(intptr_t)__b[1])((void *)(intptr_t)__b[2]");
+    for (uint32_t i = 0; i < n_args; i++) {
+        const char *pc = thunk_param_slot_c_name(arg_types[i]);
+        const char *pk = (erased_mask & ARG_IDX_BIT(i)) ? float_carrier_kind(pc) : NULL;
+        if (pk) buf_printf(target, ", tur_sc_bits_%s(a%u)", pk, (unsigned)i);
+        else buf_printf(target, ", a%u", (unsigned)i);
+    }
+    buf_puts(target, ");\n");
+    if (has_ret) {
+        if (rk) buf_printf(target, "    return tur_sc_%s_from_bits(__r);\n", rk);
+        else buf_puts(target, "    return __r;\n");
+    }
+    buf_puts(target, "}\n");
     return name;
 }
 
@@ -1103,7 +1868,7 @@ static bool emit_abi_type_has_named_tyvar(const Type *t) {
  * whose only abstract bindings are row variables does not require
  * specialization to resolve -- the carrier definition is sufficient.
  * Filed at
- * docs/reported/row-polymorphic-defn-call-from-row-polymorphic-context-missing-codegen.md
+ * docs/archive/history/row-polymorphic-defn-call-from-row-polymorphic-context-missing-codegen.md
  * before the fix. */
 static bool emit_abi_type_has_concrete_named_tyvar(const Type *t) {
     if (!t) return false;
@@ -1445,8 +2210,17 @@ static Binding *emit_find_passed_spec_closure(const Expr *e,
             return emit_find_passed_spec_closure(e->as.fn_to_fat_.inner, bindings, n_bindings, arena);
         case EX_POLY_TO_FAT:
             return emit_find_passed_spec_closure(e->as.poly_to_fat_.inner, bindings, n_bindings, arena);
-        case EX_LET:
+        case EX_LET: {
+            /* RM1 (bind chains): a passed closure the call-site hoist moved
+             * into a `__borrowc` let now sits in the let's INIT, with the
+             * call referencing the binding -- so look at the inits too. */
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                Binding *r = emit_find_passed_spec_closure(
+                    e->as.let_.bindings[i].init, bindings, n_bindings, arena);
+                if (r) return r;
+            }
             return emit_find_passed_spec_closure(e->as.let_.body, bindings, n_bindings, arena);
+        }
         case EX_DO: {
             for (uint32_t i = 0; i < e->as.do_.n; i++) {
                 Binding *r = emit_find_passed_spec_closure(
@@ -1524,6 +2298,10 @@ static void emit_collect_passed_spec_closures(
                                               n_bindings, arena, out, cap, n_out);
             return;
         case EX_LET:
+            /* As in the single-result finder: a hoisted `__borrowc` init. */
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                emit_collect_passed_spec_closures(e->as.let_.bindings[i].init, bindings,
+                                                  n_bindings, arena, out, cap, n_out);
             emit_collect_passed_spec_closures(e->as.let_.body, bindings,
                                               n_bindings, arena, out, cap, n_out);
             return;
@@ -2002,6 +2780,79 @@ static void emit_abi_note_carrier_call(EmitCtx *ctx, const Binding *binding) {
     ctx->carrier_call_bindings[ctx->n_carrier_call_bindings++] = binding;
 }
 
+/* dead-base-thunk-chain-references-undefined-ctor: register a suffix-less
+ * reference to the base ctor of a heap parametric ADT.  Such a ctor is never
+ * defined (only per-spec monomorphs are), and every reference sits on the
+ * dead base generic chain -- so instead of leaving an undefined symbol that
+ * only `-O2` dead-stripping can survive, a static trap definition is flushed
+ * into the forward-decl band (emit_flush_dead_base_ctor_traps below). */
+void emit_note_dead_base_ctor(EmitCtx *ctx, const char *mangled, uint32_t n_args) {
+    if (!ctx || !mangled) return;
+    for (uint32_t i = 0; i < ctx->n_dead_base_ctors; i++) {
+        if (strcmp(ctx->dead_base_ctor_names[i], mangled) == 0) return;
+    }
+    if (ctx->n_dead_base_ctors >= ctx->cap_dead_base_ctors) {
+        uint32_t new_cap = ctx->cap_dead_base_ctors
+                           ? ctx->cap_dead_base_ctors * 2 : 4;
+        char **grown_n = (char **)realloc(ctx->dead_base_ctor_names,
+            new_cap * sizeof(char *));
+        uint32_t *grown_a = (uint32_t *)realloc(ctx->dead_base_ctor_arities,
+            new_cap * sizeof(uint32_t));
+        if (!grown_n || !grown_a) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->dead_base_ctor_names = grown_n;
+        ctx->dead_base_ctor_arities = grown_a;
+        ctx->cap_dead_base_ctors = new_cap;
+    }
+    char *dup = strdup(mangled);
+    if (!dup) { fprintf(stderr, "tur: oom\n"); abort(); }
+    ctx->dead_base_ctor_names[ctx->n_dead_base_ctors] = dup;
+    ctx->dead_base_ctor_arities[ctx->n_dead_base_ctors] = n_args;
+    ctx->n_dead_base_ctors++;
+}
+
+/* Flush the registered dead-base-ctor traps as static file-scope definitions.
+ * `out` must be a band the final assembly places BEFORE the function bodies
+ * (the forward-decl band), so the definition is in scope at every reference
+ * without any block-scope declaration.  Static: in project mode each TU
+ * carries its own copy of the dead chain, and internal linkage keeps the
+ * per-TU stubs from colliding at link.  A genuinely live call was an
+ * unconditional `undefined reference` before this existed, so nothing that
+ * links today can regress -- it can only turn a dead symbol into a clean
+ * link, or a compiler-defect invocation into a loud abort. */
+void emit_flush_dead_base_ctor_traps(EmitCtx *ctx, Buf *out) {
+    if (!ctx) return;
+    for (uint32_t i = 0; i < ctx->n_dead_base_ctors; i++) {
+        const char *nm = ctx->dead_base_ctor_names[i];
+        uint32_t arity = ctx->dead_base_ctor_arities[i];
+        if (i == 0)
+            buf_puts(out,
+                "/* Trap stand-ins for base ctors of parametric heap ADTs: never\n"
+                " * defined (only per-spec monomorphs are), referenced only from the\n"
+                " * dead base generic chain.  Defined so a -O0 compile links clean. */\n");
+        buf_printf(out, "static int64_t ctor_%s(", nm);
+        if (arity == 0) {
+            buf_puts(out, "void");
+        } else {
+            for (uint32_t a = 0; a < arity; a++)
+                buf_printf(out, "%sint64_t _%u", a ? ", " : "", a);
+        }
+        buf_printf(out,
+            ") {\n"
+            "    fprintf(stderr, \"tur: internal error: base constructor "
+            "'ctor_%s' of a parametric type has no definition; a call reached "
+            "the dead base generic path instead of a per-spec clone\\n\");\n"
+            "    abort();\n"
+            "}\n", nm);
+        free(ctx->dead_base_ctor_names[i]);
+    }
+    free(ctx->dead_base_ctor_names);
+    free(ctx->dead_base_ctor_arities);
+    ctx->dead_base_ctor_names = NULL;
+    ctx->dead_base_ctor_arities = NULL;
+    ctx->n_dead_base_ctors = 0;
+    ctx->cap_dead_base_ctors = 0;
+}
+
 /* Mark a typeclass instance LIVE for dead-instance elimination: a reference to
  * its dict singleton (EX_DICT dispatch, or an existential witness table that
  * stores `&dict_<Class>_<T>_singleton`) keeps the dict alive, so its method
@@ -2230,6 +3081,40 @@ static bool body_has_dispatch_on_app_tyvar(
                     for (uint8_t i = 0; i < n_bindings; i++) {
                         if (bindings[i].type.kind != TY_APP) continue;
                         if (type_adt_app_def(&bindings[i].type) == chead)
+                            return true;
+                    }
+                }
+            }
+        }
+        /* SR2b: the sum-Option edition of the field-read case directly above.
+         * `unwrap` is no longer a `.value` field read but a generic accessor
+         * CALL (`(enc (unwrap x))`), so the dispatch receiver is an EX_CALL
+         * whose callee's declared result is a bare type-param (`:A`) and whose
+         * container argument is the instance's applied class-var head
+         * (`(Option A)`).  Same consequence as before: the element varies per
+         * instantiation while the carrier ABI does not, so a per-element spec
+         * must be minted for the re-resolver to fix the inner dispatch in.
+         * Detect: receiver call's result_full_type is a TYVAR, and some
+         * argument's type head matches the head of a concrete TY_APP class-var
+         * binding. */
+        if (recv && recv->kind == EX_CALL && recv->as.call_.fn_binding &&
+            recv->as.call_.args) {
+            const Type *ft2 = &recv->as.call_.fn_binding->type;
+            if (ft2->kind == TY_FN && ft2->as.fn.result_full_type &&
+                ft2->as.fn.result_full_type->kind == TY_TYVAR) {
+                for (uint32_t ai = 0; ai < recv->as.call_.n_args; ai++) {
+                    const Expr *ae = recv->as.call_.args[ai];
+                    while (ae && ae->kind == EX_ASCRIBE)
+                        ae = ae->as.ascribe_.inner;
+                    if (!ae) continue;
+                    AdtDef *ahead =
+                        (ae->type.kind == TY_APP) ? type_adt_app_def(&ae->type)
+                      : (ae->type.kind == TY_ADT) ? ae->type.as.adt_.def
+                      : NULL;
+                    if (!ahead) continue;
+                    for (uint8_t i = 0; i < n_bindings; i++) {
+                        if (bindings[i].type.kind != TY_APP) continue;
+                        if (type_adt_app_def(&bindings[i].type) == ahead)
                             return true;
                     }
                 }
@@ -3181,7 +4066,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     } else {
         fd = fn_expr->as.fn_def_.fn;
         if (fd->closure || !fd->body) return;
-        /* Per-instantiation monomorphization (docs/reported/generic-inline-c-
+        /* Per-instantiation monomorphization (docs/archive/history/generic-inline-c-
          * struct-arg-monomorphises-to-int64.md): inline-C bodies *without*
          * `__TUR_TY_<NAME>__` markers used to bail to the carrier int64 path,
          * which silently miscompiled any struct-typed A.  We now proceed to
@@ -3211,7 +4096,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             arg_types[i] = expected_full
                 ? emit_abi_instantiate_type(expected_full, bindings, n_bindings, ctx->type_arena)
                 : fd->param_types[i];
-            /* M4c Path A.1 (docs/upcoming/m4c-execution-plan.md): when this
+            /* M4c Path A.1 (docs/archive/m4c-execution-plan.md): when this
              * call dispatches a typeclass-instance method, the param's full
              * type is the resolved class-var (e.g. `Tuple2`) — the TY_TYVAR
              * was erased at instance elab.  Override the substitution here:
@@ -3411,7 +4296,17 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * element type instead of staying on the lossy int64 carrier base. */
             ((recovered.kind == TY_APP ||
               recovered.kind == TY_ADT) &&
-             type_has_concrete_codegen_layout(&recovered) &&
+             /* type_has_concrete_codegen_layout answers false for EVERY TY_APP
+              * (its TY_APP arm is an unconditional `return false`), so the
+              * ADT-app half of the comment above never actually fired -- it was
+              * masked because a nested-monomorph app was not by-value either,
+              * leaving accessor and field agreeing on the int64 carrier.  Now
+              * that `(Result (Option int) cstr)` lowers by value, its `ok_val`
+              * field IS `tur_adt_Option__int` and the accessor must recover
+              * with it.  type_is_byvalue_adt_product is the app-aware
+              * predicate that gives a TY_APP a real answer. */
+             (type_has_concrete_codegen_layout(&recovered) ||
+              type_is_byvalue_adt_product(recovered)) &&
              !type_is_heap_struct(recovered) && !type_is_heap_adt(recovered) &&
              rec_c && strcmp(rec_c, "int64_t") != 0);
         if (recovered_byvalue) {
@@ -3550,7 +4445,51 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * named-tyvar result) that Direction 3 cannot handle. */
     bool inner_float = inner_closure && !fn_binding->closure_return_dispatches_untyped &&
         emit_inner_closure_needs_float_spec(inner_closure, bindings, n_bindings);
-    if (inner_float) abi_changes = true;
+    /* generic-closure-return-type-app (Defect B): the float-only claim above
+     * ("every int64-register kind round-trips through the carrier") is false
+     * for a body that CONSTRUCTS a tyvar-dependent ADT app -- the shared
+     * generic thunk emits the BASE `ctor_Cons`, which is never defined for a
+     * parametric def, and the program dies at link having passed tur check.
+     * The signature of that shape is exact: the lifted closure's result_kind
+     * is TY_APP/TY_ADT with result_full_type NULL -- the "(type-app ? ?)"
+     * shell the elab-side grounding gate deliberately leaves when the body
+     * type mentions the enclosing fn's tyvar.  Clone per spec exactly as the
+     * float case does, so the body re-resolves under the spec bindings and
+     * the ctor call lands on the emitted monomorph. */
+    bool inner_app = inner_closure && !fn_binding->closure_return_dispatches_untyped &&
+        inner_closure->type.kind == TY_FN &&
+        inner_closure->type.as.fn.result_full_type == NULL &&
+        (inner_closure->type.as.fn.result_kind == TY_APP ||
+         inner_closure->type.as.fn.result_kind == TY_ADT) &&
+        n_bindings > 0;
+    /* SR2a, the ANNOTATED twin of inner_app.  The gate above keys on
+     * `result_full_type == NULL` -- the shell elaboration leaves when a lifted
+     * closure's body type mentions the enclosing fn's tyvar and nothing wrote
+     * the type down.  A closure that DID write it down (`(fn [xs : int] :
+     * (PRes A) ...)` inside `or-parser [A]`) has a non-NULL result_full_type
+     * and slipped past, so the single shared thunk kept the carrier while the
+     * combinator's instantiation made `(PRes cstr)` a by-value aggregate.  The
+     * fatbox it dispatches then holds a typed shim returning that aggregate
+     * while the generic thunk casts slot 0 to the int64 carrier ABI -- past 16
+     * bytes, sret shifts every argument and the program jumps to 0.
+     *
+     * Fires only when the spec turns a carrier-riding generic result INTO a
+     * by-value monomorph, which is exactly when the shared thunk is wrong.  On
+     * the default path a parametric sum still rides the carrier, so this is
+     * inert there. */
+    bool inner_app_annotated = false;
+    if (inner_closure && !inner_app && !fn_binding->closure_return_dispatches_untyped &&
+        inner_closure->type.kind == TY_FN &&
+        inner_closure->type.as.fn.result_full_type && n_bindings > 0) {
+        const Type *gr = inner_closure->type.as.fn.result_full_type;
+        if (gr->kind == TY_APP && !adt_app_is_byvalue_product(*gr)) {
+            Type inst = emit_abi_instantiate_type(gr, bindings, n_bindings,
+                                                  ctx->type_arena);
+            if (inst.kind == TY_APP && adt_app_is_byvalue_product(inst))
+                inner_app_annotated = true;
+        }
+    }
+    if (inner_float || inner_app || inner_app_annotated) abi_changes = true;
     /* M6 / gap G6(c): a generic body PASSES a captured closure whose result type
      * follows the spec's tyvar (the recursive `(fn [c] : B (re-cata alg c))` to
      * `fmap` inside `re-cata [B]`).  Clone it per spec so its recursive call
@@ -3614,7 +4553,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * audit flags -- so a top-level `(ok 5)` in user code keeps the carrier path
      * (avoiding the broad M2 suite-wide snapshot blast).
      *
-     * 2026-06-17 generalization (docs/reported/option-consumer-retype-byvalue.md
+     * 2026-06-17 generalization (docs/archive/history/option-consumer-retype-byvalue.md
      * step 1): the gate now also fires for NON-instance generic specs whose
      * declared return is a concrete by-value Option/Result struct of the same
      * family the body's construct produces.  That unblocks pure-Turmeric
@@ -3807,6 +4746,56 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         !emit_abi_type_has_concrete_named_tyvar(&result_type)) {
         abi_changes = true;
     }
+    /* SR2b: a COLORED generic's concrete monomorph is what the CPS backend's
+     * G3a island path adopts (emit_cps_ir.c) -- the generic base SIG-REJECTs
+     * on its tyvars by design, and the island classification needs a spec to
+     * resolve them through.  That spec used to exist as a side effect:
+     * `(Option int)` was a by-value record product, an ABI change, so a clone
+     * was minted anyway.  Option as a sum rides the carrier (no ABI change),
+     * and without the clone a colored generic like
+     * `choose-or [A] [o : (Option A) ...]` fell to the direct emitter, which
+     * cannot lower its `perform`.  Mint the clone for exactly this case. */
+    if (!abi_changes && !instance_changes && fd && !borrow_path &&
+        bindings && n_bindings > 0 &&
+        emit_cps_ir_colored_fn_needs_mono(fd)) {
+        abi_changes = true;
+    }
+    /* SR2b: a generic that RECEIVES a fat closure whose element tyvar
+     * resolves to FLOAT must still be minted per spec.  The carrier base
+     * invokes the closure through the erased `(bool (*)(void*, int64_t))`
+     * cast, but the callsite's fatbox holds a typed float shim
+     * (`__tur_fatshim_bool_double(void*, double)`), so the element crosses in
+     * the wrong register class -- `keep-if`'s float predicate read garbage
+     * bits > 0 as true (option-construct-byvalue-return-spec line 5).  The
+     * by-value `(Option float)` RETURN used to force these specs as a side
+     * effect; as a sum it rides the carrier, so force on the closure-param
+     * shape directly.  Float only: every int64-register element round-trips
+     * through the erased cast unchanged. */
+    if (!abi_changes && !instance_changes && fd && !borrow_path &&
+        bindings && n_bindings > 0 && fd->param_types) {
+        for (uint32_t pi = 0; pi < fd->n_params && !abi_changes; pi++) {
+            const Type *pt = &fd->param_types[pi];
+            if (pt->kind != TY_FN) continue;
+            uint32_t na = pt->as.fn.arity;
+            for (uint32_t aj = 0; aj <= na && !abi_changes; aj++) {
+                const Type *at = (aj < na)
+                    ? (pt->as.fn.arg_full_types ? pt->as.fn.arg_full_types[aj]
+                                                : NULL)
+                    : pt->as.fn.result_full_type;
+                if (!at || at->kind != TY_TYVAR || !at->as.tyvar_.name)
+                    continue;
+                for (uint8_t bi2 = 0; bi2 < n_bindings; bi2++) {
+                    if (bindings[bi2].name &&
+                        strcmp(bindings[bi2].name, at->as.tyvar_.name) == 0 &&
+                        (bindings[bi2].type.kind == TY_FLOAT ||
+                         bindings[bi2].type.kind == TY_FLOAT64)) {
+                        abi_changes = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
     if (!abi_changes && !instance_changes) {
         if (!borrow_path &&
             !emit_abi_call_is_generic_relay(ctx, call, items, n_items)) {
@@ -3815,7 +4804,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         return;
     }
 
-    /* Per-instantiation monomorphization (docs/reported/generic-inline-c-
+    /* Per-instantiation monomorphization (docs/archive/history/generic-inline-c-
      * struct-arg-monomorphises-to-int64.md): an inline-C body without
      * `__TUR_TY_<NAME>__` markers may have hand-rolled int64_t carriers in
      * its C source.  Specializing such a body when no slot actually escapes
@@ -3864,7 +4853,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 type_has_concrete_codegen_layout(&arg_types[i])) {
                 needs_byvalue_spec = true; break;
             }
-            /* M5 residual-straddle (docs/upcoming/m5-residual-straddle-
+            /* M5 residual-straddle (docs/artifacts/m5-residual-straddle-
              * retirement.md): a defn carrying `#{ByVal}` opts into
              * by-value spec interning for *any* aggregate arg type that
              * resolves to a concrete struct application -- including
@@ -4014,9 +5003,16 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     }
 
     uint32_t before_specs = ctx->n_abi_specializations;
+    /* SR2a: an inner_app_annotated clone has the SAME outer C signature across
+     * instantiations -- `or-parser` returns a closure handle whether A is cstr
+     * or int -- so without binding-matching the two instantiations dedup into
+     * one spec and one inner clone, and whichever element was emitted first
+     * wins for both.  Exactly the collapse the match_bindings flag was added
+     * for (see its comment in emit_abi_intern_spec); ask for it here too. */
+    bool spec_match_bindings = inner_app_annotated;
     EmitAbiSpecialization *spec = emit_abi_intern_spec(
         ctx, fn_binding, fn_expr, fd, bindings, n_bindings,
-        arg_types, n_spec_args, result_type, call, false);
+        arg_types, n_spec_args, result_type, call, spec_match_bindings);
     /* Interning the inner-closure spec below may realloc abi_specializations,
      * invalidating `spec`; refer to the outer spec by index afterward. */
     uint32_t outer_spec_idx = (uint32_t)(spec - ctx->abi_specializations);
@@ -4062,7 +5058,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * params / env fields / dispatch typedefs all resolve through
      * emit_resolve_type to the concrete float; the outer spec's EX_CLOSURE
      * construction then stores the clone's thunk + uses its suffixed env. */
-    if ((inner_float || inner_passed || inner_dispatch) && inner_closure) {
+    if ((inner_float || inner_app || inner_passed || inner_dispatch ||
+         inner_app_annotated) && inner_closure) {
         const Expr *inner_expr = emit_abi_find_fn_expr(items, n_items, inner_closure);
         if (inner_expr && inner_expr->kind == EX_FN_DEF && inner_expr->as.fn_def_.fn) {
             FnDef *inner_fd = inner_expr->as.fn_def_.fn;
@@ -4091,6 +5088,16 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 ? emit_abi_instantiate_type(inner_closure->type.as.fn.result_full_type,
                                             bindings, n_bindings, ctx->type_arena)
                 : emit_type_from_kind(inner_closure->type.as.fn.result_kind);
+            /* Defect B: with a NULL result_full_type the line above yields the
+             * zeroed app shell.  The lifted BODY's elaborated type still
+             * carries the real `(Cons A)` (the grounding gate only refused to
+             * copy it onto the binding), so instantiate that instead. */
+            if (inner_app && !inner_closure->type.as.fn.result_full_type &&
+                inner_fd->body &&
+                (inner_fd->body->type.kind == TY_APP ||
+                 inner_fd->body->type.kind == TY_ADT))
+                inner_res = emit_abi_instantiate_type(
+                    &inner_fd->body->type, bindings, n_bindings, ctx->type_arena);
             /* constrained-instance-element-dispatch-in-closures: the outer spec
              * binds only the CLASS var (`a -> Vec__bool`); the closure body
              * dispatches on the CONSTRAINT var (`A`), which the re-resolver
@@ -4132,7 +5139,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             uint32_t before_inner = ctx->n_abi_specializations;
             EmitAbiSpecialization *inner_spec = emit_abi_intern_spec(
                 ctx, inner_closure, inner_expr, inner_fd, spec_in_bindings, spec_in_nb,
-                inner_args, inner_n, inner_res, NULL, inner_dispatch);
+                inner_args, inner_n, inner_res, NULL,
+                inner_dispatch || spec_match_bindings);
             bool inner_is_new = ctx->n_abi_specializations != before_inner;
             /* Build the suffixed env-struct symbol both sites agree on.
              * constrained-instance-element-dispatch-in-closures: an inner_dispatch
@@ -4141,7 +5149,11 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * the base env struct (no suffixed override).  Suffixing it would emit
              * a redundant identical struct; sharing keeps the base `__env_N` and
              * snapshots minimal. */
-            if (!inner_dispatch)
+            /* An inner_app_annotated clone, like an inner_dispatch one, keeps
+             * the base env layout -- only the body's representation differs --
+             * so it reuses `__env_N` rather than emitting an identical
+             * suffixed twin. */
+            if (!inner_dispatch && !spec_match_bindings)
                 emit_assign_inner_env_override(ctx, inner_fd, inner_res, inner_spec);
             uint32_t inner_idx = (uint32_t)(inner_spec - ctx->abi_specializations);
             ctx->abi_specializations[outer_spec_idx].inner_closure_spec_idx = (int32_t)inner_idx;
@@ -4158,7 +5170,16 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * re-dispatched at scan time (emit_abi_register_call's reresolve
              * liveness mark), keeping the concrete element instance
              * (`__inst_Tag_tag_bool`) live instead of pruned as dead. */
-            if ((inner_passed || inner_dispatch) && inner_is_new && inner_fd->body) {
+            /* generic-closure-return-type-app (Defect B): the float and
+             * nonground-app clones need the same scan -- their bodies contain
+             * calls (`tcons x ...`) that must register their OWN specs at the
+             * clone's bindings, or the clone body emits against the carrier
+             * base (whose parametric ctor is never defined: a link error).
+             * The int case worked by coincidence -- some other call in the
+             * program had already interned tcons@int -- which is exactly the
+             * kind of coincidence this campaign exists to remove. */
+            if ((inner_passed || inner_dispatch || inner_float || inner_app) &&
+                inner_is_new && inner_fd->body) {
                 const EmitAbiSpecialization *saved_c = ctx->current_abi_specialization;
                 bool saved_in = saved_c >= ctx->abi_specializations &&
                                 saved_c < ctx->abi_specializations + ctx->n_abi_specializations;
@@ -4573,6 +5594,16 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             emit_abi_scan_expr(ctx, e->as.set_field_.receiver, items, n_items);
             emit_abi_scan_expr(ctx, e->as.set_field_.value, items, n_items);
             break;
+        case EX_SET:
+            /* mut-map-reassign-missing-spec-link-error (defect 1): a `set!`
+             * RHS was the one statement position this walk never descended
+             * into, so a generic call there -- `(set! m (map-assoc m i i))`,
+             * the grow-by-reassignment idiom -- never interned its ABI spec:
+             * the call emitted the BASE generic name and died at link.
+             * Every fixture grew maps by chained lets, which is why the hole
+             * survived until the container-collapse perf probe. */
+            emit_abi_scan_expr(ctx, e->as.set_.value, items, n_items);
+            break;
         case EX_RETURN:
             emit_abi_scan_expr(ctx, e->as.return_.value, items, n_items);
             break;
@@ -4611,7 +5642,7 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                  * recursive call to the int-carrier spec (`Cons__int`) instead
                  * of the enclosing spec's element type, dropping every element
                  * past the head (round-trip-list cstr/float arrays:
-                 * docs/reported/recursive-constrained-generic-carrier-ascription-loses-element-spec.md).
+                 * docs/archive/history/recursive-constrained-generic-carrier-ascription-loses-element-spec.md).
                  * Only fire G7 when the ascription preserves the result's
                  * parametric shape (both TY_APP), not when it collapses a
                  * parametric application down to a bare scalar carrier. */
@@ -4647,7 +5678,7 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             /* Calls inside the packed value still need worklist seeding so
              * any polymorphic helper used to construct the existential is
              * monomorphized.  See
-             * docs/reported/open-monomorphizes-polymorphic-fn-only-partially.md. */
+             * docs/archive/history/open-monomorphizes-polymorphic-fn-only-partially.md. */
             emit_abi_scan_expr(ctx, e->as.exists_pack_.value, items, n_items);
             /* The pack emits a witness table storing `&dict_<Class>_<T>_singleton`
              * for each constraint witness (emit_expr.c).  Those dict references
@@ -4683,7 +5714,7 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
              * for a parameterized Result -- fall off the worklist and
              * the C linker reports them undeclared. Mirrors the
              * EX_EXISTS_OPEN fix; tracked in
-             * docs/reported/typeclass-method-parameterized-result-carrier-mismatch.md
+             * docs/archive/history/typeclass-method-parameterized-result-carrier-mismatch.md
              * (Issue 1 / Prereq 1). */
             HandleExpr *h = e->as.handle_.handle;
             if (h) {
@@ -4725,7 +5756,7 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
              * decl nor a definition is emitted and the C linker reports the
              * symbol undefined.  Mirrors the EX_EXISTS_OPEN / EX_HANDLE fixes;
              * tracked in
-             * docs/reported/hkt-instance-method-match-scrutinee-undefined-symbol.md */
+             * docs/archive/history/hkt-instance-method-match-scrutinee-undefined-symbol.md */
             emit_abi_scan_expr(ctx, e->as.match_.scrutinee, items, n_items);
             for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
                 emit_abi_scan_expr(ctx, e->as.match_.arms[i].body, items, n_items);
@@ -5472,7 +6503,7 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
         spec->fn->binding->name->name &&
         strncmp(spec->fn->binding->name->name, "__inst_", 7) == 0;
     /* M4c Path A result-side
-     * (docs/reported/m4c-path-a-result-side-needs-return-dispatch-elab-hook.md):
+     * (docs/archive/m4c-path-a-result-side-needs-return-dispatch-elab-hook.md):
      * for non-HKT instance method specs (spec->typeclass_inst is set by
      * emit_abi_intern_spec), emit the concrete result type rather than the
      * carrier int64.  HKT classes keep the legacy carrier override.  Without
@@ -5522,7 +6553,7 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
          * pointer -- mirror emit_fns.c's needs_box_load signature.  spec args are
          * already concrete, so type_is_wide_byval_adt reads them directly. */
         const char *pc;
-        if (spec->fn->closure && !spec->fn->byval_fn_field_closure &&
+        if (spec->fn->closure &&
             !spec->fn->params[i]->is_poly_fn &&
             spec->fn->param_types[i].kind != TY_FN &&
             type_is_wide_byval_adt(spec->arg_types[i])) {
@@ -5692,6 +6723,95 @@ static EmitLocalVarEntry *g_lv_tab;
 static uint32_t           g_lv_tab_n;
 static uint32_t           g_lv_tab_cap;
 
+/* inline-c-option-carrier-box-leaks: the OWNED-CARRIER side table.
+ *
+ * An inline-C body declared `: (Option T)` builds its result with
+ * `tur_some_ptr` / `tur_box_*`, which malloc the carrier box.  The allocation
+ * happens inside a C body, so no elaborated expression corresponds to it and
+ * nothing could be given ownership -- the box leaked once per call, and that
+ * is the form the inline-C results guide recommends.
+ *
+ * Ownership is recorded ONCE, where the fact is known (the call-result temp in
+ * emit_value), and consumed at ONE place (the carrier->concrete bridge, which
+ * copies the box's contents into an aggregate and previously abandoned it).
+ * Routing it through the bridge is what makes every consumer position -- let
+ * binding, call argument, match scrutinee, ctor argument, container element --
+ * free the box without each one needing its own rule.
+ *
+ * Marks are CLEARED when consumed, so a temp bridged twice cannot double-free.
+ * Same lifetime and shape as the localvar table above; reset with it. */
+static char   **g_own_tab;
+static uint32_t g_own_tab_n;
+static uint32_t g_own_tab_cap;
+
+void emit_owned_carrier_mark(const char *cname) {
+    if (!cname) return;
+    for (uint32_t i = 0; i < g_own_tab_n; i++)
+        if (strcmp(g_own_tab[i], cname) == 0) return;
+    if (g_own_tab_n == g_own_tab_cap) {
+        uint32_t nc = g_own_tab_cap ? g_own_tab_cap * 2 : 64;
+        char **nt = (char **)realloc(g_own_tab, nc * sizeof(char *));
+        if (!nt) return;
+        g_own_tab = nt;
+        g_own_tab_cap = nc;
+    }
+    g_own_tab[g_own_tab_n++] = strdup(cname);
+}
+
+bool emit_owned_carrier_is(const char *cname) {
+    if (!cname) return false;
+    for (uint32_t i = 0; i < g_own_tab_n; i++)
+        if (strcmp(g_own_tab[i], cname) == 0) return true;
+    return false;
+}
+
+void emit_owned_carrier_clear(const char *cname) {
+    if (!cname) return;
+    for (uint32_t i = 0; i < g_own_tab_n; i++)
+        if (strcmp(g_own_tab[i], cname) == 0) {
+            free(g_own_tab[i]);
+            g_own_tab[i] = g_own_tab[--g_own_tab_n];
+            return;
+        }
+}
+
+/* container-element-form-plan CE2 (read half): C temp names that hold a RAW
+ * Vec slot word -- the hoist temp of `vec-get` / `vec-pop!` / the
+ * `vec-data-get-checked__` core.  By default (the Option niche) a niche
+ * `(Option P)` element is stored in its slot as the payload pointer itself
+ * (CE_WORD), so when such a temp is bridged carrier->niche the value is
+ * already the niche form and must NOT be unboxed.  Keyed on the recorded
+ * value, never on the type: the same discipline as the owned-carrier and
+ * localvar tables above, and the reason a temp cannot be double-bridged. */
+static char   **g_slot_tab;
+static uint32_t g_slot_tab_n;
+static uint32_t g_slot_tab_cap;
+
+void emit_slot_word_mark(const char *cname) {
+    if (!cname) return;
+    for (uint32_t i = 0; i < g_slot_tab_n; i++)
+        if (strcmp(g_slot_tab[i], cname) == 0) return;
+    if (g_slot_tab_n == g_slot_tab_cap) {
+        uint32_t nc = g_slot_tab_cap ? g_slot_tab_cap * 2 : 64;
+        char **nt = (char **)realloc(g_slot_tab, nc * sizeof(char *));
+        if (!nt) return;
+        g_slot_tab = nt;
+        g_slot_tab_cap = nc;
+    }
+    g_slot_tab[g_slot_tab_n++] = strdup(cname);
+}
+
+bool emit_slot_word_is(const char *cname) {
+    if (!cname) return false;
+    /* The synthesized `vec-eq?` comparator's params (elab_typeclasses.c
+     * build_comparator_lambda, slot_words): the helper feeds them raw slot
+     * words, so they carry the mark by name. */
+    if (strncmp(cname, "__cmp_slot_", 11) == 0) return true;
+    for (uint32_t i = 0; i < g_slot_tab_n; i++)
+        if (strcmp(g_slot_tab[i], cname) == 0) return true;
+    return false;
+}
+
 void emit_localvar_reset(void) {
     for (uint32_t i = 0; i < g_lv_tab_n; i++) {
         free(g_lv_tab[i].cname);
@@ -5701,6 +6821,16 @@ void emit_localvar_reset(void) {
     g_lv_tab = NULL;
     g_lv_tab_n = 0;
     g_lv_tab_cap = 0;
+    for (uint32_t i = 0; i < g_own_tab_n; i++) free(g_own_tab[i]);
+    free(g_own_tab);
+    g_own_tab = NULL;
+    g_own_tab_n = 0;
+    g_own_tab_cap = 0;
+    for (uint32_t i = 0; i < g_slot_tab_n; i++) free(g_slot_tab[i]);
+    free(g_slot_tab);
+    g_slot_tab = NULL;
+    g_slot_tab_n = 0;
+    g_slot_tab_cap = 0;
 }
 
 void emit_localvar_record_ctype(const char *cname, const char *ctype) {
@@ -5888,11 +7018,14 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                                                     || fd->body->type.kind == TY_STRUCT))
                     ? type_c_name(fd->body->type) : NULL;
                 /* Direction (1): mirror emit_fns.c. */
+                /* repro 2 (return-dispatched-sum-mint-in-constrained-instance-
+                 * miscompiles): mirror emit_fns.c -- no carrier-ABI conjunct; a
+                 * by-value aggregate body with no result_full_type is spilled
+                 * to the int64 dict slot at the tail, so the prototype is int64. */
                 bool inst_method_app_body =
                     fd->binding && fd->binding->name && fd->binding->name->name &&
                     strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
-                    _body_c && strcmp(_body_c, "int64_t") != 0 &&
-                    type_uses_carrier_abi(fd->body->type);
+                    _body_c && strcmp(_body_c, "int64_t") != 0;
                 /* M5 straddle (root cause C): mirror emit_fns.c -- a lifted
                  * lambda whose tail value is a carrier-int64 producer
                  * (some/ok/err/none or an __inst_ method) is dispatched through
@@ -5902,7 +7035,11 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                     _body_c && strcmp(_body_c, "int64_t") != 0 &&
                     type_uses_carrier_abi(fd->body->type) &&
                     fn_body_tail_is_carrier_producer(fd->body);
-                if (inst_method_app_body || body_is_carrier_producer) {
+                /* opaque-pointer-c-spelling: mirror emit_fns.c -- a pointer
+                 * opaque body does not override a declared carrier result, and
+                 * the prototype must not disagree with the definition. */
+                if (inst_method_app_body || body_is_carrier_producer ||
+                    emit_fn_body_is_opaque_ptr_over_carrier_result(fd, result)) {
                     buf_puts(out, "int64_t");
                 } else if (_body_c && strcmp(_body_c, "int64_t") != 0) {
                     buf_puts(out, _body_c);
@@ -5936,7 +7073,7 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
              * box pointer -- mirror emit_fns.c's needs_box_load signature. */
             Type _b4_pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
                 ? *e->type.as.fn.arg_full_types[j] : fd->param_types[j];
-            if (fd->closure && !fd->byval_fn_field_closure &&
+            if (fd->closure &&
                 !fd->params[j]->is_poly_fn &&
                 fd->param_types[j].kind != TY_FN &&
                 type_is_wide_byval_adt(emit_resolve_type(ctx, _b4_pty))) {
@@ -6093,7 +7230,7 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
     const CtorDef *fdc = def->ctors[ci];
     for (uint32_t fi = 0; fi < fdc->n_fields; fi++) {
         if (fdc->fields[fi].drop_inner_def) {
-            char *imn = mangle_field_name(fdc->fields[fi].drop_inner_def->name);
+            char *imn = mangle_adt_name(fdc->fields[fi].drop_inner_def->name);
             buf_printf(out, "static void drop_glue_tur_adt_%s(void *);\n", imn);
             buf_printf(out, "static void walk_glue_tur_adt_%s(void *, RcWalkChildFn, void *);\n",
                        imn);
@@ -6130,7 +7267,7 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
              * aggregate.  Its own drop glue releases the box's owners and frees
              * the box (it is a plain heap allocation, uniquely owned by this
              * value under the same move discipline a direct rc field relies on). */
-            char *imn = mangle_field_name(ctor->fields[fi].drop_inner_def->name);
+            char *imn = mangle_adt_name(ctor->fields[fi].drop_inner_def->name);
             buf_printf(out,
                        "    if (s->%s) drop_glue_tur_adt_%s((void *)(intptr_t)s->%s);\n",
                        mp, imn, mp);
@@ -6212,7 +7349,7 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
         } else if (ctor->fields[fi].drop_inner_def) {
             /* Recurse into the boxed sub-aggregate so its own rc children are
              * enumerated for the cycle collector. */
-            char *imn = mangle_field_name(ctor->fields[fi].drop_inner_def->name);
+            char *imn = mangle_adt_name(ctor->fields[fi].drop_inner_def->name);
             buf_printf(out,
                        "    if (s->%s) walk_glue_tur_adt_%s((void *)(intptr_t)s->%s, cb, ctx);\n",
                        mp, imn, mp);
@@ -6260,9 +7397,86 @@ static const char *adt_field_scalar_c_type(TypeKind k) {
  * by-value owner inlines (a carrier owner keeps every field as an int64 slot and
  * boxes a by-value child at the store). */
 static const char *adt_ctor_field_c_type(const CtorField *f, bool byval) {
-    if (byval && adt_field_is_inline_byval(f))
-        return adt_field_inline_c_name(f);
-    return adt_field_scalar_c_type(f->kind);
+    const char *chosen = (byval && adt_field_is_inline_byval(f))
+                             ? adt_field_inline_c_name(f)
+                             : adt_field_scalar_c_type(f->kind);
+    /* Increment 4 stage 3: the STRUCT_FIELD shadow.  This one function is the
+     * whole field-position decision -- all nine emission sites route through
+     * it -- so instrumenting it here covers the position with no ctx to
+     * thread.
+     *
+     * The owner's by-value status picks the POSITION, not just the answer: a
+     * by-value product inlines its aggregate fields, so its slots are real
+     * STRUCT_FIELD positions, while a carrier product keeps every field as an
+     * int64 slot and boxes a by-value child at the store -- which is the
+     * CARRIER_SINK protocol wearing a field's name.  Asking repr_of for
+     * STRUCT_FIELD on a carrier owner would report the owner's design as a
+     * seam.  This is the same shape as the recorded param-position boundary:
+     * a decision the Type alone does not carry. */
+    if (repr_shadow_active() && f) {
+        /* A nested OWNING aggregate field has its `full_type` deliberately
+         * left NULL -- a carrier-ADT full_type would misclassify field reads
+         * -- and carries its inner def in `drop_inner_def` instead.  Without
+         * this reconstruction the shadow's blind spot would be exactly the
+         * shape most worth watching: a by-value product stored behind the
+         * int64 carrier because it owns an rc/ref, which is the one field
+         * shape whose slot form genuinely disagrees with the protocol. */
+        Type ft;
+        bool have = false;
+        if (f->full_type) { ft = *f->full_type; have = true; }
+        else if (f->drop_inner_def) {
+            ft = type_adt((AdtDef *)f->drop_inner_def);
+            have = true;
+        }
+        if (have) {
+            ReprPosition pos =
+                byval ? REPR_POS_STRUCT_FIELD : REPR_POS_CARRIER_SINK;
+            repr_shadow_report("adt-field", pos, ft, repr_of(&ft, pos),
+                               repr_form_from_cty(ft, type_c_name(ft), chosen),
+                               chosen);
+        }
+    }
+    return chosen;
+}
+
+/* SR4-perf: the by-value constructor prologue -- declare `__r`, store the tag,
+ * and make the DEAD bytes deterministic at the least possible cost.
+ *
+ * This used to be `__r = {0}`, a whole-aggregate zero-init added alongside the
+ * SR1 tag-store fix as belt and braces ("the padding and the unused union arms
+ * must not be indeterminate").  Measured on the logic.tur bind+walk workload
+ * under the SR4 seam it was HALF of the by-value time regression: every
+ * construction wrote 24-48 bytes of zeros and then overwrote most of them,
+ * and at 400k passes that alone was 0.556s -> 0.472s (against the carrier's
+ * 0.385s).  Nothing consumes those bytes bytewise -- ADT equality and hashing
+ * are structural, the HAMT value box memcpys but never compares, and flat
+ * PRODUCTS have never zero-initialized at all (plain `__r;`), so full byte
+ * determinism was never an invariant the tree held.
+ *
+ * What we keep deterministic, because it is nearly free: the padding after
+ * the tag word (one 4-byte store) and the union tail BEYOND this variant's
+ * payload (zero bytes for the widest variant -- which is the hot one, since
+ * the widest arm is what sized the type).  Both memset sizes are
+ * compile-time constants, so cc lowers them to plain stores and elides the
+ * zero-length case.  Padding INSIDE the active payload struct is left
+ * indeterminate, exactly as flat products always have.  If a bytewise
+ * consumer of aggregate bytes is ever added (a memcmp Eq, a bytes hash), it
+ * must canonicalize or this choice must be revisited -- grep for SR4-perf. */
+static void emit_byval_ctor_prologue(Buf *out, const char *adt_c_name,
+                                     const CtorDef *ctor, bool flat) {
+    buf_printf(out, "    %s __r;\n", adt_c_name);
+    if (flat) return;
+    char *mctor = mangle_adt_name(ctor->name);
+    buf_printf(out, "    __r.tag = %u;\n", ctor->tag);
+    buf_printf(out,
+        "    memset((char *)&__r + sizeof(__r.tag), 0, "
+        "offsetof(%s, as) - sizeof(__r.tag));\n",
+        adt_c_name);
+    buf_printf(out,
+        "    memset((char *)&__r.as + sizeof(__r.as.%s), 0, "
+        "sizeof(__r.as) - sizeof(__r.as.%s));\n",
+        mctor, mctor);
+    free(mctor);
 }
 
 /* Pass 0 helper: emit the tagged-union `typedef struct tur_adt_<Name> { ... }`
@@ -6275,7 +7489,7 @@ static const char *adt_ctor_field_c_type(const CtorField *f, bool byval) {
  * regardless of build mode.  The header (emit_header) never emits the base ADT
  * typedef, only monomorphized type-applications, so without this the per-module
  * .c references `tur_adt_Either` / `ctor_Left` with no definition.  See
- * docs/reported/load-not-expanded-in-imported-or-project-modules.md. */
+ * docs/archive/history/load-not-expanded-in-imported-or-project-modules.md. */
 static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
                                        bool typedef_only) {
     /* CONV-S1 (defstruct-as-defadt): a struct-origin ADT superseded by a later
@@ -6289,7 +7503,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
     if (def && def->is_opaque) return;
     char adt_c_name[256];
     {
-        char *_mn = mangle_field_name(def->name);
+        char *_mn = mangle_adt_name(def->name);
         snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
         free(_mn);
     }
@@ -6324,7 +7538,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
         }
         buf_printf(out, "} %s;\n", adt_c_name);
         /* Surface alias so inline-C `sizeof(<Name>)` / `(<Name> *)p` resolve. */
-        char *sname = mangle_field_name(def->name);
+        char *sname = mangle_adt_name(def->name);
         buf_printf(out, "typedef %s %s;\n\n", adt_c_name, sname);
         free(sname);
     } else {
@@ -6333,7 +7547,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
     buf_printf(out, "    union {\n");
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
-        char *mctor = mangle_field_name(ctor->name);
+        char *mctor = mangle_adt_name(ctor->name);
         buf_printf(out, "        struct {");
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
@@ -6366,7 +7580,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
         for (uint32_t fi = 0; fi < crec->n_fields; fi++)
             if (!crec->fields[fi].name) { all_named = false; break; }
         if (all_named) {
-            char *sname = mangle_field_name(def->name);
+            char *sname = mangle_adt_name(def->name);
             buf_printf(out, "#ifndef TUR_COMPAT_%s\n#define TUR_COMPAT_%s\n",
                        sname, sname);
             buf_printf(out, "typedef struct %s {\n", sname);
@@ -6414,7 +7628,10 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
     /* Emit constructor functions */
     for (uint32_t ci = 0; ci < def->n_ctors && !skip_heap_generic_base; ci++) {
         CtorDef *ctor = def->ctors[ci];
-        char *mctor = mangle_field_name(ctor->name);
+        /* duplicate-ctor-names-collide-in-emitted-c: the FUNCTION symbol carries
+         * the owning ADT (`ctor_<Adt>_<Ctor>`).  The union member inside this
+         * ADT's own struct stays bare -- it is already scoped by the struct. */
+        char *mctor = mangle_ctor_symbol(def, ctor->name);
         const char *ctor_ret_c = heap ? adt_ptr_name : byval ? adt_c_name : "int64_t";
         buf_printf(out, "static %s ctor_%s(",
                    ctor_ret_c, mctor);
@@ -6448,18 +7665,34 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
             }
             buf_printf(out, "    return __r;\n");
         } else if (byval) {
-            /* CONV-S1: build and return the flat aggregate by value -- no heap
-             * box, no tag (byval implies single-variant flat product). */
-            buf_printf(out, "    %s __r;\n", adt_c_name);
+            /* CONV-S1: build and return the aggregate by value -- no heap box.
+             * SR1: `byval` no longer implies single-variant, so the tag store
+             * is conditional here exactly as in the two boxed branches.  A
+             * nullary variant of a by-value sum has no field writes at all, so
+             * without this the ctor returned an UNINITIALISED struct and every
+             * match read a garbage tag -- silently wrong answers, not a build
+             * error.  Dead bytes are made deterministic by the prologue
+             * helper at the least possible cost -- see emit_byval_ctor_prologue
+             * (SR4-perf) for why whole-aggregate `{0}` was retired. */
+            emit_byval_ctor_prologue(out, adt_c_name, ctor, flat);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);
                 buf_printf(out, "    __r.%s = _%u;\n", mp, fi);
                 free(mp);
             }
             buf_printf(out, "    return __r;\n");
+        } else if (adt_ctor_is_null_none(def, ctor)) {
+            /* SR3 slice A: the carrier None IS the null pointer (see the
+             * monomorph twin in types.c emit_registered_adt_app_rec). */
+            buf_printf(out, "    return 0;\n");
         } else {
-            buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
-                       adt_c_name, adt_c_name, adt_c_name);
+            /* Slab only when nothing will ever free this box: a def with drop
+             * glue is released by drop_glue_*'s trailing free(ptr), and slab
+             * memory must never reach libc free(). */
+            const char *__alloc = (g_adt_slab && !def->needs_drop_glue)
+                                    ? "tur_adt_alloc" : "malloc";
+            buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
+                       adt_c_name, adt_c_name, __alloc, adt_c_name);
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);
@@ -6469,8 +7702,80 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
             buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
         }
         buf_printf(out, "}\n\n");
+        /* duplicate-ctor-names-collide-in-emitted-c: keep the bare `ctor_<Ctor>`
+         * spelling working for hand-written inline C when exactly one ADT owns
+         * the name (stdlib/either.tur documents `ctor_Left(v)`).  Ambiguous
+         * names get no alias -- see emit_ctor_bare_alias. */
+        emit_ctor_bare_alias(out, def, ctor);
         free(mctor);
     }
+}
+
+/* SR1 (typedef ordering): emit the base typedefs an ADT's INLINE by-value
+ * aggregate fields depend on, ahead of the ADT's own.
+ *
+ * Pass 0 walks items in SOURCE order, which was enough while every ADT-typed
+ * ctor field rode the int64 carrier: an int64 slot names no other typedef, so
+ * there was no ordering constraint to violate.  A by-value sum embeds such a
+ * field INLINE, so `(defdata Expr (Expr :ExprNode))` written ABOVE `ExprNode`
+ * now names an incomplete type ("unknown type name 'tur_adt_ExprNode'").
+ *
+ * Emit the dependency's guarded typedef-only layout first.  The `TUR_TD_<Name>`
+ * guard makes Pass 0's own later emission of the same layout a no-op, and its
+ * constructors are outside that guard, so they are still emitted exactly once,
+ * in their original place.
+ *
+ * `depth` is a backstop, not the termination argument: a cycle in the inline
+ * field graph cannot reach here, because adt_graph_reaches declines a recursive
+ * sum before it can be by-value at all. */
+static bool emit_adt_inline_field_deps(Buf *out, const AdtDef *def, int depth) {
+    if (!def || depth <= 0 || !def->ctors) return false;
+    bool any = false;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        const CtorDef *c = def->ctors[ci];
+        if (!c) continue;
+        for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+            const CtorField *f = &c->fields[fi];
+            if (!f->full_type || f->full_type->kind != TY_ADT) continue;
+            if (!adt_field_is_inline_byval(f)) continue;
+            AdtDef *fd = (AdtDef *)f->full_type->as.adt_.def;
+            if (!fd || fd == def) continue;
+            emit_adt_inline_field_deps(out, fd, depth - 1);
+            emit_adt_typedef_and_ctors(out, fd, true);
+            any = true;
+        }
+    }
+    return any;
+}
+
+/* SR1: is `def` an inline-by-value field of some OTHER ADT in this program?
+ *
+ * Such a def can be emitted early by that owner's dependency pre-flush, so its
+ * own Pass 0 emission has to be guarded or it is a C redefinition.  Asking the
+ * question keeps the guard off every ADT that is not involved in the ordering,
+ * which is what keeps the emitted C byte-identical wherever the by-value sum
+ * path changes nothing. */
+static bool adt_is_inline_byval_dep(const Expr **items, uint32_t n_items,
+                                    const AdtDef *def) {
+    if (!def) return false;
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
+        if (!e || (e->kind != EX_DEFDATA && e->kind != EX_DEFGADT)) continue;
+        const AdtDef *od = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def
+                                                   : e->as.defdata_.def;
+        if (!od || od == def || !od->ctors) continue;
+        for (uint32_t ci = 0; ci < od->n_ctors; ci++) {
+            const CtorDef *c = od->ctors[ci];
+            if (!c) continue;
+            for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+                const CtorField *f = &c->fields[fi];
+                if (!f->full_type || f->full_type->kind != TY_ADT) continue;
+                if (f->full_type->as.adt_.def != def) continue;
+                if (adt_field_is_inline_byval(f)) return true;
+            }
+        }
+    }
+    return false;
 }
 
 /* Closure / fat-closure fixed runtime: tagged-union accessors, the
@@ -6483,7 +7788,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
  * the same block per module .c so that `^fat` parameters, typeclass-method
  * closures, and inline-C closure application work under `tur build <dir>` (which
  * does not run the whole-program preamble).  See
- * docs/reported/load-not-expanded-in-imported-or-project-modules.md. */
+ * docs/archive/history/load-not-expanded-in-imported-or-project-modules.md. */
 static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     /* project-mode-rc-runtime-preamble-missing: in separate compilation this
      * runtime is emitted both by the shared tur_runtime.h (via the preamble) and
@@ -6595,49 +7900,77 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
         buf_puts(out, "int tur_closure_headers_enabled = 1;\n");
     }
     /* C#1 (test-suite-idioms): inline-C Option/Result ABI helpers.
-     * A `:Option<int>` value is a heap pointer to { bool is_some; int64_t value; }
-     * with none == NULL (0).  A `:Result<int,E>` value is a heap pointer to
-     * { bool is_ok; int64_t ok_val; int64_t err_val; }.  These helpers let an
-     * inline-C block construct and inspect Option/Result values through the
-     * canonical layout instead of hand-rolling the struct cast + a magic
-     * sentinel integer (`-1`, `INT64_MIN`, `0`-as-absent).  The layout matches
-     * stdlib/option.tur and stdlib/result.tur byte-for-byte, so values built
-     * with tur_box_some/tur_box_ok flow transparently into the stdlib accessors and
-     * vice versa.  Marked unused so a program that touches neither type still
-     * compiles clean under -Wall. */
-    buf_puts(out, "typedef struct { bool is_some; int64_t value; } tur_option_t;\n");
-    buf_puts(out, "typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } tur_result_box_t;\n");
+     *
+     * SR2b: Option and Result are REAL SUMS (stdlib/option.tur, result.tur),
+     * so the canonical layout is the tagged monomorph the ADT emitter
+     * produces -- { int tag; union { ... } as; } with the payload at offset 8
+     * (the union aligns to the widest member).  Tag values follow ctor
+     * declaration order: Option None=0 / Some=1, Result Ok=0 / Err=1.
+     * A `:Option<A>` carrier value is a heap pointer to that layout, with the
+     * HISTORICAL none == NULL (0) still accepted on the read side
+     * (tur_is_some(0) is false).  A `:Result<A,B>` carrier value likewise.
+     *
+     * These helpers let an inline-C block construct and inspect Option/Result
+     * values through the canonical layout instead of hand-rolling the struct
+     * cast + a magic sentinel integer.  The layout matches the monomorph
+     * typedefs byte-for-byte for every word-sized element (int, cstr, ptr,
+     * float bits), so values built with tur_box_some/tur_box_ok flow
+     * transparently into the stdlib accessors and vice versa -- and under
+     * --enable=parametric-sum-byvalue the carrier<->by-value bridges deref
+     * these boxes into the same layout.  Keep tag values and offsets in
+     * lockstep with the two stdlib declarations.  Marked unused so a program
+     * that touches neither type still compiles clean under -Wall. */
+    buf_puts(out, "typedef struct { int tag; union { char __none; int64_t value; } as; } tur_option_t;\n");
+    buf_puts(out, "typedef struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } tur_result_box_t;\n");
     buf_puts(out, "#define TUR_NONE ((int64_t)0)\n");
     buf_puts(out, "static int64_t tur_box_some(int64_t __x) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_box_some(int64_t __x) {\n");
     buf_puts(out, "    tur_option_t *__o = (tur_option_t *)malloc(sizeof(*__o));\n");
-    buf_puts(out, "    __o->is_some = true; __o->value = __x;\n");
+    buf_puts(out, "    __o->tag = 1; __o->as.value = __x;\n");
     buf_puts(out, "    return (int64_t)(intptr_t)__o;\n}\n");
     buf_puts(out, "static bool tur_is_some(int64_t __o) __attribute__((unused));\n");
     buf_puts(out, "static bool tur_is_some(int64_t __o) {\n");
-    buf_puts(out, "    return __o != 0 && ((tur_option_t *)(intptr_t)__o)->is_some;\n}\n");
+    buf_puts(out, "    return __o != 0 && ((tur_option_t *)(intptr_t)__o)->tag == 1;\n}\n");
     buf_puts(out, "static int64_t tur_opt_value(int64_t __o) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_opt_value(int64_t __o) {\n");
-    buf_puts(out, "    return ((tur_option_t *)(intptr_t)__o)->value;\n}\n");
+    buf_puts(out, "    return ((tur_option_t *)(intptr_t)__o)->as.value;\n}\n");
+    /* option-niche: the carrier->niche crossing's read.  A carrier box CAN
+     * hold Some(NULL) -- tur_some_ptr(0) in inline-C builds one -- and the
+     * unchecked read would hand the niche its 0 payload, silently turning a
+     * value `some?` calls true into `(none)`.  The niche Some ctor already
+     * aborts on a null payload; this is the same declaration enforced at the
+     * other door.  A hand-rolled tagged-None box (tag 0, non-null pointer --
+     * the historical layout the read side still accepts) maps to the niche
+     * null rather than reading its uninitialised payload word. */
+    buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) {\n");
+    buf_puts(out, "    tur_option_t *__p = (tur_option_t *)(intptr_t)__o;\n");
+    buf_puts(out, "    if (__p->tag != 1) return 0;\n");
+    buf_puts(out, "    if (!__p->as.value) {\n");
+    buf_puts(out, "        fprintf(stderr, \"tur: a carrier Some with a NULL payload "
+                  "crossed into a niche-represented Option -- the payload type's "
+                  ":non-null declaration was violated (tur_some_ptr(0)?)\\n\");\n");
+    buf_puts(out, "        abort();\n    }\n");
+    buf_puts(out, "    return __p->as.value;\n}\n");
     buf_puts(out, "static int64_t tur_box_ok(int64_t __v) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_box_ok(int64_t __v) {\n");
     buf_puts(out, "    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));\n");
-    buf_puts(out, "    __r->is_ok = true; __r->ok_val = __v; __r->err_val = 0;\n");
+    buf_puts(out, "    __r->tag = 0; __r->as.ok_val = __v;\n");
     buf_puts(out, "    return (int64_t)(intptr_t)__r;\n}\n");
     buf_puts(out, "static int64_t tur_box_err(int64_t __e) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_box_err(int64_t __e) {\n");
     buf_puts(out, "    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));\n");
-    buf_puts(out, "    __r->is_ok = false; __r->ok_val = 0; __r->err_val = __e;\n");
+    buf_puts(out, "    __r->tag = 1; __r->as.err_val = __e;\n");
     buf_puts(out, "    return (int64_t)(intptr_t)__r;\n}\n");
     buf_puts(out, "static bool tur_is_ok(int64_t __r) __attribute__((unused));\n");
     buf_puts(out, "static bool tur_is_ok(int64_t __r) {\n");
-    buf_puts(out, "    return __r != 0 && ((tur_result_box_t *)(intptr_t)__r)->is_ok;\n}\n");
+    buf_puts(out, "    return __r != 0 && ((tur_result_box_t *)(intptr_t)__r)->tag == 0;\n}\n");
     buf_puts(out, "static int64_t tur_ok_value(int64_t __r) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_ok_value(int64_t __r) {\n");
-    buf_puts(out, "    return ((tur_result_box_t *)(intptr_t)__r)->ok_val;\n}\n");
+    buf_puts(out, "    return ((tur_result_box_t *)(intptr_t)__r)->as.ok_val;\n}\n");
     buf_puts(out, "static int64_t tur_err_value(int64_t __r) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_err_value(int64_t __r) {\n");
-    buf_puts(out, "    return ((tur_result_box_t *)(intptr_t)__r)->err_val;\n}\n");
+    buf_puts(out, "    return ((tur_result_box_t *)(intptr_t)__r)->as.err_val;\n}\n");
     /* TC5 (type-system-c-abi-followups): typed result/option builders.  The
      * _int / _ptr suffix spells out the payload's cast direction so an inline-C
      * author never has to remember whether a pointer payload needs an
@@ -6646,15 +7979,17 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * result builders and both option builders construct the same canonical
      * tur_result_box_t / tur_option_t layout as tur_box_*, so values built here
      * flow transparently into the stdlib accessors (ok?/ok-val/err-val and
-     * some?/opt-val) and vice versa.  tur_none() is the canonical empty option
-     * (NULL == none), the function-call companion to the TUR_NONE macro.  The
-     * _Static_assert pair pins the byte layout these depend on -- it must match
-     * stdlib/result.tur and stdlib/option.tur, and trips the build at the
-     * source if either struct's size drifts. */
+     * some?/opt-val) and vice versa.  tur_none() IS the null carrier (SR3
+     * slice A: every reader treats NULL as tag 0 / None, so a tagged None box
+     * was pure allocation; the tagged form remains valid on the read side).
+     * The
+     * _Static_assert pair pins the byte layout these depend on -- it must
+     * match the tagged monomorph typedefs, and trips the build at the source
+     * if either struct's size drifts. */
     buf_puts(out, "_Static_assert(sizeof(tur_option_t) == 2 * sizeof(int64_t),\n");
-    buf_puts(out, "    \"tur_option_t must match stdlib/option.tur layout\");\n");
-    buf_puts(out, "_Static_assert(sizeof(tur_result_box_t) == 3 * sizeof(int64_t),\n");
-    buf_puts(out, "    \"tur_result_box_t must match stdlib/result.tur layout\");\n");
+    buf_puts(out, "    \"tur_option_t must match the tagged Option monomorph layout\");\n");
+    buf_puts(out, "_Static_assert(sizeof(tur_result_box_t) == 2 * sizeof(int64_t),\n");
+    buf_puts(out, "    \"tur_result_box_t must match the tagged Result monomorph layout\");\n");
     buf_puts(out, "static int64_t tur_ok_int(int64_t __v) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_ok_int(int64_t __v) { return tur_box_ok(__v); }\n");
     buf_puts(out, "static int64_t tur_err_int(int64_t __e) __attribute__((unused));\n");
@@ -6671,7 +8006,8 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     buf_puts(out, "static int64_t tur_some_ptr(void *__p) {\n");
     buf_puts(out, "    return tur_box_some((int64_t)(intptr_t)__p);\n}\n");
     buf_puts(out, "static int64_t tur_none(void) __attribute__((unused));\n");
-    buf_puts(out, "static int64_t tur_none(void) { return TUR_NONE; }\n");
+    buf_puts(out, "static int64_t tur_none(void) {\n");
+    buf_puts(out, "    return TUR_NONE;\n}\n");
     /* A#1: fat-closure auto-shim thunks.  EX_FN_TO_FAT allocates a 2-slot fat
      * struct { __fn = __tur_fatshim<arity>, __orig = bare_fn_ptr } so a non-capturing
      * fn passed to a ^fat parameter is invoked through the standard fat-closure
@@ -7140,6 +8476,15 @@ static bool preamble_uses_serial(const Expr *e) {
             for (uint32_t i = 0; i < e->as.program.n; i++)
                 if (preamble_uses_serial(e->as.program.items[i])) return true;
             return false;
+        case EX_DEFMODULE:
+            /* guestbook-example-has-no-import-graph: a serial-reset inside a
+             * (defmodule ...) body was invisible here, so a module program
+             * that captured a continuation was emitted without the DK serial
+             * runtime and failed at cc with an implicit __sk_register. */
+            if (e->as.defmodule_.mod)
+                for (uint32_t i = 0; i < e->as.defmodule_.mod->n_body; i++)
+                    if (preamble_uses_serial(e->as.defmodule_.mod->body[i])) return true;
+            return false;
         case EX_FN_DEF:
             return e->as.fn_def_.fn && preamble_uses_serial(e->as.fn_def_.fn->body);
         case EX_FN:
@@ -7172,6 +8517,17 @@ static bool preamble_uses_serial(const Expr *e) {
         case EX_RETURN: return e->as.return_.value && preamble_uses_serial(e->as.return_.value);
         case EX_DEFER:  return preamble_uses_serial(e->as.defer_.body);
         case EX_BUILTIN:
+            /* A resume/serialize/deserialize on a serial-cont value is also a
+             * reference to the serial runtime: stdlib serial-resume is `(k v)`
+             * on a `k : serial-cont`, which elab_call lowers straight onto
+             * tur_serial_cont_resume.  A program that loads stdlib/serial.tur
+             * for its Serializable instances (no serial-shift of its own)
+             * still emits that defn, and without this case the call is
+             * undeclared -- a warning under gcc, a hard error under Apple
+             * clang (the macOS CI leg failed exactly there). */
+            if (e->as.builtin.spec && e->as.builtin.spec->c_op &&
+                strncmp(e->as.builtin.spec->c_op, "tur_serial_cont_", 16) == 0)
+                return true;
             for (uint32_t i = 0; i < e->as.builtin.n; i++)
                 if (preamble_uses_serial(e->as.builtin.args[i])) return true;
             return false;
@@ -7598,6 +8954,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (g_needs_hamt) {
         buf_puts(out, "#include \"hamt.h\"\n");
     }
+    /* jit-ffi-c2mir-plan: dlopen/dlsym/dlclose (and call-ptr's pointer
+     * source) need <dlfcn.h>; the codegen for these builtins predates this
+     * include, so `(unsafe (dlopen ...))` never actually compiled before the
+     * call-ptr work made someone run it.  The autolink marker adds -ldl for
+     * pre-2.34 glibc; the JIT engine's autolink loader skips the `dl` entry
+     * (its symbols are already in-process). */
+    if (g_needs_dlfcn) {
+        buf_puts(out, "#ifndef _WIN32\n");
+        buf_puts(out, "#include <dlfcn.h>\n");
+        buf_puts(out, "#endif\n");
+        buf_puts(out, "/* __tur_autolink__: -ldl */\n");
+    }
 
     /* WIN1 (windows-support-plan): the emitted C is portable, so the platform
      * split lives in the OUTPUT as #ifdef _WIN32 rather than being decided by
@@ -7671,6 +9039,57 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* DEDUP-1: offsetof, used by the RcControlBlock layout guard below. */
     buf_puts(out, "#include <stddef.h>\n");
     buf_puts(out, "#include <string.h>\n");
+    /* ADT slab allocator (docs/reported/multi-variant-adts-always-heap-allocate.md).
+     *
+     * A multi-variant ADT box is malloc'd on every construction and, when the
+     * type has no drop glue, never freed -- so ~85%% of executed instructions
+     * on an allocation-heavy workload land inside _int_malloc.  For exactly
+     * those never-freed boxes a bump allocator is sound and much cheaper: no
+     * ownership analysis, no drop glue, no ABI change.
+     *
+     * SAFETY, and why this is keyed on drop glue rather than applied blanket:
+     * slab memory must never reach libc free().  A type WITH drop glue has a
+     * drop_glue_* ending in free(ptr), so those keep malloc.  A type without it
+     * has no such function emitted.
+     *
+     * UNVERIFIED, and the reason this is off by default.  The argument that
+     * nothing else frees an ADT box rests on two things that are not proven:
+     *
+     *  - `rc/of` NOW FREES ITS ADT PAYLOAD (it used to leak it -- see
+     *    docs/archive/rc-of-adt-leaks-the-payload.md).  So a slab-allocated box
+     *    handed to `rc/of` reaches free(), and ASan says so:
+     *    "attempting free on address which was not malloc()-ed".  This was
+     *    predicted as a coupling and then confirmed.  A ctor cannot know
+     *    whether its result ends up in an rc, so no LOCAL predicate fixes it:
+     *    the slab needs a whole-program pass marking every ADT def used as an
+     *    `rc/of` payload and excluding those.  Until that exists, this is
+     *    unsafe whenever an `rc/of` of a boxed sum is anywhere in the program.
+     *  - Verification now exists where it did not: tests/run-leak-check.sh
+     *    runs opted-in fixtures under ASan, so a bad free is catchable.  That
+     *    half of the objection is resolved.
+     *
+     * So this is a MEASUREMENT SEAM, not a shipping default, and it stays off
+     * until those two are resolved.  Slabs are never released; that is the
+     * point.  Measured at 2.1x on an allocation-heavy workload.
+     */
+    if (g_adt_slab) {
+    buf_puts(out, "typedef struct TurAdtSlab { struct TurAdtSlab *next; size_t off; char buf[262144]; } TurAdtSlab;\n");
+    buf_puts(out, "static TurAdtSlab *g_tur_adt_slab = NULL;\n");
+    buf_puts(out, "static void *tur_adt_alloc(size_t __n) __attribute__((unused));\n");
+    buf_puts(out, "static void *tur_adt_alloc(size_t __n) {\n");
+    buf_puts(out, "    __n = (__n + 15u) & ~(size_t)15u;\n");
+    buf_puts(out, "    if (__n > sizeof(((TurAdtSlab *)0)->buf)) return malloc(__n);\n");
+    buf_puts(out, "    if (!g_tur_adt_slab || g_tur_adt_slab->off + __n > sizeof(g_tur_adt_slab->buf)) {\n");
+    buf_puts(out, "        TurAdtSlab *__s = (TurAdtSlab *)malloc(sizeof(TurAdtSlab));\n");
+    buf_puts(out, "        if (!__s) return malloc(__n);\n");
+    buf_puts(out, "        __s->next = g_tur_adt_slab; __s->off = 0; g_tur_adt_slab = __s;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    void *__p = g_tur_adt_slab->buf + g_tur_adt_slab->off;\n");
+    buf_puts(out, "    g_tur_adt_slab->off += __n;\n");
+    buf_puts(out, "    return __p;\n");
+    buf_puts(out, "}\n");
+    }
+
     /* G4a (mutable-globals-plan §4.4): a double crosses the integer-typed
      * atomics layer through its bit pattern, so one code path serves both front
      * ends instead of a double-typed shim only the GNU branch could provide.
@@ -7723,15 +9142,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
             buf_puts(out, "#include <regex.h>\n");
             buf_puts(out, "#endif\n");
         }
-    }
-    /* inline-c-function-scope-include-guards fix: emit every `#include`
-     * directive that elab lifted from the top of an inline-C body so
-     * include-guarded headers (sqlite3.h, rtmidi_c.h, lo/lo.h, ...) are
-     * visible to every inline-C function in this TU. The same scan strips
-     * the directives from each body at substitute time, so they appear
-     * exactly once -- here. */
-    for (uint32_t i = 0; i < g_n_hoisted_includes; i++) {
-        tur_emit_hoisted_include(out, g_hoisted_includes[i]);
     }
     /* AR8: Variadic rest-list cons-cell helper -- only emit when module has variadics */
     if (g_has_variadics) {
@@ -7916,7 +9326,19 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * hard-coded integers (their numeric values move as the enum grows).  Note
      * the tag carries kind granularity only: every struct shares the "struct"
      * tag and every ADT the "adt" tag (see the union-intersection guide). */
+    /* type-of-cast-kind-granularity: struct/ADT box tags are per-monomorph ids
+     * allocated by the PROGRAM half, so their names cannot live in this
+     * preamble.  The program installs its name table through this pointer from
+     * __tur_static_init; a preamble compiled standalone (the S2 split runtime
+     * TU) simply leaves it NULL and answers "unknown", which is what it did for
+     * every struct before.  A forward-declared per-program function would not
+     * do: that TU has no definition to link. */
+    emit_rt_global(out, shared,
+                   "const char *(*g_tur_any_name_ext)(int64_t) = 0;\n",
+                   "const char *(*g_tur_any_name_ext)(int64_t)");
     buf_puts(out, "static const char *__tur_any_type_name(int64_t tag) {\n");
+    buf_puts(out, "    if (tag >= 1000)\n");
+    buf_puts(out, "        return g_tur_any_name_ext ? g_tur_any_name_ext(tag) : \"unknown\";\n");
     buf_puts(out, "    switch (tag) {\n");
     buf_printf(out, "        case %d: return \"nil\";\n",   (int)TY_NIL);
     buf_printf(out, "        case %d: return \"bool\";\n",  (int)TY_BOOL);
@@ -8594,6 +10016,53 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "    }\n");
         buf_puts(out, "    return tur_box_ok(__v);\n");
         buf_puts(out, "}\n\n");
+
+        /* catch-unwind-aggregate-return-miscompiled: a thunk whose declared
+         * return type is a by-value AGGREGATE cannot be called through
+         * TUR_APPLY0 -- that casts slot 0 to `int64_t (*)(void *)`, while the
+         * emitted thunk returns the struct in a register pair or through a
+         * hidden sret pointer, so whatever lands in the int64 slot was boxed
+         * as ok_val and the consumer then dereferenced it as a `T *`.  For
+         * those the call site passes a per-type BOXING trampoline
+         * (`__tur_catchbox_<ctype>`, ensure_catch_box_shim) which calls the
+         * thunk with its real signature and heap-boxes the result -- the
+         * pointer the Result monomorph's `ok_val` field already expects, and
+         * the same ownership the direct `(ok <struct>)` path uses.
+         *
+         * The trampoline has always allocated by the time a panic unwinds
+         * through it, so the panic arms free the box rather than leaking one
+         * per caught panic. */
+        buf_puts(out, "static int64_t tur_catch_unwind_box_via(int64_t (*__call)(void *), int64_t thunk, int __owns) {\n");
+        buf_puts(out, "    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));\n");
+        buf_puts(out, "    __node->parent = tur_handler_chain; tur_handler_chain = __node;\n");
+        buf_puts(out, "    int64_t __v = __call((void *)(intptr_t)thunk);\n");
+        buf_puts(out, "    tur_handler_chain = __node->parent; free(__node);\n");
+        buf_puts(out, "    if (tur_panicking) {\n");
+        buf_puts(out, "        if (__owns) free((void *)(intptr_t)__v);\n");
+        buf_puts(out, "        tur_panicking = 0; tur_panic_in_progress = 0;\n");
+        buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
+        buf_puts(out, "        global_panic_payload = NULL;\n");
+        buf_puts(out, "        return tur_box_err((int64_t)(intptr_t)__p);\n");
+        buf_puts(out, "    }\n");
+        buf_puts(out, "    return tur_box_ok(__v);\n");
+        buf_puts(out, "}\n\n");
+        buf_puts(out, "static int64_t tur_catch_panic_of_box_via(int expected_type, int64_t (*__call)(void *), int64_t thunk, int __owns) {\n");
+        buf_puts(out, "    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));\n");
+        buf_puts(out, "    __node->parent = tur_handler_chain; tur_handler_chain = __node;\n");
+        buf_puts(out, "    int64_t __v = __call((void *)(intptr_t)thunk);\n");
+        buf_puts(out, "    tur_handler_chain = __node->parent; free(__node);\n");
+        buf_puts(out, "    if (tur_panicking) {\n");
+        buf_puts(out, "        if (__owns) free((void *)(intptr_t)__v);\n");
+        buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
+        buf_puts(out, "        if (__p && __p->type_tag == expected_type) {\n");
+        buf_puts(out, "            tur_panicking = 0; tur_panic_in_progress = 0;\n");
+        buf_puts(out, "            global_panic_payload = NULL;\n");
+        buf_puts(out, "            return tur_box_err((int64_t)(intptr_t)__p);\n");
+        buf_puts(out, "        }\n");
+        buf_puts(out, "        return 0;\n");
+        buf_puts(out, "    }\n");
+        buf_puts(out, "    return tur_box_ok(__v);\n");
+        buf_puts(out, "}\n\n");
     }
 
     /* catch-unwind-result-box-leak: free a caught Result box that codegen knows is
@@ -8611,7 +10080,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "static void tur_result_box_free(int64_t __r) {\n");
     buf_puts(out, "    tur_result_box_t *__b = (tur_result_box_t *)(intptr_t)__r;\n");
     buf_puts(out, "    if (!__b) return;\n");
-    buf_puts(out, "    if (!__b->is_ok) panic_payload_free((tur_panic_payload *)(intptr_t)__b->err_val);\n");
+    buf_puts(out, "    if (__b->tag != 0) panic_payload_free((tur_panic_payload *)(intptr_t)__b->as.err_val);\n");
     buf_puts(out, "    free(__b);\n");
     buf_puts(out, "}\n\n");
 
@@ -8725,7 +10194,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * emit_cps_reset / emit_cps_cloneable_reset lower onto dk_run/dk_shift. */
     if (shared || cps_uses_delimited || cps_uses_cloneable_dk ||
         cps_uses_serial || cps_ir_emittable) {
-        emit_cps_runtime_prelude_ex(out, g_opt_cps_tramp_resume);
+        emit_cps_runtime_prelude(out);
     }
     /* Base-shift escape-reset context (direct-reset-shift-degrades fix): the
      * direct emitter lowers a base (reset ...) whose body reaches a shift through
@@ -9004,16 +10473,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * the fiber's (possibly freed) stack -> SIGSEGV / "longjmp causes uninitialized
      * stack frame".  Save the resumer's driver + meta depth across the swapcontext
      * and restore them when control returns, so the fiber's driver never leaks
-     * out.  Emitted only under the trampoline path (g_opt_cps_tramp_resume) that
-     * declares g_dk_driver / g_dk_meta_n; flag-off those globals do not exist and a
-     * fiber program stays byte-identical. */
-    if (g_opt_cps_tramp_resume) {
-        buf_puts(out, "    tur_dk_jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
-        buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
-        buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
-    } else {
-        buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
-    }
+     * out.  The trampoline path declares g_dk_driver / g_dk_meta_n and is the
+     * only path since cps-tramp-resume graduated (2026-07-19). */
+    buf_puts(out, "    tur_dk_jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
+    buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
+    buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
     buf_puts(out, "    tur_current_fiber = _prev;\n");
     buf_puts(out, "    return f->result;\n");
     buf_puts(out, "}\n\n");
@@ -9654,6 +11118,36 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
                    "TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspend created */\n\n",
                    "TurAsyncPark *tur_async_pending_park");
 
+    /* async-panic-task-boundary: a panic inside an (async ...) body must
+     * reject THAT task's future, not unwind whoever spawned it.  The body runs
+     * inline on the caller's stack (there is no fiber to carry a per-fiber
+     * panic_jmpbuf), so the boundary is a handler node exactly like
+     * tur_catch_unwind_box's: with a node installed, tur_panic stages the
+     * payload, sets tur_panicking and RETURNS, and the emitted body's
+     * per-call-site `if (tur_panicking) return ...` checks unwind it back here.
+     *
+     * The rejection message takes ownership of the payload's strdup'd string
+     * (TurFuture::error is a plain const char * the future never frees), so the
+     * payload struct is released without its value. */
+    buf_puts(out, "static int tur_async_reject_if_panicking(TurFuture *future) {\n");
+    buf_puts(out, "    if (!tur_panicking) return 0;\n");
+    buf_puts(out, "    tur_panicking = 0; tur_panic_in_progress = 0;\n");
+    buf_puts(out, "    tur_panic_payload *__p = global_panic_payload;\n");
+    buf_puts(out, "    global_panic_payload = NULL;\n");
+    buf_puts(out, "    const char *__msg = \"panic\";\n");
+    buf_puts(out, "    if (__p) {\n");
+    buf_puts(out, "        if (__p->type_tag == 5 && __p->value) {\n");
+    buf_puts(out, "            __msg = (const char *)__p->value;\n");
+    buf_puts(out, "            __p->owns_value = 0;  /* the future owns it now */\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        panic_payload_free(__p);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    tur_future_reject(future, __msg);\n");
+    buf_puts(out, "    tur_async_suspended = 0;\n");
+    buf_puts(out, "    tur_async_pending_park = NULL;\n");
+    buf_puts(out, "    return 1;\n");
+    buf_puts(out, "}\n\n");
+
     /* Create a future that runs fn() and fulfills it with the result.
      *
      * F3.2 (cps-async): fn() is the async body.  When it is CPS-colored and its
@@ -9672,7 +11166,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
+    buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain;\n");
+    buf_puts(out, "    tur_handler_chain = &__node;\n");
     buf_puts(out, "    int64_t result = fn();\n");
+    buf_puts(out, "    tur_handler_chain = __node.parent;\n");
+    buf_puts(out, "    if (tur_async_reject_if_panicking(future)) return future;\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
     buf_puts(out, "        /* body parked on a pending await: leave `future` pending; the parked\n");
     buf_puts(out, "         * resume fulfills it when the awaited future completes. */\n");
@@ -9699,7 +11197,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    int64_t (*__fn)(void *) = *(int64_t (**)(void *))clos;\n");
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
+    buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain;\n");
+    buf_puts(out, "    tur_handler_chain = &__node;\n");
     buf_puts(out, "    int64_t result = __fn(clos);\n");
+    buf_puts(out, "    tur_handler_chain = __node.parent;\n");
+    buf_puts(out, "    if (tur_async_reject_if_panicking(future)) return future;\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
     buf_puts(out, "        tur_async_pending_park->outer = future;\n");
     buf_puts(out, "    } else {\n");
@@ -9716,8 +11218,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (!f) { fprintf(stderr, \"await: null future\\n\"); abort(); }\n");
     buf_puts(out, "    if (tur_future_done(f)) {\n");
     buf_puts(out, "        if (f->status == FUTURE_REJECTED) {\n");
-    buf_puts(out, "            fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
-    buf_puts(out, "            abort();\n");
+    buf_puts(out, "            /* Re-raise the task's panic at the point that demanded the\n");
+    buf_puts(out, "             * result: with a catch-unwind in scope this is catchable, and\n");
+    buf_puts(out, "             * with none tur_panic prints the task's message and aborts. */\n");
+    buf_puts(out, "            tur_panic(f->error ? f->error : \"async task panicked\");\n");
+    buf_puts(out, "            return 0;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        return f->value;\n");
     buf_puts(out, "    }\n");
@@ -9739,8 +11244,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        tur_fiber_block_yield(0);\n");
     buf_puts(out, "        /* When we resume, the future should be done */\n");
     buf_puts(out, "        if (tur_future_done(f) && f->status == FUTURE_REJECTED) {\n");
-    buf_puts(out, "            fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
-    buf_puts(out, "            abort();\n");
+    buf_puts(out, "            tur_panic(f->error ? f->error : \"async task panicked\");\n");
+    buf_puts(out, "            return 0;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        return f->value;\n");
     buf_puts(out, "    }\n");
@@ -9782,8 +11287,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (!f) { fprintf(stderr, \"await: null future\\n\"); abort(); }\n");
     buf_puts(out, "    if (tur_future_done(f)) {\n");
     buf_puts(out, "        if (f->status == FUTURE_REJECTED) {\n");
-    buf_puts(out, "            fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
-    buf_puts(out, "            abort();\n");
+    buf_puts(out, "            /* Same re-raise as tur_await_future; the resumed continuation\n");
+    buf_puts(out, "             * sees tur_panicking and unwinds through its own checks. */\n");
+    buf_puts(out, "            tur_panic(f->error ? f->error : \"async task panicked\");\n");
+    buf_puts(out, "            return dk_invoke(subk, 0);\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        return dk_invoke(subk, f->value);\n");
     buf_puts(out, "    }\n");
@@ -11180,6 +12687,36 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "/* ==== tur: end of fixed runtime preamble ==== */\n");
 }
 
+/* inline-c-function-scope-include-guards fix: emit every `#include` directive
+ * that elab lifted from the top of an inline-C body so include-guarded headers
+ * (sqlite3.h, rtmidi_c.h, lo/lo.h, ...) are visible to every inline-C function
+ * in this TU.  The same scan strips the directives from each body at
+ * substitute time, so they appear exactly once -- here.
+ *
+ * This lives OUTSIDE emit_runtime_preamble, and every caller emits it AFTER
+ * that call, deliberately.  These lines are the one program-dependent thing in
+ * an otherwise fixed region, and while they sat inside the marked span the S2
+ * split could never reproduce them: the probe (emit_rt_split_source) forces the
+ * g_needs_* gates on so the rest matches, but it has no g_hoisted_includes, so
+ * any program that hoisted an include emitted a preamble whose hash did not
+ * match the committed blob and the split silently disengaged.  Since it fails
+ * closed nothing noticed -- and it hit exactly the programs that most want the
+ * fast path, every spice binding a C library through inline-C.
+ *
+ * Below the end marker they are still ahead of every inline-C function (those
+ * live in the program half), so the visibility guarantee above is unchanged,
+ * while the span the split replaces is genuinely fixed again.  Keeping them out
+ * of emit_runtime_preamble is what makes that true for the PROBE as well: the
+ * probe calls the same function, so a guard inside it would have to be
+ * conditional on probe-ness, and the coupling that produced this bug would
+ * survive.  See
+ * docs/archive/jit-s2-split-disengages-on-hoisted-inline-c-include.md. */
+static void emit_hoisted_includes(Buf *out) {
+    for (uint32_t i = 0; i < g_n_hoisted_includes; i++) {
+        tur_emit_hoisted_include(out, g_hoisted_includes[i]);
+    }
+}
+
 /* project-mode-rc-runtime-preamble-missing: shared runtime header for the
  * owner-TU design.  Wraps the full runtime preamble (shared mode: globals
  * owner-gated, most functions demoted to static, the rc<T>/GC family
@@ -11195,6 +12732,7 @@ void emit_shared_runtime_header(Buf *out) {
     buf_puts(out, "/* generated by tur -- shared runtime (tur_runtime.h) */\n");
     buf_puts(out, "#ifndef TUR_RUNTIME_H\n#define TUR_RUNTIME_H\n");
     emit_runtime_preamble(out, NULL, /*shared=*/true);
+    emit_hoisted_includes(out);
     buf_puts(out, "#endif /* TUR_RUNTIME_H */\n");
 }
 
@@ -11209,7 +12747,7 @@ void emit_shared_runtime_header(Buf *out) {
  *   (b) cmd_jit at JIT time, hashing this emission against the recorded
  *       hash to decide whether the committed artifacts still describe the
  *       compiler it is running in.  Any drift -- an emitter edit, a knob like
- *       --backtrack-depth or --enable=cps-tramp-resume, archive-mode state --
+ *       --backtrack-depth, archive-mode state --
  *       changes this text, fails the compare, and falls back to full-preamble
  *       emission.  Never wrong, just slower.
  *
@@ -11253,9 +12791,25 @@ void emit_rt_split_source(Buf *out) {
  * was recognised by def_.struct_def (an opaque StructDef); now that opaque defs
  * are AdtDefs the EX_DEF carries no struct_def, so the global-emission sites
  * would mistake it for a runtime global and emit a bogus `static int64_t
- * Name_N;`.  This predicate restores the skip without StructDef. */
+ * Name_N;`.  This predicate restores the skip without StructDef.
+ *
+ * module-level-def-with-linear-init-emits-no-global: the `init == NULL` test is
+ * what makes this a TYPE-declaration predicate rather than an opaque-TYPED-
+ * value one.  Without it, `(def g (mutex-new))` -- an ordinary global whose
+ * value merely HAS an opaque type -- matched too, so every site below skipped
+ * its storage while the use-site emitter, which has no such guard, went on
+ * referencing `g_N`: `error: 'g_1377' undeclared`.  elab_defopaque sets
+ * `init = NULL` explicitly (elab_structs.c), and a real `def` always has an
+ * initializer, so the two are cleanly separable.
+ *
+ * The report that found this framed it as a linearity question -- Mutex is
+ * `(defopaque Mutex :ptr<void> :linear)` -- and asked whether a linear value
+ * may live in a module-level binding.  That was a red herring: linearity is not
+ * consulted anywhere here, and a plain non-linear `(defopaque Handle :int)`
+ * global failed identically. */
 static bool def_is_opaque_type_decl(const Expr *e) {
     return e && e->kind == EX_DEF &&
+           e->as.def_.init == NULL &&
            e->as.def_.binding &&
            e->as.def_.binding->type.kind == TY_ADT &&
            e->as.def_.binding->type.as.adt_.def &&
@@ -11408,6 +12962,153 @@ static void emit_mark_byval_fn_field_closures(const Expr *e) {
     }
 }
 
+
+/* ---------------------------------------------------------------------------
+ * global-def-read-before-its-declaration
+ *
+ * Pass 1 forward-declares every top-level FUNCTION, which is what lets a
+ * lifted lambda call a `defn` that appears later in the file.  Top-level `def`
+ * STORAGE never got the same treatment -- and every lambda the elaborator
+ * lifts is PREPENDED to the item list (elab_toplevel.c, "Phase 3: Prepend
+ * file-scope definitions"), so it is emitted ahead of every `def` in the
+ * program no matter where its source line sits.  The result:
+ *
+ *     (def kw ":k")
+ *     (defn mk [] (apply1 (fn [d] (+ d (c2i kw))) 1))
+ *
+ * emitted `__fn_N`, which reads `kw_NNNN`, thousands of lines above
+ * `static const char *kw_NNNN;`, and cc rejected it as undeclared.  A `defn`
+ * in the same position compiles, because of the forward-declaration pass this
+ * one mirrors.
+ *
+ * Only the globals actually read before their own declaration point are
+ * forward-declared.  Declaring all of them would be simpler and equally
+ * correct (a repeated tentative definition is legal C), but it would move a
+ * line in the snapshot of every program that was never broken.
+ * ------------------------------------------------------------------------- */
+
+static void gdef_ref_push(const Binding ***a, uint32_t *n, uint32_t *cap, const Binding *b) {
+    if (!b) return;
+    for (uint32_t i = 0; i < *n; i++) if ((*a)[i] == b) return;
+    if (*n == *cap) {
+        *cap = *cap ? *cap * 2 : 16;
+        *a = (const Binding **)realloc((void *)*a, *cap * sizeof(**a));
+        if (!*a) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    (*a)[(*n)++] = b;
+}
+
+/* Collect the bindings an item READS.  An unmodeled kind contributes nothing,
+ * which degrades to today's behaviour (no forward declaration, so a reference
+ * from inside it stays broken) rather than to a wrong declaration. */
+static void gdef_collect_refs(const Expr *e, const Binding ***a, uint32_t *n, uint32_t *cap) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_VAR: gdef_ref_push(a, n, cap, e->as.var.binding); return;
+        case EX_SET:
+            gdef_ref_push(a, n, cap, e->as.set_.target);
+            gdef_collect_refs(e->as.set_.value, a, n, cap);
+            return;
+        case EX_FN_DEF: if (e->as.fn_def_.fn) gdef_collect_refs(e->as.fn_def_.fn->body, a, n, cap); return;
+        case EX_FN:     if (e->as.fn_.fn)     gdef_collect_refs(e->as.fn_.fn->body, a, n, cap);     return;
+        case EX_CLOSURE:
+            if (e->as.closure_.closure) {
+                struct Closure *c = e->as.closure_.closure;
+                if (c->fn) gdef_collect_refs(c->fn->body, a, n, cap);
+                for (uint32_t i = 0; i < c->n_captures; i++)
+                    gdef_ref_push(a, n, cap, c->captures[i]);
+            }
+            return;
+        case EX_INLINE_C: {
+            InlineC *ic = e->as.inline_c_.inline_c;
+            if (!ic) return;
+            for (uint32_t i = 0; i < ic->n_captures; i++) gdef_ref_push(a, n, cap, ic->captures[i]);
+            for (uint32_t i = 0; i < ic->n_val_exprs; i++) gdef_collect_refs(ic->val_exprs[i], a, n, cap);
+            return;
+        }
+        case EX_DEF: gdef_collect_refs(e->as.def_.init, a, n, cap); return;
+        case EX_CALL:
+            gdef_collect_refs(e->as.call_.fn_expr, a, n, cap);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                gdef_collect_refs(e->as.call_.args[i], a, n, cap);
+            gdef_collect_refs(e->as.call_.dict_arg, a, n, cap);
+            return;
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                gdef_collect_refs(e->as.let_.bindings[i].init, a, n, cap);
+            gdef_collect_refs(e->as.let_.body, a, n, cap);
+            return;
+        case EX_IF:
+            gdef_collect_refs(e->as.if_.cond, a, n, cap);
+            gdef_collect_refs(e->as.if_.then_, a, n, cap);
+            gdef_collect_refs(e->as.if_.else_or_null, a, n, cap);
+            return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) gdef_collect_refs(e->as.do_.items[i], a, n, cap);
+            return;
+        case EX_WHILE:
+            gdef_collect_refs(e->as.while_.cond, a, n, cap);
+            gdef_collect_refs(e->as.while_.body, a, n, cap);
+            return;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) gdef_collect_refs(e->as.builtin.args[i], a, n, cap);
+            return;
+        case EX_MATCH:
+            gdef_collect_refs(e->as.match_.scrutinee, a, n, cap);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                gdef_collect_refs(e->as.match_.arms[i].guard, a, n, cap);
+                gdef_collect_refs(e->as.match_.arms[i].body, a, n, cap);
+            }
+            return;
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                gdef_collect_refs(e->as.make_struct_.field_values[i], a, n, cap);
+            return;
+        case EX_ASCRIBE: gdef_collect_refs(e->as.ascribe_.inner, a, n, cap); return;
+        case EX_CAST:    gdef_collect_refs(e->as.cast_.expr, a, n, cap);     return;
+        case EX_RETURN:  gdef_collect_refs(e->as.return_.value, a, n, cap);  return;
+        default: return;
+    }
+}
+
+/* Emit `static <T> <name>;` into `out` for every top-level `def` some earlier
+ * item reads.  Mirrors emit_fn_forward_decls, one band later in the file. */
+static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
+                                          const Expr **items, uint32_t n_items) {
+    const Binding **need = NULL; uint32_t n_need = 0, cap_need = 0;
+    const Binding **refs = NULL; uint32_t n_refs = 0, cap_refs = 0;
+
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
+        if (e->kind == EX_DEF) continue;      /* its own declaration is here */
+        n_refs = 0;
+        gdef_collect_refs(e, &refs, &n_refs, &cap_refs);
+        if (n_refs == 0) continue;
+        /* A reference counts only when the def it names is emitted LATER. */
+        for (uint32_t j = i + 1; j < n_items; j++) {
+            const Expr *d = items[j];
+            if (d->kind != EX_DEF) continue;
+            Binding *db = d->as.def_.binding;
+            if (!db || db->is_thread_local || def_is_opaque_type_decl(d)) continue;
+            for (uint32_t r = 0; r < n_refs; r++)
+                if (refs[r] == db) { gdef_ref_push(&need, &n_need, &cap_need, db); break; }
+        }
+    }
+    free((void *)refs);
+    if (n_need == 0) { free((void *)need); return; }
+
+    buf_puts(out, "/* Forward declarations for globals read by an earlier-emitted item\n"
+                  " * (a lifted lambda is prepended to the item list, so it can read a\n"
+                  " * `def` whose storage is declared far below it). */\n");
+    for (uint32_t i = 0; i < n_need; i++) {
+        char *bn = name_for_binding(ctx, (Binding *)need[i]);
+        buf_printf(out, "static %s %s;\n", type_c_name(need[i]->type), bn);
+        free(bn);
+    }
+    buf_putc(out, '\n');
+    free((void *)need);
+}
+
 /* J2: when set, emit_program appends the per-export `<mangled>__ffi` shims
  * (normally a --shared-only emission).  Set by the REPL's in-process spice
  * build only; every other emission keeps byte-identical output. */
@@ -11420,6 +13121,7 @@ int emit_program(Buf *out, const Expr *program) {
         return -1;
     }
     emit_mark_byval_fn_field_closures(program);
+    emit_expr_depth_reset();   /* expression-walk depth bound (TUR-E0712) */
     /* gcc14-int-conversion / S1: start this program's ground-truth side tables
      * fresh, ahead of every recording site (ADT ctors land in `early_file`
      * before the forward-declaration pass runs). */
@@ -11451,7 +13153,7 @@ int emit_program(Buf *out, const Expr *program) {
      * survive into a __constructor__ when the user defines their own
      * main(). Pre-fix these landed in `body`, which is silently dropped
      * under user_has_main. Filed under
-     * docs/reported/top-level-def-init-dropped.md. */
+     * docs/archive/history/top-level-def-init-dropped.md. */
     Buf def_init_body; buf_init(&def_init_body);
     /* Phase 19: separate buffers for ordered final assembly:
      *   early_file   - pass 0: struct typedefs + drop glue
@@ -11509,6 +13211,7 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.n_poly_fatshim_names = 0;
     ctx.cap_poly_fatshim_names = 0;
     ctx.fatbox_keys = NULL;
+    ctx.fatbox_names = NULL;
     ctx.n_fatbox_keys = 0;
     ctx.cap_fatbox_keys = 0;
     ctx.exbox_dict_names = NULL;
@@ -11593,14 +13296,24 @@ int emit_program(Buf *out, const Expr *program) {
 
     /* Check if user defined a main function */
     bool user_has_main = false;
+    /* examples-have-no-suite-coverage (section 2): a top-level fn whose name
+     * is a near-miss of `main` -- the tell that an entry point was intended
+     * when none is invoked (see the W0624 emission below). */
+    const FnDef *near_miss_main = NULL;
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
         if (e->kind == EX_FN_DEF) {
             FnDef *fd = e->as.fn_def_.fn;
-            if (strcmp(fd->binding->name->name, "main") == 0) {
+            const char *nm = fd->binding->name->name;
+            if (strcmp(nm, "main") == 0) {
                 user_has_main = true;
                 break;
             }
+            if (!near_miss_main &&
+                (strcmp(nm, "-main") == 0 || strcmp(nm, "main-") == 0 ||
+                 strcmp(nm, "Main") == 0 || strcmp(nm, "_main") == 0 ||
+                 strcmp(nm, "MAIN") == 0 || strcmp(nm, "--main") == 0))
+                near_miss_main = fd;
         }
     }
 
@@ -11618,7 +13331,7 @@ int emit_program(Buf *out, const Expr *program) {
             if (def && def->superseded) continue;
             char adt_c_name[256];
             {
-                char *_mn = mangle_field_name(def->name);
+                char *_mn = mangle_adt_name(def->name);
                 snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
                 free(_mn);
             }
@@ -11659,9 +13372,26 @@ int emit_program(Buf *out, const Expr *program) {
                     }
                 }
             }
+            /* SR1: the same pre-flush for a NON-parametric inline-by-value ADT
+             * field.  Before SR1 such a field was orderable by construction --
+             * only a single-variant flat product could be inlined, and a sum
+             * field rode the carrier -- so source order sufficed.  A by-value sum
+             * field is a real forward dependency; see emit_adt_inline_field_deps. */
+            bool td_guard = g_sr1_sum_byvalue &&
+                            (emit_adt_inline_field_deps(&early_file, def, 16) ||
+                             adt_is_inline_byval_dep(items, n_items, def));
             /* CONV-S1 seam 4: flat named C-ABI layout + surface alias (mirror of
              * emit_adt_typedef_and_ctors). */
             bool named = adt_uses_named_layout(def);
+            /* Guarded exactly as emit_adt_typedef_and_ctors guards it, and with
+             * the same macro name, so a layout already emitted by the dependency
+             * pre-flush above is not redefined here.  The constructors below sit
+             * OUTSIDE the guard and are still emitted once, in place.  Only ADTs
+             * actually involved in the ordering carry the guard, so the emitted C
+             * is unchanged everywhere the by-value sum path changes nothing. */
+            if (td_guard)
+                buf_printf(&early_file, "#ifndef TUR_TD_%s\n#define TUR_TD_%s\n",
+                           adt_c_name, adt_c_name);
             if (named) {
                 CtorDef *ctor = def->ctors[0];
                 buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);
@@ -11672,7 +13402,7 @@ int emit_program(Buf *out, const Expr *program) {
                     free(fname);
                 }
                 buf_printf(&early_file, "} %s;\n", adt_c_name);
-                char *sname = mangle_field_name(def->name);
+                char *sname = mangle_adt_name(def->name);
                 buf_printf(&early_file, "typedef %s %s;\n\n", adt_c_name, sname);
                 free(sname);
             } else {
@@ -11681,7 +13411,7 @@ int emit_program(Buf *out, const Expr *program) {
             buf_printf(&early_file, "    union {\n");
             for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
                 CtorDef *ctor = def->ctors[ci];
-                char *mctor = mangle_field_name(ctor->name);
+                char *mctor = mangle_adt_name(ctor->name);
                 buf_printf(&early_file, "        struct {");
                 for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                     const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
@@ -11707,7 +13437,7 @@ int emit_program(Buf *out, const Expr *program) {
                 for (uint32_t fi = 0; fi < crec->n_fields; fi++)
                     if (!crec->fields[fi].name) { all_named = false; break; }
                 if (all_named) {
-                    char *sname = mangle_field_name(def->name);
+                    char *sname = mangle_adt_name(def->name);
                     buf_printf(&early_file,
                                "#ifndef TUR_COMPAT_%s\n#define TUR_COMPAT_%s\n",
                                sname, sname);
@@ -11723,6 +13453,8 @@ int emit_program(Buf *out, const Expr *program) {
                     free(sname);
                 }
             }
+            if (td_guard)
+                buf_puts(&early_file, "#endif\n");  /* TUR_TD_<Name> base layout */
 
             /* CONV-S1 (slice 2): by-value ADT drop/walk glue (mirror of
              * emit_adt_typedef_and_ctors). */
@@ -11735,7 +13467,10 @@ int emit_program(Buf *out, const Expr *program) {
             /* Emit constructor functions */
             for (uint32_t ci = 0; ci < def->n_ctors && !skip_heap_generic_base; ci++) {
                 CtorDef *ctor = def->ctors[ci];
-                char *mctor = mangle_field_name(ctor->name);
+                /* duplicate-ctor-names-collide-in-emitted-c: same ADT-qualified
+                 * FUNCTION symbol as emit_adt_typedef_and_ctors above.  These two
+                 * sites must agree or the call names a symbol nothing defines. */
+                char *mctor = mangle_ctor_symbol(def, ctor->name);
                 const char *ctor_ret_c2 =
                     heap ? adt_ptr_name : byval ? adt_c_name : "int64_t";
                 buf_printf(&early_file, "static %s ctor_%s(", ctor_ret_c2, mctor);
@@ -11765,17 +13500,43 @@ int emit_program(Buf *out, const Expr *program) {
                     }
                     buf_printf(&early_file, "    return __r;\n");
                 } else if (byval) {
-                    /* CONV-S1: return the flat aggregate by value -- no heap box. */
-                    buf_printf(&early_file, "    %s __r;\n", adt_c_name);
+                    /* CONV-S1 / SR1: mirror of the emit_adt_typedef_and_ctors
+                     * site -- conditional tag store, cheap deterministic dead
+                     * bytes (emit_byval_ctor_prologue, SR4-perf). */
+                    emit_byval_ctor_prologue(&early_file, adt_c_name, ctor, flat);
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                         char *mp = adt_field_member_path(def, ctor, fi);
                         buf_printf(&early_file, "    __r.%s = _%u;\n", mp, fi);
                         free(mp);
                     }
                     buf_printf(&early_file, "    return __r;\n");
+                } else if (adt_ctor_is_null_none(def, ctor)) {
+                    /* SR3 slice A, the mirror that was missed.  Slice A made
+                     * the carrier None the null pointer at three producers --
+                     * the monomorph ctor (types.c), the base ctor in
+                     * emit_adt_typedef_and_ctors, and the preamble's
+                     * tur_none() -- but emit_program emits base ctors HERE
+                     * instead, and this copy never got the branch.  So an
+                     * ERASED `(none)` still malloc'd a `tag = 0` box that
+                     * nothing frees: measured leaking in the corpus from
+                     * `ctor_None -> none -> ...` traces.
+                     *
+                     * The read side has accepted NULL as tag 0 since slice A
+                     * (`__scrut ? __scrut->tag : 0`, tur_is_some(0) false), so
+                     * this is purely removing an allocation nobody wanted.
+                     *
+                     * The branch order matches the other site exactly --
+                     * byval, then null-None, then the boxed default -- because
+                     * these two emitters are supposed to be mirrors and the
+                     * whole defect is that they had drifted. */
+                    buf_puts(&early_file, "    return 0;\n");
                 } else {
-                    buf_printf(&early_file, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
-                               adt_c_name, adt_c_name, adt_c_name);
+                    /* Mirror of the emit_adt_typedef_and_ctors site: slab only
+                     * when nothing will ever free this box. */
+                    const char *__alloc2 = (g_adt_slab && !def->needs_drop_glue)
+                                             ? "tur_adt_alloc" : "malloc";
+                    buf_printf(&early_file, "    %s *__r = (%s *)%s(sizeof(%s));\n",
+                               adt_c_name, adt_c_name, __alloc2, adt_c_name);
                     if (!flat) buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                         char *mp = adt_field_member_path(def, ctor, fi);
@@ -11785,6 +13546,10 @@ int emit_program(Buf *out, const Expr *program) {
                     buf_printf(&early_file, "    return (int64_t)(intptr_t)__r;\n");
                 }
                 buf_printf(&early_file, "}\n\n");
+                /* duplicate-ctor-names-collide-in-emitted-c: mirror of the alias
+                 * emitted by emit_adt_typedef_and_ctors -- both paths define the
+                 * ctor, so both must offer the same bare-name compatibility. */
+                emit_ctor_bare_alias(&early_file, def, ctor);
                 free(mctor);
             }
         }
@@ -11829,8 +13594,20 @@ int emit_program(Buf *out, const Expr *program) {
                     "        frame = prev;\n"
                     "    }\n"
                     "}\n"
+                    /* mutable-globals-plan 13.3: the mechanism's one failure
+                     * mode, checked rather than ignored.  On EAGAIN (the
+                     * process key budget -- PTHREAD_KEYS_MAX, 1024 on glibc,
+                     * one key per dynvar plus one for ^thread-local -- is
+                     * exhausted) an unchecked create leaves the key
+                     * uninitialized and every later getspecific is UB: a
+                     * silent wrong-value failure.  Mirrors __tur_tl_key_init. */
                     "static void _dynvar_init_%s(void) {\n"
-                    "    pthread_key_create(&_dynvar_key_%s, _dynvar_cleanup_%s);\n"
+                    "    if (pthread_key_create(&_dynvar_key_%s, _dynvar_cleanup_%s) != 0) {\n"
+                    "        fprintf(stderr, \"tur: pthread_key_create failed for dynamic \"\n"
+                    "                        \"variable (process key limit, PTHREAD_KEYS_MAX, \"\n"
+                    "                        \"exhausted?)\\n\");\n"
+                    "        abort();\n"
+                    "    }\n"
                     "}\n"
                     /* S1b/cleanup: idempotent.  The emitter now calls this
                      * explicitly at the end of the binding block AND leaves
@@ -11966,6 +13743,7 @@ int emit_program(Buf *out, const Expr *program) {
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
         emit_abi_forward_decl(&fwd_decls, &ctx.abi_specializations[i]);
     }
+    emit_global_def_forward_decls(&ctx, &fwd_decls, items, n_items);
 
     /* Phase M5: collect top-level EX_DEFER nodes (module-level defers). */
     uint32_t n_prog_defers = 0;
@@ -12018,8 +13796,8 @@ int emit_program(Buf *out, const Expr *program) {
             buf_puts(&file, "static void __tur_tl_key_init(void) {\n");
             /* The one failure mode of this mechanism, checked rather than
              * ignored -- an unchecked pthread_key_create leaves the key
-             * uninitialized and every later getspecific undefined.  (The dynvar
-             * path still ignores it; see docs/reported/.) */
+             * uninitialized and every later getspecific undefined.  (The
+             * dynvar path checks it the same way; see _dynvar_init_*.) */
             buf_puts(&file, "    if (pthread_key_create(&__tur_tl_key, __tur_tl_block_free) != 0) {\n");
             buf_puts(&file, "        fprintf(stderr, \"tur: pthread_key_create failed for ^thread-local globals\\n\");\n");
             buf_puts(&file, "        abort();\n    }\n}\n");
@@ -12815,6 +14593,7 @@ int emit_program(Buf *out, const Expr *program) {
 
     /* Final assembly. */
     emit_runtime_preamble(out, program, false);
+    emit_hoisted_includes(out);
 
     /* Phase 4 v1: Collect all defer thunks into a buffer so they can be
      * emitted after extern_decls and fwd_decls (defer bodies may call
@@ -12829,6 +14608,13 @@ int emit_program(Buf *out, const Expr *program) {
     /* Phase E: fn-ptr typedefs for concrete fn fields in parametric structs */
     Buf concrete_fn_ptr_typedefs; buf_init(&concrete_fn_ptr_typedefs);
     type_codegen_emit_fn_ptr_typedefs(&concrete_fn_ptr_typedefs);
+
+    /* dead-base-thunk-chain-references-undefined-ctor: static trap stand-ins
+     * for base ctors of heap parametric ADTs referenced by the dead base
+     * generic chain.  Into fwd_decls (written before every function body).
+     * Must run after ALL body emission -- including the defer thunks above,
+     * whose bodies can register too. */
+    emit_flush_dead_base_ctor_traps(&ctx, &fwd_decls);
 
     /* Final assembly order (ensures correct C visibility):
      *  1. early_file  - struct typedefs + drop glue (visible to everything)
@@ -12856,6 +14642,7 @@ int emit_program(Buf *out, const Expr *program) {
     if (sym_records.len) { buf_write(out, sym_records.data, sym_records.len); buf_putc(out, '\n'); }
     if (concrete_fn_ptr_typedefs.len) { buf_write(out, concrete_fn_ptr_typedefs.data, concrete_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
     if (concrete_adt_apps.len) { buf_write(out, concrete_adt_apps.data, concrete_adt_apps.len); buf_putc(out, '\n'); }
+    emit_any_type_name_table(&ctx, &thunk_typedefs);
     if (thunk_typedefs.len) { buf_write(out, thunk_typedefs.data, thunk_typedefs.len); buf_putc(out, '\n'); }
     if (extern_decls.len){ buf_write(out, extern_decls.data, extern_decls.len); buf_putc(out, '\n'); }
     if (fwd_decls.len)   { buf_write(out, fwd_decls.data, fwd_decls.len); buf_putc(out, '\n'); }
@@ -12890,6 +14677,22 @@ int emit_program(Buf *out, const Expr *program) {
 
     if (!user_has_main) {
         /* Only generate main() if user didn't define one */
+        /* examples-have-no-suite-coverage (section 2): the synthesized main
+         * runs static init and returns 0.  With NO top-level statements to
+         * fold into it, the program does nothing -- which is what
+         * `examples/minikanren` and `examples/snake` silently did for weeks
+         * with a `-main` nobody called.  A near-miss name is the signal an
+         * entry point was intended; say so at its definition. */
+        if (!body.len && near_miss_main) {
+            diag_emit_with_code(DIAG_WARNING, near_miss_main->binding->span,
+                                TUR_W0624_NO_ENTRY_POINT_NEAR_MISS,
+                                "no `main` and no top-level statements: the "
+                                "synthesized entry point does nothing, so this "
+                                "program will run and print nothing. `%s` is "
+                                "never called -- name it `main`, or call it from "
+                                "a top-level form",
+                                near_miss_main->binding->name->name);
+        }
         buf_puts(out, "int main(int argc, char **argv) {\n");
         /* S1b: first statement, matching where the constructors used to run
          * (before the Windows stdio mode switch and before g_panic_trace). */
@@ -12926,7 +14729,7 @@ int emit_program(Buf *out, const Expr *program) {
          * these are the only initializers that execute *user* code, so they
          * must see the pthread keys and registries already in place.
          *
-         * Filed under docs/reported/top-level-def-init-dropped.md. */
+         * Filed under docs/archive/history/top-level-def-init-dropped.md. */
         buf_puts(out, "static void __tur_module_def_init(void) {\n");
         buf_write(out, def_init_body.data, def_init_body.len);
         buf_puts(out, "}\n\n");
@@ -12964,12 +14767,39 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.thunk_typedef_names);
     for (uint32_t i = 0; i < ctx.n_fatshim_names; i++) free(ctx.fatshim_names[i]);
     free(ctx.fatshim_names);
+    for (uint32_t i = 0; i < ctx.n_any_type_names; i++) {
+        free(ctx.any_type_names[i]);
+        free(ctx.any_type_shown[i]);
+    }
+    free(ctx.any_type_names);
+    free(ctx.any_type_shown);
+    free(ctx.any_type_boxed);
+    /* any-struct-box-leak-per-widen: the pending-drop stack.  Entries are freed
+     * as they drain; anything still here belongs to a node whose enclosing call
+     * never materialized (a void-returning consumer), so free the names too. */
+    for (uint32_t _i = 0; _i < ctx.n_any_pending; _i++) free(ctx.any_pending[_i]);
+    free(ctx.any_pending);
+    for (uint32_t _i = 0; _i < ctx.n_sum_pending; _i++) free(ctx.sum_pending[_i]);
+    free(ctx.sum_pending);
+    free(ctx.sum_pending_types);
+    free(ctx.sum_pending_owned);
+    for (uint32_t _i = 0; _i < ctx.n_vsp_pending; _i++) free(ctx.vsp_pending[_i]);
+    free(ctx.vsp_pending);
+    free(ctx.vsp_pending_types);
+    for (uint32_t _i = 0; _i < ctx.n_any_scope_drops; _i++) free(ctx.any_scope_drops[_i]);
+    free(ctx.any_scope_drops);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
-    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
+    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) {
+        free(ctx.fatbox_keys[i]);
+        free(ctx.fatbox_names[i]);
+    }
     free(ctx.fatbox_keys);
+    free(ctx.fatbox_names);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
+    for (uint8_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
+    free(ctx.env_struct_fn_typedefs);
     free(ctx.env_struct_names);
     free(ctx.pbp_param_ptrs);
     /* S1b/dynvar early-exit: the guard stack is emptied as each binding scope
@@ -13302,6 +15132,72 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
     buf_puts(out, "#include <stdio.h>\n");
     buf_puts(out, "#include <stdlib.h>\n");
     buf_puts(out, "#include <string.h>\n");
+    /* ADT slab allocator (docs/reported/multi-variant-adts-always-heap-allocate.md).
+     *
+     * A multi-variant ADT box is malloc'd on every construction and, when the
+     * type has no drop glue, never freed -- so ~85%% of executed instructions
+     * on an allocation-heavy workload land inside _int_malloc.  For exactly
+     * those never-freed boxes a bump allocator is sound and much cheaper: no
+     * ownership analysis, no drop glue, no ABI change.
+     *
+     * SAFETY, and why this is keyed on drop glue rather than applied blanket:
+     * slab memory must never reach libc free().  A type WITH drop glue has a
+     * drop_glue_* that ends in free(ptr), so those keep malloc.  A type without
+     * it has no such function emitted.
+     *
+     * KNOWN BROKEN, and why this seam stays off.  The paragraph above used to
+     * continue "and the generic free paths do not reach an ADT box -- rc/of
+     * boxes the carrier int64 separately and frees that wrapper, not the box".
+     * That was true of a bug, and the bug is fixed
+     * (docs/archive/rc-of-adt-leaks-the-payload.md): rc/of now MOVES the ADT
+     * box into shared ownership and releases it.  So a slab-allocated box
+     * handed to an rc does reach free().  Confirmed, not theorised -- ASan
+     * reports "attempting free on address which was not malloc()-ed".
+     *
+     * A ctor_* cannot know whether its result ends up in an rc, so no local
+     * predicate fixes this.  It needs a whole-program pass marking every ADT
+     * def used as an rc/of payload and excluding those from the slab.
+     *
+     * The other half of the old rationale is also gone: "the fixture suite is
+     * the check" was false, because tests/run.sh compiles emitted programs
+     * WITHOUT sanitizers.  Leak and bad-free checking of emitted code now
+     * exists, but it is opt-in per fixture --
+     * tests/run-leak-check.sh plus a requires.leak-check marker
+     * (docs/archive/compiled-fixtures-are-not-leak-checked.md).
+     *
+     * SHELVED 2026-08-25, and the escape pass above should NOT be built.  The
+     * slab's whole case was "2.4x with no ownership analysis"; needing a
+     * whole-program pass removes that, and on level ground plain reclamation
+     * measures BETTER (2.6x, and flat as the heap grows where the slab
+     * degrades).  It also never addressed the footprint half of the problem --
+     * slabs are never released -- which is the half the report identifies as
+     * the real one.  Decision record and the numbers:
+     * docs/reported/multi-variant-adts-always-heap-allocate.md.
+     *
+     * The seam stays because it costs nothing when off (codegen is
+     * byte-identical) and keeps the 2.1x measurement reproducible.  It is a
+     * museum piece, not a roadmap item.
+     *
+     * Off unless TUR_ADT_SLAB=1 was set at COMPILE time -- a measurement seam,
+     * not a shipping default.  Slabs are never released; that is the point.
+     */
+    if (g_adt_slab) {
+    buf_puts(out, "typedef struct TurAdtSlab { struct TurAdtSlab *next; size_t off; char buf[262144]; } TurAdtSlab;\n");
+    buf_puts(out, "static TurAdtSlab *g_tur_adt_slab = NULL;\n");
+    buf_puts(out, "static void *tur_adt_alloc(size_t __n) __attribute__((unused));\n");
+    buf_puts(out, "static void *tur_adt_alloc(size_t __n) {\n");
+    buf_puts(out, "    __n = (__n + 15u) & ~(size_t)15u;\n");
+    buf_puts(out, "    if (__n > sizeof(((TurAdtSlab *)0)->buf)) return malloc(__n);\n");
+    buf_puts(out, "    if (!g_tur_adt_slab || g_tur_adt_slab->off + __n > sizeof(g_tur_adt_slab->buf)) {\n");
+    buf_puts(out, "        TurAdtSlab *__s = (TurAdtSlab *)malloc(sizeof(TurAdtSlab));\n");
+    buf_puts(out, "        if (!__s) return malloc(__n);\n");
+    buf_puts(out, "        __s->next = g_tur_adt_slab; __s->off = 0; g_tur_adt_slab = __s;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    void *__p = g_tur_adt_slab->buf + g_tur_adt_slab->off;\n");
+    buf_puts(out, "    g_tur_adt_slab->off += __n;\n");
+    buf_puts(out, "    return __p;\n");
+    buf_puts(out, "}\n");
+    }
     /* inline-c-function-scope-include-guards fix: lift inline-C `#include`s
      * to file scope in the .h so every importer's .c (and this module's
      * own .c) sees the typedefs, instead of having the second/third user
@@ -13798,6 +15694,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.n_poly_fatshim_names = 0;
     ctx.cap_poly_fatshim_names = 0;
     ctx.fatbox_keys = NULL;
+    ctx.fatbox_names = NULL;
     ctx.n_fatbox_keys = 0;
     ctx.cap_fatbox_keys = 0;
     ctx.exbox_dict_names = NULL;
@@ -14061,7 +15958,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
      * reference these types in the final assembly.  Struct typedefs are NOT
      * emitted here -- emit_header already emits every struct typedef into the
      * header this .c #includes.  See
-     * docs/reported/load-not-expanded-in-imported-or-project-modules.md. */
+     * docs/archive/history/load-not-expanded-in-imported-or-project-modules.md. */
     Buf impl_early; buf_init(&impl_early);
     for (uint32_t i = 0; i < impl_n_items; i++) {
         const Expr *e = impl_items[i];
@@ -14245,7 +16142,13 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     type_codegen_emit_fn_ptr_typedefs(&impl_fn_ptr_typedefs);
     if (impl_fn_ptr_typedefs.len) { buf_write(out, impl_fn_ptr_typedefs.data, impl_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
     buf_free(&impl_fn_ptr_typedefs);
+    emit_any_type_name_table(&ctx, &thunk_typedefs2);
     if (thunk_typedefs2.len) { buf_write(out, thunk_typedefs2.data, thunk_typedefs2.len); buf_putc(out, '\n'); }
+    /* dead-base-thunk-chain-references-undefined-ctor: per-TU static trap
+     * stand-ins for base ctors of heap parametric ADTs referenced by the dead
+     * base generic chain in THIS TU's bodies (all emitted above).  Internal
+     * linkage keeps the copies from colliding across TUs at link. */
+    emit_flush_dead_base_ctor_traps(&ctx, &impl_fwd_decls);
     /* J2: Clone forward decls precede function definitions. */
     if (impl_fwd_decls.len) { buf_write(out, impl_fwd_decls.data, impl_fwd_decls.len); buf_putc(out, '\n'); }
     /* Defer thunk env-structs + functions, before the bodies that reference them. */
@@ -14300,12 +16203,39 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     free(ctx.thunk_typedef_names);
     for (uint32_t i = 0; i < ctx.n_fatshim_names; i++) free(ctx.fatshim_names[i]);
     free(ctx.fatshim_names);
+    for (uint32_t i = 0; i < ctx.n_any_type_names; i++) {
+        free(ctx.any_type_names[i]);
+        free(ctx.any_type_shown[i]);
+    }
+    free(ctx.any_type_names);
+    free(ctx.any_type_shown);
+    free(ctx.any_type_boxed);
+    /* any-struct-box-leak-per-widen: the pending-drop stack.  Entries are freed
+     * as they drain; anything still here belongs to a node whose enclosing call
+     * never materialized (a void-returning consumer), so free the names too. */
+    for (uint32_t _i = 0; _i < ctx.n_any_pending; _i++) free(ctx.any_pending[_i]);
+    free(ctx.any_pending);
+    for (uint32_t _i = 0; _i < ctx.n_sum_pending; _i++) free(ctx.sum_pending[_i]);
+    free(ctx.sum_pending);
+    free(ctx.sum_pending_types);
+    free(ctx.sum_pending_owned);
+    for (uint32_t _i = 0; _i < ctx.n_vsp_pending; _i++) free(ctx.vsp_pending[_i]);
+    free(ctx.vsp_pending);
+    free(ctx.vsp_pending_types);
+    for (uint32_t _i = 0; _i < ctx.n_any_scope_drops; _i++) free(ctx.any_scope_drops[_i]);
+    free(ctx.any_scope_drops);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
-    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
+    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) {
+        free(ctx.fatbox_keys[i]);
+        free(ctx.fatbox_names[i]);
+    }
     free(ctx.fatbox_keys);
+    free(ctx.fatbox_names);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
+    for (uint8_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
+    free(ctx.env_struct_fn_typedefs);
     free(ctx.env_struct_names);
     free(ctx.pbp_param_ptrs);
     /* S1b/dynvar early-exit: the guard stack is emptied as each binding scope

@@ -3,7 +3,7 @@
 ;; (:: expr T) ascription. Previously collect_handle_captures did not descend
 ;; into EX_ASCRIBE, so `v` was missed and the lifted __handle_body referenced a
 ;; bare `v_NNNN` local -- a hard C 'undeclared identifier' error.
-;; See docs/reported/unsafe-block-capture-misses-ascription-vars.md.
+;; See docs/archive/history/unsafe-block-capture-misses-ascription-vars.md.
 
 (defmodule m
   (export f)

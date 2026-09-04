@@ -14,7 +14,11 @@
 ;; Value ADT
 ;; ============================================================
 
-(defdata Value
+;; `:heap` is load-bearing, not decoration: a datum is a raw `int64_t[4]`
+;; built in inline-C, so the value it stores has to be ONE WORD.  A :heap ADT
+;; is a typed pointer (`tur_adt_Value *`), which fits; a plain multi-variant
+;; sum now flows BY VALUE as a tag+union aggregate (SR1) and does not.
+(defdata Value :heap
   (LongVal :int)
   (StrVal :int)
   (EntityVal :int))
@@ -102,13 +106,13 @@
 (defn rvec-len [v : ptr<void>] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
-  return (int)vec->len;
+  return (int64_t)vec->len;
   ```)
 
 (defn rvec-get [v : ptr<void> i : int] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
-  return (int)vec->data[i];
+  return vec->data[i];
   ```)
 
 (defn rvec-push! [v : ptr<void> val : int]
@@ -161,7 +165,7 @@
 ;; Base query combinators
 ;; ============================================================
 
-(defn db-q [db : int pred] : ptr<void>
+(defn db-q [db : int pred : (fn [int] bool)] : ptr<void>
   (let [n (db-count db)]
     (let [result (rvec-new)]
       (let [^mut i 0]
@@ -173,25 +177,25 @@
             (set! i (+ i 1))))
         result))))
 
-(defn q-entity [e : int]
-  (fn [d] (= (datum-entity d) e)))
+(defn q-entity [e : int] : (fn [int] bool)
+  (fn [d : int] : bool (= (datum-entity d) e)))
 
-(defn q-attr [a : cstr]
-  (fn [d] (cstr-eq? (datum-attr d) (cstr->int a))))
+(defn q-attr [a : cstr] : (fn [int] bool)
+  (fn [d : int] : bool (cstr-eq? (datum-attr d) (cstr->int a))))
 
-(defn q-ea [e : int a : cstr]
-  (fn [d]
+(defn q-ea [e : int a : cstr] : (fn [int] bool)
+  (fn [d : int] : bool
     (and (= (datum-entity d) e)
          (cstr-eq? (datum-attr d) (cstr->int a)))))
 
-(defn q-and [p q]
-  (fn [d] (and (p d) (q d))))
+(defn q-and [p : (fn [int] bool) q : (fn [int] bool)] : (fn [int] bool)
+  (fn [d : int] : bool (and (p d) (q d))))
 
-(defn q-or [p q]
-  (fn [d] (or (p d) (q d))))
+(defn q-or [p : (fn [int] bool) q : (fn [int] bool)] : (fn [int] bool)
+  (fn [d : int] : bool (or (p d) (q d))))
 
-(defn q-not [p]
-  (fn [d] (not (p d))))
+(defn q-not [p : (fn [int] bool)] : (fn [int] bool)
+  (fn [d : int] : bool (not (p d))))
 
 ;; ============================================================
 ;; Value equality
@@ -210,22 +214,22 @@
 
 ;; q-av -- query datums by attribute name and value
 (defn q-av [a : cstr v : int]
-  (fn [d]
+  (fn [d : int] : bool
     (and (cstr-eq? (datum-attr d) (cstr->int a))
          (value-eq? (datum-value d) v))))
 
 ;; db-as-of -- return an rvec of all datums at or before as-of-tx
 (defn db-as-of [db : int as-of-tx : int] : ptr<void>
-  (db-q db (fn [d] (<= (datum-tx d) as-of-tx))))
+  (db-q db (fn [d : int] : bool (<= (datum-tx d) as-of-tx))))
 
 ;; pull -- get all datums for entity e
 (defn pull [db : int e : int] : ptr<void>
-  (db-q db (fn [d] (= (datum-entity d) e))))
+  (db-q db (fn [d : int] : bool (= (datum-entity d) e))))
 
 ;; history -- return datums for entity/attr sorted ascending by tx
 ;; Uses insertion sort (suitable for tutorial-scale data)
 (defn history [db : int entity : int attr : cstr] : ptr<void>
-  (let [raw (db-q db (fn [d]
+  (let [raw (db-q db (fn [d : int] : bool
                        (and (= (datum-entity d) entity)
                             (cstr-eq? (datum-attr d) (cstr->int attr)))))]
     (let [n (rvec-len raw)]

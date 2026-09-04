@@ -1,0 +1,48 @@
+;; SX1 (solver-extension-plan 3.5): re-entering a captured continuation across a
+;; trail scope is REFUSED, not obeyed -- demonstrated through an actual
+;; multi-shot replay rather than by calling bt-undo-to! twice by hand.
+;;
+;; 3.5's sharp edge: a continuation captures CONTROL, not state. Invoke a
+;; captured `k` twice and the second invocation resumes a computation whose
+;; trail levels the first invocation already undid. The generational mark is
+;; what makes that detectable instead of memory corruption -- comparing level
+;; indices alone would accept the stale mark and unwind whichever level now sits
+;; at that index.
+;;
+;; DECIDED 2026-08-29 (plan 3.5): this checked error is the permanent answer.
+;; Snapshotting the live trail segment on capture is declined -- it is paid at
+;; every capture rather than only on the branch taken, and it restores
+;; symmetrically, which is not what state under a search scope wants.
+;;
+;; Note how the mark reaches the replayed context: through a plain int global.
+;; It cannot travel in the closure -- `Mark` has no `Clone` instance and
+;; `cloneable-shift` requires one, which is pinned by
+;; errors/sx1-trail-mark-not-cloneable. That static refusal is the primary
+;; defense; this runtime check is the backstop for exactly the laundering below,
+;; and for inline-C, which the type system cannot see.
+
+(def ^mut saved-mark 0)
+
+;; Resume the SAME captured context twice, handing it the same packed mark.
+(defn twice [k] : int
+  (do
+    ;; first re-entry: the level is still live, so the undo runs
+    (println (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) saved-mark))
+    ;; second re-entry: that level is gone. Refused, not obeyed.
+    (println (tur_cloneable_cont_resume k saved-mark))
+    0))
+
+(defn undo-int? [p : int] : int
+  (if (bt-undo-to! (:: p Mark)) 1 0))
+
+(defn main [] : int
+  (let [c (bt-cell-new 0)
+        m (bt-mark)]
+    (bt-set! c 7)
+    (set! saved-mark (:: m :int))
+    ;; the captured context is (undo-int? []) -- replayed twice
+    (cloneable-reset (undo-int? (cloneable-shift twice 0)))
+    ;; 0: the FIRST undo restored it; the refused second one changed nothing
+    (println (bt-get c))
+    (bt-cell-free c)
+    0))

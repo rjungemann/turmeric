@@ -4,7 +4,7 @@
 ; Before CG0, gc_register_block was a silent no-op once gc_all_blocks_count hit
 ; GC_GLOBAL_REGISTRY_CAPACITY (4096): every rc block allocated after that was
 ; invisible to the collector -- a correctness cliff, not just a capacity limit
-; (docs/reported/gc-strong-cycles-not-collected.md). This builds a chain of
+; (docs/archive/history/gc-strong-cycles-not-collected.md). This builds a chain of
 ; 20000 simultaneously-live rc blocks with the collector enabled and reports the
 ; peak registry size, which must equal the number actually live.
 (defn note-peak [] : int

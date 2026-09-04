@@ -31,7 +31,7 @@
 ;;; It is a separate module rather than part of stdlib/rc.tur, deliberately.
 ;;; Originally it had to be: rc.tur did not compile at all, so an API placed
 ;;; there would have been unusable (fixed 2026-07-26, see
-;;; docs/archive/rc-tur-legacy-instances-do-not-compile.md).  It stays separate
+;;; docs/archive/history/rc-tur-legacy-instances-do-not-compile.md).  It stays separate
 ;;; now because the split is the better shape -- reaching for a weak reference
 ;;; should not drag in rc.tur's Functor/Foldable/Clone instances and the
 ;;; typeclass surface behind them.  Same reasoning as stdlib/rcchain.tur: one
@@ -119,7 +119,11 @@
 ;;;
 ;;; Since: stdlib-weak-ref-audit WR1
 
-(defn weak/unwrap [A] [o : (Option rc<A>)] : rc<A> (.value o))
+(defn weak/unwrap [A] [o : (Option rc<A>)] : rc<A>
+  ;; SR2b: match in place rather than delegating to the generic `unwrap` --
+  ;; its element slot rejects an owning rc payload (the collection-element
+  ;; ownership check), while a direct match borrows nothing.
+  (match o (Some s) s (None) (:: 0 rc<A>)))
 ;;; weak/alive? -- is the weak's referent still alive?
 ;;;
 ;;; A peek that mints nothing: unlike `weak/upgrade` it creates no strong

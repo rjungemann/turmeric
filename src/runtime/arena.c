@@ -15,7 +15,7 @@ struct ArenaSlab {
     unsigned char data[];
 };
 
-/* ---- ASan-aware debug poisoning (docs/archive/arena-debug-poisoning-plan.md)
+/* ---- ASan-aware debug poisoning (docs/archive/history/arena-debug-poisoning-plan.md)
  *
  * The bump arena is invisible to ASan at sub-allocation granularity: a stale
  * pointer into a reset arena reads still-mapped garbage, and a stale pointer

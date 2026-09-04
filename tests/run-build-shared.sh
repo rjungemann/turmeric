@@ -69,7 +69,7 @@ pass "build-shared-smoke-link"
 # misleading "symbol not found".
 if command -v nm >/dev/null 2>&1; then
     nm_out=$(nm "$LIB" 2>/dev/null)
-    if printf '%s\n' "$nm_out" | grep -qE '(^| )_?smokelib__add42( |$)'; then
+    if grep -qE '(^| )_?smokelib__add42( |$)' <<< "$nm_out"; then
         pass "build-shared-smoke-symbol-present"
     else
         fail "build-shared-smoke-symbol-present" "smokelib__add42 not found in $LIB"
@@ -94,7 +94,7 @@ fi
 pass "build-shared-smoke-harness-compile"
 
 if out=$("$HARNESS" "$LIB" 2>&1); then
-    if echo "$out" | grep -q 'smokelib__add42(100) = 142'; then
+    if grep -q 'smokelib__add42(100) = 142' <<< "$out"; then
         pass "build-shared-smoke-dlopen-call"
     else
         fail "build-shared-smoke-dlopen-call" "unexpected output: $out"
@@ -140,7 +140,7 @@ fi
 
 # Default output name for a cwd-relative target ("." / "./") must derive the
 # basename from the resolved directory, NOT produce "lib..so" / "lib.so".
-# Regression guard for docs/reported/tur-build-shared-cwd-lib-double-dot.md.
+# Regression guard for docs/archive/history/tur-build-shared-cwd-lib-double-dot.md.
 # build-output-directory-plan: artifacts now land in <root>/build/lib/, so the
 # assertion checks that path instead of the cwd.  We copy the module into a
 # freshly named subdir so the expected artifact name is predictable, then run

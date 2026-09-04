@@ -530,7 +530,7 @@ void turi_env_set_scratch_promotion(TuriEnv *env, bool enable);
  * When enabled, turi_eval parses only the newly appended source each turn and
  * reuses the Forms parsed by earlier evals, instead of re-parsing the entire
  * accumulated session source every time (which is O(N^2) in both time and
- * retained AST over a session -- see docs/reported/turi-repl-quadratic-reparse.md).
+ * retained AST over a session -- see docs/archive/history/turi-repl-quadratic-reparse.md).
  * The full accumulated blob is still handed to diagnostics, so spans and error
  * snippets render exactly as before.
  *
@@ -559,6 +559,19 @@ void turi_env_pin_prelude(TuriEnv *env);
  * (turi_eval_impl, turi_eval_file, the REPL's `#lang` handler, and the WASM
  * set-lang entry point) previously open-coded and had to keep in sync. */
 void turi_env_reset_to_prelude(TuriEnv *env);
+
+/* Honest full language switch (try-turmeric-lang-toggle-plan T0): assign the
+ * base reader AND the complete layer set, resetting the session when either
+ * changes.  Unlike the inline `#lang` eval path (which unions layers turn by
+ * turn), the layer set here is the caller's total desired state, so a layer
+ * absent from `layers` genuinely turns OFF: the persistent session
+ * reader-macro registry is re-initialized (its arena storage is
+ * env-lifetime, reclaimed at teardown) and the still-active layers
+ * re-register their dispatches on the next read via
+ * lang_layers_apply_readers.  A no-op when nothing changes.  Used by the
+ * REPL `#lang` handler and the WASM set-lang entry point. */
+void turi_env_apply_lang(TuriEnv *env, ReaderType reader_type,
+                         LangLayerSet layers);
 
 /* Look up a global binding by name.  Returns TURI_ERROR if not found. */
 TuriValue turi_env_get(TuriEnv *env, const char *name);

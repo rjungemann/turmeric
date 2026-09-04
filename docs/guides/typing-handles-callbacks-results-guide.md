@@ -261,7 +261,7 @@ The audit caught these specific shortcuts. Don't take them.
   spice will inherit `:int` and do the same. The cast moves around;
   the bug stays.
 - **"Variadic rest of opaque handles -- declare it `:int` and cast in
-  the body."** No longer needed: variadic rest with a real opaque /
+  the body."** Not needed: variadic rest with a real opaque /
   struct / ADT element type is type-checked at the call site. Write
   `& routes : Route` and a wrong-handle caller fails to elaborate.
 - **"Use a status-code `:int` return because the caller might want a

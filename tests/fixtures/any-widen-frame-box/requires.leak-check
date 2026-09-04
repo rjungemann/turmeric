@@ -1,0 +1,1 @@
+any-struct-box-leak-per-widen: the non-retaining call-argument widen must not allocate.

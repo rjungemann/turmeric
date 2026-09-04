@@ -6,15 +6,14 @@ description: Validate untyped boundary data (HTTP bodies, config, IPC) with comp
 
 # Runtime Schema Validation with `tur/schema`
 
-> **Status:** SC0--SC4 shipped (scalar/object/array/optional/union/literal/
-> transform/recursive schemas, accumulating path-tagged errors). SC5 shipped:
-> the `HasSchema` typeclass with return-type-directed `decode!` and the
-> `#json-str<T>(...)` reader macro. **SC7 is complete:** the combinator layer
-> (`always`/`never`/`ap`/`field-of`/`fmap`/`alt`, Validation semantics) *and* the
-> `Functor`/`Applicative`/`Alternative` typeclass *instances* over the phantom
-> `(Schema a)` wrapper -- so object decoders can be assembled applicatively with
-> `fmap`/`ap`/`alt-or`, including building a struct field-by-field. See
-> "Applicative combinators" and "HKT instances" below.
+> **Scope:** scalar/object/array/optional/union/literal/transform/recursive
+> schemas with accumulating path-tagged errors; the `HasSchema` typeclass with
+> return-type-directed `decode!` and the `#json-str<T>(...)` / `#json-file<T>(...)` reader macros; a
+> combinator layer (`always`/`never`/`ap`/`field-of`/`fmap`/`alt`, Validation
+> semantics); and `Functor`/`Applicative`/`Alternative` typeclass instances
+> over the phantom `(Schema a)` wrapper -- so object decoders can be assembled
+> applicatively with `fmap`/`ap`/`alt-or`, including building a struct
+> field-by-field. See "Applicative combinators" and "HKT instances" below.
 
 Turmeric's type system enforces invariants *within* a program. The gap is at
 **dynamic boundaries** -- an HTTP response body, a config file, a channel
@@ -243,7 +242,7 @@ The two are complementary: use `tur/schema` to validate data **at the
 boundary**, turning untyped JSON into values you trust, then use `tur/contract`
 to enforce invariants on those values **inside** the program.
 
-## Typed decoding with `HasSchema` (SC5)
+## Typed decoding with `HasSchema`
 
 `schema-decode` hands back the *validated node* (read fields with `json/get!`);
 to land directly in a typed value, implement the `HasSchema` typeclass. Its one
@@ -319,13 +318,68 @@ defn parse-user [body :cstr] :User
 
 Unlike `#json(...)`, the inner is an ordinary Turmeric expression (read with the
 normal reader), not a verbatim JSON blob. The bare `#json<T>(...)` literal form
-now also wraps its node tree in `(:: node T)`.
+also wraps its node tree in `(:: node T)`.
 
-The panic-on-violation `#json-str<T>` is implemented; the Result-returning
-`#json-str?<T>` and file-reading `#json-file<T>` remain future work
-(`#json-str?` emits a "not yet implemented" diagnostic).
+### `#json-str?<T>(...)` -- the Result-returning form
 
-## Applicative combinators (SC7)
+Add a `?` and a schema violation becomes a value instead of a process death:
+
+```turmeric no-check
+(defn try-user [body :cstr] :(Result User int)
+  #json-str?<User>(body))
+
+;; (ok? r) -- decoded; (ok-val r) is the User
+;; (err? r) -- the body did not satisfy User's schema
+```
+
+It expands to the panicking form behind a catch boundary:
+
+```turmeric no-check
+(:: (catch-unwind (fn [] : T (:: (decode! (json/decode expr)) T)))
+    (Result T int))
+```
+
+which is the whole design: `HasSchema` has one method and each instance's
+schema lives inside its own `decode!` body, so there is nothing else for a
+reader macro to branch on. Two consequences worth knowing:
+
+- **The violation detail still goes to stderr.** `schema-decode!` prints every
+  failing path before it raises, on the recovered path too. The `Result` tells
+  you *that* it failed; stderr tells you *what* failed.
+- **The err payload is the panic handle**, carried as `:int` at this surface --
+  `(Result T int)`. Branch with `ok?` / `err?`; there is no structured error
+  value to destructure yet.
+
+### `#json-file<T>(...)` and `#json-file?<T>(...)` -- reading a file
+
+The same family over a path instead of a string:
+
+```turmeric no-check
+(defn load-config [] :Config
+  #json-file<Config>("config.json"))
+
+(defn try-load-config [] :(Result Config int)
+  #json-file?<Config>("config.json"))
+```
+
+`#json-file<T>(path)` desugars to `(:: (decode! (json/decode-file! path)) T)`.
+`json/decode-file!` (stdlib/json.tur) reads the whole file into a private
+buffer, parses it exactly as `json/decode` would, frees the buffer, and hands
+back the node tree -- so there is no `ptr<void>` to bridge and nothing for
+the caller to free but the nodes. Two failure modes, kept distinct:
+
+- **An unreadable path** is a panic raised by `json/decode-file!` itself,
+  with the path in the message (`json/decode-file!: cannot read config.json`).
+- **A file that does not satisfy the schema** is the same `schema-decode!`
+  panic the string form raises, violation paths printed first.
+
+The `?` form puts one catch boundary around both, so `(err? r)` covers "no
+such file" and "wrong shape" alike -- the `Result` says *that* it failed and
+stderr says *what*. Malformed JSON in a readable file decodes to the null
+node and then fails the schema, as with `#json-str`. The interpreter runs the
+same function as a native, so `--interpret` agrees.
+
+## Applicative combinators
 
 Object decoders compose from smaller pieces with the **Validation applicative**:
 `schema/ap` decodes both arms against the same input and **accumulates** their
@@ -368,7 +422,7 @@ need to choose a later schema based on a decoded value, decode in two explicit
 steps (decode the discriminant, then dispatch on it) rather than reaching for a
 monad. Note also the O(arms) cost: `ap`/`union` decode every arm.
 
-## HKT instances (SC7)
+## HKT instances
 
 The combinators above are also surfaced as `Functor`/`Applicative`/`Alternative`
 typeclass instances over a phantom wrapper, so object decoders can be assembled

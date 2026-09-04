@@ -232,8 +232,21 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                 EffectRow *param_row = param->type.as.fn.effect_row;
                 if (!param_row || param_row->kind != ERK_VAR) continue;
 
-                /* Determine the actual argument's effect row. */
+                /* Determine the actual argument's effect row.  Peel the
+                 * fat-normalization shim first (EX_FN_TO_FAT boxes a bare-fn
+                 * or lambda argument into a fat handle) and erased
+                 * ascriptions: the row belongs to the wrapped value.  Without
+                 * the peel, row-variable unification never runs for a
+                 * normalized effectful slot -- which silently disarmed both
+                 * the occurs check (TUR-E0254 negatives) and the row-var
+                 * mismatch inference (TUR-E0009). */
                 Expr *actual = e->as.call_.args[pi];
+                while (actual &&
+                       (actual->kind == EX_ASCRIBE ||
+                        actual->kind == EX_FN_TO_FAT))
+                    actual = (actual->kind == EX_ASCRIBE)
+                                 ? actual->as.ascribe_.inner
+                                 : actual->as.fn_to_fat_.inner;
                 EffectRow *actual_row = NULL;
                 if (actual && actual->kind == EX_CLOSURE) {
                     /* Closure literal: collect its body effects with a fresh subst. */
@@ -887,13 +900,25 @@ static int check_call_site_rows_in_expr(Arena *a, Expr *e,
                 Binding *param = callee->params[pi];
                 if (!param || param->type.kind != TY_FN) continue;
                 EffectRow *param_row = param->type.as.fn.effect_row;
+                Expr *actual = e->as.call_.args[pi];
                 /* Only check concrete declared rows (not row variables). */
                 if (!param_row ||
                     (param_row->kind != ERK_CONCRETE &&
                      param_row->kind != ERK_EMPTY)) continue;
 
-                /* Determine actual argument's inferred effect row. */
-                Expr *actual = e->as.call_.args[pi];
+                /* Determine actual argument's inferred effect row.  Peel the
+                 * fat-normalization shims first (EX_FN_TO_FAT wraps a bare-fn
+                 * or lambda argument into a fat handle; ascription is erased
+                 * at codegen): the row belongs to the wrapped value, and
+                 * matching the wrapper here is how the five errors/effect-*
+                 * negatives silently stopped diagnosing when the effect-row
+                 * exclusion was probe-lifted (2026-08-16 re-measurement). */
+                while (actual &&
+                       (actual->kind == EX_ASCRIBE ||
+                        actual->kind == EX_FN_TO_FAT))
+                    actual = (actual->kind == EX_ASCRIBE)
+                                 ? actual->as.ascribe_.inner
+                                 : actual->as.fn_to_fat_.inner;
                 EffectRow *actual_row = NULL;
                 if (actual && actual->kind == EX_CLOSURE) {
                     EffectRowSubst *arg_subst = effect_row_subst_new(a);
@@ -1036,6 +1061,22 @@ static void check_unreachable_handlers_in_expr(
     switch (e->kind) {
     case EX_HANDLE: {
         HandleExpr *h = e->as.handle_.handle;
+        /* unsafe-block-w0033-on-raw-builtins (docs/archive/): the `(unsafe
+         * ...)` desugar's Unsafe clause is compiler-generated and the block
+         * is MANDATORY for the gated raw builtins, which by design never
+         * perform the Unsafe effect (it is a compile-time marker; see the
+         * is_unsafe_marker comment in expr.h).  So "this clause is
+         * unreachable" was both always true and never actionable --
+         * contradictory advice on a required form.  Skip the clause check;
+         * a USER-written handle for a never-performed effect still warns
+         * (errors/effect-handle-unreachable pins that), and nested user
+         * handles inside the unsafe body are still swept below. */
+        if (h->is_unsafe_marker) {
+            check_unreachable_handlers_in_expr(a, h->body, idx, env);
+            for (uint8_t i = 0; i < h->n_cases; i++)
+                check_unreachable_handlers_in_expr(a, h->cases[i].body, idx, env);
+            return;
+        }
         EffectRowSubst *subst = effect_row_subst_new(a);
         EffectRow *body_row = collect_effects_in_expr(
             a, h->body, effect_row_empty(a), idx, env, subst);

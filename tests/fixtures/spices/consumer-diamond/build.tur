@@ -1,0 +1,10 @@
+;; c-sources-propagate-only-one-level: a DIAMOND -- the vendor is reached both
+;; directly and through consumer-of-aux.  Its vendored c/vendor.c must appear
+;; on the link line exactly once (a spice reached by two routes must not turn
+;; into a duplicate-symbol failure).
+(defpackage consumer-diamond
+  :name "consumer-diamond"
+  :spices #map{
+    "consumer-of-aux" #map{:path "../consumer-of-aux"}
+    "aux-c-vendor"    #map{:path "../aux-c-vendor"}
+  })

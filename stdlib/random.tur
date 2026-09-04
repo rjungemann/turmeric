@@ -2,6 +2,18 @@
 ;;;
 ;;; Implements the Random capability typeclass for real random values.
 ;;;
+;;; NOT CRYPTOGRAPHICALLY SECURE. This is libc `rand()` seeded with
+;;; `time(NULL)`. Its output is fully predictable to anyone who can guess the
+;;; second the process started -- a few thousand candidate streams, trivially
+;;; enumerable. It is the right tool for simulation, sampling, shuffling,
+;;; jitter, and procedural generation, and the wrong tool for anything an
+;;; attacker benefits from predicting: session tokens, password-reset links,
+;;; nonces, salts, IVs, or key material.
+;;;
+;;; For those, use `crypto-random-bytes!` from the `secret` spice
+;;; (`spices/secret` in turmeric-spices), which draws from the OS CSPRNG --
+;;; `getrandom(2)` / `arc4random_buf` / `BCryptGenRandom` / `/dev/urandom`.
+;;;
 ;;; Since: Phase 16
 ;; Phase 16: Real Random implementation
 ;;
@@ -182,7 +194,7 @@
 ;;;   time(NULL) on first call.
 ;;;
 ;;; Example:
-;;;   (rand-int 1 6)  ; => 4  (simulate a die roll)
+;;;   (rand-int 1 6)  ; => 4  (simulate a die roll)  ; doctest: non-deterministic (seeded from time(NULL))
 ;;;
 ;;; Since: Phase 16
 ;; Get a random integer in range [min, max]
@@ -208,7 +220,7 @@
 ;;;   in [0, 1).  The libc RNG is auto-seeded with time(NULL) on first call.
 ;;;
 ;;; Example:
-;;;   (rand-float)  ; => 7312  ; represents ~0.7312
+;;;   (rand-float)  ; => 7312  (represents ~0.7312)  ; doctest: non-deterministic (seeded from time(NULL))
 ;;;
 ;;; Since: Phase 16
 ;; Get a random float in range [0, 1)
@@ -234,7 +246,7 @@
 ;;;   A random integer in [1, sides].
 ;;;
 ;;; Example:
-;;;   (rand-die 20)  ; => 13  (D20 roll)
+;;;   (rand-die 20)  ; => 13  (D20 roll)  ; doctest: non-deterministic (seeded from time(NULL))
 ;;;
 ;;; Since: Phase 16
 ;; Roll a die with n sides (1 to n)
@@ -256,7 +268,7 @@
 ;;;   1 (true) or 0 (false) with equal probability.
 ;;;
 ;;; Example:
-;;;   (rand-bool)  ; => 1
+;;;   (rand-bool)  ; => 1  (or 0)  ; doctest: non-deterministic (fair coin, seeded from time(NULL))
 ;;;
 ;;; Since: Phase 16
 ;; Random boolean (true or false)

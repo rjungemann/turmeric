@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """check_turi_native_parity.py -- ratchet for the turi interpreter preload gap.
 
-Prereq 3a of docs/upcoming/v1/turi-open-reports-prereqs.md.  Companion to
+Prereq 3a of docs/archive/history/turi-open-reports-prereqs.md.  Companion to
 check_turi_parity.py: where that script ratchets the *expression-kind* parity
 (every EX_* the compiler emits has a case arm in eval.c), this one ratchets the
 *module preload* parity that drives the allowlist->denylist harness flip

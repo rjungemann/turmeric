@@ -35,8 +35,27 @@ reconfigure:
 # ---------------------------------------------------------------------------
 
 test: build doctest
-    # NOTE: Run with a 5-minute timeout for now, due to some minor hang issues
-    timeout 300 ctest --output-on-failure --progress --test-dir build
+    # -j is required, not decoration: without it the ~106 registered targets
+    # run sequentially and end-to-end wall time becomes their SUM rather than
+    # the slowest one. It is safe because the fan-out harnesses (tur_tests,
+    # turi_fixture_tests, tur_jit_fixture_tests) are marked RUN_SERIAL, so
+    # ctest never co-schedules two of them. Dropping it is a soft regression
+    # that shows up in no individual test's timing -- see section 5 of
+    # docs/guides/test-suite-portability-guide.md.
+    #
+    # The job count must be EXPLICIT. `ctest -j` with no number is documented
+    # as `-j <jobs>` through CMake 3.28 (a bare value-less --parallel only
+    # arrived in 3.29), and on 3.28 a bare -j is accepted in silence and does
+    # nothing: measured on a 4-core box, five targets took 11.2s serial, 11.5s
+    # with bare -j, and 5.8s with an explicit count. A bare -j therefore looks
+    # like the fix while changing nothing. `getconf _NPROCESSORS_ONLN` is the
+    # portable count (nproc is GNU-only; macOS has neither).
+    #
+    # 720s, not 300s: tests/run.sh alone is ~265s on a 4-core box and is
+    # RUN_SERIAL, so a 5-minute cap killed the suite on any machine slower
+    # than the one it was tuned on. 12 minutes is the repo-wide suite timeout
+    # (see CLAUDE.md).
+    timeout 720 ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build
 
 # Run stdlib doctests (generate + run).
 doctest: build
@@ -103,7 +122,7 @@ test-turi: build
     bash tests/run-turi.sh
 
 test-tsan: tsan
-    TUR_TSAN=1 ctest --output-on-failure --test-dir build
+    TUR_TSAN=1 ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --test-dir build
 
 # Run production smoke tests against live turmeric-lang.com + try.turmeric-lang.com.
 # Requires: npm install run from the web/ directory (just web-deps).
@@ -297,20 +316,60 @@ rebuild: clean configure build
 # Generate HTML API docs from stdlib ;;; docstrings.
 # Also emits stdlib/docstrings.tur for the runtime (doc name) lookup,
 # and web/public/doc-names.json for the web REPL search bar.
+#
+# stdlib/docstrings.tur is TRACKED, and its `doc-verified?` table comes from
+# `just doctest`'s manifest (tests/doctest-generated/verified.txt), which is
+# gitignored. This recipe deliberately does NOT depend on `doctest`: that would
+# put a build plus the full doctest run in front of every docs regen, including
+# the one inside `wasm` -> `web` -> `deploy-web`. Instead gendocs carries the
+# existing table forward when the manifest is missing, and says so on stderr.
+# So: run `just doctest` before this if you want the table REFRESHED; without
+# it the table is preserved, never emptied.
+# See docs/archive/docstrings-verified-table-zeroed-by-regen.md.
 # Spice symbols are folded into doc-names.json via --extra-json so the web
 # search bar surfaces stdlib + spices in a single list.
+#
+# OD1: every generator also emits its pages a second way -- chrome-free
+# fragments into web/public/docs-pack/ -- and `genpack` merges them into
+# index.json, resolves cross-links, and enforces the size budget. The body of
+# each page is rendered exactly once and wrapped twice, so the website and Try
+# Turmeric's in-app docs pane cannot drift. See docs/guides/offline-docs-guide.md.
+#
+# `--strict-links` is armed: a cross-link that resolves to nothing is a build
+# failure, not a note scrolled past. genguides rewrites any local `.md` href to
+# a sibling `.html` without checking the target exists, so a link to a guide
+# that was never written -- or into `docs/upcoming/`, `docs/archive/`, or
+# `docs/reported/`, none of which are rendered -- ships as a 404 on
+# turmeric-lang.com. Link an unrendered doc by its GitHub blob URL, the way the
+# guides already link CLAUDE.md.
 docs: guides spices
-    python3 tools/gendocs.py stdlib/ --out docs/html/api/ --emit-tur stdlib/docstrings.tur --emit-json web/public/doc-names.json --extra-json docs/html/spices/doc-names-spices.json
+    python3 tools/gendocs.py stdlib/ --out docs/html/api/ --emit-tur stdlib/docstrings.tur --emit-json web/public/doc-names.json --extra-json docs/html/spices/doc-names-spices.json --emit-pack web/public/docs-pack/
+    python3 tools/genpack.py web/public/docs-pack/ --strict-links
 
 # Render markdown guides to HTML pages (served at /docs/html/guides/).
 guides:
-    python3 tools/genguides.py docs/guides/ --out docs/html/guides/
+    python3 tools/genguides.py docs/guides/ --out docs/html/guides/ --emit-pack web/public/docs-pack/
 
 # Generate per-spice doc pages from the sibling ../turmeric-spices/ checkout.
 # Also emits docs/html/spices/doc-names-spices.json which gendocs merges into
 # web/public/doc-names.json on the next step.
 spices:
-    python3 tools/genspices.py --out docs/html/spices/ --emit-json docs/html/spices/doc-names-spices.json
+    python3 tools/genspices.py --out docs/html/spices/ --emit-json docs/html/spices/doc-names-spices.json --emit-pack web/public/docs-pack/
+
+# Bundle the rendered docs (site HTML + docs pack) for offline use off the web.
+# `just docs` first, then: turmeric-docs-<version>.tar.gz, which the release cut
+# attaches to the GitHub release and the Homebrew formula can install into
+# share/doc/turmeric/ for `tur docs --open`. See OD4.
+docs-tarball: docs
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="$(cat VERSION)"
+    out="turmeric-docs-${version}.tar.gz"
+    rm -f "$out"
+    tar -czf "$out" \
+        --transform "s,^,turmeric-docs-${version}/," \
+        -C . docs/html web/public/docs-pack
+    echo "wrote $out ($(du -h "$out" | cut -f1))"
 
 
 # Check that every turmeric+sweet-exp toggle pair in the guides is valid, and
@@ -355,6 +414,14 @@ web: wasm web-deps
 # Depends on `web`, so the wasm is always rebuilt from the current tree before
 # publishing -- the artifacts it writes into web/public/ are gitignored and
 # must not be committed.
+#
+# That is not the whole account of what this touches. The chain reaches `docs`
+# (deploy-web -> web -> wasm -> docs), which rewrites the TRACKED
+# stdlib/docstrings.tur. It is now idempotent when the doctest manifest is
+# absent -- it used to empty the file's `doc-verified?` table, which is how a
+# zeroed table repeatedly reached main via release commits. If a deploy leaves
+# stdlib/docstrings.tur dirty, that is a real regen (new/changed docstrings),
+# not noise: read the diff before discarding it.
 deploy-web: web
     cd web && npm run deploy
 
@@ -377,6 +444,13 @@ web-dev: web-deps
       echo "error: web/public/doc-names.json missing -- run 'just docs' first" >&2
       echo "       (it is a build output and is no longer committed; without it" >&2
       echo "        the REPL's doc panel silently finds nothing)" >&2
+      exit 1
+    fi
+    if [ ! -f web/public/docs-pack/index.json ]; then
+      echo "error: web/public/docs-pack/index.json missing -- run 'just docs' first" >&2
+      echo "       (it is a build output and is not committed; without it the" >&2
+      echo "        REPL's docs pane opens onto an empty nav and the service" >&2
+      echo "        worker has nothing to precache for offline reading)" >&2
       exit 1
     fi
     cd web && npm run dev
@@ -570,7 +644,7 @@ perf: perf-run perf-aggregate perf-analyze perf-docs perf-viz perf-open
 # with no wrapper.
 #
 # STATUS: the Windows port is not finished -- see
-# docs/upcoming/v1/windows-support-plan.md.  `configure-windows` currently stops
+# docs/archive/windows-support-plan.md.  `configure-windows` currently stops
 # at the architecture dispatch in src/CMakeLists.txt (CMAKE_SYSTEM_PROCESSOR is
 # empty under MSYS2).  The toolchain above is correct; the build is what still
 # needs work.

@@ -6,10 +6,11 @@ description: def ^mut, what the compiler checks about a global write, and the co
 
 # Mutable Globals Guide
 
-> **Status: experimental.** Everything past plain `^mut` -- naming a global in a
-> write frame, the read-only-outside-the-module rule, `^atomic`, and
-> `^thread-local` -- is behind `--enable=global-state`. Plain `(def ^mut g v)`
-> itself is unconditional. The design of record is
+> Everything on this page is unconditional -- naming a global in a write frame,
+> the read-only-outside-the-module rule, `^atomic`, and `^thread-local` need
+> no `--enable` flag. `--enable=global-state` was a warning-only no-op through
+> 0.37.0 and is a hard `TUR-E0310` from 0.38.0; delete it. The
+> design of record is
 > [`docs/upcoming/mutable-globals-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/mutable-globals-plan.md).
 
 ## The form
@@ -31,6 +32,32 @@ side effect.
 Initialization runs in source order before `main`, so a `def` may read an
 earlier global. A forward reference is `TUR-E0003`, not a zero-initialized
 surprise.
+
+### Any type may be bound at module level
+
+There is no restriction on the *type* of a global. In particular, a value whose
+type comes from `defopaque` -- including one declared `:linear` -- is an
+ordinary global:
+
+```turmeric
+(def hub-mutex (mutex-new))     ; Mutex is (defopaque Mutex :ptr<void> :linear)
+
+(defn broadcast [msg : cstr] : nil
+  (mutex-lock hub-mutex)
+  ...
+  (mutex-unlock hub-mutex))
+```
+
+A process-lifetime mutex, connection pool, or shared registry behind a
+module-level `def` is the intended spelling. Linearity is satisfied by the
+initializer: the value is produced once, at static-init, and lives for the
+process -- one production, one lifetime.
+
+You may see older code holding the carrier and casting back at each borrow
+(`(def hub-mutex (:: (mutex-new) :int))`, then `(:: hub-mutex Mutex)`). That was
+a workaround for a codegen bug that emitted no storage for such a global while
+still emitting references to it; it was fixed 2026-08-29. It costs an unchecked
+cast at every use, so replace it with the direct spelling.
 
 ## Reach for something else first
 
@@ -61,9 +88,9 @@ below exists instead.
 
 ### A `#writes` frame may name a global
 
-By default a `#writes` frame speaks only about **parameters**, so a body that
-writes a global can never be VERIFIED -- the frame has no way to name what it
-writes. With `--enable=global-state` it does:
+A `#writes` frame names **parameters and mutable globals**, so a body that
+maintains global state can say so and be checked, instead of being declined
+outright for writing something the frame had no way to name:
 
 ```turmeric
 (def ^mut hits 0)
@@ -81,9 +108,9 @@ writes. With `--enable=global-state` it does:
 Declared-but-never-written is fine -- a frame is an *upper bound*. Frames may
 mix parameters and globals: `#writes [a hits]`.
 
-Two gates are involved and they do different jobs: `global-state` lets the frame
-*name* a global, and `write-frames` is what *checks* frames at all. Naming one
-without `--enable=write-frames` parses and imposes nothing.
+Frames are checked (WF2's three verdicts) as of 0.37.0, when the `write-frames`
+experiment graduated -- before that a frame parsed and imposed nothing unless
+you passed `--enable=write-frames`.
 
 `#reads` is deliberately **not** part of this and still rejects a non-parameter
 name. It is the annotation that *grants* congruence, so a global there would let
@@ -191,10 +218,10 @@ discipline for you.
 | Annotation | Position | Effect | Gate |
 |---|---|---|---|
 | `^mut` | top level | `set!` is allowed | none |
-| `^atomic` | top level | accesses are sequentially consistent; needs `^mut`; 8-byte scalars | `global-state` |
-| `^thread-local` | top level | one copy per thread, initialized per thread | `global-state` |
-| `#writes [g]` | on a `defn` | the frame may name a global | `global-state` (+ `write-frames` to check) |
-| `(export (mut g))` | in `defmodule` | importers may write `g` | `global-state` |
+| `^atomic` | top level | accesses are sequentially consistent; needs `^mut`; 8-byte scalars | none |
+| `^thread-local` | top level | one copy per thread, initialized per thread | none |
+| `#writes [g]` | on a `defn` | the frame may name a global, and is checked | none |
+| `(export (mut g))` | in `defmodule` | importers may write `g` | none |
 
 ## See also
 

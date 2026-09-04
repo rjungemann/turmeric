@@ -17,13 +17,12 @@ monomorphization land, several of these sites will gain non-erased
 representations. Treat the file:line citations as a starting point and
 re-verify before relying on them.
 
-> **Status: post-Theme B/C/D (2026-05-30).** The aggregate carrier bridge
-> (Theme B), sized-primitive carriers (Theme C), and the by-value/by-pointer
-> struct ABI plus typed function-pointer fields (Theme D1/D2) have landed.
-> Sized primitives narrow the carrier (`int32_t`, `uint8_t`, ...) but a
-> generic slot is still `int64_t`. The one remaining erasure that the
-> unboxing roadmap *deliberately keeps* is the nested-aggregate case --
-> see "Nested aggregates" below (Theme D3).
+> **Status.** The aggregate carrier bridge, sized-primitive carriers, the
+> by-value/by-pointer struct ABI, and typed function-pointer fields are all
+> in place. Sized primitives narrow the carrier (`int32_t`, `uint8_t`, ...)
+> but a generic slot is still `int64_t`. Nested aggregate fields are inlined
+> only when the owning product itself flows by value -- see "Nested
+> aggregates" below.
 
 ---
 
@@ -31,8 +30,12 @@ re-verify before relying on them.
 
 Everything funnels through one function:
 
-- **`type_c_name()`** at `src/compiler/types.c:1560` -- maps a `Type`
-  to the C type name used in the emitted header and source.
+- **`type_c_name()`** at `src/compiler/types.c:3231` -- maps a `Type`
+  to the C type name used in the emitted header and source. Simple
+  payload-free kinds get their answer from the shared `TY_SIMPLE_REPR_ROWS`
+  table (same file, ~line 484), which also feeds
+  `type_has_concrete_codegen_layout` and `append_type_mangle` so the three
+  switches cannot drift.
 
 If `type_c_name()` returns `"int64_t"` for a type, that type is erased
 at the C boundary. If it returns a struct name or a concrete C type,
@@ -48,13 +51,15 @@ Heap-allocated values are cast through `(int64_t)(intptr_t)` and stored
 as raw integers. The runtime keeps a pointer; the type system pretends
 it's an int.
 
-- ADTs (`TY_ADT`) -- `src/compiler/types.c:1630-1631`
-- Opaque structs and `defopaque` -- `src/compiler/types.c:1626-1627`
-- Cons cells -- `stdlib/list.tur:18, 33, 56, 68`
-- Option values -- `stdlib/option.tur:30-35`
+- ADTs (`TY_ADT`) -- `src/compiler/types.c:3338` (by-value flat products
+  are the exception: they lower to the real `tur_adt_<Name>` aggregate)
+- Opaque structs and `defopaque` -- the `TY_STRUCT` row of
+  `TY_SIMPLE_REPR_ROWS` in `src/compiler/types.c`
+- Cons cells -- `stdlib/list.tur` (untyped `tnil` / `list-length` paths)
+- Option values -- `stdlib/option.tur` (payload slot)
 
 Call sites that marshal these into generic positions live in
-`src/compiler/elab_call.c:1570-1576`.
+`src/compiler/elab_call.c` (search `(int64_t)(intptr_t)`).
 
 ### Opaque-by-default
 
@@ -62,10 +67,11 @@ Anything the type checker cannot lower to a concrete C layout falls
 through to `int64_t`. This is how parametric polymorphism is
 implemented in the absence of monomorphization.
 
-- Type variables (`TY_TYVAR`) -- `src/compiler/types.c:1632-1634`
+- Type variables (`TY_TYVAR`) -- the `TY_TYVAR` row of
+  `TY_SIMPLE_REPR_ROWS`, `src/compiler/types.c`
 - Type applications without concrete layout (`TY_APP`) --
-  `src/compiler/types.c:1638-1643`
-- Recursive types (`TY_REC`, Fix-style) -- `src/compiler/types.c:1645-1646`
+  `src/compiler/types.c:3354`
+- Recursive types (`TY_REC`, Fix-style) -- `src/compiler/types.c:3379`
 
 Note the asymmetry inside `TY_APP`: if `type_has_concrete_codegen_layout()`
 succeeds, the application gets a real struct via `register_struct_app()`.
@@ -82,8 +88,8 @@ typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 #define TUR_TAG(t, v)  ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})
 ```
 
-- Definition -- `src/compiler/emit_module.c:1324-1327`
-- Tag construction -- `src/compiler/emit_expr.c:725`
+- Definition -- `src/compiler/emit_module.c:6654`
+- Tag construction -- `src/compiler/emit_expr.c` (search `TUR_TAG(`, ~line 3806)
 
 Used for `(A | B)` union types and the `any` top type.
 
@@ -95,18 +101,20 @@ Function values are a special case because they need both a code
 pointer and an environment, but the type system still wants to treat
 them uniformly.
 
-- `TY_FN` inside a struct field -- `src/compiler/types.c:473` --
-  always `int64_t`.
-- Fat closure struct -- `src/compiler/emit_expr.c:1715`:
+- `TY_FN` inside a struct field -- an `int64_t` fat handle for a boxed
+  closure field; a concrete `cfnptr` field is the one un-erased case (it
+  lowers to a real `R (*)(A...)` typedef).
+- Fat closure struct -- `src/compiler/emit_expr.c` (~line 7850):
   ```c
   struct __env_N { int64_t __fn; <captures...> };
   ```
-- Rank-2 polymorphic wrapper -- `src/compiler/emit_module.c:1314`:
+- Rank-2 polymorphic wrapper -- `src/compiler/emit_module.c:7966`:
   ```c
-  typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;
+  typedef struct { void *env; int64_t (*fn)(void *, int64_t);
+                   int64_t (*fn_cps)(void *, int64_t, struct DK *); } tur_poly_fn_t;
   ```
 - Function pointers cast `(int64_t)(intptr_t)` when passed into poly
-  helpers -- `src/compiler/emit_expr.c:1169-1243`.
+  helpers -- `src/compiler/emit_expr.c`.
 
 The code pointer is erased into `int64_t`; the environment travels
 alongside as a separate `void *`.
@@ -136,51 +144,31 @@ declaring `defn` is the source of truth.
 
 ---
 
-## Nested aggregates (Theme D3 decision)
+## Nested aggregates
 
 A struct *field* whose type is itself an aggregate -- another `defstruct`,
-a `TY_APP` like `Option[int]`, or an ADT -- is **carrier-erased to
-`int64_t`, not flat-embedded**. This is verifiable today:
+a `TY_APP` like `Option[int]`, or an ADT -- is inlined or carrier-erased
+depending on the **owner**, not just the field type. The chokepoint is
+`adt_ctor_field_c_type` (`src/compiler/emit_module.c`), which every
+field-emission site routes through, consulting
+`adt_field_is_inline_byval` (`src/compiler/types.c`):
 
-```turmeric
-(defstruct Vec2 [x : int y : int])
-(defstruct HasVec [p : Vec2])           ;; field p
-(defstruct HasOpt [o : (Option int)])  ;; field o
-```
-```sweet-exp
-defstruct Vec2 [x :int y :int]
-defstruct HasVec [p :Vec2]           ;; field p
-defstruct HasOpt [o : (Option int)]  ;; field o
-```
+- **By-value owner, drop-glue-free by-value field** -- the field is
+  **flat-inlined**: `HasVec` containing a `Vec2` really holds a
+  `tur_adt_Vec2 p;` member. This covers nested by-value ADT/struct
+  products and concrete by-value `TY_APP` monomorph fields
+  (`(Option cstr)` -> `tur_adt_Option__cstr`).
+- **Everything else stays on the carrier**: a `:heap` field is a typed
+  pointer; a field whose type owns an rc/ref (needs drop glue) is boxed so
+  the owner stays trivially copyable; a *carrier* owner keeps every field
+  as an `int64_t` slot holding a cast pointer to a heap-allocated
+  aggregate; generic/parametric fields with no concrete layout stay
+  erased.
 
-lowers (via `struct_field_c_type`, `src/compiler/types.c`) to:
-
-```c
-typedef struct HasVec { int64_t p; } HasVec;   /* not Vec2 p */
-typedef struct HasOpt { int64_t o; } HasOpt;   /* not a flat Option */
-```
-
-The `default:` arm of `struct_field_c_type`'s field-kind switch returns
-`int64_t` for `TY_STRUCT` / `TY_APP` / `TY_ADT` fields; the field holds a
-cast pointer to a heap-allocated aggregate.
-
-**Decision: keep nested aggregates carrier-erased for now.** Flat-inlining
-a concrete nested struct (so `HasVec` literally contains a `Vec2`) is a
-*future optimization*, not a correctness requirement, and it would have to:
-
-1. gate on `type_has_concrete_codegen_layout()` for the field type (the
-   same seam the HKT work uses), so generic/parametric fields stay erased;
-2. agree with the Theme D1 `pass_by_ptr` decision -- an inlined wide field
-   pushes the containing struct past the 16-byte by-pointer threshold and
-   must flip the *container* to by-pointer too;
-3. update every `make-struct`, field-read (`.f s`), and field-write site
-   to stop round-tripping through `(int64_t)(intptr_t)`.
-
-The function-pointer field case (Theme D2) is the one nested case that
-*was* un-erased, because a concrete `fn` type has a stable C signature and
-no allocation; see `struct_field_c_type`'s `TY_FN` branch. Aggregates do
-not share that property, so they stay on the carrier ABI until the
-optimization above is scheduled on its own merits.
+The function-pointer field case is different again: a concrete `cfnptr`
+field has a stable C signature and no allocation, so it lowers to a real
+function-pointer typedef, while a boxed closure field is an `int64_t` fat
+handle (see `type_c_name`'s `TY_FN` arm).
 
 ---
 

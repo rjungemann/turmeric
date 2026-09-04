@@ -19,215 +19,175 @@ Turmeric supports **serializable continuations**, enabling suspended computation
 - Mobile agents (send code + state to remote peer)
 - Debugger snapshots (freeze and replay)
 
+The concrete surface is small:
+
+- `serial-reset` / `serial-shift` -- special forms that delimit a
+  serializable region and capture the continuation (as an opaque
+  `ptr<void>` handle).
+- `save-cont!` / `resume-cont!` in `stdlib/workflow.tur` -- serialize a
+  captured continuation to a bytes value, and rebuild + resume one from
+  bytes. `workflow-suspend` / `workflow-resume` are aliases.
+- `serial-cont->bytes` / `bytes->serial-cont` / `serial-resume` in
+  `stdlib/serial.tur` -- the typed spellings: marshal a `serial-cont`,
+  rebuild one as a `(Result serial-cont cstr)` (a foreign or damaged buffer
+  is an `Err`, never an abort), and resume (`(k v)`).
+- `cont-to-file` / `cont-from-file` in `stdlib/serial.tur` -- write/read
+  the bytes value to/from disk.
+
+This guide focuses on the checkpointing patterns built on top of that
+surface. See also [serializable-continuations-guide.md](serializable-continuations-guide.md).
+
 ## Core Concept
 
-Delimited continuations reify the call stack as a heap-allocated closure chain. Each frame is a struct on the heap. Serialization traverses this chain, emitting a stable encoding, then reconstructs on load.
+Delimited continuations reify the call stack as a heap-allocated frame chain. Serialization walks this chain, emitting a stable encoding, then reconstructs it on load. `tests/fixtures/workflow-roundtrip/` locks the round trip.
 
-```turmeric
-;; Capture a continuation
-(def saved false)
-(def result
-  (+ 1 (cloneable-shift [k]
-         (set! saved k)
-         10)))
+```turmeric no-check
+(load "stdlib/workflow.tur")
 
-;; Serialize to bytes
-(def bytes (serialize saved))
+;; The serial-shift handler receives the captured continuation as an
+;; opaque ptr<void>. Serialize it and write it to disk.
+(defn save-to-disk [k : ptr<void>] : int
+  (do
+    (cont-to-file (save-cont! k) "continuation.dat")
+    0))
 
-;; Write to disk or send over network
-(write-file "continuation.dat" bytes)
+;; Capture "the rest of the computation" (+ 1 _) and park it on disk.
+(serial-reset (+ 1 (serial-shift save-to-disk 0)))
 
-;; Later, in another process:
-(def k (deserialize (read-file "continuation.dat")))
-(resume k 42)  ; => 43
+;; Later, in another process running the same binary:
+(let [b (cont-from-file "continuation.dat")]
+  (resume-cont! b 42))   ; runs (+ 1 42) => 43
 ```
 
 ```sweet-exp
-;; Capture a continuation
-def saved false
-def result
-  {1 + cloneable-shift([k]
-    set!(saved k)
-    10)}
+load("stdlib/workflow.tur")
 
-;; Serialize to bytes
-def bytes serialize(saved)
+;; The serial-shift handler receives the captured continuation as an
+;; opaque ptr<void>. Serialize it and write it to disk.
+defn save-to-disk [k : ptr<void>] : int
+  do
+    cont-to-file(save-cont!(k) "continuation.dat")
+    0
 
-;; Write to disk or send over network
-write-file("continuation.dat" bytes)
+;; Capture "the rest of the computation" (+ 1 _) and park it on disk.
+serial-reset {1 + serial-shift(save-to-disk 0)}
 
-;; Later, in another process:
-def k deserialize(read-file("continuation.dat"))
-resume(k 42)  ; => 43
+;; Later, in another process running the same binary:
+let [b cont-from-file("continuation.dat")]
+  resume-cont!(b 42)   ; runs (+ 1 42) => 43
 ```
+
+`(serial-shift handler default)` takes exactly two arguments: a function
+that receives the captured continuation, and a default expression. If the
+handler resumes the continuation, the resumed computation's result becomes
+the value of the enclosing `serial-reset`; if it does not (as above), the
+handler's own return value does.
 
 ## Serialization Design
 
-### Stable Symbol Table
+### Stable Frame Encoding
 
-Function pointers are not portable across builds. Each continuation frame stores:
-
-```turmeric
-(struct continuation-frame
-  [fn-symbol : string  ; e.g., "mymodule.myfunction"
-   args : (list any)   ; serializable arguments
-   captures : (map symbol any)])  ; captured variables
-```
-
-```sweet-exp
-struct continuation-frame
-  [fn-symbol : string  ; e.g., "mymodule.myfunction"
-   args : (list any)   ; serializable arguments
-   captures : (map symbol any)]  ; captured variables
-```
-
-On deserialization, the symbol is resolved to the current build's function pointer.
+Function pointers are not portable across processes, so no code address is
+ever written to the byte stream. Each captured frame is encoded as a
+**stable name tag plus its environment value**; on deserialization the tag
+is resolved back to the current binary's frame function through a
+self-registered name table. Captured `cstr` and `Serializable` environment
+values are copied into the buffer by content.
 
 ### The Serializable Typeclass
 
-Not all types can be serialized. Opt-in via the `Serializable` trait:
+Not all captured values can be serialized. Types opt in via the
+`Serializable` typeclass in `stdlib/serial.tur`:
 
-```turmeric
+```turmeric no-check
 (defclass Serializable [a]
-  (serialize [x : a] : bytes)
-  (deserialize [b : bytes] : a))
+  (serialize [x] : ptr<void>)          ; marshal to a length-prefixed bytes value
+  (deserialize [b : ptr<void>] : a))   ; unmarshal; panics on malformed input
 
-;; Primitive implementations
-(instance Serializable int64 ...)
-(instance Serializable string ...)
-(instance Serializable bool ...)
-
-;; Derived implementations
-(instance Serializable (Pair a b) [Serializable a, Serializable b] ...)
-
-;; NOT serializable
-(instance Serializable FileHandle
-  ;; Custom handler: store file path, re-open on deserialize
-  (serialize [fh] (file-handle-path fh))
-  (deserialize [path] (open-file path)))
+;; Shipped instances: int, bool, float, cstr, ptr<void>, Pair, Option.
 ```
 
 ```sweet-exp
 defclass Serializable [a]
-  serialize([x : a] : bytes)
-  deserialize([b : bytes] : a)
+  serialize [x] : ptr<void>            ; marshal to a length-prefixed bytes value
+  deserialize [b : ptr<void>] : a      ; unmarshal; panics on malformed input
 
-;; Primitive implementations
-instance Serializable int64 ...
-instance Serializable string ...
-instance Serializable bool ...
-
-;; Derived implementations
-instance Serializable (Pair a b) [Serializable a, Serializable b] ...
-
-;; NOT serializable
-instance Serializable FileHandle
-  ;; Custom handler: store file path, re-open on deserialize
-  serialize([fh] file-handle-path(fh))
-  deserialize([path] open-file(path))
+;; Shipped instances: int, bool, float, cstr, ptr<void>, Pair, Option.
 ```
+
+`deserialize` panics on malformed input -- there is no `Result`-returning
+variant at this level.
 
 ### Resource Types
 
-File handles, sockets, and other system resources can define custom **marshal/unmarshal hooks**:
-
-```turmeric
-(defclass Resource-Serializable [a]
-  ;; Serialize to a stable representation
-  (marshal [x : a] : resource-token)
-  ;; Restore from token in new process
-  (unmarshal [token : resource-token] : a))
-
-(instance Resource-Serializable FileHandle
-  (marshal [fh] (file-handle-path fh))
-  (unmarshal [path] (open-file path)))
-```
-
-```sweet-exp
-defclass Resource-Serializable [a]
-  ;; Serialize to a stable representation
-  marshal([x : a] : resource-token)
-  ;; Restore from token in new process
-  unmarshal([token : resource-token] : a)
-
-instance Resource-Serializable FileHandle
-  marshal([fh] file-handle-path(fh))
-  unmarshal([path] open-file(path))
-```
+File handles, sockets, and other system resources cannot be serialized
+directly. The pattern is to serialize a **stable representation** and
+re-acquire the resource on resume -- e.g. a `Serializable` instance for a
+file-handle wrapper that serializes the *path* and re-opens the file in
+`deserialize`. Keep the raw handle out of the captured frame and carry the
+path (a `cstr`) instead.
 
 ### Ownership Model and Serialization
 
-Serialized continuations produce a **deep copy**. Ownership is transferred; originals are invalidated:
-
-```turmeric
-(def r (ref 42))
-(cloneable-shift [k]
-  (serialize k))  ; Serialization deep-copies r
-                  ; Original r is now inaccessible
-(deserialize bytes)  ; Deserialize: new r created with value 42
-```
-
-```sweet-exp
-def r ref(42)
-cloneable-shift([k]
-  serialize(k))  ; Serialization deep-copies r
-                 ; Original r is now inaccessible
-deserialize(bytes)  ; Deserialize: new r created with value 42
-```
-
-This is safe because:
-- The original continuation is no longer reachable (it was consumed by `shift`).
-- The deserialized continuation has a fresh copy of captured state.
-- No aliasing between old and new process.
+`save-cont!` copies the frame chain and its captured environment values into
+a fresh, length-prefixed byte buffer that the caller owns. `resume-cont!`
+rebuilds a brand-new chain from those bytes, so the resumed run shares no
+heap state with the process that produced the checkpoint -- resuming in
+another process is exactly as safe as resuming in the same one, which is
+what `tests/fixtures/workflow-roundtrip/` demonstrates by round-tripping
+through bytes and resuming in place.
 
 ## Example: Persistent Workflow
 
 A multi-step business process that survives crashes:
 
-```turmeric
+```turmeric no-check
 (defn process-order [order-id]
   ;; Step 1: Validate order
   (def order (load-order order-id))
-  (unless (valid-order? order)
-    (throw (validation-error "Invalid order")))
+  (when (not (valid-order? order))
+    (panic "Invalid order"))
   (checkpoint "order-validated" order)
-  
+
   ;; Step 2: Charge payment (slow network call)
-  (def charge-result (charge-payment order.payment-info))
+  (def charge-result (charge-payment (order-payment-info order)))
   (checkpoint "payment-charged" charge-result)
-  
+
   ;; Step 3: Fulfill order
   (def fulfillment (fulfill order charge-result))
   (checkpoint "order-fulfilled" fulfillment)
-  
+
   fulfillment)
 
-;; Checkpointing macro
+;; Checkpointing macro: persist the continuation, then keep going --
+;; resuming through the serialized bytes, so the checkpoint is exercised
+;; on every run (the workflow-roundtrip shape).
 (defmacro checkpoint [name value]
-  `(cloneable-shift [k]
-     ;; Save continuation to disk
-     (def checkpoint-file (str "checkpoint-" ~name ".bin"))
-     (write-file checkpoint-file (serialize k))
-     ;; Resume immediately on first run
-     (continue k ~value)))
+  `(serial-shift
+     (fn [k : ptr<void>] : int
+       (let [b (save-cont! k)]
+         (cont-to-file b (str-concat "checkpoint-" ~name ".bin"))
+         (resume-cont! b ~value)))
+     0))
 
-;; On crash, user can resume from last checkpoint
-(defn resume-from-checkpoint [name]
-  (def checkpoint-file (str "checkpoint-" name ".bin"))
-  (def k (deserialize (read-file checkpoint-file)))
-  (resume k))
+;; On crash, resume from the last checkpoint file.
+(defn resume-from-checkpoint [name : cstr value : int] : int
+  (let [b (cont-from-file (str-concat "checkpoint-" name ".bin"))]
+    (if (ptr-null? b)
+      (panic "checkpoint missing or unreadable")
+      (resume-cont! b value))))
 ```
 
 ```sweet-exp
 defn process-order [order-id]
   ;; Step 1: Validate order
   def order load-order(order-id)
-  unless valid-order?(order)
-    throw(validation-error("Invalid order"))
+  when not(valid-order?(order))
+    panic("Invalid order")
   checkpoint("order-validated" order)
 
   ;; Step 2: Charge payment (slow network call)
-  def charge-result charge-payment(order.payment-info)
+  def charge-result charge-payment(order-payment-info(order))
   checkpoint("payment-charged" charge-result)
 
   ;; Step 3: Fulfill order
@@ -236,107 +196,115 @@ defn process-order [order-id]
 
   fulfillment
 
-;; Checkpointing macro
+;; Checkpointing macro: persist the continuation, then keep going --
+;; resuming through the serialized bytes, so the checkpoint is exercised
+;; on every run (the workflow-roundtrip shape).
 defmacro checkpoint [name value]
-  `(cloneable-shift [k]
-     ;; Save continuation to disk
-     (def checkpoint-file (str "checkpoint-" ~name ".bin"))
-     (write-file checkpoint-file (serialize k))
-     ;; Resume immediately on first run
-     (continue k ~value))
+  `(serial-shift
+     (fn [k : ptr<void>] : int
+       (let [b (save-cont! k)]
+         (cont-to-file b (str-concat "checkpoint-" ~name ".bin"))
+         (resume-cont! b ~value)))
+     0)
 
-;; On crash, user can resume from last checkpoint
-defn resume-from-checkpoint [name]
-  def checkpoint-file str("checkpoint-" name ".bin")
-  def k deserialize(read-file(checkpoint-file))
-  resume(k)
+;; On crash, resume from the last checkpoint file.
+defn resume-from-checkpoint [name : cstr value : int] : int
+  let [b cont-from-file(str-concat("checkpoint-" name ".bin"))]
+    if ptr-null?(b)
+      panic("checkpoint missing or unreadable")
+      resume-cont!(b value)
 ```
 
 ## Example: Distributed Task Migration
 
 Send a half-finished computation to another node:
 
-```turmeric
-;; Node A: long-running job, half done
-(def job
-  (cloneable-reset
-    (fn []
-      (def task1-result (run-task1))
-      (def task2-result (run-task2 task1-result))
-      (def task3-result (run-task3 task2-result))
-      task3-result)))
+```turmeric no-check
+;; Node A: long-running job; after task1 it captures "the rest of the job"
+;; and ships it to another node instead of running tasks 2 and 3 locally.
+(defn ship-to-node-b [k : ptr<void>] : int
+  (do
+    (send-to-node-b (save-cont! k))
+    0))
 
-;; Save state
-(def bytes (serialize job))
-(send-to-node-b bytes)
+(serial-reset
+  (let [task1-result (run-task1)
+        handoff      (serial-shift ship-to-node-b 0)]
+    (run-task3 (run-task2 handoff))))
 
-;; Node B: resume
-(def job (deserialize (receive-bytes)))
-(def result (resume job))
+;; Node B (same binary): resume with task1's result
+(def result (resume-cont! (receive-bytes) task1-result))
 ```
 
 ```sweet-exp
-;; Node A: long-running job, half done
-def job
-  cloneable-reset
-    fn []
-      def task1-result run-task1()
-      def task2-result run-task2(task1-result)
-      def task3-result run-task3(task2-result)
-      task3-result
+;; Node A: long-running job; after task1 it captures "the rest of the job"
+;; and ships it to another node instead of running tasks 2 and 3 locally.
+defn ship-to-node-b [k : ptr<void>] : int
+  do
+    send-to-node-b(save-cont!(k))
+    0
 
-;; Save state
-def bytes serialize(job)
-send-to-node-b(bytes)
+serial-reset
+  let [task1-result run-task1()
+       handoff      serial-shift(ship-to-node-b 0)]
+    run-task3(run-task2(handoff))
 
-;; Node B: resume
-def job deserialize(receive-bytes())
-def result resume(job)
+;; Node B (same binary): resume with task1's result
+def result resume-cont!(receive-bytes() task1-result)
 ```
 
 ## Example: Web Continuations (Racket-style)
 
-Serialize "what to do when form is submitted" as a URL token:
+Serialize "what to do when the form is submitted" as a URL token:
 
-```turmeric
-;; Initial page
-(defn get-checkout [req]
-  (cloneable-shift [k]
-    ;; Save continuation to disk, return URL token
-    (def token (save-continuation-to-db k))
+```turmeric no-check
+;; Initial page: capture the continuation, store its bytes, hand back a token.
+(defn park-checkout [k : ptr<void>] : int
+  (let [token (save-continuation-to-db (save-cont! k))]
     (render-page
-      (form :action (str "/checkout-submit?token=" token)))))
+      (form :action (str-concat "/checkout-submit?token=" token)))))
 
-;; Form submission handler
+(defn get-checkout [req]
+  (serial-reset
+    (checkout-flow (serial-shift park-checkout 0))))
+
+;; Form submission handler: load the bytes and resume.
 (defn post-checkout-submit [token req]
-  ;; Load and resume continuation
-  (def k (load-continuation-from-db token))
-  (def response (resume k (parse-form-data req)))
-  response)
+  (resume-cont! (load-continuation-from-db token)
+                (parse-form-data req)))
 ```
 
 ```sweet-exp
-;; Initial page
-defn get-checkout [req]
-  cloneable-shift [k]
-    ;; Save continuation to disk, return URL token
-    def token save-continuation-to-db(k)
+;; Initial page: capture the continuation, store its bytes, hand back a token.
+defn park-checkout [k : ptr<void>] : int
+  let [token save-continuation-to-db(save-cont!(k))]
     render-page
-      form(:action str("/checkout-submit?token=" token))
+      form(:action str-concat("/checkout-submit?token=" token))
 
-;; Form submission handler
+defn get-checkout [req]
+  serial-reset
+    checkout-flow(serial-shift(park-checkout 0))
+
+;; Form submission handler: load the bytes and resume.
 defn post-checkout-submit [token req]
-  ;; Load and resume continuation
-  def k load-continuation-from-db(token)
-  def response resume(k parse-form-data(req))
-  response
+  resume-cont!(load-continuation-from-db(token)
+               parse-form-data(req))
 ```
+
+This is the pattern the guestbook example ships end-to-end -- see
+[web-continuations-guide.md](web-continuations-guide.md) and
+`examples/guestbook/`.
 
 ## Example: Checkpointing Long-Running Computation
 
 Periodic snapshots for crash recovery:
 
-```turmeric
+```turmeric no-check
+(defn snapshot-and-continue [k : ptr<void>] : int
+  (let [b (save-cont! k)]
+    (cont-to-file b "checkpoint-latest.bin")
+    (resume-cont! b 0)))
+
 (defn analyze-large-dataset [data]
   (defn checkpoint-every-n [n items]
     (let [processed []]
@@ -344,16 +312,18 @@ Periodic snapshots for crash recovery:
         (fn [i item]
           (set! processed (conj processed (process item)))
           (when (= (mod (+ i 1) n) 0)
-            ;; Checkpoint every n items
-            (cloneable-shift [k]
-              (write-file (str "checkpoint-" i ".bin")
-                         (serialize k))
-              (continue k)))))))
-  
+            ;; Checkpoint every n items, then keep going
+            (serial-shift snapshot-and-continue 0))))))
+
   (checkpoint-every-n 1000 data))
 ```
 
 ```sweet-exp
+defn snapshot-and-continue [k : ptr<void>] : int
+  let [b save-cont!(k)]
+    cont-to-file(b "checkpoint-latest.bin")
+    resume-cont!(b 0)
+
 defn analyze-large-dataset [data]
   defn checkpoint-every-n [n items]
     let [processed []]
@@ -361,78 +331,44 @@ defn analyze-large-dataset [data]
         fn [i item]
           set!(processed conj(processed process(item)))
           when {mod({i + 1} n) = 0}
-            ;; Checkpoint every n items
-            cloneable-shift [k]
-              write-file(str("checkpoint-" i ".bin")
-                         serialize(k))
-              continue(k)
+            ;; Checkpoint every n items, then keep going
+            serial-shift(snapshot-and-continue 0)
 
   checkpoint-every-n(1000 data)
 ```
 
 ## Reconstruction and Error Handling
 
-### Schema Versioning
+Failures surface as null/zero sentinels and panics, not `Result` values:
 
-Continuation frames carry schema version. Mismatches produce an error:
+- `save-cont!` returns `nil` when handed a nil continuation; otherwise a
+  length-prefixed bytes buffer the caller owns.
+- `cont-to-file` returns `1` on success, `0` on any I/O failure.
+- `cont-from-file` returns `nil` (NULL) on any I/O or allocation failure --
+  check it with `ptr-null?` before resuming.
+- `resume-cont!` returns `0` when handed a nil bytes value.
+- A `Serializable` `deserialize` of a malformed captured value panics.
 
-```turmeric
-(def k (deserialize bytes))  ; May fail if:
-                             ; - Function no longer exists
-                             ; - Argument types changed
-                             ; - Captured types are incompatible
+```turmeric no-check
+(let [b (cont-from-file "checkpoint.bin")]
+  (if (ptr-null? b)
+    (panic "cannot resume: checkpoint missing or unreadable")
+    (resume-cont! b 0)))
 ```
 
 ```sweet-exp
-def k deserialize(bytes)  ; May fail if:
-                          ; - Function no longer exists
-                          ; - Argument types changed
-                          ; - Captured types are incompatible
+let [b cont-from-file("checkpoint.bin")]
+  if ptr-null?(b)
+    panic("cannot resume: checkpoint missing or unreadable")
+    resume-cont!(b 0)
 ```
 
-Error handling:
-
-```turmeric
-(try-with
-  (fn []
-    (deserialize (read-file "checkpoint.bin")))
-  (fn [e k]
-    (match e
-      (schema-mismatch _ old-version) ->
-        (throw (error (str "Cannot resume: checkpoint uses version " old-version
-                           " but current code is version " (current-version)))))))
-```
-
-```sweet-exp
-try-with
-  fn []
-    deserialize(read-file("checkpoint.bin"))
-  fn [e k]
-    match e
-      (schema-mismatch _ old-version)
-      ->
-      throw(error(str("Cannot resume: checkpoint uses version " old-version " but current code is version " current-version())))
-```
-
-### Partial Reconstruction
-
-If deserialization of a captured value fails, the whole continuation fails. To tolerate missing state:
-
-```turmeric
-;; Wrap potentially failing values in Option
-(def opt-value
-  (try
-    (deserialize captured-value)
-    (catch [e] (None))))
-```
-
-```sweet-exp
-;; Wrap potentially failing values in Option
-def opt-value
-  try
-    deserialize(captured-value)
-    catch([e] None())
-```
+**Same-build rule.** Frames are resolved by *name* against the running
+binary's frame registry. A checkpoint written by a different build whose
+frame names no longer match is **not detected** -- a missing name resolves
+to a null frame and resuming it is undefined behavior. Only resume
+checkpoints produced by the same binary, and version your checkpoint files
+yourself (e.g. embed a build id in the filename or alongside the bytes).
 
 ## Performance Considerations
 
@@ -440,7 +376,7 @@ def opt-value
 
 - **Small continuations (~1-10 frames):** Microsecond-scale serialization
 - **Large continuations (100+ frames):** Millisecond-scale; consider streaming
-- **Deep captured state:** Clone overhead proportional to state size
+- **Deep captured state:** Copy overhead proportional to state size
 
 ### Strategies
 
@@ -452,44 +388,41 @@ def opt-value
 ## API Summary
 
 ```turmeric no-check
-;; Serialize a continuation
-(serialize cont : (cloneable-shift [k] k)) : bytes
+;; Special forms: delimit a serializable region / capture the continuation
+(serial-reset body)
+(serial-shift handler default)   ; handler : (fn [k : ptr<void>] ...)
 
-;; Deserialize a continuation
-(deserialize bytes : bytes) : (cloneable-shift [k] k)
+;; stdlib/workflow.tur
+(save-cont! k)                   ; k -> bytes ptr<void> (nil if k is nil)
+(resume-cont! b v)               ; rebuild from bytes b, resume with v -> int
+(workflow-suspend k)             ; alias for save-cont!
+(workflow-resume b v)            ; alias for resume-cont!
 
-;; Resume a continuation with a value
-(resume k : (cloneable-shift [k] k) v : a) : a
+;; stdlib/serial.tur file helpers
+(cont-to-file b path)            ; write bytes; 1 on success, 0 on failure
+(cont-from-file path)            ; read bytes; nil on failure
 
-;; Checkpoint macro (example)
+;; Checkpoint macro (example, defined above)
 (checkpoint name value)
-
-;; Resource marshalling
-(marshal resource : a) : resource-token
-(unmarshal token : resource-token) : a
 ```
 
 ```sweet-exp
-;; Serialize a continuation
-serialize cont : (cloneable-shift [k] k)
-: bytes
+;; Special forms: delimit a serializable region / capture the continuation
+serial-reset body
+serial-shift handler default    ; handler : (fn [k : ptr<void>] ...)
 
-;; Deserialize a continuation
-deserialize bytes : bytes
-: (cloneable-shift [k] k)
+;; stdlib/workflow.tur
+save-cont!(k)                   ; k -> bytes ptr<void> (nil if k is nil)
+resume-cont!(b v)               ; rebuild from bytes b, resume with v -> int
+workflow-suspend(k)             ; alias for save-cont!
+workflow-resume(b v)            ; alias for resume-cont!
 
-;; Resume a continuation with a value
-resume k : (cloneable-shift [k] k) v : a
-: a
+;; stdlib/serial.tur file helpers
+cont-to-file(b path)            ; write bytes; 1 on success, 0 on failure
+cont-from-file(path)            ; read bytes; nil on failure
 
-;; Checkpoint macro (example)
-checkpoint name value
-
-;; Resource marshalling
-marshal resource : a
-: resource-token
-unmarshal token : resource-token
-: a
+;; Checkpoint macro (example, defined above)
+checkpoint(name value)
 ```
 
 ## See Also

@@ -4,10 +4,10 @@
 ;; PER-INSTANTIATION by-value spec, not the generic int64 carrier shim.
 ;;
 ;; Gap G2 of docs/carrier-concrete-abi-crossing-audit-plan.md
-;; (docs/archive/constrained-instance-dispatch-nested-parametric-element-carrier-collapse.md):
-;; in the body of `(definstance Enc [Option] [(Enc A)] (enc (.value x)))`, when
-;; the concrete element `A` is `(Cons B)`, `(.value x)` is a concrete `Cons__B *`
-;; but the inner `(enc (.value x))` baked the generic carrier shim
+;; (docs/archive/history/constrained-instance-dispatch-nested-parametric-element-carrier-collapse.md):
+;; in the body of `(definstance Enc [Option] [(Enc A)] (enc (unwrap x)))`, when
+;; the concrete element `A` is `(Cons B)`, `(unwrap x)` is a concrete `Cons__B *`
+;; but the inner `(enc (unwrap x))` baked the generic carrier shim
 ;; `__inst_Enc_enc_Cons(int64_t)` -- a `-Wint-conversion` mismatch that survived
 ;; for `int` by pointer-width luck and silently miscompiled `float` (a double's
 ;; bit pattern read as int64).
@@ -54,7 +54,7 @@
 ;; Option is by-value; its element here is the parametric container (Cons A).
 (definstance Enc [Option]
   [(Enc A)]
-  (enc [x] : cstr (if (.is-some x) (enc (.value x)) "null")))
+  (enc [x] : cstr (if (some? x) (enc (unwrap x)) "null")))
 
 (defn main [] : int
   (do

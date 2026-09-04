@@ -1,5 +1,5 @@
 ;; A #row{...} (kind [*]) cannot be the type of a *value* -- only a type
 ;; argument to a row-kinded ('^&') constructor parameter. This used to be
 ;; silently accepted (and dropped the row's elements); now it is a kind error.
-;; See docs/reported/row-type-in-value-position-loses-elements.md.
+;; See docs/archive/history/row-type-in-value-position-loses-elements.md.
 (defn f [x : #row{int bool}] : int 5)

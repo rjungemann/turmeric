@@ -1,4 +1,4 @@
-; P3 of docs/reported/ecs-e2c-sized-dense-needs-bounded-world.md:
+; P3 of docs/archive/history/ecs-e2c-sized-dense-needs-bounded-world.md:
 ; sized-buf-copy! shares its size variable `n` across the dst and src
 ; parameters.  When the callers pin `n` to distinct literal sizes
 ; ((Static 2) vs (Static 3)), the SZ8 cross-parameter unifier rejects

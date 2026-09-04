@@ -4,7 +4,7 @@
 ;;
 ;; Root cause (docs/archive/constrained-instance-element-dispatch.md): in the
 ;; body of `(definstance Enc [Option] [(Enc A)] ...)` the inner call
-;; `(enc (.value x))` has its receiver `(.value x)` erased to the int64 carrier
+;; `(enc (unwrap x))` has its receiver `(unwrap x)` erased to the int64 carrier
 ;; at elaboration (its declared type is the struct type-param `A`, summarized as
 ;; the carrier `int`).  The emit-side method re-resolver
 ;; (emit_core.c:emit_reresolve_method_call) only re-dispatched when the receiver
@@ -54,8 +54,8 @@
 (definstance Enc [Option]
   [(Enc A)]
   (enc [x] : cstr
-    (if (.is-some x)
-      (enc (.value x))
+    (if (some? x)
+      (enc (unwrap x))
       "null")))
 
 (defn main [] : int

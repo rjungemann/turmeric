@@ -52,7 +52,7 @@
 ;; (`__tur_ret_p = malloc(...); *__tur_ret_p = cb;`) while the dispatch consumer
 ;; read that cell as the handle, one indirection too many.  Fixed by not boxing
 ;; a value that is already carrier-width; see
-;; docs/archive/hkt-rc-construct-body-boxes-handle.md and
+;; docs/archive/history/hkt-rc-construct-body-boxes-handle.md and
 ;; tests/fixtures/hkt-instance-rc-construct-result.
 
 (definstance Functor [rc]
@@ -101,7 +101,7 @@
 ;; integer was expected" -- rc.tur did not compile at all.  And the suite could
 ;; not have verified anything, because no fixture loaded this module; the C
 ;; stage was never reached.  tests/fixtures/rc-tur-typeclass-instances is that
-;; missing fixture.  See docs/archive/rc-tur-legacy-instances-do-not-compile.md.
+;; missing fixture.  See docs/archive/history/rc-tur-legacy-instances-do-not-compile.md.
 ;;; Foldable [rc] -- Foldable instance for rc<T>.
 ;;;
 ;;; Since: Phase HKT S6

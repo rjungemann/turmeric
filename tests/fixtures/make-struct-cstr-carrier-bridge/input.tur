@@ -6,7 +6,7 @@
 ;; covered TY_PTR_VOID/TY_RC/TY_REF/TY_WEAK/TY_EXISTS/TY_FORALL but not TY_CSTR,
 ;; so a const char* value assigned to the int64 carrier field was emitted as an
 ;; implicit pointer->integer conversion that clang flags with -Wint-conversion.
-;; See docs/reported/make-struct-cstr-into-carrier-field-no-bridge-cast.md.
+;; See docs/archive/history/make-struct-cstr-into-carrier-field-no-bridge-cast.md.
 
 (defstruct Box :heap [A] (val :A) (tag :int))
 

@@ -6,7 +6,7 @@
 ;; thin arm was read as a fat box (slot-0 of a code address) and jumped into
 ;; -> SIGSEGV.  The fix boxes the thin arm uniformly fat.  This is an
 ;; environment-passing interpreter as one cata; eval (var 0) under env 100 = 100.
-;; See docs/archive/captureless-algebra-arm-thin-through-carrier.md.
+;; See docs/archive/history/captureless-algebra-arm-thin-through-carrier.md.
 (load "stdlib/typeclass-functor.tur")
 (defdata ExprF :copy [a] (LitF :int) (VarF :int) (AddF a a))
 (defdata Expr  :copy (Roll (ExprF Expr)))

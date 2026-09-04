@@ -46,7 +46,7 @@ for the cast / blessed-construction / type-erased boundary* -- is therefore
 Phase 1 (post-emit dead-static DCE of unconsumed instance bases/dicts) is a
 code-size cleanup needing a coordinated snapshot regen, no longer an
 audit-crossing win. Full write-up:
-`docs/reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md`
+`docs/archive/history/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md`
 ("Update 2026-06-17 (post-#400 audit floor)").
 
 ## 0g. Status snapshot — 2026-06-16 (root 2: `Eq [Vec]` retired to carrier-based; audit 98 -> 70)
@@ -71,7 +71,7 @@ regenerated), interpreter gate **1209/2** (documented pre-existing), spice json
 boundaries (`:heap` casts, blessed inline-C construction, the typed
 Result/Option-at-dispatch M4 dict-ABI item, MutableMap's still-`:int` producers,
 type-erased SChan) -- the old deref-copy root-2 shape is gone. Full write-up:
-`docs/reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md`
+`docs/archive/history/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md`
 ("Update 2026-06-16").
 
 ## 0f. Status snapshot — 2026-06-15 (M5 D.4 COMPLETE -- producer-side bridge count -> 0)
@@ -97,7 +97,7 @@ write-up: `m5-residual-straddle-retirement.md` (session 10) +
 
 **Next: Vec typed-pointer vertical slice** (M3 sequencing step 2). Execution
 plan written 2026-06-15:
-`docs/upcoming/v2/vec-typed-pointer-vertical-slice-plan.md`. Converts the Vec
+`docs/archive/vec-typed-pointer-vertical-slice-plan.md`. Converts the Vec
 primitives from the int64 carrier to the matrix-mandated `Vec__A *` typed-pointer
 ABI, driving the ~114 `Vec int` carrier-bridge crossings toward 0 and retiring
 the by-value-header copy that is a latent mutation miscompile. Baseline re-
@@ -134,12 +134,12 @@ Since the last audit refresh (`0506bab2`), the following landed:
 
 - **M4c Path A**: per-instantiation specs for non-HKT typeclass-instance
   methods on parameterized concrete-layout types (Vec, Cons, Tuple2).
-  See `docs/upcoming/m4c-execution-plan.md`.
+  See `docs/archive/m4c-execution-plan.md`.
 - **M4c-pre-ext (Cons, Vec)**: stdlib `Eq Cons` and `Eq Vec` rewritten as
   pure-Turmeric recursive/index loops, retiring direct dependence on
   `list-eq?` / `vec-eq?` inline-C helpers at the Eq dispatch site. Helpers
   remain for carrier-ABI consumers. See
-  `docs/upcoming/tco-in-abi-specs-for-stdlib-iteration.md`.
+  `docs/archive/history/tco-in-abi-specs-for-stdlib-iteration.md`.
 - **TCO lifts #1, #2, #3** (`53c23aed` and predecessors): the
   `__tur_tailcall:` label loop now composes with ABI specialization, with
   spec-aware `tco_param_type`, and with typeclass-method-dispatch
@@ -160,7 +160,7 @@ Since the last audit refresh (`0506bab2`), the following landed:
   `(defstruct Map [K V] (carrier :int))` is a **transparent int newtype**
   whose `type_c_name` short-circuits to `"int64_t"` in every
   instantiation, so Path A's `abi_changes` check correctly identifies no
-  ABI delta. See `docs/reported/why-path-a-bails-on-map-eq-instance.md`.
+  ABI delta. See `docs/archive/why-path-a-bails-on-map-eq-instance.md`.
 
 Suite: `1564 passed, 86 failed` — identical to the pre-session baseline.
 
@@ -382,7 +382,7 @@ box, and (b) suppress prelude emission when no user code references them.
 
 #### Carrier-essential helper inventory (Phase 4.1/4.3, 2026-06-18)
 
-Per [`docs/upcoming/v2/phase4-carrier-helper-inventory.md`](upcoming/v2/phase4-carrier-helper-inventory.md),
+Per [`docs/archive/phase4-carrier-helper-inventory.md`](upcoming/v2/phase4-carrier-helper-inventory.md),
 the following stdlib helpers walk a heterogeneous HAMT with no element type
 available, so they are **carrier-essential** -- they stay inline-C on the
 int64 carrier (each now carries a `;;` NOTE in source) and are the legitimate

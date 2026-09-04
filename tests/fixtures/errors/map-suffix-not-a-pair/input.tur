@@ -1,0 +1,7 @@
+;; The `:` suffix on #map{} takes a parenthesised (key value) PAIR, because Map
+;; has two type parameters.  A single bare type is rejected at read time -- if
+;; it were accepted as the key and the value left to be inferred, `#map{}:int`
+;; would silently mean something different from what it looks like.
+(defn main [] : int
+  (let [m #map{}:int]
+    0))

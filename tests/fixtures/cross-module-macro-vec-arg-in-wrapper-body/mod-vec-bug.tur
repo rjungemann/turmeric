@@ -1,6 +1,6 @@
 ;; Auxiliary module for the cross-module-macro-vec-arg-in-wrapper-body
 ;; regression fixture. See input.tur for context and the report at
-;; docs/reported/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md.
+;; docs/archive/history/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md.
 
 (defmodule mod-vec-bug
   (export m)

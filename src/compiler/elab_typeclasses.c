@@ -238,12 +238,22 @@ static const Symbol *helper_eq_symbol_for_struct(Elab *e, const AdtDef *sd,
  * (thanks to F3-7's sticky ascription) terminates the recursion at
  * the right level.  Returns NULL if `elem_type` cannot be
  * round-tripped to a Form. */
-static Form *build_comparator_lambda(Elab *e, const Type *elem_type, Span span) {
+/* container-element-form-plan CE2 (default since option-niche graduated):
+ * `slot_words` says the helper hands the comparator RAW Vec slot words
+ * (`vec-eq?` reads `a->data[i]` straight out of the buffer).  A niche
+ * `(Option P)` element sits in its slot as the payload pointer itself, so the
+ * `(:: __cmp_slot_a (Option P))` bridge must reinterpret the word, never unbox
+ * it as a carrier box.  The `__cmp_slot_` prefix is the mark: emit_slot_word_is
+ * recognises it exactly as it does the hoist temp of a `vec-get`.  Every other
+ * helper (map/option/list/pair/result-eq?) hands the comparator a value that
+ * crossed the carrier boundary (boxed), so those keep the plain names. */
+static Form *build_comparator_lambda(Elab *e, const Type *elem_type, Span span,
+                                     bool slot_words) {
     Form *elem_form = type_to_form(e, elem_type, span);
     if (!elem_form) return NULL;
 
-    const Symbol *sym_a       = intern_cstr(e->st, "__cmp_a");
-    const Symbol *sym_b       = intern_cstr(e->st, "__cmp_b");
+    const Symbol *sym_a       = intern_cstr(e->st, slot_words ? "__cmp_slot_a" : "__cmp_a");
+    const Symbol *sym_b       = intern_cstr(e->st, slot_words ? "__cmp_slot_b" : "__cmp_b");
     const Symbol *sym_dot_eq  = intern_cstr(e->st, ".eq?");
 
     Form **asc_a_items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
@@ -320,7 +330,7 @@ static Form *build_mapkey_cmp_form(Elab *e, const Type *key_type, Span span) {
  * directly, bypassing elab_call's ^fat auto-shim -- so a captureless comparator
  * lambda would reach the (now ^fat) *-eq? value-comparator parameter as a bare
  * function pointer and be misread as a fat box (segfault, per
- * docs/reported/eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md).
+ * docs/archive/history/eq-synthesis-dispatcher-passes-bare-comparator-to-fat-sink.md).
  * Wrapping it in EX_FN_TO_FAT here boxes a captureless lambda via the
  * per-signature __tur_fatshim_*, and is a pass-through for an already-fat
  * (capturing) closure -- matching the fat dispatch the helper bodies now use.
@@ -436,7 +446,7 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
             kf = build_mapkey_cmp_form(e, k_type, span);
         }
         if (kf) {
-            Form *vf = build_comparator_lambda(e, v_type, span);
+            Form *vf = build_comparator_lambda(e, v_type, span, false);
             if (!vf) return NULL;
             Expr *kcmp = elab_form(e, kf);
             Expr *vcmp = elab_form(e, vf);
@@ -516,7 +526,8 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
      * type errors surface before we commit to the synthesised call. */
     Expr *lambdas[2] = {0};
     for (uint8_t i = 0; i < n_comparators; i++) {
-        Form *lf = build_comparator_lambda(e, args_collected[i], span);
+        Form *lf = build_comparator_lambda(e, args_collected[i], span,
+                                           strcmp(sd->name, "Vec") == 0);
         if (!lf) return NULL;
         lambdas[i] = elab_form(e, lf);
         if (!lambdas[i]) return NULL;
@@ -665,7 +676,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
      * trips type_app's kind check (TUR-E0012).  The fmap shape (fn returns a
      * bare element `b`) never builds `(m _)` so it was unaffected; only the
      * monadic shapes (fn returning an applied HKT type) hit it.  See
-     * docs/reported/m7-hkt-fn-returning-applied-type-kind-mismatch.md. */
+     * docs/archive/history/m7-hkt-fn-returning-applied-type-kind-mismatch.md. */
     Kind *eff_kinds = (Kind *)class_type_param_kinds;
     /* M7: collecting method-level element tyvars is a PARSE concern.  A typed
      * HKT class signature (`(foldr [ta : (t a) ...] : b)`) parses and the
@@ -1619,7 +1630,15 @@ Expr *elab_defclass(Elab *e, const Form *call) {
     /* method-vs-defn clash check: a class registered during stdlib auto-load is
      * "intentionally overridable" by a same-named user defn, so it is exempt
      * from the TUR-W0039 clash warning (see elab_toplevel.c). */
-    tc->from_stdlib       = e->in_stdlib_load;
+    /* interp-stdlib-class-method-shadows-user-defn: interpreter preload turns
+     * load stdlib outside the in_stdlib_load bracket (stdlib_prefix == 0), so
+     * OR in the preload flag -- otherwise MapKey/Show/... register as USER
+     * classes under --interpret and a same-named user defn loses bare-call
+     * resolution to the class method (compiled/interp divergence). */
+    {
+        extern bool g_turi_stdlib_preload;   /* runtime/globals.c */
+        tc->from_stdlib   = e->in_stdlib_load || g_turi_stdlib_preload;
+    }
 
     /* Create a TYPECLASS_DEF expression for codegen */
     Expr *tc_expr = expr_new(e->arena, EX_TYPECLASS_DEF, TYPE_NIL, call->span);
@@ -2023,7 +2042,7 @@ static void m7_collect_tyvar_bindings(Elab *e, Type decl, Type act,
  * un-grounded element tyvar?  When the HKT by-value monomorphization cannot
  * recover a result element tyvar from the call args -- the Applicative `ap`
  * shape, whose result element `b` lives only inside a wrapped function value
- * that erases to `ptr<void>` (docs/reported/m7-hkt-ap-fn-element-carrier-
+ * that erases to `ptr<void>` (docs/archive/history/m7-hkt-ap-fn-element-carrier-
  * erasure.md) -- the substituted result `(Option b)` keeps `b` free.  Emitting
  * a by-value spec for it mints a half-by-value method (carrier `int64_t`
  * return) while the dispatch dict references a dropped carrier base, a hard cc
@@ -2157,6 +2176,17 @@ static bool parse_instance_head_arg(Elab *e, const Form *f, Type *out) {
     Binding *asb = scope_lookup(e->scope, akw);
     if (asb && asb->type.kind == TY_ADT && asb->type.as.adt_.def) {
         *out = asb->type; return true;
+    }
+    /* return-dispatched-sum-mint-in-constrained-instance-miscompiles (repro
+     * 3): scope_lookup is value-preferring, so for a lowered defstruct (and
+     * any `(defdata T ... (T ...))`) the name resolves to the constructor
+     * FUNCTION and the fall-through below turned `Box` in `[(Option Box)]`
+     * into a type VARIABLE named Box.  Ask the type namespace, as the
+     * two-parameter head path (`elab_lookup_type_by_name`, below) already
+     * does; only a name known to neither is a genuine head tyvar. */
+    Type *aty = elab_lookup_type_by_name(e, akw);
+    if (aty && aty->kind == TY_ADT && aty->as.adt_.def) {
+        *out = *aty; return true;
     }
     *out = type_tyvar_named(akw->name);
     return true;
@@ -2376,7 +2406,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                          * carrier, so downstream only needs the constructor identity
                          * (dispatch + orphan check) and a valid (* -> *) head, which
                          * is exactly what fixing the named arm produces.  See
-                         * docs/reported/result-param-order-blocks-functor-monad.md. */
+                         * docs/archive/history/result-param-order-blocks-functor-monad.md. */
                         Form *ctor_form = arg->as.list.items[0];
                         Form *aarg_form;
                         if (arg->as.list.len == 2) {
@@ -2400,7 +2430,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                              * against the concrete receiver).  This is the kind-*
                              * counterpart to the single-`_` partial-application
                              * path below, which serves kind-(* -> *) classes.  See
-                             * docs/reported/kind-star-instance-two-param-type-cannot-bind-constraint-var.md */
+                             * docs/archive/history/kind-star-instance-two-param-type-cannot-bind-constraint-var.md */
                             if (!h1_hole && !h2_hole) {
                                 if (ctor_form->tag != F_SYM &&
                                     ctor_form->tag != F_KEYWORD) {
@@ -2526,11 +2556,21 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                  * resolves here. */
                                 TypeKind ank = typekind_from_symbol(akw->name);
                                 Binding *asb = scope_lookup(e->scope, akw);
+                                /* return-dispatched-sum-mint-in-constrained-instance-
+                                 * miscompiles (repro 3): scope_lookup is value-
+                                 * preferring, so a lowered defstruct's name resolves
+                                 * to its constructor FUNCTION and `Box` in
+                                 * `[(Option Box)]` fell through to a type VARIABLE
+                                 * named Box.  Ask the type namespace as well. */
+                                Type *aty = elab_lookup_type_by_name(e, akw);
                                 if (ank != TY_UNKNOWN) {
                                     app_arg_type = type_simple(ank, CK_COPY);
                                 } else if (asb && asb->type.kind == TY_ADT &&
                                            asb->type.as.adt_.def) {
                                     app_arg_type = asb->type;
+                                } else if (aty && aty->kind == TY_ADT &&
+                                           aty->as.adt_.def) {
+                                    app_arg_type = *aty;
                                 } else {
                                     /* Unknown name in an applied instance head
                                      * (`A` in `(Dense A)`) is the instance's own
@@ -2619,7 +2659,20 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         /* Assemble TY_APP */
                         memset(&type_args[i], 0, sizeof(type_args[i]));
                         type_args[i].kind = TY_APP;
-                        type_args[i].copy_kind = CK_MOVE;
+                        /* return-dispatched-sum-mint-in-constrained-instance-
+                         * miscompiles (repro 3): a RESOLVED head takes the
+                         * discipline `(Option Box)` has everywhere else (copy,
+                         * or the opaque's own linear/affine lift); the blanket
+                         * CK_MOVE made the instance method's own parameter
+                         * move-only, so `(some? x)` consumed it and `(unwrap
+                         * x)` was a use-after-move -- the same body as a defn
+                         * is accepted.  An unresolved head keeps CK_MOVE. */
+                        if (have_head_ct) {
+                            type_args[i].copy_kind = CK_COPY;
+                            propagate_app_discipline(&type_args[i], fn_type);
+                        } else {
+                            type_args[i].copy_kind = CK_MOVE;
+                        }
                         /* Result kind = constructor kind with one arg applied
                          * (ARROW2 -> ARROW for a binary head; ARROW -> STAR for a
                          * fully-applied unary head). */
@@ -2700,7 +2753,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
      * the instance method bodies so that a bare `A` in an ascription such as
      * `(:: t1 (Cons A))` resolves to the constraint tyvar rather than a
      * same-named global type.  Pushed onto e->sig_tyvars for pass 2.  See
-     * docs/reported/m5-suite-residual-6-failures-2026-06-14.md (root cause A). */
+     * docs/archive/history/m5-suite-residual-6-failures-2026-06-14.md (root cause A). */
     const Symbol *constraint_tyvar_syms[32];
     uint8_t n_constraint_tyvar_syms = 0;
 
@@ -3095,7 +3148,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
      * while an auto-loaded partial typeclass stub (typeclass-clone.tur, ...)
      * already supplied the same primitive instance.  The first definition wins;
      * the redundant one is a silent no-op, matching the include-guard mental
-     * model for repeated loads.  See docs/reported/load-not-idempotent-typeclass.md. */
+     * model for repeated loads.  See docs/archive/history/load-not-idempotent-typeclass.md. */
     for (TypeClassInstance *prev = e->typeclass_env.instances; prev; prev = prev->next) {
         if (prev->typeclass != tc || prev->n_type_args != n_type_args) continue;
         char prev_suffix[64];
@@ -4310,7 +4363,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         /* M4a: backlink the method FnDef to its owning instance so emit_module
          * can identify instance methods in O(1) and (when the class is non-HKT)
          * route them through the per-instantiation emit path.  See
-         * docs/upcoming/m4-typeclass-per-method-abi-plan.md. */
+         * docs/archive/m4-typeclass-per-method-abi-plan.md. */
         method_fd->owner_instance = inst;
 
         /* Stash what pass 2 needs to elaborate this method's body. */
@@ -4463,6 +4516,19 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         if (method_fd->binding) {
             method_fd->binding->body_is_inline_c =
                 (method_body && method_body->kind == EX_INLINE_C);
+            /* RM1: instance-method bodies are where the erased sum boxes the
+             * leak sweep found actually come from (`ap`'s some(..) arms), so
+             * the freshness flag matters most here -- and `alt-or`, which
+             * returns an argument, is exactly what it must stay false for. */
+            elab_stamp_sum_freshness(method_fd->binding, method_fd->params,
+                                     method_fd->n_params, method_body);
+            /* ... and the non-retaining parameter masks, so a statically
+             * resolved dispatch site (`fn_binding` = this binding) gets the
+             * same closure-env / sum-box drops a defn call site does.  `bind`
+             * only CALLS its continuation, and a bind chain's envs were the
+             * bulk of the RM1 residue. */
+            elab_infer_nonretain_masks(method_fd->binding, method_fd->params,
+                                       method_fd->n_params, method_body);
         }
 
         /* Arrow head: the method's declared return was the class variable (the
@@ -4512,9 +4578,14 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 (mp->ret_was_class_var && !m7_type_has_free_tyvar(mp->ret_full))
                     ? RET_CLASS_COMMITTED
                     : RET_CLASS_CARRIER_METHOD;
+            /* nil-tail-not-checked-against-declared-return: `false` keeps the
+             * nil-body check OFF for instance methods for now.  A class-decl
+             * return IS always written down, so `true` would be defensible --
+             * but it is a separate blast radius from the defn case this closes,
+             * and mixing them would make a regression here unattributable. */
             ReturnConflict rc = return_position_conflict(
                 mp->ret_adt, mp->ret_kind, method_body->type,
-                meth_cls);
+                meth_cls, /*check_nil_body=*/false);
             if (rc != RET_CONFLICT_NONE) {
                 const char *want = mp->ret_adt ? mp->ret_adt->name
                                  : typekind_to_string(mp->ret_kind);
@@ -4584,6 +4655,12 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                             "int64 carrier, so there is no representation these "
                             "two share and nothing to bridge them",
                             meth, want, gb.data);
+                        break;
+                    case RET_CONFLICT_NIL_BODY:
+                        /* Unreachable while the call above passes
+                         * ret_annotated=false; present so the switch stays
+                         * exhaustive and so turning that on is a one-line
+                         * change with a diagnostic already waiting. */
                         break;
                     case RET_CONFLICT_NONE: break;  /* unreachable */
                 }
@@ -5036,7 +5113,7 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
                       name->name);
             return NULL;
         }
-        /* return-dispatch-tyvar (docs/reported/return-dispatch-tyvar-silent-
+        /* return-dispatch-tyvar (docs/archive/history/return-dispatch-tyvar-silent-
          * misdispatch.md): when the ascription pins the result to an *abstract*
          * type variable -- e.g. `(:: (deserialize b) A)` inside a constrained
          * `(defn round [A] [(Serializable A)] ...)` -- `bound` is a TY_TYVAR
@@ -5174,7 +5251,7 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
     out->as.call_.args       = args;
     out->as.call_.n_args     = n_args;
     /* M4c Path A return-side
-     * (docs/reported/m4c-path-a-result-side-needs-return-dispatch-elab-hook.md):
+     * (docs/archive/m4c-path-a-result-side-needs-return-dispatch-elab-hook.md):
      * mirror the receiver-dispatch path's abi_bindings population (around
      * line 4047) so emit_abi_register_call mints a per-instantiation spec
      * for return-dispatch typeclass methods too.  `bound` here is the
@@ -5365,6 +5442,30 @@ static bool obj_is_unascribed_carrier_elem(const Expr *obj) {
     return false;
 }
 
+
+/* erased-float-carrier: stamp a poly-wrap headed for typeclass-method param
+ * `param` with the positions of its DECLARED `:fn` signature that are type
+ * variables.  The instance body is compiled once for every `a`/`b`, so it
+ * invokes such a param through the int64 carrier cast; the emitter routes a
+ * float-class wrapper through a bits shim at exactly those positions (see
+ * ensure_float_carrier_shim).  Concrete positions keep the native thunk ABI
+ * the typed poly-to-fat shim and the F5 typed `:fn` cast already rely on. */
+static void poly_wrap_stamp_carrier_erased(Expr *wrap, const Binding *param) {
+    const Type *pt = param ? param->poly_type : NULL;
+    if (pt && pt->kind == TY_FORALL) pt = pt->as.forall_.body;
+    if (!pt || pt->kind != TY_FN) return;
+    uint64_t mask = 0;
+    for (uint8_t i = 0; i < pt->as.fn.arity; i++) {
+        const Type *a = pt->as.fn.arg_full_types ? pt->as.fn.arg_full_types[i] : NULL;
+        bool erased = a ? (a->kind == TY_TYVAR) : (pt->as.fn.arg_kinds[i] == TY_TYVAR);
+        if (erased) mask |= ARG_IDX_BIT(i);
+    }
+    const Type *r = pt->as.fn.result_full_type;
+    bool res_erased = r ? (r->kind == TY_TYVAR) : (pt->as.fn.result_kind == TY_TYVAR);
+    wrap->as.poly_wrap_.carrier_erased_arg_mask = mask;
+    wrap->as.poly_wrap_.carrier_erased_result = res_erased;
+}
+
 Expr *elab_method_call(Elab *e, const Form *call) {
     /* call is (.method obj arg1 arg2 ...)
      * call->as.list.items[0] is the symbol .method
@@ -5381,7 +5482,7 @@ Expr *elab_method_call(Elab *e, const Form *call) {
      * (struct field access, function-typed field call-through, typeclass
      * dispatch) all apply uniformly.  Without this rewrite the head `.` yields
      * an empty method name and dispatch fails with "no typeclass method found
-     * for ''" (docs/reported/dot-method-call-misroutes-to-typeclass.md). */
+     * for ''" (docs/archive/history/dot-method-call-misroutes-to-typeclass.md). */
     if (call->as.list.items[0]->tag == F_SYM &&
         call->as.list.items[0]->as.sym->len == 1 &&
         call->as.list.items[0]->as.sym->name[0] == '.') {
@@ -6020,7 +6121,7 @@ Expr *elab_method_call(Elab *e, const Form *call) {
      * Without this the old KIND_ARROW path spuriously matched the first instance
      * whose type_args[0] failed the (incomplete) primitive test -- typically
      * Hash[float32] -- baking a wrong, type-incompatible callee into the body. */
-    /* M5 (docs/reported/m5-constrained-poly-wrong-instance-on-tyvar-receiver.md):
+    /* M5 (docs/archive/history/m5-constrained-poly-wrong-instance-on-tyvar-receiver.md):
      * An EX_ASCRIBE-to-tyvar receiver (`(:: v A)`) elaborates to a
      * TY_STRUCT with NULL def -- the "abstract tyvar" representation
      * the elaborator uses when ascribing a concrete value to a class-
@@ -6143,7 +6244,7 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                      * (typically Eq[Set]) and we silently dispatch through
                      * the wrong vtable. */
                     TypeKind itk = inst->type_args[0].kind;
-                    /* M5 fix (docs/reported/m5-constrained-poly-spec-wrong-
+                    /* M5 fix (docs/archive/history/m5-constrained-poly-spec-wrong-
                      * dispatch-for-parametric-receiver.md): the sized numeric
                      * variants are primitives too -- without listing them, an
                      * `Eq float32` (or `Eq int32` / `uint8` / etc.) instance
@@ -6435,6 +6536,35 @@ found_method:;
             best_inst = user_fallback_inst;
             goto resolved_user_fallback;
         }
+        /* A RETURN-directed method reached through the dot form.
+         *
+         * `.m` means "dispatch on the first argument", which is the wrong
+         * question for a method whose class variable appears only in the return
+         * type: `pure`'s first argument is the payload, not the class type, so
+         * the receiver is an erased int64 and every instance matches by name.
+         * That is what made `for` unusable against the auto-loaded stdlib -- its
+         * desugaring emits `.pure` inside a `fn` body, and with two Applicative
+         * instances loaded (Schema and Option) every use failed with the
+         * ambiguity below, from a call site inside the macro where no caller
+         * could annotate.
+         *
+         * The expected type is available here even though the receiver is not
+         * (`bind`'s signature pins the lambda's result), so ask the
+         * return-directed dispatcher instead of guessing from the receiver.
+         * Gated on an expected type being present so a genuinely
+         * unresolvable case still gets the ambiguity error below rather than
+         * "cannot infer type for return-directed method", which would be a
+         * worse message for the same program.
+         * See docs/archive/for-comprehension-pure-ambiguous-against-stdlib.md. */
+        if (e->expected_type) {
+            const Symbol *m_sym =
+                symtab_intern(e->st, strslice(method_name, method_name_len));
+            if (m_sym && elab_symbol_is_return_dispatch_method(e, m_sym)) {
+                bool rt_handled = false;
+                Expr *rt = elab_try_return_dispatch(e, call, m_sym, &rt_handled);
+                if (rt) return rt;
+            }
+        }
         /* Build a comma-separated list of matching instance names for the message,
          * and capture the typeclass name for the concrete-receiver diagnosis. */
         char inst_list[512];
@@ -6536,6 +6666,7 @@ resolved_user_fallback:;
                 cwrap->as.poly_wrap_.inner = obj;
                 cwrap->as.poly_wrap_.wrapper_binding = NULL;
                 cwrap->as.poly_wrap_.is_closure = true;
+                poly_wrap_stamp_carrier_erased(cwrap, best_method->params[0]);
                 obj = cwrap;
             } else {
                 diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
@@ -6545,6 +6676,7 @@ resolved_user_fallback:;
         } else {
             Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, obj->span);
             wrap->as.poly_wrap_.inner = obj;
+            poly_wrap_stamp_carrier_erased(wrap, best_method->params[0]);
             if (inner_b->is_poly_fn) {
                 wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
             } else {
@@ -6574,6 +6706,7 @@ resolved_user_fallback:;
                     cwrap->as.poly_wrap_.inner = orig2;
                     cwrap->as.poly_wrap_.wrapper_binding = NULL;
                     cwrap->as.poly_wrap_.is_closure = true;
+                    poly_wrap_stamp_carrier_erased(cwrap, best_method->params[param_idx]);
                     args[i] = cwrap;
                     continue;
                 }
@@ -6584,6 +6717,7 @@ resolved_user_fallback:;
             Expr *orig = args[i];
             Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig->span);
             wrap->as.poly_wrap_.inner = orig;
+            poly_wrap_stamp_carrier_erased(wrap, best_method->params[param_idx]);
             /* constrained-hkt-byvalue-carriers: when the receiver is the ABSTRACT
              * type constructor of a constrained poly fn, this method call lowers to
              * a dictionary-slot dispatch, whose method pointer returns the int64
@@ -7077,7 +7211,46 @@ resolved_user_fallback:;
     out->as.call_.args    = call_args;
     out->as.call_.n_args  = n_args + 1;
     out->as.call_.dict_arg = dict_expr;  /* annotation for downstream passes */
-    /* M4c Path A step 1 (docs/upcoming/m4c-execution-plan.md): bind the
+    /* value-struct-payload-sum-monomorph-box-has-no-owner (dictionary sites):
+     * the drop-after stamp elab_call.c puts on a fresh sum argument of a
+     * non-retaining defn, for a CLASS-METHOD consumer.  This path never runs
+     * elab_call's argument loop, so `(enc (some (make-struct Box ..)))` kept
+     * its payload box for the process lifetime although the instance body
+     * only reads `x` -- the one shape left after three rounds of that report.
+     *
+     * Same three facts as the defn stamp, asked of the instance that was
+     * resolved here: a non-suspending consumer, a fresh producer in the slot,
+     * and the consumer's inferred nonretain_sum_param_mask bit for it.
+     * Param index i IS argument index i -- params[0] is the receiver and so is
+     * call_args[0].  When the dispatch is STATIC (receiver head concrete) the
+     * resolved binding is the method that runs and the stamp is final.  When
+     * it is not -- inside a constrained generic body, where fn_binding is a
+     * representative -- the argument is flagged TENTATIVELY
+     * (sum_box_drop_after_dyn) and the consumer's emission re-resolves the
+     * instance per monomorph before admitting the drop, exactly as the
+     * freshness question is re-asked there. */
+    {
+        const Binding *cb = out->as.call_.fn_binding;
+        if (cb && cb->type.kind == TY_FN &&
+            effect_row_is_empty(cb->type.as.fn.effect_row)) {
+            bool static_disp = call_dispatch_is_static(out);
+            for (uint32_t ai = 0; ai < out->as.call_.n_args && ai < 32; ai++) {
+                Expr *a = out->as.call_.args[ai];
+                while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+                if (!a || a->kind != EX_CALL) continue;
+                bool fresh_arg = call_returns_fresh_sum_box(a) ||
+                    (a->as.call_.dict_arg && !call_dispatch_is_static(a));
+                if (!fresh_arg) continue;
+                if (static_disp) {
+                    if (cb->nonretain_sum_param_mask & (1u << ai))
+                        a->sum_box_drop_after = true;
+                } else {
+                    a->sum_box_drop_after_dyn = true;
+                }
+            }
+        }
+    }
+    /* M4c Path A step 1 (docs/archive/m4c-execution-plan.md): bind the
      * class variable to the CALL SITE'S receiver type so
      * emit_abi_register_call mints a per-instantiation spec.  HKT carve-out
      * stays — those keep the uniform-carrier dispatch per Plan M6/M7. */

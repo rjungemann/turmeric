@@ -37,7 +37,7 @@
      Darwin this probe degrades to vacuous, exactly like an unmeasured platform;
      a real regression of the original bug still crashes here (the cycle
      collector touched a bogus control block -> segfault).  See
-     docs/archive/gc-heap-struct-rc-nonzero-on-darwin.md.  The sibling gc
+     docs/archive/history/gc-heap-struct-rc-nonzero-on-darwin.md.  The sibling gc
      fixtures use lighter allocation and measure 0 on Darwin today, so they keep
      the Darwin probe; if one ever flakes, this is the fix. */
   #if defined(__GLIBC__)

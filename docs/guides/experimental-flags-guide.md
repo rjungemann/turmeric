@@ -15,10 +15,10 @@ Unlike `-X`, which conflated "in development", "stable but opt-in", and
 `--enable=` mechanism is *only* for features that are not yet stable, and
 every flag carries a hard expiry by which it must graduate or be removed.
 
-> **Right now the registry is empty.** No feature ships behind this
-> mechanism until a concrete experiment requests a gate. `tur experiments`
-> will tell you the current set; this guide describes how the mechanism
-> behaves once a flag is present.
+> **The registry is small by design.** Run `tur experiments` for the
+> authoritative current set (at the time of writing it is empty -- `jit-ffi`,
+> the last row, graduated in 0.38.0); this guide describes how the mechanism
+> behaves for whatever rows are present.
 
 ## Opting in
 
@@ -69,6 +69,20 @@ An unknown name -- on the CLI, in the manifest, or in the user file -- is a
 ```
 error [TUR-E0310]: unknown experiment 'fancy-roows'; run 'tur experiments' for the list
 ```
+
+A **graduated** name (a feature that was gated and is now unconditionally
+on) is accepted as a no-op with a `TUR-W0063` warning rather than the hard
+error, so a downstream `build.tur` or `experiments.tur` that opted in keeps
+compiling across the graduation boundary.
+
+That shim is a **migration window, not a permanent alias**. One minor line
+after graduation the name ages out of `GRADUATED[]` and goes back to being a
+hard `TUR-E0310` -- so treat `TUR-W0063` as a deprecation notice with a
+deadline and delete the flag when you see it. Twelve names aged out this way at
+0.37.0 and 0.38.0; `jit-ffi`, which graduated in 0.38.0, is the only shim
+currently live and becomes eligible at 0.39.0. The same rule and the same
+one-line window apply to a graduated `#lang` layer token (`TUR-W0064`, then
+`TUR-E0330`).
 
 Unknown *keys* in the user file (anything other than `:enable`) are a
 `TUR-W0062` warning and otherwise ignored -- forward-compatible with future
@@ -199,12 +213,12 @@ graduation. Add one row to `EXPERIMENTS[]` in
 reads -- and a plan in `docs/upcoming/`. Call `experiment_warn_if_used(name)`
 from the feature's elaboration entry point (the helper handles the
 once-per-compile dedup). The CLI/manifest parsing, the `tur experiments`
-listing, and the release-cut enforcement all pick the entry up automatically
-from the table.
+listing, and the release-cut expiry review all pick the entry up
+automatically from the table.
 
 ## See also
 
 - [compiler-flags-guide.md](compiler-flags-guide.md) -- diagnostic/debug
   flags and the retired `-X<name>` set.
-- [docs/upcoming/v1/experimental-flag-mechanism-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/experimental-flag-mechanism-plan.md)
+- [docs/archive/history/experimental-flag-mechanism-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/experimental-flag-mechanism-plan.md)
   -- the design plan (XF0--XF6).

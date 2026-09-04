@@ -1,0 +1,40 @@
+;; SX2: the bracket COMBINATORS over the trail -- bt-scope and with-untrailed.
+;;
+;; SX1 shipped only the halves (bt-mark / bt-undo-to!, untrailed-begin /
+;; untrailed-end) and deferred these, saying they "want the effect row to type
+;; honestly".  That reason no longer holds: the row turned out not to be a
+;; soundness prerequisite (see sx2-trail-measure-not-congruent), so the
+;; combinators land on their own.
+
+(defn main [] : int
+  (let [c (bt-cell-new 0)]
+    ;; bt-scope: the body's VALUE escapes, its WRITES do not.
+    (bt-set! c 41)
+    (println (bt-scope (fn [] (do (bt-set! c 99) (bt-get c)))))   ;; 99
+    (println (bt-get c))                                          ;; 41
+
+    ;; Nesting: each scope undoes only its own level.
+    (bt-scope (fn [] (do (bt-set! c 2)
+                         (bt-scope (fn [] (do (bt-set! c 3) 0)))
+                         (println (bt-get c))                     ;; 2
+                         0)))
+    (println (bt-get c))                                          ;; 41
+
+    ;; bt-commit-to! inside a scope escapes it ENTIRELY -- commit promotes to
+    ;; level 0 rather than merging into the parent, so the write outlives the
+    ;; enclosing bt-scope.  Deliberate (it is how a learned clause outlives a
+    ;; backjump) and the opposite of what "commit" suggests to a Prolog ear.
+    (bt-scope (fn [] (let [m (bt-mark)]
+                       (do (bt-set! c 7) (bt-commit-to! m) 0))))
+    (println (bt-get c))                                          ;; 7
+
+    ;; with-untrailed: writes inside are not recorded, so they survive an undo
+    ;; that unwinds past them.  The result is DISCARDED on purpose: this is the
+    ;; spelling users write, and it was the repro for the (now fixed)
+    ;; poly-call-in-statement-position-dropped miscompile -- if the discard
+    ;; regresses, the write never happens and this prints 0, not 55.
+    (let [m (bt-mark)]
+      (with-untrailed (fn [] (bt-set! c 55)))
+      (bt-undo-to! m)
+      (println (bt-get c)))                                       ;; 55
+    0))

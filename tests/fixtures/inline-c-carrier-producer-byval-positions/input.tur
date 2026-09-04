@@ -1,0 +1,90 @@
+;; inline-c-carrier-producer-byval-positions: an inline-C Option producer
+;; reaching a BY-VALUE monomorph slot, on the DEFAULT path.
+;;
+;; An inline-C body declared `: (Option String)` builds its result with the
+;; preamble's typed builders (`tur_some_ptr`), which return the CARRIER -- a
+;; pointer to a tagged box -- so its C signature is `int64_t`.  Every position
+;; below wants the by-value monomorph aggregate instead, and each used to be a
+;; hard cc error:
+;;
+;;   match scrutinee   -- `tur_adt_Option__String __scrut_v = (<int64_t>)`,
+;;                        invalid initializer.  The bridge existed but sat
+;;                        inside the if-chain arm gated on the niche, so the
+;;                        SWITCH path (where a tagged by-value sum lands) had
+;;                        none.
+;;   call argument     -- an ascribed erased read `(:: (vec-get v 0) (Option
+;;                        String))` into a by-value spec param: the arg bridge
+;;                        asked the EXPRESSION, which is an ascribe rather than
+;;                        a call, so no disjunct saw the carrier.
+;;   ctor argument     -- `(Holder (mk-c 1))`: the bridge here was gated on
+;;                        the niche, so a by-value monomorph field fell to the
+;;                        case-A straddle, which is a pure cast and cannot turn
+;;                        a carrier word into an aggregate.
+;;   escaping element  -- `(vec-push! v (mk-c 1))`: the b4box heap-promote
+;;                        copied the value into a `T *` cell without
+;;                        normalizing it first, so `*tmp = <int64_t>`.
+;;   if-merge binding  -- both arms are carrier producers, so the merge temp is
+;;                        declared by value and each arm bridged into it; the
+;;                        let-init then re-derived "carrier producer" from the
+;;                        TAIL and bridged the aggregate a second time
+;;                        ("aggregate value used where an integer was
+;;                        expected").  emit_if_value declared that temp without
+;;                        recording its emitted C type, so the double-deref
+;;                        guard had nothing to look up.
+;;
+;; The niche path (--enable=option-niche) bridged all three already; this is
+;; the default-path twin, and it is what CI was missing -- the niche fixtures
+;; are flag-pinned, so run.sh never built these shapes the other way.
+(load "stdlib/string.tur")
+
+(defn mk-c [n : int] : (Option String)
+  ```c
+  if (n == 0) return tur_none();
+  return tur_some_ptr(tur_string_from_bytes("hi", 2));
+  ```)
+
+;; match scrutinee, both variants
+(defn probe-match [] : void
+  (match (mk-c 1)
+    (Some s) (println (string/to-cstr s))
+    (None)   (println "match-none"))
+  (match (mk-c 0)
+    (Some s) (println (string/to-cstr s))
+    (None)   (println "match-none")))
+
+;; call argument, through an erased container read + ascription
+(defn probe-arg [] : void
+  (let [v (vec-of (mk-c 1))]
+    (if (some? (:: (vec-get v 0) (Option String)))
+      (println "arg-some")
+      (println "arg-none"))))
+
+;; if-merge into a by-value binding: both arms are carrier producers
+(defn probe-merge [] : void
+  (let [o (if true (mk-c 1) (mk-c 0))]
+    (if (some? o) (println "merge-some") (println "merge-none")))
+  (let [p (if false (mk-c 1) (mk-c 0))]
+    (if (some? p) (println "merge-some") (println "merge-none"))))
+
+(defstruct Holder [o : (Option String)])
+
+;; constructor argument
+(defn probe-ctor [] : void
+  (let [h (Holder (mk-c 1))]
+    (if (some? (.o h)) (println "ctor-some") (println "ctor-none"))))
+
+;; escaping container element: vec-push! of a carrier producer
+(defn probe-push [] : void
+  (let [v (vec-of (mk-c 0))]
+    (vec-push! v (mk-c 1))
+    (if (some? (:: (vec-get v 1) (Option String)))
+      (println "push-some")
+      (println "push-none"))))
+
+(defn main [] : int
+  (probe-match)
+  (probe-arg)
+  (probe-merge)
+  (probe-ctor)
+  (probe-push)
+  0)

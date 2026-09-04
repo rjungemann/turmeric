@@ -9,15 +9,6 @@
   margin: 0 auto;
 }
 
-.hero-eyebrow {
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--gold);
-  margin-bottom: 20px;
-  font-weight: 500;
-}
-
 .hero-title {
   font-family: 'Space Grotesk', sans-serif;
   font-size: clamp(40px, 6vw, 66px);
@@ -112,20 +103,12 @@
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 16px;
+  gap: 36px 40px;
 }
 
 .card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 22px 24px;
-  transition: border-color 0.15s, background 0.15s;
   position: relative;
-}
-.card:hover {
-  border-color: var(--border-mid);
-  background: var(--bg-panel);
+  min-width: 0;
 }
 
 .card-top {

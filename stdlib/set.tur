@@ -330,7 +330,7 @@
 ;; NOTE (Phase 4.1/4.3): carrier-essential -- walks a heterogeneous HAMT via
 ;; tur_hamt_* with no element type available, so it stays inline-C on the int64
 ;; carrier and is an allowed Phase 5 bridge crossing.  See
-;; docs/upcoming/v2/phase4-carrier-helper-inventory.md.
+;; docs/archive/phase4-carrier-helper-inventory.md.
 
 (defn set-eq? [a : int b : int]
   #fx{}
@@ -370,7 +370,7 @@
 ;;;
 ;;; Since: Phase F3-5 (cross-plan-followups)
 
-(defn set-eq-cmp? [a : int b : int ^fat cmp-fn]
+(defn set-eq-cmp? [a : int b : int ^borrow ^fat cmp-fn]
   #fx{}
   : bool
   ```c

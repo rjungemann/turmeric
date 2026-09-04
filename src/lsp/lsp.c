@@ -5,11 +5,18 @@
 #include "lsp_docs.h"
 #include "lsp_sym.h"
 #include "lsp_util.h"
+#include "lsp_scope.h"
 
 #include "buf.h"
+#include "builtins.h"     /* builtin_describe() -- hover on `println`, `+`, ... */
 #include "diag.h"
 #include "fmt.h"          /* fmt_format_buffer() for textDocument/formatting */
 #include "platform_fs.h"  /* mkstemps() on Windows */
+#include "pkg.h"          /* R2: the manifest decides the file set */
+
+#include <ctype.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 #include <errno.h>
 #include <stdio.h>
@@ -235,6 +242,10 @@ static size_t unescape_json(const char *src, size_t src_len, char *dst) {
 }
 
 #define LSP_SYM_CAP 2048
+/* Locals outnumber globals in any real file, so the binding table is sized
+ * well above the symbol index. Overflow is reported (lsp_scope_truncated),
+ * not swallowed -- see prepareRename. */
+#define LSP_BIND_CAP 4096
 
 /* -------------------------------------------------------------------------
  * Stdlib symbol cache
@@ -341,7 +352,7 @@ static void stdlib_cache_prime(void) {
          * document it owns. */
         diag_reset();
         diag_lsp_begin();
-        tur_collect_symbols(tmp_path, syms, LSP_SYM_CAP, &count);
+        tur_collect_symbols(tmp_path, NULL, syms, LSP_SYM_CAP, &count);
         diag_lsp_end();
         stdlib_cache_fill(syms, count);
         free(syms);
@@ -407,12 +418,23 @@ static void run_doc_analysis(LspDoc *doc, LspSink *sink) {
      * previous one is kept and flagged. */
     LspSymbol *fresh       = calloc((size_t)LSP_SYM_CAP, sizeof(LspSymbol));
     int        fresh_count = 0;
+    LspBinding *fresh_b    = calloc((size_t)LSP_BIND_CAP, sizeof(LspBinding));
+    int        fresh_bcount = 0;
 
-    /* 4. Run the compiler: collect symbols + gather diagnostics */
+    /* 4. Run the compiler: collect symbols + locals + gather diagnostics.
+     *
+     * One compile answers both. The scope walk hangs off the same elaboration
+     * hook the symbol harvest does (see main.c), so bracketing it here is the
+     * whole of what it costs. */
     diag_reset();
     diag_init(false);
     diag_lsp_begin();
-    int rc = tur_collect_symbols(tmp_path, fresh, LSP_SYM_CAP, &fresh_count);
+    if (fresh_b)
+        lsp_scope_begin(fresh_b, LSP_BIND_CAP, &fresh_bcount, tmp_path);
+    int rc = tur_collect_symbols(tmp_path, doc->path, fresh,
+                                 LSP_SYM_CAP, &fresh_count);
+    int fresh_btrunc = lsp_scope_truncated() ? 1 : 0;
+    lsp_scope_end();
     diag_lsp_remap_path(tmp_path, doc->path);
 
     /* 5. Populate docstrings and fix up file paths */
@@ -439,6 +461,18 @@ static void run_doc_analysis(LspDoc *doc, LspSink *sink) {
         doc->symbol_count  = fresh_count;
         doc->symbols_stale = 0;
         doc->ever_analyzed = 1;
+        /* The binding table rides the symbol index's adopt/retain decision
+         * rather than making its own. Two tables from two revisions of the
+         * text is how a rename ends up bounded by a scope that has moved. */
+        lsp_doc_free_bindings(doc);
+        doc->bindings           = fresh_b;
+        doc->binding_cap        = LSP_BIND_CAP;
+        doc->binding_count      = fresh_bcount;
+        /* A table that could not be allocated is indistinguishable from one
+         * with no locals in it, and those two call for opposite edits -- so it
+         * reports as truncated, which is what makes rename refuse. */
+        doc->bindings_truncated = fresh_b ? fresh_btrunc : 1;
+        fresh_b = NULL;
         stdlib_cache_fill(fresh, fresh_count);
     } else if (!doc->ever_analyzed) {
         /* Nothing to retain -- this text has never parsed. Adopt the empty
@@ -452,10 +486,12 @@ static void run_doc_analysis(LspDoc *doc, LspSink *sink) {
         doc->symbol_cap    = LSP_SYM_CAP;
         doc->symbol_count  = 0;
         doc->symbols_stale = 0;
+        lsp_doc_free_bindings(doc);
     } else {
         free(fresh);
         doc->symbols_stale = 1;
     }
+    free(fresh_b);
 
     unlink(tmp_path);
 
@@ -703,6 +739,17 @@ static void on_initialize(const char *id_raw, size_t id_len,
           "\"hoverProvider\":true,"
           "\"definitionProvider\":true,"
           "\"documentSymbolProvider\":true,"
+          /* Occurrence highlight. The client's own fallback is a text match,
+           * which matches inside strings and comments; this one is scanned
+           * with the reader's regions skipped (lsp_scan_occurrences). */
+          "\"documentHighlightProvider\":true,"
+          /* prepareProvider, not the bare boolean. The refusals in
+           * rename_refusal are half the feature -- a rename that quietly
+           * corrupts a shadowed binding is worse than no rename -- and the
+           * prepare form is the only way the reason reaches the user BEFORE
+           * they have typed a new name. */
+          "\"renameProvider\":{\"prepareProvider\":true},"
+          "\"referencesProvider\":true,"
           "\"workspaceSymbolProvider\":true,"
           "\"documentFormattingProvider\":true,"
           "\"signatureHelpProvider\":{"
@@ -852,6 +899,38 @@ static void on_hover(const char *id_raw, size_t id_len,
 
     const LspSymbol *sym = find_symbol(doc, name);
     if (!sym) {
+        /* Not in the index. That is not the same as "not a thing": the index
+         * is built from Bindings, and a compiler builtin has none -- so
+         * `println`, `+`, `=` and `not` all land here, which are the names a
+         * newcomer types first. The operator table is the only place that
+         * knows their signatures; ask it before giving up. */
+        char desc[512];
+        if (builtin_describe(name, desc, sizeof(desc)) > 0) {
+            Buf b;
+            buf_init(&b);
+            buf_puts(&b, "{\"contents\":{\"kind\":");
+            buf_puts(&b, hover_markdown_ ? "\"markdown\"" : "\"plaintext\"");
+            buf_puts(&b, ",\"value\":");
+            Buf md;
+            buf_init(&md);
+            if (hover_markdown_) buf_puts(&md, "```\n");
+            buf_puts(&md, desc);
+            if (hover_markdown_) buf_puts(&md, "\n```");
+            /* Say where this came from. A builtin has no source file and no
+             * docstring, and a hover that looked like every other one would
+             * imply a definition the user could go to. */
+            buf_puts(&md, hover_markdown_
+                ? "\n\n_built-in operator_"
+                : "\n\n(built-in operator)");
+            buf_putc(&md, '\0');
+            json_str(&b, md.data);
+            buf_free(&md);
+            buf_puts(&b, "}}");
+            buf_putc(&b, '\0');
+            send_response(sink, id_raw, id_len, b.data);
+            buf_free(&b);
+            return;
+        }
         send_response(sink, id_raw, id_len, "{\"contents\":\"\"}");
         return;
     }
@@ -956,11 +1035,854 @@ static void on_definition(const char *id_raw, size_t id_len,
     buf_free(&result);
 }
 
-/* Infer LSP SymbolKind from type_str.  Functions get kind 12, everything
- * else gets kind 13 (Variable).  A ;;; `defstruct` / `defmacro` distinction
- * is not preserved in LspSymbol today, so this is a best-effort mapping. */
+/* LSP SymbolKind for a symbol, from the kind the collector recorded.
+ *
+ * The type_str test below is the pre-kind mapping, kept as the fallback for
+ * any LspSymbol that reached here without one -- a stale cache entry, or a
+ * future collection path that forgets to pass a kind. It can only ever answer
+ * function-or-not, which is why the kind field exists. */
 static int lsp_symbol_kind(const LspSymbol *sym) {
+    switch (sym->kind) {
+        case LSP_KIND_FUNCTION: return 12;  /* Function */
+        case LSP_KIND_VALUE:    return 13;  /* Variable */
+        case LSP_KIND_STRUCT:   return 23;  /* Struct   */
+        case LSP_KIND_ENUM:     return 10;  /* Enum     */
+        case LSP_KIND_UNKNOWN:  break;
+    }
     return (strncmp(sym->type_str, "(fn", 3) == 0) ? 12 : 13;
+}
+
+/* -------------------------------------------------------------------------
+ * textDocument/documentHighlight
+ * (try-turmeric-navigation-and-minimap-plan, M5)
+ *
+ * Without this the client falls back to Monaco's word-based selection
+ * highlight, which is textual: it matches inside strings and comments, and it
+ * cannot tell `total` from the `total` in `subtotal`. That was survivable
+ * while the answer only appeared under the cursor. With the minimap on it is
+ * painted down the whole file, so a wrong answer becomes a visible wrong
+ * answer -- which is why this landed in the same plan as the strip.
+ * --------------------------------------------------------------------- */
+
+/* Which occurrences of a name are uses of the *particular* binding the caret
+ * landed on.
+ *
+ * `bind` non-NULL means the caret is on a local, and the answer is its scope.
+ * `bind` NULL means the caret is on a global -- and the answer is NOT "the
+ * whole buffer": it is the whole buffer MINUS every region where a local of
+ * the same name is in effect. Both halves are needed and they fail in
+ * opposite directions. Without the first, renaming the inner `total` of
+ * `(let [total ...] ...)` rewrites the outer one; without the second,
+ * renaming the outer one rewrites the inner. The second is the half that
+ * actually changes what a program means, because the shadowed occurrences
+ * are the ones a reader is least likely to check. */
+typedef struct {
+    const LspBinding *bind;
+    const LspBinding *tab;    /* the document's binding table */
+    int               n_tab;
+    const char       *name;
+} ScopeGate;
+
+/* Two ranges per binding, not one, and the gap between them is the point. A
+ * binding's own initializer sits before its scope starts: `(let [x (+ x 1)]
+ * x)` binds a new `x` whose init reads the OLD one. The binder itself is in
+ * range so a caret on the declaration resolves to the declaration -- c2mp's
+ * S11.3 found exactly that case resolving to whatever global shared the name,
+ * and highlighting the whole file as a result. */
+static bool bind_covers(const LspBinding *b, size_t off) {
+    if (!b) return true;
+    if (b->def_off_end > b->def_off_start &&
+        off >= b->def_off_start && off < b->def_off_end)
+        return true;
+    return off >= b->scope_start_off && off < b->scope_end_off;
+}
+
+static bool gate_admits(const ScopeGate *g, size_t off) {
+    if (g->bind) return bind_covers(g->bind, off);
+    return lsp_scope_lookup_at(g->tab, g->n_tab, off, g->name) == NULL;
+}
+
+typedef struct {
+    Buf      *out;
+    int       emitted;
+    int       def_line;   /* 0-based line of the definition, or -1 */
+    int       def_col;    /* 0-based byte column of the definition */
+    ScopeGate gate;
+} HighlightCtx;
+
+static void highlight_emit(size_t off, int line0, int col0, int len,
+                           void *user) {
+    HighlightCtx *ctx = (HighlightCtx *)user;
+    if (!gate_admits(&ctx->gate, off)) return;
+    /* The definition gets Write (3), every use gets Text (1). A client styles
+     * the two differently, and "which one of these is the definition" is the
+     * question a reader scanning a column of marks actually has. Read (2) is
+     * not used: telling a read from a write needs the elaborated tree, and
+     * claiming the distinction from a text scan would be a guess. */
+    int kind = (line0 == ctx->def_line && col0 == ctx->def_col) ? 3 : 1;
+    if (ctx->emitted > 0) buf_putc(ctx->out, ',');
+    buf_printf(ctx->out,
+        "{\"range\":{\"start\":{\"line\":%d,\"character\":%d},"
+                   "\"end\":{\"line\":%d,\"character\":%d}},\"kind\":%d}",
+        line0, col0, line0, col0 + len, kind);
+    ctx->emitted++;
+}
+
+/* -------------------------------------------------------------------------
+ * What a position names
+ *
+ * The one question highlight, rename and references all start from: the
+ * identifier under the cursor, and whether it is a local (with a bounded
+ * scope) or a global (with the whole file, and possibly the workspace).
+ * --------------------------------------------------------------------- */
+
+typedef struct {
+    LspDoc           *doc;
+    char              uri[1024];
+    char              name[128];
+    size_t            off;
+    const LspBinding *bind;  /* non-NULL: a local, scope-bounded */
+    const LspSymbol  *sym;   /* non-NULL: a known global */
+} NameRef;
+
+static bool resolve_name_at(const char *params, NameRef *ref) {
+    memset(ref, 0, sizeof(*ref));
+    size_t td_len;
+    const char *td = lsp_json_raw(params, "textDocument", &td_len);
+    if (!td) return false;
+    if (lsp_json_str_copy(td, "uri", ref->uri, sizeof(ref->uri)) < 0) return false;
+
+    size_t pos_len;
+    const char *pos = lsp_json_raw(params, "position", &pos_len);
+    if (!pos) return false;
+    int line_0 = (int)lsp_json_int(pos, "line");
+    int char_0 = (int)lsp_json_int(pos, "character");
+
+    LspDoc *doc = lsp_doc_get(ref->uri, strlen(ref->uri));
+    if (!doc || !doc->text) return false;
+    ref->doc = doc;
+
+    if (!lsp_word_at_pos(doc->text, doc->text_len, line_0 + 1, char_0 + 1,
+                         ref->name, sizeof(ref->name)))
+        return false;
+
+    ref->off  = lsp_offset_at_pos(doc->text, doc->text_len,
+                                  line_0 + 1, char_0 + 1);
+    ref->bind = lsp_scope_lookup_at(doc->bindings, doc->binding_count,
+                                    ref->off, ref->name);
+    ref->sym  = ref->bind ? NULL : find_symbol(doc, ref->name);
+    return true;
+}
+
+/* Line/column of a byte offset, 0-based, columns in bytes (utf-8 encoding is
+ * what the server negotiated). */
+static void offset_to_line_col(const char *text, size_t off,
+                               int *line0, int *col0) {
+    int    l  = 0;
+    size_t ls = 0;
+    for (size_t i = 0; i < off; i++) {
+        if (text[i] == '\n') { l++; ls = i + 1; }
+    }
+    *line0 = l;
+    *col0  = (int)(off - ls);
+}
+
+static void on_document_highlight(const char *id_raw, size_t id_len,
+                                  const char *params, LspSink *sink) {
+    NameRef ref;
+    if (!resolve_name_at(params, &ref)) {
+        /* Not on a word (or no such document). `null` rather than `[]`: the
+         * spec's "no result", which lets the client keep whatever it was
+         * already showing instead of clearing it as the caret crosses a
+         * space. */
+        send_response(sink, id_raw, id_len, "null");
+        return;
+    }
+
+    HighlightCtx ctx;
+    Buf out;
+    buf_init(&out);
+    buf_putc(&out, '[');
+    ctx.out      = &out;
+    ctx.emitted  = 0;
+    ctx.def_line = -1;
+    ctx.def_col  = -1;
+    ctx.gate.bind  = ref.bind;
+    ctx.gate.tab   = ref.doc->bindings;
+    ctx.gate.n_tab = ref.doc->binding_count;
+    ctx.gate.name  = ref.name;
+
+    if (ref.bind) {
+        /* A local's definition is its binder. `def_line == 0` marks a
+         * macro-introduced binding, whose "position" is a point in expanded
+         * source -- there is no row in this file to mark. */
+        if (ref.bind->def_line > 0) {
+            ctx.def_line = (int)ref.bind->def_line - 1;
+            ctx.def_col  = ref.bind->def_col_start > 0
+                             ? (int)ref.bind->def_col_start - 1 : 0;
+        }
+    } else if (ref.sym && ref.sym->file_path[0] && ref.doc->path &&
+               strcmp(ref.sym->file_path, ref.doc->path) == 0) {
+        ctx.def_line = ref.sym->line > 0 ? ref.sym->line - 1 : 0;
+        ctx.def_col  = ref.sym->col_start > 0 ? ref.sym->col_start - 1 : 0;
+    }
+
+    lsp_scan_occurrences(ref.doc->text, ref.doc->text_len, ref.name,
+                         highlight_emit, &ctx);
+
+    buf_putc(&out, ']');
+    buf_putc(&out, '\0');
+    send_response(sink, id_raw, id_len, out.data);
+    buf_free(&out);
+}
+
+/* -------------------------------------------------------------------------
+ * A2/A3: textDocument/prepareRename, textDocument/rename,
+ *        textDocument/references
+ * (editor-intelligence-follow-through-plan, 2.2 and 2.3)
+ *
+ * Rename is the feature the scope resolver was built for, and refusing is
+ * half of it. c2mp lists rename as not covered in both its S11.4 and its
+ * S13.4 for one reason: "the shadowing caveat is tolerable for a highlight
+ * and is not tolerable for an edit that rewrites text." With S1 in place the
+ * shadowing answer is right, and every case where it still is not -- a
+ * macro-introduced binder, a truncated binding table, a name that belongs to
+ * the stdlib or to another file -- gets a refusal with a reason rather than a
+ * quiet corruption.
+ *
+ * That is what `prepareProvider` buys: the client asks first, and the
+ * message lands before the user has typed a new name, not after the edit.
+ * --------------------------------------------------------------------- */
+
+/* Renaming a name a *fetched* spice may import edits an API we cannot see the
+ * consumers of. Off by default; `tur lsp --rename-exports` says the operator
+ * knows what the workspace's downstream is. */
+static bool rename_exports_ = false;
+
+void lsp_set_rename_exports(bool on) { rename_exports_ = on; }
+
+/* The directory holding the nearest enclosing build.tur, or false.
+ *
+ * A bounded walk-up, the same shape `tur check` uses to find a spice from a
+ * file inside it (CLAUDE.md, "Per-file Commands Inside a Spice"). Both
+ * manifest spellings count -- `build.tur` and `build.tur.sweet` -- because
+ * both are manifests everywhere else a manifest is read. */
+#define LSP_SPICE_WALK_MAX 40
+
+static bool spice_root_of(const char *file_path, char *out, size_t cap) {
+    if (!file_path || !out) return false;
+    char cur[4096];
+    snprintf(cur, sizeof(cur), "%s", file_path);
+    char *slash = strrchr(cur, '/');
+    if (!slash) return false;
+    *slash = '\0';
+
+    for (int i = 0; i < LSP_SPICE_WALK_MAX; i++) {
+        char cand[4200];
+        struct stat st;
+        snprintf(cand, sizeof(cand), "%s/build.tur", cur);
+        if (stat(cand, &st) == 0 && S_ISREG(st.st_mode)) {
+            snprintf(out, cap, "%s", cur);
+            return true;
+        }
+        snprintf(cand, sizeof(cand), "%s/build.tur.sweet", cur);
+        if (stat(cand, &st) == 0 && S_ISREG(st.st_mode)) {
+            snprintf(out, cap, "%s", cur);
+            return true;
+        }
+        slash = strrchr(cur, '/');
+        if (!slash || slash == cur) return false;
+        *slash = '\0';
+    }
+    return false;
+}
+
+/* The module path a file is imported as: its path under `<root>/src/`, minus
+ * the extension. `src/frame/schema.tur` is `frame/schema`, which is what an
+ * `(import frame/schema)` in a sibling module spells. */
+static bool module_name_of(const char *root, const char *file_path,
+                           char *out, size_t cap) {
+    char prefix[4200];
+    int n = snprintf(prefix, sizeof(prefix), "%s/src/", root);
+    if (n <= 0 || (size_t)n >= sizeof(prefix)) return false;
+    if (strncmp(file_path, prefix, (size_t)n) != 0) return false;
+    snprintf(out, cap, "%s", file_path + n);
+    char *dot = strstr(out, ".tur");
+    if (dot) *dot = '\0';
+    return out[0] != '\0';
+}
+
+/* Does `text` contain an `(import <module> ...)` naming `module`?
+ *
+ * Cheap and deliberately so: the alternative is re-running module resolution
+ * per candidate file, and the cost of a false positive here is scanning a
+ * file that has no occurrences anyway. A false *negative* would be the
+ * expensive direction, so the test is a token match after the word `import`
+ * rather than anything cleverer. */
+static bool file_imports_module(const char *text, size_t len,
+                                const char *module) {
+    size_t mlen = strlen(module);
+    for (size_t i = 0; i + 6 <= len; i++) {
+        if (memcmp(text + i, "import", 6) != 0) continue;
+        if (i > 0 && (isalnum((unsigned char)text[i - 1]) ||
+                      text[i - 1] == '-' || text[i - 1] == '_'))
+            continue;
+        size_t j = i + 6;
+        while (j < len && (text[j] == ' ' || text[j] == '\t')) j++;
+        if (j + mlen > len) continue;
+        if (memcmp(text + j, module, mlen) != 0) continue;
+        char after = (j + mlen < len) ? text[j + mlen] : '\n';
+        if (after == '/' ) continue;   /* a longer module path */
+        if (isalnum((unsigned char)after) || after == '-' || after == '_')
+            continue;
+        return true;
+    }
+    return false;
+}
+
+/* Every `.tur` / `.tur.sweet` file under `dir`, depth-first.
+ *
+ * `tur build <dir>` descends into `src/` recursively (CLAUDE.md, manifest
+ * -driven build descent), so a workspace scan that only read the top level
+ * would miss exactly the nested `src/<pkg>/` layout the build supports. */
+typedef void (*LspFileFn)(const char *path, void *user);
+
+static void walk_tur_files(const char *dir, int depth, LspFileFn fn,
+                           void *user) {
+    if (depth > 8) return;
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (ent->d_name[0] == '.') continue;
+        char full[4096];
+        int n = snprintf(full, sizeof(full), "%s/%s", dir, ent->d_name);
+        if (n <= 0 || (size_t)n >= sizeof(full)) continue;
+        struct stat st;
+        if (stat(full, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            walk_tur_files(full, depth + 1, fn, user);
+            continue;
+        }
+        if (!S_ISREG(st.st_mode)) continue;
+        size_t len = strlen(ent->d_name);
+        bool is_tur = (len > 4 && strcmp(ent->d_name + len - 4, ".tur") == 0) ||
+                      (len > 10 && strcmp(ent->d_name + len - 10, ".tur.sweet") == 0);
+        if (is_tur) fn(full, user);
+    }
+    closedir(d);
+}
+
+/* Read a whole file. Caller frees. */
+static char *read_file_text(const char *path, size_t *len_out) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long sz = ftell(f);
+    if (sz < 0) { fclose(f); return NULL; }
+    rewind(f);
+    char *buf = malloc((size_t)sz + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t got = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[got] = '\0';
+    *len_out = got;
+    return buf;
+}
+
+/* -------------------------------------------------------------------------
+ * The workspace walk (R2), shared by rename and references
+ * --------------------------------------------------------------------- */
+
+/* How many workspace files one request will analyze.
+ *
+ * Each one costs a compile (see workspace_visit for why the compile is not
+ * optional), so this is the line between "a rename takes a moment" and "the
+ * editor appears to have hung". Overrun is reported, not silently dropped:
+ * rename refuses, because an edit that skipped files is worse than no edit. */
+#define LSP_WS_ANALYZE_MAX 200
+
+typedef struct {
+    /* Where the answer accumulates. Rename writes `"<uri>":[TextEdit...]`
+     * pairs; references writes a flat Location array. */
+    Buf        *out;
+    int         files_emitted;
+    int         hits;
+    int         files_seen;
+    bool        overflowed;
+    /* A file we were about to edit but could not elaborate. Its locals are
+     * unknown, so whether an occurrence in it is OUR name is unknown too. */
+    char        unanalyzable[512];
+    const char *name;
+    const char *new_name;   /* NULL for references */
+    const char *skip_path;  /* the open document, already handled */
+    const char *module;     /* the defining module, for the import filter */
+    bool        as_locations;
+    /* Scratch for the per-file analysis, allocated once for the whole walk
+     * rather than once per file -- the symbol destination alone is megabytes. */
+    LspSymbol  *scratch_syms;
+    LspBinding *scratch_binds;
+} WorkspaceCtx;
+
+typedef struct {
+    Buf        *out;
+    int         emitted;
+    const char *new_name;
+    const char *uri;
+    bool        as_locations;
+} FileEditCtx;
+
+static void file_edit_emit(size_t off, int line0, int col0, int len,
+                           void *user) {
+    (void)off;
+    FileEditCtx *c = (FileEditCtx *)user;
+    if (c->emitted > 0) buf_putc(c->out, ',');
+    if (c->as_locations) {
+        buf_puts(c->out, "{\"uri\":");
+        json_str(c->out, c->uri);
+        buf_printf(c->out,
+            ",\"range\":{\"start\":{\"line\":%d,\"character\":%d},"
+                        "\"end\":{\"line\":%d,\"character\":%d}}}",
+            line0, col0, line0, col0 + len);
+    } else {
+        buf_printf(c->out,
+            "{\"range\":{\"start\":{\"line\":%d,\"character\":%d},"
+                        "\"end\":{\"line\":%d,\"character\":%d}},\"newText\":",
+            line0, col0, line0, col0 + len);
+        json_str(c->out, c->new_name);
+        buf_putc(c->out, '}');
+    }
+    c->emitted++;
+}
+
+/* The same emit, gated on the scope the name actually has.
+ *
+ * Only this document needs it: the workspace walk only ever runs for a
+ * global, whose region is every file that imports it. A local's uses cannot
+ * leave the form that binds it. */
+typedef struct {
+    FileEditCtx *fc;
+    ScopeGate    gate;
+    int          def_line;  /* 0-based, or -1 */
+    int          def_col;
+    bool         skip_definition;
+} RenameScopeCtx;
+
+static void rename_scoped_emit(size_t off, int line0, int col0, int len,
+                               void *user) {
+    RenameScopeCtx *c = (RenameScopeCtx *)user;
+    if (!gate_admits(&c->gate, off)) return;
+    if (c->skip_definition && line0 == c->def_line && col0 == c->def_col)
+        return;
+    file_edit_emit(off, line0, col0, len, c->fc);
+}
+
+static void workspace_visit(const char *path, void *user) {
+    WorkspaceCtx *ws = (WorkspaceCtx *)user;
+    if (ws->skip_path && strcmp(path, ws->skip_path) == 0) return;
+    if (ws->overflowed) return;
+
+    size_t len = 0;
+    char *text = read_file_text(path, &len);
+    if (!text) return;
+    /* The import filter is the cheap half of "does this file mean OUR name":
+     * a module that never imported the defining one cannot be referring to
+     * it, whatever it happens to spell. */
+    if (ws->module && *ws->module && !file_imports_module(text, len, ws->module)) {
+        free(text);
+        return;
+    }
+    if (++ws->files_seen > LSP_WS_ANALYZE_MAX) {
+        ws->overflowed = true;
+        free(text);
+        return;
+    }
+
+    char uri[1200];
+    lsp_path_to_uri(path, uri, sizeof(uri));
+
+    /* Analyze the file for its OWN locals before editing it.
+     *
+     * The alternative -- rewriting every textual occurrence in a file that
+     * imports the module -- is the cross-file half of the shadowing bug, and
+     * it is the destructive half: a sibling module that binds a local named
+     * `total` and separately imports the global `total` would have its local
+     * silently renamed too. A compile per file is the only thing that can
+     * tell those apart, and rename is a deliberate, occasional action that
+     * can afford one. LSP_WS_ANALYZE_MAX bounds how many. */
+    int nb = 0;
+    bool analyzed = true;
+    if (ws->scratch_syms && ws->scratch_binds) {
+        int ns = 0;
+        /* Diagnostics from these compiles are about files the client did not
+         * ask about; they go into a scratch region and are dropped, the same
+         * way stdlib_cache_prime's are. */
+        diag_reset();
+        diag_lsp_begin();
+        lsp_scope_begin(ws->scratch_binds, LSP_BIND_CAP, &nb, path);
+        int rc = tur_collect_symbols(path, NULL, ws->scratch_syms,
+                                     LSP_SYM_CAP, &ns);
+        lsp_scope_end();
+        diag_lsp_end();
+        /* A type error after a clean parse still leaves a complete binding
+         * table; only a file that produced nothing at all is unusable. */
+        analyzed = (rc == 0 || ns > 0 || nb > 0);
+    }
+
+    Buf edits;
+    buf_init(&edits);
+    FileEditCtx fc = { &edits, 0, ws->new_name, uri, ws->as_locations };
+    RenameScopeCtx rc = {
+        &fc, { NULL, ws->scratch_binds, nb, ws->name }, -1, -1, false
+    };
+    lsp_scan_occurrences(text, len, ws->name, rename_scoped_emit, &rc);
+    free(text);
+
+    if (fc.emitted > 0 && !analyzed && !ws->as_locations &&
+        !ws->unanalyzable[0]) {
+        /* Only a file we would actually have edited matters. A broken file
+         * with no occurrences of the name is none of this rename's business,
+         * and refusing over it would make an unrelated syntax error anywhere
+         * in the workspace block every rename. */
+        snprintf(ws->unanalyzable, sizeof(ws->unanalyzable), "%s", path);
+    }
+    if (fc.emitted > 0) {
+        if (ws->files_emitted > 0 || ws->hits > 0) buf_putc(ws->out, ',');
+        if (!ws->as_locations) {
+            json_str(ws->out, uri);
+            buf_putc(ws->out, ':');
+            buf_putc(ws->out, '[');
+        }
+        buf_write(ws->out, edits.data, edits.len);
+        if (!ws->as_locations) buf_putc(ws->out, ']');
+        ws->files_emitted++;
+        ws->hits += fc.emitted;
+    }
+    buf_free(&edits);
+}
+
+/* Scan every file the workspace can reach: the project's own `src/`, plus
+ * each `:path`-based `:spices` dep's `src/`.
+ *
+ * The file set comes from the manifest, in C, and not from the client's open
+ * documents -- c2mp's S13.2 result, and the reasoning transfers exactly. A
+ * second implementation of the module search path in JavaScript will
+ * eventually disagree with the compiler's, and a disagreement here does not
+ * produce a cosmetic bug: it produces an edit applied to the wrong file. */
+static void workspace_scan(const char *root, WorkspaceCtx *ws) {
+    char src_dir[4200];
+    snprintf(src_dir, sizeof(src_dir), "%s/src", root);
+    walk_tur_files(src_dir, 0, workspace_visit, ws);
+
+    char manifest_path[4200];
+    if (!pkg_resolve_manifest_path(root, manifest_path, sizeof(manifest_path)))
+        return;
+    PkgManifest m;
+    memset(&m, 0, sizeof(m));
+    if (!pkg_manifest_read(manifest_path, &m)) return;
+    for (int i = 0; i < m.n_spices; i++) {
+        const PkgSpice *sp = &m.spices[i];
+        /* `:url`-backed and globally-installed deps are outside the
+         * workspace: editing them would rewrite a fetched checkout and
+         * desynchronise tur.lock. prepareRename already refused when the
+         * symbol could cross that boundary; not walking them is the other
+         * half of the same rule. */
+        if (!sp->path) continue;
+        char dep_src[4200];
+        snprintf(dep_src, sizeof(dep_src), "%s/%s/src", root, sp->path);
+        walk_tur_files(dep_src, 0, workspace_visit, ws);
+    }
+    pkg_manifest_free(&m);
+}
+
+/* Is the module this symbol is defined in listed in the manifest's
+ * `:exports`? Such a name is published surface: a fetched consumer we cannot
+ * see -- and cannot edit -- may import it. */
+static bool module_is_exported(const char *root, const char *module) {
+    if (!module || !*module) return false;
+    char manifest_path[4200];
+    if (!pkg_resolve_manifest_path(root, manifest_path, sizeof(manifest_path)))
+        return false;
+    PkgManifest m;
+    memset(&m, 0, sizeof(m));
+    if (!pkg_manifest_read(manifest_path, &m)) return false;
+    bool found = false;
+    size_t mlen = strlen(module);
+    for (int i = 0; i < m.n_exports && !found; i++) {
+        const char *e = m.exports[i];
+        if (!e) continue;
+        /* :exports entries are written as source paths ("src/frame/schema.tur")
+         * or as bare module names; match either spelling. */
+        const char *tail = strstr(e, module);
+        if (!tail) continue;
+        char after = tail[mlen];
+        if (after == '\0' || after == '.') found = true;
+    }
+    pkg_manifest_free(&m);
+    return found;
+}
+
+/* -------------------------------------------------------------------------
+ * prepareRename -- the honesty valve
+ * --------------------------------------------------------------------- */
+
+/* Why a rename cannot proceed, or NULL when it can.
+ *
+ * Also fills `*root` with the enclosing spice root (empty when there is
+ * none) so the caller does not walk up twice. */
+static const char *rename_refusal(const NameRef *ref, char *root,
+                                  size_t root_cap, char *module,
+                                  size_t module_cap) {
+    root[0] = '\0';
+    module[0] = '\0';
+
+    /* A truncated binding table cannot tell "not a local" from "a local we
+     * ran out of room for", and those two answers call for opposite edits. */
+    if (ref->doc->bindings_truncated)
+        return "file too large to rename safely";
+
+    if (ref->bind) {
+        if (ref->bind->def_line == 0)
+            return "cannot rename a macro-introduced binding";
+        return NULL;   /* R1: a local, bounded by its own scope */
+    }
+
+    if (!ref->sym)
+        return "cannot rename: no definition found for this name";
+
+    if (!ref->doc->path || !ref->sym->file_path[0])
+        return "cannot rename: this name has no known definition site";
+
+    if (strcmp(ref->sym->file_path, ref->doc->path) != 0) {
+        const char *sr = stdlib_root();
+        if (sr && strncmp(ref->sym->file_path, sr, strlen(sr)) == 0)
+            return "cannot rename stdlib symbol";
+        return "cannot rename a symbol defined in another file "
+               "-- rename it at its definition";
+    }
+
+    if (spice_root_of(ref->doc->path, root, root_cap)) {
+        module_name_of(root, ref->doc->path, module, module_cap);
+        if (!rename_exports_ && module_is_exported(root, module))
+            return "renaming an exported symbol needs --rename-exports";
+    }
+    return NULL;
+}
+
+static void on_prepare_rename(const char *id_raw, size_t id_len,
+                              const char *params, LspSink *sink) {
+    NameRef ref;
+    if (!resolve_name_at(params, &ref)) {
+        /* Not on an identifier: `null`, which the client shows as "no rename
+         * available here" rather than as an error. */
+        send_response(sink, id_raw, id_len, "null");
+        return;
+    }
+
+    char root[4096], module[1024];
+    const char *why = rename_refusal(&ref, root, sizeof(root),
+                                     module, sizeof(module));
+    if (why) {
+        /* InvalidRequest. The spec's way of getting a reason in front of the
+         * user before they type a new name, which is the entire argument for
+         * prepareProvider over the bare boolean. */
+        send_error(sink, id_raw, id_len, -32600, why);
+        return;
+    }
+
+    size_t s, e;
+    if (!lsp_ident_range_at(ref.doc->text, ref.doc->text_len, ref.off, &s, &e)) {
+        send_response(sink, id_raw, id_len, "null");
+        return;
+    }
+    int l0, c0, l1, c1;
+    offset_to_line_col(ref.doc->text, s, &l0, &c0);
+    offset_to_line_col(ref.doc->text, e, &l1, &c1);
+
+    Buf out;
+    buf_init(&out);
+    buf_printf(&out,
+        "{\"range\":{\"start\":{\"line\":%d,\"character\":%d},"
+                    "\"end\":{\"line\":%d,\"character\":%d}},\"placeholder\":",
+        l0, c0, l1, c1);
+    json_str(&out, ref.name);
+    buf_putc(&out, '}');
+    buf_putc(&out, '\0');
+    send_response(sink, id_raw, id_len, out.data);
+    buf_free(&out);
+}
+
+static void on_rename(const char *id_raw, size_t id_len,
+                      const char *params, LspSink *sink) {
+    NameRef ref;
+    if (!resolve_name_at(params, &ref)) {
+        send_error(sink, id_raw, id_len, -32600, "no identifier at position");
+        return;
+    }
+
+    char new_name[128];
+    if (lsp_json_str_copy(params, "newName", new_name, sizeof(new_name)) < 0 ||
+        !new_name[0]) {
+        send_error(sink, id_raw, id_len, -32602, "rename needs a newName");
+        return;
+    }
+
+    char root[4096], module[1024];
+    const char *why = rename_refusal(&ref, root, sizeof(root),
+                                     module, sizeof(module));
+    if (why) {
+        /* A conforming client asked prepareRename first and already saw this.
+         * One that did not still must not get an edit. */
+        send_error(sink, id_raw, id_len, -32600, why);
+        return;
+    }
+
+    Buf changes;
+    buf_init(&changes);
+    buf_puts(&changes, "{\"changes\":{");
+
+    /* R1 -- this document. A local is bounded by its scope; a global defined
+     * here is the whole buffer. Either way the bound comes from the resolver,
+     * which is what makes this half completely safe. */
+    Buf edits;
+    buf_init(&edits);
+    FileEditCtx fc = { &edits, 0, new_name, ref.uri, false };
+    /* Scope filtering rides the predicate the highlight uses, so a rename
+     * edits exactly the marks the user was just shown. */
+    RenameScopeCtx rc = {
+        &fc,
+        { ref.bind, ref.doc->bindings, ref.doc->binding_count, ref.name },
+        -1, -1, false
+    };
+    lsp_scan_occurrences(ref.doc->text, ref.doc->text_len, ref.name,
+                         rename_scoped_emit, &rc);
+    json_str(&changes, ref.uri);
+    buf_putc(&changes, ':');
+    buf_putc(&changes, '[');
+    buf_write(&changes, edits.data, edits.len);
+    buf_putc(&changes, ']');
+    buf_free(&edits);
+
+    /* R2 -- the rest of the workspace. Only a global reaches here: a local's
+     * scope cannot leave its own file. */
+    if (!ref.bind && root[0]) {
+        WorkspaceCtx ws;
+        memset(&ws, 0, sizeof(ws));
+        ws.out           = &changes;
+        ws.name          = ref.name;
+        ws.new_name      = new_name;
+        ws.skip_path     = ref.doc->path;
+        ws.module        = module;
+        ws.hits          = 1;   /* the current document already wrote a pair */
+        ws.scratch_syms  = calloc((size_t)LSP_SYM_CAP, sizeof(LspSymbol));
+        ws.scratch_binds = calloc((size_t)LSP_BIND_CAP, sizeof(LspBinding));
+        workspace_scan(root, &ws);
+        free(ws.scratch_syms);
+        free(ws.scratch_binds);
+        if (ws.overflowed || !ws.scratch_binds || ws.unanalyzable[0]) {
+            /* A partial or unverified WorkspaceEdit is the one outcome worse
+             * than none: it renames the definition and leaves some callers
+             * behind, which does not even compile. */
+            char msg[640];
+            if (ws.overflowed)
+                snprintf(msg, sizeof(msg),
+                         "too many files import this module to rename safely");
+            else if (!ws.scratch_binds)
+                snprintf(msg, sizeof(msg),
+                         "out of memory analyzing the workspace");
+            else
+                snprintf(msg, sizeof(msg),
+                         "cannot rename: %s uses this name but does not "
+                         "compile, so its own bindings are unknown",
+                         ws.unanalyzable);
+            buf_free(&changes);
+            send_error(sink, id_raw, id_len, -32600, msg);
+            return;
+        }
+    }
+
+    buf_puts(&changes, "}}");
+    buf_putc(&changes, '\0');
+    send_response(sink, id_raw, id_len, changes.data);
+    buf_free(&changes);
+}
+
+/* references is R2's file walk without the edit, which is why it lands in the
+ * same place: implementing the workspace scan and then not exposing it would
+ * be leaving the cheapest feature in the plan on the floor. */
+static void on_references(const char *id_raw, size_t id_len,
+                          const char *params, LspSink *sink) {
+    NameRef ref;
+    if (!resolve_name_at(params, &ref)) {
+        send_response(sink, id_raw, id_len, "[]");
+        return;
+    }
+
+    /* `includeDeclaration` is honored rather than ignored: the definition is
+     * a reference when the client asks for it, and is the `kind 3` mark in
+     * highlight terms when it does not. */
+    bool include_decl = true;
+    size_t ctx_len = 0, flag_len = 0;
+    const char *ctx = lsp_json_raw(params, "context", &ctx_len);
+    const char *flag = ctx ? lsp_json_raw(ctx, "includeDeclaration", &flag_len)
+                           : NULL;
+    if (flag && flag_len >= 5 && memcmp(flag, "false", 5) == 0)
+        include_decl = false;
+
+    int def_line = -1, def_col = -1;
+    if (ref.bind && ref.bind->def_line > 0) {
+        def_line = (int)ref.bind->def_line - 1;
+        def_col  = ref.bind->def_col_start > 0
+                     ? (int)ref.bind->def_col_start - 1 : 0;
+    } else if (ref.sym && ref.doc->path && ref.sym->file_path[0] &&
+               strcmp(ref.sym->file_path, ref.doc->path) == 0) {
+        def_line = ref.sym->line > 0 ? ref.sym->line - 1 : 0;
+        def_col  = ref.sym->col_start > 0 ? ref.sym->col_start - 1 : 0;
+    }
+
+    Buf out;
+    buf_init(&out);
+    buf_putc(&out, '[');
+
+    FileEditCtx fc = { &out, 0, NULL, ref.uri, true };
+    RenameScopeCtx rc = {
+        &fc,
+        { ref.bind, ref.doc->bindings, ref.doc->binding_count, ref.name },
+        def_line, def_col, !include_decl
+    };
+    lsp_scan_occurrences(ref.doc->text, ref.doc->text_len, ref.name,
+                         rename_scoped_emit, &rc);
+
+    if (!ref.bind && ref.sym && ref.doc->path &&
+        strcmp(ref.sym->file_path, ref.doc->path) == 0) {
+        char root[4096], module[1024];
+        module[0] = '\0';
+        if (spice_root_of(ref.doc->path, root, sizeof(root))) {
+            module_name_of(root, ref.doc->path, module, sizeof(module));
+            WorkspaceCtx ws;
+            memset(&ws, 0, sizeof(ws));
+            ws.out           = &out;
+            ws.name          = ref.name;
+            ws.skip_path     = ref.doc->path;
+            ws.module        = module;
+            ws.as_locations  = true;
+            ws.hits          = fc.emitted;
+            ws.scratch_syms  = calloc((size_t)LSP_SYM_CAP, sizeof(LspSymbol));
+            ws.scratch_binds = calloc((size_t)LSP_BIND_CAP, sizeof(LspBinding));
+            /* Overflow is not an error here the way it is for rename: an
+             * incomplete list of references is a smaller list, and a client
+             * that gets one has still been told the truth about every entry
+             * in it. Only an incomplete EDIT is unsafe. */
+            workspace_scan(root, &ws);
+            free(ws.scratch_syms);
+            free(ws.scratch_binds);
+        }
+    }
+
+    buf_putc(&out, ']');
+    buf_putc(&out, '\0');
+    send_response(sink, id_raw, id_len, out.data);
+    buf_free(&out);
 }
 
 /* -------------------------------------------------------------------------
@@ -1278,6 +2200,35 @@ static void on_signature_help(const char *id_raw, size_t id_len,
     }
 
     const LspSymbol *sym = find_symbol(doc, callee);
+
+    /* Same builtin fallback as on_hover: `(println ` and `(+ ` are the calls
+     * being typed when signature help is most wanted, and neither has a
+     * Binding to find. A synthetic LspSymbol keeps the rendering below on one
+     * path -- signature_params() reads type_str, so the first rendered
+     * overload has to be a type_str for the parameter labels to come out. */
+    LspSymbol builtin_sym;
+    if (!sym) {
+        char desc[512];
+        if (builtin_describe(callee, desc, sizeof(desc)) > 0) {
+            memset(&builtin_sym, 0, sizeof(builtin_sym));
+            snprintf(builtin_sym.name, sizeof(builtin_sym.name), "%s", callee);
+            /* desc's first line is "(name : (fn [...] : R))". Lift the type
+             * out from after " : " up to the closing paren. */
+            char *open = strstr(desc, " : ");
+            char *nl   = strchr(desc, '\n');
+            if (nl) *nl = '\0';
+            size_t dlen = strlen(desc);
+            if (open && dlen > 0 && desc[dlen - 1] == ')') {
+                desc[dlen - 1] = '\0';
+                snprintf(builtin_sym.type_str, sizeof(builtin_sym.type_str),
+                         "%s", open + 3);
+            }
+            snprintf(builtin_sym.doc, sizeof(builtin_sym.doc),
+                     "built-in operator");
+            builtin_sym.kind = LSP_KIND_FUNCTION;
+            sym = &builtin_sym;
+        }
+    }
     if (!sym) { send_response(sink, id_raw, id_len, "null"); return; }
 
     Buf plabels;
@@ -1362,9 +2313,22 @@ static int ci_starts_with(const char *name, const char *prefix, size_t plen) {
  * that distinction matters. */
 #define LSP_COMPLETION_MAX 200
 
+/* LSP CompletionItemKind -- a different enum from SymbolKind, for the same
+ * distinctions. A type completes as Struct/Enum so the menu shows a type icon
+ * beside `Point`, which is what tells a reader it is not a function to call. */
+static int lsp_completion_kind(const LspSymbol *sym) {
+    switch (sym->kind) {
+        case LSP_KIND_FUNCTION: return 3;   /* Function */
+        case LSP_KIND_VALUE:    return 6;   /* Variable */
+        case LSP_KIND_STRUCT:   return 22;  /* Struct   */
+        case LSP_KIND_ENUM:     return 13;  /* Enum     */
+        case LSP_KIND_UNKNOWN:  break;
+    }
+    return (strncmp(sym->type_str, "(fn", 3) == 0) ? 3 : 6;
+}
+
 static void emit_completion_item(Buf *result, const LspSymbol *sym, int *emitted) {
-    /* kind: 3 = Function (type starts with "(fn"), 6 = Variable */
-    int kind = (strncmp(sym->type_str, "(fn", 3) == 0) ? 3 : 6;
+    int kind = lsp_completion_kind(sym);
 
     if (*emitted > 0) buf_putc(result, ',');
     buf_puts(result, "{\"label\":");
@@ -1599,6 +2563,10 @@ bool lsp_dispatch_message(const char *msg, LspSink *sink, int fd_in) {
     } else if (strcmp(method, "textDocument/hover") == 0 ||
                strcmp(method, "textDocument/definition") == 0 ||
                strcmp(method, "textDocument/documentSymbol") == 0 ||
+               strcmp(method, "textDocument/documentHighlight") == 0 ||
+               strcmp(method, "textDocument/prepareRename") == 0 ||
+               strcmp(method, "textDocument/rename") == 0 ||
+               strcmp(method, "textDocument/references") == 0 ||
                strcmp(method, "workspace/symbol") == 0 ||
                strcmp(method, "textDocument/signatureHelp") == 0 ||
                strcmp(method, "textDocument/completion") == 0) {
@@ -1624,6 +2592,14 @@ bool lsp_dispatch_message(const char *msg, LspSink *sink, int fd_in) {
             on_definition(id_raw, id_len, params_raw, sink);
         } else if (strcmp(method, "textDocument/documentSymbol") == 0) {
             on_document_symbol(id_raw, id_len, params_raw, sink);
+        } else if (strcmp(method, "textDocument/documentHighlight") == 0) {
+            on_document_highlight(id_raw, id_len, params_raw, sink);
+        } else if (strcmp(method, "textDocument/prepareRename") == 0) {
+            on_prepare_rename(id_raw, id_len, params_raw, sink);
+        } else if (strcmp(method, "textDocument/rename") == 0) {
+            on_rename(id_raw, id_len, params_raw, sink);
+        } else if (strcmp(method, "textDocument/references") == 0) {
+            on_references(id_raw, id_len, params_raw, sink);
         } else if (strcmp(method, "workspace/symbol") == 0) {
             on_workspace_symbol(id_raw, id_len, params_raw, sink);
         } else if (strcmp(method, "textDocument/signatureHelp") == 0) {

@@ -10,7 +10,7 @@ Ergonomic asynchronous programming in Turmeric using fibers and delimited contin
 
 ## Overview
 
-Turmeric's `async`/`await` syntax enables direct-style asynchronous programming for I/O-bound and concurrent tasks. The implementation builds on Phase 18's delimited continuations and integrates with Turmeric's effect system.
+Turmeric's `async`/`await` syntax enables direct-style asynchronous programming for I/O-bound and concurrent tasks. The implementation builds on delimited continuations and integrates with Turmeric's effect system.
 
 ## Quick Start
 
@@ -66,9 +66,31 @@ A **fiber** is a user-space thread (lightweight thread) that:
 - Can be awaited with `(await fut)`.
 - Composable: multiple `await`s sequence operations.
 
+### Task panics
+
+A panic inside an `(async ...)` body is that **task's** failure, not the
+spawner's. It is caught at the task boundary and the future is left in a
+rejected state carrying the panic message, so:
+
+- the spawn returns normally -- the statement after it runs;
+- a task whose failure nobody demands never terminates the program;
+- `(await f)` on a rejected task re-raises the task's panic **at the await**,
+  which a `catch-unwind` there catches, and which prints the task's own
+  message and aborts when no handler is in scope.
+
+```turmeric
+(let [fut (async boom)
+      r   (catch-unwind (fn [] : int (await fut)))]
+  (if (err? r) (println "task failed") (println "ok")))
+```
+
+See the "Panic inside async tasks" section of the
+[Error Handling Guide](error-handling-guide.md) for what is still planned
+(cancel-vs-panic precedence, async-main exit codes, the WASM lowering).
+
 ### Scheduling
 
-The scheduler is single-threaded: all fibers run on one OS thread, avoiding data races. A multi-threaded scheduler (fibers on a thread pool) is a future direction.
+The default scheduler is single-threaded: all fibers run on one OS thread, avoiding data races. A multi-threaded work-stealing scheduler (fibers distributed across a pool of OS threads) is available separately via `stdlib/scheduler_mt.tur`.
 
 ## Design Decisions
 
@@ -117,7 +139,7 @@ reset
 | Feature | Threads | Async/Await |
 |---------|-------------------|----------------------|
 | **Model** | OS-level 1:1 threads | User-space fibers |
-| **Overhead** | ~10-100μs per thread | ~1μs per fiber |
+| **Overhead** | ~10-100us per thread | ~1us per fiber |
 | **Scalability** | 100s-1000s max | 100k+ feasible |
 | **Stack** | Real OS stack | CPS-based (heap) |
 | **Use case** | CPU-bound parallelism | I/O-bound concurrency |
@@ -164,28 +186,23 @@ async
 
 ### Error Handling
 
-Effects-based try/catch works within async blocks (see [Effects System Guide](effects-system-guide.md)):
+Effect handlers work within async blocks. `try-with` is sugar for `handle`:
+the body comes first, followed by `(EffectName [params] k)` clause heads and
+their handler bodies (see [Effects System Guide](effects-system-guide.md)):
 
 ```turmeric
 (async
   (try-with
-    (fn []
-      (await (fetch-file "missing.txt")))
-    (fn [e k]
-      (match e
-        (FileNotFound _) -> (continue k "default")))))
+    (await (fetch-file "missing.txt"))
+    (FileError [path] k) (resume k "default")))
 ```
 
 ```sweet-exp
 async
   try-with
-    fn []
-      await(fetch-file("missing.txt"))
-    fn [e k]
-      match e
-        (FileNotFound _)
-        ->
-        continue(k "default")
+    await(fetch-file("missing.txt"))
+    (FileError [path] k)
+    resume(k "default")
 ```
 
 ## Send Requirements for Async Bodies
@@ -235,10 +252,30 @@ Consume or drop non-Send values before the `await`:
 
 ### Scope
 
-This check applies **only to inline closures** passed directly to `(async
-(fn [] ...))`. Pre-defined functions referenced as `(async my-fn)` are not
-re-elaborated and are not checked here; their bodies were compiled without
-async context. A future CPS-based implementation will close this gap.
+The check runs at **every** `await`, wherever it appears. Writing the body
+inline as `(async (fn [] ...))` and lifting it into a named `defn` handed to
+`(async my-fn)` are diagnosed the same way -- the two are semantically
+identical, so hoisting is not an escape hatch:
+
+```turmeric no-check
+;; Both of these are TUR-E0022.
+(defn main [] : nil
+  (await (async (fn [] : int
+    (let [x (rc/of 42)]
+      (await (async zero))    ;; x live across an await
+      (rc/deref x))))))
+
+(defn f [] : int
+  (let [x (rc/of 42)]
+    (await (async zero))      ;; ... and so is this
+    (rc/deref x)))
+(defn main [] : nil (await (async f)))
+```
+
+This is conservative in the direction of safety: *every* binding in scope at
+an `await` must be Send, whether or not it is genuinely read afterwards. To
+carry a non-Send value across an await, end its scope before the await point
+(a nested `let`) or convert it to a Send representation.
 
 ## I/O Bindings
 

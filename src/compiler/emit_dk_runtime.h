@@ -21,7 +21,7 @@
  * / ...). When U7 eventually deletes emit_cps.c's *lowering* functions, this
  * runtime must survive -- relocating it here decouples the runtime's lifetime
  * from the lowering's, so the delete does not take the load-bearing runtime
- * with it. See docs/upcoming/v2/cps-backend-unification-u7-readiness-plan.md.
+ * with it. See docs/archive/cps-backend-unification-u7-readiness-plan.md.
  *
  * The whole-program prelude gates that decide whether each prelude is emitted
  * are the `preamble_uses_*` presence scans local to emit_module.c (D5 relocated
@@ -31,13 +31,15 @@
 
 /* Emit the self-contained DK multi-prompt machine (a faithful C port of
  * src/runtime/cps_prompt.c) into the generated program's preamble. Call once,
- * gated on preamble_uses_base_delimited(). */
+ * gated on preamble_uses_base_delimited().
+ *
+ * Always includes E7's trampolined tail-resume machinery (struct DK tail_resume
+ * field, dk_handler_tail, the meta-stack + dk_tail_resume + __dk_drive_after,
+ * and dk_perform's yield branch).  This used to be a `tramp` parameter with an
+ * `_ex` spelling, defaulting off; cps-tramp-resume graduated 2026-07-19, the
+ * only caller passed the always-true g_opt_cps_tramp_resume, and the
+ * tramp-off wrapper had no callers at all. */
 void emit_cps_runtime_prelude(Buf *out);
-/* E7 (cps-tramp-resume): when `tramp` is true, also emit the trampolined
- * tail-resume machinery (struct DK tail_resume field, dk_handler_tail, the
- * meta-stack + dk_tail_resume + __dk_drive_after, and dk_perform's yield branch).
- * When false the output is byte-identical to emit_cps_runtime_prelude. */
-void emit_cps_runtime_prelude_ex(Buf *out, bool tramp);
 
 /* True while emit_rt_split_source() is producing the CANONICAL split-runtime
  * text (S2): the committed src/runtime/generated/tur_rt_split*.{c,h}, and the

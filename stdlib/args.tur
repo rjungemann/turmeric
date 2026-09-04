@@ -22,17 +22,27 @@
 ;;   cons    [0]=value_cstr  [1]=next_cons     (Turmeric *args* layout)
 ;;
 ;; NULL / absent values are stored as 0.
+
+;; The load registry dedups, so re-loading an already-present module is a no-op.
+(load "stdlib/option.tur")
+
+;; ArgSpec / ArgResult are distinct handle kinds, not interchangeable ints: a
+;; spec pointer passed where a result is expected is a type error, and the
+;; option default is a real (Option cstr) rather than a cstr smuggled through
+;; :int.  See the "No Lazy `:int` Stand-Ins" rule in CLAUDE.md.
+(defopaque ArgSpec :int)
+
+(defopaque ArgResult :int)
 ;;; args/spec-new -- create a new empty argument specification.
 ;;;
 ;;; Returns:
-;;;   Opaque pointer (as :int) to an empty arg spec.
-;;;   Free with args/spec-free when done.
+;;;   A fresh ArgSpec handle.  Free with args/spec-free when done.
 ;;;
 ;;; Example:
 ;;;   (let [spec (args/spec-new)] ...)
 ;;;
 ;;; Since: Phase A1
-(defn args/spec-new [] : int
+(defn args/spec-new [] : ArgSpec
   ```c
   int64_t *s = calloc(4, sizeof(int64_t));
   return (int64_t)(intptr_t)s;
@@ -40,18 +50,18 @@
 ;;; args/spec-prog -- set the program name displayed in help text.
 ;;;
 ;;; Parameters:
-;;;   spec -- arg spec pointer from args/spec-new
+;;;   spec -- ArgSpec handle from args/spec-new
 ;;;   name -- program name cstr
 ;;;
 ;;; Returns:
-;;;   The same spec pointer (mutated in place).
+;;;   The same ArgSpec (mutated in place).
 ;;;
 ;;; Example:
 ;;;   (args/spec-prog spec "mytool")
 ;;;
 ;;; Since: Phase A1
 
-(defn args/spec-prog [spec : int name : cstr] : int
+(defn args/spec-prog [spec : ArgSpec name : cstr] : ArgSpec
   ```c
   int64_t *s = (int64_t*)(intptr_t)spec;
   s[3] = (int64_t)(intptr_t)name;
@@ -60,18 +70,18 @@
 ;;; args/spec-flag -- register a boolean flag in the arg spec.
 ;;;
 ;;; Parameters:
-;;;   spec -- arg spec pointer
+;;;   spec -- ArgSpec handle
 ;;;   name -- flag name including dashes (e.g., "--verbose")
 ;;;
 ;;; Returns:
-;;;   The same spec pointer (mutated in place).
+;;;   The same ArgSpec (mutated in place).
 ;;;
 ;;; Example:
 ;;;   (args/spec-flag spec "--verbose")
 ;;;
 ;;; Since: Phase A1
 
-(defn args/spec-flag [spec : int name : cstr] : int
+(defn args/spec-flag [spec : ArgSpec name : cstr] : ArgSpec
   ```c
   int64_t *s = (int64_t*)(intptr_t)spec;
   int64_t *cell = malloc(2 * sizeof(int64_t));
@@ -80,43 +90,63 @@
   s[0] = (int64_t)(intptr_t)cell;
   return spec;
   ```)
-;;; args/spec-option -- register a named option in the arg spec.
-;;;
-;;; Parameters:
-;;;   spec -- arg spec pointer
-;;;   name -- option name with dashes (e.g., "--input")
-;;;   type -- one of "string", "int", "float", "bool"
-;;;   dflt -- default value as a cstr, or 0 if the option is required
-;;;
-;;; Returns:
-;;;   The same spec pointer (mutated in place).
-;;;
-;;; Example:
-;;;   (args/spec-option spec "--input" "string" 0)
-;;;   (args/spec-option spec "--count" "int" "1")
-;;;
-;;; Since: Phase A1
+;;; args/-no-default -- the NULL cstr the option cell stores for "required".
 
-(defn args/spec-option [spec : int name : cstr type : cstr dflt : int] : int
+(defn args/-no-default [] : cstr
+  ```c
+  return NULL;
+  ```)
+;;; args/-spec-option-raw -- register an option whose default is a cstr or NULL.
+
+(defn args/-spec-option-raw [spec : ArgSpec name : cstr type : cstr dflt : cstr] : ArgSpec
   ```c
   int64_t *s = (int64_t*)(intptr_t)spec;
   int64_t *cell = malloc(4 * sizeof(int64_t));
   cell[0] = (int64_t)(intptr_t)name;
   cell[1] = (int64_t)(intptr_t)type;
-  cell[2] = (int64_t)dflt;
+  cell[2] = (int64_t)(intptr_t)dflt;
   cell[3] = s[1];
   s[1] = (int64_t)(intptr_t)cell;
   return spec;
   ```)
+
+;;; args/spec-option -- register a named option in the arg spec.
+;;;
+;;; Parameters:
+;;;   spec -- ArgSpec handle
+;;;   name -- option name with dashes (e.g., "--input")
+;;;   type -- one of "string", "int", "float", "bool"
+;;;   dflt -- (some "value") for a default, (none) if the option is required
+;;;
+;;; Returns:
+;;;   The same ArgSpec (mutated in place).
+;;;
+;;; Example:
+;;;   (args/spec-option spec "--input" "string" (none))
+;;;   (args/spec-option spec "--count" "int" (some "1"))
+;;;
+;;; Since: Phase A1
+
+(defn args/spec-option [spec : ArgSpec
+                        name : cstr
+                        type : cstr
+                        dflt : (Option cstr)] : ArgSpec
+  ;; none is the "required" marker: the cell stores NULL, which is what the
+  ;; default-injection pass and print-help both read as "no default".
+  (match dflt
+    (Some d)
+    (args/-spec-option-raw spec name type d)
+    (None)
+    (args/-spec-option-raw spec name type (args/-no-default))))
 ;;; args/spec-subcommand -- register a nested subcommand.
 ;;;
 ;;; Parameters:
-;;;   spec     -- parent arg spec pointer
+;;;   spec     -- parent ArgSpec handle
 ;;;   name     -- subcommand name (e.g., "build")
-;;;   sub-spec -- arg spec for the subcommand (from args/spec-new)
+;;;   sub-spec -- ArgSpec for the subcommand (from args/spec-new)
 ;;;
 ;;; Returns:
-;;;   The same spec pointer (mutated in place).
+;;;   The same parent ArgSpec (mutated in place).
 ;;;
 ;;; Example:
 ;;;   (let [sub (args/spec-new)]
@@ -125,7 +155,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/spec-subcommand [spec : int name : cstr sub-spec : int] : int
+(defn args/spec-subcommand [spec : ArgSpec name : cstr sub-spec : ArgSpec] : ArgSpec
   ```c
   int64_t *s = (int64_t*)(intptr_t)spec;
   int64_t *cell = malloc(3 * sizeof(int64_t));
@@ -145,18 +175,19 @@
 ;;; produce an error in the result.
 ;;;
 ;;; Parameters:
-;;;   spec -- arg spec pointer from args/spec-new
-;;;   argv -- Turmeric *args* cons list (int representing the cons cell pointer)
+;;;   spec -- ArgSpec handle from args/spec-new
+;;;   argv -- Turmeric *args* cons list (the elaborator declares *args* itself
+;;;           as :int, so this slot matches that global's own type)
 ;;;
 ;;; Returns:
-;;;   Opaque result pointer. Free with args/result-free when done.
+;;;   An ArgResult handle. Free with args/result-free when done.
 ;;;
 ;;; Example:
 ;;;   (let [res (args/parse spec *args*)] ...)
 ;;;
 ;;; Since: Phase A1
 
-(defn args/parse [spec : int argv : int] : int
+(defn args/parse [spec : ArgSpec argv : int] : ArgResult
   ```c
   /* --- linearise the *args* cons list into a char* array --- */
   int argc_l = 0;
@@ -365,7 +396,7 @@
 ;;; args/has? -- check whether a key is present in the result.
 ;;;
 ;;; Parameters:
-;;;   result -- result pointer from args/parse
+;;;   result -- ArgResult handle from args/parse
 ;;;   key    -- option or flag name without dashes (e.g., "verbose")
 ;;;
 ;;; Returns:
@@ -376,7 +407,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/has? [result : int key : cstr] : bool
+(defn args/has? [result : ArgResult key : cstr] : bool
   ```c
   int64_t *res = (int64_t*)(intptr_t)result;
   int64_t *e   = (int64_t*)(intptr_t)res[0];
@@ -390,7 +421,7 @@
 ;;; args/get-str -- look up a string value in the result.
 ;;;
 ;;; Parameters:
-;;;   result -- result pointer from args/parse
+;;;   result -- ArgResult handle from args/parse
 ;;;   key    -- option name without dashes (e.g., "input")
 ;;;
 ;;; Returns:
@@ -401,7 +432,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/get-str [result : int key : cstr] : cstr
+(defn args/get-str [result : ArgResult key : cstr] : cstr
   ```c
   int64_t *res = (int64_t*)(intptr_t)result;
   int64_t *e   = (int64_t*)(intptr_t)res[0];
@@ -415,7 +446,7 @@
 ;;; args/get-int -- look up an integer value in the result.
 ;;;
 ;;; Parameters:
-;;;   result -- result pointer from args/parse
+;;;   result -- ArgResult handle from args/parse
 ;;;   key    -- option name without dashes
 ;;;
 ;;; Returns:
@@ -426,7 +457,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/get-int [result : int key : cstr] : int
+(defn args/get-int [result : ArgResult key : cstr] : int
   ```c
   int64_t *res = (int64_t*)(intptr_t)result;
   int64_t *e   = (int64_t*)(intptr_t)res[0];
@@ -440,7 +471,7 @@
 ;;; args/get-bool -- look up a boolean flag value in the result.
 ;;;
 ;;; Parameters:
-;;;   result -- result pointer from args/parse
+;;;   result -- ArgResult handle from args/parse
 ;;;   key    -- flag name without dashes (e.g., "verbose")
 ;;;
 ;;; Returns:
@@ -451,7 +482,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/get-bool [result : int key : cstr] : bool
+(defn args/get-bool [result : ArgResult key : cstr] : bool
   ```c
   int64_t *res = (int64_t*)(intptr_t)result;
   int64_t *e   = (int64_t*)(intptr_t)res[0];
@@ -468,7 +499,7 @@
 ;;; args/subcommand -- return the matched subcommand name, or 0 if none.
 ;;;
 ;;; Parameters:
-;;;   result -- result pointer from args/parse
+;;;   result -- ArgResult handle from args/parse
 ;;;
 ;;; Returns:
 ;;;   The subcommand name cstr, or 0 if no subcommand was matched.
@@ -478,35 +509,43 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/subcommand [result : int] : cstr
+(defn args/subcommand [result : ArgResult] : cstr
   ```c
   int64_t *res = (int64_t*)(intptr_t)result;
   return (const char*)(intptr_t)res[2];
   ```)
-;;; args/sub-result -- return the result from subcommand parsing, or 0 if none.
-;;;
-;;; Parameters:
-;;;   result -- result pointer from args/parse
-;;;
-;;; Returns:
-;;;   The sub-result pointer, or 0 if no subcommand was matched.
-;;;
-;;; Example:
-;;;   (let [sub (args/sub-result res)] (args/get-bool sub "release"))
-;;;
-;;; Since: Phase A1
+;;; args/-sub-result-raw -- the raw sub-result slot (0 when no subcommand ran).
 
-(defn args/sub-result [result : int] : int
+(defn args/-sub-result-raw [result : ArgResult] : int
   ```c
   int64_t *res = (int64_t*)(intptr_t)result;
   return res[3];
   ```)
+;;; args/sub-result -- the result from subcommand parsing, if one matched.
+;;;
+;;; Parameters:
+;;;   result -- ArgResult handle from args/parse
+;;;
+;;; Returns:
+;;;   (some sub-result) if a subcommand was matched, (none) otherwise.
+;;;
+;;; Example:
+;;;   (let [sub (args/sub-result res)]
+;;;     (match sub
+;;;       (Some s) (args/get-bool s "release")
+;;;       (None)   false))
+;;;
+;;; Since: Phase A1
+
+(defn args/sub-result [result : ArgResult] : (Option ArgResult)
+  (let [p (args/-sub-result-raw result)]
+    (if (= p 0) (none) (some (:: p ArgResult)))))
 ;;; args/positional -- return the positional arg cons list from the result.
 ;;;
 ;;; The list is in reverse order (last positional arg is the head).
 ;;;
 ;;; Parameters:
-;;;   result -- result pointer from args/parse
+;;;   result -- ArgResult handle from args/parse
 ;;;
 ;;; Returns:
 ;;;   A Turmeric cons list (int64_t) of remaining positional cstr args.
@@ -516,7 +555,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/positional [result : int] : int
+(defn args/positional [result : ArgResult] : int
   ```c
   int64_t *res = (int64_t*)(intptr_t)result;
   return res[1];
@@ -524,7 +563,7 @@
 ;;; args/error? -- check whether parsing produced an error.
 ;;;
 ;;; Parameters:
-;;;   result -- result pointer from args/parse
+;;;   result -- ArgResult handle from args/parse
 ;;;
 ;;; Returns:
 ;;;   true if the result contains a parse error.
@@ -534,7 +573,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/error? [result : int] : bool
+(defn args/error? [result : ArgResult] : bool
   ```c
   int64_t *res = (int64_t*)(intptr_t)result;
   return res[4] != 0;
@@ -542,7 +581,7 @@
 ;;; args/error-msg -- return the parse error message, or 0 if no error.
 ;;;
 ;;; Parameters:
-;;;   result -- result pointer from args/parse
+;;;   result -- ArgResult handle from args/parse
 ;;;
 ;;; Returns:
 ;;;   The error message cstr, or 0 if there was no error.
@@ -552,7 +591,7 @@
 ;;;
 ;;; Since: Phase A1
 
-(defn args/error-msg [result : int] : cstr
+(defn args/error-msg [result : ArgResult] : cstr
   ```c
   int64_t *res = (int64_t*)(intptr_t)result;
   return (const char*)(intptr_t)res[5];
@@ -560,14 +599,14 @@
 ;;; args/print-help -- print usage information to stdout.
 ;;;
 ;;; Parameters:
-;;;   spec -- arg spec pointer from args/spec-new
+;;;   spec -- ArgSpec handle from args/spec-new
 ;;;
 ;;; Example:
 ;;;   (args/print-help spec)
 ;;;
 ;;; Since: Phase A1
 
-(defn args/print-help [spec : int] : void
+(defn args/print-help [spec : ArgSpec] : void
   ```c
   int64_t *sp = (int64_t*)(intptr_t)spec;
   const char *prog = sp[3] ? (const char*)(intptr_t)sp[3] : "program";
@@ -608,14 +647,14 @@
 ;;; the caller must free those separately.
 ;;;
 ;;; Parameters:
-;;;   spec -- arg spec pointer to free
+;;;   spec -- ArgSpec handle to free
 ;;;
 ;;; Example:
 ;;;   (args/spec-free spec)
 ;;;
 ;;; Since: Phase A1
 
-(defn args/spec-free [spec : int] : void
+(defn args/spec-free [spec : ArgSpec] : void
   ```c
   int64_t *sp = (int64_t*)(intptr_t)spec;
   int64_t *fl = (int64_t*)(intptr_t)sp[0];
@@ -629,14 +668,14 @@
 ;;; args/result-free -- free a result created by args/parse (including sub-results).
 ;;;
 ;;; Parameters:
-;;;   result -- result pointer to free
+;;;   result -- ArgResult handle to free
 ;;;
 ;;; Example:
 ;;;   (args/result-free result)
 ;;;
 ;;; Since: Phase A1
 
-(defn args/result-free [result : int] : void
+(defn args/result-free [result : ArgResult] : void
   ```c
   int64_t cur = result;
   while (cur) {

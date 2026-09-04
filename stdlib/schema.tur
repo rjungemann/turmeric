@@ -995,15 +995,11 @@
 
   int64_t value = sch_hydecode_hyrec_hy(schema, node, "", (void *)errs);
 
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   if (errs->len == 0) {
-    r->is_ok = true; r->ok_val = value; r->err_val = 0;
     free(errs->data); free(errs);
-  } else {
-    r->is_ok = false; r->ok_val = 0;
-    r->err_val = (int64_t)(intptr_t)errs;
+    return tur_box_ok(value);
   }
-  return (int64_t)(intptr_t)r;
+  return tur_box_err((int64_t)(intptr_t)errs);
   ```)
 ;;; schema-decode-ok? -- whether a schema-decode Result succeeded.
 ;;;
@@ -1017,8 +1013,7 @@
 
 (defn schema-decode-ok? [r : int] : bool
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  return res && res->is_ok;
+  return tur_is_ok(r);
   ```)
 ;;; schema-decode-value -- the decoded value of a successful Result.
 ;;;
@@ -1032,8 +1027,7 @@
 
 (defn schema-decode-value [r : int] : int
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  return res ? res->ok_val : 0;
+  return r ? tur_ok_value(r) : 0;
   ```)
 ;;; schema-decode-errors -- the error Vec of a failed Result.
 ;;;
@@ -1047,12 +1041,11 @@
 
 (defn schema-decode-errors [r : int] : int
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  return res ? res->err_val : 0;
+  return r ? tur_err_value(r) : 0;
   ```)
-;;; schema-decode-abort -- internal: print an error Vec to stderr and abort.
+;;; schema-decode-report -- internal: print an error Vec to stderr.
 
-(defn schema-decode-abort [errs : int] : int
+(defn schema-decode-report [errs : int] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
   fprintf(stderr, "schema-decode!: validation failed\n");
@@ -1063,9 +1056,19 @@
     if (path && path[0]) fprintf(stderr, "  %s: %s\n", path, msg);
     else                 fprintf(stderr, "  %s\n", msg);
   }
-  abort();
   return 0;
   ```)
+;;; schema-decode-abort -- internal: report an error Vec and raise.
+;;;
+;;; A `panic`, not a bare `abort()`: with no catch boundary in scope the two are
+;;; indistinguishable (both print and die), but a panic is what makes
+;;; `(catch-unwind (fn [] : T (decode! ...)))` -- and with it the
+;;; Result-returning `#json-str?<T>` reader -- able to recover from a schema
+;;; violation instead of taking the process down.  The errors are printed
+;;; first, so the diagnostic detail survives either way.
+
+(defn schema-decode-abort [errs : int] : int
+  (do (schema-decode-report errs) (panic "schema-decode!: validation failed")))
 ;;; schema-decode! -- decode against a schema, panicking on any violation.
 ;;;
 ;;; Parameters:

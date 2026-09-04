@@ -29,7 +29,10 @@ RAW_DIR       = BASE_DIR / "results" / "raw"
 PROCESSED_DIR = BASE_DIR / "results" / "processed"
 
 TRIM_FRACTION = 0.10   # discard top and bottom 10% of runs
-LANGUAGES     = ["c", "turmeric", "rust", "clojure", "racket", "turi", "python"]
+# B3/B4 (post-jit-benchmark-resurrection-plan): the current list is KEPT
+# verbatim and the new columns ride on top -- haskell (B2) and turjit (B4).
+LANGUAGES     = ["c", "turmeric", "rust", "clojure", "racket", "turi", "python",
+                 "haskell", "turjit"]
 
 
 def load_raw(cat_filter: "str | None", size_filter: "str | None") -> list:
@@ -114,6 +117,11 @@ def build_normalized(all_runs: dict) -> tuple:
 
     for (cat, bench, size), langs in sorted(group_keys.items()):
         c_mean = stats_map.get((cat, bench, size, "c"), {}).get("trimmed_mean")
+        # B3 (section 4.1): the normalization anchor is a PARAMETER, default
+        # rust -- present in every category, unlike C (two of nine).  The
+        # baseline language is recorded in every row so a chart can never be
+        # read against the wrong anchor.  speedup_vs_c stays wherever C exists.
+        base_mean = stats_map.get((cat, bench, size, BASELINE), {}).get("trimmed_mean")
 
         rows_for_group = []
         for lang in LANGUAGES:
@@ -124,12 +132,17 @@ def build_normalized(all_runs: dict) -> tuple:
             speedup = None
             if c_mean and c_mean > 0 and s["trimmed_mean"] and s["trimmed_mean"] > 0:
                 speedup = round(c_mean / s["trimmed_mean"], 4)
+            speedup_base = None
+            if base_mean and base_mean > 0 and s["trimmed_mean"] and s["trimmed_mean"] > 0:
+                speedup_base = round(base_mean / s["trimmed_mean"], 4)
             entry = {
                 "category":    cat,
                 "benchmark":   bench,
                 "size":        size,
                 "language":    lang,
                 "speedup_vs_c": speedup,
+                "speedup_vs_baseline": speedup_base,
+                "baseline_language": BASELINE,
                 **s,
             }
             normalized.append(entry)
@@ -148,13 +161,20 @@ def build_normalized(all_runs: dict) -> tuple:
     return normalized, rankings
 
 
+BASELINE = "rust"
+
 def main() -> None:
+    global BASELINE
     ap = argparse.ArgumentParser(description="Phase 5: aggregate and normalize results")
     ap.add_argument("--category", default=None)
     ap.add_argument("--size",     default=None, choices=["small", "medium", "large"])
+    ap.add_argument("--baseline", default="rust", choices=LANGUAGES,
+                    help="normalization anchor for speedup_vs_baseline "
+                         "(default: rust -- present in every category)")
     ap.add_argument("--trim",     type=float, default=TRIM_FRACTION,
                     help=f"Trim fraction (default {TRIM_FRACTION})")
     args = ap.parse_args()
+    BASELINE = args.baseline
 
     records = load_raw(args.category, args.size)
     if not records:

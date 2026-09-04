@@ -1,0 +1,1 @@
+instance method 'intify' declares return type 'int' but its body returns float

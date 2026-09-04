@@ -18,7 +18,12 @@ how long they stay valid.
 of every `"..."` literal and the right type at an FFI boundary. `Eq[cstr]` is a
 content `strcmp` (and `Show[cstr]` copies the bytes into a fresh owned
 `String`), so at the scalar level a `cstr` already behaves like a value -- but
-it **borrows**. The moment you store a
+it **borrows**.
+
+Note that the `=` **operator** has no `cstr` overload: `(= a b)` on two `cstr`
+values is a `TUR-E0006` operator-lookup error, not a pointer compare. Content
+equality is `(eq? a b)` through the auto-loaded `Eq[cstr]` instance, or
+`(cstr-eq? a b)` from `stdlib/cstr.tur` for the direct call. The moment you store a
 `cstr` somewhere that outlives its buffer, or use a *computed* `cstr` as a
 Map/Set key, you have a latent dangling pointer.
 
@@ -275,7 +280,7 @@ frees its argument, and freeing a string literal is UB. The rule:
 - **Leaking a "caller frees" cstr.** `(println (str-concat a b))` leaks the
   joined buffer every call. Adopt it (`(string/adopt-cstr (str-concat a b))` ->
   owned String) or free it. (This is the latent hazard the stdlib adoption audit
-  tracks: `docs/upcoming/v2/string-adoption-stdlib-plan.md`.)
+  tracks: `docs/archive/string-adoption-stdlib-plan.md`.)
 - **A computed `cstr` as a Map/Set key dangles.** `MapKey[cstr]` borrows the
   pointer (`mk-owned? = 0`); if the key was computed or is later freed, the map
   holds a dangling pointer. Use a `String` key -- `MapKey[String]` copies the
@@ -317,7 +322,7 @@ frees its argument, and freeing a string literal is UB. The rule:
   adopt/from-cstr formatter.
 - `src/runtime/tur_string.c` -- the refcounted payload + operations.
 - `docs/archive/owned-string-type-plan.md` -- the design plan.
-- `docs/upcoming/v2/string-adoption-stdlib-plan.md` -- the borrowed-`cstr`
+- `docs/archive/string-adoption-stdlib-plan.md` -- the borrowed-`cstr`
   migration audit.
-- `docs/upcoming/v2/string-owned-builders-and-optional-accessors-plan.md` --
+- `docs/archive/string-owned-builders-and-optional-accessors-plan.md` --
   the owned-builders / optional-accessors design (this section).

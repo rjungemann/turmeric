@@ -223,6 +223,94 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Regression: comments inside a `[...]` vector -- a defstruct field vector, a
+# defn parameter vector, a multi-pair let binding vector.  Every one of these
+# used to be DELETED: the vector printers called fmt_emit_inline with no
+# span_has_comment guard, and the broken printers never consulted the source
+# gaps.  `tur fmt` writes in place, so the text was destroyed with exit 0.
+#
+# The corpus this bug hid in is why the case is spelled out here rather than
+# left to FT7/FT8: no sampled stdlib file puts a comment inside a bracket
+# vector, so both idempotence checks passed over a format pass that was losing
+# source.  Assert preservation AND idempotence -- the second symptom is
+# downstream of the first (once the comments are gone, pass 2 collapses the
+# form further), so a fix that stopped only the collapse would still pass an
+# idempotence-only check while deleting the comments.
+# ---------------------------------------------------------------------------
+NAME="fmt-preserves-comments-in-vectors"
+read -r -d '' VECCOMMENT_INPUT <<'EOF'
+(defstruct P
+  [a : int    ; first field
+   b : int    ; second field
+   c : int])
+
+(defn f [x : int   ; the input
+         y : int] : int
+  (let [s (+ x y)  ; the sum
+        t 2]
+    (* s t)))
+EOF
+ACTUAL=$(printf '%s\n' "$VECCOMMENT_INPUT" | "$TUR" fmt --stdin 2>/dev/null)
+ROUNDTRIP=$(printf '%s\n' "$ACTUAL" | "$TUR" fmt --stdin 2>/dev/null)
+VECCOMMENT_MISSING=""
+for c in "; first field" "; second field" "; the input" "; the sum"; do
+    printf '%s\n' "$ACTUAL" | grep -qF "$c" || VECCOMMENT_MISSING="$VECCOMMENT_MISSING [$c]"
+done
+if [ -n "$VECCOMMENT_MISSING" ]; then
+    fail "$NAME" "comment(s) deleted:$VECCOMMENT_MISSING; got: $ACTUAL"
+elif [ "$ACTUAL" != "$ROUNDTRIP" ]; then
+    fail "$NAME" "fmt(fmt(x)) != fmt(x); pass1: $ACTUAL"
+else
+    pass "$NAME"
+fi
+
+# ---------------------------------------------------------------------------
+# A comment that trailed an element on its own source line must stay on that
+# line.  Relocating it one line down parks it above the NEXT element, where it
+# reads as a comment about that one -- a different claim about the code than
+# the author made, and not something a formatter gets to decide.
+# ---------------------------------------------------------------------------
+NAME="fmt-trailing-comment-stays-on-its-line"
+read -r -d '' TRAILING_INPUT <<'EOF'
+(defstruct Q
+  [alpha : int   ; belongs to alpha
+   beta : int])  ; belongs to beta
+EOF
+ACTUAL=$(printf '%s\n' "$TRAILING_INPUT" | "$TUR" fmt --stdin 2>/dev/null)
+ROUNDTRIP=$(printf '%s\n' "$ACTUAL" | "$TUR" fmt --stdin 2>/dev/null)
+if printf '%s\n' "$ACTUAL" | grep -qE "alpha : int +; belongs to alpha" \
+   && printf '%s\n' "$ACTUAL" | grep -qE "beta : int\]\) +; belongs to beta" \
+   && [ "$ACTUAL" = "$ROUNDTRIP" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "trailing comment relocated or not idempotent; got: $ACTUAL"
+fi
+
+# ---------------------------------------------------------------------------
+# A comment between the last element and the closing bracket must not swallow
+# that bracket.  emit_comments_indented ends output mid-comment-line, so a `]`
+# written straight after it lands INSIDE the comment -- turning silent comment
+# loss into a file that no longer parses.
+# ---------------------------------------------------------------------------
+NAME="fmt-comment-before-close-bracket"
+read -r -d '' CLOSEBRACKET_INPUT <<'EOF'
+(defn h [aaaaaaaaaaaaaaaa : int bbbbbbbbbbbbbbbb : int cccccccccccccccc : int
+         ;; a note that sits before the closing bracket
+         ] : int
+  aaaaaaaaaaaaaaaa)
+EOF
+ACTUAL=$(printf '%s\n' "$CLOSEBRACKET_INPUT" | "$TUR" fmt --stdin 2>/dev/null)
+ROUNDTRIP=$(printf '%s\n' "$ACTUAL" | "$TUR" fmt --stdin 2>/dev/null)
+# The ']' must be on a line of its own, i.e. not trailing the comment text.
+if printf '%s\n' "$ACTUAL" | grep -qF ";; a note that sits before the closing bracket" \
+   && ! printf '%s\n' "$ACTUAL" | grep -qE ";.*\]" \
+   && [ "$ACTUAL" = "$ROUNDTRIP" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "closing bracket swallowed by comment or not idempotent; got: $ACTUAL"
+fi
+
+# ---------------------------------------------------------------------------
 # Regression: a defn parameter list that overflows the line width must break
 # one parameter per line, keeping each `name : type` pair together -- it used
 # to split the name and its annotation onto separate lines.
@@ -268,13 +356,110 @@ fi
 # --emit-tur) whose inline-C literal bodies the formatter does not round-trip,
 # matching the exclusion in the FT8 idempotence check below.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# fmt-drops-comments-in-handle-and-binding-modifier-gaps: comments in the gaps
+# the header/arm printers walked with a bare ' ' -- a `handle` scrutinee/arm
+# gap, a `case` arm, a `defpackage` entry, a `loop` head, a trailing comment
+# inside a call before its `)` -- and a `^mut` binding pair, which the pair
+# walk split as name=`^mut` value=`y`.  Each case asserts the comment survives
+# AND the second pass equals the first.
+# ---------------------------------------------------------------------------
+fmt_gap_case() {
+    local name="$1" needle="$2" input="$3"
+    local actual roundtrip
+    actual=$(printf '%s\n' "$input" | "$TUR" fmt --stdin 2>/dev/null)
+    roundtrip=$(printf '%s\n' "$actual" | "$TUR" fmt --stdin 2>/dev/null)
+    if printf '%s\n' "$actual" | grep -qF -- "$needle" && [ "$actual" = "$roundtrip" ]; then
+        pass "$name"
+    else
+        fail "$name" "comment dropped or not idempotent; got: $actual"
+    fi
+}
+read -r -d '' GAP_HANDLE <<'EOF'
+(defn run [] : int
+  (handle (perform (Ask))
+    ;; the arm below re-opens Write
+    (Ask [] k) (resume k 1)))
+EOF
+fmt_gap_case "fmt-preserves-handle-arm-gap-comment" ";; the arm below re-opens Write" "$GAP_HANDLE"
+read -r -d '' GAP_MUT <<'EOF'
+(defn main [] : int
+  (let [^mut y 0]
+    (println y)) ; trailing on the last body form
+  0)
+EOF
+fmt_gap_case "fmt-preserves-mut-binding-and-trailing-comment" "; trailing on the last body form" "$GAP_MUT"
+ACTUAL=$(printf '%s\n' "$GAP_MUT" | "$TUR" fmt --stdin 2>/dev/null)
+if printf '%s\n' "$ACTUAL" | grep -qF "(let [^mut y 0]"; then
+    pass "fmt-keeps-mut-binding-pair-on-one-line"
+else
+    fail "fmt-keeps-mut-binding-pair-on-one-line" "^mut pair split; got: $ACTUAL"
+fi
+read -r -d '' GAP_CASE <<'EOF'
+(defn f [x : int] : int
+  (case x
+    ;; the zero arm
+    0 10
+    1 20 ;; the one arm
+    _ 0))
+EOF
+fmt_gap_case "fmt-preserves-case-arm-comments" ";; the one arm" "$GAP_CASE"
+read -r -d '' GAP_PKG <<'EOF'
+(defpackage app
+  :name "app"
+  ;; pinned for the raygui shim
+  :version "0.1.0")
+EOF
+fmt_gap_case "fmt-preserves-defpackage-entry-comment" ";; pinned for the raygui shim" "$GAP_PKG"
+read -r -d '' GAP_LOOP <<'EOF'
+(defn run-loop [] : int
+  (loop
+    ; Allocate out-params for the next request.
+    (def out-method 1)
+    (recur)))
+EOF
+fmt_gap_case "fmt-preserves-loop-head-comment" "; Allocate out-params for the next request." "$GAP_LOOP"
+read -r -d '' GAP_CALL <<'EOF'
+(defn main [] : int
+  (let [n 40]
+    (println (* n 2)) ;; 80
+    )
+  0)
+EOF
+fmt_gap_case "fmt-preserves-trailing-comment-before-close" ";; 80" "$GAP_CALL"
+read -r -d '' MUT_SUGAR <<'EOF'
+(defn main [] : int
+  (let [x 42]
+    (let [r &mut x] ; a mutable borrow
+      (println 1)))
+  0)
+EOF
+fmt_gap_case "fmt-mut-borrow-sugar-idempotent" "; a mutable borrow" "$MUT_SUGAR"
+
 NAME="fmt-bootstrap-stdlib"
 BOOTSTRAP_DIRTY=""
 BOOTSTRAP_SEEN=0
+BOOTSTRAP_WHY=""
 while IFS= read -r -d '' f; do
     BOOTSTRAP_SEEN=$((BOOTSTRAP_SEEN + 1))
     if ! "$TUR" fmt --check "$f" > /dev/null 2>&1; then
         BOOTSTRAP_DIRTY="$BOOTSTRAP_DIRTY $f"
+        # Record WHY, not just WHICH.  `--check` exits 1 both for "would
+        # change" and for an I/O error or a crash, and the bare file list is
+        # unactionable when the failure does not reproduce on the machine
+        # reading it -- which is exactly what happened: three stdlib files
+        # failed on CI, passed locally on a fresh sanitized build, and the
+        # log said nothing that could distinguish the two cases.  Capture the
+        # exit code, any stderr, and a bounded diff.
+        _rc_out=$("$TUR" fmt --check "$f" 2>&1 >/dev/null); _rc=$?
+        BOOTSTRAP_WHY="$BOOTSTRAP_WHY
+  --- $f (fmt --check exit $_rc)"
+        if [ -n "$_rc_out" ]; then
+            BOOTSTRAP_WHY="$BOOTSTRAP_WHY
+      stderr: $(printf '%s' "$_rc_out" | head -3 | tr '\n' '|')"
+        fi
+        BOOTSTRAP_WHY="$BOOTSTRAP_WHY
+$("$TUR" fmt --diff "$f" 2>&1 | head -20 | sed 's/^/      /')"
     fi
 done < <(find stdlib -name '*.tur' -not -name 'docstrings.tur' -print0)
 # Same guard as FT8 below: this check also passes by default, so an
@@ -284,7 +469,7 @@ if [ "$BOOTSTRAP_SEEN" -eq 0 ]; then
 elif [ -z "$BOOTSTRAP_DIRTY" ]; then
     pass "$NAME"
 else
-    fail "$NAME" "stdlib is not self-formatted:$BOOTSTRAP_DIRTY"
+    fail "$NAME" "stdlib is not self-formatted:$BOOTSTRAP_DIRTY$BOOTSTRAP_WHY"
 fi
 
 # ---------------------------------------------------------------------------

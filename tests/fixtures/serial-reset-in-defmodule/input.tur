@@ -1,0 +1,30 @@
+;; guestbook-example-has-no-import-graph: a serial-reset / serial-shift inside
+;; a (defmodule ...) body.  The preamble predicate that gates the DK serial
+;; runtime (tur_serial_cont_serialize, __sk_register, the SK_* frame
+;; vocabulary) only walked top-level defns, so a module program that captured
+;; a continuation was emitted without the runtime and died at cc with an
+;; implicit declaration of __sk_register.  The same program as a flat file
+;; always built.
+
+(load "stdlib/serial.tur")
+
+(defmodule app
+  (def ^mut saved : ptr<void> (bytes-alloc 0))
+
+  (defn page [env : cstr hole : int] : int
+    (do (println env) (+ hole 10)))
+
+  (defn stash [k : serial-cont] : int
+    (do (set! saved (serial-cont->bytes k)) -1))
+
+  (defn direct [k : serial-cont] : int
+    (serial-resume k 5))
+
+  (defn main [] : int
+    (do
+      (println (serial-reset (page "direct" (serial-shift direct 0))))   ; direct 15
+      (println (serial-reset (page "later" (serial-shift stash 0))))     ; -1
+      (match (bytes->serial-cont saved)
+        (Ok k)  (println (serial-resume k 7))                            ; later 17
+        (Err m) (println m))
+      0)))

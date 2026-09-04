@@ -1,0 +1,45 @@
+;; tur-cname-macro-breaks-on-leading-underscores regression.
+;;
+;; `__TUR_CNAME_<name>__` terminates <name> at the first "__". A name that
+;; itself begins with "__" -- the convention for a private helper across
+;; stdlib and the spices (__cons, __gzbuf, __db-prepare-raw) -- matched the
+;; terminator at offset zero, so the splice was left unexpanded and the
+;; emitted C either called a nonexistent __TUR_CNAME_... function or, when
+;; the name contained a hyphen, was tokenized as a SUBTRACTION -- giving a cc
+;; error naming a fragment ('alloc__') that appears nowhere in the source.
+
+(defmodule inline_c_cname_leading_underscores
+  (export)
+
+;; leading __, no sigils
+(defn __helper [x : int] : int
+  ```c
+  return x + 1;
+  ```)
+
+;; leading __ AND a hyphen -- the variant that mis-tokenized
+(defn __scaled-helper [x : int] : int
+  ```c
+  return x * 10;
+  ```)
+
+;; no leading underscores -- the control, must keep resolving
+(defn plain-helper [x : int] : int
+  ```c
+  return x - 1;
+  ```)
+
+(defn caller [x : int] : int
+  ```c
+  return __TUR_CNAME___helper__(x)
+       + __TUR_CNAME___scaled-helper__(x)
+       + __TUR_CNAME_plain-helper__(x);
+  ```)
+
+(defn main [] : int
+  (do
+    (println (caller 5))    ;; 6 + 50 + 4  = 60
+    (println (caller 1))    ;; 2 + 10 + 0  = 12
+    0))
+
+) ;; end defmodule inline_c_cname_leading_underscores

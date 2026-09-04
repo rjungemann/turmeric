@@ -802,6 +802,145 @@ fi
 rm -f "$LS6_B_ERR"
 rm -rf "$LS6_B"
 
+# AUDIT1/2: `tur audit` lists every origin the build fetches code from.
+# The security section of consuming-spices-guide.md promised this command; it
+# did not exist (only `audit-spans`, an unrelated debugger mode).
+AUD=$(mktemp -d)
+mkdir -p "$AUD/proj" "$AUD/utils"
+cat >"$AUD/utils/build.tur" <<'EOF'
+(defpackage utils :name "utils")
+EOF
+cat >"$AUD/proj/build.tur" <<'EOF'
+(defpackage demo
+  :name "demo"
+  :spices #{
+    "geom"  #{:url "https://example.invalid/tur-geom" :ref "v0.2.1"}
+    "utils" #{:path "../utils"}
+  }
+  :cmake-deps #{
+    "raylib" #{:url "https://example.invalid/raylib" :ref "5.0"}
+  })
+EOF
+
+# AUDIT1: with no tur.lock, every :url origin is reported UNPINNED. A :path dep
+# is not -- it resolves from local source and has nothing to pin, so flagging it
+# would train the reader to ignore the warning.
+AUD_OUT=$(mktemp)
+( cd "$AUD/proj" && "$LS6_ABS_TUR" audit ) >"$AUD_OUT" 2>&1
+rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -qF 'example.invalid/tur-geom' "$AUD_OUT" \
+   && grep -qF 'example.invalid/raylib' "$AUD_OUT" \
+   && grep -qF 'local path' "$AUD_OUT" \
+   && [ "$(grep -c 'NOT IN tur.lock' "$AUD_OUT")" -eq 2 ] \
+   && grep -qF 'verifies nothing' "$AUD_OUT"; then
+    echo "PASS AUDIT1: audit lists origins and flags the unpinned ones"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL AUDIT1: audit output"
+    echo "  exit: $rc"; sed 's/^/    /' "$AUD_OUT"
+    FAIL=$((FAIL + 1))
+    FAILED+=("AUDIT1: audit lists origins")
+fi
+rm -f "$AUD_OUT"
+
+# AUDIT2: with a tur.lock present, each pinned origin reports its commit and
+# hash and is no longer flagged. Written in pkg_lock_write's own format.
+cat >"$AUD/proj/tur.lock" <<'EOF'
+(deflockfile
+  :format-version 1
+  :spices #{
+    "geom" #{:url "https://example.invalid/tur-geom" :ref "v0.2.1" :resolved "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4" :sha256 "deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb"}
+  }
+  :cmake-deps #{
+    "raylib" #{:url "https://example.invalid/raylib" :ref "5.0" :resolved "0123456789abcdef0123456789abcdef01234567" :sha256 "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"}
+  }
+)
+EOF
+AUD_OUT=$(mktemp)
+( cd "$AUD/proj" && "$LS6_ABS_TUR" audit ) >"$AUD_OUT" 2>&1
+rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -qF 'commit a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4' "$AUD_OUT" \
+   && grep -qF 'commit 0123456789abcdef0123456789abcdef01234567' "$AUD_OUT" \
+   && grep -qF 'sha256 deadbeef' "$AUD_OUT" \
+   && ! grep -qF 'NOT IN tur.lock' "$AUD_OUT"; then
+    echo "PASS AUDIT2: audit reports the pin from tur.lock"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL AUDIT2: audit with a lock file"
+    echo "  exit: $rc"; sed 's/^/    /' "$AUD_OUT"
+    FAIL=$((FAIL + 1))
+    FAILED+=("AUDIT2: audit reports the pin")
+fi
+rm -f "$AUD_OUT"
+rm -rf "$AUD"
+
+# MSG1: `tur add` on an already-declared dep must not point at a `tur update`
+# subcommand -- there is no "update" row in CANONICAL_COMMANDS (`tur upgrade`
+# is the installed-tool pipeline, a different thing), so the old text sent
+# users to a command that does not exist.  Assert both that the dead name is
+# gone and that the replacement names the flow that works.
+MSG1=$(mktemp -d)
+mkdir -p "$MSG1/proj" "$MSG1/geom"
+cat >"$MSG1/geom/build.tur" <<'EOF'
+(defpackage geom :name "geom")
+EOF
+cat >"$MSG1/proj/build.tur" <<'EOF'
+(defpackage proj
+  :name "proj"
+  :spices #{
+    "geom" #{:path "../geom"}
+  })
+EOF
+MSG1_ERR=$(mktemp)
+( cd "$MSG1/proj" && "$LS6_ABS_TUR" add ../geom --path ) >/dev/null 2>"$MSG1_ERR"
+rc=$?
+if [ "$rc" -ne 0 ] \
+   && ! grep -qF 'tur update' "$MSG1_ERR" \
+   && grep -qF 'already a dependency' "$MSG1_ERR" \
+   && grep -qF 'tur fetch --update' "$MSG1_ERR"; then
+    echo "PASS MSG1: duplicate-dep message points at a real command"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL MSG1: duplicate-dep message"
+    echo "  exit: $rc (want non-zero)"
+    echo "  stderr:"; sed 's/^/    /' "$MSG1_ERR"
+    grep -qF 'tur update' "$MSG1_ERR" && echo "  still names the nonexistent \`tur update\`"
+    FAIL=$((FAIL + 1))
+    FAILED+=("MSG1: duplicate-dep message names a real command")
+fi
+rm -f "$MSG1_ERR"
+rm -rf "$MSG1"
+
+# MSG2: `tur add-cmake` must name the file `tur fetch` actually writes.
+# It writes cmake/CMakeLists.txt; SpiceDeps is the name of the cmake PROJECT
+# declared inside that file, which is what the old message reported as the
+# filename.
+MSG2=$(mktemp -d)
+mkdir -p "$MSG2/proj"
+cat >"$MSG2/proj/build.tur" <<'EOF'
+(defpackage proj :name "proj")
+EOF
+MSG2_OUT=$(mktemp)
+( cd "$MSG2/proj" && "$LS6_ABS_TUR" add-cmake https://example.invalid/cjson --ref v1.7.16 ) \
+    >"$MSG2_OUT" 2>/dev/null
+rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -qF 'cmake/CMakeLists.txt' "$MSG2_OUT" \
+   && ! grep -qF 'SpiceDeps.cmake' "$MSG2_OUT"; then
+    echo "PASS MSG2: add-cmake names the file fetch actually generates"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL MSG2: add-cmake generated-file message"
+    echo "  exit: $rc"
+    echo "  stdout:"; sed 's/^/    /' "$MSG2_OUT"
+    FAIL=$((FAIL + 1))
+    FAILED+=("MSG2: add-cmake names the generated file correctly")
+fi
+rm -f "$MSG2_OUT"
+rm -rf "$MSG2"
+
 # LS6 case C: `tur fetch --dry-run` classifies each dep and writes no
 # lock file.  The bogus URL would error out on a real fetch; --dry-run
 # proves it was never contacted.
@@ -1221,6 +1360,212 @@ EOF
     fi
     rm -f "$ADD_ERR"; rm -rf "$ADDDIR"
 done
+
+# ---------------------------------------------------------------------------
+# A BROKEN build.tur must fail the command, and must not degrade into a
+# cascade of `module not found`.
+# docs/archive/manifest-read-failure-degrades-to-module-not-found.md
+#
+# pkg_manifest_read returned a bare `false` for two unrelated situations --
+# "no manifest here" (normal) and "there IS a manifest and it is broken"
+# (fatal) -- so every caller took the benign branch.  The spice root's src/
+# then never joined the module search path and every intra-spice import failed
+# with `module not found`, naming the import rather than the manifest.  In the
+# field that hid 41 unreadable manifests for four weeks: one manifest typo
+# presented as 66 unrelated import failures, and `tur check` printed the
+# manifest error at `error:` severity while exiting 0.
+MF_DIR=$(mktemp -d)
+mkdir -p "$MF_DIR/src/demo" "$MF_DIR/tests"
+# `:spices #fx{...}` -- an effect-row literal where the reader wants a map.
+# This is the exact spelling that caused the field incident (TUR-E0620).
+cat >"$MF_DIR/build.tur" <<'EOF'
+(defpackage demo
+  :name    "demo"
+  :version "0.1.0"
+  :spices #fx{ "test" #map{:url "https://example.invalid/test"} }
+  :exports #map{ "demo/lib" ["answer"] })
+EOF
+cat >"$MF_DIR/src/demo/lib.tur" <<'EOF'
+(defmodule demo/lib
+  (export answer)
+  (defn answer [] : int 42))
+EOF
+cat >"$MF_DIR/tests/use_test.tur" <<'EOF'
+(defmodule use_it
+  (export)
+  (import demo/lib :refer [answer])
+  (defn main [] : int (println (answer)) 0))
+EOF
+
+# An `error:` diagnostic must never coexist with exit 0.  This exited 0 before,
+# so any CI step shelling out to `tur check` and trusting $? saw a clean
+# manifest.
+MF_ERR=$(mktemp)
+( cd "$MF_DIR" && "$LS6_ABS_TUR" check tests/use_test.tur ) >/dev/null 2>"$MF_ERR"
+mf_rc=$?
+if [ "$mf_rc" -ne 0 ]; then
+    echo "PASS malformed-manifest-fails-tur-check"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL malformed-manifest-fails-tur-check -- printed error: and exited 0"
+    echo "  stderr:"; sed 's/^/    /' "$MF_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("malformed-manifest-fails-tur-check")
+fi
+
+# The failure must name the MANIFEST, and the offending slot.
+for mf_case in 'TUR-E0624|malformed-manifest-names-the-manifest' \
+               ':spices is malformed|malformed-manifest-names-the-slot'; do
+    mf_needle=${mf_case%%|*}
+    mf_label=${mf_case#*|}
+    if grep -F -q "$mf_needle" "$MF_ERR"; then
+        echo "PASS $mf_label"
+        PASS=$((PASS + 1))
+    else
+        echo "FAIL $mf_label -- stderr missing: $mf_needle"
+        echo "  stderr:"; sed 's/^/    /' "$MF_ERR"
+        FAIL=$((FAIL + 1))
+        FAILED+=("$mf_label")
+    fi
+done
+
+# And it must NOT degrade into the misleading cascade.  The `-I src` hint is
+# the specific trap: it does make the import resolve, so a reader who follows
+# it concludes the IMPORT was mis-specified and never revisits the manifest.
+for mf_anti in 'not found|malformed-manifest-no-module-not-found-cascade' \
+               'try `tur check -I src|malformed-manifest-suppresses-I-src-hint'; do
+    mf_needle=${mf_anti%%|*}
+    mf_label=${mf_anti#*|}
+    if grep -F -q "$mf_needle" "$MF_ERR"; then
+        echo "FAIL $mf_label -- stderr still contains: $mf_needle"
+        echo "  stderr:"; sed 's/^/    /' "$MF_ERR"
+        FAIL=$((FAIL + 1))
+        FAILED+=("$mf_label")
+    else
+        echo "PASS $mf_label"
+        PASS=$((PASS + 1))
+    fi
+done
+
+# Control: the SAME tree with `#fx{` corrected to `#map{` must pass clean.
+# Nothing else changes, which is what makes the manifest the sole variable.
+sed 's/#fx{ "test"/#map{ "test"/' "$MF_DIR/build.tur" >"$MF_DIR/build.tur.new"
+mv "$MF_DIR/build.tur.new" "$MF_DIR/build.tur"
+MF_OK_ERR=$(mktemp)
+( cd "$MF_DIR" && "$LS6_ABS_TUR" check tests/use_test.tur ) >/dev/null 2>"$MF_OK_ERR"
+mf_ok_rc=$?
+if [ "$mf_ok_rc" -eq 0 ]; then
+    echo "PASS well-formed-manifest-still-checks-clean"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL well-formed-manifest-still-checks-clean -- exit $mf_ok_rc"
+    echo "  stderr:"; sed 's/^/    /' "$MF_OK_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("well-formed-manifest-still-checks-clean")
+fi
+
+# An ABSENT manifest is NOT malformed: the walk-up probe misses on most
+# directories, and that must stay quiet.  This is the distinction the old
+# single `false` collapsed, so it is the half most at risk from the fix.
+MF_NONE=$(mktemp -d)
+cat >"$MF_NONE/solo.tur" <<'EOF'
+(defn main [] : int 0)
+EOF
+MF_NONE_ERR=$(mktemp)
+( cd "$MF_NONE" && "$LS6_ABS_TUR" check solo.tur ) >/dev/null 2>"$MF_NONE_ERR"
+mf_none_rc=$?
+if [ "$mf_none_rc" -eq 0 ] && ! grep -F -q "TUR-E0624" "$MF_NONE_ERR"; then
+    echo "PASS absent-manifest-is-not-malformed"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL absent-manifest-is-not-malformed -- exit $mf_none_rc"
+    echo "  stderr:"; sed 's/^/    /' "$MF_NONE_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("absent-manifest-is-not-malformed")
+fi
+
+rm -f "$MF_ERR" "$MF_OK_ERR" "$MF_NONE_ERR"
+rm -rf "$MF_DIR" "$MF_NONE"
+
+# ---------------------------------------------------------------------------
+# `tur build src/` and `tur check src/` must handle a NESTED module layout.
+# docs/archive/tur-build-nested-src-dir-finds-no-files.md
+#
+# Both used a FLAT readdir, so a spice whose modules live one level down --
+# `src/demo/lib.tur`, the layout `:exports "demo/lib"` implies -- reported
+# `tur: no .tur files found in 'src/'`.  That is the exact invocation the
+# `module not found` diagnostic recommends, so the advertised recovery from one
+# confusing error produced a second one.  Project mode (`tur build .`) already
+# recursed, so the two spellings of "build this spice" disagreed with nothing in
+# the output to say which you got.
+#
+# Finding the files is only half of it: once the walk is recursive the sibling
+# that does `(import demo/lib)` has to resolve it, so the build dir goes on the
+# include path too.  The `main.tur` below imports across the nesting for that
+# reason -- a case with no cross-file import would pass on a half fix.
+NEST=$(mktemp -d)
+mkdir -p "$NEST/src/demo" "$NEST/src/app"
+cat >"$NEST/build.tur" <<'EOF'
+(defpackage nested
+  :name    "nested"
+  :version "0.1.0"
+  :exports #map{ "demo/lib" ["answer"] })
+EOF
+cat >"$NEST/src/demo/lib.tur" <<'EOF'
+(defmodule demo/lib
+  (export answer)
+  (defn answer [] : int 42))
+EOF
+cat >"$NEST/src/app/main.tur" <<'EOF'
+(defmodule app/main
+  (export)
+  (import demo/lib :refer [answer])
+  (defn main [] : int (println (answer)) 0))
+EOF
+
+NEST_ERR=$(mktemp)
+( cd "$NEST" && "$LS6_ABS_TUR" check src/ ) >/dev/null 2>"$NEST_ERR"
+nest_check_rc=$?
+if [ "$nest_check_rc" -eq 0 ]; then
+    echo "PASS nested-src-tur-check-finds-files"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL nested-src-tur-check-finds-files -- exit $nest_check_rc"
+    echo "  stderr:"; sed 's/^/    /' "$NEST_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("nested-src-tur-check-finds-files")
+fi
+
+# The message that used to come out; assert it is gone rather than only
+# assert on the exit code, so a future regression names itself.
+if grep -qF "no .tur files found" "$NEST_ERR"; then
+    echo "FAIL nested-src-no-empty-dir-message"
+    echo "  stderr:"; sed 's/^/    /' "$NEST_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("nested-src-no-empty-dir-message")
+else
+    echo "PASS nested-src-no-empty-dir-message"
+    PASS=$((PASS + 1))
+fi
+
+NEST_BIN="$NEST/out"
+NEST_BERR=$(mktemp)
+( cd "$NEST" && "$LS6_ABS_TUR" build src/ -o "$NEST_BIN" ) >/dev/null 2>"$NEST_BERR"
+nest_build_rc=$?
+nest_out=""
+[ -x "$NEST_BIN" ] && nest_out="$("$NEST_BIN" 2>/dev/null)"
+if [ "$nest_build_rc" -eq 0 ] && [ "$nest_out" = "42" ]; then
+    echo "PASS nested-src-tur-build-resolves-intra-spice-import"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL nested-src-tur-build-resolves-intra-spice-import"
+    echo "  exit: $nest_build_rc  output: '$nest_out' (want 42)"
+    echo "  stderr:"; sed 's/^/    /' "$NEST_BERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("nested-src-tur-build-resolves-intra-spice-import")
+fi
+
+rm -f "$NEST_ERR" "$NEST_BERR"; rm -rf "$NEST"
 
 echo
 echo "summary: $PASS passed, $FAIL failed"

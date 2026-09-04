@@ -1,0 +1,28 @@
+;; option-niche: (Option String) carried as the payload pointer -- some is the
+;; identity, none is NULL, no tur_adt_Option__String typedef. Eligibility comes
+;; from String's :non-null declaration (stdlib/string.tur), not a compiler
+;; allowlist row. Pins the experiment end to end over the census's own payload
+;; type, including an inline-C carrier producer crossing into a let binding.
+(load "stdlib/string.tur")
+
+(defn pick [flag : bool] : (Option String)
+  (if flag (some (string/from-cstr "hello")) (none)))
+
+;; inline-C producer returns the CARRIER form (tur_some_ptr boxes); the
+;; let-binding bridge must unbox it into the niche.
+(defn mk-c [n : int] : (Option String)
+  ```c
+  if (n == 0) return tur_none();
+  return tur_some_ptr(tur_string_from_bytes("hi", 2));
+  ```)
+
+(defn main [] : int
+  (let [a (pick true)
+        b (pick false)
+        c (mk-c 1)
+        d (mk-c 0)]
+    (if (some? a) (println (string/to-cstr (unwrap a))) (println "none-a"))
+    (if (some? b) (println "some-b") (println "none-b"))
+    (if (some? c) (println (string/to-cstr (unwrap c))) (println "none-c"))
+    (if (some? d) (println "some-d") (println "none-d"))
+    0))

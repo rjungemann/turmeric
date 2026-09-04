@@ -25,59 +25,86 @@ Everything after `--` is forwarded to the script as a cons list bound to
 ## Raw Access via `*args*`
 
 `*args*` is a pre-declared cons list of `:cstr` values. Each element is one
-argument string, in order.
+argument string, in order. The binding itself is typed `:int` (the elaborator
+declares it as a global `:int` carrying the cons-cell pointer), so walking it
+means `list-head` / `list-tail` from `stdlib/list.tur` plus a `::` ascription
+to recover the element's `:cstr` type:
 
 ```turmeric
 ;; script.tur
+(load "stdlib/list.tur")
+(load "stdlib/str-build.tur")   ;; str-concat / int->str
+
 (defn main [] : int
-  (println "arg 0:" (head *args*))
-  (println "arg 1:" (head (tail *args*)))
+  (println (str-concat "arg 0: " (:: (list-head *args*) :cstr)))
+  (println (str-concat "arg 1: " (:: (list-head (list-tail *args*)) :cstr)))
   0)
 ```
 ```sweet-exp
 ;; script.tur
+load("stdlib/list.tur")
+load("stdlib/str-build.tur")
+
 defn main [] :int
-  println("arg 0:" head(*args*))
-  println("arg 1:" head(tail(*args*)))
+  println $ str-concat "arg 0: " (:: list-head(*args*) :cstr)
+  println $ str-concat "arg 1: " (:: list-head(list-tail(*args*)) :cstr)
   0
 ```
 
 ```turmeric
-;; Walk all arguments
+;; Walk all arguments.  `when` takes exactly one body form -- wrap two in `do`.
+(load "stdlib/list.tur")
+
 (defn print-args [args : int] : void
-  (when (some? args)
-    (println (head args))
-    (print-args (tail args))))
+  (when (not (= args 0))
+    (do
+      (println (:: (list-head args) :cstr))
+      (print-args (list-tail args)))))
 
 (print-args *args*)
 ```
 ```sweet-exp
 ;; Walk all arguments
+load("stdlib/list.tur")
+
 defn print-args [args :int] :void
-  when some?(args)
-    println(head(args))
-    print-args(tail(args))
+  when not(=(args 0))
+    do
+      println (:: list-head(args) :cstr)
+      print-args(list-tail(args))
 print-args(*args*)
 ```
 
-For scripts that do not import stdlib, `head` and `tail` are available as
-stdlib natives automatically:
+`cstr->parse-int` (from `stdlib/str.tur`) turns one of those strings into an
+`:int`. It takes the raw `:int` cell value, so no `::` ascription is needed:
 
 ```turmeric
+(load "stdlib/list.tur")
+(load "stdlib/str.tur")
+(load "stdlib/str-build.tur")
+
 (defn main [] : int
-  (let [n (cstr->parse-int (head *args*))]
-    (println "count:" n)
+  (let [n (cstr->parse-int (list-head *args*))]
+    (println (str-concat "count: " (int->str n)))
     0))
 ```
 ```sweet-exp
+load("stdlib/list.tur")
+load("stdlib/str.tur")
+load("stdlib/str-build.tur")
+
 defn main [] :int
-  let [n (cstr->parse-int (head *args*))]
-    println("count:" n)
+  let [n cstr->parse-int(list-head(*args*))]
+    println $ str-concat "count: " int->str(n)
     0
 ```
 
-> **Note:** `cstr->parse-int` parses a C string into `:int`. It is available
-> without any import.
+> **Note:** `head` / `tail` are **not** bound in the compiled path -- a self-contained script that does
+> not load `stdlib/list.tur` has to define its own inline-C `head`/`tail`
+> stubs, which the interpreter then overrides with its natives (see the
+> CLI-argument rule in `CLAUDE.md`). Note the interpreter's `head` yields the
+> element as an `:int`, so the same `::` ascription is what makes `println`
+> print the string rather than the pointer.
 
 ## Structured Parsing with `stdlib/args.tur`
 
@@ -95,34 +122,46 @@ For anything more complex than a positional argument or two, use
 
 ```turmeric
 (load "stdlib/args.tur")
+(load "stdlib/str-build.tur")   ;; str-concat / int->str, for the examples below
 ```
+
 ```sweet-exp
 load("stdlib/args.tur")
+load("stdlib/str-build.tur")   ; str-concat / int->str, for the examples below
 ```
 
 ### Building a Spec
 
-Build a spec with the `args/spec-*` functions, then call `args/parse`:
+Build a spec with the `args/spec-*` functions, then call `args/parse`.
+Two conventions to know:
+
+- Registration names **include** the dashes (`"--verbose"`); result accessors
+  (`args/has?`, `args/get-*`) take the name **without** dashes (`"verbose"`).
+- An option's default is an `(Option cstr)`: `(some "1")` for a default of
+  `1`, `(none)` to make the option required.
+- A spec handle is an `ArgSpec` and a parse result is an `ArgResult` -- two
+  distinct `defopaque` newtypes, so passing one where the other belongs is a
+  compile error rather than a silently wrong pointer.
 
 ```turmeric
 (defn main [] : int
   (let [spec (-> (args/spec-new)
                  (args/spec-prog "mytool")
                  (args/spec-flag "--verbose")
-                 (args/spec-option "--input"  "string" 0)          ; required
-                 (args/spec-option "--count"  "int"    (cstr "1")) ; default 1
-                 (args/spec-option "--output" "string" (cstr "out.txt")))
+                 (args/spec-option "--input"  "string" (none))       ; required
+                 (args/spec-option "--count"  "int"    (some "1"))    ; default 1
+                 (args/spec-option "--output" "string" (some "out.txt")))
         result (args/parse spec *args*)]
     (if (args/error? result)
       (do
-        (println "error:" (args/error-msg result))
+        (println (str-concat "error: " (args/error-msg result)))
         1)
       (do
-        (when (args/has? result "--verbose")
+        (when (args/has? result "verbose")
           (println "verbose mode on"))
-        (println "input: " (args/get-str result "--input"))
-        (println "count: " (args/get-int result "--count"))
-        (println "output:" (args/get-str result "--output"))
+        (println (str-concat "input:  " (args/get-str result "input")))
+        (println (str-concat "count:  " (int->str (args/get-int result "count"))))
+        (println (str-concat "output: " (args/get-str result "output")))
         0))))
 ```
 ```sweet-exp
@@ -130,20 +169,20 @@ defn main [] :int
   let [spec (-> (args/spec-new)
                  (args/spec-prog "mytool")
                  (args/spec-flag "--verbose")
-                 (args/spec-option "--input"  "string" 0)          ; required
-                 (args/spec-option "--count"  "int"    (cstr "1")) ; default 1
-                 (args/spec-option "--output" "string" (cstr "out.txt")))
+                 (args/spec-option "--input"  "string" (none))       ; required
+                 (args/spec-option "--count"  "int"    (some "1"))    ; default 1
+                 (args/spec-option "--output" "string" (some "out.txt")))
         result (args/parse spec *args*)]
     if args/error?(result)
       do
-        println("error:" args/error-msg(result))
+        println $ str-concat "error: " args/error-msg(result)
         1
       do
-        when args/has?(result "--verbose")
+        when args/has?(result "verbose")
           println("verbose mode on")
-        println("input: " args/get-str(result "--input"))
-        println("count: " args/get-int(result "--count"))
-        println("output:" args/get-str(result "--output"))
+        println $ str-concat "input:  " args/get-str(result "input")
+        println $ str-concat "count:  " int->str(args/get-int(result "count"))
+        println $ str-concat "output: " args/get-str(result "output")
         0
 ```
 
@@ -169,30 +208,35 @@ Flags are boolean switches -- present means true, absent means false:
 (args/spec-flag spec "--dry-run")
 
 ;; At runtime:
-(args/has? result "--verbose")  ; => true/false
+(args/has? result "verbose")  ; => true/false
 ```
 ```sweet-exp
 args/spec-flag(spec "--verbose")
 args/spec-flag(spec "--dry-run")
 ;; At runtime:
-args/has?(result "--verbose")
+args/has?(result "verbose")
 ; => true/false
 ```
 
 ### Positional Arguments
 
 Positional arguments are everything that is not a flag or option value.
-Access them as a cons list:
+Access them as a cons list. **The list is in reverse order** -- the LAST
+positional argument is the head:
 
 ```turmeric
+(load "stdlib/list.tur")
+
 (let [pos (args/positional result)]
-  (println "first file:" (head pos))
-  (println "second file:" (head (tail pos))))
+  (println (str-concat "last positional:   " (:: (list-head pos) :cstr)))
+  (println (str-concat "second from last:  " (:: (list-head (list-tail pos)) :cstr))))
 ```
 ```sweet-exp
+load("stdlib/list.tur")
+
 let [pos (args/positional result)]
-  println("first file:" head(pos))
-  println("second file:" head(tail(pos)))
+  println $ str-concat "last positional:   " (:: list-head(pos) :cstr)
+  println $ str-concat "second from last:  " (:: list-head(list-tail(pos)) :cstr)
 ```
 
 ```sh
@@ -208,10 +252,10 @@ flags, options, and nested subcommands:
 (defn main [] : int
   (let [build-spec (-> (args/spec-new)
                        (args/spec-flag "--release")
-                       (args/spec-option "--output" "string" (cstr "a.out")))
+                       (args/spec-option "--output" "string" (some "a.out")))
         test-spec  (-> (args/spec-new)
                        (args/spec-flag "--verbose")
-                       (args/spec-option "--filter" "string" 0))
+                       (args/spec-option "--filter" "string" (none)))
         spec       (-> (args/spec-new)
                        (args/spec-prog "myapp")
                        (args/spec-subcommand "build" build-spec)
@@ -223,15 +267,19 @@ flags, options, and nested subcommands:
         1)
       (let [sub (args/subcommand result)]
         (cond
-          (cstr= sub "build")
+          (cstr-eq? sub "build")
             (let [r (args/sub-result result)]
-              (println "building, release:" (args/has? r "--release"))
+              (println (str-concat "building, release: "
+                                   (if (args/has? (.value r) "release")
+                                     "yes"
+                                     "no")))
               0)
-          (cstr= sub "test")
+          (cstr-eq? sub "test")
             (let [r (args/sub-result result)]
-              (println "testing, filter:" (args/get-str r "--filter"))
+              (println (str-concat "testing, filter: "
+                                   (args/get-str (.value r) "filter")))
               0)
-          true
+          :else
             (do
               (args/print-help spec)
               1))))))
@@ -240,10 +288,10 @@ flags, options, and nested subcommands:
 defn main [] :int
   let [build-spec (-> (args/spec-new)
                        (args/spec-flag "--release")
-                       (args/spec-option "--output" "string" (cstr "a.out")))
+                       (args/spec-option "--output" "string" (some "a.out")))
         test-spec  (-> (args/spec-new)
                        (args/spec-flag "--verbose")
-                       (args/spec-option "--filter" "string" 0))
+                       (args/spec-option "--filter" "string" (none)))
         spec       (-> (args/spec-new)
                        (args/spec-prog "myapp")
                        (args/spec-subcommand "build" build-spec)
@@ -255,30 +303,38 @@ defn main [] :int
         1
       let [sub (args/subcommand result)]
         cond
-          cstr=
-            sub
-            "build"
+          cstr-eq?(sub "build")
           let
             [r (args/sub-result result)]
-            println("building, release:" args/has?(r "--release"))
+            println $ str-concat "building, release: " (if args/has?(.value(r) "release") "yes" "no")
             0
-          cstr=
-            sub
-            "test"
+          cstr-eq?(sub "test")
           let
             [r (args/sub-result result)]
-            println("testing, filter:" args/get-str(r "--filter"))
+            println $ str-concat "testing, filter: " args/get-str(.value(r) "filter")
             0
-          true
+          :else
           do
             args/print-help(spec)
             1
 ```
 
+`cstr-eq?` is byte-wise content equality on `cstr`, from
+`(import cstr :refer [cstr-eq?])`. It is not optional sugar: `=` has **no**
+`cstr` overload at all, so `(= sub "build")` is a `TUR-E0006` operator-lookup
+error rather than a comparison. `(eq? sub "build")` is the same comparison
+reached through the auto-loaded `Eq[cstr]` instance, if you would rather not
+import `cstr`.
+
 ```sh
 tur run myapp.tur -- build --release
 tur run myapp.tur -- test --filter=core --verbose
 ```
+
+`args/sub-result` returns an `(Option ArgResult)` -- `(none)` when no
+subcommand matched. The `cond` arms above have already established which
+subcommand ran, so they take `(.value r)` directly; a caller that has not
+should test `(.is-some r)` first.
 
 Nested subcommands work the same way: call `args/sub-result` on the outer
 result, then `args/subcommand` on the inner to walk the chain.
@@ -288,12 +344,12 @@ result, then `args/subcommand` on the inner to walk the chain.
 `args/print-help` writes usage text to stdout based on the spec:
 
 ```turmeric
-(when (args/has? result "--help")
+(when (args/has? result "help")
   (args/print-help spec)
   (exit 0))
 ```
 ```sweet-exp
-when args/has?(result "--help")
+when args/has?(result "help")
   args/print-help(spec)
   exit(0)
 ```
@@ -331,24 +387,24 @@ args/result-free(result)
 
 | Function | Signature | Description |
 |---|---|---|
-| `args/spec-new` | `-> :int` | Create an empty arg spec |
-| `args/spec-prog` | `spec :int name :cstr -> :int` | Set program name for help |
-| `args/spec-flag` | `spec :int name :cstr -> :int` | Register a boolean flag |
-| `args/spec-option` | `spec :int name :cstr type :cstr dflt :int -> :int` | Register a named option |
-| `args/spec-subcommand` | `spec :int name :cstr sub :int -> :int` | Register a subcommand |
-| `args/parse` | `spec :int argv :int -> :int` | Parse `*args*` against spec |
-| `args/has?` | `result :int key :cstr -> :bool` | True if flag/option was supplied |
-| `args/get-str` | `result :int key :cstr -> :cstr` | Get option value as string |
-| `args/get-int` | `result :int key :cstr -> :int` | Get option value as int |
-| `args/get-bool` | `result :int key :cstr -> :bool` | Get option value as bool |
-| `args/positional` | `result :int -> :int` | Cons list of positional args |
-| `args/subcommand` | `result :int -> :cstr` | Matched subcommand name |
-| `args/sub-result` | `result :int -> :int` | Parse result for subcommand |
-| `args/error?` | `result :int -> :bool` | True if parsing failed |
-| `args/error-msg` | `result :int -> :cstr` | Error description string |
-| `args/print-help` | `spec :int -> :void` | Print usage to stdout |
-| `args/spec-free` | `spec :int -> :void` | Free spec memory |
-| `args/result-free` | `result :int -> :void` | Free result memory |
+| `args/spec-new` | `-> ArgSpec` | Create an empty arg spec |
+| `args/spec-prog` | `spec :ArgSpec name :cstr -> ArgSpec` | Set program name for help |
+| `args/spec-flag` | `spec :ArgSpec name :cstr -> ArgSpec` | Register a boolean flag |
+| `args/spec-option` | `spec :ArgSpec name :cstr type :cstr dflt :(Option cstr) -> ArgSpec` | Register a named option |
+| `args/spec-subcommand` | `spec :ArgSpec name :cstr sub :ArgSpec -> ArgSpec` | Register a subcommand |
+| `args/parse` | `spec :ArgSpec argv :int -> ArgResult` | Parse `*args*` against spec |
+| `args/has?` | `result :ArgResult key :cstr -> :bool` | True if flag/option was supplied |
+| `args/get-str` | `result :ArgResult key :cstr -> :cstr` | Get option value as string |
+| `args/get-int` | `result :ArgResult key :cstr -> :int` | Get option value as int |
+| `args/get-bool` | `result :ArgResult key :cstr -> :bool` | Get option value as bool |
+| `args/positional` | `result :ArgResult -> :int` | Cons list of positional args |
+| `args/subcommand` | `result :ArgResult -> :cstr` | Matched subcommand name |
+| `args/sub-result` | `result :ArgResult -> (Option ArgResult)` | Parse result for subcommand |
+| `args/error?` | `result :ArgResult -> :bool` | True if parsing failed |
+| `args/error-msg` | `result :ArgResult -> :cstr` | Error description string |
+| `args/print-help` | `spec :ArgSpec -> :void` | Print usage to stdout |
+| `args/spec-free` | `spec :ArgSpec -> :void` | Free spec memory |
+| `args/result-free` | `result :ArgResult -> :void` | Free result memory |
 
 ## CLAUDE.md Rule
 

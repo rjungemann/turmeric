@@ -2,7 +2,7 @@
 ;; higher-order-returning value, e.g. ((f 1) 2).
 ;;
 ;; Regression for
-;; docs/reported/curried-fn-typed-param-second-application-not-callable.md.
+;; docs/archive/history/curried-fn-typed-param-second-application-not-callable.md.
 ;; A value whose result type is itself a function type -- (fn [int] (fn
 ;; [int] int)) and the (-> int (-> int int)) spelling -- must keep the
 ;; inner function type at the application site so the *second* application

@@ -1,0 +1,49 @@
+;; R4 slice 1, OMITTED-PARAMETER evidence: `linked?` declares `#reads w` and
+;; then reads state reached through `g`, a parameter the frame does not name.
+;; That evidence draws TUR-W0383 and REFUSES the congruence override, so the
+;; crossing inside the frozen region is undischarged -- a hard TUR-W0372 under
+;; `--strict-refine`, carrying the refusal wording that points at the frame
+;; rather than the region.
+;;
+;; Both halves are asserted here. Before checked-reads graduated (2026-08-20)
+;; the W0383 wording lived on a passing twin, refine-reads-frame-omits-param,
+;; which pinned the gate-off default of proving anyway; graduation made that
+;; twin byte-for-byte this program with the opposite expectation, so its
+;; assertions were folded in here rather than left to contradict this one.
+;;
+;; The sibling r2-checked-reads-refuses-broken-frame pins the same escalation
+;; for the mutable-global evidence kind, and
+;; r4-checked-reads-refuses-callee-frame-read for the call-shape kind.
+(defstruct Wld [gens : ptr<void>])
+(defstruct Grd [gens : ptr<void>])
+
+(defn wld-new [] : Wld
+  (unsafe (let [p (raw-malloc 32)]
+            (array-set-unchecked p 0 0)   ;; init slot 0 -- turi runs this too
+            (Wld p))))
+(defn grd-new [] : Grd
+  (unsafe (let [p (raw-malloc 32)]
+            (array-set-unchecked p 0 0)
+            (Grd p))))
+
+(defn linked? [^borrow w : Wld ^borrow g : Grd e : int] #reads w : bool
+  (= (unsafe (+ (array-get-unchecked (.gens w) e)
+                (array-get-unchecked (.gens g) e)))
+     0))
+
+(defn get-it [^borrow w : Wld ^borrow g : Grd
+              e : #refine{ x : int | (linked? w g x) }] : int
+  (+ e 100))
+
+(defn run [] : int
+  (let [^mut w (wld-new)
+        ^mut g (grd-new)]
+    (let [__f1 (& w)
+          __f2 (& g)]
+      (if (linked? w g 0)
+        (get-it w g 0)
+        -1))))
+
+(defn main [] : int
+  (println (run))
+  0)

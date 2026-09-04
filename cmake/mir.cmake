@@ -1,7 +1,7 @@
 include_guard(GLOBAL)
 # ---------------------------------------------------------------------------
 # MIR (c2mir + MIR-gen) -- vendored for the J0 JIT spike.
-# docs/upcoming/jit-engine-plan.md, Phase J0.
+# docs/archive/jit-engine-plan.md, Phase J0.
 # ---------------------------------------------------------------------------
 # MIR is the engine chosen in section 2 of the plan: a C11 front end (c2mir)
 # plus an optimizing JIT back end, so `tur`'s existing emit-C path is reused
@@ -23,7 +23,7 @@ include_guard(GLOBAL)
 #     `ret 0, 0` to `ret t, t`, returning { second-word, second-word } for a
 #     two-word struct -- exactly the emitted tail-loop for a self-recursive
 #     carrier-struct function
-#     (docs/archive/mir-two-word-struct-return-goto-loop-miscompile.md).
+#     (docs/archive/history/mir-two-word-struct-return-goto-loop-miscompile.md).
 #   41ff4d94 -- try_spilled_reg_mem overran its 2-entry op_nums[] when one
 #     insn used the same spilled register in three operand positions
 #     (`mul r,r,r` from coalesced `r = r * r`), smashing rewrite_insn's frame
@@ -37,7 +37,7 @@ include_guard(GLOBAL)
 #     supporting c2mir fixes -- _Alignas was unparseable in spec_qual_list
 #     (struct members) and ignored for layout when it did parse
 #     (jit-engine-j0-findings.md section 30.1,
-#     docs/archive/jit-arm64-uint128-align-struct-layout-skew.md).
+#     docs/archive/history/jit-arm64-uint128-align-struct-layout-skew.md).
 #   d7e19e8d -- c2mir accepted `#pragma pack` and silently ignored it, laying
 #     the struct out at natural alignment.  Unlike c2mir's other gaps this one
 #     does not refuse the input: it compiles, runs, and is wrong (a pack(4)
@@ -71,6 +71,23 @@ include_guard(GLOBAL)
 #     semantics; measured: MinGW gcc 16 silently IGNORES macro-arg pack
 #     directives, no warning, but _CRT_PACKING is 8 == the x64 natural cap,
 #     so the two semantics agree on actual UCRT layout).
+#   472fa4c6 -- the aarch64 back end had no AAPCS64 HFA concept: it passed every
+#     aggregate <= 16 bytes in x0..x7, where a conforming compiler puts a
+#     Homogeneous Floating-point Aggregate (1-4 members, all the same FP type)
+#     in v0..v7.  Self-consistent within one c2mir compilation, so pure-JIT code
+#     was fine and nothing complained; wrong the instant c2mir code called a
+#     natively compiled function taking or returning one, with the callee
+#     reading whatever was left in the SIMD registers.  DATA-DEPENDENT wrong
+#     answers, no diagnostic -- `tur run` printed 152.25 where `tur jit` printed
+#     225 for the same source.  `struct { float x, y; }` vector APIs are exactly
+#     this shape.  Classification is in caarch64-ABI-code.c, register assignment
+#     in mir-gen-aarch64.c, sharing two of MIR's five reserved block classes
+#     (docs/archive/mir-aarch64-fp-aggregate-abi.md).
+#
+#     BEWARE reverting the pin below this commit: turmeric no longer carries the
+#     refusals that used to catch this shape (they were deleted with the fix, in
+#     jit_ffi_hook.c and elab_fns.c), so an older MIR silently reinstates the
+#     miscall rather than diagnosing it.
 # Point TUR_MIR_GIT_REPOSITORY/TAG back at vnmakarov/mir when upstream lands
 # equivalents.
 # CACHE-VARIABLE TRAP: `set(... CACHE ...)` does NOT update an entry that is
@@ -84,8 +101,8 @@ include_guard(GLOBAL)
 # the cache still said vnmakarov/a8ab7c31 while this file said the fork.)
 set(TUR_MIR_GIT_REPOSITORY "https://github.com/rjungemann/mir.git"
     CACHE STRING "MIR repository for the JIT spike (fork carrying the ret + RA fixes)")
-set(TUR_MIR_GIT_TAG "9127f8e1fa5c804b07b18aa43f717f7ff45b5217"
-    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack incl. macro args + C23 enum base types + leading member attributes")
+set(TUR_MIR_GIT_TAG "458f352157b0d5a86b1286ded36047365664af8c"
+    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack + C23 enum base types + leading member attributes + aarch64 AAPCS64 HFA passing (both, merged)")
 
 include(FetchContent)
 

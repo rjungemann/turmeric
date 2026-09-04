@@ -21,6 +21,16 @@ and [`stdlib/result.tur`](https://github.com/rjungemann/turmeric/blob/main/stdli
 use -- so a value built in C flows straight into the stdlib accessors
 (`ok?`, `err?`, `ok-val`, `err-val`, `some?`, `unwrap`) and vice versa.
 
+The builders return the `int64_t` **carrier** -- a heap pointer to the
+canonical layout. That is still what an inline-C body should hand back, and
+nothing here changed when concrete monomorphs started flowing by value: the
+compiler bridges the carrier into the aggregate at the boundary, and a
+`(none)` carrier (the null pointer) survives the crossing. What the boundary
+needs is a real declared type on the C function -- `: (Result MidiIn int)`,
+not `: int`. A producer declared `: int` hands back a bare word the accessors
+cannot type, so its callers have to write `(ok? (:: r (Result int int)))` at
+every use site.
+
 ## The helpers
 
 The builders come in three flavours. Prefer the **typed** `_int` / `_ptr`
@@ -144,7 +154,10 @@ through spices (see
 - **Re-declaring the struct in raw C** -- `struct { bool is_ok; int64_t
   ok_val; int64_t err_val; } *r = malloc(...)` returned as `:ptr<void>`.
   This duplicates the layout, drifts silently if the canonical layout ever
-  changes, and discards the `Result` type. The preamble carries a
+  changes, and discards the `Result` type. **The drift is no longer
+  hypothetical: SR2b changed the canonical layout to the tagged sum
+  `{ int tag; union { ... } as; }`, so any surviving hand-rolled copy of the
+  struct above is now reading the wrong bytes.** The preamble carries a
   `_Static_assert` pinning `tur_option_t` / `tur_result_box_t` to their
   byte layout precisely so the *helper* path cannot drift; a hand-rolled
   copy gets no such guard.
@@ -153,6 +166,48 @@ through spices (see
   process cannot run without -- this is why `threadpool-new` /
   `task-group-new` abort), but it is wrong for routine, recoverable
   failures like a port that is busy or a connection that is refused.
+
+## Who owns the box
+
+`tur_some_ptr` / `tur_ok_ptr` / `tur_box_*` **malloc** the option/result
+carrier box. Until 2026-08-30 nothing freed it: the allocation happens inside a
+C body, so no elaborated expression corresponded to it and the compiler had
+nothing to give ownership to -- every call through the idiom this guide
+recommends leaked one box.
+
+That is fixed, and the fix is a contract worth stating explicitly:
+
+> **A function whose body is inline C and whose DECLARED return type is
+> `(Option T)` / `(Result T E)` transfers ownership of the box to its caller.**
+> The compiler frees it at the point the value is read back into an ordinary
+> Turmeric value.
+
+Two consequences for anyone writing such a body:
+
+- **Return a FRESH box.** `tur_some_ptr(...)`, `tur_ok_ptr(...)`, `tur_none()`
+  (which is the null carrier and allocates nothing) all satisfy this. A body
+  that cached a box in a static and returned it twice would hand the same
+  allocation to two owners -- a double free, not a leak.
+- **Returning a BORROWED box needs a different signature.** If the box belongs
+  to something else -- a container, a cache -- do not declare the result
+  `(Option T)`. Declare the element type and let the caller wrap it, which is
+  what `vec-get [A] (v : (Vec A)) : A` does: the vector owns the box and frees
+  it in `vec-free`, and the borrow-shaped signature is what tells the compiler
+  so.
+
+The distinction is the DECLARED type, not the type at a particular call site:
+`(:: (vec-get v 0) (Option int))` resolves to an Option and is still a borrow.
+
+**The payload follows the box (since 2026-09-03).** A body that boxes a
+*value-struct* payload as a pointer -- `Box *b = malloc(sizeof *b); ...;
+return tur_box_ok((int64_t)(intptr_t)b);` for a declared `(Result Box cstr)`
+-- hands that allocation over too: the monomorph stores such a payload as a
+pointer slot, and the compiler frees the live arm together with the cell once
+the value has been read back or its consumer has returned. So the payload must
+be a FRESH allocation as well; boxing the address of a static or of something
+else's field is a double free, not a leak. This is the same rule the
+freshness analysis applies to a Turmeric producer, extended to inline C by
+declaration (`elab_stamp_sum_freshness`).
 
 ## Limitation: only `_int` and `_ptr` payloads
 
@@ -163,6 +218,28 @@ user-defined *by-value* types is **not** constructible from inline-C with
 these helpers: the payload has to fit the single `int64_t` carrier slot.
 Wrap the value behind an opaque pointer handle (the rtmidi pattern above)
 or construct the `Result` in Turmeric instead.
+
+## A control form around an `if` over these builders
+
+The builders below return the int64 CARRIER, and the consumer bridges it to the
+by-value aggregate. When an `if`'s arms are both carrier producers, `emit_if`
+bridges each arm into its merge temp -- and a `let` or `do` wrapping that `if`
+used to bridge the already-concrete result a second time:
+
+```c
+__t172 = (*(tur_adt_Result__Handle__int *)(intptr_t)(__t174));  /* already a struct */
+```
+
+`tur check` was silent; it failed at `cc` with `operand of type 'tur_adt_...'
+where arithmetic or pointer type is required`, naming no `.tur` line. The same
+`if` as the whole function body always worked, which is what made the workaround
+("hoist the block into its own defn") effective and the cause obscure.
+
+Fixed 2026-09-02; both the `let` and `do` wrappers are pinned by
+`tests/fixtures/control-form-around-if-carrier-arms/`. Nothing about how you
+write the inline C changes -- this is recorded because the shape it broke is the
+one this guide recommends, so an older compiler will still reject it. See
+[docs/archive/control-form-around-if-double-unboxes-carrier-arms.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/control-form-around-if-double-unboxes-carrier-arms.md).
 
 ## See also
 

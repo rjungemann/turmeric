@@ -1,0 +1,15 @@
+;; A `def` nested inside a top-level EXPRESSION must be rejected, and both the
+;; compiled and the interpreted path must reject it the same way.
+;;
+;; It used to be accepted here: the `def` elaborated as a global (the type
+;; checker was happy, and a later `main` could name it), but codegen emitted it
+;; as a local of the enclosing statement, so the reference died in the emitted C
+;; with `'answer_1326' undeclared`.  The only thing that ever caught it was the
+;; synthesized-main fold relocating the statement into a function body -- which
+;; happened only when the file declared no `main` of its own, so adding one made
+;; the error vanish and the miscompile return.
+;;
+;; See docs/archive/turi-toplevel-expr-subforms-elaborate-in-global-scope.md
+(if true (def answer 42) (def fallback 7))
+
+(defn main [] : int answer)

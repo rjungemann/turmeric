@@ -51,12 +51,17 @@ my-app/
   tur.lock      -- empty lock file (commit to VCS)
   src/
     main.tur    -- hello-world entry point (executable)
-  .gitignore    -- ignores build/, spices/, cmake/
+  tests/
+    my-app_test.tur
+  .gitignore    -- ignores build/, spices/, caches, generated cmake files
   README.md
-```text
+  LICENSE
+  Justfile
+  .github/workflows/ci.yml
+```
 
-For `--lib`, `src/main.tur` is replaced by `src/lib.tur` with a stub exported
-function.
+For `--lib`, `src/main.tur` is replaced by `src/<name>.tur` containing a
+`defmodule` with a stub exported function.
 
 ### Generated `build.tur`
 
@@ -69,16 +74,16 @@ function.
 ### Generated `src/main.tur`
 
 ```turmeric
-#lang turmeric
-
-(defn main [] : int
+;;; my-app -- entry point.
+;;
+(defn main [] :int
   (println "Hello from my-app!")
   0)
 ```
 
 ```sweet-exp
-#lang sweet-exp
-
+;;; my-app -- entry point.
+;;
 defn main [] :int
   println("Hello from my-app!")
   0
@@ -285,9 +290,9 @@ tur add https://github.com/alice/tur-geom --ref v0.2.1 --name geometry
 If `--ref` is omitted, the tool resolves to the default branch HEAD and warns:
 
 ```
-Warning: no --ref specified; resolved to HEAD (a1b2c3d4).
-Pin with: tur add https://github.com/alice/tur-geom --ref a1b2c3d4
-```sh
+Warning: no --ref specified; will resolve to HEAD.
+Pin with: tur add https://github.com/alice/tur-geom --ref <tag-or-sha>
+```
 
 ### Adding a local path dependency
 
@@ -327,11 +332,7 @@ is, `tur add spice/<pkg>` prints:
 ```
 The Spice registry is not yet available.
 Add the package directly with a Git URL:
-  tur add https://github.com/rjungemann/turmeric-spices \
-    --ref http-v0.1.0 --subdir spices/http --name http
-```turmeric
-
-```sweet-exp
+  tur add https://github.com/turmeric-spice/tur-http --ref v0.1.0
 ```
 
 ### What `tur add` changes
@@ -371,10 +372,9 @@ defpackage my-app
 | Condition | Message |
 |---|---|
 | Not in a project directory | `No build.tur found. Run tur new <name> to create a project.` |
-| Spice already present | `'geom' is already a dependency. Use tur update geom to change the ref.` |
-| Network failure | `Failed to reach https://github.com/...: <reason>` |
-| Ref not found | `Ref 'v99.0.0' not found in https://github.com/alice/tur-geom` |
-| SHA mismatch on re-fetch | `Integrity check failed for 'geom'. Run tur fetch --force to re-download.` |
+| Spice already present | `'geom' is already a dependency. To change its ref, edit the :spices entry for 'geom' in build.tur, then run tur fetch --update.` |
+| Clone or ref failure | `spice: git failed for 'geom' ref 'v99.0.0' in 'spices'` |
+| SHA mismatch on re-fetch | `spice: SHA mismatch detected -- run tur fetch --update to re-fetch` |
 
 ---
 
@@ -398,7 +398,6 @@ so it can be parsed by the same reader and diffed cleanly in version control.
              :fetched-at "2026-05-14T09:00:00Z"}
     "math" #{:url        "https://github.com/rjungemann/turmeric-spices"
              :ref        "math-v0.1.0"
-             :subdir     "spices/math"
              :resolved   "d6e7f8a9b0c1..."
              :sha256     "def456..."
              :fetched-at "2026-05-14T09:00:03Z"}
@@ -425,7 +424,6 @@ deflockfile
              :fetched-at "2026-05-14T09:00:00Z"}
     "math" #{:url        "https://github.com/rjungemann/turmeric-spices"
              :ref        "math-v0.1.0"
-             :subdir     "spices/math"
              :resolved   "d6e7f8a9b0c1..."
              :sha256     "def456..."
              :fetched-at "2026-05-14T09:00:03Z"}
@@ -473,11 +471,56 @@ binary's exit code.
 | Single `*.tur` file in `src/` | that file |
 | None of the above | error with suggestion |
 
+`:entry` is a path relative to the manifest directory (an absolute path is
+honored as written):
+
+```turmeric no-check
+(defpackage app
+  :name    "app"
+  :version "0.1.0"
+  :entry   "src/cli.tur")
+```
+
+The rungs are tried in order, so `:entry` wins even when `src/main.tur` also
+exists. It is authoritative rather than a hint: a `:entry` that does not name
+an existing file is a hard error, never a quiet fall-through to `src/main.tur`
+-- running a different program than the manifest asked for is the failure mode
+worth being loud about.
+
+```
+tur run: :entry "src/nope.tur" in build.tur does not name a file
+  Looked for /home/alice/app/src/nope.tur
+```
+
+`:entry` applies to project-mode `tur run` (a bare `tur run` inside the
+project). `tur run <file>` names its entry directly, and `tur build <dir>`
+compiles every module under `src/` rather than picking one.
+
+#### A program with no entry point
+
+A single-file (or whole-program) build that defines no `main` and has no
+top-level statements still builds: the compiler synthesizes an empty `main`
+that runs static init and returns 0, so the program runs, prints nothing, and
+exits 0. When a top-level function is spelled like an entry point but is not
+one -- `-main` (the Clojure spelling), `main-`, `Main`, `_main` -- the build
+warns at that definition:
+
+```
+warning [TUR-W0624]: no `main` and no top-level statements: the synthesized
+entry point does nothing, so this program will run and print nothing.
+`-main` is never called -- name it `main`, or call it from a top-level form
+```
+
+Rename it `main`, or call it from a top-level form. A module that is meant
+to be loaded rather than run (every stdlib file, a spice's `src/`) has no
+near-miss and stays quiet.
+
+
 ### Compile without running
 
 ```sh
-tur build
-tur build --release
+tur build .            # project build (directory with a build.tur)
+tur build src/foo.tur  # single-file build
 ```
 
 ### Fetch dependencies without building
@@ -490,8 +533,10 @@ tur fetch --update     # update spices to the latest allowed versions
 ### Run the test suite
 
 ```sh
-tur test
+tur test tests/
 ```
+
+`tur test <dir>` compiles and runs every `.tur` test file in the directory.
 
 See [test-runner-contract.md](test-runner-contract.md) for the test framework
 API.
@@ -514,8 +559,8 @@ my-project/
     test-v0.3.0/
       build.tur
       src/
-  cmake/                 -- generated CMake helpers (gitignored)
-    SpiceDeps.cmake      -- generated from :cmake-deps
+  cmake/                 -- generated CMake helpers (generated parts gitignored)
+    CMakeLists.txt       -- generated from :cmake-deps by tur fetch
   build/                 -- build artifacts (gitignored)
 ```
 
@@ -533,8 +578,8 @@ my-project/
     test-v0.3.0/
       build.tur
       src/
-  cmake/                 -- generated CMake helpers (gitignored)
-    SpiceDeps.cmake      -- generated from :cmake-deps
+  cmake/                 -- generated CMake helpers (generated parts gitignored)
+    CMakeLists.txt       -- generated from :cmake-deps by tur fetch
   build/                 -- build artifacts (gitignored)
 ```
 
@@ -543,22 +588,33 @@ Recommended `.gitignore`:
 ```turmeric
 build/
 spices/
-cmake/SpiceDeps.cmake
+.tur-cache/
+.tur-repl-cache/
+cmake/CMakeLists.txt
+cmake/build/
+cmake/spice-deps-manifest.json
+*.o
 ```
 
 ```sweet-exp
 build/
 spices/
-cmake/SpiceDeps.cmake
+.tur-cache/
+.tur-repl-cache/
+cmake/CMakeLists.txt
+cmake/build/
+cmake/spice-deps-manifest.json
+*.o
 ```
 
 ---
 
 ## C/CMake Dependencies
 
-The `:cmake-deps` block declares C and C++ packages to link against. The
-`tur build` command generates `cmake/SpiceDeps.cmake` from this block and
-invokes CMake automatically -- no CMake files need to be written by hand.
+The `:cmake-deps` block declares C and C++ packages to link against.
+`tur fetch` (and the fetch step of `tur run`) generates `cmake/CMakeLists.txt`
+from this block and invokes CMake automatically -- no CMake files need to be
+written by hand.
 
 ```turmeric no-check
 :cmake-deps #map{
@@ -587,7 +643,7 @@ invokes CMake automatically -- no CMake files need to be written by hand.
 Add a CMake dependency from the command line:
 
 ```sh
-tur add --cmake https://github.com/raysan5/raylib --ref 5.0
+tur add-cmake https://github.com/raysan5/raylib --ref 5.0
 ```
 
 The entry goes into `:cmake-deps` instead of `:spices`.
@@ -609,17 +665,18 @@ tur init                   # scaffold inside the current directory
 tur add <url>              # add a spice from a Git URL
 tur add <url> --ref <ref>  # pin to a specific tag, branch, or SHA
 tur add <path> --path      # add a local path dependency
-tur add --cmake <url>      # add a C/CMake dependency
+tur add-cmake <url>        # add a C/CMake dependency
 tur fetch                  # download all spices from tur.lock
 tur fetch --update         # update to latest allowed versions
+tur audit                  # list every origin the build fetches code from
 
 # Build and run
-tur build                  # compile (debug)
-tur build --release        # compile (release)
+tur build <dir>            # compile a project directory
+tur build <file.tur>       # compile a single file
 tur run                    # compile and execute
 tur run --release          # compile (release) and execute
 tur run --offline          # run without network access
-tur test                   # run the test suite
+tur test <dir>             # run all .tur test files in a directory
 
 # Diagnostics
 tur emit-c src/main.tur    # print generated C to stdout

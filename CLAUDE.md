@@ -96,6 +96,11 @@ return `:int`" escape hatch. The codegen preamble carries typed builders
 carrier-level `tur_box_*`) that construct the canonical Result/Option
 layout, so a fallible C constructor hands back a real `(Result Handle E)`
 / `(Option Handle)` with no struct hand-rolling and no sentinel integer.
+The box those builders malloc is **owned by the caller**: a body whose
+declared return type is `option`/`result` transfers it, and the compiler frees
+it when the value is read back. So return a FRESH box, and do not declare
+`option`/`result` for a box something else owns (a container's element) --
+give that a borrow-shaped signature instead, as `vec-get` does.
 See [docs/guides/inline-c-results-guide.md](docs/guides/inline-c-results-guide.md).
 
 ### When you notice this in existing code
@@ -179,7 +184,15 @@ The Debug build compiles `tur` with `-fsanitize=address,undefined`; on Linux
 ASan ships LeakSanitizer enabled. The compiler/codegen path is leak-clean, so
 `bash tests/run.sh` runs **with leak detection ON** -- a genuine leak in the
 `tur build`/`emit-c` path will fail the suite (this is intended; do not
-suppress it). The tree-walking turi/eval **interpreter** intentionally never
+suppress it).
+
+**That covers `tur` itself, NOT the programs it emits.** Fixture programs are
+compiled without any sanitizer and run with `detect_leaks=0`, so a leak in
+EMITTED code passes `run.sh` silently -- the suite only compares printed
+output. Use `tests/run-leak-check.sh` (opt in per fixture with a
+`requires.leak-check` marker) when that is what you are chasing. The full
+coverage map, and two traps that have produced wrong answers here, are in
+[docs/guides/test-suite-portability-guide.md](docs/guides/test-suite-portability-guide.md#7a-leak-checking----what-is-covered-and-what-is-not). The tree-walking turi/eval **interpreter** intentionally never
 frees its closures/registered natives (process-lifetime), so the harnesses
 that exercise it (`run-turi.sh`, `run-flags.sh`) and their ctest targets
 default to `ASAN_OPTIONS=detect_leaks=0`. Override with
@@ -303,7 +316,7 @@ always-on at their current level. See
 reader (slash-namespaced: `turmeric`, `turmeric/curly-infix`,
 `turmeric/neoteric`, `turmeric/sweet`) plus an order-independent **set** of
 additive layers (the space-separated trailing tokens). See
-[docs/upcoming/lang-layers-plan.md](docs/upcoming/lang-layers-plan.md).
+[docs/archive/lang-layers-plan.md](docs/archive/lang-layers-plan.md).
 
 A `#lang` layer token is legal **only** if it has a row in `LANG_LAYERS[]`.
 Adding a layer means:
@@ -621,6 +634,15 @@ PASS-skip it under certain conditions:
 | `requires.posix-apis` | the host is producing Windows binaries (`TUR_HOST_WINDOWS=1`) |
 | `requires.spices` | the sibling `../turmeric-spices/` checkout is absent |
 | `requires.posix-apis` | `TUR_HOST_WINDOWS=1` (an MSYS2 `MSYSTEM`); the fixture's inline-C needs a POSIX API MinGW lacks -- `pipe()`, `fork()`, `getppid()`. Applies to negative fixtures too |
+
+`tests/run-turi.sh` honours the same five markers (`requires.compiled`,
+`requires.tur-only`, `requires.dedicated-runner`, `requires.spices`,
+`requires.tsan`) on both its positive pass and its `errors/` pass, through one
+helper, and counts every skip: its summary reads `P passed, F failed, S
+skipped of D discovered` and the run fails if those do not add up. It also
+PASS-skips any fixture whose program (own file or one `load` deep) contains
+a user inline-C block -- see
+[docs/guides/test-suite-portability-guide.md](docs/guides/test-suite-portability-guide.md#7d-what-run-turish-does-not-run----and-how-it-says-so).
 
 Note `requires.interp` and `requires.interp-only` are near-homographs that do
 opposite things: the first keeps the fixture in `run.sh` (routing it through

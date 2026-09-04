@@ -1,4 +1,4 @@
-; Closes docs/reported/open-binder-skolems-not-distinguishable.md:
+; Closes docs/archive/history/open-binder-skolems-not-distinguishable.md:
 ; two nested `open` blocks bind two SizedBufs at distinct fresh
 ; skolems.  Calling sized-buf-copy! [n] [dst : (SizedBuf n) src : (SizedBuf n)]
 ; across them used to silently type-check (both skolems were indistinguishable

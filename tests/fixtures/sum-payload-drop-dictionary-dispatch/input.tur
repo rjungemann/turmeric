@@ -1,0 +1,65 @@
+;; sum-payload-drop-dictionary-dispatch -- the value-struct payload box of a
+;; fresh Option/Result monomorph is released when its consumer is a CLASS
+;; METHOD, and when a let binding takes the payload out of a fresh producer
+;; through a copying reader.
+;;
+;; value-struct-payload-sum-monomorph-box-has-no-owner, fourth round.  The
+;; first three rounds keyed every drop on a call site with a Binding to carry
+;; the callee's inferred nonretain_sum_param_mask; a class-method call is
+;; built by elab_method_call and never ran that stamp, so
+;; `(enc (some (make-struct Box ..)))` kept its Box copy for the process
+;; lifetime although the instance body only reads `x`.  Two shapes, both
+;; ASan-clean (requires.leak-check):
+;;
+;;   1. a class-method consumer whose receiver head is concrete at the call
+;;      site (`(Option a)` is enough: the Option instance is the one that
+;;      runs, whatever `a` is), so the resolved instance's mask decides at
+;;      elab -- from main and from inside a constrained generic;
+;;   2. a let binding whose init is `ok-val` of a fresh dictionary-dispatched
+;;      producer: the copy is the payload's only holder, freed at scope exit.
+;;
+;; The third shape the fix covers -- a consumer whose receiver IS the
+;; abstract class var, admitted per monomorph at emit -- is pinned by
+;; return-dispatched-sum-mint-constrained-instance (its `enc-mk`), once the
+;; three construct-seam miscompiles that blocked writing it were fixed
+;; (docs/archive/return-dispatched-sum-mint-in-constrained-instance-
+;; miscompiles.md).
+
+(defstruct Box [n : int])
+
+(defn show-int [n : int] : void ```c printf("%lld\n", (long long)n); ```)
+
+(defclass Enc [a] (enc [x] : int))
+
+(definstance Enc [int] (enc [x] : int x))
+
+(definstance Enc [Box] (enc [b : Box] : int (.n b)))
+
+(definstance Enc [Option]
+  [(Enc A)]
+  (enc [x] : int
+    (if (some? x) (enc (unwrap x)) -1)))
+
+;; shape 1 inside a generic: receiver head Option, element abstract.
+(defn enc-some [a] [^Enc a v : a] : int
+  (enc (some v)))
+
+(defclass Dec [a] (dec [tag : int] : (Result a cstr)))
+(definstance Dec [int] (dec [tag] (ok tag)))
+(definstance Dec [Box] (dec [tag] (ok (make-struct Box :n (+ tag 90)))))
+(definstance Dec [Option]
+  [(Dec A)]
+  (dec [tag]
+    (ok (some (ok-val (:: (dec tag) (Result A cstr)))))))
+
+(defn main [] : int
+  ;; shape 1, concrete receiver at the call site
+  (show-int (enc (some (make-struct Box :n 99))))
+  (show-int (enc (some 5)))
+  ;; shape 1, receiver `(Option a)` inside a generic
+  (show-int (enc-some (make-struct Box :n 7)))
+  (show-int (enc-some 3))
+  ;; shape 2
+  (let [ob (ok-val (:: (dec 9) (Result (Option Box) cstr)))]
+    (if (some? ob) (show-int (.n (unwrap ob))) (println "none")))
+  0)

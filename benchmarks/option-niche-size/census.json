@@ -1,0 +1,36 @@
+{
+  "stats": {
+    "censused": 2310,
+    "ineligible-monomorphs-seen": 4736,
+    "eligible-monomorphs-seen": 8,
+    "skip-emit-default": 42
+  },
+  "monomorphs": {
+    "tur_adt_Option__String": {
+      "body": "int tag;\n    union {\n        struct { } None;\n        struct { void * _0; } Some;\n    } as;",
+      "positions_total_emission_sites": 137,
+      "n_files": 7,
+      "positions_per_file_max": 32,
+      "positions_per_file_min": 7,
+      "files": [
+        "stdlib/httpd-string.tur",
+        "tests/fixtures/httpd-req-string-opt/input.tur",
+        "tests/fixtures/inline-c-option-byval-param/input.tur",
+        "tests/fixtures/option-niche-carrier-some-null-aborts/input.tur",
+        "tests/fixtures/option-niche-crossings/input.tur",
+        "tests/fixtures/option-niche-null-payload-aborts/input.tur",
+        "tests/fixtures/option-niche-string/input.tur"
+      ]
+    },
+    "tur_adt_Option__Vec__int": {
+      "body": "int tag;\n    union {\n        struct { } None;\n        struct { tur_adt_Vec__int * _0; } Some;\n    } as;",
+      "positions_total_emission_sites": 24,
+      "n_files": 1,
+      "positions_per_file_max": 24,
+      "positions_per_file_min": 24,
+      "files": [
+        "tests/fixtures/option-of-tvec-eq/input.tur"
+      ]
+    }
+  }
+}

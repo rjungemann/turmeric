@@ -65,9 +65,58 @@ jobs:
           path: ${{ env.ARCHIVE }}
           if-no-files-found: error
 
+  # OD4: the rendered documentation, as a downloadable archive.
+  #
+  # Guides and API pages are readable offline in Try Turmeric (OD3), but
+  # someone working in a terminal with no network had no copy at all. This
+  # builds the same docs/html/ the website serves, plus the docs pack, and
+  # attaches them to the release; unpacked into <prefix>/share/doc/turmeric/
+  # it is what `tur docs --open` finds. Platform-independent, so it runs once
+  # rather than per matrix leg.
+  docs:
+    name: Package docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # genguides.py dates each guide from the commit that added it.
+          fetch-depth: 0
+
+      - name: Install doc generator dependencies
+        run: python3 -m pip install -r tools/requirements.txt
+
+      - name: Build the docs and the docs pack
+        run: |
+          python3 tools/genguides.py docs/guides/ --out docs/html/guides/ \
+                  --emit-pack web/public/docs-pack/
+          python3 tools/genspices.py --out docs/html/spices/ \
+                  --emit-json docs/html/spices/doc-names-spices.json \
+                  --emit-pack web/public/docs-pack/
+          python3 tools/gendocs.py stdlib/ --out docs/html/api/ \
+                  --emit-json web/public/doc-names.json \
+                  --extra-json docs/html/spices/doc-names-spices.json \
+                  --emit-pack web/public/docs-pack/
+          python3 tools/genpack.py web/public/docs-pack/
+
+      - name: Package
+        run: |
+          TAG=${GITHUB_REF_NAME}
+          ARCHIVE="turmeric-docs-${TAG}.tar.gz"
+          tar -czf "${ARCHIVE}" \
+              --transform "s,^,turmeric-docs-${TAG}/," \
+              -C . docs/html web/public/docs-pack
+          echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: turmeric-docs
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
   release:
     name: Create Release
-    needs: build
+    needs: [build, docs]
     if: always() && needs.build.result != 'cancelled'
     runs-on: ubuntu-latest
     permissions:

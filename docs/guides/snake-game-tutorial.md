@@ -31,7 +31,7 @@ A **hands-on guide** to building the Snake game with CMake + CPM + Raylib + Turm
 | 12 | Resource Cleanup | `defer`, automatic cleanup | 15 min |
 | 13 | Polish & Extras | Time-based movement, score display | 30 min |
 
-**Total estimated time**: ~5–6 hours
+**Total estimated time**: ~5-6 hours
 
 ---
 
@@ -40,7 +40,7 @@ A **hands-on guide** to building the Snake game with CMake + CPM + Raylib + Turm
 ### Create Directory Structure
 
 ```bash
-# From fith/ root
+# From the turmeric repo root
 mkdir -p examples/snake/src examples/snake/assets cmake
 ```
 
@@ -53,9 +53,9 @@ curl -o cmake/CPM.cmake https://raw.githubusercontent.com/cpm-cmake/CPM.cmake/ma
 ### Create Root CMakeLists.txt
 
 ```cmake
-# fith/CMakeLists.txt
+# turmeric/CMakeLists.txt
 cmake_minimum_required(VERSION 3.20)
-project(fith LANGUAGES C)
+project(turmeric LANGUAGES C)
 
 # CPM setup
 include(cmake/CPM.cmake)
@@ -70,10 +70,10 @@ add_subdirectory(examples)
 ### Create Snake CMakeLists.txt
 
 ```cmake
-# fith/examples/snake/CMakeLists.txt
+# turmeric/examples/snake/CMakeLists.txt
 CPMAddPackage(
   NAME raylib
-  GITHUB_REPO raysan5/raylib
+  GITHUB_REPOSITORY raysan5/raylib
   VERSION 5.0
   OPTIONS "BUILD_EXAMPLES OFF"
 )
@@ -95,7 +95,7 @@ add_custom_command(
 ### Create the C Shim
 
 ```c
-// fith/examples/snake/src/rayLibShim.c
+// turmeric/examples/snake/src/rayLibShim.c
 #include <raylib.h>
 
 // Window
@@ -133,15 +133,14 @@ If this compiles, your project setup is correct. The next steps add Turmeric cod
 Create your first Turmeric file that opens a window.
 
 ```turmeric
-;; fith/examples/snake/src/main.tur
-(module main)
+;; turmeric/examples/snake/src/main.tur
 
 (extern-c init-window [^int w ^int h ^cstr title] : void)
 (extern-c close-window [] : void)
 (extern-c window-should-close [] : int)
 (extern-c set-fps [^int fps] : void)
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 1")
   (set-fps 60)
   (while (not (window-should-close))
@@ -151,15 +150,14 @@ Create your first Turmeric file that opens a window.
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/main.tur
-module main
+;; turmeric/examples/snake/src/main.tur
 
 extern-c init-window [^int w ^int h ^cstr title] : void
 extern-c close-window [] : void
 extern-c window-should-close [] : int
 extern-c set-fps [^int fps] : void
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 1")
   set-fps(60)
   while not(window-should-close())
@@ -169,7 +167,7 @@ defn -main []
 
 **What's happening:**
 - `extern-c` declares C functions for FFI
-- `-main` is the entry point
+- `main` is the entry point -- the compiler emits a call to it; a function named `-main` is NOT an entry point and is never invoked
 - Window opens and stays open until you close it
 
 **Test:** Run `./examples/snake/snake` -- you should see a black window.
@@ -186,7 +184,7 @@ Add screen clearing to prevent flickering.
 (extern-c end-drawing [] : void)
 (extern-c clear-background [^int r ^int g ^int b] : void)
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 2")
   (set-fps 60)
   (while (not (window-should-close))
@@ -202,7 +200,7 @@ extern-c begin-drawing [] : void
 extern-c end-drawing [] : void
 extern-c clear-background [^int r ^int g ^int b] : void
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 2")
   set-fps(60)
   while not(window-should-close())
@@ -224,7 +222,7 @@ Draw a white rectangle in the middle of the screen.
 ;; Add to main.tur
 (extern-c draw-rect [^int x ^int y ^int w ^int h ^int r ^int g ^int b] : void)
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 3")
   (set-fps 60)
   (while (not (window-should-close))
@@ -239,7 +237,7 @@ Draw a white rectangle in the middle of the screen.
 ;; Add to main.tur
 extern-c draw-rect [^int x ^int y ^int w ^int h ^int r ^int g ^int b] : void
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 3")
   set-fps(60)
   while not(window-should-close())
@@ -259,8 +257,7 @@ defn -main []
 Introduce a struct to hold game state. This will eventually contain the snake, food, score, etc.
 
 ```turmeric
-;; fith/examples/snake/src/state.tur
-(module state)
+;; turmeric/examples/snake/src/state.tur
 
 (defstruct GameState
   [snake-x : int
@@ -273,8 +270,7 @@ Introduce a struct to hold game state. This will eventually contain the snake, f
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/state.tur
-module state
+;; turmeric/examples/snake/src/state.tur
 
 defstruct GameState
   [snake-x : int
@@ -287,8 +283,7 @@ defn init-state [] : GameState
 ```
 
 ```turmeric
-;; fith/examples/snake/src/main.tur
-(module main)
+;; turmeric/examples/snake/src/main.tur
 (import state)
 
 (extern-c init-window [^int w ^int h ^cstr title] : void)
@@ -303,7 +298,7 @@ defn init-state [] : GameState
 (defn draw-state [^state/GameState s]
   (draw-rect s.snake-x s.snake-y s.snake-w s.snake-h 255 255 255))
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 4")
   (set-fps 60)
   (let [state (state/init-state)]
@@ -316,8 +311,7 @@ defn init-state [] : GameState
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/main.tur
-module main
+;; turmeric/examples/snake/src/main.tur
 import state
 
 extern-c init-window [^int w ^int h ^cstr title] : void
@@ -332,7 +326,7 @@ extern-c draw-rect [^int x ^int y ^int w ^int h ^int r ^int g ^int b] : void
 defn draw-state [^state/GameState s]
   draw-rect(s.snake-x s.snake-y s.snake-w s.snake-h 255 255 255)
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 4")
   set-fps(60)
   let [state state/init-state()]
@@ -375,7 +369,7 @@ Make the rectangle move with arrow keys.
                        s.snake-y))]
     (state/GameState new-x new-y s.snake-w s.snake-h)))
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 5")
   (set-fps 60)
   (let [state (state/init-state)]
@@ -412,7 +406,7 @@ defn update-state [^state/GameState s] : state/GameState
                  s.snake-y))]
     state/GameState(new-x new-y s.snake-w s.snake-h)
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 5")
   set-fps(60)
   let [state state/init-state()]
@@ -437,8 +431,7 @@ defn -main []
 Replace the single rectangle with a snake made of segments stored in a vector.
 
 ```turmeric
-;; fith/examples/snake/src/state.tur
-(module state)
+;; turmeric/examples/snake/src/state.tur
 
 (defstruct Segment [x : int, y : int])
 
@@ -454,8 +447,7 @@ Replace the single rectangle with a snake made of segments stored in a vector.
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/state.tur
-module state
+;; turmeric/examples/snake/src/state.tur
 
 defstruct Segment [x : int, y : int]
 
@@ -471,8 +463,7 @@ defn init-state [] : GameState
 ```
 
 ```turmeric
-;; fith/examples/snake/src/main.tur
-(module main)
+;; turmeric/examples/snake/src/main.tur
 (import state)
 
 ;; ... extern-c declarations ...
@@ -505,7 +496,7 @@ defn init-state [] : GameState
       s))))
   (state/GameState (update-snake s.snake)))
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 6")
   (set-fps 10)  ;; Slower for now
   (let [state (state/init-state)]
@@ -519,8 +510,7 @@ defn init-state [] : GameState
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/main.tur
-module main
+;; turmeric/examples/snake/src/main.tur
 import state
 
 ;; ... extern-c declarations ...
@@ -557,7 +547,7 @@ defn update-state [^state/GameState s] : state/GameState
           s
   state/GameState(update-snake(s.snake))
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 6")
   set-fps(10)
   let [state state/init-state()]
@@ -584,8 +574,7 @@ defn -main []
 Use typeclasses to make drawing polymorphic -- any type that implements `Drawable` can be drawn.
 
 ```turmeric
-;; fith/examples/snake/src/state.tur
-(module state)
+;; turmeric/examples/snake/src/state.tur
 
 (defclass Drawable [a]
   (draw [self : a] : void))
@@ -617,8 +606,7 @@ Use typeclasses to make drawing polymorphic -- any type that implements `Drawabl
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/state.tur
-module state
+;; turmeric/examples/snake/src/state.tur
 
 defclass Drawable [a]
   draw [self : a] : void
@@ -650,8 +638,7 @@ defn init-state [] : GameState
 ```
 
 ```turmeric
-;; fith/examples/snake/src/main.tur
-(module main)
+;; turmeric/examples/snake/src/main.tur
 (import state)
 
 ;; ... extern-c declarations ...
@@ -664,8 +651,7 @@ defn init-state [] : GameState
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/main.tur
-module main
+;; turmeric/examples/snake/src/main.tur
 import state
 
 ;; ... extern-c declarations ...
@@ -689,8 +675,7 @@ defn draw-state [^state/GameState s]
 This is where it gets interesting. Introduce algebraic effects to separate rendering logic from game logic.
 
 ```turmeric
-;; fith/examples/snake/src/effects.tur
-(module effects)
+;; turmeric/examples/snake/src/effects.tur
 
 ;; Define our effects
 (defeffect Render [obj : any] : void)
@@ -698,8 +683,7 @@ This is where it gets interesting. Introduce algebraic effects to separate rende
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/effects.tur
-module effects
+;; turmeric/examples/snake/src/effects.tur
 
 ;; Define our effects
 defeffect Render [obj : any] : void
@@ -707,8 +691,7 @@ defeffect Get-Time [] : float
 ```
 
 ```turmeric
-;; fith/examples/snake/src/state.tur
-(module state)
+;; turmeric/examples/snake/src/state.tur
 (import effects)
 
 (defclass Drawable [a]
@@ -741,8 +724,7 @@ defeffect Get-Time [] : float
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/state.tur
-module state
+;; turmeric/examples/snake/src/state.tur
 import effects
 
 defclass Drawable [a]
@@ -775,8 +757,7 @@ defn init-state [] : GameState
 ```
 
 ```turmeric
-;; fith/examples/snake/src/main.tur
-(module main)
+;; turmeric/examples/snake/src/main.tur
 (import state)
 (import effects)
 
@@ -797,7 +778,7 @@ defn init-state [] : GameState
       (handle-render obj)
       (resume k))))
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 8")
   (set-fps 10)
   (let [initial-state (state/init-state)]
@@ -807,8 +788,7 @@ defn init-state [] : GameState
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/main.tur
-module main
+;; turmeric/examples/snake/src/main.tur
 import state
 import effects
 
@@ -829,7 +809,7 @@ defn game-loop [^state/GameState state]
       handle-render(obj)
       resume(k)
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 8")
   set-fps(10)
   let [initial-state state/init-state()]
@@ -853,8 +833,7 @@ defn -main []
 Add wall and self-collision detection using pattern matching.
 
 ```turmeric
-;; fith/examples/snake/src/state.tur
-(module state)
+;; turmeric/examples/snake/src/state.tur
 (import effects)
 
 ;; ... existing code ...
@@ -902,8 +881,7 @@ Add wall and self-collision detection using pattern matching.
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/state.tur
-module state
+;; turmeric/examples/snake/src/state.tur
 import effects
 
 ;; ... existing code ...
@@ -949,8 +927,7 @@ defn check-collisions [^GameState state] : bool
 ```
 
 ```turmeric
-;; fith/examples/snake/src/main.tur
-(module main)
+;; turmeric/examples/snake/src/main.tur
 (import state)
 (import effects)
 
@@ -980,7 +957,7 @@ defn check-collisions [^GameState state] : bool
       (println (concat "Game Over! Score: " (itoa score)))
       (resume k))))
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 9")
   (set-fps 10)
   (let [initial-state (state/init-state)]
@@ -992,8 +969,7 @@ defn check-collisions [^GameState state] : bool
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/main.tur
-module main
+;; turmeric/examples/snake/src/main.tur
 import state
 import effects
 
@@ -1027,7 +1003,7 @@ defn game-loop [^state/GameState state]
       println(concat("Game Over! Score: " itoa(score)))
       resume(k)
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 9")
   set-fps(10)
   let [initial-state state/init-state()]
@@ -1050,8 +1026,7 @@ defn -main []
 Add food that the snake can eat, with score tracking.
 
 ```turmeric
-;; fith/examples/snake/src/state.tur
-(module state)
+;; turmeric/examples/snake/src/state.tur
 (import effects)
 
 ;; ... existing code ...
@@ -1114,8 +1089,7 @@ Add food that the snake can eat, with score tracking.
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/state.tur
-module state
+;; turmeric/examples/snake/src/state.tur
 import effects
 
 ;; ... existing code ...
@@ -1181,8 +1155,7 @@ defn check-collisions [^GameState state] : (or bool GameState)
 ```
 
 ```turmeric
-;; fith/examples/snake/src/main.tur
-(module main)
+;; turmeric/examples/snake/src/main.tur
 (import state)
 (import effects)
 
@@ -1211,7 +1184,7 @@ defn check-collisions [^GameState state] : (or bool GameState)
       (println (concat "Game Over! Score: " (itoa score)))
       (resume k))))
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 10")
   (set-fps 10)
   (let [initial-state (state/init-state)]
@@ -1223,8 +1196,7 @@ defn check-collisions [^GameState state] : (or bool GameState)
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/main.tur
-module main
+;; turmeric/examples/snake/src/main.tur
 import state
 import effects
 
@@ -1255,7 +1227,7 @@ defn game-loop [^state/GameState state]
       println(concat("Game Over! Score: " itoa(score)))
       resume(k)
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 10")
   set-fps(10)
   let [initial-state state/init-state()]
@@ -1279,8 +1251,7 @@ defn -main []
 Properly handle game over with a clean exit and final score display.
 
 ```turmeric
-;; fith/examples/snake/src/main.tur
-(module main)
+;; turmeric/examples/snake/src/main.tur
 (import state)
 (import effects)
 
@@ -1312,7 +1283,7 @@ Properly handle game over with a clean exit and final score display.
       ;; Wait a bit before exiting
       (resume k))))
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 11")
   (set-fps 10)
   (let [initial-state (state/init-state)]
@@ -1323,8 +1294,7 @@ Properly handle game over with a clean exit and final score display.
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/main.tur
-module main
+;; turmeric/examples/snake/src/main.tur
 import state
 import effects
 
@@ -1356,7 +1326,7 @@ defn game-loop [^state/GameState state]
       ;; Wait a bit before exiting
       resume(k)
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 11")
   set-fps(10)
   let [initial-state state/init-state()]
@@ -1375,12 +1345,11 @@ defn -main []
 Use `defer` to ensure the window is always closed, even if an error occurs.
 
 ```turmeric
-;; fith/examples/snake/src/main.tur
-(module main)
+;; turmeric/examples/snake/src/main.tur
 (import state)
 (import effects)
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake - Step 12")
   (defer (close-window))  ;; Automatically called on scope exit
   (set-fps 10)
@@ -1397,12 +1366,11 @@ Use `defer` to ensure the window is always closed, even if an error occurs.
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/main.tur
-module main
+;; turmeric/examples/snake/src/main.tur
 import state
 import effects
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake - Step 12")
   defer(close-window())
   set-fps(10)
@@ -1670,8 +1638,7 @@ defn update-snake [^state/Snake snake ^float dt] : state/Snake
 Here's the final, polished game loop:
 
 ```turmeric
-;; fith/examples/snake/src/main.tur
-(module main)
+;; turmeric/examples/snake/src/main.tur
 (import state)
 (import effects)
 
@@ -1742,7 +1709,7 @@ Here's the final, polished game loop:
       (while (not (is-key-down KEY_ESCAPE)))
       (resume k))))
 
-(defn -main []
+(defn main []
   (init-window 800 600 "Turmeric Snake")
   (defer (close-window))
   (set-fps 60)
@@ -1753,8 +1720,7 @@ Here's the final, polished game loop:
 ```
 
 ```sweet-exp
-;; fith/examples/snake/src/main.tur
-module main
+;; turmeric/examples/snake/src/main.tur
 import state
 import effects
 
@@ -1826,7 +1792,7 @@ defn game-loop [^state/GameState state]
       while not(is-key-down(KEY_ESCAPE))
       resume(k)
 
-defn -main []
+defn main []
   init-window(800 600 "Turmeric Snake")
   defer(close-window())
   set-fps(60)
@@ -1841,20 +1807,20 @@ defn -main []
 ## Final Project Structure
 
 ```
-fith/
-├── CMakeLists.txt
-├── cmake/
-│   └── CPM.cmake
-├── examples/
-│   └── snake/
-│       ├── CMakeLists.txt
-│       └── src/
-│           ├── main.tur          # Entry point, game loop, FFI
-│           ├── state.tur         # Game state, typeclasses
-│           ├── effects.tur       # Effect definitions
-│           └── rayLibShim.c      # C shim for Raylib
-└── build/
-```text
+turmeric/
+|-- CMakeLists.txt
+|-- cmake/
+|   `-- CPM.cmake
+|-- examples/
+|   `-- snake/
+|       |-- CMakeLists.txt
+|       `-- src/
+|           |-- main.tur          # Entry point, game loop, FFI
+|           |-- state.tur         # Game state, typeclasses
+|           |-- effects.tur       # Effect definitions
+|           `-- rayLibShim.c      # C shim for Raylib
+`-- build/
+```
 
 ---
 
@@ -1895,16 +1861,16 @@ Once you've completed this tutorial, consider:
 ## Summary
 
 You've now built a complete Snake game using:
-- ✅ CMake + CPM for dependency management
-- ✅ Raylib for graphics and input
-- ✅ Turmeric for game logic
-- ✅ FFI for C interop
-- ✅ Structs for game state
-- ✅ Vectors for snake segments
-- ✅ Typeclasses for polymorphic drawing
-- ✅ Algebraic effects for clean architecture
-- ✅ Pattern matching for game logic
-- ✅ `defer` for resource safety
-- ✅ `match` for control flow
+- CMake + CPM for dependency management
+- Raylib for graphics and input
+- Turmeric for game logic
+- FFI for C interop
+- Structs for game state
+- Vectors for snake segments
+- Typeclasses for polymorphic drawing
+- Algebraic effects for clean architecture
+- Pattern matching for game logic
+- `defer` for resource safety
+- `match` for control flow
 
 The game showcases Turmeric's most powerful features while maintaining clean, modular code. The effect system in particular demonstrates how Turmeric can provide a clean separation between game logic and rendering/input systems.

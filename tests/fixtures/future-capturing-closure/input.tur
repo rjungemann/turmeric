@@ -6,7 +6,7 @@
 ;; { thunk, env... } -- the thin cast jumped to the box address and segfaulted.
 ;; The callback params are now ^fat and the bodies fat-dispatch through slot 0,
 ;; so both representations flow through the same path.  See
-;; docs/reported/future-map-thin-call-capturing-closure.md.
+;; docs/archive/history/future-map-thin-call-capturing-closure.md.
 
 (load "stdlib/future.tur")
 

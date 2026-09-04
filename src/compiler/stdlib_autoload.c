@@ -2,6 +2,7 @@
 
 #include "diag.h"
 #include "reader.h"
+#include "runtime/globals.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,9 +46,24 @@ static const char *const autoload_files_[] = {
     "schema.tur",
     "sym.tur",
     "unique.tur",
+    /* SX1: backtrackable state.  Was gated behind the `backtrackable-state`
+     * experiment until it graduated 2026-08-29; an ordinary list member now. */
+    "trail.tur",
     NULL
 };
 
+/* SX1 (solver-extension-plan) GRADUATED 2026-08-29.  stdlib/trail.tur used to
+ * be spliced in here only when the `backtrackable-state` experiment was on --
+ * gating the autoload rather than a call site, so that with the experiment off
+ * the module was simply absent and `bt-set!` was an unknown function like any
+ * other.  The experiment is gone and trail.tur is an ordinary member of
+ * `autoload_files_` above, so this is now a plain accessor.
+ *
+ * Kept as a function rather than collapsed into the array because both front
+ * ends (the CLI and src/web/wasm_lsp.c) go through it, and because
+ * tur_stdlib_prepend_forms reads the list through this accessor -- reading the
+ * raw array there once made the single-file path disagree with project mode
+ * about what was in scope. */
 const char *const *tur_stdlib_autoload_files(void) {
     return autoload_files_;
 }
@@ -90,33 +106,49 @@ uint32_t tur_stdlib_prepend_forms(Arena *arena, SymbolTable *st,
                                   uint8_t *file_id_in_out) {
     if (!stdlib_dir || !*stdlib_dir) stdlib_dir = "stdlib";
 
+    /* Through the accessor, not the raw array: that is where the SX1
+     * experiment gate adds trail.tur, and reading `autoload_files_` directly
+     * here meant the single-file path silently ignored it while project mode
+     * honoured it -- the same program compiling two different ways. */
+    const char *const *files = tur_stdlib_autoload_files();
+
     int no_stdlib_skip_from = -1;
     if (no_auto_stdlib) {
         const char *input_base = basename_of(entry_path);
-        for (int j = 0; autoload_files_[j] != NULL; j++) {
-            if (strcmp(input_base, autoload_files_[j]) == 0) {
+        for (int j = 0; files[j] != NULL; j++) {
+            if (strcmp(input_base, files[j]) == 0) {
                 no_stdlib_skip_from = j;
                 break;
             }
         }
     }
 
+    /* SX1: recomputed per call, never accumulated.  The REPL and the harnesses
+     * run several compiles in one process, and a sticky flag would let a compile
+     * that loaded trail.tur license the guard in one that did not. */
+    g_trail_autoloaded = false;
+
     uint32_t total = 0;
     Form **all = NULL;
-    for (int i = 0; autoload_files_[i] != NULL; i++) {
+    for (int i = 0; files[i] != NULL; i++) {
         if (no_stdlib_skip_from >= 0 && i >= no_stdlib_skip_from) continue;
         char path_buf[4096];
         int pn = snprintf(path_buf, sizeof(path_buf), "%s/%s",
-                          stdlib_dir, autoload_files_[i]);
+                          stdlib_dir, files[i]);
         if (pn < 0 || (size_t)pn >= sizeof(path_buf)) {
             fprintf(stderr, "tur: stdlib path too long for '%s' (dir='%s')\n",
-                    autoload_files_[i], stdlib_dir);
+                    files[i], stdlib_dir);
             continue;
         }
         char *stdlib_src = NULL;
         size_t stdlib_len = 0;
         if (read_file_quiet(path_buf, &stdlib_src, &stdlib_len) != 0)
             continue;
+
+        /* Set only after the read SUCCEEDS: a missing stdlib/trail.tur is
+         * skipped silently above, and its autolink marker would be missing from
+         * the output too, so the guard must not be emitted for it either. */
+        if (strcmp(files[i], "trail.tur") == 0) g_trail_autoloaded = true;
 
         char *src_copy = (char *)arena_alloc(arena, stdlib_len);
         memcpy(src_copy, stdlib_src, stdlib_len);

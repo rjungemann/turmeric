@@ -1,0 +1,18 @@
+# Examples that pass `tur check` but that tests/check-examples.sh must NOT run,
+# with the reason. Everything else that checks clean is RUN and must exit 0.
+#
+# Added 2026-08-21. The list is empty on purpose: every example that compiles
+# today also runs today, and that is the state worth defending. `tur check`
+# passing was mistaken for "works" twice in this tree's history -- most
+# expensively when all five datalog examples type-checked and every one of them
+# segfaulted, because `rvec-get` did `return (int)vec->data[i];` and truncated a
+# 64-bit datum pointer to 32 bits. A check-only sweep cannot see that; a run
+# sweep sees it immediately.
+#
+# Add a row here (path, then a reason) only for an example that genuinely
+# cannot run in CI -- one that needs a display, a network listener, or an
+# interactive input. "It crashes" is not a reason to add a row; it is the
+# finding the sweep exists to produce.
+
+examples/snake/src/main.tur   opens a raylib window (needs a display and the raylib C shim linked by its own CMakeLists)
+examples/guestbook/src/main.tur   binds an HTTP listener and serves forever (tests/run-guestbook.sh drives it with GUESTBOOK_MAX_REQUESTS instead)

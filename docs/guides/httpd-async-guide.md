@@ -40,8 +40,8 @@ fiber whose body runs the non-blocking version of the request lifecycle:
 - `send` loop with `EWOULDBLOCK` -> `local-park-fd WRITE`.
 - HTTP/1.1 keep-alive loop, or close.
 
-The whole thing runs on **one** thread by default (resolved OQ3 -- one
-group, one reactor; shard later if measurement demands it).
+The whole thing runs on **one** thread by default (one group, one
+reactor; shard later if measurement demands it).
 
 ```turmeric
 (load "stdlib/httpd.tur")

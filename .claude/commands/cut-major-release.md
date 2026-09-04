@@ -149,6 +149,10 @@ Do not proceed past this step without explicit confirmation.
 
 In parallel:
 1. Write `NEW` to `VERSION` (no trailing newline beyond the existing format).
+1b. Write `NEW` to `stdlib/VERSION` too. `tur` reads this stamp to tell its
+   own stdlib from another release's; a stale one makes a mismatched stdlib
+   look like a match AND makes the correct one warn. `ctest -R
+   tur_stdlib_version_stamp` fails if the two files disagree.
 2. Edit `src/web/wasm_glue.h` -- update the `TURMERIC_VERSION "<OLD>"`
    define to `TURMERIC_VERSION "<NEW>"`.
 2b. Edit `web/public/sw.js` -- update the `CACHE_VERSION = 'tur-try-v1-<OLD>'`
@@ -166,7 +170,7 @@ Do not commit yet.
 ## Step 6: Commit locally
 
 ```sh
-git add VERSION src/web/wasm_glue.h web/public/sw.js CHANGELOG.md README.md
+git add VERSION stdlib/VERSION src/web/wasm_glue.h web/public/sw.js CHANGELOG.md README.md
 git commit -m "$(cat <<'EOF'
 chore: release v<NEW>
 
@@ -222,8 +226,11 @@ git push origin "v<NEW>"
 ```
 
 The tag push triggers `.github/workflows/release.yml`, which builds
-the three platform binaries (linux-x86_64, linux-aarch64, macos-arm64)
-and publishes the GitHub Release.
+the three platform binaries (linux-x86_64, linux-aarch64, macos-arm64),
+packages the rendered documentation as `turmeric-docs-v<NEW>.tar.gz`
+(OD4 -- what `tur docs --open` reads once unpacked), and publishes the
+GitHub Release. The docs job runs from the generators in `tools/`; it
+does not rewrite `stdlib/docstrings.tur`, so it cannot dirty the tree.
 
 ## Step 9: Verify
 

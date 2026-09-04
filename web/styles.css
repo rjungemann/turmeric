@@ -301,9 +301,19 @@ pre {
     padding: 0;
 }
 
+/* `min-width: 0` is load-bearing, not boilerplate. As a flex item this box
+   defaults to `min-width: auto`, so it cannot shrink below the min-content
+   width of the two panes. Push the split handle far enough that the console
+   pane hits that floor and the container overflows `.main` -- and because
+   .editor-pane's basis is `calc(var(--split-h) * 100%)`, the fatter container
+   makes the pane fatter, which makes the container fatter again. Monaco's
+   automaticLayout observer unwinds that loop one pixel per frame, so the whole
+   layout visibly creeps for a second or more after the pointer is released.
+   Flooring the container at 0 keeps the percentage resolving against .main. */
 .repl-container {
     flex: 1;
     display: flex;
+    min-width: 0;
     min-height: 0;
     gap: 0;
 }
@@ -412,8 +422,17 @@ body.split-dragging * {
     align-items: center;
     gap: 4px;
     padding: 0 8px;
-    justify-content: flex-end;
 }
+/* Right-aligned while the row fits, overflowing off the *end* when it does
+   not. `justify-content: flex-end` looks equivalent but is not: it puts the
+   overflow past the start edge, which a scroll container cannot reach
+   (scrollWidth stays == clientWidth, scrollLeft is pinned at 0), so Run and
+   Trace were clipped away with no way to scroll them back. An auto start
+   margin right-aligns the same way when there is free space and collapses to
+   zero when there isn't. */
+.editor-actions > :first-child { margin-inline-start: auto; }
+/* Buttons keep their size and push the row wider; they do not compress. */
+.editor-actions > * { flex: 0 0 auto; }
 .editor-tabs::-webkit-scrollbar,
 .editor-actions::-webkit-scrollbar { display: none; }
 .editor-tabs.has-overflow,
@@ -477,6 +496,22 @@ body.split-dragging * {
 
 .tab-label {
     pointer-events: none;
+}
+
+/* Read-only stdlib buffers opened by go-to-definition
+   (try-turmeric-navigation-and-minimap-plan M4). The padlock says the tab
+   will not accept typing; the italic label says it is not one of the user's
+   own files. Both are visible before a keystroke is wasted on it. */
+.tab-lock {
+    margin-right: 6px;
+    font-size: 9px;
+    line-height: 1;
+    opacity: 0.75;
+    pointer-events: none;
+    flex-shrink: 0;
+}
+.tab-button.read-only .tab-label {
+    font-style: italic;
 }
 
 .tab-close {
@@ -785,6 +820,7 @@ body.split-dragging * {
 .repl-input-row {
     height: 44px;
     display: flex;
+    position: relative;   /* anchor for the prompt's own placeholder */
     align-items: center;
     gap: 8px;
     padding: 0 16px;
@@ -825,21 +861,87 @@ body.split-dragging * {
     opacity: 1;
 }
 
+/* W3: the transcript's hover card. Positioned in the document body rather than
+   inside the console so it is never clipped by the console's own scroll. */
+.console-hover-card {
+    position: fixed;
+    z-index: 70;
+    max-width: 420px;
+    max-height: 240px;
+    overflow: auto;
+    padding: 8px 10px;
+    border: 1px solid var(--border-mid);
+    border-radius: 6px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+}
+
+/* W1: the prompt hosts a single-line Monaco editor. The row is a fixed height
+   and the editor fills it; Monaco supplies its own caret, selection and
+   suggest widget, so everything this rule used to set on an <input> is now
+   either Monaco's or unnecessary. */
 .repl-input {
     flex: 1;
+    min-width: 0;
+    height: 22px;
+    position: relative;   /* anchor for the placeholder below */
+    overflow: hidden;
+}
+
+.repl-input .monaco-editor,
+.repl-input .monaco-editor .overflow-guard {
     background: transparent;
-    border: none;
-    outline: none;
-    color: var(--text-primary);
+}
+
+.repl-input .monaco-editor .margin,
+.repl-input .monaco-editor-background {
+    background: transparent;
+}
+
+/* The suggest widget has to escape a 22px-tall, overflow:hidden row, so it is
+   rendered into the document body (`overflowWidgetsDomNode`) rather than
+   inside the editor. This keeps it above the console. */
+/* Deliberately an id selector. The node also carries `monaco-editor` so the
+   hoisted suggest widget inherits Monaco's `--vscode-*` colors and widget
+   rules, and Monaco injects its stylesheet after this one -- a class selector
+   here loses to `.monaco-editor { position: relative }`, which drops a
+   full-width box into normal flow at the end of <body>. */
+#repl-suggest-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 60;
+    /* ... and for the same reason the box itself has to be neutralised.
+       `.monaco-editor` also carries `width/height: 100%` and an opaque
+       `background-color`, which on a body-level node is a full-viewport
+       curtain over the app. The widgets inside are `position: fixed`
+       (fixedOverflowWidgets), so a zero-sized host still places them. */
+    width: 0;
+    height: 0;
+    background: transparent;
+}
+
+/* Shown until the first keystroke. An <input>'s ::placeholder has no Monaco
+   equivalent, so the row draws its own. */
+.repl-input.repl-input-empty::after {
+    content: attr(data-placeholder);
+    position: absolute;
+    left: 0;
+    top: 1px;
+    pointer-events: none;
+    color: var(--text-dim);
     font-family: var(--font-mono);
     font-size: 12.5px;
     line-height: 1.6;
-    caret-color: var(--gold);
 }
 
-.repl-input::placeholder { color: var(--text-dim); }
-
-.repl-input:disabled {
+.repl-input-disabled {
     opacity: 0.35;
     cursor: not-allowed;
 }
@@ -1088,6 +1190,13 @@ body.split-dragging * {
 /* ==========================================================================
  * Buttons
  * ========================================================================== */
+
+/* `display: inline-flex` here is a class rule and beats the user agent's
+   `[hidden] { display: none }`, so setting the attribute alone does not hide a
+   .btn -- the same trap .lsp-status[hidden] already carries a note about. The
+   Back-from-definition button is hidden that way (renderJumpBack), and without
+   this it sat in the toolbar from page load. */
+.btn[hidden] { display: none; }
 
 .btn {
     display: inline-flex;
@@ -1563,9 +1672,15 @@ body.split-dragging * {
     }
 }
 
-/* The overflow popover is a mobile-only affordance; on desktop the
-   buttons themselves are present in the tab bar. */
-.more-wrap { display: none; position: relative; }
+/* The overflow popover started out mobile-only, on the reasoning that on
+   desktop the buttons themselves are present in the tab bar. Two rows have
+   since landed in it that have no button of their own -- "Force update", and
+   the minimap toggle (try-turmeric-navigation-and-minimap-plan M1) -- so
+   hiding it on desktop makes those unreachable on exactly the widths where
+   the minimap is on. It stays visible at every width; what it *contains*
+   still varies, because the duplicated commands only matter once the
+   @media rule below has hidden their buttons. */
+.more-wrap { display: inline-flex; position: relative; }
 .examples-wrap { position: relative; display: inline-flex; }
 .more-menu {
     position: fixed;
@@ -1601,6 +1716,167 @@ body.split-dragging * {
     padding: 6px 12px 2px;
 }
 
+/* Symbols outline (try-turmeric-navigation-and-minimap-plan M2): the same
+   .more-menu popover shell as Examples and Language, with a scrolling list of
+   rows filled on open. Deliberately not a docked pane -- the playground is
+   already a three-way split plus a docs overlay. */
+.symbols-wrap { position: relative; display: inline-flex; }
+.symbols-menu { min-width: 260px; max-width: 380px; }
+.symbols-list {
+    display: flex;
+    flex-direction: column;
+    /* Tall enough to be an outline, short enough that the popover never runs
+       off the bottom of a phone. Rows are 28px. */
+    max-height: min(50vh, 360px);
+    overflow-y: auto;
+}
+.symbol-item {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    padding: 5px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.symbol-item:hover, .symbol-item:focus {
+    background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+    outline: none;
+}
+.symbol-item-name {
+    font-family: var(--font-mono, monospace);
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.symbol-item-kind {
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+/* Where the caret is. A left rule rather than a background wash so it still
+   reads against the hover state the pointer is sitting on. */
+.symbol-item.is-current {
+    box-shadow: inset 2px 0 0 var(--gold);
+}
+.symbol-item.is-current .symbol-item-name { color: var(--gold-bright); }
+.symbols-empty {
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 6px 12px;
+    font-style: italic;
+}
+.symbols-filter {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    border-top: 1px solid var(--border);
+    border-radius: 0 0 4px 4px;
+    margin-top: 4px;
+}
+.symbols-filter-key {
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+
+/* Language picker (try-turmeric-lang-toggle-plan): a dialect radio group +
+   layer checkboxes popover that edits the #lang line in place. Reuses the
+   .more-menu popover shell. */
+.lang-wrap {
+    position: relative;
+    display: inline-flex;
+    /* The toolbar is a nowrap flex row that scrolls; letting this wrapper
+       shrink would squeeze the button instead of scrolling the row. */
+    flex: 0 0 auto;
+}
+.btn-lang {
+    padding: 5px 10px;
+    font-size: 12px;
+    font-family: var(--font-mono, monospace);
+    color: var(--text-primary);
+    min-width: 58px;
+    /* Every other button in this row holds a 16px SVG, so their content box is
+       16px and they come out 28px tall. This one holds 12px text against
+       .btn's `line-height: 1`, which is a 12px content box and a 24px button --
+       4px short of all of its neighbours. Pad the line box to the same 16px
+       rather than hard-coding a height, so the two stay tied to one measure. */
+    line-height: 16px;
+    /* The label is a whole word ("neoteric", "s-expr"); half of one is not a
+       useful thing to show. .editor-actions scrolls, so on a narrow screen the
+       row moves and the word stays intact. */
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
+#lang-btn-label {
+    white-space: nowrap;
+    overflow: visible;
+}
+.lang-menu { min-width: 260px; max-width: 380px; }
+.lang-menu-cols { display: flex; flex-direction: row; gap: 4px; }
+.lang-menu-col { flex: 1 1 auto; min-width: 0; }
+.lang-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-primary);
+    padding: 5px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.lang-row:hover { background: var(--bg-hover, rgba(255, 255, 255, 0.06)); }
+.lang-row input { flex: 0 0 auto; margin: 0; align-self: center; accent-color: var(--gold); }
+.lang-row-name { white-space: nowrap; }
+.lang-row-summary {
+    font-size: 11px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+.lang-row-disabled { opacity: 0.5; cursor: not-allowed; }
+.lang-row-empty {
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 5px 12px;
+    font-style: italic;
+}
+.lang-chip {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--gold);
+    border: 1px solid var(--gold);
+    border-radius: 3px;
+    padding: 0 4px;
+    align-self: center;
+    white-space: nowrap;
+}
+/* One-line confirm in the footer, matching how the Clear button's
+   shift-click reset already behaves: warn, don't modal. */
+.lang-menu-footer {
+    font-size: 11px;
+    color: var(--text-dim);
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+    padding: 6px 12px 2px;
+}
+/* Narrow popovers on small screens: stack the two columns. */
+@media (max-width: 480px) {
+    .lang-menu-cols { flex-direction: column; }
+}
+
 @media (max-width: 600px) {
     /* Collapse Solve/Clear/Format/Share/Examples into the ⋯ menu so
        the tab bar has room for tabs. Run stays visible. */
@@ -1610,9 +1886,15 @@ body.split-dragging * {
     .editor-actions > #share-btn,
     .editor-actions > #download-btn,
     .editor-actions > #open-btn,
+    .editor-actions > .lang-wrap,
+    .editor-actions > .symbols-wrap,
     .editor-actions > .examples-wrap { display: none; }
-    .more-wrap { display: inline-flex; }
 }
+
+/* A checkbox row in the popover reports state in its label ("Show minimap" /
+   "Hide minimap"), so there is no tick glyph to align. The marker is there for
+   assistive tech via aria-checked; the visual is the verb. */
+.more-item[role="menuitemcheckbox"] { display: block; }
 
 /* Monaco's on-screen-keyboard widget overlaps the editor surface on
    touch devices; the system soft keyboard already handles input. */
@@ -1640,7 +1922,10 @@ body.split-dragging * {
    override to coarse pointers rather than the width-based fallback -- a
    narrow desktop window should keep the 12.5px input. */
 @media (pointer: coarse) {
-    #repl-input { font-size: 16px !important; }
+    #repl-input .monaco-editor,
+    #repl-input .monaco-editor .view-line,
+    #repl-input.repl-input-empty::after { font-size: 16px !important; }
+    #repl-input { height: 26px; }
 }
 
 @media (max-width: 768px) {
@@ -1662,6 +1947,316 @@ body.split-dragging * {
 }
 
 /* ==========================================================================
+ * In-app docs browser (OD2)
+ *
+ * A full-screen overlay over the REPL, not a navigation: opening docs never
+ * touches the editor buffer, the console, or the WASM session.
+ *
+ * Article typography comes from /docs-pack/guide.css -- the same GUIDE_CSS the
+ * site's guide pages inline, emitted into the docs pack by genguides.py. The
+ * rules below are the pane's own chrome (shell, nav column, search results)
+ * and the few places the pane has to adapt the shared guide rules to living
+ * inside a panel rather than a page.
+ * ========================================================================== */
+
+.docs-overlay {
+    background: rgba(0, 0, 0, 0.82);
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 2vh 2vw;
+}
+
+.docs-shell {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-mid);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    animation: slideIn 0.18s ease-out;
+}
+
+.docs-topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 10px 0 8px;
+    height: 44px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-surface);
+}
+
+.docs-brand {
+    font-family: var(--font-serif, serif);
+    font-size: 14px;
+    color: var(--gold);
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+}
+
+.docs-search-wrap {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+}
+
+.docs-search-icon {
+    position: absolute;
+    left: 9px;
+    color: var(--text-dim);
+    pointer-events: none;
+}
+
+.docs-search-input {
+    width: 100%;
+    height: 28px;
+    padding: 0 10px 0 28px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-primary);
+    background: var(--bg-base);
+    border: 1px solid var(--border-mid);
+    border-radius: var(--radius-md);
+    outline: none;
+}
+
+.docs-search-input:focus { border-color: var(--gold-line); }
+.docs-search-input::placeholder { color: var(--text-dim); }
+
+.docs-status {
+    font-size: 11px;
+    color: var(--text-sec);
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.docs-status.partial { color: var(--amber); }
+
+/* site.css styles the bare `nav` selector as the site's fixed header bar, and
+ * a guide fragment legitimately contains <nav class="guide-toc"> for its
+ * in-body Contents box. Unstyled, that box tears itself out of the article and
+ * pins itself across the top of the viewport. Undo the inherited positioning
+ * here rather than changing markup the website also renders.
+ *
+ * :where() keeps this at zero added specificity, so the .guide-toc rules in
+ * /docs-pack/guide.css -- which loads after this file -- still win on the
+ * properties they care about (background, padding, border). */
+.docs-shell :where(nav) {
+    position: static;
+    top: auto;
+    left: auto;
+    right: auto;
+    z-index: auto;
+    height: auto;
+    display: block;
+    padding: 0;
+    gap: 0;
+    align-items: initial;
+    background: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-bottom: none;
+}
+
+.docs-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.docs-nav {
+    width: 260px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    padding: 12px 8px 24px;
+    border-right: 1px solid var(--border);
+    background: var(--bg-surface);
+}
+
+.docs-overlay.nav-collapsed .docs-nav { display: none; }
+
+.docs-nav-section { margin-bottom: 16px; }
+
+.docs-nav-section h4 {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+    margin: 0 0 6px 8px;
+}
+
+.docs-nav-group > summary {
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-sec);
+    padding: 3px 8px;
+    border-radius: var(--radius-md);
+    list-style: none;
+}
+
+.docs-nav-group > summary::-webkit-details-marker { display: none; }
+.docs-nav-group > summary::before { content: '▸ '; color: var(--text-dim); }
+.docs-nav-group[open] > summary::before { content: '▾ '; }
+.docs-nav-group > summary:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.docs-nav ul {
+    list-style: none;
+    margin: 2px 0 6px;
+    padding: 0 0 0 14px;
+}
+
+.docs-nav li a {
+    display: block;
+    padding: 3px 8px;
+    font-size: 12px;
+    color: var(--text-primary);
+    text-decoration: none;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.docs-nav li a:hover { background: var(--bg-hover); color: var(--gold-bright); }
+
+.docs-nav li a.active {
+    background: var(--gold-subtle);
+    color: var(--gold-bright);
+    box-shadow: inset 2px 0 0 var(--gold);
+}
+
+.docs-results li a {
+    white-space: normal;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.docs-result-title { display: inline; font-family: var(--font-mono); }
+
+.docs-result-kind {
+    display: inline;
+    margin-left: 6px;
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.docs-result-desc {
+    display: block;
+    font-size: 11px;
+    color: var(--text-sec);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.docs-empty {
+    padding: 16px;
+    font-size: 12px;
+    color: var(--text-sec);
+}
+
+.docs-article {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+    padding: 24px 32px 64px;
+    scroll-behavior: smooth;
+    /* The shared guide stylesheet sizes for a full-width page; a panel wants
+       a comfortable measure, centred. */
+    max-width: none;
+}
+
+.docs-article > * { max-width: 74ch; }
+.docs-article pre,
+.docs-article table,
+.docs-article .code-card { max-width: none; }
+
+/* A code block in the pane carries a "load into editor" button. Positioning is
+   on the <pre>, so the button rides along with a horizontally scrolled block
+   instead of drifting over the code. */
+.docs-article pre { position: relative; }
+
+.docs-load-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    padding: 2px 8px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-sec);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-mid);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--transition-normal), color var(--transition-normal);
+}
+
+.docs-article pre:hover .docs-load-btn,
+.docs-load-btn:focus { opacity: 1; }
+
+.docs-load-btn:hover {
+    color: var(--gold-bright);
+    border-color: var(--gold-line);
+}
+
+.docs-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    height: 30px;
+    flex-shrink: 0;
+    padding: 0 14px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-surface);
+    font-size: 11px;
+    color: var(--text-dim);
+}
+
+.docs-site-link { color: var(--text-sec); text-decoration: none; }
+.docs-site-link:hover { color: var(--gold-bright); }
+
+/* Mobile: the pane becomes a full-screen sheet and the nav column collapses
+   behind the toolbar toggle, since 260px of tree plus an article does not fit. */
+@media (max-width: 768px) {
+    .docs-overlay { padding: 0; }
+    .docs-shell { border: none; border-radius: 0; }
+    /* Shown, the nav floats over the article rather than splitting a phone's
+       width in two. It starts collapsed here -- openDocsPane() seeds
+       docsNavCollapsed from the same breakpoint -- so a tap on Docs lands on
+       the page, not on a table of contents. */
+    .docs-nav {
+        position: absolute;
+        top: 44px;
+        bottom: 30px;
+        left: 0;
+        width: 82%;
+        max-width: 320px;
+        z-index: 2;
+        box-shadow: var(--shadow-lg);
+    }
+    .docs-article { padding: 16px 18px 48px; }
+    .docs-brand { display: none; }
+    .docs-status { display: none; }
+    .docs-load-btn { opacity: 1; }
+}
+
+@media (min-width: 769px) {
+    /* The toggle only earns its place where the nav can actually be hidden to
+       gain reading width; on mobile it is the nav's only opener. */
+    .docs-nav-toggle { display: none; }
+}
+
+/* ==========================================================================
  * Print Styles
  * ========================================================================== */
 
@@ -1669,4 +2264,133 @@ body.split-dragging * {
     .header, .footer, .editor-actions, .console-actions { display: none; }
     .repl-container { display: block; }
     .editor-pane, .console-pane { break-inside: avoid; }
+}
+
+/* ---------------------------------------------------------------------------
+ * T3: the time-travel timeline (try-turmeric-tracer-plan)
+ *
+ * Sits between the console header and the transcript, so scrubbing changes
+ * what is directly below the controls that drive it.
+ * ------------------------------------------------------------------------- */
+
+.trace-panel {
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    font-size: 12px;
+    flex: 0 0 auto;
+}
+
+.trace-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+}
+
+.trace-slider {
+    flex: 1 1 auto;
+    min-width: 80px;
+    accent-color: var(--accent-color);
+    cursor: pointer;
+}
+
+.trace-pos {
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.trace-site {
+    color: var(--accent-color);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 40%;
+}
+
+.trace-banner {
+    padding: 4px 10px 6px;
+    color: var(--text-secondary);
+    border-top: 1px solid var(--border-color);
+}
+
+.trace-frames-row {
+    display: flex;
+    gap: 1px;
+    background: var(--border-color);
+    border-top: 1px solid var(--border-color);
+    max-height: 140px;
+}
+
+.trace-frames,
+.trace-locals {
+    background: var(--bg-secondary);
+    overflow-y: auto;
+    padding: 4px 0;
+}
+
+.trace-frames { flex: 0 0 40%; }
+.trace-locals { flex: 1 1 60%; }
+
+.trace-frame {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 3px 10px;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.trace-frame:hover  { background: var(--bg-tertiary); }
+.trace-frame.active { background: var(--bg-tertiary); color: var(--accent-color); }
+
+.trace-frame-fn   { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trace-frame-line { color: var(--text-muted); white-space: nowrap; }
+
+.trace-local {
+    display: flex;
+    gap: 8px;
+    padding: 3px 10px;
+}
+
+.trace-local-name { color: var(--accent-color); flex: 0 0 auto; }
+.trace-local-val  {
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.trace-empty {
+    padding: 3px 10px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* The step the cursor is on. A left marker rather than a glyph-margin icon:
+ * the editor is created without a glyph margin, and turning one on for this
+ * would shift the gutter for every user who never opens the timeline. */
+.trace-current-line {
+    background: var(--gold-glow);
+}
+
+.trace-current-marker {
+    background: var(--accent-color);
+    width: 3px !important;
+    margin-left: 2px;
+}
+
+/* The expression the cursor is on, inside that line. A step is one evaluation
+ * rather than one line, so several consecutive steps share a line -- without
+ * this the marker sits still through all of them and the scrub looks stuck.
+ * Stronger than the line wash it sits on top of, and underlined so it still
+ * reads where the two overlap. */
+.trace-current-expr {
+    background: var(--gold-glow);
+    border-bottom: 1px solid var(--accent-color);
 }

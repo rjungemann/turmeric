@@ -63,6 +63,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 - **[binding-forms-guide.md](binding-forms-guide.md)** -- Body-level `def`, `letrec`, and named-let -- the three local binding idioms that complement `let` and `defn`
 - **[data-literals-guide.md](data-literals-guide.md)** -- Compact literal syntax for maps, vecs, and sets using `#map{...}`, `#set{...}`, and `[...]`
+- **[macros-guide.md](macros-guide.md)** -- `defmacro`: quasiquote/unquote/splice, manual hygiene with `gensym`, `^syntax` parameters, recursion over arguments, type interpolation in templates, and the compile-time evaluator's deliberate limits
 - **[mutable-globals-guide.md](mutable-globals-guide.md)** -- `def ^mut`, what the compiler checks about a global write, and the concurrency story -- including what it deliberately does not cover
 - **[numeric-tower-guide.md](numeric-tower-guide.md)** -- Exact `Rational` and hand-written `Complex` arithmetic, the `#rat{...}` / `#cx{...}` literals, and `Num`-typeclass operator overloading
 - **[strings-guide.md](strings-guide.md)** -- The `cstr` vs `str` vs `String` tiering -- which string type to reach for, and when an owned `String` must replace a borrowed `cstr`
@@ -193,6 +194,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[vim-guide.md](vim-guide.md)** -- Vim / Neovim syntax highlighting installation and configuration
 - **[vscode-guide.md](vscode-guide.md)** -- VS Code extension installation and configuration
 - **[lsp-guide.md](lsp-guide.md)** -- Configuring editors to use the Turmeric language server for diagnostics
+- **[time-travel-tracing-guide.md](time-travel-tracing-guide.md)** -- Recording an interpreted run with `tur trace` and replaying it over DAP so a debugger can step backwards
 - **[ai-assistant-integration-guide.md](ai-assistant-integration-guide.md)** -- Using the Turmeric MCP server and LSP with Copilot CLI, Claude CLI, OpenCode, and VS Code Copilot
 - **[devcontainer-guide.md](devcontainer-guide.md)** -- Running Turmeric development in a devcontainer from VS Code or the CLI
 - **[formatter-guide.md](formatter-guide.md)** -- `tur format` CLI and web REPL Format button
@@ -206,6 +208,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[tvm-guide.md](tvm-guide.md)** -- Install, switch between, and pin Turmeric compiler releases the same way nvm does for Node
 - **[compiler-flags-guide.md](compiler-flags-guide.md)** -- Diagnostic and debug flags accepted by `tur`; list of removed `-X` feature flags
 - **[test-runner-contract.md](test-runner-contract.md)** -- Test framework API and contract
+- **[test-suite-portability-guide.md](test-suite-portability-guide.md)** -- Fixture-suite pitfalls: portability, parallel ctest, sanitizers and heap probes, and which harness actually leak-checks what
 - **[autodoc-guide.md](autodoc-guide.md)** -- Writing `;;;` docstrings and generating API docs with `tools/gendocs.py`
 - **[image-dumps-guide.md](image-dumps-guide.md)** -- Warm-start a Turmeric program by saving and restoring a post-init continuation, Lisp/Smalltalk/pdumper style
 
@@ -229,6 +232,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 ## Interoperability
 
 - **[c-integration-guide.md](c-integration-guide.md)** -- Foreign function interface (FFI) and C interop
+- **[ffi-guide.md](ffi-guide.md)** -- Dynamic FFI: dlopen/dlsym, the experimental `call-ptr` form, extern-c under the interpreter, and the JIT thunk engine (with a worked libzmq example)
 - **[eval-api.md](eval-api.md)** -- C embedding API for evaluating Turmeric expressions and calling Turmeric functions from within a C program using `libturi.a`
 - **[inline-c-results-guide.md](inline-c-results-guide.md)** -- Build typed Result/Option values inside inline-C bodies with the preamble helpers instead of hand-rolling structs or returning sentinel ints
 - **[sandboxing-guide.md](sandboxing-guide.md)** -- Running untrusted Turmeric code safely inside a C host using `turi_env_new_sandboxed`, capability flags, and resource limits
@@ -256,11 +260,11 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - Networking and Web → [httpd-guide.md](httpd-guide.md), [httpd-middleware-guide.md](httpd-middleware-guide.md), [tourist-routing-guide.md](tourist-routing-guide.md), [websocket-guide.md](websocket-guide.md), [web-stack-guide.md](web-stack-guide.md), [cloudflare-deployment-guide.md](cloudflare-deployment-guide.md)
 - Tutorials → [snake-game-tutorial.md](snake-game-tutorial.md), [minikanren-1-relations-and-queries.md](minikanren-1-relations-and-queries.md), [parser-combinators-tutorial.md](parser-combinators-tutorial.md), [datalog-01-concepts.md](datalog-01-concepts.md)
 - Package Management → [package-management-guide.md](package-management-guide.md), [consuming-spices-guide.md](consuming-spices-guide.md), [developing-spices-guide.md](developing-spices-guide.md), [using-turmeric-from-cmake.md](using-turmeric-from-cmake.md), [mise-asdf-guide.md](mise-asdf-guide.md), [turmeric-spices](https://github.com/rjungemann/turmeric-spices)
-- Editor and IDE → [vim-guide.md](vim-guide.md), [vscode-guide.md](vscode-guide.md), [lsp-guide.md](lsp-guide.md), [ai-assistant-integration-guide.md](ai-assistant-integration-guide.md), [devcontainer-guide.md](devcontainer-guide.md), [formatter-guide.md](formatter-guide.md), [notebook-guide.md](notebook-guide.md)
+- Editor and IDE → [vim-guide.md](vim-guide.md), [vscode-guide.md](vscode-guide.md), [lsp-guide.md](lsp-guide.md), [time-travel-tracing-guide.md](time-travel-tracing-guide.md), [ai-assistant-integration-guide.md](ai-assistant-integration-guide.md), [devcontainer-guide.md](devcontainer-guide.md), [formatter-guide.md](formatter-guide.md), [notebook-guide.md](notebook-guide.md)
 - CLI Tools → [tur-new-guide.md](tur-new-guide.md), [tur-run-guide.md](tur-run-guide.md), [tvm-guide.md](tvm-guide.md), [compiler-flags-guide.md](compiler-flags-guide.md), [autodoc-guide.md](autodoc-guide.md)
 - Performance → [performance-guide.md](performance-guide.md), [monomorphization-abi-guide.md](monomorphization-abi-guide.md), [jit-guide.md](jit-guide.md)
 - Compiler Internals → [compiler-internals.md](compiler-internals.md), [value-representations-guide.md](value-representations-guide.md), [name-mangling-guide.md](name-mangling-guide.md), [type-erasure-guide.md](type-erasure-guide.md), [typeclass-internals-guide.md](typeclass-internals-guide.md), [turi-parity-guide.md](turi-parity-guide.md)
-- Interoperability → [c-integration-guide.md](c-integration-guide.md), [eval-api.md](eval-api.md), [inline-c-results-guide.md](inline-c-results-guide.md), [sandboxing-guide.md](sandboxing-guide.md)
+- Interoperability → [c-integration-guide.md](c-integration-guide.md), [ffi-guide.md](ffi-guide.md), [eval-api.md](eval-api.md), [inline-c-results-guide.md](inline-c-results-guide.md), [sandboxing-guide.md](sandboxing-guide.md)
 - Reference → [bibliography.md](bibliography.md), [style-guide.md](style-guide.md)
 
 **By level:**

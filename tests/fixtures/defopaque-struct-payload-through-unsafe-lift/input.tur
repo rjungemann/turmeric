@@ -9,7 +9,7 @@
 ;; the C compiler rejected `env->v = v;` / `v = env->v;` with
 ;; "assigning to int64_t from incompatible type Pos".
 ;;
-;; See docs/reported/defopaque-struct-payload-fails-through-unsafe-helper.md
+;; See docs/archive/history/defopaque-struct-payload-fails-through-unsafe-helper.md
 ;; (resolved) and the archived
 ;; docs/archive/history/generic-inline-c-struct-arg-monomorphises-to-int64.md
 ;; for the sibling per-instantiation monomorphization fix; this fixture

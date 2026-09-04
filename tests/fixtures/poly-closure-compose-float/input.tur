@@ -5,7 +5,7 @@
 ;; resolved result_full_type.
 ;;
 ;; This is the "dispatching" shape that previously triggered TUR-E0705 and was
-;; deferred in docs/reported/poly-closure-inner-dispatch-result-erased.md.
+;; deferred in docs/archive/history/poly-closure-inner-dispatch-result-erased.md.
 
 (defn cmp [A B C]
   [^fat f :(fn [A] #fx{} B) ^fat g :(fn [B] #fx{} C)] : ptr<void>

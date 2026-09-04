@@ -10,14 +10,14 @@
 ;;   drive!  -- passes `a` to a callee whose CHECKED frame covers exactly `a`,
 ;;              which is the transitive channel; declaring `[a]` honors it.
 ;;
-;; Expected: compiles clean under --enable=write-frames and prints 0.
+;; Expected: compiles clean (WF2 verifies the frame) and prints 0.
 ;;
 ;; `main` deliberately does NOT read a struct back after mutating it through a
 ;; callee, and prints a freshly-constructed value instead.  Whether such a
 ;; write is observable in the caller is exactly where the compiled backend and
 ;; the turi interpreter disagree today (compiled: by-value, prints 0;
 ;; interpreted: by-reference, prints 3 -- see
-;; docs/reported/struct-param-mutation-backend-divergence.md).  That divergence
+;; docs/archive/struct-param-mutation-backend-divergence.md).  That divergence
 ;; has nothing to do with write frames, and a frame fixture that depended on it
 ;; would be asserting the wrong thing in one backend or the other.
 ;;

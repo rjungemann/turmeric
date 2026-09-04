@@ -25,7 +25,7 @@
 ;; Functor instance whose fmap forwards its (poly) closure argument to the
 ;; :float sink.  Inside the body, `fn` is a tur_poly_fn_t carrier that gets
 ;; boxed via EX_POLY_TO_FAT before reaching call-ff's ^fat parameter.
-(defclass BoxMap [^f] (boxmap [container [fn :fn]] : int))
+(defclass BoxMap [^f] (boxmap [container [fn :fn]] : float))
 
 (definstance BoxMap [BoxW]
   (boxmap [container fn]

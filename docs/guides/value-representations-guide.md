@@ -44,8 +44,8 @@ float bit-reinterpret note below).
    the workaround for the by-value Vec-element shape
    (`vec-byvalue-struct-element-invalid-c`, resolved by increment 3).
 
-   Since 2026-07-31 (increment 3) **container element slots follow one
-   width-independent rule** per element class: scalar bits inline, heap
+   **Container element slots follow one width-independent rule** (increment
+   3) per element class: scalar bits inline, heap
    pointer as-is, by-value ADT product (ANY width) heap-boxed on insert and
    deref-unboxed on read, fn value as a fat handle. The decision lives in
    `type_is_boxed_container_elem` (`src/compiler/types.c`), consulted by
@@ -64,16 +64,25 @@ float bit-reinterpret note below).
    documented wrong-output case; treat any new float divergence as this
    family first.
 
+   In **source**, the two are spelled apart and `::` spells neither: an
+   int/float `::` is a hard error, because the operator cannot tell a carrier
+   slot holding float bits from a genuine integer. Reading a float back out of
+   an `:int` slot -- a cons cell, a variadic rest list, a HAMT value -- is
+   `(bits->float x)`, and pushing one in is `(float->bits x)`, both from
+   `stdlib/bits.tur`; converting a real number is `int->float` / `float->int`
+   from `stdlib/math.tur`. See
+   [docs/archive/ascribe-int-to-float-expression-ambiguity.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ascribe-int-to-float-expression-ambiguity.md).
+
 ## Representations: fn-typed values
 
 Function values are their own zoo. The per-boundary decision today spans
 (at least) these forms -- see the investigation in
-`docs/reported/poly-result-hof-capturing-closure-sigbus.md` for where each
+`docs/archive/poly-result-hof-capturing-closure-sigbus.md` for where each
 is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
 
 1. **`tur_poly_fn_t {env, fn}` carrier** -- for plain, non-effectful,
-   carrier-safe signatures with no named tyvar.  Since 2026-07-31 the
-   carrier<->fat seam is alias- and join-aware: the stage-2 tail walkers
+   carrier-safe signatures with no named tyvar.  The carrier<->fat seam is
+   alias- and join-aware: the stage-2 tail walkers
    resolve a let-ALIAS of a carrier param to its origin (converting via
    poly-to-fat like the direct leaf), the `if` unifier admits a
    carrier-param arm against a boxed fn result by inserting the conversion
@@ -83,27 +92,40 @@ is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
 3. **`:ptr<void>`-fat sink** -- carries an `is_fat` flag disambiguating
    thin-vs-fat dispatch at the invoke (`src/compiler/emit_expr.c` ~4246).
 4. **Nominal bare `TY_FN` pointer** -- a thin code pointer with nowhere to
-   put an environment. Fat-normalization has all but retired it in PARAM
-   position: stage 1 (2026-07-30) normalized concrete effect-free
-   signatures, and increment 2 (2026-08-01) added tyvar signatures once the
-   two carrier-side feeds were shimmed as well -- a call THROUGH a
-   rank-2/forall param (`elab_poly_call`) and the make-struct fn-field
-   store, which had been boxing an already-normalized param a second time.
-   The thin form now survives only for **effect-row'd** signatures
-   (load-bearing for the CPS backend's twin/trampoline convention, and for
-   effect-row checking itself), cfnptr, variadic, and arity>5. Passing a
-   capturing closure into an effect-row'd one is the last live row of
-   `poly-result-hof-capturing-closure-sigbus`.
+   put an environment. Fat-normalization has retired it in PARAM position
+   for concrete, tyvar, and effect-annotated signatures alike; the two
+   carrier-side feeds -- a call THROUGH a rank-2/forall param
+   (`elab_poly_call`) and the make-struct fn-field store -- are shimmed so
+   an already-normalized param is not boxed a second time. The thin form
+   survives only for cfnptr, variadic, and arity>5 signatures; passing a
+   capturing closure into an *effect-annotated* such param is a call-site
+   TUR-E0007. Effect-row call sites dispatch fat through the E2a twin
+   registry (slot 0 = a registered capturing-lambda entry whose `__cps`
+   twin takes the env, slot 1 = the fatshim box's stashed bare-fn direct
+   entry), threadable capturing lambdas are CPS-admitted with the direct
+   thunk's env-unpack preamble, and effect-row checking peels the
+   `EX_FN_TO_FAT` shim
+   (`poly-result-hof-capturing-closure-sigbus`, archived -- every row).
 
    The `{ shim, orig }` box a bare fn is shimmed into is `malloc`'d per
-   execution of the bridge.  At a normalized nominal param nothing frees it,
-   so that was a leak per call (5e6 iterations of `(apply1 add3 acc)` peaked
-   at 122 MiB); such a box is a constant when the boxed value is a global fn,
-   so it is now allocated once at file scope and filled from
-   `__tur_static_init`.  The hoist is opt-in per shim site and ONLY the
-   normalized nominal slot opts in -- a `^fat` callee may drop its argument
-   and the call site cannot tell, so those keep the heap box and keep the
-   leak ([`fat-sink-shim-box-leaks-per-call`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/fat-sink-shim-box-leaks-per-call.md)).
+   execution of the bridge.  At a normalized nominal param nothing frees it
+   -- a leak per call if allocated there -- but such a box is a constant when
+   the boxed value is a global fn, so it is allocated once at file scope and
+   filled from `__tur_static_init`.
+
+   A `^fat` sink takes the same hoist when the callee provably neither
+   retains nor drops the argument -- `nonretain_param_mask` bit set for that
+   parameter.  This was thought impossible ("a `^fat` callee may drop its
+   argument and the call site cannot tell"), and the missing fact was going
+   to need an ownership annotation on the parameter.  It does not: dropping
+   goes through `TUR_CLOSURE_DROP`, a C macro reachable only from an
+   inline-C body, and a body containing any inline-C has
+   `nonretain_param_mask == 0` by construction.  So the bit already means
+   "neither retains nor drops".  A `^fat` sink WITH inline-C -- the shape
+   that can drop -- has the bit clear and keeps its heap box, which is what
+   `tests/fixtures/closure-drop-glue-fatshim` pins.
+   ([`fat-sink-shim-box-leaks-per-call`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/fat-sink-shim-box-leaks-per-call.md),
+   gated by `tests/run-fat-shim-leak.sh`.)
 
    Two predicates, both in `src/compiler/types.c`, and they deliberately
    disagree: `fn_param_type_is_fat_normalized` (param position, tyvars
@@ -130,8 +152,24 @@ Each of these is a crossing where a bridge may be needed:
 - `let` binding / ascription `(:: e T)`
 - generic (tyvar-typed) call argument and result
 - typeclass method dispatch result (bare and dotted spellings)
-- `Vec` element slot (push and get)
-- struct field store / load
+- `Vec` element slot (push and get) -- **instrumented** (increment 4 stage
+  3). Two mechanisms box an element here and they are easy to
+  confuse: a nominal by-value ADT/struct element takes the box/deref bridge
+  behind `type_is_boxed_container_elem`, while a concrete by-value *app*
+  element (`(Vec (Option int))`) takes a monomorph-aware path -- malloc the
+  monomorph on push, reconstruct field-by-field through the generic one-word
+  box on read. Both really do box; only the first consults the predicate. The
+  second is layout-safe because every parametric monomorph's payload occupies
+  exactly one word.
+- struct field store / load -- **instrumented and measured silent**
+  (increment 4 stage 3). The declaration side of this boundary
+  is one chokepoint, `adt_ctor_field_c_type`, which all nine field-emission
+  sites route through; a `repr_of` shadow there found 84 disagreements and
+  all 84 were one word spelled two ways, not seams. Worth knowing when you
+  read a field slot: the owner, not the field type, picks the protocol. A
+  by-value owner inlines a drop-glue-free aggregate field and **boxes** one
+  that owns an rc/ref (so the owner stays trivially copyable); a carrier
+  owner keeps every field as a one-word slot.
 - closure capture and closure return
 - inline-C body edge (always the raw carrier)
 
@@ -143,15 +181,33 @@ report is one missing cell.
 **Open cells.** These are the crossings that still have no working bridge;
 each has a live report in `docs/reported/`. This table is the campaign's
 index -- a repr cell with a filed report belongs here, so if you file one,
-add the row. All four below were re-verified against `main` on 2026-08-01.
-Two moved that day: the first row narrowed to the effect row (increment 2),
-and the `^fat` leak row was filed.
+add the row.
 
 | Open cell (producer -> boundary) | Report |
 | --- | --- |
-| capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (concrete AND tyvar signatures are both fat-normalized now and work) | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/poly-result-hof-capturing-closure-sigbus.md) |
-| generic closure return over a type application (struct `Cons`) | [`generic-closure-return-type-app`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/generic-closure-return-type-app.md) |
-| bare fn -> `^fat` sink: a `{ shim, orig }` box is malloc'd per call and never freed (1002 MiB over 5e6 iterations); `^fat` has no ownership contract, so the caller cannot pick a representation | [`fat-sink-shim-box-leaks-per-call`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/fat-sink-shim-box-leaks-per-call.md) |
+| `^Class`-constrained parameter (carrier `int64_t`) -> generated instance method taking a `defdata` ADT by value; instantiating at `int` is a no-op erasure and works | [`typeclass-constrained-param-erases-adt-to-int64`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/typeclass-constrained-param-erases-adt-to-int64.md) |
+
+The table was empty between 2026-08-21 and these two filings. The pair that
+emptied it closed on the same day, and the `let` merge-temp one is worth a
+note because its filing had the arrow backwards. It was recorded here as
+"CAPTURELESS closure (bare fn pointer) -> `let` merge temp decided
+`fat-handle`", i.e. a thin producer reaching a fat boundary -- the same shape
+as the archived `let-bound-noncapturing-lambda-segfaults-as-fn-arg`, which
+really was that and was closed with the signature-keyed
+`ensure_bare_fnptr_poly_shim` adapter. It was the opposite: the tail already
+emitted a proper fat box and the merge TEMP was declared thin, so reusing that
+adapter would have boxed an already-boxed value. The lesson for this table is
+that a cell's *direction* is worth confirming against the emitted C before
+pairing it with a neighbour's bridge -- the shadow line names the two forms but
+not which side is the producer.
+
+It was also not benign under `TUR_REPR_NO_SHADOW_ICE=1`, which is how it read
+at filing time: that repro exits 0, but a variant that returns and CALLS the
+closure emits `-Wint-conversion` on the temp assignment -- a hard error under
+GCC >= 14. A loud-but-benign shadow is worth re-testing with the value actually
+consumed before trusting the "benign".
+
+File a new repr cell in this table as well as in `docs/reported/`.
 
 **Closed cells (paper trail).** Bridges that now exist. Kept here because the
 resolution notes say *which* bridge was added and what it is paired against --
@@ -159,6 +215,16 @@ the next cell in this family is usually adjacent to one of them.
 
 | Closed cell (producer -> boundary) | Resolution | Report |
 | --- | --- | --- |
+| fn value reaching a `let` merge temp in RESULT position -- the TAIL emitted the fat `{ thunk, env... }` box while the TEMP was declared thin `R (*)(A...)`, so the assignment was `-Wint-conversion` (hard error under GCC >= 14) and the R3 shadow ICE'd on it | the two sites keyed fat-vs-thin off different facts -- `emit_temp_decl` off `type.as.fn.boxed` (a TYPE fact), stage-2 tail normalization off `fn_result_type_is_fat_normalized` (a POSITION fact). `merge_temp_fn_is_fat()` asks `repr_of` in RESULT position instead, and the decl and its ctype mirror both spell the temp from it | [`let-returning-noncapturing-lambda-ices-at-merge-temp`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/let-returning-noncapturing-lambda-ices-at-merge-temp.md) |
+| bare-var tail of a NON-parametric by-value product -> `emit_if` merge temp (the parametric half was already bridged) | position-sensitive, not type-sensitive: `emit_arm_is_recorded_byval_agg()` asks the localvar side table what representation the arm's value actually has HERE, and suppresses the carrier->concrete bridge when it is already the aggregate. A TYPE-level widening regressed ten fixtures because the same type rides the carrier at the vec/map element and assoc-type seams; the recorded type differs there, so those keep their bridge. **SR1 (2026-08-26) added the case that side table cannot answer:** it records LOCALS, and a by-value aggregate PARAMETER is not one, so a sum-typed param returned from an arm (`re-repeat-n`'s `atom : Regex`) was bridged as though it were a carrier. `emit_arm_is_byval_agg_var()` is the second suppressor, and it IS the type-level test this row warns about -- kept safe only by being narrowed to by-value SUMS (the vec/map and assoc-type seams this row names are products) and gated on the seam. Widen it past sums and you should expect the ten fixtures back | [`byvalue-product-tail-var-double-unboxed-nonparametric`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/byvalue-product-tail-var-double-unboxed-nonparametric.md) |
+| four carrier->concrete bridging sites each asking "does this value already HAVE the aggregate representation?" their own way -- the arm sites through a shared predicate, TWO let-binding init sites through separate inline copies of the same three comparisons, and the CPS `letraw` mirror not at all, while its comment claimed "same gate as the direct site" | one copy: `emit_value_is_recorded_as(v, want_ctype)`, taking the wanted C type as a STRING because that is what the binder sites hold; `emit_arm_is_recorded_byval_agg` is a thin Type-taking wrapper for the arm sites. The CPS mirror's missing term was added and is **provably inert** -- across all 2131 fixtures only 33 reach that bridge with a by-value init type, and in every one either the Expr-level predicate already suppresses it or the init is recorded as `int64_t`/pointer/nothing, never the aggregate. Emitted C byte-identical. A consistency repair, not a fix for an observed miscompile | [`cps-let-binder-bridge-lacks-position-check`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cps-let-binder-bridge-lacks-position-check.md) |
+| a control form (`let`/`do`) wrapping an `if` whose arms are carrier producers -- each arm was bridged carrier->concrete by `emit_if`, then the ENCLOSING form bridged the already-concrete merge temp again (`operand of type 'tur_adt_...' where arithmetic or pointer type is required`). The same `if` as the whole function body was always fine | two halves. `bridge_control_value_to_byvalue_temp` (the do/let companion its own comment already named) gained `emit_arm_is_recorded_byval_agg`, the same one-predicate change that fixed the `emit_if` arms. But the precondition that fix assumed did NOT hold: `emit_if` declares its by-value merge temp with `emit_temp_decl` DIRECTLY, bypassing `emit_control_result_temp_decl`, which is the wrapper that records the temp's emitted C type -- so the temp was by-value but invisible to the side table the predicate consults. Recording it is the other half, and without it the predicate answers false and nothing changes | [`control-form-around-if-double-unboxes-carrier-arms`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/control-form-around-if-double-unboxes-carrier-arms.md) |
+| `^mut` rebinding of a concrete heap container (merge-temp position) -- carrier where chokepoint 1 says typed pointer, travelling with a spec-materialization hole (a generic call in a `set!` RHS never interned its spec: LINK error past tur check) | chokepoint 1's concrete-heap rule extracted to `emit_repr_concrete_heap_ptr_c_name` and shared by the let-bind decl, the merge-temp decl, and its ctype mirror (the existing int<->ptr bridge reconciles a carrier tail); `emit_abi_scan_expr` gains its missing `EX_SET` case | [`mut-map-reassign-missing-spec-link-error`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/mut-map-reassign-missing-spec-link-error.md) |
+| capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (the report's LAST row; concrete and tyvar signatures were already fat-normalized) | the CPS increment (2026-08-16): effect-annotated fn params join `fn_param_type_is_fat_normalized`; the E2a registry call sites dispatch fat (slot 0 = a registered capturing-lambda entry with an env-taking `__cps` twin, slot 1 = the fatshim's stashed bare-fn entry); threadable capturing lambdas are CPS-admitted with the direct thunk's env-unpack preamble; the effect_check walkers peel the shim. Capturing PERFORMING callbacks -- previously no working spelling -- thread the handler chain too. Thin remainder (cfnptr/variadic/arity>5 effectful) keeps a call-site TUR-E0007 | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/poly-result-hof-capturing-closure-sigbus.md) |
+| generic closure return over a type application (struct `Cons`) -- the `(type-app ? ?)` shell at the checker AND the never-emitted `ctor_Cons` at link | Defect A: result-graft recovery at the thunk-type clobber in `elab_call.c` (the binding's own ground `result_full_type` survives the swap; the `elab_fns.c` grounding gate is untouched). Defect B: `inner_app` clone trigger + body-type-derived clone result + head-keyed clone resolution at the thunk direct-call, so the per-spec inner-closure clone is both emitted and the one actually invoked | [`generic-closure-return-type-app`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/generic-closure-return-type-app.md) |
+| typeclass method result at **float** (any width) -> generic (carrier) call argument | producer bit-cast keyed on the method's DECLARED result kind (the same type the consumer keys its reinterpret on -- paired by construction); an int-declared method keeps its value conversion | [`method-result-float-spec-return-value-converts`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/method-result-float-spec-return-value-converts.md) |
+| `float32`-ascribed literal -> any mixed C expression | ascribe elaborator retypes a float literal in place (`(:: 7.1 float32)` == `7.1f32`), so it emits at single precision instead of as the double literal the promotion rules then dominated | [`float32-ascribed-literal-compares-as-double`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/float32-ascribed-literal-compares-as-double.md) |
+| `float32` generic (carrier) call result -> concrete consumer | elaboration: `call_wrap_reinterpret_owning` admits the carrier<->float32 pair (its silent mixed-size bail dropped the requested reinterpret, typing the call `int`); emit's size-mismatch reinterpret arm reads float pairs through the union overlay | [`float32-generic-call-result-printed-as-carrier`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/float32-generic-call-result-printed-as-carrier.md) |
 | `TY_CONTRACT` in type-ARGUMENT position -- the payload kept a live contract type at every downstream boundary | peeled to its base in BOTH type-application loops (`rt_peel_type_arg_contract`), warning `TUR-W0380` that the payload predicate is not enforced; `TY_CONTRACT` then joined `type_has_concrete_codegen_layout` by delegating to its base | [`contract-type-arg-not-peeled-to-base`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/contract-type-arg-not-peeled-to-base.md) |
 | method result (carrier) -> typed `(Result A B)` defn boundary | increment 2: continuation-wrapper ABI paired with the entry point dispatch actually selects | [`result-monad-bind-typed-boundary-miscompiles`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/result-monad-bind-typed-boundary-miscompiles.md) |
 | by-value aggregate returned by a CAPTURING continuation -> int64 `tur_poly_fn_t.fn` carrier sink (nested `bind` / multi-step `do-m`) | signature-keyed fat spill shim: reads the real entry point out of the closure env's `__fn` slot and boxes the aggregate, the fat twin of the row above (which only covered named wrappers) | [`nested-bind-over-result-typed-boundary-segfaults`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/nested-bind-over-result-typed-boundary-segfaults.md) |
@@ -174,9 +240,9 @@ A structural note the last closed row exposes: the representation decision today
 not one function but (at least) three hand-maintained `TypeKind` switches in
 `src/compiler/types.c` -- `type_c_name`, `type_has_concrete_codegen_layout`
 (fails closed: a missing kind silently falls back to the carrier), and
-`append_type_mangle` (failed open to `"opaque"` until 2026-07-29) -- and
-codegen is correct only when all three agree. Since 2026-07-31 (increment 4
-stage 1) the triplication is removed for payload-free kinds: the
+`append_type_mangle` -- and
+codegen is correct only when all three agree. The triplication is removed
+(increment 4 stage 1) for payload-free kinds: the
 `TY_SIMPLE_REPR_ROWS` table in `types.c` carries one row per simple kind
 with all three answers, and each switch expands the rows with its own
 projection -- adding a kind without all three answers is a build failure,
@@ -187,12 +253,59 @@ arms and now also checks `type_c_name` exhaustiveness;
 `tests/check-monomorph-name-collision.sh` reads what they emit). The
 position axis -- one `repr-of(type, position)` routine for the per-SITE
 choices -- is staged in
-[docs/upcoming/repr-decision-function-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/repr-decision-function-plan.md).
+[docs/archive/repr-decision-function-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/repr-decision-function-plan.md).
 
 A strong diagnostic signal that a *bridge exists but is not consulted*: an
 intervening `let` fixing the repro (verified for
 `class-method-result-into-generic-invalid-c` -- the binding applies the
 carrier->concrete bridge the direct composition skips).
+
+## C-name accessors: which result may I hold?
+
+Every representation in this guide has a **C spelling**, and the emitter reaches
+it through an accessor returning `const char *`. Whether you may HOLD that
+pointer across another call is part of the accessor's contract, and it is
+invisible at the call site -- two accessors that look identical can differ.
+
+The rule now, and it is uniform: **every C-name accessor returns a string that
+is stable for the whole compilation.**
+
+- `type_c_name` / `emit_type_c_name` intern every composed name via
+  `intern_type_name` (`types.c`), so the pointer is stable and may be collected,
+  stashed, and printed later.
+- `adt_field_c_type`'s ROS pointer-box spelling (`"T *"`) interns too. It used
+  to be a function-scoped `static char ptrbuf[128]`.
+- `ensure_static_fatbox` returns an owned per-`EmitCtx` string
+  (`ctx->fatbox_names[i]`), freed with the keys. It used to be a
+  function-scoped `static char name[96]`.
+
+Why this is worth a section rather than a comment: emitters routinely gather one
+name per field or per parameter into an array and only then write the
+declaration. Against a shared buffer every entry aliases it, so **every name is
+the LAST name** -- and the result is well-formed C with the wrong type in it. No
+crash, no ASan report, no compiler diagnostic. It surfaces downstream as a
+`-Wincompatible-pointer-types` at some unrelated call site, or not at all.
+
+The tree has been bitten twice: `EmitSigEntry.ret_ctype` handed out an interior
+pointer callers held across further emission (43 fixtures, caught by ASan), and
+`adt_field_c_type` mistyped a `(Result Rational ArithError)` monomorph's
+`ok_val` as the error arm. The second was found by a representation change, not
+by a test -- which is the point. **A by-value sum makes "two pointer-boxed
+fields on one constructor" ordinary**, so consolidating a representation is
+exactly what takes one of these latent and makes it live.
+
+Two guards:
+
+- `tests/check-static-cname-buffers.sh` (ctest `tur_static_cname_buffer_lint`)
+  fails on any `const char *` function in `src/compiler/` holding a
+  function-scoped `static char buf[]`, with the four audited-benign sites
+  allowlisted by name. This is the one that catches the NEXT instance.
+- `tests/fixtures/ros-pointer-box-distinct-arms/` pins the two-distinct-arms
+  shape at runtime; `run.sh` fails a fixture whose cc emits
+  `-Wincompatible-pointer-types`, so a regression is loud.
+
+Resolved report:
+[docs/archive/c-name-accessors-share-static-buffers.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/c-name-accessors-share-static-buffers.md).
 
 ## Finding more missing cells
 
@@ -205,11 +318,11 @@ pinned by `--known-probes` instead, so a red run means a NEW cell.
 
 The convention-level fix for the closure rows -- normalize every non-carrier
 fn boundary onto the fat protocol instead of deciding representation
-per-boundary -- is planned in
-`docs/upcoming/fn-value-fat-normalization-plan.md`. The campaign-level
+per-boundary -- is complete; see
+`docs/archive/fn-value-fat-normalization-plan.md`. The campaign-level
 strategy governing that plan and its successors (which seams consolidate in
 which order, the probe/blast-radius discipline, and the performance
-guardrails) is `docs/upcoming/representation-consolidation-meta-plan.md`;
+guardrails) is `docs/archive/representation-consolidation-meta-plan.md`;
 this guide's open-cells table is that campaign's live scoreboard, and the
 closed-cells table below it is the record of what the campaign has already
 consolidated.

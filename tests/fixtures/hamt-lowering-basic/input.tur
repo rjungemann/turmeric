@@ -6,7 +6,7 @@
 ; behave exactly like literal keys.  Do not replace the str-concat probes
 ; with literals: literal-only probes pass by unspecified literal merging
 ; (C11 6.4.5p7) and hide identity-compare regressions (see
-; docs/archive/persistent-map-cstr-keys-identity-compared.md).
+; docs/archive/history/persistent-map-cstr-keys-identity-compared.md).
 (load "stdlib/str-build.tur")
 
 (defn main [] : int

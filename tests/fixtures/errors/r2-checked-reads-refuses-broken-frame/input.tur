@@ -1,0 +1,37 @@
+;; R2 (docs/upcoming/trusted-refinement-claims-plan.md, graduated
+;; 2026-08-20): positive evidence that a `#reads` frame omits
+;; mutable state the body reads (the same evidence TUR-W0383 reports
+;; gatelessly) REFUSES the congruence override.  This is the exact program of
+;; tests/fixtures/refine-reads-frame-omits-global -- which still proves and
+;; prints 7 with the gate off -- run with the gate on and --strict-refine:
+;; the crossing that used to be proved from the broken promise is now an
+;; undischarged obligation, and strict makes it a hard error.
+;;
+;; The W0372 wording branches deliberately: the ordinary impure-#reads advice
+;; ("guard it inside a `frozen` region") would be misleading here, because
+;; the region IS present and the FRAME is what failed.
+(load "stdlib/refine.tur")
+
+(def ^mut fudge 1)
+
+(defstruct World [n : int])
+
+;; Declares `#reads w`.  Actually reads `fudge` -- the broken promise.
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  (> fudge 0))
+
+(defn get! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int
+  (.n w))
+
+(defn run [] : int
+  (let [^mut w (World 7)]
+    (let [__b (& w)]                 ; frozen region -- would grant congruence
+      (if (alive? w 0)
+        (do
+          (set! fudge -1)
+          (get! w 0))                ; crossing: refused, unproven, strict error
+        -1))))
+
+(defn main [] : int
+  (println (run))
+  0)

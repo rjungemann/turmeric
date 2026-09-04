@@ -1,0 +1,13 @@
+;; Fixture for tests/run-trace.sh -- granularity, the dense spelling.
+;;
+;; The same loop as loop-multiline.tur, written on one line. Under the
+;; line-granular recorder this was THREE steps: `i` went from 0 straight to 5
+;; in a single delta and all five prints landed in one drain, because a line is
+;; a unit of layout and not a unit of evaluation. Recording per expression, the
+;; two spellings produce identical step counts -- which is the property being
+;; asserted, since fidelity that depends on where the newlines went is not a
+;; property a debugging record can have.
+(defn main [] : int
+  (let [^mut i 0]
+    (while (< i 5) (do (println "tick") (set! i (+ i 1))))
+    i))

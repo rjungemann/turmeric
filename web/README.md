@@ -8,6 +8,9 @@ A web-based REPL for the [Turmeric programming language](https://github.com/turm
 - **Monaco Editor** - Professional code editing with syntax highlighting
 - **Interactive Console** - ANSI-colored output with execution history
 - **Code Examples** - Pre-loaded examples covering key language features
+- **Language picker** - Dialect radio group + `#lang` layer toggles that edit
+  the `#lang` line in place (the buffer stays the source of truth); options
+  are rendered from the runtime's registry export, never hardcoded in JS
 - **URL Sharing** - Share your code via compressed URL hash
 - **Editor intelligence** - Diagnostics, completion, hover, signature help,
   go-to-definition, and document symbols, served by the real `tur lsp` running
@@ -37,6 +40,29 @@ A web-based REPL for the [Turmeric programming language](https://github.com/turm
    ```
 
 4. Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+#### The service worker is off on localhost
+
+`sw.js` is cache-first for same-origin static assets, and its precache names
+`/main.js` and `/styles.css` -- the files a dev server exists to re-serve. A
+worker left installed by one session hands the next one the previous session's
+JS and CSS, which shows up as an unstyled page running code you already
+changed, and needs a hard reload every time.
+
+So on a loopback host the app does not register the worker, and unregisters
+any it finds (dropping their caches) before reloading once to pick up the real
+files. Nothing to do -- the first load after this change cleans up whatever
+was already installed.
+
+To work on the PWA itself, append `?sw=1`:
+
+```
+http://localhost:3000/try/?sw=1
+```
+
+That is also how `tests/mobile.split-and-pwa.spec.js` and
+`tests/docs-offline.spec.js` still exercise the real worker. Production is
+unaffected: the opt-out keys off the hostname.
 
 ### Production Build
 
@@ -121,6 +147,12 @@ The WASM module exposes the following functions:
 - `turi_wasm_eval(input)` - Evaluate code and return result as string
 - `turi_wasm_eval_ex(input, out_result, out_error)` - Evaluate with separate result/error
 - `turi_wasm_version()` - Get version string
+- `turi_wasm_set_lang(name)` - Set the reader dialect + layer set from a full
+  `#lang` directive tail (e.g. `"turmeric/sweet stringed"`); assigns the
+  layer set and resets the session when it changes
+- `turi_wasm_get_lang()` - Current reader name (canonical spelling)
+- `turi_wasm_lang_registry()` - JSON registry of base dialects and curated
+  `#lang` layers, exported from the C tables for the language picker
 - `turi_wasm_lsp_request(json)` - Feed one JSON-RPC message to the language
   server; returns a JSON array of the messages it produced
 - `turi_wasm_lsp_flush()` - Analyze documents with pending edits

@@ -15,6 +15,9 @@
 
 #include "turi/eval.h"
 #include "turi/collections_native.h"  /* native_mk_cmp_int / native_mk_box_cstr */
+#include "diag.h"    /* SYNTAX natives: diag file-registry save/restore for read-string */
+#include "forms.h"   /* SYNTAX natives: Form constructors/accessors */
+#include "reader.h"  /* SYNTAX natives: read_all_with_registry for read-string */
 
 #include <ctype.h>
 #include <errno.h>
@@ -30,6 +33,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "../runtime/tur_string.h"
+#include "../runtime/trail.h"   /* SX1: the real trail, shimmed for --interpret */
 #if defined(_WIN32)
 /* Windows has no fork/exec.  The CRT's _spawnvp/_cwait are the direct
  * equivalents (spawn-and-return-a-handle, then reap it), so process/spawn and
@@ -55,37 +59,47 @@
  * ---------------------------------------------------------------------- */
 
 /* Option functions */
-static bool wk_result_payload_is_heap(TuriValue v); /* fwd: defined with native_ok */
+/* SR2b: stdlib Option/Result are real sums, and the tree-walker represents an
+ * ADT constructor value as a TuriStruct NAMED BY THE CONSTRUCTOR ("Some" with
+ * one payload field, "None" with none; "Ok"/"Err" with one payload field) --
+ * that is what the EX_MATCH ctor patterns compare against, so the natives
+ * must build exactly this shape or every stdlib `(match o (Some v) ...)`
+ * body dies with "no arm matched".  The field readers below keep the legacy
+ * representations readable (the int64[2]/[3] carrier boxes hand-rolled
+ * inline-C still produces, and the pre-sum record TuriStructs) so mixed
+ * flows keep working. */
+static bool ctor_struct_is(TuriValue v, const char *name) {
+    if (v.tag != TURI_STRUCT) return false;
+    const char *sn = turi_struct_name(v);
+    return sn && strcmp(sn, name) == 0;
+}
+static TuriValue ctor_struct_payload(TuriValue v) {
+    bool found = false;
+    TuriValue f = turi_struct_field(v, 0, &found);
+    return found ? f : turi_int(0);
+}
 static TuriValue native_some(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     TuriValue payload = (n > 0) ? a[0] : turi_int(0);
-    /* Mirror native_ok (R5): the int64[2] box flattens the payload to a bare
-     * int64, losing the tag of a *heap* value (a make-struct, cstr, closure,
-     * float).  `.value`/unwrap would then hand back a TURI_INT and a downstream
-     * field access reads garbage.  For a heap payload build a make-struct
-     * Option whose fields hold the full TuriValue; scalar payloads keep the
-     * carrier box unchanged.  option_field reads both reps. */
-    if (wk_result_payload_is_heap(payload)) {
-        TuriValue fields[2] = { turi_bool(true), payload };
-        return turi_make_struct(env, "Option", fields, 2);
-    }
-    int64_t *opt = (int64_t *)malloc(2 * sizeof(int64_t));
-    if (!opt) return turi_nil();
-    opt[0] = 1; /* is_some = true */
-    opt[1] = payload.as_int;
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)opt;
-    return v;
+    TuriValue fields[1] = { payload };
+    return turi_make_struct(env, "Some", fields, 1);
 }
 static TuriValue native_none(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)a; (void)n; (void)ud;
-    return turi_int(0); /* NULL pointer */
+    (void)a; (void)n; (void)ud;
+    return turi_make_struct(env, "None", NULL, 0);
 }
-/* W1b: an Option reaches these shims either as a native int64[2] box
- * {is_some, value} (from native_some / tur_box_some) or as a make-struct TuriStruct
- * with the same field order (from `(make-struct Option ...)`).  option_field
- * reads field `idx` from whichever representation so the two coexist -- the same
- * dual-rep pattern as result_field.  none is the 0/NULL box (every field 0). */
+/* W1b + SR2b: an Option reaches these shims as a ctor-named TuriStruct
+ * ("Some"/"None", from native_some/none or an interpreted `(Some x)`), as a
+ * native int64[2] box {is_some, value} (hand-rolled inline-C / tur_box_some),
+ * or as a legacy make-struct TuriStruct with {is_some, value} field order.
+ * option_field maps the ctor rep onto the legacy field indices (0 = is_some,
+ * 1 = value) so every reader keeps a single call site.  none is the "None"
+ * struct or the 0/NULL box (every field 0). */
 static TuriValue option_field(TuriValue o, int idx) {
+    if (ctor_struct_is(o, "Some"))
+        return idx == 0 ? turi_bool(true) : ctor_struct_payload(o);
+    if (ctor_struct_is(o, "None"))
+        return idx == 0 ? turi_bool(false) : turi_int(0);
     bool found = false;
     TuriValue f = turi_struct_field(o, (uint32_t)idx, &found);
     if (found) return f;
@@ -112,8 +126,8 @@ static TuriValue native_option_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *
     if (!a_some && !b_some) return turi_bool(true);
     if (a_some != b_some)   return turi_bool(false);
     TuriValue cargs[2];
-    cargs[0].tag = TURI_INT; cargs[0].as_int = option_field_int(a[0], 1);
-    cargs[1].tag = TURI_INT; cargs[1].as_int = option_field_int(a[1], 1);
+    cargs[0] = option_field(a[0], 1);
+    cargs[1] = option_field(a[1], 1);
     TuriValue rv = turi_call(env, a[2], cargs, 2);
     if (turi_is_error(rv) || env->throwing) return rv;  /* propagate callback error */
     return turi_bool(rv.tag == TURI_BOOL ? rv.as_bool : rv.as_int != 0);
@@ -127,14 +141,20 @@ static TuriValue native_option_unwrap(TuriEnv *env, TuriValue *a, uint32_t n, vo
     (void)env; (void)ud;
     if (n < 1) return turi_int(0);
     if (!option_is_some(a[0])) { fprintf(stderr, "unwrap called on none\n"); return turi_int(0); }
-    return turi_int(option_field_int(a[0], 1));
+    /* SR2b: hand back the FULL payload value (tag preserved) -- flattening to
+     * int lost float/cstr/struct payloads. */
+    return option_field(a[0], 1);
 }
 static TuriValue native_option_value(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     return native_option_unwrap(env, a, n, ud);
 }
 static TuriValue native_option_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    if (n > 0) { void *p = (void *)(intptr_t)a[0].as_int; if (p) free(p); }
+    /* A ctor-named TuriStruct is env-pool-owned -- only the legacy raw box is
+     * individually freed. */
+    if (n > 0 && a[0].tag != TURI_STRUCT) {
+        void *p = (void *)(intptr_t)a[0].as_int; if (p) free(p);
+    }
     return turi_nil();
 }
 static TuriValue native_option_must(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -144,7 +164,7 @@ static TuriValue native_option_must(TuriEnv *env, TuriValue *a, uint32_t n, void
         turi_runtime_panic(env, "option-must: called on none");
         return turi_nil(); /* unreachable */
     }
-    return turi_int(option_field_int(a[0], 1));
+    return option_field(a[0], 1);
 }
 static TuriValue native_option_expect(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -153,28 +173,26 @@ static TuriValue native_option_expect(TuriEnv *env, TuriValue *a, uint32_t n, vo
         turi_runtime_panic(env, msg);
         return turi_nil(); /* unreachable */
     }
-    return turi_int(option_field_int(a[0], 1));
+    return option_field(a[0], 1);
 }
 static TuriValue native_option_unwrap_or(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 2) return turi_int(0);
-    if (!option_is_some(a[0])) return turi_int(a[1].as_int);
-    return turi_int(option_field_int(a[0], 1));
+    if (!option_is_some(a[0])) return a[1];
+    return option_field(a[0], 1);
 }
 /* option-map -- apply f to the some value, returning a new Option.  option.tur's
  * body fat-dispatches f via TUR_APPLY1; this native invokes f (a turi closure)
  * via turi_call and returns a fresh native int64[2] {is_some, value} box. */
 static TuriValue native_option_map(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
-    if (n < 2) return turi_int(0);
-    if (!option_is_some(a[0])) return turi_int(0);
-    TuriValue arg; arg.tag = TURI_INT; arg.as_int = option_field_int(a[0], 1);
+    if (n < 2) return turi_make_struct(env, "None", NULL, 0);
+    if (!option_is_some(a[0])) return turi_make_struct(env, "None", NULL, 0);
+    TuriValue arg = option_field(a[0], 1);
     TuriValue rv = turi_call(env, a[1], &arg, 1);
     if (turi_is_error(rv) || env->throwing) return rv;  /* propagate callback error */
-    int64_t *r = (int64_t *)malloc(2 * sizeof(int64_t));
-    if (!r) return turi_int(0);
-    r[0] = 1; r[1] = rv.as_int;
-    return turi_int((int64_t)(intptr_t)r);
+    TuriValue fields[1] = { rv };
+    return turi_make_struct(env, "Some", fields, 1);
 }
 
 /* Result functions: { bool is_ok (offset 0); int64_t ok_val (offset 8); int64_t err_val (offset 16) }
@@ -188,33 +206,17 @@ static TuriValue native_option_map(TuriEnv *env, TuriValue *a, uint32_t n, void 
  * fields hold the full TuriValue (tag preserved); int/bool payloads keep the box
  * (no change to the carrier-ABI fixtures that depend on it). result_field reads
  * both reps, so ok?/err?/ok-val/err-val/result-eq stay uniform. */
-static bool wk_result_payload_is_heap(TuriValue v) {
-    return v.tag == TURI_STRUCT || v.tag == TURI_CSTR ||
-           v.tag == TURI_CLOSURE || v.tag == TURI_FLOAT;
-}
 static TuriValue native_ok(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     TuriValue payload = (n > 0) ? a[0] : turi_int(0);
-    if (wk_result_payload_is_heap(payload)) {
-        TuriValue fields[3] = { turi_bool(true), payload, turi_int(0) };
-        return turi_make_struct(env, "Result", fields, 3);
-    }
-    int64_t *r = (int64_t *)malloc(3 * sizeof(int64_t));
-    if (!r) return turi_nil();
-    r[0] = 1; r[1] = payload.as_int; r[2] = 0;
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
+    TuriValue fields[1] = { payload };
+    return turi_make_struct(env, "Ok", fields, 1);
 }
 static TuriValue native_err(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     TuriValue payload = (n > 0) ? a[0] : turi_int(0);
-    if (wk_result_payload_is_heap(payload)) {
-        TuriValue fields[3] = { turi_bool(false), turi_int(0), payload };
-        return turi_make_struct(env, "Result", fields, 3);
-    }
-    int64_t *r = (int64_t *)malloc(3 * sizeof(int64_t));
-    if (!r) return turi_nil();
-    r[0] = 0; r[1] = 0; r[2] = payload.as_int;
-    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
+    TuriValue fields[1] = { payload };
+    return turi_make_struct(env, "Err", fields, 1);
 }
 /* W1b: a Result reaches these shims either as a native int64[3] box
  * {is_ok, ok_val, err_val} (from native_ok/err) or as a make-struct TuriStruct
@@ -223,6 +225,15 @@ static TuriValue native_err(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
  * the three pieces (with native_result_eq and the EX_GET_FIELD carrier path)
  * that let result.tur join the prelude. */
 static TuriValue result_field(TuriValue r, int idx) {
+    /* SR2b: ctor-named rep first (see the Option twin above): "Ok"/"Err"
+     * structs carry one payload field; map onto the legacy indices
+     * (0 = is_ok, 1 = ok_val, 2 = err_val). */
+    if (ctor_struct_is(r, "Ok"))
+        return idx == 0 ? turi_bool(true)
+             : idx == 1 ? ctor_struct_payload(r) : turi_int(0);
+    if (ctor_struct_is(r, "Err"))
+        return idx == 0 ? turi_bool(false)
+             : idx == 2 ? ctor_struct_payload(r) : turi_int(0);
     bool found = false;
     TuriValue f = turi_struct_field(r, (uint32_t)idx, &found);
     if (found) return f;
@@ -453,7 +464,9 @@ static TuriValue native_result_unwrap_err(TuriEnv *env, TuriValue *a, uint32_t n
 }
 static TuriValue native_result_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    if (n > 0) { void *p = (void *)(intptr_t)a[0].as_int; if (p) free(p); }
+    if (n > 0 && a[0].tag != TURI_STRUCT) {
+        void *p = (void *)(intptr_t)a[0].as_int; if (p) free(p);
+    }
     return turi_nil();
 }
 static TuriValue native_result_must(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -485,16 +498,19 @@ static TuriValue native_int_to_str(TuriEnv *env, TuriValue *a, uint32_t n, void 
     return turi_cstr(buf);
 }
 
-/* str-concat: mirror stdlib/str.tur:99 -- malloc(la+lb+1), copy both halves,
+/* str-concat: mirror stdlib/str.tur:99 -- allocate la+lb+1, copy both halves,
  * NUL-terminate.  Layout-exact with the compiled cstr ABI (a NUL-terminated
  * char* boxed as a cstr value), so a value crossing between interpreted and
- * native code reads identically. */
+ * native code reads identically.  Allocated from the env value pool, not
+ * malloc: nothing ever frees the result individually (by design), and a
+ * malloc here is a REAL leak when the native runs at macro-expansion time
+ * inside the leak-checked `tur build`/`emit-c` path (defmacro* bodies). */
 static TuriValue native_str_concat(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     const char *sa = (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr) ? a[0].as_cstr : "";
     const char *sb = (n > 1 && a[1].tag == TURI_CSTR && a[1].as_cstr) ? a[1].as_cstr : "";
     size_t la = strlen(sa), lb = strlen(sb);
-    char *out = (char *)malloc(la + lb + 1);
+    char *out = (char *)turi_val_alloc(env, la + lb + 1);
     if (!out) return turi_nil();
     memcpy(out, sa, la);
     memcpy(out + la, sb, lb);
@@ -1316,6 +1332,44 @@ static TuriValue native_json_decode(TuriEnv *e, TuriValue *a, uint32_t n, void *
     return turi_int(result);
 }
 
+/* json/decode-file!: the file-reading half of #json-file<T>.  Mirrors the
+ * stdlib inline-C: read the whole file, parse it as json/decode does, panic
+ * (catchably) with the path when the file cannot be read. */
+static TuriValue native_json_decode_file(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1) return turi_int(0);
+    const char *path = json_arg_cstr(a[0]);
+    FILE *f = path ? fopen(path, "rb") : NULL;
+    if (!f) {
+        char msg[512];
+        snprintf(msg, sizeof msg, "json/decode-file!: cannot read %s", path ? path : "(null)");
+        turi_runtime_panic(e, msg);
+        return turi_int(0);
+    }
+    size_t cap = 4096, len = 0;
+    char *buf = (char *)malloc(cap);
+    if (!buf) { fclose(f); return turi_int(0); }
+    size_t got;
+    while ((got = fread(buf + len, 1, cap - len - 1, f)) > 0) {
+        len += got;
+        if (cap - len - 1 == 0) {
+            cap *= 2;
+            char *nb = (char *)realloc(buf, cap);
+            if (!nb) { free(buf); fclose(f); return turi_int(0); }
+            buf = nb;
+        }
+    }
+    fclose(f);
+    buf[len] = 0;
+    tur_json_ctx ctx; ctx.s = buf; ctx.pos = 0; ctx.err = 0;
+    int64_t result = json_dec_parse_value(&ctx);
+    /* The node tree copies what it needs out of the source, as json/decode's
+     * does; the buffer is ours to release. */
+    free(buf);
+    if (ctx.err) return turi_int(0);
+    return turi_int(result);
+}
+
 /* --- free: no-op under the interpreter's process-lifetime policy (match the
  * signature so a call type-checks and is a harmless no-op). --- */
 static TuriValue native_json_free(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
@@ -1348,6 +1402,7 @@ static void wk_register_json_natives(TuriEnv *env) {
     turi_env_register_native(env, "json/encode",     native_json_encode,     NULL);
     turi_env_register_native(env, "json/decode",     native_json_decode,     NULL);
     turi_env_register_native(env, "json/free",       native_json_free,       NULL);
+    turi_env_register_native(env, "json/decode-file!", native_json_decode_file, NULL);
 }
 
 /* SCHEMA (stdlib/schema.tur): the runtime schema validator built on top of the
@@ -1789,7 +1844,7 @@ static TuriValue native_schema_decode_errors(TuriEnv *e, TuriValue *a, uint32_t 
     return turi_int(json_node_ptr(a[0])[2]);
 }
 static TuriValue native_schema_decode_abort(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
-    (void)e; (void)ud;
+    (void)ud;
     tur_json_vec *v = (n >= 1) ? (tur_json_vec *)(intptr_t)a[0].as_int : NULL;
     fprintf(stderr, "schema-decode!: validation failed\n");
     if (v) for (size_t i = 0; i < v->len; i++) {
@@ -1799,7 +1854,13 @@ static TuriValue native_schema_decode_abort(TuriEnv *e, TuriValue *a, uint32_t n
         if (path && path[0]) fprintf(stderr, "  %s: %s\n", path, msg);
         else                 fprintf(stderr, "  %s\n", msg);
     }
-    abort();
+    /* A catchable panic, not abort(): this is the interpreter half of the
+     * change in stdlib/schema.tur that lets `#json-str?<T>` (a catch-unwind
+     * around the panicking decode) recover from a schema violation.  With no
+     * catch boundary in scope turi_runtime_panic still prints and exits, so a
+     * plain `schema-decode!` failure dies as loudly as it always did. */
+    turi_runtime_panic(e, "schema-decode!: validation failed");
+    return turi_int(0);
 }
 
 static void wk_register_schema_natives(TuriEnv *env) {
@@ -2528,6 +2589,27 @@ static TuriValue native_float_to_int(TuriEnv *env, TuriValue *a, uint32_t n, voi
     double v = (n > 0) ? a[0].as_float : 0.0;
     return turi_int((int64_t)v);
 }
+/* float->bits / bits->float: stdlib/bits.tur's IEEE-754 reinterprets.
+ *
+ * These are the interpreter's exact counterparts, not approximations.  The
+ * divergence documented for `::` came from the ascription having to GUESS
+ * whether a TURI_INT was a genuine integer or a carrier holding float bits;
+ * here the author has said which, so the tagged model can answer precisely:
+ * hand back the other tag over the same 64 bits.  A carrier round-trip
+ * (`float->bits` -> :int slot -> `bits->float`) therefore agrees with the
+ * compiled path, and so does observing the bit pattern itself. */
+static TuriValue native_float_to_bits(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    union { double d; int64_t i; } u;
+    u.d = (n > 0) ? a[0].as_float : 0.0;
+    return turi_int(u.i);
+}
+static TuriValue native_bits_to_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    union { double d; int64_t i; } u;
+    u.i = (n > 0) ? a[0].as_int : 0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = u.d; return rv;
+}
 /* sqrt / floor: math.tur's libm wrappers (inline-C the tree-walker cannot run). */
 static TuriValue native_math_sqrt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -3122,6 +3204,8 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "tur-sqrt",          native_tur_sqrt,        NULL);
     turi_env_register_native(env, "int->float",        native_int_to_float,    NULL);
     turi_env_register_native(env, "float->int",        native_float_to_int,    NULL);
+    turi_env_register_native(env, "float->bits",       native_float_to_bits,   NULL);
+    turi_env_register_native(env, "bits->float",       native_bits_to_float,   NULL);
     turi_env_register_native(env, "sqrt",              native_math_sqrt,       NULL);
     turi_env_register_native(env, "floor",             native_math_floor,      NULL);
     turi_env_register_native(env, "exp",               native_math_exp,        NULL);
@@ -3527,39 +3611,32 @@ static TuriValue native_chan_free(TuriEnv *env, TuriValue *a, uint32_t n, void *
 }
 
 /* schan.tur synchronous session channels: same ring buffer (SChanBlock matches
- * WkChan's leading fields), plus a one-int64 cell.  send/recv return the channel
- * carrier (the protocol continuation rides the same pointer); recv writes the
- * popped value into *cell. */
+ * WkChan's leading fields).  The protocol continuation rides the same pointer,
+ * so send and the advance step both return the channel carrier unchanged.
+ *
+ * Only the two INLINE-C leaves are overridden here. `schan-recv` itself is
+ * ordinary Turmeric -- `(pair (schan-recv-value c) (schan-advance-recv c))` --
+ * so the tree-walker evaluates it and builds the Pair with the same struct
+ * machinery the compiled path uses. Overriding `schan-recv` instead would mean
+ * hand-building a Pair value here, i.e. a second copy of that layout, which is
+ * exactly what the cell out-parameter existed to avoid. */
 static TuriValue native_schan_send(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 2 || !a[0].as_int) return turi_int(0);
     wk_chan_push((WkChan *)(intptr_t)a[0].as_int, a[1].as_int);
     return a[0];  /* SChan R continuation */
 }
-static TuriValue native_schan_recv(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    if (n < 2 || !a[0].as_int) return turi_int(0);
-    int64_t v = 0;
-    wk_chan_pop((WkChan *)(intptr_t)a[0].as_int, &v);
-    if (a[1].as_int) *(int64_t *)(intptr_t)a[1].as_int = v;  /* write into cell */
-    return a[0];  /* SChan R continuation */
-}
-static TuriValue native_schan_cell_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)a; (void)n; (void)ud;
-    int64_t *c = (int64_t *)malloc(sizeof(int64_t));
-    if (!c) return turi_nil();
-    *c = 0;
-    return wk_int_ptr(c);
-}
-static TuriValue native_schan_cell_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+static TuriValue native_schan_recv_value(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1 || !a[0].as_int) return turi_int(0);
-    return turi_int(*(int64_t *)(intptr_t)a[0].as_int);
+    int64_t v = 0;
+    wk_chan_pop((WkChan *)(intptr_t)a[0].as_int, &v);
+    return turi_int(v);
 }
-static TuriValue native_schan_cell_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+static TuriValue native_schan_advance_recv(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    if (n > 0 && a[0].as_int) free((void *)(intptr_t)a[0].as_int);
-    return turi_nil();
+    if (n < 1) return turi_int(0);
+    return a[0];  /* same pointer; only the phantom moves */
 }
 
 static void wk_register_chan_natives(TuriEnv *env) {
@@ -3575,11 +3652,9 @@ static void wk_register_chan_natives(TuriEnv *env) {
     /* schan.tur synchronous session channels (SChanBlock == WkChan prefix). */
     turi_env_register_native(env, "schan-new",           native_chan_new,        NULL);
     turi_env_register_native(env, "schan-send",          native_schan_send,      NULL);
-    turi_env_register_native(env, "schan-recv",          native_schan_recv,      NULL);
+    turi_env_register_native(env, "schan-recv-value",    native_schan_recv_value,   NULL);
+    turi_env_register_native(env, "schan-advance-recv",  native_schan_advance_recv, NULL);
     turi_env_register_native(env, "schan-close",         native_chan_free,       NULL);
-    turi_env_register_native(env, "schan-cell-new",      native_schan_cell_new,  NULL);
-    turi_env_register_native(env, "schan-cell-get",      native_schan_cell_get,  NULL);
-    turi_env_register_native(env, "schan-cell-free",     native_schan_cell_free, NULL);
 }
 
 /* -------------------------------------------------------------------------
@@ -3808,6 +3883,135 @@ static void wk_register_backtrack_natives(TuriEnv *env) {
     turi_env_register_native(env, "bt-apply-fat",  native_bt_apply_fat, NULL);
 }
 
+/* -------------------------------------------------------------------------
+ * SX1 (solver-extension-plan): stdlib/trail.tur -- backtrackable state.
+ *
+ * Every binding in trail.tur is inline-C over src/runtime/trail.c, which the
+ * tree-walker cannot execute, so without these shims the whole module resolves
+ * to nothing under --interpret.
+ *
+ * Unlike the backtrack.tur block above -- which had to REIMPLEMENT its cons
+ * cell (`wk_bt_cell`) because the compiled layout lived only in emitted C --
+ * nothing is reimplemented here.  src/runtime/trail.c is in TUR_CORE_SOURCES,
+ * so this process already has the real trail linked; each shim is a direct
+ * call, and the interpreter therefore shares one trail implementation with the
+ * compiled path rather than approximating it.  A stamp or generation bug can
+ * only be in the one place.
+ *
+ * Representations, matching the compiled `defopaque`s: `BtCell` and `GCell` are
+ * `:ptr` and `Mark` is a packed `:int`, and all three box as `turi_int` -- the
+ * same handle-as-int64 convention the String fallbacks below use.
+ *
+ * bt-scope and with-untrailed get NO shim on purpose: they are ordinary
+ * Turmeric over these primitives (stdlib/trail.tur), so shimming the
+ * primitives makes the brackets work for free -- the same reason backtrack.tur's
+ * workers needed none.
+ * ---------------------------------------------------------------------- */
+
+static TuriValue native_bt_cell_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int((int64_t)(intptr_t)tur_bt_cell_new((n > 0) ? a[0].as_int : 0));
+}
+static TuriValue native_bt_lvar_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int((int64_t)(intptr_t)tur_bt_lvar_new((n > 0) ? a[0].as_int : 0));
+}
+static TuriValue native_bt_cell_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0) tur_bt_cell_free((void *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+static TuriValue native_bt_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n == 0) return turi_int(0);
+    return turi_int(tur_bt_cell_get((void *)(intptr_t)a[0].as_int));
+}
+static TuriValue native_bt_bound(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n == 0) return turi_bool(false);
+    return turi_bool(tur_bt_cell_bound((void *)(intptr_t)a[0].as_int));
+}
+static TuriValue native_bt_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_bool(false);
+    return turi_bool(tur_bt_cell_set((void *)(intptr_t)a[0].as_int, a[1].as_int));
+}
+
+/* A GCell is the same struct; what makes it never-trailed is that the write is
+ * bracketed by pause/resume.  trail.tur's g-set! does exactly this, and getting
+ * it wrong here would silently make the per-cell opt-out a trailed cell -- a
+ * wrong answer the interpreter would produce and the compiled path would not. */
+static TuriValue native_g_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_nil();
+    tur_trail_pause();
+    tur_bt_cell_set((void *)(intptr_t)a[0].as_int, a[1].as_int);
+    tur_trail_resume();
+    return turi_nil();
+}
+
+static TuriValue native_bt_mark(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_int(tur_trail_mark_packed());
+}
+static TuriValue native_bt_undo_to(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n == 0) return turi_bool(false);
+    return turi_bool(tur_trail_undo_to_packed(a[0].as_int));
+}
+static TuriValue native_bt_commit_to(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n == 0) return turi_bool(false);
+    return turi_bool(tur_trail_commit_to_packed(a[0].as_int));
+}
+static TuriValue native_bt_level(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_int(tur_trail_level_i64());
+}
+static TuriValue native_bt_depth(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_int(tur_trail_depth_i64());
+}
+static TuriValue native_untrailed_begin(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    tur_trail_pause();
+    return turi_nil();
+}
+static TuriValue native_untrailed_end(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    tur_trail_resume();
+    return turi_nil();
+}
+static TuriValue native_trail_reset(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    tur_trail_reset();
+    return turi_nil();
+}
+
+static void wk_register_trail_natives(TuriEnv *env) {
+    turi_env_register_native(env, "bt-cell-new",     native_bt_cell_new,     NULL);
+    turi_env_register_native(env, "bt-lvar-new",     native_bt_lvar_new,     NULL);
+    turi_env_register_native(env, "bt-cell-free",    native_bt_cell_free,    NULL);
+    turi_env_register_native(env, "bt-get",          native_bt_get,          NULL);
+    turi_env_register_native(env, "bt-bound?",       native_bt_bound,        NULL);
+    turi_env_register_native(env, "bt-set!",         native_bt_set,          NULL);
+    /* g-cell-new / g-cell-free are the SAME allocator and free as the BtCell
+     * pair -- trail.tur spells them separately only so the never-trailed cell
+     * gets a distinct type at the language level. */
+    turi_env_register_native(env, "g-cell-new",      native_bt_cell_new,     NULL);
+    turi_env_register_native(env, "g-cell-free",     native_bt_cell_free,    NULL);
+    turi_env_register_native(env, "g-get",           native_bt_get,          NULL);
+    turi_env_register_native(env, "g-set!",          native_g_set,           NULL);
+    turi_env_register_native(env, "bt-mark",         native_bt_mark,         NULL);
+    turi_env_register_native(env, "bt-undo-to!",     native_bt_undo_to,      NULL);
+    turi_env_register_native(env, "bt-commit-to!",   native_bt_commit_to,    NULL);
+    turi_env_register_native(env, "bt-level",        native_bt_level,        NULL);
+    turi_env_register_native(env, "bt-depth",        native_bt_depth,        NULL);
+    turi_env_register_native(env, "untrailed-begin", native_untrailed_begin, NULL);
+    turi_env_register_native(env, "untrailed-end",   native_untrailed_end,   NULL);
+    turi_env_register_native(env, "trail-reset!",    native_trail_reset,     NULL);
+}
+
 static void wk_register_proc_fs_natives(TuriEnv *env) {
     turi_env_register_native(env, "process/spawn",    native_process_spawn,     NULL);
     turi_env_register_native(env, "process/wait",     native_process_wait,      NULL);
@@ -3914,9 +4118,10 @@ static void wk_register_bytes_natives(TuriEnv *env) {
  * R1 (turi-interpret-flip-residual-plan): taskgroup.tur TaskGroupBlock shims.
  *
  * Replica of taskgroup.tur's TaskGroupBlock.  We include cancel_reason in the
- * allocation (the canonical documented layout) so cancel-with-reason is safe --
- * note the compiled task-group-new omits it, a latent OOB write tracked in
- * docs/reported/taskgroup-block-cancel-reason-layout-overflow.md.
+ * allocation (the canonical documented layout) so cancel-with-reason is safe;
+ * taskgroup.tur's own `task-group-new` inline-C declares and allocates the same
+ * trailing field, so the two layouts agree -- keep them in step when either
+ * side gains a field.
  *
  * The cancel native does NOT touch the per-fiber thread-local cancelled flag
  * (tur_fiber_set_cancelled) that the inline-C body sets: under --interpret no
@@ -4163,6 +4368,438 @@ TuriValue native_contract_enabled(TuriEnv *env, TuriValue *args,
  * so the WASM REPL (src/web/wasm_glue.c) and `tur repl` (src/turi/repl.c) call
  * the same block and cannot drift.  Call AFTER turi_env_preload_*.
  * ---------------------------------------------------------------------- */
+/* ============================================================================
+ * SYNTAX natives -- first-class syntax objects (TURI_SYNTAX wrapping a
+ * compiler Form*).  Stage 1 of docs/upcoming/macro-system-direction-plan.md:
+ * the value plumbing that macro-time evaluation (Stage 2's defmacro*) will
+ * run on, landed first as REPL/interpreter surface so it is exercisable on
+ * its own.  Forms constructed here are allocated from env->sym_arena
+ * (env-lifetime; never scratch) and symbols intern into env->st.
+ * ==========================================================================*/
+
+static const char *sx_tag_name(TuriTag t) {
+    switch (t) {
+        case TURI_NIL:    return "nil";
+        case TURI_BOOL:   return "bool";
+        case TURI_INT:    return "int";
+        case TURI_FLOAT:  return "float";
+        case TURI_CSTR:   return "cstr";
+        case TURI_SYNTAX: return "syntax";
+        default:          return "value";
+    }
+}
+
+/* Arg guard: the wrapped Form* when args[i] is a syntax object, else NULL. */
+static Form *sx_arg(TuriValue *a, uint32_t n, uint32_t i) {
+    if (i >= n || a[i].tag != TURI_SYNTAX) return NULL;
+    return a[i].as_syntax;
+}
+
+static bool sx_is_seq(const Form *f) {
+    return f && (f->tag == F_LIST || f->tag == F_VEC);
+}
+
+static TuriValue native_read_string(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1 || a[0].tag != TURI_CSTR || !a[0].as_cstr)
+        return turi_errorf("read-string: expected a string, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    /* Copy the source into the env-lifetime arena so any Form slices that
+     * borrow from it stay valid after the caller's string dies. */
+    size_t len = strlen(a[0].as_cstr);
+    char *src = (char *)arena_alloc(&e->sym_arena, len + 1);
+    memcpy(src, a[0].as_cstr, len + 1);
+
+    /* The reader reports through the diagnostic file registry, which the
+     * enclosing eval (or, when called from a defmacro* body, the enclosing
+     * COMPILE) owns right now -- snapshot the whole registry and the
+     * had-error flag, parse under a temporary file entry, put both back.
+     * diag_files_restore deliberately skips id 0, so re-register the saved
+     * entries directly. */
+    bool saved_had = diag_had_error();
+    const SourceFile *saved_files[64];
+    size_t n_saved = diag_files_save(saved_files, 64);
+    diag_reset();
+    SourceFile sfile = {0};
+    sfile.path        = "<read-string>";
+    sfile.src         = src;
+    sfile.len         = len;
+    sfile.file_id     = 0;
+    sfile.reader_type = e->reader_type;
+    diag_register_file(&sfile);
+
+    uint32_t nforms = 0;
+    Form **forms = read_all_with_registry(&e->sym_arena, &e->st, &sfile,
+                                          e->reader_macros, &nforms);
+    bool bad = (!forms || nforms == 0 || diag_had_error());
+    diag_reset();
+    for (size_t i = 0; i < n_saved; i++)
+        if (saved_files[i]) diag_register_file(saved_files[i]);
+    if (saved_had) diag_force_had_error();
+    if (bad)
+        return turi_errorf("read-string: could not parse \"%s\"", src);
+    /* First form only (Clojure read-string semantics). */
+    return turi_syntax_val(forms[0]);
+}
+
+static TuriValue native_syntax_tag(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax-tag: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    return turi_cstr(form_tag_name(f->tag));
+}
+
+static TuriValue native_syntax_len(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax-len: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    return turi_int(sx_is_seq(f) ? (int64_t)f->as.list.len : 0);
+}
+
+static TuriValue native_syntax_first(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax-first: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    if (!sx_is_seq(f) || f->as.list.len == 0) return turi_nil();
+    return turi_syntax_val(f->as.list.items[0]);
+}
+
+static TuriValue native_syntax_rest(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax-rest: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    if (!sx_is_seq(f) || f->as.list.len <= 1)
+        return turi_syntax_val(form_list(&e->sym_arena, f ? f->span : SPAN_UNKNOWN, NULL, 0));
+    uint32_t len = f->as.list.len - 1;
+    Form **items = (Form **)arena_alloc(&e->sym_arena, len * sizeof(Form *));
+    for (uint32_t i = 0; i < len; i++) items[i] = f->as.list.items[i + 1];
+    return turi_syntax_val(form_list(&e->sym_arena, f->span, items, len));
+}
+
+static TuriValue native_syntax_nth(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f || n < 2 || a[1].tag != TURI_INT)
+        return turi_errorf("syntax-nth: expected (syntax-nth stx idx)");
+    int64_t idx = a[1].as_int;
+    if (!sx_is_seq(f) || idx < 0 || (uint64_t)idx >= f->as.list.len) return turi_nil();
+    return turi_syntax_val(f->as.list.items[idx]);
+}
+
+/* Tag predicates. ud carries the FormTag to test (int-encoded). */
+static TuriValue native_syntax_tag_p(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_bool(false);
+    return turi_bool(f->tag == (FormTag)(intptr_t)ud);
+}
+
+static TuriValue native_syntax_to_int(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax->int: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    if (f->tag == F_INT)  return turi_int(f->as.i);
+    if (f->tag == F_BOOL) return turi_int(f->as.b ? 1 : 0);
+    return turi_errorf("syntax->int: form is %s, not an int literal",
+                       form_tag_name(f->tag));
+}
+
+static TuriValue native_syntax_to_float(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax->float: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    if (f->tag == F_FLOAT) return turi_float(f->as.f);
+    if (f->tag == F_INT)   return turi_float((double)f->as.i);
+    return turi_errorf("syntax->float: form is %s, not a float literal",
+                       form_tag_name(f->tag));
+}
+
+static TuriValue native_syntax_to_str(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax->str: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    if (f->tag != F_STR)
+        return turi_errorf("syntax->str: form is %s, not a string literal",
+                           form_tag_name(f->tag));
+    /* F_STR slices are not NUL-terminated; copy into the value pool. */
+    char *s = (char *)turi_val_alloc(e, f->as.s.len + 1);
+    memcpy(s, f->as.s.p, f->as.s.len);
+    s[f->as.s.len] = '\0';
+    return turi_cstr(s);
+}
+
+static TuriValue native_syntax_sym_name(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax-sym-name: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    if (f->tag != F_SYM && f->tag != F_KEYWORD)
+        return turi_errorf("syntax-sym-name: form is %s, not a symbol/keyword",
+                           form_tag_name(f->tag));
+    return turi_cstr(f->as.sym->name);
+}
+
+static TuriValue native_syntax_to_string(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    Form *f = sx_arg(a, n, 0);
+    if (!f) return turi_errorf("syntax->string: expected a syntax object, got %s",
+                               n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    Buf b;
+    buf_init(&b);
+    form_print(&b, f);
+    char *s = (char *)turi_val_alloc(e, b.len + 1);
+    memcpy(s, b.data, b.len);
+    s[b.len] = '\0';
+    buf_free(&b);
+    return turi_cstr(s);
+}
+
+static TuriValue native_int_to_syntax(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1 || a[0].tag != TURI_INT)
+        return turi_errorf("int->syntax: expected an int, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    return turi_syntax_val(form_int(&e->sym_arena, SPAN_UNKNOWN, a[0].as_int));
+}
+
+static TuriValue native_float_to_syntax(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1 || a[0].tag != TURI_FLOAT)
+        return turi_errorf("float->syntax: expected a float, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    return turi_syntax_val(form_float(&e->sym_arena, SPAN_UNKNOWN, a[0].as_float));
+}
+
+static TuriValue native_bool_to_syntax(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1 || a[0].tag != TURI_BOOL)
+        return turi_errorf("bool->syntax: expected a bool, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    return turi_syntax_val(form_bool(&e->sym_arena, SPAN_UNKNOWN, a[0].as_bool));
+}
+
+static TuriValue native_str_to_syntax(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1 || a[0].tag != TURI_CSTR || !a[0].as_cstr)
+        return turi_errorf("str->syntax: expected a string, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    size_t len = strlen(a[0].as_cstr);
+    char *copy = (char *)arena_alloc(&e->sym_arena, len + 1);
+    memcpy(copy, a[0].as_cstr, len + 1);
+    return turi_syntax_val(form_str(&e->sym_arena, SPAN_UNKNOWN, copy, (uint32_t)len));
+}
+
+static TuriValue native_sym_to_syntax(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1)
+        return turi_errorf("sym->syntax: expected a name (string or :Sym)");
+    /* Dual arg shape like str->sym: a real cstr, or a :Sym int carrier. */
+    const Symbol *sym = NULL;
+    if (a[0].tag == TURI_CSTR && a[0].as_cstr) {
+        StrSlice sl = { a[0].as_cstr, (uint32_t)strlen(a[0].as_cstr) };
+        sym = symtab_intern(&e->st, sl);
+    } else if (a[0].tag == TURI_INT && a[0].as_int) {
+        sym = (const Symbol *)(intptr_t)a[0].as_int;
+    }
+    if (!sym)
+        return turi_errorf("sym->syntax: expected a name (string or :Sym), got %s",
+                           sx_tag_name(a[0].tag));
+    return turi_syntax_val(form_sym(&e->sym_arena, SPAN_UNKNOWN, sym));
+}
+
+/* Shared body for syntax-list / syntax-vec.  ud: 0 = list, 1 = vec.
+ * Every element must itself be a syntax object; the result inherits the
+ * first element's span so diagnostics against constructed forms still point
+ * somewhere real. */
+static TuriValue native_syntax_seq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    bool vec = ud != NULL;
+    Form **items = (n == 0) ? NULL
+                            : (Form **)arena_alloc(&e->sym_arena, n * sizeof(Form *));
+    for (uint32_t i = 0; i < n; i++) {
+        if (a[i].tag != TURI_SYNTAX)
+            return turi_errorf("%s: arg %u is %s, not a syntax object",
+                               vec ? "syntax-vec" : "syntax-list",
+                               i, sx_tag_name(a[i].tag));
+        items[i] = a[i].as_syntax;
+    }
+    Span span = (n > 0 && items[0]) ? items[0]->span : SPAN_UNKNOWN;
+    return turi_syntax_val(vec ? form_vec(&e->sym_arena, span, items, n)
+                               : form_list(&e->sym_arena, span, items, n));
+}
+
+static TuriValue native_syntax_cons(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    Form *hd = sx_arg(a, n, 0);
+    Form *tl = sx_arg(a, n, 1);
+    if (!hd || !tl)
+        return turi_errorf("syntax-cons: expected (syntax-cons stx stx-list)");
+    /* Mirror the CT evaluator's cons: list tail prepends; nil tail makes a
+     * one-element list; any other tail makes a two-element list. */
+    uint32_t tail_len = 0;
+    if (tl->tag == F_LIST) tail_len = tl->as.list.len;
+    else if (tl->tag != F_NIL) tail_len = 1;
+    Form **items = (Form **)arena_alloc(&e->sym_arena, (tail_len + 1) * sizeof(Form *));
+    items[0] = hd;
+    if (tl->tag == F_LIST) {
+        for (uint32_t i = 0; i < tail_len; i++) items[i + 1] = tl->as.list.items[i];
+    } else if (tl->tag != F_NIL) {
+        items[1] = tl;
+    }
+    return turi_syntax_val(form_list(&e->sym_arena, hd->span, items, tail_len + 1));
+}
+
+static TuriValue native_kw_to_syntax(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1 || a[0].tag != TURI_CSTR || !a[0].as_cstr)
+        return turi_errorf("kw->syntax: expected a name string (without the colon), got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    StrSlice sl = { a[0].as_cstr, (uint32_t)strlen(a[0].as_cstr) };
+    const Symbol *sym = symtab_intern(&e->st, sl);
+    return turi_syntax_val(form_keyword(&e->sym_arena, SPAN_UNKNOWN, sym));
+}
+
+static TuriValue native_nil_to_syntax(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)a; (void)n; (void)ud;
+    return turi_syntax_val(form_nil(&e->sym_arena, SPAN_UNKNOWN));
+}
+
+static TuriValue native_syntax_type_ann(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    Form *inner = sx_arg(a, n, 0);
+    if (!inner)
+        return turi_errorf("syntax-type-ann: expected a syntax object, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    return turi_syntax_val(form_type_ann(&e->sym_arena, inner->span, inner));
+}
+
+static TuriValue native_syntax_quote(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    Form *inner = sx_arg(a, n, 0);
+    if (!inner)
+        return turi_errorf("syntax-quote: expected a syntax object, got %s",
+                           n >= 1 ? sx_tag_name(a[0].tag) : "no argument");
+    return turi_syntax_val(form_quote(&e->sym_arena, inner->span, inner));
+}
+
+/* syntax-append: concatenate list-shaped syntax objects into one list form.
+ * The lowering target for `~@` splices inside a defmacro* quasiquote:
+ * `(a ~@xs b)` lowers to
+ * (syntax-append (syntax-list <a>) xs (syntax-list <b>)). */
+static TuriValue native_syntax_append(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    uint32_t total = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        Form *p = sx_arg(a, n, i);
+        if (!p || (p->tag != F_LIST && p->tag != F_NIL))
+            return turi_errorf("syntax-append: part %u is %s, not a list-shaped "
+                               "syntax object (a ~@ splice needs a list)",
+                               i, (a[i].tag == TURI_SYNTAX && a[i].as_syntax)
+                                      ? form_tag_name(a[i].as_syntax->tag)
+                                      : sx_tag_name(a[i].tag));
+        if (p->tag == F_LIST) total += p->as.list.len;
+    }
+    Form **items = (total == 0) ? NULL
+        : (Form **)arena_alloc(&e->sym_arena, total * sizeof(Form *));
+    uint32_t out = 0;
+    Span span = SPAN_UNKNOWN;
+    for (uint32_t i = 0; i < n; i++) {
+        Form *p = a[i].as_syntax;
+        if (p->tag != F_LIST) continue;
+        if (span.line == 0 && p->span.line > 0) span = p->span;
+        for (uint32_t j = 0; j < p->as.list.len; j++) items[out++] = p->as.list.items[j];
+    }
+    return turi_syntax_val(form_list(&e->sym_arena, span, items, total));
+}
+
+static TuriValue native_syntax_eq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    /* Deep structural equality, same semantics as the CT evaluator's `=`
+     * (forms.c form_equal).  Named syntax=? because the `=` operator's
+     * overload set is scalar-only -- precedent: sym=?. */
+    Form *fa = sx_arg(a, n, 0);
+    Form *fb = sx_arg(a, n, 1);
+    if (!fa || !fb)
+        return turi_errorf("syntax=?: expected two syntax objects");
+    return turi_bool(form_equal(fa, fb));
+}
+
+static TuriValue native_syntax_gensym(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *prefix = "g";
+    if (n >= 1 && a[0].tag == TURI_CSTR && a[0].as_cstr) prefix = a[0].as_cstr;
+    /* Same freshness contract as the elaborator's gensym_fresh: skip any
+     * candidate already interned in this env's symbol table. */
+    static uint32_t counter = 0;
+    char name_buf[128];
+    for (;;) {
+        snprintf(name_buf, sizeof(name_buf), "%s_%u", prefix, counter++);
+        StrSlice sl = { name_buf, (uint32_t)strlen(name_buf) };
+        if (!symtab_contains(&e->st, sl)) {
+            const Symbol *sym = symtab_intern(&e->st, sl);
+            return turi_syntax_val(form_sym(&e->sym_arena, SPAN_UNKNOWN, sym));
+        }
+    }
+}
+
+static TuriValue native_syntax_error(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    const char *msg = (n >= 1 && a[0].tag == TURI_CSTR && a[0].as_cstr)
+                          ? a[0].as_cstr : "syntax error";
+    Form *f = sx_arg(a, n, 1);
+    if (f && f->span.line > 0)
+        return turi_errorf("syntax-error at %u:%u: %s",
+                           f->span.line, f->span.col_start, msg);
+    return turi_errorf("syntax-error: %s", msg);
+}
+
+static void wk_register_syntax_natives(TuriEnv *env) {
+    turi_env_register_native_typed(env, "read-string",     native_read_string,     NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-tag",      native_syntax_tag,      NULL, TUR_NRT_CSTR);
+    turi_env_register_native_typed(env, "syntax-len",      native_syntax_len,      NULL, TUR_NRT_INT);
+    turi_env_register_native_typed(env, "syntax-first",    native_syntax_first,    NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-rest",     native_syntax_rest,     NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-nth",      native_syntax_nth,      NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-list?",    native_syntax_tag_p,    (void *)(intptr_t)F_LIST,    TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "syntax-vec?",     native_syntax_tag_p,    (void *)(intptr_t)F_VEC,     TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "syntax-sym?",     native_syntax_tag_p,    (void *)(intptr_t)F_SYM,     TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "syntax-keyword?", native_syntax_tag_p,    (void *)(intptr_t)F_KEYWORD, TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "syntax-int?",     native_syntax_tag_p,    (void *)(intptr_t)F_INT,     TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "syntax-float?",   native_syntax_tag_p,    (void *)(intptr_t)F_FLOAT,   TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "syntax-str?",     native_syntax_tag_p,    (void *)(intptr_t)F_STR,     TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "syntax-nil?",     native_syntax_tag_p,    (void *)(intptr_t)F_NIL,     TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "syntax->int",     native_syntax_to_int,   NULL, TUR_NRT_INT);
+    turi_env_register_native_typed(env, "syntax->float",   native_syntax_to_float, NULL, TUR_NRT_FLOAT);
+    turi_env_register_native_typed(env, "syntax->str",     native_syntax_to_str,   NULL, TUR_NRT_CSTR);
+    turi_env_register_native_typed(env, "syntax-sym-name", native_syntax_sym_name, NULL, TUR_NRT_CSTR);
+    turi_env_register_native_typed(env, "syntax->string",  native_syntax_to_string, NULL, TUR_NRT_CSTR);
+    turi_env_register_native_typed(env, "int->syntax",     native_int_to_syntax,   NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "float->syntax",   native_float_to_syntax, NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "bool->syntax",    native_bool_to_syntax,  NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "str->syntax",     native_str_to_syntax,   NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "sym->syntax",     native_sym_to_syntax,   NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-list",     native_syntax_seq,      NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-vec",      native_syntax_seq,      (void *)1, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-cons",     native_syntax_cons,     NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax=?",        native_syntax_eq,       NULL, TUR_NRT_BOOL);
+    turi_env_register_native_typed(env, "kw->syntax",      native_kw_to_syntax,    NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "nil->syntax",     native_nil_to_syntax,   NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-type-ann", native_syntax_type_ann, NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-quote",    native_syntax_quote,    NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-append",   native_syntax_append,   NULL, TUR_NRT_SYNTAX);
+    turi_env_register_native_typed(env, "syntax-gensym",   native_syntax_gensym,   NULL, TUR_NRT_SYNTAX);
+    /* syntax-error never returns normally (its value is a propagating
+     * error), but it types as Syntax so `(if p good-stx (syntax-error ...))`
+     * unifies in a defmacro* body. */
+    turi_env_register_native_typed(env, "syntax-error",    native_syntax_error,    NULL, TUR_NRT_SYNTAX);
+}
+
 void turi_env_register_interpreter_natives(TuriEnv *env) {
     if (!env) return;
     /* Register native overrides for stdlib inline-C functions. */
@@ -4197,6 +4834,9 @@ void turi_env_register_interpreter_natives(TuriEnv *env) {
     wk_register_chan_natives(env);
     /* R3: backtrack.tur cons-stream monad primitives (loaded on demand). */
     wk_register_backtrack_natives(env);
+    /* SX1: trail.tur backtrackable-state cells over the real src/runtime/trail.c
+     * (auto-loaded, so these always have a module body to override). */
+    wk_register_trail_natives(env);
     /* R1: process.tur spawn/wait + fs.tur tmpfile OS-handle ops (loaded on demand). */
     wk_register_proc_fs_natives(env);
     /* R1: serial.tur Serializable int/bool instances (loaded on demand). */
@@ -4214,4 +4854,7 @@ void turi_env_register_interpreter_natives(TuriEnv *env) {
     /* SCHEMA (turi): runtime schema validator over the JSON nodes, overriding
      * schema.tur's inline-C constructors/decoder/accessors (Layer 2). */
     wk_register_schema_natives(env);
+    /* SYNTAX (turi): first-class syntax objects (TURI_SYNTAX) -- Stage 1 of
+     * docs/upcoming/macro-system-direction-plan.md. */
+    wk_register_syntax_natives(env);
 }

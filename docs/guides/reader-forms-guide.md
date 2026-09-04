@@ -59,7 +59,7 @@ too
 println("ok")
 ```
 
-### Datum comment -- `#;` *(planned)*
+### Datum comment -- `#;`
 
 Reads one complete datum and discards it. The surrounding code sees nothing.
 Unlike `#| |#`, `#;` understands structure -- it always discards exactly one
@@ -246,25 +246,24 @@ interleaved.
 effect-row annotation; it is now deprecated -- see [Deprecated Forms](#deprecated-forms)
 below.)
 
-### Set literal -- `#s(...)`
+### Set literal -- `#set{...}`
 
 A set literal.
 
 ```turmeric no-check
-#s(1 2 3)
-#s(:red :green :blue)
+#set{1 2 3}
+#set{:red :green :blue}
 ```
 ```sweet-exp
-#s(1 2 3)
-#s(:red :green :blue)
+#set{1 2 3}
+#set{:red :green :blue}
 ```
 
 ### Owned-String literal -- `#s"..."` (layer `stringed`)
 
 `#s"text"` reads as `(string/from-cstr "text")` -- a fresh owned `String`,
 where a bare `"text"` stays a borrowed `cstr`. It is dispatched by the
-delimiter, so it does not collide with the `#s(...)` set literal above (`"` vs
-`(`).
+delimiter, so it does not collide with the `#set{...}` set literal above.
 
 Unlike the always-on forms in this guide, `#s"..."` is **opt-in** via the
 `stringed` `#lang` layer (or, equivalently, `#use-reader-macros
@@ -488,7 +487,7 @@ These spellings are still accepted during the grace window but produce a
 deprecation warning at every use. The migration script
 `tools/migrate-fx-rows.py` rewrites a tree mechanically. The plan that
 drives the rename lives at
-[`docs/upcoming/fx-row-syntax-rename-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/fx-row-syntax-rename-plan.md).
+[`docs/archive/history/fx-row-syntax-rename-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/fx-row-syntax-rename-plan.md).
 
 ### `#{...}` effect row -- TUR-D0002
 

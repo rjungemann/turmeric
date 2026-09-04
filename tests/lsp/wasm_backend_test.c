@@ -259,6 +259,93 @@ static void test_definition_within_a_tab(void) {
 }
 
 /* -------------------------------------------------------------------------
+ * Definitions that land in the stdlib, and the reader that opens them
+ * (try-turmeric-navigation-and-minimap-plan, M4)
+ *
+ * Measured before the work started (plan §4.1): the server does return a real
+ * stdlib Location, which is what made the read-only-tab half of M4 worth
+ * building rather than shrinking to a keybinding. This pins that answer, and
+ * the export the page reads the file back through.
+ * --------------------------------------------------------------------- */
+
+/* Exported from wasm_lsp.c for the worker; no header, since the only other
+ * caller is a JS bridge. */
+extern char *turi_wasm_read_file(const char *path);
+
+static void test_definition_reaches_the_stdlib(void) {
+    fresh();
+    open_doc("file:///project/main.tur",
+             "(def p (pair 1 2))\n");
+
+    Buf out = send_msg(
+        "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"textDocument/definition\","
+        "\"params\":{\"textDocument\":{\"uri\":\"file:///project/main.tur\"},"
+        "\"position\":{\"line\":0,\"character\":9}}}");
+
+    CHECK(contains(&out, "stdlib/pair.tur"),
+          "a stdlib name resolves to its defining file, not to null");
+    CHECK(contains(&out, "\"uri\":\"file://"),
+          "the location is a file:// uri the client can look up");
+    buf_free(&out);
+}
+
+static void test_read_file_serves_a_stdlib_source(void) {
+    char path[1024];
+    const char *root = getenv("TUR_STDLIB_DIR");
+    snprintf(path, sizeof(path), "%s/pair.tur", root ? root : "stdlib");
+
+    char *text = turi_wasm_read_file(path);
+    CHECK(text != NULL, "the reader returns a stdlib source file");
+    if (text) {
+        CHECK(strstr(text, "pair") != NULL,
+              "the text is the file, not an empty buffer");
+        free(text);
+    }
+}
+
+static void test_read_file_refuses_everything_else(void) {
+    char path[1024];
+    const char *root = getenv("TUR_STDLIB_DIR");
+    if (!root) root = "stdlib";
+
+    /* The whole point of exporting a named operation instead of adding FS to
+     * EXPORTED_RUNTIME_METHODS is that the capability the page gains is "show
+     * me where `map` is defined", not "read any path in the module". Each of
+     * these is a way that could have leaked. */
+    char *outside = turi_wasm_read_file("/etc/passwd");
+    CHECK(outside == NULL, "a path outside the stdlib is refused");
+    free(outside);
+
+    snprintf(path, sizeof(path), "%s/../etc/passwd", root);
+    char *traversal = turi_wasm_read_file(path);
+    CHECK(traversal == NULL, "a `..` segment cannot walk out of the tree");
+    free(traversal);
+
+    /* A sibling directory whose name merely starts with the root's. */
+    snprintf(path, sizeof(path), "%s-elsewhere/secret.tur", root);
+    char *prefix = turi_wasm_read_file(path);
+    CHECK(prefix == NULL, "a prefix match is not a containment check");
+    free(prefix);
+
+    snprintf(path, sizeof(path), "%s/pair.c", root);
+    char *wrong_ext = turi_wasm_read_file(path);
+    CHECK(wrong_ext == NULL, "only .tur sources are readable");
+    free(wrong_ext);
+
+    char *root_itself = turi_wasm_read_file(root);
+    CHECK(root_itself == NULL, "the root directory is not a file to read");
+    free(root_itself);
+
+    char *nothing = turi_wasm_read_file(NULL);
+    CHECK(nothing == NULL, "a null path is refused rather than crashing");
+
+    snprintf(path, sizeof(path), "%s/no-such-module.tur", root);
+    char *missing = turi_wasm_read_file(path);
+    CHECK(missing == NULL, "a file that is not there reads as a refusal");
+    free(missing);
+}
+
+/* -------------------------------------------------------------------------
  * A buffer that has never parsed still completes
  * --------------------------------------------------------------------- */
 
@@ -359,6 +446,9 @@ int main(int argc, char **argv) {
     test_sweet_exp_buffer_is_read_correctly();
     test_workspace_symbol_spans_tabs();
     test_definition_within_a_tab();
+    test_definition_reaches_the_stdlib();
+    test_read_file_serves_a_stdlib_source();
+    test_read_file_refuses_everything_else();
     test_broken_buffer_falls_back_to_stdlib();
     test_synthesized_names_are_not_offered();
     test_outline_omits_lifted_lambdas();

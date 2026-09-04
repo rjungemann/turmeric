@@ -1,0 +1,14 @@
+;; turi-dict-passing-plan: the UNPINNABLE variant of hkt-rank2-result-only-pin
+;; -- no argument mentions `m` and no expected result type is in scope, so the
+;; instantiation is genuinely ambiguous.  This used to compile clean and
+;; SIGSEGV (the dict was silently dropped while the callee wrapper expected
+;; it); now it is a call-site error naming the fix.
+(defdata B1 [a] (Mk1 :int a))
+(definstance Applicative [B1] (pure [x] (Mk1 100 x)) (ap [ff fa] fa))
+(defn un-1 [b : (B1 int)] : int (match b (Mk1 t v) (+ t v)))
+(defn make [^m] [^Applicative m n : int] : (m int) (pure n))
+(defn at-1 [g (forall [(m :: * -> *)] [(Applicative m)] (-> int (m int)))] : int
+  (un-1 (g 7)))
+(defn main [] : int
+  (println (at-1 make))
+  0)

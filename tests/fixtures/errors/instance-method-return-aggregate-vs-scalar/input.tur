@@ -1,3 +1,7 @@
+;; CloneI: a LOCAL carrier-slot class (method declared `: int`).  This used
+;; to be spelled `Clone`, silently merging with the identical stdlib class;
+;; stdlib Clone is now `(clone [x : a] : a)` (committed, per-instance typed),
+;; so the carrier-slot shape this fixture exercises needs its own class.
 ;; The same hole reached through a typeclass instance method -- the shape
 ;; tests/fixtures/typeclass/parametric-clone-list.tur was accidentally sitting
 ;; on for however long it sat unrun (it was one of 30 loose .tur files the suite
@@ -13,10 +17,10 @@
 ;; requires.compiled: the interpreted path boxes every value.
 (defstruct S [a : int])
 
-(defclass Clone [a]
-  (clone [x] : int))
+(defclass CloneI [a]
+  (clonei [x] : int))
 
-(definstance Clone [S]
-  (clone [x] x))
+(definstance CloneI [S]
+  (clonei [x] x))
 
 (defn main [] : int 0)

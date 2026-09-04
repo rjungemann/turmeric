@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Turmeric -- A Taste of Functional Programming</title>
+<title>Turmeric -- A Safe & Expressive Systems Language</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="description" content="Turmeric is a lightning-fast functional language with typeclasses, algebraic effects, and pattern matching in a Lisp-inspired syntax.">
 
 <!-- Open Graph -->
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://turmeric-lang.com/">
-<meta property="og:title" content="Turmeric -- A Taste of Functional Programming">
+<meta property="og:title" content="Turmeric -- A Safe & Expressive Systems Language">
 <meta property="og:description" content="Turmeric is a lightning-fast functional language with typeclasses, algebraic effects, and pattern matching in a Lisp-inspired syntax.">
 <meta property="og:image" content="https://turmeric-lang.com/og-image.png">
 <meta property="og:image:width" content="1200">
@@ -20,7 +20,7 @@
 <!-- Twitter / X -->
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:url" content="https://turmeric-lang.com/">
-<meta name="twitter:title" content="Turmeric -- A Taste of Functional Programming">
+<meta name="twitter:title" content="Turmeric -- A Safe & Expressive Systems Language">
 <meta name="twitter:description" content="Turmeric is a lightning-fast functional language with typeclasses, algebraic effects, and pattern matching in a Lisp-inspired syntax.">
 <meta name="twitter:image" content="https://turmeric-lang.com/og-image.png">
 <link rel="stylesheet" href="/site.css">
@@ -35,47 +35,25 @@
 
 <!-- ── HERO ───────────────────────────── -->
 <div class="hero">
-  <div class="hero-grid"></div>
-  <div class="hero-glow"></div>
   <div class="hero-inner">
-    <div class="hero-eyebrow">
-      <span class="eyebrow-dot"></span>
-      Now in public beta -- v%TURMERIC_VERSION%
-    </div>
-    <h1>A <em>safe</em>, <em>expressive</em><br>systems language</h1>
+    <p class="hero-status">Now in public beta -- v%TURMERIC_VERSION%</p>
+    <h1>A <em>safe</em> &amp; <em>expressive</em><br>systems language</h1>
     <!--<p class="hero-subtitle">Readable and expressive, without sacrificing safety.</p>-->
     <div class="hero-desc">
       <em>Advanced type safety</em> with zero runtime cost<br>
-      <em>Close-to-Rust performance</em>, with inline C for the last mile<br>
-      <em>Lisp-level expressiveness</em>, with a <em>non-Lispy dialect</em> available<br>
+      <em>Close-to-Rust performance</em> with inline C for the last mile<br>
+      <em>Lisp-level expressiveness</em> with a <em>non-Lispy dialect</em> available<br>
     </div>
     <div class="hero-actions">
-      <a href="/try" class="btn-hero btn-hero-primary">Try in browser <span class="arrow">→</span></a>
+      <a href="/try" class="btn-hero btn-hero-primary">Try in browser</a>
+      <a href="#install" class="btn-hero btn-hero-secondary">Install</a>
       <a href="/docs/html/guides/" class="btn-hero btn-hero-secondary">Read the Guides</a>
-    </div>
-    <div class="install-hint">
-      <span>Install via</span>
-      <span class="install-cmd">curl -sSf https://turmeric-lang.com/install | sh</span>
-    </div>
-    <div class="codespaces-badge">
-      <a href="https://codespaces.new/rjungemann/turmeric"
-         class="btn-hero btn-hero-secondary"
-         aria-label="Open Turmeric in GitHub Codespaces">
-        Open in GitHub Codespaces
-      </a>
-    </div>
-    <div class="docker-hint">
-      Or <a href="https://github.com/rjungemann/turmeric/blob/main/Dockerfile">run via Docker</a>
-      -- <code>docker build -t turmeric . &amp;&amp; docker run --rm -it turmeric</code>
     </div>
 
     <!-- Code block -->
     <div class="hero-code reveal">
       <div class="code-card">
         <div class="code-card-bar">
-          <div class="win-dot wd-r"></div>
-          <div class="win-dot wd-y"></div>
-          <div class="win-dot wd-g"></div>
           <span class="code-card-filename" id="code-filename" data-turmeric="effects.tur" data-sweet-exp="effects.tur.sweet">effects.tur</span>
           <div class="code-syntax-toggle" role="tablist">
             <button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button>
@@ -84,17 +62,17 @@
         </div>
         <div class="code-card-body">
           <div class="code-version turmeric-version">;; Algebraic effects in Turmeric
-(defeffect Ask [] :int)
+(defeffect Ask [] : int)
 
-(defn use-ask [] :int
+(defn use-ask [] : int
   (+ 1 (perform (Ask))))
 
 (println
   (handle (use-ask)
     (Ask [] k) (resume k 41)))</div><div class="code-version sweet-exp-version" style="display: none;">;; Algebraic effects in Turmeric
-defeffect Ask [] :int
+defeffect Ask [] : int
 
-defn use-ask [] :int
+defn use-ask [] : int
   {1 + perform(Ask())}
 
 println
@@ -112,10 +90,11 @@ println
   <span class="infl-label">Inspired by</span>
   <div class="infl-sep"></div>
   <div class="infl-items">
-    <span class="infl-item">Clojure</span>
-    <span class="infl-item">Racket</span>
-    <span class="infl-item">Haskell</span>
-    <span class="infl-item">Koka</span>
+    <a class="infl-item" href="https://www.rust-lang.org/">Rust</a>
+    <a class="infl-item" href="https://clojure.org/">Clojure</a>
+    <a class="infl-item" href="https://racket-lang.org/">Racket</a>
+    <a class="infl-item" href="https://www.haskell.org/">Haskell</a>
+    <a class="infl-item" href="https://dafny.org/">Dafny</a>
   </div>
 </div>
 
@@ -172,15 +151,12 @@ println
 <div class="split-section reveal">
   <div>
     <p class="section-label">Typeclasses</p>
-    <h2 class="section-title">Zero-overhead polymorphism</h2>
+    <h2 class="section-title">Zero-overhead polymorphism.</h2>
     <p class="section-desc mb-24">Attach new behavior to any type without touching it. Turmeric resolves typeclass dispatch at compile time -- no virtual tables, no runtime cost.</p>
     <p class="section-desc">From typeclasses and HKTs to runtime contract types, Turmeric offers <a href="/docs/html/guides/polymorphism-guide.html" style="color:var(--gold);">multiple forms of polymorphism</a>. Choose what fits the problem -- not what the type system forces on you.</p>
   </div>
   <div class="code-card code-card--sm">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename" data-turmeric="typeclasses.tur" data-sweet-exp="typeclasses.tur.sweet">typeclasses.tur</span>
       <div class="code-syntax-toggle">
         <button class="seg-btn active" data-syntax="turmeric">turmeric</button>
@@ -189,10 +165,10 @@ println
     </div>
     <div class="code-card-body">
       <div class="code-version turmeric-version">(defclass Show [a]
-  (show [x] :cstr))
+  (show [x] : cstr))
 
 (defclass Eq [a]
-  (eq? [x y] :bool))
+  (eq? [x y] : bool))
 
 (defdata Color (Red) (Green) (Blue))
 
@@ -200,19 +176,19 @@ println
   (eq? [x y] (= x y)))
 
 ;; Typeclass constraint -- requires Show instance
-(defn display [^Show a x] :void
+(defn display [^Show a x] : void
   (println (show x)))
 
 ;; Pattern match on ADTs
-(defn color-name [c] :cstr
+(defn color-name [c] : cstr
   (match c
     (Red)   "red"
     (Green) "green"
     (Blue)  "blue"))</div><div class="code-version sweet-exp-version" style="display:none;">defclass Show [a]
-  show [x] :cstr
+  show [x] : cstr
 
 defclass Eq [a]
-  eq? [x y] :bool
+  eq? [x y] : bool
 
 defdata Color (Red) (Green) (Blue)
 
@@ -220,11 +196,11 @@ definstance Eq [int]
   eq? [x y] {x = y}
 
 ;; Typeclass constraint -- requires Show instance
-defn display [^Show a x] :void
+defn display [^Show a x] : void
   println(show(x))
 
 ;; Pattern match on ADTs
-defn color-name [c] :cstr
+defn color-name [c] : cstr
   match c
     (Red)   "red"
     (Green) "green"
@@ -239,15 +215,12 @@ defn color-name [c] :cstr
 <div class="split-section reverse reveal">
   <div>
     <p class="section-label">Effect Handlers</p>
-    <h2 class="section-title">Write once,<br>handle anywhere</h2>
+    <h2 class="section-title">Write once,<br>handle anywhere.</h2>
     <p class="section-desc mb-24">The same business logic powers your production app and your test suite. Swap the handler -- not the function. No mocking frameworks, no dependency injection.</p>
     <p class="section-desc">Turmeric's algebraic effect system makes this possible: declare what a function can do, not how it does it. The type system ensures every effect is handled.</p>
   </div>
   <div class="code-card code-card--sm">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename" data-turmeric="effects.tur" data-sweet-exp="effects.tur.sweet">effects.tur</span>
       <div class="code-syntax-toggle">
         <button class="seg-btn active" data-syntax="turmeric">turmeric</button>
@@ -255,36 +228,36 @@ defn color-name [c] :cstr
       </div>
     </div>
     <div class="code-card-body">
-      <div class="code-version turmeric-version">(defeffect Ask [] :int)
+      <div class="code-version turmeric-version">(defeffect Ask [] : int)
 
 ;; Business logic -- no mention of *how* Ask works
-(defn compute [x] :int
+(defn compute [x] : int
   (+ x (perform (Ask))))
 
 ;; Production: supply real value
-(defn run-prod [program] :int
+(defn run-prod [program] : int
   (handle program
     (Ask [] k) (resume k 41)))
 
 ;; Test: supply fixed value -- no mocking frameworks
-(defn run-test [program] :int
+(defn run-test [program] : int
   (handle program
     (Ask [] k) (resume k 0)))
 
 (println (run-prod (compute 1)))  ;; =&gt; 42
-(println (run-test (compute 1)))  ;; =&gt; 1</div><div class="code-version sweet-exp-version" style="display:none;">defeffect Ask [] :int
+(println (run-test (compute 1)))  ;; =&gt; 1</div><div class="code-version sweet-exp-version" style="display:none;">defeffect Ask [] : int
 
 ;; Business logic -- no mention of *how* Ask works
-defn compute [x] :int
+defn compute [x] : int
   {x + perform(Ask())}
 
 ;; Production: supply real value
-defn run-prod [program] :int
+defn run-prod [program] : int
   handle program
     (Ask [] k) resume(k 41)
 
 ;; Test: supply fixed value -- no mocking frameworks
-defn run-test [program] :int
+defn run-test [program] : int
   handle program
     (Ask [] k) resume(k 0)
 
@@ -306,9 +279,6 @@ println(run-test(compute(1)))  ;; =&gt; 1</div>
   </div>
   <div class="code-card code-card--sm">
     <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
       <span class="code-card-filename">build.tur</span>
     </div>
     <div class="code-card-body">
@@ -336,16 +306,46 @@ println(run-test(compute(1)))  ;; =&gt; 1</div>
 <hr class="divider">
 
 <!-- ── GETTING STARTED ───────────────── -->
-<div class="started-section reveal">
-  <p class="section-label">Get Started</p>
-  <h2 class="section-title">Up and running<br>in <em>minutes.</em></h2>
+<div class="started-section reveal" id="install">
+  <h2 class="section-title">Up and running<br>in minutes.</h2>
 
   <div class="started-grid">
     <div class="step-card">
       <div class="step-num">01 -- Install</div>
-      <div class="step-title">One-command install</div>
-      <div class="step-code">curl -sSf https://turmeric-lang.com/install | sh</div>
-      <p class="step-desc">Installs <code>tur</code> via <a href="https://brew.sh" style="color:var(--gold);">Homebrew</a> on macOS. On Linux, grab a prebuilt binary from the <a href="https://github.com/rjungemann/turmeric/releases" style="color:var(--gold);">releases page</a>, <a href="https://github.com/rjungemann/turmeric" style="color:var(--gold);">build from source</a>, or use the <a href="https://github.com/rjungemann/turmeric/blob/main/Dockerfile" style="color:var(--gold);">Docker image</a>. To install and switch between multiple releases per-shell, use the <a href="https://github.com/rjungemann/turmeric/blob/main/tvm/README.md" style="color:var(--gold);">version manager</a> (<code>tvm</code>).</p>
+      <div class="step-title">Pick your install</div>
+
+      <div class="install-tabs" role="tablist" aria-label="Install method">
+        <button class="install-tab active" id="tab-homebrew" role="tab"
+                aria-selected="true" aria-controls="panel-homebrew"
+                data-method="homebrew">Homebrew</button>
+        <button class="install-tab" id="tab-docker" role="tab"
+                aria-selected="false" aria-controls="panel-docker"
+                data-method="docker">Docker</button>
+        <button class="install-tab" id="tab-codespaces" role="tab"
+                aria-selected="false" aria-controls="panel-codespaces"
+                data-method="codespaces">Codespaces</button>
+      </div>
+
+      <div class="install-panel" id="panel-homebrew" role="tabpanel"
+           aria-labelledby="tab-homebrew" data-method="homebrew">
+        <div class="step-code">curl -sSf https://turmeric-lang.com/install | sh</div>
+        <p class="step-desc">Installs <code>tur</code> via <a href="https://brew.sh" style="color:var(--gold);">Homebrew</a> on macOS. On Linux, grab a prebuilt binary from the <a href="https://github.com/rjungemann/turmeric/releases" style="color:var(--gold);">releases page</a> or <a href="https://github.com/rjungemann/turmeric" style="color:var(--gold);">build from source</a>. To install and switch between multiple releases per-shell, use the <a href="https://github.com/rjungemann/turmeric/blob/main/tvm/README.md" style="color:var(--gold);">version manager</a> (<code>tvm</code>).</p>
+      </div>
+
+      <div class="install-panel" id="panel-docker" role="tabpanel"
+           aria-labelledby="tab-docker" data-method="docker" hidden>
+        <div class="step-code">git clone https://github.com/rjungemann/turmeric
+cd turmeric
+docker build -t turmeric .
+docker run --rm -it turmeric</div>
+        <p class="step-desc">The <a href="https://github.com/rjungemann/turmeric/blob/main/Dockerfile" style="color:var(--gold);">Dockerfile</a> builds the compiler and stdlib inside the image and drops you at a REPL -- no toolchain on your host.</p>
+      </div>
+
+      <div class="install-panel" id="panel-codespaces" role="tabpanel"
+           aria-labelledby="tab-codespaces" data-method="codespaces" hidden>
+        <div class="step-code">gh codespace create --repo rjungemann/turmeric</div>
+        <p class="step-desc">Or <a href="https://codespaces.new/rjungemann/turmeric" style="color:var(--gold);">open a Codespace in the browser</a> -- a cloud dev container with the toolchain already built, so there is nothing to install locally.</p>
+      </div>
     </div>
 
     <div class="step-card">
@@ -360,12 +360,12 @@ tur run</div>
     <div class="step-card">
       <div class="step-num">03 -- Write Code</div>
       <div class="step-title">Your first function</div>
-      <div class="step-code">(defn factorial [n] :int
+      <div class="step-code">(defn factorial [n] : int
   (if (&lt;= n 1) 1
     (* n (factorial (- n 1)))))
 
 (println (factorial 10))  ;; =&gt; 3628800</div>
-      <p class="step-desc">Return types are annotated with <code>:int</code>, <code>:bool</code>, or <code>:cstr</code>. The compiler catches type errors before you run.</p>
+      <p class="step-desc">Return types follow the parameter list -- <code>: int</code>, <code>: bool</code>, or <code>: cstr</code>. The compiler catches type errors before you run.</p>
     </div>
 
     <div class="step-card">
@@ -383,9 +383,10 @@ tur add spice/postgres</div>
 <div class="cta-section reveal">
   <div class="cta-box">
     <h2 class="cta-title">Ready to add some<br><em>spice</em> to your stack?</h2>
-    <p class="cta-desc">Try Turmeric in your browser -- no install required.</p>
+    <p class="cta-desc">Try Turmeric in your browser. No install required.</p>
     <div class="cta-actions">
-      <a href="/try" class="btn-hero btn-hero-primary">Open Playground →</a>
+      <a href="/try" class="btn-hero btn-hero-primary">Try in Browser</a>
+      <a href="#install" class="btn-hero btn-hero-secondary">Install</a>
       <a href="/docs/html/guides/" class="btn-hero btn-hero-secondary">Read the Guides</a>
     </div>
   </div>

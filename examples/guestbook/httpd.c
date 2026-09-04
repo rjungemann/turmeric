@@ -14,9 +14,24 @@
  *                            const char *body)
  */
 
+/* strdup / strncasecmp are POSIX, not ISO C: without this the compiler sees no
+ * prototype under -std=c11, assumes `int strdup()`, and truncates the returned
+ * pointer -- which crashed the very first request.  On macOS a bare
+ * _POSIX_C_SOURCE also HIDES the BSD extras (INADDR_LOOPBACK among them), so
+ * _DARWIN_C_SOURCE re-exposes them there; it is inert everywhere else. */
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE 1
+#endif
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE 1
+#endif
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <errno.h>
 
 #ifdef _WIN32
@@ -30,6 +45,10 @@
    typedef int SOCKET;
 #  define INVALID_SOCKET (-1)
 #  define closesocket    close
+#endif
+/* 127.0.0.1 in host order -- the POSIX headers do not promise the name. */
+#ifndef INADDR_LOOPBACK
+#  define INADDR_LOOPBACK 0x7f000001UL
 #endif
 
 /* --------------------------------------------------------------------------

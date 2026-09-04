@@ -20,20 +20,30 @@ Turmeric offers two primary error handling strategies:
 Contract macros (`assert!`, `require!`, `ensure!`, `invariant!`) provide structured
 precondition and postcondition checking built on top of `panic`.
 
-> **Removed in 0.25.0:** `throw` / `try` / `catch` have been deleted end-to-end.
-> Use `Result` for recoverable failures and `panic` / `catch-unwind` for
-> unrecoverable ones. Fiber rejection (from `await`, `with-timeout`,
-> `task-cancel`) now surfaces as `TURI_REJECTION` and is observed with
-> `(error? r)` / `(error-message r)` rather than `try`/`catch`.
+> **No exceptions:** Turmeric has no `throw` / `try` / `catch`. Use `Result`
+> for recoverable failures and `panic` / `catch-unwind` for unrecoverable
+> ones. Fiber rejection (from `await`, `with-timeout`, `task-cancel`)
+> surfaces as `TURI_REJECTION` and is observed with `(error? r)` /
+> `(error-message r)`.
 
 ---
 
 ## `Result`
 
-A result value is either `(ok value)` or `(err error)`. The runtime representation
-is a heap-allocated struct `{ bool is_ok; int64_t ok_val; int64_t err_val; }` returned
-as `ptr<void>`. Both the ok and err fields are `int64_t` in v1; typed generics are a
-future follow-on.
+A result value is either `(ok value)` or `(err error)`. `Result` is a real sum
+(SR2b): the runtime representation is the tagged monomorph
+`{ int tag; union { A ok_val; B err_val; } as; }` -- 16 bytes, tag 0 = Ok,
+tag 1 = Err, payload at offset 8. A concrete monomorph such as
+`(Result int cstr)` flows by value; an erased generic base still rides the
+int64 carrier as a heap pointer to the same layout. Inline-C code should
+build and read these through the preamble helpers (`tur_box_ok` /
+`tur_is_ok` / `tur_ok_value` / ...) rather than spelling the struct by hand --
+see the [inline-C results guide](inline-c-results-guide.md).
+
+An inline-C function that hands back a carrier value declared `: int` needs an
+ascription at the boundary for the typed accessors to take it -- `(ok? (:: r
+(Result int cstr)))`, the same thing `some?` has always wanted. `ok?` and
+`err?` take `(Result A B)` rather than `:int` as of the by-value default.
 
 ### Constructors
 
@@ -661,27 +671,47 @@ invariant-msg!(my-list non-empty? "list must not be empty")
 
 ## Panic inside async tasks
 
-> **Today (synchronous async).** `(async fn)` inlines the function call; the
-> body runs synchronously with no fiber scheduler and no task boundary. A panic
-> inside an async body simply propagates through the caller's stack exactly as a
-> normal panic would -- there is nothing async-specific about it, and
-> `catch-unwind` at the call site catches it like any other panic.
-
-> **v2 (fiber-based async).** When the fiber scheduler lands, panics gain a task
-> boundary:
+> **Today.** Every `(async ...)` task has its own panic boundary. `(async ...)`
+> still runs its body on the caller's stack until the body's first suspension
+> point, but a panic there is caught at the task boundary rather than unwinding
+> whoever spawned it: the task's future is **rejected** carrying the panic
+> message, and the spawn returns normally. (Fibers spawned into a *task group*
+> keep their own boundary: a panic there auto-cancels the group.)
 >
-> 1. A panic inside an async task is caught at the task boundary; the task's
->    future resolves to a rejected state carrying the panic payload. Use
->    `catch-unwind` at the join point to recover.
-> 2. If a task is cancelled while a panic is in progress, the panic takes
->    precedence.
-> 3. An uncaught panic in async main terminates the process with a nonzero exit
->    code after all defer thunks have fired.
-> 4. On the WASM target, panics lower to the WebAssembly `unreachable`
->    instruction.
+> The rejection is re-raised at the point that demands the result. `(await f)`
+> on a rejected task raises the task's own panic *at the await*, so a
+> `catch-unwind` around the await catches it -- and with no handler in scope it
+> prints the task's message and aborts, exactly as an uncaught panic does
+> anywhere else. A task whose panic nobody ever awaits does not terminate the
+> program.
 
-> See [docs/upcoming/cps-transform-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/cps-transform-plan.md)
-> for the fiber-based async runtime these v2 semantics depend on.
+```turmeric
+(defn boom [] : int (panic "task exploded"))
+
+(defn main [] : int
+  (let [fut (async boom)]
+    (println "the spawn itself does not unwind"))   ; runs
+
+  (let [fut (async boom)
+        r   (catch-unwind (fn [] : int (await fut)))]
+    (if (err? r)
+      (println "recovered from the task's panic")   ; taken
+      (println "no panic")))
+  0)
+```
+
+> **Still planned.** Three parts of the task-boundary design are not built yet:
+>
+> 1. If a task is cancelled while a panic is in progress, the panic takes
+>    precedence.
+> 2. An uncaught panic in async main terminates the process with a nonzero exit
+>    code after all defer thunks have fired.
+> 3. On the WASM target, panics lower to the WebAssembly `unreachable`
+>    instruction.
+>
+> A panic raised *after* a task re-parks on a pending `await` is also outside
+> the boundary today: the boundary is the spawn-side frame, so it is gone by
+> the time the parked continuation resumes.
 
 ---
 
@@ -706,13 +736,6 @@ A panic interacts with the effect/continuation machinery as follows:
 
 ---
 
-## Deferred
-
-All previously-deferred features have shipped; see the table of contents above
-for the current error-handling surface.
-
----
-
 ## See Also
 
 - [error-handling-rationale.md](https://github.com/rjungemann/turmeric/blob/main/docs/design/error-handling-rationale.md) --
@@ -721,5 +744,5 @@ for the current error-handling surface.
   semantics referenced above
 - [compiler-flags-guide.md](compiler-flags-guide.md) -- `--no-contracts`,
   `--warn-unused-result`, and `--lint-panic`
-- [cps-transform-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/cps-transform-plan.md) -- the fiber-based
-  async runtime behind the v2 async-panic semantics
+- [cps-transform-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/cps-transform-plan.md) -- the CPS
+  substrate the async runtime is built on

@@ -1,0 +1,41 @@
+(load "stdlib/str-build.tur")
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int] (show [x] : cstr (int->str x)))
+(defstruct P1 :copy [x : int y : int])
+(defstruct P2 :copy [x : int y : int])
+
+;; template path (stdlib)
+(derive-show-cstr P1 x y)
+
+;; procedural port: same emitted shape, built with the full language --
+;; letrec gives the typed, self-recursive field walker
+(defmacro* derive-show-cstr2 [TypeName & fields]
+  (letrec [accessor (fn [f : Syntax] : Syntax
+                      (syntax-list (sym->syntax (str-concat "." (syntax-sym-name f)))
+                                   (sym->syntax "__p")))
+           build    (fn [i : int] : Syntax
+                      (if (< i (syntax-len fields))
+                        (syntax-list (sym->syntax "str-concat")
+                          (str->syntax (str-concat (if (= i 0) " { " ", ")
+                                                   (str-concat (syntax-sym-name (syntax-nth fields i))
+                                                               " = ")))
+                          (syntax-list (sym->syntax "str-concat")
+                            (syntax-list (sym->syntax ".show") (accessor (syntax-nth fields i)))
+                            (build (+ i 1))))
+                        (str->syntax " }")))]
+    (syntax-list (sym->syntax "definstance") (sym->syntax "Show")
+      (syntax-vec TypeName)
+      (syntax-list (sym->syntax "show") (syntax-vec (sym->syntax "__p"))
+        (read-string ":cstr")
+        (syntax-list (sym->syntax "str-concat")
+          (str->syntax (syntax-sym-name TypeName))
+          (if (= (syntax-len fields) 0)
+            (str->syntax " { }")
+            (build 0)))))))
+
+(derive-show-cstr2 P2 x y)
+
+(defn main [] : int
+  (println (show (P1 1 2)))
+  (println (show (P2 1 2)))
+  0)

@@ -1,0 +1,30 @@
+;; Reverse-execution (T2) fixture, driven by tests/dap-replay-driver.py.
+;;
+;; Deliberately NOT tests/fixtures/dap/input.tur, and deliberately not small.
+;; A recording is scanned end-to-end whenever `continue` finds no breakpoint
+;; ahead of it, and the first version of that scan re-derived the whole
+;; interpreter state at every candidate step -- which is not slow, it is a
+;; hang. A 65-step fixture cannot tell the two implementations apart; this one
+;; records ~20k steps, where a quadratic scan blows the driver's timeout and a
+;; linear one finishes in milliseconds.
+;;
+;; The head of the program mirrors the dap fixture so the driver can assert on
+;; the same shapes (add over main, x and y bound at the call site); the loop
+;; that follows is what makes the recording large.
+
+(defn add [a : int b : int] : int
+  (let [s (+ a b)]
+    s))
+
+(defn main [] : int
+  (let [x 3
+        y 4
+        z (add x y)
+        ^mut i 0
+        ^mut acc 0]
+    (while (< i 2000)
+      (do
+        (set! acc (+ acc i))
+        (set! i (+ i 1))))
+    (println "done")
+    z))

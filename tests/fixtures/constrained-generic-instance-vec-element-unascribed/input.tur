@@ -3,7 +3,7 @@
 ;; even when the element is read through an UNASCRIBED carrier helper
 ;; (`(tag (vec-get v i))`, with no `(:: e A)` ascription).
 ;;
-;; Root cause (docs/reported/unascribed-carrier-helper-read-collapses-element-tyvar.md):
+;; Root cause (docs/archive/history/unascribed-carrier-helper-read-collapses-element-tyvar.md):
 ;; `vec-get` is the generic carrier helper `(defn vec-get [A] [v : (Vec A)
 ;; i : int] : A ...)`.  Its `:A` result is summarized to the int64 carrier
 ;; (TY_INT) at elaboration, so the `tag` receiver's elaborated type is TY_INT --

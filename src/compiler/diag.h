@@ -50,6 +50,10 @@ typedef enum DiagCode {
     /* CF6 (control-flow-completeness-plan): async Send-across-await soundness */
     TUR_E0022_AWAIT_LIVE_NOT_SEND,                /* non-Send binding in scope at await in async body */
     /* Phase B: mixed-width numeric arithmetic (no implicit coercion) */
+    TUR_E0023_BIND_VOID_EXPRESSION,               /* `let` binding whose init has type :void */
+
+    TUR_E0024_READS_FRAME_INVALID,                /* malformed or duplicated `#reads` frame */
+
     TUR_E0042_MIXED_WIDTH_ARITH, /* distinct numeric kinds cannot be combined without (as ...) */
     /* ER1: strict-effects warnings */
     TUR_W0030_STRICT_EFFECTS_UNANNOTATED,  /* unannotated fn has non-empty inferred row (--strict-effects) */
@@ -100,9 +104,14 @@ typedef enum DiagCode {
     /* IT1: Union type errors (-Xunion-types) */
     TUR_E0300_UNION_TYPE_MISMATCH,   /* value type not a member of union type */
     TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH, /* match on union type missing arm for one or more members */
-    /* sealed-opaque experiment: `::` between a `:sealed` defopaque and its
-     * representation type, outside the module that declared it. */
+    /* sealed-opaque (graduated 0.34.0): `::` between a `:sealed` defopaque and
+     * its representation type, outside the module that declared it. */
     TUR_E0302_SEALED_OPAQUE_CAST,
+    /* option-niche: a literal 0 ascribed into a `:non-null` defopaque -- a
+     * statically provable violation of the declaration the niche's soundness
+     * rests on.  The runtime Some-ctor check covers what elaboration cannot
+     * see (inline-C, computed values); a violation it CAN see errors here. */
+    TUR_E0303_NON_NULL_OPAQUE_ZERO,
     /* IT3: Intersection type errors (-Xintersection-types) */
     TUR_E0350_INTERSECTION_UNSATISFIABLE,   /* no value can satisfy all intersection members */
     TUR_E0351_INTERSECTION_MEMBER_MISMATCH, /* value doesn't satisfy an intersection member */
@@ -114,13 +123,13 @@ typedef enum DiagCode {
     TUR_W0038_LINT_PANIC_SITE,
     /* A free top-level defn shares its name with a user-defined typeclass
      * method, silently shadowing the method at every bare call site.
-     * See docs/reported/typeclass-methods-share-value-namespace-with-defns.md. */
+     * See docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md. */
     TUR_W0039_METHOD_DEFN_CLASH,
     /* Eval-mode unknown call head deferred to runtime-dispatch -- the name is
      * not bound at elaboration time and not in the typed-native registry, so
      * it will fail at runtime if no native is registered for it before the
      * call runs.  Likely a typo.  See
-     * docs/archive/eval-mode-unknown-call-deferred-to-runtime.md. */
+     * docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md. */
     TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH,
     /* arbitrary-fn-arity Phase 6: a defn/fn declares more positional parameters
      * than the historical soft ceiling of 16.  Not an error -- the mechanical
@@ -132,7 +141,7 @@ typedef enum DiagCode {
      * by symbol identity *before* any binding or macro lookup, so the
      * definition is accepted but every bare `(name ...)` call site elaborates
      * as the special form and the definition is unreachable by its bare name.
-     * See docs/archive/defn-shadows-return-special-form.md. */
+     * See docs/archive/history/defn-shadows-return-special-form.md. */
     TUR_W0042_SHADOWS_SPECIAL_FORM,
     /* MS2: Multi-shot continuation capture analysis */
     TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */
@@ -211,6 +220,41 @@ typedef enum DiagCode {
      * identity), so `(+ (compute) (cloneable-shift ...))` printed a wrong number.
      * Rejected at codegen instead, mirroring the serial TUR-E0706 fix. */
     TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE,
+    /* defmodule-bare-toplevel-forms-silently-dropped: a non-definition form as
+     * a direct child of (defmodule ...).  The emitter works off the globally
+     * registered definitions and never reads the module body list, so such a
+     * form was fully elaborated -- type errors inside it reported normally --
+     * and then dropped with no diagnostic.  109 (describe ...) blocks across 12
+     * spices never ran, and 8 of them passed CI vacuously.  There is no
+     * module-level side-effect position today, so this is rejected rather than
+     * emitted; `defer` is the one non-definition form that is legal here. */
+    TUR_E0711_MODULE_TOPLEVEL_EXPR,
+    /* emit-value-dispatch-unbounded-recursion: the emitter's expression walk
+     * (emit_value -> emit_value_dispatch -> emit_builtin -> ...) is plain
+     * structural recursion, so a deeply nested expression exhausted the C
+     * stack -- a SIGSEGV with no source attribution, and on the documented
+     * Debug+ASan bootstrap build it took only ~50 levels because ASan inflates
+     * the frame roughly 40x.  Bounded now, so an expression too deep to compile
+     * gets a diagnostic instead of a crash.  `tur check` runs the emitter too,
+     * so this covers the LSP path as well. */
+    TUR_E0712_EXPR_NESTING_TOO_DEEP,
+    /* nested-defn-accepted-outer-returns-zero: a function body whose LAST form
+     * is a definition.  Nested `defn` is a real feature (Phase B3 -- it lifts to
+     * file scope and is callable by name), so the definition is not the problem;
+     * being in TAIL position is.  A definition yields no value, and codegen fell
+     * back to `return 0;` for the enclosing function -- it ran, exited 0, and
+     * returned the wrong answer with no diagnostic at any stage.  In practice
+     * the cause is always a missing close paren, which makes the following
+     * definitions parse as nested ones. */
+    TUR_E0713_DEFINITION_IN_TAIL_POSITION,
+    /* container-element-form-plan CE1: a niche-represented `(Option P)`
+     * element (the default representation since 2026-09-03) is stored into a Vec whose element
+     * type is still ERASED at this site (a raw-`:int` or unresolved
+     * receiver).  The slot convention is per element monomorph -- a word for
+     * a niche element, a box otherwise -- and an erased store cannot know
+     * which, so it would put a second convention into the same vec that a
+     * concrete reader cannot tell apart.  Refuses loudly instead of guessing. */
+    TUR_E0714_NICHE_ELEMENT_ERASED_STORE,
     /* Deprecation band (TUR-D####): syntax accepted for backward
      * compatibility but slated for removal.  Emitted as DIAG_WARNING;
      * promoted to DIAG_ERROR under --Werror=deprecated. */
@@ -235,6 +279,12 @@ typedef enum DiagCode {
      * by experiment_warn_if_used (mirroring TUR-W0050), not through diag_emit;
      * they are registered here only so `tur explain` can describe them. */
     TUR_E0310_UNKNOWN_EXPERIMENT,
+    /* engine-selection-plan E1: build.tur's `:engine` key carries a value
+     * outside {"cc","jit","interp"}.  A hard error, unlike unknown manifest
+     * KEYS (silently ignored for forward compatibility): a typo'd engine
+     * silently running under cc is the exact failure the key exists to
+     * prevent. */
+    TUR_E0311_UNKNOWN_ENGINE,
     TUR_W0060_EXPERIMENTAL_PROTOTYPE,
     TUR_W0061_EXPERIMENTAL_BETA,
     /* RT3 (refinement-types-plan): static discharge of `#refine{...}`
@@ -277,6 +327,16 @@ typedef enum DiagCode {
      *          code is entitled to believe the declaration. */
     TUR_E0381_WRITES_FRAME_INVALID,
     TUR_E0382_WRITES_FRAME_EXCEEDED,
+    /* mutable-globals-plan section 12.3, shipped warning-first per section
+     * 13.1: a `#reads <param>` frame is TRUSTED, and its one consumer grants
+     * congruence -- so a frame that omits mutable state the body reads buys a
+     * proof it has not earned (the caller-side crossing check is elided on a
+     * predicate that may be false).  This warns when the body DEMONSTRABLY
+     * reads a mutable global: positive evidence only, so an inline-C body --
+     * which is every measure that predates this -- stays silent.  Gateless
+     * because it reports a live trust-boundary fact and changes no behavior;
+     * escalating warn -> refuse-the-override is a later, gated step. */
+    TUR_W0383_READS_FRAME_OMITS_MUTABLE,
     /* exports-map-syntax-tighten-plan: `:exports` in build.tur got an
      * effect-row literal (`#fx{...}` or `@{...}`) instead of a map literal
      * (`#map{...}`) or a legacy bare `#{...}` map or a path vector. */
@@ -293,6 +353,18 @@ typedef enum DiagCode {
     TUR_E0621_TUR_VERSION_BELOW_FLOOR,
     TUR_E0622_TUR_VERSION_MALFORMED,
     TUR_W0623_TUR_VERSION_ABOVE_CEILING,
+    /* examples-have-no-suite-coverage (section 2): a whole-program build with
+     * no `main` and no top-level statements synthesizes an EMPTY main -- the
+     * program builds, runs, and does nothing.  A top-level function whose name
+     * is a near-miss of `main` (`-main`, `main-`, `Main`, `_main`) is the
+     * tell that an entry point was intended; warn at its definition. */
+    TUR_W0624_NO_ENTRY_POINT_NEAR_MISS,
+    /* application-image-dumps-plan AI3.1: the `init` root of a
+     * with-image-cache-after-init expansion writes a top-level global that no
+     * `defimage-global` declared.  init runs only on a cold start and the
+     * image carries the continuation, not the heap, so the write is silently
+     * absent after a warm start. */
+    TUR_W0706_IMAGE_GLOBAL_UNREGISTERED,
 } DiagCode;
 
 typedef enum DiagLevel {
@@ -367,6 +439,16 @@ typedef struct SourceFile {
     const char     *orig_src;
     size_t          orig_len;
     const SweetMap *xform_map;
+    /* Bytes of the file on disk that `src` starts past -- the `#lang` line
+     * the reader strips before handing the body over.
+     *
+     * Line numbering survives that strip (the directive's own newline is left
+     * in place, so line 1 is simply empty), which is why nothing needed this
+     * until something started reading span *offsets*. Those are relative to
+     * `src`, so an editor that seeks to one lands `head_offset` bytes early --
+     * on a `#lang turmeric` file as much as a sweet-exp one. Zero for a file
+     * with no directive. */
+    size_t          head_offset;
 } SourceFile;
 
 /* Detect #lang directive from file source (Phase S0).  Base reader only;
@@ -443,6 +525,17 @@ void diag_register_file(const SourceFile *file);
 const char *diag_file_path(uint16_t file_id);
 const SourceFile *diag_source_file(uint16_t file_id);
 
+/* Translate a span into the coordinates of the file the user is editing.
+ *
+ * A sweet-exp file reaches the elaborator as transformed s-expression text,
+ * so every Span on the tree indexes THAT buffer, not the one on disk.
+ * Diagnostics have always translated back (render_snippet_ex); anything else
+ * that reports a position -- the LSP's symbol and scope tables above all --
+ * has to make the same trip, or an editor lands the caret on a byte that is
+ * not where the user's name lives. A file with no transformation returns the
+ * span unchanged, so callers can apply this unconditionally. */
+Span diag_translate_span(Span span);
+
 /* Core diagnostic emission */
 void diag_emit(DiagLevel level, Span span, const char *fmt, ...);
 void diag_emitv(DiagLevel level, Span span, const char *fmt, va_list ap);
@@ -461,7 +554,45 @@ void diag_emit_multi_span(DiagLevel level, const char *message,
                          size_t secondary_count);
 
 bool diag_had_error(void);
+
+/* Re-mark the error flag after a nested evaluation's diag_reset cleared it
+ * (macro-time evaluation inside a compile; see diag.c). */
+void diag_force_had_error(void);
+
+/* Monotonic count of errors actually SHOWN to the user (captured/speculative
+ * errors excluded).  Compare across a window to learn whether it surfaced an
+ * error; never reset, so only differences are meaningful. */
+uint64_t diag_error_serial(void);
 void diag_reset(void);
+
+/* Save / restore the registered-SourceFile table across a diag_reset().
+ *
+ * diag_reset() clears the file registry, which is right for a compiler driver
+ * looping over files: the SourceFiles live in a per-file arena that is about to
+ * go away, so keeping them registered would leave dangling pointers.
+ *
+ * It is wrong for the interpreter's incremental path.  There, turn N-1 splices
+ * `(load ...)`ed files in and registers each one; turn N reuses the Forms it
+ * already parsed, so those loads never re-run and the files are never
+ * re-registered -- but the reused Forms still carry their file ids.  Every
+ * later diag_file_path() on one of those ids misses, and everything downstream
+ * that needs to know WHICH FILE a form came from degrades: the DAP debugger
+ * reports a frame as `?:19` with no `source` object, and file-scoped
+ * breakpoints stop matching.
+ *
+ * The interpreter's eval arenas are retained for the life of the env, so its
+ * SourceFile pointers stay valid across turns and restoring them is sound.
+ * A caller that frees per-turn arenas must NOT use these.
+ *
+ * `diag_files_save` writes up to `cap` entries and returns how many slots the
+ * table holds (indices are file ids, and NULL slots are preserved so ids stay
+ * stable).  `diag_files_restore` re-registers every non-NULL entry EXCEPT id 0,
+ * which the caller has just re-registered with the current turn's blob.
+ * See docs/archive/incremental-elab-loses-span-file-provenance.md. */
+size_t diag_files_save(const SourceFile **out, size_t cap);
+void   diag_files_restore(const SourceFile **in, size_t n);
+/* Slots the registry can hold, so callers can size their snapshot buffer. */
+size_t diag_files_capacity(void);
 
 /* Speculative-elaboration capture (bare-fat-result-monomorphization-plan).
  * While a capture frame is active, every diag_emit* call is suppressed

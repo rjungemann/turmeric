@@ -1,0 +1,11 @@
+;; Multi-form defmacro bodies: earlier forms are compile-time setup (the CT
+;; evaluator's `do` runs them in order, splicing (def x v) into let bindings),
+;; and the LAST form's value is the template.
+(defmacro square-sum [a b]
+  (def a2 (list * a a))
+  (def b2 (list * b b))
+  `(+ ~a2 ~b2))
+
+(defn main [] : int
+  (println (square-sum 3 4))
+  0)

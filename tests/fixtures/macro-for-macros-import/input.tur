@@ -1,0 +1,18 @@
+;; Stage 3 (macro-system-direction-plan): (import m :for-macros) evaluates
+;; module m into the macro-time env, so defmacro* bodies can call its
+;; functions at expansion time.  Macro-time ONLY: mhelp is never imported
+;; at runtime.  Repeat imports of the same module are deduped.
+(defmodule prog
+  (import mhelp :for-macros)
+  (import mhelp :for-macros)
+
+  (defmacro* csum [a b]
+    (int->syntax (mx-add (syntax->int a) (syntax->int b))))
+
+  (defmacro* labeled [name]
+    (str->syntax (mx-label (syntax-sym-name name))))
+
+  (defn main [] : int
+    (println (csum 40 2))
+    (println (labeled widget))
+    0))

@@ -1,0 +1,23 @@
+;; let-binding-void-call-emits-invalid-c regression.
+;;
+;; A `:void` init has no value to name. This used to elaborate cleanly and
+;; then emit `void _un_1 = ...;` -- "variable has incomplete type 'void'", a
+;; cc error with no .tur attribution. It is now rejected at the binding.
+;;
+;; Sequencing a side effect in a binding list is a natural thing to reach for
+;; when the `let` body must end in a particular value, so the diagnostic names
+;; `do` as the fix.
+
+(defmodule let_binds_void_expression
+  (export)
+
+(defn noop [] : void
+  ```c
+  return;
+  ```)
+
+(defn main [] : int
+  (let [_ (noop)]
+    0))
+
+) ;; end defmodule let_binds_void_expression

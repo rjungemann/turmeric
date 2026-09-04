@@ -9,7 +9,7 @@
 ;; (always, since (async fn) is synchronous) the direct path checks readiness
 ;; inline and tail-loops in O(1) stack, whereas the heap path's inline resume
 ;; recurses through dk_invoke and is O(N) (SIGSEGV at ~100k under this stack).
-;; See docs/reported/cps-async-recursive-await-eviction.md.  So this probe
+;; See docs/archive/cps-async-recursive-await-eviction.md.  So this probe
 ;; exercises the DIRECT await path (tur_async_fiber spawns synchronously;
 ;; tur_await_future returns the ready value), staying flat via the direct
 ;; emitter's tail-call loop -- which is exactly the right lowering for

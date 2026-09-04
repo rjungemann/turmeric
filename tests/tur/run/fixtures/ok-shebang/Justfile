@@ -1,0 +1,19 @@
+# Shebang recipe parity. Implemented since 5ed86be1f (2026-06-10) but never
+# covered by a test, which is why a later audit recorded it as missing.
+
+default:
+	@echo default
+
+shebang-bash:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	V=42
+	echo "carried $V"
+
+shebang-python:
+	#!/usr/bin/env python3
+	x = 6 * 7
+	print("python", x)
+
+plain-shell:
+	@echo plain

@@ -86,7 +86,7 @@ expose only `entity=?`, `entity-alive?`, and constructors via the
 surface in v1** -- a "strict-aliveness" surface that turns
 use-after-despawn into a *type* error would require refinement types,
 which are not shipping (see
-[docs/upcoming/v1/refinement-types-plan.md](v1/refinement-types-plan.md)).
+[docs/archive/refinement-types-plan.md](refinement-types-plan.md)).
 The `option`-returning forgiving surface is what every shipping ECS in
 every language exposes anyway; we are not giving anything up in
 practice.
@@ -169,7 +169,7 @@ the runtime cost is one indirection per call.
 
 Refinement-typed world bounds (`/has Pos /has Vel` as a predicate on
 the world type) remain a v2 ambition; see
-[docs/upcoming/v1/refinement-types-plan.md](v1/refinement-types-plan.md).
+[docs/archive/refinement-types-plan.md](refinement-types-plan.md).
 
 ### Queries
 
@@ -329,7 +329,7 @@ the former as runtime-checked.
 ### Deferred (refinement-typed surfaces)
 
 Still gated on refinement types
-([`docs/upcoming/v1/refinement-types-plan.md`](v1/refinement-types-plan.md)),
+([`docs/archive/refinement-types-plan.md`](refinement-types-plan.md)),
 which have not yet shipped:
 
 - **Refinement-typed entities** (`entity-alive!` strict API). The
@@ -597,7 +597,7 @@ against the resolved surface:
 **E2b -- refinement-typed APIs.** The `entity-alive!` strict-aliveness
 surface and `/has Pos` refinement on world bounds both require
 refinement types, which are still in plan
-([`docs/upcoming/v1/refinement-types-plan.md`](v1/refinement-types-plan.md)).
+([`docs/archive/refinement-types-plan.md`](refinement-types-plan.md)).
 Both are pure surface additions over the shipped substrate; nothing
 in the current spice has to change to accommodate them when they
 do land.
@@ -632,9 +632,26 @@ do land.
   accessor fails to elaborate.
 - **`tur-ecs-raylib` demo** runnable via `tur run` from
   `../turmeric-spices/spices/ecs-raylib/`.
-- **Bench** -- still TODO; the original 100k-entity dense
-  `Pos`/`Vel` integration vs. hand-rolled comparison has not been
-  written. Within-2x-of-hand-rolled is the target.
+- **Bench** -- ~~still TODO~~ **WRITTEN 2026-08-20, and the target is
+  MISSED.** `turmeric-spices/spices/ecs/bench/` implements the
+  100k-entity dense `Pos`/`Vel` integration vs. hand-rolled C
+  (100 frames, float components, checksum-verified across every
+  variant). Best of 9 on an M2, `tur` v0.37.0: hand-rolled C 4.4ms;
+  raw Turmeric over flat buffers 4.6ms (**1.04x** -- the backend is
+  not the problem); `defworld` + `for-each2` 36.9ms (**8.42x**);
+  `sized-defworld` + `sized-for-each` 15.3ms (**3.50x**).
+  Within-2x-of-hand-rolled was the target and neither ECS path
+  reaches it.
+  The cost is not codegen and not the query macro (a hand-written
+  loop with no `for-each` ties `for-each2`, which does strictly more
+  work per slot); it concentrates in the unsized `dense-set!` write
+  path, which carries an auto-grow capacity branch, a `present[]`
+  byte write, and a `len` update per store. Dictionary dispatch on
+  the typeclass-polymorphic path is a non-issue: 20M lookups are
+  unmeasurable (37.4ms vs 37.3ms hoisted -- `cc -O2` hoists it
+  itself). Full write-up and the
+  consequences for the two deferred plans (ECB declined, RE2
+  reframed) in `spices/ecs/bench/README.md`.
 
 ## Resolved design decisions
 

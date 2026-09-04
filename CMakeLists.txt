@@ -63,7 +63,7 @@ endif()
 #
 # `TUR_REFINE_Z3_ORACLE`, the `find_package(Z3)` block, `refine_libz3.c` and
 # every `#ifdef TUR_REFINE_Z3_ORACLE` are gone, per the retirement criteria in
-# docs/upcoming/v1/refinement-types-plan.md ("Z3 retirement criteria").  Both
+# docs/archive/refinement-types-plan.md ("Z3 retirement criteria").  Both
 # criteria were met: the in-house chain discharges the fixtures the bootstrap
 # carried, and oracle trust was established over a labelled corpus, a 3600-
 # benchmark generated soak, a 7000-VC differential run, and a real-program
@@ -86,7 +86,7 @@ include(cmake/CPM.cmake)
 add_subdirectory(src)
 
 # ---------------------------------------------------------------------------
-# J0 JIT spike (docs/upcoming/jit-engine-plan.md) -- OFF by default.
+# J0 JIT spike (docs/archive/jit-engine-plan.md) -- OFF by default.
 # ---------------------------------------------------------------------------
 # The spike harness vendors MIR (c2mir + MIR-gen) via FetchContent, which means
 # a network fetch at configure time.  Same posture as the Z3 oracle block
@@ -98,9 +98,10 @@ option(TUR_JIT_SPIKE
   OFF)
 
 # J1: build `tur` itself with the in-process MIR JIT engine (`tur jit`).
-# Same network posture as the spike: OFF by default, opt-in fetch.  The
-# subcommand additionally sits behind the `jit` experiment (--enable=jit) at
-# run time, per the experimental-features rule.
+# Same network posture as the spike: OFF by default, opt-in fetch.  Since the
+# `jit` experiment graduated (2026-08-17) this is the ONLY gate on `tur jit`:
+# the run-time `--enable=jit` requirement is gone, so a binary built with this
+# ON runs `tur jit` unprompted, and one built without it says so.
 option(TUR_JIT
   "build tur with the in-process MIR JIT engine (tur jit; fetches MIR)"
   OFF)
@@ -133,9 +134,31 @@ add_test(
 # RUN_SERIAL tells ctest to give these two the machine to themselves, which is
 # what they already assume.
 set_tests_properties(tur_tests PROPERTIES RUN_SERIAL TRUE)
+# Emitted-program leak gate. tests/run.sh compiles fixture programs WITHOUT
+# sanitizers and runs them with detect_leaks=0, so only `tur` itself is
+# leak-checked -- a leak in EMITTED code passes the ordinary suite silently,
+# which only compares printed output. This harness compiles an opted-in fixture
+# (`requires.leak-check` marker) with -fsanitize=address and LeakSanitizer on.
+#
+# Opt-in because a sanitized compile per fixture is slow. RUN_SERIAL for the
+# same reason tur_tests is: it fans out across nproc on its own.
+add_test(
+  NAME tur_leak_check
+  COMMAND bash tests/run-leak-check.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_leak_check PROPERTIES RUN_SERIAL TRUE)
 add_test(
   NAME tur_cli_tests
   COMMAND bash tests/run-cli.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# `tur demangle` (docs/upcoming/profiling-plan.md P0): CLI surface plus the
+# false-positive ratchet over ./build/tur's own symbol table. The token
+# recognizer's unit tests are in tur_mangle_unit.
+add_test(
+  NAME tur_demangle_tests
+  COMMAND bash tests/run-demangle.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # NW6 acceptance gate: a freshly scaffolded spice (`tur new`) passes its own
@@ -162,6 +185,14 @@ add_test(
   COMMAND bash tests/run-tur-run-alias.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# OD4: `tur doc <symbol>` reads the full stdlib docstring table shipped with
+# the binary (not just the builtin list), and `tur docs` locates the rendered
+# guides. Both are the no-network half of the offline-docs work.
+add_test(
+  NAME tur_docs_cli
+  COMMAND bash tests/run-tur-docs.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Regression for tur-run-just-assignment-eval-plan: `name := VALUE`
 # assignments used to be raw byte fragments; verify the balanced scanner
 # + RHS expression evaluator handle function calls, `/` and `+` concat,
@@ -171,11 +202,77 @@ add_test(
   COMMAND bash tests/run-tur-run-rhs-eval.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# `tur completion` and the `tur run --list` contract it is built on: aliases
+# listed, hidden recipes withheld but runnable, unsupported features degrading
+# the listing rather than blanking it, and well-formed JSON.
+add_test(
+  NAME tur_completion
+  COMMAND bash tests/run-tur-completion.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# Recipe attributes and the shebang/`[script]` path: every attribute tur run
+# claims to support is matched by name and does what it says, and an unknown
+# attribute is refused rather than silently ignored (the silent-ignore hole in
+# docs/archive/tur-run-silently-ignores-parameterized-attributes.md).
+add_test(
+  NAME tur_run_attrs
+  COMMAND bash tests/run-tur-run-attrs.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 add_test(
   NAME tur_fmt_tests
   COMMAND bash tests/run-fmt.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# SR4 seam-rot gate.  Recursive sums flow BY VALUE by default since RM4
+# (2026-09-02); TUR_SR4_RECURSIVE_CARRIER=1 restores the int64 carrier for A/B
+# measurement, so nothing else in CI ever compiles a recursive sum through the
+# carrier and that path would rot silently as the compiler moves.  This harness
+# re-runs the recursive-sum fixture population under the seam (build + run +
+# stdout compare, ~22 fixtures) behind a canary that asserts the seam actually
+# bit (the logic ctor returns int64_t), so a renamed env var fails loudly
+# instead of silently re-testing the default path.  RUN_SERIAL for the same
+# reason as the suites above.
+add_test(
+  NAME tur_sr4_seam
+  COMMAND bash tests/run-sr4-seam.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# option-niche seam-rot gate, the same argument as tur_sr4_seam above.
+# The niche graduated 2026-09-03 (docs/upcoming/sr3-option-niche-plan.md);
+# TUR_OPTION_NICHE=0 restores the tagged monomorph and this harness keeps THAT
+# path green with an inverted canary, exactly as tur_sr4_seam does.
+add_test(
+  NAME tur_option_niche_seam
+  COMMAND bash tests/run-option-niche-seam.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# tur_sr2_seam RETIRED 2026-08-27, with tests/run-sr2-seam.sh.  The harness
+# existed because TUR_SR2_APP_SUM_BYVALUE was OFF by default, so nothing else in
+# CI compiled a parametric sum by value and the gate document's worklist claim
+# had nothing enforcing it.  SR2a graduated: by value IS the default, so every
+# `bash tests/run.sh` compiles all eleven of those fixtures that way, which is
+# strictly more than the subset ever asserted.  The SR4 harness above stays --
+# recursive sums remain off by default, so its argument still holds.
+# `tur check` sweep over examples/, ratcheted against
+# examples/examples-check-baseline.txt. Nothing referenced examples/ before
+# this, so nothing compiled them and they rotted -- 9 of 17 were failing when
+# the sweep was added. See docs/archive/datalog-examples-do-not-compile.md.
+add_test(
+  NAME tur_examples_check
+  COMMAND bash tests/check-examples.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# examples/guestbook end to end: build it with `tur run` (build.tur's
+# :c-sources links the httpd.c shim), serve a bounded number of requests on a
+# private port, and walk the four-page flow with curl -- every hop resumes a
+# continuation rebuilt from bytes on disk.  Skips itself when curl is absent.
+add_test(
+  NAME tur_guestbook_smoke
+  COMMAND bash tests/run-guestbook.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_guestbook_smoke PROPERTIES SKIP_RETURN_CODE 2)
 # parse-check subcommand: AST-equality of turmeric + sweet-exp file pairs,
 # the backing check for tools/check-guide-pairs.py.
 add_test(
@@ -205,6 +302,16 @@ add_test(
   COMMAND bash tests/check-monomorph-name-collision.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# user-defn-named-div-collides-with-libc: tur_name_collides_libc() bsearches
+# libc_names[], so the table's sort order is a correctness precondition -- one
+# entry out of place makes bsearch quietly miss names and the symptom is a cc
+# error cascade in generated C, not a failed lookup.  Source-text check, no
+# build needed.
+add_test(
+  NAME tur_libc_collision_list
+  COMMAND bash tests/check-libc-collision-list.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Increment 4 stage 4 (repr-decision-function-plan): representation-DECISION
 # predicates must not gain new inline call sites -- new code consults
 # repr_of / the shared predicates at chokepoints, or consciously updates the
@@ -225,7 +332,7 @@ add_test(
 )
 # debugger Phase 1: breakpoint-span coverage gate. Every fixture's elaborated
 # AST must carry a usable source span on each breakpoint-eligible node (defn,
-# let form, call site, top-level form). See docs/upcoming/debugger-plan.md.
+# let form, call site, top-level form). See docs/archive/history/debugger-plan.md.
 add_test(
   NAME tur_span_coverage
   COMMAND bash tests/check-span-coverage.sh
@@ -235,7 +342,7 @@ add_test(
 # scripted session (break / step / next / finish / backtrace / locals / print /
 # (break) builtin / continue) over a fixture and asserts the output. The fixture
 # carries requires.dedicated-runner so tests/run.sh skips it (debug is an
-# interpreter-only path). See docs/upcoming/debugger-plan.md.
+# interpreter-only path). See docs/archive/history/debugger-plan.md.
 add_test(
   NAME tur_debugger
   COMMAND bash tests/run-debugger.sh
@@ -246,10 +353,23 @@ add_test(
 # handshake, breakpoints (plain + conditional), step/next/stepOut, the call
 # stack, locals/evaluate, output events, and the exit code. The fixture carries
 # requires.dedicated-runner so tests/run.sh skips it (DAP is an interpreter-only
-# path). See docs/upcoming/debugger-plan.md.
+# path). See docs/archive/history/debugger-plan.md.
 add_test(
   NAME tur_dap
   COMMAND bash tests/run-dap.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# editor-intelligence follow-through, track T1: the time-travel recorder.
+# Records a fixture with `tur trace`, reads it back with `tur trace --dump`,
+# and asserts the step/frame counts, that a delta only carries a binding whose
+# rendering moved, that program output is both forwarded and interleaved, and
+# that the step cap truncates loudly. The fixture carries
+# requires.dedicated-runner so tests/run.sh leaves it to this target -- the
+# recorder is an interpreter feature and the compiled path does not share it.
+# See docs/archive/editor-intelligence-follow-through-plan.md.
+add_test(
+  NAME tur_trace
+  COMMAND bash tests/run-trace.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # debugger Phase 4: native source maps for emit-C. `tur --debug` threads
@@ -259,7 +379,7 @@ add_test(
 # The harness asserts both the gated #line emission and a turmeric-source gdb
 # backtrace of a deliberate crash; it skips the gdb half cleanly when gdb is
 # absent. The fixture carries requires.dedicated-runner so tests/run.sh leaves
-# it to this target. See docs/upcoming/debugger-plan.md.
+# it to this target. See docs/archive/history/debugger-plan.md.
 add_test(
   NAME tur_phase4_gdb
   COMMAND bash tests/run-phase4-gdb.sh
@@ -272,7 +392,7 @@ add_test(
 # `(ok 14)` and a returned Option as `(some 42)` rather than the raw C carrier.
 # Skips the gdb half cleanly when gdb is absent. The fixture carries
 # requires.dedicated-runner so tests/run.sh leaves it to this target. See
-# docs/upcoming/debugger-plan.md and docs/upcoming/debugger-native-types-plan.md.
+# docs/archive/history/debugger-plan.md and docs/archive/history/debugger-native-types-plan.md.
 add_test(
   NAME tur_phase5_gdb
   COMMAND bash tests/run-phase5-gdb.sh
@@ -285,10 +405,19 @@ add_test(
   COMMAND bash tests/check-httpd-conn-single-def.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# (export-from ...) costs nothing at runtime: re-exporting a name must resolve
+# to the defining module's mangled symbol, not emit a forwarding wrapper per
+# hop. The behaviour fixture (module-export-from) passes either way, so the
+# invariant needs its own codegen guard.
+add_test(
+  NAME tur_export_from_no_wrapper
+  COMMAND bash tests/check-export-from-no-wrapper.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # SF let-bind regression: a let-bound two-level closure (signal-function) whose
 # inner closure captures and calls the outer ^fat param must keep its declared
 # outer arg type (tur check guard; see
-# docs/reported/let-bound-sf-loses-outer-arg-type-when-inner-captures.md).
+# docs/archive/history/let-bound-sf-loses-outer-arg-type-when-inner-captures.md).
 add_test(
   NAME tur_sf_let_bind_inner_call
   COMMAND bash tests/check-sf-let-bind-inner-call.sh
@@ -296,7 +425,7 @@ add_test(
 )
 # WR2 stdlib ownership guard: no stored rc<T> field may land in stdlib without an
 # explicit `rc-cycle-ok` review marker, since a live strong rc<T> cycle is not
-# reclaimable today. See docs/upcoming/v1/stdlib-weak-ref-audit-plan.md and the
+# reclaimable today. See docs/archive/history/stdlib-weak-ref-audit-plan.md and the
 # "Ownership across the stdlib" section of docs/guides/gc-guide.md.
 add_test(
   NAME tur_stdlib_no_rc_cycles
@@ -323,6 +452,57 @@ add_test(
   COMMAND bash tests/check-cc-warn-ratchet.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# `cmd | grep -q` under `set -o pipefail` reports a FALSE failure when the
+# pattern IS found: grep exits at the first match, the writer takes SIGPIPE
+# (141), and pipefail promotes that to the pipeline's status.  Load- and
+# payload-dependent, so it reads as a product bug and re-runs green.  Bitten
+# three times; see docs/archive/pipefail-grep-q-false-failures.md.
+add_test(
+  NAME tur_pipefail_grep_q_lint
+  COMMAND bash tests/check-pipefail-grep-q.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# A `const char *` accessor that returns a function-scoped `static char buf[]`
+# is correct only while every caller consumes the name before asking for
+# another -- and emitters do the opposite, gathering one name per field before
+# writing the declaration, so every name becomes the LAST name.  No crash, no
+# ASan report, no diagnostic: just well-formed C with the wrong type in it.
+# Bitten twice; see docs/archive/c-name-accessors-share-static-buffers.md.
+add_test(
+  NAME tur_static_cname_buffer_lint
+  COMMAND bash tests/check-static-cname-buffers.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# The bare-name constructor alias must fail CLOSED: no alias when the name has
+# more than one meaning, so inline C naming it fails at cc instead of silently
+# reaching whichever ADT was emitted first.  It did not, when the uniqueness
+# test keyed on the raw name and the #ifndef guard on the mangled one -- a
+# silent wrong constructor with no diagnostic at any layer.  See
+# docs/reported/separator-fold-collides-emitted-c-names.md.
+add_test(
+  NAME tur_ctor_alias_ambiguity
+  COMMAND bash tests/check-ctor-alias-ambiguity.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# stdlib/VERSION is what lets tur tell its own stdlib from another release's.
+# A stamp that drifts is worse than no stamp, because it is trusted: a stale one
+# makes a mismatched stdlib look like a match AND makes the correct one warn.
+# See docs/archive/stdlib-dir-guard-accepts-mismatched-stdlib.md.
+add_test(
+  NAME tur_stdlib_version_stamp
+  COMMAND bash tests/check-stdlib-version-stamp.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# docs/reported/README.md is the triage index: it must list every open finding
+# and nothing else.  It has drifted BOTH ways -- four rows left behind after
+# their reports were archived (so triage read four findings that were not open),
+# and a severity-HIGH report that never got a row at all.  Cheap to check,
+# expensive to miss, and it can only fail on a docs edit.
+add_test(
+  NAME tur_reported_index_lint
+  COMMAND bash tests/check-reported-index.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Spice-aware per-file resolver: SC0/SC1 (later SC phases extend the script).
 add_test(
   NAME tur_spice_resolver_tests
@@ -340,9 +520,35 @@ add_test(
   COMMAND bash tests/run-flags.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# engine-selection-plan E1-E3: `tur run` engine resolution ladder
+# (--engine > TUR_ENGINE > build.tur :engine > cc), the unsatisfiable-engine
+# hard errors, and the P0 manifest-experiment gate.  Runs on every build --
+# the jit rows assert whichever outcome (run vs hard error) this binary has.
+add_test(
+  NAME tur_engine_select
+  COMMAND bash tests/run-engine-select.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# Tutorial content must actually run: tutorials/*.yaml is data, so no compiler
+# ever reads it, which is how quickstart.yaml came to teach an Option/for/struct
+# API that never existed. Replays each tutorial's own steps through one REPL
+# session.
+add_test(
+  NAME tur_tutorial_steps
+  COMMAND bash tests/run-tutorial-quickstart.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# `:entry "<path>"` in build.tur -- the first rung of `tur run`'s project-mode
+# entry-point ladder (:entry > src/main.tur > the single .tur under src/),
+# plus the dangling-:entry hard error.
+add_test(
+  NAME tur_manifest_entry
+  COMMAND bash tests/run-manifest-entry.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Off-tree (load "stdlib/<file>") resolution: a freestanding script run from
 # outside the repo resolves the stdlib via the exe-relative root, not just
-# cwd-relative. See docs/reported/one-off-script-print-and-annotation-ergonomics.md
+# cwd-relative. See docs/archive/history/one-off-script-print-and-annotation-ergonomics.md
 # (Finding 3).
 add_test(
   NAME tur_offtree_load
@@ -373,7 +579,7 @@ add_test(
 # five cu-rec / cu-catch-deep / atom-rec / mutual-rec / fiber-rec shapes run at
 # 1,000,000 depth under a reduced stack (ulimit -s 256).  Slow / memory-heavy,
 # so deliberately kept out of the default `tests/run.sh` fast suite; this is the
-# dedicated target the graduation plan (docs/archive/catch-unwind-graduation-plan.md,
+# dedicated target the graduation plan (docs/archive/history/catch-unwind-graduation-plan.md,
 # Part A) calls for.  Invoke explicitly:
 #   ctest --test-dir build -R stackless_signoff_probes --output-on-failure
 add_test(
@@ -391,10 +597,20 @@ set_tests_properties(stackless_signoff_probes PROPERTIES TIMEOUT 300)
 # handler) with ASan/UBSan + LeakSanitizer ON and asserts the emitted program is
 # leak-clean: the scoped-free pass must release each non-escaping closure env at
 # scope exit. The normal suite compiles spawned programs without ASan, so this
-# leak would otherwise slip past. See docs/reported/fat-closure-env-leak.md.
+# leak would otherwise slip past. See docs/archive/history/fat-closure-env-leak.md.
 add_test(
   NAME tur_closure_env_leak
   COMMAND bash tests/run-closure-env-leak.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# Sibling gate for the fat-sink shim box: a bare fn passed to a `^fat` parameter
+# used to malloc a { shim, orig } box per CALL that nothing ever freed (109 MiB
+# over 4e6 iterations).  Same reason for a dedicated runner -- the normal suite
+# compiles the spawned program without ASan.  See
+# docs/archive/fat-sink-shim-box-leaks-per-call.md.
+add_test(
+  NAME tur_fat_shim_leak
+  COMMAND bash tests/run-fat-shim-leak.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # WKC2: boxed-key ownership gate. Compiles the HAMT runtime + a C unit test
@@ -418,7 +634,7 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # HAMT delete-path sibling refcount regression
-# (docs/archive/hamt-delete-sibling-refcount.md).  Compiles
+# (docs/archive/history/hamt-delete-sibling-refcount.md).  Compiles
 # tests/test_hamt_del_lineage.c with ASan/UBSan (+LSan on Linux) and asserts
 # that freeing a whole persistent-map lineage containing a tur_hamt_del-derived
 # map is double-free / use-after-free clean.  Pre-fix this tripped a
@@ -469,7 +685,7 @@ add_test(
 )
 # Sweet-exp manifest support: verifies build.tur.sweet is treated as a
 # fully equivalent manifest by walk-up discovery, pkg_manifest_read, and
-# tur init --sweet.  See docs/upcoming/build-tur-sweet-manifest-plan.md.
+# tur init --sweet.  See docs/archive/history/build-tur-sweet-manifest-plan.md.
 add_test(
   NAME tur_sweet_manifest
   COMMAND bash tests/run-sweet-manifest.sh
@@ -492,7 +708,7 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # RT2/S0--S3: refinement VC + decision-procedure unit test
-# (docs/upcoming/v1/refinement-types-plan.md).
+# (docs/archive/refinement-types-plan.md).
 add_test(
   NAME tur_refine_solver
   COMMAND "${CMAKE_BINARY_DIR}/tur_refine_solver"
@@ -552,7 +768,7 @@ add_test(
 )
 set_tests_properties(tur_refine_wasm PROPERTIES TIMEOUT 600)
 # UC-2: user-level experiments file reader unit test
-# (docs/upcoming/user-config-experiments-plan.md). Standalone executable
+# (docs/archive/history/user-config-experiments-plan.md). Standalone executable
 # defined in src/CMakeLists.txt as tur_experiments_user_config.
 add_test(
   NAME tur_experiments_user_config
@@ -561,7 +777,7 @@ add_test(
 )
 # UC-3: end-to-end precedence/suppression matrix for the user-level
 # experiments file, driven through the built `tur` against synthetic
-# $XDG_CONFIG_HOME homes (docs/upcoming/user-config-experiments-plan.md).
+# $XDG_CONFIG_HOME homes (docs/archive/history/user-config-experiments-plan.md).
 add_test(
   NAME tur_experiments_user_config_e2e
   COMMAND bash tests/run-experiments-user-config.sh
@@ -583,6 +799,17 @@ add_test(
 add_test(
   NAME tur_repl_spice_call
   COMMAND bash tests/turi/repl-spice-call.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# ffi-spices-integration-plan S1: a spice declaring its C dependency via
+# the cmake deps manifest (link_dirs/link_libs, no autolink marker) is
+# loadable and callable at the REPL -- through cc's link line on the
+# subprocess path, and through the engine's autolink dlopen (-L dir
+# probing) on the in-process TUR_ENGINE=jit path.  Hermetic: builds its
+# own .so in the test temp dir.
+add_test(
+  NAME tur_repl_spice_linklibs
+  COMMAND bash tests/turi/repl-spice-linklibs.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # RP5: integration test for the `(reload)` REPL form. Exercises the
@@ -615,7 +842,7 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # J2 (jit-engine-plan 3.3): the IN-PROCESS spice build behind
-# `--enable=jit repl` -- load with no .so artifact, calls (incl. the
+# `repl --engine jit` -- load with no .so artifact, calls (incl. the
 # __ffi high-arity shim and a fractional float), the compile-error
 # surface, and (reload) self-heal.  The script self-skips on a binary
 # without the engine; the registration is gated the same way.
@@ -628,7 +855,7 @@ if(TUR_JIT)
   )
   set_tests_properties(tur_repl_spice_jit PROPERTIES RUN_SERIAL TRUE)
   # J3 (jit-engine-plan section 5): the full fixture corpus through
-  # `tur --enable=jit jit`.  RUN_SERIAL like the other whole-corpus
+  # `tur jit`.  RUN_SERIAL like the other whole-corpus
   # harnesses -- it fans out across nproc internally.  TUR is pinned to
   # THIS build's binary (the script's default would probe a sibling
   # build dir).  Note a fully green run needs a Debug binary (refine-*
@@ -744,6 +971,17 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_lang_switch_prelude PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
+# macro-system-direction-plan Stage 1: nested macro-time turi env inside a
+# compile-posture process -- g_interpret_mode bracketing, TURI_CAP_NONE,
+# fuel bound, session-owned teardown.
+add_test(
+  NAME tur_macro_env_nested
+  COMMAND "${CMAKE_BINARY_DIR}/tur_macro_env_nested"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_macro_env_nested PROPERTIES
   ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
 # map-show-keyword-key-raw-int (root cause B): the auto-show display path keeps
@@ -948,6 +1186,28 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_lsp_wasm_backend_unit" "${CMAKE_SOURCE_DIR}/stdlib"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# The browser's language-mode entry points (set_lang / get_lang /
+# lang_registry), run natively against libturi_wasm
+# (try-turmeric-lang-toggle-plan).  cwd matters: the glue preloads the
+# stdlib from the cwd-relative "stdlib" root, mirroring the MEMFS mount.
+# The interpreter env's closures/natives are process-lifetime by design, so
+# leak detection is off, matching the other turi-driving harnesses.
+# SX8c: turi_smt_check, the playground's door onto the refinement solver.
+add_test(
+  NAME tur_wasm_glue_smt_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_wasm_glue_smt_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_wasm_glue_smt_unit PROPERTIES TIMEOUT 120)
+
+add_test(
+  NAME tur_wasm_glue_lang_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_wasm_glue_lang_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_wasm_glue_lang_unit PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
 # Injective name-mangler round-trip + injectivity unit test
 add_test(
   NAME tur_mangle_unit
@@ -1031,6 +1291,7 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_collections_embed tur_stdlib_natives_embed
                      tur_reader_macro_cross_eval tur_incremental_elab_diff
                      tur_lang_switch_prelude tur_show_collection_elems
+                     tur_macro_env_nested
                      tur_gc_runtime_copy_parity tur_cc_warn_ratchet
                      tur_experiments_user_config_e2e
   PROPERTIES DEPENDS tur

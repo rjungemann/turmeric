@@ -2,7 +2,7 @@
 ;; a (fn ...) type and applied must fat-dispatch through slot 0, and a bare
 ;; captureless closure ascribed to such a handle must be boxed to a uniform fat
 ;; box -- not called as a thin function pointer (which jumps into the env struct
-;; -> SIGSEGV).  See docs/reported/logic-port-language-gaps.md GAP 1.
+;; -> SIGSEGV).  See docs/archive/history/logic-port-language-gaps.md GAP 1.
 
 (defopaque Box [A] :ptr<void>)
 

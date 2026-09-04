@@ -1,0 +1,65 @@
+;; return-dispatched-sum-mint-constrained-instance -- a class method whose
+;; result IS the class variable mints an Option over a value struct, reached
+;; through a constrained generic and through a concrete applied instance head.
+;;
+;; docs/archive/return-dispatched-sum-mint-in-constrained-instance-miscompiles.md
+;; -- three failures, all `cc` errors on a shape `tur check` accepted:
+;;
+;;   1. `(some (:: (mk n) A))` in the parametric Option instance: the
+;;      re-dispatched `(mk n)` returns `Box` BY VALUE under the A = Box spec,
+;;      and the ctor-argument seam deref'd it as the carrier.  The recorded
+;;      spelling of the hoist temp now guards that deref.
+;;   2. the dictionary slot's base clone `__inst_EncMk_mk_Option` was declared
+;;      with the by-value `tur_adt_Option__int` result while its tail spilled
+;;      to the int64 carrier the slot needs; the header now agrees with the
+;;      tail.
+;;   3. `[(Option Box)]` as an instance head read `Box` as a type VARIABLE
+;;      (scope_lookup is value-preferring: the lowered defstruct's name is its
+;;      constructor), and the head's blanket CK_MOVE made the instance
+;;      method's own parameter move-only (`(some? x)` then `(unwrap x)` was a
+;;      use-after-move).  The type namespace is consulted and a resolved head
+;;      takes its type's own discipline.
+;;
+;; Asserts the VALUES, per the SR4 lesson.
+
+(defstruct Box [n : int])
+
+(defn show-int [n : int] : void ```c printf("%lld\n", (long long)n); ```)
+
+(defclass EncMk [a]
+  (enc [x] : int)
+  (mk [n : int] : a))
+
+(definstance EncMk [int]
+  (enc [x] : int x)
+  (mk [n] n))
+
+(definstance EncMk [Box]
+  (enc [b : Box] : int (.n b))
+  (mk [n] (make-struct Box :n n)))
+
+;; shape 1: mint the element by re-dispatch, then wrap it.
+(definstance EncMk [Option]
+  [(EncMk A)]
+  (enc [x] : int
+    (if (some? x) (enc (unwrap x)) -1))
+  (mk [n]
+    (some (:: (mk n) A))))
+
+;; shape 2: the base clone of `mk` sits in the dictionary slot.
+(defn enc-mk [a] [^EncMk a w : a n : int] : int
+  (enc (:: (mk n) a)))
+
+;; shape 3: a concrete applied instance head over a value struct.
+(defclass Peek [a] (peek [x] : int))
+(definstance Peek [(Option Box)]
+  (peek [x] : int
+    (if (some? x) (.n (unwrap x)) -1)))
+
+(defn main [] : int
+  (show-int (enc-mk (some (make-struct Box :n 0)) 11))
+  (show-int (enc-mk (some 0) 12))
+  (show-int (enc-mk (make-struct Box :n 0) 13))
+  (show-int (peek (some (make-struct Box :n 4))))
+  (show-int (peek (:: (none) (Option Box))))
+  0)

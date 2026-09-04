@@ -7,38 +7,38 @@
 ;; Define u-ok and u-err inline (self-contained, like result-basic fixture)
 (defn u-ok [x : int] : ptr<void>
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
-  result->is_ok = true; result->ok_val = x; result->err_val = 0; return result;
+  struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *result = malloc(sizeof(*result));
+  result->tag = 0; result->as.ok_val = x; return result;
   ```)
 
 (defn u-err [e : int] : ptr<void>
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
-  result->is_ok = false; result->ok_val = 0; result->err_val = e; return result;
+  struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *result = malloc(sizeof(*result));
+  result->tag = 1; result->as.err_val = e; return result;
   ```)
 
 (defn u-ok? [r : ptr<void>] : bool
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  return result != NULL && result->is_ok;
+  struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *result = (void*)r;
+  return result != NULL && result->tag == 0;
   ```)
 
 (defn u-err? [r : ptr<void>] : bool
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  return result == NULL || !result->is_ok;
+  struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *result = (void*)r;
+  return result == NULL || result->tag != 0;
   ```)
 
 (defn u-ok-val [r : ptr<void>] : int
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  return result->ok_val;
+  struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *result = (void*)r;
+  return result->as.ok_val;
   ```)
 
 (defn u-err-val [r : ptr<void>] : int
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  return result->err_val;
+  struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } *result = (void*)r;
+  return result->as.err_val;
   ```)
 
 (defn get-value [b : bool] : ptr<void>

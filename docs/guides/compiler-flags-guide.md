@@ -6,11 +6,11 @@ description: Diagnostic and debug flags accepted by `tur`; list of removed `-X` 
 
 # Turmeric Compiler Flags
 
-As of **v0.24.0**, every `-X` feature flag is an accept-and-warn no-op:
-the language features they used to gate are unconditionally on. Passing
-`-X<name>` for any of the 16 names listed below still parses successfully
-(downstream `build.tur` files keep compiling unchanged) but emits
-`TUR-W0050` and otherwise does nothing.
+Every `-X` feature flag is an accept-and-warn no-op: the language features
+they used to gate are unconditionally on. Passing `-X<name>` for any of the
+16 names listed below still parses successfully (downstream `build.tur`
+files keep compiling unchanged) but emits `TUR-W0050` and otherwise does
+nothing.
 
 The diagnostic and debug flags below (`--strict-effects`, `--keep-contracts`,
 `--no-contracts`, `--dump-*`, `--emit-abi-trace`, `--warn-unused-result`,
@@ -40,31 +40,26 @@ The diagnostic and debug flags below (`--strict-effects`, `--keep-contracts`,
 | `-Xsymbols` | [symbols-guide.md](symbols-guide.md) |
 
 Each prints `warning [TUR-W0050]: -X<name> is no longer needed; the
-feature is on by default` and is otherwise ignored. There is no follow-up
-release planned to reject the flag entirely; the recognizer stays for the
-entire v0.24.x line. A v1.0+ cleanup may eventually retire the recognizer
-with its own deprecation window.
+feature is on by default` and is otherwise ignored. The recognizer stays so
+old `build.tur` files keep compiling; a future cleanup may retire it with
+its own deprecation window.
 
 > **Note.** The `-X<name>` prefix is retired for good -- none of the 16
-> names above will be reused. For genuinely **experimental** features in
-> v1+ (the kind that are half-built, in-flux, or carry a known cost), the
-> replacement surface is `--enable=<name>` with a built-in expiry policy.
+> names above will be reused. For genuinely **experimental** features (the
+> kind that are half-built, in-flux, or carry a known cost), the surface is
+> `--enable=<name>` with a built-in expiry policy.
 > See [experimental-flags-guide.md](experimental-flags-guide.md).
 
-### Behavior changes worth knowing
+### Related behavior worth knowing
 
-- **`--strict-effects` no longer auto-on with effect types.** When
-  `-Xeffect-types` was a real flag, passing it also enabled
-  `--strict-effects` (warnings on unannotated effectful functions).
-  Effect typing is now always on, but `--strict-effects` stays opt-in --
-  so code that does not annotate effectful functions no longer gets the
-  nudge unless you pass `--strict-effects` explicitly.
-- **Partial features go always-on at their current completion level.**
-  `-Xunique-types` (UT0--UT3) and `-Xsized-types` (SZ0--SZ9; static
+- **`--strict-effects` is opt-in.** Effect typing is always on, but the
+  warnings on unannotated effectful functions fire only when you pass
+  `--strict-effects` explicitly.
+- **Partial features are always-on at their current completion level.**
+  Uniqueness types (UT0--UT3) and sized types (SZ0--SZ9; static
   checking covers folded-constant sizes, runtime assertions cover
-  open-expression sizes) light up for every program, not just programs
-  that opted in. Existing not-yet-shipped-bit diagnostics (`TUR-E0260`,
-  etc.) continue to fire unchanged.
+  open-expression sizes) apply to every program. Their
+  not-yet-shipped-bit diagnostics (`TUR-E0260`, etc.) fire unchanged.
 
 ---
 
@@ -179,6 +174,6 @@ specialization is best-effort and otherwise silent on fallback.
 
 ## See Also
 
-- [drop-x-flags-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/drop-x-flags-plan.md) -- the
+- [drop-x-flags-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/drop-x-flags-plan.md) -- the
   plan that retired the `-X` flag surface.
 - Per-feature guides linked in the **Removed Feature Flags** table above.

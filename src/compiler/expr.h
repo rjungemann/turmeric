@@ -78,6 +78,22 @@ struct Binding {
     uint32_t      scope_depth;
     /* Phase 3: For closure bindings, this points to the thunk function binding */
     struct Binding *closure_fn_binding;
+    /* generic-closure-return-type-app (Defect B): for a call-head temp
+     * (`((pure 5))` -> `(let [__call_head_N (pure 5)] (__call_head_N))`), the
+     * head INIT expression that produced the closure value.  The emit-side
+     * thunk direct-call uses it to find which OUTER spec the init resolved to
+     * (via the specialized-call registry) and target that spec's inner-closure
+     * CLONE instead of the shared generic base thunk -- the base bakes the
+     * un-monomorphized body (a `ctor_Cons` that is never emitted).  NULL
+     * everywhere else. */
+    struct Expr *closure_head_init;
+    /* fn-value-fat-normalization (effect-row increment): for a `__borrowc`
+     * hoist temp of a CAPTURING closure, the lifted lambda's binding.  A
+     * dedicated field, NOT closure_fn_binding -- that one carries direct-call
+     * semantics at emit (the thunk direct-call path) and setting it on the
+     * hoist temp reroutes pure fat dispatch.  Read only by the CPS coloring /
+     * threadability walks, which must resolve the temp back to the lambda. */
+    struct Binding *hoist_closure_fn_binding;
     /* Returned-closure metadata: if evaluating this binding yields a closure value,
      * this points at the closure's thunk binding. */
     struct Binding *returns_closure_fn_binding;
@@ -136,7 +152,7 @@ struct Binding {
     bool          is_continuation;
     /* Phase M1: Module visibility */
     bool          is_exported;          /* listed in module's (export ...) */
-    /* G3 (mutable-globals-plan §4.3), behind `--enable=global-state`: this
+    /* G3 (mutable-globals-plan §4.3): this
      * global was exported as `(export (mut g))`, i.e. its module explicitly
      * permits writes from outside.  A plain `(export g)` exports it READ-ONLY:
      * importers may read it, only the defining module may `set!` it.
@@ -146,7 +162,7 @@ struct Binding {
      * `:sealed` is declared on the opaque rather than asserted by its
      * consumers. */
     bool          is_export_mut;
-    /* G4a (mutable-globals-plan §4.4), behind `--enable=global-state`: a
+    /* G4a (mutable-globals-plan §4.4): a
      * `^atomic ^mut` global.  Every read lowers to TUR_ATOMIC_LOAD_* and every
      * `set!` to TUR_ATOMIC_STORE_*, sequentially consistent.
      *
@@ -159,7 +175,7 @@ struct Binding {
      * for `set!`, and a second route would make `^atomic` the only annotation
      * conferring write permission as a side effect. */
     bool          is_atomic;
-    /* G4b (mutable-globals-plan §4.4, §11.4), behind `--enable=global-state`:
+    /* G4b (mutable-globals-plan §4.4, §11.4):
      * a `^thread-local` global.  Each thread gets its own copy, materialized on
      * first access and initialized by running the declared initializer ON THAT
      * THREAD -- which is the whole point: `(def ^thread-local buf (make-buf))`
@@ -219,7 +235,7 @@ struct Binding {
      * its linear/affine argument.  A non-consuming accessor (fs/tmpfile-path,
      * mutex-lock, ...) declares its handle param ^borrow so a later consuming
      * op (fs/tmpfile-free) remains the single legal consumption.  See
-     * docs/reported/stdlib-linear-handle-borrows.md. */
+     * docs/archive/history/stdlib-linear-handle-borrows.md. */
     bool          is_borrow;
     /* UT0: Uniqueness type -- whether this binding holds a unique value */
     bool          is_unique;
@@ -262,7 +278,7 @@ struct Binding {
      * carrier-return contexts where the call site genuinely wants an int64
      * handle. Generalizes the by-name `ok`/`err` synthesis from Prereq 6. */
     bool          is_construct_template;
-    /* M5 residual-straddle retirement (docs/upcoming/m5-residual-straddle-
+    /* M5 residual-straddle retirement (docs/artifacts/m5-residual-straddle-
      * retirement.md): true if this binding's defn was annotated with
      * `#{ByVal}`. Forces emit_abi_intern_spec to mint by-value specs for
      * TY_APP arg types that would otherwise be rejected by the
@@ -316,6 +332,25 @@ struct Binding {
      * wrap, keeping the two ABI emitters in sync. Set in elab_fns.c when
      * the FnDef is built. */
     bool          body_is_inline_c;
+    /* RM1 (reclamation-plan): true when every VALUE PATH of this defn's body
+     * ends in a sum-constructor application, or in a call to a binding this
+     * flag is already true for.  On the ERASED path such a callee hands back
+     * either a freshly-malloc'd carrier box or NULL (the slice-A None), so the
+     * caller owns the result and may free it at scope exit -- which is what
+     * separates `ap` (every arm returns some(..)/none()) from `alt-or`
+     * (returns an ARGUMENT; freeing its result frees a box the caller still
+     * holds).  Stamped beside body_is_inline_c in elab_fns.c /
+     * elab_typeclasses.c; false for inline-C bodies (their contract lives in
+     * the owned-carrier table instead), false conservatively for
+     * self-recursion (the flag is read before it is set).  A false negative
+     * is a status-quo leak, never a use-after-free. */
+    bool          returns_fresh_sum_box;
+    /* RM1 (bind chains): the body's every value path is a fresh sum box OR a
+     * call through fn-typed parameter i (bit i set) -- `bind`'s `(k v)` arm.
+     * A call site is then fresh exactly when every masked argument is itself
+     * a fresh producer (call_returns_fresh_sum_box).  Zero when the body is
+     * unconditionally fresh (returns_fresh_sum_box) or not fresh at all. */
+    uint32_t      fresh_sum_via_param_mask;
     /* class-defn-constraint-not-discharged-at-call-site: backlink to the owning
      * FnDef's typeclass constraint set (`^Encode T`, or the `[(Encode T)]`
      * middle-vector form), or NULL for a binding with no constraints.  Stamped
@@ -341,19 +376,41 @@ struct Binding {
     const char        **refine_param_vars;
     const char        **refine_param_names;
     uint32_t            n_refine_params;
-    /* C2 / #reads: 1-based index of the ^borrow parameter whose mutable state
-     * this function's body reads (a `#reads w` annotation), or 0 for none.
-     * 1-based so a memset-zeroed Binding defaults to "no #reads" -- do NOT
-     * switch to a 0-based index without auditing every Binding allocation.
-     * The refinement encoder reads this to grant a measure congruence inside a
-     * frozen region; see docs/guides/stateful-refinements-guide.md. Stamped on
-     * the same forward-declared Binding as the refine_* fields, so it is
-     * visible to call sites elaborated before the defn. */
-    uint32_t            reads_param_plus1;
+    /* C2 / #reads: bitmask of the ^borrow parameters whose mutable state this
+     * function's body reads (`#reads w` or `#reads [w g]`), bit i == param i,
+     * or 0 for none.  A zeroed Binding therefore defaults to "no #reads".
+     * Parameters beyond bit 63 cannot be named (TUR-E0024); an arity that high
+     * is already a TUR-W0041 lint.
+     *
+     * Was a single 1-based index until 2026-08-18 -- see
+     * docs/archive/reads-frame-cannot-name-multiple-params.md.  The encoder
+     * grants a measure congruence inside a frozen region only when EVERY
+     * named parameter is frozen; see docs/guides/stateful-refinements-guide.md.
+     * Stamped on the same forward-declared Binding as the refine_* fields, so
+     * it is visible to call sites elaborated before the defn. */
+    uint64_t            reads_params_mask;
+    /* R2 + R4 slice 1 (trusted-refinement-claims-plan): positive evidence
+     * that this function's `#reads` frame is broken -- the elaborated body
+     * directly reads a mutable global the frame cannot name, or mutable
+     * state rooted in a PARAMETER the frame omits.  Stamped where the frame
+     * is stamped; TUR-W0383 reports it, and the refinement encoder refuses
+     * the congruence override on it.  False never means "clean", only "no
+     * evidence" -- an
+     * inline-C body is unwalkable and stays false by design. */
+    bool                reads_frame_omits_state;
+    /* R4 slice 2 (trusted-refinement-claims-plan): the read-side mirror of
+     * `writes_checked`.  True only when the deferred rf_resolve_read_frames
+     * pass saw the WHOLE elaborated body and attributed every read of
+     * mutable state to a frame-named parameter -- silence is never enough,
+     * so an inline-C body, an unvouchable call, or an unmodeled form all
+     * leave it false (UNVERIFIED, not broken).  Nothing consumes it
+     * behaviorally yet -- `--dump-read-frames` is the surface, and the first
+     * real consumer is a post-v1 decision recorded in the plan. */
+    bool                reads_checked;
     /* WF1 / #writes: the per-argument WRITE frame -- which parameters' mutable
      * state this function's body may write.  A bitmask (bit i = parameter i is
-     * in the frame) rather than `#reads`'s single 1-based index, because a
-     * function may legitimately write more than one of its arguments.
+     * in the frame), the same shape `reads_params_mask` above has carried
+     * since 2026-08-18 (it was a single 1-based index before that).
      *
      * `writes_declared` is what carries the meaning, and the two states are NOT
      * interchangeable:
@@ -369,7 +426,7 @@ struct Binding {
      *
      * Capped at 32 parameters by the mask width; a `#writes` naming a parameter
      * beyond that is rejected (TUR-E0378) rather than silently dropped.
-     * See docs/upcoming/checked-write-frames-plan.md (WF1/WF2). */
+     * See docs/archive/checked-write-frames-plan.md (WF1/WF2). */
 #define WF_MAX_FRAME_PARAMS 32u   /* mask width; see writes_param_mask below */
 /* G2: globals in a write frame are a list, not a mask -- there is no natural
  * index for them -- so the cap is a list length rather than a word width.
@@ -411,7 +468,7 @@ struct Binding {
         WG_UNKNOWN,         /* something could not be vouched for */
         WG_IN_PROGRESS,     /* on the current recursion stack (cycle guard) */
     }                   writes_global;
-    /* G2 (mutable-globals-plan §4.2), behind `--enable=global-state`: the
+    /* G2 (mutable-globals-plan §4.2): the
      * globals this function's `#writes` frame DECLARES, and (memoized beside
      * the verdict above) the globals its body actually writes.
      *
@@ -491,7 +548,7 @@ struct Binding {
      * (EX_VAR / EX_GET_FIELD args), not just a direct call.  NULL when no form
      * is recoverable. */
     const struct Form  *decl_type_form;
-    /* pr-386 regression fix (docs/reported/pr-386-source-binding-alias-breaks-
+    /* pr-386 regression fix (docs/archive/history/pr-386-source-binding-alias-breaks-
      * closure-and-with-resource.md): true when this binding is the global
      * `__fn_N` helper minted for a captureless lifted lambda (elab_fns.c).
      * The source_binding alias rule in elab_forms.c must NOT chain a let
@@ -521,6 +578,17 @@ struct Binding {
      * callee's body rather than trusted from a name list.  Params beyond bit 31
      * are left unset (conservative -- no free). */
     uint32_t            nonretain_ptr_param_mask;
+    /* value-struct-payload-sum-monomorph-box-has-no-owner: the same inference
+     * for a stdlib Option/Result-typed parameter -- "this body reads that sum
+     * value (accessors, non-retaining callees) and never keeps it or its arm
+     * pointer".  Lets a caller free a FRESH sum argument's payload box right
+     * after the call, exactly as the reader allowlist does, but inferred from
+     * the callee body instead of trusted by name -- which is what reaches a
+     * user wrapper like `(defn res-ok? [r] (ok? r))`.  Zero for any body
+     * containing inline C (a C body can stash the pointer), and only set when
+     * the function's own result is a non-pointer scalar, so it cannot carry
+     * the param or its arm back out. */
+    uint32_t            nonretain_sum_param_mask;
     /* closure-drop-glue S1c (fresh-closure-returning fn): true when this function
      * binding's body is a bare capturing EX_CLOSURE with only scalar (Copy)
      * captures and a scalar result -- so every call mallocs a FRESH, uniquely
@@ -529,13 +597,38 @@ struct Binding {
      * exit (the make-scaler shape).  False for non-fns and any fn that returns a
      * shared/owning-capture/param closure. */
     bool                returns_fresh_closure;
+    /* any-struct-box-leak-per-widen (the temporary case): every call to this
+     * function produces a FRESH `any` -- its body's tail is a widen, so the
+     * payload box is minted per call and aliases nothing the callee keeps.
+     * That is what lets a caller drop the box after consuming it.  Inferred
+     * exactly like returns_fresh_closure, and for the same reason: ownership of
+     * a returned value cannot be read off the call site alone. */
+    bool                returns_fresh_any;
+    /* any-struct-box-leak-per-widen (the passthrough case): this function's
+     * body is exactly `param[returns_any_param_idx]` -- it hands its argument
+     * straight back, and does not otherwise retain it.  So the OWNERSHIP of the
+     * value it returns is the ownership of that argument: a caller that passed
+     * a temporary it owned still owns the result.  -1 when the function is not
+     * that shape.  Distinct from returns_fresh_any, which says the value was
+     * minted here; this says it was forwarded. */
+    int                 returns_any_param_idx;
+    /* any-struct-box-leak-per-widen: this `any` binding's payload box is dropped
+     * at its single consuming CALL, not at its scope's exit -- so the scope-exit
+     * rule must skip it or the box would be freed twice.  Set when the drop was
+     * moved to the use because the scope's end is not reachable from the body
+     * (a tail call, a `return`), which is exactly where a trailing free is
+     * jumped past.  On the Binding rather than the LetBinding because
+     * binding_new zeroes, while LetBinding arrays are built field-by-field at
+     * half a dozen sites -- one missed initializer there is an uninitialized
+     * read, which is how UBSan found the first draft of this. */
+    bool                any_dropped_at_use;
     /* Existential `open` dispatch: when this binding names the `v` of
      * `(open e [a v] ...)` and `e` is a constraint-carrying existential, this
      * points at the packed scrutinee's TY_EXISTS type (carrying the constraint
      * classes, in witness order).  A method call on `v` consults it to resolve
      * dispatch through the runtime witness vtable rather than failing as
      * ambiguous over the erased int64 carrier type.  NULL for ordinary
-     * bindings.  See docs/archive/existential-open-witness-dispatch.md. */
+     * bindings.  See docs/archive/history/existential-open-witness-dispatch.md. */
     const struct Type  *exists_open_type;
     /* van-laarhoven-lens-composition (Gap B2): a synthetic binding standing for
      * the ENCLOSING constrained rank-2 fn's own `Functor f` dictionary.  Emitting
@@ -759,7 +852,7 @@ struct FnDef {
     /* CT0: Contract pre/post-conditions — NULL if not specified */
     const struct Form *pre_cond;   /* :pre predicate form, or NULL */
     const struct Form *post_cond;  /* :post predicate form, or NULL */
-    /* M4a (docs/upcoming/m4-typeclass-per-method-abi-plan.md): when this
+    /* M4a (docs/archive/m4-typeclass-per-method-abi-plan.md): when this
      * FnDef is a typeclass-instance method (i.e. the implementation behind
      * `__inst_<Class>_<method>__…`), `owner_instance` points back at the
      * `TypeClassInstance` that owns it.  NULL for ordinary defns and for
@@ -862,6 +955,26 @@ struct ExternC {
     const struct Form *post_cond;  /* :post predicate form, or NULL */
 };
 
+/* jit-ffi-c2mir-plan F3: the explicit C signature of a `(call-ptr ...)`
+ * form -- an indirect call through a raw address (dlsym result) whose
+ * signature is stated at the call site rather than carried by a binding.
+ * Hangs off EX_CALL's `ptr_sig` so every existing recursive walker (which
+ * already visits fn_expr + args) traverses it correctly with no new expr
+ * kind.  F4: a slot may also name a by-value record (TY_ADT).
+ *
+ * F5 reuses the same node for the REVERSE direction.  With `is_callback`
+ * set the node is `(callback-ptr f [T1 T2 -> R])`: `fn_expr` is the Turmeric
+ * closure rather than a target address, `n_args` is 0, and the node's value
+ * is a C function pointer that calls back into that closure.  Sharing the
+ * node keeps F3's property that no walker had to learn a new kind -- the
+ * closure sits exactly where the address sat, and both are just `fn_expr`. */
+typedef struct CallPtrSig {
+    Type      return_type;
+    Type     *param_types;   /* arena-owned; n_params entries */
+    uint32_t  n_params;
+    bool      is_callback;   /* F5: (callback-ptr f [sig]), not (call-ptr ...) */
+} CallPtrSig;
+
 /* Phase 2: InlineC represents an inline C block. ```c ... ``` */
 struct InlineC {
     StrSlice       code;         /* the raw C code (may contain __TUR_CAP_N__ / __TUR_VAL_N__) */
@@ -897,6 +1010,16 @@ struct Closure {
      * -- unlike a general capturing closure, which is not a valid indirect callee
      * (see indirect_callee_ok).  Scoped strictly to __Shift receivers. */
     bool           is_shift_receiver;
+    /* httpd-mw-recover-unblocked-but-unwritten (B): set on the THUNK closure of
+     * a `catch-unwind` / `catch-panic-of`.  Such a thunk is created and dropped
+     * at the catch site in the same frame, so any `^fat` handle it captured is
+     * BORROWED from that frame -- which still holds it.  Releasing it in the
+     * thunk env's drop glue frees a handle the enclosing closure still owns:
+     * the first call through a captured handle worked and the second read freed
+     * memory (`heap-use-after-free ... freed by drop_glue___env_NNNN`).  Only
+     * the fat-handle release is suppressed; an rc capture still balances the
+     * env-fill retain. */
+    bool           fat_captures_borrowed;
     /* cps-dk-multishot-user-effects (Phase A): set when this closure is the fn
      * PAYLOAD of a resumable-payload user effect (`(perform (E g))` where E is
      * resumed through g).  The user-effect analogue of is_shift_receiver: it is
@@ -1022,6 +1145,12 @@ typedef struct {
     uint32_t n_refer;
     const Symbol **refer_effect_syms; /* PR5-3-D: (effect Name) entries from :refer list */
     uint32_t       n_refer_effects;
+    /* Stage 3 (macro-system-direction-plan): `(import m :for-macros)` --
+     * macro-time only.  The module is evaluated into the compile's
+     * macro-time env so defmacro* bodies can call its functions at
+     * expansion time; NO runtime import happens.  Mutually exclusive with
+     * :as / :refer (a module needed in both phases is imported twice). */
+    bool for_macros;
     Span span;
 } ImportSpec;
 
@@ -1034,6 +1163,13 @@ typedef struct DefModule {
     uint32_t       n_exports_mut;
     const Symbol **exported_effects;  /* PR5-3-B: effect names in (export (effect Name)) */
     uint32_t       n_exported_effects;
+    /* (export-from <mod> name ...) -- names this module re-exports from
+     * another. Parallel arrays: reexport_srcs[i] is the module that DEFINES
+     * reexports[i]. The consumer sees the defining module's Binding directly
+     * (same mangled symbol), so no forwarding wrapper is emitted. */
+    const Symbol **reexports;
+    const Symbol **reexport_srcs;
+    uint32_t       n_reexports;
     ImportSpec *imports;         /* import specs */
     uint32_t n_imports;
     Expr **body;                 /* elaborated body expressions */
@@ -1090,6 +1226,35 @@ struct Expr {
     ExprKind kind;
     Type     type;
     Span     span;
+    /* any-struct-box-leak-per-widen (the temporary case): this expression
+     * PRODUCES an `any` whose payload box nothing else owns, and it flows into
+     * a call parameter that provably neither retains it nor suspends -- so the
+     * box dies as soon as that call returns.  Stamped by elab at the call site
+     * (the only place that knows the callee); emit_value hoists such a value
+     * into a temp and the enclosing call emission drops it once the call has
+     * been materialized.  Outside the union because the argument can be any
+     * node kind. */
+    bool     any_drop_after;
+    /* RM1 (reclamation-plan), same architecture one type over: this CALL
+     * produces an erased sum-carrier box nothing else owns (its callee's
+     * returns_fresh_sum_box flag), and it flows into argument 0 of a pure
+     * read-only accessor -- so the box dies as soon as that call returns.
+     * Stamped by elab_call.c beside the any stamp; consumed at emit_value's
+     * call hoist, which frees the temp (null-guarded; None IS NULL) once the
+     * consuming call has been materialized. */
+    bool     sum_box_drop_after;
+    /* value-struct-payload-sum-monomorph-box-has-no-owner (dictionary sites):
+     * the same stamp, TENTATIVE on the CONSUMER.  This fresh-producer call is
+     * an argument of a class-method call whose receiver is still abstract at
+     * elab, so the instance that runs -- and therefore whose
+     * nonretain_sum_param_mask decides the drop -- is only known per
+     * monomorph at emit.  The consumer's argument loop re-resolves the
+     * dispatch (emit_reresolve_method_fndef, exactly as the freshness question
+     * is re-asked) and admits this node for the drop only when THAT binding's
+     * mask covers the slot; nothing is ever freed on the representative's
+     * say-so.  Distinct from sum_box_drop_after so an unadmitted node stays a
+     * status-quo leak, never a free. */
+    bool     sum_box_drop_after_dyn;
     union {
         bool         b;
         int64_t      i;
@@ -1146,7 +1311,14 @@ struct Expr {
                   * size index of the constructed value (NULL otherwise). Both
                   * are elaboration-only; size indices are erased in codegen. */
                  struct CtorDef *ctor;
-                 struct SizeTerm *size_index; } call_;
+                 struct SizeTerm *size_index;
+                 /* jit-ffi-c2mir-plan F3: non-NULL marks this call as
+                  * `(call-ptr ...)` -- an indirect call through a raw
+                  * address with the explicit C signature here.  fn_expr
+                  * holds the pointer expression; fn_binding is NULL.  AOT
+                  * codegen emits the direct cast-and-call; turi routes it
+                  * through the JIT FFI thunk provider. */
+                 struct CallPtrSig *ptr_sig; } call_;
         struct { FnDef *fn; }                                               fn_;
         struct { ExternC *ext; }                                            extern_c_;
         struct { InlineC *inline_c; }                                       inline_c_;
@@ -1272,7 +1444,7 @@ struct Expr {
          * reference (a collection taking ownership of a pushed element, or a
          * read handing the caller its own count), false means the existing
          * reference merely moves (a borrow, or a pop transferring the slot's
-         * count out).  See docs/archive/collections-cannot-hold-rc-values.md. */
+         * count out).  See docs/archive/history/collections-cannot-hold-rc-values.md. */
         struct { Expr *expr; TypeKind source_kind; TypeKind target_kind; bool retain; } reinterpret_;
         /* Phase H §1: dictionary passing */
         struct {
@@ -1320,6 +1492,14 @@ struct Expr {
         struct {
             struct Expr    *inner;           /* the fn/closure being wrapped */
             struct Binding *wrapper_binding; /* the __poly_N wrapper thunk binding */
+            /* turi-dict-passing-plan: when the wrapped fn is CONSTRAINED and
+             * was dict-cloned for this rank-2 crossing, the clone's global
+             * binding.  The interpreter evaluates the poly value to the CLONE
+             * (whose leading dict params the elaborated call site supplies)
+             * instead of the original -- the tree-walking analogue of the
+             * wrapper targeting the clone on the compiled path.  NULL for
+             * unconstrained wraps. */
+            struct Binding *dict_clone_binding;
             /* Phase CCL: true when inner is a fat closure (void*) rather than a
              * named function.  The emitter packs it into tur_poly_fn_t at the
              * call site instead of emitting a (tur_poly_fn_t){ NULL, wrapper }. */
@@ -1330,6 +1510,18 @@ struct Expr {
              * carrier.  False for a typed `:fn` carrier / monad continuation,
              * which the concrete-cast call site consumes by value (no spill). */
             bool            boxes_aggregate;
+            /* erased-float-carrier (float32 residue of erased-generic-field-
+             * read): the sink is a typeclass-method `:fn` param whose DECLARED
+             * signature is erased at these positions (`g : (fn [a] b)` --
+             * the instance body invokes it through the int64 carrier cast,
+             * `((int64_t (*)(void*, int64_t))g.fn)`), so a float-class value
+             * the wrapper carries natively there must cross as its BITS in an
+             * int64 (tur_sc_bits_f32 / _f64) rather than in xmm0.  Bit i =
+             * declared arg i is a tyvar; the result flag likewise.  A typed
+             * `:fn` / `^fat` sink leaves both clear and keeps the native
+             * thunk. */
+            uint64_t        carrier_erased_arg_mask;
+            bool            carrier_erased_result;
         } poly_wrap_;
         struct { struct Expr *inner; } ascribe_; /* (:: expr type) — type erased at codegen */
         /* A#1: fat-closure auto-shim.  inner is a bare (non-capturing) fn value;
@@ -1346,7 +1538,12 @@ struct Expr {
          * reports `'free' called on unallocated object`.  Only the normalized
          * NOMINAL param slot sets this -- nothing drops a box handed to one,
          * which is exactly why that slot leaked a box per call. */
-        struct { struct Expr *inner; bool static_ok; } fn_to_fat_;
+        /* stack_ok: the sink was PROVEN non-retaining (inferred mask or a
+         * declared ^borrow), so the { shim, orig } box is dead when the call
+         * returns and may live on the stack.  static_ok alone also covers a
+         * normalized nominal param, which never drops but MAY store the
+         * value -- fine for an immortal static box, not for a stack one. */
+        struct { struct Expr *inner; bool static_ok; bool stack_ok; } fn_to_fat_;
         /* SC7: convert a tur_poly_fn_t {env,fn} (a typeclass-method closure
          * param) into a single-int64 fat-closure handle so a ^fat consumer can
          * fat-call it.  inner is the tur_poly_fn_t value; the emitter heap-boxes
@@ -1405,11 +1602,22 @@ struct Expr {
         struct {
             int64_t     tag_idx;  /* member index (for TY_UNION) or TypeKind (for TY_ANY) */
             struct Expr *value;   /* the value being injected */
+            /* any-struct-box-leak-per-widen: this widen is a call ARGUMENT whose
+             * callee provably neither retains the `any` nor suspends, so the
+             * by-value payload can live in a caller-frame temporary instead of a
+             * malloc'd box nothing ever frees.  Set by elab at the call site
+             * (which is the only place that knows the callee); the emitter
+             * consults it only on the by-value-ADT branch, the one that boxes. */
+            bool        frame_box;
         } union_inject_;
         /* IT4 gradual typing */
         struct { struct Expr *value; } any_type_of_;   /* (type-of x) — x must be TY_ANY */
         /* TY3: (is? x T) — runtime type test; emits TUR_GETTAG(x) == test_tag. */
-        struct { struct Expr *value; int64_t test_tag; } any_is_;
+        /* type-of-cast-kind-granularity: `test_type` carries the NAMED target
+         * (a struct/ADT) so emit can allocate the same per-monomorph box id the
+         * inject site does; `test_tag` remains the TypeKind for primitives and
+         * as the fallback when no named type was resolved. */
+        struct { struct Expr *value; int64_t test_tag; Type test_type; } any_is_;
         /* TY2.3: (cast x T) — checked downcast; panics on tag mismatch. */
         struct {
             struct Expr *value;
@@ -1490,6 +1698,27 @@ const char *tur_stdlib_load_hint(const char *name);
  * name.  Drives TUR-W0042; see the table in elab_call.c for the membership
  * rule (deliberately-shadowable and arity-gated forms are excluded). */
 bool tur_name_is_reserved_special_form(const char *name);
+
+/* RM1: does this EX_CALL mint a fresh Option/Result box the caller owns?  A
+ * ctor, a callee flagged returns_fresh_sum_box, or a callee whose freshness
+ * rides its continuation parameters (fresh_sum_via_param_mask) with every such
+ * argument a fresh producer -- a closure literal whose body is fresh, or a
+ * defn so flagged.  Defined in elab_fns.c; shared with the emitter. */
+bool call_returns_fresh_sum_box(const Expr *call);
+/* The same question with the callee supplied by the caller -- the emitter's
+ * per-spec re-resolution of a dictionary dispatch hands in the instance
+ * method that actually runs. */
+bool call_returns_fresh_sum_box_as(const Expr *call, const Binding *fb);
+
+/* Is this call's callee the function its fn_binding names?  An ordinary call,
+ * yes.  A typeclass dispatch (dict_arg set) carries the RESOLVED instance
+ * method as fn_binding, but inside a constrained generic the receiver is the
+ * constrained type variable and the call goes through the dictionary
+ * parameter at emit -- fn_binding is then only a representative, and its
+ * masks / freshness say nothing about the instance that actually runs.
+ * Static exactly when the receiver's type head is a concrete nominal type or
+ * a scalar.  Defined in elab_fns.c. */
+bool call_dispatch_is_static(const Expr *call);
 
 /* Emit TUR-W0042 at `span` when `name` collides with a reserved special form.
  * `form_kind` names the definition form in the message ("defn", "defmacro"). */

@@ -8,7 +8,7 @@ description: Logic programming with miniKanren -- relations, composition, and bi
 
 A practical introduction to relational programming in Turmeric using a small, runnable example project in `examples/minikanren`.
 
-> **Note:** This guide uses a miniKanren-style approach (relations + bidirectional queries) implemented directly in Turmeric while full stdlib miniKanren support is still being built.
+> **Note:** This guide uses a miniKanren-style approach (relations + bidirectional queries) implemented directly in Turmeric with explicit loops. The real miniKanren engine ships in `stdlib/logic.tur` -- see [tur-logic-guide.md](tur-logic-guide.md).
 
 ---
 
@@ -101,6 +101,6 @@ mona
 
 ## Next steps
 
-Continue to [MiniKanren Part 2: Core Operators](minikanren-2-core-operators.md), which
-builds the real miniKanren engine inside Turmeric -- term representation, unification,
-`fresh`, `conde`, `run`, and reification.
+Continue to the [`tur/logic` guide](tur-logic-guide.md), which covers the real
+miniKanren engine in `stdlib/logic.tur` -- term representation, unification,
+`fresh`, disjunction/conjunction, `run-logic`, and reification.

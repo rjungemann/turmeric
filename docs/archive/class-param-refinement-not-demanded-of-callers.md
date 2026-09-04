@@ -176,7 +176,7 @@ generic calling a refined class method, which is the shape case 3 needs -- is
 ## Found
 
 While investigating "dynamic typeclass dispatch" as a next slice for
-`docs/upcoming/v1/refinement-types-plan.md`. The plan and guide both described
+`docs/archive/refinement-types-plan.md`. The plan and guide both described
 this as specific to *dynamic* dispatch; the measurement above shows the static
 case has the same hole whenever the instance does not restate the predicate,
 which is the more common way to write an instance. Guide corrected in the same

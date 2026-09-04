@@ -1,0 +1,14 @@
+;; int-declared-method-float-body-engine-divergence (archived): a float body
+;; under a fixed non-float class slot is a register-class conflict for an
+;; INSTANCE METHOD exactly as it is for a defn (TUR-E0707).  The old
+;; tolerance claimed the per-instance emit path resolves the method to its
+;; real register class; measured false -- the emitted C was
+;; `static int64_t ... { return 7.5; }` (a destructive value conversion)
+;; while turi kept the float, so the engines diverged.  Unlike cstr-under-int
+;; (pointer bits bridge the carrier losslessly -- still accepted, pinned by
+;; instance-method-return-committed-ok), a float's bits and value part ways
+;; in an int slot, and the shape cannot say which the author meant.
+(defclass Cint [^f] (intify [x [fn :fn]] : int))
+(defstruct W [A] (raw :int))
+(definstance Cint [W] (intify [x fn] 7.5))
+(defn main [] : int 0)

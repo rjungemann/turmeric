@@ -1,4 +1,4 @@
-;; Regression for docs/archive/list-macro-quote-vs-syntactic-symbol.md.
+;; Regression for docs/archive/history/list-macro-quote-vs-syntactic-symbol.md.
 ;;
 ;; A macro body that builds its expansion via `(list 'foo args...)` lands
 ;; in elab_call with the head shaped as F_QUOTE wrapping F_SYM(foo) -- the

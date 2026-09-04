@@ -30,7 +30,7 @@ static bool owning_byvalue_agg(const Type *t) {
     return def->needs_drop_glue && !def->is_heap && def->n_ctors == 1;
 }
 static bool owning_multishot_admissible(const Type *t) {
-    if (!g_opt_owning_cloneable_capture || !t) return false;
+    if (!t) return false;
     return t->kind == TY_RC
         || type_is_heap_adt(*(Type *)t)
         || type_is_heap_struct(*(Type *)t)
@@ -812,6 +812,12 @@ static Expr *wrap_reset_body_with_shift_handler(Elab *e, Expr *body_B, Span span
     if (!hbody) return body_B;
 
     HandleCase *cases = (HandleCase *)arena_alloc(e->arena, sizeof(HandleCase));
+    /* Arena memory is not zeroed, and cps_ir.c copies every HandleCase field
+     * unconditionally (`cs[ci].resumable_payload = c->resumable_payload` was
+     * UBSan's "load of value N, which is not a valid value for type '_Bool'"
+     * on the macOS sanitizer gate).  Zero first, then set what this site
+     * means -- the same rule as the HandleExpr below. */
+    memset(cases, 0, sizeof(HandleCase));
     cases[0].effect_name    = sheff->name;
     cases[0].n_params       = 1;
     cases[0].param_names    = (const Symbol **)arena_alloc(e->arena, sizeof(const Symbol *));
@@ -824,6 +830,11 @@ static Expr *wrap_reset_body_with_shift_handler(Elab *e, Expr *body_B, Span span
     cases[0].body           = hbody;
 
     HandleExpr *h = (HandleExpr *)arena_alloc(e->arena, sizeof(HandleExpr));
+    /* Arena memory is not zeroed, and every field of this struct is read
+     * unconditionally at emit time -- `shallow` was left uninitialized here,
+     * which UBSan catches as "load of value 190, which is not a valid value
+     * for type '_Bool'".  Zero first, then set what this site means. */
+    memset(h, 0, sizeof(HandleExpr));
     h->body            = body_B;
     h->cases           = cases;
     h->n_cases         = 1;
@@ -2122,6 +2133,7 @@ static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
 
     /* Create the handle expression */
     HandleExpr *handle = arena_alloc(e->arena, sizeof(HandleExpr));
+    memset(handle, 0, sizeof(HandleExpr));   /* arena memory is not zeroed */
     handle->body = body;
     handle->cases = cases;
     handle->n_cases = n_cases;
@@ -2308,6 +2320,7 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
     if (!cases[0].body) return NULL;
 
     HandleExpr *handle = arena_alloc(e->arena, sizeof(HandleExpr));
+    memset(handle, 0, sizeof(HandleExpr));   /* arena memory is not zeroed */
     handle->body = NULL;          /* literal: detached from any body (FH design) */
     handle->cases = cases;
     handle->n_cases = 1;

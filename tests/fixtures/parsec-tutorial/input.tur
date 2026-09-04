@@ -15,7 +15,7 @@
 ;; type (`or-int` / `or-expr`, `map-int-to-expr`).  Turmeric can already
 ;; write them polymorphically at elaboration time, but the codegen for a
 ;; polymorphic defn whose body returns an inner lambda hits an open bug
-;; (see docs/reported/poly-defn-inner-lambda-codegen.md); the monomorphic
+;; (see docs/archive/history/poly-defn-inner-lambda-codegen.md); the monomorphic
 ;; spellings compile end-to-end today and demonstrate the same shape.
 
 ;; ---- Result: success (value + leftover) or failure ---------------------------
@@ -129,7 +129,7 @@
 ;; (mutual recursion), so its parametric return type isn't visible when
 ;; `paren-expr` is elaborated; the match arm binder falls back to a
 ;; placeholder element type and the bare `(POK ...)` call needs a hint.
-;; See docs/reported/defdata-parametric-forward-decl-inference.md.
+;; See docs/archive/history/defdata-parametric-forward-decl-inference.md.
 (defn paren-expr [xs : int] : (PRes Expr)
   (if (at-end? xs)
     (PFail)

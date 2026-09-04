@@ -1,7 +1,7 @@
 ;; fn-float-carrier-unsupported -- the first-class `:fn` carrier is the int64
 ;; register class, so a float-class argument cannot round-trip through it.  The
 ;; compiler rejects this rather than silently miscompiling (truncating 7.5 -> 7).
-;; See docs/reported/fn-first-class-float-carrier-gap.md.
+;; See docs/archive/history/fn-first-class-float-carrier-gap.md.
 (defn applyf [g : fn x : float] : float (g x))
 (defn ident [n : float] : float n)
 (defn main [] : int

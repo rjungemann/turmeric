@@ -2,7 +2,7 @@
  *
  * The LANG_LAYERS[] table below is the single source of truth for which
  * space-separated `#lang` trailing tokens are legal layers.  See
- * lang_layers.h for the model, docs/upcoming/lang-layers-plan.md for the
+ * lang_layers.h for the model, docs/archive/lang-layers-plan.md for the
  * design, and the "`#lang` Layers -- curated only" section of CLAUDE.md for
  * the anti-proliferation process.
  *
@@ -97,10 +97,22 @@ static const LangLayerDescriptor LANG_LAYERS[] = {
  * is the worst moment to find out the shim does not work.
  *
  * `stringed` is the only remaining live layer and is not graduating.  See
- * docs/upcoming/v1/refined-graduation-plan.md.
+ * docs/archive/refined-graduation-plan.md.
+ *
+ * EMPTY AGAIN since 2026-08-22: `refined` (graduated 2026-08-01, v0.33.0) aged
+ * out at 0.38.0, five minor lines later, so `#lang turmeric refined` is once
+ * more the hard TUR-E0330 an unknown layer token gets (pinned by
+ * errors/lang-layer-retired-name).  It went in the same change that retired
+ * `"refined"` from GRADUATED[] in experiments.c: the layer shim and the
+ * experiment shim were always a pair -- a semantic layer IS its experiment,
+ * scoped to one file -- so keeping one without the other would have left
+ * `#lang turmeric refined` accepted while `--enable=refined` was refused, which
+ * is exactly the inconsistency the pairing exists to prevent.
+ *
+ * The table stays here, empty, for the reason recorded above: it has to be
+ * present BEFORE the first row deletion of the next layer to graduate.
  * ------------------------------------------------------------------------- */
 static const char *const GRADUATED_LAYERS[] = {
-    "refined",  /* graduated 2026-08-01; static #refine{...} discharge is unconditional */
     NULL,
 };
 

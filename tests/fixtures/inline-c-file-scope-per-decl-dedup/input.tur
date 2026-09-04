@@ -6,7 +6,7 @@
 ;; decls -- cc rejects with `redefinition of 'struct __shape'`.  Per-decl
 ;; dedup splits each block into chunks, keeps the first `struct __shape`,
 ;; emits B's sibling `struct __aux`, and the TU compiles.  Expected: 42.
-;; See docs/reported/cascade-struct-redef-non-identical-blocks.md.
+;; See docs/archive/history/cascade-struct-redef-non-identical-blocks.md.
 (defmodule shape-main
   (import shape/a :as a)
   (import shape/b :as b)

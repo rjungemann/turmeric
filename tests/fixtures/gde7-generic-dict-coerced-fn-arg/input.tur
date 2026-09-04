@@ -12,7 +12,7 @@
 ;;     parameter type, so its inner direct call also dispatches `Size [Box]`.
 ;; Pure-Turmeric instances, so the output is visible and identical under
 ;; `tur run` and `tur --interpret`.
-;; See docs/reported/constrained-generic-as-value-bakes-representative.md.
+;; See docs/archive/history/constrained-generic-as-value-bakes-representative.md.
 
 (defclass Size [a] (size [x] : int))
 (definstance Size [int] (size [x] -1))

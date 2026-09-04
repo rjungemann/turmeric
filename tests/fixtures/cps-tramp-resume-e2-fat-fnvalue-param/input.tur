@@ -5,7 +5,7 @@
 ;; literal left the `fn_cps` slot NULL and the callee dispatched `f.fn(f.env, x)`
 ;; directly, so `cb`'s `(perform (Ask))` ran on a fresh root and aborted with
 ;; "unhandled effect" (a runtime miscompile -- the compile error was fixed earlier
-;; by the poly-wrap binder ABI, docs/reported/effectful-fnvalue-param-miscompile).
+;; by the poly-wrap binder ABI, docs/archive/effectful-fnvalue-param-miscompile.md).
 ;;
 ;; The fix: the poly-wrap literal populates `tur_poly_fn_t.fn_cps` with a
 ;; `__poly_N__cps` twin (which threads the wrapped fn's `__cps` via the direct->cps

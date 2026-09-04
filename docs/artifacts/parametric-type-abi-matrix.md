@@ -1,7 +1,7 @@
 ---
 title: Parametric Type ABI Matrix
 category: Planning -- ABI / Codegen, end-to-end monomorphization
-description: The per-type ABI classification that gates the by-value direction of M3/M7. Each parameterized stdlib type is classified as by-value-struct, typed-pointer, or type-erased-carrier, with the mutability/representation rationale. Step 1 of the M3 -> M7 sequencing in docs/reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md.
+description: The per-type ABI classification that gates the by-value direction of M3/M7. Each parameterized stdlib type is classified as by-value-struct, typed-pointer, or type-erased-carrier, with the mutability/representation rationale. Step 1 of the M3 -> M7 sequencing in docs/archive/history/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md.
 ---
 
 # Parametric Type ABI Matrix
@@ -166,7 +166,7 @@ snapshots in the same change.
 
 ## Related
 
-- [docs/reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md](reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)
+- [docs/archive/history/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md](reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md)
   -- the M3 tracking report; this matrix is its sequencing step 1.
-- [docs/archive/end-to-end-monomorphization-plan-2.md](archive/end-to-end-monomorphization-plan-2.md)
+- [docs/archive/history/end-to-end-monomorphization-plan-2.md](archive/end-to-end-monomorphization-plan-2.md)
   -- §M2/§M4/§M7, the plan this refines.

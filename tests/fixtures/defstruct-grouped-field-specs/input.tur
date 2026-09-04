@@ -1,4 +1,4 @@
-;; Regression for docs/reported/defstruct-grouped-field-spec-vectors.md
+;; Regression for docs/archive/history/defstruct-grouped-field-spec-vectors.md
 ;;
 ;; defstruct's old-style field vector now accepts grouped `[name : type]`
 ;; sub-vectors, flattening each into the surrounding `name`, `: type` token

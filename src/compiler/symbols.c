@@ -61,6 +61,19 @@ static void rehash(SymbolTable *st) {
     st->nbuckets = new_n;
 }
 
+bool symtab_contains(const SymbolTable *st, StrSlice name) {
+    uint32_t h = hash_bytes(name.p, name.len);
+    size_t idx = h & (st->nbuckets - 1);
+    for (SymbolEntry *e = st->buckets[idx]; e; e = e->next) {
+        const Symbol *s = e->sym;
+        if (s->hash == h && s->len == name.len &&
+            (name.len == 0 || memcmp(s->name, name.p, name.len) == 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 const Symbol *symtab_intern(SymbolTable *st, StrSlice name) {
     uint32_t h = hash_bytes(name.p, name.len);
     size_t idx = h & (st->nbuckets - 1);

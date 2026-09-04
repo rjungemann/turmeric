@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/check-sf-let-bind-inner-call.sh -- regression guard for
-# docs/reported/let-bound-sf-loses-outer-arg-type-when-inner-captures.md.
+# docs/archive/history/let-bound-sf-loses-outer-arg-type-when-inner-captures.md.
 #
 # A signal-function (SF) is a two-level closure
 # (fn [sig] (fn [t] ... (sig t) ...)).  When the inner closure captures and
@@ -21,7 +21,7 @@
 # This is a `tur check` (type-check) guard.  The native codegen for this exact
 # two-level capturing-closure-return shape is a separate, pre-existing defect
 # tracked in
-# docs/reported/sf-two-level-closure-return-miscompiles-out-binding.md, so this
+# docs/archive/history/sf-two-level-closure-return-miscompiles-out-binding.md, so this
 # guard deliberately stops at `tur check` rather than building/running.
 set -euo pipefail
 cd "$(dirname "$0")/.."

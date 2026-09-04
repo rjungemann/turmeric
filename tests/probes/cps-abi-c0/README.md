@@ -1,7 +1,7 @@
 # CPS-IR-to-C backend -- Phase C0 ABI de-risking sketches
 
 Throwaway, hand-written C that proves the calling convention proposed in
-[`docs/upcoming/v1/cps-ir-to-c-backend-plan.md`](../../../docs/upcoming/v1/cps-ir-to-c-backend-plan.md)
+[`docs/archive/cps-ir-to-c-backend-plan.md`](../../../docs/archive/cps-ir-to-c-backend-plan.md)
 (section "C0 result -- ratified ABI") **before** the emitter that will produce
 this C exists. Neither file is emitted by the compiler; each transcribes a
 colored function into the ABI by hand, node-for-node against

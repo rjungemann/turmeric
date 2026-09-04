@@ -2,9 +2,19 @@
  * home.css — Homepage-specific styles for turmeric-lang.com /
  * ========================================================================== */
 
-/* ── SIDEBAR (hidden on homepage) ─────── */
-body.page-home site-sidebar { display: none; }
-body.page-home { padding-left: 0; }
+/* ── SIDEBAR ───────────────────────────
+ * The home page is full-bleed, so it shows no docked rail on desktop. The
+ * sidebar still ships in the markup: below the drawer breakpoint it is the
+ * hamburger drawer, exactly as on /tour and the generated doc pages, so a
+ * phone gets the same set of links here as it does everywhere else. Only the
+ * docked desktop presentation is suppressed, never the content.
+ *
+ * Scoped to a min-width -- an unconditional `display: none` would take the
+ * mobile drawer with it. */
+@media (min-width: 769px) {
+  body.page-home site-sidebar { display: none; }
+  body.page-home { padding-left: 0; }
+}
 
 /* ── HERO ──────────────────────────────── */
 .hero {
@@ -18,16 +28,21 @@ body.page-home { padding-left: 0; }
   overflow: hidden;
 }
 
-.hero-grid {
-  mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 0%, transparent 80%);
-}
-
 .hero-inner {
   max-width: 900px;
   width: 100%;
   text-align: center;
   position: relative;
   z-index: 1;
+}
+
+/* Plain sentence above the headline -- deliberately not an eyebrow: no pill,
+   no dot, no uppercase tracking. */
+.hero-status {
+  font-size: 14px;
+  font-weight: 300;
+  color: var(--green);
+  margin-bottom: 20px;
 }
 
 h1 {
@@ -39,7 +54,7 @@ h1 {
   color: var(--text-primary);
   margin-bottom: 12px;
 }
-h1 em { font-style: italic; color: var(--gold-bright); }
+h1 em { font-style: italic; color: var(--green); }
 
 .hero-subtitle {
   font-family: 'Space Grotesk', sans-serif;
@@ -70,11 +85,13 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   margin: 4px 0;
 }
 .hero-desc em {
-  color: var(--gold-bright);
+  color: var(--green);
   font-style: italic;
 }
 
-.hero-actions { margin-bottom: 64px; display: flex; align-items: center; justify-content: center; gap: 16px; }
+/* Same flow as .cta-actions at the foot of the page: the row wraps rather than
+   stacking, so the two arrangements of the same three buttons match on a phone. */
+.hero-actions { margin-bottom: 64px; display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
 
 .install-hint {
   display: flex;
@@ -96,39 +113,6 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   overflow-x: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.codespaces-badge {
-  display: flex;
-  justify-content: center;
-  margin-top: 14px;
-}
-
-.codespaces-badge .btn-hero {
-  font-size: 13px;
-  padding: 9px 20px;
-}
-
-.codespaces-badge img {
-  display: block;
-}
-
-.docker-hint {
-  margin-top: 10px;
-  font-size: 12px;
-  color: var(--text-sec);
-  text-align: center;
-}
-.docker-hint a {
-  color: var(--gold);
-  text-decoration: none;
-}
-.docker-hint a:hover {
-  text-decoration: underline;
-}
-.docker-hint code {
-  font-size: 11px;
-  opacity: 0.7;
 }
 
 /* ── HERO CODE BLOCK ───────────────────── */
@@ -168,32 +152,19 @@ section {
   padding: 48px 48px 100px;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 1px;
-  background: var(--border);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  overflow: hidden;
+  gap: 56px 48px;
 }
 
 .feature-card {
-  background: var(--bg-card);
-  padding: 36px 32px;
-  transition: background 0.14s;
+  min-width: 0;
 }
-.feature-card:hover { background: var(--bg-hover); }
 
 .feat-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  background: var(--gold-subtle);
-  border: 1px solid var(--gold-line);
   display: flex;
   align-items: center;
-  justify-content: center;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
   font-size: 18px;
-  color: var(--gold-bright);
+  color: var(--green);
 }
 
 .feat-title {
@@ -222,25 +193,12 @@ section {
 .bench-grid {
   display: grid;
   grid-template-columns: repeat(3,1fr);
-  gap: 24px;
+  gap: 48px;
   margin-top: 48px;
 }
 
 .bench-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-mid);
-  border-radius: 12px;
-  padding: 32px 28px;
-  position: relative;
-  overflow: hidden;
-}
-
-.bench-card::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--gold-line), transparent);
+  min-width: 0;
 }
 
 .bench-metric {
@@ -260,7 +218,7 @@ section {
 
 .bench-bar {
   height: 100%;
-  background: linear-gradient(90deg, var(--gold-dim), var(--gold));
+  background: var(--gold);
   border-radius: 2px;
   transform-origin: left;
   animation: growBar 1.2s ease both;
@@ -274,20 +232,18 @@ section {
   max-width: 1100px;
   margin: 0 auto;
   padding: 100px 48px;
+  /* Clears the fixed 60px nav when the hero's "Install" button jumps here */
+  scroll-margin-top: 24px;
 }
 
 .started-grid {
   margin-top: 56px;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 32px;
+  gap: 48px;
 }
 
 .step-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-mid);
-  border-radius: 12px;
-  padding: 28px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -298,11 +254,12 @@ section {
 }
 
 .step-num {
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 13px;
-  color: var(--gold-dim);
-  letter-spacing: 0.06em;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--green);
   font-weight: 500;
+  margin-bottom: 16px;
 }
 
 .step-title {
@@ -333,6 +290,40 @@ section {
 }
 
 .step-desc { font-size: 13.5px; color: var(--text-sec); line-height: 1.6; font-weight: 300; }
+
+/* ── INSTALL METHOD TABS ───────────────── */
+.install-tabs {
+  display: flex;
+  gap: 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.install-tab {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  border-bottom: 1px solid transparent;
+  margin-bottom: -1px;
+  padding: 0 0 9px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.install-tab:hover { color: var(--text-sec); }
+.install-tab.active {
+  color: var(--gold-bright);
+  border-bottom-color: var(--gold);
+}
+
+.install-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.install-panel[hidden] { display: none; }
 
 /* ── INFLUENCES ────────────────────────── */
 .influences {
@@ -369,12 +360,13 @@ section {
   color: var(--text-dim);
   letter-spacing: 0.02em;
   transition: color 0.14s;
-  cursor: default;
 }
-.infl-item:hover { color: var(--text-sec); }
+.infl-item:hover,
+.infl-item:focus-visible { color: var(--text-sec); }
 
 /* ── CTA ───────────────────────────────── */
 .cta-title { font-size: clamp(36px, 4vw, 56px); }
+.cta-title em { color: var(--green); }
 
 /* ── RESPONSIVE: HOMEPAGE ──────────────── */
 @media (max-width: 768px) {
@@ -385,15 +377,16 @@ section {
   .feature-grid {
     padding: 32px 24px 60px;
     grid-template-columns: 1fr 1fr;
+    gap: 40px 32px;
   }
 
   .split-section { padding: 60px 24px; }
 
   .bench-section { padding: 60px 24px; }
-  .bench-grid { grid-template-columns: 1fr; gap: 16px; }
+  .bench-grid { grid-template-columns: 1fr; gap: 40px; }
 
   .started-section { padding: 60px 24px; }
-  .started-grid { grid-template-columns: 1fr; }
+  .started-grid { grid-template-columns: 1fr; gap: 40px; }
 
   section { padding: 60px 24px; }
 

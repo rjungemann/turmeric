@@ -11,12 +11,12 @@
 ;; The fix normalizes a TY_FN construct element to the opaque `void *` carrier.
 
 (defn opt-fval-x100 [o : int] : int
-  ```c struct { bool is_some; double value; } *p = (void*)(intptr_t)o;
-       return (p && p->is_some) ? (int64_t)(p->value * 100.0) : -999; ```)
+  ```c struct { int tag; double value; } *p = (void*)(intptr_t)o;
+       return (p && p->tag == 1) ? (int64_t)(p->value * 100.0) : -999; ```)
 
 (defn opt-some? [o : int] : int
-  ```c struct { bool is_some; int64_t value; } *p = (void*)(intptr_t)o;
-       return (p && p->is_some) ? 1 : 0; ```)
+  ```c struct { int tag; int64_t value; } *p = (void*)(intptr_t)o;
+       return (p && p->tag == 1) ? 1 : 0; ```)
 
 (defn main [] : int
   ;; float-result fn wrapped in some: ap grounds the result to (Option float)

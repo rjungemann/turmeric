@@ -4,11 +4,11 @@
 ;; STATUS (2026-06-19): WORKING end-to-end under TUR_M7_HKT=1 -- this probe now
 ;; exits 21. Both the kind-check prerequisite and the layer-4 by-value emit for
 ;; the Monad `bind` shape have landed (resolved reports
-;; docs/archive/m7-hkt-fn-returning-applied-type-kind-mismatch.md and
-;; docs/archive/m7-hkt-bind-body-byvalue-emit.md). With the flag OFF the probe
+;; docs/archive/history/m7-hkt-fn-returning-applied-type-kind-mismatch.md and
+;; docs/archive/history/m7-hkt-bind-body-byvalue-emit.md). With the flag OFF the probe
 ;; still errors by design (it has no ascriptions).
 ;;
-;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-bind.tur; echo $?
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/artifacts/m7-hkt-probe-bind.tur; echo $?
 ;;   -> 21
 ;;
 ;; The defining feature of `bind` (vs `fmap`) is the continuation parameter

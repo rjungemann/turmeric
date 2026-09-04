@@ -13,7 +13,7 @@
 ;; EX_REF_PRED), so a local referenced ONLY through such an op -- like `o` in
 ;; `(rc/strong-count (.r o))` -- was left uncaptured and the emitted
 ;; `__effect_handler_*` referenced it as an undeclared C name (hard compile
-;; error).  See docs/archive/cps-consuming-aggregate-capture-hardfails.md.
+;; error).  See docs/archive/history/cps-consuming-aggregate-capture-hardfails.md.
 ;;
 ;; The capture here is a BORROW (rc/strong-count reads, does not consume), so it
 ;; is leak-clean: `o.r` starts at strong count 1, is read (not dropped) inside

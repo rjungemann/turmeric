@@ -1,0 +1,16 @@
+;; option-niche: a null payload smuggled into (some x) violates String's
+;; :non-null declaration. The LITERAL spelling `(:: 0 :String)` is now a
+;; compile-time TUR-E0303 (see errors/ascribe-zero-into-non-null-opaque), so
+;; this fixture smuggles a COMPUTED zero -- the shape no static check can
+;; prove -- and asserts the runtime backstop: under the niche that null IS the
+;; (none) bit pattern, so the unchecked identity ctor would return a silent
+;; wrong answer; the checked ctor must abort before any output.
+(load "stdlib/string.tur")
+
+(defn zero [] : int 0)
+
+(defn main [] : int
+  (let [bad (:: (:: (zero) :ptr<void>) String)
+        o   (some bad)]
+    (if (some? o) (println "some") (println "none"))
+    0))

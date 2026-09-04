@@ -1,0 +1,47 @@
+;; fn-arg-let-bound-noncapturing: a let-bound NON-capturing lambda passed as a
+;; `:fn` argument used to SIGSEGV in compiled code with no diagnostic, while
+;; the interpreter returned the right answer.
+;;
+;; A `:fn` value has three lowerings and a tur_poly_fn_t consumer always calls
+;; `f.fn(f.env, args...)`:
+;;
+;;   capturing lambda  -> a box; slot 0 holds the code pointer.        (worked)
+;;   inline lambda     -> a `__poly_` wrapper with env spliced in.     (worked)
+;;   let-bound, no captures -> the RAW int64_t (*)(int64_t). NO BOX.   (SIGSEGV)
+;;
+;; The third fed the raw pointer to a consumer that read "slot 0", i.e. the
+;; first eight bytes of the function's own machine code, and jumped to them.
+;; Adding a single captured variable made it work, which is what made the
+;; boundary easy to miss -- all three rows below are exercised together here so
+;; the next change to fn lowering cannot fix one and break another.
+;;
+;; See docs/archive/let-bound-noncapturing-lambda-segfaults-as-fn-arg.md.
+
+(defn takes [f : (fn [int] int)] : int (f 7))
+
+(defstruct Holder [cb : (fn [int] int)])
+
+(defn main [] : int
+  ;; 1. the repro: let-bound, no captures
+  (let [g (fn [x : int] : int (* x 2))]
+    (println (takes g)))                  ; 14
+  ;; 2. inline -- a different lowering, must keep working
+  (println (takes (fn [x : int] : int (* x 2))))   ; 14
+  ;; 3. let-bound WITH a capture -- the third lowering, must keep working
+  (let [n 3
+        h (fn [x : int] : int (+ x n))]
+    (println (takes h)))                  ; 10
+  ;; 4. the same bare lambda round-tripped through a struct field
+  (let [g2 (fn [x : int] : int (* x 3))
+        hd (Holder g2)]
+    (println (takes (.cb hd))))           ; 21
+  ;; 5. two distinct bare lambdas in one scope get distinct adapters
+  (let [a (fn [x : int] : int (+ x 1))
+        b (fn [x : int] : int (- x 1))]
+    (println (takes a))                   ; 8
+    (println (takes b)))                  ; 6
+  ;; 6. one binding passed twice -- the shim is reused, not re-emitted
+  (let [c (fn [x : int] : int (* x 100))]
+    (println (takes c))                   ; 700
+    (println (takes c)))                  ; 700
+  0)

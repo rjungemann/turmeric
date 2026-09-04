@@ -1,0 +1,28 @@
+;; SR1: a by-value multi-variant sum as a Vec element.  The element is
+;; heap-boxed on push (type_is_boxed_container_elem) and deref-unboxed on
+;; vec-get -- and that read-back's owner is the seam-4 carrier-producer arg
+;; bridge.  The SR1 return-side unbox (emit_expr.c) once fired on top of it,
+;; because vec-get's ERASED tyvar result reads the same as a refined
+;; ':int'-declared return at that site: the value came back double-deref'd
+;; ("aggregate value used where an integer was expected").  The fix keys the
+;; return unbox on result_full_type == NULL -- a monomorphic ':int'
+;; declaration -- which an erased tyvar result is not.
+;;
+;; Variant 0 is deliberately NARROW (one field) and variant 1 WIDE (two):
+;; the ctors[0]-only size accounting reads such a sum as 8 bytes, so keep
+;; this shape around anything keyed on width.
+
+(defdata S :copy
+  (A [x : int])
+  (B [p : int q : int]))
+
+(defn show-s [s : S] : nil
+  (match s
+    (A x)   (do (println "A") (println x))
+    (B p q) (do (println "B") (println p) (println q))))
+
+(defn main [] : int
+  (let [v (vec-of (B 11 22) (A 7))]
+    (show-s (vec-get v 0))
+    (show-s (vec-get v 1)))
+  0)

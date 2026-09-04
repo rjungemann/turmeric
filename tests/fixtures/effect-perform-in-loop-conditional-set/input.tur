@@ -1,0 +1,60 @@
+;; effect-perform-in-loop-conditional-set -- the examples/snake game loop, the
+;; residue of docs/reported/perform-inside-loop-has-no-lowering.md.  `tick` is
+;; assigned twice per iteration, once inside a `when` arm; `dir` and `frames`
+;; are assigned once, unconditionally; the effect is performed from a nested
+;; `when` inside the arm; the body's tail is a call; and (second function) the
+;; loop is followed by more statements that read the carried state.
+;;
+;; The native loop lowering keeps a carried var in the helper's parameters
+;; only when it is assigned once and unconditionally; a var the guard rejects
+;; is now carried in a B7 shared cell instead of evicting the function (every
+;; frame reads and writes one location), a loop followed by statements
+;; reifies its continuation as an escaping join with every carried var a cell,
+;; a nested escaping join reaches the outer one through its chain, and a frame
+;; that takes the back-edge captures the helper's invariant arguments.
+;;
+;; frames 0..19 with tick += 40: steps at frames 3, 7, 11, 15, 19; the snake
+;; dies at frame 7.  Abortive handler: "over 7".  Resuming handler: 20 frames
+;; and 800 - 5 * 150 = 50 ms of leftover tick.
+(defeffect GameOver [score : int] : nil)
+(defn frame-ms [] : int 40)
+(defn step-alive [frames : int] : int (if (= frames 7) 0 1))
+(defn render [] : nil nil)
+
+(defn game-loop [] : nil
+  (let [^mut tick 0
+        ^mut dir 1
+        ^mut frames 0]
+    (while (< frames 20)
+      (set! dir (+ dir 1))
+      (set! tick (+ tick (frame-ms)))
+      (when (>= tick 150)
+        (do
+          (let [alive (step-alive frames)]
+            (when (= alive 0)
+              (perform (GameOver frames))))
+          (set! tick (- tick 150))))
+      (set! frames (+ frames 1))
+      (render))))
+
+(defn game-loop-report [] : nil
+  (let [^mut tick 0
+        ^mut frames 0]
+    (while (< frames 20)
+      (set! tick (+ tick (frame-ms)))
+      (when (>= tick 150)
+        (do
+          (when (= (step-alive frames) 0)
+            (perform (GameOver frames)))
+          (set! tick (- tick 150))))
+      (set! frames (+ frames 1))
+      (render))
+    (println frames)
+    (println tick)))
+
+(defn main [] : int
+  (do
+    (handle (game-loop) (GameOver [score] k) (do (println "over") (println score)))
+    (handle (game-loop-report) (GameOver [score] k) (do (println "resume") (resume k 0)))
+    (handle (game-loop-report) (GameOver [score] k) (do (println "over") (println score)))
+    0))

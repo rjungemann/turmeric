@@ -14,7 +14,7 @@ the gap and walks through the loader (and saver) you need to add.
 
 This guide is specific to the `turmeric-godot` binding repo. It lives in this
 repo's `docs/guides/` because the v1 Godot-binding plan
-([`docs/upcoming/v1/godot-language-binding-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/godot-language-binding-plan.md))
+([`docs/archive/godot-language-binding-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/godot-language-binding-plan.md))
 treats it as part of the G2 deliverable, and the same gotcha will hit anyone
 building a future GDExtension scripting binding from this codebase.
 
@@ -224,10 +224,10 @@ each time someone wires a new scripting binding from this codebase.
 
 ## Related
 
-- [`docs/upcoming/v1/godot-language-binding-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/godot-language-binding-plan.md)
+- [`docs/archive/godot-language-binding-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/godot-language-binding-plan.md)
   -- v1 plan. The G2 phase ("Lifecycle + Inspector") is where this loader
   graduates from "known-needed" to "implemented."
-- `docs/reported/libturi-embed-include-paths.md` and
-  `docs/reported/libturi-embed-interpret-mode-flag.md` -- the *other* two
-  rough edges surfaced during the G1 slice; both are turmeric-side and
-  remain open reports.
+- `docs/archive/history/libturi-embed-include-paths.md` and
+  `docs/archive/history/libturi-embed-interpret-mode-flag.md` -- the *other* two
+  rough edges surfaced during the G1 slice; both were turmeric-side and are
+  resolved (archived).

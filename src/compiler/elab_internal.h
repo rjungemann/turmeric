@@ -166,6 +166,13 @@ typedef struct Elab {
      * user macros the entry file did. May be NULL. */
     struct ReaderMacroRegistry *user_macros;
 
+    /* Stage 1 (macro-system-direction-plan): lazily-created macro-time turi
+     * env (see elab_macro_env_get in elab.h / src/turi/macro_env.c).  NULL
+     * until first use; freed via elab_macro_env_dispose at the same three
+     * sites as the malloc'd registries (both elaborate_program teardown
+     * branches and elab_session_free). */
+    struct TuriEnv *macro_env;
+
     /* Phase 3: Collect file-scope definitions (FN_DEF) from nested contexts */
     Expr       **file_scope_defs;
     uint32_t    n_file_scope_defs;
@@ -314,6 +321,8 @@ typedef struct Elab {
     const Symbol *sym_raw_memset;  /* raw-memset */
     /* Phase U3: Unsafe primitives - FFI */
     const Symbol *sym_c_call;      /* c-call */
+    const Symbol *sym_call_ptr;    /* call-ptr (jit-ffi-c2mir-plan F3) */
+    const Symbol *sym_callback_ptr; /* callback-ptr (jit-ffi-c2mir-plan F5) */
     const Symbol *sym_dlopen;      /* dlopen */
     const Symbol *sym_dlsym;       /* dlsym */
     const Symbol *sym_dlclose;     /* dlclose */
@@ -328,6 +337,7 @@ typedef struct Elab {
     const Symbol *sym_gc_cand_hw;       /* gc-candidate-high-water (CG6) */
     /* Phase 6: Macro system */
     const Symbol *sym_defmacro;   /* defmacro */
+    const Symbol *sym_defmacro_star; /* defmacro* (Stage 2 procedural macros) */
     const Symbol *sym_quote;      /* quote */
     const Symbol *sym_quasiquote; /* quasiquote */
     const Symbol *sym_unquote;    /* unquote */
@@ -345,6 +355,9 @@ typedef struct Elab {
     const Symbol *kw_move;        /* :move keyword for defstruct */
     const Symbol *kw_linear;      /* LT4: :linear keyword for defstruct (exactly-once) */
     const Symbol *kw_affine;      /* :affine keyword for defopaque (at-most-once) */
+    const Symbol *kw_non_null;    /* :non-null keyword for defopaque -- the author
+                                   * declares the handle's valid values exclude 0,
+                                   * which is the Option-niche soundness condition */
     const Symbol *kw_sealed;      /* :sealed keyword for defopaque -- `::` cannot
                                    * cross the type/representation boundary
                                    * outside the declaring module */
@@ -562,11 +575,15 @@ typedef struct Elab {
     /* Phase M0: Module system */
     const Symbol *sym_defmodule;  /* defmodule */
     const Symbol *sym_export;     /* export */
+    /* (export-from <mod> name ...) -- re-export names another module already
+     * exports, without a forwarding wrapper. */
+    const Symbol *sym_export_from;
     const Symbol *sym_effect;     /* effect — used to parse (effect Name) in export/refer lists */
     const Symbol *sym_import;     /* import */
     const Symbol *sym_load;       /* load */
     const Symbol *kw_as;          /* :as */
     const Symbol *kw_refer;       /* :refer */
+    const Symbol *kw_for_macros;  /* :for-macros (Stage 3 macro-time imports) */
     bool has_defmodule;           /* whether defmodule has been seen in this file */
     /* Phase M1: Module namespace system */
     const Symbol    *current_module_name; /* name of module being elaborated, or NULL */
@@ -623,6 +640,18 @@ typedef struct Elab {
      * user code that later shadows them gets a hard diagnostic instead
      * of broken C output. */
     bool             in_stdlib_load;
+    /* The top-level form currently being elaborated by elaborate_program's
+     * Pass 2, or NULL when not at file scope.
+     *
+     * `e->scope == &e->global` is true both for a `def` that IS a top-level
+     * form and for a `def` buried in a top-level EXPRESSION's subforms
+     * (`(if c (def x 1) (def y 2))`), so the scope pointer alone cannot tell
+     * statement position from expression position.  elab_def needs that
+     * distinction: the second shape elaborates as a global but codegen emits
+     * it as a local, so a later reference fails in the emitted C with an
+     * `undeclared identifier`.  See def_form_is_statement_position() and
+     * docs/archive/turi-toplevel-expr-subforms-elaborate-in-global-scope.md. */
+    const Form      *toplevel_stmt;
     /* Phase M4: During macro expansion, the defining module of the currently
      * expanding macro (so private helper macros from that module are visible).
      * Cross-module wrapper-macro bug fix: when an outer macro M (defined in
@@ -634,7 +663,7 @@ typedef struct Elab {
      * elab_lookup_macro walks the stack so any module in the active expansion
      * chain contributes its visibility. macro_expansion_module remains the
      * innermost entry for back-compat with sites that read it directly. See
-     * docs/reported/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md. */
+     * docs/archive/history/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md. */
     const Symbol    *macro_expansion_module;
     const Symbol   **macro_expansion_stack;
     uint32_t         n_macro_expansion_stack;
@@ -786,9 +815,6 @@ typedef struct Elab {
     const Symbol     *sym_gen_done;     /* "gen-done?" */
     /* CF5 (control-flow-completeness-plan): set true while elaborating a match arm body. */
     bool              in_match_arm;
-    /* CF6 (control-flow-completeness-plan): set true while elaborating an inline async closure body.
-     * Used by elab_await to check that bindings in scope are Send. */
-    bool              in_async_body;
     /* bare-fat-result-monomorphization-plan (Phase B): per-call-site
      * specialization of a bare-^fat callee over the incoming closure's result
      * kind.  See elab_specialize_bare_fat (elab_call.c) and elab_defn. */
@@ -857,6 +883,23 @@ typedef struct Elab {
     struct WriteFrameSite *wf_frame_sites;
     uint32_t               n_wf_frame_sites;
     uint32_t               cap_wf_frame_sites;
+    /* AI3.1 (application-image-dumps-plan): the `init` root of every
+     * with-image-cache-after-init expansion, noted at macro expansion and
+     * checked by wf_lint_image_globals after every defn's frame site exists
+     * (init's callees may be defined later in the unit). */
+    struct ImageCacheRoot *image_cache_roots;
+    uint32_t               n_image_cache_roots;
+    uint32_t               cap_image_cache_roots;
+    /* R4 slice 2 (trusted-refinement-claims-plan): every `#reads`-annotated
+     * function, recorded during elaboration for the deferred read-frame
+     * verification pass (rf_resolve_read_frames).  Same deferral rationale
+     * as WriteFrameSite: a callee's own frame verdict may not exist yet at
+     * this defn's elaboration.  Registration is unconditional and one
+     * pointer-triple cheap, and since R4 slice 3 the pass is unconditional
+     * too. */
+    struct RfReadsSite    *rf_reads_sites;
+    uint32_t               n_rf_reads_sites;
+    uint32_t               cap_rf_reads_sites;
     /* Open-addressed (callee, call_form) -> index+1 set, so deduplicating a
      * re-elaborated call site stays O(1) instead of rescanning every crossing
      * recorded so far -- which would make an opted-in build quadratic in its
@@ -990,6 +1033,12 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
  * "every callee's declared frame stays inside this one" is a question about
  * functions that may be defined later in the file, and a check that answered it
  * differently depending on definition order would be worthless. */
+/* AI3.1: one with-image-cache-after-init expansion's cold-start root. */
+typedef struct ImageCacheRoot {
+    const Symbol *root;   /* the `init` argument (a top-level defn name) */
+    Span          span;   /* the macro call, where TUR-W0706 is reported */
+} ImageCacheRoot;
+
 typedef struct WriteFrameSite {
     Binding      *fn;          /* the annotated function; where the verdict lands */
     Binding     **params;      /* its parameters, for arg -> frame-slot mapping */
@@ -999,8 +1048,7 @@ typedef struct WriteFrameSite {
     const Form   *annot;       /* the `#writes` form, for the diagnostic span */
 } WriteFrameSite;
 
-/* Record an annotated function for the deferred WF2 walk.  No-op unless the
- * `write-frames` experiment is on. */
+/* Record an annotated function for the deferred WF2 walk. */
 void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_params,
                         const Form *defn_form, uint32_t body_start,
                         const Form *annot);
@@ -1008,6 +1056,39 @@ void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_param
 /* Verify every recorded frame against its body, stamping `writes_checked` on
  * the ones that hold and emitting TUR-E0382 on the ones that do not. */
 void wf_resolve_write_frames(Elab *e);
+/* AI3.1: record a with-image-cache-after-init `init` root / run TUR-W0706. */
+void wf_note_image_cache_root(Elab *e, const Symbol *root, Span span);
+void wf_lint_image_globals(Elab *e);
+
+/* R4 slice 2 (trusted-refinement-claims-plan): one `#reads`-annotated
+ * function, recorded during elaboration and verified AFTER it
+ * (rf_resolve_read_frames).  Unlike WriteFrameSite this walk runs over the
+ * ELABORATED body (Binding.source_fn_def->body) because its read leaves need
+ * type information (receiver type kinds, builtin shapes); the params array is
+ * arena-lived, same as WriteFrameSite's. */
+typedef struct RfReadsSite {
+    Binding  *fn;         /* the `#reads`-annotated function */
+    Binding **params;     /* its parameters, for root -> frame-bit mapping */
+    uint32_t  n_params;
+    Span      span;       /* the `#reads` annotation (or name), for W0383 */
+    /* A monomorphization clone: verified and evidence-stamped like its
+     * original (the encoder's refusal must see the evidence whichever
+     * binding a call resolves to, same rule as the defn-site stamp), but
+     * silent -- no dump line, no repeated warning. */
+    bool      is_clone;
+} RfReadsSite;
+
+/* Record a `#reads`-annotated function for the deferred verification pass. */
+void rf_note_reads_site(Elab *e, Binding *fn, Binding **params,
+                        uint32_t n_params, Span span, bool is_clone);
+
+/* Verify every recorded `#reads` frame against its elaborated body, stamping
+ * `reads_checked` on the ones where every read of mutable state attributes to
+ * a frame-named parameter.  No diagnostic: EXCEEDED evidence is the slice-1
+ * scan's job (TUR-W0383 and the congruence refusal it carries); this pass only
+ * decides whether SILENCE was "saw everything, all clean" (VERIFIED) or "could
+ * not see" (UNVERIFIED).  Only the DUMP is behind --dump-read-frames. */
+void rf_resolve_read_frames(Elab *e);
 
 /* G4a: may this kind be loaded/stored atomically in one machine operation? */
 bool type_is_atomic_scalar(TypeKind k);
@@ -1059,13 +1140,20 @@ typedef struct GenContext {
 } GenContext;
 
 /* Phase 6: Macro definition */
+/* Stage 2 (macro-system-direction-plan): how a macro's body runs. */
+typedef enum MacroKind {
+    MACRO_TEMPLATE = 0,   /* defmacro: substitute_params + the CT evaluator */
+    MACRO_PROCEDURAL,     /* defmacro*: full-Turmeric body evaluated in the
+                           * macro-time turi env (src/turi/macro_env.c) */
+} MacroKind;
+
 typedef struct MacroDef {
     const Symbol *name;
     Form **params;
     uint32_t n_params;       /* number of fixed params (excludes rest param) */
     bool is_variadic;        /* true if [params & rest] syntax used */
     const Symbol *rest_param; /* rest-arg symbol name, or NULL */
-    /* docs/reported/macro-args-elaborated-before-expansion.md:
+    /* docs/archive/history/macro-args-elaborated-before-expansion.md:
      * per-param ^syntax marker.  When is_syntax_param[i] is true, the
      * corresponding arg form is passed to the macro as data: substitute_params
      * leaves the param symbol in place and elab_eval_macro_form binds the
@@ -1082,6 +1170,15 @@ typedef struct MacroDef {
      * but defining_module_name still holds the original module so private
      * helpers of that module remain accessible during expansion. */
     bool is_referred;
+    /* Multi-form bodies: the body was synthesized as (do setup... template),
+     * which only has meaning under the compile-time evaluator -- route the
+     * substituted template through it unconditionally. */
+    bool force_ct_eval;
+    /* Stage 2: MACRO_TEMPLATE (default, memset-0) or MACRO_PROCEDURAL. */
+    MacroKind kind;
+    /* Stage 2: for MACRO_PROCEDURAL, the name the macro's compiled-to-defn
+     * closure is bound under in the macro-time env ("<name>__mx"). */
+    const char *proc_fn_name;
 } MacroDef;
 
 typedef enum CtValueTag {
@@ -1119,7 +1216,7 @@ struct CtEnv {
      * left as data for ordinary elaboration -- expanding it during CT eval
      * would mis-fire on data forms threaded through builtins like `list`
      * (e.g. an accumulated `(map-assoc ...)`).  Not inherited by child envs.
-     * docs/reported/ct-macro-evaluator-no-function-call-in-splice.md */
+     * docs/archive/history/ct-macro-evaluator-no-function-call-in-splice.md */
     bool expand_macro_head;
 };
 
@@ -1202,7 +1299,44 @@ void elab_register_macro(Elab *e, MacroDef *macro);
 Form *quasiquote_expand_form(Elab *e, Form *f);
 Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args);
 Expr *elab_defmacro(Elab *e, const Form *call);
+Expr *elab_defmacro_star(Elab *e, const Form *call);
 Expr *elab_gensym(Elab *e, const Form *call);
+
+/* Stage 2 (macro-system-direction-plan): procedural-macro bridge, implemented
+ * in src/turi/macro_env.c (include direction stays turi -> compiler; the
+ * compiler sees only these declarations).
+ *
+ * elab_macro_env_define_proc evaluates the synthesized
+ * `(defn <fn_name> [params : Syntax ...] : Syntax body...)` form in the
+ * session's macro-time env; emits a diagnostic at err_span and returns false
+ * on any definition-time failure.
+ *
+ * elab_macro_env_call_proc invokes a MACRO_PROCEDURAL macro's closure on the
+ * raw call-site argument forms and returns the expansion imported into the
+ * compiler's arena/symtab (forms built macro-side intern symbols into the
+ * macro env's own table, so a deep re-interning copy is mandatory -- symbol
+ * identity drives every special-form dispatch).  NULL after emitting a
+ * diagnostic on arity mismatch, expansion-time error, or a non-syntax
+ * result. */
+bool  elab_macro_env_define_proc(Elab *e, const char *fn_name,
+                                 const Form *defn_form, Span err_span);
+Form *elab_macro_env_call_proc(Elab *e, MacroDef *macro,
+                               Form **args, uint32_t n_args, Span call_span);
+
+/* Stage 3: `(import m :for-macros)` -- evaluate module m into the macro-time
+ * env (TURI_CAP_IMPORT granted transiently for the load) so defmacro* bodies
+ * can call its functions at expansion time.  `path` is the resolved module
+ * file.  Emits a diagnostic at `span` and returns false on failure.
+ * Implemented in src/turi/macro_env.c. */
+bool elab_macro_env_import(Elab *e, const Symbol *module_name,
+                           const char *path, Span span);
+
+/* Stage 3: resolve a module name to its file path using the same search
+ * order elab_load_module uses (importing file's dir -> stdlib dir -> each
+ * -I include dir), probing for existence only -- no read, no registry
+ * side effects.  Returns false when no candidate exists.  elab_module.c. */
+bool elab_module_resolve_path(Elab *e, const Symbol *name,
+                              char *out, size_t cap);
 
 /* TY2.2: wrap a value in EX_UNION_INJECT to widen it to the `any` top type. */
 Expr *elab_coerce_to_any(Elab *e, Expr *value);
@@ -1329,6 +1463,7 @@ typedef enum {
     RET_CONFLICT_TYPE_REVERSE,
     RET_CONFLICT_BOOL_INTEGER,
     RET_CONFLICT_CARRIER_AGGREGATE,
+    RET_CONFLICT_NIL_BODY,
 } ReturnConflict;
 
 /* carrier-aware-return-unification: single dispatcher over the return-position
@@ -1338,9 +1473,17 @@ typedef enum {
  * widen an int-literal -> float body in place with
  * rc_widen_int_literal_to_float_return BEFORE calling, and should skip the
  * lazy-probe placeholder and inline-C (fiat TY_NIL) bodies as before. */
+/* nil-tail-not-checked-against-declared-return: `checkable` is the caller's
+ * decision and carries two facts -- the return type was written down, and the
+ * tail is a nil LITERAL rather than merely nil-typed.  See elab_core.c. */
+bool return_type_nil_body_conflict(TypeKind declared, Type body,
+                                   bool checkable);
+/* True when this body's TAIL is a nil literal, peeling the EX_DO / EX_LET /
+ * EX_LETREC wrappers a multi-form or scope-opening body adds. */
+bool body_tail_is_nil_literal(const Expr *e);
 ReturnConflict return_position_conflict(const AdtDef *ret_adt,
                                         TypeKind ret_kind, Type body,
-                                        ReturnClass cls);
+                                        ReturnClass cls, bool check_nil_body);
 
 /* TY4: if `e` is a borrow (&x / &mut x) of a named binding, return that
  * binding (the referent); otherwise NULL.  Used by the borrow-escape check. */
@@ -1364,6 +1507,8 @@ Expr *elab_raw_realloc(Elab *e, const Form *call);
 Expr *elab_raw_memcpy(Elab *e, const Form *call);
 Expr *elab_raw_memset(Elab *e, const Form *call);
 Expr *elab_c_call(Elab *e, const Form *call);
+Expr *elab_call_ptr(Elab *e, const Form *call);
+Expr *elab_callback_ptr(Elab *e, const Form *call);
 Expr *elab_dlopen(Elab *e, const Form *call);
 Expr *elab_dlsym(Elab *e, const Form *call);
 Expr *elab_dlclose(Elab *e, const Form *call);
@@ -1452,11 +1597,11 @@ Expr *elab_escape(Elab *e, const Form *call);
 Expr *elab_defn(Elab *e, const Form *call);
 Expr *elab_fn(Elab *e, const Form *call);
 /* bare-fat-param-non-int-result inference (Phase A); see
- * docs/upcoming/bare-fat-result-type-inference-plan.md. */
+ * docs/archive/history/bare-fat-result-type-inference-plan.md. */
 bool kind_is_non_int_register_class(TypeKind k);
 
 /* bare-fat-result-monomorphization (Phase B); see
- * docs/upcoming/bare-fat-result-monomorphization-plan.md.
+ * docs/archive/history/bare-fat-result-monomorphization-plan.md.
  *  - elab_specialize_bare_fat: re-elaborate `callee`'s retained body with its
  *    bare-^fat param result kind set to `k`, returning the clone's binding
  *    (memoized by (callee, k)); NULL if it cannot be specialized.
@@ -1659,5 +1804,22 @@ Expr *elab_session_offer(Elab *e, const Form *call);
 Expr *elab_session_choose_left(Elab *e, const Form *call);
 Expr *elab_session_choose_right(Elab *e, const Form *call);
 Expr *elab_session_recv_timeout(Elab *e, const Form *call);
+
+
+/* any-struct-box-leak-per-widen: does this expression evaluate to an `any` whose
+ * payload box the evaluating expression owns?  See elab_call.c. */
+bool any_expr_is_owned_temp(const Expr *x, int depth);
+
+/* RM1 (reclamation-plan): the per-callee freshness analysis -- see the walker
+ * in elab_fns.c and the flag's comment in expr.h. */
+bool elab_body_returns_fresh_sum_box(const Expr *e);
+/* ... and its stamping form: sets both returns_fresh_sum_box and
+ * fresh_sum_via_param_mask on `b` from the elaborated body. */
+void elab_stamp_sum_freshness(Binding *b, Binding **params, uint32_t n_params,
+                              const Expr *body);
+/* The non-retaining parameter masks (fn / ptr-scalar / sum), inferred from the
+ * elaborated body.  Shared by defn and instance-method elaboration. */
+void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
+                                Expr *body);
 
 #endif

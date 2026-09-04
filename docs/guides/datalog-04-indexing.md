@@ -14,7 +14,7 @@ most common query pattern.
 Run the example:
 
 ```sh
-./build/tur examples/datalog/indexed.tur
+./build/tur run examples/datalog/indexed.tur
 ```
 
 ---
@@ -336,4 +336,4 @@ The four example files form a progression:
 | `datalog.tur` | Term ADT, Binding, pattern matching, join via clause chains | ~350 |
 
 Each file is self-contained and can be run independently with
-`./build/tur examples/datalog/<file>.tur`.
+`./build/tur run examples/datalog/<file>.tur`.

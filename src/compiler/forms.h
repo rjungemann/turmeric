@@ -103,7 +103,7 @@ typedef enum FxProvenance {
      * is what lets the defn signature walk tell a write-frame annotation apart
      * from a body expression -- but the frame is a SET of parameters, not one,
      * because a function may legitimately write more than one argument.  See
-     * docs/upcoming/checked-write-frames-plan.md (WF1). */
+     * docs/archive/checked-write-frames-plan.md (WF1). */
     PROV_WRITES,             /* (writes <sym>...) from #writes <sym>|[<sym>...] */
 } FxProvenance;
 
@@ -166,5 +166,11 @@ void  form_print(Buf *b, const Form *f);
 
 /* Return the name of a FormTag as a string */
 const char *form_tag_name(FormTag tag);
+
+/* Deep structural equality over two forms.  Symbols/keywords compare by
+ * interned pointer identity; strings/C-blocks by content; sequence forms
+ * recursively.  Spans are ignored.  Shared by the compile-time macro
+ * evaluator's `=` builtin and the interpreter's TURI_SYNTAX `=`. */
+bool form_equal(const Form *a, const Form *b);
 
 #endif

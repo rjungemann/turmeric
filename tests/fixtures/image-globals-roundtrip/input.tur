@@ -1,0 +1,54 @@
+;; application-image-dumps-plan (AI3.2 / AI3.3 / AI7.2): image globals.
+;;
+;; The image is the captured continuation, so a plain `def ^mut` written during
+;; init is back at its initial value after a warm start.  `defimage-global`
+;; declares a global that rides in the image: on save the registered globals
+;; are serialised (through their Serializable instance) into a second section
+;; after the continuation bytes, and on load they are restored BEFORE the
+;; continuation resumes.
+;;
+;; Single process, cold then warm.  Between the two calls every global is
+;; clobbered, so a warm start that printed 1 / "clobbered" / 0.25 would be
+;; reading the process, not the image.  The float probe uses 7.1, never 7.0.
+
+(load "stdlib/image.tur")
+
+(defn img-rm [path : cstr] : void
+  ```c remove(path); ```)
+
+(defimage-global counter :int 0)
+(defimage-global greeting :cstr "cold")
+(defimage-global ratio :float 1.5)
+
+(defn do-init [] : int
+  (do
+    (set! counter 42)
+    (set! greeting "set during init")
+    (set! ratio 7.1)
+    (println "init ran")
+    0))
+
+(defn do-loop [] : int
+  (do
+    (println "loop: counter =")
+    (println counter)
+    (println greeting)
+    (println ratio)
+    0))
+
+(defn main [] : int
+  (do
+    ;; Track at the top of main: this runs on BOTH the cold start that writes
+    ;; the image and the warm start that restores it.
+    (image/track-globals! counter greeting ratio)
+    (img-rm "/tmp/tur-image-globals-roundtrip.img")
+    (println "cold:")
+    (with-image-cache-after-init "/tmp/tur-image-globals-roundtrip.img" do-init do-loop)
+    (set! counter 1)
+    (set! greeting "clobbered")
+    (set! ratio 0.25)
+    (println "warm:")
+    (with-image-cache-after-init "/tmp/tur-image-globals-roundtrip.img" do-init do-loop)
+    (println (image/global-count))
+    (img-rm "/tmp/tur-image-globals-roundtrip.img")
+    0))

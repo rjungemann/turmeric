@@ -1,0 +1,60 @@
+;; stm-tmvar-tchan -- TMVar and TChan from stdlib/stm-sync.tur.
+;;
+;; Both STM docs used to hand-sketch these from tvar/* + check; this is that
+;; sketch made real. See docs/archive/stm-tmvar-tchan-stdlib.md.
+;;
+;; They are MACROS, not functions, and that is forced rather than stylistic:
+;; `atomically` requires a syntactic `stm` block, so `(atomically (f x))` where
+;; f returns a transaction is a hard error. An STM action cannot be a value; it
+;; has to be spliced into the transaction lexically.
+;;
+;; Hence the two spellings per operation. `tmvar-take-stm` is the transaction
+;; BODY, for composing several operations into ONE transaction; `tmvar-take`
+;; wraps the same body in its own `(atomically (stm ...))`. The composition
+;; case at the bottom is the one that would be impossible with functions.
+
+(load "stdlib/stm-sync.tur")
+
+(defn main [] : int
+  ;; ---- TMVar: a single-slot mailbox ----
+  (let [mv (tmvar-new 42)]
+    (println (tmvar-full? mv))              ; true
+    ;; read peeks -- the value stays, which is the whole difference from take
+    (println (:: (tmvar-read mv) :int))     ; 42
+    (println (tmvar-full? mv))              ; true
+    ;; take empties
+    (println (:: (tmvar-take mv) :int))     ; 42
+    (println (tmvar-full? mv))              ; false
+    ;; and it refills
+    (tmvar-put mv 7)
+    (println (:: (tmvar-take mv) :int)))    ; 7
+
+  ;; ---- TChan: an unbounded FIFO ----
+  (let [ch (tchan-new)]
+    (println (tchan-empty? ch))             ; true
+    (tchan-write ch 1)
+    (tchan-write ch 2)
+    (tchan-write ch 3)
+    (println (tchan-len ch))                ; 3
+    ;; FIFO, not LIFO -- reading back in write order is the assertion
+    (println (tchan-read ch))               ; 1
+    (println (tchan-read ch))               ; 2
+    (println (tchan-len ch))                ; 1
+    (println (tchan-read ch))               ; 3
+    (println (tchan-empty? ch))             ; true
+    ;; a TChan CAN carry 0, unlike a TMVar: the empty state is the empty LIST,
+    ;; not a marker value
+    (tchan-write ch 0)
+    (println (tchan-empty? ch))             ; false
+    (println (tchan-read ch)))              ; 0
+
+  ;; ---- composing two operations in ONE transaction ----
+  ;; Two separate tmvar-take calls would be two transactions, with a window
+  ;; between them. The -stm forms splice into a single `stm`, so this either
+  ;; drains both or neither.
+  (let [a (tmvar-new 10)
+        b (tmvar-new 20)]
+    (println (:: (atomically (stm (tmvar-take-stm a) (tmvar-take-stm b))) :int))  ; 20
+    (println (tmvar-full? a))               ; false -- a was drained too
+    (println (tmvar-full? b)))              ; false
+  0)

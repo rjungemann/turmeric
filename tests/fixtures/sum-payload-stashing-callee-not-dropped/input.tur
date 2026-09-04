@@ -1,0 +1,25 @@
+;; sum-payload-stashing-callee-not-dropped -- a callee that STORES its sum
+;; parameter (into a container) must not be inferred non-retaining: the
+;; caller's fresh `(some Box)` argument would be freed after the call while
+;; the container still holds the arm pointer.  Asserts the VALUE read back
+;; through the container after the call returns -- under the wrong answer
+;; this reads freed memory (ASan: heap-use-after-free).  Deliberately not
+;; leak-checked: the stored box has no owner by design (status quo).
+
+(defstruct Box [n : int])
+
+(defn show-int [n : int] : void ```c printf("%lld\n", (long long)n); ```)
+
+(def store (:: (vec-new) (Vec (Option Box))))
+
+(defn stash [o : (Option Box)] : int
+  (vec-push! store o)
+  1)
+
+(defn main [] : int
+  (stash (some (make-struct Box :n 5)))
+  (stash (some (make-struct Box :n 6)))
+  (let [a (:: (vec-get store 0) (Option Box))
+        b (:: (vec-get store 1) (Option Box))]
+    (show-int (+ (.n (unwrap a)) (.n (unwrap b)))))
+  0)

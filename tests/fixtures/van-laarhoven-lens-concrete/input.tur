@@ -12,14 +12,14 @@
 ;; `Identity` flow as `(f a)` through the carrier for both the argument and the
 ;; result positions of the lens -- the MB4 "can Const/Identity flow?" gate.
 ;; A functor wider than one int64 word is still the mode-B "No-go" -- see
-;; docs/reported/van-laarhoven-functor-must-be-int-carrier.md for the tracked
+;; docs/archive/history/van-laarhoven-functor-must-be-int-carrier.md for the tracked
 ;; restriction and the concrete repro (swap in `(defstruct Identity :copy [A]
 ;; ...)` and codegen produces bad C).
 ;;
 ;; NOTE: view/set/over here are written per-focus (concrete `S`/`A`).  A fully
 ;; generic `(view lens s)` that infers the focus type from the lens argument
 ;; needs generic-type-param inference through a rank-2 poly argument, which is
-;; not yet available -- see docs/reported/van-laarhoven-generic-inference-gap.md.
+;; not yet available -- see docs/archive/history/van-laarhoven-generic-inference-gap.md.
 
 ;; Const r a -- phantom second index; fmap ignores the function.
 (defopaque Const [r a] :int)

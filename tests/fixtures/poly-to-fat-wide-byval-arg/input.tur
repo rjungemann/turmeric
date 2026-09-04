@@ -1,0 +1,60 @@
+;; poly-to-fat-wide-byval-arg -- a poly fn value boxed into a ^fat sink whose
+;; declared signature takes a WIDE by-value aggregate.
+;;
+;; Three parties have to agree on how that argument crosses:
+;;   the sink's call site, which casts slot 0 through the typed-thunk typedef
+;;     (thunk_param_slot_c_name: a wide by-value aggregate is an int64 heap-box
+;;     POINTER);
+;;   the slot-0 shim ensure_typed_poly_to_fat emits;
+;;   the poly wrapper in slot 1 (make_poly_wrapper), which declares such a
+;;     parameter as the int64 carrier and does its own deref.
+;;
+;; The shim used to spell the parameter as the aggregate BY VALUE, agreeing with
+;; neither.  For (Tuple2 int int) that survived on x86-64 by accident: the
+;; caller's pointer sat in the register the struct's first eightbyte was read
+;; from, and the shim never clobbered it.  For (Tuple2 float float) the
+;; classification is SSE, so the value and the pointer are not even in the same
+;; register CLASS -- it survived only because the shim, reading xmm0:xmm1, left
+;; the pointer's integer register untouched for the wrapper to find.  Neither is
+;; a convention; both are what -O0 happened to do.
+
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+(load "stdlib/tuple.tur")
+
+;; ^fat sinks with concrete signatures over wide by-value aggregates.
+(defn call-ti [^fat f :(fn [(Tuple2 int int)] #fx{} int)
+               x : (Tuple2 int int)] : int
+  (f x))
+
+(defn call-tf [^fat f :(fn [(Tuple2 float float)] #fx{} float)
+               x : (Tuple2 float float)] : float
+  (f x))
+
+(defstruct BoxW [A] (raw :int))
+
+;; Inside each instance body `fn` is a tur_poly_fn_t carrier, boxed via
+;; EX_POLY_TO_FAT before it reaches the ^fat parameter.
+(defclass BoxI [^f] (boxi [container [fn :fn]] : int))
+(definstance BoxI [BoxW]
+  (boxi [container fn]
+    (call-ti fn (tuple2 11 22))))
+
+(defclass BoxF [^f] (boxf [container [fn :fn]] : float))
+(definstance BoxF [BoxW]
+  (boxf [container fn]
+    (call-tf fn (tuple2 1.5 2.25))))
+
+(defn sum-int [t : (Tuple2 int int)] : int
+  (+ (tuple2-1st t) (tuple2-2nd t)))
+
+;; A non-zero fractional part: an integral pair could not show a register-class
+;; mix-up, since the wrong lane would still print as a round number.
+(defn sum-float [t : (Tuple2 float float)] : float
+  (+ (tuple2-1st t) (tuple2-2nd t)))
+
+(defn main [] : int
+  (let [b (:: (make-struct BoxW (schema/int)) (BoxW int))]
+    (println (.boxi b sum-int))       ;; 11 + 22   = 33
+    (println (.boxf b sum-float)))    ;; 1.5 + 2.25 = 3.75
+  0)

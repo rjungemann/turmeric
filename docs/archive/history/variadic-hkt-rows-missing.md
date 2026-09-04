@@ -353,17 +353,28 @@ witnesses and is a Layer 6+ concern.
 **Known gaps from the aspirational validation section** (documented, not on the
 core path; each needs its own extension):
 
-- *Unregistered element types in a row do not error* (`#row{int Foo}` with `Foo`
-  undefined elaborates `Foo` to an opaque placeholder). This is Turmeric's
-  general lenient type-name resolution, not row-specific; making row elements
-  strict is a separable type-resolution change.
-- *Row-polymorphic `defn`* (`(defn id-row [r] (fn [x : Row r] x))`) is not wired:
-  `^&` is recognised on `defstruct` params but not yet on `defn`/`fn` type
-  params, and a `Row r` value-wrapper type does not exist.
+- ~~*Unregistered element types in a row do not error*~~ **CLOSED (L6
+  follow-up A).** `#row{int Foo}` with `Foo` undefined is now a hard error
+  ("unknown type name 'Foo' in #row{...} element position"); re-verified
+  2026-08-17.
+- ~~*Row-polymorphic `defn` ... is not wired: `^&` is recognised on
+  `defstruct` params but not yet on `defn`/`fn` type params*~~ **CLOSED (L6
+  follow-up B).** `^&name` is accepted in the `defn` type-param vector
+  (`src/compiler/elab_fns.c`, the type-param-vector branch) and pinned by
+  `tests/fixtures/hkt-row-polymorphic-defn` /
+  `hkt-row-polymorphic-call-from-polymorphic`; re-verified 2026-08-17.  A
+  surveying agent quoted this passage as current and reported the gap as
+  live -- see docs/upcoming/row-types-followups-plan.md, whose hygiene rule
+  ("strike closed gaps in archived docs") this edit finally applies to its
+  own motivating example.  The `Row r` VALUE-wrapper half of the old bullet
+  remains unbuilt by design (that is R2 of the same plan, deliberately not
+  scheduled).
 - *Permutation no-op as a type-checker behavior* (the data-frame
   `Frame [Name :str Age :int]` ~ `Frame [Age :int Name :str]`): `type_eq` on
   rows is order-*sensitive*; the order-insensitive `type_typerow_eq_perm` exists
-  and is unit-tested but is not consulted during type-checking.
+  and is unit-tested but is not consulted during type-checking.  (Still true
+  2026-08-17; `row-canon` is the explicit spelling for order-insensitive
+  equality.)
 
 ---
 

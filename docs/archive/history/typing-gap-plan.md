@@ -493,4 +493,4 @@ of the typing audit.
 - [typing-gap-audit.md](typing-gap-audit.md)
 - [control-flow-completeness-plan.md](control-flow-completeness-plan.md)
 - [advanced-type-system-rationale.md](../guides/advanced-type-system-rationale.md)
-- [refinement-types-plan.md](upcoming/refinement-types-plan.md)
+- [refinement-types-plan.md](../refinement-types-plan.md)

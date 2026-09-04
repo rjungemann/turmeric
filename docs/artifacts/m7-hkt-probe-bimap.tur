@@ -7,7 +7,7 @@
 ;; tyvars recovered from the two mapper fns, and the result is `(p c d)`.
 ;;     bimap [g : (fn [a] c) h : (fn [b] d) x : (p a b)] : (p c d)
 ;;
-;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-bimap.tur; echo $?
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/artifacts/m7-hkt-probe-bimap.tur; echo $?
 ;;   (by-value HKT is now default-on, so the env var is optional)
 ;;   -> 42  (TARGET, REACHED 2026-06-19)
 ;;
@@ -30,7 +30,7 @@
 ;; wildcard -- `(definstance Functor [(Result _ E)])` -- still mangles to
 ;; `Result__ltstruct_gt` and stays carrier (silent miscompile vs a by-value
 ;; consumer). That is the Functor/Monad/Applicative [Result] migration blocker,
-;; tracked in docs/reported/m7-hkt-bimap-twoparam-struct-tyvar-leak.md.
+;; tracked in docs/archive/history/m7-hkt-bimap-twoparam-struct-tyvar-leak.md.
 
 (defclass MyBifunctor [^^p]
   (bimap2 [g : (fn [a] c) h : (fn [b] d) x : (p a b)] : (p c d)))

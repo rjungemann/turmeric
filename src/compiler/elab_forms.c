@@ -1,6 +1,5 @@
 /* elab_forms.c -- control-flow and basic expression forms (let/if/do/while/case/...). */
 #include "elab_internal.h"
-#include "experiments.h"        /* G3: experiment_warn_if_used("global-state") */
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
@@ -303,6 +302,160 @@ static struct TypeClassInstance *binding_closure_drop_inst(Elab *e, Binding *b,
 }
 
 /* ---- special forms ---- */
+
+/* The parametric ADT a form constructs, when the form is literally a
+ * constructor call of one -- `(Empty)`, `(none)`, `(Some x)`.  NULL otherwise. */
+static const AdtDef *ctor_call_parametric_adt(Elab *e, const Form *f) {
+    if (!e || !f || f->tag != F_LIST || f->as.list.len < 1) return NULL;
+    if (f->as.list.items[0]->tag != F_SYM) return NULL;
+    CtorDef *c = elab_lookup_ctor(e, f->as.list.items[0]->as.sym);
+    if (!c || !c->adt || c->adt->n_type_params == 0) return NULL;
+    return c->adt;
+}
+
+/* Use-site look-ahead for an UNANNOTATED let binding whose initializer is a
+ * bare parametric constructor.
+ *
+ * `(let [e (Empty)] ... (getv e))` against `getv [b : (Box int)]` has no
+ * expected type at the initializer and no annotation to supply one, so
+ * `(Empty)` defaults to the bare TY_ADT and emits the carrier `ctor_Empty()`
+ * while every consumer reads the `(Box int)` monomorph.  Annotating the binding
+ * already fixes it; this finds the same answer without the annotation.
+ *
+ * Search `f` for a call that passes `name` in a parameter slot declared as a
+ * concrete application of `adt`, and return that parameter's type.  Bounded on
+ * purpose: syntactic, depth-capped, confined to the let's own text, and gated
+ * on the ADT matching, so the type it finds can only ground the constructor to
+ * a family it already belongs to.  Same shape as the sibling-argument
+ * look-ahead in elab_call.c (poly-hof-constrained-arg-baked-carrier), which
+ * resolves a param's tyvars by elaborating siblings early. */
+static const Type *let_use_site_app_type(Elab *e, const Form *f,
+                                         const Symbol *name, const AdtDef *adt,
+                                         uint32_t depth) {
+    if (!f || depth == 0) return NULL;
+    if (f->tag == F_LIST && f->as.list.len >= 1 &&
+        f->as.list.items[0]->tag == F_SYM) {
+        Binding *fb = scope_lookup(e->scope, f->as.list.items[0]->as.sym);
+        if (fb && fb->type.kind == TY_FN && fb->type.as.fn.arg_full_types) {
+            for (uint32_t k = 0; k + 1 < f->as.list.len; k++) {
+                const Form *a = f->as.list.items[k + 1];
+                if (a->tag != F_SYM || a->as.sym != name) continue;
+                uint32_t idx = fb->closure_fn_binding ? k + 1 : k;
+                if (idx >= fb->type.as.fn.arity) continue;
+                const Type *pt = fb->type.as.fn.arg_full_types[idx];
+                if (pt && pt->kind == TY_APP && type_adt_app_def(pt) == adt &&
+                    type_app_is_concrete_adt(pt))
+                    return pt;
+            }
+        }
+    }
+    if (f->tag == F_LIST || f->tag == F_VEC) {
+        for (uint32_t k = 0; k < f->as.list.len; k++) {
+            const Type *r = let_use_site_app_type(e, f->as.list.items[k], name,
+                                                  adt, depth - 1);
+            if (r) return r;
+        }
+    }
+    return NULL;
+}
+
+/* any-struct-box-leak-per-widen (the early-exit case): move an `any` binding's
+ * drop from scope exit to its single consuming call.
+ *
+ * The scope-exit drop is a TRAILING free -- emitted after the body -- so a
+ * `return` or a TCO'd tail call in that body jumps straight past it and the box
+ * leaks.  (The closure-env and catch-box frees have the same shape and the same
+ * hole; this does not fix those.)  But when the binding is used EXACTLY ONCE,
+ * and that use is an argument a callee neither retains nor outlives, the drop
+ * does not need the scope at all: the box is dead the moment that call returns,
+ * which is a point every path through the body reaches before it can exit.
+ *
+ * `catch_box_binding_escapes_except` does the counting.  Excluding the one use
+ * we found, the binding must not appear anywhere else -- so "exactly once" is
+ * established by the same conservative walk that decides escape, not by a
+ * separate occurrence counter that could disagree with it.
+ *
+ * The binding is then flagged so the scope-exit rule skips it; both firing
+ * would free the box twice. */
+bool any_box_binding_escapes_except(const Expr *e, const Binding *b,
+                                    const Expr *ignore);
+
+static const Expr *any_find_sole_drop_use(const Expr *e, const Binding *b);
+
+static void any_let_move_drop_to_use(Expr *let_e) {
+    if (!let_e || !let_e->as.let_.bindings) return;
+    for (uint32_t i = 0; i < let_e->as.let_.n; i++) {
+        LetBinding *lb = &let_e->as.let_.bindings[i];
+        if (!lb->binding || !lb->init) continue;
+        if (lb->binding->type.kind != TY_ANY) continue;
+        if (!any_expr_is_owned_temp(lb->init, 8)) continue;
+        const Expr *use = any_find_sole_drop_use(let_e->as.let_.body, lb->binding);
+        if (!use) continue;
+        if (any_box_binding_escapes_except(let_e->as.let_.body, lb->binding, use))
+            continue;
+        /* A sibling binding's initializer could also reach it. */
+        bool other = false;
+        for (uint32_t j = 0; j < let_e->as.let_.n && !other; j++)
+            if (j != i && any_box_binding_escapes_except(
+                              let_e->as.let_.bindings[j].init, lb->binding, NULL))
+                other = true;
+        if (other) continue;
+        ((Expr *)use)->any_drop_after = true;
+        lb->binding->any_dropped_at_use = true;
+    }
+}
+
+/* The first argument position holding a bare reference to `b` whose parameter is
+ * droppable -- non-retaining and effect-free, the same pair every other `any`
+ * drop rule uses. */
+static const Expr *any_find_sole_drop_use(const Expr *e, const Binding *b) {
+    if (!e) return NULL;
+    const Expr *r = NULL;
+    switch (e->kind) {
+        case EX_CALL: {
+            const Binding *fb = e->as.call_.fn_binding;
+            if (fb && !e->as.call_.fn_expr && fb->type.kind == TY_FN
+                && effect_row_is_empty(fb->type.as.fn.effect_row)) {
+                for (uint32_t i = 0; i < e->as.call_.n_args && i < 32; i++) {
+                    const Expr *a = e->as.call_.args[i];
+                    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+                    /* Return the ASCRIBE-PEELED node: it is what the escape
+                     * walk encounters, so it is what `ignore` must match, and
+                     * it is what emit_value's hook fires on. */
+                    if (a && a->kind == EX_VAR && a->as.var.binding == b
+                        && (fb->nonretain_ptr_param_mask & (1u << i)))
+                        return a;
+                }
+            }
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if ((r = any_find_sole_drop_use(e->as.call_.args[i], b))) return r;
+            return any_find_sole_drop_use(e->as.call_.fn_expr, b);
+        }
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if ((r = any_find_sole_drop_use(e->as.builtin.args[i], b))) return r;
+            return NULL;
+        case EX_IF:
+            /* Only the CONDITION is unconditional.  A use inside an arm runs on
+             * one path and not the other, so moving the drop there would leak on
+             * the path that skips it -- and the scope-exit rule has already been
+             * suppressed by then.  The drop has to dominate every exit, which is
+             * what restricting the search to unconditional positions buys. */
+            return any_find_sole_drop_use(e->as.if_.cond, b);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if ((r = any_find_sole_drop_use(e->as.do_.items[i], b))) return r;
+            return NULL;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if ((r = any_find_sole_drop_use(e->as.let_.bindings[i].init, b))) return r;
+            return any_find_sole_drop_use(e->as.let_.body, b);
+        case EX_ASCRIBE: return any_find_sole_drop_use(e->as.ascribe_.inner, b);
+        case EX_RETURN:  return any_find_sole_drop_use(e->as.return_.value, b);
+        default: return NULL;
+    }
+}
 
 Expr *elab_let(Elab *e, const Form *call) {
     /* (let [b1 i1 b2 i2 ...] body...)
@@ -695,6 +848,22 @@ Expr *elab_let(Elab *e, const Form *call) {
             let_init_expected = fn_type_from_form(e, type_ann_form, NULL, NULL, 0);
             if (let_init_expected) e->expected_type = let_init_expected;
         }
+        /* No annotation, and the initializer is a bare parametric constructor:
+         * look ahead to a use in this let's own text for the family.  See
+         * let_use_site_app_type. */
+        if (!let_init_expected && !is_fat_ann) {
+            const AdtDef *cadt = ctor_call_parametric_adt(e, init_form);
+            if (cadt) {
+                const Type *found = NULL;
+                for (uint32_t bi = i; !found && bi < bindings_form->as.list.len; bi++)
+                    found = let_use_site_app_type(e, bindings_form->as.list.items[bi],
+                                                  name, cadt, 8);
+                for (uint32_t bi = 2; !found && bi < call->as.list.len; bi++)
+                    found = let_use_site_app_type(e, call->as.list.items[bi],
+                                                  name, cadt, 8);
+                if (found) e->expected_type = (Type *)found;
+            }
+        }
         Expr *init = elab_form(e, init_form);
         e->expected_type = prev_expected;
         e->in_persistent_let = prev_in_persistent_let;
@@ -711,6 +880,27 @@ Expr *elab_let(Elab *e, const Form *call) {
 
         if (!init) { rc = -1; break; }
 
+        /* let-binding-void-call-emits-invalid-c: a `:void` init has no value to
+         * name.  Left to run, the emitter writes `void x = ...;` -- "variable
+         * has incomplete type 'void'", a cc error with no .tur attribution,
+         * several frames from anything the author wrote.  EVERY :void init
+         * fails that way today (checked: void defn call, while, println, and a
+         * non-first binding), so rejecting here breaks nothing that currently
+         * compiles -- it only moves the report to the binding that caused it.
+         *
+         * Sequencing a side effect in a binding list is a natural thing to
+         * reach for when the `let` body must end in a particular value (an
+         * `it` body that has to yield a bool, say), so the message names `do`
+         * as the fix rather than only stating the rule. */
+        if (init->type.kind == TY_NIL) {
+            diag_emit_with_code(DIAG_ERROR, init_form->span,
+                TUR_E0023_BIND_VOID_EXPRESSION,
+                "cannot bind '%s' to an expression of type :void; "
+                "sequence it with `do` instead of binding it",
+                name && name->name ? name->name : "_");
+            rc = -1; break;
+        }
+
         /* Verify the optional type annotation against the elaborated init type.
          * For now we compare TypeKind for the common primitive cases (int,
          * float, bool, cstr, nil/void, ptr) -- enough to reject obvious
@@ -724,7 +914,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                  * binding whose init's tail is a bare-^fat int64 call carries no
                  * recorded result type; infer it from the annotation and re-stamp
                  * the call before the kind-match check below.  See
-                 * docs/upcoming/bare-fat-result-type-inference-plan.md. */
+                 * docs/archive/history/bare-fat-result-type-inference-plan.md. */
                 if (kind_is_non_int_register_class(ann_ty->kind) &&
                     retype_bare_fat_tail_calls(init, ann_ty->kind) &&
                     init->type.kind == TY_INT) {
@@ -859,9 +1049,26 @@ Expr *elab_let(Elab *e, const Form *call) {
          * TUR-E0201) apply.  This makes hand-annotating ^unique unnecessary in
          * the common "let-bind a unique factory result" shape.
          *
-         * A borrowed ref obtained from `ref/from-rc` shares the rc's payload and
-         * is intentionally excluded -- it is a non-owning view, not a unique
-         * owner, and marking it unique would reject legitimate re-reads. */
+         * A ref obtained from `ref/from-rc` is excluded.  The original reason
+         * given -- "it shares the rc's payload ... a non-owning view, not a
+         * unique owner" -- is FALSE: tur_ref_from_rc destroys the control block
+         * and hands the payload over, so the ref is its sole owner.  Believing
+         * otherwise at the sibling site suppressed the scope-exit auto-drop and
+         * leaked the payload (fixed; see
+         * docs/archive/history/ref-from-rc-orphans-the-payload.md).
+         *
+         * The exclusion is kept here anyway, and the stated cost -- "marking it
+         * unique would reject legitimate re-reads" -- is also wrong: a re-read
+         * is already rejected as use-after-move (TUR-E0005), uniqueness or not.
+         * It is kept because removing it is not currently observable. Checked:
+         * the full suite is 2694/0 either way, aliasing is caught by
+         * move-checking with or without it, an explicit `(drop! r)` does not
+         * double-free, and a `^unique ^mut` parameter accepts the ref both
+         * ways.  `type_ref` sets CK_UNIQUE, so the branch IS reachable -- the
+         * binding simply disagrees with its own type's copy_kind.  Since
+         * `is_unique` only gates additional alias diagnostics, the exclusion
+         * can at worst MISS a diagnostic, never invent one.  Left as-is rather
+         * than changed on a premise nobody can currently test. */
         if (!is_unique_ann && !b->is_unique &&
             ty_is_unique(init->type) &&
             init->kind != EX_REF_FROM_RC) {
@@ -982,6 +1189,13 @@ Expr *elab_let(Elab *e, const Form *call) {
                         b->returns_closure_fn_binding = closure_b;
                     } else {
                         b->closure_fn_binding = closure_b;
+                        /* generic-closure-return-type-app (Defect B): remember
+                         * WHICH call produced the closure value, so the invoke
+                         * can target the producing spec's inner-body clone
+                         * instead of the shared generic base thunk -- same
+                         * stash as the call-head temp in elab_call.c. */
+                        if (init->kind == EX_CALL)
+                            b->closure_head_init = init;
                     }
                 }
             }
@@ -1006,7 +1220,7 @@ Expr *elab_let(Elab *e, const Form *call) {
             } else if (init_b->type.kind == TY_FN) {
                 /* Follow any existing source chain to the root global fn. */
                 Binding *root = init_b->source_binding ? init_b->source_binding : init_b;
-                /* pr-386 regression fix (docs/reported/pr-386-source-binding-
+                /* pr-386 regression fix (docs/archive/history/pr-386-source-binding-
                  * alias-breaks-closure-and-with-resource.md): never chain to a
                  * lifted-lambda __fn_N helper.  source_binding means "the user
                  * typed a global function name as the init"; a captureless
@@ -1018,12 +1232,21 @@ Expr *elab_let(Elab *e, const Form *call) {
             }
         }
         
-        /* Theme 1: mark a ref obtained from `ref/from-rc` as non-owning so
-         * elab_deref leaves its deref consuming (it shares the rc payload and
-         * cannot auto-drop -- see Binding.is_nonowning_ref). */
-        if (b->type.kind == TY_REF && init && init->kind == EX_REF_FROM_RC) {
-            b->is_nonowning_ref = true;
-        }
+        /* A `ref/from-rc` result used to be marked is_nonowning_ref here, on the
+         * reasoning that it "shares the rc payload and cannot auto-drop".  The
+         * runtime contract is the opposite: rc.h documents tur_ref_from_rc as
+         * DESTROYING the control block, and its body nulls `cb->value` before
+         * `free(cb)`, so the payload survives with the returned ref as its only
+         * owner.  Nothing shared it and nothing freed it --
+         * docs/reported/rc-ref-conversion-and-weak-upgrade-leak.md.
+         *
+         * It is therefore an ordinary owning ref, exactly like a fresh
+         * `(ref ...)`: deref is non-consuming and the scope-exit auto-drop
+         * below discharges the obligation.  The fixture guarding this path says
+         * the same thing in its own header -- "ownership transfers to the
+         * caller ... the caller owns the resulting ref" -- and what it asserts
+         * is that the CONSUMED rc gets no auto-drop, which is a different
+         * binding and still holds. */
 
         binds[n_binds].binding = b;
         binds[n_binds].init = init;
@@ -1039,11 +1262,27 @@ Expr *elab_let(Elab *e, const Form *call) {
      * where the elaborated body is available; here we only decide whether to
      * wrap the body in a `do` so defers can be appended, so over-detecting a
      * ref that ends up not needing a drop is harmless (n_refs == 0 -> no-op). */
+    /* `(upgrade w)` returns its option<rc<T>> as a heap box minted in EMIT
+     * (emit_expr.c EX_WEAK_UPGRADE) and typed `ptr<void>`, so no binding owned
+     * it and nothing freed it -- bug 2 of
+     * docs/reported/rc-ref-conversion-and-weak-upgrade-leak.md.
+     *
+     * It cannot be typed `ref<...>` instead (that is the obvious fix and it
+     * fails): every consumer takes the result as a `ptr<void>` parameter, and
+     * `ref<ptr<void>>` does not coerce to one -- all five in-tree callers get
+     * TUR-E0001.  So the binding keeps its `ptr<void>` type and the ownership
+     * is keyed on the INIT instead.  The disposal is the same `drop!` builtin
+     * the ref path uses, which is BS_PREFIX_UNARY_FREE -- it emits a plain
+     * `free`, which is exactly right for this malloc.  (The "drop! requires
+     * ref<T>" check lives in elab_drop, the surface form; building the builtin
+     * directly here bypasses it, which is what makes this work.) */
+    #define binding_owns_upgrade_box(bp) \
+        ((bp)->init && (bp)->init->kind == EX_WEAK_UPGRADE)
+
     bool has_ref_bindings = false;
     for (uint32_t k = 0; k < n_binds; k++) {
-        /* Skip refs that come from ref/from-rc - they don't own the data */
-        if (binds[k].binding->type.kind == TY_REF &&
-            binds[k].init->kind != EX_REF_FROM_RC) {
+        if (binds[k].binding->type.kind == TY_REF ||
+            binding_owns_upgrade_box(&binds[k])) {
             has_ref_bindings = true;
             break;
         }
@@ -1144,14 +1383,24 @@ Expr *elab_let(Elab *e, const Form *call) {
             /* First, collect all ref binding names that need drops (excluding moved ones) */
             uint32_t n_refs = 0;
             for (uint32_t k = 0; k < n_binds; k++) {
-                /* Skip refs that come from ref/from-rc - they don't own the data */
                 /* Skip refs that were moved during init or body elaboration - avoid use-after-move defer */
                 /* Theme 1: a linear ref consumed by a non-drop path (e.g. `(return r)`
                  * or a tail move) has is_linear_consumed set and must NOT also auto-drop
                  * -- that would double-free / free an escaping ref.  A deref'd ref has
-                 * been un-marked (see elab_deref) so it still auto-drops here. */
-                if (binds[k].binding->type.kind == TY_REF &&
-                    binds[k].init->kind != EX_REF_FROM_RC &&
+                 * been un-marked (see elab_deref) so it still auto-drops here.
+                 *
+                 * `ref/from-rc` results USED to be excluded here, on the reasoning
+                 * that "they don't own the data".  That is backwards: rc.h documents
+                 * tur_ref_from_rc as destroying the control block, and its body nulls
+                 * `cb->value` before `free(cb)` -- so the payload survives and the
+                 * returned ref is its only owner.  Excluding it meant nothing ever
+                 * freed the payload (rc-ref-conversion-and-weak-upgrade-leak).  The
+                 * fixture guarding this path agrees in its own header: "ownership
+                 * transfers to the caller ... the caller owns the resulting ref" --
+                 * what it asserts is that the consumed RC gets no auto-drop, which is
+                 * a different binding and still holds. */
+                if ((binds[k].binding->type.kind == TY_REF ||
+                     binding_owns_upgrade_box(&binds[k])) &&
                     !binding_moved_during_init[k] &&
                     !binds[k].binding->is_moved &&
                     !binds[k].binding->is_linear_consumed &&
@@ -1184,11 +1433,11 @@ Expr *elab_let(Elab *e, const Form *call) {
                  * what we want for scope-exit behavior. */
                 uint32_t defer_idx = body->as.do_.n;
                 for (uint32_t k = 0; k < n_binds; k++) {
-                    /* Skip refs that come from ref/from-rc - they don't own the data */
                     /* Skip refs moved during init or body elaboration - avoid use-after-move defer */
-                    /* Theme 1: mirror the count-loop guard (see above). */
-                    if (binds[k].binding->type.kind == TY_REF &&
-                        binds[k].init->kind != EX_REF_FROM_RC &&
+                    /* Theme 1: mirror the count-loop guard (see above), including the
+                     * dropped ref/from-rc exclusion. */
+                    if ((binds[k].binding->type.kind == TY_REF ||
+                         binding_owns_upgrade_box(&binds[k])) &&
                         !binding_moved_during_init[k] &&
                         !binds[k].binding->is_moved &&
                         !binds[k].binding->is_linear_consumed &&
@@ -1712,6 +1961,7 @@ Expr *elab_let(Elab *e, const Form *call) {
     out->as.let_.bindings = bcopy;
     out->as.let_.n = n_binds;
     out->as.let_.body = body;
+    any_let_move_drop_to_use(out);
     return out;
 }
 
@@ -1988,8 +2238,17 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                             (ret_f->as.list.items[0]->tag == F_SYM ||
                              ret_f->as.list.items[0]->tag == F_KEYWORD)) {
                             ret_f = ret_f->as.list.items[0];
+                        } else if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1 &&
+                                   ret_f->as.list.items[0]->tag == F_NIL) {
+                            /* forward-referenced-nil-call-bound-to-auto-type: a
+                             * bare `nil` in type position reads as F_NIL, so the
+                             * unwrap above misses it and `: nil` collapsed to the
+                             * TY_INT placeholder.  Same gap as the defmodule
+                             * pre-pass (elab_module.c). */
+                            ret_kind = TY_NIL;
+                            ret_f = NULL;
                         }
-                        if (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM) {
+                        if (ret_f && (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM)) {
                             const char *rn = ret_f->as.sym->name;
                             uint32_t   rl = ret_f->as.sym->len;
                             if      (rl == 3 && memcmp(rn, "int",  3) == 0) ret_kind = TY_INT;
@@ -2014,6 +2273,13 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                              * guard, so it is left out of this scalar fast-path. */
                             else if (rl == 5 && memcmp(rn, "float",   5) == 0) ret_kind = TY_FLOAT;
                             else if (rl == 7 && memcmp(rn, "float64", 7) == 0) ret_kind = TY_FLOAT;
+                            /* Stage 2 (macro-system-direction-plan): Syntax is
+                             * a simple scalar-class kind (a copyable Form*
+                             * handle); without this a `: Syntax` self-recursive
+                             * letrec fn -- the canonical defmacro* field-walker
+                             * -- collapses to the int carrier and the self-call
+                             * trips a spurious then=Syntax else=int mismatch. */
+                            else if (rl == 6 && memcmp(rn, "Syntax",  6) == 0) ret_kind = TY_SYNTAX;
                         }
                     }
                     placeholder = type_fn(arg_kinds, (uint8_t)arity, ret_kind);
@@ -3131,20 +3397,19 @@ Expr *elab_set(Elab *e, const Form *call) {
                   b->name->name);
         return NULL;
     }
-    /* G3 (mutable-globals-plan §4.3), behind `--enable=global-state`: an
-     * exported global is READ-ONLY outside its defining module.  A module that
-     * exports a counter for reading should not thereby export it for writing --
-     * the same argument `:sealed` makes about an opaque's representation.
+    /* G3 (mutable-globals-plan §4.3): an exported global is READ-ONLY outside
+     * its defining module.  A module that exports a counter for reading should
+     * not thereby export it for writing -- the same argument `:sealed` makes
+     * about an opaque's representation.
      *
      * Only bites across a real module boundary: a global with no defining
      * module (every single-file program) and a write from inside the owning
      * module are both untouched.  The permission lives at the definition site,
      * `(export (mut g))`, so the decision sits with the code that owns the
      * invariant rather than with whoever wants to write it. */
-    if (g_opt_global_state && b->is_global && !b->is_export_mut &&
+    if (b->is_global && !b->is_export_mut &&
         b->defining_module_name != NULL &&
         b->defining_module_name != e->current_module_name) {
-        experiment_warn_if_used("global-state");
         diag_emit(DIAG_ERROR, target->span,
                   "set!: '%s' is owned by module '%s' and is exported read-only; "
                   "call a setter that module exports, or have it export the global "

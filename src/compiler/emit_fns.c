@@ -34,7 +34,7 @@ static void pbp_push(EmitCtx *ctx, Binding *b) {
 /* The declared C type of parameter `i`, matching the function signature's
  * default (non-pbp, non-poly) path.
  *
- * M4 follow-up (docs/upcoming/tco-in-abi-specs-for-stdlib-iteration.md):
+ * M4 follow-up (docs/archive/history/tco-in-abi-specs-for-stdlib-iteration.md):
  * when emitting an ABI spec body, the spec's per-instantiation arg type
  * is the authoritative C-level shape — the bare fn binding's full type is
  * the generic (pre-substitution) form which lowers to int64_t for TY_APP.
@@ -91,7 +91,7 @@ static bool tco_params_simple(EmitCtx *ctx, const Expr *fn_e, FnDef *fd) {
      * every such loop is one engine switch away from a stack overflow (it
      * survives the cc path only because gcc -O2 turns the emitted self-call
      * into a sibling call; MIR performs no such optimization).  See
-     * docs/archive/named-let-self-tail-not-tco.md. */
+     * docs/archive/history/named-let-self-tail-not-tco.md. */
     for (uint32_t i = tco_env_offset(fd); i < fd->n_params; i++) {
         if (fd->params[i]->is_poly_fn) return false;
         Type pty = tco_param_type(ctx, fn_e, fd, i);
@@ -120,7 +120,7 @@ static bool tco_is_self_call(FnDef *fd, const char *fn_cname, const Expr *call) 
     if (!call || call->kind != EX_CALL) return false;
     if (!call->as.call_.fn_binding) return false;     /* must be a direct call */
     if (call->as.call_.fn_expr) return false;          /* indirect field call */
-    /* M4 follow-up (docs/upcoming/tco-in-abi-specs-for-stdlib-iteration.md):
+    /* M4 follow-up (docs/archive/history/tco-in-abi-specs-for-stdlib-iteration.md):
      * Path A's elab resolves typeclass dispatch directly to the instance
      * method's binding (`fn_binding = method->binding; fn_expr = NULL`).
      * `dict_arg` is still set as an annotation, but the actual call IS a
@@ -249,6 +249,11 @@ static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
         free(tmps[i]);
     }
     free(tmps);
+    /* any-struct-box-leak-per-widen: the back-edge re-enters the function, so
+     * every trailing free between here and the loop head is skipped.  Drop the
+     * enclosing scopes' `any` locals now -- after the argument temporaries
+     * above, which is where a use of one would have been read. */
+    emit_any_scope_drops(ctx, body);
     indent_buf(body, ctx->indent);
     buf_puts(body, "goto __tur_tailcall;\n");
 }
@@ -355,7 +360,7 @@ bool fn_body_tail_is_carrier_producer(const Expr *e) {
              * carrier handle.  A pure-Turmeric wrapper around such a helper
              * needs the same carrier->by-value bridge that the #{Construct}
              * and __inst_ producers above already get.
-             * See docs/archive/tail-call-inline-c-carrier-bridge.md. */
+             * See docs/archive/history/tail-call-inline-c-carrier-bridge.md. */
             if (b->body_is_inline_c && b->type.kind == TY_FN &&
                 b->type.as.fn.result_full_type &&
                 type_uses_carrier_abi(*b->type.as.fn.result_full_type))
@@ -659,7 +664,21 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                     free(bn);
                     free(iv);
                 }
+                /* any-struct-box-leak-per-widen: this arm emits a tail-position
+                 * `let` INLINE rather than through emit_let_value, so the `any`
+                 * drop bookkeeping that lives there has to be repeated.  No
+                 * trailing drop is emitted: emit_tail always ends in a `return`
+                 * or a back-edge `goto`, and both of those fire the scope list
+                 * themselves -- anything after would be dead code. */
+                uint32_t any_mark = ctx->n_any_scope_drops;
+                for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                    if (!let_binding_any_freeable(ctx, e, i)) continue;
+                    char *nm = name_for_binding(ctx, e->as.let_.bindings[i].binding);
+                    any_scope_drops_push(ctx, nm);
+                    free(nm);
+                }
                 emit_tail(ctx, body, fn_e, fd, e->as.let_.body, result_kind, is_main);
+                any_scope_drops_pop(ctx, any_mark);
                 ctx->indent -= 4;
                 indent_buf(body, ctx->indent);
                 buf_puts(body, "}\n");
@@ -857,7 +876,7 @@ static bool gs_param_class(EmitCtx *ctx, Type t, TypeKind *out_kind,
  * non-tail self-recursion (`(+ 1 (f ...))`), a catch whose thunk actually
  * panics, and nested if/let/do all run with a flat C stack.
  *
- * Model (mirrors docs/upcoming/prototypes/d3-stackless-catch-unwind.c):
+ * Model (mirrors docs/artifacts/d3-stackless-catch-unwind.c):
  *   - Every function-scope scalar local (params + hoisted let-vars + one result
  *     temp per suspension) rides a `tur_cont` node's saved[] across a descend.
  *   - A "suspension" is a self-call or a catch-unwind: its value is produced on
@@ -2090,12 +2109,30 @@ static void gs_catch_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sin
             if (sink->kind == GSK_ASSIGN && sink->bi >= 1 &&
                 sink->bi == sink->bn && sink->cont && sink->body) {
                 const Binding *boxbind = sink->binds[sink->bi - 1].binding;
-                if (boxbind && !gs_suspends_live(gs, sink->body) &&
+                /* residual-leaks (2026-09-02): the straight-line gate is no
+                 * longer needed when the box has a machine VARIABLE to be
+                 * freed through.  The gate existed because the free named
+                 * `__box<id>`, a local of THIS resume segment, which a later
+                 * segment (after a self-call descend in BODY) cannot see; but
+                 * gs_save / gs_restore carry every machine var across a
+                 * descend, so naming `sink->dest` -- the let-bound var the box
+                 * is assigned to -- is valid in whichever segment BODY's
+                 * terminal delivery lands in, and that delivery runs exactly
+                 * once per activation (branches are exclusive).  A nested
+                 * catch and a panic in BODY stay excluded: a panic unwinds
+                 * past the delivery (a leak, not a UAF), a nested catch's own
+                 * resume must not be confused with this one.  `(let [r
+                 * (catch-unwind ...)] (if (err? r) (+ 1 (h (- n 1))) 999))` --
+                 * the stackless panic stress fixtures, 53 B x 200k iterations
+                 * -- is the shape this admits. */
+                bool through_var = sink->dest != NULL;
+                if (boxbind &&
+                    (through_var || !gs_suspends_live(gs, sink->body)) &&
                     !gs_has_catch(sink->body, gs->fd) &&
                     !gs_has_panic(sink->body) &&
                     !catch_box_binding_escapes(sink->body, boxbind)) {
                     cont_copy = *sink->cont;
-                    cont_copy.free_box = boxnm;
+                    cont_copy.free_box = through_var ? sink->dest : boxnm;
                     assign_copy = *sink;
                     assign_copy.cont = &cont_copy;
                     dsink = &assign_copy;
@@ -2777,6 +2814,22 @@ static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind resul
             gs.mem_entry_tag[m] = 1 + m;
             gs.mem_ret[m] = group[m]->return_type.kind;
             gs.mem_retctype[m] = emit_type_c_name(ctx, group[m]->return_type);
+            /* AR: is THIS member's return a by-value aggregate?  The
+             * single-function path (emit_stackless_general_body) has always set
+             * this for its one member; the group path left the whole array at
+             * its memset-0, so every member's suspension temp was declared
+             * `T __t = 0` and saved with `(int64_t)(intptr_t)(__t)` -- an
+             * aggregate cast as a scalar.  Nothing in the group population
+             * returned a by-value aggregate until SR2a went default and
+             * `(Result int int)` became one
+             * (stackless-catch-unwind-byref-aggregate-reader-transitive-escape-bail,
+             * whose `leak` returns its Result param). */
+            {
+                TypeKind mrk; const char *mrct; bool mraggr; bool mrref;
+                gs.mem_ret_aggr[m] =
+                    gs_param_class(ctx, group[m]->return_type,
+                                   &mrk, &mrct, &mraggr, &mrref) && mraggr;
+            }
             if (group[m]->n_params > maxar) maxar = group[m]->n_params;
         }
         gs.next_tag = ng + 1;
@@ -2975,7 +3028,11 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             current_fn_ret_ctype_eff = fn_ret_td ? fn_ret_td : emit_type_c_name(ctx, rft);
         } else if (fd->binding && fd->binding->name && fd->binding->name->name &&
                    strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
-                   fd->body && type_uses_carrier_abi(fd->body->type)) {
+                   fd->body && (fd->body->type.kind == TY_APP ||
+                                fd->body->type.kind == TY_STRUCT ||
+                                type_uses_carrier_abi(fd->body->type))) {
+            /* repro 2 (see the signature site): a by-value aggregate body
+             * with no result_full_type is spilled to the carrier at the tail. */
             const char *_body_c2 = emit_type_c_name(ctx, fd->body->type);
             if (_body_c2 && strcmp(_body_c2, "int64_t") != 0) {
                 current_fn_ret_ctype_eff = "int64_t";
@@ -3062,13 +3119,9 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             }
             uint32_t thunk_arity = fd->n_params > 0 ? (uint32_t)(fd->n_params - 1) : 0;
             char *thunk_typedef = ensure_typed_thunk_typedef(ctx, file, thunk_result, thunk_params, thunk_arity);
-            if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
-                ctx->cap_env_struct_names = ctx->cap_env_struct_names ? ctx->cap_env_struct_names * 2 : 8;
-                ctx->env_struct_names = (const Symbol **)realloc(ctx->env_struct_names,
-                    ctx->cap_env_struct_names * sizeof(const Symbol *));
-            }
-            ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
-            
+            emit_env_struct_register(ctx, env_name, thunk_typedef);
+
+
             /* Phase HKT §5: fat closure layout — __fn (int64_t) first, then
              * captures.  The fat pointer doubles as the env ptr for the thunk:
              * thunk receives fat_ptr as self, accesses captures via ->field
@@ -3128,7 +3181,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                             "    if (__e->%s) { rc_strong_decrement(__e->%s); rc_free_queue_drain(); }\n",
                             cf, cf);
                         free(cf);
-                    } else if (cap && cap->is_fat &&
+                    } else if (cap && cap->is_fat && !fd->closure->fat_captures_borrowed &&
                                !(cap->closure_fn_binding &&
                                  fd->binding &&
                                  cap->closure_fn_binding == fd->binding)) {
@@ -3357,11 +3410,20 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * signature; the body return is heap-spilled below.  If the
              * body codegen is already int64_t (TY_APP that lowered to a
              * carrier handle), the existing int64_t path is correct. */
+            /* return-dispatched-sum-mint-in-constrained-instance-miscompiles
+             * (repro 2): NOT conditioned on type_uses_carrier_abi(body type).
+             * A base clone whose declared result is the bare class variable
+             * has no result_full_type, and its body constructs the
+             * representative monomorph BY VALUE (`(Option int)`, carrier-ABI
+             * false), so the conjunct made the header say `tur_adt_Option__int`
+             * while the dict slot (emit_stmt.c: result_kind -> int64) and the
+             * body's tail (ret_ctype fallback -> int64, heap-spilled) both say
+             * the carrier.  Any by-value aggregate body here is spilled at the
+             * tail, so the header is int64 whenever the body is one. */
             bool inst_method_struct_body =
                 fd->binding && fd->binding->name && fd->binding->name->name &&
                 strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
-                _body_c && strcmp(_body_c, "int64_t") != 0 &&
-                type_uses_carrier_abi(fd->body->type);
+                _body_c && strcmp(_body_c, "int64_t") != 0;
             /* M5 straddle (root cause C): a lifted lambda with no
              * result_full_type whose body's tail value comes from a
              * carrier-int64 producer (some/ok/err/none or an __inst_ method)
@@ -3376,7 +3438,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 _body_c && strcmp(_body_c, "int64_t") != 0 &&
                 type_uses_carrier_abi(emit_resolve_type(ctx, fd->body->type)) &&
                 fn_body_tail_is_carrier_producer(fd->body);
-            if (inst_method_struct_body || body_is_carrier_producer) {
+            /* opaque-pointer-c-spelling: a pointer opaque body does NOT override
+             * a declared carrier result -- see the helper's comment.  `(defn
+             * two-sum [] : int ...)` over a `(Parser int)` body emitted `static
+             * void * two_hysum()` whose every `return` was `(int64_t)...`. */
+            bool body_is_opaque_ptr =
+                emit_fn_body_is_opaque_ptr_over_carrier_result(fd, result);
+            if (inst_method_struct_body || body_is_carrier_producer ||
+                body_is_opaque_ptr) {
                 buf_puts(file, "int64_t");
             } else if (_body_c && strcmp(_body_c, "int64_t") != 0) {
                 buf_puts(file, _body_c);
@@ -3411,7 +3480,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * inline-C body's `(int64_t)(intptr_t)<orig>` cast then operates on
      * a pointer and produces the int64 carrier the call site expects.
      * No source-level annotation: the recognizer is purely structural.
-     * See docs/reported/polymorphic-ok-fails-for-value-struct-payload.md. */
+     * See docs/archive/history/polymorphic-ok-fails-for-value-struct-payload.md. */
     uint32_t nbp = fd->n_params ? fd->n_params : 1;
     bool *needs_box_spill = (bool *)arena_alloc(ctx->type_arena, nbp * sizeof(bool));
     for (uint32_t i = 0; i < nbp; i++) needs_box_spill[i] = false;
@@ -3437,7 +3506,11 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * field's by-value typed thunk, so its wide by-value ADT params cross by
      * value -- suppress B4 b4box boxing (it would disagree with the typed thunk
      * + call site and corrupt the arg). */
-    if (fd->closure && !fd->byval_fn_field_closure) {
+    /* SR-fat-abi: the byval_fn_field_closure suppression is retired -- the
+     * typed-thunk typedef now spells a wide by-value param slot as int64_t
+     * (see thunk_param_slot_c_name), so a fn-field closure b4boxes exactly
+     * like every other closure and the field dispatch passes the box. */
+    if (fd->closure) {
         for (uint32_t i = 0; i < fd->n_params; i++) {
             if (fd->params[i]->is_poly_fn ||
                 fd->param_types[i].kind == TY_FN) continue;
@@ -3445,7 +3518,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 ? ctx->current_abi_specialization->arg_types[i]
                 : ((e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[i])
                        ? *e->type.as.fn.arg_full_types[i] : fd->param_types[i]);
-            if (type_is_wide_byval_adt(emit_resolve_type(ctx, pty)))
+            if (type_is_b4box_closure_slot(emit_resolve_type(ctx, pty)))
                 needs_box_load[i] = true;
         }
     }
@@ -3646,7 +3719,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * have no carrier helper and never produce carrier values, so the
      * generic body for them is unreachable from carrier call sites.
      *
-     * See docs/reported/m2b-stdlib-migration-blocked-on-carrier-fallback.md
+     * See docs/archive/history/m2b-stdlib-migration-blocked-on-carrier-fallback.md
      * for the rationale; this implements that report's option (a). */
     bool m2b_carrier_synth = false;
     /* Fire in TWO contexts:
@@ -3756,6 +3829,16 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->fn_params = fd->params;
     ctx->n_fn_params = fd->n_params;
 
+    /* inline-c-locals-invisible-to-inline-c-blocks: same idea one level down --
+     * the locals this body's inline-C blocks name get their raw spelling too.
+     * Collected per body; empty (and therefore free) for every function whose
+     * inline C does not name a local, which is nearly all of them. */
+    const Binding **saved_ic_locals = ctx->inline_c_raw_locals;
+    uint32_t saved_n_ic_locals = ctx->n_inline_c_raw_locals;
+    emit_inline_c_raw_locals_collect(fd->body, fd->params, fd->n_params,
+                                     &ctx->inline_c_raw_locals,
+                                     &ctx->n_inline_c_raw_locals);
+
     /* Phase D: record which params are pbp for field-access and call-site handling. */
     uint32_t saved_n_pbp = ctx->n_pbp_params;
     ctx->n_pbp_params = 0;
@@ -3813,7 +3896,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * function can be emitted as an iterative loop instead of self-recursion.
      * Excludes main (different signature handling).
      *
-     * M4 follow-up (docs/upcoming/tco-in-abi-specs-for-stdlib-iteration.md):
+     * M4 follow-up (docs/archive/history/tco-in-abi-specs-for-stdlib-iteration.md):
      * lifted the `!use_abi_spec` restriction.  TCO inside an ABI spec is
      * safe: the `__tur_tailcall:` label and the param-reassign loop are
      * pure C-level constructs, and `tco_params_simple` reads the spec's
@@ -3855,8 +3938,60 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* M2b carrier-emit synth (above) already wrote a `return tur_*(...)`
          * line; skip the make-struct body so it doesn't double-emit. */
     } else if (body_diverges) {
-        /* Body diverges on every path - emit as statements only */
+        /* Body diverges on every path - emit as statements only, then a
+         * trailing `return` that is dead code by construction.
+         *
+         * `panic` is NOT `noreturn` on the compiled path: it sets
+         * tur_panicking and returns, and the per-call-site
+         * `if (tur_panicking) return ...;` is what unwinds.  So a C compiler
+         * reading a value-returning function whose body ends in a panic sees
+         * control reach the closing brace:
+         *
+         *   warning: non-void function does not return a value in all control
+         *   paths [-Wreturn-type]
+         *
+         * That is not just noise.  One such function in stdlib
+         * (`schema-decode-abort`) put a clang warning on stderr of every
+         * program that loaded the module, which is how it broke
+         * tests/run-offtree-load.sh: that harness captures 2>&1 and compares
+         * against expected stdout, so the program printed the right answer
+         * and the assertion failed anyway -- on macOS only, because gcc and
+         * clang word and trigger this warning differently.
+         *
+         * Fixing it in the stdlib source does not work: a value written after
+         * the panic is unreachable, and elaboration elides it, so the body
+         * still diverges and the emitted C is unchanged.  It has to be here.
+         *
+         * The default follows the same scalar/aggregate split as every other
+         * synthesized zero in the emitter -- `((T)0)` for a scalar, `(T){0}`
+         * for a struct/ADT typedef.  Getting this wrong is a build failure,
+         * not a warning: `return 0;` from a by-value-aggregate function does
+         * not compile (caught by catch-unwind-aggregate-thunk). */
         emit_stmt(ctx, file, fd->body);
+        /* Only when the EMITTED C type is a known non-void.  `result_kind`
+         * cannot decide this on its own: a `: !` (never) function is
+         * TY_NEVER, not TY_NIL, and emits as `void` -- so keying off the kind
+         * put `return 0;` in a void function, which clang rejects outright
+         * ("void function 'inner' should not return a value") while gcc only
+         * warns.  panic-trace is that fixture, and it broke macOS CI while
+         * passing on Linux.
+         *
+         * The bias when the C type is unknown is to emit NOTHING: a missing
+         * return is a -Wreturn-type warning, a wrong one is a build failure,
+         * and this branch exists to remove a warning in the first place. */
+        const char *rc = ctx->current_fn_ret_ctype;
+        bool rc_is_void = (!rc || !*rc || strcmp(rc, "void") == 0);
+        if (is_main && result_kind == TY_INT) {
+            indent_buf(file, ctx->indent);
+            buf_puts(file, "return (int)0;\n");
+        } else if (!rc_is_void && result_kind != TY_NIL) {
+            indent_buf(file, ctx->indent);
+            if (emit_c_type_is_scalar(rc)) {
+                buf_printf(file, "return ((%s)0);\n", rc);
+            } else {
+                buf_printf(file, "return (%s){0};\n", rc);
+            }
+        }
     } else if (fd->body->kind == EX_INLINE_C) {
         /* Inline C body - emit as-is (it contains its own return statements) */
         emit_stmt(ctx, file, fd->body);
@@ -3978,10 +4113,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 ret_ctype = fn_ret_td ? fn_ret_td : emit_type_c_name(ctx, rft);
             } else if (fd->binding && fd->binding->name && fd->binding->name->name &&
                        strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
-                       fd->body && type_uses_carrier_abi(fd->body->type)) {
+                       fd->body && (fd->body->type.kind == TY_APP ||
+                                    fd->body->type.kind == TY_STRUCT ||
+                                    type_uses_carrier_abi(fd->body->type))) {
                 /* Direction (1): non-spec instance method, result_full_type
                  * absent.  Spill only when body codegen is by-value struct
-                 * (matching the signature fallback above). */
+                 * (matching the signature fallback above).  repro 2: a by-value
+                 * monomorph body (carrier-ABI false) is included -- the dict
+                 * slot is int64 regardless, so it must spill too. */
                 const char *_body_c2 = emit_type_c_name(ctx, fd->body->type);
                 if (_body_c2 && strcmp(_body_c2, "int64_t") != 0) {
                     ret_ctype = "int64_t";
@@ -4063,8 +4202,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * hard cc error (aggregate into integer).  When the body's own type
              * is a concrete non-carrier aggregate, spill THAT type so the malloc
              * size and the cast match the actual value.
-             * See docs/reported/m7-hkt-bimap-... family / instance-method-
-             * return-carrier-bridge fixture. */
+             * See docs/archive/history/m7-hkt-bimap-twoparam-struct-tyvar-leak.md
+             * / the instance-method-return-carrier-bridge fixture. */
             if (struct_cty &&
                 strcmp(struct_cty, "int64_t") == 0 && fd->body) {
                 const char *body_cty = emit_type_c_name(ctx, fd->body->type);
@@ -4132,6 +4271,42 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * conversion.  (A void* carrier return needs no cast: the body value
              * is already a pointer.) */
             buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
+        } else if (ret_is_int64_carrier && fd && fd->body &&
+            e->type.kind == TY_FN &&
+            (e->type.as.fn.result_kind == TY_FLOAT ||
+             e->type.as.fn.result_kind == TY_FLOAT64 ||
+             e->type.as.fn.result_kind == TY_FLOAT32) &&
+            (fd->body->type.kind == TY_FLOAT ||
+             fd->body->type.kind == TY_FLOAT64 ||
+             fd->body->type.kind == TY_FLOAT32)) {
+            /* method-result-float-spec-return-value-converts: this clone's C
+             * return is the int64 carrier, its DECLARED result is a float, and
+             * its body tail is a float.  A plain `return ret_val;` is then C's
+             * implicit floating-to-integer CONVERSION (7.1 -> 7) while every
+             * consumer of a float-declared method result reinterprets the
+             * carrier's BITS back -- so the value is destroyed before it
+             * leaves the callee (`(l1g2 (l1p1 7.1))` printed 3.45846e-323).
+             *
+             * The key is the DECLARED result kind (`e->type.as.fn.result_kind`
+             * -- the instance-resolved signature), and that key is what pairs
+             * producer with consumer: the consumer bit-reinterprets exactly
+             * when the call's resolved result type is a float, i.e. the same
+             * declared type read from the other end.  A method DECLARED `: int`
+             * whose instance body happens to produce a float (BoxMap's boxmap,
+             * pinned by poly-to-fat-float-roundtrip expecting `7`) keeps the
+             * value conversion, because for it the conversion IS the declared
+             * semantics.  The first attempt at this fix keyed on the BODY type
+             * alone and broke exactly those fixtures -- see the report's
+             * "reverted" record for the measurement.
+             *
+             * Routed through the carrier chokepoint, whose inline-scalar arm
+             * emits the same union bit-cast the consumer side uses. */
+            char *bridged = emit_carrier_bridge(ctx, file, strdup(ret_val),
+                                                CK_CONCRETE, CK_CARRIER,
+                                                fd->body->type);
+            indent_buf(file, ctx->indent);
+            buf_printf(file, "return %s;\n", bridged);
+            free(bridged);
         } else if (use_abi_spec
                    && ctx->current_abi_specialization->typeclass_inst != NULL
                    && ret_ctype && strcmp(ret_ctype, "int64_t") != 0
@@ -4382,6 +4557,9 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
 
     /* Restore previous context */
+    free((void *)ctx->inline_c_raw_locals);
+    ctx->inline_c_raw_locals   = saved_ic_locals;
+    ctx->n_inline_c_raw_locals = saved_n_ic_locals;
     ctx->fn_params = saved_params;
     ctx->n_fn_params = saved_n_params;
     ctx->no_unwind = saved_no_unwind;  /* Phase R5 */

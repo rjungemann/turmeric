@@ -1,0 +1,59 @@
+;;; catch-unwind over a thunk returning a by-value AGGREGATE.
+;;;
+;;; It is the SUCCESS path that used to break, with no panic involved:
+;;; tur_catch_unwind_box called the thunk through TUR_APPLY0, which casts slot 0
+;;; to `int64_t (*)(void *)`, while the thunk really returns the struct in a
+;;; register pair (or through a hidden sret pointer).  Whatever landed in the
+;;; int64 slot was boxed as ok_val, and the consumer -- whose Result monomorph
+;;; declares `ok_val` as a `T *` -- then dereferenced it.  Segfault, or silent
+;;; corruption when the garbage happened to be mappable.
+;;;
+;;; Both catch forms and both payload shapes are covered here, plus a
+;;; capturing-closure thunk (whose slot 0 is the closure entry rather than a
+;;; typed fatshim) and the scalar thunk that always worked -- the one the
+;;; stdlib's own example uses, which is why this went unnoticed.
+
+(defstruct Q [x : int y : int])
+(defdata Pt (P :int :int) (Origin))
+
+(defn blow-up [] : Q (panic "kaboom"))
+(defn pt-blow-up [] : Pt (panic "kaboom"))
+
+(defn struct-ok [] : (Result Q int)
+  (catch-unwind (fn [] : Q (make-struct Q 3 4))))
+
+(defn struct-panic [] : (Result Q int)
+  (catch-unwind (fn [] : Q (blow-up))))
+
+(defn adt-capturing [n : int] : (Result Pt int)
+  (catch-unwind (fn [] : Pt (P n (* n 2)))))
+
+(defn typed-ok [] : (Result Pt int)
+  (catch-panic-of :cstr (fn [] : Pt (P 5 6))))
+
+(defn typed-panic [] : (Result Pt int)
+  (catch-panic-of :cstr (fn [] : Pt (pt-blow-up))))
+
+(defn scalar [] : (Result int int)
+  (catch-unwind (fn [] : int 7)))
+
+(defn show-pt [r : (Result Pt int)] : int
+  (if (ok? r)
+    (match (ok-val r)
+      (P a b)  (+ a b)
+      (Origin) 0)
+    -1))
+
+(defn main [] : int
+  (let [r (struct-ok)]
+    (if (ok? r) (println (.x (ok-val r))) (println -1)))   ; 3
+  (let [r (struct-ok)]
+    (if (ok? r) (println (.y (ok-val r))) (println -1)))   ; 4
+  (let [r (struct-panic)]
+    (if (ok? r) (println 999) (println -1)))               ; -1
+  (println (show-pt (adt-capturing 4)))                    ; 12
+  (println (show-pt (typed-ok)))                           ; 11
+  (println (show-pt (typed-panic)))                        ; -1
+  (let [r (scalar)]
+    (if (ok? r) (println (ok-val r)) (println -1)))         ; 7
+  0)

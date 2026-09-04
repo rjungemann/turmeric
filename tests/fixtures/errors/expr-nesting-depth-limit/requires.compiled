@@ -1,0 +1,8 @@
+EMIT_MAX_EXPR_DEPTH is a bound on the EMITTER's expression walk, so TUR-E0712 is
+raised from emit_value and only on the compiled path. The tree-walking
+interpreter never runs the emitter and evaluates this expression fine (exit 0,
+no diagnostic), so the diagnostic is validated on the compiled path only --
+the same shape as errors/cloneable-context-over-frame-limit and TUR-E0710.
+
+Note `tur check` DOES produce it, because check runs the emitter; only
+`tur --interpret` does not.

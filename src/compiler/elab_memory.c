@@ -1,8 +1,6 @@
 /* elab_memory.c -- ref/lref/deref/drop, rc and weak references, and GC primitives. */
 #include "elab_internal.h"
 #include <string.h>     /* CG6: strlen for the stat readers */
-#include "experiments.h"  /* CG5: experiment_warn_if_used("cycle-gc") */
-#include "globals.h"       /* CG5: g_opt_cycle_gc */
 
 /* Phase 5: ref — (ref expr)
  * Creates an owning reference to a heap-allocated value.
@@ -591,25 +589,19 @@ Expr *elab_gc_disable(Elab *e, const Form *call) {
  * automatically at allocation checkpoints (see gc_on_alloc_checkpoint in
  * src/runtime/gc.c).  Returns nil.
  *
- * Gated by the `cycle-gc` experiment: unlike (gc!) / (gc-enable!), which only
- * collect when the program says so, this makes collection timing implicit, so
- * pause behaviour changes without any call site showing it.  That is what
- * --enable=<name> is for.  See
- * docs/upcoming/v1/gc-cycle-collection-followup-plan.md. */
+ * CG8 GRADUATED 2026-08-17: this is an ordinary call form now, no `--enable`.
+ * Note what that does and does not mean.  It ungates the CALL; it does not make
+ * automatic collection a default, and never will -- a program that does not
+ * call this runs the pure-RC path with no collector overhead, exactly as
+ * before, and the AUTO-only alloc-path cost (the rc_cb_alloc_kinded payload
+ * zeroing) is conditional on GC_AUTO mode at RUN time.  See
+ * docs/archive/gc-cycle-collection-followup-plan.md. */
 Expr *elab_gc_auto(Elab *e, const Form *call) {
     if (call->as.list.len != 1) {
         diag_emit(DIAG_ERROR, call->span,
                   "(gc-auto!) takes no arguments");
         return NULL;
     }
-    if (!g_opt_cycle_gc) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "(gc-auto!) requires --enable=cycle-gc "
-                  "(automatic cycle collection is experimental; "
-                  "(gc!) and (gc-enable!) are always available)");
-        return NULL;
-    }
-    experiment_warn_if_used("cycle-gc");
 
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
     ic->code = strslice("gc_auto();", 10);

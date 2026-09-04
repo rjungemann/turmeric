@@ -4,7 +4,7 @@
 ;; function type or a refinement had no transparent-alias spelling at all
 ;; (`deftype` wraps its body in a TY_REC, which is the recursive binder, not
 ;; an alias).  TA2 lets `defalias` take any type expression the elaborator can
-;; resolve.  See docs/archive/composite-type-alias-gap.md.
+;; resolve.  See docs/archive/history/composite-type-alias-gap.md.
 ;;
 ;; The alias is transparent: every use site sees the target type itself, so
 ;; `Point` and `P` are the same type and no unification ever mentions the

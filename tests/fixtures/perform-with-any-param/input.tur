@@ -1,0 +1,59 @@
+;; perform-with-any-param -- `perform` inside a function that takes (or builds)
+;; an `any` value.
+;;
+;; An `any` is a two-word `tur_tagged_t`, passed and returned BY VALUE.  Nothing
+;; about that is hostile to the DK backend, but three separate places did not
+;; know it, and each on its own took the whole program off the CPS path -- the
+;; symptom being "this effect operation has no lowering here" pointing at a
+;; `perform` with no loop and no handle clause anywhere near it:
+;;
+;;   1. slot_box_ty did not recognise TY_ANY as a Tier C by-value aggregate, so
+;;      fn_sig_ok rejected an `any` PARAMETER and the function sig-evicted.
+;;   2. The CPS IR translator had no case for the `any` widen or its readers, so
+;;      they became CT_UNSUPPORTED -- which meant a mere `(f (make-struct Pt 1 2))`
+;;      in `main` evicted `main`, tainted the effect, and pushed the performer
+;;      off DK even after (1).
+;;   3. collect_free_vars did not walk those nodes, so a `v` read AFTER the
+;;      suspension point never rode the continuation env: `'v' undeclared` in
+;;      the lifted helper.  (Same shape as the catch-thunk free-var bug the
+;;      walker's own comments record.)
+
+(defstruct Pt [x : int y : int])
+(defeffect Ask [] :int)
+
+;; (1): an `any` parameter, unused -- the signature alone used to evict.
+(defn ignores [v : any] : int (perform (Ask)))
+
+;; (3): the `any` is LIVE ACROSS the perform, so it must ride the DK slot and
+;; the continuation env.
+(defn reads-after [v : any] : int
+  (let [n (perform (Ask))]
+    (+ n (if (is? v Pt) 100 0))))
+
+;; (3) again, through `cast`: the payload is unboxed after the suspension.
+(defn casts-after [v : any] : int
+  (let [n (perform (Ask))]
+    (let [p (cast v Pt)]
+      (+ n (+ (.x p) (.y p))))))
+
+;; The perform as a BUILTIN OPERAND, with the `any` read in the sibling operand
+;; -- this is the shape whose caller reaches the callee through a cps->direct
+;; CT_LETCALL, where a slot_box_ty argument is normally refused.  `any` is the
+;; one member of that class whose direct and CPS parameter spellings agree
+;; (`tur_tagged_t` by value), so the raw argument is exactly right.
+(defn operand-position [v : any] : int
+  (+ (perform (Ask)) (if (is? v Pt) 1 0)))
+
+;; An `any` RESULT crossing the return continuation.
+(defn make-any [] : any (make-struct Pt 5 6))
+
+(defn main [] : int
+  ;; (2): each argument here is a widen of a CONSTRUCTOR CALL -- never atomic,
+  ;; which is why the widen's admission had to key on control-freedom rather
+  ;; than atomicity.
+  (println (handle (ignores (make-struct Pt 1 2)) (Ask [] k) (resume k 5)))
+  (println (handle (reads-after (make-struct Pt 1 2)) (Ask [] k) (resume k 5)))
+  (println (handle (casts-after (make-struct Pt 3 4)) (Ask [] k) (resume k 5)))
+  (println (handle (operand-position (make-struct Pt 1 2)) (Ask [] k) (resume k 5)))
+  (println (is? (make-any) Pt))
+  0)

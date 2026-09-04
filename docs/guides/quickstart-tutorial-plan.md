@@ -6,9 +6,15 @@ description: Authoring plan and step outline for the quickstart.md prose guide a
 
 # Quickstart & Interactive REPL Tutorial Plan
 
+> **Status: SHIPPED.** All three deliverables exist:
+> [quickstart.md](quickstart.md), [repl-tutorial.md](repl-tutorial.md), and
+> `tutorials/quickstart.yaml` (consumed by the REPL `:tutorial quickstart`
+> meta-command). This document is the authoring plan, kept as the reference
+> for the shared step order and the YAML schema.
+
 ## Overview
 
-Two companion documents to be created:
+Two companion documents:
 
 1. **`docs/guides/quickstart.md`** -- A standalone written guide for readers who
    prefer prose over a step-by-step prompt-and-response format. Covers the same
@@ -168,48 +174,48 @@ Try it: guard a print behind a condition of your choice.
 
 **Step 8 -- `Option`: constructors and predicates**
 
-Concept: `option-some`, `option-none`, `option-some?`, `option-none?` --
+Concept: `some`, `none`, `some?`, `none?` --
 representing a value that may or may not be present.
 
 ```
-> (option-some 42)
-> (option-some? (option-some 42))
+> (some 42)
+> (some? (some 42))
 true
-> (option-none)
-> (option-none? (option-none))
+> (none)
+> (none? (none))
 true
-> (option-some? (option-none))
+> (some? (none))
 false
 ```
 
-REPL note: nil results print nothing; that is expected for `(option-none)`.
+REPL note: nil results print nothing; that is expected for `(none)`.
 
-Try it: evaluate `(option-none? (option-some 0))` -- is a `some` of zero still
+Try it: evaluate `(none? (some 0))` -- is a `some` of zero still
 `some`?
 
 ---
 
 **Step 9 -- `Option`: safe unwrapping**
 
-Concept: `option-unwrap`, `option-unwrap-or`; writing a function that returns
+Concept: `unwrap`, `unwrap-or`; writing a function that returns
 an `Option` instead of crashing.
 
 ```
-> (option-unwrap (option-some 99))
+> (unwrap (some 99))
 99
-> (option-unwrap-or (option-none) -1)
+> (unwrap-or (none) -1)
 -1
 > (defn safe-div [a :int b :int]
-    (if (= b 0) (option-none) (option-some (/ a b))))
+    (if (= b 0) (none) (some (/ a b))))
 > (safe-div 10 2)
-> (option-unwrap (safe-div 10 2))
+> (unwrap (safe-div 10 2))
 5
-> (option-unwrap-or (safe-div 10 0) -1)
+> (unwrap-or (safe-div 10 0) -1)
 -1
 ```
 
-Try it: write `safe-head` that returns `(option-none)` for an empty vector and
-`(option-some (vec-get v 0))` otherwise.
+Try it: write `safe-head` that returns `(none)` for an empty vector and
+`(some (vec-get v 0))` otherwise.
 
 ---
 
@@ -247,10 +253,10 @@ a lightweight alternative to full pattern-match syntax.
 > (describe-result (ok 1))
 ok!
 > (defn describe-option [o]
-    (cond (option-some? o) (println "some!")
-          (option-none? o) (println "none!")
+    (cond (some? o) (println "some!")
+          (none? o) (println "none!")
           :else            (println "unknown")))
-> (describe-option (option-none))
+> (describe-option (none))
 none!
 ```
 
@@ -280,12 +286,13 @@ Try it: build a vector of the first five squares using a loop (see step 13).
 
 ---
 
-**Step 13 -- The `for` macro**
+**Step 13 -- Counting with `while`**
 
-Concept: `for` as a counted loop; combining `for` with a vector.
+Concept: a counted loop as `while` + `^mut` + `set!`; combining it with a
+vector. (Turmeric has no counted `for` -- `for` is the monadic comprehension.)
 
 ```
-> (for i 0 5 (println i))
+> (let [^mut i 0] (while (< i 5) (println i) (set! i (+ i 1))))
 0
 1
 2
@@ -342,8 +349,8 @@ Concept: `defstruct`, field access via generated getters, constructing instances
 ```
 > (defstruct Point [x :int y :int])
 > (let [p (Point 3 4)]
-    (println (Point-x p))
-    (println (Point-y p)))
+    (println (.x p))
+    (println (.y p)))
 3
 4
 ```
@@ -598,17 +605,17 @@ Example for step 8:
 - id: option_constructors
   title: "Option: constructors and predicates"
   instruction: |
-    Evaluate (option-some 42) and check whether it is some using option-some?.
-    Then create an empty option with (option-none) and check option-none?.
-  expected: "(option-none? (option-none))"
+    Evaluate (some 42) and check whether it is some using some?.
+    Then create an empty option with (none) and check none?.
+  expected: "(none? (none))"
   alternate_accept:
-    - "(option-some? (option-some 42))"
-    - "(option-none? (option-none))"
+    - "(some? (some 42))"
+    - "(none? (none))"
   hints:
-    - "Use option-some to wrap a value and option-none for the empty case."
-    - "option-some? and option-none? are the predicates."
-  success_message: "Correct! option-some holds a value; option-none is the empty case."
-  verify: "(option-none? (option-none))"
+    - "Use some to wrap a value and none for the empty case."
+    - "some? and none? are the predicates."
+  success_message: "Correct! some holds a value; none is the empty case."
+  verify: "(none? (none))"
 ```
 
 Fields that map from the Markdown template:

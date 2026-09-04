@@ -74,7 +74,7 @@
       fprintf(stderr, "thread-spawn-fn: pthread_create failed (%d)\n", rc);
       abort();
   }
-  return (int64_t)(intptr_t)h;
+  return (void *)(intptr_t)h;
   ```)
 ;;; thread-join -- wait for a thread to finish and free its handle.
 ;;;

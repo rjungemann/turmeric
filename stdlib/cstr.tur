@@ -7,12 +7,12 @@
 ;;; without allocating a view.
 ;;;
 ;;; Not autoloaded: `(import cstr :refer [cstr-len cstr-nth])` explicitly.
-;;; See docs/archive/no-cstr-byte-primitives-pure-turmeric.md for why (an
+;;; See docs/archive/history/no-cstr-byte-primitives-pure-turmeric.md for why (an
 ;;; earlier attempt to autoload perturbed Vec element-type inference).
 ;;;
 ;;; Since: 2026-07-01
 (defmodule cstr
-  (export cstr-len cstr-nth cstr-sub)
+  (export cstr-len cstr-nth cstr-sub cstr-eq? cstr-free)
   ;;; cstr-len -- byte length of a NUL-terminated C string.
   ;;;
   ;;; Parameters:
@@ -69,4 +69,53 @@
     memcpy(out, cs + a, outlen);
     out[outlen] = '\0';
     return (const char *)out;
+    ```)
+  ;;; cstr-eq? -- content equality on two NUL-terminated C strings.
+  ;;;
+  ;;; The `=` operator has no `cstr` overload at all (comparing two `cstr`
+  ;;; values with it is a TUR-E0006 operator-lookup error), so a byte-wise
+  ;;; comparison needs a named function. `(eq? a b)` from the auto-loaded
+  ;;; `Eq[cstr]` instance is the same comparison reached through typeclass
+  ;;; dispatch; this is the direct call, for code that walks bytes with the
+  ;;; rest of this module and does not otherwise want typeclass machinery.
+  ;;;
+  ;;; Parameters:
+  ;;;   a -- NUL-terminated C string pointer, or NULL
+  ;;;   b -- NUL-terminated C string pointer, or NULL
+  ;;;
+  ;;; Returns:
+  ;;;   true when both are NULL, or both are non-NULL and hold the same
+  ;;;   bytes up to the terminator. false otherwise -- in particular a NULL
+  ;;;   never equals a non-NULL, including the empty string.
+  ;;;
+  ;;; Example:
+  ;;;   (cstr-eq? "abc" (cstr-sub "abcdef" 0 3))  ; => true
+  ;;;   (cstr-eq? "abc" "abd")                    ; => false
+  (defn cstr-eq? [a : cstr b : cstr] : bool
+    ```c
+    const char *x = (const char *)(intptr_t)a;
+    const char *y = (const char *)(intptr_t)b;
+    if (x == NULL && y == NULL) return true;
+    if (x == NULL || y == NULL) return false;
+    return strcmp(x, y) == 0;
+    ```)
+  ;;; cstr-free -- release a cstr this module heap-allocated.
+  ;;;
+  ;;; `cstr-sub` hands back a malloc'd string and documents that the caller
+  ;;; frees it, but `drop!` wants a `ref<T>` and rejects a bare `cstr`, so
+  ;;; without this there is no way to honor that contract from Turmeric --
+  ;;; every caller had to drop into inline C. Pass only a pointer this module
+  ;;; allocated: a string literal is static, and freeing one is undefined.
+  ;;; NULL is accepted and ignored, matching free(3).
+  ;;;
+  ;;; Parameters:
+  ;;;   s -- a cstr returned by cstr-sub, or NULL
+  ;;;
+  ;;; Example:
+  ;;;   (let [t (cstr-sub "hello world" 0 5)]
+  ;;;     (println t)
+  ;;;     (cstr-free t))
+  (defn cstr-free [s : cstr] : void
+    ```c
+    free((void *)(intptr_t)s);
     ```))

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CI Metrics -- Turmeric</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="description" content="Test suite timings for the Turmeric compiler, published from CI on every push to main. Duration trends, per-suite sparklines, and the skip ledger.">
+
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://turmeric-lang.com/ci">
+<meta property="og:title" content="CI Metrics -- Turmeric">
+<meta property="og:description" content="Test suite timings for the Turmeric compiler, published from CI on every push to main.">
+<meta property="og:image" content="https://turmeric-lang.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:site_name" content="Turmeric">
+
+<!-- Twitter / X -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:url" content="https://turmeric-lang.com/ci">
+<meta name="twitter:title" content="CI Metrics -- Turmeric">
+<meta name="twitter:description" content="Test suite timings for the Turmeric compiler, published from CI on every push to main.">
+<meta name="twitter:image" content="https://turmeric-lang.com/og-image.png">
+
+<!-- NOT /ci.js and /ci.css: a root-level `ci.js` shadows this route, because
+     Vite resolves the extensionless request for /ci to it instead of to
+     ci/index.html. Page assets keep the site's root-level convention
+     (site.js, tutorials.js) but must not share a basename with a route. -->
+<link rel="stylesheet" href="/site.css">
+<link rel="stylesheet" href="/ci-metrics.css">
+<script type="module" src="/site.js"></script>
+<script type="module" src="/ci-metrics.js"></script>
+</head>
+<body>
+
+<site-nav></site-nav>
+
+<main class="ci-page">
+
+  <header class="ci-head">
+    <h1 class="ci-title">Suite timings</h1>
+    <p class="section-desc">
+      Every push to <code>main</code> publishes each ctest suite's wall time to the
+      <a href="https://github.com/rjungemann/turmeric/tree/ci-metrics" class="ci-link">ci-metrics</a>
+      branch.
+    </p>
+    <div class="ci-provenance" id="ci-provenance"></div>
+  </header>
+
+  <!-- Load / error state; replaced by the dashboard once data arrives. -->
+  <div class="ci-state" id="ci-state">
+    <span class="ci-spinner" aria-hidden="true"></span>
+    <span>Loading timings&hellip;</span>
+  </div>
+
+  <div class="ci-body" id="ci-body" hidden>
+
+    <section class="ci-tiles" id="ci-tiles" aria-label="Latest run summary"></section>
+
+    <section class="ci-filters" id="ci-filters" aria-label="Filters"></section>
+
+    <section class="ci-panel">
+      <div class="ci-panel-head">
+        <div>
+          <h2 class="ci-panel-title">Duration over time</h2>
+          <p class="ci-panel-sub" id="ci-chart-sub"></p>
+        </div>
+        <div class="ci-seg" role="group" aria-label="Y axis scale">
+          <button type="button" class="ci-seg-btn is-active" data-scale="linear">Linear</button>
+          <button type="button" class="ci-seg-btn" data-scale="log">Log</button>
+        </div>
+      </div>
+      <div class="ci-chart-wrap">
+        <div class="ci-chart" id="ci-chart"></div>
+        <div class="ci-tooltip" id="ci-tooltip" hidden></div>
+      </div>
+      <div class="ci-legend" id="ci-legend"></div>
+    </section>
+
+    <section class="ci-panel">
+      <div class="ci-panel-head">
+        <div>
+          <h2 class="ci-panel-title">All suites</h2>
+          <p class="ci-panel-sub">
+            One sparkline per suite, largest first. Each has its own vertical
+            scale. Click to chart it above.
+          </p>
+        </div>
+        <input type="search" class="ci-input" id="ci-spark-search"
+               placeholder="Filter suites&hellip;" aria-label="Filter suites">
+      </div>
+      <div class="ci-sparks" id="ci-sparks"></div>
+    </section>
+
+    <section class="ci-panel">
+      <div class="ci-panel-head">
+        <div>
+          <h2 class="ci-panel-title">Suite table</h2>
+          <p class="ci-panel-sub">
+            The same data as the chart, in full. Sorted by absolute change
+            across the selected range.
+          </p>
+        </div>
+      </div>
+      <div class="ci-table-wrap">
+        <table class="ci-table" id="ci-table"></table>
+      </div>
+    </section>
+
+    <section class="ci-panel">
+      <div class="ci-panel-head">
+        <div>
+          <h2 class="ci-panel-title">Skip ledger</h2>
+          <p class="ci-panel-sub">
+            Suites that did not fully run in the latest build.
+          </p>
+        </div>
+      </div>
+      <div class="ci-skips" id="ci-skips"></div>
+    </section>
+
+  </div>
+
+</main>
+
+<site-footer></site-footer>
+
+</body>
+</html>

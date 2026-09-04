@@ -8,7 +8,7 @@
  * done this inline; the WASM/browser REPL (`src/web/wasm_glue.c`) skipped it,
  * so reader-macro data literals such as `#map{...}` (which lower to the
  * `hamt-of` macro defined in `stdlib/map.tur`) failed with "unknown function or
- * operator 'hamt-of'".  See docs/reported/web-repl-missing-stdlib-preload.md.
+ * operator 'hamt-of'".  See docs/archive/history/web-repl-missing-stdlib-preload.md.
  *
  * These two helpers factor that load sequence out of `main.c` so the native
  * interpreter and the WASM REPL share one copy and cannot drift.  They only

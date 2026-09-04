@@ -1,0 +1,3 @@
+(defmodule mmac
+  (export twice*)
+  (defmacro* twice* [e] `(+ ~e ~e)))

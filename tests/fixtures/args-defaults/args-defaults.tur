@@ -1,15 +1,15 @@
 ;; args-defaults -- test that missing options with defaults are injected.
+;;
+;; The default is a real (Option cstr): `(some "42")` here, `(none)` for a
+;; required option.  This fixture used to need a local `cstr->int` reinterpret
+;; helper because the slot was typed `:int` -- see
+;; docs/archive/args-api-int-erased-handles.md.
 
 (load "stdlib/args.tur")
 
-(defn cstr->int [s : cstr] : int
-  ```c
-  return (int64_t)(intptr_t)s;
-  ```)
-
 (defn main [] : void
   (let [spec (args/spec-new)]
-    (args/spec-option spec "--count" "int" (cstr->int "42"))
+    (args/spec-option spec "--count" "int" (some "42"))
     (let [res (args/parse spec *args*)]
       (println (args/get-int res "count"))
       (args/result-free res))

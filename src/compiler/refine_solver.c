@@ -12,6 +12,22 @@
 #include <string.h>
 
 /* ------------------------------------------------------------------------- *
+ * Cap telemetry (see refine_solver.h)
+ * ------------------------------------------------------------------------- */
+
+static RefineCapStats g_caps;
+
+RefineCapStats *refine_caps(void) { return &g_caps; }
+void refine_caps_reset(void) { memset(&g_caps, 0, sizeof(g_caps)); }
+
+bool refine_caps_any(void) {
+    return g_caps.cubes_hits || g_caps.cube_lits_hits || g_caps.expand_depth_hits ||
+           g_caps.la_vars_hits || g_caps.la_constr_hits || g_caps.la_fm_hits ||
+           g_caps.euf_terms_hits || g_caps.no_shared_hits || g_caps.no_rounds_hits ||
+           g_caps.path_hyps_hits || g_caps.model_vars_hits;
+}
+
+/* ------------------------------------------------------------------------- *
  * NNF
  * ------------------------------------------------------------------------- */
 
@@ -74,7 +90,11 @@ typedef struct {
 
 static void acc_push(CubeAcc *acc, VCTerm **lits, uint32_t n) {
     if (acc->overflow) return;
-    if (acc->n >= REFINE_MAX_CUBES) { acc->overflow = true; return; }
+    if (acc->n >= REFINE_MAX_CUBES) {
+        g_caps.cubes_hits++;
+        refine_cap_peak(&g_caps.cubes_peak, REFINE_MAX_CUBES);
+        acc->overflow = true; return;
+    }
     if (acc->n == acc->cap) {
         uint32_t ncap = acc->cap ? acc->cap * 2 : 8;
         VCCube *nc = (VCCube *)arena_alloc(acc->arena, ncap * sizeof(VCCube));
@@ -95,8 +115,13 @@ static void acc_push(CubeAcc *acc, VCTerm **lits, uint32_t n) {
 static void expand(CubeAcc *acc, VCTerm **pending, uint32_t n_pending,
                    VCTerm **conj, uint32_t n_conj) {
     if (acc->overflow) return;
-    if (acc->depth >= REFINE_MAX_EXPAND_DEPTH) { acc->overflow = true; return; }
+    if (acc->depth >= REFINE_MAX_EXPAND_DEPTH) {
+        g_caps.expand_depth_hits++;
+        refine_cap_peak(&g_caps.expand_depth_peak, REFINE_MAX_EXPAND_DEPTH);
+        acc->overflow = true; return;
+    }
     acc->depth++;
+    refine_cap_peak(&g_caps.expand_depth_peak, acc->depth);
 
     /* FLATTEN conjunctions first, so the disjunction scan below sees every
      * disjunct that is top-level in the FORMULA rather than top-level in this
@@ -113,7 +138,11 @@ static void expand(CubeAcc *acc, VCTerm **pending, uint32_t n_pending,
         if (pending[i]->op != VC_AND) continue;
         VCTerm *t = pending[i];
         uint32_t cap = n_pending - 1 + t->n;
-        if (cap > REFINE_MAX_CUBE_LITS * 4) { acc->overflow = true; acc->depth--; return; }
+        if (cap > REFINE_MAX_CUBE_LITS * 4) {
+            g_caps.cube_lits_hits++;
+            refine_cap_peak(&g_caps.cube_lits_peak, cap);
+            acc->overflow = true; acc->depth--; return;
+        }
         VCTerm **flat = (VCTerm **)arena_alloc(acc->arena,
                                                (cap ? cap : 1) * sizeof(VCTerm *));
         uint32_t m = 0;
@@ -147,7 +176,11 @@ static void expand(CubeAcc *acc, VCTerm **pending, uint32_t n_pending,
     /* No disjunctions left: everything pending is a literal (or a conjunction
      * already flattened by vc_mk).  Collect into one cube. */
     uint32_t total = n_conj + n_pending;
-    if (total > REFINE_MAX_CUBE_LITS) { acc->overflow = true; acc->depth--; return; }
+    refine_cap_peak(&g_caps.cube_lits_peak, total);
+    if (total > REFINE_MAX_CUBE_LITS) {
+        g_caps.cube_lits_hits++;
+        acc->overflow = true; acc->depth--; return;
+    }
 
     VCTerm **lits = (VCTerm **)arena_alloc(acc->arena, (total ? total : 1) * sizeof(VCTerm *));
     uint32_t k = 0;
@@ -195,6 +228,7 @@ bool refine_cubes_build(RefineVC *vc, Arena *a, VCCubeSet *out) {
     acc.arena = a;
     expand(&acc, parts, n, NULL, 0);
     if (acc.overflow) { out->overflow = true; return false; }
+    refine_cap_peak(&g_caps.cubes_peak, acc.n);
     out->cubes = acc.cubes;
     out->n     = acc.n;
     return true;
@@ -218,7 +252,10 @@ bool refine_cubes_build(RefineVC *vc, Arena *a, VCCubeSet *out) {
  * obligation stays Unknown -> runtime check.
  * ------------------------------------------------------------------------- */
 
-#define MODEL_MAX_VARS  3
+/* MODEL_MAX_VARS lives in refine_solver.h beside the other capped quantities,
+ * so the TUR_REFINE_STATS reporter can name the limit its peak is a peak of.
+ * MODEL_MAX_CANDS stays here and is uninstrumented: it bounds the candidate
+ * VALUE set rather than a structural quantity, and nothing has asked. */
 #define MODEL_MAX_CANDS 16
 
 typedef struct {
@@ -303,7 +340,23 @@ RefineModel *refine_model_search(RefineVC *vc, Arena *a) {
      * evaluation decides it outright.  The odometer below runs exactly once and
      * the model is empty -- there is nothing to bind, the arguments already
      * say it. */
-    if (vc->n_vars > MODEL_MAX_VARS) return NULL;
+    /* Past the uninterpreted-symbol gate, so this VC could plausibly use the
+     * search at SOME cap -- which is what makes its width worth recording.
+     * The peak is real, not saturating: n_vars is known before the check. */
+    refine_cap_peak(&g_caps.model_vars_peak, vc->n_vars);
+    if (vc->n_vars > MODEL_MAX_VARS) {
+        g_caps.model_vars_hits++;
+        /* Would a higher cap actually let this one search?  Only if every
+         * variable is also an integer -- the sort gate below would otherwise
+         * decline it anyway, and counting it as "the cap cost us this" would
+         * overstate what a raise buys.  This is the number a raise has to be
+         * argued from. */
+        bool all_int = true;
+        for (uint32_t i = 0; i < vc->n_vars; i++)
+            if (vc->vars[i].sort != VS_INT) { all_int = false; break; }
+        if (all_int) g_caps.model_vars_would_run++;
+        return NULL;
+    }
     for (uint32_t i = 0; i < vc->n_vars; i++)
         if (vc->vars[i].sort != VS_INT) return NULL;
 

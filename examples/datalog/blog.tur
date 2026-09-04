@@ -10,7 +10,11 @@
 ;; Value ADT
 ;; ============================================================
 
-(defdata Value
+;; `:heap` is load-bearing, not decoration: a datum is a raw `int64_t[4]`
+;; built in inline-C, so the value it stores has to be ONE WORD.  A :heap ADT
+;; is a typed pointer (`tur_adt_Value *`), which fits; a plain multi-variant
+;; sum now flows BY VALUE as a tag+union aggregate (SR1) and does not.
+(defdata Value :heap
   (LongVal :int)
   (StrVal :int)
   (EntityVal :int))
@@ -98,13 +102,13 @@
 (defn rvec-len [v : ptr<void>] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
-  return (int)vec->len;
+  return (int64_t)vec->len;
   ```)
 
 (defn rvec-get [v : ptr<void> i : int] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
-  return (int)vec->data[i];
+  return vec->data[i];
   ```)
 
 (defn rvec-push! [v : ptr<void> val : int]
@@ -170,7 +174,7 @@
 ;; Query
 ;; ============================================================
 
-(defn db-q [db : int pred] : ptr<void>
+(defn db-q [db : int pred : (fn [int] bool)] : ptr<void>
   (let [n (db-count db)]
     (let [result (rvec-new)]
       (let [^mut i 0]
@@ -182,14 +186,14 @@
             (set! i (+ i 1))))
         result))))
 
-(defn q-entity [e : int]
-  (fn [d] (= (datum-entity d) e)))
+(defn q-entity [e : int] : (fn [int] bool)
+  (fn [d : int] : bool (= (datum-entity d) e)))
 
-(defn q-attr [a : cstr]
-  (fn [d] (cstr-eq? (datum-attr d) (cstr->int a))))
+(defn q-attr [a : cstr] : (fn [int] bool)
+  (fn [d : int] : bool (cstr-eq? (datum-attr d) (cstr->int a))))
 
-(defn q-and [p q]
-  (fn [d] (and (p d) (q d))))
+(defn q-and [p : (fn [int] bool) q : (fn [int] bool)] : (fn [int] bool)
+  (fn [d : int] : bool (and (p d) (q d))))
 
 ;; ============================================================
 ;; Attribute name constants
@@ -234,7 +238,7 @@
 
 ;; get-attr -- retrieve first matching datum value for entity+attr, or 0
 (defn get-attr [db : int entity : int attr : cstr] : int
-  (let [results (db-q db (fn [d]
+  (let [results (db-q db (fn [d : int] : bool
                             (and (= (datum-entity d) entity)
                                  (cstr-eq? (datum-attr d) (cstr->int attr)))))]
     (if (> (rvec-len results) 0)
@@ -243,7 +247,7 @@
 
 ;; get-posts-by-user -- find all post entities authored by a given user
 (defn get-posts-by-user [db : int user-entity : int] : ptr<void>
-  (db-q db (fn [d]
+  (db-q db (fn [d : int] : bool
               (and (cstr-eq? (datum-attr d) (cstr->int post/author))
                    (match (datum-value d)
                      (EntityVal e) (= e user-entity)
@@ -251,7 +255,7 @@
 
 ;; get-comments-on-post -- find all comment entities for a given post
 (defn get-comments-on-post [db : int post-entity : int] : ptr<void>
-  (db-q db (fn [d]
+  (db-q db (fn [d : int] : bool
               (and (cstr-eq? (datum-attr d) (cstr->int comment/post))
                    (match (datum-value d)
                      (EntityVal e) (= e post-entity)
@@ -290,12 +294,12 @@
                 (while (< ci (rvec-len comments))
                   (do
                     (let [cd (rvec-get comments ci)]
-                      (let [comment-entity (datum-entity cd)])
+                      (let [comment-entity (datum-entity cd)]
                         (let [cbody  (get-attr db comment-entity comment/body)]
                           (let [cauth-val (get-attr db comment-entity comment/author)]
                             (let [cauth-name (get-attr db (value->entity cauth-val) user/name)]
                               (println-cstr (value->str cauth-name))
-                              (println-cstr (value->str cbody))))))
+                              (println-cstr (value->str cbody)))))))
                     (set! ci (+ ci 1))))))
 
             nil))))))

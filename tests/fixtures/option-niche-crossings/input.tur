@@ -1,0 +1,65 @@
+;; option-niche: every position where an inline-C CARRIER producer
+;; (tur_some_ptr boxes) or a genuine niche value can cross into or out of the
+;; niche representation. Pins the fixes for
+;; docs/archive/option-niche-inline-c-carrier-crossings-incomplete.md:
+;;   - direct match scrutinee (was: box bound as __scrut, silent none)
+;;   - constructor argument   (was: box stored as the field, silent none)
+;;   - vec-of first element   (was: heap-promoted P** cell, silent none)
+;;   - vec-push! of a carrier producer (was: double-boxed, blank payload)
+;; plus the clean positions the audit confirmed: closure capture, vec-of
+;; later elements, vec-get readback, mixed producers.
+(load "stdlib/string.tur")
+
+(defn pick [flag : bool] : (Option String)
+  (if flag (some (string/from-cstr "tv")) (none)))
+
+(defn mk-c [n : int] : (Option String)
+  ```c
+  if (n == 0) return tur_none();
+  return tur_some_ptr(tur_string_from_bytes("ic", 2));
+  ```)
+
+(defn show-opt [o : (Option String)] : void
+  (if (some? o) (println (string/to-cstr (unwrap o))) (println "none")))
+
+(defstruct Holder
+  [name : (Option String)])
+
+(defn probe-match [] : void
+  (match (mk-c 1)
+    (Some s) (println (string/to-cstr s))
+    (None)   (println "none"))
+  (match (mk-c 0)
+    (Some s) (println (string/to-cstr s))
+    (None)   (println "none")))
+
+(defn probe-ctor [] : void
+  (let [h (Holder (mk-c 1))]
+    (show-opt (.name h))))
+
+(defn probe-vec [] : void
+  (let [v (vec-of (pick true) (mk-c 1) (pick false) (mk-c 0))]
+    (show-opt (vec-get v 0))
+    (show-opt (vec-get v 1))
+    (show-opt (vec-get v 2))
+    (show-opt (vec-get v 3))))
+
+(defn probe-capture [] : void
+  (let [o (pick true)
+        f (fn [] : void (show-opt o))]
+    (f)))
+
+(defn probe-push [] : void
+  (let [v (vec-new)]
+    (vec-push! v (pick true))
+    (vec-push! v (mk-c 1))
+    (show-opt (:: (vec-get v 0) (Option String)))
+    (show-opt (:: (vec-get v 1) (Option String)))))
+
+(defn main [] : int
+  (probe-match)
+  (probe-ctor)
+  (probe-vec)
+  (probe-capture)
+  (probe-push)
+  0)

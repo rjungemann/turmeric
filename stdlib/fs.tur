@@ -25,7 +25,7 @@
 ;; they read the handle without discharging the single-consumption obligation;
 ;; a later fs/tmpfile-free is still the one legal consumption. Borrowing an
 ;; already-freed handle is a TUR-E0101. See the (now resolved) report at
-;; docs/reported/stdlib-linear-handle-borrows.md.
+;; docs/archive/history/stdlib-linear-handle-borrows.md.
 (load "stdlib/fd.tur")
 
 (load "stdlib/effects.tur")
@@ -212,7 +212,7 @@
   : int
   ```c
   #include <sys/stat.h>
-  #include <direct.h>
+  #include <direct.h>  /* tur:optional -- Windows only; POSIX takes the mkdir() branch below */
   /* MinGW's mkdir takes one argument (the legacy MSVC signature); Windows has
    * no POSIX permission bits, so the 0755 is dropped rather than translated.
    *
@@ -250,7 +250,7 @@
   ```c
   #include <sys/stat.h>
   #include <errno.h>
-  #include <direct.h>
+  #include <direct.h>  /* tur:optional -- Windows only; POSIX takes the mkdir() branch below */
   /* One-arg mkdir on MinGW (see fs/mkdir).  A body-local macro keeps both call
    * sites below identical across platforms.  direct.h sits outside the #ifdef
    * for the hoisting reason documented on fs/mkdir -- this is the very function

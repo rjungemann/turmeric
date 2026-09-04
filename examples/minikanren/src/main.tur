@@ -1,11 +1,40 @@
-;; miniKanren-style relational example
+;; miniKanren in Turmeric, on stdlib/logic.tur.
 ;;
-;; This example demonstrates a tiny relational program with:
-;;   - relation predicates (`parento`, `grandparento`)
-;;   - bidirectional querying (find parents, children, and pairs)
-;;   - a simple "logic style" workflow in plain Turmeric
+;; A relational program in the miniKanren style: logic variables, unification,
+;; `fresh`, conjunction / interleaving disjunction, delayed recursion (`zzz`)
+;; and lazy solution streams -- all from the standard library.  Two relations:
+;;
+;;   parento     -- a fact table as a disjunction of unifications, queried in
+;;                  every direction (who are the parents of X? the children of
+;;                  Y? every (parent, child) pair?), and grandparento built on
+;;                  it with a fresh intermediate variable.
+;;   appendo     -- the classic list relation, run forwards (append two lists),
+;;                  backwards (which prefix completes a list?) and with both
+;;                  inputs unknown (every way to split a list), which is the
+;;                  bidirectionality a function cannot give you.
+;;
+;; Run it:  tur run examples/minikanren/src/main.tur
+;;
+;; This is also the tree's one real program over logic.tur's recursive sums
+;; (Term / Subst / Stream), the shapes the sum-representation work is priced
+;; against -- see docs/archive/minikanren-example-implements-no-minikanren.md.
 
-(def PERSON_COUNT 6)
+(load "stdlib/logic.tur")
+
+;; Two string helpers, so the example needs nothing beyond logic.tur.
+(defn str2 [a : cstr b : cstr] : cstr
+  ```c
+  size_t la = strlen(a), lb = strlen(b);
+  char *o = (char *)malloc(la + lb + 1);
+  memcpy(o, a, la); memcpy(o + la, b, lb); o[la + lb] = 0;
+  return o;
+  ```)
+(defn int->string [n : int] : cstr
+  ```c char *b = (char *)malloc(24); snprintf(b, 24, "%lld", (long long)n); return b; ```)
+
+;; ---------------------------------------------------------------------------
+;; People are small ints; names are for printing only.
+;; ---------------------------------------------------------------------------
 
 (defn person-name [id : int] : cstr
   (cond
@@ -17,94 +46,136 @@
     (= id 5) "mona"
     :else "unknown"))
 
-(defn parento [parent : int child : int] : int
-  (cond
-    (and (= parent 0) (= child 1)) 1  ;; abe -> homer
-    (and (= parent 5) (= child 1)) 1  ;; mona -> homer
-    (and (= parent 1) (= child 2)) 1  ;; homer -> bart
-    (and (= parent 1) (= child 3)) 1  ;; homer -> lisa
-    (and (= parent 4) (= child 2)) 1  ;; marge -> bart
-    (and (= parent 4) (= child 3)) 1  ;; marge -> lisa
-    :else 0))
+;;; fact -- the goal "p is PARENT and c is CHILD", one row of the table.
+(defn fact [p : Term c : Term parent : int child : int] : (Goal int)
+  (conjoined (lequal p (term-int parent)) (lequal c (term-int child))))
 
-(defn grandparento [grand : int child : int] : int
-  (let [^mut mid 0
-        ^mut found 0]
-    (while (< mid PERSON_COUNT)
+;;; parento -- the parent relation: a disjunction over the fact table.
+;;;
+;;; Either argument may be a fresh variable, so the same relation answers
+;;; "parents of", "children of" and "every pair".
+(defn parento [p : Term c : Term] : (Goal int)
+  (disjoined (fact p c 0 1)                      ; abe   -> homer
+    (disjoined (fact p c 5 1)                    ; mona  -> homer
+      (disjoined (fact p c 1 2)                  ; homer -> bart
+        (disjoined (fact p c 1 3)                ; homer -> lisa
+          (disjoined (fact p c 4 2)              ; marge -> bart
+                     (fact p c 4 3)))))))        ; marge -> lisa
+
+;;; grandparento -- g is a grandparent of c: some m is g's child and c's parent.
+(defn grandparento [g : Term c : Term] : (Goal int)
+  (fresh (fn [m] (conjoined (parento g m) (parento m c)))))
+
+;; ---------------------------------------------------------------------------
+;; Walking solutions.  run-logic returns a lazy Stream of substitutions; each
+;; is one answer, and a query variable's value is read back by walking it.
+;; ---------------------------------------------------------------------------
+
+;;; print-people -- print the person bound to query variable v in every solution.
+(defn print-people [results : Stream v : int] : int
+  (match (st-pull results)
+    (StCons s rest)
       (do
-        (when (and (= (parento grand mid) 1)
-                   (= (parento mid child) 1))
-          (set! found 1))
-        (set! mid (+ mid 1))))
-    found))
+        (println (person-name (term-int-val (logic-walk (term-var v) s))))
+        (print-people rest v))
+    _ 0))
 
-(defn query-parents-of [child : int] : nil
+;;; print-pairs -- print "parent child" for query variables 0 and 1 in every solution.
+(defn print-pairs [results : Stream] : int
+  (match (st-pull results)
+    (StCons s rest)
+      (do
+        (println (str2 (str2 (person-name (term-int-val (logic-walk (term-var 0) s)))
+                                         " -> ")
+                             (person-name (term-int-val (logic-walk (term-var 1) s)))))
+        (print-pairs rest))
+    _ 0))
+
+;; ---------------------------------------------------------------------------
+;; appendo: lists as TPair / TNil terms.
+;; ---------------------------------------------------------------------------
+
+;;; list2 / list3 / list4 -- list terms (a b), (a b c), (a b c d) from ints.
+(defn list2 [a : int b : int] : Term
+  (term-pair (term-int a) (term-pair (term-int b) (term-nil))))
+(defn list3 [a : int b : int c : int] : Term
+  (term-pair (term-int a) (list2 b c)))
+(defn list4 [a : int b : int c : int d : int] : Term
+  (term-pair (term-int a) (list3 b c d)))
+
+;;; appendo -- (appendo l s out): out is l followed by s.
+;;;
+;;; The recursive branch is delayed with zzz so the relation can be BUILT
+;;; without diverging; the search then unfolds it one step per pull.
+(defn appendo [l : Term s : Term out : Term] : (Goal int)
+  (disjoined
+    (conjoined (lequal l (term-nil)) (lequal s out))
+    (fresh (fn [a]
+      (fresh (fn [d]
+        (fresh (fn [res]
+          (conjoined (lequal l (term-pair a d))
+            (conjoined (lequal out (term-pair a res))
+                       (zzz (appendo d s res))))))))))))
+
+;;; term->string -- render a walked list term as "(1 2 3)"; a variable as "_N".
+(defn term->string [t : Term s : Subst] : cstr
+  (match (logic-walk t s)
+    (TNil)      "()"
+    (TInt n)    (int->string n)
+    (TVar id)   (str2 "_" (int->string id))
+    (TPair a d) (str2 "(" (list-items->string (term-pair a d) s))))
+
+;;; list-items->string -- the elements of a list term, closing paren included.
+(defn list-items->string [t : Term s : Subst] : cstr
+  (match (logic-walk t s)
+    (TPair a d)
+      (match (logic-walk d s)
+        (TNil) (str2 (term->string a s) ")")
+        _      (str2 (str2 (term->string a s) " ") (list-items->string d s)))
+    (TNil)  ")"
+    _       (str2 (str2 ". " (term->string t s)) ")")))
+
+;;; print-terms -- for each solution, print query variable v as a list term.
+(defn print-terms [results : Stream v : int] : int
+  (match (st-pull results)
+    (StCons s rest)
+      (do
+        (println (term->string (term-var v) s))
+        (print-terms rest v))
+    _ 0))
+
+;;; print-splits -- for each solution, print variable 0 and variable 1 as lists.
+(defn print-splits [results : Stream] : int
+  (match (st-pull results)
+    (StCons s rest)
+      (do
+        (println (str2 (str2 (term->string (term-var 0) s) " ++ ")
+                             (term->string (term-var 1) s)))
+        (print-splits rest))
+    _ 0))
+
+
+(defn main [] : int
   (do
-    (println "Parents of:")
-    (println (person-name child))
-    (let [^mut p 0]
-      (while (< p PERSON_COUNT)
-        (do
-          (when (= (parento p child) 1)
-            (println (person-name p)))
-          (set! p (+ p 1)))))
-    nil))
+    (println "parents of bart:")
+    (print-people (run-logic 10 (fresh (fn [p] (parento p (term-int 2))))) 0)
 
-(defn query-children-of [parent : int] : nil
-  (do
-    (println "Children of:")
-    (println (person-name parent))
-    (let [^mut c 0]
-      (while (< c PERSON_COUNT)
-        (do
-          (when (= (parento parent c) 1)
-            (println (person-name c)))
-          (set! c (+ c 1)))))
-    nil))
+    (println "children of homer:")
+    (print-people (run-logic 10 (fresh (fn [c] (parento (term-int 1) c)))) 0)
 
-(defn query-grandparents-of [child : int] : nil
-  (do
-    (println "Grandparents of:")
-    (println (person-name child))
-    (let [^mut g 0]
-      (while (< g PERSON_COUNT)
-        (do
-          (when (= (grandparento g child) 1)
-            (println (person-name g)))
-          (set! g (+ g 1)))))
-    nil))
+    (println "grandparents of bart:")
+    (print-people (run-logic 10 (fresh (fn [g] (grandparento g (term-int 2))))) 0)
 
-(defn print-all-parent-facts [] : nil
-  (do
-    (println "All parent facts (both vars unknown):")
-    (let [^mut p 0]
-      (while (< p PERSON_COUNT)
-        (do
-          (let [^mut c 0]
-            (while (< c PERSON_COUNT)
-              (do
-                (when (= (parento p c) 1)
-                  (do
-                    (println (person-name p))
-                    (println (person-name c))))
-                (set! c (+ c 1)))))
-          (set! p (+ p 1)))))
-    nil))
+    (println "every parent -> child:")
+    (print-pairs (run-logic 20 (fresh (fn [p] (fresh (fn [c] (parento p c)))))))
 
-(defn -main [] : int
-  (do
-    (println "miniKanren-style relational example")
-    (println "----------------------------------")
+    (println "appendo forwards, (1 2) ++ (3 4):")
+    (print-terms (run-logic 5 (fresh (fn [out] (appendo (list2 1 2) (list2 3 4) out)))) 0)
 
-    ;; Query with known child and unknown parent:
-    (query-parents-of 2)   ;; bart -> homer, marge
+    (println "appendo backwards, ? ++ (3 4) = (1 2 3 4):")
+    (print-terms (run-logic 5 (fresh (fn [l] (appendo l (list2 3 4) (list4 1 2 3 4))))) 0)
 
-    ;; Query with known parent and unknown child:
-    (query-children-of 1)  ;; homer -> bart, lisa
-
-    ;; Two-hop relation:
-    (query-grandparents-of 2) ;; bart -> abe, mona
-
-    ;; Enumerate all matching pairs:
-    (print-all-parent-facts)
+    (println "every split of (1 2 3):")
+    (print-splits (run-logic 10 (fresh (fn [l] (fresh (fn [s]
+                                 (appendo l s (list3 1 2 3))))))))
     0))

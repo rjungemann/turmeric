@@ -23,33 +23,72 @@ import re
 import sys
 from pathlib import Path
 
-import markdown as md_lib
+try:
+    import markdown as md_lib
+except ImportError:  # pragma: no cover -- preflight, not a code path
+    sys.exit(
+        "error: tools/genspices.py needs the 'markdown' package\n"
+        "       install it with:  python3 -m pip install -r tools/requirements.txt\n"
+        "       (or:  python3 -m pip install markdown)"
+    )
 
 sys.path.insert(0, str(Path(__file__).parent))
-from genguides import (SIDEBAR_TOGGLE_JS, SYNTAX_TOGGLE_JS,
+from genguides import (SIDEBAR_DRAWER_JS, SYNTAX_TOGGLE_JS,
                        TURMERIC_HIGHLIGHT_JS, GUIDE_CSS,
-                       inject_syntax_toggles, toc_tokens_to_sidebar)
+                       inject_syntax_toggles, toc_tokens_to_sidebar,
+                       build_page_header, build_sidebar, MAIN_SITE)
 from gendocs import render_tree, collect_doc_entries
+import packlib
 
 GITHUB_BASE = 'https://github.com/rjungemann/turmeric-spices'
 SPICES_REPO = Path('../turmeric-spices')
 
-PAGE_HEADER = '''\
-  <header class="site-header">
-    <button class="hamburger" aria-label="Toggle navigation">
-      <span></span><span></span><span></span>
-    </button>
-    <a class="nav-logo" href="https://turmeric-lang.com/">
-      <img src="/logo-icon.svg" width="28" height="28" alt="">
-      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
-    </a>
-    <nav>
-      <a href="https://turmeric-lang.com/docs/html/guides/">Guides</a>
-      <a href="https://turmeric-lang.com/docs/html/api/">API Docs</a>
-      <a href="/docs/html/spices/" class="active">Spices</a>
-      <a href="https://turmeric-lang.com/try">Try It</a>
-    </nav>
-  </header>'''
+# Spice pages are served from spices.turmeric-lang.com, so every site-relative
+# link in the shared chrome has to be re-rooted at the main host.
+PAGE_HEADER = build_page_header(active='Spices', base=MAIN_SITE)
+
+# The spices index is the third of the site's three index pages, so it carries
+# the same filter box the guides and API indexes do -- one topbar, one shape.
+# It filters table rows rather than cards, which is the only difference.
+INDEX_PAGE_HEADER = (
+    build_page_header(active='Spices', base=MAIN_SITE, search='Filter spices')
+    + '\n  <p class="search-no-results">No matching spices.</p>'
+)
+
+INDEX_FILTER_JS = '''\
+  <script>
+  document.addEventListener('DOMContentLoaded', function(){
+    var input = document.querySelector('.search-input');
+    var table = document.querySelector('.spices-table');
+    if (!input || !table) return;
+    var rows = Array.prototype.slice.call(table.tBodies[0].rows);
+    var noResults = document.querySelector('.search-no-results');
+
+    function filter() {
+      var q = input.value.trim().toLowerCase();
+      var shown = 0;
+      rows.forEach(function(tr){
+        var match = !q || tr.textContent.toLowerCase().indexOf(q) !== -1;
+        tr.style.display = match ? '' : 'none';
+        if (match) shown++;
+      });
+      if (noResults) noResults.style.display = (q && shown === 0) ? 'block' : 'none';
+    }
+
+    input.addEventListener('input', filter);
+    input.addEventListener('keydown', function(e){
+      if (e.key === 'Escape') { input.value = ''; filter(); input.blur(); }
+    });
+    document.addEventListener('keydown', function(e){
+      if (e.key === '/' && document.activeElement !== input &&
+          document.activeElement.tagName !== 'INPUT' &&
+          document.activeElement.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        input.focus();
+      }
+    });
+  });
+  </script>'''
 
 
 # ---------------------------------------------------------------------------
@@ -148,8 +187,15 @@ Docs in progress.
 '''
 
 
-def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str) -> None:
-    """Render docs/html/spices/<name>/index.html from the spice's README.md."""
+def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str,
+                      pack_dir: Path | None = None) -> dict | None:
+    """Render docs/html/spices/<name>/index.html from the spice's README.md.
+
+    When `pack_dir` is given, the same rendered body is also written into the
+    docs pack as `spices/<name>.html` -- one rendering pass, two wrappers, so
+    the site page and Try's in-app pane cannot drift. Returns the pack index
+    entry (or None when not emitting a pack).
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     readme = meta['path'] / 'README.md'
 
@@ -171,15 +217,12 @@ def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str) -> None:
     toc_tokens = getattr(conv, 'toc_tokens', [])
 
     sidebar_items = toc_tokens_to_sidebar(toc_tokens)
-    sidebar_html = (
-        '<a class="sidebar-back" href="https://turmeric-lang.com/">&larr; Back to home</a>\n      '
-        '<div style="margin-bottom:1.25rem">'
-        '<a href="../index.html" style="font-size:0.8rem;color:var(--text-sec)">&larr; All Spices</a>'
-        '</div>\n      '
-        '<div style="margin-bottom:1.25rem">'
-        '<a href="api/" style="font-size:0.85rem;color:var(--gold-bright)">API reference &rarr;</a>'
-        '</div>\n      '
-        f'<h3>On this page</h3>\n      <ul>{sidebar_items}</ul>'
+    sidebar_html = build_sidebar(
+        toc=f'      <h3>On this page</h3>\n      <ul>{sidebar_items}</ul>',
+        uplinks=[('../index.html', 'All Spices'), ('api/', 'API reference')],
+        base=MAIN_SITE,
+        extra_titles={'../index.html': 'Every first-party spice',
+                      'api/': f'API reference for tur-{meta["name"]}'},
     )
 
     title = f'tur-{meta["name"]} | Turmeric Spices'
@@ -190,6 +233,7 @@ def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str) -> None:
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html_module.escape(title)}</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
@@ -208,7 +252,7 @@ def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str) -> None:
 </head>
 <body>
 {PAGE_HEADER}
-{SIDEBAR_TOGGLE_JS}
+{SIDEBAR_DRAWER_JS}
   <div class="page-layout">
     <div class="sidebar">
       {sidebar_html}
@@ -227,16 +271,41 @@ def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str) -> None:
 '''
     (out_dir / 'index.html').write_text(html, encoding='utf-8')
 
+    if pack_dir is None:
+        return None
+
+    name = meta['name']
+    rel = f'spices/{name}.html'
+    size = packlib.write_fragment(pack_dir, rel, body_html)
+    description = (meta.get('description', '') or '').strip()
+    return {
+        'slug': name,
+        'path': rel,
+        'title': f'tur-{name}',
+        'category': 'Spices',
+        'description': description,
+        'bytes': size,
+        'words': packlib.search_string(
+            f'tur-{name}', name, description,
+            *packlib.heading_names(toc_tokens),
+            prose=packlib.strip_tags(body_html)),
+    }
+
 
 # ---------------------------------------------------------------------------
 # Per-spice API reference (delegates to gendocs.render_tree)
 # ---------------------------------------------------------------------------
 
-def render_api_reference(meta: SpiceMeta, out_dir: Path):
+def render_api_reference(meta: SpiceMeta, out_dir: Path,
+                         pack_dir: Path | None = None):
     """
     Generate the per-spice API tree under out_dir/api/.
     Returns the parsed module list (for collect_doc_entries), or None when
     the spice has no src/ directory.
+
+    With `pack_dir`, the spice's module fragments also land in the pack under
+    `spices/<spice>/<module>.html` -- namespaced by spice so a module name
+    shared with the stdlib cannot collide.
     """
     src_dir = meta['path'] / 'src'
     if not src_dir.is_dir():
@@ -247,6 +316,16 @@ def render_api_reference(meta: SpiceMeta, out_dir: Path):
         api_out,
         brand=f'tur-{meta["name"]}',
         brand_label=f'tur-{meta["name"]} API',
+        emit_pack=pack_dir,
+        pack_section='spices',
+        pack_slug_prefix=f'{meta["name"]}/',
+        # Served from the spices subdomain, so the shared chrome's `/tour`-style
+        # links have to be re-rooted at the main host.
+        site_base=MAIN_SITE,
+        index_uplinks=[('../', f'tur-{meta["name"]} docs'),
+                       ('../../index.html', 'All Spices')],
+        index_uplink_titles={'../': f'Front page for tur-{meta["name"]}',
+                             '../../index.html': 'Every first-party spice'},
     )
 
 
@@ -291,12 +370,13 @@ def render_top_index(metas: list[SpiceMeta], out_dir: Path) -> None:
         'a per-spice API reference.</p>'
     )
 
-    sidebar_html = (
-        '<a class="sidebar-back" href="https://turmeric-lang.com/">&larr; Back to home</a>\n      '
-        '<h3>About</h3>\n'
-        '      <ul>\n'
-        f'        <li><a href="{GITHUB_BASE}">GitHub repo</a></li>\n'
-        '      </ul>'
+    sidebar_html = build_sidebar(
+        toc=('      <h3>About</h3>\n'
+             '      <ul>\n'
+             f'        <li><a href="{GITHUB_BASE}">Spices on GitHub</a></li>\n'
+             '      </ul>'),
+        base=MAIN_SITE,
+        extra_titles={GITHUB_BASE: 'Spice sources on GitHub'},
     )
 
     html = f'''<!DOCTYPE html>
@@ -305,6 +385,7 @@ def render_top_index(metas: list[SpiceMeta], out_dir: Path) -> None:
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Spices | Turmeric</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
@@ -325,8 +406,8 @@ def render_top_index(metas: list[SpiceMeta], out_dir: Path) -> None:
   </style>
 </head>
 <body>
-{PAGE_HEADER}
-{SIDEBAR_TOGGLE_JS}
+{INDEX_PAGE_HEADER}
+{SIDEBAR_DRAWER_JS}
   <div class="page-layout">
     <div class="sidebar">
       {sidebar_html}
@@ -341,7 +422,7 @@ def render_top_index(metas: list[SpiceMeta], out_dir: Path) -> None:
     Auto-generated by <code>tools/genspices.py</code>
   </footer>
 {TURMERIC_HIGHLIGHT_JS}
-{SYNTAX_TOGGLE_JS}
+{INDEX_FILTER_JS}
 </body>
 </html>
 '''
@@ -363,9 +444,18 @@ def main() -> None:
         help='Write a JSON array of {name, summary, kind, spice} entries to PATH. '
              'Used by `just docs` to fold spice symbols into web/public/doc-names.json.',
     )
+    p.add_argument(
+        '--emit-pack',
+        metavar='DIR',
+        help='Also write chrome-free spice fragments into the docs pack at DIR '
+             '(see tools/genpack.py). Spices absent from this checkout simply '
+             'contribute nothing, so the pack never advertises a page it does '
+             'not carry.',
+    )
     args = p.parse_args()
 
     out_dir = Path(args.out)
+    pack_dir = Path(args.emit_pack) if args.emit_pack else None
 
     spice_dirs = discover_spices()
     readme_path = SPICES_REPO / 'README.md'
@@ -375,16 +465,25 @@ def main() -> None:
 
     print(f'Generating docs for {len(metas)} spices into {out_dir}/')
     all_entries: list[dict] = []
+    pack_entries: list[dict] = []
     for meta in metas:
         print(f'-> {meta["name"]}')
         spice_out = out_dir / meta['name']
         # Front page links to /docs/html/api/style.css via two-level relative path
-        render_front_page(meta, spice_out, style_rel='../../api/style.css')
-        modules = render_api_reference(meta, spice_out)
+        front = render_front_page(meta, spice_out, style_rel='../../api/style.css',
+                                  pack_dir=pack_dir)
+        if front:
+            pack_entries.append(front)
+        modules = render_api_reference(meta, spice_out, pack_dir=pack_dir)
         if modules is None:
             print(f'   (no src/ directory; skipping API reference)')
             continue
         all_entries.extend(collect_doc_entries(modules, spice=meta['name']))
+
+    if pack_dir is not None:
+        # Front pages go in alongside whatever render_api_reference already
+        # merged into the `spices` sidecar.
+        packlib.write_sidecar(pack_dir, 'spices', pack_entries)
 
     render_top_index(metas, out_dir)
     if args.emit_json:

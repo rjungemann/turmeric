@@ -1,4 +1,4 @@
-/* E2 KILL-PROBE (docs/upcoming/v2/cps-dk-sole-effect-lowering-plan.md Sec 9)
+/* E2 KILL-PROBE (docs/archive/cps-dk-sole-effect-lowering-plan.md Sec 9)
  *
  * Question: can a fat-closure fn-value carry a DK*-threading thunk so that
  *   (a) an effect performed inside an INDIRECTLY-called effectful callback

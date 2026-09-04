@@ -30,10 +30,12 @@ defdata Shape
   Circle(:int)          ; radius
   Rect(:int :int)       ; width, height
 
-defn area [s : int] : int
+defn area [s : Shape] : int
   match s
-    Circle(r)   *(3 *(r r))
-    Rect(w h)   *(w h)
+    (Circle r)
+    *(3 *(r r))
+    (Rect w h)
+    *(w h)
 ```
 
 The canonical binary sum is `Either L R` from `stdlib/either.tur`: a value is
@@ -123,22 +125,33 @@ lifted across the sum.
   (Right r)  (use r))
 ```
 
-Sweet-exp equivalent:
+Sweet-exp equivalent -- each arm is a pattern line followed by its body
+line(s); a pattern and its body do **not** share a line, because sweet-exp
+would read the pair as one list:
 
 ```turmeric
 #lang sweet-exp
 
 match e
-  Left(l)   handle-error(l)
-  Right(r)  use(r)
+  (Left l)
+  handle-error(l)
+  (Right r)
+  use(r)
 ```
 
 - Bind a payload to a name (`l`, `r`) to use it in that arm's body.
 - Use `_` to ignore a payload: `(Left _)`.
-- Sub-match a payload that is itself a sum by matching again on the bound
-  variable (or, where supported, by nesting the pattern directly).
+- Sub-match a payload that is itself a sum either by matching again on the
+  bound variable, or by nesting the pattern directly in the field position.
 
 ```turmeric
+;; nested directly
+(match outer
+  (Left n)          n
+  (Right (Nada))    -1
+  (Right (Just k))  k)
+
+;; the same thing with an inner match
 (match outer
   (Left n)   n
   (Right r)  (match r
@@ -152,10 +165,33 @@ Sweet-exp equivalent:
 #lang sweet-exp
 
 match outer
-  Left(n)   n
-  Right(r)  match r
-              Nada()   -1
-              Just(k)  k
+  (Left n)
+  n
+  (Right (Nada))
+  -1
+  (Right (Just k))
+  k
+```
+
+Nesting goes to any depth, and a scalar literal is a pattern too, so a
+specific arm can precede a general one for the same constructor:
+
+```turmeric
+(match e
+  (Lit v)         v
+  (Add (Lit 0) r) (eval-expr r)     ; only when the left operand is 0
+  (Add l r)       (+ (eval-expr l) (eval-expr r)))
+```
+
+Arms are tried in order, and a nested arm that fails falls through to the next
+arm -- including through a failed `when` guard. The nested arms for one
+constructor have to cover it: a later arm for the same constructor binding
+plain names, sub-patterns that provably cover the sub-type, or a `_` arm.
+Otherwise the compiler says so:
+
+```
+match: the nested patterns for constructor 'Add' are not exhaustive --
+add a `(Add ...)` arm binding plain names, or a `_` arm after it
 ```
 
 ## Updating a record variant inside a `match` arm
@@ -167,7 +203,7 @@ through the matched ctor without the caller re-listing every field, and
 `(.field s)` reads the variant's field directly:
 
 ```turmeric
-(defadt Shape :copy
+(defdata Shape :copy
   (Circle [radius : float])
   (Rect   [w : float h : float]))
 
@@ -210,7 +246,7 @@ suppress the diagnostic:
 
 ```turmeric
 (defn unwrap-right [e : int] : int
-  (match #{NonExhaustive} e
+  (match #fx{NonExhaustive} e
     (Right r) r))      ; Left is statically impossible here, by construction
 ```
 
@@ -219,19 +255,16 @@ Sweet-exp equivalent:
 ```turmeric
 #lang sweet-exp
 
-defn unwrap-right [e : int] : int
-  match #{NonExhaustive} e
-    Right(r)  r         ; Left is statically impossible here, by construction
+defn unwrap-right [e : Ei] : int
+  ; Left is statically impossible here, by construction
+  match #fx{NonExhaustive} e
+    (Right r)
+    r
 ```
 
 The marker is the *only* escape hatch; without it a non-exhaustive match does
 not compile. Use it sparingly and leave a comment explaining why the missing
 arm is unreachable.
-
-> Note: this guide's plan ([sum-types-either-plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sum-types-either-plan.md)) originally specced
-> exhaustiveness as a *warning*. The implementation keeps it a hard **error**
-> (the stronger, pre-existing behaviour) and adds `#fx{NonExhaustive}` as the
-> deliberate opt-out -- see that plan's ADR for the rationale.
 
 ## The `Either` module
 

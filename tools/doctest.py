@@ -92,6 +92,7 @@ def main():
 
     total_cases = 0
     total_files = 0
+    annotated = []
 
     for f in tur_files:
         try:
@@ -105,6 +106,12 @@ def main():
             doc = defn.get('docstring')
             if doc:
                 cases.extend(extract_doctest_cases(module['name'], defn['name'], doc))
+                # Cases carrying an explicit `; doctest: <reason>` opt-out.
+                # Reported rather than dropped quietly, so a module that stops
+                # being covered says so instead of just getting smaller.
+                for defn_name, reason in getattr(
+                        extract_doctest_cases, 'last_skipped', []):
+                    annotated.append((module['name'], defn_name, reason))
 
         if not cases:
             continue
@@ -130,6 +137,10 @@ def main():
         print(f'  Generated {out_dir}/{stem}.tur ({len(cases)} cases)')
 
     print(f'\nDone. {total_files} files, {total_cases} testable cases -> {out_dir}/')
+    if annotated:
+        print(f'\n{len(annotated)} example(s) opted out via `; doctest:`:')
+        for mod, defn_name, reason in annotated:
+            print(f'  {mod}:{defn_name} -- {reason}')
 
 
 if __name__ == '__main__':

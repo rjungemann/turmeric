@@ -3,7 +3,7 @@
 ;; *opaque* newtype must monomorphize to a by-value specialization
 ;; (Pair__int__Tag), not fall back to the broken generic carrier template
 ;; `(int64_t){.fst = a, .snd = b}` -- see
-;; docs/reported/generic-struct-opaque-element-miscompile.md.
+;; docs/archive/history/generic-struct-opaque-element-miscompile.md.
 
 (defopaque Tag :int)
 

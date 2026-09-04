@@ -12,7 +12,10 @@
 ; Note there is deliberately no (gc!) below.  Under (gc-enable!) this same
 ; program leaks every cycle; the assertion is that AUTO does not.
 ;
-; Requires --enable=cycle-gc (see expected.flags).
+; No flags file: `cycle-gc` graduated 2026-08-17, so (gc-auto!) is an ordinary
+; call form.  What did NOT change is that AUTO is opt-in -- the (gc-auto!)
+; below is still what turns it on, and a program without that call gets the
+; pure-RC path.  `cycle-gc-graduated-enable-noop` pins the flag-compat shim.
 (defstruct S :move [next : rc<S>])
 
 (defn null-rc-s [] : ptr<void>

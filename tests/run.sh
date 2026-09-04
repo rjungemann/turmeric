@@ -114,6 +114,20 @@ if [ "${TUR_SKIP_CC_WARN_CHECK:-0}" != "1" ]; then
     fi
 fi
 
+# Standing rule from the numeric tower plan (section 1, made standing by N3):
+# _Complex / <complex.h> / the __mul*c3 / __div*c3 compiler-runtime family
+# never appear in generated C -- c2mir (the JIT) has no _Complex, and the
+# helper family would grow the JIT's runtime symbol boundary.  The check
+# itself predates this wiring as a ctest target (CMakeLists tur_no_c_complex);
+# running it here too puts it on the path every `bash tests/run.sh` invocation
+# takes.  Cheap (greps + a few emit-c runs); shares the ratchet opt-out.
+if [ "${TUR_SKIP_CC_WARN_CHECK:-0}" != "1" ]; then
+    if ! bash tests/check-no-c-complex.sh; then
+        echo "tests: no-C-_Complex check failed (see above); aborting." >&2
+        exit 1
+    fi
+fi
+
 # R4 (carrier-crossing-recovery-routing-plan): the audit registry is the single
 # source of truth for which carrier<->concrete crossings are routed.  A new
 # chokepoint call site that forgot its audit row (or a drifted/stale registry)
@@ -151,8 +165,13 @@ fi
 # hardcoded to build/src -- otherwise a non-default build tree (Windows uses
 # build-win/) can't resolve the `-lturi` autolink that reactor/async fixtures
 # emit, and every one of them fails to link.
+# `-Werror=implicit-function-declaration`: an undeclared call in emitted C is
+# always a codegen bug (a runtime prelude the program-scan gate did not emit).
+# Apple clang rejects it outright, so the macOS leg went red on six fixtures
+# that loaded stdlib/serial.tur while gcc 13 on the Linux leg only warned and
+# linked; promoting it to an error here makes both legs see the same thing.
 _tur_build_dir=$(dirname "$TUR")
-export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -fno-strict-aliasing -L${_tur_build_dir}/src}"
+export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -Werror=implicit-function-declaration -fno-strict-aliasing -L${_tur_build_dir}/src}"
 
 # T19: ThreadSanitizer (TSan) support.
 # Set TUR_TSAN=1 to compile and run all fixtures with -fsanitize=thread.
@@ -220,6 +239,26 @@ esac
 if [ "$JOBS" -lt 1 ]; then JOBS=1; fi
 
 RESULTS_DIR="$(mktemp -d -t tur-tests-results-XXXXXX)"
+
+# Sanitizer findings from `tur` ITSELF (not from the programs it emits).
+#
+# The Debug build compiles the compiler -fsanitize=address,undefined WITHOUT
+# -fno-sanitize-recover, so a UBSan finding prints one line to stderr and
+# execution continues.  This suite compares stdout, so such a line has always
+# been invisible: `fat_captures_borrowed` was read uninitialized on 60 fixtures,
+# on every run, for as long as it existed, and nothing ever failed
+# (docs/archive/history/fat-captures-borrowed-read-uninitialized.md).
+#
+# Every phase below already redirects the compiler's stderr to actual.stderr, so
+# scanning it costs one grep per phase.  Findings are collected rather than
+# failed on: turning them into hard failures would have converted 60 silent
+# findings into 60 red fixtures at once, which is how a gate gets disabled
+# instead of fixed.  Set TUR_SANITIZER_GATE=1 to make a finding fail the run.
+# Workers append concurrently; each line is far under PIPE_BUF, and this suite
+# already relies on short appends being atomic for its progress output.
+SANITIZER_LOG="$RESULTS_DIR/sanitizer.log"
+: > "$SANITIZER_LOG"
+export SANITIZER_LOG
 trap 'rm -rf "$RESULTS_DIR" "$_TUR_EMPTY_XDG"' EXIT
 
 # A killed or interrupted run must NEVER print a success-looking summary.
@@ -310,6 +349,18 @@ matches_shard() {
         return 0
     fi
     [ $((ordinal % SHARD_TOTAL)) -eq "$SHARD_INDEX" ]
+}
+
+# Append any sanitizer findings in $1 (a phase's captured stderr) to the shared
+# log, tagged with the fixture and phase.  UBSan's format is
+# `<file>:<line>:<col>: runtime error: <what>`; `: runtime error:` is not
+# produced anywhere in src/ and no expected.diag contains it, so this does not
+# collide with a fixture's own diagnostics.
+note_sanitizer() {
+    local stderr_file="$1" name="$2" phase="$3"
+    [ -s "$stderr_file" ] || return 0
+    grep -- ": runtime error:" "$stderr_file" 2>/dev/null \
+        | sed "s|^|$name\t$phase\t|" >> "$SANITIZER_LOG" || true
 }
 
 write_result() {
@@ -592,6 +643,7 @@ run_happy() {
     if [ "$TUR_EMIT_C_MODE" = "always" ] || [ "$needs_codegen_check" -eq 1 ]; then
         _run_timed "$fixture_timeout" "$TUR" $fixture_flags emit-c "$input" > "$actual_c" 2> "$out_dir/actual.stderr"
         _emit_rc=$?
+        note_sanitizer "$out_dir/actual.stderr" "$name" "emit-c"
         if [ $_emit_rc -ne 0 ]; then
             {
                 if [ $_emit_rc -eq 124 ]; then
@@ -617,6 +669,7 @@ run_happy() {
         # the suite indefinitely.  A timeout here is now a FAIL, not a hang.
         CC="$BUILD_CC" _run_timed "$fixture_timeout" "$TUR" $fixture_flags build "$input" -o "$exe" 2> "$out_dir/actual.stderr"
         _build_rc=$?
+        note_sanitizer "$out_dir/actual.stderr" "$name" "build"
         if [ $_build_rc -ne 0 ]; then
             {
                 if [ $_build_rc -eq 124 ]; then
@@ -657,6 +710,7 @@ run_happy() {
                 > "$actual_stdout" 2> "$actual_stderr"
         fi
         rc=$?
+        note_sanitizer "$actual_stderr" "$name" "run"
     fi
 
     local expected_exit="0"
@@ -698,6 +752,30 @@ run_happy() {
                 echo "    Opt out for one run with TUR_SKIP_CC_WARN_CHECK=1."
             } > "$log_file"
             write_result "FAIL" "$name" "emitted C pointer/integer warning" "$log_file"
+            return
+        fi
+        # Ratchet: function-pointer type confusion at a closure dispatch.
+        #
+        # clang's -fsanitize=function (part of -fsanitize=undefined since
+        # clang 17, so any clang UBSan run of the suite carries it; GCC has no
+        # equivalent) prints this when an indirect call goes through a pointer
+        # whose type disagrees with the callee's definition -- benign on
+        # SysV/AAPCS for same-slot returns, a hard fault under CFI / CET-BTI /
+        # WASM call_indirect.  UBSan default is print-and-continue, so the
+        # fixture PASSES while emitting it and the summary line never shows
+        # the class -- which is how the reactor callback typedefs drifted
+        # twice.  The corpus was sweep-verified at ZERO under clang before
+        # this landed.  See
+        # docs/archive/emitter-thunk-type-return-mismatch.md.
+        if grep -q 'through pointer to incorrect function type' "$actual_stderr"; then
+            {
+                echo "FAIL $name -- indirect call through mismatched function-pointer type"
+                grep 'through pointer to incorrect function type' \
+                    "$actual_stderr" | sed 's/^/    /'
+                echo "    UBSan continues past this, so output may still match; the type"
+                echo "    confusion is the failure.  Opt out with TUR_SKIP_CC_WARN_CHECK=1."
+            } > "$log_file"
+            write_result "FAIL" "$name" "mismatched function-pointer dispatch" "$log_file"
             return
         fi
     fi
@@ -898,6 +976,7 @@ export TUR_TEST_SHARD SHARD_INDEX SHARD_TOTAL
 export TUR_FORCE TUR_STAMP_CACHE
 export TUR_TSAN _tur_timeout_bin TUR_MTIME
 export -f matches_filter matches_shard write_result no_input_fail run_happy run_negative run_happy_worker run_negative_worker
+export -f note_sanitizer
 export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write _run_timed
 
 # Happy fixtures: tests/fixtures/* except tests/fixtures/errors, PLUS the
@@ -908,8 +987,8 @@ export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write _run_timed
 # scan skipped both it and its children, and those children were compiled by
 # NO harness (run-turi.sh scans this deep, but only interprets).  That is
 # exactly where two latent miscompiles sat undisturbed until the J3 jit
-# harness compiled them: docs/archive/typed-result-map-cps-clone-struct-assign.md
-# and docs/archive/typed-slots-nested-specialization-float-garbage.md.  Both
+# harness compiled them: docs/archive/history/typed-result-map-cps-clone-struct-assign.md
+# and docs/archive/history/typed-slots-nested-specialization-float-garbage.md.  Both
 # are fixed, so this scan now covers them and the class cannot re-hide.
 #
 # Detection is structural, not a hard-coded list, and deliberately STRICT: a
@@ -1062,9 +1141,48 @@ if [ "$_INTERRUPTED" -ne 0 ] \
     exit 2
 fi
 
+# Sanitizer findings from the compiler itself.  Reported unconditionally so a
+# regression in this class is visible, but only fatal under TUR_SANITIZER_GATE=1
+# -- see the comment where SANITIZER_LOG is created.
+SAN_COUNT=0
+if [ -s "$SANITIZER_LOG" ]; then
+    SAN_COUNT=$(wc -l < "$SANITIZER_LOG" | tr -d ' ')
+    SAN_FIXTURES=$(cut -f1 "$SANITIZER_LOG" | sort -u | wc -l | tr -d ' ')
+    echo
+    echo "SANITIZER: $SAN_COUNT finding(s) from \`tur\` across $SAN_FIXTURES fixture(s)."
+    echo "  These are UBSan/ASan diagnostics from the COMPILER, not from emitted programs."
+    # Say which configuration is actually running.  The unconditional "they do
+    # not fail the run" was a lie under TUR_SANITIZER_GATE=1 -- the run fails
+    # thirty lines later -- and the advice to set the variable is noise to
+    # someone who already has.
+    if [ "${TUR_SANITIZER_GATE:-0}" = "1" ]; then
+        echo "  TUR_SANITIZER_GATE=1: these are FATAL; the run fails below."
+    else
+        echo "  They do not fail the run (set TUR_SANITIZER_GATE=1 to make them fatal)."
+    fi
+    cut -f2- "$SANITIZER_LOG" | sed 's/value [0-9][0-9]*/value N/' \
+        | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
+    # $SANITIZER_LOG lives under $RESULTS_DIR, which the EXIT trap deletes -- so
+    # printing that path alone leaves a reader (and, once the gate is armed in
+    # CI, a red job) pointing at a file that is already gone.  Copy it somewhere
+    # durable next to the compiler under test before the trap fires.  Best-effort:
+    # an unwritable build dir must not turn a report into a harness failure.
+    SAN_LOG_OUT="${TUR_SANITIZER_LOG_OUT:-$(dirname "$TUR")/sanitizer-findings.log}"
+    if cp "$SANITIZER_LOG" "$SAN_LOG_OUT" 2>/dev/null; then
+        echo "  full log ($SAN_COUNT line(s), fixture<TAB>phase<TAB>finding): $SAN_LOG_OUT"
+    else
+        echo "  full log could not be saved to $SAN_LOG_OUT; dumping it here:"
+        sed 's/^/    /' "$SANITIZER_LOG"
+    fi
+fi
+
 echo "summary: $PASS passed, $FAIL failed"
 if [ $FAIL -ne 0 ]; then
     for f in "${FAILED[@]}"; do echo "  - $f"; done
+    exit 1
+fi
+if [ "${TUR_SANITIZER_GATE:-0}" = "1" ] && [ "$SAN_COUNT" -ne 0 ]; then
+    echo "FAILED: $SAN_COUNT sanitizer finding(s) from the compiler (TUR_SANITIZER_GATE=1)."
     exit 1
 fi
 exit 0

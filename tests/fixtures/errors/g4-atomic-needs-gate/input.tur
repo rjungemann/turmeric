@@ -1,6 +1,0 @@
-;; G4a is gated: without --enable=global-state, `^atomic` is refused by name
-;; rather than accepted and ignored.  A silently-inert `^atomic` would be a
-;; global the program believes is synchronised and is not.
-(def ^atomic ^mut n 0)
-
-(defn main [] : int 0)

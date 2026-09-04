@@ -9,7 +9,7 @@
 ;; `Vec` element type ran the int instance -- a silent wrong result (the bool/float
 ;; vectors printed as if every element tagged to 1).
 ;;
-;; Fix: docs/archive/constrained-instance-element-dispatch-leaks-into-lifted-closures.md
+;; Fix: docs/archive/history/constrained-instance-element-dispatch-leaks-into-lifted-closures.md
 ;; -- such a closure is cloned once per enclosing element-type spec
 ;; (emit_module.c: inner_dispatch / emit_find_dispatch_spec_closure), the clone
 ;; body grounds the constraint var `A` to the concrete element so its `tag` call

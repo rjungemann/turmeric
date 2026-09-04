@@ -1,7 +1,7 @@
 ;; list-homog-byvalue-aggregate-element -- a (list ...) literal whose elements
 ;; are by-value aggregates (Option is a by-value struct) must construct.
 ;;
-;; Root cause (docs/archive/list-homog-helper-carrier-typed-byvalue-aggregate-element.md):
+;; Root cause (docs/archive/history/list-homog-helper-carrier-typed-byvalue-aggregate-element.md):
 ;; the (list ...) macro chains a compile-time homogeneity check
 ;; `tur-list-homog__ [A] [a :A b :A]` over adjacent elements. Its inline-C body
 ;; is a no-op; the type unification that enforces homogeneity already runs at
@@ -19,7 +19,7 @@
 ;; through the typed accessors.
 
 (defn opt-or [o : (Option int) d : int] : int
-  (if (.is-some o) (.value o) d))
+  (if (some? o) (unwrap o) d))
 
 (defn main [] : int
   (let [xs (:: (list (some 42) (some 7) (some 100)) (Cons (Option int)))]

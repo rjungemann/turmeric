@@ -41,7 +41,7 @@
 ;; The multi-use accessors -- chan-send / chan-recv and the async send/recv/try/
 ;; count variants -- declare their handle parameter ^borrow, so sending and
 ;; receiving repeatedly reads the handle without consuming it; only the *-free
-;; operation consumes. See docs/reported/stdlib-linear-handle-borrows.md.
+;; operation consumes. See docs/archive/history/stdlib-linear-handle-borrows.md.
 (defopaque Chan :ptr<void> :linear)
 
 (defopaque AsyncChan :ptr<void> :linear)
@@ -82,7 +82,7 @@
   pthread_cond_init(&ch->not_empty, NULL);
   ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
   ch->recv_waiters = NULL; ch->send_waiters = NULL;
-  return (int64_t)(intptr_t)ch;
+  return (void *)(intptr_t)ch;
   ```)
 ;;; chan-send -- send a value into a synchronous channel, blocking when full.
 ;;;
@@ -226,7 +226,7 @@
   pthread_cond_init(&ch->not_empty, NULL);
   ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
   ch->recv_waiters = NULL; ch->send_waiters = NULL;
-  return (int64_t)(intptr_t)ch;
+  return (void *)(intptr_t)ch;
   ```)
 ;;; async-chan-send -- send a value into an async channel, blocking when full.
 ;;;

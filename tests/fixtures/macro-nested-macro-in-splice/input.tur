@@ -1,4 +1,4 @@
-;; Regression for docs/reported/ct-macro-evaluator-no-function-call-in-splice.md
+;; Regression for docs/archive/history/ct-macro-evaluator-no-function-call-in-splice.md
 ;;
 ;; A nested user macro could not be expanded from inside a `~@` splice, so a
 ;; macro could not recurse over a list to generate the sequence it splices.

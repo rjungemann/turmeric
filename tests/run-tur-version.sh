@@ -4,7 +4,7 @@
 # A manifest could not say which compiler versions a spice is valid under, so
 # every version-skew failure surfaced as an error about the wrong thing: a caret
 # under correct, current source with no mention of the compiler version. See
-# docs/reported/no-compiler-version-constraint-in-manifest.md.
+# docs/archive/history/no-compiler-version-constraint-in-manifest.md.
 #
 # What is asserted here, and why each case matters:
 #

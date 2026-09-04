@@ -16,7 +16,7 @@
 
 (defopaque Rec :ptr<void>)
 (defn mk-rec [a : int b : int] : Rec
-  ```c int64_t *r=(int64_t*)malloc(16); r[0]=a; r[1]=b; return (int64_t)(intptr_t)r; ```)
+  ```c int64_t *r=(int64_t*)malloc(16); r[0]=a; r[1]=b; return (void *)(intptr_t)r; ```)
 
 (definstance Serializable [Rec]
   (serialize [x]
@@ -24,7 +24,7 @@
     buf[0]=16; buf[1]=r?r[0]:0; buf[2]=r?r[1]:0; return buf; ```)
   (deserialize [b]
     ```c int64_t *d=(int64_t*)b+1; int64_t *r=(int64_t*)malloc(16);
-    r[0]=d[0]; r[1]=d[1]; return (int64_t)(intptr_t)r; ```))
+    r[0]=d[0]; r[1]=d[1]; return (void *)(intptr_t)r; ```))
 
 ;; the captured loop reads its Rec config.
 (defn run-loop [r : Rec] : int

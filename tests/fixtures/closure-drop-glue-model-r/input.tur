@@ -4,7 +4,8 @@
 ;; TUR_CLOSURE_DROP recovers that header and frees the BASE allocation
 ;; (env - sizeof(void*)) -- header-aware, leak-clean, no double-free.
 ;;
-;; Built with --enable=closure-drop-glue (see the sibling `flags` file).
+;; The Model R header ABI is unconditional (closure-drop-glue graduated
+;; 2026-07-22); this used to name a sibling `flags` file that no longer exists.
 ;; Verifies the ABI plumbing: construction prepends the header, dispatch
 ;; through fat[0] is unaffected, and the generic drop frees the right pointer.
 

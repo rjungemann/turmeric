@@ -63,7 +63,7 @@ typedef enum SubstructKind {
  *              (KIND_ARROW=1 means * -> *, KIND_ARROW2=2 means * -> * -> *, ...)
  *   0xFFFE  -- KIND_TYPEROW (kind-level `List Type`; a row of types, e.g.
  *              the `[Pos Vel]` component row of an ECS Query -- see
- *              docs/reported/variadic-hkt-rows-missing.md). A sentinel, not
+ *              docs/archive/history/variadic-hkt-rows-missing.md). A sentinel, not
  *              an arrow kind: a row is a first-class kind, not a constructor
  *              you apply, so kind_apply_one is the identity on it.
  *   0xFFFF  -- KIND_ROW (effect row variable; sentinel, not an arrow kind)
@@ -178,13 +178,19 @@ typedef enum TypeKind {
      * Two keywords with the same name are pointer-identical; eq is `==` and
      * hashing reads a precomputed field. */
     TY_SYM,          /* :Sym -- interned runtime symbol (const struct __tur_sym *) */
-    /* Variadic HKT rows (docs/reported/variadic-hkt-rows-missing.md, Layer 2):
+    /* Variadic HKT rows (docs/archive/history/variadic-hkt-rows-missing.md, Layer 2):
      * a compile-time-only *row of types* -- an ordered list of element types,
      * surface-spelled `#row{T1 T2 ...}`.  hkt_kind == KIND_TYPEROW.  Used as a
      * type argument to a row-parameterised constructor (e.g. an ECS Query over
      * `#row{Pos Vel}`); never the type of a runtime value, so it erases at
      * codegen like TY_TYPECLASS / TY_GLOBAL. */
     TY_TYPEROW,
+    /* Stage 1 (macro-system-direction-plan): compile-time syntax object.
+     * A Syntax value wraps a reader Form*.  It exists only in the
+     * interpreter (TURI_SYNTAX) and, later, in macro-time evaluation --
+     * never as the type of a compiled runtime value, so it erases at
+     * codegen like TY_TYPECLASS / TY_TYPEROW. */
+    TY_SYNTAX,
 } TypeKind;
 
 /* SS5: Global protocol interaction tree (compile-time only, arena-allocated).
@@ -308,6 +314,22 @@ typedef struct AdtDef {
     bool        is_heap;
     /* Phase G1: GADT flag and type parameters */
     bool        is_gadt;         /* true for defgadt, false for defdata */
+    /* SR1 (sum-representation-plan): a constructor field names this ADT, so the
+     * type is self-recursive -- `(TPair :Term :Term)`, `(SBind :int :Term
+     * :Subst)`, `(StCons :Subst :Stream)`.
+     *
+     * Recorded at declaration time because it cannot be recovered afterwards: a
+     * recursive field rides the int64 carrier and its CtorField.full_type is
+     * deliberately left NULL (recording a carrier-ADT full_type would
+     * misclassify the field READ), so nothing downstream can tell `(SBind :int
+     * :Term :Subst)` from `(SBind :int :int :int)`.
+     *
+     * The layout is finite either way -- the carrier field is one word -- so
+     * this is not a soundness gate; adt_graph_reaches is.  It is the SR1/SR4
+     * phase boundary: SR1 covers non-recursive sums, and the recursive ones are
+     * SR4, which is blocked on library source that ascribes carrier-erased
+     * results back to a sum type (stdlib/logic.tur). */
+    bool        is_self_recursive;
     const char **type_params;    /* arena-allocated array of type param names (interned) */
     uint8_t     n_type_params;
     /* TP1/TP2: arena-alloc'd Kind array, one per type_params entry.
@@ -347,15 +369,35 @@ typedef struct AdtDef {
      * skip an opaque one -- it stays the int64 carrier with its name kept only
      * for nominal identity (typeclass dispatch, REPL type tags, mangling). */
     bool        is_opaque;
-    /* sealed-opaque experiment (docs/upcoming/sealed-opaque-plan.md): set by the
-     * `:sealed` attribute on a defopaque.  `::` is a COERCING cast, so an
-     * ordinary opaque can always be unwrapped to its carrier and re-wrapped as a
-     * fresh value -- which bounds every guarantee built on the handle (see
-     * docs/reported/frozen-region-aliasing-via-coercing-cast.md).  When this is
-     * set AND the experiment is enabled, elab_ascribe refuses to cross the
-     * type/representation boundary outside `sealed_module`.  Parsed and recorded
-     * unconditionally; only the ENFORCEMENT is gated, so adopting `:sealed`
-     * downstream does not break consumers who have not opted in. */
+    /* opaque-pointer-c-spelling (docs/archive/opaque-pointer-c-spelling-
+     * gate-results.md): true iff this opaque newtype's DECLARED base type is a
+     * pointer -- `(defopaque H :ptr<void>)`, `(defopaque H :ptr)`, `(defopaque
+     * H :ptr<T>)`.  Before this flag the base form was parsed for POSITION only
+     * (to find where the trailing attributes start) and then discarded, so the
+     * declared base was not recoverable anywhere downstream.  Read only by
+     * `adt_opaque_c_names_as_pointer` (types.c), which is seam-gated. */
+    bool        opaque_base_is_ptr;
+    /* option-niche: set by the `:non-null` attribute on a pointer-based
+     * defopaque -- `(defopaque String :ptr<void> :non-null)`.  A DECLARATION by
+     * the type's author that its valid values exclude the null pointer (every
+     * constructor allocates; no producer returns 0), which is the soundness
+     * condition for `(Option T)` niche filling.  This replaces the former
+     * hard-coded String/StringBuilder rows in the eligibility allowlist: the
+     * claim now lives at the definition site, next to the constructors it is a
+     * claim about.  It is a claim the compiler cannot prove -- inline-C or a
+     * coercing `::` can still smuggle a 0 -- so the niche `Some` ctor also
+     * checks it at construction and aborts loudly rather than letting
+     * `(some null)` silently read back as `(none)`.  Only legal on a pointer
+     * base (elab_defopaque rejects it elsewhere); read by
+     * `sr3_payload_is_nonnull_pointer` (types.c). */
+    bool        opaque_non_null;
+    /* sealed-opaque (GRADUATED 2026-08-17, docs/archive/sealed-opaque-plan.md):
+     * set by the `:sealed` attribute on a defopaque.  `::` is a COERCING cast,
+     * so an ordinary opaque can always be unwrapped to its carrier and re-wrapped
+     * as a fresh value -- which bounds every guarantee built on the handle (see
+     * docs/archive/frozen-region-aliasing-via-coercing-cast.md).  When this is
+     * set, elab_ascribe refuses to cross the type/representation boundary
+     * outside `sealed_module`. */
     bool             sealed;
     /* The module that declared this def, or NULL for a moduleless top level.
      * Interned, so compare by pointer against `e->current_module_name`.  Only
@@ -423,7 +465,7 @@ static inline bool adt_uses_named_layout(const AdtDef *def) {
  *
  * Defined in types.c (needs the complete `struct Type` to inspect ctor field
  * full_types, which are only forward-declared here).  See the definition and
- * docs/upcoming/struct-adt-convergence-s1-bridging-findings.md for the gate. */
+ * docs/archive/history/struct-adt-convergence-s1-bridging-findings.md for the gate. */
 bool adt_is_byvalue_product(const AdtDef *def);
 /* B4 (byvalue-recursive-carrier): true when `def` is a single-variant,
  * single-field recursive carrier wrapper whose sole field is an (F Self)
@@ -432,6 +474,9 @@ bool adt_is_byvalue_product(const AdtDef *def);
  * reinterpreting the carrier (no heap box, no deref).  (B4 graduated; always
  * active.) */
 bool adt_is_byval_recursive_carrier_wrapper(const AdtDef *def);
+/* `arg_def` and `functor_def` form a fixpoint pair (Expr/ExprF, Re/ReF): their C
+ * typedefs are mutually recursive and only the carrier breaks the cycle. */
+bool adt_is_fixpoint_partner_of(const AdtDef *arg_def, const AdtDef *functor_def);
 /* CONV-S1 (slice 3): true when a by-value ADT product is large enough (>16
  * bytes) to use the struct-style `const tur_adt_<Name> *` pass-by-pointer ABI. */
 bool adt_byval_pass_by_ptr(const AdtDef *def);
@@ -548,6 +593,12 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         /* Variadic HKT rows: a type-level row is compile-time only -- it never
          * names a runtime value, so the copy/move discipline is moot; COPY. */
         case TY_TYPEROW:
+            return CK_COPY;
+        /* Stage 1/2 (macro-system-direction-plan): a Syntax value is an
+         * arena-resident Form* -- freely copyable, like TY_SYM.  Falling
+         * into the CK_MOVE default made `(syntax-list f x x)` a
+         * use-after-move error in defmacro* bodies. */
+        case TY_SYNTAX:
             return CK_COPY;
         case TY_UNKNOWN:
         default:
@@ -673,8 +724,7 @@ typedef struct Type {
              * passed as a rest argument does NOT escape and the CALLER may free it
              * at scope exit (per-binding-once, so the duplicate-argument aliasing
              * hazard of a callee-side per-apply free does not arise).  Set only
-             * under `--enable=closure-drop-glue`; default false keeps flag-off
-             * codegen byte-identical. */
+             * unconditionally since closure-drop-glue graduated (2026-07-22). */
             bool rest_borrow;
             /* LS4: index of the parameter whose lifetime the borrow return is
              * tied to (the returned &'a T aliases this argument's storage), or
@@ -688,8 +738,9 @@ typedef struct Type {
              * protocol (thunk = slot 0, env = the box) for all arities; a bare
              * TY_FN coerces to a boxed one of the same signature via the
              * EX_FN_TO_FAT auto-shim, never the reverse.  See
-             * docs/upcoming/closure-first-class-type-plan.md.  B-0 only plumbs
-             * the bit; nothing sets it true yet. */
+             * docs/archive/history/closure-first-class-type-plan.md (B-0..B-4
+             * shipped: the bit is set at ~10 sites -- fn-typed struct/ADT
+             * fields of arity <= 4 among them -- and read widely). */
             bool boxed;
             /* typed-c-abi-function-pointers: true when this TY_FN denotes a
              * bare C-ABI function pointer `R (*)(A...)` -- spelled `(c-fn
@@ -701,7 +752,7 @@ typedef struct Type {
              * (a boxed fat box) cannot satisfy a cfnptr parameter, while a
              * *captureless* bare fn of the same signature coerces in (a
              * captureless fn IS a bare code pointer at the C ABI).  See
-             * docs/reported/typed-c-abi-function-pointers.md. */
+             * docs/archive/history/typed-c-abi-function-pointers.md. */
             bool cfnptr;
             /* sized-types-cross-param-unification: per-parameter raw type
              * annotation Form*, retained so call-site elaboration can
@@ -1136,6 +1187,10 @@ static inline Type type_ptr(struct Type *inner) {
 /* SYM0: interned runtime symbol type (-Xsymbols) */
 #define TYPE_SYM      (type_simple(TY_SYM, CK_COPY))
 
+/* Stage 1 (macro-system-direction-plan): compile-time syntax object type.
+ * Interpreter/macro-time only; never a compiled runtime value. */
+#define TYPE_SYNTAX   (type_simple(TY_SYNTAX, CK_COPY))
+
 /* Phase 5: ref<T> type constructor */
 static inline Type type_ref(TypeKind inner) {
     Type t = {0};
@@ -1467,7 +1522,7 @@ Type type_app_fill_hole(Arena *a, Type head, Type elem, Span span);
  * `fn` carries an opaque/struct head -- without this, the application inherits
  * the default CK_COPY and the linear-discipline checker silently treats a
  * value of type `(WriteCap T)` as plain copyable.  See
- * docs/reported/parametric-linear-opaque-not-enforced.md. */
+ * docs/archive/history/parametric-linear-opaque-not-enforced.md. */
 void propagate_app_discipline(Type *app, const Type *fn);
 
 /* IT0: Union type constructor.
@@ -1744,6 +1799,9 @@ Type         substitute_adt_app_type_owned(const Type *t,
  * clone_struct_app_type allocate for a compound (TY_APP) result.  A no-op on a
  * leaf Type, so it is safe to call unconditionally on any substitute result. */
 void         free_struct_app_type(Type t);
+/* Deep-clone a Type as an OWNED spine (TY_APP nodes malloc'd, leaves by value)
+ * -- release with free_struct_app_type.  A leaf is returned unchanged. */
+Type         clone_struct_app_type(Type t);
 /* TS4P1: ADT-app (polymorphic ADT monomorphisation) registry. */
 void         type_codegen_reset_adt_apps(void);
 void         type_codegen_emit_adt_apps(Buf *out);
@@ -1754,7 +1812,7 @@ char        *type_adt_app_ctor_suffix(Type t);
 const char  *adt_byval_c_name(const AdtDef *def);
 const char  *adt_heap_ptr_c_name(const AdtDef *def);
 /* Parametric-by-value monomorphisation (heavy prerequisite for CONV-S1
- * graduation; see docs/upcoming/parametric-adt-byvalue-plan.md).  True when t is
+ * graduation; see docs/archive/parametric-adt-byvalue-plan.md).  True when t is
  * a concrete monomorphisation of a single-variant non-GADT parametric flat
  * product whose every monomorphised field is by-value-able.  LIVE (P2-P4) --
  * both crossings (match/field-access and ctor-field box/unbox) are wired. */
@@ -1765,6 +1823,25 @@ bool         adt_app_is_byvalue_product(Type t);
  * Takes precedence over the B4 wide-element int64 box. */
 bool         adt_field_is_ros_pointer_box(const struct AdtDef *owner,
                                           const Type *resolved);
+/* SR3 slice A (null-None): true when `ctor` is the stdlib Option's nullary
+ * tag-0 `None` -- the one constructor whose CARRIER form is the null pointer
+ * (the historical none-as-NULL every reader already accepts), so its carrier
+ * ctors return 0 instead of mallocing a box whose only content is tag 0. */
+bool         adt_ctor_is_null_none(const struct AdtDef *def,
+                                   const struct CtorDef *ctor);
+/* SR3 slice B (option niche, default ON since 2026-09-03; TUR_OPTION_NICHE=0
+ * restores the tagged form): true when
+ * `t` is an `(Option P)` monomorph carried AS its payload pointer -- 8 bytes,
+ * `(none)` == NULL, no tag word.  Eligibility is an explicit allowlist of
+ * payload types whose valid values exclude 0; see the definition for why
+ * `:heap`-ness is not the condition and `Cons` fails it. */
+bool         adt_app_is_niche_option(Type t);
+/* opaque-pointer-c-spelling (GRADUATED 2026-08-28): true when `def` is an
+ * opaque newtype declared over a pointer (`(defopaque String :ptr<void>)`), so
+ * type_c_name spells it `void *` instead of the `int64_t` carrier word --
+ * making an opaque handle distinguishable from a tagged box at the emitter's
+ * `strcmp(cname, "int64_t")` sites. */
+bool         adt_opaque_c_names_as_pointer(const struct AdtDef *def);
 /* B4 (slice 2): true when `t` is a wide (>8 byte) by-value ADT -- one that must
  * ride a heap box when stored as a parametric carrier monomorph element. */
 bool         type_is_wide_byval_adt(Type t);
@@ -1798,13 +1875,67 @@ typedef enum ReprForm {
 } ReprForm;
 
 ReprForm     repr_of(const Type *t, ReprPosition pos);
+/* container-element-form-plan CE1: the ONE answer every Vec element site
+ * consults.  CE_WORD: the value's one-word form is stored in the slot
+ * directly -- scalars, cstr, :heap pointers, pointer opaques, and a niche
+ * `(Option P)` (the default since 2026-09-03), whose word IS its payload
+ * pointer.  CE_BOX: the slot holds a heap box pointer -- by-value aggregates
+ * (16-byte Option monomorphs, wide products), exactly as before.  Everything
+ * but the niche row restates prior behavior: under TUR_OPTION_NICHE=0
+ * adt_app_is_niche_option is false everywhere and this is repr_of's
+ * container answer verbatim, so the default path cannot move. */
+typedef enum { CE_WORD = 0, CE_BOX = 1 } ContainerElemForm;
+ContainerElemForm container_elem_form(Type elem);
+/* Increment 4 stage 3: the binding-context sibling the param-position
+ * boundary note pre-registered.  A fn-typed value's representation is decided
+ * by per-BINDING flags (`is_poly_fn`, `is_fat`) that elaboration sets and that
+ * the Type does not carry, so `repr_of(type, pos)` alone mislabels every fn
+ * param.  This overload consults those flags first and delegates to `repr_of`
+ * otherwise.  Declared here (with a forward-declared Binding) rather than in a
+ * second decision function, so the campaign keeps ONE home for the question. */
+struct Binding;
+ReprForm     repr_of_binding(const struct Binding *b, ReprPosition pos);
 const char  *repr_form_name(ReprForm f);
 const char  *repr_position_name(ReprPosition pos);
+
+/* Increment 4 stage 3 -> R3: the shadow instrument has two modes.
+ *
+ *   MEASUREMENT (`--emit-abi-trace`): every disagreement is one stderr line
+ *   and nothing aborts, so a sweep collects the whole list.  This is how each
+ *   position was calibrated.
+ *
+ *   ENFORCEMENT (Debug builds, no flag): a disagreement is an ICE.  Licensed
+ *   only because stage 3's whole position list runs silent -- the routing
+ *   plan's rule is that the ICE comes AFTER the chokepoints exist, never
+ *   before.  `TUR_REPR_NO_SHADOW_ICE` downgrades it to a warning, mirroring
+ *   `TUR_ABI_NO_ROUTE_ICE` on the sibling R3 assert.
+ *
+ * `known` marks a pinned, documented disagreement (today: the container-elem
+ * TY_APP row).  A known row logs under trace and is silent otherwise -- it is
+ * a work list, not a defect, and must never abort a build. */
+/* The fn-PARAM routing answer.  Defined in elab_fns.c, where its two gate
+ * predicates live; declared here so the repr_* family reads from one header.
+ * See docs/archive/repr-coverage-census.md for why this signature exists --
+ * `repr_of(type, pos)` cannot answer it, because the routing depends on the
+ * binding's substructural flags as well as the annotation's shape. */
+ReprForm     repr_of_fn_param(const struct Binding *b, const Type *ann);
+
+bool         repr_shadow_active(void);
+void         repr_shadow_disagree(const char *site, bool known,
+                                  const char *line);
 /* Parametric-by-value: app-aware siblings of adt_byval_pass_by_ptr /
  * adt_is_byvalue_product -- a concrete flat-product ADT-app (`(Pair2 int
  * float)`) is laid out as its by-value monomorph aggregate, so it shares the
  * >16-byte pass-by-pointer size gate and the by-value-product representation
  * decision (the latter covering both the non-parametric ADT and the app). */
+/* Size of a by-value parametric monomorph: tag word (sums only) + widest
+ * substituted variant.  0 when `t` is not a by-value monomorph.  The single
+ * source for every width threshold on such a value -- pbp (> 16) and the b4box
+ * closure slot (> 8). */
+size_t       adt_app_byval_value_size_bytes(Type t);
+/* b4box closure-slot width -- see the definition's comment for why this is
+ * separate from type_is_wide_byval_adt (which also drives ADT field layout). */
+bool         type_is_b4box_closure_slot(Type t);
 bool         adt_app_byval_pass_by_ptr(Type t);
 bool         type_is_byvalue_adt_product(Type t);
 /* Phase E: Typed function-pointer typedef registry for unboxed fn struct fields. */

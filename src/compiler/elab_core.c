@@ -75,6 +75,9 @@ TypeKind typekind_from_symbol(const char *name) {
     if (strcmp(name, "any") == 0) return TY_ANY;
     /* SYM0: interned runtime symbol type (-Xsymbols) */
     if (strcmp(name, "Sym") == 0) return TY_SYM;
+    /* Stage 1 (macro-system-direction-plan): compile-time syntax object.
+     * Interpreter/macro-time only; a compiled runtime value never has it. */
+    if (strcmp(name, "Syntax") == 0) return TY_SYNTAX;
     return TY_UNKNOWN;
 }
 
@@ -88,7 +91,7 @@ TypeKind typekind_from_symbol(const char *name) {
  *    *next* parameter and are NOT slots -- counting them over-states the arity,
  *    which made a saturated call look under-saturated and synthesised a bogus
  *    extra-arg partial-application wrapper that failed to C-compile
- *    (docs/reported/pap-defmodule-fat-fn-too-many-args.md);
+ *    (docs/archive/history/pap-defmodule-fat-fn-too-many-args.md);
  *  - a fused `:T` (F_KEYWORD) or spaced `: T` (F_TYPE_ANN) annotates the most
  *    recently opened slot;
  *  - scalar primitive annotations (float/bool/cstr/sized numerics/...) are
@@ -401,6 +404,13 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     ls[lsp++] = cur->as.set_field_.value;
                     ls[lsp++] = cur->as.set_field_.receiver;
                     break;
+                /* Mirror the main traversal's `any` widen / reader arms, so a
+                 * local bound inside one of their operands is registered as
+                 * locally defined rather than reported free. */
+                case EX_UNION_INJECT: ls[lsp++] = cur->as.union_inject_.value;  break;
+                case EX_ANY_TYPE_OF:  ls[lsp++] = cur->as.any_type_of_.value;   break;
+                case EX_ANY_IS:       ls[lsp++] = cur->as.any_is_.value;        break;
+                case EX_ANY_CAST:     ls[lsp++] = cur->as.any_cast_.value;      break;
                 case EX_MAKE_STRUCT:
                     for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--)
                         ls[lsp++] = cur->as.make_struct_.field_values[i-1];
@@ -876,6 +886,25 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 stack[sp++] = cur->as.set_field_.receiver;
                 stack[sp++] = cur->as.set_field_.value;
                 break;
+            /* perform-in-fn-with-any-param-has-no-cps-lowering: the `any` widen
+             * and its three readers, for the same reason the catch forms below
+             * were added -- an unwalked node kind falls to `default:` and its
+             * operand's free variables are silently lost.  Here that surfaced as
+             * `'v' undeclared` in a lifted CPS continuation helper: `(is? v Pt)`
+             * after a `perform` is delegated as a CT_LETRAW, whose capture set is
+             * exactly this walk's answer, so a missed `v` never rode the env. */
+            case EX_UNION_INJECT:
+                stack[sp++] = cur->as.union_inject_.value;
+                break;
+            case EX_ANY_TYPE_OF:
+                stack[sp++] = cur->as.any_type_of_.value;
+                break;
+            case EX_ANY_IS:
+                stack[sp++] = cur->as.any_is_.value;
+                break;
+            case EX_ANY_CAST:
+                stack[sp++] = cur->as.any_cast_.value;
+                break;
             /* Phase 19: Algebraic effects */
             case EX_PERFORM:
                 for (uint32_t i = cur->as.perform_.perform->n_args; i > 0; i--) {
@@ -908,6 +937,50 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
              * lambda is closure-converted).  For the raw form, recursively
              * collect the receiver body's free vars excluding its own params and
              * merge them. */
+            /* httpd-mw-recover-unblocked-but-unwritten (C)/(D): a catch
+             * boundary's THUNK is a lambda like call/cc's receiver, and its
+             * free variables are free in the enclosing scope too.  Neither
+             * catch form was walked here at all (they fell through to
+             * `default:`), so a closure whose only use of an enclosing name
+             * was inside `(catch-unwind (fn [] ... name ...))` never captured
+             * it -- and the lifted thunk's env-fill then referenced a name
+             * that is not in scope there: `'next_1337' undeclared`.
+             * Same two receiver shapes as call/cc, so the same handling. */
+            case EX_CATCH_UNWIND:
+            case EX_CATCH_PANIC_OF: {
+                const Expr *rf = (cur->kind == EX_CATCH_UNWIND)
+                                     ? cur->as.catch_unwind_.thunk
+                                     : cur->as.catch_panic_of_.thunk;
+                while (rf && rf->kind == EX_ASCRIBE) rf = rf->as.ascribe_.inner;
+                FnDef *rfn = NULL;
+                if (rf && rf->kind == EX_FN)          rfn = rf->as.fn_.fn;
+                else if (rf && rf->kind == EX_FN_DEF) rfn = rf->as.fn_def_.fn;
+                if (rfn && rfn->body) {
+                    uint32_t sub_n = 0;
+                    Binding **sub = collect_free_vars(rfn->body, rfn->params,
+                                                      rfn->n_params,
+                                                      self_exclude, n_self_exclude,
+                                                      &sub_n);
+                    for (uint32_t si = 0; si < sub_n; si++) {
+                        Binding *sb = sub[si];
+                        if (!sb || sb->is_global) continue;
+                        bool skip = false;
+                        for (uint32_t i = 0; i < n_params; i++) if (params[i] == sb) { skip = true; break; }
+                        for (uint32_t i = 0; !skip && i < n_local; i++) if (local_defs[i] == sb) skip = true;
+                        for (uint32_t i = 0; !skip && i < n; i++) if (result[i] == sb) skip = true;
+                        if (skip) continue;
+                        if (n >= cap) {
+                            cap = cap ? cap * 2 : 8;
+                            result = (Binding **)realloc(result, cap * sizeof(Binding *));
+                        }
+                        result[n++] = sb;
+                    }
+                    free(sub);
+                } else if (rf) {
+                    stack[sp++] = (Expr *)rf;   /* EX_CLOSURE folds captures */
+                }
+                break;
+            }
             case EX_CALLCC: {
                 const Expr *rf = cur->as.callcc_.fn;
                 while (rf && rf->kind == EX_ASCRIBE) rf = rf->as.ascribe_.inner;
@@ -1388,7 +1461,7 @@ bool is_binding_consumed(const Expr *body, Binding *binding) {
     return false;
 }
 
-/* set-bang-rc-release (docs/reported/set-bang-does-not-release-old-rc-value.md).
+/* set-bang-rc-release (docs/archive/history/set-bang-does-not-release-old-rc-value.md).
  *
  * An rc-managed `^mut` binding owns exactly ONE strong reference for its whole
  * lifetime: its init takes the +1 and the scope-exit auto-drop releases it.
@@ -1915,6 +1988,8 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_raw_memset = intern_cstr(st, "raw-memset");
     /* Phase U3: Unsafe primitives - FFI */
     e->sym_c_call = intern_cstr(st, "c-call");
+    e->sym_call_ptr = intern_cstr(st, "call-ptr");
+    e->sym_callback_ptr = intern_cstr(st, "callback-ptr");
     e->sym_dlopen = intern_cstr(st, "dlopen");
     e->sym_dlsym = intern_cstr(st, "dlsym");
     e->sym_dlclose = intern_cstr(st, "dlclose");
@@ -1944,6 +2019,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_gc_cand_hw       = intern_cstr(st, "gc-candidate-high-water");
     /* Phase 6 */
     e->sym_defmacro = intern_cstr(st, "defmacro");
+    e->sym_defmacro_star = intern_cstr(st, "defmacro*");
     e->sym_quote = intern_cstr(st, "quote");
     e->sym_quasiquote = intern_cstr(st, "quasiquote");
     e->sym_unquote = intern_cstr(st, "unquote");
@@ -1964,6 +2040,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->kw_linear = intern_cstr(st, "linear"); /* LT4 */
     e->kw_affine = intern_cstr(st, "affine");
     e->kw_sealed = intern_cstr(st, "sealed");   /* sealed-opaque experiment */
+    e->kw_non_null = intern_cstr(st, "non-null"); /* option-niche eligibility */
     e->kw_heap = intern_cstr(st, "heap");
     e->kw_no_auto_ctor = intern_cstr(st, "no-auto-ctor"); /* CTOR-V0 opt-out */
     /* Phase G0: ADT registry */
@@ -2089,6 +2166,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase M0: Module system */
     e->sym_defmodule = intern_cstr(st, "defmodule");
     e->sym_export = intern_cstr(st, "export");
+    e->sym_export_from = intern_cstr(st, "export-from");
     e->sym_effect = intern_cstr(st, "effect");
     e->sym_export_mut = intern_cstr(st, "mut");   /* G3: (export (mut g)) */
     e->sym_import = intern_cstr(st, "import");
@@ -2099,6 +2177,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_is_q    = intern_cstr(st, "is?");       /* TY3: (is? x T) type test */
     e->kw_as = intern_cstr(st, "as");   /* same interned symbol, used as :as keyword */
     e->kw_refer = intern_cstr(st, "refer");
+    e->kw_for_macros = intern_cstr(st, "for-macros"); /* Stage 3 macro-time imports */
     e->has_defmodule = false;
     e->current_module_name = NULL;
     e->current_module = NULL;
@@ -2216,7 +2295,7 @@ MacroDef *elab_lookup_macro(Elab *e, const Symbol *name) {
          *   companion) during W's body re-elaboration -- the helper fell back
          *   to being elaborated as a regular function call, and any vec
          *   argument hit the data-literals lowering with unbound symbols.
-         *   See docs/reported/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md. */
+         *   See docs/archive/history/cross-module-wrapper-macro-vec-arg-elaborated-as-expression.md. */
         if (m->is_referred) return m;
         if (m->defining_module_name == NULL) return m;
         if (m->defining_module_name == e->current_module_name) return m;
@@ -2359,6 +2438,50 @@ bool return_type_pointer_scalar_reverse_conflict(TypeKind declared, Type body) {
     return body.kind == TY_CSTR;
 }
 
+/* nil-tail-not-checked-against-declared-return: a `nil`-typed body under a
+ * declared non-nil return.  The dispatcher's other predicates are each targeted
+ * at one confusable PAIR of types, and TY_NIL had no predicate at all -- so
+ * `(defn f [] : int nil)` was accepted and returned 0, while every other wrong
+ * tail (`"hello"`, `1.5`, `true`) was already rejected.
+ *
+ * Worth more than its repro's arity suggests: `nil` is what a lot of things
+ * collapse to.  `defmacro` / `defclass` / `deftype` all elaborate to
+ * EX_NIL_LIT once registered, and a void-returning call (`println`) is nil-typed
+ * too, so this hole is what made OTHER mistakes silent -- a missing close paren
+ * that swallowed the real tail among them.
+ *
+ * The caller decides `checkable`, and it carries TWO facts this predicate
+ * cannot see:
+ *
+ *  - **The return was written down.** `return_kind` is initialized to TY_NIL, so
+ *    an unannotated function and an explicit `: void` are the same TypeKind
+ *    here.  An unannotated function infers its return from its body and must not
+ *    be held to a return it never declared.
+ *  - **The tail is a nil LITERAL** (EX_NIL_LIT), not merely nil-TYPED.  This is
+ *    the deliberate scope line.  Widening to any nil-typed tail also rejects
+ *    `(defn main [] : int (println ...))` -- a void call in tail position -- which
+ *    is the idiomatic entry point here and 25 fixtures in this corpus.  Whether
+ *    that shape should be an error is a real question, but a much larger one
+ *    than this check, and the reported defect does not need it: the shapes that
+ *    made this hole expensive (`defmacro` / `defclass` / `deftype` collapsing to
+ *    EX_NIL_LIT once registered, a missing close paren swallowing the real tail)
+ *    all land on the literal.  See the report's "What narrows it" section.
+ *
+ * `: void` / `: nil` keeps accepting a nil tail either way -- that is this
+ * predicate's own job, below. */
+bool return_type_nil_body_conflict(TypeKind declared, Type body,
+                                   bool checkable) {
+    if (!checkable) return false;
+    if (body.kind != TY_NIL) return false;
+    if (declared == TY_NIL) return false;   /* `: void` / `: nil` -- correct */
+    /* A tyvar return is inferred or substituted later; TY_ANY absorbs anything;
+     * TY_NEVER is unreachable-typed.  None of the three is a commitment this
+     * check can hold the body to. */
+    if (declared == TY_TYVAR || declared == TY_ANY || declared == TY_NEVER)
+        return false;
+    return true;
+}
+
 /* carrier-aware-return-unification Phase 2b: a `bool`-vs-non-bool-integer return
  * mismatch.  `bool` and the integer family share the int64 0/1 representation,
  * so the carrier ABI cannot see the swap -- but the language already treats them
@@ -2440,12 +2563,13 @@ bool return_type_carrier_aggregate_conflict(Type declared, Type body) {
  * (nominal -> register-class -> pointer-scalar commit -> pointer-scalar reverse)
  * and returns the first conflict.  `cls` calibrates two axes against the carrier
  * ABI:
- *   - Register-class (float-vs-non-float): symmetric for both defn classes
- *     (a float never rides the int64 carrier, so a float-vs-concrete-non-float
- *     result is always an xmm-vs-GP miscompile); commit-direction-only
- *     (declared float) for RET_CLASS_CARRIER_METHOD, where the per-instance emit
- *     path resolves a non-float-declared / float-body method to its real
- *     register class.
+ *   - Register-class (float-vs-non-float): symmetric for EVERY class as of
+ *     2026-08-16 (a float never rides the int64 carrier, so a
+ *     float-vs-concrete-non-float result is always an xmm-vs-GP miscompile).
+ *     The former RET_CLASS_CARRIER_METHOD tolerance claimed the per-instance
+ *     emit path resolves such a method to its real register class; measured
+ *     false (the emitted C value-converts), and the engines diverged on it --
+ *     see docs/archive/int-declared-method-float-body-engine-divergence.md.
  *   - Pointer-scalar REVERSE (integer-declared, cstr body): only RET_CLASS_
  *     COMMITTED rejects it (Phase 2).  For a generic / `#{Unsafe}` defn
  *     (RET_CLASS_CARRIER_FN) or an instance method (RET_CLASS_CARRIER_METHOD)
@@ -2455,17 +2579,42 @@ bool return_type_carrier_aggregate_conflict(Type declared, Type body) {
  * float widening is the caller's pre-step. */
 ReturnConflict return_position_conflict(const AdtDef *ret_adt,
                                         TypeKind ret_kind, Type body,
-                                        ReturnClass cls) {
+                                        ReturnClass cls, bool check_nil_body) {
     if (ret_adt && return_type_nominal_conflict(ret_adt, body))
         return RET_CONFLICT_NOMINAL;
+
+    /* nil-tail-not-checked-against-declared-return: checked BEFORE the
+     * representation-pair predicates below, and NOT gated on the return class.
+     * Every tolerance those classes buy is a bridge between two things that are
+     * both int64_t in the emitted C and both carry a value; a nil body carries
+     * no value to bridge, so a generic or `#{Unsafe}` function is as wrong here
+     * as a committed one.  An ADT-declared return reaches this too: `ret_adt`
+     * non-NULL with a nil body is the same defect. */
+    if (return_type_nil_body_conflict(ret_adt ? TY_ADT : ret_kind, body,
+                                      check_nil_body))
+        return RET_CONFLICT_NIL_BODY;
 
     /* Register-class: commit-direction-only for a typeclass instance method;
      * symmetric otherwise.  The predicate already tolerates a same-register-class
      * pair, so the gate only narrows the instance-method case. */
-    bool rc_commit_only = (cls == RET_CLASS_CARRIER_METHOD);
-    if ((!rc_commit_only || rc_is_float_kind(ret_kind)) &&
-        return_type_register_class_conflict(ret_kind, body))
+    /* int-declared-method-float-body-engine-divergence: SYMMETRIC for every
+     * return class, instance methods included.  The old commit-direction gate
+     * tolerated a float body under a non-float instance slot on the claim
+     * that "the per-instance emit path resolves [it] to its real register
+     * class" -- measured false: the emitted C was `static int64_t ... {
+     * return 7.5; }`, a destructive value conversion, while turi kept the
+     * float, so the two engines disagreed on every program that used the
+     * shape.  Unlike a cstr body under `: int` (pointer bits ride the
+     * carrier losslessly and come back -- still tolerated below), a float
+     * under an int slot cannot bridge: its bits and its value part ways,
+     * and the shape cannot say which the author meant (stdlib Clone wanted
+     * bits; the poly-to-fat fixtures wanted the value).  The stdlib half
+     * was resolved by giving Clone its honest `[x : a] : a` signature;
+     * this closes the user-facing half by making the shape an error, the
+     * same TUR-E0707 the equivalent defn has always been. */
+    if (return_type_register_class_conflict(ret_kind, body))
         return RET_CONFLICT_REGISTER_CLASS;
+    (void)cls;
 
     if (return_type_pointer_scalar_conflict(ret_kind, body))
         return RET_CONFLICT_POINTER_SCALAR;
@@ -2510,6 +2659,34 @@ ReturnConflict return_position_conflict(const AdtDef *ret_adt,
     }
 
     return RET_CONFLICT_NONE;
+}
+
+/* nil-tail-not-checked-against-declared-return: is this body's TAIL a nil
+ * literal?  A multi-form body is wrapped (EX_DO), and a body that opens a scope
+ * is wrapped again (EX_LET / EX_LETREC), so the literal the check cares about is
+ * not the body Expr itself -- testing `body->kind == EX_NIL_LIT` directly let
+ * `(defn f [] : int (println "x") nil)` through while rejecting the single-form
+ * `(defn f [] : int nil)`, which is exactly the inconsistency the report says
+ * does not exist ("multi-form bodies behave identically").
+ *
+ * EX_IF is deliberately NOT peeled.  Its branch types are already unified and
+ * checked against each other, `!`-typed (panic) arms included, and a nil branch
+ * under a non-nil peer is that check's business, not this one's. */
+bool body_tail_is_nil_literal(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_NIL_LIT:
+            return true;
+        case EX_DO:
+            return e->as.do_.n
+                 ? body_tail_is_nil_literal(e->as.do_.items[e->as.do_.n - 1])
+                 : false;
+        case EX_LET:
+        case EX_LETREC:
+            return body_tail_is_nil_literal(e->as.let_.body);
+        default:
+            return false;
+    }
 }
 
 /* TY4: borrow referent extraction -- see elab_internal.h.

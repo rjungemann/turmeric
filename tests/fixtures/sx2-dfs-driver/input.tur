@@ -1,0 +1,43 @@
+;; sx2-dfs-driver -- the SX2 depth-first search driver (stdlib/backtrack-dfs.tur).
+;;
+;; Pins the four things the driver promises:
+;;   1. reify-at-success: solutions are read out of the trailed cells INSIDE
+;;      on-solution; after dfs-solve returns, the cells hold their pre-search
+;;      values (the whole run is undone);
+;;   2. dfs-or explores left-then-right, each branch's writes undone before
+;;      the next (depth-first, not interleaved);
+;;   3. on-solution returning false CUTS the search;
+;;   4. a write-once lvar refuses a second bind as branch FAILURE, which is
+;;      what makes it a logic variable.
+
+(load "stdlib/backtrack-dfs.tur")
+
+(defn main [] : int
+  ;; x,y in 1..3 with x + y = 4: (1,3) (2,2) (3,1)
+  (let [x (bt-cell-new 0)
+        y (bt-cell-new 0)]
+    (let [n (dfs-solve
+              (dfs-and (dfs-choose-int x 1 3)
+                (dfs-and (dfs-choose-int y 1 3)
+                  (dfs-guard (fn [] (= (+ (bt-get x) (bt-get y)) 4)))))
+              (fn [] (do (println (bt-get x))
+                         (println (bt-get y))
+                         true)))]
+      (println n)
+      (println (bt-get x))     ;; restored
+      (println (bt-get y)))    ;; restored
+    ;; or, then cut
+    (println (dfs-solve (dfs-or (dfs-set x 10) (dfs-set x 20))
+                        (fn [] (do (println (bt-get x)) true))))
+    (println (dfs-solve (dfs-choose-int x 1 5)
+                        (fn [] (do (println (bt-get x)) false))))
+    (bt-cell-free x)
+    (bt-cell-free y))
+  ;; lvar: double bind fails, single bind + guard succeeds
+  (let [v (bt-lvar-new 0)]
+    (println (dfs-solve (dfs-and (dfs-set v 1) (dfs-set v 2)) (fn [] true)))
+    (println (dfs-solve (dfs-and (dfs-set v 1)
+                                 (dfs-guard (fn [] (= (bt-get v) 1))))
+                        (fn [] true)))
+    (bt-cell-free v))
+  0)

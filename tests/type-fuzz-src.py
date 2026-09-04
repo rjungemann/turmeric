@@ -189,8 +189,12 @@ KNOWN_PROBES = [
      "(defn call [f : (fn [] FzB)] : FzB (f))\n"
      "(defn main [] : int\n"
      "  (let [k 7] (println (.a (call (fn [] (FzB k))))))\n  0)\n"),
-    # The one row of that report still open: an EFFECT-ANNOTATED fn param
-    # keeps the thin convention (load-bearing for the CPS backend).
+    # RESOLVED 2026-08-16 (the report's LAST row) by the CPS increment: the
+    # E2a registry call sites dispatch fat (slot 0 = capturing-lambda entry
+    # with an env-taking __cps twin, slot 1 = fatshim's stashed bare-fn
+    # entry), and effect-annotated fn params are fat-normalized like every
+    # other nominal fn param.  Kept as a FIXED regression probe; pinned by
+    # tests/fixtures/effect-capturing-closure-thin-param/.
     ("poly-result-hof-capturing-closure-sigbus (effect row)",
      "(defn run [body : (fn [] #fx{Write} int)] #fx{Write} : int (body))\n"
      "(defn main [] #fx{Write} : int\n"
@@ -198,9 +202,14 @@ KNOWN_PROBES = [
     # (result-monad-bind-typed-boundary-miscompiles: RESOLVED 2026-07-31,
     # archived; probe retired -- pinned by
     # tests/fixtures/result-monad-bind-typed-boundary/.)
+    # RESOLVED 2026-08-16 (both defects; archived) -- kept as a FIXED
+    # regression probe like the two rows above, since the boundary was
+    # unusually sharp.  Pinned by
+    # tests/fixtures/generic-closure-return-type-app/.
     # Faithful to the report: it takes the stdlib Cons (a defstruct).  The
-    # same shape over a local parametric defdata checks AND runs clean, so
-    # the trigger is narrower than "generic + type-app + closure return".
+    # same shape over a local parametric defdata checked AND ran clean even
+    # before the fix, so the trigger was narrower than "generic + type-app +
+    # closure return".
     ("generic-closure-return-type-app (Defect A: checker reject)",
      "(defn pure [A] [x : A] : (fn [] (Cons A))\n"
      "  (fn [] (tcons x (tnil))))\n"
@@ -648,6 +657,26 @@ def run_case(tur, path, src):
     with open(path, "w") as f:
         f.write(src)
     env = dict(os.environ)
+    # Drop any ambient TUR_STDLIB_DIR so the compiler under test resolves the
+    # stdlib that ships beside it (its walk-up probe), not one belonging to
+    # some other turmeric install.
+    #
+    # This is not hypothetical, and it is expensive to diagnose. A version
+    # manager whose `python3` is a shim (mise, asdf) re-exports the tool env
+    # *inside* this process, so the variable can point at an unrelated
+    # installed release even when the invoking shell has no such variable --
+    # which means `unset` in the shell wrapper does not reach it, and a saved
+    # case rerun by hand does not reproduce. The compiler's own guard does not
+    # catch it either: it only checks that macros.tur is readable there, which
+    # a stale-but-intact install passes.
+    #
+    # The symptom is a wall of Result/Option shape failures -- an old stdlib's
+    # `(defstruct Result [A B] (is-ok :bool) ...)` compiled against a current
+    # compiler's box layout gives `no member named 'is_ok' in
+    # 'tur_result_box_t'`, or silently wrong output. It reads as a codegen bug
+    # in the compiler and is not one. See
+    # docs/archive/type-fuzz-src-red-on-clang-21.md.
+    env.pop("TUR_STDLIB_DIR", None)
     env["ASAN_OPTIONS"] = env.get("ASAN_OPTIONS", "") or "detect_leaks=0"
     try:
         chk = subprocess.run([tur, "check", path], capture_output=True,

@@ -1,0 +1,93 @@
+;; MW3: mw-recover -- a panicking handler yields 500 and the server survives.
+;;
+;; Two requests are sent back to back on the same worker pool:
+;;
+;;   1. GET /boom -- the base handler panics. mw-recover catches the unwind
+;;      at the middleware boundary and writes 500 Internal Server Error.
+;;   2. GET /ok   -- a plain request that must still be served, which is the
+;;      property that actually matters: "the server survived". A one-request
+;;      fixture would pass even with a use-after-free in the captured env,
+;;      so the second request is deliberate.
+
+(load "stdlib/httpd.tur")
+
+(defn client-worker [arg : ptr<void>] : ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  const char *paths[2] = { "/boom", "/ok" };
+  for (int i = 0; i < 2; i++) {
+      int fd = socket(AF_INET, SOCK_STREAM, 0);
+      if (fd < 0) return NULL;
+      struct sockaddr_in addr;
+      memset(&addr, 0, sizeof(addr));
+      addr.sin_family      = AF_INET;
+      addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      addr.sin_port        = htons((uint16_t)port);
+      if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+      char req[128];
+      snprintf(req, sizeof(req), "GET %s HTTP/1.0\r\n\r\n", paths[i]);
+      send(fd, req, strlen(req), 0);
+      char buf[1024];
+      int n = (int)recv(fd, buf, sizeof(buf) - 1, 0);
+      if (n < 0) n = 0;
+      buf[n] = '\0';
+      /* Print just the status line, trimmed of CR. */
+      char *eol = strstr(buf, "\r\n");
+      if (eol) *eol = '\0';
+      printf("resp %s: %s\n", paths[i], buf);
+      fflush(stdout);
+      close(fd);
+  }
+  return NULL;
+  ```)
+
+(defn run-server [h : ptr<void>] : ptr<void>
+  ```c httpd_hyrun(h); return NULL; ```)
+
+(defn spawn-server [h : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port : int] : ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_hyworker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t : ptr<void>] : nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn path-is-boom [c : ptr<void>] : bool
+  ```c
+  HttpdConn *cn = (HttpdConn *)c;
+  return strcmp(cn->path, "/boom") == 0;
+  ```)
+
+(defn main [] : int
+  (let [base     (fn [c : ptr<void>] : nil
+                   (if (path-is-boom c)
+                     (panic "handler blew up")
+                     (do
+                       (httpd-resp-status! c 200)
+                       (httpd-resp-body! c "ok"))))
+        composed (compose-middleware base mw-recover)
+        h        (httpd-new-pool 0 1 composed)
+        port     (httpd-port h)
+        server   (spawn-server h)
+        client   (spawn-client port)]
+    (join-thread client)
+    (httpd-stop h)
+    (join-thread server)
+    (println "done")
+    (httpd-free h)
+    0))

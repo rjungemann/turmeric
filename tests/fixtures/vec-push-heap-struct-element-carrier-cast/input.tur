@@ -21,8 +21,8 @@
     (vec-push! vo (:: (none) (Option int)))
     (let [a (:: (vec-get vo 0) (Option int))
           b (:: (vec-get vo 1) (Option int))]
-      (println (if (.is-some a) (.value a) -1))    ;; 5
-      (println (if (.is-some b) (.value b) -1))))  ;; -1 (none)
+      (println (if (some? a) (unwrap a) -1))    ;; 5
+      (println (if (some? b) (unwrap b) -1))))  ;; -1 (none)
   ;; A Vec whose element is itself a heap container (Vec int).
   (let [outer (:: (vec-new) (Vec (Vec int)))
         inner (:: (vec-new) (Vec int))]

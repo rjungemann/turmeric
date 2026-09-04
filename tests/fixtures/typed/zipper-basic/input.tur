@@ -48,7 +48,7 @@
     (let [right (make-arr3)]
       (let [z (zipper-new empty 0 10 right 3)]
         (let [opt (zipper-move-left z)]
-          (let [is-none (not (.is-some opt))]
+          (let [is-none (not (some? opt))]
             (zipper-free z)
             (free empty)
             (free right)

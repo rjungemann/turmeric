@@ -6,11 +6,12 @@ description: Union (`A | B`) and intersection (`A & B`) types, `any`, gradual ty
 
 # Union and Intersection Types Guide
 
-> **Status:** IT0--IT4 are complete. As of TY2, `any` boxing codegen, the
-> checked `cast`, and `type-of` ship for every payload kind
-> (int/bool/float/nil/cstr/ptr, ADTs, and heap-boxed structs). The remaining
-> deferred item is general `struct { int tag; union { ... } }` tagged-union
-> C emission. See [Deferred](#deferred) below.
+> **Status:** `any` boxing codegen, the checked `cast`, and `type-of` ship for
+> every payload kind (int/bool/float/nil/cstr/ptr, ADTs, and heap-boxed
+> structs), at per-TYPE granularity -- `type-of` names the struct or ADT and
+> `cast` rejects a different one. The one deferred item is general
+> `struct { int tag; union { ... } }` tagged-union C emission. See
+> [Deferred](#deferred) below.
 
 Union types (`A | B`) and intersection types (`A & B`) extend the Turmeric type system with
 structural type combinations. Together they enable gradual typing, flexible APIs, and
@@ -22,8 +23,9 @@ Both features, along with the `any` type, are enabled by default; no flag is req
 
 ## Union Types
 
-A union type `(A | B)` represents a value that is **either** `A` or **`B`**. The compiler
-emits a tagged-union C struct at runtime.
+A union type `(A | B)` represents a value that is **either** `A` or **`B`**. At runtime
+a union-typed value is carried as a `tur_tagged_t` (`{ int64_t tag; int64_t val; }`) --
+a tag word plus one 64-bit payload slot.
 
 ### Syntax
 
@@ -79,7 +81,7 @@ defn describe [x : (int | cstr)] : cstr
     str("string: " s)
 ```
 
-Omitting any member is a compile-time error (`TUR_E0301`).
+Omitting any member is a compile-time error (`TUR-E0301`).
 
 ### Subtyping
 
@@ -189,7 +191,7 @@ resolves the instance at the intersection type site.
 
 ### Unsatisfiable Intersections
 
-Intersections of known-disjoint concrete types are rejected statically (`TUR_E0350`):
+Intersections of known-disjoint concrete types are rejected statically (`TUR-E0350`):
 
 ```turmeric
 ;; Compile error: int and cstr are disjoint
@@ -208,8 +210,8 @@ at compile time are permitted and fail during instance resolution.
 
 ## The `any` Type
 
-`any` is the **top type**: every type is a subtype of `any`. It is available when either
-union or intersection flag is active.
+`any` is the **top type**: every type is a subtype of `any`. Like unions and
+intersections, it is enabled by default.
 
 ```turmeric
 (defn debug-print [x : any] : unit
@@ -273,10 +275,10 @@ defn typed-print [x : (int | cstr)] : unit
 A value widened to `any` is boxed into a `tur_tagged_t` that records the
 payload's runtime type. Two forms read that box back:
 
-- **`(type-of x)`** returns the payload's type name as a `cstr`:
-  `"int"`, `"bool"`, `"float"`, `"cstr"`, `"ptr"`, `"struct"`, or `"adt"`. The
-  tag has *kind* granularity -- every struct reports `"struct"` and every ADT
-  `"adt"`, not the specific struct/ADT name.
+- **`(type-of x)`** returns the payload's type name as a `cstr`. A primitive
+  reports its kind -- `"int"`, `"bool"`, `"float"`, `"cstr"`, `"ptr"` -- and a
+  struct or ADT reports **its own name**: `"Point"`, `"Shape"`. (It used to
+  answer `"struct"` for every struct and `"adt"` for every ADT.)
 - **`(cast x : T)`** is a *checked* downcast. It verifies the box tag matches
   `T` and returns the unboxed value; on a mismatch it **panics** (aborts with a
   message like `cast: any holds cstr, not int`). `T` may be a primitive type
@@ -293,15 +295,55 @@ payload's runtime type. Two forms read that box back:
     0))
 ```
 
+The check is by TYPE, not by kind, so two struct types are distinguishable:
+
+```turmeric
+(defstruct Point [x : int y : int])
+(defstruct Other [a : int b : int])
+
+(let [a (:: (make-struct Point 3 4) any)]
+  (println (type-of a))     ;; => Point
+  (println (is? a Point))   ;; => true
+  (println (is? a Other))   ;; => false
+  ;; (cast a Other)         ;; panics: cast: any holds Point, not Other
+  (.x (cast a Point)))      ;; => 3
+```
+
+Under the hood the box tag is a per-monomorph id for a struct/ADT payload (a
+primitive keeps its `TypeKind`), and the program carries a table naming the ids
+it allocated. `(Box int)` and `(Box float)` get distinct ids; `type-of` reports
+the head name (`"Box"`) for both.
+
 By-value structs are heap-boxed on widening (a `malloc`'d copy) and unboxed by
 dereference on `cast`; ADTs and `cstr` are pointer-carried and ride the carrier
 directly; floats are stored by their bit pattern so no precision is lost.
 
-> **Note:** the struct heap-box is owned by the `any` value's (untracked)
-> lifetime, so the `malloc`'d copy is not freed -- widening a struct to `any`
-> leaks one allocation per widen. This is acceptable for the gradual-typing
-> use cases `any` targets; if you need a struct in `any` on a hot path, prefer
-> a pointer/ADT payload, which is carrier-resident and allocation-free.
+> **Note:** widening a struct to `any` does not leak. The heap box a by-value
+> payload needs is owned in every position it can occupy:
+>
+> - **As a call argument**, when the callee neither retains the value nor can
+>   suspend, there is no allocation at all -- the copy lives in the caller's
+>   frame.
+> - **Bound to a local** that does not escape, the box is released when the
+>   local dies: at scope exit, at its sole consuming use when the scope's end is
+>   unreachable, and at a `return` or a tail-call back-edge otherwise. A local
+>   that `is?` narrows is covered too, even though the narrowing rebinds the
+>   name.
+> - **As a temporary** -- never named -- produced by a function whose body ends
+>   in a widen, or forwarded through a pure passthrough, and consumed by a
+>   non-retaining, effect-free call.
+>
+> A callee that retains the value, has an inline-C body, may suspend, or is
+> called indirectly keeps the box by design: the caller cannot know when it
+> dies. That is the one place a struct payload still costs an allocation, and
+> the guidance there is unchanged -- prefer a pointer/ADT payload, which is
+> carrier-resident and allocation-free.
+>
+> Pinned leak-clean under LeakSanitizer by `tests/fixtures/any-widen-frame-box`,
+> `any-widen-local-drop`, `any-widen-temp-drop`,
+> `any-widen-drop-past-early-exit`, and `any-widen-drop-narrowed`; the shapes
+> that must NOT be dropped by `any-widen-retaining-callee`. See
+> `docs/archive/any-struct-box-leak-per-widen.md`.
 
 ---
 
@@ -327,10 +369,10 @@ type. An ADT value widens to `any` (boxing codegen), reports its kind via
 
 | Code | Message |
 |---|---|
-| `TUR_E0300` | Union type mismatch: expected `{expected}`, got `{actual}` |
-| `TUR_E0301` | Non-exhaustive pattern match on union type `{type}` -- missing arm for `{variant}` |
-| `TUR_E0350` | Intersection type unsatisfiable: no value can be both `{A}` and `{B}` |
-| `TUR_E0351` | Value of type `{actual}` does not satisfy intersection member `{missing}` |
+| `TUR-E0300` | Union type mismatch: expected `{expected}`, got `{actual}` |
+| `TUR-E0301` | Non-exhaustive pattern match on union type `{type}` -- missing arm for `{variant}` |
+| `TUR-E0350` | Intersection type unsatisfiable: no value can be both `{A}` and `{B}` |
+| `TUR-E0351` | Value of type `{actual}` does not satisfy intersection member `{missing}` |
 
 ---
 
@@ -338,10 +380,11 @@ type. An ADT value widens to `any` (boxing codegen), reports its kind via
 
 ### Tagged Union Overhead
 
-TypeScript's union types are zero-cost (erased). Turmeric emits
-`struct { int tag; union { A a; B b; } data; }`. Every union-typed value pays
-one extra `int` for the tag plus alignment padding to the largest member. This
-matters for arrays, struct fields, and cache pressure.
+TypeScript's union types are zero-cost (erased). Turmeric carries every
+union-typed value as a `tur_tagged_t` (`{ int64_t tag; int64_t val; }`): one
+extra 64-bit tag word per value, with the payload riding a single 64-bit slot
+(by-value structs are heap-boxed into it). This matters for arrays, struct
+fields, and cache pressure.
 
 Widening (passing `42` where `(int | cstr)` is expected) requires constructing
 the tagged union at the call site -- it is not a free annotation.
@@ -408,27 +451,17 @@ returning `(int | ParseError)` cannot be transparently composed with one returni
 
 Variance for type constructors containing union or intersection types is not yet
 specified. Passing `(vec (int | cstr))` where `(vec int)` is expected may produce
-unexpected behaviour and will be addressed before these features are enabled by
-default.
+unexpected behaviour.
 
 ---
 
-## Shipped in TY2
-
-| Item | Notes |
-|---|---|
-| `any` boxing codegen | All payload kinds box: immediates ride the carrier, floats by bit pattern, cstr/ptr/ADT by pointer, by-value structs heap-boxed. Boxing happens at every widening site (call arg, `: any` return, `if` branch). |
-| `(cast x : T)` | Checked downcast from `any`; verifies the box tag and panics on mismatch. `T` may be a primitive, struct, or ADT name. |
-| `(type-of x)` | Returns the payload's type name (`"int"`, ..., `"struct"`, `"adt"`) at kind granularity. |
-
 ## Deferred
 
-The following IT4 items are not yet implemented:
+The following items are not yet implemented:
 
 | Item | Notes |
 |---|---|
 | Tagged union C codegen | General `struct { int tag; union { A a; B b; } data; }` emission for `(A \| B)` unions (the `any` top type ships via `tur_tagged_t`) |
-| Per-name `type-of`/`cast` granularity | `type-of` reports `"struct"`/`"adt"`, not the specific struct/ADT name; `cast` checks at that same granularity |
 | ADT-as-union sugar | Not pursued -- infeasible against monomorphic unions (defdata is parametric/HKT/recursive/GADT). ADTs already interoperate with unions via `any` boxing; see [ADTs and Unions](#adts-and-unions-interop-via-any-not-a-desugar). |
 | Instance intersection on unions | Deferred failure during instance resolution may be hard to diagnose |
 

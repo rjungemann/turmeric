@@ -52,6 +52,12 @@ extern uint32_t g_unsafe_total_lines;
 /* Phase P3: HAMT lowering */
 extern bool g_needs_hamt;
 
+/* jit-ffi-c2mir-plan: the program elaborated a dlopen/dlsym/dlclose builtin
+ * (or a call-ptr), so the emitted C needs <dlfcn.h> and the link needs -ldl
+ * (a no-op on glibc >= 2.34 / macOS, required on older glibc).  Same
+ * lifecycle as g_needs_hamt: set during elaboration, read by the preamble. */
+extern bool g_needs_dlfcn;
+
 /* AR8: Variadic rest parameters -- set when any variadic defn is compiled */
 extern bool g_has_variadics;
 
@@ -81,6 +87,10 @@ extern bool g_sized_types_enabled;
 /* Phase SZ8: --dump-sizes flag — print inferred size index per sized-GADT
  * constructor application during elaboration (requires -Xsized-types) */
 extern bool g_dump_sizes;
+/* SX8a: --dump-refine=json -- one JSON record per refinement obligation.
+ * A diagnostic/dump surface, so explicitly outside the EXPERIMENTS[]
+ * regime per the experimental-features rule. */
+extern bool g_dump_refine_json;
 
 /* ER1: --strict-effects flag — warn/check unannotated effectful functions */
 extern bool g_strict_effects;
@@ -95,6 +105,14 @@ extern bool g_dump_effects;
  * observable difference between VERIFIED and UNVERIFIED is the absence of a
  * diagnostic, which is not something a fixture can assert on. */
 extern bool g_dump_write_frames;
+
+/* R4 slice 2 (trusted-refinement-claims-plan): --dump-read-frames flag --
+ * print the read-frame verification verdict for every `#reads`-annotated
+ * function (VERIFIED / EXCEEDED / UNVERIFIED).  Same character as
+ * --dump-write-frames: a diagnostic knob, not an experiment -- it reports
+ * what rf_resolve_read_frames decided and changes nothing.  The pass itself
+ * runs unconditionally; this flag only makes its verdicts visible. */
+extern bool g_dump_read_frames;
 
 /* CPS2 (cps-transform-plan): --dump-cps flag — print the ANF/CPS IR for each
  * colored user-level top-level defn */
@@ -150,6 +168,32 @@ extern bool g_symbols_enabled;
 /* INT-2: --interpret mode flag — set by cmd_eval before elaboration. */
 extern bool g_interpret_mode;
 
+/* `tur expand`: print each macro expansion (outside stdlib load) to stdout
+ * as it happens during elaboration.  Set by cmd_expand in main.c; read at
+ * the expansion site in elab_call.c. */
+extern bool g_dump_expansion;
+
+/* Stage 3 (macro-system-direction-plan): --macro-caps=io grants the
+ * macro-time env TURI_CAP_IO for the rare legitimately-effectful macro
+ * (embed-file style).  Default deny; io is the only grantable capability
+ * -- FFI/Unsafe/inline-C/async at macro time are never offered.  Set by
+ * the global flag parser in main.c; read at macro-env creation in
+ * src/turi/macro_env.c. */
+extern bool g_macro_caps_io;
+
+/* interp-stdlib-class-method-shadows-user-defn: true while an interpreter
+ * entry point (--interpret / REPL / WASM) is preloading stdlib modules via
+ * `(load ...)` turns.  Those turns run with stdlib_prefix == 0, so
+ * `e->in_stdlib_load` never brackets them and every typeclass they register
+ * would read as USER-defined -- flipping the documented "user defn overrides
+ * a stdlib method" resolution (prefer_method_dispatch in elab_call.c) and
+ * the TUR-W0039 clash warning.  Typeclass registration ORs this in for
+ * `tc->from_stdlib`.  Deliberately NOT applied to binding-level
+ * `is_from_stdlib`: interpreter fixtures legitimately redefine stdlib defns
+ * (the benchmark head/tail stub pattern), and marking those would turn the
+ * MF3 collision error on under --interpret. */
+extern bool g_turi_stdlib_preload;
+
 /* F4 (cross-plan-followups): --Werror=deprecated flag — promotes
  * ^deprecated use-site warnings to errors. */
 extern bool g_werror_deprecated;
@@ -189,7 +233,7 @@ extern bool g_werror_inline_c_narrow_params;
  * The former `g_opt_vl_wide_functor` bool is gone; its guards are now
  * unconditional. */
 
-/* VBM1-CM4 (docs/upcoming/van-laarhoven-monomorphization-plan.md +
+/* VBM1-CM4 (docs/archive/history/van-laarhoven-monomorphization-plan.md +
  * van-laarhoven-consumer-mono-plan.md): the by-value HKT monomorphization path
  * (Path B) GRADUATED 2026-07-05 -- the former `vl-wide-mono` experiment is
  * retired and its registration/redirect/clone emit are unconditional.
@@ -207,60 +251,134 @@ extern bool g_dump_mono_specs;
  * MONOMORPH the direct emitter specializes, whether that monomorph's body +
  * concrete signature would land in the CPS-backend subset (its generic template
  * sig-rejects on the tyvar TY_APP, so the template is never a candidate).  See
- * docs/upcoming/v1/cps-backend-generic-monomorph-classification-plan.md (G1).
+ * docs/archive/cps-backend-generic-monomorph-classification-plan.md (G1).
  * Analysis only -- it changes no emitted code. */
 extern bool g_dump_cps_mono;
 
 /* g_opt_cps_effects RETIRED 2026-07-12 -- the `cps-effects` experiment graduated
  * and `handle-shallow` is now unconditionally accepted (see experiments.c). */
 
-/* E7: trampolined tail-resume (cps-tramp-resume experiment). See globals.c. */
-extern bool g_opt_cps_tramp_resume;
-/* E3a: admit an OWNING value captured into a genuinely multi-shot (cloneable /
- * serializable) continuation, giving each captured frame's env clone/drop glue
- * so resumes are memory-safe (cps-backend-owning-env-teardown-e3-plan.md). Read
- * by the cloneable/serial capture checks (elab_effects.c) and the cloneable
- * codegen (emit_cps_ir.c). Gated by the `owning-cloneable-capture` experiment. */
-extern bool g_opt_owning_cloneable_capture;
+/* g_opt_backtrackable_state RETIRED 2026-08-29 -- the `backtrackable-state`
+ * experiment graduated and stdlib/trail.tur is autoloaded unconditionally
+ * (see experiments.c and stdlib_autoload.c). */
+/* TUR_ADT_SLAB=1: bump-allocate never-freed multi-variant ADT boxes.
+ * A measurement seam for docs/reported/multi-variant-adts-always-heap-allocate.md,
+ * not a shipping default.  SHELVED 2026-08-25 -- kept reproducible, not
+ * headed anywhere; the decision record in that report says why, and why
+ * reclamation rather than a slab is the thing to build. */
+extern bool g_adt_slab;
+/* SR1 (docs/upcoming/sum-representation-plan.md): flow a non-recursive,
+ * non-parametric, non-heap MULTI-VARIANT sum by value (tag + union aggregate)
+ * instead of the int64 heap carrier.
+ *
+ * ON by default since 2026-08-26.  It is the fix for both halves of
+ * docs/archive/multi-variant-adts-always-heap-allocate.md: such a sum is no
+ * longer malloc'd on every construction, and a value that is never boxed has
+ * nothing to leak.  A 2e6-construction loop over a two-variant `:copy` sum
+ * went from 62.6 MB peak RSS to 1.2 MB.
+ *
+ * `TUR_SR1_SUM_BYVALUE=0` restores the int64 carrier -- an escape hatch for
+ * bisecting a suspected representation bug, not a supported mode.  Recursive
+ * sums are unaffected either way; they are SR4's population and still ride the
+ * carrier (see AdtDef.is_self_recursive for why, and what blocks them). */
+extern bool g_sr1_sum_byvalue;
+/* SX1: set by tur_stdlib_prepend_forms when stdlib/trail.tur was actually read
+ * into THIS compile.  Not the same question as "is the trail available": the
+ * autoload can be suppressed (--no-auto-stdlib), and the emitted serial prelude
+ * must only reference `tur_trail_level` when trail.tur's autolink marker is
+ * also in the output pulling src/runtime/trail.c into the link.  Emitting the
+ * guard off any looser signal is an undefined symbol at cc time. */
+extern bool g_trail_autoloaded;
+/* SR3 slice B (the Option niche -- default since 2026-09-03, TUR_OPTION_NICHE=0
+ * restores the tagged form; docs/upcoming/sr3-option-niche-plan.md):
+ * an `(Option P)` whose payload is a NON-NULLABLE pointer is carried AS that
+ * pointer -- 16 bytes down to 8, `(none)` as NULL, no tag word anywhere.
+ *
+ * Behind an experiment rather than on, because the soundness condition ("P's
+ * valid values exclude 0") is not something the type system records: it is a
+ * hand-maintained allowlist in `sr3_payload_is_nonnull_pointer` (types.c), and
+ * an entry added in error makes `(some x)` and `(none)` the same value.  The
+ * polarity is deliberate -- an unrecognised payload merely misses the
+ * optimisation. */
+extern bool g_opt_option_niche;
+/* SR2a: a MULTI-VARIANT parametric sum monomorph -- `(Opt2 int)`, `(PRes
+ * cstr)`, and above all `(Option int)` / `(Result int cstr)` -- flows by value
+ * instead of riding the int64 heap-pointer carrier.  The parametric sibling of
+ * g_sr1_sum_byvalue above, and the prerequisite SR2b's stdlib conversion was
+ * built on: the carrier's monomorph ctors malloc per construction and never
+ * free (measured: 16,000 bytes leaked in 1,000 constructions; by value is 3.6x
+ * faster at 71x less peak RSS on the same loop).  Same exclusions as SR1:
+ * non-GADT, non-heap, not self-recursive, and never a fixpoint partner's
+ * functor app (adt_is_fixpoint_partner_of).
+ *
+ * ON by default since 2026-08-27 -- GRADUATED out of
+ * `--enable=parametric-sum-byvalue` once SR2b (Option/Result as real sums) and
+ * the spice-side layout migration had both landed, which is exactly what the
+ * experiment's soak was waiting for.  `TUR_SR2_APP_SUM_BYVALUE=0` restores the
+ * int64 carrier -- an escape hatch for bisecting a suspected representation
+ * bug, not a supported mode, and the same two-way shape SR1 kept.  Consumed by
+ * sr2_app_sum_byvalue (types.c).  See docs/upcoming/sr2-gate-results.md. */
+extern bool g_sr2_app_sum_byvalue;
 
-/* CG5: `(gc-auto!)` -- automatic allocation-driven cycle collection. Gated by
- * the `cycle-gc` experiment; read by elab_gc_auto (elab_memory.c). */
-extern bool g_opt_cycle_gc;
-/* J1: `tur jit` experiment enable bit (jit-engine-plan). */
-extern bool g_opt_jit;
+/* g_opt_cps_tramp_resume RETIRED 2026-08-22 -- the `cps-tramp-resume`
+ * experiment graduated 2026-07-19 and E7's trampolined tail-resume is the sole
+ * effect lowering.  The bit outlived the row by seven minor lines, unwritable
+ * the whole time (its EXPERIMENTS[] row was gone, so nothing could set it), so
+ * its 64 read sites were constant tests with an unreachable arm.  Folded to
+ * true and the dead arms deleted; the bit is gone.  See
+ * docs/archive/cps-dk-sole-effect-lowering-plan.md. */
+
+/* g_opt_owning_cloneable_capture RETIRED 2026-08-22 -- the
+ * `owning-cloneable-capture` experiment graduated 2026-07-20 and admitting an
+ * owning value captured into a multi-shot cloneable continuation (with the
+ * per-frame env clone/drop teardown) is unconditional.  Same story as the bit
+ * above: unwritable since graduation, five reads folded to true.  See
+ * docs/archive/history/cps-backend-owning-env-teardown-e3-plan.md. */
+
+/* CG5/CG8 cycle-gc GRADUATED 2026-08-17 -- `(gc-auto!)` is an ordinary call
+ * form; the g_opt_cycle_gc enable bit and the elab_gc_auto gate are gone.
+ * GC_AUTO itself is still opt-in (you must CALL `(gc-auto!)`) and is never a
+ * default.  See docs/archive/gc-cycle-collection-followup-plan.md. */
+
+/* J1-J3 jit GRADUATED 2026-08-17 -- `tur jit` needs only the -DTUR_JIT=ON
+ * build-time gate; the g_opt_jit enable bit is gone and the REPL's in-process
+ * JIT loader hangs off engine selection instead.  See
+ * docs/archive/jit-engine-plan.md. */
 
 /* closure-drop-glue GRADUATED 2026-07-22 -- the Model R drop-glue header ABI
  * (env[-1] -> drop_glue_env_N, released via TUR_CLOSURE_DROP) is now
  * unconditional; the g_opt_closure_drop_glue enable bit and its codegen gates are
- * gone.  See docs/upcoming/closure-drop-glue-plan.md. */
+ * gone.  See docs/archive/closure-drop-glue-plan.md. */
 
 /* RT0 refined GRADUATED 2026-08-01 -- static discharge of `#refine{...}`
  * predicates is unconditional; the g_opt_refined enable bit and its
  * elaboration gates are gone.  See
- * docs/upcoming/v1/refined-graduation-plan.md. */
+ * docs/archive/refined-graduation-plan.md. */
 
-/* sealed-opaque: gates the `:sealed` defopaque attribute's ENFORCEMENT.  When
- * off, `:sealed` parses and is recorded but the `::` check never fires, so
- * adopting it downstream is not a breaking change for consumers who have not
- * enabled the experiment.  See docs/upcoming/sealed-opaque-plan.md. */
-extern bool g_opt_sealed_opaque;
+/* sealed-opaque GRADUATED 2026-08-17 -- the `:sealed` defopaque attribute's
+ * ENFORCEMENT is unconditional; the g_opt_sealed_opaque enable bit and the
+ * ascribe_check_sealed gate are gone.  See
+ * docs/archive/sealed-opaque-plan.md. */
 
-/* write-frames (WF1/WF2, docs/upcoming/checked-write-frames-plan.md): gates the
- * `#writes` write-frame annotation -- its CHECKING (WF2's TUR-E0382) and every
- * consumer that acts on a checked frame (WF3's callee-frame widening, WF4's
- * entry-check elision).  The annotation itself always PARSES so that adding one
- * is not a breaking change for a consumer who has not enabled the experiment;
- * what the gate withholds is the checking and the acting.
- *
- * `#reads` lived under the `refined` experiment, but that graduated 2026-08-01,
- * so this feature needs its own lifecycle home rather than a retired one. */
-extern bool g_opt_write_frames;
+/* write-frames GRADUATED 2026-08-20 -- WF2 checks every declared `#writes`
+ * frame and WF3 may widen on a checked callee frame, both unconditionally; the
+ * g_opt_write_frames enable bit and its gates are gone.  See
+ * docs/archive/checked-write-frames-plan.md. */
 
-/* `global-state` experiment (docs/upcoming/mutable-globals-plan.md, G2):
- * lets a `#writes` frame NAME a mutable global, so a body that maintains
- * global state can carry a checked frame instead of being declined outright.
- * With it off, G1's rule stands: any global write blocks VERIFIED, silently. */
-extern bool g_opt_global_state;
+/* checked-reads GRADUATED 2026-08-20 -- positive evidence that a `#reads`
+ * measure's body reads mutable state the frame omits REFUSES the congruence
+ * override (the crossing gets the ordinary TUR-W0372) rather than merely
+ * warning; the g_opt_checked_reads enable bit and its gates are gone.  Refusal
+ * still keys on "saw a read", never on "could not see" -- an inline-C body
+ * yields no evidence and keeps the trusted grant.  See
+ * docs/upcoming/trusted-refinement-claims-plan.md (R2). */
+
+/* jit-ffi GRADUATED 2026-08-21 -- `(unsafe (call-ptr p [T1 T2 -> R] args...))`
+ * (F3) and `(unsafe (callback-ptr f [sig]))` (F5) are ordinary `unsafe` forms;
+ * the g_opt_jit_ffi enable bit and its two elaboration gates are gone.  The
+ * BUILD-TIME gate is unaffected: the turi routing still needs `-DTUR_JIT=ON`
+ * and reports a clean diagnostic without it, and `unsafe` is still required.
+ * See docs/archive/jit-ffi-c2mir-plan.md. */
 
 /* lang-layers L4: true once a project manifest declared an `:experiments`
  * key (even the empty list), i.e. the project owner scoped the experiment set.
@@ -292,7 +410,7 @@ extern bool g_strict_refine;
  * a curated typed wrapper see the right return type.  The enum lives here --
  * in the neutral runtime layer shared by the compiler and the embedder API --
  * so neither side has to include the other's headers.  See
- * docs/archive/untyped-native-registration-blocks-curated-facades.md.
+ * docs/archive/history/untyped-native-registration-blocks-curated-facades.md.
  * --------------------------------------------------------------------------- */
 typedef enum TurNativeRetType {
     TUR_NRT_INT = 0,   /* default; matches the historical untyped behavior */
@@ -301,6 +419,7 @@ typedef enum TurNativeRetType {
     TUR_NRT_CSTR,
     TUR_NRT_VOID,
     TUR_NRT_PTR,       /* opaque handle -> ptr<void> */
+    TUR_NRT_SYNTAX,    /* syntax object (TURI_SYNTAX) -> the Syntax type */
 } TurNativeRetType;
 
 /* Register (or replace) the return-type signature for native `name`.  `name`

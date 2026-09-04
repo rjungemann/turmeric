@@ -1,0 +1,30 @@
+;; global-def-read-before-its-declaration: a lambda that reads a top-level
+;; `def` compiles.
+;;
+;; Pass 1 forward-declares every top-level FUNCTION, which is why a lambda can
+;; CALL a `defn` defined later.  Top-level `def` storage had no such pass, and
+;; every lifted lambda is prepended to the item list -- so it was emitted above
+;; every `def` in the program regardless of source order, and reading one gave
+;; `'kw_1334' undeclared` from cc.
+;;
+;; The lambda here is non-capturing (it reads only globals), which is the shape
+;; that gets lifted to a bare `__fn_N` at file scope; a capturing one takes the
+;; env path instead.
+
+(def base 100)
+(def label "total")
+
+(defn apply1 [^fat f : int x : int] : int
+  ((:: f (fn [int] int)) x))
+
+(defn add-base [] : int
+  (apply1 (fn [d : int] : int (+ d base)) 5))
+
+(defn show [tag : cstr v : int] : nil
+  ```c printf("%s=%lld\n", tag, (long long)v); ```)
+
+(defn main [] : int
+  (do
+    (println label)
+    (show "add-base" (add-base))
+    0))

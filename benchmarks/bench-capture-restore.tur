@@ -1,0 +1,860 @@
+;;; bench-capture-restore -- SX0(a): cost per capture/restore as a function of
+;;; live state under the prompt.
+;;;
+;;; The solver-extension plan's second review question asks for one number:
+;;; "cost per capture/restore as a function of live state under the prompt --
+;;; that single curve decides more of this design than the interpreter-vs-JIT
+;;; ratio does."  This file produces it.
+;;;
+;;; Turmeric has THREE capture paths with genuinely different shapes, and
+;;; nothing in the tree distinguished them before this benchmark:
+;;;
+;;;   dk        the DK chain slice behind compiled shift/reset and effect
+;;;             handlers.  Capture copies one node per frame under the prompt
+;;;             (dk_copy_node), plus one env_clone per OWNING frame.  Restore
+;;;             replays a fresh copy, so it pays the same slope again on every
+;;;             resume.  Predicted: real slope in both F and E.
+;;;   fiber     ucontext fibers (FiberBlock).  Suspend and switch are O(1)
+;;;             swapcontext, but a stack is allocated per fiber up front.
+;;;             Predicted: large intercept, flat in F.
+;;;   cloneable tur_cloneable_cont_clone -- a 4-field struct copy plus one
+;;;             clone_env call.  There is no chain, so F does not enter by
+;;;             construction; the sweep across F is run anyway, because
+;;;             confirming flatness is the point of including it.
+;;;
+;;; The single most useful thing the curve reveals is the INTERCEPT versus the
+;;; SLOPE: a strategy with a large constant and zero slope beats one with a
+;;; small constant and a real slope past some crossover, and where that
+;;; crossover sits relative to real workloads is the whole decision.
+;;;
+;;; Axes (plan section 4.3):
+;;;   F  frames under the prompt        1, 2, 4, ... 4096 (log sweep)
+;;;   E  owning-env bytes per frame     0 (no hook), rc handle, 8, 64
+;;;   R  resumes per capture            1 (one-shot) and 8 (multi-shot)
+;;;   T  trailed writes under the prompt  0 -- the axis exists in the schema
+;;;      from SX0 so SX1 can fill it without reshaping the output.
+;;;
+;;; Output is one CSV row per measurement on stdout; benchmarks/run-capture-curve.sh
+;;; fits a + b*F + c*E per path and writes the markdown table.
+;;;
+;;; Run it through benchmarks/run-capture-curve.sh, NOT by hand: a sanitized
+;;; build makes every number here meaningless, and the script is what refuses
+;;; to publish one.
+;;;
+;;; Since: SX0(a)
+
+;; ---------------------------------------------------------------------------
+;; Handles.  Each of these is an opaque pointer to a specific kind of runtime
+;; object; none of them is an integer, so none of them is typed as one.
+;; ---------------------------------------------------------------------------
+
+(defopaque DkChain   :ptr<void>)   ;; a DK * continuation chain
+(defopaque CloneCont :ptr<void>)   ;; a tur_cloneable_cont *
+(defopaque Fiber     :ptr<void>)   ;; a FiberBlock *
+
+;; ---------------------------------------------------------------------------
+;; The E axis: owning-env clone/drop hooks.
+;;
+;; dk_copy_node fires env_clone once per owning frame, so these are what turns
+;; the E axis into a real cost.  The rc flavor is deliberately separate from the
+;; byte flavors: a refcount bump and a malloc+memcpy have different shapes, and
+;; the plan asks for "the difference between a memcpy slope and a refcount
+;; slope" rather than one blended number.
+;; ---------------------------------------------------------------------------
+
+;;; env-clone-rc -- clone an owning env by bumping its refcount (E = 1 rc handle).
+(defn env-clone-rc [env : ptr<void>] : ptr<void>
+  ```c
+  if (env) (*(int64_t *)env)++;
+  return env;
+  ```)
+
+;;; env-drop-rc -- release an rc-flavored owning env.
+(defn env-drop-rc [env : ptr<void>] : void
+  ```c
+  if (env && --(*(int64_t *)env) <= 0) free(env);
+  ```)
+
+;;; env-clone-8 -- clone an 8-byte owning env by value.
+(defn env-clone-8 [env : ptr<void>] : ptr<void>
+  ```c
+  void *p = malloc(8);
+  if (p && env) memcpy(p, env, 8);
+  return p;
+  ```)
+
+;;; env-clone-64 -- clone a 64-byte owning env by value.
+(defn env-clone-64 [env : ptr<void>] : ptr<void>
+  ```c
+  void *p = malloc(64);
+  if (p && env) memcpy(p, env, 64);
+  return p;
+  ```)
+
+;;; env-drop-bytes -- release a by-value owning env.
+(defn env-drop-bytes [env : ptr<void>] : void
+  ```c
+  free(env);
+  ```)
+
+;;; frame-id -- the DK frame body: identity, so the measurement is the
+;;; mechanism's cost and not the payload's.
+(defn frame-id [env : ptr<void> v : int] : int
+  ```c
+  (void)env; return v;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; Path 1: the DK chain slice
+;; ---------------------------------------------------------------------------
+
+;;; dk-chain-build -- build a chain of `frames` frames under one prompt.
+;;;
+;;; Passing the frame body and the clone/drop pair in as function pointers is
+;;; what lets one builder serve every point on the E axis: `clone` NULL is
+;;; E = 0 (dk_copy_node keeps today's shallow env-pointer copy), and a non-NULL
+;;; pair makes every frame an owning one.
+(defn dk-chain-build [frames : int fr : ptr<void> clone : ptr<void> drop : ptr<void>] : DkChain
+  ```c
+  DK *chain = dk_prompt(1, dk_done());
+  for (int64_t i = 0; i < frames; i++) {
+      /* Give each frame its own env so a clone hook has something real to
+         copy.  The rc flavor needs its refcount initialized to 1. */
+      void *env = clone ? malloc(64) : NULL;
+      if (env) { memset(env, 0, 64); *(int64_t *)env = 1; }
+      chain = dk_frame_owning((DKFrame)fr, (intptr_t)env,
+                              (DKEnvClone)clone, (DKEnvDrop)drop, chain);
+  }
+  return (int64_t)(intptr_t)chain;
+  ```)
+
+;;; dk-chain-free -- release a chain built by dk-chain-build.
+(defn dk-chain-free [c : DkChain] : void
+  ```c
+  dk_free((DK *)(intptr_t)c);
+  ```)
+
+;;; dk-capture-ns -- total nanoseconds for `iters` captures of `c`.
+;;;
+;;; The copies are HELD and freed after the clock stops.  Timing capture and
+;;; reclaim together would report one number for two mechanisms, and the free
+;;; is the larger of the two at high F -- which would hide the very slope this
+;;; benchmark exists to measure.  One clock pair for the whole batch keeps
+;;; clock overhead out of the fitted intercept.
+(defn dk-capture-ns [c : DkChain iters : int] : int
+  ```c
+  DK *chain = (DK *)(intptr_t)c;
+  DK **held = (DK **)malloc((size_t)iters * sizeof(DK *));
+  if (!held) return -1;
+  int64_t best = INT64_MAX;
+  /* One untimed warm-up round, then best-of-3.
+     The first pass through any of these paths pays for page faults and
+     allocator arena growth that no later pass repeats -- timing it reports the
+     cost of starting the benchmark rather than the cost of the operation, and
+     it showed up as a first row an order of magnitude off its neighbours.  The
+     MINIMUM of the remaining rounds is the round least disturbed by the
+     scheduler, which is what we want: the question is what the mechanism
+     costs, not what the machine was doing at the time. */
+  for (int rep = 0; rep < 4; rep++) {
+      int64_t t0 = tur_monotonic_ns();
+      for (int64_t i = 0; i < iters; i++) held[i] = dk_copy_range(chain, NULL);
+      int64_t t1 = tur_monotonic_ns();
+      for (int64_t i = 0; i < iters; i++) dk_free(held[i]);
+      if (rep > 0 && t1 - t0 < best) best = t1 - t0;
+  }
+  free(held);
+  return best;
+  ```)
+
+;;; dk-restore-ns -- total nanoseconds for `iters` restores of `c`.
+;;;
+;;; dk_invoke is the restore: it copies the chain again, runs it, and frees it.
+;;; That re-copy is why the DK path pays its slope on every resume rather than
+;;; once at capture, and it is exactly what the R axis is asking about.
+(defn dk-restore-ns [c : DkChain iters : int] : int
+  ```c
+  DK *chain = (DK *)(intptr_t)c;
+  volatile int64_t acc = 0;
+  int64_t best = INT64_MAX;
+  /* One untimed warm-up round, then best-of-3.
+     The first pass through any of these paths pays for page faults and
+     allocator arena growth that no later pass repeats -- timing it reports the
+     cost of starting the benchmark rather than the cost of the operation, and
+     it showed up as a first row an order of magnitude off its neighbours.  The
+     MINIMUM of the remaining rounds is the round least disturbed by the
+     scheduler, which is what we want: the question is what the mechanism
+     costs, not what the machine was doing at the time. */
+  for (int rep = 0; rep < 4; rep++) {
+      int64_t t0 = tur_monotonic_ns();
+      for (int64_t i = 0; i < iters; i++) acc += (int64_t)dk_invoke(chain, (intptr_t)i);
+      int64_t t1 = tur_monotonic_ns();
+      if (rep > 0 && t1 - t0 < best) best = t1 - t0;
+  }
+  return best;
+  ```)
+
+;;; dk-capture-bytes -- bytes a single capture of `c` allocates.
+;;;
+;;; Computed rather than sampled: the allocation is exactly one DK node per
+;;; chain node plus one env_clone per owning frame, both of which are known
+;;; here, and an exact figure beats a malloc-hooked estimate.
+(defn dk-capture-bytes [c : DkChain env-bytes : int] : int
+  ```c
+  int64_t nodes = 0, owning = 0;
+  for (DK *p = (DK *)(intptr_t)c; p; p = p->next) {
+      nodes++;
+      if (p->env_clone) owning++;
+  }
+  return nodes * (int64_t)sizeof(DK) + owning * env_bytes;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; Path 2: ucontext fibers
+;;
+;; "Live state under the prompt" for a fiber is live C stack, so the body
+;; recurses F deep and then yields from that depth.  The recursion has to be
+;; NON-TAIL -- `(+ 1 (fiber-recurse ...))` -- or the compiler turns it into a
+;; loop and the fiber suspends over one frame no matter what F says.
+;; ---------------------------------------------------------------------------
+
+;;; fiber-arg -- the value the current resume passed in.
+(defn fiber-arg [] : int
+  ```c
+  return tur_current_fiber ? tur_current_fiber->arg : 0;
+  ```)
+
+;;; fiber-yield-forever -- suspend, over and over, at whatever depth we are at.
+;;;
+;;; Never returns: the benchmark resumes the fiber a fixed number of times and
+;;; then frees it, so parking here forever is the shape we want.  The trailing
+;;; return is unreachable and exists only to keep the compiler from warning
+;;; about a non-void function with no return statement.
+(defn fiber-yield-forever [] : int
+  ```c
+  for (;;) tur_fiber_block_yield(1);
+  return 0;   /* unreachable */
+  ```)
+
+;;; fiber-recurse -- burn `depth` real stack frames, then park.
+;;;
+;;; The `(+ 1 ...)` is load-bearing: it makes the call non-tail, so each level
+;;; keeps a frame.  Written as a tail call the compiler turns this into a loop
+;;; and every row of the F sweep suspends over ONE frame, which would report
+;;; the fiber path as flat in F for the wrong reason entirely.
+;;;
+;;; gcc flags this -Winfinite-recursion.  It is wrong: the recursion stops at
+;;; `depth <= 0`, but the base case calls a function that never returns, and
+;;; the analysis reads "no reachable return" as "no base case".
+(defn fiber-recurse [depth : int] : int
+  (if (<= depth 0)
+    (fiber-yield-forever)
+    (+ 1 (fiber-recurse (- depth 1)))))
+
+;;; fiber-body -- the fiber entry point; depth arrives in the fiber's arg slot.
+(defn fiber-body [] : void
+  (let [d (fiber-arg)]
+    (do
+      (fiber-recurse d)
+      0)))
+
+;;; fiber-make -- allocate a fiber and run it up to its first suspension.
+;;;
+;;; This IS the fiber path's "capture": the stack allocation plus the first
+;;; switch is what it costs to have a suspended computation in hand.  The
+;;; stack is oversized on purpose -- 4096 non-tail frames do not fit in the
+;;; 1 MiB default, and a benchmark that silently smashed its own stack at the
+;;; top of the F sweep would report the wrong shape rather than fail.
+(defn fiber-make [body : ptr<void> depth : int stack-bytes : int] : Fiber
+  ```c
+  FiberBlock *f = tur_fiber_block_new((void (*)(void))body, (size_t)stack_bytes);
+  tur_fiber_block_resume(f, depth);   /* runs to the first yield, at depth */
+  return (int64_t)(intptr_t)f;
+  ```)
+
+;;; fiber-free -- release a fiber and its stack.
+(defn fiber-free [f : Fiber] : void
+  ```c
+  FiberBlock *fb = (FiberBlock *)(intptr_t)f;
+  if (fb) { free(fb->stack); free(fb); }
+  ```)
+
+;;; fiber-capture-ns -- total nanoseconds to create `iters` suspended fibers.
+(defn fiber-capture-ns [body : ptr<void> depth : int stack-bytes : int iters : int] : int
+  ```c
+  FiberBlock **held = (FiberBlock **)malloc((size_t)iters * sizeof(FiberBlock *));
+  if (!held) return -1;
+  int64_t best = INT64_MAX;
+  /* One untimed warm-up round, then best-of-3.
+     The first pass through any of these paths pays for page faults and
+     allocator arena growth that no later pass repeats -- timing it reports the
+     cost of starting the benchmark rather than the cost of the operation, and
+     it showed up as a first row an order of magnitude off its neighbours.  The
+     MINIMUM of the remaining rounds is the round least disturbed by the
+     scheduler, which is what we want: the question is what the mechanism
+     costs, not what the machine was doing at the time. */
+  for (int rep = 0; rep < 4; rep++) {
+      int64_t t0 = tur_monotonic_ns();
+      for (int64_t i = 0; i < iters; i++) {
+          held[i] = tur_fiber_block_new((void (*)(void))body, (size_t)stack_bytes);
+          tur_fiber_block_resume(held[i], depth);
+      }
+      int64_t t1 = tur_monotonic_ns();
+      for (int64_t i = 0; i < iters; i++) { free(held[i]->stack); free(held[i]); }
+      if (rep > 0 && t1 - t0 < best) best = t1 - t0;
+  }
+  free(held);
+  return best;
+  ```)
+
+;;; fiber-restore-ns -- total nanoseconds for `iters` resumes of one fiber.
+(defn fiber-restore-ns [f : Fiber iters : int] : int
+  ```c
+  FiberBlock *fb = (FiberBlock *)(intptr_t)f;
+  int64_t best = INT64_MAX;
+  /* One untimed warm-up round, then best-of-3.
+     The first pass through any of these paths pays for page faults and
+     allocator arena growth that no later pass repeats -- timing it reports the
+     cost of starting the benchmark rather than the cost of the operation, and
+     it showed up as a first row an order of magnitude off its neighbours.  The
+     MINIMUM of the remaining rounds is the round least disturbed by the
+     scheduler, which is what we want: the question is what the mechanism
+     costs, not what the machine was doing at the time. */
+  for (int rep = 0; rep < 4; rep++) {
+      int64_t t0 = tur_monotonic_ns();
+      for (int64_t i = 0; i < iters; i++) tur_fiber_block_resume(fb, 0);
+      int64_t t1 = tur_monotonic_ns();
+      if (rep > 0 && t1 - t0 < best) best = t1 - t0;
+  }
+  return best;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; Path 3: the cloneable continuation snapshot
+;; ---------------------------------------------------------------------------
+
+;;; cloneable-k-id -- the shift body for the warm-up below.  Left untyped
+;;; deliberately: the parameter is a captured continuation, and writing `: int`
+;;; for it would be exactly the pointer-as-integer the type rules forbid.
+(defn cloneable-k-id [k] : int k)
+
+;;; cloneable-warmup -- run one real cloneable-reset/shift.
+;;;
+;;; Not decoration: the cloneable-continuation runtime is emitted ON DEMAND, so
+;;; without a use of the language form in this program the `tur_cloneable_cont`
+;;; type and its clone/resume/drop entry points are simply not in the emitted C
+;;; and the measurement functions below do not compile.  It doubles as a check
+;;; that the surface this path measures actually works here.
+(defn cloneable-warmup [] : int
+  (cloneable-reset (cloneable-shift cloneable-k-id 0)))
+
+;;; clone-cont-fn -- the continuation body: identity, as with frame-id.
+(defn clone-cont-fn [env : ptr<void> v : int] : int
+  ```c
+  (void)env; return v;
+  ```)
+
+;;; clone-cont-make -- build a cloneable continuation with the given hooks.
+(defn clone-cont-make [fn : ptr<void> clone : ptr<void> drop : ptr<void>] : CloneCont
+  ```c
+  tur_cloneable_cont *c = (tur_cloneable_cont *)malloc(sizeof(tur_cloneable_cont));
+  if (!c) return 0;
+  c->cont_fn   = (int64_t (*)(void *, int64_t))fn;
+  c->clone_env = (void *(*)(const void *))clone;
+  c->drop_env  = (void (*)(void *))drop;
+  if (clone) { c->env = malloc(64); memset(c->env, 0, 64); *(int64_t *)c->env = 1; }
+  else       { c->env = NULL; }
+  return (int64_t)(intptr_t)c;
+  ```)
+
+;;; clone-cont-free -- release a cloneable continuation.
+(defn clone-cont-free [c : CloneCont] : void
+  ```c
+  tur_cloneable_cont_drop((int64_t)c);
+  ```)
+
+;;; clone-capture-ns -- total nanoseconds for `iters` clones.
+(defn clone-capture-ns [c : CloneCont iters : int] : int
+  ```c
+  int64_t *held = (int64_t *)malloc((size_t)iters * sizeof(int64_t));
+  if (!held) return -1;
+  int64_t best = INT64_MAX;
+  /* One untimed warm-up round, then best-of-3.
+     The first pass through any of these paths pays for page faults and
+     allocator arena growth that no later pass repeats -- timing it reports the
+     cost of starting the benchmark rather than the cost of the operation, and
+     it showed up as a first row an order of magnitude off its neighbours.  The
+     MINIMUM of the remaining rounds is the round least disturbed by the
+     scheduler, which is what we want: the question is what the mechanism
+     costs, not what the machine was doing at the time. */
+  for (int rep = 0; rep < 4; rep++) {
+      int64_t t0 = tur_monotonic_ns();
+      for (int64_t i = 0; i < iters; i++) held[i] = tur_cloneable_cont_clone((int64_t)c);
+      int64_t t1 = tur_monotonic_ns();
+      for (int64_t i = 0; i < iters; i++) tur_cloneable_cont_drop(held[i]);
+      if (rep > 0 && t1 - t0 < best) best = t1 - t0;
+  }
+  free(held);
+  return best;
+  ```)
+
+;;; clone-restore-ns -- total nanoseconds for `iters` resumes.
+(defn clone-restore-ns [c : CloneCont iters : int] : int
+  ```c
+  volatile int64_t acc = 0;
+  int64_t best = INT64_MAX;
+  /* One untimed warm-up round, then best-of-3.
+     The first pass through any of these paths pays for page faults and
+     allocator arena growth that no later pass repeats -- timing it reports the
+     cost of starting the benchmark rather than the cost of the operation, and
+     it showed up as a first row an order of magnitude off its neighbours.  The
+     MINIMUM of the remaining rounds is the round least disturbed by the
+     scheduler, which is what we want: the question is what the mechanism
+     costs, not what the machine was doing at the time. */
+  for (int rep = 0; rep < 4; rep++) {
+      int64_t t0 = tur_monotonic_ns();
+      for (int64_t i = 0; i < iters; i++) acc += tur_cloneable_cont_resume((int64_t)c, i);
+      int64_t t1 = tur_monotonic_ns();
+      if (rep > 0 && t1 - t0 < best) best = t1 - t0;
+  }
+  return best;
+  ```)
+
+;;; clone-capture-bytes -- bytes one clone allocates.
+(defn clone-capture-bytes [env-bytes : int] : int
+  ```c
+  return (int64_t)sizeof(tur_cloneable_cont) + env_bytes;
+  ```)
+
+
+;; ---------------------------------------------------------------------------
+;; Baselines -- the floor, and the alternative the trail competes with
+;; ---------------------------------------------------------------------------
+
+;;; loop-iteration-ns -- an empty accumulate loop: the absolute floor.
+(defn loop-iteration-ns [iters : int] : int
+  ```c
+  volatile int64_t acc = 0;
+  int64_t t0 = tur_monotonic_ns();
+  for (int64_t i = 0; i < iters; i++) acc += i;
+  int64_t t1 = tur_monotonic_ns();
+  (void)acc;
+  return t1 - t0;
+  ```)
+
+;;; plain-call-ns -- `iters` indirect calls to a real function.
+;;;
+;;; Through a `volatile` function pointer so the call actually happens: every
+;;; path measured above goes through a function pointer the compiler cannot see
+;;; through, and a baseline that got inlined into nothing would make all of
+;;; them look worse than they are.
+(defn plain-call-ns [f : ptr<void> iters : int] : int
+  ```c
+  int64_t (*volatile fp)(int64_t) = (int64_t (*)(int64_t))f;
+  volatile int64_t acc = 0;
+  int64_t t0 = tur_monotonic_ns();
+  for (int64_t i = 0; i < iters; i++) acc += fp(i);
+  int64_t t1 = tur_monotonic_ns();
+  (void)acc;
+  return t1 - t0;
+  ```)
+
+;;; sink -- consume a value so the computation that produced it must happen.
+;;;
+;;; The closure baseline needs this.  `closure-spin` is a pure tail-recursive
+;;; loop, so with its result unused the optimizer deleted the whole thing and
+;;; the row read 35 ns for a million invocations -- a measurement of nothing,
+;;; and one that looks like a great result rather than a broken one.
+(defn sink [v : int] : int
+  ```c
+  static volatile int64_t s;
+  s = v;
+  return (int64_t)s;
+  ```)
+
+;;; now-ns -- the monotonic clock, for baselines timed from Turmeric.
+(defn now-ns [] : int
+  ```c
+  return tur_monotonic_ns();
+  ```)
+
+;;; closure-spin -- invoke a Turmeric closure `n` times.
+;;;
+;;; Timed from Turmeric rather than from inline C on purpose: a closure
+;;; invocation is a Turmeric-level operation, and reaching into C to time it
+;;; would measure a C function pointer instead of the thing being baselined.
+(defn closure-spin [f : (fn [int] int) n : int acc : int] : int
+  (if (<= n 0)
+    acc
+    (closure-spin f (- n 1) (f acc))))
+
+;;; hamt-snapshot-ns -- the persistent-structure snapshot cost.
+;;;
+;;; This is the alternative the trail competes with -- "thread the state around
+;;; it" instead of undoing it -- so the crossover between this row and the
+;;; SX1 trail rows is a real design output, not decoration.
+(defn hamt-snapshot-ns [entries : int iters : int] : int
+  ```c
+  void *base = tur_hamt_new();
+  for (int64_t i = 0; i < entries; i++) {
+      int64_t *k = (int64_t *)malloc(sizeof(int64_t));
+      int64_t *v = (int64_t *)malloc(sizeof(int64_t));
+      *k = i; *v = i;
+      uint64_t h = (uint64_t)i * 2654435761ULL;
+      void *m2 = tur_hamt_set(base, (int64_t)h, (void *)k, (void *)v);
+      if (m2 != base) tur_hamt_free(base);
+      base = m2;
+  }
+  int64_t t0 = tur_monotonic_ns();
+  for (int64_t i = 0; i < iters; i++) {
+      int64_t *k = (int64_t *)malloc(sizeof(int64_t));
+      int64_t *v = (int64_t *)malloc(sizeof(int64_t));
+      *k = 100000 + i; *v = i;
+      uint64_t h = (uint64_t)(100000 + i) * 2654435761ULL;
+      void *snap = tur_hamt_set(base, (int64_t)h, (void *)k, (void *)v);
+      tur_hamt_free(snap);
+  }
+  int64_t t1 = tur_monotonic_ns();
+  tur_hamt_free(base);
+  return t1 - t0;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; Reporting
+;; ---------------------------------------------------------------------------
+
+;;; peak-rss-kb -- high-water RSS in KiB, or 0 where it cannot be read.
+(defn peak-rss-kb [] : int
+  ```c
+  FILE *f = fopen("/proc/self/status", "r");
+  if (!f) return 0;
+  char line[256]; int64_t kb = 0;
+  while (fgets(line, sizeof(line), f))
+      if (strncmp(line, "VmHWM:", 6) == 0) { kb = strtoll(line + 6, NULL, 10); break; }
+  fclose(f);
+  return kb;
+  ```)
+
+;;; Row -- one CSV record.  A struct rather than a nine-parameter print shim,
+;;; per the arity guide: these are named, independent inputs.
+(defstruct Row
+  [path      : cstr   ;; dk | fiber | cloneable | baseline-*
+   frames    : int    ;; F -- 0 where the path has no notion of frames
+   env-bytes : int    ;; E -- bytes cloned per owning frame; -1 = rc handle
+   resumes   : int    ;; R
+   trailed   : int    ;; T -- always 0 until SX1
+   cap-iters : int    ;; captures timed
+   res-iters : int    ;; restores timed (capture and restore want very
+                      ;; different counts: a held capture costs memory per
+                      ;; iteration, a restore costs none)
+   cap-ns    : int    ;; total ns for cap-iters captures
+   res-ns    : int    ;; total ns for res-iters restores
+   bytes-cap : int])  ;; bytes allocated by ONE capture
+
+;;; emit-row -- print one CSV record.
+(defn emit-row [r : Row] : void
+  ```c
+  printf("%s,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld\n",
+         r.path,
+         (long long)r.frames, (long long)r.env_bytes, (long long)r.resumes,
+         (long long)r.trailed,
+         (long long)r.cap_iters, (long long)r.res_iters,
+         (long long)r.cap_ns, (long long)r.res_ns, (long long)r.bytes_cap);
+  ```)
+
+;;; emit-header -- the CSV header, so the file is self-describing.
+(defn emit-header [] : void
+  ```c
+  printf("path,F,E,R,T,cap_iters,res_iters,cap_ns_total,res_ns_total,bytes_per_capture\n");
+  ```)
+
+;;; emit-rss -- a trailing comment line carrying peak RSS for the whole run.
+(defn emit-rss [kb : int] : void
+  ```c
+  printf("# peak_rss_kb=%lld\n", (long long)kb);
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; The sweep
+;; ---------------------------------------------------------------------------
+
+;;; null-ptr -- the E = 0 corner: no clone hook at all, so dk_copy_node keeps
+;;; its shallow env-pointer copy and env_clone never fires.
+(defn null-ptr [] : ptr<void>
+  ```c
+  return NULL;
+  ```)
+
+;;; dk-cap-iters -- captures to time at this F.
+;;;
+;;; Held captures cost memory in proportion to F, so the count has to fall as
+;;; F rises.  The floor keeps the batch long enough to stay well clear of clock
+;;; resolution at the top of the sweep.
+(defn dk-cap-iters [frames : int] : int
+  ```c
+  int64_t n = 400000 / (frames + 2);
+  if (n > 20000) n = 20000;
+  if (n < 16) n = 16;
+  return n;
+  ```)
+
+;;; dk-res-iters -- restores to time at this F.  Restores hold nothing, so this
+;;; is bounded by patience rather than by memory.
+(defn dk-res-iters [frames : int] : int
+  ```c
+  int64_t n = 2000000 / (frames + 2);
+  if (n > 50000) n = 50000;
+  if (n < 32) n = 32;
+  return n;
+  ```)
+
+;;; dk-measure -- one (F, E, R) point on the DK curve.
+(defn dk-measure [frames : int e : int r : int clone : ptr<void> drop : ptr<void>] : int
+  (let [ci    (dk-cap-iters frames)
+        ri    (* (dk-res-iters frames) r)
+        chain (dk-chain-build frames frame-id clone drop)
+        capn  (dk-capture-ns chain ci)
+        resn  (dk-restore-ns chain ri)
+        eb    (if (< e 0) 0 e)
+        bytes (dk-capture-bytes chain eb)]
+    (emit-row (Row "dk" frames e r 0 ci ri capn resn bytes))
+    (dk-chain-free chain)
+    0))
+
+;;; dk-sweep-f -- the log sweep over F at one R, across the whole E axis.
+(defn dk-sweep-f [f : int r : int] : int
+  (if (> f 4096)
+    0
+    (do
+      (dk-measure f 0  r (null-ptr)   (null-ptr))
+      (dk-measure f -1 r env-clone-rc env-drop-rc)
+      (dk-measure f 8  r env-clone-8  env-drop-bytes)
+      (dk-measure f 64 r env-clone-64 env-drop-bytes)
+      (dk-sweep-f (* f 2) r))))
+
+;;; fiber-stack-bytes -- one fixed stack for every row of the fiber sweep.
+;;;
+;;; Fixed, not scaled to F, and that is the whole point: the fiber strategy's
+;;; claim is a CONSTANT allocation with an O(1) switch, so scaling the stack
+;;; with F would measure a different strategy and manufacture the slope we are
+;;; here to test for.  It has to clear the deepest row -- 4096 non-tail frames
+;;; do not fit in the 1 MiB default -- so it is sized for the top of the sweep
+;;; and held there for every row.
+(defn fiber-stack-bytes [] : int
+  ```c
+  return 4 * 1024 * 1024;
+  ```)
+
+;;; fiber-cap-iters -- fibers to create per timing batch.
+;;;
+;;; Every held fiber owns a whole stack, so this stays small where the deep
+;;; rows actually touch those pages.
+(defn fiber-cap-iters [frames : int] : int
+  ```c
+  int64_t n = 100000 / (frames + 16);
+  if (n > 64) n = 64;
+  if (n < 8) n = 8;
+  return n;
+  ```)
+
+;;; fiber-measure -- one (F, R) point on the fiber curve.
+(defn fiber-measure [frames : int r : int] : int
+  (let [ci    (fiber-cap-iters frames)
+        ri    (* 20000 r)
+        stack (fiber-stack-bytes)
+        capn  (fiber-capture-ns fiber-body frames stack ci)
+        f     (fiber-make fiber-body frames stack)
+        resn  (fiber-restore-ns f ri)]
+    (emit-row (Row "fiber" frames 0 r 0 ci ri capn resn stack))
+    (fiber-free f)
+    0))
+
+;;; fiber-sweep-f -- the log sweep over F at one R.  E does not apply: a fiber
+;;; captures a stack, not an env, so there is no per-owner clone to vary.
+(defn fiber-sweep-f [f : int r : int] : int
+  (if (> f 4096)
+    0
+    (do
+      (fiber-measure f r)
+      (fiber-sweep-f (* f 2) r))))
+
+;;; clone-measure -- one (E, R) point on the cloneable-snapshot curve.
+;;;
+;;; F is reported as 0 rather than swept.  A cloneable continuation is a
+;;; four-field struct with no chain behind it, so its cost cannot depend on
+;;; frames under the prompt -- sweeping F here would emit a dozen repetitions
+;;; of one measurement dressed up as a curve.  b_F is zero by construction, and
+;;; saying so is worth more than pretending to have measured it.
+(defn clone-measure [e : int r : int clone : ptr<void> drop : ptr<void>] : int
+  (let [ci   (dk-cap-iters 1)
+        ri   (* (dk-res-iters 1) r)
+        c    (clone-cont-make clone-cont-fn clone drop)
+        capn (clone-capture-ns c ci)
+        resn (clone-restore-ns c ri)
+        eb   (if (< e 0) 0 e)]
+    (emit-row (Row "cloneable" 0 e r 0 ci ri capn resn (clone-capture-bytes eb)))
+    (clone-cont-free c)
+    0))
+
+;;; clone-sweep -- the E axis at one R.
+(defn clone-sweep [r : int] : int
+  (do
+    (clone-measure 0  r (null-ptr)   (null-ptr))
+    (clone-measure -1 r env-clone-rc env-drop-rc)
+    (clone-measure 8  r env-clone-8  env-drop-bytes)
+    (clone-measure 64 r env-clone-64 env-drop-bytes)
+    0))
+
+;;; bump / bump2 -- the closure baseline's body, twice.
+;;;
+;;; Two identical functions so `pick-bump` has something to choose BETWEEN.
+;;; With a single statically-known callee the compiler devirtualized the
+;;; indirect call, folded the whole tail-recursive loop, and the row read
+;;; 0.33 ns per invocation -- below an empty loop iteration, and below a direct
+;;; call.  The checksum still came out right, which is exactly why the checksum
+;;; alone is not enough: a folded loop produces the correct answer instantly.
+(defn bump  [x : int] : int (+ x 1))
+(defn bump2 [x : int] : int (+ x 1))
+
+;;; pick-bump -- choose a callee the compiler cannot predict.
+;;;
+;;; `which` comes through `sink`, which round-trips it via a volatile, so the
+;;; choice is not knowable at compile time and the call in `closure-spin` stays
+;;; a real indirect call.
+(defn pick-bump [which : int] : (fn [int] int)
+  (if (= which 0) bump bump2))
+
+;;; emit-check -- print the closure baseline's checksum.
+;;;
+;;; Printed, not discarded: it is what proves the closure loop ran.  It must
+;;; equal the iteration count; anything else means the baseline measured
+;;; something other than a million closure invocations.
+(defn emit-check [v : int expect : int] : void
+  ```c
+  printf("# closure_checksum=%lld expected=%lld\n",
+         (long long)v, (long long)expect);
+  ```)
+
+;;; baselines -- the floor, a real call, and the persistent-structure
+;;; alternative the trail will be measured against in SX1.
+(defn baselines [] : int
+  (let [n     1000000
+        li    (loop-iteration-ns n)
+        pc    (plain-call-ns bump n)
+        cb    (pick-bump (sink 0))
+        t0    (now-ns)
+        spun  (closure-spin cb n 0)
+        t1    (now-ns)
+        keep  (sink spun)
+        hamt  (hamt-snapshot-ns 100 20000)]
+    (emit-row (Row "baseline-loop-iteration" 0 0 1 0 n n li 0 0))
+    (emit-row (Row "baseline-plain-call" 0 0 1 0 n n pc 0 0))
+    (emit-row (Row "baseline-closure-call" 0 0 1 0 n n (- t1 t0) 0 0))
+    (emit-row (Row "baseline-hamt-snapshot" 100 0 1 0 20000 20000 hamt 0 0))
+    (emit-check keep n)
+    0))
+
+;; ---------------------------------------------------------------------------
+;; The T axis: trailed writes live under the prompt (SX1)
+;;
+;; Reserved in the CSV schema from SX0 so this could land without reshaping the
+;; file, and now filled. The trail is the alternative to capturing state at all:
+;; instead of copying a continuation so a second entry does not see the first
+;; one's mutations, record the mutations and put them back. So the number that
+;; matters is `bt-mark` + T writes + `bt-undo-to!` against a capture/restore of
+;; comparable live state -- which is what puts these rows in the same table
+;; rather than a file of their own.
+;;
+;; Called through the C shims rather than stdlib/trail.tur on purpose: what is
+;; being measured is the runtime mechanism, not the language surface over it, so
+;; the timed region holds no Turmeric call overhead. (This predates the
+;; `backtrackable-state` graduation, when reaching the surface also meant
+;; flipping an experiment gate; the reason to keep it is now the narrower one.)
+;; ---------------------------------------------------------------------------
+
+;;; trail-autolink-hint -- pull src/runtime/trail.c into this program.
+(defn trail-autolink-hint [] : int
+  ```c
+  /* __tur_autolink__: src/runtime/trail.c -Isrc/runtime */
+  return 0;
+  ```)
+
+;;; trail-undo-ns -- total nanoseconds for `iters` mark/T-writes/undo cycles.
+;;;
+;;; One cell per write, because the stamp means a single cell written T times
+;;; costs ONE trail entry -- which is the right answer for a search loop and
+;;; exactly the wrong shape for measuring what T entries cost.
+(defn trail-undo-ns [writes : int iters : int] : int
+  ```c
+  extern int64_t tur_trail_mark_packed(void);
+  extern _Bool   tur_trail_undo_to_packed(int64_t);
+  extern void   *tur_bt_cell_new(int64_t);
+  extern void    tur_bt_cell_free(void *);
+  extern _Bool   tur_bt_cell_set(void *, int64_t);
+  extern void    tur_trail_reset(void);
+
+  void **cells = (void **)malloc((size_t)writes * sizeof(void *));
+  if (!cells) return -1;
+  for (int64_t i = 0; i < writes; i++) cells[i] = tur_bt_cell_new(i);
+
+  int64_t best = INT64_MAX;
+  for (int rep = 0; rep < 4; rep++) {
+      int64_t t0 = tur_monotonic_ns();
+      for (int64_t k = 0; k < iters; k++) {
+          int64_t m = tur_trail_mark_packed();
+          for (int64_t i = 0; i < writes; i++) tur_bt_cell_set(cells[i], i + 1);
+          tur_trail_undo_to_packed(m);
+      }
+      int64_t t1 = tur_monotonic_ns();
+      if (rep > 0 && t1 - t0 < best) best = t1 - t0;
+  }
+  for (int64_t i = 0; i < writes; i++) tur_bt_cell_free(cells[i]);
+  free(cells);
+  tur_trail_reset();
+  return best;
+  ```)
+
+;;; trail-bytes -- bytes one mark/undo cycle keeps live at T writes.
+(defn trail-bytes [writes : int] : int
+  ```c
+  /* Two words per entry plus the stamp/flags word, which is what the trail
+     itself costs; the cells are the caller's and are not counted. */
+  return writes * 32;
+  ```)
+
+;;; trail-iters -- cycles to time at this T.
+(defn trail-iters [writes : int] : int
+  ```c
+  int64_t n = 2000000 / (writes + 2);
+  if (n > 50000) n = 50000;
+  if (n < 32) n = 32;
+  return n;
+  ```)
+
+;;; trail-measure -- one point on the T axis.
+(defn trail-measure [writes : int] : int
+  (let [it (trail-iters writes)
+        ns (trail-undo-ns writes it)]
+    (emit-row (Row "trail" 0 0 1 writes it it ns 0 (trail-bytes writes)))
+    0))
+
+;;; trail-sweep -- the log sweep over T.
+(defn trail-sweep [t : int] : int
+  (if (> t 4096)
+    0
+    (do
+      (trail-measure t)
+      (trail-sweep (* t 2)))))
+
+(defn main [] : int
+  (cloneable-warmup)
+  (emit-header)
+  (dk-sweep-f 1 1)
+  (dk-sweep-f 1 8)
+  (fiber-sweep-f 1 1)
+  (fiber-sweep-f 1 8)
+  (clone-sweep 1)
+  (clone-sweep 8)
+  (trail-sweep 1)
+  (baselines)
+  (emit-rss (peak-rss-kb))
+  0)

@@ -1,0 +1,44 @@
+;; arrow-loop-fix -- ArrowLoop feedback by iteration to a fixpoint.
+;;
+;; For a looped arrow that reads the fed-back d STRICTLY, a cell that is only
+;; filled after the run is no help.  arrow-loop-fix seeds the cell instead and
+;; re-runs the arrow, each pass seeing the previous pass's d, until d stops
+;; moving or the fuel runs out.  The result is the c output of the last pass.
+
+(load "stdlib/arrow.tur")
+(load "stdlib/tuple.tur")
+
+;; Newton's method for integer sqrt: d' = (d + b/d) / 2, c = d.
+;; The fixpoint of d' is floor(sqrt(b)).
+(defn newton [p] : int
+  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  typedef struct { int64_t filled; int64_t value; } LC;
+  P *s  = (P *)(intptr_t)p;
+  LC *c = (LC *)(intptr_t)s->e2;
+  int64_t b = s->e1, d = c->value;
+  P *r = (P *)malloc(sizeof(P));
+  r->e1 = d;
+  r->e2 = (d + b / d) / 2;
+  return (int64_t)(intptr_t)r; ```)
+
+;; The same shape in Turmeric on the erased carrier: converge d up to a cap.
+;; d' = min(d + 1, b), c = d -- the fixpoint is b itself.
+(defn climb [p : int] : int
+  (let [t (:: p (Tuple2 int int))
+        b (tuple2-1st t)
+        d (loop-cell-force (loop-cell-of (tuple2-2nd t)))
+        n (if (< (+ d 1) b) (+ d 1) b)]
+    (:: (tuple2 d n) :int)))
+
+(defn main [] : int
+  (let [sq (arrow-loop-fix newton 1 32)]
+    (println (sq 144))       ;; 12
+    (println (sq 1000))      ;; 31 -- floor(sqrt(1000))
+    (println (sq 1)))        ;; 1
+  ;; Converges at d = b after b iterations, well inside the fuel.
+  (let [up (arrow-loop-fix climb 0 64)]
+    (println (up 7)))        ;; 7
+  ;; Fuel is a bound, not an error: 3 passes of climb from 0 reach d = 2.
+  (let [short (arrow-loop-fix climb 0 3)]
+    (println (short 100)))   ;; 2
+  0)

@@ -3,7 +3,7 @@
 ;; (. obj field)        desugars to (.field obj)        -- struct field read
 ;; (. obj field args)   desugars to (.field obj args)   -- function-field call
 ;;
-;; Regression for docs/archive/dot-method-call-misroutes-to-typeclass.md:
+;; Regression for docs/archive/history/dot-method-call-misroutes-to-typeclass.md:
 ;; the bare `.` head previously routed through typeclass dispatch with an
 ;; empty method name ("no typeclass method found for ''").
 

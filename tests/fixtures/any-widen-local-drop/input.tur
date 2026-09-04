@@ -1,0 +1,37 @@
+;; any-widen-local-drop -- an `any` whose payload box this scope owns is freed
+;; at scope exit.
+;;
+;; The frame-box rule (any-widen-frame-box) removes the allocation for a widen in
+;; ARGUMENT position.  It cannot help where the `any` outlives the expression
+;; that built it -- a value RETURNED as `any`, or handed back by a callee that
+;; boxed it -- because a caller-frame copy would dangle the moment that frame
+;; returns.  Such a value lands in a local, and a local is where ownership can be
+;; settled: if the name does not escape, the body is its last use.
+;;
+;; `ret-any` boxes on every call, so without the scope-exit drop this leaks one
+;; 16-byte box per turn.  requires.leak-check is what makes that a test rather
+;; than a claim.
+
+(defstruct Pt [x : int y : int])
+
+;; Non-retaining reader: an int result cannot carry the payload back out.
+(defn reads [v : any] : int
+  (if (is? v Pt) 1 0))
+
+;; Produces an `any` the CALLER owns -- return position must heap-box.
+(defn ret-any [i : int] : any (make-struct Pt i 2))
+
+;; The owning scope.  `a` does not escape: its only use is a non-retaining
+;; reader, so the box dies when this function returns.
+(defn one [i : int] : int
+  (let [a (ret-any i)]
+    (reads a)))
+
+(defn loop-n [i : int n : int acc : int] : int
+  (if (= i n)
+    acc
+    (loop-n (+ i 1) n (+ acc (one i)))))
+
+(defn main [] : int
+  (println (loop-n 0 2000 0))    ;; 2000 -- one per turn
+  0)

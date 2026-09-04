@@ -3,7 +3,7 @@
 ;; OUTLIVES the producing frame must not store a dangling stack address.
 ;;
 ;; Before the fix
-;; (docs/archive/vec-push-byvalue-aggregate-element-stores-dangling-stack-address.md),
+;; (docs/archive/history/vec-push-byvalue-aggregate-element-stores-dangling-stack-address.md),
 ;; the concrete->carrier bridge spilled each element to a stack local and
 ;; carried `(int64_t)(intptr_t)(&tmp)`.  Correct for an immediate consumer, but
 ;; for a `Vec` returned from `build-vec` the stored pointers dangle the moment
@@ -34,7 +34,7 @@
     (let [junk (clobber 4096 0)]
       (let [a (:: (vec-get vo 0) (Option int))
             b (:: (vec-get vo 1) (Option int))]
-        (println (if (.is-some a) (.value a) -1))    ;; wants 5
-        (println (if (.is-some b) (.value b) -1))    ;; wants 99
+        (println (if (some? a) (unwrap a) -1))    ;; wants 5
+        (println (if (some? b) (unwrap b) -1))    ;; wants 99
         (+ junk 0)))
     0))

@@ -41,6 +41,9 @@ bool emit_cps_ir_program_has_emittable(const Expr *program);
  * the cps-backend already emits (else the two declare the same `__cps` symbol
  * with different signatures -- a `conflicting types` error). */
 bool emit_cps_ir_emits_binding(const Expr *program, const Binding *b);
+/* SR2b: colored generic whose base signature sig-rejects -- needs a monomorph
+ * clone (the G3a island path's precondition).  See the definition. */
+bool emit_cps_ir_colored_fn_needs_mono(const struct FnDef *fd);
 
 /* If `fn_def_expr`'s FnDef is colored and lies in the C1 emittable subset, emit
  * its CPS body + direct-entry wrapper into `file` and return true.  Otherwise

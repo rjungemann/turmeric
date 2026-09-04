@@ -13,7 +13,7 @@
  * pulling that into every compiler TU invites macro collisions (ERROR, min/max)
  * for no benefit.  Only eval.c needs it.
  *
- * See docs/upcoming/v1/windows-support-plan.md.
+ * See docs/archive/windows-support-plan.md.
  */
 
 #ifndef TUR_PLATFORM_MMAN_H

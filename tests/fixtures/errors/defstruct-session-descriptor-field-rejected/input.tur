@@ -3,7 +3,7 @@
 ;; a `Session[P]`, and a descriptor is only meaningful nested inside
 ;; `(Session ...)`.  So a bare descriptor field is permanently rejected (unlike
 ;; the value-carrying `Session`/`project`/`Role` heads, which lower in EF-4).
-;; See docs/upcoming/structdef-exotic-field-forms-plan.md.
+;; See docs/archive/history/structdef-exotic-field-forms-plan.md.
 
 (defstruct Bad [s : (Send int Close)])
 

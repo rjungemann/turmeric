@@ -14,7 +14,7 @@
 ;; from whichever argument grounds it (arg 0 may be a bare `(none)` whose element
 ;; is a free tyvar).
 ;;
-;; Run: TUR_M7_HKT=1 ./build/tur run docs/upcoming/v2/m7-hkt-probe-alt.tur; echo $?
+;; Run: TUR_M7_HKT=1 ./build/tur run docs/artifacts/m7-hkt-probe-alt.tur; echo $?
 ;;   -> 42  (TARGET, REACHED 2026-06-19)
 ;;
 ;; STATUS (2026-06-19): WORKING end-to-end under TUR_M7_HKT=1 -- exits 42 with

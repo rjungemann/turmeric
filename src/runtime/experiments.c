@@ -1,7 +1,7 @@
 /* experiments.c -- the experimental-feature-flag registry.
  *
  * Successor to the retired `-X<name>` surface.  See experiments.h and
- * docs/upcoming/v1/experimental-flag-mechanism-plan.md.
+ * docs/archive/history/experimental-flag-mechanism-plan.md.
  *
  * The EXPERIMENTS[] table below is the single source of truth: `tur
  * experiments`, `tur --help`, the docs site, and the release-cut script all
@@ -29,17 +29,34 @@
 #include <stdlib.h>   /* getenv, exit, malloc, free */
 #include <string.h>
 
-/* The registry.  Empty by design (see file header). */
+/* The registry. */
 static const ExperimentDescriptor EXPERIMENTS[] = {
+    /* `backtrackable-state` GRADUATED 2026-08-29 -- stdlib/trail.tur is
+     * autoloaded unconditionally and the row is gone (see stdlib_autoload.c).
+     * It was held at prototype by one open question, plan 3.5's multi-shot
+     * re-entry, which is now DECIDED: the checked error is permanent and
+     * snapshotting the live trail segment is declined.  Do not re-add a gate
+     * for it. */
+    /* option-niche GRADUATED 2026-09-03 -- an `(Option P)` over a non-nullable
+     * pointer payload is carried AS that pointer unconditionally (16 bytes to 8,
+     * `(none)` as NULL), and a Vec stores such an element as that word (CE2).
+     * The prototype's open question -- can non-nullness be DECLARED rather than
+     * listed -- was answered 2026-08-28 (`:non-null` on a defopaque, TUR-E0303
+     * at elaboration, the Some ctor and the carrier crossing at runtime); the
+     * container parity that removed the urgency was broken by CE1/CE2
+     * 2026-09-03.  The gate lives in sr3_option_niche (types.c);
+     * TUR_OPTION_NICHE=0 restores the tagged 16-byte monomorph for bisection.
+     * The name moves to GRADUATED[] below (a lingering --enable is a
+     * TUR-W0063 no-op).  See docs/upcoming/sr3-option-niche-plan.md. */
     /* defstruct-as-defadt GRADUATED 2026-06-28 -- a `defstruct` now lowers to a
      * single-variant record `defadt` unconditionally (always-on; the gate lives
      * in defstruct_lowers_to_adt, elab_structs.c).  See
-     * docs/upcoming/defstruct-as-defadt-plan.md. */
+     * docs/archive/defstruct-as-defadt-plan.md. */
     /* B4 byvalue-recursive-carrier GRADUATED 2026-06-25 -- the recursive carrier
      * wrappers (Re/Expr, and wider products carrying an (F Self) field) now flow
      * by value through the fat-closure ABI unconditionally; the gate lives in
      * adt_is_byvalue_product_d (types.c).  See
-     * docs/upcoming/v2/b4-fat-closure-byvalue-adt-abi-plan.md. */
+     * docs/archive/history/b4-fat-closure-byvalue-adt-abi-plan.md. */
     /* forall-kinds GRADUATED 2026-07-06 -- explicit kind annotations on
      * forall/exists bound variables (e.g. (f :: * -> *)) are always accepted;
      * the pre-elaboration gate at elab_types.c is removed.  See
@@ -61,7 +78,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * dispatches through the dict for its own class.  The one residual shape --
      * a constraint method dispatched from inside a nested lambda -- is rejected
      * with TUR-E0311 (never miscompiled) and tracked in
-     * docs/reported/forall-dict-pass-nested-lambda-method.md.  See
+     * docs/archive/history/forall-dict-pass-nested-lambda-method.md.  See
      * docs/archive/history/forall-dict-pass-multi-constraint-hkt-plan.md. */
     /* hrt-curried-result GRADUATED 2026-07-06 -- a curried rank-2 poly fn whose
      * forall body result is itself a function (e.g. (forall [a] (-> a (-> a a))))
@@ -77,10 +94,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
     /* vl-wide-mono GRADUATED 2026-07-05 (CM4 of van-laarhoven-consumer-mono-plan)
      * -- by-value HKT monomorphization across the van Laarhoven lens boundary
      * (Path B) is now unconditional: SIMPLE lenses (direct `fmap` tail) redirect
-     * to a by-value mono body with no carrier box; COMPOSED lenses fall back to
-     * the always-on Path A carrier bridge (the residual by-value-propagation fix
-     * is tracked in docs/upcoming/v2/van-laarhoven-composed-byvalue-plan.md).
-     * The `g_opt_vl_wide_mono` bit is retired. */
+     * to a by-value mono body with no carrier box.  COMPOSED lenses fell back to
+     * the always-on Path A carrier bridge at graduation; that residual was closed
+     * the same day by CB1-CB5
+     * (docs/archive/history/van-laarhoven-composed-byvalue-plan.md), so composed
+     * lenses now thread `(f a)` by value too and Path A is only the CB5 backstop
+     * for shapes that cannot be lowered.  The `g_opt_vl_wide_mono` bit is
+     * retired. */
     /* panic-return-signal + stackless-catch-unwind GRADUATED 2026-07-07 -- the
      * compiled backend now always lowers panic propagation via the thread-local
      * `tur_panicking` return-path signal (no setjmp/longjmp on the catch-unwind
@@ -94,7 +114,8 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * the elab_handle gate and g_opt_cps_effects are removed.  handle-shallow
      * lowers to dk_handler_shallow on the CPS path and to the shallow_consumed
      * bubble-up on the fiber path, with compiled == interp on all shapes.  A
-     * lingering --enable=cps-effects is an accept-and-warn no-op via GRADUATED[]. */
+     * The name aged out of GRADUATED[] 2026-08-22; a lingering
+     * --enable=cps-effects is now TUR-E0310. */
     /* cps-async GRADUATED 2026-07-19 -- the heap-continuation representation for
      * `async`/`await` is now the unconditional CPS-path lowering: a function
      * containing `await` is always CPS-colored, and each `await` lowers to a
@@ -103,7 +124,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * F3 closed every admissibility gap (await-as-shift, deferred pending drive,
      * bounded multi-await; docs/archive/compiled-async-heap-continuations-plan.md);
      * a recursive await evicting to the direct emitter is by-design (F4 declined;
-     * docs/archive/compiled-stackless-recursive-await-plan.md).  The 2026-07-19
+     * docs/archive/history/compiled-stackless-recursive-await-plan.md).  The 2026-07-19
      * graduation attempt surfaced two fiber-interop gaps, both now closed so the
      * heap path is a strict superset of the fiber path:
      *   1. A pending future backed by a runnable scheduler fiber (manual spawn /
@@ -115,7 +136,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      *      `async-effect-spawn` colors natively instead of evicting.
      * The gate did its job; the row is retired and the name moved to GRADUATED[]
      * below (a lingering --enable is a TUR-W0063 no-op).  See
-     * docs/archive/cps-async-graduation-plan.md. */
+     * docs/archive/history/cps-async-graduation-plan.md. */
     /* cps-tramp-resume GRADUATED 2026-07-19 -- the CPS/DK trampolined tail-resume
      * path is now the DEFAULT and SOLE lowering for effectful colored code
      * (g_opt_cps_tramp_resume defaults true).  The full corpus DK-lowers every
@@ -125,13 +146,14 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
     /* owning-cloneable-capture GRADUATED 2026-07-20 -- admitting an owning value
      * (rc handle, :heap carrier handle, by-value aggregate) captured into a
      * multi-shot cloneable continuation, with the per-frame env clone/drop
-     * teardown, is now unconditional (g_opt_owning_cloneable_capture defaults
-     * true; the admission predicates in elab_effects.c / cps_ir.c / emit_cps_ir.c
-     * read it always-on).  Every capture channel and owning shape that is
-     * leak-clean in the base language is covered; the remaining rejections are
-     * bounded by the base drop's shallowness, not this gate.  The name moves to
-     * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).  See
-     * docs/archive/cps-backend-owning-env-teardown-e3-plan.md. */
+     * teardown, is unconditional -- the admission predicates in elab_effects.c /
+     * cps_ir.c / emit_cps_ir.c no longer test a bit at all (the
+     * g_opt_owning_cloneable_capture enable bit was retired 2026-08-22; see
+     * globals.h).  Every capture channel and owning shape that is leak-clean in
+     * the base language is covered; the remaining rejections are bounded by the
+     * base drop's shallowness, not this gate.  The name aged out of GRADUATED[]
+     * 2026-08-22 (a lingering --enable is now TUR-E0310).  See
+     * docs/archive/history/cps-backend-owning-env-teardown-e3-plan.md. */
     /* closure-drop-glue GRADUATED 2026-07-22 -- Model R (runtime drop-glue header
      * on every heap fat-closure env, walked on release via TUR_CLOSURE_DROP) is
      * now unconditional: the header ABI is emitted in every build and every
@@ -139,20 +161,23 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * fn-field drop, httpd/reactor teardown) routes through it.  The whole corpus
      * is crash- and leak-clean under the always-on ABI (forced-on suite verified
      * before graduation).  The name moves to GRADUATED[] below (a lingering
-     * --enable is a TUR-W0063 no-op).  See docs/upcoming/closure-drop-glue-plan.md. */
-    /* CG5: automatic, allocation-driven cycle collection -- `(gc-auto!)`.
-     * Gated because it changes runtime TIMING rather than accepting new syntax:
-     * with it on, collections happen at allocation checkpoints the program
-     * never asked for, so pause behaviour becomes implicit.  Everything else in
-     * the collector (`(gc!)`, `(gc-enable!)`) already ships ungated. */
-    { "cycle-gc",
-      "automatic allocation-driven rc<T> cycle collection ((gc-auto!))",
-      "docs/upcoming/v1/gc-cycle-collection-followup-plan.md",
-      "0.30.8",                  /* introduced */
-      "0.34.0",                  /* expires_at -- review at that cut: graduate,
-                                  *   shelve, or bump */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_cycle_gc },
+     * --enable is a TUR-W0063 no-op).  See docs/archive/closure-drop-glue-plan.md. */
+    /* CG5/CG8 cycle-gc GRADUATED 2026-08-17 -- `(gc-auto!)` is now an ordinary
+     * call form, available without `--enable`.  Read the scope narrowly, the
+     * way CG8 decided it: what graduated is the CALL FORM, not a default.
+     * `GC_AUTO` remains strictly opt-in -- a program that never calls
+     * `(gc-auto!)` still gets the pure-RC path with no collector overhead, and
+     * automatic collection is never going to be the default in this language
+     * (CG8 (2), rejected permanently, before or after v1).  Ungating costs a
+     * non-calling program exactly nothing, because the gate was on the call
+     * form while the `rc_cb_alloc_kinded` payload zeroing is conditional on
+     * GC_AUTO mode at RUN time.  Baked from 0.30.8 through the whole 0.31-0.33
+     * lines; pause time measured and fixed (PT1/PT2), the alloc-path cost
+     * measured (~10%, fixed overhead, AUTO-only), and the real-shape workload
+     * re-measured after the `set!` refcount leak it surfaced was fixed
+     * (steady-state residue ~60 blocks).  The name moves to GRADUATED[] below
+     * (a lingering --enable is a TUR-W0063 no-op).  See
+     * docs/archive/gc-cycle-collection-followup-plan.md. */
     /* RT0 refined GRADUATED 2026-08-01 -- static discharge of `#refine{...}`
      * predicates is now unconditional.  The runtime contract half was always
      * on; what became unconditional is the STATIC half, so the one
@@ -163,94 +188,148 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * moves to GRADUATED[] below and to GRADUATED_LAYERS[] in lang_layers.c --
      * a lingering --enable is a TUR-W0063 no-op, and a lingering
      * `#lang turmeric refined` a TUR-W0064 one.  See
-     * docs/upcoming/v1/refined-graduation-plan.md. */
-    /* J1 (docs/upcoming/jit-engine-plan.md): the in-process MIR JIT engine.
-     * Gated because it is a third execution engine whose semantics must stay
-     * identical to `tur build` output while the J3 parity sweep is still to
-     * come -- and because the capability itself is opt-in at build time
-     * (-DTUR_JIT=ON vendors MIR; a default build carries no fetch and no
-     * dependency).  `tur jit` errors out unless BOTH gates are open. */
-    { "jit",
-      "in-process MIR JIT execution engine (tur jit <file>)",
-      "docs/upcoming/jit-engine-plan.md",
-      "0.32.2",                  /* introduced */
-      "0.36.0",                  /* expires_at -- review at that cut: graduate,
-                                  *   shelve, or bump */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_jit },
-    /* sealed-opaque (docs/upcoming/sealed-opaque-plan.md): `::` is a COERCING
-     * cast, so a `defopaque` handle can always be unwrapped to its carrier and
-     * re-wrapped as a fresh value -- which bounds every guarantee built on top
-     * of one (the motivating case is the ECS spice's `frozen` region, whose
-     * uniqueness argument an alias walks straight around; see
-     * docs/reported/frozen-region-aliasing-via-coercing-cast.md).  `:sealed`
-     * makes `::` refuse both directions outside the declaring module.
+     * docs/archive/refined-graduation-plan.md. */
+    /* J1-J3 jit GRADUATED 2026-08-17 -- `tur jit <file>` no longer needs
+     * `--enable=jit`.  The gate existed to hold a third execution engine until
+     * its parity sweep landed; J3 landed 2026-07-30 and closed every defect it
+     * surfaced (three latent product bugs, all fixed), the harness denylist is
+     * empty, and tests/run-jit.sh runs the whole corpus through the engine on
+     * both hosts.  The remaining gate is the BUILD-TIME one and it stays:
+     * `-DTUR_JIT=ON` vendors MIR, a default build carries no fetch and no
+     * dependency, and `tur jit` in such a build still says so.  Engine
+     * SELECTION is likewise unchanged and is not a default flip -- `cc` is
+     * still what you get unless `--engine jit` / `TUR_ENGINE=jit` /
+     * `:engine "jit"` says otherwise, and the REPL's in-process JIT loader now
+     * hangs off that same selector rather than off this row.  The name moves to
+     * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).  See
+     * docs/archive/jit-engine-plan.md. */
+    /* sealed-opaque GRADUATED 2026-08-17 -- `(defopaque H :int :sealed)` now
+     * enforces unconditionally: outside H's declaring module, `::` refuses both
+     * the unwrap and the fabricate direction (TUR-E0302).  Both of the plan's
+     * graduation criteria were met -- the ECS spice shipped on it with no
+     * in-module pattern needing an escape, and the moduleless-top-level
+     * limitation was accepted (not closed) in opaques-guide.md 2026-08-13 --
+     * and the two-direction rule the gate existed to question survived that
+     * adoption, so it graduates as designed rather than narrowed to
+     * fabrication-only.  Unusually low-risk for a graduation: with the gate off
+     * `:sealed` already parsed and imposed nothing, so becoming unconditional
+     * reaches only code that deliberately wrote `:sealed`.  The name moves to
+     * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).  See
+     * docs/archive/sealed-opaque-plan.md. */
+    /* write-frames GRADUATED 2026-08-20 -- `#writes w` / `#writes [a b]` is now
+     * CHECKED unconditionally (WF2's three verdicts, TUR-E0382 on EXCEEDED),
+     * and WF3's borrow widening may consult a checked callee frame without an
+     * opt-in.  The gate existed for two reasons and both are settled:
      *
-     * Gated because it is a NEW ENCAPSULATION CLAIM whose two-direction rule is
-     * the part most likely to be wrong: sealing the unwrap direction as well as
-     * fabrication is what makes the representation genuinely private, but if
-     * real spices turn out to need cross-module unwraps, the right answer is to
-     * seal only fabrication.  That is the question the gate exists to answer.
-     * With it off, `:sealed` still parses and imposes nothing, so adoption is
-     * not a breaking change for consumers who have not opted in. */
-    { "sealed-opaque",
-      "`(defopaque H :int :sealed)` -- `::` cannot cross the H/representation "
-      "boundary outside H's declaring module",
-      "docs/upcoming/sealed-opaque-plan.md",
-      "0.32.2",                  /* introduced */
-      "0.35.0",                  /* expires_at -- review at that cut: graduate,
-                                  *   shelve, or bump */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_sealed_opaque },
-    /* write-frames: step 2 of the trajectory stateful-refinements-guide.md
-     * sketches ("trusted now -> checkable later -> effect-row eventually").
-     * `#reads` is step 1 and graduated with `refined`; this is the checked
-     * tier, which is what an optimization may act on.  Gated because the
-     * CHECKING can reject a body that compiles today (TUR-E0382) and because
-     * WF4 ELIDES a runtime check on the strength of the frame -- neither should
-     * arrive unasked-for.  The annotation parses either way.
+     *   1. "The checking can reject a body that compiles today."  It can, but
+     *      only a body that DECLARED a frame -- an annotation nobody writes by
+     *      accident -- and only when the body demonstrably exceeds it.  The
+     *      unverifiable case was designed as a silent downgrade (UNVERIFIED)
+     *      precisely so adopting a frame never cascades into a caller's
+     *      callees, so the reachable blast radius is "you wrote `#writes` and
+     *      the body writes something else", which is the diagnostic's point.
+     *   2. "WF4 elides a runtime check on the strength of the frame."  WF4 is
+     *      RETIRED -- the check it proposed to elide does not exist and never
+     *      did (`rt_inject_param_checks` already skips entry-check injection
+     *      for any `#reads`-mentioning refinement).  Nothing elides on the
+     *      strength of a frame, so the half of the gate that guarded an
+     *      unasked-for optimization has no subject.
      *
-     * G1 (docs/upcoming/mutable-globals-plan.md) narrows what VERIFIED claims:
-     * a frame speaks about PARAMETERS, so a body that writes a mutable global
-     * is downgraded to UNVERIFIED rather than stamped with a fact an
-     * optimization may act on.  Silent -- a global is outside the frame's
-     * vocabulary, not outside the declared frame. */
-    { "write-frames",
-      "`#writes w` / `#writes [a b]` -- a checked per-argument write frame; "
-      "backs frame-aware hypothesis invalidation and entry-check elision",
-      "docs/upcoming/checked-write-frames-plan.md",
-      "0.34.0",                  /* introduced */
-      "0.38.0",                  /* expires_at -- review at that cut: graduate,
-                                  *   shelve, or bump */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_write_frames },
-    /* global-state: G2 of docs/upcoming/mutable-globals-plan.md.  A `#writes`
-     * frame's vocabulary is PARAMETERS, so a body that writes a mutable global
-     * cannot be VERIFIED (G1) -- correct, and the wrong end state: a function
-     * that legitimately maintains global state should be able to SAY so and be
-     * checked, the way it can already say it writes an argument.  This lets a
-     * frame name a global.
+     * What remains is a checker that reports a broken promise, which is the
+     * ordinary tier.  G1's narrowing survives graduation unchanged: a frame
+     * speaks about PARAMETERS, so a body that writes a mutable global is
+     * downgraded to UNVERIFIED rather than stamped with a fact a consumer may
+     * act on -- silently, because a global is outside the frame's vocabulary,
+     * not outside the declared frame.  The name moves to GRADUATED[] below (a
+     * lingering --enable is a TUR-W0063 no-op).  See
+     * docs/archive/checked-write-frames-plan.md. */
+    /* global-state GRADUATED 2026-08-18 (G5b of mutable-globals-plan) -- a
+     * `#writes` frame may name a mutable global, an exported global is
+     * read-only outside its defining module, and `^atomic` / `^thread-local`
+     * are ordinary global annotations.  All unconditional; the name moves to
+     * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op). */
+    /* checked-reads GRADUATED 2026-08-20 (R2 of
+     * docs/upcoming/trusted-refinement-claims-plan.md) -- positive evidence
+     * that a `#reads` measure's body reads mutable state the frame omits now
+     * REFUSES the congruence override unconditionally, instead of merely
+     * warning.  The crossing it used to decide becomes the ordinary TUR-W0372
+     * an unframed impure measure gets.
      *
-     * Gated because it TIGHTENS: with it on, writing a global the frame does
-     * not name is TUR-E0382, where G1 merely declined to verify.  A body that
-     * compiles quietly today can become an error, which must not arrive
-     * unasked-for.  Off, the frame grammar rejects a non-parameter name exactly
-     * as before.
+     * The gate existed because this can only ever turn a currently-proving
+     * program into a diagnostic.  That is still true, and it is exactly why
+     * it should be the default: `#reads` is the ONE trusted claim the
+     * refinement solver believes, its consumer GRANTS congruence on the
+     * strength of it, and at the crossing it enables there is no runtime
+     * fallback -- so a frame that omits state the body reads buys a proof it
+     * has not earned.  A program that "stops proving" here was never entitled
+     * to the proof; TUR-W0383 has been reporting the broken promise
+     * gatelessly since 0.34, so the finding is not new, only the consequence.
      *
-     * Deliberately `#writes` only.  `#reads` is the annotation that GRANTS
-     * congruence, so letting it name a global would let a promise about mutable
-     * global state pay out in proofs -- see the plan's sections 12.2 and 12.4,
-     * and the fixtures refine-reads-frame-omits-global{,-no-region} that pin
-     * what a broken read-side promise costs. */
-    { "global-state",
-      "`#writes [a *cache*]` -- a write frame may name a mutable global, so a "
-      "body that maintains global state can carry a CHECKED frame",
-      "docs/upcoming/mutable-globals-plan.md",
-      "0.34.0",                  /* introduced */
-      "0.38.0",                  /* expires_at -- review at that cut: graduate,
-                                  *   shelve, or bump */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_global_state },
+     * Refusal keys on "saw a read", never on "could not see".  An inline-C
+     * measure -- essentially every measure that predates mutable globals --
+     * yields no evidence and keeps the trusted grant, which is what kept the
+     * nine strict-refine `#reads` fixtures byte-identical under the flag and
+     * is what bounds the graduation's reach to frames the checker can read.
+     * The name moves to GRADUATED[] below (a lingering --enable is a
+     * TUR-W0063 no-op). */
+    /* jit-ffi GRADUATED 2026-08-21 -- `(unsafe (call-ptr p [T1 T2 -> R]
+     * args...))` and `(unsafe (callback-ptr f [sig]))` are now ordinary
+     * `unsafe` forms, accepted without `--enable=jit-ffi`.  Graduated at its
+     * own `expires_at` (0.38.0), which is the review the row asked for.
+     *
+     * The gate had exactly one stated job: hold the signature vocabulary
+     * still enough that it "should be able to move without breaking early
+     * adopters."  That vocabulary is now settled, and settled in the
+     * direction that dissolves the question rather than merely answering it:
+     * F4 (2026-08-18) encodes a layout INLINE in the sig string -- exact-width
+     * member codes, nesting allowed -- so a sig is self-describing and the
+     * struct registry section 4 flagged as the piece most likely to grow was
+     * never built.  F5 landed callbacks the same day on F3's node.
+     *
+     * The 2026-08-21 follow-on batch then closed four of the five items F5
+     * left open, and two of them were live wrong-answer bugs rather than the
+     * cosmetic gaps the plan had described: the x86-64 verification that had
+     * never been run (which found a nested-aggregate miscall present on every
+     * architecture), inbound callback aggregates, extern-c aggregate slots,
+     * and scalar width fidelity (a C callee returning `int` left the upper
+     * half of the return register unspecified, so `neg_int(1234)` read back
+     * as 4294966062).  A gate is worth keeping when the surface underneath it
+     * is still moving; this one is now more measured than most of what ships
+     * ungated, so it is withholding a form for a reason that no longer has a
+     * subject.
+     *
+     * What graduation does NOT touch, because none of it was ever this row:
+     *
+     *   - The BUILD-TIME gate stays.  Under `--interpret` these forms route
+     *     through the c2mir thunk provider, so they need `-DTUR_JIT=ON`; a
+     *     default build still reports the clean non-JIT diagnostic rather than
+     *     miscompiling.  The AOT path is a pure cast-and-call and needs no JIT.
+     *   - `unsafe` stays required, exactly like `c-call`.  This is a raw
+     *     function pointer invoked against a signature the CALLER asserts;
+     *     graduating the flag does not make that checkable, and the whole
+     *     surface remains behind the block that says so.
+     *   - The plan's F1/F2 plumbing (runtime spice-export thunks,
+     *     thunk-backed extern-c under --interpret) was never behind this flag.
+     *
+     * One substantive boundary used to survive graduation: under `--interpret`
+     * on aarch64, an aggregate whose fields are all the same float type (an
+     * AAPCS64 HFA) was REFUSED in both directions, because MIR had no HFA
+     * class and would pass it in x0..x7 where a natively compiled callee reads
+     * v0..v7.  That is FIXED as of 2026-08-26 -- the pinned MIR fork
+     * implements the HFA rule, the refusal is gone, and no aggregate shape is
+     * carved out any more.  See
+     * docs/archive/mir-aarch64-fp-aggregate-abi.md.  The name moves to
+     * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).  See
+     * docs/archive/jit-ffi-c2mir-plan.md. */
+    /* parametric-sum-byvalue GRADUATED 2026-08-27 -- a multi-variant PARAMETRIC
+     * sum monomorph ((Opt2 int), and above all (Option int) / (Result int
+     * cstr)) now flows by value unconditionally; the gate lives in
+     * sr2_app_sum_byvalue (types.c), reading the default-true
+     * g_sr2_app_sum_byvalue with TUR_SR2_APP_SUM_BYVALUE=0 as the bisection
+     * escape hatch.  The row's soak had exactly one job -- do not fix the ABI
+     * before SR2b, its heaviest client, exists -- and SR2b landed in-tree and
+     * across the spices before the expiry was anywhere near.  See
+     * docs/upcoming/sr2-gate-results.md. */
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
@@ -267,13 +346,51 @@ static const char *const GRADUATED[] = {
      * --enable/build.tur/experiments.tur reference to it is accepted as a no-op
      * (TUR-W0063) for one minor line, rather than the hard TUR-E0310 an unknown
      * name gets.  cps-backend graduated 2026-07-11 and its shim was retired once
-     * no config referenced it. */
-    "cps-effects",   /* graduated 2026-07-12; handle-shallow is now always-on */
-    "cps-tramp-resume", /* graduated 2026-07-19; DK trampolined tail-resume is the default+sole effect lowering */
-    "cps-async",     /* graduated 2026-07-19; heap-continuation async/await is the unconditional CPS-path lowering */
-    "owning-cloneable-capture", /* graduated 2026-07-20; owning capture into a multi-shot cloneable continuation is always-on */
-    "closure-drop-glue", /* graduated 2026-07-22; Model R drop-glue header ABI is unconditional */
-    "refined",       /* graduated 2026-08-01; static discharge of #refine{...} is unconditional */
+     * no config referenced it.
+     *
+     * AGED OUT 2026-08-22, at 0.37.0 -- the five CPS/closure backend names,
+     * every one of them at least seven minor lines past its graduation:
+     * cps-effects (0.28 line), cps-tramp-resume (0.29.0), cps-async (0.29.1),
+     * owning-cloneable-capture (0.29 line), closure-drop-glue (0.30.2).
+     *
+     * These five aged out together and ahead of the user-facing names that are
+     * equally eligible by the calendar, because the population that could have
+     * named them is different in kind.  Each gated a BACKEND LOWERING STRATEGY
+     * -- which continuation representation the emitter picks, whether an owning
+     * capture is admitted, whether a drop-glue header rides on a closure env --
+     * with no source syntax to adopt and no behaviour to opt into.  There was
+     * never a reason to write one in a build.tur, and a corpus-wide grep at
+     * removal found no `flags` file, manifest, or experiments.tur naming any of
+     * them (only prose in comments).  A name nobody had reason to enable needs
+     * no migration window.
+     *
+     * AGED OUT 2026-08-22, at 0.38.0 -- the seven user-facing names, in a
+     * second round taken as a deliberate decision rather than a cleanup:
+     * refined (0.33.0), cycle-gc / jit / sealed-opaque (0.34.0), global-state
+     * (0.35.0), write-frames / checked-reads (0.37.0).
+     *
+     * These are the opposite case from the backend five above.  Each gated
+     * SOURCE SYNTAX someone had to write into a file and then enable to use, so
+     * a lingering enable is exactly what a real adopter's config looks like and
+     * retiring it turns their build red.  That is the point of the window, not
+     * an argument against closing it: the shim is a migration window, not a
+     * permanent alias, and every one of these is at least a full minor line
+     * past its graduation.  `--enable=<any of them>` is now the hard TUR-E0310
+     * an unknown name gets, pinned by errors/experiment-retired-name.
+     *
+     * `refined` also aged out of GRADUATED_LAYERS[] (lang_layers.c) in the same
+     * change, so `#lang turmeric refined` is now TUR-E0330; the two shims were
+     * always a pair and had to go together.
+     *
+     * Only `jit-ffi` stays.  It graduated in 0.38.0 -- this line -- so its
+     * window has not opened yet; it becomes eligible at 0.39.0. */
+    "jit-ffi",       /* graduated 2026-08-21; call-ptr / callback-ptr are ordinary `unsafe` forms (-DTUR_JIT=ON still gates the interpreter path) */
+    /* graduated 2026-08-27, in the 0.39 line.  A representation change with no
+     * syntax, so the population that could have written it into a build.tur is
+     * the narrow one the backend names above describe -- but it shipped as a
+     * user-facing `--enable` for a full release, so it keeps the window. */
+    "parametric-sum-byvalue",
+    "option-niche",  /* graduated 2026-09-03; TUR_OPTION_NICHE=0 restores the tagged monomorph */
     NULL,
 };
 

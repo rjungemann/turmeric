@@ -1,0 +1,16 @@
+;; RM5 by composition: the reader macro is a dumb template that expands
+;; into a defmacro* call, so the read-time syntax gets a full-language
+;; procedural expander -- compile-time folding of #csum[1 2 3 4 5] to 15.
+(defmacro* csum* [& xs]
+  (letrec [walk (fn [i : int acc : int] : int
+                  (if (< i (syntax-len xs))
+                    (walk (+ i 1) (+ acc (syntax->int (syntax-nth xs i))))
+                    acc))]
+    (int->syntax (walk 0 0))))
+
+(reader-macros/define 'csum :datum-bracket '(csum* $body))
+
+(defn main [] : int
+  (println #csum[1 2 3 4 5])
+  (println #csum[40 2])
+  0)

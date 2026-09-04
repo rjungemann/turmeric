@@ -10,36 +10,46 @@ Safe concurrent programming with OS threads, atomic types, and synchronization p
 
 ## Overview
 
-Turmeric provides **1:1 OS threads** via C11 `<threads.h>` plus thread-safe abstractions (`Arc<T>`, `Mutex<T>`, `Atomic<T>`) for safe concurrent programming. Integration with Turmeric's ownership model (`ref<T>`, borrow checking) ensures memory safety.
+Turmeric provides **1:1 OS threads** built on POSIX threads (pthreads) plus thread-safe primitives (atomic cells, mutexes, read-write locks, condition variables). Integration with Turmeric's ownership model (`ref<T>`, borrow checking, `Send` checks) ensures memory safety.
 
-Higher-level primitives -- channels, futures, task groups, thread pools, semaphores -- are implemented in stdlib without FFI.
+Higher-level primitives -- channels, futures, task groups, thread pools, semaphores -- are implemented in stdlib.
 
 ## Thread Model
 
 ### Creating Threads
 
+The simplest way to run a closure on another thread and get its result back
+is `async`/`await` (a future-backed spawn):
+
 ```turmeric
-;; Spawn a new thread
-(def result
-  (thread
+;; Spawn a new thread; returns a future
+(def fut
+  (async
     (fn []
       (println "Hello from thread!")
       42)))
 
-;; Block until thread completes and get result
-(println (thread-join result))  ; prints 42
+;; Block until the thread completes and get the result
+(println (await fut))  ; prints 42
 ```
 ```sweet-exp
-;; Spawn a new thread
-def result
-  thread
+;; Spawn a new thread; returns a future
+def fut
+  async
     fn []
       println("Hello from thread!")
       42
 
-;; Block until thread completes and get result
-println(thread-join(result))  ; prints 42
+;; Block until the thread completes and get the result
+println(await(fut))  ; prints 42
 ```
+
+The lower-level surface is `stdlib/thread.tur`: `(thread-spawn-fn fn-ptr arg)`
+spawns a pthread running a C-ABI function pointer (no captures; pack state
+into `arg`) and returns a `ThreadHandle`; `(thread-join t)` /
+`(thread-detach t)` consume the handle. The `(thread-spawn (fn [] ...))`
+form is the elaborator-level Send-safety gate for closures crossing a thread
+boundary.
 
 ### Properties
 
@@ -50,65 +60,87 @@ println(thread-join(result))  ; prints 42
 
 ### Thread-Local Storage
 
-Each thread has its own stack and thread-local variables:
+A top-level `def` annotated `^thread-local` gets one copy per thread,
+initialized per thread:
 
 ```turmeric
-;; Declare a thread-local
-(thread-local my-tls 42)
+;; Declare a thread-local global
+(def ^thread-local my-tls 42)
 
-;; Get current value (only accessible within this thread)
-(thread-local-get my-tls)  ; => 42
+;; Read it (each thread sees its own copy)
+my-tls  ; => 42
 
-;; Set current value
-(thread-local-set my-tls 100)
+;; Set it (affects only this thread's copy)
+(set! my-tls 100)
 ```
 ```sweet-exp
-;; Declare a thread-local
-thread-local my-tls 42
+;; Declare a thread-local global
+def ^thread-local my-tls 42
 
-;; Get current value (only accessible within this thread)
-thread-local-get(my-tls)  ; => 42
+;; Read it (each thread sees its own copy)
+my-tls  ; => 42
 
-;; Set current value
-thread-local-set(my-tls 100)
+;; Set it (affects only this thread's copy)
+set!(my-tls 100)
 ```
 
-## Shared Ownership: Arc<T>
+See [mutable-globals-guide.md](mutable-globals-guide.md) for the full rules
+(`^thread-local` may not reference another `^thread-local` in its
+initializer, etc.).
 
-**`Arc<T>`** (atomic reference counting) enables shared ownership across threads:
+## Shared Ownership: Arc
 
-```turmeric
-;; Create a shared value
-(def shared (arc (make-counter 0)))
+**Arc** (atomic reference counting) is the thread-safe counterpart to
+`rc<T>`: where `rc<T>` uses plain counts (single-threaded), the Arc control
+block uses atomic counts so multiple OS threads can safely clone and drop a
+shared value. The runtime lives in `src/runtime/arc.{c,h}`; the language
+surface is `stdlib/arc.tur`, which is not auto-loaded:
 
-;; Clone the arc (increments reference count)
-(thread
-  (fn []
-    (let [my-copy (arc-clone shared)]
-      (modify-counter my-copy))))
-
-;; Original and clones all point to same value
-(println (counter-value shared))
+```turmeric no-check
+(defmodule app
+  (import arc :refer [arc-new arc-clone arc-get arc-strong-count arc-drop])
+  (defn main [] : int
+    (let [a (arc-new 42)
+          b (arc-clone a)]
+      (println (arc-get b))            ; 42
+      (println (arc-strong-count a))   ; 2
+      (arc-drop b)
+      (arc-drop a))
+    0))
 ```
-```sweet-exp
-;; Create a shared value
-def shared arc(make-counter(0))
 
-;; Clone the arc (increments reference count)
-thread
-  fn []
-    let [my-copy arc-clone(shared)]
-      modify-counter(my-copy)
-
-;; Original and clones all point to same value
-println(counter-value(shared))
-```
+`Arc` and `ArcWeak` are distinct opaque handles, so passing one where the
+other belongs is a type error rather than a runtime abort.
 
 ### Properties
 
 - **Atomic:** Reference count increments/decrements are atomic (thread-safe).
-- **Move semantics:** `arc-clone` increments the count; `arc` drop decrements atomically.
-- **Shared but not mutable:** `Arc<T>` gives shared read-only access. For mutable shared state, wrap in `Mutex<T>`.
+- **Clone/drop:** cloning increments the strong count; dropping decrements it atomically and frees at zero.
+- **Shared but not mutable:** an Arc gives shared read-only access. Guard mutable shared state with a mutex or use an atomic cell.
+- **No cycle collector.** This is the one place Arc is *weaker* than `rc<T>`,
+  which has a Bacon-Rajan collector. A cycle of strong Arcs leaks; break it
+  by hand with `arc-downgrade` / `arc-upgrade`.
+
+### Weak references
+
+`arc-downgrade` yields an `ArcWeak` that does not keep the value alive.
+`arc-upgrade` returns `(Option Arc)` -- not a nullable handle, because "the
+value may already be gone" is the entire point of a weak reference, so the
+caller has to say what happens in that case:
+
+```turmeric no-check
+(let [a (arc-new 42)
+      w (arc-downgrade a)]
+  (arc-drop a)                     ; last strong reference gone
+  (let [u (arc-upgrade w)]
+    (println (if (some? u) 1 -1))) ; -1
+  (arc-weak-drop w))
+```
+
+`arc-weak-count` reports the weak handles a caller actually holds: the
+runtime keeps a +1 sentinel while any strong reference lives, so the control
+block is not freed under a live weak handle, and that sentinel is subtracted
+out.
 
 ### When to Use Arc
 
@@ -116,117 +148,164 @@ println(counter-value(shared))
 - Ownership is genuinely shared (multiple threads live simultaneously).
 - Passing objects to spawned threads.
 
-## Mutual Exclusion: Mutex<T>
+## Mutual Exclusion: Mutex
 
-**`Mutex<T>`** (mutual exclusion) protects mutable shared state:
+**Mutex** (`stdlib/mutex.tur`) protects mutable shared state. A `Mutex` is a
+linear opaque handle; lock and unlock borrow it, and `mutex-free` is the one
+legal consumption:
+
+The scoped form is `with-lock`, which makes the body's value the form's value
+and puts the release where it cannot be forgotten:
+
+```turmeric no-check
+(let [m (mutex-new)]
+  (println (with-lock m (+ 1 41)))   ; => 42
+  (mutex-free m))
+```
+
+`stdlib/rwlock.tur` has the matching `with-read-lock` / `with-write-lock`.
+
+Two things to know about all three. The lock expression is evaluated **twice**
+-- once to acquire, once to release -- so pass a variable, never a call. That
+is forced rather than sloppy: `Mutex` is `:linear`, so a `let` binding *moves*
+the handle and the checker then rejects the enclosing scope for dropping it
+unconsumed (TUR-E0100), which rules out binding it once inside the macro. And
+the release is not panic-safe: if the body panics the lock stays held, so put
+the unlock on an unwind path with `catch-unwind` where that matters.
+
+The raw pair is still there when you need the acquire and release in different
+scopes:
 
 ```turmeric
-;; Create a mutex
-(def counter (mutex 0))
+(def lock (mutex-new))
+(def ^mut counter 0)
 
-;; Acquire lock, modify, and release (automatically via defer)
-(with-lock counter
-  (fn [value]
-    (let [new-val (+ value 1)]
-      new-val)))
+;; Acquire, modify, release
+(mutex-lock lock)
+(set! counter (+ counter 1))
+(mutex-unlock lock)
 
-;; Check current value (requires lock)
-(let [val (with-lock counter (fn [v] v))]
-  (println val))
+;; Non-blocking attempt
+(when (mutex-try-lock lock)
+  (do (set! counter (+ counter 1))
+      (mutex-unlock lock)))
+
+(mutex-free lock)
 ```
 ```sweet-exp
-;; Create a mutex
-def counter mutex(0)
+def lock mutex-new()
+def ^mut counter 0
 
-;; Acquire lock, modify, and release (automatically via defer)
-with-lock counter
-  fn [value]
-    let [new-val {value + 1}]
-      new-val
+;; Acquire, modify, release
+mutex-lock(lock)
+set!(counter {counter + 1})
+mutex-unlock(lock)
 
-;; Check current value (requires lock)
-let [val with-lock(counter (fn [v] v))]
-  println(val)
+;; Non-blocking attempt
+when mutex-try-lock(lock)
+  do
+    set!(counter {counter + 1})
+    mutex-unlock(lock)
+
+mutex-free(lock)
 ```
 
 ### Properties
 
-- **Scoped locking:** Locks release automatically on scope exit (via `defer`).
 - **Prevents races:** Only one thread can hold the lock at a time.
 - **Composable:** Multiple mutexes can be held (but beware deadlocks with out-of-order release).
-- **Blocking:** If another thread holds the lock, `with-lock` blocks until available.
+- **Blocking:** If another thread holds the lock, `mutex-lock` blocks until available (`mutex-try-lock` never blocks).
+- **Linear handle:** the substructural checker rejects locking a freed mutex or dropping one without `mutex-free`. `stdlib/concurrent.tur` adds a `mutex-guard-lock`/`mutex-guard-unlock` RAII-style pair.
 
-### Read-Write Locks: RwLock<T>
+### Read-Write Locks: RwLock
 
-For read-heavy workloads, use `RwLock<T>`:
+For read-heavy workloads, use `RwLock` (`stdlib/rwlock.tur`):
 
 ```turmeric
 ;; Multiple readers or one writer
-(def data (rw-lock (vec 1 2 3)))
+(def rw (rwlock-new))
 
 ;; Read lock (multiple threads can hold simultaneously)
-(read-lock data
-  (fn [vec] (println vec)))
+(rwlock-rdlock rw)
+;; ... read the shared data ...
+(rwlock-unlock rw)
 
 ;; Write lock (exclusive)
-(write-lock data
-  (fn [vec] (set-vec vec 0 42)))
+(rwlock-wrlock rw)
+;; ... mutate the shared data ...
+(rwlock-unlock rw)
+
+(rwlock-free rw)
 ```
 ```sweet-exp
 ;; Multiple readers or one writer
-def data rw-lock(vec(1 2 3))
+def rw rwlock-new()
 
 ;; Read lock (multiple threads can hold simultaneously)
-read-lock data
-  fn [vec] println(vec)
+rwlock-rdlock(rw)
+;; ... read the shared data ...
+rwlock-unlock(rw)
 
 ;; Write lock (exclusive)
-write-lock data
-  fn [vec] set-vec(vec 0 42)
+rwlock-wrlock(rw)
+;; ... mutate the shared data ...
+rwlock-unlock(rw)
+
+rwlock-free(rw)
 ```
 
-## Atomic Types: Atomic<T>
+`rwlock-try-rdlock` / `rwlock-try-wrlock` are the non-blocking variants.
 
-For simple types, **`Atomic<T>`** provides lock-free atomic operations:
+## Atomic Cells
+
+**`AtomicCell`** (`stdlib/atomic.tur`) is a heap-allocated int64 cell with
+lock-free, sequentially-consistent operations:
 
 ```turmeric
-;; Atomic integer
-(def counter (atomic 0))
+;; Atomic integer cell
+(def counter (atomic-new 0))
 
 ;; Atomic load
 (println (atomic-load counter))  ; => 0
 
 ;; Atomic store
-(atomic-store counter 42)
+(atomic-store! counter 42)
 
 ;; Atomic compare-and-swap
-(atomic-cas counter 42 100)  ; success if value was 42, set to 100
+(atomic-cas! counter 42 100)  ; true if value was 42; cell now 100
 
-;; Atomic add/sub
-(atomic-add counter 5)  ; atomically add 5
+;; Atomic add/sub/swap (each returns the OLD value)
+(atomic-add! counter 5)
+(atomic-sub! counter 2)
+(atomic-swap! counter 7)
+
+(atomic-free counter)
 ```
 ```sweet-exp
-;; Atomic integer
-def counter atomic(0)
+;; Atomic integer cell
+def counter atomic-new(0)
 
 ;; Atomic load
 println(atomic-load(counter))  ; => 0
 
 ;; Atomic store
-atomic-store(counter 42)
+atomic-store!(counter 42)
 
 ;; Atomic compare-and-swap
-atomic-cas(counter 42 100)  ; success if value was 42, set to 100
+atomic-cas!(counter 42 100)  ; true if value was 42; cell now 100
 
-;; Atomic add/sub
-atomic-add(counter 5)  ; atomically add 5
+;; Atomic add/sub/swap (each returns the OLD value)
+atomic-add!(counter 5)
+atomic-sub!(counter 2)
+atomic-swap!(counter 7)
+
+atomic-free(counter)
 ```
 
-### Types Supported
-
-- `int`, `bool`, `usize`, pointer types
-- Basic arithmetic operations on integers
-- Compare-and-swap, load, store on all types
+The cell holds an `int` (64-bit); flags, counters, and pointer-sized values
+all fit. For thread-safe mutable globals there is also the `^atomic`
+annotation on `def ^mut` -- see
+[mutable-globals-guide.md](mutable-globals-guide.md).
 
 ### When to Use Atomic
 
@@ -246,7 +325,7 @@ mutex, condvar, and value/error slot.
 (def f p)
 
 ;; Producer thread fulfills the promise
-(thread (fn [] (promise-fulfill p 42)))
+(async (fn [] (promise-fulfill p 42)))
 
 ;; Consumer blocks on the future
 (def result (future-get f))
@@ -260,7 +339,7 @@ def p promise-new()
 def f p
 
 ;; Producer thread fulfills the promise
-thread((fn [] promise-fulfill(p 42)))
+async(fn([] promise-fulfill(p 42)))
 
 ;; Consumer blocks on the future
 def result future-get(f)
@@ -386,7 +465,7 @@ Turmeric provides two channel types backed by the same ring-buffer layout:
 (def ch (chan-new 8))
 
 ;; Producer thread
-(thread
+(async
   (fn []
     (chan-send ch 1)
     (chan-send ch 2)
@@ -402,7 +481,7 @@ Turmeric provides two channel types backed by the same ring-buffer layout:
 def ch chan-new(8)
 
 ;; Producer thread
-thread
+async
   fn []
     chan-send(ch 1)
     chan-send(ch 2)
@@ -465,50 +544,42 @@ async-chan-free(ch)
 
 ### Multi-Channel Select
 
-`select` waits on multiple channel operations and executes the first one ready.
+`select` waits on multiple channel operations and runs the body of the first
+clause that is ready. Each clause is `((chan :recv v) body)` -- binding the
+received value to `v` -- or `((chan :send val) body)`, plus an optional
+`(:default body)` arm; `select` returns the selected clause body's value:
 
 ```turmeric
 (def ch-a (chan-new 4))
 (def ch-b (chan-new 4))
 
 ;; Poll with a default arm (never blocks)
-(let [[idx val] (select
-                  (ch-a :recv)
-                  (ch-b :recv)
-                  (:default :nothing))]
-  (cond
-    (= idx 0) (println (str "from ch-a: " val))
-    (= idx 1) (println (str "from ch-b: " val))
-    :else     (println "nothing ready")))
+(select ((ch-a :recv v) (println (str "from ch-a: " v)))
+        ((ch-b :recv v) (println (str "from ch-b: " v)))
+        (:default       (println "nothing ready")))
 
 ;; Send-or-drop
-(select
-  (ch-a :send 99)
-  (:default (println "ch-a full, dropping")))
+(select ((ch-a :send 99) 99)
+        (:default (println "ch-a full, dropping")))
 ```
 ```sweet-exp
 def ch-a chan-new(4)
 def ch-b chan-new(4)
 
 ;; Poll with a default arm (never blocks)
-let [[idx val] select((ch-a :recv) (ch-b :recv) (:default :nothing))]
-  cond
-    {idx = 0}
-    println(str("from ch-a: " val))
-    {idx = 1}
-    println(str("from ch-b: " val))
-    :else
-    println("nothing ready")
+select
+  ((ch-a :recv v) println(str("from ch-a: " v)))
+  ((ch-b :recv v) println(str("from ch-b: " v)))
+  (:default       println("nothing ready"))
 
 ;; Send-or-drop
 select
-  (ch-a :send 99)
+  ((ch-a :send 99) 99)
   (:default println("ch-a full, dropping"))
 ```
 
-Returns `(index value)` where `index` is the 0-based clause position (or `-1`
-for `:default`) and `value` is the received value, `true` for `:send`, or the
-`:default` expression result.
+Clause bodies must be type-compatible; the value of the selected body is the
+value of the whole `select`.
 
 When multiple clauses are simultaneously ready, `select` picks one uniformly at
 random using an xorshift32 PRNG so that no single channel is systematically
@@ -517,31 +588,33 @@ on all channels concurrently and wakes as soon as any one of them becomes ready.
 
 ### Condition Variables
 
-Block until a condition is signaled:
+Block until a condition is signaled (`stdlib/condvar.tur`):
 
 ```turmeric
-(def cond (condition-variable))
+(def m  (mutex-new))
+(def cv (condvar-new))
 
-;; Thread A: wait for signal
-(with-lock mutex
-  (fn [_]
-    (condition-wait cond mutex)
-    (println "woken!")))
+;; Thread A: wait for a signal (atomically releases m while waiting)
+(mutex-lock m)
+(condvar-wait cv m)
+(println "woken!")
+(mutex-unlock m)
 
-;; Thread B: signal the condition
-(condition-signal cond)
+;; Thread B: signal one waiter (or condvar-broadcast for all)
+(condvar-signal cv)
 ```
 ```sweet-exp
-def cond condition-variable()
+def m  mutex-new()
+def cv condvar-new()
 
-;; Thread A: wait for signal
-with-lock mutex
-  fn [_]
-    condition-wait(cond mutex)
-    println("woken!")
+;; Thread A: wait for a signal (atomically releases m while waiting)
+mutex-lock(m)
+condvar-wait(cv m)
+println("woken!")
+mutex-unlock(m)
 
-;; Thread B: signal the condition
-condition-signal(cond)
+;; Thread B: signal one waiter (or condvar-broadcast for all)
+condvar-signal(cv)
 ```
 
 ### Semaphore
@@ -556,7 +629,7 @@ unnamed form is unavailable on macOS).
 ;; Limit concurrency to 3 parallel workers
 (def sem (sem-new 3))
 
-(thread
+(async
   (fn []
     (sem-acquire sem)
     (do-work)
@@ -569,7 +642,7 @@ def s sem-new(1)
 ;; Limit concurrency to 3 parallel workers
 def sem sem-new(3)
 
-thread
+async
   fn []
     sem-acquire(sem)
     do-work()
@@ -931,32 +1004,13 @@ Most library types implement these traits automatically based on their fields.
 
 Turmeric's borrow checker enforces:
 
-```turmeric
-;; ERROR: cannot move borrowed reference to thread
-(let [x 42]
-  (thread
-    (fn []
-      (println x))))  ; x is borrowed; can't move across boundary
-
-;; OK: clone or use Arc
-(let [x (arc 42)]
-  (thread
-    (fn []
-      (println (arc-deref x)))))
-```
-```sweet-exp
-;; ERROR: cannot move borrowed reference to thread
-let [x 42]
-  thread
-    fn []
-      println(x)  ; x is borrowed; can't move across boundary
-
-;; OK: clone or use Arc
-let [x arc(42)]
-  thread
-    fn []
-      println(arc-deref(x))
-```
+A closure crossing a thread boundary (via `thread-spawn`, `async`, or a
+task-group spawn) is Send-checked: capturing a non-`Send` value -- a `ref<T>`,
+a continuation, a borrow -- is rejected with `TUR-E0010` (not Send) or
+`TUR-E0011` (not Sync) instead of racing at runtime. Copyable scalars capture
+freely; shared structures cross via an Arc or a channel. See
+`tests/fixtures/errors/thread-send-ref` and
+`tests/fixtures/errors/thread-send-cont` for the rejected shapes.
 
 ## Common Patterns
 
@@ -966,7 +1020,7 @@ let [x arc(42)]
 (def ch (chan-new 16))
 
 ;; Producer
-(thread
+(async
   (fn []
     (for-each items
       (fn [item] (chan-send ch item)))
@@ -985,7 +1039,7 @@ let [x arc(42)]
 def ch chan-new(16)
 
 ;; Producer
-thread
+async
   fn []
     for-each items
       fn [item] chan-send(ch item)
@@ -1004,56 +1058,68 @@ chan-free(ch)
 ### Thread-Safe Counter
 
 ```turmeric
-(def counter (mutex 0))
+(def counter (atomic-new 0))
 
 (for-each (range 10)
   (fn [i]
-    (thread
+    (async
       (fn []
-        (with-lock counter
-          (fn [n]
-            (+ n 1)))))))
+        (atomic-add! counter 1)))))
 
-(println (with-lock counter (fn [n] n)))  ; => 10
+;; ... after joining the workers ...
+(println (atomic-load counter))  ; => 10
 ```
 ```sweet-exp
-def counter mutex(0)
+def counter atomic-new(0)
 
 for-each range(10)
   fn [i]
-    thread
+    async
       fn []
-        with-lock counter
-          fn [n]
-            {n + 1}
+        atomic-add!(counter 1)
 
-println(with-lock(counter (fn [n] n)))  ; => 10
+;; ... after joining the workers ...
+println(atomic-load(counter))  ; => 10
 ```
 
 ### Barrier
 
-```turmeric
-(def barrier (barrier-new 3))
+`stdlib/barrier.tur` is a counting barrier: `barrier-wait` blocks until the
+Nth caller arrives, then releases all N together and resets for the next
+round. That reuse is the point -- a barrier is for **phased** work, where
+every worker must finish phase 1 before any starts phase 2, which is what
+separates it from a one-shot latch.
 
-(for-each (range 3)
-  (fn [i]
-    (thread
-      (fn []
-        (println (str "Thread " i " starting"))
-        (barrier-wait barrier)
-        (println (str "Thread " i " done"))))))
-```
-```sweet-exp
-def barrier barrier-new(3)
+```turmeric no-check
+(load "stdlib/barrier.tur")
 
-for-each range(3)
-  fn [i]
-    thread
-      fn []
-        println(str("Thread " i " starting"))
-        barrier-wait(barrier)
-        println(str("Thread " i " done"))
+(let [b (barrier-new 3)]
+  ;; ... each of three threads calls (barrier-wait b) between phases ...
+  (barrier-free b))
 ```
+
+`barrier-wait` returns `true` for exactly **one** of the N threads released
+per round -- the arrival that tripped it, mirroring
+`PTHREAD_BARRIER_SERIAL_THREAD`. That lets a single thread do the
+between-phases work (swap buffers, print a summary) without a second lock:
+
+```turmeric no-check
+(if (barrier-wait b) (println "phase complete") 0)
+```
+
+It is built from mutex + condvar rather than `pthread_barrier_t`, which is an
+optional POSIX feature macOS does not ship -- the same reason
+`stdlib/sync.tur` hand-rolls its semaphore instead of using `sem_t`.
+Internally it is sense-reversing: each round bumps a generation counter and a
+waiter sleeps until *its* generation ends, so a thread that loops back around
+cannot be released by its own next round.
+
+Free the barrier only after every waiter has been released; destroying it
+while threads are parked on it destroys the condvar out from under them.
+
+The STM alternative -- a TVar plus `check` -- is sketched in the
+[STM Tutorial](stm-tutorial.md#barrier), and is the right choice when the
+rendezvous needs to compose with other transactional state.
 
 ### Structured Concurrency with TaskGroup
 

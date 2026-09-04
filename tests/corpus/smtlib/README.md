@@ -4,7 +4,7 @@ A standing regression for the in-house staged decision procedure (S0--S3),
 replayed by `tur_refine_corpus` with **no solver linked**.
 
 This exists because of the Z3 retirement criteria in
-[docs/upcoming/v1/refinement-types-plan.md](../../../docs/upcoming/v1/refinement-types-plan.md).
+[docs/archive/refinement-types-plan.md](../../../docs/archive/refinement-types-plan.md).
 `refine_libz3.c` was a *live* cross-check that only existed on a dev build with
 a system Z3, and **it was deleted in 0.32.5** -- that safety net is gone. What
 survives it is a corpus whose labels are **data in the repo**, which is what
@@ -289,7 +289,7 @@ over-budget: it sits at the 10s line and moves with machine load, not with
 these changes.) The over-budget and unlabelled counts are timing- and
 sample-dependent; re-measure rather than compare across machines. Full
 measurements and fix rationale:
-[docs/archive/corpus-reader-tail-plan.md](../../../docs/archive/corpus-reader-tail-plan.md)
+[docs/archive/history/corpus-reader-tail-plan.md](../../../docs/archive/history/corpus-reader-tail-plan.md)
 (archived -- the tail it tracked is closed).
 
 ## Running it

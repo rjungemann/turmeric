@@ -13,7 +13,7 @@
  * obligations LEFT in the chain; it never changes an answer, because every
  * stage preserves the one-directional soundness invariant.
  *
- * See docs/upcoming/v1/refinement-types-plan.md (phase RT3). */
+ * See docs/archive/refinement-types-plan.md (phase RT3). */
 
 #include "refine_discharge.h"
 
@@ -37,6 +37,7 @@ const RefineStats *refine_stats(void) { return &g_stats; }
 void refine_memo_reset(void);
 void refine_discharge_reset(void) {
     memset(&g_stats, 0, sizeof(g_stats));
+    refine_caps_reset();
     refine_memo_reset();
 }
 
@@ -59,6 +60,11 @@ static const RefineBackend CHAIN[] = {
     refine_s1_decide,   /* congruence closure (EUF)     */
     refine_s2_decide,   /* linear arithmetic            */
     refine_s3_decide,   /* Nelson-Oppen combination     */
+};
+/* Parallel to CHAIN, for the SX8a dump and `tur smt`: "which stage decided
+ * this" is the first thing anyone asks of an unexpected verdict. */
+static const char *const CHAIN_NAMES[] = {
+    "S0 (trivial)", "S1 (EUF)", "S2 (arithmetic)", "S3 (Nelson-Oppen)",
 };
 #define CHAIN_LEN (sizeof(CHAIN) / sizeof(CHAIN[0]))
 
@@ -451,17 +457,27 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
         RefineVC *pvc = refine_vc_build(ob, a, &why);
         ob->vc = pvc;   /* so a caller can follow up (e.g. ask for a witness) */
         if (!pvc) return false;
+        /* A probe's caps are accounted exactly like a real obligation's.  They
+         * used to be counted globally and recorded nowhere, so a cap that bit
+         * during a probe made the per-compile summary say "** HIT" while every
+         * obligation's `caps_hit` read empty -- the wrong direction to be
+         * wrong in for a field that is start/do-not-start evidence for SX6.
+         * The caller rolls this up into the site's `caps_probe`. */
+        const RefineCapStats probe_before = *refine_caps();
+        bool proved = false;
         for (size_t i = 0; i < CHAIN_LEN; i++) {
             g_stats.backend_calls++;
             RefineDecision pd = CHAIN[i](pvc, a);
             if (pd.verdict == RT_VALID) {
                 ob->proven = true;
                 if (!ob->path_probe) g_stats.inferred++;
-                return true;
+                proved = true;
+                break;
             }
             if (pd.verdict != RT_UNKNOWN) break;
         }
-        return false;
+        refine_caps_delta(&ob->caps, refine_caps(), &probe_before);
+        return proved;
     }
     g_stats.collected++;
 
@@ -497,7 +513,12 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
                                 "refinement on %s could not be decided statically "
                                 "(%s); %s",
                                 what, reason ? reason : "outside the supported fragment",
-                                ob->reads_no_runtime
+                                ob->reads_grant_refused
+                                  ? "no runtime fallback for an impure #reads "
+                                    "measure, and its congruence grant was refused: "
+                                    "the frame omits mutable state the body reads "
+                                    "(TUR-W0383) -- fix the frame, not the region"
+                                : ob->reads_no_runtime
                                   ? "no runtime fallback for an impure #reads "
                                     "measure -- the crossing must be proven (guard "
                                     "it inside a `frozen` region)"
@@ -542,7 +563,13 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
         buf_free(&b);
     }
 
+    /* Per-obligation cap accounting: snapshot, run, subtract.  The counters
+     * are global (they are a per-compile summary), so the only way to say
+     * which obligation hit a cap is to diff around its own decision. */
+    const RefineCapStats caps_before = *refine_caps();
+
     RefineDecision d = refine_unknown();
+    ob->memo_hit = memo_hit;
     if (memo_hit) {
         /* The chain is the expensive part and its answer depends only on the
          * VC, so a confirmed hit skips it.  Only PROVED is carried across:
@@ -554,7 +581,7 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
         for (size_t i = 0; i < CHAIN_LEN; i++) {
             g_stats.backend_calls++;
             d = CHAIN[i](vc, a);
-            if (d.verdict != RT_UNKNOWN) break;
+            if (d.verdict != RT_UNKNOWN) { ob->decided_by = CHAIN_NAMES[i]; break; }
         }
         memo_insert(vc, memo_fp, d.verdict == RT_VALID);
     }
@@ -565,8 +592,14 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
      * model.  Finding none leaves the verdict exactly where it was. */
     if (d.verdict == RT_UNKNOWN) {
         RefineModel *m = refine_model_search(vc, a);
-        if (m) d = refine_invalid(m);
+        if (m) { d = refine_invalid(m); ob->decided_by = "bounded model search"; }
     }
+
+    /* Subtract per field: a saturating "did anything move" bool would lose the
+     * count.  This window covers this obligation's own chain run only; solver
+     * work done for it BEFORE it existed -- the RT4 path probes -- is
+     * attributed separately, in ob->caps_probe, by the caller that ran them. */
+    refine_caps_delta(&ob->caps, refine_caps(), &caps_before);
 
     switch (d.verdict) {
         case RT_VALID:
@@ -619,7 +652,12 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
                                     TUR_W0372_REFINE_UNKNOWN,
                                     "solver returned unknown for the refinement on %s; "
                                     "%s", what,
-                                    ob->reads_no_runtime
+                                    ob->reads_grant_refused
+                                      ? "no runtime fallback for an impure #reads "
+                                        "measure, and its congruence grant was refused: "
+                                        "the frame omits mutable state the body reads "
+                                        "(TUR-W0383) -- fix the frame, not the region"
+                                    : ob->reads_no_runtime
                                       ? "no runtime fallback for an impure #reads "
                                         "measure -- the crossing must be proven (guard "
                                         "it inside a `frozen` region)"
@@ -629,6 +667,60 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
             }
             return false;
     }
+}
+
+/* Cap telemetry.  Prints one line per cap, with the peak the run actually
+ * reached against the limit, and marks the caps that fired.  Every cap here
+ * degrades to RT_UNKNOWN, so a hit is not an error -- it is the difference
+ * between an obligation the solver declined and one it ran out of room on,
+ * which is otherwise invisible from the outside.
+ *
+ * The peaks print even when nothing fired: headroom is the point.  "cubes
+ * peaked at 3 of 64" and "cubes peaked at 61 of 64" are the same zero-hit
+ * summary and completely different signals about whether S4 needs building.
+ * See docs/upcoming/solver-extension-plan.md (SX0(b)). */
+static void refine_report_caps(void) {
+    const RefineCapStats *c = refine_caps();
+    struct { const char *name; uint32_t hits, peak, limit; } rows[] = {
+        { "cubes",         c->cubes_hits,        c->cubes_peak,        REFINE_MAX_CUBES        },
+        { "cube literals", c->cube_lits_hits,    c->cube_lits_peak,    REFINE_MAX_CUBE_LITS    },
+        { "expand depth",  c->expand_depth_hits, c->expand_depth_peak, REFINE_MAX_EXPAND_DEPTH },
+        { "LA vars",       c->la_vars_hits,      c->la_vars_peak,      REFINE_MAX_LA_VARS      },
+        { "LA constraints",c->la_constr_hits,    c->la_constr_peak,    REFINE_MAX_LA_CONSTR    },
+        { "NO shared",     c->no_shared_hits,    c->no_shared_peak,    NO_MAX_SHARED           },
+        { "EUF terms",     c->euf_terms_hits,    c->euf_terms_peak,    REFINE_MAX_EUF_TERMS    },
+        /* Collection side, not a stage: the branch guards recovered for a
+         * call-site crossing.  Its peak SATURATES at the limit (the walk stops
+         * collecting once full), so read `hits` for whether it bit and the
+         * peak only for headroom while hits is 0. */
+        { "path hyps",     c->path_hyps_hits,    c->path_hyps_peak,    RT_CS_PATH_MAX_HYPS     },
+        /* The counterexample search's width.  A hit here costs a REFUTATION,
+         * not a proof: the obligation stays Unknown rather than reporting the
+         * counterexample it has.  See the `would run` line below. */
+        { "model vars",    c->model_vars_hits,   c->model_vars_peak,   MODEL_MAX_VARS          },
+    };
+    fprintf(stderr, "refine: caps %s\n",
+            refine_caps_any() ? "(one or more BIT -- those obligations answered "
+                                "unknown and kept their runtime check)"
+                              : "(none hit)");
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++)
+        fprintf(stderr, "refine:   %-15s peak %6u / %-6u %s\n",
+                rows[i].name, rows[i].peak, rows[i].limit,
+                rows[i].hits ? "** HIT" : "");
+    /* Two counters with no meaningful peak of their own: FM growth is bounded
+     * by the LA-constraint limit it shares, and the round budget is a count of
+     * exchange passes, not of a sized structure. */
+    fprintf(stderr, "refine:   %-15s %u\n",
+            "FM blow-ups", c->la_fm_hits);
+    fprintf(stderr, "refine:   %-15s %u (of %u rounds)\n",
+            "NO rounds out", c->no_rounds_hits, (unsigned)NO_MAX_ROUNDS);
+    /* The subset of `model vars` hits that a higher cap would actually help:
+     * the rest carry a non-int variable and would be declined by the sort gate
+     * whatever the limit.  Printed separately rather than folded into the row
+     * above because the row counts what the cap TURNED AWAY and this counts
+     * what raising it would BUY -- and only the second justifies a raise. */
+    fprintf(stderr, "refine:   %-15s %u (of %u over the cap)\n",
+            "model vars run", c->model_vars_would_run, c->model_vars_hits);
 }
 
 void refine_discharge_all(RefineObligationVec *v, Arena *a) {
@@ -649,5 +741,6 @@ void refine_discharge_all(RefineObligationVec *v, Arena *a) {
                     "refine: %u result refinement(s) inferred from %u template "
                     "probe(s)\n",
                     g_stats.inferred, g_stats.templates_tried);
+        refine_report_caps();
     }
 }

@@ -14,6 +14,23 @@ class Turmeric < Formula
     system "cmake", "--build", "build", "-j"
     bin.install "build/tur"
     (share/"turmeric").install "stdlib"
+
+    # OD4: install the rendered guides and API reference when the checkout has
+    # them, so `tur docs --open` finds a local copy. A fresh clone does not --
+    # docs/html/ is a `just docs` output and is gitignored -- and generating it
+    # here would mean depending on python3 + the markdown package for something
+    # that is optional to running the compiler. So this is a no-op for the
+    # common case, and the release's turmeric-docs-<version>.tar.gz is the
+    # supported way to get them: unpack it and point TUR_DOCS_DIR at the
+    # directory holding guides/ and api/. `tur doc <symbol>` needs none of
+    # this; its table ships in the stdlib installed just above.
+    doc.install Dir["docs/html/*"] if File.directory?("docs/html/guides")
+
+    # Runs `tur completion zsh` / `tur completion bash` -- the default
+    # shell_parameter_format passes the shell name as a positional argument,
+    # which is exactly the CLI shape.
+    generate_completions_from_executable(bin/"tur", "completion",
+                                         shells: [:zsh, :bash])
   end
 
   test do

@@ -52,8 +52,52 @@ int lsp_enclosing_call(const char *text, size_t text_len,
                        char *out_name, size_t name_cap,
                        int *active_param_out);
 
+/* The identifier that covers byte offset `off`, as a half-open byte range.
+ *
+ * Unlike lsp_word_at_pos this answers in offsets rather than in a copied
+ * name, which is what an *edit* needs: prepareRename has to hand the client
+ * the exact range it is about to rewrite, and a rename has to replace that
+ * range rather than re-find the word.  A cursor sitting immediately after an
+ * identifier belongs to it (that is where the caret is when the user has just
+ * finished typing the name), a cursor on a space does not.
+ *
+ * Returns 1 and fills the two out params on a hit, 0 otherwise. */
+int lsp_ident_range_at(const char *text, size_t text_len, size_t off,
+                       size_t *start, size_t *end);
+
 /* Build a "file://" URI from an absolute filesystem path.
  * Writes into dest[0..dest_cap-1].  Returns dest. */
 char *lsp_path_to_uri(const char *path, char *dest, size_t dest_cap);
+
+/* Reported once per occurrence.  `off` is the match's byte offset in `text`;
+ * `line0` is 0-based; `col0` is a *byte* offset into that line, matching the
+ * utf-8 positionEncoding the server negotiates.  `len` is the match length in
+ * bytes.
+ *
+ * `off` is what a scope-bounded consumer filters on.  The scan itself always
+ * runs from byte zero -- starting it at an offset would put the comment and
+ * string state machine in the wrong state, so a match inside a literal that
+ * opened earlier in the file would be reported as a use.  Scan everything,
+ * report everything, and let the caller drop what is out of range. */
+typedef void (*LspOccurrenceFn)(size_t off, int line0, int col0, int len,
+                                void *user);
+
+/* Every whole-identifier occurrence of `name` in `text`, skipping the places
+ * where a name is not a use of that name.
+ *
+ * The skipping is the entire value of this over a regular expression, and it
+ * is the line c2mp draws too (vite-wasm/src/symbols.js:721): `total` inside
+ * `subtotal`, inside a comment, or inside a string literal is not a use of
+ * `total`, and a pattern match over the source cannot tell.  Four regions are
+ * skipped: `;` line comments, `"..."` string literals (backslash-escaped),
+ * `#| ... |#` block comments (nesting), and ```` ```c ... ``` ```` inline-C
+ * bodies -- the last because a C identifier that happens to spell a Turmeric
+ * one is a different language's variable.
+ *
+ * Word boundaries use the same identifier character class as
+ * lsp_word_at_pos, so a highlight lands on exactly what a hover would. */
+void lsp_scan_occurrences(const char *text, size_t text_len,
+                          const char *name,
+                          LspOccurrenceFn fn, void *user);
 
 #endif

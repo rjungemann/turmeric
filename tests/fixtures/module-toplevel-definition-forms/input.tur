@@ -1,0 +1,44 @@
+;; module-toplevel-definition-forms -- everything that IS legal as a direct
+;; child of (defmodule ...) stays legal.
+;;
+;; The companion to errors/module-toplevel-expression.  That one pins the
+;; reject (TUR-E0711); this one pins the allow-set, which is the half a later
+;; tightening would break silently.  Two entries here look like expressions and
+;; are deliberate:
+;;
+;;   - a bare ```c block supplies file-scope C declarations
+;;   - module-level `defer` is a real feature; it runs at process exit
+;;
+;; The check is on the ELABORATED expression rather than the source form's head
+;; symbol, so `make-adder` below matters too: a user macro expanding to a defn
+;; has an arbitrary head, and a head-symbol allowlist would reject it.
+;;
+;; Regression for docs/archive/defmodule-bare-toplevel-forms-silently-dropped.md
+(defmodule mtdf
+  (export run)
+
+  ;; A bare inline-C block: file-scope declarations for the bodies below.
+  ```c
+  struct __mtdf_pt { int64_t x; int64_t y; };
+  ```
+
+  (defstruct Pt [x : int y : int])
+  (defopaque Tag :int)
+  (defdata Color (Red) (Green))
+  (defeffect Ask [] : int)
+  (deftype Count :int)
+  (def base 10)
+
+  ;; A macro that expands to a defn -- its head is neither `defn` nor a `def*`
+  ;; name, so only the post-elaboration test accepts it.
+  (defmacro make-adder [name n]
+    `(defn ,name [x : int] : int (+ x ,n)))
+
+  (make-adder add5 5)
+
+  (defn run [] : int
+    (println (add5 base))
+    0))
+
+(defn main [] : int
+  (run))

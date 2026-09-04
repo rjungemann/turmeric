@@ -1,4 +1,4 @@
-; set-bang-rc-release (docs/reported/set-bang-does-not-release-old-rc-value.md):
+; set-bang-rc-release (docs/archive/history/set-bang-does-not-release-old-rc-value.md):
 ; an rc-managed `^mut` binding owns exactly ONE strong reference for its whole
 ; lifetime -- its init takes the +1, its scope-exit auto-drop releases it.
 ; `(set! b v)` used to overwrite the binding without releasing what was there,

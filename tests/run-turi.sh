@@ -182,25 +182,67 @@ fixture_inline_c_runs() {
 # the same diagnostic the compiled path raises.
 # This closes the TI0-noted gap that errors/ was skipped wholesale.
 #
-# Remaining reporting-stage divergence (interpreter emits a strict subset, not a
-# wrong diagnostic):
-#   defdata-malformed-ctor-field-type -- the compiled batch elaborator reports
-#     BOTH the malformed-field-type error AND the follow-on "unknown function or
-#     operator 'MkAcc'" at the later constructor reference; the interpreter halts
-#     at the first hard elaboration error and never reaches the MkAcc call, so it
-#     emits only the first line.  The first (primary) diagnostic matches; only
-#     the compiled path's second, cascade diagnostic is missing.
+# Known reporting-stage divergence shape (interpreter emits a strict subset,
+# not a wrong diagnostic): the compiled batch elaborator keeps going after a
+# hard elaboration error and reports follow-on cascade diagnostics (e.g. an
+# "unknown function or operator" at a later reference to a constructor whose
+# defdata failed), while the interpreter halts at the first hard error and
+# emits only the primary line.  The one fixture that pinned this,
+# errors/defdata-malformed-ctor-field-type, was retired when a bare type name
+# in a defdata field (`(MkAcc int)`) became legal -- the program it held is no
+# longer an error on either path -- so the list is empty today.  An entry that
+# names no fixture is a startup error (below), so this cannot go stale again.
 # ---------------------------------------------------------------------------
 TURI_ERRORS_DENY="
-defdata-malformed-ctor-field-type
 "
 while IFS= read -r _ef; do
     _ef="${_ef%%#*}"                                   # strip trailing comment
     _ef="${_ef#"${_ef%%[![:space:]]*}"}"; _ef="${_ef%"${_ef##*[![:space:]]}"}"
     [ -z "$_ef" ] && continue
+    # turi-suite-accounting-and-reporting-gaps (4): a denylist entry that names
+    # no fixture is dead prose at best and an uncovered divergence at worst --
+    # this one matched nothing for weeks after an unrelated commit deleted the
+    # fixture.  Refuse to start rather than silently carve out nothing.
+    if [ ! -d "tests/fixtures/errors/$_ef" ]; then
+        echo "run-turi: TURI_ERRORS_DENY names tests/fixtures/errors/$_ef, which does not exist" >&2
+        echo "  (delete the entry, or restore the fixture it documents)" >&2
+        exit 2
+    fi
     _ek="$(printf '%s' "$_ef" | tr '-' '_')"
     eval "export TURI_ERRDENY_${_ek}=1"
 done <<< "$TURI_ERRORS_DENY"
+
+# ---------------------------------------------------------------------------
+# turi-suite-accounting-and-reporting-gaps (1, 3): ONE marker-skip rule for
+# both passes, and every skip lands in a result file so the tally counts it.
+# The positive pass and the error pass used to honour different marker sets
+# (the error pass ignored requires.dedicated-runner / requires.tsan and checked
+# requires.spices unconditionally), and only the inline-C carve-out wrote a
+# result -- 81 marker skips printed SKIP and then fell out of every bucket.
+#   requires.compiled         -- needs the compiled path
+#   requires.tur-only         -- a feature the interpreter deliberately omits
+#   requires.dedicated-runner -- owned by its own ctest target
+#   requires.spices           -- needs the sibling ../turmeric-spices checkout
+#   requires.tsan             -- TSan-only fixture
+# Returns 0 (and has printed + recorded the skip) when the fixture is skipped.
+# ---------------------------------------------------------------------------
+record_result() {   # record_result <name> <kind>
+    echo "$2" > "$RESULTS_DIR/$(printf '%s' "$1" | tr '/ ' '__').result"
+}
+marker_skip() {     # marker_skip <dir> <name>
+    local dir="$1" name="$2" why=""
+    if   [ -f "$dir/requires.compiled" ]; then why="requires.compiled"
+    elif [ -f "$dir/requires.tur-only" ]; then why="requires.tur-only"
+    elif [ -f "$dir/requires.dedicated-runner" ]; then why="requires.dedicated-runner"
+    elif [ -f "$dir/requires.spices" ] && [ ! -d "../turmeric-spices" ]; then
+        why="requires.spices; sibling checkout absent"
+    elif [ -f "$dir/requires.tsan" ] && [ "${TUR_TSAN:-0}" != "1" ]; then why="requires.tsan"
+    fi
+    [ -n "$why" ] || return 1
+    printf 'SKIP %s (%s)\n' "$name" "$why"
+    record_result "$name" "SKIP_MARKER"
+    return 0
+}
 
 err_in_denyset() {
     local key; key="$(printf '%s' "$1" | tr '-' '_')"
@@ -216,12 +258,22 @@ run_turi_error_fixture() {
     local rkey; rkey="$(printf '%s' "$name" | tr '/ ' '__')"
 
     [ -f "$dir/input.tur" ] || return
-    # Only diag-style negative fixtures (must have a non-empty expected.diag).
-    [ -s "$dir/expected.diag" ] || return
-    if [ -f "$dir/requires.compiled" ] || [ -f "$dir/requires.tur-only" ] \
-       || [ -f "$dir/requires.spices" ]; then return; fi
+    marker_skip "$dir" "$name" && return
     if err_in_denyset "$base"; then
         printf 'SKIP %s (errors denylist: interp diag diverges)\n' "$name"
+        record_result "$name" "SKIP_MARKER"
+        return
+    fi
+    # The needles: expected.diag, or run.sh's other substring file,
+    # expected.stderr (seven fh-*/borrow fixtures use only that one).  An
+    # errors/ fixture with neither asserts nothing -- which is the shape of the
+    # loose-.tur-files bug -- so it is loud, not silent (accounting gaps item 2).
+    local needles=""
+    if   [ -s "$dir/expected.diag" ];   then needles="$dir/expected.diag"
+    elif [ -s "$dir/expected.stderr" ]; then needles="$dir/expected.stderr"
+    else
+        echo "FAIL $name -- errors/ fixture has no expected.diag or expected.stderr (asserts nothing)"
+        record_result "$name" "FAIL"
         return
     fi
 
@@ -243,7 +295,7 @@ run_turi_error_fixture() {
     while IFS= read -r needle; do
         [ -z "$needle" ] && continue
         grep -F -q "$needle" "$err" || missing=1
-    done < "$dir/expected.diag"
+    done < "$needles"
 
     if [ "$missing" -eq 0 ]; then
         stamp_write "$name" "$dir/input.tur"
@@ -266,22 +318,8 @@ run_turi_fixture() {
     elif [ -f "$dir/$(basename "$dir").tur" ]; then input="$dir/$(basename "$dir").tur"
     else return; fi
 
-    # Marker skips.  Mirror of run.sh's skip set:
-    #   requires.compiled       -- needs the compiled path
-    #   requires.tur-only       -- a feature the interpreter deliberately omits
-    #   requires.dedicated-runner -- owned by its own ctest target
-    #   requires.spices         -- needs the sibling ../turmeric-spices checkout
-    #   requires.tsan           -- TSan-only fixture
-    if [ -f "$dir/requires.compiled" ]; then
-        printf 'SKIP %s (requires.compiled)\n' "$name"; return; fi
-    if [ -f "$dir/requires.tur-only" ]; then
-        printf 'SKIP %s (requires.tur-only)\n' "$name"; return; fi
-    if [ -f "$dir/requires.dedicated-runner" ]; then
-        printf 'SKIP %s (requires.dedicated-runner)\n' "$name"; return; fi
-    if [ -f "$dir/requires.spices" ] && [ ! -d "../turmeric-spices" ]; then
-        printf 'SKIP %s (requires.spices; sibling checkout absent)\n' "$name"; return; fi
-    if [ -f "$dir/requires.tsan" ] && [ "${TUR_TSAN:-0}" != "1" ]; then
-        printf 'SKIP %s (requires.tsan)\n' "$name"; return; fi
+    # Marker skips (the shared rule above; mirrors run.sh's skip set).
+    marker_skip "$dir" "$name" && return
 
     # W5 flip (turi-interpreter-gap-closure-plan): the only positive-fixture skip
     # left is the *permanent* inline-C carve-out.  User inline-C (a ```c block) is
@@ -293,7 +331,7 @@ run_turi_fixture() {
     # those few keep a presence in the suite via the dedicated paths.  Note: some
     # inline-C fixtures silently miscompile under the simple inline-C evaluator --
     # a real bug the carve hides; see
-    # docs/reported/turi-inline-c-silent-miscompiles.md.  Every other fixture is
+    # docs/archive/history/turi-inline-c-silent-miscompiles.md.  Every other fixture is
     # now run for real under --interpret (no allowlist gate).
     if fixture_has_inline_c "$dir" && ! fixture_inline_c_runs "$name"; then
         printf 'SKIP %s (inline-c carve-out)\n' "$name"
@@ -393,7 +431,7 @@ run_turi_fixture() {
 export TUR STAMP_CACHE RESULTS_DIR TUR_FORCE TUR_MTIME
 export -f run_turi_fixture fixture_inline_c_runs fixture_has_inline_c stamp_check stamp_write stamp_key
 export -f _tur_hash_file _tur_mtime
-export -f run_turi_error_fixture err_in_denyset
+export -f run_turi_error_fixture err_in_denyset marker_skip record_result
 
 # Build list of all fixture dirs (top-level and one subdirectory deep).
 # tests/fixtures/errors/* are negative fixtures handled by the dedicated
@@ -419,6 +457,15 @@ for d in "${ALL_DIRS[@]}"; do
     fi
 done
 
+# The census: every directory the two passes are about to walk that carries an
+# input.  The tally below must account for each of these exactly once.
+DISCOVERED=0
+for d in "${FILTERED_DIRS[@]}"; do
+    if [ -f "$d/input.tur" ] || [ -f "$d/$(basename "$d").tur" ]; then
+        DISCOVERED=$((DISCOVERED + 1))
+    fi
+done
+
 if [ ${#FILTERED_DIRS[@]} -gt 0 ]; then
     printf '%s\n' "${FILTERED_DIRS[@]}" | \
         xargs -P "$JOBS" -I{} bash -c 'run_turi_fixture "$@"' _ {} 2>/dev/null
@@ -434,13 +481,22 @@ for d in tests/fixtures/errors/*/; do
         ERROR_DIRS+=("$d")
     fi
 done
+for d in "${ERROR_DIRS[@]}"; do
+    [ -f "$d/input.tur" ] && DISCOVERED=$((DISCOVERED + 1))
+done
 if [ ${#ERROR_DIRS[@]} -gt 0 ]; then
     printf '%s\n' "${ERROR_DIRS[@]}" | \
         xargs -P "$JOBS" -I{} bash -c 'run_turi_error_fixture "$@"' _ {} 2>/dev/null
 fi
 
-# Tally results.
+# The tests/turi/eval-async-*.sh scripts used to run here too and be folded
+# into these counts.  They are their own ctest targets (tur_eval_async_*), so
+# that ran each of them twice per CI job and inflated the fixture count with
+# seven things that are not fixtures (accounting gaps item 5).
+
+# Tally results.  Every discovered fixture must land in exactly one bucket.
 INLINEC_CARVE=0
+MARKER_SKIP=0
 for rf in "$RESULTS_DIR"/*.result; do
     [ -f "$rf" ] || continue
     kind="$(cat "$rf")"
@@ -453,27 +509,30 @@ for rf in "$RESULTS_DIR"/*.result; do
     elif [ "$kind" = "SKIP_INLINEC" ]; then
         SKIP=$((SKIP + 1))
         INLINEC_CARVE=$((INLINEC_CARVE + 1))
-    fi
-done
-
-# §4.2: Run REPL-based async eval test scripts.
-for _async_sh in tests/turi/eval-async-*.sh; do
-    [ -x "$_async_sh" ] || continue
-    _async_name="$(basename "${_async_sh%.sh}")"
-    if TUR="$TUR" bash "$_async_sh" > /dev/null 2>&1; then
-        PASS=$((PASS + 1))
-        printf 'PASS %s\n' "$_async_name"
-    else
-        FAIL=$((FAIL + 1))
-        FAILED+=("$_async_name")
-        printf 'FAIL %s\n' "$_async_name"
+    elif [ "$kind" = "SKIP_MARKER" ]; then
+        SKIP=$((SKIP + 1))
+        MARKER_SKIP=$((MARKER_SKIP + 1))
     fi
 done
 
 echo
-echo "turi fixture summary: $PASS passed, $FAIL failed, $SKIP skipped"
+echo "turi fixture summary: $PASS passed, $FAIL failed, $SKIP skipped of $DISCOVERED discovered"
 if [ "$INLINEC_CARVE" -gt 0 ]; then
     echo "  (of which $INLINEC_CARVE inline-c carve-outs -- TI7, never run under turi)"
+    # The marker the CI timing ingest (tools/ci/collect-suite-timings.py)
+    # understands: this suite permanently skips about a quarter of what it
+    # discovers, and "pass with no note" was hiding that (accounting gaps 6).
+    echo "TUR_SKIP_PARTIAL: inline-c carve-out ($INLINEC_CARVE fixtures)"
+fi
+if [ "$MARKER_SKIP" -gt 0 ]; then
+    echo "  (and $MARKER_SKIP requires.* marker skips)"
+fi
+ACCOUNTED=$((PASS + FAIL + SKIP))
+if [ "$ACCOUNTED" -ne "$DISCOVERED" ]; then
+    # A fixture that printed something (or nothing) and landed in no bucket is
+    # exactly the failure mode this census exists to catch -- fail loudly.
+    echo "FAIL run-turi accounting: $ACCOUNTED results for $DISCOVERED discovered fixtures"
+    exit 1
 fi
 if [ $FAIL -ne 0 ]; then
     echo "failed:"

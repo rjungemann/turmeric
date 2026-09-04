@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/turi/repl-host-integration.sh — the REPL surface a GUI host drives.
 #
-# Every case here comes from §5 of docs/upcoming/lsp-client-gaps-plan.md: a
+# Every case here comes from §5 of docs/archive/lsp-client-gaps-plan.md: a
 # real client (Trowel) carried a workaround because the REPL would not answer
 # the question directly. Covers OSC 133 busy/idle markers over a pipe, the
 # logical working directory, and :load-string.
@@ -13,7 +13,7 @@ FAIL=0
 
 check() {
     local desc="$1" expected="$2" actual="$3"
-    if echo "$actual" | grep -qF -- "$expected"; then
+    if grep -qF -- "$expected" <<< "$actual"; then
         echo "PASS: $desc"
         PASS=$((PASS + 1))
     else
@@ -26,7 +26,7 @@ check() {
 
 check_absent() {
     local desc="$1" unexpected="$2" actual="$3"
-    if echo "$actual" | grep -qF -- "$unexpected"; then
+    if grep -qF -- "$unexpected" <<< "$actual"; then
         echo "FAIL: $desc"
         echo "  did not expect substring: $unexpected"
         echo "  got: $actual"

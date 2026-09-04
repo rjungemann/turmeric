@@ -6,19 +6,20 @@
 ;; Show exactly.
 (load "stdlib/range.tur")
 
-;; A result<T,E>-shaped carrier as a raw ptr<void> (is_ok, ok_val, err_val).
+;; A result<T,E>-shaped carrier as a raw ptr<void> (SR2b tagged layout:
+;; { int tag; payload } with tag 0 = Ok, 1 = Err, payload at offset 8).
 (defn mk-ok [v : int] : ptr<void>
   ```c
-  struct R { bool is_ok; int64_t ok_val; int64_t err_val; };
+  struct R { int tag; int64_t payload; };
   struct R *r = (struct R*)malloc(sizeof(struct R));
-  r->is_ok = true; r->ok_val = v; r->err_val = 0;
+  r->tag = 0; r->payload = v;
   return (void*)r;
   ```)
 (defn mk-err [v : int] : ptr<void>
   ```c
-  struct R { bool is_ok; int64_t ok_val; int64_t err_val; };
+  struct R { int tag; int64_t payload; };
   struct R *r = (struct R*)malloc(sizeof(struct R));
-  r->is_ok = false; r->ok_val = 0; r->err_val = v;
+  r->tag = 1; r->payload = v;
   return (void*)r;
   ```)
 

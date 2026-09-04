@@ -19,6 +19,12 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="stylesheet" href="/site.css">
     <link rel="stylesheet" href="/styles.css">
+    <!-- Guide typography for the in-app docs pane (OD2). Emitted into the docs
+         pack by tools/genguides.py from the same GUIDE_CSS the site's guide
+         pages inline, so a guide reads the same here as on turmeric-lang.com.
+         Precached with the rest of the pack, so it is present offline. -->
+    <link rel="stylesheet" href="/docs-pack/guide.css">
+    <script defer src="/docs-pack/guide.js"></script>
     <script type="module" src="/site.js"></script>
 </head>
 <body>
@@ -41,9 +47,30 @@
                                     <path d="M8 5v14l11-7z"/>
                                 </svg>
                             </button>
+                            <!-- Trace is a second button rather than something
+                                 Run always does: recording costs roughly 5x and
+                                 produces a megabyte for a busy loop
+                                 (try-turmeric-tracer-plan §6). -->
+                            <button class="btn btn-icon" id="trace-btn" title="Trace (record and scrub this run)" aria-label="Trace">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M13 3a9 9 0 0 0-9 9H1l3.9 3.9.1.2L9 12H6a7 7 0 1 1 2.1 5l-1.4 1.4A9 9 0 1 0 13 3zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8H12z"/>
+                                </svg>
+                            </button>
                             <button class="btn btn-icon" id="solve-btn" title="Fill in the answer for this step" aria-label="Solve this" style="display: none;">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                     <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                                </svg>
+                            </button>
+                            <!-- Back from a go-to-definition jump. Hidden
+                                 until there is somewhere to go back to --
+                                 Monaco standalone ships no navigation history,
+                                 so an undiscoverable binding would be the same
+                                 as none (renderJumpBack() in main.js). -->
+                            <button class="btn btn-icon" id="jump-back-btn" hidden
+                                    title="Back from definition (Ctrl/Cmd + Alt + -)"
+                                    aria-label="Back from definition">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                    <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
                                 </svg>
                             </button>
                             <button class="btn btn-icon" id="clear-btn" title="Clear (Shift+Click resets the whole workspace)" aria-label="Clear">
@@ -74,6 +101,33 @@
                             <input type="file" id="open-project-input" accept=".zip,application/zip"
                                    style="position:absolute; left:-9999px; width:1px; height:1px;"
                                    aria-hidden="true" tabindex="-1">
+                            <!-- Language: dialect picker + layer toggles
+                                 (try-turmeric-lang-toggle-plan). Edits the
+                                 #lang line in place -- the buffer stays the
+                                 source of truth. Options are rendered by
+                                 renderLangMenu() in main.js from the WASM
+                                 registry export, never hardcoded here. -->
+                            <div class="lang-wrap">
+                                <button class="btn btn-lang" id="lang-btn"
+                                        aria-haspopup="true" aria-expanded="false"
+                                        aria-controls="lang-menu"
+                                        title="Language dialect &amp; layers" aria-label="Language">
+                                    <span id="lang-btn-label">s-expr</span>
+                                </button>
+                                <div class="more-menu lang-menu" id="lang-menu" role="menu" hidden>
+                                    <div class="lang-menu-cols">
+                                        <div class="lang-menu-col">
+                                            <div class="more-label">Dialect</div>
+                                            <div id="lang-bases" role="radiogroup" aria-label="Dialect"></div>
+                                        </div>
+                                        <div class="lang-menu-col">
+                                            <div class="more-label">Layers</div>
+                                            <div id="lang-layers"></div>
+                                        </div>
+                                    </div>
+                                    <div class="lang-menu-footer">Switching resets the REPL environment</div>
+                                </div>
+                            </div>
                             <!-- Examples: a hamburger button that opens a popover of
                                  example programs (wired in main.js). Replaces the old
                                  <select>; reuses the .more-menu popover styling. -->
@@ -96,6 +150,45 @@
                                     <button class="more-item" role="menuitem" data-example="sweet">Sweet-exp Syntax</button>
                                 </div>
                             </div>
+                            <!-- Symbols: the outline. The list is filled from
+                                 the language server's documentSymbol answer
+                                 when the popover opens, not kept in sync --
+                                 the buffer changes on every keystroke and this
+                                 is read once in a while. Rows are rendered by
+                                 renderSymbolsMenu() in main.js. -->
+                            <div class="symbols-wrap">
+                                <button class="btn btn-icon" id="symbols-btn"
+                                        aria-haspopup="true" aria-expanded="false"
+                                        aria-controls="symbols-menu"
+                                        title="Symbols in this file (Ctrl/Cmd + Shift + O)"
+                                        aria-label="Symbols">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                        <path d="M4 5h4v2H4zm6 0h10v2H10zM4 11h4v2H4zm6 0h10v2H10zM4 17h4v2H4zm6 0h10v2H10z"/>
+                                    </svg>
+                                </button>
+                                <div class="more-menu symbols-menu" id="symbols-menu" role="menu" hidden>
+                                    <div class="more-label">Symbols</div>
+                                    <div class="symbols-list" id="symbols-list"></div>
+                                    <!-- Monaco's own quick-outline is a
+                                         filterable palette and has been
+                                         registered in this bundle all along;
+                                         it was simply undiscoverable. This row
+                                         is the discovery. -->
+                                    <button class="more-item symbols-filter" role="menuitem"
+                                            id="symbols-filter">Filter symbols...
+                                        <span class="symbols-filter-key">Ctrl/Cmd + Shift + O</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <!-- Docs: opens the in-app docs browser over the REPL
+                                 (never navigates away). Also reachable as `:docs`
+                                 and via the #doc= URL hash. -->
+                            <button class="btn btn-icon" id="docs-btn"
+                                    title="Documentation (guides &amp; API)" aria-label="Documentation">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                    <path d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 18H6V4h6v7l2.5-1.5L17 11V4h1v16z"/>
+                                </svg>
+                            </button>
                             <!-- Mobile overflow: collapses Solve/Clear/Format/Share/Examples
                                  into a single popover so the tab bar has room. Run stays
                                  visible as the primary action. -->
@@ -112,8 +205,20 @@
                                     <button class="more-item" role="menuitem" data-cmd="clear-btn">Clear</button>
                                     <button class="more-item" role="menuitem" data-cmd="format-btn">Format</button>
                                     <button class="more-item" role="menuitem" data-cmd="share-btn">Share</button>
+                                    <button class="more-item" role="menuitem" data-action="language">Language...</button>
+                                    <button class="more-item" role="menuitem" data-cmd="docs-btn">Documentation</button>
                                     <button class="more-item" role="menuitem" data-cmd="download-btn">Download project</button>
                                     <button class="more-item" role="menuitem" data-cmd="open-btn">Open project...</button>
+                                    <div class="more-sep" role="separator"></div>
+                                    <!-- View. The minimap row is a checkbox
+                                         rather than a command: its label
+                                         reports the current state, and picking
+                                         it pins an explicit choice that from
+                                         then on beats the narrow-pane width
+                                         gate (see applyMinimapPreference). -->
+                                    <button class="more-item" role="menuitem" data-cmd="symbols-btn">Symbols...</button>
+                                    <button class="more-item" role="menuitemcheckbox" aria-checked="false"
+                                            data-action="toggle-minimap">Show minimap</button>
                                     <div class="more-sep" role="separator"></div>
                                     <button class="more-item" role="menuitem" data-action="force-update" title="Clear cached assets and reload the latest version">Force update</button>
                                     <div class="more-sep" role="separator"></div>
@@ -193,6 +298,42 @@
                             </button>
                         </div>
                     </div>
+                    <!-- Time-travel timeline (try-turmeric-tracer-plan T3.2/T3.3).
+                         Hidden until a recording exists; every control in here is
+                         driven by turi_trace_replay_* through the WASM bridge, so
+                         the page never decodes a .turtrace byte itself. -->
+                    <div class="trace-panel" id="trace-panel" hidden>
+                        <div class="trace-controls">
+                            <button class="btn btn-icon btn-sm" id="trace-first" title="First step" aria-label="First step">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+                            </button>
+                            <button class="btn btn-icon btn-sm" id="trace-back" title="Step back (Alt+Left)" aria-label="Step back">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 5v14l-9-7z"/></svg>
+                            </button>
+                            <button class="btn btn-icon btn-sm" id="trace-fwd" title="Step forward (Alt+Right)" aria-label="Step forward">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8.5 5v14l9-7z"/></svg>
+                            </button>
+                            <button class="btn btn-icon btn-sm" id="trace-last" title="Last step" aria-label="Last step">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg>
+                            </button>
+                            <input type="range" id="trace-slider" class="trace-slider"
+                                   min="0" max="0" value="0" step="1"
+                                   aria-label="Step through the recording">
+                            <span class="trace-pos" id="trace-pos">0 / 0</span>
+                            <span class="trace-site" id="trace-site"></span>
+                            <button class="btn btn-icon btn-sm" id="trace-download" title="Download .turtrace" aria-label="Download recording">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                            </button>
+                            <button class="btn btn-icon btn-sm" id="trace-close" title="Close the timeline and free the recording" aria-label="Close timeline">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                            </button>
+                        </div>
+                        <div class="trace-banner" id="trace-banner" hidden></div>
+                        <div class="trace-frames-row">
+                            <div class="trace-frames" id="trace-frames" aria-label="Frames"></div>
+                            <div class="trace-locals" id="trace-locals" aria-label="Bindings"></div>
+                        </div>
+                    </div>
                     <div class="console-wrapper">
                         <div id="console" class="console-output">
                             <div class="console-welcome">
@@ -209,9 +350,14 @@
                     </div>
                     <div class="repl-input-row" id="repl-input-row">
                         <span class="repl-prompt">turi&gt;</span>
-                        <input type="text" id="repl-input" class="repl-input"
-                               placeholder="Enter an expression…"
-                               autocomplete="off" spellcheck="false" disabled />
+                        <!-- W1: the prompt is a single-line Monaco editor, not
+                             an <input>. Not for the look: completion, hover and
+                             signature help at the prompt are then the providers
+                             that already exist, rather than a second copy of the
+                             widget stack over a bare text field. The id is kept
+                             so existing CSS and tests still find it. -->
+                        <div id="repl-input" class="repl-input repl-input-disabled"
+                             data-placeholder="Enter an expression…"></div>
                     </div>
                     <div class="console-footer">
                         <span class="execution-time" id="exec-time">Ready</span>
@@ -243,8 +389,68 @@
                         <p class="doc-placeholder">Evaluate <code>(doc name)</code> or search above.</p>
                     </div>
                     <div class="doc-footer">
-                        <a id="doc-full-link" href="/docs/html/api/index.html" target="_blank" rel="noopener"
-                           class="doc-open-link">Open full docs &#x2197;</a>
+                        <!-- Opens the in-app docs pane (see #docs-overlay below)
+                             rather than navigating away from /try/ and losing
+                             REPL state. Kept as an <a> with a real href so it
+                             still works as a plain link if JS has not wired up
+                             yet, and so its target is visible on hover. -->
+                        <a id="doc-full-link" href="#doc=api/index"
+                           class="doc-open-link">Open full docs</a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============================================================
+                 In-app docs browser (OD2).
+
+                 Renders the docs pack -- chrome-free fragments emitted by the
+                 same generators that build turmeric-lang.com/docs/html/ -- so
+                 guides and API pages are readable without ever leaving the
+                 REPL, and (OD3) without a network. The nav tree, the search
+                 corpus, and the service worker's precache list all come from
+                 /docs-pack/index.json.
+                 ============================================================ -->
+            <div id="docs-overlay" class="overlay docs-overlay" style="display: none;"
+                 role="dialog" aria-modal="true" aria-label="Documentation">
+                <div class="docs-shell">
+                    <div class="docs-topbar">
+                        <button class="btn btn-icon btn-sm docs-nav-toggle" id="docs-nav-toggle"
+                                aria-label="Toggle documentation navigation" title="Contents">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/>
+                            </svg>
+                        </button>
+                        <span class="docs-brand">Docs</span>
+                        <div class="docs-search-wrap">
+                            <svg class="docs-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                            </svg>
+                            <input type="search" id="docs-search" class="docs-search-input"
+                                   placeholder="Search guides, modules, and symbols…"
+                                   autocomplete="off" spellcheck="false"
+                                   aria-label="Search documentation">
+                        </div>
+                        <!-- Offline readiness, from the pack-status the service
+                             worker records during install (OD3). Silent when the
+                             pack is complete. -->
+                        <span class="docs-status" id="docs-status"></span>
+                        <button class="btn-close" id="docs-close" aria-label="Close documentation">&times;</button>
+                    </div>
+                    <div class="docs-body">
+                        <!-- role=navigation on a div, not a <nav> element:
+                             site.css styles the bare `nav` selector as the
+                             fixed site header bar, which would yank any nested
+                             <nav> out of this layout and pin it to the top of
+                             the viewport. Same semantics for assistive tech,
+                             no inherited positioning. -->
+                        <div class="docs-nav" id="docs-nav" role="navigation"
+                             aria-label="Documentation contents"></div>
+                        <article class="docs-article guide-content" id="docs-article" tabindex="-1"></article>
+                    </div>
+                    <div class="docs-footer">
+                        <span id="docs-version" class="docs-version"></span>
+                        <a id="docs-site-link" class="docs-site-link" href="/docs/html/guides/"
+                           target="_blank" rel="noopener">Open on turmeric-lang.com &#x2197;</a>
                     </div>
                 </div>
             </div>
@@ -299,7 +505,13 @@
         <!-- Footer -->
         <footer class="footer">
             <div class="footer-content">
-                <p>Try Turmeric &mdash; A web-based REPL for the <a href="https://github.com/turmeric-lang/turmeric">Turmeric language</a></p>
+                <!-- /try does not place <site-footer>; this is its own. The
+                     C-interpreter link belongs in both: the marketing footer
+                     is where a visitor browsing the site finds it, and this is
+                     where someone already in a playground finds the other
+                     playground. Prose here, so the verb reads naturally. -->
+                <p>Try Turmeric &mdash; A web-based REPL for the <a href="https://github.com/turmeric-lang/turmeric">Turmeric language</a>
+                   &mdash; also try our <a href="https://c.turmeric-lang.com">C interpreter</a>.</p>
             </div>
         </footer>
     </div>

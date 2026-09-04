@@ -30,7 +30,9 @@
 #include "eval.h"
 #include "preload.h"       /* shared stdlib preload (macros + typed collections) */
 #include "interpreter_natives.h"  /* wk_register_* interpreter native overrides */
+#include "collections_native.h"   /* turi_register_collection_natives re-assert */
 #include "spice_loader.h"  /* RP3: auto-discover + load the enclosing spice */
+#include "elab_internal.h" /* :expand -- MacroDef registry + elab_expand_macro */
 #include "ffi_thunk.h"     /* RP4: install per-export TuriNativeFn bindings */
 #include "platform_fs.h"   /* setenv/unsetenv on Windows */
 
@@ -227,7 +229,7 @@ static int paren_balance(const char *s) {
 /* Known REPL meta-commands for colon-prefix completion. */
 static const char *const k_meta_cmds[] = {
     ":help", ":quit", ":q",
-    ":type", ":doc", ":reload", ":load-string", ":run", ":reset", ":explain",
+    ":type", ":doc", ":expand", ":reload", ":load-string", ":run", ":reset", ":explain",
     ":cd", ":pwd",
     ":tutorial", ":next", ":prev", ":hint", ":skip",
     ":quit-tutorial", ":tutorial-progress",
@@ -529,6 +531,7 @@ static void repl_print_value(TuriValue v, bool use_color) {
         case TURI_GEN:         col = COL_RESET; break;
         case TURI_HANDLER:     col = COL_RESET; break;
         case TURI_REJECTION:   col = COL_ERR;   break;
+        case TURI_SYNTAX:      col = COL_RESET; break;
     }
     printf("=> %s%s%s\n", col, repr, COL_RESET);
 }
@@ -591,6 +594,108 @@ static void cmd_type(TuriEnv *env, const char *expr_src) {
     }
 
 cleanup:
+    arena_free(&arena);
+    buf_free(&combined);
+}
+
+/* -------------------------------------------------------------------------
+ * :expand <form> -- expand-1: expand the form's head macro ONCE and print
+ * the result (macro-system-direction-plan, the deferred REPL expand-1).
+ *
+ * Same setup as cmd_type -- re-read the accumulated session source so
+ * macros defined at earlier prompts are registered -- but the elaboration
+ * runs through a throwaway ElabSession so the macro REGISTRY survives the
+ * call and the given form can be expanded by hand.  defmacro* macros work
+ * too: their closures live in the throwaway session's own macro env,
+ * recreated (with the stdlib preload) for this command and torn down with
+ * the session.
+ * ------------------------------------------------------------------------- */
+static void cmd_expand(TuriEnv *env, const char *expr_src) {
+    Buf combined;
+    buf_init(&combined);
+    if (env->src_acc.len > 0)
+        buf_write(&combined, env->src_acc.data, env->src_acc.len);
+    size_t prior_len = combined.len;
+    buf_puts(&combined, expr_src);
+    buf_putc(&combined, '\0');
+
+    Arena arena;
+    arena_init(&arena, 0);
+    SymbolTable st;
+    symtab_init(&st, &arena);
+
+    diag_reset();
+    SourceFile sfile = {0};
+    sfile.path        = "<expand>";
+    sfile.src         = combined.data;
+    sfile.len         = combined.len - 1;
+    sfile.file_id     = 0;
+    sfile.reader_type = env->reader_type;
+    diag_register_file(&sfile);
+
+    uint32_t nforms = 0;
+    Form **forms = read_all_with_registry(&arena, &st, &sfile,
+                                          env->reader_macros, &nforms);
+    if (!forms || nforms == 0 || diag_had_error()) {
+        if (!diag_had_error()) printf(":expand -- empty expression\n");
+        goto cleanup_noses;
+    }
+
+    {
+        /* The LAST top-level form is the one to expand; everything before
+         * it (the accumulated session source) elaborates first so its
+         * macros register into the session. */
+        Form *target = forms[nforms - 1];
+        if (target->span.off_start < prior_len) {
+            printf(":expand -- give one form to expand\n");
+            goto cleanup_noses;
+        }
+        ElabSession *sess = elab_session_new();
+        if (nforms > 1) {
+            (void)elaborate_program_session(&arena, &st, forms, nforms - 1,
+                                            /*stdlib_prefix=*/0, ".",
+                                            /*separate_compilation=*/false,
+                                            /*sandboxed=*/false,
+                                            /*tc_env=*/NULL, NULL, 0, NULL,
+                                            env->reader_macros, sess);
+            /* Prior-source errors are the prompt's business, not this
+             * command's; the macro registry is populated regardless of a
+             * failed later form.  (A failed session must be discarded for
+             * further ELABORATION -- expansion only reads the registry.) */
+            diag_reset();
+            diag_register_file(&sfile);
+        }
+        Elab *e = (Elab *)sess;
+        if (target->tag != F_LIST || target->as.list.len == 0 ||
+            target->as.list.items[0]->tag != F_SYM) {
+            printf(":expand -- not a macro call\n");
+            elab_session_free(sess);
+            goto cleanup_noses;
+        }
+        MacroDef *macro = elab_lookup_macro(e, target->as.list.items[0]->as.sym);
+        if (!macro) {
+            printf(":expand -- '%s' is not a macro here\n",
+                   target->as.list.items[0]->as.sym->name);
+            elab_session_free(sess);
+            goto cleanup_noses;
+        }
+        uint32_t n_args = target->as.list.len - 1;
+        Form **args = (n_args == 0) ? NULL
+            : (Form **)arena_alloc(&arena, n_args * sizeof(Form *));
+        for (uint32_t i = 0; i < n_args; i++)
+            args[i] = target->as.list.items[1 + i];
+        Form *expanded = elab_expand_macro(e, macro, args, n_args);
+        if (expanded) {
+            Buf out;
+            buf_init(&out);
+            form_print(&out, expanded);
+            printf("%.*s\n", (int)out.len, out.data);
+            buf_free(&out);
+        }
+        elab_session_free(sess);
+    }
+
+cleanup_noses:
     arena_free(&arena);
     buf_free(&combined);
 }
@@ -660,10 +765,13 @@ const char *turi_doc_lookup_builtin(const char *sym) {
         /* Async */
         {"async",    "(async body) -- create an async computation"},
         {"await",    "(await future) -- wait for an async computation to complete"},
-        /* Error handling */
-        {"try",      "(try body (catch err handler)) -- catch runtime errors"},
-        {"catch",    "catch -- error handler clause in (try ...)"},
-        {"throw",    "(throw msg) -- raise a runtime error"},
+        /* Error handling.  try/catch/throw were deleted end-to-end in v0.25.0
+         * (CHANGELOG.md:1974); the model is Result-returning functions plus
+         * panic for the unrecoverable case.  Do not re-add them here. */
+        {"panic",    "(panic msg) -- abort with an unrecoverable error"},
+        {"panic-with","(panic-with value) -- panic carrying a typed payload"},
+        {"catch-unwind","(catch-unwind thunk) -- run thunk, returning a Result whose err slot carries the Panic"},
+        {"catch-panic-of","(catch-panic-of Type thunk) -- like catch-unwind, but re-raises panics whose payload is not Type"},
         /* Dynamic vars */
         {"defdynamic","(defdynamic *name* :Type init) -- define a dynamic (thread-local) variable"},
         {"let-dyn",  "(let-dyn [*name* val] body) -- bind dynamic variable within scope"},
@@ -785,6 +893,10 @@ static void repl_preload_stdlib_and_natives(TuriEnv *env) {
      * stdlib with it (web-repl-lang-switch-drops-stdlib). */
     turi_env_pin_prelude(env);
     turi_env_register_interpreter_natives(env);
+    /* Re-assert collection natives (vec/set/map/hamt) after preload -- see
+     * the matching call in main.c for why (turi_register_collection_natives
+     * is otherwise only ever registered once, before any preload runs). */
+    turi_register_collection_natives(env);
     tur_ffi_register_reload_native(env);
 }
 
@@ -963,6 +1075,7 @@ static void print_help(void) {
         "  :help               show this help\n"
         "  :quit  :q           exit the REPL\n"
         "  :type <expr>        print inferred type without evaluating\n"
+        "  :expand <form>      expand the form's head macro once and print it\n"
         "  :doc  <sym>         print documentation for a symbol or builtin\n"
         "  :reload <file>      evaluate a .tur file into the current session\n"
         "  :load-string \"<src>\"  evaluate source directly (\\n for newlines)\n"
@@ -1440,6 +1553,13 @@ int turi_repl_run(bool watch_mode) {
                 free(line);
                 continue;
             }
+            if (strncmp(line, ":expand", 7) == 0 && (line[7] == ' ' || line[7] == '\0')) {
+                const char *expr = (line[7] == ' ') ? line + 8 : "";
+                if (*expr) cmd_expand(env, expr);
+                else printf(":expand requires a macro call form\n");
+                free(line);
+                continue;
+            }
             if (strncmp(line, ":doc", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
                 const char *sym = (line[4] == ' ') ? line + 5 : "";
                 if (*sym) cmd_doc(env, sym);
@@ -1580,13 +1700,12 @@ int turi_repl_run(bool watch_mode) {
                     fprintf(stderr, "unknown #lang layer: '%.*s'\n",
                             (int)bad_len, bad);
                 } else if (rt != env->reader_type || layers != env->lang_layers) {
-                    env->reader_type      = rt;
-                    env->lang_layers      = layers;
-                    /* Accumulated USER source may be incompatible with the new
-                     * reader, but the pinned stdlib preload is not: rewind to
-                     * the pin rather than emptying, or the next collection
-                     * literal fails as "unknown ... 'hamt-of'". */
-                    turi_env_reset_to_prelude(env);
+                    /* Full switch: rewinds to the pinned stdlib preload
+                     * (accumulated USER source may be incompatible with the
+                     * new reader, the preload is not) and wipes the session
+                     * reader-macro registry so a dropped layer's dispatch
+                     * genuinely turns off. */
+                    turi_env_apply_lang(env, rt, layers);
                     printf("; reader set to %s (session reset)\n", reader_type_name(rt));
                 } else {
                     printf("; reader already set to %s\n", reader_type_name(rt));

@@ -11,7 +11,7 @@
 ;; into F_TYPE_ANN's payload so unquotes inside type positions
 ;; participate in the same substitution pass as everywhere else.
 ;;
-;; See docs/reported/macro-unquote-in-type-position-rejected.md.
+;; See docs/archive/history/macro-unquote-in-type-position-rejected.md.
 
 (defstruct Pos [x : int y : int])
 

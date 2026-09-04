@@ -36,7 +36,7 @@ endif()
 # ---------------------------------------------------------------------------
 # Warnings-as-errors, except during the Windows bring-up.
 #
-# The Windows port is in progress (docs/upcoming/v1/windows-support-plan.md).
+# The Windows port is in progress (docs/archive/windows-support-plan.md).
 # A first-time portability warning on a platform nobody has compiled for yet is
 # information, not a defect to halt on -- promoting it to a hard error just
 # hides the next twenty behind it.  Restore -Werror here once the port is warning
@@ -103,9 +103,18 @@ set(TURI_EVAL_SOURCES
     # block relocated from main.c so `tur repl` and the WASM REPL register the
     # same interpreter natives as --interpret (web-repl-repl-inline-c-native-gap).
     turi/interpreter_natives.c
+    # macro_env.c -- the per-compile macro-time interpreter env
+    # (macro-system-direction-plan Stage 1): elab_macro_env_get/_dispose,
+    # declared in compiler/elab.h, implemented turi-side to keep the include
+    # direction turi -> compiler.
+    turi/macro_env.c
     # dap.c -- Debug Adapter Protocol server (debugger Phase 3), a thin shell
     # over the Phase 2 interpreter debugger's control API in eval.c.
     turi/dap.c
+    # trace.c -- the time-travel recorder (editor-intelligence follow-through,
+    # track T). Drives the same Phase 3 control API dap.c does: a pause
+    # handler that captures and immediately resumes step-in IS a tracer.
+    turi/trace.c
     turi/repl.c
     # RP3: REPL spice-image loader. Walks up to build.tur, dlopens
     # .tur-repl-cache/lib.so, primes a symbol map from exports.manifest.
@@ -113,6 +122,10 @@ set(TURI_EVAL_SOURCES
     # RP4: TuriValue<->scalar marshaling layer that installs each
     # spice export as a TuriNativeFn binding the eval loop can call.
     turi/ffi_thunk.c
+    # jit-ffi-c2mir-plan: the MIR-free half of the JIT-scoped dynamic FFI --
+    # provider hook + signature vocabulary.  The c2mir-backed provider itself
+    # lives in turi/jit_ffi.c inside tur_jit_obj (JIT builds only).
+    turi/jit_ffi_hook.c
 )
 
 # ---------------------------------------------------------------------------
@@ -179,7 +192,7 @@ set(TUR_CORE_SOURCES
     compiler/reader_macros.c
     compiler/lang_layers.c
     compiler/stdlib_autoload.c
-    # RT1--RT3 + S0--S3 (docs/upcoming/v1/refinement-types-plan.md): refinement
+    # RT1--RT3 + S0--S3 (docs/archive/refinement-types-plan.md): refinement
     # types.  These stages are the whole solver -- the dev-only Z3 oracle that
     # once sat behind them was retired in 0.32.5, so there is no solver
     # dependency here to gate, in any build type.
@@ -187,6 +200,7 @@ set(TUR_CORE_SOURCES
     compiler/refine_collect.c
     compiler/refine_smtlib.c
     compiler/refine_discharge.c
+    compiler/refine_report.c
     compiler/refine_solver.c
     compiler/refine_solver_s0.c
     compiler/refine_solver_euf.c
@@ -244,8 +258,12 @@ set(TUR_CORE_SOURCES
     # archive only contributes members that resolve an undefined symbol, so
     # the duplicate definition costs an existing link nothing -- but a
     # whole-archive consumer (the JIT, which resolves runtime symbols by NAME
-    # at run time) needs it present.  docs/archive/libturi-symbols-basename-collision.md.
+    # at run time) needs it present.  docs/archive/history/libturi-symbols-basename-collision.md.
     runtime/symbols.c
+    # SX1 (solver-extension-plan): the backtrackable-state trail.  Dual-listed
+    # in TURT_RUNTIME_SOURCES like every other runtime TU here, so a compiled
+    # program can link the one maintained copy.
+    runtime/trail.c
     runtime/tur_string.c
     # S2 (jit-engine-plan, findings 19.4 item 2 / seam 3): the generated
     # runtime TU -- the emitted preamble, every gate on, statics externalized,
@@ -273,6 +291,7 @@ set(TUR_CORE_SOURCES
     lsp/lsp_io.c
     lsp/lsp_sink.c
     lsp/lsp_collect.c
+    lsp/lsp_scope.c
     lsp/lsp_json.c
     lsp/lsp_docs.c
     lsp/lsp_util.c
@@ -280,6 +299,8 @@ set(TUR_CORE_SOURCES
     lsp/lsp_session.c
     # cli/ -- standalone subcommands
     cli/lsp_lite.c
+    cli/completion.c
+    cli/demangle.c
 )
 
 # ---------------------------------------------------------------------------
@@ -328,7 +349,7 @@ endif()
 if(WIN32)
     # Windows -- IOCP backend (io.h already selects IO_BACKEND_IOCP here).
     # Currently a stub: every entry point fails cleanly rather than silently
-    # pretending to poll.  See docs/upcoming/v1/windows-support-plan.md (WIN3).
+    # pretending to poll.  See docs/archive/windows-support-plan.md (WIN3).
     list(APPEND TUR_CORE_SOURCES async/io_iocp.c)
 elseif(UNIX AND NOT APPLE AND NOT FREEBSD AND NOT OPENBSD AND NOT NETBSD)
     # Linux - use epoll
@@ -423,7 +444,11 @@ if(TUR_JIT)
   # showed up as `undefined reference to MIR_set_error_func` across the
   # board.  A separate object library keeps the blast radius to the two
   # targets that actually want an engine.
-  add_library(tur_jit_obj OBJECT jit_engine.c runtime/generated/tur_rt_split_embed.c)
+  # jit-ffi-c2mir-plan F1: turi/jit_ffi.c rides in the engine's object
+  # library, not tur_core -- it calls the image API and must not drag MIR
+  # onto tur_core's eighteen consumers.
+  add_library(tur_jit_obj OBJECT jit_engine.c turi/jit_ffi.c
+              runtime/generated/tur_rt_split_embed.c)
   target_include_directories(tur_jit_obj PRIVATE ${TUR_INCLUDE_DIRS})
   target_link_libraries(tur_jit_obj PRIVATE tur_mir)
   target_compile_definitions(tur_jit_obj PRIVATE TUR_HAVE_JIT=1)
@@ -577,6 +602,7 @@ endif()
 # symbol), so the archive grows but no existing link changes.
 set(TURT_RUNTIME_SOURCES
     runtime/hamt.c
+    runtime/trail.c
     runtime/symbols.c
     runtime/tur_atomics.c
     runtime/tur_tls.c
@@ -699,6 +725,26 @@ target_link_options(tur_lang_switch_prelude PRIVATE -pthread
     $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 set_target_properties(tur_lang_switch_prelude PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
+# macro-system-direction-plan Stage 1: the macro-time interpreter env.
+# Nested turi evaluation inside a (simulated) compile must never leave
+# g_interpret_mode flipped; capabilities are denied and fuel is bounded.
+# ---------------------------------------------------------------------------
+add_executable(tur_macro_env_nested ${CMAKE_SOURCE_DIR}/tests/turi/macro-env-nested.c)
+target_include_directories(tur_macro_env_nested PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_macro_env_nested PRIVATE libturi)
+target_compile_options(tur_macro_env_nested PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_macro_env_nested PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_macro_env_nested PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
@@ -919,8 +965,32 @@ set_target_properties(tur_ffi_dispatch_unit PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# SX1 (solver-extension-plan): unit tests for the backtrackable-state trail.
+# Links the runtime source directly rather than tur_core -- the trail has no
+# compiler dependencies, and keeping the target that narrow is what lets a
+# failure here mean exactly one thing.
+# ---------------------------------------------------------------------------
+add_executable(tur_trail
+    ${CMAKE_SOURCE_DIR}/tests/unit/trail.c
+    runtime/trail.c
+)
+target_include_directories(tur_trail PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_trail PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_trail PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_trail PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+add_test(NAME tur_trail COMMAND tur_trail)
+
+# ---------------------------------------------------------------------------
 # RT2/S0--S3: refinement normalized-VC + decision-procedure unit test
-# (docs/upcoming/v1/refinement-types-plan.md).  Exercises hash-consing,
+# (docs/archive/refinement-types-plan.md).  Exercises hash-consing,
 # constant folding, each in-house stage, the cube expansion, the bounded
 # counterexample search, and the SMT-LIB serializer -- including the
 # "must NOT prove" direction, which is where the soundness invariant lives.
@@ -1001,7 +1071,7 @@ endif()  # NOT WIN32
 
 # ---------------------------------------------------------------------------
 # UC-2: user-level experiments file reader unit test
-# (docs/upcoming/user-config-experiments-plan.md).  Exercises
+# (docs/archive/history/user-config-experiments-plan.md).  Exercises
 # experiments_read_user_config against a temp $XDG_CONFIG_HOME.
 # ---------------------------------------------------------------------------
 add_executable(tur_experiments_user_config
@@ -1372,11 +1442,74 @@ set_target_properties(tur_lsp_wasm_backend_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
+# ---------------------------------------------------------------------------
+# try-turmeric-lang-toggle-plan T0/T1: the browser's language-mode entry
+# points (turi_wasm_set_lang / get_lang / lang_registry), run natively via
+# libturi_wasm for the same reason as the analysis backend above -- nothing
+# in wasm_glue.c is actually wasm-specific, and inside a wasm module nothing
+# in CI can look at it.
+# ---------------------------------------------------------------------------
+add_executable(tur_wasm_glue_lang_unit
+    ${CMAKE_SOURCE_DIR}/tests/wasm_glue_lang_unit.c
+)
+target_include_directories(tur_wasm_glue_lang_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_wasm_glue_lang_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
+    -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_wasm_glue_lang_unit PRIVATE
+    -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_wasm_glue_lang_unit PRIVATE libturi_wasm m ${CMAKE_DL_LIBS})
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_wasm_glue_lang_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_wasm_glue_lang_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_wasm_glue_lang_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# SX8c: the playground's solver entry point, exercised natively.
+# `turi_smt_check` otherwise only runs inside a wasm module, where nothing in
+# CI can look at it.  Nothing in wasm_glue.c is wasm-specific, so linking
+# libturi_wasm runs the real thing -- against the same S0..S3 chain the browser
+# build links.  See docs/upcoming/solver-extension-plan.md (SX8c).
+add_executable(tur_wasm_glue_smt_unit
+    ${CMAKE_SOURCE_DIR}/tests/wasm_glue_smt_unit.c
+)
+target_include_directories(tur_wasm_glue_smt_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_wasm_glue_smt_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
+    -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_wasm_glue_smt_unit PRIVATE
+    -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_wasm_glue_smt_unit PRIVATE libturi_wasm m ${CMAKE_DL_LIBS})
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_wasm_glue_smt_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_wasm_glue_smt_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_wasm_glue_smt_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
 # Injective name-mangler round-trip + injectivity unit test
 # (reversible-name-mangling-plan, task T2).
 add_executable(tur_mangle_unit
     ${CMAKE_SOURCE_DIR}/tests/mangle_test.c
     ${CMAKE_SOURCE_DIR}/src/compiler/mangle.c
+    # `tur demangle`'s token recognizer (profiling-plan P0) is tested here
+    # rather than through the CLI: the decode is pure, and which tokens it
+    # accepts is the part worth pinning. cli/demangle.c depends on nothing
+    # but mangle.h and stdio.
+    ${CMAKE_SOURCE_DIR}/src/cli/demangle.c
 )
 target_include_directories(tur_mangle_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_mangle_unit PRIVATE
@@ -1468,7 +1601,13 @@ if(TUR_WASM)
                 -sSTACK_SIZE=16777216
                 -sDEFAULT_PTHREAD_STACK_SIZE=8388608
                 -sINITIAL_MEMORY=67108864
-                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_turi_wasm_lsp_request,_turi_wasm_lsp_flush,_turi_wasm_lsp_reset,_turi_wasm_set_lang,_turi_wasm_get_lang,_turi_doc_lookup,_turi_type_of,_turi_explain,_malloc,_free
+                # _turi_wasm_read_file is deliberately a named operation rather
+                # than adding FS to EXPORTED_RUNTIME_METHODS: it reads .tur
+                # files under the stdlib mount and nothing else, so
+                # go-to-definition can open a stdlib buffer without the page
+                # gaining a general filesystem (wasm_lsp.c,
+                # try-turmeric-navigation-and-minimap-plan M4).
+                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_turi_wasm_lsp_request,_turi_wasm_lsp_flush,_turi_wasm_lsp_reset,_turi_wasm_read_file,_turi_wasm_set_lang,_turi_wasm_get_lang,_turi_wasm_lang_registry,_turi_doc_lookup,_turi_smt_check,_turi_type_of,_turi_explain,_turi_wasm_trace_run,_turi_wasm_trace_stats,_turi_wasm_trace_seek,_turi_wasm_trace_state,_turi_wasm_trace_site_at,_turi_wasm_trace_find_line,_turi_wasm_trace_output_full,_turi_wasm_trace_buffer,_turi_wasm_trace_buffer_len,_turi_wasm_trace_release,_malloc,_free
                 -sEXPORTED_RUNTIME_METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8
                 -sEXPORT_NAME=TurmericModule
                 -sMODULARIZE=1

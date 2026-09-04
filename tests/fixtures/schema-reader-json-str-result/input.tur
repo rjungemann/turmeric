@@ -1,0 +1,43 @@
+;; RD2: #json-str?<User>(body) -- the Result-returning typed decode.
+;;
+;; Expands to the panicking form behind a catch boundary:
+;;   (:: (catch-unwind (fn [] : User (:: (decode! (json/decode body)) User)))
+;;       (Result User int))
+;;
+;; Two things had to be true for that to work, and both are asserted here by
+;; the second case surviving: schema-decode! raises a catchable panic rather
+;; than calling abort(), and catch-unwind over a thunk returning a by-value
+;; aggregate is no longer miscompiled (a typed decode lands in a struct by
+;; definition, so it hit that on every SUCCESS).
+
+(defstruct User :copy [name : cstr age : int])
+
+(defn user-schema [] : int
+  (schema/field
+    (schema/field (schema/object-new) "name" (schema/str))
+    "age" (schema/int)))
+
+(definstance HasSchema [User]
+  (decode! [node]
+    (let [v (schema-decode! (user-schema) node)]
+      (make-struct User
+        (json/get-string (json/get! v "name"))
+        (json/get-int    (json/get! v "age"))))))
+
+(defn try-user [body : cstr] : (Result User int)
+  #json-str?<User>(body))
+
+;; the panicking form still works unchanged
+(defn parse-user [body : cstr] : User
+  #json-str<User>(body))
+
+(defn main [] : int
+  (let [r (try-user "{\"name\": \"dave\", \"age\": 51}")]
+    (if (ok? r)
+      (do (println (.name (ok-val r)))
+          (println (.age (ok-val r))))
+      (println "unexpected err")))
+  (let [r (try-user "{\"nope\": 1}")]
+    (if (ok? r) (println "unexpected ok") (println "caught")))
+  (println (.name (parse-user "{\"name\": \"eve\", \"age\": 33}")))
+  0)

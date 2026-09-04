@@ -20,17 +20,27 @@ cd "$(dirname "$0")/../.."
 
 TUR="${TUR:-./build/tur}"
 [ -x "$TUR" ] || { echo "tests: $TUR not built; run 'just build' first" >&2; exit 2; }
-# The REPL invokes `tur` as a subprocess; point at the local build.
-export TUR_BIN="$PWD/$TUR"
-# Ensure TUR_BIN is an absolute path (not "./build/tur") so the subprocess
-# works regardless of where the loader is invoked from.
-case "$TUR_BIN" in
-    /*) ;;
-    *)  TUR_BIN="$(cd "$(dirname "$TUR_BIN")" && pwd)/$(basename "$TUR_BIN")" ;;
+# The REPL invokes `tur` as a subprocess; point at the local build.  TUR_BIN
+# must be absolute so the subprocess works regardless of where the loader is
+# invoked from -- but prefixing $PWD unconditionally corrupts an already
+# absolute $TUR into "$PWD/home/.../tur", so branch on which one it is.
+case "$TUR" in
+    /*) TUR_BIN="$TUR" ;;
+    *)  TUR_BIN="$(cd "$(dirname "$PWD/$TUR")" && pwd)/$(basename "$TUR")" ;;
 esac
+export TUR_BIN
 
 WORK="$(mktemp -d -t tur-rp3.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
+# The REPL's spice-binding installer allocates one FfiBindingUd plus one
+# qualified-name key per export and deliberately never frees either --
+# src/turi/ffi_thunk.c:533 ("Leaked at process exit") and :551 ("qkey is
+# referenced by the env binding's name field; do not free here").  Those are
+# process-lifetime by design, like the rest of the tree-walking interpreter,
+# so LeakSanitizer's report is noise here and pollutes the output these
+# assertions diff against.  Same opt-out repl-spice-jit.sh already carries;
+# the compiler/codegen path stays leak-checked (see CLAUDE.md).
+export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=0"
 
 # The cached spice image is named by tur_spice_image_load(); its extension
 # tracks TUR_SHLIB_EXT in src/platform_fs.h, so it is .dll on Windows.
@@ -48,7 +58,7 @@ fail() { FAIL=$((FAIL + 1)); echo "FAIL $1 -- $2"; }
 NOPROJ="$WORK/no-project"
 mkdir -p "$NOPROJ"
 out=$(cd "$NOPROJ" && echo ':quit' | "$TUR_BIN" repl 2>&1)
-if echo "$out" | grep -q 'Loaded spice'; then
+if grep -q 'Loaded spice' <<< "$out"; then
     fail "repl-spice-load-outside-project" \
          "unexpected 'Loaded spice' line: $out"
 else
@@ -67,7 +77,7 @@ cat > "$PROJ/src/smoke.tur" <<'EOF'
   (defn add42 [x :int] :int (+ x 42)))
 EOF
 out=$(cd "$PROJ" && echo ':quit' | "$TUR_BIN" repl 2>&1)
-if echo "$out" | grep -q 'Loaded spice from .*proj (1 export)'; then
+if grep -q 'Loaded spice from .*proj (1 export)' <<< "$out"; then
     pass "repl-spice-load-initial"
 else
     fail "repl-spice-load-initial" "missing/wrong status line: $out"
@@ -128,7 +138,7 @@ cat > "$NOAUTOPROJ/src/x.tur" <<'EOF'
 EOF
 out=$(cd "$NOAUTOPROJ" && echo ':quit' \
         | TUR_NO_AUTO_SPICE=1 "$TUR_BIN" repl 2>&1)
-if echo "$out" | grep -q 'Loaded spice'; then
+if grep -q 'Loaded spice' <<< "$out"; then
     fail "repl-spice-load-no-auto-spice" \
          "TUR_NO_AUTO_SPICE=1 was ignored: $out"
 elif [ -d "$NOAUTOPROJ/.tur-repl-cache" ]; then

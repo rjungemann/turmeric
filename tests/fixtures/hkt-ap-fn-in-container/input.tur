@@ -14,17 +14,17 @@
 
 ;; int-carrier extractors (Option = { bool is_some; int64_t value; })
 (defn opt-val [o : int] : int
-  ```c struct { bool is_some; int64_t value; } *p = (void*)(intptr_t)o;
-       return (p && p->is_some) ? p->value : -999; ```)
+  ```c struct { int tag; int64_t value; } *p = (void*)(intptr_t)o;
+       return (p && p->tag == 1) ? p->value : -999; ```)
 (defn opt-some? [o : int] : int
-  ```c struct { bool is_some; int64_t value; } *p = (void*)(intptr_t)o;
-       return (p && p->is_some) ? 1 : 0; ```)
+  ```c struct { int tag; int64_t value; } *p = (void*)(intptr_t)o;
+       return (p && p->tag == 1) ? 1 : 0; ```)
 
 ;; float-carrier extractor (Option = { bool is_some; double value; }), scaled to
 ;; an int so the result-type-grounding case stays printable without float I/O.
 (defn opt-fval-x100 [o : int] : int
-  ```c struct { bool is_some; double value; } *p = (void*)(intptr_t)o;
-       return (p && p->is_some) ? (int64_t)(p->value * 100.0) : -999; ```)
+  ```c struct { int tag; double value; } *p = (void*)(intptr_t)o;
+       return (p && p->tag == 1) ? (int64_t)(p->value * 100.0) : -999; ```)
 
 (defn main [] : int
   ;; capturing closure wrapped in some: ap applies it by value

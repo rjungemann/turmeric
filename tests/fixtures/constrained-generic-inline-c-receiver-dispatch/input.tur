@@ -6,7 +6,7 @@
 ;; keys this off `fd->body->kind == EX_INLINE_C`).  The generic helper's
 ;; monomorphization must respect that and NOT take the address of the receiver.
 ;;
-;; Regression for docs/archive/constrained-generic-dispatch-tyvar-name-and-inlinec.md
+;; Regression for docs/archive/history/constrained-generic-dispatch-tyvar-name-and-inlinec.md
 ;; (Bug 2): #439's address-of bridge (emit_reresolved_receiver_is_by_ptr)
 ;; checked only the binding-cached `body_is_inline_c` flag, which is not set on
 ;; instance-method FnDefs.  So merely adding the generic helper re-triggered the

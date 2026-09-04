@@ -1,0 +1,7 @@
+stdlib/cstr.tur implements cstr-sub / cstr-eq? / cstr-free as inline-C, and the
+tree-walking interpreter does not run inline-C (the TI7 carve-out). run-turi.sh's
+fixture_has_inline_c only greps this file and follows `(load "...")`, not
+`(import cstr ...)`, so without this marker the fixture is dispatched to
+--interpret and dies on the first cstr call. Broadening that detector to follow
+imports would over-approximate -- 7 fixtures import inline-C-carrying stdlib
+modules and interpret correctly today because they never reach the inline-C.

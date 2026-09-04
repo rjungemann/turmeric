@@ -13,7 +13,7 @@
     ;; a cas against the committed value succeeds; against a stale one it fails.
     ;; The bool is printed as a bool: `(:: b :int)` prints 1/0 compiled but
     ;; true/false interpreted, which is a divergence of its own -- see
-    ;; docs/reported/ascribe-bool-to-int-prints-differently-per-path.md.
+    ;; docs/archive/ascribe-bool-to-int-prints-differently-per-path.md.
     (println (atomically (stm (tvar/cas tv 42 43))))                          ; true
     (println (atomically (stm (tvar/cas tv 42 99))))                          ; false
     (println (:: (atomically (stm (tvar/read tv))) :int)))                    ; 43

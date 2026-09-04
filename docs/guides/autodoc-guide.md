@@ -8,11 +8,11 @@ description: Writing `;;;` docstrings and generating API docs with `tools/gendoc
 
 Turmeric's documentation system has three layers:
 
-1. **`;;;` docstrings** — triple-semicolon comments above any `defn`, `defmacro`,
+1. **`;;;` docstrings** -- triple-semicolon comments above any `defn`, `defmacro`,
    `defstruct`, `definstance`, or `defopaque`.
-2. **HTML API docs** — `tools/gendocs.py` parses the docstrings and emits a
-   styled site under `docs/api/`.
-3. **Runtime `(doc name)`** — looks up the docstring for a name at the REPL or
+2. **HTML API docs** -- `tools/gendocs.py` parses the docstrings and emits a
+   styled site under `docs/html/api/`.
+3. **Runtime `(doc name)`** -- looks up the docstring for a name at the REPL or
    in the web playground. The same generator can emit `stdlib/docstrings.tur`,
    the lookup table the `doc` macro reads.
 
@@ -23,7 +23,7 @@ This guide covers all three.
 ## Writing docstrings
 
 Use `;;;` (triple-semicolon), distinct from `;;` (regular inline comment).
-A docstring block must sit **immediately above** the definition it documents —
+A docstring block must sit **immediately above** the definition it documents --
 a blank line or any non-`;;;` line resets the buffer.
 
 ```turmeric
@@ -56,14 +56,14 @@ a blank line or any non-`;;;` line resets the buffer.
 
 ### Conventions
 
-- First line: `;;; name -- brief summary` — the name is repeated so the line is
+- First line: `;;; name -- brief summary` -- the name is repeated so the line is
   greppable.
 - Blank `;;;` lines separate sections, like Python docstrings.
 - Examples use `; => result` to show expected output.
-- **ASCII only** — use `--` (double hyphen), never em dashes. The Turmeric
+- **ASCII only** -- use `--` (double hyphen), never em dashes. The Turmeric
   parser hangs on non-ASCII bytes.
 - Internal helpers (e.g. `tur-contract-check`, `__functor_*`) get a one-liner
-  only — no Parameters/Returns/Example blocks needed.
+  only -- no Parameters/Returns/Example blocks needed.
 
 ### Docstring levels
 
@@ -75,8 +75,8 @@ a blank line or any non-`;;;` line resets the buffer.
 
 ### Module docstrings
 
-A contiguous `;;;` block at the very top of a file — **before the first real
-definition** — becomes the module docstring. Terminate it with a `;;` line or
+A contiguous `;;;` block at the very top of a file -- **before the first real
+definition** -- becomes the module docstring. Terminate it with a `;;` line or
 any non-comment, non-blank form (e.g. `(defmodule ...)`, `(export ...)`).
 
 ```turmeric
@@ -105,17 +105,21 @@ tur run docs
 
 # Equivalent direct invocation:
 python3 tools/gendocs.py stdlib/ \
-    --out docs/api/ \
+    --out docs/html/api/ \
     --emit-tur stdlib/docstrings.tur
 ```
 
-**Generated artifacts live under `docs/api/` — do not edit by hand.** Each
-regen overwrites the tree.
+The `tur run docs` recipe additionally emits `web/public/doc-names.json`
+(the web REPL search index) via `--emit-json`, folding in spice symbols
+with `--extra-json`.
+
+**Generated artifacts live under `docs/html/api/` -- do not edit by hand.**
+Each regen overwrites the tree.
 
 ### Output layout
 
 ```
-docs/api/
+docs/html/api/
   index.html          -- module index with one-liners
   tur-list.html       -- per-module page
   tur-option.html
@@ -137,7 +141,7 @@ Each per-module page has:
 When iterating on docstrings in a single file:
 
 ```sh
-python3 tools/gendocs.py stdlib/list.tur --out docs/api/
+python3 tools/gendocs.py stdlib/list.tur --out docs/html/api/
 ```
 
 ---
@@ -145,7 +149,8 @@ python3 tools/gendocs.py stdlib/list.tur --out docs/api/
 ## Runtime `(doc name)`
 
 `stdlib/docstrings.tur` is **auto-generated** by `gendocs.py --emit-tur`. It
-populates a HAMT-backed lookup table keyed by name. The `doc` macro in
+defines the `tur/docstrings` module, whose `doc-lookup` function maps a name
+to its docstring via a static table. The `doc` macro in
 `stdlib/macros.tur` reads it:
 
 ```
@@ -166,10 +171,11 @@ Since: Phase B1
 ```
 
 `(doc name)` accepts either a bare symbol (`(doc cons)`) or a string
-(`(doc "cons")`). The macro looks the name up in `tur/docstrings/doc-table`
-and prints either the entry or a "No documentation found" message.
+(`(doc "cons")`). The macro looks the name up via `doc-lookup` from
+`tur/docstrings` and prints either the entry or a "No documentation found."
+message.
 
-Since `tur/` modules are auto-loaded, `doc` is globally available — no
+Since `tur/` modules are auto-loaded, `doc` is globally available -- no
 explicit import needed.
 
 ---
@@ -177,7 +183,7 @@ explicit import needed.
 ## Web REPL integration
 
 The Try Turmeric web app exposes the same lookup table from the WASM build.
-`src/wasm_glue.c` exports:
+`src/web/wasm_glue.c` exports:
 
 ```c
 EMSCRIPTEN_KEEPALIVE
@@ -207,6 +213,6 @@ Because the lookup goes through the WASM module itself (not a network fetch),
 
 ## See also
 
-- `tools/gendocs.py` — the generator script
-- `stdlib/docstrings.tur` — the auto-generated lookup table (do not edit)
-- [REPL Guide](repl.md) — using `(doc name)` interactively
+- `tools/gendocs.py` -- the generator script
+- `stdlib/docstrings.tur` -- the auto-generated lookup table (do not edit)
+- [REPL Guide](repl.md) -- using `(doc name)` interactively

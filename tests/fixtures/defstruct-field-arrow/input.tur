@@ -2,7 +2,7 @@
 ;
 ; `(-> int int)` is an alternate spelling of `(fn [int] int)`; it lowers to
 ; TY_FN and rides the int64 carrier slot exactly as a `fn`-typed field does
-; (docs/upcoming/structdef-exotic-field-arrow-plan.md).  Previously this hit
+; (docs/archive/structdef-exotic-field-arrow-plan.md).  Previously this hit
 ; the DS-A4 "not yet supported as a struct/ADT field" hard error.
 
 (defstruct Cell [f : (-> int int)])

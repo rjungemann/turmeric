@@ -3,7 +3,7 @@
 ;; Previously the builtin spec table left result_type.copy_kind zeroed
 ;; (CK_UNIQUE/CK_MOVE), so reading the binding twice through a builtin tripped
 ;; a bogus TUR-E0005 use-after-move on a Copy float/int.
-;; See docs/reported/use-after-move-on-local-let-bound-float-vs-captured.md.
+;; See docs/archive/history/use-after-move-on-local-let-bound-float-vs-captured.md.
 
 ;; (1) local let-bound float, used twice (predicate + then-branch).
 (defn clip-local [limit :float t :float] :float

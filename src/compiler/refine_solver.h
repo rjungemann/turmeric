@@ -22,7 +22,7 @@
  * Cube expansion is capped; blowing the cap yields RT_UNKNOWN (this is the
  * "naive S4" the plan permits -- we never build a DPLL(T) engine).
  *
- * See docs/upcoming/v1/refinement-types-plan.md (S0--S4). */
+ * See docs/archive/refinement-types-plan.md (S0--S4). */
 
 #include "refine_vc.h"
 
@@ -39,6 +39,176 @@
 #define REFINE_MAX_LA_VARS      32
 #define REFINE_MAX_LA_CONSTR    512
 #define REFINE_MAX_EUF_TERMS    512
+/* S3's two caps live here rather than in refine_solver_no.c so the telemetry
+ * below can report a peak against the limit it is a peak of. */
+#define NO_MAX_ROUNDS           4
+/* Raised 8 -> 16 on SX0(b)'s evidence (solver-extension-plan SX5).  It was the
+ * ONLY cap in the solver with a live signal: it turned away eligible terms on
+ * four units across the three swept populations, every time by exactly one
+ * (9 eligible against a cap of 8), while every other cap sat on 72-98%
+ * headroom.  Not free -- the exchange is quadratic in the shared set and each
+ * `la_entails_eq` runs Fourier-Motzkin twice, so the pair work per S3 cube is
+ * 4x at the new cap and is paid by every obligation reaching S3, not only the
+ * ones near the cap.  Measured before landing: no verdict moved on the 125
+ * corpus benchmarks or the 89 in-tree refinement fixtures, and the corpus
+ * replay did not slow measurably.  Numbers and method in
+ * docs/archive/history/no-max-shared-raise.md. */
+#define NO_MAX_SHARED           16
+
+/* The bounded counterexample search's scope.  Here rather than beside its own
+ * code for the telemetry reason the NO_MAX_* ones are: the reporter names the
+ * limit its peak is a peak of.
+ *
+ * This is the cap most likely to SURPRISE, because it does not cost a proof --
+ * it costs a REFUTATION.  The proving stages only ever answer Valid or
+ * Unknown, so a counterexample can come from nowhere else; a VC with more
+ * variables than this can therefore never be reported as definitely wrong,
+ * however obviously wrong it is.  Raising it costs enumeration exponentially
+ * (n_cand ** n_vars), which is why it wants a measurement rather than a
+ * guess -- see model_vars_hits below for what that measurement has to
+ * separate. */
+#define MODEL_MAX_VARS          3
+
+/* A COLLECTION cap, not a solver one, and it lives here for the same reason
+ * the two NO_MAX_* ones do: the telemetry below reports a peak against the
+ * limit it is a peak of, and the reporter cannot see elab_fns.c's internals.
+ *
+ * It bounds the PATH CONDITIONS recovered for a call-site crossing -- the
+ * branch guards that had to hold to reach the call.  It is the tightest cap
+ * in the whole refinement path, and until 2026-09-04 it was also the only one
+ * with no telemetry, so nobody could say whether it bit.  Dropping a guard is
+ * sound in the one direction that matters (fewer hypotheses make the goal
+ * HARDER to prove, never easier), so a hit costs a proof, not a wrong answer.
+ * Enforced in rt_collect_path_conds (elab_fns.c). */
+#define RT_CS_PATH_MAX_HYPS     8
+
+/* ------------------------------------------------------------------------- *
+ * Cap telemetry
+ * ------------------------------------------------------------------------- */
+
+/* Every cap above degrades to RT_UNKNOWN when it bites, which is sound but
+ * silent: from the outside, an obligation the solver capped out on and one
+ * that was never in its competence look exactly alike.  These counters make
+ * the difference visible under TUR_REFINE_STATS=1.
+ *
+ * They are also decision data.  The solver-extension plan gates its two
+ * largest phases on this measurement -- SX4 (incremental simplex) is worth
+ * building only if REFINE_MAX_LA_CONSTR actually bites, and SX6 (boolean
+ * structure beyond small DNF) only if the cube caps do.  See
+ * docs/upcoming/solver-extension-plan.md, SX0(b).
+ *
+ * `hits` counts the times a cap fired.  `peak` is the high-water mark of the
+ * quantity that cap bounds, recorded on every query rather than only on the
+ * ones that overflow -- so a cap that never fires still reports how much
+ * headroom was left, which is the difference between "we are nowhere near
+ * this" and "we are one wide function away from it". */
+typedef struct RefineCapStats {
+    uint32_t cubes_hits,        cubes_peak;
+    uint32_t cube_lits_hits,    cube_lits_peak;
+    uint32_t expand_depth_hits, expand_depth_peak;
+    uint32_t la_vars_hits,      la_vars_peak;
+    uint32_t la_constr_hits,    la_constr_peak;
+    uint32_t la_fm_hits;        /* FM elimination backed off before growing   */
+    uint32_t euf_terms_hits,    euf_terms_peak;
+    uint32_t no_shared_hits,    no_shared_peak;
+    uint32_t no_rounds_hits;    /* exchange still progressing when rounds ran out */
+    /* Collection side (RT_CS_PATH_MAX_HYPS).  `peak` SATURATES at the limit --
+     * the walk stops collecting when it fills, so there is no way to know how
+     * many guards a crossing would have produced.  So peak is a headroom
+     * reading only while hits is 0; once it bites, `hits` is the signal and
+     * peak just reads 8.  Counting past the cap would mean restructuring a
+     * recursive walk with early returns, which risks changing WHICH guards get
+     * collected -- a verdict change for a measurement, which is the wrong
+     * trade. */
+    uint32_t path_hyps_hits,    path_hyps_peak;
+    /* The counterexample search's variable cap.  Unlike path_hyps, the peak
+     * here is REAL rather than saturating: `n_vars` is known before the check,
+     * so a declined VC still reports how wide it actually was.  It is recorded
+     * only for VCs that got past the uninterpreted-symbol gate, since the
+     * others could not use the search at any cap.
+     *
+     * Two hit counters, and the second is the one that decides anything.
+     * `model_vars_hits` counts every decline at the cap; `model_vars_would_run`
+     * counts the subset that would ACTUALLY start searching at a higher cap --
+     * a VC over the cap may also carry a non-int variable, and the sort gate
+     * sits after the count gate, so raising the limit would buy those nothing.
+     * A raise is justified by the second number, never the first. */
+    uint32_t model_vars_hits,   model_vars_peak;
+    uint32_t model_vars_would_run;
+} RefineCapStats;
+
+/* Mutable on purpose: the stages bump their own counters in place, which is
+ * cheaper and clearer than threading a stats pointer through every seam. */
+RefineCapStats *refine_caps(void);
+void refine_caps_reset(void);
+
+static inline void refine_cap_peak(uint32_t *slot, uint32_t v) {
+    if (v > *slot) *slot = v;
+}
+
+/* `out = now - before`, per field, for attributing a window of solver work to
+ * whatever asked for it.  The counters are global (a per-compile summary), so
+ * a delta around one decision is the only way to say which obligation hit a
+ * cap.
+ *
+ * The peaks are NOT differenced: they are maxima, not sums, so a difference of
+ * two high-water marks is meaningless.  `out` records the peak the window SAW,
+ * which is what "how close did this come to the cap" asks. */
+static inline void refine_caps_delta(RefineCapStats *out,
+                                     const RefineCapStats *now,
+                                     const RefineCapStats *before) {
+    out->cubes_hits        = now->cubes_hits        - before->cubes_hits;
+    out->cube_lits_hits    = now->cube_lits_hits    - before->cube_lits_hits;
+    out->expand_depth_hits = now->expand_depth_hits - before->expand_depth_hits;
+    out->la_vars_hits      = now->la_vars_hits      - before->la_vars_hits;
+    out->la_constr_hits    = now->la_constr_hits    - before->la_constr_hits;
+    out->la_fm_hits        = now->la_fm_hits        - before->la_fm_hits;
+    out->euf_terms_hits    = now->euf_terms_hits    - before->euf_terms_hits;
+    out->no_shared_hits    = now->no_shared_hits    - before->no_shared_hits;
+    out->no_rounds_hits    = now->no_rounds_hits    - before->no_rounds_hits;
+    out->path_hyps_hits    = now->path_hyps_hits    - before->path_hyps_hits;
+    out->path_hyps_peak    = now->path_hyps_peak;
+    out->model_vars_hits      = now->model_vars_hits      - before->model_vars_hits;
+    out->model_vars_would_run = now->model_vars_would_run - before->model_vars_would_run;
+    out->model_vars_peak      = now->model_vars_peak;
+    out->cubes_peak        = now->cubes_peak;
+    out->cube_lits_peak    = now->cube_lits_peak;
+    out->expand_depth_peak = now->expand_depth_peak;
+    out->la_vars_peak      = now->la_vars_peak;
+    out->la_constr_peak    = now->la_constr_peak;
+    out->euf_terms_peak    = now->euf_terms_peak;
+    out->no_shared_peak    = now->no_shared_peak;
+}
+
+/* `a += b`, hits only.  Used to accumulate several probes' deltas into the one
+ * site they were run for. */
+static inline void refine_caps_add_hits(RefineCapStats *a,
+                                        const RefineCapStats *b) {
+    a->cubes_hits        += b->cubes_hits;
+    a->cube_lits_hits    += b->cube_lits_hits;
+    a->expand_depth_hits += b->expand_depth_hits;
+    a->la_vars_hits      += b->la_vars_hits;
+    a->la_constr_hits    += b->la_constr_hits;
+    a->la_fm_hits        += b->la_fm_hits;
+    a->euf_terms_hits    += b->euf_terms_hits;
+    a->no_shared_hits    += b->no_shared_hits;
+    a->no_rounds_hits    += b->no_rounds_hits;
+    a->path_hyps_hits    += b->path_hyps_hits;
+    a->model_vars_hits      += b->model_vars_hits;
+    a->model_vars_would_run += b->model_vars_would_run;
+    refine_cap_peak(&a->path_hyps_peak,    b->path_hyps_peak);
+    refine_cap_peak(&a->model_vars_peak,   b->model_vars_peak);
+    refine_cap_peak(&a->cubes_peak,        b->cubes_peak);
+    refine_cap_peak(&a->cube_lits_peak,    b->cube_lits_peak);
+    refine_cap_peak(&a->expand_depth_peak, b->expand_depth_peak);
+    refine_cap_peak(&a->la_vars_peak,      b->la_vars_peak);
+    refine_cap_peak(&a->la_constr_peak,    b->la_constr_peak);
+    refine_cap_peak(&a->euf_terms_peak,    b->euf_terms_peak);
+    refine_cap_peak(&a->no_shared_peak,    b->no_shared_peak);
+}
+/* True when any cap fired since the last reset -- lets the printer stay quiet
+ * on the overwhelmingly common "nothing was capped" compile. */
+bool refine_caps_any(void);
 
 /* ------------------------------------------------------------------------- *
  * Cubes
@@ -74,6 +244,18 @@ bool refine_cubes_build(RefineVC *vc, Arena *a, VCCubeSet *out);
 typedef struct EufState EufState;
 
 EufState *euf_new(RefineVC *vc, Arena *a);
+/* SX3: mark / undo-to-mark over one state (incremental EUF), plus the env
+ * seam selecting it.  See trail_c.h for the trail; TUR_REFINE_EUF=rebuild
+ * restores the per-cube rebuild path. */
+typedef struct {
+    uint32_t trail_len;    /* TrailCMark, flattened to keep trail_c.h private */
+    uint32_t trail_level;
+    uint32_t n;
+    bool     unsat;
+} EufMark;
+EufMark  euf_mark(EufState *st);
+void     euf_undo_to(EufState *st, EufMark m);
+bool     euf_incremental_mode(void);
 /* Assert every literal of `c`.  Returns false when a contradiction is found. */
 bool      euf_assert_cube(EufState *st, const VCCube *c);
 /* Assert `a == b` and re-close.  Returns false on contradiction. */

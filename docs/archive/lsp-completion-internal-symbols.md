@@ -1,7 +1,7 @@
 # LSP completion is dominated by compiler-internal names
 
 **Severity:** medium (quality of the completion surface; no incorrect answers)
-**Found:** 2026-07-29, while executing `docs/upcoming/try-turmeric-lsp-plan.md`
+**Found:** 2026-07-29, while executing `docs/archive/try-turmeric-lsp-plan.md`
 **Affects:** `tur lsp` and the Try Turmeric playground equally -- both read the
 same symbol index.
 

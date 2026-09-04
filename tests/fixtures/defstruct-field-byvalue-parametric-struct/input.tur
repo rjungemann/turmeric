@@ -1,4 +1,4 @@
-; Regression: docs/reported/struct-field-byvalue-parametric-struct-layout.md
+; Regression: docs/archive/history/struct-field-byvalue-parametric-struct-layout.md
 ;
 ; A defstruct field whose type is a BY-VALUE PARAMETRIC struct (e.g.
 ; `(Option cstr)`) must be laid out INLINE as the monomorphized aggregate
@@ -15,13 +15,13 @@
 (defn main [] : int
   ; Option cstr field: some -> is-some reads back through the inline aggregate.
   (let [b (make-struct BoxS 1 (:: (some "x") (Option cstr)))]
-    (println (if (.is-some (.v b)) 1 0)))   ; 1
+    (println (if (some? (.v b)) 1 0)))   ; 1
   ; Option cstr field: none round-trips as absent.
   (let [b (make-struct BoxS 2 (:: (none) (Option cstr)))]
-    (println (if (.is-some (.v b)) 1 0)))   ; 0
+    (println (if (some? (.v b)) 1 0)))   ; 0
   ; Option int field: read the wrapped value back out of the field slot.
   (let [b (make-struct BoxI 7 (:: (some 42) (Option int)))]
-    (println (if (.is-some (.v b)) (.value (.v b)) -1)))  ; 42
+    (println (if (some? (.v b)) (unwrap (.v b)) -1)))  ; 42
   ; Sibling scalar field unaffected by the inline aggregate slot.
   (let [b (make-struct BoxI 9 (:: (some 5) (Option int)))]
     (println (.id b)))                      ; 9

@@ -21,7 +21,7 @@
 ;;;   (clone 42)  ; => 42
 ;;;
 ;;; Since: Phase B1
-(defclass Clone [a] (clone [x] : int))
+(defclass Clone [a] (clone [x : a] : a))
 ;;; Clone [int] -- Clone instance for int (trivial copy).
 ;;;
 ;;; Since: Phase B1

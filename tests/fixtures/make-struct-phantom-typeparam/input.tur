@@ -6,8 +6,8 @@
 ;; Before the fix, the make-struct emit step produced an invalid C99 designated
 ;; initializer on a non-aggregate: `(int64_t){.fst = ..., .snd = ...}`, which
 ;; the C compiler rejects.  The struct's phantom type parameters have no layout
-;; impact, so every phantom instantiation shares one monomorph.
-;; See docs/reported/make-struct-phantom-typeparam-lowering.md (now fixed).
+;; impact, so every phantom instantiation shares one monomorph.  Fixed; this
+;; fixture is the record.
 
 (defopaque Dense [n A] :int)
 

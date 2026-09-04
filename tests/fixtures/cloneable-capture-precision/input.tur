@@ -12,14 +12,19 @@
 ;; in the outer function scope and is never referenced inside the inner lambda.
 ;; This program must compile and run without error.
 
+;; Clone here is the STDLIB class (identical signature merges silently);
+;; re-declared so the fixture reads standalone.  The instance signature
+;; follows the committed `[x : a] : a` shape the class now declares --
+;; see docs/archive/int-declared-method-float-body-engine-divergence.md
+;; for why the old `: int` slot went away.
 (defclass Clone [a]
-  (clone [x] : int))
+  (clone [x : a] : a))
 
 ;; CloneToken: a wrapper with a Clone instance.
 (defstruct CloneToken :copy [tag : int])
 
 (definstance Clone [CloneToken]
-  (clone [t] : int 0))
+  (clone [t : CloneToken] : CloneToken t))
 
 ;; NoToken: no Clone instance.
 (defstruct NoToken :copy [tag : int])

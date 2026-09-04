@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/run-closure-env-leak.sh -- LeakSanitizer regression gate for the
-# fat-closure-env scoped-free pass (docs/reported/fat-closure-env-leak.md).
+# fat-closure-env scoped-free pass (docs/archive/history/fat-closure-env-leak.md).
 #
 # Every `(fn ...)` that captures a free variable heap-allocates a fat-closure
 # env.  When the closure provably does not escape its defining scope, the
@@ -53,18 +53,29 @@ fi
 
 # Compile with ASan/UBSan.  LeakSanitizer ships with ASan on Linux; on macOS it
 # is unsupported and ASan aborts at startup, so probe and skip cleanly.
+#
+# src/runtime/trail.c is in the list even though this fixture never touches the
+# trail: stdlib/trail.tur is auto-loaded into every program since
+# `backtrackable-state` graduated, so the emitted C carries its inline-C bodies
+# (bt_hycell_hynew and friends) and their calls into tur_bt_cell_*.  Whether that
+# costs a link error is TOOLCHAIN-DEPENDENT and macOS says the wrong thing:
+# Apple clang drops the unused statics, so the link succeeds and this gate skips
+# for want of LSan, while GCC at -O0 emits them and the link fails with a wall of
+# undefined references.  The emitted C says as much in its `__tur_autolink__:
+# src/runtime/trail.c` marker -- `tur build` reads that marker, and this
+# hand-rolled cc line has to be kept in step with it by hand.
 if ! "$CC" -g -O0 -fno-strict-aliasing -fsanitize=address,undefined \
         -Isrc/runtime -o "$BIN" "$C_OUT" \
         src/runtime/hamt.c src/runtime/runtime.c src/runtime/rc.c \
         src/runtime/gc.c src/runtime/rc_free_queue.c src/runtime/tur_string.c \
-        src/runtime/symbols.c -lpthread 2>"$WORK/cc.err"; then
+        src/runtime/symbols.c src/runtime/trail.c -lpthread 2>"$WORK/cc.err"; then
     echo "FAIL closure-env-leak -- C compile failed"
     sed 's/^/    /' "$WORK/cc.err"
     exit 1
 fi
 
 probe=$(ASAN_OPTIONS="detect_leaks=1" "$BIN" 2>&1)
-if printf '%s' "$probe" | grep -q "detect_leaks is not supported"; then
+if grep -q "detect_leaks is not supported" <<< "$probe"; then
     echo "PASS closure-env-leak (skipped: LeakSanitizer unsupported on this platform)"
     echo "closure-env-leak summary: skipped -- no LSan on this platform"
     exit 0
@@ -75,20 +86,20 @@ rc=$?
 
 fail=0
 # (1) Output sanity: both lines must be present (the program ran to completion).
-if ! printf '%s\n' "$out" | grep -qx "202"; then
+if ! grep -qx "202" <<< "$out"; then
     echo "FAIL closure-env-leak -- expected handler result 202 not in output"
     fail=1
 fi
-if ! printf '%s\n' "$out" | grep -qx "500500"; then
+if ! grep -qx "500500" <<< "$out"; then
     echo "FAIL closure-env-leak -- expected loop result 500500 not in output"
     fail=1
 fi
 # (2) The real assertion: no LeakSanitizer leak report, clean exit.
-if printf '%s' "$out" | grep -q "LeakSanitizer: detected memory leaks"; then
+if grep -q "LeakSanitizer: detected memory leaks" <<< "$out"; then
     echo "FAIL closure-env-leak -- LeakSanitizer reported a leak"
     fail=1
 fi
-if printf '%s' "$out" | grep -q "runtime error:"; then
+if grep -q "runtime error:" <<< "$out"; then
     echo "FAIL closure-env-leak -- UBSan reported undefined behavior"
     fail=1
 fi

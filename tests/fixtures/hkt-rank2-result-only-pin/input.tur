@@ -1,0 +1,34 @@
+;; turi-dict-passing-plan: a rank-2 constrained poly value whose class
+;; variable appears ONLY in the result type -- `make : int -> (m int)` has no
+;; argument to pin `m` from.  Before 2026-08-16 the compiled path silently
+;; dropped the dict while the callee wrapper still expected it as a leading
+;; arg, calling a 3-param wrapper with 2 args and dereferencing the int
+;; argument as the dictionary (SIGSEGV past a clean tur check).
+;;
+;; The instantiation pins from the expected-result channel (the ascription),
+;; the MB1 dict prepend and the result instantiation both read it, and the
+;; interpreter now follows the same dict-threaded AST: the poly value
+;; resolves to the dict CLONE, the EX_DICT address-only value carries the
+;; instance pointer into the clone's dict param, and method dispatch inside
+;; the body reads that dictionary with precedence over the gde_* recovery
+;; heuristics.  Inline-C-free, so run-turi actually executes it.
+(defdata B1 [a] (Mk1 :int a))
+(defdata B2 [a] (Mk2 :int a))
+
+(definstance Applicative [B1] (pure [x] (Mk1 100 x)) (ap [ff fa] fa))
+(definstance Applicative [B2] (pure [x] (Mk2 200 x)) (ap [ff fa] fa))
+
+(defn un-1 [b : (B1 int)] : int (match b (Mk1 t v) (+ t v)))
+(defn un-2 [b : (B2 int)] : int (match b (Mk2 t v) (+ t v)))
+
+(defn make [^m] [^Applicative m n : int] : (m int) (pure n))
+
+(defn at-1 [g (forall [(m :: * -> *)] [(Applicative m)] (-> int (m int)))] : int
+  (un-1 (:: (g 7) (B1 int))))
+(defn at-2 [g (forall [(m :: * -> *)] [(Applicative m)] (-> int (m int)))] : int
+  (un-2 (:: (g 7) (B2 int))))
+
+(defn main [] : int
+  (println (at-1 make))   ; 107
+  (println (at-2 make))   ; 207
+  0)

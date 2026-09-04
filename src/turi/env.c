@@ -136,7 +136,7 @@ void turi_register_default_native(const char *name, TuriNativeFn fn, void *ud) {
 /* Typed variant: register the default native as usual, then record its runtime
  * return type in the process-global signature registry so the elaborator types
  * calls to it (and curated typed wrappers over it) correctly.  See
- * docs/archive/untyped-native-registration-blocks-curated-facades.md. */
+ * docs/archive/history/untyped-native-registration-blocks-curated-facades.md. */
 void turi_register_default_native_typed(const char *name, TuriNativeFn fn,
                                         void *ud, TurNativeRetType ret) {
     turi_register_default_native(name, fn, ud);
@@ -230,7 +230,7 @@ TuriEnv *turi_env_new(void) {
      * resolve for every interpreter env created through libturi (embedders,
      * the WASM REPL, the test harnesses), not just the `tur` CLI.  Registered
      * before install_default_natives so an embedder-seeded default of the same
-     * name still wins.  See docs/upcoming/turi-interp-collections-libturi-plan.md. */
+     * name still wins.  See docs/archive/history/turi-interp-collections-libturi-plan.md. */
     turi_register_collection_natives(env);
     /* Owned String type (owned-string-type-plan): register the tur_string_*
      * primitives so stdlib/string.tur's pure-Turmeric ops + typeclass instances
@@ -249,7 +249,7 @@ TuriEnv *turi_env_new(void) {
      * shim still wins over the loaded body -- the same ordering the collection
      * natives above rely on.  The CLI/REPL/WASM entry points also call this
      * after their preload; that re-registration is idempotent (same name -> same
-     * fn pointer).  See docs/upcoming/turi-interp-stdlib-natives-libturi-plan.md. */
+     * fn pointer).  See docs/archive/turi-interp-stdlib-natives-libturi-plan.md. */
     turi_env_register_interpreter_natives(env);
     /* RM Q#5: persistent reader-macro registry for session semantics. */
     env->reader_macros = (ReaderMacroRegistry *)arena_alloc(
@@ -599,6 +599,26 @@ void turi_env_reset_to_prelude(TuriEnv *env) {
         env->elab_session       = NULL;
         env->elab_session_forms = 0;
     }
+}
+
+void turi_env_apply_lang(TuriEnv *env, ReaderType reader_type,
+                         LangLayerSet layers) {
+    if (!env) return;
+    if (reader_type == env->reader_type && layers == env->lang_layers) return;
+    turi_env_reset_to_prelude(env);
+    /* Reader layers register `#`-dispatch macros into the persistent session
+     * registry (RM Q#5), and nothing unregisters them -- so an assignment
+     * that drops a layer must wipe the registry or the dispatch survives the
+     * switch (e.g. `#s"..."` kept reading as a String after `stringed` was
+     * turned off).  User macros registered by discarded session source go
+     * with it, which matches the reset semantics: the `#use-reader-macros`
+     * form that registered them is no longer part of the session either.
+     * The old entries' arena storage is env-lifetime and reclaimed at
+     * teardown, matching the interpreter's process-lifetime policy. */
+    if (env->reader_macros)
+        reader_macros_init(env->reader_macros, &env->sym_arena);
+    env->reader_type = reader_type;
+    env->lang_layers = layers;
 }
 
 void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image) {

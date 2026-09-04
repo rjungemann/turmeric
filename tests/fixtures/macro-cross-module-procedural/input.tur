@@ -1,0 +1,7 @@
+;; Stage 3: a defmacro* DEFINED in another module works through the normal
+;; export + :refer mechanism -- one compile-wide macro registry, one
+;; per-compile macro env, and the :refer clone carries the PROCEDURAL kind
+;; and closure binding (elab_module.c's whole-MacroDef copy).
+(defmodule prog
+  (import mmac :refer [twice*])
+  (defn main [] : int (println (twice* 21)) 0))

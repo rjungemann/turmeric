@@ -84,9 +84,9 @@ cat > "$P2/src/lib.tur" <<'EOF'
 (defmodule sh (export f) (defn f [] :int (no-such-name)))
 EOF
 out=$(cd "$P2" && echo ':quit' | "$TUR_BIN" repl 2>&1)
-if   echo "$out" | grep -q "spice rebuild failed" \
-  && echo "$out" | grep -q "fix the error above" \
-  && echo "$out" | grep -q "(reload)"; then
+if   grep -q "spice rebuild failed" <<< "$out" \
+  && grep -q "fix the error above" <<< "$out" \
+  && grep -q "(reload)" <<< "$out"; then
     pass "rp7-build-failure-hint"
 else
     fail "rp7-build-failure-hint" "$out"
@@ -146,7 +146,7 @@ fi
 NOPROJ="$WORK/noproj"
 mkdir -p "$NOPROJ"
 out=$(cd "$NOPROJ" && printf '(reload)\n:quit\n' | "$TUR_BIN" repl 2>&1)
-if echo "$out" | grep -q "no spice project here"; then
+if grep -q "no spice project here" <<< "$out"; then
     pass "rp7-reload-outside-project-message"
 else
     fail "rp7-reload-outside-project-message" "$out"

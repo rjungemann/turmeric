@@ -1,0 +1,2 @@
+(defmacro* bad [x] `(a `(b ~x)))
+(defn main [] : int (println (bad 1)) 0)

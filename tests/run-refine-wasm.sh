@@ -27,17 +27,19 @@
 # be installed. Compiling the translation units directly keeps verification
 # free of side effects. Build tur_wasm when you mean to deploy.
 #
-# See docs/upcoming/v1/refinement-types-plan.md (phase RT5a).
+# See docs/archive/refinement-types-plan.md (phase RT5a).
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
 if ! command -v emcc >/dev/null 2>&1; then
   echo "SKIP refine-wasm: emcc not on PATH (source emsdk_env.sh to enable)"
+  echo "TUR_SKIP: emcc not on PATH"
   exit 0
 fi
 if ! command -v node >/dev/null 2>&1; then
   echo "SKIP refine-wasm: node not on PATH"
+  echo "TUR_SKIP: node not on PATH"
   exit 0
 fi
 
@@ -72,7 +74,7 @@ fi
 
 result=$(node "$OUT/refsolver.js" 2>&1); run_rc=$?
 echo "  wasm32: $result"
-if [ $run_rc -ne 0 ] || ! printf '%s' "$result" | grep -q "0 failure"; then
+if [ $run_rc -ne 0 ] || ! grep -q "0 failure" <<< "$result"; then
   echo "FAIL refine-wasm: solver checks did not pass at wasm32"
   rc=1
 else

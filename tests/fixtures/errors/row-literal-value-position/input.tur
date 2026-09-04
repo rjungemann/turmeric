@@ -1,5 +1,5 @@
 ;; Variadic HKT rows (Layer 3): a #row{...} type-row literal is TYPE-ONLY.
 ;; Using it where a value expression is expected must be a clean error, not a
 ;; silent lowering to a set/tuple value. See
-;; docs/reported/variadic-hkt-rows-missing.md.
+;; docs/archive/history/variadic-hkt-rows-missing.md.
 (def r #row{int bool})

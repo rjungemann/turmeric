@@ -16,7 +16,7 @@
 ;; pointer does not match -- the same identity the emitter uses -- so the loop
 ;; is uncolored, direct-emitted, and TCO'd.  5,000,000 iterations complete.
 ;;
-;; See docs/archive/cps-colored-noncapture-named-let-recurses-through-entry.md.
+;; See docs/archive/history/cps-colored-noncapture-named-let-recurses-through-entry.md.
 
 (defn sum-to-5m [] : int
   (let go [i   :int 0

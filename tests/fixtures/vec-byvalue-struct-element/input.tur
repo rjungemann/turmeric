@@ -1,6 +1,6 @@
 ;; vec-byvalue-struct-element (increment 3, container element protocol): a
 ;; `(Vec T)` whose element T is a plain NARROW (<= 8 byte) non-:heap defstruct.
-;; Before the fix (docs/archive/vec-byvalue-struct-element-invalid-c.md) the
+;; Before the fix (docs/archive/history/vec-byvalue-struct-element-invalid-c.md) the
 ;; push side stack-spilled the element (`&tmp`, dangling once the frame
 ;; returns) and the read side initialized the aggregate straight off the int64
 ;; carrier (`tur_adt_FzB b = __ps;` -- invalid C).  The protocol now boxes

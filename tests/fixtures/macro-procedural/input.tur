@@ -1,0 +1,24 @@
+;; Stage 2 (macro-system-direction-plan): defmacro* procedural macros.
+;; The body is full Turmeric evaluated in the macro-time env -- compile-time
+;; arithmetic (impossible in the frozen CT evaluator), code generation via
+;; syntax constructors, and kind mixing in both directions: a procedural
+;; expansion calling a template macro, and vice versa.
+(defmacro* const-sum [a b]
+  (int->syntax (+ (syntax->int a) (syntax->int b))))
+
+(defmacro* twice [e]
+  (syntax-list (sym->syntax "+") e e))
+
+(defmacro* wrap-when [c body]
+  (syntax-list (sym->syntax "when") c body))
+
+(defmacro plain-add [a b] `(+ ~a ~b))
+
+(defmacro* use-template [x]
+  (syntax-list (sym->syntax "plain-add") x (int->syntax 1)))
+
+(defn main [] : int
+  (println (const-sum 40 2))
+  (println (twice 21))
+  (wrap-when true (println (use-template 9)))
+  0)

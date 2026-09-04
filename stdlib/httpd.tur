@@ -350,8 +350,14 @@
       free(buf);
       /* Dispatch to handler. */
       int64_t *fat = (int64_t *)(intptr_t)conn->handler;
-      typedef void (*fn1_t)(void *, int64_t);
-      ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
+      /* The handler is `(fn [c : ptr<void>] : nil)`, which the emitter lowers
+         to `void (void *, void *)`.  Spelling the conn parameter `int64_t`
+         here made this an indirect call through a mismatched function-pointer
+         type -- UB that -fsanitize=function reports and that CFI / CET-BTI /
+         WASM call_indirect turn into a hard failure.  See
+         docs/archive/reactor-fd-callback-fn-ptr-type-mismatch.md */
+      typedef void (*fn1_t)(void *, void *);
+      ((fn1_t)(intptr_t)fat[0])((void *)fat, (void *)conn);
       /* Write response. */
       int status = conn->resp_status ? conn->resp_status : 200;
       const char *stxt = (status == 200) ? "OK" :
@@ -599,7 +605,14 @@
 ;;;
 ;;; Since: Phase H2
 
-(defn httpd-accept-cb [env : ptr<void> id : int events : int user : ptr<void>] : nil
+;;; NOTE: the trailing `user`/`user-data` slot is typed `: int` DELIBERATELY
+;;; (an exception to the no-lazy-:int rule): this defn is hand-packed into a
+;;; fat box's slot 0 (see the `clos[0] = ...` below / reactor.c park boxes),
+;;; and the reactor invokes slot 0 through the fat-entry CARRIER convention
+;;; (typedefs in src/async/reactor.c) -- every value parameter is int64_t.  A
+;;; `ptr<void>` spelling emits a `void *` C parameter, which -fsanitize=function
+;;; flags (and CFI/CET-BTI/WASM reject) at every dispatch.
+(defn httpd-accept-cb [env : ptr<void> id : int events : int user : int] : nil
   ```c
   (void)id; (void)events; (void)user;
   typedef struct {
@@ -924,6 +937,12 @@
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   hb->stop_flag = 1;
+  /* Close the listener NOW, not at httpd-free (same rationale as
+   * httpd-stop-async): the kernel completes handshakes into the backlog
+   * whether or not accept() ever runs, so a connection racing the stop
+   * would otherwise sit ESTABLISHED, unanswered, until httpd-free -- and a
+   * peer blocked in recv() on it may be what the caller is joining first. */
+  if (hb->listen_fd >= 0) { close(hb->listen_fd); hb->listen_fd = -1; }
   if (hb->reactor) {
       tur_reactor_stop(hb->reactor);
       tur_reactor_wake(hb->reactor);
@@ -972,7 +991,7 @@
    * box) and nothing else frees it, so this is the sole free -- no double free.
    * For a bare handler this reclaims the whole thing; for a compose-middleware
    * onion, TUR_CLOSURE_DROP releases the outermost layer AND (under
-   * --enable=closure-drop-glue) walks the inner captured `next` boxes via the
+   * closure-drop-glue, graduated 2026-07-22) walks the inner captured `next` boxes via the
    * env's drop-glue header, so the whole onion is freed.  Flag-off,
    * TUR_CLOSURE_DROP is a plain free of the outer box (the inner boxes leak, as
    * before). */
@@ -1380,22 +1399,14 @@
 ;;; Since: Phase H8 (M2)
 
 (defstruct CookieOpts
-  [name
-   : cstr
-   value
-   : cstr
-   path
-   : cstr
-   domain
-   : cstr
-   max-age
-   : int
-   secure
-   : int
-   http-only
-   : int
-   same-site
-   : cstr])
+  [name : cstr
+   value : cstr
+   path : cstr
+   domain : cstr
+   max-age : int
+   secure : int
+   http-only : int
+   same-site : cstr])
 ;;; cookie -- construct a CookieOpts with sensible defaults.
 ;;;
 ;;; Defaults: Path=/, no Domain, no Max-Age (session cookie), not Secure
@@ -1456,7 +1467,7 @@
 ;;;   (httpd-set-cookie! c (cookie "session" "abc123"))
 ;;;
 ;;; Since: Phase H8 (M2); requires the DS1 fix in
-;;;        docs/upcoming/defstruct-inline-c-byvalue-callsite-plan.md.
+;;;        docs/archive/history/defstruct-inline-c-byvalue-callsite-plan.md.
 
 (defn httpd-set-cookie! [conn : ptr<void> opts : CookieOpts] : nil
   ```c
@@ -1680,18 +1691,12 @@
 ;;; Since: Phase H8 (M4)
 
 (defstruct CorsOpts
-  [allow-origin
-   : cstr
-   allow-methods
-   : cstr
-   allow-headers
-   : cstr
-   expose-headers
-   : cstr
-   allow-credentials
-   : int
-   max-age
-   : int])
+  [allow-origin : cstr
+   allow-methods : cstr
+   allow-headers : cstr
+   expose-headers : cstr
+   allow-credentials : int
+   max-age : int])
 ;;; default-cors-opts -- permissive defaults suitable for development.
 ;;;
 ;;; allow-origin = "*", standard set of methods, Content-Type allowed,
@@ -1722,7 +1727,7 @@
 ;;; side-stepped a closure-capture codegen bug with by-pointer defstruct
 ;;; params (the inner closure env stored the caller's `const CorsOpts *`
 ;;; into a by-value field).  That bug is now fixed (see
-;;; docs/upcoming/stdlib-type-erasure-cleanup-plan.md A5/B5), so a future
+;;; docs/archive/history/stdlib-type-erasure-cleanup-plan.md A5/B5), so a future
 ;;; refactor may capture a `CorsOpts` directly; the primitive surface is
 ;;; retained for now to keep this change scoped to the codegen fix.
 
@@ -1799,7 +1804,7 @@
 ;;; BY BORROW dangles if the caller passed a computed/freed buffer (see
 ;;; string-adoption-stdlib-plan.md, items 2/3).  This returns an OWNED String
 ;;; (a refcounted copy) the closure keeps for its lifetime.  Under
-;;; --enable=closure-drop-glue the String is a Drop-typeclass capture, so the
+;;; With closure-drop-glue (graduated 2026-07-22) the String is a Drop-typeclass capture, so the
 ;;; closure's drop-glue releases it when the middleware is torn down (Model R);
 ;;; flag-off it lives to process exit, as before.
 
@@ -2332,7 +2337,14 @@
 ;;; reads body, dispatches the handler, writes the response (parking on
 ;;; EWOULDBLOCK), and loops on keep-alive.  Mirrors httpd-handle.
 
-(defn httpd-async-fiber-body [self : ptr<void> user-data : ptr<void>] : nil
+;;; NOTE: the trailing `user`/`user-data` slot is typed `: int` DELIBERATELY
+;;; (an exception to the no-lazy-:int rule): this defn is hand-packed into a
+;;; fat box's slot 0 (see the `clos[0] = ...` below / reactor.c park boxes),
+;;; and the reactor invokes slot 0 through the fat-entry CARRIER convention
+;;; (typedefs in src/async/reactor.c) -- every value parameter is int64_t.  A
+;;; `ptr<void>` spelling emits a `void *` C parameter, which -fsanitize=function
+;;; flags (and CFI/CET-BTI/WASM reject) at every dispatch.
+(defn httpd-async-fiber-body [self : ptr<void> user-data : int] : nil
   ```c
   #include <fcntl.h>
   #include <errno.h>
@@ -2359,7 +2371,7 @@
       int   in_flight;
   } HttpdAsync;
   if (!user_data) return;
-  HttpdAsyncReqCtx *ctx = (HttpdAsyncReqCtx *)user_data;
+  HttpdAsyncReqCtx *ctx = (HttpdAsyncReqCtx *)(intptr_t)user_data;
   int fd = ctx->fd;
   int64_t handler = ctx->handler;
   void *group = ctx->fiber_group;
@@ -2527,8 +2539,14 @@
       free(buf);
       /* Dispatch handler. */
       int64_t *fat = (int64_t *)(intptr_t)conn->handler;
-      typedef void (*fn1_t)(void *, int64_t);
-      ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
+      /* The handler is `(fn [c : ptr<void>] : nil)`, which the emitter lowers
+         to `void (void *, void *)`.  Spelling the conn parameter `int64_t`
+         here made this an indirect call through a mismatched function-pointer
+         type -- UB that -fsanitize=function reports and that CFI / CET-BTI /
+         WASM call_indirect turn into a hard failure.  See
+         docs/archive/reactor-fd-callback-fn-ptr-type-mismatch.md */
+      typedef void (*fn1_t)(void *, void *);
+      ((fn1_t)(intptr_t)fat[0])((void *)fat, (void *)conn);
       /* Build response header block (same as httpd-handle's writer). */
       int status = conn->resp_status ? conn->resp_status : 200;
       const char *stxt = (status == 200) ? "OK" :
@@ -2671,10 +2689,14 @@
 ;;; the A4 in-flight cap: when ha->in_flight >= ha->max_in_flight,
 ;;; sends a quick HTTP/1.0 503 and closes instead of spawning.
 
-(defn httpd-async-accept-cb [env : ptr<void>
-                             id : int
-                             events : int
-                             user : ptr<void>] : nil
+;;; NOTE: the trailing `user`/`user-data` slot is typed `: int` DELIBERATELY
+;;; (an exception to the no-lazy-:int rule): this defn is hand-packed into a
+;;; fat box's slot 0 (see the `clos[0] = ...` below / reactor.c park boxes),
+;;; and the reactor invokes slot 0 through the fat-entry CARRIER convention
+;;; (typedefs in src/async/reactor.c) -- every value parameter is int64_t.  A
+;;; `ptr<void>` spelling emits a `void *` C parameter, which -fsanitize=function
+;;; flags (and CFI/CET-BTI/WASM reject) at every dispatch.
+(defn httpd-async-accept-cb [env : ptr<void> id : int events : int user : int] : nil
   ```c
   (void)id; (void)events; (void)user;
   typedef struct {
@@ -2889,6 +2911,12 @@
       tur_reactor_remove(ha->reactor, ha->listen_src_id);
       ha->listen_src_id = -1;
   }
+  /* Close the listener NOW, not at httpd-async-free: the kernel completes
+   * TCP handshakes into the backlog whether or not accept() ever runs, so a
+   * connection that races the stop would otherwise sit ESTABLISHED with no
+   * one ever answering, and the client blocks in recv() forever. Closing
+   * the fd resets the pending backlog and refuses late connects instead. */
+  if (ha->listen_fd >= 0) { close(ha->listen_fd); ha->listen_fd = -1; }
   tur_reactor_stop(ha->reactor);
   tur_reactor_wake(ha->reactor);
   ```)
@@ -2927,7 +2955,7 @@
    * distinct from body_closure). Sole free -- no double free. For a bare handler
    * this reclaims the whole thing; for a compose-middleware onion,
    * TUR_CLOSURE_DROP releases the outermost layer AND (under
-   * --enable=closure-drop-glue) walks the inner captured `next` boxes via the
+   * closure-drop-glue, graduated 2026-07-22) walks the inner captured `next` boxes via the
    * env's drop-glue header, so the whole onion is freed. Flag-off,
    * TUR_CLOSURE_DROP is a plain free of the outer box (the inner boxes leak, as
    * before). */
@@ -3102,7 +3130,7 @@
       Route *nx = cur->next;
       /* Each route handler is passed ^fat (heap fat-closure box) and freed
        * nowhere else. TUR_CLOSURE_DROP releases the outer box AND (under
-       * --enable=closure-drop-glue) walks the inner captured `next` boxes via the
+       * closure-drop-glue, graduated 2026-07-22) walks the inner captured `next` boxes via the
        * env's drop-glue header, so a compose-middleware onion is fully freed.
        * Flag-off, TUR_CLOSURE_DROP is a plain free of the outer box (inner layers
        * leak, as before). */
@@ -3175,8 +3203,10 @@
       if (matched) {
           c->route_params = (void *)params;
           int64_t *fat = (int64_t *)(intptr_t)route->handler;
-          typedef void (*fn1_t)(void *, int64_t);
-          ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)c);
+          /* `(fn [c : ptr<void>] : nil)` lowers to `void (void *, void *)`;
+             see the note in httpd-handle's dispatch. */
+          typedef void (*fn1_t)(void *, void *);
+          ((fn1_t)(intptr_t)fat[0])((void *)fat, (void *)c);
           /* Free params after handler returns. */
           RouteParam *cur = params;
           while (cur) { RouteParam *nx = cur->next; free(cur); cur = nx; }
@@ -3274,7 +3304,7 @@
 (defmacro defroute [router method pattern handler]
   `(router-add ~router ~method ~pattern ~handler))
 ;; =============================================================================
-;; M1: mw-log -- request logging middleware (per docs/upcoming/httpd-middleware-async-plan.md)
+;; M1: mw-log -- request logging middleware (per docs/archive/history/httpd-middleware-async-plan.md)
 ;; =============================================================================
 ;;
 ;; The reference middleware on top of the H7 convention. Logs one line per
@@ -3510,10 +3540,21 @@
 ;;; (fn [next :int] :ptr<void> ...); this performs a single fat-closure
 ;;; dispatch -- the same ascription idiom as httpd-call -- and returns the
 ;;; wrapped handler. It holds no cons-layout knowledge; the list walk lives
-;;; in httpd-mw-fold. The caller guards against a null mw, so dispatching the
-;;; already-fat handle via (:: mw (fn [int] int)) here is safe.
+;;; in httpd-mw-fold. The caller guards against a null mw.
+;;;
+;;; The dispatch ascription MUST name the middleware's REAL type,
+;;; (fn [int] ptr<void>) -- the emitted call goes through a typed-thunk
+;;; typedef derived from this ascription, and the lambda's definition is
+;;; emitted from its own declared type.  The old (fn [int] int) spelling
+;;; made the two disagree on the return type: works on every SysV/AAPCS ABI
+;;; (same return slot), but it is UB that -fsanitize=function reports and
+;;; that CFI / CET-BTI / WASM call_indirect turn into a hard failure.  The
+;;; wrapped handler then crosses back to the :int carrier via a value
+;;; ascription, which is a representation read, not a function-type cast.
+;;; See docs/archive/emitter-thunk-type-return-mismatch.md.
 
-(defn httpd-mw-apply [mw : int cur : int] : int ((:: mw (fn [int] int)) cur))
+(defn httpd-mw-apply [mw : int cur : int] : int
+  (:: ((:: mw (fn [int] ptr<void>)) cur) :int))
 ;;; httpd-mw-fold -- internal: right-fold a cons-list of fat-closure
 ;;; middlewares over a base handler. Each cell holds a fat closure value of
 ;;; shape (fn [next :int] :ptr<void> ...). Applied right-to-left so the list
@@ -3625,7 +3666,7 @@
 ;;; `(fn [next :int] :ptr<void> ...)` -- i.e. a closure that captures at
 ;;; least one variable. A bare top-level defn name is NOT a fat closure;
 ;;; passing one will compile (thanks to the
-;;; docs/upcoming/variadic-rest-closure-cast-plan.md fix) but the fat-
+;;; docs/archive/history/variadic-rest-closure-cast-plan.md fix) but the fat-
 ;;; closure dispatch dereferences code bytes as the fn pointer and
 ;;; BUS-faults. Bridge a bare defn through a let-captured `fn` literal:
 ;;;
@@ -3650,7 +3691,7 @@
 ;;;   auto-drop so the server owns it).
 ;;;
 ;;; Since: Phase H8 (M8 core); requires the V1 cast fix in
-;;;        docs/upcoming/variadic-rest-closure-cast-plan.md.
+;;;        docs/archive/history/variadic-rest-closure-cast-plan.md.
 ;;;        Returns `Handler` since automatic R3a (closure-drop-glue).
 
 (defn compose-middleware-of [A] [^fat base :int ^borrow & mws :A] :Handler
@@ -3658,7 +3699,7 @@
     (httpd-mw-free-spine mws)
     (:: composed :Handler)))
 ;; =============================================================================
-;; MW1: mw-body-size -- Content-Length cap (per docs/upcoming/httpd-middleware-plan.md)
+;; MW1: mw-body-size -- Content-Length cap (per docs/archive/httpd-middleware-plan.md)
 ;; =============================================================================
 ;;
 ;; Pre-handler middleware that consults the request's `Content-Length` header
@@ -3728,7 +3769,7 @@
             (httpd-resp-body! c "Payload Too Large"))
           (httpd-call _n c))))))
 ;; =============================================================================
-;; MW2: Request attributes (per docs/upcoming/httpd-middleware-plan.md)
+;; MW2: Request attributes (per docs/archive/httpd-middleware-plan.md)
 ;; =============================================================================
 ;;
 ;; A small per-request key/value side-channel attached to httpd_conn.
@@ -4198,3 +4239,57 @@
     (fn [c : ptr<void>] : nil
       (httpd-call _n c)
       (httpd-mw-static-fallback c _root))))
+
+;; =============================================================================
+;; MW3: mw-recover -- turn a downstream panic into a 500 response
+;; =============================================================================
+;;
+;; Runs `next` under `catch-unwind`.  When the downstream handler panics,
+;; the unwind is caught at the middleware boundary, the worker thread
+;; survives, and the client gets a 500 instead of a dropped connection.
+;;
+;; The status/body are only written when the handler had not already set a
+;; status before it panicked -- a handler that got as far as
+;; `(httpd-resp-status! c 201)` and then blew up keeps its own status
+;; rather than having it silently rewritten.
+
+;;; httpd-mw-recover-500 -- internal: write a 500 response unless the
+;;; handler already set a status before panicking. Always returns nil.
+
+(defn httpd-mw-recover-500 [conn : ptr<void>] : nil
+  (when (= 0 (httpd-resp-status-get conn))
+    (do
+      (httpd-resp-status! conn 500)
+      (httpd-resp-body! conn "Internal Server Error"))))
+
+;;; mw-recover -- catch a downstream panic and respond 500.
+;;;
+;;; Wraps a base handler so that a `panic` (or any unwind) raised inside
+;;; `next` is caught at the middleware boundary.  Without it a panicking
+;;; handler unwinds out of the worker and takes the process (or at best
+;;; the connection) with it; with it the request gets a 500 and the
+;;; server keeps serving.
+;;;
+;;; Put it OUTERMOST in the middleware chain -- it can only recover
+;;; panics raised by handlers it wraps, and an outer middleware's
+;;; post-processing still runs on the 500 response.
+;;;
+;;; Parameters:
+;;;   next -- downstream handler closure (fat-closure :int)
+;;;
+;;; Returns:
+;;;   A wrapped handler closure (:ptr<void>).
+;;;
+;;; Example:
+;;;   (let [base     (fn [c :ptr<void>] :nil (panic "boom"))
+;;;         composed (compose-middleware base mw-recover)]
+;;;     (httpd-new 0 composed))
+;;;   ; => client sees "500 Internal Server Error"; the server stays up
+;;;
+;;; Since: Phase H8 (MW3)
+
+(defn mw-recover [^fat next : int] : ptr<void>
+  (let [_n next]
+    (fn [c : ptr<void>] : nil
+      (let [r (catch-unwind (fn [] : int (do (httpd-call _n c) 0)))]
+        (when (err? r) (httpd-mw-recover-500 c))))))

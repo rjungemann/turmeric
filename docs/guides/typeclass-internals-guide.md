@@ -160,19 +160,23 @@ Rules and representation:
   on `TypeClassInstance.assoc_types` (`src/compiler/typeclass.h`).
 - **Every member must be bound.** A `definstance` that omits a member, or binds
   a name the class never declared, is a hard error reported on the instance.
-- **Resolution is precise.** `(Name T)` matches the instance whose single type
-  argument is `type_eq` to `T`. This is *not* the kind-erased dispatch
-  `typeclass_env_lookup_instance` (which cannot tell `Vec int` from `Vec cstr`);
-  associated-type projection has its own `typeclass_env_resolve_assoc_type`.
+- **Resolution is precise.** `(Name T...)` matches the instance whose type
+  arguments are structurally equal to the projection's arguments (an exact
+  N-ary match, `typeclass_env_lookup_instance_exact`). This is *not* the
+  kind-erased dispatch `typeclass_env_lookup_instance` (which cannot tell
+  `Vec int` from `Vec cstr`); associated-type projection has its own
+  `typeclass_env_resolve_assoc_type` / `typeclass_env_resolve_assoc_type_n`.
 - **Erased.** Associated types live only in the elaborator's type-annotation
   parsers (`type_expr_from_form` and the `defn` signature parser
   `fn_type_from_form`, which must carry its own copy of the hook because it
   builds type applications without delegating). There is no dictionary field
   and no codegen -- zero runtime cost.
-- **Scope.** Single type-parameter classes; one output type per member; no
-  arithmetic or functional dependencies. Multi-parameter classes / fundeps are
-  the remaining open direction (see
-  [`docs/reported/typeclass-associated-types-missing.md`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/typeclass-associated-types-missing.md)).
+- **Scope.** Multi-parameter classes are supported: a projection names every
+  class parameter (`(Acc (Vec int) int)`) and resolves by the exact N-ary
+  match above. One output type per member; no type-level arithmetic.
+  Functional dependencies are a separate mechanism, declared with the
+  `| (a -> b)` clause on the class head (see
+  [typeclass-guide.md](typeclass-guide.md#functional-dependencies)).
 
 ## See also -- the arrow / `Category` hierarchy
 
@@ -185,7 +189,7 @@ namespace rules. See [arrows-guide.md](arrows-guide.md).
 
 ## See also
 
-- [closure-returning-instance-method-codegen-plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/closure-returning-instance-method-codegen-plan.md)
+- [closure-returning-instance-method-codegen-plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/closure-returning-instance-method-codegen-plan.md)
   -- the plan this rule was extracted from.
 - [`docs/archive/history/nested-closure-transitive-capture.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/nested-closure-transitive-capture.md) -- an *orthogonal*
   capture-set defect (a grandchild closure's free var not threaded through the

@@ -99,6 +99,11 @@ plan was filed against).
 |---|---|---|
 | `emit_expr.c` `emit_var_spec_arg_type` | ROUTED (is the chokepoint; now delegates to `emit_spec_arg_type_for_binding`) | -- |
 | `emit_expr.c` monomorphized-ctor arg slot bridge (`macos-int-conversion-carrier-pointer-straddles` case A) | ROUTED | added 2026-08-01; resolves a bare arg var through the active spec so its emitted C type can be compared against the ctor param C type recorded in the signature side table |
+| `emit_expr.c` `expr_is_erased_carrier_param` (SR2a graduation) | ROUTED | added 2026-08-27; the stale-flag guard -- `emit_carrier_holds_byval` is set while emitting the generic instance BASE and persists into a by-value spec emission, where the param really is the aggregate |
+| `emit_expr.c` `call_arg_spill_type` / `arg_is_spec_byvalue_param` (SR2a graduation) | ROUTED | added 2026-08-27; a spec param that is a by-value monomorph feeding a carrier-typed generic base -- the spec's arg type is what the spill temp must be declared at, and asking the argument's static type instead is the repr-shadow ICE at `arg-bridge` |
+| `emit_expr.c` match-scrutinee spec narrowing (SR2a graduation) | ROUTED | added 2026-08-27; resolution can ground a scrutinee param's element from a DIFFERENT instantiation than the active spec passes (`ap`'s `ff`), which only shows once the two spellings stop both being `int64_t` |
+| `emit_expr.c` call-arg opaque-pointer spelling relabel (opaque-pointer-c-spelling) | ROUTED | added 2026-08-28; a pointer `defopaque` and the int64 carrier are the same word under two names, so a formal and an argument can disagree about the spelling -- the argument's own type is asked through the active spec so the relabel fires on the value, not on an ascription that was stripped before emission |
+| `emit_expr.c` generic-base ctor arg slot (opaque-pointer-c-spelling) | ROUTED | added 2026-08-28; the un-suffixed base ctor is absent from the ctor signature side table, so the case-A straddle bridge above had no slot type to compare against -- the spec resolves the argument to name the base's carrier slot for a pointer-opaque argument |
 | `emit_expr.c` `field_read_emits_byvalue_aggregate` (G9) | MIGRATED | inline copy deleted |
 | `emit_core.c` `emit_reresolve_disp_type` field-receiver recovery | MIGRATED | inline copy deleted |
 | `emit_expr.c` M4c Path A.2 by-value field-access override | MIGRATED | inline copy deleted |
@@ -116,6 +121,7 @@ plan was filed against).
 | `emit_module.c` `emit_abi_register_call` constraint-binding augmentation | MIGRATED | same `param_idx`->element kernel; any-TY_APP extraction stays site-local |
 | `emit_core.c`/`emit_module.c` constraint-var vs. `emit_ground_constraint_var` | NOT MERGED (by design) | `emit_ground_constraint_var` differs (param_idx<0 + concreteness gating); merge would change instance selection |
 | `emit_module.c:2164` scan-time dispatch recovery | ALREADY ROUTED | calls `emit_reresolve_disp_type`; redirect helpers consume its result |
+| `emit_expr.c` return-dispatched sum-cell drain type (value-struct-payload round 4) | ROUTED | added 2026-09-03; a stamped `(:: (dec tag) (Result A cstr))` producer carries the abstract class var as its own type, so the pending free could not see the boxed arm -- the re-resolved instance's declared result with the class var substituted by the dispatch type (an owned spine, freed at the drain) is the cell's real layout; never resolved through the active spec, which binds that var to the OUTER receiver |
 
 ### R0 inventory -- fn-value (closure-thunk) axis
 

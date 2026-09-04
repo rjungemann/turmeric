@@ -16,7 +16,11 @@
 ;; Value ADT
 ;; ============================================================
 
-(defdata Value
+;; `:heap` is load-bearing, not decoration: a datum is a raw `int64_t[4]`
+;; built in inline-C, so the value it stores has to be ONE WORD.  A :heap ADT
+;; is a typed pointer (`tur_adt_Value *`), which fits; a plain multi-variant
+;; sum now flows BY VALUE as a tag+union aggregate (SR1) and does not.
+(defdata Value :copy :heap
   (LongVal :int)
   (StrVal :int)
   (EntityVal :int))
@@ -104,13 +108,13 @@
 (defn rvec-len [v : ptr<void>] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
-  return (int)vec->len;
+  return (int64_t)vec->len;
   ```)
 
 (defn rvec-get [v : ptr<void> i : int] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
-  return (int)vec->data[i];
+  return vec->data[i];
   ```)
 
 (defn rvec-push! [v : ptr<void> val : int]
@@ -169,7 +173,11 @@
 ;;   Wild -- matches anything; binds nothing
 ;; ============================================================
 
-(defdata Term
+;; `:heap` is load-bearing, not decoration: a datum is a raw `int64_t[4]`
+;; built in inline-C, so the value it stores has to be ONE WORD.  A :heap ADT
+;; is a typed pointer (`tur_adt_Value *`), which fits; a plain multi-variant
+;; sum now flows BY VALUE as a tag+union aggregate (SR1) and does not.
+(defdata Term :heap
   (Var :int)   ;; variable name as cstr ptr
   (Lit :int)   ;; Value ADT pointer (as int)
   (Wild))      ;; match anything, bind nothing
@@ -319,7 +327,7 @@
                           (when (not (= b2 -1))
                             (rvec-push! result b2))))
                       (set! di (+ di 1))))))
-              (set! bi (+ bi 1))))))
+              (set! bi (+ bi 1)))))))
     result))
 
 ;; ============================================================

@@ -45,6 +45,20 @@ typedef struct PkgCmakeDep {
     char         *cmake_version;   /* optional minimum version for find_package */
     char        **targets;     /* CMake targets to link against */
     int           n_targets;
+    /* `:link-libs [...]` -- overrides the -l name(s) derived from :targets.
+     * The empty list is meaningful and distinct from an absent key: it says
+     * "this dep contributes include dirs only, link nothing", which is the
+     * only way to express a header-only dep (raygui) or a code generator that
+     * builds no library at all (glad). has_link_libs records key presence so
+     * [] can be told apart from absent. */
+    char        **link_libs;
+    int           n_link_libs;
+    bool          has_link_libs;
+    /* `:link-flags [...]` -- verbatim link-line tokens, appended with no
+     * prefix added. The escape hatch for anything the structured keys cannot
+     * describe (e.g. `-framework Cocoa`, `-Wl,...`). */
+    char        **link_flags;
+    int           n_link_flags;
     PkgCmakeOpt  *opts;
     int           n_opts;
 } PkgCmakeDep;
@@ -63,6 +77,13 @@ typedef struct PkgCmakeManifestEntry {
     int    n_link_dirs;
     char **link_libs;
     int    n_link_libs;
+    /* Verbatim link-line tokens -- no -I/-L/-l prefix is added. Carries the
+     * entries CMake reports in a target's INTERFACE_LINK_LIBRARIES (notably
+     * `-framework Cocoa` on macOS, which cannot be spelled as -l) and the
+     * $<TARGET_FILE:...> artifact paths. See
+     * pkg_cmake_manifest_append_cc_flags for how each token is classified. */
+    char **link_flags;
+    int    n_link_flags;
 } PkgCmakeManifestEntry;
 
 typedef struct PkgCmakeManifest {
@@ -81,6 +102,11 @@ typedef struct PkgSpice {
     char *path;     /* relative local path; NULL for git deps */
     char *subdir;   /* subdirectory within repo (monorepo sub-packages); NULL = root */
     bool  optional;
+    /* global-spice-library-consumption: `#{:global true}` -- consume a spice
+     * installed with `tur install` as a library.  Resolves through state.tur
+     * (tur_installed_spice_dir), not through <root>/spices, and is never
+     * fetched: `tur install` owns the checkout. */
+    bool  is_global;
 } PkgSpice;
 
 /* ------------------------------------------------------------------ */
@@ -93,7 +119,7 @@ typedef struct PkgManifest {
     /* `:tur-version "<range>"` -- which COMPILER versions this spice is valid
      * under, as opposed to `version` above, which is the spice's own version.
      * NULL when unconstrained (the overwhelming majority today).  See
-     * docs/reported/no-compiler-version-constraint-in-manifest.md. */
+     * docs/archive/history/no-compiler-version-constraint-in-manifest.md. */
     char        *tur_version;
     char        *description;
     char        *license;
@@ -113,6 +139,12 @@ typedef struct PkgManifest {
     int          n_c_flags;
     char       **link_libs;
     int          n_link_libs;
+    /* `:build-opts :link-flags [...]` -- verbatim link-line tokens for the
+     * project's own link (no -l prefix added). :link-libs cannot express a
+     * `-framework Cocoa`, and a project whose own inline-C needs one has no
+     * :cmake-deps entry to hang a per-dep :link-flags on. */
+    char       **link_flags;
+    int          n_link_flags;
     /* spices-c-sources-plan: auxiliary hand-written C sources vendored into
      * the spice (e.g. KissFFT, stb_image). Paths are stored as written in
      * build.tur (relative to the manifest dir) and compiled + linked into the
@@ -144,6 +176,17 @@ typedef struct PkgManifest {
     /* build-output-directory-plan: relative path (from the manifest dir) for
      * generated artifacts. NULL = use the default (`<manifest-dir>/build`). */
     char        *build_dir;
+    /* `:entry "src/foo.tur"` -- the project's entry-point module for
+     * `tur run` in project mode, relative to the manifest dir (an absolute
+     * path is honored as written). NULL when the key is absent, in which
+     * case resolution falls back to src/main.tur and then to the single
+     * .tur file under src/. */
+    char        *entry;
+    /* engine-selection-plan E1: default execution engine for `tur run` --
+     * "cc" | "jit" | "interp", or NULL when the key is absent.  Validated at
+     * parse (TUR-E0311); resolved by main.c's resolve_engine ladder
+     * (CLI --engine > TUR_ENGINE env > this key > "cc"). */
+    char        *engine;
     /* XF1 (experimental-flag-mechanism-plan): names from a top-level
      * :experiments [...] list. Each is a kebab-case experiment name (stored
      * without any leading ':'); merged with the CLI --enable= set at build
@@ -189,9 +232,48 @@ typedef struct PkgLockFile {
 /* Manifest read / write                                               */
 /* ------------------------------------------------------------------ */
 
+/* The outcome of a manifest read.  ABSENT and MALFORMED are very different
+ * situations that a plain `false` used to collapse into one:
+ *
+ *   ABSENT     -- no manifest here (or it could not be opened).  Normal; the
+ *                 caller should carry on with whatever resolution it had.
+ *   OK         -- read and parsed.
+ *   MALFORMED  -- a manifest EXISTS and is broken.  The caller is about to
+ *                 silently drop everything the manifest was going to provide
+ *                 (most damagingly, the spice root's `src/` never joins the
+ *                 module search path), so every intra-spice import then fails
+ *                 with `module not found` naming the import, not the manifest.
+ *
+ * See docs/archive/manifest-read-failure-degrades-to-module-not-found.md. */
+typedef enum {
+    PKG_MANIFEST_ABSENT = 0,
+    PKG_MANIFEST_OK,
+    PKG_MANIFEST_MALFORMED,
+} PkgManifestStatus;
+
 /* Parse a build.tur file.  All returned strings are heap-allocated.
- * Returns true on success; prints diagnostics to stderr on failure. */
+ * Returns true on success; prints diagnostics to stderr on failure.
+ *
+ * On failure `*out` is freed and zeroed before returning, so a caller taking
+ * the `if (!pkg_manifest_read(...)) continue;` branch leaks nothing and never
+ * sees a partially-parsed manifest. */
 bool pkg_manifest_read(const char *path, PkgManifest *out);
+
+/* Same, reporting WHICH failure occurred.  `status` may be NULL. */
+bool pkg_manifest_read_status(const char *path, PkgManifest *out,
+                              PkgManifestStatus *status);
+
+/* True if any manifest read in this process found a manifest and rejected it.
+ * Sticky across diag_reset() -- see pkg_manifest_reassert().  When true,
+ * `pkg_manifest_malformed_path()` is the offending manifest (NULL if none). */
+bool        pkg_manifest_malformed(void);
+const char *pkg_manifest_malformed_path(void);
+
+/* Re-assert a malformed-manifest verdict after diag_reset(), so the command
+ * actually FAILS rather than printing `error:` and exiting 0.  Same shape and
+ * same reason as pkg_tur_version_reassert(); call the two together. */
+void pkg_manifest_reassert(void);
+void pkg_manifest_malformed_reset(void);
 
 /* Resolve a manifest filename in `dir`. Writes the full path into `out`
  * (size `cap`). Probes `build.tur` first, then `build.tur.sweet`.
@@ -357,12 +439,47 @@ char *pkg_workspace_member_path(const char *project_dir, const char *dep_name);
  * manifest's own `:spices` closure contributes -- the narrower semantic
  * `tur build .` wants so it doesn't accidentally try to configure cmake-deps
  * from unrelated workspace members.  See
- * docs/archive/tur-build-cmake-deps-workspace-overreach.md. */
+ * docs/archive/history/tur-build-cmake-deps-workspace-overreach.md. */
+/* Resolve one :spices entry to its on-disk directory (workspace sibling ->
+ * :path -> <root>/spices/<name>-<ref> -> <root>/spices/<name>; a :global dep
+ * from the install registry).  Heap-allocated; NULL when the directory does
+ * not exist.  Shared by the transitive :cmake-deps and :c-sources walks so
+ * the two agree on what a dependency IS. */
+char *pkg_resolve_spice_dep_dir(const char *root_project_dir, const PkgSpice *s);
+
 bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
                                        const PkgManifest *root_manifest,
                                        bool               include_workspace_siblings,
                                        PkgCmakeDep      **out_deps,
                                        int               *out_n);
+
+/* Whether the cmake-deps walk should seed every workspace sibling rather than
+ * only the manifest's declared `:spices` closure.
+ *
+ * False by default, which is what all three callers (`tur fetch`, `tur run`,
+ * `tur build`) now use. Seeding siblings means building ONE spice configures
+ * the native dependencies of EVERY member of the workspace: in
+ * `turmeric-spices` that turned `spices/opengl` -- which needs glfw and glad
+ * -- into a 15-dependency configure pulling in mbedtls, sqlite3, libpq,
+ * rtaudio and the rest. It is wasteful, and it is fatal rather than merely
+ * slow, two ways:
+ *
+ *   - one dependency that cannot configure on this machine aborts the whole
+ *     configure, so nothing builds and every test in the spice fails; and
+ *   - unrelated members collide in the single shared CMake target namespace
+ *     (`opengl` fetches glfw while `raygui` pulls raylib, which vendors its
+ *     own glfw: "add_library cannot create target glfw").
+ *
+ * The rule it implemented -- a sibling's modules are importable without an
+ * explicit `:spices` entry, so its native deps must build too -- is about the
+ * *include path*, and does not need every sibling's libraries. Downstream
+ * evidence agrees: every spice that genuinely needs a sibling's native lib
+ * declares that sibling in its own `:spices`, and the declared walk alone
+ * resolves them.
+ *
+ * `TUR_CMAKE_DEPS_WORKSPACE_WIDE=1` restores the old behavior for a project
+ * that does rely on the implicit rule. */
+bool pkg_workspace_wide_cmake_deps(void);
 
 /* Free an array allocated by pkg_collect_transitive_cmake_deps. */
 void pkg_cmake_deps_free(PkgCmakeDep *deps, int n);
@@ -393,6 +510,7 @@ int cmd_pkg_init(int argc, char **argv);      /* tur init */
 int cmd_pkg_add(int argc, char **argv);       /* tur add  */
 int cmd_pkg_add_cmake(int argc, char **argv); /* tur add-cmake */
 int cmd_pkg_fetch(int argc, char **argv);     /* tur fetch */
+int cmd_pkg_audit(int argc, char **argv);     /* tur audit */
 int cmd_pkg_emit_cmake(int argc, char **argv); /* tur emit-cmake */
 int cmd_pkg_install(int argc, char **argv);   /* tur install */
 int cmd_pkg_uninstall(int argc, char **argv); /* tur uninstall */

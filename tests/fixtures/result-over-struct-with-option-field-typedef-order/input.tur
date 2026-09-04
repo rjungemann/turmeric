@@ -18,7 +18,7 @@
 (defn mk [u : User] : (Result User cstr) (ok u))
 
 (defn describe [r : (Result User cstr)] : cstr
-  (if (.is-ok r) "ok" "err"))
+  (if (ok? r) "ok" "err"))
 
 (defn main [] : int
   (let [u (make-struct User 7 (:: (some "al") (Option cstr)))

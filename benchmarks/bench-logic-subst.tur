@@ -1,0 +1,145 @@
+;; bench-logic-subst -- SX2: the honest test.
+;;
+;; The solver-extension plan puts it plainly: if a trailed substitution does not
+;; beat a persistent association list here, the trail primitive is not paying for
+;; itself and SX3/SX4 should proceed as plain C with no shared utility. So this
+;; runs the SAME workload through both and records where they cross.
+;;
+;; The two are asymmetric in opposite directions, which is why a crossover
+;; exists at all rather than one simply dominating:
+;;
+;;   persistent assoc list   O(1) extend, FREE backtrack (drop the reference),
+;;   (stdlib/logic.tur)      O(n) lookup -- every walk scans the bindings
+;;
+;;   trailed substitution    O(1) indexed lookup, O(1) bind,
+;;   (src/runtime/trail.c)   O(writes) backtrack -- undo runs every entry
+;;
+;; So the ratio turns on LOOKUPS PER BINDING. A search that binds and
+;; immediately backtracks favours the list; one that binds and then reasons over
+;; what it bound favours the trail. The sweep varies exactly that.
+;;
+;; Measured against logic.tur's REAL Subst, not a C reimplementation of an assoc
+;; list -- the question is what would actually change if the engine swapped, and
+;; a hand-written C list would answer a different and much kinder question.
+;;
+;; Since: SX2
+
+(load "stdlib/logic.tur")
+
+(extern-c tur_monotonic_ns [] :int)
+;; tur_trail_mark_packed / tur_trail_undo_to_packed / tur_trail_reset are
+;; PREDECLARED by the compiler now, so re-declaring them here is a hard
+;; "already defined" error.  The inline-C below still calls them directly --
+;; the preamble carries their prototypes.  The `tur_uf_*` family is not
+;; predeclared, so it still needs its own rows.
+(extern-c tur_uf_new [n :int] :ptr)
+(extern-c tur_uf_free [uf :ptr] :void)
+(extern-c tur_uf_bind [uf :ptr var :int val :int] :bool)
+(extern-c tur_uf_walk [uf :ptr var :int] :int)
+
+(defn now-ns [] : int
+  ```c
+  return tur_monotonic_ns();
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; Path A: the persistent association list, exactly as logic.tur has it
+;; ---------------------------------------------------------------------------
+
+;;; build-subst -- extend a Subst with `n` bindings, var i -> int i.
+(defn build-subst [n : int acc : Subst] : Subst
+  (if (<= n 0)
+    acc
+    (build-subst (- n 1) (SBind (- n 1) (TInt (- n 1)) acc))))
+
+;;; walk-all -- walk every variable in 0..n-1 once, summing to keep it live.
+(defn walk-all [n : int subs : Subst acc : int] : int
+  (if (<= n 0)
+    acc
+    (walk-all (- n 1) subs
+              (+ acc (term-int-val (logic-walk (TVar (- n 1)) subs))))))
+
+;;; persistent-round -- one build/lookup/discard cycle.
+;;;
+;;; Backtracking is free on this path: dropping the reference is the undo, which
+;;; is the whole appeal of a persistent structure and has to be represented
+;;; honestly in the comparison.
+(defn persistent-round [n : int passes : int acc : int] : int
+  (if (<= passes 0)
+    acc
+    (let [s (build-subst n (subs-empty))]
+      (persistent-round n (- passes 1) (+ acc (walk-all n s 0))))))
+
+;; ---------------------------------------------------------------------------
+;; Path B: the trailed substitution
+;; ---------------------------------------------------------------------------
+
+;;; trailed-round -- the same workload over trailed cells.
+(defn trailed-round [n : int passes : int] : int
+  ```c
+  void *uf = tur_uf_new(n);
+  int64_t acc = 0;
+  for (int64_t p = 0; p < passes; p++) {
+      int64_t m = tur_trail_mark_packed();
+      for (int64_t i = 0; i < n; i++) tur_uf_bind(uf, i, i * 2);   /* ground i */
+      for (int64_t i = 0; i < n; i++) acc += tur_uf_walk(uf, i) >> 1;
+      tur_trail_undo_to_packed(m);                                  /* backtrack */
+  }
+  tur_uf_free(uf);
+  tur_trail_reset();
+  return acc;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; Reporting
+;; ---------------------------------------------------------------------------
+
+(defn emit-header [] : void
+  ```c
+  printf("path,bindings,passes,total_ns,ns_per_op\n");
+  ```)
+
+(defn emit-row [path : cstr n : int passes : int ns : int] : void
+  ```c
+  /* One "op" is one bind plus one walk, which is what both paths do per
+     variable per pass -- the only unit the two share. */
+  double ops = (double)n * (double)passes;
+  printf("%s,%lld,%lld,%lld,%.2f\n", path, (long long)n, (long long)passes,
+         (long long)ns, ops > 0 ? (double)ns / ops : 0.0);
+  ```)
+
+(defn passes-for [n : int] : int
+  ```c
+  /* Hold total work roughly constant across the sweep: the persistent path is
+     quadratic, so a fixed pass count would take minutes at the top end. */
+  int64_t p = 200000 / (n * n + 1);
+  if (p > 2000) p = 2000;
+  if (p < 3) p = 3;
+  return p;
+  ```)
+
+(defn bench-one [n : int] : int
+  (let [passes (passes-for n)
+        t0     (now-ns)
+        a      (persistent-round n passes 0)
+        t1     (now-ns)
+        b      (trailed-round n passes)
+        t2     (now-ns)]
+    (emit-row "persistent" n passes (- t1 t0))
+    (emit-row "trailed"    n passes (- t2 t1))
+    ;; Both sums are kept so neither loop can be optimized away, and so a
+    ;; divergence between the two paths' answers would show as a wrong number
+    ;; rather than as a silently faster one.
+    (if (= a b) 0 1)))
+
+(defn sweep [n : int worst : int] : int
+  (if (> n 512)
+    worst
+    (sweep (* n 2) (+ worst (bench-one n)))))
+
+(defn main [] : int
+  (emit-header)
+  (let [mismatches (sweep 1 0)]
+    (if (= mismatches 0)
+      0
+      (do (println "MISMATCH: the two paths disagreed") 1))))

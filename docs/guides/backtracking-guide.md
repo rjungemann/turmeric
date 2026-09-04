@@ -19,24 +19,35 @@ classic nondeterministic/backtracking semantics with a familiar monadic API.
 
 | Function | Signature | Description |
 |---|---|---|
-| `mzero` | `() → :int` | The empty list -- zero alternatives (failure) |
-| `mreturn` | `(x) → :int` | Wrap a single value -- one alternative (success) |
-| `mplus` | `(xs ys) → :int` | Concatenate two alternative lists |
-| `mbind` | `(ma f) → :int` | Flatmap: apply `f` to each alternative |
-| `guard` | `(pred :bool) → :int` | Keep current branch if `pred` is true, else fail |
-| `fresh` | `(lo hi) → :int` | Return all integers in `[lo, hi)` as alternatives |
-| `once` | `(xs) → :int` | Truncate to first alternative |
-| `interleave` | `(xs ys) → :int` | Fair interleaving of two streams |
-| `run-backtrack` | `(xs) → :int` | Identity -- return all results |
-| `run-backtrack-depth` | `(xs n) → :int` | Return first N results only |
+| `mzero` | `() -> :int` | The empty list -- zero alternatives (failure) |
+| `mreturn` | `(x) -> :int` | Wrap a single value -- one alternative (success) |
+| `mplus` | `(xs ys) -> :int` | Concatenate two alternative lists |
+| `mbind` | `(ma f) -> :int` | Flatmap: apply `f` to each alternative |
+| `guard` | `(pred :bool) -> :int` | Keep current branch if `pred` is true, else fail |
+| `fresh` | `(f) -> :int` | Apply fat closure `f` to a fresh (unbound) logic variable |
+| `once` | `(xs) -> :int` | Truncate to first alternative |
+| `interleave` | `(xs ys) -> :int` | Fair interleaving of two streams |
+| `run-backtrack` | `(xs) -> :int` | Identity -- return all results |
+| `run-backtrack-depth` | `(xs n) -> :int` | Return first N results only |
+
+`fresh` introduces a placeholder logic variable: it calls its (fat) closure
+argument with the unbound sentinel (`INT64_MIN`), which is distinct from any
+practical logic value. To enumerate a range of integer alternatives, build
+the list with `mplus`/`mreturn` (see `ints-upto` below).
 
 ---
 
 ## Basic Usage
 
 ```turmeric
+;; All integers in [lo, hi) as alternatives
+(defn ints-upto [lo : int hi : int] : int
+  (if (>= lo hi)
+    (mzero)
+    (mplus (mreturn lo) (ints-upto (+ lo 1) hi))))
+
 ;; Return all even numbers from 1..10
-(let [evens (mbind (fresh 1 11)
+(let [evens (mbind (ints-upto 1 11)
                    (fn [x]
                      (if (= (mod x 2) 0)
                        (mreturn x)
@@ -53,8 +64,14 @@ classic nondeterministic/backtracking semantics with a familiar monadic API.
 ```
 
 ```sweet-exp
+;; All integers in [lo, hi) as alternatives
+defn ints-upto [lo :int hi :int] :int
+  if (>= lo hi)
+    mzero()
+    mplus(mreturn(lo) ints-upto({lo + 1} hi))
+
 ;; Return all even numbers from 1..10
-let [evens mbind(fresh(1 11)
+let [evens mbind(ints-upto(1 11)
                  (fn [x]
                    (if (= (mod x 2) 0)
                      (mreturn x)
@@ -78,22 +95,22 @@ The `backtrack-do` macro provides Haskell-`do`-notation-style sequencing for
 the backtracking monad:
 
 ```turmeric
-;; Pythagorean triples with a+b+c = 24
+;; Pythagorean triples with a+b+c = 24 (ints-upto from above)
 (backtrack-do
-  a (fresh 1 24)
-  b (fresh a 24)
+  a (ints-upto 1 24)
+  b (ints-upto a 24)
   c (mreturn (- 24 (+ a b)))
   _ (guard (= (* a a) (+ (* b b) (* c c))))
   (mreturn (list a b c)))
 ```
 
 ```sweet-exp
-;; Pythagorean triples with a+b+c = 24
+;; Pythagorean triples with a+b+c = 24 (ints-upto from above)
 backtrack-do
   a
-  fresh(1 24)
+  ints-upto(1 24)
   b
-  fresh(a 24)
+  ints-upto(a 24)
   c
   mreturn({24 - {a + b}})
   _
@@ -203,7 +220,7 @@ working example.
 
 ## Sudoku Solver Example
 
-The file `tests/fixtures/backtrack-sudoku/input.tur` demonstrates a 4×4
+The file `tests/fixtures/backtrack-sudoku/input.tur` demonstrates a 4x4
 mini-Sudoku solver using iterative backtracking within inline C code. It
 produces the unique solution to the given puzzle.
 
@@ -221,7 +238,7 @@ produces the unique solution to the given puzzle.
 
 ---
 
-## Compiler Flags (Phase B5)
+## Compiler Flags
 
 | Flag | Description |
 |---|---|
@@ -230,40 +247,25 @@ produces the unique solution to the given puzzle.
 
 ---
 
-## Residual Liveness Imprecision (1.0 limitation)
+## Clone Capture Checking
 
-The compile-time capture check (`TUR-E0014`) is conservative: it flags every
-binding in scope at a `cloneable-shift` site inside the **same function** that
-lacks a Clone instance, even if that binding is not actually used in the
-continuation body.  Bindings from **enclosing functions** (outer lambdas or
-defns) are excluded from the check (CF7.3), but same-function bindings that
-are merely in lexical scope -- not live -- may be falsely rejected.
-
-**Workaround:** move non-Clone values out of scope before the shift:
-
-```turmeric
-;; Instead of:
-(let [nc (make-struct NoClone x)]
-  (cloneable-reset
-    (let [k (cloneable-shift k-fn 0)]
-      ...)))  ;; nc is in scope even if unused => TUR-E0014
-
-;; Do:
-(let [nc (make-struct NoClone x)
-      result (extract nc)]   ;; consume nc before the reset
-  (cloneable-reset
-    (let [k (cloneable-shift k-fn 0)]
-      result)))               ;; only `result` (Clone-able) is in scope
-```
-
-Full liveness precision is gated on the post-1.0 CPS pass (tracked in
-[control-flow-completeness-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/control-flow-completeness-plan.md) CF7.5).
+The compile-time capture check (`TUR-E0014`) runs once per `cloneable-reset`,
+over the free variables of the reset body (the delimited context the
+continuation reifies). A same-function binding needs a `Clone` instance only
+if the continuation actually references it -- a non-Clone value that is merely
+in lexical scope at a `cloneable-shift` is not flagged. Bindings from
+enclosing functions and top-level `def`s are not capture candidates and are
+never checked. Some owning types without a `Clone` instance are still
+admitted when the codegen can give the captured frame its own per-resume
+teardown; a genuinely captured owning value outside that set is rejected.
+See `tests/fixtures/cloneable-capture-precision/` for the locked behavior.
 
 ---
 
 ## See Also
 
-- [tur/backtrack API](../api/tur-backtrack.html) -- standard library implementation
+- [Backtrackable State Guide](backtrackable-state-guide.md) -- the other search surface: trailed mutable cells with mark/undo, and `stdlib/backtrack-dfs.tur`'s driver over them. Reach for it when the state is large, when answers must be reified out of live cells, or when you need to keep some of what a failed branch learned; the list monad here stays ahead on small fixed enumeration
+- [tur/backtrack API](../html/api/tur-backtrack.html) -- standard library implementation (generated by `tur run docs`)
 - [parser-combinators-tutorial.md](parser-combinators-tutorial.md) -- worked example: parser combinators built directly on the list monad described here
 - [`tests/fixtures/backtrack-*/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- test fixtures for all backtracking features
 - [`benchmarks/bench-backtrack-*.tur`](https://github.com/rjungemann/turmeric/tree/main/benchmarks/) -- performance benchmarks

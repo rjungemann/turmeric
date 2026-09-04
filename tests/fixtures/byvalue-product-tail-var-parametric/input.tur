@@ -1,0 +1,52 @@
+;; result-block-value-double-unboxed, generalized past Option/Result.
+;;
+;; A `let`/`do` block evaluating to a PARAMETRIC by-value product, returned
+;; through an `if` branch as a bare var, used to have the boxed-carrier ->
+;; struct conversion applied to a value that was already a struct:
+;;
+;;   error: operand of type 'tur_adt_Box2__int__cstr' where arithmetic or
+;;          pointer type is required
+;;
+;; The first fix keyed on Option/Result by name, which left every other
+;; parametric by-value product broken. The predicate now keys on
+;; adt_app_is_byvalue_product, so any such app is covered.
+;;
+;; Still open for the NON-parametric case (a plain `defstruct` lowered to
+;; `tur_adt_Pt`): widening the predicate to reach it regresses 10 fixtures, so
+;; it needs a position-sensitive predicate rather than a broader type test. See
+;; docs/reported/byvalue-product-tail-var-double-unboxed-nonparametric.md.
+
+(defmodule byvalue_product_tail_var_parametric
+  (export)
+
+(defstruct Box2 [A B] [a : A b : B])
+
+(defn mk [n : int] : (Box2 int cstr)
+  (make-struct Box2 n "x"))
+
+(defn side [x : int] : int x)
+
+;; if-branch -> let -> do -> bare var of a parametric by-value product.
+(defn via-block [n : int] : (Box2 int cstr)
+  (if (= n 0)
+    (mk 0)
+    (let [r (mk n)
+          _ (side n)]
+      (do
+        (side n)
+        r))))
+
+;; The shape that always worked, kept as the control.
+(defn via-call [n : int] : (Box2 int cstr)
+  (if (= n 0)
+    (mk 0)
+    (mk n)))
+
+(defn main [] : int
+  (do
+    (println (.a (via-block 3)))
+    (println (.a (via-block 0)))
+    (println (.a (via-call 7)))
+    0))
+
+) ;; end defmodule

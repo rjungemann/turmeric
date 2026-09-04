@@ -4,7 +4,7 @@
 ;; body.  `Opt` is a parametric opaque (int-carried) container -- carrier-
 ;; compatible, so it flows through the erased poly carrier.  (An aggregate
 ;; container like the stdlib `Option` is rejected with TUR-E0297 today; see
-;; docs/reported/hrt-hkt-aggregate-container-carrier.md.)
+;; docs/archive/history/hrt-hkt-aggregate-container-carrier.md.)
 (defopaque Opt [a] :int)
 
 (defn opt-some [x : int] : (Opt int)

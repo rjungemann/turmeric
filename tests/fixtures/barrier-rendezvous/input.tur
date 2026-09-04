@@ -1,0 +1,124 @@
+;; barrier-rendezvous -- stdlib/barrier.tur across real OS threads.
+;;
+;; A barrier is only meaningful with several threads, so this spawns three and
+;; runs them through TWO phases. The assertion that matters is the phase
+;; ordering: every worker must finish phase 1 before ANY starts phase 2. If the
+;; barrier let one thread through early, `phase1_done` would still be below 3
+;; when a worker began phase 2, and `early` would be non-zero.
+;;
+;; Reuse across rounds is the other half. A barrier that worked once and then
+;; wedged (or released everyone immediately) would still pass a single-phase
+;; test, which is why there are two.
+;;
+;; barrier-wait returns true for exactly one thread per round -- the arrival
+;; that tripped it -- so summing those gives 2 for two rounds, and any other
+;; number means the serial-thread signal is broken.
+;;
+;; See docs/archive/barrier-primitive-missing.md.
+
+(load "stdlib/barrier.tur")
+
+;; Shared state block: the barrier plus the counters the workers touch.
+(defn shared-new [b : int] : ptr<void>
+  ```c
+  typedef struct { int64_t bar; int64_t phase1_done; int64_t early; int64_t serial_hits; pthread_mutex_t m; } Shared;
+  Shared *s = (Shared *)malloc(sizeof(Shared));
+  if (!s) { fprintf(stderr, "shared-new: oom\n"); abort(); }
+  s->bar = b; s->phase1_done = 0; s->early = 0; s->serial_hits = 0;
+  pthread_mutex_init(&s->m, NULL);
+  return (void *)s;
+  ```)
+
+(defn shared-early [s : ptr<void>] : int
+  ```c
+  typedef struct { int64_t bar; int64_t phase1_done; int64_t early; int64_t serial_hits; pthread_mutex_t m; } Shared;
+  return ((Shared *)s)->early;
+  ```)
+
+(defn shared-phase1 [s : ptr<void>] : int
+  ```c
+  typedef struct { int64_t bar; int64_t phase1_done; int64_t early; int64_t serial_hits; pthread_mutex_t m; } Shared;
+  return ((Shared *)s)->phase1_done;
+  ```)
+
+(defn shared-serial-hits [s : ptr<void>] : int
+  ```c
+  typedef struct { int64_t bar; int64_t phase1_done; int64_t early; int64_t serial_hits; pthread_mutex_t m; } Shared;
+  return ((Shared *)s)->serial_hits;
+  ```)
+
+(defn shared-free [s : ptr<void>] : nil
+  ```c
+  typedef struct { int64_t bar; int64_t phase1_done; int64_t early; int64_t serial_hits; pthread_mutex_t m; } Shared;
+  Shared *sh = (Shared *)s;
+  pthread_mutex_destroy(&sh->m);
+  free(sh);
+  ```)
+
+;; One worker: phase 1, rendezvous, phase 2, rendezvous.
+(defn worker [arg : ptr<void>] : ptr<void>
+  ```c
+  typedef struct { int64_t bar; int64_t phase1_done; int64_t early; int64_t serial_hits; pthread_mutex_t m; } Shared;
+  /* barrier-wait returns :bool, which lowers to C `bool` -- declaring it
+     int64_t here is a conflicting-types error, and getting that wrong on a
+     function whose whole job is a boolean signal would be a quiet miscompile
+     rather than a loud one.  Its Barrier parameter is a `defopaque` over a
+     pointer, so the slot is `void *`, not the int64 carrier. */
+  extern bool barrier_hywait(void *);
+  Shared *s = (Shared *)arg;
+
+  /* phase 1 */
+  pthread_mutex_lock(&s->m);
+  s->phase1_done++;
+  pthread_mutex_unlock(&s->m);
+
+  if (barrier_hywait((void *)(intptr_t)s->bar)) {
+      pthread_mutex_lock(&s->m); s->serial_hits++; pthread_mutex_unlock(&s->m);
+  }
+
+  /* phase 2 -- must not start until ALL of phase 1 finished */
+  pthread_mutex_lock(&s->m);
+  if (s->phase1_done < 3) s->early++;
+  pthread_mutex_unlock(&s->m);
+
+  if (barrier_hywait((void *)(intptr_t)s->bar)) {
+      pthread_mutex_lock(&s->m); s->serial_hits++; pthread_mutex_unlock(&s->m);
+  }
+  return NULL;
+  ```)
+
+(defn spawn [fn-ptr : ptr<void> arg : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "spawn: oom\n"); abort(); }
+  pthread_create(t, NULL, (void *(*)(void *))fn_ptr, arg);
+  return (void *)t;
+  ```)
+
+(defn join [t : ptr<void>] : nil
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  ```)
+
+;; Hand the barrier's handle to the C worker as a raw int64. ^borrow is
+;; required: Barrier is :linear, and consuming it here would make the
+;; barrier-free below a use-after-consume (TUR-E0101).
+(defn barrier->int [^borrow b : Barrier] : int
+  ```c
+  return (int64_t)b;
+  ```)
+
+(defn main [] : int
+  (let [bar (barrier-new 3)]
+    (let [s (shared-new (barrier->int bar))]
+      (let [t1 (spawn worker s)
+            t2 (spawn worker s)
+            t3 (spawn worker s)]
+        (join t1) (join t2) (join t3))
+      (println (shared-phase1 s))        ; 3 -- every worker ran phase 1
+      (println (shared-early s))         ; 0 -- nobody entered phase 2 early
+      (println (shared-serial-hits s))   ; 2 -- one serial thread per round
+      (shared-free s))
+    (barrier-free bar))
+  0)

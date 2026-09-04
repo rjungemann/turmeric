@@ -163,7 +163,10 @@
 ;;;   A Seq that is immediately exhausted.
 ;;;
 ;;; Example:
-;;;   (let [s (empty-seq)] (seq-gen-done (seq-iter s)))  ; => true
+;;;   ;; seq-gen-done reports "ran to completion", so a freshly-created
+;;;   ;; iterator is not done yet -- drive it once first. (An unstarted
+;;;   ;; generator is never done; that holds for a non-empty Seq too.)
+;;;   (let [g (seq-iter (empty-seq))] (let [_ (seq-gen-next g)] (seq-gen-done g)))  ; => true
 ;;;
 ;;; Since: LZ0
 
@@ -226,8 +229,7 @@
 
 (defn seq-from-vec [v : int] : int
   (seq-new (fn []
-             (let [^mut i
-                   0]
+             (let [^mut i 0]
                (gen []
                  (while (< i (seq-vec-len v))
                    (yield (seq-vec-get v i))
@@ -248,8 +250,7 @@
 
 (defn seq-from-list [l : int] : int
   (seq-new (fn []
-             (let [^mut node
-                   l]
+             (let [^mut node l]
                (gen []
                  (while (not (seq-list-nil? node))
                    (yield (seq-list-head node))

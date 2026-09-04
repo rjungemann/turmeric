@@ -28,14 +28,8 @@ defn apply-poly [f (forall [a] (-> a a)) x :int] :int
 
 Without rank-2 types, you'd need to pick a concrete type for `f` at the call site, losing the generality.
 
-## Enabling HRTs
-
-Higher-ranked types are an opt-in feature. Enable them with the `-Xhrt` flag:
-
-```sh
-tur run -Xhrt myfile.tur
-tur compile -Xhrt myfile.tur -o myfile
-```
+Higher-ranked types are always available -- no flag or `--enable` is
+needed.
 
 ## Syntax
 
@@ -87,7 +81,7 @@ defn use-counter [c (exists [s] s)] :int
   open(c as [s v] v)
 ```
 
-See `docs/higher-ranked-types-plan.md` for the full existential type spec.
+See `docs/archive/existential-types-plan.md` for the full existential type spec.
 
 ## Common patterns
 

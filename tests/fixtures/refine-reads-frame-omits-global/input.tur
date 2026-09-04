@@ -1,38 +1,41 @@
-;; TRUST-BOUNDARY FIXTURE -- pins what a BROKEN `#reads` promise costs.
+;; TRUST-BOUNDARY FIXTURE -- pins what a BROKEN `#reads` promise costs, now
+;; that the promise is checked.
 ;;
-;; `#reads` is step 1 of the read/write-frame trajectory: TRUSTED, not checked
+;; `#reads` is the one TRUSTED claim the refinement solver believes
 ;; (docs/guides/stateful-refinements-guide.md).  Its one consumer grants
-;; congruence to an otherwise-impure measure when the named parameter is frozen
-;; at the call site -- enc_reads_arg_frozen, src/compiler/refine_collect.c.
+;; congruence to an otherwise-impure measure when every named parameter is
+;; frozen at the call site -- enc_reads_arg_frozen, src/compiler/refine_collect.c.
 ;;
-;; So a frame that OMITS mutable state the body reads buys a proof it has not
-;; earned.  `alive?` below declares `#reads w` and then reads the global
-;; `fudge`.  Inside the frozen region the crossing is proved and the
-;; caller-side check is elided -- on a predicate that is FALSE by the time the
-;; crossing is reached.  The program prints 7 rather than failing.
+;; So a frame that OMITS mutable state the body reads asks for a proof it has
+;; not earned.  `alive?` below declares `#reads w` and then reads the global
+;; `fudge`.  Since checked-reads graduated (2026-08-20) that evidence draws
+;; TUR-W0383 *and* REFUSES the grant, so the crossing inside the frozen region
+;; is no longer proved: TUR-W0372, asserted here.
 ;;
-;; This is the DOCUMENTED contract, not a defect: the design's stated backstop
-;; is "the callee's own entry check is never elided" (this proof elides the
-;; caller-side crossing check, not the safety check).  A real accessor
-;; validates internally and returns a sentinel; `get!` here deliberately does
-;; not, which is what makes the elision observable.
+;; WHAT THE REFUSAL DOES NOT DO -- the point of this fixture, and the reason it
+;; survived the graduation rather than folding into its errors sibling.  The
+;; program STILL PRINTS 7.  A `#reads` crossing is proof-only by design: there
+;; is no runtime fallback to fall back TO, so refusing the proof buys a
+;; diagnostic, not a check.  The unearned elision is still there at runtime;
+;; what changed is that the compiler now says so instead of staying silent.
+;; A fixture asserting only the diagnostic would let someone "fix" this by
+;; inserting a check that the design says does not exist, so the 7 is asserted
+;; deliberately.
+;;
+;; The strict half of the pair is errors/r2-checked-reads-refuses-broken-frame:
+;; this exact program under --strict-refine, where the undischarged obligation
+;; is a hard error.  Together they pin both halves of the refusal -- warn and
+;; keep running, or refuse outright -- and neither should be "repaired" toward
+;; the other.  The paired negative for the REGION (rather than the frame) is
+;; errors/refine-reads-frame-omits-global-no-region.
 ;;
 ;; It is also PRE-EXISTING and not caused by mutable globals: replacing `fudge`
 ;; with an inline-C `static int` counter -- writable long before `^mut` on a
-;; top-level `def` existed -- behaves identically.  What `^mut` globals changed
-;; is reachability: breaking the promise no longer requires inline C.
-;;
-;; The paired negative is errors/refine-reads-frame-omits-global-no-region,
-;; where removing the frozen region turns the same program into TUR-W0372.
-;; Both matter: this one alone would pass just as well if the override were
-;; deleted outright.
-;;
-;; EXPECTED TO CHANGE: if the narrow read-side check lands
-;; (docs/upcoming/mutable-globals-plan.md section 12.3 -- refuse the congruence
-;; override when the body demonstrably reads mutable state outside the frame),
-;; this fixture SHOULD start warning and eventually stop proving.  That is the
-;; fix landing, not a regression.  Update it deliberately; do not "repair" it
-;; back to silence.
+;; top-level `def` existed -- behaves identically, except that an inline-C body
+;; is unwalkable, so it yields no evidence, draws no W0383, and KEEPS the
+;; trusted grant (r2-checked-reads-inline-c-still-trusted pins that).  What
+;; `^mut` globals changed is reachability: breaking the promise no longer
+;; requires inline C, and that is exactly the tier the check can see.
 (load "stdlib/refine.tur")
 
 (def ^mut fudge 1)

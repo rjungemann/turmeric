@@ -134,7 +134,7 @@ or an `rc<Struct>` -- so the reference route is not available by accident.
 | `:bool`           | Boolean |
 | `:float`          | 64-bit float |
 | `:float32`        | 32-bit float |
-| `:uint8`, `:int16`, `:int32`, … | Sized numeric types |
+| `:uint8`, `:int16`, `:int32`, ... | Sized numeric types |
 | `:cstr`           | C string pointer (`const char *`) |
 | `:ptr<void>`      | Raw pointer |
 | `:rc<T>`          | Reference-counted pointer to `T` |
@@ -218,9 +218,9 @@ opt out with `:no-auto-ctor`; construction then goes only through
 > Note: an under-applied **positional** constructor curries. `(Point 3)` on a
 > two-field struct returns a closure expecting the remaining field, and
 > `((Point 3) 4)` -- or `(let [mk (Point 3)] (mk 4))` -- yields the `Point`,
-> with field access working on the result. By-value struct results now flow
-> through the closure ABI (this was previously a known limitation). The
-> *keyword* form does not curry: a keyword call must supply every field.
+> with field access working on the result. By-value struct results flow
+> through the closure ABI. The *keyword* form does not curry: a keyword call
+> must supply every field.
 
 ### Keyword arguments
 
@@ -797,7 +797,7 @@ buffers with a `(float64* ptr i)` intrinsic. **None of these are Turmeric
 language forms** -- `sizeof` is valid only inside an inline-C block, and the
 `Struct-field` accessor and `float64*`/`float32*` indexing forms never existed
 at the language level. Code using them fails with `unknown function or
-operator '<name>'` (the compiler now attaches a migration hint pointing here).
+operator '<name>'` (the compiler attaches a migration hint pointing here).
 
 Translate each form to the supported equivalent:
 

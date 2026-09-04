@@ -34,10 +34,9 @@ canonical method names (`arr`, `>>>`, `<<<`, `first`, `second`, `left`,
 Both surfaces live in the **same module** and share the names `arr` / `>>>`. A
 bare call dispatches to the matching instance when the receiver's type selects
 one, and falls back to the bare combinator otherwise -- so a single `(load
-"stdlib/arrow.tur")` gives you both. (This unification became possible once a
-free `defn` and a typeclass method of the same name were allowed to coexist;
-see
-[`docs/reported/typeclass-methods-share-value-namespace-with-defns.md`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/typeclass-methods-share-value-namespace-with-defns.md).)
+"stdlib/arrow.tur")` gives you both. (A free `defn` and a typeclass method of
+the same name share the value namespace; see
+[`docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md).)
 
 For the function arrow, `arr` lifts a function (the identity up to eta), and
 `>>>` is left-to-right composition; both surfaces compute identical values --
@@ -111,8 +110,8 @@ let [add1       arr(fn([x] +(x 1)))
 `arrow-first` and `arrow-second` are the plain-function helpers exported from
 `stdlib/arrow.tur`. The bare layer exports only forward composition (`>>>`);
 write `(>>> f g)` with the arguments in the order you want them applied. If you
-need reverse composition (`<<<`), reach for the typeclass layer below -- the A3
-operator-mangling fix gives `>>>` and `<<<` distinct C identifiers
+need reverse composition (`<<<`), reach for the typeclass layer below --
+operator mangling gives `>>>` and `<<<` distinct C identifiers
 (`_gt_gt_gt` / `_lt_lt_lt`), so they coexist there as method names.
 
 ## Additional Combinators
@@ -173,7 +172,7 @@ Haskell-style hierarchy and instantiates it at the function arrow:
 | `Category` | `ident`, `comp` | yes |
 | `Arrow` | `arr`, `>>>`, `<<<`, `first`, `second` | yes |
 | `ArrowChoice` | `left`, `right`, `+++`, `\|\|\|` | yes (over `Either`) |
-| `ArrowLoop` | `arrow-loop` | yes (non-recursive subset) |
+| `ArrowLoop` | `arrow-loop` | yes (cell-based feedback -- see below) |
 | `ArrowApply` | `app` | yes |
 | `ArrowZero` | `zero-arrow` | no -- `(->)` has no zero (see Kleisli below) |
 | `ArrowPlus` | `plus-arrow` | no -- declared for other arrows |
@@ -197,7 +196,7 @@ function:
 
 `arr` is eta-expanded in the instance (`(fn [x] (f x))`, not the bare `f`) so
 the dispatched result carries a concrete arrow type and is directly callable;
-see `docs/reported/instance-method-returning-untyped-param-loses-result-type.md`.
+see `docs/archive/history/instance-method-returning-untyped-param-loses-result-type.md`.
 
 ### `Category` -- identity and composition
 
@@ -282,13 +281,127 @@ two arms, and `|||` collapses both arms to a common result:
   0)
 ```
 
-### `ArrowLoop` -- non-recursive only
+### `ArrowLoop` -- feedback
 
-`arrow-loop` feeds part of an arrow's output back as input. Turmeric is strict
-and has no lazy thunks, so the `(->)` instance implements only the case where
-the looped arrow **does not read** the fed-back component (it runs the arrow on
-`(b, sentinel)` and projects the first output). True lazy feedback is future
-work.
+`arrow-loop` feeds part of an arrow's output back as input: given an arrow
+`a (b, d) (c, d)` it produces `a b c`, wiring the `d` output round to the `d`
+input. In Haskell that knot is tied by laziness. Turmeric is strict, so the
+`d` slot cannot simply *be* the value the same run is about to produce -- and
+the fix is to hand the looped arrow a **`LoopCell`** in slot 1 instead of a
+bare value. The cell splits "the value is written" from "the value is read",
+which is all laziness was buying:
+
+```
+LoopCell  =  { filled : int64, value : int64 }   ; two words on the heap
+```
+
+Three combinators fill the cell at three different times. They share one
+protocol -- slot 1 is always a `LoopCell` -- so a single looped arrow works
+under all three.
+
+| Combinator | The cell starts | Good for | Total? |
+|---|---|---|---|
+| `arrow-loop` (and its bare twin `arrow-loop-lazy`) | **empty**; filled with the `d` output when the run returns | knot-tying: the arrow parks the cell in its `c` output and something forces it *later* | no -- forcing mid-run is the `<<loop>>` black hole |
+| `arrow-loop-fix` | **seeded** with `d0`, refilled once per pass until `d` stops moving or `fuel` runs out | an arrow that reads `d` *strictly*, where the answer is a fixpoint | yes -- `fuel` bounds it |
+| `arrow-loop-delay` | **seeded** with `d0`, carried forward across calls | a unit delay in the feedback path: call *n* sees call *n-1*'s `d` | yes |
+
+Reading the cell:
+
+| Function | Meaning |
+|---|---|
+| `(loop-cell-of slot)` | the erased slot-1 value, typed as a `LoopCell` |
+| `(loop-cell-ready? c)` | `true` when the value has been written; `false` inside an `arrow-loop` run |
+| `(loop-cell-force c)` | the fed-back value, or a `<<loop>>` panic when it is not there yet |
+
+#### Lazy feedback (knot-tying)
+
+The looped arrow's `c` output is *defined by* the `d` output of the same run --
+it parks the cell handle in `c` and the consumer forces it afterwards:
+
+```turmeric
+(load "stdlib/arrow.tur")
+
+;; c = the feedback cell itself; d = b * 10, known only at the end of the run.
+(defn park-cell [p] : int
+  ```c typedef struct { int64_t e1; int64_t e2; } P;
+  P *s = (P *)(intptr_t)p;
+  P *r = (P *)malloc(sizeof(P));
+  r->e1 = s->e2;
+  r->e2 = s->e1 * 10;
+  return (int64_t)(intptr_t)r; ```)
+
+(defn main [] : int
+  (let [lp (arrow-loop park-cell)
+        c  (loop-cell-of (lp 7))]
+    (println (loop-cell-force c)))   ; => 70
+  0)
+```
+
+An arrow that forces the cell *during* the run has demanded its own output;
+that is a genuine error, and it panics with `<<loop>>` rather than quietly
+reading a sentinel. Guard with `loop-cell-ready?` when a miss is expected.
+
+#### Fixpoint feedback
+
+```turmeric
+;; newton: d' = (d + b/d)/2, c = d -- iterate to floor(sqrt(b)).
+((arrow-loop-fix newton 1 32) 144)    ; => 12
+```
+
+`fuel` is a bound, not an assertion: a non-converging arrow spends its passes
+and returns the last `c` rather than hanging.
+
+#### Delayed feedback
+
+```turmeric
+;; sum-step: d' = c = d + b -- a running total, seeded at 0.
+(let [acc (arrow-loop-delay sum-step 0)]
+  (acc 1) (acc 2) (acc 3))            ; => 1, 3, 6
+```
+
+The returned arrow is stateful: it owns one cell, so each call advances the
+same feedback line. Call `arrow-loop-delay` again for an independent one.
+
+#### Writing the looped arrow
+
+The arrow layer runs on an erased two-slot heap pair of `int64`, so a looped
+arrow written in Turmeric takes and returns that carrier and ascribes at the
+edges:
+
+```turmeric
+(load "stdlib/tuple.tur")
+
+(defn prev-step [p : int] : int             ; unit delay: emit the previous b
+  (let [t (:: p (Tuple2 int int))
+        b (tuple2-1st t)
+        d (loop-cell-force (loop-cell-of (tuple2-2nd t)))]
+    (:: (tuple2 d b) :int)))
+```
+
+An inline-C arrow redeclares the cell layout locally, the same way the pair
+helpers in `stdlib/arrow.tur` redeclare `P`:
+
+```c
+typedef struct { int64_t filled; int64_t value; } LC;
+```
+
+Declaring the arrow directly over `(Tuple2 int int)` works too, and computes
+the same values -- the compiler bridges the by-value aggregate to the carrier
+at the fat-box boundary:
+
+```turmeric
+(defn prev-step [t : (Tuple2 int int)] : (Tuple2 int int)
+  (tuple2 (loop-cell-force (loop-cell-of (tuple2-2nd t)))
+          (tuple2-1st t)))
+```
+
+(That crossing used to return garbage and then segfault; see
+`docs/archive/arrow-struct-typed-arrow-abi.md`. `tests/fixtures/arrow-struct-typed-arrow`
+now asserts the two spellings agree under every member of the family.)
+
+Fixtures: `arrow-loop-lazy-feedback`, `arrow-loop-fix`, `arrow-loop-delay`,
+`arrow-struct-typed-arrow`, and `arrow-instance-loop-nonrecursive` (the
+degenerate case, where the arrow ignores `d` entirely).
 
 ### Both surfaces agree
 
@@ -303,19 +416,14 @@ flowing through the instance dictionary.
 
 ## Signals and Signal Functions
 
-> **Where the Signal/SF library lives:** the worked example is the
+> **Where the Signal/SF library lives:** the worked implementation is the
 > `tur-signal` spice in `../turmeric-spices/spices/signal/` (see
-> `docs/upcoming/tur-signal-rebuild-plan.md` for the rebuild plan and
-> current acceptance state). The code samples below use the
-> `stdlib/signal/core.tur` paths from the original placement; treat
-> them as the conceptual surface -- the same names are exported by
+> `docs/archive/history/tur-signal-rebuild-plan.md` for the rebuild plan and
+> acceptance state). The code samples below are written against
+> `stdlib/signal/...` paths; there is no `stdlib/signal/` in this repo, so
+> treat them as the conceptual surface -- the same names are exported by
 > `signal/core`, `signal/osc`, `signal/filter`, `signal/shaper`,
-> `signal/envelope`, and `signal/compose` in the spice. End-to-end
-> exercise of the SF-application surface is currently gated on the
-> reports under `docs/reported/` named `defmodule-loses-fat-fn-type-
-> annotation` and `vec-typed-fat-closure-readback-fixture-regressed-
-> codegen`; the bare combinators (`arr`, `>>>`, `arrow-first`,
-> `arrow-second`) work today.
+> `signal/envelope`, and `signal/compose` in the spice.
 
 `stdlib/signal/core.tur` introduces the Signal abstraction:
 
@@ -585,57 +693,25 @@ let [dummy  constant(())
 
 ---
 
-## Extended Arrow Typeclasses
-
-An earlier scaleback
-([`docs/archive/history/stdlib-arrow-scaleback-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/stdlib-arrow-scaleback-plan.md))
-removed `ArrowZero`, `ArrowPlus`, `ArrowChoice`, `ArrowLoop`, and `ArrowApply`
-because no instances backed them (closure-returning instance methods tripped a
-codegen bug, and several stubs needed `Either`/`Left`/`Right` sum types). Both
-gaps have since closed, so the hierarchy was **reintroduced**
-([`docs/archive/history/stdlib-arrow-typeclass-reintroduction-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/stdlib-arrow-typeclass-reintroduction-plan.md))
-and is now live in `stdlib/arrow.tur` -- see the **Typeclass dispatch** section
-above for the full table and per-class examples. `Category` and the honest
-`Kleisli` `ArrowZero` were added on top
-([`docs/archive/history/category-arrowzero-implementation-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/category-arrowzero-implementation-plan.md)).
-`ArrowZero`/`ArrowPlus` remain uninstantiated at `(->)` by design (no zero for a
-total function); `Kleisli` is where `zero-arrow` honestly lives.
-
----
-
 ## Examples
 
-The `examples/signal-processing/` directory contains a three-step tutorial
-that you can run directly:
-
-```sh
-tur run examples/signal-processing/01_basics.tur    # Arrow fundamentals
-tur run examples/signal-processing/02_signals.tur   # Signals and SFs
-tur run examples/signal-processing/03_dsp.tur       # DSP primitives
-```
-
-**`01_basics.tur`** -- covers `arr`, `>>>`, arrow laws, and
-`arrow-first`/`arrow-second` using plain integer functions.
-
-**`02_signals.tur`** -- introduces the `Signal` and `SF` types, `constant`,
-`time-signal`, `pair-signals`, and stateful SFs via `state-sf`.
-
-**`03_dsp.tur`** -- demonstrates oscillators (`sine`, `square`, `sawtooth`,
-`triangle`), processors (`gain`, `offset`, `invert`, `abs-sf`), mixing
-(`add`, `mix`, `multiply`), filters (`low-pass`, `high-pass`), and a
-complete multi-stage processing chain.
+Runnable signal-processing examples ship with the `tur-signal` spice under
+`../turmeric-spices/spices/signal/examples/` -- short, per-module programs
+covering signal construction, oscillators, filters and shapers, envelopes,
+and a simple voice. Clone the `turmeric-spices` repository next to this one
+to run them.
 
 ## Quick Reference
 
 ```
-stdlib/arrow.tur          -- arr, >>>, compose-float, arrow-first, arrow-second,
+stdlib/arrow.tur          -- arr, >>>, arrow-first, arrow-second,
                              par-comp, arrow-split, arrow-const, arrow-dup
 stdlib/kleisli.tur        -- Kleisli, kleisli, k-apply
-stdlib/signal/core.tur    -- constant, time-signal, sample, map-signal,
-                             pair-signals, left-signal, right-signal
-stdlib/signal/dsp.tur     -- sine, square, sawtooth, triangle,
-                             low-pass, high-pass,
-                             gain, mix, add, offset, clip, invert
+signal/core (spice)       -- constant, time-signal, sample, map-signal,
+                             pair-signals
+signal/osc (spice)        -- sine, square, sawtooth, triangle
+signal/filter (spice)     -- low-pass, high-pass
+signal/shaper (spice)     -- gain, mix, add, offset, clip, invert
 ```
 
 ## See Also

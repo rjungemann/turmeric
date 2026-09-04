@@ -1,0 +1,22 @@
+;; constrained-generic-samehead-instance-dict -- a plain constrained generic
+;; must discriminate between two instances over the SAME ADT head that differ
+;; only in their element type ((Option int) vs (Option cstr)).
+;;
+;; Pins the interpreter's apply-time constraint-dict path
+;; (frame_bind_constraint_dicts, docs/upcoming/turi-dict-passing-plan.md):
+;; the dict is resolved with the elaborator's exact structural lookup, so the
+;; full applied type selects the instance.  Before that path existed, turi's
+;; head-name recovery heuristic (gde_reresolve_method) collapsed both calls
+;; onto one same-head instance and printed 200/200 where the compiled path
+;; printed 100/200.
+(defclass Code [a] (code [x : a] : int))
+(definstance Code [int] (code [x] 1))
+(definstance Code [(Option int)]  (code [x] 100))
+(definstance Code [(Option cstr)] (code [x] 200))
+
+(defn via [A] [(Code A)] [x : A] : int (code x))
+
+(defn main [] : int
+  (println (via (:: (some 7) (Option int))))
+  (println (via (:: (some "s") (Option cstr))))
+  0)

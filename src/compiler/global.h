@@ -102,4 +102,13 @@ TurStateEntry *tur_state_upsert(TurState *st, const char *name);
 /* Remove an entry by name. Returns true if an entry was removed. */
 bool tur_state_remove(TurState *st, const char *name);
 
+/* global-spice-library-consumption: the source dir of an INSTALLED spice,
+ * looked up by name in state.tur -- what a `#{:global true}` manifest dep
+ * resolves to.  Returns false when it is not installed (or its directory is
+ * gone).  `out_version` / `out_resolved` optionally receive freshly allocated
+ * copies of the recorded version and resolved SHA (NULL for a --path
+ * install); the caller frees them. */
+bool tur_installed_spice_dir(const char *name, char *out, size_t out_sz,
+                             char **out_version, char **out_resolved);
+
 #endif /* TUR_GLOBAL_H */

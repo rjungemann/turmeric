@@ -3,7 +3,7 @@
 ;; `: type` into an F_TYPE_ANN node (forms.c:142), and pre-fix
 ;; first/rest/second only descended F_LIST/F_VEC, so a macro had
 ;; no way to read the inner type symbol out.
-;; docs/reported/ct-primitives-cannot-walk-type-ann-nodes.md
+;; docs/archive/history/ct-primitives-cannot-walk-type-ann-nodes.md
 (defmacro probe [^syntax decl]
   ;; decl shape: (name : type default)
   (let [name-sym (first decl)

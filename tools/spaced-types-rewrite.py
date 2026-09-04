@@ -7,7 +7,7 @@ type-bearing positions use the spaced form (e.g. `:int` -> `: int`).
 Keyword literals in other positions (`:refer`, `:else`, manifest
 fields, etc.) are left alone.
 
-See docs/upcoming/spaced-type-annotation-migration-plan.md.
+See docs/archive/history/spaced-type-annotation-migration-plan.md.
 
 Usage:
   tools/spaced-types-rewrite.py [opts] PATH [PATH...]

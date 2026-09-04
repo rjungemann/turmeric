@@ -131,7 +131,7 @@ polish and is tracked with N3/N4/N5.
 
 ## Bugs surfaced (and resolved)
 
-- `docs/reported/byvalue-result-field-access-casts-aggregate-to-pointer.md` --
+- `docs/archive/history/byvalue-result-field-access-casts-aggregate-to-pointer.md` --
   **Resolved.** By-value `Result` field access codegen has been fixed.
   The receiver now takes the direct `(r).field` path instead of casting aggregates to pointers, unblocking native debugger type display work.
 - **`-Wint-conversion` with Pointer-to-Integer Constructors:**

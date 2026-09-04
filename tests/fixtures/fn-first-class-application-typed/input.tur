@@ -3,7 +3,7 @@
 ;;
 ;; The bare `:fn` carrier is the int64 register class, so it rejects float-class
 ;; arguments (see tests/fixtures/errors/fn-float-carrier-unsupported and
-;; docs/reported/fn-first-class-float-carrier-gap.md).  A `(fn [A...] : R)`
+;; docs/archive/history/fn-first-class-float-carrier-gap.md).  A `(fn [A...] : R)`
 ;; parameter is the *typed* carrier: it stores the same tur_poly_fn_t {env, fn}
 ;; value but with a known concrete signature, so the call site casts fn.fn to
 ;; the concrete R(*)(void*, A...) and float/cstr arguments and results survive.

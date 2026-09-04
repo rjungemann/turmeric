@@ -2,7 +2,7 @@
 ;; constructor list form is expected) must NOT leave a NULL CtorDef slot in
 ;; the half-registered AdtDef. A later (match ...) on that type used to walk
 ;; adt->ctors[ci]->name and segfault in elab_match.
-;; See docs/reported/defgadt-malformed-pattern-segfault.md
+;; See docs/archive/history/defgadt-malformed-pattern-segfault.md
 ;;
 ;; The first error ("constructor must be a list form") is the real parse
 ;; failure. The second ("is not a constructor of 'Bound'") only prints if

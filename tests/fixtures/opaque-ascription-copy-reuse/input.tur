@@ -1,5 +1,5 @@
 ;; opaque-ascription-copy-reuse -- regression for
-;; docs/reported/opaque-ascription-cast-marks-value-move-once.md.
+;; docs/archive/history/opaque-ascription-cast-marks-value-move-once.md.
 ;;
 ;; A value produced by the keyword ascription cast (:: expr :T) over an
 ;; UNRESTRICTED opaque (no :linear / :affine) must be freely reusable -- the

@@ -106,6 +106,9 @@ const STORAGE_KEYS = {
     // Multi-tab keys (Phase 1 of try-turmeric-multi-tab-and-projects-plan).
     tabs:      'tur.try.tabs.v1',
     activeTab: 'tur.try.activeTab.v1',
+    // Minimap: true / false when the user has chosen, absent when they have
+    // not. The absence is load-bearing -- see minimapPreference() (M1).
+    minimap:   'tur.try.minimap.v1',
 };
 
 // Multi-tab editor state. Each tab carries its persisted record plus a
@@ -212,12 +215,22 @@ function tabsSnapshot() {
         cursor: t.cursor || { lineNumber: 1, column: 1 },
         scrollTop: t.scrollTop || 0,
         createdAt: t.createdAt,
+        // Read-only stdlib buffers opened by go-to-definition (M4). Carried on
+        // the snapshot so the test surface can see them; every *storage* path
+        // filters them back out, and each of those filters is written at its
+        // own call site rather than hidden here, because "which tabs count"
+        // has a different answer for a zip than for a reload.
+        readOnly: !!t.readOnly,
+        sourceUri: t.sourceUri || undefined,
     }));
 }
 
+// A stdlib buffer is not part of the user's workspace: they did not create it,
+// they cannot edit it, and restoring it on reload would present a file they
+// never opened deliberately as one of their own.
 const persistTabs = debounce(() => {
     if (tabsHydrating) return;
-    safeWrite(STORAGE_KEYS.tabs, tabsSnapshot());
+    safeWrite(STORAGE_KEYS.tabs, tabsSnapshot().filter(t => !t.readOnly));
 }, 250);
 
 function persistActiveId() {
@@ -268,6 +281,11 @@ function switchTab(id) {
     captureActiveTabState();
     activeId = id;
     editor.setModel(ensureModel(next));
+    // Read-only is a property of the tab, not of the editor, so it is applied
+    // on every switch rather than once. Missing this in one direction is the
+    // bug that lets someone type into the stdlib; missing it in the other
+    // locks them out of their own file.
+    applyReadOnlyState(next);
     try {
         if (next.cursor) editor.setPosition(next.cursor);
         if (typeof next.scrollTop === 'number') editor.setScrollTop(next.scrollTop);
@@ -275,6 +293,8 @@ function switchTab(id) {
     editor.focus();
     renderTabs();
     persistActiveId();
+    // The picker reflects the active tab; dialect is per-file (§3.5).
+    reconcileLangPicker();
 }
 
 function createTab({ name, content = '', activate = true } = {}) {
@@ -308,6 +328,7 @@ function closeTab(id) {
         const neighbor = tabs[idx] || tabs[idx - 1] || tabs[0];
         activeId = neighbor.id;
         editor.setModel(ensureModel(neighbor));
+        applyReadOnlyState(neighbor);
         try {
             if (neighbor.cursor) editor.setPosition(neighbor.cursor);
             if (typeof neighbor.scrollTop === 'number') editor.setScrollTop(neighbor.scrollTop);
@@ -317,6 +338,7 @@ function closeTab(id) {
     persistTabs();
     persistActiveId();
     notifyTabsChanged();
+    reconcileLangPicker();
 }
 
 function sanitizeTabName(raw) {
@@ -349,6 +371,120 @@ function renameTab(id, rawName) {
     // A rename changes the document uri, so the server has to be told: the
     // client closes the old one and opens the new.
     notifyTabsChanged();
+}
+
+// ============================================================================
+// Read-only buffers + jump-back (try-turmeric-navigation-and-minimap-plan, M4)
+// ============================================================================
+
+/** Put the editor in or out of read-only for the tab it is showing. */
+function applyReadOnlyState(tab) {
+    if (!editor) return;
+    try {
+        editor.updateOptions({ readOnly: !!(tab && tab.readOnly) });
+    } catch { /* editor disposed mid-switch */ }
+}
+
+/** `file:///stdlib/list.tur` -> `list.tur`; used for the tab label. */
+function basenameFromUri(uri) {
+    const path = String(uri || '').replace(/^file:\/\//, '');
+    const last = path.split('/').filter(Boolean).pop();
+    return last || 'source.tur';
+}
+
+/**
+ * Open a definition that lives outside the workspace -- in practice, a stdlib
+ * source file the WASM bundle carries at /stdlib.
+ *
+ * Returns the tab (so the caller can convert a range against its model), or
+ * null when there is nothing to show: no server, no reader export in this
+ * bundle, or a path the export refuses. Null is the pre-M4 behaviour, which is
+ * the right thing to degrade to.
+ *
+ * Opening the same file twice focuses the tab that is already there rather
+ * than stacking copies of list.tur across a reading session.
+ */
+async function openReadOnlyTab(uri) {
+    if (!lspClient || !lspClient.isAvailable()) return null;
+
+    const existing = tabs.find(t => t.readOnly && t.sourceUri === uri);
+    if (existing) { ensureModel(existing); return existing; }
+
+    const path = String(uri || '').replace(/^file:\/\//, '');
+    let text = null;
+    try {
+        text = await lspClient.readFile(path);
+    } catch {
+        return null;
+    }
+    if (typeof text !== 'string') return null;
+
+    // Not createTab(): that activates, persists, and tells the server about a
+    // new document. None of the three is wanted here -- the caller navigates
+    // through onNavigate, storage excludes read-only tabs by design, and the
+    // server already knows this file as its own source. Announcing it a second
+    // time under a file:///project/ uri would have it analysed as if the user
+    // had pasted the stdlib into their project.
+    const tab = {
+        id: genTabId(),
+        name: basenameFromUri(uri),
+        content: text,
+        cursor: { lineNumber: 1, column: 1 },
+        scrollTop: 0,
+        createdAt: Date.now(),
+        readOnly: true,
+        sourceUri: uri,
+        _model: null,
+    };
+    tabs.push(tab);
+    ensureModel(tab);
+    renderTabs();
+    return tab;
+}
+
+// Where a jump came from, so it can be undone. Monaco standalone registers
+// `editor.action.revealDefinition` but ships no navigation history service --
+// that is a VS Code workbench feature -- so this is ours.
+const JUMP_STACK_MAX = 20;
+let jumpStack = [];
+
+function pushJumpOrigin(tabId, position) {
+    if (!tabId || !position) return;
+    const top = jumpStack[jumpStack.length - 1];
+    // Two definition requests from the same spot are one origin, not two.
+    if (top && top.tabId === tabId &&
+        top.position.lineNumber === position.lineNumber &&
+        top.position.column === position.column) {
+        return;
+    }
+    jumpStack.push({ tabId, position });
+    if (jumpStack.length > JUMP_STACK_MAX) jumpStack.shift();
+    renderJumpBack();
+}
+
+/** Pop back to the most recent origin whose tab still exists. */
+function jumpBack() {
+    while (jumpStack.length > 0) {
+        const entry = jumpStack.pop();
+        const tab = findTab(entry.tabId);
+        // A closed tab is not an error, it is just not somewhere to go back
+        // to. Keep popping rather than making the user press it twice.
+        if (!tab) continue;
+        switchTab(tab.id);
+        try {
+            editor.revealPositionInCenterIfOutsideViewport(entry.position);
+            editor.setPosition(entry.position);
+            editor.focus();
+        } catch {}
+        break;
+    }
+    renderJumpBack();
+}
+
+/** Show the Back button only while there is somewhere to go back to. */
+function renderJumpBack() {
+    const btn = document.getElementById('jump-back-btn');
+    if (btn) btn.hidden = jumpStack.length === 0;
 }
 
 // ============================================================================
@@ -416,11 +552,27 @@ function setLspStatus(state) {
 function startLspClient() {
     if (lspClient) return lspClient.start();
 
+    // The hover fallback reads doc-names.json, which otherwise only arrives
+    // after a successful WASM boot -- so it was absent for the whole window
+    // where it is most wanted, and permanently absent when that boot failed.
+    // Idempotent and not awaited: a hover that arrives first simply misses,
+    // which is the same as having no fallback, which is where we started.
+    fetchDocNames();
+
     lspClient = createLspClient({
         monaco,
         languageId: 'turmeric',
-        getTabs: () => tabs,
+        // Read-only stdlib buffers are deliberately not part of the document
+        // set (M4). They are reference material the user cannot edit, and
+        // announcing one under a file:///project/ uri would have the server
+        // analyse the stdlib as if it had been pasted into the project --
+        // publishing diagnostics against code nobody here can fix.
+        getTabs: () => tabs.filter(t => !t.readOnly),
         onStatus: setLspStatus,
+        // Hover fallback (M3). Same table the docs pane searches, already
+        // fetched by the WASM boot -- no new asset, and no fetch on the hover
+        // path: an unloaded table is an empty array, which is a miss.
+        lookupDoc: (name) => (docNames || []).find(d => d.name === name) || null,
         onNavigate: (tab, range) => {
             // Monaco's standalone editor cannot switch models on its own, so a
             // definition in another tab is a tab switch we perform.
@@ -433,6 +585,15 @@ function startLspClient() {
                 });
             } catch {}
         },
+        // A definition in the stdlib (M4).
+        onOpenExternal: (uri) => openReadOnlyTab(uri),
+        // Record where a jump starts. Fired from inside the definition
+        // provider, so F12, Cmd+click and the context menu all push -- there
+        // is no keybinding here that could miss one of them.
+        onBeforeNavigate: (model, position) => {
+            const origin = tabs.find(t => t._model === model);
+            if (origin) pushJumpOrigin(origin.id, position);
+        },
     });
 
     // Test surface: lets a spec await the server instead of sleeping on it.
@@ -444,6 +605,8 @@ function startLspClient() {
         sync: () => notifyTabsChanged(),
         // Monaco is a module-scoped import, not a global, so a spec has no
         // other way to read the markers the adapter set.
+        highlights: () => lspClient.documentHighlights(
+            editor.getModel(), editor.getPosition()),
         markers: () => monaco.editor.getModelMarkers({ owner: 'turmeric' })
             .map(m => ({
                 message: m.message,
@@ -467,9 +630,22 @@ function renderTabs() {
     const canClose = tabs.length > 1;
     for (const tab of tabs) {
         const btn = document.createElement('button');
-        btn.className = 'tab-button' + (tab.id === activeId ? ' active' : '');
+        btn.className = 'tab-button' + (tab.id === activeId ? ' active' : '')
+                                     + (tab.readOnly ? ' read-only' : '');
         btn.dataset.tabId = tab.id;
-        btn.title = tab.name;
+        btn.title = tab.readOnly
+            ? `${tab.name} (read-only, from the standard library)`
+            : tab.name;
+        if (tab.readOnly) {
+            // A padlock, so a tab that will not accept typing says so before
+            // the user tries. Read-only is otherwise invisible until a
+            // keystroke does nothing, which reads as a broken editor.
+            const lock = document.createElement('span');
+            lock.className = 'tab-lock';
+            lock.textContent = '\u{1F512}';
+            lock.setAttribute('aria-hidden', 'true');
+            btn.appendChild(lock);
+        }
         const label = document.createElement('span');
         label.className = 'tab-label';
         label.textContent = tab.name;
@@ -496,6 +672,9 @@ function renderTabs() {
         });
         btn.addEventListener('dblclick', (e) => {
             e.preventDefault();
+            // A stdlib buffer's name is its identity, not a label: it is how
+            // the tab is matched on a second jump to the same file.
+            if (tab.readOnly) return;
             beginRename(tab.id, btn, label);
         });
         setupTabDrag(btn, tab);
@@ -866,7 +1045,9 @@ function updateUrlHash() {
     const code = editor.getValue();
     const encoded = encodeState(code);
     if (encoded) {
-        window.location.hash = `code=${encoded}`;
+        // Merge rather than assign: the docs pane keeps a `doc=` key in the
+        // same hash, and clobbering it would close the pane mid-read.
+        setHashParam('code', encoded);
     }
 }
 
@@ -949,6 +1130,20 @@ async function initWasm() {
                     pending.resolve(msg.result);
                 } else if (msg.type === 'explain-result') {
                     pending.resolve(msg.result);
+                } else if (msg.type === 'lang-registry-result') {
+                    pending.resolve(msg.result);
+                } else if (msg.type === 'trace-run-result') {
+                    pending.resolve({ steps: msg.steps, stats: msg.stats, error: msg.error });
+                } else if (msg.type === 'trace-state') {
+                    pending.resolve(msg.state);
+                } else if (msg.type === 'trace-sites') {
+                    pending.resolve(msg.sites);
+                } else if (msg.type === 'trace-found') {
+                    pending.resolve(msg.found);
+                } else if (msg.type === 'trace-bytes') {
+                    pending.resolve(msg.bytes);
+                } else if (msg.type === 'trace-released') {
+                    pending.resolve();
                 } else if (msg.type === 'reset-done') {
                     pending.resolve();
                 } else if (msg.type === 'error') {
@@ -967,10 +1162,10 @@ async function initWasm() {
         console.log('Turmeric WASM runtime initialized');
         wasmState = WASM_STATE.READY;
 
-        const replInput = document.getElementById('repl-input');
-        if (replInput) replInput.disabled = false;
+        promptSetEnabled(true);
 
         await fetchDocNames();
+        fetchLangRegistry();  // re-renders the picker from the C-side tables
         showStatus('Ready', 'success');
         loadFromUrlHash();
 
@@ -999,17 +1194,322 @@ async function initWasm() {
 
 /**
  * Strip a leading #lang directive from code and return the detected language
- * name plus the remaining source.  The #lang line must be the first non-
- * blank line (leading spaces/tabs are allowed but not newlines).
+ * plus the remaining source.  The #lang line must be the first non-blank
+ * line (leading spaces/tabs are allowed but not newlines).
  *
- * Returns { lang: string|null, body: string }
- *   lang -- the base language name (e.g. "turmeric/sweet") or null if no directive found
- *   body -- source text with the #lang line removed
+ * Returns { lang: string|null, layers: string[], body: string, line: string|null }
+ *   lang   -- the base language name (e.g. "turmeric/sweet") or null if no
+ *             directive found
+ *   layers -- the space-separated trailing layer tokens (e.g. ["stringed"]);
+ *             mirrors detect_lang_layered on the C side, where the old
+ *             base-only parse silently dropped them
+ *   body   -- source text with the #lang line removed
+ *   line   -- the full directive line text (no trailing newline), or null
  */
 function parseLangDirective(code) {
-    const m = code.match(/^[ \t]*#lang[ \t]+(\S+)([ \t]*\r?\n?|$)/);
-    if (!m) return { lang: null, body: code };
-    return { lang: m[1], body: code.slice(m[0].length) };
+    const m = code.match(/^[ \t]*#lang[ \t]+([^\r\n]*?)[ \t]*(\r?\n|$)/);
+    if (!m) return { lang: null, layers: [], body: code, line: null };
+    const toks = m[1].split(/[ \t]+/).filter(Boolean);
+    if (!toks.length) return { lang: null, layers: [], body: code, line: null };
+    return {
+        lang: toks[0],
+        layers: toks.slice(1),
+        body: code.slice(m[0].length),
+        line: m[0].replace(/\r?\n$/, ''),
+    };
+}
+
+// ============================================================================
+// Language picker (try-turmeric-lang-toggle-plan)
+//
+// A dialect radio group + layer checkboxes that edit the #lang line in
+// place.  The #lang line in the buffer stays the source of truth: the picker
+// is a text edit, not a hidden mode, and everything round-trips -- paste a
+// file with a #lang header and the picker updates; flip the picker and the
+// header updates.  Nothing is stored in UI state that is not also in the
+// source.
+// ============================================================================
+
+// Fallback for older deployed WASM builds that don't export
+// _turi_wasm_lang_registry.  Bases only, mirroring lang_base_from_name's
+// canonical set -- the LAYER list is never hardcoded in JS, because
+// LANG_LAYERS[] in src/compiler/lang_layers.c is the single source of truth
+// and a JS copy would drift on the next layer added or graduated.
+const LANG_REGISTRY_FALLBACK = {
+    bases: [
+        { name: 'turmeric',             label: 'S-expression' },
+        { name: 'turmeric/curly-infix', label: 'Curly-infix' },
+        { name: 'turmeric/neoteric',    label: 'Neoteric' },
+        { name: 'turmeric/sweet',       label: 'Sweet-expression' },
+    ],
+    layers: [],
+};
+
+const LANG_DEFAULT_BASE = 'turmeric';
+
+// Registry fetched from the WASM module (null until it arrives).
+let langRegistry = null;
+
+function langMenuRegistry() {
+    return langRegistry || LANG_REGISTRY_FALLBACK;
+}
+
+// The legacy alias is accepted on input but never generated; normalize it so
+// the picker treats `#lang sweet-exp` as the turmeric/sweet selection.
+function normalizeLangBase(name) {
+    return name === 'sweet-exp' ? 'turmeric/sweet' : name;
+}
+
+// Short dialect tag for the header button (the full labels live in the
+// popover, from the registry).
+function baseShortLabel(base) {
+    switch (base) {
+        case 'turmeric':             return 's-expr';
+        case 'turmeric/curly-infix': return 'curly';
+        case 'turmeric/neoteric':    return 'neoteric';
+        case 'turmeric/sweet':       return 'sweet';
+        default:                     return base || 's-expr';
+    }
+}
+
+/**
+ * Fetch the #lang registry (bases + curated layers) from the WASM module and
+ * re-render the picker.  No-op fallback when the export is absent.
+ */
+function fetchLangRegistry() {
+    if (wasmState !== WASM_STATE.READY) return Promise.resolve();
+    return new Promise((resolve) => {
+        const id = ++evalCallId;
+        pendingCalls.set(id, {
+            resolve,
+            reject: () => resolve(null),
+            startTime: performance.now(),
+            isEval: false,
+        });
+        evalWorker.postMessage({ type: 'lang-registry', id });
+    }).then((json) => {
+        if (!json) return;
+        try {
+            const parsed = JSON.parse(json);
+            if (parsed && Array.isArray(parsed.bases) && Array.isArray(parsed.layers)) {
+                langRegistry = parsed;
+                renderLangMenu();
+            }
+        } catch (err) {
+            console.error('Bad lang registry JSON:', err);
+        }
+    });
+}
+
+/**
+ * The active tab's current selection, read from line 1 of its model.  The
+ * picker is per-tab: dialect is per-file in Turmeric, so nothing about it is
+ * persisted outside the tab's own text.
+ */
+function currentLangSelection() {
+    const model = editor && editor.getModel();
+    if (!model) return { base: LANG_DEFAULT_BASE, layers: [] };
+    const parsed = parseLangDirective(model.getLineContent(1));
+    if (parsed.lang === null) return { base: LANG_DEFAULT_BASE, layers: [] };
+    return { base: normalizeLangBase(parsed.lang), layers: parsed.layers };
+}
+
+// Layers are emitted in registry order so the directive text is stable
+// across toggles -- the set is order-independent to the reader, but a
+// jittering line makes a noisy diff and a noisy undo stack.  Tokens the
+// registry doesn't know (hand-typed) keep their original relative order at
+// the end rather than being dropped.
+function orderLangLayers(layers) {
+    const order = langMenuRegistry().layers.map(l => l.name);
+    const known = order.filter(n => layers.includes(n));
+    const unknown = layers.filter(n => !order.includes(n));
+    return known.concat(unknown);
+}
+
+// Tracks models whose #lang insert also added the blank separator line, so
+// removal only eats a blank line this code created (never one the user
+// typed).  WeakMap so disposed models don't pin the flag.
+const langInsertAddedBlank = new WeakMap();
+
+/**
+ * The single writer of the #lang line (§3.4 of the plan).  All paths go
+ * through one pushEditOperations call, so one Ctrl+Z undoes a language
+ * switch.
+ *
+ * - No #lang line + default selection: write nothing (don't decorate a
+ *   plain file with a redundant header).
+ * - No #lang line + non-default selection: insert `#lang ...` as line 1,
+ *   followed by a blank line.
+ * - Has a #lang line: replace exactly that line, preserving everything
+ *   after it.
+ * - Selection returns to the default: remove the line (and the blank line
+ *   after it if the insert above added one).
+ */
+function setLangDirective(model, { base, layers }) {
+    if (!model || !monaco) return;
+    const ordered = orderLangLayers(layers || []);
+    const parsed = parseLangDirective(model.getLineContent(1));
+    const isDefault = base === LANG_DEFAULT_BASE && ordered.length === 0;
+    const directive = ['#lang', base].concat(ordered).join(' ');
+
+    let edits;
+    if (parsed.lang === null) {
+        if (isDefault) return;
+        edits = [{ range: new monaco.Range(1, 1, 1, 1), text: directive + '\n\n' }];
+        langInsertAddedBlank.set(model, true);
+    } else if (isDefault) {
+        const lineCount = model.getLineCount();
+        const removeBlank = langInsertAddedBlank.get(model) === true &&
+                            lineCount >= 2 &&
+                            model.getLineContent(2).trim() === '';
+        const lastRemoved = removeBlank ? 2 : 1;
+        const range = lineCount > lastRemoved
+            ? new monaco.Range(1, 1, lastRemoved + 1, 1)
+            : new monaco.Range(1, 1, lineCount, model.getLineMaxColumn(lineCount));
+        edits = [{ range, text: '' }];
+        langInsertAddedBlank.delete(model);
+    } else {
+        if (parsed.line === directive) return;   // nothing to do
+        edits = [{
+            range: new monaco.Range(1, 1, 1, model.getLineMaxColumn(1)),
+            text: directive,
+        }];
+    }
+    // Delimit the undo stack on both sides so the switch is exactly one
+    // Ctrl+Z -- neither merged with preceding typing nor split in two.
+    model.pushStackElement();
+    model.pushEditOperations([], edits, () => null);
+    model.pushStackElement();
+}
+
+/**
+ * Render the popover's radio group + checkboxes from the registry.  The
+ * form of the control mirrors the form of the syntax: one mutually
+ * exclusive base, an order-independent set of layers.
+ */
+function renderLangMenu() {
+    const basesEl = document.getElementById('lang-bases');
+    const layersEl = document.getElementById('lang-layers');
+    if (!basesEl || !layersEl) return;
+    const reg = langMenuRegistry();
+
+    basesEl.innerHTML = reg.bases.map(b => `
+        <label class="lang-row">
+            <input type="radio" name="lang-base" value="${escapeHtml(b.name)}">
+            <span class="lang-row-name">${escapeHtml(b.label)}</span>
+        </label>`).join('');
+
+    // An unavailable layer renders disabled with the reason -- never hidden,
+    // because hiding it makes it undiscoverable and makes the picker
+    // disagree with `tur lang-layers`.
+    layersEl.innerHTML = reg.layers.length ? reg.layers.map(l => {
+        const unavailable = l.available === false;
+        const title = unavailable
+            ? `${l.summary || ''} (unavailable in this build)`
+            : (l.summary || '');
+        return `
+        <label class="lang-row${unavailable ? ' lang-row-disabled' : ''}"
+               title="${escapeHtml(title)}">
+            <input type="checkbox" value="${escapeHtml(l.name)}"${unavailable ? ' disabled' : ''}>
+            <span class="lang-row-name">${escapeHtml(l.name)}</span>${
+                l.kind === 'semantic'
+                    ? '<span class="lang-chip">experimental</span>'
+                    : ''
+            }
+            <span class="lang-row-summary">${escapeHtml(l.summary || '')}</span>
+        </label>`;
+    }).join('') : '<div class="lang-row-empty">No optional layers in this build</div>';
+
+    basesEl.querySelectorAll('input[type=radio]').forEach(r =>
+        r.addEventListener('change', onLangControlChange));
+    layersEl.querySelectorAll('input[type=checkbox]').forEach(c =>
+        c.addEventListener('change', onLangControlChange));
+
+    reconcileLangPicker();
+}
+
+/** A picker control changed: write the new selection into the buffer. */
+function onLangControlChange() {
+    const model = editor && editor.getModel();
+    if (!model) return;
+    const checkedBase = document.querySelector('#lang-bases input[type=radio]:checked');
+    const base = checkedBase ? checkedBase.value : LANG_DEFAULT_BASE;
+    const layers = Array.from(
+        document.querySelectorAll('#lang-layers input[type=checkbox]:checked'),
+        c => c.value);
+    setLangDirective(model, { base, layers });
+    reconcileLangPicker();
+}
+
+/**
+ * Reconcile the picker with the active tab's line 1.  Called on model
+ * content change (typing the header by hand and using the picker are the
+ * same operation) and on tab switch (the picker follows the tab).
+ */
+function reconcileLangPicker() {
+    const sel = currentLangSelection();
+    const btnLabel = document.getElementById('lang-btn-label');
+    if (btnLabel) btnLabel.textContent = baseShortLabel(sel.base);
+    document.querySelectorAll('#lang-bases input[type=radio]').forEach(r => {
+        r.checked = (r.value === sel.base);
+    });
+    document.querySelectorAll('#lang-layers input[type=checkbox]').forEach(c => {
+        c.checked = sel.layers.includes(c.value);
+    });
+}
+
+/**
+ * Wire the header button + popover.  Mirrors the Examples popover: reparent
+ * to <body> to escape ancestor overflow/stacking contexts, anchor with
+ * position:fixed, close on outside-click / Escape.
+ */
+function initLangPicker() {
+    const langBtn = document.getElementById('lang-btn');
+    const langMenu = document.getElementById('lang-menu');
+    if (!langBtn || !langMenu) return;
+    if (langMenu.parentElement !== document.body) {
+        document.body.appendChild(langMenu);
+    }
+    const closeLang = () => {
+        langMenu.hidden = true;
+        langBtn.setAttribute('aria-expanded', 'false');
+    };
+    const openLangAt = (anchor) => {
+        langMenu.hidden = false;
+        langBtn.setAttribute('aria-expanded', 'true');
+        const r = anchor.getBoundingClientRect();
+        langMenu.style.top = `${r.bottom + 4}px`;
+        langMenu.style.right = `${Math.max(4, window.innerWidth - r.right)}px`;
+        reconcileLangPicker();
+    };
+    langBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        langMenu.hidden ? openLangAt(langBtn) : closeLang();
+    });
+    document.addEventListener('click', (e) => {
+        if (!langMenu.hidden && !langMenu.contains(e.target) && e.target !== langBtn) {
+            closeLang();
+        }
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !langMenu.hidden) closeLang();
+    });
+    // Mobile: the "Language..." item in the ⋯ overflow opens the same
+    // popover, anchored to the overflow button.  stopPropagation so the
+    // click never reaches the document-level outside-click closer (which
+    // would immediately re-hide the menu); that also bypasses the overflow
+    // menu's own close-on-click delegate, so close it here.
+    const moreBtn = document.getElementById('more-btn');
+    document.querySelectorAll('[data-action="language"]').forEach(item => {
+        item.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const moreMenu = document.getElementById('more-menu');
+            if (moreMenu) moreMenu.hidden = true;
+            moreBtn?.setAttribute('aria-expanded', 'false');
+            openLangAt(moreBtn || langBtn);
+        });
+    });
+    renderLangMenu();
 }
 
 /**
@@ -1046,14 +1546,17 @@ function processQueue() {
 
     // turi_eval_typed detects and strips an inline #lang directive itself, so
     // pass the raw source through. Still parse it locally to keep the UI's
-    // mode indicator (currentLangMode) in sync; also forward `lang` to the
-    // Worker as a hint for runtimes that export _turi_wasm_set_lang.
-    const { lang } = parseLangDirective(code);
+    // mode indicator (currentLangMode) in sync; also forward the FULL
+    // directive tail (base + layer tokens) to the Worker as a hint for
+    // runtimes that export _turi_wasm_set_lang -- set_lang assigns the layer
+    // set, so forwarding base-only would silently drop layer toggles.
+    const { lang, layers } = parseLangDirective(code);
     if (lang !== null) currentLangMode = lang;
+    const langDirective = lang !== null ? [lang, ...layers].join(' ') : null;
 
     const id = ++evalCallId;
     pendingCalls.set(id, { resolve, reject, startTime: performance.now(), isEval: true });
-    evalWorker.postMessage({ type: 'eval', id, input: code, lang });
+    evalWorker.postMessage({ type: 'eval', id, input: code, lang: langDirective });
 }
 
 /**
@@ -1066,6 +1569,10 @@ function resetWasm() {
     pendingCalls.set(id, {
         resolve: () => {
             currentLangMode = 'turmeric'; // turi_env_new() always starts in default mode
+            /* The session forgot everything it had accepted, so the prompt's
+             * document has to forget it too -- otherwise completion keeps
+             * offering names `:reset` just destroyed. */
+            replSessionReset();
             clearConsole();
             showStatus('Environment reset', 'success');
         },
@@ -1079,6 +1586,32 @@ function resetWasm() {
 // ============================================================================
 // Monaco Editor Setup
 // ============================================================================
+
+/**
+ * Read a CSS custom property and return it only if Monaco can parse it.
+ *
+ * Monaco runs theme colors through Color.fromHex(), which returns opaque RED
+ * on any parse failure -- so an `rgba()` or a `var()` chain that did not
+ * resolve does not degrade, it repaints the strip bright red. Anything that is
+ * not a literal #RGB / #RRGGBB / #RRGGBBAA is refused here and the caller's
+ * fallback is used instead, which is the same color the stylesheet declares.
+ */
+function cssHex(varName, fallback) {
+    try {
+        const raw = getComputedStyle(document.documentElement)
+            .getPropertyValue(varName).trim();
+        if (/^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(raw)) return raw;
+    } catch {
+        /* no document, or a browser that refuses computed styles here */
+    }
+    return fallback;
+}
+
+/** Replace (or append) the alpha byte of a #RRGGBB / #RRGGBBAA color. */
+function withAlpha(hex, alphaByte) {
+    const base = /^#[0-9a-f]{8}$/i.test(hex) ? hex.slice(0, 7) : hex;
+    return /^#[0-9a-f]{6}$/i.test(base) ? base + alphaByte : base;
+}
 
 /**
  * Configure Monaco Editor for Turmeric
@@ -1154,6 +1687,17 @@ function configureMonaco() {
             { open: '"', close: '"' },
         ],
         comments: { lineComment: ';' },
+        // Monaco's default word pattern is C-shaped: it breaks on `-`, `?`,
+        // `!`, `/` and the comparison characters, so `nil-value` is three
+        // words and `vec-push!` is four. That is wrong everywhere it is used
+        // here -- double-click selection, occurrence highlight, the range a
+        // completion replaces, and the name the hover fallback looks up.
+        //
+        // This is exactly the character class the server's own tokenizer
+        // accepts (is_ident_char, src/lsp/lsp_util.c:6). Keeping the two in
+        // step is what makes a client-side word and a server-side word the
+        // same word.
+        wordPattern: /[A-Za-z0-9\-?!*/><+=_]+/g,
     });
 
     // Rainbow-bracket palette, mirrored from trowel's turmeric-dark theme
@@ -1169,6 +1713,56 @@ function configureMonaco() {
         'editorBracketHighlight.foreground5':               '#8AB0E8', // blue
         'editorBracketHighlight.foreground6':               '#C4A0E8', // purple
         'editorBracketHighlight.unexpectedBracket.foreground': '#FF5C57', // error red
+    };
+
+    // Minimap + overview ruler (try-turmeric-navigation-and-minimap-plan M1).
+    //
+    // Colors are resolved out of the stylesheet rather than written here as
+    // literals. The strip sits directly against the editor canvas and paints
+    // marks in the same semantic colors the console and the status dots use;
+    // a hardcoded hex would silently stop matching the first time one of those
+    // tokens moves. c2mp reaches into CSS custom properties for the same
+    // reason (minimap.js:204-209).
+    //
+    // Monaco parses these with Color.fromHex() and falls back to opaque RED on
+    // any parse failure, so cssHex() refuses anything that is not #RGB /
+    // #RRGGBB / #RRGGBBAA and hands back the literal fallback instead. A theme
+    // token that fails to resolve must look like the old theme, never like an
+    // error.
+    const minimapColors = {
+        // Canvas: the strip is part of the editor, not a panel beside it.
+        'minimap.background':                   cssHex('--bg-base', '#0C0A08'),
+        'minimapSlider.background':             withAlpha(cssHex('--text-dim', '#453F39'), '59'),
+        'minimapSlider.hoverBackground':        withAlpha(cssHex('--text-sec', '#88796C'), '59'),
+        'minimapSlider.activeBackground':       withAlpha(cssHex('--text-sec', '#88796C'), '8C'),
+
+        // Marks inside the strip. Diagnostics keep full opacity -- they are
+        // the reason to look at it; selection and find are washes, because a
+        // mark you cannot see past is a mark that hides the shape of the file.
+        // c2mp's rule (minimap.js §"marks as washes"), same conclusion.
+        'minimap.errorHighlight':               cssHex('--error-color', '#D9735A'),
+        'minimap.warningHighlight':             cssHex('--warning-color', '#EFA030'),
+        'minimap.findMatchHighlight':           withAlpha(cssHex('--gold', '#D48B1C'), '99'),
+        'minimap.selectionHighlight':           withAlpha(cssHex('--text-dim', '#453F39'), '80'),
+        'minimap.selectionOccurrenceHighlight': withAlpha(cssHex('--text-sec', '#88796C'), '66'),
+        'minimapGutter.addedBackground':        withAlpha(cssHex('--success-color', '#A8C98A'), 'B3'),
+        'minimapGutter.modifiedBackground':     withAlpha(cssHex('--gold', '#D48B1C'), 'B3'),
+        'minimapGutter.deletedBackground':      withAlpha(cssHex('--error-color', '#D9735A'), 'B3'),
+
+        // The outboard ruler. This is the affordance c2mp builds by hand
+        // (minimap.js RULER_W): a diagnostic gets a tick here because it must
+        // stay findable when the minimap is scrolled past it; an occurrence
+        // does not, because there can be fifty of them and they are noise at
+        // this width.
+        'editorOverviewRuler.background':       cssHex('--bg-base', '#0C0A08'),
+        'editorOverviewRuler.border':           '#00000000',
+        'editorOverviewRuler.errorForeground':  cssHex('--error-color', '#D9735A'),
+        'editorOverviewRuler.warningForeground': cssHex('--warning-color', '#EFA030'),
+        'editorOverviewRuler.infoForeground':   cssHex('--info-color', '#7AC4B8'),
+        'editorOverviewRuler.findMatchForeground': withAlpha(cssHex('--gold', '#D48B1C'), 'CC'),
+        'editorOverviewRuler.selectionHighlightForeground':
+            withAlpha(cssHex('--text-sec', '#88796C'), '80'),
+        'editorOverviewRuler.bracketMatchForeground': '#00000000',
     };
 
     // Define theme
@@ -1199,7 +1793,16 @@ function configureMonaco() {
             'editor.inactiveSelectionBackground': '#0366D61A',
             'editorIndentGuide.background': '#e1e4e8',
             'editorIndentGuide.activeBackground': '#959da5',
-            ...rainbowBrackets
+            ...rainbowBrackets,
+            // The light theme is not currently selectable (setTheme below
+            // pins turmeric-dark), but a half-themed minimap is exactly the
+            // kind of thing that ships the day someone makes it selectable.
+            ...minimapColors,
+            'minimap.background':             '#ffffff',
+            'editorOverviewRuler.background': '#ffffff',
+            'minimapSlider.background':       '#959da54D',
+            'minimapSlider.hoverBackground':  '#959da580',
+            'minimapSlider.activeBackground': '#959da5A6',
         }
     });
 
@@ -1281,7 +1884,10 @@ function configureMonaco() {
             'focusBorder':                          '#D48B1C66',
 
             // Rainbow brackets — depth-colored, matching the trowel editor
-            ...rainbowBrackets
+            ...rainbowBrackets,
+
+            // Minimap + overview ruler, resolved from the stylesheet above
+            ...minimapColors
         }
     });
 
@@ -1307,7 +1913,19 @@ async function initEditor() {
         insertSpaces: true,
         detectIndentation: false,
         minimap: {
-            enabled: false
+            // Resolved for real by applyMinimapPreference() below, once the
+            // editor exists and its width can be measured. Starting false and
+            // turning it on is the cheap direction: an editor that renders the
+            // strip and then yanks it away on the first layout pass flickers.
+            enabled: false,
+            // Blocks, not glyphs. c2mp reached the same conclusion the hard
+            // way (minimap.js:8-13): no browser hints glyphs at 2px, so
+            // rendered characters are platform-dependent mush. Blocks are
+            // legible and cheap.
+            renderCharacters: false,
+            showSlider: 'mouseover',
+            size: 'proportional',
+            maxColumn: 80,
         },
         scrollbar: {
             vertical: 'auto',
@@ -1351,7 +1969,12 @@ async function initEditor() {
         multiCursorPaste: 'full',
         occurrencesHighlight: true,
         overviewRulerBorder: false,
-        overviewRulerLanes: 0,
+        // Three lanes is what puts error and warning ticks in the right-hand
+        // strip -- the affordance c2mp builds by hand (minimap.js RULER_W).
+        // Unlike the minimap this is not width-gated: it is a few pixels wide
+        // at any pane size, and a diagnostic you can find by looking is worth
+        // those pixels on a phone too.
+        overviewRulerLanes: 3,
         quickSuggestions: {
             other: true,
             comments: false,
@@ -1381,6 +2004,17 @@ async function initEditor() {
     
     // Expose editor for smoke tests
     window._turiEditor = editor;
+    // T3: line-number clicks jump the timeline while a recording is open.
+    traceInstallGutterHandler(editor);
+    // Timeline test surface, alongside _turiTabs below.
+    window._turiTrace = {
+        state:   () => ({ active: traceState.active, steps: traceState.steps,
+                          index: traceState.index, baseLine: traceState.baseLine,
+                          frames: traceState.frames }),
+        run:     () => traceCode(),
+        seek:    (i) => traceSeek(i),
+        close:   () => traceClose(),
+    };
     // Multi-tab test surface. Read-only `tabs()` snapshot keeps tests from
     // accidentally mutating module state.
     window._turiTabs = {
@@ -1421,6 +2055,20 @@ async function initEditor() {
         parseBytes: (bytes) => {
             const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
             return parseProjectZip(u8);
+        },
+    };
+
+    // Navigation test surface (M4): read-only buffers and the jump-back stack.
+    window._turiNav = {
+        readOnlyTabs: () => tabs.filter(t => t.readOnly)
+            .map(t => ({ id: t.id, name: t.name, sourceUri: t.sourceUri })),
+        stackDepth: () => jumpStack.length,
+        back: () => jumpBack(),
+        // Editor-level truth, not the tab record: what a spec cares about is
+        // whether typing would do anything.
+        isReadOnly: () => {
+            try { return !!editor.getOption(monaco.editor.EditorOption.readOnly); }
+            catch { return false; }
         },
     };
 
@@ -1495,6 +2143,9 @@ async function initEditor() {
         persistContent();
         clearTimeout(urlHashTimer);
         urlHashTimer = setTimeout(updateUrlHash, 1000);
+        // Round-trip the picker from the text: typing the header by hand and
+        // using the picker are the same operation.  Reads line 1 only.
+        reconcileLangPicker();
     });
     
     // Handle Ctrl+Enter to run code
@@ -1517,6 +2168,20 @@ async function initEditor() {
     editor.addCommand(
         monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.KeyF,
         () => formatCode()
+    );
+
+    // F12 -> go to definition. Cmd/Ctrl+click already works through the
+    // provider; F12 is the binding people reach for without a mouse, and
+    // Monaco standalone does not bind it by default.
+    editor.addCommand(monaco.KeyCode.F12, () => {
+        try { editor.getAction('editor.action.revealDefinition')?.run(); } catch {}
+    });
+
+    // Ctrl/Cmd+Alt+- -> back to where the last jump started. Monaco standalone
+    // has no navigation history service, so this drives our own stack.
+    editor.addCommand(
+        monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.Minus,
+        () => jumpBack()
     );
 
     // Register as Monaco document formatter so "Format Document" also works
@@ -1622,11 +2287,19 @@ async function runCode() {
     // shows `2`, not `#<fn main>`.
     if (definesMainEntry(code)) {
         const { isError } = await executeCode(code, '', true, false, true);
-        if (!isError) await executeCode('(main)', '', false, false);
+        if (!isError) {
+            replSessionAccept(code);
+            await executeCode('(main)', '', false, false);
+        }
         return;
     }
 
-    await executeCode(code, '', true, false);
+    const { isError } = await executeCode(code, '', true, false);
+    /* W2: a Run is how a tab's definitions become callable at the prompt, so
+     * it is also how they become offerable there. Before this, completion at
+     * the prompt would have had to guess -- and the two honest answers were
+     * "offer the tab and be wrong until Run" or "never offer it at all". */
+    if (!isError) replSessionAccept(code);
 }
 
 /**
@@ -1798,7 +2471,10 @@ function slugifyTabName(raw, used) {
 // browser download.
 function buildProjectEntries() {
     captureActiveTabState();
-    const snapshot = tabsSnapshot();
+    // Read-only stdlib buffers are not the user's files. A downloaded project
+    // zip that carried copies of list.tur would build differently from the
+    // workspace it came from -- the real stdlib is already on the path.
+    const snapshot = tabsSnapshot().filter(t => !t.readOnly);
     const used = new Set();
     const files = snapshot.map(t => {
         const fileName = slugifyTabName(t.name, used);
@@ -2008,9 +2684,15 @@ function applyProjectLoad(parsed) {
     }
     tabs = parsed.tabs;
     activeId = parsed.activeId;
+    // Every origin the stack held belonged to the workspace that just went
+    // away. jumpBack() would skip them one by one; clearing says so up front,
+    // and takes the Back button down with it.
+    jumpStack = [];
+    renderJumpBack();
     const active = currentTab();
     if (active && editor) {
         editor.setModel(ensureModel(active));
+        applyReadOnlyState(active);
         try {
             if (active.cursor) editor.setPosition(active.cursor);
             if (typeof active.scrollTop === 'number') editor.setScrollTop(active.scrollTop);
@@ -2138,47 +2820,477 @@ function shareCode() {
 /**
  * REPL input at the bottom of the console
  */
+/* ---------------------------------------------------------------------------
+ * W3: hover in the transcript
+ *
+ * This needs no markup at all, which is the whole reason it is cheap.
+ * appendToConsole inserts HTML it built itself and console lines are ordinary
+ * text nodes, so caretPositionFromPoint lands on the right node without a span
+ * around every identifier. Wrapping them would put an escaping surface exactly
+ * where "interpreted stdout stays inert" lives.
+ *
+ * WHICH lines answer is a judgement, not a capability. The echoed `turi> ...`
+ * lines and error lines do; program stdout does not. Text a program happened
+ * to print is not a symbol reference, and a hover card about `println` over a
+ * program that printed the word "println" is a lie about what that text is.
+ * ------------------------------------------------------------------------ */
+
+const CONSOLE_IDENT = /[A-Za-z0-9\-?!*/><+=_]/;
+
+/** The identifier under `offset` in `text`, or ''. Same character class the
+ *  server's occurrence scanner uses, so a hover lands on what a hover means. */
+function identifierAt(text, offset) {
+    if (!text || offset < 0 || offset > text.length) return '';
+    let i = offset;
+    if ((i >= text.length || !CONSOLE_IDENT.test(text[i])) &&
+        i > 0 && CONSOLE_IDENT.test(text[i - 1])) i--;
+    if (i >= text.length || !CONSOLE_IDENT.test(text[i])) return '';
+    let start = i, end = i;
+    while (start > 0 && CONSOLE_IDENT.test(text[start - 1])) start--;
+    while (end < text.length && CONSOLE_IDENT.test(text[end])) end++;
+    const word = text.slice(start, end);
+    // A bare number is not a symbol; neither is a lone operator run that the
+    // index has never heard of, but that one the lookup answers for itself.
+    return /^[0-9]+$/.test(word) ? '' : word;
+}
+
+/** Does this text node belong to a line a hover may answer on? */
+function consoleLineAnswers(node) {
+    if (!node) return false;
+    const parent = node.parentElement;
+    if (!parent) return false;
+    // An error line: the whole span carries the class.
+    if (parent.classList && parent.classList.contains('console-error')) return true;
+    // An echoed prompt line: `<span class="console-prompt">turi&gt;</span> code`,
+    // so the code is a bare text node sitting right after that span.
+    let prev = node.previousSibling;
+    while (prev && prev.nodeType === Node.TEXT_NODE && !prev.data.trim()) {
+        prev = prev.previousSibling;
+    }
+    return !!(prev && prev.nodeType === Node.ELEMENT_NODE &&
+              prev.classList && prev.classList.contains('console-prompt'));
+}
+
+/** The (node, offset) under a viewport point, across the two browser spellings. */
+function caretAt(x, y) {
+    if (document.caretPositionFromPoint) {
+        const p = document.caretPositionFromPoint(x, y);
+        return p ? { node: p.offsetNode, offset: p.offset } : null;
+    }
+    if (document.caretRangeFromPoint) {
+        const r = document.caretRangeFromPoint(x, y);
+        return r ? { node: r.startContainer, offset: r.startOffset } : null;
+    }
+    return null;
+}
+
+function initConsoleHover() {
+    const consoleEl = document.getElementById('console');
+    if (!consoleEl) return;
+
+    let card = document.getElementById('console-hover-card');
+    if (!card) {
+        card = document.createElement('div');
+        card.id = 'console-hover-card';
+        card.className = 'console-hover-card';
+        card.hidden = true;
+        document.body.appendChild(card);
+    }
+
+    let shownFor = null;
+    let token = 0;
+
+    function hide() {
+        shownFor = null;
+        card.hidden = true;
+    }
+
+    async function show(name, x, y) {
+        if (name === shownFor) return;
+        shownFor = name;
+        const mine = ++token;
+
+        let summary = null;
+        const entry = (docNames || []).find(d => d.name === name);
+        if (entry && entry.summary) summary = entry.summary;
+        else summary = await wasmDocLookup(name).catch(() => null);
+        // A later hover already won; do not paint over it.
+        if (mine !== token) return;
+        if (!summary) { hide(); return; }
+
+        card.textContent = summary;
+        card.hidden = false;
+        // Place above the cursor when there is room, below when there is not.
+        const rect = card.getBoundingClientRect();
+        const top = (y - rect.height - 10 > 8) ? y - rect.height - 10 : y + 16;
+        card.style.left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8)) + 'px';
+        card.style.top = top + 'px';
+    }
+
+    const onMove = debounce((x, y) => {
+        const caret = caretAt(x, y);
+        if (!caret || caret.node.nodeType !== Node.TEXT_NODE) { hide(); return; }
+        if (!consoleEl.contains(caret.node)) { hide(); return; }
+        if (!consoleLineAnswers(caret.node)) { hide(); return; }
+        const name = identifierAt(caret.node.data, caret.offset);
+        if (!name) { hide(); return; }
+        show(name, x, y);
+    }, 120);
+
+    consoleEl.addEventListener('mousemove', (e) => onMove(e.clientX, e.clientY));
+    consoleEl.addEventListener('mouseleave', hide);
+    consoleEl.addEventListener('scroll', hide);
+}
+
+/* ---------------------------------------------------------------------------
+ * W1/W2: the REPL prompt
+ *
+ * The prompt was a bare <input> with Enter-to-submit and ArrowUp/ArrowDown
+ * history, and nothing the language server knows reached it -- no completion,
+ * no hover, no signature help, in the one place a beginner types the most.
+ *
+ * The fix is not a completion widget built over the <input>. It is a
+ * single-line Monaco editor, because then completion, hover and signature help
+ * at the prompt are *the providers that already exist* rather than a second
+ * copy of the state machine that drives them.
+ * ------------------------------------------------------------------------ */
+
+/** The prompt's Monaco editor, or null before init. */
+let promptEditor = null;
+
+/** The synthetic document the prompt is analysed as (W2). */
+const REPL_DOC_URI = 'file:///project/repl.tur';
+let promptDoc = null;
+
+/**
+ * Source the interpreter session has actually accepted -- previous prompt
+ * lines and Runs that evaluated without error.
+ *
+ * This, and not the active tab, is what the prompt may offer. The editor's
+ * index is built from whatever file is open; the prompt evaluates against the
+ * wasm session, and a `defn` typed in a tab that has never been Run is not
+ * callable here. An offered name the session cannot resolve is not merely
+ * unhelpful: accepting it produces an expression that fails to evaluate.
+ */
+let replSessionSource = '';
+
+function replSessionAccept(source) {
+    const text = String(source || '').trim();
+    if (!text) return;
+    replSessionSource = replSessionSource ? replSessionSource + '\n' + text : text;
+    // Push it now rather than on the debounce, so the very next keystroke's
+    // completion already knows about the name that was just defined.
+    if (promptDoc) promptDoc.refresh();
+}
+
+function replSessionReset() {
+    replSessionSource = '';
+    if (promptDoc) promptDoc.refresh();
+}
+
+/** Is the suggest widget open? Asked once per keystroke, by one handler. */
+function promptSuggestOpen() {
+    if (!promptEditor) return false;
+    const c = promptEditor.getContribution('editor.contrib.suggestController');
+    // `model.state` is 0 when idle; the widget's own visibility flag is not
+    // public, and the controller is.
+    return !!(c && c.model && c.model.state !== 0);
+}
+
+function promptValue() {
+    return promptEditor ? promptEditor.getValue() : '';
+}
+
+function promptSetValue(text) {
+    if (!promptEditor) return;
+    promptEditor.setValue(text);
+    const line = promptEditor.getModel().getLineCount();
+    promptEditor.setPosition({
+        lineNumber: line,
+        column: promptEditor.getModel().getLineMaxColumn(line),
+    });
+}
+
+function promptSetEnabled(on) {
+    /* The host class is set whether or not the editor exists yet: the WASM
+     * boot and the prompt's construction are independent, and whichever wins
+     * the race must not leave the row looking disabled forever. The editor's
+     * own initial readOnly is read from wasmState in initReplInput. */
+    const host = document.getElementById('repl-input');
+    if (host) host.classList.toggle('repl-input-disabled', !on);
+    if (promptEditor) promptEditor.updateOptions({ readOnly: !on });
+}
+
+async function promptSubmit() {
+    const code = promptValue().trim();
+    if (!code || wasmState !== WASM_STATE.READY) return;
+
+    replHistory.unshift(code);
+    replHistoryIndex = -1;
+    promptSetValue('');
+
+    if (code.startsWith(':')) {
+        appendToConsole(`<span class="console-prompt">turi&gt;</span> ${escapeHtml(code)}`);
+        await dispatchReplMetaCommand(code);
+    } else {
+        const res = await executeCode(code, '<span class="console-prompt">turi&gt;</span>');
+        // Only a line the session actually accepted joins the prompt's
+        // document. A line that failed defined nothing, and offering its
+        // names would be the exact lie W2 exists to prevent.
+        if (!res || !res.isError) replSessionAccept(code);
+    }
+
+    const consoleEl = document.getElementById('console');
+    if (consoleEl) consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+
 function initReplInput() {
-    const input = document.getElementById('repl-input');
-    if (!input) return;
+    const host = document.getElementById('repl-input');
+    if (!host) return;
 
-    input.addEventListener('keydown', async (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            const code = input.value.trim();
-            if (!code || wasmState !== WASM_STATE.READY) return;
+    /* The suggest widget has to escape a 22px-tall, overflow:hidden row, so it
+     * renders into a body-level node instead of inside the editor.
+     *
+     * `monaco-editor` on that node is mandatory, not decorative. Monaco ships
+     * every widget rule scoped to a `.monaco-editor` ancestor
+     * (`.monaco-editor .suggest-widget { ... }`) and declares the whole
+     * `--vscode-*` color set on `.monaco-editor` itself. Hoisted out of the
+     * editor without the class, the popup matches none of it: transparent
+     * background, no border, unsized rows -- suggestions painted straight over
+     * the prompt with nothing behind them. */
+    let overlay = document.getElementById('repl-suggest-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'repl-suggest-overlay';
+        overlay.className = 'repl-suggest-overlay monaco-editor';
+        document.body.appendChild(overlay);
+    }
+    // An overlay left over from a previous init predates the class.
+    overlay.classList.add('monaco-editor');
 
-            replHistory.unshift(code);
-            replHistoryIndex = -1;
-            input.value = '';
+    promptEditor = monaco.editor.create(host, {
+        value: '',
+        language: 'turmeric',
+        theme: 'turmeric-dark',
+        automaticLayout: true,
+        lineNumbers: 'off',
+        glyphMargin: false,
+        folding: false,
+        lineDecorationsWidth: 0,
+        lineNumbersMinChars: 0,
+        minimap: { enabled: false },
+        overviewRulerLanes: 0,
+        overviewRulerBorder: false,
+        hideCursorInOverviewRuler: true,
+        renderLineHighlight: 'none',
+        scrollBeyondLastLine: false,
+        scrollBeyondLastColumn: 0,
+        wordWrap: 'off',
+        contextmenu: false,
+        fontFamily: 'var(--font-mono)',
+        fontSize: 12.5,
+        lineHeight: 20,
+        padding: { top: 1, bottom: 1 },
+        scrollbar: {
+            vertical: 'hidden',
+            horizontal: 'hidden',
+            handleMouseWheel: false,
+            alwaysConsumeMouseWheel: false,
+        },
+        overflowWidgetsDomNode: overlay,
+        fixedOverflowWidgets: true,
+        readOnly: wasmState !== WASM_STATE.READY,
+        quickSuggestions: { other: true, comments: false, strings: false },
+        suggestOnTriggerCharacters: true,
+        acceptSuggestionOnEnter: 'on',
+        tabCompletion: 'off',
+        parameterHints: { enabled: true },
+    });
 
-            if (code.startsWith(':')) {
-                appendToConsole(`<span class="console-prompt">turi&gt;</span> ${escapeHtml(code)}`);
-                await dispatchReplMetaCommand(code);
-            } else {
-                await executeCode(code, '<span class="console-prompt">turi&gt;</span>');
-            }
+    host.classList.toggle('repl-input-disabled', wasmState !== WASM_STATE.READY);
+    host.classList.add('repl-input-empty');
 
-            const consoleEl = document.getElementById('console');
-            if (consoleEl) consoleEl.scrollTop = consoleEl.scrollHeight;
+    const model = promptEditor.getModel();
 
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            if (replHistoryIndex < replHistory.length - 1) {
-                replHistoryIndex++;
-                input.value = replHistory[replHistoryIndex];
-            }
-        } else if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            if (replHistoryIndex > 0) {
-                replHistoryIndex--;
-                input.value = replHistory[replHistoryIndex];
-            } else {
-                replHistoryIndex = -1;
-                input.value = '';
-            }
+    promptEditor.onDidChangeModelContent(() => {
+        const v = model.getValue();
+        host.classList.toggle('repl-input-empty', v.length === 0);
+        // One line, always. A paste can carry newlines and Monaco will happily
+        // take them; the prompt submits a line, so it keeps one.
+        if (v.indexOf('\n') >= 0) {
+            const flat = v.replace(/\s*\n\s*/g, ' ');
+            promptEditor.setValue(flat);
+            promptEditor.setPosition({
+                lineNumber: 1,
+                column: model.getLineMaxColumn(1),
+            });
         }
     });
+
+    /* One handler, not several listeners.
+     *
+     * Enter submits, ArrowUp/ArrowDown walk history, and the suggest widget
+     * wants all three. With two listeners the behaviour depends on
+     * registration order, which a reader has to infer rather than read -- so
+     * every key that is contested is decided here, in one place, by asking
+     * whether the widget is open.
+     */
+    promptEditor.onKeyDown((e) => {
+        const widget = promptSuggestOpen();
+
+        if (e.keyCode === monaco.KeyCode.Enter && !e.shiftKey) {
+            if (widget) return;          // accept the highlighted suggestion
+            e.preventDefault();
+            e.stopPropagation();
+            promptSubmit();
+            return;
+        }
+        if (e.keyCode === monaco.KeyCode.UpArrow) {
+            if (widget) return;          // move within the list
+            e.preventDefault();
+            e.stopPropagation();
+            if (replHistoryIndex < replHistory.length - 1) {
+                replHistoryIndex++;
+                promptSetValue(replHistory[replHistoryIndex]);
+            }
+            return;
+        }
+        if (e.keyCode === monaco.KeyCode.DownArrow) {
+            if (widget) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (replHistoryIndex > 0) {
+                replHistoryIndex--;
+                promptSetValue(replHistory[replHistoryIndex]);
+            } else {
+                replHistoryIndex = -1;
+                promptSetValue('');
+            }
+            return;
+        }
+        if (e.keyCode === monaco.KeyCode.Escape) {
+            /* Dismissing a popup must not also close the docs pane or a menu.
+             * The page has document-level Escape handlers; Monaco's own
+             * dismissal happens on this same event, so the key is left to it
+             * and only the propagation is stopped. */
+            e.stopPropagation();
+            return;
+        }
+    });
+
+    /* W4: meta-command completion, on a `:` at the start of a line and nowhere
+     * else. A `:foo` mid-expression is a keyword literal and a map key
+     * (`#map{:name name}`), and offering the REPL's vocabulary there would be
+     * noise on top of the language completions that already fire. */
+    const metaProvider = {
+        triggerCharacters: [':', ' '],
+        provideCompletionItems(m, position) {
+            if (m !== model) return { suggestions: [] };
+            const upto = m.getLineContent(position.lineNumber)
+                          .slice(0, position.column - 1);
+
+            const typing = /^\s*(:[a-z-]*)$/.exec(upto);
+            if (typing) {
+                const word = m.getWordUntilPosition(position);
+                const range = {
+                    startLineNumber: position.lineNumber,
+                    endLineNumber: position.lineNumber,
+                    // The `:` is not a word character, so getWordUntilPosition
+                    // stops after it; the replacement has to start on it or
+                    // accepting a suggestion leaves `::doc`.
+                    startColumn: position.column - typing[1].length,
+                    endColumn: word.endColumn,
+                };
+                return {
+                    suggestions: REPL_META_COMMANDS.map(c => ({
+                        label: c.usage ? `${c.name} ${c.usage}` : c.name,
+                        kind: monaco.languages.CompletionItemKind.Keyword,
+                        insertText: c.arg ? c.name + ' ' : c.name,
+                        detail: c.summary,
+                        filterText: c.name,
+                        range,
+                    })),
+                };
+            }
+
+            /* Second context: `:doc ` and `:type ` take a symbol, so
+             * completion after them offers symbols rather than commands. One
+             * line of context test, reusing the doc table the panel already
+             * loaded. */
+            const withArg = /^\s*(:[a-z-]+)\s+(\S*)$/.exec(upto);
+            if (withArg) {
+                const spec = REPL_META_COMMANDS.find(c => c.name === withArg[1]);
+                if (!spec || (spec.arg !== 'sym' && spec.arg !== 'expr'))
+                    return { suggestions: [] };
+                const word = m.getWordUntilPosition(position);
+                const range = {
+                    startLineNumber: position.lineNumber,
+                    endLineNumber: position.lineNumber,
+                    startColumn: word.startColumn,
+                    endColumn: word.endColumn,
+                };
+                return {
+                    suggestions: (docNames || []).slice(0, 500).map(d => ({
+                        label: d.name,
+                        kind: monaco.languages.CompletionItemKind.Function,
+                        insertText: d.name,
+                        detail: d.summary ? String(d.summary).split('\n')[0] : undefined,
+                        range,
+                    })),
+                };
+            }
+            return { suggestions: [] };
+        },
+    };
+    monaco.languages.registerCompletionItemProvider('turmeric', metaProvider);
+
+    /* Test surface. A spec cannot type into Monaco through `fill()` and should
+     * not have to read the suggest widget's DOM to find out what was offered,
+     * so the prompt's own state and its providers' answers are reachable
+     * directly -- while Enter and the arrows still go through the real
+     * onKeyDown, which is the part worth covering. */
+    window._turiRepl = {
+        focus: () => promptEditor && promptEditor.focus(),
+        value: () => promptValue(),
+        setValue: (t) => promptSetValue(t),
+        submit: () => promptSubmit(),
+        suggestOpen: () => promptSuggestOpen(),
+        sessionSource: () => replSessionSource,
+        metaCompletions: (line) => {
+            promptSetValue(line);
+            const r = metaProvider.provideCompletionItems(model, {
+                lineNumber: 1,
+                column: model.getLineMaxColumn(1),
+            });
+            return (r && r.suggestions ? r.suggestions : []).map(x => x.label);
+        },
+        completions: async (line) => {
+            promptSetValue(line);
+            if (!lspClient) return [];
+            const r = await lspClient.completions(model, {
+                lineNumber: 1,
+                column: model.getLineMaxColumn(1),
+            });
+            return (r && r.suggestions ? r.suggestions : []).map(x => x.label);
+        },
+    };
+
+    /* W2: the prompt's own document. It is opened against the same session the
+     * editor's tabs are, which needs nothing from the server --
+     * lsp_session_handle is already document-keyed and already holds several
+     * documents at once. */
+    const attachPromptDoc = () => {
+        if (promptDoc || !lspClient) return;
+        promptDoc = lspClient.attachDocument({
+            model,
+            uri: REPL_DOC_URI,
+            getPrefix: () => replSessionSource,
+        });
+    };
+    promptEditor.onDidFocusEditorText(() => {
+        startLspClient().then(attachPromptDoc).catch(() => {});
+    });
+    if (lspClient) attachPromptDoc();
 }
 
 /**
@@ -2196,6 +3308,13 @@ function initEventListeners() {
             clearEditor();
         }
     });
+
+    // Back-from-definition button (M4). Hidden until the stack is non-empty.
+    document.getElementById('jump-back-btn')?.addEventListener('click', jumpBack);
+    renderJumpBack();
+
+    // Time-travel timeline (try-turmeric-tracer-plan T3).
+    traceInstallHandlers();
 
     // Format button
     document.getElementById('format-btn')?.addEventListener('click', formatCode);
@@ -2262,6 +3381,12 @@ function initEventListeners() {
         });
     }
 
+    // Symbols dropdown (the outline)
+    initSymbolsMenu();
+
+    // Language picker (dialect radio group + layer checkboxes)
+    initLangPicker();
+
     // Solve button
     document.getElementById('solve-btn')?.addEventListener('click', solveStep);
 
@@ -2287,6 +3412,9 @@ function initEventListeners() {
             if (solveItem && solveBtn) {
                 solveItem.hidden = solveBtn.style.display === 'none';
             }
+            // The minimap row's label *is* its state, so it has to be right
+            // before the menu is painted, not after the click that changes it.
+            syncMinimapMenuItem();
             moreMenu.hidden = false;
             moreBtn.setAttribute('aria-expanded', 'true');
             // Anchor below the button. position:fixed so the menu escapes
@@ -2302,6 +3430,15 @@ function initEventListeners() {
         moreMenu.addEventListener('click', (e) => {
             const item = e.target.closest('.more-item');
             if (!item) return;
+            // Stop here rather than letting the click reach document. Some
+            // rows forward to a button that opens another popover (Symbols),
+            // and the other popovers close themselves on any document click
+            // whose target is outside them -- which this one is. Without this,
+            // opening Symbols from the ⋯ menu opened and closed it in the same
+            // event. Nothing else needs the click at document level: the only
+            // listeners there close menus, and closeMenu() below does that
+            // for this one.
+            e.stopPropagation();
             const cmd = item.dataset.cmd;
             const example = item.dataset.example;
             const action = item.dataset.action;
@@ -2311,6 +3448,8 @@ function initEventListeners() {
                 loadExample(example);
             } else if (action === 'force-update') {
                 forceUpdatePWA();
+            } else if (action === 'toggle-minimap') {
+                toggleMinimap();
             }
             closeMenu();
         });
@@ -2336,17 +3475,25 @@ function initEventListeners() {
         }
     });
     
-    // Handle hash changes (for sharing)
-    window.addEventListener('hashchange', loadFromUrlHash);
+    // Handle hash changes (for sharing, and for #doc= docs deep links)
+    window.addEventListener('hashchange', () => {
+        loadFromUrlHash();
+        syncDocsPaneFromHash();
+    });
 
     // REPL input
     initReplInput();
+    initConsoleHover();
 
     // Horizontal drag-to-scroll on the editor header (mobile / narrow widths)
     initHScrollDrag();
 
     // Draggable editor/console split (horizontal on desktop, vertical on mobile)
     initSplitHandle();
+
+    // Minimap width gate + user toggle (M1). After initSplitHandle(), which
+    // restores the persisted split and therefore the editor's real width.
+    initMinimap();
 
     // PWA install affordances
     initInstallAffordances();
@@ -2365,7 +3512,25 @@ function initHScrollDragRow(el) {
     };
     updateOverflow();
     if (typeof ResizeObserver !== 'undefined') {
-        new ResizeObserver(updateOverflow).observe(el);
+        // The row's own box never changes when a button appears -- its width
+        // comes from the pane -- so observing only `el` misses the overflow
+        // that Solve or Back-from-definition unhiding creates. Watch the
+        // children too, and re-attach as the child list changes (tabs are
+        // re-rendered wholesale by renderTabs()).
+        const ro = new ResizeObserver(updateOverflow);
+        const observeChildren = () => {
+            ro.disconnect();
+            ro.observe(el);
+            for (const child of el.children) ro.observe(child);
+        };
+        observeChildren();
+        if (typeof MutationObserver !== 'undefined') {
+            new MutationObserver(() => {
+                observeChildren();
+                updateOverflow();
+            }).observe(el, { childList: true, attributes: true, subtree: true,
+                             attributeFilter: ['hidden', 'style'] });
+        }
     }
     window.addEventListener('resize', updateOverflow);
 
@@ -2423,6 +3588,370 @@ function initHScrollDragRow(el) {
 }
 
 // ============================================================================
+// Symbols outline (try-turmeric-navigation-and-minimap-plan, M2)
+//
+// Monaco standalone has no outline pane and no breadcrumbs -- those are VS
+// Code workbench features -- so the documentSymbol provider the adapter
+// registers has answered correctly since it landed with nothing reading it.
+// This is the surface.
+//
+// Two ways in, and they are not redundant. Ctrl/Cmd+Shift+O runs Monaco's own
+// quick-outline, which is a filterable palette and is already registered
+// (`editor.all.js` pulls standaloneGotoSymbolQuickAccess in); the button opens
+// this popover, which is a list you can look at without typing. The button is
+// also the only one of the two that is discoverable.
+// ============================================================================
+
+// What to call each SymbolKind out loud. c2mp's KIND_LABEL (symbols.js:752)
+// is the phrasing being copied: what you would say about the entry, not the
+// LSP enum name. Kinds the server does not currently emit are listed anyway,
+// because M5 widens the mapping and a missing row here would silently render
+// as the bare enum name.
+const SYMBOL_KIND_LABELS = {
+    Function:  'function',
+    Method:    'function',
+    Constructor: 'constructor',
+    Variable:  'value',
+    Constant:  'constant',
+    Struct:    'type',
+    Class:     'type',
+    Enum:      'type',
+    Interface: 'class',
+    Object:    'instance',
+    Operator:  'macro',
+    Module:    'module',
+    Namespace: 'module',
+    Field:     'field',
+    Property:  'field',
+    EnumMember: 'variant',
+    TypeParameter: 'type param',
+};
+
+function symbolKindLabel(kindName) {
+    return SYMBOL_KIND_LABELS[kindName] || (kindName || '').toLowerCase();
+}
+
+/**
+ * Which entry contains the caret.
+ *
+ * Ported from c2mp (symbols.js:775-795), rule and reasoning intact: the name
+ * wins when the caret is actually on one, otherwise the smallest containing
+ * range wins. Someone editing the middle of a function is not sitting on its
+ * name, and "where am I" is the entire point of the marker -- a rule that only
+ * matched names would go blank the moment you started typing.
+ *
+ * Returns an index into `symbols`, or -1.
+ */
+function currentSymbolIndex(symbols, position) {
+    if (!position) return -1;
+    const within = (r) => {
+        if (position.lineNumber < r.startLineNumber) return false;
+        if (position.lineNumber > r.endLineNumber) return false;
+        if (position.lineNumber === r.startLineNumber &&
+            position.column < r.startColumn) return false;
+        if (position.lineNumber === r.endLineNumber &&
+            position.column > r.endColumn) return false;
+        return true;
+    };
+    for (let i = 0; i < symbols.length; i++) {
+        if (within(symbols[i].selectionRange || symbols[i].range)) return i;
+    }
+    let best = -1;
+    let bestSpan = Infinity;
+    for (let i = 0; i < symbols.length; i++) {
+        const r = symbols[i].range;
+        if (!within(r)) continue;
+        const span = (r.endLineNumber - r.startLineNumber) * 100000 +
+                     (r.endColumn - r.startColumn);
+        if (span < bestSpan) { bestSpan = span; best = i; }
+    }
+    return best;
+}
+
+/** Move the caret to a symbol, with the same two calls onNavigate makes. */
+function jumpToSymbol(sym) {
+    if (!editor || !sym) return;
+    const r = sym.selectionRange || sym.range;
+    try {
+        editor.revealRangeInCenterIfOutsideViewport(r);
+        editor.setPosition({ lineNumber: r.startLineNumber, column: r.startColumn });
+        editor.focus();
+    } catch { /* model swapped underneath; nothing to navigate to */ }
+}
+
+/** Paint the list. `state` is 'ok' | 'empty' | 'unavailable' | 'loading'. */
+function renderSymbolsMenu(list, symbols, state) {
+    list.innerHTML = '';
+    if (state !== 'ok') {
+        const msg = document.createElement('div');
+        msg.className = 'symbols-empty';
+        // Three distinct sentences on purpose. An empty outline shown because
+        // analysis is down would say "this file defines nothing", which is a
+        // claim about the user's code made from a fact about our worker.
+        msg.textContent =
+            state === 'loading'      ? 'Reading symbols...' :
+            state === 'unavailable'  ? 'Analysis is unavailable.' :
+            state === 'read-only'    ? 'No outline for a stdlib buffer.' :
+                                       'Nothing defined yet';
+        list.appendChild(msg);
+        return;
+    }
+
+    const current = currentSymbolIndex(symbols, editor && editor.getPosition());
+    symbols.forEach((sym, i) => {
+        const row = document.createElement('button');
+        row.className = 'symbol-item' + (i === current ? ' is-current' : '');
+        row.setAttribute('role', 'menuitem');
+        if (i === current) row.setAttribute('aria-current', 'true');
+        const name = document.createElement('span');
+        name.className = 'symbol-item-name';
+        name.textContent = sym.name;
+        const kind = document.createElement('span');
+        kind.className = 'symbol-item-kind';
+        kind.textContent = symbolKindLabel(sym.kindName);
+        row.appendChild(name);
+        row.appendChild(kind);
+        row.addEventListener('click', () => {
+            jumpToSymbol(sym);
+            closeSymbolsMenu();
+        });
+        list.appendChild(row);
+    });
+}
+
+let closeSymbolsMenu = () => {};
+
+function initSymbolsMenu() {
+    const btn = document.getElementById('symbols-btn');
+    const menu = document.getElementById('symbols-menu');
+    const list = document.getElementById('symbols-list');
+    if (!btn || !menu || !list) return;
+
+    // Same reparent/anchor/outside-click pattern as Examples and the ⋯ menu.
+    if (menu.parentElement !== document.body) document.body.appendChild(menu);
+
+    const close = () => {
+        menu.hidden = true;
+        btn.setAttribute('aria-expanded', 'false');
+    };
+    closeSymbolsMenu = close;
+
+    const anchor = () => {
+        // Below 600px the toolbar collapses and #symbols-btn is display:none,
+        // so its rect is all zeros and the popover would land in the corner.
+        // Anchor to whichever button the user actually pressed -- the ⋯ menu
+        // forwards to this one via .click().
+        const more = document.getElementById('more-btn');
+        const el = btn.getBoundingClientRect().width > 0 ? btn : (more || btn);
+        const r = el.getBoundingClientRect();
+        menu.style.top = `${r.bottom + 4}px`;
+        menu.style.right = `${Math.max(4, window.innerWidth - r.right)}px`;
+    };
+
+    const open = async () => {
+        menu.hidden = false;
+        btn.setAttribute('aria-expanded', 'true');
+        anchor();
+
+        // Filled on open, never kept in sync. c2mp's reason (main.js:427)
+        // holds exactly: the buffer changes on every keystroke and this list
+        // is read once in a while.
+        if (!lspClient || !lspClient.isAvailable()) {
+            renderSymbolsMenu(list, [], 'unavailable');
+            return;
+        }
+        // A stdlib buffer is not an open document as far as the server is
+        // concerned (see getTabs in startLspClient), so documentSymbol would
+        // come back empty -- and "Nothing defined yet" about list.tur is a
+        // false statement, not a degraded one.
+        const active = currentTab();
+        if (active && active.readOnly) {
+            renderSymbolsMenu(list, [], 'read-only');
+            return;
+        }
+        renderSymbolsMenu(list, [], 'loading');
+        let symbols = [];
+        try {
+            symbols = await lspClient.documentSymbols(editor.getModel()) || [];
+        } catch {
+            renderSymbolsMenu(list, [], 'unavailable');
+            return;
+        }
+        if (menu.hidden) return;   // closed while the request was in flight
+        // Position order, not collection order: an outline that does not match
+        // the file it describes is harder to use than no outline.
+        symbols.sort((a, b) =>
+            (a.range.startLineNumber - b.range.startLineNumber) ||
+            (a.range.startColumn - b.range.startColumn));
+        renderSymbolsMenu(list, symbols, symbols.length ? 'ok' : 'empty');
+    };
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (menu.hidden) open(); else close();
+    });
+
+    // Hand off to Monaco's filterable palette. The action has been in the
+    // bundle since the page started importing the full `editor.api` entry;
+    // nothing ever pointed at it. If a future Monaco drops it, the row goes
+    // away rather than becoming a button that does nothing.
+    const filterRow = document.getElementById('symbols-filter');
+    if (filterRow) {
+        const action = () => (editor ? editor.getAction('editor.action.quickOutline') : null);
+        if (!action()) {
+            filterRow.remove();
+        } else {
+            filterRow.addEventListener('click', (e) => {
+                e.stopPropagation();
+                close();
+                try {
+                    editor.focus();
+                    action().run();
+                } catch { /* palette unavailable; the list above still works */ }
+            });
+        }
+    }
+
+    document.addEventListener('click', (e) => {
+        if (!menu.hidden && !menu.contains(e.target) && !btn.contains(e.target)) {
+            close();
+        }
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !menu.hidden) close();
+    });
+
+    // Test surface: a spec should read the rendered rows, but asserting on the
+    // caret rule wants the rule's own answer rather than a DOM scrape.
+    window._turiOutline = {
+        open: () => open(),
+        close: () => close(),
+        rows: () => Array.from(list.querySelectorAll('.symbol-item')).map(el => ({
+            name: el.querySelector('.symbol-item-name')?.textContent || '',
+            kind: el.querySelector('.symbol-item-kind')?.textContent || '',
+            current: el.classList.contains('is-current'),
+        })),
+        state: () => (list.querySelector('.symbols-empty')?.textContent || 'ok'),
+    };
+}
+
+// ============================================================================
+// Minimap (try-turmeric-navigation-and-minimap-plan, M1)
+//
+// Two inputs decide whether the strip is showing: an explicit user choice,
+// and how wide the editor actually is. The user's choice wins outright; the
+// width gate only speaks when they have not made one.
+//
+// The gate is on *measured editor width*, not a media query, because the
+// split handle can make the editor 300px wide on a 1920px desktop -- and a
+// minimap on a 300px editor is a fifth of the code column showing three
+// characters of shape.
+// ============================================================================
+
+// Below this many pixels of editor width the strip costs more column than it
+// pays back. Roughly: 80 columns of Iosevka at 13px plus the gutter is around
+// 600px, so this is "the code no longer fits comfortably beside it".
+const MINIMAP_MIN_WIDTH = 600;
+
+/** The user's explicit choice, or null when they have never made one. */
+function minimapPreference() {
+    const stored = safeRead(STORAGE_KEYS.minimap);
+    return typeof stored === 'boolean' ? stored : null;
+}
+
+/** What the strip should be doing right now, given preference and width. */
+function minimapShouldBeOn() {
+    const pref = minimapPreference();
+    if (pref !== null) return pref;
+    if (!editor) return false;
+    let width = 0;
+    try {
+        width = editor.getLayoutInfo().width;
+    } catch {
+        return false;
+    }
+    // A layout that has not happened yet reports 0. Treat that as "not narrow"
+    // rather than "narrow": the next layout pass re-runs this, and starting
+    // wide-then-narrowing is less jarring than the reverse.
+    return width === 0 || width >= MINIMAP_MIN_WIDTH;
+}
+
+/**
+ * Push the current decision into the editor.
+ *
+ * Everything this touches is wrapped: the failure contract from c2mp
+ * (minimap.js:342) is that a decoration which fails removes itself rather
+ * than degrading the editor. Monaco's minimap is a supported component and is
+ * not expected to throw, but the gate, the toggle, and the theme extension are
+ * ours -- and if any of them throws, the playground must keep working.
+ */
+function applyMinimapPreference() {
+    if (!editor) return;
+    try {
+        editor.updateOptions({ minimap: { enabled: minimapShouldBeOn() } });
+    } catch (err) {
+        console.warn('Try Turmeric: minimap update failed', err);
+    }
+    syncMinimapMenuItem();
+}
+
+/** Reflect the current state in the More menu's toggle row. */
+function syncMinimapMenuItem() {
+    const item = document.querySelector('[data-action="toggle-minimap"]');
+    if (!item) return;
+    let on = false;
+    try {
+        on = !!editor && !!editor.getOption(monaco.editor.EditorOption.minimap).enabled;
+    } catch {
+        on = minimapShouldBeOn();
+    }
+    item.setAttribute('aria-checked', on ? 'true' : 'false');
+    item.textContent = on ? 'Hide minimap' : 'Show minimap';
+}
+
+/** Flip the strip and remember the choice, which from now on beats the gate. */
+function toggleMinimap() {
+    if (!editor) return;
+    let on = false;
+    try {
+        on = !!editor.getOption(monaco.editor.EditorOption.minimap).enabled;
+    } catch {
+        on = minimapShouldBeOn();
+    }
+    safeWrite(STORAGE_KEYS.minimap, !on);
+    applyMinimapPreference();
+}
+
+function initMinimap() {
+    applyMinimapPreference();
+    // Re-evaluate wherever the editor can change width. The split handle calls
+    // applyMinimapPreference() from applySplit(); this covers the window and
+    // anything else that resizes the pane (the docs overlay, the on-screen
+    // keyboard, a rotated phone).
+    if (typeof ResizeObserver !== 'undefined') {
+        const host = document.getElementById('editor');
+        if (host) {
+            try {
+                new ResizeObserver(() => applyMinimapPreference()).observe(host);
+            } catch { /* older engine; the resize listener below still fires */ }
+        }
+    }
+    window.addEventListener('resize', () => applyMinimapPreference());
+
+    // Test surface: a spec should assert what the editor is actually doing,
+    // not re-derive it from localStorage.
+    window._turiMinimap = {
+        enabled: () => {
+            try {
+                return !!editor.getOption(monaco.editor.EditorOption.minimap).enabled;
+            } catch { return false; }
+        },
+        preference: () => minimapPreference(),
+        toggle: () => toggleMinimap(),
+    };
+}
+
+// ============================================================================
 // Draggable Split Handle (editor / console)
 // ============================================================================
 
@@ -2440,7 +3969,14 @@ function applySplit(fraction, vertical) {
     const f = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, fraction));
     container.style.setProperty(vertical ? '--split-v' : '--split-h', String(f));
     if (editor) {
-        requestAnimationFrame(() => { try { editor.layout(); } catch {} });
+        requestAnimationFrame(() => {
+            try { editor.layout(); } catch {}
+            // The split is the one thing that can make the editor narrow on a
+            // desktop, so the width gate is re-evaluated from here as well as
+            // from the ResizeObserver -- layout() is synchronous, the observer
+            // is not, and a gate that lags a drag by a frame reads as a bug.
+            applyMinimapPreference();
+        });
     }
 }
 
@@ -2769,12 +4305,55 @@ if (document.readyState === 'loading') {
     init();
 }
 
-// Register the service worker after the page settles. Scope `/` so the
-// origin-wide kill-switch and runtime caching can target docs paths too.
-if ('serviceWorker' in navigator) {
+/* The service worker is a production feature, and on a dev server it is
+ * actively harmful.
+ *
+ * sw.js falls through to cache-first for same-origin static assets, and its
+ * precache names `/main.js` and `/styles.css` -- which on a dev server are the
+ * files you are editing. So a worker installed by one `npm run dev` session
+ * keeps serving that session's JS and CSS to every later one: the page comes up
+ * unstyled, or running code you changed an hour ago, and the only way out is a
+ * hard reload every single time.
+ *
+ * On a loopback host we therefore tear the worker down instead of registering
+ * it. `?sw=1` opts back in, which is how the PWA and offline-docs specs still
+ * exercise the real thing. */
+const SW_LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '']);
+const swDevDisabled = SW_LOOPBACK_HOSTS.has(location.hostname) &&
+                      !new URLSearchParams(location.search).has('sw');
+
+if ('serviceWorker' in navigator && !swDevDisabled) {
+    // Register after the page settles. Scope `/` so the origin-wide
+    // kill-switch and runtime caching can target docs paths too.
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js', { scope: '/' })
             .catch((err) => console.warn('SW registration failed:', err));
+    });
+} else if ('serviceWorker' in navigator) {
+    window.addEventListener('load', async () => {
+        try {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            // Nothing installed is the steady state, and returning here is what
+            // makes the reload below safe: after one teardown there are no
+            // registrations left, so the next load cannot reload again.
+            if (!regs.length) return;
+
+            const wasControlled = !!navigator.serviceWorker.controller;
+            await Promise.all(regs.map((r) => r.unregister()));
+            if ('caches' in window) {
+                const keys = await caches.keys();
+                await Promise.all(keys.map((k) => caches.delete(k)));
+            }
+            console.info('Service worker disabled on localhost (append ?sw=1 to keep it).');
+
+            // This page load was served BY the worker just removed, so what is
+            // on screen is the stale copy. Reload once to get the real files --
+            // otherwise the fix appears not to have worked until a manual
+            // reload, which is the thing being fixed.
+            if (wasControlled) window.location.reload();
+        } catch (err) {
+            console.warn('SW teardown failed:', err);
+        }
     });
 }
 
@@ -2802,6 +4381,17 @@ async function forceUpdatePWA() {
         console.warn('Force update failed:', err);
     }
     // Reload from the network now that no SW/cache can serve stale assets.
+    hardReload();
+}
+
+/**
+ * Reload the page.  The one indirection exists for the smoke test: current
+ * Chromium makes `location.reload` non-configurable, so a test cannot stub
+ * it -- it installs `window.__turiReload` instead and observes the intent
+ * without navigating away.
+ */
+function hardReload() {
+    if (typeof window.__turiReload === 'function') { window.__turiReload(); return; }
     window.location.reload();
 }
 
@@ -2815,20 +4405,32 @@ let docNames = [];
 /**
  * Fetch the doc name list and set up the search bar.
  */
+let docNamesPromise = null;
+
 async function fetchDocNames() {
-    try {
-        const res = await fetch('/doc-names.json');
-        if (!res.ok) {
-            console.error('Failed to fetch doc-names.json:', res.status, res.statusText);
-            return;
+    // Idempotent. The WASM boot calls this, and so does the docs pane -- which
+    // needs the symbol list for its search but has no reason to wait on (or be
+    // lost to) a WASM boot that is slow or never completes. doc-names.json is
+    // a static file; nothing about it depends on the runtime.
+    if (docNamesPromise) return docNamesPromise;
+    docNamesPromise = (async () => {
+        try {
+            const res = await fetch('/doc-names.json');
+            if (!res.ok) {
+                console.error('Failed to fetch doc-names.json:', res.status, res.statusText);
+                docNamesPromise = null;
+                return;
+            }
+            docNames = await res.json();
+            console.log('docNames loaded successfully. Length:', docNames.length);
+            initDocSearch();
+        } catch (err) {
+            console.error('Error fetching doc-names.json:', err);
+            docNamesPromise = null;
+            // Non-fatal — search bar stays empty
         }
-        docNames = await res.json();
-        console.log('docNames loaded successfully. Length:', docNames.length);
-        initDocSearch();
-    } catch (err) {
-        console.error('Error fetching doc-names.json:', err);
-        // Non-fatal — search bar stays empty
-    }
+    })();
+    return docNamesPromise;
 }
 
 /**
@@ -2999,6 +4601,45 @@ function wasmExplain(code) {
     });
 }
 
+/* ---------------------------------------------------------------------------
+ * W4: one table, three consumers
+ *
+ * The meta-command vocabulary was about to exist in three places -- the
+ * dispatch chain, the hand-written `:help` text, and (once the prompt could
+ * complete) a suggestion list. Three copies is how the help text and the
+ * switch quietly stop agreeing about what the REPL can do.
+ *
+ * `arg` says what a command takes, which is also the completion context: a
+ * command taking 'sym' offers symbols after the space, one taking nothing
+ * offers nothing.
+ * ------------------------------------------------------------------------ */
+const REPL_META_COMMANDS = [
+    { name: ':help',    arg: null,     usage: '',        summary: 'show this help text' },
+    { name: ':type',    arg: 'expr',   usage: '<expr>',  summary: 'print inferred type without evaluating' },
+    { name: ':doc',     arg: 'sym',    usage: '<sym>',   summary: 'print builtin/standard operator documentation' },
+    { name: ':docs',    arg: 'page',   usage: '[page]',  summary: 'open the docs browser (guides + API), offline-ready' },
+    { name: ':reset',   arg: null,     usage: '',        summary: 'clear session and start fresh' },
+    { name: ':explain', arg: 'code',   usage: '[code]',  summary: 'explain the most recent error, or a TUR-E#### code' },
+    { name: ':trace',   arg: null,     usage: '',        summary: 'record this program and open the time-travel timeline' },
+];
+
+/* Rendered from the table, aligned on the widest label -- so adding a command
+ * cannot leave the column crooked, which is the failure mode a hand-written
+ * block has and a generated one cannot. */
+function replHelpText() {
+    const labels = REPL_META_COMMANDS.map(c =>
+        c.usage ? `${c.name} ${c.usage}` : c.name);
+    const width = labels.reduce((w, l) => Math.max(w, l.length), 0);
+    const rows = REPL_META_COMMANDS.map((c, i) =>
+        `  ${labels[i].padEnd(width)}  ${c.summary}`);
+    return 'Turmeric REPL Help\n' +
+           '------------------\n' +
+           rows.join('\n') + '\n' +
+           '\n' +
+           'Multi-line input: keep typing when parentheses are open;\n' +
+           '  an empty line to cancel an incomplete expression.';
+}
+
 /**
  * Dispatch web REPL meta-commands locally.
  */
@@ -3008,18 +4649,11 @@ async function dispatchReplMetaCommand(line) {
     const arg = parts.slice(1).join(' ').trim();
 
     if (cmd === ':help') {
-        const helpText = 
-            'Turmeric REPL Help\n' +
-            '------------------\n' +
-            '  :help               show this help text\n' +
-            '  :type <expr>        print inferred type without evaluating\n' +
-            '  :doc  <sym>         print builtin/standard operator documentation\n' +
-            '  :reset              clear session and start fresh\n' +
-            '  :explain [code]     explain the most recent error, or a TUR-E#### code\n' +
-            '\n' +
-            'Multi-line input: keep typing when parentheses are open;\n' +
-            '  an empty line to cancel an incomplete expression.';
-        appendToConsole(`<pre class="console-output" style="margin:0">${escapeHtml(helpText)}</pre>`);
+        appendToConsole(
+            `<pre class="console-output" style="margin:0">${escapeHtml(replHelpText())}</pre>`);
+
+    } else if (cmd === ':trace') {
+        await traceCode();
 
     } else if (cmd === ':doc') {
         if (!arg) {
@@ -3037,6 +4671,27 @@ async function dispatchReplMetaCommand(line) {
                 appendToConsole(`<span class="console-output">no documentation for \'${escapeHtml(arg)}\'</span>`);
             }
         }
+
+    } else if (cmd === ':docs') {
+        // `:docs` opens the browser at its last location; `:docs <page>` jumps
+        // straight to one. A bare slug is resolved against guides first, then
+        // API modules, so `:docs hkt-guide` and `:docs tur-list` both work
+        // without the reader knowing the pack's section layout.
+        await loadDocsIndex();
+        let ref;
+        if (arg) {
+            const candidates = arg.includes('/')
+                ? [arg]
+                : [`guides/${arg}`, `guides/${arg}-guide`, `api/${arg}`, `spices/${arg}`];
+            ref = candidates.find(c => docsEntryFor(parseDocsRef(c).ref));
+            if (!ref) {
+                appendToConsole(
+                    `<span class="console-error">no documentation page '${escapeHtml(arg)}'`
+                    + ' -- open :docs and search</span>');
+                return;
+            }
+        }
+        openDocsPane(ref);
 
     } else if (cmd === ':type') {
         if (!arg) {
@@ -3140,6 +4795,618 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('close-doc-btn')?.addEventListener('click', hideDocPanel);
 });
 
+// ============================================================================
+// In-app docs browser (OD2)
+//
+// Reads the docs pack -- chrome-free fragments plus index.json, emitted by the
+// same generators that build turmeric-lang.com/docs/html/ -- and renders it
+// over the REPL. Nothing here navigates: the editor buffer, console history,
+// and WASM session all survive a docs session untouched, which is the whole
+// point of embedding rather than linking out.
+//
+// The pack is precached by the service worker (OD3), so every fetch below is
+// expected to hit the cache when offline.
+// ============================================================================
+
+const DOCS_PACK_BASE = '/docs-pack';
+
+let docsIndex = null;          // parsed index.json, once
+let docsIndexPromise = null;   // in-flight load, so concurrent opens share one
+let docsCurrentRef = null;     // e.g. 'guides/hkt-guide'
+let docsNavCollapsed = false;
+/**
+ * Where you were in each page you have read this session, keyed by ref.
+ *
+ * Per-ref rather than one global offset on purpose: the pane is a browser over
+ * many pages, so coming back to guide A must not restore guide B's offset.
+ * Session-scoped in memory -- surviving a reload is not worth a STORAGE_KEYS
+ * entry for something this cheap to re-establish by scrolling.
+ */
+const docsScrollByRef = new Map();
+
+/**
+ * Assign scrollTop without the smooth animation `.docs-article` sets in CSS.
+ *
+ * Restoring a remembered offset under `scroll-behavior: smooth` glides down
+ * the page on every reopen, which reads as the pane scrolling by itself rather
+ * than as returning you to your place.
+ */
+function docsSetScroll(article, top) {
+    try {
+        article.scrollTo({ top, behavior: 'instant' });
+    } catch {
+        // 'instant' is not universally accepted by scrollTo's options form;
+        // the plain assignment still lands, it just animates.
+        article.scrollTop = top;
+    }
+}
+
+/**
+ * Record where the article column is scrolled to for the page it is showing.
+ *
+ * Refuses to record while the pane is closed. A hidden element reports
+ * scrollTop 0, so a `scroll` callback still queued when the overlay went
+ * display:none would overwrite the offset closeDocsPane had just banked --
+ * with exactly the value the restore is supposed to avoid.
+ */
+function rememberDocsScroll() {
+    const article = document.getElementById('docs-article');
+    if (!article || !docsCurrentRef || !docsPaneIsOpen()) return;
+    docsScrollByRef.set(docsCurrentRef, article.scrollTop);
+}
+
+/**
+ * Fetch and cache the pack manifest. Resolves to null when the pack is absent
+ * (a dev server that never ran `just docs`), which the pane reports rather
+ * than failing silently.
+ */
+function loadDocsIndex() {
+    if (docsIndex) return Promise.resolve(docsIndex);
+    if (docsIndexPromise) return docsIndexPromise;
+    docsIndexPromise = (async () => {
+        try {
+            const res = await fetch(`${DOCS_PACK_BASE}/index.json`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            docsIndex = await res.json();
+            return docsIndex;
+        } catch (err) {
+            console.warn('docs pack unavailable:', err);
+            docsIndexPromise = null;
+            return null;
+        }
+    })();
+    return docsIndexPromise;
+}
+
+/** All pack pages as one flat list of {ref, title, description, words, kind}. */
+function docsAllPages() {
+    if (!docsIndex) return [];
+    const out = [];
+    for (const g of docsIndex.guides || []) {
+        out.push({ ref: `guides/${g.slug}`, title: g.title, kind: 'guide',
+                   category: g.category, description: g.description, words: g.words });
+    }
+    for (const m of docsIndex.api || []) {
+        out.push({ ref: `api/${m.slug}`, title: m.title, kind: 'module',
+                   category: m.category, description: m.description, words: m.words });
+    }
+    for (const s of docsIndex.spices || []) {
+        out.push({ ref: `spices/${s.slug}`, title: s.title, kind: 'spice',
+                   category: s.category, description: s.description, words: s.words });
+    }
+    return out;
+}
+
+/** Look up the manifest entry for a pack ref (no #fragment). */
+function docsEntryFor(ref) {
+    return docsAllPages().find(p => p.ref === ref) || null;
+}
+
+/**
+ * Split a `#doc=` value into its page ref and in-page anchor.
+ * 'guides/hkt-guide#kinds' -> { ref: 'guides/hkt-guide', anchor: 'kinds' }
+ */
+function parseDocsRef(value) {
+    if (!value) return { ref: null, anchor: null };
+    const hashAt = value.indexOf('#');
+    if (hashAt === -1) return { ref: value, anchor: null };
+    return { ref: value.slice(0, hashAt), anchor: value.slice(hashAt + 1) };
+}
+
+/**
+ * The URL hash as an ordered list of [key, value] pairs.
+ *
+ * `key=value&key=value`, the shape the share feature already used for
+ * `#code=<compressed>` -- but parsed by hand rather than with URLSearchParams,
+ * because a docs deep link should read `#doc=guides/hkt-guide`, not
+ * `#doc=guides%2Fhkt-guide`. Values are written literally and only `&` and `%`
+ * are escaped; neither of our two values (url-safe base64 for `code`, a slug
+ * path for `doc`) contains either, so in practice the hash stays plain text.
+ */
+function parseHashPairs() {
+    const raw = window.location.hash.slice(1);
+    if (!raw) return [];
+    return raw.split('&').filter(Boolean).map(part => {
+        const eq = part.indexOf('=');
+        const key = eq === -1 ? part : part.slice(0, eq);
+        const value = eq === -1 ? '' : part.slice(eq + 1);
+        return [key, value.replace(/%26/gi, '&').replace(/%25/g, '%')];
+    });
+}
+
+/**
+ * Merge a key into the URL hash without disturbing the others.
+ *
+ * The share feature writes `code`; the docs pane writes `doc`. A shared link
+ * that also points at a guide round-trips, and neither key clobbers the other.
+ * Passing null removes the key.
+ */
+function setHashParam(key, value) {
+    const pairs = parseHashPairs().filter(([k]) => k !== key);
+    if (value !== null && value !== undefined) {
+        pairs.push([key, String(value).replace(/%/g, '%25').replace(/&/g, '%26')]);
+    }
+    const next = pairs.map(([k, v]) => (v === '' ? k : `${k}=${v}`)).join('&');
+    // replaceState, not `location.hash =`: a docs navigation should not push a
+    // history entry per page, and it must not fire our own hashchange handler.
+    const url = `${window.location.pathname}${window.location.search}${next ? '#' + next : ''}`;
+    window.history.replaceState(null, '', url);
+}
+
+function getHashParam(key) {
+    const hit = parseHashPairs().find(([k]) => k === key);
+    return hit ? hit[1] : null;
+}
+
+/** Group pack pages by category, preserving 'Other'/'core' last. */
+function docsGroupByCategory(pages) {
+    const groups = new Map();
+    for (const p of pages) {
+        const key = p.category || 'Other';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(p);
+    }
+    const names = [...groups.keys()].sort((a, b) => {
+        const rank = (n) => (n === 'core' ? -1 : n === 'Other' ? 1 : 0);
+        return rank(a) - rank(b) || a.localeCompare(b);
+    });
+    return names.map(name => ({ name, pages: groups.get(name) }));
+}
+
+function docsNavSection(label, groups) {
+    let html = `<div class="docs-nav-section"><h4>${escapeHtml(label)}</h4>`;
+    for (const g of groups) {
+        html += `<details class="docs-nav-group"><summary>${escapeHtml(g.name)}</summary><ul>`;
+        for (const p of g.pages) {
+            html += `<li><a href="#doc=${escapeHtml(p.ref)}" data-doc-ref="${escapeHtml(p.ref)}"`
+                 +  ` title="${escapeHtml(p.description || '')}">${escapeHtml(p.title)}</a></li>`;
+        }
+        html += '</ul></details>';
+    }
+    return html + '</div>';
+}
+
+/** Render the full nav tree (guides by category, API by group, spices). */
+function renderDocsNav() {
+    const nav = document.getElementById('docs-nav');
+    if (!nav) return;
+    if (!docsIndex) {
+        nav.innerHTML = '<p class="docs-empty">Documentation pack not found. '
+                      + 'Run <code>just docs</code> to build it.</p>';
+        return;
+    }
+    const pages = docsAllPages();
+    let html = '';
+    const guides = pages.filter(p => p.kind === 'guide');
+    const modules = pages.filter(p => p.kind === 'module');
+    const spices = pages.filter(p => p.kind === 'spice');
+    if (guides.length) html += docsNavSection('Guides', docsGroupByCategory(guides));
+    if (modules.length) html += docsNavSection('API', docsGroupByCategory(modules));
+    // Spices only appear when this build actually carries their pages, so the
+    // nav never offers a link the pack cannot serve offline.
+    if (spices.length) html += docsNavSection('Spices', docsGroupByCategory(spices));
+    nav.innerHTML = html;
+    markDocsNavActive();
+}
+
+function markDocsNavActive() {
+    const nav = document.getElementById('docs-nav');
+    if (!nav) return;
+    nav.querySelectorAll('a[data-doc-ref]').forEach(a => {
+        const active = a.dataset.docRef === docsCurrentRef;
+        a.classList.toggle('active', active);
+        if (active) {
+            a.closest('details')?.setAttribute('open', '');
+            a.scrollIntoView({ block: 'nearest' });
+        }
+    });
+}
+
+/**
+ * Render search results into the nav column.
+ *
+ * One box, two result kinds. Pages come from index.json's `words` blob; symbols
+ * come from the doc-names.json the panel already uses, and selecting one routes
+ * to the existing docstring panel rather than duplicating it here.
+ */
+function renderDocsSearch(query) {
+    const nav = document.getElementById('docs-nav');
+    if (!nav) return;
+    const q = query.trim().toLowerCase();
+    if (!q) { renderDocsNav(); return; }
+
+    const pages = docsAllPages()
+        .map(p => ({ p, score: docsScore(p, q) }))
+        .filter(x => x.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 40);
+
+    const symbols = (docNames || [])
+        .filter(d => d.name.toLowerCase().includes(q))
+        .slice(0, 25);
+
+    let html = '';
+    if (pages.length) {
+        html += '<div class="docs-nav-section"><h4>Pages</h4><ul class="docs-results">';
+        for (const { p } of pages) {
+            html += `<li><a href="#doc=${escapeHtml(p.ref)}" data-doc-ref="${escapeHtml(p.ref)}">`
+                 +  `<span class="docs-result-title">${escapeHtml(p.title)}</span>`
+                 +  `<span class="docs-result-kind">${escapeHtml(p.kind)}</span>`
+                 +  `<span class="docs-result-desc">${escapeHtml(p.description || '')}</span>`
+                 +  '</a></li>';
+        }
+        html += '</ul></div>';
+    }
+    if (symbols.length) {
+        html += '<div class="docs-nav-section"><h4>Symbols</h4><ul class="docs-results">';
+        for (const s of symbols) {
+            const short = s.summary.replace(/^[\w/\-!?*+<>]+\s+--\s+/, '');
+            html += `<li><a href="#" data-doc-symbol="${escapeHtml(s.name)}">`
+                 +  `<span class="docs-result-title">${escapeHtml(s.name)}</span>`
+                 +  `<span class="docs-result-kind">${escapeHtml(s.kind)}</span>`
+                 +  `<span class="docs-result-desc">${escapeHtml(short)}</span>`
+                 +  '</a></li>';
+        }
+        html += '</ul></div>';
+    }
+    nav.innerHTML = html || '<p class="docs-empty">No matches.</p>';
+}
+
+/** Rank a page against a query: title hits beat description hits beat body. */
+function docsScore(page, q) {
+    const title = (page.title || '').toLowerCase();
+    if (title === q) return 100;
+    if (title.includes(q)) return 50;
+    if ((page.description || '').toLowerCase().includes(q)) return 20;
+    if ((page.words || '').includes(q)) return 5;
+    return 0;
+}
+
+/**
+ * Fetch a pack fragment and render it into the article column.
+ *
+ * `ref` is a pack-relative page id, optionally with an in-page anchor:
+ * 'guides/hkt-guide', 'api/tur-list#map', 'spices/json'.
+ */
+async function showDocsPage(refWithAnchor, { updateHash = true } = {}) {
+    const article = document.getElementById('docs-article');
+    if (!article) return;
+    const { ref, anchor } = parseDocsRef(refWithAnchor);
+    if (!ref) return;
+
+    // Leaving the page you are on: bank its offset before the fragment is
+    // replaced, so navigating away and back returns you to your place.
+    if (docsCurrentRef && docsCurrentRef !== ref) rememberDocsScroll();
+
+    const entry = docsEntryFor(ref);
+    if (!entry) {
+        article.innerHTML = `<p class="docs-empty">No page <code>${escapeHtml(ref)}</code> `
+                          + 'in this documentation pack.</p>';
+        return;
+    }
+
+    article.setAttribute('aria-busy', 'true');
+    try {
+        const res = await fetch(`${DOCS_PACK_BASE}/${ref}.html`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        article.innerHTML = await res.text();
+    } catch (err) {
+        article.innerHTML = '<p class="docs-empty">This page is not available offline yet. '
+                          + 'Reconnect once and it will be cached for good.</p>';
+        console.warn('docs fragment fetch failed:', ref, err);
+        article.removeAttribute('aria-busy');
+        return;
+    }
+    article.removeAttribute('aria-busy');
+
+    docsCurrentRef = ref;
+    decorateDocsArticle(article);
+    markDocsNavActive();
+    if (updateHash) setHashParam('doc', refWithAnchor);
+
+    const siteLink = document.getElementById('docs-site-link');
+    if (siteLink) siteLink.href = docsSiteUrl(ref);
+
+    // Anchor scrolling has to wait for the fragment to be in the document --
+    // and so does restoring an offset, since the element is not tall enough to
+    // accept one until its content is there.
+    //
+    // Precedence: an explicit anchor always wins (you asked for that heading),
+    // then a remembered offset for this page, then the top for a page opened
+    // for the first time. A remembered offset can outlive the content it
+    // pointed into if the pack updated between visits; the browser clamps it
+    // to the scrollable range, which is the right behaviour, so it just does
+    // not round-trip exactly.
+    if (anchor) {
+        const target = article.querySelector(`#${CSS.escape(anchor)}`);
+        if (target) { target.scrollIntoView({ block: 'start' }); return; }
+    }
+    docsSetScroll(article, docsScrollByRef.get(ref) || 0);
+}
+
+/** The turmeric-lang.com URL for a pack ref, for the "open on the site" link. */
+function docsSiteUrl(ref) {
+    const [section, ...rest] = ref.split('/');
+    const slug = rest.join('/');
+    if (section === 'guides') return `/docs/html/guides/${slug}.html`;
+    if (section === 'api') return `/docs/html/api/${slug}.html`;
+    if (section === 'spices') return `/docs/html/spices/${slug}/`;
+    return '/docs/html/guides/';
+}
+
+/**
+ * Post-process a freshly rendered fragment: syntax highlighting, the
+ * turmeric/sweet-exp toggles, and a "load into editor" affordance on every
+ * runnable code block.
+ *
+ * The first two come from window.turmericGuide, which /docs-pack/guide.js
+ * defines -- the same code the site's guide pages run, so highlighting and
+ * toggles behave identically in both places.
+ */
+function decorateDocsArticle(article) {
+    if (window.turmericGuide) {
+        window.turmericGuide.highlightGuideCode(article);
+        window.turmericGuide.initSyntaxToggles(article);
+    }
+    article.querySelectorAll('pre').forEach(pre => {
+        const code = pre.querySelector('code.language-turmeric, code.language-sweet-exp');
+        if (!code || pre.querySelector('.docs-load-btn')) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'docs-load-btn';
+        btn.textContent = 'Load into editor';
+        btn.title = 'Replace the editor buffer with this snippet';
+        btn.addEventListener('click', () => {
+            loadSnippetIntoEditor(code.textContent);
+            btn.textContent = 'Loaded';
+            setTimeout(() => { btn.textContent = 'Load into editor'; }, 1400);
+        });
+        pre.appendChild(btn);
+    });
+}
+
+/** Put a guide snippet in the editor and close the docs pane so it is visible. */
+function loadSnippetIntoEditor(source) {
+    if (!editor) return;
+    editor.setValue(source.replace(/\s+$/, '') + '\n');
+    closeDocsPane();
+    editor.focus();
+    if (typeof showStatus === 'function') showStatus('Snippet loaded into the editor', 'info');
+}
+
+/**
+ * Report offline readiness from the pack-status the service worker writes
+ * during install (OD3). Says nothing when the pack is complete -- a working
+ * guarantee does not need announcing; a partial one does.
+ */
+async function refreshDocsStatus() {
+    const el = document.getElementById('docs-status');
+    if (!el) return;
+    el.textContent = '';
+    el.className = 'docs-status';
+    try {
+        const res = await fetch('/docs-pack/pack-status');
+        if (!res.ok) return;
+        const status = await res.json();
+        if (!status || typeof status.cached !== 'number') return;
+        if (status.cached < status.expected) {
+            el.textContent = `${status.cached} of ${status.expected} pages cached -- reconnect to finish`;
+            el.classList.add('partial');
+            // Ask the worker to top up now rather than waiting for a release.
+            // An install is per-URL failure-tolerant, so a flaky first load can
+            // leave the pack short; a guarantee that silently waits a version
+            // bump to come true is not a guarantee.
+            if (navigator.onLine) {
+                navigator.serviceWorker?.controller?.postMessage('REPAIR_DOCS_PACK');
+            }
+        }
+    } catch {
+        // No service worker (dev server, or a browser with SW disabled). The
+        // pane still works online; there is nothing useful to report.
+    }
+}
+
+function openDocsPane(refWithAnchor) {
+    const overlay = document.getElementById('docs-overlay');
+    if (!overlay) return;
+    overlay.style.display = 'flex';
+    document.body.classList.add('docs-open');
+
+    // On a phone the nav column would cover the page it navigates to, so open
+    // onto the article and leave the tree behind the toolbar toggle.
+    if (window.matchMedia('(max-width: 768px)').matches && !docsCurrentRef) {
+        docsNavCollapsed = true;
+    }
+    overlay.classList.toggle('nav-collapsed', docsNavCollapsed);
+
+    // The symbol half of the pane's search comes from doc-names.json; make
+    // sure it is on its way even if the WASM boot has not got there yet.
+    fetchDocNames();
+
+    loadDocsIndex().then(index => {
+        const version = document.getElementById('docs-version');
+        if (version) {
+            version.textContent = index ? `Docs v${index.version}` : '';
+        }
+        renderDocsNav();
+        const target = refWithAnchor
+            || docsCurrentRef
+            || (index && index.guides && index.guides.length
+                ? `guides/${index.guides[0].slug}`
+                : null);
+        if (target) showDocsPage(target);
+        refreshDocsStatus();
+        document.getElementById('docs-search')?.focus();
+    });
+}
+
+function closeDocsPane() {
+    // Bank the offset while the overlay is still laid out. Reading scrollTop
+    // after display:none would give 0, which is exactly the position the pane
+    // is not supposed to come back to.
+    rememberDocsScroll();
+    const overlay = document.getElementById('docs-overlay');
+    if (overlay) overlay.style.display = 'none';
+    document.body.classList.remove('docs-open');
+    setHashParam('doc', null);
+}
+
+function docsPaneIsOpen() {
+    const overlay = document.getElementById('docs-overlay');
+    return !!overlay && overlay.style.display !== 'none';
+}
+
+/**
+ * Intercept clicks inside the pane.
+ *
+ * Three cases: a `#doc=` link is a pack navigation, a bare `#anchor` scrolls
+ * within the current page, and anything else is an outbound link that opens in
+ * a new tab so the REPL session is never replaced.
+ */
+function initDocsLinkInterception() {
+    const overlay = document.getElementById('docs-overlay');
+    if (!overlay) return;
+    overlay.addEventListener('click', (e) => {
+        const link = e.target.closest('a');
+        if (!link) return;
+
+        if (link.dataset.docSymbol) {
+            e.preventDefault();
+            const name = link.dataset.docSymbol;
+            const entry = (docNames || []).find(d => d.name === name) || null;
+            closeDocsPane();
+            wasmDocLookup(name).then(text => showDocPanel(name, text, entry));
+            return;
+        }
+
+        const href = link.getAttribute('href') || '';
+        if (href.startsWith('#doc=')) {
+            e.preventDefault();
+            const raw = href.slice('#doc='.length);
+            let ref = raw;
+            try { ref = decodeURIComponent(raw); } catch { /* literal already */ }
+            // On mobile the nav floats over the article, so picking a page
+            // should get out of the way and show it.
+            if (link.dataset.docRef
+                && window.matchMedia('(max-width: 768px)').matches) {
+                docsNavCollapsed = true;
+                overlay.classList.add('nav-collapsed');
+            }
+            showDocsPage(ref);
+            return;
+        }
+        if (href.startsWith('#')) {
+            e.preventDefault();
+            const id = href.slice(1);
+            const article = document.getElementById('docs-article');
+            const target = id && article ? article.querySelector(`#${CSS.escape(id)}`) : null;
+            if (target) target.scrollIntoView({ block: 'start' });
+            return;
+        }
+        if (href && !href.startsWith('javascript:')) {
+            // Absolute or site-relative: leave /try/ intact.
+            link.target = '_blank';
+            link.rel = 'noopener';
+        }
+    });
+}
+
+function initDocsPane() {
+    document.getElementById('docs-btn')?.addEventListener('click', () => openDocsPane());
+    document.getElementById('docs-close')?.addEventListener('click', closeDocsPane);
+
+    // showDocsPage and closeDocsPane already bank the offset on the two ways of
+    // leaving a page, so this listener is a backstop rather than the mechanism:
+    // it keeps the map current for any exit path that forgets to, at the cost
+    // of one rAF-coalesced store per scroll burst.
+    const article = document.getElementById('docs-article');
+    if (article) {
+        let pending = false;
+        article.addEventListener('scroll', () => {
+            if (pending) return;
+            pending = true;
+            requestAnimationFrame(() => { pending = false; rememberDocsScroll(); });
+        }, { passive: true });
+    }
+
+    // The doc panel's "Open full docs" used to navigate to /docs/html/api/,
+    // dropping the REPL session. It opens the pane now.
+    document.getElementById('doc-full-link')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        const href = e.currentTarget.getAttribute('href') || '';
+        const ref = href.startsWith('#doc=') ? href.slice('#doc='.length) : null;
+        openDocsPane(ref && docsEntryFor(ref) ? ref : undefined);
+    });
+
+    document.getElementById('docs-nav-toggle')?.addEventListener('click', () => {
+        docsNavCollapsed = !docsNavCollapsed;
+        document.getElementById('docs-overlay')
+            ?.classList.toggle('nav-collapsed', docsNavCollapsed);
+    });
+
+    const search = document.getElementById('docs-search');
+    if (search) {
+        search.addEventListener('input', debounce(() => {
+            renderDocsSearch(search.value);
+        }, 120));
+        search.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                if (search.value) { search.value = ''; renderDocsNav(); }
+                else closeDocsPane();
+            }
+        });
+    }
+
+    // Click the backdrop (not the shell) to dismiss.
+    document.getElementById('docs-overlay')?.addEventListener('mousedown', (e) => {
+        if (e.target.id === 'docs-overlay') closeDocsPane();
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && docsPaneIsOpen()) closeDocsPane();
+    });
+
+    initDocsLinkInterception();
+
+    // Deep link: /try/#doc=guides/hkt-guide restores a docs location, and
+    // composes with the existing #code= share hash rather than replacing it.
+    const initial = getHashParam('doc');
+    if (initial) openDocsPane(initial);
+}
+
+/** hashchange hook: a #doc= change opens or moves the pane. */
+function syncDocsPaneFromHash() {
+    const ref = getHashParam('doc');
+    if (!ref) {
+        if (docsPaneIsOpen()) closeDocsPane();
+        return;
+    }
+    if (docsPaneIsOpen()) showDocsPage(ref, { updateHash: false });
+    else openDocsPane(ref);
+}
+
+document.addEventListener('DOMContentLoaded', initDocsPane);
+
 // Export for debugging
 window.turmericApp = {
     runCode,
@@ -3153,9 +5420,460 @@ window.turmericApp = {
     showDocPanel,
     hideDocPanel,
     wasmDocLookup,
+    openDocsPane,
+    closeDocsPane,
+    showDocsPage,
+    loadDocsIndex,
     getState: () => ({
         wasmState,
         hasEditor: !!editor,
         hasWasm: !!evalWorker && wasmState === WASM_STATE.READY,
+        docsOpen: docsPaneIsOpen(),
+        docsRef: docsCurrentRef,
     })
 };
+
+/* ---------------------------------------------------------------------------
+ * T3: the time-travel timeline
+ *
+ * Run records; then you scrub the recording, forwards and backwards, watching
+ * the gutter follow the cursor and each live frame's bindings change under it.
+ *
+ * The page does not decode the .turtrace format.  Every question here --
+ * where am I, what are the frames, what had been printed by now -- is answered
+ * by turi_trace_replay_* through the WASM bridge, which is the same replay
+ * `tur dap` answers stepBack with.  One decoder for one format.
+ * ------------------------------------------------------------------------- */
+
+/* The browser's cap is deliberately far below the recorder's own 1,000,000
+ * default.  That number was chosen for a native process; here the interpreter
+ * retains roughly 4 KiB per step of a trampolined loop on top of the ~13 bytes
+ * a step costs the recording itself, and the tab is what pays.
+ *
+ * Raised from 50,000 alongside the recorder's move from line to expression
+ * granularity.  A cap is a bound on the recording, but what it MEANS is how
+ * much of a program fits under it, and a step is now about a third to a fifth
+ * of what it used to be -- so holding 50,000 would have quietly cut the reach
+ * of every recording by that factor.  The interpreter-side retention at the
+ * cap is unchanged by construction: this is the same amount of program.
+ * 250,000 steps is about 3 MB of trace and a session that stays responsive. */
+const TRACE_MAX_STEPS = 250000;
+
+const traceState = {
+    active: false,
+    steps: 0,
+    index: 0,
+    baseLine: 1,
+    frames: [],
+    selectedFrame: 0,
+    stats: null,
+    savedConsoleHTML: null,
+    savedConsoleLog: null,
+    decorations: null,
+    seekPending: false,
+    seekQueued: null,
+};
+
+function traceWorkerCall(message) {
+    if (!evalWorker || wasmState !== WASM_STATE.READY) return Promise.resolve(null);
+    return new Promise((resolve, reject) => {
+        const id = ++evalCallId;
+        pendingCalls.set(id, {
+            resolve,
+            reject,
+            startTime: performance.now(),
+            isEval: false,
+        });
+        evalWorker.postMessage({ ...message, id });
+    });
+}
+
+/**
+ * Reset the interpreter env for a recording, without the console-clearing and
+ * status message the user-facing `:reset` does.
+ *
+ * A trace is a run of a whole program from the start, which is what `tur trace
+ * <file>` means and what makes two recordings of the same program comparable.
+ * The browser env is a REPL session that accumulates every eval, so without
+ * this the SECOND Trace re-evaluates the program on top of the first one's
+ * definitions and dies on `'Ask' is already defined` -- and even where the
+ * program has no top-level definitions to collide, the recording would be of a
+ * program running in an env polluted by its own previous run.
+ */
+function traceResetEnv() {
+    return new Promise((resolve) => {
+        const id = ++evalCallId;
+        pendingCalls.set(id, {
+            resolve: () => {
+                currentLangMode = 'turmeric';  // turi_env_new() starts in default mode
+                // The session forgot what it had accepted, so the prompt's
+                // document has to forget it too.
+                replSessionReset();
+                resolve(true);
+            },
+            reject: () => resolve(false),
+            startTime: performance.now(),
+            isEval: false,
+        });
+        evalWorker.postMessage({ type: 'reset', id });
+    });
+}
+
+/**
+ * Record the editor's program and open the timeline.
+ */
+async function traceCode() {
+    if (wasmState !== WASM_STATE.READY) {
+        showStatus('WASM not ready', 'error');
+        return;
+    }
+    const code = editor.getValue();
+    if (!code.trim()) {
+        appendToConsole('<span class="console-error">Error: No code to trace</span>');
+        return;
+    }
+
+    showStatus('Recording...', 'info');
+    if (!await traceResetEnv()) {
+        appendToConsole('<span class="console-error">Trace failed: could not reset the session</span>');
+        showStatus('Trace failed', 'error');
+        return;
+    }
+
+    const started = performance.now();
+    // Forwarded for the same reason Run forwards it: turi_eval_typed strips an
+    // inline #lang itself, but set_lang ASSIGNS the layer set, so a program
+    // opening `#lang turmeric stringed` needs the tail or its layers are off.
+    const { lang, layers } = parseLangDirective(code);
+    if (lang !== null) currentLangMode = lang;
+
+    // hasMain is the page's existing Run rule, not a second one: a program with
+    // a top-level `main` loads its forms and then runs `(main)`, and the
+    // recording covers the run rather than the definitions.
+    const res = await traceWorkerCall({
+        type: 'trace-run',
+        input: code,
+        maxSteps: TRACE_MAX_STEPS,
+        hasMain: definesMainEntry(code),
+        lang: lang !== null ? [lang, ...layers].join(' ') : null,
+    });
+
+    if (!res || res.steps < 0) {
+        const why = res && res.steps === -2
+            ? 'this program declares a main entry point but did not define one'
+            : (res && res.error) || 'the program did not load';
+        appendToConsole(`<span class="console-error">Trace failed: ${escapeHtml(why)}</span>`);
+        showStatus('Trace failed', 'error');
+        return;
+    }
+    if (res.steps === 0) {
+        appendToConsole('<span class="console-error">Trace recorded nothing -- the program ran no interpreted steps.</span>');
+        showStatus('Ready', 'success');
+        return;
+    }
+
+    updateExecTime(performance.now() - started);
+    traceState.stats = res.stats || null;
+    traceState.steps = res.steps;
+    traceState.baseLine = (res.stats && res.stats.baseLine) || 1;
+    traceOpen();
+    await traceSeek(0);
+}
+
+function traceOpen() {
+    const panel = document.getElementById('trace-panel');
+    if (!panel) return;
+    if (!traceState.active) {
+        // The transcript belongs to the user, so it is put back on close
+        // rather than overwritten: while the timeline is open the console
+        // shows what the program had printed by the cursor's step, which is
+        // what the OUTPUT records exist for.
+        const consoleEl = document.getElementById('console');
+        traceState.savedConsoleHTML = consoleEl ? consoleEl.innerHTML : '';
+        traceState.savedConsoleLog = consoleLog.slice();
+    }
+    traceState.active = true;
+    panel.hidden = false;
+
+    const slider = document.getElementById('trace-slider');
+    if (slider) {
+        slider.min = '0';
+        slider.max = String(Math.max(0, traceState.steps - 1));
+        slider.value = '0';
+    }
+
+    const banner = document.getElementById('trace-banner');
+    if (banner) {
+        const st = traceState.stats;
+        if (st && st.truncated) {
+            banner.hidden = false;
+            banner.textContent =
+                `Recording stopped at the ${TRACE_MAX_STEPS.toLocaleString()}-step cap -- ` +
+                `this is the beginning of the run, not all of it.`;
+        } else if (st) {
+            banner.hidden = false;
+            banner.textContent =
+                `${st.steps.toLocaleString()} steps, peak depth ${st.peakDepth}, ` +
+                `${(st.bytes / 1024).toFixed(1)} KB recorded from a fresh session.`;
+        } else {
+            banner.hidden = true;
+        }
+    }
+}
+
+function traceClose() {
+    const panel = document.getElementById('trace-panel');
+    if (panel) panel.hidden = true;
+    if (traceState.decorations) {
+        traceState.decorations.clear();
+        traceState.decorations = null;
+    }
+    if (traceState.active) {
+        const consoleEl = document.getElementById('console');
+        if (consoleEl && traceState.savedConsoleHTML !== null) {
+            consoleEl.innerHTML = traceState.savedConsoleHTML;
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+        }
+        if (traceState.savedConsoleLog) {
+            consoleLog = traceState.savedConsoleLog;
+            safeWrite(STORAGE_KEYS.consol, consoleLog);
+        }
+    }
+    traceState.active = false;
+    traceState.savedConsoleHTML = null;
+    traceState.savedConsoleLog = null;
+    traceState.frames = [];
+    // Hand the megabyte back rather than letting it sit in WASM memory for the
+    // rest of the session.
+    traceWorkerCall({ type: 'trace-release' });
+}
+
+/**
+ * Move the cursor.  Seeks coalesce: a slider drag issues one seek at a time
+ * and remembers only the most recent target, so dragging across a 50,000-step
+ * recording costs one rebuild per settled position rather than one per pixel.
+ */
+async function traceSeek(index) {
+    if (!traceState.active && index !== 0) return;
+    const target = Math.max(0, Math.min(index, traceState.steps - 1));
+    if (traceState.seekPending) {
+        traceState.seekQueued = target;
+        return;
+    }
+    traceState.seekPending = true;
+    const state = await traceWorkerCall({
+        type: 'trace-seek',
+        index: target,
+        // At the last step, ask for every OUTPUT record rather than the ones
+        // before the cursor: a program whose final act is a println drains it
+        // after the final STEP, and an empty console at the end of a run that
+        // printed reads as a broken timeline rather than a precise one.
+        wantFullOutput: target === traceState.steps - 1,
+    });
+    traceState.seekPending = false;
+
+    if (state) traceRender(state);
+
+    if (traceState.seekQueued !== null) {
+        const next = traceState.seekQueued;
+        traceState.seekQueued = null;
+        await traceSeek(next);
+    }
+}
+
+function traceRender(state) {
+    traceState.index = state.index;
+    traceState.frames = state.frames || [];
+    if (traceState.selectedFrame >= traceState.frames.length) {
+        traceState.selectedFrame = 0;
+    }
+
+    const slider = document.getElementById('trace-slider');
+    if (slider && String(state.index) !== slider.value) slider.value = String(state.index);
+
+    const pos = document.getElementById('trace-pos');
+    if (pos) pos.textContent = `${state.index + 1} / ${state.steps}`;
+
+    const top = traceState.frames[0];
+    const site = document.getElementById('trace-site');
+    if (site) {
+        site.textContent = top
+            ? `${top.fn || '(top level)'}  line ${traceEditorLine(top.line)}`
+            : '';
+    }
+
+    traceRenderFrames();
+    traceRenderOutput(state.fullOutput !== undefined ? state.fullOutput : (state.output || ''));
+    traceHighlight(top ? traceEditorLine(top.line) : 0, top);
+}
+
+/* Interpreter line -> editor line.  The env accumulates every eval into one
+ * blob, so an interpreter line is absolute in that blob; baseLine is where
+ * this run's source started in it. */
+function traceEditorLine(line) {
+    const mapped = (line | 0) - traceState.baseLine + 1;
+    return mapped > 0 ? mapped : 0;
+}
+
+function traceRenderFrames() {
+    const framesEl = document.getElementById('trace-frames');
+    const localsEl = document.getElementById('trace-locals');
+    if (!framesEl || !localsEl) return;
+
+    if (!traceState.frames.length) {
+        framesEl.innerHTML = '<div class="trace-empty">no frames</div>';
+        localsEl.innerHTML = '';
+        return;
+    }
+
+    framesEl.innerHTML = traceState.frames.map((f, i) => {
+        const cls = i === traceState.selectedFrame ? ' class="trace-frame active"' : ' class="trace-frame"';
+        const line = traceEditorLine(f.line);
+        return `<button${cls} data-frame="${i}">` +
+               `<span class="trace-frame-fn">${escapeHtml(f.fn || '(top level)')}</span>` +
+               `<span class="trace-frame-line">${line ? 'line ' + line : ''}</span>` +
+               `</button>`;
+    }).join('');
+
+    const frame = traceState.frames[traceState.selectedFrame];
+    const locals = (frame && frame.locals) || [];
+    localsEl.innerHTML = locals.length
+        ? locals.map(l =>
+            `<div class="trace-local">` +
+            `<span class="trace-local-name">${escapeHtml(l.name)}</span>` +
+            `<span class="trace-local-val">${escapeHtml(l.repr)}</span>` +
+            `</div>`).join('')
+        : '<div class="trace-empty">no bindings in this frame yet</div>';
+}
+
+function traceRenderOutput(output) {
+    const consoleEl = document.getElementById('console');
+    if (!consoleEl) return;
+    consoleEl.innerHTML = output
+        ? `<span class="console-output">${escapeHtml(output)}</span>`
+        : '<div class="console-welcome"><p>Nothing printed yet at this step.</p></div>';
+    consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+
+/**
+ * Mark where the cursor is: the line always, and the expression within it when
+ * the recording says which one.
+ *
+ * The second decoration is the visible half of recording per expression rather
+ * than per line.  A step is one evaluation, so several consecutive steps share
+ * a line and the line marker alone would sit still through all of them --
+ * looking stuck rather than looking like progress.  `endCol` is 0 on a v1
+ * recording (and absent on a wasm build older than the field), in which case
+ * there is no range to draw and the line marker is the whole story.
+ */
+function traceHighlight(line, frame) {
+    if (!editor) return;
+    if (!traceState.decorations) {
+        traceState.decorations = editor.createDecorationsCollection([]);
+    }
+    if (!line) {
+        traceState.decorations.set([]);
+        return;
+    }
+    const decorations = [{
+        range: new monaco.Range(line, 1, line, 1),
+        options: {
+            isWholeLine: true,
+            className: 'trace-current-line',
+            /* No glyphMarginClassName: the editor is created without a glyph
+             * margin, and turning one on would shift the whole gutter. */
+            linesDecorationsClassName: 'trace-current-marker',
+        },
+    }];
+    const col = frame ? (frame.col | 0) : 0;
+    const endCol = frame ? (frame.endCol | 0) : 0;
+    if (col > 0 && endCol > col) {
+        decorations.push({
+            range: new monaco.Range(line, col, line, endCol),
+            options: { className: 'trace-current-expr' },
+        });
+    }
+    traceState.decorations.set(decorations);
+    editor.revealLineInCenterIfOutsideViewport(line);
+}
+
+/**
+ * Jump to the next (dir > 0) or previous execution of an editor line.
+ *
+ * This is what a breakpoint is in a recording: the run already happened, so
+ * "next hit on line 12" is a scan rather than a resume.  A miss lands on the
+ * boundary and says so, which is the difference between "ran to the end" and
+ * "found it".
+ */
+async function traceJumpToLine(editorLine, dir) {
+    if (!traceState.active) return;
+    const absolute = editorLine + traceState.baseLine - 1;
+    const found = await traceWorkerCall({
+        type: 'trace-find-line',
+        dir,
+        file: '',          // "" matches any file; the tab is the only source here
+        line: absolute,
+    });
+    if (!found) return;
+    if (!found.hit) {
+        showStatus(`No ${dir > 0 ? 'later' : 'earlier'} step on line ${editorLine}`, 'info');
+        return;
+    }
+    await traceSeek(found.index);
+}
+
+async function traceDownload() {
+    const buf = await traceWorkerCall({ type: 'trace-download' });
+    if (!buf) {
+        showStatus('Nothing to download', 'error');
+        return;
+    }
+    const blob = new Blob([buf], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'run.turtrace';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
+
+function traceInstallHandlers() {
+    document.getElementById('trace-btn')?.addEventListener('click', traceCode);
+    document.getElementById('trace-close')?.addEventListener('click', traceClose);
+    document.getElementById('trace-download')?.addEventListener('click', traceDownload);
+    document.getElementById('trace-first')?.addEventListener('click', () => traceSeek(0));
+    document.getElementById('trace-last')?.addEventListener('click', () => traceSeek(traceState.steps - 1));
+    document.getElementById('trace-back')?.addEventListener('click', () => traceSeek(traceState.index - 1));
+    document.getElementById('trace-fwd')?.addEventListener('click', () => traceSeek(traceState.index + 1));
+
+    document.getElementById('trace-slider')?.addEventListener('input', (e) => {
+        traceSeek(parseInt(e.target.value, 10) || 0);
+    });
+
+    document.getElementById('trace-frames')?.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-frame]');
+        if (!btn) return;
+        traceState.selectedFrame = parseInt(btn.dataset.frame, 10) || 0;
+        traceRenderFrames();
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (!traceState.active || !e.altKey) return;
+        if (e.key === 'ArrowLeft')  { e.preventDefault(); traceSeek(traceState.index - 1); }
+        if (e.key === 'ArrowRight') { e.preventDefault(); traceSeek(traceState.index + 1); }
+    });
+}
+
+/* Click a line number while the timeline is open -> jump to that line's next
+ * execution; Alt+click for the previous one. Registered from the editor setup
+ * path, once Monaco exists. */
+function traceInstallGutterHandler(ed) {
+    ed.onMouseDown((e) => {
+        if (!traceState.active) return;
+        if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS) return;
+        const line = e.target.position?.lineNumber;
+        if (line) traceJumpToLine(line, e.event.altKey ? -1 : 1);
+    });
+}

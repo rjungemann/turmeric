@@ -1,0 +1,17 @@
+;; Stage 2: variadic defmacro* -- the trailing args arrive as ONE Syntax
+;; wrapping a list form; iteration is ordinary recursion with ordinary
+;; integers (an internal (def walk (fn ...)) helper; the self-call resolves
+;; by runtime dispatch in the macro-time env).  A counting macro, which the
+;; template/CT path cannot express by design.
+(defmacro* sum-lits [& xs]
+  (def walk (fn [i : int acc : int] : int
+              (if (< i (syntax-len xs))
+                (walk (+ i 1) (+ acc (syntax->int (syntax-nth xs i))))
+                acc)))
+  (int->syntax (walk 0 0)))
+
+(defn main [] : int
+  (println (sum-lits 1 2 3 4 5))
+  (println (sum-lits 10))
+  (println (sum-lits))
+  0)

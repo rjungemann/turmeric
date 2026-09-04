@@ -13,7 +13,8 @@ emit_abi_fn_value_signature emit_module.c 1
 emit_dispatch_tyvar emit_core.c 1
 emit_dispatch_tyvar emit_module.c 1
 emit_reresolve_disp_type emit_core.c 2
+emit_reresolve_disp_type emit_expr.c 1
 emit_reresolve_disp_type emit_module.c 1
 emit_spec_arg_type_for_binding emit_core.c 1
-emit_spec_arg_type_for_binding emit_expr.c 2
-emit_var_spec_arg_type emit_expr.c 11
+emit_spec_arg_type_for_binding emit_expr.c 6
+emit_var_spec_arg_type emit_expr.c 13

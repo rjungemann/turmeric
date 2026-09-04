@@ -34,7 +34,7 @@
 ;; Raylib + game-state FFI  (implemented in rayLibShim.c)
 ;; Key codes, window, drawing, input, and snake state bindings.
 ;; ============================================================
-(import examples/snake/src/raylib)
+(load "examples/snake/src/raylib.tur")
 
 ;; ============================================================
 ;; Typeclass demonstration — Describable
@@ -161,7 +161,7 @@
 ;; ============================================================
 ;; Entry point
 ;; ============================================================
-(defn -main [] : int
+(defn main [] : int
   (tur-init-window WIN_W WIN_H "Turmeric Snake")
   (defer (tur-close-window))        ;; always close window on exit
   (tur-set-fps 60)

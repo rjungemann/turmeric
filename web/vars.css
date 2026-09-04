@@ -46,4 +46,44 @@
   --amber-subtle:  rgba(239,160,48,0.10);
   --purple:        #C4A0E8;
   --purple-subtle: rgba(196,160,232,0.10);
+
+  /* Chart series (categorical) -- /ci
+   *
+   * NOT the accent tokens above: those are tuned for badges on a panel and
+   * fail as a chart palette on --bg-panel (teal and green drop below the
+   * chroma floor and read gray at 2px stroke; teal/purple separate by only
+   * dE 7.4 under deuteranopia). These are darkened, chroma-boosted siblings
+   * in the same hue families.
+   *
+   * The ORDER is load-bearing -- it keeps coral and green non-adjacent,
+   * which lifts worst-adjacent CVD separation from dE 6.1 to 10.2. Assign
+   * in this fixed order and never cycle: a 6th series is not a generated
+   * hue, it folds into the sparkline grid instead.
+   *
+   * Validated against surface #161411: lightness band, chroma floor, CVD
+   * separation (10.2 deutan / 11.4 tritan), normal-vision floor (19.6),
+   * and contrast (all >= 3:1) all pass.
+   */
+  --chart-1:        #BE801A;  /* gold   */
+  --chart-2:        #0F9C8A;  /* teal   */
+  --chart-3:        #C24E3E;  /* coral  */
+  --chart-4:        #9468CC;  /* purple */
+  --chart-5:        #5FA33C;  /* green  */
+
+  --chart-1-subtle: rgba(190,128,26,0.14);
+  --chart-2-subtle: rgba(15,156,138,0.14);
+  --chart-3-subtle: rgba(194,78,62,0.14);
+  --chart-4-subtle: rgba(148,104,204,0.14);
+  --chart-5-subtle: rgba(95,163,60,0.14);
+
+  /* Status -- reserved, never reused as "series 6".
+   * Always shipped alongside an icon and a text label, never color alone. */
+  --status-pass:   #5FA33C;
+  --status-skip:   #8A7D6E;
+  --status-warn:   #D9911F;  /* a gap worth attention, not a failure */
+  --status-fail:   #D6584A;
+  --status-pass-subtle: rgba(95,163,60,0.12);
+  --status-skip-subtle: rgba(138,125,110,0.12);
+  --status-warn-subtle: rgba(217,145,31,0.12);
+  --status-fail-subtle: rgba(214,88,74,0.12);
 }

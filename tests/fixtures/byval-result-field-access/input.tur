@@ -2,7 +2,7 @@
 ;; `(r).field` access, not a carrier-pointer cast
 ;; `((Result *)(intptr_t)(r))->field` (which casts an aggregate value to a
 ;; pointer -- a hard cc error).  See
-;; docs/archive/byvalue-result-field-access-casts-aggregate-to-pointer.md.
+;; docs/archive/history/byvalue-result-field-access-casts-aggregate-to-pointer.md.
 
 (defn parse [b : int] : Result
   (if (= b 0) (err "zero") (ok (* b 2))))
@@ -10,6 +10,6 @@
 (defn main [] : int
   (let [r (parse 7)
         o (some 9)]
-    (println (.ok-val r))
-    (println (.value o))
+    (println (ok-val r))
+    (println (unwrap o))
     0))

@@ -5,7 +5,7 @@
 ;; emits a double-returning inner body dispatched through
 ;; tur_thunk_double_double_t (unlike the old type-erased >>> which would
 ;; dispatch double bodies through int64 thunk pointers -- see
-;; docs/reported/arrow-compose-float-closure-int64-thunk-mismatch.md).
+;; docs/archive/history/arrow-compose-float-closure-int64-thunk-mismatch.md).
 ;;
 ;; Verifies fractional results survive composition (no int truncation) and
 ;; that two independently constructed compositions with distinct behaviours

@@ -1,0 +1,66 @@
+;; nil-return-forward-ref-in-defmodule -- a call in statement position to a
+;; `: nil` function the elaborator has not yet reached must emit as a bare
+;; statement, never bound into an `__auto_type` temp.
+;;
+;; The reader parses a bare `nil` in type position as F_NIL, not F_SYM.  The
+;; defmodule pass-1 forward declaration (elab_module.c) unwrapped a spaced
+;; `: T` annotation only when the inner form was an F_SYM/F_KEYWORD, so `: nil`
+;; fell through to the TY_INT placeholder.  A sibling caller elaborated BEFORE
+;; the callee then typed the call `int`, and the statement-position emitter
+;; hoisted the void call into `__auto_type __ps_N = ...` -- a cc-level
+;; "variable has incomplete type 'void'" with no .tur attribution.  `: void`
+;; was immune only because `void` is an ordinary symbol.  The letrec/let
+;; pre-pass in elab_forms.c had the identical gap.
+;;
+;; Recursion is incidental; being *not yet elaborated* at the call site is the
+;; trigger, so the non-recursive forward reference (fwd-caller/fwd-callee) is
+;; the decisive row -- a fix keyed on recursion would pass a recursion-only
+;; fixture and leave it broken.
+;;
+;; Regression for docs/archive/forward-referenced-nil-call-bound-to-auto-type.md
+(defmodule probe/nilfwd
+  (export run)
+
+  (defn emit [x : int] : nil
+    (println x))
+
+  ;; Row 1 -- plain forward reference, no recursion at all.
+  (defn fwd-caller [] : nil
+    (fwd-callee 1))
+
+  (defn fwd-callee [x : int] : nil
+    (emit x))
+
+  ;; Row 3 -- self-recursion in the tail of a `when`.
+  (defn count-up [i : int n : int] : nil
+    (when (< i n)
+      (do (emit i)
+          (count-up (+ i 1) n))))
+
+  ;; Row 4 -- mutual recursion; `ping` calls `pong` before `pong` exists.
+  (defn ping [i : int] : nil
+    (when (< i 2)
+      (do (emit 100)
+          (pong (+ i 1)))))
+
+  (defn pong [i : int] : nil
+    (ping i))
+
+  ;; The same gap in the letrec pre-pass: a self-recursive `fn` literal
+  ;; declared `: nil` collapsed to the TY_INT placeholder too.
+  (defn lr [] : int
+    (letrec [rec (fn [i : int] : nil
+                   (when (< i 2)
+                     (do (emit 200)
+                         (rec (+ i 1)))))]
+      (do (rec 0)
+          0)))
+
+  (defn run [] : int
+    (do (fwd-caller)
+        (count-up 10 13)
+        (ping 0)
+        (lr))))
+
+(defn main [] : int
+  (run))

@@ -20,7 +20,7 @@
  *                       experiment carries the lifecycle + expires_at.  No
  *                       parallel enable path.
  *
- * See docs/upcoming/lang-layers-plan.md and the "`#lang` Layers -- curated
+ * See docs/archive/lang-layers-plan.md and the "`#lang` Layers -- curated
  * only" section in CLAUDE.md. */
 
 #include <stdbool.h>

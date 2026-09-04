@@ -353,10 +353,10 @@ when the condition is falsy. Both are macros defined in `stdlib/macros.tur`.
 Type this:
 
 ```turmeric
-(option-some? (option-some 42))
+(some? (some 42))
 ```
 ```sweet-exp
-option-some?(option-some(42))
+some?(some(42))
 ```
 
 Expected output:
@@ -368,10 +368,10 @@ true
 Then:
 
 ```turmeric
-(option-none? (option-none))
+(none? (none))
 ```
 ```sweet-exp
-option-none?(option-none())
+none?(none())
 ```
 
 Expected output:
@@ -383,10 +383,10 @@ true
 Then:
 
 ```turmeric
-(option-some? (option-none))
+(some? (none))
 ```
 ```sweet-exp
-option-some?(option-none())
+some?(none())
 ```
 
 Expected output:
@@ -395,12 +395,12 @@ Expected output:
 false
 ```
 
-**What happened:** `option-some` wraps a value in an optional container.
-`option-none` represents the absence of a value. The predicates `option-some?`
-and `option-none?` test which case you have. Evaluating `(option-none)` alone
+**What happened:** `some` wraps a value in an optional container.
+`none` represents the absence of a value. The predicates `some?`
+and `none?` test which case you have. Evaluating `(none)` alone
 produces a nil result, which the REPL does not print -- that is normal.
 
-> **Try it yourself:** evaluate `(option-none? (option-some 0))`. Is a `some`
+> **Try it yourself:** evaluate `(none? (some 0))`. Is a `some`
 > of zero still `some`?
 
 ---
@@ -413,10 +413,10 @@ and writing functions that return `Option` instead of panicking.
 Type this:
 
 ```turmeric
-(option-unwrap (option-some 99))
+(unwrap (some 99))
 ```
 ```sweet-exp
-option-unwrap(option-some(99))
+unwrap(some(99))
 ```
 
 Expected output:
@@ -428,10 +428,10 @@ Expected output:
 Then:
 
 ```turmeric
-(option-unwrap-or (option-none) -1)
+(unwrap-or (none) -1)
 ```
 ```sweet-exp
-option-unwrap-or(option-none() -1)
+unwrap-or(none() -1)
 ```
 
 Expected output:
@@ -444,20 +444,20 @@ Now define a division function that never crashes:
 
 ```turmeric
 (defn safe-div [a : int b : int]
-  (if (= b 0) (option-none) (option-some (/ a b))))
+  (if (= b 0) (none) (some (/ a b))))
 ```
 ```sweet-exp
 defn safe-div [a :int b :int]
   if {b = 0}
-    option-none()
-    option-some({a / b})
+    none()
+    some({a / b})
 ```
 
 ```turmeric
-(option-unwrap (safe-div 10 2))
+(unwrap (safe-div 10 2))
 ```
 ```sweet-exp
-option-unwrap(safe-div(10 2))
+unwrap(safe-div(10 2))
 ```
 
 Expected output:
@@ -467,10 +467,10 @@ Expected output:
 ```
 
 ```turmeric
-(option-unwrap-or (safe-div 10 0) -1)
+(unwrap-or (safe-div 10 0) -1)
 ```
 ```sweet-exp
-option-unwrap-or(safe-div(10 0) -1)
+unwrap-or(safe-div(10 0) -1)
 ```
 
 Expected output:
@@ -479,13 +479,13 @@ Expected output:
 -1
 ```
 
-**What happened:** `option-unwrap` extracts the inner value or panics if the
-option is none. `option-unwrap-or` provides a fallback instead of panicking.
+**What happened:** `unwrap` extracts the inner value or panics if the
+option is none. `unwrap-or` provides a fallback instead of panicking.
 Returning `Option` from a function lets callers decide how to handle the
 missing case.
 
-> **Try it yourself:** write `safe-head` that returns `(option-none)` for an
-> empty vector and `(option-some (vec-get v 0))` otherwise. You will need
+> **Try it yourself:** write `safe-head` that returns `(none)` for an
+> empty vector and `(some (vec-get v 0))` otherwise. You will need
 > `vec-len` from step 12 to check emptiness.
 
 ---
@@ -543,7 +543,7 @@ Expected output:
 **What happened:** `ok` wraps a success value; `err` wraps an error value.
 `ok?` and `err?` test which case you have. `result-unwrap-or` extracts the
 success value or returns a fallback when the result is an error. Like
-`option-none`, evaluating `(ok 100)` or `(err 0)` alone prints nothing.
+`none`, evaluating `(ok 100)` or `(err 0)` alone prints nothing.
 
 > **Try it yourself:** rewrite `safe-div` from step 9 to return `(ok (/ a b))`
 > on success and `(err 0)` on division by zero.
@@ -593,26 +593,26 @@ Then:
 ```turmeric
 (defn describe-option [o]
   (cond
-    (option-some? o) (println "some!")
-    (option-none? o) (println "none!")
+    (some? o) (println "some!")
+    (none? o) (println "none!")
     :else            (println "unknown")))
 ```
 ```sweet-exp
 defn describe-option [o]
   cond
-    option-some?(o)
+    some?(o)
     println("some!")
-    option-none?(o)
+    none?(o)
     println("none!")
     :else
     println("unknown")
 ```
 
 ```turmeric
-(describe-option (option-none))
+(describe-option (none))
 ```
 ```sweet-exp
-describe-option(option-none())
+describe-option(none())
 ```
 
 Expected output:
@@ -621,7 +621,7 @@ Expected output:
 none!
 ```
 
-**What happened:** `cond` with `ok?` / `err?` / `option-some?` / `option-none?`
+**What happened:** `cond` with `ok?` / `err?` / `some?` / `none?`
 gives you a clean, readable way to branch on wrapped values. This is the
 standard lightweight dispatch pattern before reaching for full pattern matching.
 
@@ -674,16 +674,22 @@ length; `vec-get` reads by zero-based index.
 
 ### Step 13 -- The `for` macro
 
-**What you'll learn:** counted iteration with `for`; combining a loop with a
-vector built in step 12.
+**What you'll learn:** counted iteration with `while` and `set!`; combining a
+loop with a vector built in step 12.
 
 Type this:
 
 ```turmeric
-(for i 0 5 (println i))
+(let [^mut i 0]
+  (while (< i 5)
+    (println i)
+    (set! i (+ i 1))))
 ```
 ```sweet-exp
-for i 0 5 println(i)
+let [^mut i 0]
+  while {i < 5}
+    println(i)
+    set!(i {i + 1})
 ```
 
 Expected output:
@@ -696,12 +702,13 @@ Expected output:
 4
 ```
 
-**What happened:** `(for i lo hi body)` binds `i` to each integer in `[lo,
-hi)` and evaluates `body` once per value. It is a macro -- `:doc for` shows
-its signature. The index variable is available inside the body.
+**What happened:** Turmeric has no counted `for` -- `for` is the monadic
+comprehension `(for [x coll] body)`. A counted loop is `while` over a
+condition, with `set!` advancing a counter. The `^mut` on the binding is what
+permits `set!`; without it the binding is immutable and `set!` is rejected, so
+the one mutable thing in the loop is spelled out.
 
-> **REPL tip:** `:doc for` shows the macro's parameter names and a usage
-> example.
+> **REPL tip:** `:doc while` and `:doc set!` show the forms' signatures.
 
 > **Try it yourself:** use `for` to push the first five square numbers into a
 > vector, then print the vector's length.
@@ -821,13 +828,13 @@ Then construct an instance and read its fields:
 
 ```turmeric
 (let [p (Point 3 4)]
-  (println (Point-x p))
-  (println (Point-y p)))
+  (println (.x p))
+  (println (.y p)))
 ```
 ```sweet-exp
 let [p Point(3 4)]
-  println(Point-x(p))
-  println(Point-y(p))
+  println(.x(p))
+  println(.y(p))
 ```
 
 Expected output:

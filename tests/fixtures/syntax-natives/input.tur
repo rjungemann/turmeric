@@ -1,0 +1,19 @@
+;; Stage 1 (macro-system-direction-plan): first-class syntax objects in the
+;; interpreter -- TURI_SYNTAX wrapping a compiler Form*.  read-string parses,
+;; accessors walk, converters cross into ordinary values (this is what ends
+;; "no arithmetic at macro time" in Stage 2), constructors build new forms,
+;; and syntax=? is deep structural equality (the CT evaluator's `=`).
+;; The natives are interpreter-only, hence requires.interp-only.
+(defn main [] : int
+  (let [stx (read-string "(+ 40 2)")]
+    (println (syntax->string stx))
+    (println (syntax-tag stx))
+    (println (syntax-len stx))
+    (println (syntax-sym-name (syntax-first stx)))
+    (println (syntax->int (syntax-nth stx 2)))
+    (println (+ (syntax->int (syntax-nth stx 1)) (syntax->int (syntax-nth stx 2))))
+    (println (syntax->string (syntax-list (sym->syntax "println") (int->syntax 7))))
+    (println (syntax->string (syntax-cons (sym->syntax "do") (read-string "(x y)"))))
+    (println (syntax=? (read-string "(a (b 1))") (read-string "(a (b 1))")))
+    (println (syntax=? (read-string "(a b)") (read-string "(a c)"))))
+  0)

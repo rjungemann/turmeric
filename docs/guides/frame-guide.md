@@ -26,11 +26,17 @@ tur add https://github.com/rjungemann/turmeric-spices \
 tur fetch
 ```
 
-Then in your `build.tur`:
+`tur add` writes the dependency into your `build.tur`:
 
-```turmeric
-{:name "myapp"
- :spices ["frame"]}
+```turmeric no-check
+(defpackage myapp
+  :name "myapp"
+  :version "0.1.0"
+  :spices #map{
+    "frame" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                 :ref    "frame-v0.1.0"
+                 :subdir "spices/frame"}
+  })
 ```
 
 ## Importing
@@ -172,17 +178,21 @@ let [s  schema(list(field("x" type-int64()   0)
 (let [df (read-csv "data/sales.csv" (default-csv-opts))]
   (match df
     [(ok f)  (print-frame f)]
-    [(err e) (println "error:" e)]))
+    [(err e) (do (println "error:") (println e))]))
 ```
+
+> `println` takes exactly one argument (there is an overload per argument type,
+> each arity 1), so a label and a value are two calls -- or one
+> `(println (str-concat "error: " e))` when the value is already a `cstr`.
 
 ```sweet-exp
 let [df read-csv("data/sales.csv" default-csv-opts())]
   match df
     [ok(f)  print-frame(f)]
-    [err(e) println("error:" e)]
+    [err(e) do(println("error:") println(e))]
 ```
 
-The type inference order is int64 → float64 → date32 → timestamp → bool → utf8.
+The type inference order is int64 -> float64 -> date32 -> timestamp -> bool -> utf8.
 Use `read-csv-typed` to supply an explicit schema and skip inference:
 
 ```turmeric
@@ -394,7 +404,7 @@ output column names, input column names, and aggregation tags.
                 (list (agg-sum)     (agg-count)))]
   (match summary
     [(ok f)  (print-frame f)]
-    [(err e) (println "agg error:" e)]))
+    [(err e) (do (println "agg error:") (println e))]))
 ```
 
 ```sweet-exp
@@ -405,7 +415,7 @@ let [grouped group-by(df vec-of("grade"))
                  list(agg-sum() agg-count()))]
   match summary
     [ok(f)  print-frame(f)]
-    [err(e) println("agg error:" e)]
+    [err(e) do(println("agg error:") println(e))]
 ```
 
 Available aggregation functions:
@@ -473,7 +483,7 @@ of column names -- left-side key names and right-side key names.
                     (list "id"))]
        (match result
          [(ok df) (print-frame df)]
-         [(err e) (println "join error:" e)]))]
+         [(err e) (do (println "join error:") (println e))]))]
     [_ (println "csv read error")]))
 ```
 
@@ -487,7 +497,7 @@ let [orders   read-csv("orders.csv"   default-csv-opts())
                     (list "id"))]
        (match result
          [(ok df) (print-frame df)]
-         [(err e) (println "join error:" e)]))]
+         [(err e) (do (println "join error:") (println e))]))]
     [_ (println "csv read error")]
 ```
 
@@ -569,7 +579,7 @@ let [df   read-csv("quarterly.csv" default-csv-opts())
 All non-identity columns must share the same type. `melt` returns `0` if they
 do not.
 
-> **Note:** `pivot` (long → wide) and `transpose` are not included in v0.1.0.
+> **Note:** `pivot` (long -> wide) and `transpose` are not included in v0.1.0.
 > For those operations, export to Arrow and use the receiving runtime's native
 > pivot/transpose.
 
@@ -592,16 +602,20 @@ directly.
   ;; Hand the two raw pointers to Python via ctypes or cffi:
   ;; import pyarrow as pa
   ;; tbl = pa.RecordBatch._import_from_c(array_ptr, schema_ptr)
-  (println "schema ptr:" schema-p)
-  (println "array ptr:"  array-p))
+  (println "schema ptr:")
+  (println schema-p)
+  (println "array ptr:")
+  (println array-p))
 ```
 
 ```sweet-exp
 let [ptrs     arrow-export(df)
      schema-p head(ptrs)
      array-p  head(tail(ptrs))]
-  println("schema ptr:" schema-p)
-  println("array ptr:"  array-p)
+  println("schema ptr:")
+  println(schema-p)
+  println("array ptr:")
+  println(array-p)
 ```
 
 The exporting side transfers ownership: the consumer must call the release
@@ -621,14 +635,14 @@ callbacks embedded in the structs when done. PyArrow does this automatically.
 (let [df (arrow-import schema-ptr array-ptr)]
   (match df
     [(ok f)  (print-frame f)]
-    [(err e) (println "import error:" e)]))
+    [(err e) (do (println "import error:") (println e))]))
 ```
 
 ```sweet-exp
 let [df arrow-import(schema-ptr array-ptr)]
   match df
     [ok(f)  print-frame(f)]
-    [err(e) println("import error:" e)]
+    [err(e) do(println("import error:") println(e))]
 ```
 
 ### Column-level export
@@ -653,14 +667,14 @@ let [col  frame-column(df "score")
 
 | Type tag function | Arrow format | Turmeric element accessor |
 |---|---|---|
-| `(type-int32)` | `"i"` | `(column-int32-at col i)` → `:int` |
-| `(type-int64)` | `"l"` | `(column-int64-at col i)` → `:int` |
-| `(type-float32)` | `"f"` | `(column-float32-at col i)` → `:float` |
-| `(type-float64)` | `"g"` | `(column-float64-at col i)` → `:float` |
-| `(type-bool)` | `"b"` | `(column-bool-at col i)` → `:int` (0 or 1) |
-| `(type-utf8)` | `"u"` | `(column-utf8-at col i)` → `:cstr` |
-| `(type-date32)` | `"tdD"` | `(column-int32-at col i)` → days since epoch |
-| `(type-timestamp)` | `"tsu:"` | `(column-int64-at col i)` → µs since epoch |
+| `(type-int32)` | `"i"` | `(column-int32-at col i)` -> `:int` |
+| `(type-int64)` | `"l"` | `(column-int64-at col i)` -> `:int` |
+| `(type-float32)` | `"f"` | `(column-float32-at col i)` -> `:float` |
+| `(type-float64)` | `"g"` | `(column-float64-at col i)` -> `:float` |
+| `(type-bool)` | `"b"` | `(column-bool-at col i)` -> `:int` (0 or 1) |
+| `(type-utf8)` | `"u"` | `(column-utf8-at col i)` -> `:cstr` |
+| `(type-date32)` | `"tdD"` | `(column-int32-at col i)` -> days since epoch |
+| `(type-timestamp)` | `"tsu:"` | `(column-int64-at col i)` -> us since epoch |
 | `(type-null)` | `"n"` | all rows null |
 
 Typed fast-path accessors (`column-int64-at`, etc.) are undefined if called on

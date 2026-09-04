@@ -6,9 +6,8 @@ description: How Turmeric's end-to-end monomorphization ABI works, why the by-va
 
 # Monomorphization ABI Guide
 
-This guide explains the codegen ABI that Turmeric settled on after the
-end-to-end monomorphization migration (concluded 2026-06-19). It is
-aimed at two audiences:
+This guide explains Turmeric's codegen ABI: by-value end-to-end
+monomorphization. It is aimed at two audiences:
 
 - **Library/spice authors** who want to understand why a function's
   generated C signature looks the way it does, and how that affects
@@ -34,9 +33,9 @@ You'll start needing it the first time you see a symbol like
   (recursive combinator HKT instances whose closures return an
   HKT-applied type; consumer-side bridges where typing the producer
   would be churn-for-no-gain). It is documented and load-bearing -- not
-  a migration loose end. As of 0.22.0 (#444) the by-value path's audit
-  floor is **0 carrier deref-copies**; the Vec and MutableMap element
-  bridges that previously appeared here have been retired.
+  a migration loose end. The by-value path's audit floor is **0 carrier
+  deref-copies**; Vec and MutableMap elements use typed ABIs, not the
+  carrier.
 
 ## Why monomorphization, not a uniform carrier
 
@@ -118,13 +117,9 @@ If you see one of these in a link error, the usual causes are:
 
 - **Linkage mismatch.** A spec was emitted `static` in one TU and
   declared `extern` in another. The fix lives in the compiler -- file
-  a report. The historical example is the prelude-spec linkage story:
-  pre-0.21.0, two TUs referencing the same prelude spec would
-  `multiple definition` link-fail; 0.21.0 worked around it by emitting
-  prelude specs `static` in every referencing TU; 0.22.0 (#444 follow-up)
-  flipped them back to external linkage now that the underlying
-  cross-TU ownership rule is correct. If you see this class of error
-  today, it almost always means a spec is being claimed by two owners.
+  a report. User-module and prelude-owned specs alike are emitted with
+  external linkage in exactly one owning TU, so this class of error
+  almost always means a spec is being claimed by two owners.
 - **Missing import.** A module uses a spec that no module in the
   project actually instantiates. Add the import that drives the
   instantiation, or move the call site into the using module.
@@ -135,10 +130,8 @@ If you see one of these in a link error, the usual causes are:
 
 ## The residual carrier bridge -- what it does, why it stays
 
-Phase 5 of the migration set out to delete the carrier bridge
-entirely. As of 0.22.0 (#444), two classes of crossings remain --
-either intentional, or load-bearing in a way that no method-level fix
-can address:
+Two classes of carrier crossings remain -- either intentional, or
+load-bearing in a way that no method-level fix can address:
 
 1. **Consumer-side bridges, by design.** Some inline-C extractors
    take an `int64_t` argument and reinterpret. The audit fixture
@@ -151,19 +144,16 @@ can address:
    propagating generic-dispatch type information through the entire
    call graph. That's a parser-rewrite unit of work, not a localized
    ABI fix. Until it lands, the closure's return value rides the
-   carrier and a tiny spill shim boxes it. 0.22.0 #438 narrowed this
-   considerably -- Applicative `ap` now preserves fn type through
-   polymorphic constructors -- but the residual continuation case
-   still rides the bridge.
+   carrier and a tiny spill shim boxes it. Applicative `ap` preserves
+   fn type through polymorphic constructors; only the residual
+   continuation case rides the bridge.
 
-The Vec and MutableMap element bridges that previously sat in this
-section are gone: 0.21.0 #377 migrated Vec to the `:heap` typed-pointer
-ABI (retiring carrier-based `Eq[Vec]`); 0.22.0 #396 retyped
-MutableMap to the honest `(MutableMap K V)` and retired its carrier
-bridge; 0.22.0 #391/#393 monomorphized the Vec inline-C producers to
-typed pointers.
+Vec and MutableMap elements do not ride the carrier: Vec uses the
+`:heap` typed-pointer ABI, MutableMap is typed as the honest
+`(MutableMap K V)`, and the Vec inline-C producers are monomorphized
+to typed pointers.
 
-The bridge is now a documented small surface, not an open migration.
+The bridge is a documented small surface, not an open migration.
 Look for `tur_box_T` / `tur_unbox_T` helpers in the runtime and the
 `ensure_aggregate_spill_shim` codegen helper for the spill path.
 
@@ -186,9 +176,8 @@ as their natural C layout:
   ```)
 ```
 
-Before monomorphization landed, you would have had to cast `a` and `b`
-from `int64_t` back to `Pos*` and dereference. That style is no longer
-needed (and is wrong now -- `a` and `b` are passed by value).
+Do not cast `a` and `b` from `int64_t` back to `Pos*` and dereference --
+that carrier-style idiom is wrong here: `a` and `b` are passed by value.
 
 The carrier-bridge corners (HKT continuation results, Vec/Map element
 reinterprets) are the only places you still write `(int64_t)(intptr_t)`
@@ -200,8 +189,8 @@ typechecker probably wants a real type.
 When you hand a Turmeric function pointer to a C library (`qsort`
 comparators, Arrow release callbacks, signal handlers, raylib draw
 callbacks), the mangled spec symbol is what the C side takes. Mark the
-defn `#[used]` (shipped 0.22.0, #467) so the compiler keeps external
-linkage and doesn't DCE the body:
+defn `#[used]` so the compiler keeps external linkage and doesn't DCE
+the body:
 
 ```turmeric
 (defn #[used] compare-ints [a : ptr<void> b : ptr<void>] : int
@@ -223,31 +212,24 @@ Each module compiles independently. Spec emission rules:
 - A spec owned by a real user module is emitted with **external
   linkage** in that module and **extern declarations** elsewhere.
 - A spec owned by the prelude (no real owning module) is also emitted
-  with **external linkage** as of 0.22.0 (#444 follow-up): the prior
-  0.21.0 workaround that emitted prelude specs `static` in every
-  referencing TU is gone now that the cross-TU ownership rule is
-  correct. The history: pre-0.21.0, two TUs sharing a prelude spec
-  would `multiple definition` link-fail; 0.21.0 patched that by going
-  `static`; 0.22.0 returned them to external linkage with the
-  ownership rule fixed.
+  with **external linkage**; the cross-TU ownership rule guarantees
+  exactly one TU emits the body.
 
 If you're maintaining the codegen, the rule of thumb is: the owning
-module is whoever declared the originating defn/instance. If that
-module is the prelude, fall back to `static`.
+module is whoever declared the originating defn/instance.
 
 ## Compiler-contributor cheat sheet
 
-- **Emit pipeline.** `emit_call.c` picks the spec for a call site;
-  `emit_fn.c` emits each spec's body. `mangle.c` turns
-  `(defn-name, [arg types])` into the spec symbol.
-- **Boundary types.** `TypeKind::Carrier` (`int64_t`) and
-  `TypeKind::Concrete` (the real type) are the only two flavors that
-  matter at the C-emit boundary. 0.21.0 #368 removed the
-  `EX_ASCRIBE CK_CONCRETE -> CK_CARRIER` bridge; the remaining
-  ascription path goes the other direction (carrier -> concrete return
-  deref for by-value instance methods, landed in 0.21.0 #369 under M5
-  Option C). Outside the documented bridge cases, every Concrete stays
-  Concrete.
+- **Emit pipeline.** `emit_expr.c` picks the spec for a call site;
+  `emit_fns.c` emits each spec's body. The spec symbols themselves are
+  assembled in `emit_module.c`.
+- **Boundary types.** `CK_CARRIER` (`int64_t`) and `CK_CONCRETE` (the
+  real type) are the only two `CarrierKind` flavors that matter at the
+  C-emit boundary (`emit_internal.h`). There is no
+  `EX_ASCRIBE CK_CONCRETE -> CK_CARRIER` bridge; the ascription path
+  goes the other direction (carrier -> concrete return deref for
+  by-value instance methods). Outside the documented bridge cases,
+  every Concrete stays Concrete.
 - **HKT specs.** A by-value HKT instance method's spec name encodes
   *both* the constructor and the element type:
   `Functor_fmap__spec__Option__int`. If you see a method spec without
@@ -287,15 +269,15 @@ module is the prelude, fall back to `static`.
 
 ## Where to look next
 
-- `docs/archive/end-to-end-monomorphization-plan.md` -- the original
+- `docs/archive/history/end-to-end-monomorphization-plan.md` -- the original
   rationale and "why-monomorphization" framing.
-- `docs/archive/end-to-end-monomorphization-plan-2.md` -- the
-  remaining-work plan, archived complete 2026-06-19. Has the detailed
-  per-phase progress.
+- `docs/archive/history/end-to-end-monomorphization-plan-2.md` -- the
+  remaining-work plan, archived complete. Has the detailed per-phase
+  progress.
 - `docs/archive/m4-typeclass-per-method-abi-plan.md` and
   `docs/archive/m5-scope-audit-2026-06-18.md` -- the per-method ABI
   and constrained-poly HOF sub-plans.
-- `docs/archive/m7-stdlib-migration-execution.md` -- the by-value HKT
+- `docs/archive/history/m7-stdlib-migration-execution.md` -- the by-value HKT
   stdlib migration log.
 - `docs/guides/hkt-guide.md` -- the user-facing HKT story; this
   guide is the ABI underneath it.

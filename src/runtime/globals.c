@@ -53,6 +53,7 @@ uint32_t g_unsafe_total_lines = 0;
 
 /* Phase P3: HAMT lowering - track if HAMT is needed for this compilation */
 bool g_needs_hamt = false;
+bool g_needs_dlfcn = false;   /* jit-ffi: program uses dlopen/dlsym/call-ptr */
 
 /* stdlib/re.tur: track when any inline-C in this compilation references
  * <regex.h>. When true, the emitter hoists `#include <regex.h>` into the
@@ -115,6 +116,12 @@ bool g_sized_types_enabled = true;
 
 /* Phase SZ8: --dump-sizes flag */
 bool g_dump_sizes = false;
+bool g_dump_refine_json = false;
+bool g_trail_autoloaded = false;
+bool g_opt_option_niche = true;   /* graduated 2026-09-03; TUR_OPTION_NICHE=0 restores the tagged monomorph */
+bool g_adt_slab = false;
+bool g_sr1_sum_byvalue = true;
+bool g_sr2_app_sum_byvalue = true;
 
 /* ER1: --strict-effects flag */
 bool g_strict_effects = false;
@@ -124,6 +131,9 @@ bool g_dump_effects = false;
 
 /* G1: --dump-write-frames flag */
 bool g_dump_write_frames = false;
+
+/* R4 slice 2: --dump-read-frames flag */
+bool g_dump_read_frames = false;
 
 /* CPS2: --dump-cps flag */
 bool g_dump_cps = false;
@@ -175,6 +185,13 @@ bool g_symbols_enabled = true;
 /* INT-2: --interpret mode — true when running tur --interpret. */
 bool g_interpret_mode = false;
 
+/* `tur expand`: dump macro expansions during elaboration. */
+bool g_dump_expansion = false;
+
+/* Stage 3: --macro-caps=io -- grant the macro-time env I/O. */
+bool g_macro_caps_io = false;
+bool g_turi_stdlib_preload = false;
+
 /* F4 (cross-plan-followups): --Werror=deprecated promotes deprecation
  * warnings emitted by elab_lookup_sym to errors so a clean build can
  * gate against new uses of deprecated APIs. */
@@ -218,56 +235,51 @@ bool g_dump_mono_specs = false;
  * monomorphs (G1 of the generic-monomorph-classification plan).  Analysis only. */
 bool g_dump_cps_mono = false;
 
-/* E7 (v2 cps-dk-sole-effect-lowering-plan): enables the trampolined tail-resume
- * lowering -- a perform-continuation ending in a tail call is admitted as a
- * DKK_RESUME_FRAME and its handler tail-resume unwinds to the entry driver
- * (meta-stack) instead of resuming inline, keeping deep effectful tail-recursion
- * flat. Flipped by the `cps-tramp-resume` experiment; read by the CPS-IR
- * classifier (emit_cps_ir.c) and gates the trampoline runtime emission. */
-bool g_opt_cps_tramp_resume = true;
+/* g_opt_cps_tramp_resume and g_opt_owning_cloneable_capture RETIRED 2026-08-22.
+ * Both experiments graduated in July 2026 and both left their enable bit behind,
+ * defined and initialized true.  Neither had an EXPERIMENTS[] row any more, so
+ * no CLI, manifest, or user-config path could write either one -- the
+ * initializer was the only assignment in the tree, and every read (64 and 5
+ * respectively, across eight files) was a constant test with an unreachable
+ * arm.  Both are folded to true and the dead arms deleted.  See globals.h. */
 
-/* owning-cloneable-capture GRADUATED 2026-07-20 -- admitting an owning value
- * captured into a multi-shot cloneable continuation (with the per-frame env
- * clone/drop teardown) is now unconditional; the `owning-cloneable-capture`
- * experiment row is retired (moved to GRADUATED[] in experiments.c) and a
- * lingering --enable is a TUR-W0063 no-op.  The bit stays defined and true so
- * the admission predicates that read it stay always-on (mirrors g_gadt_enabled /
- * g_opt_cps_tramp_resume).  See
- * docs/archive/cps-backend-owning-env-teardown-e3-plan.md. */
-bool g_opt_owning_cloneable_capture = true;
+/* CG5/CG8 cycle-gc GRADUATED 2026-08-17 -- `(gc-auto!)` is an ordinary call
+ * form; the enable bit and the elab_gc_auto gate are gone.  What did NOT change
+ * is the default: a program that never calls `(gc-auto!)` still runs the
+ * pure-RC path with no collector overhead.  See
+ * docs/archive/gc-cycle-collection-followup-plan.md. */
 
-/* CG5 (cycle-gc experiment): admit `(gc-auto!)` -- automatic, allocation-driven
- * cycle collection.  Off by default; the collector's timing becomes implicit
- * when it is on, which is exactly what the experiment gate exists for.  See
- * docs/upcoming/v1/gc-cycle-collection-followup-plan.md. */
-bool g_opt_cycle_gc = false;
-/* J1 (jit-engine-plan): the `jit` experiment's enable bit -- gates the
- * `tur jit` subcommand until graduation. */
-bool g_opt_jit = false;
+/* J1-J3 jit GRADUATED 2026-08-17 -- `tur jit` needs only -DTUR_JIT=ON; the
+ * enable bit is gone.  See docs/archive/jit-engine-plan.md. */
 
 /* closure-drop-glue GRADUATED 2026-07-22 -- the Model R drop-glue header ABI is
  * unconditional; the enable bit and its codegen gates are gone.  See
- * docs/upcoming/closure-drop-glue-plan.md. */
+ * docs/archive/closure-drop-glue-plan.md. */
 
 /* RT0 refined GRADUATED 2026-08-01 -- static discharge of `#refine{...}` is
  * unconditional; the g_opt_refined enable bit and its elaboration gates are
- * gone.  See docs/upcoming/v1/refined-graduation-plan.md. */
+ * gone.  See docs/archive/refined-graduation-plan.md. */
 
-/* sealed-opaque (docs/upcoming/sealed-opaque-plan.md): `(defopaque H :int
- * :sealed)` makes `::` refuse to convert between H and its representation type
- * outside the module that declared H, closing the extract-reconstruct aliasing
- * hole that bounds every guarantee built on an opaque handle.  Off by default;
- * when off, `:sealed` still PARSES but imposes nothing, so a spice can adopt it
- * without breaking consumers who have not enabled the experiment. */
-bool g_opt_sealed_opaque = false;
+/* sealed-opaque GRADUATED 2026-08-17 -- `(defopaque H :int :sealed)` makes `::`
+ * refuse to convert between H and its representation type outside the module
+ * that declared H, unconditionally.  The enable bit and its gate are gone.  See
+ * docs/archive/sealed-opaque-plan.md. */
 
-/* write-frames (docs/upcoming/checked-write-frames-plan.md): `#writes w` /
- * `#writes [a b]` declares which of a function's arguments its body may write.
- * Off by default; when off the annotation still PARSES and is recorded but
- * nothing checks it and nothing acts on it, so a spice can adopt it without
- * breaking consumers who have not enabled the experiment. */
-bool g_opt_write_frames = false;
-bool g_opt_global_state  = false;
+/* write-frames GRADUATED 2026-08-20 -- `#writes w` / `#writes [a b]` declares
+ * which of a function's arguments its body may write, and WF2 now CHECKS every
+ * declared frame unconditionally (VERIFIED / EXCEEDED -> TUR-E0382 /
+ * UNVERIFIED).  The enable bit and its gates are gone.  See
+ * docs/archive/checked-write-frames-plan.md. */
+
+/* checked-reads GRADUATED 2026-08-20 -- the #reads congruence override is
+ * refused on positive broken-promise evidence, unconditionally.  The enable bit
+ * and its gates are gone.  See docs/upcoming/trusted-refinement-claims-plan.md
+ * (R2). */
+
+/* jit-ffi GRADUATED 2026-08-21 -- call-ptr / callback-ptr are ordinary
+ * `unsafe` forms.  The enable bit and its two elaboration gates are gone; the
+ * `-DTUR_JIT=ON` build gate on the interpreter path is untouched.  See
+ * docs/archive/jit-ffi-c2mir-plan.md. */
 
 /* --strict-refine: hard-fail on any obligation the chain could not prove. */
 bool g_strict_refine = false;

@@ -55,12 +55,11 @@ Expr *elab_async(Elab *e, const Form *call) {
                   "(async fn-expr) requires exactly one argument");
         return NULL;
     }
-    /* CF6: mark that we are elaborating an async body so elab_await can check
-     * Send for all bindings in scope at each await point. */
-    bool saved_in_async_body = e->in_async_body;
-    e->in_async_body = true;
+    /* CF6's in_async_body flag lived here: it told elab_await to run the
+     * Send-across-await check.  That check is unconditional now (see
+     * elab_await), so the flag had no remaining reader and is gone rather than
+     * left set-but-never-read. */
     Expr *fn_expr = elab_form(e, call->as.list.items[1]);
-    e->in_async_body = saved_in_async_body;
     if (!fn_expr) return NULL;
 
     /* Normalize `(async EXPR)` where EXPR is a BARE VALUE expression (not a
@@ -83,9 +82,7 @@ Expr *elab_async(Elab *e, const Form *call) {
         fnitems[1] = form_vec(e->arena, sp, NULL, 0);      /* [] -- no params */
         fnitems[2] = (Form *)call->as.list.items[1];        /* the original body */
         Form *thunk = form_list(e->arena, sp, fnitems, 3);
-        e->in_async_body = true;
         Expr *wrapped = elab_form(e, thunk);
-        e->in_async_body = saved_in_async_body;
         if (!wrapped) return NULL;
         fn_expr = wrapped;
     }
@@ -144,12 +141,22 @@ Expr *elab_await(Elab *e, const Form *call) {
         return NULL;
     }
     /* CF6 (TUR-E0022): conservative Send-across-await check.
-     * When inside an inline async closure, every binding currently in scope is
-     * treated as live across this await.  Any non-Send binding is a soundness
-     * hole: the fiber may resume on a different OS thread, racing with e.g. the
-     * rc<T> refcount.  This check applies to inline closures only; pre-defined
-     * functions passed to (async fn) are not re-elaborated here. */
-    if (e->in_async_body) {
+     * Every binding currently in scope is treated as live across this await.
+     * Any non-Send binding is a soundness hole: the fiber may resume on a
+     * different OS thread, racing with e.g. the rc<T> refcount.
+     *
+     * This used to run only inside an inline `(async (fn [] ...))` closure,
+     * gated on an in_async_body flag, because a pre-defined function passed to
+     * `(async f)` is elaborated at its own definition site and never
+     * re-elaborated here.  That made the check trivially evadable -- hoisting
+     * the same body into a named defn and writing `(async f)` silenced it --
+     * so a non-Send value could sit live across an await with no diagnostic at
+     * all.  cps-async lowering is unconditional now (fixture async-await-cps),
+     * so a body containing an await is fiber-resumable regardless of how it
+     * reaches `async`, and the check belongs at every await point rather than
+     * at the ones the elaborator happens to be walking inside an async form.
+     * See docs/archive/async-send-check-skips-predefined-fns.md. */
+    {
         bool had_error = false;
         for (Scope *sc = e->scope; sc != NULL; sc = sc->parent) {
             for (uint32_t i = 0; i < sc->n; i++) {
@@ -405,7 +412,7 @@ static Type catch_unwind_result_type(Elab *e, Expr *thunk, Span span) {
  * unchanged so TUR_APPLY0 dispatches to the lifted thunk with the env box
  * as its first argument.  Double-boxing a capturing closure through
  * EX_FN_TO_FAT here previously dropped the env and segfaulted -- see
- * docs/reported/catch-unwind-drops-captures-segv.md. */
+ * docs/archive/history/catch-unwind-drops-captures-segv.md. */
 static Expr *catch_thunk_to_fat(Elab *e, Expr *thunk) {
     if (thunk && thunk->type.kind == TY_FN && !thunk->type.as.fn.boxed) {
         Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID, thunk->span);
@@ -413,6 +420,19 @@ static Expr *catch_thunk_to_fat(Elab *e, Expr *thunk) {
         return shim;
     }
     return thunk;
+}
+
+/* httpd-mw-recover-unblocked-but-unwritten (B): mark a catch boundary's thunk
+ * so its env drop-glue does not release captured `^fat` handles -- see the
+ * `fat_captures_borrowed` comment on struct Closure. */
+static void catch_thunk_mark_borrowed(Expr *thunk) {
+    Expr *t = thunk;
+    while (t && (t->kind == EX_ASCRIBE || t->kind == EX_FN_TO_FAT)) {
+        t = (t->kind == EX_ASCRIBE) ? t->as.ascribe_.inner
+                                    : t->as.fn_to_fat_.inner;
+    }
+    if (t && t->kind == EX_CLOSURE && t->as.closure_.closure)
+        t->as.closure_.closure->fat_captures_borrowed = true;
 }
 
 /* Phase R2: (catch-unwind thunk) — catch any panic at a boundary.
@@ -430,6 +450,7 @@ Expr *elab_catch_unwind(Elab *e, const Form *call) {
     if (!thunk) return NULL;
     Type result_ty = catch_unwind_result_type(e, thunk, call->span);
     thunk = catch_thunk_to_fat(e, thunk);
+    catch_thunk_mark_borrowed(thunk);
     Expr *out = expr_new(e->arena, EX_CATCH_UNWIND, result_ty, call->span);
     out->as.catch_unwind_.thunk = thunk;
     return out;
@@ -459,6 +480,7 @@ Expr *elab_catch_panic_of(Elab *e, const Form *call) {
     if (!thunk) return NULL;
     Type result_ty = catch_unwind_result_type(e, thunk, call->span);
     thunk = catch_thunk_to_fat(e, thunk);
+    catch_thunk_mark_borrowed(thunk);
     Expr *out = expr_new(e->arena, EX_CATCH_PANIC_OF, result_ty, call->span);
     out->as.catch_panic_of_.type_kind = type_kind;
     out->as.catch_panic_of_.thunk = thunk;

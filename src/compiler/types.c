@@ -3,7 +3,11 @@
 #include "kind_check.h"  /* Phase HKT-P1: for kind_of_type_app */
 #include "forms.h"      /* Phase HKT-P1: for Span */
 #include "effect.h"     /* FH4.1: EffectRow name-set helpers for TY_HANDLER */
-#include "mangle.h"  /* c-keyword guard: keep append_c_ident_mangled in lockstep with mangle_field_name */
+#include "expr.h"     /* increment 4 stage 3: Binding, for repr_of_binding */
+#include "globals.h"  /* increment 4 stage 3: g_emit_abi_trace (container-elem shadow) */
+#include "experiments.h" /* SR3 slice B: option-niche lifecycle warning */
+#include "mangle.h"
+/* c-keyword guard: keep append_c_ident_mangled in lockstep with mangle_field_name */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,6 +49,13 @@ Arena *tur_type_arena(void) {
  * single-variant record monomorph emit routes its field stores through the same
  * member-path the typedef / field-read / match sites use. */
 char *mangle_field_name(const char *name);
+char *mangle_adt_name(const char *name);
+/* duplicate-ctor-names-collide-in-emitted-c: the ADT-qualified base token
+ * of a constructor's emitted C FUNCTION symbol.  Defined in emit_core.c;
+ * forward-declared here (types.c does not include emit_internal.h) so the
+ * monomorph ctor emit spells the symbol exactly as the base-ctor emit and
+ * every call site do. */
+char *mangle_ctor_symbol(const struct AdtDef *adt, const char *ctor_name);
 char *adt_field_member_path(const struct AdtDef *def, const struct CtorDef *ctor,
                             uint32_t fi);
 
@@ -208,7 +219,7 @@ int type_eq(Type a, Type b) {
      * pointer equality is name equality).  Two unnamed tyvars are still equal
      * (the historical default); but two distinctly-named tyvars are NOT.  This
      * is load-bearing for Direction A of
-     * docs/reported/open-binder-skolems-not-distinguishable.md, where each
+     * docs/archive/history/open-binder-skolems-not-distinguishable.md, where each
      * `open` mints a fresh skolem-named tyvar and the call-side unifier must
      * reject mismatches across nested opens. */
     if (a.kind == TY_TYVAR) {
@@ -516,7 +527,8 @@ bool type_extract_adt_app(const Type *t, AdtDef **out_def,
     X(TY_TIMEOUT,           "/*session-protocol*/ void", "timeout",          false) \
     X(TY_SESSION_PAIR,      "void *",                   "session_pair",      false) \
     X(TY_SESSION_RECV_PAIR, "void *",                   "session_recv_pair", false) \
-    X(TY_SESSION_OFFER,     "int64_t",                  "session_offer",     false)
+    X(TY_SESSION_OFFER,     "int64_t",                  "session_offer",     false) \
+    X(TY_SYNTAX,            "/*syntax*/ void",          "syntax",            false)
 
 bool type_has_concrete_codegen_layout(const Type *t) {
     if (!t) return false;
@@ -624,6 +636,45 @@ bool type_has_concrete_codegen_layout(const Type *t) {
  * type_has_concrete_codegen_layout deliberately rejects ADT apps (its callers
  * then call type_extract_struct_app), so this is a separate predicate used by
  * the M7 by-value HKT machinery to recognize a parametric-SUM result/element. */
+/* Is one type ARGUMENT of an ADT application concrete enough to monomorphise?
+ *
+ * type_has_concrete_codegen_layout answers `true` for every TY_ADT, which is
+ * right when the question is "does this value have a C representation" but
+ * wrong here: an UNAPPLIED parametric ADT names a type CONSTRUCTOR, not a type.
+ * Admitting it mangles `(Opt (Opt int))` -- whose inner argument was dropped
+ * somewhere upstream, leaving `(Opt Opt)` -- to the suffix `__Opt`, so a ctor
+ * call site names `ctor_Some__Opt` (an int64 carrier ctor) while the value in
+ * hand is `tur_adt_Opt__Opt__int`.  Declining lets the caller fall through to
+ * the spec-grounded suffix, which knows the real family.
+ *
+ * Shared by type_app_is_concrete_adt and adt_app_is_byvalue_product, whose
+ * argument loops were already required to stay in lockstep -- see the comment
+ * in the former.  A single helper is how they stay that way. */
+static bool adt_app_type_arg_is_concrete(const Type *a) {
+    if (!a) return false;
+    if (a->kind == TY_ADT && a->as.adt_.def && a->as.adt_.def->n_type_params > 0)
+        return false;
+    if (type_has_concrete_codegen_layout(a) || adt_app_is_byvalue_product(*a))
+        return true;
+    /* A nested app that NAMES a real monomorph, whatever its REPRESENTATION.
+     *
+     * The two tests above ask "does this argument have a C layout" and "is it a
+     * by-value monomorph".  A multi-variant parametric sum monomorph answers no
+     * to both on the default path -- it rides the carrier -- yet
+     * `tur_adt_Opt2__int` is a registered typedef all the same, and the OUTER
+     * app is perfectly nameable over it.  Answering no here made
+     * `(Vec (Opt2 int))` not-a-concrete-app, so the let binder fell to the int64
+     * carrier while repr_of said typed heap pointer, and the repr-shadow
+     * aborted the compile:
+     *
+     *   ICE: want=heap-ptr got=carrier-i64 ... type=(type-app Vec (type-app Opt2 int))
+     *
+     * A Vec of a parametric PRODUCT monomorph never hit it, because a product
+     * IS by-value and passed the second test.  See
+     * docs/archive/vec-of-parametric-sum-monomorph-ice.md. */
+    return a->kind == TY_APP && type_app_is_concrete_adt(a);
+}
+
 bool type_app_is_concrete_adt(const Type *t) {
     if (!t || t->kind != TY_APP) return false;
     AdtDef *def = NULL;
@@ -635,11 +686,15 @@ bool type_app_is_concrete_adt(const Type *t) {
      * ADT -- so it must not be registered/monomorphized. */
     if (def->is_opaque) return false;
     for (uint32_t i = 0; i < n_args; i++) {
-        /* Nested by-value-product element accepted only for a :heap outer (see
-         * adt_app_is_byvalue_product) so the ctor selection picks the monomorph
-         * ctor matching the field-read consumer's layout. */
-        if (!type_has_concrete_codegen_layout(&args[i]) &&
-            !(def->is_heap && adt_app_is_byvalue_product(args[i]))) return false;
+        /* A nested by-value-product element is accepted for ANY outer, not just
+         * a :heap one.  This must stay in lockstep with the identical loop in
+         * adt_app_is_byvalue_product: that predicate decides the monomorph's
+         * REPRESENTATION and this one decides whether a ctor CALL SITE names
+         * the monomorph.  Widening one alone makes `some__spec__..._Vec__int`
+         * return the by-value aggregate while its body still calls the
+         * carrier `ctor_Option` -- eight fixtures fail to compile with
+         * "incompatible types when returning type 'int64_t'". */
+        if (!adt_app_type_arg_is_concrete(&args[i])) return false;
     }
     return true;
 }
@@ -746,14 +801,16 @@ bool type_is_transparent_int_newtype(Type t) {
  * and the make-struct fn-field store (which must not re-box an already
  * normalized param).  Named tyvars are therefore no longer excluded here.
  *
- * One exclusion remains, measured again 2026-08-01 with the tyvar half in:
- *   - effect rows -- an effectful callback's thin convention is LOAD-BEARING
- *     for the CPS backend.  Lifting it regresses 22 fixtures: 17 effect/cps
- *     behavioral (colored fn values have their own twin/trampoline calling
- *     convention this predicate must not override) and, more seriously, 5
- *     `tests/fixtures/errors/effect-*` negative fixtures STOP diagnosing --
- *     effect-row checking itself reads the thin representation.  That is a
- *     CPS-backend increment, not a param-side rule.
+ * The LAST exclusion -- effect rows -- was lifted 2026-08-16 by the CPS
+ * increment it was waiting on.  The load-bearing thin dependence was the E2a
+ * direct-entry-keyed CPS twin registry; the via_registry call sites now
+ * dispatch fat (slot 0 = a registered capturing-lambda entry with an
+ * env-taking __cps twin, slot 1 = a fatshim's stashed bare-fn entry), the
+ * effect_check walkers peel the EX_FN_TO_FAT shim, and threadable capturing
+ * lambdas are CPS-admitted with the env unpacked exactly like the direct
+ * thunk.  Effect-annotated fn params are therefore normalized like every
+ * other nominal fn param.  Pinned by
+ * tests/fixtures/effect-capturing-closure-thin-param/.
  *
  * Note the asymmetry with fn_result_type_is_fat_normalized below: a tyvar-sig
  * fn type is normalized in PARAM position but not as a declared RESULT.  The
@@ -793,7 +850,6 @@ bool fn_param_type_is_fat_normalized(const Type *t) {
     if (!(t && t->kind == TY_FN && !t->as.fn.cfnptr &&
           !t->as.fn.is_variadic && t->as.fn.arity <= 5))
         return false;
-    if (t->as.fn.effect_row) return false;
     return true;
 }
 
@@ -814,18 +870,23 @@ bool fn_result_type_is_fat_normalized(const Type *t) {
  * emitted C identifier (`tur_adt_Lens'__...` is not valid C). */
 static void append_c_ident_mangled(Buf *b, const char *name) {
     /* c-keyword-function-names-not-mangled: keep this byte-for-byte in lockstep
-     * with mangle_field_name in emit_core.c, which spells the same names at the
+     * with mangle_adt_name in emit_core.c, which spells the same names at the
      * declaration sites. A keyword-named ADT is not itself a C collision here
      * (every use is prefixed, `tur_adt_enum`), but if the two manglers disagree
-     * the typedef and its use sites name different types. */
-    if (name && tur_name_is_c_keyword(name, strlen(name)))
-        buf_puts(b, TUR_NAME_GUARD_PREFIX);
-    for (const char *p = name; p && *p; p++) {
-        char c = *p;
-        bool ident = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                     (c >= '0' && c <= '9') || c == '_';
-        buf_putc(b, ident ? c : '_');
-    }
+     * the typedef and its use sites name different types.
+     * separator-fold-collides-emitted-c-names: the injective scheme (mangle.h),
+     * so the `_` / `__` joiners around this name are structural only -- a
+     * user ADT `Foo__int` no longer spells the `(Foo int)` monomorph's name. */
+    if (!name) return;
+    size_t len = strlen(name);
+    if (tur_name_is_c_keyword(name, len)) buf_puts(b, TUR_NAME_GUARD_PREFIX);
+    char *tmp = (char *)malloc(tur_mangle_bound(len) + 1);
+    if (!tmp) { fprintf(stderr, "tur: oom\n"); abort(); }
+    size_t k = 0;
+    tur_mangle_append(tmp, &k, name, len);
+    tmp[k] = '\0';
+    buf_puts(b, tmp);
+    free(tmp);
 }
 
 /* Mangle a bare TypeKind by routing it through append_type_mangle, so a
@@ -906,7 +967,7 @@ static void append_type_mangle(Buf *b, Type t) {
             }
             break;
         }
-        /* docs/archive/concrete-codegen-layout-kind-enumerations-drift.md:
+        /* docs/archive/history/concrete-codegen-layout-kind-enumerations-drift.md:
          * this switch used to end in `default: "opaque"`, which did not drop an
          * unlisted kind but MERGED it -- every kind without a case mangled to
          * the single token `opaque`, so two distinct instantiations claimed one
@@ -1099,7 +1160,7 @@ static void append_type_mangle(Buf *b, Type t) {
     }
 }
 
-static Type clone_struct_app_type(Type t) {
+Type clone_struct_app_type(Type t) {
     if (t.kind != TY_APP) return t;
     Type out = t;
     out.as.app.fn = (Type *)malloc(sizeof(Type));
@@ -1127,7 +1188,7 @@ void free_struct_app_type(Type t) {
  * TY_APP whose copy_kind / substruct reflect the head's :linear (or :affine)
  * qualifier; otherwise the linear-discipline checker silently treats the
  * applied value as a plain copyable handle.  See
- * docs/reported/parametric-linear-opaque-not-enforced.md.
+ * docs/archive/history/parametric-linear-opaque-not-enforced.md.
  * Walks the `fn` spine down to its head; if the head is a :linear / :affine
  * opaque/struct, lifts the discipline onto the TY_APP node in place. */
 void propagate_app_discipline(Type *app, const Type *fn) {
@@ -1352,6 +1413,144 @@ Type substitute_adt_app_type_owned(const Type *t, const AdtDef *def,
  * precedence over the B4 wide-by-value-element int64 box (`type_is_wide_byval_adt`)
  * for these fields, which would otherwise pick a conflicting int64 slot for a wide
  * (>8-byte) record-ADT payload like `User`. */
+/* SR3 slice A (null-None).  Keyed by name like adt_field_is_ros_pointer_box
+ * above, with the shape pinned down (2 ctors, nullary tag 0 named None) so a
+ * user ADT that happens to be called Option but is shaped differently never
+ * takes the niche.  A same-shaped user Option does -- and gets the same
+ * semantics, since the readers treat NULL as tag 0 uniformly. */
+bool adt_ctor_is_null_none(const AdtDef *def, const CtorDef *ctor) {
+    return def && ctor && def->name && ctor->name &&
+           strcmp(def->name, "Option") == 0 && def->n_ctors == 2 &&
+           ctor->tag == 0 && ctor->n_fields == 0 &&
+           strcmp(ctor->name, "None") == 0;
+}
+
+/* SR3 slice B (the Option niche -- default since 2026-09-03, TUR_OPTION_NICHE=0
+ * restores the tagged form; docs/upcoming/sr3-option-niche-plan.md):
+ * represents an `(Option P)` monomorph whose payload is a NON-NULLABLE pointer
+ * as the bare payload pointer -- 16 bytes down to 8, with `(none)` as the null
+ * pointer.  Slice A already made the CARRIER None the null pointer, so the two
+ * representations already agree about None; what this adds is Some carried AS
+ * its payload, with no tag word anywhere.
+ *
+ * A real experiment rather than an env seam (the CLAUDE.md rule for an
+ * in-flight feature): it carries a hand-maintained soundness allowlist, so a
+ * user who turns it on should get the TUR-W0060 lifecycle warning and a plan to
+ * read.  `experiment_warn_if_used` is once-per-compile guarded, so calling it
+ * from this hot predicate costs one index lookup after the first. */
+static bool sr3_option_niche(void) {
+    /* Graduated 2026-09-03: default-on, no lifecycle warning.  The global is
+     * only ever cleared by TUR_OPTION_NICHE=0 (main.c), the bisection hatch. */
+    return g_opt_option_niche;
+}
+
+/* opaque-pointer-c-spelling (GRADUATED 2026-08-28, docs/archive/opaque-pointer-
+ * c-spelling-gate-results.md): an opaque newtype declared over a POINTER
+ * (`(defopaque String :ptr<void>)`) c-names as `void *`, not as the `int64_t`
+ * carrier word.
+ *
+ * The motivation is not size -- both are 8 bytes -- it is DISTINGUISHABILITY.
+ * The emitter asks "is this the int64 carrier?" by string-comparing the C name
+ * (94 `strcmp(cname, "int64_t")` sites), so an opaque pointer handle used to
+ * alias every other carrier value: a tagged ADT box, a closure handle, a boxed
+ * Option.  A pointer spelling is what lets those sites tell a handle apart from
+ * a box -- and it is the precondition SR3 slice B needs for `(Option String)`
+ * niche filling, which is the whole of that phase's census.
+ *
+ * The declared base type reaches here through `AdtDef.opaque_base_is_ptr`; it
+ * was parsed for POSITION only and discarded before this landed, which is why
+ * `:ptr<void>` and `:int` were indistinguishable downstream. */
+bool adt_opaque_c_names_as_pointer(const AdtDef *def) {
+    return def && def->is_opaque && def->opaque_base_is_ptr;
+}
+
+/* The soundness condition for the niche is "P's valid values EXCLUDE 0",
+ * because that is the bit pattern None claims.  Nothing in the type system
+ * PROVES non-nullness, so eligibility rests on two claims of different
+ * strengths -- and the polarity matters throughout: an unrecognised payload
+ * merely misses the optimisation, where a denylist that missed an entry would
+ * make `(some x)` and `(none)` the same value.
+ *
+ *   1. DECLARED (opaque newtypes): `(defopaque String :ptr<void> :non-null)`.
+ *      The type's author claims it at the definition site, next to the
+ *      constructors the claim is about.  The compiler cannot verify it --
+ *      inline-C or a coercing `::` can still smuggle a 0 -- so the niche
+ *      `Some` ctor enforces it at construction (emit_registered_adt_app_rec):
+ *      a null payload aborts with a message naming the type, instead of
+ *      silently reading back as `(none)`.
+ *   2. LISTED (compiler-lowered `:heap` collections): Vec / Map / Set /
+ *      MutableMap, whose constructors the compiler itself emits as
+ *      unconditional mallocs; an empty collection is a valid non-null header.
+ *      These stay a name list because they are defstruct-lowered heap ADTs,
+ *      not opaques -- there is no author-facing attribute slot for them yet --
+ *      and because the compiler emitting the ctor is a stronger warrant than
+ *      any annotation.
+ *
+ * `:heap`-ness itself is NOT the condition, which is the finding that shrank
+ * this phase.  `Cons` is a `:heap` record ADT whose EMPTY LIST is the null
+ * handle ("At runtime, nil is 0" -- stdlib/list.tur, and `(defn tnil [] : int
+ * 0)`), so `(Option (Cons T))` would read `(some (tnil))` as `(none)`.  A
+ * `:ptr<T>`, a `cstr`, or a bare closure handle is never eligible: null is a
+ * value each of them can legitimately hold, and none of them has an author who
+ * can claim otherwise. */
+static bool sr3_payload_is_nonnull_pointer(Type p) {
+    const AdtDef *pdef = NULL;
+    if (p.kind == TY_ADT && p.as.adt_.def) pdef = p.as.adt_.def;
+    else {
+        AdtDef *d = NULL;
+        Type pargs[16];
+        uint8_t pn = 0;
+        Type pt = p;
+        if (type_extract_adt_app(&pt, &d, pargs, &pn)) pdef = d;
+    }
+    if (!pdef || !pdef->name) return false;
+    bool allowed = false;
+    if (pdef->is_opaque) {
+        /* Claim 1: the declaration.  opaque_base_is_ptr is implied (the
+         * attribute is rejected on any other base) but asked anyway so a stale
+         * def can never widen eligibility. */
+        allowed = pdef->opaque_non_null && pdef->opaque_base_is_ptr;
+    } else {
+        static const char *const HEAP_ALLOW[] = {
+            "Vec", "Map", "Set", "MutableMap", NULL
+        };
+        for (uint32_t i = 0; HEAP_ALLOW[i] && !allowed; i++)
+            if (strcmp(pdef->name, HEAP_ALLOW[i]) == 0) allowed = true;
+    }
+    if (!allowed) return false;
+    /* And the payload's C spelling must be a real POINTER, not the int64
+     * carrier word.  This is about telling representations apart rather than
+     * about null: an `int64_t`-spelled niche `(Option P)` would be
+     * byte-identical to the CARRIER form of the same type, which is a pointer
+     * to a tagged box, and every `strcmp(cname, "int64_t")` test in the
+     * emitter (there are dozens) would read a niche value as a box and
+     * dereference the payload's first word as a tag.  This was the condition
+     * that ruled `String` out before `defopaque` over a pointer got its
+     * pointer C spelling; it is now a tautology for the opaque arm above (a
+     * `:non-null` opaque spells `void *`) and load-bearing only as a backstop. */
+    const char *pc = type_c_name(p);
+    return pc && strchr(pc, '*') != NULL;
+}
+
+/* True when `t` is an `(Option P)` monomorph eligible for the SR3 slice B
+ * niche.  Shape-pinned exactly as adt_ctor_is_null_none is (a user ADT that
+ * happens to be called Option but is shaped differently never takes it), plus
+ * the payload allowlist above. */
+bool adt_app_is_niche_option(Type t) {
+    if (!sr3_option_niche()) return false;
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return false;
+    if (n_args != 1 || def->n_ctors != 2 || !def->ctors) return false;
+    if (!def->ctors[0] || !def->ctors[1]) return false;
+    if (!adt_ctor_is_null_none(def, def->ctors[0])) return false;
+    if (def->ctors[1]->n_fields != 1 || !def->ctors[1]->name ||
+        strcmp(def->ctors[1]->name, "Some") != 0) return false;
+    if (!adt_app_type_arg_is_concrete(&args[0])) return false;
+    return sr3_payload_is_nonnull_pointer(args[0]);
+}
+
 bool adt_field_is_ros_pointer_box(const AdtDef *owner, const Type *resolved) {
     if (!owner || !owner->name || !resolved) return false;
     if (strcmp(owner->name, "Result") != 0 && strcmp(owner->name, "Option") != 0)
@@ -1386,13 +1585,73 @@ static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
          * reached for them.  The ctor heap-boxes the by-value param into the slot
          * (see the byval ctor branch's struct-pointer box). */
         if (adt_field_is_ros_pointer_box(owner, &resolved)) {
-            static char ptrbuf[128];
-            snprintf(ptrbuf, sizeof(ptrbuf), "%s *", type_c_name(resolved));
+            /* INTERNED, so the returned pointer is stable for the whole
+             * compilation -- the same contract type_c_name already honours, and
+             * the reason the distinction between the two was invisible at the
+             * call site.
+             *
+             * This used to be one function-scoped `static char ptrbuf[128]`.
+             * Callers collect several of these before printing any of them --
+             * the monomorph ctor emitter fills `val_ctype[]` for every field and
+             * only then writes the parameter list -- so a single buffer handed
+             * every field the LAST field's spelling.  That emitted
+             * `ctor_Result__Rational__ArithError(bool, tur_adt_ArithError *,
+             * tur_adt_ArithError *)`, silently mistyping ok_val as the error
+             * arm: well-formed C with the wrong type in it, no crash, no ASan
+             * report, no diagnostic.  A 16-slot rotating pool fixed the two-field
+             * case in 2026-08-26; interning removes the bound entirely.
+             *
+             * Latent until two fields of one constructor could both take this
+             * path: it needs a Result/Option monomorph whose OK and ERR arms are
+             * both non-parametric by-value ADTs, which is what a by-value sum
+             * makes ordinary (`(Result Rational ArithError)`).  See
+             * docs/archive/c-name-accessors-share-static-buffers.md. */
+            Buf pb; buf_init(&pb);
+            buf_printf(&pb, "%s *", type_c_name(resolved));
+            buf_putc(&pb, '\0');
+            const char *boxed = intern_type_name(pb.data);
+            buf_free(&pb);
             free_struct_app_type(resolved);
-            return ptrbuf;
+            return boxed;
         }
         const char *nm = type_c_name(resolved);
         free_struct_app_type(resolved);
+        /* SR2b layout contract: a MULTI-VARIANT parametric monomorph's union
+         * payload lives at offset 8 in a 16-byte tagged aggregate -- that is
+         * what the generic base layout (`tur_adt_Option`'s int64 slot), the
+         * preamble helpers (tur_opt_value & co.), and every erased reader
+         * assume.  A sub-word scalar member (`bool _0;`) gives the union
+         * 1-byte alignment: the payload lands at offset 4 in an 8-byte
+         * aggregate, and a generic-layout read of offset 8 returns garbage --
+         * `(unwrap-or (some true) false)` was false whenever the producer was
+         * the `Option__bool` monomorph ctor and the consumer an erased spec
+         * (type-fuzz BUG_wrong_output-000010).  Widen sub-word INTEGER
+         * scalars to the int64 slot; the store zero/sign-extends and the
+         * typed binder reads cast back, so both the monomorph-typed and the
+         * generic-layout views agree.  Single-variant records keep exact
+         * member types (they have no generic-union twin), and float/double
+         * keep theirs (an implicit float->int64 store would VALUE-convert;
+         * double is already 8-aligned). */
+        /* erased-generic-field-read-overruns-subword-monomorph-box: the
+         * single-variant record DOES have a generic twin after all.  The base
+         * typedef of a parametric record (`tur_adt_Identity { int64_t
+         * wrapped; }`) is what every erased generic body reads through --
+         * `(defn run-id [A] [i : (Identity A)] : A (.wrapped i))` -- and a
+         * `(Identity bool)` monomorph boxed at an aggregate spill with a 1-byte
+         * `bool wrapped;` is then read 8 bytes wide (ASan heap-buffer-overflow;
+         * the right answer only by little-endian luck).  So the widening applies
+         * to a record too, but ONLY for a field whose DECLARED type is a type
+         * parameter: that is the field the twin spells as int64_t.  A record
+         * field declared concretely (`:bool`) is `bool` in both layouts and
+         * keeps its width. */
+        bool declared_tyvar = field->full_type &&
+                              field->full_type->kind == TY_TYVAR;
+        if (owner && (owner->n_ctors > 1 || declared_tyvar) && nm &&
+            (strcmp(nm, "bool") == 0 ||
+             strcmp(nm, "int8_t") == 0 || strcmp(nm, "uint8_t") == 0 ||
+             strcmp(nm, "int16_t") == 0 || strcmp(nm, "uint16_t") == 0 ||
+             strcmp(nm, "int32_t") == 0 || strcmp(nm, "uint32_t") == 0))
+            return "int64_t";
         return nm;
     }
     switch (field->kind) {
@@ -1481,18 +1740,29 @@ static void record_adt_app_ctor_sigs(AdtDef *def, Type *args, uint8_t n_args,
     snprintf(ret_heap, sizeof ret_heap, "%s *", name.data);
     bool app_heap  = def->is_heap;
     bool app_byval = adt_app_is_byvalue_product(t);
-    const char *ctor_ret = app_heap ? ret_heap
+    /* SR3 slice B: a niche ctor returns the PAYLOAD's C type -- this table is
+     * what the call-site temp is declared from (`emit_sig_lookup_ret_ctype`),
+     * so recording the tagged monomorph name here spells a struct that has no
+     * definition.  Must stay in lockstep with emit_registered_adt_app_rec's
+     * `ctor_ret`, exactly as this function's header comment says. */
+    bool app_niche = adt_app_is_niche_option(t);
+    const char *ctor_ret = app_niche ? type_c_name(t)
+                         : app_heap ? ret_heap
                          : app_byval ? name.data : "int64_t";
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
+        /* duplicate-ctor-names-collide-in-emitted-c: this table is keyed by the
+         * emitted FUNCTION symbol, so it has to spell it the same way
+         * emit_registered_adt_app_rec does -- through the shared builder, which
+         * qualifies the constructor with its owning ADT.  A key that disagrees
+         * silently misses, and the call site then falls back to re-deriving a
+         * ctype the prototype does not carry. */
+        char *csym = mangle_ctor_symbol(def, ctor->name);
         char ctor_sym[512];
-        int off = snprintf(ctor_sym, sizeof ctor_sym, "ctor_");
-        size_t mlen = strlen(ctor->name);
-        for (size_t mi = 0; mi < mlen && off < (int)sizeof ctor_sym - 1; mi++) {
-            char c = ctor->name[mi];
-            ctor_sym[off++] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                               (c >= '0' && c <= '9') || c == '_') ? c : '_';
-        }
+        int off = snprintf(ctor_sym, sizeof ctor_sym, "ctor_%s", csym);
+        free(csym);
+        if (off < 0) off = 0;
+        if (off > (int)sizeof ctor_sym - 1) off = (int)sizeof ctor_sym - 1;
         ctor_sym[off] = '\0';
         if (off + suffix.len < sizeof ctor_sym)
             memcpy(ctor_sym + off, suffix.data, suffix.len);   /* includes NUL */
@@ -1581,6 +1851,15 @@ char *type_adt_app_ctor_suffix(Type t) {
     for (uint32_t i = 0; i < n_args; i++) {
         if (args[i].kind == TY_TYVAR || args[i].kind == TY_UNKNOWN) return NULL;
     }
+    /* SR2b: choosing a suffix is a PROMISE that `ctor_<Name><suffix>` exists,
+     * and only a REGISTERED app emits its monomorph ctors.  Every caller used
+     * to reach here for types that were registered anyway (by being named in a
+     * signature); a ctor call deep in a spec body -- `(ok (some v))` grounding
+     * to `(Result (Option int) cstr)` -- can be the type's ONLY appearance,
+     * and skipping registration left the call referencing an undefined
+     * `ctor_Ok__Option__int__cstr` at link time.  Registration is idempotent
+     * and an unused registration costs one guarded typedef. */
+    (void)type_register_adt_app(t);
     Buf b; buf_init(&b);
     append_adt_app_type_suffix(&b, def, args, n_args);
     buf_putc(&b, '\0');
@@ -1644,7 +1923,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                  * so a forward `typedef struct tur_adt_<Name> ...;` would dangle. */
                 !resolved.as.adt_.def->is_opaque &&
                 resolved.as.adt_.def->n_type_params == 0) {
-                char *un = mangle_field_name(resolved.as.adt_.def->name);
+                char *un = mangle_adt_name(resolved.as.adt_.def->name);
                 buf_printf(out, "#ifndef TUR_FWD_tur_adt_%s\n", un);
                 buf_printf(out, "#define TUR_FWD_tur_adt_%s\n", un);
                 buf_printf(out, "typedef struct tur_adt_%s tur_adt_%s;\n", un, un);
@@ -1662,9 +1941,15 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
      * typedef for the same instantiation, a third TU including both fails
      * with `redefinition` (each anonymous-struct typedef makes a fresh tag).
      * Per-instantiation include guard keyed on the mangled name. */
+    bool flat = adt_is_flat_product(def);
+    /* SR3 slice B: a niche-filled `(Option P)` has no struct at all -- its C
+     * type IS P's, so there is no typedef to emit.  Emitting one anyway would
+     * define a `tur_adt_Option__String` nothing references, and `type_c_name`
+     * (which answers P's name for this type) would never spell it. */
+    bool app_niche = adt_app_is_niche_option(g_adt_apps[idx].type);
+    if (!app_niche) {
     buf_printf(out, "#ifndef TUR_TY_%s\n", adt_inst_name);
     buf_printf(out, "#define TUR_TY_%s\n", adt_inst_name);
-    bool flat = adt_is_flat_product(def);
     /* CONV-S1 seam 4 (keystone): a single-variant record monomorph carries the
      * record's real field names (`{ T data; ... }`) -- the parametric analogue
      * of the non-parametric named layout -- so inline-C that reads it by field
@@ -1687,6 +1972,17 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             free_struct_app_type(fres);
             char *fname = mangle_field_name(fld->name);
             buf_printf(out, "    %s %s;\n", ctype, fname);
+            /* erased-generic-field-read-overruns-subword-monomorph-box, the
+             * float32 residue: a type-parameter field instantiated at float32
+             * stays a 4-byte `float` (widening it to the int64 slot would
+             * VALUE-convert on every implicit store), so pad it to the word.
+             * The erased twin reads this slot as int64 and recovers the float
+             * with a 4-byte memcpy from the slot's FIRST bytes -- byte position,
+             * not value -- which is exactly where the float sits; the pad only
+             * keeps that 8-byte read inside the aggregate on any endianness. */
+            if (fld->full_type && fld->full_type->kind == TY_TYVAR &&
+                ctype && strcmp(ctype, "float") == 0)
+                buf_printf(out, "    int32_t __pad_%s;\n", fname);
             free(fname);
         }
         buf_printf(out, "} %s;\n", adt_inst_name);
@@ -1724,6 +2020,10 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                 : adt_field_c_type(def, fld, args);
             free_struct_app_type(fres);
             buf_printf(out, " %s _%u;", ctype, fi);
+            /* float32 residue: same word pad as the named layout above. */
+            if (fld->full_type && fld->full_type->kind == TY_TYVAR &&
+                ctype && strcmp(ctype, "float") == 0)
+                buf_printf(out, " int32_t __pad_%u;", fi);
         }
         buf_printf(out, " } %s;\n", mctor);
         free(mctor);
@@ -1732,6 +2032,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
     buf_printf(out, "} %s;\n", adt_inst_name);
     buf_printf(out, "#endif\n\n");
     }
+    }   /* !app_niche */
 
     /* Build the type-arg suffix (e.g. "__float"). */
     Buf suffix; buf_init(&suffix);
@@ -1765,6 +2066,16 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                          (c >= '0' && c <= '9') || c == '_') ? c : '_';
         }
         mctor[mlen] = '\0';
+        /* duplicate-ctor-names-collide-in-emitted-c: two different names, and
+         * they were the same variable before.  `csym` is the FUNCTION symbol and
+         * carries the owning ADT (`ctor_<Adt>_<Ctor><suffix>`); `mctor` stays the
+         * bare union MEMBER name (`__r.as.<Ctor>`), which is already scoped by
+         * this monomorph's own struct and must NOT be qualified.  Using the
+         * shared builder for the symbol also puts this site on the same C-keyword
+         * guard as the call sites -- the hand-rolled mangle above has none, so a
+         * constructor named after a C keyword used to spell its definition and
+         * its calls differently. */
+        char *csym = mangle_ctor_symbol(def, ctor->name);
 
         /* B4 (slice 2): a wide by-value ADT element is passed to the ctor by
          * VALUE (the aggregate) but STORED as an int64 heap box -- so the ctor
@@ -1789,9 +2100,45 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
          * :heap struct ctor.  Fields are stored INLINE by value in the header
          * (no int64 carrier box) -- the pointer indirection is the whole point. */
         bool app_heap = def->is_heap;
-        const char *ctor_ret = app_heap ? heap_ptr_c_name(adt_inst_name)
+        /* SR3 slice B: a niche ctor is the identity on the payload.  `Some`
+         * returns its argument unchanged and `None` returns that pointer type's
+         * null -- no struct, no tag, no zeroing prologue.  The C name of the
+         * whole type IS the payload's (type_c_name), so `ctor_ret` and the
+         * `Some` param spell the same thing. */
+        const char *niche_ctype = NULL;
+        if (app_niche) niche_ctype = type_c_name(g_adt_apps[idx].type);
+        const char *ctor_ret = app_niche ? niche_ctype
+                             : app_heap ? heap_ptr_c_name(adt_inst_name)
                              : app_byval ? adt_inst_name : "int64_t";
-        buf_printf(out, "static %s ctor_%s%s(", ctor_ret, mctor, suffix.data);
+        if (app_niche) {
+            buf_printf(out, "static %s ctor_%s%s(", ctor_ret, csym, suffix.data);
+            if (ctor->n_fields == 1)
+                buf_printf(out, "%s _0", niche_ctype);
+            buf_printf(out, ") {\n");
+            if (ctor->n_fields == 1) {
+                /* option-niche: the eligibility claim ("this payload's valid
+                 * values exclude 0") is DECLARED, not proven -- inline-C or a
+                 * coercing `::` can still hand `some` a null.  Under the niche
+                 * that null IS `(none)`, so an unchecked identity ctor turns
+                 * the violation into a silent wrong answer downstream.  Check
+                 * it here, at the one point every niche Some passes through,
+                 * and die loudly naming the type.  Cost: one compare on a path
+                 * that exists to remove a malloc. */
+                buf_printf(out,
+                    "    if (!_0) { fprintf(stderr, \"tur: (some x) with a "
+                    "NULL payload for niche-represented %s -- the payload "
+                    "type's :non-null declaration was violated (a null here "
+                    "would silently read back as (none))\\n\"); abort(); }\n",
+                    adt_inst_name);
+                buf_printf(out, "    return _0;\n");
+            } else {
+                buf_printf(out, "    return (%s)0;\n", niche_ctype);
+            }
+            buf_printf(out, "}\n\n");
+            free(wide_box); free(val_ctype); free(mctor); free(csym);
+            continue;
+        }
+        buf_printf(out, "static %s ctor_%s%s(", ctor_ret, csym, suffix.data);
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             if (fi > 0) buf_puts(out, ", ");
             buf_printf(out, "%s _%u", val_ctype[fi], fi);
@@ -1813,6 +2160,22 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             buf_printf(out, "    return __r;\n");
         } else if (app_byval) {
             buf_printf(out, "    %s __r;\n", adt_inst_name);
+            /* SR2: a by-value SUM monomorph stores its tag and makes the dead
+             * bytes deterministic at the least possible cost -- the pad after
+             * the tag and the union tail beyond this variant.  Mirrors
+             * emit_byval_ctor_prologue (emit_module.c, SR4-perf); a flat
+             * product has no tag and skips all three lines. */
+            if (!flat) {
+                buf_printf(out, "    __r.tag = %u;\n", ctor->tag);
+                buf_printf(out,
+                    "    memset((char *)&__r + sizeof(__r.tag), 0, "
+                    "offsetof(%s, as) - sizeof(__r.tag));\n",
+                    adt_inst_name);
+                buf_printf(out,
+                    "    memset((char *)&__r.as + sizeof(__r.as.%s), 0, "
+                    "sizeof(__r.as) - sizeof(__r.as.%s));\n",
+                    mctor, mctor);
+            }
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);
                 /* CONV-S1 seam 4 (B4 wide element in a by-value product): the
@@ -1832,6 +2195,12 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                 free(mp);
             }
             buf_printf(out, "    return __r;\n");
+        } else if (adt_ctor_is_null_none(def, ctor)) {
+            /* SR3 slice A: the carrier None IS the null pointer.  Every reader
+             * already accepts it (tur_is_some(0) is false; a carrier match
+             * reads a NULL scrutinee as tag 0), so the box whose only content
+             * was `tag = 0` is pure allocation. */
+            buf_printf(out, "    return 0;\n");
         } else {
             buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
                        adt_inst_name, adt_inst_name, adt_inst_name);
@@ -1856,6 +2225,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         free(wide_box);
         free(val_ctype);
         free(mctor);
+        free(csym);
     }
     buf_printf(out, "#endif\n");
 
@@ -2160,6 +2530,9 @@ const char *type_name(Type t) {
             buf_free(&tmp);
             return r;
         }
+        /* Stage 1 (macro-system-direction-plan): compile-time syntax object. */
+        case TY_SYNTAX:
+            return "Syntax";
         /* Variadic HKT rows: short name "#row{T1 T2 ...}". */
         case TY_TYPEROW: {
             Buf tmp;
@@ -2423,7 +2796,7 @@ static void type_name_buf(Buf *b, Type t) {
         case TY_TYVAR:
             /* Include the binder name in the printed form so cross-skolem
              * mismatches (Direction A of
-             * docs/reported/open-binder-skolems-not-distinguishable.md) show
+             * docs/archive/history/open-binder-skolems-not-distinguishable.md) show
              * which tyvar is which: "tyvar 'n'" vs "tyvar '__open_skolem_3_0'". */
             if (t.as.tyvar_.name) {
                 buf_puts(b, "tyvar '");
@@ -2649,6 +3022,10 @@ static void type_name_buf(Buf *b, Type t) {
             buf_putc(b, ')');
             break;
         }
+        /* Stage 1 (macro-system-direction-plan): compile-time syntax object. */
+        case TY_SYNTAX:
+            buf_puts(b, "Syntax");
+            break;
         /* Variadic HKT rows: print as the surface form `#row{T1 T2 ...}`. */
         case TY_TYPEROW: {
             buf_puts(b, "#row{");
@@ -2845,7 +3222,7 @@ const char *adt_heap_ptr_c_name(const AdtDef *def) {
 /* CONV-S1: the stable C typedef name (`tur_adt_<mangled>`) for the BY-VALUE
  * representation of a non-parametric flat-product ADT.  Mirrors the name the
  * emitters build for the base typedef (emit_module.c:emit_adt_typedef_and_ctors)
- * -- `tur_adt_` + mangle_field_name(def->name) -- so signatures, constructors,
+ * -- `tur_adt_` + mangle_adt_name(def->name) -- so signatures, constructors,
  * `match`, and field-access all agree on one spelling.  The mangler (replace any
  * non `[A-Za-z0-9_]` byte with `_`) is replicated inline here so the type layer
  * does not have to reach up into the emit layer; the result is interned (same
@@ -2904,9 +3281,156 @@ static bool adt_field_is_inline_byval_d(const CtorField *f, int depth) {
     return false;
 }
 
+/* SR1: does the ADT reference graph rooted at `from` reach `target`?
+ *
+ * A by-value product embeds its by-value ADT fields INLINE, so a CYCLE in that
+ * graph has no finite C layout.  Self-recursion (`(Node :Tree :Tree)`) is the
+ * one-step case and was the only one the gate excluded; the mutual case is the
+ * same defect one hop further out -- `(defdata Expr (Expr :ExprNode))` against
+ * `(defdata ExprNode (Lit :int) (Add :Expr :Expr))`, where admitting `ExprNode`
+ * makes each type embed the other.
+ *
+ * That shape is worse than an unorderable typedef, which is how it surfaced.
+ * `adt_is_byvalue_product_d` walks the same graph under a depth budget, so on a
+ * cycle it answers the SAME question differently at different depths -- and the
+ * typedef emitter (depth 16 from the owner) and a field-store site (depth 16
+ * from the field) enter at different points.  Two emission sites disagreeing
+ * about one type's layout is a silent miscompile, not a build error.
+ *
+ * Conservative by construction: it follows every non-`:heap` ADT-typed field,
+ * whether or not that field would actually be inlined, and treats "not known
+ * yet" (a NULL ctor mid-definition, an unresolved def, an exhausted budget) as
+ * reaching.  Declining leaves the type exactly where it is with SR1 off -- on
+ * the int64 carrier -- so a false positive costs representation, never
+ * correctness.  A `:heap` field is a typed POINTER, which breaks the cycle the
+ * same way the carrier does. */
+static bool adt_graph_reaches(const AdtDef *from, const AdtDef *target,
+                              const AdtDef **seen, uint32_t *n_seen,
+                              uint32_t cap) {
+    if (!from || !target) return true;
+    for (uint32_t i = 0; i < *n_seen; i++)
+        if (seen[i] == from) return false;      /* already fully explored */
+    if (*n_seen >= cap) return true;            /* out of budget */
+    seen[(*n_seen)++] = from;
+    if (!from->ctors) return true;
+    for (uint32_t ci = 0; ci < from->n_ctors; ci++) {
+        const CtorDef *c = from->ctors[ci];
+        if (!c) return true;                    /* ctor array still filling */
+        for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+            const Type *ft = c->fields[fi].full_type;
+            if (!ft || ft->kind != TY_ADT) continue;
+            const AdtDef *fd = ft->as.adt_.def;
+            if (!fd) return true;
+            if (fd == target) return true;
+            /* A field naming the target by NAME but not yet resolved to its
+             * AdtDef is the same forward reference wearing a different hat. */
+            if (fd->name && target->name &&
+                strcmp(fd->name, target->name) == 0) return true;
+            if (fd->is_heap) continue;
+            if (adt_graph_reaches(fd, target, seen, n_seen, cap)) return true;
+        }
+    }
+    return false;
+}
+
+/* SR1 prototype gate (docs/upcoming/sum-representation-plan.md).  True when
+ * `def` is a MULTI-VARIANT sum that could flow by value as a tag+union
+ * aggregate: non-parametric, non-GADT, non-heap, and not recursive.
+ *
+ * The two recursion exclusions below are NOT the same test and are not
+ * redundant, which is worth stating because an earlier revision of this comment
+ * conflated them:
+ *
+ *   - `is_self_recursive` is the SR1/SR4 PHASE boundary.  Such a type lowers by
+ *     value perfectly well -- its recursive field is a one-word carrier, so the
+ *     layout is finite, and the gate proved a self-recursive `Tree` compiles and
+ *     runs.  (The plan's original claim that `(TPair :Term :Term)` "has no
+ *     finite inline size" is wrong for Turmeric.)  It is excluded because of
+ *     library source, not layout: see the comment at the test itself.
+ *
+ *   - `adt_graph_reaches` is a SOUNDNESS gate over the INLINE-by-value field
+ *     graph, where a cycle genuinely has no finite layout.  It covers the
+ *     mutual case, which the phase boundary does not.
+ *
+ * Note what this does NOT touch: `adt_is_flat_product` still reports false for
+ * these, so the tagged-union typedef, the tag store in each ctor and the tag
+ * test in `match` all stay exactly as they are.  Only the ABI moves.  Today
+ * those two questions -- "has no tag" and "flows by value" -- are conflated,
+ * because adt_is_byvalue_product_d requires adt_is_flat_product; separating
+ * them is the whole of SR1. */
+static bool adt_sr1_sum_candidate(const AdtDef *def) {
+    if (!g_sr1_sum_byvalue) return false;
+    if (!def || def->is_gadt || def->is_heap) return false;
+    if (def->n_ctors < 2 || def->n_type_params != 0) return false;
+    if (!def->ctors) return false;
+    /* SR4 measurement seam (2026-08-27): TUR_SR4_RECURSIVE_BYVALUE=1 admitted
+     * recursive sums to the by-value path (the default since RM4, below).  The suite is GREEN with it on --
+     * every codegen blocker is fixed (the fat-dispatch ABI disagreement,
+     * resolved by unifying every fat boundary on the b4box convention via
+     * thunk_param_slot_c_name; see the archived
+     * fat-dispatch-wide-byvalue-aggregate-argument report) -- so this line is
+     * now a PERFORMANCE decision, not a correctness one, and it was measured
+     * before being made (re-measured after the SR4-perf ctor-prologue fix,
+     * which halved the original ~1.4x regression -- the whole-union `{0}`
+     * zero-init was half the cost; see emit_byval_ctor_prologue):
+     *
+     *   logic.tur bind+walk, 400k passes:  carrier 0.40s / by-value 0.45s
+     *                                      peak RSS 116 MB -> 51 MB
+     *   re.tur compile+match, 5k passes:   carrier 14 ms / by-value 15 ms
+     *
+     * By value halves the mallocs (the payload no longer boxes; the spine box
+     * per node remains) but each walk step still deref-COPIES a 24-48 byte
+     * aggregate out of the spine box where the carrier copied one word --
+     * ~1.13x slower on logic, ~1.07x on regex, for ~2.2x less memory.  The
+     * residue is spread across many small copies (an arg spill here, a
+     * return-slot copy there; each hand-measured at ~2%), so there is no
+     * second big lever short of pointer-binding match fields.  The SR plan
+     * says to justify this phase against the post-reclamation baseline; the
+     * trade is now close enough that a memory-constrained workload could
+     * reasonably take it, but the default stays carrier until one asks.  is_self_recursive is the
+     * boundary; adt_graph_reaches below is the separate SOUNDNESS gate over
+     * inline-field cycles and is never bypassed. */
+    /* RM4 (reclamation-plan.md, 2026-09-02): the default FLIPPED to by value.
+     * Re-measured on the same two workloads after RM0 established that no
+     * arena is coming to make the carrier's mallocs cheap (RM2/RM3 have no
+     * constituency): logic bind+walk 400k passes carrier 0.49s / by-value
+     * 0.51s (~1.03x) at 370 MB -> 202 MB peak RSS; re compile+match 5k passes
+     * 68-90 ms / 65-71 ms (no slower) at 41 MB -> 33 MB.  The time side of the
+     * trade shrank to noise while the memory side held, and the premise for
+     * waiting is gone.  TUR_SR4_RECURSIVE_CARRIER=1 restores the carrier for
+     * A/B measurement; tests/run-sr4-seam.sh keeps THAT path from rotting now. */
+    if (def->is_self_recursive && getenv("TUR_SR4_RECURSIVE_CARRIER"))
+        return false;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        const CtorDef *c = def->ctors[ci];
+        /* The predicate is reached DURING elaboration of the very def it is
+         * asked about -- a self-recursive `(Node :Tree :Tree)` queries `Tree`
+         * while `Tree`'s ctor array is still being filled, so an entry can be
+         * NULL.  Decline rather than guess: a def whose variants are not all
+         * known yet cannot be shown non-recursive, and admitting it by default
+         * is how a recursive sum would slip onto the by-value path. */
+        if (!c) return false;
+        for (uint32_t i = 0; i < c->n_fields; i++) {
+            const CtorField *f = &c->fields[i];
+            if (f->full_type && f->full_type->kind == TY_APP) return false;
+        }
+    }
+    /* Direct AND mutual recursion, in one check: a sum that can reach itself
+     * through ADT-typed fields has no finite by-value layout. */
+    const AdtDef *seen[64];
+    uint32_t n_seen = 0;
+    if (adt_graph_reaches(def, def, seen, &n_seen, 64)) return false;
+    return true;
+}
+
 static bool adt_is_byvalue_product_d(const AdtDef *def, int depth) {
-    if (!adt_is_flat_product(def) || def->n_type_params != 0) return false;
-    const CtorDef *c = def->ctors[0];
+    const bool sr1_sum = adt_sr1_sum_candidate(def);
+    if (!sr1_sum && (!adt_is_flat_product(def) || def->n_type_params != 0))
+        return false;
+    /* Every variant's fields must be by-value-able, not just variant 0's --
+     * a union is only as flat as its widest arm. */
+    for (uint32_t ci = 0; ci < (sr1_sum ? def->n_ctors : 1u); ci++) {
+    const CtorDef *c = def->ctors[ci];
     for (uint32_t i = 0; i < c->n_fields; i++) {
         const CtorField *f = &c->fields[i];
         /* slice 4: a by-value aggregate field is inlined -- admit it. */
@@ -2930,6 +3454,7 @@ static bool adt_is_byvalue_product_d(const AdtDef *def, int depth) {
         if (k == TY_ADT || k == TY_APP || k == TY_STRUCT || k == TY_TYVAR)
             return false;
     }
+    }
     return true;
 }
 
@@ -2950,6 +3475,33 @@ bool adt_is_byval_recursive_carrier_wrapper(const AdtDef *def) {
     if (c->n_fields != 1) return false;
     const CtorField *f = &c->fields[0];
     return f->full_type && f->full_type->kind == TY_APP;
+}
+
+/* True when `arg_def` and `functor_def` form a FIXPOINT PAIR: `arg_def` is a
+ * non-parametric ADT one of whose fields is a type-application headed by
+ * `functor_def`, so `Expr`/`ExprF` and `Re`/`ReF` qualify.  Such a pair's C
+ * typedefs are mutually recursive, and only the carrier breaks the cycle -- the
+ * functor monomorph `tur_adt_ExprF__Expr` is emitted before `tur_adt_Expr`
+ * exists, so laying its fields out inline is an incomplete type, not merely a
+ * representation choice.
+ *
+ * Deliberately broader than adt_is_byval_recursive_carrier_wrapper, which is
+ * about a DIFFERENT property (an 8-byte wrapper whose by-value form IS its
+ * carrier int64) and whose sole-field requirement its own callers rely on. */
+bool adt_is_fixpoint_partner_of(const AdtDef *arg_def, const AdtDef *functor_def) {
+    if (!arg_def || !functor_def || arg_def->n_type_params != 0) return false;
+    if (!arg_def->ctors) return false;
+    for (uint32_t ci = 0; ci < arg_def->n_ctors; ci++) {
+        const CtorDef *c = arg_def->ctors[ci];
+        if (!c) continue;
+        for (uint32_t i = 0; i < c->n_fields; i++) {
+            const CtorField *f = &c->fields[i];
+            if (!f->full_type || f->full_type->kind != TY_APP) continue;
+            Type ft = *f->full_type;
+            if (type_adt_app_def(&ft) == functor_def) return true;
+        }
+    }
+    return false;
 }
 
 /* CONV-S1 (slice 4): public predicate -- is this field stored inline by value?
@@ -2989,15 +3541,17 @@ static size_t adt_field_size_bytes(TypeKind k) {
  * aggregate (its fields contribute their own bytes rather than a single 8-byte
  * carrier slot), so the >16-byte pass-by-pointer threshold lines up with the
  * nested-struct layout. */
+static size_t adt_byval_value_size_bytes_d(const AdtDef *def, int depth);
+
 static size_t adt_ctor_field_size_bytes(const CtorField *f, int depth) {
     if (depth > 0 && adt_field_is_inline_byval_d(f, depth) && f->full_type) {
         if (f->full_type->kind == TY_ADT && f->full_type->as.adt_.def) {
-            const AdtDef *ad = f->full_type->as.adt_.def;
-            const CtorDef *ic = ad->ctors[0];
-            size_t t = 0;
-            for (uint32_t i = 0; i < ic->n_fields; i++)
-                t += adt_ctor_field_size_bytes(&ic->fields[i], depth - 1);
-            return t;
+            /* SR1: an inline field can be a SUM now, so its size is the shared
+             * whole-value computation (tag + widest variant), not a walk of
+             * ctors[0].  Before SR1 only a flat product could be inlined, so
+             * the two were the same loop. */
+            return adt_byval_value_size_bytes_d(f->full_type->as.adt_.def,
+                                                depth - 1);
         }
     }
     return adt_field_size_bytes(f->kind);
@@ -3010,11 +3564,7 @@ bool adt_byval_pass_by_ptr(const AdtDef *def) {
      * the call site (`bsum(&p)` where `p` is already a pointer). */
     if (def && def->is_heap) return false;
     if (!adt_is_byvalue_product(def)) return false;
-    const CtorDef *c = def->ctors[0];
-    size_t total = 0;
-    for (uint32_t i = 0; i < c->n_fields; i++)
-        total += adt_ctor_field_size_bytes(&c->fields[i], 16);
-    return total > 16;
+    return adt_byval_value_size_bytes(def) > 16;
 }
 
 /* B4: the by-value (aggregate) byte size of a by-value ADT product -- the sum of
@@ -3022,13 +3572,38 @@ bool adt_byval_pass_by_ptr(const AdtDef *def) {
  * stored in a parametric carrier monomorph fits the int64 carrier slot directly
  * (<= 8 bytes, reinterpret; slice 1) or must ride a heap box (> 8 bytes; slice
  * 2).  Returns 0 for a non-by-value product. */
+static size_t adt_byval_value_size_bytes_d(const AdtDef *def, int depth) {
+    if (!adt_is_byvalue_product_d(def, depth > 0 ? depth : 1)) return 0;
+    /* SR1: a multi-variant sum's by-value size is the TAG WORD plus its WIDEST
+     * variant -- `struct { int tag; union { ... } as; }` -- not a walk of
+     * ctors[0].  The ctors[0]-only accounting (a flat-product assumption from
+     * before sums could be by value) sized `Subst` by its narrow SNil variant
+     * as 8 bytes, so type_is_wide_byval_adt called a ~40-byte value
+     * carrier-slot-safe: the closure b4box preamble never fired and the value
+     * was truncated to whatever the int64 slot held.  It also made
+     * adt_byval_pass_by_ptr's answer depend on DECLARATION ORDER.
+     *
+     * The 8 for the tag models `int tag;` padded to the union's 8-byte
+     * alignment -- exact for the int64-class fields these layouts hold, and
+     * safely conservative for the >8 / >16 threshold questions this number
+     * feeds.  Single-variant products keep the old sum-of-fields answer,
+     * byte for byte. */
+    const bool tagged = def->n_ctors > 1;
+    size_t widest = 0;
+    for (uint32_t ci = 0; ci < (tagged ? def->n_ctors : 1u); ci++) {
+        const CtorDef *c = def->ctors[ci];
+        if (!c) continue;
+        size_t total = 0;
+        for (uint32_t i = 0; i < c->n_fields; i++)
+            total += adt_ctor_field_size_bytes(&c->fields[i],
+                                               depth > 0 ? depth : 1);
+        if (total > widest) widest = total;
+    }
+    return (tagged ? 8u : 0u) + widest;
+}
+
 size_t adt_byval_value_size_bytes(const AdtDef *def) {
-    if (!adt_is_byvalue_product(def)) return 0;
-    const CtorDef *c = def->ctors[0];
-    size_t total = 0;
-    for (uint32_t i = 0; i < c->n_fields; i++)
-        total += adt_ctor_field_size_bytes(&c->fields[i], 16);
-    return total;
+    return adt_byval_value_size_bytes_d(def, 16);
 }
 
 /* B4 (byvalue-recursive-carrier, slice 2): true when `t` resolves to a WIDE
@@ -3056,6 +3631,42 @@ bool type_is_wide_byval_adt(Type t) {
     return false;
 }
 
+/* The b4box CLOSURE-SLOT width question, deliberately NOT folded into
+ * type_is_wide_byval_adt.
+ *
+ * A wide by-value aggregate crossing a closure/thunk parameter slot rides the
+ * int64 box-pointer convention: the typed-thunk typedef spells the slot
+ * `int64_t`, the dispatch site boxes, the thunk body derefs at entry.  A
+ * concrete parametric monomorph -- `(ExprF (fn [int] int))`, 24 bytes and
+ * pass-by-pointer at the callee -- belongs to that convention exactly as its
+ * non-parametric sibling does; spelled BY VALUE in the fat-dispatch cast, the
+ * call hands an aggregate to a `const T *` slot and the program SEGVs.  Same
+ * shape as the archived fat-dispatch-wide-byvalue-aggregate-argument, one
+ * representation over.
+ *
+ * The separation is load-bearing, not tidiness.  type_is_wide_byval_adt also
+ * drives ADT FIELD layout, where a parametric monomorph must stay INLINE:
+ * `(Cons (Option int))` lays its `head` out as a `tur_adt_Option__int`, and
+ * answering "wide" there retypes the field to the int64 carrier while every
+ * reader still binds the aggregate ("invalid initializer" -- six fixtures on
+ * the DEFAULT path).  Two questions, two predicates; only the closure-slot
+ * lockstep set (thunk_param_slot_c_name, the typed fatshims, the dispatch-site
+ * boxing, the thunk-body deref) consults this one. */
+bool type_is_b4box_closure_slot(Type t) {
+    if (type_is_wide_byval_adt(t)) return true;
+    if (t.kind == TY_APP) return adt_app_byval_value_size_bytes(t) > 8;
+    return false;
+}
+
+ContainerElemForm container_elem_form(Type elem) {
+    /* CE1: one chokepoint, defined AS repr_of's container answer so the two
+     * cannot drift (the retired-shadow argument below applies here too).  A
+     * niche option resolves to REPR_HEAP_PTR in repr_of's SR3 arm, which is
+     * what makes it CE_WORD; a by-value aggregate is REPR_BOXED_AGG. */
+    return repr_of(&elem, REPR_POS_CONTAINER_ELEM) == REPR_BOXED_AGG ? CE_BOX
+                                                                     : CE_WORD;
+}
+
 /* Increment 3 (representation-consolidation meta-plan): the CONTAINER-ELEMENT
  * boxing predicate.  True when `t` is a non-heap by-value ADT product of ANY
  * width -- the class of element that must be heap-boxed when stored into a
@@ -3072,9 +3683,41 @@ bool type_is_wide_byval_adt(Type t) {
  * folds), and the read-back recovery must consult THIS predicate so the four
  * decisions cannot drift. */
 bool type_is_boxed_container_elem(Type t) {
-    if (t.kind != TY_ADT || !t.as.adt_.def) return false;
-    if (t.as.adt_.def->is_heap) return false;
-    return adt_byval_value_size_bytes(t.as.adt_.def) > 0;
+    /* Increment 4, THE COLLAPSE (2026-08-16): this predicate is now
+     * `repr_of`'s answer rather than a second derivation of it.  That is what
+     * increment 4 was for -- "collapse the per-site representation choices
+     * into the single repr-of(type, position) routine".
+     *
+     * The shadow that measured this position reported one disagreement class:
+     * a concrete by-value APP element (`(Vec (Option int))`), where repr_of
+     * said BOXED and this predicate said not-boxed.  The diagnosis at the
+     * time was "two mechanisms deciding one thing and AGREEING" -- the push
+     * side really does malloc the monomorph either way -- and that was true
+     * of the BOXING half and false of the OWNERSHIP half.  Measured: the
+     * `tur-vec-elem-wide?` / `tur-wide-byval?` folds consult this predicate,
+     * so they answered 0 for app elements and `vec-free` never released the
+     * boxes the push side had allocated.  `(Vec (Option int))` leaked one
+     * element box per push (32 bytes / 2 allocations under LeakSanitizer for
+     * a two-push probe, while the sibling `(Vec Sm)` in the same program
+     * freed both of its).  Two mechanisms that agree on one half of a
+     * decision and disagree on the other is exactly the defect shape this
+     * campaign exists to close. */
+    bool boxed = repr_of(&t, REPR_POS_CONTAINER_ELEM) == REPR_BOXED_AGG;
+    /* The shadow that lived here is retired BY CONSTRUCTION: with the
+     * predicate defined as repr_of's answer, want and got are the same
+     * expression and a disagreement is unrepresentable.  That is the
+     * intended end state for a consolidated position -- a chokepoint that
+     * cannot drift needs no instrument watching it drift -- and it is why
+     * `run-repr-trace.sh` now asserts SILENCE on the shape that used to be
+     * the pinned TY_APP row.  The other six positions keep their shadows
+     * because their sites still derive their own answers.
+     *
+     * Kept deliberately: the >0-size and non-heap conditions now live in
+     * repr_of (heap types return HEAP_PTR before the by-value arm; a
+     * transparent int newtype returns SCALAR_BITS), so this function has no
+     * conditions of its own left to drift.
+     */
+    return boxed;
 }
 
 /* Parametric-by-value: app-aware sibling of adt_byval_pass_by_ptr.  A concrete
@@ -3083,26 +3726,53 @@ bool type_is_boxed_container_elem(Type t) {
  * convention.  Each field's byte size is taken from its monomorphised kind
  * (substituting the app args for the base def's type params); aggregate fields
  * default to the 8-byte carrier slot size, monotone for the threshold. */
-bool adt_app_byval_pass_by_ptr(Type t) {
-    if (!adt_app_is_byvalue_product(t)) return false;
+/* The in-memory size of a by-value parametric monomorph: the tag word (when the
+ * def is a sum) plus its WIDEST substituted variant -- exactly what
+ * adt_byval_value_size_bytes_d computes on the non-parametric side.  Returns 0
+ * when `t` is not a by-value monomorph at all, so every caller can treat 0 as
+ * "not applicable" rather than "zero-sized".
+ *
+ * Every width question about such a value routes here: pass-by-pointer (> 16,
+ * the SysV threshold) and the b4box closure-slot convention (> 8) are two
+ * thresholds on ONE size, and reading `ctors[0]` alone made the answer depend on
+ * declaration order. */
+size_t adt_app_byval_value_size_bytes(Type t) {
+    if (!adt_app_is_byvalue_product(t)) return 0;
+    /* SR3 slice B: a niche-filled Option IS one pointer -- 8 bytes, whatever
+     * the tagged layout its ctors describe would have measured.  Answering 16
+     * here would make it "wide" for the b4box closure-slot convention and get
+     * it heap-boxed as a carrier element, which is the allocation the niche
+     * exists to remove. */
+    if (adt_app_is_niche_option(t)) return 8;
     AdtDef *def = NULL;
     Type args[16];
     uint8_t n_args = 0;
-    if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return false;
-    /* seam 3: a :heap parametric ADT monomorph is a typed pointer, never pbp. */
-    if (def->is_heap) return false;
-    const CtorDef *c = def->ctors[0];
-    size_t total = 0;
-    for (uint32_t i = 0; i < c->n_fields; i++) {
-        TypeKind k = c->fields[i].kind;
-        if (c->fields[i].full_type) {
-            Type rf = substitute_adt_app_type_owned(c->fields[i].full_type, def, args);
-            k = rf.kind;
-            free_struct_app_type(rf);
+    if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return 0;
+    /* seam 3: a :heap parametric ADT monomorph is a typed pointer, not an
+     * aggregate -- it has no by-value width. */
+    if (def->is_heap) return 0;
+    const bool tagged = def->n_ctors > 1;
+    size_t widest = 0;
+    for (uint32_t ci = 0; ci < (tagged ? def->n_ctors : 1u); ci++) {
+        const CtorDef *c = def->ctors[ci];
+        if (!c) continue;
+        size_t total = 0;
+        for (uint32_t i = 0; i < c->n_fields; i++) {
+            TypeKind k = c->fields[i].kind;
+            if (c->fields[i].full_type) {
+                Type rf = substitute_adt_app_type_owned(c->fields[i].full_type, def, args);
+                k = rf.kind;
+                free_struct_app_type(rf);
+            }
+            total += adt_field_size_bytes(k);
         }
-        total += adt_field_size_bytes(k);
+        if (total > widest) widest = total;
     }
-    return total > 16;
+    return (tagged ? 8u : 0u) + widest;
+}
+
+bool adt_app_byval_pass_by_ptr(Type t) {
+    return adt_app_byval_value_size_bytes(t) > 16;
 }
 
 /* Parametric-by-value: true when `t` is a by-value monomorph -- either a
@@ -3117,7 +3787,7 @@ bool type_is_byvalue_adt_product(Type t) {
 }
 
 /* Parametric-by-value monomorphisation (heavy prerequisite for CONV-S1
- * graduation; see docs/upcoming/parametric-adt-byvalue-plan.md).
+ * graduation; see docs/archive/parametric-adt-byvalue-plan.md).
  *
  * A concrete monomorphisation of a single-variant, non-GADT, parametric flat
  * product -- e.g. `(Pair2 int float)` from `(defdata Pair2 [A B] (Pair2 [a:A
@@ -3140,13 +3810,56 @@ bool type_is_byvalue_adt_product(Type t) {
  * predicate, so this never touches that machinery (B4 remains separate). */
 static const bool g_adt_app_byvalue = true;
 
+/* SR2a (docs/upcoming/sum-representation-plan.md SR2): a MULTI-VARIANT
+ * parametric sum monomorph (`(Opt2 int)`, and above all `(Option int)` /
+ * `(Result int cstr)`) flows by value -- the app-side sibling of SR1's
+ * adt_sr1_sum_candidate, and the prerequisite SR2b's stdlib conversion is
+ * built on: on the carrier, the conversion takes the two most-used types in
+ * the language to heap-boxed-and-leaked, the exact regression the plan's
+ * section 5 warns about (SR1 as shipped covers non-parametric sums only).
+ * Same exclusions as the SR1 gate: non-GADT, non-heap, and not self-recursive
+ * (`(Cons2 a (Cons2 a))` stays on the carrier -- SR4's population, measured
+ * and declined there).
+ *
+ * GRADUATED 2026-08-27 out of `--enable=parametric-sum-byvalue`: the row's
+ * soak existed so the representation would not be fixed against SR2b, and
+ * SR2b has landed (in-tree and across the spices).  `TUR_SR2_APP_SUM_BYVALUE=0`
+ * is the bisection escape hatch, read once in main.c the way SR1's is. */
+static bool sr2_app_sum_byvalue(void) {
+    return g_sr2_app_sum_byvalue;
+}
+
 bool adt_app_is_byvalue_product(Type t) {
     if (!g_adt_app_byvalue) return false;
     AdtDef *def = NULL;
     Type args[16];
     uint8_t n_args = 0;
     if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return false;
-    if (!adt_is_flat_product(def)) return false;       /* single-variant, non-GADT */
+    bool app_sum = sr2_app_sum_byvalue() && def->n_ctors > 1 &&
+                   !def->is_gadt && !def->is_heap &&
+                   !def->is_self_recursive && def->ctors != NULL;
+    /* SR2 exclusion: an app over a recursive-carrier wrapper -- `(ExprF Expr)`,
+     * `(ReF Re)`, the fixpoint functors -- stays on B4's machinery.  Its element
+     * rides the int64 carrier by DESIGN (the wrapper is the carrier), and
+     * admitting the functor here spells `tur_adt_Expr` fields inline into a
+     * typedef that PRECEDES the wrapper's own ("parameter has incomplete type"),
+     * colliding with everything B4 already does for these shapes.  This is the
+     * same boundary the g_adt_app_byvalue comment above draws for the
+     * flat-product path.
+     *
+     * The question is fixpoint PARTNERSHIP, not B4's narrower
+     * adt_is_byval_recursive_carrier_wrapper: that predicate means "an 8-byte
+     * wrapper whose by-value representation IS its carrier int64", so it
+     * requires a SOLE field and its caller in emit_expr.c reinterprets the
+     * carrier on that promise.  `Expr = (Roll :int (ExprF Expr))` carries a tag
+     * alongside the carrier field, so it is not that -- yet `(ExprF Expr)` is
+     * still the typedef-ordering cycle this exclusion exists to avoid.  Ask the
+     * broader question here and leave B4's promise alone. */
+    for (uint32_t i = 0; app_sum && i < n_args; i++)
+        if (args[i].kind == TY_ADT &&
+            adt_is_fixpoint_partner_of(args[i].as.adt_.def, def))
+            app_sum = false;
+    if (!adt_is_flat_product(def) && !app_sum) return false; /* single-variant, non-GADT */
     if (def->n_type_params == 0) return false;          /* non-parametric is CONV-S1's path */
     /* A nested by-value-product element (`(Cons (Option int))`'s `(Option int)`)
      * is accepted ONLY for a :heap outer.  A :heap cell stores its element inline
@@ -3154,20 +3867,40 @@ bool adt_app_is_byvalue_product(Type t) {
      * aggregate already round-trips via the struct-app monomorph path, so leaving
      * it untouched avoids perturbing the constrained-instance-body specs. */
     for (uint32_t i = 0; i < n_args; i++)
-        if (!type_has_concrete_codegen_layout(&args[i]) &&
-            !(def->is_heap && adt_app_is_byvalue_product(args[i]))) return false;
+        if (!adt_app_type_arg_is_concrete(&args[i])) return false;
     /* Every monomorphised field must resolve to a by-value-able concrete type --
-     * no residual tyvar / HKT / non-concrete application (those are M7's job). */
-    const CtorDef *c = def->ctors[0];
+     * no residual tyvar / HKT / non-concrete application (those are M7's job).
+     * SR2: for a sum, EVERY variant's fields -- a union is only as flat as its
+     * widest arm, exactly as adt_is_byvalue_product_d checks on the
+     * non-parametric side. */
+    for (uint32_t ci = 0; ci < (app_sum ? def->n_ctors : 1u); ci++) {
+    const CtorDef *c = def->ctors[ci];
+    if (!c) return false;                    /* ctor array still filling */
     for (uint32_t i = 0; i < c->n_fields; i++) {
         if (!c->fields[i].full_type) continue;          /* scalar storage -- by value */
         Type rf = substitute_adt_app_type_owned(c->fields[i].full_type, def, args);
         TypeKind k = rf.kind;
         bool bad = (k == TY_TYVAR || k == TY_FORALL || k == TY_EXISTS) ||
                    (k == TY_APP && !type_has_concrete_codegen_layout(&rf) &&
-                    !(def->is_heap && adt_app_is_byvalue_product(rf)));
+                    !adt_app_is_byvalue_product(rf));
+        /* SR2b: a field that NAMES a concrete monomorph is storable whatever
+         * its representation -- `(Cons (Option int))`'s `head` holds a
+         * carrier-riding sum monomorph as the int64 word its own type_c_name
+         * spells, exactly as a scalar field holds its word.  This is the field
+         * loop's copy of the arg loop's adt_app_type_arg_is_concrete widening
+         * (the two must move together; see type_app_is_concrete_adt).  Vec
+         * never needed it because its element parameter is PHANTOM -- no
+         * field mentions it -- which is why `(Vec (Option int))` worked while
+         * `(Cons (Option int))` fell to the carrier and the let binder ICEd
+         * against repr_of's heap-ptr answer.  Excluded for a self-recursive
+         * def, where accepting the self-field would inline the typedef into
+         * itself. */
+        if (bad && k == TY_APP && !def->is_self_recursive &&
+            type_app_is_concrete_adt(&rf))
+            bad = false;
         free_struct_app_type(rf);
         if (bad) return false;
+    }
     }
     return true;
 }
@@ -3296,6 +4029,11 @@ const char *type_c_name(Type t) {
             /* SC7: a lowered transparent int-newtype ADT is just its int64
              * payload (mirrors the TY_STRUCT / TY_APP arms above). */
             if (type_is_transparent_int_newtype(t)) return "int64_t";
+            /* opaque-pointer-c-spelling: an opaque newtype declared over a
+             * pointer spells `void *`.  Asked before the by-value arm (which an
+             * opaque never reaches -- adt_is_byvalue_product is false for
+             * is_opaque) purely so the two opaque answers sit together. */
+            if (adt_opaque_c_names_as_pointer(t.as.adt_.def)) return "void *";
             if (adt_is_byvalue_product(t.as.adt_.def)) {
                 /* CONV-S1 seam 3: a :heap record ADT lowers to a typed pointer to
                  * its by-value header (the ADT analogue of a :heap struct's
@@ -3311,9 +4049,31 @@ const char *type_c_name(Type t) {
         case TY_APP: {
             /* SC7: a transparent int newtype is just its int64 payload. */
             if (type_is_transparent_int_newtype(t)) return "int64_t";
+            /* opaque-pointer-c-spelling: a PARAMETRIC opaque over a
+             * pointer -- `(defopaque Goal [A] :ptr<void>)`, `(defopaque Parser
+             * [A] :ptr<void>)`, `(defopaque SChan [P] :ptr<void>)` -- erases its
+             * type arguments to the same handle, so `(Goal int)` must spell
+             * exactly what bare `Goal` does or the two disagree at every
+             * instantiation boundary. */
+            {
+                AdtDef *odef = type_adt_app_def(&t);
+                if (adt_opaque_c_names_as_pointer(odef)) return "void *";
+            }
             /* Parametric-by-value (gated): a concrete flat-product ADT-app flows
              * as its by-value monomorph aggregate (`tur_adt_Pair2__int__float`),
              * not the int64 carrier.  Hard-off until the crossings are wired. */
+            /* SR3 slice B: a niche-filled `(Option P)` IS its payload -- the
+             * C spelling is P's, there is no `tur_adt_Option__P` struct, and
+             * `(none)` is that pointer type's null.  Asked BEFORE the by-value
+             * arm below, which would otherwise mint the tagged monomorph name. */
+            if (adt_app_is_niche_option(t)) {
+                AdtDef *ndef = NULL;
+                Type nargs[16];
+                uint8_t nn = 0;
+                Type nt = t;
+                if (type_extract_adt_app(&nt, &ndef, nargs, &nn) && nn == 1)
+                    return type_c_name(nargs[0]);
+            }
             if (adt_app_is_byvalue_product(t)) {
                 const char *nm = type_register_adt_app(t);
                 if (nm) {
@@ -3624,6 +4384,9 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
             return true;
         /* GF1: Generator -- heap pointer, leaf; no recursive members */
         case TY_GENERATOR:
+            return true;
+        /* Stage 1: syntax objects are leaves; no recursive members. */
+        case TY_SYNTAX:
             return true;
         /* Variadic HKT rows -- the row is a constructor over its elements;
          * guard recursion like a union and recurse into each element. */
@@ -4673,7 +5436,27 @@ const char *repr_position_name(ReprPosition pos) {
     return "?";
 }
 
+/* Increment 5 precondition: the coverage census.  Increment 5 is CONDITIONAL
+ * -- "if the decision function shows a form with no remaining (type,
+ * position) pairs" -- and nothing had ever produced that matrix.  Under
+ * TUR_REPR_CENSUS=1 every answer prints one line, so a corpus sweep
+ * aggregates into a position x form table.  An empty cell is a retirement
+ * CANDIDATE, never a decision: the meta-plan's most repeated stall verdict is
+ * "load-bearing, not redundant", so a candidate still owes a
+ * redundancy-falsification probe before any code moves. */
+static ReprForm repr_of_impl(const Type *t, ReprPosition pos);
+
 ReprForm repr_of(const Type *t, ReprPosition pos) {
+    ReprForm f = repr_of_impl(t, pos);
+    static int census = -1;
+    if (census < 0) census = getenv("TUR_REPR_CENSUS") ? 1 : 0;
+    if (census)
+        fprintf(stderr, "repr-census %s %s\n", repr_position_name(pos),
+                repr_form_name(f));
+    return f;
+}
+
+static ReprForm repr_of_impl(const Type *t, ReprPosition pos) {
     if (!t) return REPR_CARRIER_I64;
 
     /* Contracts share their base type's representation (type_c_name rule). */
@@ -4706,6 +5489,20 @@ ReprForm repr_of(const Type *t, ReprPosition pos) {
     if (t->kind == TY_EXISTS)
         return REPR_HEAP_PTR;
 
+    /* SS1/SS2 internal session pairs (make-session's [Session, Session]
+     * and recv's [T, Session]) are the same shape: a heap-boxed pair whose
+     * only C spelling is its `void *` pointer, so the pointer IS the value
+     * wherever it travels.  Their TY_SIMPLE_REPR_ROWS layout column stays
+     * false on purpose (they must never form a by-value monomorph or a
+     * type argument), which is why the generic scalar fallthrough below
+     * cannot see them -- without this arm the merge-temp shadow reports
+     * the site's correct `void *` decl as a carrier/heap-ptr seam
+     * (stdlib/session.tur, recv inside a control-form tail).  The offer
+     * result (TY_SESSION_OFFER, int64_t-spelled) rides the carrier via
+     * the fallthrough, which already agrees with its declarations. */
+    if (t->kind == TY_SESSION_PAIR || t->kind == TY_SESSION_RECV_PAIR)
+        return REPR_HEAP_PTR;
+
     /* `any` / union values are the two-word tur_tagged_t -- a real by-value
      * aggregate at direct positions; the erased carrier at generic sinks and
      * container slots (the layout switch deliberately rejects them from
@@ -4727,7 +5524,21 @@ ReprForm repr_of(const Type *t, ReprPosition pos) {
      * were this spelling distinction; the exists-element rows surfaced in
      * the third). */
     if (type_is_heap_struct(*t) || type_is_heap_adt(*t)) {
-        if (t->kind == TY_APP && repr_app_mentions_erased_arg(t))
+        /* Increment 4 stage 3 (2026-08-16): the erased spelling is a
+         * DECLARATION fact, not a value fact, so it is scoped to the
+         * positions that declare.  `(Vec A)` inside a generic body is
+         * DECLARED `int64_t` -- that is what the let-bind chokepoint
+         * migrated around -- but the value is a pointer in both spellings,
+         * and a CROSSING of it is a pure reinterpret.
+         *
+         * This position-scoping was earned three times over: the same
+         * pointer/carrier spelling identity accounted for 431 of the first
+         * sweep's 521 let-bind lines, all 84 of the first adt-field sweep,
+         * and all 65 of the first arg-bridge sweep.  Three positions
+         * rediscovering one calibration is the decision function's job to
+         * absorb, not each site's to re-exclude. */
+        if (t->kind == TY_APP && repr_app_mentions_erased_arg(t) &&
+            (pos == REPR_POS_LET_BIND || pos == REPR_POS_RESULT))
             return REPR_CARRIER_I64;
         return REPR_HEAP_PTR;
     }
@@ -4741,6 +5552,27 @@ ReprForm repr_of(const Type *t, ReprPosition pos) {
     if (type_is_transparent_int_newtype(*t))
         return REPR_SCALAR_BITS;
 
+    /* opaque-pointer-c-spelling: an opaque newtype over a pointer is a
+     * LEAF pointer -- the same form `cstr` / `ptr<T>` take, not a heap handle:
+     * `void *` is the type's own spelling, so the bits ARE the value and
+     * repr_form_from_cty recovers SCALAR_BITS from the declaration.  Predicting
+     * the carrier here instead is what ICEs every `Arc` / `Mutex` / `String`
+     * let-binding the moment the spelling changes. */
+    {
+        const AdtDef *odef = t->kind == TY_ADT ? t->as.adt_.def
+                           : t->kind == TY_APP ? type_adt_app_def(t)
+                                               : NULL;
+        if (adt_opaque_c_names_as_pointer(odef)) return REPR_SCALAR_BITS;
+    }
+
+    /* SR3 slice B: a niche-filled `(Option P)` IS P's pointer in every
+     * position -- there is no aggregate, so the by-value-product arm below
+     * would predict a form the type has no spelling for.  The eligibility rule
+     * requires P to c-name as a real pointer, which is what makes HEAP_PTR the
+     * right answer rather than the carrier word. */
+    if (t->kind == TY_APP && adt_app_is_niche_option(*t))
+        return REPR_HEAP_PTR;
+
     /* Non-heap by-value products (nominal ADT or concrete parametric app):
      * real aggregates in direct positions; boxed in container slots and
      * generic sinks (increment 3, width-independent). */
@@ -4750,6 +5582,20 @@ ReprForm repr_of(const Type *t, ReprPosition pos) {
         (t->kind == TY_APP && adt_app_is_byvalue_product(*t));
     if (byval_product) {
         if (pos == REPR_POS_CONTAINER_ELEM || pos == REPR_POS_CARRIER_SINK)
+            return REPR_BOXED_AGG;
+        /* Increment 4 stage 3 (adt-field shadow, 2026-08-15): a field slot
+         * boxes a by-value product that OWNS drop glue, exactly as a
+         * container slot does.  The reason is the owner's copyability, not
+         * the element protocol -- inlining a sub-aggregate that owns an
+         * rc/ref would force recursive drop glue onto the outer product, so
+         * `adt_field_is_inline_byval` restricts inlining to drop-glue-free
+         * inners and the owning ones ride the carrier with `drop_inner_def`
+         * driving their release.  The shadow found this as a spec hole: it
+         * was the only field shape whose slot form disagreed, and stripping
+         * this arm makes it fire again (sabotage-verified). */
+        const AdtDef *bp_def = t->kind == TY_ADT ? t->as.adt_.def
+                                                 : type_adt_app_def(t);
+        if (pos == REPR_POS_STRUCT_FIELD && bp_def && bp_def->needs_drop_glue)
             return REPR_BOXED_AGG;
         return REPR_BYVAL_AGG;
     }
@@ -4763,4 +5609,61 @@ ReprForm repr_of(const Type *t, ReprPosition pos) {
      * erased carrier (compile-time-only kinds, unions, placeholders). */
     if (type_has_concrete_codegen_layout(t)) return REPR_SCALAR_BITS;
     return REPR_CARRIER_I64;
+}
+
+bool repr_shadow_active(void) {
+#ifndef NDEBUG
+    return true;              /* enforcement mode: evaluate even without the flag */
+#else
+    return g_emit_abi_trace;  /* Release: measurement only, and only on request */
+#endif
+}
+
+void repr_shadow_disagree(const char *site, bool known, const char *line) {
+    /* Measurement mode collects the whole list; it never aborts, because the
+     * point of a sweep is to see all of it at once. */
+    if (g_emit_abi_trace) {
+        fputs(line, stderr);
+        return;
+    }
+    if (known) return;        /* pinned work-list row -- never a build failure */
+#ifndef NDEBUG
+    if (getenv("TUR_REPR_NO_SHADOW_ICE")) {
+        fprintf(stderr, "tur: warning: representation shadow disagreement at "
+                        "%s; downgraded by TUR_REPR_NO_SHADOW_ICE\n  %s",
+                site, line);
+        return;
+    }
+    fprintf(stderr,
+            "tur: internal error (ICE): a representation decision disagrees "
+            "with repr_of at %s.\n  %s"
+            "Two sites now decide this value's representation differently -- "
+            "the defect family\n"
+            "docs/archive/repr-decision-function-plan.md exists to close.  "
+            "Re-run with\n"
+            "--emit-abi-trace to see every disagreement, or set "
+            "TUR_REPR_NO_SHADOW_ICE=1 to\ndowngrade this to a warning while "
+            "fixing.\n",
+            site, line);
+    abort();
+#else
+    (void)site;
+#endif
+}
+
+ReprForm repr_of_binding(const struct Binding *b, ReprPosition pos) {
+    if (!b) return REPR_CARRIER_I64;
+    /* The two decisions elaboration records on the binding and the Type does
+     * not carry.  Order matters: a rank-2 poly fn PARAM is the by-value
+     * tur_poly_fn_t carrier even though its type is spelled ptr<void>, and
+     * `^fat` is an explicit request for the fat handle. */
+    if (b->is_poly_fn && b->is_param) return REPR_CARRIER_I64;
+    if (b->is_fat) return REPR_FAT_HANDLE;
+    /* A parameter's representation is fixed where it was DECLARED, not where
+     * it is later used -- a fn param normalized to fat at the signature stays
+     * fat when it appears in a tail, so asking the use position would give
+     * the wrong answer (param and result positions deliberately disagree; see
+     * fn_param_type_is_fat_normalized vs fn_result_type_is_fat_normalized). */
+    if (b->is_param) return repr_of(&b->type, REPR_POS_PARAM);
+    return repr_of(&b->type, pos);
 }

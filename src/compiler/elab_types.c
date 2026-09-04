@@ -1,4 +1,5 @@
 /* elab_types.c -- type-expression forms: defkind/defrec/deftype/type-app, ascribe/pack/open. */
+#include <stdint.h>
 #include "elab_internal.h"
 #include "experiments.h"  /* Slice 1 (constrained-hkt-forall): forall-kinds gate */
 
@@ -768,7 +769,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             for (uint8_t i = 0; i < n_type_params; i++) {
                 if (type_params[i] && type_params[i] == sym) {
                     /* Direction A step 2a of
-                     * docs/reported/open-binder-skolems-not-distinguishable.md:
+                     * docs/archive/history/open-binder-skolems-not-distinguishable.md:
                      * return a NAMED TY_TYVAR so binder identity survives down
                      * to the call-site unifier.  Previously this returned an
                      * anonymous TY_STRUCT{def=NULL}, which made every type-param
@@ -2846,7 +2847,8 @@ static bool ascribe_type_is_word_carrier(const Type *t) {
     return t && (t->kind == TY_INT || t->kind == TY_PTR_VOID);
 }
 
-/* sealed-opaque: the AdtDef behind a `:sealed` defopaque, or NULL.  Descends a
+/* sealed-opaque (GRADUATED 2026-08-17): the AdtDef behind a `:sealed`
+ * defopaque, or NULL.  Descends a
  * parameterised head so a phantom-parameterised sealed opaque `(H A)` is caught
  * as well as a bare `H`. */
 static const AdtDef *ascribe_sealed_opaque_def(const Type *t) {
@@ -2861,17 +2863,55 @@ static const AdtDef *ascribe_sealed_opaque_def(const Type *t) {
 
 /* Reject a `::` that crosses a sealed opaque's representation boundary from
  * outside the module that declared it.  Returns true if a diagnostic was
- * emitted.  See docs/upcoming/sealed-opaque-plan.md.
+ * emitted.  Unconditional since the sealed-opaque graduation (2026-08-17); see
+ * docs/archive/sealed-opaque-plan.md.
  *
  * The rule is "exactly one side is this sealed type": an identity relabel
  * (`(:: w H)` where w is already an H) crosses nothing and stays legal, while
  * both the unwrap (`(:: w :int)`) and the fabricate (`(:: n H)`) directions are
  * refused.  Sealing BOTH directions is what makes the representation private
  * rather than merely hard to rebuild -- see the plan's "why both directions". */
+/* option-niche static :non-null enforcement: the AdtDef behind a `:non-null`
+ * defopaque, or NULL.  Descends a parameterised head, mirroring
+ * ascribe_sealed_opaque_def above. */
+static const AdtDef *ascribe_non_null_opaque_def(const Type *t) {
+    if (!t) return NULL;
+    while (t->kind == TY_APP && t->as.app.fn) t = t->as.app.fn;
+    if (t->kind != TY_ADT) return NULL;
+    const AdtDef *def = t->as.adt_.def;
+    return (def && def->is_opaque && def->opaque_non_null) ? def : NULL;
+}
+
+/* Reject `(:: 0 T)` where T is a `:non-null` opaque -- a statically PROVABLE
+ * violation of the declaration.  The literal is peeled through nested
+ * ascriptions/reinterprets so the two spellings of the same forge --
+ * `(:: 0 :String)` and `(:: (:: 0 :ptr<void>) String)` -- are both caught.
+ * Deliberately literal-0-only: a computed zero is not provable here and stays
+ * the runtime Some-ctor check's job (as does inline-C, which no static check
+ * can reach).  Returns true if a diagnostic was emitted. */
+static bool ascribe_check_non_null_zero(const Form *call,
+                                        const Expr *inner, const Type *to) {
+    const AdtDef *nn = ascribe_non_null_opaque_def(to);
+    if (!nn) return false;
+    const Expr *v = inner;
+    while (v && (v->kind == EX_ASCRIBE || v->kind == EX_REINTERPRET))
+        v = v->kind == EX_ASCRIBE ? v->as.ascribe_.inner
+                                  : v->as.reinterpret_.expr;
+    if (!v || v->kind != EX_INT_LIT || v->as.i != 0) return false;
+    diag_emit_with_code(
+        DIAG_ERROR, call->span, TUR_E0303_NON_NULL_OPAQUE_ZERO,
+        "cannot ascribe the literal 0 into '%s' -- its :non-null declaration "
+        "says the handle's valid values exclude the null pointer. Express "
+        "absence as (none) / option<%s>, or build the value through '%s's "
+        "real constructors",
+        nn->name ? nn->name : "<opaque>",
+        nn->name ? nn->name : "T",
+        nn->name ? nn->name : "<opaque>");
+    return true;
+}
+
 static bool ascribe_check_sealed(Elab *e, const Form *call,
                                  const Type *from, const Type *to) {
-    if (!g_opt_sealed_opaque) return false;   /* experiment off: parses, imposes nothing */
-
     const AdtDef *sf = ascribe_sealed_opaque_def(from);
     const AdtDef *st = ascribe_sealed_opaque_def(to);
     if (sf == st) return false;               /* both sides same sealed def, or neither */
@@ -2916,7 +2956,7 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * the `A` in stdlib ascriptions such as `(:: t1 (Cons A))` in the `Eq Cons`
      * instance body -- the `(Eq A)` constraint stops behaving as a dictionary
      * tyvar and `.eq?` dispatch goes ambiguous.  See
-     * docs/reported/m5-suite-residual-6-failures-2026-06-14.md (root cause A). */
+     * docs/archive/history/m5-suite-residual-6-failures-2026-06-14.md (root cause A). */
     const Symbol **scope_tyvars = NULL;
     uint8_t n_scope_tyvars = e->n_sig_tyvars;
     if (n_scope_tyvars > 0) {
@@ -2958,6 +2998,13 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * whether the cast would LOWER soundly is beside the point if the caller is
      * not allowed to express it. */
     if (ascribe_check_sealed(e, call, &inner->type, ascribed)) return NULL;
+
+    /* option-niche: a literal 0 into a :non-null opaque is a provable
+     * violation of the declaration -- error here instead of aborting at the
+     * niche Some ctor at runtime.  Placed with the sealed check because it is
+     * the same kind of question (is this coercion allowed to be EXPRESSED),
+     * not a representation-lowering one. */
+    if (ascribe_check_non_null_zero(call, inner, ascribed)) return NULL;
 
     /* fn-value-carrier-fat-seam-residuals (ascribed-alias variant): ascribing
      * a CARRIER (tur_poly_fn_t) fn param to a fn type -- `(:: v (fn [] int))`
@@ -3003,7 +3050,7 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * alone; only a bare, unboxed TY_FN is shimmed via EX_FN_TO_FAT.  Without
      * this, `(:: (fn [s] ...) :Goal)` on a captureless lambda stores a raw code
      * address that a later slot-0 fat-dispatch reads as a thunk -> SIGSEGV
-     * (docs/reported/logic-port-language-gaps.md GAP 1). */
+     * (docs/archive/history/logic-port-language-gaps.md GAP 1). */
     if ((ascribed->kind == TY_PTR_VOID || ascribe_type_is_opaque_handle(ascribed)) &&
         inner->type.kind == TY_FN && !inner->type.as.fn.boxed) {
         uint32_t box_ar = inner->type.as.fn.arity;
@@ -3071,7 +3118,7 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      *
      *   anything -> OWNING is rejected EXCEPT for the literal 0.  That one form
      *   is a null handle -- the only way to write an empty rc without inline-C
-     *   (see docs/reported/inline-c-rc-return-misses-carrier-bridge.md), and
+     *   (see docs/archive/inline-c-rc-return-misses-carrier-bridge.md), and
      *   what stdlib/rcchain.tur's `rcchain-nil` uses.  Any other integer
      *   fabricates a control-block pointer out of arithmetic. */
     {
@@ -3098,6 +3145,157 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
                       "reference-counted type",
                       typekind_to_string(src_kind),
                       typekind_to_string(dst_kind));
+            return NULL;
+        }
+    }
+    /* float32-ascribed-literal-compares-as-double: a float LITERAL ascribed
+     * to a float kind is retyped in place, exactly as if it had been written
+     * with the width suffix (`(:: 7.1 float32)` == `7.1f32`).  Without this
+     * the sizes differ (8 vs 4), no reinterpret is built, and the EX_ASCRIBE
+     * wrapper is erased at codegen -- so the literal renders as the bare
+     * DOUBLE literal, and any mixed C expression promotes the float32
+     * operand up to it: `(= (mono (:: 7.1 float32)) (:: 7.1 float32))` was
+     * `false` compiled and `true` under turi.  A literal is the one shape
+     * where the narrowing is unambiguous -- the author wrote a constant AT
+     * that width; there is no runtime value to preserve the wider bits of.
+     * (A non-literal float64 expression ascribed to float32 keeps today's
+     * erased-ascription behavior; narrowing IT is a value conversion with a
+     * representation question this arm deliberately does not answer.) */
+    if (inner->kind == EX_FLOAT_LIT &&
+        (src_kind == TY_FLOAT || src_kind == TY_FLOAT32 ||
+         src_kind == TY_FLOAT64) &&
+        (dst_kind == TY_FLOAT || dst_kind == TY_FLOAT32 ||
+         dst_kind == TY_FLOAT64)) {
+        inner->type = *ascribed;
+        return inner;
+    }
+    /* ascribe-int-to-float-reinterprets: an INTEGER literal ascribed to a
+     * float kind is the number, not its bit pattern.  `(:: 3 :float)` printed
+     * 1.4822e-323 -- the double whose bits are 0x...03 -- because :int and
+     * :float are both 8 bytes and the same-size rule below turned the
+     * ascription into an EX_REINTERPRET.  The bug was width-dependent in a way
+     * that made it obviously unintended: `(:: 3 :float32)` printed 3, since 8
+     * != 4 misses that rule, so one operator disagreed with itself across
+     * float widths.
+     *
+     * Scoped to literals on purpose.  `::` from an int-typed EXPRESSION to a
+     * float could equally mean a bit-reinterpret -- that is the carrier
+     * round-trip typed slots, variadic rest collection, and the cons/HAMT
+     * carriers depend on, where a value's static type is :int while it holds
+     * float bits.  Nothing in the static types separates that from a genuine
+     * int being converted, so no reading can be picked for it; that case is
+     * refused by the arm below, and the two meanings are spelled
+     * `int->float` (stdlib/math.tur) and `bits->float` (stdlib/bits.tur).
+     * A literal is the one shape with no such ambiguity -- the author wrote a
+     * constant, and there is no carried value whose bits could be meant.  This
+     * mirrors the float-literal arm directly above, which retypes for the same
+     * reason.
+     *
+     * The residual expression-level ambiguity is resolved by the arm directly
+     * below, which refuses the ambiguous spelling outright rather than picking
+     * a reading; see
+     * docs/archive/ascribe-int-to-float-expression-ambiguity.md. */
+    if ((dst_kind == TY_FLOAT || dst_kind == TY_FLOAT32 ||
+         dst_kind == TY_FLOAT64) &&
+        (src_kind == TY_INT || src_kind == TY_INT64 ||
+         src_kind == TY_INT32 || src_kind == TY_INT16 || src_kind == TY_INT8 ||
+         src_kind == TY_UINT32 || src_kind == TY_UINT16 || src_kind == TY_UINT8)) {
+        /* Peel integer-typed ascription wrappers to reach the literal, so a
+         * stepped `(:: (:: 3 i32) f32)` reads the same as a direct one.
+         *
+         * Each hop must hold the value EXACTLY.  Today that guard never fires:
+         * an integer-to-integer `::` is erased at codegen and does not narrow
+         * (`(:: 300 :int8)` prints 300, not 44), so peeling could not observe
+         * a truncated value even if it ignored the question.  It is here so
+         * that this arm does not silently become wrong the day narrowing is
+         * implemented -- at which point `(:: (:: 300 :int8) :float)` means
+         * 44.0, and folding it to 300.0 would trade one wrong answer for
+         * another.  Declining falls through to the existing path rather than
+         * inventing a third behavior. */
+        const Expr *lit_src = inner;
+        bool exact = true;
+        while (lit_src && lit_src->kind == EX_ASCRIBE) {
+            TypeKind k = lit_src->type.kind;
+            if (k != TY_INT && k != TY_INT64 && k != TY_INT32 &&
+                k != TY_INT16 && k != TY_INT8 && k != TY_UINT32 &&
+                k != TY_UINT16 && k != TY_UINT8) { exact = false; break; }
+            lit_src = lit_src->as.ascribe_.inner;
+        }
+        if (exact && lit_src && lit_src->kind == EX_INT_LIT) {
+            int64_t v = lit_src->as.i;
+            /* Re-walk the chain outward-in, checking the value survives each
+             * declared width unchanged. */
+            for (const Expr *w = inner; exact && w && w->kind == EX_ASCRIBE;
+                 w = w->as.ascribe_.inner) {
+                switch (w->type.kind) {
+                    case TY_INT8:   exact = (v >= INT8_MIN  && v <= INT8_MAX);  break;
+                    case TY_INT16:  exact = (v >= INT16_MIN && v <= INT16_MAX); break;
+                    case TY_INT32:  exact = (v >= INT32_MIN && v <= INT32_MAX); break;
+                    case TY_UINT8:  exact = (v >= 0 && v <= UINT8_MAX);  break;
+                    case TY_UINT16: exact = (v >= 0 && v <= UINT16_MAX); break;
+                    case TY_UINT32: exact = (v >= 0 && v <= UINT32_MAX); break;
+                    default: break;   /* int / int64 -- no narrowing */
+                }
+            }
+            if (exact) {
+                Expr *lit = expr_new(e->arena, EX_FLOAT_LIT, *ascribed, call->span);
+                lit->as.f = (double)v;
+                return lit;
+            }
+        }
+    }
+    /* ascribe-int-to-float-expression-ambiguity: `::` between an int kind and a
+     * float kind means two different things, and nothing in the static types
+     * separates them.  `(:: (.n m) :float)` on a genuine integer wants the
+     * NUMBER; `(:: (list-head c) :float)` on a value that reached an :int slot
+     * through the carrier wants the BITS.  Both operands are statically :int.
+     *
+     * The same-size rule below used to answer "bits", silently, in both cases.
+     * That reading is right for the carrier round-trip that typed slots,
+     * variadic rest collection and the cons/HAMT carriers depend on -- and
+     * catastrophically wrong for the other, where the int becomes a denormal
+     * that contributes nothing to a sum.  A dropped term, not a garbage one,
+     * which is what made it easy to miss.
+     *
+     * Neither reading gets to win by default: whichever were chosen, the other
+     * one's existing code would keep compiling and start returning silently
+     * wrong answers.  So the ambiguous spelling is refused and the author says
+     * which they meant.  Both spellings already exist and neither is new
+     * syntax -- `int->float` / `float->int` in stdlib/math.tur convert,
+     * `bits->float` / `float->bits` in stdlib/bits.tur reinterpret.
+     *
+     * LITERALS are exempt, and keep converting: the author wrote a constant, so
+     * there is no carried value whose bits could be meant.  That half was fixed
+     * separately (the arm above, and ascribe-int-to-float-reinterprets). */
+    {
+        bool src_int = (src_kind == TY_INT || src_kind == TY_INT64 ||
+                        src_kind == TY_INT32 || src_kind == TY_INT16 ||
+                        src_kind == TY_INT8 || src_kind == TY_UINT64 ||
+                        src_kind == TY_UINT32 || src_kind == TY_UINT16 ||
+                        src_kind == TY_UINT8);
+        bool dst_int = (dst_kind == TY_INT || dst_kind == TY_INT64 ||
+                        dst_kind == TY_INT32 || dst_kind == TY_INT16 ||
+                        dst_kind == TY_INT8 || dst_kind == TY_UINT64 ||
+                        dst_kind == TY_UINT32 || dst_kind == TY_UINT16 ||
+                        dst_kind == TY_UINT8);
+        bool src_flt = (src_kind == TY_FLOAT || src_kind == TY_FLOAT32 ||
+                        src_kind == TY_FLOAT64);
+        bool dst_flt = (dst_kind == TY_FLOAT || dst_kind == TY_FLOAT32 ||
+                        dst_kind == TY_FLOAT64);
+        if ((src_int && dst_flt) || (src_flt && dst_int)) {
+            const char *conv = (src_int && dst_flt) ? "int->float" : "float->int";
+            const char *bits = (src_int && dst_flt) ? "bits->float" : "float->bits";
+            diag_emit(DIAG_ERROR, call->span,
+                      "`::` between an integer and a float kind is ambiguous: it "
+                      "could convert the NUMBER or reinterpret the BIT PATTERN, "
+                      "and the static types do not say which");
+            diag_emit(DIAG_NOTE, call->span,
+                      "to convert, use (%s x) -- (load \"stdlib/math.tur\")", conv);
+            diag_emit(DIAG_NOTE, call->span,
+                      "to reinterpret the bits, as when reading a float back out "
+                      "of an :int carrier slot (a cons cell, a variadic rest "
+                      "list, a HAMT value), use (%s x) -- (load "
+                      "\"stdlib/bits.tur\")", bits);
             return NULL;
         }
     }
@@ -3130,7 +3328,7 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * of the same signature, and boxed-TY_FN is interchangeable with
      * TY_PTR_VOID, so this is invisible to ordinary type-checking; it only
      * flips the ^fat arg classifier from shim to pass-through.  See
-     * docs/reported/ascribing-fat-closure-value-to-fn-type-double-shims.md. */
+     * docs/archive/ascribing-fat-closure-value-to-fn-type-double-shims.md. */
     if (ascribed->kind == TY_FN &&
         (src_kind == TY_INT || src_kind == TY_PTR_VOID ||
          ascribe_type_is_opaque_handle(&inner->type) ||
@@ -3166,6 +3364,29 @@ Expr *elab_default_of(Elab *e, const Form *call) {
         return NULL;
     }
     Form *type_form = call->as.list.items[1];
+    /* SR2b: an enclosing signature's type PARAMETER shadows a same-named
+     * registered type.  `(default-of A)` inside `unwrap [A] [...] :A` means
+     * the method tyvar, and resolving it through type_expr_from_form with no
+     * type-param scope let a program's own `(defopaque A :int)` capture the
+     * name -- the match arm then typed as that concrete ADT and failed the
+     * join against the `Some` arm's genuine tyvar (positional-opaque-ok).
+     * The signature's tyvars are already collected in e->sig_tyvars for
+     * exactly this body-elaboration window; consult them first, the same
+     * shadowing rule a declared type param has everywhere else. */
+    if (type_form->tag == F_SYM) {
+        const Symbol *ts = type_form->as.sym;
+        for (uint8_t si = 0; si < e->n_sig_tyvars; si++) {
+            if (e->sig_tyvars[si] &&
+                strcmp(e->sig_tyvars[si], ts->name) == 0) {
+                Type tv = type_tyvar_named(ts->name);
+                tv.copy_kind = CK_COPY;
+                if (e->sig_tyvar_kinds[si] != KIND_STAR)
+                    tv.hkt_kind = e->sig_tyvar_kinds[si];
+                Expr *tout = expr_new(e->arena, EX_DEFAULT_OF, tv, call->span);
+                return tout;
+            }
+        }
+    }
     Type *t = type_expr_from_form(e, type_form, NULL, NULL, NULL, 0);
     if (!t) return NULL;
     Expr *out = expr_new(e->arena, EX_DEFAULT_OF, *t, call->span);
@@ -3248,7 +3469,7 @@ Expr *elab_pack(Elab *e, const Form *call) {
          * EX_EXISTS_OPEN in emit_expr.c).  Witness-dispatch on a by-value-struct
          * receiver is the remaining gap -- the dispatch site assumes the int64
          * carrier ABI; see
-         * docs/reported/constrained-exists-open-dispatch-byval-struct-receiver.md. */
+         * docs/archive/history/constrained-exists-open-dispatch-byval-struct-receiver.md. */
     }
 
     /* F1-2-3: move-at-pack for RC-payload existentials.  If the packed
@@ -3355,7 +3576,7 @@ static bool ex1d_tail_leaks(ExistsEscapeCtx *ctx, const Expr *e) {
 }
 
 /* Direction A step 2b of
- * docs/reported/open-binder-skolems-not-distinguishable.md: walk a Type and
+ * docs/archive/history/open-binder-skolems-not-distinguishable.md: walk a Type and
  * rename every TY_TYVAR whose name matches `from` (interned-pointer compare,
  * with strcmp fallback) to `to`.  Allocates new Type nodes for the renamed
  * branches; leaves the rest of the tree intact.  Used by elab_open to mint
@@ -3518,7 +3739,7 @@ Expr *elab_open(Elab *e, const Form *call) {
                  * applied form so signatures declared as `(Op n)` can
                  * unify their `n` against the open's bound binder -- this
                  * is the SizedBuf path and the eventual sized-world `(World n)`
-                 * path.  See docs/reported/pack-open-phantom-opaque-body-type-collapses.md. */
+                 * path.  See docs/archive/history/pack-open-phantom-opaque-body-type-collapses.md. */
                 Type head = ex2_peel_phantom_app(T);
                 /* structdef-retirement slice 5: a `defopaque` head is now an
                  * opaque TY_ADT (it was a real-def TY_STRUCT before).  Keep the

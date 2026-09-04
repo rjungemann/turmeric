@@ -106,5 +106,5 @@ Native: Debug build clean, `bash tests/run.sh` **2359 passed, 0 failed**.
 ## How it surfaced
 
 RT5a (confirm the refinement solver builds under Emscripten,
-`docs/upcoming/v1/refinement-types-plan.md`). The refine sources are clean; the
+`docs/archive/refinement-types-plan.md`). The refine sources are clean; the
 warning came from the rest of the module in the same build.

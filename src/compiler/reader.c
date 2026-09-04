@@ -948,11 +948,19 @@ static Form *read_fx_row(Reader *r) {
     return m;
 }
 
-/* C2 / #reads: `#reads <sym>` names a ^borrow parameter whose mutable state a
- * measure reads.  It sits at the effect-row position of a defn signature and is
- * consumed by elab_defn.  Returns `(reads <sym>)` stamped PROV_READS so the
- * signature walk distinguishes it from a body expression.  A read-frame is not
- * an effect row; see docs/guides/stateful-refinements-guide.md. */
+/* C2 / #reads: `#reads <sym>` or `#reads [<sym> ...]` names the ^borrow
+ * parameters whose mutable state a measure reads.  It sits at the effect-row
+ * position of a defn signature and is consumed by elab_defn.  Returns
+ * `(reads <sym> ...)` stamped PROV_READS so the signature walk distinguishes it
+ * from a body expression.  A read-frame is not an effect row; see
+ * docs/guides/stateful-refinements-guide.md.
+ *
+ * The bracketed form mirrors `#writes` below, for the same reason its comment
+ * gives: the annotation is followed by the return marker `:`, which reads as a
+ * symbol, so a greedy symbol run could not tell where the frame ends.  Unlike
+ * `#writes`, an EMPTY `#reads []` is rejected in elab_defn rather than here --
+ * "reads nothing" is the absence of the annotation, and spelling it two ways
+ * would give the solver two encodings of one claim. */
 static Form *read_reads_annot(Reader *r) {
     uint32_t start_line = r->line;
     uint32_t start_col  = r->col;
@@ -960,14 +968,27 @@ static Form *read_reads_annot(Reader *r) {
     advance(r); advance(r); advance(r);   /* '#' 'r' 'e' */
     advance(r); advance(r); advance(r);   /* 'a' 'd' 's' */
     skip_ws_and_comments(r);
-    Form *param = read_symbol_or_minus(r);   /* the parameter name */
-    if (!param) return NULL;                 /* error already emitted */
+    Form *vec = NULL;
+    Form *one = NULL;
+    if (peek(r) == '[') {
+        vec = read_seq(r, '[', ']', F_VEC,
+                       "unterminated #reads frame (missing ']')");
+        if (!vec) return NULL;               /* error already emitted */
+    } else {
+        one = read_symbol_or_minus(r);       /* the single parameter name */
+        if (!one) return NULL;               /* error already emitted */
+    }
+    uint32_t n = vec ? vec->as.list.len : 1;
     Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
     Form *head = form_sym(r->arena, span, symtab_intern(r->st, strslice("reads", 5)));
-    Form **items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+    Form **items = (Form **)arena_alloc(r->arena, (n + 1) * sizeof(Form *));
     items[0] = head;
-    items[1] = param;
-    Form *lst = form_list(r->arena, span, items, 2);
+    if (vec) {
+        for (uint32_t i = 0; i < n; i++) items[i + 1] = vec->as.list.items[i];
+    } else {
+        items[1] = one;
+    }
+    Form *lst = form_list(r->arena, span, items, n + 1);
     lst->fx_prov = (uint8_t)PROV_READS;
     return lst;
 }
@@ -983,7 +1004,7 @@ static Form *read_reads_annot(Reader *r) {
  * could not tell where the frame ends.  The vector form is unambiguous, and it
  * gives `#writes []` -- "this body writes nothing" -- a spelling, which is the
  * frame WF2 most wants to check and which a single-symbol-only syntax could
- * not express.  See docs/upcoming/checked-write-frames-plan.md (WF1). */
+ * not express.  See docs/archive/checked-write-frames-plan.md (WF1). */
 static Form *read_writes_annot(Reader *r) {
     uint32_t start_line = r->line;
     uint32_t start_col  = r->col;
@@ -1120,19 +1141,29 @@ static Form *read_refine_literal(Reader *r) {
 }
 
 /* TCE (typed-container-elements / test-suite-idioms Phase E): a `:`-prefixed
- * element type fused to the closer of a vec or set literal pins the
- * collection's element type.  `[]:int` lowers to `(:: [] (Vec int))` and
+ * element type fused to the closer of a vec, set, or map literal pins the
+ * collection's type parameters.  `[]:int` lowers to `(:: [] (Vec int))` and
  * `#set{}:int` to `(:: #set{} (Set int))`, so an empty literal recovers its
  * element type without the verbose `(:: (vec-new) (Vec int))` ascription.
  * The element type form may itself be compound -- `#set{}:(Vec int)` pins
- * `Set[Vec[int]]`.  `ctor` is the type-constructor name ("Vec" or "Set").
+ * `Set[Vec[int]]`.
+ *
+ * `ctor` is the type-constructor name ("Vec", "Set", or "Map") and
+ * `n_type_args` how many parameters it takes.  A two-parameter constructor
+ * spells its suffix as a parenthesised pair -- `#map{}:(int cstr)` lowers to
+ * `(:: #map{} (Map int cstr))` -- because the arity has to come from
+ * somewhere and a bare `#map{}:int cstr` would swallow whatever token
+ * followed the literal.  There is no ambiguity with the compound-element
+ * reading above: which one applies is fixed by the literal kind, not by the
+ * shape of the suffix.
  *
  * The suffix is recognized only when a single ':' is immediately adjacent to
  * the closer (no intervening whitespace) and is not the '::' ascription
  * operator; otherwise `lit` is returned unchanged so binding vectors
  * (`[x :int]`, where ']' is followed by space) and bare literals are
  * unaffected. */
-static Form *maybe_container_type_suffix(Reader *r, Form *lit, const char *ctor) {
+static Form *maybe_container_type_suffix(Reader *r, Form *lit, const char *ctor,
+                                         int n_type_args) {
     if (!lit || r->error) return lit;
     if (peek(r) != ':' || peek2(r) == ':') return lit;
 
@@ -1142,22 +1173,46 @@ static Form *maybe_container_type_suffix(Reader *r, Form *lit, const char *ctor)
     if (peek(r) == -1) {
         Span s = span_from_to(r, s_line, s_col, s_off, r->pos);
         diag_emit(DIAG_ERROR, s,
-                  "expected an element type after the ':' container-literal "
-                  "suffix (e.g. []:int)");
+                  n_type_args == 2
+                      ? "expected a (key value) type pair after the ':' "
+                        "container-literal suffix (e.g. #map{}:(int cstr))"
+                      : "expected an element type after the ':' "
+                        "container-literal suffix (e.g. []:int)");
         r->error = true;
         return NULL;
     }
     Form *elem = read_form(r);
     if (!elem || r->error) return NULL;
 
+    /* A two-parameter constructor takes its arguments as one parenthesised
+     * list.  Reject anything else here rather than letting a mis-shaped
+     * suffix reach the elaborator as a bogus type application, where the
+     * error would point at a form the user never wrote. */
+    if (n_type_args == 2 &&
+        (elem->tag != F_LIST || elem->as.list.len != 2)) {
+        Span s = span_from_to(r, s_line, s_col, s_off, r->pos);
+        diag_emit(DIAG_ERROR, s,
+                  "the ':' suffix on a #map{} literal takes exactly two type "
+                  "arguments as a parenthesised pair -- write "
+                  "#map{}:(<key> <value>), e.g. #map{}:(int cstr)");
+        r->error = true;
+        return NULL;
+    }
+
     Span sp = lit->span;
-    /* (Ctor elem) -- the full container type. */
+    /* (Ctor arg...) -- the full container type. */
     const Symbol *ctor_sym =
         symtab_intern(r->st, strslice(ctor, (uint32_t)strlen(ctor)));
-    Form **ctor_items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+    size_t n_items = 1 + (size_t)n_type_args;
+    Form **ctor_items = (Form **)arena_alloc(r->arena, n_items * sizeof(Form *));
     ctor_items[0] = form_sym(r->arena, sp, ctor_sym);
-    ctor_items[1] = elem;
-    Form *ctype = form_list(r->arena, sp, ctor_items, 2);
+    if (n_type_args == 2) {
+        ctor_items[1] = elem->as.list.items[0];
+        ctor_items[2] = elem->as.list.items[1];
+    } else {
+        ctor_items[1] = elem;
+    }
+    Form *ctype = form_list(r->arena, sp, ctor_items, (uint32_t)n_items);
     /* (:: lit (Ctor elem)) -- erased at codegen; pins the static type. */
     const Symbol *asc_sym = symtab_intern(r->st, strslice("::", 2));
     Form **asc_items = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
@@ -1349,11 +1404,11 @@ static Form *try_read_data_literal(Reader *r) {
     /* peek(r) == '#' guaranteed by caller. */
     if (peek_at(r, 1) == 'm' && peek_at(r, 2) == 'a' &&
         peek_at(r, 3) == 'p' && peek_at(r, 4) == '{') {
-        return read_map_literal(r);
+        return maybe_container_type_suffix(r, read_map_literal(r), "Map", 2);
     }
     if (peek_at(r, 1) == 's' && peek_at(r, 2) == 'e' &&
         peek_at(r, 3) == 't' && peek_at(r, 4) == '{') {
-        return maybe_container_type_suffix(r, read_set_literal(r), "Set");
+        return maybe_container_type_suffix(r, read_set_literal(r), "Set", 1);
     }
     if (peek_at(r, 1) == 'r' && peek_at(r, 2) == 'o' &&
         peek_at(r, 3) == 'w' && peek_at(r, 4) == '{') {
@@ -1842,42 +1897,66 @@ static Form *try_read_json(Reader *r) {
     return val;
 }
 
-/* RD2: #json-str<T>(expr) -- typed decode of a runtime JSON string.
+/* RD2: #json-str<T>(expr) / #json-str?<T>(expr) -- typed decode of a runtime
+ * JSON string, panicking or Result-returning.
  *
- *   #json-str<T>(e)  ==>  (:: (decode! (json/decode e)) T)
+ *   #json-str<T>(e)   ==>  (:: (decode! (json/decode e)) T)
+ *   #json-str?<T>(e)  ==>  (:: (catch-unwind
+ *                               (fn [] : T (:: (decode! (json/decode e)) T)))
+ *                             (Result T int))
  *
  * Unlike #json(...), the inner is an ordinary Turmeric expression (a :cstr at
  * runtime), read with the normal reader -- no JSON sub-parser is involved.
- * The panic-on-violation
- * #json-str<T> is implemented here; the Result-returning #json-str?<T> and the
- * file-reading #json-file<T> remain future work (a clear diagnostic is emitted
- * for the '?' form). */
+ *
+ * The `?` form is the panicking one behind a catch boundary rather than a
+ * second decode path: `HasSchema` has exactly one method and the schema lives
+ * inside each instance's `decode!` body, so a reader macro has nothing else to
+ * branch on.  Two things had to be true first, and both now are -- a schema
+ * violation raises a catchable `panic` instead of calling `abort()`
+ * (stdlib/schema.tur, schema-decode-abort), and `catch-unwind` over a thunk
+ * returning a by-value aggregate no longer miscompiles (see
+ * docs/archive/catch-unwind-aggregate-return-miscompiled.md); a typed decode
+ * lands in a struct by definition, so it hit that every time.
+ *
+ * #json-file<T>(path) / #json-file?<T>(path) are the same family over
+ * json/decode-file!, which panics on an unreadable path. */
 static Form *try_read_json_str(Reader *r) {
-    if (!(peek_at(r, 1) == 'j' && peek_at(r, 2) == 's' && peek_at(r, 3) == 'o' &&
-          peek_at(r, 4) == 'n' && peek_at(r, 5) == '-' && peek_at(r, 6) == 's' &&
-          peek_at(r, 7) == 't' && peek_at(r, 8) == 'r')) {
-        return NULL;
+    /* Two spellings share one grammar and one expansion shape:
+     *   #json-str<T>(e)    decodes the JSON text e      -- (json/decode e)
+     *   #json-file<T>(p)   decodes the JSON file at p   -- (json/decode-file! p)
+     * The file form's own failure (an unreadable path) is a panic inside
+     * json/decode-file!, so the `?` variant's catch boundary turns it into an
+     * err exactly as it does a schema violation -- nothing here has to know. */
+    static const char PFX_STR[]  = "#json-str";
+    static const char PFX_FILE[] = "#json-file";
+    const char *pfx = NULL; int plen = 0; const char *decoder = NULL;
+    if (peek_at(r, 1) == 'j' && peek_at(r, 2) == 's' && peek_at(r, 3) == 'o' &&
+        peek_at(r, 4) == 'n' && peek_at(r, 5) == '-') {
+        if (peek_at(r, 6) == 's' && peek_at(r, 7) == 't' && peek_at(r, 8) == 'r') {
+            pfx = PFX_STR; plen = 9; decoder = "json/decode";
+        } else if (peek_at(r, 6) == 'f' && peek_at(r, 7) == 'i' && peek_at(r, 8) == 'l' &&
+                   peek_at(r, 9) == 'e') {
+            pfx = PFX_FILE; plen = 10; decoder = "json/decode-file!";
+        }
     }
-    int after = peek_at(r, 9);
+    if (!pfx) return NULL;
+    int after = peek_at(r, plen);
     if (after != '<' && after != '?') return NULL;
 
     uint32_t sl = r->line, sc = r->col;
     size_t   so = r->pos;
-    for (int k = 0; k < 9; k++) advance(r); /* "#json-str" */
+    for (int k = 0; k < plen; k++) advance(r); /* the prefix */
 
+    bool result_form = false;
     if (peek(r) == '?') {
-        Span s = span_from_to(r, sl, sc, so, r->pos);
-        diag_emit(DIAG_ERROR, s,
-                  "#json-str?<...>: the Result-returning typed-decode reader is "
-                  "not yet implemented; use #json-str<...> (panics on a schema "
-                  "violation) or call schema-decode directly");
-        r->error = true; return NULL;
+        result_form = true;
+        advance(r); /* consume '?' */
     }
 
     /* <Type> hint (required). */
     if (peek(r) != '<') {
         diag_emit(DIAG_ERROR, span_point(r),
-                  "#json-str must be followed by a <Type> hint (TUR-E0270)");
+                  "%s must be followed by a <Type> hint (TUR-E0270)", pfx);
         r->error = true; return NULL;
     }
     advance(r); /* consume '<' */
@@ -1889,12 +1968,12 @@ static Form *try_read_json_str(Reader *r) {
     size_t name_len = r->pos - name_off;
     if (name_len == 0) {
         diag_emit(DIAG_ERROR, span_point(r),
-                  "#json-str<...>: expected a type name after '<' (TUR-E0270)");
+                  "%s<...>: expected a type name after '<' (TUR-E0270)", pfx);
         r->error = true; return NULL;
     }
     if (peek(r) != '>') {
         diag_emit(DIAG_ERROR, span_point(r),
-                  "#json-str<...>: expected '>' to close the type hint (TUR-E0270)");
+                  "%s<...>: expected '>' to close the type hint (TUR-E0270)", pfx);
         r->error = true; return NULL;
     }
     Span tspan = span_from_to(r, sl, sc, name_off, r->pos);
@@ -1904,7 +1983,7 @@ static Form *try_read_json_str(Reader *r) {
 
     if (peek(r) != '(') {
         diag_emit(DIAG_ERROR, span_point(r),
-                  "#json-str<T> must be followed by '(' (TUR-E0270)");
+                  "%s<T> must be followed by '(' (TUR-E0270)", pfx);
         r->error = true; return NULL;
     }
     advance(r); /* consume '(' */
@@ -1915,15 +1994,15 @@ static Form *try_read_json_str(Reader *r) {
     skip_ws_and_comments(r);
     if (peek(r) != ')') {
         diag_emit(DIAG_ERROR, span_point(r),
-                  "#json-str<T>(expr): expected ')' to close the expression (TUR-E0271)");
+                  "%s<T>(expr): expected ')' to close the expression (TUR-E0271)", pfx);
         r->error = true; return NULL;
     }
     advance(r); /* consume ')' */
 
     Span s = span_from_to(r, sl, sc, so, r->pos);
-    /* (json/decode expr) */
+    /* (json/decode expr) -- or (json/decode-file! path) for the file form */
     Form *decode_arg = expr;
-    Form *json_decode = json_call(r, s, "json/decode", &decode_arg, 1);
+    Form *json_decode = json_call(r, s, decoder, &decode_arg, 1);
     /* (decode! (json/decode expr)) */
     Form *decoded = json_call(r, s, "decode!", &json_decode, 1);
     /* (:: (decode! (json/decode expr)) Type) */
@@ -1932,7 +2011,40 @@ static Form *try_read_json_str(Reader *r) {
     items[0] = form_sym(r->arena, s, asc);
     items[1] = decoded;
     items[2] = type_form;
-    return form_list(r->arena, s, items, 3);
+    Form *ascribed = form_list(r->arena, s, items, 3);
+    if (!result_form) return ascribed;
+
+    /* (fn [] : T <ascribed>) -- the return annotation is not decoration: the
+     * catch boundary reads the thunk's declared return type to decide whether
+     * the value needs heap-boxing across the int64 result box. */
+    Form **fnitems = (Form **)arena_alloc(r->arena, 4 * sizeof(Form *));
+    fnitems[0] = form_sym(r->arena, s, symtab_intern(r->st, strslice("fn", 2)));
+    fnitems[1] = form_vec(r->arena, s, NULL, 0);
+    fnitems[2] = form_type_ann(r->arena, s, type_form);
+    fnitems[3] = ascribed;
+    Form *thunk = form_list(r->arena, s, fnitems, 4);
+
+    /* (catch-unwind <thunk>) */
+    Form **cuitems = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+    cuitems[0] = form_sym(r->arena, s,
+                          symtab_intern(r->st, strslice("catch-unwind", 12)));
+    cuitems[1] = thunk;
+    Form *caught = form_list(r->arena, s, cuitems, 2);
+
+    /* (:: (catch-unwind ...) (Result T int)) -- the err slot carries the
+     * panic payload handle, which `err?` / `panic-msg`-style readers consume;
+     * `int` is the payload's carrier type at this surface. */
+    Form **ritems = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
+    ritems[0] = form_sym(r->arena, s, symtab_intern(r->st, strslice("Result", 6)));
+    ritems[1] = type_form;
+    ritems[2] = form_sym(r->arena, s, symtab_intern(r->st, strslice("int", 3)));
+    Form *result_ty = form_list(r->arena, s, ritems, 3);
+
+    Form **aitems = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
+    aitems[0] = form_sym(r->arena, s, asc);
+    aitems[1] = caught;
+    aitems[2] = result_ty;
+    return form_list(r->arena, s, aitems, 3);
 }
 
 /* RR: Is form an operator symbol (<, <=, >, >=, =)? */
@@ -3275,7 +3387,7 @@ static Form *read_form(Reader *r) {
         /* TCE: a fused `:T` element-type suffix (`[]:int`) pins the vec's
          * element type.  Binding vectors are unaffected because their ']' is
          * never immediately followed by ':'. */
-        return maybe_container_type_suffix(r, v, "Vec");
+        return maybe_container_type_suffix(r, v, "Vec", 1);
     }
     if (c == ')' || c == ']' || c == '}') {
         Span s = span_point(r);
@@ -4559,14 +4671,17 @@ ReaderType reader_type_from_extension(const char *path) {
     return READER_TURMERIC;
 }
 
-/* Get reader type name as string */
+/* Get reader type name as string.  Always the canonical slash-namespaced
+ * spelling: the legacy `sweet-exp` alias is accepted on input
+ * (lang_base_from_name) but never generated, so a round-trip through
+ * detect_lang -> reader_type_name is stable. */
 const char *reader_type_name(ReaderType type) {
     switch (type) {
         case READER_UNKNOWN: return "unknown";
         case READER_TURMERIC: return "turmeric";
         case READER_CURLY_INFIX: return "turmeric/curly-infix";
         case READER_NEOTERIC: return "turmeric/neoteric";
-        case READER_SWEET: return "sweet-exp";
+        case READER_SWEET: return "turmeric/sweet";
         default: return "<invalid>";
     }
 }

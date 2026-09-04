@@ -12,6 +12,8 @@ description: Reference guide for the `tur repl` interactive read-eval-print loop
 tur repl              # interactive Turmeric prompt
 tur repl --watch      # also auto-reload spice exports when source changes
                       # (see "Working with spices in the REPL" below)
+tur repl --engine jit # build the enclosing spice in process via MIR
+                      # (see "Building the spice in process" below)
 ```
 
 ---
@@ -108,11 +110,26 @@ Meta-commands:
   :help               show this help
   :quit  :q           exit the REPL
   :type <expr>        print inferred type without evaluating
+  :expand <form>      expand the form's head macro once and print it
   :doc  <sym>         print documentation for a symbol or builtin
   :reload <file>      evaluate a .tur file into the current session
   :load-string "<src>"  evaluate source directly (\n for newlines)
+  :run <file>         reset session, load file, auto-invoke (main)
+  :reset              clear session and start fresh
   :pwd                print the working directory
   :cd [dir]           change the working directory (bare :cd goes home)
+  :explain [code]     explain the most recent error, or a TUR-E#### code
+
+Tutorial commands:
+  :tutorial              list available tutorials
+  :tutorial <name>       start a tutorial
+  :tutorial <name> <n>   start a tutorial at step n
+  :next                  go to next step
+  :prev                  go to previous step
+  :hint                  show hint for current step
+  :skip                  skip current step
+  :quit-tutorial         exit tutorial mode
+  :tutorial-progress     show progress in current tutorial
 ```
 
 ### `:quit` / `:q`
@@ -192,6 +209,24 @@ Elaborates `<expr>` and prints the inferred type without evaluating it.
 > :type (fn [x :int] :int x)
 (:int -> :int)
 ```
+
+### `:expand <form>`
+
+Expands the form's head macro exactly ONCE and prints the result --
+template and `defmacro*` macros alike, including macros defined at
+earlier prompts.
+
+```
+> (defmacro plus1 [x] `(+ ~x 1))
+> :expand (plus1 41)
+(+ 41 1)
+> :expand (cond a 1 :else 2)
+(if a 1 (cond :else 2))
+```
+
+One step at a time: run `:expand` again on the printed result to walk a
+recursive macro's unfolding (or use `tur expand <file>` for the full
+trace of a whole file).
 
 ### `:doc <sym>`
 
@@ -354,12 +389,12 @@ The compiled library and its symbol manifest live under
 
 ```
 my-spice/
-├── build.tur
-├── src/
-│   └── lib.tur
-└── .tur-repl-cache/        <- auto-generated, gitignored
-    ├── lib-0.so            <- shared library (one per process generation)
-    └── exports.manifest    <- module/defn -> mangled C symbol :: signature
+|-- build.tur
+|-- src/
+|   `-- lib.tur
+`-- .tur-repl-cache/        <- auto-generated, gitignored
+    |-- lib-0.so            <- shared library (one per process generation)
+    `-- exports.manifest    <- module/defn -> mangled C symbol :: signature
 ```
 
 The first time the cache directory is created, `.tur-repl-cache/` is
@@ -380,6 +415,35 @@ skips the rebuild entirely:
 $ tur repl                    # rebuild + load (~1s)
 $ tur repl                    # nothing changed -- instant load
 ```
+
+### Building the spice in process (`--engine jit`)
+
+By default the loader shells out to `tur build --shared` and `dlopen`s the
+result -- the `.tur-repl-cache/` flow above. On a binary built with
+`-DTUR_JIT=ON`, the whole spice can instead be compiled as one translation
+unit **in process** through the MIR engine, skipping the subprocess, the
+`.so`, and the `dlopen`:
+
+```sh
+tur repl --engine jit            # this session only
+TUR_ENGINE=jit tur repl          # every session in this shell
+```
+
+...or `:engine "jit"` in the project's `build.tur`, which makes it the default
+for anyone working in that project. Precedence is the same ladder `tur run`
+uses: `--engine` > `TUR_ENGINE` > `build.tur :engine` > `"cc"`.
+
+Cold spice load is roughly 3x faster this way, and every load compiles fresh
+so there is no cached artifact to go stale. The trade is that it is a
+different execution engine -- see
+[jit-guide.md](jit-guide.md) for what differs from the `cc` path. On a binary
+built without `-DTUR_JIT=ON`, asking for the `jit` engine is a hard error
+rather than a silent fallback, because the two engines differ in semantics and
+guessing which one you got is worse than being told.
+
+> `tur --enable=jit repl` (the retired experiment spelling) is a hard
+> `TUR-E0310` as of 0.38.0 -- drop the flag. Engine selection is the supported
+> spelling.
 
 ### (reload) -- pick up edits without restarting
 
@@ -459,11 +523,11 @@ Arguments are marshaled per the defn's signature recorded in
 The marshaler accepts compatible Turmeric values:
 
 ```
-turmeric> (sh/add42 100)         ; :int -> :int            ✓
+turmeric> (sh/add42 100)         ; :int -> :int            OK
 => 142
-turmeric> (sh/scale 2.5 4.0)     ; :float :float -> :float ✓
+turmeric> (sh/scale 2.5 4.0)     ; :float :float -> :float OK
 => 10
-turmeric> (sh/add42 1.5)         ; :float into :int slot   ✗ rejected
+turmeric> (sh/add42 1.5)         ; :float into :int slot   REJECTED
 error: ffi: 'sh/add42' arg 0: expected :int-class, got float
 ```
 
@@ -543,7 +607,7 @@ ordinary environment variable it is inherited by every child process and
 outlives the install that set it, so a stale value can point a freshly built
 `tur` at a stdlib that has since moved or been deleted.
 
-It is now validated before use: if `$TUR_STDLIB_DIR/macros.tur` is not
+It is validated before use: if `$TUR_STDLIB_DIR/macros.tur` is not
 readable, `tur` prints one line naming the variable, unsets it, and falls back
 to the stdlib beside the binary.
 
@@ -552,11 +616,9 @@ $ TUR_STDLIB_DIR=/gone tur repl
 tur: ignoring TUR_STDLIB_DIR=/gone (no readable macros.tur there); falling back to the stdlib beside the binary
 ```
 
-Previously the value was taken verbatim, and the first sign of trouble was a
-wall of `load: cannot open .../macros.tur` errors with nothing pointing at the
-variable that caused them.  A directory that *does* contain a stdlib is still
-honoured silently -- an explicit override remains an override, so pinning a
-host's bundled stdlib works exactly as before.
+A directory that *does* contain a stdlib is honoured silently -- an explicit
+override remains an override, so pinning a host's bundled stdlib works as
+expected.
 
 ---
 

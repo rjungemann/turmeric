@@ -1,0 +1,217 @@
+;;; tur/backtrack-dfs -- depth-first search driver over the backtracking trail.
+;;;
+;;; The SX2 driver (docs/upcoming/solver-extension-plan.md): CPS goal
+;;; combinators whose state lives in trailed cells (stdlib/trail.tur), with
+;;; every choice point bracketed by bt-scope so a failed branch's writes are
+;;; undone before the next branch runs.  This is the mark / explore /
+;;; undo-to-mark discipline a trail wants -- depth-first, left branch fully
+;;; exhausted before the right one is touched -- as opposed to
+;;; stdlib/backtrack.tur's persistent list monad, which pays per-operation to
+;;; keep every alternative alive at once.
+;;;
+;;; A GOAL is a fat closure `(fn [(fn [] bool)] bool)`: it receives a success
+;;; continuation `k` and calls it once per solution, with the goal's bindings
+;;; live in the trailed cells for exactly the duration of that call.
+;;;
+;;;   k returns:      true  = keep searching (the caller wants more solutions)
+;;;                   false = stop -- cut the entire search
+;;;   a goal returns: true  = alternatives exhausted normally
+;;;                   false = a stop request is propagating outward
+;;;
+;;; SOLUTIONS ESCAPE BY REIFICATION, NOT BY REFERENCE.  When `k` runs, the
+;;; answer exists only as the current values of the trailed cells; the moment
+;;; the search backtracks past it, those bindings are undone.  Whatever the
+;;; caller wants to keep, its `k` must COPY out (into a vec, a g-cell, or by
+;;; printing) before returning.  Returning a BtCell handle from a search and
+;;; reading it later yields the restored (pre-search) value by design.
+;;;
+;;; This module references bt-scope / bt-set! from stdlib/trail.tur, which is
+;;; autoloaded unconditionally since `backtrackable-state` graduated 2026-08-29.
+;;; It still lives NEXT TO backtrack.tur rather than inside it, now as a plain
+;;; separation of concerns: the two are different search strategies with
+;;; different cost profiles (the list monad enumerates faster at small N; this
+;;; driver scales further and reifies out of live cells), and backtrack.tur is
+;;; usable without pulling the trail into the picture.
+;;
+;; Since: SX2
+
+;;; dfs-succeed -- the goal with exactly one solution and no bindings.
+;;;
+;;; Returns:
+;;;   A goal that calls `k` once and propagates its verdict.
+;;;
+;;; Example:
+;;;   (dfs-solve (dfs-succeed) (fn [] true))  ; => 1
+;;;
+;;; Since: SX2
+(defn dfs-succeed [] : (fn [(fn [] bool)] bool) (fn [k : (fn [] bool)] (k)))
+
+;;; dfs-fail -- the goal with no solutions.
+;;;
+;;; Returns:
+;;;   A goal that never calls `k` and reports exhaustion.
+;;;
+;;; Example:
+;;;   (dfs-solve (dfs-fail) (fn [] true))  ; => 0
+;;;
+;;; Since: SX2
+(defn dfs-fail [] : (fn [(fn [] bool)] bool)
+  (fn [k : (fn [] bool)] (let [_ k] true)))
+
+;;; dfs-and -- conjunction: g2 runs inside each solution of g1.
+;;;
+;;; g1's bindings are live while g2 searches, which is what makes a chain of
+;;; dfs-set / dfs-choose-int constraints accumulate.
+;;;
+;;; Parameters:
+;;;   g1 -- the outer goal
+;;;   g2 -- the inner goal, tried under each of g1's solutions
+;;;
+;;; Returns:
+;;;   The conjoined goal.
+;;;
+;;; Example:
+;;;   (dfs-and (dfs-set x 1) (dfs-set y 2))   ; one solution: x=1, y=2
+;;;
+;;; Since: SX2
+(defn dfs-and [^fat g1 : (fn [(fn [] bool)] bool)
+               ^fat g2 : (fn [(fn [] bool)] bool)] : (fn [(fn [] bool)] bool)
+  (fn [k : (fn [] bool)] (g1 (fn [] (g2 k)))))
+
+;;; dfs-or -- disjunction: g1's alternatives fully exhausted, then g2's.
+;;;
+;;; Each branch's writes are undone before the next branch (and before
+;;; returning), so g2 starts from the state g1 found -- not the state it
+;;; left.  A stop request (k returning false) skips g2 entirely.
+;;;
+;;; Uses the bt-mark / bt-undo-to! halves rather than the bt-scope bracket,
+;;; and not by preference: wrapping `(g1 k)` in a scope THUNK would capture
+;;; `k`, and capturing a fat closure MOVES it (TUR-E0005), so the second
+;;; branch could not use it.  Calling `k` -- passing it to g1 and then g2 --
+;;; does not consume it; only capture does.  The early-return hazard the
+;;; bracket exists to prevent does not arise here: both paths run the undo.
+;;;
+;;; Parameters:
+;;;   g1 -- tried first, depth-first
+;;;   g2 -- tried after g1 is exhausted
+;;;
+;;; Returns:
+;;;   The disjoined goal.
+;;;
+;;; Example:
+;;;   (dfs-or (dfs-set x 1) (dfs-set x 2))   ; two solutions
+;;;
+;;; Since: SX2
+(defn dfs-or [^fat g1 : (fn [(fn [] bool)] bool)
+              ^fat g2 : (fn [(fn [] bool)] bool)] : (fn [(fn [] bool)] bool)
+  (fn [k : (fn [] bool)]
+    (let [m  (bt-mark)
+          r1 (g1 k)]
+      (bt-undo-to! m)
+      (if r1
+        (let [m2 (bt-mark)
+              r2 (g2 k)]
+          (bt-undo-to! m2)
+          r2)
+        false))))
+
+;;; dfs-guard -- succeed with no bindings iff `pred` holds NOW.
+;;;
+;;; The predicate runs at search time, under whatever bindings the enclosing
+;;; conjunction has made -- this is the constraint-check combinator.
+;;;
+;;; Parameters:
+;;;   pred -- evaluated when the search reaches this goal
+;;;
+;;; Returns:
+;;;   A goal with one solution when pred is true, none otherwise.
+;;;
+;;; Example:
+;;;   (dfs-and (dfs-choose-int x 1 3)
+;;;            (dfs-guard (fn [] (> (bt-get x) 1))))   ; x=2, x=3
+;;;
+;;; Since: SX2
+(defn dfs-guard [^fat pred : (fn [] bool)] : (fn [(fn [] bool)] bool)
+  (fn [k : (fn [] bool)] (if (pred) (k) true)))
+
+;;; dfs-set -- bind a trailed cell to a value.
+;;;
+;;; The write is trailed, so backtracking past this goal unbinds it.  On a
+;;; write-once cell (bt-lvar-new) that is already bound, the refusal is a
+;;; FAILURE of this branch, not an error -- which is what makes lvars behave
+;;; as logic variables under search.
+;;;
+;;; Parameters:
+;;;   c -- the cell
+;;;   v -- the value
+;;;
+;;; Returns:
+;;;   A goal with one solution (the binding) or none (refused write).
+;;;
+;;; Since: SX2
+(defn dfs-set [c : BtCell v : int] : (fn [(fn [] bool)] bool)
+  (fn [k : (fn [] bool)] (if (bt-set! c v) (k) true)))
+
+;;; dfs-choose-go -- internal: try binding c to each of lo..hi in order.
+;;; Mark/undo halves for the same reason as dfs-or: a bt-scope thunk would
+;;; capture (and so consume) `k`, which the next candidate still needs.
+(defn dfs-choose-go [c : BtCell lo : int hi : int ^fat k : (fn [] bool)] : bool
+  (if (> lo hi)
+    true
+    (let [m (bt-mark)
+          r (if (bt-set! c lo) (k) true)]
+      (bt-undo-to! m)
+      (if r (dfs-choose-go c (+ lo 1) hi k) false))))
+
+;;; dfs-choose-int -- nondeterministically bind `c` to an integer in [lo, hi].
+;;;
+;;; The workhorse choice point.  Each candidate binding runs in its own
+;;; bt-scope: the continuation explores the whole subtree under `c = v`, and
+;;; the scope's undo strips every write that subtree made before `c = v+1` is
+;;; tried.
+;;;
+;;; Parameters:
+;;;   c  -- the cell to bind
+;;;   lo -- first candidate (inclusive)
+;;;   hi -- last candidate (inclusive)
+;;;
+;;; Returns:
+;;;   A goal with up to (hi - lo + 1) solutions.
+;;;
+;;; Example:
+;;;   (dfs-choose-int x 1 8)   ; x = 1, then 2, ... then 8
+;;;
+;;; Since: SX2
+(defn dfs-choose-int [c : BtCell lo : int hi : int] : (fn [(fn [] bool)] bool)
+  (fn [k : (fn [] bool)] (dfs-choose-go c lo hi k)))
+
+;;; dfs-solve -- run a goal depth-first; count solutions.
+;;;
+;;; `on-solution` is the REIFIER: it runs once per solution with the bindings
+;;; live, and must copy out whatever the caller wants to keep (see the module
+;;; docstring).  Its return steers the search: true asks for the next
+;;; solution, false cuts.
+;;;
+;;; The whole run is bracketed in one bt-scope, so every binding the search
+;;; made -- including a cut's partial state -- is undone before this returns.
+;;; The solution COUNT survives via an untrailed g-cell; that is exactly the
+;;; per-write opt-out's purpose.
+;;;
+;;; Parameters:
+;;;   goal        -- the goal to run
+;;;   on-solution -- reifier + continuation verdict, run per solution
+;;;
+;;; Returns:
+;;;   The number of solutions on-solution saw.
+;;;
+;;; Example:
+;;;   (dfs-solve (dfs-choose-int x 1 3)
+;;;              (fn [] (do (println (bt-get x)) true)))   ; prints 1 2 3 => 3
+;;;
+;;; Since: SX2
+(defn dfs-solve [^fat goal : (fn [(fn [] bool)] bool)
+                 ^fat on-solution : (fn [] bool)] : int
+  (let [n (g-cell-new 0)]
+    (bt-scope (fn []
+                (goal (fn [] (do (g-set! n (+ (g-get n) 1)) (on-solution))))))
+    (let [total (g-get n)] (g-cell-free n) total)))

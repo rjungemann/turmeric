@@ -1,0 +1,56 @@
+;; user-defn-named-div-collides-with-libc.
+;;
+;; A bare (non-module) top-level defn is emitted as a C identifier, so a name
+;; the system headers also declare produced `static double div(double, double);`
+;; next to <stdlib.h>'s `div_t div(int, int)` -- and the user saw cc errors
+;; about generated C under /tmp, with nothing pointing at their own source.
+;;
+;; The `tur_u_` guard prefix already existed; its libc_names[] table was just
+;; incomplete, because it had been grown one bug report at a time. It is
+;; derived from the headers the generated TU includes now. These are the names
+;; measured breaking before that change.
+;;
+;; `gets` is the one that shows why a plain header scrape is not enough: glibc
+;; declares it only from <bits/stdio2.h>, included only when _FORTIFY_SOURCE is
+;; on, which -O2 does -- so `tur emit-c | cc` compiled clean while `tur run`
+;; (which passes -O2) failed.
+
+(defn div     [a : float b : float] : float (/ a b))
+(defn ldiv    [a : float b : float] : float (/ a b))
+(defn lldiv   [a : float b : float] : float (/ a b))
+(defn llabs   [a : float b : float] : float (/ a b))
+(defn atexit  [a : float b : float] : float (/ a b))
+(defn putchar [a : float b : float] : float (/ a b))
+(defn getchar [a : float b : float] : float (/ a b))
+(defn gets    [a : float b : float] : float (/ a b))
+(defn chown   [a : float b : float] : float (/ a b))
+(defn execl   [a : float b : float] : float (/ a b))
+(defn drand48 [a : float b : float] : float (/ a b))
+(defn erand48 [a : float b : float] : float (/ a b))
+
+;; Names already covered before, so a regeneration of the table cannot quietly
+;; drop them.
+(defn read    [a : float b : float] : float (/ a b))
+(defn write   [a : float b : float] : float (/ a b))
+(defn time    [a : float b : float] : float (/ a b))
+
+;; Each is really the user's function, not the libc one: 7.1 / 2.5 = 2.84, a
+;; value libc's same-named symbol could not produce.
+(defn main [] : int
+  (do
+    (println (div     7.1 2.5))
+    (println (ldiv    7.1 2.5))
+    (println (lldiv   7.1 2.5))
+    (println (llabs   7.1 2.5))
+    (println (atexit  7.1 2.5))
+    (println (putchar 7.1 2.5))
+    (println (getchar 7.1 2.5))
+    (println (gets    7.1 2.5))
+    (println (chown   7.1 2.5))
+    (println (execl   7.1 2.5))
+    (println (drand48 7.1 2.5))
+    (println (erand48 7.1 2.5))
+    (println (read    7.1 2.5))
+    (println (write   7.1 2.5))
+    (println (time    7.1 2.5))
+    0))

@@ -12,7 +12,7 @@
  * emit_module.c -- see emit-effects-extraction-plan.md §EE4 for rationale.
  */
 #include "emit_internal.h"
-#include "globals.h"   /* B3 part 2: g_opt_cps_tramp_resume */
+#include "globals.h"
 
 /* =========================================================================
  * Region C -- algebraic effects
@@ -507,7 +507,7 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
         /* Env struct: captures the dispatch context + fiber, plus a snapshot of
          * the fiber's suspended-at-perform stack image so each resume re-runs an
          * INDEPENDENT copy of the continuation (true multishot).  See
-         * docs/reported/turi-effect-multishot-degenerate-resume.md. */
+         * docs/archive/history/turi-effect-multishot-degenerate-resume.md. */
         buf_printf(hbuf, "struct __ms_env_%d_%d { void *__ctx; int64_t __k_int; "
                          "FiberBlock *__fiber; char *__stack_image; size_t __image_size; "
                          "ucontext_t __saved_ctx; };\n",
@@ -1010,9 +1010,8 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
      * dynamic with-handler over this value can install it on the DK. */
     char dkfn_name[64];
     snprintf(dkfn_name, sizeof(dkfn_name), "__dk_hcase_%d", id);
-    bool dk_emitted = g_opt_cps_tramp_resume
-        && emit_dk_handler_case_fn(ctx, hbuf, dkfn_name, c, env_type, env_var,
-                                   has_caps, caps, n_caps);
+    bool dk_emitted = emit_dk_handler_case_fn(ctx, hbuf, dkfn_name, c, env_type,
+                                              env_var, has_caps, caps, n_caps);
     /* Fiber case fn is DEAD once the DK case is emitted -- append it only as the
      * non-DK fallback, so `tur_effect_cont_resume` leaves the DK-lowered output. */
     if (!dk_emitted && fiberfn.len > 0) buf_write(hbuf, fiberfn.data, fiberfn.len);

@@ -1,0 +1,720 @@
+# Representation consolidation -- the meta-plan
+
+**Status: COMPLETE, 2026-08-16.** Every increment is landed (see the
+Sequencing section for each increment's dated record): 0 (observability),
+1 (the fn-value axis, through the effect-row CPS increment -- its child
+plan is archived complete), 2 (method-result bridging), 3 (the container
+element protocol), 4 (the decision function, R3 ICE and all seven
+positions), and 5 -- whose conditional retirement was measured, found no
+candidate, and instead closed the census's coverage hole the same day
+(`repr_of_fn_param` owns the fn-axis routing gate set;
+[repr-coverage-census.md](repr-coverage-census.md)). The campaign's exit
+state: the guide's open-cells table is **empty**, the fuzzer's
+`known_bug_slug` avoid table is **empty** and all its `--known-probes`
+print FIXED, and a representation-shadow disagreement is a Debug-build
+ICE whose first live catch (`mut-map-reassign`) was itself fixed the day
+it fired. The instruments stay armed -- the trace, the census hook, the
+ICE, and the stage-4 ratchet are permanent fixtures, not campaign
+scaffolding -- so the next un-exercised pairing someone hits becomes a
+new open-cells row instead of a years-later mystery.
+
+Original framing follows. This is not a plan for one
+seam; it is the plan for how every representation-consolidation increment
+gets chosen, de-risked, landed, and verified, so the work neither stalls (as
+attempts here have) nor trades away the low-level performance the current
+representations exist to buy.
+Child plans (starting with
+[fn-value-fat-normalization-plan.md](fn-value-fat-normalization-plan.md))
+follow this template; this doc owns the principles, the sequencing, and the
+process gates.
+
+The representation inventory this plan operates on is
+[docs/guides/value-representations-guide.md](../guides/value-representations-guide.md):
+~4 data representations (int64 carrier, by-value aggregate, heap pointer,
+concrete scalar) and ~6 fn-value forms, times every boundary kind, with each
+bridge implemented point-by-point.
+
+## What "consolidation" means here -- and what it must not mean
+
+**Consolidate the *conventions*, not (necessarily) the *representations*.**
+The bug family is not "too many representations"; it is too many *unwritten
+pairwise agreements* about which representation crosses which boundary,
+each decided locally at an emit site. N representations behind one decision
+function and one bridge library is fine -- that is how fast compilers work.
+N representations times M boundaries, each pair hand-negotiated, is the
+current defect generator.
+
+So the target state is:
+
+1. **One decision function per axis.** For any (type, boundary-position)
+   pair, a single named routine answers "which representation crosses here".
+   Emit sites consult it; none of them re-derive it.
+2. **One bridge library.** Every representation conversion (carrier<->
+   concrete, thin<->fat, spill<->unspill) is a named chokepoint routine.
+   An emit site that needs a conversion calls the chokepoint; a Debug-build
+   ICE fires when a value reaches a boundary un-routed.
+3. **Fewer representations only where a form is redundant.** A
+   representation is deleted only when the decision function proves no
+   (type, position) pair still needs it -- deletion is an outcome of
+   consolidation, never the method.
+
+This split matters because the two failed instincts here are both
+representation-first: "widen the fast path's domain" (reverted --
+`poly-hof-constrained-arg-baked-carrier`: demoting named-tyvar fn params
+onto the carrier baked the int64 ABI over by-value struct args) and
+"reject what the zoo can't represent" (abandoned -- the poly-result report's
+compile-time diagnostic fired on six correct fixtures, because
+representability is decided downstream across five emit surfaces and cannot
+be reconstructed at the elaboration call site). Both failures are the same
+lesson: **until the decision lives in one place, neither widening nor
+gating it can be done correctly.**
+
+## Performance: what must survive, and the principle that protects it
+
+The representations exist for speed, and the consolidation must be
+articulate about which properties are load-bearing:
+
+- **Carrier fast paths** -- scalar and heap-pointer payloads cross erased
+  boundaries with zero conversion cost (the bits are the value). This is
+  the backbone of typeclass dispatch and generic specialization.
+- **Thin calls for captureless fns** -- a bare function crossing as a code
+  pointer costs one direct call; no env alloc, no double indirection.
+- **By-value aggregates** -- small structs/ADTs live in registers and on
+  the stack; forcing them onto the heap to make them "uniform" would tax
+  every `Option`/`Result` in the language.
+- **Monomorphized clones** -- the M7 by-value HKT path exists precisely
+  because the carrier dict model was scored and rejected
+  (`docs/archive/history/hkt-dispatch-options-tradeoff.md` scored the three
+  dispatch models on blast radius, expressiveness, and "decisively --
+  whether they retire or reintroduce the int64 carrier ABI").
+- **Raw C function pointers at `extern-c` boundaries** -- a correctness
+  constraint that reads like a perf one: the closure-unification plan's
+  risk list is explicit that consolidation "must not box a fn destined for
+  a raw C function-pointer parameter"; the raw-callback set is excluded
+  from any fn-value normalization by name.
+
+Two archive findings sharpen how cheap consolidation can be when it
+respects width:
+
+- **"Reinterpret, not box" (the b4 key decision):** a single-carrier
+  wrapper whose by-value form fits one word crosses the fat-closure
+  boundary "by reinterpret with no heap box and no deref." **Width, not
+  nominal kind, is the right discriminator** -- a same-width unification
+  is free, and only genuinely wide values need the spill/box bridge.
+- **The by-value <-> carrier box bridge is already mandatory where it
+  exists** (`emit_expr.c` ~432: "the box/unbox bridge is mandatory at the
+  seam"), with `:heap` as the documented escape ("it already IS a
+  pointer-sized carrier"). Consolidation does not add this cost; it makes
+  the existing cost total instead of site-by-site.
+
+The protecting principle: **fast in the small, uniform in the large.**
+
+- *Interior* of a compilation-visible region -- a function body, a direct
+  call to a known callee, a monomorphized clone -- the compiler may use the
+  fastest representation it can prove: thin calls, unboxed by-value forms,
+  raw scalars. Nothing in this plan touches interior code.
+- *Escape points* -- a value stored into a container or struct field,
+  returned through a fn-typed or erased boundary, ascribed, captured, or
+  passed to a parameter whose representation the caller cannot see -- get
+  the normalized form for their axis, with the conversion (shim, spill,
+  re-wrap) paid once at the edge.
+
+The precedent is the struct-field-fat fix: bare fns are shimmed to fat
+`{thunk, env}` handles *at the store*, and field-calls dispatch fat -- while
+direct calls to the same functions stay thin everywhere else. Nobody has
+measured a regression from it. Each child plan still carries an explicit
+benchmark gate (below) so this stays an empirical claim, not a vibe.
+
+## Why past efforts stalled -- and why the successes succeeded
+
+The archive holds both outcomes; the meta-plan is built from the deltas.
+
+**Succeeded: the closure representation unification (2026-06).**
+`docs/archive/history/closure-representation-unification-plan.md` faced
+nearly this exact problem (captureless -> bare pointer, capturing -> heap
+fat box, five stdlib crash sites) and its decisive move was **escalating
+scope to the root fix**: rather than "papering over the `:ptr<void>`
+overload with an implicit-`^fat` heuristic (Option A)," it introduced the
+first-class closure type (Option B) -- "this removes the bare/fat
+representation split at its root ... without needing a per-call-site
+boxing heuristic that has to enumerate every fat sink." Option A stayed
+documented as the fallback if B proved too large. The rule: when the
+choice is between a heuristic that must enumerate sites and a
+representation change that makes the enumeration unnecessary, take the
+representation change -- and keep the cheap option on file as the
+pre-registered retreat.
+
+**Succeeded: the CPS backend unification -- the repo's best retirement
+template** (`docs/archive/cps-backend-unification-plan.md` and siblings).
+Two lowering strategies consolidated to one, old path deleted
+(`emit_cps.{c,h}` no longer exist). What made it land:
+
+- **Two milestones, explicitly not conflated**: "becoming the default" and
+  "deleting the old path" were separate gates with separate criteria.
+- **A forced-on probe over the whole corpus** as the graduation signal
+  (2142 fixtures, every failure classified) -- and, crucially, **the probe
+  was wrong and the doc says so**: flipping the default surfaced 24
+  failures the probe missed, because the eviction gate admitted shapes it
+  should have evicted. The fix was *narrowing* what the new path claims
+  ("Restricting CPS-emitted signatures to scalars keeps the ABI
+  single-valued"), not patching the 24 sites.
+- **A hard `expires_at` contract** as forcing function -- the release-cut
+  skills refuse to bump past it until the row graduates or shelves.
+- **Byte-identity** as the faithfulness proof for the final deletion
+  (flag-off output byte-identical across the corpus).
+
+Its stalled sub-efforts carry the single most recurring stall verdict in
+the archive -- **"load-bearing, not redundant."** Three independent docs
+reach it (`abortive-shift-retirement-blocked.md`,
+`cps-backend-n6-fallback-followups-blocked.md`,
+`closure-result-monomorphization-plan.md`): a path that looked like a
+redundant duplicate turned out to be strictly more expressive or more
+general for its case, and the deletion was blocked by numbered probes.
+The corollary rule: **every representation slated for deletion gets a
+probe whose only job is to falsify "this is redundant" -- before any code
+moves.**
+
+There is also a second-order stall: **"functionally free."** The
+closure-result monomorphization plan shipped its groundings but abandoned
+its consolidation objective ("delete the bridge / 0 crossings": crossing
+count went 102 -&gt; 102, Phase 3 "NOT PURSUED, by decision") because "the
+bridge stays -- load-bearing and functionally free." A redundant-looking
+path survives if keeping it costs nothing; deletion must state its benefit
+beyond tidiness (here: each unconsolidated cell is a standing bug
+generator -- the missing-cells table is the benefit ledger).
+
+**Succeeded: the carrier<->concrete crossing campaign (2026-06).** PRs
+#437-#481 were a reactive whack-a-mole -- one defect ("a parametric
+payload's concrete element type collapsing to the int64 carrier"),
+surfacing at a different emit site per spice. What ended it
+(`docs/archive/carrier-concrete-abi-crossing-audit-plan.md` +
+`docs/archive/history/carrier-crossing-recovery-routing-plan.md`):
+
+1. an **audit** enumerated every crossing site up front, converting an
+   open-ended bug stream into a closeable list;
+2. a **composition stress matrix** found the next bugs proactively ("found
+   by us, not by a downstream spice");
+3. a **routing plan** made the recovery routines mandatory chokepoints
+   (R1), migrated the ad-hoc sites (R2), added a Debug ICE for "forgot to
+   route" (R3), and shipped a static registry + CI ratchet
+   (`tools/check_crossing_routing.py`, wired into `tests/run.sh`) so the
+   consolidation cannot silently un-happen (R4).
+
+**Succeeded: the M7 by-value HKT migration.** A measurement-driven design
+pass scored the options *before* committing; the migration ran dual-path
+under `TUR_M7_HKT` with the new path as default; the legacy carrier path
+was retired only after the suite flip -- and CLAUDE.md now says "there is
+no longer a second suite." Dualism was a phase with an exit (~2 weeks),
+not a steady state, and the exit was engineered in advance: a **written
+rot license** ("may degrade as classes migrate ... that is expected, not a
+regression to chase") is what made the second suite non-load-bearing, a
+downstream-dependency sweep (including `../turmeric-spices/` and open
+reports citing the flag as a workaround) cleared the deletion, and a
+pre-registered abort path said exactly what to do if the old path turned
+out load-bearing after all. Two more of its lessons bind here: the flag
+was deliberately NOT promoted to `EXPERIMENTS[]` ("a toggle whose 'off'
+branch is explicitly permitted to rot ... is dead code waiting to be
+removed"), and its aftershock is a warning --
+`b4-fat-closure-byvalue-adt-abi-plan.md` records that "M7 graduating did
+not deliver the ABI change described here": **consolidating a dispatch
+path is not consolidating a representation**; each axis needs its own
+campaign.
+
+**Stalled (instructively): the first fn-element substitution fix
+(2026-07-30).** `docs/archive/history/fn-element-tyvars-not-substituted-in-spec-types.md`
+is the sharpest recent record. The first attempt applied a global
+substitution change without a grounding guard: 1916 fixture failures,
+reverted. The landed fix measured each step in isolation (step 1 alone:
+3 snapshot diffs, runtime unchanged; step 2 alone: 1916; steps 1+2+3:
+green) and its decisive piece was a guard -- **only adopt a substitution
+that RESOLVED**; when the context cannot ground a tyvar, keep the stable
+erased form. The general form of that guard appears in every successful
+change in this area: *normalization must be provably grounded at the point
+it is applied, and the un-normalized form must remain legal where proof is
+unavailable.*
+
+**Left undone by design: the fn-value axis.** The routing plan's inventory
+explicitly excluded "the fn-value inner-clone derivation" as by-design.
+The 2026-07 bug harvest -- `poly-result-hof-capturing-closure-sigbus`,
+`fn-typed-value-return-ascribe-miscompiles`,
+`fn-payload-in-container-undeclared-temp`, plus the type-fuzzer findings --
+clusters exactly on the axis the last campaign carved out. That is not a
+coincidence; it is the map telling us where the next campaign goes.
+
+Distilled stall anatomy:
+
+| Anti-pattern | Instance | Rule that replaces it |
+| --- | --- | --- |
+| Global change, unmeasured blast radius | fn-element attempt 1 (1916 failures) | Measure each step in isolation before combining; suite count is the gauge |
+| Consolidate by widening a fast path | carrier widening over named-tyvar fn params | Fast paths keep their exact legality predicate; consolidation moves the *decision*, not the domain |
+| Enforce before centralizing | poly-result compile-time diagnostic (6 false positives) | The ICE/gate comes *after* the chokepoint exists (routing plan R3 after R1/R2) |
+| Permanent dual-path | (avoided by M7; risk for any flag) | A dual-path ships with its retirement criterion, per the experiments discipline |
+| Fix sites one fish at a time | PRs #437-#481, #475-#504 | Audit first; route through chokepoints; ratchet with a registry check |
+| Delete a "redundant" path unprobed | abortive-shift retirement, N6 fallback ("load-bearing, not redundant") | A redundancy-falsification probe per deletion candidate, before code moves |
+| No forcing function | (the shelved consolidations) | Every dual-path carries an `expires_at`-style contract or a written rot license |
+| Assume the flip probe is complete | CPS graduation (probe missed 24 failures) | The default flip is its own measurement; when it disagrees with the probe, narrow the new path's claim rather than patch the misses |
+
+Two further findings from the archive shape expectations rather than rules:
+
+- **Coincidences hold this area up.** Two 2026-07 docs say so verbatim:
+  `result_kind` staying `TY_INT` was "a correct handle width by accident,
+  which is the coincidence this area rests on," and the mangling fix
+  "removed the coincidence that was hiding" a latent mismatch.
+  Consolidation will therefore *surface* latent bugs; pre-register that as
+  an expected outcome of each increment, not a regression against it.
+- **Representation splits hide behind one-sided test coverage.** The
+  arrow-thin crash was "masked only because the test suite exercises
+  captureless arrows exclusively." For every representation an increment
+  touches, first find (or write) the fixture that exercises the *other*
+  side of the split.
+
+## The probe discipline
+
+"Probe" here follows the house usage (`tests/shallow-handler-probes.sh`,
+`stackless-signoff-probes.sh`, `tests/probes/cps-abi-c0/`, the refine
+plans' RE probes): a deliberately non-suite measurement that answers ONE
+de-risking question about a migration, under conditions the fixture
+harness cannot express -- distinct from a fixture, which permanently pins
+a behavior. A probe that produces a result worth pinning gets promoted
+into a fixture (the shallow-handler 105-vs-10 result is the precedent).
+The house's sharpest statement of why probes come first is in the
+refinement plan: a report there was "WRONG TWICE before it was right ...
+both earlier readings were consistent with the probes run at the time --
+which is the argument for widening the probe set BEFORE writing down a
+root cause, not after."
+
+This campaign uses five kinds:
+
+1. **Blast-radius probes.** Before an increment lands, its mechanical core
+   is applied alone and the suite delta measured (the fn-element fix's
+   per-step table is the template). An increment whose isolated delta is
+   not understood does not proceed to composition.
+2. **Boundary-behavior probes.** The hand-minimized ok/broken matrices
+   (e.g. the 11-row table in
+   `fn-typed-value-return-ascribe-miscompiles.md`) become fixtures *before*
+   the fix -- ok rows included, so the working boundary cannot regress
+   while the broken rows flip.
+3. **Continuous composition probes.** `tests/type-fuzz-src.py` is the
+   standing generalization of the audit plan's composition stress matrix:
+   correct-by-construction programs over random wrapper x boundary
+   compositions, with `--known-probes` pinning each open report and
+   `known_bug_slug` keeping default runs green. Each landed increment
+   retires its known rows, returns those shapes to the default pool, and
+   runs fresh-seed sessions as acceptance.
+4. **ABI-ratification probes.** For a new normalized convention, prove the
+   calling convention in hand-written C against the real runtime *before*
+   the emitter that will produce it exists -- `tests/probes/cps-abi-c0/`
+   is the exemplar ("each transcribes a colored function into the ABI by
+   hand, node-for-node ... and compiles against the real DK runtime").
+   Increment 1's fat-normalized boundaries should get the same treatment:
+   a hand-written C file per boundary shape, ASan/UBSan clean, kept for
+   reproducibility.
+   **A calibration rediscovered at a third site belongs in the decision
+   function** (added 2026-08-16, after the per-arg bridge shadow). The
+   pointer/carrier spelling identity was calibrated away once per position --
+   431 of 521 let-bind lines, all 84 adt-field lines, all 65 arg-bridge
+   lines. Twice is coincidence; the third time is a signal that the rule is
+   general and the per-site exclusions are copies. Move it into `repr_of`,
+   and while moving it, ask which positions it is actually ABOUT -- that
+   question is what turned "a heap app with tyvar args is erased" into "the
+   erased spelling is a DECLARATION fact", true at let-bind and result and
+   false everywhere else. A rule that has to be re-excluded per site is
+   usually a rule stated at the wrong altitude.
+
+   **Report the population, not just the disagreement count** (added
+   2026-08-16, after the method-result shadow). "0 disagreements" is not a
+   result until you know how many answers were checked: the fn-value
+   tail/join position measured 0 out of **8** evaluations corpus-wide, the
+   method-result position 0 out of **7211**. Those are the same number and
+   wildly different evidence. Both counts came from the same cheap technique
+   -- temporarily widen the shadow's condition to fire on every evaluation,
+   re-sweep, count -- so there is no excuse for reporting the bare zero.
+   Spec errors surface the same way: the method-result shadow's first,
+   wrong invariant fired 5740 lines, and the size of that number is what
+   said "your spec is wrong", not "the compiler is broken".
+
+   **A silence criterion is only as good as its probe** (added 2026-08-15,
+   after the adt-field shadow). Once a position is migrated, its check
+   inverts from "this shape must fire" to "nothing may fire" -- and a
+   silence check passes for every reason a probe can fail to say anything.
+   The adt-field smoke's first draft passed with the guard it existed to pin
+   REMOVED, twice over: the probe did not compile (no output, therefore no
+   disagreement lines), and its layout assertions used
+   `echo "$var" | grep -q` under `set -o pipefail`, where grep closing the
+   pipe on its first match kills `echo` with SIGPIPE so the pipeline reports
+   failure on a pattern that matched. So a silence check owes two things a
+   fire check does not: an assertion that the probe actually ran and
+   produced the shapes it names, and a sabotage run in that final state
+   proving the removed guard makes it fail. This is the repo's standing
+   "assertions that pass when you run them directly were probably never
+   really run" trap (CLAUDE.md), reached from the other direction.
+
+5. **Performance probes.** Each child plan names the benchmark(s) that
+   actually exercise its seam (`benchmarks/`, `tur run bench` -- e.g.
+   `bench-poly-specialize.tur` for dispatch seams, closure-heavy benches
+   for the fn axis), records before/after on the same box, and states its
+   acceptable delta *in the plan before landing*. The house neutrality
+   template is `catch-unwind-graduation-plan.md` Part B: flag-off codegen
+   byte-identical for untouched fixtures, plus suite wall-clock and a
+   representative bench with the change on vs off -- and the CPS
+   readiness doc states the governance: "if a regression shows, it gates
+   the flip, not the correctness." A regression outside the stated
+   envelope is a stop-and-redesign signal, not a note in the PR.
+
+## Observability: make the decision auditable
+
+`--emit-abi-trace` already classifies every resolved call site by ABI path
+(concrete-clone / dictionary / polymorphic-wrapper / carrier,
+`src/compiler/emit_module.c` ~4546). Extend it with a **representation
+trace**: one line per boundary crossing -- value's type, boundary kind,
+chosen representation, bridge applied. Two payoffs:
+
+- a probe can *diff traces* across a change, so "this increment only
+  re-routes fn-typed stores" becomes a checkable claim rather than a hope;
+- disagreement becomes visible before it becomes a segfault: a trace line
+  where producer and consumer name different representations is a bug
+  report with the location attached.
+
+The trace lands early (increment 0) because every later increment uses it
+for its blast-radius probe.
+
+## Sequencing
+
+Ordered so each increment shrinks the surface the next one must reason
+about, and cowpaths are paved before the field is closed:
+
+- **Increment 0 -- observability + inventory freshness.** The
+  representation trace above; the guide's missing-cells table reconciled
+  against `docs/reported/` (it is the campaign's live scoreboard, per the
+  Guide-upkeep tasks each report carries).
+  *Status 2026-07-30: landed (both slices).* `repr-trace` lines ship under
+  `--emit-abi-trace`:
+  - one per fn-typed parameter (carrier / fat / cfnptr / thin-fn + which
+    gate forced it, from the `carrier_ok` decision in `elab_fns.c`);
+  - one per emit-side fat bridge (bare-to-fat with shim kind,
+    poly-to-fat);
+  - one per carrier<->concrete crossing lowered by the
+    `emit_carrier_bridge` chokepoint, with direction and the lowering form
+    it picked (heap-reinterpret / inline-reinterpret / aggregate) --
+    container-element crossings (Vec push/get) route through here;
+  - one per aggregate heap-box/unbox at the `emit_agg_box`/`emit_agg_unbox`
+    chokepoints (poly-carrier and wide-byval crossings).
+
+  *Status 2026-08-16: the deferred gap below is CLOSED.* The note said ad-hoc
+  spill sites outside the named chokepoints do not trace, and that closing
+  them was increments 2-4's job. Audited: 14 sites in `emit_expr.c`, all one
+  shape -- an inline `(int64_t)(intptr_t)(val)` reinterpreting a pointer-ish
+  value into the carrier at a call boundary. They are CORRECT (a pure
+  reinterpret is what `emit_carrier_bridge` emits for a heap value, which is
+  why corpus and fuzzer were clean), but each was an independent `buf_printf`,
+  so none appeared in the trace. 11 matched the exact idiom and now route
+  through one named chokepoint, `emit_carrier_reinterpret`, named per site
+  (`spec-call-arg`, `ctor-field-*`, `closure-capture`, ...). Deliberately NOT
+  `emit_carrier_bridge`: that one spills, boxes and resolves spec types, and
+  these sites have already established their value is carrier-shaped --
+  sending them through it would be a behavior change with its own
+  measurement. **Emitted C byte-identical across all 2029 fixtures**, and the
+  trace gained **7148 crossings** it could not previously see, against 13822
+  already visible -- so the instrument had been blind to about a THIRD of all
+  carrier crossings. 3 sites remain un-migrated (they sit inside if/else
+  chains with a different idiom) and are the residue of this gap.
+  All pinned by `tests/run-repr-trace.sh` (ctest `tur_repr_trace`, 8
+  classifications). Guide table reconciled (+2 rows:
+  `fn-payload-in-container-undeclared-temp`, enumerations-drift Finding
+  2); all 10 `--known-probes` fire on current main; suite green (2436/0)
+  with the trace in. Known coverage gap, intentionally deferred: ad-hoc
+  spill sites NOT routed through the named chokepoints (e.g. the
+  call-site by-value->carrier-`:int`-sink spill) do not trace -- those
+  sites becoming chokepoint calls is increments 2-4's job, and the trace
+  will grow with them.
+- **Increment 1 -- the fn-value axis.**
+  [fn-value-fat-normalization-plan.md](fn-value-fat-normalization-plan.md),
+  staged as written (params -> return/let/ascribe -> unify flag'd sinks).
+  Highest bug density, clearest precedent (struct-field-fat), and the axis
+  the last campaign deliberately deferred.
+  *Status 2026-07-31: stages 1-2 landed; the residual seams stage 2 left
+  open (`fn-value-carrier-fat-seam-residuals`) are closed and archived --
+  the tail walkers resolve let-aliases to their origin, the if unifier
+  inserts poly-to-fat at a carrier-vs-boxed join, and ascribing a carrier
+  param to its own fn type is a no-op.  With that, the fuzzer's thunk legs
+  run the FULL crossing pool and a 300-case session reports 0 findings of
+  any class -- the campaign's first fully-clean session.  Stage 3 (unify
+  flag'd sinks) remains optional cleanup; increment 4 subsumes it.*
+- **Increment 2 -- method-result bridging.** The carrier->concrete re-wrap
+  applied uniformly to typeclass method results at every consumer position
+  (typed defn boundary, generic call argument, ascription) -- closes
+  `result-monad-bind-typed-boundary-miscompiles` and
+  `class-method-result-into-generic-invalid-c`. The let-bind workaround
+  proves the bridge exists; this increment makes consulting it total,
+  routing-plan style.
+  *Status 2026-07-31: first cell landed.* The generic-call-argument cell is
+  CLOSED (and its report archived): the defect was inverted from the
+  prediction -- not a missing bridge but a wrongly-consulted one
+  (`fn_body_tail_is_carrier_producer` classified every `__inst_*` callee as
+  a carrier producer by NAME; the M7 by-value instance amendment fixes it;
+  suite 2444/0 in isolation, pinned by
+  `tests/fixtures/class-method-result-into-generic/`). The `bind` cell is
+  diagnosed one level deeper (see the report's 2026-07-31 investigation
+  update): a continuation return-ABI mismatch -- the elab-side
+  `boxes_aggregate` gate pairs the wrapper ABI by receiver abstractness
+  while the emit-side dispatch selects the entry point; partially-applied
+  instance heads (`(Result _ B)`) get the carrier base with a
+  by-value-returning wrapper. Fixing it means deciding the pairing where
+  the entry point is selected -- remaining work for this increment.
+  *Status update, later 2026-07-31: DONE -- increment 2 complete.* The bind
+  cell landed exactly that way: `ctx->poly_wrap_callee_carrier` is set at
+  the call-arg emission (where the entry point is known) and consulted at
+  the EX_POLY_WRAP spill gate, so the wrapper ABI follows the selected
+  callee; the ascription form additionally needed
+  `fn_body_tail_byvalue_carrier_type` to trust the ascribed type over a
+  still-generic producer result.  Both reports this increment named are now
+  resolved and archived; `Option`/`Result` bind behave identically.
+- **Increment 3 -- container element protocol.** One rule for what a
+  container element slot holds per element class (scalar bits / heap ptr /
+  spilled by-value / fat fn handle), shared by Vec, parametric ADT
+  payloads, and struct fields -- closes
+  `vec-byvalue-struct-element-invalid-c` and
+  `fn-payload-in-container-undeclared-temp`, or (acceptably) turns the
+  unrepresentable cases into real diagnostics.
+  *Status 2026-07-31: landed.* The rule is width-independent: a non-heap
+  by-value ADT product of any width is heap-boxed into container slots and
+  deref-unboxed on read (`type_is_boxed_container_elem`, consulted by the
+  push bridges, the read recovery, and the `tur-wide-byval?` /
+  `tur-vec-elem-wide?` ownership folds -- the four decisions that used to
+  be free to drift).  The old fork -- wide boxed, narrow stack-spilled with
+  no reader -- was exactly a two-place-decision bug: the push side and read
+  side each "handled" narrow structs by different (wrong) defaults.  Two
+  rode along: the let-binding double-deref guard (consult the merge temp's
+  RECORDED emitted C type instead of re-deriving from the tail -- this also
+  fixed the never-pinned wide `(let [b (:: (map-get m k) Point)] ...)`
+  shape), and the interpreter's 1-field-record carrier retag
+  (`from_struct_lowering`-gated).  Both fn-payload cells were already
+  closed by fat-normalization stage 2.  Transient (non-container) inline-C
+  crossings keep the cheap stack spill -- the performance guardrail --
+  discriminated by a heap-container sibling argument at the call site.
+- **Increment 4 -- the decision function.** Only after 1-3: collapse the
+  per-site representation choices into the single `repr-of(type, position)`
+  routine plus chokepoint bridges, with the R3-style Debug ICE and an
+  R4-style registry + CI ratchet extended to cover the new axes. This is
+  the true consolidation; it goes last because by then the sites agree in
+  *behavior* and the collapse is mechanical rather than semantic.
+  *Status 2026-07-31: child plan written
+  ([repr-decision-function-plan.md](repr-decision-function-plan.md));
+  stage 1 landed -- the TY_SIMPLE_REPR_ROWS table makes one X-macro row per
+  payload-free TypeKind the single home of its three type-axis answers
+  (C name, mangle token, concrete layout), expanded by all three switches,
+  byte-identical behavior, guard extended to a sixth property (type_c_name
+  exhaustiveness).*
+  *Status 2026-07-31, later: stages 2 and 4 landed too.* Stage 2 is
+  `ReprPosition` + `repr_of` + the shadow log (521 -> 80 lines over two
+  calibration passes); stage 3's chokepoint 1 migrated concrete heap
+  bindings to their typed pointer and drove the shadowed sites to corpus
+  silence (80 -> 0); stage 4 is `tests/check-repr-decision-ratchet.sh`,
+  which pins the per-file call-site count of every representation-DECISION
+  predicate so new code consults the chokepoints or explains itself in the
+  same commit.
+  *Status 2026-08-15: stage 3 continues -- the STRUCT_FIELD position is
+  instrumented and silent.* Shadowed at `adt_ctor_field_c_type` (the one
+  function all nine field-emission sites route through); 2028-fixture sweep
+  84 -> 0. Two results worth carrying forward. **The slot calibration:** a
+  field / container-element / carrier-sink slot is one machine word, and
+  which form that word holds is decided by the STORE (already consolidated
+  in increment 3), so a declaration-recovered shadow can only honestly ask
+  "inline aggregate, or one word?" there -- narrowing the instrument's claim
+  rather than patching the 84 shapes it mis-reported, per the CPS rule in
+  the stall table. **The one real finding was a spec hole, not a seam:** a
+  by-value product that owns drop glue is BOXED at a field (so the owner
+  stays trivially copyable), which is the container protocol under a field's
+  name -- and that shape's `full_type` is deliberately NULL, so the shadow
+  had to reconstruct it from `drop_inner_def` or its blind spot would have
+  been exactly the shape worth watching. Suite 2598/0, no snapshot churn.
+  *Status 2026-08-15, later: CONTAINER_ELEM instrumented -- and it named the
+  next chokepoint.* Shadowed inside `type_is_boxed_container_elem` (the
+  predicate every boxing site, ownership probe and read-back recovery
+  consults). This one compares a PREDICATE rather than a C spelling, because
+  the slot calibration says the slot is one word either way, so boxed-or-not
+  is not recoverable from a declaration. Sweep: 5 lines, one shape --
+  a concrete by-value APP element (`(Vec (Option int))`). It is a **scope
+  mismatch, not a seam**: `repr_of` answers the outcome ("is it boxed?" --
+  yes, the push mallocs the monomorph), while the predicate answers "does it
+  take the ADT box/deref bridge?" -- which TY_APP elements do not, riding a
+  separate monomorph-aware path instead. Sound rather than lucky: every
+  parametric monomorph's payload occupies one word, verified by round-tripping
+  int, float (7.1/2.5) and a by-value struct payload. So: **two mechanisms
+  deciding one thing and agreeing** -- this campaign's core anatomy, caught
+  before it drifts. Collapsing them is a behavior change (the app path must
+  consult the predicate without double-boxing) and wants its own measured
+  increment; until then the row is pinned in `run-repr-trace.sh` the way the
+  fuzzer pins a `--known-probes` row -- the TY_APP line must still fire, and
+  the TY_ADT half must stay silent.
+  *Status 2026-08-16: the fn-value tail/join position closed, and the
+  decision function grew its second signature.* `repr_of_binding(const
+  Binding *, ReprPosition)` -- pre-registered by the param-position boundary
+  note and built now that a consumer needed it -- consults the `is_poly_fn` /
+  `is_fat` flags elaboration records and the Type does not carry, and encodes
+  that **a parameter's representation is fixed where it was DECLARED, not
+  where it is used**. Shadowed in `elab_normalize_fn_tail_leaves`: 0
+  disagreements, on a sabotage-counted population of 8 evaluations
+  corpus-wide -- so "agrees everywhere it runs", not broad verification, and
+  the smoke requires the probe to reach the classification before reading its
+  silence. Only param leaves are shadowed; a let-bound alias carries its
+  representation in its initialiser, which no binding-only signature can see.
+  **The stage-4 ratchet caught this increment's own instrumentation**: the
+  shadow's first draft re-derived `fn_param_type_is_fat_normalized` to
+  describe the site's decision and the build failed with
+  `elab_fns.c grew 3 -> 4`. The fix was to hoist the site's own check into
+  one shared local rather than bump the baseline -- a guard that catches its
+  author is a working guard.
+  *Status 2026-08-16, later: method-result carrier production instrumented and
+  silent.* Shadowed at a wrapper around `fn_body_tail_byvalue_carrier_type`.
+  The first spec was wrong and its wrongness is the useful measurement: the
+  naive reading ("a `byvalue_carrier_type` returns a by-value AGGREGATE")
+  fired 5740 lines, 4495 of them heap containers. **"By-value" in that
+  walker's name is opposed to ERASED, not to pointer** -- the struct-field
+  calibration again from a new angle. The honest invariant is that the walker
+  must never name a type the protocol calls the erased carrier (an int64
+  dressed as a concrete spelling -- increment 2's `bind` cell shape): **0
+  disagreements over a measured population of 7211**. Worth carrying forward:
+  that population is three orders of magnitude above the fn-tail-leaf
+  position's 8, so **two positions can both report "0" and mean very
+  different things** -- a shadow result is only as strong as the count of
+  answers it actually checked, which is why each of these increments now
+  measures its population rather than reporting a bare zero.
+  *Status 2026-08-16, final for stage 3: the per-arg bridges closed, and
+  stage 3's position list is complete.* The "long tail" turned out to be one
+  chokepoint: every per-arg crossing already routes through
+  `emit_carrier_bridge`, because that routing is what the 2026-06
+  carrier-crossing campaign landed -- so an earlier increment had already
+  paid for this one. First sweep: 65 disagreements over a population of
+  **13787 crossings**, all one shape -- heap containers with tyvar arguments,
+  all crossing as `heap-reinterpret`. **That is the pointer/carrier spelling
+  identity for the third time** (431 of 521 let-bind lines, all 84 adt-field
+  lines, all 65 here), and the repetition is the finding: three positions
+  rediscovering one calibration is the DECISION FUNCTION's job to absorb, not
+  each site's to re-exclude. So the rule moved into `repr_of` and got scoped
+  to the positions it is about -- the erased spelling is a **declaration**
+  fact, not a value fact, so it holds at LET_BIND and RESULT and nowhere
+  else. Chokepoint 1 reads LET_BIND, so the one place this answer drives real
+  codegen is unchanged (suite 2598/0). After scoping: 65 -> 0, every other
+  position still silent.
+  *Status 2026-08-16, R3: the Debug ICE landed.* A representation-shadow
+  disagreement is now a hard error in a Debug build with no flag required --
+  the routing plan's R3 step, taken only after every position ran silent
+  (*enforce before centralizing* is the stall-table entry this respects). The
+  instrument has three modes stated once in `types.c` rather than per site:
+  measurement (`--emit-abi-trace`, logs everything, never aborts -- a sweep
+  that dies on its first finding cannot calibrate a spec), enforcement (Debug,
+  ICE, `TUR_REPR_NO_SHADOW_ICE` downgrades), off (Release). Known rows -- today
+  the container-elem TY_APP class -- log under trace and never abort: a
+  diagnosed work list must not break someone's build. The ICE text and escape
+  hatch deliberately mirror `emit_abi_assert_routed_concrete` /
+  `TUR_ABI_NO_ROUTE_ICE`, the sibling R3 assert.
+  **The flip is its own measurement** (the CPS lesson): suite 2598/0 with the
+  ICE armed over the full build-and-run path; two fresh-seed fuzzer sessions
+  (8161, 8162) at 250 cases, 0 BUG classes; and a sabotage run -- un-scoping
+  the erased-spelling rule -- aborts 20 fixtures and downgrades cleanly under
+  the escape hatch, so both halves are load-bearing.
+  *Status 2026-08-16, INCREMENT 4 COMPLETE: the container-element collapse
+  landed, and the pinned row was hiding a real leak.*
+  `type_is_boxed_container_elem` is now DEFINED as
+  `repr_of(t, CONTAINER_ELEM) == BOXED_AGG` -- increment 4's stated goal
+  reached for its first position, with the shadow retired by construction
+  (want and got are one expression, so a disagreement is unrepresentable).
+  The 2026-08-15 verdict on that row -- "two mechanisms deciding one thing and
+  AGREEING" -- was right about the BOXING half and wrong about the OWNERSHIP
+  half: `vec-free` threads `tur-vec-elem-wide?`, that fold consults this
+  predicate, and it answered 0 for app elements, so the boxes the push side
+  allocated were never freed. `(Vec (Option int))` leaked one box per push (32
+  bytes / 2 allocations under LSan; the sibling `(Vec Sm)` freed both of its).
+  Written up in
+  [`docs/archive/vec-app-element-boxes-never-freed.md`](../archive/vec-app-element-boxes-never-freed.md).
+  Suite 2599/0, fuzzer 2 fresh seeds clean, no snapshot churn.
+  Increment 4 is complete; next is increment 5's conditional retirement,
+  whose precondition is a redundancy-falsification probe rather than a code
+  change.*
+- **Increment 5 (conditional) -- representation retirement.**
+  *Status 2026-08-16: MEASURED, and it does not start.* The condition was
+  never tested until now; `TUR_REPR_CENSUS=1` plus a corpus sweep produces
+  the position x form matrix the clause asks for
+  ([repr-coverage-census.md](repr-coverage-census.md)). Over **257,005
+  answers** every form is populated except `thin-fn`, which is zero in all
+  six positions -- and the redundancy-falsification probe kills it as a
+  candidate immediately: the SAME sweep shows elaboration routing **2122 fn
+  params onto the thin representation** (2088 tyvar-sig, 19 effect-row, 15
+  non-scalar-sig). `repr_of` returns it zero times because it is never
+  ASKED -- the fn axis is decided from Binding flags before `repr_of_binding`
+  delegates. A zero means "no site consults the decision function here", not
+  "no code needs this form", which is the "load-bearing, not redundant"
+  verdict arriving for the fourth time in this archive.
+  What the census found instead is a **coverage hole with a number on it**:
+  2122 representation decisions per sweep are made outside the decision
+  function. That is the fn axis, and it is the natural successor to increment
+  4 -- consolidating it needs the `repr_of_binding(const Binding *, ...)`
+  signature to become the site's answer rather than its shadow.
+  **Done, same day.** `repr_of_fn_param(const Binding *, const Type *ann)`
+  now owns the routing gate set, the site consults it (`carrier_ok` is one
+  comparison), the fn-value tail walker consults `repr_of_binding` for param
+  leaves, and both answers are censused. The matrix gained an `fn-param` row
+  of 24706 answers that reconciles line-for-line with the elaboration trace,
+  `thin-fn` stopped being empty, and **no empty cell remains** -- so increment
+  5 is closed on stronger evidence than the falsification probe alone. The
+  full repr-trace sweep is byte-identical across both migrations (43058 lines,
+  empty diff), which for a pure consolidation is the whole proof: the decision
+  moved, the decisions did not. The ratchet read the tail-walker migration as
+  `elab_fns.c shrank 3 -> 2` and the baseline was tightened in the same
+  commit.
+  Also recorded: the plan's guessed candidate, the by-value fat struct
+  in-flight form, has no distinct `ReprForm`, so this census cannot speak to
+  it either way; retiring it needs an instrument that distinguishes in-flight
+  forms.
+  The original clause, for reference -- if the
+  decision function shows a form with no remaining (type, position) pairs
+  -- the by-value fat struct in-flight form is the likely candidate --
+  delete it CPS-style, with the two milestones kept explicitly separate:
+  becoming the default (forced-on corpus probe, every failure classified)
+  and deleting the old path (byte-identity proof, dependency sweep,
+  pre-registered abort path). The redundancy-falsification probe from the
+  checklist runs before either milestone starts.
+
+## Per-increment landing checklist (the template child plans follow)
+
+1. Assumption probes written and green (or their failures understood).
+2. Blast radius measured per mechanical step, in isolation, before
+   composition; numbers recorded in the plan.
+3. Boundary matrix fixtures added (ok rows and broken rows) before the fix.
+4. Grounding guard stated: where proof is unavailable, the old form stays
+   legal (no un-grounded normalization).
+5. Performance probe named, baseline recorded, acceptable delta stated.
+6. Snapshot regen in the same PR; one regen window per the fixture-churn
+   rule.
+7. Fuzzer: known rows retired, `--known-probes` flipped to FIXED, two
+   fresh-seed sessions green.
+8. Representation trace diff reviewed: only the intended boundaries moved.
+9. Guide updated (inventory + missing-cells table) in the same PR --
+   enforced socially by each report's Guide-upkeep section.
+10. Any dual-path flag carries its retirement criterion in writing: a hard
+    `expires_at`-style contract (CPS) or a written rot license (M7) --
+    never an open-ended coexistence.
+11. For any representation slated for deletion: the redundancy-
+    falsification probe ran and failed to find a load-bearing use, AND a
+    fixture exists exercising the *other* side of the split it leaves
+    behind.
+12. Deletion states its benefit beyond tidiness (the "functionally free"
+    test) -- usually the missing-cells rows it permanently closes.
+
+## Stall-recovery rule
+
+A revert is data, not failure. The fn-element report set the standard:
+when an attempt is reverted, the measurement table and the disproven
+hypothesis are written into the report *before* moving on, so the next
+attempt starts from what was proven rather than re-deriving it. Any
+increment of this campaign that gets reverted does the same, in its child
+plan, with the revert commit referenced.
+
+## Doc follow-up
+
+- Each landed increment updates the representations guide (its Maintenance
+  section already requires this) and this plan's sequencing status.
+- When increment 4 lands, the guide's "missing cells" framing inverts: the
+  table becomes the *coverage* table of the decision function, and the
+  fuzzer's `known_bug_slug` table should be empty.

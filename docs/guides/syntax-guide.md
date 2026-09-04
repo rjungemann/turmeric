@@ -208,6 +208,7 @@ types), and `defmacro` (syntax extension). Each has a dedicated guide:
 - Binding forms (`let`, `letrec`, named let): [binding-forms-guide.md](binding-forms-guide.md)
 - Structs: [structs-guide.md](structs-guide.md)
 - Modules, `import`/`export`: [module-system-guide.md](module-system-guide.md)
+- Macros (`defmacro`): [macros-guide.md](macros-guide.md)
 
 ### Type-annotation syntax
 
@@ -367,9 +368,7 @@ one pulled in by `(load "...")`: a loaded file's dialect is read from its own
 first line and its own extension, independently of whatever dialect the loading
 file is written in. When both are present the extension picks the base dialect
 and the directive is a redundant hint; layers on the `#lang` line apply either
-way. (Before 2026-07-29 a loaded file's dialect came from its extension alone,
-so `(load ...)` on a plain-`.tur` file whose first line was
-`#lang turmeric/sweet` failed to parse.)
+way.
 
 ### The three tools
 
@@ -556,9 +555,9 @@ defn main [] : int
   string/len(#s"hello")
 ```
 
-There is no semantic layer today. `refined` was one until it graduated in
-v0.33.0; static discharge of `#refine{...}` predicates is now unconditional, so
-there is nothing left for the token to turn on. A file that still carries
+There is no semantic layer today. Static discharge of `#refine{...}`
+predicates is unconditional (the former `refined` layer graduated), so there
+is nothing for the token to turn on. A file that still carries
 `#lang turmeric refined` keeps compiling -- the token is accepted and ignored
 with a one-time `TUR-W0064` -- but it can be dropped. See
 [refinement-types-guide.md](refinement-types-guide.md).
@@ -667,8 +666,87 @@ A short list of pitfalls newcomers hit:
 7. **Naming a definition after a special form.** `(defn return ...)`,
    `(defn match ...)`, `(defmacro open ...)` are accepted, but a bare call site
    dispatches to the form, never to your definition. See
-   [Reserved names](#reserved-names) below -- the compiler now flags this as
+   [Reserved names](#reserved-names) below -- the compiler flags this as
    `TUR-W0042` at the definition.
+8. **An expression at `defmodule` top level.** There is no module-level
+   side-effect position; see
+   [What may appear inside a `defmodule`](#what-may-appear-inside-a-defmodule).
+9. **A definition as the last form of a function body.** Legal anywhere else in
+   the body, but not last -- see
+   [Definitions inside a function body](#definitions-inside-a-function-body).
+
+### Definitions inside a function body
+
+A `defn` (or any `def*` form) may appear inside a function body. It is lifted to
+file scope and stays callable by name from the enclosing function:
+
+```turmeric
+(defn outer [] : int
+  (defn inner [x : int] : int (+ x 1))
+  (inner 5))                  ; => 6
+```
+
+**It may not be the last form**, unless the function owes no value. A definition
+produces nothing, so a function declared `: int` whose body ends with one has
+nothing to return -- that is `TUR-E0713`:
+
+```turmeric
+(defn outer [] : int
+  (let [x (helper)] x)
+  (defn other [] : int 7))    ; error [TUR-E0713]
+```
+
+In practice this is almost always a **missing close paren**: `outer` was meant
+to end after `x`, and everything following it got swallowed into its body. An
+editor will happily reindent around the slip, so the diagnostic names it. Until
+2026-08-29 this was silent -- the function returned 0, which is a successful
+exit status, a `false`, and a "nothing found" all at once.
+
+A `: nil` / `: void` function may end with a definition, since it owes no value.
+
+### What may appear inside a `defmodule`
+
+A `(defmodule ...)` body is a list of **definitions**, not statements. A
+non-definition form as a direct child is rejected with `TUR-E0711`:
+
+```turmeric
+(defmodule dt
+  (defn shout [] : int (println "hi") 1)
+  (shout)                     ; error [TUR-E0711] -- never evaluated
+  (defn main [] : int 0))
+```
+
+There is no module-level side-effect position, so put the call in `main` (or a
+function `main` calls). This was silent until 2026-08-29: the form was fully
+elaborated -- type errors inside it reported like live code -- and then dropped
+from codegen, which cost 12 spices their entire test suites without a single
+warning.
+
+Legal as a direct child:
+
+| Form | Note |
+| --- | --- |
+| `defn` `defmacro` `defmacro*` | |
+| `defstruct` `defdata` `defopaque` `deftype` `defalias` | |
+| `defclass` `definstance` `defeffect` | |
+| `def` | a module-level global; its initializer *does* run |
+| `extern-c` | |
+| `import` `export` `export-from` | must come first, before any definition |
+| a bare ` ```c ` block | supplies file-scope C declarations |
+| `defer` | runs at process exit, not at module load |
+
+The last two look like expressions and are deliberate. `defer` is the only
+non-definition form that executes.
+
+The rule is applied to the form *after* macro expansion, so a macro that
+expands to a definition is fine wherever the definition would be:
+
+```turmeric
+(defmacro make-adder [name n]
+  `(defn ,name [x : int] : int (+ x ,n)))
+
+(make-adder add5 5)           ; OK -- expands to a defn
+```
 
 ### Reserved names
 
@@ -687,7 +765,7 @@ Reserved in call-head position:
 | Group | Names |
 |---|---|
 | Binding / control | `def` `define` `let` `let*` `letrec` `if` `do` `unsafe` `set!` `while` `case` `defer` `return` `match` `quote` `gensym` `?` `->` `->>` |
-| Definition forms | `defn` `fn` `λ` `extern-c` `defmacro` `defmodule` `import` `export` `load` `defstruct` `make-struct` `defopaque` `defdata` `defgadt` `defclass` `definstance` `defkind` `defrec` `deftype` `defalias` `defdynamic` `defeffect` `defprotocol` |
+| Definition forms | `defn` `fn` (and its Greek-letter lambda alias) `extern-c` `defmacro` `defmodule` `import` `export` `load` `defstruct` `make-struct` `defopaque` `defdata` `defgadt` `defclass` `definstance` `defkind` `defrec` `deftype` `defalias` `defdynamic` `defeffect` `defprotocol` |
 | Generators | `gen` `yield` `gen-next` `gen-done?` |
 | References / rc / weak | `ref` `deref` `drop!` `ref?` `weak` `weak?` `upgrade` `lref/new` `rc/of` `rc/clone` `rc/drop` `rc->ptr` `rc/strong-count` `rc/from-ref` `ref/from-rc` |
 | Continuations | `reset` `shift` `shift0` `call/cc` `call/cc*` `escape` `cloneable-reset` `cloneable-shift` `serial-reset` `serial-shift` `cont?` |
