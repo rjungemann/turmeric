@@ -102,7 +102,24 @@
       (println (if (set-eq-cmp? s1 s3 (fn [p : (Option String) q : (Option String)] : bool (eq? p q))) "st-eq" "st-ne"))
       (println (if (set-eq-cmp? s1 ss (fn [p : (Option String) q : (Option String)] : bool (eq? p q))) "st-eq" "st-ne")))
 
-    ;; 5. a NON-niche element through the same helpers: the mark must be inert
+    ;; 5. `pair-eq?` is a MACRO -- it splices the comparator into call position
+    ;;    against a `.fst` field read, so there is no named callee whose
+    ;;    parameter contract could carry either mark.  A direct application does
+    ;;    not need one: the ARGUMENT is at the call, and a concrete niche-typed
+    ;;    argument IS the payload word.  The third line varies only the int
+    ;;    component, so it also pins that the SECOND comparator still sees an
+    ;;    ordinary int -- the marking is per parameter, not per lambda.
+    (let [pa (:: (pair aa1 1) (Pair (Option String) int))
+          pb (:: (pair aa2 1) (Pair (Option String) int))
+          pc (:: (pair bb 1)  (Pair (Option String) int))
+          pd (:: (pair aa2 2) (Pair (Option String) int))]
+      (println (if (pair-eq? pa pb (fn [a b] : bool (eq? (:: a (Option String)) (:: b (Option String)))) (fn [a b] : bool (= a b))) "pu-eq" "pu-ne"))
+      (println (if (pair-eq? pa pc (fn [a b] : bool (eq? (:: a (Option String)) (:: b (Option String)))) (fn [a b] : bool (= a b))) "pu-eq" "pu-ne"))
+      (println (if (pair-eq? pa pd (fn [a b] : bool (eq? (:: a (Option String)) (:: b (Option String)))) (fn [a b] : bool (= a b))) "pu-eq" "pu-ne"))
+      (println (if (pair-eq? pa pb (fn [a : (Option String) b : (Option String)] : bool (eq? a b)) (fn [a b] : bool (= a b))) "pt-eq" "pt-ne"))
+      (println (if (pair-eq? pa pc (fn [a : (Option String) b : (Option String)] : bool (eq? a b)) (fn [a b] : bool (= a b))) "pt-eq" "pt-ne")))
+
+    ;; 6. a NON-niche element through the same helpers: the mark must be inert
     (let [a (cons 1 (cons 2 0))
           b (cons 1 (cons 2 0))
           c (cons 1 (cons 3 0))]

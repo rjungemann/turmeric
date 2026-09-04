@@ -20,5 +20,10 @@ su-ne
 st-eq
 st-ne
 st-eq
+pu-eq
+pu-ne
+pu-ne
+pt-eq
+pt-ne
 int-eq
 int-ne

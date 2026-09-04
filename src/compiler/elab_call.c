@@ -195,6 +195,8 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
 static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding);
 static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding);
 static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr);
+static void mark_direct_apply_niche_word_params(Elab *e, Expr *head_expr,
+                                               Expr *call_expr);
 
 /* GS5/CS3: shared AbiTypeBinding lives in expr.h so emit can consume what
  * elaboration produced. Keep CallTypeBinding as a local alias for minimal
@@ -1655,6 +1657,11 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
 
     Expr *call_expr = elab_call_fn(e, call, tmp_b);
     if (!call_expr) return NULL;
+    /* pair-eq-macro-applies-comparator-directly: a lambda applied DIRECTLY has
+     * no named callee to carry a convention, but it does not need one -- the
+     * argument is right here.  Mark each erased parameter whose argument is a
+     * concrete niche option, which IS the payload word. */
+    mark_direct_apply_niche_word_params(e, head_expr, call_expr);
 
     tmp_b->closure_head_init = head_expr;
     LetBinding *let_bs = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
@@ -4496,6 +4503,27 @@ static Type comparator_vec_elem_type(const Expr *a) {
  * Returns true when the argument was a lambda literal (markable), false when it
  * is a name -- a named function is elaborated once and may also be called with
  * genuine boxes, so it cannot carry this mark and gets the diagnostic instead. */
+/* Rename one parameter into the `__cmp_slot_` namespace.  The MARK IS THE
+ * EMITTED NAME, so it has to survive name mangling intact: a pure C identifier
+ * is emitted verbatim (raw_name_for_binding passes reserved-prefix identifiers
+ * through), while anything carrying a kebab or sigil byte would go through the
+ * injective mangler, which rewrites the prefix itself and silently loses the
+ * mark -- those fall back to the parameter index.  A parameter already in the
+ * reserved `__` namespace is skipped: that covers a lifted closure's env
+ * pointer and an already-marked parameter, and users cannot write such a name. */
+static void mark_one_param_as_slot_word(Elab *e, Binding *pb, uint32_t idx) {
+    if (!pb || !pb->name || !pb->name->name) return;
+    if (pb->name->name[0] == '_' && pb->name->name[1] == '_') return;
+    bool pure = true;
+    for (const char *c = pb->name->name; *c; c++)
+        if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+              (*c >= '0' && *c <= '9') || *c == '_')) { pure = false; break; }
+    char buf[256];
+    if (pure) snprintf(buf, sizeof buf, "__cmp_slot_%s", pb->name->name);
+    else      snprintf(buf, sizeof buf, "__cmp_slot_p%u", (unsigned)idx);
+    pb->name = intern_cstr(e->st, buf);
+}
+
 static bool mark_comparator_slot_word_params(Elab *e, Expr *arg) {
     Expr *inner = arg;
     while (inner && (inner->kind == EX_ASCRIBE || inner->kind == EX_FN_TO_FAT))
@@ -4520,31 +4548,68 @@ static bool mark_comparator_slot_word_params(Elab *e, Expr *arg) {
     /* An inline-C body names its parameters by their source spelling, so a
      * rename would desync the body text from the emitted signature. */
     if (fd->body && fd->body->kind == EX_INLINE_C) return true;
-    for (uint32_t p = 0; p < fd->n_params; p++) {
-        Binding *pb = fd->params[p];
-        if (!pb || !pb->name || !pb->name->name) continue;
-        /* Skip every synthesized parameter: a lifted closure's env pointer
-         * (params[0]) and an already-marked comparator param both live in the
-         * reserved `__` namespace, which users cannot write. */
-        if (pb->name->name[0] == '_' && pb->name->name[1] == '_') continue;
-        /* The MARK IS THE EMITTED NAME, so it has to survive name mangling
-         * intact.  A pure C identifier is emitted verbatim (raw_name_for_binding
-         * passes reserved-prefix identifiers through); anything carrying a
-         * kebab or sigil byte would go through the injective mangler, which
-         * would rewrite the prefix itself and silently lose the mark.  Fall
-         * back to the parameter index for those. */
-        bool pure = true;
-        for (const char *c = pb->name->name; *c; c++)
-            if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
-                  (*c >= '0' && *c <= '9') || *c == '_')) { pure = false; break; }
-        char buf[256];
-        if (pure)
-            snprintf(buf, sizeof buf, "__cmp_slot_%s", pb->name->name);
-        else
-            snprintf(buf, sizeof buf, "__cmp_slot_p%u", (unsigned)p);
-        pb->name = intern_cstr(e->st, buf);
-    }
+    for (uint32_t p = 0; p < fd->n_params; p++)
+        mark_one_param_as_slot_word(e, fd->params[p], p);
     return true;
+}
+
+/* Peel a call argument or call head down to the lambda literal behind it, or
+ * NULL when it is a name.  Shared by the two sites that mark parameters. */
+static FnDef *lambda_literal_fn_def(Expr *x) {
+    while (x && (x->kind == EX_ASCRIBE || x->kind == EX_FN_TO_FAT))
+        x = (x->kind == EX_ASCRIBE) ? x->as.ascribe_.inner
+                                    : x->as.fn_to_fat_.inner;
+    if (!x) return NULL;
+    if (x->kind == EX_CLOSURE && x->as.closure_.closure)
+        return x->as.closure_.closure->fn;
+    if (x->kind == EX_VAR && x->as.var.binding &&
+        x->as.var.binding->is_lifted_lambda)
+        return x->as.var.binding->source_fn_def;
+    return NULL;
+}
+
+/* pair-eq-macro-applies-comparator-directly.
+ *
+ * The third way a lambda meets a niche word, and the one neither call-keyed
+ * rule could reach: it is APPLIED DIRECTLY, with no named callee whose
+ * parameter contract could say which convention the value arrives in.
+ * `pair-eq?` is a macro that splices its comparator into call position against
+ * a field read --
+ *
+ *   `(~fst-cmp (.fst ~p1) (.fst ~p2))`
+ *
+ * -- and `.fst` on a niche `(Option P)` field yields the payload pointer, so an
+ * erased parameter's `(:: a (Option P))` unboxed a box that was never there.
+ *
+ * But a direct application needs no contract, because the ARGUMENT is right
+ * here: this is the one site where the convention is read off the value being
+ * passed rather than promised by a callee.  A concrete niche-typed argument IS
+ * the word (that is what the representation means), so an erased parameter
+ * receiving one is receiving a word.  Per PARAMETER, not per lambda -- a
+ * comparator may take a niche argument in one position and an int in another,
+ * as `pair-eq?`'s own two lambdas do.
+ *
+ * Only an ERASED parameter is touched.  One declared as the element type has
+ * no bridge to redirect and is already correct. */
+static void mark_direct_apply_niche_word_params(Elab *e, Expr *head_expr,
+                                                Expr *call_expr) {
+    if (!call_expr || call_expr->kind != EX_CALL) return;
+    FnDef *fd = lambda_literal_fn_def(head_expr);
+    if (!fd || !fd->params) return;
+    if (fd->body && fd->body->kind == EX_INLINE_C) return;
+    uint32_t n_args = call_expr->as.call_.n_args;
+    /* A lifted closure thunk carries its env as params[0], so the parameter
+     * vector can be one longer than the argument list. */
+    uint32_t off = (fd->n_params == n_args + 1) ? 1u : 0u;
+    if (fd->n_params != n_args + off) return;
+    for (uint32_t i = 0; i < n_args; i++) {
+        Expr *a = call_expr->as.call_.args[i];
+        Binding *pb = fd->params[i + off];
+        if (!a || !pb) continue;
+        if (pb->type.kind != TY_INT) continue;      /* erased only */
+        if (!adt_app_is_niche_option(a->type)) continue;
+        mark_one_param_as_slot_word(e, pb, i + off);
+    }
 }
 
 static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) {
