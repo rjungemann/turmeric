@@ -9396,8 +9396,8 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* E7: install the trampoline driver.  A tail-resume longjmps here; the
          * else-branch runs the meta-stack trampoline to completion. */
         if (!mvoid) buf_puts(file, "    int64_t __r;\n");
-        buf_puts(file, "    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
-        buf_printf(file, "    if (setjmp(__dkjb) == 0) { %s%s__cps(__root); }\n",
+        buf_puts(file, "    tur_dk_jmp_buf __dkjb; tur_dk_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
+        buf_printf(file, "    if (TUR_DK_SETJMP(__dkjb) == 0) { %s%s__cps(__root); }\n",
                    mvoid ? "(void)" : "__r = ", cn);
         buf_printf(file, "    else { %s__dk_drive_after(); }\n", mvoid ? "(void)" : "__r = ");
         buf_puts(file, "    g_dk_driver = __dksave;\n");
@@ -9497,8 +9497,8 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * the d2b main), so a colored body reached from a non-d2b caller (`run`
      * called by a plain main) still trampolines a deep tail-resume flat. */
     if (!void_ret) buf_puts(file, "    int64_t __r;\n");
-    buf_puts(file, "    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
-    buf_printf(file, "    if (setjmp(__dkjb) == 0) { %s%s__cps(%s); }\n",
+    buf_puts(file, "    tur_dk_jmp_buf __dkjb; tur_dk_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
+    buf_printf(file, "    if (TUR_DK_SETJMP(__dkjb) == 0) { %s%s__cps(%s); }\n",
                void_ret ? "(void)" : "__r = ", cn, __args.data);
     buf_printf(file, "    else { %s__dk_drive_after(); }\n", void_ret ? "(void)" : "__r = ");
     buf_puts(file, "    g_dk_driver = __dksave;\n");

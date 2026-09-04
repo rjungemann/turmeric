@@ -1270,6 +1270,19 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **Performing an effect inside a fiber no longer kills the process on
+  Windows.** The DK tail-resume trampoline lands via `longjmp`, and on win64
+  that is a real SEH unwind: `RtlUnwindEx` validates every frame against the
+  thread's stack bounds as recorded in the TEB, and a fiber stack is `malloc`'d
+  and invisible there. Every frame on it was out of bounds, so the unwind raised
+  `STATUS_BAD_STACK` and the program died before printing anything. The landing
+  now uses `__builtin_setjmp`/`__builtin_longjmp` on Windows -- a plain
+  SP/FP/PC save-restore with no unwinder, which is all the trampoline ever
+  wanted. Linux and macOS are byte-identical. Not fixed on the JIT path: c2mir
+  has no such builtin, and both halves of a split-runtime program must agree on
+  the mechanism, so the split keeps plain `setjmp`. `call/cc` and panic-in-fiber
+  have the same defect and are still open.
+
 - **A runaway macro on a sanitizer-instrumented (Debug) build now reports
   `maximum macro expansion depth exceeded` instead of aborting with an ASan
   stack-overflow.** The 256-level depth counter is a proxy for stack

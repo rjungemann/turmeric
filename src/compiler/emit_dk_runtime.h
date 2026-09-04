@@ -41,6 +41,23 @@
  * tramp-off wrapper had no callers at all. */
 void emit_cps_runtime_prelude(Buf *out);
 
+/* True while emit_rt_split_source() is producing the CANONICAL split-runtime
+ * text (S2): the committed src/runtime/generated/tur_rt_split*.{c,h}, and the
+ * probe cmd_jit hashes against them.  Defined in emit_module.c, where the flag
+ * it reports lives.
+ *
+ * The DK prelude needs it for exactly one decision -- which setjmp/longjmp pair
+ * backs the tail-resume landing on Windows -- because that choice cannot be made
+ * by the preprocessor there.  Under S2 the runtime half is compiled by the host
+ * toolchain (GCC) while the program half goes through c2mir, so a `#if
+ * defined(__GNUC__)` resolves DIFFERENTLY in the two halves of one program: the
+ * host arms a landing with one mechanism and the program half arms it with the
+ * other, and since setjmp/longjmp must PAIR, the mismatch is silent -- the
+ * program runs to exit 0 having produced nothing.  Deciding here instead makes
+ * both halves agree by construction, because they are emitted from this same
+ * text. */
+bool rt_split_canonical_emission(void);
+
 /* Emit the undelimited escape-continuation runtime (tur_escape_cont +
  * tur_escape_resume) into the generated preamble. Call once, gated on
  * preamble_uses_callcc(). */

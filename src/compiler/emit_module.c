@@ -8608,9 +8608,23 @@ static void emit_win_ucontext_shim(Buf *out) {
     buf_puts(out, "extern void __tur_uctx_tramp(void);\n");
     /* The context switch and entry trampoline, emitted as file-scope asm. This
      * is the exact code validated in fiber_ctx_x64_win.S, re-emitted here
-     * because generated C is standalone and cannot link that object. */
+     * because generated C is standalone and cannot link that object.
+     *
+     * This preamble goes into EVERY generated translation unit, so a plain
+     * `.globl` definition collides the moment a build has more than one TU --
+     * which is every `tur build <dir>` over multiple modules, and every
+     * `--shared` build (the generated tur_runtime.c is always a second TU).
+     * GNU ld reports it as "multiple definition of `__tur_uctx_swap'".
+     *
+     * The fix is COMDAT, the same mechanism a C++ inline function uses: each
+     * definition goes in its own `.text$<name>` section marked
+     * `.linkonce discard`, and the linker keeps exactly one copy and drops the
+     * rest.  Plain TU-local (`.scl 3`) is NOT enough for __tur_uctx_swap: the C
+     * code below calls it, so GCC emits its own `.def ... .scl 2` for the call
+     * and re-externalises the symbol underneath us. */
     buf_puts(out, "__asm__(\n");
-    buf_puts(out, "\".text\\n\"\n");
+    buf_puts(out, "\".section .text$__tur_uctx_swap,\\\"xr\\\"\\n\"\n");
+    buf_puts(out, "\".linkonce discard\\n\"\n");
     buf_puts(out, "\".globl __tur_uctx_swap\\n\"\n");
     buf_puts(out, "\".def __tur_uctx_swap; .scl 2; .type 32; .endef\\n\"\n");
     buf_puts(out, "\"__tur_uctx_swap:\\n\"\n");
@@ -8635,14 +8649,26 @@ static void emit_win_ucontext_shim(Buf *out) {
     buf_puts(out, "\"  mov 40(%rdx), %rdi\\n mov 32(%rdx), %rsi\\n\"\n");
     buf_puts(out, "\"  mov 24(%rdx), %rbp\\n mov 16(%rdx), %rbx\\n\"\n");
     buf_puts(out, "\"  mov 8(%rdx), %rsp\\n jmp *0(%rdx)\\n\"\n");
+    buf_puts(out, "\".section .text$__tur_uctx_tramp,\\\"xr\\\"\\n\"\n");
+    buf_puts(out, "\".linkonce discard\\n\"\n");
     buf_puts(out, "\".globl __tur_uctx_tramp\\n\"\n");
     buf_puts(out, "\".def __tur_uctx_tramp; .scl 2; .type 32; .endef\\n\"\n");
     buf_puts(out, "\"__tur_uctx_tramp:\\n\"\n");
     buf_puts(out, "\"  mov %r12, %rcx\\n sub $32, %rsp\\n call __tur_uctx_run\\n call abort\\n ud2\\n\"\n");
+    /* Switch back to .text before handing control back to the compiler.  A
+     * file-scope asm block leaves the assembler wherever its last .section
+     * directive put it, and GCC does not re-assert .text for everything it
+     * emits afterwards -- so without this, later output lands in a
+     * `.linkonce discard` section and the linker throws it away.  That is not
+     * a hypothetical: it made every generated program segfault in main(). */
+    buf_puts(out, "\".text\\n\"\n");
     buf_puts(out, ");\n");
-    /* Entry helper the trampoline calls (external so the asm `call` resolves and
-     * the optimiser cannot drop it as unreferenced). */
-    buf_puts(out, "void __tur_uctx_run(struct tur_ucontext *u) {\n");
+    /* Entry helper the trampoline calls.  `static` for the same per-TU reason as
+     * the asm symbols above -- the local symbol still satisfies the assembler's
+     * `call __tur_uctx_run` within this TU.  `used` is what keeps it: GCC cannot
+     * see the reference from inside the asm string, so without the attribute it
+     * would drop the function as unreferenced and the call would not link. */
+    buf_puts(out, "static __attribute__((used)) void __tur_uctx_run(struct tur_ucontext *u) {\n");
     buf_puts(out, "    if (u->entry) {\n");
     buf_puts(out, "        if (u->argc == 2)      ((void(*)(int,int))u->entry)(u->argv[0], u->argv[1]);\n");
     buf_puts(out, "        else if (u->argc == 1) ((void(*)(int))u->entry)(u->argv[0]);\n");
@@ -8805,6 +8831,11 @@ static void emit_winsock_compat_shim(Buf *out) {
  * the feature-complete preamble the split-runtime artifacts are generated
  * from.  Set only by emit_rt_split_source; never during normal emission. */
 static bool g_rt_split_all_gates = false;
+
+/* See emit_dk_runtime.h: the DK prelude asks whether it is emitting the
+ * canonical split text, because the Windows tail-resume landing has to pick a
+ * setjmp/longjmp pair that both halves of an S2 program will agree on. */
+bool rt_split_canonical_emission(void) { return g_rt_split_all_gates; }
 
 static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Prefix that demotes a runtime function to internal linkage in shared mode
@@ -10444,7 +10475,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * and restore them when control returns, so the fiber's driver never leaks
      * out.  The trampoline path declares g_dk_driver / g_dk_meta_n and is the
      * only path since cps-tramp-resume graduated (2026-07-19). */
-    buf_puts(out, "    jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
+    buf_puts(out, "    tur_dk_jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
     buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
     buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
     buf_puts(out, "    tur_current_fiber = _prev;\n");
@@ -12729,6 +12760,18 @@ void emit_rt_split_source(Buf *out) {
     extern bool g_needs_winsock;
     bool s_hamt = g_needs_hamt, s_regex = g_needs_regex_h;
     bool s_var = g_has_variadics, s_cps = g_cps_path, s_wsk = g_needs_winsock;
+    /* DEDUP-4b interaction: the rc/GC section emits decls-only in archive mode
+     * and full static bodies otherwise, so the canonical text depends on
+     * g_rcgc_from_archive too.  cmd_emit_rt_split forces it true before
+     * calling here, but the S2 engage probe (jit_try_split_preamble) calls
+     * with whatever resolve_rcgc_from_archive decided for this box -- on a
+     * host without the lean runtime archive that is `false`, the probe emits
+     * the bodies flavor, and the hash NEVER matches the committed artifacts.
+     * Net effect: S2 silently disengaged for every program on such hosts.
+     * Force it here, where every caller gets the canonical posture, and
+     * restore on the way out. */
+    bool s_arch = rt_global_from_archive();
+    emit_set_rcgc_from_archive(true);
     g_needs_hamt = true; g_needs_regex_h = true;
     g_has_variadics = true; g_cps_path = true; g_needs_winsock = true;
     g_rt_split_all_gates = true;
@@ -12739,6 +12782,7 @@ void emit_rt_split_source(Buf *out) {
     g_rt_split_all_gates = false;
     g_needs_hamt = s_hamt; g_needs_regex_h = s_regex;
     g_has_variadics = s_var; g_cps_path = s_cps; g_needs_winsock = s_wsk;
+    emit_set_rcgc_from_archive(s_arch);
 }
 
 /* structdef-retirement slice 5: an `(defopaque ...)` elaborates to an EX_DEF

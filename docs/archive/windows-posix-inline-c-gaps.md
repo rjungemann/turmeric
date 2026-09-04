@@ -1,4 +1,10 @@
 # POSIX-only calls in stdlib inline-C break three fixture groups on Windows
+> **RESOLVED 2026-09-04.** All five fixtures pass on Windows today.
+> `childhandle-linear` and `term-raw-cooked-roundtrip` PASS-skip through main's
+> `requires.posix-apis` marker -- the remedy this report recommended -- and
+> `tmpfile-linear`, `term-string` now pass outright. Verified in a full Debug
+> suite run on `windows-bringup`: 0 failures.
+
 
 **Severity: low (Windows-only, 5 fixtures).** Three unrelated POSIX APIs reached
 for from inline-C with no Windows path. One is a near-trivial fix, one needs a

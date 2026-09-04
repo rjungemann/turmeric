@@ -1,4 +1,13 @@
 # The pipe-based reactor fixtures do not BUILD on Windows (plan says runtime)
+> **RESOLVED 2026-09-04 (superseded).** Main introduced a `requires.posix-apis`
+> skip marker, which is exactly the remedy this report recommended, and all
+> nine fixtures below now carry it -- plus `childhandle-linear` and
+> `term-raw-cooked-roundtrip` from the sibling POSIX report. `tests/run.sh`
+> PASS-skips them when `TUR_HOST_WINDOWS=1`, so the Windows suite is clean and
+> the gap stays visible as a marker rather than as noise. The correction this
+> report existed to make (they fail to BUILD, not at runtime as the plan then
+> claimed) is carried in the plan doc.
+
 
 **Severity: low (Windows-only, 9 fixtures, arguably works-as-intended).** The
 value of this report is mostly the correction to the plan doc: these fixtures

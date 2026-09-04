@@ -51,6 +51,12 @@ fi
 
 python3 - "$TMP/report.json" <<'PY'
 import json, sys
+# Windows: Python opens stdout in TEXT mode, so every "\n" it writes becomes
+# "\r\n" while the bash echo/sed lines below stay LF -- a half-CRLF file that
+# diffs against the LF expected.stdout even though the content is identical.
+# tur.exe itself already forces binary stdout (src/main.c) for exactly this
+# reason; do the same here.  No-op on Linux/macOS.
+sys.stdout.reconfigure(newline="\n")
 rep = json.load(open(sys.argv[1]))
 ob = next(o for o in rep["obligations"]
           if "the return value of 'stress-branchy'" in o["what"])

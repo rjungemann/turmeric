@@ -301,6 +301,58 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 
 
 void emit_cps_runtime_prelude(Buf *out) {
+    /* The tail-resume trampoline's landing pad.  Everywhere but Windows this is
+     * plain setjmp/longjmp.
+     *
+     * On win64 it cannot be: `longjmp` there is a genuine SEH unwind
+     * (`_setjmpex` + `RtlUnwindEx`), and RtlUnwindEx validates each frame's RSP
+     * against the *thread's* stack bounds as recorded in the TEB.  A fiber
+     * stack is malloc'd and the TEB knows nothing about it, so every frame on
+     * it is out of bounds and the unwind raises STATUS_BAD_STACK (0xc0000028),
+     * killing the process before any output.  This is not a cross-stack mistake
+     * that bookkeeping could avoid: a setjmp/longjmp pair BOTH on the fiber
+     * stack fails identically, which is exactly what a fiber body does -- its
+     * direct->cps entry installs its own landing there.
+     *
+     * GCC's __builtin_setjmp/__builtin_longjmp are a plain SP/FP/PC
+     * save-restore with no unwinder and no TEB check, which is all this
+     * trampoline ever wanted.  Measured on a fiber stack: 200 re-armed hops,
+     * throws 30-40 frames deep, a nested scoped landing that restores the outer
+     * one, and a throw after a swapcontext round trip.  The buffer is 5 words
+     * by GCC's definition.
+     *
+     * The `#if` is on __GNUC__ because the builtins are GCC/clang-only, but the
+     * OUTER choice is made HERE, at emission, and baked in as a literal -- it
+     * must not be a preprocessor test the two halves of an S2 split program can
+     * answer differently.  c2mir has no __builtin_setjmp (verified: no such
+     * identifier anywhere in c2mir), and it does not define __GNUC__, so a
+     * program half compiled by c2mir would take the plain-setjmp branch while
+     * the host-compiled runtime half took the builtin one.  setjmp/longjmp must
+     * PAIR, so that mismatch is silent: the program exits 0 having printed
+     * nothing.  Under the split we therefore keep plain setjmp on BOTH sides,
+     * which leaves fibers-plus-effects broken on the JIT path exactly as they
+     * were -- a strictly smaller gap than the cc path had, and the JIT is
+     * experimental.  Lifting it means teaching c2mir the builtins in the MIR
+     * fork.  See
+     * docs/reported/windows-longjmp-across-fiber-stack-kills-effects.md. */
+    if (rt_split_canonical_emission()) {
+        buf_puts(out,
+"/* S2 split emission: both halves must agree, and c2mir has no __builtin_setjmp. */\n"
+"typedef jmp_buf tur_dk_jmp_buf;\n"
+"#define TUR_DK_SETJMP(b)  setjmp(b)\n"
+"#define TUR_DK_LONGJMP(b) longjmp((b), 1)\n");
+    } else {
+        buf_puts(out,
+"#if defined(_WIN32) && defined(__GNUC__)\n"
+"typedef void *tur_dk_jmp_buf[5];\n"
+"#define TUR_DK_SETJMP(b)  __builtin_setjmp(b)\n"
+"#define TUR_DK_LONGJMP(b) __builtin_longjmp((b), 1)\n"
+"#else\n"
+"typedef jmp_buf tur_dk_jmp_buf;\n"
+"#define TUR_DK_SETJMP(b)  setjmp(b)\n"
+"#define TUR_DK_LONGJMP(b) longjmp((b), 1)\n"
+"#endif\n");
+    }
     buf_puts(out,
 "/* CPS substrate (cps-transform-plan): multi-prompt delimited-control machine.\n"
 " * Heap-reified continuation chains (DK); a reset is a prompt, a shift slices\n"
@@ -654,7 +706,7 @@ void emit_cps_runtime_prelude(Buf *out) {
     buf_puts(out,
 "/* Forward decl of the entry driver (defined with the E7 runtime below): dk_invoke\n"
 " * consults it to know whether running the invoked chain might tail-resume out. */\n"
-"static jmp_buf *g_dk_driver;\n"
+"static tur_dk_jmp_buf *g_dk_driver;\n"
 "static size_t   g_dk_meta_n;   /* tentative defn; the E7 block below defines it */\n"
 "static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor);\n"
 "static intptr_t dk_invoke(DK *sub, intptr_t w) {\n"
@@ -694,7 +746,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 " * nesting (LIFO) order; a delivery of only HANDLER/DONE nodes is a no-op and is\n"
 " * elided, so the meta-stack stays O(nesting), not O(N). Validated end-to-end at\n"
 " * N=1e6 by docs/artifacts/probes/e7-fidelity-probe.c. */\n"
-"static jmp_buf *g_dk_driver = NULL;      /* current entry-driver landing (NULL => inline) */\n"
+"static tur_dk_jmp_buf *g_dk_driver = NULL;      /* current entry-driver landing (NULL => inline) */\n"
 "static DK      *g_dk_resume_chain = NULL;\n"
 "static intptr_t g_dk_resume_val = 0;\n"
 "static DK     **g_dk_meta = NULL;\n"
@@ -718,7 +770,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "static intptr_t dk_tail_resume(DK *sub, intptr_t v) {\n"
 "    if (!g_dk_driver) return dk_invoke(sub, v);\n"
 "    g_dk_resume_chain = sub; g_dk_resume_val = v;\n"
-"    longjmp(*g_dk_driver, 1);\n"
+"    TUR_DK_LONGJMP(*g_dk_driver);\n"
 "    return 0; /* unreachable */\n"
 "}\n"
 "");
@@ -735,13 +787,13 @@ void emit_cps_runtime_prelude(Buf *out) {
 " * what makes them well-defined on the yield path -- the same structure\n"
 " * __dk_drive_after uses. */\n"
 "static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor) {\n"
-"    jmp_buf jb; jmp_buf *saved = g_dk_driver;\n"
+"    tur_dk_jmp_buf jb; tur_dk_jmp_buf *saved = g_dk_driver;\n"
 "    g_dk_driver = &jb;\n"
 "    g_dk_resume_chain = first; g_dk_resume_val = firstv;\n"
 "    intptr_t r;\n"
 "    for (;;) {\n"
 "        DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;\n"
-"        if (setjmp(jb) == 0) {\n"
+"        if (TUR_DK_SETJMP(jb) == 0) {\n"
 "            r = dk_run_impl(ch, rv, false);\n"
 "            __dk_reap_keep(ch);\n"
 "            if (g_dk_meta_n <= floor) break;\n"
@@ -757,11 +809,11 @@ void emit_cps_runtime_prelude(Buf *out) {
 "/* Run the meta-stack trampoline to completion after a tail-resume longjmp landed\n"
 " * in the entry wrapper. Owns its own jmp_buf so further yields land here. */\n"
 "static intptr_t __dk_drive_after(void) {\n"
-"    jmp_buf jb; g_dk_driver = &jb;\n"
+"    tur_dk_jmp_buf jb; g_dk_driver = &jb;\n"
 "    intptr_t r;\n"
 "    for (;;) {\n"
 "        DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;\n"
-"        if (setjmp(jb) == 0) {\n"
+"        if (TUR_DK_SETJMP(jb) == 0) {\n"
 "            r = dk_run_impl(ch, rv, false);\n"
 "            dk_free(ch);\n"
 "            if (g_dk_meta_n == 0) return r;\n"

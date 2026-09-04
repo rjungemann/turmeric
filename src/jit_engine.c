@@ -23,7 +23,16 @@
 
 #include "jit_engine.h"
 
-#include <dlfcn.h>
+#ifdef _WIN32
+/* MinGW ships no <dlfcn.h>.  platform_dl.h is the same LoadLibrary shim the
+ * rest of the tree already uses for this (src/turi/spice_loader.c, and the
+ * Godot shim's AOT image loader), so host-symbol resolution goes through one
+ * implementation rather than a second, subtly-different one. */
+#  include "platform_dl.h"
+#  include "jit_win_prelude.h"  /* JIT_PRELUDE_WIN -- see jit_compile_and_link */
+#else
+#  include <dlfcn.h>
+#endif
 #include <math.h>
 #include <pthread.h>
 #include <setjmp.h>
@@ -42,7 +51,14 @@
 /* Temporary: measures the tier so I0's go/no-go gate has numbers.     */
 /* Remove wholesale if I0 comes back negative and the plan is shelved. */
 /* ------------------------------------------------------------------ */
-#include <sys/resource.h>
+#ifndef _WIN32
+/* getrlimit/setrlimit live here; MinGW has neither the header nor the calls.
+ * Nothing in this file actually calls them today -- the include rides along
+ * with the temporary instrumentation block above -- so guarding it costs no
+ * functionality on Windows. If a real rlimit use lands, it needs a Win32
+ * equivalent (Job Objects), not just an include. */
+#  include <sys/resource.h>
+#endif
 #include <time.h>
 
 static int g_jit_interp_mode;  /* TUR_JIT_GEN=interp */
@@ -75,6 +91,15 @@ static void jit_timing_mark (const char *phase) {
 
 static void jit_timing_rss (void) {
   if (!g_jit_timing) return;
+#ifdef _WIN32
+  /* No getrusage on MinGW.  PeakWorkingSetSize is the same quantity
+   * ru_maxrss reports (peak resident set); psapi comes in via platform_dl.h,
+   * which this file already includes for dlsym. */
+  PROCESS_MEMORY_COUNTERS pmc;
+  double kb = 0.0;
+  if (GetProcessMemoryInfo (GetCurrentProcess (), &pmc, sizeof (pmc)))
+    kb = (double) pmc.PeakWorkingSetSize / 1024.0;
+#else
   struct rusage ru;
   getrusage (RUSAGE_SELF, &ru);
   /* Linux reports KB, macOS bytes; normalize to KB. */
@@ -82,6 +107,7 @@ static void jit_timing_rss (void) {
   double kb = (double) ru.ru_maxrss / 1024.0;
 #else
   double kb = (double) ru.ru_maxrss;
+#endif
 #endif
   fprintf (stderr, "TUR_JIT_TIMING\t%s\tmaxrss_kb\t%.0f\n",
            g_jit_interp_mode ? "interp" : "gen", kb);
@@ -272,6 +298,40 @@ static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
   {"_OSSwapInt16", (void *) jit_osswap16},
   {"_OSSwapInt32", (void *) jit_osswap32},
   {"_OSSwapInt64", (void *) jit_osswap64},
+#ifdef _WIN32
+  /* The printf/snprintf family are NOT dlsym-resolvable on MinGW: ucrtbase
+   * exports only __stdio_common_vf* (the header-inline bodies call those),
+   * and ld's --export-all-symbols deliberately excludes the MinGW runtime
+   * objects that define the classic names inside tur.exe.  So the resolver's
+   * RTLD_DEFAULT walk misses them everywhere.  Handing out the HOST's own
+   * addresses (this TU is compiled by the real toolchain) is exactly what
+   * this table is for.  strdup rides along for the same export-list reason. */
+  {"printf", (void *) printf},
+  {"fprintf", (void *) fprintf},
+  {"snprintf", (void *) snprintf},
+  {"vsnprintf", (void *) vsnprintf},
+  {"vfprintf", (void *) vfprintf},
+  {"sscanf", (void *) sscanf},
+  {"puts", (void *) puts},
+  {"putchar", (void *) putchar},
+  {"fputs", (void *) fputs},
+  {"fputc", (void *) fputc},
+  {"fflush", (void *) fflush},
+  {"fgets", (void *) fgets},
+  {"fopen", (void *) fopen},
+  {"fclose", (void *) fclose},
+  {"fread", (void *) fread},
+  {"fwrite", (void *) fwrite},
+  {"fseek", (void *) fseek},
+  {"ftell", (void *) ftell},
+  {"feof", (void *) feof},
+  {"ferror", (void *) ferror},
+  {"remove", (void *) remove},
+  {"rename", (void *) rename},
+  {"strdup", (void *) strdup},
+  {"strerror", (void *) strerror},
+  {"__acrt_iob_func", (void *) __acrt_iob_func},
+#endif
 };
 
 /* ------------------------------------------------------------------ */
@@ -509,12 +569,31 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
   if (jit_load_autolink (autolink) != 0) return TUR_JIT_ERR_LINK;
 
   /* Prepend the builtin prototypes.  A memory concat beats teaching c2mir
-   * about a second stream. */
-  size_t full_len = sizeof JIT_PRELUDE - 1 + csrc_len;
+   * about a second stream.
+   *
+   * On Windows, JIT_PRELUDE_WIN (src/jit_win_prelude.h) goes in too: c2mir
+   * cannot digest the UCRT/MinGW system headers (vadefs.h hard-#errors
+   * without compiler va intrinsics; winnt.h pulls the GCC-internal
+   * x86intrin.h), so the prelude predefines every include guard the emitted
+   * TU can reach -- the #includes then open the real files and expand to
+   * NOTHING -- and declares the libc/pthread/winsock surface the emitted
+   * code uses, with by-value struct layouts matched to the host toolchain.
+   * It also swallows the emitted ucontext shim's file-scope __asm__ (the
+   * host carries those primitives; MIR_link resolves them).  cc never sees
+   * any of this -- the fallback compiles the raw TU against real headers. */
+#ifdef _WIN32
+  const size_t prelude_win_len = sizeof JIT_PRELUDE_WIN - 1;
+#else
+  const size_t prelude_win_len = 0;
+#endif
+  size_t full_len = sizeof JIT_PRELUDE - 1 + prelude_win_len + csrc_len;
   char *full = (char *) malloc (full_len + 1);
   if (!full) return TUR_JIT_ERR_COMPILE;
   memcpy (full, JIT_PRELUDE, sizeof JIT_PRELUDE - 1);
-  memcpy (full + sizeof JIT_PRELUDE - 1, csrc, csrc_len);
+#ifdef _WIN32
+  memcpy (full + sizeof JIT_PRELUDE - 1, JIT_PRELUDE_WIN, prelude_win_len);
+#endif
+  memcpy (full + sizeof JIT_PRELUDE - 1 + prelude_win_len, csrc, csrc_len);
   full[full_len] = '\0';
 
   g_src = full;

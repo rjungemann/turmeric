@@ -98,7 +98,8 @@ typedef struct tur_ucontext {
 extern void __tur_uctx_swap(ucontext_t *from, ucontext_t *to);
 extern void __tur_uctx_tramp(void);
 __asm__(
-".text\n"
+".section .text$__tur_uctx_swap,\"xr\"\n"
+".linkonce discard\n"
 ".globl __tur_uctx_swap\n"
 ".def __tur_uctx_swap; .scl 2; .type 32; .endef\n"
 "__tur_uctx_swap:\n"
@@ -123,12 +124,15 @@ __asm__(
 "  mov 40(%rdx), %rdi\n mov 32(%rdx), %rsi\n"
 "  mov 24(%rdx), %rbp\n mov 16(%rdx), %rbx\n"
 "  mov 8(%rdx), %rsp\n jmp *0(%rdx)\n"
+".section .text$__tur_uctx_tramp,\"xr\"\n"
+".linkonce discard\n"
 ".globl __tur_uctx_tramp\n"
 ".def __tur_uctx_tramp; .scl 2; .type 32; .endef\n"
 "__tur_uctx_tramp:\n"
 "  mov %r12, %rcx\n sub $32, %rsp\n call __tur_uctx_run\n call abort\n ud2\n"
+".text\n"
 );
-void __tur_uctx_run(struct tur_ucontext *u) {
+static __attribute__((used)) void __tur_uctx_run(struct tur_ucontext *u) {
     if (u->entry) {
         if (u->argc == 2)      ((void(*)(int,int))u->entry)(u->argv[0], u->argv[1]);
         else if (u->argc == 1) ((void(*)(int))u->entry)(u->argv[0]);
@@ -1042,6 +1046,15 @@ static void tur_result_box_free_shallow(int64_t __r) {
     free((tur_result_box_t *)(intptr_t)__r);
 }
 
+#if defined(_WIN32) && defined(__GNUC__)
+typedef void *tur_dk_jmp_buf[5];
+#define TUR_DK_SETJMP(b)  __builtin_setjmp(b)
+#define TUR_DK_LONGJMP(b) __builtin_longjmp((b), 1)
+#else
+typedef jmp_buf tur_dk_jmp_buf;
+#define TUR_DK_SETJMP(b)  setjmp(b)
+#define TUR_DK_LONGJMP(b) longjmp((b), 1)
+#endif
 /* CPS substrate (cps-transform-plan): multi-prompt delimited-control machine.
  * Heap-reified continuation chains (DK); a reset is a prompt, a shift slices
  * the chain up to the nearest prompt. Faithful port of src/runtime/cps_prompt.c.
@@ -1329,7 +1342,7 @@ static intptr_t dk_run(DK *k, intptr_t v)      { return dk_run_impl(k, v, false)
 static intptr_t dk_run_root(DK *k, intptr_t v) { return dk_run_impl(k, v, true); }
 /* Forward decl of the entry driver (defined with the E7 runtime below): dk_invoke
  * consults it to know whether running the invoked chain might tail-resume out. */
-static jmp_buf *g_dk_driver;
+static tur_dk_jmp_buf *g_dk_driver;
 static size_t   g_dk_meta_n;   /* tentative defn; the E7 block below defines it */
 static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor);
 static intptr_t dk_invoke(DK *sub, intptr_t w) {
@@ -1368,7 +1381,7 @@ static intptr_t dk_invoke(DK *sub, intptr_t w) {
  * nesting (LIFO) order; a delivery of only HANDLER/DONE nodes is a no-op and is
  * elided, so the meta-stack stays O(nesting), not O(N). Validated end-to-end at
  * N=1e6 by docs/artifacts/probes/e7-fidelity-probe.c. */
-static jmp_buf *g_dk_driver = NULL;      /* current entry-driver landing (NULL => inline) */
+static tur_dk_jmp_buf *g_dk_driver = NULL;      /* current entry-driver landing (NULL => inline) */
 static DK      *g_dk_resume_chain = NULL;
 static intptr_t g_dk_resume_val = 0;
 static DK     **g_dk_meta = NULL;
@@ -1392,7 +1405,7 @@ static bool __dk_delivery_noop(const DK *d) {   /* only HANDLER/DONE -> identity
 static intptr_t dk_tail_resume(DK *sub, intptr_t v) {
     if (!g_dk_driver) return dk_invoke(sub, v);
     g_dk_resume_chain = sub; g_dk_resume_val = v;
-    longjmp(*g_dk_driver, 1);
+    TUR_DK_LONGJMP(*g_dk_driver);
     return 0; /* unreachable */
 }
 /* Run `first` to completion, absorbing any tail-resume yields it makes, and
@@ -1407,13 +1420,13 @@ static intptr_t dk_tail_resume(DK *sub, intptr_t v) {
  * what makes them well-defined on the yield path -- the same structure
  * __dk_drive_after uses. */
 static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor) {
-    jmp_buf jb; jmp_buf *saved = g_dk_driver;
+    tur_dk_jmp_buf jb; tur_dk_jmp_buf *saved = g_dk_driver;
     g_dk_driver = &jb;
     g_dk_resume_chain = first; g_dk_resume_val = firstv;
     intptr_t r;
     for (;;) {
         DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;
-        if (setjmp(jb) == 0) {
+        if (TUR_DK_SETJMP(jb) == 0) {
             r = dk_run_impl(ch, rv, false);
             __dk_reap_keep(ch);
             if (g_dk_meta_n <= floor) break;
@@ -1429,11 +1442,11 @@ static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor) {
 /* Run the meta-stack trampoline to completion after a tail-resume longjmp landed
  * in the entry wrapper. Owns its own jmp_buf so further yields land here. */
 static intptr_t __dk_drive_after(void) {
-    jmp_buf jb; g_dk_driver = &jb;
+    tur_dk_jmp_buf jb; g_dk_driver = &jb;
     intptr_t r;
     for (;;) {
         DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;
-        if (setjmp(jb) == 0) {
+        if (TUR_DK_SETJMP(jb) == 0) {
             r = dk_run_impl(ch, rv, false);
             dk_free(ch);
             if (g_dk_meta_n == 0) return r;
@@ -1726,7 +1739,7 @@ static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
     FiberBlock *_prev = tur_current_fiber;
     tur_current_fiber = f;
     f->arg = arg;
-    jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;
+    tur_dk_jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;
     swapcontext(&f->caller_ctx, &f->ctx);
     g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;
     tur_current_fiber = _prev;
@@ -5413,8 +5426,8 @@ __attribute__((unused)) static bool map_hyeq_hyloop(void * iter, void * m2_hamt,
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, val_cmp, __root); }
+    tur_dk_jmp_buf __dkjb; tur_dk_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (TUR_DK_SETJMP(__dkjb) == 0) { __r = map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, val_cmp, __root); }
     else { __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
@@ -5755,8 +5768,8 @@ __attribute__((unused)) static bool list_hyeq_qu(int64_t l1, int64_t l2, int64_t
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = list_hyeq_qu__cps(l1, l2, cmp_fn, __root); }
+    tur_dk_jmp_buf __dkjb; tur_dk_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (TUR_DK_SETJMP(__dkjb) == 0) { __r = list_hyeq_qu__cps(l1, l2, cmp_fn, __root); }
     else { __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
@@ -5835,8 +5848,8 @@ __attribute__((unused)) static int64_t _un_uncons_hyfmap(int64_t cell, void * f)
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = _un_uncons_hyfmap__cps(cell, f, __root); }
+    tur_dk_jmp_buf __dkjb; tur_dk_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (TUR_DK_SETJMP(__dkjb) == 0) { __r = _un_uncons_hyfmap__cps(cell, f, __root); }
     else { __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
