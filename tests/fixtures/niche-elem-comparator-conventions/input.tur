@@ -1,0 +1,83 @@
+;; niche-elem-comparator-conventions -- what each *-eq? helper hands its
+;; comparator, and that both parameter spellings agree with it.
+;;
+;; A niche (Option P) is carried as its payload pointer.  The `*-eq?` family
+;; splits on whether a helper walks its own payload slots or iterates a HAMT:
+;;
+;;   Vec     vec-eq?      a->data[i]                -- the stored WORD
+;;   Cons    list-eq?     (list-head l)             -- word
+;;   Option  option-eq?   the (Some v) match binder -- word
+;;   Result  result-eq?   the sum's payload slot    -- word
+;;   Pair    pair-eq?     a->fst / a->snd           -- word
+;;   Map     map-eq?      the HAMT value            -- box
+;;   Set     set-eq-cmp?  the HAMT key              -- box
+;;
+;; A comparator fed a WORD must reinterpret it; unboxing it as a carrier box
+;; reads the payload's own first words as a tag and a value.  The synthesized
+;; comparator says which it is by naming its params `__cmp_slot_*`, and that
+;; decision used to be `strcmp(sd->name, "Vec") == 0` -- so plain `(eq? a b)`
+;; was silently wrong for every OTHER word-passing container once the niche
+;; graduated.  `(eq? (some (some "aa")) (some (some "bb")))` answered TRUE.
+;;
+;; Every assertion below is a PAIR: equal payloads in distinct allocations,
+;; then different payloads.  The second is the one that catches this -- the
+;; broken path answered "eq" for both, so an equal-only probe passes while the
+;; comparison is doing nothing at all.
+;;
+;; Map and Set are deliberately absent: their comparators take the opposite
+;; convention and their TYPED spelling is still wrong --
+;; docs/reported/typed-comparator-over-hamt-box-compares-box-addresses.md.
+(load "stdlib/string.tur")
+(load "stdlib/pair.tur")
+
+(defn main [] : int
+  (let [aa1 (:: (some (string/from-cstr "aa")) (Option String))
+        aa2 (:: (some (string/from-cstr "aa")) (Option String))
+        bb  (:: (some (string/from-cstr "bb")) (Option String))]
+
+    ;; 1. the SYNTHESIZED comparator: plain (eq? a b) over a nested niche
+    (let [v (:: (vec-new) (Vec (Option String)))
+          w (:: (vec-new) (Vec (Option String)))
+          u (:: (vec-new) (Vec (Option String)))]
+      (vec-push! v aa1) (vec-push! w aa2) (vec-push! u bb)
+      (println (if (eq? v w) "vec-eq" "vec-ne"))
+      (println (if (eq? v u) "vec-eq" "vec-ne")))
+    (let [o1 (:: (some aa1) (Option (Option String)))
+          o2 (:: (some aa2) (Option (Option String)))
+          o3 (:: (some bb)  (Option (Option String)))]
+      (println (if (eq? o1 o2) "opt-eq" "opt-ne"))
+      (println (if (eq? o1 o3) "opt-eq" "opt-ne")))
+    (let [r1 (:: (ok aa1) (Result (Option String) cstr))
+          r2 (:: (ok aa2) (Result (Option String) cstr))
+          r3 (:: (ok bb)  (Result (Option String) cstr))]
+      (println (if (eq? r1 r2) "res-eq" "res-ne"))
+      (println (if (eq? r1 r3) "res-eq" "res-ne")))
+
+    ;; 2. a comparator the USER writes inline, with ERASED params that ascribe
+    ;;    the word back to the element -- the shape that has no convention of
+    ;;    its own and takes the mark from the call it appears in.
+    (let [l1 (cons aa1 0)
+          l2 (cons aa2 0)
+          l3 (cons bb 0)]
+      (println (if (list-eq? l1 l2 (fn [p q] : bool (eq? (:: p (Option String)) (:: q (Option String))))) "list-eq" "list-ne"))
+      (println (if (list-eq? l1 l3 (fn [p q] : bool (eq? (:: p (Option String)) (:: q (Option String))))) "list-eq" "list-ne")))
+    (let [q1 (:: (ok aa1) (Result (Option String) cstr))
+          q2 (:: (ok aa2) (Result (Option String) cstr))
+          q3 (:: (ok bb)  (Result (Option String) cstr))]
+      (println (if (result-eq? q1 q2 (fn [p q] : bool (eq? (:: p (Option String)) (:: q (Option String)))) (fn [p q] : bool true)) "rc-eq" "rc-ne"))
+      (println (if (result-eq? q1 q3 (fn [p q] : bool (eq? (:: p (Option String)) (:: q (Option String)))) (fn [p q] : bool true)) "rc-eq" "rc-ne")))
+
+    ;; 3. TYPED params through the same helpers must agree with the erased ones
+    (let [l1 (cons aa1 0)
+          l2 (cons aa2 0)
+          l3 (cons bb 0)]
+      (println (if (list-eq? l1 l2 (fn [p : (Option String) q : (Option String)] : bool (eq? p q))) "lt-eq" "lt-ne"))
+      (println (if (list-eq? l1 l3 (fn [p : (Option String) q : (Option String)] : bool (eq? p q))) "lt-eq" "lt-ne")))
+
+    ;; 4. a NON-niche element through the same helpers: the mark must be inert
+    (let [a (cons 1 (cons 2 0))
+          b (cons 1 (cons 2 0))
+          c (cons 1 (cons 3 0))]
+      (println (if (list-eq? a b (fn [p q] : bool (= p q))) "int-eq" "int-ne"))
+      (println (if (list-eq? a c (fn [p q] : bool (= p q))) "int-eq" "int-ne")))
+    0))

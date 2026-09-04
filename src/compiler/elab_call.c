@@ -4382,25 +4382,37 @@ bool any_expr_is_owned_temp(const Expr *x, int depth) {
 
 /* erased-closure-param-over-niche-vec-slot-reads-box.
  *
- * `vec-eq?` is the one stdlib helper that hands a user comparator RAW Vec slot
- * words: its inline-C loop passes `a->data[i]` straight through.  Every other
- * *-eq? helper (map/option/list/pair/result/set) hands over a value that has
- * already crossed the carrier boundary, i.e. a box.  For a niche `(Option P)`
- * element the slot holds the payload pointer ITSELF (container-element-form
- * plan, CE2), so a comparator that ascribes its parameter back to the element
- * type must REINTERPRET that word; unboxing it as a carrier box reads the
- * payload's own first words as a tag and a value and answers silently wrong.
+ * Two stdlib helpers hand a user comparator a RAW container word rather than a
+ * value that has crossed the carrier boundary: `vec-eq?`, whose inline-C loop
+ * passes `a->data[i]` straight through, and `list-eq?`, which passes
+ * `(list-head l)` -- the cons cell's stored carrier. For a niche `(Option P)`
+ * that word is the payload pointer ITSELF (container-element-form plan, CE2),
+ * so a comparator that ascribes its parameter back to the element type must
+ * REINTERPRET the word; unboxing it as a carrier box reads the payload's own
+ * first words as a tag and a value and answers silently wrong.
  *
  * The synthesized comparator (elab_typeclasses.c build_comparator_lambda) says
  * this by naming its parameters `__cmp_slot_*` -- the prefix emit_slot_word_is
  * recognises.  A user's lambda in that position is the same value reached the
  * same way, so it earns the same mark.  Keep this predicate in step with
- * build_comparator_lambda's `strcmp(sd->name, "Vec") == 0`: the two encode one
- * fact, that Vec is the slot-word container. */
+ * build_comparator_lambda's `strcmp(sd->name, "Vec") == 0`, which is the
+ * synthesized half of the same fact.
+ *
+ * `map-eq?` and `set-eq-cmp?` are NOT here and must not be: they iterate a HAMT
+ * and hand over the stored value/key, which IS a carrier box, so their erased
+ * comparators are already right.  (Their TYPED comparators are wrong for the
+ * mirror-image reason -- filed separately as
+ * docs/reported/typed-comparator-over-hamt-box-compares-box-addresses.md.) */
 static bool call_comparator_gets_slot_words(const Binding *fn_binding,
                                             uint32_t argi) {
-    return fn_binding && fn_binding->name && fn_binding->name->name &&
-           argi == 2 && strcmp(fn_binding->name->name, "vec-eq?") == 0;
+    if (!fn_binding || !fn_binding->name || !fn_binding->name->name) return false;
+    const char *n = fn_binding->name->name;
+    /* `vec-eq?` passes `a->data[i]`, `list-eq?` passes `(list-head l)`, and
+     * `result-eq?` passes the sum's payload slot -- all three the stored word.
+     * result-eq? has TWO comparators, one per arm, and both are fed payloads. */
+    if (argi == 2 && (strcmp(n, "vec-eq?") == 0 || strcmp(n, "list-eq?") == 0))
+        return true;
+    return (argi == 2 || argi == 3) && strcmp(n, "result-eq?") == 0;
 }
 
 /* The element type of a `(Vec E)` argument, peeled back through whatever
@@ -6180,14 +6192,21 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             }
             if (slot_fat_decl || slot_nominal) {
                 /* erased-closure-param-over-niche-vec-slot-reads-box: the
-                 * comparator of a `vec-eq?` is fed raw Vec slot words.  Mark a
-                 * lambda's parameters so an ascription back to the element type
+                 * comparator is fed raw container words.  Mark a lambda's
+                 * parameters so an ascription back to the element type
                  * reinterprets the word instead of unboxing a box that is not
                  * there.  A name cannot carry the mark; when the element is a
-                 * niche option -- the one element form whose slot word is not a
+                 * niche option -- the one element form whose word is not a
                  * box -- that shape has no decidable convention, so say so
                  * rather than compile a silent wrong answer.  This is the read
-                 * side of the store side's TUR-E0714. */
+                 * side of the store side's TUR-E0714.
+                 *
+                 * The refusal reaches `vec-eq?` only, because it needs the
+                 * element type and only a `(Vec A)` receiver carries one:
+                 * `list-eq?` declares `l1 : int`, a bare cons carrier with the
+                 * element erased at the call, so a named erased comparator over
+                 * a list stays undiagnosable.  Marking still covers every list
+                 * comparator written inline. */
                 if (call_comparator_gets_slot_words(fn_binding, i) &&
                     !mark_comparator_slot_word_params(e, args[i]) &&
                     n_args > 0 && args[i]->type.kind == TY_FN &&
@@ -6209,7 +6228,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                         const char *ets = ebuf;
                         diag_emit_with_code(DIAG_ERROR, args[i]->span,
                             TUR_E0715_NICHE_ELEMENT_ERASED_COMPARATOR,
-                            "the comparator passed to 'vec-eq?' over a "
+                            "the comparator passed to '%s' over a "
                             "'(Vec %s)' is named rather than written inline, so "
                             "its parameters cannot be marked as the raw slot "
                             "words this helper hands them. A niche '%s' rides "
@@ -6218,7 +6237,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                             "convention here. Declare the parameter types -- "
                             "(fn [a : %s b : %s] ...) -- or write the "
                             "comparator inline at the call",
-                            ets, ets, ets, ets);
+                            fn_binding->name->name, ets, ets, ets, ets);
                         return NULL;
                     }
                 }

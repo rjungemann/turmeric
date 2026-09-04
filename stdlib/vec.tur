@@ -487,15 +487,21 @@
           __v)))))
 ;;; vec-eq? -- compare two Vec[A] element-wise using a comparator.
 ;;;
-;;; Unlike every other *-eq? helper, this one hands the comparator RAW slot
-;;; words -- it reads a->data[i] straight out of the buffer rather than
-;;; passing a value across the carrier boundary. That matters for an element
-;;; whose slot word is not a carrier box, a niche (Option P) above all: it
-;;; sits in its slot as the payload pointer itself. Declare the comparator's
-;;; parameter types, or write the comparator inline at the call, and the
-;;; word is bridged for you. A NAMED comparator with erased parameters over
-;;; such an element cannot be given the convention and is refused with
-;;; TUR-E0715.
+;;; This helper hands the comparator RAW slot words -- it reads a->data[i]
+;;; straight out of the buffer rather than passing a value across the carrier
+;;; boundary. So do list-eq?, option-eq?, result-eq? and pair-eq?, each from
+;;; its own payload slots; map-eq? and set-eq-cmp? are the exception, handing
+;;; over a HAMT-stored carrier box instead. The difference matters only for an
+;;; element whose word is not a box, a niche (Option P) above all: it rides
+;;; its slot as the payload pointer itself.
+;;;
+;;; Here, either spelling works: declare the comparator's parameter types, or
+;;; write the comparator inline at the call, and the word is bridged for you.
+;;; A NAMED comparator with erased parameters over such an element cannot be
+;;; given the convention and is refused with TUR-E0715. Note the typed
+;;; spelling is currently WRONG over map-eq? / set-eq-cmp? for a niche element
+;;; (it compares box addresses) --
+;;; docs/reported/typed-comparator-over-hamt-box-compares-box-addresses.md.
 ;;;
 ;;; Parameters:
 ;;;   v1     -- first Vec[A]

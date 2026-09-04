@@ -147,12 +147,56 @@ non-niche element is untouched.
   Option element is CE_BOX there, so the marked row never fires and the answer
   is unchanged.
 
-## What this does not cover
+## Correction: this covered less than it claimed (2026-09-04, same day)
 
-Only `vec-eq?`.  It is the one stdlib helper that hands a comparator raw slot
-words -- every other `*-eq?` (map/option/list/pair/result/set-eq-cmp?) passes a
-value that has crossed the carrier boundary, i.e. a box, so an erased parameter
-there is correct as it stands.  The predicate keying this off the callee name
-must stay in step with `build_comparator_lambda`'s `strcmp(sd->name, "Vec")`:
-the two encode the same single fact, that Vec is the slot-word container, and a
-second such helper would have to update both.
+This section originally read:
+
+> Only `vec-eq?`.  It is the one stdlib helper that hands a comparator raw slot
+> words -- every other `*-eq?` (map/option/list/pair/result/set-eq-cmp?) passes
+> a value that has crossed the carrier boundary, i.e. a box, so an erased
+> parameter there is correct as it stands.
+
+**That was wrong**, and asserted from reading the helpers rather than running
+them.  Probing all seven with both parameter spellings found the split is not
+"Vec versus everything else" but "walks its own payload slots" versus
+"iterates a HAMT" -- and only Map and Set are in the second group:
+
+| container | helper | hands the comparator | |
+|---|---|---|---|
+| Vec | `vec-eq?` | `a->data[i]` | word |
+| Cons | `list-eq?` | `(list-head l)` | word |
+| Option | `option-eq?` | the `(Some v)` binder | word |
+| Result | `result-eq?` | the sum's payload slot | word |
+| Pair | `pair-eq?` | `a->fst` / `a->snd` | word |
+| Map | `map-eq?` | the HAMT value | box |
+| Set | `set-eq-cmp?` | the HAMT key | box |
+
+The consequence was worse than the original report: `build_comparator_lambda`
+decided the mark with `strcmp(sd->name, "Vec") == 0`, so the SYNTHESIZED
+comparator -- plain `(eq? a b)`, not a hand-written one -- was silently wrong
+for every other word-passing container.  `(eq? (some (some "aa")) (some (some
+"bb")))` answered **true**.  That is the default equality operator on a nested
+niche option, a far more travelled path than any hand-written comparator.
+
+Fixed the same day, in the follow-on commit: `container_helper_passes_slot_words`
+replaces the `Vec` name test at the synthesized site, and `list-eq?` and
+`result-eq?` (both comparator slots) join `vec-eq?` at the user-written site.
+Pinned by `tests/fixtures/niche-elem-comparator-conventions`, whose every
+assertion is a PAIR -- equal payloads in distinct allocations, then different
+payloads.  The second is what catches this: the broken paths answered "eq" for
+every input, so an equal-only probe reports success while the comparison is
+doing nothing at all.  The same trap as the original repro's `"aa"`/`"aa"`.
+
+What is still open, filed as
+[typed-comparator-over-hamt-box-compares-box-addresses](../reported/typed-comparator-over-hamt-box-compares-box-addresses.md):
+the box half breaks the TYPED spelling instead (`map-eq?` / `set-eq-cmp?`
+compare box addresses, so a value is unequal to itself); the `pair-eq?` MACRO
+applies its comparator directly to a field read, so there is no callee whose
+contract could carry a mark; and `option-eq?` rejects a hand-written lambda
+with a diagnostic that prints the same type twice.
+
+The lesson is the one this report already made about its own repro, one level
+up: an assertion about scope is a claim, and a claim in a "what this does not
+cover" section is exactly the kind that nothing downstream will re-check.
+Running the seven probes cost minutes and the reading cost a wrong answer in
+`eq?`.
