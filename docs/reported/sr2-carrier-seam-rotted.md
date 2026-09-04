@@ -121,6 +121,81 @@ one-axis harnesses. Worth keeping in mind for the other seams: SR4's
 `TUR_SR4_RECURSIVE_CARRIER` is a third axis nobody has crossed with either of
 these.
 
+Since defect 1's fix, `TUR_SR2_APP_SUM_BYVALUE=0` alone reproduces it (that flag
+now implies the niche off), so it no longer needs the diagonal to hit.
+
+### Root cause -- established 2026-09-04
+
+Minimal repro, no Vec and no closures:
+
+```turmeric
+(load "stdlib/string.tur")
+(defn main [] : int
+  (let [a (:: (some (string/from-cstr "aa")) (Option String))
+        b (:: (some (string/from-cstr "aa")) (Option String))]
+    (println (if (eq? a b) "opt-eq" "opt-ne")))    ; default: opt-eq.  SR2=0: opt-ne
+  0)
+```
+
+`--emit-abi-trace` on the outer `(eq? a b)` says it all:
+
+```
+default:  abi-trace __inst_Eq_eq_qu_Option concrete-clone __inst_Eq_eq_qu_Option__spec__bool_void___void__
+SR2=0:    abi-trace __inst_Eq_eq_qu_Option dictionary
+```
+
+By value a per-instantiation ABI **specialization** is minted, and inside that
+spec body the inner dispatch re-resolves correctly to
+`__inst_Eq_eq_qu_String`. On the carrier no spec is minted, so the call lands
+in the GENERIC instance body, whose inner dispatch was baked against the
+representative:
+
+```c
+/* SR2=0, generic __inst_Eq_eq_qu_Option */
+int64_t vx_939 = (int64_t)__scrut->as.Some._0;
+bool __ps_15 = (__inst_Eq_eq_qu_int(vx_939, vy_940));   /* pointer equality on a String */
+```
+
+Instrumenting `emit_abi_register_call` for that call gives the decision:
+
+| | `abi_changes` | `instance_changes` | spec |
+|---|---|---|---|
+| default | **1** | 0 | minted |
+| `SR2=0` | 0 | 0 | none |
+
+`abi_changes` is the only trigger that fires, and it fires for a reason that has
+nothing to do with dispatch: the class var `a` is bound to `(Option String)`,
+whose `type_c_name` is `void *` under the niche and `int64_t` under the carrier.
+So the spec exists because the SIGNATURE changed, and correct dispatch is a
+side effect of that.
+
+**The consequence worth flagging beyond this hatch:** the comments in
+`stdlib/option.tur` and `stdlib/result.tur` say the `(:: vx A)` ascription is
+what makes the inner `eq?` "re-dispatch per ABI specialization". The ascription
+is necessary but it is not what triggers the specialization -- the C-signature
+change is. Where a payload type does NOT change the signature, the ascription
+alone does not save the dispatch. That is a latent gap the by-value
+representation currently papers over, not a carrier-only defect.
+
+The second trigger, `instance_changes`
+(`body_has_dispatch_on_app_tyvar`), is meant for exactly this "ABI unchanged but
+the instance differs" case and already documents the opaque-`String` scenario in
+its comment. It does not fire here: it looks for a dispatch receiver that is a
+tyvar named in `bindings`, and `bindings` holds the CLASS var (`a` ->
+`(Option String)`), whereas the inner call dispatches on the INSTANCE's own
+constraint var `A`, which is not in that set at all.
+
+**Fix direction.** Extend the `instance_changes` trigger so an instance-method
+body dispatching on the instance's own constraint var mints a spec when that var
+is recoverable from a `TY_APP` class-var binding with a nominal argument
+(`(Option String)` -> `A = String`). Two cautions from a first attempt: the
+recursion in `body_has_dispatch_on_app_tyvar` did not appear to reach the inner
+call under the concrete binding set, so the traversal wants checking before the
+predicate is extended; and because `instance_changes` is consulted only when
+`!abi_changes`, a careless widening mints specs that do not exist today on the
+DEFAULT path too -- so the change must be validated against the full snapshot
+suite, not just the seam.
+
 ## What is NOT a defect here
 
 - **~148 `codegen mismatch` failures** under `TUR_SR2_APP_SUM_BYVALUE=0 bash
