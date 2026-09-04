@@ -13,11 +13,30 @@
 # turned this away" from "raising it would actually help" -- the second is the
 # only number a raise can be argued from, since a VC over the cap may also
 # carry a non-int variable the sort gate declines at any limit.
+#
+# The subject is written into $TMP rather than kept as a sibling `input.tur`,
+# which is the sx8a-tur-smt / sx8b-smt-push-pop pattern and is load-bearing:
+# tests/run-turi.sh discovers a fixture by its `input.tur` and runs it as a
+# PROGRAM under --interpret, comparing the program's stdout against
+# expected.stdout.  For a hook fixture whose expected.stdout is CLI telemetry
+# rather than program output, that is a guaranteed mismatch -- which is exactly
+# how this fixture failed CI the first time.  A `requires.compiled` marker would
+# also have silenced it, but it would leave a directory that looks like an
+# ordinary compiled fixture while meaning something else.
 
 set -u
 TMP="$1"
 TUR="${TUR:-./build/tur}"
-SRC="tests/fixtures/refine-model-vars-cap/input.tur"
+
+SRC="$TMP/model-vars.tur"
+cat > "$SRC" <<'EOF'
+;; Four integer variables and an obviously false goal: the search would find a
+;; counterexample instantly at a higher cap, and declines outright at 3.
+(defn f [a : int b : int c : int d : int] : #refine{r : int | (> r 1000)}
+  (+ a (+ b (+ c d))))
+
+(defn main [] : int (f 1 1 1 1))
+EOF
 
 out=$(TUR_REFINE_STATS=1 "$TUR" check "$SRC" 2>&1)
 

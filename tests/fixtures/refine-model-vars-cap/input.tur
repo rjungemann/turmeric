@@ -1,6 +1,0 @@
-;; Four integer variables and an obviously false goal: the search would find a
-;; counterexample instantly at a higher cap, and declines outright at 3.
-(defn f [a : int b : int c : int d : int] : #refine{r : int | (> r 1000)}
-  (+ a (+ b (+ c d))))
-
-(defn main [] : int (f 1 1 1 1))
