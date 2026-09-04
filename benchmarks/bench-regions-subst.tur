@@ -26,11 +26,12 @@
 ;; phase that makes the program faster but not smaller has not done its job,
 ;; and one that makes it smaller at a tolerable cost has.
 ;;
-;; Every `bt-scope` is in `main`, and the loops are `while` rather than
-;; recursion, because a bt-scope in a non-main defn whose thunk calls another
-;; user function miscompiles today -- see
-;; docs/reported/cps-direct-bt-scope-closure-temp-undeclared.md.  That is a
-;; workaround, not a property of the benchmark.
+;; `region-round` is bench-logic-subst's `persistent-round` with one `bt-scope`
+;; around the per-pass body and nothing else changed, so the two are readable
+;; side by side.  That spelling -- a bracket inside a non-main defn -- did not
+;; compile until docs/archive/cps-direct-bt-scope-closure-temp-undeclared.md was
+;; fixed, and it is also the shape that made R4 route its region through the CPS
+;; emitter rather than only the direct one.
 
 (load "stdlib/logic.tur")
 
@@ -76,37 +77,37 @@
   return p;
   ```)
 
+;;; one-pass -- build an n-link Subst, walk it, drop it, inside ONE generation.
+;;;
+;;; The result is the walk SUM -- an `:int` -- so nothing that points into the
+;;; generation crosses the boundary, the static check clears the rewind, and the
+;;; whole n-link spine dies at the pop.
+(defn one-pass [n : int] : int
+  (bt-scope (fn [] (walk-all n (build-subst n (subs-empty)) 0))))
+
+;;; region-round -- bench-logic-subst's `persistent-round`, one bracket added.
+(defn region-round [n : int passes : int acc : int] : int
+  (if (<= passes 0)
+    acc
+    (region-round n (- passes 1) (+ acc (one-pass n)))))
+
+(defn bench-one [n : int] : int
+  (let [passes (passes-for n)
+        t0     (now-ns)
+        acc    (region-round n passes 0)
+        t1     (now-ns)]
+    ;; The checksum is printed so a rewind that reclaimed something still live
+    ;; shows as a WRONG NUMBER rather than as a faster run.  It must be
+    ;; identical in both arms.
+    (emit-row n passes (- t1 t0) acc)
+    0))
+
+(defn sweep [n : int] : int
+  (if (> n 512)
+    0
+    (do (bench-one n) (sweep (* n 2)))))
+
 (defn main [] : int
   (emit-header)
-  (let [n   (g-cell-new 1)
-        p   (g-cell-new 0)
-        acc (g-cell-new 0)
-        t0  (g-cell-new 0)]
-    (while (<= (g-get n) 512)
-      (do
-        (g-set! p 0)
-        (g-set! acc 0)
-        (g-set! t0 (now-ns))
-        (while (< (g-get p) (passes-for (g-get n)))
-          (do
-            ;; ONE generation per pass.  The result is the walk SUM -- an
-            ;; `:int` -- so nothing that points into the generation crosses
-            ;; the boundary and the static check clears the rewind; the
-            ;; whole n-link spine dies at the pop.
-            (g-set! acc (+ (g-get acc)
-                           (bt-scope
-                             (fn [] (walk-all (g-get n)
-                                              (build-subst (g-get n) (subs-empty))
-                                              0)))))
-            (g-set! p (+ (g-get p) 1))))
-        ;; The checksum is printed so a rewind that reclaimed something still
-        ;; live shows as a WRONG NUMBER rather than as a faster run.  It must
-        ;; be identical in both arms.
-        (emit-row (g-get n) (passes-for (g-get n))
-                  (- (now-ns) (g-get t0)) (g-get acc))
-        (g-set! n (* (g-get n) 2))))
-    (g-cell-free n)
-    (g-cell-free p)
-    (g-cell-free acc)
-    (g-cell-free t0))
+  (sweep 1)
   0)

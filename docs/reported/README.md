@@ -427,9 +427,22 @@ so the rejected shape was not in use anywhere in the corpus.
 
 ## Effect handlers
 
-| Report | Severity | One line |
-|---|---|---|
-| [cps-direct-bt-scope-closure-temp-undeclared](cps-direct-bt-scope-closure-temp-undeclared.md) | medium | a `bt-scope` in a NON-main defn whose thunk calls another user function CPS-lowers, and the `/* cps->direct */` bridge emits the call while dropping the statements that build its `^fat` closure argument -- so the emitted C names an undeclared `_un_unborrowc_un*` temp and `cc` fails. Flag-independent (nothing to do with `--enable=regions`, which is where it surfaced). Three neighbours work, which narrows it: the same bracket inlined into `main`, a thunk that calls nothing, and a self-recursive caller. Every in-tree caller happened to be one of those, which is why nothing caught it. Workaround (bt-scope in `main`) is carried with a pointer here by both R4 fixtures and `benchmarks/bench-regions-subst.tur` |
+*(No open reports.)*
+
+`cps-direct-bt-scope-closure-temp-undeclared` was filed and resolved 2026-09-04
+and moved to
+[docs/archive](../archive/cps-direct-bt-scope-closure-temp-undeclared.md). Its
+filed root cause was WRONG and the archive corrects it: not the `cps->direct`
+bridge dropping operand statements, but `pap_register_let` classifying the
+hoisted closure as an inlinable partial application and dropping it, because the
+pap check delegated its "the var appears only as a call callee" proof to
+`closure_binding_escapes` -- which answers whether an env may be freed at scope
+exit and deliberately clears a value passed to a non-retaining fn param.
+`--dump-cps` refuted the emitter hypothesis in one line (the IR itself named a
+free variable); reading emitted C and reasoning backwards is what cost the wrong
+guess. A second, plausible-looking guard on the closure's arity was tried and
+REMOVED -- `FnDef.n_params` counts the lifted env param, so it would have
+rejected genuine paps while fixing nothing.
 
 `handler-clause-setbang-enclosing-mut-undeclared` was resolved 2026-08-05 and
 moved to

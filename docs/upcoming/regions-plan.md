@@ -171,7 +171,19 @@ as `check-cc-warn-ratchet.sh`, and the same failure it was written for.
 **R4 -- wire `bt-scope`. LANDED 2026-09-04.** Not a new surface form: the
 solver's existing bracket became the region boundary, so a caller opts in by
 using the bracket it would use anyway. `emit_value` opens a generation around a
-call to `bt-scope` and closes it after the call's hoist temp.
+call to `bt-scope` and closes it after the call's hoist temp, and the CPS
+emitter's `CT_TAILCALL` cps->direct arm does the same.
+
+**Two emit paths, and the second was found by measuring.** A `bt-scope` inside a
+CPS-lowered function never reaches `emit_value`, so the direct-path hook alone
+left the NATURAL spelling -- `(defn one-round [n] (bt-scope (fn [] ...)))` --
+with no region at all: the fixture read 909 live blocks with the flag on and 909
+with it off. Both sites share one predicate pair
+(`emit_binding_is_region_scope` / `emit_region_scope_reclaims`) rather than two
+copies of the static walk. The CPS `CT_LETCALL` arm deliberately has NO copy: the
+bracket was probed in tail position, as an arithmetic operand, and bound twice in
+a `let`, and every one lowered to a tailcall, so a transcription there would be
+untested safety code -- worse than a missed saving, which is all it would cost.
 
 ### The static lock, which is the half R3 could not have
 
@@ -241,12 +253,20 @@ variable (full numbers in `benchmarks/regions-subst-results.md`):
 | | flag off | flag on |
 |---|---|---|
 | leaked at exit | 2,668,800 B in 55,600 blocks | **0** |
-| allocations | 64,645 | 9,050 |
-| ns/op, n <= 16 | -- | **0.75-0.80x** |
+| allocations | 82,785 | 27,190 |
+| ns/op, 2 <= n <= 32 | -- | **0.77-0.92x** |
 | ns/op, n >= 64 | -- | ~parity |
+| peak RSS | 2,076 kB | 2,360 kB |
 
 Checksums identical in every row, which is the column that would catch a rewind
 of something still live.
+
+**Peak RSS goes UP, and that belongs in the summary rather than the footnotes.**
+A region trades an unbounded leak for a fixed 64 KiB slab; on a benchmark whose
+pass counts are tuned to hold total work constant, the leak never grows large
+enough for the trade to pay in footprint. The block and byte counts show the
+SHAPE -- unbounded versus bounded -- which is the claim RM3 rests on, and R5
+should not be handed a memory win this measurement does not support.
 
 ### Known gaps R5 has to price
 
@@ -261,10 +281,14 @@ of something still live.
   to precede the argument emissions -- the call text embeds their temps. Sound
   for this form's thunk; the shapes it is not sound for are the transitive ones
   the static walk already refuses.
-- **A `bt-scope` in a non-main defn whose thunk calls another user function
-  miscompiles**, independently of this flag --
-  `docs/reported/cps-direct-bt-scope-closure-temp-undeclared.md`. Both R4
-  fixtures and the benchmark carry a workaround for it.
+- **The CPS `CT_LETCALL` arm carries no bracket** (see above). Probing did not
+  reach it with a `bt-scope` callee; if a shape does, it is a missed saving.
+- **Peak RSS on this workload goes up, not down** (see the table). The shape is
+  right and the footprint is not, which is a real thing for R5 to weigh.
+
+The report R4 filed against a `bt-scope` in a non-main defn is fixed and
+archived (`docs/archive/cps-direct-bt-scope-closure-temp-undeclared.md`); both
+fixtures and the benchmark are on the natural spelling now.
 
 **R5 -- decide.** Graduate, shelve, or bump, against the leak sweep and the
 `bench-regions-subst` A/B. Shelving was a real outcome and R4 has now retired

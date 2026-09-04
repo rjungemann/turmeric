@@ -13,9 +13,11 @@
 ;; arena), so a straggler from round 1 is overwritten by round 2 rather than
 ;; sitting undisturbed.  If the reclaim were wrong these totals would drift.
 ;;
-;; Every `bt-scope` sits in `main` on purpose: a bt-scope in a NON-main defn
-;; whose thunk calls another user function miscompiles today, independently of
-;; regions (see docs/reported/cps-direct-bt-scope-closure-temp-undeclared.md).
+;; The bracket lives in `one-round`, a NON-main defn, which is the spelling
+;; bt-scope exists for and which did not compile until
+;; docs/archive/cps-direct-bt-scope-closure-temp-undeclared.md was fixed.  It is
+;; the shape a real caller writes, so the region path is exercised through it
+;; rather than only through a bracket inlined into `main`.
 
 (defdata Link :heap (Link [v : int nxt : int]))
 
@@ -35,26 +37,26 @@
   return acc;
   ```)
 
-(defn main [] : int
-  ;; The result of each bracket is an `:int` SUM, not the chain: nothing that
-  ;; points into the generation crosses the boundary, so both locks pass and
-  ;; the pop rewinds.
-  (println (bt-scope (fn [] (chain-sum (build 4 0)))))     ;; 1+2+3+4   = 10
-  (println (bt-scope (fn [] (chain-sum (build 100 0)))))   ;; 100*101/2 = 5050
+;;; one-round -- build and consume a spine inside one generation.
+;;;
+;;; The result is an `:int` SUM, not the chain: nothing that points into the
+;;; generation crosses the boundary, so both locks pass and the pop rewinds.
+(defn one-round [n : int] : int
+  (bt-scope (fn [] (chain-sum (build n 0)))))
 
+;;; rounds -- k generations of the same shape, opened and reclaimed in turn.
+(defn rounds [k : int n : int acc : int] : int
+  (if (<= k 0)
+    acc
+    (rounds (- k 1) n (+ acc (one-round n)))))
+
+(defn main [] : int
+  (println (one-round 4))       ;; 1+2+3+4   = 10
+  (println (one-round 100))     ;; 100*101/2 = 5050
   ;; 100 generations, each an 8-link chain (8*9/2 = 36), all reusing the same
   ;; reclaimed slabs.
-  (let [total (g-cell-new 0)
-        i     (g-cell-new 0)]
-    (while (< (g-get i) 100)
-      (do (g-set! total (+ (g-get total)
-                           (bt-scope (fn [] (chain-sum (build 8 0))))))
-          (g-set! i (+ (g-get i) 1))))
-    (println (g-get total))                                ;; 3600
-    (g-cell-free total)
-    (g-cell-free i))
-
+  (println (rounds 100 8 0))    ;; 3600
   ;; Once more after all that reuse, to catch a rewind that corrupted the
   ;; pooled arena rather than one that returned a wrong sum immediately.
-  (println (bt-scope (fn [] (chain-sum (build 4 0)))))     ;; 10
+  (println (one-round 4))       ;; 10
   0)

@@ -6273,6 +6273,17 @@ static void emit_term(CE *ce, const CTerm *t) {
                 : atoms_csv_call_typed(ce, t->as.letcall.args, t->as.letcall.n,
                                        t->as.letcall.fn, lc_spec);
             char *bn = cvar_cname(ce, t->as.letcall.x);
+            /* RM3 R4 (docs/upcoming/regions-plan.md): NO region boundary here,
+             * deliberately.  The CPS path's `bt-scope` calls all land on the
+             * CT_TAILCALL cps->direct arm, which carries the push/pop -- probed
+             * with the bracket in tail position, in an arithmetic operand, and
+             * bound twice in a `let`, and every one of them lowered to a tailcall
+             * plus a letcont.  A copy of the mechanism here would be a second,
+             * untested transcription of the two-lock rule, which is worse than a
+             * missed saving.  If a shape ever does reach this arm with a
+             * `bt-scope` callee it costs no correctness -- an unbracketed call is
+             * exactly a flag-off build -- and the fix is to mirror the tailcall
+             * arm's block, predicates and all. */
             /* A `:nil`/`:void`-returning callee (e.g. `tur_contract_check`) yields
              * no value: emit the call as a bare statement and bind the unit
              * placeholder, never `x = void_fn(...)` (a C "void value not ignored"
@@ -6467,6 +6478,27 @@ static void emit_term(CE *ce, const CTerm *t) {
                 const FnDef *cfd = g_prog
                     ? fd_for_binding(g_prog, t->as.tailcall.fn) : NULL;
                 const Type *crt = cfd ? fn_ret_type(cfd) : NULL;
+                /* RM3 R4: the region boundary on the CPS TAILCALL path.  This is
+                 * the arm a `bt-scope` in a non-main defn actually lands on --
+                 * the CT_LETCALL arm below covers the other CPS shape, and
+                 * emit_value covers the direct one.  Three sites, one predicate
+                 * pair (emit_binding_is_region_scope / emit_region_scope_reclaims),
+                 * because a second copy of the static walk would drift.
+                 *
+                 * The instantiated result type comes from `call_expr`, not from
+                 * the callee's declared return: `bt-scope [A] ... : A` declares a
+                 * TYPE VARIABLE, which the walk would (correctly, and uselessly)
+                 * refuse every time. */
+                int  rgn_id = -1;
+                bool rgn_reclaim = false;
+                if (emit_binding_is_region_scope(t->as.tailcall.fn) &&
+                    crt && crt->kind != TY_NIL && crt->kind != TY_NEVER) {
+                    const Expr *rce = t->as.tailcall.call_expr;
+                    rgn_reclaim = rce ? emit_region_scope_reclaims(ce->ctx, &rce->type)
+                                      : false;
+                    rgn_id = (int)ce->ctx->tmp_n++;
+                    ce_line(ce, "int __tur_rgn_%d = tur_region_push();", rgn_id);
+                }
                 if (crt && (crt->kind == TY_NIL || crt->kind == TY_NEVER)) {
                     ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv_t);
                     emit_deliver(ce, &t->as.tailcall.kont, "0");
@@ -6481,6 +6513,23 @@ static void emit_term(CE *ce, const CTerm *t) {
                         ce_line(ce, "%s %s = %s(%s); /* cps->direct */", drt, tmp, fn, argv_t);
                     else
                         ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
+                    /* RM3 R4: close the generation before the value is delivered
+                     * to the continuation -- the continuation is the rest of the
+                     * caller, so anything after this point is outside the bracket.
+                     * Same two locks and same word-only note as the direct path. */
+                    if (rgn_id >= 0) {
+                        bool notable = drt && (strchr(drt, '*') != NULL ||
+                                               strcmp(drt, "int64_t") == 0 ||
+                                               strcmp(drt, "intptr_t") == 0);
+                        if (rgn_reclaim && notable)
+                            ce_line(ce, "tur_region_note_escape((const void *)(intptr_t)%s); "
+                                        "(void)tur_region_pop_checked(__tur_rgn_%d);", tmp, rgn_id);
+                        else if (rgn_reclaim)
+                            ce_line(ce, "(void)tur_region_pop_checked(__tur_rgn_%d);", rgn_id);
+                        else
+                            ce_line(ce, "tur_region_pop(__tur_rgn_%d);", rgn_id);
+                        rgn_id = -1;   /* closed */
+                    }
                     /* findings 28 (typed/result-basic): the callee resolved to a
                      * MONOMORPH/spec clone that returns its ADT BY VALUE
                      * (`tur_adt_Result__int__int`), while the IR types the call at

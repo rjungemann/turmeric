@@ -4691,12 +4691,26 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
     }
 }
 
-static bool emit_call_is_region_scope(const Expr *e) {
-    if (e->kind != EX_CALL) return false;
+/* The static lock, for a caller that is not this file.  The CPS emitter has to
+ * ask the same question about the same result type -- a `bt-scope` inside a
+ * CPS-lowered function never reaches `emit_value` -- and the answer has to come
+ * from ONE walk, or the two paths drift and one of them is wrong. */
+bool emit_region_scope_reclaims(EmitCtx *ctx, const Type *t) {
+    if (!t) return false;                 /* type unknown -> refuse, as always */
+    const AdtDef *seen[32];
+    uint32_t n_seen = 0;
+    return !region_type_reaches_node(ctx, *t, seen, &n_seen, 24);
+}
+
+bool emit_binding_is_region_scope(const Binding *b) {
     if (!regions_enabled()) return false;
-    const Binding *b = e->as.call_.fn_binding;
     return b && b->name && b->name->name &&
            strcmp(b->name->name, "bt-scope") == 0;
+}
+
+static bool emit_call_is_region_scope(const Expr *e) {
+    if (e->kind != EX_CALL) return false;
+    return emit_binding_is_region_scope(e->as.call_.fn_binding);
 }
 
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {

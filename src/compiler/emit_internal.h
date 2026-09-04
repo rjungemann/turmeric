@@ -749,6 +749,17 @@ bool emit_slot_word_is(const char *cname);
  * deliberately absent -- its own body already ascribes the word back to the
  * element, so it hands back the element, not the slot. */
 bool emit_call_is_raw_slot_read(const struct Expr *e);
+/* RM3 R4 (docs/upcoming/regions-plan.md): the region boundary, shared with the
+ * CPS emitter.  `emit_binding_is_region_scope` is the callee test (and is false
+ * with the flag off, so both call sites are inert by default);
+ * `emit_region_scope_reclaims` is the STATIC lock -- true when the bracket's
+ * result type provably cannot transitively reach a region-allocated node, which
+ * is the only condition under which a generation may be rewound rather than
+ * retired.  Exported so the direct path and the CPS path ask ONE walk: a
+ * `bt-scope` inside a CPS-lowered function never reaches emit_value, and two
+ * copies of this question would drift. */
+bool emit_binding_is_region_scope(const struct Binding *b);
+bool emit_region_scope_reclaims(struct EmitCtx *ctx, const struct Type *t);
 /* S1 (jit-engine-plan section 4): true when an emitted C type NAME denotes a
  * scalar -- any pointer, or one of the primitive/stdint spellings the emitter
  * produces.  Anything else (a struct typedef such as `Option__int` or
