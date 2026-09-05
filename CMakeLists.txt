@@ -83,6 +83,30 @@ include(cmake/CPM.cmake)
 # ---------------------------------------------------------------------------
 # Turmeric compiler (native CMake build)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Windows: link the MinGW support libraries statically.
+#
+# A default MinGW build of tur.exe needs libwinpthread-1.dll and edit.dll from
+# the MSYS2 tree.  Off an MSYS2 PATH it does not start at all -- exit 127, no
+# output, no diagnostic -- so a release archive containing only the exe is dead
+# on arrival, and the failure gives the user nothing to go on.
+#
+# ON by default rather than release-only.  A release-only knob is a code path
+# that is first exercised while cutting a release, which is the worst moment to
+# discover it; this way every Windows CI build links the way the shipped binary
+# does.  Both libraries have a static form in MSYS2 (libwinpthread.a,
+# libedit.a), so there is no functional difference -- only a larger exe.
+#
+# CMAKE_FIND_LIBRARY_SUFFIXES is the load-bearing half: without it
+# find_library(edit) returns libedit.dll.a, the IMPORT library, and hands ld an
+# absolute path that -static does not override -- so the DLL dependency
+# survives and the flag looks like it worked.
+option(TUR_WIN_STATIC "Statically link the MinGW support libraries" ON)
+if(WIN32 AND TUR_WIN_STATIC)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".a" ".lib")
+    add_link_options(-static)
+endif()
+
 add_subdirectory(src)
 
 # ---------------------------------------------------------------------------
