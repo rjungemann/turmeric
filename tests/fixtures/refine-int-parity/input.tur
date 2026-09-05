@@ -1,0 +1,22 @@
+;; S2c-lite: the gcd divisibility test.  `2v = 2x + 1` has rational solutions
+;; (v = x + 1/2) and no integer ones, so a cube carrying it is unsat over the
+;; integers and the goal follows ex falso.  Fourier-Motzkin alone works over
+;; the rationals and could not see this; the integer equality phase in
+;; refine_solver_arith.c (eq_eliminate / int_normalize) can.
+;;
+;; Also the inequality side of the same normalization: `2q >= -1` over the
+;; integers is `q >= 0`, which is what lets `nonneg-half` go through without
+;; any case split.
+(defn odd-eq-even [x : int y : #refine{ v : int | (= (* 2 v) (+ (* 2 x) 1)) }]
+                  : #refine{ r : int | (= r 0) }
+  1)
+
+(defn nonneg-half [q : #refine{ v : int | (>= (* 2 v) -1) }]
+                  : #refine{ r : int | (>= r 0) }
+  q)
+
+(defn main [] : int
+  (println (nonneg-half 0))
+  (println (nonneg-half 5))
+  (println "refine-int-parity")
+  0)

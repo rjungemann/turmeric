@@ -24,7 +24,7 @@ bool refine_caps_any(void) {
     return g_caps.cubes_hits || g_caps.cube_lits_hits || g_caps.expand_depth_hits ||
            g_caps.la_vars_hits || g_caps.la_constr_hits || g_caps.la_fm_hits ||
            g_caps.euf_terms_hits || g_caps.no_shared_hits || g_caps.no_rounds_hits ||
-           g_caps.path_hyps_hits || g_caps.model_vars_hits;
+           g_caps.path_hyps_hits || g_caps.model_vars_hits || g_caps.model_evals_hits;
 }
 
 /* ------------------------------------------------------------------------- *
@@ -388,6 +388,17 @@ RefineModel *refine_model_search(RefineVC *vc, Arena *a) {
         if (lits[i] > INT64_MIN) add_cand(cand, &n_cand, lits[i] - 1);
     }
     if (n_cand == 0 && vc->n_vars > 0) return NULL;
+
+    /* The cap that binds: the odometer runs n_cand ** n_vars full
+     * evaluations.  Past the budget we decline rather than start something
+     * that might not finish in compile-time noise; a decline here is one a
+     * bigger budget WOULD have let run, which is what the counter says. */
+    {
+        uint64_t evals = 1;
+        for (uint32_t i = 0; i < vc->n_vars && evals <= MODEL_MAX_EVALS; i++)
+            evals *= n_cand;
+        if (evals > MODEL_MAX_EVALS) { g_caps.model_evals_hits++; return NULL; }
+    }
 
     uint32_t nv = vc->n_vars;
     int64_t vals[MODEL_MAX_VARS] = {0};

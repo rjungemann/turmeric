@@ -1395,6 +1395,23 @@ obligations.
 
 ### SX7 -- integer completeness, the long tail (S2c)
 
+> **First slice LANDED 2026-09-05, in C, not via the Turmeric prototype this
+> phase prescribes** -- see
+> [solver-integer-tail-plan.md](solver-integer-tail-plan.md). The Omega test's
+> two exact steps (gcd normalization of inequalities; the divisibility test
+> and unit-coefficient substitution on equations) went straight into
+> `refine_solver_arith.c` behind the unchanged `la_*` seam, because at ~150
+> lines of exact int64 arithmetic they were cheaper to write than to
+> prototype. Alongside: the encoder axiomatizes `(/ a k)` / `(mod a k)` by a
+> literal and asserts squares non-negative, and the counterexample search is
+> budgeted by evaluations rather than capped at three variables. The trigger
+> was not a cap hit -- every cap still sits on its 2026-09-03 headroom -- but
+> nine ordinary probes, four of which the solver could not decide, all
+> outside every shape the three swept populations contain. That blind spot
+> in the instruments is that plan's Phase 4. What remains of SX7 proper --
+> Pugh's sigma-substitution, and branch-and-bound / the dark shadow on the
+> inequality side -- keeps the prescription below.
+
 - **Do:** branch-and-bound over the SX4 simplex, depth-limited, `UNKNOWN` past
   the limit. Optionally Gomory cuts. Closes the integer non-convexity hole that
   makes S3 incomplete on disequality case-splits today.

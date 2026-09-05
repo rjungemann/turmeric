@@ -66,8 +66,24 @@
  * however obviously wrong it is.  Raising it costs enumeration exponentially
  * (n_cand ** n_vars), which is why it wants a measurement rather than a
  * guess -- see model_vars_hits below for what that measurement has to
- * separate. */
-#define MODEL_MAX_VARS          3
+ * separate.
+ *
+ * Raised 3 -> 8 on 2026-09-05 and paired with MODEL_MAX_EVALS, which is the
+ * cap that actually binds now.  At 3 the search declined EVERY four-parameter
+ * function with a refined return -- an ordinary shape, and one none of the
+ * three swept populations happened to contain (the fuzzer generates at most
+ * two parameters), which is why the sweep read "never bites".  A structural
+ * width limit was the wrong shape for the cost it guards: `n_cand ** n_vars`
+ * is what the odometer pays, and a five-variable VC over five candidates
+ * (3125 evaluations) is cheaper than a three-variable one over sixteen
+ * (4096).  So the width cap is now only a backstop for the array sizes, and
+ * the evaluation budget below decides.  See
+ * docs/upcoming/solver-integer-tail-plan.md. */
+#define MODEL_MAX_VARS          8
+/* Ceiling on `n_cand ** n_vars`, the number of full evaluations one search
+ * may run.  131072 tiny evaluations is a few milliseconds; the old cap's
+ * worst case (16 ** 3) was 4096.  Declines are counted in model_evals_hits. */
+#define MODEL_MAX_EVALS         131072u
 
 /* A COLLECTION cap, not a solver one, and it lives here for the same reason
  * the two NO_MAX_* ones do: the telemetry below reports a peak against the
@@ -135,6 +151,11 @@ typedef struct RefineCapStats {
      * A raise is justified by the second number, never the first. */
     uint32_t model_vars_hits,   model_vars_peak;
     uint32_t model_vars_would_run;
+    /* The evaluation budget (MODEL_MAX_EVALS): a VC inside the width cap and
+     * past the sort gate whose `n_cand ** n_vars` would exceed the budget.
+     * Every one of these WOULD run at a higher budget, so this row needs no
+     * `would_run` twin. */
+    uint32_t model_evals_hits;
 } RefineCapStats;
 
 /* Mutable on purpose: the stages bump their own counters in place, which is
@@ -170,6 +191,7 @@ static inline void refine_caps_delta(RefineCapStats *out,
     out->path_hyps_peak    = now->path_hyps_peak;
     out->model_vars_hits      = now->model_vars_hits      - before->model_vars_hits;
     out->model_vars_would_run = now->model_vars_would_run - before->model_vars_would_run;
+    out->model_evals_hits     = now->model_evals_hits     - before->model_evals_hits;
     out->model_vars_peak      = now->model_vars_peak;
     out->cubes_peak        = now->cubes_peak;
     out->cube_lits_peak    = now->cube_lits_peak;
@@ -196,6 +218,7 @@ static inline void refine_caps_add_hits(RefineCapStats *a,
     a->path_hyps_hits    += b->path_hyps_hits;
     a->model_vars_hits      += b->model_vars_hits;
     a->model_vars_would_run += b->model_vars_would_run;
+    a->model_evals_hits     += b->model_evals_hits;
     refine_cap_peak(&a->path_hyps_peak,    b->path_hyps_peak);
     refine_cap_peak(&a->model_vars_peak,   b->model_vars_peak);
     refine_cap_peak(&a->cubes_peak,        b->cubes_peak);

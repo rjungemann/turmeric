@@ -1,0 +1,21 @@
+;; A nonlinear product is still abstracted to an uninterpreted symbol (and
+;; TUR-W0373 still says so), but a SQUARE carries the one fact that holds for
+;; every integer and every real: `(<= 0 (* x x))`.  The encoder asserts it as a
+;; hypothesis about the abstracted term (refine_collect.c, enc_nonlinear), so
+;; the sign goals below are proved while `(* x y)` with distinct operands
+;; remains Unknown (refine-nonlinear-warn pins that).
+(defn sq [x : int] : #refine{ r : int | (>= r 0) }
+  (* x x))
+
+(defn sq-plus-one [x : int] : #refine{ r : int | (> r 0) }
+  (+ (* x x) 1))
+
+(defn sq-of-expr [x : int] : #refine{ r : int | (>= r 0) }
+  (* (- x 1) (- x 1)))
+
+(defn main [] : int
+  (println (sq -3))
+  (println (sq-plus-one 0))
+  (println (sq-of-expr 1))
+  (println "refine-square-nonneg")
+  0)

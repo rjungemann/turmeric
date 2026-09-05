@@ -371,6 +371,14 @@ expr ::= <int literal> | <float literal>
        | (measure e ...)          ; an int/float-returning measure is a value
 ```
 
+`(/ e <literal>)` and `(mod e <literal>)` on integers mean what the runtime
+means: C's truncating `/` and `%` (the remainder takes the dividend's sign, so
+`(mod -7 2)` is `-1`). The solver knows this -- it asserts `e = k*q + r` and
+the sign clause for the two terms -- so `(= (mod n 2) 0)` on a parameter proves
+`(= (mod (+ n 2) 2) 0)` on the result, and `(>= n 0)` proves
+`(<= 0 (/ n 2) n)`. Division or remainder by a *variable* is nonlinear and
+falls under the rule below.
+
 Two rules keep this on the cheap side of the solver cliff. They are rules, not
 accidents:
 
@@ -961,6 +969,26 @@ anyway.
   rejected or fall through to runtime. (Typeclass method signatures *are*
   supported now, on parameters and results alike -- see above.)
 - **[by design] Nonlinear arithmetic** is uninterpreted, as described above.
+  One sign fact survives the abstraction: a square `(* x x)` is known to be
+  non-negative, so `(>= (* x x) 0)` and `(> (+ (* x x) 1) 0)` prove while
+  `(* x y)` with distinct operands stays Unknown (`TUR-W0373` is emitted
+  either way).
+- **[incomplete] Integer reasoning is exact for equations, not yet for every
+  inequality system.** `2v = 2x + 1` is recognised as having no integer
+  solution (parity), an equation is substituted away through any variable
+  with coefficient +/-1, and each inequality is rounded to its integer hull
+  (`2q >= -1` gives `q >= 0`). What is left is the long tail: an all-integer
+  equation with no unit coefficient (`2x + 3y = 1`) is read as two
+  inequalities, and a system that is only infeasible over the integers
+  *without* any equation in it is not decided. Both fall to Unknown and keep
+  the runtime check; see `docs/upcoming/solver-integer-tail-plan.md`.
+- **[incomplete] A counterexample needs the search to fit its budget.** The
+  bounded search that produces `TUR-E0371`'s witness enumerates at most
+  131072 assignments over at most 8 integer variables; an obligation wider
+  than that is reported Unknown even when it is plainly false. (The limit was
+  three variables until 2026-09-05, which made every four-parameter function
+  with a refined return unrefutable.) `TUR_REFINE_STATS=1` reports both
+  declines.
 - **[by design] A predicate that calls an effectful function is rejected** (`TUR-E0375`),
   in all four positions: a refined parameter, `:pre`, `:post`, and a refined
   return. Whether a check runs depends on the build -- `--no-contracts` strips
