@@ -4944,8 +4944,16 @@ bool emit_region_scope_reclaims(EmitCtx *ctx, const Type *t) {
 
 bool emit_binding_is_region_scope(const Binding *b) {
     if (!regions_enabled()) return false;
-    return b && b->name && b->name->name &&
-           strcmp(b->name->name, "bt-scope") == 0;
+    if (!b || !b->name || !b->name->name) return false;
+    /* Two region boundaries, one recognition: `bt-scope` (stdlib/trail.tur)
+     * opens a region AND a trail level; `with-region` (stdlib/region.tur) opens
+     * the region ONLY.  Both take a `[A] [^fat body : (fn [] A)] : A` thunk and
+     * hand its value back, so every site downstream of this predicate -- the
+     * static walk, the push/pop in emit_value, the CPS tailcall arm -- is
+     * identical for the two.  The only difference is in the stdlib body (mark/
+     * undo vs. a bare forwarder), which this pass never looks at. */
+    return strcmp(b->name->name, "bt-scope") == 0 ||
+           strcmp(b->name->name, "with-region") == 0;
 }
 
 static bool emit_call_is_region_scope(const Expr *e) {

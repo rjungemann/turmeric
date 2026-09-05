@@ -168,6 +168,15 @@ void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root) {
          * overrides the bodies -- which is why that registration must run AFTER
          * this preload, not before. */
         "trail.tur",
+        /* RM3 A1: `with-region`, the lifetime-only region bracket.  Unlike
+         * trail.tur it needs NO native: the body is a bare Turmeric forwarder
+         * `(body)`, which the tree-walker runs as an identity call -- which is
+         * also exactly what the compiled path does with `--enable=regions` off,
+         * the only mode the interpreter has (a region is a codegen decision at
+         * the emitter's call site, and the interpreter has no emitter).  Listed
+         * here for module-preload parity with the compiled autoload
+         * (tools/check_turi_native_parity.py), not for any behaviour. */
+        "region.tur",
         NULL
     };
 

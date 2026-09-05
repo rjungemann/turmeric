@@ -46,6 +46,13 @@ region-scope-value-survives
 region-scope-escape-refused
 region-scope-void-body
 "
+
+# A1: `with-region` (stdlib/region.tur) is the lifetime-only boundary -- the
+# same push / checked pop as `bt-scope`, with no trail level.  Same assertion:
+# the value read back after the pop must not change with the flag.
+FIXTURES="$FIXTURES
+region-with-region
+"
 pass=0; fail=0; skip=0
 for name in $FIXTURES; do
     d="tests/fixtures/$name"; in="$d/input.tur"

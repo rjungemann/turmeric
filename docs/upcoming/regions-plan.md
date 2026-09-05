@@ -324,10 +324,52 @@ per the standing rule it would not block a release if there were.
 
 ### What graduation requires, in the order that matters
 
-1. **A boundary form of its own.** Either a `with-region` bracket that means
+1. ~~**A boundary form of its own.** Either a `with-region` bracket that means
    only the lifetime, or an explicit statement that `bt-scope` means both and a
    documented way to opt one out. This is the blocker; everything below is
-   ordinary work.
+   ordinary work.~~ **DONE 2026-09-05 -- `with-region` (A1).** The blocker
+   is a public-surface decision, and it was decided by the reclamation plan's
+   own measured residue: RM2's category 1 (496 B, `constrained-defn-cons-
+   return-monomorphize` and `refined-nonempty`) is in programs with NO
+   backtracking that build a throwaway spine, so the lifetime needs a spelling
+   that is not a search primitive. Of the three designs weighed --
+
+   - **A1, additive** (taken): `with-region` is the region-only bracket;
+     `bt-scope` KEEPS opening its region automatically, so R4's measured
+     solver win is untouched and the change is purely additive.
+   - **A2, orthogonal**: `with-region` becomes the only region opener and
+     `bt-scope` reverts to trail-only, "both" being one wrapped in the other.
+     Cleanest model, but it takes the automatic region off the solver path,
+     which would have to re-add it in `dfs-solve` -- a change to the exact
+     path R4 measured, deferred as its own separately-measured step if ever
+     wanted.
+   - **B, documented coupling**: no new form; declare `bt-scope` means both
+     and tell non-backtracking programs to call it and not use the trail.
+     Zero surface, but it leaves the conflation R5 flagged in place, merely
+     documented -- a parser with no backtracking still calls a backtracking
+     primitive to get a lifetime.
+
+   -- A1 fills the one corner of the 2x2 that had no spelling, and each corner
+   now has one:
+
+   | | region | no region |
+   |---|---|---|
+   | **trail level** | `bt-scope` | `bt-mark` / `bt-undo-to!` halves |
+   | **no trail level** | `with-region` | plain code |
+
+   `stdlib/region.tur` (autoloaded, its own file: the region is its own
+   concept, not the trail's). The body is a bare forwarder `(body)`; the
+   boundary is a CODEGEN decision, and `emit_binding_is_region_scope` now
+   recognizes both names, so the static walk, both emit paths and both
+   runtime locks are shared unchanged -- the only difference between the two
+   brackets is in the stdlib body this pass never reads. With the flag off
+   `with-region` is an identity call. It carries NO `#fx{Bt}`, which is the
+   checkable difference: `region-with-region` has a `#fx{}`-declared caller
+   reach it, the shape that is TUR-E0009 for `bt-scope`. Measured on that
+   fixture: live blocks at exit 908 -> 5 (the five are the pooled slab, R5
+   item 3), allocations 1,424 -> 521, values identical both arms. Seam 13/0.
+   Autoloading a new module moved all 148 codegen snapshots (binding-id
+   renumbering plus the one new defn), regenerated in the same commit.
 2. **Widen the static walk deliberately, with a fixture per shape admitted.**
    It accepts scalars, `cstr`, and non-heap ADTs whose every field it can walk.
    Structs, containers, refs and closures are refused wholesale -- sound, and it
@@ -371,4 +413,10 @@ per the standing rule it would not block a release if there were.
 
 - `docs/guides/gc-guide.md` -- it documents the arena and the rc/cycle paths;
   a third reclamation mode belongs beside them.
-- `docs/guides/experimental-flags-guide.md` -- the row while it is gated.
+- ~~`docs/guides/experimental-flags-guide.md` -- the row while it is gated.~~
+  **Struck 2026-09-05: there is no such row to add.** That guide deliberately
+  does not restate the experiment list -- "the registry is the single source
+  of truth; this guide does not restate the list -- the command does" -- and
+  defers to `tur experiments`. The `EXPERIMENTS[]` row in
+  `src/runtime/experiments.c` IS the gated-feature documentation. Nothing to
+  do there while gated, and nothing to remove at graduation either.

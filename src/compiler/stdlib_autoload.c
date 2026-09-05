@@ -49,6 +49,12 @@ static const char *const autoload_files_[] = {
     /* SX1: backtrackable state.  Was gated behind the `backtrackable-state`
      * experiment until it graduated 2026-08-29; an ordinary list member now. */
     "trail.tur",
+    /* RM3 (regions): `with-region`, the lifetime-only bracket.  Loaded after
+     * trail.tur since it is the trail's sibling in the region/trail split.  The
+     * body is a bare forwarder, so with `--enable=regions` off the defn is an
+     * ordinary identity call and adds no behaviour; the emitter opens a region
+     * around a call to it only when the flag is on. */
+    "region.tur",
     NULL
 };
 

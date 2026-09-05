@@ -1,0 +1,54 @@
+;;; tur/region -- a declared lifetime bracket, independent of the trail.
+;;;
+;;; `with-region` runs a thunk inside an arena generation: allocations made
+;;; while it runs are reclaimed in one O(slabs) rewind when it returns, PROVIDED
+;;; the compiler can prove the returned value does not transitively reach any
+;;; value allocated inside. When it cannot prove that, the generation is retired
+;;; instead of rewound -- byte-for-byte what a build without the feature does --
+;;; so refusing costs a saving, never correctness.
+;;;
+;;; This is the LIFETIME half of what `bt-scope` (stdlib/trail.tur) does, split
+;;; out so a program that wants the reclamation but has no backtracking does not
+;;; have to reach for a search primitive to get it. The full picture:
+;;;
+;;;   region only          `with-region`                 (this file)
+;;;   trail level only     `bt-mark` / `bt-undo-to!`      (stdlib/trail.tur)
+;;;   both                 `bt-scope`                     (stdlib/trail.tur)
+;;;   neither              plain code
+;;;
+;;; The region boundary is a CODEGEN decision keyed on the call to
+;;; `with-region`, not on anything this body does -- the body is a bare
+;;; forwarder. Under `--enable=regions` the emitter opens a generation around
+;;; the call and rewinds (or retires) it after; without the flag `with-region`
+;;; is an ordinary identity call and the whole file is inert, so autoloading it
+;;; costs nothing a program does not ask for.
+;;;
+;;; See docs/upcoming/regions-plan.md and docs/guides/gc-guide.md.
+;;;
+;;; Since: RM3 (regions prototype, `--enable=regions`)
+;; Declared-lifetime region bracket (reclamation-plan RM3 / regions-plan).
+
+;;; with-region -- run `body` inside an arena generation and reclaim it after.
+;;;
+;;; The lifetime-only bracket: unlike `bt-scope` it pushes NO trail level, so it
+;;; carries no `#fx{Bt}` and undoes no mutation -- it only bounds a generation.
+;;;
+;;; Parameters:
+;;;   body -- a thunk. Taken ^fat, so a capturing lambda works -- which is the
+;;;           only interesting case, since the body has to build the values
+;;;           whose lifetime this bounds.
+;;;
+;;; Returns:
+;;;   Whatever `body` returned. The VALUE survives; anything it allocated inside
+;;;   that the value does not reach is reclaimed. Returning something that points
+;;;   into reclaimed region memory is refused at compile time by declining to
+;;;   rewind (the value's type is walked); a genuinely escaping pointer the walk
+;;;   cannot see is caught at run time and blocks the rewind. Neither is a memory
+;;;   safety hole -- the failure mode is "no saving", not a stale read.
+;;;
+;;; Example:
+;;;   (with-region (fn [] (sum-of (build-scratch 100))))  ; scratch reclaimed
+;;;
+;;; Since: RM3
+(defn with-region [A] [^fat body : (fn [] A)] : A
+  (body))

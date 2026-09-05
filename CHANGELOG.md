@@ -39,6 +39,35 @@ All notable changes to Turmeric are documented here.
   help, since a VC over the cap may also carry a non-int variable the sort gate
   declines at any limit.
 
+### Added
+
+- **`with-region`: the lifetime-only region bracket** (regions plan, RM3 R5
+  graduation item 1 -- the blocker). Under `--enable=regions`, `bt-scope`
+  opens an arena generation as well as a trail level, which is right for a
+  solver but left a program with no backtracking no way to bound a lifetime
+  except by calling a search primitive. `with-region` (`stdlib/region.tur`,
+  autoloaded) is the same bracket with the region only: same reclamation,
+  no mark, no undo, and so no `#fx{Bt}` -- a `#fx{}`-declared function may
+  call it. Each corner of the trail-level/region square now has one
+  spelling: `bt-scope` (both), `with-region` (region only), the
+  `bt-mark`/`bt-undo-to!` halves (trail only). Without the flag it is an
+  identity call. Measured on the pinning fixture: live blocks at exit 908
+  -> 5, allocations 1,424 -> 521, values identical both arms. The region
+  stays a gated prototype; this removes the graduation blocker, it does not
+  flip the default. The new autoloaded module moved all 148 codegen
+  snapshots (binding-id renumbering plus one defn), regenerated in the same
+  commit. Backtrackable State Guide has the square.
+
+- **The region rewind admits a scalar-field ADT result** (RM3 R5 graduation
+  item 2, first shape). The escape walk refused any constructor field with a
+  NULL `full_type`, which is also NULL for an ordinary `:int`, so every
+  ADT-returning bracket retired instead of rewinding. It now consults the
+  declared field FORM: a bare scalar keyword reaches nothing and is admitted;
+  an ADT name, `ptr`, a type variable or a compound form still refuses. This
+  admits `(RxIP :int :int)` -- `re.tur`'s `re-find-from` result -- and keeps
+  the mutual-recursion result refused; a kind-based accept that was reverted
+  for a use-after-free is not reintroduced.
+
 ### Fixed
 
 - **The trail's `#fx{Bt}` effect row is now checked; it used to resolve to

@@ -251,6 +251,35 @@ which means the row is **checked**, at two places:
 declares resolves to *nothing*, silently. That is not hypothetical: the row sat
 on the mutators for a month checking as `#fx{}` before the declaration existed.
 
+## `bt-scope` is also a region, and `with-region` is only a region
+
+Under `--enable=regions` (a prototype; see the
+[regions plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/regions-plan.md)),
+`bt-scope` does a second thing besides pushing a trail level: it opens an
+arena **generation**, and everything allocated inside that the returned value
+cannot reach is reclaimed in one rewind when the bracket exits. For a solver
+that is exactly right -- one query is one generation -- and it is why
+`dfs-solve` gets its reclamation for free.
+
+But a trail level and a lifetime are independent things, so each combination
+has its own spelling rather than one form meaning two:
+
+| | region | no region |
+|---|---|---|
+| **trail level** | `bt-scope` | `bt-mark` / `bt-undo-to!` halves |
+| **no trail level** | `with-region` | plain code |
+
+`with-region` (`stdlib/region.tur`) is the lifetime-only bracket: same shape as
+`bt-scope`, same reclamation, **no** mark, **no** undo, and therefore no
+`#fx{Bt}` -- a `#fx{}`-declared function may call it. It is for a program that
+builds a throwaway structure and has no backtracking at all, so it does not have
+to reach for a search primitive to bound a lifetime. And the halves are the
+trail-only corner: they are never a region boundary, so a caller that wants
+undo without paying the escape check uses them.
+
+Without the flag, `with-region` is an identity call and `bt-scope` is just the
+trail bracket described above; neither allocates any differently.
+
 ## Under `--interpret`
 
 The whole surface works, and the interpreter calls the same
