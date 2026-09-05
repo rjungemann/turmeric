@@ -162,7 +162,7 @@ state the harness had been built to prevent, with the two paths swapped.
 What accumulated there in the meantime: a compiler abort, a hard C compile
 error, and a silent wrong answer, none of which touched the default path and all
 of which broke the instrument you reach for when something *else* is already
-wrong. See [docs/archive/sr2-carrier-seam-rotted.md](../archive/sr2-carrier-seam-rotted.md).
+wrong. See [docs/archive/sr2-carrier-seam-rotted.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/sr2-carrier-seam-rotted.md).
 
 A hatch nobody turns on decays into a hatch nobody notices -- the same lesson as
 `sanitizer-gate-not-armed-in-ci`. If you keep the switch, keep a harness on it.
