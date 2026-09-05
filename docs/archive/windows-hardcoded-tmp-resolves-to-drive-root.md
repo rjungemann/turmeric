@@ -1,5 +1,11 @@
 # Hardcoded `/tmp` paths resolve to the drive root in native Windows binaries
 
+> **RESOLVED 2026-09-05.** All three steps are done. `fs/tmpfile` resolves the
+> temp directory at run time, no fixture spells `/tmp` literally any more, and
+> the harness provisioning that stood in for the fix is deleted. Verified on
+> main: 0 fixtures matching `"/tmp/`, 0 drive-root provisioning in
+> `tests/run.sh`.
+
 **Summary:** `stdlib/fs.tur`'s `fs/tmpfile` does `mkstemp("/tmp/tur_XXXXXX")`,
 and around a dozen fixtures write hardcoded `"/tmp/..."` paths. Compiled
 turmeric programs are **native** Windows executables, not MSYS-linked, so their
@@ -60,8 +66,15 @@ before:  C:\tmp\tur_XXXXXX        (returned 0 outright where C:\tmp is absent)
 after:   C:\Users\<u>\AppData\Local\Temp\tur_a10656
 ```
 
-Steps 2 and 3 remain, and they are ordered: the harness provisioning cannot be
-removed until the ten fixtures below stop spelling `/tmp` literally.
+**Steps 2 and 3 are also done.** The ten fixtures below read `TUR_TEST_TMPDIR`
+(with a `/tmp` fallback so one can still be run by hand on POSIX), and the
+harness provisioning block is gone -- so the suite is portable by
+construction rather than by creating a directory behind its own back.
+
+Proven by where the files land, not by the fixtures passing: they passed
+before AND after on a machine that has `C:\tmp`, which is how this survived
+so long. Clearing the droppings and pointing `TUR_TEST_TMPDIR` at a named
+directory put all six there and left `C:\tmp` empty.
 
 ## Fix directions
 

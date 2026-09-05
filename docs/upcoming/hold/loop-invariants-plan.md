@@ -226,10 +226,11 @@ already describe exactly this situation), gets `--strict-refine` promotion
 for free (same discharge path), and leaves the freshly freed `0383+` band to
 the sibling reflected-measures plan.
 
-One measured caveat for the wording: `MODEL_MAX_VARS` is 3
-(`refine_solver.c:221`), so a multi-conjunct invariant under a body
-substitution will usually exceed the counterexample search's variable budget
-and land on `TUR-W0372` without a model. The remedy is in LI4: split the
+One measured caveat for the wording: the counterexample search is budgeted
+(`MODEL_MAX_VARS` is 8 and `MODEL_MAX_EVALS` bounds `n_cand ** n_vars` at
+131072, `refine_solver.h`; until 2026-09-05 the width cap was 3), so a wide
+multi-conjunct invariant under a body substitution can still exceed the
+search's budget and land on `TUR-W0372` without a model. The remedy is in LI4: split the
 invariant into conjuncts and discharge each separately, so the message can
 say *which* iteration-carried fact broke -- conjunct-level reporting matters
 more here than counterexample translation.

@@ -76,7 +76,7 @@ at, not the fixture.
 
 ## Related
 
-- [windows-hardcoded-tmp-resolves-to-drive-root.md](windows-hardcoded-tmp-resolves-to-drive-root.md) -- the other finding from the same first CI run
+- [windows-hardcoded-tmp-resolves-to-drive-root.md](../archive/windows-hardcoded-tmp-resolves-to-drive-root.md) -- the other finding from the same first CI run
 - [docs/upcoming/v1/windows-remaining-plan.md](../upcoming/v1/windows-remaining-plan.md)
 
 

@@ -109,6 +109,10 @@ typedef struct RefineVC {
     /* Serial for minting DISTINCT symbols when two occurrences of the same
      * call must NOT be treated as the same value (see RefineFnInfo.pure). */
     uint32_t   fresh_ctr;
+    /* How many `(/ a k)` / `(mod a k)` terms received the DISJUNCTIVE sign
+     * axiom (refine_collect.c, enc_divmod_axioms); past its budget the
+     * weaker conjunctive bound is used so cube expansion stays bounded. */
+    uint32_t   n_divmod_splits;
 } RefineVC;
 
 RefineVC *vc_new(Arena *a);

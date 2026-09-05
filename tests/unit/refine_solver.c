@@ -145,6 +145,132 @@ static void test_s2_linear(Arena *a) {
     ok(decide(vc, a) != RT_VALID, "S2 soundness: unconstrained z is not positive");
 }
 
+/* S2c-lite (docs/upcoming/solver-integer-tail-plan.md): the integer phase of
+ * la_unsat -- gcd normalization of inequalities, the divisibility test on
+ * equalities, and substitution through a unit coefficient.  Every "proves"
+ * case here was RT_UNKNOWN on the pure rational relaxation. */
+static void test_s2_integer(Arena *a) {
+    /* PARITY: 2v = 2x + 1 has rational solutions and no integer ones, so the
+     * hypothesis is contradictory and anything follows. */
+    RefineVC *vc = vc_new(a);
+    VCTerm *x = V(vc, "x"), *v = V(vc, "v");
+    vc_add_hyp(vc, eq(vc, mul(vc, vc_int(vc, 2), v),
+                      add(vc, mul(vc, vc_int(vc, 2), x), vc_int(vc, 1))));
+    vc_set_goal(vc, eq(vc, vc_int(vc, 1), vc_int(vc, 0)));
+    ok(refine_s2_decide(vc, a).verdict == RT_VALID,
+       "S2 int: 2v = 2x + 1 is unsat over the integers (gcd test)");
+
+    /* SOUNDNESS: the same shape over the REALS has a model (v = x + 1/2). */
+    vc = vc_new(a);
+    VCTerm *rx = R(vc, "rx"), *rv = R(vc, "rv");
+    vc_add_hyp(vc, eq(vc, mul(vc, vc_int(vc, 2), rv),
+                      add(vc, mul(vc, vc_int(vc, 2), rx), vc_int(vc, 1))));
+    vc_set_goal(vc, eq(vc, vc_int(vc, 1), vc_int(vc, 0)));
+    ok(decide(vc, a) != RT_VALID,
+       "S2 int soundness: 2v = 2x + 1 over the reals is satisfiable");
+
+    /* SOUNDNESS: 2x + 3y = 1 HAS integer solutions (x = -1, y = 1); the gcd
+     * test must pass it and the missing sigma-substitution must fall back to
+     * the two-inequality reading rather than guess. */
+    vc = vc_new(a);
+    x = V(vc, "x"); VCTerm *y = V(vc, "y");
+    vc_add_hyp(vc, eq(vc, add(vc, mul(vc, vc_int(vc, 2), x), mul(vc, vc_int(vc, 3), y)),
+                      vc_int(vc, 1)));
+    vc_set_goal(vc, eq(vc, vc_int(vc, 1), vc_int(vc, 0)));
+    ok(decide(vc, a) != RT_VALID,
+       "S2 int soundness: 2x + 3y = 1 is satisfiable over the integers");
+
+    /* INEQUALITY NORMALIZATION: 2q >= -1 |- q >= 0 over the integers.  The
+     * rational relaxation only gives q >= -1/2. */
+    vc = vc_new(a);
+    VCTerm *q = V(vc, "q");
+    vc_add_hyp(vc, le(vc, vc_int(vc, -1), mul(vc, vc_int(vc, 2), q)));
+    vc_set_goal(vc, le(vc, vc_int(vc, 0), q));
+    ok(refine_s2_decide(vc, a).verdict == RT_VALID, "S2 int: 2q >= -1 |- q >= 0");
+
+    /* ... and NOT over the reals. */
+    vc = vc_new(a);
+    VCTerm *rq = R(vc, "rq");
+    vc_add_hyp(vc, le(vc, vc_int(vc, -1), mul(vc, vc_int(vc, 2), rq)));
+    vc_set_goal(vc, le(vc, vc_int(vc, 0), rq));
+    ok(decide(vc, a) != RT_VALID, "S2 int soundness: 2q >= -1 does not give q >= 0 over the reals");
+
+    /* SUBSTITUTION CHAIN: n = 2a, n + 2 = 2b + r, r = 1  |-  false.
+     * Substituting n through the first equation turns the second into
+     * 2a + 2 = 2b + 1, i.e. 2(a - b) = -1 -- the gcd test fires one
+     * substitution deep.  This is the `(mod x 2)` shape after the encoder's
+     * axioms. */
+    vc = vc_new(a);
+    VCTerm *n = V(vc, "n"), *aa = V(vc, "a"), *bb = V(vc, "b"), *r = V(vc, "r");
+    vc_add_hyp(vc, eq(vc, n, mul(vc, vc_int(vc, 2), aa)));
+    vc_add_hyp(vc, eq(vc, add(vc, n, vc_int(vc, 2)), add(vc, mul(vc, vc_int(vc, 2), bb), r)));
+    vc_add_hyp(vc, eq(vc, r, vc_int(vc, 1)));
+    vc_set_goal(vc, eq(vc, vc_int(vc, 1), vc_int(vc, 0)));
+    ok(refine_s2_decide(vc, a).verdict == RT_VALID,
+       "S2 int: parity contradiction found one substitution deep");
+
+    /* The disequality shape the encoder's mod axioms produce, end to end at
+     * the solver seam: n = 2a, n + 2 = 2b + r, -1 <= r <= 1  |-  r = 0. */
+    vc = vc_new(a);
+    n = V(vc, "n"); aa = V(vc, "a"); bb = V(vc, "b"); r = V(vc, "r");
+    vc_add_hyp(vc, eq(vc, n, mul(vc, vc_int(vc, 2), aa)));
+    vc_add_hyp(vc, eq(vc, add(vc, n, vc_int(vc, 2)), add(vc, mul(vc, vc_int(vc, 2), bb), r)));
+    vc_add_hyp(vc, le(vc, vc_int(vc, -1), r));
+    vc_add_hyp(vc, le(vc, r, vc_int(vc, 1)));
+    vc_set_goal(vc, eq(vc, r, vc_int(vc, 0)));
+    ok(decide(vc, a) == RT_VALID, "S2 int: remainder of an even number plus two is zero");
+
+    /* The S3 seam still works over the new equality representation:
+     * len(v) = n via EUF, and arithmetic through it. */
+    vc = vc_new(a);
+    uint32_t len = vc_declare_ufunc(vc, "len", 1, VS_INT, NULL, false);
+    VCTerm *vv = V(vc, "v"); n = V(vc, "n"); VCTerm *i = V(vc, "i");
+    VCTerm *args[1] = { vv };
+    VCTerm *lenv = vc_app(vc, len, args, 1);
+    vc_add_hyp(vc, eq(vc, mul(vc, vc_int(vc, 2), lenv), mul(vc, vc_int(vc, 2), n)));
+    vc_add_hyp(vc, lt(vc, i, n));
+    vc_set_goal(vc, lt(vc, i, lenv));
+    ok(decide(vc, a) == RT_VALID, "S2 int / S3: 2 len(v) = 2n, i < n |- i < len(v)");
+}
+
+/* The counterexample search is budgeted by evaluations (MODEL_MAX_EVALS), not
+ * by a three-variable width: a four-variable false goal now yields a witness,
+ * and a VC whose `n_cand ** n_vars` exceeds the budget still declines. */
+static void test_model_search_budget(Arena *a) {
+    RefineVC *vc = vc_new(a);
+    VCTerm *s = add(vc, V(vc, "a"), add(vc, V(vc, "b"), add(vc, V(vc, "c"), V(vc, "d"))));
+    vc_set_goal(vc, lt(vc, vc_int(vc, 0), s));
+    RefineModel *m = refine_model_search(vc, a);
+    ok(m != NULL && m->n == 4, "model search: four variables are within the budget");
+    if (m) {
+        int64_t sum = 0;
+        for (uint32_t i = 0; i < m->n; i++) sum += m->bindings[i].ival;
+        ok(sum <= 0, "model search: the four-variable witness falsifies the goal");
+    }
+
+    /* Nine variables: over MODEL_MAX_VARS, declined and counted. */
+    vc = vc_new(a);
+    const char *names[9] = { "a","b","c","d","e","f","g","h","i" };
+    VCTerm *t = V(vc, names[0]);
+    for (int k = 1; k < 9; k++) t = add(vc, t, V(vc, names[k]));
+    vc_set_goal(vc, lt(vc, vc_int(vc, 0), t));
+    uint32_t before = refine_caps()->model_vars_hits;
+    ok(refine_model_search(vc, a) == NULL, "model search: nine variables decline");
+    ok(refine_caps()->model_vars_hits == before + 1, "model search: the width decline is counted");
+
+    /* Six variables with the literal 1000 in play: 8 candidates, 8**6 over
+     * the evaluation budget -- declined on the budget row, not the width one. */
+    vc = vc_new(a);
+    t = V(vc, names[0]);
+    for (int k = 1; k < 6; k++) t = add(vc, t, V(vc, names[k]));
+    vc_set_goal(vc, lt(vc, vc_int(vc, 1000), t));
+    before = refine_caps()->model_evals_hits;
+    uint32_t before_w = refine_caps()->model_vars_hits;
+    ok(refine_model_search(vc, a) == NULL, "model search: over the evaluation budget declines");
+    ok(refine_caps()->model_evals_hits == before + 1, "model search: the budget decline is counted");
+    ok(refine_caps()->model_vars_hits == before_w, "model search: ... and not as a width hit");
+}
+
 static void test_s1_euf(Arena *a) {
     /* len(v) = n, i < n |- i < len(v).
      * `len` is an uninterpreted function -- never unfolded. */
@@ -412,6 +538,8 @@ int main(void) {
     test_constant_folding(&a);
     test_s0_trivial(&a);
     test_s2_linear(&a);
+    test_s2_integer(&a);
+    test_model_search_budget(&a);
     test_s1_euf(&a);
     test_nonlinear_is_unknown(&a);
     test_disjunction(&a);

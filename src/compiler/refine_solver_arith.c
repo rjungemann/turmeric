@@ -14,11 +14,22 @@
  * the same la_* interface.
  *
  * Integers: rational unsatisfiability implies integer unsatisfiability, so
- * every refutation found here is sound for `int` too.  We additionally tighten
- * strict integer constraints (`e < 0` becomes `e <= -1` when every variable is
- * int-sorted and every coefficient is integral), which is what lets
- * `(> x 0) |= (> (* x 2) 0)` go through.  Genuine integer completeness
- * (branch-and-bound / Omega) is the S2c tail we deliberately do not chase.
+ * every refutation found here is sound for `int` too.  On top of that the
+ * integer-sorted constraints get the Omega test's two cheap exact steps
+ * (docs/upcoming/solver-integer-tail-plan.md):
+ *   - NORMALIZATION (`int_normalize`): clear denominators, divide by the gcd
+ *     of the coefficients, round the bound to the integer hull.  Subsumes the
+ *     strict tightening (`e < 0` -> `e <= -1`) that lets
+ *     `(> x 0) |= (> (* x 2) 0)` go through, and adds `2q >= -1 |= q >= 0`.
+ *   - EQUALITY ELIMINATION (`eq_eliminate`): the gcd divisibility test on
+ *     every equation (`2x = 2y + 1` is unsat over the integers -- parity),
+ *     then substitution through any unit-coefficient variable, so the test
+ *     re-runs on what the substitution produces.
+ * Both are equivalences over the integers, so the set keeps exactly its
+ * integer models and the refuter only gets stronger.  What is still NOT here
+ * is the rest of the S2c tail: Pugh's sigma-substitution for equations with
+ * no unit coefficient, and the dark/grey shadows (branch-and-bound) for
+ * inequality systems that are rationally feasible but integer-infeasible.
  *
  * PURIFICATION.  Any term the linear encoder cannot see inside -- a VC_VAR, an
  * uninterpreted application (a measure, or a nonlinear product already
@@ -87,6 +98,31 @@ static bool rat_zero(Rat a){ return !a.bad && a.num == 0; }
 static bool rat_pos(Rat a) { return !a.bad && a.num > 0; }
 static bool rat_neg_p(Rat a){ return !a.bad && a.num < 0; }
 static bool rat_is_int(Rat a){ return !a.bad && a.den == 1; }
+/* Exact floor / ceil of a rational (den > 0 by rat_norm). */
+static int64_t rat_floor(Rat a) {
+    int64_t q = a.num / a.den, r = a.num % a.den;
+    return (r != 0 && a.num < 0) ? q - 1 : q;
+}
+static int64_t rat_ceil(Rat a) {
+    int64_t q = a.num / a.den, r = a.num % a.den;
+    return (r != 0 && a.num > 0) ? q + 1 : q;
+}
+/* gcd with gcd(0, x) = |x|, unlike igcd's "1 for the empty case" -- the
+ * integer normalization below accumulates over the nonzero coefficients and
+ * needs the identity element to be 0. */
+static int64_t igcd0(int64_t a, int64_t b) {
+    if (a < 0) a = -a;
+    if (b < 0) b = -b;
+    while (b) { int64_t t = a % b; a = b; b = t; }
+    return a;
+}
+/* lcm of two positive int64s; 0 on overflow. */
+static int64_t ilcm(int64_t a, int64_t b) {
+    int64_t g = igcd0(a, b), r;
+    if (g == 0) return 0;
+    if (__builtin_mul_overflow(a / g, b, &r)) return 0;
+    return r;
+}
 
 /* Convert a double literal to an exact rational when it is safely
  * representable; otherwise mark it bad so the constraint is dropped (dropping
@@ -108,11 +144,19 @@ static Rat rat_of_double(double d) {
  * Linear expressions and constraints
  * ------------------------------------------------------------------------- */
 
-/* `coef[0..n_vars-1] . x + konst  {<,<=}  0` */
+/* `coef[0..n_vars-1] . x + konst  {<,<=,=}  0`
+ *
+ * An equality is kept AS an equality (`is_eq`) rather than split into two
+ * inequalities at assertion time, because the integer phase of `la_unsat`
+ * needs to see it whole: the gcd divisibility test and the substitution step
+ * both work on equations, and neither can be recovered from the pair.  The
+ * split happens inside `la_unsat`, on the equalities the integer phase could
+ * not eliminate, just before Fourier-Motzkin. */
 typedef struct {
     Rat  coef[REFINE_MAX_LA_VARS];
     Rat  konst;
     bool strict;
+    bool is_eq;
     bool bad;
 } LinC;
 
@@ -242,16 +286,98 @@ static LinExp linearize(LaState *st, VCTerm *t, uint32_t depth) {
     return e;
 }
 
-/* True when every variable with a nonzero coefficient is integer-sorted. */
-static bool all_int_vars(LaState *st, const LinExp *e) {
+/* A variable-free constraint that cannot hold. */
+static bool constant_false(const LinC *c, uint32_t n_vars) {
+    for (uint32_t i = 0; i < n_vars; i++) if (!rat_zero(c->coef[i])) return false;
+    if (c->konst.bad) return false;
+    if (c->is_eq) return c->konst.num != 0;
+    return c->strict ? (c->konst.num >= 0) : (c->konst.num > 0);
+}
+
+/* Overwrite `c` with a canonical variable-free contradiction (`0 < 0`), so
+ * whatever scan runs next reports the set unsat.  Used when the integer
+ * normalization finds an equality with no integer solution: the constraint
+ * is not merely tight, it is impossible, and saying so in-band keeps
+ * `la_entails_eq`'s truncate-and-retry discipline working unchanged. */
+static void make_false(LinC *c) {
+    for (uint32_t i = 0; i < REFINE_MAX_LA_VARS; i++) c->coef[i] = rat_of(0);
+    c->konst  = rat_of(0);
+    c->strict = true;
+    c->is_eq  = false;
+    c->bad    = false;
+}
+
+/* INTEGER NORMALIZATION -- the Omega test's "normalize" step, generalizing
+ * the strict-to-non-strict tightening this file always did.
+ *
+ * For a constraint whose every variable with a nonzero coefficient is
+ * int-sorted, the left-hand side is an integer whatever the variables take,
+ * so the rational relaxation Fourier-Motzkin works on can be tightened to the
+ * integer hull of the constraint without losing a single integer solution:
+ *
+ *     clear the coefficient denominators (scale by their lcm, positive);
+ *     sum a_i x_i <  b   ==>   sum a_i x_i <= ceil(b) - 1
+ *     sum a_i x_i <= b   ==>   sum a_i x_i <= floor(b)
+ *     sum a_i x_i <= b   ==>   sum (a_i/g) x_i <= floor(b/g),  g = gcd(a_i)
+ *
+ * Every step is an EQUIVALENCE over the integers, which is what makes it
+ * sound for a refuter: the set keeps exactly its integer models and the
+ * refutation only gets easier.  For an EQUALITY the same step is the gcd
+ * divisibility test -- `sum a_i x_i = b` has an integer solution only if g
+ * divides b -- and a failed test means the whole cube is unsat (`2x = 2y + 1`
+ * has rational solutions and no integer ones; this is what makes S2 decide
+ * parity).  Returns false exactly in that case.
+ *
+ * Any overflow leaves the constraint as it was: unnormalized is still a
+ * valid constraint, just a weaker one. */
+static bool int_normalize(LaState *st, LinC *c) {
+    if (c->bad || c->konst.bad) return true;
+    int64_t L = 1;
+    bool any = false;
     for (uint32_t i = 0; i < st->n_vars; i++) {
-        if (rat_zero(e->coef[i])) continue;
-        if (st->vars[i]->sort != VS_INT) return false;
+        if (rat_zero(c->coef[i])) continue;
+        if (c->coef[i].bad) return true;
+        if (st->vars[i]->sort != VS_INT) return true;   /* a real: no hull */
+        any = true;
+        L = ilcm(L, c->coef[i].den);
+        if (!L) return true;
     }
+    if (!any) return true;                               /* constant: see constant_false */
+
+    Rat Lr = rat_of(L);
+    Rat coef[REFINE_MAX_LA_VARS];
+    int64_t g = 0;
+    for (uint32_t i = 0; i < REFINE_MAX_LA_VARS; i++) coef[i] = rat_of(0);
+    for (uint32_t i = 0; i < st->n_vars; i++) {
+        coef[i] = rat_mul(c->coef[i], Lr);
+        if (coef[i].bad) return true;
+        g = igcd0(g, coef[i].num);
+    }
+    if (g <= 0) return true;
+    /* sum coef x {<,<=,=} b, with b = -(L * konst). */
+    Rat b = rat_neg(rat_mul(c->konst, Lr));
+    if (b.bad) return true;
+
+    int64_t bound;
+    if (c->is_eq) {
+        if (!rat_is_int(b)) { make_false(c); return false; }
+        if (b.num % g != 0)  { make_false(c); return false; }
+        bound = b.num / g;
+    } else {
+        int64_t bi = c->strict ? rat_ceil(b) : rat_floor(b);
+        if (c->strict) { if (bi == INT64_MIN) return true; bi -= 1; }
+        bound = bi / g;
+        if ((bi % g) != 0 && bi < 0) bound--;              /* floor(bi / g) */
+    }
+    if (bound == INT64_MIN) return true;
+    for (uint32_t i = 0; i < st->n_vars; i++) coef[i] = rat_of(coef[i].num / g);
+    memcpy(c->coef, coef, sizeof(c->coef));
+    c->konst  = rat_of(-bound);
+    c->strict = false;
     return true;
 }
 
-static void la_push(LaState *st, LinExp e, bool strict) {
+static void la_push(LaState *st, LinExp e, bool strict, bool is_eq) {
     if (e.bad) return;              /* dropping a constraint only weakens us */
     if (st->n_cs >= REFINE_MAX_LA_CONSTR) {
         refine_caps()->la_constr_hits++;
@@ -268,20 +394,18 @@ static void la_push(LaState *st, LinExp e, bool strict) {
     LinC *c = &st->cs[st->n_cs++];
     memcpy(c->coef, e.coef, sizeof(c->coef));
     c->konst  = e.konst;
-    c->strict = strict;
+    c->strict = strict && !is_eq;
+    c->is_eq  = is_eq;
     c->bad    = false;
 
-    /* Integer tightening: `e < 0` over integral data becomes `e + 1 <= 0`. */
-    if (strict && all_int_vars(st, &e) && rat_is_int(e.konst)) {
-        bool integral = true;
-        for (uint32_t i = 0; i < st->n_vars; i++)
-            if (!rat_is_int(e.coef[i])) { integral = false; break; }
-        if (integral) {
-            c->konst  = rat_add(c->konst, rat_of(1));
-            c->strict = false;
-            if (c->konst.bad) { st->n_cs--; }
-        }
+    /* A variable-free equality is decided here: `0 = 0` says nothing and is
+     * dropped, `0 = 5` is the contradiction constant_false reports. */
+    if (is_eq) {
+        bool any = false;
+        for (uint32_t i = 0; i < st->n_vars; i++) if (!rat_zero(c->coef[i])) { any = true; break; }
+        if (!any) { if (rat_zero(c->konst)) st->n_cs--; return; }
     }
+    (void)int_normalize(st, c);   /* a failed gcd test left `0 < 0` in place */
 }
 
 /* ------------------------------------------------------------------------- *
@@ -299,14 +423,17 @@ LaState *la_new(RefineVC *vc, Arena *a) {
 bool la_assert_le(LaState *st, VCTerm *lhs, VCTerm *rhs, bool strict) {
     LinExp e = lin_add(linearize(st, lhs, 0),
                        lin_scale(linearize(st, rhs, 0), rat_of(-1)));
-    la_push(st, e, strict);
+    la_push(st, e, strict, false);
     return !e.bad;
 }
 
+/* x == y  ==>  x - y = 0, kept as ONE equality so the integer phase of
+ * la_unsat can run the gcd test and substitute through it. */
 bool la_assert_eq(LaState *st, VCTerm *x, VCTerm *y) {
-    bool ok = la_assert_le(st, x, y, false);
-    ok = la_assert_le(st, y, x, false) && ok;
-    return ok;
+    LinExp e = lin_add(linearize(st, x, 0),
+                       lin_scale(linearize(st, y, 0), rat_of(-1)));
+    la_push(st, e, false, true);
+    return !e.bad;
 }
 
 bool la_assert_cube(LaState *st, const VCCube *c) {
@@ -339,15 +466,90 @@ bool la_assert_cube(LaState *st, const VCCube *c) {
 }
 
 /* ------------------------------------------------------------------------- *
- * Fourier-Motzkin
+ * Integer equality elimination (the Omega test's equality phase)
  * ------------------------------------------------------------------------- */
 
-/* A variable-free constraint that cannot hold. */
-static bool constant_false(const LinC *c, uint32_t n_vars) {
-    for (uint32_t i = 0; i < n_vars; i++) if (!rat_zero(c->coef[i])) return false;
-    if (c->konst.bad) return false;
-    return c->strict ? (c->konst.num >= 0) : (c->konst.num > 0);
+/* Eliminate the equalities in `cur[0..*n)` before Fourier-Motzkin sees the
+ * set.  Works on la_unsat's private copy; `cur` has room for 2 * n_in entries
+ * so an equality that has to be split into two inequalities fits.
+ *
+ * For each equality E:  sum a_i x_i + k = 0
+ *   - all-integer with some |a_p| == 1: solve for x_p and SUBSTITUTE into
+ *     every other constraint.  Coefficients stay integral, so the constraints
+ *     it lands in re-normalize (gcd test included) -- which is how a parity
+ *     contradiction two equations deep is found.
+ *   - mixed real/int: Gaussian substitution on any nonzero pivot; exact over
+ *     the rationals, no integer claims made.
+ *   - all-integer with no unit coefficient (`2x + 3y = 1`): the gcd test has
+ *     already run at push time; the equality is now read as the two
+ *     inequalities it always was, which is sound and exactly as complete as
+ *     before this phase existed.  Pugh's sigma-substitution would finish the
+ *     job; see docs/upcoming/solver-integer-tail-plan.md.
+ * Returns false when a contradiction surfaces (the set is unsat). */
+static bool eq_eliminate(LaState *st, LinC *cur, uint32_t *n_io) {
+    uint32_t n_vars = st->n_vars, n = *n_io;
+    for (;;) {
+        uint32_t e = n;
+        for (uint32_t i = 0; i < n; i++) if (cur[i].is_eq) { e = i; break; }
+        if (e == n) break;
+        LinC E = cur[e];
+
+        bool allint = true;
+        for (uint32_t j = 0; j < n_vars; j++)
+            if (!rat_zero(E.coef[j]) && st->vars[j]->sort != VS_INT) { allint = false; break; }
+
+        uint32_t pivot = n_vars;
+        for (uint32_t j = 0; j < n_vars; j++) {
+            if (rat_zero(E.coef[j]) || E.coef[j].bad) continue;
+            if (!allint) { pivot = j; break; }
+            if (E.coef[j].den == 1 && (E.coef[j].num == 1 || E.coef[j].num == -1)) { pivot = j; break; }
+        }
+
+        if (pivot == n_vars) {
+            /* Split into E <= 0 and -E <= 0 in place. */
+            cur[e].is_eq = false; cur[e].strict = false;
+            LinC neg = cur[e];
+            bool bad = false;
+            for (uint32_t j = 0; j < n_vars; j++) {
+                neg.coef[j] = rat_neg(neg.coef[j]);
+                if (neg.coef[j].bad) { bad = true; break; }
+            }
+            neg.konst = rat_neg(neg.konst);
+            if (!bad && !neg.konst.bad) cur[n++] = neg;   /* room: 2 * n_in */
+            continue;
+        }
+
+        /* x_p = -(E - a_p x_p) / a_p ; for constraint C with coefficient c_p on
+         * x_p:  C' = C - (c_p / a_p) * E, which zeroes x_p in C'. */
+        Rat inv = rat_norm(E.coef[pivot].den, E.coef[pivot].num);
+        for (uint32_t i = 0; i < n; i++) {
+            if (i == e || rat_zero(cur[i].coef[pivot])) continue;
+            Rat f = rat_mul(cur[i].coef[pivot], inv);
+            LinC out = cur[i];
+            bool bad = f.bad;
+            for (uint32_t j = 0; j < n_vars && !bad; j++) {
+                out.coef[j] = rat_add(out.coef[j], rat_neg(rat_mul(f, E.coef[j])));
+                if (out.coef[j].bad) bad = true;
+            }
+            if (!bad) { out.konst = rat_add(out.konst, rat_neg(rat_mul(f, E.konst))); bad = out.konst.bad; }
+            if (bad) { cur[i].bad = true; continue; }      /* dropped below: weaker only */
+            out.coef[pivot] = rat_of(0);
+            if (!int_normalize(st, &out)) return false;   /* gcd test failed: unsat */
+            if (constant_false(&out, n_vars)) return false;
+            cur[i] = out;
+        }
+        /* Remove E and any constraint the substitution overflowed. */
+        uint32_t m = 0;
+        for (uint32_t i = 0; i < n; i++) if (i != e && !cur[i].bad) cur[m++] = cur[i];
+        n = m;
+    }
+    *n_io = n;
+    return true;
 }
+
+/* ------------------------------------------------------------------------- *
+ * Fourier-Motzkin
+ * ------------------------------------------------------------------------- */
 
 bool la_unsat(LaState *st) {
     if (st->gave_up) return false;
@@ -356,9 +558,16 @@ bool la_unsat(LaState *st) {
     uint32_t n = st->n_cs;
     if (n == 0) return false;
 
-    LinC *cur = (LinC *)arena_alloc(st->a, (n ? n : 1) * sizeof(LinC));
+    /* Private copy, with room for every equality to split in two. */
+    LinC *cur = (LinC *)arena_alloc(st->a, (2 * n) * sizeof(LinC));
     memcpy(cur, st->cs, n * sizeof(LinC));
 
+    for (uint32_t i = 0; i < n; i++)
+        if (constant_false(&cur[i], n_vars)) return true;
+
+    /* Phase E: integer-exact equality elimination, then the real shadow. */
+    if (!eq_eliminate(st, cur, &n)) return true;
+    if (n == 0) return false;
     for (uint32_t i = 0; i < n; i++)
         if (constant_false(&cur[i], n_vars)) return true;
 
@@ -408,6 +617,9 @@ bool la_unsat(LaState *st) {
                 if (kk.bad) continue;
                 out.konst  = kk;
                 out.strict = cur[i].strict || cur[j].strict;
+                out.is_eq  = false;
+                out.bad    = false;
+                (void)int_normalize(st, &out);   /* never fails for an inequality */
                 if (m < next) nxt[m++] = out;
                 if (constant_false(&out, n_vars)) return true;
             }
