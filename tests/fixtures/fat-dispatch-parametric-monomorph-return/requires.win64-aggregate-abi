@@ -1,7 +1,0 @@
-Skipped on Windows: the fat-dispatch shim selector picks register-return vs
-sret from a hardcoded SysV threshold (> 16 bytes).  Win64 returns aggregates
-via hidden pointer unless the size is 1/2/4/8, so this fixture's 16-byte
-(Box2 int) is sret there, the selector keeps the generic forwarding shim, and
-the signature mismatch jumps to a garbage address on the FIRST call.
-
-docs/reported/win64-aggregate-return-threshold-is-sysv.md

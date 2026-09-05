@@ -417,14 +417,51 @@ static bool thunk_type_has_concrete_c_abi(Type t, bool result_pos) {
     }
 }
 
-bool use_typed_thunk_abi(Type result_type, Type *param_types, uint8_t n_params) {
-    if (!thunk_type_has_concrete_c_abi(result_type, /*result_pos=*/true))
-        return false;
+/* win64-aggregate-return: the result-position window where the two x86-64
+ * ABIs DISAGREE about how an aggregate comes back.
+ *
+ * thunk_type_has_concrete_c_abi keeps a <= 16-byte app monomorph on the
+ * generic forwarding shim (see the TY_APP arm above): under SysV such a value
+ * is returned in RAX:RDX / XMM0:XMM1 and rides the shim's tail-call
+ * untouched, so the generic int64 spelling in slot 0 stays honest for an
+ * erased consumer.  Win64 returns an aggregate in a register ONLY when its
+ * size is exactly 1, 2, 4 or 8 bytes; everything else is sret.  So a
+ * 16-byte (Box2 int) is sret there, the call site's aggregate cast makes the
+ * caller pass a hidden return pointer in RCX, and the generic shim reads
+ * THAT as its env and jumps to garbage -- a SIGSEGV on the first call,
+ * with no diagnostic (fat-dispatch-parametric-monomorph-return).
+ *
+ * Only TY_APP is in play: the TY_ADT arm admits the typed shim at every
+ * size already, so a non-parametric defdata result was never wrong.
+ * Sizes 3, 5, 6, 7 are in the window too -- SysV packs them into a register,
+ * Win64 does not. */
+bool type_app_result_win64_sret_only(Type t) {
+    if (!type_app_is_concrete_adt(&t)) return false;
+    size_t s = adt_app_byval_value_size_bytes(t);
+    if (s == 0 || s > 16) return false;   /* 0: not by-value; > 16: sret on both */
+    return !(s == 1 || s == 2 || s == 4 || s == 8);
+}
+
+/* `win64_result` admits the window above in RESULT position.  It is a
+ * separate gate rather than a change to thunk_type_has_concrete_c_abi so the
+ * SysV decision every existing caller makes is byte-identical: the boxing
+ * site asks twice -- once as before for the `#else` branch, once with this
+ * set for the `#ifdef _WIN32` branch -- and dual-emits only when the two
+ * answers differ.  Parameters are unaffected either way. */
+bool use_typed_thunk_abi_ex(Type result_type, Type *param_types, uint8_t n_params,
+                            bool win64_result) {
+    bool result_ok = thunk_type_has_concrete_c_abi(result_type, /*result_pos=*/true)
+                  || (win64_result && type_app_result_win64_sret_only(result_type));
+    if (!result_ok) return false;
     for (uint32_t i = 0; i < n_params; i++) {
         if (!thunk_type_has_concrete_c_abi(param_types[i], /*result_pos=*/false))
             return false;
     }
     return true;
+}
+
+bool use_typed_thunk_abi(Type result_type, Type *param_types, uint8_t n_params) {
+    return use_typed_thunk_abi_ex(result_type, param_types, n_params, false);
 }
 
 static void append_sanitized_c_token(Buf *out, const char *raw) {
@@ -873,6 +910,68 @@ bool ensure_fatbox_keep(EmitCtx *ctx) {
     return true;
 }
 
+/* Dual-slot-0 form: the preprocessor picks the shim.  `win_shim` is the typed
+ * shim the Win64 sret-only window needs; `sysv_shim` is whatever the SysV
+ * decision produced (the generic __tur_fatshim<arity>).  Same static box,
+ * same fill, one `#ifdef _WIN32` around the slot-0 line.  Keyed on all three
+ * names so it never aliases a single-shim box for the same fn. */
+const char *ensure_static_fatbox_dual(EmitCtx *ctx, const char *win_shim,
+                                      const char *sysv_shim, const char *fnptr) {
+    if (!ctx || !ctx->fatbox_init || !ctx->thunk_typedefs) return NULL;
+    if (!win_shim || !*win_shim || !sysv_shim || !*sysv_shim || !fnptr || !*fnptr)
+        return NULL;
+
+    Buf key; buf_init(&key);
+    buf_puts(&key, win_shim); buf_putc(&key, '|');
+    buf_puts(&key, sysv_shim); buf_putc(&key, '|'); buf_puts(&key, fnptr);
+    buf_putc(&key, '\0');
+    for (uint32_t i = 0; i < ctx->n_fatbox_keys; i++) {
+        if (strcmp(ctx->fatbox_keys[i], key.data) == 0) {
+            buf_free(&key);
+            return ctx->fatbox_names[i];
+        }
+    }
+    if (ctx->n_fatbox_keys >= ctx->cap_fatbox_keys) {
+        uint32_t nc = ctx->cap_fatbox_keys ? ctx->cap_fatbox_keys * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatbox_keys, nc * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatbox_keys = nn;
+        char **nm = (char **)realloc(ctx->fatbox_names, nc * sizeof(char *));
+        if (!nm) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatbox_names = nm;
+        ctx->cap_fatbox_keys = nc;
+    }
+    uint32_t idx = ctx->n_fatbox_keys++;
+    ctx->fatbox_keys[idx] = strdup(key.data);
+    if (!ctx->fatbox_keys[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    buf_free(&key);
+    {
+        char nb[96];
+        snprintf(nb, sizeof nb, "__tur_fatbox_%u", (unsigned)idx);
+        ctx->fatbox_names[idx] = strdup(nb);
+        if (!ctx->fatbox_names[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    ensure_fatbox_keep(ctx);
+    buf_printf(ctx->thunk_typedefs,
+        "static union { void *__a; int64_t __b;\n"
+        "               char __c[sizeof(void *) + 2 * sizeof(int64_t)]; }\n"
+        "    __tur_fatbox_%u = { .__a = (void *)__tur_fatbox_keep };\n",
+        (unsigned)idx);
+    /* Directives must start a line; the fill block is inside a function. */
+    buf_printf(ctx->fatbox_init,
+        "    { char *__b = (char *)&__tur_fatbox_%u;\n"
+        "      int64_t *__s = (int64_t *)(__b + sizeof(void *));\n"
+        "#ifdef _WIN32\n"
+        "      __s[0] = (int64_t)(intptr_t)%s;\n"
+        "#else\n"
+        "      __s[0] = (int64_t)(intptr_t)%s;\n"
+        "#endif\n"
+        "      __s[1] = (int64_t)(intptr_t)%s; }\n",
+        (unsigned)idx, win_shim, sysv_shim, fnptr);
+
+    return ctx->fatbox_names[idx];
+}
+
 const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
                                         const char *fnptr) {
     if (!ctx || !ctx->fatbox_init || !ctx->thunk_typedefs) return NULL;
@@ -1029,10 +1128,20 @@ const char *ensure_catch_bits_shim(EmitCtx *ctx, Type result_type) {
 
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params) {
+    return ensure_typed_fatshim_ex(ctx, result_type, param_types, n_params, false);
+}
+
+char *ensure_typed_fatshim_ex(EmitCtx *ctx,
+                              Type result_type, Type *param_types, uint8_t n_params,
+                              bool win64_result) {
     /* The call site invokes the boxed fn through the typed-thunk cast only when
      * use_typed_thunk_abi holds; otherwise it falls back to the int64_t fat-call
-     * path that the preamble __tur_fatshim<arity> shim already satisfies. */
-    if (!use_typed_thunk_abi(result_type, param_types, n_params)) return NULL;
+     * path that the preamble __tur_fatshim<arity> shim already satisfies.
+     * `win64_result` widens the RESULT gate to the Win64 sret-only window
+     * (type_app_result_win64_sret_only); the shim body is unchanged, because
+     * it declares the real aggregate signature and cc does the sret. */
+    if (!use_typed_thunk_abi_ex(result_type, param_types, n_params, win64_result))
+        return NULL;
     /* All-int64_t carrier signatures are likewise served by the preamble shim
      * (its int64_t (*)(void *, int64_t...) ABI equals the typed-thunk cast),
      * so emit nothing new and keep int64 fixtures churn-free. */

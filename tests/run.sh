@@ -591,17 +591,6 @@ run_happy() {
         write_result "PASS" "$name" "(posix-apis-skipped)" ""
         return
     fi
-    # requires.win64-aggregate-abi: the fat-dispatch shim selector decides
-    # register-return vs sret from a hardcoded SysV threshold
-    # (adt_app_byval_pass_by_ptr: size > 16).  Win64 returns an aggregate via
-    # hidden pointer unless its size is 1/2/4/8, so a 16-byte monomorph is sret
-    # there while the selector still calls it register-returned, keeps the
-    # generic forwarding shim, and the signature lie jumps to garbage.  Tracked
-    # in docs/reported/win64-aggregate-return-threshold-is-sysv.md.
-    if [ -f "$dir/requires.win64-aggregate-abi" ] && [ "$TUR_HOST_WINDOWS" = "1" ]; then
-        write_result "PASS" "$name" "(win64-aggregate-abi-skipped)" ""
-        return
-    fi
     # requires.win-concurrent-loopback: needs several concurrent loopback HTTP
     # connections to make progress.  httpd-async-limit HANGS on GitHub's Windows
     # runners -- no output, killed at the per-fixture timeout at both 10s and
@@ -937,17 +926,6 @@ run_negative() {
     # POSIX-API skip (mirrors the happy-path guard above).
     if [ -f "$dir/requires.posix-apis" ] && [ "$TUR_HOST_WINDOWS" = "1" ]; then
         write_result "PASS" "$name" "(posix-apis-skipped)" ""
-        return
-    fi
-    # requires.win64-aggregate-abi: the fat-dispatch shim selector decides
-    # register-return vs sret from a hardcoded SysV threshold
-    # (adt_app_byval_pass_by_ptr: size > 16).  Win64 returns an aggregate via
-    # hidden pointer unless its size is 1/2/4/8, so a 16-byte monomorph is sret
-    # there while the selector still calls it register-returned, keeps the
-    # generic forwarding shim, and the signature lie jumps to garbage.  Tracked
-    # in docs/reported/win64-aggregate-return-threshold-is-sysv.md.
-    if [ -f "$dir/requires.win64-aggregate-abi" ] && [ "$TUR_HOST_WINDOWS" = "1" ]; then
-        write_result "PASS" "$name" "(win64-aggregate-abi-skipped)" ""
         return
     fi
     # requires.win-concurrent-loopback: needs several concurrent loopback HTTP

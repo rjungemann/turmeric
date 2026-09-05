@@ -1049,6 +1049,13 @@ void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst);
 void collect_defined(const Expr *e, Binding ***defs, uint32_t *ndefs, uint32_t *cdefs);
 Binding **collect_handle_captures(const Expr *body, uint32_t *n_out);
 bool use_typed_thunk_abi(Type result_type, Type *param_types, uint8_t n_params);
+/* win64-aggregate-return: the result window where Win64 uses sret and SysV
+ * uses registers (a concrete app monomorph, <= 16 bytes, not 1/2/4/8). */
+bool type_app_result_win64_sret_only(Type t);
+/* use_typed_thunk_abi with `win64_result` admitting that window in result
+ * position; the plain form is this with false, so SysV is unchanged. */
+bool use_typed_thunk_abi_ex(Type result_type, Type *param_types, uint8_t n_params,
+                            bool win64_result);
 char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
                                  Type result_type, Type *param_types, uint8_t n_params);
 /* fn-value-fat-normalization (effect-row increment): fat-closure env struct +
@@ -1071,6 +1078,10 @@ const char *emit_env_struct_fn_typedef(EmitCtx *ctx, const Symbol *env_name);
  * __tur_fatshim<arity> shim instead) -- this keeps int64 fixtures churn-free. */
 const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
                                  const char *fnptr);
+/* Same box with slot 0 chosen by the preprocessor: `win_shim` under _WIN32,
+ * `sysv_shim` otherwise.  For the Win64 sret-only result window. */
+const char *ensure_static_fatbox_dual(EmitCtx *ctx, const char *win_shim,
+                                      const char *sysv_shim, const char *fnptr);
 /* Emit the no-op drop glue the static / stack fat boxes carry as their
  * header, once.  False when there is nowhere to put it. */
 bool ensure_fatbox_keep(EmitCtx *ctx);
@@ -1094,6 +1105,11 @@ const char *ensure_catch_bits_shim(EmitCtx *ctx, Type result_type);
 
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params);
+/* ... with `win64_result` widening the result gate to the Win64 sret-only
+ * window.  The plain form is this with false. */
+char *ensure_typed_fatshim_ex(EmitCtx *ctx,
+                              Type result_type, Type *param_types, uint8_t n_params,
+                              bool win64_result);
 /* arrow-struct-typed-arrow-abi: the erased-carrier fatshim used when the typed
  * shim is declined but a parameter is a wide by-value aggregate -- slot 0 keeps
  * the `int64_t (*)(void *, int64_t...)` spelling the erased call site casts to,

@@ -77,5 +77,5 @@ removed until the ten fixtures below stop spelling `/tmp` literally.
 
 ## Related
 
-- [win64-aggregate-return-threshold-is-sysv.md](win64-aggregate-return-threshold-is-sysv.md)
+- [win64-aggregate-return-threshold-is-sysv.md](../archive/win64-aggregate-return-threshold-is-sysv.md) (resolved)
 - [docs/upcoming/v1/windows-remaining-plan.md](../upcoming/v1/windows-remaining-plan.md)
