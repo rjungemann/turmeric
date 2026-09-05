@@ -1211,7 +1211,29 @@ Expr *elab_let(Elab *e, const Form *call) {
              * thin ER2 path (which casts the fat box to a bare fn pointer and
              * crashes).  A bare ^fat alias is :ptr<void> and fat-dispatches
              * regardless, but carrying is_fat keeps the two forms consistent. */
-            if (init_b->is_fat) {
+            /* fn-value-carrier-fat-seam-residuals (nominal-param alias): the
+             * marker also has to carry for a param that is fat by NORMALIZATION
+             * rather than by annotation.  `f : (fn [int] Pair2)` holds a fat
+             * handle at runtime -- the callee's invoke dispatches fat, keyed on
+             * `fn_param_type_is_fat_normalized` -- but `is_fat` is false on it,
+             * because that flag records the `^fat` ANNOTATION.
+             *
+             * Without this, `(let [g f] ... (h g ...))` re-shims the alias into
+             * a SECOND `__tur_fatshim` box, and the consumer reads the inner
+             * handle's first word as code:
+             *
+             *   (defn use3 [f : (fn [int] Pair2)] : int
+             *     (let [g f] (.a (apply2 g 5))))        ;; SEGV; without the
+             *                                           ;; alias it is fine
+             *
+             * The call-site pass-through already knows about both kinds -- its
+             * comment even says "a ^fat parameter (or a let-alias of one)" --
+             * but its normalized arm requires `is_param`, which an alias is not.
+             * Carrying the fact on the alias fixes it for every guard keyed on
+             * `is_fat` rather than for that one call site. */
+            if (init_b->is_fat ||
+                (init_b->is_param &&
+                 fn_param_type_is_fat_normalized(&init_b->type))) {
                 b->is_fat = true;
             }
             if (init_b->is_poly_fn) {

@@ -83,6 +83,13 @@ top layer to look. **A workaround's recorded blocker is a hypothesis until
 someone takes the workaround out.** Taking it out cost one afternoon; the row
 had carried a wrong blocker for three days and a superseded one for longer.
 
-Two adjacent defects surfaced while writing a regression fixture for the emit
-fix and are filed separately:
-[let-alias-of-fn-param-captured-in-lambda](../reported/let-alias-of-fn-param-captured-in-lambda.md).
+Two adjacent symptoms surfaced while writing a regression fixture for the emit
+fix. They turned out to be ONE defect, unrelated to the lambda they were first
+seen through, and were fixed the same day:
+[let-alias-of-fn-param-captured-in-lambda](let-alias-of-fn-param-captured-in-lambda.md).
+A fn-typed param that is fat by NORMALIZATION rather than by the `^fat`
+ANNOTATION did not carry that fact through a let alias, so the alias was
+re-shimmed into a second fat box. Three lines in `elab_forms.c`.
+
+That makes FOUR layers, not three -- and the fourth was only reachable once the
+first three were gone.

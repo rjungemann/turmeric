@@ -1,7 +1,7 @@
 ---
 title: A let-alias of a fn-typed parameter is mishandled when captured into a lambda
-category: Reported
-description: `(let [g f] ... (fn [] ... g ...))` where `f` is a fn-typed parameter. In callee position the lifted body names `g` directly and the emitted C says "'g' undeclared"; in argument position it compiles and segfaults. Pre-existing (both symptoms reproduce against a compiler without the fat-alias declaration fix), and adjacent to the -Wint-conversion straddle that fix closed.
+category: Archive
+description: RESOLVED 2026-09-05, same day, in three lines. Both symptoms were one defect and the lambda was not part of it -- the minimal repro has no lambda at all. A fn-typed param that is fat by NORMALIZATION rather than by the ^fat ANNOTATION did not carry that fact through a let alias, so every guard keyed on is_fat re-shimmed the alias into a second fatshim box.
 ---
 
 # A let-alias of a fn-typed parameter is mishandled when captured into a lambda
@@ -94,3 +94,70 @@ costs a few probes. Case 1 is likely the simpler of the two and may be
 independent: a fn-typed local in callee position inside a lifted lambda needs to
 join the capture set, which is a question about `collect_free_vars` rather than
 about representation.
+
+
+---
+
+# Resolution, 2026-09-05
+
+Fixed the same day it was filed, in three lines, and **the filing's framing was
+wrong in two ways**. Both are worth keeping because the bisection that found
+them is the cheap part anyone could have run.
+
+## The lambda is not part of it
+
+The report presents two cases, both involving a capture into a lambda. The
+minimal repro has **no lambda and no capture**:
+
+```turmeric
+(defn use3 [f : (fn [int] Pair2)] : int
+  (let [g f]                     ;; alias a fn-typed PARAM
+    (.a (apply2 g 5))))          ;; forward the alias
+```
+
+-- SEGV, while `(apply2 f 5)` without the alias is fine. Four probes got there:
+passing the param directly works, aliasing a LOCAL works, forwarding the param
+without an alias works, aliasing the PARAM does not. The lambda in the filed
+repro was incidental scaffolding.
+
+## The two cases are one defect
+
+They are not "callee position" and "argument position" behaving differently.
+Both are the same missing fact, and the same three-line change fixes both.
+
+## What it was
+
+A fn-typed parameter can be fat two ways: by the `^fat` ANNOTATION (which sets
+`Binding.is_fat`) or by NORMALIZATION (`fn_param_type_is_fat_normalized`, keyed
+on the type -- the callee's invoke dispatches fat either way). The let-alias
+propagation in `elab_forms.c` carried only the first:
+
+```c
+if (init_b->is_fat) { b->is_fat = true; }
+```
+
+So an alias of a normalized nominal param lost the fact, and the call-site
+pass-through re-shimmed it into a second `__tur_fatshim` box:
+
+```c
+int64_t g = (int64_t)(intptr_t)(f);
+__t185[0] = (int64_t)(intptr_t)__tur_fatshim_tur_adt_Pair2_int64_t;
+__t185[1] = (int64_t)(intptr_t)g;        /* g is ALREADY a fat handle */
+apply2((int64_t)(intptr_t)(__t187), 5);
+```
+
+The consumer then reads the inner handle's first word as code.
+
+The pass-through's own comment says it covers "a `^fat` parameter (or a
+let-alias of one)", and it does test both kinds -- but its normalized arm
+requires `is_param`, which an alias is not. Carrying the fact on the ALIAS fixes
+it for every guard keyed on `is_fat` rather than for that one call site.
+
+## The result type is why this hid
+
+An `int`-returning callback never failed: the double-box only misbehaves once
+the result is a by-value aggregate. `defstruct` and `:copy defdata` results both
+failed, so it is not a defstruct-lowering question. `tests/fixtures/let-alias-of-fat-fn-param`
+carries all of it -- both repro positions, the no-alias control, the
+int-result control, and both aggregate flavours -- and fails on the pre-fix
+compiler.

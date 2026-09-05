@@ -1,0 +1,81 @@
+;; fn-value-carrier-fat-seam-residuals: `(let [g f] ...)` where `f` is a
+;; fn-typed PARAMETER that is fat by NORMALIZATION rather than by annotation.
+;;
+;; `f : (fn [int] Pair2)` holds a fat { thunk, env } handle at runtime -- the
+;; callee's invoke dispatches fat, keyed on `fn_param_type_is_fat_normalized` --
+;; but `is_fat` is false on it, because that flag records the `^fat` ANNOTATION.
+;; The let-alias propagation only carried `is_fat`, so the alias lost the fact
+;; and every downstream guard keyed on it re-shimmed the alias into a SECOND
+;; `__tur_fatshim` box.  The consumer then reads the inner handle's first word
+;; as code.
+;;
+;; Two symptoms, both fixed by carrying the fact on the alias:
+;;
+;;   argument position  ->  emitted C builds, SEGV at run time
+;;   callee position    ->  emitted C says "'g' undeclared" (the lifted lambda
+;;                          named the alias directly instead of reading it from
+;;                          the env)
+;;
+;; The trigger is the ALIAS.  `use-direct` below passes the parameter itself and
+;; has always worked, and it is the control: a fixture without it would not
+;; distinguish this defect from "passing a fn value is broken".
+;;
+;; The result type matters too, and the controls pin that: an `int`-returning
+;; callback never failed, because the double-box only misbehaves once the
+;; result is a by-value aggregate.  Both `defstruct` and `:copy defdata`
+;; results failed, so this is not a defstruct-lowering question.
+
+(defstruct Pair2 :copy [a : int b : int])
+(defdata P2d :copy (P2d :int :int))
+
+(defn mk [n : int] : (fn [int] Pair2)
+  (fn [x : int] : Pair2 (make-struct Pair2 :a n :b x)))
+(defn mk-d [n : int] : (fn [int] P2d)
+  (fn [x : int] : P2d (P2d n x)))
+(defn mk-i [n : int] : (fn [int] int)
+  (fn [x : int] : int (+ n x)))
+
+(defn apply2   [f : (fn [int] Pair2) x : int] : Pair2 (f x))
+(defn apply2-d [f : (fn [int] P2d)   x : int] : P2d   (f x))
+(defn apply2-i [f : (fn [int] int)   x : int] : int   (f x))
+
+(defn p2d-a [p : P2d] : int (match p (P2d a b) a))
+
+;; THE REPRO, argument position, no lambda: the alias is forwarded to another
+;; fn-typed parameter.
+(defn via-alias [f : (fn [int] Pair2)] : int
+  (let [g f]
+    (.a (apply2 g 5))))
+
+;; Control: the parameter itself, no alias.  Always worked.
+(defn use-direct [f : (fn [int] Pair2)] : int
+  (.a (apply2 f 5)))
+
+;; The same alias with a `:copy defdata` result.
+(defn via-alias-d [f : (fn [int] P2d)] : int
+  (let [g f]
+    (p2d-a (apply2-d g 5))))
+
+;; Control: an int result never failed -- the double-box only bites once the
+;; result is a by-value aggregate.
+(defn via-alias-i [f : (fn [int] int)] : int
+  (let [g f]
+    (apply2-i g 5)))
+
+;; THE REPRO, callee position: the alias is CAPTURED into a lambda and called
+;; there.  This was `'g' undeclared` in the emitted C.
+(defn deferred [f : (fn [int] Pair2) v : int] : (fn [] Pair2)
+  (let [g f
+        w v]
+    (fn [] : Pair2 (g w))))
+
+(defn main [] : int
+  (println (via-alias   (mk 7)))     ;; 7
+  (println (use-direct  (mk 9)))     ;; 9
+  (println (via-alias-d (mk-d 3)))   ;; 3
+  (println (via-alias-i (mk-i 4)))   ;; 4 + 5 = 9
+  (let [th (deferred (mk 1) 2)
+        p  (th)]
+    (println (.a p))                 ;; 1
+    (println (.b p)))                ;; 2
+  0)
