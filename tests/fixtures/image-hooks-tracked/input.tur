@@ -12,6 +12,28 @@
 ;;            and the loop reads 99 back through it.
 ;; A finalize hook (flush-stdio) flushes buffered output before each save.
 
+(defn tmp-path [name : cstr] : cstr
+  ```c
+  /* Resolve a scratch path at RUN TIME instead of hardcoding "/tmp/...".
+   *
+   * A compiled fixture is a NATIVE Windows binary, so its CRT resolves a
+   * leading "/tmp" against the CURRENT DRIVE ROOT (C:\tmp, D:\tmp) rather than
+   * the way the MSYS shell does.  Where that directory does not exist the open
+   * simply failed and the fixture printed nothing.  tests/run.sh exports
+   * TUR_TEST_TMPDIR; the "/tmp" fallback keeps this runnable by hand on POSIX.
+   *
+   * Four rotating buffers so a call like (f (tmp-path "a") (tmp-path "b"))
+   * does not have the second call clobber the first. */
+  static char bufs[4][512];
+  static int slot = 0;
+  char *buf = bufs[slot];
+  slot = (slot + 1) & 3;
+  const char *d = getenv("TUR_TEST_TMPDIR");
+  if (!d || !*d) d = "/tmp";
+  snprintf(buf, sizeof bufs[0], "%s/%s", d, name);
+  return buf;
+  ```)
+
 (load "stdlib/image.tur")
 (load "stdlib/image_hooks.tur")
 
@@ -32,8 +54,8 @@
 
 (defn do-init [] : int
   (do
-    (write-data "/tmp/tur-image-hooks-tracked.txt" 99)
-    (image-hooks/track-file! "/tmp/tur-image-hooks-tracked.txt" "r")
+    (write-data (tmp-path "tur-image-hooks-tracked.txt") 99)
+    (image-hooks/track-file! (tmp-path "tur-image-hooks-tracked.txt") "r")
     (println "init: wrote + tracked data = 99")
     0))
 
@@ -44,12 +66,12 @@
   (do
     (image-hooks/use-reopen-tracked!)
     (image-hooks/use-flush-stdio!)
-    (img-rm "/tmp/tur-image-hooks-tracked.img")
-    (img-rm "/tmp/tur-image-hooks-tracked.txt")
+    (img-rm (tmp-path "tur-image-hooks-tracked.img"))
+    (img-rm (tmp-path "tur-image-hooks-tracked.txt"))
     (println "cold:")
-    (with-image-cache-after-init "/tmp/tur-image-hooks-tracked.img" do-init do-loop)
+    (with-image-cache-after-init (tmp-path "tur-image-hooks-tracked.img") do-init do-loop)
     (println "warm:")
-    (with-image-cache-after-init "/tmp/tur-image-hooks-tracked.img" do-init do-loop)
-    (img-rm "/tmp/tur-image-hooks-tracked.img")
-    (img-rm "/tmp/tur-image-hooks-tracked.txt")
+    (with-image-cache-after-init (tmp-path "tur-image-hooks-tracked.img") do-init do-loop)
+    (img-rm (tmp-path "tur-image-hooks-tracked.img"))
+    (img-rm (tmp-path "tur-image-hooks-tracked.txt"))
     0))
