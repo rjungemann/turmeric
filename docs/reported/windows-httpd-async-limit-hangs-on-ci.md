@@ -158,6 +158,25 @@ to make it visible.
 
 ### Fix directions
 
+**Defect 2 is FIXED.**  `alloc_source` now recycles slots, DEFERRED by one
+poll.  Under the same spin `sources_len` went from 3953 -> 5285 in five
+seconds to **9 and flat**, so a poll now costs O(active) rather than
+O(sources-ever-created).  Pinned by `tests/reactor_slot_reuse_unit.c`, which
+fails against immediate recycling and passes against the deferred version.
+
+The deferral is the non-obvious half.  `tick_timers` holds `src` across the
+callback it runs and writes through it afterwards, so if that callback both
+REMOVES a source and REGISTERS one, immediate recycling hands the freed slot
+to the new registration and the post-callback write deactivates it.  Both
+halves are required: an ordinary re-arming timer callback does NOT trigger
+it (measured), because tick_timers deactivates a one-shot directly and never
+calls `tur_reactor_remove`.  Nothing in-tree does both today --
+`local_park_wake` removes but does not register -- so the deferral is
+defensive against a shape the API permits.
+
+**Defect 1 is untouched**, so the fixture still spins and stays skipped on
+Windows; the spin is simply cheap and non-growing now.
+
 For defect 2 -- reuse an inactive slot in `alloc_source` instead of appending.
 Source ids come from a separate monotonic `next_id`, so a reused slot still
 gets a fresh id and a stale id cannot alias it. Contained, and testable by
