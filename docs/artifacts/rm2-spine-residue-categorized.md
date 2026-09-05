@@ -54,7 +54,7 @@ these programs have no reason to write `bt-scope`, which is a backtracking
 primitive. This is precisely the `with-region` surface form RM3's R5 named as
 its graduation blocker.
 
-### Category 2 -- 312 B, and the bracket is a no-op
+### Category 2 -- 312 B, and the bracket is a no-op (partly fixed 2026-09-05)
 
 `stdlib/re.tur`'s `re-find-from` is the textbook region and it does not work.
 
@@ -68,10 +68,16 @@ The `RxPos` cells are built by `re-step-*`, consumed by `re-pos-max` inside
 static walk ACCEPTS.
 
 So a bracket belongs there, the walk would let it rewind, and putting one there
-today reclaims nothing: a `bt-scope` whose result is a by-value record emits
-**zero** `tur_region_push()` calls. Filed as
-[region-bracket-lost-when-bt-scope-specializes](../reported/region-bracket-lost-when-bt-scope-specializes.md).
-It compiles, runs, prints the right answer, and silently does not open a region.
+today reclaims nothing: a `bt-scope` whose result is a by-value record emitted
+**zero** `tur_region_push()` calls. It compiled, ran, printed the right answer,
+and silently did not open a region.
+
+**Half of that is fixed** -- the bracket is emitted now
+([archived](../archive/region-bracket-lost-when-bt-scope-specializes.md)) -- and
+the other half is that the walk does NOT in fact accept `(RxIP :int :int)`, as
+this section claimed. It refuses at field 0, because a plain `:int` field
+records no `full_type`. See step 1 of the order of work below and
+[region-walk-refuses-every-adt-result](../reported/region-walk-refuses-every-adt-result.md).
 
 ### Category 3 -- 96 B, genuinely RM2's
 
@@ -113,12 +119,23 @@ exactly one fixture wide.
 
 1. ~~**Fix the CPS specialization arm.**~~ **Done 2026-09-05** -- the call's own
    result type is now a discriminator in `find_mono_clone_for_call`, and both
-   faces are pinned by a fixture each. **The region bracket did NOT ride along**,
-   which this step predicted it would: the callee resolves correctly now and the
-   push is still absent, because the `cps->cps` arm carries no bracket at all.
-   Checked after the fix, not assumed. Category 2 therefore still needs
-   [region-bracket-lost-when-bt-scope-specializes](../reported/region-bracket-lost-when-bt-scope-specializes.md)
-   closed on its own.
+   faces are pinned by a fixture each. The region bracket did NOT ride along, as
+   this step predicted it would; it was
+   [fixed separately](../archive/region-bracket-lost-when-bt-scope-specializes.md)
+   the same day by routing a region boundary to `cps->direct`, the only arm the
+   bracket can live on.
+
+   **Category 2 is still not reclaimed, and the blocker moved rather than
+   closing.** `re-find-from` gets a bracket now, and that bracket RETIRES rather
+   than rewinding, because the static walk refuses on a ctor field with no
+   recorded `full_type` -- which is every ordinary `:int`, not just the spine its
+   comment describes. Deciding by the field's kind is unsound and was measured
+   so (a genuine `:int` and a carrier-erased ADT field both report `TY_INT`;
+   accepting on kind reclaimed a live mutually-recursive spine and printed 0
+   instead of 42). Now
+   [region-walk-refuses-every-adt-result](../reported/region-walk-refuses-every-adt-result.md),
+   with the source of truth named: `c->field_forms[fi]` is populated for plain
+   defdata, so this is a layering question, not a missing fact.
 2. **Add a `with-region` bracket.** Category 1's 496 B is unreachable without it
    and needs nothing else; category 2's 312 B needs it plus the region-bracket fix in step 1's follow-up.
 3. **Then re-measure.** What is left should be category 3 and whatever step 2

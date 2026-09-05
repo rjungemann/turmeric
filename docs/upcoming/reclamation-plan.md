@@ -639,17 +639,21 @@ something nothing in the tree had done:
   emitter call arm picked a specialization that was not this call's.
   **Fixed 2026-09-05**: the call's own result type now discriminates in
   `find_mono_clone_for_call`.
-- [region-bracket-lost-when-bt-scope-specializes](../reported/region-bracket-lost-when-bt-scope-specializes.md)
-  -- the same arm emitting no region push at all for a non-scalar result. This
-  is what makes category 2 a no-op: `re.tur`'s `re-find-from` is the textbook
-  region (spine built and died inside one call, result `(RxIP :int :int)`, which
-  the static walk accepts) and a bracket there reclaims nothing today, with no
-  diagnostic.
+- [region-bracket-lost-when-bt-scope-specializes](../archive/region-bracket-lost-when-bt-scope-specializes.md)
+  -- the same arm emitting no region push at all for a non-scalar result.
+  **Fixed 2026-09-05**: a region boundary takes `cps->direct`, the only arm the
+  bracket can live on.
 
-Order of work: the CPS arm is done. **The bracket did NOT ride along on it** --
-that was this section's prediction and it was wrong; the callee resolves
-correctly now and the push is still absent, because the `cps->cps` arm carries
-no bracket at all. So: close the region-bracket report on its own, add the
+Category 2 is still not reclaimed after both, and the reason moved rather than
+closing. This section claimed the static walk ACCEPTS `(RxIP :int :int)`; it
+does not -- it refuses at field 0, because a plain `:int` ctor field records no
+`full_type`, which its comment attributes only to the self-recursive spine.
+Deciding such a field by its `kind` is unsound and was measured so, so that is
+now [region-walk-refuses-every-adt-result](../reported/region-walk-refuses-every-adt-result.md).
+
+Order of work: the CPS arm and the bracket are both done (separately -- the
+bracket did NOT ride along on the CPS fix, which was this section's prediction
+and was wrong). Next: widen the walk so an ADT result can be proved, add the
 `with-region` form, then re-measure.
 
 RM3's gate is "RM0(b), and RM1 landed".  RM1 is now landed to its unstampable

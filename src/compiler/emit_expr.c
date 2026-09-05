@@ -4769,11 +4769,52 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
             Type args[16];
             uint8_t n_args = 0;
             Type probe = rt;
-            if (!type_extract_adt_app(&probe, &def, args, &n_args) || !def)
-                return true;
+            if (!type_extract_adt_app(&probe, &def, args, &n_args) || !def) {
+                /* A NON-PARAMETRIC ADT is not an "app", and this is the only
+                 * door it has: type_extract_adt_app returns false outright when
+                 * `def->n_type_params == 0` (types.c), so a plain `(defdata
+                 * RxPair (RxIP :int :int))` came in here as a bare TY_ADT, found
+                 * no app, and was refused -- along with every other
+                 * non-parametric `defdata` result a bracket could return.
+                 *
+                 * Read its def directly and continue with zero type arguments.
+                 * The rest of this case is unchanged and is what does the actual
+                 * proving: `is_heap` still refuses, and every ctor's every field
+                 * is still walked, with an unknown `full_type` (the self-
+                 * recursive spine) still reading as "reaches".  So this admits
+                 * exactly the shapes the parametric path already admits --
+                 * `region-scope-adt-result` pins the accepting one and
+                 * `region-scope-escape-refused` the recursive one. */
+                if (rt.kind == TY_ADT && rt.as.adt_.def) {
+                    def = rt.as.adt_.def;
+                    n_args = 0;
+                } else {
+                    return true;
+                }
+            }
             if (def->is_heap) return true;       /* THE node R2 routes */
+            /* `seen` is the current PATH, not a visited set, and the difference
+             * is a use-after-free.  It used to read a repeat as "already fully
+             * explored" and return false -- but a def reached again while it is
+             * still on the path means the type is CYCLIC, which is exactly
+             * "reaches a node".  Mutual recursion is the shape that shows it:
+             *
+             *   (defdata MB :copy (MBnil) (MBcons :int :MA))
+             *   (defdata MA :copy (MAnil) (MAcons :int :MB))
+             *
+             * Neither def is self-recursive, so `is_self_recursive` does not
+             * catch either, and MA -> MB -> MA hit the old cycle-break and
+             * "proved" MA reaches nothing.  A bracket returning one then
+             * rewound the spine it was handing back: measured at `(sumA (esc 6)
+             * 0)` printing 0 instead of 42 -- a silent wrong answer, the exact
+             * class the plan's safety rule exists to prevent.
+             *
+             * So: a hit is a cycle and refuses, and the entry is POPPED once the
+             * def is fully explored, which keeps a benign repeat (the same
+             * non-recursive ADT in two sibling fields) re-provable instead of
+             * refused.  Bounded by the 32 slots and the depth budget. */
             for (uint32_t i = 0; i < *n_seen; i++)
-                if (seen[i] == def) return false;   /* already fully explored */
+                if (seen[i] == def) return true;    /* cyclic: reaches */
             if (*n_seen >= 32) return true;         /* out of budget */
             seen[(*n_seen)++] = def;
             for (uint8_t i = 0; i < n_args; i++)
@@ -4786,16 +4827,35 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
                 for (uint32_t fi = 0; fi < c->n_fields; fi++) {
                     const Type *ft = c->fields[fi].full_type;
                     /* A SELF-RECURSIVE field's full_type is deliberately NULL
-                     * (see AdtDef.is_recursive in types.h: recording a carrier
-                     * full_type there would misclassify the field read).  That
-                     * is precisely the spine -- and precisely what the R4 boxing
-                     * site allocates -- so unknown reads as "reaches" and a
-                     * recursive result is refused. */
+                     * (see AdtDef.is_self_recursive in types.h: recording a
+                     * carrier full_type there would misclassify the field read).
+                     * That is precisely the spine -- and precisely what the R4
+                     * boxing site allocates -- so unknown reads as "reaches" and
+                     * a recursive result is refused.
+                     *
+                     * NULL is NOT only the spine, and that is why this refuses
+                     * more than it would like: `full_type` is populated for a
+                     * type-variable field (TP1) and left NULL for an ordinary
+                     * `:int`, so `(defdata RxPair (RxIP :int :int))` -- two
+                     * machine integers -- is refused here.  Widening it needs a
+                     * source of truth this struct does not carry: MEASURED, a
+                     * genuine `:int` field and a carrier-erased `:MB` ADT field
+                     * both report `kind == TY_INT` with no `full_type`, so the
+                     * field's kind cannot tell them apart, and accepting on kind
+                     * turned a mutually-recursive result into a use-after-free
+                     * (`(sumA (esc 6) 0)` printing 0 instead of 42).  The
+                     * declared form IS reachable (`c->field_forms[fi]` is
+                     * populated for plain defdata, contrary to its comment), so
+                     * the widening is available to whoever wants it -- it needs
+                     * form-to-type resolution at emit time, which is a layering
+                     * question, not a missing fact.  See
+                     * docs/reported/region-bracket-lost-when-bt-scope-specializes.md. */
                     if (!ft) return true;
                     if (region_type_reaches_node(ctx, *ft, seen, n_seen, depth - 1))
                         return true;
                 }
             }
+            (*n_seen)--;   /* fully explored and proved safe: off the path */
             return false;
         }
         default:

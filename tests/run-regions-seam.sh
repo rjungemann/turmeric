@@ -27,6 +27,11 @@ hkt-stdlib-result-ok-biased
 
 "
 
+# `region-scope-adt-result` is deliberately NOT listed: it is hook-driven (no
+# input.tur for this harness to run) and its hook already asserts both halves
+# of what this gate checks -- on/off output equality AND, which this gate
+# cannot see, that a region was opened at all.
+#
 # R4: fixtures that actually OPEN a region -- every `bt-scope` is a boundary
 # now, so these run push / (checked) pop for real, and the spine nodes their
 # bodies allocate land in the generation rather than on the heap.  The

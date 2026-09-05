@@ -6481,7 +6481,30 @@ static void emit_term(CE *ce, const CTerm *t) {
             }
             char *fn = rr ? rr : (clone ? strdup(clone) : callee_name(t->as.tailcall.fn));
             char *argv = atoms_csv_call(ce, t->as.tailcall.args, t->as.tailcall.n);
-            if (!rr && (callee_colored || clone_is_cps)) {
+            /* region-bracket-lost-when-bt-scope-specializes: a region boundary
+             * has to take the cps->direct arm, because that is the only arm the
+             * bracket can live on.  `cps->cps` is a TAIL call -- the callee
+             * delivers to `__kont` itself and this frame never runs again -- so
+             * there is nowhere to put the pop; wrapping `__kont` in a
+             * region-popping DK frame is the alternative, and it is a great deal
+             * of machinery for a boundary that is already direct everywhere else.
+             *
+             * "Everywhere else" is the point: `bt-scope`'s base is colored but
+             * fell back to DIRECT style (no `bt_hyscope__cps` is ever emitted),
+             * so every shipping call site already lands on cps->direct.  Only a
+             * resolved SPEC clone reached cps->cps, and only because a colored
+             * mono-template emits `<clone>__cps` even when its own base did not.
+             * Forcing direct here makes a `bt-scope` at an aggregate result
+             * behave exactly like the scalar one every existing fixture covers,
+             * rather than introducing a third behaviour.
+             *
+             * Scoped to the one callee `emit_binding_is_region_scope` names, and
+             * that predicate is false unless `--enable=regions` is on, so no
+             * default-path routing moves.  The residual asymmetry -- a colored
+             * mono-template emitting CPS specs of a direct-style base -- is not
+             * fixed here; it is the general shape this is a local answer to. */
+            bool force_direct = emit_binding_is_region_scope(t->as.tailcall.fn);
+            if (!rr && !force_direct && (callee_colored || clone_is_cps)) {
                 /* cps->cps: both colored and emitted -- thread the continuation
                  * straight through, no trampoline.  The threaded continuation is
                  * the function's own k (KK_RET) or, inside a reset's delimited
