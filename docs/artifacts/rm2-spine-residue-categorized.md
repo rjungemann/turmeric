@@ -86,9 +86,9 @@ describes as "spines that escape their region", and it is 11% of the total.
 in a scope a region could bracket. But two defects have to be fixed first, and
 one of them is not about regions at all.
 
-Categorizing this turned up a **silent wrong answer on default flags**: a
-polymorphic function instantiated at two result types with different
-representations, called from a CPS-lowered caller, is emitted against the wrong
+Categorizing this turned up a **silent wrong answer on default flags** (since
+fixed): a polymorphic function instantiated at two result types with different
+representations, called from a CPS-lowered caller, was emitted against the wrong
 specialization. Through `bt-scope`, which is stdlib:
 
 ```turmeric
@@ -96,13 +96,14 @@ specialization. Through `bt-scope`, which is stdlib:
 (defn s-rec [n : int] : PPair (bt-scope (fn [] (PIP n 20))))  ;; prints 28
 ```
 
-Filed as
-[cps-call-arm-ignores-abi-specialization](../reported/cps-call-arm-ignores-abi-specialization.md).
 The neighbouring shape (`float` + record) is a hard C build failure instead. Both
-faces are the CPS emitter's call arms not selecting by result type, and the
-region bracket going missing is the same arm losing a different thing.
+faces were the CPS emitter's call arms not selecting by result type; fixed and
+archived as
+[cps-call-arm-ignores-abi-specialization](../archive/cps-call-arm-ignores-abi-specialization.md).
+The region bracket going missing is the same arm losing a different thing, and
+is a separate fix -- see step 1 below.
 
-**Why none of this is red today:** every `bt-scope` site in the tree returns
+**Why none of it was red:** every `bt-scope` site in the tree returns
 `int`, `bool` or `void`. All are carrier-transparent, so the erased base and
 every specialization agree and the mis-selection is invisible. The three
 `region-scope-*` fixtures are all scalar-or-void results too -- the blind spot is
@@ -110,10 +111,16 @@ exactly one fixture wide.
 
 ## Order of work, if RM2 is taken up
 
-1. **Fix the CPS specialization arm.** It is a wrong answer, it is independent of
-   regions, and the region bracket rides along on the same fix.
+1. ~~**Fix the CPS specialization arm.**~~ **Done 2026-09-05** -- the call's own
+   result type is now a discriminator in `find_mono_clone_for_call`, and both
+   faces are pinned by a fixture each. **The region bracket did NOT ride along**,
+   which this step predicted it would: the callee resolves correctly now and the
+   push is still absent, because the `cps->cps` arm carries no bracket at all.
+   Checked after the fix, not assumed. Category 2 therefore still needs
+   [region-bracket-lost-when-bt-scope-specializes](../reported/region-bracket-lost-when-bt-scope-specializes.md)
+   closed on its own.
 2. **Add a `with-region` bracket.** Category 1's 496 B is unreachable without it
-   and needs nothing else; category 2's 312 B needs it plus step 1.
+   and needs nothing else; category 2's 312 B needs it plus the region-bracket fix in step 1's follow-up.
 3. **Then re-measure.** What is left should be category 3 and whatever step 2
    turns up -- a far smaller set than the phase as scoped, and one where per-node
    ownership may be inferable, since the escaping cases are the ones a promotion

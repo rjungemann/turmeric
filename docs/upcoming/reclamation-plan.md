@@ -634,9 +634,11 @@ Two defects sit in front of that, both found by the probe, because putting a
 `bt-scope` around a function whose result is a RECORD rather than a scalar is
 something nothing in the tree had done:
 
-- [cps-call-arm-ignores-abi-specialization](../reported/cps-call-arm-ignores-abi-specialization.md)
+- [cps-call-arm-ignores-abi-specialization](../archive/cps-call-arm-ignores-abi-specialization.md)
   -- **a silent wrong answer on default flags**, unrelated to regions. A CPS
-  emitter call arm picks a specialization that is not this call's.
+  emitter call arm picked a specialization that was not this call's.
+  **Fixed 2026-09-05**: the call's own result type now discriminates in
+  `find_mono_clone_for_call`.
 - [region-bracket-lost-when-bt-scope-specializes](../reported/region-bracket-lost-when-bt-scope-specializes.md)
   -- the same arm emitting no region push at all for a non-scalar result. This
   is what makes category 2 a no-op: `re.tur`'s `re-find-from` is the textbook
@@ -644,8 +646,11 @@ something nothing in the tree had done:
   the static walk accepts) and a bracket there reclaims nothing today, with no
   diagnostic.
 
-Order of work: fix the CPS arm first (it is a wrong answer, and the bracket
-rides along), then the `with-region` form, then re-measure.
+Order of work: the CPS arm is done. **The bracket did NOT ride along on it** --
+that was this section's prediction and it was wrong; the callee resolves
+correctly now and the push is still absent, because the `cps->cps` arm carries
+no bracket at all. So: close the region-bracket report on its own, add the
+`with-region` form, then re-measure.
 
 RM3's gate is "RM0(b), and RM1 landed".  RM1 is now landed to its unstampable
 residue (~240 B), and the constituency measurement above is RM0(b)'s missing

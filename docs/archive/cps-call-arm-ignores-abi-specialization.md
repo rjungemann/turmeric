@@ -105,3 +105,61 @@ which is the same arm losing a different thing.
 Instantiate a CPS-reached polymorphic bracket at ONE result representation per
 program, or hand the aggregate out through a scalar (return an index, or write
 into a cell) rather than as the bracket's value.
+
+## Resolved 2026-09-05
+
+`find_mono_clone_for_call` (emit_cps_ir.c) matched a specialization on argument
+C types alone. Two new helpers beside it make the call's own RESULT type a
+discriminator:
+
+- `cps_call_result_discriminator` -- the call's resolved result type, or NULL
+  when it decides nothing. The NULL case is the load-bearing half: a call whose
+  result is still a type variable, or an app with an abstract head, c-names to
+  the int64 carrier exactly as a genuine `int` does, so filtering on it would
+  reject the correct concrete clone for the `^Show a` wrappers RC1/RC2 resolve
+  through this same function. Deciding nothing leaves the arg-only behaviour
+  untouched.
+- `spec_result_matches` -- accepts every spec when the discriminator is NULL, so
+  the change is a pure NARROWING. It can only turn a wrong hit into NULL (which
+  falls back to the erased base, the pre-existing conservative path) or turn an
+  ambiguity into a unique correct hit. It cannot introduce a match that did not
+  exist.
+
+Applied to both matching passes (the primary one that skips scalar args, and the
+RC2/2b.3 stricter tie-break), and threaded through all three call sites --
+`CT_LETCALL` plus both `CT_TAILCALL` clone lookups -- from the `call_expr` the
+CPS IR already retains on each node for `emit_reresolve_method_call`.
+
+Both faces fixed by the one change, which is what the narrowing predicts:
+
+- **Repro 1** picked the record spec because it was the ONLY spec registered
+  (`A = int` needs none -- the int64 result IS the carrier, so the base is
+  correct). The result filter rejects it, the lookup returns NULL, and the call
+  falls to `bt_hyscope`, which is right.
+- **Repro 2** had two specs, both matching on args, so the lookup returned NULL
+  and `cps->direct` called the erased base. The result filter leaves exactly one
+  match, so the QPair site now resolves to its own clone.
+
+**Pinned by two fixtures, one per face**, because the faces mask each other in a
+combined file -- a pre-fix run sees only the build error:
+
+- `tests/fixtures/cps-spec-selected-by-result-type` -- the silent wrong answer.
+  Compiles pre-fix and prints an address. Values are READ, not merely built.
+- `tests/fixtures/cps-spec-erased-base-fallback-typechecks` -- the build
+  failure. No trail, no `bt-scope`, no flags: a plain `[A]` defn.
+
+Both verified against a pre-fix binary (`emit_cps_ir.c` copied aside and
+restored, not stashed): garbage-then-28 for the first, `cc invocation failed`
+for the second.
+
+**The sibling report is NOT fixed by this**, and the prediction in its "fix
+directions" that it would ride along was wrong -- checked rather than assumed.
+[region-bracket-lost-when-bt-scope-specializes](../reported/region-bracket-lost-when-bt-scope-specializes.md)
+still reproduces: the specialization now resolves correctly, and the
+`/* cps->cps */` arm it takes still emits no `tur_region_push()`. Same function,
+genuinely different gap.
+
+**Validation.** Suite 2799/0 (2797 + the two new fixtures; no snapshot moved,
+which is itself the evidence that no existing resolution changed), turi
+1911/0/856, regions seam 12/0, leak-check 83/0, sr2 seam 57/0, cc-warn ratchet
+OK.

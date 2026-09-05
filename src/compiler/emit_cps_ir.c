@@ -5094,19 +5094,67 @@ static SEnt *ent_of_binding(const Binding *b) {
     return NULL;
 }
 
+/* cps-call-arm-ignores-abi-specialization: the call's OWN result type, when it
+ * is concrete enough to tell two specializations apart.
+ *
+ * Argument types alone do not identify a specialization.  A generic whose type
+ * variable reaches only the RESULT -- `bt-scope [A] [^fat body : (fn [] A)] : A`,
+ * whose single parameter is the erased `int64_t` fat-thunk handle for EVERY A --
+ * presents identical args at every instantiation, so the matcher below saw one
+ * spec and handed it to call sites that wanted a different one (or the base).
+ *
+ * Returns NULL when the type decides nothing, which is the important half: a
+ * call whose result is still a type variable (or an app with an abstract head)
+ * c-names to the int64 carrier exactly as a genuine `int` does, and filtering on
+ * that would reject the correct concrete clone for the `^Show a` wrappers RC1/RC2
+ * resolve here.  Deciding nothing leaves the arg-only behaviour untouched. */
+static const Type *cps_call_result_discriminator(EmitCtx *ctx,
+                                                 const Expr *call_expr,
+                                                 Type *store) {
+    if (!ctx || !call_expr || !store) return NULL;
+    Type rt = emit_resolve_type(ctx, call_expr->type);
+    switch (rt.kind) {
+        case TY_TYVAR:
+            return NULL;
+        case TY_APP:
+            if (!type_app_is_concrete_adt(&rt)) return NULL;
+            break;
+        default:
+            break;
+    }
+    *store = rt;
+    return store;
+}
+
+/* True when `spec` produces a result the call at `want` can accept.  `want` NULL
+ * (the type decided nothing) accepts every spec, so this is a pure narrowing. */
+static bool spec_result_matches(EmitCtx *ctx, const EmitAbiSpecialization *spec,
+                                const Type *want) {
+    if (!want) return true;
+    const char *wc = emit_type_c_name(ctx, *want);
+    const char *sc = emit_type_c_name(ctx, spec->result_type);
+    if (!wc || !sc) return true;   /* unspellable either side: do not narrow */
+    return strcmp(wc, sc) == 0;
+}
+
 /* G3b: resolve a colored-generic callee at a specific CPS call site to its
  * MONOMORPH clone name, so a cps->cps tail call to a mono-template emits
  * `<clone>__cps` rather than the unresolved generic `<callee>__cps`.  Matches the
- * spec whose callee binding is `fn` and whose concrete arg types (C spelling)
- * equal the call's atom types.  Returns NULL when 0 or >1 specs match (fall back
- * -- never guess a wrong monomorph). */
+ * spec whose callee binding is `fn`, whose concrete arg types (C spelling) equal
+ * the call's atom types, and whose RESULT type the call site can accept.
+ * Returns NULL when 0 or >1 specs match (fall back -- never guess a wrong
+ * monomorph). */
 static const char *find_mono_clone_for_call(EmitCtx *ctx, const Binding *fn,
-                                            const CAtom *args, uint32_t n) {
+                                            const CAtom *args, uint32_t n,
+                                            const Expr *call_expr) {
     if (!ctx || !fn) return NULL;
+    Type want_store;
+    const Type *want = cps_call_result_discriminator(ctx, call_expr, &want_store);
     const char *hit = NULL; int n_hit = 0;
     for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
         const EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
         if (spec->binding != fn || !spec->clone_name || spec->n_args != n) continue;
+        if (!spec_result_matches(ctx, spec, want)) continue;
         bool ok = true;
         for (uint32_t j = 0; j < n && ok; j++) {
             if (!args[j].type) continue;   /* untyped scalar atom: not discriminating */
@@ -5135,6 +5183,7 @@ static const char *find_mono_clone_for_call(EmitCtx *ctx, const Binding *fn,
         for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
             const EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
             if (spec->binding != fn || !spec->clone_name || spec->n_args != n) continue;
+            if (!spec_result_matches(ctx, spec, want)) continue;
             bool ok = true;
             for (uint32_t j = 0; j < n && ok; j++) {
                 if (!args[j].type) { ok = false; break; }  /* can't discriminate */
@@ -6254,7 +6303,8 @@ static void emit_term(CE *ce, const CTerm *t) {
             char *rr_lc = t->as.letcall.call_expr
                 ? emit_reresolve_method_call(ce->ctx, t->as.letcall.call_expr) : NULL;
             const char *mclone_lc = rr_lc ? NULL : find_mono_clone_for_call(
-                ce->ctx, t->as.letcall.fn, t->as.letcall.args, t->as.letcall.n);
+                ce->ctx, t->as.letcall.fn, t->as.letcall.args, t->as.letcall.n,
+                t->as.letcall.call_expr);
             char *fn = rr_lc ? rr_lc
                      : (mclone_lc ? strdup(mclone_lc) : callee_name(t->as.letcall.fn));
             /* Cast each arg to the (direct) callee's declared param C type --
@@ -6420,11 +6470,13 @@ static void emit_term(CE *ce, const CTerm *t) {
             bool callee_colored = binding_in_s(t->as.tailcall.fn);
             if (!rr && fe && fe->mono_template) {
                 clone = find_mono_clone_for_call(ce->ctx, t->as.tailcall.fn,
-                                                 t->as.tailcall.args, t->as.tailcall.n);
+                                                 t->as.tailcall.args, t->as.tailcall.n,
+                                                 t->as.tailcall.call_expr);
                 clone_is_cps = (clone != NULL);  /* colored mono-template -> <clone>__cps */
             } else if (!rr && fe && !callee_colored) {
                 clone = find_mono_clone_for_call(ce->ctx, t->as.tailcall.fn,
-                                                 t->as.tailcall.args, t->as.tailcall.n);
+                                                 t->as.tailcall.args, t->as.tailcall.n,
+                                                 t->as.tailcall.call_expr);
                 /* uncolored generic clone is direct-only: clone_is_cps stays false */
             }
             char *fn = rr ? rr : (clone ? strdup(clone) : callee_name(t->as.tailcall.fn));

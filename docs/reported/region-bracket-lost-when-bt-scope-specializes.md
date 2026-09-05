@@ -63,9 +63,17 @@ goes through `cps->direct` -- its `one_hyround__cps` calls the erased
 `bt_hyscope` -- which is why the fixture proves the CPS path works and this
 shape still does not.
 
-Same arm, and very likely the same fix, as
-[cps-call-arm-ignores-abi-specialization](cps-call-arm-ignores-abi-specialization.md),
-which is the more serious face of it (that one is a wrong answer).
+Found alongside
+[cps-call-arm-ignores-abi-specialization](../archive/cps-call-arm-ignores-abi-specialization.md),
+which was the more serious face (a wrong answer) and is fixed as of 2026-09-05.
+
+**That fix does NOT close this one**, and the prediction below that it would
+ride along was wrong -- checked after the fix landed rather than assumed. The
+specialization now resolves correctly (`bt_scope__spec__tur_adt_RPair_int64_t__cps`
+is the right callee for this site), and the repro still emits **zero** pushes.
+The gap is not "the wrong callee was chosen"; it is that the `/* cps->cps */`
+arm has no region bracket in it at all, while `/* cps->direct */` does. Same
+function, genuinely separate defect.
 
 ## Why it matters beyond the flag
 
@@ -78,9 +86,13 @@ right answer, and reclaim nothing, with no diagnostic saying so.
 
 ## Fix directions
 
-1. Fix the CPS specialization arm (the sibling report's direction 1); the
-   bracket then rides along, since `emit_binding_is_region_scope` already keys
-   on the callee.
+1. ~~Fix the CPS specialization arm; the bracket then rides along.~~ **Tried,
+   and it does not** -- see above. Emit the push/pop on the `/* cps->cps */`
+   arm too. `emit_binding_is_region_scope` already keys on the callee binding,
+   so the question that arm has to ask is the one `cps->direct` already asks;
+   what it also needs is somewhere to put the pop, which a tail call that
+   `return`s straight through does not obviously have. That is the real work
+   here, and it is why this is not a two-line change.
 2. Independently worth having: with `--enable=regions`, a `bt-scope` call site
    that emits no push is a silent no-op. Either emit the bracket on every arm,
    or diagnose the arm that cannot.

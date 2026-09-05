@@ -1,0 +1,30 @@
+;; cps-call-arm-ignores-abi-specialization, face 2: the BUILD FAILURE.
+;;
+;; Same root cause as tests/fixtures/cps-spec-selected-by-result-type -- a CPS
+;; call arm resolving a specialization by argument types alone -- surfacing at
+;; the other arm.  When two specs of one generic differ only in their result,
+;; the argument pass matched BOTH, so `find_mono_clone_for_call` returned NULL
+;; ("never guess a wrong monomorph") and `/* cps->direct */` fell back to the
+;; ERASED base.  The caller then boxed that int64 carrier as though it were the
+;; aggregate:
+;;
+;;   error: incompatible types when assigning to type 'tur_adt_QPair'
+;;          from type 'int64_t'
+;;
+;; No trail, no `bt-scope`, no flags: a plain [A] defn with a thunk parameter.
+;; The two results here differ in REGISTER CLASS as well as width, which is what
+;; makes this face loud rather than silent.  Note r-flt is emitted on the DIRECT
+;; path and always resolved `runit__spec__double_int64_t` correctly -- the
+;; registry was right all along and only the CPS arms were not asking.
+
+(defdata QPair (QIP :int :int))
+
+(defn runit [A] [^fat body : (fn [] A)] : A (body))
+
+(defn r-flt [n : int] : float (runit (fn [] 7.1)))
+(defn r-rec [n : int] : QPair (runit (fn [] (QIP n 20))))
+
+(defn main [] : int
+  (println (r-flt 8))                            ;; 7.1
+  (match (r-rec 8) (QIP a b) (println (+ a b)))   ;; 28
+  0)
