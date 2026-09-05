@@ -644,17 +644,25 @@ something nothing in the tree had done:
   **Fixed 2026-09-05**: a region boundary takes `cps->direct`, the only arm the
   bracket can live on.
 
-Category 2 is still not reclaimed after both, and the reason moved rather than
-closing. This section claimed the static walk ACCEPTS `(RxIP :int :int)`; it
-does not -- it refuses at field 0, because a plain `:int` ctor field records no
-`full_type`, which its comment attributes only to the self-recursive spine.
-Deciding such a field by its `kind` is unsound and was measured so, so that is
-now [region-walk-refuses-every-adt-result](../reported/region-walk-refuses-every-adt-result.md).
+Category 2 **is now reclaimed for a scalar-field ADT result** (2026-09-05).
+This section claimed the static walk ACCEPTS `(RxIP :int :int)`; it did not --
+it refused at field 0, because a plain `:int` ctor field records no `full_type`,
+which its comment attributes only to the self-recursive spine. Deciding such a
+field by its `kind` is unsound and was measured so; deciding by the declared
+FORM is not, and that is what landed:
+[region-walk-refuses-every-adt-result](../archive/region-walk-refuses-every-adt-result.md)
+is RESOLVED. A field whose form is a bare scalar primitive keyword reaches
+nothing and is admitted, so `(RxIP :int :int)` -- `re.tur`'s `re-find-from`
+result, the 312 B -- now REWINDS; an ADT name, `ptr`, a tyvar, or a compound
+form stays refused, so the mutual-recursion result is still safe.
 
-Order of work: the CPS arm and the bracket are both done (separately -- the
-bracket did NOT ride along on the CPS fix, which was this section's prediction
-and was wrong). Next: widen the walk so an ADT result can be proved, add the
-`with-region` form, then re-measure.
+Order of work: the CPS arm, the bracket, and the scalar-field walk widening are
+done. Remaining for category 2's harder shapes (a recursive spine reached
+through a cycle, a carrier-erased ADT field, a container of scalars): each is a
+later one-shape-at-a-time widening with its own fixture. The 96 B of category 3
+stays RM2's. The bigger remaining graduation blocker is the `with-region`
+boundary form (RM3 R5 item 1), a design decision on the public surface rather
+than a walk change; then re-measure.
 
 RM3's gate is "RM0(b), and RM1 landed".  RM1 is now landed to its unstampable
 residue (~240 B), and the constituency measurement above is RM0(b)'s missing

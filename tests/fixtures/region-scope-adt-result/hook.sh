@@ -17,12 +17,14 @@
 #      field-less enum -- by value, reaches nothing -- and must REWIND
 #      (tur_region_pop_checked); this is the shape the bare-TY_ADT lookup
 #      admitted, and it retired before that change.  `one-round` returns
-#      `(RIP :int :int)`, which the walk still cannot prove (an ordinary `:int`
-#      field records no full_type), and `mutual` returns a spine reached through
-#      a cycle: both must RETIRE (tur_region_pop).  The counts are asserted, so
-#      a widening that admits `RIP` shows up here as a changed number to be
-#      read, not a silent gain -- and a widening that admits `mutual` shows up
-#      as a wrong answer in (3).
+#      `(RIP :int :int)`, and NOW REWINDS too: the scalar-field widening
+#      (region-walk-refuses-every-adt-result, resolved) reads the declared
+#      FORM `:int` and proves the result reaches no node, where the old walk
+#      refused on the field's NULL full_type.  `mutual` returns a spine reached
+#      through a cycle and still must RETIRE (tur_region_pop) -- its `:MA` field
+#      is not a scalar keyword, so the widening leaves it refused.  The counts
+#      are asserted (retire=1 rewind=2), so a future widening that admits
+#      `mutual` shows up as a changed number here AND as a wrong answer in (3).
 #
 #   3. The values SURVIVE.  This is the SR4 lesson, and the reclamation plan
 #      says it applies to regions with more force: a fixture that only checks

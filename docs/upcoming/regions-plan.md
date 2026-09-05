@@ -332,6 +332,23 @@ per the standing rule it would not block a release if there were.
    It accepts scalars, `cstr`, and non-heap ADTs whose every field it can walk.
    Structs, containers, refs and closures are refused wholesale -- sound, and it
    means a bracket returning a `Vec` of scalars never rewinds.
+
+   **First widening LANDED 2026-09-05:** a non-heap ADT result whose every
+   ctor field is a bare scalar primitive now REWINDS, where the walk used to
+   refuse it on the field's NULL `full_type` (which is also NULL for a genuine
+   `:int`). The disambiguator is the declared FORM, not the field kind -- a
+   bare scalar keyword (`:int`, `:cstr`, ...) reaches nothing; an ADT name,
+   `ptr`, a type variable, or any compound form stays refused, so the widening
+   can only turn a refuse into a pass for a provable scalar. This admits
+   `(RxIP :int :int)` -- `re.tur`'s `re-find-from` result, the 312 B of RM2
+   category 2 -- and keeps the mutual-recursion result (`(MAcons :int :MB)`)
+   refused. `region_field_form_is_scalar` in emit_expr.c; `region-scope-adt-
+   result` now reads `retire=1 rewind=2` with the value asserted across the
+   pop, and it carries the mutual-recursion case as the negative. Closes
+   [region-walk-refuses-every-adt-result](https://github.com/rjungemann/turmeric/blob/main/docs/archive/region-walk-refuses-every-adt-result.md).
+   Still refused, deliberately, for later increments each with their own
+   fixture: a recursive spine, a carrier-erased ADT field, a container of
+   scalars, a struct result.
 3. **Close or price the residue** named under R4: the unbracketed CPS
    `CT_LETCALL` arm, argument-position allocation landing in the generation, and
    the pooled slab that is never returned (reachable at exit, not lost -- a pool,

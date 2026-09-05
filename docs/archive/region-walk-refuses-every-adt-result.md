@@ -2,8 +2,30 @@
 
 **Severity: low (a lost saving, never a wrong answer) -- but it is the single
 blocker on RM2's largest reclaimable slice.** Filed 2026-09-05, split out of
-[region-bracket-lost-when-bt-scope-specializes](../archive/region-bracket-lost-when-bt-scope-specializes.md)
+[region-bracket-lost-when-bt-scope-specializes](region-bracket-lost-when-bt-scope-specializes.md)
 when fixing that one moved the blocker here rather than closing it.
+
+**RESOLVED 2026-09-05, along fix direction (1) -- resolve the field FORM, not
+the kind, and do it as the minimal conservative widening.** The walk consults
+`c->field_forms[fi]` before refusing on a NULL `full_type`: a field whose
+declared form is a bare scalar primitive keyword (`:int`, `:bool`, `:float`,
+`:cstr`, the sized ints/floats) reaches nothing and is admitted; every other
+form -- an ADT name, `ptr`, a type variable, an applied `(F a)` list, or a
+missing form -- is not a scalar keyword and still refuses, exactly as before.
+So the change can only turn a REFUSE into a PASS for a provable scalar, never
+the reverse, which is why it needed no name-to-def resolution and no walk into
+the field's type: the two dangerous NULL-`full_type` shapes this report warned
+about (the self-recursive spine, whose form names the def; and a carrier-erased
+ADT field like `:MA`, whose form is an ADT name) are both non-scalar forms and
+stay refused. `region_field_form_is_scalar` in emit_expr.c. `(RxIP :int :int)`
+-- `re.tur`'s `re-find-from` result, the 312 B this report costs -- now
+rewinds; `region-scope-adt-result` reads `retire=1 rewind=2` and asserts the
+value across the pop, keeping its mutual-recursion case (`MA`, printing 42) as
+the negative. The kind-based accept this report measured into a use-after-free
+was NOT reintroduced -- the form, not the kind, is what decides. Full suite
+green, regions seam 12/0, poison canary intact. This is RM3 R5 graduation
+item 2's first shape; the recursive/erased/container/struct shapes stay refused
+for later increments, each with its own fixture.
 
 Under `--enable=regions`, a `bt-scope` whose result is a by-value record ADT now
 opens a region (that was the other report) and then **retires** it --
