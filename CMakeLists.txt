@@ -118,6 +118,15 @@ endif()
 # ---------------------------------------------------------------------------
 enable_testing()
 
+# Escaping a filesystem path for embedding in generated Turmeric source.  The
+# bug it guards took down the entire stdlib prelude on an installed tur.exe --
+# every backslash of a Windows path read as a string escape, so `when` was an
+# unknown name -- and the in-tree build could not see it, because the stdlib
+# root resolves to the literal "stdlib" there, which has nothing to escape.
+# The cases are reachable on POSIX too ("\\" and '"' are both legal in a POSIX
+# filename), so the Linux legs enforce it rather than Windows alone.
+add_test(NAME source_literal_unit COMMAND tur_source_literal_unit)
+
 add_test(
   NAME tur_tests
   COMMAND bash tests/run.sh

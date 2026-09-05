@@ -21,6 +21,7 @@
 #endif
 
 #include <ctype.h>
+#include "source_literal.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -7548,16 +7549,18 @@ static int cmd_eval_h(const char *path, bool use_color,
         g_turi_stdlib_preload = true;
         char pb[4096];
         tur_stdlib_path("json.tur", pb, sizeof(pb));
-        char load_form[4200];
-        snprintf(load_form, sizeof(load_form), "(load \"%s\")", pb);
+        char load_form[4200], epb[8200];
+        if (!tur_source_literal_escape(pb, epb, sizeof epb)) epb[0] = '\0';
+        snprintf(load_form, sizeof(load_form), "(load \"%s\")", epb);
         TuriValue sv = turi_eval(env, load_form);
         (void)sv;
     }
     {
         char pb[4096];
         tur_stdlib_path("schema.tur", pb, sizeof(pb));
-        char load_form[4200];
-        snprintf(load_form, sizeof(load_form), "(load \"%s\")", pb);
+        char load_form[4200], epb[8200];
+        if (!tur_source_literal_escape(pb, epb, sizeof epb)) epb[0] = '\0';
+        snprintf(load_form, sizeof(load_form), "(load \"%s\")", epb);
         TuriValue sv = turi_eval(env, load_form);
         (void)sv;
     }
@@ -7656,7 +7659,9 @@ static int cmd_eval_h(const char *path, bool use_color,
     if (debug && !has_main) turi_debug_arm(env);
     {
         char load_form[4200];
-        snprintf(load_form, sizeof load_form, "(load \"%s\")", path);
+        char epath[8200];
+    if (!tur_source_literal_escape(path, epath, sizeof epath)) epath[0] = '\0';
+    snprintf(load_form, sizeof load_form, "(load \"%s\")", epath);
         result = turi_eval(env, load_form);
     }
     int rc = 0;

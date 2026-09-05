@@ -1564,7 +1564,13 @@ Filed 2026-08 while bringing the `turmeric-godot` GDExtension up on Windows.
 
 ## Platform-independent, found on a platform sweep
 
-Empty. `term-set-cooked-restores-zeroed-state` was the only row and was
+| Report | Severity | One line |
+| --- | --- | --- |
+| [src-cmakelists-add-test-never-registers](src-cmakelists-add-test-never-registers.md) | low | `enable_testing()` runs after `add_subdirectory(src)`, so every `add_test` in `src/CMakeLists.txt` is silently dropped -- `tur_trail` has never run in CI |
+
+The row above was found while adding a Windows regression test and is not a
+Windows defect at all.  `term-set-cooked-restores-zeroed-state` was the
+previous occupant and was
 resolved 2026-08-05 (fix direction 2 -- one inline-C body owning the saved
 state -- plus a pty-backed round-trip fixture); it now lives at
 [docs/archive/term-set-cooked-restores-zeroed-state.md](../archive/term-set-cooked-restores-zeroed-state.md).
