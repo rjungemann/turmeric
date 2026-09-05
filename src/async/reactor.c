@@ -188,6 +188,20 @@ struct TurReactor {
     size_t               freelist_len, freelist_cap;
     size_t              *pending;       /* freed during the current poll */
     size_t               pending_len, pending_cap;
+    /* Callback boxes orphaned by slot reuse.
+     *
+     * cleanup_source does NOT release a source's cb box -- ownership is
+     * settled at teardown, which walks r->sources and frees each owned box
+     * once (deduped, because one box may be registered on several
+     * sources).  Reusing a slot resets it in place, so without this the
+     * previous occupant's box became unreachable and leaked: LeakSanitizer
+     * measured exactly 250 allocations across 250 add/remove rounds.
+     *
+     * Freeing at reuse instead would be wrong for the same reason teardown
+     * dedupes: the box may still be live on another source.  So the pointer
+     * is parked here and goes through teardown's existing dedup. */
+    int64_t             *orphan_boxes;
+    size_t               orphan_len, orphan_cap;
 };
 
 /* Push a slot index onto one of the two lists; a failed grow just drops the
@@ -428,6 +442,24 @@ void tur_reactor_free(void *rp) {
         }
         free(src);
     }
+    /* Boxes whose slot was recycled out from under them.  Same dedup: one
+     * may still be shared with a source freed above. */
+    for (size_t i = 0; i < r->orphan_len; i++) {
+        int64_t box = r->orphan_boxes[i];
+        if (!box) continue;
+        bool seen = false;
+        for (size_t j = 0; j < nfreed; j++)
+            if (freed[j] == box) { seen = true; break; }
+        if (seen) continue;
+        if (nfreed == freed_cap) {
+            size_t new_cap = freed_cap ? freed_cap * 2 : 8;
+            int64_t *grown = (int64_t *)realloc(freed, new_cap * sizeof(int64_t));
+            if (grown) { freed = grown; freed_cap = new_cap; }
+        }
+        if (nfreed < freed_cap) freed[nfreed++] = box;
+        tur_reactor_release_box(box);
+    }
+    free(r->orphan_boxes);
     free(freed);
     free(r->sources);
     free(r->freelist);
@@ -447,6 +479,18 @@ static TurReactorSource *alloc_source(TurReactor *r) {
         size_t slot = r->freelist[--r->freelist_len];
         TurReactorSource *reused = r->sources[slot];
         if (reused) {
+            /* The outgoing occupant's cb box outlives the slot -- park it so
+             * teardown still frees it exactly once (see orphan_boxes). */
+            if (reused->owns_cb && reused->tur_cb) {
+                if (r->orphan_len == r->orphan_cap) {
+                    size_t nc = r->orphan_cap ? r->orphan_cap * 2 : 16;
+                    int64_t *g = (int64_t *)realloc(r->orphan_boxes,
+                                                    nc * sizeof(int64_t));
+                    if (g) { r->orphan_boxes = g; r->orphan_cap = nc; }
+                }
+                if (r->orphan_len < r->orphan_cap)
+                    r->orphan_boxes[r->orphan_len++] = reused->tur_cb;
+            }
             /* Reset in place: the allocation is reused, never the contents. */
             memset(reused, 0, sizeof(*reused));
             reused->slot         = slot;
