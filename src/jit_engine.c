@@ -60,6 +60,7 @@
 #  include <sys/resource.h>
 #endif
 #include <time.h>
+#include "async/tur_sjlj.h"
 
 static int g_jit_interp_mode;  /* TUR_JIT_GEN=interp */
 static int g_jit_gen_inited;   /* was MIR_gen_init called? */
@@ -299,6 +300,16 @@ static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
   {"_OSSwapInt32", (void *) jit_osswap32},
   {"_OSSwapInt64", (void *) jit_osswap64},
 #ifdef _WIN32
+  /* The DK trampoline's landing pad (async/tur_sjlj_x64_win.S).  The program
+   * half is compiled by c2mir, which has no __builtin_setjmp, so the emitted
+   * preamble calls these instead -- and the host half, compiled by the real
+   * toolchain, calls the very same functions.  That is the whole point: the
+   * two halves have to agree on a setjmp mechanism, and a symbol is something
+   * both can name.  Listed here rather than left to the dlsym walk for the
+   * same reason printf is: --export-all-symbols does not reach every object
+   * inside tur.exe, and a miss here is silent (the pair simply never fires).  */
+  {"tur_sjlj_set", (void *) tur_sjlj_set},
+  {"tur_sjlj_jump", (void *) tur_sjlj_jump},
   /* The printf/snprintf family are NOT dlsym-resolvable on MinGW: ucrtbase
    * exports only __stdio_common_vf* (the header-inline bodies call those),
    * and ld's --export-all-symbols deliberately excludes the MinGW runtime

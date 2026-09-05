@@ -1550,7 +1550,7 @@ these are fixture-watched. Two of the original three are resolved and archived:
 | --- | --- | --- |
 | [windows-subprocess-and-shared-lib-gaps](windows-subprocess-and-shared-lib-gaps.md) | high (for Windows users) | `tur install` / `fetch` / `new` / `build --shared` / REPL spice loading all fail -- the subprocess and shared-library layers are unported. Read-verified by audit, **not** exercised end-to-end. `build --shared` half is now done (emits a real `.dll`) |
 | [windows-httpd-async-limit-hangs-on-ci](windows-httpd-async-limit-hangs-on-ci.md) | low | Hangs on GitHub's Windows runners (no output, killed at both 10s and 30s) while passing locally 4/4. Skipped via `requires.win-concurrent-loopback`. Best suspect is runner core count, untested |
-| [jit-windows-support-spike](jit-windows-support-spike.md) | research | Spike EXECUTED: the Windows JIT builds and runs. The **lazy tier is fixed** (three defects in MIR's win64 wrapper assembly, rjungemann/mir#3) -- the default mode went 0/5 to **2637 passed / 68 failed** on the full corpus. What remains: c2mir has no `__builtin_setjmp`, so 56 of those 68 are CPS/effect fixtures; plus `__va_start`, and `path-string` unexplained |
+| [jit-windows-support-spike](jit-windows-support-spike.md) | research | Spike EXECUTED: the Windows JIT builds and runs. The **lazy tier is fixed** (three defects in MIR's win64 wrapper assembly, rjungemann/mir#3) -- the default mode went 0/5 to **2637 passed / 68 failed** on the full corpus. The JIT longjmp is fixed too (win64 SEH cannot unwind JIT frames -- `STATUS_BAD_FUNCTION_TABLE`, not the fiber-stack cause this report recorded): **2696 / 2 / 70 skipped** on merged main. What remains: `__va_start`, and two real fixtures -- `path-string` and `cps-backend-nil-delegated-call` |
 
 ## Godot embedding
 
@@ -1564,7 +1564,13 @@ Filed 2026-08 while bringing the `turmeric-godot` GDExtension up on Windows.
 
 ## Platform-independent, found on a platform sweep
 
-Empty. `term-set-cooked-restores-zeroed-state` was the only row and was
+| Report | Severity | One line |
+| --- | --- | --- |
+| [src-cmakelists-add-test-never-registers](src-cmakelists-add-test-never-registers.md) | low | `enable_testing()` runs after `add_subdirectory(src)`, so every `add_test` in `src/CMakeLists.txt` is silently dropped -- `tur_trail` has never run in CI |
+
+The row above was found while adding a Windows regression test and is not a
+Windows defect at all.  `term-set-cooked-restores-zeroed-state` was the
+previous occupant and was
 resolved 2026-08-05 (fix direction 2 -- one inline-C body owning the saved
 state -- plus a pty-backed round-trip fixture); it now lives at
 [docs/archive/term-set-cooked-restores-zeroed-state.md](../archive/term-set-cooked-restores-zeroed-state.md).
