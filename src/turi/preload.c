@@ -9,6 +9,7 @@
 
 #include "turi/eval.h"
 #include "buf.h"
+#include "source_literal.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -24,10 +25,12 @@ static const char *preload_root(const char *stdlib_root) {
  * runtime/globals.h).  Set for the duration of each preload helper. */
 extern bool g_turi_stdlib_preload;
 
-/* Emit and evaluate `(load "<root>/<base>")`. */
+/* Emit and evaluate `(load "<root>/<base>")`.  `root` is a filesystem path
+ * going into generated SOURCE, so it needs escaping -- see source_literal.h. */
 static void preload_one(TuriEnv *env, const char *root, const char *base) {
-    char form[4300];
-    snprintf(form, sizeof form, "(load \"%s/%s\")", root, base);
+    char form[4300], eroot[8200];
+    if (!tur_source_literal_escape(root, eroot, sizeof eroot)) return;
+    snprintf(form, sizeof form, "(load \"%s/%s\")", eroot, base);
     TuriValue sv = turi_eval(env, form);
     (void)sv; /* a failed stdlib load surfaces via the env's diag sink */
 }
@@ -176,9 +179,11 @@ void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root) {
      * order. */
     Buf src;
     buf_init(&src);
+    char eroot[8200];
+    if (!tur_source_literal_escape(root, eroot, sizeof eroot)) return;
     for (int i = 0; prelude[i] != NULL; i++) {
         buf_puts(&src, "(load \"");
-        buf_puts(&src, root);
+        buf_puts(&src, eroot);
         buf_putc(&src, '/');
         buf_puts(&src, prelude[i]);
         buf_puts(&src, "\")\n");
