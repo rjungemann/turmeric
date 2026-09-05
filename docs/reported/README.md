@@ -1001,6 +1001,19 @@ clean corpus -- which is how two passes of the original sweep produced a false
 zero. Per-platform wording is deliberately still open; the self-test is what
 will report it on a clang or Windows leg.
 
+## Specialization / CPS (filed 2026-09-05)
+
+Two reports from one probe. Categorizing RM2's spine residue meant putting a
+`bt-scope` around a function whose result is a record rather than a scalar --
+the first time anything in the tree has done that -- and both of these fell out
+of it. Read the first one first; the second is the same emitter arm losing a
+different thing.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [cps-call-arm-ignores-abi-specialization](cps-call-arm-ignores-abi-specialization.md) | high | A polymorphic fn instantiated at two result types with different representations, called from a CPS-lowered caller, is emitted against the WRONG specialization -- no flags needed. `/* cps->cps */` picks a spec that may not be this call's (repro: `bt-scope` at `int` and at a 2-int record; the `int` site prints a pointer); `/* cps->direct */` skips specialization and calls the erased base, which is a hard C build error when the representations differ in width. The DIRECT path consults the registry correctly, so the registry is fine and the CPS arms are not asking. Green today only because every `bt-scope` site in the tree returns `int`/`bool`/`void`, all carrier-transparent |
+| [region-bracket-lost-when-bt-scope-specializes](region-bracket-lost-when-bt-scope-specializes.md) | medium | Under `--enable=regions`, a `bt-scope` whose result is a by-value record emits ZERO `tur_region_push()` -- not "pushes then retires", no bracket at all. Not the static walk (`region_type_reaches_node` accepts a non-heap 2-int ADT); the call takes the `cps->cps` arm to a specialization and only `cps->direct` carries the push. Right answer, silent no-op. Blocks the 312 B of `re.tur`'s `re-find-from` spine that is otherwise the textbook region. Same arm as the row above |
+
 ## Allocation and memory-checking (filed 2026-08-22)
 
 Reports from one thread of work: measuring the refinement solver's cost led

@@ -615,6 +615,38 @@ bigger than this plan.
 
 **Recommendation: RM2 is unblocked by doing RM3, not by unblocking RM2.**
 
+#### The residue, categorized (2026-09-05) -- and two defects in the way
+
+The section above argues the shape; it never measured how much of the residue a
+region could actually take. Done now, per allocation, in
+[rm2-spine-residue-categorized.md](../artifacts/rm2-spine-residue-categorized.md):
+
+| category | bytes |
+|---|---:|
+| no bracket exists, but the natural one would work | 496 |
+| a bracket exists and is the right one -- but is silently a no-op | 312 |
+| escapes into a returned structure; no boundary contains it | 96 |
+
+So **808 of 904 bytes are inside a scope a region could bracket** -- the surface
+form is most of the answer, not half of it. The 96 is what stays RM2's.
+
+Two defects sit in front of that, both found by the probe, because putting a
+`bt-scope` around a function whose result is a RECORD rather than a scalar is
+something nothing in the tree had done:
+
+- [cps-call-arm-ignores-abi-specialization](../reported/cps-call-arm-ignores-abi-specialization.md)
+  -- **a silent wrong answer on default flags**, unrelated to regions. A CPS
+  emitter call arm picks a specialization that is not this call's.
+- [region-bracket-lost-when-bt-scope-specializes](../reported/region-bracket-lost-when-bt-scope-specializes.md)
+  -- the same arm emitting no region push at all for a non-scalar result. This
+  is what makes category 2 a no-op: `re.tur`'s `re-find-from` is the textbook
+  region (spine built and died inside one call, result `(RxIP :int :int)`, which
+  the static walk accepts) and a bracket there reclaims nothing today, with no
+  diagnostic.
+
+Order of work: fix the CPS arm first (it is a wrong answer, and the bracket
+rides along), then the `with-region` form, then re-measure.
+
 RM3's gate is "RM0(b), and RM1 landed".  RM1 is now landed to its unstampable
 residue (~240 B), and the constituency measurement above is RM0(b)'s missing
 input.  After RM3, what is left of RM2 is "spines that escape their region" --
