@@ -1230,10 +1230,17 @@ Expr *elab_let(Elab *e, const Form *call) {
              * comment even says "a ^fat parameter (or a let-alias of one)" --
              * but its normalized arm requires `is_param`, which an alias is not.
              * Carrying the fact on the alias fixes it for every guard keyed on
-             * `is_fat` rather than for that one call site. */
+             * `is_fat` rather than for that one call site.
+             *
+             * The question "is this parameter a fat handle?" is asked of the
+             * representation chokepoint, not re-derived here: repr_of_binding
+             * is the function that decides the PARAM's own representation, and
+             * an alias has to agree with its param by construction -- that
+             * disagreement is exactly the re-shim above.  (The repr-decision
+             * ratchet pins the re-derivation sites for the same reason.) */
             if (init_b->is_fat ||
                 (init_b->is_param &&
-                 fn_param_type_is_fat_normalized(&init_b->type))) {
+                 repr_of_binding(init_b, REPR_POS_PARAM) == REPR_FAT_HANDLE)) {
                 b->is_fat = true;
             }
             if (init_b->is_poly_fn) {

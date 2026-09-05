@@ -567,8 +567,7 @@
 ;;; Since: lazy-streams
 
 (defmacro zzz [g]
-  `(:: (fn [state : Subst] (StInc (fn [] (apply-goal ~g state))))
-     :Goal))
+  `(:: (fn [state : Subst] (StInc (fn [] (apply-goal ~g state)))) :Goal))
 ;;; disjoined-dfs -- disjunction that searches DEPTH-FIRST.
 ;;;
 ;;; `disjoined` interleaves, which is what makes it complete on relations with
