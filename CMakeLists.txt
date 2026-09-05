@@ -1156,6 +1156,12 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_cps_prompt_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Reactor slot recycling (deferred by one poll -- see the note in reactor.c)
+add_test(
+  NAME tur_reactor_slot_reuse_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_reactor_slot_reuse_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # AI1 (application-image-dumps-plan): image header codec unit test
 add_test(
   NAME tur_image_unit

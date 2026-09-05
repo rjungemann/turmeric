@@ -109,6 +109,9 @@ typedef enum {
 
 typedef struct {
     int64_t       id;
+    /* This source's index in r->sources.  Recorded so a removal can hand the
+     * slot back for reuse without re-scanning the array. */
+    size_t        slot;
     TurSourceKind kind;
     /* FD and signal (pipe read or signalfd) */
     int           fd;
@@ -142,7 +145,62 @@ struct TurReactor {
     size_t               sources_cap;
     int64_t              next_id;
     atomic_int           stop_flag;
+    /* Slot recycling, in TWO stages on purpose.
+     *
+     * Without it `sources` only ever grew: alloc_source appended, and
+     * tur_reactor_remove deactivated a source but never reclaimed its slot.
+     * A fiber that parks in a loop -- the normal shape of an await inside a
+     * long-lived connection handler -- therefore leaked two slots per park,
+     * and since cap_timeout and tick_timers each walk the WHOLE array on
+     * every poll, the cost of a poll grew with sources-ever-created rather
+     * than sources-active.  Measured on httpd-async-limit: 3953 -> 5285
+     * slots in five seconds, still climbing.
+     *
+     * Two stages, not one.  tick_timers holds `src` across the callback it
+     * runs and writes through it afterwards (`src->active = false` for a
+     * one-shot).  If that callback both REMOVES a source and REGISTERS one,
+     * immediate recycling hands the freed slot to the new registration and
+     * the post-callback write then lands on the new source, silently
+     * deactivating it.
+     *
+     * Both halves are required, which is narrower than it first looks:
+     * tick_timers deactivates a one-shot directly and never calls
+     * tur_reactor_remove, so an ordinary re-arming timer callback does NOT
+     * trigger it (measured -- it passes under immediate recycling).  A
+     * callback that calls tur_reactor_remove on its own source and then
+     * registers a replacement DOES: under immediate recycling the
+     * replacement never fires, under deferred it does.
+     *
+     * Nothing in-tree does both today.  local_park_wake comes one step
+     * away -- it removes the source being iterated, via
+     * local_fiber_clear_park -- but does not register.  So this is
+     * defensive against a shape the API permits, not a bug caught in
+     * flight.  It costs one push per removal.
+     *
+     * `pending` collects slots freed during a poll; tur_reactor_poll
+     * promotes them to `freelist` at the TOP of the next poll, by which
+     * point every loop that could have been holding one has returned.
+     *
+     * The source structs themselves are never freed here -- the "stable
+     * pointers" invariant above still holds; a reused slot keeps its
+     * allocation and is reset in place. */
+    size_t              *freelist;      /* slot indices safe to reuse now */
+    size_t               freelist_len, freelist_cap;
+    size_t              *pending;       /* freed during the current poll */
+    size_t               pending_len, pending_cap;
 };
+
+/* Push a slot index onto one of the two lists; a failed grow just drops the
+ * slot, which costs a recycle and never correctness. */
+static void slot_push(size_t **arr, size_t *len, size_t *cap, size_t v) {
+    if (*len == *cap) {
+        size_t nc = *cap ? *cap * 2 : 16;
+        size_t *n = (size_t *)realloc(*arr, nc * sizeof(size_t));
+        if (!n) return;
+        *arr = n; *cap = nc;
+    }
+    (*arr)[(*len)++] = v;
+}
 
 /* ------------------------------------------------------------------ */
 /* Self-pipe signal dispatch table (macOS / kqueue platforms)          */
@@ -372,6 +430,8 @@ void tur_reactor_free(void *rp) {
     }
     free(freed);
     free(r->sources);
+    free(r->freelist);
+    free(r->pending);
     io_backend_free(r->backend);
     free(r);
 }
@@ -380,8 +440,20 @@ void tur_reactor_free(void *rp) {
 /* Source registration                                                  */
 /* ------------------------------------------------------------------ */
 
-/* Append a fresh source slot, growing the array if needed. */
+/* Take a recycled slot when one is available, else append a fresh one
+ * (growing the array if needed). */
 static TurReactorSource *alloc_source(TurReactor *r) {
+    if (r->freelist_len > 0) {
+        size_t slot = r->freelist[--r->freelist_len];
+        TurReactorSource *reused = r->sources[slot];
+        if (reused) {
+            /* Reset in place: the allocation is reused, never the contents. */
+            memset(reused, 0, sizeof(*reused));
+            reused->slot         = slot;
+            reused->sig_write_fd = -1;
+            return reused;
+        }
+    }
     if (r->sources_len == r->sources_cap) {
         size_t new_cap = r->sources_cap * 2;
         TurReactorSource **arr = (TurReactorSource **)realloc(
@@ -395,6 +467,7 @@ static TurReactorSource *alloc_source(TurReactor *r) {
     TurReactorSource *src = (TurReactorSource *)calloc(1, sizeof(TurReactorSource));
     if (!src) return NULL;
     src->sig_write_fd = -1;
+    src->slot = r->sources_len;
     r->sources[r->sources_len++] = src;
     return src;
 }
@@ -469,6 +542,8 @@ int64_t tur_reactor_remove(void *rp, int64_t id) {
     if (!src) return -1;
     cleanup_source(r, src);
     src->active = false;
+    /* Deferred: promoted to the freelist at the top of the next poll. */
+    slot_push(&r->pending, &r->pending_len, &r->pending_cap, src->slot);
     return 0;
 }
 
@@ -701,6 +776,13 @@ static int tick_chans(TurReactor *r) {
 int64_t tur_reactor_poll(void *rp, int64_t timeout_ms) {
     TurReactor *r = (TurReactor *)rp;
     if (!r) return -1;
+    /* Slots freed during the PREVIOUS poll become reusable now: every loop
+     * that could still have been holding one has returned.  See the
+     * two-stage note on struct TurReactor. */
+    for (size_t i = 0; i < r->pending_len; i++)
+        slot_push(&r->freelist, &r->freelist_len, &r->freelist_cap,
+                  r->pending[i]);
+    r->pending_len = 0;
     int64_t capped = cap_timeout(r, timeout_ms);
     int fd_count = io_poll(r->backend, (int)capped);
     if (fd_count < 0) return -1;
