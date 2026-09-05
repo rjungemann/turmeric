@@ -1,5 +1,12 @@
 # `httpd-async-limit` hangs on GitHub's Windows runners but passes locally
 
+> **DIAGNOSED 2026-09-04.** Reproduced locally by pinning the process to two
+> cores, exactly as the "next step" below proposed. It is **not** a timing
+> flake and **not** a blocked reactor: the process is SPINNING. Two distinct
+> defects, one in the fixture and one in the reactor, are described under
+> "Diagnosis" at the end. The reactor one affects real servers, not just this
+> fixture.
+
 **Summary:** The fixture produces no output and is killed by the per-fixture
 timeout on `windows-latest` -- at 10s and again at 30s, so it is hanging, not
 merely slow. The same fixture passes on a local Windows box (4/4 in isolation,
@@ -71,3 +78,96 @@ at, not the fixture.
 
 - [windows-hardcoded-tmp-resolves-to-drive-root.md](windows-hardcoded-tmp-resolves-to-drive-root.md) -- the other finding from the same first CI run
 - [docs/upcoming/v1/windows-remaining-plan.md](../upcoming/v1/windows-remaining-plan.md)
+
+
+## Diagnosis (2026-09-04)
+
+### Reproduced
+
+Pinning the process to two cores reproduces it on a 12-core box:
+
+| cores | result |
+| --- | --- |
+| 12 (unpinned) | 5 / 5 pass |
+| 2 (`ProcessorAffinity = 3`) | 3 of 5 hang on the first sample; roughly 1 in 5 to 1 in 12 thereafter |
+
+So suspect 2 from the list above -- runner core count -- is confirmed, and
+suspects 1 and 3 are not needed to explain it.
+
+### It is spinning, not blocked
+
+The first thread dump looked like a blocked reactor: the server thread sat in
+`select_poll` with `tur_reactor_poll(rp, timeout_ms=-1)`, an infinite wait, and
+main sat in `chan_recv`. That reading was wrong.
+
+Dumping the reactor's source table at the moment of the hang shows two ACTIVE
+timer sources, so `cap_timeout` clamps the infinite timeout to the next
+deadline and `select` returns promptly. The stack was simply caught mid-poll.
+
+Attaching twice, five seconds apart, settles it:
+
+```
+t0:        SOURCES=3953
+t1 (+5s):  SOURCES=5285
+```
+
+~1330 new sources in five seconds is ~133 park/unpark cycles per second, which
+is exactly the cadence of the handler's `(httpd-await-timer c 10)`. The process
+is running flat out, not waiting.
+
+### Defect 1 -- the fixture's gate can never open if a client drops out
+
+The handler holds its in-flight slot with
+
+```turmeric
+(while (< (read-counter busy) 2)
+  (httpd-await-timer c 10))
+```
+
+`busy` is incremented by a client that receives a 503. But the client exits
+silently on two paths that do NOT count: a failed `connect()` returns `NULL`,
+and the 8s `SO_RCVTIMEO` backstop makes a slow exchange give up the same way.
+By the time of the hang **all four client threads have exited** -- the thread
+dump shows only main, the server, and Windows thread-pool workers.
+
+So if either over-cap client drops out, `busy` never reaches 2, both handlers
+spin forever on their timers, neither sends to `donech`, and main blocks in
+`chan_recv` for good. The fixture's header explains that gating on observed
+rejections (rather than a fixed delay) makes the counts robust against
+scheduling -- which it does -- but there is no backstop for a client that never
+reports at all.
+
+### Defect 2 -- reactor source slots are never reused (this one is not test-only)
+
+`alloc_source` is documented as "append a fresh source slot, growing the array
+if needed", and that is literally what it does. `tur_reactor_remove` deactivates
+a source but its slot is never reclaimed, so `r->sources_len` only ever grows:
+4131 and 5285 were observed here, with `sources_cap` already doubled to 8192.
+
+Two consequences, both real outside this fixture:
+
+1. **Unbounded memory growth** for any fiber that parks in a loop -- which is
+   the normal shape of an await inside a long-lived connection handler.
+2. **Every poll costs O(sources ever created), not O(active).** `cap_timeout`
+   and `tick_timers` each walk the whole array on every single
+   `tur_reactor_poll`. A server that has served many awaits pays that scan
+   forever, so throughput degrades over uptime rather than settling.
+
+A two-core box does not cause this; it only makes the fixture spin long enough
+to make it visible.
+
+### Fix directions
+
+For defect 2 -- reuse an inactive slot in `alloc_source` instead of appending.
+Source ids come from a separate monotonic `next_id`, so a reused slot still
+gets a fresh id and a stale id cannot alias it. Contained, and testable by
+watching `sources_len` stay flat across a parking loop.
+
+For defect 1 -- give the handler's wait a deadline so a missing client cannot
+wedge it, and have the client count its own failure rather than returning
+`NULL` silently. Both change the fixture's synchronization, so they want more
+thought than the reactor fix: the current design is deliberate and the header
+explains why.
+
+Until then the fixture stays skipped on Windows via
+`requires.win-concurrent-loopback`.
