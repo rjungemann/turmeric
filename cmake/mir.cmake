@@ -84,6 +84,19 @@ include_guard(GLOBAL)
 #     in mir-gen-aarch64.c, sharing two of MIR's five reserved block classes
 #     (docs/archive/mir-aarch64-fp-aggregate-abi.md).
 #
+#   07ad0148 -- MIR_set_lazy_gen_interface had never worked on win64: three
+#     stacked defects in the hand-written wrapper assembly.  _MIR_get_wrapper
+#     patched its four immediates 10 bytes short (the win64 start_pat opens
+#     with two 5-byte shadow-space stores that the offsets did not account
+#     for), so called_func overwrote those stores and the wrapper began
+#     with a decode of `mov %rax,(%rax)`.  Behind that, _MIR_get_wrapper_end
+#     reserved 0x28 bytes where alignment needs a multiple of 16 -- the
+#     adjacent comment already said 0x40 -- and parked xmm0..3 on the 32
+#     bytes of shadow space the generation hook owns, so the original call
+#     lost its first two float arguments in transit.  This is what kept
+#     TUR_JIT_GEN=lazy (the DEFAULT) unusable on Windows; the windows-jit CI
+#     job was build-only because of it.  Covered by mir-tests/wrapper-abi.c.
+#
 #     BEWARE reverting the pin below this commit: turmeric no longer carries the
 #     refusals that used to catch this shape (they were deleted with the fix, in
 #     jit_ffi_hook.c and elab_fns.c), so an older MIR silently reinstates the
@@ -101,8 +114,8 @@ include_guard(GLOBAL)
 # the cache still said vnmakarov/a8ab7c31 while this file said the fork.)
 set(TUR_MIR_GIT_REPOSITORY "https://github.com/rjungemann/mir.git"
     CACHE STRING "MIR repository for the JIT spike (fork carrying the ret + RA fixes)")
-set(TUR_MIR_GIT_TAG "458f352157b0d5a86b1286ded36047365664af8c"
-    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack + C23 enum base types + leading member attributes + aarch64 AAPCS64 HFA passing (both, merged)")
+set(TUR_MIR_GIT_TAG "07ad0148887c9ffd470d594d8dca9b60c1ab4cdb"
+    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack + C23 enum base types + leading member attributes + aarch64 AAPCS64 HFA passing (both, merged) + win64 lazy-generation wrapper ABI")
 
 include(FetchContent)
 
