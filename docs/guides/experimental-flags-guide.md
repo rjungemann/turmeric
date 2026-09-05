@@ -144,6 +144,29 @@ the version being cut, the release author reviews that entry and either:
 `expires_at` is a **deadline, not an earliest date** -- graduating early is
 routine (`closure-drop-glue` graduated at 0.30.2 carrying `expires_at 0.34.0`).
 
+### Graduating flips a default -- so the old default's harness INVERTS, it does not retire
+
+When a feature graduates, the path it *stopped* being becomes the path nothing
+compiles any more. If a bisection hatch survives graduation (`--enable` gone,
+`TUR_<NAME>=0` kept as the A/B switch), the harness that covered the old default
+does not retire with the flag: **it inverts, and keeps covering what is now the
+off path.**
+
+Three graduations have hit this and two got it right by instinct.
+`run-sr4-seam.sh` and `run-option-niche-seam.sh` both flipped their harness at
+graduation; SR2's was deleted, on the reasoning that "every `bash tests/run.sh`
+compiles all eleven of its fixtures that way now" -- true, and it covers the ON
+path, while leaving the OFF path with no cover at all. That is precisely the
+state the harness had been built to prevent, with the two paths swapped.
+
+What accumulated there in the meantime: a compiler abort, a hard C compile
+error, and a silent wrong answer, none of which touched the default path and all
+of which broke the instrument you reach for when something *else* is already
+wrong. See [docs/archive/sr2-carrier-seam-rotted.md](../archive/sr2-carrier-seam-rotted.md).
+
+A hatch nobody turns on decays into a hatch nobody notices -- the same lesson as
+`sanitizer-gate-not-armed-in-ci`. If you keep the switch, keep a harness on it.
+
 ### `expires_at` is ADVISORY -- it never blocks a release
 
 **An expiring entry is surfaced at the cut. It does not refuse the cut.** The

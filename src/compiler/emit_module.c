@@ -3034,6 +3034,55 @@ static bool body_has_dispatch_on_app_tyvar(
                 }
             }
         }
+        /* sr2-carrier-seam-rotted (3): an instance method dispatching on its OWN
+         * constraint var, spelled as an ascription.
+         *
+         * `(definstance Eq [Option] [(Eq A)] (eq? [x y] ... (eq? (:: vx A) ...)))`
+         * -- the receiver is `(:: vx A)`.  The check above peels the ascription
+         * and asks about the INNER expression, whose type is the carrier once
+         * the payload is erased, so it never fires; and `A` is not in
+         * `bindings` anyway, which holds the CLASS var (`a` -> `(Option
+         * String)`).  No spec is minted, the call lands in the generic instance
+         * body, and its inner dispatch stays baked against the int
+         * representative -- pointer equality on a String.
+         *
+         * On the by-value path `abi_changes` covers this BY ACCIDENT: `(Option
+         * String)` narrows to `void *` where the representative is `int64_t`, so
+         * a spec exists because the SIGNATURE changed and correct dispatch is a
+         * side effect.  That is the fragility worth naming: the ascription is
+         * necessary but is not what triggers the specialization, so the
+         * comments in option.tur/result.tur claiming it is are describing a
+         * coincidence.
+         *
+         * What keeps this from over-minting is the type ARGUMENT: only a
+         * NOMINAL payload can have an instance the int representative gets
+         * wrong.  A class var bound to `(Option int)` / `(Option bool)` /
+         * `(Option float)` has a primitive `args[0]` and mints nothing new. */
+        {
+            const Expr *asc = e->as.call_.args[0];
+            if (asc && asc->kind == EX_ASCRIBE &&
+                asc->type.kind == TY_TYVAR && asc->type.as.tyvar_.name) {
+                bool named_in_bindings = false;
+                for (uint8_t i = 0; i < n_bindings; i++)
+                    if (bindings[i].name &&
+                        strcmp(bindings[i].name, asc->type.as.tyvar_.name) == 0)
+                        named_in_bindings = true;
+                if (!named_in_bindings) {
+                    for (uint8_t i = 0; i < n_bindings; i++) {
+                        if (bindings[i].type.kind != TY_APP) continue;
+                        Type probe = bindings[i].type;
+                        AdtDef *pdef = NULL;
+                        Type pargs[16];
+                        uint8_t pn = 0;
+                        if (!type_extract_adt_app(&probe, &pdef, pargs, &pn) ||
+                            !pdef || pn == 0)
+                            continue;
+                        if (pargs[0].kind == TY_ADT || pargs[0].kind == TY_APP)
+                            return true;
+                    }
+                }
+            }
+        }
         /* heap-struct-field-extraction-collapses-to-carrier: the dispatch
          * receiver may be a field extraction `(.head xs)` from a parametric
          * (often :heap) container whose element type was erased to the int64
@@ -3156,6 +3205,26 @@ static bool body_has_dispatch_on_app_tyvar(
         case EX_WHILE:
             return body_has_dispatch_on_app_tyvar(e->as.while_.cond, bindings, n_bindings) ||
                    body_has_dispatch_on_app_tyvar(e->as.while_.body, bindings, n_bindings);
+        /* sr2-carrier-seam-rotted (3): `match` was missing from this walk
+         * entirely, which made every `instance_changes` trigger -- the TY_APP
+         * tyvar dispatch, the return dispatch, the field extraction -- blind to
+         * anything inside one.  That is not a corner: matching is how a sum
+         * instance is written, so `(definstance Eq [Option] ... (match x (Some
+         * vx) ... (eq? (:: vx A) ...)))` had its only dispatch out of reach.
+         * The scrutinee and the guards are walked too; a dispatch in either is
+         * as much a reason to mint as one in an arm body. */
+        case EX_MATCH:
+            if (body_has_dispatch_on_app_tyvar(e->as.match_.scrutinee, bindings, n_bindings))
+                return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (body_has_dispatch_on_app_tyvar(e->as.match_.arms[i].guard,
+                                                   bindings, n_bindings))
+                    return true;
+                if (body_has_dispatch_on_app_tyvar(e->as.match_.arms[i].body,
+                                                   bindings, n_bindings))
+                    return true;
+            }
+            break;
         case EX_CALL:
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
                 if (body_has_dispatch_on_app_tyvar(e->as.call_.args[i], bindings, n_bindings))

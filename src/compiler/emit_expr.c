@@ -10159,6 +10159,36 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_free(&_ab);
                     free(_tmp);
                 }
+                /* sr2-carrier-seam-rotted (3), the argument half.  Minting the
+                 * spec fixes WHICH instance is called; this fixes what it is
+                 * handed.  Inside a carrier-representation spec the payload
+                 * locals are `int64_t`, while the re-resolved concrete instance
+                 * declares its params at the payload's own C type
+                 * (`__inst_Eq_eq_qu_String(void *, void *)`), so the call is a
+                 * `-Wint-conversion` -- a build failure under the suite's cc
+                 * ratchet and a hard error under GCC >= 14.
+                 *
+                 * Narrow on purpose: a dict-dispatched call, inside a spec, whose
+                 * callee's RECORDED param is a pointer and whose argument's
+                 * static type is a carrier word.  An argument that is genuinely
+                 * an `int` reaching a genuinely pointer-typed formal is already
+                 * a type error upstream, so the reinterpret cannot mask one it
+                 * did not already have. */
+                if (!needs_fn_cast && fn_name && e->as.call_.dict_arg &&
+                    ctx->current_abi_specialization) {
+                    const char *_pc = emit_sig_lookup_param_ctype(fn_name, i);
+                    Type _at = emit_resolve_type(ctx, e->as.call_.args[i]->type);
+                    bool _arg_is_word = (_at.kind == TY_INT || _at.kind == TY_INT64 ||
+                                         _at.kind == TY_TYVAR);
+                    if (_pc && strchr(_pc, '*') != NULL && _arg_is_word) {
+                        Buf _cb; buf_init(&_cb);
+                        buf_printf(&_cb, "(%s)(intptr_t)(%s)", _pc, raw);
+                        buf_putc(&_cb, '\0');
+                        free(raw);
+                        raw = strdup(_cb.data);
+                        buf_free(&_cb);
+                    }
+                }
                 /* end-to-end-monomorphization (bucket A): a `:heap` value that
                  * is emitted as its typed pointer (e.g. a `Vec__int *` from a
                  * vec-new/-push spec, or a let-bound typed-pointer var) must be

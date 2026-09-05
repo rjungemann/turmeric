@@ -205,22 +205,30 @@ stdlib-result
 stdlib-result-runtime
 httpd-req-string-opt
 sum-passthrough-param-not-dropped
+option-niche-vec-closure-cmp
+option-eq-nominal-payload-dispatch
 "
 
-# DELIBERATELY EXCLUDED -- still red under the seam, filed in
-# docs/reported/sr2-carrier-seam-rotted.md.  Left out rather than carried red so
-# this harness answers "has the carrier path rotted FURTHER", which is the
-# question it exists to answer.  Re-add each as its defect closes.
+# NOTHING IS EXCLUDED ANY MORE.  All three defects in
+# docs/archive/sr2-carrier-seam-rotted.md are closed, so the two fixtures that
+# were carried out of this list are back in it:
 #
-#   option-niche-vec-closure-cmp -- a SILENT wrong answer: `(eq? (some "aa")
-#     (some "aa"))` is false on the carrier because no ABI specialization is
-#     minted, so the generic Eq[Option] body keeps the `int` representative and
-#     compares String payloads by pointer.  Root cause established (defect 3 in
-#     the report); the fix is in the spec-minting trigger, not here.
+#   sum-passthrough-param-not-dropped -- excluded 2026-09-04, back the same day:
+#     its "invalid initializer" was the ROS pointer-box slot read inline by the
+#     nested-carrier-match binder.
 #
-# sum-passthrough-param-not-dropped was excluded here on 2026-09-04 and is now
-# IN the list above -- its "invalid initializer" was the ROS pointer-box slot
-# read inline by the nested-carrier-match binder, fixed the same day.
+#   option-niche-vec-closure-cmp -- the SILENT wrong answer (defect 3), back
+#     2026-09-04.  `(eq? (some "aa") (some "aa"))` was false on the carrier
+#     because no ABI specialization was minted, so the generic Eq[Option] body
+#     kept the `int` representative and compared String payloads by pointer.
+#     Two causes, both needed: `match` was missing from the spec-minting walk
+#     entirely, and the walk did not recognise a dispatch receiver spelled as an
+#     ascription to the instance's OWN constraint var.
+#
+# option-eq-nominal-payload-dispatch is defect 3's minimal repro, kept here as
+# well as in the ordinary suite because it is green on the default path for a
+# DIFFERENT reason than on this one (there the C signature changes and mints the
+# spec by accident; here the dispatch trigger has to do it).
 #
 # NOT excluded-as-defect, by design on the niche axis and covered as such by
 # run-option-niche-seam.sh: option-niche-vec-word (asserts the word form

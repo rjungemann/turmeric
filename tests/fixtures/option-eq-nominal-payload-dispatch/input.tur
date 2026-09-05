@@ -1,0 +1,57 @@
+;; sr2-carrier-seam-rotted, defect 3: `(eq? (some "aa") (some "aa"))` where the
+;; payload is a NOMINAL type with its own Eq instance.
+;;
+;; `(definstance Eq [Option] [(Eq A)] (eq? [x y] (match ... (eq? (:: vx A) ...))))`
+;; -- the inner dispatch has to reach `Eq[String]`, not the `int` representative
+;; the generic instance body is compiled against.  Two things had to be true for
+;; it to, and neither was:
+;;
+;;   1. `match` was missing from `body_has_dispatch_on_app_tyvar`'s walk
+;;      ENTIRELY, so every instance_changes trigger was blind to the inside of a
+;;      match -- which is how every sum instance is written.
+;;   2. the walk peels the `(:: vx A)` ascription and asks about the INNER
+;;      expression (the erased carrier), and `A` is not in the binding set
+;;      anyway: that holds the CLASS var, `a -> (Option String)`.
+;;
+;; This is green on the DEFAULT path for a reason that is not the fix, and that
+;; is the point of keeping it: there `(Option String)` narrows to `void *` where
+;; the representative is `int64_t`, so a spec is minted because the SIGNATURE
+;; changed and correct dispatch is a side effect.  The comments in option.tur and
+;; result.tur say the ascription is what triggers the re-dispatch; it is
+;; necessary, but the C-signature change is what fires.  tests/run-sr2-seam.sh
+;; runs this on the carrier, where that coincidence is unavailable.
+;;
+;; The int payload is the control: a primitive payload's representative IS
+;; correct, and a fix that mints a spec for it would be over-minting.
+
+(load "stdlib/string.tur")
+
+(defn main [] : int
+  ;; Two distinct String values with equal CONTENT.  Eq[String] compares
+  ;; content -> true; the int representative compares pointers -> false.
+  (let [a (:: (some (string/from-cstr "aa")) (Option String))
+        b (:: (some (string/from-cstr "aa")) (Option String))]
+    (println (if (eq? a b) "str-eq" "str-ne")))          ;; str-eq
+
+  ;; Distinct content, so a wrong-instance "true" cannot pass by luck either.
+  (let [c (:: (some (string/from-cstr "aa")) (Option String))
+        d (:: (some (string/from-cstr "bb")) (Option String))]
+    (println (if (eq? c d) "str2-eq" "str2-ne")))        ;; str2-ne
+
+  ;; Control: a primitive payload, where the representative is the right answer.
+  (let [e (:: (some 7) (Option int))
+        f (:: (some 7) (Option int))]
+    (println (if (eq? e f) "int-eq" "int-ne")))          ;; int-eq
+  (let [g (:: (some 7) (Option int))
+        h (:: (some 8) (Option int))]
+    (println (if (eq? g h) "int2-eq" "int2-ne")))        ;; int2-ne
+
+  ;; None on both sides, and a None/Some mismatch: the arms the match walk now
+  ;; also reaches.
+  (let [i (:: (none) (Option String))
+        j (:: (none) (Option String))]
+    (println (if (eq? i j) "none-eq" "none-ne")))        ;; none-eq
+  (let [k (:: (none) (Option String))
+        l (:: (some (string/from-cstr "aa")) (Option String))]
+    (println (if (eq? k l) "mix-eq" "mix-ne")))          ;; mix-ne
+  0)

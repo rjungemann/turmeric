@@ -195,6 +195,16 @@
 ;; re-dispatches per ABI specialization: a bare binder is typed by the
 ;; representative (int) at elaboration, and the spec then pointer-compared
 ;; String/struct payloads (`(eq? (some "aa") (some "aa"))` said false).
+;;
+;; sr2-carrier-seam-rotted (3): the ascription is NECESSARY but it is not what
+;; MINTS the specialization -- `body_has_dispatch_on_app_tyvar` now recognises a
+;; receiver spelled as an ascription to the instance's own constraint var, and
+;; walks into `match` at all, which it did not before.  On the by-value default
+;; the spec used to exist for an unrelated reason (a nominal payload changes the
+;; Option's C signature, so `abi_changes` fires and correct dispatch came along
+;; as a side effect).  Do not read this comment as "the ascription is
+;; sufficient": where a payload type does NOT change the signature -- the whole
+;; carrier path -- it is not.
 
 (definstance Eq [Option]
   [(Eq A)]

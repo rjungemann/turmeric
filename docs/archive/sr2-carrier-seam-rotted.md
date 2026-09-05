@@ -1,10 +1,15 @@
 ---
 title: The SR2 carrier seam has rotted -- a compile error, a silent wrong answer, and a layering crash
-category: Reported
-description: TUR_SR2_APP_SUM_BYVALUE=0, the bisection hatch left behind when parametric-sum-byvalue graduated, no longer produces correct programs. Three distinct defects, found by restoring the harness that was retired at graduation. The layering crash (1) and the carrier-path compile error (2) are fixed; the silent wrong answer (3) is root-caused and open.
+category: Archive
+description: RESOLVED 2026-09-04. TUR_SR2_APP_SUM_BYVALUE=0, the bisection hatch left behind when parametric-sum-byvalue graduated, no longer produced correct programs. All three defects are now fixed; the last one needed two independent changes, and `match` being absent from the spec-minting walk entirely was the half the root-cause note had not found.
 ---
 
 # The SR2 carrier seam has rotted
+
+**RESOLVED 2026-09-04.** All three defects fixed. `tests/run-sr2-seam.sh` is
+57 passed / 0 failed with nothing excluded, and the four-mode table for
+`option-niche-vec-closure-cmp` (default, niche off, SR2 off, both off) is green
+in every cell. See **Defect 3: resolution** at the end.
 
 **Severity: medium.** Nothing here affects the default path -- every fixture
 below is green with no env vars set. What is broken is the **bisection hatch**
@@ -124,7 +129,7 @@ TUR_SR2_APP_SUM_BYVALUE=0 TUR_OPTION_NICHE=0 \
   ./build/tur build tests/fixtures/sum-passthrough-param-not-dropped/input.tur -o /tmp/x
 ```
 
-## 3. `option-niche-vec-closure-cmp`: a silent wrong answer
+## 3. `option-niche-vec-closure-cmp`: a silent wrong answer -- **FIXED 2026-09-04**
 
 The sharper of the two, because it is a **wrong value, not a crash**, and
 because of how it hides:
@@ -237,3 +242,92 @@ what happens to the **path the graduation stops exercising**. Three graduations
 hit this and two got it right by instinct rather than by rule. Worth one line
 in the experimental-flags guide: *if graduation flips a default, the harness
 that covered the old default does not retire -- it inverts.*
+
+---
+
+# Defect 3: resolution, 2026-09-04
+
+The root-cause note above was right about the mechanism (`abi_changes` is the
+only trigger that fires, and it fires for a signature reason unrelated to
+dispatch) and right that the fix belongs in `instance_changes`. It found one of
+the two things that had to change, and both were needed -- verified by
+subtraction, each half alone still prints `opt-ne`.
+
+## `match` was not in the walk at all
+
+`body_has_dispatch_on_app_tyvar` traverses `EX_PROGRAM`, `EX_FN_DEF`, `EX_DEF`,
+`EX_LET`, `EX_DO`, `EX_BUILTIN`, `EX_IF`, `EX_WHILE`, `EX_CALL`,
+`EX_MAKE_STRUCT`, `EX_GET_FIELD`, `EX_SET_FIELD`, `EX_RETURN`, `EX_ASCRIBE`,
+`EX_CAST`, `EX_REINTERPRET` -- and **not `EX_MATCH`**.
+
+So every `instance_changes` trigger -- the TY_APP tyvar dispatch, the
+return-dispatch, the field extraction -- was blind to anything inside a match.
+That is not a corner case: matching is how a sum instance is written, so
+`(definstance Eq [Option] ... (match x (Some vx) ... (eq? (:: vx A) ...)))` had
+its only dispatch permanently out of reach. This is the report's caution (a)
+("the recursion did not appear to reach the inner call") with a cause: it was
+not a subtle traversal-order problem, the node kind was simply missing.
+
+Found by instrumenting the walk rather than reading it: a probe printing every
+call the walk reached under the CONCRETE binding set reached exactly one, with
+no `dict_arg`, while the same probe under the abstract binding set reached the
+ascribed inner calls. The asymmetry is what pointed at the container, not the
+predicate.
+
+## The receiver is an ascription to the instance's own constraint var
+
+With the walk reaching it, the existing predicate still declined. It peels
+`EX_ASCRIBE` and asks about the INNER expression -- whose type on the carrier is
+`int64_t` -- and `A` is not in `bindings` regardless: that holds the CLASS var,
+`a -> (Option String)`.
+
+The added clause asks about the ascription's OWN type: a tyvar that is NOT in
+the binding set is the instance's own constraint var, and a spec is minted when
+some class-var binding is a `TY_APP` whose type argument is nominal
+(`TY_ADT`/`TY_APP`).
+
+**That last condition is the over-minting guard**, and it is why the report's
+caution (b) did not materialise: only a nominal payload can have an instance the
+`int` representative gets wrong. `(Option int)` / `(Option bool)` /
+`(Option float)` have a primitive `args[0]` and mint nothing. Measured: the full
+default suite is 2792 passed / 0 failed with **zero snapshot drift**, so the
+widening changes no byte of the default path.
+
+## The dispatch was only half of it
+
+Minting the spec fixed WHICH instance is called. It was then handed the wrong
+thing: inside a carrier-representation spec the payload locals are `int64_t`,
+while the re-resolved concrete instance declares
+`__inst_Eq_eq_qu_String(void *, void *)`. The program printed the right answer
+and emitted
+
+```
+warning: passing argument 1 of '__inst_Eq_eq_qu_String' makes pointer from
+integer without a cast [-Wint-conversion]
+```
+
+which `tests/run.sh`'s cc ratchet treats as a hard FAIL and GCC >= 14 treats as
+an error. A right answer with a `-Wint-conversion` under it is not a fix. The
+argument half is a reinterpret at the call site, narrowly gated: a
+dict-dispatched call, inside a spec, whose callee's RECORDED param is a pointer
+and whose argument's static type is a carrier word.
+
+## What this says beyond the hatch
+
+The report flagged it and it survives the fix: the comments in `option.tur` and
+`result.tur` claiming the `(:: vx A)` ascription is what makes the inner `eq?`
+re-dispatch describe a coincidence. The ascription is necessary; the
+C-signature change is what fired. Both comments now say so.
+
+One thing the report suspected that is NOT a live default-path gap: two distinct
+payload types that share an Option C signature do not collide. Probed with two
+`defopaque ... :ptr<void> :non-null` types carrying deliberately opposite `Eq`
+instances -- the emitter disambiguates the clone names
+(`__spec__bool_void___void__` and `..._h1`), and both answered correctly.
+
+## Meta
+
+The graduation-checklist hole the report names is now one section in
+[docs/guides/experimental-flags-guide.md](../guides/experimental-flags-guide.md):
+*if graduation flips a default, the harness that covered the old default does
+not retire -- it inverts.*
