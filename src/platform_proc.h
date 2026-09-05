@@ -1,0 +1,142 @@
+/* platform_proc.h - portable pieces of a shell-string subprocess.
+ *
+ * Every `system()` / `popen()` call site in the package and install paths
+ * builds a SHELL COMMAND STRING.  That string is handed to /bin/sh on POSIX and
+ * to cmd.exe on Windows, and the two agree on almost none of its syntax.  Two
+ * differences account for every failure observed so far:
+ *
+ *   1. The null device.  `2>/dev/null` is a redirect to a path cmd.exe cannot
+ *      resolve; it prints "The system cannot find the path specified." and the
+ *      command fails.  cmd.exe spells it `NUL`.
+ *
+ *   2. Quoting.  cmd.exe does not treat `'` as a quote character AT ALL, so a
+ *      single-quoted argument is passed through with the quotes still attached
+ *      and the callee sees a literal `'C:\path'`.  Windows wants double quotes.
+ *
+ * Both failures are SILENT in the way that matters: the command runs, does
+ * nothing, and returns a status the caller may or may not check.  `tur new`
+ * scaffolded a project and skipped `git init` while exiting 0, and reported
+ * "git config user.name not set" on a machine where it was plainly set --
+ * because the probe that read it had failed, not because the value was absent.
+ *
+ * On every non-Windows platform this compiles to the POSIX spellings, so it is
+ * safe (and cheap) to include unconditionally.
+ *
+ * See docs/reported/windows-subprocess-and-shared-lib-gaps.md.
+ */
+
+#ifndef TUR_PLATFORM_PROC_H
+#define TUR_PLATFORM_PROC_H
+
+#include <stddef.h>
+#include <string.h>
+
+/* The null device, as the platform's shell spells it.  Use in a redirect:
+ *   snprintf(cmd, sizeof cmd, "git ... 2>" TUR_DEVNULL);
+ * It is a string literal so it concatenates into a format string. */
+#ifdef _WIN32
+#  define TUR_DEVNULL "NUL"
+#else
+#  define TUR_DEVNULL "/dev/null"
+#endif
+
+/* Quote one argument for the platform's shell.
+ *
+ * Writes a NUL-terminated quoted form of `in` into `out`; returns 0 on success
+ * and -1 if it would not fit (the caller must treat that as a hard failure --
+ * a truncated command string is worse than no command at all).
+ *
+ * POSIX: single quotes, with the standard `'\''` break-out for an embedded
+ * quote, which is safe against every metacharacter sh has.
+ *
+ * Windows: double quotes.  Inside them cmd.exe leaves &, |, <, >, ^ alone, and
+ * the CRT's argument parser handles the rest.  An embedded double quote is
+ * escaped as \", and a run of backslashes immediately BEFORE such a quote has
+ * to be doubled -- that is the CRT's documented rule, and getting it wrong is
+ * how a trailing separator in a directory path (`C:\dir\`) silently escapes the
+ * closing quote and swallows the next argument.
+ */
+static inline int tur_shell_quote(const char *in, char *out, size_t cap) {
+    if (!in || !out || cap < 3) return -1;
+    size_t o = 0;
+#ifdef _WIN32
+    out[o++] = '"';
+    size_t bs = 0;                       /* pending backslashes */
+    for (const char *p = in; *p; p++) {
+        if (*p == '\\') { bs++; continue; }
+        if (*p == '"') {
+            /* double the run that precedes the quote, then escape the quote */
+            for (size_t i = 0; i < bs * 2 + 1; i++) {
+                if (o + 2 >= cap) return -1;
+                out[o++] = '\\';
+            }
+            bs = 0;
+            if (o + 2 >= cap) return -1;
+            out[o++] = '"';
+            continue;
+        }
+        for (size_t i = 0; i < bs; i++) {
+            if (o + 2 >= cap) return -1;
+            out[o++] = '\\';
+        }
+        bs = 0;
+        if (o + 2 >= cap) return -1;
+        out[o++] = *p;
+    }
+    /* a trailing run abuts the closing quote, so it must be doubled too */
+    for (size_t i = 0; i < bs * 2; i++) {
+        if (o + 2 >= cap) return -1;
+        out[o++] = '\\';
+    }
+    if (o + 2 >= cap) return -1;
+    out[o++] = '"';
+#else
+    out[o++] = '\'';
+    for (const char *p = in; *p; p++) {
+        if (*p == '\'') {
+            if (o + 5 >= cap) return -1;
+            out[o++] = '\''; out[o++] = '\\'; out[o++] = '\''; out[o++] = '\'';
+            continue;
+        }
+        if (o + 2 >= cap) return -1;
+        out[o++] = *p;
+    }
+    if (o + 2 >= cap) return -1;
+    out[o++] = '\'';
+#endif
+    out[o] = '\0';
+    return 0;
+}
+
+/* Wrap a complete shell command string for system()/popen().
+ *
+ * POSIX: nothing to do.
+ *
+ * Windows: system() runs `cmd.exe /c <string>`, and cmd.exe has a rule that
+ * catches every caller eventually -- if the string begins with a quote, it
+ * strips the FIRST and LAST quote characters and runs what is left.  With one
+ * quoted program path that is harmless; with a quoted program AND quoted
+ * arguments it tears the command in half, and cmd.exe reports "The filename,
+ * directory name, or volume label syntax is incorrect."  The documented
+ * remedy is an extra enclosing pair, so the pair cmd.exe eats is one we added.
+ *
+ * Returns 0 on success, -1 if it would not fit.
+ */
+static inline int tur_shell_command(const char *cmd, char *out, size_t cap) {
+    if (!cmd || !out) return -1;
+#ifdef _WIN32
+    size_t n = strlen(cmd);
+    if (n + 3 > cap) return -1;
+    out[0] = '"';
+    memcpy(out + 1, cmd, n);
+    out[n + 1] = '"';
+    out[n + 2] = '\0';
+#else
+    size_t n = strlen(cmd);
+    if (n + 1 > cap) return -1;
+    memcpy(out, cmd, n + 1);
+#endif
+    return 0;
+}
+
+#endif /* TUR_PLATFORM_PROC_H */
