@@ -41,6 +41,29 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **The trail's `#fx{Bt}` effect row is now checked; it used to resolve to
+  nothing.** Every mutator in `stdlib/trail.tur` has carried `#fx{Bt}` since
+  0.41, but no `defeffect` declared `Bt`, and an undeclared uppercase name in
+  a row is silently dropped at resolution -- so the annotation checked as
+  `#fx{}` and `--dump-effects` showed `bt-set! : #{}`. `Bt` is now a
+  `^capability` effect declared in `trail.tur` (the autoloaded module, so it
+  is declared wherever the row is written), which makes it propagate from a
+  callee's declared row like `#fx{FS}`: a caller that declares `#fx{}` (or
+  any row without `Bt`) and reaches the trail is `TUR-E0009`. Unannotated
+  callers stay unchecked, as for every capability tag. `bt-scope`,
+  `with-untrailed`, `dfs-solve` and `dfs-choose-go` carry the row too; the
+  DFS goal constructors deliberately do not (they only build a closure).
+
+  The refinement solver's declared-row purity veto had a second defect that
+  hid behind the first: it ran once at the top of the walk and was skipped on
+  every memo hit, and the memo was written first by the predicate-impurity
+  walk, so it never fired -- for a resolved `#fx{Unsafe}` either. It now
+  applies where the verdict is memoized, so it holds on every lookup and is
+  transitive (an unannotated wrapper around a `#fx{Bt}` function is not
+  proven pure). Pinned by `sx1-bt-row-checked` and
+  `errors/sx1-bt-row-pure-caller-rejected`; the Backtrackable State Guide has
+  a section, and the Effects System Guide now documents the silent-drop trap.
+
 - **The internals guide's solver documentation was a release cycle stale.**
   The caps table gave `NO_MAX_SHARED` as 8 where the source says 16 (raised
   2026-08-25), in two places; the S1 section still described the

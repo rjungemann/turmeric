@@ -369,6 +369,23 @@ I/O-touching modules:
 | `#fx{Proc}` | `process.tur`, `env.tur`                     |
 | `#fx{Rand}` | `random.tur`                                |
 
+A sixth lives outside `effects.tur`, because the module that uses it is
+autoloaded and `effects.tur` is not:
+
+| Tag       | Declared in       | Used by                                                     |
+|-----------|-------------------|-------------------------------------------------------------|
+| `#fx{Bt}`   | `trail.tur`       | every trail mutator, `bt-scope`, `with-untrailed`, `dfs-solve` |
+
+`Bt` is not under `IO`: mutating the backtracking trail is process-local
+state, not an authority over a resource outside the process. See the
+[Backtrackable State Guide](backtrackable-state-guide.md#the-bt-capability).
+
+One trap worth knowing about any tag: an uppercase name in `#fx{...}` that no
+`defeffect` in the compile declares is **silently dropped** at resolution, so
+`#fx{Typo}` checks as `#fx{}`. That is how `#fx{Bt}` sat decorative on the
+trail mutators for a month before `Bt` was declared. If a row you annotated
+seems to have no effect, `--dump-effects` shows what it resolved to.
+
 Discipline stays **opt-in**: a function with no effect-row annotation is never
 checked, so existing code that ignores effect rows keeps compiling. Only when a
 caller annotates its own row (e.g. declares `#fx{}` or `#fx{Net}`) does the compiler

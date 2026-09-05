@@ -1,0 +1,64 @@
+;; sx1-bt-row-checked -- the `#fx{Bt}` row is CHECKED, not decorative.
+;;
+;; `Bt` is a `^capability` effect declared in stdlib/trail.tur (autoloaded),
+;; so the row on the trail mutators and bracket forms resolves to a real
+;; effect.  Before 2026-09-05 nothing declared it, and `effect_row_resolve`
+;; silently drops an undeclared uppercase name, so `#fx{Bt}` resolved to `{}`
+;; -- which is why the plan recorded "no verdict anywhere moves".
+;;
+;; Three things this fixture pins, with the negative half in
+;; errors/sx1-bt-row-pure-caller-rejected:
+;;
+;;   1. A caller that DECLARES `#fx{Bt}` and reaches the trail through the
+;;      bracket form and through the DFS driver compiles and runs.  (A `#fx{}`
+;;      caller of the same code is TUR-E0009 -- the errors fixture.)
+;;
+;;   2. The declared row VETOES the refinement solver's purity walk on a body
+;;      the walk can otherwise prove pure.  `idv-bt` is the identity with a
+;;      `#fx{Bt}` row; `(- (idv-bt x) (idv-bt x))` must NOT be collapsed to
+;;      `t - t` and proven, so the W0372 in expected.stderr is the assertion.
+;;      `pure-probe` is the control: the same shape over an unannotated
+;;      identity IS proven (no warning for it), so a walk that had merely
+;;      become conservative everywhere would not pass.
+;;
+;;   3. The veto is TRANSITIVE and memo-stable.  `via-bt` has no row of its
+;;      own and only calls `idv-bt`; the walk must not prove it pure by
+;;      descending into a body it was told not to trust.  The veto used to be
+;;      applied once at the top of the walk and skipped on every memo hit,
+;;      and the memo was written first by the predicate-impurity walk -- so
+;;      the "top" veto never ran.  Applying it where the verdict is memoized
+;;      closes both holes at once.
+
+(defn idv-bt [x : int] #fx{Bt} : int x)
+(defn idv [x : int] : int x)
+(defn via-bt [x : int] : int (idv-bt x))
+
+(defn bt-probe [x : int] : #refine{ r : int | (>= r 0) }
+  (- (idv-bt x) (idv-bt x)))
+
+(defn via-probe [x : int] : #refine{ r : int | (>= r 0) }
+  (- (via-bt x) (via-bt x)))
+
+(defn pure-probe [x : int] : #refine{ r : int | (>= r 0) }
+  (- (idv x) (idv x)))
+
+;; A caller that declares the capability it uses: both bracket forms, and a
+;; write through the driver.  Each is the shape the errors twin rejects under
+;; `#fx{}`.
+(defn scoped-write [c : BtCell] #fx{Bt} : int
+  (bt-scope (fn [] (do (bt-set! c 5) (bt-get c)))))
+
+(defn kept-write [c : BtCell] #fx{Bt} : int
+  (let [m (bt-mark)]
+    (with-untrailed (fn [] (bt-set! c 7)))
+    (bt-undo-to! m)
+    (bt-get c)))
+
+(defn main [] : int
+  (let [c (bt-cell-new 1)]
+    (println (scoped-write c))   ; 5 -- the body's value survives
+    (println (bt-get c))         ; 1 -- the write did not
+    (println (kept-write c))     ; 7 -- untrailed, so it survived the undo
+    (println (pure-probe 5))     ; 0
+    (bt-cell-free c)
+    0))

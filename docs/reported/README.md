@@ -669,6 +669,7 @@ suite 2687 passed, 0 failed.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [jit-ffi-interp-refuses-parametric-record-field](jit-ffi-interp-refuses-parametric-record-field.md) | low | `call-ptr` under `--interpret` refuses a record with a parametric-monomorph field (`(BoxW int32)`) that the compiled path inlines by value: a compiled/interpreted divergence, refused cleanly. Its diagnostic ("no by-value C member type") is inaccurate in every case it can fire |
+| [defer-in-generic-hof-skipped-on-caught-panic](defer-in-generic-hof-skipped-on-caught-panic.md) | medium | a `defer` registered inside a generic (`[A]`) higher-order function is skipped on a caught `panic` unwind on the COMPILED path, while the interpreter fires it -- a silent missed cleanup and a compiled/interpreted divergence. The non-generic twin fires on both. This is why `bt-scope`'s panic caveat cannot be closed by rewriting it to a `defer`: `bt-scope` is `[A]`-generic, so the defer would be dropped on exactly the unwind it was meant to cover. Found 2026-09-05 checking that caveat; not trail-specific (the repro has no trail) |
 
 The `mir-aarch64` row was indexed 2026-08-21. It had **no row at all** since it
 was filed -- the only open report in the tree that this index never listed, and

@@ -99,7 +99,10 @@ Two caveats:
   level. There is no unwind protection to hang the restore on. `with-untrailed`
   is worse in the same way: a panic there leaves trailing paused for everything
   after it, so later writes silently stop being undoable. Do not put fallible
-  work in a `with-untrailed` that a `bt-scope` could hold instead.
+  work in a `with-untrailed` that a `bt-scope` could hold instead. A `defer`
+  cannot currently close this: `bt-scope` is generic, and a `defer` inside a
+  generic function is dropped on a caught-panic unwind on the compiled path
+  ([report](https://github.com/rjungemann/turmeric/blob/main/docs/reported/defer-in-generic-hof-skipped-on-caught-panic.md)).
 - **Free cells outside the scope that wrote them.** A trail entry still pointing
   at a freed cell dangles until the next undo, and the failure surfaces inside
   `bt-undo-to!` rather than at the free.
@@ -200,10 +203,53 @@ Worth knowing before extending the driver:
   and capturing a fat closure moves it (`TUR-E0005`). Calling is non-consuming;
   capture is not.
 - Recursion is written pass-`k`-through (`dfs-choose-go`) rather than
-  goal-returning, because a self-recursive call whose fn-typed result feeds a
-  `^fat` parameter hits a known
-  [codegen bug](https://github.com/rjungemann/turmeric/blob/main/docs/reported/self-recursive-fn-returning-call-into-fat-sink.md);
-  the same call through a one-line forwarder works.
+  goal-returning. When the driver was written, a self-recursive call whose
+  fn-typed result fed a `^fat` parameter hit a
+  [codegen bug](https://github.com/rjungemann/turmeric/blob/main/docs/archive/self-recursive-fn-returning-call-into-fat-sink.md),
+  since fixed (2026-08-27); the spelling stayed because it is also the one
+  that does not capture `k`.
+
+## The `Bt` capability
+
+Every function in `stdlib/trail.tur` that mutates the trail carries `#fx{Bt}`:
+the writes (`bt-set!`, `g-set!`), the marks (`bt-mark`, `bt-undo-to!`,
+`bt-commit-to!`), the pause halves (`untrailed-begin`, `untrailed-end`,
+`trail-reset!`), and both bracket forms (`bt-scope`, `with-untrailed`). In the
+driver, `dfs-solve` and the internal `dfs-choose-go` carry it too; the goal
+*constructors* (`dfs-set`, `dfs-choose-int`, ...) do not, because they only
+build a closure and the trail is touched when `dfs-solve` runs it.
+
+`Bt` is a `^capability` effect, like `#fx{FS}` or `#fx{Net}` (see the
+[Effects System Guide](effects-system-guide.md#capability-effect-tags-capability)),
+which means the row is **checked**, at two places:
+
+- **Effect rows.** A capability propagates from a callee's declared row into
+  the caller's inferred row, so a caller that declares its own row without
+  `Bt` and reaches the trail fails with `TUR-E0009`. A caller with no row
+  annotation is not checked at all -- the discipline is opt-in, exactly as for
+  the other tags.
+
+  ```turmeric
+  (defn bind-var [c : BtCell v : int] #fx{Bt} : bool   ; OK
+    (bt-set! c v))
+
+  (defn bind-var-bad [c : BtCell v : int] #fx{} : bool  ; TUR-E0009
+    (bt-set! c v))
+  ```
+
+- **Refinement purity.** The solver only congruence-collapses two calls of a
+  function it has proven pure, and a declared non-empty row vetoes that proof
+  whatever the body looks like. The veto is memoized with the verdict and is
+  transitive: an unannotated function whose only work is calling a
+  `#fx{Bt}` function is not proven pure either. The trail's own mutators were
+  never at risk here -- they are inline-C, which the walk refuses on sight --
+  so what the row buys is precision on the wrappers *around* them, and a
+  declaration the walk would find already in place if it were ever widened.
+
+`Bt` is declared in `trail.tur` itself, not in `effects.tur`, because
+`trail.tur` is autoloaded and `effects.tur` is not, and an effect name nothing
+declares resolves to *nothing*, silently. That is not hypothetical: the row sat
+on the mutators for a month checking as `#fx{}` before the declaration existed.
 
 ## Under `--interpret`
 

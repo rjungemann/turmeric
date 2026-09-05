@@ -12205,11 +12205,28 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
         return turi_error("elaboration error");
     }
 
-    /* 6b. Run effect-row check pass to emit warnings (e.g. TUR-W0033). */
+    /* 6b. Run effect-row check pass to emit warnings (e.g. TUR-W0033).
+     *
+     * The EffectEnv is SESSION-scoped (env->effect_env), not per turn: the
+     * pass populates it from the EX_DEFECT nodes of the program it is handed,
+     * and under incremental elaboration that program holds only this turn's
+     * forms -- so a fresh env per turn never saw `defeffect Bt` from the
+     * stdlib preload turn, resolved this turn's declared `#fx{Bt}` to `{}`,
+     * and reported TUR-E0009 against a callee whose row (resolved on its own
+     * turn) still carried Bt.  Registration is idempotent, so re-scanning a
+     * turn's defeffects into the shared env is harmless.  The builtin
+     * `Unsafe` is registered as the compiled pipeline does (PASS_EFFECT_LOWER
+     * in main.c), for the same parity reason. */
     {
-        EffectEnv eff_env;
-        memset(&eff_env, 0, sizeof(eff_env));
-        effect_check_pass(eval_arena, prog, &eff_env);
+        EffectEnv *eff_env = (EffectEnv *)env->effect_env;
+        if (!eff_env) {
+            eff_env = effect_env_new(eval_arena);
+            effect_env_register_builtin_unsafe(
+                eff_env, eval_arena,
+                symtab_intern(&env->st, strslice(EFFECT_NAME_UNSAFE, 6)));
+            env->effect_env = eff_env;
+        }
+        effect_check_pass(eval_arena, prog, eff_env);
         /* Warnings are emitted as a side-effect; ignore hard errors in
          * interpreter mode (they would already be caught as elaboration errors). */
     }

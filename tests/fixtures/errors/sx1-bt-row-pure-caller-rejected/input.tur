@@ -1,0 +1,30 @@
+;; sx1-bt-row-pure-caller-rejected -- a caller that claims a row without
+;; `Bt` and reaches the trail is rejected with TUR-E0009.
+;;
+;; `Bt` is a `^capability` effect (stdlib/trail.tur), so it propagates from a
+;; callee's DECLARED row into the caller's inferred row exactly as `#fx{FS}`
+;; does; a `#fx{}` caller therefore fails the declared-vs-inferred check.  The
+;; discipline is opt-in: the same body with no row annotation compiles (see
+;; sx1-bt-row-checked for the `#fx{Bt}` twin of each shape below).
+;;
+;; Three routes in, one per line of expected.diag: a direct write, the
+;; `bt-scope` bracket, and the DFS driver's `dfs-solve`.
+
+(load "stdlib/backtrack-dfs.tur")
+
+(defn direct-bad [c : BtCell] #fx{} : bool
+  (bt-set! c 1))
+
+(defn scoped-bad [c : BtCell] #fx{} : int
+  (bt-scope (fn [] (do (bt-set! c 5) (bt-get c)))))
+
+(defn driver-bad [c : BtCell] #fx{} : int
+  (dfs-solve (dfs-choose-int c 1 3) (fn [] true)))
+
+(defn main [] : int
+  (let [c (bt-cell-new 0)]
+    (println (if (direct-bad c) 1 0))
+    (println (scoped-bad c))
+    (println (driver-bad c))
+    (bt-cell-free c)
+    0))

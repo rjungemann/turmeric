@@ -381,6 +381,15 @@ typedef struct TuriEnv {
     /* SI4: TypeClassEnv* from latest turi_eval; used by turi_try_show for Show dispatch.
      * Points into an eval_arena (never freed). Cast to TypeClassEnv* in eval.c. */
     void        *last_tc_env;
+    /* Session-scoped EffectEnv* for the per-turn effect-row check.  Turns are
+     * elaborated INCREMENTALLY, so a `defeffect` from an earlier turn (the
+     * stdlib preload, an earlier REPL line) is not in the program the check
+     * pass sees this turn; a fresh env per turn resolved every such name to
+     * nothing, so a caller's declared `#fx{Bt}` read as `#fx{}` while the
+     * callee's, resolved on ITS turn, still carried Bt -- a spurious TUR-E0009
+     * under --interpret only.  Registered effects accumulate here instead.
+     * Points into an eval_arena (never freed).  Cast to EffectEnv* in eval.c. */
+    void        *effect_env;
     /* Full elaborated Type of the last top-level result, as a `const Type *`
      * into the same eval_arena as last_tc_env (never freed; NULL when the turn
      * produced no new top-level expression).  The companion `type_tag` string
