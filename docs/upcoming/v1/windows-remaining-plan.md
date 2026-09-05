@@ -27,7 +27,7 @@ failed` on a clean CI runner whose workspace is on `D:`. A dozen fixtures (and
 stdlib's `fs/tmpfile`) spell `/tmp/...` literally, and a NATIVE Windows binary
 resolves that against the current drive root, not the MSYS shell's `/tmp`.
 `tests/run.sh` now provisions `<drive>:	mp`; the real fix is tracked in
-[windows-hardcoded-tmp-resolves-to-drive-root](../../reported/windows-hardcoded-tmp-resolves-to-drive-root.md).
+[windows-hardcoded-tmp-resolves-to-drive-root](../../archive/windows-hardcoded-tmp-resolves-to-drive-root.md).
 
 Run the suite against a **Debug** build. A Release `tur` compiles out contract
 checks (`rt_contracts_emitted` is `#ifdef NDEBUG`), so every fixture pinning a

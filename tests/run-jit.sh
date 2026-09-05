@@ -27,6 +27,8 @@
 #
 # Markers (mirroring run-turi.sh's posture):
 #   requires.cc               -- genuinely cc-only under the JIT; PASS-skip
+#   requires.posix-apis       -- POSIX-only APIs; PASS-skip on Windows only,
+#                                matching tests/run.sh
 #   requires.interp           -- interpreter-owned fixture; PASS-skip
 #   requires.dedicated-runner -- owned by its own ctest target; PASS-skip
 #   requires.spices           -- skipped when the sibling checkout is absent
@@ -195,6 +197,15 @@ run_jit_fixture() {
     if [ -f "$dir/requires.dedicated-runner" ]; then
         printf 'SKIP %s (requires.dedicated-runner)\n' "$name"
         echo "SKIP" > "$RESULTS_DIR/$rkey.result"; return; fi
+    # requires.posix-apis: POSIX-only APIs the fixture reaches from inline-C.
+    # tests/run.sh has honoured this since the marker was introduced; this
+    # runner did not, so eleven fixtures that run.sh correctly skips on
+    # Windows were failing here for a reason that has nothing to do with the
+    # JIT -- reactor-*, scheduler-io-park, term-raw-cooked-roundtrip.  They
+    # accounted for 11 of the 61 failures in the first Windows corpus run.
+    if [ -f "$dir/requires.posix-apis" ] && [ "$TUR_HOST_WINDOWS" = "1" ]; then
+        printf 'SKIP %s (posix-apis; not on Windows)\n' "$name"
+        echo "SKIP" > "$RESULTS_DIR/$rkey.result"; return; fi
     if [ -f "$dir/requires.spices" ] && [ ! -d "../turmeric-spices" ]; then
         printf 'SKIP %s (requires.spices; sibling checkout absent)\n' "$name"
         echo "SKIP" > "$RESULTS_DIR/$rkey.result"; return; fi
@@ -311,6 +322,8 @@ run_jit_error_fixture() {
     if [ -f "$dir/requires.cc" ] || [ -f "$dir/requires.interp" ] \
        || [ -f "$dir/requires.interp-only" ] \
        || [ -f "$dir/requires.spices" ]; then return; fi
+    if [ -f "$dir/requires.posix-apis" ] && [ "$TUR_HOST_WINDOWS" = "1" ]; then
+        return; fi
 
     if stamp_check "$name" "$dir/input.tur"; then
         printf 'PASS %s\n' "$name"
@@ -363,6 +376,15 @@ for d in tests/fixtures/*/ tests/fixtures/*/*/; do
     [ -d "$d" ] || continue
     ALL_DIRS+=("$d")
 done
+
+# Are we producing Windows binaries?  Mirrors tests/run.sh: keyed on MSYSTEM
+# rather than uname so it stays false under WSL, which runs the Linux build and
+# has every POSIX API.
+TUR_HOST_WINDOWS=0
+case "${MSYSTEM:-}" in
+  UCRT64|MINGW64|CLANG64|MINGW32) TUR_HOST_WINDOWS=1 ;;
+esac
+export TUR_HOST_WINDOWS
 
 JIT_FILTER="${JIT_FILTER:-${TUR_TEST_FILTER:-}}"
 FILTERED_DIRS=()
