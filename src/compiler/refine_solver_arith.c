@@ -437,17 +437,26 @@ bool la_entails_eq(LaState *st, VCTerm *x, VCTerm *y) {
     return gt_unsat;
 }
 
-RefineDecision refine_s2_decide(RefineVC *vc, Arena *a) {
+RefineDecision refine_s2_decide_cc(RefineVC *vc, Arena *a, RefineCubeCache *cc) {
     if (!vc || !vc->goal) return refine_unknown();
 
-    VCCubeSet cs;
-    if (!refine_cubes_build(vc, a, &cs)) return refine_unknown();
-    if (cs.trivial || cs.n == 0) return refine_valid();
+    const VCCubeSet *cs;
+    if (!refine_cubes_get(vc, a, cc, &cs)) return refine_unknown();
+    if (cs->trivial || cs->n == 0) return refine_valid();
 
-    for (uint32_t i = 0; i < cs.n; i++) {
+    for (uint32_t i = 0; i < cs->n; i++) {
         LaState *st = la_new(vc, a);
-        la_assert_cube(st, &cs.cubes[i]);
+        la_assert_cube(st, &cs->cubes[i]);
         if (!la_unsat(st)) return refine_unknown();
     }
     return refine_valid();
+}
+
+/* refine-chain-expands-the-same-dnf-four-times: the original entry point, kept
+ * so every caller outside the chain driver (`tur smt`, tests/unit, the SX8
+ * doors) is unchanged -- a fresh cache means it builds exactly once, as it
+ * always did. */
+RefineDecision refine_s2_decide(RefineVC *vc, Arena *a) {
+    RefineCubeCache cc = {0};
+    return refine_s2_decide_cc(vc, a, &cc);
 }

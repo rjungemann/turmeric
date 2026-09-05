@@ -207,6 +207,19 @@ static void expand(CubeAcc *acc, VCTerm **pending, uint32_t n_pending,
     acc->depth--;
 }
 
+/* refine-chain-expands-the-same-dnf-four-times: build once per chain run.
+ * See the RefineCubeCache comment in refine_solver.h for why this is a local
+ * rather than a cache on the RefineVC, and why it is lazy. */
+bool refine_cubes_get(RefineVC *vc, Arena *a, RefineCubeCache *cc,
+                      const VCCubeSet **out) {
+    if (!cc->tried) {
+        cc->tried = true;
+        cc->ok = refine_cubes_build(vc, a, &cc->cs);
+    }
+    *out = &cc->cs;
+    return cc->ok;
+}
+
 bool refine_cubes_build(RefineVC *vc, Arena *a, VCCubeSet *out) {
     memset(out, 0, sizeof(*out));
     if (!vc || !vc->goal) { out->overflow = true; return false; }

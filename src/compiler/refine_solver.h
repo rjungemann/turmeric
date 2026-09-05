@@ -237,6 +237,40 @@ static inline VCTerm *refine_lit_atom(VCTerm *l) {
  * out->overflow) when a cap is hit. */
 bool refine_cubes_build(RefineVC *vc, Arena *a, VCCubeSet *out);
 
+/* refine-chain-expands-the-same-dnf-four-times: one chain run's cube set.
+ *
+ * S0 -> S1 -> S2 -> S3 each opened by calling `refine_cubes_build` on an
+ * UNCHANGED vc, so an obligation reaching S3 ran the same NNF conversion and
+ * the same DNF product expansion four times and threw three of them away --
+ * 75% of the cube expansion in this solver was duplicate work (measured: 48
+ * builds across the heaviest in-tree refinement fixture, 4 per obligation on
+ * the corpus benchmarks that reach S3).
+ *
+ * This is a LOCAL with the lifetime of one chain run, not a cache on the
+ * RefineVC.  That distinction is the whole safety argument: SX8b's `(pop)`
+ * truncates `vc->n_hyps` directly, so a cache keyed on (n_hyps, goal) can be
+ * stale after pop + re-assert re-grows the count to the same value with
+ * different hypotheses, and invalidating it correctly would need a generation
+ * counter -- a soundness-critical invariant for a noise-level win.  A chain-run
+ * local needs no invalidation because the vc cannot change under it.
+ *
+ * LAZY on purpose.  S0 decides several shapes syntactically (`hyp_contains`,
+ * ex falso) BEFORE it needs cubes, and those obligations build none today.
+ * Building eagerly in the driver would have made them pay for one, trading a
+ * duplicate-work win for a new cost on the cheapest path.  Building on first
+ * ask keeps 0 builds at 0 and turns 4 into 1. */
+typedef struct RefineCubeCache {
+    bool     tried;   /* refine_cubes_build has run for this chain */
+    bool     ok;      /* ... and returned true */
+    VCCubeSet cs;
+} RefineCubeCache;
+
+/* Cube set for this chain run, built on the first ask.  Returns false exactly
+ * when `refine_cubes_build` would have (a cap hit), and does so for every later
+ * ask in the same run without re-expanding. */
+bool refine_cubes_get(RefineVC *vc, Arena *a, RefineCubeCache *cc,
+                      const VCCubeSet **out);
+
 /* ------------------------------------------------------------------------- *
  * S1: congruence closure (EUF)
  * ------------------------------------------------------------------------- */
@@ -302,5 +336,14 @@ RefineDecision refine_s0_decide(RefineVC *vc, Arena *a);
 RefineDecision refine_s1_decide(RefineVC *vc, Arena *a);
 RefineDecision refine_s2_decide(RefineVC *vc, Arena *a);
 RefineDecision refine_s3_decide(RefineVC *vc, Arena *a);
+
+/* The same stages sharing one chain run's cube set.  The four entry points
+ * above are thin wrappers over these with a fresh cache, so `tur smt`,
+ * tests/unit/refine_solver.c and the SX8a/SX8b doors call exactly what they
+ * called before. */
+RefineDecision refine_s0_decide_cc(RefineVC *vc, Arena *a, RefineCubeCache *cc);
+RefineDecision refine_s1_decide_cc(RefineVC *vc, Arena *a, RefineCubeCache *cc);
+RefineDecision refine_s2_decide_cc(RefineVC *vc, Arena *a, RefineCubeCache *cc);
+RefineDecision refine_s3_decide_cc(RefineVC *vc, Arena *a, RefineCubeCache *cc);
 
 #endif /* TUR_REFINE_SOLVER_H */

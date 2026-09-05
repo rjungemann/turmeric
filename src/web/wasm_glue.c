@@ -1229,16 +1229,25 @@ static void smt_json_model(Buf *out, const RefineModel *m) {
 /* One `(check-sat)`'s worth of work: run the chain, then the bounded search if
  * nothing proved it.  Mirrors `smt_answer` in main.c. */
 static void smt_one_answer(RefineVC *vc, Arena *arena, Buf *out) {
-    static const struct { const char *name; RefineBackend fn; } CHAIN[] = {
-        { "S0 (trivial)",       refine_s0_decide },
-        { "S1 (EUF)",           refine_s1_decide },
-        { "S2 (arithmetic)",    refine_s2_decide },
-        { "S3 (Nelson-Oppen)",  refine_s3_decide },
+    /* refine-chain-expands-the-same-dnf-four-times: the `_cc` stages, sharing
+     * ONE run's cube set.  Each stage used to rebuild the same DNF from an
+     * unchanged vc, so a query reaching S3 expanded it four times.  Same
+     * verdicts by construction -- the set is identical, it is just built once.
+     * The `refine_sN_decide` entry points still exist for a single-stage
+     * caller; a chain has no use for them. */
+    static const struct { const char *name;
+                          RefineDecision (*fn)(RefineVC *, Arena *,
+                                               RefineCubeCache *); } CHAIN[] = {
+        { "S0 (trivial)",       refine_s0_decide_cc },
+        { "S1 (EUF)",           refine_s1_decide_cc },
+        { "S2 (arithmetic)",    refine_s2_decide_cc },
+        { "S3 (Nelson-Oppen)",  refine_s3_decide_cc },
     };
     const char *decided_by = NULL;
     RefineVerdict v = RT_UNKNOWN;
+    RefineCubeCache cc = {0};
     for (size_t i = 0; i < sizeof(CHAIN)/sizeof(CHAIN[0]); i++) {
-        RefineDecision d = CHAIN[i].fn(vc, arena);
+        RefineDecision d = CHAIN[i].fn(vc, arena, &cc);
         if (d.verdict != RT_UNKNOWN) { v = d.verdict; decided_by = CHAIN[i].name; break; }
     }
 
