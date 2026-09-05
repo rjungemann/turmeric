@@ -352,6 +352,22 @@ static int64_t tur_opt_value(int64_t __o) __attribute__((unused));
 static int64_t tur_opt_value(int64_t __o) {
     return ((tur_option_t *)(intptr_t)__o)->as.value;
 }
+/* RM3 regions: declared lifetimes over the runtime arena.  A generation is
+ * reclaimed whole or not at all -- tur_region_pop retires without freeing and
+ * tur_region_pop_reclaim rewinds, so a shape the escape check cannot prove
+ * costs a saving rather than correctness.  tur_region_owns guards every free
+ * path: a pointer into region memory must never reach free(). */
+extern int  tur_region_push(void);
+extern void tur_region_pop(int depth);
+extern void tur_region_pop_reclaim(int depth);
+extern void  tur_region_note_escape(const void *p);
+extern bool tur_region_pop_checked(int depth);
+extern void *tur_region_alloc(size_t n);
+extern void *tur_region_alloc_or_malloc(size_t n);
+extern bool tur_region_owns(const void *p);
+extern void tur_region_free(void *p);
+extern bool tur_region_active(void);
+extern void tur_region_shutdown(void);
 static int64_t tur_opt_value_checked(int64_t __o) __attribute__((unused));
 static int64_t tur_opt_value_checked(int64_t __o) {
     tur_option_t *__p = (tur_option_t *)(intptr_t)__o;
@@ -4032,7 +4048,7 @@ typedef struct tur_adt_Cons__int {
 #ifndef TUR_FN_tur_adt_Cons__int
 #define TUR_FN_tur_adt_Cons__int
 static tur_adt_Cons__int * ctor_Cons_Cons__int(int64_t _0, int64_t _1) {
-    tur_adt_Cons__int *__r = (tur_adt_Cons__int *)malloc(sizeof(tur_adt_Cons__int));
+    tur_adt_Cons__int *__r = (tur_adt_Cons__int *)tur_region_alloc_or_malloc(sizeof(tur_adt_Cons__int));
     __r->head = _0;
     __r->tail = _1;
     return __r;
@@ -4051,7 +4067,7 @@ typedef struct tur_adt_Vec__int {
 #ifndef TUR_FN_tur_adt_Vec__int
 #define TUR_FN_tur_adt_Vec__int
 static tur_adt_Vec__int * ctor_Vec_Vec__int(void * _0, int64_t _1, int64_t _2) {
-    tur_adt_Vec__int *__r = (tur_adt_Vec__int *)malloc(sizeof(tur_adt_Vec__int));
+    tur_adt_Vec__int *__r = (tur_adt_Vec__int *)tur_region_alloc_or_malloc(sizeof(tur_adt_Vec__int));
     __r->data = _0;
     __r->len = _1;
     __r->cap = _2;
@@ -7678,19 +7694,19 @@ int main(int argc, char **argv) {
         /* panic-return-signal: ret ctype unknown; no propagation here */
         bool __ps_181 = (ok_val__spec__bool_tur_adt_Result__bool__cstr((*(tur_adt_Result__bool__cstr *)(intptr_t)(__ps_180))));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        if (__ps_180) free((void *)(intptr_t)__ps_180);
+        if (__ps_180) tur_region_free((void *)(intptr_t)__ps_180);
         decode_unbool_uncarrier_untest__show_hybool(__ps_181);
         int64_t __ps_182 = (__inst_Decode_decode_bool(INT64_C(0)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         bool __ps_183 = (ok_val__spec__bool_tur_adt_Result__bool__cstr((*(tur_adt_Result__bool__cstr *)(intptr_t)(__ps_182))));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        if (__ps_182) free((void *)(intptr_t)__ps_182);
+        if (__ps_182) tur_region_free((void *)(intptr_t)__ps_182);
         decode_unbool_uncarrier_untest__show_hybool(__ps_183);
         int64_t __ps_184 = (__inst_Decode_decode_int(INT64_C(5)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         int64_t __ps_185 = (ok_val__spec__int64_t_tur_adt_Result__int__cstr((*(tur_adt_Result__int__cstr *)(intptr_t)(__ps_184))));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        if (__ps_184) free((void *)(intptr_t)__ps_184);
+        if (__ps_184) tur_region_free((void *)(intptr_t)__ps_184);
         decode_unbool_uncarrier_untest__show_hyint(__ps_185);
         int64_t __t186;
         __t186 = INT64_C(0);
@@ -7801,6 +7817,7 @@ static void __tur_static_init(void) {
     static int __tur_static_init_done = 0;
     if (__tur_static_init_done) return;
     __tur_static_init_done = 1;
+    atexit(tur_region_shutdown);
     __tur_fatbox_init();
     __tur_module_def_init();
 }
