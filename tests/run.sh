@@ -76,29 +76,35 @@ case "${MSYSTEM:-}" in
 esac
 export TUR_HOST_WINDOWS
 
-# Windows: make <workspace-drive>:\tmp exist before any fixture runs.
+# A writable scratch directory for fixtures that need one, exported so the
+# fixture binaries can find it.
 #
-# stdlib's fs/tmpfile does mkstemp("/tmp/tur_XXXXXX") and a dozen fixtures write
-# hardcoded "/tmp/..." paths.  Those are POSIX spellings, and the MSYS *shell*
-# maps /tmp to %LOCALAPPDATA%\Temp -- but the fixture binaries are NATIVE
-# Windows executables, so their CRT resolves "/tmp/foo" against the CURRENT
-# DRIVE ROOT instead: C:\tmp\foo, D:\tmp\foo.  If that directory does not exist
-# the open fails, the program prints nothing, and the fixture reports a stdout
-# mismatch that looks nothing like "your temp dir is missing".
+# Fixtures used to write hardcoded "/tmp/..." paths.  Those are POSIX
+# spellings, and the MSYS *shell* maps /tmp to %LOCALAPPDATA%\Temp -- but a
+# fixture binary is a NATIVE Windows executable, so its CRT resolves "/tmp/foo"
+# against the CURRENT DRIVE ROOT instead: C:\tmp, D:\tmp.  When that directory
+# did not exist the open failed, the program printed nothing, and the fixture
+# reported a stdout mismatch that named nothing resembling the cause.  It stayed
+# invisible for as long as it did because a developer box accumulates a C:\tmp,
+# so the suite was green locally and 12 red on a fresh CI runner.
 #
-# This bit us exactly once, in the most expensive way available: the suite was
-# green on a developer box that happened to have C:\tmp (left by earlier runs)
-# and came back 12 red on a fresh CI runner whose workspace is on D:.  Creating
-# the directory here is provisioning, in the same spirit as installing diffutils
-# -- the real fix is portable temp paths in stdlib + fixtures, tracked in
-# docs/reported/windows-hardcoded-tmp-resolves-to-drive-root.md.
-if [ "$TUR_HOST_WINDOWS" = "1" ]; then
-    _tur_drive=$(pwd -W 2>/dev/null | cut -c1 | tr 'A-Z' 'a-z')
-    if [ -n "$_tur_drive" ]; then
-        mkdir -p "/$_tur_drive/tmp" 2>/dev/null || true
-    fi
-    unset _tur_drive
+# The harness used to paper over that by creating <drive>:\tmp.  Fixtures now
+# read TUR_TEST_TMPDIR instead (falling back to /tmp when it is unset, so one
+# can still be run by hand), which is portable by construction rather than by
+# provisioning.  Same shape as TUR_BIND_LOOPBACK below.
+TUR_TEST_TMPDIR="${TUR_TEST_TMPDIR:-$(mktemp -d 2>/dev/null)}"
+if [ -z "$TUR_TEST_TMPDIR" ]; then
+    echo "tests: could not create a scratch directory for fixtures" >&2
+    exit 1
 fi
+mkdir -p "$TUR_TEST_TMPDIR" 2>/dev/null || true
+# Native fixture binaries need the WINDOWS form of the path; an MSYS-style
+# /tmp/... would be resolved against the drive root by their CRT, which is the
+# very bug this replaces.
+if [ "$TUR_HOST_WINDOWS" = "1" ] && command -v cygpath >/dev/null 2>&1; then
+    TUR_TEST_TMPDIR=$(cygpath -m "$TUR_TEST_TMPDIR")
+fi
+export TUR_TEST_TMPDIR
 
 # Force server fixtures to bind 127.0.0.1 instead of INADDR_ANY. On Windows this
 # stops the Defender Firewall "allow this app" dialog from popping for every

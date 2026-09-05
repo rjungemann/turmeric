@@ -16,18 +16,51 @@
 ;;   r3-status=404
 ;;   done
 
+(defn tmp-path [name : cstr] : cstr
+  ```c
+  /* Resolve a scratch path at RUN TIME instead of hardcoding "/tmp/...".
+   *
+   * A compiled fixture is a NATIVE Windows binary, so its CRT resolves a
+   * leading "/tmp" against the CURRENT DRIVE ROOT (C:\tmp, D:\tmp) rather than
+   * the way the MSYS shell does.  Where that directory does not exist the open
+   * simply failed and the fixture printed nothing.  tests/run.sh exports
+   * TUR_TEST_TMPDIR; the "/tmp" fallback keeps this runnable by hand on POSIX.
+   *
+   * Four rotating buffers so a call like (f (tmp-path "a") (tmp-path "b"))
+   * does not have the second call clobber the first. */
+  static char bufs[4][512];
+  static int slot = 0;
+  char *buf = bufs[slot];
+  slot = (slot + 1) & 3;
+  const char *d = getenv("TUR_TEST_TMPDIR");
+  if (!d || !*d) d = "/tmp";
+  snprintf(buf, sizeof bufs[0], "%s/%s", d, name);
+  return buf;
+  ```)
+
 (load "stdlib/httpd.tur")
 (load "stdlib/chan.tur")
 
 (defn setup-fs [] : nil
   ```c
   #include <direct.h>
+  /* Scratch dir resolved at run time -- see the tmp-path helper note.
+   * A native Windows binary resolves a leading "/tmp" against the drive
+   * root, which need not exist; tests/run.sh exports TUR_TEST_TMPDIR. */
+  char __d[512];
+  {
+    const char *__t = getenv("TUR_TEST_TMPDIR");
+    if (!__t || !*__t) __t = "/tmp";
+    snprintf(__d, sizeof __d, "%s/turmeric-mw-static-test", __t);
+  }
 #ifdef _WIN32
-  _mkdir("/tmp/turmeric-mw-static-test");
+  _mkdir(__d);
 #else
-  mkdir("/tmp/turmeric-mw-static-test", 0755);
+  mkdir(__d, 0755);
 #endif
-  FILE *f = fopen("/tmp/turmeric-mw-static-test/hello.txt", "w");
+  char __f[512];
+  snprintf(__f, sizeof __f, "%s/hello.txt", __d);
+  FILE *f = fopen(__f, "w");
   if (f) { fwrite("hello, world", 1, 12, f); fclose(f); }
   ```)
 
@@ -141,7 +174,7 @@
                    (httpd-resp-status! c 404)
                    (httpd-resp-body! c "Not Found")
                    (chan-send donech 1))
-        composed (mw-static "/tmp/turmeric-mw-static-test" base)
+        composed (mw-static (tmp-path "turmeric-mw-static-test") base)
         h        (httpd-new-pool 0 1 composed)
         port     (httpd-port h)
         server   (spawn-server h)

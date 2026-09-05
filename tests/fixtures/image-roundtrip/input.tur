@@ -8,6 +8,28 @@
 ;; start (so a stale file from a prior run does not make the cold call warm)
 ;; and at the end (hermetic).
 
+(defn tmp-path [name : cstr] : cstr
+  ```c
+  /* Resolve a scratch path at RUN TIME instead of hardcoding "/tmp/...".
+   *
+   * A compiled fixture is a NATIVE Windows binary, so its CRT resolves a
+   * leading "/tmp" against the CURRENT DRIVE ROOT (C:\tmp, D:\tmp) rather than
+   * the way the MSYS shell does.  Where that directory does not exist the open
+   * simply failed and the fixture printed nothing.  tests/run.sh exports
+   * TUR_TEST_TMPDIR; the "/tmp" fallback keeps this runnable by hand on POSIX.
+   *
+   * Four rotating buffers so a call like (f (tmp-path "a") (tmp-path "b"))
+   * does not have the second call clobber the first. */
+  static char bufs[4][512];
+  static int slot = 0;
+  char *buf = bufs[slot];
+  slot = (slot + 1) & 3;
+  const char *d = getenv("TUR_TEST_TMPDIR");
+  if (!d || !*d) d = "/tmp";
+  snprintf(buf, sizeof bufs[0], "%s/%s", d, name);
+  return buf;
+  ```)
+
 (load "stdlib/image.tur")
 
 (defn img-rm [path : cstr] : void
@@ -21,10 +43,10 @@
 
 (defn main [] : int
   (do
-    (img-rm "/tmp/tur-image-roundtrip.img")
+    (img-rm (tmp-path "tur-image-roundtrip.img"))
     (println "cold:")
-    (with-image-cache-after-init "/tmp/tur-image-roundtrip.img" do-init do-loop)
+    (with-image-cache-after-init (tmp-path "tur-image-roundtrip.img") do-init do-loop)
     (println "warm:")
-    (with-image-cache-after-init "/tmp/tur-image-roundtrip.img" do-init do-loop)
-    (img-rm "/tmp/tur-image-roundtrip.img")
+    (with-image-cache-after-init (tmp-path "tur-image-roundtrip.img") do-init do-loop)
+    (img-rm (tmp-path "tur-image-roundtrip.img"))
     0))

@@ -7,6 +7,28 @@
 ;; <dirent.h> codegen errors before the fix.
 ;;
 ;; Expected output: io stdlib ok
+(defn tmp-path [name : cstr] : cstr
+  ```c
+  /* Resolve a scratch path at RUN TIME instead of hardcoding "/tmp/...".
+   *
+   * A compiled fixture is a NATIVE Windows binary, so its CRT resolves a
+   * leading "/tmp" against the CURRENT DRIVE ROOT (C:\tmp, D:\tmp) rather than
+   * the way the MSYS shell does.  Where that directory does not exist the open
+   * simply failed and the fixture printed nothing.  tests/run.sh exports
+   * TUR_TEST_TMPDIR; the "/tmp" fallback keeps this runnable by hand on POSIX.
+   *
+   * Four rotating buffers so a call like (f (tmp-path "a") (tmp-path "b"))
+   * does not have the second call clobber the first. */
+  static char bufs[4][512];
+  static int slot = 0;
+  char *buf = bufs[slot];
+  slot = (slot + 1) & 3;
+  const char *d = getenv("TUR_TEST_TMPDIR");
+  if (!d || !*d) d = "/tmp";
+  snprintf(buf, sizeof bufs[0], "%s/%s", d, name);
+  return buf;
+  ```)
+
 (load "stdlib/io.tur")
 
 (defn cstr->ptr [s : cstr] : ptr<void>
@@ -25,7 +47,7 @@
   ```c fputs((const char*)p, stdout); ```)
 
 (defn main [] : int
-  (let [path "/tmp/tur-io-stdlib-fixture.txt"
+  (let [path (tmp-path "tur-io-stdlib-fixture.txt")
         msg  "io stdlib ok\n"
         wr   (write-file path (cstr->ptr msg) 13)
         ex   (file-exists? path)
