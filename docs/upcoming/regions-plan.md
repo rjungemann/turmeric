@@ -459,11 +459,47 @@ per the standing rule it would not block a release if there were.
    warrant would apply, each its own increment with its own fixture);
    **other parametric monomorphs** like `(Pair int int)` (need tyvar
    substitution in the field walk).
-3. **Close or price the residue** named under R4: the unbracketed CPS
+3. ~~**Close or price the residue** named under R4: the unbracketed CPS
    `CT_LETCALL` arm, argument-position allocation landing in the generation, and
    the pooled slab that is never returned (reachable at exit, not lost -- a pool,
    not a leak, and freeing it needs care about `atexit` ordering against module
-   defers that may still read retired generations).
+   defers that may still read retired generations).~~ **DONE 2026-09-05 --
+   all three closed, two by proof and one by code.**
+
+   - **The `CT_LETCALL` arm stays bracket-free, by proof.** The IR builder
+     (`cps_ir.c`) emits `CT_LETCALL` only for an UNCOLORED callee; a colored
+     callee always becomes `CT_TAILCALL`, with a join when not in tail
+     position. Both region scopes are colored (each invokes a fat thunk), so a
+     region bracket can never land on the LETCALL arm. R4 knew every probed
+     shape became a tailcall but only probed `bt-scope`; `region-scope-
+     nontail-cps` pins it for `with-region` in the two non-tail positions
+     that would produce a LETCALL for an uncolored callee (let-bound, and as
+     an operand) inside a CPS-lowered function: both calls bracketed, `--dump-
+     cps` shows tailcalls, no LETCALL names the bracket, 46 survives. No
+     transcription -- which is what R4 wanted.
+   - **Argument-position allocation is sound, verified in emitted C.** The
+     only thing allocated in argument position of a region-scope call is the
+     thunk's closure env, and it is `void *__t = malloc(...)` -- never the
+     router, which is emitted only at the four ADT-ctor sites. So it lands
+     after the push but not in the generation. (The second routed site this
+     was once feared to be, emit_expr.c ~8273, is the same SR4 recursive-field
+     box as ~8223; the line moved.)
+   - **The pooled slab is returned: `atexit(tur_region_shutdown)`.** Flag-on
+     exit residue 65,728 B in 5 blocks -> **0 bytes in 0 blocks**, valgrind
+     0 errors, flag-off build references no region symbol. **The first
+     attempt was wrong exactly the way this item warned**, and a probe caught
+     it before it shipped: registered in a `main` prologue (all four of them),
+     it ran BEFORE a module `defer` that read a value escaped into a retired
+     generation -- `0` where `42` was right, `Invalid read`. Cause: a
+     `__attribute__((constructor))` runs `__tur_static_init` -- and so
+     registers the defers' `atexit`s -- before `main`, so anything `main`
+     registers is later and, LIFO, runs first. The only always-earlier place
+     is the first statement of `__tur_static_init` itself, behind its
+     idempotent guard: once, from whichever path enters first, before any
+     band. One call site (`static_init_emit`, emit_core.c), not four.
+     `region-shutdown-order` pins the placement (after the guard, before
+     `__module_defers_init`, not in `main`), the gating, and the value: the
+     defer prints `42` from the retired generation before shutdown frees it.
 4. **Soak the existing `bt-scope` callers.** `dfs-solve` and the sx2 fixtures
    become region users the moment this is on by default; the seam test covers
    twelve fixtures today, which is a floor, not a soak.

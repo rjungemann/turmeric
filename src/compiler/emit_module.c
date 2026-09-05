@@ -8198,7 +8198,8 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
 "extern void *tur_region_alloc_or_malloc(size_t n);\n"
 "extern bool tur_region_owns(const void *p);\n"
 "extern void tur_region_free(void *p);\n"
-"extern bool tur_region_active(void);\n");
+"extern bool tur_region_active(void);\n"
+"extern void tur_region_shutdown(void);\n");
     }
     buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) {\n");

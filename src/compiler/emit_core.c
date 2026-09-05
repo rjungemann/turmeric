@@ -170,6 +170,38 @@ void emit_abi_assert_routed_concrete(EmitCtx *ctx, const Type *recovered,
 #endif
 }
 
+/* RM3 R5 graduation item 3: return the region pool at exit.
+ *
+ * A reclaimed generation is REWOUND, not released -- arena_reset keeps the
+ * slabs and region.c pools the arena for the next push -- so at exit the pool
+ * (one 64 KiB slab per pooled arena) was reachable but never freed, and every
+ * leak checker reported it.  tur_region_shutdown frees live, retired and
+ * pooled arenas outright.
+ *
+ * WHERE it is registered is the whole problem, and the first attempt got it
+ * wrong in a way the plan predicted ("care about atexit ordering against
+ * module defers that may still read retired generations").  atexit runs
+ * handlers LIFO, so shutdown must be REGISTERED BEFORE every module `defer`
+ * (a defer may read a value that escaped its bracket, which lives in a
+ * RETIRED generation; freeing first is a use-after-free, and the probe read 0
+ * where it should read 42, with valgrind's "Invalid read").  The defers are
+ * registered by __tur_static_init's STATIC_INIT_ATEXIT band -- and
+ * __tur_static_init is ALSO run from a __attribute__((constructor)) wrapper
+ * BEFORE main.  So registering shutdown in any main prologue is too late: the
+ * constructor has already registered the defers.  The only place that is
+ * always earlier is the first statement of __tur_static_init itself, behind
+ * its idempotent guard: it runs exactly once, from whichever path enters
+ * first, and before any band.  That is the single call site, in
+ * static_init_emit.
+ *
+ * Gated on the flag so a flag-off program references no region symbol and the
+ * linker never extracts the member (R2's reasoning).  A panic aborts and skips
+ * atexit, which is fine -- abort is abnormal exit and frees nothing anyway. */
+void emit_region_shutdown_atexit(Buf *out, int indent) {
+    if (!regions_enabled()) return;
+    buf_printf(out, "%*satexit(tur_region_shutdown);\n", indent, "");
+}
+
 Type emit_resolve_type(EmitCtx *ctx, Type t) {
     const EmitAbiSpecialization *spec = ctx ? ctx->current_abi_specialization : NULL;
     if (!spec) return t;
@@ -5912,6 +5944,10 @@ void static_init_emit(Buf *out) {
         buf_puts(out, "    static int __tur_static_init_done = 0;\n"
                       "    if (__tur_static_init_done) return;\n"
                       "    __tur_static_init_done = 1;\n");
+        /* RM3 R5 item 3: register the region-pool shutdown HERE and nowhere
+         * else -- see emit_region_shutdown_atexit for why this is the only
+         * place the atexit ordering actually holds. */
+        emit_region_shutdown_atexit(out, 4);
         for (int band = STATIC_INIT_KEYS; band <= STATIC_INIT_DEFS; band++)
             for (uint32_t i = 0; i < g_n_static_inits; i++)
                 if (g_static_inits[i].band == (StaticInitBand)band)
