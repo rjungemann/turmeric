@@ -1,0 +1,16 @@
+; declared-size-index-never-checked-against-value (B): an ascribed size is
+; load-bearing.  `sized-buf-new-zeroed` returns a polymorphic (SizedBuf n),
+; and the stdlib idiom pins `n` by ascription; those pins must reach the
+; cross-parameter unifier exactly as a declared return type does.  Both
+; operands here are ascribed, both are let-bound, and they disagree on the
+; `n` that `sized-buf-copy!` shares across dst and src.
+
+(load "stdlib/sized.tur")
+(load "stdlib/sized-buf.tur")
+
+(defn main [] : int
+  (let [a (:: (sized-buf-new-zeroed 4) (SizedBuf (Static 4)))
+        b (:: (sized-buf-new-zeroed 4) (SizedBuf (Static 99)))]
+    ; ERROR: TUR-E0260 -- `a` is pinned to 4, `b` to 99
+    (sized-buf-copy! a b))
+  0)

@@ -207,6 +207,9 @@
 ;;; Returns:
 ;;;   A fresh (SizedBuf n) where `n` is polymorphic; pin it via
 ;;;   ascription, e.g. `(:: (sized-buf-new 4) (SizedBuf (Static 4)))`.
+;;;   The pinned index is load-bearing (it unifies across shared-`n`
+;;;   parameters like a declared return type), but nothing checks it
+;;;   against `k` -- the ascription is the caller's claim.
 ;;;
 ;;; Example:
 ;;;   (let [b (sized-buf-new 4)] ...)

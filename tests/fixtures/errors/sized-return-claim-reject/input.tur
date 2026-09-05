@@ -1,0 +1,22 @@
+; declared-size-index-never-checked-against-value (A): a defn's declared
+; return-type size index is recovered at every call site and trusted there,
+; so it must be reconciled with the body.  `bogus` claims (Static 5)
+; (Static 5) but returns the (Static 2) (Static 3) value `mk23` builds --
+; the annotation is a false claim and is rejected at the return seam,
+; instead of laundering `(takes55 (bogus))` past TUR-E0260.
+;
+; (Passing `(mk23)` to `takes55` directly was already rejected; routing it
+; through the mis-annotated wrapper used to be accepted.)
+
+(defopaque LaMatN [m n] :int)
+
+(defn mk23 [] : (LaMatN (Static 2) (Static 3)) (:: 0 :LaMatN))
+
+; ERROR: declares return size 5 but the body has size 2
+(defn bogus [] : (LaMatN (Static 5) (Static 5)) (mk23))
+
+(defn takes55 [a : (LaMatN (Static 5) (Static 5))] : int 7)
+
+(defn main [] : int
+  (println (takes55 (bogus)))
+  0)

@@ -1,0 +1,16 @@
+; declared-size-index-never-checked-against-value (B): a `::` ascription
+; that pins a size index is a claim about the expression it wraps.  When
+; the expression's own index is statically known and disagrees, the claim
+; is false and is rejected where it is written.
+
+(load "stdlib/sized.tur")
+(load "stdlib/sized-buf.tur")
+
+(defn mk4 [] : (SizedBuf (Static 4))
+  (:: (sized-buf-new-zeroed 4) :SizedBuf))
+
+(defn main [] : int
+  ; ERROR: ascription declares size 3 but (mk4) has size 4
+  (let [d (:: (mk4) (SizedBuf (Static 3)))]
+    (println (sized-buf-len d)))
+  0)

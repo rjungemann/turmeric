@@ -8032,6 +8032,29 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
 
+    /* declared-size-index-never-checked-against-value (A): a declared
+     * return-type size index is recovered at every call site
+     * (sz_recover_type_form's EX_CALL arm) and trusted there, so a wrong
+     * annotation launders a mismatch past TUR-E0260.  Reconcile the
+     * annotation with the body's tail expression when both indices fold to
+     * constants; an open index on either side stays polymorphic. */
+    if (return_type_form_kept && body && !lazy_defer) {
+        const Expr *tail = body;
+        while (tail && tail->kind == EX_DO && tail->as.do_.n > 0)
+            tail = tail->as.do_.items[tail->as.do_.n - 1];
+        int64_t claimed, actual;
+        if (sz_claim_disagrees(e, return_type_form_kept, tail, &claimed, &actual)) {
+            diag_emit_with_code(DIAG_ERROR, tail->span,
+                TUR_E0260_SIZED_TYPE_MISMATCH,
+                "sized type mismatch (TUR-E0260): '%s' declares return size "
+                "%lld but its body has size %lld",
+                name_f->as.sym->name, (long long)claimed, (long long)actual);
+            e->scope = inner.parent;
+            scope_free(&inner);
+            return NULL;
+        }
+    }
+
     /* carrier-aware-return-unification Phase 1: reject a genuine return-position
      * conflict between the declared return and the elaborated body via the
      * shared `return_position_conflict` dispatcher (nominal -> register-class ->

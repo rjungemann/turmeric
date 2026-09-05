@@ -3315,6 +3315,25 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * for downstream type-checking purposes. Type is erased at codegen. */
     Expr *out = expr_new(e->arena, EX_ASCRIBE, *ascribed, call->span);
     out->as.ascribe_.inner = inner;
+    out->as.ascribe_.type_form = type_form;
+
+    /* declared-size-index-never-checked-against-value (B): an ascription that
+     * pins a size index is a claim about `inner`; when the inner's own index
+     * is statically known and disagrees, the claim is false and is rejected
+     * here rather than laundered into every downstream call.  An inner whose
+     * index is open (`sized-buf-new`'s polymorphic `n`) is skipped -- that is
+     * the legitimate pin-by-ascription case. */
+    {
+        int64_t claimed, actual;
+        if (sz_claim_disagrees(e, type_form, inner, &claimed, &actual)) {
+            diag_emit_with_code(DIAG_ERROR, call->span,
+                TUR_E0260_SIZED_TYPE_MISMATCH,
+                "sized type mismatch (TUR-E0260): ascription declares size "
+                "%lld but the expression has size %lld",
+                (long long)claimed, (long long)actual);
+            return NULL;
+        }
+    }
 
     /* Fat-handle ascription: reinterpreting a one-word carrier (:int or
      * :ptr<void>) as a function type means "this carrier already holds a
