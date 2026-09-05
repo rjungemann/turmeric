@@ -62,8 +62,10 @@ Accepting on kind made a mutually-recursive result reclaim its own spine:
 ```
 
 `def->is_self_recursive` does not catch that -- neither def is self-recursive on
-its own. (The walk's cycle handling was hardened in the same change so the path
-check catches it, but the kind ambiguity remains and is the real blocker.)
+its own. Nor did the walk's cycle-break get a chance to: the kind accept took
+the `:MB` field as a scalar and never recursed into MB. (The cycle handling was
+hardened in the same change anyway, because the fix direction below WILL
+recurse MA -> MB -> MA and the old rule would then have proved MA safe.)
 
 ## Fix direction
 

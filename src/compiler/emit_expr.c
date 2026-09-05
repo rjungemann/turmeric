@@ -4780,11 +4780,19 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
                  * Read its def directly and continue with zero type arguments.
                  * The rest of this case is unchanged and is what does the actual
                  * proving: `is_heap` still refuses, and every ctor's every field
-                 * is still walked, with an unknown `full_type` (the self-
-                 * recursive spine) still reading as "reaches".  So this admits
-                 * exactly the shapes the parametric path already admits --
-                 * `region-scope-adt-result` pins the accepting one and
-                 * `region-scope-escape-refused` the recursive one. */
+                 * is still walked, with a NULL `full_type` still reading as
+                 * "reaches".
+                 *
+                 * That last rule is what bounds this: an ordinary `:int` field
+                 * records no `full_type` (see below), so what this actually
+                 * ADMITS today is a non-heap bare ADT whose every ctor field
+                 * either carries a walkable `full_type` or does not exist -- in
+                 * practice a field-less enum, `(defdata Color (Red) (Green))`,
+                 * which is by value (SR1) and reaches nothing.  Measured against
+                 * the pre-change walk: such a result RETIRED before and REWINDS
+                 * now, and `region-scope-adt-result`'s `pick` pins that with
+                 * the value read after the pop.  `(RxIP :int :int)` still
+                 * refuses, at the field. */
                 if (rt.kind == TY_ADT && rt.as.adt_.def) {
                     def = rt.as.adt_.def;
                     n_args = 0;
@@ -4803,16 +4811,27 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
              *   (defdata MA :copy (MAnil) (MAcons :int :MB))
              *
              * Neither def is self-recursive, so `is_self_recursive` does not
-             * catch either, and MA -> MB -> MA hit the old cycle-break and
-             * "proved" MA reaches nothing.  A bracket returning one then
-             * rewound the spine it was handing back: measured at `(sumA (esc 6)
-             * 0)` printing 0 instead of 42 -- a silent wrong answer, the exact
-             * class the plan's safety rule exists to prevent.
+             * catch either.  Be precise about what was and was not measured:
+             * a bracket returning `MA` DID rewind its own spine -- `(sumA (esc
+             * 6) 0)` printed 0 instead of 42 -- but that came from a (reverted)
+             * kind-based field accept that never recursed into MB at all; the
+             * old cycle-break was not on that path.  It is fixed here because
+             * the widening this walk is waiting for (resolving the declared
+             * field type -- docs/reported/region-walk-refuses-every-adt-result.md)
+             * WOULD recurse MA -> MB -> MA, and the old rule would then have
+             * proved MA reaches nothing.  Fixing a safety lock's cycle handling
+             * before the next widening rather than after.
              *
              * So: a hit is a cycle and refuses, and the entry is POPPED once the
              * def is fully explored, which keeps a benign repeat (the same
              * non-recursive ADT in two sibling fields) re-provable instead of
-             * refused.  Bounded by the 32 slots and the depth budget. */
+             * refused.  Bounded by the 32 slots and the depth budget.
+             *
+             * Cost: a def on the path via its own TYPE ARGUMENT -- `(Pair2
+             * (Pair2 int int) int)`, nesting rather than a cycle -- is refused
+             * too.  No observable change: any such def's tyvar-typed fields were
+             * already refused by the `default:` arm below, checked against the
+             * pre-change walk (both retire). */
             for (uint32_t i = 0; i < *n_seen; i++)
                 if (seen[i] == def) return true;    /* cyclic: reaches */
             if (*n_seen >= 32) return true;         /* out of budget */
@@ -4849,7 +4868,7 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
                      * the widening is available to whoever wants it -- it needs
                      * form-to-type resolution at emit time, which is a layering
                      * question, not a missing fact.  See
-                     * docs/reported/region-bracket-lost-when-bt-scope-specializes.md. */
+                     * docs/reported/region-walk-refuses-every-adt-result.md. */
                     if (!ft) return true;
                     if (region_type_reaches_node(ctx, *ft, seen, n_seen, depth - 1))
                         return true;

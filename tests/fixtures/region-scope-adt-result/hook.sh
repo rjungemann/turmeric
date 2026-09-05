@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# region-bracket-lost-when-bt-scope-specializes: a `bt-scope` whose result is a
-# by-value record ADT must still OPEN a region -- and must still hand back a
-# value that outlives the pop.
+# region-bracket-lost-when-bt-scope-specializes / region-walk-refuses-every-adt-result:
+# a `bt-scope` whose result is an ADT must OPEN a region, must hand back a value
+# that outlives the pop, and must rewind exactly the shapes the static walk can
+# prove -- no more.
 #
-# Two things this asserts that an output-only fixture cannot:
+# Three things this asserts that an output-only fixture cannot:
 #
 #   1. The bracket EXISTS.  A non-scalar result made the call resolve to an ABI
 #      specialization and take the CPS emitter's `/* cps->cps */` arm, which
@@ -12,13 +13,24 @@
 #      output difference.  Only the emitted C shows it, so that is what is
 #      grepped.
 #
-#   2. The value SURVIVES.  This is the SR4 lesson, and the reclamation plan
+#   2. The retire/rewind SPLIT is exactly the proven set.  `pick` returns a
+#      field-less enum -- by value, reaches nothing -- and must REWIND
+#      (tur_region_pop_checked); this is the shape the bare-TY_ADT lookup
+#      admitted, and it retired before that change.  `one-round` returns
+#      `(RIP :int :int)`, which the walk still cannot prove (an ordinary `:int`
+#      field records no full_type), and `mutual` returns a spine reached through
+#      a cycle: both must RETIRE (tur_region_pop).  The counts are asserted, so
+#      a widening that admits `RIP` shows up here as a changed number to be
+#      read, not a silent gain -- and a widening that admits `mutual` shows up
+#      as a wrong answer in (3).
+#
+#   3. The values SURVIVE.  This is the SR4 lesson, and the reclamation plan
 #      says it applies to regions with more force: a fixture that only checks
 #      the program builds would pass with a rewind that reclaimed memory still
 #      in use, because the wrong answer is a stale read, not a link error.
 #      `mutual` is the case that actually produced one during this work -- a
-#      mutually-recursive result whose spine the walk wrongly proved safe,
-#      printing 0 instead of 42.
+#      mutually-recursive result whose spine a kind-based field accept wrongly
+#      proved safe, printing 0 instead of 42.
 set -u
 TMP="$1"
 TUR="${TUR:-./build/tur}"
@@ -28,10 +40,10 @@ cat > "$TMP/in.tur" <<'EOF'
 
 (defdata Link :heap (Link [v : int nxt : int]))
 (defdata RPair (RIP :int :int))
+(defdata Color (Red) (Green) (Blue))
 
 ;; Mutually recursive, and NEITHER def is self-recursive -- so the walk's
-;; is_self_recursive guard does not see it and the cycle has to be caught by
-;; the path check instead.
+;; is_self_recursive guard does not see it.
 (defdata MB :copy (MBnil) (MBcons :int :MA))
 (defdata MA :copy (MAnil) (MAcons :int :MB))
 
@@ -46,9 +58,14 @@ cat > "$TMP/in.tur" <<'EOF'
   return acc;
   ```)
 
-;; The bracket that used to vanish: a record result, not a scalar.
+;; The bracket that used to vanish: a record result, not a scalar.  RETIRES.
 (defn one-round [n : int] : RPair
   (bt-scope (fn [] (RIP n (chain-sum (build n 0))))))
+
+;; A field-less enum result: provable, so REWINDS -- and the spine built inside
+;; is reclaimed under it.  The value read back is what the walk promised.
+(defn pick [n : int] : Color
+  (bt-scope (fn [] (if (> (chain-sum (build n 0)) 5) (Green) (Red)))))
 
 (defn mkA [n : int] : MA (if (<= n 0) (MAnil) (MAcons n (MBcons n (mkA (- n 1))))))
 (defn sumA [a : MA acc : int] : int
@@ -57,20 +74,29 @@ cat > "$TMP/in.tur" <<'EOF'
                                  (MBcons y r) (sumA r (+ acc (+ x y))))))
 
 ;; The result IS the spine, reached through a cycle rather than a self-link.
+;; RETIRES.
 (defn mutual [n : int] : MA (bt-scope (fn [] (mkA n))))
 
 (defn main [] : int
-  (match (one-round 4) (RIP a b) (println (+ a b)))   ;; 4 + 10 = 14
-  (println (sumA (mutual 6) 0))                      ;; 2*(1+..+6) = 42
+  (match (one-round 4) (RIP a b) (println (+ a b)))            ;; 4 + 10 = 14
+  (println (sumA (mutual 6) 0))                               ;; 2*(1+..+6) = 42
+  (match (pick 4) (Red) (println 0) (Green) (println 1) (Blue) (println 2))  ;; 10 > 5: 1
+  (match (pick 1) (Red) (println 0) (Green) (println 1) (Blue) (println 2))  ;; 1 > 5: 0
   0)
 EOF
 
-if "$TUR" --enable=regions emit-c "$TMP/in.tur" 2>/dev/null \
-        | grep -q 'tur_region_push()'; then
+"$TUR" --enable=regions emit-c "$TMP/in.tur" 2>/dev/null > "$TMP/out.c"
+
+if grep -q 'tur_region_push()' "$TMP/out.c"; then
     echo "bracket: opened"
 else
     echo "bracket: MISSING (the bt-scope emitted no region)"
 fi
+
+# The extern declarations spell `tur_region_pop(int depth)` and would count.
+retire=$(grep -v '^extern' "$TMP/out.c" | grep -c 'tur_region_pop(')
+rewind=$(grep -v '^extern' "$TMP/out.c" | grep -c 'tur_region_pop_checked(')
+echo "retire=$retire rewind=$rewind"
 
 echo "regions off: $("$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
 echo "regions on:  $("$TUR" --enable=regions run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"

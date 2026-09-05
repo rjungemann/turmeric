@@ -135,9 +135,15 @@ Two layers refused it:
 - **`type_extract_adt_app` returns false for a NON-parametric ADT** -- it
   requires `def->n_type_params > 0` (types.c) -- so a bare `TY_ADT` never got
   past the first line of the `TY_ADT` case. Fixed: the def is now read directly
-  when the app extraction fails, with zero type arguments. No behaviour change
-  on its own; it makes the refusal land on the real reason instead of a
-  misleading one.
+  when the app extraction fails, with zero type arguments. **This IS a
+  widening**, and the first write-up of it said "no behaviour change on its
+  own", which was wrong and is corrected here: a non-heap bare ADT whose every
+  ctor field either carries a walkable `full_type` or does not exist now
+  REWINDS where it retired -- in practice a field-less enum, `(defdata Color
+  (Red) (Green))`, by value since SR1. Measured against the pre-change walk
+  (retire before, `pop_checked` after) and pinned by `region-scope-adt-result`'s
+  `pick`, value read after the pop. `(RxIP :int :int)` still refuses, at the
+  field.
 - **A ctor field's `full_type` is NULL for an ordinary `:int`**, not only for
   the self-recursive spine its comment describes. So the walk refuses at field 0
   of `(RxIP :int :int)`.
@@ -157,7 +163,7 @@ So the widening is available to whoever wants it -- it needs form-to-type
 resolution at emit time, which is a layering question, not a missing fact.
 Recorded at the site.
 
-### 3. Cycle handling in the walk, hardened
+### 3. Cycle handling in the walk, hardened -- and what was NOT measured
 
 `seen` was read as a visited set: a repeat returned false, "already fully
 explored". A def reached again while still on the path means the type is
@@ -166,12 +172,24 @@ catch mutual recursion, where neither def is self-recursive on its own. It is
 now a PATH: a repeat refuses, and the entry is popped once a def is fully
 explored so a benign sibling repeat stays provable.
 
-**Not reachable today** and stated as hardening rather than a fix: the shape
-needs a mutually-recursive pair whose fields carry `full_type`, which means
-parametric, and parametric mutual recursion does not elaborate (TUR-E0012,
-forward reference). It was reachable the moment the field widening above went
-in, which is the argument for fixing a safety lock's cycle handling before the
-next widening rather than after.
+**The first write-up of this misattributed the measurement, and the code
+comment did too.** It said MA -> MB -> MA "hit the old cycle-break and proved MA
+reaches nothing", producing the 0-instead-of-42. It did not. The trace shows the
+reverted kind-based accept took `MAcons` field 1 (`:MB`, reporting `TY_INT`) as
+a scalar and **never recursed into MB at all**; the cycle-break was not on that
+path in any configuration tested. The wrong answer was the kind accept's alone.
+
+The cycle fix stays, for the reason that is actually true: the widening this
+walk is waiting for (resolving the declared field type) WOULD recurse
+MA -> MB -> MA, and the old rule would then have proved MA safe. It is not
+reachable today -- a mutually-recursive pair whose fields carry `full_type`
+needs parametric mutual recursion, which does not elaborate (TUR-E0012,
+forward reference).
+
+Cost, also measured: a def on the path via its own TYPE ARGUMENT --
+`(Pair2 (Pair2 int int) int)`, nesting rather than a cycle -- is refused too.
+No observable change: any such def's tyvar-typed fields were already refused by
+the walk's `default:` arm, and the pre-change walk retires that shape as well.
 
 ### Where this leaves category 2
 
