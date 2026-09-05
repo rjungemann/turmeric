@@ -13030,12 +13030,31 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
             }
 
+            /* win64-aggregate-return: when SysV settled on the generic
+             * forwarding shim (typed declined, carrier declined) but the result
+             * is a monomorph Win64 returns via hidden pointer, the generic shim
+             * reads that pointer as its env -- SIGSEGV on the first call.  Ask
+             * for the typed shim with the Win64 gate widened, and let the C
+             * preprocessor put the right one in slot 0.  The emitted C stays
+             * portable (WIN1): a snapshot generated on Linux carries both
+             * spellings and each host compiles its own.  Every call site
+             * already casts slot 0 to the aggregate signature in this window
+             * (the fat-call emitter's fallback branch), so nothing else
+             * changes.  NULL outside the window, or when SysV chose a typed or
+             * carrier shim -- both of which are already correct on Win64. */
+            char *win_shim = NULL;
+            if (!typed_shim)
+                win_shim = ensure_typed_fatshim_ex(ctx, fnt_result, fnt_params,
+                                                   arity, /*win64_result=*/true);
+
             /* repr-trace: a bare fn crossing into a fat sink -- the shim
              * bridge is where the representation changes hands. */
             if (g_emit_abi_trace) {
                 fprintf(stderr, "repr-trace %u:%u bridge bare-to-fat arity=%u %s\n",
                         e->span.line, e->span.col_start, (unsigned)arity,
-                        typed_shim ? "typed-shim" : "int64-shim");
+                        typed_shim ? "typed-shim"
+                                   : win_shim ? "int64-shim (win64: typed-shim)"
+                                              : "int64-shim");
             }
 
             /* fn-value-fat-normalization: when the boxed value is a file-scope
@@ -13059,8 +13078,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (!typed_shim)
                     snprintf(shim_name, sizeof shim_name, "__tur_fatshim%u",
                              (unsigned)arity);
-                const char *box = ensure_static_fatbox(
-                    ctx, typed_shim ? typed_shim : shim_name, fnptr);
+                const char *box = win_shim
+                    ? ensure_static_fatbox_dual(ctx, win_shim, shim_name, fnptr)
+                    : ensure_static_fatbox(
+                          ctx, typed_shim ? typed_shim : shim_name, fnptr);
                 if (box) {
                     if (g_emit_abi_trace)
                         fprintf(stderr, "repr-trace %u:%u bridge bare-to-fat "
@@ -13073,6 +13094,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                sb_tmp, box);
                     free(fnptr);
                     free(typed_shim);
+                    free(win_shim);
                     return sb_tmp;
                 }
             }
@@ -13116,6 +13138,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             indent_buf(body, ctx->indent);
             if (typed_shim) {
                 buf_printf(body, "%s[0] = (int64_t)(intptr_t)%s;\n", fat_tmp, typed_shim);
+            } else if (win_shim) {
+                /* Directives start a line, so the pair is not indented. */
+                buf_printf(body,
+                           "\n#ifdef _WIN32\n"
+                           "    %s[0] = (int64_t)(intptr_t)%s;\n"
+                           "#else\n"
+                           "    %s[0] = (int64_t)(intptr_t)__tur_fatshim%u;\n"
+                           "#endif\n",
+                           fat_tmp, win_shim, fat_tmp, (unsigned)arity);
             } else {
                 buf_printf(body, "%s[0] = (int64_t)(intptr_t)__tur_fatshim%u;\n",
                            fat_tmp, (unsigned)arity);
@@ -13128,6 +13159,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(fnptr);
             free(fat_tmp);
             free(typed_shim);
+            free(win_shim);
             return ptr_tmp;
         }
         case EX_POLY_TO_FAT: {

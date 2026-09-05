@@ -40,7 +40,6 @@ red, so a new failure is unambiguous:
 | marker | what it covers |
 | --- | --- |
 | `requires.posix-apis` | POSIX-only APIs (11 fixtures) -- pipe-fd reactor family, `childhandle`, `term-raw-cooked` |
-| `requires.win64-aggregate-abi` | the SysV-vs-Win64 aggregate-return threshold ([report](../../reported/win64-aggregate-return-threshold-is-sysv.md)) |
 
 **WIN0 regressed between the merge and 2026-07-31 and had to be re-fixed.** Five
 independent breaks accumulated, three of them within five days, because nothing
