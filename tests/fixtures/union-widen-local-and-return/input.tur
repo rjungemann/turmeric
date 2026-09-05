@@ -1,0 +1,64 @@
+;; union-tagged-union-c-emission: a member value flowing into a union slot has
+;; to be TAGGED, and until now only the ARGUMENT position did it.
+;;
+;; A union's C representation is `tur_tagged_t {int64_t tag; int64_t val}`, not
+;; the member's own layout.  Handing a raw by-value member to a `tur_tagged_t`
+;; slot is not a miscompile that runs -- it is a hard cc error:
+;;
+;;   (let [u (:: (Wide ...) (Wide | int))] ...)
+;;     -> error: invalid initializer
+;;   (defn mk [] : (Wide | int) (:: (Wide ...) (Wide | int)))
+;;   (defn mk [] : (Wide | int) (Wide ...))
+;;     -> error: incompatible types when returning type 'tur_adt_Wide'
+;;               but 'tur_tagged_t' was expected
+;;
+;; The report had these filed as "a union bound to a local, returned, or held as
+;; a temporary still leaks its box".  They did not leak; they did not build.
+;;
+;; `elab_coerce_to_union` is the union twin of `elab_coerce_to_any` -- the same
+;; widen the argument path has done since IT4, now reachable from the ascription
+;; and from return position.  It deliberately does NOT set `frame_box`: that
+;; optimisation rests on a CALLEE not retaining the payload for one call, and a
+;; value bound to a local or returned outlives the expression that made it.  So
+;; these shapes heap-box, and the box still has no owner -- see the report for
+;; why the union drop needs a channel of its own (`__tur_any_drop` switches on
+;; ids >= 1000, while a union tag is a small member index, so it is a silent
+;; no-op on a union value rather than a wrong free).  That is why this fixture
+;; does NOT carry requires.leak-check: it would fail, honestly.
+
+(defstruct Wide [a : int b : int c : int d : int])
+
+(defn sum-wide [x : (Wide | int)] : int
+  (match x
+    (w : Wide) (+ (.a w) (.b w))
+    (i : int)  i))
+
+;; (1) ascribed let-init -- "invalid initializer"
+(defn via-local [i : int] : int
+  (let [u (:: (Wide i 1 2 3) (Wide | int))]
+    (sum-wide u)))
+
+;; (2) ascribed return -- "incompatible types when returning"
+(defn mk-asc [i : int] : (Wide | int)
+  (:: (Wide i 4 5 6) (Wide | int)))
+
+;; (3) BARE return, no ascription -- same error, and the shape a caller actually
+;; writes.  The int member has to keep riding the value slot unchanged.
+(defn mk-bare [i : int] : (Wide | int) (Wide i 7 8 9))
+(defn mk-int  [i : int] : (Wide | int) i)
+
+;; Control: an ANNOTATED let binding, which already worked -- the binding is
+;; inlined into the argument position and frame-boxed, so it never allocated.
+;; Kept so a future change that routes it through the new coercion shows up as a
+;; behaviour change rather than silently.
+(defn via-annotated [i : int] : int
+  (let [u : (Wide | int) (Wide i 2 3 4)]
+    (sum-wide u)))
+
+(defn main [] : int
+  (println (via-local 10))            ;; 10 + 1  = 11
+  (println (sum-wide (mk-asc 20)))    ;; 20 + 4  = 24
+  (println (sum-wide (mk-bare 30)))   ;; 30 + 7  = 37
+  (println (sum-wide (mk-int 42)))    ;; 42
+  (println (via-annotated 50))        ;; 50 + 2  = 52
+  0)

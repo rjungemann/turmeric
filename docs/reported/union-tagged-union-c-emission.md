@@ -1,7 +1,7 @@
 ---
 title: Unions never get the documented per-member C union emission
 category: Reported
-description: Every (A | B) rides the generic tur_tagged_t, so a member that cannot be an int64 has to round-trip through the 8-byte value slot. Three defects came out of that, two of which were not the perf cost this was filed for -- a hard compile error and a silent wrong answer. Both fixed, plus the unowned box; the representation itself is still deferred.
+description: Every (A | B) rides the generic tur_tagged_t, so a member that cannot be an int64 has to round-trip through the 8-byte value slot. Four defects came out of that, none of them the perf cost this was filed for -- two hard compile errors, a silent wrong answer, and an unowned box. All fixed except the box's owner; the representation itself is still deferred.
 ---
 
 # Unions never get the documented per-member C union emission
@@ -21,9 +21,14 @@ building.
 
 ## What was actually there
 
-Three defects, all in the round trip through the 8-byte value slot, all fixed.
-The representation change the report asks for is still deferred, and is now much
-less urgent -- the cost it was filed to remove is mostly gone.
+FOUR defects, all in the round trip through the 8-byte value slot. Three are
+fixed; what remains open is the box's OWNER (1b below), and the representation
+change the report asks for is still deferred and now much less urgent -- the
+cost it was filed to remove is mostly gone.
+
+The fourth was found on 2026-09-05 and was hiding inside this entry's own
+"still open" note: the widen happened at ARGUMENT position and nowhere else, so
+a member bound to a local or returned did not leak, it did not COMPILE.
 
 ### 1. The by-value member widen mallocs a box nothing frees -- **FIXED**
 
@@ -59,13 +64,70 @@ rather than decide which convention the mask follows, the union rule declines
 outright. A wrong bit here would hand a retaining callee a pointer into a dying
 frame -- a dangling pointer, which is worse than the leak it replaces.
 
-**Still open:** only argument position is covered, which is pass 1 of the five
-`any` got. A union bound to a local, returned, or held as a temporary still
-leaks its box. Closing those needs a union-tagged drop: `__tur_any_drop`
-switches on tag values interned by `emit_any_type_id` (`TUR_ANY_ID_BASE + i`,
-i.e. >= 1000), while a union tag is a small member index, so calling it on a
-union value is a silent no-op today rather than a wrong free. That is the safe
-direction, but it means the drop side is a separate piece of work.
+**Still open, and re-scoped 2026-09-05.** The clause above said "a union bound
+to a local, returned, or held as a temporary still leaks its box". Two of those
+three did not leak -- **they did not build**, and that was a separate and larger
+defect hiding inside this one.
+
+### 1a. Only ARGUMENT position ever widened -- **FIXED 2026-09-05**
+
+A member value flowing into a union slot has to be tagged: the union's C
+representation is `tur_tagged_t`, not the member's own layout. `EX_UNION_INJECT`
+was inserted at call arguments (IT4) and nowhere else, so:
+
+```
+(let [u (:: (Wide 1 2 3 4) (Wide | int))] ...)   error: invalid initializer
+(defn mk [] : (Wide | int) (:: (Wide 1 2 3 4) (Wide | int)))
+(defn mk [] : (Wide | int) (Wide 1 2 3 4))       error: incompatible types when
+                                                 returning type 'tur_adt_Wide'
+                                                 but 'tur_tagged_t' was expected
+```
+
+`elab_coerce_to_union` (elab_call.c) is the union twin of `elab_coerce_to_any`,
+reached from the ascription path (elab_types.c) and from return position
+(elab_fns.c, which needed a `return_union_type` capture alongside the existing
+session/app/exists/fn/borrow ones -- `return_kind` alone is a bare `TY_UNION`
+with no member list to match against). It deliberately never sets `frame_box`:
+that optimisation rests on a CALLEE not retaining the payload for the duration
+of one call, and a value bound to a local or returned outlives the expression
+that made it. A leak is the safe direction there; a frame box would dangle.
+
+An ANNOTATED let (`(let [u : (Wide | int) (Wide ...)] ...)`) already worked and
+is unchanged -- it inlines the binding into the argument position and frame-boxes
+it, so it never allocated. `tests/fixtures/union-widen-local-and-return` carries
+all four shapes and the pre-fix behaviour of each.
+
+### 1b. The heap box still has no owner -- **STILL OPEN**
+
+Measured: a `(:: member union)` bound to a local in a 1000-iteration loop leaks
+**32,000 bytes in 1,000 blocks**. The identical program through `any` is clean.
+
+The reason is the same one this whole entry keeps having: `let_binding_any_freeable`
+(emit_expr.c) -- the rule that decides a scope owns a widened box and may drop it
+at scope exit -- opens with `if (emit_resolve_type(ctx, b->type).kind != TY_ANY)
+return false;`. That is the fourth rule keyed on `TY_ANY` with no `TY_UNION`
+beside it.
+
+Adding the key is not enough, and this is the part worth knowing before starting:
+the drop CHANNEL emits `__tur_any_drop(name)`, which switches on ids interned by
+`emit_any_type_id` (`TUR_ANY_ID_BASE + i`, i.e. >= 1000). A union tag is a small
+member index, so that call is a silent no-op on a union value -- safe, and
+useless.
+
+The shape of the fix, from having looked at it:
+
+- At a let whose init is an `EX_UNION_INJECT`, the tag is known **statically**,
+  so no runtime switch is needed at all -- the drop is an unconditional
+  `free((void *)(intptr_t)TUR_UNTAG(u))`, emitted only when the injected member
+  is one the widen actually boxed (`emit_type_is_byvalue_adt` and not
+  `frame_box`, the same test the inject itself makes).
+- What that costs is a PARALLEL drop channel: `any_pending` / `any_scope_drops`
+  carry names only, and both drain by emitting `__tur_any_drop`. A per-entry
+  "free directly" flag has to reach all four drain sites, or the early-exit
+  paths (a `return`, a tail-call back-edge) miss it -- and the natural repro is
+  tail-recursive, so a fall-through-only fix would not even cover it.
+- A union local whose init is a CALL has no statically-known tag and should
+  decline, keeping the status-quo leak.
 
 ### 2. A `match` arm binding a by-value member is a hard C compile error -- **FIXED**
 

@@ -6812,6 +6812,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
     Type *return_fn_type = NULL; /* Issue 1b: full TY_FN return type so callers see the complete function signature (arity, result_kind) rather than a zeroed TY_FN shell */
     Type *return_tyvar_type = NULL; /* GS4: full TY_TYVAR return type for call-site substitution */
     Type *return_borrow_type = NULL; /* LS2: full borrow return type (&'a T) so lifetime IDs survive */
+    /* union-tagged-union-c-emission: full TY_UNION return type, so the
+     * return-position widen below knows the MEMBER LIST -- `return_kind` alone
+     * is a bare TY_UNION with no members to match the body's type against.
+     * Same shape as the captures above, and the reason there was no widen at
+     * all here: nothing had ever needed the union's payload in this scope. */
+    Type *return_union_type = NULL;
     const Form *return_type_form_kept = NULL; /* SZ8 non-GADT: retain raw return-type Form for size-index inference at call sites */
     /* CT0/RT0: a contract RETURN type -- `: #refine{ r : T | p }`.  The
      * declared return kind is the BASE type T (mirroring how a contract
@@ -7323,6 +7329,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
                      * FnDef.return_type. */
                     if (ann->kind == TY_REF_IMMUT || ann->kind == TY_REF_MUT) {
                         return_borrow_type = ann;
+                    }
+                    /* union-tagged-union-c-emission: capture the member list so
+                     * the return-position widen can tag the body's value. */
+                    if (ann->kind == TY_UNION) {
+                        return_union_type = ann;
                     }
                     /* F2-1: a `:linear` existential cannot escape past the
                      * scope that packs it -- the linear discipline relies on
@@ -8027,6 +8038,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if (return_kind == TY_ANY && body && body->type.kind != TY_ANY &&
         body->type.kind != TY_NEVER) {
         body = elab_coerce_to_any(e, body);
+    }
+
+    /* union-tagged-union-c-emission: the same widening, one type up.  A function
+     * declared `: (A | B)` whose body yields a bare member has to tag it; the
+     * raw value in a `tur_tagged_t` return slot is "incompatible types when
+     * returning", a hard cc error.  Only the ARGUMENT position ever did this
+     * widen, which is why every other one was broken. */
+    if (return_kind == TY_UNION && return_union_type && body &&
+        body->type.kind != TY_UNION && body->type.kind != TY_NEVER) {
+        body = elab_coerce_to_union(e, body, return_union_type);
     }
 
     /* bare-fat-param-non-int-result: a bare `^fat g` call in result position

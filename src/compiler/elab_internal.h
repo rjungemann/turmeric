@@ -1340,6 +1340,10 @@ bool elab_module_resolve_path(Elab *e, const Symbol *name,
 
 /* TY2.2: wrap a value in EX_UNION_INJECT to widen it to the `any` top type. */
 Expr *elab_coerce_to_any(Elab *e, Expr *value);
+/* union-tagged-union-c-emission: tag a member value flowing into a union slot.
+ * The union twin of elab_coerce_to_any; see its comment in elab_call.c for why
+ * it never sets frame_box. */
+Expr *elab_coerce_to_union(Elab *e, Expr *value, const Type *union_t);
 
 /* Gap 1 (instance-method-return-not-unified): report a genuine,
  * carrier-independent return-type conflict between a function's DECLARED return

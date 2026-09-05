@@ -427,6 +427,40 @@ Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     return inject;
 }
 
+/* union-tagged-union-c-emission: the union twin of `elab_coerce_to_any`.
+ *
+ * A member value flowing into a union slot has to be TAGGED -- the union's C
+ * representation is `tur_tagged_t {int64_t tag; int64_t val}`, not the member's
+ * own layout.  The call-argument path has done this since IT4, but it is the
+ * only position that did: `(let [u (:: (Wide 1 2 3 4) (Wide | int))] ...)` and a
+ * `defn` declared `: (Wide | int)` both handed the raw aggregate straight to a
+ * `tur_tagged_t` slot, which is not a leak (as the report had it) but a hard cc
+ * error -- "invalid initializer" at the let, "incompatible types when returning"
+ * at the return.
+ *
+ * `frame_box` is deliberately NOT set here, in contrast to the argument path.
+ * That optimisation rests on the CALLEE provably not retaining the payload for
+ * the duration of one call; a value bound to a local or returned outlives the
+ * expression that made it, so its box has to be on the heap.  A heap box with
+ * no owner is this report's remaining open item -- a leak, which is the safe
+ * direction, where a frame box here would be a dangling pointer.
+ *
+ * Returns `value` unchanged when it is already the union type (no double tag)
+ * or when no member matches (the caller's own type check reports that).  */
+Expr *elab_coerce_to_union(Elab *e, Expr *value, const Type *union_t) {
+    if (!value || !union_t || union_t->kind != TY_UNION) return value;
+    if (value->type.kind == TY_UNION) return value;
+    for (uint8_t um = 0; um < union_t->as.union_.n_members; um++) {
+        const Type *mem = union_t->as.union_.members[um];
+        if (!mem || !type_eq(value->type, *mem)) continue;
+        Expr *inject = expr_new(e->arena, EX_UNION_INJECT, *union_t, value->span);
+        inject->as.union_inject_.tag_idx = (int64_t)um;
+        inject->as.union_inject_.value = value;
+        return inject;
+    }
+    return value;
+}
+
 /* zero-arg-construct-ground-byvalue-return: true when a parameterised type
  * (`(Option BoundedIdx)`, `(Result Pos cstr)`) carries an element that is a
  * by-value struct/opaque payload (TY_STRUCT) -- the case where the sibling
