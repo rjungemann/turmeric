@@ -30,9 +30,11 @@ readings in this solver, and they came apart on measurement.
 
 ### 1.1 The numeric caps do not bite
 
-`refine_solver.h` carries nine caps.  `benchmarks/run-cap-sweep.sh`
-(regenerated 2026-09-05, `benchmarks/cap-sweep-results.md`) across 124 corpus
-benchmarks, 85 in-tree refinement fixtures and 200 fuzzer programs:
+`refine_solver.h` carries nine caps.  `benchmarks/run-cap-sweep.sh` as it
+stood before this work (the 2026-09-05 03:21 run of
+`benchmarks/cap-sweep-results.md`, byte-identical to the 2026-08-26 baseline
+except the header) across 124 corpus benchmarks, 85 in-tree refinement
+fixtures and 200 fuzzer programs:
 
 | cap | limit | worst peak anywhere | headroom |
 |---|---:|---:|---:|
@@ -48,6 +50,14 @@ benchmarks, 85 in-tree refinement fixtures and 200 fuzzer programs:
 Zero hits on any cap on any real obligation.  Raising a number here buys
 nothing measurable, and SX0(b) already parked the two phases (SX4 simplex,
 SX6 lazy SMT) that a cap hit would have justified.
+
+Regenerated after Phase 1 landed, the file moves in two places only: the
+`model_vars` limit column reads 8, and the `la_constr` peaks DROP (corpus 42
+-> 10, fuzzer 9 -> 6) because an equality now occupies one constraint rather
+than two and is eliminated before Fourier-Motzkin can grow through it.  The
+new `refine-int-divmod-by-literal` fixture becomes the in-tree worst unit for
+cubes (8 of 64) and cube literals (11 of 64) -- the disjunctive sign axiom
+doing exactly what 2.2 says it does, well inside the caps.
 
 ### 1.2 The corpus and the tree are already fully covered
 
@@ -203,7 +213,7 @@ a correct refutation (`(* p 2) > 0` with `p >= 0`, witness `p = 0`).
   "ran"), `errors/refine-model-search-four-vars`, and
   `refine-model-vars-cap` re-pointed at the new limits with a second subject
   for the budget row.
-- Full `bash tests/run.sh`: see the landing commit.
+- Full `bash tests/run.sh`: 2810 passed, 0 failed (commit dee5563f); refine ctests pass; `benchmarks/run-cap-sweep.sh` regenerated against this compiler -- no cap moved except the `model_vars` limit column and the constraint count an equality now occupies.
 
 ## 3. Phase 2 -- the rest of the Omega equality phase (open)
 
