@@ -3784,6 +3784,18 @@ static bool jit_try_split_preamble(Buf *csrc, Buf *out) {
     buf_write(out, csrc->data, (size_t)(ps - csrc->data));
     buf_write(out, tur_rt_split_decls, tur_rt_split_decls_len);
     buf_write(out, after, csrc->len - (size_t)(after - csrc->data));
+    /* TUR_JIT_DUMP_C=<path>: the exact text handed to c2mir.  A c2mir
+     * diagnostic names <tur-jit>:LINE:COL, and until this existed there was no
+     * way to see what was on that line: the source exists only in memory, it is
+     * not `tur emit-c` output (the preamble has been swapped for the decls
+     * image), and reconstructing it by hand gets the line numbers wrong.
+     * TUR_JIT_SPLIT_DEBUG=<path> dumps the preamble PROBE, which is a different
+     * text and cannot answer this. */
+    const char *dump = getenv("TUR_JIT_DUMP_C");
+    if (dump && *dump) {
+        FILE *df = fopen(dump, "wb");
+        if (df) { fwrite(out->data, 1, out->len, df); fclose(df); }
+    }
     return true;
 }
 
