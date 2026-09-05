@@ -51,23 +51,21 @@
 ;;                        solution instead of the whole search space, and what
 ;;                        lets a recursive relation terminate at all.
 
-(defopaque StThunk :ptr<void>)
+(defdata Stream :copy (StNil) (StCons :Subst :Stream) (StInc (fn [] Stream)))
 
-(defdata Stream :copy (StNil) (StCons :Subst :Stream) (StInc :StThunk))
-
-;;; StThunk -- a delayed Stream, carrier is the fat-closure pointer.
-;;;
-;;; The carrier is `:ptr<void>` and NOT `:fn`: a `:fn` field accepts a
-;;; capturing closure, type-checks, and segfaults when it is forced, because
-;;; the ascription that calls it back assumes a bare function pointer while a
-;;; capturing lambda is a fat closure.  This is the same route `Goal` takes,
-;;; for the same reason.  See docs/reported/closure-in-defdata-field.md.
-;;;
-;;; Since: lazy-streams
+;; The thunk field is declared with its real type, `(fn [] Stream)`.
+;;
+;; It used to be an opaque `(defopaque StThunk :ptr<void>)` carrier with a
+;; `(:: ... :StThunk)` wrapper at every construction site and an
+;; `(:: th (fn [] Stream))` at the force site, because a bare `:fn` field
+;; accepted a capturing closure and segfaulted when forced.  That is fixed;
+;; what kept the workaround alive afterwards was narrower than the note here
+;; claimed, and was NOT the `:fn` field at all -- see
+;; docs/archive/workaround-stthunk-opaque-carrier.md.
 
 ;;; st-force -- run a delayed stream one step.
 
-(defn st-force [th : StThunk] : Stream ((:: th (fn [] Stream))))
+(defn st-force [th : (fn [] Stream)] : Stream (th))
 ;;; st-pull -- force a stream until it is mature (StNil or StCons).
 ;;;
 ;;; This is where laziness is cashed in: every consumer that needs to look at
@@ -102,7 +100,7 @@
     ;; itself immature, which is what an earlier `mplus-i` in the guide missed.
     (let [lth th
           lys ys]
-      (StInc (:: (fn [] (let [_ lth] (st-append lys (st-force lth)))) :StThunk)))
+      (StInc (fn [] (let [_ lth] (st-append lys (st-force lth))))))
     (StCons v rest)
     (StCons v (st-append rest ys))))
 ;;; st-append-dfs -- concatenate two solution streams DEPTH-FIRST.
@@ -139,23 +137,22 @@
     (StInc th)
     (let [lth th
           lys ys]
-      (StInc (:: (fn [] (let [_ lth] (st-append-dfs (st-force lth) lys)))
-               :StThunk)))
+      (StInc (fn [] (let [_ lth] (st-append-dfs (st-force lth) lys)))))
     (StCons v rest)
     (StCons v (st-append-dfs rest ys))))
 ;;; st-bind -- concatMap: apply f to each state and concatenate the streams.
 ;;; f is a `Subst -> Stream` callback (arrives as a first-class `:fn` value).
 
-(defn st-bind [xs : Stream f : fn] : Stream
+(defn st-bind [xs : Stream f : (fn [Subst] Stream)] : Stream
   (match xs
     (StNil)
     (StNil)
     (StInc th)
     (let [lth th
           lf  f]
-      (StInc (:: (fn [] (let [_ lth] (st-bind (st-force lth) lf))) :StThunk)))
+      (StInc (fn [] (let [_ lth] (st-bind (st-force lth) lf)))))
     (StCons v rest)
-    (st-append (:: (f v) :Stream) (st-bind rest f))))
+    (st-append (f v) (st-bind rest f))))
 ;;; st-length -- count the states in a solution stream.
 
 (defn st-length [xs : Stream] : int
@@ -205,7 +202,7 @@
 ;;; Returns:
 ;;;   The concatenated solution stream.
 
-(defn mbind [ma : Stream fn : fn] : Stream (st-bind ma fn))
+(defn mbind [ma : Stream fn : (fn [Subst] Stream)] : Stream (st-bind ma fn))
 ;;; bt-length -- count the number of solutions in a solution stream.
 ;;;
 ;;; Parameters:
@@ -570,7 +567,7 @@
 ;;; Since: lazy-streams
 
 (defmacro zzz [g]
-  `(:: (fn [state : Subst] (StInc (:: (fn [] (apply-goal ~g state)) :StThunk)))
+  `(:: (fn [state : Subst] (StInc (fn [] (apply-goal ~g state))))
      :Goal))
 ;;; disjoined-dfs -- disjunction that searches DEPTH-FIRST.
 ;;;

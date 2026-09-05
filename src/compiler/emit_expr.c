@@ -2613,6 +2613,33 @@ static bool emit_init_owns_fresh_sum(EmitCtx *ctx, const Expr *init) {
     return false;
 }
 
+/* fn-value-carrier-fat-seam-residuals (plain-alias variant): true when a let
+ * initializer is a bare reference to a fn-typed PARAMETER.
+ *
+ * Such a parameter arrives as the fat-closure HANDLE -- the emitted signature is
+ * `int64_t f`, and every call site reads it as `(*(thunk_t *)f)(f, ...)`.
+ * Declaring the alias as a thin function pointer (the general TY_FN let arm) and
+ * then storing it into an `int64_t` closure-env field is a -Wint-conversion
+ * straddle:
+ *
+ *     int64_t (*lf)(int64_t) = (int64_t (*)(int64_t))f;
+ *     __env->lf = lf;              // int64_t = int64_t (*)(int64_t)
+ *
+ * Same shape and same answer as the curried-closure arm beside it: carry the
+ * handle as int64_t.  The elaborator already does this for the ASCRIBED
+ * spelling `(:: f (fn [..] ..))` by returning the var itself (elab_types.c);
+ * a plain `(let [lf f] ...)` alias had no counterpart, which is what a typed
+ * `(fn [Subst] Stream)` callback in stdlib/logic.tur's `st-bind` runs into.
+ *
+ * Narrow on purpose: a bare variable reference to a fn-typed param is exactly
+ * the alias shape, and nothing else is claimed. */
+static bool let_init_aliases_fat_fn_param(const Expr *init) {
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    return init && init->kind == EX_VAR && init->as.var.binding &&
+           init->as.var.binding->is_param &&
+           init->as.var.binding->type.kind == TY_FN;
+}
+
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if body contains return or throw first */
     bool body_has_return_or_throw = expr_contains_return_or_throw(e->as.let_.body);
@@ -2763,6 +2790,10 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * unwrap the result kind to an unknown-void return type and mistype
              * the handle; carry it as the int64_t handle instead, mirroring the
              * is_fat/boxed branch above. */
+            buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
+            emit_localvar_record_ctype(bn, "int64_t");
+        } else if (b->type.kind == TY_FN &&
+                   let_init_aliases_fat_fn_param(e->as.let_.bindings[i].init)) {
             buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
             emit_localvar_record_ctype(bn, "int64_t");
         } else if (b->type.kind == TY_FN) {
