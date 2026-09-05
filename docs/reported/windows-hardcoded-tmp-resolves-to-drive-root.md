@@ -48,9 +48,24 @@ anything. That is *provisioning*, in the same spirit as installing `diffutils`
 for the harness -- it makes the suite honest on any machine, but it does not
 make `fs/tmpfile` correct for a user who never runs the suite.
 
+## Status
+
+**Step 1 is done** (`stdlib/fs.tur`): the temp directory is resolved at run time
+-- `GetTempPathA` + `_mktemp_s` + `_open(_O_EXCL)` on Windows, `TMPDIR` else
+`/tmp` on POSIX. Verified by printing what `fs/tmpfile` actually returns, since
+the fixtures pass either way on a machine that already has `C:\tmp`:
+
+```
+before:  C:\tmp\tur_XXXXXX        (returned 0 outright where C:\tmp is absent)
+after:   C:\Users\<u>\AppData\Local\Temp\tur_a10656
+```
+
+Steps 2 and 3 remain, and they are ordered: the harness provisioning cannot be
+removed until the ten fixtures below stop spelling `/tmp` literally.
+
 ## Fix directions
 
-1. **`fs/tmpfile` should not hardcode `/tmp`.** Under `_WIN32` use
+1. **DONE.** ~~`fs/tmpfile` should not hardcode `/tmp`.~~ Under `_WIN32` use
    `GetTempPathA` (which honours `TMP`/`TEMP`/`USERPROFILE` and always exists)
    and `_mktemp_s`, or simply `_tempnam(NULL, "tur_")`. MinGW has no `mkstemp`
    contract to preserve here, and this is the change that helps actual users.

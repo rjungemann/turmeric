@@ -441,12 +441,15 @@
     cur = next;
   }
   ```)
-;;; fs/tmpfile -- create a unique temporary file via mkstemp(3).
+;;; fs/tmpfile -- create a unique temporary file in the system temp directory.
 ;;;
 ;;; Returns:
 ;;;   A linear TmpFile handle wrapping a pair { path-cstr, fd }.
 ;;;   The path is heap-allocated; the fd is the open descriptor.
-;;;   Release exactly once with fs/tmpfile-free.  Returns 0 on mkstemp failure.
+;;;   Release exactly once with fs/tmpfile-free.  Returns 0 on failure.
+;;;   The directory is resolved at run time: TMPDIR (else /tmp) on POSIX,
+;;;   GetTempPath on Windows -- never a hardcoded "/tmp", which a native
+;;;   Windows binary would resolve against the current drive root.
 ;;;   Under -Xlinear the checker requires the handle be consumed exactly once
 ;;;   (dropping it is TUR-E0100; freeing it twice is TUR-E0101).
 ;;;
@@ -459,9 +462,59 @@
   #fx{FS}
   : TmpFile
   ```c
-  char *tmpl = strdup("/tmp/tur_XXXXXX");
+  #include <sys/stat.h>
+  #include <io.h>     /* tur:optional -- Windows only (_open, _mktemp_s) */
+  #include <fcntl.h>
+  /* The temp DIRECTORY is resolved at run time, never spelled as a literal.
+   *
+   * This used to be strdup("/tmp/tur_XXXXXX") + mkstemp.  A compiled turmeric
+   * program is a NATIVE Windows binary, not an MSYS one, so its CRT does not
+   * resolve "/tmp" the way the MSYS shell does (%LOCALAPPDATA%\Temp) -- it
+   * resolves it against the CURRENT DRIVE ROOT, i.e. C:\tmp or D:\tmp, which
+   * need not exist.  When it does not, every fs/tmpfile call returned 0 and the
+   * caller saw an I/O failure with nothing naming a missing directory.
+   *
+   * That shipped green for a long time because developer machines accumulate a
+   * C:\tmp; it only surfaced when CI ran the suite on a fresh runner whose
+   * workspace is on D:.  See
+   * docs/reported/windows-hardcoded-tmp-resolves-to-drive-root.md. */
+#ifdef _WIN32
+  /* GetTempPathA is the documented source of a directory that EXISTS: it tries
+   * TMP, then TEMP, then USERPROFILE, then the Windows directory, and always
+   * returns a path ending in a separator. */
+  char dir[MAX_PATH + 1];
+  DWORD dn = GetTempPathA((DWORD)sizeof dir, dir);
+  if (dn == 0 || dn > MAX_PATH) return 0;
+  size_t need = (size_t)dn + sizeof("tur_XXXXXX");
+  char *tmpl = (char *)malloc(need);
+  if (!tmpl) return 0;
+  memcpy(tmpl, dir, (size_t)dn);
+  memcpy(tmpl + dn, "tur_XXXXXX", sizeof("tur_XXXXXX"));
+  /* _mktemp_s only picks a free NAME; it does not create the file, so two
+   * racing processes can be handed the same one.  _O_EXCL is what closes that:
+   * the create fails rather than clobbering an existing file, which is the
+   * guarantee mkstemp gives on the other branch. */
+  if (_mktemp_s(tmpl, need) != 0) { free(tmpl); return 0; }
+  int fd = _open(tmpl, _O_RDWR | _O_CREAT | _O_EXCL | _O_BINARY,
+                 _S_IREAD | _S_IWRITE);
+  if (fd < 0) { free(tmpl); return 0; }
+#else
+  /* POSIX: honour TMPDIR when set (containers and CI often point it at a
+   * writable scratch), else the conventional /tmp -- which on a real POSIX
+   * system does exist. */
+  const char *dir = getenv("TMPDIR");
+  if (!dir || !*dir) dir = "/tmp";
+  size_t dl = strlen(dir);
+  int slash = (dl > 0 && dir[dl - 1] != '/') ? 1 : 0;
+  size_t need = dl + (size_t)slash + sizeof("tur_XXXXXX");
+  char *tmpl = (char *)malloc(need);
+  if (!tmpl) return 0;
+  memcpy(tmpl, dir, dl);
+  if (slash) tmpl[dl] = '/';
+  memcpy(tmpl + dl + slash, "tur_XXXXXX", sizeof("tur_XXXXXX"));
   int fd = mkstemp(tmpl);
   if (fd < 0) { free(tmpl); return 0; }
+#endif
   int64_t *pair = malloc(2 * sizeof(int64_t));
   pair[0] = (int64_t)(intptr_t)tmpl;
   pair[1] = (int64_t)fd;
