@@ -218,3 +218,100 @@ proven by the eager run. Next session: chase the thunk (rjungemann/mir,
 branch from `fix/pragma-pack-macro-arg`), or flip the Windows default to
 eager as an interim -- the engine comment notes eager "doubles" cost, which
 may be acceptable to ship a working tier first.
+
+
+---
+
+## 2026-09-04: S2 was disengaged for EVERYONE; the lazy fault re-characterized
+
+Going after the lazy-generation crash turned up a larger, cross-platform bug on
+the way in, plus two Windows build/CI gaps. The crash itself is better
+understood but not fixed.
+
+### The S2 split path was silently off, on every platform
+
+`tur jit hello.tur` on main fell back to the whole-preamble path. The engage
+probe explains why:
+
+```
+split-debug: probe=4bbd9925fea410ea  committed=7a8360d2df358f58
+```
+
+Regenerating the committed artifacts produced **no diff**, so they were not
+stale -- the PROBE was emitting different text. Diffing the two showed the
+probe carrying an SX1 trail-guard block inside `tur_serial_cont_serialize` that
+the canonical emission omits.
+
+That block is gated on `g_trail_autoloaded`, i.e. whether `stdlib/trail.tur`
+happened to be autoloaded into *that particular compile*. `cmd_emit_rt_split`
+does not autoload it; the JIT probe does. `emit_rt_split_source` forces six
+other gates to a canonical posture (`g_needs_hamt`, `g_needs_regex_h`,
+`g_has_variadics`, `g_cps_path`, `g_needs_winsock`, and the rc/GC archive
+posture) and missed this one.
+
+This is the **second instance of the same hazard** -- the first was the rc/GC
+archive flag, fixed in the Windows bring-up. The consequence is worse than it
+looks, because nothing reports it: the hash compare fails, S2 disengages, and
+the JIT quietly uses the slower whole-preamble path. On Windows that path then
+dies on `__va_start` and falls back again to `cc`, which is why `hello.tur`
+appeared to "work".
+
+Fixed by forcing `g_trail_autoloaded` in `emit_rt_split_source` and restoring
+it on the way out. Safe for the split specifically: the runtime half is
+compiled into the host, which always links `src/runtime/trail.c`, so
+`tur_trail_level_i64` resolves. The gate's own comment is about the NON-split
+path, where a looser gate would emit a call `cc` cannot resolve.
+
+After the fix and a regen, `probe == committed == 4bbd9925fea410ea` and S2
+engages.
+
+**Worth a guard.** A stale-or-divergent blob is invisible today. A CI check
+that runs the engage probe and fails when it does not match would have caught
+both instances the day they landed.
+
+### Two Windows build/CI gaps
+
+- `src/turi/jit_ffi.c` includes `<dlfcn.h>` unguarded, so the Windows JIT build
+  does not compile at all on main. Fixed with the same `platform_dl.h` guard
+  `jit_engine.c` already carries.
+- The `windows` CI job configures **without `-DTUR_JIT=ON`**, so nothing on
+  Windows ever compiles the JIT sources. That is how the above reached main.
+  The job added during the bring-up guards the default build only.
+
+### The lazy fault, re-characterized
+
+Two corrections to what this report previously recorded:
+
+1. It is **SIGSEGV, not SIGILL**.
+2. It is **not** the `PAGE_EXECUTE`-without-READ theory recorded earlier. That
+   was a guess and it is wrong: probing
+   `VirtualAlloc(NULL, len, MEM_COMMIT, PAGE_EXECUTE)` on this host returns a
+   valid pointer with `GetLastError() == 0`, and `VirtualQuery` confirms
+   `Protect=0x10`. The allocator is not the fault.
+
+What the fault actually looks like, with S2 engaged so the run reaches it:
+
+```
+interp  -> "jit hello", exit 0
+eager   -> "jit hello", exit 0
+lazy    -> no output, SIGSEGV
+
+Thread 5 received signal SIGSEGV
+#0  0x0000000001cb0180 in ?? ()
+#1  jit_run_entry ()
+=> 0x1cb0180:  mov  %rsp,0x429e8(%rax)
+```
+
+The page is readable and executing -- the fault is a **data store through a bad
+`%rax`**, not an instruction-fetch fault. Those bytes match neither pattern in
+`_MIR_get_wrapper`, and MIR *does* carry a `_WIN32` arm there (and in
+`_MIR_get_wrapper_end`), so this is not a missing win64 port at the wrapper
+level. The shape is consistent with a jump landing mid-instruction, i.e. a bad
+redirect target -- which points at `_MIR_redirect_thunk` or the lazy
+serialized-thunk interface built on it.
+
+Next step: single-step from `jit_run_entry` into the thunk on the lazy path and
+compare the redirect target against the generated function's real entry.  That
+is MIR x86-64 back-end work in the `rjungemann/mir` fork.
+
+Until then `TUR_JIT_GEN=eager` is a working tier on Windows.

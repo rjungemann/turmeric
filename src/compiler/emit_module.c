@@ -12774,6 +12774,22 @@ void emit_rt_split_source(Buf *out) {
      * restore on the way out. */
     bool s_arch = rt_global_from_archive();
     emit_set_rcgc_from_archive(true);
+    /* Same hazard, second instance.  The SX1 trail guard inside
+     * tur_serial_cont_serialize is gated on g_trail_autoloaded, which
+     * reflects whether stdlib/trail.tur happened to be autoloaded into THIS
+     * compile.  cmd_emit_rt_split does not autoload it, the JIT engage probe
+     * does -- so the two emitted different text, the hash compare failed, and
+     * S2 silently disengaged for EVERY program on every platform.  Nothing
+     * reports that: the JIT just falls back to the whole-preamble path, which
+     * on Windows then dies on __va_start and falls back again to cc.
+     *
+     * Forcing it on is safe for the split specifically: the runtime half is
+     * compiled into the host, which always links src/runtime/trail.c, so
+     * tur_trail_level_i64 resolves.  The gate's own comment is about the
+     * NON-split path, where a looser gate would emit a call cc cannot
+     * resolve. */
+    bool s_trail = g_trail_autoloaded;
+    g_trail_autoloaded = true;
     g_needs_hamt = true; g_needs_regex_h = true;
     g_has_variadics = true; g_cps_path = true; g_needs_winsock = true;
     g_rt_split_all_gates = true;
@@ -12785,6 +12801,7 @@ void emit_rt_split_source(Buf *out) {
     g_needs_hamt = s_hamt; g_needs_regex_h = s_regex;
     g_has_variadics = s_var; g_cps_path = s_cps; g_needs_winsock = s_wsk;
     emit_set_rcgc_from_archive(s_arch);
+    g_trail_autoloaded = s_trail;
 }
 
 /* structdef-retirement slice 5: an `(defopaque ...)` elaborates to an EX_DEF
