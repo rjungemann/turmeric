@@ -388,9 +388,43 @@ per the standing rule it would not block a release if there were.
    result` now reads `retire=1 rewind=2` with the value asserted across the
    pop, and it carries the mutual-recursion case as the negative. Closes
    [region-walk-refuses-every-adt-result](https://github.com/rjungemann/turmeric/blob/main/docs/archive/region-walk-refuses-every-adt-result.md).
-   Still refused, deliberately, for later increments each with their own
-   fixture: a recursive spine, a carrier-erased ADT field, a container of
-   scalars, a struct result.
+   **Second batch, PINNED 2026-09-05 (`region-scope-shapes`):** three more
+   result shapes REWIND, and it turned out none needed a new walk change --
+   the scalar-form widening plus the existing `full_type` walk already admit
+   them, so the work was to prove it and pin each with its value read after
+   the pop, per the one-shape-one-fixture rule:
+
+   - a **`defstruct` with scalar fields** -- every defstruct is a record ADT
+     (structdef-retirement DS-D), so it reaches the same TY_ADT arm and its
+     `[x : int y : float]` fields are scalar keywords;
+   - a variant holding a **`:cstr`** -- never region memory, on the list;
+   - a variant holding a **field-less by-value enum** (`(T :int :Color)`) --
+     admitted the OTHER way: `Color` is not a scalar keyword, so it only got
+     through because the field's `full_type` is recorded (`record_full`) and
+     the walk descends into `Color`, whose every ctor is field-less. That is
+     an inference from the emitted verdict, and the negatives make it a safe
+     one.
+
+   And the negatives held: a variant HOLDING a `:heap` node retires, a
+   variant holding a self-recursive spine retires, and `region-scope-adt-
+   result`'s mutual-recursion case still retires and prints 42. The
+   `:heap`-holding shape is kept DEFINED in the fixture so its retire is
+   counted, but not RUN -- writing it surfaced an unrelated pre-existing
+   miscompile (a capturing thunk returning a heap-field record garbles the
+   int field, flag off too:
+   [capturing-thunk-returning-heap-field-record-garbles-int](../reported/capturing-thunk-returning-heap-field-record-garbles-int.md)),
+   and running it would bake a nondeterministic pointer into the expected
+   output.
+
+   Still refused, and each a real widening if taken up: a **carrier-erased
+   ADT field whose inner def gets no `full_type`** (a multi-variant or
+   drop-glue-bearing inner -- needs name-to-def resolution at emit time,
+   which the emitter does not have; `program_root`'s EX_DEFDATA items are
+   the route); a **container of scalars** (`Vec<int>` -- `Vec` is `:heap`
+   and refused on sight, and admitting it needs the compiler-warranted fact
+   that Vec's storage is inline-C malloc never routed to a generation, the
+   same name-list warrant the option-niche plan uses); and the **recursive
+   spine**, which must stay refused because the result IS the node.
 3. **Close or price the residue** named under R4: the unbracketed CPS
    `CT_LETCALL` arm, argument-position allocation landing in the generation, and
    the pooled slab that is never returned (reachable at exit, not lost -- a pool,
