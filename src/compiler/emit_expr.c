@@ -4932,17 +4932,21 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
              *
              * This increment admits exactly ONE parametric shape: a `Vec`
              * whose element is a scalar.  Two facts make it sound, one per
-             * lock.  (1) Vec's own storage -- the handle and the element
-             * buffer -- is plain inline-C `malloc` in stdlib/vec.tur (lines
-             * ~59 and ~127), NEVER the region router: `tur_region_alloc_or_
-             * malloc` is emitted only at the four ADT-ctor sites (the base,
-             * monomorph and emit_program ctors, and the SR4 recursive-field
-             * box), none of which Vec's inline-C construction uses.  So the
-             * handle that escapes is never region memory and the runtime lock
-             * (`tur_region_note_escape`) is satisfied; this is a compiler-
-             * warranted name check, the same warrant the option-niche plan
-             * uses for Vec/Map/Set ("the compiler itself emits their
-             * constructors as unconditional mallocs").  (2) The ELEMENTS are
+             * lock.  (1) Every Vec a program can hold comes from inline-C
+             * `malloc` in stdlib/vec.tur (`vec-new` ~59, the buffer ~127):
+             * vec.tur never constructs one through the record constructor,
+             * and the EMITTED `ctor_Vec__<T>` -- which IS routed through the
+             * region router like every ADT ctor, and is defined in every TU
+             * -- is called nowhere (checked across all 148 snapshots at the
+             * graduation).  So in practice the escaping handle is never
+             * region memory.  But the argument does not REST on that: the
+             * bracket passes its result to `tur_region_note_escape` before
+             * the checked pop, so a Vec handle that somehow did land in the
+             * generation would flip the escape flag and RETIRE, never rewind.
+             * The name check is the same compiler-warranted warrant the
+             * option-niche plan uses for Vec/Map/Set ("the compiler itself
+             * emits their constructors as unconditional mallocs"), and the
+             * runtime lock is what makes it safe to be wrong.  (2) The ELEMENTS are
              * what could transitively reach, and a scalar element is an int64
              * word in that malloc'd buffer: nothing to reach.  Anything else
              * refuses here -- a by-value aggregate element (heap-boxed at push
