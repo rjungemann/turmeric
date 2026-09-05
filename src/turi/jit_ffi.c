@@ -17,7 +17,17 @@
  * never abort. */
 #include "jit_ffi.h"
 
-#include <dlfcn.h>
+#ifdef _WIN32
+/* MinGW ships no <dlfcn.h>.  Same guard jit_engine.c already carries -- see
+ * the note there: host-symbol resolution goes through platform_dl.h so the
+ * tree has one LoadLibrary shim rather than a second, subtly-different one.
+ *
+ * This file reached main unguarded because the Windows CI job configures
+ * WITHOUT -DTUR_JIT=ON, so nothing on Windows compiles the JIT sources. */
+#  include "platform_dl.h"
+#else
+#  include <dlfcn.h>
+#endif
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
