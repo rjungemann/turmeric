@@ -315,8 +315,21 @@ static bool find_stdlib_beside_exe(char *out, size_t cap) {
             int rn = snprintf(out, cap, "%s/share/turmeric/stdlib", dir);
             if (rn > 0 && (size_t)rn < cap) return true;
         }
-        /* Step up one level. */
+        /* Step up one level.  Backslashes too: GetModuleFileNameA hands back
+         * `C:\...\bin\tur.exe`, so a '/'-only search finds no separator, breaks
+         * out of the loop on the first iteration, and the walk-up never happens.
+         * Only depth 0 is ever probed, which is why a FLAT tree (stdlib beside
+         * the exe) resolved while the installed prefix layout -- <prefix>/bin/tur
+         * with <prefix>/share/turmeric/stdlib one level up -- did not: `when` came
+         * back "unknown function or operator", the program then elaborated without
+         * macros or CPS, and the emitted C referenced DK without defining it.
+         * dir_of_path above already carries this fix and the comment explaining
+         * it; this loop did not get it. */
         char *slash = strrchr(dir, '/');
+#ifdef _WIN32
+        char *bs = strrchr(dir, '\\');
+        if (bs && (!slash || bs > slash)) slash = bs;
+#endif
         if (!slash || slash == dir) break;
         *slash = '\0';
     }
