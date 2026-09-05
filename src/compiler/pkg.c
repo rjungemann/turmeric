@@ -21,6 +21,7 @@
 #  endif
 #endif
 
+#include "platform_proc.h"
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -4020,12 +4021,12 @@ static void resolve_author(const ScaffoldOpts *opts, char *out, size_t cap) {
         return;
     }
     /* Try git config */
-    FILE *p = popen("git config user.name 2>/dev/null", "r");
+    FILE *p = popen("git config user.name 2>" TUR_DEVNULL, "r");
     char git_name[128] = {0};
     char git_email[128] = {0};
     if (p) { if (fgets(git_name, sizeof(git_name), p)) {
         char *nl = strchr(git_name, '\n'); if (nl) *nl = '\0'; } pclose(p); }
-    p = popen("git config user.email 2>/dev/null", "r");
+    p = popen("git config user.email 2>" TUR_DEVNULL, "r");
     if (p) { if (fgets(git_email, sizeof(git_email), p)) {
         char *nl = strchr(git_email, '\n'); if (nl) *nl = '\0'; } pclose(p); }
     if (git_name[0] && git_email[0])
@@ -4288,16 +4289,31 @@ int scaffold_project_ext(const ScaffoldOpts *opts) {
 
     /* ---- Git init ---- */
     if (!opts->no_git && !opts->dry_run) {
-        char cmd[4096];
+        char cmd[4096], qdir[2048];
+        /* The directory is shell-quoted for the PLATFORM's shell, and the null
+         * device is spelled the platform's way.  Both were POSIX-only before:
+         * cmd.exe does not treat ' as a quote character at all, so git received
+         * a literal 'C:\path' and failed, and 2>/dev/null is an unresolvable
+         * path there ("The system cannot find the path specified.").  The net
+         * effect was a scaffolded project with no git repository and exit 0.
+         *
+         * The commit message is spelled with the platform quoting too, rather
+         * than relying on git to be forgiving about stray single quotes. */
+        if (tur_shell_quote(dir, qdir, sizeof(qdir)) != 0) {
+            fprintf(stderr, "tur new: project path too long to quote for the "
+                    "shell; skipping git init\n");
+            goto after_git;
+        }
         snprintf(cmd, sizeof(cmd),
-            "git -C '%s' init -q 2>/dev/null && "
-            "git -C '%s' add -A 2>/dev/null && "
-            "git -C '%s' commit -q -m 'Initial scaffold from tur new' 2>/dev/null",
-            dir, dir, dir);
+            "git -C %s init -q 2>" TUR_DEVNULL " && "
+            "git -C %s add -A 2>" TUR_DEVNULL " && "
+            "git -C %s commit -q -m \"Initial scaffold from tur new\" 2>" TUR_DEVNULL,
+            qdir, qdir, qdir);
         if (system(cmd) != 0) {
             fprintf(stderr, "tur new: git init failed (non-fatal); "
                     "project is on disk without a git repository\n");
         }
+    after_git: ;
     }
 
     if (!opts->dry_run) {
