@@ -106,3 +106,74 @@ Cheap, but not as simple as adding markers: a fixture must first stop leaking
 its own scaffolding, or the marker pins the rig rather than the compiler.  One
 fixture is fixed here; the rest need their category resolved (spine -> RM2,
 strings -> String ownership) before a marker on them means anything.
+
+## Re-run 2026-09-05
+
+The sweep reproduces **byte for byte** -- 1790 B, same per-fixture split -- on a
+tree several commits further along, so the numbers above are stable and not an
+artifact of the day they were taken.  Two things changed on re-reading it.
+
+### `zipper-basic` was a second test rig, not "the program's"
+
+The table above files its 64 B under "program-owned containers ... the
+program's".  That reading is wrong in the way that matters: it is the FIXTURE's
+program, and the fixture had a bug.  `test-move-right-focus` frees `z` and never
+frees `z2` -- but `zipper-move-right-raw` mallocs a fresh struct AND fresh
+left/right arrays rather than mutating, so the second zipper and both its arrays
+(40 + 16 + 8) go unowned.  `test-focus`, right above it in the same file, gets
+the discipline right.
+
+Fixed here: 64 -> 0 B, and `zipper-basic` now carries `requires.leak-check`
+(82 opted-in fixtures, all green).  Same shape as `httpd-req-string-opt` in the
+section above, and the same lesson -- **two of the sweep's fifteen rows were
+fixtures leaking their own rig**: 1176 + 64 = 1240 B, which is 42% of the 2966 B
+the sweep totalled before either was fixed.  The remainder is 1726 B.
+
+`stdlib/zipper.tur`'s `zipper-free-raw` got a null guard in the same change.
+The API produces the null handle (`zipper-move-left/right-raw` return 0 at the
+end of the tape) and the documented way to consume the Option is
+`(unwrap-or opt (:: 0 (Zipper int)))`, so a caller following this very fixture's
+pattern reaches `zipper-free` with 0 on the exhausted path.  Every other entry
+point guards; that one dereferenced.
+
+### The `__tur_aggrspill_*` rows are the erased dict path, not a category
+
+The table lists "poly aggregate-spill shim" as its own ~48 B line, RM1-adjacent.
+Traced through, it is not adjacent to RM1 -- it is the same erased path the
+report already names, and the shim is where it becomes visible.
+
+`hkt-constrained-spec-reresolves-instance` is the clean specimen.  Its
+`poly-bind` calls `bind` through the dictionary, so the continuation crosses the
+`tur_poly_fn_t` int64 ABI; the closure returns `tur_adt_Option__int` by value, so
+`__tur_aggrspill___poly_1441` mallocs a 16-byte box purely to make the return fit
+one word.  Write the same call with the dispatch statically resolved --
+
+```turmeric
+(defn main [] : int
+  (println (unwrap-or (bind (:: (some 7) (Option int)) (fn [v] (some (* v 2)))) -1))
+  0)
+```
+
+-- and **no shim is emitted at all**: the instance specializes to
+`__inst_Monad_bind_Option__spec__...` returning the aggregate by value, and the
+closure is passed as `__poly_1437` with no box.  So the row is not "a shim that
+forgot to free"; it is the cost of erasure, and it goes to zero at
+monomorphization, which is what the report has said through four narrowings.
+
+Why the freshness machinery does not reach it, recorded so nobody re-derives it:
+the box IS provably fresh, and the analysis can even see it -- inside
+`poly_bind__spec`, `emit_call_returns_fresh_sum_box` re-resolves the dispatch to
+`__inst_Monad_bind_Option`, whose `fresh_sum_via_param_mask` names the
+continuation, whose body is a ctor.  The temp there is marked owned.  But the
+spec **returns** that carrier rather than reading it back, and the owned mark
+does not cross the function boundary: at the call site in `main`,
+`call_returns_fresh_sum_box_as` asks `poly-bind`'s own binding, which
+`elab_stamp_sum_freshness` stamped once, on the GENERIC body, where
+`call_dispatch_is_static` is false because the receiver's type head is the
+class variable.  Freshness is a per-monomorph property recorded as a
+per-binding one.
+
+Closing it means either an all-instances-agree stamp at elab time or a per-spec
+"returns a fresh box" pass that runs before callers are emitted -- both real
+work, both with double-free as the failure mode, for ~48 bytes across three
+fixtures that monomorphization deletes outright.  Not taken up.
