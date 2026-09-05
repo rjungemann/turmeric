@@ -1,6 +1,6 @@
 # Refinement solver cap sweep (SX0(b))
 
-Generated: 2026-09-05 03:21 at 5aa45aa6 by `benchmarks/run-cap-sweep.sh`.
+Generated: 2026-09-05 17:26 at dee5563f by `benchmarks/run-cap-sweep.sh`.
 
 Every cap below degrades to `RT_UNKNOWN` -> the runtime check survives, so a
 hit is never unsound -- it is lost completeness, and only lost completeness that
@@ -39,28 +39,28 @@ means something only while its hits are 0.
 | cube_lits | 0 | 13 | 64 | 80% | qf_lia_distinct_unsat.smt2 |
 | expand_depth | 0 | 8 | 256 | 97% | qf_lia_distinct_unsat.smt2 |
 | la_vars | 0 | 9 | 32 | 72% | gen_mixed_sat_00013.smt2 |
-| la_constr | 0 | 42 | 512 | 92% | gen_real_unsat_00042.smt2 |
+| la_constr | 0 | 10 | 512 | 98% | qf_lia_distinct_unsat.smt2 |
 | euf_terms | 982 | 512 | 512 | 0% | qf_lra_deep_arith_chain_sat.smt2 |
 | no_shared | 0 | 9 | 16 | 44% | gen_mixed_sat_00013.smt2 |
 | path_hyps | n/a | n/a | 8 | n/a | this population does not elaborate |
-| model_vars | n/a | n/a | 3 | n/a | this harness does not run the model search |
+| model_vars | n/a | n/a | 8 | n/a | this harness does not run the model search |
 | la_fm (FM blow-up) | 0 | - | - | - | - |
 | no_rounds (exchange budget) | 0 | - | - | - | - |
 | model_vars would run | n/a | - | - | - | this harness does not run the model search |
 
-## in-tree fixtures -- 85 unit(s), 0 with a cap hit
+## in-tree fixtures -- 88 unit(s), 0 with a cap hit
 
 | cap | hits | peak | limit | headroom | worst unit |
 |---|---:|---:|---:|---:|---|
-| cubes | 0 | 4 | 64 | 94% | refine-disjunctive-goal |
-| cube_lits | 0 | 10 | 64 | 84% | refine-ctor-axioms |
-| expand_depth | 0 | 5 | 256 | 98% | refine-disjunctive-goal |
+| cubes | 0 | 8 | 64 | 88% | refine-int-divmod-by-literal |
+| cube_lits | 0 | 11 | 64 | 83% | refine-int-divmod-by-literal |
+| expand_depth | 0 | 7 | 256 | 97% | refine-int-divmod-by-literal |
 | la_vars | 0 | 9 | 32 | 72% | refine-match-field-wrong |
-| la_constr | 0 | 12 | 512 | 98% | refine-match-field-wrong |
+| la_constr | 0 | 10 | 512 | 98% | refine-int-divmod-by-literal |
 | euf_terms | 0 | 25 | 512 | 95% | refine-ctor-axioms |
 | no_shared | 0 | 9 | 16 | 44% | refine-match-field-wrong |
 | path_hyps | 0 | 5 | 8 | 38% | range-bound-gadt |
-| model_vars | 0 | 2 | 3 | 33% | refine-no-contracts-strips-runtime-check |
+| model_vars | 0 | 2 | 8 | 75% | refine-no-contracts-strips-runtime-check |
 | la_fm (FM blow-up) | 0 | - | - | - | - |
 | no_rounds (exchange budget) | 0 | - | - | - | - |
 | model_vars would run | 0 | - | - | - | of the 0 over the cap |
@@ -73,11 +73,11 @@ means something only while its hits are 0.
 | cube_lits | 0 | 5 | 64 | 92% | c000004.tur |
 | expand_depth | 0 | 6 | 256 | 98% | c000082.tur |
 | la_vars | 0 | 7 | 32 | 78% | c000021.tur |
-| la_constr | 0 | 9 | 512 | 98% | c000199.tur |
+| la_constr | 0 | 6 | 512 | 99% | c000174.tur |
 | euf_terms | 0 | 23 | 512 | 96% | c000106.tur |
 | no_shared | 0 | 7 | 16 | 56% | c000021.tur |
 | path_hyps | 0 | 4 | 8 | 50% | c000000.tur |
-| model_vars | 0 | 3 | 3 | 0% | c000028.tur |
+| model_vars | 0 | 3 | 8 | 62% | c000028.tur |
 | la_fm (FM blow-up) | 0 | - | - | - | - |
 | no_rounds (exchange budget) | 0 | - | - | - | - |
 | model_vars would run | 0 | - | - | - | of the 0 over the cap |

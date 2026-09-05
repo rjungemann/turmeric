@@ -1,0 +1,9 @@
+;; The bounded counterexample search used to decline any VC with more than
+;; three variables, so this plainly false return refinement on a
+;; four-parameter function was a silent Unknown (runtime check kept, no
+;; diagnostic).  The search is budgeted by evaluations now (MODEL_MAX_EVALS)
+;; rather than by width, and finds the witness.
+(defn sum4 [a : int b : int c : int d : int] : #refine{ r : int | (> r 0) }
+  (+ a (+ b (+ c d))))
+
+(defn main [] : int (sum4 1 2 3 4))

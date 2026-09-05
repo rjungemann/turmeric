@@ -1,4 +1,8 @@
 1 unknown
-model vars: peak=4 limit=3 HIT
+model vars: peak=9 limit=8 HIT
 would run: 1 of 1
+E0371 count: 0
+1 unknown
+model vars: peak=6 limit=8 no hit
+evals out: 1 budget=131072
 E0371 count: 0

@@ -333,11 +333,22 @@ and bounds reasoning -- `0 <= i`, `i < len`, `i + 1 <= n` -- is covered, and it
 decides conjunctions of linear constraints outright.
 
 - **Integers:** rational unsatisfiability implies integer unsatisfiability, so
-  every refutation is sound for `int`. A strict integer constraint is
-  additionally *tightened* -- `e < 0` becomes `e <= -1` when every variable is
-  int-sorted and every coefficient integral -- which is exactly what lets
-  `x > 0 |= 2x > 0` go through. Full integer completeness (branch-and-bound /
-  Omega) is deliberately not attempted.
+  every refutation is sound for `int`. On top of that, constraints whose
+  variables are all int-sorted get the Omega test's two exact steps
+  (`docs/upcoming/solver-integer-tail-plan.md`, landed 2026-09-05):
+  *normalization* -- clear denominators, divide by the gcd of the
+  coefficients, round the bound to the integer hull (`e < 0` becomes
+  `e <= -1`, which is what lets `x > 0 |= 2x > 0` go through, and
+  `2q >= -1` becomes `q >= 0`) -- and *equality elimination* -- the gcd
+  divisibility test on every equation (`2v = 2x + 1` has no integer solution:
+  parity), then substitution through any unit-coefficient variable so the test
+  re-runs on what the substitution produced. Equalities are kept as equalities
+  in the constraint set for this reason; the two-inequality split happens
+  inside `la_unsat`, only for an all-integer equation with no unit coefficient
+  (`2x + 3y = 1`), which is the part of the Omega equality phase still open.
+  Every step is an equivalence over the integers, so the set keeps exactly its
+  integer models. Full integer completeness on the inequality side
+  (branch-and-bound / dark shadow) is deliberately not attempted.
 - **Purification:** any term the linear encoder cannot see inside -- a `VC_VAR`,
   a measure, an already-abstracted nonlinear product -- becomes an opaque LA
   variable. This is the Nelson-Oppen purification step, and it is what lets S3
@@ -369,11 +380,13 @@ assignments over an odometer, and **evaluates `hyps AND (not goal)` exactly**. A
 satisfying assignment is a genuine counterexample, which is the only thing in
 the whole solver allowed to answer `RT_INVALID`, and it does so *with a model*.
 
-Scope is deliberately tiny: integer variables only, at most `MODEL_MAX_VARS = 3`
-of them, and it **declines any VC carrying uninterpreted symbols** -- a measure
-has no fixed interpretation to evaluate, so guessing one would be dishonest. The
-important zero-variable case is a call site with literal arguments
-(`(safe-div 10 0)`): the goal is closed, one evaluation decides it.
+Scope is deliberately tiny: integer variables only, at most `MODEL_MAX_VARS = 8`
+of them and -- the cap that actually binds -- at most `MODEL_MAX_EVALS = 131072`
+full evaluations (`n_cand ** n_vars`), and it **declines any VC carrying
+uninterpreted symbols** -- a measure has no fixed interpretation to evaluate, so
+guessing one would be dishonest. The important zero-variable case is a call
+site with literal arguments (`(safe-div 10 0)`): the goal is closed, one
+evaluation decides it.
 
 ---
 
@@ -495,32 +508,40 @@ check it would otherwise have elided.
 | `REFINE_MAX_EUF_TERMS` | 512 | congruence-closure terms |
 | `NO_MAX_SHARED` | 16 | terms in the S3 equality exchange |
 | `NO_MAX_ROUNDS` | 4 | S3 exchange rounds before giving up |
-| `MODEL_MAX_VARS` | 3 | counterexample-search variables |
+| `MODEL_MAX_VARS` | 8 | counterexample-search variables (array backstop) |
+| `MODEL_MAX_EVALS` | 131072 | counterexample-search evaluations, `n_cand ** n_vars` |
 | `MODEL_MAX_CANDS` | 16 | counterexample candidate values |
 
-`MODEL_MAX_VARS` is the one most likely to surprise, because it does not cost a
-proof -- it costs a **refutation**. The proving stages only ever answer Valid or
-Unknown, so a counterexample can come from nowhere but the bounded search, and
-`refine_model_search` returns `NULL` outright for a VC with more than three
-variables. A four-parameter function with a refined return therefore stays
-`unknown` (silent, runtime check kept) where the same function with three
-parameters reports `TUR-E0371` with a witness. Verified both ways: raising the
-cap to 4 turns that exact obligation from `unknown` into the error.
+The two `MODEL_*` caps are the ones most likely to surprise, because they do
+not cost a proof -- they cost a **refutation**. The proving stages only ever
+answer Valid or Unknown, so a counterexample can come from nowhere but the
+bounded search, and `refine_model_search` returns `NULL` outright for a VC it
+declines. Until 2026-09-05 the width cap was **3**, and a four-parameter
+function with a plainly false return refinement therefore stayed `unknown`
+(silent, runtime check kept) where the same function with three parameters
+reported `TUR-E0371` with a witness -- an ordinary shape none of the three
+swept populations contained, which is why the sweep read clean. The cap that
+binds is now the evaluation budget, which is what the odometer actually pays:
+a five-variable VC over five candidates (3125 evaluations) is cheaper than a
+three-variable one over sixteen (4096). See
+`docs/upcoming/solver-integer-tail-plan.md`.
 
-It is instrumented as `model vars` under `TUR_REFINE_STATS=1`, with a second
-line that is the one a raise has to be argued from:
+Both are instrumented under `TUR_REFINE_STATS=1`:
 
 ```
-refine:   model vars      peak      4 / 3      ** HIT
+refine:   model vars      peak      9 / 8      ** HIT
 refine:   model vars run  1 (of 1 over the cap)
+refine:   model evals out 1 (budget 131072 evaluations)
 ```
 
-`model vars` counts every decline at the cap. **`model vars run` counts the
-subset a higher cap would actually help** -- a VC over the cap may also carry a
-non-int variable, and the sort gate sits *after* the count gate, so raising the
-limit buys those nothing. The cost of raising is exponential
-(`n_cand ** n_vars`, and `n_cand` is up to 16), which is why the distinction
-matters rather than being pedantry.
+`model vars` counts every decline at the width cap. **`model vars run` counts
+the subset a higher cap would actually help** -- a VC over the cap may also
+carry a non-int variable, and the sort gate sits *after* the count gate, so
+raising the limit buys those nothing. `model evals out` counts declines on the
+budget; every one of those would run at a bigger budget, so it needs no
+`would run` twin. The cost is exponential either way (`n_cand ** n_vars`, and
+`n_cand` is up to 16), which is why the distinction matters rather than being
+pedantry.
 
 ### Tier 2 -- collection caps (upstream of the solver)
 
@@ -580,11 +601,22 @@ than any number above.
   refused outright, not approximated.
 - **Nonlinear arithmetic is abstracted, not decided.** `x * y` becomes an
   uninterpreted term (`TUR-W0373` says so), so S2 can reason about its
-  occurrences but never about its value.
+  occurrences but never about its value. The one exception is a sign law: a
+  square `(* a a)` carries the hypothesis `(<= 0 (* a a))` (still abstracted,
+  still warned). Division and remainder by an integer *literal* are not
+  nonlinear and are no longer opaque either: the encoder asserts
+  `a = k*q + r` plus the truncating sign/bound clause for `q = (/ a k)`,
+  `r = (mod a k)` (`refine_collect.c`, `enc_divmod_axioms`), so S2 reasons
+  about them through the axioms while still treating the terms as shared
+  variables.
 - **Integers are non-convex and S3 does not case-split.** Deciding a mixed
   integer cube in general needs splitting on disjunctions of equalities; S3
-  reaches a fixpoint and answers `RT_UNKNOWN` instead. This is the largest
-  completeness hole, and it is deliberate -- see S2c in the design of record.
+  reaches a fixpoint and answers `RT_UNKNOWN` instead. S2's own integer
+  layer now closes the equation-side part of this (gcd test, unit-coefficient
+  substitution -- see S2 above); what remains is the inequality-side hull
+  (branch-and-bound / dark shadow) and equations with no unit coefficient.
+  See `docs/upcoming/solver-integer-tail-plan.md` for what is left and what
+  would trigger it.
 - **No DPLL(T).** Boolean structure is naive DNF: no clause learning, no theory
   propagation, no conflict-driven search. The cube caps exist because of this,
   not the other way round.
@@ -613,7 +645,7 @@ TUR_REFINE_STATS=1 tur build main.tur
 # refine:   cubes           peak      4 / 64
 # refine:   cube literals   peak      7 / 64
 # refine:   path hyps       peak      4 / 8
-# refine:   model vars      peak      2 / 3
+# refine:   model vars      peak      2 / 8
 # ...
 
 # Dump each VC as SMT-LIB2 (the refutation form shown earlier).

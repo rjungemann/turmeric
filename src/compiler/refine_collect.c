@@ -343,7 +343,73 @@ static VCTerm *enc_nonlinear(Enc *E, const char *base, const Form *src,
     snprintf(nm, sizeof(nm), "%s_%s", base, s == VS_REAL ? "r" : "i");
     uint32_t fn = vc_declare_ufunc(E->vc, nm, 2, s, src, /*nonlinear=*/true);
     VCTerm *args[2] = { a, b };
-    return vc_app(E->vc, fn, args, 2);
+    VCTerm *app = vc_app(E->vc, fn, args, 2);
+    /* A SQUARE IS NON-NEGATIVE.  `(* x x)` is still uninterpreted -- nothing
+     * here says what its value is -- but its sign is a fact about every
+     * integer and every real, so it is asserted as a hypothesis about the
+     * abstracted term.  `a == b` is structural equality (hash-consing), so
+     * this fires for `(* (- x 1) (- x 1))` too.  Only products: `x / x` and
+     * `x mod x` share this abstraction path and have no such sign law. */
+    if (a == b && strcmp(base, "__nl_mul") == 0) {
+        VCTerm *zero = s == VS_REAL ? vc_real(E->vc, 0.0) : vc_int(E->vc, 0);
+        vc_add_hyp(E->vc, vc_mk2(E->vc, VC_LE, zero, app));
+    }
+    return app;
+}
+
+/* INTEGER DIVISION AND REMAINDER BY A LITERAL -- axiomatized rather than left
+ * opaque.  `(/ a k)` and `(mod a k)` with `k` an integer literal were always
+ * inside the predicate grammar, but S2 purified both into opaque variables,
+ * so `(= (mod n 2) 0) |- (= (mod (+ n 2) 2) 0)` was Unknown.  The two terms
+ * stay opaque to the linear encoder (they are still shared terms S3 can
+ * exchange over); what changes is that the VC now carries what they MEAN:
+ *
+ *     a = k * q + r                    (q = (/ a k), r = (mod a k))
+ *     (0 <= a  and  0 <= r <= |k|-1)  or  (a < 0  and  -(|k|-1) <= r <= 0)
+ *
+ * These are the TRUNCATING semantics of C's `/` and `%`, which is what both
+ * backends emit for `/` and `mod` on ints (builtins.c maps `mod` to `%`; the
+ * interpreter's eval uses `%` too), so the axioms describe exactly the value
+ * the runtime check would see.  They are NOT SMT-LIB's floor/Euclidean `div`
+ * and `mod`; the SMT-LIB reader (`tur smt`) does not go through this encoder
+ * and gets no axioms, which keeps it sound for its own semantics.
+ *
+ * The sign clause is a disjunction, so each axiomatized term doubles the cube
+ * count.  After ENC_MAX_DIVMOD_SPLITS terms in one VC the weaker conjunctive
+ * bound `-(|k|-1) <= r <= |k|-1` is asserted instead -- still sound, and it
+ * means a VC that used to prove without knowing anything about its `mod`
+ * terms cannot be pushed over REFINE_MAX_CUBES by learning about them.  Both
+ * the relation and the cube telemetry are the evidence for raising it. */
+#define ENC_MAX_DIVMOD_SPLITS 4
+
+static void enc_divmod_axioms(Enc *E, VCTerm *a, VCTerm *k) {
+    RefineVC *vc = E->vc;
+    if (!a || !k || k->op != VC_CONST_INT || k->as.i == 0 || a->sort != VS_INT) return;
+    if (is_const_term(a)) return;              /* vc_mk folded the whole term */
+    int64_t kv = k->as.i;
+    if (kv == INT64_MIN) return;
+    int64_t K = kv < 0 ? -kv : kv;
+    VCTerm *q    = vc_mk2(vc, VC_DIV, a, k);
+    VCTerm *r    = vc_mk2(vc, VC_MOD, a, k);
+    VCTerm *zero = vc_int(vc, 0);
+    VCTerm *rel  = vc_mk2(vc, VC_EQ, a, vc_mk2(vc, VC_ADD, vc_mk2(vc, VC_MUL, k, q), r));
+    /* Already axiomatized (the same (a, k) pair encoded twice)?  vc_add_hyp
+     * would dedup the terms anyway; the check keeps the split budget honest. */
+    for (uint32_t i = 0; i < vc->n_hyps; i++) if (vc->hyps[i] == rel) return;
+    vc_add_hyp(vc, rel);
+    VCTerm *km1 = vc_int(vc, K - 1), *nkm1 = vc_int(vc, -(K - 1));
+    if (vc->n_divmod_splits < ENC_MAX_DIVMOD_SPLITS) {
+        vc->n_divmod_splits++;
+        VCTerm *pos[3] = { vc_mk2(vc, VC_LE, zero, a), vc_mk2(vc, VC_LE, zero, r),
+                           vc_mk2(vc, VC_LE, r, km1) };
+        VCTerm *neg[3] = { vc_mk2(vc, VC_LT, a, zero), vc_mk2(vc, VC_LE, nkm1, r),
+                           vc_mk2(vc, VC_LE, r, zero) };
+        vc_add_hyp(vc, vc_mk2(vc, VC_OR, vc_mk(vc, VC_AND, pos, 3),
+                              vc_mk(vc, VC_AND, neg, 3)));
+    } else {
+        vc_add_hyp(vc, vc_mk2(vc, VC_LE, nkm1, r));
+        vc_add_hyp(vc, vc_mk2(vc, VC_LE, r, km1));
+    }
 }
 
 /* RM-B2: a proposition is not a number.  vc_mk would happily build
@@ -371,7 +437,10 @@ static VCTerm *enc_binary_arith(Enc *E, VCOp op, const Form *f,
         return enc_nonlinear(E, "__nl_mul", f, a, b);
     if ((op == VC_DIV || op == VC_MOD) && !is_const_term(b))
         return enc_nonlinear(E, op == VC_DIV ? "__nl_div" : "__nl_mod", f, a, b);
-    return vc_mk2(E->vc, op, a, b);
+    VCTerm *t = vc_mk2(E->vc, op, a, b);
+    if ((op == VC_DIV || op == VC_MOD) && t && t->sort == VS_INT)
+        enc_divmod_axioms(E, a, b);
+    return t;
 }
 
 /* n-ary fold for + - * with the language's variadic arithmetic. */

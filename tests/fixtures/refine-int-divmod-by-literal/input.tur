@@ -1,0 +1,38 @@
+;; S2c-lite: `(/ a k)` and `(mod a k)` with an integer literal `k` are
+;; AXIOMATIZED by the encoder (refine_collect.c, enc_divmod_axioms) rather than
+;; left as opaque terms:
+;;
+;;     a = k*q + r,  and the remainder's sign follows the dividend with
+;;     |r| <= |k| - 1   (C's truncating `/` and `%`, which is what `/` and
+;;     `mod` on ints compile to).
+;;
+;; With the equality phase in S2 (gcd divisibility test + substitution), the
+;; parity goal below is decided: `n = 2q + 0` and `n + 2 = 2q' + r'` with
+;; `r' in {-1, 1}` gives `2(q' - q) = 2 - r'`, odd on the right, unsat over the
+;; integers.  Both used to be Unknown -- the `flags` file's --strict-refine
+;; turns an Unknown back into a build failure, so this fixture pins PROVEN.
+(defn bump-even [n : #refine{ x : int | (= (mod x 2) 0) }]
+                : #refine{ r : int | (= (mod r 2) 0) }
+  (+ n 2))
+
+(defn half [n : #refine{ x : int | (>= x 0) }]
+           : #refine{ r : int | (and (>= r 0) (<= r n)) }
+  (/ n 2))
+
+;; Negative dividends: C truncates toward zero, so (/ -7 2) is -3 and
+;; (mod -7 2) is -1.  The axioms say so, and the runtime agrees.
+(defn quot-neg [n : #refine{ x : int | (< x 0) }]
+               : #refine{ r : int | (<= r 0) }
+  (/ n 2))
+
+(defn rem-neg [n : #refine{ x : int | (< x 0) }]
+              : #refine{ r : int | (and (<= r 0) (>= r -1)) }
+  (mod n 2))
+
+(defn main [] : int
+  (println (bump-even 4))
+  (println (half 9))
+  (println (quot-neg -7))
+  (println (rem-neg -7))
+  (println "refine-int-divmod-by-literal")
+  0)

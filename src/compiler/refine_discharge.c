@@ -735,6 +735,12 @@ static void refine_report_caps(void) {
      * what raising it would BUY -- and only the second justifies a raise. */
     fprintf(stderr, "refine:   %-15s %u (of %u over the cap)\n",
             "model vars run", c->model_vars_would_run, c->model_vars_hits);
+    /* The search's OTHER decline: inside the width cap, past the sort gate,
+     * but `n_cand ** n_vars` over the evaluation budget.  A count rather than
+     * a peak, like the FM row: the quantity it bounds is a product, not a
+     * sized structure.  Every hit here would run at a bigger budget. */
+    fprintf(stderr, "refine:   %-15s %u (budget %u evaluations)\n",
+            "model evals out", c->model_evals_hits, (unsigned)MODEL_MAX_EVALS);
 }
 
 void refine_discharge_all(RefineObligationVec *v, Arena *a) {
