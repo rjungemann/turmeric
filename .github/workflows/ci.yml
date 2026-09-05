@@ -765,7 +765,7 @@ jobs:
     name: Windows JIT build (MSYS2/UCRT64)
     runs-on: windows-latest
 
-    # BUILD ONLY, and a separate job rather than a step on `windows:`.
+    # BUILD + SMOKE, and a separate job rather than a step on `windows:`.
     #
     # Nothing on Windows compiled the JIT sources at all until this existed:
     # the `windows` job configures without -DTUR_JIT=ON, so src/jit_engine.c and
@@ -774,11 +774,12 @@ jobs:
     # <dlfcn.h>, which MinGW does not ship -- the Windows JIT build was simply
     # broken and no job noticed.
     #
-    # It does not run the JIT suites.  The lazy-generation tier still faults on
-    # win64 (docs/reported/jit-windows-support-spike.md), so a suite run here
-    # would be red for a known reason, and a permanently-red job teaches people
-    # to ignore it.  Compiling is what guards this platform today; turn more on
-    # when the thunk fault is fixed.
+    # It does not run the full JIT corpus, only the three-tier smoke check at the
+    # end.  The corpus is still red here for one tracked reason -- c2mir has no
+    # __builtin_setjmp, so every CPS/effect fixture fails under the JIT
+    # (docs/reported/jit-windows-support-spike.md) -- and a permanently-red job
+    # teaches people to ignore it.  The smoke check is the part that can be green
+    # today and would catch a real regression, so that is what runs.
     #
     # Separate job so it runs in parallel with `windows:` rather than adding its
     # MIR fetch and build onto that job's ~30 minutes.
@@ -833,6 +834,35 @@ jobs:
               echo "::error::tur.exe was built without the MIR JIT engine -- this job would pass having compiled nothing it guards."
               exit 1 ;;
           esac
+
+      # The three generation tiers, on a program small enough that the check is
+      # about the tier and not about the program.  lazy is the DEFAULT tier, and
+      # it had never once worked on Windows: _MIR_get_wrapper patched its win64
+      # immediates 10 bytes short, so the wrapper's first instruction decoded as
+      # a store through a garbage %rax and every default-mode JIT run segfaulted
+      # before the generation hook could run.  Fixed in the MIR pin; covered
+      # upstream by mir-tests/wrapper-abi.c.  A regression is silent without
+      # this: interp and eager keep working, so nothing else here would notice.
+      - name: Smoke-test all three JIT generation tiers
+        run: |
+          cat > jit-smoke.tur <<'EOF'
+          (defn main [] : int
+            (println "jit hello")
+            0)
+          EOF
+          fail=0
+          for mode in interp eager lazy; do
+            out=$(TUR_JIT_GEN=$mode timeout 120 ./build-win-jit/tur.exe jit jit-smoke.tur 2>&1)
+            rc=$?
+            case "$out" in
+              *"jit hello"*)
+                if [ "$rc" -eq 0 ]; then echo "$mode: ok"; continue; fi ;;
+            esac
+            echo "::error::TUR_JIT_GEN=$mode failed (rc=$rc)"
+            echo "$out"
+            fail=1
+          done
+          exit $fail
 
   check-guides:
     name: Check guide toggle pairs

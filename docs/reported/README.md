@@ -1550,7 +1550,7 @@ these are fixture-watched. Two of the original three are resolved and archived:
 | --- | --- | --- |
 | [windows-subprocess-and-shared-lib-gaps](windows-subprocess-and-shared-lib-gaps.md) | high (for Windows users) | `tur install` / `fetch` / `new` / `build --shared` / REPL spice loading all fail -- the subprocess and shared-library layers are unported. Read-verified by audit, **not** exercised end-to-end. `build --shared` half is now done (emits a real `.dll`) |
 | [windows-httpd-async-limit-hangs-on-ci](windows-httpd-async-limit-hangs-on-ci.md) | low | Hangs on GitHub's Windows runners (no output, killed at both 10s and 30s) while passing locally 4/4. Skipped via `requires.win-concurrent-loopback`. Best suspect is runner core count, untested |
-| [jit-windows-support-spike](jit-windows-support-spike.md) | research | Spike EXECUTED: the Windows JIT builds, and the full corpus is **2621 passed / 61 failed** under `TUR_JIT_GEN=eager` -- but 0/5 under the default lazy mode, which is the one blocker. See the report's "Remaining Windows JIT work" section (lazy SIGSEGV, c2mir has no `__builtin_setjmp`, `__va_start`, build-only CI) |
+| [jit-windows-support-spike](jit-windows-support-spike.md) | research | Spike EXECUTED: the Windows JIT builds and runs. The **lazy tier is fixed** (three defects in MIR's win64 wrapper assembly, rjungemann/mir#3) -- the default mode went 0/5 to **2637 passed / 68 failed** on the full corpus. What remains: c2mir has no `__builtin_setjmp`, so 56 of those 68 are CPS/effect fixtures; plus `__va_start`, and `path-string` unexplained |
 
 ## Godot embedding
 

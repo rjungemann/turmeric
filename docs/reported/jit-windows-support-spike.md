@@ -310,12 +310,114 @@ level. The shape is consistent with a jump landing mid-instruction, i.e. a bad
 redirect target -- which points at `_MIR_redirect_thunk` or the lazy
 serialized-thunk interface built on it.
 
-Next step: single-step from `jit_run_entry` into the thunk on the lazy path and
-compare the redirect target against the generated function's real entry.  That
-is MIR x86-64 back-end work in the `rjungemann/mir` fork.
+> **Superseded 2026-09-05 -- see "Resolution" below.** This guess was half
+> right and half wrong, and the wrong half is the expensive kind. The redirect
+> target WAS correct: `_MIR_redirect_thunk` is not at fault, and neither is the
+> serialized-lazy interface. What was broken is the thing the thunk correctly
+> jumped TO -- `_MIR_get_wrapper` built a corrupt wrapper. A bad redirect and a
+> correct redirect to a corrupt target are indistinguishable from a backtrace;
+> only reading the emitted bytes separates them, and reading them took minutes.
 
 Until then `TUR_JIT_GEN=eager` is a working tier on Windows.
 
+
+---
+
+## Resolution 2026-09-05: three defects in MIR's win64 wrapper assembly
+
+Fixed in the fork ([rjungemann/mir#3](https://github.com/rjungemann/mir/pull/3))
+and pinned here. `TUR_JIT_GEN=lazy` -- the **default** tier, which had never
+once worked on Windows -- now runs.
+
+### How it was found
+
+Not by single-stepping, which is what the note above proposed. A ~50-line C
+program calling the three primitives directly -- `_MIR_get_thunk`,
+`_MIR_get_wrapper`, `_MIR_redirect_thunk` -- and **dumping the emitted bytes**
+reproduced the SIGSEGV with no turmeric, no generator and no MIR module in the
+picture. The defect was legible in the first hexdump. That program is now
+`mir-tests/wrapper-abi.c` upstream.
+
+The lesson repeats one this report already records elsewhere: the estimate came
+from reading the emitters, the correction came from reading their output.
+
+### Defect 1 -- `_MIR_get_wrapper` patched its immediates 10 bytes short
+
+The win64 `start_pat` opens with two 5-byte stores of `%rcx`/`%rdx` into the
+caller's shadow space. The offsets used (`2, 12, 22, 31`) are the ones that
+would be right if the pattern began at the first `movabs`.
+
+| immediate | written at | actually landed on |
+| --- | --- | --- |
+| `called_func` | 2 | both shadow-space stores |
+| `ctx` | 12 | inside the `called_func` immediate |
+| `hook_address` | 22 | inside the `ctx` immediate |
+| tail `rel32` | 31 | inside the `hook_address` immediate |
+
+So the wrapper's first instruction decoded as `mov %rax,(%rax)`. That is the
+"data store through a bad `%rax`" recorded above -- it was never a jump landing
+mid-instruction. Corrected to `12, 22, 32, 41`.
+
+### Defect 2 -- `_MIR_get_wrapper_end` did not align the stack
+
+Behind defect 1, and invisible until it was fixed. `rsp` is reduced by
+`(rsp & 0xf) + C`, which leaves it congruent to `-C` mod 16, so `C` must be a
+multiple of 16. It was `0x28`. **The comment on that very line already read**
+`add $0x40,%rax` -- the comment was right and the byte was wrong. Any hook using
+aligned SSE stores (i.e. any ordinary C function) faulted, which is why fixing
+defect 1 moved the crash into `printf` rather than curing it.
+
+### Defect 3 -- `xmm0..3` were saved on top of the callee's shadow space
+
+Behind defect 2, and this one never crashes -- it returns wrong answers. The
+saves went to `0..0x20(%rsp)`, exactly the 32 bytes the callee owns, and the
+hook spills its own register parameters there. Measured with non-integral
+values, so a clobber and a truncation are distinguishable:
+
+```
+f(7.25, 3.5, 0.125, 1.0625)   reached the generated code as
+f(0,    0,   0.125, 1.0625)   -- got 1.1875, want 11.9375
+```
+
+`xmm2`/`xmm3` survived and `xmm0`/`xmm1` did not, which is exactly the first 16
+bytes a callee spilling `rcx` and `rdx` overwrites. Moved to `0x20..0x40(%rsp)`,
+already covered by defect 2's `0x40` reservation.
+
+`_MIR_get_bb_wrapper` was checked for the same three shapes and is correct on
+all of them; only these two functions were wrong.
+
+### Verified
+
+| check | before | after |
+| --- | --- | --- |
+| `mir-tests/wrapper-abi.c` | SIGSEGV | `wrapper ABI: OK` |
+| the same, with only defects 1+2 fixed | -- | `float args: got 1.187500, want 11.937500` |
+| `tur jit hello.tur`, `TUR_JIT_GEN=lazy` | SIGSEGV, no output | `jit hello`, rc 0 |
+| `tur jit hello.tur`, default (= lazy) | SIGSEGV, no output | `jit hello`, rc 0 |
+| `tests/run-jit.sh`, default tier | **0 passed, 5 failed** (5-fixture sample) | **2637 passed, 68 failed, 59 skipped** |
+
+The middle row is the point: it is the evidence that the new test is not one
+that cannot fail. It fails three different ways against three different states
+of the sources.
+
+The 68 remaining failures contain nothing thunk-related:
+
+- **56 are CPS/effect-shaped** -- the `__builtin_setjmp` gap tracked in section 2
+  below. Unchanged in kind from the eager baseline.
+- **11 carry `requires.posix-apis`** and are a harness gap, not a defect:
+  `run-jit.sh` did not honour the marker. Fixed on a separate branch
+  (turmeric#818), not merged when this run was taken, so they are still counted
+  here.
+- **1 genuinely unexplained**: `path-string`. The earlier count of two was wrong --
+  `try-with-basic` is plainly in the effect class.
+
+### CI
+
+`windows-jit` now smoke-tests all three generation tiers on a hello-world. It
+still does not run the corpus -- that stays red for the `__builtin_setjmp`
+reason below -- but a regression in the default tier would otherwise be
+invisible, since `interp` and `eager` were unaffected by all three defects and
+a build-only job cannot tell the difference.
 
 ---
 
@@ -352,14 +454,16 @@ The 61 eager failures decompose almost entirely into classes already tracked:
   [win64-aggregate-return-threshold-is-sysv.md](win64-aggregate-return-threshold-is-sysv.md).
 - **2 unexplained**: `path-string`, `try-with-basic`.
 
-### 1. The lazy-generation fault -- the one blocker that matters
+### 1. The lazy-generation fault -- ~~the one blocker that matters~~ RESOLVED
 
-Characterized above (SIGSEGV, a data store through a bad `%rax`, not the
-allocator and not a missing win64 wrapper port).  It is the single thing
-standing between Windows and a routine JIT corpus run: eager passes 2621, lazy
-passes none.
+**Fixed 2026-09-05**, see "Resolution" above. Three defects in MIR's win64
+wrapper assembly, all in the fork ([rjungemann/mir#3](https://github.com/rjungemann/mir/pull/3)).
+The default tier went from **0 passed** to **2637 passed, 68 failed** on the
+full corpus, and none of the residue is thunk-related.
 
-Next step is recorded above.  MIR x86-64 back-end work in the fork.
+The characterisation this section carried -- "not a missing win64 wrapper port,
+because MIR *does* carry a `_WIN32` arm there" -- was the wrong inference. The
+arm existed and was wrong, which is not the same as absent and is harder to see.
 
 ### 2. c2mir has no `__builtin_setjmp`, so effects under the JIT are broken
 
@@ -389,14 +493,17 @@ compile the win64 `__va_start` lowering.
 Not investigated.  Nothing depends on it while S2 holds, and the engage probe is
 now guarded in CI, so the risk is bounded rather than closed.
 
-### 4. `windows-jit` CI is build-only
+### 4. `windows-jit` CI is build-only -- now build + smoke
 
 The job added alongside this work compiles the JIT sources on Windows -- which
 nothing did before, hence `jit_ffi.c` reaching main with an unguarded
-`<dlfcn.h>` -- but does not run the JIT suites.
+`<dlfcn.h>`. As of 2026-09-05 it also **smoke-tests all three generation tiers**
+on a hello-world, which is what guards the fix in (1): a regression there is
+otherwise invisible, because `interp` and `eager` were unaffected by all three
+defects and a build-only job cannot tell the difference.
 
-The precondition for turning suites on is (1): with the lazy fault fixed,
-`run-jit.sh` becomes runnable, and with the run-jit.sh marker gap closed the
-expected baseline is the eager figure above minus the POSIX set.  Until then a
-suite run there would be red for known reasons, and a permanently-red job
-teaches people to ignore it.
+It still does not run the corpus. With (1) fixed and the `run-jit.sh` marker
+gap closed (turmeric#818), the expected baseline is 2637 + 11 = **2648 passed,
+57 failed** -- still red, and red for one tracked reason: (2) below. A
+permanently-red job teaches people to ignore it, so the corpus stays off until
+c2mir learns `__builtin_setjmp`.
