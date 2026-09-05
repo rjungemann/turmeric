@@ -6,6 +6,7 @@ build-asan/
 build-nosan/
 build-debug/
 build-win-jit/
+build-win-lazy/
 build-jit/
 build-jit-asan/
 build-jit-spike/
