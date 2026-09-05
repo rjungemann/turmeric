@@ -1618,6 +1618,14 @@ Expr *elab_def(Elab *e, const Form *call);
 
 /* elab_call.c */
 Expr *elab_call(Elab *e, Form *call);
+/* SZ8 size-index recovery: the declared/ascribed type Form describing `x`'s
+ * static type (NULL when none is recoverable). */
+const Form *sz_recover_type_form(Elab *e, const Expr *x);
+/* declared-size-index-never-checked-against-value: true (with the two folded
+ * values) when a written `(Head idx ...)` size claim and the expression it
+ * describes disagree at a position where both are statically known. */
+bool sz_claim_disagrees(Elab *e, const Form *claim, const Expr *x,
+                        int64_t *claimed, int64_t *actual);
 Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span span, bool typed_concrete);
 /* MB1 (constrained-hkt-forall-mode-b): variant with `n_lead_ignore` leading
  * dict-carrier params the wrapper accepts but does not forward to the inner. */

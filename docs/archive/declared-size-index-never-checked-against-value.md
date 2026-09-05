@@ -1,5 +1,36 @@
 # A declared or ascribed size index is never checked against the value it describes
 
+> **Resolved 2026-09-05** (same day as filed). Fix directions 1 and 2 below
+> landed together, plus the ascription-vs-inner check direction 2 called for:
+>
+> - `sz_claim_disagrees` (`src/compiler/elab_call.c`) reconciles a written
+>   `(Head idx ...)` claim with the expression it describes, position-wise,
+>   where both fold to constants. `elab_defn` runs it at the return seam
+>   against the body's tail expression (closes **A**: both repros now reject
+>   with `'bogus' declares return size 5 but its body has size 2` /
+>   `'three' declares return size 3 but its body has size 1`); `elab_ascribe`
+>   runs it against the inner expression (`(:: (mk4) (SizedBuf (Static 3)))`
+>   rejects).
+> - `EX_ASCRIBE` retains its type Form (`ascribe_.type_form`),
+>   `sz_recover_type_form` gained the `EX_ASCRIBE` arm, and the `let` init
+>   path routes through that recovery, so an ascribed size is load-bearing
+>   (closes the second **B** repro: `(Static 4)` vs `(Static 99)` on a shared
+>   `n` now rejects, direct or let-bound).
+>
+> Fixtures: `tests/fixtures/errors/sized-return-claim-reject`,
+> `sized-return-claim-gadt-reject`, `sized-ascribe-claim-reject`,
+> `sized-ascribe-cross-param-reject`; acceptance shapes in
+> `tests/fixtures/sized-size-claims-accept`.
+>
+> **Still open, by design here:** fix direction 3. The first **B** repro
+> (`(:: (sized-buf-new-zeroed 4) (SizedBuf (Static 99)))` alone) is still
+> accepted, because the constructor's `n` is open and the ascription is the
+> only source of the index -- that is the legitimate pin-by-ascription idiom.
+> Tying `sized-buf-new`'s runtime `k` to `n` is stdlib work (a size-witnessed
+> constructor), not a checker gap, and is noted in the `sized-types-guide.md`
+> "Written size claims are checked, not trusted" section rather than carried
+> as an open report.
+
 **Severity: medium** -- not a miscompile, but it defeats the static discipline
 `docs/guides/sized-types-guide.md` advertises, and it does so through the
 idiom that guide and `stdlib/sized-buf.tur` tell you to use. Filed 2026-09-05
@@ -126,9 +157,9 @@ size rides only on the retained Form. Two consequences:
    (B).
 
 This is the residue of the placeholder representation that
-[sz8-opaque-phantom-size-not-load-bearing](../archive/history/sz8-opaque-phantom-size-not-load-bearing.md)
+[sz8-opaque-phantom-size-not-load-bearing](history/sz8-opaque-phantom-size-not-load-bearing.md)
 introduced to make `(Static N)` legal in a type-app slot, and that
-[sz8-projection-size-recovery-gap](../archive/history/sz8-projection-size-recovery-gap.md)
+[sz8-projection-size-recovery-gap](history/sz8-projection-size-recovery-gap.md)
 then extended recovery over. Both closed the *recovery* direction; neither
 closed the *validation* direction, and ascription was never added to either.
 
@@ -174,7 +205,7 @@ runtime predicates is by design, per the guide.
 
 ## Related
 
-- [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) -- the
+- [gadt-length-index-not-enforced](../reported/gadt-length-index-not-enforced.md) -- the
   separate, already-open dependent-types gap. That report is about indices that
   are phantom *by design pending a future phase*; this one is about indices
   that are load-bearing today and simply unvalidated.

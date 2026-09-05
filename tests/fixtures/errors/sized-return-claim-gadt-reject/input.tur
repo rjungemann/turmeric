@@ -1,0 +1,23 @@
+; declared-size-index-never-checked-against-value (A), GADT carrier: the
+; sized-GADT constructor application infers its index (`(SVCons 1 (SVNil))`
+; is (Add (Static 1) (Static 0)) = 1), and the declared return type claims
+; (Static 3).  The claim is reconciled with the inferred index at the
+; return seam and rejected.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defgadt SizedVec [n]
+  (SVNil  : (SizedVec (Static 0)))
+  (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
+
+; ERROR: declares length 3, returns length 1
+(defn three [] : (SizedVec (Static 3)) (SVCons 1 (SVNil)))
+
+(defn pairwise [xs : (SizedVec n) ys : (SizedVec n)] : int 0)
+
+(defn main [] : int
+  (println (pairwise (three) (SVCons 1 (SVCons 2 (SVCons 3 (SVNil))))))
+  0)

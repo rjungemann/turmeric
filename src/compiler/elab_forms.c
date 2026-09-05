@@ -963,12 +963,12 @@ Expr *elab_let(Elab *e, const Form *call) {
          * `a (mk-2)` where `mk-2 : (SizedBuf (Static 2))`). */
         if (type_ann_form) {
             b->decl_type_form = type_ann_form;
-        } else if (init && init->kind == EX_CALL && init->as.call_.fn_binding) {
-            const Binding *callee = init->as.call_.fn_binding;
-            const Type *cft = &callee->type;
-            if (callee->closure_fn_binding) cft = &callee->closure_fn_binding->type;
-            if (cft && cft->kind == TY_FN && cft->as.fn.result_type_form)
-                b->decl_type_form = cft->as.fn.result_type_form;
+        } else {
+            /* declared-size-index-never-checked-against-value (B): route
+             * through the shared recovery so an ASCRIBED init
+             * (`b (:: (mk) (SizedBuf (Static 4)))`) pins the binding's index
+             * exactly as a call init does. */
+            b->decl_type_form = sz_recover_type_form(e, init);
         }
         /* TY4: borrow-escape at a let binding.  If the init is a borrow of a
          * referent that lives in a deeper (shorter-lived) scope than this

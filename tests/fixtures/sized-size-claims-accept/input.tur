@@ -1,0 +1,38 @@
+; Companion to sized-return-claim-reject / sized-ascribe-claim-reject /
+; sized-ascribe-cross-param-reject: every shape the size-claim checks must
+; NOT reject.
+;
+;   - a return annotation that AGREES with the body (direct call, let-bound
+;     tail, and a size-polymorphic helper whose open `m n` stays polymorphic);
+;   - the documented pin-by-ascription idiom on a polymorphic constructor
+;     (`sized-buf-new-zeroed`'s `n` is open, so the ascription is the only
+;     source of the index and is accepted);
+;   - an ascription that agrees with a known index;
+;   - an ascribed value unifying against a declared return type in a
+;     shared-`n` call.
+
+(load "stdlib/sized.tur")
+(load "stdlib/sized-buf.tur")
+
+(defopaque LaMatN [m n] :int)
+
+(defn mk23 [] : (LaMatN (Static 2) (Static 3)) (:: 0 :LaMatN))
+(defn same23 [] : (LaMatN (Static 2) (Static 3)) (mk23))
+(defn wrap23 [] : (LaMatN (Static 2) (Static 3)) (let [x (mk23)] x))
+(defn poly [m n] [a : (LaMatN m n)] : (LaMatN m n) a)
+(defn takes23 [a : (LaMatN (Static 2) (Static 3))] : int 7)
+
+(defn mk4 [] : (SizedBuf (Static 4))
+  (:: (sized-buf-new-zeroed 4) :SizedBuf))
+
+(defn main [] : int
+  (println (takes23 (same23)))
+  (println (takes23 (wrap23)))
+  (println (takes23 (poly (mk23))))
+  (let [b (:: (sized-buf-new-zeroed 4) (SizedBuf (Static 4)))
+        c (mk4)]
+    (sized-buf-copy! b c)
+    (println (sized-buf-len b)))
+  (let [d (:: (mk4) (SizedBuf (Static 4)))]
+    (println (sized-buf-len d)))
+  0)

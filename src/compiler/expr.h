@@ -1523,7 +1523,13 @@ struct Expr {
             uint64_t        carrier_erased_arg_mask;
             bool            carrier_erased_result;
         } poly_wrap_;
-        struct { struct Expr *inner; } ascribe_; /* (:: expr type) — type erased at codegen */
+        struct {
+            struct Expr *inner;
+            /* The raw ascribed type Form, retained so a `(:: e (SizedBuf
+             * (Static 4)))` ascription is a recoverable size claim
+             * (sz_recover_type_form).  NULL for internally-built ascriptions. */
+            const struct Form *type_form;
+        } ascribe_; /* (:: expr type) — type erased at codegen */
         /* A#1: fat-closure auto-shim.  inner is a bare (non-capturing) fn value;
          * the emitter generates an env-ignoring wrapper thunk and a heap fat
          * struct { thunk, orig_fn_ptr } so a ^fat consumer can fat-call it. */

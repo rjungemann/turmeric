@@ -627,6 +627,13 @@ it becomes an ordinary path-splitting obligation.
 > 2026-07-26 probe as evidence the mechanism is ready. The narrower move, if
 > RE2 is built for its correctness payoff, is a monomorphic accessor per
 > capacity (bound as a literal), which needs no compiler work at all.
+>
+> One prerequisite for the parametric shape did land the same day: a
+> declared or ascribed size index is now reconciled with the value it
+> describes (`docs/archive/declared-size-index-never-checked-against-value.md`),
+> so if size indices ever become visible to the refinement elaborator, a
+> proof of `i < n` is a proof against a checked claim rather than a bare
+> annotation. The bridge itself is still unbuilt.
 
 Deliberately sequenced last: it is the only phase whose payoff is measured in
 nanoseconds, and the parent plan's benchmarking section is a standing warning

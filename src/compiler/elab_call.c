@@ -1778,12 +1778,23 @@ static bool sz8_ctor_is_sized(Elab *e, const CtorDef *ctor) {
  *                      struct type argument the field's (bare) type variable
  *                      selects (e.g. `.fst` of `(Pair2 (Dense (Static 3) A) ..)`
  *                      yields `(Dense (Static 3) A)`).
+ *   - EX_ASCRIBE    -> the ascribed type Form when it is a compound
+ *                      `(Head ...)` (declared-size-index-never-checked-against-
+ *                      value, half B: `(:: e (SizedBuf (Static 4)))` pins the
+ *                      index the same way a declared return type does); a
+ *                      bare-keyword ascription carries no index and falls
+ *                      through to the inner expression.
  * Returns NULL when no Form is recoverable (the size stays polymorphic). */
-static const Form *sz_recover_type_form(Elab *e, const Expr *x) {
+const Form *sz_recover_type_form(Elab *e, const Expr *x) {
     if (!x) return NULL;
     switch (x->kind) {
         case EX_VAR:
             return x->as.var.binding ? x->as.var.binding->decl_type_form : NULL;
+        case EX_ASCRIBE: {
+            const Form *tf = x->as.ascribe_.type_form;
+            if (tf && tf->tag == F_LIST && tf->as.list.len >= 2) return tf;
+            return sz_recover_type_form(e, x->as.ascribe_.inner);
+        }
         case EX_CALL: {
             const Binding *callee = x->as.call_.fn_binding;
             if (!callee) return NULL;
@@ -1836,6 +1847,48 @@ static const Form *sz_recover_type_form(Elab *e, const Expr *x) {
         default:
             return NULL;
     }
+}
+
+/* declared-size-index-never-checked-against-value: reconcile a WRITTEN size
+ * claim with the value it describes.  `claim` is a `(Head idx ...)` type-app
+ * Form (a defn's declared return type, or a `::` ascription); `x` is the
+ * expression the claim is made about.  Walks every index position of the
+ * claim, recovers the expression's static index at the same position (its
+ * declared/ascribed type Form, or the GADT-inferred ctor index), and reports
+ * the first position where BOTH fold to constants and disagree.  A position
+ * where either side is open (a size variable, an un-inferable operand) stays
+ * polymorphic and is skipped -- ascribing a runtime-sized value is the
+ * legitimate case and must keep working.  This is the same fold-and-compare
+ * sz_cross_param_unify does in its closed-template arm, applied at the seam
+ * where the claim is MADE rather than where it is consumed. */
+bool sz_claim_disagrees(Elab *e, const Form *claim, const Expr *x,
+                        int64_t *claimed, int64_t *actual) {
+    if (!claim || claim->tag != F_LIST || claim->as.list.len < 2 || !x)
+        return false;
+    const Form *xf = sz_recover_type_form(e, x);
+    const SizeTerm *gadt_idx = (x->kind == EX_CALL) ? x->as.call_.size_index
+                                                    : NULL;
+    if (!xf && !gadt_idx) return false;
+    for (uint32_t k = 1; k < claim->as.list.len; k++) {
+        SizeTerm *ct = size_term_from_form(e->arena, claim->as.list.items[k],
+                                           NULL, NULL);
+        if (!ct) continue;                       /* not a size position */
+        int64_t cv;
+        if (!size_term_eval(ct, &cv)) continue;  /* open claim -> polymorphic */
+        const SizeTerm *xt = NULL;
+        if (xf && xf->tag == F_LIST && k < xf->as.list.len)
+            xt = size_term_from_form(e->arena, xf->as.list.items[k], NULL, NULL);
+        int64_t xv;
+        if (!(xt && size_term_eval(xt, &xv))) {
+            if (!(gadt_idx && size_term_eval(gadt_idx, &xv))) continue;
+        }
+        if (xv != cv) {
+            *claimed = cv;
+            *actual  = xv;
+            return true;
+        }
+    }
+    return false;
 }
 
 /* (sz_first_size_term was retired by sized-types-cross-param-multi-index:

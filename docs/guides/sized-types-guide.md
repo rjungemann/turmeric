@@ -30,6 +30,13 @@ Sized types are enabled by default; the layer is built on the GADT machinery.
 >   mismatch.
 > - **Polymorphic helpers.** A function over `(SizedVec n)` whose body re-wraps
 >   or threads the value preserves the index without per-call re-annotation.
+> - **The claims themselves.** A `defn`'s declared return-type index is
+>   reconciled with its body, and a `(:: e (SizedBuf (Static k)))` ascription
+>   with the index `e` already carries -- so a wrong annotation is rejected
+>   where it is written rather than trusted by every downstream call. An
+>   ascription on a value whose index is open (the `sized-buf-new` family's
+>   polymorphic `n`) is the pin-by-ascription idiom: accepted, and the pinned
+>   index then unifies like a declared return type.
 >
 > Where both sides of a comparison fold to a known constant, the check fires
 > statically. The runtime predicates/assertions (`size-eq?`, `size-compat?`,
@@ -315,6 +322,40 @@ The boundary is the same as for the assertion forms: an index that is only
 known at run time, or an open size expression with free variables that cannot
 be folded to a constant, stays polymorphic and falls through to the runtime
 predicates.
+
+### Written size claims are checked, not trusted
+
+Both places a size index is *written* rather than inferred are reconciled
+with the value they describe, at the seam where the claim is made:
+
+```turmeric
+(defopaque LaMatN [m n] :int)
+(defn mk23 [] : (LaMatN (Static 2) (Static 3)) (:: 0 :LaMatN))
+
+; COMPILE-TIME TUR-E0260: 'bogus' declares return size 5 but its body has size 2
+(defn bogus [] : (LaMatN (Static 5) (Static 5)) (mk23))
+
+(defn mk4 [] : (SizedBuf (Static 4)) (:: (sized-buf-new-zeroed 4) :SizedBuf))
+
+; COMPILE-TIME TUR-E0260: ascription declares size 3 but the expression has size 4
+(let [d (:: (mk4) (SizedBuf (Static 3)))] ...)
+```
+
+Without the return-seam check, `(takes55 (bogus))` would have been accepted
+even though `(takes55 (mk23))` is rejected -- the annotation laundered the
+mismatch past the argument check that trusted it.
+
+The pin-by-ascription idiom stays legitimate. `sized-buf-new` /
+`sized-buf-new-zeroed` return a polymorphic `(SizedBuf n)`, so
+`(:: (sized-buf-new-zeroed 4) (SizedBuf (Static 4)))` has nothing static to
+disagree with and is accepted; the pinned `4` is then load-bearing, flowing
+through a `let` binding into the cross-parameter unifier exactly as a
+declared return type does. What is **not** checked is the allocation itself:
+nothing ties the runtime `k` passed to `sized-buf-new` to the `n` an
+ascription pins, so `(:: (sized-buf-new-zeroed 4) (SizedBuf (Static 99)))`
+is still accepted. Tying `k` to `n` needs a size-witnessed constructor and is
+a stdlib follow-up (see
+[docs/archive/declared-size-index-never-checked-against-value.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/declared-size-index-never-checked-against-value.md)).
 
 ---
 
