@@ -19,8 +19,20 @@
 #             walk descends into Color, whose every ctor is field-less and so
 #             reaches nothing.  That is the inference: nothing else could have
 #             let it through.
+#   r-sum     a variant holding a non-recursive multi-variant SUM OF SCALARS,
+#             `(Circle :float) (Sq :float :float)`.  Same route as r-enum, and
+#             this is the one worth knowing the name of: adt_is_byvalue_product
+#             (types.c) admits an SR1 by-value sum candidate and walks every
+#             variant's fields, so `Shape` counts as "by-value product" for
+#             record_full, gets a full_type, and the walk descends into it.
 #
 # REFUSED (must RETIRE -- tur_region_pop):
+#   r-bad     a variant holding a sum ONE OF WHOSE ARMS holds a `:heap` node.
+#             The walk descends into the sum and refuses at that arm: a union
+#             is only as safe as its widest arm.
+#   r-rec     a variant holding a SELF-RECURSIVE sum.  Its recursive field's
+#             form names the def, which is never a scalar keyword, so it refuses
+#             -- the spine is exactly what a rewind must not reclaim.
 #   r-heap    a variant HOLDING a `:heap` node.  The result reaches region
 #             memory, so the walk refuses on `is_heap`.  It is DEFINED so its
 #             retire is counted, but deliberately NOT called from main: a record
@@ -62,6 +74,21 @@ cat > "$TMP/in.tur" <<'EOF'
 (defn r-enum [n : int] : Tag
   (with-region (fn [] (T (chain-sum (build n 0)) (Green)))))
 
+(defdata Shape (Circle :float) (Sq :float :float))
+(defdata HoldsShape (HSh :int :Shape))
+(defn r-sum [n : int] : HoldsShape
+  (with-region (fn [] (HSh (chain-sum (build n 0)) (Circle 1.5)))))
+
+(defdata BadShape (BCircle :float) (BLink :Link))
+(defdata HoldsBad (HB :int :BadShape))
+(defn r-bad [n : int] : HoldsBad
+  (with-region (fn [] (HB (chain-sum (build n 0)) (BCircle 1.5)))))
+
+(defdata RShape (RLeaf :float) (RNode :RShape))
+(defdata HoldsR (HR :int :RShape))
+(defn r-rec [n : int] : HoldsR
+  (with-region (fn [] (HR (chain-sum (build n 0)) (RLeaf 1.5)))))
+
 (defdata HoldsLink (HL :int :Link))
 (defn r-heap [n : int] : HoldsLink
   (with-region (fn [] (HL (chain-sum (build n 0)) (Link n 0)))))
@@ -70,6 +97,9 @@ cat > "$TMP/in.tur" <<'EOF'
   (match (r-struct 4) (P2 a b) (println a))   ;; 10
   (match (r-cstr 4)   (N a s)  (println a))   ;; 10
   (match (r-enum 4)   (T a c)  (println a))   ;; 10
+  (match (r-sum 4)    (HSh a s) (println a))  ;; 10
+  (match (r-bad 4)    (HB a b)  (println a))  ;; 10 (retired: identical to flag-off)
+  (match (r-rec 4)    (HR a r)  (println a))  ;; 10 (retired: identical to flag-off)
   0)
 EOF
 

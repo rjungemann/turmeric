@@ -416,15 +416,49 @@ per the standing rule it would not block a release if there were.
    and running it would bake a nondeterministic pointer into the expected
    output.
 
-   Still refused, and each a real widening if taken up: a **carrier-erased
-   ADT field whose inner def gets no `full_type`** (a multi-variant or
-   drop-glue-bearing inner -- needs name-to-def resolution at emit time,
-   which the emitter does not have; `program_root`'s EX_DEFDATA items are
-   the route); a **container of scalars** (`Vec<int>` -- `Vec` is `:heap`
-   and refused on sight, and admitting it needs the compiler-warranted fact
-   that Vec's storage is inline-C malloc never routed to a generation, the
-   same name-list warrant the option-niche plan uses); and the **recursive
-   spine**, which must stay refused because the result IS the node.
+   **Third batch, PINNED 2026-09-05 (also `region-scope-shapes`):** a
+   variant holding a **non-recursive multi-variant sum of scalars**
+   (`(Circle :float) (Sq :float :float)`) REWINDS, and this closes the
+   "carrier-erased inner ADT" question rather than opening it: the inner
+   was expected to get no `full_type` (not a product, not field-less) and
+   need name-to-def resolution -- but `adt_is_byvalue_product` (types.c),
+   despite its name, admits an SR1 by-value sum candidate and walks every
+   variant's fields, so `Shape` gets `record_full`, a recorded `full_type`,
+   and the walk descends into it.  The same free route as the enum.  What
+   is left with NO recorded `full_type` is exactly what should stay
+   refused: an inner with drop glue (an rc can point at a region node), a
+   self-recursive inner, and a mutual-recursion partner.  Negatives pinned:
+   a sum one of whose arms holds a `:heap` node retires (a union is only
+   as safe as its widest arm), a self-recursive sum retires.  So the
+   "name-to-def resolution" widening the previous paragraph priced is
+   NOT needed; struck.
+
+   **Fourth batch, LANDED 2026-09-05 -- the one real walk change of the
+   later batches (`region-scope-vec-scalar`):** a **`Vec` of scalars**
+   REWINDS.  It was refused for a reason the plan's own example ("a
+   bracket returning a `Vec` of scalars never rewinds") never stated: a
+   parametric monomorph `(Vec int)` is a TY_APP, so it never reached the
+   walk's TY_ADT arm at all and fell to `default:`.  A new TY_APP arm
+   admits exactly this shape, one fact per lock: (1) Vec's own storage --
+   handle and element buffer -- is plain inline-C `malloc` in vec.tur,
+   never the region router, which is emitted only at the four ADT-ctor
+   sites; so the escaping handle is never region memory and the runtime
+   lock is satisfied.  A compiler-warranted name check, the option-niche
+   plan's warrant for Vec/Map/Set.  (2) A scalar element is an int64 word
+   in that malloc'd buffer and reaches nothing.  Anything else refuses:
+   a `Vec` of `:heap` nodes (pinned -- its buffer holds region pointers),
+   a by-value aggregate element (heap-boxed at push by the escaping
+   bridge, a later shape once that is pinned as never-routed), any other
+   parametric def (its tyvar fields would refuse without the argument
+   substitution the walk does not yet do).  Measured: the spines that
+   produce the elements are reclaimed and the Vec survives with both
+   elements and its length read back correctly after the pop.
+
+   Still refused, deliberately: the **recursive spine** (the result IS the
+   node); a **Vec of by-value aggregates** and **Map / Set** (the same
+   warrant would apply, each its own increment with its own fixture);
+   **other parametric monomorphs** like `(Pair int int)` (need tyvar
+   substitution in the field walk).
 3. **Close or price the residue** named under R4: the unbracketed CPS
    `CT_LETCALL` arm, argument-position allocation landing in the generation, and
    the pooled slab that is never returned (reachable at exit, not lost -- a pool,

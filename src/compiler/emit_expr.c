@@ -4923,8 +4923,58 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
             (*n_seen)--;   /* fully explored and proved safe: off the path */
             return false;
         }
+        case TY_APP: {
+            /* A PARAMETRIC monomorph -- `(Vec int)`, `(Pair int int)` -- is a
+             * TY_APP, so it never reached the TY_ADT arm above and fell to
+             * `default:`: refused on sight.  That is the whole reason "a
+             * bracket returning a Vec of scalars never rewinds" (R5 item 2's
+             * own example of an over-conservative refusal).
+             *
+             * This increment admits exactly ONE parametric shape: a `Vec`
+             * whose element is a scalar.  Two facts make it sound, one per
+             * lock.  (1) Vec's own storage -- the handle and the element
+             * buffer -- is plain inline-C `malloc` in stdlib/vec.tur (lines
+             * ~59 and ~127), NEVER the region router: `tur_region_alloc_or_
+             * malloc` is emitted only at the four ADT-ctor sites (the base,
+             * monomorph and emit_program ctors, and the SR4 recursive-field
+             * box), none of which Vec's inline-C construction uses.  So the
+             * handle that escapes is never region memory and the runtime lock
+             * (`tur_region_note_escape`) is satisfied; this is a compiler-
+             * warranted name check, the same warrant the option-niche plan
+             * uses for Vec/Map/Set ("the compiler itself emits their
+             * constructors as unconditional mallocs").  (2) The ELEMENTS are
+             * what could transitively reach, and a scalar element is an int64
+             * word in that malloc'd buffer: nothing to reach.  Anything else
+             * refuses here -- a by-value aggregate element (heap-boxed at push
+             * by the escaping bridge, and a later shape once that is pinned),
+             * an ADT element, a node element -- as does any other parametric
+             * def, whose tyvar-typed fields the field walk would refuse anyway
+             * without argument substitution it does not yet do.
+             *
+             * Pinned by `region-scope-vec-scalar`: `(Vec int)` rewinds with
+             * its elements read back after the pop; `(Vec Link)` retires. */
+            AdtDef *def = NULL;
+            Type args[16];
+            uint8_t n_args = 0;
+            if (!type_extract_adt_app(&rt, &def, args, &n_args) || !def)
+                return true;
+            if (!def->name || strcmp(def->name, "Vec") != 0 || !def->is_heap ||
+                n_args != 1)
+                return true;
+            Type el = emit_resolve_type(ctx, args[0]);
+            switch (el.kind) {
+                case TY_NIL:  case TY_NEVER: case TY_BOOL:
+                case TY_INT:  case TY_INT8:  case TY_INT16: case TY_INT32: case TY_INT64:
+                case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                case TY_CSTR:
+                    return false;           /* a scalar element reaches nothing */
+                default:
+                    return true;
+            }
+        }
         default:
-            /* Pointers, refs, rc, closures, structs, containers, type
+            /* Pointers, refs, rc, closures, structs, other containers, type
              * variables, existentials: every one of them can hold or capture a
              * node, and R4 needs none of them to say no. */
             return true;
