@@ -5,7 +5,7 @@
 > `p19-8-fiber-effect-chain` pass. See "Resolution" at the end -- including a
 > correction to fix direction 1 below, which does NOT work, and the two sibling
 > sites this did not cover
-> ([windows-longjmp-remaining-fiber-sites.md](../reported/windows-longjmp-remaining-fiber-sites.md)).
+> ([windows-longjmp-remaining-fiber-sites.md](windows-longjmp-remaining-fiber-sites.md)).
 
 **Summary:** On Windows x64, the DK runtime's tail-resume trampoline
 (`dk_tail_resume` -> `longjmp`) is fatal when it executes on a fiber stack.
@@ -187,11 +187,11 @@ onto the cc fallback via `__va_start`).
 ### Not covered
 
 `call/cc` and panic-in-fiber have the identical defect and were left alone --
-see [windows-longjmp-remaining-fiber-sites.md](../reported/windows-longjmp-remaining-fiber-sites.md).
+see [windows-longjmp-remaining-fiber-sites.md](windows-longjmp-remaining-fiber-sites.md).
 
 ## Related
 
-- [windows-longjmp-remaining-fiber-sites.md](../reported/windows-longjmp-remaining-fiber-sites.md) -- the sibling sites
+- [windows-longjmp-remaining-fiber-sites.md](windows-longjmp-remaining-fiber-sites.md) -- the sibling sites
 - [windows-posix-inline-c-gaps.md](../reported/windows-posix-inline-c-gaps.md)
 - [windows-subprocess-and-shared-lib-gaps.md](../reported/windows-subprocess-and-shared-lib-gaps.md)
 - [docs/upcoming/v1/windows-remaining-plan.md](../upcoming/v1/windows-remaining-plan.md)

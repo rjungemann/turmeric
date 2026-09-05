@@ -1,7 +1,15 @@
 # Windows: `call/cc` and panic-in-fiber still `longjmp` on a fiber stack
 
+> **RESOLVED 2026-09-04, and this report was WRONG about which sites are
+> affected.** Every emitted setjmp/longjmp landing now goes through
+> `TUR_SETJMP`/`TUR_LONGJMP`. Probing each site first showed that
+> **panic-in-fiber does not reproduce** -- the compiled `catch-unwind` path
+> is stackless and never longjmps -- while `call/cc` does. Enumerating
+> properly also found FIVE such families, not the three listed below. See
+> "Resolution" at the end.
+
 **Summary:** Fixing the DK tail-resume landing
-([archived report](../archive/windows-longjmp-across-fiber-stack-kills-effects.md))
+([archived report](windows-longjmp-across-fiber-stack-kills-effects.md))
 converted one of four emitted `longjmp` sites. The other three still use libc
 `longjmp`, so each dies with `STATUS_BAD_STACK` (0xc0000028) if it fires on a
 fiber stack -- the same root cause, unchanged.
@@ -80,6 +88,58 @@ path use the builtins too and retire the special case entirely.
 
 ## Related
 
-- [../archive/windows-longjmp-across-fiber-stack-kills-effects.md](../archive/windows-longjmp-across-fiber-stack-kills-effects.md) -- the resolved DK site, with the measurements
-- [jit-windows-support-spike.md](jit-windows-support-spike.md) -- the c2mir fork work this would ride on
+- [../archive/windows-longjmp-across-fiber-stack-kills-effects.md](windows-longjmp-across-fiber-stack-kills-effects.md) -- the resolved DK site, with the measurements
+- [jit-windows-support-spike.md](../reported/jit-windows-support-spike.md) -- the c2mir fork work this would ride on
 - [docs/upcoming/v1/windows-remaining-plan.md](../upcoming/v1/windows-remaining-plan.md)
+
+
+## Resolution (2026-09-04)
+
+### What was actually broken
+
+This report asserted all three sites were broken "by the same root cause,
+unchanged". That was reasoning from the code, not measurement, and it was half
+wrong. Probing each on Windows first:
+
+| site | probe | result |
+| --- | --- | --- |
+| `call/cc` escape inside a fiber | escape invoked in a fiber body | **reproduces** -- exit 127, `0xc0000028` via `RtlUnwindEx` |
+| panic inside a fiber, handler outside | `catch-unwind` around the resume | survives, exit 0 |
+| panic inside a fiber, handler inside | `catch-unwind` in the fiber body | survives, exit 0 |
+
+Panic does not go through `longjmp` on the compiled path at all -- it is
+stackless, a `tur_panicking` flag with early returns, which is what the
+`stackless-catch-unwind-*` fixture family is about. The `panic_jmpbuf` landing
+exists but is only armed in narrower circumstances than assumed here.
+
+### What was fixed
+
+Enumerating the emitted landings rather than trusting this report's list turned
+up **five** families, not three: the DK trampoline (already done), the `call/cc`
+escape, shift/reset, the handler node, per-fiber panic recovery, and
+cancellation. All now use the same pair.
+
+`tur_dk_jmp_buf` / `TUR_DK_SETJMP` / `TUR_DK_LONGJMP` were renamed to
+`tur_jmp_buf` / `TUR_SETJMP` / `TUR_LONGJMP` -- they stopped being DK-specific --
+and the selection moved out of `emit_cps_runtime_prelude` into
+`emit_tur_jmp_buf_prelude`, emitted **unconditionally** after `<setjmp.h>`.
+That was the prerequisite this report flagged: the typedef lived inside a gated
+prelude, and its new consumers are gated independently -- several can appear in
+a program with no delimited control at all.
+
+The S2 split constraint is unchanged: the choice is still made at emission via
+`rt_split_canonical_emission()`, so both halves of a split program agree by
+construction.
+
+### Regression cover
+
+`tests/fixtures/callcc-in-fiber` is new and is the thing this report said was
+missing. It asserts both the escaped value and the fiber's return to its
+resumer -- the first proves the jump landed, the second that it did not corrupt
+the fiber's return path.
+
+There is still **no fixture** for shift/reset, the handler node, or cancellation
+inside a fiber. Those three were converted on the strength of the shared
+mechanism, not a reproduction, so they are covered by reasoning rather than by a
+test. If one of them turns out to have its own stackless path like panic did,
+the conversion is harmless there.

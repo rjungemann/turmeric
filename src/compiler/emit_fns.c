@@ -2497,7 +2497,7 @@ static void gs_emit_driver(GsCtx *gs, Buf *out, int bi, bool done_typed) {
         indent_buf(out, bi + 2); buf_puts(out, "if (__k->tag == 0) {\n");
         indent_buf(out, bi + 3); buf_puts(out, "free(__k);\n");
         indent_buf(out, bi + 3); buf_printf(out, "if (tur_handler_chain) return %s;\n", rz);
-        indent_buf(out, bi + 3); buf_puts(out, "if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) longjmp(tur_current_fiber->panic_jmpbuf, 1);\n");
+        indent_buf(out, bi + 3); buf_puts(out, "if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) TUR_LONGJMP(tur_current_fiber->panic_jmpbuf);\n");
         indent_buf(out, bi + 3); buf_puts(out, "fprintf(stderr, \"panic (uncaught, stackless)\\n\"); fflush(NULL); abort();\n");
         indent_buf(out, bi + 2); buf_puts(out, "}\n");
         free(rz);
