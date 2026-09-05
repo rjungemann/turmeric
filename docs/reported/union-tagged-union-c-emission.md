@@ -1,7 +1,7 @@
 ---
 title: Unions never get the documented per-member C union emission
 category: Reported
-description: Every (A | B) rides the generic tur_tagged_t, so a member that cannot be an int64 has to round-trip through the 8-byte value slot. Four defects came out of that, none of them the perf cost this was filed for -- two hard compile errors, a silent wrong answer, and an unowned box. All fixed except the box's owner; the representation itself is still deferred.
+description: Every (A | B) rides the generic tur_tagged_t, so a member that cannot be an int64 has to round-trip through the 8-byte value slot. Four defects came out of that, none of them the perf cost this was filed for -- two hard compile errors, a silent wrong answer, and an unowned box. All four are fixed; only the representation change this was filed for is still deferred, and it is much less urgent now.
 ---
 
 # Unions never get the documented per-member C union emission
@@ -21,10 +21,10 @@ building.
 
 ## What was actually there
 
-FOUR defects, all in the round trip through the 8-byte value slot. Three are
-fixed; what remains open is the box's OWNER (1b below), and the representation
-change the report asks for is still deferred and now much less urgent -- the
-cost it was filed to remove is mostly gone.
+FOUR defects, all in the round trip through the 8-byte value slot, ALL FIXED.
+What remains is only the representation change the report was filed for, which
+is still deferred and now much less urgent -- the cost it was filed to remove is
+gone.
 
 The fourth was found on 2026-09-05 and was hiding inside this entry's own
 "still open" note: the widen happened at ARGUMENT position and nowhere else, so
@@ -64,10 +64,10 @@ rather than decide which convention the mask follows, the union rule declines
 outright. A wrong bit here would hand a retaining callee a pointer into a dying
 frame -- a dangling pointer, which is worse than the leak it replaces.
 
-**Still open, and re-scoped 2026-09-05.** The clause above said "a union bound
-to a local, returned, or held as a temporary still leaks its box". Two of those
-three did not leak -- **they did not build**, and that was a separate and larger
-defect hiding inside this one.
+**Re-scoped and closed 2026-09-05.** This entry used to end here with "a union
+bound to a local, returned, or held as a temporary still leaks its box". Two of
+those three did not leak -- **they did not build** (1a), and the one that did
+leak needed more than the TY_ANY key the note implied (1b). Both below.
 
 ### 1a. Only ARGUMENT position ever widened -- **FIXED 2026-09-05**
 
@@ -94,40 +94,48 @@ that made it. A leak is the safe direction there; a frame box would dangle.
 
 An ANNOTATED let (`(let [u : (Wide | int) (Wide ...)] ...)`) already worked and
 is unchanged -- it inlines the binding into the argument position and frame-boxes
-it, so it never allocated. `tests/fixtures/union-widen-local-and-return` carries
-all four shapes and the pre-fix behaviour of each.
+it, so it never allocated -- established by reverting and re-running, not
+assumed. `tests/fixtures/union-widen-local-and-return` carries all four shapes;
+its sibling `union-widen-local-owned` carries the leak check (see 1b for why
+they are two fixtures).
 
-### 1b. The heap box still has no owner -- **STILL OPEN**
+### 1b. The heap box had no owner -- **FIXED 2026-09-05**
 
-Measured: a `(:: member union)` bound to a local in a 1000-iteration loop leaks
-**32,000 bytes in 1,000 blocks**. The identical program through `any` is clean.
+Measured before: a `(:: member union)` bound to a local in a 1000-iteration loop
+leaked **32,000 bytes in 1,000 blocks**, where the identical program through
+`any` was clean. Zero after.
 
-The reason is the same one this whole entry keeps having: `let_binding_any_freeable`
-(emit_expr.c) -- the rule that decides a scope owns a widened box and may drop it
-at scope exit -- opens with `if (emit_resolve_type(ctx, b->type).kind != TY_ANY)
-return false;`. That is the fourth rule keyed on `TY_ANY` with no `TY_UNION`
-beside it.
+`let_binding_any_freeable` (emit_expr.c) -- the rule that decides a scope owns a
+widened box and may drop it at scope exit -- opened with
+`if (emit_resolve_type(ctx, b->type).kind != TY_ANY) return false;`. The FOURTH
+rule in this entry keyed on `TY_ANY` with no `TY_UNION` beside it.
 
-Adding the key is not enough, and this is the part worth knowing before starting:
+**Adding the key would have closed nothing**, and that is the part worth keeping:
 the drop CHANNEL emits `__tur_any_drop(name)`, which switches on ids interned by
-`emit_any_type_id` (`TUR_ANY_ID_BASE + i`, i.e. >= 1000). A union tag is a small
-member index, so that call is a silent no-op on a union value -- safe, and
-useless.
+`emit_any_type_id` (`TUR_ANY_ID_BASE + i`, >= 1000). A union tag is a small
+member INDEX, disjoint from that space, so the call matches no case and silently
+does nothing. Safe, and useless -- a rule change with a green suite and an
+unchanged leak.
 
-The shape of the fix, from having looked at it:
+A union let needs no runtime switch at all. The `EX_UNION_INJECT` is right there
+in the initializer, so "was THIS payload boxed?" is a compile-time question
+(`emit_type_is_byvalue_adt`, not `frame_box`, not the float member -- the same
+test the inject site makes), and the drop is a plain
+`free((void *)(intptr_t)TUR_UNTAG(u))`.
 
-- At a let whose init is an `EX_UNION_INJECT`, the tag is known **statically**,
-  so no runtime switch is needed at all -- the drop is an unconditional
-  `free((void *)(intptr_t)TUR_UNTAG(u))`, emitted only when the injected member
-  is one the widen actually boxed (`emit_type_is_byvalue_adt` and not
-  `frame_box`, the same test the inject itself makes).
-- What that costs is a PARALLEL drop channel: `any_pending` / `any_scope_drops`
-  carry names only, and both drain by emitting `__tur_any_drop`. A per-entry
-  "free directly" flag has to reach all four drain sites, or the early-exit
-  paths (a `return`, a tail-call back-edge) miss it -- and the natural repro is
-  tail-recursive, so a fall-through-only fix would not even cover it.
-- A union local whose init is a CALL has no statically-known tag and should
-  decline, keeping the status-quo leak.
+What that needed was one change to the channel, not a parallel one:
+`any_free_names` / `any_scope_drops` carry the drop STATEMENT rather than the
+name, and the four drain sites print `%s;`. One channel serves both, and the
+union drop reaches the early exits -- a `return`, a tail-call back-edge -- which
+is where it has to be, because the natural repro is tail-recursive and a
+fall-through-only fix would have passed a straight-line fixture while leaking.
+`tests/fixtures/union-widen-local-owned` is that loop, leak-checked.
+
+Narrower than the `any` arm in one way, deliberately: a union local whose
+initializer is a CALL has no statically-known tag and declines, keeping the
+status-quo leak. Same for a value that escapes the scope -- the
+`union-widen-local-and-return` fixture carries that negative, since a wrong
+greenlight there is a use-after-free rather than a leak.
 
 ### 2. A `match` arm binding a by-value member is a hard C compile error -- **FIXED**
 

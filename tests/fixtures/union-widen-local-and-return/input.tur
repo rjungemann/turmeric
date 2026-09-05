@@ -20,11 +20,20 @@
 ;; and from return position.  It deliberately does NOT set `frame_box`: that
 ;; optimisation rests on a CALLEE not retaining the payload for one call, and a
 ;; value bound to a local or returned outlives the expression that made it.  So
-;; these shapes heap-box, and the box still has no owner -- see the report for
-;; why the union drop needs a channel of its own (`__tur_any_drop` switches on
-;; ids >= 1000, while a union tag is a small member index, so it is a silent
-;; no-op on a union value rather than a wrong free).  That is why this fixture
-;; does NOT carry requires.leak-check: it would fail, honestly.
+;; these shapes heap-box, and OWNING that box is the second half
+;; (report item 1b, also closed): `let_binding_any_freeable` was a fourth rule
+;; keyed on TY_ANY, and adding the key alone would have closed nothing, because
+;; the drop channel emits `__tur_any_drop`, whose interned id space (>= 1000) is
+;; disjoint from a union's small member index -- a silent no-op on a union
+;; value.  A union let needs no runtime switch: the `EX_UNION_INJECT` is right
+;; there in the initializer, so the tag is a compile-time fact and the drop is a
+;; plain free.  The channel carries drop STATEMENTS now instead of names, which
+;; is what lets one channel serve both and reach the early exits.
+;;
+;; The OWNERSHIP half is pinned by the sibling `union-widen-local-owned`, which
+;; carries requires.leak-check.  This fixture deliberately does not: `escaping`
+;; below leaks one box on purpose, which is the safe half of the rule and would
+;; fail a leak check for the right reason.
 
 (defstruct Wide [a : int b : int c : int d : int])
 
@@ -55,10 +64,20 @@
   (let [u : (Wide | int) (Wide i 2 3 4)]
     (sum-wide u)))
 
+;; The negative: a union local that ESCAPES by being returned must NOT be freed
+;; here.  `any_box_binding_escapes` declines it, the box outlives the scope, and
+;; the caller reads it -- a wrong greenlight would be a use-after-free, which is
+;; the direction that matters.  (It leaks instead; that is the safe half of the
+;; rule and is what "only ever greenlights a free" means.)
+(defn escaping [i : int] : (Wide | int)
+  (let [u (:: (Wide i 6 7 8) (Wide | int))]
+    u))
+
 (defn main [] : int
   (println (via-local 10))            ;; 10 + 1  = 11
   (println (sum-wide (mk-asc 20)))    ;; 20 + 4  = 24
   (println (sum-wide (mk-bare 30)))   ;; 30 + 7  = 37
   (println (sum-wide (mk-int 42)))    ;; 42
   (println (via-annotated 50))        ;; 50 + 2  = 52
+  (println (sum-wide (escaping 60)))  ;; 60 + 6  = 66
   0)

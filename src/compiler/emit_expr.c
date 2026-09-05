@@ -2419,6 +2419,79 @@ static bool let_binding_box_freeable(const Expr *e, uint32_t idx) {
  * `__tur_any_drop` then frees only a payload the widen actually boxed, so a
  * primitive or heap-ADT payload is untouched.  Like its siblings this only ever
  * GREENLIGHTS a free: a false negative keeps the status-quo leak. */
+/* union-tagged-union-c-emission 1b: the union arm of `let_binding_any_freeable`.
+ *
+ * Same question, one type over: does this scope own the box the widen malloc'd,
+ * and is the body its last use?  Two differences from the `any` arm, both
+ * narrowing:
+ *
+ *   - the initializer must be the `EX_UNION_INJECT` itself, never a CALL.  A
+ *     union's runtime tag is a MEMBER INDEX, so "was this payload boxed?" is
+ *     only answerable when the inject is right here to ask; a call result's tag
+ *     is a runtime fact and the box stays leaked, which is the safe direction.
+ *   - the payload must be one the inject actually boxed: a by-value aggregate,
+ *     not frame-boxed, and not the float member (which rides the value slot as
+ *     a bit pattern).  Exactly the test the inject site itself makes.
+ *
+ * Like every rule in this family it only ever GREENLIGHTS a free, so an
+ * unmodelled shape keeps the status-quo leak. */
+static bool let_binding_union_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) {
+    const Expr *init = e->as.let_.bindings[idx].init;
+    const Binding *b = e->as.let_.bindings[idx].binding;
+    if (!init || !b) return false;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!init || init->kind != EX_UNION_INJECT) return false;
+    if (init->as.union_inject_.frame_box) return false;   /* a stack address */
+    const Expr *payload = init->as.union_inject_.value;
+    if (!payload) return false;
+    if (emit_resolve_type(ctx, payload->type).kind == TY_FLOAT) return false;
+    if (!emit_type_is_byvalue_adt(ctx, payload->type)) return false;
+    if (any_box_binding_escapes(e->as.let_.body, b) &&
+        !catch_box_binding_reader_confined(e->as.let_.body, b, e->type.kind))
+        return false;
+    for (uint32_t j = 0; j < e->as.let_.n; j++) {
+        if (j == idx) continue;
+        if (any_box_binding_escapes(e->as.let_.bindings[j].init, b)) return false;
+    }
+    return true;
+}
+
+/* union-tagged-union-c-emission 1b: the drop STATEMENT for an owned widen
+ * local, which is what the two drop channels now carry instead of a bare name.
+ *
+ * `any` goes through `__tur_any_drop`, whose switch knows which interned ids
+ * (`TUR_ANY_ID_BASE + i`, >= 1000) name a payload the widen boxed.  A union's
+ * tag is a small MEMBER INDEX, disjoint from that id space, so handing a union
+ * value to `__tur_any_drop` matches no case and silently does nothing -- safe,
+ * and useless, which is why adding TY_UNION to the ownership rule alone would
+ * have closed nothing.
+ *
+ * A union let needs no switch at all: `let_binding_union_freeable` has already
+ * proved, from the `EX_UNION_INJECT` sitting in the initializer, that this exact
+ * payload is a heap box.  The tag is a compile-time fact there, so the drop is a
+ * plain free.
+ *
+ * Returning a statement rather than a name is what keeps ONE channel: the four
+ * drain sites print `%s;` and no per-entry flag has to be threaded through
+ * `any_scope_drops` (whose entries also have to survive into the early-exit
+ * paths -- a `return`, a tail-call back-edge -- which is where the natural
+ * tail-recursive repro leaks). */
+char *let_binding_widen_drop_stmt(EmitCtx *ctx, const Expr *e, uint32_t idx) {
+    const Binding *b = e->as.let_.bindings[idx].binding;
+    char *nm = name_for_binding(ctx, b);
+    Buf s;
+    buf_init(&s);
+    if (emit_resolve_type(ctx, b->type).kind == TY_UNION)
+        buf_printf(&s, "free((void *)(intptr_t)TUR_UNTAG(%s))", nm);
+    else
+        buf_printf(&s, "__tur_any_drop(%s)", nm);
+    buf_putc(&s, '\0');
+    free(nm);
+    char *out = strdup(s.data);
+    buf_free(&s);
+    return out;
+}
+
 bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) {
     const Expr *init = e->as.let_.bindings[idx].init;
     const Binding *b = e->as.let_.bindings[idx].binding;
@@ -2427,7 +2500,15 @@ bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) {
      * single consuming call, which every path reaches before the scope can
      * exit.  Dropping again here would free the box twice. */
     if (b->any_dropped_at_use) return false;
-    if (emit_resolve_type(ctx, b->type).kind != TY_ANY) return false;
+    /* union-tagged-union-c-emission 1b: a UNION local's widen box is the same
+     * unowned malloc, and this rule was the fourth keyed on TY_ANY alone.  The
+     * union arm is narrower than the `any` one by design -- see
+     * `let_binding_widen_drop_stmt` for why a union needs the tag known
+     * statically, which rules out the EX_CALL initializer the `any` arm
+     * accepts. */
+    TypeKind _bk = emit_resolve_type(ctx, b->type).kind;
+    if (_bk == TY_UNION) return let_binding_union_freeable(ctx, e, idx);
+    if (_bk != TY_ANY) return false;
     while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
     if (!init) return false;
     /* Owned-here shapes only.  A frame-boxed widen is a STACK address -- freeing
@@ -2600,8 +2681,11 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         if (let_binding_any_freeable(ctx, e, i)) {
             any_free_names = (char **)realloc(any_free_names,
                                               (n_any_free + 1) * sizeof(char *));
+            /* union-tagged-union-c-emission 1b: the STATEMENT, not the name --
+             * a union drop is a plain free and an `any` drop is the tagged
+             * switch, and one channel carries both. */
             any_free_names[n_any_free++] =
-                name_for_binding(ctx, e->as.let_.bindings[i].binding);
+                let_binding_widen_drop_stmt(ctx, e, i);
         }
     }
     if (!body_has_return_or_throw) {
@@ -3014,7 +3098,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
          * needs the drop; the returning paths took emit_any_scope_drops. */
         for (uint32_t i = 0; i < n_any_free; i++) {
             indent_buf(body, ctx->indent);
-            buf_printf(body, "__tur_any_drop(%s);\n", any_free_names[i]);
+            buf_printf(body, "%s;\n", any_free_names[i]);
             free(any_free_names[i]);
         }
         free(any_free_names);
@@ -3088,7 +3172,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * non-escaping `any` local now that the body -- its last use -- is emitted. */
     for (uint32_t i = 0; i < n_any_free; i++) {
         indent_buf(body, ctx->indent);
-        buf_printf(body, "__tur_any_drop(%s);\n", any_free_names[i]);
+        buf_printf(body, "%s;\n", any_free_names[i]);
         free(any_free_names[i]);
     }
     free(any_free_names);
@@ -4589,7 +4673,7 @@ void any_scope_drops_pop(EmitCtx *ctx, uint32_t mark) {
 void emit_any_scope_drops(EmitCtx *ctx, Buf *body) {
     for (uint32_t i = ctx->n_any_scope_drops; i-- > 0; ) {
         indent_buf(body, ctx->indent);
-        buf_printf(body, "__tur_any_drop(%s);\n", ctx->any_scope_drops[i]);
+        buf_printf(body, "%s;\n", ctx->any_scope_drops[i]);
     }
 }
 

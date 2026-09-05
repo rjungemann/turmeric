@@ -1,0 +1,54 @@
+;; union-tagged-union-c-emission 1b: a union local's widen box gets an OWNER.
+;;
+;; `(:: member union)` bound to a local heap-boxes the payload (unlike the
+;; argument position, which can frame-box it -- a value in a local outlives the
+;; expression that made it).  Nothing freed that box: 32,000 bytes in 1,000
+;; blocks, measured, where the identical program through `any` was clean.
+;;
+;; `let_binding_any_freeable` -- the rule that decides a scope owns a widened box
+;; -- was the FOURTH rule in this family keyed on TY_ANY with no TY_UNION beside
+;; it.  Adding the key alone would have closed nothing: the drop channel emits
+;; `__tur_any_drop`, whose interned id space (>= 1000) is disjoint from a union
+;; tag's small member index, so it matches no case and silently does nothing.
+;;
+;; A union let needs no runtime switch at all.  The `EX_UNION_INJECT` is right
+;; there in the initializer, so whether THIS payload was boxed is a compile-time
+;; fact, and the drop is a plain free.  The two drop channels carry drop
+;; STATEMENTS now rather than names, which is what lets one channel serve both.
+;;
+;; `drive` is TAIL-RECURSIVE on purpose.  Its drops fire at a back-edge `goto`,
+;; not at a fall-through, so a fix that only emitted the trailing drop would pass
+;; a straight-line fixture and leak here -- which is exactly the trap the report
+;; warned about before this was built.
+;;
+;; requires.leak-check: AddressSanitizer fails this if a single box is orphaned.
+;; 1000 iterations is what makes that meaningful rather than a coin flip.
+
+(defstruct Wide [a : int b : int c : int d : int])
+
+(defn sum-wide [x : (Wide | int)] : int
+  (match x
+    (w : Wide) (+ (.a w) (.b w))
+    (i : int)  i))
+
+(defn drive [i : int n : int acc : int] : int
+  (if (= i n)
+    acc
+    (let [u (:: (Wide i 1 2 3) (Wide | int))]
+      (drive (+ i 1) n (+ acc (sum-wide u))))))
+
+;; The int member rides the value slot and never boxed.  It must not start being
+;; freed now that the struct member stopped leaking -- freeing a tagged int
+;; would be a wild pointer, not a leak.
+(defn drive-int [i : int n : int acc : int] : int
+  (if (= i n)
+    acc
+    (let [u (:: i (Wide | int))]
+      (drive-int (+ i 1) n (+ acc (sum-wide u))))))
+
+(defn main [] : int
+  ;; sum over i in [0, 1000) of (i + 1) = 499500 + 1000 = 500500
+  (println (drive 0 1000 0))
+  ;; sum over i in [0, 1000) of i = 499500
+  (println (drive-int 0 1000 0))
+  0)

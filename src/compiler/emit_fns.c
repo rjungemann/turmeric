@@ -704,7 +704,10 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                 uint32_t any_mark = ctx->n_any_scope_drops;
                 for (uint32_t i = 0; i < e->as.let_.n; i++) {
                     if (!let_binding_any_freeable(ctx, e, i)) continue;
-                    char *nm = name_for_binding(ctx, e->as.let_.bindings[i].binding);
+                    /* union-tagged-union-c-emission 1b: the channel carries the
+                     * drop STATEMENT now, so a union local's plain free reaches
+                     * the early exits this arm is entirely made of. */
+                    char *nm = let_binding_widen_drop_stmt(ctx, e, i);
                     any_scope_drops_push(ctx, nm);
                     free(nm);
                 }

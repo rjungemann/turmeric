@@ -1227,6 +1227,13 @@ void emit_any_scope_drops(EmitCtx *ctx, Buf *body);
  * payload box that scope owns and may drop?  Exported because emit_tail emits a
  * tail-position `let` inline rather than through emit_let_value. */
 bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx);
+/* union-tagged-union-c-emission 1b: the drop STATEMENT for a binding
+ * `let_binding_any_freeable` greenlit -- `__tur_any_drop(x)` for an `any`, a
+ * plain `free` of the untagged payload for a union (whose tag is a member index
+ * the any-drop switch does not cover, and which the ownership rule proved is a
+ * heap box).  The drop channels carry these rather than names so one channel
+ * serves both.  Caller frees the returned string. */
+char *let_binding_widen_drop_stmt(EmitCtx *ctx, const Expr *e, uint32_t idx);
 void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const char *init_or_null);
 
 /* True when a handle's sole case is the built-in `Unsafe` effect -- a pure
