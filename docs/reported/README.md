@@ -650,6 +650,7 @@ suite 2687 passed, 0 failed.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [jit-ffi-interp-refuses-parametric-record-field](jit-ffi-interp-refuses-parametric-record-field.md) | low | `call-ptr` under `--interpret` refuses a record with a parametric-monomorph field (`(BoxW int32)`) that the compiled path inlines by value: a compiled/interpreted divergence, refused cleanly. Its diagnostic ("no by-value C member type") is inaccurate in every case it can fire |
+| [declared-size-index-never-checked-against-value](declared-size-index-never-checked-against-value.md) | medium | sized-type argument checks fire correctly, but the *claims* they trust are never validated: a `defn`'s declared return-type size index is recovered and used downstream without ever being compared to the body, so a wrong annotation launders a mismatch past `TUR-E0260`; and an ascribed size (`(:: e (SizedBuf (Static k)))`) is neither validated nor recovered, which is the idiom `stdlib/sized-buf.tur` prescribes for pinning `n` |
 
 The `mir-aarch64` row was indexed 2026-08-21. It had **no row at all** since it
 was filed -- the only open report in the tree that this index never listed, and
