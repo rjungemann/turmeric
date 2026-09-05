@@ -355,7 +355,7 @@ nothing ties the runtime `k` passed to `sized-buf-new` to the `n` an
 ascription pins, so `(:: (sized-buf-new-zeroed 4) (SizedBuf (Static 99)))`
 is still accepted. Tying `k` to `n` needs a size-witnessed constructor and is
 a stdlib follow-up (see
-[the archived report](../archive/declared-size-index-never-checked-against-value.md)).
+[docs/archive/declared-size-index-never-checked-against-value.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/declared-size-index-never-checked-against-value.md)).
 
 ---
 
