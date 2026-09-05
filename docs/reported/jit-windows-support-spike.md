@@ -421,6 +421,86 @@ a build-only job cannot tell the difference.
 
 ---
 
+## Resolution: the JIT longjmp (2026-09-05)
+
+`tests/run-jit.sh`, default tier: **2637 passed / 68 failed -> 2692 passed /
+13 failed.** 55 fixtures fixed, all of them the CPS/effect class.
+
+### The recorded cause was wrong, and the data had already said so
+
+Section 2 held that the JIT path carried the cc path's old fiber-stack defect,
+because c2mir cannot use `__builtin_setjmp`. That should have been doubted
+earlier: **the fiber+effect fixtures were passing.** `fiber-effect`,
+`p19-8-fiber-effect-chain`, `callcc-in-fiber` and both
+`direct-fiber-effect-float-*` all passed on the JIT path as real JIT runs, not
+cc fallbacks -- while plain `effect-handler`, which never touches a fiber,
+failed. A fiber-stack explanation predicts exactly the opposite.
+
+Running the pre-fix binary under a debugger takes about a minute and settles it:
+
+```
+gdb: unknown target exception 0xc00000ff
+#0  ntdll!RtlRaiseStatus
+#1  ntdll!RtlUnwindEx
+#2  ntdll!RtlUnwind
+#3  ucrtbase!.intrinsic_setjmpex          <- longjmp
+#4  dk_tail_resume ()                     <- the host-compiled runtime half
+#5  0x0000000000f20f8a in ?? ()           <- a JIT-generated frame
+```
+
+`0xC00000FF` is **`STATUS_BAD_FUNCTION_TABLE`**, not the `STATUS_BAD_STACK`
+(`0xC0000028`) of the fiber-stack report. Different status, different cause:
+
+| | cc path (fixed earlier) | JIT path (this) |
+| --- | --- | --- |
+| status | `STATUS_BAD_STACK` 0xC0000028 | `STATUS_BAD_FUNCTION_TABLE` 0xC00000FF |
+| raised because | the frame's RSP is outside the TEB stack bounds | no `.pdata`/`.xdata` entry exists for the frame |
+| needs a fiber | yes | **no** |
+
+`RtlUnwindEx` walks every frame between the `longjmp` and the `setjmp` and calls
+`RtlLookupFunctionEntry` on each. MIR emits no SEH unwind data, so a
+JIT-generated frame has no entry and the unwind cannot proceed. That is why the
+fiber fixtures passed -- their landing pads happen not to have a JIT frame in
+between -- and why the cc path, whose frames all have unwind data, never saw it.
+
+### The fix
+
+`src/async/tur_sjlj_x64_win.S`: `tur_sjlj_set` / `tur_sjlj_jump`, a plain
+register save/restore with no unwinder. It is the save half and the restore
+half of `fiber_ctx_x64_win.S`'s `tur_ctx_swap` split apart, with the same buffer
+layout, so the two can be read against each other.
+
+The interesting part is not the assembly but **how the two halves agree on it**.
+They cannot agree via `__GNUC__`, which is what section 2 correctly identified.
+They can agree via a *symbol*: an ordinary extern call is something both a real
+toolchain and c2mir can emit. The host-compiled runtime half links the object
+directly; the c2mir-compiled program half resolves it through jit_engine.c's
+`JIT_SHIMS` table.
+
+And the platform test moves into the emitted text as `#ifdef _WIN32`, which is
+safe where `#ifdef __GNUC__` was not: c2mir predefines `_WIN32`
+(`mirc_x86_64_win.h`), so both halves answer it identically. Keeping it in the
+text rather than deciding it at emission is also what keeps the split hash
+platform-independent -- an emission-time choice would silently disengage S2 on
+whichever host did not generate the artifacts, which has already happened twice.
+
+Evidence that this held: the committed artifacts were regenerated **on Windows**
+and the diff against the Linux-generated ones is exactly the eleven-line
+prelude block and the hash. Nothing else moved.
+
+The cc path is untouched -- it keeps `__builtin_setjmp`, which needs no library
+at link time. An emitted program only links `libturt_runtime.a` when the probe
+finds it, so the cc path cannot depend on a symbol.
+
+### What remains
+
+13 failures: 10 carry `requires.posix-apis` (a harness gap fixed by
+turmeric#818, so the real figure is **2702 / 3**), plus `path-string`,
+`childhandle-linear` and `cps-backend-nil-delegated-call`. All three were
+failing before this change and none is CPS-trampoline-shaped.
+
+---
+
 ## Remaining Windows JIT work (2026-09-04)
 
 Everything left, in one place.  Before this section the answer was spread across
@@ -465,22 +545,23 @@ The characterisation this section carried -- "not a missing win64 wrapper port,
 because MIR *does* carry a `_WIN32` arm there" -- was the wrong inference. The
 arm existed and was wrong, which is not the same as absent and is harder to see.
 
-### 2. c2mir has no `__builtin_setjmp`, so effects under the JIT are broken
+### 2. ~~c2mir has no `__builtin_setjmp`~~ RESOLVED -- and the diagnosis here was wrong
 
-Documented in
-[../archive/windows-longjmp-across-fiber-stack-kills-effects.md](../archive/windows-longjmp-across-fiber-stack-kills-effects.md),
-which is ARCHIVED -- so it is invisible to a triage pass over `docs/reported/`,
-and that is why this section exists.
+**Fixed 2026-09-05.** No c2mir change was needed, and no MIR change either.
+See "Resolution: the JIT longjmp" below. What this section said the problem
+was is not what the problem was, so the reasoning is preserved here and
+corrected there:
 
-The cc path uses `__builtin_setjmp`/`__builtin_longjmp` on Windows because libc
-`longjmp` is an SEH unwind that dies on a fiber stack.  Under the S2 split both
-halves must agree on the mechanism and c2mir has neither builtin, so the split
-keeps plain `setjmp` -- leaving the JIT path with the defect the cc path no
-longer has.  The 48 CPS failures above are the visible consequence.
+> The cc path uses `__builtin_setjmp`/`__builtin_longjmp` on Windows because
+> libc `longjmp` is an SEH unwind that dies on a fiber stack. Under the S2
+> split both halves must agree on the mechanism and c2mir has neither builtin,
+> so the split keeps plain `setjmp` -- leaving the JIT path with the defect the
+> cc path no longer has. The 48 CPS failures above are the visible consequence.
 
-Lifting it means teaching c2mir `__builtin_setjmp`/`__builtin_longjmp` in the
-`rjungemann/mir` fork.  That would also let the split use the builtins and
-retire the `rt_split_canonical_emission()` special case in the DK prelude.
+The first sentence is true of the **cc** path. The inference in the third --
+that the JIT path therefore has "the defect the cc path no longer has" -- is
+not, and it went unchallenged because it was never measured. The JIT path had
+a *different* SEH defect that happens to have the same cure.
 
 ### 3. `__va_start` on the whole-preamble path
 

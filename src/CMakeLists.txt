@@ -338,6 +338,12 @@ if(WIN32)
     # WIN3 tier C: real Windows x64 context switch (RCX first-arg, preserves
     # RSI/RDI/XMM6-15). Replaces the earlier aborting fiber_ctx_win.c stub.
     list(APPEND TUR_CORE_SOURCES async/fiber_ctx_x64_win.S)
+    # The DK trampoline's landing pad.  libc longjmp on win64 is an SEH unwind
+    # that dies on a fiber stack; the cc path uses __builtin_setjmp, but the JIT
+    # path cannot, because c2mir has no such builtin and setjmp/longjmp must
+    # pair.  An ordinary extern call is something BOTH halves of an S2 split can
+    # make.  See async/tur_sjlj_x64_win.S.
+    list(APPEND TUR_CORE_SOURCES async/tur_sjlj_x64_win.S)
 elseif(TUR_ARCH MATCHES "arm64|aarch64")
     list(APPEND TUR_CORE_SOURCES async/fiber_ctx_arm64.S)
 elseif(TUR_ARCH MATCHES "x86_64|amd64")
