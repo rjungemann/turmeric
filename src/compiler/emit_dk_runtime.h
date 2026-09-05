@@ -39,6 +39,14 @@
  * `_ex` spelling, defaulting off; cps-tramp-resume graduated 2026-07-19, the
  * only caller passed the always-true g_opt_cps_tramp_resume, and the
  * tramp-off wrapper had no callers at all. */
+/* Emit the tur_jmp_buf / TUR_SETJMP / TUR_LONGJMP landing-pad selection.
+ * Call ONCE, unconditionally, after <setjmp.h> and before any emitter that
+ * declares a landing -- the DK trampoline, the call/cc escape, shift/reset,
+ * the handler node, per-fiber panic recovery, cancellation.  Those are gated
+ * independently, and several can appear with no delimited control at all, so
+ * this cannot live inside any one of their preludes. */
+void emit_tur_jmp_buf_prelude(Buf *out);
+
 void emit_cps_runtime_prelude(Buf *out);
 
 /* True while emit_rt_split_source() is producing the CANONICAL split-runtime

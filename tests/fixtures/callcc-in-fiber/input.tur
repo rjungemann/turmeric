@@ -1,0 +1,53 @@
+;; callcc-in-fiber: an escape continuation invoked from INSIDE a fiber body.
+;;
+;; The escape runtime's tur_escape_resume ends in a jump back to the landing
+;; established at the (call/cc ...) site.  When the call/cc is inside a fiber,
+;; BOTH ends of that pair sit on the fiber's own stack -- a malloc'd block, not
+;; the stack the OS gave the thread.
+;;
+;; On win64 that distinction is fatal with libc longjmp: it is a real SEH
+;; unwind, and RtlUnwindEx validates each frame's RSP against the thread's
+;; stack bounds as recorded in the TEB.  A fiber stack is outside them, so the
+;; unwind raised STATUS_BAD_STACK (0xc0000028) and the process died before
+;; printing anything -- exit 127, no output, no diagnostic.
+;;
+;; The landing pads now go through TUR_SETJMP/TUR_LONGJMP, which are GCC's
+;; __builtin_setjmp/__builtin_longjmp on Windows: a plain SP/FP/PC
+;; save-restore, no unwinder, no TEB check.  Unchanged on Linux and macOS,
+;; where libc longjmp never had the problem.
+;;
+;; What this pins is that the escape still delivers its value and the fiber
+;; still returns to its resumer.  Both lines matter: the first proves the jump
+;; landed, the second that it did not corrupt the fiber's own return path.
+;;
+;; Expected output:
+;;   42
+;;   back on the main stack
+
+(defn fiber-new-fn [fn : ptr<void> stack-size : int] : ptr<void>
+  ```c
+  return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
+  ```)
+
+(defn fiber-resume-fn [f : ptr<void> arg : int] : int
+  ```c
+  return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
+  ```)
+
+(defn fiber-free-fn [f : ptr<void>] : nil
+  ```c
+  tur_fiber_block_free((FiberBlock *)f);
+  ```)
+
+(defn esc [] : int
+  (call/cc (fn [^linear k] (k 42))))
+
+(defn fiber-body [] : nil
+  (println (esc)))
+
+(defn main [] : int
+  (let [f (fiber-new-fn fiber-body 0)]
+    (let [r (fiber-resume-fn f 0)]
+      (println "back on the main stack")
+      (fiber-free-fn f)
+      0)))

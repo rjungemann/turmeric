@@ -9110,6 +9110,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * pointer into two ints -- the classic ucontext workaround for its
      * int-only varargs.  The trampoline therefore has to re-dispatch on argc. */
     emit_win_ucontext_shim(out);
+    /* Landing-pad selection, before every emitter that declares one. */
+    emit_tur_jmp_buf_prelude(out);
     /* POSIX regex (stdlib/re.tur): hoist regex.h to file scope so every
      * generated re_* function sees regex_t and friends. Per-function
      * `#include <regex.h>` only works for the first function due to header
@@ -9899,7 +9901,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_printf(out, "%svoid rc_free_queue_reset_drain_state(void);  /* Forward decl */\n", rcgc_helper);
     buf_puts(out, "static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {\n");
     buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;\n");
-    buf_puts(out, "    if (setjmp(__node.buf) == 0) {\n");
+    buf_puts(out, "    if (TUR_SETJMP(__node.buf) == 0) {\n");
     buf_puts(out, "        thunk(env, out);\n");
     buf_puts(out, "        tur_handler_chain = __node.parent;\n");
     buf_puts(out, "        if (global_panic_payload) {\n");
@@ -9928,7 +9930,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "}\n\n");
     buf_puts(out, "static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env, tur_result *out) {\n");
     buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;\n");
-    buf_puts(out, "    if (setjmp(__node.buf) == 0) {\n");
+    buf_puts(out, "    if (TUR_SETJMP(__node.buf) == 0) {\n");
     buf_puts(out, "        thunk(env, out);\n");
     buf_puts(out, "        tur_handler_chain = __node.parent;\n");
     buf_puts(out, "        if (global_panic_payload) {\n");
@@ -10208,7 +10210,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (shared || cps_uses_delimited) {
         buf_puts(out, "/* base-shift escape-reset context (setjmp/longjmp abort) */\n");
         buf_puts(out, "typedef struct tur_shift_reset_ctx {\n");
-        buf_puts(out, "    jmp_buf buf;\n");
+        buf_puts(out, "    tur_jmp_buf buf;\n");
         buf_puts(out, "    int64_t result;  /* f(operand), set by an abortive shift before longjmp */\n");
         buf_puts(out, "    struct tur_shift_reset_ctx *prev; /* nested resets */\n");
         buf_puts(out, "} tur_shift_reset_ctx;\n\n");
@@ -10274,7 +10276,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    void *task_group; /* Parent TaskGroup for cancellation */\n");
     buf_puts(out, "    bool cancelled; /* Set when parent TaskGroup is cancelled */\n");
     /* Phase TG-004-1 PR: Per-fiber panic handling for auto-cancel propagation */
-    buf_puts(out, "    jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */\n");
+    buf_puts(out, "    tur_jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */\n");
     buf_puts(out, "    bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */\n");
     buf_puts(out, "};\n\n");
     emit_rt_tls(out, shared, "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;\n", "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber",
@@ -10306,7 +10308,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* owns_value = 0: panic-with carries a caller-supplied / scalar / borrowed
      * value the payload must never free (catch-unwind-panic-payload-leaks). */
     buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);\n");
-    buf_puts(out, "        longjmp(tur_current_fiber->panic_jmpbuf, 1);\n");
+    buf_puts(out, "        TUR_LONGJMP(tur_current_fiber->panic_jmpbuf);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    fprintf(stderr, \"panic at %s:%d\\n\", file ? file : \"(unknown)\", line);\n");
     /* payload is opaque -- see the double-panic path above.  Do not free it:
@@ -10341,8 +10343,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     emit_rt_tls(out, shared, "TUR_THREAD_LOCAL TurThreadState *tur_current_thread_state = NULL;\n", "TUR_THREAD_LOCAL TurThreadState *tur_current_thread_state",
                 "tur_current_thread_state", "void **", "tur_tls_current_thread_state_ptr", "TurThreadState **");
     buf_puts(out, "/* TC0: thread-local setjmp buffer for with-cancel-guard (0 = not active) */\n");
-    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL jmp_buf tur_cancel_jmpbuf;\n", "TUR_THREAD_LOCAL jmp_buf tur_cancel_jmpbuf",
-                "tur_cancel_jmpbuf", "jmp_buf *", "tur_tls_cancel_jmpbuf_ptr", NULL);
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL tur_jmp_buf tur_cancel_jmpbuf;\n", "TUR_THREAD_LOCAL tur_jmp_buf tur_cancel_jmpbuf",
+                "tur_cancel_jmpbuf", "tur_jmp_buf *", "tur_tls_cancel_jmpbuf_ptr", NULL);
     emit_rt_tls(out, shared, "TUR_THREAD_LOCAL int tur_cancel_jmpbuf_valid = 0;\n\n", "TUR_THREAD_LOCAL int tur_cancel_jmpbuf_valid",
                 "tur_cancel_jmpbuf_valid", "int *", "tur_tls_cancel_jmpbuf_valid_ptr", NULL);
     buf_puts(out, "static void *tur_thread_trampoline(void *raw) {\n");
@@ -10361,7 +10363,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "static void tur_thread_do_cancel(void) {\n");
     buf_puts(out, "    if (tur_cancel_jmpbuf_valid) {\n");
     buf_puts(out, "        tur_cancel_jmpbuf_valid = 0;\n");
-    buf_puts(out, "        longjmp(tur_cancel_jmpbuf, 1);\n");
+    buf_puts(out, "        TUR_LONGJMP(tur_cancel_jmpbuf);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    /* No cancel guard -- exit the thread cleanly without panicking. */\n");
     buf_puts(out, "    pthread_exit(NULL);\n");
@@ -10378,7 +10380,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        tur_handler_node *prev_chain = tur_handler_chain;\n");
     buf_puts(out, "        tur_handler_chain = NULL;\n");
     buf_puts(out, "        /* Set up per-fiber panic handler */\n");
-    buf_puts(out, "        if (setjmp(f->panic_jmpbuf) == 0) {\n");
+    buf_puts(out, "        if (TUR_SETJMP(f->panic_jmpbuf) == 0) {\n");
     buf_puts(out, "            f->panic_jmpbuf_valid = 1;\n");
     buf_puts(out, "            tur_current_fiber = f;\n");
     buf_puts(out, "            f->entry_fn();\n");
@@ -10475,7 +10477,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * and restore them when control returns, so the fiber's driver never leaks
      * out.  The trampoline path declares g_dk_driver / g_dk_meta_n and is the
      * only path since cps-tramp-resume graduated (2026-07-19). */
-    buf_puts(out, "    tur_dk_jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
+    buf_puts(out, "    tur_jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
     buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
     buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
     buf_puts(out, "    tur_current_fiber = _prev;\n");
