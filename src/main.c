@@ -10456,6 +10456,16 @@ int main(int argc, char **argv) {
         const char *__sr3 = getenv("TUR_OPTION_NICHE");
         if (__sr3 && __sr3[0] == '0') g_opt_option_niche = false;
         else if (__sr3 && __sr3[0] == '1') g_opt_option_niche = true;
+        /* RM3 regions are ON by default since graduation out of
+         * --enable=regions (2026-09-05).  `=0` restores plain malloc at the
+         * routed ctor sites, no bracket around bt-scope / with-region, and no
+         * atexit shutdown -- the pre-graduation default build -- for bisection
+         * and for tests/run-regions-seam.sh, which keeps that path green.
+         * Independent of the SR2/SR3 hatches above: a region is a lifetime
+         * over the arena, not a representation, so it composes with either. */
+        const char *__rgn = getenv("TUR_REGIONS");
+        if (__rgn && __rgn[0] == '0') g_opt_regions = false;
+        else if (__rgn && __rgn[0] == '1') g_opt_regions = true;
     }
 
 #ifdef _WIN32

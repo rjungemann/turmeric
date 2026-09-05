@@ -17,7 +17,7 @@
 ;;      generation crosses the boundary and the pop REWINDS (the static walk
 ;;      clears it).  The spine built inside is reclaimed; the sum survives.
 ;;
-;; With `--enable=regions` off, `with-region` is a plain identity call and the
+;; With regions off (`TUR_REGIONS=0`, the bisection hatch), `with-region` is a plain identity call and the
 ;; numbers are identical -- which is what the regions seam checks.
 
 (defdata Link :heap (Link [v : int nxt : int]))

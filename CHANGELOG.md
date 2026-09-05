@@ -68,6 +68,30 @@ All notable changes to Turmeric are documented here.
   the mutual-recursion result refused; a kind-based accept that was reverted
   for a use-after-free is not reintroduced.
 
+### Changed
+
+- **Regions are on by default; `--enable=regions` graduated.** Every
+  `bt-scope` and `with-region` bracket now opens an arena generation, and a
+  `:heap` ADT node allocated inside it is reclaimed in one rewind when the
+  bracket exits -- provided the compiler can prove the returned value reaches
+  nothing allocated inside (a static walk over the result type plus a runtime
+  escape check; a shape neither can clear retires the generation, which is the
+  old behaviour exactly). The regions plan held this at prototype on one
+  blocker, the boundary form; with `with-region` landed, the static walk
+  widened across four pinned batches, and the three R4 residues closed, the
+  four graduation requirements are met and the default flipped. Measured on
+  the solver workload the phase was built for: the whole per-link spine goes
+  to zero leaked at exit and peak RSS drops 47%; on the pinning fixtures, live
+  blocks at exit 908 -> 0. `--enable=regions` is accepted as a `TUR-W0063`
+  no-op for one minor line; `TUR_REGIONS=0` restores the pre-graduation build
+  (plain malloc, no brackets, no shutdown) for bisection, and
+  `tests/run-regions-seam.sh` is inverted onto that off path with a canary
+  that the hatch bites, per the flags guide. The flip regenerates all 148
+  codegen snapshots (region externs, routed ctor allocations, the atexit
+  shutdown, and a bracket at each boundary now appear in every program). Plan:
+  `docs/upcoming/regions-plan.md`; the GC guide documents the mode beside RC
+  and the cycle collector.
+
 ### Fixed
 
 - **The trail's `#fx{Bt}` effect row is now checked; it used to resolve to

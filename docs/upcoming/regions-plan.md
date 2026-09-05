@@ -6,8 +6,14 @@ description: A scope form over the arena that already ships, so a persistent str
 
 # Regions (RM3)
 
-**Status: PROTOTYPE, R1-R5 landed 2026-09-04.** Gated behind `--enable=regions`,
-and staying gated -- see R5 for the decision and for what graduation needs.
+**Status: GRADUATED 2026-09-05 -- ON BY DEFAULT.** `--enable=regions` is
+retired (a lingering enable is a `TUR-W0063` no-op for one minor line);
+`TUR_REGIONS=0` is the bisection hatch that restores the pre-graduation build,
+and `tests/run-regions-seam.sh` -- inverted at graduation, per the flags guide
+-- keeps that off path green. R1-R5 landed 2026-09-04 as a prototype; R5 held
+it there on one blocker, and the four graduation requirements below were then
+closed in order (1, 2, 3 by work; 4 by the flip itself). The R5 decision text
+is kept as the record of why it waited.
 
 RM3 of [reclamation-plan.md](reclamation-plan.md). Read that plan's RM2
 section first -- this phase exists because RM2's question has no answer at RM2.
@@ -500,23 +506,37 @@ per the standing rule it would not block a release if there were.
      `region-shutdown-order` pins the placement (after the guard, before
      `__module_defers_init`, not in `main`), the gating, and the value: the
      defer prints `42` from the retired generation before shutdown frees it.
-4. **Soak the existing `bt-scope` callers.** `dfs-solve` and the sx2 fixtures
+4. ~~**Soak the existing `bt-scope` callers.** `dfs-solve` and the sx2 fixtures
    become region users the moment this is on by default; the seam test covers
-   twelve fixtures today, which is a floor, not a soak.
+   twelve fixtures today, which is a floor, not a soak.~~ **This is the flip
+   (2026-09-05).** The soak is not a prerequisite the flip waits on; it is
+   what the flip *is*: from this commit every `bt-scope` and `with-region`
+   caller in the tree -- `dfs-solve`, the sx2 fixtures, every spine-carrying
+   program -- runs with a region, on every `bash tests/run.sh`, on every CI
+   run. What the seam covers is now the OTHER path (the thirteen-fixture
+   population under `TUR_REGIONS=0`, plus a canary that the hatch bites), so
+   a bisection stays a one-variable switch. Full suite green at the flip with
+   all 148 codegen snapshots regenerated (every program now carries the
+   region externs, the routed ctor allocations, the atexit shutdown, and a
+   bracket at each boundary).
 
 ## What this does NOT do
 
 - It does not free a value whose lifetime is not a scope. Those stay RM2's,
   and RM2 gets smaller for it -- what remains is "spines that escape their
   region", which is also the set R3's walk has to identify anyway.
-- It does not change any default. The flag is off; `logic.tur` and every other
-  program allocate exactly as they do today until R4 opts a call site in.
+- ~~It does not change any default. The flag is off; `logic.tur` and every other
+  program allocate exactly as they do today until R4 opts a call site in.~~
+  **Superseded 2026-09-05: it is the default.** `TUR_REGIONS=0` restores the
+  old allocation exactly.
 - It is not region *inference*. Every region is declared.
 
 ## Guides to update when this graduates
 
-- `docs/guides/gc-guide.md` -- it documents the arena and the rc/cycle paths;
-  a third reclamation mode belongs beside them.
+- ~~`docs/guides/gc-guide.md` -- it documents the arena and the rc/cycle paths;
+  a third reclamation mode belongs beside them.~~ **Done 2026-09-05** -- a
+  "Region-allocated values" entry beside the arena paragraph, with the two
+  locks, the two brackets and the hatch.
 - ~~`docs/guides/experimental-flags-guide.md` -- the row while it is gated.~~
   **Struck 2026-09-05: there is no such row to add.** That guide deliberately
   does not restate the experiment list -- "the registry is the single source

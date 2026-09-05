@@ -36,10 +36,10 @@ cat > "$TMP/in.tur" <<'EOF'
 (defn main [] : int (println (two 4)) 0)   ;; 10 + 36 = 46
 EOF
 
-"$TUR" --enable=regions emit-c "$TMP/in.tur" 2>/dev/null > "$TMP/out.c"
+"$TUR" emit-c "$TMP/in.tur" 2>/dev/null > "$TMP/out.c"
 echo "caller cps-lowered: $(grep -c 'two__cps' "$TMP/out.c" | awk '{print ($1>0)?"yes":"no"}')"
 echo "push=$(grep -v '^extern' "$TMP/out.c" | grep -c 'tur_region_push()') rewind=$(grep -v '^extern' "$TMP/out.c" | grep -c 'tur_region_pop_checked(') retire=$(grep -v '^extern' "$TMP/out.c" | grep -c 'tur_region_pop(')"
-echo "letcall to with-region: $("$TUR" --enable=regions --dump-cps check "$TMP/in.tur" 2>&1 | grep -ci 'letcall.*with-region')"
-echo "regions off: $("$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
-echo "regions on:  $("$TUR" --enable=regions run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
+echo "letcall to with-region: $("$TUR" --dump-cps check "$TMP/in.tur" 2>&1 | grep -ci 'letcall.*with-region')"
+echo "regions off: $(TUR_REGIONS=0 "$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
+echo "regions on:  $("$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
 exit 0

@@ -18,14 +18,14 @@
 ;;;
 ;;; The region boundary is a CODEGEN decision keyed on the call to
 ;;; `with-region`, not on anything this body does -- the body is a bare
-;;; forwarder. Under `--enable=regions` the emitter opens a generation around
-;;; the call and rewinds (or retires) it after; without the flag `with-region`
-;;; is an ordinary identity call and the whole file is inert, so autoloading it
-;;; costs nothing a program does not ask for.
+;;; forwarder. The emitter opens a generation around the call and rewinds (or
+;;; retires) it after -- on by default since 2026-09-05; under `TUR_REGIONS=0`
+;;; (the bisection hatch) `with-region` is an ordinary identity call and the
+;;; whole file is inert.
 ;;;
 ;;; See docs/upcoming/regions-plan.md and docs/guides/gc-guide.md.
 ;;;
-;;; Since: RM3 (regions prototype, `--enable=regions`)
+;;; Since: RM3 (prototype 2026-09-04; on by default since 2026-09-05)
 ;; Declared-lifetime region bracket (reclamation-plan RM3 / regions-plan).
 
 ;;; with-region -- run `body` inside an arena generation and reclaim it after.

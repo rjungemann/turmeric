@@ -41,8 +41,8 @@ cat > "$TMP/in.tur" <<'EOF'
   0)
 EOF
 
-"$TUR" --enable=regions emit-c "$TMP/in.tur" 2>/dev/null > "$TMP/on.c"
-"$TUR" emit-c "$TMP/in.tur" 2>/dev/null > "$TMP/off.c"
+"$TUR" emit-c "$TMP/in.tur" 2>/dev/null > "$TMP/on.c"
+TUR_REGIONS=0 "$TUR" emit-c "$TMP/in.tur" 2>/dev/null > "$TMP/off.c"
 
 # 1. placement: line numbers inside __tur_static_init, in order
 read -r l_done l_atexit l_defers < <(awk '
@@ -62,6 +62,6 @@ echo "in main: $in_main"
 # 2. gating
 echo "flag-off references: $(grep -c 'tur_region_shutdown' "$TMP/off.c")"
 # 3. the value, both arms
-echo "regions off: $("$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
-echo "regions on:  $("$TUR" --enable=regions run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
+echo "regions off: $(TUR_REGIONS=0 "$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
+echo "regions on:  $("$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
 exit 0

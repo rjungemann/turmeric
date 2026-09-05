@@ -172,6 +172,28 @@ interpreter's value pool, and per-pass working memory all live in bump
 arenas (`arena.c`) that are freed en masse at the end of their scope.
 Individual values inside an arena are never freed one at a time.
 
+**Region-allocated values.** The third reclamation mode, on by default since
+2026-09-05 (see the
+[regions plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/regions-plan.md)).
+A `:heap` `defdata` node -- a list cell, a tree node, the per-link box of a
+recursive sum -- has no unique owner by construction, so neither RC nor a
+scope-exit drop can free it. A **region** does not ask who owns the node; it
+asks *when the whole generation dies*. Two brackets declare that: `with-region`
+(the lifetime only) and `bt-scope` (a trail level *and* the lifetime). Every
+such node allocated while a bracket is open lands in an arena generation, and
+when the bracket exits the generation is **rewound** in one O(slabs) step --
+*provided* the compiler can prove the returned value does not transitively
+reach anything allocated inside. That proof is two locks: a static walk over
+the result type (scalars, `cstr`, non-heap ADTs of those, a `Vec` of scalars
+pass; a node, a pointer, a closure, a recursive spine refuse) and a runtime
+check that the escaping pointer itself is not region memory. A shape neither
+lock can clear **retires** the generation instead of rewinding it -- byte-for-
+byte the pre-region behaviour, so a missed shape costs a saving, never
+correctness. Retired and pooled generations are freed at exit by
+`tur_region_shutdown`, registered ahead of every module `defer` so a defer can
+still read a retired value. `TUR_REGIONS=0` turns the whole mechanism off for
+bisection; `tests/run-regions-seam.sh` keeps that path green.
+
 **Non-`rc` heap values.** A `defstruct` used by value or a raw `:ptr<T>`
 returned from inline C is *not* on the RC path. If your inline-C code
 `malloc`s, your inline-C code frees.

@@ -103,7 +103,7 @@ cat > "$TMP/in.tur" <<'EOF'
   0)
 EOF
 
-"$TUR" --enable=regions emit-c "$TMP/in.tur" 2>/dev/null > "$TMP/out.c"
+"$TUR" emit-c "$TMP/in.tur" 2>/dev/null > "$TMP/out.c"
 
 if grep -q 'tur_region_push()' "$TMP/out.c"; then
     echo "bracket: opened"
@@ -113,6 +113,6 @@ fi
 retire=$(grep -v '^extern' "$TMP/out.c" | grep -c 'tur_region_pop(')
 rewind=$(grep -v '^extern' "$TMP/out.c" | grep -c 'tur_region_pop_checked(')
 echo "retire=$retire rewind=$rewind"
-echo "regions off: $("$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
-echo "regions on:  $("$TUR" --enable=regions run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
+echo "regions off: $(TUR_REGIONS=0 "$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
+echo "regions on:  $("$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
 exit 0

@@ -253,9 +253,9 @@ on the mutators for a month checking as `#fx{}` before the declaration existed.
 
 ## `bt-scope` is also a region, and `with-region` is only a region
 
-Under `--enable=regions` (a prototype; see the
-[regions plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/regions-plan.md)),
-`bt-scope` does a second thing besides pushing a trail level: it opens an
+On by default since 2026-09-05 (see the
+[regions plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/regions-plan.md);
+`TUR_REGIONS=0` turns it off for bisection), `bt-scope` does a second thing besides pushing a trail level: it opens an
 arena **generation**, and everything allocated inside that the returned value
 cannot reach is reclaimed in one rewind when the bracket exits. For a solver
 that is exactly right -- one query is one generation -- and it is why
@@ -277,7 +277,7 @@ to reach for a search primitive to bound a lifetime. And the halves are the
 trail-only corner: they are never a region boundary, so a caller that wants
 undo without paying the escape check uses them.
 
-Without the flag, `with-region` is an identity call and `bt-scope` is just the
+With `TUR_REGIONS=0`, `with-region` is an identity call and `bt-scope` is just the
 trail bracket described above; neither allocates any differently.
 
 ## Under `--interpret`

@@ -318,7 +318,10 @@ extern bool g_opt_option_niche;
  * safety rule is that a region which cannot PROVE every escaping value
  * relocatable does not rewind at all, so a missed shape costs a saving rather
  * than correctness -- the same discipline turi's value-pool promotion walk
- * already runs on. */
+ * already runs on.
+ *
+ * GRADUATED 2026-09-05: default true.  TUR_REGIONS=0 (main.c) is the bisection
+ * hatch; tests/run-regions-seam.sh keeps that off path green. */
 extern bool g_opt_regions;
 /* SR2a: a MULTI-VARIANT parametric sum monomorph -- `(Opt2 int)`, `(PRes
  * cstr)`, and above all `(Option int)` / `(Result int cstr)` -- flows by value
