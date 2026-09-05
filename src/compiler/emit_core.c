@@ -5228,6 +5228,12 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                 return src_str;
             }
         }
+        /* Asked BEFORE src_str is freed below, and only for the unboxing
+         * direction: the carrier box the mark names is the thing this crossing
+         * consumes.  See the owning branch for what the mark means. */
+        bool owns_niche_box = src_ck == CK_CARRIER && sink_ck == CK_CONCRETE &&
+                              emit_str_is_bare_ident(src_str) &&
+                              emit_owned_carrier_is(src_str);
         char *ntmp = fresh_tmp(ctx);
         indent_buf(body, ctx->indent);
         if (src_ck == CK_CONCRETE && sink_ck == CK_CARRIER) {
@@ -5243,8 +5249,41 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
              * the niche its 0 payload -- silently turning a value `some?`
              * calls true into `(none)`.  Same declaration the niche Some ctor
              * enforces, at the other door. */
-            buf_printf(&out, "(%s ? (%s)(intptr_t)tur_opt_value_checked(%s) : (%s)0)",
-                       ntmp, cname, ntmp, cname);
+            if (owns_niche_box) {
+                /* inline-c-option-carrier-box-leaks, the NICHE half.  This arm
+                 * had the consumption its two siblings already carry -- the
+                 * by-value readback below, and the CE_WORD Vec-slot store just
+                 * above -- and it is the arm an inline-C `: (Option String)`
+                 * producer actually reaches, because a niche Option is exactly
+                 * an Option whose payload is a pointer.
+                 *
+                 * `tur_opt_value_checked` COPIES the payload word out of the
+                 * box, so once the copy is materialized the box is dead; the
+                 * expression form in the else branch has nowhere to put the
+                 * free, which is why it leaked 16 bytes per call.  Read into a
+                 * temp first, THEN free -- the read is a load out of the
+                 * allocation being freed and must not be reordered after it.
+                 *
+                 * The null test is the same one the ternary already needed: a
+                 * niche None is the null carrier (SR3 slice A), allocates
+                 * nothing, and must not be freed. */
+                char *vtmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body,
+                           "%s %s = (%s ? (%s)(intptr_t)tur_opt_value_checked(%s) : (%s)0);\n",
+                           cname, vtmp, ntmp, cname, ntmp, cname);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "if (%s) free((void *)(intptr_t)(%s));\n",
+                           ntmp, ntmp);
+                buf_printf(&out, "%s", vtmp);
+                /* Consume the mark: a temp bridged twice must not be freed
+                 * twice -- the same discipline as the by-value readback. */
+                emit_owned_carrier_clear(src_str);
+                free(vtmp);
+            } else {
+                buf_printf(&out, "(%s ? (%s)(intptr_t)tur_opt_value_checked(%s) : (%s)0)",
+                           ntmp, cname, ntmp, cname);
+            }
         }
         free(ntmp);
         free(src_str);

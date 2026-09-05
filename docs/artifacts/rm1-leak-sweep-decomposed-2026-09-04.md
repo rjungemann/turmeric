@@ -177,3 +177,23 @@ Closing it means either an all-instances-agree stamp at elab time or a per-spec
 "returns a fresh box" pass that runs before callers are emitted -- both real
 work, both with double-free as the failure mode, for ~48 bytes across three
 fixtures that monomorphization deletes outright.  Not taken up.
+
+### One row WAS a compiler leak: the niche readback arm
+
+The table's two `option-niche-*` rows (183 + 38 B) are filed under
+`tur_string_from_bytes` and `tur_box_some` without a category.  48 B of that is
+neither String ownership nor RM1 residue: `emit_carrier_bridge`'s **niche** arm
+copied an inline-C producer's payload word out with `tur_opt_value_checked` and
+never freed the box, while the by-value readback below it and the CE_WORD
+Vec-slot store above it both did.  Fixed, pinned by
+`tests/fixtures/option-niche-inline-c-box-freed` (leak-checked, verified 32 -> 0 B
+against a pre-fix binary), written up in
+[inline-c-option-carrier-box-leaks.md](../archive/inline-c-option-carrier-box-leaks.md).
+
+That is the third of fifteen rows to change category on a second reading, and
+the pattern is worth naming: **this sweep's per-fixture byte totals are a
+starting point, not an attribution.**  Two rows were fixtures leaking their own
+rig, one was a compiler bug filed under a runtime allocator's name.  Read the
+frames, not the totals.
+
+**Sweep total: 1790 -> 1678 B** (zipper scaffold 64, niche boxes 48).

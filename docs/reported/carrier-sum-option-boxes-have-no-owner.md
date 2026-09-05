@@ -122,7 +122,21 @@ all-instances-agree stamp or a per-spec pre-pass, with double-free as the
 failure mode, for ~48 B that monomorphization deletes outright.  Deliberately
 not taken up.
 
-**The largest remaining category is not this report's.** Of the 1726 B left,
+### A third row was a real compiler leak, and is fixed
+
+Chasing the same sweep found one entry that was neither scaffolding nor erased
+residue: the **niche** arm of `emit_carrier_bridge` consumed an inline-C
+producer's carrier box without freeing it, while the by-value readback beside it
+and the CE_WORD Vec-slot store above it both did. 16 bytes per call, on the arm
+every inline-C `: (Option T-shaped-as-a-pointer)` producer reaches. Invisible to
+`bash tests/run.sh`, which compiles fixtures without sanitizers.
+
+Fixed, with `tests/fixtures/option-niche-inline-c-box-freed` (leak-checked, both
+readback positions, both Some and None paths) pinning it. Write-up appended to
+[inline-c-option-carrier-box-leaks.md](../archive/inline-c-option-carrier-box-leaks.md).
+`option-niche-crossings` 183 -> 151 B, `option-niche-string` 38 -> 22 B.
+
+**The largest remaining category is not this report's.** Of the 1678 B left,
 ~990 is the per-node recursive spine (`ctor_Cons_Cons__*`, `stdlib/re.tur`'s
 `RxCons` cells), which is RM2 -- and RM2's own assessment is that it gets
 unblocked by RM3 (regions), not by a better analysis.  RM1's own residue is
