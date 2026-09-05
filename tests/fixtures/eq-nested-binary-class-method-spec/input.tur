@@ -1,0 +1,94 @@
+;; eq-nested-binary-class-method-spec -- a binary class method dispatched from
+;; INSIDE another instance's specialization must resolve BOTH its parameters,
+;; not just the receiver.
+;;
+;; `Eq [Pair]`'s body is `(and (eq? (.fst x) (.fst y)) (eq? (.snd x) (.snd y)))`,
+;; so the inner `eq?` is minted from the nested-dispatch path.  That path forced
+;; only parameter 0 to the resolved receiver; every other parameter instantiated
+;; its DECLARED type through the element bindings, and the class variable is not
+;; an element tyvar, so it stayed the erased carrier.  One `Eq[Option]` spec came
+;; out as `(void *, int64_t)`: parameter x matched as a niche option (the payload
+;; pointer), parameter y as a tagged carrier box.  The second binder then handed
+;; `Eq[String]` an integer where it wants a pointer.
+;;
+;; `cc` reports that as -Wint-conversion, a WARNING, so it reached a running
+;; binary and segfaulted there.  run.sh already fails any fixture whose build
+;; stderr carries that warning -- this shape simply had no fixture, which is the
+;; whole reason it survived.  So the C-level guard is the primary assertion here
+;; and the printed answers are the secondary one.
+;;
+;; Group 2 is the SIBLING-SPEC case, and it was a second defect: two Pair
+;; monomorphs that share a first component and differ in the second made the
+;; `.snd` dispatch of one adopt the other's recorded clone, because the
+;; cross-spec fallback in the spec lookup keys on the source `Expr*` alone
+;; while a dict-dispatched call re-resolves its callee per monomorph.  The
+;; last line of that group varies ONLY the int, so it fails loudly if the two
+;; components' dispatches are ever crossed again.
+;;
+;; The `(Pair (Vec int) int)` group is the same defect where it did NOT crash:
+;; both representations are pointers to the same layout, so the mismatched spec
+;; warned and still answered correctly.  It is here because a fix that only
+;; addressed the crashing shape would leave it warning, and because it shows the
+;; defect was never niche-specific.
+(load "stdlib/string.tur")
+(load "stdlib/pair.tur")
+
+(defn main [] : int
+  (let [a (:: (some (string/from-cstr "aa")) (Option String))
+        b (:: (some (string/from-cstr "aa")) (Option String))   ;; equal text, own allocation
+        c (:: (some (string/from-cstr "bb")) (Option String))]
+
+    ;; 1. the SEGV shape: a niche option beside a plain int
+    (let [p1 (:: (pair a 1) (Pair (Option String) int))
+          p2 (:: (pair b 1) (Pair (Option String) int))
+          p3 (:: (pair c 1) (Pair (Option String) int))
+          p4 (:: (pair b 2) (Pair (Option String) int))]
+      (println (if (eq? p1 p2) "eq" "ne"))     ;; eq
+      (println (if (eq? p1 p3) "eq" "ne"))     ;; ne -- first component differs
+      (println (if (eq? p1 p4) "eq" "ne")))    ;; ne -- second component differs
+
+    ;; 2. two Pair monomorphs sharing a component, in ONE program
+    (let [s1 (:: (pair a 1) (Pair (Option String) int))
+          s2 (:: (pair b 1) (Pair (Option String) int))
+          s3 (:: (pair b 2) (Pair (Option String) int))
+          t1 (:: (pair a a) (Pair (Option String) (Option String)))
+          t2 (:: (pair b b) (Pair (Option String) (Option String)))
+          t3 (:: (pair a c) (Pair (Option String) (Option String)))]
+      (println (if (eq? s1 s2) "eq" "ne"))     ;; eq
+      (println (if (eq? t1 t2) "eq" "ne"))     ;; eq
+      (println (if (eq? t1 t3) "eq" "ne"))     ;; ne
+      (println (if (eq? s1 s3) "eq" "ne")))    ;; ne -- ONLY the int differs
+
+    ;; 3. nested one level further: Pair inside Pair
+    (let [n1 (:: (pair (:: (pair a 1) (Pair (Option String) int)) 2) (Pair (Pair (Option String) int) int))
+          n2 (:: (pair (:: (pair b 1) (Pair (Option String) int)) 2) (Pair (Pair (Option String) int) int))
+          n3 (:: (pair (:: (pair c 1) (Pair (Option String) int)) 2) (Pair (Pair (Option String) int) int))]
+      (println (if (eq? n1 n2) "eq" "ne"))     ;; eq
+      (println (if (eq? n1 n3) "eq" "ne")))    ;; ne
+
+    ;; 4. a Pair reached through a container's own Eq
+    (let [v (:: (vec-new) (Vec (Pair (Option String) int)))
+          w (:: (vec-new) (Vec (Pair (Option String) int)))
+          u (:: (vec-new) (Vec (Pair (Option String) int)))]
+      (vec-push! v (:: (pair a 1) (Pair (Option String) int)))
+      (vec-push! w (:: (pair b 1) (Pair (Option String) int)))
+      (vec-push! u (:: (pair c 1) (Pair (Option String) int)))
+      (println (if (eq? v w) "eq" "ne"))       ;; eq
+      (println (if (eq? v u) "eq" "ne")))      ;; ne
+    (vec-pair-check)
+    0))
+
+;; 5. the warning-only twin: both representations are pointers, so the
+;;    mismatched spec answered correctly and only -Wint-conversion showed it.
+(defn vec-pair-check [] : void
+  (let [va (:: (vec-new) (Vec int))
+        vb (:: (vec-new) (Vec int))
+        vc (:: (vec-new) (Vec int))]
+    (vec-push! va 1) (vec-push! va 2)
+    (vec-push! vb 1) (vec-push! vb 2)
+    (vec-push! vc 1) (vec-push! vc 9)
+    (let [p1 (:: (pair va 7) (Pair (Vec int) int))
+          p2 (:: (pair vb 7) (Pair (Vec int) int))
+          p3 (:: (pair vc 7) (Pair (Vec int) int))]
+      (println (if (eq? p1 p2) "eq" "ne"))
+      (println (if (eq? p1 p3) "eq" "ne")))))

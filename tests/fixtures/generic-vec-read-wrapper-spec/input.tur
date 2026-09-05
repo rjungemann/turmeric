@@ -1,0 +1,63 @@
+;; generic-vec-read-wrapper-spec -- a generic wrapper whose tail is a RAW
+;; container read, specialized to a BOXED by-value element.
+;;
+;;   (defn get-it [A] [v : (Vec A) i : int] : A (vec-get v i))
+;;
+;; `vec-get` hands back the slot WORD.  For a CE_BOX element that word is the
+;; element's heap-box pointer, so the spec's tail was an int64_t where its
+;; declared result is the element aggregate:
+;;
+;;   error: incompatible types when returning type 'int64_t'
+;;          but 'tur_adt_Option__Pt' was expected
+;;
+;; -- a hard cc error for a shape `tur check` accepts.  A direct
+;; `(:: (vec-get v 0) (Option Pt))` at a concrete site got the box readback
+;; from the ascription bridge; the spec's RETURN position had no counterpart.
+;; It routes through the same bridge now and emits the same NULL-guarded
+;; deref.
+;;
+;; Reading `.x` and `.y` rather than just `(some? ...)` is the point: a
+;; readback that misses the box entirely still answers "some" off the first
+;; word, so a shape-only assertion passes while the payload is garbage.
+;;
+;; The niche `(Option String)` case is the control.  Its element is CE_WORD --
+;; the slot word IS the value -- so it must NOT get the readback, and it
+;; worked before this fix for exactly that reason.  It is here so a change
+;; that widens the bridge to every element form fails loudly.
+(load "stdlib/string.tur")
+
+(defstruct Pt [x : int y : int])
+
+(defn get-it [A] [v : (Vec A) i : int] : A
+  (vec-get v i))
+
+(defn pop-it [A] [v : (Vec A)] : A
+  (vec-pop! v))
+
+(defn main [] : int
+  ;; CE_BOX: an Option wrapping a by-value struct
+  (let [v (:: (vec-new) (Vec (Option Pt)))]
+    (vec-push! v (some (make-struct Pt :x 7 :y 41)))
+    (vec-push! v (some (make-struct Pt :x 9 :y 43)))
+    (let [a (:: (get-it v 0) (Option Pt))]
+      (println (.x (unwrap a)))          ;; 7
+      (println (.y (unwrap a))))         ;; 41
+    (let [b (:: (pop-it v) (Option Pt))]
+      (println (.x (unwrap b)))          ;; 9  -- the read half of vec-pop!
+      (println (.y (unwrap b))))         ;; 43
+    (println (vec-len v)))               ;; 1
+  ;; CE_BOX: a bare by-value struct element, no Option wrapper
+  (let [p (:: (vec-new) (Vec Pt))]
+    (vec-push! p (make-struct Pt :x 3 :y 5))
+    (let [q (:: (get-it p 0) Pt)]
+      (println (.x q))                   ;; 3
+      (println (.y q))))                 ;; 5
+  ;; CE_WORD control: the niche element must stay a cast, not a readback
+  (let [s (:: (vec-new) (Vec (Option String)))]
+    (vec-push! s (some (string/from-cstr "hi")))
+    (println (string/to-cstr (unwrap (:: (get-it s 0) (Option String))))))
+  ;; CE_WORD control: a plain scalar element
+  (let [n (:: (vec-new) (Vec int))]
+    (vec-push! n 7)
+    (println (get-it n 0)))
+  0)

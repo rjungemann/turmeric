@@ -1,0 +1,357 @@
+---
+title: Regions (RM3) -- a declared lifetime for values with no unique owner
+category: Plan
+description: A scope form over the arena that already ships, so a persistent structure whose nodes have no unique owner is reclaimed by generation instead of per node. The answer RM2 needs and cannot supply itself; conservative by construction, so a shape the escape walk cannot prove means "no saving", never "use-after-reset".
+---
+
+# Regions (RM3)
+
+**Status: PROTOTYPE, R1-R5 landed 2026-09-04.** Gated behind `--enable=regions`,
+and staying gated -- see R5 for the decision and for what graduation needs.
+
+RM3 of [reclamation-plan.md](reclamation-plan.md). Read that plan's RM2
+section first -- this phase exists because RM2's question has no answer at RM2.
+
+## The problem this solves
+
+A persistent recursive structure has **no unique owner by construction**.
+`(SBind v t rest)` shares `rest` with every older chain, and backtracking
+depends on that sharing, so "is this the last reference to this node?" is a
+runtime fact. RM1's scope-exit rule cannot reach it (the nodes escape their
+constructor -- that is what a spine is), and per-node free needs ownership the
+emitter does not have.
+
+Measured cost of leaving it (2026-09-04):
+
+- Per-node spine boxes are **~990 of the 1790 bytes** remaining in the RM1
+  leak sweep, the largest real category once one fixture's hand-written test
+  scaffold is out of it.
+- It **grows**: a 64-link `Subst` chain leaks 64 boxes, and 100 rounds of an
+  8-link chain leak 800, not 8. A program that builds and discards recursive
+  values in a loop grows without bound.
+
+## The shape
+
+Do not ask who owns a node. Ask **when the whole generation dies.**
+
+For a solver that is one query. For a parser it is one parse. The boundary is
+not something this phase invents -- `bt-scope` (stdlib/trail.tur) already
+brackets exactly it, and the reclamation plan already said so: "not region
+inference; it is one `arena_reset()` at a call site that already exists."
+
+## What already ships, and is why this is the tractable phase
+
+- **`arena_reset`** (src/runtime/arena.c) -- O(slabs) rewind that keeps the
+  backing memory. In a Debug build it **poisons** the reclaimed bytes, so a
+  value that outlives its region crashes loudly under ASan instead of reading
+  stale-but-mapped data. That is this phase's worst risk, already
+  instrumented, before a line of it is written.
+- **`arena_owns`** -- the guard the reclamation plan requires on every free
+  path, so a pointer into region memory is never handed to `free()`.
+- **A precedent with the same shape, already running.** turi's value-pool
+  scratch/permanent split (`src/turi/eval.c`,
+  `turi-value-pool-scratch-promotion-plan`) does reset-with-promotion: walk
+  the escapees out, then rewind. Its conservatism rule is the one this phase
+  adopts verbatim:
+
+  > Correctness never depends on catching every shape: a missed shape means
+  > "this eval does not shrink", never "use-after-reset".
+
+  The code is the interpreter's and does not transfer; the discipline does,
+  and it has been load-bearing in this tree before.
+
+## The safety rule, stated once
+
+**A region that cannot prove every escaping value safe to relocate does not
+rewind.** No partial rewinds, no best-effort. That turns the failure mode from
+"silent wrong answer" into "no saving", which is the only trade that makes a
+lifetime mechanism shippable behind a flag.
+
+Corollaries:
+
+- Every free path consults `arena_owns` before `free()`.
+- The Debug poison stays on. It is the backstop that makes a missed shape
+  loud in the suite rather than latent in a user's program.
+- A fixture asserts the **value** read back across the boundary, never merely
+  that the program builds. That is the SR4 lesson and the reclamation plan
+  already says it applies here with more force.
+
+## Increments
+
+**R1 -- the gate and the plumbing (this commit).** `EXPERIMENTS[]` row with
+every descriptor field, `g_opt_regions`, `experiment_warn_if_used` at the
+elaboration entry point. No behaviour change: with the flag off nothing moves,
+and with it on the entry point warns and does nothing yet. Landing the gate
+first is what CLAUDE.md requires for a user-visible feature, and it means every
+later increment is measurable against a flag rather than a rebuild.
+
+**R2 -- an allocation generation. LANDED 2026-09-04.** Spine-node allocation
+routed to the innermost open generation, and to `malloc` outside one. No
+escape analysis and no rewind: pure plumbing.
+
+`tur_region_alloc_or_malloc` is the routing point, so the emitted constructor
+needs ONE call site rather than a branch -- it allocates by generation inside a
+region and exactly as it does today outside one. The consequence a caller must
+carry is that the result is not necessarily region memory, which is why
+`tur_region_owns` has to gate every free path rather than the allocation being
+assumed.
+
+**Two ctor emitters, and only finding one is how this nearly shipped wrong.**
+A `:heap` ADT's node is emitted by the base ctor (`emit_module.c`,
+`emit_adt_typedef_and_ctors`) AND by the monomorph ctor (`types.c`). The first
+pass changed only the base emitter, and `ctor_Cons_Cons__int` -- the ctor the
+leak sweep actually blames -- kept its plain `malloc`. Caught because the
+verification asked the emitted C rather than trusting the edit. This is
+verbatim the standing habit RM1 wrote down after the null-None mirror ("when a
+representation change lands in a ctor or temp emitter, grep for the other
+emitter before calling it done"), and it cost a round anyway; the two sites now
+cross-reference each other by name.
+
+`region.c` and `arena.c` also had to join `TURT_RUNTIME_SOURCES`, not just the
+compiler's own object list: an emitted program LINKS the routing helper, so a
+definition only the compiler can see is an undefined reference at the fixture's
+link step. With the flag off nothing references it and the linker never
+extracts the member -- the same reasoning the rc/gc members carry.
+
+*Validation:* `tests/run-regions-seam.sh` (ctest `tur_regions_seam`) asserts
+that `--enable=regions` with no region open changes nothing OBSERVABLE across
+six spine-carrying fixtures -- output equality, not that both arms build, since
+a routing bug returning uninitialised memory would still link. That is the
+property R2 is built to have and the one a later increment is most likely to
+break by accident.
+
+**R3 -- the escape check and the rewind. LANDED 2026-09-04 (runtime half).**
+
+`tur_region_note_escape(p)` records a value crossing out of the innermost
+generation; `tur_region_pop_checked(depth)` reclaims only when no noted escape
+pointed INTO it, and retires otherwise. It returns which it did, so a caller
+can report whether a region paid for itself.
+
+**Reclaiming rewinds rather than releases.** `arena_reset` keeps the slabs and
+the arena is pooled for the next push, so a per-query region inside a loop pays
+for its slabs once -- and the reset is what gets the Debug poison, which
+`arena_free` would not. The unit test pins the reuse (`second == first`), not
+just that reclaim happened.
+
+### What the runtime check does and does not establish
+
+This is the part to read before extending it. The check proves the escaping
+pointer ITSELF does not point into the generation. **It proves nothing about
+what that pointer transitively reaches** -- a malloc'd struct whose field
+points at a region node passes and would dangle after a rewind.
+
+So it is the SECOND lock. The first is static, and lands with R4 where there
+is a form to attach it to: a region reclaims only when its result TYPE cannot
+transitively reach a region-allocated node, which is a compile-time question
+with a decidable conservative answer. The runtime check then catches the direct
+case cheaply and makes a static mistake loud rather than silent. Neither alone
+is the safety argument, and neither should be removed on the strength of the
+other.
+
+Erring the right way is what the tests assert: a region-owned escape must BLOCK
+the rewind, and a heap escape must NOT -- one direction is unsafe, the other
+makes the check useless.
+
+### The backstop is verified, not asserted
+
+The claim this phase rests on is that a value outliving its generation crashes
+loudly rather than reading stale-but-mapped data. Checked directly: a canary
+that reads reclaimed region memory reports
+
+```
+ERROR: AddressSanitizer: use-after-poison on address 0x531000000818
+READ of size 1 ... #0 in main canary.c:10
+```
+
+`tests/check-region-poison.sh` (ctest `tur_region_poison`) is that canary, kept
+because a backstop that silently stops firing -- an ASan flag dropped from the
+Debug build, `TUR_DEBUG_ARENA_POISON` turned off, `arena_reset` changed to skip
+the poison -- looks exactly like a program with no stragglers. Same reasoning
+as `check-cc-warn-ratchet.sh`, and the same failure it was written for.
+
+**R4 -- wire `bt-scope`. LANDED 2026-09-04.** Not a new surface form: the
+solver's existing bracket became the region boundary, so a caller opts in by
+using the bracket it would use anyway. `emit_value` opens a generation around a
+call to `bt-scope` and closes it after the call's hoist temp, and the CPS
+emitter's `CT_TAILCALL` cps->direct arm does the same.
+
+**Two emit paths, and the second was found by measuring.** A `bt-scope` inside a
+CPS-lowered function never reaches `emit_value`, so the direct-path hook alone
+left the NATURAL spelling -- `(defn one-round [n] (bt-scope (fn [] ...)))` --
+with no region at all: the fixture read 909 live blocks with the flag on and 909
+with it off. Both sites share one predicate pair
+(`emit_binding_is_region_scope` / `emit_region_scope_reclaims`) rather than two
+copies of the static walk. The CPS `CT_LETCALL` arm deliberately has NO copy: the
+bracket was probed in tail position, as an arithmetic operand, and bound twice in
+a `let`, and every one lowered to a tailcall, so a transcription there would be
+untested safety code -- worse than a missed saving, which is all it would cost.
+
+### The static lock, which is the half R3 could not have
+
+`region_type_reaches_node` (emit_expr.c) walks the call's RESULT type and
+refuses unless it can prove the type cannot transitively reach a
+region-allocated node. Scalars and `cstr` pass; a `:heap` ADT fails on sight; a
+non-heap ADT is walked through its type arguments and every constructor field,
+with a **self-recursive field's NULL `full_type` read as "reaches"** -- which is
+exactly the spine, so a recursive result is refused. Pointers, refs, closures,
+structs, containers and type variables are refused outright: R4 needs none of
+them to say no, and refusing costs a saving rather than correctness.
+
+An unproven result emits `tur_region_pop` (retire), which is byte-for-byte what
+a flag-off build does.
+
+### Both locks are load-bearing, and that was checked rather than argued
+
+R3's header claims the runtime note is a second lock, not decoration. R4 has the
+case that proves it: a carrier-ERASED `:heap` pointer is spelled `:int`, so the
+static walk sees a scalar and clears the rewind. Only
+`tur_region_note_escape` catches it. Deleting the note from
+`tests/fixtures/region-scope-escape-refused`'s emitted C turns it into
+
+```
+ERROR: AddressSanitizer: use-after-poison ... READ of size 8 ... #0 in chain_hysum
+```
+
+so the fixture is a live test of the lock and not a shape that happens to work.
+
+### R2's "spine-node allocation is routed" did not cover the workload
+
+The single most valuable thing R4 did was measure the saving instead of
+re-reading the claim. Two allocation sites had to be found by looking at emitted
+C and at valgrind block counts:
+
+- **A THIRD ctor emitter.** `emit_program` emits base ctors at its own site
+  (emit_module.c, near the SR3 slice-A note that records this exact miss one
+  representation change earlier), so a NON-parametric `:heap` ADT -- `(defdata
+  Link :heap ...)`, the plainest spine there is -- still called `malloc` after
+  R2. Symptom: valgrind reported 913 live blocks with the flag on against 909
+  with it off. The region was pushed, popped, and never allocated into.
+- **The SR4 recursive-field box, which is not a ctor at all.** `Subst` is
+  `:copy`, not `:heap`, so its per-link box is the `tur_adt_Subst *__t =
+  malloc(...)` that emit_expr.c writes when a by-value aggregate flows into a
+  recursive constructor field. That is the allocation the RM1 leak sweep
+  actually blames, and none of the three ctor emitters reach it. Until it was
+  routed, R4 on `logic.tur` saved nothing at all.
+
+Four allocation sites now, then, and they do not resemble each other. The habit
+this keeps re-teaching is not "grep for the other emitter" -- that was already
+written down twice and still missed both of these. It is: **a routing change is
+verified by measuring the saving, never by reading the diff.**
+
+### The free side had to move with it
+
+From R2 onward a node allocated inside a region is arena memory while the same
+emitted drop glue still ended in `free(ptr)`. That is an allocator mismatch --
+glibc aborts -- not a leak. `tur_region_free` (free unless `tur_region_owns`) is
+the mirror of `tur_region_alloc_or_malloc`, spelled by `region_free_fn()` at the
+node free paths and resolving to plain `free` in a default build.
+
+### What it is worth
+
+`benchmarks/bench-regions-subst.tur`, same source both arms, flag as the only
+variable (full numbers in `benchmarks/regions-subst-results.md`):
+
+| | flag off | flag on |
+|---|---|---|
+| leaked at exit | 2,668,800 B in 55,600 blocks | **0** |
+| allocations | 82,785 | 27,190 |
+| ns/op, 2 <= n <= 32 | -- | **0.77-0.92x** |
+| ns/op, n >= 64 | -- | ~parity |
+| peak RSS | 7,340 kB | **3,892 kB** |
+
+Checksums identical in every row, which is the column that would catch a rewind
+of something still live.
+
+**The peak-RSS row was reported backwards once.** An earlier revision of this
+plan and of the results doc said footprint went UP (2,076 -> 2,360 kB) and told
+R5 to weigh that. It was a measurement artifact: a shell poller reading `VmHWM`
+every 50 ms from a program that runs in 21 ms, which returned 240, 1584, 2424,
+2484 and 2500 kB for the same binary on repeat. `wait4`'s `ru_maxrss` gives the
+kernel's own high-water mark, is bit-stable across five runs of each arm, and
+says the flag CUTS peak footprint by 47%. The lesson is the cheap one: a spread
+that wide is the measurement failing, and it was visible before the number was
+believed.
+
+### Known gaps R5 has to price
+
+- ~~**A `:void` bracket is not wrapped at all.**~~ **Filed here in error and
+  withdrawn.** `emit_value` does skip a TY_NIL/TY_NEVER call -- there is no
+  hoist temp and so no statement seam -- but that guard never fires for this
+  callee: `bt-scope` emits as `int64_t bt_hyscope(int64_t)`, the erased carrier,
+  so `(bt-scope (fn [] (println ...)))` types as a word and IS bracketed on both
+  paths. Checked, after writing it down as a cost without checking.
+  `tests/fixtures/region-scope-void-body` pins it so the claim cannot be
+  re-derived. The guard stays as a guard.
+- **The pooled slab is never returned.** 64 KiB stays reachable at exit because
+  no emitted program calls `tur_region_shutdown`. O(1), reported as reachable
+  rather than lost, and worth closing before graduation.
+- **Argument-position allocation lands in the generation**, because the push has
+  to precede the argument emissions -- the call text embeds their temps. Sound
+  for this form's thunk; the shapes it is not sound for are the transitive ones
+  the static walk already refuses.
+- **The CPS `CT_LETCALL` arm carries no bracket** (see above). Probing did not
+  reach it with a `bt-scope` callee; if a shape does, it is a missed saving.
+
+The report R4 filed against a `bt-scope` in a non-main defn is fixed and
+archived (`docs/archive/cps-direct-bt-scope-closure-temp-undeclared.md`); both
+fixtures and the benchmark are on the natural spelling now.
+
+**R5 -- decide. DECIDED 2026-09-04: keep it, gated, at `prototype`.**
+
+Shelving was a real outcome and R4 retired the reason it was most likely: the
+solver's region DOES rewind, takes the whole per-link spine with it (2,668,800
+leaked bytes to zero), and cuts peak RSS 47% on the workload RM0(b) named. So
+the phase is not shelved.
+
+Nor is it graduated, and the reason is a SURFACE question rather than any of the
+measurements:
+
+> **`bt-scope` is the trail bracket, and a region is not a trail level.**
+
+R4 chose it because the reclamation plan did, and the choice is right for a
+solver: one query is one generation. But it conflates two things a user might
+want separately. A caller who wants a region and no trail level has no spelling;
+a caller who wants a trail level and no region -- a `bt-scope` around code whose
+allocations must outlive it -- gets a region anyway and pays the escape check to
+find out it cannot rewind. Graduating would make that second case everyone's
+default, silently, behind a form they wrote for backtracking. `prototype`
+(TUR-W0060, "breaking changes likely") is the accurate label while the boundary
+form is still the wrong shape, and promoting to `beta` would advertise a frozen
+surface plus a graduation date this does not have.
+
+`expires_at` stays 0.47.0 against a 0.43.0 tree -- no pressure either way, and
+per the standing rule it would not block a release if there were.
+
+### What graduation requires, in the order that matters
+
+1. **A boundary form of its own.** Either a `with-region` bracket that means
+   only the lifetime, or an explicit statement that `bt-scope` means both and a
+   documented way to opt one out. This is the blocker; everything below is
+   ordinary work.
+2. **Widen the static walk deliberately, with a fixture per shape admitted.**
+   It accepts scalars, `cstr`, and non-heap ADTs whose every field it can walk.
+   Structs, containers, refs and closures are refused wholesale -- sound, and it
+   means a bracket returning a `Vec` of scalars never rewinds.
+3. **Close or price the residue** named under R4: the unbracketed CPS
+   `CT_LETCALL` arm, argument-position allocation landing in the generation, and
+   the pooled slab that is never returned (reachable at exit, not lost -- a pool,
+   not a leak, and freeing it needs care about `atexit` ordering against module
+   defers that may still read retired generations).
+4. **Soak the existing `bt-scope` callers.** `dfs-solve` and the sx2 fixtures
+   become region users the moment this is on by default; the seam test covers
+   twelve fixtures today, which is a floor, not a soak.
+
+## What this does NOT do
+
+- It does not free a value whose lifetime is not a scope. Those stay RM2's,
+  and RM2 gets smaller for it -- what remains is "spines that escape their
+  region", which is also the set R3's walk has to identify anyway.
+- It does not change any default. The flag is off; `logic.tur` and every other
+  program allocate exactly as they do today until R4 opts a call site in.
+- It is not region *inference*. Every region is declared.
+
+## Guides to update when this graduates
+
+- `docs/guides/gc-guide.md` -- it documents the arena and the rc/cycle paths;
+  a third reclamation mode belongs beside them.
+- `docs/guides/experimental-flags-guide.md` -- the row while it is gated.

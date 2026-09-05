@@ -1,0 +1,35 @@
+;; cps-call-arm-ignores-abi-specialization, face 1: the SILENT WRONG ANSWER.
+;;
+;; A CPS-lowered call must pick the ABI specialization whose RESULT type matches
+;; this call site, not merely one whose argument types do.
+;; find_mono_clone_for_call matched on argument C types alone, which identifies
+;; nothing for a generic whose type variable reaches only the RESULT: `bt-scope
+;; [A] [^fat body : (fn [] A)] : A` takes the erased int64 fat-thunk handle for
+;; EVERY A, so every instantiation presents identical args.
+;;
+;; With A = int and A = a 2-int record in one program, the `/* cps->cps */` arm
+;; handed the int site the RECORD's spec.  It then read the returned box POINTER
+;; as its int and printed an address -- on default flags, through a stdlib
+;; bracket.  So the number below has to be READ, not merely built: this compiles
+;; perfectly and prints garbage.  Face 2, which is a build failure instead, is
+;; tests/fixtures/cps-spec-erased-base-fallback-typechecks.
+;;
+;; Drop either defn and the other printed correctly even before the fix -- the
+;; defect needs both instantiations to coexist -- and the two are
+;; order-independent, so putting s-rec first does not move it.
+;;
+;; Green before the fix only because every bt-scope site in the tree returned
+;; int, bool or void: all carrier-transparent, so base and specialization agree
+;; and the mis-selection is invisible.  This is the first fixture that is not.
+
+(load "stdlib/trail.tur")
+
+(defdata SPair (SIP :int :int))
+
+(defn s-int [n : int] : int   (bt-scope (fn [] (+ n 20))))
+(defn s-rec [n : int] : SPair (bt-scope (fn [] (SIP n 20))))
+
+(defn main [] : int
+  (println (s-int 8))                            ;; 28 -- was an address
+  (match (s-rec 8) (SIP a b) (println (+ a b)))   ;; 28
+  0)

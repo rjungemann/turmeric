@@ -231,6 +231,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0712_EXPR_NESTING_TOO_DEEP:            return "TUR-E0712";
         case TUR_E0713_DEFINITION_IN_TAIL_POSITION:      return "TUR-E0713";
         case TUR_E0714_NICHE_ELEMENT_ERASED_STORE:       return "TUR-E0714";
+        case TUR_E0715_NICHE_ELEMENT_ERASED_COMPARATOR:  return "TUR-E0715";
         /* ET4: effect scope errors */
         case TUR_E0250_ROW_VAR_ESCAPES_SCOPE:            return "TUR-E0250";
         case TUR_E0253_EFFECT_NOT_IN_SCOPE:              return "TUR-E0253";
@@ -403,6 +404,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0712") == 0) return TUR_E0712_EXPR_NESTING_TOO_DEEP;
     if (strcmp(s, "TUR-E0713") == 0) return TUR_E0713_DEFINITION_IN_TAIL_POSITION;
     if (strcmp(s, "TUR-E0714") == 0) return TUR_E0714_NICHE_ELEMENT_ERASED_STORE;
+    if (strcmp(s, "TUR-E0715") == 0) return TUR_E0715_NICHE_ELEMENT_ERASED_COMPARATOR;
     /* ET4: effect scope errors */
     if (strcmp(s, "TUR-E0250") == 0) return TUR_E0250_ROW_VAR_ESCAPES_SCOPE;
     if (strcmp(s, "TUR-E0253") == 0) return TUR_E0253_EFFECT_NOT_IN_SCOPE;
@@ -638,6 +640,31 @@ static const DiagExplanation diag_explanations_[] = {
       "Ascribe the receiver to its concrete element type at this site, e.g.\n"
       "  (vec-push! (:: v (Vec (Option String))) x)\n"
       "or give the helper a typed (Vec A) parameter so the call specializes.\n"
+    },
+    { TUR_E0715_NICHE_ELEMENT_ERASED_COMPARATOR,
+      "TUR-E0715: Erased comparator over a niche-represented Vec element\n"
+      "\n"
+      "`vec-eq?` hands its comparator RAW Vec slot words -- its inline-C loop\n"
+      "passes a->data[i] straight through -- rather than values that have\n"
+      "crossed the carrier boundary.  (So do list-eq?, option-eq?, result-eq?\n"
+      "and pair-eq?, from their own payload slots; map-eq? and set-eq-cmp?\n"
+      "are the exception and hand over a HAMT-stored box.)  A niche\n"
+      "(Option P) element rides its slot as the payload pointer itself, not\n"
+      "as a carrier box (container-element-form-plan, CE2), so a comparator\n"
+      "that ascribes a parameter back to the element type has to reinterpret\n"
+      "that word.  Unboxing it instead reads the payload's own first words as\n"
+      "a tag and a value: a silent wrong answer, not a crash.\n"
+      "\n"
+      "A comparator written INLINE at the call is marked as receiving slot\n"
+      "words and compiles correctly, and so does one whose parameters are\n"
+      "declared as the element type.  A NAMED function with ERASED parameters\n"
+      "cannot be: it is elaborated once and the same function may also be\n"
+      "called with genuine boxes, so it has no decidable convention here.\n"
+      "\n"
+      "Declare the parameter types, which bridges at the closure boundary:\n"
+      "  (vec-eq? v w (fn [a : (Option String) b : (Option String)] : bool\n"
+      "                 (eq? a b)))\n"
+      "or write the comparator inline at the call site.\n"
     },
     { TUR_E0005_USE_AFTER_MOVE,
       "TUR-E0005: Use after move\n"

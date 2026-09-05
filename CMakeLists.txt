@@ -161,6 +161,25 @@ add_test(
   COMMAND bash tests/run-demangle.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# RM3: the region allocator's safety properties (docs/upcoming/regions-plan.md).
+add_test(
+  NAME tur_region_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_region_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# RM3 R2: --enable=regions with no region open must change nothing observable.
+add_test(
+  NAME tur_regions_seam
+  COMMAND bash tests/run-regions-seam.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# RM3 R3: the poison backstop must actually fire.  A backstop that silently
+# stops firing looks exactly like a program with no stragglers.
+add_test(
+  NAME tur_region_poison
+  COMMAND bash tests/check-region-poison.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # NW6 acceptance gate: a freshly scaffolded spice (`tur new`) passes its own
 # `tur run ci` (clean + check + test) end-to-end. Hermetic: no git, no
 # network, no ../turmeric-spices, no `just`. See docs/tur-new-ci-bootstrap-plan.md.
@@ -247,13 +266,28 @@ add_test(
   COMMAND bash tests/run-option-niche-seam.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
-# tur_sr2_seam RETIRED 2026-08-27, with tests/run-sr2-seam.sh.  The harness
-# existed because TUR_SR2_APP_SUM_BYVALUE was OFF by default, so nothing else in
-# CI compiled a parametric sum by value and the gate document's worklist claim
-# had nothing enforcing it.  SR2a graduated: by value IS the default, so every
-# `bash tests/run.sh` compiles all eleven of those fixtures that way, which is
-# strictly more than the subset ever asserted.  The SR4 harness above stays --
-# recursive sums remain off by default, so its argument still holds.
+# tur_sr2_seam was RETIRED 2026-08-27 with tests/run-sr2-seam.sh, and is
+# RESTORED 2026-09-04 as the mirror-image OFF-path gate, the same argument as
+# tur_sr4_seam and tur_option_niche_seam above.
+#
+# The retirement's reasoning was half right.  It observed that by value IS the
+# default now, so every `bash tests/run.sh` compiles all eleven of the old
+# harness's fixtures that way -- true, and it does cover the ON path.  What it
+# missed is that the same flip left the CARRIER path with nothing compiling it
+# at all, which is the exact condition the harness had been built for, with the
+# two paths swapped.  Both sibling seams flipped their harness at graduation
+# rather than deleting it; this one is now flipped too, a release late.
+#
+# The rot that accumulated in the meantime is why the argument matters: the
+# restored harness found a hard C compile error and a silent wrong answer on the
+# carrier path, plus a layering defect that makes TUR_SR2_APP_SUM_BYVALUE=0
+# abort the compiler unless TUR_OPTION_NICHE=0 comes with it.  See
+# docs/reported/sr2-carrier-seam-rotted.md and the harness header.
+add_test(
+  NAME tur_sr2_seam
+  COMMAND bash tests/run-sr2-seam.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # `tur check` sweep over examples/, ratcheted against
 # examples/examples-check-baseline.txt. Nothing referenced examples/ before
 # this, so nothing compiled them and they rotted -- 9 of 17 were failing when

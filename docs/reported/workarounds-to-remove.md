@@ -9,54 +9,31 @@ things outlive their reasons unless someone writes down what the reason was.
 Each row: what is in the tree, why, what to do when the blocker clears, and how
 to prove the workaround is no longer needed.
 
-## 1. `StThunk` exists only because a `:fn` field crashes
+## 1. `StThunk` exists only because a `:fn` field crashes -- REMOVED 2026-09-05
 
-**Where:** `stdlib/logic.tur` -- `(defopaque StThunk :ptr<void>)` and
-`(StInc :StThunk)`.
+**Struck.** `stdlib/logic.tur` declares the field with its real type now --
+`(StInc (fn [] Stream))` -- and the four `(:: ... :StThunk)` wrappers are gone.
 
-**Why:** the honest declaration is `(StInc :fn)`. That accepts a capturing
-closure, type-checks, and **segfaults** when forced, because the ascription
-that calls it back emits a bare function-pointer call while a capturing lambda
-is a fat closure. The `:ptr<void>` carrier gets the fat dispatch instead.
+The row's recorded blocker was wrong, and so was the one before it. Neither the
+original crash (fixed and archived) nor the 2026-09-02 probe's reading ("every
+construction site fails TUR-E0295") was what kept it alive: the change fails at
+exactly ONE site, `st-bind`'s `(:: (f v) :Stream)`, because `f : fn` is an
+untyped fn parameter two functions away. Typing it, and `mbind` with it, removes
+the ascription and the error. A compiler fix was then needed for the `(let [lf f]
+...)` alias (a fn-typed param is a fat handle, not a thin function pointer).
 
-**Blocker:** [closure-in-defdata-field](closure-in-defdata-field.md), case 1.
+Full paper trail, including why the recorded blocker was a hypothesis nobody had
+tested by removing the workaround:
+[docs/archive/workaround-stthunk-opaque-carrier.md](../archive/workaround-stthunk-opaque-carrier.md).
 
-**When it lands:** replace `StThunk` with a plain `:fn` field, delete the
-opaque and the paragraph in `logic.tur` explaining why it exists, and drop the
-`(:: ... :StThunk)` wrappers at the four construction sites.
+## 2. `weak-upgrade-after-drop` carries a `known-leak` marker -- REMOVED
 
-**Proof it is no longer needed:** the probe in that report --
-a `defdata` with a `:fn` field holding a *capturing* lambda -- runs instead of
-segfaulting. Note the *non*-capturing version already works, so a probe that
-does not capture proves nothing.
-
-**Probed 2026-09-02 -- blocked by a second thing.** The original blocker is
-resolved (archived): a bare `:fn` field now *refuses* a capturing closure at
-compile time, and a field declared with its full signature stores one
-correctly -- `(defdata Box (BInc (fn [] int)))` holding a capturing lambda
-runs. But the honest declaration here is `(StInc (fn [] Stream))`, and every
-construction site then fails `TUR-E0295: cannot reinterpret by-value aggregate
-'Stream' as a one-word carrier` -- the closure is called through the erased
-fat-closure path, which returns an int64, and `Stream` is a `:copy` by-value
-struct. The `:ptr<void>` carrier plus `(:: th (fn [] Stream))` at the force
-site is what bridges that today. Strike this row when a closure field can
-return a by-value aggregate (or when `Stream` stops being one).
-
-## 2. `weak-upgrade-after-drop` carries a `known-leak` marker
-
-**Where:** `tests/fixtures/weak-upgrade-after-drop/known-leak`.
-
-**Why:** `stdlib/weak.tur`'s `weak/upgrade` builds its `Option` inside inline C
-with `tur_some_ptr`, which allocates a carrier box no elaborated expression
-owns, so nothing frees it. The marker keeps `tests/run-leak-check.sh` honest
-(it reports KNOWN rather than PASS) without failing the gate.
-
-**Blocker:** [inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md).
-
-**When it lands:** delete the marker file. The fixture should then report PASS
-and the gate's tally line should read `54 passed, 0 failed, 0 known-open`.
-
-**Proof:** `bash tests/run-leak-check.sh` -- the known-open count goes to zero.
+**Struck 2026-09-05, already true before that.** The blocker
+(`inline-c-option-carrier-box-leaks`) is archived, the `known-leak` marker file
+is gone from the tree, and `bash tests/run-leak-check.sh` reports
+`81 passed, 0 failed, 0 known-open` -- which is the proof this row asked for.
+Nobody struck the row when the work landed, which is the failure mode a
+checklist is supposed to prevent.
 
 ## 3. The sanitizer gate is not armed -- REMOVED 2026-08-26
 

@@ -497,6 +497,32 @@ is CLAUDE.md's documented gap ("a leak in EMITTED code passes run.sh
 silently") turning up 8.3 KB of real leaks the moment anyone looks. Widening
 the marker set is cheap and is not gated on RM1.
 
+**Taken up 2026-09-04, and the aside was half right.**  Full decomposition in
+[rm1-leak-sweep-decomposed-2026-09-04.md](../artifacts/rm1-leak-sweep-decomposed-2026-09-04.md).
+Widening the marker set is cheap, but not as simple as adding markers: the
+sweep's byte totals attribute nothing, and the largest single entry --
+`httpd-req-string-opt` at 1285 B, 2.3x the next -- was **1176 B of the
+fixture's own hand-written `calloc(1, sizeof(HttpdConn))`**, three fake conns
+it built and never freed.  A marker on a fixture that leaks its own test rig
+measures the rig.  Fixed by giving that fixture the `free-conn` it never had
+(1285 -> 109 B, output unchanged); the rest need their category resolved before
+a marker on them means anything.
+
+Broken down by allocating function rather than by fixture, the 1790 B that
+remain are:
+
+| category | bytes | whose |
+|---|---:|---|
+| recursive sum spine | ~990 | **RM2** |
+| `tur_string_from_bytes` payloads | ~250 | String ownership |
+| **RM1 sum boxes** | **~240** | this phase |
+| poly aggregate-spill shim | ~48 | RM1-adjacent |
+| program-owned containers | ~100 | the program's |
+
+So RM1's own residue is ~240 B in 16-48 B units, which matches this section's
+account of what is unstampable by design.  **The largest real category is
+RM2's** -- see the note added there.
+
 ### RM2 -- the recursive spine
 
 The per-node spine box of a self-recursive sum, which is what `logic.tur`
@@ -511,6 +537,144 @@ inferred.
 
 *Gate:* RM0(b). If there is no workload, this phase does not start, and the
 reason is recorded rather than the phase being left implicitly pending.
+
+**The gate's evidence, revisited 2026-09-04.** RM0 closed this phase as "no
+constituency".  Two measurements now argue otherwise, and they are recorded
+here rather than acted on, because RM2's own blocker is unchanged:
+
+1. **It is the biggest real category left.** Once `httpd-req-string-opt`'s
+   test scaffold is out of the RM1 sweep, per-node spine boxes
+   (`ctor_Cons_Cons__*`, `re-string`'s regex cells) are ~990 of the remaining
+   1790 bytes -- 55%, against RM1's own ~240.
+2. **It GROWS, and the corpus sweep could not see that.** A 64-link `Subst`
+   chain leaks 64 boxes; 100 rounds of an 8-link chain leak 800, not 8.  A
+   program that builds and discards recursive values in a loop grows without
+   bound.  RM0 priced the spine as an allocation COUNT across a corpus where
+   every fixture builds its structure once -- an axis on which unbounded
+   growth and a one-shot allocation are indistinguishable.  A backtracking
+   solver is the workload the gate asked for.
+
+This does not reopen the phase on its own: "a tree's nodes escape their
+constructor by construction" is still true, per-node free still needs
+ownership the emitter does not have, and Row B's 2.49x is still measured with
+frees written by hand.  What has changed is that the gate's premise -- that
+nobody is paying for this -- no longer holds.
+
+#### How RM2 gets unblocked (assessed 2026-09-04)
+
+**Not by a better analysis.**  The blocker is structural, not a missing pass.
+A persistent spine has no unique owner *by construction* -- that is what
+persistent means.  `(SBind v t rest)` shares `rest` with every older chain and
+backtracking depends on that sharing, so "is this the last reference?" is a
+RUNTIME fact.  No static per-node rule can answer it, and looking harder for
+one is the wrong move.
+
+So the question changes rather than the analysis.  Three answers, and this
+tree already has substrate for all three:
+
+**A. Give each node a runtime owner -- refcount.**  `rc<T>`,
+`RcControlBlock`, and a Bacon-Rajan cycle collector (`src/runtime/gc.c`) all
+ship today.  Deterministic, and sharing is exactly what it is for.  But a
+control block per node is wider than the 48-byte node being reclaimed, and the
+inc/dec lands on the walk -- the hot path this plan's sibling report already
+measures at 8.8x.  Almost certainly a net loss for `Subst`.  Worth stating so
+nobody re-derives it.
+
+**B. Give the spine a LIFETIME instead of an owner -- RM3, and it is the
+fit.**  Every node of one query dies together; that is the whole shape.  What
+already exists:
+
+- `arena_reset` -- O(slabs) rewind, and in a Debug build it POISONS the
+  reclaimed bytes, so a survivor crashes loudly under ASan instead of reading
+  stale-but-mapped data.  That is this phase's stated worst risk, already
+  instrumented.
+- `arena_owns` -- the guard RM3 says must sit on every free path.
+- **A precedent with the same shape, already running.**  turi's value-pool
+  scratch/permanent split (`eval.c`, `turi-value-pool-scratch-promotion-plan`)
+  does reset-with-promotion: walk the escapees out, then rewind.  Its
+  conservatism rule is precisely the one RM3 needs --
+
+  > Correctness never depends on catching every shape: a missed shape means
+  > "this eval does not shrink", never "use-after-reset".
+
+  A region that cannot prove a value safe to relocate simply does not rewind.
+  That turns RM3's "most able to produce a silent wrong answer" into "most
+  able to produce no saving", which is a different risk class.  The code is
+  the interpreter's and does not transfer directly; the discipline does, and
+  it has been load-bearing here before.
+- **The boundary already exists in the language.**  `bt-scope`
+  (stdlib/trail.tur) brackets exactly the region a solver query occupies.
+  This plan already said as much -- "not region inference; it is one
+  `arena_reset()` at a call site that already exists".
+
+**C. Make the box never exist.**  The direction the report prefers and the one
+RM1 already cashed once (the null-None mirror).  For a spine that means
+unboxing the recursive field, which SR4 explored: by value halves the mallocs
+and the per-node box remains.  Exhausted, short of a representation change
+bigger than this plan.
+
+**Recommendation: RM2 is unblocked by doing RM3, not by unblocking RM2.**
+
+#### The residue, categorized (2026-09-05) -- and two defects in the way
+
+The section above argues the shape; it never measured how much of the residue a
+region could actually take. Done now, per allocation, in
+[rm2-spine-residue-categorized.md](../artifacts/rm2-spine-residue-categorized.md):
+
+| category | bytes |
+|---|---:|
+| no bracket exists, but the natural one would work | 496 |
+| a bracket exists and is the right one -- but is silently a no-op | 312 |
+| escapes into a returned structure; no boundary contains it | 96 |
+
+So **808 of 904 bytes are inside a scope a region could bracket** -- the surface
+form is most of the answer, not half of it. The 96 is what stays RM2's.
+
+Two defects sit in front of that, both found by the probe, because putting a
+`bt-scope` around a function whose result is a RECORD rather than a scalar is
+something nothing in the tree had done:
+
+- [cps-call-arm-ignores-abi-specialization](../archive/cps-call-arm-ignores-abi-specialization.md)
+  -- **a silent wrong answer on default flags**, unrelated to regions. A CPS
+  emitter call arm picked a specialization that was not this call's.
+  **Fixed 2026-09-05**: the call's own result type now discriminates in
+  `find_mono_clone_for_call`.
+- [region-bracket-lost-when-bt-scope-specializes](../archive/region-bracket-lost-when-bt-scope-specializes.md)
+  -- the same arm emitting no region push at all for a non-scalar result.
+  **Fixed 2026-09-05**: a region boundary takes `cps->direct`, the only arm the
+  bracket can live on.
+
+Category 2 is still not reclaimed after both, and the reason moved rather than
+closing. This section claimed the static walk ACCEPTS `(RxIP :int :int)`; it
+does not -- it refuses at field 0, because a plain `:int` ctor field records no
+`full_type`, which its comment attributes only to the self-recursive spine.
+Deciding such a field by its `kind` is unsound and was measured so, so that is
+now [region-walk-refuses-every-adt-result](../reported/region-walk-refuses-every-adt-result.md).
+
+Order of work: the CPS arm and the bracket are both done (separately -- the
+bracket did NOT ride along on the CPS fix, which was this section's prediction
+and was wrong). Next: widen the walk so an ADT result can be proved, add the
+`with-region` form, then re-measure.
+
+RM3's gate is "RM0(b), and RM1 landed".  RM1 is now landed to its unstampable
+residue (~240 B), and the constituency measurement above is RM0(b)'s missing
+input.  After RM3, what is left of RM2 is "spines that escape their region" --
+a far smaller set, and one where per-node ownership may actually be
+inferable because the escaping cases are the ones the promotion walk already
+had to identify.
+
+Sequencing this the other way round is what the RM3 gate warns against:
+"shipping both orderings at once is how two sites end up disagreeing about who
+frees."
+
+*First increment if this is taken up:* an `EXPERIMENTS[]` row (`regions`) with
+every descriptor field, `experiment_warn_if_used` at the elaboration entry,
+and `plan_path` here -- it is user-visible, so CLAUDE.md requires the gate.
+Then wire the EXISTING `bt-scope` to an arena generation rather than inventing
+a surface form, and measure on `logic.tur`, which is the workload.  Fixtures
+assert the VALUE across the boundary, plus a negative where an escapee is
+poisoned -- "asserts the value, not merely that it builds" is the SR4 lesson
+and this section already says it applies here with more force.
 
 ### RM3 -- declared regions
 

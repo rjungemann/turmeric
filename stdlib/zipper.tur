@@ -175,11 +175,19 @@
 ;;;
 ;;; Since: Phase TC2
 
+;; Null-safe by contract, and that is not incidental: zipper-move-left-raw and
+;; zipper-move-right-raw both `return 0` at the end of the tape, and the
+;; documented way to consume the Option they wrap is
+;; `(unwrap-or opt (:: 0 (Zipper int)))` -- so a caller following the pattern in
+;; tests/fixtures/zipper-basic reaches this with 0 on the exhausted path. Every
+;; other entry point guards; without the guard here, freeing what the API just
+;; handed back segfaults.
 (defn zipper-free-raw [z : int]
   #fx{}
   : void
   ```c
   struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
+  if (!zip) return;  /* the null handle is a value this API produces */
   if (zip->left)  free(zip->left);
   if (zip->right) free(zip->right);
   free(zip);

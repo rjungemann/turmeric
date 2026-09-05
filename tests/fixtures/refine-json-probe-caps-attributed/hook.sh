@@ -14,6 +14,13 @@
 # both cap out).  Both counts must be reported and must be reported SEPARATELY:
 # a probe asks about one path, not the whole body, so summing them at the
 # source would destroy the distinction a consumer needs.
+#
+# The COUNTS moved 4 -> 1 on 2026-09-05 and that is the fix working, not a
+# regression: refine-chain-expands-the-same-dnf-four-times made the chain build
+# its DNF once per run instead of once per stage, and this counter counts
+# BUILDS that hit the cap.  What the fixture is here to protect -- the cap still
+# hits, both windows are attributed, and own/probe stay SEPARATE -- is unchanged.
+# A future change that takes either number to 0 is the real regression.
 set -u
 TMP="$1"
 TUR="${TUR:-./build/tur}"

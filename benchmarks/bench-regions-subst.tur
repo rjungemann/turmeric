@@ -1,0 +1,113 @@
+;; bench-regions-subst -- RM3 R4: what a declared lifetime is worth on the
+;; workload the reclamation plan named.
+;;
+;; This is bench-logic-subst's PERSISTENT path and nothing else.  The trailed
+;; path is not here: that comparison (trail vs assoc list) is a different
+;; question and bench-logic-subst already answers it.  The question here is
+;; narrower and is the one R5 has to decide on --
+;;
+;;   the persistent path builds an n-link `Subst` per pass and drops it.  Every
+;;   link is a `malloc`'d box that nothing frees: 100 passes over an 8-link
+;;   chain leak 800 boxes, not 8.  Does bracketing the pass in `bt-scope` --
+;;   the bracket a solver already writes -- reclaim them, and what does the
+;;   bracket cost when it does?
+;;
+;; So the A/B is the FLAG, not the source: the same program, compiled with and
+;; without `--enable=regions`.  With it off, `bt-scope` is the trail bracket it
+;; has always been and the spine leaks; with it on, the same bracket is also a
+;; region and the pass's whole generation is rewound at the pop.
+;;
+;;   ./build/tur build            benchmarks/bench-regions-subst.tur -o /tmp/b-off
+;;   ./build/tur build --enable=regions benchmarks/bench-regions-subst.tur -o /tmp/b-on
+;;   /usr/bin/time -v /tmp/b-off    # ns_per_op, and Maximum resident set size
+;;   /usr/bin/time -v /tmp/b-on
+;;
+;; Peak RSS is half the measurement and the more important half: a reclamation
+;; phase that makes the program faster but not smaller has not done its job,
+;; and one that makes it smaller at a tolerable cost has.
+;;
+;; `region-round` is bench-logic-subst's `persistent-round` with one `bt-scope`
+;; around the per-pass body and nothing else changed, so the two are readable
+;; side by side.  That spelling -- a bracket inside a non-main defn -- did not
+;; compile until docs/archive/cps-direct-bt-scope-closure-temp-undeclared.md was
+;; fixed, and it is also the shape that made R4 route its region through the CPS
+;; emitter rather than only the direct one.
+
+(load "stdlib/logic.tur")
+
+(extern-c tur_monotonic_ns [] :int)
+
+(defn now-ns [] : int
+  ```c
+  return tur_monotonic_ns();
+  ```)
+
+;;; build-subst -- extend a Subst with `n` bindings, var i -> int i.
+(defn build-subst [n : int acc : Subst] : Subst
+  (if (<= n 0)
+    acc
+    (build-subst (- n 1) (SBind (- n 1) (TInt (- n 1)) acc))))
+
+;;; walk-all -- walk every variable in 0..n-1 once, summing to keep it live.
+(defn walk-all [n : int subs : Subst acc : int] : int
+  (if (<= n 0)
+    acc
+    (walk-all (- n 1) subs
+              (+ acc (term-int-val (logic-walk (TVar (- n 1)) subs))))))
+
+(defn emit-header [] : void
+  ```c
+  printf("bindings,passes,total_ns,ns_per_op,checksum\n");
+  ```)
+
+(defn emit-row [n : int passes : int ns : int sum : int] : void
+  ```c
+  double ops = (double)n * (double)passes;
+  printf("%lld,%lld,%lld,%.2f,%lld\n", (long long)n, (long long)passes,
+         (long long)ns, ops > 0 ? (double)ns / ops : 0.0, (long long)sum);
+  ```)
+
+;;; passes-for -- hold total work roughly constant across the sweep, exactly as
+;;; bench-logic-subst does, so the two are readable side by side.
+(defn passes-for [n : int] : int
+  ```c
+  int64_t p = 200000 / (n * n + 1);
+  if (p > 2000) p = 2000;
+  if (p < 3) p = 3;
+  return p;
+  ```)
+
+;;; one-pass -- build an n-link Subst, walk it, drop it, inside ONE generation.
+;;;
+;;; The result is the walk SUM -- an `:int` -- so nothing that points into the
+;;; generation crosses the boundary, the static check clears the rewind, and the
+;;; whole n-link spine dies at the pop.
+(defn one-pass [n : int] : int
+  (bt-scope (fn [] (walk-all n (build-subst n (subs-empty)) 0))))
+
+;;; region-round -- bench-logic-subst's `persistent-round`, one bracket added.
+(defn region-round [n : int passes : int acc : int] : int
+  (if (<= passes 0)
+    acc
+    (region-round n (- passes 1) (+ acc (one-pass n)))))
+
+(defn bench-one [n : int] : int
+  (let [passes (passes-for n)
+        t0     (now-ns)
+        acc    (region-round n passes 0)
+        t1     (now-ns)]
+    ;; The checksum is printed so a rewind that reclaimed something still live
+    ;; shows as a WRONG NUMBER rather than as a faster run.  It must be
+    ;; identical in both arms.
+    (emit-row n passes (- t1 t0) acc)
+    0))
+
+(defn sweep [n : int] : int
+  (if (> n 512)
+    0
+    (do (bench-one n) (sweep (* n 2)))))
+
+(defn main [] : int
+  (emit-header)
+  (sweep 1)
+  0)

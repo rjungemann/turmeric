@@ -1,0 +1,59 @@
+;; union-widen-frame-box -- widening a by-value struct to a UNION member for a
+;; call that provably neither retains it nor suspends puts the payload in the
+;; CALLER's frame, so there is no allocation to leak.
+;;
+;; This is the sibling of any-widen-frame-box, and it exists because the union
+;; path did not get that fix.  A union-typed value is the same tur_tagged_t as
+;; an `any`, and a by-value member is heap-boxed into its 8-byte value slot the
+;; same way -- but the ownership work (docs/archive/any-struct-box-leak-per-widen.md)
+;; keyed every one of its rules on TY_ANY, so a union widen kept mallocing a box
+;; that nothing anywhere frees.  One malloc per widen, linear RSS growth in a
+;; loop, in the SAME program shape the `any` path had already made allocation-free.
+;;
+;; Two edits closed it: TY_UNION joins the nonretain_ptr_param_mask inference
+;; (elab_fns.c), and the union-inject arm of the call-argument walk consults it
+;; (elab_call.c), exactly as the `any` widen beside it does.
+;;
+;; This fixture carries requires.leak-check: `tests/run-leak-check.sh` builds it
+;; under AddressSanitizer and fails if a single allocation is orphaned.  The loop
+;; count is what makes that meaningful -- one leaked 32-byte box is easy to miss
+;; by eye, 2000 of them are not.
+
+(defstruct Wide [a : int b : int c : int d : int])
+
+;; Ignores the parameter entirely.  Its result is an int, so nothing can carry
+;; the payload back out of the call.
+(defn tally [x : (Wide | int)] : int
+  1)
+
+;; Reads through a `match` arm, which for a boxed by-value payload is a DEREF --
+;; the arm binding is a copy, so it does not alias the box.
+(defn sum-wide [x : (Wide | int)] : int
+  (match x
+    (w : Wide) (+ (.a w) (.b w))
+    (i : int)  i))
+
+;; Discriminates without reading the payload at all: the tag word alone.
+;; (`type-of` / `is?` are not this test -- both demand an `any`-typed argument,
+;; so a union discriminates through `match`.)
+(defn wide? [x : (Wide | int)] : int
+  (match x
+    (w : Wide) 1
+    (i : int)  0))
+
+(defn drive [i : int n : int acc : int] : int
+  (if (= i n)
+    acc
+    (drive (+ i 1) n
+           (+ acc (+ (tally (Wide i 1 2 3))
+                     (+ (wide? (Wide i 2 3 4))
+                        (sum-wide (Wide i 5 6 7))))))))
+
+(defn main [] : int
+  ;; Three widens a turn.  Per turn i: 1 + 1 + (i + 5).
+  ;; Over i in [0, 2000): 2000*7 + (0+1+...+1999) = 14000 + 1999000 = 2013000.
+  (println (drive 0 2000 0))
+  ;; The int member still rides the value slot -- it never boxed, and must not
+  ;; start now that the struct member stopped.
+  (println (sum-wide 42))
+  0)

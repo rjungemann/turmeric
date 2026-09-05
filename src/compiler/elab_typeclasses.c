@@ -247,6 +247,35 @@ static const Symbol *helper_eq_symbol_for_struct(Elab *e, const AdtDef *sd,
  * recognises it exactly as it does the hoist temp of a `vec-get`.  Every other
  * helper (map/option/list/pair/result-eq?) hands the comparator a value that
  * crossed the carrier boundary (boxed), so those keep the plain names. */
+/* Which of the `*-eq?` helpers hand their comparator the STORED WORD, and
+ * which hand it a value that has crossed the carrier boundary (a box).  The
+ * split is not "Vec versus everything else" -- it is "walks its own payload
+ * slots" versus "iterates a HAMT":
+ *
+ *   Vec     vec-eq?       `a->data[i]`               -- word
+ *   Cons    list-eq?      `(list-head l)`            -- word
+ *   Option  option-eq?    the `(Some v)` match binder -- word
+ *   Result  result-eq?    the sum's payload slot      -- word
+ *   Pair    pair-eq?      `a->fst` / `a->snd`         -- word
+ *   Map     map-eq?       the HAMT value             -- box
+ *   Set     set-eq-cmp?   the HAMT key               -- box
+ *
+ * For a niche `(Option P)` element the stored word is the payload pointer
+ * itself, so a comparator fed a word must REINTERPRET it rather than unbox a
+ * box that is not there.  This was `strcmp(sd->name, "Vec") == 0`, which made
+ * `(eq? a b)` silently wrong for every OTHER word-passing container once the
+ * niche graduated -- `(eq? (some (some "aa")) (some (some "bb")))` answered
+ * true, because the inner comparator unboxed a String pointer as a box and
+ * compared whatever it found.  Keep it in step with elab_call.c's
+ * call_comparator_gets_slot_words, which answers the same question for a
+ * comparator the USER writes at one of these calls. */
+static bool container_helper_passes_slot_words(const char *sd_name) {
+    if (!sd_name) return false;
+    return strcmp(sd_name, "Vec") == 0 || strcmp(sd_name, "Cons") == 0 ||
+           strcmp(sd_name, "Option") == 0 || strcmp(sd_name, "Result") == 0 ||
+           strcmp(sd_name, "Pair") == 0;
+}
+
 static Form *build_comparator_lambda(Elab *e, const Type *elem_type, Span span,
                                      bool slot_words) {
     Form *elem_form = type_to_form(e, elem_type, span);
@@ -527,7 +556,7 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
     Expr *lambdas[2] = {0};
     for (uint8_t i = 0; i < n_comparators; i++) {
         Form *lf = build_comparator_lambda(e, args_collected[i], span,
-                                           strcmp(sd->name, "Vec") == 0);
+                                           container_helper_passes_slot_words(sd->name));
         if (!lf) return NULL;
         lambdas[i] = elab_form(e, lf);
         if (!lambdas[i]) return NULL;

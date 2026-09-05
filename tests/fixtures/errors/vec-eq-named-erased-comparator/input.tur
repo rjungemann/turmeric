@@ -1,0 +1,26 @@
+;; erased-closure-param-over-niche-vec-slot-reads-box, the residue that cannot
+;; be marked.  `vec-eq?` hands its comparator RAW Vec slot words, and a niche
+;; (Option String) rides its slot as the payload pointer rather than a carrier
+;; box, so an ascription inside the comparator has to reinterpret that word.
+;;
+;; A comparator written INLINE at the call is marked and compiles correctly
+;; (tests/fixtures/option-niche-vec-closure-cmp, shape 4).  A NAMED one cannot
+;; be: `slotcmp` is elaborated once and any other caller may hand it genuine
+;; boxes, so marking its params here would corrupt that caller instead.
+;; Erased params in this position therefore have no decidable convention.
+;;
+;; Before TUR-E0715 this compiled and answered "eq" for two vecs holding
+;; DIFFERENT strings -- a silent wrong answer with no diagnostic anywhere.
+;; Declaring the parameter types, or inlining the comparator, both work.
+(load "stdlib/string.tur")
+
+(defn slotcmp [a b] : bool
+  (eq? (:: a (Option String)) (:: b (Option String))))
+
+(defn main [] : int
+  (let [v (:: (vec-new) (Vec (Option String)))
+        w (:: (vec-new) (Vec (Option String)))]
+    (vec-push! v (some (string/from-cstr "aa")))
+    (vec-push! w (some (string/from-cstr "bb")))
+    (println (if (vec-eq? v w slotcmp) "eq" "ne"))
+    0))

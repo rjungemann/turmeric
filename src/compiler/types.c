@@ -1438,7 +1438,56 @@ bool adt_ctor_is_null_none(const AdtDef *def, const CtorDef *ctor) {
  * user who turns it on should get the TUR-W0060 lifecycle warning and a plan to
  * read.  `experiment_warn_if_used` is once-per-compile guarded, so calling it
  * from this hot predicate costs one index lookup after the first. */
+/* RM3 regions (docs/upcoming/regions-plan.md): declared lifetimes over the
+ * arena, for values whose owner is a SCOPE rather than another value -- the
+ * per-node spine box of a persistent recursive structure, which RM1 cannot
+ * reach and RM2 cannot own.
+ *
+ * A real experiment rather than an env seam, per the CLAUDE.md rule for an
+ * in-flight feature: it is user-visible surface and it is the reclamation
+ * phase most able to produce a silent wrong answer, so a user who turns it on
+ * gets the TUR-W0060 lifecycle warning and a plan to read.
+ * `experiment_warn_if_used` is once-per-compile guarded, so consulting this
+ * from a hot path would cost one index lookup after the first. */
+bool regions_enabled(void) {
+    if (!g_opt_regions) return false;
+    experiment_warn_if_used("regions");
+    return true;
+}
+
+/* RM3 R4: the free-side twin of the ctor routing above.
+ *
+ * From R2 onward a `:heap` ADT node allocated inside a region is ARENA memory,
+ * while the same emitted drop glue still ends in `free(ptr)`.  That is not a
+ * leak if it goes wrong -- it is an allocator mismatch, and glibc aborts.  So
+ * every node free path spells this instead of `free`, and it resolves to plain
+ * `free` in a default build, exactly as `region_alloc_fn` does on the other
+ * side.  Keep the two in step: a new node allocation site needs a matching
+ * free site, and vice versa. */
+const char *region_free_fn(void) {
+    return regions_enabled() ? "tur_region_free" : "free";
+}
+
 static bool sr3_option_niche(void) {
+    /* The niche is layered ON TOP of SR2: narrowing `(Option P)` to its payload
+     * pointer only means anything if that Option is a by-value parametric sum in
+     * the first place.  With SR2 off, the same type rides the int64 carrier as a
+     * pointer to a tagged box -- and a niche value is then byte-identical to a
+     * carrier box, which is precisely the confusion the payload-must-be-a-pointer
+     * test above exists to prevent, arriving through the other door.
+     *
+     * So the niche follows its substrate down.  Without this,
+     * TUR_SR2_APP_SUM_BYVALUE=0 is not the one-variable switch a bisection hatch
+     * has to be: it ABORTED the compiler on four fixtures and silently
+     * wrong-answered httpd-req-string-opt, all of which recover when the niche
+     * comes off too, and none of which points at the niche from the switch the
+     * user actually flipped.  Measured and filed 2026-09-04 in
+     * docs/reported/sr2-carrier-seam-rotted.md; tests/run-sr2-seam.sh pins it.
+     *
+     * This is a HATCH interaction, not a default one: both globals are true in
+     * every shipping build, so the added test is dead weight on the default path
+     * and changes no emitted byte there. */
+    if (!g_sr2_app_sum_byvalue) return false;
     /* Graduated 2026-09-03: default-on, no lifecycle warning.  The global is
      * only ever cleared by TUR_OPTION_NICHE=0 (main.c), the bisection hatch. */
     return g_opt_option_niche;
@@ -2149,8 +2198,22 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
          * and a positional one writes `__r->as.<Ctor>._N`, in lockstep with the
          * typedef + field-read sites. */
         if (app_heap) {
-            buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
-                       adt_inst_name, adt_inst_name, adt_inst_name);
+            /* RM3 R2 (docs/upcoming/regions-plan.md): the spine node, at the
+             * MONOMORPH ctor.  Its sibling is the base ctor in emit_module.c
+             * (`emit_adt_typedef_and_ctors`) -- the two mirror each other and a
+             * change to one belongs in both.  That is not a general caution: it
+             * is what happened here.  The first R2 pass changed only the base
+             * emitter, and `ctor_Cons_Cons__int` -- the ctor the leak sweep
+             * actually blames -- kept its plain malloc, which the reclamation
+             * plan's own standing habit predicts ("when a representation change
+             * lands in a ctor or temp emitter, grep for the other emitter
+             * before calling it done").
+             *
+             * Gated, so a default build emits the identical malloc. */
+            buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
+                       adt_inst_name, adt_inst_name,
+                       regions_enabled() ? "tur_region_alloc_or_malloc" : "malloc",
+                       adt_inst_name);
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);
@@ -2809,13 +2872,26 @@ static void type_name_buf(Buf *b, Type t) {
         /* IT4: Top type */
         case TY_ANY:     buf_puts(b, "any"); break;
         case TY_FN: {
+            /* Print each parameter from its FULL type when one is recorded,
+             * falling back to the bare kind.  Rendering the kind alone collapses
+             * every composite to its constructor and a type variable to nothing,
+             * which is how `option-eq?` came to reject a lambda with
+             * "expected (fn [int int] : bool), got (fn [int int] : bool)" -- the
+             * two types differ, and the message showed neither difference.  A
+             * diagnostic a reader cannot act on is worse than none. */
             buf_puts(b, t.as.fn.cfnptr ? "(c-fn [" : "(fn [");
             for (uint32_t i = 0; i < t.as.fn.arity; i++) {
                 if (i > 0) buf_puts(b, " ");
-                type_name_buf(b, type_from_kind(t.as.fn.arg_kinds[i]));
+                if (t.as.fn.arg_full_types && t.as.fn.arg_full_types[i])
+                    type_name_buf(b, *t.as.fn.arg_full_types[i]);
+                else
+                    type_name_buf(b, type_from_kind(t.as.fn.arg_kinds[i]));
             }
             buf_puts(b, "] : ");
-            type_name_buf(b, type_from_kind(t.as.fn.result_kind));
+            if (t.as.fn.result_full_type)
+                type_name_buf(b, *t.as.fn.result_full_type);
+            else
+                type_name_buf(b, type_from_kind(t.as.fn.result_kind));
             buf_puts(b, ")");
             break;
         }
@@ -3807,8 +3883,14 @@ bool type_is_byvalue_adt_product(Type t) {
  * by-value ADT-app value boxes into / unboxes out of a carrier ctor field
  * slot via emit_type_is_byvalue_adt).  The M7 by-value-HKT carriers
  * (`ReF`/`ExprF`) carry a residual tyvar field and are excluded by the
- * predicate, so this never touches that machinery (B4 remains separate). */
-static const bool g_adt_app_byvalue = true;
+ * predicate, so this never touches that machinery (B4 remains separate).
+ *
+ * The `g_adt_app_byvalue` bool this paragraph used to introduce is GONE
+ * (2026-09-04).  It was `static const bool ... = true`, written nowhere and read
+ * once as `if (!g_adt_app_byvalue) return false;` -- a gate frozen open when P2-P4
+ * went live, which the compiler had been folding away ever since.  The prose is
+ * kept because it still describes the predicate below; only the dead bit is
+ * removed. */
 
 /* SR2a (docs/upcoming/sum-representation-plan.md SR2): a MULTI-VARIANT
  * parametric sum monomorph (`(Opt2 int)`, and above all `(Option int)` /
@@ -3830,7 +3912,6 @@ static bool sr2_app_sum_byvalue(void) {
 }
 
 bool adt_app_is_byvalue_product(Type t) {
-    if (!g_adt_app_byvalue) return false;
     AdtDef *def = NULL;
     Type args[16];
     uint8_t n_args = 0;

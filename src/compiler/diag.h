@@ -255,6 +255,14 @@ typedef enum DiagCode {
      * which, so it would put a second convention into the same vec that a
      * concrete reader cannot tell apart.  Refuses loudly instead of guessing. */
     TUR_E0714_NICHE_ELEMENT_ERASED_STORE,
+    /* erased-closure-param-over-niche-vec-slot-reads-box: the READ side of
+     * E0714's store.  `vec-eq?` hands its comparator raw Vec slot words, and a
+     * niche `(Option P)` element rides its slot as the payload pointer rather
+     * than a carrier box.  A comparator written inline is marked so the
+     * ascription back to the element type reinterprets the word; a NAMED one
+     * cannot be, because the same function may also be called with genuine
+     * boxes.  Erased parameters there have no decidable convention. */
+    TUR_E0715_NICHE_ELEMENT_ERASED_COMPARATOR,
     /* Deprecation band (TUR-D####): syntax accepted for backward
      * compatibility but slated for removal.  Emitted as DIAG_WARNING;
      * promoted to DIAG_ERROR under --Werror=deprecated. */

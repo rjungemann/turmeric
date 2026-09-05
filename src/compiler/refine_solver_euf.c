@@ -258,12 +258,12 @@ bool euf_assert_cube(EufState *st, const VCCube *c) {
     return true;
 }
 
-RefineDecision refine_s1_decide(RefineVC *vc, Arena *a) {
+RefineDecision refine_s1_decide_cc(RefineVC *vc, Arena *a, RefineCubeCache *cc) {
     if (!vc || !vc->goal) return refine_unknown();
 
-    VCCubeSet cs;
-    if (!refine_cubes_build(vc, a, &cs)) return refine_unknown();
-    if (cs.trivial || cs.n == 0) return refine_valid();
+    const VCCubeSet *cs;
+    if (!refine_cubes_get(vc, a, cc, &cs)) return refine_unknown();
+    if (cs->trivial || cs->n == 0) return refine_valid();
 
     /* SX3: one state, mark/undo per cube, instead of a fresh euf_new per
      * cube -- the arrays and trail grow once and are reused.  Each cube still
@@ -271,17 +271,26 @@ RefineDecision refine_s1_decide(RefineVC *vc, Arena *a) {
      * so verdicts and cap telemetry are identical to the rebuild path by
      * construction. */
     EufState *inc = euf_incremental_mode() ? euf_new(vc, a) : NULL;
-    for (uint32_t i = 0; i < cs.n; i++) {
+    for (uint32_t i = 0; i < cs->n; i++) {
         bool survived;
         if (inc) {
             EufMark m = euf_mark(inc);
-            survived = euf_assert_cube(inc, &cs.cubes[i]);
+            survived = euf_assert_cube(inc, &cs->cubes[i]);
             euf_undo_to(inc, m);
         } else {
             EufState *st = euf_new(vc, a);
-            survived = euf_assert_cube(st, &cs.cubes[i]);
+            survived = euf_assert_cube(st, &cs->cubes[i]);
         }
         if (survived) return refine_unknown();  /* cube survived */
     }
     return refine_valid();
+}
+
+/* refine-chain-expands-the-same-dnf-four-times: the original entry point, kept
+ * so every caller outside the chain driver (`tur smt`, tests/unit, the SX8
+ * doors) is unchanged -- a fresh cache means it builds exactly once, as it
+ * always did. */
+RefineDecision refine_s1_decide(RefineVC *vc, Arena *a) {
+    RefineCubeCache cc = {0};
+    return refine_s1_decide_cc(vc, a, &cc);
 }

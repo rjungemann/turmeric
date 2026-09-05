@@ -2505,23 +2505,55 @@ static bool pap_extract(const Expr *init, const Binding **target,
     /* The wrapper body must be a FULLY saturated call to TARGET (n_caps captured +
      * remaining), so `(var rest)` reconstructs the complete arg list. */
     if (cbody->as.call_.n_args != tarity || tarity < c->n_captures) return false;
+    /* NOTE for anyone tempted to tighten this with the closure's own arity:
+     * `c->fn->n_params` is the LIFTED lambda's parameter count, which includes
+     * the env pointer, not the source-level arity.  A `(fn [] ...)` thunk
+     * measures n_params=1 here, so `n_params == tarity - n_captures` is
+     * satisfied by a thunk that takes no arguments at all -- it does not
+     * distinguish a partial application from a thunk, and imposing it would
+     * reject genuine paps (whose lifted count is rem+1).  Tried while fixing
+     * cps-direct-bt-scope-closure-temp-undeclared; it changed nothing there and
+     * would have quietly disabled the optimization.  The real guard is in
+     * `pap_calls_saturated` below. */
     *target = tgt; *caps = c->captures; *n_caps = c->n_captures;
     *rem_arity = tarity - c->n_captures; *prelude = pl;
     return true;
 }
 
 /* Conservative, complete check: is EVERY use of `var` in `e` a saturated direct
- * call `(var <rem_arity args>)`?  Paired with `closure_binding_escapes(e,var) ==
- * false` (which proves `var` appears ONLY as a call callee), this makes the
- * partial-application inlining sound: any unmodeled form returns false (bail, do
- * not inline), and any wrong-arity call to `var` returns false. */
+ * call `(var <rem_arity args>)`?  This makes the partial-application inlining
+ * sound on its own: any unmodeled form returns false (bail, do not inline), any
+ * wrong-arity call to `var` returns false, and any use of `var` that is not a
+ * call CALLEE reaches the EX_VAR leaf below and returns false.
+ *
+ * That last clause used to be delegated -- the comment here said the property
+ * was established by `closure_binding_escapes(e,var) == false`, "which proves
+ * `var` appears ONLY as a call callee".  It does not, and never did:
+ * `closure_binding_escapes` answers whether an env may be freed at scope exit,
+ * and it deliberately reports NO escape for a value passed to a `^borrow` or
+ * inferred-non-retaining fn param.  So `(bt-scope __borrowc)` -- a genuine
+ * VALUE use of the closure -- cleared the check, the closure was dropped as
+ * pap-inlined, and the emitted C named a temp nothing declared
+ * (cps-direct-bt-scope-closure-temp-undeclared).  The check is local now; the
+ * escape call remains at the registration site as a second, independent
+ * condition rather than as this one's proof.
+ *
+ * This leaf is the WHOLE fix -- verified by disabling it and keeping everything
+ * else, which reproduces the failure exactly. */
 static bool pap_calls_saturated(const Expr *e, const Binding *var, uint32_t rem_arity) {
     e = ascribe_peel(e);
     if (!e) return true;
     switch (e->kind) {
         case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
-        case EX_FLOAT_LIT: case EX_CSTR_LIT: case EX_VAR:
+        case EX_FLOAT_LIT: case EX_CSTR_LIT:
             return true;
+        /* A bare reference REACHED here is by construction a non-callee use: the
+         * EX_CALL arm never recurses into a callee that is `var` (neither the
+         * resolved `fn_binding` nor an `fn_expr` peeling to it), so anything
+         * arriving at this leaf is an argument, an init, a branch value -- a use
+         * of the closure as a VALUE, which inlining it away would break. */
+        case EX_VAR:
+            return e->as.var.binding != var;
         case EX_CALL: {
             const Expr *fe = e->as.call_.fn_expr;
             bool is_var_callee =

@@ -740,6 +740,26 @@ void emit_owned_carrier_clear(const char *cname);
 /* CE2: raw Vec slot-word temps (see emit_module.c). */
 void emit_slot_word_mark(const char *cname);
 bool emit_slot_word_is(const char *cname);
+/* CE2: true when `e` is a call to one of the container reads that hands back
+ * the RAW slot word -- the value the slot holds verbatim, which for a CE_BOX
+ * element is the element's heap-box pointer and for a CE_WORD element is the
+ * value itself.  One fact, consulted wherever such a word has to be recognised
+ * before it is used as if it were the element: the hoist that marks the temp
+ * (emit_expr.c) and the spec return bridge (emit_fns.c).  `vec-get-byval` is
+ * deliberately absent -- its own body already ascribes the word back to the
+ * element, so it hands back the element, not the slot. */
+bool emit_call_is_raw_slot_read(const struct Expr *e);
+/* RM3 R4 (docs/upcoming/regions-plan.md): the region boundary, shared with the
+ * CPS emitter.  `emit_binding_is_region_scope` is the callee test (and is false
+ * with the flag off, so both call sites are inert by default);
+ * `emit_region_scope_reclaims` is the STATIC lock -- true when the bracket's
+ * result type provably cannot transitively reach a region-allocated node, which
+ * is the only condition under which a generation may be rewound rather than
+ * retired.  Exported so the direct path and the CPS path ask ONE walk: a
+ * `bt-scope` inside a CPS-lowered function never reaches emit_value, and two
+ * copies of this question would drift. */
+bool emit_binding_is_region_scope(const struct Binding *b);
+bool emit_region_scope_reclaims(struct EmitCtx *ctx, const struct Type *t);
 /* S1 (jit-engine-plan section 4): true when an emitted C type NAME denotes a
  * scalar -- any pointer, or one of the primitive/stdint spellings the emitter
  * produces.  Anything else (a struct typedef such as `Option__int` or
@@ -1207,6 +1227,13 @@ void emit_any_scope_drops(EmitCtx *ctx, Buf *body);
  * payload box that scope owns and may drop?  Exported because emit_tail emits a
  * tail-position `let` inline rather than through emit_let_value. */
 bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx);
+/* union-tagged-union-c-emission 1b: the drop STATEMENT for a binding
+ * `let_binding_any_freeable` greenlit -- `__tur_any_drop(x)` for an `any`, a
+ * plain `free` of the untagged payload for a union (whose tag is a member index
+ * the any-drop switch does not cover, and which the ownership rule proved is a
+ * heap box).  The drop channels carry these rather than names so one channel
+ * serves both.  Caller frees the returned string. */
+char *let_binding_widen_drop_stmt(EmitCtx *ctx, const Expr *e, uint32_t idx);
 void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const char *init_or_null);
 
 /* True when a handle's sole case is the built-in `Unsafe` effect -- a pure

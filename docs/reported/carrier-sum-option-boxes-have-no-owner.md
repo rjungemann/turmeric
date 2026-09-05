@@ -90,3 +90,54 @@ generic) is freed only after the emitter re-resolves the instance per
 monomorph -- the first round had read a representative instance's flag there,
 which was unsound. Details in
 [reclamation-plan.md](../upcoming/reclamation-plan.md), RM1.
+
+## Re-measured 2026-09-05, and two rows re-attributed
+
+The sweep reproduces byte for byte (1790 B, same per-fixture split), so the
+figures above are stable.  Re-reading it moved two rows, both toward "smaller
+than recorded":
+
+- **`zipper-basic`'s 64 B was a test rig**, not the compiler's -- the fixture
+  frees the zipper it started with and not the fresh one `zipper-move-right`
+  hands back.  Fixed; the fixture now carries `requires.leak-check`.  That makes
+  **two** of the sweep's fifteen rows fixtures leaking their own scaffolding,
+  1240 B between them.  (`stdlib/zipper.tur`'s `zipper-free-raw` got the null
+  guard it was missing in the same change: the API returns the null handle at
+  the end of the tape and this fixture's own `unwrap-or ... (:: 0 (Zipper int))`
+  idiom hands it straight back to `zipper-free`.)
+- **The `__tur_aggrspill_*` rows are this report's erased path**, not a separate
+  "poly aggregate-spill" category.  Verified rather than inferred: write the same
+  `bind` with its dispatch statically resolved and *no shim is emitted at all* --
+  the instance specializes to a by-value return and the closure needs no box.
+  The 16-48 B boxes appear only when the dispatch goes through the dictionary,
+  which is exactly where this report has always said the residue lives, and they
+  go to zero at monomorphization for the same reason everything else here does.
+
+Why the existing freshness machinery does not reach those boxes -- it is one
+specific gap, not a general limit -- is written up in
+[rm1-leak-sweep-decomposed-2026-09-04.md](../artifacts/rm1-leak-sweep-decomposed-2026-09-04.md#the-__tur_aggrspill_-rows-are-the-erased-dict-path-not-a-category):
+freshness is a per-monomorph property recorded once per binding, stamped on the
+generic body where the dispatch is not static.  Closing it costs an
+all-instances-agree stamp or a per-spec pre-pass, with double-free as the
+failure mode, for ~48 B that monomorphization deletes outright.  Deliberately
+not taken up.
+
+### A third row was a real compiler leak, and is fixed
+
+Chasing the same sweep found one entry that was neither scaffolding nor erased
+residue: the **niche** arm of `emit_carrier_bridge` consumed an inline-C
+producer's carrier box without freeing it, while the by-value readback beside it
+and the CE_WORD Vec-slot store above it both did. 16 bytes per call, on the arm
+every inline-C `: (Option T-shaped-as-a-pointer)` producer reaches. Invisible to
+`bash tests/run.sh`, which compiles fixtures without sanitizers.
+
+Fixed, with `tests/fixtures/option-niche-inline-c-box-freed` (leak-checked, both
+readback positions, both Some and None paths) pinning it. Write-up appended to
+[inline-c-option-carrier-box-leaks.md](../archive/inline-c-option-carrier-box-leaks.md).
+`option-niche-crossings` 183 -> 151 B, `option-niche-string` 38 -> 22 B.
+
+**The largest remaining category is not this report's.** Of the 1678 B left,
+~990 is the per-node recursive spine (`ctor_Cons_Cons__*`, `stdlib/re.tur`'s
+`RxCons` cells), which is RM2 -- and RM2's own assessment is that it gets
+unblocked by RM3 (regions), not by a better analysis.  RM1's own residue is
+~240 B.

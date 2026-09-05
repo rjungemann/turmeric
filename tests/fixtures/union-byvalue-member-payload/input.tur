@@ -1,0 +1,45 @@
+;; union-byvalue-member-payload -- a union member that does NOT ride the
+;; tur_tagged_t value slot survives the round trip through it.
+;;
+;; A union value is `{ int64_t tag; int64_t val; }`.  Two member kinds cannot be
+;; an int64 in that slot, and the inject site spells out what it does with each:
+;; a by-value aggregate is heap-boxed and the slot holds a pointer, and a float
+;; rides as its IEEE-754 bit pattern.  The MATCH binder had neither rule -- it
+;; cast the slot to the arm type unconditionally -- so both were broken, in the
+;; two ways a representation mismatch can break:
+;;
+;;   - the aggregate arm cast a pointer to a struct type, which is
+;;     "conversion to non-scalar type requested": a hard C compile error.  Every
+;;     pre-existing union fixture either ignores its payload or carries only
+;;     scalars, which is how a union of a struct stayed uncompiled long enough
+;;     for this to sit.
+;;   - the float arm converted numerically, and the INJECT's float rule was
+;;     itself keyed on the tag rather than the payload type -- a union tag is a
+;;     member index, so it never fired.  7.1 went in as the integer 7 and came
+;;     back as 7.0: a silent wrong answer, no diagnostic anywhere.
+;;
+;; Leading with 7.1 rather than 7.0 is the point: an integral literal round-trips
+;; through the truncating path unharmed and reports success.
+
+(defstruct Wide [a : int b : int c : int d : int])
+
+;; The aggregate member: four fields, well past the 8-byte slot.
+(defn wide-sum [x : (Wide | int)] : int
+  (match x
+    (w : Wide) (+ (+ (.a w) (.b w)) (+ (.c w) (.d w)))
+    (i : int)  i))
+
+;; The float member.
+(defn as-float [x : (float | int)] : float
+  (match x
+    (f : float) f
+    (i : int)   0.25))
+
+(defn main [] : int
+  ;; Every field arrives, not just the first word.
+  (println (wide-sum (Wide 1 2 3 4)))          ;; 10
+  (println (wide-sum 99))                      ;; 99, the scalar member is unchanged
+  ;; The fraction survives.  Under the truncating path this printed 7.
+  (println (as-float 7.1))                     ;; 7.1
+  (println (as-float 3))                       ;; 0.25, the non-float arm
+  0)

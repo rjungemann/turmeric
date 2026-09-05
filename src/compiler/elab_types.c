@@ -2992,6 +2992,17 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
         return elab_coerce_to_any(e, inner);
     }
 
+    /* union-tagged-union-c-emission: `(:: v (A | B))` is the same coercion one
+     * type up.  Ascribing a MEMBER value to the union must tag it, exactly as
+     * passing it to a union-typed parameter does; relabelling the static type
+     * alone hands a raw aggregate to a `tur_tagged_t` slot, which is a hard cc
+     * error ("invalid initializer" / "incompatible types when returning"), not a
+     * miscompile that runs.  This is the ascription spelling, and it is what a
+     * caller reaches for to put a member in a local or return one. */
+    if (ascribed->kind == TY_UNION && inner->type.kind != TY_UNION) {
+        return elab_coerce_to_union(e, inner, ascribed);
+    }
+
     /* sealed-opaque: refuse to cross a sealed opaque's representation boundary
      * from outside its declaring module.  Placed before the remaining coercion
      * rules because it is a visibility question, not a representation one --

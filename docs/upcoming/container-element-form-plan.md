@@ -6,10 +6,10 @@ description: Extend per-monomorph specialization from container RECEIVERS (done,
 
 # Container Element Form (CE)
 
-**Status: CE0, CE1 and CE2 BUILT (2026-09-03) and DEFAULT since the option
-niche graduated the same day; CE3 mostly moot, CE4 deferred, CE5 done for
-the container row.** The word convention, the TUR-E0714 backstop and the
-erased-closure residue below are default-path facts now. The refinement of the "monomorphization
+**Status: CE0, CE1, CE2 and CE3 BUILT (CE3 closed 2026-09-04) and DEFAULT
+since the option niche graduated 2026-09-03; CE4 deferred, CE5 done for
+the container row.** The word convention and the TUR-E0714 / TUR-E0715
+backstops are default-path facts now. The refinement of the "monomorphization
 dependency" the [option-niche graduation hold](sr3-option-niche-plan.md)
 points at, sketched 2026-08-28 in that plan's container-boxing section.
 
@@ -37,8 +37,13 @@ unwrapping at all -- so the first element read back blank. CE0's
 The same push spec failed to BUILD on the default path (a by-value
 `(Option String)` element) for the same double-bridge reason; resolving the
 bridge type inside the spec and gating the second arm fixed both. The read
-half of the default-path wrapper is a separate pre-existing defect, filed as
-[generic-vec-read-wrapper-spec-returns-carrier-word](../reported/generic-vec-read-wrapper-spec-returns-carrier-word.md).
+half of the default-path wrapper was a separate pre-existing defect, filed as
+[generic-vec-read-wrapper-spec-returns-carrier-word](../archive/generic-vec-read-wrapper-spec-returns-carrier-word.md)
+and resolved 2026-09-04: a spec whose declared result is a CE_BOX element and
+whose tail is a raw container read now takes the same carrier->concrete return
+bridge a catch-box tail already did, so it emits the readback the concrete
+ascription site has always emitted. CE_WORD is excluded, which is what keeps
+the niche wrapper -- correct since CE2 -- correct.
 
 ## The problem, in one sentence
 
@@ -244,11 +249,24 @@ constrained-Eq synthesizer names its params `__cmp_slot_a`/`__cmp_slot_b`
 and `emit_slot_word_is` recognises the prefix, so the value-keyed bridge
 reinterprets the word (pinned by `option-niche-vec-closure-cmp`, seam
 population). A USER comparator with untyped params that ascribes the word
-itself, `(fn [a b] (eq? (:: a (Option String)) ...))`, is the residue the
-diagnostic cannot see and the bridge cannot key: filed as
-[erased-closure-param-over-niche-vec-slot-reads-box](../reported/erased-closure-param-over-niche-vec-slot-reads-box.md);
-the fix on the user's side is to type the params, which the same fixture
-pins.
+itself, `(fn [a b] (eq? (:: a (Option String)) ...))`, was the residue --
+filed as
+[erased-closure-param-over-niche-vec-slot-reads-box](../archive/erased-closure-param-over-niche-vec-slot-reads-box.md).
+
+**Closed 2026-09-04, and CE3 is done.** The residue split again along one
+line: whether the comparator is written AT the call. A lambda there is
+minted for that argument and reachable from nowhere else, so it can be given
+the same `__cmp_slot_` mark the synthesized comparator carries -- the mark is
+the emitted parameter name, which makes it self-scoping in a way the
+program-wide value table is not. Both spellings reach it, a captureless
+lambda through its lifted `__fn_N` binding (`is_lifted_lambda`) and a
+capturing one as an `EX_CLOSURE` literal. A NAMED comparator cannot be
+marked: it is elaborated once and another caller may hand it genuine boxes,
+so marking its parameters would corrupt that caller instead. Erased
+parameters there have no decidable convention and are refused with
+TUR-E0715, the read-side twin of the store side's TUR-E0714. Every path is
+now either correct or loud; typing the parameters remains the fix at the
+site, and shape 4 of `option-niche-vec-closure-cmp` pins the inline form.
 
 **CE4 -- decide Map/Set/HAMT by evidence, not momentum.** Keys need
 hash/cmp over the word and the HAMT's own boxing story; the census from CE0

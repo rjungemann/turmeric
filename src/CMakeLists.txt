@@ -244,6 +244,7 @@ set(TUR_CORE_SOURCES
     runtime/interp.c
     runtime/rc.c
     runtime/rc_free_queue.c
+    runtime/region.c
     runtime/serial.c
     # 6(a): atomics for front ends without the GCC builtins (the JIT). Host-side
     # by design -- see the file header and jit-engine-j0-findings.md 14.
@@ -610,6 +611,13 @@ set(TURT_RUNTIME_SOURCES
     runtime/rc.c
     runtime/gc.c
     runtime/rc_free_queue.c
+    # RM3 regions: an emitted spine ctor calls tur_region_alloc_or_malloc when
+    # --enable=regions is on, so the definition has to be linkable by the
+    # program, not only by the compiler.  Same reasoning as the rc/gc members
+    # above; with the flag off nothing references it and the linker never
+    # extracts this member.
+    runtime/region.c
+    runtime/arena.c
 )
 add_library(turt_runtime STATIC ${TURT_RUNTIME_SOURCES})
 set_target_properties(turt_runtime PROPERTIES OUTPUT_NAME "turt_runtime")
@@ -1521,6 +1529,27 @@ if(HAVE_EDITLINE)
     target_compile_definitions(tur_wasm_glue_smt_unit PRIVATE TURI_HAVE_EDITLINE=1)
 endif()
 set_target_properties(tur_wasm_glue_smt_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# RM3 region allocator unit test (docs/upcoming/regions-plan.md).  Pins the
+# SAFETY properties -- ownership across retirement, a conservative pop that
+# does not reclaim, a refused mismatched depth -- not that malloc works.
+add_executable(tur_region_unit
+    ${CMAKE_SOURCE_DIR}/tests/region_unit.c
+    ${CMAKE_SOURCE_DIR}/src/runtime/region.c
+    ${CMAKE_SOURCE_DIR}/src/runtime/arena.c
+)
+target_include_directories(tur_region_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_region_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_region_unit PRIVATE
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_region_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 

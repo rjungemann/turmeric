@@ -19,11 +19,21 @@
 ;;      said "ne".  The slot-word mark on the synthesized params and the
 ;;      `(:: vx A)` ascription in the Option/Result instances fix both.
 ;;
-;; The one shape deliberately NOT here is an UNTYPED user comparator that
-;; ascribes the word itself, `(fn [a b] (eq? (:: a (Option String)) ...))`:
-;; an erased closure param carries no convention, and the bridge reads it
-;; as a carrier box -- docs/reported/erased-closure-param-over-niche-vec-
-;; slot-reads-box.md.  Write the element type on the params (shape 1).
+;;   4. an UNTYPED user comparator that ascribes the word itself,
+;;      `(fn [a b] (eq? (:: a (Option String)) ...))`.  This one was the
+;;      report erased-closure-param-over-niche-vec-slot-reads-box: an
+;;      erased closure param carried no convention, so the bridge unboxed
+;;      a String pointer as a carrier box and answered silently wrong --
+;;      "eq" for two vecs holding DIFFERENT strings.  A comparator written
+;;      inline at the call now gets the same `__cmp_slot_` mark shape 3's
+;;      synthesized one carries, capturing or not, so the ascription
+;;      reinterprets the word.  The differing-payload line is the one that
+;;      matters: equal payloads answered "eq" even while broken.
+;;
+;; The shape that is a hard error rather than an answer is a NAMED
+;; comparator with erased params (TUR-E0715) -- it is elaborated once and
+;; may also be called with real boxes, so it cannot carry the mark.  See
+;; tests/fixtures/errors/vec-eq-named-erased-comparator.
 (load "stdlib/string.tur")
 
 (defn show-opt [o : (Option String)] : void
@@ -46,6 +56,15 @@
     (println (if (vec-eq? v w (fn [a : (Option String) b : (Option String)] : bool (same-shape? a b))) "shape-eq" "shape-ne"))
     (println (if (vec-eq? v w (fn [a : (Option String) b : (Option String)] : bool (eq? a b))) "typed-eq" "typed-ne"))
     (println (if (vec-eq? v u (fn [a : (Option String) b : (Option String)] : bool (eq? a b))) "typed-eq" "typed-ne"))
+    ;; 4. UNTYPED comparator written inline: the ascription reinterprets the
+    ;;    slot word.  Captureless and capturing spellings both, since the two
+    ;;    reach the mark by different routes (a lifted `__fn_N` reference vs an
+    ;;    EX_CLOSURE literal).
+    (println (if (vec-eq? v w (fn [a b] : bool (eq? (:: a (Option String)) (:: b (Option String))))) "raw-eq" "raw-ne"))
+    (println (if (vec-eq? v u (fn [a b] : bool (eq? (:: a (Option String)) (:: b (Option String))))) "raw-eq" "raw-ne"))
+    (let [k 1]
+      (println (if (vec-eq? v w (fn [a b] : bool (and (= k 1) (eq? (:: a (Option String)) (:: b (Option String)))))) "cap-eq" "cap-ne"))
+      (println (if (vec-eq? v u (fn [a b] : bool (and (= k 1) (eq? (:: a (Option String)) (:: b (Option String)))))) "cap-eq" "cap-ne")))
     ;; 2. let-bound raw word, ascribed later
     (let [x (vec-get v 0)
           y (vec-get v 1)]

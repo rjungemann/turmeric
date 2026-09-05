@@ -32,6 +32,12 @@
         (let [opt (zipper-move-right z)]
           (let [z2 (unwrap-or opt (:: 0 (Zipper int)))]
             (let [f (zipper-focus z2)]
+              ;; z2 is a SECOND zipper: zipper-move-right-raw mallocs a fresh
+              ;; struct and fresh left/right arrays rather than mutating z.
+              ;; Freeing only z leaks all three (40 + 16 + 8 bytes), which is
+              ;; this fixture's own scaffolding and was being counted against
+              ;; the compiler in the RM1 leak sweep.
+              (zipper-free z2)
               (zipper-free z)
               (free left)
               (free right)

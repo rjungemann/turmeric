@@ -108,24 +108,33 @@ static bool no_cube_unsat(RefineVC *vc, Arena *a, const VCCube *c,
     return false;
 }
 
-RefineDecision refine_s3_decide(RefineVC *vc, Arena *a) {
+RefineDecision refine_s3_decide_cc(RefineVC *vc, Arena *a, RefineCubeCache *cc) {
     if (!vc || !vc->goal) return refine_unknown();
 
-    VCCubeSet cs;
-    if (!refine_cubes_build(vc, a, &cs)) return refine_unknown();
-    if (cs.trivial || cs.n == 0) return refine_valid();
+    const VCCubeSet *cs;
+    if (!refine_cubes_get(vc, a, cc, &cs)) return refine_unknown();
+    if (cs->trivial || cs->n == 0) return refine_valid();
 
     EufState *inc = euf_incremental_mode() ? euf_new(vc, a) : NULL;
-    for (uint32_t i = 0; i < cs.n; i++) {
+    for (uint32_t i = 0; i < cs->n; i++) {
         bool refuted;
         if (inc) {
             EufMark m = euf_mark(inc);
-            refuted = no_cube_unsat(vc, a, &cs.cubes[i], inc);
+            refuted = no_cube_unsat(vc, a, &cs->cubes[i], inc);
             euf_undo_to(inc, m);
         } else {
-            refuted = no_cube_unsat(vc, a, &cs.cubes[i], NULL);
+            refuted = no_cube_unsat(vc, a, &cs->cubes[i], NULL);
         }
         if (!refuted) return refine_unknown();
     }
     return refine_valid();
+}
+
+/* refine-chain-expands-the-same-dnf-four-times: the original entry point, kept
+ * so every caller outside the chain driver (`tur smt`, tests/unit, the SX8
+ * doors) is unchanged -- a fresh cache means it builds exactly once, as it
+ * always did. */
+RefineDecision refine_s3_decide(RefineVC *vc, Arena *a) {
+    RefineCubeCache cc = {0};
+    return refine_s3_decide_cc(vc, a, &cc);
 }

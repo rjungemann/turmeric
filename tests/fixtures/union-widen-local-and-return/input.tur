@@ -1,0 +1,83 @@
+;; union-tagged-union-c-emission: a member value flowing into a union slot has
+;; to be TAGGED, and until now only the ARGUMENT position did it.
+;;
+;; A union's C representation is `tur_tagged_t {int64_t tag; int64_t val}`, not
+;; the member's own layout.  Handing a raw by-value member to a `tur_tagged_t`
+;; slot is not a miscompile that runs -- it is a hard cc error:
+;;
+;;   (let [u (:: (Wide ...) (Wide | int))] ...)
+;;     -> error: invalid initializer
+;;   (defn mk [] : (Wide | int) (:: (Wide ...) (Wide | int)))
+;;   (defn mk [] : (Wide | int) (Wide ...))
+;;     -> error: incompatible types when returning type 'tur_adt_Wide'
+;;               but 'tur_tagged_t' was expected
+;;
+;; The report had these filed as "a union bound to a local, returned, or held as
+;; a temporary still leaks its box".  They did not leak; they did not build.
+;;
+;; `elab_coerce_to_union` is the union twin of `elab_coerce_to_any` -- the same
+;; widen the argument path has done since IT4, now reachable from the ascription
+;; and from return position.  It deliberately does NOT set `frame_box`: that
+;; optimisation rests on a CALLEE not retaining the payload for one call, and a
+;; value bound to a local or returned outlives the expression that made it.  So
+;; these shapes heap-box, and OWNING that box is the second half
+;; (report item 1b, also closed): `let_binding_any_freeable` was a fourth rule
+;; keyed on TY_ANY, and adding the key alone would have closed nothing, because
+;; the drop channel emits `__tur_any_drop`, whose interned id space (>= 1000) is
+;; disjoint from a union's small member index -- a silent no-op on a union
+;; value.  A union let needs no runtime switch: the `EX_UNION_INJECT` is right
+;; there in the initializer, so the tag is a compile-time fact and the drop is a
+;; plain free.  The channel carries drop STATEMENTS now instead of names, which
+;; is what lets one channel serve both and reach the early exits.
+;;
+;; The OWNERSHIP half is pinned by the sibling `union-widen-local-owned`, which
+;; carries requires.leak-check.  This fixture deliberately does not: `escaping`
+;; below leaks one box on purpose, which is the safe half of the rule and would
+;; fail a leak check for the right reason.
+
+(defstruct Wide [a : int b : int c : int d : int])
+
+(defn sum-wide [x : (Wide | int)] : int
+  (match x
+    (w : Wide) (+ (.a w) (.b w))
+    (i : int)  i))
+
+;; (1) ascribed let-init -- "invalid initializer"
+(defn via-local [i : int] : int
+  (let [u (:: (Wide i 1 2 3) (Wide | int))]
+    (sum-wide u)))
+
+;; (2) ascribed return -- "incompatible types when returning"
+(defn mk-asc [i : int] : (Wide | int)
+  (:: (Wide i 4 5 6) (Wide | int)))
+
+;; (3) BARE return, no ascription -- same error, and the shape a caller actually
+;; writes.  The int member has to keep riding the value slot unchanged.
+(defn mk-bare [i : int] : (Wide | int) (Wide i 7 8 9))
+(defn mk-int  [i : int] : (Wide | int) i)
+
+;; Control: an ANNOTATED let binding, which already worked -- the binding is
+;; inlined into the argument position and frame-boxed, so it never allocated.
+;; Kept so a future change that routes it through the new coercion shows up as a
+;; behaviour change rather than silently.
+(defn via-annotated [i : int] : int
+  (let [u : (Wide | int) (Wide i 2 3 4)]
+    (sum-wide u)))
+
+;; The negative: a union local that ESCAPES by being returned must NOT be freed
+;; here.  `any_box_binding_escapes` declines it, the box outlives the scope, and
+;; the caller reads it -- a wrong greenlight would be a use-after-free, which is
+;; the direction that matters.  (It leaks instead; that is the safe half of the
+;; rule and is what "only ever greenlights a free" means.)
+(defn escaping [i : int] : (Wide | int)
+  (let [u (:: (Wide i 6 7 8) (Wide | int))]
+    u))
+
+(defn main [] : int
+  (println (via-local 10))            ;; 10 + 1  = 11
+  (println (sum-wide (mk-asc 20)))    ;; 20 + 4  = 24
+  (println (sum-wide (mk-bare 30)))   ;; 30 + 7  = 37
+  (println (sum-wide (mk-int 42)))    ;; 42
+  (println (via-annotated 50))        ;; 50 + 2  = 52
+  (println (sum-wide (escaping 60)))  ;; 60 + 6  = 66
+  0)

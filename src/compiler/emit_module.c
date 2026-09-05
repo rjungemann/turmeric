@@ -3034,6 +3034,55 @@ static bool body_has_dispatch_on_app_tyvar(
                 }
             }
         }
+        /* sr2-carrier-seam-rotted (3): an instance method dispatching on its OWN
+         * constraint var, spelled as an ascription.
+         *
+         * `(definstance Eq [Option] [(Eq A)] (eq? [x y] ... (eq? (:: vx A) ...)))`
+         * -- the receiver is `(:: vx A)`.  The check above peels the ascription
+         * and asks about the INNER expression, whose type is the carrier once
+         * the payload is erased, so it never fires; and `A` is not in
+         * `bindings` anyway, which holds the CLASS var (`a` -> `(Option
+         * String)`).  No spec is minted, the call lands in the generic instance
+         * body, and its inner dispatch stays baked against the int
+         * representative -- pointer equality on a String.
+         *
+         * On the by-value path `abi_changes` covers this BY ACCIDENT: `(Option
+         * String)` narrows to `void *` where the representative is `int64_t`, so
+         * a spec exists because the SIGNATURE changed and correct dispatch is a
+         * side effect.  That is the fragility worth naming: the ascription is
+         * necessary but is not what triggers the specialization, so the
+         * comments in option.tur/result.tur claiming it is are describing a
+         * coincidence.
+         *
+         * What keeps this from over-minting is the type ARGUMENT: only a
+         * NOMINAL payload can have an instance the int representative gets
+         * wrong.  A class var bound to `(Option int)` / `(Option bool)` /
+         * `(Option float)` has a primitive `args[0]` and mints nothing new. */
+        {
+            const Expr *asc = e->as.call_.args[0];
+            if (asc && asc->kind == EX_ASCRIBE &&
+                asc->type.kind == TY_TYVAR && asc->type.as.tyvar_.name) {
+                bool named_in_bindings = false;
+                for (uint8_t i = 0; i < n_bindings; i++)
+                    if (bindings[i].name &&
+                        strcmp(bindings[i].name, asc->type.as.tyvar_.name) == 0)
+                        named_in_bindings = true;
+                if (!named_in_bindings) {
+                    for (uint8_t i = 0; i < n_bindings; i++) {
+                        if (bindings[i].type.kind != TY_APP) continue;
+                        Type probe = bindings[i].type;
+                        AdtDef *pdef = NULL;
+                        Type pargs[16];
+                        uint8_t pn = 0;
+                        if (!type_extract_adt_app(&probe, &pdef, pargs, &pn) ||
+                            !pdef || pn == 0)
+                            continue;
+                        if (pargs[0].kind == TY_ADT || pargs[0].kind == TY_APP)
+                            return true;
+                    }
+                }
+            }
+        }
         /* heap-struct-field-extraction-collapses-to-carrier: the dispatch
          * receiver may be a field extraction `(.head xs)` from a parametric
          * (often :heap) container whose element type was erased to the int64
@@ -3156,6 +3205,26 @@ static bool body_has_dispatch_on_app_tyvar(
         case EX_WHILE:
             return body_has_dispatch_on_app_tyvar(e->as.while_.cond, bindings, n_bindings) ||
                    body_has_dispatch_on_app_tyvar(e->as.while_.body, bindings, n_bindings);
+        /* sr2-carrier-seam-rotted (3): `match` was missing from this walk
+         * entirely, which made every `instance_changes` trigger -- the TY_APP
+         * tyvar dispatch, the return dispatch, the field extraction -- blind to
+         * anything inside one.  That is not a corner: matching is how a sum
+         * instance is written, so `(definstance Eq [Option] ... (match x (Some
+         * vx) ... (eq? (:: vx A) ...)))` had its only dispatch out of reach.
+         * The scrutinee and the guards are walked too; a dispatch in either is
+         * as much a reason to mint as one in an arm body. */
+        case EX_MATCH:
+            if (body_has_dispatch_on_app_tyvar(e->as.match_.scrutinee, bindings, n_bindings))
+                return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (body_has_dispatch_on_app_tyvar(e->as.match_.arms[i].guard,
+                                                   bindings, n_bindings))
+                    return true;
+                if (body_has_dispatch_on_app_tyvar(e->as.match_.arms[i].body,
+                                                   bindings, n_bindings))
+                    return true;
+            }
+            break;
         case EX_CALL:
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
                 if (body_has_dispatch_on_app_tyvar(e->as.call_.args[i], bindings, n_bindings))
@@ -3503,6 +3572,25 @@ static bool emit_abi_try_nested_instance_dispatch_redirect(
     for (uint8_t i = 0; i < n_spec_args; i++) {
         if (i == 0 && !return_dispatch) {
             arg_types[0] = *resolved;
+        } else if (!return_dispatch && n_spec_args > 1 &&
+                   type_eq(fd->params[i]->type, fd->params[0]->type)) {
+            /* eq-on-pair-of-niche-option-segfaults: a BINARY method whose other
+             * parameter is ALSO the class variable -- `(eq? [x y] ...)` -- had
+             * only parameter 0 forced to the resolved receiver.  Every other
+             * parameter instantiated its DECLARED type through the element
+             * bindings, and the class variable is not an element tyvar, so it
+             * stayed the erased carrier: one `Eq[Option]` spec minted
+             * `(void *, int64_t)`, matching x as a niche and y as a tagged box.
+             * The second binder then handed `Eq[String]` an integer where it
+             * wants a pointer -- a -Wint-conversion cc WARNING, so it reached a
+             * running binary and segfaulted there.
+             *
+             * A parameter declared with the receiver's own erased type IS the
+             * class variable: the tyvar was erased at instance elaboration (the
+             * same fact the sibling substitution at the owned-path loop relies
+             * on), so inside an instance body that spelling has no other
+             * meaning.  It resolves to the same concrete receiver. */
+            arg_types[i] = *resolved;
         } else {
             arg_types[i] = emit_abi_instantiate_type(&fd->params[i]->type, eb, enb,
                                                      ctx->type_arena);
@@ -6812,6 +6900,15 @@ bool emit_slot_word_is(const char *cname) {
     return false;
 }
 
+bool emit_call_is_raw_slot_read(const Expr *e) {
+    if (!e || e->kind != EX_CALL) return false;
+    const Binding *fb = e->as.call_.fn_binding;
+    if (!fb || !fb->name || !fb->name->name) return false;
+    const char *n = fb->name->name;
+    return strcmp(n, "vec-get") == 0 || strcmp(n, "vec-pop!") == 0 ||
+           strcmp(n, "vec-data-get-checked__") == 0;
+}
+
 void emit_localvar_reset(void) {
     for (uint32_t i = 0; i < g_lv_tab_n; i++) {
         free(g_lv_tab[i].cname);
@@ -7078,6 +7175,12 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 fd->param_types[j].kind != TY_FN &&
                 type_is_wide_byval_adt(emit_resolve_type(ctx, _b4_pty))) {
                 buf_puts(out, "int64_t");
+            } else if (fd->params[j]->arrives_as_carrier_box) {
+                /* typed-comparator-over-hamt-box: declared as a niche option,
+                 * but the caller hands over the carrier box -- the definition
+                 * takes `int64_t __tur_nbox_<p>` and unboxes at entry, so the
+                 * forward declaration has to agree. */
+                buf_puts(out, "int64_t");
             } else if (fd->params[j]->is_poly_fn) {
                 buf_puts(out, "tur_poly_fn_t");
             } else if (fd->param_types[j].kind == TY_FN
@@ -7289,7 +7392,10 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
     if (tagged) buf_printf(out, "        break;\n");
     }
     if (tagged) buf_printf(out, "    }\n");
-    buf_printf(out, "    free(ptr);\n");
+    /* RM3 R4: `ptr` is the node the two ctor emitters allocate, so inside a
+     * region it is arena memory and plain `free` would be an allocator
+     * mismatch, not a leak.  `region_free_fn` is `free` in a default build. */
+    buf_printf(out, "    %s(ptr);\n", region_free_fn());
     buf_printf(out, "}\n\n");
     ctor = def->ctors[0];   /* restore for the sections below */
 
@@ -7655,8 +7761,27 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
         if (heap) {
             /* malloc the by-value header, store fields inline, return the typed
              * pointer (no int64 carrier cast -- the pointer IS the value). */
-            buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
-                       adt_c_name, adt_c_name, adt_c_name);
+            /* RM3 R2 (docs/upcoming/regions-plan.md): this is the spine node.
+             * A `:heap` ADT's monomorph ctor mallocs one per link, and it is
+             * the allocation RM1 cannot reach (it escapes its constructor by
+             * construction) and RM2 cannot own (a persistent tail is shared).
+             * Route it to the innermost open generation when regions are
+             * enabled; `tur_region_alloc_or_malloc` falls back to malloc when
+             * none is open, so the SAME emitted ctor works inside and outside
+             * a region and R2 needs no branch here.
+             *
+             * Gated: a default build emits the identical `malloc` it always
+             * has, so this changes no byte of the default path.
+             *
+             * Its sibling is the MONOMORPH ctor in types.c (search RM3 R2
+             * there); the two mirror each other and a change to one belongs in
+             * both.  Changing only this one is what the first R2 pass did, and
+             * the monomorph ctor -- which is the one the leak sweep blames --
+             * kept its plain malloc. */
+            buf_printf(out, "    %s *__r = (%s *)%s(sizeof(%s));\n",
+                       adt_c_name, adt_c_name,
+                       regions_enabled() ? "tur_region_alloc_or_malloc" : "malloc",
+                       adt_c_name);
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);
@@ -7942,6 +8067,30 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * other door.  A hand-rolled tagged-None box (tag 0, non-null pointer --
      * the historical layout the read side still accepts) maps to the niche
      * null rather than reading its uninitialised payload word. */
+    /* RM3 regions (docs/upcoming/regions-plan.md), R1 plumbing: with
+     * `--enable=regions` the emitted program can reach the region allocator, so
+     * R2 has something to route allocation to and R4 something for `bt-scope`
+     * to bracket.  Declared, not called: R1 changes no allocation.  Off by
+     * default, so a default build emits nothing here and this costs an
+     * already-false bool test. */
+    if (regions_enabled()) {
+        buf_puts(out,
+"/* RM3 regions: declared lifetimes over the runtime arena.  A generation is\n"
+" * reclaimed whole or not at all -- tur_region_pop retires without freeing and\n"
+" * tur_region_pop_reclaim rewinds, so a shape the escape check cannot prove\n"
+" * costs a saving rather than correctness.  tur_region_owns guards every free\n"
+" * path: a pointer into region memory must never reach free(). */\n"
+"extern int  tur_region_push(void);\n"
+"extern void tur_region_pop(int depth);\n"
+"extern void tur_region_pop_reclaim(int depth);\n"
+"extern void  tur_region_note_escape(const void *p);\n"
+"extern bool tur_region_pop_checked(int depth);\n"
+"extern void *tur_region_alloc(size_t n);\n"
+"extern void *tur_region_alloc_or_malloc(size_t n);\n"
+"extern bool tur_region_owns(const void *p);\n"
+"extern void tur_region_free(void *p);\n"
+"extern bool tur_region_active(void);\n");
+    }
     buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) {\n");
     buf_puts(out, "    tur_option_t *__p = (tur_option_t *)(intptr_t)__o;\n");
@@ -13509,8 +13658,26 @@ int emit_program(Buf *out, const Expr *program) {
                 }
                 buf_printf(&early_file, ") {\n");
                 if (heap) {
-                    buf_printf(&early_file, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
-                               adt_c_name, adt_c_name, adt_c_name);
+                    /* RM3 R2/R4 (docs/upcoming/regions-plan.md): the THIRD
+                     * spine-node ctor emitter.  `emit_program` emits base ctors
+                     * HERE rather than through emit_adt_typedef_and_ctors, so a
+                     * NON-parametric `:heap` ADT -- `(defdata Link :heap ...)`,
+                     * the plainest spine there is -- came out of R2 still
+                     * calling malloc while both of the other two routed.
+                     *
+                     * Found because R4's fixture measured the SAVING rather
+                     * than asserting the routing: valgrind reported 913 blocks
+                     * live with the flag on against 909 with it off, so the
+                     * region was pushed, popped, and never allocated into.  The
+                     * SR3 slice-A note a few lines below records this exact
+                     * miss at this exact site, one representation change
+                     * earlier.  All three emitters mirror each other; a change
+                     * to one belongs in all three. */
+                    buf_printf(&early_file, "    %s *__r = (%s *)%s(sizeof(%s));\n",
+                               adt_c_name, adt_c_name,
+                               regions_enabled() ? "tur_region_alloc_or_malloc"
+                                                 : "malloc",
+                               adt_c_name);
                     if (!flat) buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                         char *mp = adt_field_member_path(def, ctor, fi);

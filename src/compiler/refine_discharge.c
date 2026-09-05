@@ -55,18 +55,29 @@ static bool dump_enabled(void) {
  * The chain
  * ------------------------------------------------------------------------- */
 
-static const RefineBackend CHAIN[] = {
-    refine_s0_decide,   /* trivial / syntactic          */
-    refine_s1_decide,   /* congruence closure (EUF)     */
-    refine_s2_decide,   /* linear arithmetic            */
-    refine_s3_decide,   /* Nelson-Oppen combination     */
-};
-/* Parallel to CHAIN, for the SX8a dump and `tur smt`: "which stage decided
+/* Parallel to CHAIN_CC, for the SX8a dump and `tur smt`: "which stage decided
  * this" is the first thing anyone asks of an unexpected verdict. */
 static const char *const CHAIN_NAMES[] = {
     "S0 (trivial)", "S1 (EUF)", "S2 (arithmetic)", "S3 (Nelson-Oppen)",
 };
-#define CHAIN_LEN (sizeof(CHAIN) / sizeof(CHAIN[0]))
+/* refine-chain-expands-the-same-dnf-four-times: the chain, sharing ONE run's
+ * cube set.  Each stage used to open by calling `refine_cubes_build` on an
+ * unchanged vc, so an obligation reaching S3 ran the same NNF conversion and
+ * DNF expansion four times and discarded three.  Every driver below now
+ * declares one `RefineCubeCache` and threads it through.
+ *
+ * The single-stage `refine_sN_decide` entry points still exist (they wrap these
+ * with a fresh cache), which is what `tur smt`, `src/web/wasm_glue.c` and
+ * tests/unit/refine_solver.c call -- unchanged, and they never had the
+ * duplication because they run one stage. */
+typedef RefineDecision (*RefineBackendCC)(RefineVC *, Arena *, RefineCubeCache *);
+static const RefineBackendCC CHAIN_CC[] = {
+    refine_s0_decide_cc,   /* trivial / syntactic          */
+    refine_s1_decide_cc,   /* congruence closure (EUF)     */
+    refine_s2_decide_cc,   /* linear arithmetic            */
+    refine_s3_decide_cc,   /* Nelson-Oppen combination     */
+};
+#define CHAIN_LEN (sizeof(CHAIN_CC) / sizeof(CHAIN_CC[0]))
 
 /* ------------------------------------------------------------------------- *
  * Diagnostics
@@ -119,8 +130,9 @@ static void emit_model_note(const RefineObligation *ob, bool closed) {
 
 /* Run the whole chain over `vc` as the discharge loop does. */
 static RefineVerdict run_chain(RefineVC *vc, Arena *a) {
+    RefineCubeCache cc = {0};
     for (size_t i = 0; i < CHAIN_LEN; i++) {
-        RefineDecision d = CHAIN[i](vc, a);
+        RefineDecision d = CHAIN_CC[i](vc, a, &cc);
         if (d.verdict != RT_UNKNOWN) return d.verdict;
     }
     return RT_UNKNOWN;
@@ -465,9 +477,10 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
          * The caller rolls this up into the site's `caps_probe`. */
         const RefineCapStats probe_before = *refine_caps();
         bool proved = false;
+        RefineCubeCache pcc = {0};
         for (size_t i = 0; i < CHAIN_LEN; i++) {
             g_stats.backend_calls++;
-            RefineDecision pd = CHAIN[i](pvc, a);
+            RefineDecision pd = CHAIN_CC[i](pvc, a, &pcc);
             if (pd.verdict == RT_VALID) {
                 ob->proven = true;
                 if (!ob->path_probe) g_stats.inferred++;
@@ -578,9 +591,10 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
          * THIS obligation's variables rather than the remembered one's. */
         d = memo_proven ? refine_valid() : refine_unknown();
     } else {
+        RefineCubeCache cc = {0};
         for (size_t i = 0; i < CHAIN_LEN; i++) {
             g_stats.backend_calls++;
-            d = CHAIN[i](vc, a);
+            d = CHAIN_CC[i](vc, a, &cc);
             if (d.verdict != RT_UNKNOWN) { ob->decided_by = CHAIN_NAMES[i]; break; }
         }
         memo_insert(vc, memo_fp, d.verdict == RT_VALID);

@@ -1,0 +1,46 @@
+;; inline-c-option-carrier-box-leaks, the NICHE half.
+;;
+;; An inline-C body whose declared result is (Option T) hands its caller a
+;; FRESH carrier box -- that is the contract in docs/guides/inline-c-results-
+;; guide.md, and tur_some_ptr mallocs it.  The compiler owns the box from
+;; there and frees it where the carrier is read back.
+;;
+;; Two of the three readback arms already did.  The NICHE arm -- an (Option T)
+;; whose payload is a pointer, so the concrete form IS the payload word -- read
+;; the payload out with tur_opt_value_checked and dropped the box on the floor:
+;; 16 bytes per call, invisible to tests/run.sh because that harness only
+;; compares printed output.  This fixture carries requires.leak-check, so the
+;; free is pinned rather than assumed.
+;;
+;; Both paths matter.  Some allocates and must be freed exactly once; None is
+;; the NULL carrier (SR3 slice A), allocates nothing, and must NOT be freed --
+;; a free without the null test would be a crash, not a leak.
+(load "stdlib/string.tur")
+
+(defn mk-c [n : int] : (Option String)
+  ```c
+  if (n == 0) return tur_none();
+  return tur_some_ptr(tur_string_from_bytes("ic", 2));
+  ```)
+
+;; The niche readback, in match-scrutinee position.
+(defn probe-match [n : int] : void
+  (match (mk-c n)
+    (Some s) (do (println (string/to-cstr s)) (string/release s))
+    (None)   (println "none")))
+
+;; ... and in let-binding position, where the same crossing lowers as a value.
+(defn probe-let [n : int] : void
+  (let [o (mk-c n)]
+    (if (some? o)
+      (let [s (unwrap o)]
+        (println (string/to-cstr s))
+        (string/release s))
+      (println "none"))))
+
+(defn main [] : int
+  (probe-match 1)
+  (probe-match 0)
+  (probe-let 1)
+  (probe-let 0)
+  0)

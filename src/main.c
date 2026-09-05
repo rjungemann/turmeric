@@ -9915,16 +9915,25 @@ static int smt_answer(RefineVC *vc, Arena *arena, RefineModel **model_out) {
     /* The same chain, in the same order, as the compile path -- running a
      * different one here would make this window show something other than the
      * solver it is a window onto. */
-    static const struct { const char *name; RefineBackend fn; } CHAIN[] = {
-        { "S0 (trivial)",       refine_s0_decide },
-        { "S1 (EUF)",           refine_s1_decide },
-        { "S2 (arithmetic)",    refine_s2_decide },
-        { "S3 (Nelson-Oppen)",  refine_s3_decide },
+    /* refine-chain-expands-the-same-dnf-four-times: the `_cc` stages, sharing
+     * ONE run's cube set.  Each stage used to rebuild the same DNF from an
+     * unchanged vc, so a query reaching S3 expanded it four times.  Same
+     * verdicts by construction -- the set is identical, it is just built once.
+     * The `refine_sN_decide` entry points still exist for a single-stage
+     * caller; a chain has no use for them. */
+    static const struct { const char *name;
+                          RefineDecision (*fn)(RefineVC *, Arena *,
+                                               RefineCubeCache *); } CHAIN[] = {
+        { "S0 (trivial)",       refine_s0_decide_cc },
+        { "S1 (EUF)",           refine_s1_decide_cc },
+        { "S2 (arithmetic)",    refine_s2_decide_cc },
+        { "S3 (Nelson-Oppen)",  refine_s3_decide_cc },
     };
     const char *decided_by = NULL;
     RefineVerdict v = RT_UNKNOWN;
+    RefineCubeCache cc = {0};
     for (size_t i = 0; i < sizeof(CHAIN)/sizeof(CHAIN[0]); i++) {
-        RefineDecision d = CHAIN[i].fn(vc, arena);
+        RefineDecision d = CHAIN[i].fn(vc, arena, &cc);
         if (d.verdict != RT_UNKNOWN) { v = d.verdict; decided_by = CHAIN[i].name; break; }
     }
 
@@ -10423,14 +10432,27 @@ int main(int argc, char **argv) {
         /* SR2a is ON by default too, since its graduation out of
          * --enable=parametric-sum-byvalue.  Same two-way shape: `=0` restores
          * the int64 carrier for a parametric sum monomorph, `=1` is the no-op
-         * that keeps the measurement harnesses' existing invocations working. */
+         * that keeps the measurement harnesses' existing invocations working.
+         *
+         * `=0` also takes SR3's Option niche down with it, in sr3_option_niche
+         * (types.c) rather than here -- the niche narrows a BY-VALUE Option to
+         * its payload pointer, so it cannot outlive the representation it
+         * narrows.  Setting this alone is therefore a complete switch; it did
+         * not used to be, and the failure mode was a compiler abort two layers
+         * from the flag (docs/reported/sr2-carrier-seam-rotted.md). */
         const char *__sr2 = getenv("TUR_SR2_APP_SUM_BYVALUE");
         if (__sr2 && __sr2[0] == '0') g_sr2_app_sum_byvalue = false;
         else if (__sr2 && __sr2[0] == '1') g_sr2_app_sum_byvalue = true;
         /* SR3 slice B (the Option niche) is ON by default since its graduation
          * out of --enable=option-niche (2026-09-03).  `=0` restores the tagged
          * 16-byte Option monomorph and the boxed Vec slot for bisection and
-         * for tests/run-option-niche-seam.sh, which keeps that path green. */
+         * for tests/run-option-niche-seam.sh, which keeps that path green.
+         *
+         * One-directional: this turns the niche off without disturbing SR2,
+         * whereas TUR_SR2_APP_SUM_BYVALUE=0 turns BOTH off (the niche needs a
+         * by-value Option to narrow).  So `=1` here cannot force the niche back
+         * on under a disabled SR2 -- sr3_option_niche refuses it, deliberately,
+         * because that combination is the one that aborts the compiler. */
         const char *__sr3 = getenv("TUR_OPTION_NICHE");
         if (__sr3 && __sr3[0] == '0') g_opt_option_niche = false;
         else if (__sr3 && __sr3[0] == '1') g_opt_option_niche = true;

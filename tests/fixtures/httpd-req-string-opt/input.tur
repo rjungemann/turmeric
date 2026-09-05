@@ -34,6 +34,26 @@
   return (void *)c;
   ```)
 
+;; Release a fake HttpdConn: its header chain, the strings it strdup'd, any
+;; cstrs the httpd layer took ownership of, and the conn itself.
+;;
+;; The fixture allocates these by hand, so it frees them by hand.  Without this
+;; the scaffold is 1176 bytes -- one HttpdConn is mostly its `char path[1024]`
+;; -- times three conns, which dominated this fixture's ASan report and hid the
+;; leaks that are actually the compiler's.  A leak-check marker on a fixture
+;; that leaks its own test rig measures the rig.
+(defn free-conn [c : ptr<void>] : void
+  ```c
+  HttpdConn *conn = (HttpdConn *)c;
+  if (!conn) return;
+  HttpdHeader *h = (HttpdHeader *)conn->req_headers;
+  while (h) { HttpdHeader *n = h->next; free(h->name); free(h->value); free(h); h = n; }
+  HttpdOwnedStr *o = (HttpdOwnedStr *)conn->owned_cstrs;
+  while (o) { HttpdOwnedStr *n = o->next; free(o->s); free(o); o = n; }
+  free(conn->body);
+  free(conn);
+  ```)
+
 ;; Print "some:<bytes>" for a present value.
 (defn print-some [v : cstr] : void
   ```c printf("some:%s\n", (const char *)v); ```)
@@ -73,6 +93,10 @@
       (show-form b1 "blank")               ; some:
       ;; form field absent -- none
       (show-form b1 "nope")                ; none
+      ;; the fixture frees what the fixture allocated
+      (free-conn c1)
+      (free-conn c2)
+      (free-conn b1)
       0)))
 
 (demo)

@@ -802,10 +802,16 @@ static bool defstruct_newstyle_fields_all_primitive(Elab *e, const Form *call,
 /* CONV-S1 (defstruct-as-defadt): decide whether a `defstruct` form qualifies for
  * lowering to a single-variant record `defadt`.  GRADUATED (always-on): a
  * `defstruct` lowers whenever its shape is supported -- old OR new field syntax,
- * scalar / pointer / fn / aggregate / parametric / `:heap` fields.  The
- * field-lowerability checks below still legitimately keep a `:linear` outer
- * struct, or one carrying an applied-type / `exists` field, on the StructDef
- * path.  Shared by the top-level type pre-pass (which must then register an ADT
+ * scalar / pointer / fn / aggregate / parametric / `:heap` fields.
+ *
+ * This header used to add that the field checks "still legitimately keep a
+ * `:linear` outer struct, or one carrying an applied-type / `exists` field, on
+ * the StructDef path".  Measured 2026-09-04, all three lower, and so does every
+ * other shape tried: the predicate rejects nothing today, and its sole remaining
+ * job is to defer rejection to the ADT field parser.  See
+ * docs/reported/defstruct-struct-path-is-dead.md.
+ *
+ * Shared by the top-level type pre-pass (which must then register an ADT
  * stub rather than a struct stub) and elab_defstruct (which performs the
  * rewrite), so they agree on which names become ADTs.  Re-derives the annotation
  * / field shape straight from the form (cheap; the form is small). */
@@ -1013,9 +1019,24 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
      * the app's type args).  Rewrite, preserving :copy and the type-param vec:
      *     (defstruct P [a : int b : int])      -> (defdata P (P [a : int b : int]))
      *     (defstruct Box [A] (val A))           -> (defdata Box [A] (Box [val : A]))
-     * and dispatch to elab_defdata, reusing all the AdtDef machinery.  Anything
-     * the gate rejects (:heap / :linear outer structs) still elaborates as a
-     * struct.  See docs/archive/defstruct-as-defadt-plan.md. */
+     * and dispatch to elab_defdata, reusing all the AdtDef machinery.
+     *
+     * The `else` below is DEAD, measured 2026-09-04.  This comment used to end
+     * "anything the gate rejects (:heap / :linear outer structs) still elaborates
+     * as a struct", and every clause of that is now stale: `:heap`, `:linear`,
+     * `:no-auto-ctor`, parametric, and fields of applied (`(Option int)`), `fn`,
+     * nested-aggregate and even `exists` type all take the ADT path today, because
+     * defstruct_lowers_to_adt was widened slice by slice until it stopped
+     * rejecting anything.  Instrumenting both outcomes over the whole suite
+     * (2781 fixtures) plus those shapes by hand produced ZERO struct-path hits.
+     * elab_toplevel.c already acted on this and removed its own counterpart
+     * branch (structdef-retirement DS-C, "defstruct_lowers_to_adt is always true
+     * now"), which is what leaves the two files disagreeing.
+     *
+     * Deleting the branch (and whatever StructDef machinery it keeps reachable)
+     * belongs to the structdef-retirement track rather than to a drive-by:
+     * see docs/reported/defstruct-struct-path-is-dead.md.
+     * See docs/archive/defstruct-as-defadt-plan.md. */
     if (defstruct_lowers_to_adt(e, call)) {
         /* Redefinition guard -- must run BEFORE dispatching into elab_defdata.
          * A `defstruct` that redefines a fully-defined name (commonly an

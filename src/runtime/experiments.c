@@ -330,6 +330,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * before SR2b, its heaviest client, exists -- and SR2b landed in-tree and
      * across the spices before the expiry was anywhere near.  See
      * docs/upcoming/sr2-gate-results.md. */
+    { "regions",
+      "declared lifetimes over the arena, for values with no unique owner",
+      "docs/upcoming/regions-plan.md",
+      "0.43.0",
+      "0.47.0",
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_regions },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

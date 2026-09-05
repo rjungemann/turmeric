@@ -1,0 +1,38 @@
+;; cps-direct-bt-scope-closure-temp-undeclared: a `bt-scope` in a NON-main defn
+;; whose thunk calls another user function used to emit
+;;
+;;   int64_t __t182 = bt_hyscope((int64_t)(intptr_t)_un_unborrowc_un1444_1445);
+;;
+;; -- a call to a temp nothing declared, so `cc` rejected the program.  The
+;; hoisted closure had been classified as an inlinable partial application and
+;; DROPPED, while the call that needed it stayed.
+;;
+;; The three neighbours below are why this went unnoticed: each of them works,
+;; and every in-tree caller happened to be one of them.  They are kept as
+;; controls -- if a future tightening of the pap check over-corrects, these are
+;; what say so.
+
+;;; build -- a self-recursive callee, so the thunk's body is a real call.
+(defn build [n : int acc : int] : int
+  (if (<= n 0) acc (build (- n 1) (+ acc n))))
+
+;;; THE REPRO: bt-scope in a non-main defn, thunk calls a user function.
+(defn one-round [n : int] : int
+  (bt-scope (fn [] (build n 0))))
+
+;;; Control 1: same shape under a self-recursive caller (the caller was never
+;;; the variable -- this failed too, before the fix).
+(defn rounds [k : int acc : int] : int
+  (if (<= k 0) acc (rounds (- k 1) (+ acc (one-round 3)))))
+
+;;; Control 2: a thunk that calls nothing -- always worked.
+(defn plain [n : int] : int
+  (bt-scope (fn [] (+ n 1))))
+
+(defn main [] : int
+  (println (one-round 4))     ;; 4+3+2+1 = 10
+  (println (rounds 3 0))      ;; 3 * (3+2+1) = 18
+  (println (plain 41))        ;; 42
+  ;; Control 3: the same bracket inlined into main -- always worked.
+  (println (bt-scope (fn [] (build 4 0))))   ;; 10
+  0)

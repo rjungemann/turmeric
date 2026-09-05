@@ -6025,6 +6025,7 @@ static int64_t zipper_hymove_hyright_hyraw(int64_t z) {
 
 static void zipper_hyfree_hyraw(int64_t z) {
         struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
+  if (!zip) return;  /* the null handle is a value this API produces */
   if (zip->left)  free(zip->left);
   if (zip->right) free(zip->right);
   free(zip);

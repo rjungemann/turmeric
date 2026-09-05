@@ -1,0 +1,62 @@
+;; RM3 R4 (docs/upcoming/regions-plan.md): `bt-scope` is a region boundary, and
+;; the VALUE read back across it is what this asserts.
+;;
+;; That is the SR4 lesson, and the reclamation plan says it applies here with
+;; more force: a fixture that only checks the program builds would pass with a
+;; rewind that reclaimed memory still in use, because the wrong answer is a
+;; stale read, not a link error.  So every number below is read AFTER the pop.
+;;
+;; The loop is the point of the second half.  A region inside a loop is the
+;; shape RM3 exists for -- 100 rounds of an 8-link chain leak 800 boxes today,
+;; not 8 -- and it is also the shape a rewind gets wrong most cheaply: the
+;; second round reuses the first round's slabs (region.c pools a reclaimed
+;; arena), so a straggler from round 1 is overwritten by round 2 rather than
+;; sitting undisturbed.  If the reclaim were wrong these totals would drift.
+;;
+;; The bracket lives in `one-round`, a NON-main defn, which is the spelling
+;; bt-scope exists for and which did not compile until
+;; docs/archive/cps-direct-bt-scope-closure-temp-undeclared.md was fixed.  It is
+;; the shape a real caller writes, so the region path is exercised through it
+;; rather than only through a bracket inlined into `main`.
+
+(defdata Link :heap (Link [v : int nxt : int]))
+
+;;; build -- an n-link spine, carrier-erased, 0 for the end.
+(defn build [n : int acc : int] : int
+  (if (<= n 0)
+    acc
+    (build (- n 1) (:: (Link n acc) :int))))
+
+;;; chain-sum -- walk the spine.  Single-ctor `:heap` ADTs are flat (no tag),
+;;; which is the same layout conv-heap-adt-carrier-ascribe reads.
+(defn chain-sum [c : int] : int
+  ```c
+  struct { int64_t v; int64_t nxt; } *p = (void *)(intptr_t)c;
+  int64_t acc = 0;
+  while (p) { acc += p->v; p = (void *)(intptr_t)p->nxt; }
+  return acc;
+  ```)
+
+;;; one-round -- build and consume a spine inside one generation.
+;;;
+;;; The result is an `:int` SUM, not the chain: nothing that points into the
+;;; generation crosses the boundary, so both locks pass and the pop rewinds.
+(defn one-round [n : int] : int
+  (bt-scope (fn [] (chain-sum (build n 0)))))
+
+;;; rounds -- k generations of the same shape, opened and reclaimed in turn.
+(defn rounds [k : int n : int acc : int] : int
+  (if (<= k 0)
+    acc
+    (rounds (- k 1) n (+ acc (one-round n)))))
+
+(defn main [] : int
+  (println (one-round 4))       ;; 1+2+3+4   = 10
+  (println (one-round 100))     ;; 100*101/2 = 5050
+  ;; 100 generations, each an 8-link chain (8*9/2 = 36), all reusing the same
+  ;; reclaimed slabs.
+  (println (rounds 100 8 0))    ;; 3600
+  ;; Once more after all that reuse, to catch a rewind that corrupted the
+  ;; pooled arena rather than one that returned a wrong sum immediately.
+  (println (one-round 4))       ;; 10
+  0)

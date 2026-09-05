@@ -207,3 +207,54 @@ that, failing a `known-leak` fixture that runs clean, which is how the fix was
 confirmed before the marker came off. Leak-check 60 passed / 0 failed /
 **0 known-open** (was 59/0/1). Full suite 2747/0 after regenerating three
 snapshots that gained the free; option-niche seam 9/0; sr4 seam 24/0.
+
+## Reopened and closed again: the NICHE arm (2026-09-05)
+
+The fix above covered two of the three readback arms. The third -- the **niche**
+crossing in `emit_carrier_bridge` (an `(Option T)` whose payload is a pointer,
+so the concrete form IS the payload word) -- still leaked, and it is the arm an
+inline-C `: (Option String)` producer actually reaches:
+
+```turmeric
+(defn mk-c [n : int] : (Option String)
+  ```c
+  if (n == 0) return tur_none();
+  return tur_some_ptr(tur_string_from_bytes("ic", 2));
+  ```)
+
+(match (mk-c 1) (Some s) ... (None) ...)
+```
+
+emitted
+
+```c
+int64_t __t266 = (int64_t)(intptr_t)(__ps_265);
+void * __scrut = ((__t266 ? (void *)(intptr_t)tur_opt_value_checked(__t266) : (void *)0));
+```
+
+-- the payload word copied out, the box dropped on the floor. 16 bytes per call.
+
+The mark was already set (`emit_owned_carrier_mark` fires for `mk-c`: inline-C
+body, declared Option result, `int64_t` return); this arm simply never asked.
+Its two siblings did -- the by-value readback below it, and the CE_WORD Vec-slot
+store just above it, which even carries the same free and the same
+`emit_owned_carrier_clear`. The fix is the same shape as both: read into a temp
+(the load is out of the allocation about to be freed and cannot be reordered
+after it), free under the existing null test (a niche None is the NULL carrier,
+allocates nothing, and must not be freed), and consume the mark so a
+twice-bridged temp is not freed twice.
+
+**Why it survived the first pass:** no `expected.c` fixture exercises the arm,
+and `tests/run.sh` compiles fixture programs without sanitizers -- so the leak
+was invisible to the whole suite. It surfaced in the RM1 erased-base leak sweep
+as `option-niche-crossings` (183 B) and `option-niche-string` (38 B).
+
+`tests/fixtures/option-niche-inline-c-box-freed` pins it, with
+`requires.leak-check` so the free is asserted rather than assumed, and covers
+both readback positions (match scrutinee, let binding) on both paths (Some
+allocates and is freed exactly once; None is NULL and must not be freed -- a
+free without the null test is a crash, not a leak). Verified against a
+pre-fix binary: 32 B leaked, 0 after.
+
+Sweep 1726 -> 1678 B. Suite 2797/0, leak-check 83/0, option-niche seam 10/0,
+sr2 seam 57/0, cc-warn ratchet OK.

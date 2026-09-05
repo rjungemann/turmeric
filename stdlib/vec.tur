@@ -487,16 +487,32 @@
           __v)))))
 ;;; vec-eq? -- compare two Vec[A] element-wise using a comparator.
 ;;;
+;;; This helper hands the comparator RAW slot words -- it reads a->data[i]
+;;; straight out of the buffer rather than passing a value across the carrier
+;;; boundary. So do list-eq?, option-eq?, result-eq? and pair-eq?, each from
+;;; its own payload slots; map-eq? and set-eq-cmp? are the exception, handing
+;;; over a HAMT-stored carrier box instead. The difference matters only for an
+;;; element whose word is not a box, a niche (Option P) above all: it rides
+;;; its slot as the payload pointer itself.
+;;;
+;;; Either spelling works, here and at every one of those helpers: declare the
+;;; comparator's parameter types, or write the comparator inline at the call,
+;;; and the value is bridged for you whichever convention it arrived in. A
+;;; NAMED comparator with erased parameters over such an element cannot be
+;;; given the convention and is refused with TUR-E0715.
+;;;
 ;;; Parameters:
 ;;;   v1     -- first Vec[A]
 ;;;   v2     -- second Vec[A]
-;;;   cmp-fn -- comparator fn [a :int b :int] :bool
+;;;   cmp-fn -- comparator fn [a :A b :A] :bool, receiving raw slot words
 ;;;
 ;;; Returns:
 ;;;   true if both vecs have the same length and all element pairs satisfy cmp-fn.
 ;;;
 ;;; Example:
 ;;;   (vec-eq? va vb (fn [a b] (= a b)))  ; => true
+;;;   (vec-eq? vo wo (fn [a : (Option String) b : (Option String)] : bool
+;;;                    (eq? a b)))        ; => true
 ;;;
 ;;; Since: Phase TC1
 

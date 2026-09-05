@@ -6028,6 +6028,7 @@ static int64_t zipper_hymove_hyright_hyraw(int64_t z) {
 
 static void zipper_hyfree_hyraw(int64_t z) {
         struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
+  if (!zip) return;  /* the null handle is a value this API produces */
   if (zip->left)  free(zip->left);
   if (zip->right) free(zip->right);
   free(zip);
@@ -7628,31 +7629,29 @@ int main(int argc, char **argv) {
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Shape r_1443 = __ps_182;
             (void)r_1443;
-            tur_adt_Shape __t183 = c_1442;
-            int64_t __ps_184 = (area(&__t183));
+            int64_t __ps_183 = (area(&c_1442));
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+            printf("%lld\n", (long long)(__ps_183));
+            int64_t __ps_184 = (area(&r_1443));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             printf("%lld\n", (long long)(__ps_184));
-            tur_adt_Shape __t185 = r_1443;
-            int64_t __ps_186 = (area(&__t185));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
-            printf("%lld\n", (long long)(__ps_186));
-            int64_t __t187;
-            __t187 = INT64_C(0);
-            __t180 = __t187;
+            int64_t __t185;
+            __t185 = INT64_C(0);
+            __t180 = __t185;
         }
         return (int)__t180;
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
-        tur_adt_Cons__int * __ps_188 = (ctor_Cons_Cons__int(h, t));
+        tur_adt_Cons__int * __ps_186 = (ctor_Cons_Cons__int(h, t));
         if (tur_panicking) return ((tur_adt_Cons__int *)0);
-        return __ps_188;
+        return __ps_186;
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        tur_adt_Vec__int * __ps_189 = (vec_new__spec__tur_adt_Vec__int__());
+        tur_adt_Vec__int * __ps_187 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return ((tur_adt_Vec__int *)0);
-        return __ps_189;
+        return __ps_187;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {

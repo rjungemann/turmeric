@@ -1,0 +1,6 @@
+str-eq
+str2-ne
+int-eq
+int2-ne
+none-eq
+mix-ne
