@@ -494,10 +494,32 @@ finds it, so the cc path cannot depend on a symbol.
 
 ### What remains
 
-13 failures: 10 carry `requires.posix-apis` (a harness gap fixed by
-turmeric#818, so the real figure is **2702 / 3**), plus `path-string`,
-`childhandle-linear` and `cps-backend-nil-delegated-call`. All three were
-failing before this change and none is CPS-trampoline-shaped.
+Re-measured on merged main, which carries #818's marker handling:
+**2696 passed, 2 failed, 70 skipped.**
+
+An earlier draft of this section said "10 posix-marked plus 3 real, so
+2702 / 3". Both halves were wrong, and the mistake was reading the failure
+list by eye instead of checking each fixture for its marker.
+`childhandle-linear` carries `requires.posix-apis` and spawns `/bin/true`;
+it was never a JIT defect. The split is **11 posix-marked and 2 real**, and
+the passed count moves too, because the check is a SKIP rather than a PASS.
+
+The two real failures are `cps-backend-nil-delegated-call` (prints a pointer
+where it should print `10` -- a miscompile, not a trampoline fault) and
+`path-string`. Both were failing before this change; neither is
+CPS-trampoline-shaped.
+
+The three runs reconcile exactly, which is the check that the numbers are
+the same corpus and not three different ones:
+
+| run | passed | failed | skipped | total |
+| --- | --- | --- | --- | --- |
+| before, pre-#818 branch | 2637 | 68 | 59 | 2764 |
+| after, pre-#818 branch | 2692 | 13 | 59 | 2764 |
+| after, merged main | 2696 | 2 | 70 | 2768 |
+
+11 fixtures move FAIL -> SKIP when #818's marker handling lands (13 - 2 = 11,
+59 + 11 = 70), and main added 4 fixtures that pass.
 
 ---
 
