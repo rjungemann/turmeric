@@ -315,3 +315,88 @@ compare the redirect target against the generated function's real entry.  That
 is MIR x86-64 back-end work in the `rjungemann/mir` fork.
 
 Until then `TUR_JIT_GEN=eager` is a working tier on Windows.
+
+
+---
+
+## Remaining Windows JIT work (2026-09-04)
+
+Everything left, in one place.  Before this section the answer was spread across
+a passing clause in the text above, an archived report, and a CI comment -- so a
+triage pass could not see it.
+
+### Measured baseline, first ever on Windows
+
+`tests/run-jit.sh` had never been run here.  It has now:
+
+| generation mode | result |
+| --- | --- |
+| default (**lazy**) | **0 passed, 5 failed** on a five-fixture sample |
+| `TUR_JIT_GEN=eager` | **2621 passed, 61 failed, 59 skipped** (full corpus) |
+
+So the corpus *works* on Windows.  `run-jit.sh` uses the default mode, so the
+lazy fault below fails it at 100% for a single reason -- which is why "the JIT
+corpus does not run on Windows" was true and also misleading.
+
+The 61 eager failures decompose almost entirely into classes already tracked:
+
+- **48 are CPS/effect-shaped** (`cps-*`, perform/resume/handle).  Consistent
+  with the c2mir setjmp limitation below -- these are exactly the fixtures that
+  exercise the DK trampoline.
+- **11 are the POSIX set** (`reactor-*`, `scheduler-io-park`,
+  `term-raw-cooked-roundtrip`).  These carry `requires.posix-apis`, which
+  `tests/run.sh` honours and **`tests/run-jit.sh` does not** -- a harness gap,
+  not a JIT defect.  Cheap to close: teach run-jit.sh the same marker.
+- **1 is `fat-dispatch-parametric-monomorph-return`** -- the Win64
+  aggregate-return threshold, tracked separately in
+  [win64-aggregate-return-threshold-is-sysv.md](win64-aggregate-return-threshold-is-sysv.md).
+- **2 unexplained**: `path-string`, `try-with-basic`.
+
+### 1. The lazy-generation fault -- the one blocker that matters
+
+Characterized above (SIGSEGV, a data store through a bad `%rax`, not the
+allocator and not a missing win64 wrapper port).  It is the single thing
+standing between Windows and a routine JIT corpus run: eager passes 2621, lazy
+passes none.
+
+Next step is recorded above.  MIR x86-64 back-end work in the fork.
+
+### 2. c2mir has no `__builtin_setjmp`, so effects under the JIT are broken
+
+Documented in
+[../archive/windows-longjmp-across-fiber-stack-kills-effects.md](../archive/windows-longjmp-across-fiber-stack-kills-effects.md),
+which is ARCHIVED -- so it is invisible to a triage pass over `docs/reported/`,
+and that is why this section exists.
+
+The cc path uses `__builtin_setjmp`/`__builtin_longjmp` on Windows because libc
+`longjmp` is an SEH unwind that dies on a fiber stack.  Under the S2 split both
+halves must agree on the mechanism and c2mir has neither builtin, so the split
+keeps plain `setjmp` -- leaving the JIT path with the defect the cc path no
+longer has.  The 48 CPS failures above are the visible consequence.
+
+Lifting it means teaching c2mir `__builtin_setjmp`/`__builtin_longjmp` in the
+`rjungemann/mir` fork.  That would also let the split use the builtins and
+retire the `rt_split_canonical_emission()` special case in the DK prelude.
+
+### 3. `__va_start` on the whole-preamble path
+
+Mentioned above only as the reason `hello.tur` fell back to `cc`.  Stated
+plainly here because it is a defect in its own right: when S2 is engaged the
+whole-preamble path is unused, but if S2 ever disengages again -- which it did,
+twice, silently -- Windows has **no working fallback**, because c2mir cannot
+compile the win64 `__va_start` lowering.
+
+Not investigated.  Nothing depends on it while S2 holds, and the engage probe is
+now guarded in CI, so the risk is bounded rather than closed.
+
+### 4. `windows-jit` CI is build-only
+
+The job added alongside this work compiles the JIT sources on Windows -- which
+nothing did before, hence `jit_ffi.c` reaching main with an unguarded
+`<dlfcn.h>` -- but does not run the JIT suites.
+
+The precondition for turning suites on is (1): with the lazy fault fixed,
+`run-jit.sh` becomes runnable, and with the run-jit.sh marker gap closed the
+expected baseline is the eager figure above minus the POSIX set.  Until then a
+suite run there would be red for known reasons, and a permanently-red job
+teaches people to ignore it.
