@@ -1,7 +1,7 @@
 ---
 title: elab_defstruct's StructDef branch is dead, and its comment says the opposite
 category: Reported
-description: defstruct_lowers_to_adt has been widened until it rejects nothing; the `else` in elab_defstruct is unreachable and the legacy StructDef elaboration it keeps alive is dead weight. elab_toplevel already removed its counterpart, so the two files disagree.
+description: defstruct_lowers_to_adt has been widened until it rejects nothing, so the `else` in elab_defstruct is unreachable. CORRECTED 2026-09-05: it does not keep any legacy StructDef elaboration alive -- DS-D deleted that two days before this was filed, and what remains is a three-line defensive diagnostic. The value here was never the branch; it is the StructDef machinery behind it, which is still reachable.
 ---
 
 # `elab_defstruct`'s StructDef branch is dead
@@ -67,11 +67,46 @@ The stale prose is in two places and was wrong in every clause:
 
 Both are corrected in place as of this report; the branch itself is untouched.
 
+## Correction, 2026-09-05
+
+**The premise above is stale, and was already stale when it was filed.** The
+`else` arm does not guard "the legacy StructDef elaboration". That elaboration
+was deleted on 2026-09-02 (`structdef-retirement DS-D`, commit `f9c4cd12`), two
+days before this report; what sits after the `if` today is three lines:
+
+```c
+    diag_emit(DIAG_ERROR, call->span,
+              "defstruct '%s': unsupported field form", name->name);
+    return NULL;
+```
+
+So fix direction 1 as written -- "delete the `else` arm and sweep whatever
+StructDef machinery becomes unreachable" -- has nothing to sweep. Deleting a
+defensive diagnostic is not a cleanup, and it is the whole of what direction 1
+would achieve.
+
+Two more things checked while confirming this:
+
+- The predicate's `false` returns for MALFORMED input are all shadowed by
+  earlier diagnostics in `elab_defstruct` itself. `(defstruct Foo)` and
+  `(defstruct Foo :copy)` both report "defstruct requires a field list";
+  `(defstruct Foo 7)` reports "field list must be a vector". None reaches the
+  fallthrough, which is consistent with the zero-hit measurement above and
+  explains WHY it is zero rather than just recording that it is.
+- The machinery direction 2 names is still there and is not small: ~47
+  `StructDef` references across ten files, plus twelve `struct_defs` registry
+  uses, several already commented "always empty".
+
+**So this stays parked, for the reason the report already gave** -- the point is
+the machinery, not the branch -- but a future reader should not go looking for
+an elaboration path to delete. Direction 2 is the entire remaining content.
+
 ## Fix directions
 
-1. Delete the `else` arm in `elab_defstruct` and make the predicate's callers
-   unconditional (or drop the predicate, keeping only the ADT-field-parser
-   rejections it defers to).
+1. ~~Delete the `else` arm in `elab_defstruct`~~ -- see the correction above:
+   there is no elaboration behind it, only a diagnostic. Dropping the predicate
+   and making its callers unconditional is still possible, but on its own it
+   trades a defensive error for nothing.
 2. Then sweep whatever `StructDef` machinery becomes unreachable. That is the
    part worth doing deliberately: `struct_defs` registries are already described
    as "always-empty" in at least one place (`elab_structs.c`, the DS-C note on
