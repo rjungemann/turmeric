@@ -592,6 +592,42 @@ it becomes an ordinary path-splitting obligation.
 > see the trigger note under C2 above before touching how measures hold
 > state.
 
+> **Probe update 2026-09-05 -- the probe above measured a CONSTANT bound, and
+> the signature this section writes down does not currently parse.** Both
+> halves re-measured against `023013c8` (Debug build):
+>
+> - **Constant capacity proves, confirming the 2026-07-26 result.**
+>   `#refine{ x : int | (and (>= x 0) (< x 8)) }` called from a tail-recursive
+>   loop guarded by `(< i 8)` passes `tur check --strict-refine` clean, and the
+>   off-by-one negative control (`(< i 9)`) rejects with `TUR-E0371` plus the
+>   note "the predicate (and (>= x 0) (< x 8)) does not hold for every input
+>   here". So the proof is real, not vacuous.
+> - **Parametric in the sized index does not.** RE2's own signature above spells
+>   the bound as `(< x n)`, where `n` is the world's type-level size index. That
+>   is not a value in refinement scope:
+>
+>   ```
+>   probe.tur:13:61: error: unbound symbol 'n'
+>      13 |    i : #refine{ x : int | (and (>= x 0) (< x n)) }] : int
+>   probe.tur:13:61: help: Did you mean 'b'?
+>   ```
+>
+>   Reproduced on a `defopaque SBuf [n]` carrier with the index pinned by the
+>   callee's return type (`(defn mk8 [] : (SBuf (Static 8)) ...)`), so the size
+>   is as statically known as it ever gets. A refinement predicate ranges over
+>   runtime values in scope; a size index is a type-level name lowered to a
+>   `TY_INT` placeholder. There is no bridge between the two scopes.
+>
+> **What this changes.** Nothing about RE2's sequencing -- the profile note
+> below still governs whether it starts at all. It does mean the phase is not
+> "discharge works, wire it up": a capacity that is a *literal at the accessor's
+> definition site* works today, but the parametric `(GameWorld n)` shape RE2 is
+> actually for needs type-level size indices visible to the refinement
+> elaborator, which is unbuilt and unscoped. Cost that in before quoting the
+> 2026-07-26 probe as evidence the mechanism is ready. The narrower move, if
+> RE2 is built for its correctness payoff, is a monomorphic accessor per
+> capacity (bound as a literal), which needs no compiler work at all.
+
 Deliberately sequenced last: it is the only phase whose payoff is measured in
 nanoseconds, and the parent plan's benchmarking section is a standing warning
 that this class of win tends to evaporate under `cc -O2`, which already proves

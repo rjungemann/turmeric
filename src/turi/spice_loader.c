@@ -15,6 +15,7 @@
  * matching `tur_ffi_call_<ret>_<args>` trampoline based on it.
  */
 
+#include "platform_proc.h"
 #include "spice_loader.h"
 #include "platform_fs.h"  /* realpath/mkdir/getline on Windows */
 
@@ -268,37 +269,18 @@ static int ensure_cache_dir(const char *root, char *out, size_t cap) {
 /* Subprocess invocation: tur build --shared                          */
 /* ------------------------------------------------------------------ */
 
-static int shell_quote(const char *in, char *out, size_t cap) {
-    /* Single-quote the argument and escape any embedded single quotes
-     * with the '\'' sequence. Output cap includes terminating NUL. */
-    size_t o = 0;
-    if (o + 1 >= cap) return -1;
-    out[o++] = '\'';
-    for (const char *p = in; *p; p++) {
-        if (*p == '\'') {
-            if (o + 4 >= cap) return -1;
-            out[o++] = '\'';
-            out[o++] = '\\';
-            out[o++] = '\'';
-            out[o++] = '\'';
-        } else {
-            if (o + 1 >= cap) return -1;
-            out[o++] = *p;
-        }
-    }
-    if (o + 2 >= cap) return -1;
-    out[o++] = '\'';
-    out[o] = '\0';
-    return 0;
-}
+/* Quoting and the null device come from platform_proc.h.  The local
+ * shell_quote here single-quoted its arguments, which cmd.exe does not
+ * recognise as quoting at all -- the spice build subprocess received a
+ * literal 'C:\path' for every argument and could not run. */
 
 static int run_build(const char *tur_bin, const char *root,
                      const char *lib_path, const char *manifest_path) {
     char q_bin[1024], q_root[4400], q_lib[4400], q_mf[4400];
-    if (shell_quote(tur_bin,       q_bin,  sizeof(q_bin))  != 0
-     || shell_quote(root,          q_root, sizeof(q_root)) != 0
-     || shell_quote(lib_path,      q_lib,  sizeof(q_lib))  != 0
-     || shell_quote(manifest_path, q_mf,   sizeof(q_mf))   != 0) {
+    if (tur_shell_quote(tur_bin,       q_bin,  sizeof(q_bin))  != 0
+     || tur_shell_quote(root,          q_root, sizeof(q_root)) != 0
+     || tur_shell_quote(lib_path,      q_lib,  sizeof(q_lib))  != 0
+     || tur_shell_quote(manifest_path, q_mf,   sizeof(q_mf))   != 0) {
         fprintf(stderr, "tur repl: build command too long to quote\n");
         return -1;
     }
@@ -306,16 +288,26 @@ static int run_build(const char *tur_bin, const char *root,
      * the user sees the actual diagnostic from the compiler. */
     char cmd[20000];
     snprintf(cmd, sizeof(cmd),
-             "%s build --shared %s -o %s --manifest %s >/dev/null 2>&1",
+             "%s build --shared %s -o %s --manifest %s >" TUR_DEVNULL " 2>&1",
              q_bin, q_root, q_lib, q_mf);
-    int rc = system(cmd);
+    /* cmd.exe eats the outer quote pair of a /c string, so give it one of
+     * ours to eat -- otherwise a quoted program plus quoted arguments comes
+     * back as "The filename, directory name, or volume label syntax is
+     * incorrect." and no build runs. */
+    char wrapped[20008];
+    if (tur_shell_command(cmd, wrapped, sizeof(wrapped)) != 0) {
+        fprintf(stderr, "tur repl: build command too long\n");
+        return -1;
+    }
+    int rc = system(wrapped);
     if (rc == 0) return 0;
     fprintf(stderr,
             "tur repl: spice rebuild failed; replaying with full output:\n");
     snprintf(cmd, sizeof(cmd),
              "%s build --shared %s -o %s --manifest %s",
              q_bin, q_root, q_lib, q_mf);
-    int _sys_ret = system(cmd); (void)_sys_ret;
+    if (tur_shell_command(cmd, wrapped, sizeof(wrapped)) != 0) return -1;
+    int _sys_ret = system(wrapped); (void)_sys_ret;
     /* RP7: tell the user what to do next. (reload) re-runs the same
      * build subprocess after they've fixed the source, so they don't
      * have to restart the REPL on every compile error. */
@@ -659,7 +651,8 @@ int tur_spice_image_load(const char *start_dir, const char *tur_bin,
     static unsigned int generation_counter = 0;
     unsigned int gen = generation_counter++;
     char lib_path[4400], manifest_path[4400];
-    snprintf(lib_path, sizeof(lib_path), "%s/lib-%u.so", cache_dir, gen);
+    snprintf(lib_path, sizeof(lib_path), "%s/lib-%u" TUR_SHLIB_EXT,
+             cache_dir, gen);
     snprintf(manifest_path, sizeof(manifest_path),
              "%s/exports.manifest", cache_dir);
 

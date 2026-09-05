@@ -5,6 +5,7 @@ build2/
 build-asan/
 build-nosan/
 build-debug/
+build-win-jit/
 build-jit/
 build-jit-asan/
 build-jit-spike/

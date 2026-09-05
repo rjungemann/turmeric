@@ -7,6 +7,28 @@
 ;; rebuilding the chain, so a foreign or damaged buffer is an Err naming the
 ;; problem, never an abort or a resumed garbage chain.
 
+(defn tmp-path [name : cstr] : cstr
+  ```c
+  /* Resolve a scratch path at RUN TIME instead of hardcoding "/tmp/...".
+   *
+   * A compiled fixture is a NATIVE Windows binary, so its CRT resolves a
+   * leading "/tmp" against the CURRENT DRIVE ROOT (C:\tmp, D:\tmp) rather than
+   * the way the MSYS shell does.  Where that directory does not exist the open
+   * simply failed and the fixture printed nothing.  tests/run.sh exports
+   * TUR_TEST_TMPDIR; the "/tmp" fallback keeps this runnable by hand on POSIX.
+   *
+   * Four rotating buffers so a call like (f (tmp-path "a") (tmp-path "b"))
+   * does not have the second call clobber the first. */
+  static char bufs[4][512];
+  static int slot = 0;
+  char *buf = bufs[slot];
+  slot = (slot + 1) & 3;
+  const char *d = getenv("TUR_TEST_TMPDIR");
+  if (!d || !*d) d = "/tmp";
+  snprintf(buf, sizeof bufs[0], "%s/%s", d, name);
+  return buf;
+  ```)
+
 (load "stdlib/serial.tur")
 
 (def ^mut saved : ptr<void> (bytes-alloc 0))
@@ -51,10 +73,10 @@
     (println (serial-reset (* 3 (serial-shift stash 0))))     ; -1
     (report (bytes->serial-cont saved))                       ; 15
     ;; the same bytes through the file helpers
-    (cont-to-file saved "/tmp/tur-serial-typed-surface.bin")
-    (report (bytes->serial-cont (cont-from-file "/tmp/tur-serial-typed-surface.bin")))  ; 15
+    (cont-to-file saved (tmp-path "tur-serial-typed-surface.bin"))
+    (report (bytes->serial-cont (cont-from-file (tmp-path "tur-serial-typed-surface.bin"))))  ; 15
     (report (bytes->serial-cont (bad-tag)))
     (report (bytes->serial-cont (foreign)))
     (report (bytes->serial-cont (truncated)))
-    (report (bytes->serial-cont (cont-from-file "/tmp/tur-serial-typed-surface-missing.bin")))
+    (report (bytes->serial-cont (cont-from-file (tmp-path "tur-serial-typed-surface-missing.bin"))))
     0))

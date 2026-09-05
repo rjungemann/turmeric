@@ -98,7 +98,8 @@ typedef struct tur_ucontext {
 extern void __tur_uctx_swap(ucontext_t *from, ucontext_t *to);
 extern void __tur_uctx_tramp(void);
 __asm__(
-".text\n"
+".section .text$__tur_uctx_swap,\"xr\"\n"
+".linkonce discard\n"
 ".globl __tur_uctx_swap\n"
 ".def __tur_uctx_swap; .scl 2; .type 32; .endef\n"
 "__tur_uctx_swap:\n"
@@ -123,12 +124,15 @@ __asm__(
 "  mov 40(%rdx), %rdi\n mov 32(%rdx), %rsi\n"
 "  mov 24(%rdx), %rbp\n mov 16(%rdx), %rbx\n"
 "  mov 8(%rdx), %rsp\n jmp *0(%rdx)\n"
+".section .text$__tur_uctx_tramp,\"xr\"\n"
+".linkonce discard\n"
 ".globl __tur_uctx_tramp\n"
 ".def __tur_uctx_tramp; .scl 2; .type 32; .endef\n"
 "__tur_uctx_tramp:\n"
 "  mov %r12, %rcx\n sub $32, %rsp\n call __tur_uctx_run\n call abort\n ud2\n"
+".text\n"
 );
-void __tur_uctx_run(struct tur_ucontext *u) {
+static __attribute__((used)) void __tur_uctx_run(struct tur_ucontext *u) {
     if (u->entry) {
         if (u->argc == 2)      ((void(*)(int,int))u->entry)(u->argv[0], u->argv[1]);
         else if (u->argc == 1) ((void(*)(int))u->entry)(u->argv[0]);
@@ -169,6 +173,15 @@ static int tur_win_swapcontext(ucontext_t *from, ucontext_t *to) {
 #include <io.h>
 #include <fcntl.h>
 #endif /* _WIN32 */
+#if defined(_WIN32) && defined(__GNUC__)
+typedef void *tur_jmp_buf[5];
+#define TUR_SETJMP(b)  __builtin_setjmp(b)
+#define TUR_LONGJMP(b) __builtin_longjmp((b), 1)
+#else
+typedef jmp_buf tur_jmp_buf;
+#define TUR_SETJMP(b)  setjmp(b)
+#define TUR_LONGJMP(b) longjmp((b), 1)
+#endif
 /* Phase X3: tur_set_t — sorted int64_t array */
 typedef struct { int64_t *items; uint32_t n; } tur_set_t;
 static int __tur_set_cmp(const void *a, const void *b) {
@@ -907,7 +920,7 @@ typedef void (*tur_thunk_fn)(void *env, tur_result *out);
 static void rc_free_queue_reset_drain_state(void);  /* Forward decl */
 static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
     tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;
-    if (setjmp(__node.buf) == 0) {
+    if (TUR_SETJMP(__node.buf) == 0) {
         thunk(env, out);
         tur_handler_chain = __node.parent;
         if (global_panic_payload) {
@@ -928,7 +941,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
 
 static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env, tur_result *out) {
     tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;
-    if (setjmp(__node.buf) == 0) {
+    if (TUR_SETJMP(__node.buf) == 0) {
         thunk(env, out);
         tur_handler_chain = __node.parent;
         if (global_panic_payload) {
@@ -1329,7 +1342,7 @@ static intptr_t dk_run(DK *k, intptr_t v)      { return dk_run_impl(k, v, false)
 static intptr_t dk_run_root(DK *k, intptr_t v) { return dk_run_impl(k, v, true); }
 /* Forward decl of the entry driver (defined with the E7 runtime below): dk_invoke
  * consults it to know whether running the invoked chain might tail-resume out. */
-static jmp_buf *g_dk_driver;
+static tur_jmp_buf *g_dk_driver;
 static size_t   g_dk_meta_n;   /* tentative defn; the E7 block below defines it */
 static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor);
 static intptr_t dk_invoke(DK *sub, intptr_t w) {
@@ -1368,7 +1381,7 @@ static intptr_t dk_invoke(DK *sub, intptr_t w) {
  * nesting (LIFO) order; a delivery of only HANDLER/DONE nodes is a no-op and is
  * elided, so the meta-stack stays O(nesting), not O(N). Validated end-to-end at
  * N=1e6 by docs/artifacts/probes/e7-fidelity-probe.c. */
-static jmp_buf *g_dk_driver = NULL;      /* current entry-driver landing (NULL => inline) */
+static tur_jmp_buf *g_dk_driver = NULL;      /* current entry-driver landing (NULL => inline) */
 static DK      *g_dk_resume_chain = NULL;
 static intptr_t g_dk_resume_val = 0;
 static DK     **g_dk_meta = NULL;
@@ -1392,7 +1405,7 @@ static bool __dk_delivery_noop(const DK *d) {   /* only HANDLER/DONE -> identity
 static intptr_t dk_tail_resume(DK *sub, intptr_t v) {
     if (!g_dk_driver) return dk_invoke(sub, v);
     g_dk_resume_chain = sub; g_dk_resume_val = v;
-    longjmp(*g_dk_driver, 1);
+    TUR_LONGJMP(*g_dk_driver);
     return 0; /* unreachable */
 }
 /* Run `first` to completion, absorbing any tail-resume yields it makes, and
@@ -1407,13 +1420,13 @@ static intptr_t dk_tail_resume(DK *sub, intptr_t v) {
  * what makes them well-defined on the yield path -- the same structure
  * __dk_drive_after uses. */
 static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor) {
-    jmp_buf jb; jmp_buf *saved = g_dk_driver;
+    tur_jmp_buf jb; tur_jmp_buf *saved = g_dk_driver;
     g_dk_driver = &jb;
     g_dk_resume_chain = first; g_dk_resume_val = firstv;
     intptr_t r;
     for (;;) {
         DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;
-        if (setjmp(jb) == 0) {
+        if (TUR_SETJMP(jb) == 0) {
             r = dk_run_impl(ch, rv, false);
             __dk_reap_keep(ch);
             if (g_dk_meta_n <= floor) break;
@@ -1429,11 +1442,11 @@ static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor) {
 /* Run the meta-stack trampoline to completion after a tail-resume longjmp landed
  * in the entry wrapper. Owns its own jmp_buf so further yields land here. */
 static intptr_t __dk_drive_after(void) {
-    jmp_buf jb; g_dk_driver = &jb;
+    tur_jmp_buf jb; g_dk_driver = &jb;
     intptr_t r;
     for (;;) {
         DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;
-        if (setjmp(jb) == 0) {
+        if (TUR_SETJMP(jb) == 0) {
             r = dk_run_impl(ch, rv, false);
             dk_free(ch);
             if (g_dk_meta_n == 0) return r;
@@ -1541,7 +1554,7 @@ struct FiberBlock {
     void *fiber_local; /* Phase T21: fiber-local storage */
     void *task_group; /* Parent TaskGroup for cancellation */
     bool cancelled; /* Set when parent TaskGroup is cancelled */
-    jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */
+    tur_jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */
     bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */
 };
 
@@ -1565,7 +1578,7 @@ static void tur_panic_with(int type_tag, void *payload, const char *file, int li
     } else if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) {
         /* Use per-fiber panic buffer - set up global payload for cleanup */
         global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);
-        longjmp(tur_current_fiber->panic_jmpbuf, 1);
+        TUR_LONGJMP(tur_current_fiber->panic_jmpbuf);
     }
     fprintf(stderr, "panic at %s:%d\n", file ? file : "(unknown)", line);
     abort();
@@ -1608,9 +1621,9 @@ extern void ** tur_tls_current_thread_state_ptr(void);
 #endif
 /* TC0: thread-local setjmp buffer for with-cancel-guard (0 = not active) */
 #if defined(__GNUC__) || defined(__clang__)
-static TUR_THREAD_LOCAL jmp_buf tur_cancel_jmpbuf;
+static TUR_THREAD_LOCAL tur_jmp_buf tur_cancel_jmpbuf;
 #else
-extern jmp_buf * tur_tls_cancel_jmpbuf_ptr(void);
+extern tur_jmp_buf * tur_tls_cancel_jmpbuf_ptr(void);
 #define tur_cancel_jmpbuf (*tur_tls_cancel_jmpbuf_ptr())
 #endif
 #if defined(__GNUC__) || defined(__clang__)
@@ -1638,7 +1651,7 @@ static int tur_thread_cancel_requested(void) {
 static void tur_thread_do_cancel(void) {
     if (tur_cancel_jmpbuf_valid) {
         tur_cancel_jmpbuf_valid = 0;
-        longjmp(tur_cancel_jmpbuf, 1);
+        TUR_LONGJMP(tur_cancel_jmpbuf);
     }
     /* No cancel guard -- exit the thread cleanly without panicking. */
     pthread_exit(NULL);
@@ -1655,7 +1668,7 @@ static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
         tur_handler_node *prev_chain = tur_handler_chain;
         tur_handler_chain = NULL;
         /* Set up per-fiber panic handler */
-        if (setjmp(f->panic_jmpbuf) == 0) {
+        if (TUR_SETJMP(f->panic_jmpbuf) == 0) {
             f->panic_jmpbuf_valid = 1;
             tur_current_fiber = f;
             f->entry_fn();
@@ -1726,7 +1739,7 @@ static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
     FiberBlock *_prev = tur_current_fiber;
     tur_current_fiber = f;
     f->arg = arg;
-    jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;
+    tur_jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;
     swapcontext(&f->caller_ctx, &f->ctx);
     g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;
     tur_current_fiber = _prev;
@@ -5393,8 +5406,8 @@ __attribute__((unused)) static bool map_hyeq_hyloop(void * iter, void * m2_hamt,
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, val_cmp, __root); }
+    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (TUR_SETJMP(__dkjb) == 0) { __r = map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, val_cmp, __root); }
     else { __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
@@ -5735,8 +5748,8 @@ __attribute__((unused)) static bool list_hyeq_qu(int64_t l1, int64_t l2, int64_t
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = list_hyeq_qu__cps(l1, l2, cmp_fn, __root); }
+    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (TUR_SETJMP(__dkjb) == 0) { __r = list_hyeq_qu__cps(l1, l2, cmp_fn, __root); }
     else { __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
@@ -5815,8 +5828,8 @@ __attribute__((unused)) static int64_t _un_uncons_hyfmap(int64_t cell, void * f)
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
-    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = _un_uncons_hyfmap__cps(cell, f, __root); }
+    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (TUR_SETJMP(__dkjb) == 0) { __r = _un_uncons_hyfmap__cps(cell, f, __root); }
     else { __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);

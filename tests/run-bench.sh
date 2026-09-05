@@ -15,7 +15,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-TUR="./build/tur"
+TUR="${TUR:-./build/tur}"
 [ -x "$TUR" ] || { echo "Error: $TUR not built; run 'cmake --build build' first" >&2; exit 2; }
 
 # Default minimum iterations

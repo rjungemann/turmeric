@@ -1,0 +1,3 @@
+Skipped on Windows: hangs on GitHub Windows runners (no output, killed at 10s and at 30s) while passing locally 4/4 in isolation.  Cause unidentified.
+
+docs/reported/windows-httpd-async-limit-hangs-on-ci.md

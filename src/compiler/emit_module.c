@@ -8757,9 +8757,23 @@ static void emit_win_ucontext_shim(Buf *out) {
     buf_puts(out, "extern void __tur_uctx_tramp(void);\n");
     /* The context switch and entry trampoline, emitted as file-scope asm. This
      * is the exact code validated in fiber_ctx_x64_win.S, re-emitted here
-     * because generated C is standalone and cannot link that object. */
+     * because generated C is standalone and cannot link that object.
+     *
+     * This preamble goes into EVERY generated translation unit, so a plain
+     * `.globl` definition collides the moment a build has more than one TU --
+     * which is every `tur build <dir>` over multiple modules, and every
+     * `--shared` build (the generated tur_runtime.c is always a second TU).
+     * GNU ld reports it as "multiple definition of `__tur_uctx_swap'".
+     *
+     * The fix is COMDAT, the same mechanism a C++ inline function uses: each
+     * definition goes in its own `.text$<name>` section marked
+     * `.linkonce discard`, and the linker keeps exactly one copy and drops the
+     * rest.  Plain TU-local (`.scl 3`) is NOT enough for __tur_uctx_swap: the C
+     * code below calls it, so GCC emits its own `.def ... .scl 2` for the call
+     * and re-externalises the symbol underneath us. */
     buf_puts(out, "__asm__(\n");
-    buf_puts(out, "\".text\\n\"\n");
+    buf_puts(out, "\".section .text$__tur_uctx_swap,\\\"xr\\\"\\n\"\n");
+    buf_puts(out, "\".linkonce discard\\n\"\n");
     buf_puts(out, "\".globl __tur_uctx_swap\\n\"\n");
     buf_puts(out, "\".def __tur_uctx_swap; .scl 2; .type 32; .endef\\n\"\n");
     buf_puts(out, "\"__tur_uctx_swap:\\n\"\n");
@@ -8784,14 +8798,26 @@ static void emit_win_ucontext_shim(Buf *out) {
     buf_puts(out, "\"  mov 40(%rdx), %rdi\\n mov 32(%rdx), %rsi\\n\"\n");
     buf_puts(out, "\"  mov 24(%rdx), %rbp\\n mov 16(%rdx), %rbx\\n\"\n");
     buf_puts(out, "\"  mov 8(%rdx), %rsp\\n jmp *0(%rdx)\\n\"\n");
+    buf_puts(out, "\".section .text$__tur_uctx_tramp,\\\"xr\\\"\\n\"\n");
+    buf_puts(out, "\".linkonce discard\\n\"\n");
     buf_puts(out, "\".globl __tur_uctx_tramp\\n\"\n");
     buf_puts(out, "\".def __tur_uctx_tramp; .scl 2; .type 32; .endef\\n\"\n");
     buf_puts(out, "\"__tur_uctx_tramp:\\n\"\n");
     buf_puts(out, "\"  mov %r12, %rcx\\n sub $32, %rsp\\n call __tur_uctx_run\\n call abort\\n ud2\\n\"\n");
+    /* Switch back to .text before handing control back to the compiler.  A
+     * file-scope asm block leaves the assembler wherever its last .section
+     * directive put it, and GCC does not re-assert .text for everything it
+     * emits afterwards -- so without this, later output lands in a
+     * `.linkonce discard` section and the linker throws it away.  That is not
+     * a hypothetical: it made every generated program segfault in main(). */
+    buf_puts(out, "\".text\\n\"\n");
     buf_puts(out, ");\n");
-    /* Entry helper the trampoline calls (external so the asm `call` resolves and
-     * the optimiser cannot drop it as unreferenced). */
-    buf_puts(out, "void __tur_uctx_run(struct tur_ucontext *u) {\n");
+    /* Entry helper the trampoline calls.  `static` for the same per-TU reason as
+     * the asm symbols above -- the local symbol still satisfies the assembler's
+     * `call __tur_uctx_run` within this TU.  `used` is what keeps it: GCC cannot
+     * see the reference from inside the asm string, so without the attribute it
+     * would drop the function as unreferenced and the call would not link. */
+    buf_puts(out, "static __attribute__((used)) void __tur_uctx_run(struct tur_ucontext *u) {\n");
     buf_puts(out, "    if (u->entry) {\n");
     buf_puts(out, "        if (u->argc == 2)      ((void(*)(int,int))u->entry)(u->argv[0], u->argv[1]);\n");
     buf_puts(out, "        else if (u->argc == 1) ((void(*)(int))u->entry)(u->argv[0]);\n");
@@ -8954,6 +8980,11 @@ static void emit_winsock_compat_shim(Buf *out) {
  * the feature-complete preamble the split-runtime artifacts are generated
  * from.  Set only by emit_rt_split_source; never during normal emission. */
 static bool g_rt_split_all_gates = false;
+
+/* See emit_dk_runtime.h: the DK prelude asks whether it is emitting the
+ * canonical split text, because the Windows tail-resume landing has to pick a
+ * setjmp/longjmp pair that both halves of an S2 program will agree on. */
+bool rt_split_canonical_emission(void) { return g_rt_split_all_gates; }
 
 static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Prefix that demotes a runtime function to internal linkage in shared mode
@@ -9228,6 +9259,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * pointer into two ints -- the classic ucontext workaround for its
      * int-only varargs.  The trampoline therefore has to re-dispatch on argc. */
     emit_win_ucontext_shim(out);
+    /* Landing-pad selection, before every emitter that declares one. */
+    emit_tur_jmp_buf_prelude(out);
     /* POSIX regex (stdlib/re.tur): hoist regex.h to file scope so every
      * generated re_* function sees regex_t and friends. Per-function
      * `#include <regex.h>` only works for the first function due to header
@@ -10017,7 +10050,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_printf(out, "%svoid rc_free_queue_reset_drain_state(void);  /* Forward decl */\n", rcgc_helper);
     buf_puts(out, "static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {\n");
     buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;\n");
-    buf_puts(out, "    if (setjmp(__node.buf) == 0) {\n");
+    buf_puts(out, "    if (TUR_SETJMP(__node.buf) == 0) {\n");
     buf_puts(out, "        thunk(env, out);\n");
     buf_puts(out, "        tur_handler_chain = __node.parent;\n");
     buf_puts(out, "        if (global_panic_payload) {\n");
@@ -10046,7 +10079,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "}\n\n");
     buf_puts(out, "static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env, tur_result *out) {\n");
     buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;\n");
-    buf_puts(out, "    if (setjmp(__node.buf) == 0) {\n");
+    buf_puts(out, "    if (TUR_SETJMP(__node.buf) == 0) {\n");
     buf_puts(out, "        thunk(env, out);\n");
     buf_puts(out, "        tur_handler_chain = __node.parent;\n");
     buf_puts(out, "        if (global_panic_payload) {\n");
@@ -10326,7 +10359,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (shared || cps_uses_delimited) {
         buf_puts(out, "/* base-shift escape-reset context (setjmp/longjmp abort) */\n");
         buf_puts(out, "typedef struct tur_shift_reset_ctx {\n");
-        buf_puts(out, "    jmp_buf buf;\n");
+        buf_puts(out, "    tur_jmp_buf buf;\n");
         buf_puts(out, "    int64_t result;  /* f(operand), set by an abortive shift before longjmp */\n");
         buf_puts(out, "    struct tur_shift_reset_ctx *prev; /* nested resets */\n");
         buf_puts(out, "} tur_shift_reset_ctx;\n\n");
@@ -10392,7 +10425,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    void *task_group; /* Parent TaskGroup for cancellation */\n");
     buf_puts(out, "    bool cancelled; /* Set when parent TaskGroup is cancelled */\n");
     /* Phase TG-004-1 PR: Per-fiber panic handling for auto-cancel propagation */
-    buf_puts(out, "    jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */\n");
+    buf_puts(out, "    tur_jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */\n");
     buf_puts(out, "    bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */\n");
     buf_puts(out, "};\n\n");
     emit_rt_tls(out, shared, "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;\n", "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber",
@@ -10424,7 +10457,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* owns_value = 0: panic-with carries a caller-supplied / scalar / borrowed
      * value the payload must never free (catch-unwind-panic-payload-leaks). */
     buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);\n");
-    buf_puts(out, "        longjmp(tur_current_fiber->panic_jmpbuf, 1);\n");
+    buf_puts(out, "        TUR_LONGJMP(tur_current_fiber->panic_jmpbuf);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    fprintf(stderr, \"panic at %s:%d\\n\", file ? file : \"(unknown)\", line);\n");
     /* payload is opaque -- see the double-panic path above.  Do not free it:
@@ -10459,8 +10492,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     emit_rt_tls(out, shared, "TUR_THREAD_LOCAL TurThreadState *tur_current_thread_state = NULL;\n", "TUR_THREAD_LOCAL TurThreadState *tur_current_thread_state",
                 "tur_current_thread_state", "void **", "tur_tls_current_thread_state_ptr", "TurThreadState **");
     buf_puts(out, "/* TC0: thread-local setjmp buffer for with-cancel-guard (0 = not active) */\n");
-    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL jmp_buf tur_cancel_jmpbuf;\n", "TUR_THREAD_LOCAL jmp_buf tur_cancel_jmpbuf",
-                "tur_cancel_jmpbuf", "jmp_buf *", "tur_tls_cancel_jmpbuf_ptr", NULL);
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL tur_jmp_buf tur_cancel_jmpbuf;\n", "TUR_THREAD_LOCAL tur_jmp_buf tur_cancel_jmpbuf",
+                "tur_cancel_jmpbuf", "tur_jmp_buf *", "tur_tls_cancel_jmpbuf_ptr", NULL);
     emit_rt_tls(out, shared, "TUR_THREAD_LOCAL int tur_cancel_jmpbuf_valid = 0;\n\n", "TUR_THREAD_LOCAL int tur_cancel_jmpbuf_valid",
                 "tur_cancel_jmpbuf_valid", "int *", "tur_tls_cancel_jmpbuf_valid_ptr", NULL);
     buf_puts(out, "static void *tur_thread_trampoline(void *raw) {\n");
@@ -10479,7 +10512,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "static void tur_thread_do_cancel(void) {\n");
     buf_puts(out, "    if (tur_cancel_jmpbuf_valid) {\n");
     buf_puts(out, "        tur_cancel_jmpbuf_valid = 0;\n");
-    buf_puts(out, "        longjmp(tur_cancel_jmpbuf, 1);\n");
+    buf_puts(out, "        TUR_LONGJMP(tur_cancel_jmpbuf);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    /* No cancel guard -- exit the thread cleanly without panicking. */\n");
     buf_puts(out, "    pthread_exit(NULL);\n");
@@ -10496,7 +10529,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        tur_handler_node *prev_chain = tur_handler_chain;\n");
     buf_puts(out, "        tur_handler_chain = NULL;\n");
     buf_puts(out, "        /* Set up per-fiber panic handler */\n");
-    buf_puts(out, "        if (setjmp(f->panic_jmpbuf) == 0) {\n");
+    buf_puts(out, "        if (TUR_SETJMP(f->panic_jmpbuf) == 0) {\n");
     buf_puts(out, "            f->panic_jmpbuf_valid = 1;\n");
     buf_puts(out, "            tur_current_fiber = f;\n");
     buf_puts(out, "            f->entry_fn();\n");
@@ -10593,7 +10626,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * and restore them when control returns, so the fiber's driver never leaks
      * out.  The trampoline path declares g_dk_driver / g_dk_meta_n and is the
      * only path since cps-tramp-resume graduated (2026-07-19). */
-    buf_puts(out, "    jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
+    buf_puts(out, "    tur_jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
     buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
     buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
     buf_puts(out, "    tur_current_fiber = _prev;\n");
@@ -12878,6 +12911,34 @@ void emit_rt_split_source(Buf *out) {
     extern bool g_needs_winsock;
     bool s_hamt = g_needs_hamt, s_regex = g_needs_regex_h;
     bool s_var = g_has_variadics, s_cps = g_cps_path, s_wsk = g_needs_winsock;
+    /* DEDUP-4b interaction: the rc/GC section emits decls-only in archive mode
+     * and full static bodies otherwise, so the canonical text depends on
+     * g_rcgc_from_archive too.  cmd_emit_rt_split forces it true before
+     * calling here, but the S2 engage probe (jit_try_split_preamble) calls
+     * with whatever resolve_rcgc_from_archive decided for this box -- on a
+     * host without the lean runtime archive that is `false`, the probe emits
+     * the bodies flavor, and the hash NEVER matches the committed artifacts.
+     * Net effect: S2 silently disengaged for every program on such hosts.
+     * Force it here, where every caller gets the canonical posture, and
+     * restore on the way out. */
+    bool s_arch = rt_global_from_archive();
+    emit_set_rcgc_from_archive(true);
+    /* Same hazard, second instance.  The SX1 trail guard inside
+     * tur_serial_cont_serialize is gated on g_trail_autoloaded, which
+     * reflects whether stdlib/trail.tur happened to be autoloaded into THIS
+     * compile.  cmd_emit_rt_split does not autoload it, the JIT engage probe
+     * does -- so the two emitted different text, the hash compare failed, and
+     * S2 silently disengaged for EVERY program on every platform.  Nothing
+     * reports that: the JIT just falls back to the whole-preamble path, which
+     * on Windows then dies on __va_start and falls back again to cc.
+     *
+     * Forcing it on is safe for the split specifically: the runtime half is
+     * compiled into the host, which always links src/runtime/trail.c, so
+     * tur_trail_level_i64 resolves.  The gate's own comment is about the
+     * NON-split path, where a looser gate would emit a call cc cannot
+     * resolve. */
+    bool s_trail = g_trail_autoloaded;
+    g_trail_autoloaded = true;
     g_needs_hamt = true; g_needs_regex_h = true;
     g_has_variadics = true; g_cps_path = true; g_needs_winsock = true;
     g_rt_split_all_gates = true;
@@ -12888,6 +12949,8 @@ void emit_rt_split_source(Buf *out) {
     g_rt_split_all_gates = false;
     g_needs_hamt = s_hamt; g_needs_regex_h = s_regex;
     g_has_variadics = s_var; g_cps_path = s_cps; g_needs_winsock = s_wsk;
+    emit_set_rcgc_from_archive(s_arch);
+    g_trail_autoloaded = s_trail;
 }
 
 /* structdef-retirement slice 5: an `(defopaque ...)` elaborates to an EX_DEF

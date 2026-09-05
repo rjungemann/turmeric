@@ -50,12 +50,12 @@ fix, not a follow-up. The two rows marked (spice repo) live in the sibling
 | [defstruct-struct-path-is-dead](defstruct-struct-path-is-dead.md) | low | `defstruct_lowers_to_adt` has been widened slice by slice until it rejects nothing, so the `else` in `elab_defstruct` is unreachable (measured: zero struct-path hits over the suite, plus eight shapes by hand). **Corrected 2026-09-05: it does NOT keep a legacy StructDef elaboration alive** -- DS-D deleted that on 2026-09-02, two days before this was filed, and what sits after the `if` is a three-line defensive diagnostic. Fix direction 1 as written has nothing to sweep; deleting a defensive error is not a cleanup. Also checked: the predicate's `false` returns for malformed input are all shadowed by earlier diagnostics in `elab_defstruct` itself, which is WHY the measurement is zero. Stays parked for the reason originally given -- the value is the machinery, not the branch -- and that machinery is real: ~47 `StructDef` references across ten files plus twelve `struct_defs` uses, several already commented "always empty". Direction 2 is the entire remaining content |
 | [serial-shift-colored-receiver-rejected](serial-shift-colored-receiver-rejected.md) | low | a serial-shift receiver (named or lambda) that calls anything colored -- a fn-value call, an effect, an `unsafe` block -- is rejected with TUR-E0706 although it runs once at capture and is never marshalled; keep its callees uncolored. **Fix direction CORRECTED 2026-09-05.** Root cause confirmed by instrumentation (the colored lambda lifts to a global fn VALUE, so the named arm rejects it on `is_global && callee_colored` and the U7 arm rejects it for not being an EX_CLOSURE). But the filed direction -- thread `subk`'s continuation as the receiver's `DK *` -- does NOT fix the soundness problem it names: the driver builds `subk` as [frames up to the prompt] ++ [RE-INSTALLED prompt] ++ [DONE], so a `perform` inside the receiver would escape to root. Same escaped effect as the direct-entry wrapper's fresh DK root, different address. The receiver needs a chain whose tail is `P->next` (outside the enclosing prompt), which the driver computes and **never hands to the body** -- `DKBody` is `(intptr_t env, DK *sub)`. So the work is widening that contract, not per-site plumbing in the emitter, which is why the restriction has stood. `DKK_RESUME_FRAME` in the same switch is the precedent: a callback that needs the downstream chain already gets it |
 | ~~perform-inside-loop-has-no-lowering~~ | -- | **Resolved 2026-09-02**: a tail-position `while` now reaches the loop lowering, a conditional `perform` in statement position reifies its join as a DK resume-frame, a conditionally or repeatedly assigned loop-carried `^mut` rides a shared cell, a loop followed by statements reifies its continuation as a join, and `extern-c` callees no longer color their callers. `examples/snake` passes `tur check`. Archived to [docs/archive](../archive/perform-inside-loop-has-no-lowering.md) |
-| [wss-client-cert-verification](wss-client-cert-verification.md) | medium | (spice repo) `wss://` client uses MBEDTLS_SSL_VERIFY_NONE -- no cert verification |
+| ~~wss-client-cert-verification~~ | -- | **Resolved (already fixed at filing; docs updated 2026-09-04)**: `ws-client`'s TLS-V0 (turmeric-spices commit `95eae7a4`, 2026-06-23) predates this report and already verifies against the system CA store by default, with `ws-connect-with-ca` / `ws-connect-insecure` opt-outs. Only the guide had drifted. Archived to [docs/archive](../archive/wss-client-cert-verification.md) |
 | [webkit-sw-controlled-reload-fails-wasm-init](webkit-sw-controlled-reload-fails-wasm-init.md) | medium | Try Turmeric shows "Failed to load WASM" on a WebKit *reload*, once the service worker controls the page and the wasm assets come from the Cache API instead of the network. Not the SharedArrayBuffer path (main.js:1178, not :1168). First load is fine, so it hits returning visitors, and the "Please refresh the page" advice cannot work. Root cause not established; unconfirmed on real iOS Safari, which is what decides the severity |
 | ~~c-sources-propagate-only-one-level~~ | -- | **Resolved 2026-09-02**: `:c-sources` / `:c-includes` now propagate across the whole `:spices` closure (worklist + realpath visited set, the `:cmake-deps` shape, sharing its dep resolver), each source linked once by resolved path. Two-hop and diamond fixtures in the spice c-sources harness. Archived to [docs/archive](../archive/c-sources-propagate-only-one-level.md) |
 | [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) | low | GADT constructor-application indices are phantom; no compile-time length proofs |
 | [union-tagged-union-c-emission](union-tagged-union-c-emission.md) | low | per-member C union emission still deferred -- and now much less urgent, because the cost it was filed to remove is gone. FOUR defects hid behind it, **all now fixed**: the unowned box at argument position, the aggregate match-arm compile error, float truncation, and (2026-09-05) two more found inside this entry's own "still open" note, which claimed a union bound to a local or returned "still leaks its box". (1a) It did not leak, it did not COMPILE -- `EX_UNION_INJECT` was inserted at call arguments and NOWHERE else, so a let-init was "invalid initializer" and a `defn` declared `: (Wide | int)` was "incompatible types when returning". `elab_coerce_to_union` is the union twin of `elab_coerce_to_any`, reached now from the ascription and from return position (which needed a `return_union_type` capture -- `return_kind` alone is a bare TY_UNION with no member list). (1b) The heap box then had no owner: 32,000 bytes in 1,000 blocks where the same program through `any` is clean, because `let_binding_any_freeable` was a FOURTH rule keyed on TY_ANY. Adding the key would have closed NOTHING -- the drop channel emits `__tur_any_drop`, whose id space (>= 1000) is disjoint from a union's member index, so it is a silent no-op. A union let needs no switch (the inject is in the initializer, so the tag is a compile-time fact); the channels carry drop STATEMENTS now instead of names, which reaches the early exits the tail-recursive repro leaks through |
-| [tourist-ws-conn-adapter](tourist-ws-conn-adapter.md) | low | (spice repo) tourist handlers cannot reach Conn, so no WebSocket endpoints |
+| ~~tourist-ws-conn-adapter~~ | -- | **Resolved (already fixed at filing; docs updated 2026-09-04)**: the `tourist-ws` spice (`ws-route!` + `tourist-conn`, TOUR-V0, turmeric-spices commit `95eae7a4`, 2026-06-23) predates this report. Only the guide had drifted, still describing it as unbuilt future work. Archived to [docs/archive](../archive/tourist-ws-conn-adapter.md) |
 
 `stdlib-dir-guard-accepts-mismatched-stdlib` was resolved 2026-09-02 and moved
 to [docs/archive](../archive/stdlib-dir-guard-accepts-mismatched-stdlib.md) by
@@ -669,6 +669,7 @@ suite 2687 passed, 0 failed.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [jit-ffi-interp-refuses-parametric-record-field](jit-ffi-interp-refuses-parametric-record-field.md) | low | `call-ptr` under `--interpret` refuses a record with a parametric-monomorph field (`(BoxW int32)`) that the compiled path inlines by value: a compiled/interpreted divergence, refused cleanly. Its diagnostic ("no by-value C member type") is inaccurate in every case it can fire |
+| [declared-size-index-never-checked-against-value](declared-size-index-never-checked-against-value.md) | medium | sized-type argument checks fire correctly, but the *claims* they trust are never validated: a `defn`'s declared return-type size index is recovered and used downstream without ever being compared to the body, so a wrong annotation launders a mismatch past `TUR-E0260`; and an ascribed size (`(:: e (SizedBuf (Static k)))`) is neither validated nor recovered, which is the idiom `stdlib/sized-buf.tur` prescribes for pinning `n` |
 
 The `mir-aarch64` row was indexed 2026-08-21. It had **no row at all** since it
 was filed -- the only open report in the tree that this index never listed, and
@@ -750,6 +751,7 @@ Pinned by four `errors/` negatives and
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [codegen-gcc14-permerrors](codegen-gcc14-permerrors.md) | medium | Latent today; breaks every `tur build` the moment CI's compiler crosses GCC 14, which promotes several emitted-C warnings to errors. Worked around, not fixed. Not Windows-specific |
 
 `env-doctests-are-machine-dependent` was resolved 2026-08-21 and moved to
 [docs/archive](../archive/env-doctests-are-machine-dependent.md). The five
@@ -1427,13 +1429,16 @@ retrying; the remaining open row is the mbedTLS one:
 | Class | Spices | Owner |
 | --- | --- | --- |
 | Frameworks not expressible in the manifest | `raygui`, `opengl` | **fixed** -- `docs/archive/cmake-deps-cannot-express-framework.md` |
-| `ld: library 'mbedtls' not found`, cause not established | `tls`, `http`, `httpd`, `ws-client`, `ws-server`, `tourist-ws` | diagnosability blocked by `spices-ci-fetch-failure-downgraded-to-warning` |
+| `ld: library 'mbedtls' not found`, cause not established | `tls`, `http`, `httpd`, `ws-client`, `ws-server`, `tourist-ws` | diagnosability item fixed -- `docs/archive/spices-ci-fetch-failure-downgraded-to-warning.md`; root cause itself still open |
 | `dyld: @rpath/libz.1.dylib` -- static/shared preference | `zlib` | **fixed** -- `docs/archive/cmake-deps-link-name-not-overridable.md` |
 | Genuine platform behavior differences (kqueue vs inotify, etc.) | `tourist`, `watch`, `wav`, `plot`, part of `tourist-session` | spice repo |
 
-The mbedTLS class is six jobs presenting the *identical* misleading error, and
-the reason it is still undiagnosed is the CI row below -- which is worth reading
-before anyone spends a CI round-trip on it.
+The mbedTLS class is six jobs presenting the *identical* misleading error. Why
+it was undiagnosed is the CI row below, now fixed -- the `::warning::`
+annotation carries the real `tur fetch` output instead of a generic message,
+so the next occurrence should name the actual failure directly rather than
+requiring a CI round-trip to find it. The root cause of the macOS mbedTLS
+build failure itself is still open.
 
 Two rows carry a **root cause that differs from how they were originally
 reported** -- the narrowing is in the report, and a fix keyed on the original
@@ -1529,22 +1534,36 @@ churn.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [spices-ci-fetch-failure-downgraded-to-warning](spices-ci-fetch-failure-downgraded-to-warning.md) | medium | (spice repo) `tur fetch` failure becomes a `::warning::`, so a failed native-dep build surfaces two steps later as `ld: library 'mbedtls' not found` in six jobs at once. **Deliberate and correctly so** -- making it fatal risks Linux, since optional `:spices` routinely fail. The fix is to put the captured output *in* the annotation, and to give `tur fetch` an exit code that separates optional-dep failure from required-dep failure |
+| ~~spices-ci-fetch-failure-downgraded-to-warning~~ | -- | **Resolved 2026-09-04, item (1)**: turmeric-spices commit `e24a41a8` tees `tur fetch`'s output and folds it into the `::warning::` annotation, dropping the "often optional" editorializing. Archived to [docs/archive](../archive/spices-ci-fetch-failure-downgraded-to-warning.md). The durable fix (an exit code from `tur fetch` distinguishing optional vs required failures) is split out to [tur-fetch-exit-code-optional-vs-required](tur-fetch-exit-code-optional-vs-required.md) |
+| [tur-fetch-exit-code-optional-vs-required](tur-fetch-exit-code-optional-vs-required.md) | low | `tur fetch` returns the same exit code whether a failed dep was optional or required, so CI can only warn-and-continue, never fail on a real required-dep break |
 
 ## Windows port
 
-Filed 2026-07-31 during the Windows-support sweep on `main`; they arrived in
-this directory with that work. The Windows CI leg that watches them was itself
-broken until 2026-08-01 -- it installed a nonexistent `libedit` package and
-never reached Configure -- which is now fixed (report archived at
-`docs/archive/windows-ci-leg-installs-nonexistent-libedit.md`). Note the leg is
-build-only by design, so these three are still not FIXTURE-watched on Windows.
+Originally filed 2026-07-31 during the Windows-support sweep on `main`. The
+Windows CI leg that watches them was build-only until 2026-09-04 and now runs
+the **full fixture suite** (`windows` job in `.github/workflows/ci.yml`), so
+these are fixture-watched. Two of the original three are resolved and archived:
+`windows-posix-inline-c-gaps` and
+`windows-pipe-reactor-fixtures-do-not-build` (both superseded by main's
+`requires.posix-apis` skip marker).
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [windows-subprocess-and-shared-lib-gaps](windows-subprocess-and-shared-lib-gaps.md) | high (for Windows users) | `tur install` / `fetch` / `new` / `build --shared` / REPL spice loading all fail -- the subprocess and shared-library layers are unported. Read-verified by audit, **not** exercised end-to-end |
-| [windows-posix-inline-c-gaps](windows-posix-inline-c-gaps.md) | low | 5 fixtures; three unrelated POSIX APIs reached from stdlib inline-C with no Windows path (`_mkdir` conflicting decl, one real port, one probably should not be ported) |
-| [windows-pipe-reactor-fixtures-do-not-build](windows-pipe-reactor-fixtures-do-not-build.md) | low | 9 pipe-reactor fixtures fail at **build**, not runtime -- the value here is the correction to the plan doc, which documents them as a runtime limitation |
+| [windows-subprocess-and-shared-lib-gaps](windows-subprocess-and-shared-lib-gaps.md) | high (for Windows users) | `tur install` / `fetch` / `new` / `build --shared` / REPL spice loading all fail -- the subprocess and shared-library layers are unported. Read-verified by audit, **not** exercised end-to-end. `build --shared` half is now done (emits a real `.dll`) |
+| [win64-aggregate-return-threshold-is-sysv](win64-aggregate-return-threshold-is-sysv.md) | medium | The fat-dispatch shim selector reads register-return-vs-sret off a hardcoded SysV `> 16` threshold; Win64's is 1/2/4/8, so a 16-byte monomorph is sret there, keeps the generic forwarding shim, and SIGSEGVs with no diagnostic. Skipped via `requires.win64-aggregate-abi` |
+| [windows-hardcoded-tmp-resolves-to-drive-root](windows-hardcoded-tmp-resolves-to-drive-root.md) | medium | `fs/tmpfile` and ~12 fixtures spell `/tmp/...` literally; a NATIVE Windows binary resolves that against the current DRIVE ROOT, not the MSYS `/tmp`. Green locally (the box had `C:\tmp`), 12 red on a clean runner. `tests/run.sh` provisions the dir; the real fix is `GetTempPath` in stdlib |
+| [windows-httpd-async-limit-hangs-on-ci](windows-httpd-async-limit-hangs-on-ci.md) | low | Hangs on GitHub's Windows runners (no output, killed at both 10s and 30s) while passing locally 4/4. Skipped via `requires.win-concurrent-loopback`. Best suspect is runner core count, untested |
+| [jit-windows-support-spike](jit-windows-support-spike.md) | research | Spike EXECUTED: the Windows JIT builds, and a program runs natively under `TUR_JIT_GEN=eager` via a c2mir compat prelude. Remaining: the lazy-thunk SIGILL and full-TU `__va_start` |
+
+## Godot embedding
+
+Filed 2026-08 while bringing the `turmeric-godot` GDExtension up on Windows.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [godot-baked-in-prelude-fails-to-eval](godot-baked-in-prelude-fails-to-eval.md) | high | The GDExtension loads and registers correctly but no script ever evaluates -- the baked-in prelude fails |
+| [godot-aot-staged-build-lacks-godot-natives](godot-aot-staged-build-lacks-godot-natives.md) | high (AOT) | The staged transient project has no `godot-*` natives, so the AOT path cannot compile a script that touches the engine. Interpreter path unaffected |
+| [jit-godot-embedding-spike](jit-godot-embedding-spike.md) | research | Whether the JIT can replace the AOT stage-and-subprocess cache in the GDExtension |
 
 ## Platform-independent, found on a platform sweep
 

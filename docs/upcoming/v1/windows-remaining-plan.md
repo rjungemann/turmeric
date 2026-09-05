@@ -1,43 +1,68 @@
 # Windows Support -- Remaining Work
 
-**Status (revised 2026-07-31):** WIN0 (compiler/runtime), WIN1 (generated-code
+**Status (revised 2026-09-04):** WIN0 (compiler/runtime), WIN1 (generated-code
 portability), and the hard core of WIN3 (async I/O + fiber context switches) are
 done and **merged to `main`** -- squash-merged as `7a16ef1de` ("Windows Bringup
-(#682)"). The `windows-bringup` branch is stale (~900 commits behind main); do
-not work from it.
+(#682)").
+
+**The `windows-bringup` branch is live again, and is where the current work is.**
+An earlier revision of this header said it was "~900 commits behind main; do not
+work from it" -- that was true when written and is no longer. It has since been
+merged up twice (most recently 584 commits, v0.33.2 -> v0.43.0) and carries the
+JIT bring-up, the `__builtin_setjmp` fiber fix, the `-ldl` autolink fix, and the
+CI change below.
 
 `tur.exe` builds under MSYS2/UCRT64, and `tur build` compiles and runs real
-programs. Measured on main at `f630230e5` with gcc 16.1.0:
+programs. Measured on `windows-bringup` with gcc 16.1.0, Debug:
 
 ```
 TUR=./build-win/tur.exe bash tests/run.sh
-# summary: 2478 passed, 21 failed
+# summary: 2781 passed, 0 failed
 ```
 
-That is the whole fixture tree, not the async subset -- roughly 99%. (An earlier
-revision of this plan cited "~65 fixtures"; that was the async/reactor/httpd
-subset at bring-up time, not a ceiling.)
+**Do not trust a green local run until it is green on a machine that has never
+run the suite.** That number was first measured on a box that happened to have
+`C:	mp` left over from earlier runs; the same commit came back `2769 passed, 12
+failed` on a clean CI runner whose workspace is on `D:`. A dozen fixtures (and
+stdlib's `fs/tmpfile`) spell `/tmp/...` literally, and a NATIVE Windows binary
+resolves that against the current drive root, not the MSYS shell's `/tmp`.
+`tests/run.sh` now provisions `<drive>:	mp`; the real fix is tracked in
+[windows-hardcoded-tmp-resolves-to-drive-root](../../reported/windows-hardcoded-tmp-resolves-to-drive-root.md).
 
-The 21 are four known classes and nothing else: 9 pipe-fd fixtures, 5
-carrier<->pointer straddles (not Windows-specific; **all five fixed 2026-08-01**,
-though not re-measured on Windows -- see below), 5 POSIX-only inline-C, and 2
-scheduler stdout mismatches. Each is a section below. The run was 2445/54 before
-the Winsock setsockopt/getsockopt shim landed; the whole `httpd-*` family moved
-in one change.
+Run the suite against a **Debug** build. A Release `tur` compiles out contract
+checks (`rt_contracts_emitted` is `#ifdef NDEBUG`), so every fixture pinning a
+contract panic fails against it with the wrong runtime error -- which looks
+exactly like a product regression and is not one.
+
+The remaining known-bad fixtures PASS-skip behind markers rather than sitting
+red, so a new failure is unambiguous:
+
+| marker | what it covers |
+| --- | --- |
+| `requires.posix-apis` | POSIX-only APIs (11 fixtures) -- pipe-fd reactor family, `childhandle`, `term-raw-cooked` |
+| `requires.win64-aggregate-abi` | the SysV-vs-Win64 aggregate-return threshold ([report](../../reported/win64-aggregate-return-threshold-is-sysv.md)) |
 
 **WIN0 regressed between the merge and 2026-07-31 and had to be re-fixed.** Five
 independent breaks accumulated, three of them within five days, because nothing
-guards Windows in CI. The compiler did not build at all. See
+guarded Windows in CI. The compiler did not build at all. See
 `docs/reported/windows-*.md` and the `fix(windows): restore the Windows build on
 main` commit.
 
-**The single highest-value item in this plan is therefore a `windows-latest` CI
-job**, which is not otherwise listed here -- `.github/workflows/ci.yml` runs
-`[ubuntu-latest, macos-latest]` on both the `test` and `jit` legs, and
-`release.yml` ships no Windows artifact. Without a guard, everything below
-rots as fast as it is fixed. Note also that `src/CMakeLists.txt:45-49` disables
-`-Werror` on Windows pending a warning-clean port, so a new job runs with
-warnings unpromoted until that is revisited.
+**That guard now exists, and as of this branch it runs the fixture suite, not
+just the build.** `.github/workflows/ci.yml` has a `windows` job (MSYS2/UCRT64).
+It was build-only by deliberate choice while ~54 fixtures were failing -- a
+permanently-red job teaches people to ignore it -- with the stated exit
+condition "turn the suite on here once those classes are closed". They are
+closed, so it is on.
+
+Build-only was not sufficient, and the gap was not hypothetical: `-ldl` (Windows
+has no libdl) reached main in three new `jit-ffi` fixtures and the job stayed
+green through it, because that failure is a LINK error when building a FIXTURE,
+not when building `tur.exe`.
+
+Still missing: `release.yml` ships no Windows artifact, and
+`src/CMakeLists.txt:45-49` disables `-Werror` on Windows pending a warning-clean
+port, so the job runs with warnings unpromoted.
 
 This plan tracks what is left.
 
@@ -53,22 +78,86 @@ firewall).
 
 ---
 
-## WIN2 -- `turmeric-godot` GDExtension Windows build (THE north star, not started)
+## WIN2 -- `turmeric-godot` GDExtension Windows build (THE north star -- LOADS)
 
 **Goal:** build the shim from `../turmeric-godot/` as a Windows `.dll` and load
 it in a stock Godot 4 binary. This is the actual point of Windows support -- the
 compiler/runtime work exists to serve it.
 
-### Prerequisite in this repo: shared-library output naming
+**Reached 2026-08-04.** The shim builds as
+`libturmeric-godot.windows.template_debug.x86_64.dll` and initializes in a stock
+Godot 4.3.stable:
 
-`tur build --shared` still emits `lib<name>.so`. On Windows the shim's AOT path
-wants `<name>.dll` (no `lib` prefix). Wire this through the shared-library output
-naming in `src/main.c` under `_WIN32`:
+```
+$ scons platform=windows arch=x86_64 target=template_debug use_mingw=yes
+$ Godot_v4.3-stable_win64.exe --headless --editor --path examples/spike --quit
+[turmeric-godot] initialize(level=2)
+[turmeric-godot] ctor called
+[turmeric-godot] registered Turmeric script language + resource format
+[turmeric-godot] initialize(level=3)
+```
 
-- `.so` -> `.dll`, drop the `lib` prefix.
-- Confirm the shim's "compile script on demand" subprocess invokes `tur.exe`
-  (with the suffix) -- `tur_settle_exe_output` already handles the executable
-  case; the shared path needs the same care.
+Startup and shutdown are both clean (exit 0, full uninitialize sequence). The
+link used `-Wl,--no-undefined`, so nothing is left unresolved.
+
+Three notes for whoever picks this up:
+
+- **Use `--editor`, not plain `--headless --path`.** Without it Godot goes into
+  run mode, bails with "no main scene defined", and never loads the extension at
+  all -- which reads exactly like a load failure. The spike project's own header
+  comment still recommends the plain form.
+- **Headless Godot 4.3 hangs at teardown on this box**, with
+  `Pages in use exist at exit in PagedAllocator`. Verified as NOT ours: an empty
+  project with no GDExtension hangs identically. Wrap runs in a `timeout`.
+- **One error remains**, and it is an ordering problem rather than a load
+  failure: `[turmeric-godot] TurmericEditorSyntaxHighlighter class not
+  registered; is the GDExtension loaded?` is pushed *before* `initialize(level=2)`.
+  The editor plugin in `addons/turmeric-godot-editor` runs ahead of the
+  extension's EDITOR-level registration. Not known to be Windows-specific --
+  untested on Linux/macOS.
+
+What is NOT yet demonstrated: **the AOT path has never run.** Loading the
+extension does not compile a `.tur` script, so the Windows-specific work in
+`aot_cache.cpp` (cmd.exe quoting, `std::system` exit decoding, `.dll` cache
+naming) is still unexercised. That needs a project that actually attaches a
+Turmeric script.
+
+### Prerequisite in this repo: shared-library output naming -- DONE
+
+`tur build --shared` emits `<name>.dll` (no `lib` prefix) on Windows.
+`TUR_SHLIB_PREFIX` / `TUR_SHLIB_EXT` in `src/platform_fs.h` are the single
+source of truth; `src/main.c` (default output path) and
+`src/turi/spice_loader.c` (the `.tur-repl-cache/` image) both build their names
+from them. macOS deliberately keeps `lib<name>.so` -- see the header comment.
+
+`tests/run-build-shared.sh` passes 11/11 against `build-win/tur.exe`: the .dll
+links, exports `smokelib__add42`, dlopens through `src/platform_dl.h`, calls,
+and writes `exports.manifest`. Three fixes were needed to get there:
+
+- **Multi-TU collision in the emitted ucontext shim.** The WIN3-C register-
+  snapshot shim goes into *every* generated TU with `.globl __tur_uctx_swap` /
+  `__tur_uctx_tramp`, so any build with more than one TU died with "multiple
+  definition". Not `--shared`-specific: every multi-module `tur build <dir>`
+  hits it; `--shared` just always has a second TU (`tur_runtime.c`). The
+  definitions now sit in COMDAT (`.text$<name>` + `.linkonce discard`), the
+  mechanism a C++ inline function uses. Two traps: `.scl 3` alone is not enough
+  for `__tur_uctx_swap` (the C code calls it, so GCC re-externalises it), and
+  the asm block **must** end by switching back to `.text` -- otherwise later
+  compiler output lands in the discardable section and every generated program
+  segfaults in `main()`.
+- **`basename_of()` split on `/` only.** Windows `realpath()` returns the
+  backslash spelling, so `tur build --shared .` used the whole absolute path as
+  the artifact name and ld rejected it. Now splits on `\` too, under `_WIN32`.
+- **`dlfcn.h` in the smoke harness.** MinGW has none; it now includes the
+  repo's existing `src/platform_dl.h`.
+
+Nine harnesses also hardcoded `TUR="./build/tur"` rather than honouring a `TUR`
+override, so they could not be pointed at `build-win/tur.exe` at all. They now
+read `${TUR:-./build/tur}` like the other 35.
+
+Still open: confirm the shim's "compile script on demand" subprocess invokes
+`tur.exe` (with the suffix). `tur_settle_exe_output` already handles the
+executable case.
 
 ### Scope (mostly in `../turmeric-godot/`)
 
@@ -110,7 +199,7 @@ create a `pipe()` and register the pipe fds with the reactor.
 **Correction (2026-07-31): these fail at `cc`, not at runtime.** MinGW does not
 declare `pipe()` -- it ships `_pipe`, with a different signature -- and
 `-Wimplicit-function-declaration` is a hard error on gcc >= 14. No reactor code
-is reached. See `docs/reported/windows-pipe-reactor-fixtures-do-not-build.md`.
+is reached. See `docs/archive/windows-pipe-reactor-fixtures-do-not-build.md`.
 
 The runtime limitation below is still real and still applies the moment they do
 compile, so the two causes compound rather than compete: **Windows `select()` is
@@ -172,15 +261,15 @@ it.
   contains only includes/defines/comments -- also unblocks the natural port of
   `term/width`/`term/height`, which would otherwise break the same way the moment
   their `#include <sys/ioctl.h>` is wrapped in an `#ifdef`. See
-  [docs/reported/windows-posix-inline-c-gaps.md](../../reported/windows-posix-inline-c-gaps.md).
+  [docs/archive/windows-posix-inline-c-gaps.md](../../archive/windows-posix-inline-c-gaps.md).
 
 ## Subprocess and shared-library layers (not fixture-visible)
 
 The commands that shell out or produce/load a shared library are unported:
-`tur install`, `tur fetch`, `tur new`, `tur build --shared`, and REPL spice
-loading. They pass `/bin/sh` command strings with single-quote quoting to
-`cmd.exe`, `--shared` still emits `lib<name>.so`, and the REPL JIT module graph
-hits the deliberate `symlink` `ENOSYS` stub. This is the highest-impact group
+`tur install`, `tur fetch`, `tur new`, and REPL spice loading. They pass
+`/bin/sh` command strings with single-quote quoting to `cmd.exe`, and the REPL
+JIT module graph hits the deliberate `symlink` `ENOSYS` stub. This is the
+highest-impact group
 for an actual Windows user and is a prerequisite for WIN2 above. See
 [docs/reported/windows-subprocess-and-shared-lib-gaps.md](../../reported/windows-subprocess-and-shared-lib-gaps.md).
 

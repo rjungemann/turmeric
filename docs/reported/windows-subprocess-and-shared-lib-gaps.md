@@ -1,5 +1,12 @@
 # Windows: the subprocess and shared-library layers are unported
 
+> **PARTIALLY RESOLVED 2026-09-04, and this report's read-only findings needed
+> correcting once they were actually run.** `tur new` and REPL spice loading
+> now work end to end on Windows. A third failure mode -- cmd.exe eating the
+> outer quote pair of a `/c` string -- was not in this report and is not
+> findable by reading the call sites. See "Resolution" at the end for what is
+> fixed, what is still POSIX-only, and what turned out to be misdiagnosed.
+
 **Severity: high for anyone actually using `tur` on Windows.** `tur.exe` now
 builds and compiles-and-runs programs, but the commands that shell out or
 produce/load a shared library fail. `tur install`, `tur fetch`, `tur new`,
@@ -93,3 +100,80 @@ feature rather than breaking. But the port is not a matter of shims:
 
 1 and 2 gate real use; 3 is a small fix on a new regression; 4 can wait for a
 deliberate decision about whether the JIT targets Windows at all.
+
+
+## Resolution (2026-09-04) -- partial
+
+### What this report got wrong
+
+It was explicit that its claims were "read-verified, not empirically
+exercised". Exercising them:
+
+**`tur new` did not fail.** It SUCCEEDED, with exit 0 and the project on disk --
+and no git repository, which is the worse outcome because nothing signals it.
+Its stderr carried three cmd.exe errors and this line:
+
+```
+tur new: git config user.name/user.email not set; using placeholder author
+```
+
+That is false on a machine where `git config user.name` is plainly set. The
+popen that read it had failed, so the tool blamed the user's git configuration
+for its own broken subprocess. A user following that message would go and set a
+value that was already set.
+
+### The third cause, which reading could not have found
+
+Fixing the two causes this report names -- `/dev/null` and single quotes -- was
+not enough. The spice build then failed with:
+
+```
+The filename, directory name, or volume label syntax is incorrect.
+```
+
+`system()` runs `cmd.exe /c <string>`, and cmd.exe strips the FIRST and LAST
+quote characters of that string. With one quoted program path that is harmless;
+with a quoted program AND quoted arguments it tears the command in half. The
+remedy is an extra enclosing pair, so the pair cmd.exe eats is one we added.
+
+This is invisible in a source audit: every individual argument is quoted
+correctly and the command still does not run.
+
+### What is fixed
+
+`src/platform_proc.h` (new) carries the three portable pieces, all no-ops off
+Windows:
+
+| helper | what it settles |
+| --- | --- |
+| `TUR_DEVNULL` | `NUL` vs `/dev/null` |
+| `tur_shell_quote` | double quotes on Windows, with the CRT's backslash-doubling rule so a trailing `C:\dir\` cannot escape its own closing quote |
+| `tur_shell_command` | the outer wrap cmd.exe consumes |
+
+Converted and **verified end to end on Windows**:
+
+- `tur new` -- stderr now empty; `git log` shows `Initial scaffold from tur new`
+- REPL spice loading -- `Loaded spice from ... (1 export)`, and calling the
+  export from the prompt returns `=> 42`
+- `tests/turi/repl-spice-load.sh` -- 9/9 pass
+
+### What is still POSIX-only
+
+Not converted, because they cannot be driven end to end here and a change that
+cannot be run is a change that cannot be trusted:
+
+```
+install.c:1177   git ls-remote '%s' '%s' 2>/dev/null      (needs a remote)
+pkg.c:1587/1589  tar -c '%s' 2>/dev/null | shasum -a 256  (needs a spice tree)
+pkg.c:1858       git -C '%s' rev-parse HEAD 2>/dev/null
+```
+
+The `tar`/`shasum` pair has a second problem the helpers do not touch: neither
+tool exists on a stock Windows box, so correct quoting only changes the error.
+That wants a different remedy -- an in-process hash, or a documented dependency.
+
+### Also still open, and unrelated to subprocesses
+
+The REPL cannot resolve `stdlib/typeclass-show.tur` when loading its eval
+prelude (`load: cannot open ...`). It is visible in every REPL session above and
+is a stdlib path-resolution bug, not a subprocess one.

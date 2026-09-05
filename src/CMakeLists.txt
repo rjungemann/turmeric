@@ -486,6 +486,15 @@ if(TUR_JIT)
   # property; an embedding host has to set the equivalent itself (see the
   # ENABLE_EXPORTS note in jit_engine.h).
   set_target_properties(tur PROPERTIES ENABLE_EXPORTS TRUE)
+  # MinGW: ENABLE_EXPORTS alone left tur.exe with NO export table on this
+  # toolchain (measured: objdump -p showed none), so dlsym(RTLD_DEFAULT)
+  # could not resolve a single runtime symbol and every JIT link died on the
+  # first tur_* import.  Say it explicitly.  ld's --export-all-symbols still
+  # excludes the MinGW runtime objects (printf and friends) -- those resolve
+  # through JIT_SHIMS in jit_engine.c instead.
+  if(WIN32)
+    target_link_options(tur PRIVATE "-Wl,--export-all-symbols")
+  endif()
 endif()
 
 # tur also needs the subsystem subdirs on the include path for main.c.

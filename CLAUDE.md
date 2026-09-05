@@ -633,6 +633,7 @@ PASS-skip it under certain conditions:
 | `requires.dedicated-runner` | always under `run.sh`; the fixture is owned by its own ctest target (e.g. `tur_eval_import`) |
 | `requires.posix-apis` | the host is producing Windows binaries (`TUR_HOST_WINDOWS=1`) |
 | `requires.spices` | the sibling `../turmeric-spices/` checkout is absent |
+| `requires.posix-apis` | `TUR_HOST_WINDOWS=1` (an MSYS2 `MSYSTEM`); the fixture's inline-C needs a POSIX API MinGW lacks -- `pipe()`, `fork()`, `getppid()`. Applies to negative fixtures too |
 
 `tests/run-turi.sh` honours the same five markers (`requires.compiled`,
 `requires.tur-only`, `requires.dedicated-runner`, `requires.spices`,

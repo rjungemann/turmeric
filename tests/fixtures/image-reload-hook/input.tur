@@ -13,6 +13,28 @@
 ;;            (the handle was never in the image); finalize hooks do NOT run.
 ;; Both files are removed at start (hermetic) and end.
 
+(defn tmp-path [name : cstr] : cstr
+  ```c
+  /* Resolve a scratch path at RUN TIME instead of hardcoding "/tmp/...".
+   *
+   * A compiled fixture is a NATIVE Windows binary, so its CRT resolves a
+   * leading "/tmp" against the CURRENT DRIVE ROOT (C:\tmp, D:\tmp) rather than
+   * the way the MSYS shell does.  Where that directory does not exist the open
+   * simply failed and the fixture printed nothing.  tests/run.sh exports
+   * TUR_TEST_TMPDIR; the "/tmp" fallback keeps this runnable by hand on POSIX.
+   *
+   * Four rotating buffers so a call like (f (tmp-path "a") (tmp-path "b"))
+   * does not have the second call clobber the first. */
+  static char bufs[4][512];
+  static int slot = 0;
+  char *buf = bufs[slot];
+  slot = (slot + 1) & 3;
+  const char *d = getenv("TUR_TEST_TMPDIR");
+  if (!d || !*d) d = "/tmp";
+  snprintf(buf, sizeof bufs[0], "%s/%s", d, name);
+  return buf;
+  ```)
+
 (load "stdlib/image.tur")
 
 (defn img-rm [path : cstr] : void
@@ -44,7 +66,7 @@
 
 (defimage-reload-hook reopen-data
   (do
-    (file-reopen-and-report "/tmp/tur-image-reload-data.txt")
+    (file-reopen-and-report (tmp-path "tur-image-reload-data.txt"))
     0))
 
 (defimage-finalize-hook flush-data
@@ -52,7 +74,7 @@
 
 (defn do-init [] : int
   (do
-    (file-write-int "/tmp/tur-image-reload-data.txt" 42)
+    (file-write-int (tmp-path "tur-image-reload-data.txt") 42)
     (println "init: wrote data = 42")
     0))
 
@@ -63,12 +85,12 @@
   (do
     (image/register-reload-hook! reopen-data)
     (image/register-finalize-hook! flush-data)
-    (img-rm "/tmp/tur-image-reload-hook.img")
-    (img-rm "/tmp/tur-image-reload-data.txt")
+    (img-rm (tmp-path "tur-image-reload-hook.img"))
+    (img-rm (tmp-path "tur-image-reload-data.txt"))
     (println "cold:")
-    (with-image-cache-after-init "/tmp/tur-image-reload-hook.img" do-init do-loop)
+    (with-image-cache-after-init (tmp-path "tur-image-reload-hook.img") do-init do-loop)
     (println "warm:")
-    (with-image-cache-after-init "/tmp/tur-image-reload-hook.img" do-init do-loop)
-    (img-rm "/tmp/tur-image-reload-hook.img")
-    (img-rm "/tmp/tur-image-reload-data.txt")
+    (with-image-cache-after-init (tmp-path "tur-image-reload-hook.img") do-init do-loop)
+    (img-rm (tmp-path "tur-image-reload-hook.img"))
+    (img-rm (tmp-path "tur-image-reload-data.txt"))
     0))

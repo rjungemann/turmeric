@@ -5,7 +5,14 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dlfcn.h>
+/* MinGW ships no <dlfcn.h>; the repo already carries the LoadLibrary shim the
+ * compiler itself uses, so reuse it rather than growing a second copy here.
+ * tests/run-build-shared.sh puts src/ on the include path for this. */
+#ifdef _WIN32
+#  include "platform_dl.h"
+#else
+#  include <dlfcn.h>
+#endif
 
 int main(int argc, char **argv) {
     if (argc < 2) {

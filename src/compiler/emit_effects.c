@@ -1337,7 +1337,7 @@ static void emit_shift_escape_abort(EmitCtx *ctx, Buf *body, const char *result)
     indent_buf(body, ctx->indent);
     buf_printf(body, "tur_cur_shift_reset->result = (int64_t)(%s);\n", result);
     indent_buf(body, ctx->indent);
-    buf_puts(body, "longjmp(tur_cur_shift_reset->buf, 1);\n");
+    buf_puts(body, "TUR_LONGJMP(tur_cur_shift_reset->buf);\n");
 }
 
 char *emit_effects_shift(EmitCtx *ctx, Buf *body, const Expr *e) {

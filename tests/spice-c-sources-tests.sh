@@ -22,7 +22,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-TUR="./build/tur"
+TUR="${TUR:-./build/tur}"
 [ -x "$TUR" ] || { echo "tests: $TUR not built; run 'tur run build' first" >&2; exit 2; }
 
 # Leak detection is irrelevant to these CLI-level assertions and the

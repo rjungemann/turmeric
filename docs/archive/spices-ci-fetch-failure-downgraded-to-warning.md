@@ -1,5 +1,20 @@
 # (spice repo) CI downgrades `tur fetch` failure to a warning, so native-dep breakage surfaces as an unrelated link error
 
+**RESOLVED 2026-09-04, item (1) only.** `turmeric-spices` commit `e24a41a8`
+(branch `claude/reports-batch-ci-fetch-warning`) tees `tur fetch`'s output and
+folds the tail into the `::warning::` annotation itself (GitHub's `%0A`/`%0D`/
+`%25` escaping for multiline annotation bodies), and drops the "often
+optional" editorializing in favor of naming the actual exit code. The
+diagnosability gap this report exists for -- six jobs presenting the same
+generic, misleading warning above a later unrelated link error -- is closed.
+
+Items (2) and (3) (an exit code from `tur fetch` that distinguishes a failed
+*optional* dep from a failed *required* one, so the workflow could fail
+instead of guess) are the durable fix and were **not** attempted here --
+that's compiler-side work on `turmeric`, not a CI script change, and is
+tracked separately:
+[tur-fetch-exit-code-optional-vs-required](../reported/tur-fetch-exit-code-optional-vs-required.md).
+
 **Severity: medium** (diagnosability, not correctness -- but it is why six
 macOS jobs all present as the same misleading message). Found 2026-08-28
 getting `turmeric-spices` CI green.

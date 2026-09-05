@@ -137,9 +137,21 @@ static void json_escape(const char *s, char *out, size_t cap) {
     out[i] = '\0';
 }
 
-/* Extract basename from a path. */
+/* Extract basename from a path.
+ *
+ * Windows accepts both separators, and realpath() on this platform hands back
+ * the backslash spelling ("C:\\tmp\\proj"), so a '/'-only scan finds nothing
+ * and returns the whole absolute path as the "basename".  That silently became
+ * the output name -- `tur build --shared .` tried to link
+ * `<build>/lib/C:\tmp\proj.dll` and ld failed with "Invalid argument".
+ * Backslash is only a separator under _WIN32: it is a legal character in a
+ * POSIX filename, so splitting on it there would be wrong. */
 static const char *basename_of(const char *path) {
     const char *s = strrchr(path, '/');
+#ifdef _WIN32
+    const char *b = strrchr(path, '\\');
+    if (b && (!s || b > s)) s = b;
+#endif
     return s ? s + 1 : path;
 }
 
@@ -201,6 +213,13 @@ static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len
 /* Compute the directory part of a file path (Phase M2: module base dir). */
 static void dir_of_path(const char *path, char *out, size_t cap) {
     const char *last_slash = strrchr(path, '/');
+#ifdef _WIN32
+    /* GetModuleFileName / _fullpath return backslashed paths; a '/'-only
+     * split sees no separator at all and answers ".", which silently broke
+     * the exe-relative SDK walk (the JIT could not find hamt.h). */
+    const char *last_bs = strrchr(path, '\\');
+    if (last_bs && (!last_slash || last_bs > last_slash)) last_slash = last_bs;
+#endif
     if (!last_slash) {
         out[0] = '.'; out[1] = '\0';
     } else {
@@ -233,6 +252,13 @@ static int get_exe_path(char *out, size_t cap) {
         }
         return 0;
     }
+#elif defined(_WIN32)
+    /* readlink("/proc/self/exe") has no Windows meaning (the platform_fs.h
+     * stub always fails), so this used to fall through to the argv[0] guess
+     * -- which loses when tur is invoked as a bare `tur` from PATH.
+     * (windows.h is already in scope in this TU via the platform shims.) */
+    unsigned long wn = GetModuleFileNameA(NULL, out, (unsigned long)cap);
+    if (wn > 0 && wn < (unsigned long)cap) return 0;
 #else
     ssize_t n = readlink("/proc/self/exe", out, cap - 1);
     if (n > 0) { out[n] = '\0'; return 0; }
@@ -2003,7 +2029,8 @@ static void stable_c_path(const char *input, char *out, size_t cap) {
  * -lturi from stdlib/turi/eval.tur).  The marker format is:
  *   slash-star __tur_autolink__: FLAGS star-slash
  * On return `autolink` holds the raw space-joined flag string (NUL-terminated
- * content when non-empty), before any SDK/ASan/anchor resolution.  Shared by
+ * content when non-empty), before any SDK/ASan/anchor resolution -- except that
+ * on Windows `-ldl` is dropped here (see below).  Shared by
  * cmd_build and cmd_compile so the two cannot drift. */
 static void scan_autolink_markers(const Buf *csrc, Buf *autolink) {
     const char *marker = "/* __tur_autolink__: ";
@@ -2017,6 +2044,40 @@ static void scan_autolink_markers(const Buf *csrc, Buf *autolink) {
         buf_write(autolink, p, (size_t)(end - p));
         p = end + 3;
     }
+#ifdef _WIN32
+    /* Windows has no libdl.  dlopen/dlsym/dlclose are not a separate library
+     * there; the emitted C reaches them through the tree's platform_dl.h shim
+     * over kernel32, so there is nothing to link and the flag is simply absent
+     * ("cannot find -ldl", which killed every jit-ffi fixture at link time).
+     *
+     * The marker itself is emitted UNCONDITIONALLY on purpose.  Its <dlfcn.h>
+     * neighbour in emit_module.c is `#ifndef _WIN32`-guarded, but the marker
+     * must not be: the emitted C is portable by design (WIN1 -- the platform
+     * split lives in the OUTPUT as #ifdef, not in whichever host ran emit-c),
+     * so a snapshot generated on Linux still has to carry it.  And this scanner
+     * is a plain strstr over the text; it does not evaluate the preprocessor,
+     * so wrapping the marker in a guard would not hide it from here anyway.
+     *
+     * Dropping it therefore belongs HERE, in the driver -- the first place that
+     * knows the target.  The JIT engine's autolink loader already skips its
+     * `dl` entry for the same reason. */
+    if (autolink->len > 0) {
+        Buf keep; buf_init(&keep);
+        const char *q = autolink->data, *lim = autolink->data + autolink->len;
+        while (q < lim) {
+            while (q < lim && *q == ' ') q++;
+            const char *tok = q;
+            while (q < lim && *q != ' ') q++;
+            size_t tlen = (size_t)(q - tok);
+            if (tlen == 0) continue;
+            if (tlen == 4 && strncmp(tok, "-ldl", 4) == 0) continue;
+            if (keep.len > 0) buf_putc(&keep, ' ');
+            buf_write(&keep, tok, tlen);
+        }
+        buf_free(autolink);
+        *autolink = keep;
+    }
+#endif
     if (autolink->len > 0) buf_putc(autolink, '\0');
 }
 
@@ -3696,6 +3757,16 @@ static bool jit_try_split_preamble(Buf *csrc, Buf *out) {
     buf_init(&probe);
     emit_rt_split_source(&probe);
     uint64_t cur = tur_hamt_hash_xxh64(probe.data, probe.len);
+    const char *dbg = getenv("TUR_JIT_SPLIT_DEBUG");
+    if (dbg) {
+        fprintf(stderr, "split-debug: probe=%016llx len=%zu committed=%016llx\n",
+                (unsigned long long)cur, probe.len,
+                (unsigned long long)tur_rt_split_hash);
+        if (dbg[0] == '/' || (dbg[0] && dbg[1] == ':')) {
+            FILE *pf = fopen(dbg, "wb");
+            if (pf) { fwrite(probe.data, 1, probe.len, pf); fclose(pf); }
+        }
+    }
     buf_free(&probe);
     if (cur != tur_rt_split_hash)
         return jit_split_reject("preamble hash != committed artifact "
@@ -3715,13 +3786,53 @@ static bool jit_try_split_preamble(Buf *csrc, Buf *out) {
     return true;
 }
 
+#ifdef _WIN32
+/* c2mir carries baked-in system-header paths for Linux and macOS
+ * (/usr/include and friends) and nothing for Windows, so on MinGW every
+ * `#include <winsock2.h>` in the emitted C fails with "error in opening
+ * file" before parsing even starts.  Caller-supplied include_dirs are added
+ * to c2mir's SYSTEM header search too, so the fix belongs here, not in MIR:
+ * hand it the UCRT include dir of the same toolchain the cc fallback would
+ * use, found by walking PATH for cc.exe and taking <bindir>/../include.
+ * TUR_JIT_SYS_INCLUDE overrides the probe outright.  Returns false when
+ * neither yields a directory -- the engine then fails to open the header and
+ * falls back to cc, exactly as before this function existed. */
+static bool jit_win_sys_include_dir(char *out, size_t cap) {
+    const char *env = getenv("TUR_JIT_SYS_INCLUDE");
+    struct stat st;
+    if (env && *env) {
+        snprintf(out, cap, "%s", env);
+        return stat(out, &st) == 0;
+    }
+    const char *path = getenv("PATH");
+    if (!path) return false;
+    while (*path) {
+        const char *sep = strchr(path, ';');
+        size_t len = sep ? (size_t)(sep - path) : strlen(path);
+        if (len > 0 && len < 3800) {
+            char probe[4096];
+            snprintf(probe, sizeof(probe), "%.*s/cc.exe", (int)len, path);
+            if (stat(probe, &st) == 0) {
+                snprintf(out, cap, "%.*s/../include", (int)len, path);
+                return stat(out, &st) == 0;
+            }
+        }
+        if (!sep) break;
+        path = sep + 1;
+    }
+    return false;
+}
+#endif
+
 /* The engine's `#include "hamt.h"` (et al.) include path: the Turmeric tree
  * (dev checkout, walking up from the executable) or the installed SDK.
- * Fills inc0/inc1 (caller-owned, >= 4096 each) and incs[0..1]; returns the
- * count (0 when no root was found). */
+ * On Windows also the toolchain's system include dir (see
+ * jit_win_sys_include_dir).  Fills inc0/inc1/inc2 (caller-owned, >= 4096
+ * each) and incs[0..2]; returns the count (0 when nothing was found). */
 static int jit_sdk_include_dirs(char *inc0, size_t cap0,
                                 char *inc1, size_t cap1,
-                                const char *incs[2]) {
+                                char *inc2, size_t cap2,
+                                const char *incs[3]) {
     int n = 0;
     char root[4096] = "";
     const char *env = getenv("TUR_SDK_ROOT");
@@ -3748,6 +3859,14 @@ static int jit_sdk_include_dirs(char *inc0, size_t cap0,
                     break;
                 }
                 char *sl = strrchr(dir, '/');
+#ifdef _WIN32
+                /* GetModuleFileName hands back backslashes; a '/'-only split
+                 * ended the walk at depth 0 and the JIT lost hamt.h. */
+                {
+                    char *bs = strrchr(dir, '\\');
+                    if (bs && (!sl || bs > sl)) sl = bs;
+                }
+#endif
                 if (!sl || sl == dir) break;
                 *sl = '\0';
             }
@@ -3759,6 +3878,13 @@ static int jit_sdk_include_dirs(char *inc0, size_t cap0,
         incs[n++] = inc0;
         incs[n++] = inc1;
     }
+#ifdef _WIN32
+    if (jit_win_sys_include_dir(inc2, cap2)) {
+        incs[n++] = inc2;
+    }
+#else
+    (void)inc2; (void)cap2;
+#endif
     return n;
 }
 #endif /* TUR_HAVE_JIT */
@@ -3922,11 +4048,18 @@ static int cmd_jit(int argc, char **argv) {
     prog_argv[prog_argc] = NULL;
 
     /* Include path for `#include "hamt.h"` et al. */
-    static char jit_inc0[4096], jit_inc1[4096];
-    const char *jit_incs[2];
+    static char jit_inc0[4096], jit_inc1[4096], jit_inc2[4096];
+    const char *jit_incs[3];
     int n_jit_incs = jit_sdk_include_dirs(jit_inc0, sizeof(jit_inc0),
                                           jit_inc1, sizeof(jit_inc1),
+                                          jit_inc2, sizeof(jit_inc2),
                                           jit_incs);
+    if (getenv("TUR_JIT_SPLIT_DEBUG")) {
+        fprintf(stderr, "jit-debug: n_incs=%d", n_jit_incs);
+        for (int di = 0; di < n_jit_incs; di++)
+            fprintf(stderr, " [%s]", jit_incs[di]);
+        fprintf(stderr, "\n");
+    }
 
     int prog_rc = 0;
     int jrc;
@@ -4264,10 +4397,11 @@ static int repl_jit_build(const char *build_dir, void **out_image,
     buf_init(&split_src);
     bool split_used = jit_try_split_preamble(&csrc, &split_src);
 
-    static char jinc0[4096], jinc1[4096];
-    const char *jincs[2];
+    static char jinc0[4096], jinc1[4096], jinc2[4096];
+    const char *jincs[3];
     int n_jincs = jit_sdk_include_dirs(jinc0, sizeof(jinc0),
-                                       jinc1, sizeof(jinc1), jincs);
+                                       jinc1, sizeof(jinc1),
+                                       jinc2, sizeof(jinc2), jincs);
 
     TurJitImage *img = NULL;
     const Buf *use = split_used ? &split_src : &csrc;
@@ -5135,7 +5269,8 @@ static int cmd_check_dir(const char *dir) {
 /* Build a project from multiple .tur files. Generates .h and .c for each,
  * plus a _main.c that includes all headers. */
 /* RP0: `shared` selects shared-library build (skip _main.c, link with
- * -fPIC -shared, default output `lib<dir>.so`). The host can then
+ * -shared, default output `lib<dir>.so` -- `<dir>.dll` on Windows, see
+ * TUR_SHLIB_PREFIX/TUR_SHLIB_EXT in platform_fs.h). The host can then
  * dlopen the result and dlsym exported defns.
  * RP1: `manifest_path` overrides the default exports.manifest location
  * (`<out_path>.manifest`). NULL means use the default. Ignored unless
@@ -5382,7 +5517,8 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
                 default_output_name(dir, base, sizeof(base));
             }
             snprintf(chosen_out, sizeof(chosen_out),
-                     "%s/lib/lib%s.so", build_dir, base);
+                     "%s/lib/" TUR_SHLIB_PREFIX "%s" TUR_SHLIB_EXT,
+                     build_dir, base);
         } else {
             if (manifest_base[0]) {
                 snprintf(base, sizeof(base), "%s", manifest_base);
@@ -5785,9 +5921,17 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * instead of an executable. On macOS, -undefined dynamic_lookup allows
      * cross-library symbols (e.g. httpd in tourist) to resolve at load time. */
     if (shared) {
+#ifdef _WIN32
+        /* No -fPIC on PE: every Win32 image is position-independent already, so
+         * MinGW's gcc answers the flag with a "-fPIC ignored for target"
+         * warning on every single shared build.  Suppressing the flag is not a
+         * behaviour change -- it is dropping a no-op that only produces noise. */
+        buf_puts(&cmd, " -shared");
+#else
         buf_puts(&cmd, " -fPIC -shared");
-#ifdef __APPLE__
+#  ifdef __APPLE__
         buf_puts(&cmd, " -undefined dynamic_lookup");
+#  endif
 #endif
     }
     buf_printf(&cmd, " -o %s", out_path);
@@ -8788,7 +8932,7 @@ static int usage_build(void) {
         "usage:\n"
         "  tur build [-I <dir>...] <file.tur> [-o <out>]   build a single file\n"
         "  tur build <dir> [-o <out>]                       build all .tur in dir\n"
-        "  tur build --shared <dir> [-o <out>] [--manifest <p>]  build a shared library (.so)\n"
+        "  tur build --shared <dir> [-o <out>] [--manifest <p>]  build a shared library\n"
         "  tur compile [-I <dir>...] <file.tur> -o <out.o>  lower a .tur to an object + .link\n"
         "  tur link [--shared] <obj/src>... -o <out>        link objects (+ .link) into an exe/.so\n"
         "  tur emit-c [-I <dir>...] <file.tur>              emit C to stdout\n"
@@ -8804,9 +8948,12 @@ static int usage_build(void) {
         "                    (subdirs: obj/, bin/, lib/). Defaults to\n"
         "                    <project-root>/build or <cwd>/build. Override layers:\n"
         "                    CLI flag > TUR_BUILD_DIR env > build.tur :build-dir.\n"
-        "  --shared          build a shared library (`-fPIC -shared`, no main);\n"
-        "                    requires a directory argument. Exported defns are\n"
+        "  --shared          build a shared library (`-fPIC -shared`, no main;\n"
+        "                    Windows drops the -fPIC, which PE ignores anyway).\n"
+        "                    Requires a directory argument. Exported defns are\n"
         "                    callable via dlopen/dlsym as `<module>__<name>`.\n"
+        "                    Default output is <build-dir>/lib/lib<name>.so, or\n"
+        "                    <name>.dll on Windows.\n"
         "  --split-build     build a single file as `compile` + `link` (cacheable\n"
         "                    `cc -c` object compiles + a link). Native builds only.\n"
         "  --no-split-build  force the monolithic single-`cc` build (the default).\n"

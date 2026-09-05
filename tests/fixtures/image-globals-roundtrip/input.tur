@@ -11,6 +11,28 @@
 ;; clobbered, so a warm start that printed 1 / "clobbered" / 0.25 would be
 ;; reading the process, not the image.  The float probe uses 7.1, never 7.0.
 
+(defn tmp-path [name : cstr] : cstr
+  ```c
+  /* Resolve a scratch path at RUN TIME instead of hardcoding "/tmp/...".
+   *
+   * A compiled fixture is a NATIVE Windows binary, so its CRT resolves a
+   * leading "/tmp" against the CURRENT DRIVE ROOT (C:\tmp, D:\tmp) rather than
+   * the way the MSYS shell does.  Where that directory does not exist the open
+   * simply failed and the fixture printed nothing.  tests/run.sh exports
+   * TUR_TEST_TMPDIR; the "/tmp" fallback keeps this runnable by hand on POSIX.
+   *
+   * Four rotating buffers so a call like (f (tmp-path "a") (tmp-path "b"))
+   * does not have the second call clobber the first. */
+  static char bufs[4][512];
+  static int slot = 0;
+  char *buf = bufs[slot];
+  slot = (slot + 1) & 3;
+  const char *d = getenv("TUR_TEST_TMPDIR");
+  if (!d || !*d) d = "/tmp";
+  snprintf(buf, sizeof bufs[0], "%s/%s", d, name);
+  return buf;
+  ```)
+
 (load "stdlib/image.tur")
 
 (defn img-rm [path : cstr] : void
@@ -41,14 +63,14 @@
     ;; Track at the top of main: this runs on BOTH the cold start that writes
     ;; the image and the warm start that restores it.
     (image/track-globals! counter greeting ratio)
-    (img-rm "/tmp/tur-image-globals-roundtrip.img")
+    (img-rm (tmp-path "tur-image-globals-roundtrip.img"))
     (println "cold:")
-    (with-image-cache-after-init "/tmp/tur-image-globals-roundtrip.img" do-init do-loop)
+    (with-image-cache-after-init (tmp-path "tur-image-globals-roundtrip.img") do-init do-loop)
     (set! counter 1)
     (set! greeting "clobbered")
     (set! ratio 0.25)
     (println "warm:")
-    (with-image-cache-after-init "/tmp/tur-image-globals-roundtrip.img" do-init do-loop)
+    (with-image-cache-after-init (tmp-path "tur-image-globals-roundtrip.img") do-init do-loop)
     (println (image/global-count))
-    (img-rm "/tmp/tur-image-globals-roundtrip.img")
+    (img-rm (tmp-path "tur-image-globals-roundtrip.img"))
     0))
