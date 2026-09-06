@@ -55,14 +55,50 @@ command set, including `.tur-version` auto-switching.
 
 For every tag matching `v*` pushed to the repository, a
 [GitHub Release](https://github.com/rjungemann/turmeric/releases) is
-published with three tarballs and a `sha256sums.txt`:
+published with four archives and a `sha256sums.txt`:
 
 ```
 turmeric-vX.Y.Z-linux-x86_64.tar.gz
 turmeric-vX.Y.Z-linux-aarch64.tar.gz
 turmeric-vX.Y.Z-macos-arm64.tar.gz
+turmeric-vX.Y.Z-windows-x86_64.zip
 sha256sums.txt
 ```
+
+Windows ships a `.zip` rather than a `.tar.gz` because Explorer opens one and
+not the other, and `tur.exe` is statically linked against the MinGW support
+libraries, so the archive has no DLLs beside it and needs nothing on `PATH` to
+start.
+
+It also unpacks to a **prefix layout** rather than the flat one the other
+archives use:
+
+```
+bin/tur.exe
+lib/libturt_runtime.a, libturi.a
+include/turi/*.h
+share/turmeric/stdlib/
+```
+
+Keep that shape. `tur` finds its runtime archive at `<exe_dir>/../lib` and its
+standard library at `<exe_dir>/../share/turmeric/stdlib`; flattening the tree
+leaves it unable to compile anything (see
+`docs/reported/release-archive-cannot-compile.md`, which also tracks the other
+platforms, still on the flat layout). Put `<extracted>/bin` on `PATH`, or
+symlink `bin/tur.exe` -- the walk-up resolves through a symlink either way.
+
+**Windows also needs a C toolchain to compile anything.** `tur.exe` runs on its
+own, but `tur build` and `tur run` invoke `cc`, and `tur jit` reads the UCRT
+headers that come with it. Install [MSYS2](https://www.msys2.org/) and its
+UCRT64 gcc:
+
+```sh
+pacman -S mingw-w64-ucrt-x86_64-gcc
+```
+
+then run `tur` from a UCRT64 shell, or put `C:\msys64\ucrt64\bin` on `PATH`.
+Without it `tur run` reports `cc invocation failed`. (`TUR_JIT_SYS_INCLUDE`
+overrides where the JIT looks for those headers, if yours live elsewhere.)
 
 Pick the tarball for your platform, verify, and extract:
 
@@ -285,6 +321,16 @@ For each matrix leg (`linux-x86_64`, `linux-aarch64`, `macos-arm64`):
 5. Packages `tur` + `libturi.a` + `include/turi/*.h` + `stdlib/` into
    a `tar.gz`.
 6. Uploads the artifact.
+
+Windows is a separate job rather than a fourth matrix leg: every step needs
+`shell: msys2 {0}` and the toolchain arrives through `setup-msys2`, neither of
+which fits the matrix. It does the same six steps, plus one that has no
+equivalent elsewhere -- **verifying the binary is self-contained**. A default
+MinGW build needs `libwinpthread-1.dll` and `edit.dll` out of the MSYS2 tree,
+and off an MSYS2 `PATH` such a binary exits 127 with no output and no
+diagnostic. So the job both reads the import table (`ldd`, rejecting anything
+resolved inside the MSYS2 tree) and actually runs `tur --version` with MSYS2
+stripped from `PATH`, which is the failure a user would hit.
 
 A final job downloads all artifacts, generates `sha256sums.txt`, and
 publishes the release with auto-generated notes.

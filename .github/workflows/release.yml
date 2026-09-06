@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  # Dry run.  Until this existed the only way to find out whether this workflow
+  # works was to cut a release, which is the worst possible moment: every step
+  # below the first failure is unexercised, and a tag is awkward to retract.
+  # A manual run builds and uploads the artifacts and stops there -- the
+  # `release` job is gated on a tag ref, so a dispatch can never publish.
+  workflow_dispatch:
 
 jobs:
   build:
@@ -65,6 +71,153 @@ jobs:
           path: ${{ env.ARCHIVE }}
           if-no-files-found: error
 
+  # Windows is its own job rather than a matrix leg.  Every step needs
+  # `shell: msys2 {0}` and the toolchain arrives through setup-msys2, neither of
+  # which fits the matrix above -- the same reason ci.yml keeps its Windows legs
+  # separate.
+  build-windows:
+    name: Build (windows-x86_64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Keep LF line endings
+        shell: bash
+        run: git config --global core.autocrlf input
+
+      - uses: actions/checkout@v5
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            zip
+
+      # The package is `wineditline`, not `libedit`.  Non-fatal, mirroring
+      # ci.yml and the macOS legs: the build succeeds without it, just with a
+      # degraded REPL, and an unavailable optional package must not be able to
+      # fail a release.
+      - name: Install optional REPL line editing (non-fatal)
+        run: pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-wineditline || true
+
+      - name: Toolchain versions
+        run: |
+          cc --version | head -1
+          cmake --version | head -1
+
+      # TUR_WIN_STATIC defaults ON (see the top-level CMakeLists) -- named here
+      # anyway, because this is the build where it is load-bearing and a silent
+      # default flip would ship a binary that cannot start.
+      - name: Configure (Release)
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DTUR_WIN_STATIC=ON
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Smoke test
+        run: ./build/tur.exe --version
+
+      # THE check for this job.  A default MinGW build needs libwinpthread-1.dll
+      # and edit.dll out of the MSYS2 tree; off an MSYS2 PATH such a binary exits
+      # 127 with no output and no diagnostic, so an archive built that way is dead
+      # on arrival and says nothing about why.  Both halves are here on purpose:
+      # ldd names the offending DLL, and the stripped-PATH run is the actual
+      # failure mode a user would hit.
+      - name: Verify the binary is self-contained
+        run: |
+          raw=$(ldd build/tur.exe) || {
+            echo "::error::ldd failed on build/tur.exe; this check cannot run."
+            exit 1
+          }
+          # An absent or broken ldd would make the grep below match nothing and
+          # the check pass having verified nothing.  Every Windows binary links
+          # KERNEL32, so its absence means the output is not what we think it is.
+          case "$raw" in
+            *KERNEL32*|*kernel32*) ;;
+            *) printf '%s\n' "$raw"
+               echo "::error::ldd output does not name KERNEL32 -- unrecognised format, so a clean result here would be meaningless."
+               exit 1 ;;
+          esac
+          deps=$(printf '%s\n' "$raw" | grep -iE "/(ucrt64|mingw64|clang64|msys64)/" || true)
+          if [ -n "$deps" ]; then
+            echo "$deps"
+            echo "::error::tur.exe depends on DLLs from the MSYS2 tree; it will not start on a machine without MSYS2. Is TUR_WIN_STATIC still ON, and is CMAKE_FIND_LIBRARY_SUFFIXES still preferring .a?"
+            exit 1
+          fi
+          out=$(PATH="/c/Windows/System32:/c/Windows" ./build/tur.exe --version 2>&1) || {
+            echo "$out"
+            echo "::error::tur.exe failed to run with MSYS2 off PATH -- exactly what a user unpacking the archive would see."
+            exit 1
+          }
+          echo "$out"
+          echo "Self-contained: no MSYS2 DLLs, runs with MSYS2 off PATH."
+
+      # PREFIX layout -- bin/, lib/, include/, share/ -- not the flat one the
+      # other legs use.  Flat is not merely a style choice there: `tur run` from
+      # a flat extract cannot compile anything.  locate_runtime_lib probes
+      # $TUR_RUNTIME_LIB, <exe_dir>/src, <exe_dir>/../lib and <root>/build/src,
+      # and a flat tree is none of them, so TUR_RT_AUTO falls back to source mode
+      # -- which wants src/runtime/*.c that no archive ships.  The prefix shape is
+      # what <exe_dir>/../lib and resolve_stdlib_root step 3 already understand.
+      # docs/reported/release-archive-cannot-compile.md tracks the other legs.
+      - name: Package
+        run: |
+          TAG=${GITHUB_REF_NAME}
+          ARCHIVE="turmeric-${TAG}-windows-x86_64.zip"
+
+          mkdir -p dist/bin dist/lib dist/include/turi dist/share/turmeric
+
+          cp build/tur.exe dist/bin/
+          cp build/src/libturt_runtime.a dist/lib/
+          cp build/src/libturi.a dist/lib/
+          cp src/turi/eval.h src/turi/env.h src/turi/value.h src/turi/fiber.h dist/include/turi/
+          cp -R stdlib dist/share/turmeric/
+
+          # zip rather than tar.gz: Explorer opens one and not the other.  The
+          # release job checksums whatever it finds, so the format is free.
+          (cd dist && zip -qr "../${ARCHIVE}" .)
+          echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
+
+      # Unpack what was just built and compile a program with it.  The other legs
+      # smoke-test `--version`, which proves only that the binary starts -- this
+      # archive passed that check while being unable to compile a two-line
+      # program, because the runtime archive was not where tur looks for it.
+      - name: Compile a program from the extracted archive
+        run: |
+          rm -rf verify && mkdir verify
+          (cd verify && unzip -q "../${ARCHIVE}")
+          cat > verify/hello.tur <<'EOF'
+          (defn main [] : int
+            (println "hello from the archive")
+            0)
+          EOF
+          out=$(cd verify && ./bin/tur.exe run hello.tur 2>&1) || {
+            printf '%s\n' "$out"
+            echo "::error::the extracted archive cannot compile a program"
+            exit 1
+          }
+          printf '%s\n' "$out"
+          case "$out" in
+            *"hello from the archive"*) echo "Archive compiles and runs." ;;
+            *) echo "::error::unexpected output from the extracted archive"; exit 1 ;;
+          esac
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: turmeric-windows-x86_64
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
   # OD4: the rendered documentation, as a downloadable archive.
   #
   # Guides and API pages are readable offline in Try Turmeric (OD3), but
@@ -116,8 +269,13 @@ jobs:
 
   release:
     name: Create Release
-    needs: [build, docs]
-    if: always() && needs.build.result != 'cancelled'
+    needs: [build, build-windows, docs]
+    # startsWith(...refs/tags/) is what makes workflow_dispatch safe: a manual
+    # run produces artifacts to inspect and never creates a release.
+    if: >-
+      always() && startsWith(github.ref, 'refs/tags/')
+      && needs.build.result != 'cancelled'
+      && needs.build-windows.result != 'cancelled'
     runs-on: ubuntu-latest
     permissions:
       contents: write
