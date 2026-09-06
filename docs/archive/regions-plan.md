@@ -325,11 +325,52 @@ asks: a bracket with no escape must still rewind. The first sessions (seeds
 found was the model learning that `bt-scope` undoes a `bt-set!` at its pop,
 which is the trail doing its job.
 
-What this does not close is a store the emitter never sees: a user inline-C
-body writing a node into its own `malloc`'d cell, or a stdlib primitive
-outside the hooked set. That is filed as
-`docs/reported/region-escape-through-unhooked-stores.md`, with the rule that
-a new store primitive carries the note.
+What this did not close, at first, was a store the emitter never sees: a user
+inline-C body writing a node into its own `malloc`'d cell. That was filed as
+`docs/reported/region-escape-through-unhooked-stores.md` with a documented
+contract as the proposed fix -- and both halves of that were wrong.
+
+**The inline-C parameter note (2026-09-06, same day).** The report called the
+inline-C class `#fx{Unsafe}` territory needing a contract. It is neither
+exotic nor unfixable. A typed node handed to a hand-written body --
+
+```turmeric
+(defn cell-set! [c : ptr<void> v : Link] : nil ```c *(int64_t *)c = (int64_t)(intptr_t)v; ```)
+(defn stash [c : ptr<void> n : int] : int
+  (with-region (fn [] (do (cell-set! c (Link n 0)) 1))))
+```
+
+-- has a scalar result, clears both locks, **rewinds**, and the read after the
+pop printed garbage and exited 0. A silent wrong answer on the default build,
+with no ascription trickery in it, and the poison did not trap because the
+pooled arena had already been reused.
+
+The fix is at the CALLEE, not the call site: a call site cannot note an
+argument without re-emitting it, but in an emitted inline-C function every
+parameter is already a plain C identifier. So the note goes once at body
+entry, and one rule covers stdlib and user inline-C alike.
+
+The filter is the whole engineering. `emit_region_word_can_be_node` asks "can
+this word BE region memory", which is much narrower than the result lock's
+"cannot prove it reaches nothing" -- that also refuses a `ptr<void>`, a
+`cstr`, a bare tyvar and a `(Map K V)` handle, none of which can ever be a
+node. Only a `:heap` ADT or a by-value aggregate holding one qualifies;
+opaque newtypes (`defopaque BtCell :ptr` is a C-made handle) and the
+malloc-backed collections are excluded. Two wrong versions came first and the
+snapshots priced them: the result lock as the filter emitted 12,373 notes
+across the fixtures, an intermediate one 1,369 (every trail-cell accessor).
+The right filter emits **zero** in this tree -- nothing in it hands a node to
+inline-C -- so the fix costs no existing saving at all. One more trap on the
+way: the type to ask about is the BINDING's, since `fd->param_types[]` carries
+a def-less `TY_ADT` for a `:heap` parameter, which read as "erased" and made
+the note silently never fire.
+
+`tests/fixtures/region-escape-via-inline-c` pins both directions on both arms
+(the node store retires; a bracket whose inline-C sees only scalars still
+rewinds), and the fuzzer gained `store-inline-c` / `inline-c-scalar`, which
+fail 2 of 30 programs on the pre-fix compiler by stdout AND by the savings
+model. What is left in the report is `extern-c` (no emitted body to note in)
+and primitives taking an already-erased `:int`, neither with a repro.
 
 ### R2's "spine-node allocation is routed" did not cover the workload
 

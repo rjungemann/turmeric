@@ -4846,10 +4846,45 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
  * around a by-value aggregate reaches what the aggregate's fields reach, a
  * `:heap` node element is a pointer INTO the generation.  So the arm below
  * asks the element types the same question, recursively. */
-static bool region_def_is_malloc_collection(const AdtDef *def) {
+bool region_def_is_malloc_collection(const AdtDef *def) {
     if (!def || !def->name || !def->is_heap) return false;
     return strcmp(def->name, "Vec") == 0 || strcmp(def->name, "Map") == 0 ||
            strcmp(def->name, "Set") == 0 || strcmp(def->name, "MutableMap") == 0;
+}
+
+/* region-lock-hardening follow-up: can a value of this type, AS ONE WORD, be
+ * region memory?  Narrower than "reaches a node", which the result lock also
+ * answers yes to out of ignorance (a `ptr<void>`, a `cstr`, a bare tyvar).
+ * Only a `:heap` ADT node comes from the routed ctor sites, and a collection
+ * HANDLE is stdlib `malloc` even though its def is `:heap` -- so noting one
+ * buys nothing (`arena_owns` on it is always false) and would put a runtime
+ * call at the top of every hot accessor.  A by-value aggregate is included
+ * because its inline words can hold a node.  Used by the inline-C parameter
+ * note in emit_fns.c. */
+bool emit_region_word_can_be_node(EmitCtx *ctx, const Type *t) {
+    if (!t) return false;
+    Type rt = emit_resolve_type(ctx, *t);
+    if (rt.kind != TY_ADT && rt.kind != TY_APP) return false;
+    AdtDef *def = NULL;
+    Type args[8];
+    uint8_t n_args = 0;
+    /* TY_ADT carries its def directly; only TY_APP needs the extraction (the
+     * same split type_is_heap_adt makes -- running everything through the
+     * extractor drops a plain `:heap` defdata, which is THE case this exists
+     * for).  No def at all is the erased/unresolved shape: a generic parameter
+     * riding the int64 carrier, whose node was noted at its ascription. */
+    if (rt.kind == TY_ADT) def = rt.as.adt_.def;
+    else if (!type_extract_adt_app(&rt, &def, args, &n_args)) def = NULL;
+    if (!def) return false;
+    /* An opaque newtype's bytes come from whatever the C side made
+     * (`defopaque BtCell :ptr`, whose `tur_bt_cell_new` mallocs), never from a
+     * routed ctor -- so it can never be region memory.  This is what the trail
+     * cell accessors are, and without it every one of them is noted. */
+    if (def->is_opaque) return false;
+    if (region_def_is_malloc_collection(def)) return false;   /* stdlib malloc handle */
+    if (def->is_heap) return true;              /* the word IS a node pointer */
+    /* A by-value aggregate: its inline words can include one. */
+    return !emit_region_scope_reclaims(ctx, &rt);
 }
 
 /* The ADT walk proper, shared by the TY_ADT arm (n_args == 0) and the TY_APP

@@ -1,0 +1,73 @@
+;; region-lock-hardening follow-up: an inline-C body is OPAQUE to the emitter,
+;; so a node handed to one may be retained past the call with no store the
+;; compiler can hook.  Before the parameter note this was a SILENT WRONG ANSWER
+;; on the default build -- `stash` below rewound its generation and `cell-get-v`
+;; printed garbage, where TUR_REGIONS=0 printed 7
+;; (docs/reported/region-escape-through-unhooked-stores.md, class 1).
+;;
+;; The rule is at the callee, where every parameter is a plain C identifier:
+;; a parameter whose type can BE region memory (a `:heap` node, or a by-value
+;; aggregate holding one -- never a scalar, a cstr, a `ptr<void>`, an opaque
+;; newtype, or a malloc-backed collection handle) is noted at body entry.  So
+;; the generation retires and the stored node survives.
+;;
+;; Both halves matter, and the second is why this is not a blanket refusal:
+;;   c1  hands a NODE to inline-C          -> retires, value survives
+;;   c2  hands only SCALARS to inline-C    -> still rewinds
+;; Every value is read AFTER the pop, and TUR_REGIONS=0 must print the same
+;; lines (tests/run-regions-seam.sh).
+
+(defdata Link :heap (Link [v : int nxt : int]))
+
+(defn cell-new [] : ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t)); *p = 0; return (void *)p;
+  ```)
+
+;; The unhooked store: a TYPED node parameter, so no ascription erases it and
+;; the erasure note never fires.  The callee-side parameter note is the only
+;; thing standing between the reader below and reclaimed memory.
+(defn cell-set! [c : ptr<void> v : Link] : nil
+  ```c
+  *(int64_t *)c = (int64_t)(intptr_t)v;
+  ```)
+
+(defn cell-get-v [c : ptr<void>] : int
+  ```c
+  struct { int64_t v; int64_t nxt; } *p = *(void **)c; return p->v;
+  ```)
+
+;; A scalar-only inline-C body: nothing here can be region memory, so no note
+;; is emitted and a bracket built around it keeps its rewind.
+(defn twice [x : int] : int
+  ```c
+  return x * 2;
+  ```)
+
+;; A TYPED chain, walked in Turmeric.  Case 2 must not erase anything: an
+;; `(:: (Link ..) :int)` would fire the ERASURE note and retire the generation
+;; for a different reason, which would make the rewind assertion vacuous.
+(defdata TL :heap (TNil) (TCons :int :TL))
+(defn tbuild [n : int acc : TL] : TL
+  (if (<= n 0) acc (tbuild (- n 1) (TCons n acc))))
+(defn tsum [t : TL] : int
+  (match t
+    (TNil) 0
+    (TCons v r) (+ v (tsum r))))
+
+;; 1. The node crosses into inline-C and is kept: the generation must retire.
+(defn stash [c : ptr<void> n : int] : int
+  (with-region (fn [] (do (cell-set! c (Link n 0)) 1))))
+
+;; 2. Only scalars cross into inline-C and the result is a scalar: this one
+;;    must still rewind, which is what keeps the rule from being a refusal of
+;;    every bracket that touches hand-written C at all.
+(defn scratch-sum [n : int] : int
+  (with-region (fn [] (twice (tsum (tbuild n (TNil)))))))
+
+(defn main [] : int
+  (let [c (cell-new)]
+    (println (stash c 7))
+    (println (cell-get-v c)))     ;; 7 -- read after the pop
+  (println (scratch-sum 4))       ;; 20 = 2 * (1+2+3+4)
+  0)

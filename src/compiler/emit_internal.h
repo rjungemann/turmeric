@@ -775,6 +775,12 @@ void emit_region_shutdown_atexit(Buf *out, int indent);
  * nothing under TUR_REGIONS=0.  `lv` must be an lvalue expression. */
 void emit_region_note_lvalue(Buf *body, int indent, const char *ctype, const char *lv);
 bool emit_region_scope_reclaims(struct EmitCtx *ctx, const struct Type *t);
+/* region-lock-hardening follow-up: true when a value of this type, as one
+ * word, can BE region memory -- a `:heap` node or a by-value aggregate whose
+ * inline words hold one, and never a malloc-backed collection handle.  The
+ * filter for the inline-C parameter note; see emit_expr.c for why it is
+ * narrower than the result lock. */
+bool emit_region_word_can_be_node(struct EmitCtx *ctx, const struct Type *t);
 /* S1 (jit-engine-plan section 4): true when an emitted C type NAME denotes a
  * scalar -- any pointer, or one of the primitive/stdint spellings the emitter
  * produces.  Anything else (a struct typedef such as `Option__int` or

@@ -46,6 +46,10 @@ style (typed `TL` nodes, or `Link` nodes erased to `:int` through
             node, set! of a mutable global, mutmap-set!, bt-set! into a
             trail cell, a by-value aggregate holding a node pushed as a
             boxed element                       -- retire (store-side lock)
+            a typed node handed to a hand-written inline-C cell store, which
+            no store hook can see                -- retire (parameter note),
+            and its mirror: inline-C called inside the bracket seeing only
+            SCALARS                              -- must still rewind
   nested    inner + outer brackets with nothing escaping (both rewind), and
             the inner bracket storing the OUTER generation's node into an
             outer vec (inner rewinds, outer retires: owner flagging)
@@ -117,6 +121,22 @@ PRELUDE = """\
     (TNil) 0
     (TCons v r) (+ v (tsum r))))
 (defn link-v [l : Link] : int (match l (Link a b) a))
+(defn cell-new [] : ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t)); *p = 0; return (void *)p;
+  ```)
+(defn cell-set! [c : ptr<void> v : Link] : nil
+  ```c
+  *(int64_t *)c = (int64_t)(intptr_t)v;
+  ```)
+(defn cell-get-v [c : ptr<void>] : int
+  ```c
+  struct {{ int64_t v; int64_t nxt; }} *p = *(void **)c; return p->v;
+  ```)
+(defn twice [x : int] : int
+  ```c
+  return x * 2;
+  ```)
 """
 
 
@@ -155,6 +175,7 @@ def gen_case(rng, idx):
         "node", "erased-record", "erased-vec",
         "store-vec", "store-erased-vec", "store-closure", "store-global",
         "store-mutmap", "store-cell", "store-byval",
+        "store-inline-c", "inline-c-scalar",
         "nested", "nested-store",
     ])
     # Shapes that only make sense in one style.
@@ -163,7 +184,8 @@ def gen_case(rng, idx):
     if kind in ("erased-record", "erased-vec", "store-erased-vec", "store-cell"):
         typed = False
     if kind in ("store-vec", "store-closure", "store-global", "store-mutmap",
-                "store-byval", "nested-store"):
+                "store-byval", "nested-store", "store-inline-c",
+                "inline-c-scalar"):
         typed = True     # the store hook is what is under test, not the erasure
     bracket = "bt-scope" if bt else "with-region"
     fx = " #fx{Bt}" if bt else ""
@@ -279,6 +301,22 @@ def gen_case(rng, idx):
         c.main = [f"(let [hv (:: (vec-new) (Vec HoldsLink))] (println ({c.name} hv {n})) (match (vec-get-byval hv 0) (HL a l) (println (link-v l))))"]
         c.expected = ["1", str(2 * n)]
         escapes = True
+    elif kind == "store-inline-c":
+        # A TYPED node into a hand-written C body: no ascription erases it, so
+        # only the callee-side parameter note can see the escape.  This was a
+        # silent wrong answer before that note existed.
+        c.defn = (f"(defn {c.name} [cl : ptr<void> n : int]{fx} : int\n"
+                  f"  ({bracket} (fn [] {body_wrap('(do (cell-set! cl (Link n 0)) 1)')})))")
+        c.main = [f"(let [cl (cell-new)] (println ({c.name} cl {n})) (println (cell-get-v cl)))"]
+        c.expected = ["1", str(n)]
+        escapes = True
+    elif kind == "inline-c-scalar":
+        # The other direction: inline-C is called inside the bracket but sees
+        # only scalars, so the rewind must SURVIVE.  Without this the rule
+        # could be "note every inline-C parameter" and nothing would notice.
+        c.defn = one_bracket(f"(twice {s})", "int")
+        c.main = [f"(println ({c.name} {n}))"]
+        c.expected = [str(2 * T)]
     elif kind == "nested":
         inner = f"({bracket} (fn [] {s}))"
         c.defn = one_bracket(f"(+ {inner} {s})", "int")

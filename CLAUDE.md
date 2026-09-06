@@ -337,6 +337,14 @@ hook is a silent use-after-rewind on the default build -- exactly what
 `docs/reported/region-escape-through-unhooked-stores.md` documents -- not a
 lost saving. See `docs/guides/gc-guide.md` (regions) for the reasoning.
 
+**A TYPED node parameter of an inline-C body needs no hand-written note**: the
+emitter notes it at body entry, because an inline-C body is opaque and may
+retain it (`region-escape-via-inline-c`). The manual `TUR_REGION_NOTE` is
+still what a body needs when the word arrives ERASED -- as `:int`, `ptr<void>`
+or `Any` -- since the type no longer says it is a node. That is why the stdlib
+hooks above are written the way they are: their `val` is a carrier word, not a
+`Link`.
+
 ## `#lang` Layers -- curated only
 
 `#lang <base>[/<dialect>] <layer>*` selects one mutually-exclusive base

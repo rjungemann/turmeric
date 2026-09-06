@@ -216,9 +216,21 @@ that OWNS it (not only the innermost), which then retires. The macro is
 note**; the two fixtures `region-escape-via-store` and
 `region-escape-via-erasure` read every stored value back after the pop.
 
-What the note still cannot see is a store made by **user inline-C** (a
-`malloc`'d cell written in a ` ```c ` body) or by a stdlib primitive nobody has
-hooked yet -- see `docs/reported/region-escape-through-unhooked-stores.md`.
+An **inline-C body is opaque**, so a node handed to one may be retained past
+the call with no store the compiler can hook. That is covered at the callee,
+where every parameter is a plain C identifier: a parameter whose type can *be*
+region memory is noted at body entry. The filter is narrow on purpose -- a
+`:heap` node, or a by-value aggregate holding one, and never a scalar, a
+`cstr`, a `ptr<void>`, an opaque newtype (`defopaque BtCell :ptr` is a C-made
+handle) or a malloc-backed collection handle. So `(defn f [l : Link] ...)`
+with a hand-written body retires the generation, while the far more common
+scalar-parameter body notes nothing and keeps every rewind. No fixture in the
+tree changed when this landed.
+
+Two things remain outside the note, both in
+`docs/reported/region-escape-through-unhooked-stores.md`: an `extern-c`
+function, which has no emitted body to put the note in, and a stdlib primitive
+that stores a word arriving as an *erased* `:int` rather than a typed node.
 Prefer the typed style (`nxt : Link`, `(Vec Link)`, a `:copy` sum) over
 erasing to `:int`: a typed value is refused by the result walk where it must
 be, keeps its rewinds where it can, and never takes the erasure note.

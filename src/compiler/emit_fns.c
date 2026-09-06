@@ -4061,6 +4061,52 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             }
         }
     } else if (fd->body->kind == EX_INLINE_C) {
+        /* region-lock-hardening follow-up: an inline-C body is OPAQUE to the
+         * emitter, so a caller's node handed to one may be retained past the
+         * call (written into a malloc'd cell, a global, a foreign structure)
+         * with no store the compiler can hook.  That was a silent wrong
+         * answer on the default build: a `Link` built inside `with-region`,
+         * passed to a hand-written `cell-set!`, read back after the pop --
+         * the bracket rewound and the reader printed garbage, where
+         * TUR_REGIONS=0 printed the value
+         * (docs/reported/region-escape-through-unhooked-stores.md).
+         *
+         * The callee is the one place each parameter is a plain C identifier,
+         * so the note goes here rather than at every call site: one site per
+         * function, no argument re-emission, and it covers stdlib and user
+         * inline-C by the same rule.  Only a parameter whose TYPE can reach a
+         * region node is noted -- a scalar cannot be one, and an erased node
+         * (`(:: (Link ..) :int)`) was already noted at its ascription -- so
+         * the common `(defn f [x : int] ...)` inline-C body is untouched and
+         * a bracket that hands no node to inline-C keeps its rewind.
+         *
+         * Conservative by construction: the note only ever BLOCKS a rewind,
+         * so a body that does not in fact retain its argument costs a saving
+         * on that generation, never correctness. */
+        for (uint32_t i = 0; i < fd->n_params; i++) {
+            if (!fd->params[i]) continue;
+            if (fd->params[i]->is_poly_fn) continue;
+            /* The BINDING's type, not fd->param_types[i]: the latter carries
+             * a def-less TY_ADT for a `:heap` parameter (its c-name falls back
+             * to the int64 carrier), so every node param read as "erased" and
+             * the note never fired -- the repro still printed garbage with the
+             * loop in place. */
+            Type pt = emit_resolve_type(ctx, fd->params[i]->type);
+            /* The filter is "this word can BE region memory", not the result
+             * lock's "cannot prove it reaches nothing" -- see
+             * emit_region_word_can_be_node.  The difference is most of the
+             * stdlib: a `ptr<void>`, a `cstr`, a bare tyvar and a `(Map K V)`
+             * handle all fail the result lock and none can ever be a node, so
+             * noting them would put a runtime call atop every hot accessor
+             * and flag nothing. */
+            if (!emit_region_word_can_be_node(ctx, &pt)) continue;
+            char *pn = raw_name_for_binding(fd->params[i]);
+            if (pn) {
+                emit_region_note_lvalue(file, ctx->indent,
+                                        emit_type_c_name(ctx, pt), pn);
+                free(pn);
+            }
+        }
         /* Inline C body - emit as-is (it contains its own return statements) */
         emit_stmt(ctx, file, fd->body);
     } else if (result_kind == TY_NIL && !is_main) {
