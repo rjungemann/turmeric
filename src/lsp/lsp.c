@@ -1269,11 +1269,34 @@ void lsp_set_rename_exports(bool on) { rename_exports_ = on; }
  * both are manifests everywhere else a manifest is read. */
 #define LSP_SPICE_WALK_MAX 40
 
+/* Last path separator, either spelling.
+ *
+ * The walk-up below used strrchr(cur, '/') alone.  A path that reached the
+ * server from a Windows editor is spelled C:\dir\src\user.tur and contains no
+ * forward slash at all, so the very first lookup returned NULL and the
+ * function answered "not in a spice" for every file on the platform.  Nothing
+ * reported an error -- cross-module definition, completion and rename simply
+ * came back empty, which reads as "no such symbol" rather than "I never
+ * looked".  `tur check` resolves the same spice correctly, because it has its
+ * own walk-up that does not share this code.
+ *
+ * Same shape as the bug fixed in find_stdlib_beside_exe and
+ * rewrite_autolink_relative_paths: a POSIX-only path assumption that is
+ * invisible until a drive-lettered path arrives. */
+static char *lsp_last_sep(char *p) {
+    char *slash = strrchr(p, '/');
+#ifdef _WIN32
+    char *bs = strrchr(p, '\\');
+    if (bs && (!slash || bs > slash)) slash = bs;
+#endif
+    return slash;
+}
+
 static bool spice_root_of(const char *file_path, char *out, size_t cap) {
     if (!file_path || !out) return false;
     char cur[4096];
     snprintf(cur, sizeof(cur), "%s", file_path);
-    char *slash = strrchr(cur, '/');
+    char *slash = lsp_last_sep(cur);
     if (!slash) return false;
     *slash = '\0';
 
@@ -1290,7 +1313,7 @@ static bool spice_root_of(const char *file_path, char *out, size_t cap) {
             snprintf(out, cap, "%s", cur);
             return true;
         }
-        slash = strrchr(cur, '/');
+        slash = lsp_last_sep(cur);
         if (!slash || slash == cur) return false;
         *slash = '\0';
     }

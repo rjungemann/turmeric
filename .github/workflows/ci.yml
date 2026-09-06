@@ -736,6 +736,15 @@ jobs:
       # trip the Defender firewall dialog.  Debug build on purpose: a Release
       # tur elides contract checks (rt_contracts_emitted is #ifdef NDEBUG), so
       # every fixture pinning a contract panic would fail against it.
+      # The stdio protocol servers.  Neither ctest nor the LSP/DAP harnesses
+      # run in this job, so `tur lsp` and `tur dap` were completely dead on
+      # Windows -- exit 0, no output, no diagnostic -- and nothing noticed
+      # until an editor was pointed at them.  Cheap enough to run here even
+      # though the full harnesses are not wired up yet (they have two known
+      # Windows failures: docs/reported/lsp-dap-windows-gaps.md).
+      - name: LSP/DAP stdio smoke test
+        run: python tests/lsp/stdio-smoke.py ./build-win/tur.exe
+
       - name: Fixture suite
         run: |
           TUR=./build-win/tur.exe bash tests/run.sh 2>&1 | tee ./suite.log
