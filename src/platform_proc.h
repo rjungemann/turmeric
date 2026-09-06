@@ -40,6 +40,18 @@
 #  define TUR_DEVNULL "/dev/null"
 #endif
 
+/* `cd`, spelled so it actually changes directory.
+ *
+ * cmd.exe keeps a current directory PER DRIVE: from C:, a bare
+ * `cd D:\x` succeeds, sets D:'s current directory, and leaves the
+ * process on C:.  A command of the form `cd <dir> && <build>` then builds in
+ * the wrong place while reporting nothing.  /d makes it change drive too. */
+#ifdef _WIN32
+#  define TUR_CD "cd /d"
+#else
+#  define TUR_CD "cd"
+#endif
+
 /* Quote one argument for the platform's shell.
  *
  * Writes a NUL-terminated quoted form of `in` into `out`; returns 0 on success

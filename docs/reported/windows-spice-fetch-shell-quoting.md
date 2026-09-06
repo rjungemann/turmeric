@@ -53,16 +53,32 @@ rather than run truncated.
 Verified end to end on Windows against a local `file://` git repo: fetch
 clones, `tur.lock` is written, `tur run` builds and runs the dependency.
 
-## Still open: `tur install`
+## `tur install` -- the same three sites, also fixed
 
-`src/compiler/install.c` has the same defect at three sites, not fixed here
-because `tur install` is a different command from the fetch/run path this
-change is about, and one of them needs more than quoting:
+`src/compiler/install.c` had the identical defect at three sites, all now
+converted:
 
-| line | command | needs |
+| site | was | now |
 | --- | --- | --- |
-| 166 | `rm -rf -- '%s'` | a real port -- cmd.exe has no `rm`; either `rmdir /s /q` or an in-process recursive delete |
-| 526 | `'%s' build '%s' -I '%s' -o '%s'` | `cmd_arg`, plus `tur_shell_command` -- the string STARTS with a quoted program, which is the case cmd.exe's "strip the first and last quote" rule tears in half |
-| 1177 | `git ls-remote '%s' '%s' 2>/dev/null` | `cmd_arg` + `TUR_DEVNULL` |
+| `inst_rm_rf` | `rm -rf -- '%s'` | an in-process recursive delete -- cmd.exe has no `rm` at all, so quoting alone would not have helped |
+| the `:bin` build | `cd '%s' && '%s' build '%s' -I '%s' -o '%s'` | `pkg_cmd_arg` per argument, plus `tur_shell_command` (this one STARTS with a quoted program, the case cmd.exe's "strip the first and last quote" rule tears in half) and `TUR_CD` |
+| `upgrade_ls_remote` | `git ls-remote '%s' '%s' 2>/dev/null` | `pkg_cmd_arg` + `TUR_DEVNULL` |
 
-Until then `tur install` does not work on Windows.
+Two things worth keeping in view from that work:
+
+- **`cd` does not change drive on Windows.** cmd.exe keeps a current directory
+  per drive, so from `C:` a bare `cd` to a path on `D:` succeeds, sets D:'s
+  current directory, and leaves the process on C: -- the build then runs in the
+  wrong place and says nothing. `TUR_CD` in `platform_proc.h` spells it
+  `cd /d`.
+- **An in-process delete has to refuse to descend a symlink**, which `rm -rf`
+  already did. Following one would delete the contents of whatever it points
+  at. `inst_is_link` checks `S_ISLNK` on POSIX and
+  `FILE_ATTRIBUTE_REPARSE_POINT` on Windows. The Windows path also clears the
+  read-only attribute before unlinking, because git marks everything under
+  `.git/objects` read-only and `DeleteFile` refuses a read-only file -- the
+  classic reason deleting a clone fails on Windows.
+
+`tur install` still does not complete on Windows, for four unrelated reasons in
+the binary-placement step:
+[windows-install-binary-placement](windows-install-binary-placement.md).
