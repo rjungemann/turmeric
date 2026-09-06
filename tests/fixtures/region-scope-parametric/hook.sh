@@ -80,10 +80,10 @@ cat > "$TMP/in.tur" <<'EOF'
   (println (.fst (p-pair 4)))                       ;; 10
   (match (p-opt 4) (Some x) (println x) (None) (println -1))   ;; 10
   (println (.fst (.fst (p-nest 4))))                ;; 10
-  ;; `vec-get` + ascription rather than `vec-get-byval`: the latter's spec
-  ;; clone for a by-value struct element returns the int64 carrier where the
-  ;; aggregate is expected and does not compile, regions on or off -- see
-  ;; docs/reported/vec-get-byval-struct-element-returns-carrier.md.
+  ;; `vec-get` + ascription; `vec-get-byval` works too since
+  ;; docs/archive/vec-get-byval-struct-element-returns-carrier.md was fixed, and
+  ;; its own fixture pins that spelling -- this one keeps the read it was
+  ;; written with.
   (println (.fst (:: (vec-get (v-pair 4) 0) (Pair int int))))   ;; 10
   (println (:: (map-get (m-int 4) 1) :int))         ;; 10
   (println (set-member? (s-int 4) 10 10))           ;; true (retire/rewind-neutral)

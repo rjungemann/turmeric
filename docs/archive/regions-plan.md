@@ -520,7 +520,7 @@ per the standing rule it would not block a release if there were.
 
    Writing it surfaced an unrelated pre-existing compile failure:
    `vec-get-byval` on a `Vec` of a by-value struct
-   (`../reported/vec-get-byval-struct-element-returns-carrier.md`); the
+   (`vec-get-byval-struct-element-returns-carrier.md`); the
    fixture reads its elements through `(:: (vec-get v i) T)`.
 3. ~~**Close or price the residue** named under R4: the unbracketed CPS
    `CT_LETCALL` arm, argument-position allocation landing in the generation, and

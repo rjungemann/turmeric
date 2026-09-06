@@ -13492,6 +13492,30 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     return emit_carrier_bridge(ctx, body, inner_val,
                                                CK_CARRIER, CK_CONCRETE, rtv);
                 }
+                /* vec-get-byval-struct-element-returns-carrier: the sentence
+                 * above ("struct elements need no reinterpret -- their carrier
+                 * bits ARE the value") is false for a BY-VALUE aggregate.  A
+                 * heap container stores such an element BOXED
+                 * (type_is_boxed_container_elem: a non-heap by-value product of
+                 * any width), so the int64 the carrier helper hands back is the
+                 * box's address, and `vec-get-byval`'s `(:: (vec-data-get-
+                 * checked__ ...) A)` with `A := P2` was returned raw -- an int64
+                 * where the clone's C return type is `tur_adt_P2`, a hard cc
+                 * error, regions on or off.  The concrete spelling `(:: (vec-get
+                 * v 0) P2)` at a call site takes the aggregate bridge two blocks
+                 * down; the tyvar spelling inside a spec body must take the same
+                 * one.  Gated on the boxed-element predicate, and NOT on the SR4
+                 * recursive-carrier wrapper (its <= 8-byte bits really do ride
+                 * the carrier inline; the B4 match-binder path reads it raw), so
+                 * a shape that was right before stays right. */
+                if ((rtv.kind == TY_ADT || rtv.kind == TY_APP) &&
+                    !type_is_heap_adt(rtv) && !type_is_heap_struct(rtv) &&
+                    !emit_type_is_byval_recursive_carrier(ctx, rtv) &&
+                    type_is_boxed_container_elem(rtv) &&
+                    strcmp(emit_type_c_name(ctx, rtv), "int64_t") != 0) {
+                    return emit_carrier_bridge(ctx, body, inner_val,
+                                               CK_CARRIER, CK_CONCRETE, rtv);
+                }
             }
             if (!ascribe_to_opaque &&
                 e->as.ascribe_.inner->type.kind == TY_INT &&

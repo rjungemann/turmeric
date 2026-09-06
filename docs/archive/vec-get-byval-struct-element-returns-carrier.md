@@ -54,3 +54,27 @@ emit the deref-unbox bridge instead of a bare return -- the same bridge the
 call-site ascription uses. A fixture that reads a struct element through
 `vec-get-byval` (the `Eq [Vec]` path redirects `vec-get` to it inside spec
 bodies, so `vec-eq?` over a `(Vec P2)` may be reachable too -- check).
+
+## Resolved 2026-09-05
+
+Exactly the fix direction above, at the ascription arm of `emit_value`
+(emit_expr.c, `case EX_ASCRIBE`).  That arm already resolved a type-variable
+ascription of an int64 carrier through the active spec and bridged it when `A`
+grounds to a FLOAT width -- and said in its comment that "int/bool/cstr/struct
+elements need no reinterpret; their carrier bits ARE the value".  For a
+by-value aggregate that is false: a heap container stores such an element
+BOXED (`type_is_boxed_container_elem`), so the int64 is the box's address.
+The same block now also bridges when `A` grounds to a non-heap by-value
+ADT/ADT-app that the container predicate boxes -- the identical
+`emit_carrier_bridge(CK_CARRIER -> CK_CONCRETE)` unbox the concrete
+`(:: (vec-get v 0) P2)` spelling took two blocks down -- and leaves the SR4
+recursive-carrier wrapper alone (its bits do ride the carrier inline, and the
+B4 binder path reads it raw).
+
+`vec-get-byval`'s clone for `A := P2` now reads
+`return (*(tur_adt_P2 *)(intptr_t)(__ps));`.  Pinned by
+`tests/fixtures/vec-get-byval-struct-element` (a non-parametric defstruct and
+stdlib's parametric `Pair`, fields read back, compiled and interpreted alike);
+`region-scope-parametric` keeps its `(:: (vec-get v i) T)` spelling with the
+note updated.  Suite green with no snapshot moved -- no snapshot fixture reads
+a struct element through the by-value twin.
