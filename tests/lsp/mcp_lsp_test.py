@@ -39,6 +39,34 @@ def _find_tur():
 TUR = _find_tur()
 
 
+def native_path(path):
+    """A path the `tur` BINARY can open, not just this interpreter.
+
+    Under MSYS2 -- which is how Windows CI runs this -- tempfile hands back
+    /tmp/mcp_test_x.tur.  That is a real file to the msys runtime and to python,
+    and meaningless to tur.exe, which is a native Windows program: a leading
+    slash there means the root of the current drive, so it looked for C:\tmp and
+    reported "Could not read or analyze".  Every MCP test that writes a scratch
+    file failed that way, while the same tests passed locally where TEMP already
+    pointed at a Windows path.
+
+    cygpath is the translation both halves agree on.  Absent (real POSIX), the
+    path is already native and comes back unchanged.
+    """
+    if os.name != "nt" and "MSYSTEM" not in os.environ:
+        return path
+    try:
+        out = subprocess.run(["cygpath", "-m", path], capture_output=True,
+                             timeout=15)
+        if out.returncode == 0:
+            got = out.stdout.decode().strip()
+            if got:
+                return got
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return path
+
+
 def to_uri(path):
     """Spell a path the way an LSP client does.
 
@@ -207,6 +235,7 @@ BAD_TUR = textwrap.dedent("""\
 
 def make_tempfile(content: str) -> str:
     fd, path = tempfile.mkstemp(suffix=".tur", prefix="mcp_test_")
+    path = native_path(path)
     os.write(fd, content.encode("utf-8"))
     os.close(fd)
     return path
@@ -877,7 +906,7 @@ def test_lsp_inside_a_spice() -> None:
     # crossed to the sibling module then failed a string compare on its uri.
     # Canonicalising here makes every path this test builds match whichever
     # spelling the server reports, on both platforms.
-    root = os.path.realpath(tempfile.mkdtemp(prefix="lsp_spice_"))
+    root = native_path(os.path.realpath(tempfile.mkdtemp(prefix="lsp_spice_")))
     src_dir = os.path.join(root, "src")
     os.makedirs(src_dir, exist_ok=True)
     with open(os.path.join(root, "build.tur"), "w") as f:
