@@ -92,9 +92,9 @@ Reaching for the layout the probes *do* understand -- `<prefix>/bin/tur` with
 | platform | layout | `tur run` from an extracted archive |
 | --- | --- | --- |
 | windows-x86_64 | prefix (`bin/lib/include/share`) | **works**, and CI compiles a program out of the archive every release |
-| linux-x86_64 | flat | **broken** (inferred, see below) |
+| macos-arm64 | flat | **broken -- verified 2026-09-06** on an arm64 Release build |
+| linux-x86_64 | flat | **broken** (inferred) |
 | linux-aarch64 | flat | **broken** (inferred) |
-| macos-arm64 | flat | **broken** (inferred) |
 
 The Windows fix is two things: the `-L` defect above, and packaging a prefix
 layout instead of a flat one. The other three legs need the same packaging
@@ -108,10 +108,26 @@ change; the `-L` fix is already shared, since it is not platform-specific code
 | flat archive cannot compile, on Windows | **verified**, repro above |
 | the four probe paths do not match a flat archive | **verified** by reading `locate_runtime_lib` |
 | the guide's instructions produce a flat layout | **verified** by reading the guide |
-| therefore Linux and macOS behave identically | **inferred** -- the code has no platform branch, but it was not run there |
+| the same failure on macOS | **verified 2026-09-06** -- see below |
+| therefore Linux behaves identically | **inferred** -- the code has no platform branch, but it was not run there |
 
-The last row is the one to check first. It should take one extracted tarball and
-one `tur run`.
+macOS was checked on 2026-09-06 and behaves exactly as predicted. A flat archive
+built from this branch (arm64, Release) fails at the same place:
+
+```
+clang: error: no such file or directory: '.../src/runtime/hamt.c'
+clang: error: no such file or directory: '.../src/runtime/trail.c'
+tur: cc invocation failed (status 256)
+```
+
+and a hand-packaged prefix layout -- `bin/lib/include/share`, including
+`libturt_runtime.a` -- compiles and runs a program straight out of the extracted
+archive. So the fix direction is confirmed on a second platform, not just
+reasoned about.
+
+Linux remains unverified for want of a box. Given two platforms now agree and
+the code has no platform branch, it is a formality -- but it is still one
+extracted tarball and one `tur run`.
 
 ## What remains: the same change on the other three legs
 

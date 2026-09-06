@@ -1566,7 +1566,7 @@ Filed 2026-08 while bringing the `turmeric-godot` GDExtension up on Windows.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [release-archive-cannot-compile](release-archive-cannot-compile.md) | high | An extracted release tarball can run `tur --version` and the REPL but not `tur run`. **Windows fixed** (a mangled `-L`, plus a prefix-layout archive); linux and macos still ship the flat layout and are still affected |
+| [release-archive-cannot-compile](release-archive-cannot-compile.md) | high | An extracted release tarball can run `tur --version` and the REPL but not `tur run`. **Windows fixed** (a mangled `-L`, plus a prefix-layout archive); macos verified to fail the same way and linux inferred -- both still ship the flat layout |
 | [src-cmakelists-add-test-never-registers](src-cmakelists-add-test-never-registers.md) | low | `enable_testing()` runs after `add_subdirectory(src)`, so every `add_test` in `src/CMakeLists.txt` is silently dropped -- `tur_trail` has never run in CI |
 
 The row above was found while adding a Windows regression test and is not a
