@@ -523,7 +523,11 @@ TUR_RT_API bool tur_region_active(void);
  * bracket that did not pop shows up as a depth that never returns to 0. */
 TUR_RT_API int  tur_region_depth(void);
 
-/* Release every generation and the backing arena.  Process teardown only. */
+/* Release every generation and the backing arena.  Process teardown only.
+ * Under TUR_REGION_STATS=1 it first prints `region-stats: pushes=N
+ * rewinds=N retires=N` to stderr -- the instrument tests/regions-fuzz-src.py
+ * checks its rewind / retire model against, so a lock that quietly became a
+ * blanket refusal shows up as a savings regression rather than as nothing. */
 TUR_RT_API void tur_region_shutdown(void);
 
 #endif
@@ -999,6 +1003,7 @@ TUR_RT_API bool arena_owns(const Arena *a, const void *p) {
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -1046,6 +1051,23 @@ static __thread int    g_my_reg;
 
 static void reg_lock(void)   { while (atomic_flag_test_and_set_explicit(&g_reg_lock, memory_order_acquire)) { } }
 static void reg_unlock(void) { atomic_flag_clear_explicit(&g_reg_lock, memory_order_release); }
+
+/* TUR_REGION_STATS=1: count pushes, rewinds and retires (process-wide,
+ * atomic) and print them at shutdown, so a harness can tell a region that
+ * paid for itself from one that only ever retired.  The regions fuzzer
+ * (tests/regions-fuzz-src.py) predicts these per program: a bracket with no
+ * escape MUST rewind, or the lock has become a blanket refusal -- which is
+ * safe, and exactly the regression a safety-only check would never see. */
+static atomic_int g_stat_push, g_stat_rewind, g_stat_retire;
+static int g_stats_enabled = -1;   /* -1: not read yet */
+
+static bool stats_enabled(void) {
+    if (g_stats_enabled < 0) {
+        const char *e = getenv("TUR_REGION_STATS");
+        g_stats_enabled = (e && e[0] == '1') ? 1 : 0;
+    }
+    return g_stats_enabled == 1;
+}
 
 /* Thread exit.  A worker that opened a region owns three small arrays and a
  * pool of reset arenas that nothing else references; a pthread key destructor
@@ -1134,6 +1156,7 @@ static bool reg_owns_foreign(const void *p) {
 TUR_RT_API int tur_region_push(void) {
     Arena *a;
     tls_arm();
+    if (stats_enabled()) atomic_fetch_add_explicit(&g_stat_push, 1, memory_order_relaxed);
     if (g_pool_n > 0) {
         a = g_pool[--g_pool_n];    /* already reset by the reclaim that pooled it */
     } else {
@@ -1209,6 +1232,7 @@ static bool generation_escaped(int idx0) {
 
 static void retire_top(void) {
     Arena *a = g_live[--g_live_n];
+    if (stats_enabled()) atomic_fetch_add_explicit(&g_stat_retire, 1, memory_order_relaxed);
     if (!push_ptr(&g_retired, &g_retired_n, &g_retired_cap, a)) {
         /* Out of memory retiring it: the arena stays mapped and unreferenced,
          * which is the same outcome the retired list produces.  Never free it
@@ -1249,6 +1273,7 @@ TUR_RT_API void tur_region_pop_reclaim(int depth) {
      * rather than asking the allocator again. */
     arena_reset(a);
     reg_remove(a);
+    if (stats_enabled()) atomic_fetch_add_explicit(&g_stat_rewind, 1, memory_order_relaxed);
     if (!push_ptr(&g_pool, &g_pool_n, &g_pool_cap, a)) {
         arena_free(a);
         free(a);
@@ -1300,6 +1325,10 @@ TUR_RT_API bool tur_region_active(void) { return g_live_n > 0; }
 TUR_RT_API int tur_region_depth(void) { return g_live_n; }
 
 TUR_RT_API void tur_region_shutdown(void) {
+    if (stats_enabled())
+        fprintf(stderr, "region-stats: pushes=%d rewinds=%d retires=%d\n",
+                atomic_load(&g_stat_push), atomic_load(&g_stat_rewind),
+                atomic_load(&g_stat_retire));
     /* This thread's arenas only: another thread's live or retired generations
      * are its own, and at process exit they go with the process.  Their
      * registry entries are dropped too, so a shutdown that follows every

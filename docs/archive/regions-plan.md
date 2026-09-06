@@ -310,6 +310,21 @@ result shapes) read every value back after the pop and run on both arms
 through `tests/run-regions-seam.sh`. `bench-regions-subst`, the typed
 workload R4 was priced on, keeps its rewinds.
 
+**And then fuzzed.** The three shapes above were found by hand, one at a
+time, which is the wrong rate for a lock with this many doors.
+`tests/regions-fuzz-src.py` (ctest smoke `tur_regions_fuzz_src`) generates
+programs of random brackets -- every result shape the walk admits or
+refuses, every hooked store, the erasure, nested brackets with and without
+the owner case, `with-region` and `bt-scope` alike -- reads each value back
+after the pop on the ASan-compiled default arm and under `TUR_REGIONS=0`
+against a predicted stdout, and checks the runtime's `TUR_REGION_STATS=1`
+rewind / retire counts against the generator's model of which brackets may
+rewind. Two properties, because the second is the one a safety fuzzer never
+asks: a bracket with no escape must still rewind. The first sessions (seeds
+1 and 2, 180 programs, 1,080 brackets) found no region defect; what they
+found was the model learning that `bt-scope` undoes a `bt-set!` at its pop,
+which is the trail doing its job.
+
 What this does not close is a store the emitter never sees: a user inline-C
 body writing a node into its own `malloc`'d cell, or a stdlib primitive
 outside the hooked set. That is filed as

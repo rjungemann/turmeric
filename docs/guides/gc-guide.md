@@ -229,6 +229,17 @@ through a registry, so a node that crosses threads is still safe to drop
 anywhere. A pop whose inner brackets were skipped by a panic retires the
 abandoned generations rather than jamming the stack.
 
+**Fuzzed, both ways.** `tests/regions-fuzz-src.py` generates programs that
+let nodes out of a bracket through every route above (or not at all), reads
+each value back after the pop on the default arm compiled with
+`-fsanitize=address` (so the arena poison is live) and under `TUR_REGIONS=0`,
+and checks both against a predicted stdout. It also predicts, per bracket,
+whether the runtime must rewind or retire and compares that with the counts
+`TUR_REGION_STATS=1` prints at shutdown -- so a lock that quietly refused
+everything would fail the run as surely as one that let a node dangle.
+The ctest smoke is `tur_regions_fuzz_src`; run the driver directly with a
+larger `--n` and a fresh `--seed` for a session.
+
 **Non-`rc` heap values.** A `defstruct` used by value or a raw `:ptr<T>`
 returned from inline C is *not* on the RC path. If your inline-C code
 `malloc`s, your inline-C code frees.

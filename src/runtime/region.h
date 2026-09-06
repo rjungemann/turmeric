@@ -161,7 +161,11 @@ TUR_RT_API bool tur_region_active(void);
  * bracket that did not pop shows up as a depth that never returns to 0. */
 TUR_RT_API int  tur_region_depth(void);
 
-/* Release every generation and the backing arena.  Process teardown only. */
+/* Release every generation and the backing arena.  Process teardown only.
+ * Under TUR_REGION_STATS=1 it first prints `region-stats: pushes=N
+ * rewinds=N retires=N` to stderr -- the instrument tests/regions-fuzz-src.py
+ * checks its rewind / retire model against, so a lock that quietly became a
+ * blanket refusal shows up as a savings regression rather than as nothing. */
 TUR_RT_API void tur_region_shutdown(void);
 
 #endif
