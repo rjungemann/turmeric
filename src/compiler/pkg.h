@@ -314,6 +314,15 @@ PkgLockEntry *pkg_lock_find(PkgLockFile *lock, const char *name, bool is_cmake);
 /* Compute SHA-256 of a file (64 hex chars + NUL). Returns true on success. */
 bool pkg_sha256_file(const char *path, char out[65]);
 
+/* Append one argument to a shell command string, quoted for the platform's
+ * shell (tur_shell_quote).  Returns false if it does not fit -- a truncated
+ * command string is worse than none, so callers must fail rather than run it.
+ *
+ * Every command in the package and install paths used to interpolate `'%s'`,
+ * which cmd.exe does not treat as quoting at all.
+ * See docs/reported/windows-spice-fetch-shell-quoting.md. */
+bool pkg_cmd_arg(Buf *cmd, const char *arg);
+
 /* Room for a tagged tree hash: "tree1:" + 64 hex + NUL. */
 #define PKG_HASH_MAX 72
 

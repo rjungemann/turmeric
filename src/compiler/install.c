@@ -51,6 +51,7 @@
 #include "global.h"
 #include "pkg.h"
 #include "platform_fs.h"
+#include "platform_proc.h"
 #ifdef _WIN32
 #include <windows.h>  /* GetModuleFileNameA */
 #endif
@@ -156,15 +157,68 @@ static void inst_derive_name(const char *url_or_path, char *out, size_t cap) {
     if (strncmp(out, "tur-", 4) == 0) memmove(out, out + 4, strlen(out) - 3);
 }
 
-/* Recursive rm -rf via system(). Refuses to remove paths that don't
- * contain a '/' (no rm -rf of bare ".") to limit blast radius. */
+/* Is `path` a symlink (POSIX) or a reparse point (Windows)?
+ *
+ * A recursive delete must never descend through one: the link is what belongs
+ * to us, its target does not.  `rm -rf` got this right and the in-process walk
+ * below has to as well, or removing a spice tree containing a symlinked
+ * directory would take out the directory it points AT. */
+static bool inst_is_link(const char *path) {
+#ifdef _WIN32
+    DWORD a = GetFileAttributesA(path);
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_REPARSE_POINT);
+#else
+    struct stat st;
+    return lstat(path, &st) == 0 && S_ISLNK(st.st_mode);
+#endif
+}
+
+/* Depth-first unlink.  False if anything could not be removed. */
+static bool inst_rm_tree(const char *path) {
+    if (inst_is_link(path)) return remove(path) == 0;
+
+    struct stat st;
+    if (stat(path, &st) != 0) return false;
+    if (!S_ISDIR(st.st_mode)) {
+#ifdef _WIN32
+        /* git marks everything under .git/objects read-only, and DeleteFile
+         * refuses a read-only file -- the classic reason `rm -rf` of a clone
+         * fails on Windows.  Drop the attribute before unlinking. */
+        chmod(path, S_IREAD | S_IWRITE);
+#endif
+        return remove(path) == 0;
+    }
+
+    bool ok = true;
+    DIR *d = opendir(path);
+    if (!d) return false;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+            continue;
+        char child[4096];
+        int n = snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+        if (n < 0 || n >= (int)sizeof(child)) { ok = false; continue; }
+        ok = inst_rm_tree(child) && ok;
+    }
+    closedir(d);
+    if (!ok) return false;
+    return rmdir(path) == 0;
+}
+
+/* Recursive delete.  Refuses to remove paths that don't contain a '/' (no
+ * delete of a bare ".") to limit blast radius -- the same contract the shell
+ * version had.
+ *
+ * Was `system("rm -rf -- '%s'")`, which failed twice on Windows: cmd.exe has
+ * no `rm`, and it does not treat '...' as quoting, so the path arrived with
+ * the quotes still attached.  A tree walk needs neither a shell nor a quoting
+ * rule.  docs/reported/windows-spice-fetch-shell-quoting.md */
 static bool inst_rm_rf(const char *path) {
     if (!path || !*path) return false;
     if (!strchr(path, '/')) return false;
     if (strstr(path, "..")) return false; /* defensive */
-    char cmd[8192];
-    snprintf(cmd, sizeof(cmd), "rm -rf -- '%s'", path);
-    return system(cmd) == 0;
+    return inst_rm_tree(path);
 }
 
 /* Walk the bin_dir/<name>:
@@ -520,19 +574,41 @@ static int do_install_spec(const InstallSpec *spec) {
         bool has_src = (stat(src_subdir, &st) == 0 && S_ISDIR(st.st_mode));
 
         Buf cmd;
+        bool cmd_ok = true;
         buf_init(&cmd);
-        if (have_root)
-            buf_printf(&cmd, "cd '%s' && ", tur_root);
-        buf_printf(&cmd, "'%s' build '%s'", self_exe, entry_abs);
-        if (has_src)
-            buf_printf(&cmd, " -I '%s'", src_subdir);
-        for (int j = 0; j < n_dep_srcs; j++)
-            buf_printf(&cmd, " -I '%s'", dep_srcs[j]);
-        buf_printf(&cmd, " -o '%s'", bin_out);
+        if (have_root) {
+            /* `cd` alone does not change DRIVE on Windows: from C:, `cd D:\x`
+             * silently succeeds and leaves you on C:.  /d is the switch that
+             * makes it mean what this code intends. */
+            buf_puts(&cmd, TUR_CD " ");
+            cmd_ok = pkg_cmd_arg(&cmd, tur_root) && cmd_ok;
+            buf_puts(&cmd, " && ");
+        }
+        cmd_ok = pkg_cmd_arg(&cmd, self_exe) && cmd_ok;
+        buf_puts(&cmd, " build ");
+        cmd_ok = pkg_cmd_arg(&cmd, entry_abs) && cmd_ok;
+        if (has_src) {
+            buf_puts(&cmd, " -I ");
+            cmd_ok = pkg_cmd_arg(&cmd, src_subdir) && cmd_ok;
+        }
+        for (int j = 0; j < n_dep_srcs; j++) {
+            buf_puts(&cmd, " -I ");
+            cmd_ok = pkg_cmd_arg(&cmd, dep_srcs[j]) && cmd_ok;
+        }
+        buf_puts(&cmd, " -o ");
+        cmd_ok = pkg_cmd_arg(&cmd, bin_out) && cmd_ok;
         buf_putc(&cmd, '\0');
 
+        /* This command STARTS with a quoted program path (or with `cd` when
+         * have_root), which is the case cmd.exe's "strip the first and last
+         * quote" rule tears in half.  tur_shell_command adds the enclosing
+         * pair it eats; on POSIX it is a copy. */
+        char wrapped[16384];
+        if (cmd_ok && tur_shell_command(cmd.data, wrapped, sizeof(wrapped)) != 0)
+            cmd_ok = false;
+
         fprintf(stderr, "tur %s: building %s ...\n", verb, bin_name);
-        int rc = system(cmd.data);
+        int rc = cmd_ok ? system(wrapped) : -1;
         buf_free(&cmd);
         if (rc != 0) {
             fprintf(stderr,
@@ -1174,10 +1250,13 @@ static int upgrade_usage(void) {
 static char *upgrade_ls_remote(const char *url, const char *ref) {
     if (!url) return NULL;
     Buf cmd; buf_init(&cmd);
-    buf_printf(&cmd, "git ls-remote '%s' '%s' 2>/dev/null", url,
-               ref ? ref : "HEAD");
+    buf_puts(&cmd, "git ls-remote ");
+    bool ok = pkg_cmd_arg(&cmd, url);
+    buf_putc(&cmd, ' ');
+    ok = pkg_cmd_arg(&cmd, ref ? ref : "HEAD") && ok;
+    buf_puts(&cmd, " 2>" TUR_DEVNULL);
     buf_putc(&cmd, '\0');
-    FILE *f = popen(cmd.data, "r");
+    FILE *f = ok ? popen(cmd.data, "r") : NULL;
     buf_free(&cmd);
     if (!f) return NULL;
     char line[256] = {0};

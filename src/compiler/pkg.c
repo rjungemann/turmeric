@@ -1982,7 +1982,7 @@ bool pkg_version_range_match(const char *range, const char *version,
  * the argument does not fit; a truncated command string is worse than none, so
  * callers must fail rather than run it.
  * docs/reported/windows-spice-fetch-shell-quoting.md */
-static bool cmd_arg(Buf *cmd, const char *arg) {
+bool pkg_cmd_arg(Buf *cmd, const char *arg) {
     char q[8192];
     if (tur_shell_quote(arg, q, sizeof q) != 0) return false;
     buf_puts(cmd, q);
@@ -1993,7 +1993,7 @@ char *pkg_git_resolve(const char *repo_dir) {
     Buf cmd;
     buf_init(&cmd);
     buf_puts(&cmd, "git -C ");
-    bool ok = cmd_arg(&cmd, repo_dir);
+    bool ok = pkg_cmd_arg(&cmd, repo_dir);
     buf_puts(&cmd, " rev-parse HEAD 2>" TUR_DEVNULL);
     buf_putc(&cmd, '\0');
     char *sha = ok ? run_capture(cmd.data) : NULL;
@@ -2014,22 +2014,22 @@ char *pkg_git_fetch(const char *url, const char *ref, const char *dest_dir) {
         buf_puts(&cmd, "git clone --depth 1 ");
         if (ref) {
             buf_puts(&cmd, "--branch ");
-            ok = cmd_arg(&cmd, ref) && ok;
+            ok = pkg_cmd_arg(&cmd, ref) && ok;
             buf_putc(&cmd, ' ');
         }
         buf_puts(&cmd, "-- ");
-        ok = cmd_arg(&cmd, url) && ok;
+        ok = pkg_cmd_arg(&cmd, url) && ok;
         buf_putc(&cmd, ' ');
-        ok = cmd_arg(&cmd, dest_dir) && ok;
+        ok = pkg_cmd_arg(&cmd, dest_dir) && ok;
         buf_puts(&cmd, " 2>&1");
     } else {
         /* Fetch and checkout the desired ref */
         buf_puts(&cmd, "git -C ");
-        ok = cmd_arg(&cmd, dest_dir) && ok;
+        ok = pkg_cmd_arg(&cmd, dest_dir) && ok;
         buf_puts(&cmd, " fetch --depth 1 origin ");
-        ok = cmd_arg(&cmd, ref ? ref : "HEAD") && ok;
+        ok = pkg_cmd_arg(&cmd, ref ? ref : "HEAD") && ok;
         buf_puts(&cmd, " 2>&1 && git -C ");
-        ok = cmd_arg(&cmd, dest_dir) && ok;
+        ok = pkg_cmd_arg(&cmd, dest_dir) && ok;
         buf_puts(&cmd, " checkout FETCH_HEAD 2>&1");
     }
     buf_putc(&cmd, '\0');
@@ -3701,9 +3701,9 @@ bool pkg_cmake_build(const char *project_dir,
     bool cmake_ok = true;
     buf_init(&cmd);
     buf_puts(&cmd, wasm ? "emcmake cmake -S " : "cmake -S ");
-    cmake_ok = cmd_arg(&cmd, cmake_src) && cmake_ok;
+    cmake_ok = pkg_cmd_arg(&cmd, cmake_src) && cmake_ok;
     buf_puts(&cmd, " -B ");
-    cmake_ok = cmd_arg(&cmd, cmake_bld) && cmake_ok;
+    cmake_ok = pkg_cmd_arg(&cmd, cmake_bld) && cmake_ok;
     /* CMake 4 removed compatibility with `cmake_minimum_required` floors below
      * 3.5, so a dependency that has not raised its floor (hiredis, and plenty
      * of other stable C libraries) aborts the whole configure and *nothing*
@@ -3734,7 +3734,7 @@ bool pkg_cmake_build(const char *project_dir,
     /* Build */
     buf_init(&cmd);
     buf_puts(&cmd, "cmake --build ");
-    cmake_ok = cmd_arg(&cmd, cmake_bld) && cmake_ok;
+    cmake_ok = pkg_cmd_arg(&cmd, cmake_bld) && cmake_ok;
     buf_putc(&cmd, '\0');
     fprintf(stderr, "spice: cmake build ...\n");
     rc = cmake_ok ? system(cmd.data) : -1;
