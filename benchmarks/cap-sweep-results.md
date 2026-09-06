@@ -1,6 +1,6 @@
 # Refinement solver cap sweep (SX0(b))
 
-Generated: 2026-09-06 04:02 at 10655e41 by `benchmarks/run-cap-sweep.sh`.
+Generated: 2026-09-06 04:38 at 94afc38a by `benchmarks/run-cap-sweep.sh`.
 
 Every cap below degrades to `RT_UNKNOWN` -> the runtime check survives, so a
 hit is never unsound -- it is lost completeness, and only lost completeness that
@@ -33,15 +33,15 @@ elaborates anything, and its peak SATURATES at the limit, so the headroom column
 means something only while its hits are 0.
 
 
-## SMT-LIB corpus -- 124 unit(s), 1 with a cap hit
+## SMT-LIB corpus -- 130 unit(s), 1 with a cap hit
 
 | cap | hits | peak | limit | headroom | worst unit |
 |---|---:|---:|---:|---:|---|
 | cubes | 0 | 40 | 64 | 38% | gen_mixed_sat_00003.smt2 |
-| cube_lits | 0 | 13 | 64 | 80% | qf_lia_distinct_unsat.smt2 |
-| expand_depth | 0 | 8 | 256 | 97% | qf_lia_distinct_unsat.smt2 |
+| cube_lits | 0 | 15 | 64 | 77% | qf_lia_parity_shift_unsat.smt2 |
+| expand_depth | 0 | 9 | 256 | 96% | qf_lia_div_mod_identity_unsat.smt2 |
 | la_vars | 0 | 9 | 32 | 72% | gen_mixed_sat_00013.smt2 |
-| la_constr | 0 | 10 | 512 | 98% | qf_lia_distinct_unsat.smt2 |
+| la_constr | 0 | 14 | 512 | 97% | qf_lia_parity_shift_unsat.smt2 |
 | euf_terms | 982 | 512 | 512 | 0% | qf_lra_deep_arith_chain_sat.smt2 |
 | no_shared | 0 | 9 | 16 | 44% | gen_mixed_sat_00013.smt2 |
 | path_hyps | n/a | n/a | 8 | n/a | this population does not elaborate |

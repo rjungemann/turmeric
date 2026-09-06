@@ -1,0 +1,18 @@
+neg_dividend: answer=sat exit=1
+nonneg_rem: answer=unsat exit=0
+trunc_quotient: answer=unsat exit=0
+neg_divisor: answer=sat exit=1
+parity: answer=unsat exit=0
+var_divisor: answer=unknown exit=3
+by_zero: answer=unknown exit=3
+neg_dividend model: define-fun x () Int negative
+neg_divisor model: define-fun x () Int 7
+var_divisor: non-literal divisor is outside the accepted fragment
+by_zero: by zero is outside the accepted fragment
+round-trip records with div/mod: 4
+round-trip rt0.smt2: unsat
+round-trip rt1.smt2: unsat
+round-trip rt2.smt2: unsat
+round-trip rt3.smt2: unsat
+round-trip truncating idioms: 16
+round-trip div/mod outside an idiom: 0

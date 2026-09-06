@@ -245,13 +245,78 @@ reached by per-constraint rounding).
   the limit.  This is what the archived plan and SX7 call S2c proper.
   **Trigger:** a real obligation, not a constructed one.  The probe set in
   1.3 did not produce one; ordinary bounds reasoning does not need it.
-- **(b) `tur smt` `div`/`mod` semantics.**  The SMT-LIB reader translates
+- ~~**(b) `tur smt` `div`/`mod` semantics.**  The SMT-LIB reader translates
   `div`/`mod` to `VC_DIV`/`VC_MOD`, whose constant folding and model
   evaluation use C truncation, while SMT-LIB specifies floor division and a
   non-negative remainder.  No corpus benchmark uses either today.  Either
   translate to the truncating form with an explicit sign adjustment, or
   refuse `div`/`mod` in the reader as out-of-fragment until then.  Small,
-  and worth doing before anyone adds a `QF_LIA` benchmark with `mod`.
+  and worth doing before anyone adds a `QF_LIA` benchmark with `mod`.~~
+  **LANDED 2026-09-05, the first way, in both directions.**  (SMT-LIB's
+  `div`/`mod` are *Euclidean* -- `0 <= mod < |n|`, the quotient absorbing
+  the divisor's sign -- which for a positive divisor is floor division; the
+  paragraph above said "floor" and that was the imprecise half of it.)
+
+  Measured first: `(< (mod x 3) 0)`, unsatisfiable in SMT-LIB, came back
+  `sat` with the model `x = -2` -- the bounded search evaluating `%`.  The
+  reader now BUILDS the Euclidean value from the truncating pair the VC
+  already has, `r_t = VC_MOD(a, k)`, `q_t = VC_DIV(a, k)`:
+
+  ```
+  mod_E = ite(r_t < 0,  r_t + |k|,     r_t)
+  div_E = ite(r_t < 0,  q_t - sgn(k),  q_t)
+  ```
+
+  lifted through the same fresh-variable `ite` the reader already uses,
+  with the truncating axioms asserted for `(a, k)` -- `enc_divmod_axioms`
+  moved onto the VC as `vc_add_divmod_axioms` so the encoder and the
+  reader assert one set, not two copies.  So `tur smt` does not merely
+  stop answering wrong; it decides these: `(< (mod x 3) 0)` is proved
+  unsat by S2, and `(= (mod x 2) 0), (= (mod (+ x 1) 2) 0)` too.  A
+  literal dividend folds outright.  A non-literal divisor (nonlinear, no
+  axiom) and division by zero (uninterpreted in SMT-LIB) are refused whole
+  as outside the fragment -- before this the reader accepted `(div x y)`,
+  left it opaque to the stages, and let the model search evaluate it with
+  C semantics.
+
+  The other direction had the same defect: the serializer (`vc_smtlib` in
+  `--dump-refine=json`, `TUR_REFINE_DUMP`) emitted the compiler's
+  truncating `(/ a k)` as a bare SMT-LIB `(div a k)`, mis-stating every
+  negative-dividend obligation to an external solver.  It now spells the
+  truncating value in Euclidean terms
+  (`(ite (>= a 0) (div a k) (- (div (- a) k)))`, likewise for `mod`), so a
+  dumped VC replays faithfully -- pinned by feeding a dumped `(/ n 2)`
+  obligation straight back into `tur smt`, which proves it.
+
+  Two tests grew teeth with it.  `tur_refine_corpus` now runs the bounded
+  model search after the chain, exactly as `tur smt` does (it replayed a
+  SUBSET of the solver before, so a wrong model was invisible to it), and
+  counts a MODEL on an `unsat`-labelled benchmark as a failure (before,
+  only VALID-on-`sat` was; a witness for a contradictory set is a
+  reader/evaluator bug, not incompleteness, and it is exactly what this
+  defect looked like).  Verified against the pre-fix reader with the new
+  harness: 2 MODEL failures (`qf_lia_mod_nonneg_unsat`,
+  `qf_lia_div_rounds_down_unsat`), and 0 with the fix; no verdict on the
+  pre-existing 125 benchmarks moved.  Six hand-written `QF_LIA` benchmarks
+  with `div`/`mod` are in the corpus -- which closes Phase 4's corpus half
+  too.  Fixture: `tests/fixtures/sx8a-tur-smt-div-mod`, which also pins the
+  `--dump-refine=json` -> `tur smt` round trip proving all four of a
+  `/`+`mod` program's obligations.
+
+  One more reader change rode along, because the round trip needed it: two
+  occurrences of the SAME arithmetic `ite` now share one lifted variable
+  (memoized by term identity, definitions re-added on every hit so a
+  session `pop` cannot strand the variable undefined), and the serializer's
+  truncating idiom is recognized on read and mapped back to the node it
+  was written from plus its axioms (`tr_trunc_idiom`).  Without both, the
+  six idiom occurrences in one dumped `mod` obligation minted eighteen
+  variables, each with its own disjunctive definition, and the replay went
+  over the cube cap.  The lift itself also got cheaper: one disjunction
+  `(c and t = a) or (not c and t = b)` instead of the equivalent pair of
+  implications, which the naive DNF expanded to four cube combinations
+  rather than two -- `qf_lia_div_mod_identity_unsat` sat at exactly 64 of
+  64 cubes on the old form and reads 40 (the pre-existing corpus peak) on
+  the new one, with every corpus verdict identical.
 
 ## 5. Phase 4 -- make the instruments able to see this class
 
@@ -290,10 +355,17 @@ and it is cheap:
   to pass -- the report-only class doing exactly what it is for).  The
   ctest smoke size (`tests/run-refine-fuzz-src.sh`) passes.
 
-- `tests/corpus/smtlib/`: a handful of hand-written `QF_LIA` benchmarks with
+- ~~`tests/corpus/smtlib/`: a handful of hand-written `QF_LIA` benchmarks with
   `div`/`mod` and parity, labelled by both reference solvers per the corpus
   README -- **after** Phase 3(b), or the labels will disagree with the
-  reader's semantics.  **Still open.**
+  reader's semantics.~~  **Done with Phase 3(b), 2026-09-05**: six
+  benchmarks (`qf_lia_mod_negative_dividend_sat`, `qf_lia_mod_nonneg_unsat`,
+  `qf_lia_div_rounds_down_unsat`, `qf_lia_div_mod_identity_unsat`,
+  `qf_lia_div_negative_divisor_sat`, `qf_lia_parity_shift_unsat`), each
+  with its reason in the file, sealed by `validate-labels.py` against BOTH
+  Z3 and cvc5 (131 labels checked, 0 disagreements).  Every one is a
+  discriminator: the truncating reading answers the opposite label on the
+  first three.
 - ~~`benchmarks/run-cap-sweep.sh`: nothing to change; it already reports the
   new `model evals out` row as a plain count, the way it reports FM blow-ups.~~
   **Wrong on both counts, and both are fixed.**  (1) The compiler printed

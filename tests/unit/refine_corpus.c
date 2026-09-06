@@ -19,15 +19,23 @@
  *
  * which gives the check its whole shape:
  *
- *   | :status | RT_VALID              | anything else |
- *   |---------|-----------------------|---------------|
- *   | unsat   | correct (a proof)     | acceptable    |
- *   | sat     | SOUNDNESS FAILURE     | correct       |
+ *   | :status | RT_VALID              | RT_INVALID (a model)  | RT_UNKNOWN |
+ *   |---------|-----------------------|-----------------------|------------|
+ *   | unsat   | correct (a proof)     | MODEL FAILURE         | acceptable |
+ *   | sat     | SOUNDNESS FAILURE     | correct               | correct    |
  *
  * A `sat` benchmark answered VALID is the one-directional invariant broken:
  * the chain claimed a contradiction in a set of constraints that has a model.
  * That is the property this harness exists to defend, and it needs no oracle
  * to check -- only the label.
+ *
+ * An `unsat` benchmark answered with a MODEL is the other direction, and it
+ * is not incompleteness: the model search evaluated every assertion true
+ * under a concrete assignment, so the witness says the reader or the
+ * evaluator gives some term a meaning the script did not write (the case
+ * that found it: SMT-LIB's Euclidean `mod` read as C's `%`).  Counted with
+ * the soundness failures.  A plain RT_UNKNOWN on an `unsat` label stays
+ * "weak" -- that one really is incompleteness.
  *
  * `unknown` labels are recorded and never fail: they carry no claim.
  *
@@ -89,7 +97,14 @@ static RefineVerdict run_chain(RefineVC *vc, Arena *a) {
         RefineDecision d = CHAIN[i](vc, a);
         if (d.verdict != RT_UNKNOWN) return d.verdict;
     }
-    return RT_UNKNOWN;
+    /* What `tur smt` does after the chain comes back Unknown, so this harness
+     * replays the same solver and not a subset of it: the bounded model
+     * search, the one thing allowed to answer RT_INVALID -- with a witness it
+     * EVALUATED.  Without this step the harness could never see a wrong model
+     * (SMT-LIB's Euclidean `mod` read as C's `%` produced one for
+     * `(< (mod x 3) 0)`, and every label here shrugged), so the MODEL row of
+     * the table above was unreachable. */
+    return refine_model_search(vc, a) ? RT_INVALID : RT_UNKNOWN;
 }
 
 static int g_soundness_failures = 0;
@@ -210,6 +225,20 @@ static int decide_one(const char *path) {
         } else if (v == RT_VALID) {
             printf("  ok      %s (unsat, proved)\n", path);
             outcome = OUT_PROVED;
+        } else if (v == RT_INVALID) {
+            /* The OTHER direction.  RT_INVALID is not an `unknown` arrived at
+             * differently: only the bounded model search answers it, and only
+             * after EVALUATING every assertion true under a concrete
+             * assignment.  A witness for an unsatisfiable set means the reader
+             * translated something to a term with a different meaning, or the
+             * evaluator computes one -- which is exactly how SMT-LIB's
+             * Euclidean `mod` read as C's `%` surfaced (a model for
+             * `(< (mod x 3) 0)`).  A label check that shrugged at it would
+             * have let that ship. */
+            printf("  MODEL!  %s -- labelled unsat, chain produced a model "
+                   "(a witness for a contradictory set: the reader or the "
+                   "evaluator gives a term the wrong meaning)\n", path);
+            outcome = OUT_SOUNDNESS;
         } else {
             printf("  weak    %s (unsat, not proved -- incomplete, not unsound)\n",
                    path);
@@ -368,7 +397,8 @@ int main(int argc, char **argv) {
 
     if (g_soundness_failures) {
         printf("\nrefine_corpus: FAIL -- the chain proved a satisfiable "
-               "benchmark contradictory\n");
+               "benchmark contradictory, produced a model for a contradictory "
+               "one, or crashed (see the SOUND! / MODEL! / ERROR lines)\n");
         return 1;
     }
     /* A corpus that decides nothing is not a regression net.  Guard against

@@ -28,6 +28,68 @@ static void emit_nary(const RefineVC *vc, const VCTerm *t, const char *op, Buf *
     buf_putc(out, ')');
 }
 
+/* The VC's VC_DIV / VC_MOD on ints are C's TRUNCATING `/` and `%` (quotient
+ * toward zero, remainder with the dividend's sign) -- that is what the
+ * compiler's `/` and `mod` lower to, what vc_mk folds, what the model search
+ * evaluates, and what vc_add_divmod_axioms describes.  SMT-LIB's `div` / `mod`
+ * are EUCLIDEAN (`0 <= mod < |n|`), so emitting the node as a bare `(div a k)`
+ * mis-stated every negative-dividend case to an external solver.  Spell the
+ * truncating value in Euclidean terms instead, which for non-negative
+ * operands coincide:
+ *
+ *     tdiv(a, b) = sgn(a) * sgn(b) * (|a| div |b|)
+ *     tmod(a, b) = sgn(a) * (|a| mod |b|)     -- Euclidean mod ignores sgn(b)
+ *
+ * A literal divisor (the only kind the compiler emits; the reader refuses
+ * any other) folds the sgn(b) branch away. */
+static void emit_term(const RefineVC *vc, const VCTerm *t, Buf *out);
+
+static void emit_neg_of(const RefineVC *vc, const VCTerm *t, Buf *out) {
+    buf_puts(out, "(- "); emit_term(vc, t, out); buf_putc(out, ')');
+}
+
+static void emit_trunc_divmod(const RefineVC *vc, const VCTerm *t, Buf *out) {
+    const VCTerm *a = t->kids[0], *b = t->kids[1];
+    const char *op = t->op == VC_DIV ? "div" : "mod";
+    bool lit = b->op == VC_CONST_INT && b->as.i != INT64_MIN;
+    int64_t K = lit ? (b->as.i < 0 ? -b->as.i : b->as.i) : 0;
+    /* (ite (>= a 0) <a nonneg> <a negative>) */
+    buf_puts(out, "(ite (>= "); emit_term(vc, a, out); buf_puts(out, " 0) ");
+    if (t->op == VC_MOD) {
+        /* a >= 0: (mod a |b|);  a < 0: (- (mod (- a) |b|)) */
+        buf_printf(out, "(%s ", op); emit_term(vc, a, out); buf_putc(out, ' ');
+        if (lit) buf_printf(out, "%lld", (long long)K); else emit_term(vc, b, out);
+        buf_puts(out, ") (- (");
+        buf_printf(out, "%s ", op); emit_neg_of(vc, a, out); buf_putc(out, ' ');
+        if (lit) buf_printf(out, "%lld", (long long)K); else emit_term(vc, b, out);
+        buf_puts(out, ")))");
+        return;
+    }
+    if (lit) {
+        /* b > 0:  a >= 0: (div a K);      a < 0: (- (div (- a) K))
+         * b < 0:  a >= 0: (- (div a K));  a < 0: (div (- a) K) */
+        bool bneg = b->as.i < 0;
+        if (bneg) buf_puts(out, "(- ");
+        buf_puts(out, "(div "); emit_term(vc, a, out); buf_printf(out, " %lld)", (long long)K);
+        if (bneg) buf_putc(out, ')');
+        buf_putc(out, ' ');
+        if (!bneg) buf_puts(out, "(- ");
+        buf_puts(out, "(div "); emit_neg_of(vc, a, out); buf_printf(out, " %lld)", (long long)K);
+        if (!bneg) buf_putc(out, ')');
+        buf_putc(out, ')');
+        return;
+    }
+    /* General divisor: branch on its sign too. */
+    buf_puts(out, "(ite (>= "); emit_term(vc, b, out); buf_puts(out, " 0) (div ");
+    emit_term(vc, a, out); buf_putc(out, ' '); emit_term(vc, b, out);
+    buf_puts(out, ") (- (div "); emit_term(vc, a, out); buf_putc(out, ' ');
+    emit_neg_of(vc, b, out); buf_puts(out, "))) ");
+    buf_puts(out, "(ite (>= "); emit_term(vc, b, out); buf_puts(out, " 0) (- (div ");
+    emit_neg_of(vc, a, out); buf_putc(out, ' '); emit_term(vc, b, out);
+    buf_puts(out, ")) (div "); emit_neg_of(vc, a, out); buf_putc(out, ' ');
+    emit_neg_of(vc, b, out); buf_puts(out, ")))");
+}
+
 static void emit_term(const RefineVC *vc, const VCTerm *t, Buf *out) {
     if (!t) { buf_puts(out, "true"); return; }
     switch (t->op) {
@@ -56,8 +118,14 @@ static void emit_term(const RefineVC *vc, const VCTerm *t, Buf *out) {
         case VC_ADD: emit_nary(vc, t, "+", out); return;
         case VC_SUB: emit_nary(vc, t, "-", out); return;
         case VC_MUL: emit_nary(vc, t, "*", out); return;
-        case VC_DIV: emit_nary(vc, t, vc->has_real ? "/" : "div", out); return;
-        case VC_MOD: emit_nary(vc, t, "mod", out); return;
+        case VC_DIV:
+            /* Real division is exact and needs no adjustment; the sort of
+             * the TERM decides, not the VC's has_real flag -- an int-sorted
+             * division inside a mixed VC used to be emitted as `/`, which is
+             * a different function again. */
+            if (t->sort == VS_REAL) { emit_nary(vc, t, "/", out); return; }
+            emit_trunc_divmod(vc, t, out); return;
+        case VC_MOD: emit_trunc_divmod(vc, t, out); return;
         case VC_NEG: emit_nary(vc, t, "-", out); return;
         case VC_EQ:  emit_nary(vc, t, "=", out); return;
         case VC_LT:  emit_nary(vc, t, "<", out); return;
@@ -250,6 +318,11 @@ static bool sx_head_is(const Sx *s, const char *name) {
 
 typedef struct { const char *name; VCTerm *val; } LetBind;
 
+/* One lifted arithmetic ite: the (c, a, b) it stands for, the fresh variable
+ * it became, and its definitional hypothesis (see tr_lift_ite; `d2` is a
+ * spare slot, NULL today). */
+typedef struct { VCTerm *c, *a, *b, *v, *d1, *d2; } IteMemo;
+
 typedef struct {
     RefineVC  *vc;
     Arena     *arena;
@@ -257,6 +330,8 @@ typedef struct {
     LetBind   *lets;                 /* arena-allocated: too big for the stack */
     uint32_t   n_lets, cap_lets;
     uint32_t   n_ite;                /* serial for fresh ite-lifting variables */
+    IteMemo   *ite_memo;             /* every lift so far, by term identity */
+    uint32_t   n_ite_memo, cap_ite_memo;
     bool       reals_only;           /* pure-Real logic: numerals denote reals */
 } Tr;
 
@@ -365,6 +440,216 @@ static VCTerm *tr_fold_real_div(Tr *t, const Sx *s, uint32_t depth) {
         VCTerm *nx = tr_as_real(t, tr_term(t, s->kids[i], depth + 1));
         if (!nx) return NULL;
         acc = vc_mk2(t->vc, VC_DIV, acc, nx);
+    }
+    return acc;
+}
+
+/* An ARITHMETIC `(ite c a b)` lifted to a fresh variable with a definition
+ * asserted at the top level:
+ *     (ite c a b)  ~>  t,  with  (c => t = a)  and  ((not c) => t = b)
+ *
+ * That is equisatisfiable, not merely sound-in-one-direction, and the
+ * polarity of the occurrence does not matter: the two implications DEFINE `t`
+ * uniquely given c, a and b, so every model of the original extends to exactly
+ * one model of the rewritten form and every model of the rewritten form
+ * restricts back.  `t` is fresh per occurrence, which is what the freshness
+ * counter is for -- reusing a name across two distinct ite terms would
+ * silently equate them.
+ *
+ * Adding the definitions as hypotheses is safe here because the goal is
+ * `false`: the whole benchmark is one conjunction, so a definitional conjunct
+ * lands in the same place whether the ite sat under a negation, a
+ * disjunction, or nothing at all.  `a` and `b` must already agree on sort.
+ *
+ * IDENTICAL ites share one variable.  The freshness rule above is about two
+ * DIFFERENT ite terms; two occurrences of the same (c, a, b) -- the same
+ * hash-consed kids -- denote the same value, and giving each its own variable
+ * plus its own pair of implications is not merely wasteful, it is what made a
+ * VC replayed from `--dump-refine=json` undecidable: the serializer spells a
+ * truncating `mod` as an ite and every axiom mentions it, so six textual
+ * occurrences minted six variables and twelve disjunctive hypotheses, past
+ * the cube cap.  The memo is keyed on term identity, which the hash-consing
+ * makes exact.
+ *
+ * A memo hit re-adds the definition.  vc_add_hyp dedups by pointer, so
+ * while they are present that is a no-op; after a session `pop` truncated
+ * them away it puts them back in the CURRENT scope, which is what keeps the
+ * shared variable defined wherever it is used -- a reused variable with its
+ * definition popped would be unconstrained, and an unconstrained variable is
+ * how a contradictory set grows a model. */
+static VCTerm *tr_lift_ite(Tr *t, VCTerm *c, VCTerm *a, VCTerm *b) {
+    for (uint32_t i = 0; i < t->n_ite_memo; i++) {
+        const IteMemo *m = &t->ite_memo[i];
+        if (m->c == c && m->a == a && m->b == b) {
+            vc_add_hyp(t->vc, m->d1);
+            if (m->d2) vc_add_hyp(t->vc, m->d2);
+            return m->v;
+        }
+    }
+    char name[32];
+    snprintf(name, sizeof(name), "#ite!%u", t->n_ite++);
+    uint32_t idx = vc_declare_var(t->vc, arena_strdup(t->arena, name,
+                                                      strlen(name)), a->sort);
+    VCTerm *fresh = vc_var_ref(t->vc, idx);
+    /* One disjunction, not two implications.  `(c => t = a) and (not c =>
+     * t = b)` is the same proposition as `(c and t = a) or (not c and t =
+     * b)`, but the naive DNF the stages expand sees FOUR cube combinations
+     * in the first (two of them contradictory, c with not c) and TWO in the
+     * second.  With a div/mod benchmark lifting several ites, the difference
+     * is a proof inside the cube cap versus an overflow to unknown:
+     * `qf_lia_div_mod_identity_unsat` sat at exactly 64 of 64 cubes on the
+     * implication form. */
+    VCTerm *d1 = vc_mk2(t->vc, VC_OR,
+                        vc_mk2(t->vc, VC_AND, c, vc_mk2(t->vc, VC_EQ, fresh, a)),
+                        vc_mk2(t->vc, VC_AND, vc_not(t->vc, c),
+                               vc_mk2(t->vc, VC_EQ, fresh, b)));
+    VCTerm *d2 = NULL;
+    vc_add_hyp(t->vc, d1);
+    if (t->n_ite_memo == t->cap_ite_memo) {
+        uint32_t nc = t->cap_ite_memo ? t->cap_ite_memo * 2 : 16;
+        IteMemo *nm = (IteMemo *)arena_alloc(t->arena, nc * sizeof(IteMemo));
+        if (t->n_ite_memo) memcpy(nm, t->ite_memo, t->n_ite_memo * sizeof(IteMemo));
+        t->ite_memo = nm; t->cap_ite_memo = nc;
+    }
+    t->ite_memo[t->n_ite_memo++] = (IteMemo){ c, a, b, fresh, d1, d2 };
+    return fresh;
+}
+
+/* The serializer's own spelling of the VC's TRUNCATING pair, read back as the
+ * primitive it came from.  refine_smtlib_emit writes `VC_DIV(a, k)` /
+ * `VC_MOD(a, k)` -- C's `/` and `%` -- in Euclidean terms:
+ *
+ *     k > 0:  (ite (>= a 0) (div a k) (- (div (- a) k)))       -> VC_DIV(a, k)
+ *     k < 0:  (ite (>= a 0) (- (div a |k|)) (div (- a) |k|))   -> VC_DIV(a, k)
+ *     any k:  (ite (>= a 0) (mod a |k|) (- (mod (- a) |k|)))   -> VC_MOD(a, |k|)
+ *
+ * Each of those IS the truncating value (the Euclidean and truncating
+ * operations agree on non-negative operands, and the sign is put back
+ * outside), so translating it through tr_euclid_divmod would be exact too --
+ * three lifted ites and two axiom sets per occurrence, where the compiler's
+ * VC had one node.  A VC replayed from `--dump-refine=json` then proved
+ * nothing its author proved.  Recognizing the idiom restores the node and
+ * its axioms, so a dumped VC reads back as the VC that was dumped.
+ *
+ * Purely a peephole: the shape is matched on the S-expression, `a` is
+ * translated once and the other two occurrences must translate to the SAME
+ * interned term (hash-consing makes structural equality pointer equality),
+ * and anything that does not match falls through to the general `ite`.
+ * `(mod a k)` with k < 0 equals `(mod a |k|)` under truncation, which is why
+ * the mod form carries |k| and maps to the positive divisor. */
+static const Sx *sx_unary_minus_arg(const Sx *s) {
+    return (s && s->kind == SX_LIST && s->n == 2 && sx_head_is(s, "-")) ? s->kids[1] : NULL;
+}
+static bool sx_divmod_app(const Sx *s, const char **op, const Sx **arg, const char **k) {
+    if (!s || s->kind != SX_LIST || s->n != 3 || s->kids[0]->kind != SX_ATOM) return false;
+    if (strcmp(s->kids[0]->atom, "div") != 0 && strcmp(s->kids[0]->atom, "mod") != 0) return false;
+    if (s->kids[2]->kind != SX_ATOM) return false;
+    *op = s->kids[0]->atom; *arg = s->kids[1]; *k = s->kids[2]->atom;
+    return true;
+}
+static VCTerm *tr_trunc_idiom(Tr *t, const Sx *s, uint32_t depth) {
+    const Sx *c = s->kids[1], *p = s->kids[2], *q = s->kids[3];
+    if (!c || c->kind != SX_LIST || c->n != 3 || !sx_head_is(c, ">=") ||
+        !sx_is(c->kids[2], "0"))
+        return NULL;
+    const Sx *A = c->kids[1];
+    const char *op1, *op2, *k1, *k2;
+    const Sx *a1, *a2, *inner;
+    bool neg_div = false;
+    if (sx_divmod_app(p, &op1, &a1, &k1)) {
+        /* (ite (>= a 0) (OP a k) (- (OP (- a) k))) */
+        inner = sx_unary_minus_arg(q);
+        if (!inner || !sx_divmod_app(inner, &op2, &a2, &k2)) return NULL;
+    } else {
+        /* (ite (>= a 0) (- (div a k)) (div (- a) k)) */
+        inner = sx_unary_minus_arg(p);
+        if (!inner || !sx_divmod_app(inner, &op1, &a1, &k1) ||
+            strcmp(op1, "div") != 0 || !sx_divmod_app(q, &op2, &a2, &k2))
+            return NULL;
+        neg_div = true;
+    }
+    if (strcmp(op1, op2) != 0 || strcmp(k1, k2) != 0) return NULL;
+    const Sx *a2in = sx_unary_minus_arg(a2);
+    if (!a2in) return NULL;
+    int64_t K;
+    if (!tr_numeral(k1, &K) || K <= 0) return NULL;
+    VCTerm *tA = tr_term(t, A, depth + 1);
+    if (!tA || t->err) return NULL;
+    if (tA->sort != VS_INT) return NULL;
+    VCTerm *t1 = tr_term(t, a1, depth + 1);
+    if (!t1 || t->err) return NULL;
+    VCTerm *t2 = tr_term(t, a2in, depth + 1);
+    if (!t2 || t->err) return NULL;
+    if (t1 != tA || t2 != tA) return NULL;
+    VCTerm *k = vc_int(t->vc, neg_div ? -K : K);
+    VCTerm *r = vc_mk2(t->vc, strcmp(op1, "div") == 0 ? VC_DIV : VC_MOD, tA, k);
+    vc_add_divmod_axioms(t->vc, tA, k);
+    return r;
+}
+
+/* SMT-LIB `div` / `mod` are EUCLIDEAN:  a = k*q + r  with  0 <= r < |k|.
+ * The VC's VC_DIV / VC_MOD are C's TRUNCATING pair (quotient toward zero,
+ * remainder with the dividend's sign) -- what vc_mk folds, what the model
+ * search evaluates, and what vc_add_divmod_axioms describes.  Translating
+ * `div` to VC_DIV read every negative dividend wrong: `(< (mod x 3) 0)` is
+ * unsatisfiable in SMT-LIB and this reader answered `sat` with x = -2.
+ *
+ * The two agree for a non-negative dividend and differ by exactly one step
+ * otherwise, so the Euclidean value is BUILT from the truncating pair:
+ *
+ *     r_t = VC_MOD(a, k),  q_t = VC_DIV(a, k)
+ *     mod_E = ite(r_t < 0,  r_t + |k|,     r_t)
+ *     div_E = ite(r_t < 0,  q_t - sgn(k),  q_t)
+ *
+ * with the truncating axioms asserted for (a, k) so the stages can reason
+ * about r_t and q_t, and the ite lifted through tr_lift_ite.  A literal
+ * dividend folds outright.
+ *
+ * A NON-literal divisor is refused whole ("outside the accepted fragment"):
+ * the VC would carry a nonlinear VC_DIV the stages treat as opaque while the
+ * model search evaluated it with C semantics -- the same mismatch, on a term
+ * no axiom describes.  Division by zero is refused too: SMT-LIB leaves it
+ * uninterpreted, so no answer this reader could give is one the script
+ * asked for. */
+static VCTerm *tr_euclid_divmod(Tr *t, VCOp op, VCTerm *a, VCTerm *k) {
+    RefineVC *vc = t->vc;
+    if (a->sort != VS_INT || k->sort != VS_INT) {
+        t->err = "div/mod on a non-integer operand"; return NULL;
+    }
+    if (k->op != VC_CONST_INT) {
+        t->err = "div/mod by a non-literal divisor is outside the accepted fragment";
+        return NULL;
+    }
+    int64_t kv = k->as.i;
+    if (kv == 0) { t->err = "div/mod by zero is outside the accepted fragment"; return NULL; }
+    if (kv == INT64_MIN) { t->err = "div/mod by INT64_MIN"; return NULL; }
+    int64_t K = kv < 0 ? -kv : kv;
+    if (a->op == VC_CONST_INT) {
+        int64_t av = a->as.i;
+        if (av == INT64_MIN && kv == -1) { t->err = "div/mod overflow"; return NULL; }
+        int64_t q = av / kv, r = av % kv;
+        if (r < 0) { r += K; q -= (kv > 0 ? 1 : -1); }
+        return vc_int(vc, op == VC_DIV ? q : r);
+    }
+    VCTerm *qt = vc_mk2(vc, VC_DIV, a, k);
+    VCTerm *rt = vc_mk2(vc, VC_MOD, a, k);
+    vc_add_divmod_axioms(vc, a, k);
+    VCTerm *neg = vc_mk2(vc, VC_LT, rt, vc_int(vc, 0));
+    if (op == VC_MOD)
+        return tr_lift_ite(t, neg, vc_mk2(vc, VC_ADD, rt, vc_int(vc, K)), rt);
+    return tr_lift_ite(t, neg, vc_mk2(vc, VC_SUB, qt, vc_int(vc, kv > 0 ? 1 : -1)), qt);
+}
+
+/* Left-associative fold of `div` / `mod` through tr_euclid_divmod. */
+static VCTerm *tr_fold_divmod(Tr *t, VCOp op, const Sx *s, uint32_t depth) {
+    if (s->n < 3) { t->err = "div/mod needs two arguments"; return NULL; }
+    VCTerm *acc = tr_term(t, s->kids[1], depth + 1);
+    if (!acc) return NULL;
+    for (uint32_t i = 2; i < s->n; i++) {
+        VCTerm *nx = tr_term(t, s->kids[i], depth + 1);
+        if (!nx) return NULL;
+        acc = tr_euclid_divmod(t, op, acc, nx);
+        if (!acc) return NULL;
     }
     return acc;
 }
@@ -497,22 +782,14 @@ static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth) {
          *     (ite c p q)  ==  (c and p) or ((not c) and q)
          *
          * An ARITHMETIC ite is lifted to a fresh variable with a definition
-         * asserted at the top level:
-         *     (ite c a b)  ~>  t,  with  (c => t = a)  and  ((not c) => t = b)
-         *
-         * That is equisatisfiable, not merely sound-in-one-direction, and the
-         * polarity of the occurrence does not matter: the two implications
-         * DEFINE `t` uniquely given c, a and b, so every model of the original
-         * extends to exactly one model of the rewritten form and every model of
-         * the rewritten form restricts back. `t` is fresh per occurrence, which
-         * is what the freshness counter is for -- reusing a name across two
-         * distinct ite terms would silently equate them.
-         *
-         * Adding the definitions as hypotheses is safe here because the goal is
-         * `false`: the whole benchmark is one conjunction, so a definitional
-         * conjunct lands in the same place whether the ite sat under a
-         * negation, a disjunction, or nothing at all. */
+         * asserted at the top level -- tr_lift_ite. */
         if (s->n != 4) { t->err = "ite needs three arguments"; return NULL; }
+        /* The serializer's truncating div/mod idiom reads back as the node
+         * it was written from (tr_trunc_idiom); anything else lifts. */
+        {
+            VCTerm *idiom = tr_trunc_idiom(t, s, depth);
+            if (idiom || t->err) return idiom;
+        }
         VCTerm *c = tr_term(t, s->kids[1], depth + 1);
         VCTerm *a = tr_term(t, s->kids[2], depth + 1);
         VCTerm *b = tr_term(t, s->kids[3], depth + 1);
@@ -533,17 +810,7 @@ static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth) {
             else if (b->sort == VS_REAL) a = tr_as_real(t, a);
         }
         if (a->sort != b->sort) { t->err = "ite branches disagree on sort"; return NULL; }
-
-        char name[32];
-        snprintf(name, sizeof(name), "#ite!%u", t->n_ite++);
-        uint32_t idx = vc_declare_var(t->vc, arena_strdup(t->arena, name,
-                                                          strlen(name)), a->sort);
-        VCTerm *fresh = vc_var_ref(t->vc, idx);
-        vc_add_hyp(t->vc, vc_mk2(t->vc, VC_IMPLIES, c,
-                                 vc_mk2(t->vc, VC_EQ, fresh, a)));
-        vc_add_hyp(t->vc, vc_mk2(t->vc, VC_IMPLIES, vc_not(t->vc, c),
-                                 vc_mk2(t->vc, VC_EQ, fresh, b)));
-        return fresh;
+        return tr_lift_ite(t, c, a, b);
     }
     if (strcmp(op, "distinct") == 0) {
         if (s->n < 3) { t->err = "distinct needs two arguments"; return NULL; }
@@ -574,9 +841,9 @@ static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth) {
     }
     if (strcmp(op, "+") == 0) return tr_fold(t, VC_ADD, s, depth);
     if (strcmp(op, "*") == 0) return tr_fold(t, VC_MUL, s, depth);
-    if (strcmp(op, "div") == 0) return tr_fold(t, VC_DIV, s, depth);
+    if (strcmp(op, "div") == 0) return tr_fold_divmod(t, VC_DIV, s, depth);
     if (strcmp(op, "/")   == 0) return tr_fold_real_div(t, s, depth);
-    if (strcmp(op, "mod") == 0) return tr_fold(t, VC_MOD, s, depth);
+    if (strcmp(op, "mod") == 0) return tr_fold_divmod(t, VC_MOD, s, depth);
     if (strcmp(op, "-") == 0) {
         if (s->n == 2) {
             VCTerm *a = tr_term(t, s->kids[1], depth + 1);

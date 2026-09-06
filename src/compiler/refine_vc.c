@@ -331,6 +331,35 @@ VCTerm *vc_mk2(RefineVC *vc, VCOp op, VCTerm *a, VCTerm *b) {
 }
 VCTerm *vc_not(RefineVC *vc, VCTerm *a) { return vc_mk1(vc, VC_NOT, a); }
 
+void vc_add_divmod_axioms(RefineVC *vc, VCTerm *a, VCTerm *k) {
+    if (!vc || !a || !k || k->op != VC_CONST_INT || k->as.i == 0 || a->sort != VS_INT) return;
+    if (a->op == VC_CONST_INT || a->op == VC_CONST_REAL) return;  /* folded whole */
+    int64_t kv = k->as.i;
+    if (kv == INT64_MIN) return;
+    int64_t K = kv < 0 ? -kv : kv;
+    VCTerm *q    = vc_mk2(vc, VC_DIV, a, k);
+    VCTerm *r    = vc_mk2(vc, VC_MOD, a, k);
+    VCTerm *zero = vc_int(vc, 0);
+    VCTerm *rel  = vc_mk2(vc, VC_EQ, a, vc_mk2(vc, VC_ADD, vc_mk2(vc, VC_MUL, k, q), r));
+    /* Already axiomatized (the same (a, k) pair encoded twice)?  vc_add_hyp
+     * would dedup the terms anyway; the check keeps the split budget honest. */
+    for (uint32_t i = 0; i < vc->n_hyps; i++) if (vc->hyps[i] == rel) return;
+    vc_add_hyp(vc, rel);
+    VCTerm *km1 = vc_int(vc, K - 1), *nkm1 = vc_int(vc, -(K - 1));
+    if (vc->n_divmod_splits < VC_MAX_DIVMOD_SPLITS) {
+        vc->n_divmod_splits++;
+        VCTerm *pos[3] = { vc_mk2(vc, VC_LE, zero, a), vc_mk2(vc, VC_LE, zero, r),
+                           vc_mk2(vc, VC_LE, r, km1) };
+        VCTerm *neg[3] = { vc_mk2(vc, VC_LT, a, zero), vc_mk2(vc, VC_LE, nkm1, r),
+                           vc_mk2(vc, VC_LE, r, zero) };
+        vc_add_hyp(vc, vc_mk2(vc, VC_OR, vc_mk(vc, VC_AND, pos, 3),
+                              vc_mk(vc, VC_AND, neg, 3)));
+    } else {
+        vc_add_hyp(vc, vc_mk2(vc, VC_LE, nkm1, r));
+        vc_add_hyp(vc, vc_mk2(vc, VC_LE, r, km1));
+    }
+}
+
 void vc_add_hyp(RefineVC *vc, VCTerm *t) {
     if (!t || t->op == VC_TRUE) return;
     for (uint32_t i = 0; i < vc->n_hyps; i++) if (vc->hyps[i] == t) return;

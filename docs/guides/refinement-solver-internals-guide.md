@@ -606,9 +606,16 @@ than any number above.
   still warned). Division and remainder by an integer *literal* are not
   nonlinear and are no longer opaque either: the encoder asserts
   `a = k*q + r` plus the truncating sign/bound clause for `q = (/ a k)`,
-  `r = (mod a k)` (`refine_collect.c`, `enc_divmod_axioms`), so S2 reasons
-  about them through the axioms while still treating the terms as shared
-  variables.
+  `r = (mod a k)` (`vc_add_divmod_axioms`, shared by the encoder and the
+  SMT-LIB reader), so S2 reasons about them through the axioms while still
+  treating the terms as shared variables. The VC's `VC_DIV`/`VC_MOD` are C's
+  truncating pair throughout -- folding, model evaluation, axioms -- while
+  SMT-LIB's `div`/`mod` are Euclidean (`0 <= mod < |n|`), so the SMT-LIB seam
+  translates at both ends: `tur smt` builds the Euclidean value out of the
+  truncating pair plus an `ite` (`tr_euclid_divmod`), and the serializer
+  spells the truncating value in Euclidean terms
+  (`(ite (>= a 0) (div a k) (- (div (- a) k)))`). A non-literal divisor or a
+  zero divisor is outside `tur smt`'s fragment and refused whole.
 - **Integers are non-convex and S3 does not case-split.** Deciding a mixed
   integer cube in general needs splitting on disjunctions of equalities; S3
   reaches a fixpoint and answers `RT_UNKNOWN` instead. S2's own integer

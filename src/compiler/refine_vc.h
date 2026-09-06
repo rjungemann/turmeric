@@ -138,6 +138,27 @@ VCTerm *vc_not(RefineVC *vc, VCTerm *a);
 void vc_add_hyp(RefineVC *vc, VCTerm *t);
 void vc_set_goal(RefineVC *vc, VCTerm *t);
 
+/* Assert what the TRUNCATING integer division pair `q = VC_DIV(a, k)`,
+ * `r = VC_MOD(a, k)` means, for a non-constant int `a` and a nonzero int
+ * literal `k` -- C's `/` and `%`, which is what the compiler's `/` and `mod`
+ * lower to and what the model search evaluates:
+ *
+ *     a = k*q + r
+ *     (0 <= a  and  0 <= r <= |k|-1)  or  (a < 0  and  -(|k|-1) <= r <= 0)
+ *
+ * The sign clause is a disjunction, so each axiomatized pair doubles the cube
+ * count; past VC_MAX_DIVMOD_SPLITS pairs in one VC the weaker conjunctive
+ * bound `-(|k|-1) <= r <= |k|-1` is asserted instead (still sound), so a VC
+ * that proved without knowing anything about its `mod` terms cannot be pushed
+ * over REFINE_MAX_CUBES by learning about them.  Idempotent per (a, k).
+ *
+ * Shared by the encoder (refine_collect.c, for the language's `/` and `mod`)
+ * and the SMT-LIB reader (refine_smtlib.c), which builds SMT-LIB's Euclidean
+ * `div`/`mod` OUT OF the truncating pair plus these axioms.  A no-op when the
+ * preconditions fail. */
+#define VC_MAX_DIVMOD_SPLITS 4
+void vc_add_divmod_axioms(RefineVC *vc, VCTerm *a, VCTerm *k);
+
 /* Pretty-print a term into `buf` (source-ish syntax; used by diagnostics and
  * the SMT-LIB serializer's origin notes).  Always NUL-terminates. */
 void vc_term_print(const RefineVC *vc, const VCTerm *t, char *buf, size_t cap);
