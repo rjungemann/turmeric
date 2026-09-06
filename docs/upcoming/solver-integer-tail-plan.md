@@ -253,24 +253,64 @@ reached by per-constraint rounding).
   refuse `div`/`mod` in the reader as out-of-fragment until then.  Small,
   and worth doing before anyone adds a `QF_LIA` benchmark with `mod`.
 
-## 5. Phase 4 -- make the instruments able to see this class (open)
+## 5. Phase 4 -- make the instruments able to see this class
+
+**Fuzzer half LANDED 2026-09-05.**  The corpus half stays open behind
+Phase 3(b), as written below.
 
 The blind spot in 1.3 is the actionable finding for the measurement side,
 and it is cheap:
 
-- `tests/refine-fuzz-src.py`: generate `(/ e k)`, `(mod e k)`, `(* e e)`,
-  and 3-5 parameters, at low weight.  Every shape in 1.3 then has a
-  population, and `run-cap-sweep.sh`'s `model_vars` / `model evals` rows
-  start meaning something.  The differential property (elision never turns
-  a caught program into a silent one) is exactly the right check for the
-  truncation axioms: a wrong sign in 2.2 would show up as a miscompile, not
-  as a corpus label.
+- ~~`tests/refine-fuzz-src.py`: generate `(/ e k)`, `(mod e k)`, `(* e e)`,
+  and 3-5 parameters, at low weight.~~  **Done.**  A `shape_integer`
+  (int mode, ~5% of programs) generates the 1.3 probes as families rather
+  than instances: parity through `mod` with a refined-parameter residue
+  and a body that keeps or moves it; `/` and `mod` by a literal in
+  `{-4..-2, 2..4}` with the dividend's sign bounded by the parameter or
+  left free, and a claim that either holds under C truncation or fails on
+  one side of zero (the SMT-LIB floor reading would make the `mod`
+  "remainder is non-negative" claim true; truncation makes it false for
+  every negative argument, and `main`'s literals are two-signed -- that
+  is the trap an encoder asserting the wrong semantics would fall into,
+  as a `BUG_soundness`); squares of a parameter or an offset of it,
+  including one rung the sign law cannot decide (`x*x - x >= 0`), kept
+  deliberately as the abstracted-nonlinear population; and 3-5 parameter
+  sums with every parameter bounded by a `:pre` (a genuine multi-variable
+  proof) or unbounded (false, so the model search has to find the witness
+  across all of them).  `expr()` also reaches `mod` and a square at low
+  weight, so they show up inside every other shape's arithmetic.
+
+  Validity: 60 of 60 `shape_integer` programs compile, 43 proven / 55
+  refuted / 8 unknown -- all 8 the deliberately abstract square rungs.
+  Differential runs, 0 bugs in every class: n=200 seed=1 mode=both (5
+  suspicious, unchanged from the pre-widening baseline on the same seed;
+  183 proven / 203 refuted against 175 / 188), and n=150 seed=7 mode=int
+  (9 suspicious, two of them the wide rung's false refinement refuted with
+  a 4- and a 5-variable witness while the program's own arguments happened
+  to pass -- the report-only class doing exactly what it is for).  The
+  ctest smoke size (`tests/run-refine-fuzz-src.sh`) passes.
+
 - `tests/corpus/smtlib/`: a handful of hand-written `QF_LIA` benchmarks with
   `div`/`mod` and parity, labelled by both reference solvers per the corpus
   README -- **after** Phase 3(b), or the labels will disagree with the
-  reader's semantics.
-- `benchmarks/run-cap-sweep.sh`: nothing to change; it already reports the
-  new `model evals out` row as a plain count, the way it reports FM blow-ups.
+  reader's semantics.  **Still open.**
+- ~~`benchmarks/run-cap-sweep.sh`: nothing to change; it already reports the
+  new `model evals out` row as a plain count, the way it reports FM blow-ups.~~
+  **Wrong on both counts, and both are fixed.**  (1) The compiler printed
+  the `model evals out` row but the sweep's parser dropped the line; it
+  now reads it into a `model_evals (search budget)` row, counted as a cap
+  hit since a budget decline leaves the obligation unknown.  (2) The sweep
+  constructed the generator with mode `"both"`, which `Gen` does not take
+  -- its `ty` property reads anything but `"int"` as float -- so every
+  sweep before this one measured a FLOAT-ONLY fuzzer population.  That is
+  why the first regeneration after the widening moved nothing: `mod`, the
+  axioms and `shape_integer` are int-mode only.  The sweep now alternates
+  int/float per case exactly as the fuzzer's own driver does.  Regenerated
+  against this compiler, the fuzzer rows finally carry the class: peaks
+  `model_vars` 3 -> 5, `cubes` 8 -> 16, `cube_lits` 5 -> 12, `la_vars`
+  7 -> 9, `la_constr` 6 -> 11, `euf_terms` 23 -> 25; hits stay 0 on every
+  cap, `model_evals` included, so nothing here reopens SX4 or SX6.  The
+  corpus and fixture populations are byte-identical to the previous run.
 
 ## 6. Explicitly not doing
 

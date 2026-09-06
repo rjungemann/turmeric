@@ -73,6 +73,27 @@ where the shipped build reports zero:
 `--self-test` runs a cheaper check of the plumbing (exit-code capture, stdout
 capture, classification) against the pinned regression fixtures.
 
+What the generator can and cannot see (solver-integer-tail-plan, Phase 4)
+------------------------------------------------------------------------
+A differential fuzzer reports only on the shapes its population contains.
+Until 2026-09-05 this one emitted `+ - *` by a constant, `/` by a literal
+inside helper bodies, comparisons, and at most TWO parameters -- so the three
+swept populations (this generator, the corpus, the in-tree fixtures) were
+blind to `mod`, to squares, and to any counterexample search wider than three
+variables, and nine ordinary day-one probes found four undecided shapes none
+of them had ever exercised.  `shape_integer` (int mode) now generates exactly
+those: `(mod e k)` and `(/ e k)` with a literal divisor under the axioms the
+encoder asserts for C's truncating `/` and `%`, `(* e e)` under the square
+sign law, and 3-5 parameter functions whose refinements the bounded model
+search has to refute across every parameter.  `expr()` also reaches `mod` and
+a square at low weight, so they show up inside the other shapes' arithmetic.
+
+The differential property is exactly the right check for the axioms: a wrong
+sign in the `mod` remainder clause would not show up as a corpus label, it
+would PROVE a refinement the runtime violates -- a `BUG_soundness` here.
+That is why the shape's rungs include refinements that are false only for
+NEGATIVE dividends, and why `main`'s literal arguments range over both signs.
+
 Usage
 -----
     python3 tests/refine-fuzz-src.py [--n 300] [--seed 1] [--jobs 4]
@@ -272,6 +293,21 @@ class Gen:
             # gates identically, which is noise rather than signal.
             return "(/ %s %s)" % (self.expr(depth - 1, scope, pure_only),
                                   self.nonzero_lit())
+        if self.mode == "int" and r < 0.59:
+            # Phase 4: `mod` by a literal, so the encoder's div/mod axioms
+            # (enc_divmod_axioms) get a population inside ordinary arithmetic
+            # rather than only in shape_integer's hand-built rungs.  Int only:
+            # `mod` is not defined on floats.
+            return "(mod %s %s)" % (self.expr(depth - 1, scope, pure_only),
+                                    self.nonzero_lit())
+        if self.mode == "int" and r < 0.62:
+            # Phase 4: a SQUARE -- the same subexpression on both sides, which
+            # is what enc_nonlinear's structural-equality test recognizes.  The
+            # operand is generated ONCE and repeated textually; two independent
+            # draws would be an ordinary nonlinear product, which stays
+            # abstracted.
+            sq = self.expr(depth - 1, scope, pure_only)
+            return "(* %s %s)" % (sq, sq)
         pool = [h for h in self.helpers if h[3]] if pure_only else self.helpers
         if r < 0.95 and pool:
             name, _kind, arity, _pure = self.rng.choice(pool)
@@ -734,28 +770,174 @@ class Gen:
         )
         return (["p"], defs)
 
+    def shape_integer(self):
+        """Phase 4 of solver-integer-tail-plan: the integer tail's own shapes.
+
+        Each rung is one of the nine probes that plan's section 1.3 found the
+        solver could not decide before its Phase 1 -- `mod` and `/` by a
+        literal, a square, a function wide enough that the counterexample
+        search's old three-variable cap declined it -- generated as a family
+        rather than a fixed instance, so the axioms are exercised on every
+        divisor, sign and width the family reaches.
+
+        The rungs deliberately mix TRUE refinements (proven, so the check is
+        elided -- the elision is what the differential can then contradict)
+        with refinements that are false only on one side of zero.  A `mod`
+        remainder is non-negative for a non-negative dividend and non-positive
+        for a negative one (C truncation, which is what `mod` compiles to); a
+        refinement that claims `(>= r 0)` unconditionally is therefore false
+        exactly when `main` passes a negative literal, and `main`'s literals
+        range over both signs.  An encoder that asserted the SMT-LIB floor
+        semantics instead would prove such a refinement and elide the check
+        that catches it: BUG_soundness, the one class this harness exists for.
+
+        The wide rungs have 3-5 parameters.  With a `:pre` bounding every
+        parameter the goal is a genuine multi-variable LA proof (la_vars);
+        without one it is false and the bounded model search has to find the
+        witness across every parameter -- which is what the `model vars` /
+        `model evals` rows of the cap sweep report, and what nothing in any
+        swept population reached while the generator stopped at two.
+
+        Int mode only: `mod` is not defined on floats and the square law is
+        the only piece that would carry over."""
+        if self.mode != "int":
+            return self.shape_linear()
+        z = "0"
+        r = self.rng.random()
+        if r < 0.22:
+            # -- parity through mod.  Even in, even out (or provably odd).
+            k = self.rng.choice([2, 3, 4])
+            pre_res = self.rng.choice([0, 1])
+            body, want = self.rng.choice([
+                ("(+ p0 %d)" % k,           pre_res),            # residue kept
+                ("(* p0 %d)" % (k + 1),     pre_res),            # k+1 == 1 (mod k)
+                ("(+ p0 %d)" % (k * 2),     pre_res),
+                ("(+ p0 1)",                (pre_res + 1) % k),  # residue moved
+                ("(- p0 1)",                (pre_res - 1) % k),
+            ])
+            # `want` is the residue under the FLOOR reading.  Under C
+            # truncation a negative dividend's remainder is <= 0, so with
+            # pre-residue 0 (which admits negative multiples of k) the
+            # "residue moved" rungs are false for every negative argument --
+            # a real trap for an encoder that asserted floor semantics.
+            if self.rng.random() < 0.25:
+                # A wrong claim about the residue outright.
+                want = (want + 1) % k
+            pp = "(= (mod v %d) %d)" % (k, pre_res)
+            rp = "(= (mod r %d) %d)" % (k, want)
+            return (["p0"],
+                    "(defn target [p0 : #refine{ v : int | %s }] : #refine{ r : int | %s }\n  %s)"
+                    % (pp, rp, body))
+        if r < 0.44:
+            # -- `/` and `mod` by a literal, with the sign of the dividend
+            # either bounded by the parameter or left free.
+            k = self.rng.choice([-4, -3, -2, 2, 3, 4])
+            ak = abs(k)
+            op = self.rng.choice(["/", "mod"])
+            body = "(%s p0 %d)" % (op, k)
+            sign = self.rng.choice(["nonneg", "neg", "free"])
+            pp = {"nonneg": "(>= v %s)" % z, "neg": "(< v %s)" % z, "free": None}[sign]
+            # `holds`: true for every argument the entry check admits, under
+            # C truncation (quotient toward zero, remainder with the sign of
+            # the dividend, |r| <= |k|-1).  `breaks`: false for SOME admitted
+            # argument -- at zero, or on one side of it -- so `main`'s
+            # two-signed literals reach both a passing and an aborting run.
+            # The labels describe the intent; the harness does not consume
+            # them, it checks that discharge never disagrees with the runtime.
+            neg_p0 = "(- %s p0)" % z
+            if op == "/":
+                if k > 0:
+                    holds = {
+                        "nonneg": ["(>= r %s)" % z, "(<= r p0)",
+                                   "(and (>= r %s) (<= r p0))" % z],
+                        "neg":    ["(<= r %s)" % z, "(>= r p0)"],
+                        "free":   ["(or (>= r %s) (< p0 %s))" % (z, z)],
+                    }[sign]
+                else:
+                    holds = {
+                        "nonneg": ["(<= r %s)" % z, "(>= r %s)" % neg_p0],
+                        "neg":    ["(>= r %s)" % z, "(<= r %s)" % neg_p0],
+                        "free":   ["(or (<= r %s) (< p0 %s))" % (z, z)],
+                    }[sign]
+                breaks = ["(< r p0)", "(not= r %s)" % z,
+                          "(>= r %s)" % z if k < 0 or sign == "neg" else "(< r %s)" % z]
+            else:
+                holds = {
+                    "nonneg": ["(>= r %s)" % z, "(<= r %d)" % (ak - 1),
+                               "(and (>= r %s) (<= r %d))" % (z, ak - 1)],
+                    "neg":    ["(<= r %s)" % z, "(>= r %d)" % (1 - ak)],
+                    "free":   ["(and (>= r %d) (<= r %d))" % (1 - ak, ak - 1),
+                               "(or (>= r %s) (< p0 %s))" % (z, z)],
+                }[sign]
+                # The SMT-LIB floor/Euclidean reading would make the first of
+                # these true; C truncation makes it false for a negative p0.
+                breaks = ["(>= r %s)" % z, "(< r %d)" % (ak - 1),
+                          "(not= r %s)" % z]
+            rp = self.rng.choice(holds if self.rng.random() < 0.7 else breaks)
+            if pp:
+                return (["p0"],
+                        "(defn target [p0 : #refine{ v : int | %s }] : #refine{ r : int | %s }\n  %s)"
+                        % (pp, rp, body))
+            return ["p0"], self._target(["p0"], rp, None, body)
+        if r < 0.60:
+            # -- squares: `(* e e)` with e a parameter or an offset of one.
+            e = self.rng.choice(["p0", "(- p0 1)", "(+ p0 %s)" % self.lit()])
+            body = self.rng.choice([
+                "(* %s %s)" % (e, e),
+                "(+ (* %s %s) 1)" % (e, e),
+                "(- (* %s %s) p0)" % (e, e),      # not a square law: abstract
+            ])
+            rp = self.rng.choice([
+                "(>= r %s)" % z,                  # true for the first two rungs
+                "(> r %s)" % z,                   # false at the root
+                "(>= r p0)",                      # x*x >= x needs more than the sign law
+            ])
+            return ["p0"], self._target(["p0"], rp, None, body)
+        # -- wide: 3-5 parameters, the counterexample search's population.
+        n = self.rng.randint(3, 5)
+        params = ["p%d" % i for i in range(n)]
+        terms = list(params)
+        self.rng.shuffle(terms)
+        body = terms[0]
+        for t in terms[1:]:
+            body = "(%s %s %s)" % (self.rng.choice(["+", "+", "-"]), body, t)
+        if self.rng.random() < 0.5:
+            # Bounded: every parameter non-negative, the goal a genuine LA
+            # proof (or refutation, when a `-` slipped in) over all of them.
+            pre = " ".join("(>= %s %s)" % (p, z) for p in params)
+            pre = "(and %s)" % pre if n > 1 else pre
+            rp = self.rng.choice(["(>= r %s)" % z, "(>= r %s)" % terms[0],
+                                  "(> r -1)"])
+            return params, self._target(params, rp, pre, body)
+        # Unbounded: false, and the witness needs every parameter.
+        rp = self.rng.choice(["(> r %s)" % z, "(>= r %s)" % z, "(not= r %s)" % z,
+                              "(> r %s)" % terms[-1]])
+        return params, self._target(params, rp, None, body)
+
     def program(self):
         lines = self.gen_helpers(self.rng.randint(1, 3))
         lines += self.gen_bool_helpers(self.rng.randint(1, 2))
         r = self.rng.random()
-        if r < 0.17:
+        if r < 0.15:
             params, target = self.shape_random()
-        elif r < 0.36:
+        elif r < 0.33:
             params, target = self.shape_linear()
-        elif r < 0.52:
+        elif r < 0.49:
             params, target = self.shape_congruence()
-        elif r < 0.64:
+        elif r < 0.60:
             params, target = self.shape_param()
-        elif r < 0.70:
+        elif r < 0.66:
             params, target = self.shape_propagate()
-        elif r < 0.78:
+        elif r < 0.74:
             params, target = self.shape_typeclass()
-        elif r < 0.84:
+        elif r < 0.80:
             params, target = self.shape_congruence_method()
-        elif r < 0.90:
+        elif r < 0.86:
             params, target = self.shape_branching()
-        elif r < 0.95:
+        elif r < 0.91:
             params, target = self.shape_datatype()
+        elif r < 0.96:
+            params, target = self.shape_integer()
         else:
             params, target = self.shape_stateful()
         lines.append(target)

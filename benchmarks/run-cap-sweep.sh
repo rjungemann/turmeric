@@ -83,8 +83,15 @@ spec = importlib.util.spec_from_file_location("rfs", "tests/refine-fuzz-src.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 for i in range(n):
     rng = random.Random(seed * 1000003 + i)
+    # The SAME seeding and int/float alternation as the fuzzer's own job():
+    # `Gen` takes "int" or "float", never "both" -- its `ty` property reads
+    # anything else as float, so the earlier `Gen(rng, "both")` here quietly
+    # produced a FLOAT-ONLY population (every sweep before 2026-09-05), which
+    # is why the integer-tail work moved none of these rows: `mod`, the
+    # div/mod axioms and shape_integer are int-mode only.
+    mode = "int" if (i % 2 == 0) else "float"
     with open(os.path.join(out, "c%06d.tur" % i), "w") as f:
-        f.write(m.Gen(rng, "both").program())
+        f.write(m.Gen(rng, mode).program())
 PY
 : > "$WORK/fuzz.log"
 for f in "$WORK"/fuzz/*.tur; do
@@ -127,7 +134,8 @@ SATURATING = {"path_hyps"}
 
 def blank():
     return {c: {"hits": 0, "peak": 0, "worst": "", "limit": 0} for c in CAPS} | \
-           {"la_fm": {"hits": 0}, "no_rounds": {"hits": 0}, "model_run": {"hits": 0}}
+           {"la_fm": {"hits": 0}, "no_rounds": {"hits": 0}, "model_run": {"hits": 0},
+            "model_evals": {"hits": 0}}
 
 def note(acc, cap, hits, peak, limit, who):
     r = acc[cap]
@@ -174,6 +182,19 @@ def parse_summary(path, acc, tag):
             # unit count or a unit would be tallied twice.
             acc["model_run"]["hits"] += int(m.group(1))
             continue
+        m = re.match(r"model evals out\s+(\d+)", rest)
+        if m:
+            # The search's OTHER decline (MODEL_MAX_EVALS): inside the width
+            # cap, past the sort gate, but `n_cand ** n_vars` over the budget.
+            # A count, like the FM row.  solver-integer-tail-plan Phase 4 said
+            # this script "already reports" it; it did not -- the compiler
+            # printed the row and this parser dropped the line.  A budget
+            # decline is a real cap hit (the obligation stays unknown), so it
+            # counts toward the unit's capped status too.
+            if int(m.group(1)):
+                acc["model_evals"]["hits"] += int(m.group(1))
+                seen.add(who)
+            continue
         m = re.match(r"(FM blow-ups|NO rounds out)\s+(\d+)", rest)
         if m and int(m.group(2)):
             acc["la_fm" if m.group(1).startswith("FM") else "no_rounds"]["hits"] += int(m.group(2))
@@ -217,14 +238,16 @@ L.append("`model_vars` bounds the counterexample SEARCH, so a hit there costs a\
          "higher cap would actually help -- a VC over the cap may also carry a non-int\n"
          "variable, which the sort gate declines at any limit.  Argue a raise from that\n"
          "row, never from the hits.\n")
-L.append("**Do not read the fuzzer population's `model_vars` headroom as a signal.**\n"
-         "`tests/refine-fuzz-src.py` generates at most TWO parameters per program\n"
-         "(`rng.randint(0, 2)` / `randint(1, 2)` in its shape methods), so a generated\n"
-         "VC structurally cannot exceed those plus `r`.  A peak that sits exactly on the\n"
-         "limit there is the generator's ceiling, not evidence about real code, and 0\n"
-         "hits from that population is not evidence the cap never bites.  A four-\n"
-         "parameter function with a refined return trips it immediately -- which is an\n"
-         "ordinary shape none of the three swept populations happens to contain.\n")
+L.append("**The fuzzer population's `model_vars` / `model_evals` rows mean something\n"
+         "only as far as the generator reaches.**  Until 2026-09-05\n"
+         "`tests/refine-fuzz-src.py` generated at most TWO parameters per program, so a\n"
+         "generated VC structurally could not exceed those plus `r` and a peak sitting on\n"
+         "the limit was the generator's ceiling, not evidence about real code.  Its\n"
+         "`shape_integer` now emits 3-5 parameter functions (plus `mod`, `/` by a literal\n"
+         "and squares), so the rows have a population -- but still one shaped by the\n"
+         "generator: 0 hits there says the cap does not bite on THAT distribution.  The\n"
+         "`model_evals` row is the search's evaluation-budget decline (MODEL_MAX_EVALS),\n"
+         "a count like the FM row; every hit would run at a bigger budget.\n")
 L.append("`path_hyps` is a COLLECTION cap (RT_CS_PATH_MAX_HYPS -- the branch guards\n"
          "recovered for a call-site crossing), not a solver stage.  It reads `n/a` for the\n"
          "SMT-LIB corpus because that population feeds VCs straight to the chain and never\n"
@@ -257,9 +280,12 @@ for name, acc, n, tag in pops:
     L.append("| no_rounds (exchange budget) | %d | - | - | - | - |" % acc["no_rounds"]["hits"])
     if tag == "corpus":
         L.append("| model_vars would run | n/a | - | - | - | %s |" % COMPILED_ONLY["model_vars"])
+        L.append("| model_evals (search budget) | n/a | - | - | - | %s |" % COMPILED_ONLY["model_vars"])
     else:
         L.append("| model_vars would run | %d | - | - | - | of the %d over the cap |"
                  % (acc["model_run"]["hits"], acc["model_vars"]["hits"]))
+        L.append("| model_evals (search budget) | %d | - | - | - | - |"
+                 % acc["model_evals"]["hits"])
 L.append("\nCorpus harness exit code: %s (0 = PASS, no soundness failure).\n" % corpus_rc)
 L.append("Fuzzer population: n=%s seed=%s, generated by `tests/refine-fuzz-src.py`'s own `Gen`.\n"
          % (fuzz_n, fuzz_seed))
