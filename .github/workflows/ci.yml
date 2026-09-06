@@ -646,6 +646,7 @@ jobs:
             mingw-w64-ucrt-x86_64-ninja
             diffutils
             python
+            git
 
       # Optional: line editing for the REPL (HAVE_EDITLINE in
       # src/CMakeLists.txt).  The package is `wineditline`, NOT `libedit` --
@@ -774,7 +775,7 @@ jobs:
       # rename() left every registry write-once -- four silent defects, no
       # red check.  Same shape as the `tur lsp` gap noted above.
       - name: Spice fetch + lockfile integrity
-        run: TUR=./build-win/tur.exe bash tests/run-spice-fetch.sh
+        run: TUR_REQUIRE_GIT=1 TUR=./build-win/tur.exe bash tests/run-spice-fetch.sh
 
       - name: Install / uninstall / upgrade harness
         run: TUR=./build-win/tur.exe bash tests/run-install.sh

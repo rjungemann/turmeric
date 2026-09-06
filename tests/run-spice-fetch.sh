@@ -26,7 +26,19 @@ cd "$(dirname "$0")/.."
 
 TUR="${TUR:-./build/tur}"
 [ -x "$TUR" ] || { echo "tests: $TUR not built; run 'just build' first" >&2; exit 2; }
-command -v git >/dev/null 2>&1 || { echo "tests: git not found; skipping" >&2; exit 0; }
+# A self-skip is a green check that tested nothing, which is the same disease
+# this harness was written to catch -- the first CI run of it skipped exactly
+# here, because the MSYS2 environment ships no git, and reported success.  So
+# where git is guaranteed (every CI leg), a missing one is fatal; elsewhere it
+# still skips, since `tur fetch` genuinely cannot work without git.
+if ! command -v git >/dev/null 2>&1; then
+    if [ "${TUR_REQUIRE_GIT:-0}" = 1 ]; then
+        echo "FAIL run-spice-fetch -- git not found, and TUR_REQUIRE_GIT=1" >&2
+        exit 1
+    fi
+    echo "tests: git not found; skipping (set TUR_REQUIRE_GIT=1 to make this fatal)" >&2
+    exit 0
+fi
 
 # An absolute path spelled the way the platform's own tools expect.  tur is a
 # native binary on Windows and does not understand an MSYS /c/... path.
