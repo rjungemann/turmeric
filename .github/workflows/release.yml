@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  # Dry run.  Until this existed the only way to find out whether this workflow
+  # works was to cut a release, which is the worst possible moment: every step
+  # below the first failure is unexercised, and a tag is awkward to retract.
+  # A manual run builds and uploads the artifacts and stops there -- the
+  # `release` job is gated on a tag ref, so a dispatch can never publish.
+  workflow_dispatch:
 
 jobs:
   build:
@@ -264,8 +270,11 @@ jobs:
   release:
     name: Create Release
     needs: [build, build-windows, docs]
+    # startsWith(...refs/tags/) is what makes workflow_dispatch safe: a manual
+    # run produces artifacts to inspect and never creates a release.
     if: >-
-      always() && needs.build.result != 'cancelled'
+      always() && startsWith(github.ref, 'refs/tags/')
+      && needs.build.result != 'cancelled'
       && needs.build-windows.result != 'cancelled'
     runs-on: ubuntu-latest
     permissions:
