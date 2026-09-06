@@ -225,7 +225,10 @@ static bool inst_rm_rf(const char *path) {
  *   - returns true if it's missing, or if it's a symlink pointing into the
  *     spices/ tree (i.e. owned by an earlier tur install), or if force is
  *     set. Otherwise prints a diagnostic and returns false. */
-static bool inst_check_bin_target(const char *target, const char *spices_dir,
+static bool inst_check_bin_target(const char *target, const char *bin_name,
+                                   const char *install_name,
+                                   const TurState *state,
+                                   const char *spices_dir,
                                    const char *self_install_dir,
                                    bool force) {
     struct stat st;
@@ -236,6 +239,26 @@ static bool inst_check_bin_target(const char *target, const char *spices_dir,
         return false;
     }
     if (force) return true;
+
+    /* Where a symlink is not available the file cannot say who put it there,
+     * so ask the registry, which is the actual record of what tur installed.
+     * (S_ISLNK is a compile-time 0 on Windows -- platform_fs.h.) */
+    if (!S_ISLNK(st.st_mode) && state != NULL) {
+        for (int i = 0; i < state->n_entries; i++) {
+            const TurStateEntry *se = &state->entries[i];
+            for (int j = 0; j < se->n_bin; j++) {
+                if (strcmp(se->bin[j], bin_name) != 0) continue;
+                if (install_name && strcmp(se->name, install_name) == 0)
+                    return true;   /* our own previous install */
+                fprintf(stderr,
+                    "tur install: '%s' is already provided by installed spice "
+                    "'%s'.\n"
+                    "  Run `tur uninstall %s` first, or pass --force.\n",
+                    target, se->name, se->name);
+                return false;
+            }
+        }
+    }
 
     if (S_ISLNK(st.st_mode)) {
         char buf[4096];
@@ -261,11 +284,86 @@ static bool inst_check_bin_target(const char *target, const char *spices_dir,
     return false;
 }
 
-/* Atomically replace a symlink: write tmp link, then rename over target. */
-static bool inst_replace_symlink(const char *src, const char *target) {
+/* The FILE NAME a :bin entry takes inside bin_dir.
+ *
+ * Windows resolves a bare command name through PATHEXT, so an extensionless
+ * file on the PATH is not runnable as a command -- an installed `tur-sample`
+ * would never be found.  `tur build -o` emits no suffix, so the installed entry
+ * adds one.
+ *
+ * The suffix is a PROPERTY OF THE PATH, not of the name: state.tur keeps the
+ * logical `tur-sample` on every platform (so a registry written here reads the
+ * same as one written on Linux, and `tur list --json` does not vary), and every
+ * filesystem path is built through this. */
+static void inst_bin_name(const char *bin, char *out, size_t cap) {
+#ifdef _WIN32
+    snprintf(out, cap, "%s.exe", bin);
+#else
+    snprintf(out, cap, "%s", bin);
+#endif
+}
+
+#ifdef _WIN32
+/* Say once per run that the installed binaries are copies rather than links. */
+static void inst_note_copy_fallback(void) {
+    static bool said = false;
+    if (said) return;
+    said = true;
+    fprintf(stderr,
+        "tur install: note: installing a COPY, not a link.  Creating a symlink "
+        "needs administrator rights or Developer Mode"
+        " (Settings > System > For developers).\n"
+        "  Rebuilding the spice will not update the installed command until you "
+        "run `tur upgrade`.\n");
+}
+#endif
+
+/* Place `src` at `target`, atomically: build it beside the target, then move it
+ * over in one step.
+ *
+ * POSIX: a symlink, as it has always been -- rebuilding the spice then updates
+ * the installed command for free.
+ *
+ * Windows: CreateSymbolicLink needs administrator rights or Developer Mode, so
+ * try it and fall back to a copy.  Under Developer Mode -- which most developer
+ * machines have on -- the semantics are identical to POSIX; otherwise the copy
+ * costs the live-update property, which inst_note_copy_fallback says out loud
+ * rather than leaving the user to discover.
+ *
+ * platform_fs.h's symlink() shim reports ENOSYS and is deliberately not used
+ * here: its warning is against a shim that succeeds only when elevated, and the
+ * fallback is what answers it.  See
+ * docs/archive/windows-install-binary-placement.md */
+static bool inst_place_bin(const char *src, const char *target) {
     char tmp[4096];
     snprintf(tmp, sizeof(tmp), "%s.tmp.%d", target, (int)getpid());
     unlink(tmp);
+#ifdef _WIN32
+    /* Not in every MinGW winnt.h yet; the value is stable ABI. */
+#  ifndef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
+#    define SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE 0x2
+#  endif
+    if (!CreateSymbolicLinkA(tmp, src,
+                             SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)) {
+        if (!CopyFileA(src, tmp, FALSE)) {
+            fprintf(stderr,
+                "tur install: cannot place '%s': neither a symlink nor a copy "
+                "of '%s' could be created (error %lu)\n",
+                tmp, src, (unsigned long)GetLastError());
+            return false;
+        }
+        inst_note_copy_fallback();
+    }
+    /* rename() refuses an existing target on Windows; MoveFileEx replaces it,
+     * which is what the POSIX rename above has always done. */
+    if (!MoveFileExA(tmp, target, MOVEFILE_REPLACE_EXISTING)) {
+        fprintf(stderr, "tur install: cannot move '%s' -> '%s' (error %lu)\n",
+                tmp, target, (unsigned long)GetLastError());
+        unlink(tmp);
+        return false;
+    }
+    return true;
+#else
     if (symlink(src, tmp) != 0) {
         fprintf(stderr, "tur install: symlink('%s' -> '%s') failed: %s\n",
                 tmp, src, strerror(errno));
@@ -278,6 +376,7 @@ static bool inst_replace_symlink(const char *src, const char *target) {
         return false;
     }
     return true;
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -432,18 +531,23 @@ static int do_install_spec(const InstallSpec *spec) {
     /* ---------------------------------------------------------------- */
     /* 3. Pre-flight conflict check on bin_dir/<name> entries.          */
     /* ---------------------------------------------------------------- */
+    TurState pre_state;
+    tur_state_read(state_path, &pre_state);
     for (int i = 0; i < m.n_bins; i++) {
-        char target[4096];
-        snprintf(target, sizeof(target), "%s/%s",
-                 bin_dir, m.bin_names[i]);
-        if (!inst_check_bin_target(target, spices_dir,
+        char binfile[4096], target[4096];
+        inst_bin_name(m.bin_names[i], binfile, sizeof(binfile));
+        snprintf(target, sizeof(target), "%s/%s", bin_dir, binfile);
+        if (!inst_check_bin_target(target, m.bin_names[i], install_name,
+                                    &pre_state, spices_dir,
                                     install_dir[0] ? install_dir : src_dir,
                                     force)) {
+            tur_state_free(&pre_state);
             pkg_manifest_free(&m);
             free(resolved_sha);
             return 1;
         }
     }
+    tur_state_free(&pre_state);
 
     /* ---------------------------------------------------------------- */
     /* 4. Build each declared binary.                                   */
@@ -635,13 +739,15 @@ static int do_install_spec(const InstallSpec *spec) {
     /* 5. Symlink each binary into bin_dir.                             */
     /* ---------------------------------------------------------------- */
     for (int i = 0; i < m.n_bins; i++) {
-        char target[4096];
-        char source[4096];
-        snprintf(target, sizeof(target), "%s/%s",
-                 bin_dir, m.bin_names[i]);
+        char binfile[4096], target[4096], source[4096];
+        inst_bin_name(m.bin_names[i], binfile, sizeof(binfile));
+        snprintf(target, sizeof(target), "%s/%s", bin_dir, binfile);
+        /* The BUILD artifact keeps the bare name -- `tur build -o` writes
+         * exactly the path it is given -- so only the installed entry gets the
+         * platform suffix. */
         snprintf(source, sizeof(source), "%s/%s",
                  build_out_dir, m.bin_names[i]);
-        if (!inst_replace_symlink(source, target)) {
+        if (!inst_place_bin(source, target)) {
             pkg_manifest_free(&m);
             free(resolved_sha);
             return 1;
@@ -690,8 +796,11 @@ static int do_install_spec(const InstallSpec *spec) {
     fprintf(stderr, "tur %s: %s '%s'", verb, past, install_name);
     if (m.version) fprintf(stderr, " (%s)", m.version);
     fprintf(stderr, "\n");
-    for (int i = 0; i < m.n_bins; i++)
-        fprintf(stderr, "  %s/%s\n", bin_dir, m.bin_names[i]);
+    for (int i = 0; i < m.n_bins; i++) {
+        char binfile[4096];
+        inst_bin_name(m.bin_names[i], binfile, sizeof(binfile));
+        fprintf(stderr, "  %s/%s\n", bin_dir, binfile);
+    }
 
     if (!tur_global_bin_on_path(bin_dir)) {
         fprintf(stderr,
@@ -804,29 +913,36 @@ int cmd_pkg_uninstall(int argc, char **argv) {
         return 1;
     }
 
-    /* Remove bin_dir/<name> for each bin we own. Only unlink if it's a
-     * symlink pointing into spices/ (defensive). */
+    /* Remove bin_dir/<name> for each bin we own.  The symlink check below is
+     * defensive, not the ownership decision -- we are already inside
+     * `if (e)`, so the registry has said this spice owns these names.  Where a
+     * symlink was not available the entry is a copy (inst_place_bin), which
+     * readlink cannot vouch for, so a plain file at a path the registry claims
+     * is removed too. */
     for (int i = 0; i < e->n_bin; i++) {
-        char target[4096];
-        snprintf(target, sizeof(target), "%s/%s", bin_dir, e->bin[i]);
+        char binfile[4096], target[4096];
+        inst_bin_name(e->bin[i], binfile, sizeof(binfile));
+        snprintf(target, sizeof(target), "%s/%s", bin_dir, binfile);
         struct stat lst;
         if (lstat(target, &lst) != 0) continue;
+        bool ours = false;
         if (S_ISLNK(lst.st_mode)) {
             char rb[4096];
             ssize_t n = readlink(target, rb, sizeof(rb) - 1);
             if (n > 0) {
                 rb[n] = '\0';
-                if (strncmp(rb, spices_dir, strlen(spices_dir)) == 0 ||
-                    (e->path && strncmp(rb, e->path, strlen(e->path)) == 0)) {
-                    if (unlink(target) != 0) {
-                        fprintf(stderr,
-                            "tur uninstall: cannot remove '%s': %s\n",
-                            target, strerror(errno));
-                    } else {
-                        fprintf(stderr, "tur uninstall: removed %s\n", target);
-                    }
-                }
+                ours = strncmp(rb, spices_dir, strlen(spices_dir)) == 0 ||
+                       (e->path && strncmp(rb, e->path, strlen(e->path)) == 0);
             }
+        } else {
+            ours = true;   /* a copy we placed; the registry is the record */
+        }
+        if (!ours) continue;
+        if (unlink(target) != 0) {
+            fprintf(stderr, "tur uninstall: cannot remove '%s': %s\n",
+                    target, strerror(errno));
+        } else {
+            fprintf(stderr, "tur uninstall: removed %s\n", target);
         }
     }
 

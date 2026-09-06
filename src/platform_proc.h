@@ -52,6 +52,44 @@
 #  define TUR_CD "cd"
 #endif
 
+/* The separator between entries in $PATH.
+ *
+ * Windows uses ";", and getting this wrong is worse than finding nothing: a
+ * walk that splits on ":" tears every entry at its DRIVE COLON, so
+ * `C:\\Users\\x` becomes the two entries `C` and
+ * `\\Users\\x` and every candidate path built from them is
+ * malformed. */
+#ifdef _WIN32
+#  define TUR_PATH_LIST_SEP ';'
+#else
+#  define TUR_PATH_LIST_SEP ':'
+#endif
+
+/* Do these two spellings name the same directory, as far as a string compare
+ * can tell?
+ *
+ * On Windows both the separator and the case vary freely between one part of
+ * the system and another: tur records its bin dir as `C:/Users/.../bin` while
+ * the PATH a shell exports spells it `C:\\Users\\...\\bin`, and an exact
+ * strcmp then says two spellings of one directory are different places.  On
+ * POSIX a path is case-sensitive and a backslash is an ordinary character, so
+ * this is a plain comparison and must stay one. */
+static inline int tur_path_seg_eq(const char *a, size_t alen,
+                                  const char *b, size_t blen) {
+    if (alen != blen) return 0;
+    for (size_t i = 0; i < alen; i++) {
+        char ca = a[i], cb = b[i];
+#ifdef _WIN32
+        if (ca == '\\') ca = '/';
+        if (cb == '\\') cb = '/';
+        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+#endif
+        if (ca != cb) return 0;
+    }
+    return 1;
+}
+
 /* Quote one argument for the platform's shell.
  *
  * Writes a NUL-terminated quoted form of `in` into `out`; returns 0 on success

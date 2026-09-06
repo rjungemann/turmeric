@@ -79,6 +79,7 @@ Two things worth keeping in view from that work:
   `.git/objects` read-only and `DeleteFile` refuses a read-only file -- the
   classic reason deleting a clone fails on Windows.
 
-`tur install` still does not complete on Windows, for four unrelated reasons in
-the binary-placement step:
-[windows-install-binary-placement](windows-install-binary-placement.md).
+Fixing this only got `tur install` as far as the *build* step. Four further
+defects, all in binary placement rather than shell-command construction, gated
+everything after it; they are fixed too, and recorded in
+[windows-install-binary-placement](../archive/windows-install-binary-placement.md).
