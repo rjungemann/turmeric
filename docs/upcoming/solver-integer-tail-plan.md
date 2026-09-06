@@ -7,7 +7,10 @@ description: Where the refinement solver's limits actually are once the numeric 
 # Solver Integer Tail (S2c-lite)
 
 **Status:** Phase 1 **LANDED 2026-09-05** (this document was written with
-it).  Phases 2-4 are open, each with its own trigger.  Nothing here is on the
+it).  Phase 3(b) and Phase 4 landed the same day; Phases 2 and 3(a) are
+parked on measured evidence, with their triggers instrumented (`eq no-unit
+split`, `LA int feasible`, and `benchmarks/run-unknown-oracle.py`, which
+found zero missed proofs in any swept population).  Nothing here is on the
 critical path to v1; every item is additive to a solver that already ships
 and is sound, and every step below is an equivalence over the integers, so
 the one-directional invariant (never `RT_VALID` unless entailed) is preserved
@@ -215,12 +218,30 @@ a correct refutation (`(* p 2) > 0` with `p >= 0`, witness `p = 0`).
   for the budget row.
 - Full `bash tests/run.sh`: 2810 passed, 0 failed (commit dee5563f); refine ctests pass; `benchmarks/run-cap-sweep.sh` regenerated against this compiler -- no cap moved except the `model_vars` limit column and the constraint count an equality now occupies.
 
-## 3. Phase 2 -- the rest of the Omega equality phase (open)
+## 3. Phase 2 -- the rest of the Omega equality phase (open, instrumented)
 
 **Trigger:** an obligation whose equation has no unit coefficient shows up
 outside a test -- the telemetry to add first is a counter on the
 `eq_eliminate` fallback branch (how many equalities were split rather than
 eliminated), reported under `TUR_REFINE_STATS=1`.
+
+**Instrumented and measured 2026-09-05.**  `eq no-unit split` under
+`TUR_REFINE_STATS=1` counts, at OBLIGATION level, obligations the whole
+chain (model search included) left unknown after such a split (the raw
+per-call count is printed beside it; it is inflated by every stage, probe
+and hint that re-decides the same VC -- a three-obligation probe read 14).
+The cap sweep carries it as a row for all three populations
+(`benchmarks/cap-sweep-results.md`):
+
+| population | unknown obligations after a no-unit split |
+|---|---:|
+| SMT-LIB corpus (130 units) | 1 -- `gen_mixed_sat_00054`, labelled `sat`: unknown is the right answer |
+| in-tree fixtures (88) | 0 |
+| fuzzer (200 programs) | 0 |
+
+So the shape exists only in one generated corpus benchmark that has a
+model, where eliminating the equation could not produce a proof.  Parked,
+with the instrument in place; the row is what to watch.
 
 - **Pugh's sigma-substitution** for `sum a_i x_i = b` with all `|a_i| > 1`:
   pick the smallest `|a_k|`, `m = |a_k| + 1`, introduce `sigma` with
@@ -245,6 +266,38 @@ reached by per-constraint rounding).
   the limit.  This is what the archived plan and SX7 call S2c proper.
   **Trigger:** a real obligation, not a constructed one.  The probe set in
   1.3 did not produce one; ordinary bounds reasoning does not need it.
+
+  **Instrumented and measured 2026-09-05, two ways.**  First the
+  population: `LA int feasible` under `TUR_REFINE_STATS=1` counts obligations
+  left unknown after S2 declined a cube that is all-integer, has a constraint
+  over two or more variables, and whose RATIONAL relaxation Fourier-Motzkin
+  found feasible -- exactly the sets the dark shadow would look at.  Corpus
+  23 units (all `sat`-labelled, where unknown is correct), fixtures 5, fuzzer
+  17.  That is an upper bound only: most such sets have integer models too.
+
+  Then the payoff, which is the number that matters.
+  `benchmarks/run-unknown-oracle.py` hands EVERY obligation the compiler
+  left unknown -- its `vc_smtlib` from `--dump-refine=json` -- to Z3 and
+  counts the ones Z3 calls `unsat`, i.e. proofs the in-house chain missed.
+  Reading: **283 unknown obligations (15 fixture, 268 fuzzer), 283 `sat`,
+  0 `unsat`.**  Together with the corpus, where all 72 in-fragment `unsat`
+  benchmarks are already proved, there is not one obligation in any swept
+  population that branch-and-bound, the dark shadow, or any complete
+  integer procedure could turn from unknown into proven.  Parked on that
+  evidence, with both instruments in place.
+
+  Running the oracle found a defect it was not looking for: a third of the
+  dumped VCs would not parse in Z3.  The serializer wrote uninterpreted
+  names verbatim -- `tickm#0` (read as a malformed bit-vector literal),
+  `match`, `_`, `if` (reserved words, which SMT-LIB makes the same symbol
+  even quoted) -- declared uniform `Int`/`Real` parameter sorts for an
+  abstracted form that takes a Bool argument, and named `QF_UFLRA` for a
+  VC that also carries ints.  `tur smt`'s own reader took all of it, which
+  is why the external-replay promise of SX8a was never actually kept for
+  those obligations.  Fixed in `refine_smtlib_emit`: non-simple names are
+  quoted, reserved names are renamed (`|match~rw|`), parameter sorts are
+  read off a real application, and a mixed VC says `QF_UFLIRA`.  The
+  oracle now exits non-zero on an unparsed VC, so the promise stays kept.
 - ~~**(b) `tur smt` `div`/`mod` semantics.**  The SMT-LIB reader translates
   `div`/`mod` to `VC_DIV`/`VC_MOD`, whose constant folding and model
   evaluation use C truncation, while SMT-LIB specifies floor division and a

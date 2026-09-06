@@ -614,6 +614,14 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
      * work done for it BEFORE it existed -- the RT4 path probes -- is
      * attributed separately, in ob->caps_probe, by the caller that ran them. */
     refine_caps_delta(&ob->caps, refine_caps(), &caps_before);
+    /* solver-integer-tail-plan triggers, at obligation level: an obligation
+     * the whole chain (search included) left UNKNOWN after S2 saw the shape
+     * the phase would decide.  A refuted or proven one is not a trigger --
+     * something else decided it. */
+    if (d.verdict == RT_UNKNOWN) {
+        if (ob->caps.eq_nounit_split)       refine_caps()->eq_nounit_unknown_obl++;
+        if (ob->caps.la_int_relax_feasible) refine_caps()->la_int_unknown_obl++;
+    }
 
     switch (d.verdict) {
         case RT_VALID:
@@ -741,6 +749,16 @@ static void refine_report_caps(void) {
      * sized structure.  Every hit here would run at a bigger budget. */
     fprintf(stderr, "refine:   %-15s %u (budget %u evaluations)\n",
             "model evals out", c->model_evals_hits, (unsigned)MODEL_MAX_EVALS);
+    /* solver-integer-tail-plan: the two open phases' triggers, as counts.
+     * `eq no-unit split` is how many all-integer equations with no unit
+     * coefficient fell back to two inequalities (Phase 2, sigma-substitution);
+     * `LA int feasible` is how many obligations S2 declined on an all-integer
+     * multi-variable cube whose rational relaxation was feasible (Phase 3(a),
+     * branch-and-bound / dark shadow) -- the population, not the payoff. */
+    fprintf(stderr, "refine:   %-15s %u unknown obligation(s) (%u splits; Phase 2 trigger: sigma-substitution)\n",
+            "eq no-unit split", c->eq_nounit_unknown_obl, c->eq_nounit_split);
+    fprintf(stderr, "refine:   %-15s %u unknown obligation(s) (%u S2 declines; Phase 3a trigger: integer hull unchecked)\n",
+            "LA int feasible", c->la_int_unknown_obl, c->la_int_relax_feasible);
 }
 
 void refine_discharge_all(RefineObligationVec *v, Arena *a) {

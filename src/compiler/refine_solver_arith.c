@@ -506,7 +506,10 @@ static bool eq_eliminate(LaState *st, LinC *cur, uint32_t *n_io) {
         }
 
         if (pivot == n_vars) {
-            /* Split into E <= 0 and -E <= 0 in place. */
+            /* Split into E <= 0 and -E <= 0 in place.  For an all-integer
+             * equation this is the Phase 2 fallback the plan gates
+             * sigma-substitution on; count it so the gate has a reading. */
+            if (allint) refine_caps()->eq_nounit_split++;
             cur[e].is_eq = false; cur[e].strict = false;
             LinC neg = cur[e];
             bool bad = false;
@@ -634,6 +637,24 @@ bool la_unsat(LaState *st) {
     return false;
 }
 
+/* Phase 3(a) trigger predicate: every variable in the asserted set is
+ * int-sorted and at least one constraint has two or more nonzero
+ * coefficients.  Single-variable bounds are decided exactly by
+ * int_normalize's floor/ceil, so a set without a multi-variable constraint
+ * has no integer hull left to close. */
+bool la_set_is_int_multivar(const LaState *st) {
+    if (!st || st->n_cs == 0) return false;
+    for (uint32_t j = 0; j < st->n_vars; j++)
+        if (st->vars[j]->sort != VS_INT) return false;
+    for (uint32_t i = 0; i < st->n_cs; i++) {
+        uint32_t nz = 0;
+        for (uint32_t j = 0; j < st->n_vars; j++)
+            if (!rat_zero(st->cs[i].coef[j])) nz++;
+        if (nz >= 2) return true;
+    }
+    return false;
+}
+
 bool la_entails_eq(LaState *st, VCTerm *x, VCTerm *y) {
     if (st->gave_up) return false;
     uint32_t saved = st->n_cs;
@@ -659,7 +680,18 @@ RefineDecision refine_s2_decide_cc(RefineVC *vc, Arena *a, RefineCubeCache *cc) 
     for (uint32_t i = 0; i < cs->n; i++) {
         LaState *st = la_new(vc, a);
         la_assert_cube(st, &cs->cubes[i]);
-        if (!la_unsat(st)) return refine_unknown();
+        if (!la_unsat(st)) {
+            /* Phase 3(a) trigger (solver-integer-tail-plan): the cube S2
+             * could not refute -- if it is all-integer with a genuinely
+             * multi-variable constraint, its rational relaxation was found
+             * feasible while its INTEGER feasibility was never asked, which
+             * is exactly what the dark shadow / branch-and-bound would ask.
+             * Counted per obligation (first such cube), not per cube, and
+             * not when the stage gave up on a cap. */
+            if (!st->gave_up && la_set_is_int_multivar(st))
+                refine_caps()->la_int_relax_feasible++;
+            return refine_unknown();
+        }
     }
     return refine_valid();
 }

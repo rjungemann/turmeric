@@ -623,7 +623,9 @@ than any number above.
   substitution -- see S2 above); what remains is the inequality-side hull
   (branch-and-bound / dark shadow) and equations with no unit coefficient.
   See `docs/upcoming/solver-integer-tail-plan.md` for what is left and what
-  would trigger it.
+  would trigger it; `TUR_REFINE_STATS=1` prints the two triggers (`eq no-unit
+  split`, `LA int feasible`) as obligation counts, and as of 2026-09-05 no
+  swept population has an unknown obligation Z3 can prove.
 - **No DPLL(T).** Boolean structure is naive DNF: no clause learning, no theory
   propagation, no conflict-driven search. The cube caps exist because of this,
   not the other way round.
@@ -843,6 +845,16 @@ writer and reader are now the same file
 ([`refine_smtlib.c`](../../src/compiler/refine_smtlib.c)), this closes a loop
 in both directions: an external harness can differentially test any solver
 against `tur` without `tur` ever linking one.
+
+The dumped VC is legal SMT-LIB 2.6 for an external solver, not only for
+`tur smt`'s reader: a name that is not a simple symbol is quoted (`|tickm#0|`),
+a reserved or builtin name is renamed (`|match~rw|` -- SMT-LIB makes `|match|`
+the same symbol as `match`, so quoting alone is refused), an uninterpreted
+function's parameter sorts are read off a real application (an abstracted
+`if`/`match` takes a Bool among its Int arguments), and a VC mixing Int and
+Real declares `QF_UFLIRA`. `benchmarks/run-unknown-oracle.py` replays every
+`unknown` obligation through Z3 and fails on a VC it cannot parse, which is
+what keeps this true.
 
 The JSON schema is **stable** since SX9 and says so in every record
 (`"schema": 1`; schema 0 was the same shape while it was flagged unstable).

@@ -22,6 +22,48 @@ static const char *sort_name(VCSort s) {
 
 static void emit_term(const RefineVC *vc, const VCTerm *t, Buf *out);
 
+/* SMT-LIB symbol spelling.  A VC name is whatever the compiler minted --
+ * `tickm#0` (a distinct-occurrence measure), `match`, `when`, `_`, `if` (a
+ * form name abstracted as an uninterpreted function) -- and `tur smt`'s own
+ * reader takes all of them, so the mis-spelling was invisible until a dumped
+ * VC was handed to Z3, which read `tickm#0` as a malformed bit-vector literal
+ * and `match` / `_` as the reserved words they are.  Quote anything that is
+ * not a simple symbol, plus the reserved and theory-builtin names; the reader
+ * unquotes `|...|` back to the same name, so a round trip is exact. */
+static bool smt_symbol_is_simple(const char *s) {
+    if (!s || !*s || isdigit((unsigned char)*s)) return false;
+    for (const char *p = s; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (isalnum(c) || strchr("~!@$%^&*_-+=<>.?/", c)) continue;
+        return false;
+    }
+    return true;
+}
+static bool smt_symbol_is_reserved(const char *s) {
+    static const char *const reserved[] = {
+        "_", "!", "as", "let", "forall", "exists", "match", "par",
+        "ite", "and", "or", "not", "xor", "distinct", "true", "false",
+        "div", "mod", "abs", "to_real", "to_int", "is_int", "if",
+        "select", "store", NULL
+    };
+    for (size_t i = 0; reserved[i]; i++)
+        if (strcmp(s, reserved[i]) == 0) return true;
+    return false;
+}
+/* A reserved word or theory builtin is RENAMED, not merely quoted: SMT-LIB
+ * makes `|match|` the same symbol as `match`, and Z3 rejects a declaration of
+ * either ("invalid constant declaration" for `|_|`, "invalid pattern binding"
+ * for `|match|`).  The name is uninterpreted on both sides, so `match~rw`
+ * means exactly what `match` did, in the dump and on the replay. */
+static void emit_sym(const char *s, Buf *out) {
+    if (smt_symbol_is_reserved(s)) {
+        buf_putc(out, '|'); buf_puts(out, s); buf_puts(out, "~rw|");
+        return;
+    }
+    if (smt_symbol_is_simple(s)) { buf_puts(out, s); return; }
+    buf_putc(out, '|'); buf_puts(out, s); buf_putc(out, '|');
+}
+
 static void emit_nary(const RefineVC *vc, const VCTerm *t, const char *op, Buf *out) {
     buf_printf(out, "(%s", op);
     for (uint32_t i = 0; i < t->n; i++) { buf_putc(out, ' '); emit_term(vc, t->kids[i], out); }
@@ -106,11 +148,13 @@ static void emit_term(const RefineVC *vc, const VCTerm *t, Buf *out) {
             return;
         }
         case VC_VAR:
-            buf_puts(out, t->as.idx < vc->n_vars ? vc->vars[t->as.idx].name : "|?var|");
+            if (t->as.idx < vc->n_vars) emit_sym(vc->vars[t->as.idx].name, out);
+            else buf_puts(out, "|?var|");
             return;
         case VC_APP: {
             const VCUFunc *u = t->as.idx < vc->n_ufuncs ? &vc->ufuncs[t->as.idx] : NULL;
-            buf_printf(out, "(%s", u ? u->name : "|?fn|");
+            buf_putc(out, '(');
+            if (u) emit_sym(u->name, out); else buf_puts(out, "|?fn|");
             for (uint32_t i = 0; i < t->n; i++) { buf_putc(out, ' '); emit_term(vc, t->kids[i], out); }
             buf_putc(out, ')');
             return;
@@ -138,19 +182,67 @@ static void emit_term(const RefineVC *vc, const VCTerm *t, Buf *out) {
     buf_puts(out, "true");
 }
 
+/* The first application of uninterpreted function `idx` reachable from the
+ * hypotheses or the goal, or NULL.  Terms are hash-consed and small; a plain
+ * walk is cheaper than bookkeeping a per-ufunc back-pointer nobody else
+ * needs. */
+static const VCTerm *find_app_in(const VCTerm *t, uint32_t idx) {
+    if (!t) return NULL;
+    if (t->op == VC_APP && t->as.idx == idx) return t;
+    for (uint32_t i = 0; i < t->n; i++) {
+        const VCTerm *r = find_app_in(t->kids[i], idx);
+        if (r) return r;
+    }
+    return NULL;
+}
+static const VCTerm *find_app(const RefineVC *vc, uint32_t idx) {
+    for (uint32_t i = 0; i < vc->n_hyps; i++) {
+        const VCTerm *r = find_app_in(vc->hyps[i], idx);
+        if (r) return r;
+    }
+    return find_app_in(vc->goal, idx);
+}
+
 void refine_smtlib_emit(const RefineVC *vc, Buf *out) {
     if (!vc) return;
-    buf_printf(out, "(set-logic %s)\n", vc->has_real ? "QF_UFLRA" : "QF_UFLIA");
+    /* A VC with reals AND an int-sorted variable or measure result is mixed:
+     * `QF_UFLRA` makes an external solver refuse the Int declarations
+     * ("logic does not support integers"), so name the mixed logic.  `tur
+     * smt`'s reader keys only on the pure-Real logics for numeral typing, so
+     * it replays either. */
+    bool any_int = false;
+    for (uint32_t i = 0; i < vc->n_vars && !any_int; i++)
+        if (vc->vars[i].sort == VS_INT) any_int = true;
+    for (uint32_t i = 0; i < vc->n_ufuncs && !any_int; i++)
+        if (vc->ufuncs[i].sort == VS_INT) any_int = true;
+    buf_printf(out, "(set-logic %s)\n",
+               vc->has_real ? (any_int ? "QF_UFLIRA" : "QF_UFLRA") : "QF_UFLIA");
 
-    for (uint32_t i = 0; i < vc->n_vars; i++)
-        buf_printf(out, "(declare-const %s %s)\n",
-                   vc->vars[i].name, sort_name(vc->vars[i].sort));
+    for (uint32_t i = 0; i < vc->n_vars; i++) {
+        buf_puts(out, "(declare-const ");
+        emit_sym(vc->vars[i].name, out);
+        buf_printf(out, " %s)\n", sort_name(vc->vars[i].sort));
+    }
 
     for (uint32_t i = 0; i < vc->n_ufuncs; i++) {
         const VCUFunc *u = &vc->ufuncs[i];
-        buf_printf(out, "(declare-fun %s (", u->name);
-        for (uint32_t j = 0; j < u->arity; j++)
-            buf_printf(out, "%s%s", j ? " " : "", vc->has_real ? "Real" : "Int");
+        buf_puts(out, "(declare-fun ");
+        emit_sym(u->name, out);
+        buf_puts(out, " (");
+        /* Parameter sorts come from a real APPLICATION, not from the VC's
+         * has_real flag: a `VCUFunc` records arity and result sort only, and
+         * an abstracted form (`if`, `match` over an out-of-fragment scrutinee)
+         * takes a Bool among its Int or Real arguments.  Declared uniformly,
+         * the dump was rejected by Z3 with "unknown constant" for the very
+         * function it declared one line up.  Fall back to the old uniform
+         * spelling only when no application of the symbol exists. */
+        const VCTerm *app = find_app(vc, i);
+        for (uint32_t j = 0; j < u->arity; j++) {
+            const char *sn = (app && j < app->n && app->kids[j])
+                ? sort_name(app->kids[j]->sort)
+                : (vc->has_real ? "Real" : "Int");
+            buf_printf(out, "%s%s", j ? " " : "", sn);
+        }
         buf_printf(out, ") %s)\n", sort_name(u->sort));
     }
 

@@ -156,6 +156,33 @@ typedef struct RefineCapStats {
      * Every one of these WOULD run at a higher budget, so this row needs no
      * `would_run` twin. */
     uint32_t model_evals_hits;
+    /* solver-integer-tail-plan, the two open phases' TRIGGERS.  Neither is a
+     * cap; both are counts of the shapes a phase would decide, so the plan's
+     * "build it when the population shows up" has a number to read.
+     *   eq_nounit_split        Phase 2: an all-integer equation with no unit
+     *                          coefficient reached eq_eliminate and was split
+     *                          into two inequalities (exactly as complete as
+     *                          before Phase 1) rather than substituted away.
+     *                          Pugh's sigma-substitution would eliminate it.
+     *   la_int_relax_feasible  Phase 3(a): S2 declined an obligation on a cube
+     *                          whose constraints are all-integer, involve a
+     *                          constraint over two or more variables, and whose
+     *                          RATIONAL relaxation Fourier-Motzkin found
+     *                          feasible.  That is the population the dark
+     *                          shadow / branch-and-bound would look at; it is an
+     *                          UPPER bound on what they could decide (most such
+     *                          sets are integer-feasible too). */
+    uint32_t eq_nounit_split;
+    uint32_t la_int_relax_feasible;
+    /* The same two, at OBLIGATION level: how many obligations were left
+     * UNKNOWN by the whole chain (model search included) after carrying the
+     * shape.  The raw counts above are per backend call and are inflated by
+     * every stage, probe and hint that re-decides the same VC (a three-
+     * obligation probe read 14 and 18); these are what the plan's triggers
+     * mean by "an obligation shows up".  Tallied in refine_discharge_one
+     * from the per-obligation delta. */
+    uint32_t eq_nounit_unknown_obl;
+    uint32_t la_int_unknown_obl;
 } RefineCapStats;
 
 /* Mutable on purpose: the stages bump their own counters in place, which is
@@ -192,6 +219,10 @@ static inline void refine_caps_delta(RefineCapStats *out,
     out->model_vars_hits      = now->model_vars_hits      - before->model_vars_hits;
     out->model_vars_would_run = now->model_vars_would_run - before->model_vars_would_run;
     out->model_evals_hits     = now->model_evals_hits     - before->model_evals_hits;
+    out->eq_nounit_split       = now->eq_nounit_split       - before->eq_nounit_split;
+    out->la_int_relax_feasible = now->la_int_relax_feasible - before->la_int_relax_feasible;
+    out->eq_nounit_unknown_obl = now->eq_nounit_unknown_obl - before->eq_nounit_unknown_obl;
+    out->la_int_unknown_obl    = now->la_int_unknown_obl    - before->la_int_unknown_obl;
     out->model_vars_peak      = now->model_vars_peak;
     out->cubes_peak        = now->cubes_peak;
     out->cube_lits_peak    = now->cube_lits_peak;
@@ -339,6 +370,9 @@ bool     la_assert_eq(LaState *st, VCTerm *a, VCTerm *b);
 bool     la_unsat(LaState *st);
 /* True when the constraints entail `a == b` (used by the S3 exchange). */
 bool     la_entails_eq(LaState *st, VCTerm *a, VCTerm *b);
+/* solver-integer-tail-plan Phase 3(a) trigger: every asserted variable is
+ * int-sorted and some constraint spans two or more of them. */
+bool     la_set_is_int_multivar(const LaState *st);
 /* True when `t` is a term the LA encoder treats as an opaque variable
  * (a VC_VAR or an uninterpreted application) -- i.e. a shared term. */
 bool     la_is_shared_term(const VCTerm *t);

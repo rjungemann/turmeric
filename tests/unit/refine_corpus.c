@@ -168,13 +168,13 @@ static char *slurp(const char *path, size_t *len_out) {
  * Emitted for every benchmark, not only the capped ones: the peaks of the
  * benchmarks that did NOT cap out are what say how much headroom the corpus
  * actually leaves.  See docs/archive/solver-extension-plan.md (SX0(b)). */
-static void report_caps(const char *path) {
+static void report_caps(const char *path, RefineVerdict v) {
     const char *e = getenv("TUR_CORPUS_CAPS");
     if (!e || e[0] != '1') return;
     const RefineCapStats *c = refine_caps();
     printf("  caps    %s cubes=%u:%u cube_lits=%u:%u expand_depth=%u:%u "
            "la_vars=%u:%u la_constr=%u:%u la_fm=%u euf_terms=%u:%u "
-           "no_shared=%u:%u no_rounds=%u\n",
+           "no_shared=%u:%u no_rounds=%u eq_nounit=%u la_int_feas=%u\n",
            path,
            c->cubes_hits, c->cubes_peak,
            c->cube_lits_hits, c->cube_lits_peak,
@@ -184,7 +184,13 @@ static void report_caps(const char *path) {
            c->la_fm_hits,
            c->euf_terms_hits, c->euf_terms_peak,
            c->no_shared_hits, c->no_shared_peak,
-           c->no_rounds_hits);
+           c->no_rounds_hits,
+           /* solver-integer-tail-plan triggers (counts, not caps): reported
+            * only for a unit the chain left UNKNOWN -- a proved or refuted
+            * unit that carried the shape is not a trigger, something else
+            * decided it -- so the sweep can count units, not calls. */
+           v == RT_UNKNOWN ? c->eq_nounit_split : 0u,
+           v == RT_UNKNOWN ? c->la_int_relax_feasible : 0u);
 }
 
 /* Decide one benchmark and print its line.  Runs in a CHILD process so a
@@ -210,7 +216,7 @@ static int decide_one(const char *path) {
     } else {
         refine_caps_reset();
         RefineVerdict v = run_chain(b.vc, a);
-        report_caps(path);
+        report_caps(path, v);
         if (b.status == SMT_STATUS_SAT) {
             /* The invariant: a satisfiable assertion set must never be proved
              * contradictory.  RT_UNKNOWN and RT_INVALID are both correct. */

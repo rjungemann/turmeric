@@ -1,6 +1,6 @@
 # Refinement solver cap sweep (SX0(b))
 
-Generated: 2026-09-06 05:00 at 54c5f289 by `benchmarks/run-cap-sweep.sh`.
+Generated: 2026-09-06 16:20 at 84664c29 by `benchmarks/run-cap-sweep.sh`.
 
 Every cap below degrades to `RT_UNKNOWN` -> the runtime check survives, so a
 hit is never unsound -- it is lost completeness, and only lost completeness that
@@ -50,6 +50,8 @@ means something only while its hits are 0.
 | no_rounds (exchange budget) | 0 | - | - | - | - |
 | model_vars would run | n/a | - | - | - | the corpus emitter does not report the search's caps |
 | model_evals (search budget) | n/a | - | - | - | the corpus emitter does not report the search's caps |
+| eq_nounit_split, unknown obligations (Phase 2 trigger) | 1 | - | - | - | gen_mixed_sat_00054.smt2 |
+| la_int_relax_feasible, unknown obligations (Phase 3a trigger) | 23 | - | - | - | qf_uf_no_congruence_sat.smt2 |
 
 ## in-tree fixtures -- 88 unit(s), 0 with a cap hit
 
@@ -68,6 +70,8 @@ means something only while its hits are 0.
 | no_rounds (exchange budget) | 0 | - | - | - | - |
 | model_vars would run | 0 | - | - | - | of the 0 over the cap |
 | model_evals (search budget) | 0 | - | - | - | - |
+| eq_nounit_split, unknown obligations (Phase 2 trigger) | 0 | - | - | - | - |
+| la_int_relax_feasible, unknown obligations (Phase 3a trigger) | 5 | - | - | - | refine-match-field-wrong |
 
 ## fuzzer VCs -- 200 unit(s), 0 with a cap hit
 
@@ -86,6 +90,8 @@ means something only while its hits are 0.
 | no_rounds (exchange budget) | 0 | - | - | - | - |
 | model_vars would run | 0 | - | - | - | of the 0 over the cap |
 | model_evals (search budget) | 0 | - | - | - | - |
+| eq_nounit_split, unknown obligations (Phase 2 trigger) | 0 | - | - | - | - |
+| la_int_relax_feasible, unknown obligations (Phase 3a trigger) | 17 | - | - | - | c000000.tur |
 
 Corpus harness exit code: 0 (0 = PASS, no soundness failure).
 
