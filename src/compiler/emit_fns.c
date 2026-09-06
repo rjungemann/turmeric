@@ -3,9 +3,12 @@
 #include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn CPS lowering */
 #include "globals.h"   /* g_cps_path, g_panic_trace */
 
-/* Append a pass-by-ptr param binding to ctx->pbp_param_ptrs, growing the
- * (realloc-backed) array on demand -- no fixed arity ceiling. */
-static void pbp_push(EmitCtx *ctx, Binding *b) {
+/* Append a pass-by-ptr binding to ctx->pbp_param_ptrs, growing the
+ * (realloc-backed) array on demand -- no fixed arity ceiling.  Not only
+ * params any more: a match binder that BORROWS a boxed recursive field
+ * (emit_expr.c, the B3 branch) registers here too, so every use site that
+ * already knows how to read a `const T *` parameter reads it the same way. */
+void emit_pbp_push(EmitCtx *ctx, Binding *b) {
     if (ctx->n_pbp_params >= ctx->cap_pbp_params) {
         ctx->cap_pbp_params = ctx->cap_pbp_params ? ctx->cap_pbp_params * 2 : 16;
         ctx->pbp_param_ptrs = (Binding **)realloc(ctx->pbp_param_ptrs,
@@ -2879,7 +2882,7 @@ static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind resul
             for (uint32_t i = 0; i < group[m]->n_params; i++) {
                 TypeKind k; const char *ct; bool aggr; bool ref;
                 if (gs_param_class(ctx, group[m]->param_types[i], &k, &ct, &aggr, &ref) && ref)
-                    pbp_push(ctx, group[m]->params[i]);
+                    emit_pbp_push(ctx, group[m]->params[i]);
             }
         g_gs_nmem = ng; g_gs_ctx = ctx; for (int m = 0; m < ng; m++) g_gs_mem[m] = group[m];
         bool ok = gs_build(&gs);
@@ -3912,7 +3915,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             Type pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[_pi])
                 ? *e->type.as.fn.arg_full_types[_pi] : fd->param_types[_pi];
             if (type_struct_pass_by_ptr(pty))
-                pbp_push(ctx, fd->params[_pi]);
+                emit_pbp_push(ctx, fd->params[_pi]);
         }
     }
 

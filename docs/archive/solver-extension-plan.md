@@ -1072,7 +1072,7 @@ away. But the new slope is mostly not asymptotics either: an A/B against
 `TUR_SR4_RECURSIVE_CARRIER=1` on one box puts **6.8x of the n=512 cost on the
 by-value recursive-sum lowering**, which copies 120 bytes per chain link where
 the carrier moved one word, two thirds of it redundantly. Filed as
-[../reported/sr4-byvalue-recursive-sum-walk-copies-per-link.md](../reported/sr4-byvalue-recursive-sum-walk-copies-per-link.md).
+[sr4-byvalue-recursive-sum-walk-copies-per-link.md](sr4-byvalue-recursive-sum-walk-copies-per-link.md).
 `TUR_SR1_SUM_BYVALUE=0` on top moves nothing, which is the control: these types
 are all self-recursive, so SR4 is the entire effect.
 

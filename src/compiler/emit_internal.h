@@ -569,6 +569,8 @@ typedef struct EmitCtx {
     Binding    **pbp_param_ptrs;
     uint32_t     n_pbp_params;
     uint32_t     cap_pbp_params;
+    /* Defined in emit_fns.c; registers `b` as held by `const T *`. */
+
     /* ASan/LSan plan (Option C): arena for the transient Type nodes that
      * emit_resolve_type / emit_abi_instantiate_type clone while resolving
      * generic type variables to concrete types for ABI specialization. These
@@ -936,6 +938,10 @@ void emit_abi_assert_routed_concrete(EmitCtx *ctx, const Type *recovered,
  * cannot drift; the CPS emitter's find_mono_clone_for_call carries the same
  * rule for its arms.  Defined in emit_expr.c. */
 bool emit_spec_result_mismatch(EmitCtx *ctx, Type call_result, Type spec_result);
+/* Register a binding as pass-by-pointer for the current function (emit_fns.c).
+ * Parameters at fn entry, and the match binder that borrows a wide boxed
+ * recursive field (emit_expr.c B3) rather than copying the node out. */
+void emit_pbp_push(EmitCtx *ctx, Binding *b);
 /* G2: the concrete instance-method FnDef a class-method call resolves to for a
  * given recovered dispatch type (e.g. `__inst_Enc_enc_Cons` for `(Cons int)`).
  * Defined in emit_core.c. */

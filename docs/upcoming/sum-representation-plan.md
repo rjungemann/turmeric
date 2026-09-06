@@ -592,7 +592,7 @@ still climbing. The cause is per-link copying in the emitted walk -- 120 bytes
 per `SBind` link against the carrier's one word, two thirds of it redundant
 (a dead field binder, and a node copied out of its box and then copied again
 to take its address). Filed as
-[../reported/sr4-byvalue-recursive-sum-walk-copies-per-link.md](../reported/sr4-byvalue-recursive-sum-walk-copies-per-link.md),
+[../archive/sr4-byvalue-recursive-sum-walk-copies-per-link.md](../archive/sr4-byvalue-recursive-sum-walk-copies-per-link.md),
 with the A/B in
 [benchmarks/logic-subst-results.md](../../benchmarks/logic-subst-results.md).
 

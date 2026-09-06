@@ -242,3 +242,58 @@ shape, since RM0 priced the spine as an allocation count and not as unbounded
 growth in a program that builds and discards chains in a loop -- which is what
 a solver backtracking does. If RM2's gate is ever revisited, that is the
 measurement to revisit it with.
+## Resolved 2026-09-05 -- the profile, and what it found
+
+The profile this report asked for was run, and the copy model was wrong
+about what the copies cost while being right about which one to remove.
+
+**Construction versus traversal.** `benchmarks/bench-logic-subst-split.tur`
+times the two phases alone.  Construction was never the gap: by value is at
+parity with the carrier or ahead of it at every n (fewer mallocs per bind,
+as RM4 measured).  The walk was the whole gap -- 3804 ns/op against 708 at
+n=512 -- and its cost per link SCANNED was a flat ~15 ns at every n, while the
+carrier's fell toward 3 ns as n grew.  A flat per-link cost is not a cache
+effect; it is instruction count.
+
+**Callgrind, both arms, persistent rounds only.** By value: the recursive
+instance of `subst_hylookup` was 65% of all instructions, with 898,191
+genuine self-calls -- about 50 instructions per link.  Carrier: `subst_hylookup`
+has NO recursive call edge at all.  GCC compiled the same source as a loop,
+about 14 instructions per link, and malloc dominated the profile instead.
+So the 8.8x was not 120 bytes of copying; it was a recursion the C compiler
+could not flatten.  The reason is copy (b): the binder copied the boxed node
+into a LOCAL, and the recursive call passed `&rest_1599` -- the address of
+that local -- which pins the frame for the callee's lifetime and forbids the
+sibling-call optimization.  The carrier passes a plain `int64_t`, so nothing
+pins its frame.  Fix (1) removed a copy but left the address-of in place,
+which is why it bought ~5%.
+
+**The fix is (2), and it is worth far more than "another ~5%".**  The
+match binder for a wide boxed recursive field now BORROWS the box
+(`const tur_adt_Subst *rest = (const tur_adt_Subst *)(intptr_t)slot`) and
+registers itself as pass-by-pointer (`emit_pbp_push`, the same list
+`const T *` parameters live in), so field reads use `->`, a by-value use
+derefs, and the self-call passes the pointer straight through.  Verified by
+hand-patching the emitted C first (walk at n=512: 3804 -> 581 ns/op, and
+`objdump` shows zero `call subst_hylookup` inside `subst_hylookup`), then by
+the compiler change producing the same C.  Release build, medians of three,
+one box:
+
+| bindings | walk, before | walk, after | walk, carrier | bind+walk, after / carrier |
+|---:|---:|---:|---:|---:|
+| 1 | 41.1 | 36.5 | 50.4 | 0.68x |
+| 8 | 66.2 | 38.6 | 47.6 | 0.90x |
+| 64 | 368.0 | 91.2 | 104.8 | 0.95x |
+| 128 | 753.5 | 167.5 | 165.6 | 1.04x |
+| 512 | 3804.0 | 580.7 | 707.9 | 1.01x |
+
+(ns per op; the last column is `bench-logic-subst`'s persistent path, by
+value over carrier, which read 4.77x at n=512 before.)  The by-value default
+now keeps RM4's construction and memory win with no traversal loss, and the
+"do not unflip" stance stands with nothing left to weigh against it.  Copy (a)
+-- the 24-byte `Term` binder materialized on the miss path -- is still there
+and still dead on that path; at ~14 instructions per link total it is no
+longer worth a match-lowering change on its own.
+
+Suite 2820/0 with no snapshot moved (no snapshot fixture matches a wide
+boxed recursive field), regions seam 14/0, cc-warn ratchet OK.

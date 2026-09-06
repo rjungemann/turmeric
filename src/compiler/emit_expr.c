@@ -14841,6 +14841,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                      * docs/reported/sr2-carrier-seam-rotted.md) */
                                     buf_printf(body, "%s %s = __scrut%s%s;\n",
                                                ctype, bname, acc, mp);
+                                } else if (type_struct_pass_by_ptr(
+                                               emit_resolve_type(ctx, fb->type))) {
+                                    /* SR4 traversal profile: BORROW the box, do not
+                                     * copy the node out of it.  The slot holds a
+                                     * heap-box pointer to a WIDE by-value aggregate
+                                     * -- the recursive spine link -- and every
+                                     * callee already takes such a value as
+                                     * `const T *`, so bind the pointer and register
+                                     * the binder as pass-by-pointer: field reads
+                                     * use `->`, a by-value use derefs, and a call
+                                     * passes it through.  The copy this replaces
+                                     * was what made `subst-lookup` a real recursion:
+                                     * `&rest` handed the address of a LOCAL to the
+                                     * self-call, so GCC could not turn the tail call
+                                     * into a jump, and each link cost a frame plus
+                                     * the 48-byte copy (~50 instructions against 14
+                                     * for the carrier, which it DID flatten).  With
+                                     * the pointer passed straight through the walk
+                                     * is a loop again: bench-logic-subst-split's walk
+                                     * rows go from 6.5x slower than the carrier at
+                                     * n=512 to parity.  The box is owned by the
+                                     * scrutinee's node, which outlives the arm. */
+                                    buf_printf(body,
+                                        "const %s *%s = (const %s *)(intptr_t)(__scrut%s%s);\n",
+                                        ctype, bname, ctype, acc, mp);
+                                    emit_pbp_push(ctx, fb);
                                 } else {
                                     /* B3: a by-value ADT field stored boxed (int64
                                      * heap pointer) in a carrier / GADT slot --
@@ -15199,6 +15225,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                      * initializer.  Fall through to B3's deref. */
                                     buf_printf(body, "%s %s = __scrut->%s;\n",
                                                ctype, bname, mp);
+                                } else if (type_struct_pass_by_ptr(
+                                               emit_resolve_type(ctx, fb->type))) {
+                                    /* SR4 traversal profile: borrow the box (see the
+                                     * sibling switch-path site for the reasoning). */
+                                    buf_printf(body,
+                                        "const %s *%s = (const %s *)(intptr_t)(__scrut->%s);\n",
+                                        ctype, bname, ctype, mp);
+                                    emit_pbp_push(ctx, fb);
                                 } else {
                                     /* B3: a by-value ADT field stored boxed (int64
                                      * heap pointer) in a carrier / GADT slot --

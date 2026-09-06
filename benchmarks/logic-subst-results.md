@@ -93,12 +93,51 @@ tur_adt_Lookup __ps_311 = (subst_hylookup(vid, &__t310));                    /* 
 120 bytes copied per chain link, of which the 24-byte `Term` is dead whenever
 the arm takes the recursive branch and the second 48-byte copy is redundant
 with the first. The carrier path passes one `int64_t`. Filed as
-[docs/reported/sr4-byvalue-recursive-sum-walk-copies-per-link.md](../docs/reported/sr4-byvalue-recursive-sum-walk-copies-per-link.md).
+[docs/archive/sr4-byvalue-recursive-sum-walk-copies-per-link.md](../docs/archive/sr4-byvalue-recursive-sum-walk-copies-per-link.md).
 
 **This does not reverse SX2's gate** -- the trail wins either way, and wins by
 more under the default. It does mean the persistent column is now measuring a
 representation choice as much as a data-structure choice, which is worth
 knowing before quoting the 215x anywhere.
+
+## Re-run 2026-09-05: the traversal profile, and the walk flattened
+
+The by-value/carrier gap above was profiled rather than modelled
+(`docs/archive/sr4-byvalue-recursive-sum-walk-copies-per-link.md` has the
+full record).  `benchmarks/bench-logic-subst-split.tur` separates construction
+from traversal; callgrind on the persistent rounds of both arms found the
+by-value `subst_hylookup` was a REAL recursion (898k self-calls, ~50
+instructions per link) while the carrier's was compiled to a loop (~14) --
+the binder copied the boxed link into a local and passed `&rest` to the
+self-call, which pins the frame and forbids the tail call.  The binder now
+borrows the box as `const T *`.  Same box, Release, medians of three:
+
+| bindings | persistent ns/op, by value (before) | by value (after) | carrier | after / carrier |
+|---:|---:|---:|---:|---:|
+| 1 | 124.0 | 117.3 | 171.7 | 0.68x |
+| 2 | 120.1 | 119.5 | 159.4 | 0.75x |
+| 4 | 129.0 | 119.1 | 145.3 | 0.82x |
+| 8 | 146.7 | 124.4 | 138.7 | 0.90x |
+| 16 | 176.2 | 134.0 | 143.3 | 0.94x |
+| 32 | 276.8 | 150.4 | 163.2 | 0.92x |
+| 64 | 455.9 | 186.8 | 196.3 | 0.95x |
+| 128 | 890.9 | 291.6 | 281.4 | 1.04x |
+| 256 | 1821.4 | 414.7 | 361.9 | 1.15x |
+| 512 | 3791.6 | 805.9 | 795.1 | 1.01x |
+
+Split by phase (ns per link per pass; the walk row is per lookup divided by n,
+i.e. this file's ns/op):
+
+| bindings | build, by value | build, carrier | walk, by value (before) | walk, by value (after) | walk, carrier |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 87.8 | 132.1 | 41.1 | 36.5 | 50.4 |
+| 8 | 90.8 | 94.4 | 66.2 | 38.6 | 47.6 |
+| 64 | 89.9 | 91.3 | 368.0 | 91.2 | 104.8 |
+| 512 | 118.8 | 81.0 | 3804.0 | 580.7 | 707.9 |
+
+Construction was never the gap.  The SX2 gate verdict is untouched (the trail
+still wins by 11x-100x); what changed is that the persistent column is again
+measuring the data structure rather than a representation accident.
 
 ## Original run, 2026-08-22 at 8c987b89 (pre-SR)
 
