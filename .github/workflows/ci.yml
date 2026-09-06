@@ -745,6 +745,18 @@ jobs:
       - name: LSP/DAP stdio smoke test
         run: python tests/lsp/stdio-smoke.py ./build-win/tur.exe
 
+      # The LSP end-to-end harness: 70 assertions over `tur lsp` and `tur mcp`.
+      # It has existed for a long time and had never run on Windows -- this job
+      # invokes tests/run.sh only, never ctest -- which is how `tur lsp` came to
+      # be completely dead there, and how cross-module definition, completion
+      # and rename came to return empty, without a single red check.
+      #
+      # tur_dap is deliberately not here yet: it passes everything except the
+      # time-travel replay section (docs/reported/lsp-dap-windows-gaps.md), and
+      # a job that is red for one known reason teaches people to ignore it.
+      - name: LSP end-to-end harness
+        run: TUR=./build-win/tur.exe bash tests/lsp/run-mcp-lsp.sh
+
       - name: Fixture suite
         run: |
           TUR=./build-win/tur.exe bash tests/run.sh 2>&1 | tee ./suite.log

@@ -38,6 +38,48 @@ def _find_tur():
 
 TUR = _find_tur()
 
+
+def native_path(path):
+    """A path the `tur` BINARY can open, not just this interpreter.
+
+    Under MSYS2 -- which is how Windows CI runs this -- tempfile hands back
+    /tmp/mcp_test_x.tur.  That is a real file to the msys runtime and to python,
+    and meaningless to tur.exe, which is a native Windows program: a leading
+    slash there means the root of the current drive, so it looked for C:\tmp and
+    reported "Could not read or analyze".  Every MCP test that writes a scratch
+    file failed that way, while the same tests passed locally where TEMP already
+    pointed at a Windows path.
+
+    cygpath is the translation both halves agree on.  Absent (real POSIX), the
+    path is already native and comes back unchanged.
+    """
+    if os.name != "nt" and "MSYSTEM" not in os.environ:
+        return path
+    try:
+        out = subprocess.run(["cygpath", "-m", path], capture_output=True,
+                             timeout=15)
+        if out.returncode == 0:
+            got = out.stdout.decode().strip()
+            if got:
+                return got
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return path
+
+
+def to_uri(path):
+    """Spell a path the way an LSP client does.
+
+    On POSIX that is "file://" + an already-absolute path.  On Windows a bare
+    concatenation gives file://C:\\dir\\x.tur, which is not a file URI at all --
+    the drive letter lands in the authority and the separators are wrong.  Every
+    real client sends file:///C:/dir/x.tur, and that is what the server now
+    emits, so the tests have to speak it too or they compare two spellings of
+    the same file and call them different.
+    """
+    p = os.path.abspath(path).replace("\\", "/")
+    return "file:///" + p if (len(p) > 1 and p[1] == ":") else "file://" + p
+
 PASS = 0
 FAIL = 0
 
@@ -193,6 +235,7 @@ BAD_TUR = textwrap.dedent("""\
 
 def make_tempfile(content: str) -> str:
     fd, path = tempfile.mkstemp(suffix=".tur", prefix="mcp_test_")
+    path = native_path(path)
     os.write(fd, content.encode("utf-8"))
     os.close(fd)
     return path
@@ -342,7 +385,7 @@ def test_mcp() -> None:
 def test_lsp() -> None:
     print("--- LSP server tests ---")
     good_path = make_tempfile(GOOD_TUR)
-    uri = "file://" + good_path
+    uri = to_uri(good_path)
     try:
         srv = Server([TUR, "lsp"], transport="lsp")
 
@@ -426,7 +469,7 @@ def test_lsp_encoding_and_deferred_analysis() -> None:
     expected_col = src.encode("utf-8").index(b"later")
 
     path = make_tempfile("(def a 1)\n")
-    uri = "file://" + path
+    uri = to_uri(path)
     try:
         srv = Server([TUR, "lsp"], transport="lsp")
         r = srv.call("initialize", {
@@ -491,7 +534,7 @@ def test_lsp_client_gaps() -> None:
     docs/archive/lsp-client-gaps-plan.md."""
     print("--- LSP client-gap coverage ---")
     path = make_tempfile(GAPS_TUR)
-    uri = "file://" + path
+    uri = to_uri(path)
     try:
         srv = Server([TUR, "lsp"], transport="lsp")
 
@@ -705,7 +748,7 @@ def test_lsp_unprimed_completion() -> None:
 
     # -- opened good, edited broken before any analysis ran ------------------
     path = make_tempfile(GOOD)
-    uri = "file://" + path
+    uri = to_uri(path)
     try:
         srv = Server([TUR, "lsp"], transport="lsp")
         srv.call("initialize", {"processId": None, "rootUri": None,
@@ -757,7 +800,7 @@ def test_lsp_unprimed_completion() -> None:
 
     # -- opened already broken: never parsed, nothing of its own to retain ---
     path = make_tempfile(GOOD + BROKEN_TAIL)
-    uri = "file://" + path
+    uri = to_uri(path)
     try:
         srv = Server([TUR, "lsp"], transport="lsp")
         srv.call("initialize", {"processId": None, "rootUri": None,
@@ -863,7 +906,7 @@ def test_lsp_inside_a_spice() -> None:
     # crossed to the sibling module then failed a string compare on its uri.
     # Canonicalising here makes every path this test builds match whichever
     # spelling the server reports, on both platforms.
-    root = os.path.realpath(tempfile.mkdtemp(prefix="lsp_spice_"))
+    root = native_path(os.path.realpath(tempfile.mkdtemp(prefix="lsp_spice_")))
     src_dir = os.path.join(root, "src")
     os.makedirs(src_dir, exist_ok=True)
     with open(os.path.join(root, "build.tur"), "w") as f:
@@ -892,8 +935,8 @@ def test_lsp_inside_a_spice() -> None:
     with open(user_path, "w") as f:
         f.write(user_src)
 
-    mathy_uri = "file://" + mathy_path
-    user_uri = "file://" + user_path
+    mathy_uri = to_uri(mathy_path)
+    user_uri = to_uri(user_path)
 
     def caret(text: str, needle: str, offset: int = 0):
         for i, line in enumerate(text.split("\n")):

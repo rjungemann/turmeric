@@ -1,5 +1,9 @@
 # LSP/DAP on Windows: what still fails after the stdio fix
 
+> **Mostly resolved.** The stdio transport, the spice walk-up and the file-URI
+> spelling are all fixed; `tests/lsp/run-mcp-lsp.sh` is **70 passed / 0 failed**
+> on Windows. What remains open is section 3, DAP time-travel replay.
+
 **Severity: high for any editor on Windows.** `tur lsp` and `tur dap` produced
 *zero output* on Windows until the stdio transport was put in binary mode (fixed
 alongside this report). With that fixed, most of both servers works. What
@@ -25,52 +29,93 @@ Both are fixed with this report. The CI half -- actually running these on
 Windows -- is a separate decision, because two of the checks below are still red
 there.
 
-## 1. Cross-module resolution returns nothing (LSP)
+## 1. Cross-module resolution returns nothing (LSP) -- FIXED
 
-`tests/lsp/run-mcp-lsp.sh` on Windows: **65 passed, 5 failed.** All five are the
-"LSP inside a spice (A6)" group:
+`tests/lsp/run-mcp-lsp.sh` on Windows went **65 passed / 5 failed -> 70 passed
+/ 0 failed.** Two independent defects, and a wrong diagnosis of my own on the
+way.
+
+### The correction first
+
+An earlier revision of this report said:
+
+> Not spice discovery generally. `tur check src/user.tur` on the same tree
+> resolves the sibling module and exits 0.
+
+**That was wrong**, and it pointed away from the actual cause. `tur check` does
+exit 0 -- but not because discovery worked. The module search path it printed
+for a deliberately-bad import gives it away:
 
 ```
-lsp spice: definition crosses to the sibling module (got None)
-lsp spice: completion offers an imported name (got set())
-lsp spice: rename edits exactly the one real use (got 0)
-lsp spice: renaming from a use in another file refuses with a reason
-lsp spice: a local is renameable in place
+  searched:
+    .../src/no-such-module.tur    (importing file's directory)
+    .../stdlib/no-such-module.tur    (stdlib)
 ```
 
-Reduced to a standalone probe: a spice with `build.tur` and
-`src/{mathy,user}.tur`, `didOpen` on `user.tur`, then
-`textDocument/definition` on the imported `double-it`. The reply is `null`.
+Two entries. The spice's own `src/` is absent, so
+`auto_append_spice_includes` contributed **nothing**. `tur check` resolved the
+sibling anyway because `mathy.tur` sits in the importing file's own directory,
+which is search path #1 -- adjacency, not discovery. The LSP cannot lean on
+that: it analyses a scratch copy in the temp directory, whose neighbours are
+other scratch files.
 
-Two things this is **not**:
+The lesson is the one this codebase keeps teaching: exit 0 is not evidence that
+the mechanism under test ran. Asking for a module that does not exist, and
+reading the search path it printed, took a minute and settled it.
 
-- Not spice discovery generally. `tur check src/user.tur` on the same tree
-  resolves the sibling module and exits 0.
-- Not the path separator. The probe was run with the path spelled both
-  `C:/dir/src/user.tur` and `C:\dir\src\user.tur`; both return `null`.
+### Defect A: the spice walk-up could not step (src/main.c)
 
-Not root-caused further. The next step is to find where the LSP's own module
-index diverges from the one `tur check` builds, since only the former fails.
+`find_spice_root` canonicalises with `realpath()` and then walks up with
+`strrchr(dir, '/')`. On Windows `realpath` is `_fullpath`, which returns
+`C:\dir\sub` **even when the caller passed forward slashes** -- so the step
+found no separator, the loop broke at depth 0, and no spice root was ever
+found. Every `(import sibling)` inside a spice went unresolved, so the symbol
+index had no cross-module names and definition, completion and rename all
+answered "nothing here".
 
-## 2. `spice_root_of` cannot walk up a backslash path (LSP) -- fixed, unverifiable
+Two more loops in the same file had the identical bug and are fixed with the
+same helper: `find_project_root`, and the `tur docs` root probe. That makes
+four instances of this class in total, after `find_stdlib_beside_exe` and
+`rewrite_autolink_relative_paths` (#824). They all fail by returning "not
+found" rather than by erroring, which is why they survive so long.
 
-`src/lsp/lsp.c`'s walk-up looked for `strrchr(cur, '/')` and returned false when
-there was none. A path spelled `C:\dir\src\user.tur` contains no forward slash,
-so the function answered "not in a spice" for the entire platform -- silently,
-since the caller reads that as "no spice here" rather than an error.
+### Defect B: the URIs were not file URIs (src/lsp/lsp_util.c, lsp_docs.c)
 
-Fixed here (both separators), and worth stating plainly: **the fix changes no
-observable behaviour today**, because (1) above breaks cross-module resolution
-regardless. It is kept because the defect is not a hypothesis -- it is what the
-code does with a backslash -- and because it will matter the moment (1) is
-fixed. The five tests above still fail with it in place.
+With A fixed, definition resolved and returned:
 
-This is the third instance of the same bug class, after `find_stdlib_beside_exe`
-and `rewrite_autolink_relative_paths` (both fixed in #824): a POSIX-only path
-assumption that is invisible until a drive-lettered path arrives, and that fails
-by returning "nothing found" rather than by erroring.
+```
+file://C%3A%5CUsers%5Croger%5C...%5Csrc/mathy.tur
+```
 
-## 3. Time-travel replay (DAP)
+`lsp_path_to_uri` percent-encoded the drive colon and every backslash. That
+round-trips through this codebase's own decoder, so every internal comparison
+agreed and the server looked self-consistent -- but no editor spells a path
+that way, so a definition answer naming another file was a URI the client could
+not match to any document it had. Go-to-definition would land nowhere.
+
+The reverse direction was broken too: `lsp_uri_to_path` stripped exactly
+`file://` and stopped, turning the standard `file:///C:/dir/x.tur` that every
+client sends into `/C:/dir/x.tur`, which no Windows API will open.
+
+Both now speak `file:///C:/dir/x.tur`. POSIX is untouched: there is no drive
+letter, so the same code produces the same bytes it always did, and the
+backslash-to-slash rewrite is `#ifdef _WIN32` because a backslash is a legal
+character in a POSIX filename.
+
+`tests/lsp/mcp_lsp_test.py` built its URIs as `"file://" + path`, which is
+correct on POSIX and not a file URI at all on Windows. It now goes through a
+`to_uri()` helper that spells them the way a client does.
+
+## 2. `spice_root_of` cannot walk up a backslash path (LSP) -- fixed
+
+`src/lsp/lsp.c`'s own walk-up had the same defect as A, in a second copy.
+Fixed with the same shape.
+
+An earlier revision noted this fix "changes no observable behaviour, because
+(1) masks it". With (1) fixed that is no longer true -- it is on the live path
+for rename refusals now.
+
+## 3. Time-travel replay (DAP) -- still open
 
 `tests/run-dap.sh` on Windows gets a long way -- breakpoints bind, stepping
 works, variables and `evaluate` return correct values -- and then:
@@ -84,14 +129,18 @@ FAIL: timeout waiting for event output
 Whether the recorder itself is broken on Windows or the driver's relaunch step
 is, was not determined. Everything before the replay section passes.
 
-## Fix directions
+## What remains
 
-1. Root-cause (1). It is the one that costs a Windows user real editor
-   functionality: go-to-definition and rename across modules.
-2. Then run `tur_mcp_lsp_tests` and `tur_dap` in the Windows CI job. They cannot
-   go green until (1) and (3) are settled, which is why the harness fixes land
-   now and the CI wiring does not.
-3. A cheaper interim guard: a smoke check that `tur lsp` and `tur dap` answer an
-   `initialize` at all. That is the regression that just happened, it is two
-   subprocess calls, and it would have caught a total outage that 65 passing
-   assertions never saw because none of them ran.
+Only section 3. The LSP harness is green on Windows, so it is now wired into
+the Windows CI job -- the coverage that existed all along and had never run
+there. `tur_dap` is deliberately NOT wired up yet: everything in it passes
+except the replay section, and a job that is red for one known reason teaches
+people to ignore it.
+
+The `tur lsp` / `tur dap` stdio smoke test runs there too. It is two
+subprocess calls and would have caught the original total outage, which 65
+passing assertions did not -- because none of them ran on the platform.
+
+For section 3, the first question is whether the recorder is broken on
+Windows or the driver's relaunch step is. Everything before the replay
+section passes, so it is well isolated.

@@ -241,15 +241,48 @@ int lsp_ident_range_at(const char *text, size_t text_len, size_t off,
     return 1;
 }
 
+/* A drive-qualified Windows path: C:\dir or c:/dir. */
+static int lsp_has_drive(const char *p) {
+    return p && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z'))
+           && p[1] == ':' && (p[2] == '/' || p[2] == '\\');
+}
+
+/* Filesystem path -> `file:` URI.
+ *
+ * On Windows this used to percent-encode the drive colon and every backslash,
+ * emitting file://C%3A%5Cdir%5Cx.tur.  That round-trips through this file's own
+ * decoder, so every internal comparison agreed and the server looked correct --
+ * but no editor spells a path that way, so a `textDocument/definition` answer
+ * naming another file was a URI the client could not match to any document it
+ * had.  Go-to-definition landed nowhere.
+ *
+ * The spelling every LSP client uses is file:///C:/dir/x.tur: an empty
+ * authority, a literal drive colon, forward slashes.  POSIX paths are
+ * unchanged -- they already start with '/', so file:// + /dir gives the same
+ * three slashes. */
 char *lsp_path_to_uri(const char *path, char *dest, size_t dest_cap) {
     if (!path || !dest || dest_cap < 8) return dest;
     size_t di = 0;
-    /* Prefix */
     const char *prefix = "file://";
     while (*prefix && di < dest_cap - 1) dest[di++] = *prefix++;
-    /* Encode path: percent-encode characters outside unreserved + '/' */
+    /* file:///C:/... -- the slash before the drive letter is part of the path
+     * component, and the authority is empty. */
+    if (lsp_has_drive(path) && di < dest_cap - 1) dest[di++] = '/';
+    /* Encode path: percent-encode characters outside unreserved + '/'.
+     * A backslash becomes '/' rather than %5C, and the drive colon is kept
+     * literal -- both are what clients send and expect back. */
     for (const char *p = path; *p && di + 3 < dest_cap; p++) {
         unsigned char c = (unsigned char)*p;
+#ifdef _WIN32
+        /* Windows only: a backslash IS a separator there.  On POSIX it is a
+         * legal filename character, so rewriting it to '/' would invent a
+         * directory boundary -- it keeps its %5C escape. */
+        if (c == '\\') { dest[di++] = '/'; continue; }
+#endif
+        if (c == ':' && p == path + 1 && lsp_has_drive(path)) {
+            dest[di++] = ':';
+            continue;
+        }
         if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
             (c >= '0' && c <= '9') || c == '/' || c == '-' ||
             c == '_' || c == '.' || c == '~') {

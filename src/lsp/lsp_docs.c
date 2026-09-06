@@ -226,9 +226,25 @@ void lsp_docs_free(void) {
     capacity_ = count_ = 0;
 }
 
+/* `file:` URI -> filesystem path.
+ *
+ * Accepts both spellings a Windows client might send: the standard
+ * file:///C:/dir/x.tur, whose path component begins with a slash BEFORE the
+ * drive letter, and the file://C:/dir/x.tur some tooling emits.  Stripping a
+ * bare "file://" and stopping there left "/C:/dir/x.tur", which no Windows API
+ * will open -- so a correctly-formed request from a conforming editor referred
+ * to a file the server could not read.
+ *
+ * POSIX is untouched: there is no drive letter, so the leading slash stays. */
 char *lsp_uri_to_path(const char *uri, char *dest, size_t dest_cap) {
     const char *src = uri;
     if (strncmp(src, "file://", 7) == 0) src += 7;
+    /* "/C:/..." -> "C:/..." */
+    if (src[0] == '/' &&
+        ((src[1] >= 'A' && src[1] <= 'Z') || (src[1] >= 'a' && src[1] <= 'z')) &&
+        (src[2] == ':' || (src[2] == '%' && src[3] == '3' &&
+                            (src[4] == 'A' || src[4] == 'a'))))
+        src += 1;
     size_t di = 0;
     for (; *src && di < dest_cap - 1; src++) {
         if (*src == '%' && src[1] && src[2]) {
