@@ -39,7 +39,94 @@ All notable changes to Turmeric are documented here.
   help, since a VC over the cap may also carry a non-int variable the sort gate
   declines at any limit.
 
+### Added
+
+- **`with-region`: the lifetime-only region bracket** (regions plan, RM3 R5
+  graduation item 1 -- the blocker). Under `--enable=regions`, `bt-scope`
+  opens an arena generation as well as a trail level, which is right for a
+  solver but left a program with no backtracking no way to bound a lifetime
+  except by calling a search primitive. `with-region` (`stdlib/region.tur`,
+  autoloaded) is the same bracket with the region only: same reclamation,
+  no mark, no undo, and so no `#fx{Bt}` -- a `#fx{}`-declared function may
+  call it. Each corner of the trail-level/region square now has one
+  spelling: `bt-scope` (both), `with-region` (region only), the
+  `bt-mark`/`bt-undo-to!` halves (trail only). Without the flag it is an
+  identity call. Measured on the pinning fixture: live blocks at exit 908
+  -> 5, allocations 1,424 -> 521, values identical both arms. The region
+  stays a gated prototype; this removes the graduation blocker, it does not
+  flip the default. The new autoloaded module moved all 148 codegen
+  snapshots (binding-id renumbering plus one defn), regenerated in the same
+  commit. Backtrackable State Guide has the square.
+
+- **The region rewind admits a scalar-field ADT result** (RM3 R5 graduation
+  item 2, first shape). The escape walk refused any constructor field with a
+  NULL `full_type`, which is also NULL for an ordinary `:int`, so every
+  ADT-returning bracket retired instead of rewinding. It now consults the
+  declared field FORM: a bare scalar keyword reaches nothing and is admitted;
+  an ADT name, `ptr`, a type variable or a compound form still refuses. This
+  admits `(RxIP :int :int)` -- `re.tur`'s `re-find-from` result -- and keeps
+  the mutual-recursion result refused; a kind-based accept that was reverted
+  for a use-after-free is not reintroduced.
+
+### Changed
+
+- **Regions are on by default; `--enable=regions` graduated.** Every
+  `bt-scope` and `with-region` bracket now opens an arena generation, and a
+  `:heap` ADT node allocated inside it is reclaimed in one rewind when the
+  bracket exits -- provided the compiler can prove the returned value reaches
+  nothing allocated inside (a static walk over the result type plus a runtime
+  escape check; a shape neither can clear retires the generation, which is the
+  old behaviour exactly). The regions plan held this at prototype on one
+  blocker, the boundary form; with `with-region` landed, the static walk
+  widened across four pinned batches, and the three R4 residues closed, the
+  four graduation requirements are met and the default flipped. Measured on
+  the solver workload the phase was built for: the whole per-link spine goes
+  to zero leaked at exit and peak RSS drops 47%; on the pinning fixtures, live
+  blocks at exit 908 -> 0. `--enable=regions` is accepted as a `TUR-W0063`
+  no-op for one minor line; `TUR_REGIONS=0` restores the pre-graduation build
+  (plain malloc, no brackets, no shutdown) for bisection, and
+  `tests/run-regions-seam.sh` is inverted onto that off path with a canary
+  that the hatch bites, per the flags guide. The flip regenerates all 148
+  codegen snapshots (region externs, routed ctor allocations, the atexit
+  shutdown, and a bracket at each boundary now appear in every program). Plan:
+  `docs/upcoming/regions-plan.md`; the GC guide documents the mode beside RC
+  and the cycle collector.
+
+  The emitted C stays self-contained: `src/runtime/{arena,region}.{h,c}` are
+  embedded into the compiler at build time (`cmake/embed_region_runtime.cmake`)
+  and pasted verbatim into the preamble on the same DEDUP-4b archive posture
+  the rc/GC runtime follows -- declarations only when `libturt_runtime.a` is
+  on the link line, bodies in the owner TU otherwise (one region stack per
+  program, hidden in a `.so`). Before that a project build, a `--shared`
+  library, the REPL's spice cache and a bare `cc` of `tur emit-c` output all
+  linked with `undefined reference to tur_region_shutdown`. The multi-module
+  executable link, which chose the archive posture and then named no archive,
+  now links `libturt_runtime.a` like the single-file path does.
+
 ### Fixed
+
+- **The trail's `#fx{Bt}` effect row is now checked; it used to resolve to
+  nothing.** Every mutator in `stdlib/trail.tur` has carried `#fx{Bt}` since
+  0.41, but no `defeffect` declared `Bt`, and an undeclared uppercase name in
+  a row is silently dropped at resolution -- so the annotation checked as
+  `#fx{}` and `--dump-effects` showed `bt-set! : #{}`. `Bt` is now a
+  `^capability` effect declared in `trail.tur` (the autoloaded module, so it
+  is declared wherever the row is written), which makes it propagate from a
+  callee's declared row like `#fx{FS}`: a caller that declares `#fx{}` (or
+  any row without `Bt`) and reaches the trail is `TUR-E0009`. Unannotated
+  callers stay unchecked, as for every capability tag. `bt-scope`,
+  `with-untrailed`, `dfs-solve` and `dfs-choose-go` carry the row too; the
+  DFS goal constructors deliberately do not (they only build a closure).
+
+  The refinement solver's declared-row purity veto had a second defect that
+  hid behind the first: it ran once at the top of the walk and was skipped on
+  every memo hit, and the memo was written first by the predicate-impurity
+  walk, so it never fired -- for a resolved `#fx{Unsafe}` either. It now
+  applies where the verdict is memoized, so it holds on every lookup and is
+  transitive (an unannotated wrapper around a `#fx{Bt}` function is not
+  proven pure). Pinned by `sx1-bt-row-checked` and
+  `errors/sx1-bt-row-pure-caller-rejected`; the Backtrackable State Guide has
+  a section, and the Effects System Guide now documents the silent-drop trap.
 
 - **The internals guide's solver documentation was a release cycle stale.**
   The caps table gave `NO_MAX_SHARED` as 8 where the source says 16 (raised

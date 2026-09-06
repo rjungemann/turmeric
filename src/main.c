@@ -6007,6 +6007,29 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * both reported a false all-clear on exactly this question.  Use
      * tools/jit-spike/sweep-turjit.sh.  See findings 21.2/21.3 and
      * docs/archive/history/hoisted-inline-c-precedes-includes.md. */
+    /* DEDUP-4b, the project half.  resolve_rcgc_from_archive (called above,
+     * before tur_runtime.h was emitted) may have decided that libturt_runtime.a
+     * supplies the rc<T>/GC runtime -- and, since regions graduated, the region
+     * runtime -- in which case the generated header carries prototypes only
+     * and this link line has to actually name the archive.  It never did: the
+     * single-file path routes through apply_runtime_lib_mode, but this
+     * multi-module link was assembled by hand and stopped at -lm.  That went
+     * unnoticed only because the rc<T>/GC references the project fixtures
+     * left after -O2 dead-code elimination happened to be none; the region
+     * graduation made the gap unconditional, since every module's static init
+     * takes the address of tur_region_shutdown for atexit: `undefined
+     * reference to tur_region_shutdown` on every multi-module executable
+     * build.  Re-probe rather than cache: locate_runtime_lib is a pure
+     * filesystem check and this is the same answer the emitter saw.  Ahead of
+     * -lm so a static archive member that needs libm still resolves.  Shared
+     * builds never take the archive posture (g_emit_for_link is false there)
+     * and stay self-contained. */
+    if (!shared && emit_rcgc_from_archive()) {
+        char rt_libdir[4096], rt_libname[128];
+        if (locate_runtime_lib(rt_libdir, sizeof(rt_libdir),
+                               rt_libname, sizeof(rt_libname)))
+            buf_printf(&cmd, " -l%s -L%s", rt_libname, rt_libdir);
+    }
     buf_puts(&cmd, " -lm");
 #ifdef _WIN32
     /* The emitted runtime uses pthread_mutex_t/pthread_cond_t and select().
@@ -10473,6 +10496,16 @@ int main(int argc, char **argv) {
         const char *__sr3 = getenv("TUR_OPTION_NICHE");
         if (__sr3 && __sr3[0] == '0') g_opt_option_niche = false;
         else if (__sr3 && __sr3[0] == '1') g_opt_option_niche = true;
+        /* RM3 regions are ON by default since graduation out of
+         * --enable=regions (2026-09-05).  `=0` restores plain malloc at the
+         * routed ctor sites, no bracket around bt-scope / with-region, and no
+         * atexit shutdown -- the pre-graduation default build -- for bisection
+         * and for tests/run-regions-seam.sh, which keeps that path green.
+         * Independent of the SR2/SR3 hatches above: a region is a lifetime
+         * over the arena, not a representation, so it composes with either. */
+        const char *__rgn = getenv("TUR_REGIONS");
+        if (__rgn && __rgn[0] == '0') g_opt_regions = false;
+        else if (__rgn && __rgn[0] == '1') g_opt_regions = true;
     }
 
 #ifdef _WIN32

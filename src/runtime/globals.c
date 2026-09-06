@@ -119,7 +119,7 @@ bool g_dump_sizes = false;
 bool g_dump_refine_json = false;
 bool g_trail_autoloaded = false;
 bool g_opt_option_niche = true;   /* graduated 2026-09-03; TUR_OPTION_NICHE=0 restores the tagged monomorph */
-bool g_opt_regions = false;      /* RM3 prototype; --enable=regions */
+bool g_opt_regions = true;       /* graduated 2026-09-05; TUR_REGIONS=0 restores malloc + unbracketed calls */
 bool g_adt_slab = false;
 bool g_sr1_sum_byvalue = true;
 bool g_sr2_app_sum_byvalue = true;

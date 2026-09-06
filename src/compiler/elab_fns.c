@@ -557,6 +557,15 @@ static bool rt_builtin_shape_impure(BuiltinShape s) {
     }
 }
 
+/* Does `b`'s DECLARED effect row rule out congruence?  Any non-empty row
+ * does -- concrete (`#fx{Bt}`, `#fx{IO}`), a row variable (`#fx{e}`), or a
+ * still-unresolved `#fx{...}` (rows resolve in the effect pass, after this
+ * walk runs; an unresolved non-empty row is a declaration all the same). */
+static bool rt_binding_row_vetoes_purity(const Binding *b) {
+    return b->type.kind == TY_FN && b->type.as.fn.effect_row &&
+           !effect_row_is_empty(b->type.as.fn.effect_row);
+}
+
 static RtPurity rt_classify_binding(RtPureCtx *c, Binding *b) {
     if (!b) return RT_P_UNKNOWN;
     if (b->refine_purity) return (RtPurity)(b->refine_purity - 1);
@@ -583,6 +592,15 @@ static RtPurity rt_classify_binding(RtPureCtx *c, Binding *b) {
     c->min_open = UINT32_MAX;
 
     RtPurity r = rt_classify_expr(c, fd->body);
+
+    /* A declared non-empty effect row rules PURE out.  It does not prove
+     * IMPURE -- the row can name an effect the body never performs -- so it
+     * only ever downgrades to UNKNOWN.  Applied HERE, at the binding, rather
+     * than once at the top of the walk: it is memoized with the verdict (a
+     * top-only veto was skipped on every memo hit after the first), and it
+     * propagates -- a caller of a `#fx{Bt}` function is UNKNOWN too, which is
+     * what makes the declared row worth more than the body walk alone. */
+    if (r == RT_P_PURE && rt_binding_row_vetoes_purity(b)) r = RT_P_UNKNOWN;
 
     uint32_t used = c->min_open;
     c->depth--;
@@ -730,15 +748,10 @@ static RtPurity rt_classify_expr(RtPureCtx *c, const Expr *x) {
 static RtPurity rt_classify_binding_top(Binding *b) {
     if (!b) return RT_P_UNKNOWN;
     if (b->refine_purity) return (RtPurity)(b->refine_purity - 1);
-    /* A declared non-empty effect row rules PURE out.  It does not prove
-     * IMPURE -- the row can name an effect the body never performs -- so it
-     * only ever downgrades to UNKNOWN. */
-    bool row_veto = (b->type.kind == TY_FN && b->type.as.fn.effect_row &&
-                     !effect_row_is_empty(b->type.as.fn.effect_row));
+    /* The declared-row veto lives in rt_classify_binding itself, so it is
+     * memoized and transitive; nothing to add at the top. */
     RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES };
-    RtPurity r = rt_classify_binding(&c, b);
-    if (row_veto && r == RT_P_PURE) return RT_P_UNKNOWN;
-    return r;
+    return rt_classify_binding(&c, b);
 }
 
 /* True when calling `b` twice with equal arguments is guaranteed to produce

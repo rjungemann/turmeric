@@ -453,6 +453,14 @@ effects and infers nothing from `set!`, from a mutable global, or from inline C.
 A function can declare an empty row, keep a `static` counter in a C block, and
 return a different value on every call.
 
+The veto is applied where a function's verdict is memoized, so it holds on
+every later lookup and it is **transitive**: a function with no row of its own
+whose body calls a `#fx{Bt}` (or `#fx{Log}`, or `#fx{e}`) function is not
+proven pure either. It used to be applied once at the top of the walk and
+skipped on a memo hit, and the memo was usually written first by another
+walk -- so in practice it never fired. `sx1-bt-row-checked` pins both the
+direct and the transitive case, with an unannotated control that still proves.
+
 The rule has teeth. Given a `tick` that counts up, `(- (tick) (tick))` is `-1`,
 never `0` -- but encoded congruently it becomes `t - t`, and a refinement of
 `(>= r 0)` on it would be "proved" and its check elided. Three separate routes

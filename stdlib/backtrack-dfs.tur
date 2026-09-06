@@ -155,7 +155,9 @@
 ;;; dfs-choose-go -- internal: try binding c to each of lo..hi in order.
 ;;; Mark/undo halves for the same reason as dfs-or: a bt-scope thunk would
 ;;; capture (and so consume) `k`, which the next candidate still needs.
-(defn dfs-choose-go [c : BtCell lo : int hi : int ^fat k : (fn [] bool)] : bool
+(defn dfs-choose-go [c : BtCell lo : int hi : int ^fat k : (fn [] bool)]
+  #fx{Bt}
+  : bool
   (if (> lo hi)
     true
     (let [m (bt-mark)
@@ -208,9 +210,16 @@
 ;;;   (dfs-solve (dfs-choose-int x 1 3)
 ;;;              (fn [] (do (println (bt-get x)) true)))   ; prints 1 2 3 => 3
 ;;;
+;;; Carries `#fx{Bt}`: this is the entry point that actually runs the search
+;;; and so brackets, writes and unwinds the trail. The goal CONSTRUCTORS above
+;;; (`dfs-set`, `dfs-choose-int`, ...) do not carry it -- they only build a
+;;; closure, and the trail is touched when that closure runs, which is here.
+;;;
 ;;; Since: SX2
 (defn dfs-solve [^fat goal : (fn [(fn [] bool)] bool)
-                 ^fat on-solution : (fn [] bool)] : int
+                 ^fat on-solution : (fn [] bool)]
+  #fx{Bt}
+  : int
   (let [n (g-cell-new 0)]
     (bt-scope (fn []
                 (goal (fn [] (do (g-set! n (+ (g-get n) 1)) (on-solution))))))

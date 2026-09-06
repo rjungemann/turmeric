@@ -4748,6 +4748,37 @@ void emit_pending_drops_drain(EmitCtx *ctx, Buf *body, const uint32_t m[3]) {
  * Refusing costs a SAVING, never correctness: an unproven result type retires
  * the generation (`tur_region_pop`) instead of rewinding it, which is byte-for-
  * byte the behaviour of a build with the flag off. */
+/* Does a constructor field's DECLARED FORM name a by-value scalar primitive --
+ * one whose storage holds no pointer that could reach region memory?  This is
+ * the disambiguator `CtorField.kind` cannot be: a genuine `:int`, a
+ * carrier-erased ADT field (`:MA`) and the self-recursive spine all read
+ * `kind == TY_INT` with a NULL `full_type`, so the walk below cannot tell a
+ * scalar (reaches nothing) from a node (reaches) by kind, and refuses all
+ * three.  The FORM does tell them apart, because it is the surface the user
+ * wrote: a bare primitive keyword is exactly the scalar case.
+ *
+ * Only the value scalars are admitted.  `ptr` is deliberately excluded (it is a
+ * pointer, and could point into the generation); an ADT name, a type variable,
+ * an applied `(F a)` list form, and a missing form all fall through to false
+ * and are refused by the caller, exactly as before this widening.  So this can
+ * only turn a REFUSE into a PASS for a provable scalar -- never the reverse --
+ * which keeps the mutual-recursion result refused (its `:MA` field is not a
+ * scalar keyword) and admits `(RxIP :int :int)`.
+ * See docs/archive/region-walk-refuses-every-adt-result.md. */
+static bool region_field_form_is_scalar(const Form *f) {
+    if (!f || (f->tag != F_SYM && f->tag != F_KEYWORD) || !f->as.sym ||
+        !f->as.sym->name)
+        return false;
+    const char *n = f->as.sym->name;
+    return strcmp(n, "int")     == 0 || strcmp(n, "bool")    == 0 ||
+           strcmp(n, "float")   == 0 || strcmp(n, "cstr")    == 0 ||
+           strcmp(n, "int8")    == 0 || strcmp(n, "int16")   == 0 ||
+           strcmp(n, "int32")   == 0 || strcmp(n, "int64")   == 0 ||
+           strcmp(n, "uint8")   == 0 || strcmp(n, "uint16")  == 0 ||
+           strcmp(n, "uint32")  == 0 || strcmp(n, "uint64")  == 0 ||
+           strcmp(n, "float32") == 0 || strcmp(n, "float64") == 0;
+}
+
 static bool region_type_reaches_node(EmitCtx *ctx, Type t,
                                      const AdtDef **seen, uint32_t *n_seen,
                                      int depth) {
@@ -4780,19 +4811,19 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
                  * Read its def directly and continue with zero type arguments.
                  * The rest of this case is unchanged and is what does the actual
                  * proving: `is_heap` still refuses, and every ctor's every field
-                 * is still walked, with a NULL `full_type` still reading as
-                 * "reaches".
+                 * is still walked.  A NULL `full_type` used to read as "reaches"
+                 * unconditionally; it now consults the declared FORM first (see
+                 * the field loop below), so an ordinary `:int` field is admitted
+                 * as a scalar while the spine and a carrier-erased ADT field
+                 * still refuse.
                  *
-                 * That last rule is what bounds this: an ordinary `:int` field
-                 * records no `full_type` (see below), so what this actually
-                 * ADMITS today is a non-heap bare ADT whose every ctor field
-                 * either carries a walkable `full_type` or does not exist -- in
-                 * practice a field-less enum, `(defdata Color (Red) (Green))`,
-                 * which is by value (SR1) and reaches nothing.  Measured against
-                 * the pre-change walk: such a result RETIRED before and REWINDS
-                 * now, and `region-scope-adt-result`'s `pick` pins that with
-                 * the value read after the pop.  `(RxIP :int :int)` still
-                 * refuses, at the field. */
+                 * So what this ADMITS is a non-heap bare ADT whose every ctor
+                 * field is a bare scalar primitive or carries a walkable
+                 * `full_type` that itself reaches nothing: a field-less enum
+                 * `(defdata Color (Red) (Green))` and `(defdata RPair
+                 * (RIP :int :int))` alike.  Both RETIRED before and REWIND now;
+                 * `region-scope-adt-result`'s `pick` (enum) and `one-round`
+                 * (RPair) pin them with the value read after the pop. */
                 if (rt.kind == TY_ADT && rt.as.adt_.def) {
                     def = rt.as.adt_.def;
                     n_args = 0;
@@ -4817,7 +4848,7 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
              * kind-based field accept that never recursed into MB at all; the
              * old cycle-break was not on that path.  It is fixed here because
              * the widening this walk is waiting for (resolving the declared
-             * field type -- docs/reported/region-walk-refuses-every-adt-result.md)
+             * field type -- docs/archive/region-walk-refuses-every-adt-result.md)
              * WOULD recurse MA -> MB -> MA, and the old rule would then have
              * proved MA reaches nothing.  Fixing a safety lock's cycle handling
              * before the next widening rather than after.
@@ -4868,8 +4899,23 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
                      * the widening is available to whoever wants it -- it needs
                      * form-to-type resolution at emit time, which is a layering
                      * question, not a missing fact.  See
-                     * docs/reported/region-walk-refuses-every-adt-result.md. */
-                    if (!ft) return true;
+                     * docs/archive/region-walk-refuses-every-adt-result.md.
+                     *
+                     * RESOLVED: consult the declared FORM before refusing on a
+                     * NULL full_type.  A field whose form is a bare scalar
+                     * primitive (`:int`, `:cstr`, ...) reaches nothing and is
+                     * admitted; the spine (form names the def), an erased ADT
+                     * field (form is an ADT name), `ptr`, and any compound form
+                     * are not scalar keywords, so they still refuse here.  The
+                     * one-shape-at-a-time widening the report and RM3 R5
+                     * graduation item 2 call for -- admits `(RxIP :int :int)`,
+                     * keeps `(MAcons :int :MB)` refused. */
+                    if (!ft) {
+                        const Form *ff =
+                            c->field_forms ? c->field_forms[fi] : NULL;
+                        if (region_field_form_is_scalar(ff)) continue;
+                        return true;
+                    }
                     if (region_type_reaches_node(ctx, *ft, seen, n_seen, depth - 1))
                         return true;
                 }
@@ -4877,8 +4923,62 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
             (*n_seen)--;   /* fully explored and proved safe: off the path */
             return false;
         }
+        case TY_APP: {
+            /* A PARAMETRIC monomorph -- `(Vec int)`, `(Pair int int)` -- is a
+             * TY_APP, so it never reached the TY_ADT arm above and fell to
+             * `default:`: refused on sight.  That is the whole reason "a
+             * bracket returning a Vec of scalars never rewinds" (R5 item 2's
+             * own example of an over-conservative refusal).
+             *
+             * This increment admits exactly ONE parametric shape: a `Vec`
+             * whose element is a scalar.  Two facts make it sound, one per
+             * lock.  (1) Every Vec a program can hold comes from inline-C
+             * `malloc` in stdlib/vec.tur (`vec-new` ~59, the buffer ~127):
+             * vec.tur never constructs one through the record constructor,
+             * and the EMITTED `ctor_Vec__<T>` -- which IS routed through the
+             * region router like every ADT ctor, and is defined in every TU
+             * -- is called nowhere (checked across all 148 snapshots at the
+             * graduation).  So in practice the escaping handle is never
+             * region memory.  But the argument does not REST on that: the
+             * bracket passes its result to `tur_region_note_escape` before
+             * the checked pop, so a Vec handle that somehow did land in the
+             * generation would flip the escape flag and RETIRE, never rewind.
+             * The name check is the same compiler-warranted warrant the
+             * option-niche plan uses for Vec/Map/Set ("the compiler itself
+             * emits their constructors as unconditional mallocs"), and the
+             * runtime lock is what makes it safe to be wrong.  (2) The ELEMENTS are
+             * what could transitively reach, and a scalar element is an int64
+             * word in that malloc'd buffer: nothing to reach.  Anything else
+             * refuses here -- a by-value aggregate element (heap-boxed at push
+             * by the escaping bridge, and a later shape once that is pinned),
+             * an ADT element, a node element -- as does any other parametric
+             * def, whose tyvar-typed fields the field walk would refuse anyway
+             * without argument substitution it does not yet do.
+             *
+             * Pinned by `region-scope-vec-scalar`: `(Vec int)` rewinds with
+             * its elements read back after the pop; `(Vec Link)` retires. */
+            AdtDef *def = NULL;
+            Type args[16];
+            uint8_t n_args = 0;
+            if (!type_extract_adt_app(&rt, &def, args, &n_args) || !def)
+                return true;
+            if (!def->name || strcmp(def->name, "Vec") != 0 || !def->is_heap ||
+                n_args != 1)
+                return true;
+            Type el = emit_resolve_type(ctx, args[0]);
+            switch (el.kind) {
+                case TY_NIL:  case TY_NEVER: case TY_BOOL:
+                case TY_INT:  case TY_INT8:  case TY_INT16: case TY_INT32: case TY_INT64:
+                case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                case TY_CSTR:
+                    return false;           /* a scalar element reaches nothing */
+                default:
+                    return true;
+            }
+        }
         default:
-            /* Pointers, refs, rc, closures, structs, containers, type
+            /* Pointers, refs, rc, closures, structs, other containers, type
              * variables, existentials: every one of them can hold or capture a
              * node, and R4 needs none of them to say no. */
             return true;
@@ -4898,8 +4998,16 @@ bool emit_region_scope_reclaims(EmitCtx *ctx, const Type *t) {
 
 bool emit_binding_is_region_scope(const Binding *b) {
     if (!regions_enabled()) return false;
-    return b && b->name && b->name->name &&
-           strcmp(b->name->name, "bt-scope") == 0;
+    if (!b || !b->name || !b->name->name) return false;
+    /* Two region boundaries, one recognition: `bt-scope` (stdlib/trail.tur)
+     * opens a region AND a trail level; `with-region` (stdlib/region.tur) opens
+     * the region ONLY.  Both take a `[A] [^fat body : (fn [] A)] : A` thunk and
+     * hand its value back, so every site downstream of this predicate -- the
+     * static walk, the push/pop in emit_value, the CPS tailcall arm -- is
+     * identical for the two.  The only difference is in the stdlib body (mark/
+     * undo vs. a bare forwarder), which this pass never looks at. */
+    return strcmp(b->name->name, "bt-scope") == 0 ||
+           strcmp(b->name->name, "with-region") == 0;
 }
 
 static bool emit_call_is_region_scope(const Expr *e) {

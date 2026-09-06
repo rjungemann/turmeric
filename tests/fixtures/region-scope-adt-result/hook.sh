@@ -17,12 +17,14 @@
 #      field-less enum -- by value, reaches nothing -- and must REWIND
 #      (tur_region_pop_checked); this is the shape the bare-TY_ADT lookup
 #      admitted, and it retired before that change.  `one-round` returns
-#      `(RIP :int :int)`, which the walk still cannot prove (an ordinary `:int`
-#      field records no full_type), and `mutual` returns a spine reached through
-#      a cycle: both must RETIRE (tur_region_pop).  The counts are asserted, so
-#      a widening that admits `RIP` shows up here as a changed number to be
-#      read, not a silent gain -- and a widening that admits `mutual` shows up
-#      as a wrong answer in (3).
+#      `(RIP :int :int)`, and NOW REWINDS too: the scalar-field widening
+#      (region-walk-refuses-every-adt-result, resolved) reads the declared
+#      FORM `:int` and proves the result reaches no node, where the old walk
+#      refused on the field's NULL full_type.  `mutual` returns a spine reached
+#      through a cycle and still must RETIRE (tur_region_pop) -- its `:MA` field
+#      is not a scalar keyword, so the widening leaves it refused.  The counts
+#      are asserted (retire=1 rewind=2), so a future widening that admits
+#      `mutual` shows up as a changed number here AND as a wrong answer in (3).
 #
 #   3. The values SURVIVE.  This is the SR4 lesson, and the reclamation plan
 #      says it applies to regions with more force: a fixture that only checks
@@ -85,7 +87,7 @@ cat > "$TMP/in.tur" <<'EOF'
   0)
 EOF
 
-"$TUR" --enable=regions emit-c "$TMP/in.tur" 2>/dev/null > "$TMP/out.c"
+"$TUR" emit-c "$TMP/in.tur" 2>/dev/null > "$TMP/out.c"
 
 if grep -q 'tur_region_push()' "$TMP/out.c"; then
     echo "bracket: opened"
@@ -94,10 +96,14 @@ else
 fi
 
 # The extern declarations spell `tur_region_pop(int depth)` and would count.
-retire=$(grep -v '^extern' "$TMP/out.c" | grep -c 'tur_region_pop(')
-rewind=$(grep -v '^extern' "$TMP/out.c" | grep -c 'tur_region_pop_checked(')
+# Count in the PROGRAM half only (after the preamble marker): the preamble
+# now carries src/runtime/region.{h,c} verbatim (regions on by default,
+# self-contained emitted C), whose declarations, definitions and prose
+# would otherwise be counted as bracket sites.
+retire=$(sed -n '/end of fixed runtime preamble/,$p' "$TMP/out.c" | grep -c 'tur_region_pop(')
+rewind=$(sed -n '/end of fixed runtime preamble/,$p' "$TMP/out.c" | grep -c 'tur_region_pop_checked(')
 echo "retire=$retire rewind=$rewind"
 
-echo "regions off: $("$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
-echo "regions on:  $("$TUR" --enable=regions run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
+echo "regions off: $(TUR_REGIONS=0 "$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
+echo "regions on:  $("$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
 exit 0

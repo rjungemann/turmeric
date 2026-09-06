@@ -29,11 +29,43 @@
 ;;; Serializing a continuation inside an open scope is refused -- the undo
 ;;; information is process-local and does not travel with the blob.
 ;;;
+;;; THE `Bt` CAPABILITY. Every function here that mutates the trail -- the
+;;; writes, the marks, the undo/commit, the pause/resume, and the two bracket
+;;; forms -- carries `#fx{Bt}`, and `Bt` is a real `^capability` effect declared
+;;; below, so the row is CHECKED rather than decorative: a caller that declares
+;;; its own row (`#fx{}` or any row without `Bt`) and reaches the trail fails
+;;; effect-row checking with TUR-E0009, exactly as a `#fx{}` caller of an
+;;; FS-tagged function does. A caller with no row annotation is not checked --
+;;; the discipline is opt-in, as for every capability tag. The row also vetoes
+;;; the refinement solver's purity walk: a body it could otherwise prove pure
+;;; is never congruence-collapsed once it declares `Bt`, and that veto
+;;; propagates to every caller the walk reaches.
+;;;
 ;;; See docs/guides/backtrackable-state-guide.md, and
 ;;; docs/upcoming/solver-extension-plan.md sections 3.2-3.5.
 ;;;
 ;;; Since: SX1 (graduated from `--enable=backtrackable-state` 2026-08-29)
 ;; Backtrackable state (solver-extension-plan SX1).
+
+;;; Bt -- capability tag for mutating the backtracking trail.
+;;;
+;;; Never performed or handled: it annotates a function's authority to write a
+;;; trailed cell, push or unwind a trail level, or pause trailing. Declared
+;;; `^capability`, so it is justified by its annotation alone (never TUR-W0031)
+;;; and propagates from a callee's declared row into the caller's inferred row.
+;;; It is declared HERE rather than in stdlib/effects.tur because this module
+;;; is autoloaded and effects.tur is not; an effect name that no `defeffect`
+;;; declares resolves to nothing, silently, and that is precisely how the
+;;; annotation was decorative for a month.
+;;;
+;;; Returns:
+;;;   nil (never performed; used only as a #fx{Bt} row annotation)
+;;;
+;;; Example:
+;;;   (defn bind-var [c : BtCell v : int] #fx{Bt} : bool (bt-set! c v))
+;;;
+;;; Since: SX1 (checked since 2026-09-05)
+(defeffect Bt [] :nil ^capability)
 
 ;;; Mark -- an opaque handle to a trail level.
 ;;;
@@ -434,9 +466,15 @@
 ;;; already spent, which inside this bracket means the body undid or committed
 ;;; its own enclosing level -- covered by note 1.
 ;;;
+;;; Carries `#fx{Bt}` itself (it pushes and unwinds a level); `body` is
+;;; deliberately left without a declared row, so a body that also prints or
+;;; performs its own effects is not rejected at the bracket.
+;;;
 ;;; Since: SX2
 
-(defn bt-scope [A] [^fat body : (fn [] A)] : A
+(defn bt-scope [A] [^fat body : (fn [] A)]
+  #fx{Bt}
+  : A
   (let [m (bt-mark)
         r (body)]
     (do (bt-undo-to! m) r)))
@@ -464,7 +502,9 @@
 ;;;
 ;;; Since: SX2
 
-(defn with-untrailed [A] [^fat body : (fn [] A)] : A
+(defn with-untrailed [A] [^fat body : (fn [] A)]
+  #fx{Bt}
+  : A
   (do (untrailed-begin) (let [r (body)] (do (untrailed-end) r))))
 ;;; trail-reset! -- drop every level and entry WITHOUT running undo.
 ;;;

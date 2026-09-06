@@ -940,6 +940,46 @@ a nice-to-have; the asymmetry is the reason.
   picking this up should treat "make the row checked" as the actual open work --
   it is unstarted, and the annotations do not represent progress on it.
 
+  **DONE 2026-09-05: the row is checked.** Every finding of the 2026-08-29
+  revisit had one cause, and it was not in the purity walk. `effect_row_resolve`
+  **silently drops any uppercase name that no `defeffect` declares**, and
+  nothing declared `Bt` -- `stdlib/effects.tur` is not autoloaded, and the
+  tag was never added to it anyway -- so `#fx{Bt}` resolved to `#fx{}` on every
+  mutator. `--dump-effects` showed `bt-set! : #{}` all along. "No compiler
+  change was needed" was true because the annotation was not reaching the
+  compiler. The `#fx{IO}` control in the same experiment failed for the same
+  reason (not autoloaded either), which is why every shape tried "left the
+  answer unchanged".
+
+  Three changes close it:
+
+  1. **`(defeffect Bt [] :nil ^capability)` in `stdlib/trail.tur`** -- in the
+     autoloaded module, deliberately, so it is declared wherever the row is
+     written. As a capability it propagates from the declared row (the
+     `#fx{FS}` mechanism, `effect_check.c`), so a `#fx{}` caller of a trail
+     mutator is **TUR-E0009**, and it is exempt from the over-annotation
+     warning. The discipline stays opt-in: an unannotated caller is unchecked.
+  2. **`bt-scope`, `with-untrailed`, `dfs-solve` and `dfs-choose-go` carry
+     the row** -- the bracket forms this note said "land with it", and the
+     driver's two entry points that actually write and unwind. The goal
+     constructors do not: they build a closure, and the trail is touched when
+     `dfs-solve` runs it. Their thunk parameters are left without a declared
+     row so a body that also prints is not rejected at the bracket.
+  3. **The purity veto moved into `rt_classify_binding`** (elab_fns.c), where
+     the verdict is memoized. At the top only, it was skipped on every memo
+     hit -- and the memo was written first by the predicate-impurity walk, so
+     it never ran at all; that is the second half of "no verdict moves", and
+     it would have held for a resolved `#fx{Unsafe}` too. In the binding it is
+     memo-stable and **transitive**: an unannotated wrapper around a `#fx{Bt}`
+     function is UNKNOWN, not PURE. An unresolved row also vetoes (rows resolve
+     in the effect pass, after this walk), which is the conservative direction.
+
+  Pinned by `tests/fixtures/sx1-bt-row-checked` (the W0372 on a `#fx{Bt}`
+  identity and on its unannotated caller, with an unannotated control that
+  still proves; plus `#fx{Bt}` callers of both brackets running) and
+  `tests/fixtures/errors/sx1-bt-row-pure-caller-rejected` (TUR-E0009 through
+  a direct write, `bt-scope`, and `dfs-solve`). The guide has a section.
+
   The one residual worth knowing: the `#reads`-frame grant
   (`enc_reads_args_frozen`) *can* hand congruence to an otherwise-impure
   measure when its named arguments are frozen at the site. That is a
@@ -1124,6 +1164,8 @@ annotation -- measured, and pinned by
 `tests/fixtures/sx2-trail-measure-not-congruent`. See SX1's note for the probe
 and the mechanism. The row remains worth having for precision, but the driver
 no longer waits on it, which removes one of this phase's two coupled pieces.
+**The row landed checked on 2026-09-05** (SX1's note has the record);
+`dfs-solve` and `dfs-choose-go` carry it.
 
 **Re-checked 2026-08-26, after lazy streams landed in `logic.tur`.** Two of the
 statements above have moved, one helpfully and one not.
@@ -1786,9 +1828,17 @@ surface slotted where it is cheapest:
    a symmetric snapshot restores the learned clause away, which is the shape a
    solver specifically does not want. Declined rather than deferred, with a
    falsifiable revisit trigger (measure RT6, question 3). Full record in 3.5.
-2. Is a *write-once* cell flavor (`LVar`) worth its own type, or should
+2. ~~Is a *write-once* cell flavor (`LVar`) worth its own type, or should
    everything be a value cell with the stamp doing the optimization? The WAM
-   says yes; a smaller API says no.
+   says yes; a smaller API says no.~~ **ANSWERED by SX1 as shipped, recorded
+   2026-09-05:** the WAM's way, but as a *flavor* rather than a type.
+   `bt-lvar-new` allocates a write-once cell that is still a `BtCell` --
+   `bt-set!` refuses a second binding and returns `false`, undo returns it to
+   unbound, `bt-bound?` reads the state. One cell struct, one trail, one set
+   of accessors; the write-once discipline is a per-cell mode, not a second
+   representation. Pinned by `sx1-trail-basics` and the driver's
+   "lvar refusal-as-failure" case in `sx2-dfs-driver`. This question was
+   still listed as open because nobody struck it, not because it was.
 3. RT6 hint generation as the one genuine multi-shot consumer: capture after
    hypotheses are asserted, re-enter once per candidate. Does it beat the RT7
    memo? Depends on the work ahead of the branch point -- measure (SX0 curve

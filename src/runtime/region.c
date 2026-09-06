@@ -62,7 +62,7 @@ static bool push_ptr(Arena ***vec, int *n, int *cap, Arena *a) {
     return true;
 }
 
-int tur_region_push(void) {
+TUR_RT_API int tur_region_push(void) {
     Arena *a;
     if (g_pool_n > 0) {
         a = g_pool[--g_pool_n];    /* already reset by the reclaim that pooled it */
@@ -92,7 +92,7 @@ int tur_region_push(void) {
     return g_live_n;   /* 1-based depth */
 }
 
-void tur_region_note_escape(const void *p) {
+TUR_RT_API void tur_region_note_escape(const void *p) {
     if (g_live_n <= 0 || !p) return;
     /* Only an escape that IS region memory matters.  A malloc'd or static
      * pointer crossing the boundary is ordinary and blocks nothing -- which is
@@ -120,7 +120,7 @@ static Arena *detach(int depth) {
     return g_live[--g_live_n];
 }
 
-void tur_region_pop(int depth) {
+TUR_RT_API void tur_region_pop(int depth) {
     Arena *a = detach(depth);
     if (!a) return;
     if (!push_ptr(&g_retired, &g_retired_n, &g_retired_cap, a)) {
@@ -131,7 +131,7 @@ void tur_region_pop(int depth) {
     }
 }
 
-void tur_region_pop_reclaim(int depth) {
+TUR_RT_API void tur_region_pop_reclaim(int depth) {
     Arena *a = detach(depth);
     if (!a) return;
     /* Rewind, do not release.  arena_reset keeps the slabs and, in a Debug
@@ -145,7 +145,7 @@ void tur_region_pop_reclaim(int depth) {
     }
 }
 
-bool tur_region_pop_checked(int depth) {
+TUR_RT_API bool tur_region_pop_checked(int depth) {
     if (depth <= 0 || depth != g_live_n) return false;   /* mismatched: refuse */
     if (generation_escaped(depth - 1)) {
         tur_region_pop(depth);       /* retire: correctness over saving */
@@ -155,17 +155,17 @@ bool tur_region_pop_checked(int depth) {
     return true;
 }
 
-void *tur_region_alloc(size_t n) {
+TUR_RT_API void *tur_region_alloc(size_t n) {
     if (g_live_n <= 0) return NULL;   /* no region open -- caller uses malloc */
     return arena_alloc(g_live[g_live_n - 1], n);
 }
 
-void *tur_region_alloc_or_malloc(size_t n) {
+TUR_RT_API void *tur_region_alloc_or_malloc(size_t n) {
     void *p = tur_region_alloc(n);
     return p ? p : malloc(n);
 }
 
-bool tur_region_owns(const void *p) {
+TUR_RT_API bool tur_region_owns(const void *p) {
     if (!p) return false;
     for (int i = 0; i < g_live_n; i++)
         if (arena_owns(g_live[i], p)) return true;
@@ -174,7 +174,7 @@ bool tur_region_owns(const void *p) {
     return false;
 }
 
-void tur_region_free(void *p) {
+TUR_RT_API void tur_region_free(void *p) {
     if (!p) return;
     /* Region memory is owned by the generation, not by this pointer: handing it
      * to free() is an allocator mismatch (glibc aborts), so the guard is not a
@@ -184,9 +184,9 @@ void tur_region_free(void *p) {
     free(p);
 }
 
-bool tur_region_active(void) { return g_live_n > 0; }
+TUR_RT_API bool tur_region_active(void) { return g_live_n > 0; }
 
-void tur_region_shutdown(void) {
+TUR_RT_API void tur_region_shutdown(void) {
     for (int i = 0; i < g_live_n; i++)    { arena_free(g_live[i]);    free(g_live[i]); }
     for (int i = 0; i < g_retired_n; i++) { arena_free(g_retired[i]); free(g_retired[i]); }
     for (int i = 0; i < g_pool_n; i++)    { arena_free(g_pool[i]);    free(g_pool[i]); }

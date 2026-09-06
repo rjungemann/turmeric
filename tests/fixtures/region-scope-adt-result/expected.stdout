@@ -1,4 +1,4 @@
 bracket: opened
-retire=2 rewind=1
+retire=1 rewind=2
 regions off: 14 42 1 0 
 regions on:  14 42 1 0 

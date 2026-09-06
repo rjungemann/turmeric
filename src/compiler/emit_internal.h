@@ -759,6 +759,13 @@ bool emit_call_is_raw_slot_read(const struct Expr *e);
  * `bt-scope` inside a CPS-lowered function never reaches emit_value, and two
  * copies of this question would drift. */
 bool emit_binding_is_region_scope(const struct Binding *b);
+/* RM3 R5 item 3: emit `atexit(tur_region_shutdown);` at `indent` when regions
+ * are enabled, else nothing.  Must be called BEFORE the `__tur_static_init();`
+ * band registers a module defer -- which means INSIDE __tur_static_init, right
+ * after its idempotent guard (static_init_emit), and nowhere else: a main
+ * prologue is too late, because a constructor runs __tur_static_init (and so
+ * registers the defers) before main.  See the definition. */
+void emit_region_shutdown_atexit(Buf *out, int indent);
 bool emit_region_scope_reclaims(struct EmitCtx *ctx, const struct Type *t);
 /* S1 (jit-engine-plan section 4): true when an emitted C type NAME denotes a
  * scalar -- any pointer, or one of the primitive/stdint spellings the emitter

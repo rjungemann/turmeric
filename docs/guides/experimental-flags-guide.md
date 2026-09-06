@@ -152,9 +152,9 @@ compiles any more. If a bisection hatch survives graduation (`--enable` gone,
 does not retire with the flag: **it inverts, and keeps covering what is now the
 off path.**
 
-Three graduations have hit this and two got it right by instinct.
-`run-sr4-seam.sh` and `run-option-niche-seam.sh` both flipped their harness at
-graduation; SR2's was deleted, on the reasoning that "every `bash tests/run.sh`
+Four graduations have hit this and three got it right.
+`run-sr4-seam.sh`, `run-option-niche-seam.sh` and `run-regions-seam.sh` all
+flipped their harness at graduation; SR2's was deleted, on the reasoning that "every `bash tests/run.sh`
 compiles all eleven of its fixtures that way now" -- true, and it covers the ON
 path, while leaving the OFF path with no cover at all. That is precisely the
 state the harness had been built to prevent, with the two paths swapped.

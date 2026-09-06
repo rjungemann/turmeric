@@ -1,0 +1,4 @@
+bracket: opened
+retire=1 rewind=1
+regions off: 2 10 36 1 
+regions on:  2 10 36 1 

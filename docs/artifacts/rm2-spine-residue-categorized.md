@@ -72,12 +72,13 @@ today reclaims nothing: a `bt-scope` whose result is a by-value record emitted
 **zero** `tur_region_push()` calls. It compiled, ran, printed the right answer,
 and silently did not open a region.
 
-**Half of that is fixed** -- the bracket is emitted now
-([archived](../archive/region-bracket-lost-when-bt-scope-specializes.md)) -- and
-the other half is that the walk does NOT in fact accept `(RxIP :int :int)`, as
-this section claimed. It refuses at field 0, because a plain `:int` field
-records no `full_type`. See step 1 of the order of work below and
-[region-walk-refuses-every-adt-result](../reported/region-walk-refuses-every-adt-result.md).
+**Both halves are fixed now.** The bracket is emitted
+([archived](../archive/region-bracket-lost-when-bt-scope-specializes.md)); and
+the walk, which at the time of this snapshot did NOT accept `(RxIP :int :int)`
+(it refused at field 0, because a plain `:int` field records no `full_type`),
+was widened to decide the field by its declared FORM rather than its kind, so a
+scalar-field ADT result now rewinds. See step 1 of the order of work below and
+[region-walk-refuses-every-adt-result](../archive/region-walk-refuses-every-adt-result.md).
 
 ### Category 3 -- 96 B, genuinely RM2's
 
@@ -125,19 +126,25 @@ exactly one fixture wide.
    the same day by routing a region boundary to `cps->direct`, the only arm the
    bracket can live on.
 
-   **Category 2 is still not reclaimed, and the blocker moved rather than
-   closing.** `re-find-from` gets a bracket now, and that bracket RETIRES rather
-   than rewinding, because the static walk refuses on a ctor field with no
-   recorded `full_type` -- which is every ordinary `:int`, not just the spine its
-   comment describes. Deciding by the field's kind is unsound and was measured
-   so (a genuine `:int` and a carrier-erased ADT field both report `TY_INT`;
-   accepting on kind reclaimed a live mutually-recursive spine and printed 0
-   instead of 42). Now
-   [region-walk-refuses-every-adt-result](../reported/region-walk-refuses-every-adt-result.md),
-   with the source of truth named: `c->field_forms[fi]` is populated for plain
-   defdata, so this is a layering question, not a missing fact.
+   **Category 2's scalar-field ADT result IS reclaimed now (2026-09-05).**
+   `re-find-from` returns `(RxIP :int :int)`; the bracket used to RETIRE it
+   because the static walk refused on a ctor field with no recorded `full_type`
+   -- which is every ordinary `:int`, not just the spine its comment describes.
+   Deciding by the field's kind was unsound and measured so (a genuine `:int`
+   and a carrier-erased ADT field both report `TY_INT`; accepting on kind
+   reclaimed a live mutually-recursive spine and printed 0 instead of 42), so
+   the fix decides by the declared FORM instead: a bare scalar keyword reaches
+   nothing and is admitted, an ADT name / `ptr` / tyvar / compound form stays
+   refused. `(RxIP :int :int)` now REWINDS; the mutual-recursion result still
+   RETIRES and prints 42.
+   [region-walk-refuses-every-adt-result](../archive/region-walk-refuses-every-adt-result.md)
+   is RESOLVED. What is still refused in category 2: a recursive spine reached
+   through a cycle, and a carrier-erased ADT field -- each a later increment.
 2. **Add a `with-region` bracket.** Category 1's 496 B is unreachable without it
-   and needs nothing else; category 2's 312 B needs it plus the region-bracket fix in step 1's follow-up.
+   -- it needs a lifetime boundary that is not a `bt-scope`. Category 2's 312 B
+   is now reclaimed under `bt-scope` (step 1 above), but `with-region` is what a
+   caller who wants the lifetime without a trail level would use; it is RM3 R5
+   graduation item 1, a public-surface decision rather than a walk change.
 3. **Then re-measure.** What is left should be category 3 and whatever step 2
    turns up -- a far smaller set than the phase as scoped, and one where per-node
    ownership may be inferable, since the escaping cases are the ones a promotion

@@ -43,6 +43,10 @@ extern bool g_emit_ffi_export_shims;
  * resolves it from the same archive probe the link step uses; the probe is a
  * pure filesystem check, so it is safe to run ahead of codegen. */
 void emit_set_rcgc_from_archive(bool from_archive);
+/* The posture as last set -- true when the emitted preamble declared the
+ * archive-owned runtime (rc<T>/GC, regions) without defining it, so the
+ * caller's link line must carry libturt_runtime.a. */
+bool emit_rcgc_from_archive(void);
 
 /* J5/J6: A forced ABI specialization -- a clone that a borrower module needs
  * emitted by the owner module (even when the owner has no local call sites).

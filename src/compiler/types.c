@@ -1443,16 +1443,19 @@ bool adt_ctor_is_null_none(const AdtDef *def, const CtorDef *ctor) {
  * per-node spine box of a persistent recursive structure, which RM1 cannot
  * reach and RM2 cannot own.
  *
- * A real experiment rather than an env seam, per the CLAUDE.md rule for an
- * in-flight feature: it is user-visible surface and it is the reclamation
- * phase most able to produce a silent wrong answer, so a user who turns it on
- * gets the TUR-W0060 lifecycle warning and a plan to read.
- * `experiment_warn_if_used` is once-per-compile guarded, so consulting this
- * from a hot path would cost one index lookup after the first. */
+ * GRADUATED 2026-09-05 (RM3 R5): on by default.  It was a real experiment
+ * rather than an env seam while in flight, per the CLAUDE.md rule -- it is
+ * user-visible surface and the reclamation phase most able to produce a silent
+ * wrong answer -- and R5 held it at prototype on one blocker, the boundary
+ * form.  With `with-region` landed, the static walk widened across four pinned
+ * batches, and the three R4 residues closed, the default flipped.  `TUR_REGIONS=0`
+ * is the bisection hatch (read once in main.c): it restores plain malloc at
+ * the four routed ctor sites, no bracket around bt-scope / with-region, and no
+ * atexit shutdown -- byte-for-byte the pre-graduation default build.
+ * tests/run-regions-seam.sh keeps THAT path green (inverted at graduation, per
+ * the flags guide), so the hatch cannot rot the way an unused flag does. */
 bool regions_enabled(void) {
-    if (!g_opt_regions) return false;
-    experiment_warn_if_used("regions");
-    return true;
+    return g_opt_regions;
 }
 
 /* RM3 R4: the free-side twin of the ctor routing above.

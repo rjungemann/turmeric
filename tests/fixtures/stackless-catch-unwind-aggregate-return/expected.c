@@ -352,6 +352,152 @@ static int64_t tur_opt_value(int64_t __o) __attribute__((unused));
 static int64_t tur_opt_value(int64_t __o) {
     return ((tur_option_t *)(intptr_t)__o)->as.value;
 }
+#ifndef TUR_RT_API
+#  ifdef TUR_RT_LOCAL
+#    define TUR_RT_API TUR_RT_LOCAL
+#  else
+#    define TUR_RT_API
+#  endif
+#endif
+/* ---- begin src/runtime/region.h (embedded verbatim) ---- */
+#ifndef TUR_REGION_H
+#define TUR_REGION_H
+/* region.h -- declared lifetimes (RM3), over the Arena that already ships.
+ *
+ * The reclamation plan's third phase.  RM1 frees a box whose owner is a scope;
+ * RM2 would free a node whose owner is a value, and cannot, because a
+ * persistent structure's nodes have no unique owner -- `(SBind v t rest)`
+ * shares `rest` with every older chain, so "is this the last reference?" is a
+ * runtime fact no static rule answers.
+ *
+ * A region does not ask who owns a node.  It asks WHEN THE GENERATION DIES.
+ * Every node allocated between a push and its matching pop dies at the pop, in
+ * one O(slabs) rewind, with no per-node bookkeeping at all.
+ *
+ * See docs/upcoming/regions-plan.md.  ON BY DEFAULT since graduation out of
+ * `--enable=regions` on 2026-09-05 (g_opt_regions, default true); TUR_REGIONS=0
+ * is the bisection hatch that restores the pre-graduation build.
+ *
+ * THE SAFETY RULE, and it is the whole design:
+ *
+ *   A region that cannot prove every escaping value relocatable does not
+ *   rewind.
+ *
+ * There are no partial rewinds and no best-effort.  A shape the escape check
+ * cannot handle costs a SAVING, never correctness -- the same discipline
+ * turi's value-pool promotion walk runs on ("a missed shape means this eval
+ * does not shrink, never use-after-reset").  R1 ships the mechanism with the
+ * rule enforced the only way it can be before the escape check exists: a pop
+ * rewinds only when the caller has vouched for the generation
+ * (`tur_region_pop_reclaim`), and the plain `tur_region_pop` does not rewind
+ * at all.  R3 replaces the caller's word with a proof.
+ *
+ * The Debug arena poisons reclaimed bytes, so a value that outlives its region
+ * crashes loudly under ASan rather than reading stale-but-mapped data.  That
+ * backstop is why this is shippable behind a flag at all; do not disable it. */
+#include <stdbool.h>
+#include <stddef.h>
+
+/* Linkage qualifier for the public surface.  Empty when this is compiled as
+ * an ordinary runtime TU (the compiler itself, libturt_runtime.a).  The
+ * emitter pastes this header and region.c verbatim into an emitted program
+ * that does not link the archive (src/compiler/emit_module.c,
+ * emit_region_runtime_bodies); in a --shared build it defines this as
+ * TUR_RT_LOCAL (hidden visibility) first, so a .so keeps its generation stack
+ * to itself -- the same reasoning DEDUP-5 applied to the GC registry. */
+#ifndef TUR_RT_API
+#define TUR_RT_API
+#endif
+
+/* Push a new generation.  Returns the depth, which `tur_region_pop*` takes
+ * back so a mismatched pair is caught rather than silently rewinding someone
+ * else's generation. */
+TUR_RT_API int  tur_region_push(void);
+
+/* Pop WITHOUT reclaiming: the generation's memory stays live for the process.
+ * The conservative default, and what R1 uses everywhere -- correctness with no
+ * saving, which is the safe half of the rule above. */
+TUR_RT_API void tur_region_pop(int depth);
+
+/* Pop AND rewind, unconditionally.  The caller asserts that nothing allocated
+ * in this generation is still reachable.  Prefer `tur_region_pop_checked`,
+ * which asks rather than asserts; this one remains for a caller that owns both
+ * ends of the scope and has its own proof. */
+TUR_RT_API void tur_region_pop_reclaim(int depth);
+
+/* --- R3: the escape check ---------------------------------------------- *
+ *
+ * Note that `p` crosses out of the innermost generation.  A value that is NOT
+ * region memory (a malloc'd box, a static, a scalar cast to a pointer) is
+ * recorded and harmless; one that IS marks the generation non-reclaimable.
+ *
+ * WHAT THIS DOES AND DOES NOT ESTABLISH, because the difference is the whole
+ * safety argument:
+ *
+ *   It proves the escaping pointer ITSELF does not point into the generation.
+ *   It proves nothing about what that pointer TRANSITIVELY reaches -- a
+ *   malloc'd struct whose field points at a region node passes this check and
+ *   would dangle after a rewind.
+ *
+ * So this is the SECOND lock, not the first.  The first is static: the region
+ * form only reclaims when its result TYPE cannot transitively reach a
+ * region-allocated node, which is a compile-time question with a decidable
+ * conservative answer.  This runtime check catches the direct case cheaply and
+ * makes a static mistake loud rather than silent.  Neither alone is the
+ * argument; do not remove one on the strength of the other. */
+TUR_RT_API void tur_region_note_escape(const void *p);
+
+/* Pop, reclaiming ONLY if no noted escape pointed into the generation.
+ * Returns true when it reclaimed, false when it retired instead -- the caller
+ * can use that to report whether a region paid for itself.
+ *
+ * Reclaiming REWINDS rather than releases: the arena is reset (which poisons
+ * its bytes in a Debug build, so a straggler traps at the deref under ASan
+ * instead of reading stale data) and kept for the next push.  A per-query
+ * region in a loop therefore allocates its slabs once. */
+TUR_RT_API bool tur_region_pop_checked(int depth);
+
+/* Allocate `n` bytes in the innermost live generation.  Returns NULL when no
+ * region is open, which every caller must treat as "use malloc instead" -- a
+ * region is an optimisation, never a requirement. */
+TUR_RT_API void *tur_region_alloc(size_t n);
+
+/* Allocate `n` bytes in the innermost live generation if one is open, and from
+ * the heap otherwise.  The routing point for RM3 R2: a spine-node constructor
+ * calls this instead of `malloc`, so the SAME emitted code allocates by
+ * generation inside a region and exactly as it does today outside one.
+ *
+ * A caller must therefore never assume the result is region memory -- pair it
+ * with `tur_region_owns` before any `free()`.  That guard is the whole reason
+ * the two allocators can share one call site. */
+TUR_RT_API void *tur_region_alloc_or_malloc(size_t n);
+
+/* True when `p` points into any live generation.  The guard the reclamation
+ * plan requires on every free path: a pointer into region memory must never
+ * reach `free()`, because the slab, not the pointer, owns it. */
+TUR_RT_API bool tur_region_owns(const void *p);
+
+/* `free(p)` unless `p` is region memory, in which case the generation owns it
+ * and the pop reclaims it.
+ *
+ * R4 makes this load-bearing rather than advisory.  R2 routed the spine-node
+ * constructor through `tur_region_alloc_or_malloc`, so from R2 onward a node
+ * inside a region is arena memory while the SAME emitted drop glue still ends
+ * in `free(ptr)` -- an allocator mismatch that aborts, not a leak.  Every node
+ * free path therefore spells this instead of `free` when regions are enabled,
+ * exactly mirroring the allocation side's one-call-site routing.
+ *
+ * A NULL is a no-op, like `free`. */
+TUR_RT_API void tur_region_free(void *p);
+
+/* True when at least one generation is open. */
+TUR_RT_API bool tur_region_active(void);
+
+/* Release every generation and the backing arena.  Process teardown only. */
+TUR_RT_API void tur_region_shutdown(void);
+
+#endif
+/* ---- end src/runtime/region.h ---- */
 static int64_t tur_opt_value_checked(int64_t __o) __attribute__((unused));
 static int64_t tur_opt_value_checked(int64_t __o) {
     tur_option_t *__p = (tur_option_t *)(intptr_t)__o;
@@ -460,6 +606,527 @@ static void *__tur_fatshim_keep[] __attribute__((unused)) = {
     (void *)__tur_poly_to_fat0, (void *)__tur_poly_to_fat1,
     (void *)__tur_poly_to_fat2, (void *)__tur_poly_to_fat3,
     (void *)__tur_poly_to_fat4, (void *)__tur_poly_to_fat5 };
+/* ---- begin src/runtime/arena.h (embedded verbatim) ---- */
+#ifndef TUR_ARENA_H
+#define TUR_ARENA_H
+
+#include <stddef.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+/* Linkage qualifier -- see region.h.  Empty in an ordinary runtime TU; the
+ * emitter defines it before pasting this header into an emitted program. */
+#ifndef TUR_RT_API
+#define TUR_RT_API
+#endif
+
+typedef struct ArenaSlab ArenaSlab;
+
+typedef struct Arena {
+    ArenaSlab *head;
+    size_t default_slab;
+    size_t total_bytes;
+    size_t total_allocs;
+} Arena;
+
+TUR_RT_API void  arena_init(Arena *a, size_t default_slab_size);
+TUR_RT_API void *arena_alloc(Arena *a, size_t size);
+TUR_RT_API void *arena_alloc_aligned(Arena *a, size_t size, size_t align);
+TUR_RT_API char *arena_strdup(Arena *a, const char *s, size_t len);
+TUR_RT_API void  arena_free(Arena *a);
+
+/* Rewind every slab to empty without releasing the backing memory, so the arena
+ * can be reused for a fresh generation of allocations in O(slabs).  This is the
+ * scratch-region reset primitive for the turi value-pool scratch/permanent split
+ * (turi-value-pool-scratch-promotion-plan): a long-lived TuriEnv rewinds its
+ * scratch pool at each top-level eval boundary after promoting escapees.
+ *
+ * In a Debug build (NDEBUG undefined) the reclaimed bytes are overwritten with a
+ * poison pattern first, so any pointer that survived into the rewound region and
+ * is dereferenced afterwards crashes loudly under ASan instead of reading stale
+ * (but still-mapped) data -- the "poison-on-reset debug mode" the plan calls for. */
+TUR_RT_API void  arena_reset(Arena *a);
+
+/* True when p points into any slab currently owned by a.  Used by the promotion
+ * walk to decide whether a payload pointer is scratch-allocated (copy + forward)
+ * or lives elsewhere -- permanent pool, eval arenas, sym arena, static data --
+ * and must be left untouched.  O(slabs). */
+TUR_RT_API bool  arena_owns(const Arena *a, const void *p);
+
+#endif
+/* ---- end src/runtime/arena.h ---- */
+/* ---- begin src/runtime/arena.c (embedded verbatim) ---- */
+/* (local #include dropped: that header is pasted above) */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+
+#define DEFAULT_SLAB (64 * 1024)
+
+struct ArenaSlab {
+    ArenaSlab *next;
+    size_t cap;
+    size_t used;
+    /* data[cap] follows inline */
+    unsigned char data[];
+};
+
+/* ---- ASan-aware debug poisoning (docs/archive/history/arena-debug-poisoning-plan.md)
+ *
+ * The bump arena is invisible to ASan at sub-allocation granularity: a stale
+ * pointer into a reset arena reads still-mapped garbage, and a stale pointer
+ * into a FREED arena usually aliases the next compile's reallocated slabs
+ * (malloc reuses the addresses), corrupting live data with no report.  In a
+ * Debug+ASan build we close both holes:
+ *
+ *   - reset/free POISON the reclaimed bytes with the real ASan interface, so a
+ *     straggler deref traps as use-after-poison AT the deref;
+ *   - free QUARANTINES the slabs (poisoned, chained off a global so LSan still
+ *     sees them as reachable) instead of returning them to malloc, so freed
+ *     arena addresses are never reused within the process and the poison
+ *     cannot be undone by a later malloc.
+ *
+ * Opt out with TUR_DEBUG_ARENA_POISON=0 (e.g. for a long-lived Debug REPL
+ * where the quarantine's bounded, deliberate retention is unwanted).  The
+ * whole mechanism compiles away in Release / non-ASan builds. */
+#if defined(__has_feature)
+# if __has_feature(address_sanitizer)
+#  define TUR_ARENA_ASAN 1
+# endif
+#elif defined(__SANITIZE_ADDRESS__)
+# define TUR_ARENA_ASAN 1
+#endif
+
+/* Guard-page mode (plan phase AP4): TUR_DEBUG_ARENA_GUARD=1 in a Debug build
+ * backs every slab with its own mmap and mprotect(PROT_NONE)s it on
+ * arena_free instead of returning it to malloc.  Any later access through a
+ * stale pointer into a freed arena is then a hard SIGSEGV AT THE DEREF, with
+ * the faulting address still inside the old slab -- the strongest form of
+ * the diagnostic, and the one that works when ASan's own allocator perturbs
+ * the layout enough to hide the bug.  The protected regions are retained for
+ * the life of the process (bounded, deliberate).  Opt-in only.
+ *
+ * Unavailable on Windows, hence TUR_ARENA_GUARD rather than a bare NDEBUG
+ * test: the mode needs mprotect(PROT_NONE) to retire a mapping in place, and
+ * platform_mman.h deliberately emulates only anonymous mmap/munmap -- it
+ * declines mprotect rather than fake it (see the header's comment).  Since
+ * this is an opt-in diagnostic and not a correctness feature, the Windows
+ * build simply loses it and keeps the malloc path; TUR_DEBUG_ARENA_GUARD=1
+ * is a no-op there. */
+#if !defined(NDEBUG) && !defined(_WIN32)
+#define TUR_ARENA_GUARD 1
+#include <sys/mman.h>
+#include <unistd.h>
+
+static int arena_guard_mode(void) {
+    static int mode = -1;
+    if (mode < 0) {
+        const char *e = getenv("TUR_DEBUG_ARENA_GUARD");
+        mode = (e && e[0] == '1' && e[1] == '\0');
+    }
+    return mode;
+}
+#endif
+
+#if defined(TUR_ARENA_ASAN) && !defined(NDEBUG)
+#include <sanitizer/asan_interface.h>
+
+static int arena_poison_mode(void) {
+    static int mode = -1;
+    if (mode < 0) {
+        const char *e = getenv("TUR_DEBUG_ARENA_POISON");
+        mode = !(e && e[0] == '0' && e[1] == '\0');
+    }
+    return mode;
+}
+
+/* Freed-slab quarantine.  Chained via the slabs' own next pointers and rooted
+ * in a global so the memory stays reachable (LSan-clean) while its addresses
+ * stay out of malloc circulation for the life of the process. */
+static ArenaSlab *g_arena_quarantine = NULL;
+
+static void arena_dbg_unpoison(void *p, size_t n) {
+    if (arena_poison_mode()) __asan_unpoison_memory_region(p, n);
+}
+#else
+static void arena_dbg_unpoison(void *p, size_t n) { (void)p; (void)n; }
+#endif
+
+static void oom(void) {
+    fprintf(stderr, "tur: out of memory\n");
+    abort();
+}
+
+static ArenaSlab *slab_new(size_t cap) {
+#ifdef TUR_ARENA_GUARD
+    if (arena_guard_mode()) {
+        /* Page-rounded private mapping so arena_free can mprotect it whole.
+         * cap absorbs the rounding slack (header + cap == mapping exactly). */
+        size_t page  = (size_t)sysconf(_SC_PAGESIZE);
+        size_t total = (sizeof(ArenaSlab) + cap + page - 1) & ~(page - 1);
+        ArenaSlab *s = (ArenaSlab *)mmap(NULL, total, PROT_READ | PROT_WRITE,
+                                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (s == MAP_FAILED) oom();
+        s->next = NULL;
+        s->cap = total - sizeof(ArenaSlab);
+        s->used = 0;
+        return s;
+    }
+#endif
+    ArenaSlab *s = (ArenaSlab *)malloc(sizeof(ArenaSlab) + cap);
+    if (!s) oom();
+    s->next = NULL;
+    s->cap = cap;
+    s->used = 0;
+    return s;
+}
+
+TUR_RT_API void arena_init(Arena *a, size_t default_slab_size) {
+    a->head = NULL;
+    a->default_slab = default_slab_size ? default_slab_size : DEFAULT_SLAB;
+    a->total_bytes = 0;
+    a->total_allocs = 0;
+}
+
+static size_t align_up(size_t n, size_t align) {
+    assert(align && (align & (align - 1)) == 0);
+    return (n + (align - 1)) & ~(align - 1);
+}
+
+TUR_RT_API void *arena_alloc_aligned(Arena *a, size_t size, size_t align) {
+    if (size == 0) size = 1;
+    if (align < sizeof(void *)) align = sizeof(void *);
+
+    /* Align the ABSOLUTE address, not the offset: the slab's data[] field sits
+     * at a non-trivial offset past the ArenaSlab header (e.g. 24 bytes), so a
+     * 16-byte-aligned malloc base leaves data[] only 8-byte aligned.  Aligning
+     * s->used alone would therefore never satisfy align > 8 (a TuriFiber leads
+     * with a ucontext_t needing 16-byte alignment -- see turi/fiber.c).  Round
+     * the real pointer up instead so any power-of-two alignment is honored. */
+    ArenaSlab *s = a->head;
+    if (s) {
+        uintptr_t base = (uintptr_t)s->data;
+        size_t aligned_used = align_up(base + s->used, align) - base;
+        if (aligned_used + size <= s->cap) {
+            void *p = s->data + aligned_used;
+            s->used = aligned_used + size;
+            a->total_bytes += size;
+            a->total_allocs++;
+            arena_dbg_unpoison(p, size);
+            return p;
+        }
+    }
+
+    /* Need a new slab. Grow if the request is large. The extra `align` bytes
+     * cover worst-case alignment padding at the head of a fresh slab. */
+    size_t cap = a->default_slab;
+    if (size + align > cap) cap = size + align;
+    ArenaSlab *fresh = slab_new(cap);
+    fresh->next = a->head;
+    a->head = fresh;
+
+    uintptr_t base = (uintptr_t)fresh->data;
+    size_t aligned_used = align_up(base, align) - base;
+    void *p = fresh->data + aligned_used;
+    fresh->used = aligned_used + size;
+    a->total_bytes += size;
+    a->total_allocs++;
+    arena_dbg_unpoison(p, size);
+    return p;
+}
+
+TUR_RT_API void *arena_alloc(Arena *a, size_t size) {
+    return arena_alloc_aligned(a, size, sizeof(void *));
+}
+
+TUR_RT_API char *arena_strdup(Arena *a, const char *s, size_t len) {
+    char *p = (char *)arena_alloc_aligned(a, len + 1, 1);
+    if (len) memcpy(p, s, len);
+    p[len] = '\0';
+    return p;
+}
+
+TUR_RT_API void arena_free(Arena *a) {
+    ArenaSlab *s = a->head;
+    while (s) {
+        ArenaSlab *next = s->next;
+#ifdef TUR_ARENA_GUARD
+        if (arena_guard_mode()) {
+            /* Retire the whole mapping: any stale pointer into this arena now
+             * faults at the deref.  Never unmapped, so the address range is
+             * never recycled into a later arena. */
+            mprotect(s, sizeof(ArenaSlab) + s->cap, PROT_NONE);
+            s = next;
+            continue;
+        }
+#endif
+#if defined(TUR_ARENA_ASAN) && !defined(NDEBUG)
+        if (arena_poison_mode()) {
+            /* Quarantine instead of free: poison the payload and park the slab
+             * (header included) so its addresses are never handed out again by
+             * malloc.  A stale cross-arena pointer then traps at the deref
+             * instead of silently aliasing the next arena's live data. */
+            __asan_poison_memory_region(s->data, s->cap);
+            s->next = g_arena_quarantine;
+            g_arena_quarantine = s;
+        } else {
+            free(s);
+        }
+#else
+        free(s);
+#endif
+        s = next;
+    }
+    a->head = NULL;
+    a->total_bytes = 0;
+    a->total_allocs = 0;
+}
+
+/* Poison byte for reclaimed scratch memory; 0xDE reads back as an obviously-bad
+ * pointer (0xDEDEDEDE...) if a straggler is dereferenced. */
+#define ARENA_POISON 0xDE
+
+TUR_RT_API void arena_reset(Arena *a) {
+    for (ArenaSlab *s = a->head; s; s = s->next) {
+#ifndef NDEBUG
+        /* Poison the bytes we are about to hand out again so a missed pointer
+         * into the rewound region crashes loudly instead of reading stale data. */
+        if (s->used) {
+#if defined(TUR_ARENA_ASAN)
+            if (arena_poison_mode()) {
+                /* The used region is a patchwork of unpoisoned allocations and
+                 * still-poisoned alignment gaps from earlier generations, so
+                 * lift the poison before the memset can trip over a gap, then
+                 * re-poison the whole span with the real ASan interface: a
+                 * straggler deref now traps as use-after-poison at the deref
+                 * (arena_alloc unpoisons ranges as they are handed back out). */
+                __asan_unpoison_memory_region(s->data, s->used);
+                memset(s->data, ARENA_POISON, s->used);
+                __asan_poison_memory_region(s->data, s->used);
+            } else {
+                memset(s->data, ARENA_POISON, s->used);
+            }
+#else
+            memset(s->data, ARENA_POISON, s->used);
+#endif
+        }
+#endif /* !NDEBUG */
+        s->used = 0;
+    }
+    a->total_bytes = 0;
+    a->total_allocs = 0;
+}
+
+TUR_RT_API bool arena_owns(const Arena *a, const void *p) {
+    if (!p) return false;
+    const unsigned char *cp = (const unsigned char *)p;
+    for (const ArenaSlab *s = a->head; s; s = s->next) {
+        if (cp >= s->data && cp < s->data + s->cap) return true;
+    }
+    return false;
+}
+/* ---- end src/runtime/arena.c ---- */
+/* ---- begin src/runtime/region.c (embedded verbatim) ---- */
+/* region.c -- declared lifetimes (RM3).  See region.h for the design and
+ * docs/upcoming/regions-plan.md for the phase.
+ *
+ * One Arena per generation rather than watermarks into a shared one.  Arena
+ * exposes `arena_reset` (whole-arena rewind) and `arena_owns`, not a
+ * save/restore watermark, so a per-generation Arena is what the existing API
+ * supports without changing it -- and it makes `tur_region_owns` a walk over
+ * generations instead of an address-range comparison that would have to know
+ * about interleaving.
+ *
+ * A generation popped WITHOUT reclaim is retired, not freed: its memory stays
+ * mapped for the process.  That is deliberately the status quo (the spine
+ * leaks today), so the conservative path costs nothing new, and it keeps
+ * `tur_region_owns` true for those pointers -- a value that outlived its
+ * generation must still never reach `free()`. */
+/* (local #include dropped: that header is pasted above) */
+
+#include <stdlib.h>
+#include <string.h>
+
+/* (local #include dropped: that header is pasted above) */
+
+#define TUR_REGION_SLAB (64u * 1024u)
+
+/* Live generations, innermost last.  Depth is 1-based so 0 can mean "none". */
+static Arena  **g_live;
+static int      g_live_n;
+static int      g_live_cap;
+
+/* Generations popped without reclaim.  Never freed before shutdown -- see the
+ * file comment for why they are kept rather than released. */
+static Arena  **g_retired;
+static int      g_retired_n;
+static int      g_retired_cap;
+
+/* Reclaimed generations, reset and available for the next push.  Reclaiming
+ * REWINDS rather than releases: arena_reset keeps the slabs (and poisons them
+ * in a Debug build), so a per-query region inside a loop pays for its slabs
+ * once instead of per iteration.  A pooled arena is dead memory -- deliberately
+ * NOT reported by tur_region_owns, which answers about live and retired
+ * generations only. */
+static Arena  **g_pool;
+static int      g_pool_n;
+static int      g_pool_cap;
+
+/* R3: set on the innermost generation when a noted escape points into it.
+ * Parallel to g_live, one flag per open generation.  Sticky: once a generation
+ * has leaked a pointer it can never be reclaimed, however many safe escapes
+ * follow. */
+static bool    *g_escaped;
+static int      g_escaped_cap;
+
+static bool push_ptr(Arena ***vec, int *n, int *cap, Arena *a) {
+    if (*n == *cap) {
+        int nc = *cap ? *cap * 2 : 8;
+        Arena **nv = (Arena **)realloc(*vec, (size_t)nc * sizeof(Arena *));
+        if (!nv) return false;
+        *vec = nv;
+        *cap = nc;
+    }
+    (*vec)[(*n)++] = a;
+    return true;
+}
+
+TUR_RT_API int tur_region_push(void) {
+    Arena *a;
+    if (g_pool_n > 0) {
+        a = g_pool[--g_pool_n];    /* already reset by the reclaim that pooled it */
+    } else {
+        a = (Arena *)calloc(1, sizeof(Arena));
+        if (!a) return 0;
+        arena_init(a, TUR_REGION_SLAB);
+    }
+    if (!push_ptr(&g_live, &g_live_n, &g_live_cap, a)) {
+        arena_free(a);
+        free(a);
+        return 0;
+    }
+    /* A fresh generation has escaped nothing.  Grow the flag vector alongside
+     * the live stack; a failure to grow it is treated as "escaped", so the
+     * generation is never reclaimed on the strength of a flag we could not
+     * store -- the conservative direction. */
+    if (g_live_n > g_escaped_cap) {
+        int nc = g_escaped_cap ? g_escaped_cap * 2 : 8;
+        if (nc < g_live_n) nc = g_live_n;
+        bool *nf = (bool *)realloc(g_escaped, (size_t)nc * sizeof(bool));
+        if (!nf) return g_live_n;   /* flag missing -> read as escaped below */
+        g_escaped = nf;
+        g_escaped_cap = nc;
+    }
+    g_escaped[g_live_n - 1] = false;
+    return g_live_n;   /* 1-based depth */
+}
+
+TUR_RT_API void tur_region_note_escape(const void *p) {
+    if (g_live_n <= 0 || !p) return;
+    /* Only an escape that IS region memory matters.  A malloc'd or static
+     * pointer crossing the boundary is ordinary and blocks nothing -- which is
+     * what makes this check worth having rather than a blanket refusal. */
+    if (arena_owns(g_live[g_live_n - 1], p)) {
+        if (g_live_n <= g_escaped_cap) g_escaped[g_live_n - 1] = true;
+    }
+}
+
+/* Read the flag conservatively: a generation whose flag we could not store is
+ * treated as having escaped. */
+static bool generation_escaped(int idx0) {
+    if (idx0 < 0) return true;
+    if (idx0 >= g_escaped_cap) return true;
+    return g_escaped[idx0];
+}
+
+/* Both pops take the depth back so a mismatched pair is a no-op rather than a
+ * rewind of somebody else's generation.  A region form that unwinds through a
+ * panic can leave the stack deeper than the caller thinks; refusing is the
+ * conservative answer, and it keeps the failure "no saving" rather than
+ * "reclaimed memory still in use". */
+static Arena *detach(int depth) {
+    if (depth <= 0 || depth != g_live_n) return NULL;
+    return g_live[--g_live_n];
+}
+
+TUR_RT_API void tur_region_pop(int depth) {
+    Arena *a = detach(depth);
+    if (!a) return;
+    if (!push_ptr(&g_retired, &g_retired_n, &g_retired_cap, a)) {
+        /* Out of memory retiring it: the arena stays mapped and unreferenced,
+         * which is the same outcome the retired list produces.  Never free it
+         * -- something may still point in. */
+        return;
+    }
+}
+
+TUR_RT_API void tur_region_pop_reclaim(int depth) {
+    Arena *a = detach(depth);
+    if (!a) return;
+    /* Rewind, do not release.  arena_reset keeps the slabs and, in a Debug
+     * build, poisons them -- so a straggler traps at the deref under ASan
+     * instead of reading stale bytes, and the next push reuses the memory
+     * rather than asking the allocator again. */
+    arena_reset(a);
+    if (!push_ptr(&g_pool, &g_pool_n, &g_pool_cap, a)) {
+        arena_free(a);
+        free(a);
+    }
+}
+
+TUR_RT_API bool tur_region_pop_checked(int depth) {
+    if (depth <= 0 || depth != g_live_n) return false;   /* mismatched: refuse */
+    if (generation_escaped(depth - 1)) {
+        tur_region_pop(depth);       /* retire: correctness over saving */
+        return false;
+    }
+    tur_region_pop_reclaim(depth);
+    return true;
+}
+
+TUR_RT_API void *tur_region_alloc(size_t n) {
+    if (g_live_n <= 0) return NULL;   /* no region open -- caller uses malloc */
+    return arena_alloc(g_live[g_live_n - 1], n);
+}
+
+TUR_RT_API void *tur_region_alloc_or_malloc(size_t n) {
+    void *p = tur_region_alloc(n);
+    return p ? p : malloc(n);
+}
+
+TUR_RT_API bool tur_region_owns(const void *p) {
+    if (!p) return false;
+    for (int i = 0; i < g_live_n; i++)
+        if (arena_owns(g_live[i], p)) return true;
+    for (int i = 0; i < g_retired_n; i++)
+        if (arena_owns(g_retired[i], p)) return true;
+    return false;
+}
+
+TUR_RT_API void tur_region_free(void *p) {
+    if (!p) return;
+    /* Region memory is owned by the generation, not by this pointer: handing it
+     * to free() is an allocator mismatch (glibc aborts), so the guard is not a
+     * leak-avoidance nicety but the thing that keeps a region-allocated node
+     * survivable at all once a drop path runs over it. */
+    if (tur_region_owns(p)) return;
+    free(p);
+}
+
+TUR_RT_API bool tur_region_active(void) { return g_live_n > 0; }
+
+TUR_RT_API void tur_region_shutdown(void) {
+    for (int i = 0; i < g_live_n; i++)    { arena_free(g_live[i]);    free(g_live[i]); }
+    for (int i = 0; i < g_retired_n; i++) { arena_free(g_retired[i]); free(g_retired[i]); }
+    for (int i = 0; i < g_pool_n; i++)    { arena_free(g_pool[i]);    free(g_pool[i]); }
+    free(g_live);    g_live = NULL;    g_live_n = g_live_cap = 0;
+    free(g_retired); g_retired = NULL; g_retired_n = g_retired_cap = 0;
+    free(g_pool);    g_pool = NULL;    g_pool_n = g_pool_cap = 0;
+    free(g_escaped); g_escaped = NULL; g_escaped_cap = 0;
+}
+/* ---- end src/runtime/region.c ---- */
 static const char *(*g_tur_any_name_ext)(int64_t) = 0;
 static const char *__tur_any_type_name(int64_t tag) {
     if (tag >= 1000)
@@ -4032,7 +4699,7 @@ typedef struct tur_adt_Cons__int {
 #ifndef TUR_FN_tur_adt_Cons__int
 #define TUR_FN_tur_adt_Cons__int
 static tur_adt_Cons__int * ctor_Cons_Cons__int(int64_t _0, int64_t _1) {
-    tur_adt_Cons__int *__r = (tur_adt_Cons__int *)malloc(sizeof(tur_adt_Cons__int));
+    tur_adt_Cons__int *__r = (tur_adt_Cons__int *)tur_region_alloc_or_malloc(sizeof(tur_adt_Cons__int));
     __r->head = _0;
     __r->tail = _1;
     return __r;
@@ -4051,7 +4718,7 @@ typedef struct tur_adt_Vec__int {
 #ifndef TUR_FN_tur_adt_Vec__int
 #define TUR_FN_tur_adt_Vec__int
 static tur_adt_Vec__int * ctor_Vec_Vec__int(void * _0, int64_t _1, int64_t _2) {
-    tur_adt_Vec__int *__r = (tur_adt_Vec__int *)malloc(sizeof(tur_adt_Vec__int));
+    tur_adt_Vec__int *__r = (tur_adt_Vec__int *)tur_region_alloc_or_malloc(sizeof(tur_adt_Vec__int));
     __r->data = _0;
     __r->len = _1;
     __r->cap = _2;
@@ -4287,7 +4954,7 @@ static int64_t __inst_MapKey_mk_hyowned_qu_float32(float);
 static int64_t __inst_MapKey_mk_hybox_float(double);
 static int64_t __inst_MapKey_mk_hycmp_float(double);
 static int64_t __inst_MapKey_mk_hyowned_qu_float(double);
-static bool __fn_828(int64_t, int64_t);
+static bool __fn_829(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Map(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Vec(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Option(int64_t, int64_t);
@@ -4298,14 +4965,14 @@ static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Tuple2(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Cons(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Set(int64_t, int64_t);
-static bool __fn_1241(int64_t, int64_t);
+static bool __fn_1242(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_MutableMap(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Sym(const struct __tur_sym *, const struct __tur_sym *);
 static int64_t __inst_Hash_hash_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hybox_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hycmp_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hyowned_qu_Sym(const struct __tur_sym *);
-static int64_t __fn_1437();
+static int64_t __fn_1439();
 static void * array_hyget(void *, int64_t);
 static int64_t array_hyset(void *, int64_t, int64_t);
 static void * array_hyslice(void *, int64_t, int64_t);
@@ -4542,6 +5209,7 @@ static int64_t bt_hyscope(int64_t);
 static int64_t with_hyuntrailed(int64_t);
 static void trail_hyreset_ex();
 static int64_t trail_slautolink_hyhint();
+static int64_t with_hyregion(int64_t);
 static tur_adt_Option__int go(tur_adt_Option__int, int64_t);
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t, int64_t);
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t);
@@ -4723,7 +5391,7 @@ static int64_t __inst_MapKey_mk_hyowned_qu_float(double x) {
         return INT64_C(0);
 }
 
-static bool __fn_828(int64_t a, int64_t b) {
+static bool __fn_829(int64_t a, int64_t b) {
         bool __ps_2 = (__inst_Eq_eq_qu_int(a, b));
         if (tur_panicking) return ((bool)0);
         return __ps_2;
@@ -4766,14 +5434,14 @@ static bool __inst_Eq_eq_qu_Option(int64_t x, int64_t y) {
             tur_adt_Option *__scrut = (tur_adt_Option *)(intptr_t)(x);
             switch (__scrut ? __scrut->tag : 0) {
             case 1: {
-                int64_t vx_905 = (int64_t)__scrut->as.Some._0;
+                int64_t vx_906 = (int64_t)__scrut->as.Some._0;
                 bool __t14 = 0;
                 {
                     tur_adt_Option *__scrut = (tur_adt_Option *)(intptr_t)(y);
                     switch (__scrut ? __scrut->tag : 0) {
                     case 1: {
-                        int64_t vy_906 = (int64_t)__scrut->as.Some._0;
-                        bool __ps_15 = (__inst_Eq_eq_qu_int(vx_905, vy_906));
+                        int64_t vy_907 = (int64_t)__scrut->as.Some._0;
+                        bool __ps_15 = (__inst_Eq_eq_qu_int(vx_906, vy_907));
                         if (tur_panicking) return ((bool)0);
                         __t14 = __ps_15;
                         break;
@@ -4806,20 +5474,20 @@ static bool __inst_Eq_eq_qu_Result(int64_t x, int64_t y) {
             tur_adt_Result *__scrut = (tur_adt_Result *)(intptr_t)(x);
             switch (__scrut ? __scrut->tag : 0) {
             case 0: {
-                int64_t vx_958 = (int64_t)__scrut->as.Ok._0;
+                int64_t vx_959 = (int64_t)__scrut->as.Ok._0;
                 bool __t18 = 0;
                 {
                     tur_adt_Result *__scrut = (tur_adt_Result *)(intptr_t)(y);
                     switch (__scrut ? __scrut->tag : 0) {
                     case 0: {
-                        int64_t vy_959 = (int64_t)__scrut->as.Ok._0;
-                        bool __ps_19 = (__inst_Eq_eq_qu_int(vx_958, vy_959));
+                        int64_t vy_960 = (int64_t)__scrut->as.Ok._0;
+                        bool __ps_19 = (__inst_Eq_eq_qu_int(vx_959, vy_960));
                         if (tur_panicking) return ((bool)0);
                         __t18 = __ps_19;
                         break;
                     }
                     case 1: {
-                        int64_t _un_960 = (int64_t)__scrut->as.Err._0;
+                        int64_t _un_961 = (int64_t)__scrut->as.Err._0;
                         __t18 = false;
                         break;
                     }
@@ -4830,19 +5498,19 @@ static bool __inst_Eq_eq_qu_Result(int64_t x, int64_t y) {
                 break;
             }
             case 1: {
-                int64_t ex_961 = (int64_t)__scrut->as.Err._0;
+                int64_t ex_962 = (int64_t)__scrut->as.Err._0;
                 bool __t20 = 0;
                 {
                     tur_adt_Result *__scrut = (tur_adt_Result *)(intptr_t)(y);
                     switch (__scrut ? __scrut->tag : 0) {
                     case 0: {
-                        int64_t _un_962 = (int64_t)__scrut->as.Ok._0;
+                        int64_t _un_963 = (int64_t)__scrut->as.Ok._0;
                         __t20 = false;
                         break;
                     }
                     case 1: {
-                        int64_t ey_963 = (int64_t)__scrut->as.Err._0;
-                        bool __ps_21 = (__inst_Eq_eq_qu_int(ex_961, ey_963));
+                        int64_t ey_964 = (int64_t)__scrut->as.Err._0;
+                        bool __ps_21 = (__inst_Eq_eq_qu_int(ex_962, ey_964));
                         if (tur_panicking) return ((bool)0);
                         __t20 = __ps_21;
                         break;
@@ -4897,19 +5565,19 @@ static bool __inst_Eq_eq_qu_Tuple2(int64_t x, int64_t y) {
 static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
         bool __t28;
         {
-            int64_t t1_1105 = x;
-            (void)t1_1105;
-            int64_t t2_1106 = y;
-            (void)t2_1106;
+            int64_t t1_1106 = x;
+            (void)t1_1106;
+            int64_t t2_1107 = y;
+            (void)t2_1107;
             bool __t29;
-            if ((t1_1105) == (INT64_C(0))) {
-                __t29 = (t2_1106) == (INT64_C(0));
+            if ((t1_1106) == (INT64_C(0))) {
+                __t29 = (t2_1107) == (INT64_C(0));
             } else {
                 bool __t30;
-                if ((t2_1106) == (INT64_C(0))) {
+                if ((t2_1107) == (INT64_C(0))) {
                     __t30 = false;
                 } else {
-                    bool __ps_31 = (cons_hyeq_hygo(t1_1105, t2_1106));
+                    bool __ps_31 = (cons_hyeq_hygo(t1_1106, t2_1107));
                     if (tur_panicking) return ((bool)0);
                     __t30 = __ps_31;
                 }
@@ -4926,7 +5594,7 @@ static bool __inst_Eq_eq_qu_Set(int64_t x, int64_t y) {
         return __ps_32;
 }
 
-static bool __fn_1241(int64_t a, int64_t b) {
+static bool __fn_1242(int64_t a, int64_t b) {
         bool __ps_33 = (__inst_Eq_eq_qu_int(a, b));
         if (tur_panicking) return ((bool)0);
         return __ps_33;
@@ -4971,7 +5639,7 @@ static int64_t __inst_MapKey_mk_hyowned_qu_Sym(const struct __tur_sym * x) {
         return INT64_C(0);
 }
 
-static int64_t __fn_1437() {
+static int64_t __fn_1439() {
         return INT64_C(0);
 }
 
@@ -5396,13 +6064,13 @@ static int64_t map_hyget_hydynamic_hyas(void * m, int64_t hash, void * key, void
         return (int64_t)(intptr_t)tur_hamt_get_dynamic((void*)(intptr_t)m, hash, (void*)(intptr_t)key, (void*)(intptr_t)keyeq); 
 }
 
-static int64_t map_hyeq_hyloop__cps(void * iter_811, void * m2_hyhamt_812, void * keyeq_813, int64_t val_cmp, DK *__kont);
-static int64_t list_hyeq_qu__cps(int64_t l1_1095, int64_t l2_1096, int64_t cmp_fn, DK *__kont);
-static int64_t _un_uncons_hyfmap__cps(int64_t cell_1107, void * f_1108, DK *__kont);
+static int64_t map_hyeq_hyloop__cps(void * iter_812, void * m2_hyhamt_813, void * keyeq_814, int64_t val_cmp, DK *__kont);
+static int64_t list_hyeq_qu__cps(int64_t l1_1096, int64_t l2_1097, int64_t cmp_fn, DK *__kont);
+static int64_t _un_uncons_hyfmap__cps(int64_t cell_1108, void * f_1109, DK *__kont);
 static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, int64_t val_cmp, DK *__kont) {
     bool __t0;
-    int64_t h_815;
-    void * k_816;
+    int64_t h_816;
+    void * k_817;
     bool __t1;
     bool __t2;
     bool __ps_70 = (hamt_sliter_hyadvance_ex((void *)(intptr_t)(iter)));
@@ -5411,17 +6079,17 @@ static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, i
     if (__t0) {
         int64_t __ps_71 = (hamt_sliter_hycur_hyhash((void *)(intptr_t)(iter)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        h_815 = __ps_71;
+        h_816 = __ps_71;
         void * __ps_72 = (hamt_sliter_hycur_hykey((void *)(intptr_t)(iter)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        k_816 = __ps_72;
-        bool __ps_73 = (hamt_slhas_hydynamic_qu((void *)(intptr_t)(m2_hamt), h_815, (void *)(intptr_t)(k_816), (void *)(intptr_t)(keyeq)));
+        k_817 = __ps_72;
+        bool __ps_73 = (hamt_slhas_hydynamic_qu((void *)(intptr_t)(m2_hamt), h_816, (void *)(intptr_t)(k_817), (void *)(intptr_t)(keyeq)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         __t1 = __ps_73;
         if (__t1) {
             int64_t __ps_74 = (map_hyiter_hycur_hyval_hyas((void *)(intptr_t)(iter)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            int64_t __ps_75 = (map_hyget_hydynamic_hyas((void *)(intptr_t)(m2_hamt), h_815, (void *)(intptr_t)(k_816), (void *)(intptr_t)(keyeq)));
+            int64_t __ps_75 = (map_hyget_hydynamic_hyas((void *)(intptr_t)(m2_hamt), h_816, (void *)(intptr_t)(k_817), (void *)(intptr_t)(keyeq)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             bool __ps_76 = (((bool (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_74, __ps_75));
             /* panic-return-signal: ret ctype unknown; no propagation here */
@@ -5458,23 +6126,23 @@ static bool map_hyeq_hydriver(int64_t m1, int64_t m2, int64_t val_cmp) {
             if (tur_panicking) return ((bool)0);
             void * __ps_79 = (hamt_sliter_hyalloc((void *)(intptr_t)(__ps_78)));
             if (tur_panicking) return ((bool)0);
-            void * iter_820 = __ps_79;
-            (void)iter_820;
+            void * iter_821 = __ps_79;
+            (void)iter_821;
             void * __ps_80 = (map_hyhamt(m1));
             if (tur_panicking) return ((bool)0);
             void * __ps_81 = (hamt_slkeyeq((void *)(intptr_t)(__ps_80)));
             if (tur_panicking) return ((bool)0);
-            void * keyeq_821 = __ps_81;
-            (void)keyeq_821;
+            void * keyeq_822 = __ps_81;
+            (void)keyeq_822;
             void * __ps_82 = (map_hyhamt(m2));
             if (tur_panicking) return ((bool)0);
-            bool __ps_83 = (map_hyeq_hyloop((void *)(intptr_t)(iter_820), (void *)(intptr_t)(__ps_82), (void *)(intptr_t)(keyeq_821), (int64_t)(intptr_t)(val_cmp)));
+            bool __ps_83 = (map_hyeq_hyloop((void *)(intptr_t)(iter_821), (void *)(intptr_t)(__ps_82), (void *)(intptr_t)(keyeq_822), (int64_t)(intptr_t)(val_cmp)));
             if (tur_panicking) return ((bool)0);
-            bool result_822 = __ps_83;
-            (void)result_822;
-            hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_820));
+            bool result_823 = __ps_83;
+            (void)result_823;
+            hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_821));
             bool __t84;
-            __t84 = result_822;
+            __t84 = result_823;
             __t77 = __t84;
         }
         return __t77;
@@ -5634,7 +6302,7 @@ static bool none_qu(int64_t o) {
             tur_adt_Option *__scrut = (tur_adt_Option *)(intptr_t)(o);
             switch (__scrut ? __scrut->tag : 0) {
             case 1: {
-                int64_t _un_885 = (int64_t)__scrut->as.Some._0;
+                int64_t _un_886 = (int64_t)__scrut->as.Some._0;
                 __t93 = false;
                 break;
             }
@@ -5806,19 +6474,19 @@ static bool cons_hyeq_hygo(int64_t c1, int64_t c2) {
         if (__ps_103) {
             bool __t104;
             {
-                int64_t t1_1100 = (int64_t)((tur_adt_Cons *)(intptr_t)(c1))->tail;
-                (void)t1_1100;
-                int64_t t2_1101 = (int64_t)((tur_adt_Cons *)(intptr_t)(c2))->tail;
-                (void)t2_1101;
+                int64_t t1_1101 = (int64_t)((tur_adt_Cons *)(intptr_t)(c1))->tail;
+                (void)t1_1101;
+                int64_t t2_1102 = (int64_t)((tur_adt_Cons *)(intptr_t)(c2))->tail;
+                (void)t2_1102;
                 bool __t105;
-                if ((t1_1100) == (INT64_C(0))) {
-                    __t105 = (t2_1101) == (INT64_C(0));
+                if ((t1_1101) == (INT64_C(0))) {
+                    __t105 = (t2_1102) == (INT64_C(0));
                 } else {
                     bool __t106;
-                    if ((t2_1101) == (INT64_C(0))) {
+                    if ((t2_1102) == (INT64_C(0))) {
                         __t106 = false;
                     } else {
-                        bool __ps_107 = (cons_hyeq_hygo(t1_1100, t2_1101));
+                        bool __ps_107 = (cons_hyeq_hygo(t1_1101, t2_1102));
                         if (tur_panicking) return ((bool)0);
                         __t106 = __ps_107;
                     }
@@ -5838,9 +6506,9 @@ static intptr_t _un_uncons_hyfmap_j0(intptr_t env, intptr_t __t2__slot, DK *__ko
     _un_uncons_hyfmap_j0_env *__cap = (_un_uncons_hyfmap_j0_env *)(intptr_t)env;
     int64_t __t1 = __cap->f0;
     int64_t __t2 = (int64_t)(__t2__slot);
-    int64_t out_1109;
-    out_1109 = (int64_t)(intptr_t)tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__t1, __t2); /* cps->direct */
-    return dk_run(__kont, (intptr_t)(out_1109));
+    int64_t out_1110;
+    out_1110 = (int64_t)(intptr_t)tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__t1, __t2); /* cps->direct */
+    return dk_run(__kont, (intptr_t)(out_1110));
 }
 static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
     bool __t0;
@@ -5912,9 +6580,9 @@ static int64_t list_hyconcat(int64_t l1, int64_t l2) {
                 if (tur_panicking) return ((int64_t)0);
                 tur_adt_Cons__int * __ps_118 = (tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__ps_115, __ps_117));
                 if (tur_panicking) return ((int64_t)0);
-                int64_t out_1116 = (int64_t)(intptr_t)(__ps_118);
-                (void)out_1116;
-                __t114 = out_1116;
+                int64_t out_1117 = (int64_t)(intptr_t)(__ps_118);
+                (void)out_1117;
+                __t114 = out_1117;
             }
             __t112 = __t114;
         }
@@ -6130,13 +6798,13 @@ static bool set_hyeq_hyloop(void * iter, void * s2_hamt, void * keyeq) {
             {
                 int64_t __ps_124 = (hamt_sliter_hycur_hyhash((void *)(intptr_t)(iter)));
                 if (tur_panicking) return ((bool)0);
-                int64_t h_1187 = __ps_124;
-                (void)h_1187;
+                int64_t h_1188 = __ps_124;
+                (void)h_1188;
                 void * __ps_125 = (hamt_sliter_hycur_hykey((void *)(intptr_t)(iter)));
                 if (tur_panicking) return ((bool)0);
-                void * k_1188 = __ps_125;
-                (void)k_1188;
-                bool __ps_126 = (hamt_slhas_hydynamic_qu((void *)(intptr_t)(s2_hamt), h_1187, (void *)(intptr_t)(k_1188), (void *)(intptr_t)(keyeq)));
+                void * k_1189 = __ps_125;
+                (void)k_1189;
+                bool __ps_126 = (hamt_slhas_hydynamic_qu((void *)(intptr_t)(s2_hamt), h_1188, (void *)(intptr_t)(k_1189), (void *)(intptr_t)(keyeq)));
                 if (tur_panicking) return ((bool)0);
                 if (__ps_126) {
                     void * __t127 = iter;
@@ -6162,23 +6830,23 @@ static bool set_hyeq_hydriver(int64_t s1, int64_t s2) {
             if (tur_panicking) return ((bool)0);
             void * __ps_132 = (hamt_sliter_hyalloc((void *)(intptr_t)(__ps_131)));
             if (tur_panicking) return ((bool)0);
-            void * iter_1191 = __ps_132;
-            (void)iter_1191;
+            void * iter_1192 = __ps_132;
+            (void)iter_1192;
             void * __ps_133 = (set_hyhamt(s1));
             if (tur_panicking) return ((bool)0);
             void * __ps_134 = (hamt_slkeyeq((void *)(intptr_t)(__ps_133)));
             if (tur_panicking) return ((bool)0);
-            void * keyeq_1192 = __ps_134;
-            (void)keyeq_1192;
+            void * keyeq_1193 = __ps_134;
+            (void)keyeq_1193;
             void * __ps_135 = (set_hyhamt(s2));
             if (tur_panicking) return ((bool)0);
-            bool __ps_136 = (set_hyeq_hyloop((void *)(intptr_t)(iter_1191), (void *)(intptr_t)(__ps_135), (void *)(intptr_t)(keyeq_1192)));
+            bool __ps_136 = (set_hyeq_hyloop((void *)(intptr_t)(iter_1192), (void *)(intptr_t)(__ps_135), (void *)(intptr_t)(keyeq_1193)));
             if (tur_panicking) return ((bool)0);
-            bool result_1193 = __ps_136;
-            (void)result_1193;
-            hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_1191));
+            bool result_1194 = __ps_136;
+            (void)result_1194;
+            hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_1192));
             bool __t137;
-            __t137 = result_1193;
+            __t137 = result_1194;
             __t130 = __t137;
         }
         return __t130;
@@ -6843,23 +7511,23 @@ static void json_slfree(int64_t node) {
   
 }
 
-static int64_t SCHEMA_unSTR_1282;
-static int64_t SCHEMA_unINT_1283;
-static int64_t SCHEMA_unFLOAT_1284;
-static int64_t SCHEMA_unBOOL_1285;
-static int64_t SCHEMA_unNIL_1286;
-static int64_t SCHEMA_unLITERAL_1287;
-static int64_t SCHEMA_unOBJECT_1288;
-static int64_t SCHEMA_unARRAY_1289;
-static int64_t SCHEMA_unOPTIONAL_1290;
-static int64_t SCHEMA_unUNION_1291;
-static int64_t SCHEMA_unTRANSFORM_1292;
-static int64_t SCHEMA_unREC_1293;
-static int64_t SCHEMA_unALWAYS_1294;
-static int64_t SCHEMA_unNEVER_1295;
-static int64_t SCHEMA_unAP_1296;
-static int64_t SCHEMA_unFIELD_1297;
-static int64_t SCHEMA_unAP_unFAT_1298;
+static int64_t SCHEMA_unSTR_1283;
+static int64_t SCHEMA_unINT_1284;
+static int64_t SCHEMA_unFLOAT_1285;
+static int64_t SCHEMA_unBOOL_1286;
+static int64_t SCHEMA_unNIL_1287;
+static int64_t SCHEMA_unLITERAL_1288;
+static int64_t SCHEMA_unOBJECT_1289;
+static int64_t SCHEMA_unARRAY_1290;
+static int64_t SCHEMA_unOPTIONAL_1291;
+static int64_t SCHEMA_unUNION_1292;
+static int64_t SCHEMA_unTRANSFORM_1293;
+static int64_t SCHEMA_unREC_1294;
+static int64_t SCHEMA_unALWAYS_1295;
+static int64_t SCHEMA_unNEVER_1296;
+static int64_t SCHEMA_unAP_1297;
+static int64_t SCHEMA_unFIELD_1298;
+static int64_t SCHEMA_unAP_unFAT_1299;
 static int64_t schema_slstr() {
         int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 0; s[1] = 0; s[2] = 0; s[3] = 0;
@@ -7034,18 +7702,18 @@ static int64_t schema_slfmap(int64_t inner, int64_t f) {
 static int64_t schema_slalt(int64_t a, int64_t b) {
         tur_adt_Vec__int * __t157;
         {
-            int64_t _un_unvw_1321 = a;
-            (void)_un_unvw_1321;
+            int64_t _un_unvw_1322 = a;
+            (void)_un_unvw_1322;
             tur_adt_Vec__int * __t158;
             {
-                tur_adt_Vec__int * __ps_159 = (vec_empty_like____spec__tur_adt_Vec__int___int64_t(_un_unvw_1321));
+                tur_adt_Vec__int * __ps_159 = (vec_empty_like____spec__tur_adt_Vec__int___int64_t(_un_unvw_1322));
                 if (tur_panicking) return ((int64_t)0);
-                tur_adt_Vec__int * _un_unv_1322 = __ps_159;
-                (void)_un_unv_1322;
-                vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1322))), _un_unvw_1321);
-                vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1322))), b);
+                tur_adt_Vec__int * _un_unv_1323 = __ps_159;
+                (void)_un_unv_1323;
+                vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1323))), _un_unvw_1322);
+                vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1323))), b);
                 tur_adt_Vec__int * __t160;
-                __t160 = _un_unv_1322;
+                __t160 = _un_unv_1323;
                 __t158 = __t160;
             }
             __t157 = __t158;
@@ -7414,17 +8082,17 @@ static int64_t schema_hydecode_ex(int64_t schema, int64_t node) {
         {
             int64_t __ps_164 = (schema_hydecode(schema, node));
             if (tur_panicking) return ((int64_t)0);
-            int64_t r_1372 = __ps_164;
-            (void)r_1372;
+            int64_t r_1373 = __ps_164;
+            (void)r_1373;
             int64_t __t165;
-            bool __ps_166 = (schema_hydecode_hyok_qu(r_1372));
+            bool __ps_166 = (schema_hydecode_hyok_qu(r_1373));
             if (tur_panicking) return ((int64_t)0);
             if (__ps_166) {
-                int64_t __ps_167 = (schema_hydecode_hyvalue(r_1372));
+                int64_t __ps_167 = (schema_hydecode_hyvalue(r_1373));
                 if (tur_panicking) return ((int64_t)0);
                 __t165 = __ps_167;
             } else {
-                int64_t __ps_168 = (schema_hydecode_hyerrors(r_1372));
+                int64_t __ps_168 = (schema_hydecode_hyerrors(r_1373));
                 if (tur_panicking) return ((int64_t)0);
                 int64_t __ps_169 = (schema_hydecode_hyabort(__ps_168));
                 if (tur_panicking) return ((int64_t)0);
@@ -7549,17 +8217,17 @@ static int64_t bt_hyscope(int64_t body) {
         {
             int64_t __ps_172 = (bt_hymark());
             if (tur_panicking) return ((int64_t)0);
-            int64_t m_1431 = __ps_172;
-            (void)m_1431;
+            int64_t m_1432 = __ps_172;
+            (void)m_1432;
             int64_t __ps_173 = (((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body)));
             if (tur_panicking) return ((int64_t)0);
-            int64_t r_1432 = __ps_173;
-            (void)r_1432;
-            bool __ps_174 = (bt_hyundo_hyto_ex(m_1431));
+            int64_t r_1433 = __ps_173;
+            (void)r_1433;
+            bool __ps_174 = (bt_hyundo_hyto_ex(m_1432));
             if (tur_panicking) return ((int64_t)0);
             (void)(__ps_174);
             int64_t __t175;
-            __t175 = r_1432;
+            __t175 = r_1433;
             __t171 = __t175;
         }
         return __t171;
@@ -7572,11 +8240,11 @@ static int64_t with_hyuntrailed(int64_t body) {
         {
             int64_t __ps_178 = (((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body)));
             if (tur_panicking) return ((int64_t)0);
-            int64_t r_1434 = __ps_178;
-            (void)r_1434;
+            int64_t r_1435 = __ps_178;
+            (void)r_1435;
             untrailed_hyend();
             int64_t __t179;
-            __t179 = r_1434;
+            __t179 = r_1435;
             __t177 = __t179;
         }
         __t176 = __t177;
@@ -7594,9 +8262,15 @@ static int64_t trail_slautolink_hyhint() {
   
 }
 
+static int64_t with_hyregion(int64_t body) {
+        int64_t __ps_180 = (((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body)));
+        if (tur_panicking) return ((int64_t)0);
+        return __ps_180;
+}
+
 static tur_adt_Option__int go(tur_adt_Option__int acc, int64_t n) {
-        int64_t __t180 = 0;
-        tur_adt_Option__int __t181 = {0};
+        int64_t __t181 = 0;
+        tur_adt_Option__int __t182 = {0};
         tur_cont *__k = (tur_cont*)malloc(sizeof(tur_cont));
         __k->tag = 0; __k->boundary = 0; __k->next = 0; __k->aggr_mask = 0;
         int __pc = 1;
@@ -7619,16 +8293,16 @@ static tur_adt_Option__int go(tur_adt_Option__int acc, int64_t n) {
             { tur_adt_Option__int __rv = (acc); void *__rb = malloc(sizeof(tur_adt_Option__int)); memcpy(__rb, &__rv, sizeof(tur_adt_Option__int)); __v = (int64_t)(intptr_t)__rb; }
             __pc = __k->tag; break;
            } else {
-            tur_handler_node *__b182 = (tur_handler_node*)malloc(sizeof(tur_handler_node));
-            __b182->parent = tur_handler_chain; tur_handler_chain = __b182;
-            tur_cont *__n182 = (tur_cont*)malloc(sizeof(tur_cont));
-            __n182->tag = 3; __n182->boundary = __b182; __n182->next = __k;
-            __n182->aggr_mask = 0x9u;
-            { void *__ab = malloc(sizeof(tur_adt_Option__int)); memcpy(__ab, &acc, sizeof(tur_adt_Option__int)); __n182->saved[0] = (int64_t)(intptr_t)__ab; }
-            __n182->saved[1] = (int64_t)(intptr_t)(n);
-            __n182->saved[2] = (int64_t)(intptr_t)(__t180);
-            { void *__ab = malloc(sizeof(tur_adt_Option__int)); memcpy(__ab, &__t181, sizeof(tur_adt_Option__int)); __n182->saved[3] = (int64_t)(intptr_t)__ab; }
-            __k = __n182; __pc = 2; break;
+            tur_handler_node *__b183 = (tur_handler_node*)malloc(sizeof(tur_handler_node));
+            __b183->parent = tur_handler_chain; tur_handler_chain = __b183;
+            tur_cont *__n183 = (tur_cont*)malloc(sizeof(tur_cont));
+            __n183->tag = 3; __n183->boundary = __b183; __n183->next = __k;
+            __n183->aggr_mask = 0x9u;
+            { void *__ab = malloc(sizeof(tur_adt_Option__int)); memcpy(__ab, &acc, sizeof(tur_adt_Option__int)); __n183->saved[0] = (int64_t)(intptr_t)__ab; }
+            __n183->saved[1] = (int64_t)(intptr_t)(n);
+            __n183->saved[2] = (int64_t)(intptr_t)(__t181);
+            { void *__ab = malloc(sizeof(tur_adt_Option__int)); memcpy(__ab, &__t182, sizeof(tur_adt_Option__int)); __n183->saved[3] = (int64_t)(intptr_t)__ab; }
+            __k = __n183; __pc = 2; break;
            }
           }
           case 2: {
@@ -7637,45 +8311,45 @@ static tur_adt_Option__int go(tur_adt_Option__int acc, int64_t n) {
           case 3: {
            { void *__ab = (void*)(intptr_t)__k->saved[0]; memcpy(&acc, __ab, sizeof(tur_adt_Option__int)); free(__ab); }
            n = (int64_t)(intptr_t)(__k->saved[1]);
-           __t180 = (int64_t)(intptr_t)(__k->saved[2]);
-           { void *__ab = (void*)(intptr_t)__k->saved[3]; memcpy(&__t181, __ab, sizeof(tur_adt_Option__int)); free(__ab); }
+           __t181 = (int64_t)(intptr_t)(__k->saved[2]);
+           { void *__ab = (void*)(intptr_t)__k->saved[3]; memcpy(&__t182, __ab, sizeof(tur_adt_Option__int)); free(__ab); }
            tur_handler_chain = __k->boundary->parent; free(__k->boundary);
-           int64_t __box182;
-           if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0; tur_panic_payload *__pp182 = global_panic_payload; global_panic_payload = 0; __box182 = tur_box_err((int64_t)(intptr_t)__pp182); }
-           else { __box182 = tur_box_ok(__v); }
+           int64_t __box183;
+           if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0; tur_panic_payload *__pp183 = global_panic_payload; global_panic_payload = 0; __box183 = tur_box_err((int64_t)(intptr_t)__pp183); }
+           else { __box183 = tur_box_ok(__v); }
            { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
-           tur_result_box_free((int64_t)(intptr_t)__box182);
-           (void)(__box182);
-           tur_cont *__n183 = (tur_cont*)malloc(sizeof(tur_cont));
-           __n183->tag = 4; __n183->boundary = 0; __n183->next = __k;
-           __n183->aggr_mask = 0x9u;
-           { void *__ab = malloc(sizeof(tur_adt_Option__int)); memcpy(__ab, &acc, sizeof(tur_adt_Option__int)); __n183->saved[0] = (int64_t)(intptr_t)__ab; }
-           __n183->saved[1] = (int64_t)(intptr_t)(n);
-           __n183->saved[2] = (int64_t)(intptr_t)(__t180);
-           { void *__ab = malloc(sizeof(tur_adt_Option__int)); memcpy(__ab, &__t181, sizeof(tur_adt_Option__int)); __n183->saved[3] = (int64_t)(intptr_t)__ab; }
-           tur_adt_Option__int __ra183_0 = (acc);
-           int64_t __ra183_1 = ((n) - (INT64_C(1)));
-           acc = __ra183_0;
-           n = __ra183_1;
-           __k = __n183; __pc = 1; break;
+           tur_result_box_free((int64_t)(intptr_t)__box183);
+           (void)(__box183);
+           tur_cont *__n184 = (tur_cont*)malloc(sizeof(tur_cont));
+           __n184->tag = 4; __n184->boundary = 0; __n184->next = __k;
+           __n184->aggr_mask = 0x9u;
+           { void *__ab = malloc(sizeof(tur_adt_Option__int)); memcpy(__ab, &acc, sizeof(tur_adt_Option__int)); __n184->saved[0] = (int64_t)(intptr_t)__ab; }
+           __n184->saved[1] = (int64_t)(intptr_t)(n);
+           __n184->saved[2] = (int64_t)(intptr_t)(__t181);
+           { void *__ab = malloc(sizeof(tur_adt_Option__int)); memcpy(__ab, &__t182, sizeof(tur_adt_Option__int)); __n184->saved[3] = (int64_t)(intptr_t)__ab; }
+           tur_adt_Option__int __ra184_0 = (acc);
+           int64_t __ra184_1 = ((n) - (INT64_C(1)));
+           acc = __ra184_0;
+           n = __ra184_1;
+           __k = __n184; __pc = 1; break;
           }
           case 4: {
            { void *__ab = (void*)(intptr_t)__k->saved[0]; memcpy(&acc, __ab, sizeof(tur_adt_Option__int)); free(__ab); }
            n = (int64_t)(intptr_t)(__k->saved[1]);
-           __t180 = (int64_t)(intptr_t)(__k->saved[2]);
-           { void *__ab = (void*)(intptr_t)__k->saved[3]; memcpy(&__t181, __ab, sizeof(tur_adt_Option__int)); free(__ab); }
-           tur_adt_Option__int __ur184; { void *__rb = (void*)(intptr_t)__v; memcpy(&__ur184, __rb, sizeof(tur_adt_Option__int)); free(__rb); }
-           __t181 = __ur184;
+           __t181 = (int64_t)(intptr_t)(__k->saved[2]);
+           { void *__ab = (void*)(intptr_t)__k->saved[3]; memcpy(&__t182, __ab, sizeof(tur_adt_Option__int)); free(__ab); }
+           tur_adt_Option__int __ur185; { void *__rb = (void*)(intptr_t)__v; memcpy(&__ur185, __rb, sizeof(tur_adt_Option__int)); free(__rb); }
+           __t182 = __ur185;
            { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
-           tur_adt_Option__int __t185;
-           bool __ps_186 = (some___spec__bool_tur_adt_Option__int(__t181));
+           tur_adt_Option__int __t186;
+           bool __ps_187 = (some___spec__bool_tur_adt_Option__int(__t182));
            if (tur_panicking) return (tur_adt_Option__int){0};
-           if (__ps_186) {
-               __t185 = acc;
+           if (__ps_187) {
+               __t186 = acc;
            } else {
-               __t185 = acc;
+               __t186 = acc;
            }
-           { tur_adt_Option__int __rv = (__t185); void *__rb = malloc(sizeof(tur_adt_Option__int)); memcpy(__rb, &__rv, sizeof(tur_adt_Option__int)); __v = (int64_t)(intptr_t)__rb; }
+           { tur_adt_Option__int __rv = (__t186); void *__rb = malloc(sizeof(tur_adt_Option__int)); memcpy(__rb, &__rv, sizeof(tur_adt_Option__int)); __v = (int64_t)(intptr_t)__rb; }
            __pc = __k->tag; break;
           }
          }
@@ -7698,54 +8372,54 @@ int main(int argc, char **argv) {
             g_tur_args = (int64_t)(intptr_t)_c;
         }
         {
-            tur_adt_Option__int __ps_187 = (some__spec__tur_adt_Option__int_int64_t(INT64_C(7)));
+            tur_adt_Option__int __ps_188 = (some__spec__tur_adt_Option__int_int64_t(INT64_C(7)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            tur_adt_Option__int __ps_188 = (go(__ps_187, INT64_C(200000)));
+            tur_adt_Option__int __ps_189 = (go(__ps_188, INT64_C(200000)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            tur_adt_Option__int r_1439 = __ps_188;
-            (void)r_1439;
-            bool __ps_189 = (some___spec__bool_tur_adt_Option__int(r_1439));
+            tur_adt_Option__int r_1441 = __ps_189;
+            (void)r_1441;
+            bool __ps_190 = (some___spec__bool_tur_adt_Option__int(r_1441));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            if (__ps_189) {
-                int64_t __ps_190 = (unwrap__spec__int64_t_tur_adt_Option__int(r_1439));
+            if (__ps_190) {
+                int64_t __ps_191 = (unwrap__spec__int64_t_tur_adt_Option__int(r_1441));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                printf("%lld\n", (long long)(__ps_190));
+                printf("%lld\n", (long long)(__ps_191));
             } else {
                 printf("%lld\n", (long long)(INT64_C(-1)));
             }
         }
         {
-            tur_adt_Option__int __ps_191 = (none__spec__tur_adt_Option__int());
+            tur_adt_Option__int __ps_192 = (none__spec__tur_adt_Option__int());
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            tur_adt_Option__int __ps_192 = (go(__ps_191, INT64_C(5)));
+            tur_adt_Option__int __ps_193 = (go(__ps_192, INT64_C(5)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            tur_adt_Option__int s_1440 = __ps_192;
-            (void)s_1440;
-            bool __ps_193 = (some___spec__bool_tur_adt_Option__int(s_1440));
+            tur_adt_Option__int s_1442 = __ps_193;
+            (void)s_1442;
+            bool __ps_194 = (some___spec__bool_tur_adt_Option__int(s_1442));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            if (__ps_193) {
-                int64_t __ps_194 = (unwrap__spec__int64_t_tur_adt_Option__int(s_1440));
+            if (__ps_194) {
+                int64_t __ps_195 = (unwrap__spec__int64_t_tur_adt_Option__int(s_1442));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                printf("%lld\n", (long long)(__ps_194));
+                printf("%lld\n", (long long)(__ps_195));
             } else {
                 printf("%lld\n", (long long)(INT64_C(-2)));
             }
         }
-        int64_t __t195;
-        __t195 = INT64_C(0);
-        return (int)__t195;
+        int64_t __t196;
+        __t196 = INT64_C(0);
+        return (int)__t196;
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
-        tur_adt_Cons__int * __ps_196 = (ctor_Cons_Cons__int(h, t));
+        tur_adt_Cons__int * __ps_197 = (ctor_Cons_Cons__int(h, t));
         if (tur_panicking) return ((tur_adt_Cons__int *)0);
-        return __ps_196;
+        return __ps_197;
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        tur_adt_Vec__int * __ps_197 = (vec_new__spec__tur_adt_Vec__int__());
+        tur_adt_Vec__int * __ps_198 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return ((tur_adt_Vec__int *)0);
-        return __ps_197;
+        return __ps_198;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
@@ -7758,89 +8432,89 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
 }
 
 static bool some___spec__bool_tur_adt_Option__int(tur_adt_Option__int o) {
-        bool __t198 = 0;
+        bool __t199 = 0;
         {
             tur_adt_Option__int __scrut_v = (o);
             tur_adt_Option__int *__scrut = &__scrut_v;
             switch (__scrut->tag) {
             case 1: {
-                int64_t _un_883 = (int64_t)__scrut->as.Some._0;
-                __t198 = true;
+                int64_t _un_884 = (int64_t)__scrut->as.Some._0;
+                __t199 = true;
                 break;
             }
             case 0: {
-                __t198 = false;
+                __t199 = false;
                 break;
             }
             default: break;
             }
         }
-        return __t198;
+        return __t199;
 }
 
 static tur_adt_Option__int some__spec__tur_adt_Option__int_int64_t(int64_t x) {
-        tur_adt_Option__int __ps_199 = (ctor_Option_Some__int(x));
+        tur_adt_Option__int __ps_200 = (ctor_Option_Some__int(x));
         if (tur_panicking) return (tur_adt_Option__int){0};
-        return __ps_199;
+        return __ps_200;
 }
 
 static int64_t unwrap__spec__int64_t_tur_adt_Option__int(tur_adt_Option__int o) {
-        int64_t __t200 = 0;
+        int64_t __t201 = 0;
         {
             tur_adt_Option__int __scrut_v = (o);
             tur_adt_Option__int *__scrut = &__scrut_v;
             switch (__scrut->tag) {
             case 1: {
-                int64_t v_887 = (int64_t)__scrut->as.Some._0;
-                __t200 = v_887;
+                int64_t v_888 = (int64_t)__scrut->as.Some._0;
+                __t201 = v_888;
                 break;
             }
             case 0: {
-                __t200 = ((int64_t)0);
+                __t201 = ((int64_t)0);
                 break;
             }
             default: break;
             }
         }
-        return __t200;
+        return __t201;
 }
 
 static tur_adt_Option__int none__spec__tur_adt_Option__int() {
-        tur_adt_Option__int __ps_201 = (ctor_Option_None__int());
+        tur_adt_Option__int __ps_202 = (ctor_Option_None__int());
         if (tur_panicking) return (tur_adt_Option__int){0};
-        return __ps_201;
+        return __ps_202;
 }
 
 
 static void __tur_module_def_init(void) {
-    SCHEMA_unSTR_1282 = INT64_C(0);
-    SCHEMA_unINT_1283 = INT64_C(1);
-    SCHEMA_unFLOAT_1284 = INT64_C(2);
-    SCHEMA_unBOOL_1285 = INT64_C(3);
-    SCHEMA_unNIL_1286 = INT64_C(4);
-    SCHEMA_unLITERAL_1287 = INT64_C(5);
-    SCHEMA_unOBJECT_1288 = INT64_C(6);
-    SCHEMA_unARRAY_1289 = INT64_C(7);
-    SCHEMA_unOPTIONAL_1290 = INT64_C(8);
-    SCHEMA_unUNION_1291 = INT64_C(9);
-    SCHEMA_unTRANSFORM_1292 = INT64_C(10);
-    SCHEMA_unREC_1293 = INT64_C(11);
-    SCHEMA_unALWAYS_1294 = INT64_C(12);
-    SCHEMA_unNEVER_1295 = INT64_C(13);
-    SCHEMA_unAP_1296 = INT64_C(14);
-    SCHEMA_unFIELD_1297 = INT64_C(15);
-    SCHEMA_unAP_unFAT_1298 = INT64_C(16);
+    SCHEMA_unSTR_1283 = INT64_C(0);
+    SCHEMA_unINT_1284 = INT64_C(1);
+    SCHEMA_unFLOAT_1285 = INT64_C(2);
+    SCHEMA_unBOOL_1286 = INT64_C(3);
+    SCHEMA_unNIL_1287 = INT64_C(4);
+    SCHEMA_unLITERAL_1288 = INT64_C(5);
+    SCHEMA_unOBJECT_1289 = INT64_C(6);
+    SCHEMA_unARRAY_1290 = INT64_C(7);
+    SCHEMA_unOPTIONAL_1291 = INT64_C(8);
+    SCHEMA_unUNION_1292 = INT64_C(9);
+    SCHEMA_unTRANSFORM_1293 = INT64_C(10);
+    SCHEMA_unREC_1294 = INT64_C(11);
+    SCHEMA_unALWAYS_1295 = INT64_C(12);
+    SCHEMA_unNEVER_1296 = INT64_C(13);
+    SCHEMA_unAP_1297 = INT64_C(14);
+    SCHEMA_unFIELD_1298 = INT64_C(15);
+    SCHEMA_unAP_unFAT_1299 = INT64_C(16);
 }
 
 static void __tur_fatbox_init(void) {
     { char *__b = (char *)&__tur_fatbox_0;
       int64_t *__s = (int64_t *)(__b + sizeof(void *));
       __s[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-      __s[1] = (int64_t)(intptr_t)__fn_828; }
+      __s[1] = (int64_t)(intptr_t)__fn_829; }
     { char *__b = (char *)&__tur_fatbox_1;
       int64_t *__s = (int64_t *)(__b + sizeof(void *));
       __s[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-      __s[1] = (int64_t)(intptr_t)__fn_1241; }
+      __s[1] = (int64_t)(intptr_t)__fn_1242; }
 }
 
 /* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md.
@@ -7850,6 +8524,7 @@ static void __tur_static_init(void) {
     static int __tur_static_init_done = 0;
     if (__tur_static_init_done) return;
     __tur_static_init_done = 1;
+    atexit(tur_region_shutdown);
     __tur_fatbox_init();
     __tur_module_def_init();
 }

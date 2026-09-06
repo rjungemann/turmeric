@@ -8023,6 +8023,36 @@ static bool adt_is_inline_byval_dep(const Expr **items, uint32_t n_items,
  * closures, and inline-C closure application work under `tur build <dir>` (which
  * does not run the whole-program preamble).  See
  * docs/archive/history/load-not-expanded-in-imported-or-project-modules.md. */
+/* RM3 regions, on by default: the region runtime that an emitted program
+ * carries when nothing else supplies it.
+ *
+ * src/runtime/{region,arena}.{h,c} are embedded into the compiler at build
+ * time (cmake/embed_region_runtime.cmake -> region_rt_embed.h) and pasted
+ * verbatim.  The one transform is dropping each source's LOCAL `#include
+ * "..."` line: the emitter pastes those headers itself, in order, ahead of
+ * the bodies, and a `cc` of the emitted TU has no src/runtime on its include
+ * path to find them.  System includes stay -- they are what the bodies were
+ * written against, and repeating a system header is harmless. */
+#include "runtime/region_rt_embed.h"
+
+static void emit_embedded_runtime_source(Buf *out, const char *what,
+                                         const unsigned char *src) {
+    buf_printf(out, "/* ---- begin src/runtime/%s (embedded verbatim) ---- */\n", what);
+    const char *p = (const char *)src;
+    while (*p) {
+        const char *nl = strchr(p, '\n');
+        size_t len = nl ? (size_t)(nl - p) + 1 : strlen(p);
+        if (strncmp(p, "#include \"", 10) == 0) {
+            buf_puts(out, "/* (local #include dropped: that header is pasted above) */\n");
+        } else {
+            buf_write(out, p, len);
+        }
+        p += len;
+    }
+    if (p != (const char *)src && p[-1] != '\n') buf_putc(out, '\n');
+    buf_printf(out, "/* ---- end src/runtime/%s ---- */\n", what);
+}
+
 static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     /* project-mode-rc-runtime-preamble-missing: in separate compilation this
      * runtime is emitted both by the shared tur_runtime.h (via the preamble) and
@@ -8176,29 +8206,34 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * other door.  A hand-rolled tagged-None box (tag 0, non-null pointer --
      * the historical layout the read side still accepts) maps to the niche
      * null rather than reading its uninitialised payload word. */
-    /* RM3 regions (docs/upcoming/regions-plan.md), R1 plumbing: with
-     * `--enable=regions` the emitted program can reach the region allocator, so
-     * R2 has something to route allocation to and R4 something for `bt-scope`
-     * to bracket.  Declared, not called: R1 changes no allocation.  Off by
-     * default, so a default build emits nothing here and this costs an
-     * already-false bool test. */
+    /* RM3 regions (docs/upcoming/regions-plan.md; on by default since the
+     * 2026-09-05 graduation): the emitted program reaches the region allocator
+     * from every spine-node constructor and drop path, and registers
+     * tur_region_shutdown from its static init.  This is the DECLARATION half
+     * -- src/runtime/region.h pasted verbatim, so the prototypes an emitted
+     * program sees are the ones the archive's region.c was compiled against,
+     * not a hand-copied list that can drift.  The header's own include guard
+     * makes the separate-compilation re-emission (per-module .c, after
+     * tur_runtime.h already carried it) a no-op.
+     *
+     * The bodies are a separate question answered by
+     * emit_region_runtime_bodies below, on the DEDUP-4b archive posture.
+     *
+     * TUR_RT_API is the header's linkage hook: in a --shared build TUR_RT_LOCAL
+     * is already defined (top of the preamble) and the region surface takes
+     * its hidden visibility, so a .so keeps its generation stack to itself
+     * exactly as DEDUP-5 keeps the GC registry; single-file mode has no
+     * TUR_RT_LOCAL and the surface stays plain. */
     if (regions_enabled()) {
         buf_puts(out,
-"/* RM3 regions: declared lifetimes over the runtime arena.  A generation is\n"
-" * reclaimed whole or not at all -- tur_region_pop retires without freeing and\n"
-" * tur_region_pop_reclaim rewinds, so a shape the escape check cannot prove\n"
-" * costs a saving rather than correctness.  tur_region_owns guards every free\n"
-" * path: a pointer into region memory must never reach free(). */\n"
-"extern int  tur_region_push(void);\n"
-"extern void tur_region_pop(int depth);\n"
-"extern void tur_region_pop_reclaim(int depth);\n"
-"extern void  tur_region_note_escape(const void *p);\n"
-"extern bool tur_region_pop_checked(int depth);\n"
-"extern void *tur_region_alloc(size_t n);\n"
-"extern void *tur_region_alloc_or_malloc(size_t n);\n"
-"extern bool tur_region_owns(const void *p);\n"
-"extern void tur_region_free(void *p);\n"
-"extern bool tur_region_active(void);\n");
+            "#ifndef TUR_RT_API\n"
+            "#  ifdef TUR_RT_LOCAL\n"
+            "#    define TUR_RT_API TUR_RT_LOCAL\n"
+            "#  else\n"
+            "#    define TUR_RT_API\n"
+            "#  endif\n"
+            "#endif\n");
+        emit_embedded_runtime_source(out, "region.h", tur_rt_embed_region_h);
     }
     buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) {\n");
@@ -8391,6 +8426,13 @@ void emit_set_rcgc_from_archive(bool from_archive) {
     g_rcgc_from_archive = from_archive;
 }
 
+/* The posture the last emission used, for a link step that has to match it:
+ * a preamble that only DECLARES the archive-owned runtime commits its caller
+ * to putting that archive on the link line. */
+bool emit_rcgc_from_archive(void) {
+    return g_rcgc_from_archive;
+}
+
 /* DEDUP-4b: a runtime GLOBAL the archive owns.
  *
  * Omitted entirely rather than `extern`-declared, which looks over-cautious
@@ -8461,6 +8503,43 @@ static void emit_rcgc_global(Buf *out, bool shared,
      * from, or interposable by, anything outside it. */
     buf_printf(out, "#ifdef TUR_RT_OWNER\nTUR_RT_LOCAL %s#else\nextern TUR_RT_LOCAL %s;\n#endif\n",
                owner_body, extern_decl);
+}
+
+/* RM3 regions (on by default): the BODY half of the region runtime, on the
+ * DEDUP-4b archive posture the rc<T>/GC runtime already follows.
+ *
+ * When libturt_runtime.a is on the link line (rt_global_from_archive()) the
+ * archive's region.c/arena.c supply the definitions and the preamble carries
+ * only the declarations emit_closure_fat_runtime pasted.  Otherwise the
+ * emitted C has to be self-contained -- a project build, a --shared library,
+ * the REPL's spice cache and a bare `cc` of `tur emit-c` output all compile
+ * it without the archive, and before this every one of them linked with
+ * `undefined reference to tur_region_shutdown` (the address-taken atexit
+ * registration; the lazily-bound allocator calls would have failed on first
+ * use instead).  So the maintained sources are pasted here, verbatim.
+ *
+ * Shared mode wraps them in the TUR_RT_OWNER guard: the region stack is
+ * per-program state (a generation pushed in one module and allocated from in
+ * another must be the SAME generation, and tur_region_free's ownership test
+ * must see every slab), so exactly one TU -- tur_runtime.c -- carries the
+ * definitions and their file-scope state, and every other module TU calls
+ * through the prototypes.  Replicating the bodies `static` per TU, the way
+ * the non-rc/GC runtime helpers are, would give each module its own stack
+ * and free() arena memory across the seam.
+ *
+ * The S2 split (emit_rt_split_source) forces the archive posture, so the
+ * generated runtime TU never carries these -- the host links region.c. */
+static void emit_region_runtime_bodies(Buf *out, bool shared) {
+    if (!regions_enabled()) return;
+    if (rt_global_from_archive()) {
+        buf_puts(out, "/* RM3 regions: definitions live in the runtime archive (DEDUP-4b). */\n");
+        return;
+    }
+    if (shared) buf_puts(out, "#ifdef TUR_RT_OWNER\n");
+    emit_embedded_runtime_source(out, "arena.h",  tur_rt_embed_arena_h);
+    emit_embedded_runtime_source(out, "arena.c",  tur_rt_embed_arena_c);
+    emit_embedded_runtime_source(out, "region.c", tur_rt_embed_region_c);
+    if (shared) buf_puts(out, "#endif /* TUR_RT_OWNER */\n");
 }
 
 /* DEDUP-3: prototypes for every rc<T>/GC runtime function, so a non-owner
@@ -9580,6 +9659,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * Option/Result helpers, fatshims, poly-to-fat thunks).  Shared with the
      * separate-compilation path via emit_closure_fat_runtime. */
     emit_closure_fat_runtime(out, shared);
+    emit_region_runtime_bodies(out, shared);
     /* IT4/TY2.4: (type-of x) helper — maps a TypeKind tag to a cstr type name.
      * The tag stored in tur_tagged_t is the value's TypeKind enum value, so the
      * struct/ADT cases are emitted from the actual enum constants rather than

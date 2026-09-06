@@ -6,8 +6,33 @@ description: A scope form over the arena that already ships, so a persistent str
 
 # Regions (RM3)
 
-**Status: PROTOTYPE, R1-R5 landed 2026-09-04.** Gated behind `--enable=regions`,
-and staying gated -- see R5 for the decision and for what graduation needs.
+**Status: GRADUATED 2026-09-05 -- ON BY DEFAULT.** `--enable=regions` is
+retired (a lingering enable is a `TUR-W0063` no-op for one minor line);
+`TUR_REGIONS=0` is the bisection hatch that restores the pre-graduation build,
+and `tests/run-regions-seam.sh` -- inverted at graduation, per the flags guide
+-- keeps that off path green. R1-R5 landed 2026-09-04 as a prototype; R5 held
+it there on one blocker, and the four graduation requirements below were then
+closed in order (1, 2, 3 by work; 4 by the flip itself). The R5 decision text
+is kept as the record of why it waited.
+
+**Where the runtime comes from, since the flip.** The first CI run of the
+default-on build failed everywhere the emitted C is compiled without
+`libturt_runtime.a` -- a project build, a `--shared` library, the REPL's spice
+cache, a bare `cc` of `tur emit-c` output -- with `undefined reference to
+tur_region_shutdown`, because region.c lived only in the archive. The rc<T>/GC
+runtime had already solved that exact problem with the DEDUP-4b archive
+posture, and regions now follow it: `emit_closure_fat_runtime` pastes
+`src/runtime/region.h` verbatim (declarations, every TU), and
+`emit_region_runtime_bodies` pastes `arena.h`, `arena.c` and `region.c`
+verbatim into the owner TU (`#ifdef TUR_RT_OWNER` in shared mode; a `.so`
+takes `TUR_RT_API = TUR_RT_LOCAL`, hidden visibility) unless
+`rt_global_from_archive()` says the archive is on the link line. The sources
+are embedded into the compiler at build time by
+`cmake/embed_region_runtime.cmake` (hex byte arrays, `region_rt_embed.h`), so
+there is one implementation, not a replica that drifts. The S2 split forces
+the archive posture and never carries the bodies. The multi-module executable
+link, which chose the archive posture and then never named the archive, now
+adds `-lturt_runtime` like the single-file path.
 
 RM3 of [reclamation-plan.md](reclamation-plan.md). Read that plan's RM2
 section first -- this phase exists because RM2's question has no answer at RM2.
@@ -324,34 +349,217 @@ per the standing rule it would not block a release if there were.
 
 ### What graduation requires, in the order that matters
 
-1. **A boundary form of its own.** Either a `with-region` bracket that means
+1. ~~**A boundary form of its own.** Either a `with-region` bracket that means
    only the lifetime, or an explicit statement that `bt-scope` means both and a
    documented way to opt one out. This is the blocker; everything below is
-   ordinary work.
+   ordinary work.~~ **DONE 2026-09-05 -- `with-region` (A1).** The blocker
+   is a public-surface decision, and it was decided by the reclamation plan's
+   own measured residue: RM2's category 1 (496 B, `constrained-defn-cons-
+   return-monomorphize` and `refined-nonempty`) is in programs with NO
+   backtracking that build a throwaway spine, so the lifetime needs a spelling
+   that is not a search primitive. Of the three designs weighed --
+
+   - **A1, additive** (taken): `with-region` is the region-only bracket;
+     `bt-scope` KEEPS opening its region automatically, so R4's measured
+     solver win is untouched and the change is purely additive.
+   - **A2, orthogonal**: `with-region` becomes the only region opener and
+     `bt-scope` reverts to trail-only, "both" being one wrapped in the other.
+     Cleanest model, but it takes the automatic region off the solver path,
+     which would have to re-add it in `dfs-solve` -- a change to the exact
+     path R4 measured, deferred as its own separately-measured step if ever
+     wanted.
+   - **B, documented coupling**: no new form; declare `bt-scope` means both
+     and tell non-backtracking programs to call it and not use the trail.
+     Zero surface, but it leaves the conflation R5 flagged in place, merely
+     documented -- a parser with no backtracking still calls a backtracking
+     primitive to get a lifetime.
+
+   -- A1 fills the one corner of the 2x2 that had no spelling, and each corner
+   now has one:
+
+   | | region | no region |
+   |---|---|---|
+   | **trail level** | `bt-scope` | `bt-mark` / `bt-undo-to!` halves |
+   | **no trail level** | `with-region` | plain code |
+
+   `stdlib/region.tur` (autoloaded, its own file: the region is its own
+   concept, not the trail's). The body is a bare forwarder `(body)`; the
+   boundary is a CODEGEN decision, and `emit_binding_is_region_scope` now
+   recognizes both names, so the static walk, both emit paths and both
+   runtime locks are shared unchanged -- the only difference between the two
+   brackets is in the stdlib body this pass never reads. With the flag off
+   `with-region` is an identity call. It carries NO `#fx{Bt}`, which is the
+   checkable difference: `region-with-region` has a `#fx{}`-declared caller
+   reach it, the shape that is TUR-E0009 for `bt-scope`. Measured on that
+   fixture: live blocks at exit 908 -> 5 (the five are the pooled slab, R5
+   item 3), allocations 1,424 -> 521, values identical both arms. Seam 13/0.
+   Autoloading a new module moved all 148 codegen snapshots (binding-id
+   renumbering plus the one new defn), regenerated in the same commit.
 2. **Widen the static walk deliberately, with a fixture per shape admitted.**
    It accepts scalars, `cstr`, and non-heap ADTs whose every field it can walk.
    Structs, containers, refs and closures are refused wholesale -- sound, and it
    means a bracket returning a `Vec` of scalars never rewinds.
-3. **Close or price the residue** named under R4: the unbracketed CPS
+
+   **First widening LANDED 2026-09-05:** a non-heap ADT result whose every
+   ctor field is a bare scalar primitive now REWINDS, where the walk used to
+   refuse it on the field's NULL `full_type` (which is also NULL for a genuine
+   `:int`). The disambiguator is the declared FORM, not the field kind -- a
+   bare scalar keyword (`:int`, `:cstr`, ...) reaches nothing; an ADT name,
+   `ptr`, a type variable, or any compound form stays refused, so the widening
+   can only turn a refuse into a pass for a provable scalar. This admits
+   `(RxIP :int :int)` -- `re.tur`'s `re-find-from` result, the 312 B of RM2
+   category 2 -- and keeps the mutual-recursion result (`(MAcons :int :MB)`)
+   refused. `region_field_form_is_scalar` in emit_expr.c; `region-scope-adt-
+   result` now reads `retire=1 rewind=2` with the value asserted across the
+   pop, and it carries the mutual-recursion case as the negative. Closes
+   [region-walk-refuses-every-adt-result](https://github.com/rjungemann/turmeric/blob/main/docs/archive/region-walk-refuses-every-adt-result.md).
+   **Second batch, PINNED 2026-09-05 (`region-scope-shapes`):** three more
+   result shapes REWIND, and it turned out none needed a new walk change --
+   the scalar-form widening plus the existing `full_type` walk already admit
+   them, so the work was to prove it and pin each with its value read after
+   the pop, per the one-shape-one-fixture rule:
+
+   - a **`defstruct` with scalar fields** -- every defstruct is a record ADT
+     (structdef-retirement DS-D), so it reaches the same TY_ADT arm and its
+     `[x : int y : float]` fields are scalar keywords;
+   - a variant holding a **`:cstr`** -- never region memory, on the list;
+   - a variant holding a **field-less by-value enum** (`(T :int :Color)`) --
+     admitted the OTHER way: `Color` is not a scalar keyword, so it only got
+     through because the field's `full_type` is recorded (`record_full`) and
+     the walk descends into `Color`, whose every ctor is field-less. That is
+     an inference from the emitted verdict, and the negatives make it a safe
+     one.
+
+   And the negatives held: a variant HOLDING a `:heap` node retires, a
+   variant holding a self-recursive spine retires, and `region-scope-adt-
+   result`'s mutual-recursion case still retires and prints 42. The
+   `:heap`-holding shape is kept DEFINED in the fixture so its retire is
+   counted, but not RUN -- writing it surfaced an unrelated pre-existing
+   miscompile (a capturing thunk returning a heap-field record garbles the
+   int field, flag off too:
+   [capturing-thunk-returning-heap-field-record-garbles-int](../reported/capturing-thunk-returning-heap-field-record-garbles-int.md)),
+   and running it would bake a nondeterministic pointer into the expected
+   output.
+
+   **Third batch, PINNED 2026-09-05 (also `region-scope-shapes`):** a
+   variant holding a **non-recursive multi-variant sum of scalars**
+   (`(Circle :float) (Sq :float :float)`) REWINDS, and this closes the
+   "carrier-erased inner ADT" question rather than opening it: the inner
+   was expected to get no `full_type` (not a product, not field-less) and
+   need name-to-def resolution -- but `adt_is_byvalue_product` (types.c),
+   despite its name, admits an SR1 by-value sum candidate and walks every
+   variant's fields, so `Shape` gets `record_full`, a recorded `full_type`,
+   and the walk descends into it.  The same free route as the enum.  What
+   is left with NO recorded `full_type` is exactly what should stay
+   refused: an inner with drop glue (an rc can point at a region node), a
+   self-recursive inner, and a mutual-recursion partner.  Negatives pinned:
+   a sum one of whose arms holds a `:heap` node retires (a union is only
+   as safe as its widest arm), a self-recursive sum retires.  So the
+   "name-to-def resolution" widening the previous paragraph priced is
+   NOT needed; struck.
+
+   **Fourth batch, LANDED 2026-09-05 -- the one real walk change of the
+   later batches (`region-scope-vec-scalar`):** a **`Vec` of scalars**
+   REWINDS.  It was refused for a reason the plan's own example ("a
+   bracket returning a `Vec` of scalars never rewinds") never stated: a
+   parametric monomorph `(Vec int)` is a TY_APP, so it never reached the
+   walk's TY_ADT arm at all and fell to `default:`.  A new TY_APP arm
+   admits exactly this shape, one fact per lock: (1) Vec's own storage --
+   handle and element buffer -- is plain inline-C `malloc` in vec.tur,
+   never the region router, which is emitted only at the four ADT-ctor
+   sites; so the escaping handle is never region memory and the runtime
+   lock is satisfied.  A compiler-warranted name check, the option-niche
+   plan's warrant for Vec/Map/Set.  (2) A scalar element is an int64 word
+   in that malloc'd buffer and reaches nothing.  Anything else refuses:
+   a `Vec` of `:heap` nodes (pinned -- its buffer holds region pointers),
+   a by-value aggregate element (heap-boxed at push by the escaping
+   bridge, a later shape once that is pinned as never-routed), any other
+   parametric def (its tyvar fields would refuse without the argument
+   substitution the walk does not yet do).  Measured: the spines that
+   produce the elements are reclaimed and the Vec survives with both
+   elements and its length read back correctly after the pop.
+
+   Still refused, deliberately: the **recursive spine** (the result IS the
+   node); a **Vec of by-value aggregates** and **Map / Set** (the same
+   warrant would apply, each its own increment with its own fixture);
+   **other parametric monomorphs** like `(Pair int int)` (need tyvar
+   substitution in the field walk).
+3. ~~**Close or price the residue** named under R4: the unbracketed CPS
    `CT_LETCALL` arm, argument-position allocation landing in the generation, and
    the pooled slab that is never returned (reachable at exit, not lost -- a pool,
    not a leak, and freeing it needs care about `atexit` ordering against module
-   defers that may still read retired generations).
-4. **Soak the existing `bt-scope` callers.** `dfs-solve` and the sx2 fixtures
+   defers that may still read retired generations).~~ **DONE 2026-09-05 --
+   all three closed, two by proof and one by code.**
+
+   - **The `CT_LETCALL` arm stays bracket-free, by proof.** The IR builder
+     (`cps_ir.c`) emits `CT_LETCALL` only for an UNCOLORED callee; a colored
+     callee always becomes `CT_TAILCALL`, with a join when not in tail
+     position. Both region scopes are colored (each invokes a fat thunk), so a
+     region bracket can never land on the LETCALL arm. R4 knew every probed
+     shape became a tailcall but only probed `bt-scope`; `region-scope-
+     nontail-cps` pins it for `with-region` in the two non-tail positions
+     that would produce a LETCALL for an uncolored callee (let-bound, and as
+     an operand) inside a CPS-lowered function: both calls bracketed, `--dump-
+     cps` shows tailcalls, no LETCALL names the bracket, 46 survives. No
+     transcription -- which is what R4 wanted.
+   - **Argument-position allocation is sound, verified in emitted C.** The
+     only thing allocated in argument position of a region-scope call is the
+     thunk's closure env, and it is `void *__t = malloc(...)` -- never the
+     router, which is emitted only at the four ADT-ctor sites. So it lands
+     after the push but not in the generation. (The second routed site this
+     was once feared to be, emit_expr.c ~8273, is the same SR4 recursive-field
+     box as ~8223; the line moved.)
+   - **The pooled slab is returned: `atexit(tur_region_shutdown)`.** Flag-on
+     exit residue 65,728 B in 5 blocks -> **0 bytes in 0 blocks**, valgrind
+     0 errors, flag-off build references no region symbol. **The first
+     attempt was wrong exactly the way this item warned**, and a probe caught
+     it before it shipped: registered in a `main` prologue (all four of them),
+     it ran BEFORE a module `defer` that read a value escaped into a retired
+     generation -- `0` where `42` was right, `Invalid read`. Cause: a
+     `__attribute__((constructor))` runs `__tur_static_init` -- and so
+     registers the defers' `atexit`s -- before `main`, so anything `main`
+     registers is later and, LIFO, runs first. The only always-earlier place
+     is the first statement of `__tur_static_init` itself, behind its
+     idempotent guard: once, from whichever path enters first, before any
+     band. One call site (`static_init_emit`, emit_core.c), not four.
+     `region-shutdown-order` pins the placement (after the guard, before
+     `__module_defers_init`, not in `main`), the gating, and the value: the
+     defer prints `42` from the retired generation before shutdown frees it.
+4. ~~**Soak the existing `bt-scope` callers.** `dfs-solve` and the sx2 fixtures
    become region users the moment this is on by default; the seam test covers
-   twelve fixtures today, which is a floor, not a soak.
+   twelve fixtures today, which is a floor, not a soak.~~ **This is the flip
+   (2026-09-05).** The soak is not a prerequisite the flip waits on; it is
+   what the flip *is*: from this commit every `bt-scope` and `with-region`
+   caller in the tree -- `dfs-solve`, the sx2 fixtures, every spine-carrying
+   program -- runs with a region, on every `bash tests/run.sh`, on every CI
+   run. What the seam covers is now the OTHER path (the thirteen-fixture
+   population under `TUR_REGIONS=0`, plus a canary that the hatch bites), so
+   a bisection stays a one-variable switch. Full suite green at the flip with
+   all 148 codegen snapshots regenerated (every program now carries the
+   region externs, the routed ctor allocations, the atexit shutdown, and a
+   bracket at each boundary).
 
 ## What this does NOT do
 
 - It does not free a value whose lifetime is not a scope. Those stay RM2's,
   and RM2 gets smaller for it -- what remains is "spines that escape their
   region", which is also the set R3's walk has to identify anyway.
-- It does not change any default. The flag is off; `logic.tur` and every other
-  program allocate exactly as they do today until R4 opts a call site in.
+- ~~It does not change any default. The flag is off; `logic.tur` and every other
+  program allocate exactly as they do today until R4 opts a call site in.~~
+  **Superseded 2026-09-05: it is the default.** `TUR_REGIONS=0` restores the
+  old allocation exactly.
 - It is not region *inference*. Every region is declared.
 
 ## Guides to update when this graduates
 
-- `docs/guides/gc-guide.md` -- it documents the arena and the rc/cycle paths;
-  a third reclamation mode belongs beside them.
-- `docs/guides/experimental-flags-guide.md` -- the row while it is gated.
+- ~~`docs/guides/gc-guide.md` -- it documents the arena and the rc/cycle paths;
+  a third reclamation mode belongs beside them.~~ **Done 2026-09-05** -- a
+  "Region-allocated values" entry beside the arena paragraph, with the two
+  locks, the two brackets and the hatch.
+- ~~`docs/guides/experimental-flags-guide.md` -- the row while it is gated.~~
+  **Struck 2026-09-05: there is no such row to add.** That guide deliberately
+  does not restate the experiment list -- "the registry is the single source
+  of truth; this guide does not restate the list -- the command does" -- and
+  defers to `tur experiments`. The `EXPERIMENTS[]` row in
+  `src/runtime/experiments.c` IS the gated-feature documentation. Nothing to
+  do there while gated, and nothing to remove at graduation either.

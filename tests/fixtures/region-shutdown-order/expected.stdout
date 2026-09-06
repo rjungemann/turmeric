@@ -1,0 +1,5 @@
+placement: shutdown registered after the guard and before the module defers
+in main: 0
+flag-off references: 0
+regions off: 1 42 
+regions on:  1 42 
