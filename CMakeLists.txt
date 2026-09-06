@@ -149,6 +149,18 @@ enable_testing()
 # root resolves to the literal "stdlib" there, which has nothing to escape.
 # The cases are reachable on POSIX too ("\\" and '"' are both legal in a POSIX
 # filename), so the Linux legs enforce it rather than Windows alone.
+# Does the JSON-RPC stdio transport answer at all?  `tur lsp` and `tur dap`
+# frame on a literal CRLF CRLF, and on Windows fd 0 is opened in TEXT mode,
+# which strips exactly those CRs -- so both servers exited 0 having printed
+# nothing, for every editor, silently.  65 passing LSP assertions missed it
+# because the harness that runs them had never run on Windows.  This needs no
+# fixtures and takes about a second, so it can run everywhere.
+add_test(
+  NAME lsp_dap_stdio_smoke
+  COMMAND bash tests/lsp/run-stdio-smoke.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
 add_test(NAME source_literal_unit COMMAND tur_source_literal_unit)
 
 add_test(

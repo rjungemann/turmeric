@@ -20,7 +20,23 @@ import tempfile
 import textwrap
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-TUR  = os.path.join(ROOT, "build", "tur")
+# $TUR wins, then build/tur, then build/tur.exe.  Both halves matter on
+# Windows: the binary has a .exe suffix, and the build directory is rarely
+# named "build" there (build-win, build-win-rel, ...).  Without this the
+# harness silently reports "not built" on the one platform where `tur lsp`
+# and `tur dap` were broken.
+def _find_tur():
+    env = os.environ.get("TUR")
+    if env:
+        return os.path.abspath(env)
+    for name in ("tur", "tur.exe"):
+        cand = os.path.join(ROOT, "build", name)
+        if os.path.exists(cand):
+            return cand
+    return os.path.join(ROOT, "build", "tur")
+
+
+TUR = _find_tur()
 
 PASS = 0
 FAIL = 0

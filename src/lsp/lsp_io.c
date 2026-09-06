@@ -5,6 +5,41 @@
 #include <string.h>
 #include <unistd.h>
 
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+
+/* Put the protocol fd in BINARY mode.
+ *
+ * Windows opens fd 0 and 1 in TEXT mode, which strips the CR from every CRLF
+ * on the way in.  This transport frames on a literal CRLF CRLF (read_headers
+ * below compares those four bytes), so a client that sends a correct
+ * `Content-Length: N\r\n\r\n` header has it silently rewritten to `\n\n`
+ * before the compare ever sees it.  The terminator then never matches,
+ * read_headers loops to EOF, and the server exits 0 having printed nothing --
+ * which is what `tur lsp` and `tur dap` did on Windows for every client.
+ * Silent, and indistinguishable from a server that simply has nothing to say.
+ *
+ * The body read has the same problem one layer down: it asks for exactly
+ * body_len bytes, and text mode delivers fewer whenever the JSON contains a
+ * CRLF, so the read loop blocks waiting for bytes that were already consumed.
+ *
+ * main() already does this for stdout and stderr, with a comment about this
+ * exact desynchronisation -- stdin was missed.  Doing it here rather than
+ * there keeps it to the transport that needs it: `tur format` and the REPL
+ * also read stdin, and they want the platform text conventions.
+ *
+ * Idempotent, and cheap enough to call per message rather than asking every
+ * server entry point to remember.  A missed call is invisible until an editor
+ * reports nothing at all.
+ */
+static void lsp_io_binary(int fd) {
+    if (fd >= 0) _setmode(fd, _O_BINARY);
+}
+#else
+static void lsp_io_binary(int fd) { (void)fd; }
+#endif
+
 /* Read until the 4-byte CRLF CRLF header terminator.
  * Returns heap-allocated header string (NUL-terminated), or NULL on EOF. */
 static char *read_headers(int fd) {
@@ -34,6 +69,7 @@ static char *read_headers(int fd) {
 }
 
 char *lsp_read_message(int fd_in) {
+    lsp_io_binary(fd_in);
     char *headers = read_headers(fd_in);
     if (!headers) return NULL;
 
@@ -61,6 +97,7 @@ char *lsp_read_message(int fd_in) {
 }
 
 void lsp_write_message(int fd_out, const char *json, size_t len) {
+    lsp_io_binary(fd_out);
     char header[64];
     int hlen = snprintf(header, sizeof(header),
                         "Content-Length: %zu\r\n\r\n", len);
