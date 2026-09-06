@@ -433,13 +433,18 @@ per the standing rule it would not block a release if there were.
    And the negatives held: a variant HOLDING a `:heap` node retires, a
    variant holding a self-recursive spine retires, and `region-scope-adt-
    result`'s mutual-recursion case still retires and prints 42. The
-   `:heap`-holding shape is kept DEFINED in the fixture so its retire is
-   counted, but not RUN -- writing it surfaced an unrelated pre-existing
-   miscompile (a capturing thunk returning a heap-field record garbles the
-   int field, flag off too:
-   [capturing-thunk-returning-heap-field-record-garbles-int](../reported/capturing-thunk-returning-heap-field-record-garbles-int.md)),
-   and running it would bake a nondeterministic pointer into the expected
-   output.
+   `:heap`-holding shape was at first kept DEFINED in the fixture but not
+   RUN -- writing it surfaced an unrelated pre-existing miscompile (a
+   record holding a heap node returned through the bracket read its int
+   field back as an address, flag off too), and running it would have
+   baked a nondeterministic pointer into the expected output. **Fixed the
+   same day and the shape now runs with its 10 asserted**: the cause was
+   the direct emitter's by-args spec matcher handing the call the clone
+   minted for a SIBLING by-value record result, since its result guard
+   only told two primitive kinds apart --
+   [capturing-thunk-returning-heap-field-record-garbles-int](../archive/capturing-thunk-returning-heap-field-record-garbles-int.md).
+   Worth knowing for this plan because every bracket call site is that
+   shape: a `[A]` generic whose type variable reaches only the result.
 
    **Third batch, PINNED 2026-09-05 (also `region-scope-shapes`):** a
    variant holding a **non-recursive multi-variant sum of scalars**

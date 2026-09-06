@@ -3356,7 +3356,7 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
                 /* G6: skip a return-differentiated sibling spec (e.g. the bool
                  * `re-cata` clone for an int-result call) -- lockstep with
                  * find_matched_abi_spec's identical guard. */
-                if (emit_spec_result_mismatch(emit_resolve_type(ctx, call->type),
+                if (emit_spec_result_mismatch(ctx, emit_resolve_type(ctx, call->type),
                                               spec->result_type)) {
                     continue;
                 }

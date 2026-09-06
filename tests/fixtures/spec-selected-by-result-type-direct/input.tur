@@ -1,0 +1,42 @@
+;; capturing-thunk-returning-heap-field-record-garbles-int: the DIRECT-path
+;; twin of cps-spec-selected-by-result-type.
+;;
+;; A generic whose type variable reaches only the RESULT -- `ident [A] [^fat
+;; body : (fn [] A)] : A`, the shape bt-scope / with-region use -- presents
+;; identical argument types at every instantiation.  The direct emitter's
+;; by-args spec matchers (find_matched_abi_spec, emit_call_name's fallback)
+;; guarded the result only for two distinct PRIMITIVE kinds, so a call whose
+;; result is a record holding a `:heap` node -- `HoldsLink`, a heap-boxed ADT
+;; riding the int64 carrier -- matched the spec minted for the BY-VALUE record
+;; `HoldsInt` and read its box pointer back through a 16-byte aggregate: the
+;; int field printed as an address, different on every run.
+;;
+;; The report's four-variable table said it needed BOTH a capturing thunk and
+;; the `:heap` field.  Neither is the cause.  The capture only decides which
+;; emit path the caller takes (cap-int is CPS-lowered, where the archived
+;; cps-call-arm-ignores-abi-specialization fix already selects by result;
+;; cap-heap stays direct), and the heap field only decides that `HoldsLink`
+;; is boxed rather than by value -- which is what makes the two results
+;; c-name differently while both being TY_ADT.  Delete cap-int and cap-heap
+;; was always right: the defect needs the sibling spec to exist.
+;;
+;; Values are READ, not merely built -- this compiled fine and printed garbage.
+
+(defdata Link :heap (Link [v : int nxt : int]))
+(defdata HoldsLink (HL :int :Link))
+(defdata HoldsInt  (HI :int :int))
+
+(defn ident [A] [^fat body : (fn [] A)] : A (body))
+
+(defn cap-heap [n : int] : HoldsLink (ident (fn [] (HL n (Link n 0)))))
+(defn cap-int  [n : int] : HoldsInt  (ident (fn [] (HI n n))))
+
+;; The non-capturing twin, which was never wrong, stays as the control.
+(defn plain-heap [] : HoldsLink (ident (fn [] (HL 5 (Link 5 0)))))
+
+(defn main [] : int
+  (match (cap-heap 7)   (HL a l) (println a))   ;; 7 -- was an address
+  (match (cap-int 7)    (HI a b) (println a))   ;; 7
+  (match (plain-heap)   (HL a l) (println a))   ;; 5
+  (match (cap-heap 9)   (HL a l) (println (.v l)))   ;; 9 -- the heap field, read too
+  0)

@@ -34,13 +34,12 @@
 #             form names the def, which is never a scalar keyword, so it refuses
 #             -- the spine is exactly what a rewind must not reclaim.
 #   r-heap    a variant HOLDING a `:heap` node.  The result reaches region
-#             memory, so the walk refuses on `is_heap`.  It is DEFINED so its
-#             retire is counted, but deliberately NOT called from main: a record
-#             with a `:heap` field returned through a CAPTURING generic `[A]` fat-thunk
-#             bracket reads its INT field back as garbage -- with the flag off
-#             too, so it is not the region's doing.  Filed as
-#             docs/reported/capturing-thunk-returning-heap-field-record-garbles-int.md.
-#             Running it would bake a nondeterministic pointer into this file.
+#             memory, so the walk refuses on `is_heap`.  It was once DEFINED but
+#             not called: its int field read back as garbage through the
+#             bracket, because the direct-path spec matcher handed the call the
+#             sibling by-value record's clone (docs/archive/capturing-thunk-
+#             returning-heap-field-record-garbles-int.md, fixed 2026-09-05).
+#             Now run like the others; its 10 is the retired-region value.
 #
 # The counts are the ratchet: a widening that admits `r-heap` shows up as a
 # changed number here AND, because a retired region reclaims nothing, could
@@ -100,6 +99,7 @@ cat > "$TMP/in.tur" <<'EOF'
   (match (r-sum 4)    (HSh a s) (println a))  ;; 10
   (match (r-bad 4)    (HB a b)  (println a))  ;; 10 (retired: identical to flag-off)
   (match (r-rec 4)    (HR a r)  (println a))  ;; 10 (retired: identical to flag-off)
+  (match (r-heap 4)   (HL a l)  (println a))  ;; 10 (retired: the result holds a node)
   0)
 EOF
 

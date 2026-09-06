@@ -6027,6 +6027,14 @@ static const char *abi_trace_clone_name(const EmitCtx *ctx, const Expr *call) {
         for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
             const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
             if (spec->binding != b || spec->n_args != call->as.call_.n_args) continue;
+            /* Lockstep with emit_call_name's G6 / result-ABI guard, so the
+             * trace reports the clone emit will actually name.  The cast is
+             * trace-only: emit_resolve_type does not mutate the ctx. */
+            if (emit_spec_result_mismatch((EmitCtx *)ctx,
+                                          emit_resolve_type((EmitCtx *)ctx, call->type),
+                                          spec->result_type)) {
+                continue;
+            }
             bool args_match = true;
             for (uint32_t ai = 0; ai < call->as.call_.n_args; ai++) {
                 const Expr *cur = call->as.call_.args[ai];

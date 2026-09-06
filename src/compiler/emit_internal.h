@@ -929,9 +929,13 @@ bool emit_spec_arg_type_for_binding(EmitCtx *ctx, const struct Binding *b,
 void emit_abi_assert_routed_concrete(EmitCtx *ctx, const Type *recovered,
                                      const char *site, bool deep);
 /* G6: true when a call's result type and a candidate spec's result type are
- * distinct PRIMITIVE kinds -- a return-differentiated sibling spec that the
- * by-args lookup must not match.  Defined in emit_expr.c. */
-bool emit_spec_result_mismatch(Type call_result, Type spec_result);
+ * distinct PRIMITIVE kinds, or (capturing-thunk-returning-heap-field-record-
+ * garbles-int) are both concrete and spell different C types -- a return-
+ * differentiated sibling spec that the by-args lookup must not match.  Every
+ * by-args spec matcher on the direct path consults this one predicate so they
+ * cannot drift; the CPS emitter's find_mono_clone_for_call carries the same
+ * rule for its arms.  Defined in emit_expr.c. */
+bool emit_spec_result_mismatch(EmitCtx *ctx, Type call_result, Type spec_result);
 /* G2: the concrete instance-method FnDef a class-method call resolves to for a
  * given recovered dispatch type (e.g. `__inst_Enc_enc_Cons` for `(Cons int)`).
  * Defined in emit_core.c. */

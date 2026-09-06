@@ -270,10 +270,50 @@ static bool emit_prim_result_kind(TypeKind k) {
         default: return false;
     }
 }
-bool emit_spec_result_mismatch(Type call_result, Type spec_result) {
-    return emit_prim_result_kind(call_result.kind) &&
-           emit_prim_result_kind(spec_result.kind) &&
-           call_result.kind != spec_result.kind;
+/* capturing-thunk-returning-heap-field-record-garbles-int: is a result type
+ * concrete enough that its C spelling identifies its return ABI?  A bare type
+ * variable, an unknown, or an app with an abstract head all c-name to the
+ * int64 carrier exactly as a genuine `int` does, so a C-name comparison on
+ * them would reject the correct clone for a call whose result the enclosing
+ * spec has not grounded yet.  Deciding nothing there keeps the by-args
+ * behaviour those sites were written against.  Same rule as the CPS side's
+ * cps_call_result_discriminator. */
+static bool emit_result_c_name_is_decisive(const Type *t) {
+    switch (t->kind) {
+        case TY_TYVAR:
+        case TY_UNKNOWN:
+            return false;
+        case TY_APP:
+            return type_app_is_concrete_adt(t);
+        default:
+            return true;
+    }
+}
+
+bool emit_spec_result_mismatch(EmitCtx *ctx, Type call_result, Type spec_result) {
+    if (emit_prim_result_kind(call_result.kind) &&
+        emit_prim_result_kind(spec_result.kind) &&
+        call_result.kind != spec_result.kind)
+        return true;
+    /* capturing-thunk-returning-heap-field-record-garbles-int: the primitive
+     * rule above cannot see two ADT results apart.  A generic whose type
+     * variable reaches only the RESULT -- `ident [A] [^fat body : (fn [] A)]
+     * : A`, the bt-scope / with-region bracket shape -- presents identical
+     * args at every instantiation, so a call whose result is a heap-boxed
+     * record (`HoldsLink`, riding the int64 carrier) matched the spec minted
+     * for a BY-VALUE record (`HoldsInt`, a 16-byte aggregate) and read its box
+     * pointer back through the aggregate's layout.  When both results are
+     * concrete, their C spellings are the return ABI; a difference is a
+     * genuinely different ABI and must not match.  A pure narrowing: it can
+     * only turn a wrong hit into "no spec" (the erased base, which is what a
+     * carrier-riding result wants) or an ambiguity into the unique right hit. */
+    if (!emit_result_c_name_is_decisive(&call_result) ||
+        !emit_result_c_name_is_decisive(&spec_result))
+        return false;
+    const char *cc = emit_type_c_name(ctx, call_result);
+    const char *sc = emit_type_c_name(ctx, spec_result);
+    if (!cc || !sc) return false;   /* unspellable either side: do not narrow */
+    return strcmp(cc, sc) != 0;
 }
 
 /* KB-004/KB-021: find the ABI specialization (concrete-by-value clone) that an
@@ -428,7 +468,7 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
         if (spec->binding != fn_binding || spec->n_args != e->as.call_.n_args) continue;
         /* G6: do not match a return-differentiated sibling spec (e.g. the bool
          * `re-cata` clone for an int-result call). */
-        if (emit_spec_result_mismatch(emit_resolve_type(ctx, e->type),
+        if (emit_spec_result_mismatch(ctx, emit_resolve_type(ctx, e->type),
                                       spec->result_type)) {
             continue;
         }
