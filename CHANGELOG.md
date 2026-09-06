@@ -2,6 +2,30 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.44.1] -- 2026-09-05
+
+### Fixed
+
+- **`tur lsp` and `tur dap` speak to editors on Windows.** Both framed
+  messages with a literal CRLF CRLF terminator, but Windows opens fd 0 in
+  text mode and strips the CR on the way in, so a correct
+  `Content-Length: N\r\n\r\n` header arrived as `\n\n`, the terminator never
+  matched, and both servers ran to EOF and exited 0 having said nothing --
+  no error, no diagnostic. The stdio transport (`src/lsp/lsp_io.c`) now puts
+  its descriptors in binary mode; `tur format` and the REPL keep the platform
+  text conventions, and `tur mcp` was never affected. A
+  `tests/lsp/stdio-smoke.py` guard asserts each server answers an
+  `initialize` with a well-framed reply, wired into ctest and the Windows CI
+  job -- which ran `tests/run.sh` only and had never invoked ctest, so the
+  existing LSP/DAP coverage never executed there. `run-mcp-lsp.sh` now
+  honours `$TUR` and the `.exe` suffix instead of hardcoding `./build/tur`.
+- **`spice_root_of` handles backslash-spelled paths.** Its walk-up searched
+  only for `/`, answering "not in a spice" for every Windows path. Third
+  instance of this bug class after `find_stdlib_beside_exe` and
+  `rewrite_autolink_relative_paths`. Known remaining Windows gaps in LSP
+  cross-module resolution and DAP time-travel replay are tracked in
+  `docs/reported/lsp-dap-windows-gaps.md`.
+
 ## [0.44.0] -- 2026-09-05
 
 ### Added
