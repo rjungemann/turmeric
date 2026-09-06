@@ -2281,7 +2281,7 @@ static int locate_runtime_lib(char *libdir, size_t dcap,
          *
          * Without this probe none of the four candidates matched an extracted
          * tarball, TUR_RT_AUTO fell back to source mode, and source mode wanted
-         * src/runtime/*.c that the archive does not ship -- so `tur run` on a
+         * the src/runtime sources that the archive does not ship -- so `tur run` on a
          * released build failed at the C compile step with "no such file or
          * directory: .../src/runtime/hamt.c".  Verified on macOS and Windows;
          * see docs/reported/release-archive-cannot-compile.md.
