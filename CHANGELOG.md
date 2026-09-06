@@ -2,10 +2,20 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.44.0] -- 2026-09-05
 
 ### Added
 
+- **Turmeric runs natively on Windows.** `tur.exe` builds and passes the
+  fixture suite under MSYS2/UCRT64: the reactor gets a real `select()`-based
+  I/O backend over Winsock, generated programs get real fiber-based context
+  switching (a register-snapshot `ucontext` shim, replacing the earlier Win32
+  Fibers spike) so multishot and multithreaded effects work, and the JIT
+  executes natively through the S2 tier with lazy thunks and safe unwinding
+  through fiber stacks. CI now builds and runs the JIT suite on Windows, and
+  release artifacts ship a self-contained Windows x86_64 build.
+  `TUR_JIT_DUMP_C` dumps the exact source handed to c2mir for debugging the
+  JIT pipeline.
 - **`tur smt` runs a script as a session, with a real assertion stack**
   (solver-extension plan, SX8b). `(push [n])` and `(pop [n])` scope the
   assertions, each `(check-sat)` is answered where it appears, `(get-model)`
@@ -21,7 +31,6 @@ All notable changes to Turmeric are documented here.
   `(check-sat)` is still decided once at the end, so SX8a's contract and the
   corpus replay are unchanged. Guide:
   `docs/guides/refinement-solver-internals-guide.md`.
-
 - **The refinement solver is answerable from the browser** (SX8c):
   `turi_smt_check` runs an SMT-LIB2 script through the same reader, chain and
   bounded model search as `tur smt`, including the `(push)`/`(pop)` assertion
@@ -29,7 +38,6 @@ All notable changes to Turmeric are documented here.
   refine sources are core sources -- so this exposes what was shipping rather
   than adding weight. Read-only: nothing reachable from it can elide a runtime
   check.
-
 - **Two more solver caps are now instrumented** under `TUR_REFINE_STATS=1` and
   in `benchmarks/run-cap-sweep.sh`: `path hyps` (`RT_CS_PATH_MAX_HYPS`, the
   branch guards recovered per call-site crossing -- the tightest cap in the
@@ -37,10 +45,9 @@ All notable changes to Turmeric are documented here.
   (`MODEL_MAX_VARS`, the counterexample search's width). The latter carries a
   second `model vars run` line counting the subset a higher cap would actually
   help, since a VC over the cap may also carry a non-int variable the sort gate
-  declines at any limit.
-
-### Added
-
+  declines at any limit. The solver's integer tail is also closed (S2c-lite,
+  div/mod axioms, budgeted counterexamples), and the refinement chain now
+  builds its DNF once per run instead of once per stage.
 - **`with-region`: the lifetime-only region bracket** (regions plan, RM3 R5
   graduation item 1 -- the blocker). Under `--enable=regions`, `bt-scope`
   opens an arena generation as well as a trail level, which is right for a
@@ -57,7 +64,6 @@ All notable changes to Turmeric are documented here.
   flip the default. The new autoloaded module moved all 148 codegen
   snapshots (binding-id renumbering plus one defn), regenerated in the same
   commit. Backtrackable State Guide has the square.
-
 - **The region rewind admits a scalar-field ADT result** (RM3 R5 graduation
   item 2, first shape). The escape walk refused any constructor field with a
   NULL `full_type`, which is also NULL for an ordinary `:int`, so every
@@ -66,7 +72,9 @@ All notable changes to Turmeric are documented here.
   an ADT name, `ptr`, a type variable or a compound form still refuses. This
   admits `(RxIP :int :int)` -- `re.tur`'s `re-find-from` result -- and keeps
   the mutual-recursion result refused; a kind-based accept that was reverted
-  for a use-after-free is not reintroduced.
+  for a use-after-free is not reintroduced. A `Vec` of scalars and a
+  sum-of-scalars shape are admitted the same way (R5 item 2's second batch),
+  and the three R4 residues are closed (R5 item 3).
 
 ### Changed
 
@@ -102,9 +110,66 @@ All notable changes to Turmeric are documented here.
   linked with `undefined reference to tur_region_shutdown`. The multi-module
   executable link, which chose the archive posture and then named no archive,
   now links `libturt_runtime.a` like the single-file path does.
+- **The release workflow is dry-runnable**, so a workflow change can be
+  validated without cutting a real tag.
+- **`st-bind`'s callback parameter is now a real function type**, not an
+  opaque `StThunk` carrier -- removing the untyped carrier also fixed an
+  aliasing bug it was hiding.
 
 ### Fixed
 
+- **A broad set of Windows-specific portability fixes** landed alongside the
+  bring-up: shell-string subprocesses now work under `cmd.exe`; `C:\dir` is
+  recognized as absolute when anchoring `-I`/`-L`; the stdlib walk-up steps up
+  a directory correctly; the temp directory and `fs/tmpfile` are resolved at
+  run time instead of a hardcoded `/tmp` (which resolved to the MSYS drive
+  root); every emitted `setjmp`/`longjmp` routes through `TUR_SETJMP`; `-ldl`
+  is dropped from autolink flags (Windows has no `libdl`); `.text` is restored
+  after the `ucontext` asm block; a Win64 aggregate return now gets its typed
+  `sret` shim; effects inside a fiber no longer die on `STATUS_BAD_STACK`; and
+  paths embedded in generated `(load "...")` source and REPL paths are
+  correctly escaped.
+- **The JIT's native tier (S2) was disengaged on every platform, not only
+  Windows** -- an unguarded `dlfcn.h` include broke the Windows JIT build, and
+  the S2 engage probe never matched on a host without the runtime archive.
+  Both are fixed.
+- **The reactor's source-slot reuse orphaned the outgoing source's callback
+  box**, surfacing as a hang under sustained async load; slot recycling is
+  now deferred by one poll so an in-flight callback is never freed out from
+  under itself.
+- **Several defects in the union/niche carrier representation**, found via a
+  restored SR2 seam harness: three defects in the `tur_tagged_t` round trip;
+  a nested-carrier-match binder that failed to deref the Option/Result
+  pointer-box slot; a niche-typed comparator parameter that read a caller's
+  carrier box instead of unboxing it (now generalized to every word-passing
+  container, not just `Vec`); an `rc`-of-by-value-sum monomorph that read the
+  first word of the wrong representation (two defects); and three hard
+  compile errors in union widening at `let`/return position. The frozen
+  `g_adt_app_byvalue` gate, no longer needed, was removed.
+- **A CPS call's ABI specialization is now selected by its result type, not
+  just its arguments**, fixing a miscompile where two calls sharing an
+  argument list but differing result types picked the same specialization.
+- **Several closure and dispatch correctness fixes**: a let-aliased function
+  parameter captured in a lambda; a directly-applied lambda's calling
+  convention now read off its own argument; both parameters of a nested
+  binary class-method spec now resolve; a fallback spec clone must belong to
+  the call's own callee; and a second zipper's leaked box plus a null-handle
+  crash in `zipper-free`.
+- **The refinement solver's declared-row purity veto had a second defect**
+  that hid behind the first: it ran once at the top of the walk and was
+  skipped on every memo hit, and the memo was written first by the
+  predicate-impurity walk, so it never fired -- for a resolved `#fx{Unsafe}`
+  either. It now applies where the verdict is memoized, so it holds on every
+  lookup and is transitive (an unannotated wrapper around a `#fx{Bt}`
+  function is not proven pure). Pinned by `sx1-bt-row-checked` and
+  `errors/sx1-bt-row-pure-caller-rejected`; the Backtrackable State Guide has
+  a section, and the Effects System Guide now documents the silent-drop trap.
+- **The internals guide's solver documentation was a release cycle stale.**
+  The caps table gave `NO_MAX_SHARED` as 8 where the source says 16 (raised
+  2026-08-25), in two places; the S1 section still described the
+  rebuild-per-cube EUF state that incremental EUF replaced; and
+  `TUR_REFINE_EUF=rebuild`, the seam for bisecting the incremental path, was
+  undocumented.
 - **The trail's `#fx{Bt}` effect row is now checked; it used to resolve to
   nothing.** Every mutator in `stdlib/trail.tur` has carried `#fx{Bt}` since
   0.41, but no `defeffect` declared `Bt`, and an undeclared uppercase name in
@@ -117,23 +182,6 @@ All notable changes to Turmeric are documented here.
   callers stay unchecked, as for every capability tag. `bt-scope`,
   `with-untrailed`, `dfs-solve` and `dfs-choose-go` carry the row too; the
   DFS goal constructors deliberately do not (they only build a closure).
-
-  The refinement solver's declared-row purity veto had a second defect that
-  hid behind the first: it ran once at the top of the walk and was skipped on
-  every memo hit, and the memo was written first by the predicate-impurity
-  walk, so it never fired -- for a resolved `#fx{Unsafe}` either. It now
-  applies where the verdict is memoized, so it holds on every lookup and is
-  transitive (an unannotated wrapper around a `#fx{Bt}` function is not
-  proven pure). Pinned by `sx1-bt-row-checked` and
-  `errors/sx1-bt-row-pure-caller-rejected`; the Backtrackable State Guide has
-  a section, and the Effects System Guide now documents the silent-drop trap.
-
-- **The internals guide's solver documentation was a release cycle stale.**
-  The caps table gave `NO_MAX_SHARED` as 8 where the source says 16 (raised
-  2026-08-25), in two places; the S1 section still described the
-  rebuild-per-cube EUF state that incremental EUF replaced; and
-  `TUR_REFINE_EUF=rebuild`, the seam for bisecting the incremental path, was
-  undocumented.
 
 ## [0.43.0] -- 2026-09-03
 

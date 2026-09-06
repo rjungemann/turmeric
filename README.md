@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.43.0` -- the Option niche graduates to the default representation (`Option<NonNull>` and `Vec<Option>` collapse to a bare pointer, no tag word), recursive sums switch to by-value by default, and serializable continuations gain a documented typed surface.
+**Latest release:** `v0.44.0` -- Turmeric runs natively on Windows (reactor, fibers, and JIT included), and regions graduate to on-by-default, dropping peak RSS 47% on the solver workload.
 
 ## What
 
