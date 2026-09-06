@@ -1,0 +1,23 @@
+;; module-toplevel-do-with-expression -- a (do ...) at (defmodule ...) top
+;; level is only legal when EVERY child is itself a definition. One real
+;; side-effecting call mixed in with definitions still rejects (TUR-E0711),
+;; on the call itself -- module_body_form_is_definition's EX_DO case must
+;; not become a blanket allow for the wrapper just because some of its
+;; children are legitimate definitions.
+;;
+;; Companion to module-toplevel-do-of-definitions (the all-definitions case,
+;; which is legal).
+(defmodule mtdwe
+  (export go)
+
+  (defn go [] : int
+    ```c
+    printf("SIDE EFFECT RAN\n");
+    return 1;
+    ```)
+
+  (do
+    (defn helper [] : int 1)
+    (go))  ;; never evaluated -- this is the form under test.
+
+  (defn main [] : int 0))
