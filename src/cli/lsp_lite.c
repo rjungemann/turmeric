@@ -127,7 +127,10 @@ static int scan_cstr(const char **p, const char *end,
 }
 
 static void load_stdlib_docstrings(LiteTable *out, const char *path) {
-    FILE *fp = fopen(path, "r");
+    /* "rb": a text-mode read on Windows is short of the ftell size, and the
+     * strict check below then drops the whole table without a word. See
+     * docs/reported/windows-text-mode-read-rejects-own-files.md */
+    FILE *fp = fopen(path, "rb");
     if (!fp) return;
     fseek(fp, 0, SEEK_END);
     long sz = ftell(fp);

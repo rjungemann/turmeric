@@ -4921,9 +4921,14 @@ static int cmd_run(int argc, char **argv) {
                 } else {
                     /* Verify SHA-256 matches lock (if lock has entry). */
                     PkgLockEntry *le = pkg_lock_find(&lock, s->name, false);
-                    if (le && le->sha256) {
-                        char actual_sha[65];
-                        if (pkg_sha256_dir(dep_dir, actual_sha) &&
+                    /* Only a hash THIS algorithm produced can be compared.  A
+                     * lockfile written by an older tur carries a `tar -c |
+                     * sha256sum` digest (or the git-SHA fallback), which is not
+                     * comparable and must not be reported as tampering -- the
+                     * next `tur fetch` rewrites it in the current format. */
+                    if (le && pkg_hash_comparable(le->sha256)) {
+                        char actual_sha[PKG_HASH_MAX];
+                        if (pkg_hash_dir(dep_dir, actual_sha) &&
                             strcmp(actual_sha, le->sha256) != 0) {
                             fprintf(stderr,
                                 "tur run: integrity check failed for '%s'.\n"

@@ -1241,6 +1241,18 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_reactor_slot_reuse_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Spice lockfile integrity hash (pkg_hash_dir)
+add_test(
+  NAME tur_pkg_hash
+  COMMAND "${CMAKE_BINARY_DIR}/tur_pkg_hash"
+  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+# SHA-256 unit test (runtime/sha256.c, shared by image.c and pkg_hash_dir)
+add_test(
+  NAME tur_sha256_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_sha256_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # AI1 (application-image-dumps-plan): image header codec unit test
 add_test(
   NAME tur_image_unit
