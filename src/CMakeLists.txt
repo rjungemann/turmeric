@@ -338,6 +338,12 @@ if(WIN32)
     # WIN3 tier C: real Windows x64 context switch (RCX first-arg, preserves
     # RSI/RDI/XMM6-15). Replaces the earlier aborting fiber_ctx_win.c stub.
     list(APPEND TUR_CORE_SOURCES async/fiber_ctx_x64_win.S)
+    # The DK trampoline's landing pad.  libc longjmp on win64 is an SEH unwind
+    # that dies on a fiber stack; the cc path uses __builtin_setjmp, but the JIT
+    # path cannot, because c2mir has no such builtin and setjmp/longjmp must
+    # pair.  An ordinary extern call is something BOTH halves of an S2 split can
+    # make.  See async/tur_sjlj_x64_win.S.
+    list(APPEND TUR_CORE_SOURCES async/tur_sjlj_x64_win.S)
 elseif(TUR_ARCH MATCHES "arm64|aarch64")
     list(APPEND TUR_CORE_SOURCES async/fiber_ctx_arm64.S)
 elseif(TUR_ARCH MATCHES "x86_64|amd64")
@@ -1018,6 +1024,13 @@ target_link_options(tur_trail PRIVATE -pthread
 set_target_properties(tur_trail PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
+# NOTE: this add_test does NOT register.  enable_testing() is called in the
+# top-level CMakeLists AFTER add_subdirectory(src), so tests declared here are
+# dropped -- `ctest -N` lists 130 tests and tur_trail is not among them.  Left
+# in place rather than moved because moving it makes a never-run test start
+# running, which is a change in its own right; tracked in
+# docs/reported/src-cmakelists-add-test-never-registers.md.  New tests go in
+# the top-level CMakeLists next to the other 130.
 add_test(NAME tur_trail COMMAND tur_trail)
 
 # ---------------------------------------------------------------------------
@@ -1336,6 +1349,28 @@ endif()
 set_target_properties(tur_cps_rt_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
+# Escaping a filesystem path for embedding in generated Turmeric source.
+# Header-only, so this links nothing -- but the bug it guards took down the
+# whole stdlib prelude on an installed tur.exe (every backslash of a Windows
+# path read as a string escape), and the in-tree build could not see it
+# because the stdlib root resolves to the literal "stdlib" there.  The cases
+# are reachable on POSIX too, so the Linux legs enforce it.
+add_executable(tur_source_literal_unit
+    ${CMAKE_SOURCE_DIR}/tests/source_literal_unit.c
+)
+target_include_directories(tur_source_literal_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_source_literal_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_source_literal_unit PRIVATE
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_source_literal_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
 
 # CPS5 (cps-transform-plan): multi-prompt delimited-control machine unit.
 # Reactor source-slot recycling: that it happens, and that a slot freed inside

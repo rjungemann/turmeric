@@ -336,18 +336,56 @@ void emit_tur_jmp_buf_prelude(Buf *out) {
      * program half compiled by c2mir would take the plain-setjmp branch while
      * the host-compiled runtime half took the builtin one.  setjmp/longjmp must
      * PAIR, so that mismatch is silent: the program exits 0 having printed
-     * nothing.  Under the split we therefore keep plain setjmp on BOTH sides,
-     * which leaves fibers-plus-effects broken on the JIT path exactly as they
-     * were -- a strictly smaller gap than the cc path had, and the JIT is
-     * experimental.  Lifting it means teaching c2mir the builtins in the MIR
-     * fork.  See
-     * docs/reported/windows-longjmp-across-fiber-stack-kills-effects.md. */
+     * nothing.
+     *
+     * The split used to answer this by keeping plain setjmp on both sides.  That
+     * was not, as recorded at the time, "the cc path's fiber-stack defect, left
+     * in place on the JIT path": win64 SEH broke the JIT path for a SECOND and
+     * independent reason.  RtlUnwindEx calls RtlLookupFunctionEntry on every
+     * frame between the longjmp and the setjmp, MIR emits no .pdata/.xdata, and a
+     * JIT-generated frame in between therefore raises STATUS_BAD_FUNCTION_TABLE
+     * (0xC00000FF) -- not STATUS_BAD_STACK (0xC0000028), and with no fiber
+     * involved.  The tell was that fiber+effect fixtures PASSED on the JIT path
+     * while fiber-free effect fixtures failed.
+     *
+     * So the split now calls tur_sjlj_set/_jump (src/async/tur_sjlj_x64_win.S),
+     * which restore registers and jump without unwinding anything.  The two halves
+     * agree on a SYMBOL rather than on a builtin -- an ordinary extern call is
+     * something both a real toolchain and c2mir can emit -- so the "must not be a
+     * preprocessor test the halves answer differently" rule above is satisfied
+     * without deciding anything at emission time.  See
+     * docs/reported/jit-windows-support-spike.md, "Resolution: the JIT longjmp",
+     * and docs/archive/windows-longjmp-across-fiber-stack-kills-effects.md for the
+     * cc path's separate (fiber-stack) defect. */
     if (rt_split_canonical_emission()) {
+        /* The two halves must agree, and c2mir has neither __builtin_setjmp nor
+         * __GNUC__ -- so the choice cannot be spelled as a test on the compiler.
+         * It CAN be spelled as a test on the platform: c2mir predefines _WIN32
+         * (mirc_x86_64_win.h), so both halves answer this identically, and the
+         * emitted text is byte-for-byte the same on every host -- which is what
+         * keeps the split hash stable and the split engaged.  (An emission-time
+         * choice here would make the text platform-dependent and silently
+         * disengage S2 on whichever host did not generate the artifacts.)
+         *
+         * tur_sjlj_set/_jump are an ordinary extern call, so neither half needs a
+         * builtin: the host-compiled runtime half links async/tur_sjlj_x64_win.S
+         * directly, and the c2mir-compiled program half resolves the symbols
+         * through jit_engine.c's JIT_SHIMS table. */
         buf_puts(out,
-"/* S2 split emission: both halves must agree, and c2mir has no __builtin_setjmp. */\n"
+"/* S2 split emission: one mechanism both halves can name.  See\n"
+"   src/async/tur_sjlj_x64_win.S -- win64 longjmp is an SEH unwind that dies\n"
+"   on a fiber stack, and c2mir has no __builtin_setjmp. */\n"
+"#ifdef _WIN32\n"
+"typedef void *tur_jmp_buf[30];\n"
+"extern int  tur_sjlj_set(void *);\n"
+"extern void tur_sjlj_jump(void *);\n"
+"#define TUR_SETJMP(b)  tur_sjlj_set(b)\n"
+"#define TUR_LONGJMP(b) tur_sjlj_jump(b)\n"
+"#else\n"
 "typedef jmp_buf tur_jmp_buf;\n"
 "#define TUR_SETJMP(b)  setjmp(b)\n"
-"#define TUR_LONGJMP(b) longjmp((b), 1)\n");
+"#define TUR_LONGJMP(b) longjmp((b), 1)\n"
+"#endif\n");
     } else {
         buf_puts(out,
 "#if defined(_WIN32) && defined(__GNUC__)\n"

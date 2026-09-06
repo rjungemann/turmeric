@@ -33,6 +33,7 @@
  *    "the macro-time language is the interpreted language" means.
  */
 #include "turi/eval.h"
+#include "source_literal.h"
 #include "turi/env.h"
 #include "turi/interpreter_natives.h"
 #include "turi/collections_native.h"
@@ -189,13 +190,17 @@ struct TuriEnv *elab_macro_env_get(ElabSession *session) {
          * override their inline-C bodies at runtime, per the preload
          * ordering contract.) */
         {
-            char loadbuf[8600];
+            char loadbuf[8600], eroot[8200];
             const char *root = (stdlib_root && *stdlib_root) ? stdlib_root
                                                              : "stdlib";
+            /* generated SOURCE -- a Windows path needs escaping to survive
+             * the string lexer.  See source_literal.h. */
+            if (tur_source_literal_escape(root, eroot, sizeof eroot)) {
             snprintf(loadbuf, sizeof(loadbuf),
                      "(load \"%s/cstr.tur\")(load \"%s/str-build.tur\")",
-                     root, root);
+                     eroot, eroot);
             turi_eval(env, loadbuf);
+            }
         }
         turi_env_pin_prelude(env);
         turi_env_register_interpreter_natives(env);
@@ -472,8 +477,9 @@ bool elab_macro_env_import(Elab *e, const Symbol *module_name,
      * derives from it), so grant IMPORT for exactly this eval and take
      * back only that grant afterward -- a --macro-caps=io grant must
      * survive. */
-    char src[4352];
-    int n = snprintf(src, sizeof(src), "(load \"%s\")", path);
+    char src[4352], epath[8200];
+    if (!tur_source_literal_escape(path, epath, sizeof epath)) epath[0] = '\0';
+    int n = snprintf(src, sizeof(src), "(load \"%s\")", epath);
     if (n < 0 || (size_t)n >= sizeof(src)) {
         diag_emit(DIAG_ERROR, span,
                   ":for-macros module path too long for '%s'",

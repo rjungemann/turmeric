@@ -174,6 +174,34 @@ That wants a different remedy -- an in-process hash, or a documented dependency.
 
 ### Also still open, and unrelated to subprocesses
 
-The REPL cannot resolve `stdlib/typeclass-show.tur` when loading its eval
+~~The REPL cannot resolve `stdlib/typeclass-show.tur` when loading its eval
 prelude (`load: cannot open ...`). It is visible in every REPL session above and
-is a stdlib path-resolution bug, not a subprocess one.
+is a stdlib path-resolution bug, not a subprocess one.~~
+
+**RESOLVED 2026-09-05, and it was worse than this described.** Not a
+path-*resolution* bug: the path resolved fine. The preload builds
+`(load "<path>")` by string concatenation and evaluates it, so the path lands
+inside a string literal and the lexer reads it with escape processing on. Every
+backslash of a Windows path is then an unknown escape:
+
+```
+<eval>:1:12: error: unknown string escape '\U'
+1 | (load "C:\Users\roger\AppData\Local\Temp\turdist/stdlib/macros.tur")
+```
+
+The whole prelude fails, so `when` is an unknown name and an installed
+`tur.exe` has an unusable REPL -- considerably more than one missing module.
+
+The `cannot open` symptom recorded here is the *in-tree* face of the same bug:
+there `resolve_stdlib_root` falls through to the literal `"stdlib"`, which has
+no backslashes to trip over, so the form parses and then fails to open a
+cwd-relative path. Two symptoms, one cause, and the milder one is the one that
+got written down -- which is why it read as a resolution bug.
+
+Fixed by escaping the path at every site that embeds one in generated source
+(`src/source_literal.h`, applied in `preload.c`, `macro_env.c` and `main.c`).
+Escaping rather than rewriting separators to `/`: a `"` in a directory name is
+legal on POSIX and would inject a string terminator, so the separator rewrite
+fixes the common character rather than the bug. Guarded by
+`tests/source_literal_unit.c`, whose cases are reachable on POSIX, so the Linux
+CI legs enforce it.

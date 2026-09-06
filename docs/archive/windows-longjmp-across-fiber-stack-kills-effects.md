@@ -171,6 +171,17 @@ So the decision is made at emission and baked in as a literal
 (`rt_split_canonical_emission()`), which makes both halves agree by
 construction. Under the split, both keep plain `setjmp` -- so fibers-plus-
 effects on the JIT path stay broken exactly as they were. Lifting that means
+
+> **Correction 2026-09-05.** "Exactly as they were" was wrong. The JIT path was
+> broken by a *different* SEH failure: `STATUS_BAD_FUNCTION_TABLE` (0xC00000FF)
+> raised by `RtlUnwindEx` because MIR emits no `.pdata`/`.xdata`, so it cannot
+> unwind through a JIT-generated frame -- not the `STATUS_BAD_STACK`
+> (0xC0000028) this report is about, and not dependent on a fiber at all. The
+> tell was there to be seen: fiber+effect fixtures PASSED on the JIT path while
+> fiber-free effect fixtures failed. Fixed without touching c2mir, by calling a
+> hand-written save/restore pair through a symbol both halves can name --
+> src/async/tur_sjlj_x64_win.S, and
+> docs/reported/jit-windows-support-spike.md "Resolution: the JIT longjmp".
 teaching c2mir the builtins in the MIR fork.
 
 Regenerating `src/runtime/generated/tur_rt_split*` is **mandatory** with this
