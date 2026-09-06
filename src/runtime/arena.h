@@ -5,6 +5,12 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/* Linkage qualifier -- see region.h.  Empty in an ordinary runtime TU; the
+ * emitter defines it before pasting this header into an emitted program. */
+#ifndef TUR_RT_API
+#define TUR_RT_API
+#endif
+
 typedef struct ArenaSlab ArenaSlab;
 
 typedef struct Arena {
@@ -14,11 +20,11 @@ typedef struct Arena {
     size_t total_allocs;
 } Arena;
 
-void  arena_init(Arena *a, size_t default_slab_size);
-void *arena_alloc(Arena *a, size_t size);
-void *arena_alloc_aligned(Arena *a, size_t size, size_t align);
-char *arena_strdup(Arena *a, const char *s, size_t len);
-void  arena_free(Arena *a);
+TUR_RT_API void  arena_init(Arena *a, size_t default_slab_size);
+TUR_RT_API void *arena_alloc(Arena *a, size_t size);
+TUR_RT_API void *arena_alloc_aligned(Arena *a, size_t size, size_t align);
+TUR_RT_API char *arena_strdup(Arena *a, const char *s, size_t len);
+TUR_RT_API void  arena_free(Arena *a);
 
 /* Rewind every slab to empty without releasing the backing memory, so the arena
  * can be reused for a fresh generation of allocations in O(slabs).  This is the
@@ -30,12 +36,12 @@ void  arena_free(Arena *a);
  * poison pattern first, so any pointer that survived into the rewound region and
  * is dereferenced afterwards crashes loudly under ASan instead of reading stale
  * (but still-mapped) data -- the "poison-on-reset debug mode" the plan calls for. */
-void  arena_reset(Arena *a);
+TUR_RT_API void  arena_reset(Arena *a);
 
 /* True when p points into any slab currently owned by a.  Used by the promotion
  * walk to decide whether a payload pointer is scratch-allocated (copy + forward)
  * or lives elsewhere -- permanent pool, eval arenas, sym arena, static data --
  * and must be left untouched.  O(slabs). */
-bool  arena_owns(const Arena *a, const void *p);
+TUR_RT_API bool  arena_owns(const Arena *a, const void *p);
 
 #endif

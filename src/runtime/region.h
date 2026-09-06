@@ -36,21 +36,32 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/* Linkage qualifier for the public surface.  Empty when this is compiled as
+ * an ordinary runtime TU (the compiler itself, libturt_runtime.a).  The
+ * emitter pastes this header and region.c verbatim into an emitted program
+ * that does not link the archive (src/compiler/emit_module.c,
+ * emit_region_runtime_bodies); in a --shared build it defines this as
+ * TUR_RT_LOCAL (hidden visibility) first, so a .so keeps its generation stack
+ * to itself -- the same reasoning DEDUP-5 applied to the GC registry. */
+#ifndef TUR_RT_API
+#define TUR_RT_API
+#endif
+
 /* Push a new generation.  Returns the depth, which `tur_region_pop*` takes
  * back so a mismatched pair is caught rather than silently rewinding someone
  * else's generation. */
-int  tur_region_push(void);
+TUR_RT_API int  tur_region_push(void);
 
 /* Pop WITHOUT reclaiming: the generation's memory stays live for the process.
  * The conservative default, and what R1 uses everywhere -- correctness with no
  * saving, which is the safe half of the rule above. */
-void tur_region_pop(int depth);
+TUR_RT_API void tur_region_pop(int depth);
 
 /* Pop AND rewind, unconditionally.  The caller asserts that nothing allocated
  * in this generation is still reachable.  Prefer `tur_region_pop_checked`,
  * which asks rather than asserts; this one remains for a caller that owns both
  * ends of the scope and has its own proof. */
-void tur_region_pop_reclaim(int depth);
+TUR_RT_API void tur_region_pop_reclaim(int depth);
 
 /* --- R3: the escape check ---------------------------------------------- *
  *
@@ -72,7 +83,7 @@ void tur_region_pop_reclaim(int depth);
  * conservative answer.  This runtime check catches the direct case cheaply and
  * makes a static mistake loud rather than silent.  Neither alone is the
  * argument; do not remove one on the strength of the other. */
-void tur_region_note_escape(const void *p);
+TUR_RT_API void tur_region_note_escape(const void *p);
 
 /* Pop, reclaiming ONLY if no noted escape pointed into the generation.
  * Returns true when it reclaimed, false when it retired instead -- the caller
@@ -82,12 +93,12 @@ void tur_region_note_escape(const void *p);
  * its bytes in a Debug build, so a straggler traps at the deref under ASan
  * instead of reading stale data) and kept for the next push.  A per-query
  * region in a loop therefore allocates its slabs once. */
-bool tur_region_pop_checked(int depth);
+TUR_RT_API bool tur_region_pop_checked(int depth);
 
 /* Allocate `n` bytes in the innermost live generation.  Returns NULL when no
  * region is open, which every caller must treat as "use malloc instead" -- a
  * region is an optimisation, never a requirement. */
-void *tur_region_alloc(size_t n);
+TUR_RT_API void *tur_region_alloc(size_t n);
 
 /* Allocate `n` bytes in the innermost live generation if one is open, and from
  * the heap otherwise.  The routing point for RM3 R2: a spine-node constructor
@@ -97,12 +108,12 @@ void *tur_region_alloc(size_t n);
  * A caller must therefore never assume the result is region memory -- pair it
  * with `tur_region_owns` before any `free()`.  That guard is the whole reason
  * the two allocators can share one call site. */
-void *tur_region_alloc_or_malloc(size_t n);
+TUR_RT_API void *tur_region_alloc_or_malloc(size_t n);
 
 /* True when `p` points into any live generation.  The guard the reclamation
  * plan requires on every free path: a pointer into region memory must never
  * reach `free()`, because the slab, not the pointer, owns it. */
-bool tur_region_owns(const void *p);
+TUR_RT_API bool tur_region_owns(const void *p);
 
 /* `free(p)` unless `p` is region memory, in which case the generation owns it
  * and the pop reclaims it.
@@ -115,12 +126,12 @@ bool tur_region_owns(const void *p);
  * exactly mirroring the allocation side's one-call-site routing.
  *
  * A NULL is a no-op, like `free`. */
-void tur_region_free(void *p);
+TUR_RT_API void tur_region_free(void *p);
 
 /* True when at least one generation is open. */
-bool tur_region_active(void);
+TUR_RT_API bool tur_region_active(void);
 
 /* Release every generation and the backing arena.  Process teardown only. */
-void tur_region_shutdown(void);
+TUR_RT_API void tur_region_shutdown(void);
 
 #endif

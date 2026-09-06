@@ -384,6 +384,30 @@ set_source_files_properties(
 )
 
 # ---------------------------------------------------------------------------
+# RM3 regions (on by default): the region runtime sources, embedded.  An
+# emitted program that does not link libturt_runtime.a gets the bodies of
+# src/runtime/{arena,region}.c pasted into its owner TU by the emitter
+# (emit_region_runtime_bodies), the way the rc<T>/GC runtime is replicated
+# under the DEDUP-4b archive posture.  Generated at build time from the real
+# sources so there is one implementation, not a hand-written replica; see
+# cmake/embed_region_runtime.cmake and src/runtime/region_rt_embed.h.
+# ---------------------------------------------------------------------------
+set(TUR_REGION_EMBED_C ${CMAKE_CURRENT_BINARY_DIR}/generated/region_rt_embed.c)
+add_custom_command(
+    OUTPUT ${TUR_REGION_EMBED_C}
+    COMMAND ${CMAKE_COMMAND}
+        -DSRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}/runtime
+        -DOUT=${TUR_REGION_EMBED_C}
+        -P ${CMAKE_SOURCE_DIR}/cmake/embed_region_runtime.cmake
+    DEPENDS
+        ${CMAKE_SOURCE_DIR}/cmake/embed_region_runtime.cmake
+        runtime/region.h runtime/region.c runtime/arena.h runtime/arena.c
+    COMMENT "Embedding src/runtime/{arena,region}.{h,c} for the emitter"
+    VERBATIM
+)
+list(APPEND TUR_CORE_SOURCES ${TUR_REGION_EMBED_C})
+
+# ---------------------------------------------------------------------------
 # tur_core: OBJECT library shared by tur executable and libturi
 # ---------------------------------------------------------------------------
 add_library(tur_core OBJECT ${TUR_CORE_SOURCES})
@@ -1668,6 +1692,10 @@ if(TUR_WASM)
                 -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pedantic
                 -D_DEFAULT_SOURCE
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            # The emitter's embedded region runtime is a generated TU in
+            # TUR_CORE_SOURCES; emcc compiles it straight from the list above,
+            # so it must exist before this target runs.
+            DEPENDS ${TUR_REGION_EMBED_C}
             COMMENT "Building Turmeric WASM module (pthreads, lazy pool)"
             VERBATIM
         )

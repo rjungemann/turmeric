@@ -15,6 +15,25 @@ it there on one blocker, and the four graduation requirements below were then
 closed in order (1, 2, 3 by work; 4 by the flip itself). The R5 decision text
 is kept as the record of why it waited.
 
+**Where the runtime comes from, since the flip.** The first CI run of the
+default-on build failed everywhere the emitted C is compiled without
+`libturt_runtime.a` -- a project build, a `--shared` library, the REPL's spice
+cache, a bare `cc` of `tur emit-c` output -- with `undefined reference to
+tur_region_shutdown`, because region.c lived only in the archive. The rc<T>/GC
+runtime had already solved that exact problem with the DEDUP-4b archive
+posture, and regions now follow it: `emit_closure_fat_runtime` pastes
+`src/runtime/region.h` verbatim (declarations, every TU), and
+`emit_region_runtime_bodies` pastes `arena.h`, `arena.c` and `region.c`
+verbatim into the owner TU (`#ifdef TUR_RT_OWNER` in shared mode; a `.so`
+takes `TUR_RT_API = TUR_RT_LOCAL`, hidden visibility) unless
+`rt_global_from_archive()` says the archive is on the link line. The sources
+are embedded into the compiler at build time by
+`cmake/embed_region_runtime.cmake` (hex byte arrays, `region_rt_embed.h`), so
+there is one implementation, not a replica that drifts. The S2 split forces
+the archive posture and never carries the bodies. The multi-module executable
+link, which chose the archive posture and then never named the archive, now
+adds `-lturt_runtime` like the single-file path.
+
 RM3 of [reclamation-plan.md](reclamation-plan.md). Read that plan's RM2
 section first -- this phase exists because RM2's question has no answer at RM2.
 

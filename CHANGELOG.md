@@ -92,6 +92,17 @@ All notable changes to Turmeric are documented here.
   `docs/upcoming/regions-plan.md`; the GC guide documents the mode beside RC
   and the cycle collector.
 
+  The emitted C stays self-contained: `src/runtime/{arena,region}.{h,c}` are
+  embedded into the compiler at build time (`cmake/embed_region_runtime.cmake`)
+  and pasted verbatim into the preamble on the same DEDUP-4b archive posture
+  the rc/GC runtime follows -- declarations only when `libturt_runtime.a` is
+  on the link line, bodies in the owner TU otherwise (one region stack per
+  program, hidden in a `.so`). Before that a project build, a `--shared`
+  library, the REPL's spice cache and a bare `cc` of `tur emit-c` output all
+  linked with `undefined reference to tur_region_shutdown`. The multi-module
+  executable link, which chose the archive posture and then named no archive,
+  now links `libturt_runtime.a` like the single-file path does.
+
 ### Fixed
 
 - **The trail's `#fx{Bt}` effect row is now checked; it used to resolve to

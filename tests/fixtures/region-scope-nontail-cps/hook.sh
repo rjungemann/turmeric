@@ -38,7 +38,11 @@ EOF
 
 "$TUR" emit-c "$TMP/in.tur" 2>/dev/null > "$TMP/out.c"
 echo "caller cps-lowered: $(grep -c 'two__cps' "$TMP/out.c" | awk '{print ($1>0)?"yes":"no"}')"
-echo "push=$(grep -v '^extern' "$TMP/out.c" | grep -c 'tur_region_push()') rewind=$(grep -v '^extern' "$TMP/out.c" | grep -c 'tur_region_pop_checked(') retire=$(grep -v '^extern' "$TMP/out.c" | grep -c 'tur_region_pop(')"
+# Count in the PROGRAM half only (after the preamble marker): the preamble
+# now carries src/runtime/region.{h,c} verbatim (regions on by default,
+# self-contained emitted C), whose declarations, definitions and prose
+# would otherwise be counted as bracket sites.
+echo "push=$(sed -n '/end of fixed runtime preamble/,$p' "$TMP/out.c" | grep -c 'tur_region_push()') rewind=$(sed -n '/end of fixed runtime preamble/,$p' "$TMP/out.c" | grep -c 'tur_region_pop_checked(') retire=$(sed -n '/end of fixed runtime preamble/,$p' "$TMP/out.c" | grep -c 'tur_region_pop(')"
 echo "letcall to with-region: $("$TUR" --dump-cps check "$TMP/in.tur" 2>&1 | grep -ci 'letcall.*with-region')"
 echo "regions off: $(TUR_REGIONS=0 "$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
 echo "regions on:  $("$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"

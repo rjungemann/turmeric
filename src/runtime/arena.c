@@ -125,7 +125,7 @@ static ArenaSlab *slab_new(size_t cap) {
     return s;
 }
 
-void arena_init(Arena *a, size_t default_slab_size) {
+TUR_RT_API void arena_init(Arena *a, size_t default_slab_size) {
     a->head = NULL;
     a->default_slab = default_slab_size ? default_slab_size : DEFAULT_SLAB;
     a->total_bytes = 0;
@@ -137,7 +137,7 @@ static size_t align_up(size_t n, size_t align) {
     return (n + (align - 1)) & ~(align - 1);
 }
 
-void *arena_alloc_aligned(Arena *a, size_t size, size_t align) {
+TUR_RT_API void *arena_alloc_aligned(Arena *a, size_t size, size_t align) {
     if (size == 0) size = 1;
     if (align < sizeof(void *)) align = sizeof(void *);
 
@@ -179,18 +179,18 @@ void *arena_alloc_aligned(Arena *a, size_t size, size_t align) {
     return p;
 }
 
-void *arena_alloc(Arena *a, size_t size) {
+TUR_RT_API void *arena_alloc(Arena *a, size_t size) {
     return arena_alloc_aligned(a, size, sizeof(void *));
 }
 
-char *arena_strdup(Arena *a, const char *s, size_t len) {
+TUR_RT_API char *arena_strdup(Arena *a, const char *s, size_t len) {
     char *p = (char *)arena_alloc_aligned(a, len + 1, 1);
     if (len) memcpy(p, s, len);
     p[len] = '\0';
     return p;
 }
 
-void arena_free(Arena *a) {
+TUR_RT_API void arena_free(Arena *a) {
     ArenaSlab *s = a->head;
     while (s) {
         ArenaSlab *next = s->next;
@@ -230,7 +230,7 @@ void arena_free(Arena *a) {
  * pointer (0xDEDEDEDE...) if a straggler is dereferenced. */
 #define ARENA_POISON 0xDE
 
-void arena_reset(Arena *a) {
+TUR_RT_API void arena_reset(Arena *a) {
     for (ArenaSlab *s = a->head; s; s = s->next) {
 #ifndef NDEBUG
         /* Poison the bytes we are about to hand out again so a missed pointer
@@ -261,7 +261,7 @@ void arena_reset(Arena *a) {
     a->total_allocs = 0;
 }
 
-bool arena_owns(const Arena *a, const void *p) {
+TUR_RT_API bool arena_owns(const Arena *a, const void *p) {
     if (!p) return false;
     const unsigned char *cp = (const unsigned char *)p;
     for (const ArenaSlab *s = a->head; s; s = s->next) {

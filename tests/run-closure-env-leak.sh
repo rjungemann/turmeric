@@ -68,7 +68,8 @@ if ! "$CC" -g -O0 -fno-strict-aliasing -fsanitize=address,undefined \
         -Isrc/runtime -o "$BIN" "$C_OUT" \
         src/runtime/hamt.c src/runtime/runtime.c src/runtime/rc.c \
         src/runtime/gc.c src/runtime/rc_free_queue.c src/runtime/tur_string.c \
-        src/runtime/symbols.c src/runtime/trail.c -lpthread 2>"$WORK/cc.err"; then
+        src/runtime/symbols.c src/runtime/trail.c \
+        src/runtime/region.c src/runtime/arena.c -lpthread 2>"$WORK/cc.err"; then
     echo "FAIL closure-env-leak -- C compile failed"
     sed 's/^/    /' "$WORK/cc.err"
     exit 1

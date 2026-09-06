@@ -50,5 +50,4 @@
 ;;;   (with-region (fn [] (sum-of (build-scratch 100))))  ; scratch reclaimed
 ;;;
 ;;; Since: RM3
-(defn with-region [A] [^fat body : (fn [] A)] : A
-  (body))
+(defn with-region [A] [^fat body : (fn [] A)] : A (body))

@@ -65,8 +65,12 @@ EOF
 
 "$TUR" emit-c "$TMP/in.tur" 2>/dev/null > "$TMP/out.c"
 if grep -q 'tur_region_push()' "$TMP/out.c"; then echo "bracket: opened"; else echo "bracket: MISSING"; fi
-retire=$(grep -v '^extern' "$TMP/out.c" | grep -c 'tur_region_pop(')
-rewind=$(grep -v '^extern' "$TMP/out.c" | grep -c 'tur_region_pop_checked(')
+# Count in the PROGRAM half only (after the preamble marker): the preamble
+# now carries src/runtime/region.{h,c} verbatim (regions on by default,
+# self-contained emitted C), whose declarations, definitions and prose
+# would otherwise be counted as bracket sites.
+retire=$(sed -n '/end of fixed runtime preamble/,$p' "$TMP/out.c" | grep -c 'tur_region_pop(')
+rewind=$(sed -n '/end of fixed runtime preamble/,$p' "$TMP/out.c" | grep -c 'tur_region_pop_checked(')
 echo "retire=$retire rewind=$rewind"
 echo "regions off: $(TUR_REGIONS=0 "$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
 echo "regions on:  $("$TUR" run "$TMP/in.tur" 2>/dev/null | tr '\n' ' ')"
