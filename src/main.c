@@ -2295,6 +2295,24 @@ static int locate_runtime_lib(char *libdir, size_t dcap,
             snprintf(libdir, dcap, "%s", sd);
             return 1;
         }
+        /* The FLAT layout -- the archive shape release.yml publishes for
+         * linux-x86_64, linux-aarch64 and macos-arm64, where `tur` and the
+         * runtime archive sit in one directory with no bin/ or lib/.
+         *
+         * Without this probe none of the four candidates matched an extracted
+         * tarball, TUR_RT_AUTO fell back to source mode, and source mode wanted
+         * the src/runtime sources that the archive does not ship -- so `tur run` on a
+         * released build failed at the C compile step with "no such file or
+         * directory: .../src/runtime/hamt.c".  Verified on macOS and Windows;
+         * see docs/reported/release-archive-cannot-compile.md.
+         *
+         * Probing <exe_dir> rather than restructuring the archives is what keeps
+         * this non-breaking: tvm already restages into bin/ + lib/, Homebrew and
+         * Trowel consume the published shape, and all of those keep working. */
+        if (probe_runtime_lib_in(d, libname, ncap)) {
+            snprintf(libdir, dcap, "%s", d);
+            return 1;
+        }
         /* DEDUP-4b: the INSTALLED layout -- <prefix>/bin/tur next to
          * <prefix>/lib/libturt_runtime.a.  Without this probe the archive was
          * only ever findable in a dev build tree, so an installed toolchain
