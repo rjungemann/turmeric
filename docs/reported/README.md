@@ -1550,10 +1550,21 @@ these are fixture-watched. Two of the original three are resolved and archived:
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [windows-subprocess-and-shared-lib-gaps](windows-subprocess-and-shared-lib-gaps.md) | high (for Windows users) | `tur install` / `fetch` / `new` / `build --shared` / REPL spice loading all fail -- the subprocess and shared-library layers are unported. Read-verified by audit, **not** exercised end-to-end. `build --shared` half is now done (emits a real `.dll`) |
+| [windows-subprocess-and-shared-lib-gaps](windows-subprocess-and-shared-lib-gaps.md) | medium (was high) | Filed as "`tur install` / `fetch` / `new` / `build --shared` / REPL spice loading all fail", read-verified by audit and never exercised end to end. `build --shared` emits a real `.dll`; `install` now passes `run-install.sh` on Windows 34/34 (from 12/22), and `fetch` clones, locks and integrity-checks against a local `file://` remote. **`new` and REPL spice loading are the remaining halves** and are still audit-only, neither confirmed broken nor confirmed working |
 | [windows-httpd-async-limit-hangs-on-ci](windows-httpd-async-limit-hangs-on-ci.md) | low | Hangs on GitHub's Windows runners (no output, killed at both 10s and 30s) while passing locally 4/4. Skipped via `requires.win-concurrent-loopback`. Best suspect is runner core count, untested |
 | [jit-windows-support-spike](jit-windows-support-spike.md) | research | Spike EXECUTED: the Windows JIT builds and runs. The **lazy tier is fixed** (three defects in MIR's win64 wrapper assembly, rjungemann/mir#3) -- the default mode went 0/5 to **2637 passed / 68 failed** on the full corpus. The JIT longjmp is fixed too (win64 SEH cannot unwind JIT frames -- `STATUS_BAD_FUNCTION_TABLE`, not the fiber-stack cause this report recorded). Both remaining fixtures are fixed as well -- `path-string` was [jit-c2mir-implicit-decl-truncates-pointers](jit-c2mir-implicit-decl-truncates-pointers.md) and `cps-backend-nil-delegated-call` was [jit-win-prelude-shadows-user-fn](jit-win-prelude-shadows-user-fn.md) -- so the corpus is **2702 passed / 0 failed / 70 skipped**. What remains: `__va_start` |
 | [jit-win-prelude-shadows-user-fn](jit-win-prelude-shadows-user-fn.md) | high (Windows JIT) | **RESOLVED.** A program defining a libm name (`log2`, `sqrt`, `floor`, ...) was called through JIT_PRELUDE_WIN's `double` prototype: the int argument goes in xmm0 while the callee reads rcx, so the program ran to completion and printed a pointer. Fixed by dropping a prelude declaration the program itself defines. Still open: nothing keeps that prelude and `mangle.c`'s libc denylist in step, so a name added to the prelude re-opens the hole silently |
+
+`windows-install-binary-placement` sat here and is **resolved** -- it now lives at
+[docs/archive/windows-install-binary-placement.md](../archive/windows-install-binary-placement.md).
+`tur install` works end to end on Windows (`run-install.sh` there: 34 passed, 0
+failed). Chasing it turned up two defects that were not install-specific at all and
+have their own archived records: `rename()` does not replace an existing file on
+Windows, so every temp-file-then-rename atomic update in the tree was write-once
+([windows-rename-does-not-replace](../archive/windows-rename-does-not-replace.md)),
+and `state.tur` was written with unescaped backslashes, so the registry could be
+written and never read back
+([windows-state-tur-unescaped-paths](../archive/windows-state-tur-unescaped-paths.md)).
 
 ## Godot embedding
 
@@ -1577,7 +1588,6 @@ Filed 2026-08 while bringing the `turmeric-godot` GDExtension up on Windows.
 | [pkg-hash-shells-out-to-sha256sum](pkg-hash-shells-out-to-sha256sum.md) | medium | **RESOLVED.** The spice lockfile hashed `tar -c <abspath> | sha256sum`: it covered `.git` (so any git command in a fetched spice changed it), covered the absolute path, was not reproducible across tar implementations, and did not exist on Windows. Now an in-process content walk tagged `tree1:`, so a lockfile an older tur wrote is skipped rather than read as tampering |
 | [windows-text-mode-read-rejects-own-files](windows-text-mode-read-rejects-own-files.md) | high (Windows) | **RESOLVED.** `fopen("r")` + an `ftell` size + a strict `fread` comparison rejects any file with CRLF, because text mode strips the CR -- so tur rejected `tur.lock`, the cmake manifest and the LSP docstring table, all files tur itself wrote. Each caller read the false return as "absent" |
 | [windows-spice-fetch-shell-quoting](windows-spice-fetch-shell-quoting.md) | high (Windows) | `tur fetch` could not fetch anything: POSIX `'...'` quoting interpolated into a string cmd.exe runs, which passes `'` through literally (`could not create leading directories of ''./spices/demo''`). Fixed in `pkg.c` and `install.c` -- the latter also needed a real port of `rm -rf` (cmd.exe has no `rm`) and `cd /d` (a bare `cd` does not change drive) |
-| [windows-install-binary-placement](windows-install-binary-placement.md) | high (Windows) | `tur install` builds the binary and then cannot place it: MinGW has no `symlink()`, ownership is decided by `readlink`, the installed entry has no `.exe` so PATHEXT cannot resolve it, and `try_external_subcommand` splits `PATH` on `:` -- which on Windows tears every entry at its drive colon. `run-install.sh` there is 12 passed / 22 failed |
 
 The row above was found while adding a Windows regression test and is not a
 Windows defect at all.  `term-set-cooked-restores-zeroed-state` was the

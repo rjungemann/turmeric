@@ -39,6 +39,7 @@
 #include <pthread.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include "platform_proc.h"
 #include "platform_fs.h"  /* realpath/mkdir/setenv/mkstemps/... on Windows */
 #ifdef _WIN32
 #include <io.h>       /* _setmode, _fileno */
@@ -10515,31 +10516,50 @@ static int try_external_subcommand(int argc, char **argv) {
     char ext_name[256];
     snprintf(ext_name, sizeof(ext_name), "tur-%s", cmd);
 
+    /* The suffixes a command name can carry.  Windows resolves a bare name
+     * through PATHEXT, and `tur install` writes `tur-foo.exe`, so probing only
+     * the bare name finds nothing there. */
+#ifdef _WIN32
+    static const char *const EXTS[] = { ".exe", "" };
+#else
+    static const char *const EXTS[] = { "" };
+#endif
+
     const char *path_env = getenv("PATH");
     if (path_env) {
         const char *p = path_env;
         while (*p) {
-            const char *colon = strchr(p, ':');
-            size_t seg = colon ? (size_t)(colon - p) : strlen(p);
-            if (seg > 0 && seg < 3500) {
+            /* TUR_PATH_LIST_SEP, not ':': on Windows a ':' split tears every
+             * entry at its drive colon and no candidate is ever well formed. */
+            const char *sep = strchr(p, TUR_PATH_LIST_SEP);
+            size_t seg = sep ? (size_t)(sep - p) : strlen(p);
+            for (size_t e = 0; seg > 0 && seg < 3500
+                               && e < sizeof(EXTS) / sizeof(EXTS[0]); e++) {
                 char candidate[4096];
-                snprintf(candidate, sizeof(candidate), "%.*s/%s",
-                         (int)seg, p, ext_name);
-                if (access(candidate, X_OK) == 0) {
-                    char **nv = (char **)calloc((size_t)argc, sizeof(char *));
-                    if (!nv) return 1;
-                    nv[0] = (char *)ext_name;
-                    for (int i = 2; i < argc; i++) nv[i - 1] = argv[i];
-                    nv[argc - 1] = NULL;
-                    execv(candidate, nv);
-                    fprintf(stderr, "tur: failed to exec '%s': %s\n",
-                            candidate, strerror(errno));
-                    free(nv);
-                    return 1;
-                }
+                snprintf(candidate, sizeof(candidate), "%.*s/%s%s",
+                         (int)seg, p, ext_name, EXTS[e]);
+                if (access(candidate, X_OK) != 0) continue;
+                char **nv = (char **)calloc((size_t)argc, sizeof(char *));
+                if (!nv) return 1;
+                nv[0] = (char *)ext_name;
+                for (int i = 2; i < argc; i++) nv[i - 1] = argv[i];
+                nv[argc - 1] = NULL;
+#ifdef _WIN32
+                /* _execv does not REPLACE the process on Windows: the parent
+                 * exits immediately and a calling shell sees the command
+                 * finish before the child has.  Wait and pass the status on. */
+                intptr_t rc = _spawnv(_P_WAIT, candidate, (const char *const *)nv);
+                if (rc >= 0) { free(nv); return (int)rc; }
+#else
+                execv(candidate, nv);
+#endif
+                fprintf(stderr, "tur: failed to exec '%s': %s\n",
+                        candidate, strerror(errno));
+                free(nv);
+                return 1;
             }
-            if (!colon) break;
-            p = colon + 1;
+            if (!sep) break;
+            p = sep + 1;
         }
     }
     fprintf(stderr,
