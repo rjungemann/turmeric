@@ -202,6 +202,33 @@ void emit_region_shutdown_atexit(Buf *out, int indent) {
     buf_printf(out, "%*satexit(tur_region_shutdown);\n", indent, "");
 }
 
+/* region-lock-hardening (see emit_internal.h).  The classification is by the
+ * C spelling because that is what decides whether `(intptr_t)lv` is a
+ * reinterpretation (a word) or a numeric conversion (a double -- undefined
+ * for out-of-range values, and never region memory anyway).  Anything that is
+ * neither a known scalar nor a word is treated as an aggregate and noted by
+ * its bytes, which is sound for every shape: a word that is not a pointer
+ * compares as an address and is not region memory. */
+void emit_region_note_lvalue(Buf *body, int indent, const char *ctype, const char *lv) {
+    if (!regions_enabled() || !lv) return;
+    if (ctype) {
+        static const char *skip[] = {
+            "double", "float", "bool", "_Bool", "char", "short", "int", "long",
+            "unsigned", "int8_t", "int16_t", "int32_t", "uint8_t", "uint16_t",
+            "uint32_t", "uint64_t", "size_t", "void", NULL };
+        for (int i = 0; skip[i]; i++)
+            if (strcmp(ctype, skip[i]) == 0) return;
+    }
+    /* Always the WORDS form.  It is valid C for any lvalue -- an int64
+     * carrier, a pointer, a by-value aggregate, a 16-byte poly-fn -- and the
+     * claimed `ctype` is not always the emitted one: a carrier-spelled ADT
+     * can be a by-value aggregate under the active spec, and `(intptr_t)` of
+     * an aggregate is a hard cc error ("aggregate value used where an integer
+     * was expected"), found the first time this was emitted as
+     * TUR_REGION_NOTE(lv).  One word costs the same either way. */
+    buf_printf(body, "%*sTUR_REGION_NOTE_WORDS(&(%s), sizeof(%s));\n", indent, "", lv, lv);
+}
+
 Type emit_resolve_type(EmitCtx *ctx, Type t) {
     const EmitAbiSpecialization *spec = ctx ? ctx->current_abi_specialization : NULL;
     if (!spec) return t;

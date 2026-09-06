@@ -143,6 +143,10 @@
   uint64_t mask = s->cap - 1;
   uint64_t idx = ((uint64_t)h) & mask;
   int64_t first_tomb = -1;
+  /* region-lock-hardening: slot storage is malloc'd and outlives any region
+     bracket; a region-allocated key or value is an escape.  See vec-push!. */
+  TUR_REGION_NOTE(key);
+  TUR_REGION_NOTE(val);
   for (;;) {
       struct __tur_mm_slot *slot = &s->slots[idx];
       if (slot->tag == TUR_MM_EMPTY) {

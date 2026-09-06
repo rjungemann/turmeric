@@ -186,13 +186,48 @@ when the bracket exits the generation is **rewound** in one O(slabs) step --
 reach anything allocated inside. That proof is two locks: a static walk over
 the result type (scalars, `cstr`, non-heap ADTs of those, a `Vec` of scalars
 pass; a node, a pointer, a closure, a recursive spine refuse) and a runtime
-check that the escaping pointer itself is not region memory. A shape neither
-lock can clear **retires** the generation instead of rewinding it -- byte-for-
-byte the pre-region behaviour, so a missed shape costs a saving, never
-correctness. Retired and pooled generations are freed at exit by
-`tur_region_shutdown`, registered ahead of every module `defer` so a defer can
-still read a retired value. `TUR_REGIONS=0` turns the whole mechanism off for
-bisection; `tests/run-regions-seam.sh` keeps that path green.
+**escape note** that flags a generation whenever one of its words is seen
+crossing out of it. A shape neither lock can clear **retires** the generation
+instead of rewinding it -- byte-for-byte the pre-region behaviour, so a missed
+shape costs a saving, never correctness. Retired and pooled generations are
+freed at exit by `tur_region_shutdown`, registered ahead of every module
+`defer` so a defer can still read a retired value. `TUR_REGIONS=0` turns the
+whole mechanism off for bisection; `tests/run-regions-seam.sh` keeps that path
+green.
+
+The runtime note is wider than the result (region-lock-hardening, 2026-09-06),
+because the result is not the only way out of a bracket. Three escapes the
+result walk cannot see were each a segfault on the default build: a node
+**stored** into an outer container (`vec-push!` from inside `with-region`), a
+node hiding behind an **erased `:int`** inside an admitted record result
+(`(HI n (build n 0))` where `build` returns `(:: (Link ..) :int)`), and a
+`(Vec int)` result of erased nodes. So every primitive that writes a caller's
+word into memory that can outlive a bracket says `TUR_REGION_NOTE(word)` --
+`vec-push!`/`vec-set!`, `mutmap-set!`, the HAMT setters, `bt-set!`/`g-set!`,
+the atomics, `gen-arr-push!`, `grid-set!`, `rcvec-push!`, `set!` on a global
+or shared cell, `set-field!`/`set-deref!`, a closure-env fill, a heap-boxed
+constructor field, an element box, an `rc/of` -- and an **erasing
+ascription** (an ADT or type application that reaches a node, ascribed to
+`:int`, `ptr<void>` or `Any`) notes the value at the point the static walk
+loses it. A by-value aggregate result
+is noted by its words. A noted word that is region memory flags the generation
+that OWNS it (not only the innermost), which then retires. The macro is
+`((void)0)` under `TUR_REGIONS=0`. **A new store primitive must carry the
+note**; the two fixtures `region-escape-via-store` and
+`region-escape-via-erasure` read every stored value back after the pop.
+
+What the note still cannot see is a store made by **user inline-C** (a
+`malloc`'d cell written in a ` ```c ` body) or by a stdlib primitive nobody has
+hooked yet -- see `docs/reported/region-escape-through-unhooked-stores.md`.
+Prefer the typed style (`nxt : Link`, `(Vec Link)`, a `:copy` sum) over
+erasing to `:int`: a typed value is refused by the result walk where it must
+be, keeps its rewinds where it can, and never takes the erasure note.
+
+The generation stack is **per-thread** (like the trail and the panic state);
+ownership -- what `tur_region_free` refuses to `free()` -- is process-wide
+through a registry, so a node that crosses threads is still safe to drop
+anywhere. A pop whose inner brackets were skipped by a panic retires the
+abandoned generations rather than jamming the stack.
 
 **Non-`rc` heap values.** A `defstruct` used by value or a raw `:ptr<T>`
 returned from inline C is *not* on the RC path. If your inline-C code

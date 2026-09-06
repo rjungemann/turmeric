@@ -7939,6 +7939,20 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);
                 buf_printf(out, "    __r->%s = _%u;\n", mp, fi);
+                /* region-lock-hardening: this box is malloc'd (or slab), never
+                 * region memory, so a region node written into one of its
+                 * fields is an escape the moment the box outlives the bracket
+                 * -- and a box is a single word to every store hook.  Note
+                 * the field at construction.  The routed `:heap` branch above
+                 * needs nothing: its node IS region memory. */
+                {
+                    Buf lv; buf_init(&lv);
+                    buf_printf(&lv, "__r->%s", mp);
+                    buf_putc(&lv, '\0');
+                    emit_region_note_lvalue(out, 4,
+                        adt_ctor_field_c_type(&ctor->fields[fi], byval || heap), lv.data);
+                    buf_free(&lv);
+                }
                 free(mp);
             }
             buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
@@ -8242,6 +8256,28 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
             "#  endif\n"
             "#endif\n");
         emit_embedded_runtime_source(out, "region.h", tur_rt_embed_region_h);
+    }
+    /* region-lock-hardening: the STORE-SIDE lock's one spelling.  Every
+     * primitive that writes a caller's word into memory that can outlive a
+     * bracket -- stdlib inline-C (vec-push!, mutmap-set!, bt-set!, ...), the
+     * emitted closure-env fill, a heap-boxed ctor field, an erasing
+     * ascription -- says `TUR_REGION_NOTE(word)` and nothing else, so the
+     * same stdlib text compiles on both arms: with regions on it is the
+     * runtime note (a region-owned word flags its generation, which then
+     * retires instead of rewinding); under TUR_REGIONS=0 it is `((void)0)`
+     * and the program references no region symbol, which is what
+     * tests/run-regions-seam.sh's canary greps for.  The WORDS form is for a
+     * by-value aggregate (every aligned word is a possible erased pointer).
+     * The macro names are upper-case on purpose: the canary matches
+     * `tur_region_` and must keep matching the off arm as clean. */
+    if (regions_enabled()) {
+        buf_puts(out,
+            "#define TUR_REGION_NOTE(w) tur_region_note_escape((const void *)(intptr_t)(w))\n"
+            "#define TUR_REGION_NOTE_WORDS(p, n) tur_region_note_escape_words((const void *)(p), (size_t)(n))\n");
+    } else {
+        buf_puts(out,
+            "#define TUR_REGION_NOTE(w) ((void)0)\n"
+            "#define TUR_REGION_NOTE_WORDS(p, n) ((void)0)\n");
     }
     buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) {\n");
@@ -13924,6 +13960,19 @@ int emit_program(Buf *out, const Expr *program) {
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                         char *mp = adt_field_member_path(def, ctor, fi);
                         buf_printf(&early_file, "    __r->%s = _%u;\n", mp, fi);
+                        /* region-lock-hardening: mirror of the note at the
+                         * emit_adt_typedef_and_ctors site -- this malloc'd
+                         * (or slab) box outlives any bracket, so a region node
+                         * written into it is an escape.  All three boxed-ctor
+                         * emitters carry it. */
+                        {
+                            Buf lv; buf_init(&lv);
+                            buf_printf(&lv, "__r->%s", mp);
+                            buf_putc(&lv, '\0');
+                            emit_region_note_lvalue(&early_file, 4,
+                                adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval), lv.data);
+                            buf_free(&lv);
+                        }
                         free(mp);
                     }
                     buf_printf(&early_file, "    return (int64_t)(intptr_t)__r;\n");

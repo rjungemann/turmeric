@@ -12,9 +12,30 @@
  * mapped for the process.  That is deliberately the status quo (the spine
  * leaks today), so the conservative path costs nothing new, and it keeps
  * `tur_region_owns` true for those pointers -- a value that outlived its
- * generation must still never reach `free()`. */
+ * generation must still never reach `free()`.
+ *
+ * THREADS (region-lock-hardening, 2026-09-06).  The generation stack is
+ * PER-THREAD (`__thread`, exactly as src/runtime/trail.c keeps the trail and
+ * tur_tls.c keeps the panic state): a bracket is a stack discipline over one
+ * thread's control flow, and `bt-scope` already pushes a per-thread trail
+ * level, so its generation belongs to the same thread.  With one process-wide
+ * stack, a worker thread's spine nodes landed in whatever generation the main
+ * thread happened to have open -- through an unsynchronised push_ptr/realloc
+ * -- and were rewound under the worker when that bracket closed.
+ *
+ * What does NOT follow the thread is OWNERSHIP.  A node allocated in thread
+ * A's generation and dropped by thread B must still never reach free(), so
+ * `tur_region_owns` consults a process-wide registry of every arena that is
+ * live or retired in ANY thread.  The registry is touched under a spinlock at
+ * push, retire and reclaim (once per bracket, never per allocation), and the
+ * ownership query skips the lock entirely while every registered arena is
+ * this thread's own -- which is every single-threaded program, and every
+ * multi-threaded one in which only one thread has ever opened a region. */
 #include "region.h"
 
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -23,15 +44,15 @@
 #define TUR_REGION_SLAB (64u * 1024u)
 
 /* Live generations, innermost last.  Depth is 1-based so 0 can mean "none". */
-static Arena  **g_live;
-static int      g_live_n;
-static int      g_live_cap;
+static __thread Arena  **g_live;
+static __thread int      g_live_n;
+static __thread int      g_live_cap;
 
 /* Generations popped without reclaim.  Never freed before shutdown -- see the
  * file comment for why they are kept rather than released. */
-static Arena  **g_retired;
-static int      g_retired_n;
-static int      g_retired_cap;
+static __thread Arena  **g_retired;
+static __thread int      g_retired_n;
+static __thread int      g_retired_cap;
 
 /* Reclaimed generations, reset and available for the next push.  Reclaiming
  * REWINDS rather than releases: arena_reset keeps the slabs (and poisons them
@@ -39,16 +60,62 @@ static int      g_retired_cap;
  * once instead of per iteration.  A pooled arena is dead memory -- deliberately
  * NOT reported by tur_region_owns, which answers about live and retired
  * generations only. */
-static Arena  **g_pool;
-static int      g_pool_n;
-static int      g_pool_cap;
+static __thread Arena  **g_pool;
+static __thread int      g_pool_n;
+static __thread int      g_pool_cap;
 
-/* R3: set on the innermost generation when a noted escape points into it.
- * Parallel to g_live, one flag per open generation.  Sticky: once a generation
- * has leaked a pointer it can never be reclaimed, however many safe escapes
- * follow. */
-static bool    *g_escaped;
-static int      g_escaped_cap;
+/* R3: set on a generation when a noted escape points into it.  Parallel to
+ * g_live, one flag per open generation.  Sticky: once a generation has leaked
+ * a pointer it can never be reclaimed, however many safe escapes follow. */
+static __thread bool    *g_escaped;
+static __thread int      g_escaped_cap;
+
+/* Cross-thread ownership registry: every arena that is live or retired in any
+ * thread.  `g_reg_total` counts them (atomic, read lock-free); `g_my_reg`
+ * counts the ones this thread registered.  While the two agree, every
+ * registered arena is ours and the per-thread walk is the whole answer. */
+static Arena         **g_reg;
+static int             g_reg_n;
+static int             g_reg_cap;
+static atomic_int      g_reg_total;
+static atomic_flag     g_reg_lock = ATOMIC_FLAG_INIT;
+static __thread int    g_my_reg;
+
+static void reg_lock(void)   { while (atomic_flag_test_and_set_explicit(&g_reg_lock, memory_order_acquire)) { } }
+static void reg_unlock(void) { atomic_flag_clear_explicit(&g_reg_lock, memory_order_release); }
+
+/* Thread exit.  A worker that opened a region owns three small arrays and a
+ * pool of reset arenas that nothing else references; a pthread key destructor
+ * releases them when the thread ends (the main thread's go through
+ * tur_region_shutdown at atexit instead).  Live generations it abandoned are
+ * retired -- something may still point into them -- and retired ones stay
+ * registered, because a node that crossed to another thread still needs
+ * `tur_region_owns` to answer for it. */
+static pthread_key_t   g_tls_key;
+static pthread_once_t  g_tls_once = PTHREAD_ONCE_INIT;
+static __thread bool   g_tls_armed;
+
+static void retire_top(void);
+
+static void tls_thread_exit(void *unused) {
+    (void)unused;
+    while (g_live_n > 0) retire_top();
+    for (int i = 0; i < g_pool_n; i++) { arena_free(g_pool[i]); free(g_pool[i]); }
+    free(g_live);    g_live = NULL;    g_live_n = g_live_cap = 0;
+    free(g_retired); g_retired = NULL; g_retired_n = g_retired_cap = 0;
+    free(g_pool);    g_pool = NULL;    g_pool_n = g_pool_cap = 0;
+    free(g_escaped); g_escaped = NULL; g_escaped_cap = 0;
+    g_tls_armed = false;
+}
+
+static void tls_key_init(void) { pthread_key_create(&g_tls_key, tls_thread_exit); }
+
+static void tls_arm(void) {
+    if (g_tls_armed) return;
+    pthread_once(&g_tls_once, tls_key_init);
+    pthread_setspecific(g_tls_key, (void *)1);   /* non-NULL: run the destructor */
+    g_tls_armed = true;
+}
 
 static bool push_ptr(Arena ***vec, int *n, int *cap, Arena *a) {
     if (*n == *cap) {
@@ -62,8 +129,48 @@ static bool push_ptr(Arena ***vec, int *n, int *cap, Arena *a) {
     return true;
 }
 
+static void reg_add(Arena *a) {
+    reg_lock();
+    if (push_ptr(&g_reg, &g_reg_n, &g_reg_cap, a)) {
+        atomic_fetch_add_explicit(&g_reg_total, 1, memory_order_relaxed);
+        g_my_reg++;
+    }
+    /* A failed registration is conservative in the only direction that
+     * matters: the per-thread walk still knows this arena, and another thread
+     * asked about it gets "not owned" -- the same answer a registry could not
+     * have given it before this change.  It cannot rewind anything. */
+    reg_unlock();
+}
+
+static void reg_remove(Arena *a) {
+    reg_lock();
+    for (int i = 0; i < g_reg_n; i++) {
+        if (g_reg[i] == a) {
+            g_reg[i] = g_reg[--g_reg_n];
+            atomic_fetch_sub_explicit(&g_reg_total, 1, memory_order_relaxed);
+            g_my_reg--;
+            break;
+        }
+    }
+    reg_unlock();
+}
+
+static bool reg_owns_foreign(const void *p) {
+    /* Lock-free fast path: nothing registered that this thread does not
+     * already answer for. */
+    if (atomic_load_explicit(&g_reg_total, memory_order_acquire) == g_my_reg)
+        return false;
+    bool owned = false;
+    reg_lock();
+    for (int i = 0; i < g_reg_n && !owned; i++)
+        owned = arena_owns(g_reg[i], p);
+    reg_unlock();
+    return owned;
+}
+
 TUR_RT_API int tur_region_push(void) {
     Arena *a;
+    tls_arm();
     if (g_pool_n > 0) {
         a = g_pool[--g_pool_n];    /* already reset by the reclaim that pooled it */
     } else {
@@ -76,6 +183,7 @@ TUR_RT_API int tur_region_push(void) {
         free(a);
         return 0;
     }
+    reg_add(a);
     /* A fresh generation has escaped nothing.  Grow the flag vector alongside
      * the live stack; a failure to grow it is treated as "escaped", so the
      * generation is never reclaimed on the strength of a flag we could not
@@ -96,9 +204,35 @@ TUR_RT_API void tur_region_note_escape(const void *p) {
     if (g_live_n <= 0 || !p) return;
     /* Only an escape that IS region memory matters.  A malloc'd or static
      * pointer crossing the boundary is ordinary and blocks nothing -- which is
-     * what makes this check worth having rather than a blanket refusal. */
-    if (arena_owns(g_live[g_live_n - 1], p)) {
-        if (g_live_n <= g_escaped_cap) g_escaped[g_live_n - 1] = true;
+     * what makes this check worth having rather than a blanket refusal.
+     *
+     * Flag the generation that OWNS the pointer, not just the innermost one.
+     * The result note at a pop only ever sees its own generation, but a store
+     * hook (vec-push! into an outer container, a closure capture, ...) can
+     * fire inside a nested bracket for a value the OUTER generation allocated:
+     * that outer generation is the one that must not rewind, and it would
+     * have, because its own flag was never set.  Innermost-first, so the
+     * common case is one arena walk. */
+    for (int i = g_live_n - 1; i >= 0; i--) {
+        if (arena_owns(g_live[i], p)) {
+            if (i < g_escaped_cap) g_escaped[i] = true;
+            return;
+        }
+    }
+}
+
+TUR_RT_API void tur_region_note_escape_words(const void *p, size_t n) {
+    if (g_live_n <= 0 || !p) return;
+    /* Every aligned word of a by-value aggregate, read as a possible address.
+     * A word that is not a pointer at all compares as an address and simply is
+     * not region memory; a word that IS a region pointer -- an erased `:int`
+     * field, a boxed element's box, a closure env -- flags its generation.
+     * False positives refuse a rewind (the safe direction), never permit one. */
+    const unsigned char *b = (const unsigned char *)p;
+    for (size_t off = 0; off + sizeof(void *) <= n; off += sizeof(void *)) {
+        void *w;
+        memcpy(&w, b + off, sizeof w);
+        tur_region_note_escape(w);
     }
 }
 
@@ -110,25 +244,37 @@ static bool generation_escaped(int idx0) {
     return g_escaped[idx0];
 }
 
-/* Both pops take the depth back so a mismatched pair is a no-op rather than a
- * rewind of somebody else's generation.  A region form that unwinds through a
- * panic can leave the stack deeper than the caller thinks; refusing is the
- * conservative answer, and it keeps the failure "no saving" rather than
+static void retire_top(void) {
+    Arena *a = g_live[--g_live_n];
+    if (!push_ptr(&g_retired, &g_retired_n, &g_retired_cap, a)) {
+        /* Out of memory retiring it: the arena stays mapped and unreferenced,
+         * which is the same outcome the retired list produces.  Never free it
+         * -- something may still point in.  It stays in the registry, so a
+         * drop path that reaches it still refuses to free(). */
+        return;
+    }
+}
+
+/* Both pops take the depth back so a mismatched pair cannot rewind somebody
+ * else's generation.
+ *
+ * A depth SHALLOWER than the stack means the deeper generations' pops were
+ * skipped -- a panic that unwound through a bracket without running its pop.
+ * Those generations are retired here (never rewound: something the unwinder
+ * left behind may still point into them), so the stack does not stay jammed
+ * with a stale innermost that every later allocation would land in and that
+ * would refuse every outer pop.  A depth DEEPER than the stack is a spent
+ * handle and a no-op.  Either way the failure stays "no saving", never
  * "reclaimed memory still in use". */
 static Arena *detach(int depth) {
-    if (depth <= 0 || depth != g_live_n) return NULL;
+    if (depth <= 0 || depth > g_live_n) return NULL;
+    while (g_live_n > depth) retire_top();
     return g_live[--g_live_n];
 }
 
 TUR_RT_API void tur_region_pop(int depth) {
-    Arena *a = detach(depth);
-    if (!a) return;
-    if (!push_ptr(&g_retired, &g_retired_n, &g_retired_cap, a)) {
-        /* Out of memory retiring it: the arena stays mapped and unreferenced,
-         * which is the same outcome the retired list produces.  Never free it
-         * -- something may still point in. */
-        return;
-    }
+    if (depth <= 0 || depth > g_live_n) return;
+    while (g_live_n >= depth) retire_top();
 }
 
 TUR_RT_API void tur_region_pop_reclaim(int depth) {
@@ -139,6 +285,7 @@ TUR_RT_API void tur_region_pop_reclaim(int depth) {
      * instead of reading stale bytes, and the next push reuses the memory
      * rather than asking the allocator again. */
     arena_reset(a);
+    reg_remove(a);
     if (!push_ptr(&g_pool, &g_pool_n, &g_pool_cap, a)) {
         arena_free(a);
         free(a);
@@ -146,7 +293,8 @@ TUR_RT_API void tur_region_pop_reclaim(int depth) {
 }
 
 TUR_RT_API bool tur_region_pop_checked(int depth) {
-    if (depth <= 0 || depth != g_live_n) return false;   /* mismatched: refuse */
+    if (depth <= 0 || depth > g_live_n) return false;   /* spent handle: refuse */
+    while (g_live_n > depth) retire_top();               /* skipped inner pops */
     if (generation_escaped(depth - 1)) {
         tur_region_pop(depth);       /* retire: correctness over saving */
         return false;
@@ -171,7 +319,7 @@ TUR_RT_API bool tur_region_owns(const void *p) {
         if (arena_owns(g_live[i], p)) return true;
     for (int i = 0; i < g_retired_n; i++)
         if (arena_owns(g_retired[i], p)) return true;
-    return false;
+    return reg_owns_foreign(p);
 }
 
 TUR_RT_API void tur_region_free(void *p) {
@@ -186,12 +334,22 @@ TUR_RT_API void tur_region_free(void *p) {
 
 TUR_RT_API bool tur_region_active(void) { return g_live_n > 0; }
 
+TUR_RT_API int tur_region_depth(void) { return g_live_n; }
+
 TUR_RT_API void tur_region_shutdown(void) {
-    for (int i = 0; i < g_live_n; i++)    { arena_free(g_live[i]);    free(g_live[i]); }
-    for (int i = 0; i < g_retired_n; i++) { arena_free(g_retired[i]); free(g_retired[i]); }
+    /* This thread's arenas only: another thread's live or retired generations
+     * are its own, and at process exit they go with the process.  Their
+     * registry entries are dropped too, so a shutdown that follows every
+     * thread's exit leaves nothing allocated. */
+    for (int i = 0; i < g_live_n; i++)    { reg_remove(g_live[i]);    arena_free(g_live[i]);    free(g_live[i]); }
+    for (int i = 0; i < g_retired_n; i++) { reg_remove(g_retired[i]); arena_free(g_retired[i]); free(g_retired[i]); }
     for (int i = 0; i < g_pool_n; i++)    { arena_free(g_pool[i]);    free(g_pool[i]); }
     free(g_live);    g_live = NULL;    g_live_n = g_live_cap = 0;
     free(g_retired); g_retired = NULL; g_retired_n = g_retired_cap = 0;
     free(g_pool);    g_pool = NULL;    g_pool_n = g_pool_cap = 0;
     free(g_escaped); g_escaped = NULL; g_escaped_cap = 0;
+    g_tls_armed = false;
+    reg_lock();
+    if (g_reg_n == 0) { free(g_reg); g_reg = NULL; g_reg_cap = 0; }
+    reg_unlock();
 }

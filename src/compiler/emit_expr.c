@@ -1131,9 +1131,15 @@ static char *emit_agg_box(EmitCtx *ctx, Type t, const char *val) {
     if (g_emit_abi_trace)
         fprintf(stderr, "repr-trace bridge agg-box %s\n", cn);
     Buf b; buf_init(&b);
+    /* region-lock-hardening: the box is malloc'd and outlives the bracket its
+     * element was built in (a Vec slot, a field store); its words are noted
+     * so an erased node inside the aggregate cannot hide behind the box
+     * pointer the store hook sees.  The macro is `((void)0)` under
+     * TUR_REGIONS=0. */
     buf_printf(&b,
         "({ %s *__tur_pbox = (%s *)malloc(sizeof(%s)); "
-        "*__tur_pbox = (%s); (int64_t)(intptr_t)__tur_pbox; })",
+        "*__tur_pbox = (%s); TUR_REGION_NOTE_WORDS(__tur_pbox, sizeof *__tur_pbox); "
+        "(int64_t)(intptr_t)__tur_pbox; })",
         cn, cn, cn, val);
     buf_putc(&b, '\0');
     char *out = strdup(b.data);
@@ -5566,7 +5572,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                        "(void)tur_region_pop_checked(__tur_rgn_%d);\n",
                        tmp, rgn_id);
         else if (rgn_reclaim)
-            buf_printf(body, "(void)tur_region_pop_checked(__tur_rgn_%d);\n", rgn_id);
+            /* region-lock-hardening: a by-value aggregate result is noted by
+             * its WORDS.  The static walk admitted its declared field types,
+             * but an `:int` field can be an erased node (`(HI n (build n 0))`
+             * with `build` returning `(:: (Link ..) :int)`), and before this
+             * the rewind went ahead and the field dangled.  Every aligned word
+             * is compared as an address; a scalar simply is not region
+             * memory, an erased pointer is and retires the generation. */
+            buf_printf(body,
+                       "tur_region_note_escape_words(&%s, sizeof %s); "
+                       "(void)tur_region_pop_checked(__tur_rgn_%d);\n",
+                       tmp, tmp, rgn_id);
         else
             buf_printf(body, "tur_region_pop(__tur_rgn_%d);\n", rgn_id);
     }
@@ -6071,7 +6087,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 } else {
                     buf_printf(&out,
                         "({ %s *__tur_box = (%s *)malloc(sizeof(%s)); "
-                        "*__tur_box = (%s); TUR_TAG(%lld, (int64_t)(intptr_t)__tur_box); })",
+                        "*__tur_box = (%s); TUR_REGION_NOTE_WORDS(__tur_box, sizeof *__tur_box); "
+                        "TUR_TAG(%lld, (int64_t)(intptr_t)__tur_box); })",
                         cn, cn, cn, inner, (long long)tag);
                 }
             } else {
@@ -11196,6 +11213,24 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(body, "%s->%s = %s%s;\n",
                                fat_tmp, field, captured_is_pbp ? "*" : "", cn);
                 }
+                /* region-lock-hardening: the env is malloc'd and can outlive
+                 * the bracket the closure was built in (stored into an outer
+                 * container, handed to a thread), and its fields are the one
+                 * place a captured node hides from both locks -- the result
+                 * walk sees a closure and refuses, but a STORED closure is
+                 * only a malloc'd env pointer to the store hook.  Note each
+                 * captured word at the fill, by the field's declared C type. */
+                if (regions_enabled()) {
+                    Buf lv; buf_init(&lv);
+                    buf_printf(&lv, "%s->%s", fat_tmp, field);
+                    buf_putc(&lv, '\0');
+                    const char *fcty_note = captured->type.kind == TY_FN
+                        ? "int64_t"
+                        : (captured->is_poly_fn ? "tur_poly_fn_t"
+                                                : emit_type_c_name(ctx, captured->type));
+                    emit_region_note_lvalue(body, ctx->indent, fcty_note, lv.data);
+                    buf_free(&lv);
+                }
                 /* closure-drop-glue (Model R) walk slice: an rc-typed capture is a
                  * SHARED owning reference.  Flag-on, RETAIN it at capture (a strong
                  * increment) so the closure holds its own count -- balancing the
@@ -11294,6 +11329,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                            inner_type_c, val_tmp, inner_type_c, inner_type_c);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "*%s = %s;\n", val_tmp, inner);
+            }
+            /* region-lock-hardening: the rc block is malloc'd and shared; the
+             * payload it now holds (the adopted node pointer, or the words of
+             * the boxed value) is an escape if it is region memory. */
+            if (regions_enabled()) {
+                if (payload_is_boxed_adt || payload_is_heap_adt) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "TUR_REGION_NOTE(%s);\n", val_tmp);
+                } else {
+                    Buf lv; buf_init(&lv);
+                    buf_printf(&lv, "(*%s)", val_tmp);
+                    buf_putc(&lv, '\0');
+                    emit_region_note_lvalue(body, ctx->indent, inner_type_c, lv.data);
+                    buf_free(&lv);
+                }
             }
 
             char *cb_tmp = fresh_tmp(ctx);
@@ -13439,6 +13489,54 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
          * downstream concrete consumer gets the struct value, not an int64_t. */
         case EX_ASCRIBE: {
             char *inner_val = emit_value(ctx, body, e->as.ascribe_.inner);
+            /* region-lock-hardening: an ERASING ascription -- a value whose
+             * type reaches a region node, ascribed to a type that does not
+             * (`(:: (Link n acc) :int)`, `(:: node Any)`, a `ptr<void>`) -- is
+             * the point where the static walk loses sight of the node.  From
+             * here on it is a word the result walk admits and no container
+             * type refuses.  So the erasure IS the escape: note the value,
+             * and a node erased inside a bracket retires that generation
+             * instead of letting it rewind under an int somebody still
+             * holds.  A node erased OUTSIDE any bracket, or one another
+             * generation owns, is not region memory of any live generation
+             * and costs one compare.  The typed style (a `:copy` sum, a
+             * typed `nxt : Link` field, `(Vec Link)`) never takes this path
+             * and keeps its rewinds. */
+            if (regions_enabled() && inner_val) {
+                const AdtDef *seen_a[32], *seen_b[32];
+                uint32_t na = 0, nb = 0;
+                Type from = emit_resolve_type(ctx, e->as.ascribe_.inner->type);
+                Type to   = emit_resolve_type(ctx, e->type);
+                /* `from` must be a type that can HOLD a node -- an ADT or a
+                 * type application -- not merely one the walk refuses.  The
+                 * walk says "reaches" for a raw pointer, a closure, a type
+                 * variable too, and those are refusals of ignorance: a
+                 * `(:: <ptr<void>> String)` relabel carries no node and
+                 * hoisting it changed the text a downstream cast keyed on
+                 * (the `__inst_Clone_clone_String` -Wint-conversion). */
+                bool from_can_hold_node =
+                    (from.kind == TY_ADT &&
+                     !(from.as.adt_.def && from.as.adt_.def->is_opaque)) ||
+                    from.kind == TY_APP || from.kind == TY_STRUCT;
+                /* And `to` must be an ERASURE -- a word type the walk reads
+                 * as a scalar -- not a refinement to another typed shape
+                 * (`(:: (set-add ..) (Set (Vec int)))` pins a type argument;
+                 * the walk still sees the elements afterwards, and hoisting
+                 * the inner text there lost a downstream pointer cast). */
+                bool to_is_erasure =
+                    to.kind == TY_INT || to.kind == TY_PTR_VOID || to.kind == TY_ANY;
+                if (from_can_hold_node && to_is_erasure &&
+                    region_type_reaches_node(ctx, from, seen_a, &na, 24) &&
+                    !region_type_reaches_node(ctx, to, seen_b, &nb, 24)) {
+                    char *et = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "__auto_type %s = (%s);\n", et, inner_val);
+                    emit_region_note_lvalue(body, ctx->indent,
+                                            emit_type_c_name(ctx, from), et);
+                    free(inner_val);
+                    inner_val = et;
+                }
+            }
             /* KB-021: an ascription `(:: (vec-new) (Vec int))` pins the static
              * type for dispatch discrimination but must NOT change the runtime
              * representation of a carrier-ABI aggregate.  The carrier (int64_t

@@ -66,6 +66,7 @@
 (defn atomic-store! [p : AtomicCell v : int] : nil
   ```c
   int64_t *cell = (int64_t *)p;
+  TUR_REGION_NOTE(v);   /* region-lock-hardening: the cell outlives any bracket */
   __atomic_store_n(cell, (int64_t)v, __ATOMIC_SEQ_CST);
   ```)
 ;;; atomic-add! -- atomically add delta and return the old value.
@@ -121,6 +122,7 @@
   ```c
   int64_t *cell = (int64_t *)p;
   int64_t tmp = (int64_t)new_val;
+  TUR_REGION_NOTE(tmp);   /* region-lock-hardening: see atomic-store! */
   return (int64_t)__atomic_exchange_n(cell, tmp, __ATOMIC_SEQ_CST);
   ```)
 ;;; atomic-cas! -- compare-and-swap: if cell == expected, set to desired and return true.
@@ -143,6 +145,7 @@
   int64_t *cell = (int64_t *)p;
   int64_t exp_v = (int64_t)expected;
   int64_t des_v = (int64_t)desired;
+  TUR_REGION_NOTE(des_v);   /* region-lock-hardening: see atomic-store! */
   return (int64_t)__atomic_compare_exchange_n(
       cell, &exp_v, des_v, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
   ```)

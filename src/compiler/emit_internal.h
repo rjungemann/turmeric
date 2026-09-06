@@ -768,6 +768,12 @@ bool emit_binding_is_region_scope(const struct Binding *b);
  * prologue is too late, because a constructor runs __tur_static_init (and so
  * registers the defers) before main.  See the definition. */
 void emit_region_shutdown_atexit(Buf *out, int indent);
+/* region-lock-hardening: the store-side note for an lvalue just written into
+ * memory that can outlive a bracket.  `ctype` picks the spelling: a word or
+ * pointer is noted directly, a by-value aggregate by its words, a float or
+ * narrow scalar not at all; NULL means unknown and notes the words.  Emits
+ * nothing under TUR_REGIONS=0.  `lv` must be an lvalue expression. */
+void emit_region_note_lvalue(Buf *body, int indent, const char *ctype, const char *lv);
 bool emit_region_scope_reclaims(struct EmitCtx *ctx, const struct Type *t);
 /* S1 (jit-engine-plan section 4): true when an emitted C type NAME denotes a
  * scalar -- any pointer, or one of the primitive/stdint spellings the emitter

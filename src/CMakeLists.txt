@@ -1601,11 +1601,13 @@ add_executable(tur_region_unit
 )
 target_include_directories(tur_region_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_region_unit PRIVATE
-    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
-target_link_options(tur_region_unit PRIVATE
+# region-lock-hardening: the generation stack is per-thread and ownership is
+# process-wide; the unit test spawns a thread to pin both halves.
+target_link_options(tur_region_unit PRIVATE -pthread
     $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 set_target_properties(tur_region_unit PROPERTIES

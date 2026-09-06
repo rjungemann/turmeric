@@ -90,6 +90,10 @@ fi
 #   sx2-trail-combinators, sx2-dfs-driver, self-recursive-goal-into-fat-sink,
 #   region-scope-value-survives, region-scope-escape-refused,
 #   region-scope-void-body, region-with-region.
+# Store-side / erasure escapes (region-lock-hardening): every value is read
+# AFTER the pop, so the default arm proves the note blocked the rewind and
+# this arm proves the answer is the same without a region at all:
+#   region-escape-via-store, region-escape-via-erasure.
 FIXTURES="
 refined-nonempty
 constrained-defn-cons-return-monomorphize
@@ -104,6 +108,8 @@ region-scope-value-survives
 region-scope-escape-refused
 region-scope-void-body
 region-with-region
+region-escape-via-store
+region-escape-via-erasure
 "
 
 for fx in $FIXTURES; do

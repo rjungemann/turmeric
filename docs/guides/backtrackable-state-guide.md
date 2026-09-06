@@ -280,6 +280,14 @@ undo without paying the escape check uses them.
 With `TUR_REGIONS=0`, `with-region` is an identity call and `bt-scope` is just the
 trail bracket described above; neither allocates any differently.
 
+The escape check is not only about the returned value. A node built inside the
+bracket and then `bt-set!` into a cell, pushed into a vec, or captured by a
+closure that is stored outward is noted at the store and blocks the rewind
+too, so a search that stashes part of its state outside the bracket keeps its
+correctness and loses only the saving. See the regions section of the
+[GC guide](gc-guide.md#what-is-not-gc-managed) for the full list of hooked
+stores and the one thing they cannot see (user inline-C).
+
 ## Under `--interpret`
 
 The whole surface works, and the interpreter calls the same

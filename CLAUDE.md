@@ -310,6 +310,33 @@ codegen/operator knobs (`--dump-*`, `--emit-abi-trace`), build-system options
 always-on at their current level. See
 [docs/guides/experimental-flags-guide.md](docs/guides/experimental-flags-guide.md).
 
+## Region Store Hooks -- STRICT RULE
+
+Regions (RM3, on by default) rewind a generation only when nothing outside it
+still points in. The compiler proves that with two locks: the static walk over
+a bracket's result type, and the runtime **escape note** -- and the note is
+only as complete as the set of stores that carry it. So:
+
+**Any primitive that writes a caller's word into memory that can outlive a
+`with-region` / `bt-scope` bracket MUST note that word.** In stdlib inline-C
+that is one line before the store, `TUR_REGION_NOTE(word);` (words of a
+by-value aggregate: `TUR_REGION_NOTE_WORDS(ptr, nbytes);`). The macros are
+always defined in the emitted preamble and expand to `((void)0)` under
+`TUR_REGIONS=0`, so the same text compiles on both arms. In the emitter, call
+`emit_region_note_lvalue` after the store. Host-runtime C (hamt.c) calls
+`tur_region_note_escape` directly.
+
+The hooked set today: `vec-push!`/`vec-set-o!`, `mutmap-set!`, the HAMT
+setters, `bt-set!`/`g-set!`, `atomic-store!/swap!/cas!`, `gen-arr-push!`,
+`grid-set!`, `rcvec-push!`, `set!` on a global or shared cell, `set-field!`,
+`set-deref!`, the closure-env fill, the malloc'd ctor boxes, the element-box
+helpers, `rc/of`, and every erasing ascription. A new `-set!`/`-push!`/insert
+primitive, a new boxing site, or a new cell type joins the list in the same
+change, and `tests/fixtures/region-escape-via-store` gets the case. A missed
+hook is a silent use-after-rewind on the default build -- exactly what
+`docs/reported/region-escape-through-unhooked-stores.md` documents -- not a
+lost saving. See `docs/guides/gc-guide.md` (regions) for the reasoning.
+
 ## `#lang` Layers -- curated only
 
 `#lang <base>[/<dialect>] <layer>*` selects one mutually-exclusive base

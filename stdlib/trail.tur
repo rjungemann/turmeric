@@ -234,6 +234,10 @@
   #fx{Bt}
   : bool
   ```c
+  /* region-lock-hardening: the cell is heap memory that outlives the
+     bracket, and the trail keeps the OLD value too; a region-allocated
+     word stored here is an escape.  See vec-push! in stdlib/vec.tur. */
+  TUR_REGION_NOTE(v);
   return tur_bt_cell_set((void *)(intptr_t)c, v);
   ```)
 
@@ -305,6 +309,7 @@
   ```c
   /* Pause across the write: one cell representation, one set of
      semantics, and the opt-out is the TYPE that reaches it. */
+  TUR_REGION_NOTE(v);   /* region-lock-hardening: see bt-set! */
   tur_trail_pause();
   tur_bt_cell_set((void *)(intptr_t)g, v);
   tur_trail_resume();

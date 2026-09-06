@@ -100,6 +100,7 @@
     h[1] = nc; h[2] = (int64_t)(intptr_t)nd;
   }
   int64_t *data = (int64_t *)(intptr_t)h[2];
+  TUR_REGION_NOTE(val);   /* region-lock-hardening: see vec-push! */
   data[h[0]++] = val;
   ```)
 ;;; gen-arr-len -- return the number of elements in a gen-arr array.

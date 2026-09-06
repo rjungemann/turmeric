@@ -1,0 +1,96 @@
+;; region-lock-hardening: a node built inside a bracket and STORED into
+;; memory that outlives it (a vec, a mutable map, a global, a trail cell, a
+;; boxed by-value element, a closure env) must block the rewind.  The result
+;; of every bracket here is a scalar, so the result walk admits the rewind and
+;; only the store-side note stands between the reader below and reclaimed
+;; memory.  Every value is read AFTER the pop, and TUR_REGIONS=0 must print
+;; the same lines (tests/run-regions-seam.sh).
+
+(defdata Link :heap (Link [v : int nxt : int]))
+
+(defn link-v [l : Link] : int
+  (match l (Link a b) a))
+
+(defn chain-sum [c : int] : int
+  ```c
+  struct { int64_t v; int64_t nxt; } *p = (void *)(intptr_t)c;
+  int64_t acc = 0; while (p) { acc += p->v; p = (void *)(intptr_t)p->nxt; } return acc;
+  ```)
+
+(defn build [n : int acc : int] : int
+  (if (<= n 0) acc (build (- n 1) (:: (Link n acc) :int))))
+
+;; 1. vec-push! of a TYPED node into an outer (Vec Link).
+(defn store-vec [v : (Vec Link) n : int] : int
+  (with-region (fn [] (do (vec-push! v (Link n 0)) 1))))
+
+;; 2. vec-push! of an ERASED chain into an outer (Vec int): the erasure note.
+(defn store-vec-erased [v : (Vec int) n : int] : int
+  (with-region (fn [] (do (vec-push! v (build n 0)) 1))))
+
+;; 3. mutmap-set! of a typed node into an outer (MutableMap int Link).
+(defn store-mutmap [mm : (MutableMap int Link) n : int] : int
+  (with-region (fn [] (do (mutmap-set! mm n n (Link n 0)) 1))))
+
+;; 4. a persistent map ASSOC'd inside and handed out through an outer vec:
+;;    the HAMT node holding the value is malloc'd (the hamt.c store hook).
+(defn store-map [mv : (Vec (Map int Link)) n : int] : int
+  (with-region (fn [] (do (vec-push! mv (map-assoc (:: (map-new) (Map int Link)) n (Link n 0))) 1))))
+
+;; 5. set! of a mutable global.
+(def ^mut gnode 0)
+(defn store-global [n : int] : int
+  (with-region (fn [] (do (set! gnode (build n 0)) 1))))
+
+;; 6. bt-set! into a trail cell that outlives the bracket.
+(defn store-cell [c : BtCell n : int] : int
+  (with-region (fn [] (do (bt-set! c (build n 0)) 1))))
+
+;; 7. a by-value aggregate holding a node, pushed into an outer vec: the
+;;    element box is malloc'd; its WORDS carry the node.
+(defdata HoldsLink (HL :int :Link))
+(defn store-byval [hv : (Vec HoldsLink) n : int] : int
+  (with-region (fn [] (do (vec-push! hv (HL n (Link (* 2 n) 0))) 1))))
+
+;; 8. a closure capturing a node, stored into an outer vec: the env is
+;;    malloc'd; its captured word is the node.
+(defn store-closure [fv : (Vec (fn [] int)) n : int] : int
+  (with-region (fn [] (let [l (Link (* 3 n) 0)]
+                        (vec-push! fv (fn [] : int (link-v l)))
+                        1))))
+
+;; 9. nested: the OUTER generation's node stored from inside the INNER
+;;    bracket -- the note must flag the owner, not the innermost.
+(defn store-nested [v : (Vec Link) n : int] : int
+  (with-region (fn []
+    (let [outer (Link (* 5 n) 0)]
+      (with-region (fn [] (do (vec-push! v outer) 1)))))))
+
+(defn main [] : int
+  (let [v (:: (vec-new) (Vec Link))]
+    (println (store-vec v 4))
+    (println (link-v (vec-get v 0))))                   ;; 4
+  (let [v (:: (vec-new) (Vec int))]
+    (println (store-vec-erased v 4))
+    (println (chain-sum (vec-get v 0))))                ;; 10
+  (let [mm (:: (mutmap-new) (MutableMap int Link))]
+    (println (store-mutmap mm 6))
+    (println (link-v (mutmap-get mm 6 6))))             ;; 6
+  (let [mv (:: (vec-new) (Vec (Map int Link)))]
+    (println (store-map mv 7))
+    (println (link-v (map-get (vec-get mv 0) 7))))      ;; 7
+  (println (store-global 3))
+  (println (chain-sum gnode))                           ;; 6
+  (let [c (bt-cell-new 0)]
+    (println (store-cell c 4))
+    (println (chain-sum (bt-get c))))                   ;; 10
+  (let [hv (:: (vec-new) (Vec HoldsLink))]
+    (println (store-byval hv 8))
+    (match (vec-get-byval hv 0) (HL a l) (println (link-v l))))   ;; 16
+  (let [fv (:: (vec-new) (Vec (fn [] int)))]
+    (println (store-closure fv 9))
+    (println ((vec-get fv 0))))                         ;; 27
+  (let [v (:: (vec-new) (Vec Link))]
+    (println (store-nested v 2))                        ;; 1
+    (println (link-v (vec-get v 0))))                   ;; 10
+  0)

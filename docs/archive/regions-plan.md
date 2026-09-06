@@ -249,6 +249,73 @@ ERROR: AddressSanitizer: use-after-poison ... READ of size 8 ... #0 in chain_hys
 
 so the fixture is a live test of the lock and not a shape that happens to work.
 
+### region-lock-hardening (2026-09-06): the result is not the only way out
+
+The two locks above answer one question -- can the RESULT reach the
+generation? -- and a day after graduation three programs answered a different
+one. Each was a segfault on the default build and correct under
+`TUR_REGIONS=0`:
+
+1. **A store.** `(with-region (fn [] (do (vec-push! v (build n 0)) 1)))` --
+   the result is an `:int`, both locks clear it, the generation rewinds, and
+   the outer vec holds a dangling node.
+2. **An erased field.** `(with-region (fn [] (HI n (build n 0))))` with
+   `(defdata HoldsInt (HI :int :int))` -- the static walk admits a record of
+   scalars, the runtime note only ever saw the top-level word (and a by-value
+   aggregate is not a word), and the second field was a node.
+3. **An erased element.** A `(Vec int)` result whose elements are
+   `(:: (Link ..) :int)`. Same shape as 2, one container deeper.
+
+The section above says "it proves nothing about what that pointer
+transitively reaches", and every one of these is that sentence coming due.
+The fix keeps both locks and widens the runtime one from "the result word"
+to "every word that leaves the generation":
+
+- **The store-side lock.** Every primitive that writes a caller's word into
+  memory that can outlive a bracket notes it through one emitted macro,
+  `TUR_REGION_NOTE(word)`: stdlib inline-C (`vec-push!`, `vec-set-o!`,
+  `mutmap-set!`, `bt-set!`, `g-set!`, `atomic-store!/swap!/cas!`,
+  `gen-arr-push!`, `grid-set!`, `rcvec-push!`), the HAMT setters (host
+  runtime, so `tur_hamt_set` calls `tur_region_note_escape` directly), the
+  emitter's `set!` on a global or shared cell, `set-field!`, `set-deref!`,
+  the closure-env fill, the two malloc'd ctor-box emitters and the types.c
+  monomorph twin, the element-box helpers, and `rc/of`. The macro is
+  `((void)0)` under `TUR_REGIONS=0`, so the seam canary still sees no region
+  symbol on the off arm.
+- **The erasure note.** An ascription whose source type reaches a node and
+  whose target type does not (`:int`, `Any`, `ptr<void>`) is where the
+  static walk goes blind, so it is treated as the escape: the value is noted
+  there. The typed style never takes this path; the erased style retires
+  where it used to rewind unsoundly.
+- **Aggregate results by their words.** `tur_region_note_escape_words` reads
+  every aligned word of a by-value result; a scalar compared as an address
+  is not region memory, an erased pointer is.
+- **Owner flagging.** The note flags whichever LIVE generation owns the word,
+  not just the innermost: a store fired inside a nested bracket for a value
+  the OUTER generation allocated must block the outer rewind.
+- **Per-thread stack, process-wide ownership.** The generation stack is
+  `__thread` (as the trail and the panic state already were), so a worker's
+  nodes stop landing in a generation the main thread has open; a registry
+  under a spinlock keeps `tur_region_owns` true across threads, consulted
+  only when another thread has ever opened a region.
+- **Skipped pops retire.** A pop shallower than the stack retires the
+  generations above it (a panic unwound through their brackets) instead of
+  refusing and leaving the stack jammed on a stale innermost. Latent today
+  -- both catch paths pop before the propagation check -- and pinned in
+  `tests/region_unit.c`.
+
+`tests/fixtures/region-escape-via-store` (nine stores, including the nested
+owner case and a captured closure) and `region-escape-via-erasure` (the three
+result shapes) read every value back after the pop and run on both arms
+through `tests/run-regions-seam.sh`. `bench-regions-subst`, the typed
+workload R4 was priced on, keeps its rewinds.
+
+What this does not close is a store the emitter never sees: a user inline-C
+body writing a node into its own `malloc`'d cell, or a stdlib primitive
+outside the hooked set. That is filed as
+`docs/reported/region-escape-through-unhooked-stores.md`, with the rule that
+a new store primitive carries the note.
+
 ### R2's "spine-node allocation is routed" did not cover the workload
 
 The single most valuable thing R4 did was measure the saving instead of

@@ -21,8 +21,11 @@ BIN="$(mktemp -t tur-wkc2-XXXXXX)"
 # double-free / use-after-free, so we keep going but skip the leak assertion.
 ASAN_OPTIONS="detect_leaks=1:exitcode=23"
 probe_bin="$(mktemp -t tur-wkc2-probe-XXXXXX)"
+# region-lock-hardening: hamt.c notes stored words through region.c, so the
+# standalone compile links it (and arena.c under it) exactly as every library
+# that carries hamt.c does.
 if ! "$CC" -std=c11 -fsanitize=address,undefined -I "$SRC_RUNTIME" \
-        "$TEST_SRC" "$SRC_RUNTIME/hamt.c" -o "$BIN" 2>/tmp/wkc2-cc.log; then
+        "$TEST_SRC" "$SRC_RUNTIME/hamt.c" "$SRC_RUNTIME/region.c" "$SRC_RUNTIME/arena.c" -pthread -o "$BIN" 2>/tmp/wkc2-cc.log; then
     echo "FAIL hamt-owned-keys -- compile failed"
     cat /tmp/wkc2-cc.log
     rm -f "$BIN" "$probe_bin"

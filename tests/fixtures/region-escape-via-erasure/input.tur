@@ -1,0 +1,43 @@
+;; region-lock-hardening: a node that reaches the bracket's RESULT only
+;; through an erased `:int` word -- a scalar-typed record field, a (Vec int)
+;; element, a (Map int int) value -- is invisible to the static walk (it sees
+;; a scalar) and was invisible to the runtime lock (it noted only the
+;; top-level result word).  Two things now catch it: the erasing ascription
+;; itself notes the node, and a by-value aggregate result is noted by its
+;; words.  Every value is read AFTER the pop; TUR_REGIONS=0 prints the same.
+
+(defdata Link :heap (Link [v : int nxt : int]))
+
+(defn build [n : int acc : int] : int
+  (if (<= n 0) acc (build (- n 1) (:: (Link n acc) :int))))
+
+(defn chain-sum [c : int] : int
+  ```c
+  struct { int64_t v; int64_t nxt; } *p = (void *)(intptr_t)c;
+  int64_t acc = 0; while (p) { acc += p->v; p = (void *)(intptr_t)p->nxt; } return acc;
+  ```)
+
+;; 1. a by-value record whose `:int` field is an erased chain.
+(defdata HoldsInt (HI :int :int))
+(defn r-field [n : int] : HoldsInt
+  (with-region (fn [] (HI n (build n 0)))))
+
+;; 2. a (Vec int) of erased chains.
+(defn r-vec [n : int] : (Vec int)
+  (with-region (fn [] (let [v (:: (vec-new) (Vec int))] (vec-push! v (build n 0)) v))))
+
+;; 3. a (Map int int) whose value is an erased chain.
+(defn r-map [n : int] : (Map int int)
+  (with-region (fn [] (map-assoc (:: (map-new) (Map int int)) n (build n 0)))))
+
+;; 4. a bare `:int` result that is an erased chain -- the top-level note
+;;    already caught this; it stays pinned beside the shapes that escaped it.
+(defn r-int [n : int] : int
+  (with-region (fn [] (build n 0))))
+
+(defn main [] : int
+  (match (r-field 4) (HI a h) (do (println a) (println (chain-sum h))))   ;; 4 10
+  (println (chain-sum (vec-get (r-vec 4) 0)))                            ;; 10
+  (println (chain-sum (map-get (r-map 5) 5)))                            ;; 15
+  (println (chain-sum (r-int 6)))                                        ;; 21
+  0)

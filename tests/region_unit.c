@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 #include "region.h"
 
@@ -31,6 +32,24 @@ static int failures = 0;
 
 static void check(int cond, const char *what) {
     if (!cond) { printf("FAIL: %s\n", what); failures++; }
+}
+
+/* region-lock-hardening (h): the generation stack is PER-THREAD, ownership is
+ * PROCESS-WIDE.  The worker opens its own bracket while main has one open:
+ * its allocation must land in ITS generation (main's stays empty of it), main
+ * must still refuse to free() the worker's retired node, and the worker must
+ * see no generation of main's as "open" on its own thread. */
+struct worker_out { void *node; int saw_open_on_entry; int depth_after_push; };
+
+static void *worker(void *arg) {
+    struct worker_out *o = (struct worker_out *)arg;
+    o->saw_open_on_entry = tur_region_active();
+    int d = tur_region_push();
+    o->depth_after_push = d;
+    o->node = tur_region_alloc(24);
+    tur_region_note_escape(o->node);        /* keep it: retire, do not rewind */
+    tur_region_pop_checked(d);
+    return NULL;
 }
 
 int main(void) {
@@ -137,6 +156,71 @@ int main(void) {
     check(tur_region_pop_checked(e5 + 1) == false, "checked pop refuses a bad depth");
     check(tur_region_active(), "refused checked pop left the generation open");
     check(tur_region_pop_checked(e5) == true, "correct depth then reclaims");
+
+    /* ---- region-lock-hardening (2026-09-06) ------------------------------
+     *
+     * (e) The note flags the generation that OWNS the pointer, not just the
+     * innermost.  A store hook (vec-push! into an outer container) fires
+     * inside a NESTED bracket for a value the OUTER generation allocated; the
+     * outer generation is the one that must not rewind. */
+    int o1 = tur_region_push();
+    void *outer_node = tur_region_alloc(32);
+    int o2 = tur_region_push();
+    tur_region_note_escape(outer_node);          /* noted while o2 is innermost */
+    check(tur_region_pop_checked(o2) == true, "owner flagging: inner generation still reclaims");
+    check(tur_region_pop_checked(o1) == false, "owner flagging: the OWNING outer generation retires");
+    check(tur_region_owns(outer_node), "owner flagging: the escaped node survives");
+
+    /* (f) A by-value aggregate is noted by its words: an erased pointer
+     * field blocks the rewind, a scalar-only aggregate does not. */
+    int w1 = tur_region_push();
+    void *hidden = tur_region_alloc(16);
+    struct { int64_t a; void *p; int64_t b; } agg = { 7, hidden, 9 };
+    tur_region_note_escape_words(&agg, sizeof agg);
+    check(tur_region_pop_checked(w1) == false, "words: an erased region pointer inside an aggregate blocks reclaim");
+    int w2 = tur_region_push();
+    (void)tur_region_alloc(16);
+    struct { int64_t a; double d; int64_t b; } scal = { 1, 2.5, 3 };
+    tur_region_note_escape_words(&scal, sizeof scal);
+    check(tur_region_pop_checked(w2) == true, "words: a scalar-only aggregate does not block reclaim");
+
+    /* (g) A skipped inner pop (a panic unwound through the inner bracket)
+     * must not jam the stack: the outer pop retires the abandoned inner
+     * generation and then handles its own.  Before this, the outer pop was
+     * refused as a mismatch, every later allocation landed in the stale
+     * inner generation, and no bracket could ever pop again. */
+    int s1 = tur_region_push();
+    void *s1a = tur_region_alloc(16);
+    int s2 = tur_region_push();
+    void *s2a = tur_region_alloc(16);
+    (void)s2;   /* ... s2's pop never runs ... */
+    check(tur_region_pop_checked(s1) == true, "skipped pop: the outer bracket still reclaims its own generation");
+    check(!tur_region_active(), "skipped pop: no generation left open");
+    check(tur_region_owns(s2a), "skipped pop: the abandoned inner generation is RETIRED, never rewound");
+    check(!tur_region_owns(s1a), "skipped pop: the outer generation was reclaimed");
+    check(tur_region_alloc(8) == NULL, "skipped pop: allocation falls back to malloc afterwards");
+    /* A spent (deeper-than-stack) handle stays a no-op. */
+    int s3 = tur_region_push();
+    tur_region_pop(s3 + 1);
+    check(tur_region_active(), "spent handle: a depth deeper than the stack is a no-op");
+    check(tur_region_pop_checked(s3) == true, "spent handle: the real depth then reclaims");
+
+    /* (h) threads: see `worker` above. */
+    {
+        int t1 = tur_region_push();
+        void *mine = tur_region_alloc(16);
+        struct worker_out o = { NULL, -1, -1 };
+        pthread_t th;
+        check(pthread_create(&th, NULL, worker, &o) == 0, "threads: spawn");
+        pthread_join(th, NULL);
+        check(o.saw_open_on_entry == 0, "threads: main's open generation is not open on the worker");
+        check(o.depth_after_push == 1, "threads: the worker's bracket is depth 1 on its own stack");
+        check(o.node != NULL, "threads: the worker allocated region memory");
+        check(tur_region_owns(o.node), "threads: main sees the worker's retired node as owned (never free()d)");
+        check(tur_region_owns(mine), "threads: main still owns its own allocation");
+        check(tur_region_pop_checked(t1) == true, "threads: the worker's bracket did not disturb main's");
+        check(tur_region_owns(o.node), "threads: the worker's retired node stays owned after main's pop");
+    }
 
     tur_region_shutdown();
 
