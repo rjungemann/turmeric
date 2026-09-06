@@ -9376,6 +9376,30 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* DEDUP-1: offsetof, used by the RcControlBlock layout guard below. */
     buf_puts(out, "#include <stddef.h>\n");
     buf_puts(out, "#include <string.h>\n");
+    /* Three CRT functions whose declarations c2mir does not pick up from the
+     * MinGW headers.  Without a prototype the call is implicit-int, so a 64-bit
+     * pointer comes back truncated to 32 bits and sign-extended: non-NULL, so a
+     * loop that only counts results looks correct, and a crash the moment one is
+     * dereferenced.  path/normalize hit it through strtok and segfaulted under
+     * `tur jit` while running correctly under `tur run`; stdlib/httpd.tur uses
+     * strpbrk and memchr.
+     *
+     * Measured in one translation unit: strstr, strchr, strrchr, malloc, calloc,
+     * strdup and getenv all return intact pointers -- only these three truncate.
+     * Why these and not their neighbours (strpbrk is declared identically to
+     * strrchr) is not established; the declarations are the fix either way.
+     *
+     * Guarded on __GNUC__ because c2mir does not define it -- the same
+     * discriminator the DK prelude uses -- so a real toolchain never sees a
+     * redeclaration and never warns about the missing dllimport attribute.
+     * Declarations only, so the two halves of an S2 split need not agree on
+     * anything here, and the text is identical on every host. */
+    buf_puts(out,
+        "#if defined(_WIN32) && !defined(__GNUC__)\n"
+        "extern char *strtok(char *, const char *);\n"
+        "extern char *strpbrk(const char *, const char *);\n"
+        "extern void *memchr(const void *, int, size_t);\n"
+        "#endif\n");
     /* ADT slab allocator (docs/reported/multi-variant-adts-always-heap-allocate.md).
      *
      * A multi-variant ADT box is malloc'd on every construction and, when the
@@ -15507,6 +15531,30 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
     buf_puts(out, "#include <stdio.h>\n");
     buf_puts(out, "#include <stdlib.h>\n");
     buf_puts(out, "#include <string.h>\n");
+    /* Three CRT functions whose declarations c2mir does not pick up from the
+     * MinGW headers.  Without a prototype the call is implicit-int, so a 64-bit
+     * pointer comes back truncated to 32 bits and sign-extended: non-NULL, so a
+     * loop that only counts results looks correct, and a crash the moment one is
+     * dereferenced.  path/normalize hit it through strtok and segfaulted under
+     * `tur jit` while running correctly under `tur run`; stdlib/httpd.tur uses
+     * strpbrk and memchr.
+     *
+     * Measured in one translation unit: strstr, strchr, strrchr, malloc, calloc,
+     * strdup and getenv all return intact pointers -- only these three truncate.
+     * Why these and not their neighbours (strpbrk is declared identically to
+     * strrchr) is not established; the declarations are the fix either way.
+     *
+     * Guarded on __GNUC__ because c2mir does not define it -- the same
+     * discriminator the DK prelude uses -- so a real toolchain never sees a
+     * redeclaration and never warns about the missing dllimport attribute.
+     * Declarations only, so the two halves of an S2 split need not agree on
+     * anything here, and the text is identical on every host. */
+    buf_puts(out,
+        "#if defined(_WIN32) && !defined(__GNUC__)\n"
+        "extern char *strtok(char *, const char *);\n"
+        "extern char *strpbrk(const char *, const char *);\n"
+        "extern void *memchr(const void *, int, size_t);\n"
+        "#endif\n");
     /* ADT slab allocator (docs/reported/multi-variant-adts-always-heap-allocate.md).
      *
      * A multi-variant ADT box is malloc'd on every construction and, when the
