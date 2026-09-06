@@ -19,7 +19,7 @@
  *   5. With no region open, allocation returns NULL so the caller falls back
  *      to malloc.  A region is an optimisation, never a requirement.
  *
- * See docs/upcoming/regions-plan.md.
+ * See docs/archive/regions-plan.md.
  */
 #include <stdio.h>
 #include <stdlib.h>

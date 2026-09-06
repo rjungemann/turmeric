@@ -13,7 +13,7 @@ and is sound, and every step below is an equivalence over the integers, so
 the one-directional invariant (never `RT_VALID` unless entailed) is preserved
 by construction.
 
-Companion to [solver-extension-plan.md](solver-extension-plan.md) (SX), which
+Companion to [solver-extension-plan.md](../archive/solver-extension-plan.md) (SX), which
 this plan does not replace: SX is about *incrementality and boolean
 structure*; this is about *what the arithmetic stage can decide at all*.  SX7
 ("integer completeness, the long tail") is the SX phase this work belongs
@@ -406,4 +406,4 @@ and it is cheap:
 - Dutertre, de Moura, *A Fast Linear-Arithmetic Solver for DPLL(T)* (2006)
   -- the SX4 simplex this plan does not build.
 - [docs/archive/refinement-types-plan.md](../archive/refinement-types-plan.md)
-  S2a-S2c; [solver-extension-plan.md](solver-extension-plan.md) SX0(b), SX7.
+  S2a-S2c; [solver-extension-plan.md](../archive/solver-extension-plan.md) SX0(b), SX7.

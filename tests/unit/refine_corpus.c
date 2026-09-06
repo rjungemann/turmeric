@@ -167,7 +167,7 @@ static char *slurp(const char *path, size_t *len_out) {
  *
  * Emitted for every benchmark, not only the capped ones: the peaks of the
  * benchmarks that did NOT cap out are what say how much headroom the corpus
- * actually leaves.  See docs/upcoming/solver-extension-plan.md (SX0(b)). */
+ * actually leaves.  See docs/archive/solver-extension-plan.md (SX0(b)). */
 static void report_caps(const char *path) {
     const char *e = getenv("TUR_CORPUS_CAPS");
     if (!e || e[0] != '1') return;

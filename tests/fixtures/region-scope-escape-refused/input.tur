@@ -1,4 +1,4 @@
-;; RM3 R4 (docs/upcoming/regions-plan.md): a value that ESCAPES its generation
+;; RM3 R4 (docs/archive/regions-plan.md): a value that ESCAPES its generation
 ;; must block the rewind, and this reads the escapee afterwards to prove it did.
 ;;
 ;; The assertion has teeth because `arena_reset` memsets the reclaimed bytes to

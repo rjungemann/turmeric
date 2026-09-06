@@ -1,6 +1,6 @@
 # Refinement solver cap sweep (SX0(b))
 
-Generated: 2026-09-06 04:38 at 94afc38a by `benchmarks/run-cap-sweep.sh`.
+Generated: 2026-09-06 05:00 at 54c5f289 by `benchmarks/run-cap-sweep.sh`.
 
 Every cap below degrades to `RT_UNKNOWN` -> the runtime check survives, so a
 hit is never unsound -- it is lost completeness, and only lost completeness that
@@ -45,11 +45,11 @@ means something only while its hits are 0.
 | euf_terms | 982 | 512 | 512 | 0% | qf_lra_deep_arith_chain_sat.smt2 |
 | no_shared | 0 | 9 | 16 | 44% | gen_mixed_sat_00013.smt2 |
 | path_hyps | n/a | n/a | 8 | n/a | this population does not elaborate |
-| model_vars | n/a | n/a | 8 | n/a | this harness does not run the model search |
+| model_vars | n/a | n/a | 8 | n/a | the corpus emitter does not report the search's caps |
 | la_fm (FM blow-up) | 0 | - | - | - | - |
 | no_rounds (exchange budget) | 0 | - | - | - | - |
-| model_vars would run | n/a | - | - | - | this harness does not run the model search |
-| model_evals (search budget) | n/a | - | - | - | this harness does not run the model search |
+| model_vars would run | n/a | - | - | - | the corpus emitter does not report the search's caps |
+| model_evals (search budget) | n/a | - | - | - | the corpus emitter does not report the search's caps |
 
 ## in-tree fixtures -- 88 unit(s), 0 with a cap hit
 

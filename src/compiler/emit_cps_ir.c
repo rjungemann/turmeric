@@ -6323,7 +6323,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                 : atoms_csv_call_typed(ce, t->as.letcall.args, t->as.letcall.n,
                                        t->as.letcall.fn, lc_spec);
             char *bn = cvar_cname(ce, t->as.letcall.x);
-            /* RM3 R4 (docs/upcoming/regions-plan.md): NO region boundary here,
+            /* RM3 R4 (docs/archive/regions-plan.md): NO region boundary here,
              * deliberately.  The CPS path's `bt-scope` calls all land on the
              * CT_TAILCALL cps->direct arm, which carries the push/pop -- probed
              * with the bracket in tail position, in an arithmetic operand, and

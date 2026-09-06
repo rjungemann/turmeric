@@ -111,7 +111,7 @@
  * largest phases on this measurement -- SX4 (incremental simplex) is worth
  * building only if REFINE_MAX_LA_CONSTR actually bites, and SX6 (boolean
  * structure beyond small DNF) only if the cube caps do.  See
- * docs/upcoming/solver-extension-plan.md, SX0(b).
+ * docs/archive/solver-extension-plan.md, SX0(b).
  *
  * `hits` counts the times a cap fired.  `peak` is the high-water mark of the
  * quantity that cap bounds, recorded on every query rather than only on the

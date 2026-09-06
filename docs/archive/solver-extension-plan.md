@@ -6,6 +6,14 @@ description: Extending the refinement solver into an incremental, backtracking d
 
 # Solver Extension (SX)
 
+> **Archived 2026-09-05.** Every live phase has landed (SX0, SX1, SX2, SX3,
+> SX8a-c, SX9 including the `"schema": 1` stamp); what is not built -- SX4,
+> SX5's remainder, SX6, SX6b -- is parked on evidence gates that have been
+> measured shut, with the re-measurement recipe recorded under each.  A later
+> integer-side slice of SX7 lives in
+> [../upcoming/solver-integer-tail-plan.md](../upcoming/solver-integer-tail-plan.md),
+> which is where the solver's open work is tracked now.
+
 **Status:** proposal. SX0 (both instruments), SX8a (the interrogation surface),
 SX1 (the trail primitive, minus its effect row), SX2 in full (measurement,
 combinators, and the depth-first driver), and SX3 (incremental EUF) have
@@ -128,7 +136,7 @@ Facts, checked against the source. The user-facing feature is documented in
 in
 [refinement-solver-internals-guide.md](../guides/refinement-solver-internals-guide.md);
 the design of record is
-[../archive/refinement-types-plan.md](../archive/refinement-types-plan.md).
+[refinement-types-plan.md](refinement-types-plan.md).
 
 | Stage | File | What it decides | Incremental? |
 |---|---|---|---|
@@ -1264,7 +1272,7 @@ that as a side effect. It is not a reason to start SX3 on its own (the number is
 a flat constant, not a growth curve), but it is a real second payoff once the
 phase is taken for its cost argument. A per-entry arena was measured as the
 alternative way to reclaim it and came back NO --
-[per-entry-arena-gate.md](../archive/history/per-entry-arena-gate.md).
+[per-entry-arena-gate.md](history/per-entry-arena-gate.md).
 
 - **Do:** extend the `euf_*` seam with `euf_mark` / `euf_undo_to`, backed by
   `src/compiler/trail_c.h` (the C sibling of SX1, same stamp discipline).
@@ -1343,7 +1351,7 @@ alternative way to reclaim it and came back NO --
 
   **It bought headroom, not capability:** all four capped units had to answer
   `UNKNOWN` regardless, so no verdict moved. Full numbers and method in
-  [../archive/history/no-max-shared-raise.md](../archive/history/no-max-shared-raise.md).
+  [history/no-max-shared-raise.md](history/no-max-shared-raise.md).
 
   This leaves S3 with **no cap carrying a live signal**, which removes the one
   standalone reason to start SX5 early. The rest of SX5 (running the exchange
@@ -1439,7 +1447,7 @@ obligations.
 
 > **First slice LANDED 2026-09-05, in C, not via the Turmeric prototype this
 > phase prescribes** -- see
-> [solver-integer-tail-plan.md](solver-integer-tail-plan.md). The Omega test's
+> [solver-integer-tail-plan.md](../upcoming/solver-integer-tail-plan.md). The Omega test's
 > two exact steps (gcd normalization of inequalities; the divisibility test
 > and unit-coefficient substitution on equations) went straight into
 > `refine_solver_arith.c` behind the unchanged `la_*` seam, because at ~150
@@ -1734,8 +1742,13 @@ one dishonest failure mode a query surface can have.
   `solver-query-guide.md`, which is where they read better and is treated as
   closing that deliverable.
 
-  Move this plan to `docs/archive/` when the last phase lands, per the
-  archiving rule.
+  **The `"schema": 1` stamp landed 2026-09-05**: `--dump-refine=json` and
+  `turi_smt_check` both write 1, the note reads "stable since SX9", and the
+  rule is that an additive change keeps the number while a removed or
+  retyped key bumps it.  Schema 0 was the same shape flagged unstable.
+
+  ~~Move this plan to `docs/archive/` when the last phase lands, per the
+  archiving rule.~~  Moved 2026-09-05.
 
 ### Recommended order
 
@@ -1855,7 +1868,7 @@ surface slotted where it is cheapest:
 
 - [refinement-solver-internals-guide.md](../guides/refinement-solver-internals-guide.md) -- the current pipeline, caps, seams, diagnostics.
 - [refinement-types-guide.md](../guides/refinement-types-guide.md) -- the user-facing feature.
-- [../archive/refinement-types-plan.md](../archive/refinement-types-plan.md) -- design of record; S0--S4 and RT1--RT7 phase names, the S2b/S2c/S4 tail, the Z3 retirement criteria.
+- [refinement-types-plan.md](refinement-types-plan.md) -- design of record; S0--S4 and RT1--RT7 phase names, the S2b/S2c/S4 tail, the Z3 retirement criteria.
 - [delimited-control-operators-guide.md](../guides/delimited-control-operators-guide.md), [effects-system-guide.md](../guides/effects-system-guide.md), [backtracking-guide.md](../guides/backtracking-guide.md), [logic-programming-guide.md](../guides/logic-programming-guide.md), [experimental-flags-guide.md](../guides/experimental-flags-guide.md).
 - Source: `src/compiler/refine_*.{c,h}`, `src/runtime/cps_prompt.{c,h}`, `src/runtime/generated/tur_rt_split.c`, `stdlib/{logic,backtrack,stm,ref}.tur`.
 

@@ -749,7 +749,7 @@ bool emit_slot_word_is(const char *cname);
  * deliberately absent -- its own body already ascribes the word back to the
  * element, so it hands back the element, not the slot. */
 bool emit_call_is_raw_slot_read(const struct Expr *e);
-/* RM3 R4 (docs/upcoming/regions-plan.md): the region boundary, shared with the
+/* RM3 R4 (docs/archive/regions-plan.md): the region boundary, shared with the
  * CPS emitter.  `emit_binding_is_region_scope` is the callee test (and is false
  * with the flag off, so both call sites are inert by default);
  * `emit_region_scope_reclaims` is the STATIC lock -- true when the bracket's

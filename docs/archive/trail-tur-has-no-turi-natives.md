@@ -160,6 +160,6 @@ performance. It should not be justified on speed.
 
 ## Related
 
-- Graduation record and the re-entry decision: `docs/upcoming/solver-extension-plan.md` 3.5, SX9.
+- Graduation record and the re-entry decision: `docs/archive/solver-extension-plan.md` 3.5, SX9.
 - The carve-out that documents the current gap: `docs/artifacts/turi-preload-carve-out.txt`.
 - Prior art for the same shape: `docs/archive/history/turi-map-set-hamt-interpreter-gap.md`.

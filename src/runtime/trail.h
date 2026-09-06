@@ -50,7 +50,7 @@
  *    The plan's answer is (a) a checked error, shipped here; (b) snapshotting
  *    the live trail segment is a measured decision, not a default.
  *
- * See docs/upcoming/solver-extension-plan.md, sections 3.2-3.5 and SX1. */
+ * See docs/archive/solver-extension-plan.md, sections 3.2-3.5 and SX1. */
 
 #include <stdbool.h>
 #include <stdint.h>

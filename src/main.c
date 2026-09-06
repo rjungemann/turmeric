@@ -9963,7 +9963,7 @@ static void xf_json_puts(FILE *f, const char *s) {
  * test any solver against `tur` in BOTH directions (`TUR_REFINE_DUMP=1` writes
  * SMT-LIB out; this reads it back in) without `tur` ever linking one.
  *
- * See docs/upcoming/solver-extension-plan.md (SX8a).
+ * See docs/archive/solver-extension-plan.md (SX8a).
  * ------------------------------------------------------------------------- */
 
 /* Exit codes mirror the answer so a shell harness can branch on `$?` without

@@ -192,12 +192,12 @@ char *turi_wasm_strdup(const char *s);
  *
  * Returns a malloc'd JSON string; free it with turi_wasm_free_string.
  *
- *   {"schema":0,"results":[{"answer":"unsat","decided_by":"S2 (arithmetic)"}]}
- *   {"schema":0,"results":[{"answer":"sat","model":[{"name":"x","sort":"Int","value":1}],
+ *   {"schema":1,"results":[{"answer":"unsat","decided_by":"S2 (arithmetic)"}]}
+ *   {"schema":1,"results":[{"answer":"sat","model":[{"name":"x","sort":"Int","value":1}],
  *                           "decided_by":"bounded model search"}]}
- *   {"schema":0,"results":[],"error":"unsupported command"}
+ *   {"schema":1,"results":[],"error":"unsupported command"}
  *
- * `schema` is 0 while the shape is unstable, matching --dump-refine=json.
+ * `schema` is 1, the stable shape since SX9, matching --dump-refine=json.
  */
 char *turi_smt_check(const char *smtlib);
 

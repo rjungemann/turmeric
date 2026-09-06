@@ -12,7 +12,7 @@
 # The output is decision data, not a performance number.  The plan gates its
 # two largest phases on it: SX4 (incremental simplex) is worth starting only if
 # REFINE_MAX_LA_CONSTR actually bites, and SX6 (boolean structure beyond small
-# DNF) only if the cube caps do.  See docs/upcoming/solver-extension-plan.md.
+# DNF) only if the cube caps do.  See docs/archive/solver-extension-plan.md.
 #
 # Populations:
 #   1. the SMT-LIB corpus      (tests/corpus/smtlib, via tur_refine_corpus)
@@ -125,7 +125,7 @@ PRETTY = {"cubes": "cubes", "cube literals": "cube_lits",
 # population cannot reach it", so the corpus table says n/a and why.
 COMPILED_ONLY = {
     "path_hyps":  "this population does not elaborate",
-    "model_vars": "this harness does not run the model search",
+    "model_vars": "the corpus emitter does not report the search's caps",
 }
 
 # Caps whose peak saturates at the limit because the producer stops at it.

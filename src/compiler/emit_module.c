@@ -7878,7 +7878,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
         if (heap) {
             /* malloc the by-value header, store fields inline, return the typed
              * pointer (no int64 carrier cast -- the pointer IS the value). */
-            /* RM3 R2 (docs/upcoming/regions-plan.md): this is the spine node.
+            /* RM3 R2 (docs/archive/regions-plan.md): this is the spine node.
              * A `:heap` ADT's monomorph ctor mallocs one per link, and it is
              * the allocation RM1 cannot reach (it escapes its constructor by
              * construction) and RM2 cannot own (a persistent tail is shared).
@@ -8214,7 +8214,7 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * other door.  A hand-rolled tagged-None box (tag 0, non-null pointer --
      * the historical layout the read side still accepts) maps to the niche
      * null rather than reading its uninitialised payload word. */
-    /* RM3 regions (docs/upcoming/regions-plan.md; on by default since the
+    /* RM3 regions (docs/archive/regions-plan.md; on by default since the
      * 2026-09-05 graduation): the emitted program reaches the region allocator
      * from every spine-node constructor and drop path, and registers
      * tur_region_shutdown from its static init.  This is the DECLARATION half
@@ -13855,7 +13855,7 @@ int emit_program(Buf *out, const Expr *program) {
                 }
                 buf_printf(&early_file, ") {\n");
                 if (heap) {
-                    /* RM3 R2/R4 (docs/upcoming/regions-plan.md): the THIRD
+                    /* RM3 R2/R4 (docs/archive/regions-plan.md): the THIRD
                      * spine-node ctor emitter.  `emit_program` emits base ctors
                      * HERE rather than through emit_adt_typedef_and_ctors, so a
                      * NON-parametric `:heap` ADT -- `(defdata Link :heap ...)`,

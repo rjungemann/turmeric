@@ -702,7 +702,7 @@ emits its own machine-readable per-benchmark line under `TUR_CORPUS_CAPS=1`
 (aggregation lives in the sweep script because each benchmark is decided in a
 forked child). The current numbers, and what they say about which solver
 extensions are worth building, are in
-[../upcoming/solver-extension-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/solver-extension-plan.md)
+[../archive/solver-extension-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/solver-extension-plan.md)
 under SX0(b).
 
 ### Asking the solver directly -- `tur smt` and `--dump-refine=json`
@@ -794,7 +794,7 @@ The solver is already in the WASM module (`compiler/refine_*.c` are
 
 ```js
 const json = Module.ccall('turi_smt_check', 'string', ['string'], [script]);
-// {"schema":0,"results":[{"answer":"unsat","decided_by":"S2 (arithmetic)"}]}
+// {"schema":1,"results":[{"answer":"unsat","decided_by":"S2 (arithmetic)"}]}
 ```
 
 Same reader, same chain, same bounded model search and same push/pop semantics
@@ -802,8 +802,8 @@ as `tur smt` -- two doors onto one solver should not disagree. One `results`
 entry per `(check-sat)` in script order; a `sat` entry carries its `model`
 inline (the witness belongs with the answer, so nothing has to ask twice). A
 script outside the fragment returns an `error` key and an **empty** `results`
-array -- refused whole, never partially parsed. `schema` is 0 while the shape is
-unstable, matching `--dump-refine=json`.
+array -- refused whole, never partially parsed. `schema` is 1, the stable shape
+since SX9, matching `--dump-refine=json`.
 
 The result is malloc'd; free it from JS with `Module._free`. Nothing reachable
 from this entry point touches elaboration or discharge, so no answer it gives
@@ -844,8 +844,10 @@ writer and reader are now the same file
 in both directions: an external harness can differentially test any solver
 against `tur` without `tur` ever linking one.
 
-The JSON schema is **explicitly unstable** and says so in every record
-(`"schema": 0`). Branch on it; do not assume it.
+The JSON schema is **stable** since SX9 and says so in every record
+(`"schema": 1`; schema 0 was the same shape while it was flagged unstable).
+Branch on it: an additive change keeps the number, a key removed or retyped
+bumps it.
 
 `TUR_REFINE_NO_DISCHARGE` is a **test seam, not a feature gate** -- env-only,
 with no `--enable`, no `EXPERIMENTS[]` row and no CLI flag. It exists because

@@ -1,5 +1,5 @@
 /* region.c -- declared lifetimes (RM3).  See region.h for the design and
- * docs/upcoming/regions-plan.md for the phase.
+ * docs/archive/regions-plan.md for the phase.
  *
  * One Arena per generation rather than watermarks into a shared one.  Arena
  * exposes `arena_reset` (whole-arena rewind) and `arena_owns`, not a

@@ -149,8 +149,10 @@ int main(void) {
           "and that single answer is the right one");
 
     /* --- the envelope ----------------------------------------------------- */
-    CHECK(smt_contains("(check-sat)", "\"schema\":0"),
-          "every response carries the unstable-schema marker");
+    /* SX9: schema 1 is the stable shape; 0 was the same shape while it was
+     * flagged unstable.  Pinned so a bump is deliberate, never incidental. */
+    CHECK(smt_contains("(check-sat)", "\"schema\":1"),
+          "every response carries the stable-schema marker (1)");
     {
         char *r = turi_smt_check(NULL);
         CHECK(r != NULL, "a NULL script returns a string rather than crashing");

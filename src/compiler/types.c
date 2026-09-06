@@ -1438,7 +1438,7 @@ bool adt_ctor_is_null_none(const AdtDef *def, const CtorDef *ctor) {
  * user who turns it on should get the TUR-W0060 lifecycle warning and a plan to
  * read.  `experiment_warn_if_used` is once-per-compile guarded, so calling it
  * from this hot predicate costs one index lookup after the first. */
-/* RM3 regions (docs/upcoming/regions-plan.md): declared lifetimes over the
+/* RM3 regions (docs/archive/regions-plan.md): declared lifetimes over the
  * arena, for values whose owner is a SCOPE rather than another value -- the
  * per-node spine box of a persistent recursive structure, which RM1 cannot
  * reach and RM2 cannot own.
@@ -2201,7 +2201,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
          * and a positional one writes `__r->as.<Ctor>._N`, in lockstep with the
          * typedef + field-read sites. */
         if (app_heap) {
-            /* RM3 R2 (docs/upcoming/regions-plan.md): the spine node, at the
+            /* RM3 R2 (docs/archive/regions-plan.md): the spine node, at the
              * MONOMORPH ctor.  Its sibling is the base ctor in emit_module.c
              * (`emit_adt_typedef_and_ctors`) -- the two mirror each other and a
              * change to one belongs in both.  That is not a general caution: it

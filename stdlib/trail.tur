@@ -42,7 +42,7 @@
 ;;; propagates to every caller the walk reaches.
 ;;;
 ;;; See docs/guides/backtrackable-state-guide.md, and
-;;; docs/upcoming/solver-extension-plan.md sections 3.2-3.5.
+;;; docs/archive/solver-extension-plan.md sections 3.2-3.5.
 ;;;
 ;;; Since: SX1 (graduated from `--enable=backtrackable-state` 2026-08-29)
 ;; Backtrackable state (solver-extension-plan SX1).

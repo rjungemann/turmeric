@@ -12,7 +12,7 @@
  * Every node allocated between a push and its matching pop dies at the pop, in
  * one O(slabs) rewind, with no per-node bookkeeping at all.
  *
- * See docs/upcoming/regions-plan.md.  ON BY DEFAULT since graduation out of
+ * See docs/archive/regions-plan.md.  ON BY DEFAULT since graduation out of
  * `--enable=regions` on 2026-09-05 (g_opt_regions, default true); TUR_REGIONS=0
  * is the bisection hatch that restores the pre-graduation build.
  *

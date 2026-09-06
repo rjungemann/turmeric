@@ -4821,6 +4821,132 @@ static bool region_field_form_is_scalar(const Form *f) {
 
 static bool region_type_reaches_node(EmitCtx *ctx, Type t,
                                      const AdtDef **seen, uint32_t *n_seen,
+                                     int depth);
+
+/* The heap collections whose storage is NEVER region memory: handle and
+ * buffer/nodes alike are inline-C `malloc` (stdlib/vec.tur, map.tur over
+ * src/runtime/hamt.c, set.tur, mutmap.tur), and the container-insert bridge
+ * that boxes a by-value aggregate element (`__tur_pbox` / `__tur_box`,
+ * this file) is plain `malloc` too.  The region router is emitted at the
+ * four ADT-ctor sites and nowhere else, and these defs' emitted ctors are
+ * called nowhere (checked across every snapshot at graduation).  The same
+ * compiler-warranted name list the option-niche plan uses (types.c) -- and,
+ * as there, the argument does not REST on the name: the runtime lock
+ * (`tur_region_note_escape`) still sees the escaping handle, so a handle
+ * that somehow did land in the generation retires rather than rewinds.
+ *
+ * What a collection can transitively reach is therefore exactly what its
+ * ELEMENT types can reach: an int64 word reaches nothing, a malloc'd box
+ * around a by-value aggregate reaches what the aggregate's fields reach, a
+ * `:heap` node element is a pointer INTO the generation.  So the arm below
+ * asks the element types the same question, recursively. */
+static bool region_def_is_malloc_collection(const AdtDef *def) {
+    if (!def || !def->name || !def->is_heap) return false;
+    return strcmp(def->name, "Vec") == 0 || strcmp(def->name, "Map") == 0 ||
+           strcmp(def->name, "Set") == 0 || strcmp(def->name, "MutableMap") == 0;
+}
+
+/* The ADT walk proper, shared by the TY_ADT arm (n_args == 0) and the TY_APP
+ * arm (a parametric monomorph such as `(Pair int int)` or `(Option Link)`).
+ * A parametric def's field is declared over a type VARIABLE, so the field
+ * walk substitutes the monomorph's arguments (substitute_adt_app_type_owned)
+ * before asking whether the field reaches a node -- which is what turned
+ * `(Pair int int)` from "refused on sight" into a proved scalar record, and
+ * keeps `(Pair Link int)` refused: its substituted field IS the node. */
+static bool region_adt_reaches_node(EmitCtx *ctx, AdtDef *def,
+                                    const Type *args, uint8_t n_args,
+                                    const AdtDef **seen, uint32_t *n_seen,
+                                    int depth) {
+    if (!def) return true;
+    if (def->is_heap) return true;       /* THE node R2 routes */
+    /* The type ARGUMENTS are walked before the def goes on the path.  They
+     * are values the fields hold, not a route back through the def, so the
+     * same def appearing as its own argument -- `(Pair (Pair int int) int)`,
+     * nesting -- must not read as a cycle; the by-value child sits in a
+     * plain-malloc box (the byval<->carrier field bridge), which reaches
+     * what its own fields reach and nothing more. */
+    for (uint8_t i = 0; i < n_args; i++)
+        if (region_type_reaches_node(ctx, args[i], seen, n_seen, depth - 1))
+            return true;
+    /* `seen` is the current PATH, not a visited set, and the difference
+     * is a use-after-free.  It used to read a repeat as "already fully
+     * explored" and return false -- but a def reached again while it is
+     * still on the path means the type is CYCLIC, which is exactly
+     * "reaches a node".  Mutual recursion is the shape that shows it:
+     *
+     *   (defdata MB :copy (MBnil) (MBcons :int :MA))
+     *   (defdata MA :copy (MAnil) (MAcons :int :MB))
+     *
+     * Neither def is self-recursive, so `is_self_recursive` does not
+     * catch either.  Be precise about what was and was not measured:
+     * a bracket returning `MA` DID rewind its own spine -- `(sumA (esc
+     * 6) 0)` printed 0 instead of 42 -- but that came from a (reverted)
+     * kind-based field accept that never recursed into MB at all; the
+     * old cycle-break was not on that path.  It is fixed here because
+     * the widening this walk was waiting for (resolving the declared
+     * field type -- docs/archive/region-walk-refuses-every-adt-result.md)
+     * WOULD recurse MA -> MB -> MA, and the old rule would then have
+     * proved MA reaches nothing.  Fixing a safety lock's cycle handling
+     * before the next widening rather than after.
+     *
+     * So: a hit is a cycle and refuses, and the entry is POPPED once the
+     * def is fully explored, which keeps a benign repeat (the same
+     * non-recursive ADT in two sibling fields) re-provable instead of
+     * refused.  Bounded by the 32 slots and the depth budget. */
+    for (uint32_t i = 0; i < *n_seen; i++)
+        if (seen[i] == def) return true;    /* cyclic: reaches */
+    if (*n_seen >= 32) return true;         /* out of budget */
+    seen[(*n_seen)++] = def;
+    if (!def->ctors) return true;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        const CtorDef *c = def->ctors[ci];
+        if (!c) return true;             /* ctor array still filling */
+        for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+            const Type *ft = c->fields[fi].full_type;
+            /* A SELF-RECURSIVE field's full_type is deliberately NULL
+             * (see AdtDef.is_self_recursive in types.h: recording a
+             * carrier full_type there would misclassify the field read).
+             * That is precisely the spine -- and precisely what the R4
+             * boxing site allocates -- so unknown reads as "reaches" and
+             * a recursive result is refused.
+             *
+             * NULL is NOT only the spine: `full_type` is populated for a
+             * type-variable field (TP1) and left NULL for an ordinary
+             * `:int`, and MEASURED, a genuine `:int` field and a
+             * carrier-erased `:MB` ADT field both report `kind == TY_INT`
+             * with no `full_type`, so the field's kind cannot tell them
+             * apart -- accepting on kind turned a mutually-recursive
+             * result into a use-after-free (`(sumA (esc 6) 0)` printing 0
+             * instead of 42).  So consult the declared FORM before
+             * refusing on a NULL full_type: a bare scalar primitive
+             * (`:int`, `:cstr`, ...) reaches nothing and is admitted; the
+             * spine (form names the def), an erased ADT field (form is an
+             * ADT name), `ptr`, and any compound form are not scalar
+             * keywords, so they still refuse here.  Admits `(RxIP :int
+             * :int)`, keeps `(MAcons :int :MB)` refused.  See
+             * docs/archive/region-walk-refuses-every-adt-result.md. */
+            if (!ft) {
+                const Form *ff = c->field_forms ? c->field_forms[fi] : NULL;
+                if (region_field_form_is_scalar(ff)) continue;
+                return true;
+            }
+            bool reaches;
+            if (n_args > 0) {
+                Type sub = substitute_adt_app_type_owned(ft, def, args);
+                reaches = region_type_reaches_node(ctx, sub, seen, n_seen, depth - 1);
+                free_struct_app_type(sub);
+            } else {
+                reaches = region_type_reaches_node(ctx, *ft, seen, n_seen, depth - 1);
+            }
+            if (reaches) return true;
+        }
+    }
+    (*n_seen)--;   /* fully explored and proved safe: off the path */
+    return false;
+}
+
+static bool region_type_reaches_node(EmitCtx *ctx, Type t,
+                                     const AdtDef **seen, uint32_t *n_seen,
                                      int depth) {
     if (depth <= 0) return true;
     Type rt = emit_resolve_type(ctx, t);
@@ -4847,23 +4973,9 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
                  * RxPair (RxIP :int :int))` came in here as a bare TY_ADT, found
                  * no app, and was refused -- along with every other
                  * non-parametric `defdata` result a bracket could return.
-                 *
-                 * Read its def directly and continue with zero type arguments.
-                 * The rest of this case is unchanged and is what does the actual
-                 * proving: `is_heap` still refuses, and every ctor's every field
-                 * is still walked.  A NULL `full_type` used to read as "reaches"
-                 * unconditionally; it now consults the declared FORM first (see
-                 * the field loop below), so an ordinary `:int` field is admitted
-                 * as a scalar while the spine and a carrier-erased ADT field
-                 * still refuse.
-                 *
-                 * So what this ADMITS is a non-heap bare ADT whose every ctor
-                 * field is a bare scalar primitive or carries a walkable
-                 * `full_type` that itself reaches nothing: a field-less enum
-                 * `(defdata Color (Red) (Green))` and `(defdata RPair
-                 * (RIP :int :int))` alike.  Both RETIRED before and REWIND now;
+                 * Read its def directly and walk it with zero type arguments.
                  * `region-scope-adt-result`'s `pick` (enum) and `one-round`
-                 * (RPair) pin them with the value read after the pop. */
+                 * (RPair) pin the shapes this admits, value read after the pop. */
                 if (rt.kind == TY_ADT && rt.as.adt_.def) {
                     def = rt.as.adt_.def;
                     n_args = 0;
@@ -4871,151 +4983,42 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
                     return true;
                 }
             }
-            if (def->is_heap) return true;       /* THE node R2 routes */
-            /* `seen` is the current PATH, not a visited set, and the difference
-             * is a use-after-free.  It used to read a repeat as "already fully
-             * explored" and return false -- but a def reached again while it is
-             * still on the path means the type is CYCLIC, which is exactly
-             * "reaches a node".  Mutual recursion is the shape that shows it:
-             *
-             *   (defdata MB :copy (MBnil) (MBcons :int :MA))
-             *   (defdata MA :copy (MAnil) (MAcons :int :MB))
-             *
-             * Neither def is self-recursive, so `is_self_recursive` does not
-             * catch either.  Be precise about what was and was not measured:
-             * a bracket returning `MA` DID rewind its own spine -- `(sumA (esc
-             * 6) 0)` printed 0 instead of 42 -- but that came from a (reverted)
-             * kind-based field accept that never recursed into MB at all; the
-             * old cycle-break was not on that path.  It is fixed here because
-             * the widening this walk is waiting for (resolving the declared
-             * field type -- docs/archive/region-walk-refuses-every-adt-result.md)
-             * WOULD recurse MA -> MB -> MA, and the old rule would then have
-             * proved MA reaches nothing.  Fixing a safety lock's cycle handling
-             * before the next widening rather than after.
-             *
-             * So: a hit is a cycle and refuses, and the entry is POPPED once the
-             * def is fully explored, which keeps a benign repeat (the same
-             * non-recursive ADT in two sibling fields) re-provable instead of
-             * refused.  Bounded by the 32 slots and the depth budget.
-             *
-             * Cost: a def on the path via its own TYPE ARGUMENT -- `(Pair2
-             * (Pair2 int int) int)`, nesting rather than a cycle -- is refused
-             * too.  No observable change: any such def's tyvar-typed fields were
-             * already refused by the `default:` arm below, checked against the
-             * pre-change walk (both retire). */
-            for (uint32_t i = 0; i < *n_seen; i++)
-                if (seen[i] == def) return true;    /* cyclic: reaches */
-            if (*n_seen >= 32) return true;         /* out of budget */
-            seen[(*n_seen)++] = def;
-            for (uint8_t i = 0; i < n_args; i++)
-                if (region_type_reaches_node(ctx, args[i], seen, n_seen, depth - 1))
-                    return true;
-            if (!def->ctors) return true;
-            for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
-                const CtorDef *c = def->ctors[ci];
-                if (!c) return true;             /* ctor array still filling */
-                for (uint32_t fi = 0; fi < c->n_fields; fi++) {
-                    const Type *ft = c->fields[fi].full_type;
-                    /* A SELF-RECURSIVE field's full_type is deliberately NULL
-                     * (see AdtDef.is_self_recursive in types.h: recording a
-                     * carrier full_type there would misclassify the field read).
-                     * That is precisely the spine -- and precisely what the R4
-                     * boxing site allocates -- so unknown reads as "reaches" and
-                     * a recursive result is refused.
-                     *
-                     * NULL is NOT only the spine, and that is why this refuses
-                     * more than it would like: `full_type` is populated for a
-                     * type-variable field (TP1) and left NULL for an ordinary
-                     * `:int`, so `(defdata RxPair (RxIP :int :int))` -- two
-                     * machine integers -- is refused here.  Widening it needs a
-                     * source of truth this struct does not carry: MEASURED, a
-                     * genuine `:int` field and a carrier-erased `:MB` ADT field
-                     * both report `kind == TY_INT` with no `full_type`, so the
-                     * field's kind cannot tell them apart, and accepting on kind
-                     * turned a mutually-recursive result into a use-after-free
-                     * (`(sumA (esc 6) 0)` printing 0 instead of 42).  The
-                     * declared form IS reachable (`c->field_forms[fi]` is
-                     * populated for plain defdata, contrary to its comment), so
-                     * the widening is available to whoever wants it -- it needs
-                     * form-to-type resolution at emit time, which is a layering
-                     * question, not a missing fact.  See
-                     * docs/archive/region-walk-refuses-every-adt-result.md.
-                     *
-                     * RESOLVED: consult the declared FORM before refusing on a
-                     * NULL full_type.  A field whose form is a bare scalar
-                     * primitive (`:int`, `:cstr`, ...) reaches nothing and is
-                     * admitted; the spine (form names the def), an erased ADT
-                     * field (form is an ADT name), `ptr`, and any compound form
-                     * are not scalar keywords, so they still refuse here.  The
-                     * one-shape-at-a-time widening the report and RM3 R5
-                     * graduation item 2 call for -- admits `(RxIP :int :int)`,
-                     * keeps `(MAcons :int :MB)` refused. */
-                    if (!ft) {
-                        const Form *ff =
-                            c->field_forms ? c->field_forms[fi] : NULL;
-                        if (region_field_form_is_scalar(ff)) continue;
-                        return true;
-                    }
-                    if (region_type_reaches_node(ctx, *ft, seen, n_seen, depth - 1))
-                        return true;
-                }
-            }
-            (*n_seen)--;   /* fully explored and proved safe: off the path */
-            return false;
+            return region_adt_reaches_node(ctx, def, args, n_args, seen, n_seen, depth);
         }
         case TY_APP: {
             /* A PARAMETRIC monomorph -- `(Vec int)`, `(Pair int int)` -- is a
-             * TY_APP, so it never reached the TY_ADT arm above and fell to
-             * `default:`: refused on sight.  That is the whole reason "a
+             * TY_APP, so it never reached the TY_ADT arm above and used to fall
+             * to `default:`: refused on sight.  That is the whole reason "a
              * bracket returning a Vec of scalars never rewinds" (R5 item 2's
              * own example of an over-conservative refusal).
              *
-             * This increment admits exactly ONE parametric shape: a `Vec`
-             * whose element is a scalar.  Two facts make it sound, one per
-             * lock.  (1) Every Vec a program can hold comes from inline-C
-             * `malloc` in stdlib/vec.tur (`vec-new` ~59, the buffer ~127):
-             * vec.tur never constructs one through the record constructor,
-             * and the EMITTED `ctor_Vec__<T>` -- which IS routed through the
-             * region router like every ADT ctor, and is defined in every TU
-             * -- is called nowhere (checked across all 148 snapshots at the
-             * graduation).  So in practice the escaping handle is never
-             * region memory.  But the argument does not REST on that: the
-             * bracket passes its result to `tur_region_note_escape` before
-             * the checked pop, so a Vec handle that somehow did land in the
-             * generation would flip the escape flag and RETIRE, never rewind.
-             * The name check is the same compiler-warranted warrant the
-             * option-niche plan uses for Vec/Map/Set ("the compiler itself
-             * emits their constructors as unconditional mallocs"), and the
-             * runtime lock is what makes it safe to be wrong.  (2) The ELEMENTS are
-             * what could transitively reach, and a scalar element is an int64
-             * word in that malloc'd buffer: nothing to reach.  Anything else
-             * refuses here -- a by-value aggregate element (heap-boxed at push
-             * by the escaping bridge, and a later shape once that is pinned),
-             * an ADT element, a node element -- as does any other parametric
-             * def, whose tyvar-typed fields the field walk would refuse anyway
-             * without argument substitution it does not yet do.
+             * Two shapes are decided here rather than refused.  A malloc-backed
+             * COLLECTION (region_def_is_malloc_collection) reaches exactly what
+             * its element types reach, so `(Vec int)`, `(Map int int)` and
+             * `(Set int)` rewind, `(Vec (Pair int int))` rewinds (the element
+             * box is plain malloc; the pair's fields are scalars), and `(Vec
+             * Link)` / `(Map int Link)` retire: their buffer holds pointers
+             * INTO the generation.  Any OTHER parametric def is walked as the
+             * ADT it is, with the monomorph's arguments substituted into its
+             * field types (region_adt_reaches_node): `(Pair int int)` and
+             * `(Option int)` rewind, `(Pair Link int)` and `(Option Link)`
+             * retire, and a `:heap` parametric def is refused as before.
              *
-             * Pinned by `region-scope-vec-scalar`: `(Vec int)` rewinds with
-             * its elements read back after the pop; `(Vec Link)` retires. */
+             * Pinned by `region-scope-vec-scalar` and
+             * `region-scope-parametric`, each value read back after the pop. */
             AdtDef *def = NULL;
             Type args[16];
             uint8_t n_args = 0;
             if (!type_extract_adt_app(&rt, &def, args, &n_args) || !def)
                 return true;
-            if (!def->name || strcmp(def->name, "Vec") != 0 || !def->is_heap ||
-                n_args != 1)
-                return true;
-            Type el = emit_resolve_type(ctx, args[0]);
-            switch (el.kind) {
-                case TY_NIL:  case TY_NEVER: case TY_BOOL:
-                case TY_INT:  case TY_INT8:  case TY_INT16: case TY_INT32: case TY_INT64:
-                case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
-                case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
-                case TY_CSTR:
-                    return false;           /* a scalar element reaches nothing */
-                default:
-                    return true;
+            if (region_def_is_malloc_collection(def)) {
+                for (uint8_t i = 0; i < n_args; i++)
+                    if (region_type_reaches_node(ctx, args[i], seen, n_seen, depth - 1))
+                        return true;
+                return false;
             }
+            if (n_args != def->n_type_params) return true;   /* not a monomorph */
+            return region_adt_reaches_node(ctx, def, args, n_args, seen, n_seen, depth);
         }
         default:
             /* Pointers, refs, rc, closures, structs, other containers, type
@@ -8303,7 +8306,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         const char *cn = type_c_name(emit_resolve_type(ctx, box_ty));
                         char *tmp = fresh_tmp(ctx);
                         indent_buf(body, ctx->indent);
-                        /* RM3 R4 (docs/upcoming/regions-plan.md): THIS is the
+                        /* RM3 R4 (docs/archive/regions-plan.md): THIS is the
                          * per-link spine box the RM1 leak sweep blames -- the
                          * `tur_adt_Subst *__t = malloc(...)` that boxes an
                          * SR4 recursive ctor field.  It is NOT a `:heap` ADT

@@ -97,7 +97,7 @@ All notable changes to Turmeric are documented here.
   that the hatch bites, per the flags guide. The flip regenerates all 148
   codegen snapshots (region externs, routed ctor allocations, the atexit
   shutdown, and a bracket at each boundary now appear in every program). Plan:
-  `docs/upcoming/regions-plan.md`; the GC guide documents the mode beside RC
+  `docs/archive/regions-plan.md`; the GC guide documents the mode beside RC
   and the cycle collector.
 
   The emitted C stays self-contained: `src/runtime/{arena,region}.{h,c}` are

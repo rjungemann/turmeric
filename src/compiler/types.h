@@ -1837,7 +1837,7 @@ bool         adt_ctor_is_null_none(const struct AdtDef *def,
  * `:heap`-ness is not the condition and `Cons` fails it. */
 bool         adt_app_is_niche_option(Type t);
 /* RM3: true when `--enable=regions` is on.  Warns once per compile (TUR-W0060)
- * on first consult; see docs/upcoming/regions-plan.md. */
+ * on first consult; see docs/archive/regions-plan.md. */
 bool         regions_enabled(void);
 const char  *region_free_fn(void);
 /* opaque-pointer-c-spelling (GRADUATED 2026-08-28): true when `def` is an

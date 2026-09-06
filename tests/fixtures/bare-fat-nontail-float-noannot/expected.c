@@ -374,7 +374,7 @@ static int64_t tur_opt_value(int64_t __o) {
  * Every node allocated between a push and its matching pop dies at the pop, in
  * one O(slabs) rewind, with no per-node bookkeeping at all.
  *
- * See docs/upcoming/regions-plan.md.  ON BY DEFAULT since graduation out of
+ * See docs/archive/regions-plan.md.  ON BY DEFAULT since graduation out of
  * `--enable=regions` on 2026-09-05 (g_opt_regions, default true); TUR_REGIONS=0
  * is the bisection hatch that restores the pre-graduation build.
  *
@@ -930,7 +930,7 @@ TUR_RT_API bool arena_owns(const Arena *a, const void *p) {
 /* ---- end src/runtime/arena.c ---- */
 /* ---- begin src/runtime/region.c (embedded verbatim) ---- */
 /* region.c -- declared lifetimes (RM3).  See region.h for the design and
- * docs/upcoming/regions-plan.md for the phase.
+ * docs/archive/regions-plan.md for the phase.
  *
  * One Arena per generation rather than watermarks into a shared one.  Arena
  * exposes `arena_reset` (whole-arena rewind) and `arena_owns`, not a

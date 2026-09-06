@@ -23,7 +23,7 @@
 ;;; (the bisection hatch) `with-region` is an ordinary identity call and the
 ;;; whole file is inert.
 ;;;
-;;; See docs/upcoming/regions-plan.md and docs/guides/gc-guide.md.
+;;; See docs/archive/regions-plan.md and docs/guides/gc-guide.md.
 ;;;
 ;;; Since: RM3 (prototype 2026-09-04; on by default since 2026-09-05)
 ;; Declared-lifetime region bracket (reclamation-plan RM3 / regions-plan).

@@ -1567,7 +1567,7 @@ set_target_properties(tur_wasm_glue_lang_unit PROPERTIES
 # `turi_smt_check` otherwise only runs inside a wasm module, where nothing in
 # CI can look at it.  Nothing in wasm_glue.c is wasm-specific, so linking
 # libturi_wasm runs the real thing -- against the same S0..S3 chain the browser
-# build links.  See docs/upcoming/solver-extension-plan.md (SX8c).
+# build links.  See docs/archive/solver-extension-plan.md (SX8c).
 add_executable(tur_wasm_glue_smt_unit
     ${CMAKE_SOURCE_DIR}/tests/wasm_glue_smt_unit.c
 )
@@ -1591,7 +1591,7 @@ set_target_properties(tur_wasm_glue_smt_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
-# RM3 region allocator unit test (docs/upcoming/regions-plan.md).  Pins the
+# RM3 region allocator unit test (docs/archive/regions-plan.md).  Pins the
 # SAFETY properties -- ownership across retirement, a conservative pop that
 # does not reclaim, a refused mismatched depth -- not that malloc works.
 add_executable(tur_region_unit

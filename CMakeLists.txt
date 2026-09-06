@@ -194,7 +194,7 @@ add_test(
   COMMAND bash tests/run-demangle.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
-# RM3: the region allocator's safety properties (docs/upcoming/regions-plan.md).
+# RM3: the region allocator's safety properties (docs/archive/regions-plan.md).
 add_test(
   NAME tur_region_unit
   COMMAND "${CMAKE_BINARY_DIR}/tur_region_unit"

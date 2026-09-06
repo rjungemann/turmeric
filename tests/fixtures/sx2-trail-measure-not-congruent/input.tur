@@ -11,7 +11,7 @@
 ;; not reachable today".  This fixture makes it reachable and pins the answer:
 ;; the hole does not exist, because the purity walk is DEFAULT-DENY and
 ;; `bt-set!` is an extern-c call it cannot prove pure.  The row is therefore not
-;; a soundness prerequisite for SX2 -- see docs/upcoming/solver-extension-plan.md.
+;; a soundness prerequisite for SX2 -- see docs/archive/solver-extension-plan.md.
 ;;
 ;; WHAT THIS FIXTURE ACTUALLY ASSERTS.  Not stdout -- `probe` is deliberately
 ;; never called, so stdout would look identical either way.  The observable is

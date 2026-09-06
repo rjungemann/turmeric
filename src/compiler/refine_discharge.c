@@ -692,7 +692,7 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
  * The peaks print even when nothing fired: headroom is the point.  "cubes
  * peaked at 3 of 64" and "cubes peaked at 61 of 64" are the same zero-hit
  * summary and completely different signals about whether S4 needs building.
- * See docs/upcoming/solver-extension-plan.md (SX0(b)). */
+ * See docs/archive/solver-extension-plan.md (SX0(b)). */
 static void refine_report_caps(void) {
     const RefineCapStats *c = refine_caps();
     struct { const char *name; uint32_t hits, peak, limit; } rows[] = {

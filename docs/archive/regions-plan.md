@@ -6,6 +6,16 @@ description: A scope form over the arena that already ships, so a persistent str
 
 # Regions (RM3)
 
+> **Archived 2026-09-05.** Graduated and on by default; every increment
+> (R1-R5) and every graduation item below has landed, so this is a record.
+> The one open thread it leaves is item 2's list of result shapes the static
+> escape walk still refuses, which is a standing one-shape-at-a-time widening
+> rather than a phase; the latest batch (parametric monomorphs by argument
+> substitution, and the malloc-backed collections by element type --
+> `region-scope-parametric`) is recorded under item 2.  The reclamation plan
+> (`../upcoming/reclamation-plan.md`, RM2) owns what is left of the spine
+> residue.
+
 **Status: GRADUATED 2026-09-05 -- ON BY DEFAULT.** `--enable=regions` is
 retired (a lingering enable is a `TUR-W0063` no-op for one minor line);
 `TUR_REGIONS=0` is the bisection hatch that restores the pre-graduation build,
@@ -34,7 +44,7 @@ the archive posture and never carries the bodies. The multi-module executable
 link, which chose the archive posture and then never named the archive, now
 adds `-lturt_runtime` like the single-file path.
 
-RM3 of [reclamation-plan.md](reclamation-plan.md). Read that plan's RM2
+RM3 of [reclamation-plan.md](../upcoming/reclamation-plan.md). Read that plan's RM2
 section first -- this phase exists because RM2's question has no answer at RM2.
 
 ## The problem this solves
@@ -442,7 +452,7 @@ per the standing rule it would not block a release if there were.
    the direct emitter's by-args spec matcher handing the call the clone
    minted for a SIBLING by-value record result, since its result guard
    only told two primitive kinds apart --
-   [capturing-thunk-returning-heap-field-record-garbles-int](../archive/capturing-thunk-returning-heap-field-record-garbles-int.md).
+   [capturing-thunk-returning-heap-field-record-garbles-int](capturing-thunk-returning-heap-field-record-garbles-int.md).
    Worth knowing for this plan because every bracket call site is that
    shape: a `[A]` generic whose type variable reaches only the result.
 
@@ -484,11 +494,34 @@ per the standing rule it would not block a release if there were.
    produce the elements are reclaimed and the Vec survives with both
    elements and its length read back correctly after the pop.
 
-   Still refused, deliberately: the **recursive spine** (the result IS the
+   ~~Still refused, deliberately: the **recursive spine** (the result IS the
    node); a **Vec of by-value aggregates** and **Map / Set** (the same
    warrant would apply, each its own increment with its own fixture);
    **other parametric monomorphs** like `(Pair int int)` (need tyvar
-   substitution in the field walk).
+   substitution in the field walk).~~
+
+   **Fifth batch, LANDED 2026-09-05 (`region-scope-parametric`)** -- the
+   whole of that list but the spine.  Two walk changes: (1) the ADT field
+   walk SUBSTITUTES a monomorph's type arguments into its field types
+   (`substitute_adt_app_type_owned`) before asking whether a field reaches,
+   so `(Pair int int)` and `(Option int)` REWIND while `(Pair Link int)` and
+   `(Option Link)` RETIRE -- the substituted field IS the node; a def that is
+   its own type argument (`(Pair (Pair int int) int)`) is nesting, not a
+   cycle, so the arguments are walked before the def goes on the path.  (2)
+   The four malloc-backed collections (`Vec`, `Map`, `Set`, `MutableMap` --
+   the same compiler-warranted name list as the option-niche plan) reach
+   exactly what their ELEMENT types reach: handle and storage are inline-C or
+   runtime `malloc`, and the container-insert bridge boxes a by-value element
+   with plain `malloc`, so `(Vec (Pair int int))`, `(Map int int)` and
+   `(Set int)` REWIND while `(Map int Link)` RETIRES.  Nine shapes, each with
+   its value read after the pop; both arms identical.  What the walk still
+   refuses is the recursive spine (by design), pointers, refs, closures and
+   type variables -- and a `:heap` parametric def of the user's own.
+
+   Writing it surfaced an unrelated pre-existing compile failure:
+   `vec-get-byval` on a `Vec` of a by-value struct
+   (`../reported/vec-get-byval-struct-element-returns-carrier.md`); the
+   fixture reads its elements through `(:: (vec-get v i) T)`.
 3. ~~**Close or price the residue** named under R4: the unbracketed CPS
    `CT_LETCALL` arm, argument-position allocation landing in the generation, and
    the pooled slab that is never returned (reachable at exit, not lost -- a pool,

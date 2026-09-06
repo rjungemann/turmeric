@@ -173,9 +173,14 @@ static void emit_one(Buf *out, const RefineObligation *ob) {
 }
 
 void refine_report_json(const RefineObligationVec *v, Buf *out) {
-    buf_puts(out, "{\n  \"schema\": 0,\n");
-    buf_printf(out, "  \"schema_note\": \"unstable through SX8a-b; "
-                     "stabilized at SX9 -- branch on schema, do not assume\",\n");
+    /* SX9: schema 1 is the STABLE shape of this record -- the keys below,
+     * with `vc_smtlib` in the refutation form the stages decide.  Schema 0
+     * was the same shape flagged unstable through SX8a-b; a consumer that
+     * branches on the number sees 1 from 0.45.0 on.  Bump it again only for
+     * a change that removes or retypes a key; adding one is compatible. */
+    buf_puts(out, "{\n  \"schema\": 1,\n");
+    buf_printf(out, "  \"schema_note\": \"stable since SX9 (0.45.0); "
+                     "additive changes keep 1 -- branch on schema\",\n");
     buf_printf(out, "  \"obligations\": [\n");
     uint32_t n = v ? v->n : 0;
     uint32_t emitted = 0;

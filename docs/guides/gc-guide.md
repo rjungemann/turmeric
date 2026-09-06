@@ -174,7 +174,7 @@ Individual values inside an arena are never freed one at a time.
 
 **Region-allocated values.** The third reclamation mode, on by default since
 2026-09-05 (see the
-[regions plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/regions-plan.md)).
+[regions plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/regions-plan.md)).
 A `:heap` `defdata` node -- a list cell, a tree node, the per-link box of a
 recursive sum -- has no unique owner by construction, so neither RC nor a
 scope-exit drop can free it. A **region** does not ask who owns the node; it

@@ -555,6 +555,11 @@ finding rather than a closed one:
 - **[spice-guides-bare-brace-manifest-syntax.md](spice-guides-bare-brace-manifest-syntax.md)** -- guides corrected; spice-README coverage and `tur add-cmake` comment-dropping are not
 - **[turi-interp-incremental-reclamation-plan.md](turi-interp-incremental-reclamation-plan.md)** -- TR1 carrier relocation shelved as demand-driven
 
+### Archived 2026-09-05
+
+- **[regions-plan.md](regions-plan.md)** -- RM3 declared regions over the arena; R1-R5 landed, `with-region` added, GRADUATED on by default 2026-09-05 (`TUR_REGIONS=0` is the hatch). The static escape walk's admitted result shapes are recorded under graduation item 2; the spine residue stays with [../upcoming/reclamation-plan.md](../upcoming/reclamation-plan.md)
+- **[solver-extension-plan.md](solver-extension-plan.md)** -- the refinement solver as an incremental, backtracking decision procedure; SX0/SX1/SX2/SX3/SX8/SX9 landed (trail, DFS driver, incremental EUF, `tur smt`, `--dump-refine=json` at schema 1), SX4/SX6 parked on measured-shut gates. Open solver work continues in [../upcoming/solver-integer-tail-plan.md](../upcoming/solver-integer-tail-plan.md)
+
 ### Completed plans swept out of `docs/upcoming/` (2026-08-15)
 
 Each of these declares itself executed/landed with nothing outstanding, so it

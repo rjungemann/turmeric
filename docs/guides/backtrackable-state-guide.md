@@ -254,7 +254,7 @@ on the mutators for a month checking as `#fx{}` before the declaration existed.
 ## `bt-scope` is also a region, and `with-region` is only a region
 
 On by default since 2026-09-05 (see the
-[regions plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/regions-plan.md);
+[regions plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/regions-plan.md);
 `TUR_REGIONS=0` turns it off for bisection), `bt-scope` does a second thing besides pushing a trail level: it opens an
 arena **generation**, and everything allocated inside that the returned value
 cannot reach is reclaimed in one rewind when the bracket exits. For a solver
@@ -301,4 +301,4 @@ it to explore, not to measure.
 - [Backtracking Guide](backtracking-guide.md) -- the list-monad search surface.
 - [Logic Programming Guide](logic-programming-guide.md) -- relational search and `Subst`.
 - [Delimited Control Operators Guide](delimited-control-operators-guide.md) -- `shift`/`reset`, `call/cc*`.
-- [Solver extension plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/solver-extension-plan.md) -- design rationale, sections 3.2-3.5.
+- [Solver extension plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/solver-extension-plan.md) -- design rationale, sections 3.2-3.5.

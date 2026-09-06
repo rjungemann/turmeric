@@ -14,12 +14,13 @@
  * record can say "this one hit the cube cap" rather than only "something in
  * this unit did".
  *
- * The schema is EXPLICITLY UNSTABLE and says so in every record (`"schema": 0`).
+ * The schema is STABLE since SX9 and says so in every record (`"schema": 1`;
+ * 0 was the same shape while it was flagged unstable).
  * A query surface that hardens into a compatibility contract before the solver
  * settles is a listed risk in the plan; the field stabilizes at SX9, not
  * before.  Consumers should branch on it rather than assume.
  *
- * See docs/upcoming/solver-extension-plan.md (SX8a). */
+ * See docs/archive/solver-extension-plan.md (SX8a). */
 
 #include "refine_collect.h"
 #include "runtime/buf.h"
