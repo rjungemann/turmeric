@@ -64,6 +64,11 @@ uint64_t tur_hamt_hash_xxh64(const void *data, size_t len);
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
+#if defined(_WIN32) && !defined(__GNUC__)
+extern char *strtok(char *, const char *);
+extern char *strpbrk(const char *, const char *);
+extern void *memchr(const void *, int, size_t);
+#endif
 static inline double __tur_bits_to_f64(uint64_t b) {
     double d; memcpy(&d, &b, sizeof d); return d;
 }
