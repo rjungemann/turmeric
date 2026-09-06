@@ -1,8 +1,9 @@
 # LSP/DAP on Windows: what still fails after the stdio fix
 
-> **Mostly resolved.** The stdio transport, the spice walk-up and the file-URI
-> spelling are all fixed; `tests/lsp/run-mcp-lsp.sh` is **70 passed / 0 failed**
-> on Windows. What remains open is section 3, DAP time-travel replay.
+> **RESOLVED.** The stdio transport, the spice walk-up, the file-URI spelling
+> and the debuggee-output capture are all fixed. On Windows:
+> `tests/lsp/run-mcp-lsp.sh` **70 passed / 0 failed**, `tests/run-dap.sh`
+> **all 68 assertions passed**.
 
 **Severity: high for any editor on Windows.** `tur lsp` and `tur dap` produced
 *zero output* on Windows until the stdio transport was put in binary mode (fixed
@@ -115,32 +116,55 @@ An earlier revision noted this fix "changes no observable behaviour, because
 (1) masks it". With (1) fixed that is no longer true -- it is on the live path
 for rename refusals now.
 
-## 3. Time-travel replay (DAP) -- still open
+## 3. Time-travel replay (DAP) -- FIXED, and it was not the replay
 
-`tests/run-dap.sh` on Windows gets a long way -- breakpoints bind, stepping
-works, variables and `evaluate` return correct values -- and then:
+`tests/run-dap.sh` on Windows: **driver exited non-zero -> all 68 assertions
+passed.**
+
+The symptom was `FAIL: timeout waiting for event output`, which read like a
+replay defect. It was not. Dumping the raw bytes `tur dap` writes showed the
+protocol stream corrupted mid-session:
 
 ```
-LIVE replayInfo success=false message=there is no recording in this session -- relaunch with "replay": true
-LIVE replaySeek success=false
-FAIL: timeout waiting for event output
+MESSAGE 5   configurationDone
+offset 787: header has no Content-Length: b'done\nContent-Length: 106'
 ```
 
-Whether the recorder itself is broken on Windows or the driver's relaunch step
-is, was not determined. Everything before the replay section passes.
+That `done` is the DEBUGGEE's output. The replay fixture ends with
+`(println "done")`, and it went straight to the real stdout, landing between
+the `configurationDone` response and the `stopped` event. Every client's
+framing desynchronised there; the driver's reader thread died with a
+JSONDecodeError and the main thread then timed out waiting for an event that
+could never arrive.
 
+### Both halves were already documented as unsupported
+
+Neither site was a mystery -- `dap.c` said so in a comment:
+
+> Not captured on Windows. `_pipe`/`_dup2` exist, but the non-blocking read
+> this relies on does not: fcntl/O_NONBLOCK have no counterpart for a Win32
+> anonymous pipe [...] So the DAP debugger is effectively unsupported on
+> Windows until this is done properly with overlapped I/O (WIN3).
+
+`trace.c`'s `output_begin`/`output_drain`/`output_end` were compiled out the
+same way, so the recording carried no `TUR_TRACE_OUTPUT` records at all and a
+replay had nothing to replay.
+
+### Overlapped I/O was not needed
+
+`PeekNamedPipe` answers exactly the question `O_NONBLOCK` was wanted for -- how
+many bytes are ready -- so the read is capped at what is already buffered and
+can never block. About twenty lines per site, and the POSIX paths are untouched
+except that `want` replaces `sizeof buf`, which is the same value there.
+
+One thing worth recording: in `trace.c` the Windows includes I added landed
+INSIDE the existing `#ifndef _WIN32`, so they compiled to nothing and the build
+failed on five implicit declarations. The pre-existing block had the same shape
+for the same reason -- the code it guarded was compiled out too -- so nothing
+had ever noticed the headers were missing.
 ## What remains
 
-Only section 3. The LSP harness is green on Windows, so it is now wired into
-the Windows CI job -- the coverage that existed all along and had never run
-there. `tur_dap` is deliberately NOT wired up yet: everything in it passes
-except the replay section, and a job that is red for one known reason teaches
-people to ignore it.
+Nothing in this report. Both harnesses are green on Windows.
 
-The `tur lsp` / `tur dap` stdio smoke test runs there too. It is two
-subprocess calls and would have caught the original total outage, which 65
-passing assertions did not -- because none of them ran on the platform.
-
-For section 3, the first question is whether the recorder is broken on
-Windows or the driver's relaunch step is. Everything before the replay
-section passes, so it is well isolated.
+`tur_dap` can now be wired into the Windows CI job alongside the LSP harness
+and the stdio smoke test -- it was held out only because of section 3.

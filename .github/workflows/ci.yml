@@ -757,6 +757,14 @@ jobs:
       - name: LSP end-to-end harness
         run: TUR=./build-win/tur.exe bash tests/lsp/run-mcp-lsp.sh
 
+      # The DAP driver: 68 assertions over breakpoints, stepping, variables,
+      # evaluate and the time-travel replay.  Held out of this job until the
+      # debuggee-output capture worked on Windows -- without it the program own
+      # stdout landed in the JSON-RPC stream and desynchronised every client,
+      # so the harness could not have passed here.
+      - name: DAP end-to-end harness
+        run: TUR=./build-win/tur.exe bash tests/run-dap.sh
+
       - name: Fixture suite
         run: |
           TUR=./build-win/tur.exe bash tests/run.sh 2>&1 | tee ./suite.log
