@@ -1,0 +1,32 @@
+;; jit-c2mir-prelude-shadows-user-fn: a user defn named after a libm function
+;; must not be miscompiled on the Windows JIT path.
+;;
+;; c2mir cannot read the UCRT headers, so tur prepends JIT_PRELUDE_WIN, which
+;; DECLARES `double log2(double);` and ~105 other entry points.  A program that
+;; defines its own `log2` then emits `static void log2(int64_t);` after that
+;; prototype -- an ill-formed TU that gcc rejects outright and c2mir accepts
+;; silently, keeping the FIRST prototype at every call site: the int argument
+;; goes in xmm0 per the `double` signature while the callee reads rcx, so the
+;; program runs to completion and prints a pointer-shaped garbage value.
+;;
+;; These names are NOT in mangle.c's libc denylist, correctly -- the emitted TU
+;; never includes math.h, so the cc path only ever sees them as gcc builtins,
+;; which a local definition may shadow.  jit_prelude_win_shadowed drops a
+;; prelude declaration the program defines, so the JIT path agrees with cc.
+;;
+;; One argument each: the miscompile is an integer-vs-float register class
+;; mismatch, so a value that survives the round trip is the whole assertion.
+(defn log2 [x : int] : int
+  (* x 2))
+
+(defn sqrt [x : int] : int
+  (+ x 1))
+
+(defn floor [x : int] : int
+  (- x 1))
+
+(defn main [] : int
+  (println (log2 21))
+  (println (sqrt 41))
+  (println (floor 43))
+  0)
