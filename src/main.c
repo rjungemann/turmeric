@@ -1972,6 +1972,26 @@ static const char *resolve_turmeric_root(char *out, size_t cap) {
  * the turmeric root and emits -LC:\root/C:\real\dir.  ld reports that as
  * `cannot find -lturt_runtime`, which reads as the -L having been dropped
  * rather than mangled -- and sends you looking in the wrong place. */
+/* Last path separator, either spelling.
+ *
+ * Windows accepts '/' but does not produce it -- realpath() (_fullpath) hands
+ * back C:\dir\sub -- so a walk-up that steps with strrchr(p, '/') alone finds
+ * no separator, stops on its first iteration, and reports "not found" for the
+ * entire platform.  Three loops below had that bug independently; this is the
+ * one place to fix it.
+ *
+ * Fourth instance of the class, after find_stdlib_beside_exe,
+ * rewrite_autolink_relative_paths and lsp.c's spice_root_of.  They all fail the
+ * same way: by answering "nothing here" rather than by erroring. */
+static char *last_path_sep(char *p) {
+    char *slash = strrchr(p, '/');
+#ifdef _WIN32
+    char *bs = strrchr(p, '\\');
+    if (bs && (!slash || bs > slash)) slash = bs;
+#endif
+    return slash;
+}
+
 static bool path_is_absolute(const char *p) {
     if (!p || !*p) return false;
     if (p[0] == '/') return true;
@@ -2788,7 +2808,7 @@ static char *find_project_root(const char *start) {
             if (res) strcpy(res, dir);
             return res;
         }
-        char *slash = strrchr(dir, '/');
+        char *slash = last_path_sep(dir);
         if (!slash || slash == dir) break;
         *slash = '\0';
     }
@@ -2840,6 +2860,18 @@ static char *find_spice_root(const char *file_path) {
         }
     }
 
+    /* `dir` came through realpath() just above, which on Windows returns a
+     * backslash path even when the caller passed forward slashes -- so before
+     * last_path_sep this loop never advanced past depth 0.
+     * auto_append_spice_includes then contributed no include paths at all and
+     * every `(import sibling)` inside a spice went unresolved.
+     *
+     * `tur check` hid it: the importing file's own directory is already on the
+     * search path, so a sibling in the SAME directory resolved anyway and the
+     * command looked fine.  The LSP cannot lean on that -- it analyses a scratch
+     * copy in the temp directory, whose neighbours are other scratch files --
+     * which is why go-to-definition, completion and rename across modules all
+     * came back empty on Windows while `tur check` said nothing was wrong. */
     for (int steps = 0; steps < TUR_SPICE_WALK_MAX; steps++) {
         char candidate[4096];
         if (pkg_resolve_manifest_path(dir, candidate, sizeof(candidate))) {
@@ -2848,7 +2880,7 @@ static char *find_spice_root(const char *file_path) {
             if (res) memcpy(res, dir, dl + 1);
             return res;
         }
-        char *slash = strrchr(dir, '/');
+        char *slash = last_path_sep(dir);
         if (!slash || slash == dir) break;
         *slash = '\0';
     }
@@ -9486,7 +9518,7 @@ static int resolve_docs_root(char *out, size_t cap) {
             snprintf(out, cap, "%s/docs/html", dir);
             return 1;
         }
-        char *slash = strrchr(dir, '/');
+        char *slash = last_path_sep(dir);
         if (!slash || slash == dir) break;
         *slash = '\0';
     }
