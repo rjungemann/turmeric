@@ -1568,7 +1568,8 @@ Filed 2026-08 while bringing the `turmeric-godot` GDExtension up on Windows.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [release-archive-cannot-compile](release-archive-cannot-compile.md) | high | An extracted release tarball can run `tur --version` and the REPL but not `tur run`. **Windows fixed** (a mangled `-L`, plus a prefix-layout archive); linux and macos still ship the flat layout and are still affected |
+| [unify-release-archive-layout](unify-release-archive-layout.md) | low | Windows ships a prefix archive (`bin/lib/include/share`) and the other three ship flat. Nothing is broken -- `locate_runtime_lib` probes both -- but every consumer (tvm, Trowel, Homebrew) rearranges into the prefix shape by hand |
+| [release-archive-cannot-compile](release-archive-cannot-compile.md) | high | **RESOLVED all platforms.** `locate_runtime_lib` now probes `<exe_dir>` (the flat shape the archives already have) and the archives ship `libturt_runtime.a`, which they never did; every release leg compiles a program out of its own artifact |
 | [lsp-dap-windows-gaps](lsp-dap-windows-gaps.md) | high | `tur lsp` and `tur dap` produced zero output on Windows (fixed: stdio fd left in text mode ate the CRLF header terminator). Still open: LSP cross-module resolution returns nothing, and DAP time-travel replay fails |
 | [src-cmakelists-add-test-never-registers](src-cmakelists-add-test-never-registers.md) | low | `enable_testing()` runs after `add_subdirectory(src)`, so every `add_test` in `src/CMakeLists.txt` is silently dropped -- `tur_trail` has never run in CI |
 

@@ -58,11 +58,41 @@ jobs:
 
           cp build/tur dist/
           cp build/src/libturi.a dist/
+          # libturt_runtime.a is the one TUR_RT_AUTO will actually link.  Without
+          # it in the archive, `tur run` from an extracted tarball fell back to
+          # recompiling src/runtime/*.c -- which the archive does not ship -- and
+          # failed at the C compile step.  Verified broken on macOS and Windows
+          # before this; docs/reported/release-archive-cannot-compile.md.
+          cp build/src/libturt_runtime.a dist/
           cp src/turi/eval.h src/turi/env.h src/turi/value.h src/turi/fiber.h dist/include/turi/
           cp -R stdlib dist/
 
           tar -czf "${ARCHIVE}" -C dist .
           echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
+
+      # Unpack what was just built and compile with it.  `tur --version` above
+      # proves the binary starts, which is a much weaker claim than it looks: the
+      # archives passed that check for many releases while being unable to compile
+      # a two-line program.  This is the check that would have caught it.
+      - name: Compile a program from the extracted archive
+        run: |
+          rm -rf verify && mkdir verify
+          tar -xzf "${ARCHIVE}" -C verify
+          cat > verify/hello.tur <<'EOF'
+          (defn main [] : int
+            (println "hello from the archive")
+            0)
+          EOF
+          out=$(cd verify && ./tur run hello.tur 2>&1) || {
+            printf '%s\n' "$out"
+            echo "::error::the extracted archive cannot compile a program"
+            exit 1
+          }
+          printf '%s\n' "$out"
+          case "$out" in
+            *"hello from the archive"*) echo "Archive compiles and runs." ;;
+            *) echo "::error::unexpected output from the extracted archive"; exit 1 ;;
+          esac
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5

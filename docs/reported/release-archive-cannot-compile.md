@@ -1,13 +1,11 @@
 # An extracted release archive cannot compile a program
 
-> **Windows: FIXED 2026-09-05.** The lost `-L` turned out to be a real and
-> separate defect (`rewrite_autolink_relative_paths` read `C:\dir` as a
-> RELATIVE path and anchored it at the turmeric root), and fixing it made a
-> prefix-layout archive work end to end. The Windows release now ships
-> `bin/lib/include/share` and CI compiles a program out of the extracted
-> archive. **Linux and macOS still ship the flat layout and are still
-> affected** -- see "Status by platform".
-
+> **RESOLVED 2026-09-06, all platforms.** The fix is not the one this report
+> first proposed. Rather than restructuring every archive into a prefix layout,
+> `locate_runtime_lib` now probes `<exe_dir>` itself -- the flat shape the
+> archives already have -- and the archives ship `libturt_runtime.a`, which they
+> never did. Nothing downstream had to change. The release workflow now compiles
+> a program out of the artifact it just built, on every leg.
 **Severity: high for anyone installing from a release tarball.** `tur --version`
 works, the REPL works, and `tur run` fails at the C compile step. Not
 Windows-specific -- the code involved has no platform branch -- though it was
@@ -89,12 +87,15 @@ Reaching for the layout the probes *do* understand -- `<prefix>/bin/tur` with
 
 ## Status by platform
 
-| platform | layout | `tur run` from an extracted archive |
-| --- | --- | --- |
-| windows-x86_64 | prefix (`bin/lib/include/share`) | **works**, and CI compiles a program out of the archive every release |
-| linux-x86_64 | flat | **broken** (inferred, see below) |
-| linux-aarch64 | flat | **broken** (inferred) |
-| macos-arm64 | flat | **broken** (inferred) |
+| platform | layout | before | after |
+| --- | --- | --- | --- |
+| windows-x86_64 | prefix (`bin/lib/include/share`) | broken | fixed, shipped in v0.44.1 and verified against the published asset |
+| macos-arm64 | flat | broken (verified) | fixed |
+| linux-x86_64 | flat | broken (inferred) | fixed |
+| linux-aarch64 | flat | broken (inferred) | fixed |
+
+v0.44.1 shipped with Windows working and the other three still flat and still
+unable to compile -- which is what prompted finishing this.
 
 The Windows fix is two things: the `-L` defect above, and packaging a prefix
 layout instead of a flat one. The other three legs need the same packaging
@@ -108,33 +109,51 @@ change; the `-L` fix is already shared, since it is not platform-specific code
 | flat archive cannot compile, on Windows | **verified**, repro above |
 | the four probe paths do not match a flat archive | **verified** by reading `locate_runtime_lib` |
 | the guide's instructions produce a flat layout | **verified** by reading the guide |
-| therefore Linux and macOS behave identically | **inferred** -- the code has no platform branch, but it was not run there |
+| the same failure on macOS | **verified 2026-09-06** on an arm64 Release build |
+| therefore Linux behaves identically | **inferred** -- the code has no platform branch, and two platforms now agree, but it was not run there |
 
-The last row is the one to check first. It should take one extracted tarball and
-one `tur run`.
+macOS was checked rather than assumed. A flat archive built from the branch
+fails at the same place:
 
-## What remains: the same change on the other three legs
+```
+clang: error: no such file or directory: '.../src/runtime/hamt.c'
+clang: error: no such file or directory: '.../src/runtime/trail.c'
+tur: cc invocation failed (status 256)
+```
 
-The route is settled and proven on Windows; the other legs need the packaging
-half of it.
+Linux remains unverified for want of a box. With two platforms agreeing and no
+platform branch in the code involved it is a formality -- and the
+compile-from-archive check now added to every release leg turns it into one
+that answers itself: if Linux does not work, the release job says so instead of
+publishing.
 
-1. **Ship a prefix layout** -- `bin/`, `lib/`, `include/`,
-   `share/turmeric/stdlib/` -- which `<exe_dir>/../lib` and
-   `resolve_stdlib_root` step 3 already understand. Include
-   `libturt_runtime.a`, not just `libturi.a`: `TUR_RT_AUTO` only engages for
-   the lean archive. The guide's extract-and-symlink instructions change with
-   it (`~/.local/turmeric/bin/tur`).
-2. **Add the compile-from-archive check** to those legs, as `build-windows`
-   now has. Unpack the artifact into a clean directory and `tur run` a two-line
-   program. This is the check that would have caught the whole thing, and it is
-   about fifteen lines. A `--version` smoke test proves the binary starts,
-   which is a much weaker claim than it looks -- the flat archive passed it
-   while being unable to compile anything.
+## The fix, and why it is not what was proposed
 
-An alternative to (1) is shipping `src/runtime/*.c` so source mode works as-is.
-Smaller diff, but every user then recompiles the runtime on every build, which
-is the cost the archive exists to avoid. Not recommended.
+The first draft of this report proposed shipping a prefix layout everywhere.
+That would have worked, and it would have been a breaking change for three
+consumers at once: `tvm` restages the tarball into `bin/` + `lib/` and would
+have had to learn a new shape, Homebrew's cask consumes the published one, and
+Trowel stages the extracted tree next to its binary and probes
+`turmeric/tur`.
 
+Probing `<exe_dir>` instead makes the shape the archives ALREADY have work:
+
+1. `locate_runtime_lib` gains a fourth candidate, `<exe_dir>` itself -- the flat
+   case, where `tur` and the runtime archive are siblings. One `if`.
+2. The archives ship `libturt_runtime.a`. They never did, and it is the only
+   one `TUR_RT_AUTO` will link -- `libturi.a` alone is not enough, which is why
+   even `tvm`'s `bin/` + `lib/` restaging would not have worked either.
+
+Nothing downstream changes. Windows keeps the prefix layout it shipped in
+v0.44.1 -- that is released and verified, and changing it now would break
+anyone who scripted against it -- and `<exe_dir>/../lib` already covers it.
+
+## The check that would have caught this
+
+Every leg of `release.yml` now unpacks the artifact it just built and compiles a
+two-line program with it. The archives passed a `tur --version` smoke test for
+many releases while being unable to compile anything; that check proves the
+binary starts, which is a much weaker claim than it appears.
 ## Related
 
 Two Windows-specific defects were in the way and are fixed:
@@ -146,3 +165,8 @@ Two Windows-specific defects were in the way and are fixed:
 
 Neither is needed by the Linux/macOS work -- the first is Windows-only and the
 second, while shared code, is only triggered by a drive-lettered path.
+
+The two defects listed above under "Two further defects behind it" are both
+settled: the `-L` was mangled rather than lost (fixed), and the
+`tur_set_contract_handler` failure was an artefact of that mangling rather than
+a real gap in the lean archive.
