@@ -149,6 +149,18 @@ enable_testing()
 # root resolves to the literal "stdlib" there, which has nothing to escape.
 # The cases are reachable on POSIX too ("\\" and '"' are both legal in a POSIX
 # filename), so the Linux legs enforce it rather than Windows alone.
+# Does the JSON-RPC stdio transport answer at all?  `tur lsp` and `tur dap`
+# frame on a literal CRLF CRLF, and on Windows fd 0 is opened in TEXT mode,
+# which strips exactly those CRs -- so both servers exited 0 having printed
+# nothing, for every editor, silently.  65 passing LSP assertions missed it
+# because the harness that runs them had never run on Windows.  This needs no
+# fixtures and takes about a second, so it can run everywhere.
+add_test(
+  NAME lsp_dap_stdio_smoke
+  COMMAND bash tests/lsp/run-stdio-smoke.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
 add_test(NAME source_literal_unit COMMAND tur_source_literal_unit)
 
 add_test(
@@ -1239,6 +1251,18 @@ add_test(
 add_test(
   NAME tur_reactor_slot_reuse_unit
   COMMAND "${CMAKE_BINARY_DIR}/tur_reactor_slot_reuse_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# Spice lockfile integrity hash (pkg_hash_dir)
+add_test(
+  NAME tur_pkg_hash
+  COMMAND "${CMAKE_BINARY_DIR}/tur_pkg_hash"
+  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+# SHA-256 unit test (runtime/sha256.c, shared by image.c and pkg_hash_dir)
+add_test(
+  NAME tur_sha256_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_sha256_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # AI1 (application-image-dumps-plan): image header codec unit test

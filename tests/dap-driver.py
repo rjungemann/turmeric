@@ -12,7 +12,13 @@ import json, os, subprocess, sys, threading
 
 if len(sys.argv) != 3:
     sys.exit("usage: dap-driver.py <tur> <fixture.tur>")
-TUR, PROG = sys.argv[1], os.path.abspath(sys.argv[2])
+# native_path, not abspath: under MSYS2 abspath yields /d/a/... which tur.exe
+# cannot open, so the debuggee never launched and this driver timed out waiting
+# for `stopped`.  See tests/dap_native_path.py.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dap_native_path import native_path  # noqa: E402
+
+TUR, PROG = sys.argv[1], native_path(sys.argv[2])
 BASE = os.path.basename(PROG)
 
 proc = subprocess.Popen(

@@ -2,6 +2,69 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- **A downloaded release archive can compile a program.** The published
+  linux-x86_64, linux-aarch64 and macos-arm64 tarballs have never shipped
+  `libturt_runtime.a` -- the only runtime archive `TUR_RT_AUTO` will link --
+  so `tur run` inside an extracted tree fell back to recompiling
+  `src/runtime`, which the archive does not contain. The archives now ship
+  it, and `locate_runtime_lib` gained a fourth candidate, `<exe_dir>` itself,
+  for the flat layout those tarballs use. Windows keeps the prefix layout it
+  shipped in v0.44.1, so nothing downstream changes. Every leg of
+  `release.yml` now unpacks the artifact it just built and compiles a
+  two-line program with it; the previous `tur --version` smoke test proved
+  only that the binary starts. The remaining shape disagreement between the
+  four archives is tracked in
+  `docs/reported/unify-release-archive-layout.md`.
+- **`tur lsp` resolves cross-module names on Windows.** `find_spice_root`
+  canonicalises through `_fullpath`, which answers with backslashes, then
+  walked up looking only for `/` -- so it broke at depth 0, contributed no
+  spice include paths, and left every `(import sibling)` unresolved, which is
+  why definition, completion and rename all answered "nothing here".
+  `find_project_root` and the `tur docs` root probe carried the identical
+  bug; all three now share `last_path_sep()`. Separately, `lsp_path_to_uri`
+  percent-encoded the drive colon and every backslash -- self-consistent
+  through this codebase's own decoder, and matching nothing an editor spells
+  -- while `lsp_uri_to_path` turned `file:///C:/dir/x.tur` into
+  `/C:/dir/x.tur`, which no Windows API opens. Both now speak
+  `file:///C:/dir/x.tur`. POSIX is untouched.
+- **`tur dap` keeps the debuggee's output off the protocol channel on
+  Windows, and `tur trace` records it.** Neither captured the debuggee's
+  stdout there, because `fcntl`/`O_NONBLOCK` has no counterpart for a Win32
+  anonymous pipe and a blocking drain would hang -- so a program's `println`
+  landed between two DAP messages, desynchronised the framing, and surfaced
+  as a replay timeout. `PeekNamedPipe` answers exactly the question
+  `O_NONBLOCK` was wanted for, so the read is capped at what is already
+  buffered and can never block. The DAP and LSP harnesses now run on Windows
+  CI, translating MSYS paths to native ones before handing them to `tur.exe`.
+
+## [0.44.1] -- 2026-09-05
+
+### Fixed
+
+- **`tur lsp` and `tur dap` speak to editors on Windows.** Both framed
+  messages with a literal CRLF CRLF terminator, but Windows opens fd 0 in
+  text mode and strips the CR on the way in, so a correct
+  `Content-Length: N\r\n\r\n` header arrived as `\n\n`, the terminator never
+  matched, and both servers ran to EOF and exited 0 having said nothing --
+  no error, no diagnostic. The stdio transport (`src/lsp/lsp_io.c`) now puts
+  its descriptors in binary mode; `tur format` and the REPL keep the platform
+  text conventions, and `tur mcp` was never affected. A
+  `tests/lsp/stdio-smoke.py` guard asserts each server answers an
+  `initialize` with a well-framed reply, wired into ctest and the Windows CI
+  job -- which ran `tests/run.sh` only and had never invoked ctest, so the
+  existing LSP/DAP coverage never executed there. `run-mcp-lsp.sh` now
+  honours `$TUR` and the `.exe` suffix instead of hardcoding `./build/tur`.
+- **`spice_root_of` handles backslash-spelled paths.** Its walk-up searched
+  only for `/`, answering "not in a spice" for every Windows path. Third
+  instance of this bug class after `find_stdlib_beside_exe` and
+  `rewrite_autolink_relative_paths`. Known remaining Windows gaps in LSP
+  cross-module resolution and DAP time-travel replay are tracked in
+  `docs/reported/lsp-dap-windows-gaps.md`.
+
 ## [0.44.0] -- 2026-09-05
 
 ### Added

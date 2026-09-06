@@ -33,6 +33,7 @@
 #else
 #  include <dlfcn.h>
 #endif
+#include <ctype.h>
 #include <math.h>
 #include <pthread.h>
 #include <setjmp.h>
@@ -45,6 +46,7 @@
 #include "mir.h"
 #include "mir-gen.h"
 #include "c2mir.h"
+#include "runtime/buf.h"
 
 /* ------------------------------------------------------------------ */
 /* I0 SPIKE INSTRUMENTATION (mir-interp-tier-plan phase I0)            */
@@ -560,6 +562,129 @@ static void *jit_run_entry (void *p) {
   return NULL;
 }
 
+#ifdef _WIN32
+/* ------------------------------------------------------------------ */
+/* prelude shadowing: a program may define a name the prelude declares  */
+/* ------------------------------------------------------------------ */
+/* JIT_PRELUDE_WIN declares ~106 libc/libm/pthread entry points, because c2mir
+ * cannot read the UCRT headers.  A Turmeric program may legitimately define a
+ * function with one of those names -- `(defn log2 [x : int] : void ...)` is
+ * ordinary code -- and the emitted TU then carries `static void log2(int64_t);`
+ * AFTER the prelude's `double log2(double);`.
+ *
+ * That TU is ill-formed, and gcc rejects the pair outright.  c2mir accepts it
+ * silently and keeps the FIRST prototype at every call site: the int argument
+ * goes in xmm0 per the `double` signature while the callee reads rcx, so the
+ * program runs to completion and prints a garbage value.  Ten of the prelude's
+ * one-argument math names reproduce it (log2 log10 sqrt sin cos fabs round
+ * trunc ceil floor); every other declared name is a live footgun of the same
+ * shape, waiting for a program to pick it.
+ *
+ * So drop any prelude declaration whose name the emitted TU defines: the TU's
+ * own `static` declaration then serves its calls, with no conflict for c2mir to
+ * resolve wrongly.  Only names the TU DEFINES are dropped, so nothing loses a
+ * prototype it still needs -- which would be the implicit-int pointer
+ * truncation from the same family, see
+ * docs/reported/jit-c2mir-implicit-decl-truncates-pointers.md.
+ *
+ * The cc path never needs this: it compiles the raw TU against real headers,
+ * where the only `log2` in scope is a gcc BUILTIN, and gcc lets a local
+ * definition shadow a builtin (with -Wbuiltin-declaration-mismatch). */
+
+/* The identifier immediately before the first `(` in [s,e), if any.  Trailing
+ * space is skipped, so `log2 (double)` and `log2(double)` both yield "log2";
+ * `void (*f)(int)` yields nothing, because `*` ends the backward scan with an
+ * empty identifier. */
+static int jit_name_before_paren (const char *s, const char *e, const char **name,
+                                  size_t *nlen) {
+  const char *p = (const char *) memchr (s, '(', (size_t) (e - s));
+  if (p == NULL) return 0;
+  while (p > s && (p[-1] == ' ' || p[-1] == '\t')) p--;
+  const char *idend = p;
+  while (p > s && (isalnum ((unsigned char) p[-1]) || p[-1] == '_')) p--;
+  if (p == idend || isdigit ((unsigned char) *p)) return 0;
+  *name = p;
+  *nlen = (size_t) (idend - p);
+  return 1;
+}
+
+/* A prelude line is a single-line declaration when it starts in column 0 with
+ * an identifier character (so: not `#define`, not a comment, not an indented
+ * continuation of the two multi-line declarations) and ends in `;`. */
+static int jit_prelude_decl_name (const char *s, const char *e, const char **name,
+                                  size_t *nlen) {
+  if (s == e) return 0;
+  if (!isalpha ((unsigned char) *s) && *s != '_') return 0;
+  if (e[-1] != ';') return 0;
+  return jit_name_before_paren (s, e, name, nlen);
+}
+
+/* Does the emitted TU declare or define `name` at file scope?  Every function
+ * a single-TU emission produces is `static` (jit_find_entry relies on the same
+ * property), so a line whose first token is `static` and whose first `(` is
+ * preceded by `name` is the TU claiming that name.  A future emission that
+ * stopped saying `static` would only make this filter stop firing -- it can
+ * never make it drop a declaration the TU does not own. */
+static int jit_tu_defines (const char *csrc, size_t csrc_len, const char *name,
+                           size_t nlen) {
+  const char *p = csrc, *end = csrc + csrc_len;
+  while (p < end) {
+    const char *nl = (const char *) memchr (p, '\n', (size_t) (end - p));
+    const char *le = nl ? nl : end;
+    if ((size_t) (le - p) > 7 && memcmp (p, "static", 6) == 0
+        && (p[6] == ' ' || p[6] == '\t')) {
+      const char *n;
+      size_t l;
+      if (jit_name_before_paren (p, le, &n, &l) && l == nlen
+          && memcmp (n, name, nlen) == 0)
+        return 1;
+    }
+    if (!nl) break;
+    p = nl + 1;
+  }
+  return 0;
+}
+
+/* JIT_PRELUDE_WIN with every declaration the TU defines commented out, or NULL
+ * when there is nothing to drop (the overwhelmingly common case -- no copy is
+ * made and the caller uses the literal).  The replacement keeps the line count
+ * stable so a c2mir diagnostic's <tur-jit>:LINE still points where it did. */
+static char *jit_prelude_win_shadowed (const char *csrc, size_t csrc_len,
+                                       size_t *out_len) {
+  const size_t pre_len = sizeof JIT_PRELUDE_WIN - 1;
+  Buf b;
+  int dropped = 0;
+  buf_init (&b);
+  const char *p = JIT_PRELUDE_WIN, *end = JIT_PRELUDE_WIN + pre_len;
+  while (p < end) {
+    const char *nl = (const char *) memchr (p, '\n', (size_t) (end - p));
+    const char *le = nl ? nl : end;
+    const char *n;
+    size_t l;
+    if (jit_prelude_decl_name (p, le, &n, &l) && jit_tu_defines (csrc, csrc_len, n, l)) {
+      buf_puts (&b, "/* shadowed by the program: ");
+      buf_write (&b, n, l);
+      buf_puts (&b, " */");
+      dropped++;
+      const char *v = getenv ("TUR_JIT_TIMING");
+      if (v && *v && strcmp (v, "0") != 0)
+        fprintf (stderr, "TUR_JIT_TIMING\tprelude\tshadowed\t%.*s\n", (int) l, n);
+    } else {
+      buf_write (&b, p, (size_t) (le - p));
+    }
+    if (!nl) break;
+    buf_putc (&b, '\n');
+    p = nl + 1;
+  }
+  if (!dropped) {
+    buf_free (&b);
+    return NULL;
+  }
+  *out_len = b.len;
+  return b.data;
+}
+#endif /* _WIN32 */
+
 /* ------------------------------------------------------------------ */
 /* shared front half: compile + load + link one emitted TU              */
 /* ------------------------------------------------------------------ */
@@ -593,16 +718,28 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
    * host carries those primitives; MIR_link resolves them).  cc never sees
    * any of this -- the fallback compiles the raw TU against real headers. */
 #ifdef _WIN32
-  const size_t prelude_win_len = sizeof JIT_PRELUDE_WIN - 1;
+  /* ...except where the program defines one of the names the prelude declares,
+   * which c2mir resolves to the prelude's signature and miscompiles silently.
+   * jit_prelude_win_shadowed returns NULL (and copies nothing) unless the TU
+   * actually claims one. */
+  size_t prelude_win_len = sizeof JIT_PRELUDE_WIN - 1;
+  const char *prelude_win = JIT_PRELUDE_WIN;
+  char *prelude_win_owned = jit_prelude_win_shadowed (csrc, csrc_len, &prelude_win_len);
+  if (prelude_win_owned != NULL) prelude_win = prelude_win_owned;
 #else
   const size_t prelude_win_len = 0;
 #endif
   size_t full_len = sizeof JIT_PRELUDE - 1 + prelude_win_len + csrc_len;
   char *full = (char *) malloc (full_len + 1);
+#ifdef _WIN32
+  if (!full) { free (prelude_win_owned); return TUR_JIT_ERR_COMPILE; }
+#else
   if (!full) return TUR_JIT_ERR_COMPILE;
+#endif
   memcpy (full, JIT_PRELUDE, sizeof JIT_PRELUDE - 1);
 #ifdef _WIN32
-  memcpy (full + sizeof JIT_PRELUDE - 1, JIT_PRELUDE_WIN, prelude_win_len);
+  memcpy (full + sizeof JIT_PRELUDE - 1, prelude_win, prelude_win_len);
+  free (prelude_win_owned);
 #endif
   memcpy (full + sizeof JIT_PRELUDE - 1 + prelude_win_len, csrc, csrc_len);
   full[full_len] = '\0';

@@ -12,7 +12,11 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 0
 fi
 
-TUR="./build/tur"
+# Honour $TUR like tests/run-dap.sh does, and fall back to the .exe so this
+# is runnable on Windows -- where `tur lsp` and `tur dap` were silently
+# broken precisely because nothing drove them there.
+TUR="${TUR:-./build/tur}"
+[ -x "$TUR" ] || [ ! -x "${TUR}.exe" ] || TUR="${TUR}.exe"
 if [ ! -x "$TUR" ]; then
     echo "SKIP: $TUR not built" >&2
     # On stdout, unlike the human line above: the marker has to land in the
@@ -23,4 +27,4 @@ fi
 
 # Pin stdlib lookup so the running tur picks up the in-tree stdlib --
 # matches what tests/run.sh does indirectly via the build layout.
-exec python3 tests/lsp/mcp_lsp_test.py
+exec env TUR="$TUR" python3 tests/lsp/mcp_lsp_test.py

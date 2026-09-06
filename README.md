@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.44.0` -- Turmeric runs natively on Windows (reactor, fibers, and JIT included), and regions graduate to on-by-default, dropping peak RSS 47% on the solver workload.
+**Latest release:** `v0.44.1` -- `tur lsp` and `tur dap` reach editors on Windows again; their stdio transport runs in binary mode, so CRLF-framed headers survive the read.
 
 ## What
 

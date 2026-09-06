@@ -39,6 +39,7 @@
 #include <pthread.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include "platform_proc.h"
 #include "platform_fs.h"  /* realpath/mkdir/setenv/mkstemps/... on Windows */
 #ifdef _WIN32
 #include <io.h>       /* _setmode, _fileno */
@@ -1972,6 +1973,26 @@ static const char *resolve_turmeric_root(char *out, size_t cap) {
  * the turmeric root and emits -LC:\root/C:\real\dir.  ld reports that as
  * `cannot find -lturt_runtime`, which reads as the -L having been dropped
  * rather than mangled -- and sends you looking in the wrong place. */
+/* Last path separator, either spelling.
+ *
+ * Windows accepts '/' but does not produce it -- realpath() (_fullpath) hands
+ * back C:\dir\sub -- so a walk-up that steps with strrchr(p, '/') alone finds
+ * no separator, stops on its first iteration, and reports "not found" for the
+ * entire platform.  Three loops below had that bug independently; this is the
+ * one place to fix it.
+ *
+ * Fourth instance of the class, after find_stdlib_beside_exe,
+ * rewrite_autolink_relative_paths and lsp.c's spice_root_of.  They all fail the
+ * same way: by answering "nothing here" rather than by erroring. */
+static char *last_path_sep(char *p) {
+    char *slash = strrchr(p, '/');
+#ifdef _WIN32
+    char *bs = strrchr(p, '\\');
+    if (bs && (!slash || bs > slash)) slash = bs;
+#endif
+    return slash;
+}
+
 static bool path_is_absolute(const char *p) {
     if (!p || !*p) return false;
     if (p[0] == '/') return true;
@@ -2273,6 +2294,24 @@ static int locate_runtime_lib(char *libdir, size_t dcap,
         snprintf(sd, sizeof(sd), "%s/src", d);
         if (probe_runtime_lib_in(sd, libname, ncap)) {
             snprintf(libdir, dcap, "%s", sd);
+            return 1;
+        }
+        /* The FLAT layout -- the archive shape release.yml publishes for
+         * linux-x86_64, linux-aarch64 and macos-arm64, where `tur` and the
+         * runtime archive sit in one directory with no bin/ or lib/.
+         *
+         * Without this probe none of the four candidates matched an extracted
+         * tarball, TUR_RT_AUTO fell back to source mode, and source mode wanted
+         * the src/runtime sources that the archive does not ship -- so `tur run` on a
+         * released build failed at the C compile step with "no such file or
+         * directory: .../src/runtime/hamt.c".  Verified on macOS and Windows;
+         * see docs/reported/release-archive-cannot-compile.md.
+         *
+         * Probing <exe_dir> rather than restructuring the archives is what keeps
+         * this non-breaking: tvm already restages into bin/ + lib/, Homebrew and
+         * Trowel consume the published shape, and all of those keep working. */
+        if (probe_runtime_lib_in(d, libname, ncap)) {
+            snprintf(libdir, dcap, "%s", d);
             return 1;
         }
         /* DEDUP-4b: the INSTALLED layout -- <prefix>/bin/tur next to
@@ -2788,7 +2827,7 @@ static char *find_project_root(const char *start) {
             if (res) strcpy(res, dir);
             return res;
         }
-        char *slash = strrchr(dir, '/');
+        char *slash = last_path_sep(dir);
         if (!slash || slash == dir) break;
         *slash = '\0';
     }
@@ -2840,6 +2879,18 @@ static char *find_spice_root(const char *file_path) {
         }
     }
 
+    /* `dir` came through realpath() just above, which on Windows returns a
+     * backslash path even when the caller passed forward slashes -- so before
+     * last_path_sep this loop never advanced past depth 0.
+     * auto_append_spice_includes then contributed no include paths at all and
+     * every `(import sibling)` inside a spice went unresolved.
+     *
+     * `tur check` hid it: the importing file's own directory is already on the
+     * search path, so a sibling in the SAME directory resolved anyway and the
+     * command looked fine.  The LSP cannot lean on that -- it analyses a scratch
+     * copy in the temp directory, whose neighbours are other scratch files --
+     * which is why go-to-definition, completion and rename across modules all
+     * came back empty on Windows while `tur check` said nothing was wrong. */
     for (int steps = 0; steps < TUR_SPICE_WALK_MAX; steps++) {
         char candidate[4096];
         if (pkg_resolve_manifest_path(dir, candidate, sizeof(candidate))) {
@@ -2848,7 +2899,7 @@ static char *find_spice_root(const char *file_path) {
             if (res) memcpy(res, dir, dl + 1);
             return res;
         }
-        char *slash = strrchr(dir, '/');
+        char *slash = last_path_sep(dir);
         if (!slash || slash == dir) break;
         *slash = '\0';
     }
@@ -4871,9 +4922,14 @@ static int cmd_run(int argc, char **argv) {
                 } else {
                     /* Verify SHA-256 matches lock (if lock has entry). */
                     PkgLockEntry *le = pkg_lock_find(&lock, s->name, false);
-                    if (le && le->sha256) {
-                        char actual_sha[65];
-                        if (pkg_sha256_dir(dep_dir, actual_sha) &&
+                    /* Only a hash THIS algorithm produced can be compared.  A
+                     * lockfile written by an older tur carries a `tar -c |
+                     * sha256sum` digest (or the git-SHA fallback), which is not
+                     * comparable and must not be reported as tampering -- the
+                     * next `tur fetch` rewrites it in the current format. */
+                    if (le && pkg_hash_comparable(le->sha256)) {
+                        char actual_sha[PKG_HASH_MAX];
+                        if (pkg_hash_dir(dep_dir, actual_sha) &&
                             strcmp(actual_sha, le->sha256) != 0) {
                             fprintf(stderr,
                                 "tur run: integrity check failed for '%s'.\n"
@@ -9486,7 +9542,7 @@ static int resolve_docs_root(char *out, size_t cap) {
             snprintf(out, cap, "%s/docs/html", dir);
             return 1;
         }
-        char *slash = strrchr(dir, '/');
+        char *slash = last_path_sep(dir);
         if (!slash || slash == dir) break;
         *slash = '\0';
     }
@@ -10460,31 +10516,50 @@ static int try_external_subcommand(int argc, char **argv) {
     char ext_name[256];
     snprintf(ext_name, sizeof(ext_name), "tur-%s", cmd);
 
+    /* The suffixes a command name can carry.  Windows resolves a bare name
+     * through PATHEXT, and `tur install` writes `tur-foo.exe`, so probing only
+     * the bare name finds nothing there. */
+#ifdef _WIN32
+    static const char *const EXTS[] = { ".exe", "" };
+#else
+    static const char *const EXTS[] = { "" };
+#endif
+
     const char *path_env = getenv("PATH");
     if (path_env) {
         const char *p = path_env;
         while (*p) {
-            const char *colon = strchr(p, ':');
-            size_t seg = colon ? (size_t)(colon - p) : strlen(p);
-            if (seg > 0 && seg < 3500) {
+            /* TUR_PATH_LIST_SEP, not ':': on Windows a ':' split tears every
+             * entry at its drive colon and no candidate is ever well formed. */
+            const char *sep = strchr(p, TUR_PATH_LIST_SEP);
+            size_t seg = sep ? (size_t)(sep - p) : strlen(p);
+            for (size_t e = 0; seg > 0 && seg < 3500
+                               && e < sizeof(EXTS) / sizeof(EXTS[0]); e++) {
                 char candidate[4096];
-                snprintf(candidate, sizeof(candidate), "%.*s/%s",
-                         (int)seg, p, ext_name);
-                if (access(candidate, X_OK) == 0) {
-                    char **nv = (char **)calloc((size_t)argc, sizeof(char *));
-                    if (!nv) return 1;
-                    nv[0] = (char *)ext_name;
-                    for (int i = 2; i < argc; i++) nv[i - 1] = argv[i];
-                    nv[argc - 1] = NULL;
-                    execv(candidate, nv);
-                    fprintf(stderr, "tur: failed to exec '%s': %s\n",
-                            candidate, strerror(errno));
-                    free(nv);
-                    return 1;
-                }
+                snprintf(candidate, sizeof(candidate), "%.*s/%s%s",
+                         (int)seg, p, ext_name, EXTS[e]);
+                if (access(candidate, X_OK) != 0) continue;
+                char **nv = (char **)calloc((size_t)argc, sizeof(char *));
+                if (!nv) return 1;
+                nv[0] = (char *)ext_name;
+                for (int i = 2; i < argc; i++) nv[i - 1] = argv[i];
+                nv[argc - 1] = NULL;
+#ifdef _WIN32
+                /* _execv does not REPLACE the process on Windows: the parent
+                 * exits immediately and a calling shell sees the command
+                 * finish before the child has.  Wait and pass the status on. */
+                intptr_t rc = _spawnv(_P_WAIT, candidate, (const char *const *)nv);
+                if (rc >= 0) { free(nv); return (int)rc; }
+#else
+                execv(candidate, nv);
+#endif
+                fprintf(stderr, "tur: failed to exec '%s': %s\n",
+                        candidate, strerror(errno));
+                free(nv);
+                return 1;
             }
-            if (!colon) break;
-            p = colon + 1;
+            if (!sep) break;
+            p = sep + 1;
         }
     }
     fprintf(stderr,

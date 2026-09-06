@@ -62,6 +62,11 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#ifdef _WIN32
+#include <io.h>        /* _pipe, _get_osfhandle */
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>   /* PeekNamedPipe */
+#endif
 
 /* ------------------------------------------------------------------------- */
 
@@ -253,6 +258,24 @@ static void dap_send_event(DapState *s, const char *event, const char *body) {
  * Debuggee stdout capture
  * --------------------------------------------------------------------------- */
 
+#ifdef _WIN32
+/* Bytes ready on the capture pipe, without blocking.
+ *
+ * Win32 anonymous pipes have no O_NONBLOCK, which is why this capture was
+ * originally skipped on Windows altogether: a plain read() on an empty pipe
+ * whose write end is still open blocks forever, and a hung debugger is worse
+ * than an interleaved one.  PeekNamedPipe answers the same question without
+ * the overlapped-I/O machinery the old comment here proposed -- ask how much
+ * is available, then read exactly that much and never more. */
+static long dap_pipe_avail(int fd) {
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    DWORD avail = 0;
+    if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL)) return -1;
+    return (long)avail;
+}
+#endif
+
 /* Drain whatever the debuggee has written to the capture pipe and forward it as
  * `output` events.  Non-blocking, so safe to call at any pause. */
 static void dap_drain_output(DapState *s) {
@@ -260,7 +283,13 @@ static void dap_drain_output(DapState *s) {
     fflush(stdout);
     char buf[4096];
     for (;;) {
-        ssize_t n = read(s->out_pipe_r, buf, sizeof buf);
+        size_t want = sizeof buf;
+#ifdef _WIN32
+        long avail = dap_pipe_avail(s->out_pipe_r);
+        if (avail <= 0) break;   /* nothing pending, or the pipe is gone */
+        if ((size_t)avail < want) want = (size_t)avail;
+#endif
+        ssize_t n = read(s->out_pipe_r, buf, want);
         if (n <= 0) break;   /* EAGAIN (nonblocking) or EOF */
         Buf b; buf_init(&b);
         buf_printf(&b, "{\"seq\":%d,\"type\":\"event\",\"event\":\"output\","
@@ -270,7 +299,7 @@ static void dap_drain_output(DapState *s) {
         buf_puts(&b, "\"}}");
         dap_write(s, &b);
         buf_free(&b);
-        if (n < (ssize_t)sizeof buf) break;
+        if ((size_t)n < want) break;
     }
 }
 
@@ -1246,18 +1275,22 @@ static void dap_run_program(DapState *s, DapLaunchFn launch, void *ud,
         close(p[1]);
     }
 #else
-    /*
-     * Not captured on Windows.  _pipe/_dup2 exist, but the non-blocking read
-     * this relies on does not: fcntl/O_NONBLOCK have no counterpart for a Win32
-     * anonymous pipe, so dap_drain_output() would block on an empty pipe whose
-     * write end is still open -- a hang, which is worse than the problem being
-     * solved.
-     *
-     * Consequence: with out_pipe_r left at -1, drain is a no-op and the
-     * debuggee's stdout goes to the real stdout, where it can interleave with
-     * the JSON-RPC channel.  So the DAP debugger is effectively unsupported on
-     * Windows until this is done properly with overlapped I/O (WIN3).
-     */
+    /* Same shape as the POSIX branch, with PeekNamedPipe standing in for
+     * O_NONBLOCK (see dap_pipe_avail).  Without this the debuggee's stdout went
+     * to the real stdout and interleaved with the JSON-RPC channel: the replay
+     * fixture prints "done", and that landed mid-stream between the
+     * configurationDone response and the stopped event, so every client's
+     * framing desynchronised and `tests/run-dap.sh` died with "timeout waiting
+     * for event output".  The debugger was unusable on Windows, which is what
+     * the note this replaces said. */
+    int p[2];
+    if (_pipe(p, 1 << 20, _O_BINARY) == 0) {
+        s->out_pipe_r = p[0];
+        fflush(stdout);
+        saved = dup(STDOUT_FILENO);
+        dup2(p[1], STDOUT_FILENO);
+        close(p[1]);
+    }
 #endif
 
     int rc = launch(program, args, n_args, s, ud);

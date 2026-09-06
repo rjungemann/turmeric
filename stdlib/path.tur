@@ -163,26 +163,46 @@
 
 (defn path/normalize [p : cstr] : cstr
   ```c
+  /* Splits on '/' by hand rather than with strtok.
+   *
+   * strtok is unusable here on the JIT path: c2mir does not pick up its
+   * declaration from the MinGW headers, so the call falls back to an implicit
+   * `int` return and the 64-bit pointer comes back truncated to 32 bits and
+   * sign-extended -- non-NULL, so a loop that only counts tokens looks correct,
+   * and a crash the moment one is dereferenced.  Measured: strstr, strchr,
+   * strrchr and getenv all return intact pointers in the same translation unit;
+   * only strtok truncates.  docs/reported/jit-c2mir-implicit-decl-truncates-pointers.md
+   *
+   * Hand-splitting also drops strtok's static cursor, which was never
+   * thread-safe. */
   size_t plen = strlen(p);
   char *work = malloc(plen + 2);
+  if (!work) return NULL;
   memcpy(work, p, plen + 1);
   int is_abs = (work[0] == '/');
-  /* collect segment start pointers by splitting on '/' */
+
   char **segs = malloc((plen + 2) * sizeof(char *));
+  if (!segs) { free(work); return NULL; }
   int nseg = 0;
-  char *tok = strtok(work, "/");
-  while (tok) {
-    if (strcmp(tok, ".") == 0) {
-      /* skip current-dir component */
-    } else if (strcmp(tok, "..") == 0) {
+
+  char *cur = work;
+  while (*cur) {
+    while (*cur == '/') cur++;          /* skip run of separators */
+    if (!*cur) break;
+    char *seg = cur;
+    while (*cur && *cur != '/') cur++;
+    if (*cur) *cur++ = '\0';            /* terminate this segment */
+    if (strcmp(seg, ".") == 0) {
+      /* current-dir component: drop */
+    } else if (strcmp(seg, "..") == 0) {
       if (nseg > 0) nseg--;
     } else {
-      segs[nseg++] = tok;
+      segs[nseg++] = seg;
     }
-    tok = strtok(NULL, "/");
   }
-  /* rebuild from segments */
+
   char *out = malloc(plen + 4);
+  if (!out) { free(work); free(segs); return NULL; }
   size_t pos = 0;
   if (is_abs) out[pos++] = '/';
   for (int i = 0; i < nseg; i++) {

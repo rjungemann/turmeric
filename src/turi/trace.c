@@ -9,6 +9,14 @@
 #ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
+#else
+/* These were behind the same #ifndef as the POSIX headers, so the whole block
+ * compiled to nothing on Windows -- which is consistent with the capture below
+ * having been compiled out too, and is why nothing missed them. */
+#include <fcntl.h>
+#include <io.h>        /* _pipe, dup, dup2, _get_osfhandle */
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>   /* PeekNamedPipe */
 #endif
 
 /* --------------------------------------------------------------------------
@@ -247,16 +255,52 @@ static void output_begin(TurTrace *t) {
     if (flags >= 0) fcntl(fds[0], F_SETFL, flags | O_NONBLOCK);
     t->saved_stdout = saved;
     t->pipe_read    = fds[0];
+#else
+    /* Same shape, with PeekNamedPipe standing in for O_NONBLOCK (see
+     * trace_pipe_avail).  Skipping the capture here left the recording with no
+     * TUR_TRACE_OUTPUT records at all on Windows, so a replay had nothing to
+     * replay: `tur dap` in replay mode never emitted the transcript and the
+     * scrubber showed an empty console for a run that printed. */
+    int fds[2];
+    if (_pipe(fds, 1 << 20, _O_BINARY) != 0) return;
+    fflush(stdout);
+    int saved = dup(STDOUT_FILENO);
+    if (saved < 0) { close(fds[0]); close(fds[1]); return; }
+    if (dup2(fds[1], STDOUT_FILENO) < 0) {
+        close(saved); close(fds[0]); close(fds[1]);
+        return;
+    }
+    close(fds[1]);
+    t->saved_stdout = saved;
+    t->pipe_read    = fds[0];
 #endif
 }
 
+#ifdef _WIN32
+/* Bytes ready on the capture pipe, without blocking.  A Win32 anonymous pipe
+ * has no O_NONBLOCK, and a read() on an empty one whose write end is still open
+ * blocks forever -- which is why this capture used to be compiled out here. */
+static long trace_pipe_avail(int fd) {
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    DWORD avail = 0;
+    if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL)) return -1;
+    return (long)avail;
+}
+#endif
+
 static void output_drain(TurTrace *t) {
-#ifndef _WIN32
     if (t->pipe_read < 0) return;
     fflush(stdout);
     uint8_t buf[4096];
     for (;;) {
-        ssize_t n = read(t->pipe_read, buf, sizeof buf);
+        size_t want = sizeof buf;
+#ifdef _WIN32
+        long avail = trace_pipe_avail(t->pipe_read);
+        if (avail <= 0) break;
+        if ((size_t)avail < want) want = (size_t)avail;
+#endif
+        ssize_t n = read(t->pipe_read, buf, want);
         if (n <= 0) break;
         bytes_u8(&t->records, TUR_TRACE_OUTPUT);
         bytes_u32(&t->records, (uint32_t)n);
@@ -273,15 +317,11 @@ static void output_drain(TurTrace *t) {
                 off += w;
             }
         }
-        if ((size_t)n < sizeof buf) break;
+        if ((size_t)n < want) break;
     }
-#else
-    (void)t;
-#endif
 }
 
 static void output_end(TurTrace *t) {
-#ifndef _WIN32
     if (t->saved_stdout < 0) return;
     output_drain(t);
     fflush(stdout);
@@ -289,7 +329,6 @@ static void output_end(TurTrace *t) {
     close(t->saved_stdout);
     if (t->pipe_read >= 0) { close(t->pipe_read); t->pipe_read = -1; }
     t->saved_stdout = -1;
-#endif
 }
 
 /* --------------------------------------------------------------------------

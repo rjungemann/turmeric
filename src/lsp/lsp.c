@@ -974,27 +974,38 @@ static void on_hover(const char *id_raw, size_t id_len,
  * LD3: textDocument/definition
  * --------------------------------------------------------------------- */
 
+/* TUR_LSP_DEBUG=1: trace why a request answered `null`.  Goes to stderr --
+ * stdout is the protocol.  Every null return in this file is a silent
+ * "nothing here" to the editor, which is indistinguishable from a genuine
+ * absence; this says which branch produced it. */
+#define LSPDBG(...) do { if (getenv("TUR_LSP_DEBUG")) { \
+    fprintf(stderr, "lsp-debug: "); fprintf(stderr, __VA_ARGS__); \
+    fputc('\n', stderr); } } while (0)
+
 static void on_definition(const char *id_raw, size_t id_len,
                           const char *params, LspSink *sink) {
     size_t td_len;
     const char *td = lsp_json_raw(params, "textDocument", &td_len);
-    if (!td) { send_response(sink, id_raw, id_len, "null"); return; }
+    if (!td) { LSPDBG("no textDocument"); send_response(sink, id_raw, id_len, "null"); return; }
 
     char uri[1024];
     if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) {
+        LSPDBG("no uri");
         send_response(sink, id_raw, id_len, "null");
         return;
     }
 
     size_t pos_len;
     const char *pos = lsp_json_raw(params, "position", &pos_len);
-    if (!pos) { send_response(sink, id_raw, id_len, "null"); return; }
+    if (!pos) { LSPDBG("no position"); send_response(sink, id_raw, id_len, "null"); return; }
 
     int line_0 = (int)lsp_json_int(pos, "line");
     int char_0 = (int)lsp_json_int(pos, "character");
 
     LspDoc *doc = lsp_doc_get(uri, strlen(uri));
     if (!doc || !doc->symbols) {
+        LSPDBG("doc=%p symbols=%p for uri %s", (void *)doc,
+               doc ? (void *)doc->symbols : NULL, uri);
         send_response(sink, id_raw, id_len, "null");
         return;
     }
@@ -1002,12 +1013,14 @@ static void on_definition(const char *id_raw, size_t id_len,
     char name[128];
     if (!lsp_word_at_pos(doc->text, doc->text_len,
                          line_0 + 1, char_0 + 1, name, sizeof(name))) {
+        LSPDBG("no word at %d:%d", line_0, char_0);
         send_response(sink, id_raw, id_len, "null");
         return;
     }
 
     const LspSymbol *sym = find_symbol(doc, name);
     if (!sym || sym->file_path[0] == '\0') {
+        LSPDBG("find_symbol(%s) -> %s", name, sym ? "found but empty file_path" : "NOT FOUND");
         send_response(sink, id_raw, id_len, "null");
         return;
     }
@@ -1269,11 +1282,34 @@ void lsp_set_rename_exports(bool on) { rename_exports_ = on; }
  * both are manifests everywhere else a manifest is read. */
 #define LSP_SPICE_WALK_MAX 40
 
+/* Last path separator, either spelling.
+ *
+ * The walk-up below used strrchr(cur, '/') alone.  A path that reached the
+ * server from a Windows editor is spelled C:\dir\src\user.tur and contains no
+ * forward slash at all, so the very first lookup returned NULL and the
+ * function answered "not in a spice" for every file on the platform.  Nothing
+ * reported an error -- cross-module definition, completion and rename simply
+ * came back empty, which reads as "no such symbol" rather than "I never
+ * looked".  `tur check` resolves the same spice correctly, because it has its
+ * own walk-up that does not share this code.
+ *
+ * Same shape as the bug fixed in find_stdlib_beside_exe and
+ * rewrite_autolink_relative_paths: a POSIX-only path assumption that is
+ * invisible until a drive-lettered path arrives. */
+static char *lsp_last_sep(char *p) {
+    char *slash = strrchr(p, '/');
+#ifdef _WIN32
+    char *bs = strrchr(p, '\\');
+    if (bs && (!slash || bs > slash)) slash = bs;
+#endif
+    return slash;
+}
+
 static bool spice_root_of(const char *file_path, char *out, size_t cap) {
     if (!file_path || !out) return false;
     char cur[4096];
     snprintf(cur, sizeof(cur), "%s", file_path);
-    char *slash = strrchr(cur, '/');
+    char *slash = lsp_last_sep(cur);
     if (!slash) return false;
     *slash = '\0';
 
@@ -1290,7 +1326,7 @@ static bool spice_root_of(const char *file_path, char *out, size_t cap) {
             snprintf(out, cap, "%s", cur);
             return true;
         }
-        slash = strrchr(cur, '/');
+        slash = lsp_last_sep(cur);
         if (!slash || slash == cur) return false;
         *slash = '\0';
     }

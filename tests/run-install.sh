@@ -16,6 +16,27 @@ note() { printf "  %s\n" "$*"; }
 ok()   { PASS=$((PASS+1)); echo "PASS $1"; }
 bad()  { FAIL=$((FAIL+1)); FAILED+=("$1"); echo "FAIL $1"; [ -n "${2:-}" ] && note "$2"; }
 
+# Two things this script has to spell per-platform.  Both are identities off
+# Windows, so the POSIX assertions are unchanged.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) IS_WINDOWS=1 ;;
+  *)                    IS_WINDOWS=0 ;;
+esac
+
+# The FILE NAME a :bin entry takes in bin_dir.  Windows resolves a bare
+# command name through PATHEXT, so `tur install` writes `tur-foo.exe`; a test
+# that plants a file "at the same bin path" has to plant it at that path.
+binfile() {
+  if [ "$IS_WINDOWS" = 1 ]; then echo "$1.exe"; else echo "$1"; fi
+}
+
+# tur prints paths the way Windows spells them (C:/Users/...), while $WORK
+# here is an MSYS path (/tmp/... or /c/Users/...).  Comparing tur output
+# against a shell variable needs one spelling; this is it.
+native() {
+  if [ "$IS_WINDOWS" = 1 ]; then cygpath -m "$1"; else echo "$1"; fi
+}
+
 WORK="$(mktemp -d -t tur-install-tests-XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -102,8 +123,8 @@ else
 fi
 
 # 8. Conflict: a foreign file at the same bin path is refused without --force.
-echo "#!/bin/sh" > "$TUR_HOME/bin/tur-conflict"
-chmod +x "$TUR_HOME/bin/tur-conflict"
+echo "#!/bin/sh" > "$TUR_HOME/bin/$(binfile tur-conflict)"
+chmod +x "$TUR_HOME/bin/$(binfile tur-conflict)"
 # Create a second spice with the same bin name.
 SPICE2="$WORK/conflict-spice"
 mkdir -p "$SPICE2/src"
@@ -317,9 +338,10 @@ fi
 # 25. --print-path-snippet emits both shell snippets and never installs.
 out="$("$TUR" install --print-path-snippet 2>&1)"
 rc=$?
+NAT_HOME="$(native "$TUR_HOME")"
 if [ "$rc" -eq 0 ] && \
-   echo "$out" | grep -q "export PATH=\"$TUR_HOME/bin:\$PATH\"" && \
-   echo "$out" | grep -q "set -gx PATH $TUR_HOME/bin \$PATH"; then
+   echo "$out" | grep -q "export PATH=\"$NAT_HOME/bin:\$PATH\"" && \
+   echo "$out" | grep -q "set -gx PATH $NAT_HOME/bin \$PATH"; then
     ok "install --print-path-snippet"
 else
     bad "install --print-path-snippet" "rc=$rc out: $out"
@@ -329,7 +351,7 @@ fi
 empty="$WORK/empty-home"
 out="$(TUR_HOME="$empty" "$TUR" install --print-path-snippet 2>&1)"
 rc=$?
-if [ "$rc" -eq 0 ] && echo "$out" | grep -q "$empty/bin"; then
+if [ "$rc" -eq 0 ] && echo "$out" | grep -q "$(native "$empty")/bin"; then
     ok "install --print-path-snippet (empty home)"
 else
     bad "install --print-path-snippet (empty home)" "rc=$rc out: $out"

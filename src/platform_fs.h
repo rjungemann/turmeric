@@ -36,6 +36,48 @@
 #define PATH_MAX 260  /* MAX_PATH; MinGW normally defines PATH_MAX in limits.h */
 #endif
 
+/* ---- Atomic replace ------------------------------------------------------
+ *
+ * POSIX rename(2) replaces an existing destination.  The Windows CRT rename()
+ * does NOT -- it fails with EEXIST -- so every "write a temp file, rename it
+ * over the real one" atomic update in the tree could CREATE a file and never
+ * UPDATE one.  The symptom is `tur: rename failed: File exists`, and it hit
+ * state.tur (so a second `tur install` failed), tur.lock (a second
+ * `tur fetch`), and four other registries and caches.
+ *
+ * MoveFileEx with MOVEFILE_REPLACE_EXISTING is the atomic replace, so the
+ * pattern keeps the property it was written for rather than degrading to
+ * remove-then-rename with a window where the file does not exist.
+ *
+ * Aliased over rename() -- the same idiom this header already uses for
+ * mkdir/lstat/readlink -- so the six call sites and any future one are
+ * covered without each having to remember.  Nothing can be relying on the
+ * failure it removes: POSIX rename() never fails because the target exists.
+ *
+ * <windows.h> is pulled in LEAN here: without WIN32_LEAN_AND_MEAN and
+ * NOMINMAX it drops `min`, `max` and `ERROR` macros into every translation
+ * unit that includes this header, which is most of the compiler. */
+#ifndef WIN32_LEAN_AND_MEAN
+#  define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#  define NOMINMAX
+#endif
+#include <windows.h>
+
+static inline int tur_rename_replace(const char *from, const char *to) {
+    if (MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING)) return 0;
+    switch (GetLastError()) {
+        case ERROR_FILE_NOT_FOUND:
+        case ERROR_PATH_NOT_FOUND: errno = ENOENT; break;
+        case ERROR_ACCESS_DENIED:  errno = EACCES; break;
+        case ERROR_SHARING_VIOLATION: errno = EBUSY; break;
+        default: errno = EIO; break;
+    }
+    return -1;
+}
+#define rename(from, to) tur_rename_replace((from), (to))
+
 /* ---- Filesystem ---------------------------------------------------------- */
 
 /*
@@ -84,18 +126,21 @@ static inline char *tur_realpath(const char *path, char *resolved) {
 /* ---- Symlinks -------------------------------------------------------------
  *
  * Windows symlinks require either Developer Mode or an elevated process, so
- * `tur install`'s symlink-based bin-shims (install.c) do not work here.  That
- * is deferred -- WIN4 in the plan -- and these shims exist so the file compiles
- * and FAILS CLEANLY rather than silently doing the wrong thing:
+ * there is no honest POSIX symlink() here.  These shims report "not a symlink"
+ * and ENOSYS so a caller that has not thought about Windows fails cleanly
+ * rather than silently doing the wrong thing.
  *
- *   - Nothing is ever reported as a symlink, so inst_check_bin_target() sees a
- *     plain file and refuses to clobber it (the safe answer).
- *   - symlink() reports ENOSYS, so inst_replace_symlink() prints its existing
- *     "symlink(...) failed: Function not implemented" diagnostic.
+ * `tur install` no longer relies on them: inst_place_bin (install.c) calls
+ * CreateSymbolicLinkA with SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE and
+ * falls back to a COPY when the OS refuses -- which is what answers the
+ * privilege requirement, and is the only way to answer it.  Ownership then
+ * comes from state.tur rather than readlink, because a copy cannot say who
+ * wrote it.
  *
- * Do NOT "fix" these by making symlink() succeed via CreateSymbolicLinkA
- * without also handling the privilege requirement -- a shim that works only for
- * elevated users is worse than one that never works.
+ * So: do NOT "fix" these shims by making symlink() succeed via
+ * CreateSymbolicLinkA on its own.  A shim that works only for elevated users
+ * is worse than one that never works; the fallback has to come with it, and
+ * that decision belongs to the caller, which knows what to do without a link.
  */
 #define lstat(path, buf) stat((path), (buf))
 #define S_ISLNK(mode)    (0)

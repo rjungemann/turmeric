@@ -30,6 +30,8 @@
 #include <unistd.h>
 
 #include "arena.h"
+#include "platform_proc.h"
+#include "source_literal.h"
 #include "buf.h"
 #include "diag.h"
 #include "forms.h"
@@ -155,11 +157,13 @@ bool tur_global_bin_on_path(const char *bin_dir) {
     size_t blen = strlen(bin_dir);
     const char *p = path;
     while (*p) {
-        const char *colon = strchr(p, ':');
-        size_t seg = colon ? (size_t)(colon - p) : strlen(p);
-        if (seg == blen && strncmp(p, bin_dir, blen) == 0) return true;
-        if (!colon) break;
-        p = colon + 1;
+        const char *sep = strchr(p, TUR_PATH_LIST_SEP);
+        size_t seg = sep ? (size_t)(sep - p) : strlen(p);
+        /* tur_path_seg_eq, not strncmp: on Windows this same directory is
+         * spelled `C:/...` here and `C:\\...` in the PATH the shell exports. */
+        if (tur_path_seg_eq(p, seg, bin_dir, blen)) return true;
+        if (!sep) break;
+        p = sep + 1;
     }
     return false;
 }
@@ -303,6 +307,29 @@ bool tur_state_read(const char *path, TurState *out) {
     return true;
 }
 
+/* state.tur is Turmeric source that tur writes and tur reads back, so every
+ * value it emits has to survive the reader ESCAPE PROCESSING.  A Windows path
+ * does not survive unescaped: a :path value written verbatim comes back as
+ * `unknown string escape` on its first directory separator, and the WHOLE
+ * registry then fails to load -- so the second `tur install` on a Windows box
+ * could not see the first.  The same hazard exists on POSIX for any path
+ * containing a double quote.
+ *
+ * tur_source_literal_escape is the same helper the generated-source paths use;
+ * see its header for why escaping rather than rewriting separators. */
+static void state_put_str(FILE *f, const char *s) {
+    char esc[8192];
+    tur_source_literal_escape(s ? s : "", esc, sizeof esc);
+    fprintf(f, "\"%s\"", esc);
+}
+
+static void state_put_kv(FILE *f, const char *key, const char *val) {
+    if (!val) return;
+    fprintf(f, ":%s ", key);
+    state_put_str(f, val);
+    fprintf(f, " ");
+}
+
 bool tur_state_write(const char *path, const TurState *st) {
     char tmp_path[4096];
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%d", path, (int)getpid());
@@ -319,20 +346,22 @@ bool tur_state_write(const char *path, const TurState *st) {
     fprintf(f, "  :installed #{\n");
     for (int i = 0; i < st->n_entries; i++) {
         const TurStateEntry *e = &st->entries[i];
-        fprintf(f, "    \"%s\" #{", e->name ? e->name : "");
-        if (e->url)          fprintf(f, ":url \"%s\" ", e->url);
-        if (e->ref)          fprintf(f, ":ref \"%s\" ", e->ref);
-        if (e->subdir)       fprintf(f, ":subdir \"%s\" ", e->subdir);
-        if (e->path)         fprintf(f, ":path \"%s\" ", e->path);
-        if (e->resolved)     fprintf(f, ":resolved \"%s\" ", e->resolved);
-        if (e->version)      fprintf(f, ":version \"%s\" ", e->version);
-        if (e->installed_at) fprintf(f, ":installed-at \"%s\" ", e->installed_at);
-        if (e->built_with)   fprintf(f, ":built-with \"%s\" ", e->built_with);
+        fprintf(f, "    ");
+        state_put_str(f, e->name ? e->name : "");
+        fprintf(f, " #{");
+        state_put_kv(f, "url",          e->url);
+        state_put_kv(f, "ref",          e->ref);
+        state_put_kv(f, "subdir",       e->subdir);
+        state_put_kv(f, "path",         e->path);
+        state_put_kv(f, "resolved",     e->resolved);
+        state_put_kv(f, "version",      e->version);
+        state_put_kv(f, "installed-at", e->installed_at);
+        state_put_kv(f, "built-with",   e->built_with);
         if (e->n_bin > 0) {
             fprintf(f, ":bin [");
             for (int j = 0; j < e->n_bin; j++) {
                 if (j) fprintf(f, " ");
-                fprintf(f, "\"%s\"", e->bin[j]);
+                state_put_str(f, e->bin[j]);
             }
             fprintf(f, "] ");
         }
