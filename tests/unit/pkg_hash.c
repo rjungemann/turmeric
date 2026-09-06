@@ -22,10 +22,14 @@
 #include "lsp/lsp_sym.h"            /* LspSymbol, for the link stub below */
 #include "platform_fs.h"
 
+#include <dirent.h>   /* opendir/readdir -- rm_tree */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>   /* rmdir -- an implicit declaration is a hard error
+                      * under clang 16+, which is how this passed on Windows
+                      * (platform_fs.h supplies both) and failed on macOS. */
 
 /* Stub: tur_core's lsp.c references this; this test never touches LSP, but the
  * symbol must resolve when tur_core is linked into a standalone executable.
