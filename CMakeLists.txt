@@ -961,6 +961,17 @@ add_test(
   COMMAND bash tests/run-install.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# `tur fetch` + the lockfile integrity check, against a local file:// repo.
+add_test(
+  NAME tur_spice_fetch_tests
+  COMMAND bash tests/run-spice-fetch.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# The harness skips itself when git is absent.  Under ctest that would be a
+# pass that tested nothing, and a source tree you cloned has git -- so here
+# a missing one is a failure with an actionable message.
+set_tests_properties(tur_spice_fetch_tests PROPERTIES
+  ENVIRONMENT "TUR_REQUIRE_GIT=1")
 add_test(
   NAME turi_fixture_tests
   COMMAND bash tests/run-turi.sh

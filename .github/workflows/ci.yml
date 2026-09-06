@@ -646,6 +646,7 @@ jobs:
             mingw-w64-ucrt-x86_64-ninja
             diffutils
             python
+            git
 
       # Optional: line editing for the REPL (HAVE_EDITLINE in
       # src/CMakeLists.txt).  The package is `wineditline`, NOT `libedit` --
@@ -764,6 +765,20 @@ jobs:
       # so the harness could not have passed here.
       - name: DAP end-to-end harness
         run: TUR=./build-win/tur.exe bash tests/run-dap.sh
+
+      # The package manager had NO check on this platform: the job below runs
+      # tests/run.sh directly and never ctest, which is where both of these
+      # live for the other legs.  In that gap `tur fetch` could not fetch
+      # anything (POSIX shell quoting handed to cmd.exe), tur.lock was never
+      # read back (a text-mode read short of its own ftell size), the
+      # integrity hash shelled out to a tool MinGW does not ship, and
+      # rename() left every registry write-once -- four silent defects, no
+      # red check.  Same shape as the `tur lsp` gap noted above.
+      - name: Spice fetch + lockfile integrity
+        run: TUR_REQUIRE_GIT=1 TUR=./build-win/tur.exe bash tests/run-spice-fetch.sh
+
+      - name: Install / uninstall / upgrade harness
+        run: TUR=./build-win/tur.exe bash tests/run-install.sh
 
       - name: Fixture suite
         run: |
