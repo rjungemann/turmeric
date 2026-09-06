@@ -314,9 +314,23 @@ PkgLockEntry *pkg_lock_find(PkgLockFile *lock, const char *name, bool is_cmake);
 /* Compute SHA-256 of a file (64 hex chars + NUL). Returns true on success. */
 bool pkg_sha256_file(const char *path, char out[65]);
 
-/* Compute SHA-256 of a directory by piping `tar -c <dir>` into sha256.
- * Returns true on success; out receives 64 hex chars + NUL. */
-bool pkg_sha256_dir(const char *dir, char out[65]);
+/* Room for a tagged tree hash: "tree1:" + 64 hex + NUL. */
+#define PKG_HASH_MAX 72
+
+/* The tag every hash pkg_hash_dir produces carries.  It is in the stored
+ * string, not implied by it, so the algorithm can change without a lockfile
+ * written by an older tur being read as a mismatch -- see pkg_hash_comparable. */
+#define PKG_TREE_HASH_TAG "tree1:"
+
+/* Content hash of a directory tree: "tree1:" + 64 hex.  Reproducible for a
+ * given tree, with no subprocess and no tar.  Returns true on success. */
+bool pkg_hash_dir(const char *dir, char out[PKG_HASH_MAX]);
+
+/* Can `recorded` (a lockfile :sha256 value) be compared against a fresh
+ * pkg_hash_dir result?  False for anything an older tur wrote -- a bare
+ * `tar -c | sha256sum` digest, or the git-SHA fallback -- which are not this
+ * algorithm and must not be reported as an integrity failure. */
+bool pkg_hash_comparable(const char *recorded);
 
 /* Parse semver "vMAJOR.MINOR.PATCH[-pre]" or "MAJOR.MINOR.PATCH[-pre]".
  * Returns false if the string is not valid semver. */

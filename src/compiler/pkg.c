@@ -42,6 +42,7 @@
 #include "reader.h"
 #include "symbols.h"
 #include "platform_fs.h"
+#include "runtime/sha256.h"
 
 /* ================================================================== */
 /* Internal helpers                                                     */
@@ -1293,7 +1294,15 @@ bool pkg_lock_read(const char *path, PkgLockFile *out) {
     memset(out, 0, sizeof(*out));
     out->format_version = 1;
 
-    FILE *f = fopen(path, "r");
+    /* "rb", not "r": on Windows a text-mode handle strips CR on the way in, so
+     * fread returns FEWER bytes than the ftell size above and the `!= sz` check
+     * below rejects the file -- silently, because the caller reads the result as
+     * "there is no lock file yet". Every tur.lock tur itself writes has CRLF
+     * line endings, so on Windows the lockfile was never read AT ALL: the
+     * integrity check never ran, and the pinned :resolved refs never applied.
+     * The Turmeric reader treats CR as whitespace, so the bytes are fine.
+     * docs/reported/windows-text-mode-read-rejects-own-files.md */
+    FILE *f = fopen(path, "rb");
     if (!f) return false; /* not an error -- no lock file yet */
 
     fseek(f, 0, SEEK_END);
@@ -1555,54 +1564,166 @@ static bool lock_remove(PkgLockFile *lock, const char *name, bool is_cmake) {
 /* ================================================================== */
 
 bool pkg_sha256_file(const char *path, char out[65]) {
-    Buf cmd;
-    buf_init(&cmd);
-#if defined(__APPLE__)
-    buf_printf(&cmd, "shasum -a 256 '%s'", path);
-#else
-    buf_printf(&cmd, "sha256sum '%s'", path);
-#endif
-    buf_putc(&cmd, '\0');
-    FILE *f = popen(cmd.data, "r");
-    buf_free(&cmd);
-    if (!f) return false;
-    char line[256];
-    bool ok = false;
-    if (fgets(line, sizeof(line), f)) {
-        /* output: "<64 hex chars>  <filename>" */
-        if (strlen(line) >= 64) {
-            memcpy(out, line, 64);
-            out[64] = '\0';
-            ok = true;
+    uint8_t digest[TUR_SHA256_DIGEST_LEN];
+    if (!tur_sha256_file(path, digest)) return false;
+    tur_sha256_hex(digest, out);
+    return true;
+}
+
+/* --- pkg_hash_dir: a content hash of a directory tree ------------------- *
+ *
+ * This used to be `tar -c <dir> | sha256sum`, which had four problems and
+ * only the last one was visible:
+ *
+ *   1. It hashed `.git`.  A shallow clone's `.git/index` records mtimes, so
+ *      running any git command inside a fetched spice changed its hash and
+ *      `tur run` then reported "integrity check failed" for a tree nobody had
+ *      touched.
+ *   2. `tar -c /abs/path` puts the ABSOLUTE PATH in the member headers, so the
+ *      digest depended on where the project happened to live on disk.
+ *   3. tar output is not reproducible across implementations -- bsdtar and GNU
+ *      tar disagree on default format, and both record uid/gid/mtime -- so a
+ *      lockfile written on macOS could not verify on Linux.
+ *   4. No Windows host can run it.  MinGW ships neither `shasum` nor
+ *      `sha256sum`, and popen there runs cmd.exe, where the '%s' quoting is
+ *      not quoting at all.  The failure was silent: pkg_fetch_all stored the
+ *      git SHA instead and `tur run`'s check quietly never ran.
+ *
+ * So: hash the CONTENT, in process.  For each regular file, in ascending byte
+ * order of its relative path:
+ *
+ *     "F\0" <relpath> "\0" <decimal size> "\0" <bytes>
+ *
+ * Separators are normalized to '/', the length prefix keeps a path and the
+ * bytes that follow it unambiguous, and the sort makes readdir order
+ * irrelevant.  File modes are deliberately absent: Windows cannot represent
+ * the executable bit, and a hash that disagreed across platforms would be
+ * worse than one that ignores it.
+ *
+ * Reproducible for a given checkout.  Not guaranteed byte-identical across
+ * platforms for a tree containing symlinks or CRLF-translated files -- git
+ * itself materializes those differently -- which is why a mismatch is only
+ * ever reported for a hash this same algorithm produced (PKG_TREE_HASH_TAG).
+ * See docs/reported/pkg-hash-shells-out-to-sha256sum.md. */
+
+/* Directory names never descended into.  `.git` because it is VCS metadata
+ * rather than content (see 1 above); the rest because they are tur's own build
+ * outputs, which appear inside a spice only after someone builds in it and are
+ * never part of what was fetched. */
+static bool hash_skip_dir(const char *name) {
+    return strcmp(name, ".git") == 0
+        || strcmp(name, "build") == 0
+        || strcmp(name, ".tur-abi-cache") == 0
+        || strcmp(name, ".tur-repl-cache") == 0;
+}
+
+/* Bounds a symlinked cycle; a source tree this deep is already pathological. */
+#define PKG_HASH_MAX_DEPTH 64
+
+typedef struct {
+    char **paths;      /* relative, '/'-separated */
+    int    n, cap;
+    bool   failed;
+} HashWalk;
+
+static void hash_walk_push(HashWalk *w, const char *rel) {
+    if (w->n == w->cap) {
+        int cap = w->cap ? w->cap * 2 : 64;
+        char **p = (char **)realloc(w->paths, (size_t)cap * sizeof(char *));
+        if (!p) { w->failed = true; return; }
+        w->paths = p;
+        w->cap = cap;
+    }
+    w->paths[w->n] = tur_strdup(rel);
+    if (!w->paths[w->n]) { w->failed = true; return; }
+    w->n++;
+}
+
+static void hash_walk(HashWalk *w, const char *root, const char *rel, int depth) {
+    if (w->failed || depth > PKG_HASH_MAX_DEPTH) return;
+    char abs[4096];
+    if (*rel) snprintf(abs, sizeof(abs), "%s/%s", root, rel);
+    else      snprintf(abs, sizeof(abs), "%s", root);
+
+    DIR *d = opendir(abs);
+    if (!d) { w->failed = true; return; }
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        char child[4096];
+        if (*rel) snprintf(child, sizeof(child), "%s/%s", rel, ent->d_name);
+        else      snprintf(child, sizeof(child), "%s", ent->d_name);
+        char child_abs[4096];
+        snprintf(child_abs, sizeof(child_abs), "%s/%s", root, child);
+        struct stat st;
+        if (stat(child_abs, &st) != 0) continue;   /* dangling link: not content */
+        if (S_ISDIR(st.st_mode)) {
+            if (hash_skip_dir(ent->d_name)) continue;
+            hash_walk(w, root, child, depth + 1);
+        } else if (S_ISREG(st.st_mode)) {
+            hash_walk_push(w, child);
+        }
+        if (w->failed) break;
+    }
+    closedir(d);
+}
+
+static int hash_path_cmp(const void *a, const void *b) {
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+bool pkg_hash_dir(const char *dir, char out[PKG_HASH_MAX]) {
+    HashWalk w;
+    memset(&w, 0, sizeof w);
+    hash_walk(&w, dir, "", 0);
+
+    bool ok = !w.failed;
+    if (ok) {
+        qsort(w.paths, (size_t)w.n, sizeof(char *), hash_path_cmp);
+
+        TurSha256 ctx;
+        tur_sha256_init(&ctx);
+        for (int i = 0; i < w.n && ok; i++) {
+            char abs[4096];
+            snprintf(abs, sizeof(abs), "%s/%s", dir, w.paths[i]);
+            FILE *f = fopen(abs, "rb");
+            if (!f) { ok = false; break; }
+            if (fseek(f, 0, SEEK_END) != 0) { fclose(f); ok = false; break; }
+            long sz = ftell(f);
+            if (sz < 0) { fclose(f); ok = false; break; }
+            rewind(f);
+
+            char hdr[64];
+            int hn = snprintf(hdr, sizeof(hdr), "%ld", sz);
+            tur_sha256_update(&ctx, "F", 2);              /* 'F' and its NUL */
+            tur_sha256_update(&ctx, w.paths[i], strlen(w.paths[i]) + 1);
+            tur_sha256_update(&ctx, hdr, (size_t)hn + 1);
+
+            uint8_t buf[64 * 1024];
+            for (;;) {
+                size_t got = fread(buf, 1, sizeof buf, f);
+                if (got > 0) tur_sha256_update(&ctx, buf, got);
+                if (got < sizeof buf) break;
+            }
+            if (ferror(f)) ok = false;
+            fclose(f);
+        }
+        if (ok) {
+            uint8_t digest[TUR_SHA256_DIGEST_LEN];
+            tur_sha256_final(&ctx, digest);
+            memcpy(out, PKG_TREE_HASH_TAG, sizeof(PKG_TREE_HASH_TAG) - 1);
+            tur_sha256_hex(digest, out + sizeof(PKG_TREE_HASH_TAG) - 1);
         }
     }
-    pclose(f);
+
+    for (int i = 0; i < w.n; i++) free(w.paths[i]);
+    free(w.paths);
     return ok;
 }
 
-bool pkg_sha256_dir(const char *dir, char out[65]) {
-    Buf cmd;
-    buf_init(&cmd);
-#if defined(__APPLE__)
-    buf_printf(&cmd, "tar -c '%s' 2>/dev/null | shasum -a 256", dir);
-#else
-    buf_printf(&cmd, "tar -c '%s' 2>/dev/null | sha256sum", dir);
-#endif
-    buf_putc(&cmd, '\0');
-    FILE *f = popen(cmd.data, "r");
-    buf_free(&cmd);
-    if (!f) return false;
-    char line[256];
-    bool ok = false;
-    if (fgets(line, sizeof(line), f)) {
-        if (strlen(line) >= 64) {
-            memcpy(out, line, 64);
-            out[64] = '\0';
-            ok = true;
-        }
-    }
-    pclose(f);
-    return ok;
+bool pkg_hash_comparable(const char *recorded) {
+    return recorded != NULL
+        && strncmp(recorded, PKG_TREE_HASH_TAG, sizeof(PKG_TREE_HASH_TAG) - 1) == 0;
 }
 
 /* ================================================================== */
@@ -1852,12 +1973,30 @@ bool pkg_version_range_match(const char *range, const char *version,
 /* Git operations                                                       */
 /* ================================================================== */
 
+/* Append one argument to a shell command, quoted for the platform's shell.
+ *
+ * Every command in this file used to interpolate `'%s'`, which cmd.exe does not
+ * treat as quoting at all -- git received a path with the quotes still attached
+ * and reported `could not create leading directories of ''./spices/demo''`.
+ * That made `tur fetch` unable to fetch anything on Windows.  Returns false if
+ * the argument does not fit; a truncated command string is worse than none, so
+ * callers must fail rather than run it.
+ * docs/reported/windows-spice-fetch-shell-quoting.md */
+static bool cmd_arg(Buf *cmd, const char *arg) {
+    char q[8192];
+    if (tur_shell_quote(arg, q, sizeof q) != 0) return false;
+    buf_puts(cmd, q);
+    return true;
+}
+
 char *pkg_git_resolve(const char *repo_dir) {
     Buf cmd;
     buf_init(&cmd);
-    buf_printf(&cmd, "git -C '%s' rev-parse HEAD 2>/dev/null", repo_dir);
+    buf_puts(&cmd, "git -C ");
+    bool ok = cmd_arg(&cmd, repo_dir);
+    buf_puts(&cmd, " rev-parse HEAD 2>" TUR_DEVNULL);
     buf_putc(&cmd, '\0');
-    char *sha = run_capture(cmd.data);
+    char *sha = ok ? run_capture(cmd.data) : NULL;
     buf_free(&cmd);
     return sha;
 }
@@ -1869,32 +2008,39 @@ char *pkg_git_fetch(const char *url, const char *ref, const char *dest_dir) {
     Buf cmd;
     buf_init(&cmd);
 
+    bool ok = true;
     if (!already_cloned) {
         /* Fresh clone */
+        buf_puts(&cmd, "git clone --depth 1 ");
         if (ref) {
-            buf_printf(&cmd,
-                "git clone --depth 1 --branch '%s' -- '%s' '%s' 2>&1",
-                ref, url, dest_dir);
-        } else {
-            buf_printf(&cmd,
-                "git clone --depth 1 -- '%s' '%s' 2>&1",
-                url, dest_dir);
+            buf_puts(&cmd, "--branch ");
+            ok = cmd_arg(&cmd, ref) && ok;
+            buf_putc(&cmd, ' ');
         }
+        buf_puts(&cmd, "-- ");
+        ok = cmd_arg(&cmd, url) && ok;
+        buf_putc(&cmd, ' ');
+        ok = cmd_arg(&cmd, dest_dir) && ok;
+        buf_puts(&cmd, " 2>&1");
     } else {
         /* Fetch and checkout the desired ref */
-        buf_printf(&cmd,
-            "git -C '%s' fetch --depth 1 origin '%s' 2>&1 && "
-            "git -C '%s' checkout FETCH_HEAD 2>&1",
-            dest_dir, ref ? ref : "HEAD",
-            dest_dir);
+        buf_puts(&cmd, "git -C ");
+        ok = cmd_arg(&cmd, dest_dir) && ok;
+        buf_puts(&cmd, " fetch --depth 1 origin ");
+        ok = cmd_arg(&cmd, ref ? ref : "HEAD") && ok;
+        buf_puts(&cmd, " 2>&1 && git -C ");
+        ok = cmd_arg(&cmd, dest_dir) && ok;
+        buf_puts(&cmd, " checkout FETCH_HEAD 2>&1");
     }
     buf_putc(&cmd, '\0');
-    int rc = system(cmd.data);
+    int rc = ok ? system(cmd.data) : -1;
     buf_free(&cmd);
 
     if (rc != 0) {
         fprintf(stderr, "spice: git failed for '%s' ref '%s' in '%s'\n",
                 url, ref ? ref : "(default)", dest_dir);
+        if (!ok)
+            fprintf(stderr, "  (a path in that command was too long to quote)\n");
         if (already_cloned) {
             fprintf(stderr,
                 "  hint: the cached clone has uncommitted changes or a "
@@ -2381,10 +2527,14 @@ bool pkg_fetch_all(const char *project_dir,
             free(le->ref);       le->ref       = it->ref ? tur_strdup(it->ref) : NULL;
             free(le->resolved);  le->resolved  = resolved;
             free(le->fetched_at);le->fetched_at= tur_strdup(iso_now());
-            /* Compute SHA-256 of the fetched directory archive */
-            char dir_sha[65];
+            /* Content hash of the fetched tree, for `tur run`'s integrity
+             * check.  The git-SHA fallback is provenance only: it does not
+             * carry PKG_TREE_HASH_TAG, so pkg_hash_comparable rejects it and
+             * the check is skipped rather than failing against a value this
+             * algorithm never produced. */
+            char dir_sha[PKG_HASH_MAX];
             free(le->sha256);
-            if (pkg_sha256_dir(dest, dir_sha))
+            if (pkg_hash_dir(dest, dir_sha))
                 le->sha256 = tur_strdup(dir_sha);
             else
                 le->sha256 = tur_strdup(resolved); /* fallback: git SHA */
@@ -3514,7 +3664,7 @@ static int cmake_major_version(void) {
     static int cached = -1;
     if (cached >= 0) return cached;
     cached = 0;
-    FILE *p = popen("cmake --version 2>/dev/null", "r");
+    FILE *p = popen("cmake --version 2>" TUR_DEVNULL, "r");
     if (p) {
         char line[256];
         if (fgets(line, sizeof(line), p)) {
@@ -3548,11 +3698,12 @@ bool pkg_cmake_build(const char *project_dir,
 
     /* Configure */
     Buf cmd;
+    bool cmake_ok = true;
     buf_init(&cmd);
-    if (wasm)
-        buf_printf(&cmd, "emcmake cmake -S '%s' -B '%s'", cmake_src, cmake_bld);
-    else
-        buf_printf(&cmd, "cmake -S '%s' -B '%s'", cmake_src, cmake_bld);
+    buf_puts(&cmd, wasm ? "emcmake cmake -S " : "cmake -S ");
+    cmake_ok = cmd_arg(&cmd, cmake_src) && cmake_ok;
+    buf_puts(&cmd, " -B ");
+    cmake_ok = cmd_arg(&cmd, cmake_bld) && cmake_ok;
     /* CMake 4 removed compatibility with `cmake_minimum_required` floors below
      * 3.5, so a dependency that has not raised its floor (hiredis, and plenty
      * of other stable C libraries) aborts the whole configure and *nothing*
@@ -3573,7 +3724,7 @@ bool pkg_cmake_build(const char *project_dir,
         buf_printf(&cmd, " -DTUR_FETCH_FORCE_FETCH=ON");
     buf_putc(&cmd, '\0');
     fprintf(stderr, "spice: cmake configure%s ...\n", wasm ? " (wasm)" : "");
-    int rc = system(cmd.data);
+    int rc = cmake_ok ? system(cmd.data) : -1;
     buf_free(&cmd);
     if (rc != 0) {
         fprintf(stderr, "spice: cmake configure failed (status %d)\n", rc);
@@ -3582,10 +3733,11 @@ bool pkg_cmake_build(const char *project_dir,
 
     /* Build */
     buf_init(&cmd);
-    buf_printf(&cmd, "cmake --build '%s'", cmake_bld);
+    buf_puts(&cmd, "cmake --build ");
+    cmake_ok = cmd_arg(&cmd, cmake_bld) && cmake_ok;
     buf_putc(&cmd, '\0');
     fprintf(stderr, "spice: cmake build ...\n");
-    rc = system(cmd.data);
+    rc = cmake_ok ? system(cmd.data) : -1;
     buf_free(&cmd);
     if (rc != 0) {
         fprintf(stderr, "spice: cmake build failed (status %d)\n", rc);
@@ -3750,7 +3902,9 @@ static char **json_parse_str_arr(const char **pp, int *n_out) {
 bool pkg_cmake_manifest_read(const char *path, PkgCmakeManifest *out) {
     memset(out, 0, sizeof(*out));
 
-    FILE *f = fopen(path, "r");
+    /* "rb": see pkg_lock_read -- a text-mode read is short of the ftell size on
+     * Windows and the check below then rejects tur's own file. */
+    FILE *f = fopen(path, "rb");
     if (!f) return true; /* not present is not an error */
 
     fseek(f, 0, SEEK_END);

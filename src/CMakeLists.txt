@@ -243,6 +243,7 @@ set(TUR_CORE_SOURCES
     runtime/image.c
     runtime/interp.c
     runtime/rc.c
+    runtime/sha256.c
     runtime/rc_free_queue.c
     runtime/region.c
     runtime/serial.c
@@ -1040,6 +1041,30 @@ add_test(NAME tur_trail COMMAND tur_trail)
 # counterexample search, and the SMT-LIB serializer -- including the
 # "must NOT prove" direction, which is where the soundness invariant lives.
 # ---------------------------------------------------------------------------
+# pkg_hash_dir -- the spice lockfile's integrity hash.  Links tur_core because
+# the walk lives with the rest of the package manager.
+add_executable(tur_pkg_hash
+    ${CMAKE_SOURCE_DIR}/tests/unit/pkg_hash.c
+    $<TARGET_OBJECTS:tur_core>
+)
+target_include_directories(tur_pkg_hash PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_pkg_hash PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_pkg_hash PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_pkg_hash PRIVATE m)
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_pkg_hash PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_pkg_hash PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_pkg_hash PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
 add_executable(tur_refine_solver
     ${CMAKE_SOURCE_DIR}/tests/unit/refine_solver.c
     $<TARGET_OBJECTS:tur_core>
@@ -1419,10 +1444,30 @@ set_target_properties(tur_cps_prompt_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
+# SHA-256 unit test -- known-answer vectors plus the streaming property that
+# pkg_hash_dir's multi-update tree walk depends on.
+add_executable(tur_sha256_unit
+    ${CMAKE_SOURCE_DIR}/tests/sha256_unit.c
+    ${CMAKE_SOURCE_DIR}/src/runtime/sha256.c
+)
+target_include_directories(tur_sha256_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_sha256_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_sha256_unit PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_sha256_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
 # AI1 (application-image-dumps-plan): image header codec unit test.
 add_executable(tur_image_unit
     ${CMAKE_SOURCE_DIR}/tests/image_unit.c
     ${CMAKE_SOURCE_DIR}/src/runtime/image.c
+    ${CMAKE_SOURCE_DIR}/src/runtime/sha256.c
 )
 target_include_directories(tur_image_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_image_unit PRIVATE
