@@ -156,22 +156,55 @@ jobs:
           echo "$out"
           echo "Self-contained: no MSYS2 DLLs, runs with MSYS2 off PATH."
 
+      # PREFIX layout -- bin/, lib/, include/, share/ -- not the flat one the
+      # other legs use.  Flat is not merely a style choice there: `tur run` from
+      # a flat extract cannot compile anything.  locate_runtime_lib probes
+      # $TUR_RUNTIME_LIB, <exe_dir>/src, <exe_dir>/../lib and <root>/build/src,
+      # and a flat tree is none of them, so TUR_RT_AUTO falls back to source mode
+      # -- which wants src/runtime/*.c that no archive ships.  The prefix shape is
+      # what <exe_dir>/../lib and resolve_stdlib_root step 3 already understand.
+      # docs/reported/release-archive-cannot-compile.md tracks the other legs.
       - name: Package
         run: |
           TAG=${GITHUB_REF_NAME}
           ARCHIVE="turmeric-${TAG}-windows-x86_64.zip"
 
-          mkdir -p dist/include/turi
+          mkdir -p dist/bin dist/lib dist/include/turi dist/share/turmeric
 
-          cp build/tur.exe dist/
-          cp build/src/libturi.a dist/
+          cp build/tur.exe dist/bin/
+          cp build/src/libturt_runtime.a dist/lib/
+          cp build/src/libturi.a dist/lib/
           cp src/turi/eval.h src/turi/env.h src/turi/value.h src/turi/fiber.h dist/include/turi/
-          cp -R stdlib dist/
+          cp -R stdlib dist/share/turmeric/
 
           # zip rather than tar.gz: Explorer opens one and not the other.  The
           # release job checksums whatever it finds, so the format is free.
           (cd dist && zip -qr "../${ARCHIVE}" .)
           echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
+
+      # Unpack what was just built and compile a program with it.  The other legs
+      # smoke-test `--version`, which proves only that the binary starts -- this
+      # archive passed that check while being unable to compile a two-line
+      # program, because the runtime archive was not where tur looks for it.
+      - name: Compile a program from the extracted archive
+        run: |
+          rm -rf verify && mkdir verify
+          (cd verify && unzip -q "../${ARCHIVE}")
+          cat > verify/hello.tur <<'EOF'
+          (defn main [] : int
+            (println "hello from the archive")
+            0)
+          EOF
+          out=$(cd verify && ./bin/tur.exe run hello.tur 2>&1) || {
+            printf '%s\n' "$out"
+            echo "::error::the extracted archive cannot compile a program"
+            exit 1
+          }
+          printf '%s\n' "$out"
+          case "$out" in
+            *"hello from the archive"*) echo "Archive compiles and runs." ;;
+            *) echo "::error::unexpected output from the extracted archive"; exit 1 ;;
+          esac
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5

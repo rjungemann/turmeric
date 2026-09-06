@@ -1965,6 +1965,24 @@ static const char *resolve_turmeric_root(char *out, size_t cap) {
  * (a bare path, or the argument of `-I` / `-L`) are anchored at `root`.
  * Absolute paths and non-path flags (`-l`, `-f`, `-D`, ...) pass through
  * unchanged.  The rewritten flags are appended to `out` (no trailing NUL). */
+/* Is this path already absolute?  POSIX says a leading '/'; Windows also
+ * accepts a leading '\' and a drive-qualified C:\dir or C:/dir.
+ *
+ * A '/'-only test reads C:\dir as RELATIVE, so the caller below anchors it at
+ * the turmeric root and emits -LC:\root/C:\real\dir.  ld reports that as
+ * `cannot find -lturt_runtime`, which reads as the -L having been dropped
+ * rather than mangled -- and sends you looking in the wrong place. */
+static bool path_is_absolute(const char *p) {
+    if (!p || !*p) return false;
+    if (p[0] == '/') return true;
+#ifdef _WIN32
+    if (p[0] == '\\') return true;
+    if (((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z'))
+        && p[1] == ':' && (p[2] == '/' || p[2] == '\\')) return true;
+#endif
+    return false;
+}
+
 static void rewrite_autolink_relative_paths(const char *flags,
                                              const char *root, Buf *out) {
     const char *p = flags;
@@ -1978,12 +1996,12 @@ static void rewrite_autolink_relative_paths(const char *flags,
         if (!first) buf_putc(out, ' ');
         first = false;
         if (len > 2 && tok[0] == '-' && (tok[1] == 'I' || tok[1] == 'L') &&
-            tok[2] != '/') {
+            !path_is_absolute(tok + 2)) {
             /* -I<rel> / -L<rel>: anchor the path part at root. */
             buf_write(out, tok, 2);
             buf_printf(out, "%s/", root);
             buf_write(out, tok + 2, len - 2);
-        } else if (tok[0] != '-' && tok[0] != '/') {
+        } else if (tok[0] != '-' && !path_is_absolute(tok)) {
             /* bare relative path (source file or lib): anchor it at root. */
             buf_printf(out, "%s/", root);
             buf_write(out, tok, len);
@@ -2521,6 +2539,13 @@ static int link_command_run(const char *cc, const char *cc_flags,
     buf_puts(&cmd, " -lpthread -lws2_32 -lshlwapi");
 #endif
     buf_putc(&cmd, '\0');
+    /* TUR_SHOW_CC=1: print the assembled cc command.  A link error names the
+     * library it could not find, never the flags that failed to find it -- this
+     * is what showed the doubled -L behind
+     * docs/reported/release-archive-cannot-compile.md, after three plausible
+     * theories (flag ordering, quoting, a missing archive) had each been tested
+     * and eliminated. */
+    if (getenv("TUR_SHOW_CC")) fprintf(stderr, "CC: %s\n", cmd.data);
     int sys_rc = system(cmd.data);
     buf_free(&cmd);
 
@@ -6031,6 +6056,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
 #endif
     /* Ensure null termination before passing to system(). */
     buf_putc(&cmd, '\0');
+    if (getenv("TUR_SHOW_CC")) fprintf(stderr, "CC: %s\n", cmd.data);
     int sys_rc = system(cmd.data);
     buf_free(&cmd);
 
@@ -6656,6 +6682,7 @@ static int cmd_compile(const char *input, const char *out_obj,
     }
     buf_printf(&cmd, " -c %s -o %s", cpath, out_obj);
     buf_putc(&cmd, '\0');
+    if (getenv("TUR_SHOW_CC")) fprintf(stderr, "CC: %s\n", cmd.data);
     int sys_rc = system(cmd.data);
     buf_free(&cmd);
     buf_free(&aux_includes);

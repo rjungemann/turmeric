@@ -70,6 +70,23 @@ not the other, and `tur.exe` is statically linked against the MinGW support
 libraries, so the archive has no DLLs beside it and needs nothing on `PATH` to
 start.
 
+It also unpacks to a **prefix layout** rather than the flat one the other
+archives use:
+
+```
+bin/tur.exe
+lib/libturt_runtime.a, libturi.a
+include/turi/*.h
+share/turmeric/stdlib/
+```
+
+Keep that shape. `tur` finds its runtime archive at `<exe_dir>/../lib` and its
+standard library at `<exe_dir>/../share/turmeric/stdlib`; flattening the tree
+leaves it unable to compile anything (see
+`docs/reported/release-archive-cannot-compile.md`, which also tracks the other
+platforms, still on the flat layout). Put `<extracted>/bin` on `PATH`, or
+symlink `bin/tur.exe` -- the walk-up resolves through a symlink either way.
+
 **Windows also needs a C toolchain to compile anything.** `tur.exe` runs on its
 own, but `tur build` and `tur run` invoke `cc`, and `tur jit` reads the UCRT
 headers that come with it. Install [MSYS2](https://www.msys2.org/) and its

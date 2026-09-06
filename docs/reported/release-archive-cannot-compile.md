@@ -1,5 +1,13 @@
 # An extracted release archive cannot compile a program
 
+> **Windows: FIXED 2026-09-05.** The lost `-L` turned out to be a real and
+> separate defect (`rewrite_autolink_relative_paths` read `C:\dir` as a
+> RELATIVE path and anchored it at the turmeric root), and fixing it made a
+> prefix-layout archive work end to end. The Windows release now ships
+> `bin/lib/include/share` and CI compiles a program out of the extracted
+> archive. **Linux and macOS still ship the flat layout and are still
+> affected** -- see "Status by platform".
+
 **Severity: high for anyone installing from a release tarball.** `tur --version`
 works, the REPL works, and `tur run` fails at the C compile step. Not
 Windows-specific -- the code involved has no platform branch -- though it was
@@ -59,17 +67,39 @@ the flat directory either way.
 Reaching for the layout the probes *do* understand -- `<prefix>/bin/tur` with
 `<prefix>/lib/libturt_runtime.a` -- gets further and then hits two more:
 
-1. **The `-L` never reaches the link line.** `apply_runtime_lib_mode` emits
-   `-l<name> -L<dir>` (`src/main.c:2333`), and the link fails with
-   `cannot find -lturt_runtime`. Supplying the same directory through
-   `TUR_CC_FLAGS=-L<dir>` gets past it, so the flag is being lost rather than
-   malformed. Not an `-l`-before-`-L` ordering problem: both orders were tested
-   directly against this gcc and both work.
-2. **`libturt_runtime.a` does not resolve `tur_set_contract_handler`.** With the
-   `-L` supplied externally, that is the next failure.
+1. ~~**The `-L` never reaches the link line.**~~ **FIXED.** It reached the line
+   mangled, not dropped. `rewrite_autolink_relative_paths` (`src/main.c:1968`)
+   anchors relative `-I`/`-L` paths at the turmeric root, and tested "already
+   absolute" as `tok[2] != '/'`. A Windows path has `C` there, so an absolute
+   `-LC:\...\src` was treated as relative and became
+   `-LC:\root/C:\real\src`. ld reports that as `cannot find -lturt_runtime`,
+   which reads as a dropped flag and sends you looking in the wrong place.
+   Fixed with a `path_is_absolute` helper that knows about drive letters and
+   backslashes.
 
-Neither was chased further; they are recorded here so the next person does not
-have to rediscover them.
+   Worth noting how it was found, because reading did not do it: a one-line
+   `TUR_SHOW_CC` dump of the assembled cc command showed the doubled path
+   immediately, after several wrong hypotheses (flag ordering, quoting, a
+   missing archive) had each been tested and eliminated.
+
+2. ~~**`libturt_runtime.a` does not resolve `tur_set_contract_handler`.**~~ Not
+   reproducible once (1) was fixed. It was almost certainly an artefact of the
+   mangled `-L`: the externally supplied `-L` let ld open *a* library while the
+   real one was still unreachable.
+
+## Status by platform
+
+| platform | layout | `tur run` from an extracted archive |
+| --- | --- | --- |
+| windows-x86_64 | prefix (`bin/lib/include/share`) | **works**, and CI compiles a program out of the archive every release |
+| linux-x86_64 | flat | **broken** (inferred, see below) |
+| linux-aarch64 | flat | **broken** (inferred) |
+| macos-arm64 | flat | **broken** (inferred) |
+
+The Windows fix is two things: the `-L` defect above, and packaging a prefix
+layout instead of a flat one. The other three legs need the same packaging
+change; the `-L` fix is already shared, since it is not platform-specific code
+(only its trigger was).
 
 ## How far this was taken
 
@@ -83,27 +113,36 @@ have to rediscover them.
 The last row is the one to check first. It should take one extracted tarball and
 one `tur run`.
 
-## Fix directions
+## What remains: the same change on the other three legs
 
-1. **Ship a prefix layout** -- `bin/`, `lib/`, `include/`, `share/turmeric/stdlib/`
-   -- which `<exe_dir>/../lib` and `resolve_stdlib_root` step 3 already
-   understand. Changes the archive shape and the guide's instructions for every
-   platform. Requires (2) and (3) below to actually work.
-2. Fix the lost `-L`.
-3. Make the lean archive complete, or fall back to `libturi.a` when a symbol is
-   missing.
-4. **Or** ship `src/runtime/*.c` in the archive so source mode works as-is.
-   Smallest change, but it means every user recompiles the runtime on every
-   build, which is what the archive exists to avoid.
-5. **Whichever is chosen, the release workflow should compile a hello-world from
-   the extracted archive.** That is the check that would have caught this, and
-   it is a handful of lines: unpack the artifact into a clean directory and run
-   `tur run` on a two-line program. A smoke test of `--version` proves the binary
-   starts, which is a much weaker claim than it appears.
+The route is settled and proven on Windows; the other legs need the packaging
+half of it.
+
+1. **Ship a prefix layout** -- `bin/`, `lib/`, `include/`,
+   `share/turmeric/stdlib/` -- which `<exe_dir>/../lib` and
+   `resolve_stdlib_root` step 3 already understand. Include
+   `libturt_runtime.a`, not just `libturi.a`: `TUR_RT_AUTO` only engages for
+   the lean archive. The guide's extract-and-symlink instructions change with
+   it (`~/.local/turmeric/bin/tur`).
+2. **Add the compile-from-archive check** to those legs, as `build-windows`
+   now has. Unpack the artifact into a clean directory and `tur run` a two-line
+   program. This is the check that would have caught the whole thing, and it is
+   about fifteen lines. A `--version` smoke test proves the binary starts,
+   which is a much weaker claim than it looks -- the flat archive passed it
+   while being unable to compile anything.
+
+An alternative to (1) is shipping `src/runtime/*.c` so source mode works as-is.
+Smaller diff, but every user then recompiles the runtime on every build, which
+is the cost the archive exists to avoid. Not recommended.
 
 ## Related
 
-The Windows-specific half of this -- `find_stdlib_beside_exe` could not step up
-a directory, so the prefix layout could not find its stdlib at all -- is fixed
-separately (`src/main.c`, backslash handling in the walk-up). That fix is
-necessary for direction 1 and not sufficient on its own.
+Two Windows-specific defects were in the way and are fixed:
+
+- `find_stdlib_beside_exe` stepped up with `strrchr(dir, '/')` only, so the
+  walk-up never happened on Windows and the prefix layout could not find its
+  stdlib at all.
+- `rewrite_autolink_relative_paths` read `C:\dir` as relative (defect 1 above).
+
+Neither is needed by the Linux/macOS work -- the first is Windows-only and the
+second, while shared code, is only triggered by a drive-lettered path.
