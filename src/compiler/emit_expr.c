@@ -2763,6 +2763,13 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     char **fnfld_names = NULL;
     char **fnfld_types = NULL;
     uint32_t n_fnfld = 0;
+    /* byvalue-recursive-adt-boxes-are-never-freed: C names + type names of
+     * let-bound by-value RECURSIVE locals the elaborator flagged
+     * `drops_rec_spine` -- their box chain is freed via
+     * `drop_recspine_<T>(&name)` at scope exit. */
+    char **recsp_names = NULL;
+    char **recsp_types = NULL;
+    uint32_t n_recsp = 0;
     /* any-struct-box-leak-per-widen: collected UNGUARDED, unlike its neighbours.
      * They are trailing-only frees, so a body with an early exit gets none and
      * leaks -- the status quo this rule is closing.  An `any` drop is also
@@ -2780,6 +2787,27 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
     }
     if (!body_has_return_or_throw) {
+        /* Its own loop rather than an arm of the else-chain below: a recursive
+         * local can also be env- or box-freeable, and those are different
+         * questions about the same binding. */
+        for (uint32_t i = 0; i < e->as.let_.n; i++) {
+            const Binding *rb = e->as.let_.bindings[i].binding;
+            if (!rb || !rb->drops_rec_spine || rb->type.kind != TY_ADT ||
+                !rb->type.as.adt_.def)
+                continue;
+            char *rmn = mangle_adt_name(rb->type.as.adt_.def->name);
+            size_t rtl = strlen(rmn) + 16;
+            char *rtn = (char *)malloc(rtl);
+            snprintf(rtn, rtl, "tur_adt_%s", rmn);
+            free(rmn);
+            recsp_names = (char **)realloc(recsp_names,
+                                           (n_recsp + 1) * sizeof(char *));
+            recsp_types = (char **)realloc(recsp_types,
+                                           (n_recsp + 1) * sizeof(char *));
+            recsp_names[n_recsp] = name_for_binding(ctx, rb);
+            recsp_types[n_recsp] = rtn;
+            n_recsp++;
+        }
         for (uint32_t i = 0; i < e->as.let_.n; i++) {
             if (let_binding_env_freeable(e, i)) {
                 env_free_names = (char **)realloc(env_free_names,
@@ -3285,6 +3313,22 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
     free(fnfld_names);
     free(fnfld_types);
+
+    /* byvalue-recursive-adt-boxes-are-never-freed: free the spine of flagged
+     * non-escaping by-value recursive locals, after the body -- their last use
+     * -- has been emitted.  Reverse order, matching the drops above: a later
+     * binding may have been built from an earlier one.  The local itself is
+     * stack-resident, so drop_recspine_<T> frees what it points at and not
+     * `&name`. */
+    for (uint32_t i = n_recsp; i-- > 0; ) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "drop_recspine_%s((void *)&%s);\n",
+                   recsp_types[i], recsp_names[i]);
+        free(recsp_names[i]);
+        free(recsp_types[i]);
+    }
+    free(recsp_names);
+    free(recsp_types);
 
     ctx->indent -= 4;
     indent_buf(body, ctx->indent);

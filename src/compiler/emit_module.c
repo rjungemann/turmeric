@@ -7711,6 +7711,53 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
         buf_printf(out, "}\n\n");
     }
 
+    /* byvalue-recursive-adt-boxes-are-never-freed: free the SPINE of a
+     * stack-resident by-value local -- every box its recursive fields point at,
+     * transitively -- without freeing `ptr` itself, which is a stack address.
+     *
+     * The same shape as drop_fnfields_ above and for the same reason: the local
+     * is not a heap allocation, so its scope-exit drop releases what it owns and
+     * stops there.  `drop_glue_<T>` does the recursion and the per-box free, so
+     * this is one call per recursive field of the live variant.
+     *
+     * Tagged (multi-variant) unlike drop_fnfields_, which reads ctors[0] only: a
+     * recursive ADT is a sum by construction -- it needs a base case -- so the
+     * single-variant assumption would have excluded every type this exists for. */
+    {
+        bool has_rec_field = false;
+        for (uint32_t ci = 0; ci < def->n_ctors && !has_rec_field; ci++)
+            for (uint32_t fi = 0; fi < def->ctors[ci]->n_fields; fi++)
+                if (def->ctors[ci]->fields[fi].drop_inner_def == def) {
+                    has_rec_field = true;
+                    break;
+                }
+        if (has_rec_field) {
+            const bool rs_tagged = adt_glue_is_tagged(def);
+            buf_printf(out, "static void drop_recspine_%s(void *ptr) __attribute__((unused));\n",
+                       adt_c_name);
+            buf_printf(out, "static void drop_recspine_%s(void *ptr) {\n", adt_c_name);
+            buf_printf(out, "    if (!ptr) return;\n");
+            buf_printf(out, "    %s *s = (%s *)ptr;\n", adt_c_name, adt_c_name);
+            if (rs_tagged) buf_printf(out, "    switch (s->tag) {\n");
+            for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+                const CtorDef *rc_ctor = def->ctors[ci];
+                if (rs_tagged) buf_printf(out, "    case %u:\n", ci);
+                for (int32_t fi = (int32_t)rc_ctor->n_fields - 1; fi >= 0; fi--) {
+                    if (rc_ctor->fields[fi].drop_inner_def != def) continue;
+                    char *mp = adt_field_member_path(def, rc_ctor, (uint32_t)fi);
+                    buf_printf(out,
+                               "    if (s->%s) drop_glue_%s((void *)(intptr_t)s->%s);\n",
+                               mp, adt_c_name, mp);
+                    free(mp);
+                }
+                if (rs_tagged) buf_printf(out, "        break;\n");
+                if (!rs_tagged) break;
+            }
+            if (rs_tagged) buf_printf(out, "    }\n");
+            buf_printf(out, "}\n\n");
+        }
+    }
+
     /* Walk glue -- enumerate strong (rc) children for the cycle walker. */
     buf_printf(out, "static void walk_glue_%s(void *ptr, RcWalkChildFn cb, void *ctx) {\n",
                adt_c_name);

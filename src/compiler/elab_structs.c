@@ -1377,6 +1377,37 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
     if (ctor_field_form_names_adt(ft_form, def->name))
         def->is_self_recursive = true;
 
+    /* byvalue-recursive-adt-boxes-are-never-freed: a DIRECT self-reference
+     * (`tl : Lst`, not `(Vec Lst)`) is an owning field, and until now nothing
+     * said so.  The slot holds a pointer to a heap copy -- a by-value product
+     * cannot ride the int64 carrier and cannot contain itself inline -- so a
+     * list of N links is N allocations and no frees.  Measured in plain
+     * Turmeric with no `any` anywhere: 3 cells / 3 allocations, 5 / 5.
+     *
+     * `drop_inner_def = def` is the same channel a nested owning aggregate
+     * already uses; pointing it at the ADT itself makes the emitted glue
+     * recursive, which is exactly the walk a spine needs.
+     *
+     * `:copy` IS THE SOUNDNESS LINE, and it is measured rather than assumed.
+     * `needs_drop_glue` makes a type move-only, and the move discipline is what
+     * guarantees the single owner this free depends on -- `(let [a (Cons 1 t)
+     * b (Cons 2 t)] ...)` is already TUR-E0201 "cannot copy unique value 't'".
+     * Under `:copy` that same program compiles, and the emitted C shows both
+     * boxes carrying the SAME tail pointer, so freeing each chain would free it
+     * twice.  So a `:copy` recursive ADT keeps the leak; `with-region` reclaims
+     * it (verified: zero leaks inside a bracket) and is the answer there.
+     *
+     * A `:heap` ADT is excluded for the reason the sibling rules exclude it:
+     * its node is a typed pointer with its own teardown story. */
+    if (!def->is_copy && !def->is_heap &&
+        (ft_form->tag == F_SYM || ft_form->tag == F_KEYWORD) &&
+        ft_form->as.sym && ft_form->as.sym->name && def->name &&
+        strlen(def->name) == ft_form->as.sym->len &&
+        memcmp(ft_form->as.sym->name, def->name, ft_form->as.sym->len) == 0) {
+        ctor->fields[fi].drop_inner_def = def;
+        def->needs_drop_glue = true;
+    }
+
     /* TP1: a bare symbol (non-keyword) may be a declared type parameter.
      * E.g. `a` in `(defdata Opt2 [a] (Yep a))`. */
     {

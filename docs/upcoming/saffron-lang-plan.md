@@ -49,10 +49,21 @@ non-retain inference off for every Saffron body before its result gate was even
 consulted. **RC-managed `any` boxes, which this plan proposed as the mitigation,
 were not needed** and should not be revived on this evidence.
 
-One leak remains under the gate and it is not Saffron's:
-[a self-recursive by-value ADT mallocs one box per link and frees none](../reported/byvalue-recursive-adt-boxes-are-never-freed.md),
-measured in plain Turmeric with no `any` anywhere (3 cells / 3 allocations,
-5 / 5, linear). `saffron-higher-order` carries a `known-leak` pointing at it.
+One leak remains under the gate, and identifying it correctly took measuring the
+emitted C rather than reading the source: `saffron-higher-order`'s container is
+`(Cons [hd : any tl : any])`, so its 21 allocations are all the **`any` widen
+into a field** and none of them the recursive-carrier box it was first attributed
+to. Filed as
+[any-widen-stored-in-an-adt-field-has-no-owner](../reported/any-widen-stored-in-an-adt-field-has-no-owner.md),
+and it is a **prerequisite for S6**: a container of `any` is exactly what that
+stage is about, so the element box needs an owner before it lands.
+
+The sibling finding that measurement separated out --
+[a self-recursive by-value ADT mallocs one box per link](../reported/byvalue-recursive-adt-boxes-are-never-freed.md),
+which reproduces in plain Turmeric with no `any` anywhere -- is now partially
+fixed: a non-escaping local's spine is freed at scope exit. Its two residues (a
+local handed to a callee, and `:copy` types, where `with-region` already
+reclaims the spine) are recorded there.
 **S6, containers and the Saffron prelude, is next.**
 
 Worth stating plainly, because it changes how the rest of this plan should be

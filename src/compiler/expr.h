@@ -135,6 +135,13 @@ struct Binding {
      * there exactly as it did before local fn-field drops existed) while
      * uncolored functions release it. */
     bool          drops_fn_fields;
+    /* byvalue-recursive-adt-boxes-are-never-freed: this local is a by-value
+     * recursive ADT that does not escape, so the direct emitter frees its SPINE
+     * at scope exit (`drop_recspine_<T>(&xs)`).  Emitted directly rather than as
+     * an injected defer, for the same CPS-admission reason drops_fn_fields is --
+     * and, unlike the rc/ref auto-drop beside it, there is no surface form that
+     * frees a recursive box chain to inject. */
+    bool          drops_rec_spine;
     /* Phase 11: span of first move for note chaining diagnostics */
     Span          moved_at;
     /* Phase R5: #[no-unwind] attribute on defn */

@@ -1,79 +1,114 @@
 # A by-value recursive ADT leaks one box per link
 
-**Severity: low-medium.** One `malloc` per cons cell of any self-recursive
-by-value `defdata`, never freed. Bounded by the structure's size, so it is a
-retained-forever cost rather than unbounded growth in a loop -- but a program
-that builds and discards lists in a loop does grow without bound.
+**Severity: low-medium.** One `malloc` per link of a self-recursive by-value
+`defdata`, never freed.
+
+**PARTIALLY FIXED 2026-09-07.** A non-escaping local's spine is now freed at
+scope exit; a local handed to a callee, and every `:copy` recursive ADT, still
+leak. Both residues are described below, with what each would take.
 
 Split out of
-[saffron-any-return-defeats-the-frame-box-rule](../archive/saffron-any-return-defeats-the-frame-box-rule.md)
-(now resolved), which measured it while establishing that it was NOT that bug.
+[saffron-any-return-defeats-the-frame-box-rule](../archive/saffron-any-return-defeats-the-frame-box-rule.md).
 
 ## Repro -- no `any` anywhere, plain Turmeric
 
 ```turmeric
 (defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
-(defn llen [xs : Lst] : int
-  (match xs
-    (Cons h t) (+ 1 (llen t))
-    (Nil)      0))
 (defn main [] : int
   (let [xs (Cons 1 (Cons 2 (Cons 3 (Nil))))] (println (llen xs)))
   0)
 ```
 
-Built with the leak harness's own flags
-(`TUR_CC_FLAGS="-O1 -g -std=c99 -Wall -fno-strict-aliasing -fsanitize=address -Lbuild/src"`):
-
-| cells | LeakSanitizer |
+| cells | before |
 |---|---|
 | 3 | `72 byte(s) leaked in 3 allocation(s)` |
 | 5 | `120 byte(s) leaked in 5 allocation(s)` |
 
-Exactly one box per link, scaling linearly. Each is the heap copy of the
-recursive `tl` field: a by-value product cannot ride the int64 carrier, so the
-field slot holds a pointer to a `malloc`'d `tur_adt_Lst`.
+Exactly one box per link, linear. Each is the heap copy of the recursive `tl`
+field: a by-value product cannot ride the int64 carrier and cannot contain
+itself inline, so the field slot holds a pointer to a heap copy.
 
 ## Root cause
 
 `AdtDef.needs_drop_glue` is set when a constructor has an `rc`/`ref`/`weak`
-field -- an OWNING field in the reference-counted sense. A self-recursive
-by-value field is owning in the allocation sense (the parent's slot is the only
-pointer to that box) but is not one of those kinds, so no drop glue is emitted
-and nothing ever frees the chain.
+field. A self-recursive by-value field is owning in the allocation sense (the
+parent's slot is the only pointer to that box) but is not one of those kinds, so
+no drop glue was emitted and nothing ever freed the chain.
 
-This is the same *shape* as
-[carrier-sum-option-boxes-have-no-owner](carrier-sum-option-boxes-have-no-owner.md)
--- a box the layout requires and the ownership model does not name -- but a
-different producer: that one is the Option/Result carrier, this one is any
-user `defdata` that names itself.
+## What was fixed
 
-## Where it shows up
+A DIRECT self-reference (`tl : Lst`, not `(Vec Lst)`) now points the field's
+`drop_inner_def` at its own def, which makes the existing by-value drop glue
+recursive -- exactly the walk a spine needs -- and a non-escaping local frees
+that spine at scope exit via `drop_recspine_<T>(&xs)`, the twin of the
+boxed-fn-field drop beside it. `tests/fixtures/byval-recursive-adt-spine-drop`
+pins it under the leak harness.
 
-`tests/fixtures/saffron-higher-order` carries a `known-leak` pointing here
-(840 bytes in 21 allocations). Its `(Cons [hd : any tl : any])` boxes the tail
-through the `any` widen rather than the recursive carrier, so the box is 40
-bytes instead of 24 -- but the count is still one per cell and the cause is
-identical. Saffron makes the shape easy to reach, it does not create it.
+**`:copy` is the soundness line, and it was measured rather than assumed.** Drop
+glue makes a type move-only, and that move discipline is what guarantees the
+single owner the free depends on:
 
-## Fix directions
+```turmeric
+(let [t (Cons 3 (Nil))  a (Cons 1 t)  b (Cons 2 t)] ...)
+```
 
-1. **Extend `needs_drop_glue` to a self-recursive by-value field.**
-   `AdtDef.is_self_recursive` already records exactly this property, at
-   declaration time, because it cannot be recovered afterwards (a recursive
-   field's `CtorField.full_type` is deliberately NULL). The drop glue would walk
-   the chain and free each box. The risk is aliasing: two values sharing a tail
-   would double-free, so this needs the same freshness question the `any` passes
-   answered, or a refcount.
+is already `TUR-E0201: cannot copy unique value 't'`. Under `:copy` the same
+program compiles, and the emitted C shows `*__t185 = t` and `*__t187 = t` --
+two boxes carrying the SAME tail pointer -- so a per-chain free would free it
+twice. `:copy` recursive ADTs therefore keep the leak.
 
-2. **Refcount the link.** Heavier, and it settles aliasing by construction.
-   Consistent with what `docs/upcoming/saffron-lang-plan.md` S5 proposed for
-   `any` boxes.
+Flipping the flag alone changed nothing across the corpus (2861 passed / 0
+failed, no codegen snapshot moved -- none of the 148 snapshot fixtures has a
+self-recursive `defdata`).
 
-3. **Leave it, and say so in the guide.** Defensible for a language where a
-   long-lived structure is the normal case, but it should then be a documented
-   contract rather than an unremarked cost -- the union/intersection guide took
-   that route for the `any` box before the widen passes closed it.
+## Residue 1 -- a local handed to a callee (the common shape)
 
-Direction 1 is the smallest and the only one that needs no new runtime concept;
-it should be measured against the aliasing case first.
+`(println (llen xs))` marks `xs` moved, so no drop fires and the spine leaks
+exactly as before. That is correct as far as it goes -- ownership went to `llen`
+-- but nothing discharges it there, and completing the move discipline is
+harder than it looks:
+
+A pattern-match binder ALIASES the parent's spine. `(match xs (Cons h t) ...)`
+gives `t` a pointer into `xs`'s box chain, and `llen` passes it to its own
+recursive call. If a callee freed its by-value ADT parameter at scope exit, that
+recursive call would free a sub-chain the outer frame also owns -- a double free,
+not a leak. So parameter-side discharge needs to distinguish an owned argument
+from a borrowed interior pointer, which the current move tracking does not.
+
+Measured coverage as it stands: a local consumed by an inline `match` or field
+read within its own scope is freed (the fixture); a local passed to a helper is
+not.
+
+## Residue 2 -- `:copy`, where regions already answer
+
+Most recursive types in the stdlib are `:copy` -- `Term`, `Subst` and `Stream`
+in `logic.tur` (the workload `docs/archive/regions-plan.md` was priced on),
+`Regex`, `RxCls`, `RxPos` -- so this residue is the larger one by usage.
+
+It already has a working answer: inside a `with-region` bracket the whole spine
+is reclaimed on rewind. Verified -- the 3-cell repro above wrapped in
+`(with-region (fn [] : int ...))` reports zero leaks. R4 of the regions plan
+routed this exact allocation site (`emit_expr.c`'s recursive-ctor-field box) for
+that purpose.
+
+## What is NOT this bug
+
+`tests/fixtures/saffron-higher-order` was originally marked against this report.
+That was wrong, and measuring the emitted C is what showed it: its `Lst` is
+`(Cons [hd : any tl : any])`, so the tail is an `any` box from
+`elab_coerce_to_any`'s by-value widen, not the recursive-carrier box at all --
+11 widen sites, ZERO recursive-carrier sites. Same family (a box inside a
+structure with no owner), different producer, different fix. Filed separately as
+[any-widen-stored-in-an-adt-field-has-no-owner](any-widen-stored-in-an-adt-field-has-no-owner.md).
+
+## Fix directions for the residue
+
+1. **Parameter-side discharge**, with a borrow/own distinction for by-value ADT
+   arguments. The `nonretain_ptr_param_mask` family answers an adjacent question
+   already, but its `_is_ptr_scalar` gate does not admit an ADT parameter, and
+   the interior-pointer case above is the part it does not model.
+2. **Refcount the link.** Settles both residues, including `:copy`, by
+   construction. Heavier, and it prices every construction.
+3. **Leave `:copy` to regions, and say so in the guide.** Defensible -- the
+   mechanism exists, is measured, and is what the regions plan intended -- but it
+   should be a documented contract rather than an unremarked cost.

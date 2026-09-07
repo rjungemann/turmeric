@@ -33,6 +33,32 @@ static const AdtDef *elab_byval_drop_adt(Type t) {
     return def;
 }
 
+/* byvalue-recursive-adt-boxes-are-never-freed: resolve a let-binding type to the
+ * by-value ADT whose recursive SPINE needs a scope-exit free, or NULL.
+ *
+ * The twin of elab_byval_drop_adt above and deliberately not a relaxation of it:
+ * that one refuses a multi-variant ADT because its callers index `ctors[0]`
+ * directly, and a recursive ADT is a sum by construction (it needs a base case),
+ * so every type this exists for is multi-variant.  The recursive-field marking
+ * (elab_structs.c) has already applied the `:copy` and `:heap` exclusions and
+ * the direct-self-reference test -- a field pointing `drop_inner_def` at its own
+ * def is the whole condition, so it is not restated here. */
+static const AdtDef *elab_byval_recspine_adt(Type t) {
+    const AdtDef *def = NULL;
+    if (t.kind == TY_ADT)      def = t.as.adt_.def;
+    else if (t.kind == TY_APP) def = type_adt_app_def(&t);
+    else                       return NULL;
+    if (!def || def->is_heap || !def->needs_drop_glue) return NULL;
+    /* A parametric monomorph's glue carries a mangled per-instantiation name;
+     * threading that through is separate work, as the sibling nested-aggregate
+     * rule already records. */
+    if (def->n_type_params != 0) return NULL;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++)
+        for (uint32_t fi = 0; fi < def->ctors[ci]->n_fields; fi++)
+            if (def->ctors[ci]->fields[fi].drop_inner_def == def) return def;
+    return NULL;
+}
+
 /* rc-field-read-into-var-double-free: peel type ascriptions and return the
  * EX_GET_FIELD when `init` reads an owning `rc<T>` FIELD directly (e.g.
  * `(.r o)` / `(:: (.r o) rc<int>)`), or NULL otherwise.
@@ -1844,6 +1870,26 @@ Expr *elab_let(Elab *e, const Form *call) {
             binds[k].binding->drops_fn_fields = true;
             break;
         }
+    }
+
+    /* byvalue-recursive-adt-boxes-are-never-freed: the same flagging for a
+     * by-value RECURSIVE local, whose spine of boxes is freed at scope exit.
+     *
+     * A separate loop rather than a branch in the one above, because it cannot
+     * share `elab_byval_drop_adt`: that helper refuses `n_ctors != 1` (its
+     * callers read `ctors[0]` directly) and a recursive ADT is a sum by
+     * construction -- it needs a base case -- so every type this exists for
+     * would be refused.  The guards are the same three, and they are what makes
+     * the free sound: a local that was moved into a call, moved during its own
+     * initialisation, or explicitly consumed has handed ownership on, and the
+     * new owner's scope frees the spine instead. */
+    for (uint32_t k = 0; k < n_binds; k++) {
+        const AdtDef *ad = elab_byval_recspine_adt(binds[k].binding->type);
+        if (!ad) continue;
+        if (binding_moved_during_init[k] || binds[k].binding->is_moved ||
+            is_binding_consumed(body, binds[k].binding))
+            continue;
+        binds[k].binding->drops_rec_spine = true;
     }
 
     if (has_byval_drop_bindings && body && body->kind == EX_DO) {
