@@ -516,6 +516,111 @@ jobs:
           path: ${{ github.workspace }}/.ccache
           key: ccache-jit-${{ runner.os }}-${{ github.sha }}
 
+  # cc-path-preamble-split-plan: run the corpus with the split runtime ON.
+  #
+  # Nothing in CI exercised `--runtime=split` at all, so the split PR could go
+  # fully green -- twelve jobs, all passing -- while the feature it adds was
+  # never once executed.  That green attested "the opt-in path does not break
+  # the default path", which is worth knowing and is not what it looked like.
+  # It is the same shape as
+  # docs/reported/jit-suite-reports-pass-when-the-engine-is-disabled.md: a
+  # suite reporting PASS for a path it never took.
+  #
+  # Linux only, deliberately.  The split's failure modes so far are compiler
+  # diagnostics from the emitted C (gcc rejecting what c2mir accepts), not
+  # platform behaviour, so a second OS would mostly buy runtime.  Widen it when
+  # a platform-specific split bug actually shows up.
+  split:
+    name: Split runtime (cc path)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-split-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-split-${{ runner.os }}-
+
+      # Debug, matching the `test` job: a Release tur elides contract checks,
+      # so contract fixtures fail with the wrong error and the baseline below
+      # would be measuring the build type rather than the split.
+      - name: Configure (Debug)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+      # ALL targets: --runtime=split links libturt_preamble.a, and `tur` alone
+      # never builds it.  A tur-only build fails every fixture at the link with
+      # `cannot find -lturt_preamble`, which reads like a split bug and is not.
+      - name: Build (all targets -- split links libturt_preamble.a)
+        run: cmake --build build -j
+
+      # Load-bearing, and the whole reason this job is worth having.  The split
+      # FAILS CLOSED: on any mismatch it silently emits the full preamble, so
+      # the suite still passes, slower, and nothing says so.  Without this
+      # check a build that lost the split entirely would report a clean green
+      # -- vacuously, having tested the default path twice.
+      - name: Verify the split actually engages
+        run: |
+          printf '(defn main [] : int 0)\n' > /tmp/splitprobe.tur
+          out=$(TUR_JIT_TIMING=1 TUR_RUNTIME=split \
+                  ./build/tur build /tmp/splitprobe.tur -o /tmp/splitprobe 2>&1) || true
+          printf '%s\n' "$out"
+          if printf '%s\n' "$out" | grep -q 'split.*disengaged'; then
+            echo "::error::the split disengaged -- see the reason above (regenerate artifacts with tools/gen-runtime-split.py after a preamble change)"
+            exit 1
+          fi
+          if [ ! -x /tmp/splitprobe ]; then
+            echo "::error::split build produced no executable"
+            exit 1
+          fi
+          /tmp/splitprobe || { echo "::error::split-built binary did not run"; exit 1; }
+          echo "split engaged and the artifact runs."
+
+      # Compared against a NAMED baseline, not a count.  A count cannot tell
+      # "the three known failures" from "one got fixed and two new ones
+      # appeared".  Any difference in either direction is a failure, including
+      # a fixture that starts passing -- fix one, delete its line.
+      - name: Suite under TUR_RUNTIME=split
+        run: |
+          set -o pipefail
+          TUR_RUNTIME=split bash tests/run.sh 2>&1 | tee /tmp/split-run.log || true
+
+          # run.sh prints trailing "  - <name> (<reason>)" lines per failure.
+          sed -n 's/^  - \([A-Za-z0-9._-]*\).*/\1/p' /tmp/split-run.log \
+            | sort -u > /tmp/split-actual.txt
+          grep -vE '^\s*(#|$)' tests/split-known-failures.txt \
+            | sed 's/[[:space:]]*$//' | sort -u > /tmp/split-expected.txt
+
+          echo "--- expected (tests/split-known-failures.txt) ---"; cat /tmp/split-expected.txt
+          echo "--- actual ---";                                   cat /tmp/split-actual.txt
+
+          if diff -u /tmp/split-expected.txt /tmp/split-actual.txt; then
+            n=$(wc -l < /tmp/split-expected.txt)
+            echo "Split suite matches its known-failure baseline ($n known)."
+            exit 0
+          fi
+          echo "::error::split failures differ from tests/split-known-failures.txt (see diff above). A fixture that now PASSES is also a difference -- delete its line."
+          exit 1
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-split-${{ runner.os }}-${{ github.sha }}
+
   # Phase 3A/4 of docs/upcoming/suite-timing-trends-plan.md.
   #
   # A SEPARATE job, not a step on `test`, specifically because of the
