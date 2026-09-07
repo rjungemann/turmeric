@@ -301,14 +301,63 @@ def split(src):
             decls.append('#endif')
             i += 1
             continue
-        # A PROJECT header (quoted include).  The impl half genuinely needs it;
-        # the decls half does not use a single type from it, and including it
-        # actively breaks a hosted consumer: hamt.h declares
-        # `Hamt *tur_hamt_new(void)` while the program half emits the loose
-        # `extern void *tur_hamt_new();` from stdlib's extern-c, and gcc calls
-        # that a conflicting type.  c2mir accepts it, which is why the JIT never
-        # noticed.  Guarded rather than dropped so the JIT keeps compiling the
-        # exact text it compiles today.
+        # The THREAD-LOCAL selector.  Each of the 11 thread-locals is emitted as
+        #
+        #     #if defined(__GNUC__) || defined(__clang__)
+        #     static TUR_THREAD_LOCAL T x = ...;      <- native TLS, private
+        #     #else
+        #     extern T *tur_tls_x_ptr(void);          <- the HOST's storage
+        #     #define x (*tur_tls_x_ptr())
+        #     #endif
+        #
+        # and the decls half was kept verbatim on the assumption -- true until
+        # now -- that "the decls half is only ever compiled by c2mir", which
+        # defines neither macro and so takes the accessor branch.
+        #
+        # A hosted cc build breaks that assumption: gcc defines __GNUC__, takes
+        # the FIRST branch, and the program gets its own private thread-locals
+        # while the runtime keeps using the host accessors.  They never agree,
+        # and the symptom is not a link error -- it is tur_current_fiber and
+        # tur_panicking reading zero forever, which took out every async, fiber,
+        # panic and catch-unwind fixture at once.
+        #
+        # So the decls half must take the accessor branch whenever the program
+        # links the runtime, exactly as c2mir does.
+        #
+        # Rewritten only when the guard actually introduces a thread-local: the
+        # same guard also selects __atomic_load_n over a shim, and gcc really
+        # does have those.
+        if (at_col0
+                and l.strip() == '#if defined(__GNUC__) || defined(__clang__)'
+                and i + 1 < len(lines)
+                and ('TUR_THREAD_LOCAL' in lines[i + 1]
+                     or '_Thread_local' in lines[i + 1])):
+            impl.append(l)
+            decls.append('#if (defined(__GNUC__) || defined(__clang__)) '
+                         '&& !defined(TUR_RT_SPLIT_HOSTED)')
+            i += 1
+            continue
+        # A PROJECT header (quoted include), dropped from the decls half for a
+        # hosted consumer.
+        #
+        # This is the one place the split is genuinely LOSSY, and it is worth
+        # being precise about why.  The preamble is not actually fixed across
+        # programs: the emitter picks EITHER `#include "hamt.h"` (for a program
+        # that uses hamt directly) OR loose `extern void *tur_hamt_new();`
+        # declarations from stdlib's extern-c -- never both.  The decls region
+        # is generated from ONE canonical emission, so it freezes whichever
+        # choice that program made and hands it to every other program.
+        #
+        # c2mir does not care: it accepts the loose declaration alongside
+        # hamt.h's `Hamt *tur_hamt_new(void)`.  gcc calls that a conflicting
+        # type and stops.  Since the loose form is what the majority of
+        # programs emit, the include is what gives way -- a program that
+        # depends on the header instead is left with implicit declarations and
+        # fails loudly at compile time, which is the safe direction.
+        #
+        # Properly fixing this means making the decls region carry both shapes,
+        # or making the emitted extern-c declarations agree with the header.
+        # See docs/upcoming/cc-path-preamble-split-plan.md.
         if at_col0 and re.match(r'^#include\s+"', l):
             impl.append(l)
             decls.append('#ifndef TUR_RT_SPLIT_HOSTED')
