@@ -562,6 +562,7 @@ static void cmd_type(TuriEnv *env, const char *expr_src) {
     sfile.len         = combined.len - 1;
     sfile.file_id     = 0;
     sfile.reader_type = env->reader_type;
+    sfile.lang        = env->lang;   /* saffron-lang-plan S1 */
     diag_register_file(&sfile);
 
     uint32_t nforms = 0;
@@ -631,6 +632,7 @@ static void cmd_expand(TuriEnv *env, const char *expr_src) {
     sfile.len         = combined.len - 1;
     sfile.file_id     = 0;
     sfile.reader_type = env->reader_type;
+    sfile.lang        = env->lang;   /* saffron-lang-plan S1 */
     diag_register_file(&sfile);
 
     uint32_t nforms = 0;

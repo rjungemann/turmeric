@@ -330,6 +330,21 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * before SR2b, its heaviest client, exists -- and SR2b landed in-tree and
      * across the spices before the expiry was anywhere near.  See
      * docs/upcoming/sr2-gate-results.md. */
+    /* saffron-lang-plan: the dynamically typed dialect.  S1 wires the `#lang`
+     * axis and this gate only -- the dialect selects no semantics yet, so a
+     * `#lang saffron` file compiles exactly as `#lang turmeric` does and says
+     * so once through the lifecycle warning below.
+     *
+     * `#lang saffron` is itself the enable, scoped to one file at CLI
+     * precedence, the same relationship a semantic `#lang` layer has to its
+     * experiment (D9). */
+    { "saffron",
+      "dynamically typed dialect (#lang saffron)",
+      "docs/upcoming/saffron-lang-plan.md",
+      "0.45.0",                  /* introduced */
+      "0.52.0",                  /* expires_at (soft deadline; advisory only) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_saffron },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

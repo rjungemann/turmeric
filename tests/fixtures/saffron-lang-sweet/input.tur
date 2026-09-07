@@ -1,0 +1,20 @@
+#lang saffron/sweet
+;; saffron-lang-plan S1 / D1: the language axis is ORTHOGONAL to the reader
+;; axis, so Saffron is spellable over any of the four surface syntaxes.
+;;
+;; `saffron/sweet` picks the language `saffron` and the reader `turmeric/sweet`
+;; -- which is why D1 kept LangDialect beside ReaderType instead of growing
+;; ReaderType: folding them together would have doubled that enum and left
+;; every `switch (reader_type)` in the tree obliged to remember that half its
+;; cases mean the same reader.
+;;
+;; This is the parse-level proof: sweet-exp indentation, a neoteric call and
+;; curly-infix arithmetic all work under a Saffron base.
+
+defn add [x : int y : int] : int
+  {x + y}
+
+defn main [] : int
+  println $ add 1 41
+  println $ add(2 3)
+  0

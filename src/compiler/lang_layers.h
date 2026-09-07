@@ -94,4 +94,11 @@ void lang_layers_apply_readers(LangLayerSet set,
  * case, having emitted the diagnostic.  `path` is used in the message only. */
 bool lang_layers_apply_semantic(LangLayerSet set, const char *path);
 
+/* saffron-lang-plan S1: print the `#lang` BASE axis -- the (language, reader)
+ * pairs a base token can name -- for `tur lang-layers`.  The layer table has a
+ * descriptor array to iterate; the base axis is a small cross-product of two
+ * enums, so it is rendered rather than tabulated. */
+void lang_dialects_print(void);
+void lang_dialects_print_json(void);
+
 #endif /* TUR_LANG_LAYERS_H */

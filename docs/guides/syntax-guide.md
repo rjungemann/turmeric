@@ -499,22 +499,45 @@ let [add3 make-adder(3)
 A `#lang` line is more than a dialect switch. Its full shape is:
 
 ```
-#lang <base>[/<dialect>] <layer>*
+#lang <language>[/<reader>] <layer>*
 ```
 
 The whole line is read *before the first form*, so everything that changes how
 the file reads or checks is declared up front and is guaranteed file-scoped.
+It must be the **first line**: the detector skips spaces and tabs before it,
+but not comments, so a comment above the directive silently disables it.
 
-### Base dialect (mutually exclusive)
+`tur lang-layers` lists both axes, and `tur lang-layers --json` emits the same
+thing machine-readably.
 
-The first, possibly slash-namespaced, token picks exactly one **base reader**:
+### Base (mutually exclusive): a language and a reader
 
-| Base | Reader |
-|---|---|
-| `turmeric` | plain s-expression (the default; curly-infix is always on) |
-| `turmeric/curly-infix` | curly-infix emphasis (same as the default) |
-| `turmeric/neoteric` | curly-infix + neoteric `f(x)` |
-| `turmeric/sweet` | full sweet-expressions (indentation + neoteric + `$`) |
+The first, possibly slash-namespaced, token names **two** things: which
+*language* the forms are elaborated as, and which *reader* parses them. They
+are independent axes, so every language is spellable over every reader.
+
+| Base | Language | Reader |
+|---|---|---|
+| `turmeric` | turmeric | plain s-expression (the default; curly-infix is always on) |
+| `turmeric/curly-infix` | turmeric | curly-infix emphasis (same as the default) |
+| `turmeric/neoteric` | turmeric | curly-infix + neoteric `f(x)` |
+| `turmeric/sweet` | turmeric | full sweet-expressions (indentation + neoteric + `$`) |
+| `saffron` | saffron | plain s-expression |
+| `saffron/curly-infix` | saffron | curly-infix emphasis |
+| `saffron/neoteric` | saffron | curly-infix + neoteric |
+| `saffron/sweet` | saffron | full sweet-expressions |
+
+**Saffron** is the dynamically typed dialect, and is an **experiment in its
+prototype stage**: today `#lang saffron` selects no semantics at all -- the file
+compiles exactly as `#lang turmeric` does -- and the directive exists so the
+language axis, its gate and its warning are in place before any behaviour hangs
+off them. See [docs/upcoming/saffron-lang-plan.md](../upcoming/saffron-lang-plan.md).
+
+The `#lang saffron` line *is* the enable for the `saffron` experiment, scoped to
+that file, at CLI precedence -- exactly the relationship a semantic layer has to
+its experiment (below). So no `--enable=saffron` is needed, and a project
+manifest that scopes `:experiments` and leaves `saffron` out makes the directive
+a **hard error** rather than silently compiling the file as Turmeric.
 
 `turmeric/sweet` is the preferred spelling for the sweet-exp base. The older
 `#lang sweet-exp` is still accepted as a legacy alias, so

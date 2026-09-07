@@ -172,7 +172,8 @@ static int  g_audit_span_holes = 0;
  * `out_layers` (may be NULL for callers that don't thread it). */
 static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len,
                                         const char **out_src, size_t *out_len,
-                                        LangLayerSet *out_layers) {
+                                        LangLayerSet *out_layers,
+                                        LangDialect *out_dialect) {
     ReaderType ext_type = reader_type_from_extension(path);
 
     /* Always run detect_lang so any leading "#lang ..." line is stripped from
@@ -185,8 +186,10 @@ static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len
     LangLayerSet layers = 0;
     const char *bad = NULL;
     size_t bad_len = 0;
-    ReaderType lang_type = detect_lang_layered(src, len, &src_rest, &len_rest,
-                                               &layers, &bad, &bad_len);
+    LangDialect dialect = LANG_TURMERIC;
+    ReaderType lang_type = detect_lang_dialect(src, len, &src_rest, &len_rest,
+                                               &layers, &bad, &bad_len,
+                                               &dialect);
 
     if (bad) {
         /* Unknown layer token -- hard error (TUR-E0330), mirroring the
@@ -209,6 +212,11 @@ static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len
     *out_src = src_rest;
     *out_len = len_rest;
     if (out_layers) *out_layers = layers;
+    /* saffron-lang-plan S1: the language axis rides out beside the reader.  The
+     * extension override above is deliberately reader-only -- a `.tur.sweet`
+     * file is sweet-exp Turmeric unless its `#lang` line says otherwise, and
+     * there is no extension that means "Saffron". */
+    if (out_dialect) *out_dialect = dialect;
     return detected_type;
 }
 
@@ -906,7 +914,8 @@ static int compile_to_c(const char *path, Buf *out_c,
     const char *src_adj = src;
     size_t len_adj = len;
     LangLayerSet lang_layers = 0;
-    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers);
+    LangDialect lang_dialect = LANG_TURMERIC;
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers, &lang_dialect);
 
     /* Each compile_to_c call is a self-contained compilation unit.  Clear the
      * global diagnostic state (the `had_error_` flag and the file registry)
@@ -932,6 +941,7 @@ static int compile_to_c(const char *path, Buf *out_c,
     file.head_offset = (size_t)(src_adj - src);
     file.file_id = 0;
     file.reader_type = reader_type;
+    file.lang        = lang_dialect;
     file.lang_layers = lang_layers;
     diag_register_file(&file);
 
@@ -1125,7 +1135,8 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     const char *src_adj = src;
     size_t len_adj = len;
     LangLayerSet lang_layers = 0;
-    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers);
+    LangDialect lang_dialect = LANG_TURMERIC;
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers, &lang_dialect);
 
     /* Fresh diagnostic slate per compilation unit -- see compile_to_c.  The
      * project-mode dir build loops compile_to_h / compile_to_implementation
@@ -1147,6 +1158,7 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     file.head_offset = (size_t)(src_adj - src);
     file.file_id = 0;
     file.reader_type = reader_type;
+    file.lang        = lang_dialect;
     file.lang_layers = lang_layers;
     diag_register_file(&file);
 
@@ -1232,7 +1244,8 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     const char *src_adj = src;
     size_t len_adj = len;
     LangLayerSet lang_layers = 0;
-    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers);
+    LangDialect lang_dialect = LANG_TURMERIC;
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers, &lang_dialect);
 
     /* Fresh diagnostic slate per compilation unit -- see compile_to_c.  The
      * project-mode dir build loops compile_to_h / compile_to_implementation
@@ -1254,6 +1267,7 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     file.head_offset = (size_t)(src_adj - src);
     file.file_id = 0;
     file.reader_type = reader_type;
+    file.lang        = lang_dialect;
     file.lang_layers = lang_layers;
     diag_register_file(&file);
 
@@ -7586,10 +7600,17 @@ static int cmd_eval_h(const char *path, bool use_color,
             head[hn] = '\0';
             const char *rest = head; size_t rest_len = hn;
             LangLayerSet layers = 0;
-            ReaderType rt = detect_lang_layered(head, hn, &rest, &rest_len,
-                                                &layers, NULL, NULL);
+            LangDialect dialect = LANG_TURMERIC;
+            ReaderType rt = detect_lang_dialect(head, hn, &rest, &rest_len,
+                                                &layers, NULL, NULL, &dialect);
             if (rest != head && reader_type_is_implemented(rt)) {
                 env->reader_type = rt;
+                /* saffron-lang-plan S1: seed the LANGUAGE axis here for the
+                 * same reason the reader is seeded -- the prelude must load
+                 * under the same language as the user file, and this runs
+                 * before the eval blob that would otherwise be the first place
+                 * the directive is seen. */
+                env->lang = dialect;
                 /* Pre-seed the layer set too so the prelude and the user file
                  * read under the same layers (lang-layers-plan L1); turi_eval
                  * unions the authoritative set again when it strips the
@@ -10395,10 +10416,12 @@ static int cmd_lang_layers(int argc, char **argv) {
             json = true;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("usage:\n  tur lang-layers [--json]\n\n"
-                   "List the curated `#lang` additive layers.  A `#lang "
-                   "<base> <layer>*`\nline may name any of these after the "
-                   "base dialect; each is order-\nindependent and file-scoped."
-                   "  --json emits the machine-readable form.\n");
+                   "List the two axes of a `#lang` line: the base DIALECTS "
+                   "(language, and\noptionally a reader after a slash) and the "
+                   "curated additive LAYERS.  A\n`#lang <base> <layer>*` line "
+                   "names one base and any number of layers;\nlayers are "
+                   "order-independent and file-scoped.  --json emits the\n"
+                   "machine-readable form.\n");
             return 0;
         } else {
             fprintf(stderr, "tur lang-layers: unexpected argument '%s'\n", argv[i]);
@@ -10409,7 +10432,12 @@ static int cmd_lang_layers(int argc, char **argv) {
     size_t n = lang_layers_count();
 
     if (json) {
-        printf("[");
+        /* saffron-lang-plan S1: both axes.  The layer array keeps its shape at
+         * the "layers" key rather than becoming a bare top-level array, so a
+         * consumer that wants only layers reads one key instead of guessing. */
+        printf("{\n  \"dialects\": ");
+        lang_dialects_print_json();
+        printf(",\n  \"layers\": [");
         for (size_t i = 0; i < n; i++) {
             const LangLayerDescriptor *d = lang_layer_at(i);
             if (i) printf(",");
@@ -10425,14 +10453,23 @@ static int cmd_lang_layers(int argc, char **argv) {
             }
             printf("}");
         }
-        printf("%s]\n", n ? "\n" : "");
+        printf("%s]\n}\n", n ? "\n  " : "");
         return 0;
     }
 
     if (n == 0) {
-        printf("No `#lang` layers are registered.\n");
+        lang_dialects_print();
+        printf("\nNo `#lang` layers are registered.\n");
         return 0;
     }
+
+    /* saffron-lang-plan S1: the two axes of a `#lang` line are listed
+     * together, because a reader looking one up does not know in advance which
+     * axis the token they saw belongs to.  The base names the LANGUAGE and
+     * (optionally, after a slash) the reader; the trailing tokens are the
+     * additive layer set. */
+    lang_dialects_print();
+    printf("\n");
 
     printf("%-12s %-9s %-7s %s\n", "NAME", "KIND", "SINCE", "SUMMARY");
     for (size_t i = 0; i < n; i++) {

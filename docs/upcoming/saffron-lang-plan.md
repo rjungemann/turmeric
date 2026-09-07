@@ -30,7 +30,8 @@ S3/S4 lean on the interpreter hard), and
 [a spurious `-Wfree-nonheap-object` in emitted code](../reported/any-drop-inlining-warns-free-nonheap.md)
 (cosmetic).
 
-**S1 is the next stage and is unblocked.**
+**S1 landed 2026-09-07** -- the `#lang` language axis, its experiment gate and
+its listing, with no semantics attached. **S2 is next.**
 
 Worth stating plainly, because it changes how the rest of this plan should be
 read: **six of those eight reports had a diagnosis that was wrong on
@@ -769,7 +770,7 @@ function shape -- lambda, capturing closure, partial application, named `defn` -
 can be tested with `is?`, recovered with `cast`, and called, identically on both
 back ends. S4 inherits that rather than building it.
 
-### S1 -- the `#lang` axis, no semantics (small)
+### S1 -- the `#lang` axis, no semantics (small) -- DONE 2026-09-07
 
 D1's plumbing only. `LangDialect`, `SourceFile.lang`, `detect_lang_layered`
 out-param, `lang_base_from_name` returning a pair, `reader_type_name`'s
@@ -780,9 +781,40 @@ sibling `lang_dialect_name`. The `EXPERIMENTS[]` row from D9, with
 once (TUR-W0060, the experiment lifecycle warning) that the dialect carries no
 semantics yet.
 
-**Exit:** `#lang saffron` and `#lang saffron/sweet` parse; `tur lang-layers`
-grows a dialect listing; `tests/fixtures/saffron-lang-line-accepted`,
-`errors/saffron-without-enable`.
+**Exit: MET 2026-09-07.** `#lang saffron` and `#lang saffron/sweet` parse and
+run identically to their `turmeric` spellings on both back ends; `tur
+lang-layers` lists both axes (and `--json` emits them under `dialects` /
+`layers`); `tur experiments` carries the row.
+
+Landed as described, with three notes worth keeping:
+
+- **`detect_lang_layered` did not need an out-param.** It has a dozen callers,
+  most of which have no use for the language axis, so the dialect-aware entry
+  is `detect_lang_dialect` and `detect_lang_layered` became a wrapper passing
+  NULL -- the same relationship `detect_lang` already had to it. Only the paths
+  that *elaborate* a file thread the dialect onto `SourceFile.lang`.
+- **The gate has one home, not one per detection site.** Every path that
+  elaborates a file -- compile, `--interpret`, an imported module, the REPL --
+  funnels through `read_all_with_registry_from`, which already applies the
+  semantic-LAYER gate. `lang_dialect_apply` sits beside it there, so no
+  detection site can forget it. The detection sites' only job is to set the
+  field.
+- **`--interpret` needed a second wiring point.** The file-eval entry
+  pre-detects the `#lang` line before the eval blob, to load the prelude under
+  the same reader; the language axis needs seeding there for the same reason,
+  and setting it only on the blob left the interpreter silently un-gated. A
+  probe printing the reader-entry state found that in one step.
+
+The planned `errors/saffron-without-enable` fixture is **not** in the tree, and
+the reason is worth recording: the manifest-scoped hard error works (verified by
+hand against a project whose `build.tur` carries `:experiments []` -- it reports
+"whose experiment 'saffron' is disabled by the project manifest"), but it needs
+a project directory with a manifest, which the single-file fixture harness
+cannot express. The existing semantic-LAYER policy has the same gap: nothing in
+`tests/` covers it either. `errors/saffron-unknown-dialect` covers the reachable
+negative instead. Closing the manifest gap properly wants a dedicated runner in
+the shape of `tests/run-any-type-id-multi-module.sh`, and would cover both
+policies at once.
 
 ### S2 -- default to `any`, interpreter first (medium)
 

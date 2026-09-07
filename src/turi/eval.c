@@ -12225,9 +12225,11 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
         LangLayerSet layers    = 0;
         const char  *bad       = NULL;
         size_t       bad_len   = 0;
-        ReaderType   detected  = detect_lang_layered(src_body, body_len,
+        LangDialect  dialect   = LANG_TURMERIC;
+        ReaderType   detected  = detect_lang_dialect(src_body, body_len,
                                                      &rest, &rest_len,
-                                                     &layers, &bad, &bad_len);
+                                                     &layers, &bad, &bad_len,
+                                                     &dialect);
         if (rest != src_body) {
             /* A #lang directive was found.  Reject an unknown / not-yet-
              * implemented reader the same way the compiled entry points do
@@ -12258,6 +12260,12 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
             /* Layers are additive and file-scoped; union them into the
              * session set so reader layers stay active across the eval blob. */
             env->lang_layers |= layers;
+            /* saffron-lang-plan S1: the language axis is sticky like the reader
+             * -- a session that said `#lang saffron` stays Saffron for the
+             * blobs after it.  Only a directive that NAMES a dialect changes
+             * it, so a later directive-free blob cannot silently revert the
+             * session to Turmeric. */
+            if (dialect != LANG_TURMERIC) env->lang = dialect;
             src_body = rest;
             body_len = rest_len;
         }
@@ -12328,6 +12336,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     sfile->file_id     = 0;
     sfile->reader_type = env->reader_type;
     sfile->lang_layers = env->lang_layers;   /* lang-layers-plan L1 */
+    sfile->lang        = env->lang;          /* saffron-lang-plan S1 */
     diag_register_file(sfile);
     /* Re-register the previous turn's loaded files (id 0, this turn's blob,
      * is skipped) so spans in reused Forms still resolve to their real path. */

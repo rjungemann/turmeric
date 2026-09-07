@@ -393,6 +393,28 @@ typedef enum ReaderType {
     READER_SWEET,          /* Full sweet-expressions */
 } ReaderType;
 
+/* saffron-lang-plan D1: the LANGUAGE axis of a `#lang` line, orthogonal to the
+ * reader axis above.
+ *
+ * `#lang <base>[/<dialect>]` resolves to a PAIR now, not a single enum.  The
+ * reader axis says how the text is parsed (s-expr, curly-infix, neoteric,
+ * sweet); this one says which language the parsed forms are elaborated as.
+ * They are independent: a Saffron file may be written in any of the four
+ * surface syntaxes, so `saffron`, `saffron/sweet`, `saffron/neoteric` and
+ * `saffron/curly-infix` are all spellable.
+ *
+ * Deliberately NOT folded into ReaderType.  Doing so would double that enum and
+ * leave every `switch (reader_type)` in the tree obliged to remember that half
+ * its cases mean the same reader -- see the plan's D1 for the full argument. */
+typedef enum LangDialect {
+    LANG_TURMERIC = 0,   /* the default; every existing file */
+    LANG_SAFFRON,        /* dynamically typed dialect (experiment "saffron") */
+} LangDialect;
+
+/* Canonical name of a dialect, for diagnostics and `tur lang-layers`.
+ * The sibling of reader_type_name. */
+const char *lang_dialect_name(LangDialect d);
+
 /* The additive `#lang` layer set: a bitset over the LANG_LAYERS[] table
  * (src/compiler/lang_layers.c), one bit per table index.  Rides alongside
  * the base ReaderType, not in place of it.  Empty (0) for a bare file or a
@@ -435,6 +457,12 @@ typedef struct SourceFile {
     size_t      len;
     uint16_t    file_id;
     ReaderType  reader_type;  /* Phase S1: for enabling syntax features */
+    /* saffron-lang-plan S1: which LANGUAGE this file is elaborated as, parsed
+     * from the same `#lang` token as reader_type (D1).  LANG_TURMERIC for every
+     * file without a `#lang saffron...` line, which is what a `{0}`/memset
+     * SourceFile starts as -- so an unwired construction site keeps today's
+     * behaviour rather than silently opting into a dialect. */
+    LangDialect lang;
     /* Additive `#lang` layer set parsed from the same directive line as
      * reader_type (lang-layers-plan).  Reader layers in this set have their
      * `#`-dispatch registered at reader init; empty for files without layers.
@@ -476,6 +504,31 @@ ReaderType detect_lang_layered(const char *src, size_t len,
                                const char **out_rest, size_t *out_rest_len,
                                LangLayerSet *out_layers,
                                const char **out_bad, size_t *out_bad_len);
+
+/* saffron-lang-plan S1: detect_lang_layered plus the LANGUAGE axis (D1).
+ * `out_dialect` receives the dialect the base token named; every existing
+ * spelling yields LANG_TURMERIC.  detect_lang_layered is this with
+ * `out_dialect == NULL`, which is why the dozen callers that do not care about
+ * the dialect needed no change -- only the paths that elaborate a file thread
+ * it through to SourceFile.lang. */
+ReaderType detect_lang_dialect(const char *src, size_t len,
+                               const char **out_rest, size_t *out_rest_len,
+                               LangLayerSet *out_layers,
+                               const char **out_bad, size_t *out_bad_len,
+                               LangDialect *out_dialect);
+
+/* saffron-lang-plan D9: apply a file's dialect the way a SEMANTIC `#lang` layer
+ * is applied (lang_layers_apply_semantic).
+ *
+ * `#lang saffron` IS the enable for the `saffron` experiment, scoped to one
+ * file, at CLI precedence -- and it inherits that rule's sharp edge on purpose:
+ * a project manifest that scopes `:experiments` and leaves `saffron` out has
+ * said no, so the directive is a hard ERROR rather than a silent ignore.
+ * Compiling a file under a language it did not ask for is the worse failure.
+ *
+ * Returns false having emitted a diagnostic; true (and a no-op) for
+ * LANG_TURMERIC. */
+bool lang_dialect_apply(LangDialect d, const char *path);
 
 /* Get reader type from file extension (Phase S0) */
 ReaderType reader_type_from_extension(const char *path);
