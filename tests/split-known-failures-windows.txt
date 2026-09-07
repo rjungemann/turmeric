@@ -26,28 +26,74 @@
 # gcc does not, on either platform.
 hamt-lowering-basic
 
-# --- Windows-only, and a REAL defect rather than a measurement artifact -----
-# Both produce no output and exit 127 under the split, while passing under the
-# default runtime with the same compiler and the same build. Established by
-# experiment, in this order:
+# --- ROOT-CAUSED 2026-09-07: a stack overflow, not a GC bug ----------------
 #
-#   - NOT the build type. First seen on Release, where CLAUDE.md warns contract
-#     checks are elided; rebuilt Debug on Windows and both still fail.
-#   - NOT a link failure. `nm` finds gc_all_blocks_count in both the split and
-#     the default binary.
-#   - NOT recursion depth. gc-registry-growth builds a 20000-deep chain, and a
-#     hand-written 20000-deep recursion runs fine under split on Windows.
-#   - NOT a missing DLL. `ldd` resolves everything.
+# It is NOT a defect in the rc/GC machinery, and the "exit 127, no output" this
+# file used to describe was a red herring the whole time. In bash 127 is a
+# translation; the real status is 0xC00000FD == STATUS_STACK_OVERFLOW
+# (PowerShell reports LASTEXITCODE=-1073741571). Nobody looked past the 127.
 #
-# So: a Windows-only split defect in the rc/GC machinery, failing before any
-# output reaches stdout. Two variables remain uncontrolled -- Windows vs Linux
-# and MinGW gcc 16.1 vs system gcc -- and cannot be separated on a Windows box
-# alone.
+# Mechanism. The monolithic preamble emits `tur_frame` AND its two accessors
+# into the same TU as the program, as `static inline`
+# (src/compiler/emit_module.c:10092-10103). The split replaces that region with
+# the committed decls header, where the same two are bare extern prototypes
+# (src/runtime/generated/tur_rt_split_decls.h:615-616) with out-of-line bodies
+# in libturt_preamble.a (src/runtime/generated/tur_rt_split.c:1042,1045).
 #
-# Next diagnostic, cheapest first: the WIN32 split archive also pulls in
-# async/tur_sjlj_x64_win.S (see add_library(turt_preamble ...) in
-# src/CMakeLists.txt), which the default path gets from elsewhere. Look for a
-# duplicate or divergent unwinding/setjmp implementation across that seam.
+# De-inlining them is deliberate -- tools/gen-runtime-split.py:71-77 documents
+# it, naming tur_frame_init as the very function that forced it -- and it is
+# right for linking and wrong for codegen. Inlined, GCC sees a frame holding
+# one known thunk and eliminates the 536-byte struct. Split, `&__frame_N`
+# escapes to an opaque callee, so all 536 bytes must be real:
+#
+#   build_hychain prologue, same compiler, byte-identical program C:
+#     default   sub $0x48,%rsp
+#     split     sub $0x268,%rsp
+#
+# 20000 frames x 640 bytes = 12.2 MiB against a 2 MiB Windows stack reserve
+# (identical SizeOfStackReserve in both PE headers -- not a link-flag
+# difference). Predicted overflow depth 2097152/640 = 3276; measured, split
+# prints at 3200 and dies at 3300. Relinking the same split build with
+# -Wl,--stack,33554432 makes it print 20000 and exit 0.
+#
+# CORRECTION, and the reason this sat misdiagnosed. An earlier revision of this
+# file recorded "NOT recursion depth -- a hand-written 20000-deep recursion runs
+# fine under split". That experiment was mine and it was wrong: the probe had no
+# `defer` in its body, so it never allocated a tur_frame at all. It eliminated
+# depth ALONE; the actual variable is depth x defer-bearing scope. A 20000-deep
+# recursion whose body is `let [r (rc/of n)]` fails identically under split and
+# passes under default. A negative result is only as good as the thing it varied.
+#
+# The tur_sjlj_x64_win.S hypothesis this file used to carry is dead: the minimal
+# repro reaches the fault with no setjmp, no panic and no async.
+#
+# Fix direction: keep the two tiny leaf helpers inlinable across the seam (an
+# allowlist in gen-runtime-split.py emitting their bodies as `static inline`
+# into the decls header and omitting them from the archive). Secondary: shrink
+# tur_frame, three fixed 32-entry arrays sized for a common case of 1-2 defers.
+#
+# TWO FURTHER FINDINGS, both worth their own attention:
+#
+#  1. The DEFAULT runtime is also near the cliff on Windows. Measured: the
+#     fixture passes at depth 21000 and overflows at 21800, matching
+#     2097152/96 = 21845. At its committed depth of 20000 it uses ~1.83 MiB of
+#     a 2 MiB stack -- about 9% headroom. Any codegen change that adds a few
+#     bytes to that frame breaks this fixture in the DEFAULT runtime too, and it
+#     will present as the same content-free "exit 127". Nothing in src/ or
+#     tests/run.sh ever passes -Wl,--stack, so every tur-built Windows binary
+#     gets 2 MiB where Linux gets 8 MiB.
+#
+#  2. Why this passes under split on LINUX is not established, and the
+#     arithmetic says it should not: at 20000 frames an 8 MiB stack allows 419
+#     bytes, less than sizeof(tur_frame) = 536 on its own. Either the Linux
+#     frame is smaller than can be accounted for, or the split DECLINED the swap
+#     for this program there (it declines loudly on hash mismatch --
+#     src/main.c:2681-2688 -- and hamt-lowering-basic's note confirms the
+#     emitted preamble is not fixed across programs), in which case the Linux
+#     green is vacuous for this fixture. One check on a Linux box settles it:
+#     build with --runtime=split, `objdump -d` the build_hychain prologue and
+#     read `ulimit -s`. A ~0x230 sub means the same latent cliff exists there;
+#     a ~0x30 sub means the split declined.
 gc-registry-growth
 
 # --- NOT listed, and deliberately: sx8a-tur-smt-div-mod --------------------
