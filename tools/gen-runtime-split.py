@@ -262,6 +262,45 @@ def split(src):
                 decls.append(desig)
                 i = j + 1
                 continue
+        # A col-0 NON-static global DEFINITION with an initializer.  The static
+        # case above becomes `extern` in the decls half; this one used to fall
+        # through to "keep verbatim in both", so the symbol was defined TWICE.
+        # Harmless on the JIT path (the program half is the only definition
+        # c2mir compiles) and a duplicate-definition link error the moment a
+        # cc-compiled program links the runtime TU -- which is exactly what
+        # docs/upcoming/cc-path-preamble-split-plan.md needs it to do.
+        #
+        # Which half loses the definition is load-bearing, and neither obvious
+        # answer works:
+        #
+        #   extern in the decls half -- breaks the JIT.  jit_sync_config_globals
+        #     (src/jit_engine.c) locates tur_closure_headers_enabled as a MIR
+        #     DATA ITEM in the program module and copies its value onto the
+        #     host's.  No definition, no data item, and that handshake silently
+        #     stops working while everything still builds.
+        #
+        #   __attribute__((weak)) in the runtime half -- breaks Windows.  On
+        #     PE/COFF a weak definition inside an archive member is not pulled
+        #     in to satisfy an undefined reference the way it is on ELF, so the
+        #     host stopped resolving the symbol at all: `undefined reference to
+        #     tur_closure_headers_enabled` from jit_engine.c and reactor.c.
+        #
+        # So the decls half carries BOTH spellings behind a guard the consumer
+        # picks.  The JIT compiles it undefined and keeps the definition it
+        # needs; a cc-compiled program that links the runtime TU defines
+        # TUR_RT_SPLIT_HOSTED and takes the extern.
+        if (at_col0 and '(' not in l and '=' in l
+                and code_part(l).endswith(';')
+                and not re.match(r'^\s*(?:static|extern|typedef|#)\b', l)
+                and re.match(r'^[A-Za-z_][A-Za-z0-9_ \t]*[\s*]\*?[A-Za-z_][A-Za-z0-9_]*\s*=', l)):
+            impl.append(l)
+            decls.append('#ifdef TUR_RT_SPLIT_HOSTED')
+            decls.append(f'extern {l.split("=")[0].rstrip()};')
+            decls.append('#else')
+            decls.append(l)
+            decls.append('#endif')
+            i += 1
+            continue
         # everything else (includes, macros, types, non-static decls,
         # comments): both halves keep it verbatim
         impl.append(l)

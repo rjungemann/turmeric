@@ -238,7 +238,11 @@ typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 void tur_closure_drop(void *__h) __attribute__((unused));
 void tur_closure_drop(void *__h);
 #define TUR_CLOSURE_DROP(h) tur_closure_drop((void *)(intptr_t)(h))
+#ifdef TUR_RT_SPLIT_HOSTED
+extern int tur_closure_headers_enabled;
+#else
 int tur_closure_headers_enabled = 1;
+#endif
 typedef struct { int tag; union { char __none; int64_t value; } as; } tur_option_t;
 typedef struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } tur_result_box_t;
 #define TUR_NONE ((int64_t)0)
