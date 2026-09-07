@@ -5891,40 +5891,351 @@ static void ce0_trace_elem_read(EmitCtx *ctx, const Expr *e,
             fname);
 }
 
+/* saffron-lang-plan S5/D4: `(op a b ...)` where an operand is `any`.
+ *
+ * The operator was chosen by the elaborator's EX_DYN_OP route but its OVERLOAD
+ * is chosen at run time, from the tag the value actually carries.  Every
+ * operand is `any` by construction (elab_call.c widens the concrete ones), so
+ * each emits as a `tur_tagged_t` and the preamble helpers take it from there.
+ *
+ * The set of operators this handles is D4's dynamic surface and no more:
+ * arithmetic, comparison, truthiness (including `and`/`or`) and `println`.
+ * The interpreter covers a wider set for free -- it resolves through
+ * `builtin_lookup` against the live builtin table -- and that asymmetry is
+ * real, so an operator outside the set gets a diagnostic naming it rather than
+ * a lowering that guesses.  Emitting the STATIC operator instead would be a
+ * miscompile, not a missing feature: the operands are two-word boxes, so `+`
+ * over them would add tag words. */
+static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
+    ensure_saffron_dyn_runtime(ctx);
+    const char *opn = (e->as.dyn_op_.op && e->as.dyn_op_.op->name)
+                          ? e->as.dyn_op_.op->name : "";
+    uint32_t n = e->as.dyn_op_.n_args;
+    Expr **args = e->as.dyn_op_.args;
+
+    int opcode = 0;
+    bool is_arith = false, is_cmp = false;
+    if      (strcmp(opn, "+")   == 0) { opcode = TUR_DYNOP_ADD; is_arith = true; }
+    else if (strcmp(opn, "-")   == 0) { opcode = TUR_DYNOP_SUB; is_arith = true; }
+    else if (strcmp(opn, "*")   == 0) { opcode = TUR_DYNOP_MUL; is_arith = true; }
+    else if (strcmp(opn, "/")   == 0) { opcode = TUR_DYNOP_DIV; is_arith = true; }
+    else if (strcmp(opn, "mod") == 0) { opcode = TUR_DYNOP_MOD; is_arith = true; }
+    else if (strcmp(opn, "bit-and") == 0) { opcode = TUR_DYNOP_BAND; is_arith = true; }
+    else if (strcmp(opn, "bit-or")  == 0) { opcode = TUR_DYNOP_BOR;  is_arith = true; }
+    else if (strcmp(opn, "bit-xor") == 0) { opcode = TUR_DYNOP_BXOR; is_arith = true; }
+    else if (strcmp(opn, "bit-shl") == 0) { opcode = TUR_DYNOP_SHL;  is_arith = true; }
+    else if (strcmp(opn, "bit-shr") == 0) { opcode = TUR_DYNOP_SHR;  is_arith = true; }
+    else if (strcmp(opn, "=")    == 0) { opcode = TUR_DYNOP_EQ;  is_cmp = true; }
+    else if (strcmp(opn, "not=") == 0) { opcode = TUR_DYNOP_NE;  is_cmp = true; }
+    else if (strcmp(opn, "<")    == 0) { opcode = TUR_DYNOP_LT;  is_cmp = true; }
+    else if (strcmp(opn, ">")    == 0) { opcode = TUR_DYNOP_GT;  is_cmp = true; }
+    else if (strcmp(opn, "<=")   == 0) { opcode = TUR_DYNOP_LE;  is_cmp = true; }
+    else if (strcmp(opn, ">=")   == 0) { opcode = TUR_DYNOP_GE;  is_cmp = true; }
+
+    bool is_and = (strcmp(opn, "and") == 0);
+    bool is_or  = (strcmp(opn, "or")  == 0);
+
+    /* `and` / `or` stay LAZY, and laziness is why they are lowered to
+     * STATEMENTS rather than to C's `&&` over two emitted expressions: an
+     * operand may itself need statements (a `let`, an `if`, a call whose result
+     * lands in a temp), and those statements would run before the guard did.
+     * This is the shape emit_builtin already uses for BS_AND_SC/BS_OR_SC --
+     * `bool t = a; if (t) t = b;` -- with the bool test replaced by D4's
+     * truthiness and the result re-boxed, since the node's type is `any`. */
+    if ((is_and || is_or) && n >= 1) {
+        char *tmp = fresh_tmp(ctx);
+        char *first = emit_value(ctx, body, args[0]);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "int %s = __tur_dyn_truthy(%s);\n", tmp, first);
+        free(first);
+        for (uint32_t i = 1; i < n; i++) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "if (%s%s) {\n", is_or ? "!" : "", tmp);
+            ctx->indent += 4;
+            char *next = emit_value(ctx, body, args[i]);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s = __tur_dyn_truthy(%s);\n", tmp, next);
+            free(next);
+            ctx->indent -= 4;
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "}\n");
+        }
+        Buf out; buf_init(&out);
+        buf_printf(&out, "TUR_TAG(TUR_DYNTAG_BOOL, %s)", tmp);
+        buf_putc(&out, '\0');
+        free(tmp);
+        char *r = strdup(out.data);
+        buf_free(&out);
+        return r;
+    }
+
+    /* The reserved truthiness operator.  Unlike every other row here its node
+     * type is `bool`, not `any` -- elab_forms.c builds it precisely to feed a
+     * C-level `if`, so re-boxing the answer would only make the consumer unbox
+     * it again. */
+    if (strcmp(opn, SAFFRON_TRUTHY_OP) == 0 && n == 1) {
+        char *a = emit_value(ctx, body, args[0]);
+        Buf out; buf_init(&out);
+        buf_printf(&out, "__tur_dyn_truthy(%s)", a);
+        buf_putc(&out, '\0');
+        free(a);
+        char *r = strdup(out.data);
+        buf_free(&out);
+        return r;
+    }
+
+    if (n == 1 && (strcmp(opn, "println") == 0 || strcmp(opn, "not") == 0)) {
+        char *a = emit_value(ctx, body, args[0]);
+        Buf out; buf_init(&out);
+        buf_printf(&out, "__tur_dyn_%s(%s)",
+                   opn[0] == 'p' ? "println" : "not", a);
+        buf_putc(&out, '\0');
+        free(a);
+        char *r = strdup(out.data);
+        buf_free(&out);
+        return r;
+    }
+
+    /* Arithmetic folds left, matching BS_VARIADIC_FOLD: `(+ a b c)` is
+     * `(a + b) + c`, so the dynamic form nests the same way and a mixed
+     * int/float chain promotes at the same points the static one would. */
+    if (is_arith && n >= 2) {
+        char *acc = emit_value(ctx, body, args[0]);
+        for (uint32_t i = 1; i < n; i++) {
+            char *rhs = emit_value(ctx, body, args[i]);
+            Buf out; buf_init(&out);
+            buf_printf(&out, "__tur_dyn_arith(%d, %s, %s)", opcode, acc, rhs);
+            buf_putc(&out, '\0');
+            free(acc); free(rhs);
+            acc = strdup(out.data);
+            buf_free(&out);
+        }
+        return acc;
+    }
+
+    if (is_cmp && n == 2) {
+        char *a = emit_value(ctx, body, args[0]);
+        char *b = emit_value(ctx, body, args[1]);
+        Buf out; buf_init(&out);
+        buf_printf(&out, "__tur_dyn_cmp(%d, %s, %s)", opcode, a, b);
+        buf_putc(&out, '\0');
+        free(a); free(b);
+        char *r = strdup(out.data);
+        buf_free(&out);
+        return r;
+    }
+
+    /* Outside D4's set.  Naming the operator matters: the message is the only
+     * thing that tells a reader whether they hit a designed boundary or a bug,
+     * and `--interpret` genuinely runs the program today. */
+    diag_emit(DIAG_ERROR, e->span,
+              "'%s' on a dynamic value is outside the compiled dynamic operator "
+              "set (saffron-lang-plan D4: arithmetic, the bit operators, "
+              "comparison, not, truthiness and println); the interpreter "
+              "resolves it against the full builtin table, so `tur --interpret` "
+              "runs this file",
+              opn[0] ? opn : "operator");
+    return atom_nil();
+}
+
+/* saffron-lang-plan S5/D4 (G5): `(f a ...)` where `f : any`.
+ *
+ * The payload of a function-carrying `any` is always the FAT `{ thunk, env }`
+ * representation -- `elab_coerce_to_any` shims a bare code pointer to fat
+ * before boxing precisely so there is one representation to call, not two
+ * (any-cannot-recover-a-capturing-closure).  So the lowering is the ordinary
+ * fat protocol: read the thunk from slot 0, pass the box as the env.
+ *
+ * The arity/signature check is the SAME comparison `cast` makes, and gets it
+ * for free: a fn's `any` box id is interned from its signature key, so the id
+ * for `(fn [any ...n] : any)` fat is exactly what a Saffron function of that
+ * arity gets when it is widened.  One tag compare therefore rules out a
+ * non-function, a wrong arity, and a function whose parameters are concrete --
+ * all three of which would otherwise be a jump through a mistyped pointer. */
+static char *emit_dyn_call(EmitCtx *ctx, Buf *body, const Expr *e) {
+    ensure_saffron_dyn_runtime(ctx);
+    uint32_t n = e->as.dyn_call_.n_args;
+    /* TUR_APPLYn_T covers arities 0..4.  Beyond that the fat protocol has no
+     * macro to borrow, and inventing a sixth here would duplicate the shim
+     * table's own ceiling in a second place; say so instead. */
+    if (n > 4) {
+        diag_emit(DIAG_ERROR, e->span,
+                  "calling a dynamic value with %u arguments is not supported by "
+                  "the compiled back end (the fat-closure apply helpers stop at "
+                  "4); `tur --interpret` has no such limit",
+                  n);
+        return atom_nil();
+    }
+
+    /* The expected box id: a fat fn taking `n` `any`s and returning `any`. */
+    Type want = type_simple(TY_FN, CK_COPY);
+    want.as.fn.arity       = n;
+    want.as.fn.result_kind = TY_ANY;
+    want.as.fn.boxed       = true;
+    want.as.fn.arg_kinds   = n ? tur_fn_args_alloc(n) : NULL;
+    for (uint32_t i = 0; i < n; i++) want.as.fn.arg_kinds[i] = (uint8_t)TY_ANY;
+    int64_t want_id = emit_any_type_id(ctx, want);
+
+    char *fnv = emit_value(ctx, body, e->as.dyn_call_.fn);
+    char **argv = n ? (char **)calloc(n, sizeof(char *)) : NULL;
+    for (uint32_t i = 0; i < n; i++)
+        argv[i] = emit_value(ctx, body, e->as.dyn_call_.args[i]);
+
+    /* A statement expression, not a nested call: the callee box is read three
+     * times (check, thunk, env) and evaluating its expression three times would
+     * run any side effect three times. */
+    Buf out; buf_init(&out);
+    buf_printf(&out,
+               "({ tur_tagged_t __tur_dc = (%s); "
+               "__tur_dyn_call_check(TUR_GETTAG(__tur_dc), %lld); "
+               "TUR_APPLY%u_T(tur_tagged_t",
+               fnv, (long long)want_id, n);
+    for (uint32_t i = 0; i < n; i++) buf_puts(&out, ", tur_tagged_t");
+    buf_puts(&out, ", TUR_UNTAG(__tur_dc)");
+    for (uint32_t i = 0; i < n; i++) buf_printf(&out, ", %s", argv[i]);
+    buf_puts(&out, "); })");
+    buf_putc(&out, '\0');
+
+    free(fnv);
+    for (uint32_t i = 0; i < n; i++) free(argv[i]);
+    free(argv);
+    char *r = strdup(out.data);
+    buf_free(&out);
+    return r;
+}
+
+/* saffron-lang-plan S5: widen an already-emitted C expression of type `t` into
+ * an `any` box, as a string.
+ *
+ * The EX_UNION_INJECT arm does this from an Expr; the dynamic field read needs
+ * the same three cases starting from a C lvalue it built itself, and there is
+ * no Expr to hand that arm.  Kept deliberately narrow -- float, by-value
+ * aggregate, carrier -- and each case is spelled the way the inject arm spells
+ * it, because a float widened any other way is a denormal, not a rounding
+ * error. */
+static char *dyn_widen_to_any(EmitCtx *ctx, Type t, const char *val) {
+    Type r = emit_resolve_type(ctx, t);
+    int64_t id = emit_any_type_id(ctx, t);
+    Buf out; buf_init(&out);
+    if (r.kind == TY_FLOAT) {
+        buf_printf(&out,
+                   "TUR_TAG(%lld, ((union { double d; int64_t i; }){.d = (%s)}).i)",
+                   (long long)id, val);
+    } else if (emit_type_is_byvalue_adt(ctx, t)) {
+        const char *cn = emit_type_c_name(ctx, r);
+        buf_printf(&out,
+                   "({ %s *__tur_fb = (%s *)malloc(sizeof(%s)); *__tur_fb = (%s); "
+                   "TUR_REGION_NOTE_WORDS(__tur_fb, sizeof *__tur_fb); "
+                   "TUR_TAG(%lld, (int64_t)(intptr_t)__tur_fb); })",
+                   cn, cn, cn, val, (long long)id);
+    } else {
+        buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)(%s))",
+                   (long long)id, val);
+    }
+    buf_putc(&out, '\0');
+    char *s = strdup(out.data);
+    buf_free(&out);
+    return s;
+}
+
+/* saffron-lang-plan S5/D4 (G11): `(.f x)` where `x : any`.
+ *
+ * The interpreter resolves this against the value's own constructor -- it
+ * carries `ctor->fields[i].name` at run time and scans it.  A compiled program
+ * carries no such table, so the scan is done HERE instead, at emit time, over
+ * every type in the program that has a field of this name; what is left for run
+ * time is one integer compare per candidate against the box id.
+ *
+ * Duck typing is what makes the candidate SET the right unit: `get-x` in the S4
+ * fixture is called with two unrelated structs, so there is no single type to
+ * resolve `.x` against, and the answer is "whichever of them arrives".
+ *
+ * The two back ends differ here in a way worth stating plainly: the
+ * interpreter's version is OPEN (any struct reaching it with the right field
+ * name works, including one built by a module it never saw) and this one is
+ * CLOSED over the program being compiled.  That is inherent to compiling, not a
+ * shortcut -- whole-program knowledge is exactly what a compiler has and an
+ * interpreter does not -- and for a single program the two sets coincide. */
+static char *emit_dyn_field(EmitCtx *ctx, Buf *body, const Expr *e) {
+    ensure_saffron_dyn_runtime(ctx);
+    const char *fname = (e->as.dyn_field_.field && e->as.dyn_field_.field->name)
+                            ? e->as.dyn_field_.field->name : "";
+
+    uint32_t n_items = 0;
+    const Expr **items = ctx ? flatten_program_items(ctx->program_root, &n_items)
+                             : NULL;
+
+    char *obj = emit_value(ctx, body, e->as.dyn_field_.obj);
+    char *ov  = fresh_tmp(ctx);
+    char *rv  = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_tagged_t %s = (%s);\n", ov, obj);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_tagged_t %s = TUR_TAG(TUR_DYNTAG_NIL, 0);\n", rv);
+    free(obj);
+
+    uint32_t n_cands = 0;
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *it = items[i];
+        if (!it || (it->kind != EX_DEFDATA && it->kind != EX_DEFGADT)) continue;
+        AdtDef *def = (it->kind == EX_DEFGADT) ? it->as.defgadt_.def
+                                               : it->as.defdata_.def;
+        /* One record constructor and no type parameters: the `defstruct` shape,
+         * where "the type" is a single C struct with the field as a member.  A
+         * multi-ctor sum needs the ctor tag read before a field even has a
+         * location, and a generic ADT has monomorphs rather than one type --
+         * both are real, both are wider than a dynamic FIELD READ, and guessing
+         * at either would emit a read from the wrong offset. */
+        if (!def || def->n_ctors != 1 || def->n_type_params != 0) continue;
+        CtorDef *ctor = def->ctors[0];
+        if (!ctor || !ctor->is_record) continue;
+        Type at = type_adt(def);
+        if (!emit_type_is_byvalue_adt(ctx, at)) continue;
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            const CtorField *f = &ctor->fields[fi];
+            if (!f->name || strcmp(f->name, fname) != 0) continue;
+            const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, at));
+            char *mp = adt_field_member_path(def, ctor, fi);
+            Type ft = f->full_type ? *f->full_type : type_simple(f->kind, CK_COPY);
+            Buf read; buf_init(&read);
+            buf_printf(&read, "((%s *)(intptr_t)TUR_UNTAG(%s))->%s", cn, ov,
+                       mp ? mp : f->name);
+            buf_putc(&read, '\0');
+            char *w = dyn_widen_to_any(ctx, ft, read.data);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s (TUR_GETTAG(%s) == %lld) { %s = %s; }\n",
+                       n_cands ? "else if" : "if", ov,
+                       (long long)emit_any_type_id(ctx, at), rv, w);
+            free(w); free(mp); buf_free(&read);
+            n_cands++;
+            break;
+        }
+    }
+    free((void *)items);
+
+    if (n_cands == 0) {
+        /* No type in the program has a field of this name, so no value could
+         * ever satisfy the read.  That is a static fact even in a dynamic
+         * language -- the whole-program closure above is what makes it one --
+         * and reporting it beats emitting a chain that always panics. */
+        diag_emit(DIAG_ERROR, e->span,
+                  "no type in this program has a field '.%s', so a dynamic read "
+                  "of it can never succeed", fname);
+        free(ov); free(rv);
+        return atom_nil();
+    }
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "else { __tur_dyn_no_field(TUR_GETTAG(%s), \"%s\"); }\n",
+               ov, fname);
+    free(ov);
+    return rv;
+}
+
 static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
-        /* saffron-lang-plan S3: a dynamic operator has no compiled lowering
-         * yet -- that is S5's `__tur_dyn_arith` / `__tur_dyn_cmp` /
-         * `__tur_dyn_print` preamble.  Say so, rather than guessing: the
-         * arguments are `tur_tagged_t` boxes, so emitting the static operator
-         * would be an int add over tag words, and silence here would be a
-         * miscompile rather than a missing feature.
-         *
-         * A diagnostic, not an abort: `tur run` on a Saffron program that uses
-         * arithmetic should say what to do, and `--interpret` runs it today. */
-        /* saffron-lang-plan S4: same posture as EX_DYN_OP -- no compiled
-         * lowering until S5 (unbox to a fat pointer, check arity, indirect
-         * call), and saying so beats emitting a call through a tag word. */
-        case EX_DYN_FIELD:
-            diag_emit(DIAG_ERROR, e->span,
-                      "reading field '.%s' of a dynamic value is not supported "
-                      "by the compiled back end yet (saffron-lang-plan S5); run "
-                      "this file with `tur --interpret` for now",
-                      e->as.dyn_field_.field ? e->as.dyn_field_.field->name : "?");
-            return atom_nil();
-        case EX_DYN_CALL:
-            diag_emit(DIAG_ERROR, e->span,
-                      "calling a dynamic value is not supported by the compiled "
-                      "back end yet (saffron-lang-plan S5); run this file with "
-                      "`tur --interpret` for now");
-            return atom_nil();
-        case EX_DYN_OP:
-            diag_emit(DIAG_ERROR, e->span,
-                      "'%s' on a dynamic value is not supported by the compiled "
-                      "back end yet (saffron-lang-plan S5); run this file with "
-                      "`tur --interpret` for now",
-                      e->as.dyn_op_.op ? e->as.dyn_op_.op->name : "operator");
-            return atom_nil();
+        case EX_DYN_OP:    return emit_dyn_op(ctx, body, e);
+        case EX_DYN_CALL:  return emit_dyn_call(ctx, body, e);
+        case EX_DYN_FIELD: return emit_dyn_field(ctx, body, e);
         case EX_NIL_LIT:  return atom_nil();
         case EX_BOOL_LIT: return atom_bool(e->as.b);
         case EX_INT_LIT:  return atom_int_typed(e->as.i, e->type.kind);
@@ -6235,6 +6546,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         (unsigned)m, (long long)emit_any_type_id(ctx, *mem));
                 }
                 buf_puts(&out, " default: break; } __tur_ua; })");
+            } else if (inj_pt.kind == TY_NIL) {
+                /* saffron-lang-plan S5: a NIL payload is the fourth thing that
+                 * cannot ride the carrier as written.  `nil` emits as
+                 * `((void)0)`, so the ordinary integer cast below is "invalid
+                 * use of void expression" -- a hard cc error, not a wrong
+                 * answer.  Nothing widened a nil before Saffron: a Turmeric
+                 * program has no reason to pass one where an `any` is wanted,
+                 * and `(dyn nil)` is the ordinary shape in a dynamic one.
+                 *
+                 * The comma keeps the payload expression evaluated -- it is
+                 * pure today, but the widen has no business deciding that -- and
+                 * yields the 0 word the tag makes meaningless anyway. */
+                buf_printf(&out, "TUR_TAG(%lld, ((%s), (int64_t)0))",
+                           (long long)tag, inner);
             } else {
                 buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)(%s))",
                            (long long)tag, inner);
@@ -14868,8 +15193,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * is guaranteed by the elaborator so the default branch is unreachable.
                  * CONV-S1/B3: a by-value ADT result is a C aggregate -- it cannot be
                  * scalar-initialised with `0` (invalid initializer), so use `{0}`. */
+                /* saffron-lang-plan S5: an `any` (or union) result is the
+                 * two-word `tur_tagged_t`, an aggregate for exactly the same
+                 * reason and with exactly the same "invalid initializer" if it
+                 * is given a scalar `0`.  Reachable once a match can JOIN to
+                 * `any` -- which is what S4's arm unifier made possible. */
                 if (type_is_byvalue_adt_product(res_ty) ||
-                    adt_app_is_byvalue_product(res_ty))
+                    adt_app_is_byvalue_product(res_ty) ||
+                    res_ty.kind == TY_ANY || res_ty.kind == TY_UNION)
                     buf_printf(body, "%s %s = {0};\n", type_c_name(res_ty), tmp);
                 else
                     buf_printf(body, "%s %s = 0;\n", type_c_name(res_ty), tmp);
@@ -15114,6 +15445,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                     "%s %s = *(%s *)(intptr_t)(__scrut%s%s);\n",
                                     ctype, bname, ctype, acc, mp);
                             } else if (inline_byval) {
+                                buf_printf(body, "%s %s = __scrut%s%s;\n",
+                                           ctype, bname, acc, mp);
+                            } else if (fb->type.kind == TY_ANY) {
+                                /* saffron-lang-plan S5: an `:any` field's slot IS
+                                 * the two-word box, so it is read directly.  The
+                                 * default arm's `(ctype)` cast is a scalar cast
+                                 * and "conversion to non-scalar type requested"
+                                 * for an aggregate -- the same shape as the
+                                 * inline-by-value arm above, for the same reason. */
                                 buf_printf(body, "%s %s = __scrut%s%s;\n",
                                            ctype, bname, acc, mp);
                             } else if (emit_type_is_byval_recursive_carrier(ctx, fb->type) ||
@@ -15516,6 +15856,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                     "%s %s = *(%s *)(intptr_t)(__scrut->%s);\n",
                                     ctype, bname, ctype, mp);
                             } else if (inline_byval) {
+                                buf_printf(body, "%s %s = __scrut->%s;\n",
+                                           ctype, bname, mp);
+                            } else if (fb->type.kind == TY_ANY) {
+                                /* saffron-lang-plan S5: the switch path's twin of
+                                 * the sibling site's `any` arm -- the slot is the
+                                 * two-word box, so read it, do not cast it. */
                                 buf_printf(body, "%s %s = __scrut->%s;\n",
                                            ctype, bname, mp);
                             } else if (emit_type_is_byval_recursive_carrier(ctx, fb->type) ||

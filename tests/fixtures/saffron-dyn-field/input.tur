@@ -21,7 +21,13 @@
 ;; errors/saffron-seam-wrong-type; this fixture asserts the value passes
 ;; through when it IS the right type.
 ;;
-;; requires.interp-only: S4 is the interpreter's stage.
+;; S5 compiles the field read as an if/else chain over the box id, one arm per
+;; type in the program that HAS a field of this name -- the emit-time analogue
+;; of the interpreter's run-time name scan.  Worth stating plainly: the
+;; interpreter's version is OPEN (any struct with the right field works) and the
+;; compiled one is CLOSED over the program, which is inherent to compiling
+;; rather than a shortcut.  For a single program the two sets coincide, which is
+;; why this fixture can assert the same output from both.
 
 (defstruct Pt   [x : int  y : int])
 (defstruct Name [x : cstr])

@@ -8111,6 +8111,29 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
 
+    /* saffron-lang-plan S5/D3: an UNANNOTATED Saffron return IS `any`, not
+     * "whatever the body turned out to produce".
+     *
+     * S4 forwarded `any` for the recursive self-call only, and left the final
+     * type to the inference below.  The interpreter did not care -- a TuriValue
+     * carries its own tag whatever the static type said -- but the two answers
+     * are a C type each, and they disagreed: `lmap`'s self-call was elaborated
+     * against `any` while the function was finally typed `Lst`, so the emitted
+     * self-call spoke a signature the definition did not have.
+     *
+     * Fixing it at the FORWARD decl instead would be the wrong half: inference
+     * cannot see the recursive call's own result, so the two are only reliably
+     * equal if the boundary is fixed at `any` -- which is what D3 says the
+     * default type is.  Inference still runs everywhere inside the body; what
+     * this pins is the SIGNATURE, the one place a caller has to agree.
+     *
+     * Placed before the widen below on purpose, so the body is boxed by the
+     * existing return-position coercion rather than a second one written here. */
+    if (return_kind == TY_NIL && !return_annotated && body &&
+        body->type.kind != TY_NEVER && lang_span_is_saffron(call->span)) {
+        return_kind = TY_ANY;
+    }
+
     /* TY2.2: return-position widening to `any`.  A function declared `: any`
      * whose body yields a narrower type must box the result, otherwise the
      * raw value leaks into a tur_tagged_t slot and breaks C codegen.  Mirror

@@ -862,6 +862,37 @@ typedef enum ExprKind {
  * differently. */
 #define SAFFRON_TRUTHY_OP "saffron/truthy?"
 
+/* saffron-lang-plan S5: the opcodes the compiled dynamic operator runtime
+ * dispatches on.  emit_expr.c picks one from the operator's NAME (which it has
+ * statically) and emit_module.c emits the matching `#define` into the preamble,
+ * so the runtime never does a strcmp -- the name survives only in the panic
+ * message, where a reader needs it.
+ *
+ * Shared here rather than duplicated in the two emitters because they have to
+ * agree on the numbering, and a silent disagreement would turn `+` into `mod`
+ * with nothing to notice it. */
+enum {
+    TUR_DYNOP_ADD = 1,
+    TUR_DYNOP_SUB,
+    TUR_DYNOP_MUL,
+    TUR_DYNOP_DIV,
+    TUR_DYNOP_MOD,
+    TUR_DYNOP_EQ,
+    TUR_DYNOP_NE,
+    TUR_DYNOP_LT,
+    TUR_DYNOP_GT,
+    TUR_DYNOP_LE,
+    TUR_DYNOP_GE,
+    /* Integer-only, like `mod`: the builtin table has rows for the int kinds
+     * and nothing else, so a float operand finds no overload in the
+     * interpreter either and both back ends answer the same way. */
+    TUR_DYNOP_BAND,
+    TUR_DYNOP_BOR,
+    TUR_DYNOP_BXOR,
+    TUR_DYNOP_SHL,
+    TUR_DYNOP_SHR
+};
+
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
 struct FnDef {
     Binding        *binding;     /* name binding */

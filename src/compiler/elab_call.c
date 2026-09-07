@@ -3748,6 +3748,22 @@ Expr *elab_call(Elab *e, Form *call) {
             Type any_t;
             memset(&any_t, 0, sizeof(any_t));
             any_t.kind = TY_ANY;
+            /* saffron-lang-plan S5: widen every operand, not only the `any`
+             * ones.  A mixed call like `(* x 2)` is the common shape, and the
+             * two halves disagree about what to do with the concrete operand:
+             * the interpreter does not care, because a TuriValue is uniform
+             * whatever the static type said, while the compiled runtime takes
+             * `tur_tagged_t` and would be handed a bare `int64_t` for the `2`.
+             *
+             * Widening HERE rather than in the emitter keeps the node's own
+             * invariant honest -- every operand of a dynamic operator is `any`
+             * -- so both back ends read the same tree and neither has to
+             * reconstruct the coercion.  It costs the interpreter nothing: an
+             * EX_UNION_INJECT over an int is a transparent shim there. */
+            for (uint32_t i = 0; i < n_args; i++) {
+                Expr *w = elab_coerce_to_any(e, args[i]);
+                if (w) args[i] = w;
+            }
             Expr *dyn = expr_new(e->arena, EX_DYN_OP, any_t, call->span);
             dyn->as.dyn_op_.op     = name;
             dyn->as.dyn_op_.args   = args;

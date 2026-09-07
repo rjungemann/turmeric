@@ -17,11 +17,15 @@
 ;; not evaluate `boom`, because the whole point of `and` is guarding.  They are
 ;; handled before the dynamic operator's argument loop, which is eager.
 ;;
-;; requires.interp-only: S3 is the interpreter's layer; see the sibling
-;; arithmetic fixture.
+;; S5 gave the compiled half `__tur_dyn_truthy` and lowered `and`/`or` to the
+;; statement form emit_builtin already uses for BS_AND_SC -- statements rather
+;; than C's `&&` because an operand can need statements of its own, which would
+;; then run before the guard did.  So this runs on both back ends now, and the
+;; short-circuit row is what proves the lowering kept its laziness.
 
 (defn dyn [x] x)
 (defn boom [] : int (panic "and must short-circuit before reaching this"))
+(defn empty-list [] : int 0)
 
 (defn main [] : int
   ;; Falsy: exactly two values, `false` and `nil`.
@@ -33,11 +37,13 @@
   (println (if (dyn "") 1 0))
   (println (if (dyn "text") 1 0))
   (println (if (dyn 0.0) 1 0))
-  ;; `(nil-value)` is NOT nil: it is the cons-list terminator, which is an int,
-  ;; so it is truthy.  Kept as a contrast because it is exactly the confusion
-  ;; D4's rule is chosen to avoid -- under the C rule this would be falsy and
-  ;; an empty list would silently take the wrong branch.
-  (println (if (dyn (nil-value)) 1 0))
+  ;; The empty cons list is NOT nil: its terminator is an int, so it is truthy.
+  ;; That is exactly the confusion D4's rule is chosen to avoid -- under the C
+  ;; rule an empty list would silently take the wrong branch.  Written as the
+  ;; literal terminator rather than `(nil-value)` because that name is an
+  ;; interpreter native with no compiled counterpart, and this fixture asserts
+  ;; that both back ends agree.
+  (println (if (dyn (empty-list)) 1 0))
   ;; `when` and `cond` ride the same lowering, being built on `if`.
   (when (dyn 0) (println 7))
   (println (cond (dyn 0) 5 :else 9))

@@ -27,9 +27,11 @@
 ;; int) and then rejects `x` as "arg 2: expected int, got any".  An operator is
 ;; dynamic when any operand is, not only when the first is.
 ;;
-;; requires.interp-only: S3 is the interpreter's layer.  The compiled back end
-;; gets `__tur_dyn_arith` in S5 and until then reports the gap as a diagnostic
-;; naming --interpret, which errors/saffron-dyn-op-compiled-unsupported pins.
+;; S5 landed `__tur_dyn_arith` / `__tur_dyn_cmp` / `__tur_dyn_println` in the
+;; preamble, so this fixture now runs on BOTH back ends and the marker is gone.
+;; That is the whole point of it: the compiled half resolves the overload from
+;; the box tag the same way the interpreter resolves it from the TuriValue tag,
+;; and the two must print the same nine lines.
 
 (defn twice     [x] (* x 2))
 (defn twice-rev [x] (* 2 x))

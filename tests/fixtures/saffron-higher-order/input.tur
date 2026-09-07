@@ -33,8 +33,14 @@
 ;; int and the heterogeneity is gone before `type-of` sees it.  Containers that
 ;; can hold dynamic values are S6's subject, not S4's.
 ;;
-;; requires.interp-only: S4 is the interpreter's stage; the compiled back end
-;; gets these lowerings in S5 and reports the gap until then.
+;; S5 made this compile, and it took four things beyond the dynamic call
+;; itself: an `:any` ADT field had to become a two-word `tur_tagged_t` member
+;; (the int64 carrier stored the payload and dropped the tag); `match` on an
+;; `any` scrutinee had to narrow to the ADT its arms name; a match that JOINS to
+;; `any` had to widen the arms that are not (S4 settled the type and left the
+;; values alone, which only the interpreter could survive); and an unannotated
+;; Saffron return had to BE `any` rather than whatever inference produced, so
+;; the self-call and the definition agree on one C signature.
 
 (defdata Lst [] (Cons [hd : any tl : any]) (Nil))
 

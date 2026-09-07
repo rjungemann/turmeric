@@ -30,13 +30,23 @@ S3/S4 lean on the interpreter hard), and
 [a spurious `-Wfree-nonheap-object` in emitted code](../reported/any-drop-inlining-warns-free-nonheap.md)
 (cosmetic).
 
-**S1-S4 landed 2026-09-07** -- the `#lang` language axis with its gate and
+**S1-S5 landed 2026-09-07** -- the `#lang` language axis with its gate and
 listing, the `any` default for unannotated parameters, the dynamic operator
-layer (arithmetic, comparison, print, truthiness), and dynamic call plus dynamic
-field access. Saffron runs higher-order code over a heterogeneous list under
-`--interpret`: `map`, `filter` and `fold` over `(1 "hi" 7.1 true)`. **S5, the
-compiled path, is next** -- and it is the largest stage, since every dynamic
-node currently reports a diagnostic there rather than lowering.
+layer (arithmetic, comparison, print, truthiness), dynamic call plus dynamic
+field access, and the compiled back end for all three. Saffron runs higher-order
+code over a heterogeneous list -- `map`, `filter` and `fold` over
+`(1 "hi" 7.1 true)` -- and now runs it **compiled**, printing the same eight
+lines as the interpreter. Every S3/S4 fixture lost its `requires.interp-only`
+marker and is asserted on both back ends.
+
+S5 left one thing open, and it is the one the stage predicted: **ownership**.
+Widening a by-value payload into an `any` parameter still mallocs a box nothing
+frees, because the frame-box rule that avoids that allocation requires a
+non-pointer scalar RESULT -- and a Saffron function returns `any`. Filed as
+[saffron-any-return-defeats-the-frame-box-rule](../reported/saffron-any-return-defeats-the-frame-box-rule.md)
+with the measurement and three fix directions; the fixtures carry `known-leak`
+so `tests/run-leak-check.sh` stays readable rather than permanently red.
+**S6, containers and the Saffron prelude, is next.**
 
 Worth stating plainly, because it changes how the rest of this plan should be
 read: **six of those eight reports had a diagnosis that was wrong on
@@ -312,16 +322,18 @@ only so the design does not foreclose them.
 Saffron needs `any` to support exactly these, and this list should not grow
 without a decision:
 
-| Operation | Compiled lowering | Interpreter |
+| Operation | Compiled lowering (S5, as built) | Interpreter |
 |---|---|---|
-| arithmetic (`+ - * / mod`) | `__tur_dyn_arith(op, tur_tagged_t, tur_tagged_t)` in the preamble | exists (`eval.c:3567`) |
-| comparison (`= < > <= >= !=`) | `__tur_dyn_cmp` | exists (`eval.c:3618`) |
-| print (`println`, `print`, `str`) | `__tur_dyn_print`, reusing `__tur_any_name_ext` | exists (`eval.c:3759`) |
-| call (`(f x ...)`, `f : any`) | unbox to fat pointer, check arity, indirect call | closure values already first-class |
-| truthiness (`if`, `when`, `and`, `or`) | `__tur_dyn_truthy` | tag test |
-| field access (`(.f x)`, `(set! (.f x) v)`) | per-type field table keyed on the box id | `TuriStruct` field lookup exists |
-| type dispatch (`match` on `any`) | box-id switch; `emit_expr.c:14356` is half-plumbed | tag switch |
-| index (`(vec-get v i)` etc. on `any`) | unbox then delegate | delegate |
+| arithmetic (`+ - * / mod`) | `__tur_dyn_arith(op, tur_tagged_t, tur_tagged_t)`, left-folded for the variadic forms | `builtin_lookup` on the runtime tag, with numeric promotion |
+| bit operators (`bit-and/or/xor/shl/shr`) | same helper, int-only like `mod` | same |
+| comparison (`= not= < > <= >=`) | `__tur_dyn_cmp`, returning a BOXED bool (the node's type is `any`) | same |
+| print (`println`) | `__tur_dyn_println`, each arm spelling the value the way the static emitter spells it | same |
+| call (`(f x ...)`, `f : any`) | `TUR_APPLYn_T` through the fat protocol; the arity/signature check is one tag compare against the fn box id | closure values already first-class |
+| truthiness (`if`, `when`, `and`, `or`) | `__tur_dyn_truthy`; `and`/`or` lower to STATEMENTS so an operand needing statements of its own stays lazy | tag test |
+| `not` | `__tur_dyn_not` -- bool-only, NOT truthiness, matching what `builtin_lookup` does | `builtin_lookup` |
+| field access (`(.f x)`) | if/else chain over the box id, one arm per program type with that field | `TuriStruct` field lookup |
+| type dispatch (`match` on `any`) | checked NARROW to the ADT the arms name, then the ordinary match | tag switch |
+| index (`(vec-get v i)` etc. on `any`) | **S6** -- outside the compiled set, reported by name | delegate |
 
 **The float rule is load-bearing here.** `tur_tagged_t.val` is `int64_t` and a
 float rides as its IEEE-754 bit pattern. Every dynamic arithmetic path must
@@ -986,27 +998,83 @@ value emitter and eval.c. The statement-position arms are not uniform and the
 difference matters: a dynamic operator and a dynamic field read are pure and
 are discarded, a dynamic CALL runs a user function and must not be.
 
-### S5 -- the compiled path (large)
+### S5 -- the compiled path (large) -- DONE 2026-09-07
 
-Everything S3 and S4 did for the interpreter, done again in the C preamble:
-`__tur_dyn_arith`, `__tur_dyn_cmp`, `__tur_dyn_print`, `__tur_dyn_truthy`,
-`__tur_dyn_call`, the field table, the `match`-on-`any` box-id switch (half of
-which `emit_expr.c:14356` already sketches).
+Everything S3 and S4 did for the interpreter, done again in C:
+`__tur_dyn_arith`, `__tur_dyn_cmp`, `__tur_dyn_println`, `__tur_dyn_truthy`,
+`__tur_dyn_not`, the dynamic call, the dynamic field read, and `match` on an
+`any` scrutinee.
 
-This is the biggest single stage and the one where the float reinterpret
-(D4) and the box-ownership question (below) both bite.
+**Exit criterion MET.** All four S3/S4 fixtures lost `requires.interp-only` and
+print identically on both back ends; `saffron-higher-order` -- map/filter/fold
+over `(1 "hi" 7.1 true)` -- gives `4 / int / cstr / float / bool / 2 / 2 / 8.1`
+compiled, `7.1 + 1 = 8.1` included, which is the float rule surviving the whole
+dynamic path. `run.sh` 2861 passed / 0 failed, `run-turi.sh` 1953 / 0, turi
+parity 117/118 with the recorded carve-out.
 
-**Ownership is the real risk here, not the dispatch.** `any` boxing already has
-a known ownerless-box problem in the union case
-(`docs/reported/union-tagged-union-c-emission.md`), and Saffron multiplies
-every widen site by roughly the size of the program. The mitigation is to make
-Saffron's `any` boxes RC-managed rather than raw `malloc`/`__tur_any_drop`, and
-to pin it with `tests/run-leak-check.sh` from the first fixture rather than
-retrofitting. Budget for this explicitly; it is where a "just box everything"
-design usually goes wrong.
+**The ownership prediction was right, and it is not fixed.** Filed as
+[saffron-any-return-defeats-the-frame-box-rule](../reported/saffron-any-return-defeats-the-frame-box-rule.md),
+with the cause measured rather than guessed: `any-struct-box-leak-per-widen`'s
+frame-box pass already avoids the allocation when the callee cannot retain the
+payload, but it is gated on the callee's RESULT being a non-pointer scalar --
+which is correct, and which Saffron's `any`-by-default return makes false
+everywhere. The rule did not break; it stopped being reachable. The sibling
+`saffron-higher-order` leak is a different thing and the report says so: a plain
+Turmeric recursive ADT leaks one box per cons cell too (measured, 72 bytes for
+three cells), so that half is the existing no-drop-glue story wearing `any`
+boxes. Both fixtures carry `requires.leak-check` AND `known-leak`, so the gate
+reports them without going permanently red. RC-managed `any` boxes -- this
+section's original proposal -- is fix direction 3 of the three filed; directions
+1 and 2 are smaller and should be weighed first.
 
-**Exit:** every S3/S4 fixture passes compiled with identical output, and the
-Saffron fixtures carry `requires.leak-check`.
+Five things differed from what this section expected:
+
+- **The dynamic operator set had to be enumerated, and that is a real
+  asymmetry.** The interpreter resolves a dynamic operator through
+  `builtin_lookup` against the live builtin table, so it inherits every builtin
+  for free. A compiled program has no such table, so this half lists its
+  operators: arithmetic, the bit operators, comparison, `not`, truthiness and
+  `println` -- every builtin over primitive scalars. `cons` and the container
+  operations are outside it and get a diagnostic naming the operator, which
+  `errors/saffron-dyn-op-compiled-unsupported` now pins (it used to pin the
+  whole-stage gap). D4's row 8 (index on `any`) is genuinely S6's.
+
+- **The field read is a chain, not a table, and it is CLOSED.** The interpreter
+  scans `ctor->fields[i].name` at run time; the compiled path does that scan at
+  emit time over every type in the program with a field of that name, leaving
+  one integer compare per candidate. So the interpreter's version is open (any
+  struct with the right field works) and this one is closed over the program.
+  That is inherent to compiling rather than a shortcut, and for one program the
+  two sets coincide.
+
+- **`match` on `any` did not need the box-id switch this section imagined.** It
+  needed a NARROW: the arms name an ADT, so the scrutinee unboxes to it through
+  the same checked `cast` D5 uses at argument position, and the ordinary match
+  machinery runs. One ADT only -- arms from two ADTs would need the switch, and
+  guessing which ADT to narrow to would be worse than the existing diagnostic.
+
+- **An `:any` ADT field had to become a real two-word member.** `defdata`
+  lowered it to the int64 carrier, which stores the payload and drops the tag,
+  so `type-of` on a field read answered whatever the carrier collided with. That
+  is three lines (`adt_field_c_type`, `adt_field_scalar_c_type`, and the two
+  match-binder sites, which must read the slot rather than scalar-cast it) and
+  it is the thing that made a heterogeneous container work at all.
+
+- **An unannotated Saffron return had to BE `any`, not "whatever inference
+  produced".** S4 forwarded `any` for the self-call and left the final type to
+  inference; the two then disagreed, and `lmap`'s self-call spoke a signature the
+  definition did not have. Inference still runs inside the body -- what is pinned
+  is the signature, the one place a caller has to agree. This is the completion
+  of D3's "the default type is `any`", not a departure from it.
+
+Two smaller things landed with it, both because a fixture asserting both back
+ends forced the question. A NIL payload could not be widened at all (`nil` emits
+as `((void)0)`, so the carrier cast was a hard cc error) -- nothing in Turmeric
+widens a nil, and `(dyn nil)` is ordinary in Saffron. And the interpreter's
+runtime type errors named a primitive "a value of a different type" where the
+compiled ones named it "cstr", because the helper behind them answers NULL for
+anything that is not a struct; a display-name helper beside it makes the two
+agree word for word, which is what `saffron-seam-panics` asserts.
 
 ### S6 -- containers and the Saffron prelude (medium)
 

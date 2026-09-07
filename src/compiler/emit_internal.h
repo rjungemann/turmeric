@@ -327,6 +327,12 @@ typedef struct EmitCtx {
     char    **fatshim_names;
     uint32_t  n_fatshim_names;
     uint32_t  cap_fatshim_names;
+    /* saffron-lang-plan S5: has this TU already emitted the dynamic operator
+     * runtime?  The block is emitted ON DEMAND, from the first EX_DYN_* node
+     * that needs it, rather than unconditionally into the preamble -- a program
+     * with no dynamic operator gets no dynamic runtime, which is why the ~1440
+     * codegen snapshots are untouched by this stage. */
+    bool      saffron_dyn_emitted;
     /* type-of-cast-kind-granularity: per-monomorph identity for `any` box tags.
      * A primitive keeps its TypeKind as its tag; a struct/ADT interns its
      * monomorph C name here, so `cast` / `is?` / `type-of` distinguish two
@@ -1145,6 +1151,13 @@ bool ensure_fatbox_keep(EmitCtx *ctx);
 /* type-of-cast-kind-granularity: the `any` box tag for a type -- its TypeKind
  * for a primitive, an interned per-monomorph id for a struct/ADT. */
 int64_t emit_any_type_id(EmitCtx *ctx, Type t);
+
+/* saffron-lang-plan S5: emit the dynamic operator runtime into this TU's
+ * file-scope buffer, once.  Called from the three EX_DYN_* emitters rather than
+ * from the preamble, so a program with no dynamic operator carries no dynamic
+ * runtime.  Lands in `thunk_typedefs`, which precedes the forward decls, so the
+ * helpers are declared before any body can call them. */
+void ensure_saffron_dyn_runtime(EmitCtx *ctx);
 /* any-struct-box-leak-per-widen: the predicate the `any` widen uses to decide
  * whether a payload is heap-boxed.  Exported so emit_any_type_id can intern the
  * same answer for the drop side -- one predicate, not two that can drift. */

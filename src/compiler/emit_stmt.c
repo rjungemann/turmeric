@@ -238,18 +238,6 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_UNION_INJECT: /* IT4: pure struct literal, no stmt-level side effects */
         case EX_ANY_TYPE_OF:  /* IT4: pure read, no stmt-level side effects */
         case EX_ANY_CAST:     /* IT4: pure unbox, no stmt-level side effects */
-        /* saffron-lang-plan S3: a dynamic operator has no compiled lowering
-         * until S5, and emit_value reports that.  Listing it with the pure
-         * forms here means a statement-position one is discarded rather than
-         * reaching emit_value -- which would report the S5 gap for an
-         * expression whose value nothing wanted.  `(+ x 1)` alone on a line is
-         * dead code in either language. */
-        case EX_DYN_OP:
-        case EX_DYN_FIELD:   /* a pure read, like EX_ANY_CAST above */
-        /* saffron-lang-plan S4: a dynamic CALL is deliberately NOT in this
-         * discard list -- it runs a user function, so dropping it in statement
-         * position would drop its side effects, unlike a dynamic operator,
-         * which is pure.  Its arm sits with the effectful forms below. */
         case EX_ANY_IS:       /* TY3: pure tag test, no stmt-level side effects */
         case EX_TYPECLASS_DEF:
         case EX_DEFMODULE: /* Phase M0: module metadata — nothing to emit */
@@ -493,9 +481,38 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             fprintf(stderr, "tur: emit: EX_FN_DEF in stmt position\n");
             abort();
             return;
-        /* saffron-lang-plan S4: emitted for effect, which is how it reaches
-         * emit_value and reports the S5 gap. */
-        case EX_DYN_CALL:
+        /* saffron-lang-plan S5: all three dynamic nodes are emitted for effect,
+         * and none of them may be discarded.
+         *
+         * S3/S4 listed the operator and the field read with the pure forms
+         * above, on the reasoning that `(+ x 1)` alone on a line is dead code.
+         * That was true only while nothing was emitted for them.  It is wrong
+         * now on both counts: `println` is a dynamic OPERATOR, so discarding one
+         * would drop the output; and every dynamic node can PANIC on the type
+         * that actually arrives -- `(+ x 1)` where x is a cstr, `(.f v)` where v
+         * has no such field -- which the interpreter reports because it
+         * evaluates statement-position expressions.  Dropping the emission would
+         * make the compiled program silently accept what the interpreter
+         * rejects.  They are not pure; they were only unemitted.
+         *
+         * A separate arm from EX_CALL rather than a shared one: the block below
+         * reads `e->as.call_.fn_binding`, and a dyn-call node's union carries
+         * `dyn_call_` there instead -- reading it would interpret the callee
+         * expression pointer as a Binding. */
+        case EX_DYN_OP:
+        case EX_DYN_FIELD:
+        case EX_DYN_CALL: {
+            uint32_t pd_mark[3];
+            emit_pending_drops_mark(ctx, pd_mark);
+            char *v = emit_value(ctx, body, e);
+            if (v && v[0]) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "(void)(%s);\n", v);
+            }
+            free(v);
+            emit_pending_drops_drain(ctx, body, pd_mark);
+            return;
+        }
         case EX_CALL: {
             /* G1 (carrier<->concrete crossing audit): `tur-list-homog__` is the
              * compile-time-only element-homogeneity assertion the `(list ...)`

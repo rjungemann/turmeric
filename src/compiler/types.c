@@ -1715,6 +1715,18 @@ static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
         case TY_BOOL:     return "bool";
         case TY_FLOAT:    return "double";
         case TY_CSTR:     return "const char *";
+        /* saffron-lang-plan S5: an `:any` field is a TWO-word box, and the
+         * `default: int64_t` below is not a narrower spelling of that -- it is
+         * the tag thrown away.  A `(Cons [hd : any tl : any])` laid out as two
+         * int64 slots stores the payload word and loses which type it was, so
+         * `type-of` on a field read answers whatever the carrier happens to
+         * collide with.  The interpreter never had this problem: a TuriValue
+         * carries its own tag wherever it is stored.
+         *
+         * Only reachable for a field whose declared kind is TY_ANY and whose
+         * `full_type` is NULL; a field carrying a full type already resolves to
+         * `tur_tagged_t` through type_c_name above. */
+        case TY_ANY:      return "tur_tagged_t";
         case TY_PTR_VOID: return "void *";
         case TY_RC:
         case TY_WEAK:     return "RcControlBlock *";

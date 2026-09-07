@@ -1,5 +1,6 @@
 /* elab_structs.c -- struct/ADT/GADT definitions, pattern matching, and borrow traits. */
 #include "elab_internal.h"
+#include "lang_layers.h"  /* saffron-lang-plan S5: lang_span_is_saffron */
 #include <assert.h>   /* structdef-retirement slice 5 DS-B: zero-producer guard */
 
 /* ---- file-local helper forward declarations ---- */
@@ -3653,6 +3654,45 @@ Expr *elab_match(Elab *e, const Form *call) {
     Expr *scrutinee = elab_form(e, call->as.list.items[1]);
     if (!scrutinee) return NULL;
 
+    /* saffron-lang-plan S5/D4 (row 7): `match` on an `any` scrutinee.
+     *
+     * In Saffron an unannotated parameter is `any`, so `(match xs (Cons h t)
+     * ... )` reaches here with no ADT to match against.  The interpreter needed
+     * nothing for this -- a TuriValue carries its own constructor, so matching
+     * works whatever the static type claimed -- but a compiled `match` reads a
+     * tag out of a C aggregate, and `tur_adt_Lst __scrut_v = xs;` where `xs` is
+     * a two-word box is "invalid initializer".
+     *
+     * The narrow is D5's seam, applied to the scrutinee position: the arms name
+     * an ADT, so unbox to it and let the ordinary match machinery run.  A value
+     * of the wrong type panics with the standard cast message rather than
+     * reinterpreting the payload -- the same trade D5 already made for
+     * arguments, and the reason `cast` was built checked.
+     *
+     * ONE ADT only.  Arms drawn from two different ADTs would need a box-id
+     * switch over unrelated layouts, which is a bigger thing than a narrow and
+     * has no arm-unifier story yet; leaving it to the existing diagnostic is
+     * better than narrowing to whichever ADT happened to be named first. */
+    if (scrutinee->type.kind == TY_ANY && lang_span_is_saffron(call->span)) {
+        AdtDef *only = NULL;
+        bool mixed = false;
+        for (uint32_t ai = 0; ai < n_arms && !mixed; ai++) {
+            Form *pf = call->as.list.items[2 + ai * 2];
+            if (!pf || pf->tag != F_LIST || pf->as.list.len == 0) continue;
+            Form *hd = pf->as.list.items[0];
+            if (!hd || hd->tag != F_SYM) continue;
+            CtorDef *cd = elab_lookup_ctor(e, hd->as.sym);
+            if (!cd || !cd->adt) continue;
+            if (!only) only = cd->adt;
+            else if (only != cd->adt) mixed = true;
+        }
+        if (only && !mixed && only->n_type_params == 0) {
+            Expr *nar = elab_any_unbox_to(e, scrutinee, type_adt(only),
+                                          scrutinee->span);
+            if (nar) scrutinee = nar;
+        }
+    }
+
     /* IT1: Union type match — when scrutinee is TY_UNION, handle type-narrowing patterns.
      * Pattern syntax: (varname : TypeName) or bare _ / variable for wildcard.
      * Returns early via the union match path. */
@@ -4894,6 +4934,29 @@ Expr *elab_match(Elab *e, const Form *call) {
     free(arm_diverges);
 
     if (result_type.kind == TY_UNKNOWN) result_type = TYPE_NIL;
+
+    /* saffron-lang-plan S5: when the arms UNIFIED to `any`, box the ones that
+     * are not.
+     *
+     * S4 taught match_arm_type_compatible that `any` is the top type, so an
+     * `any` arm beside a `Lst` arm joins to `any` instead of being rejected.
+     * That settled the TYPE and left the VALUES alone, which the interpreter
+     * did not notice -- every TuriValue is one word wide there -- and the
+     * compiled path cannot survive: the result temp is a `tur_tagged_t` and the
+     * `Lst` arm assigns a raw aggregate into it ("incompatible types when
+     * assigning").  Widening a value to the type its own arm already claims is
+     * the same coercion the return and argument positions make; this is the
+     * third position that needed it.
+     *
+     * A `!`-typed arm (a `panic`) is skipped: it produces no value to box. */
+    if (result_type.kind == TY_ANY) {
+        for (uint32_t ai = 0; ai < n_arms; ai++) {
+            Expr *b = arms[ai].body;
+            if (!b || b->type.kind == TY_ANY || b->type.kind == TY_NEVER) continue;
+            Expr *w = elab_coerce_to_any(e, b);
+            if (w) arms[ai].body = w;
+        }
+    }
 
     Expr *out = expr_new(e->arena, EX_MATCH, result_type, call->span);
     out->as.match_.scrutinee = scrutinee;

@@ -1313,6 +1313,37 @@ static const char *turi_any_named_type(TuriValue v) {
     return v.as_struct->name;
 }
 
+/* saffron-lang-plan S5: the name to PRINT for a value in a runtime type error.
+ *
+ * `turi_any_named_type` above answers NULL for anything that is not a struct,
+ * and its callers must keep that: the ADT cast arm reads NULL as "not a
+ * struct", which is the comparison itself.  But every message built from it
+ * then said "a value of a different type" / "non-struct" / "non-function"
+ * where the compiled half, going through `__tur_any_type_name`, said "cstr".
+ * Same program, same failure, two different sentences -- and the compiled one
+ * is the useful one.
+ *
+ * So the display name is a separate question from the identity name, and this
+ * answers it: the named type when there is one, the primitive's own name
+ * otherwise.  A box wrapper is unwrapped first, since the wrapper exists to
+ * make `type-of` work and should not be what a panic reports. */
+static const char *turi_any_display_type(TuriValue v) {
+    if (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->is_any_box &&
+        v.as_struct->n_fields == 1 && v.as_struct->fields)
+        v = v.as_struct->fields[0];
+    const char *named = turi_any_named_type(v);
+    if (named) return named;
+    switch (v.tag) {
+    case TURI_INT:     return "int";
+    case TURI_FLOAT:   return "float";
+    case TURI_BOOL:    return "bool";
+    case TURI_CSTR:    return "cstr";
+    case TURI_NIL:     return "nil";
+    case TURI_CLOSURE: return "fn";
+    default:           return NULL;
+    }
+}
+
 /* interp-native-ctor-loses-adt-name: recover the CtorDef a constructor NAME
  * belongs to, so a value a native builds carries the same ctor->adt link a value
  * built by evaluating `(Some x)` does.
@@ -11007,7 +11038,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                  * of a different type" is what the fallback said for every
                  * closure, which tells a reader nothing about the mismatch that
                  * actually happened. */
-                const char *have = turi_any_named_type(v);
+                const char *have = turi_any_display_type(v);
                 if (!have) have = turi_closure_fn_key(v);
                 char msg[192];
                 snprintf(msg, sizeof(msg), "cast: any holds %s, not %s",
@@ -11056,7 +11087,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * because "no field .x" is far less useful than "an int has no .x". */
         {
             char msg[160];
-            const char *tn = turi_any_named_type(ov);
+            const char *tn = turi_any_display_type(ov);
             snprintf(msg, sizeof(msg), "no field '.%s' on a %s value",
                      fname, tn ? tn : "non-struct");
             turi_runtime_panic(env, msg);
@@ -11087,8 +11118,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             char msg[128];
             snprintf(msg, sizeof(msg),
                      "cannot call a %s value -- it is not a function",
-                     turi_any_named_type(fnv) ? turi_any_named_type(fnv)
-                                              : "non-function");
+                     turi_any_display_type(fnv) ? turi_any_display_type(fnv)
+                                                : "non-function");
             turi_runtime_panic(env, msg);
             return turi_nil();  /* unreachable */
         }

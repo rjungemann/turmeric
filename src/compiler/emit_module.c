@@ -360,6 +360,21 @@ static bool thunk_type_has_concrete_c_abi(Type t, bool result_pos) {
         case TY_SESSION:
         case TY_ROLE:
         case TY_GENERATOR:
+        /* saffron-lang-plan S5: `any` is `tur_tagged_t`, a real 16-byte C type
+         * with a real ABI, so a closure over it needs the TYPED shim.
+         *
+         * Declining left slot 0 holding the generic `__tur_fatshim<arity>`,
+         * whose `int64_t (*)(void *, int64_t...)` spelling passes each argument
+         * in ONE register while the callee reads TWO -- so a Saffron `(f h)`
+         * through an `any` callee jumped into a function reading half an
+         * argument and a garbage second word.  It segfaulted on the first call.
+         *
+         * The TY_APP arm below declines in RESULT position for an erased
+         * consumer that calls slot 0 through the generic cast.  There is no
+         * such consumer here: an `any`-carried function is reached only through
+         * EX_DYN_CALL or a `cast` to a fn type, and both emit the typed
+         * TUR_APPLYn_T cast that this shim is the other half of. */
+        case TY_ANY:
             return true;
         case TY_ADT:
             return t.as.adt_.def != NULL;
@@ -7736,6 +7751,12 @@ static const char *adt_field_scalar_c_type(TypeKind k) {
         case TY_BOOL:     return "bool";
         case TY_FLOAT:    return "double";
         case TY_CSTR:     return "const char *";
+        /* saffron-lang-plan S5: an `any` slot is the two-word box, for the same
+         * reason as in adt_field_c_type -- the int64 carrier stores the payload
+         * and drops the tag.  This mapping decides the CTOR PARAMETER and the
+         * member spelling; the two must agree or the ctor cannot store its own
+         * argument. */
+        case TY_ANY:      return "tur_tagged_t";
         case TY_PTR_VOID: return "void *";
         case TY_RC:
         case TY_WEAK:     return "RcControlBlock *";
@@ -9359,6 +9380,310 @@ static bool g_rt_split_all_gates = false;
  * canonical split text, because the Windows tail-resume landing has to pick a
  * setjmp/longjmp pair that both halves of an S2 program will agree on. */
 bool rt_split_canonical_emission(void) { return g_rt_split_all_gates; }
+
+/* saffron-lang-plan S5/D4: the dynamic operator runtime, the compiled twin of
+ * the interpreter's EX_DYN_OP arm (eval.c).
+ *
+ * The two back ends reach the same answers by opposite routes, and the
+ * asymmetry is worth stating because it decides what this file can cover.  The
+ * interpreter resolves a dynamic operator by calling `builtin_lookup` with the
+ * TypeKind read off the value's own tag and then running `eval_builtin` -- so
+ * it inherits the WHOLE builtin table for free, and any builtin whose first
+ * argument matches the runtime type just works.  There is no builtin table at
+ * run time in a compiled program, so this half has to enumerate its operators,
+ * and it enumerates exactly D4's set: arithmetic, comparison, truthiness and
+ * `println`.  An operator outside that set is a compile-time diagnostic naming
+ * the operator (emit_expr.c), never a silent wrong answer.
+ *
+ * Everything is `static inline` on purpose: a TU that uses no dynamic operator
+ * would otherwise take -Wunused-function on every one of these.
+ *
+ * THE FLOAT RULE IS THE LOAD-BEARING PART.  `tur_tagged_t.val` is an int64_t
+ * and a float rides in it as its IEEE-754 bit pattern, so every numeric path
+ * must REINTERPRET rather than convert -- reading a float box's word as an
+ * integer (or an int box's word as a double) produces a denormal, not a
+ * rounding error.  `__tur_dyn_f` and `__tur_dyn_mkf` are the only two places
+ * that pun, and every arithmetic and comparison path goes through them. */
+void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
+    if (!ctx || ctx->saffron_dyn_emitted) return;
+    ctx->saffron_dyn_emitted = true;
+    Buf *out = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    if (!out) return;
+    buf_puts(out, "/* saffron-lang-plan S5/D4: dynamic operator runtime */\n");
+    buf_printf(out, "#define TUR_DYNOP_ADD %d\n", TUR_DYNOP_ADD);
+    buf_printf(out, "#define TUR_DYNOP_SUB %d\n", TUR_DYNOP_SUB);
+    buf_printf(out, "#define TUR_DYNOP_MUL %d\n", TUR_DYNOP_MUL);
+    buf_printf(out, "#define TUR_DYNOP_DIV %d\n", TUR_DYNOP_DIV);
+    buf_printf(out, "#define TUR_DYNOP_MOD %d\n", TUR_DYNOP_MOD);
+    buf_printf(out, "#define TUR_DYNOP_EQ  %d\n", TUR_DYNOP_EQ);
+    buf_printf(out, "#define TUR_DYNOP_NE  %d\n", TUR_DYNOP_NE);
+    buf_printf(out, "#define TUR_DYNOP_LT  %d\n", TUR_DYNOP_LT);
+    buf_printf(out, "#define TUR_DYNOP_GT  %d\n", TUR_DYNOP_GT);
+    buf_printf(out, "#define TUR_DYNOP_LE  %d\n", TUR_DYNOP_LE);
+    buf_printf(out, "#define TUR_DYNOP_GE  %d\n", TUR_DYNOP_GE);
+    buf_printf(out, "#define TUR_DYNOP_BAND %d\n", TUR_DYNOP_BAND);
+    buf_printf(out, "#define TUR_DYNOP_BOR  %d\n", TUR_DYNOP_BOR);
+    buf_printf(out, "#define TUR_DYNOP_BXOR %d\n", TUR_DYNOP_BXOR);
+    buf_printf(out, "#define TUR_DYNOP_SHL  %d\n", TUR_DYNOP_SHL);
+    buf_printf(out, "#define TUR_DYNOP_SHR  %d\n", TUR_DYNOP_SHR);
+    /* The five tags a dynamic operator can act on.  Spelled from the TypeKind
+     * enum rather than hard-coded, because the numeric values move as the enum
+     * grows -- the same reason __tur_any_type_name is emitted this way. */
+    buf_printf(out, "#define TUR_DYNTAG_NIL   %d\n",   (int)TY_NIL);
+    buf_printf(out, "#define TUR_DYNTAG_BOOL  %d\n",   (int)TY_BOOL);
+    buf_printf(out, "#define TUR_DYNTAG_INT   %d\n",   (int)TY_INT);
+    buf_printf(out, "#define TUR_DYNTAG_FLOAT %d\n",   (int)TY_FLOAT);
+    buf_printf(out, "#define TUR_DYNTAG_CSTR  %d\n",   (int)TY_CSTR);
+    buf_puts(out,
+        "static inline const char *__tur_dyn_op_name(int __op) {\n"
+        "    switch (__op) {\n"
+        "    case TUR_DYNOP_ADD: return \"+\";\n"
+        "    case TUR_DYNOP_SUB: return \"-\";\n"
+        "    case TUR_DYNOP_MUL: return \"*\";\n"
+        "    case TUR_DYNOP_DIV: return \"/\";\n"
+        "    case TUR_DYNOP_MOD: return \"mod\";\n"
+        "    case TUR_DYNOP_EQ:  return \"=\";\n"
+        "    case TUR_DYNOP_NE:  return \"not=\";\n"
+        "    case TUR_DYNOP_LT:  return \"<\";\n"
+        "    case TUR_DYNOP_GT:  return \">\";\n"
+        "    case TUR_DYNOP_LE:  return \"<=\";\n"
+        "    case TUR_DYNOP_BAND: return \"bit-and\";\n"
+        "    case TUR_DYNOP_BOR:  return \"bit-or\";\n"
+        "    case TUR_DYNOP_BXOR: return \"bit-xor\";\n"
+        "    case TUR_DYNOP_SHL:  return \"bit-shl\";\n"
+        "    case TUR_DYNOP_SHR:  return \"bit-shr\";\n"
+        "    default:            return \">=\";\n"
+        "    }\n"
+        "}\n");
+    /* The argument-type spelling in the panic message.  Deliberately the
+     * interpreter's, including its "value of that type" fallback: the message
+     * is user-visible and a fixture can assert it on either back end, so the
+     * two must agree word for word rather than approximately. */
+    buf_puts(out,
+        "static inline const char *__tur_dyn_argname(int64_t __t) {\n"
+        "    switch (__t) {\n"
+        "    case TUR_DYNTAG_INT:   return \"int\";\n"
+        "    case TUR_DYNTAG_FLOAT: return \"float\";\n"
+        "    case TUR_DYNTAG_BOOL:  return \"bool\";\n"
+        "    case TUR_DYNTAG_CSTR:  return \"cstr\";\n"
+        "    case TUR_DYNTAG_NIL:   return \"nil\";\n"
+        "    default:               return \"value of that type\";\n"
+        "    }\n"
+        "}\n");
+    buf_puts(out,
+        "static void __tur_dyn_no_operator(int __op, int64_t __t) {\n"
+        "    char __m[160];\n"
+        "    snprintf(__m, sizeof(__m), \"%s: no operator for a %s argument\",\n"
+        "             __tur_dyn_op_name(__op), __tur_dyn_argname(__t));\n"
+        "    tur_panic(__m);\n"
+        "}\n");
+    buf_puts(out,
+        "static inline int __tur_dyn_is_num(int64_t __t) {\n"
+        "    return __t == TUR_DYNTAG_INT || __t == TUR_DYNTAG_FLOAT;\n"
+        "}\n");
+    buf_puts(out,
+        "static inline double __tur_dyn_f(tur_tagged_t __v) {\n"
+        "    if (TUR_GETTAG(__v) == TUR_DYNTAG_FLOAT)\n"
+        "        return ((union { int64_t i; double d; }){.i = TUR_UNTAG(__v)}).d;\n"
+        "    return (double)TUR_UNTAG(__v);\n"
+        "}\n");
+    buf_puts(out,
+        "static inline tur_tagged_t __tur_dyn_mkf(double __d) {\n"
+        "    return TUR_TAG(TUR_DYNTAG_FLOAT, ((union { double d; int64_t i; }){.d = __d}).i);\n"
+        "}\n");
+    /* Numeric promotion, and it is not optional -- the same rule, for the same
+     * reason, as the interpreter's dyn-op arm.  If both operands are numeric
+     * and either is a float, both become floats; a mixed pair read through one
+     * operand's representation is how `(* 7.1 2)` printed 6.91692e-323 before
+     * the interpreter promoted.  An integral literal cannot show that, which is
+     * why every probe here leads with 7.1. */
+    buf_puts(out,
+        "static tur_tagged_t __tur_dyn_arith(int __op, tur_tagged_t __a, tur_tagged_t __b) {\n"
+        "    int64_t __ta = TUR_GETTAG(__a), __tb = TUR_GETTAG(__b);\n"
+        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_no_operator(__op, __ta); }\n"
+        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_no_operator(__op, __tb); }\n"
+        /* `mod` and the bit operators have int rows only in the builtin table,
+         * so a float operand finds no overload in the interpreter either.  Same
+         * answer here. */
+        "    if (__op == TUR_DYNOP_MOD || __op == TUR_DYNOP_BAND ||\n"
+        "        __op == TUR_DYNOP_BOR || __op == TUR_DYNOP_BXOR ||\n"
+        "        __op == TUR_DYNOP_SHL || __op == TUR_DYNOP_SHR) {\n"
+        "        if (__ta != TUR_DYNTAG_INT) { __tur_dyn_no_operator(__op, __ta); }\n"
+        "        if (__tb != TUR_DYNTAG_INT) { __tur_dyn_no_operator(__op, __tb); }\n"
+        "        {\n"
+        "            int64_t __x = TUR_UNTAG(__a), __y = TUR_UNTAG(__b);\n"
+        "            switch (__op) {\n"
+        "            case TUR_DYNOP_BAND: return TUR_TAG(TUR_DYNTAG_INT, __x & __y);\n"
+        "            case TUR_DYNOP_BOR:  return TUR_TAG(TUR_DYNTAG_INT, __x | __y);\n"
+        "            case TUR_DYNOP_BXOR: return TUR_TAG(TUR_DYNTAG_INT, __x ^ __y);\n"
+        "            case TUR_DYNOP_SHL:  return TUR_TAG(TUR_DYNTAG_INT, __x << __y);\n"
+        "            case TUR_DYNOP_SHR:  return TUR_TAG(TUR_DYNTAG_INT, __x >> __y);\n"
+        "            default:\n"
+        "                if (__y == 0) { fprintf(stderr, \"division by zero\\n\"); abort(); }\n"
+        "                return TUR_TAG(TUR_DYNTAG_INT, __x % __y);\n"
+        "            }\n"
+        "        }\n"
+        "    }\n"
+        "    if (__ta == TUR_DYNTAG_FLOAT || __tb == TUR_DYNTAG_FLOAT) {\n"
+        "        double __x = __tur_dyn_f(__a), __y = __tur_dyn_f(__b);\n"
+        "        switch (__op) {\n"
+        "        case TUR_DYNOP_ADD: return __tur_dyn_mkf(__x + __y);\n"
+        "        case TUR_DYNOP_SUB: return __tur_dyn_mkf(__x - __y);\n"
+        "        case TUR_DYNOP_MUL: return __tur_dyn_mkf(__x * __y);\n"
+        "        default:            return __tur_dyn_mkf(__x / __y);\n"
+        "        }\n"
+        "    }\n"
+        "    {\n"
+        "        int64_t __x = TUR_UNTAG(__a), __y = TUR_UNTAG(__b);\n"
+        "        switch (__op) {\n"
+        "        case TUR_DYNOP_ADD: return TUR_TAG(TUR_DYNTAG_INT, __x + __y);\n"
+        "        case TUR_DYNOP_SUB: return TUR_TAG(TUR_DYNTAG_INT, __x - __y);\n"
+        "        case TUR_DYNOP_MUL: return TUR_TAG(TUR_DYNTAG_INT, __x * __y);\n"
+        /* BS_DIV_CHECK's guard, in the compiled path's own words: `/` on two
+         * ints emits the zero test and aborts, so the dynamic route does the
+         * same rather than inventing a second convention. */
+        "        default:\n"
+        "            if (__y == 0) { fprintf(stderr, \"division by zero\\n\"); abort(); }\n"
+        "            return TUR_TAG(TUR_DYNTAG_INT, __x / __y);\n"
+        "        }\n"
+        "    }\n"
+        "}\n");
+    /* Comparison returns a BOXED bool, not a C int: the EX_DYN_OP node's static
+     * type is `any` whatever the operator, because the elaborator has no way to
+     * know which operator it will turn out to be.  The `if` that consumes it
+     * goes through __tur_dyn_truthy like any other dynamic condition. */
+    buf_puts(out,
+        "static tur_tagged_t __tur_dyn_cmp(int __op, tur_tagged_t __a, tur_tagged_t __b) {\n"
+        "    int64_t __ta = TUR_GETTAG(__a), __tb = TUR_GETTAG(__b);\n"
+        /* `=` on two bools is a real builtin row (TY_BOOL), so it is a real
+         * dynamic answer too.  Ordering operators have no bool row. */
+        "    if ((__op == TUR_DYNOP_EQ || __op == TUR_DYNOP_NE) &&\n"
+        "        __ta == TUR_DYNTAG_BOOL && __tb == TUR_DYNTAG_BOOL) {\n"
+        "        int __be = ((TUR_UNTAG(__a) != 0) == (TUR_UNTAG(__b) != 0));\n"
+        "        return TUR_TAG(TUR_DYNTAG_BOOL, __op == TUR_DYNOP_EQ ? __be : !__be);\n"
+        "    }\n"
+        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_no_operator(__op, __ta); }\n"
+        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_no_operator(__op, __tb); }\n"
+        "    if (__ta == TUR_DYNTAG_FLOAT || __tb == TUR_DYNTAG_FLOAT) {\n"
+        "        double __x = __tur_dyn_f(__a), __y = __tur_dyn_f(__b);\n"
+        "        int __r;\n"
+        "        switch (__op) {\n"
+        "        case TUR_DYNOP_EQ: __r = (__x == __y); break;\n"
+        "        case TUR_DYNOP_NE: __r = (__x != __y); break;\n"
+        "        case TUR_DYNOP_LT: __r = (__x <  __y); break;\n"
+        "        case TUR_DYNOP_GT: __r = (__x >  __y); break;\n"
+        "        case TUR_DYNOP_LE: __r = (__x <= __y); break;\n"
+        "        default:           __r = (__x >= __y); break;\n"
+        "        }\n"
+        "        return TUR_TAG(TUR_DYNTAG_BOOL, __r);\n"
+        "    }\n"
+        "    {\n"
+        "        int64_t __x = TUR_UNTAG(__a), __y = TUR_UNTAG(__b);\n"
+        "        int __r;\n"
+        "        switch (__op) {\n"
+        "        case TUR_DYNOP_EQ: __r = (__x == __y); break;\n"
+        "        case TUR_DYNOP_NE: __r = (__x != __y); break;\n"
+        "        case TUR_DYNOP_LT: __r = (__x <  __y); break;\n"
+        "        case TUR_DYNOP_GT: __r = (__x >  __y); break;\n"
+        "        case TUR_DYNOP_LE: __r = (__x <= __y); break;\n"
+        "        default:           __r = (__x >= __y); break;\n"
+        "        }\n"
+        "        return TUR_TAG(TUR_DYNTAG_BOOL, __r);\n"
+        "    }\n"
+        "}\n");
+    /* D4's truthiness decision, in one function: `false` and `nil` are falsy,
+     * everything else -- `0`, `""`, the empty container -- is truthy.  Lisp,
+     * not C.  Turmeric's `if` already demands a bool, so no existing program
+     * depends on int-truthiness and there is nothing to stay compatible with;
+     * and the C rule would make `(if (vec-len v) ...)` silently wrong on an
+     * empty vector. */
+    /* `not` is NOT truthiness, deliberately.  The interpreter's dynamic route
+     * resolves it through `builtin_lookup`, which has one row -- bool -> bool --
+     * so `(not 0)` is a runtime type error there.  D4's truthiness rule governs
+     * `if`/`when`/`and`/`or`, the forms whose whole job is a decision; making
+     * `not` truthy here would give the two back ends different answers for the
+     * same program, which is a worse outcome than either rule. */
+    buf_puts(out,
+        "static tur_tagged_t __tur_dyn_not(tur_tagged_t __v) {\n"
+        "    if (TUR_GETTAG(__v) != TUR_DYNTAG_BOOL) {\n"
+        "        char __m[160];\n"
+        "        snprintf(__m, sizeof(__m), \"not: no operator for a %s argument\",\n"
+        "                 __tur_dyn_argname(TUR_GETTAG(__v)));\n"
+        "        tur_panic(__m);\n"
+        "    }\n"
+        "    return TUR_TAG(TUR_DYNTAG_BOOL, TUR_UNTAG(__v) == 0);\n"
+        "}\n");
+    buf_puts(out,
+        "static inline int __tur_dyn_truthy(tur_tagged_t __v) {\n"
+        "    int64_t __t = TUR_GETTAG(__v);\n"
+        "    if (__t == TUR_DYNTAG_NIL) return 0;\n"
+        "    if (__t == TUR_DYNTAG_BOOL) return TUR_UNTAG(__v) != 0;\n"
+        "    return 1;\n"
+        "}\n");
+    /* `println` on a dynamic value.  Each arm reproduces the static emitter's
+     * own spelling for that type (printf %lld / printf %g / puts of
+     * "true"/"false" / puts of the string) so the compiled dynamic path and the
+     * compiled static path print a given value identically -- a `%f` here would
+     * have printed 14.200000 where the rest of the language prints 14.2.
+     *
+     * Returns nil rather than void so the node keeps the `any` type the
+     * elaborator gave it; a println in value position is rare but legal. */
+    buf_puts(out,
+        "static tur_tagged_t __tur_dyn_println(tur_tagged_t __v) {\n"
+        "    int64_t __t = TUR_GETTAG(__v);\n"
+        "    if (__t == TUR_DYNTAG_INT)        printf(\"%lld\\n\", (long long)TUR_UNTAG(__v));\n"
+        "    else if (__t == TUR_DYNTAG_FLOAT) printf(\"%g\\n\", __tur_dyn_f(__v));\n"
+        "    else if (__t == TUR_DYNTAG_BOOL)  puts(TUR_UNTAG(__v) ? \"true\" : \"false\");\n"
+        "    else if (__t == TUR_DYNTAG_CSTR)  puts((const char *)(intptr_t)TUR_UNTAG(__v));\n"
+        /* No `println` row exists for nil, a struct or an ADT, so the
+         * interpreter's dynamic path panics on them too.  Same message. */
+        "    else {\n"
+        "        char __m[160];\n"
+        "        snprintf(__m, sizeof(__m), \"println: no operator for a %s argument\",\n"
+        "                 __tur_dyn_argname(__t));\n"
+        "        tur_panic(__m);\n"
+        "    }\n"
+        "    return TUR_TAG(TUR_DYNTAG_NIL, 0);\n"
+        "}\n");
+    /* saffron-lang-plan S5/D4 (G5): the guard on a dynamic CALL.
+     *
+     * One tag compare covers three distinct wrongs, because a fn's `any` box id
+     * is interned from its whole signature: the value is not a function at all;
+     * it is a function of a different arity; it is a function whose parameters
+     * are concrete rather than `any`.  Each of the three would otherwise be a
+     * jump through a mistyped pointer, which is why the ids were split by
+     * signature in the first place (any-fn-tag-does-not-discriminate-signatures)
+     * and why a fat closure does not share an id with a bare one
+     * (partial-application-widened-to-any-is-a-ptr).
+     *
+     * The non-function message is the interpreter's, word for word. */
+    buf_puts(out,
+        "static void __tur_dyn_call_check(int64_t __have, int64_t __want) {\n"
+        "    if (__have == __want) return;\n"
+        "    {\n"
+        "        char __m[192];\n"
+        "        const char *__hn = __tur_any_type_name(__have);\n"
+        "        if (strcmp(__hn, \"fn\") != 0)\n"
+        "            snprintf(__m, sizeof(__m), \"cannot call a %s value -- it is "
+        "not a function\", __hn);\n"
+        "        else\n"
+        "            snprintf(__m, sizeof(__m), \"cannot call this function here "
+        "-- it takes a different number of arguments, or parameters this call "
+        "site cannot supply\");\n"
+        "        tur_panic(__m);\n"
+        "    }\n"
+        "}\n");
+    /* saffron-lang-plan S5/D4 (G11): the fall-through of a dynamic field read.
+     * Named the interpreter's way -- "an int has no .x" is the useful sentence,
+     * not "no field .x". */
+    buf_puts(out,
+        "static void __tur_dyn_no_field(int64_t __tag, const char *__f) {\n"
+        "    char __m[192];\n"
+        "    snprintf(__m, sizeof(__m), \"no field '.%s' on a %s value\", __f,\n"
+        "             __tur_any_type_name(__tag));\n"
+        "    tur_panic(__m);\n"
+        "}\n");
+}
 
 static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Prefix that demotes a runtime function to internal linkage in shared mode
