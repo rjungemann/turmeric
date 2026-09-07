@@ -1,8 +1,11 @@
 # Turmeric Godot Binding -- Status Refresh, JIT Concerns, and Un-stranding Plan
 
-> **Status:** Active -- refreshes a stale picture; sequences work that exists
-> but is not landed.
-> **Last Updated:** 2026-09-06
+> **Status:** Steps 0-4 DONE (2026-09-07). The branch is un-stranded: it merged
+> as [turmeric-godot#1](https://github.com/rjungemann/turmeric-godot/pull/1),
+> and that repo now has its **first passing CI run**, green on all four
+> platforms with downloadable artifacts. Steps 5-6 remain -- see
+> "What actually happened" below before starting them.
+> **Last Updated:** 2026-09-07
 > **Type:** Integration / Game Engine -- post-v1.
 > **Does not supersede** [godot-language-binding-plan.md](../archive/godot-language-binding-plan.md);
 > that plan's v1 scope really is complete and stays archived. This one covers
@@ -105,66 +108,192 @@ Windows only because that is where AOT was first driven end to end.
 
 ## JIT concerns
 
+> **Audited 2026-09-07, one day after filing. Three of the ten were wrong:
+> J1, J2 and J4.** All three failed the same way -- reasoned from a true premise
+> to a conclusion I never checked against the tree, then stated with more
+> confidence than the evidence supported. J1 and J2 were settled by running a
+> three-line program; J4 by reading two paragraphs of a plan I had already
+> cited. Each is corrected in place, with the original claim quoted, rather than
+> quietly rewritten.
+>
+> Scoring the rest honestly: **J6, J8 and J10 verified** against
+> `jit-guide.md:325`, `src/CMakeLists.txt:604` and `cmake/mir.cmake`
+> respectively. **J3's facts hold** but its corpus figure is point-in-time, not
+> standing. **J9** points at a real open report.
+>
+> **J5 and J7 have since been verified too, and both moved.** J5 got *worse*:
+> MIR's interpreter tier is not a W^X escape hatch, because it publishes native
+> shims through the same `MAP_JIT` allocator -- so a locked-down platform has no
+> degraded JIT mode, only the interpreter or AOT. J7 got *better in one half and
+> sharper in the other*: MIR-gen's thread-unsafety is real but **already solved**
+> in-tree by `jit_lazy_gen_locked`, so the binding inherits a JIT that
+> serialises generation; what is actually open is shim-side state under Godot's
+> worker threads. As filed, J7 would have sent someone to re-investigate a
+> solved problem -- a vague concern is not harmless, it misdirects.
+>
+> Final tally: **3 wrong (J1, J2, J4), 5 verified sound (J3 with a caveat, J6,
+> J8, J9, J10), 2 verified-and-materially-revised (J5, J7).** Only five of ten
+> survived unchanged.
+>
+> The pattern worth carrying forward: the wrong entries are the ones asserting
+> what *would* happen; the sound ones cite a file and a line. Anything below
+> phrased as a mechanism rather than a citation should be treated as a
+> hypothesis until it is run.
+
 The open spike [jit-godot-embedding-spike.md](../reported/jit-godot-embedding-spike.md)
 asks whether the shim should compile in-process rather than shelling out to
 `tur build --shared`. Several of its premises have changed, and several of its
 open questions now have partial answers. Recorded here because the spike doc
 still reads as if the Windows JIT were unexplored.
 
-### J1 -- The JIT is not merely a convenience. It is the plausible *fix* for the AOT defect
+### J1 -- CORRECTED 2026-09-07: the JIT does *not* dissolve the AOT defect
 
-The defect above is structural: the natives are C++ functions **in the host
-process**, and a subprocess can never see them. No amount of work on
-`aot_cache.cpp` changes that; the fix has to either teach standalone `tur` the
-natives (a second, drifting registration surface) or move compilation into the
-process that already has them.
+> **This section was wrong when written, and the error mattered**, because it
+> made the JIT look like a way to skip the work in step 5 rather than a
+> different way to finish it. Corrected here rather than deleted, so the bad
+> reasoning stays visible.
+>
+> The original claim: the natives are C++ functions in the host process, a
+> subprocess can never see them, so in-process compilation "dissolves the defect
+> rather than working around it."
+>
+> The premise is true and the conclusion does not follow. **The failure is at
+> elaboration, not at symbol resolution.** Same three-line program:
+>
+> ```
+> tur build  -> error: unknown function or operator 'godot-export'
+> tur jit    -> error: unknown function or operator 'godot-export'   (identical)
+> tur --interpret -> warning TUR-W0040 ... will runtime-dispatch     (defers)
+> ```
+>
+> The runtime-dispatch fallback lives in a branch
+> [elab_call.c:3726](../../src/compiler/elab_call.c) labels `eval mode`, and
+> `g_interpret_mode` is set by `cmd_eval_h`, `cmd_eval_expr` and `cmd_repl` --
+> not by `cmd_jit`. The JIT elaborates in compiled mode and hard-errors the same
+> way. Being in the right address space does not teach the elaborator a name.
+>
+> **Declarations are required on every route.** What the JIT still buys is
+> narrower and still real: no external toolchain on the player's machine, and no
+> link step. That is an argument about *distribution*, not about *this defect*.
 
-In-process JIT compilation is the second option, and it dissolves the defect
-rather than working around it.
+The work that every route needs, and that should be costed before choosing one:
+~90 exported C entry points with legal names and concrete signatures, plus a
+generated declarations file staged with the source. The natives cannot be linked
+as they stand -- each is
+`static TuriValue tg_native_export(TuriEnv *, TuriValue *, uint32_t, void *)`,
+the interpreter's ABI, file-local.
 
-### J2 -- ...but symbol resolution is NOT automatic, and this is the thing to verify first
+The declaration half is confirmed cheap: `extern-c` takes a hyphenated name and
+mangles `-` to `_`, so `(extern-c godot-export [name :cstr ty :cstr dflt :float] :void)`
+emits `extern void godot_export(const char *, const char *, double);` and a
+plain typed call. The staged project therefore gets *real types*, not the
+interpreter path's `:int`-shaped dynamic dispatch.
 
-The spike leans on `dlsym(RTLD_DEFAULT)` resolving host symbols. **That will not
-find the Godot natives.** They are registered by *string name* into the
-interpreter env against C++ function pointers:
+### J2 -- CORRECTED 2026-09-07: `dlsym` resolution is fine; the invented problem was mine
 
-```cpp
-turi_register_default_native_typed("godot-export", tg_native_export,
-                                   nullptr, TUR_NRT_VOID);
-```
-
-`godot-export` is not an exported C symbol, and could not be one -- it is not a
-legal C identifier. JIT'd code calling `godot-export` needs to route through a
-dispatch shim that looks the name up in the env, exactly as the interpreter
-does. That shim does not exist yet and is the first real design question, ahead
-of any performance measurement.
+> **Also wrong, and wrong the same way as J1** -- asserted from a plausible
+> premise without checking what the compiler emits.
+>
+> The original claim: the natives are registered by *string name* into the
+> interpreter env, `godot-export` "is not an exported C symbol, and could not be
+> one -- it is not a legal C identifier", so JIT'd code needs "a dispatch shim
+> that looks the name up in the env", called out as "the first real design
+> question".
+>
+> The first half is true. The conclusion is not. The compiler **mangles `-` to
+> `_`**, so a declaration
+>
+> ```turmeric
+> (extern-c godot-export [name :cstr ty :cstr dflt :float] :void)
+> ```
+>
+> emits an ordinary, perfectly linkable symbol:
+>
+> ```c
+> extern void godot_export(const char *, const char *, double);
+> godot_export("vel-x", "float", 240.0);
+> ```
+>
+> `dlsym` finds `godot_export` like any other symbol. There is **no env-lookup
+> dispatch shim to design** -- that was an invented problem, and it made the JIT
+> route look harder than it is.
+>
+> What is actually required is the J1 correction's work and nothing more: the
+> shim must *export* C entry points under those mangled names, because today's
+> natives are file-local `static` functions in the interpreter's
+> `TuriValue`-based ABI. Once they exist, all three resolution strategies (link,
+> `dlopen` fixup, `dlsym(RTLD_DEFAULT)`) are ordinary.
 
 ### J3 -- The Windows sequencing gate the spike names is now cleared
 
 The spike says to sequence `jit-windows-support-spike.md` first. That spike has
 been run (2026-08-05) and its follow-on defects fixed since:
 
-- `jit-win-prelude-shadows-user-fn` -- fixed, on `main`.
+- `jit-win-prelude-shadows-user-fn` -- fixed; `jit_prelude_win_shadowed` is on
+  `main` in `src/jit_engine.c`.
 - `jit-c2mir-implicit-decl-truncates-pointers` -- `strtok`/`strpbrk`/`memchr`
-  returning 32-bit-truncated pointers; fixed 2026-09-06.
+  returning 32-bit-truncated pointers; fixed, and `emit_module.c` on `main` now
+  emits explicit declarations for all three.
 - `jit-s2-split-disengages-on-hoisted-inline-c-include` -- resolved, archived.
-- Windows JIT corpus now runs **2702 pass / 0 fail**.
+- Windows JIT corpus measured **2702 pass / 0 fail** on 2026-09-06.
 
 The spike's "compounds risk rather than avoiding it" caveat no longer applies
 the way it did.
 
-### J4 -- The JIT cannot replace the AOT path. It can only be a second path
+Two caveats on the above, from re-auditing it 2026-09-07:
 
-The spike's open question 5 asks "replacement or second path?" The platform
-matrix answers it:
+- **That corpus figure is a point-in-time measurement, not a standing
+  guarantee.** Fixtures are added continuously, so treat it as "the corpus was
+  green on that date" and re-measure before relying on it. Per
+  [jit-suite-reports-pass-when-the-engine-is-disabled](../reported/jit-suite-reports-pass-when-the-engine-is-disabled.md)
+  (J9), also confirm the engine actually *engaged* -- a wholesale fallback to
+  `cc` reports green.
+- **Those first two reports are correctly still open**, and this bullet
+  originally said the opposite. Both index rows lead with "RESOLVED" / "Fixed",
+  both fixes really are on `main`, and I moved both to `docs/archive/` on that
+  basis -- then read the bodies and moved them back.
+  `jit-win-prelude-shadows-user-fn` carries a section titled "Still open: the
+  two mechanisms disagree about what is declared" (nothing keeps
+  `JIT_PRELUDE_WIN` and `mangle.c`'s libc denylist in step, so a name added to
+  the prelude silently re-opens the hole), and
+  `jit-c2mir-implicit-decl-truncates-pointers` says its list of three functions
+  is explicitly "a lower bound". A fixed *symptom* is not a resolved *report*.
 
-- **iOS bans JIT outright.** No entitlement, no exception.
-- **Web/WASM has no JIT** -- MIR targets native code.
+### J4 -- CORRECTED 2026-09-07: the universal fallback is the INTERPRETER, not AOT
 
-Both have plans parked in `docs/upcoming/hold/`. If either is ever picked up,
-AOT must still exist. So `aot_cache.cpp`'s staging machinery **cannot** simply
-be deleted, and the spike's question 4 ("what happens to the cache?") should be
-re-scoped from "delete it" to "when is it bypassed."
+> The original claim: iOS bans JIT and Web has no JIT, both have parked plans,
+> therefore "AOT must still exist" and `aot_cache.cpp` cannot be deleted.
+>
+> The two premises are true. **The conclusion is not**, and the parked plans I
+> cited say so in as many words -- I cited them without reading them.
+> [godot-binding-ios-plan.md](hold/godot-binding-ios-plan.md):
+>
+> > iOS does not permit dlopen of arbitrary `.dylib` files in App Store builds.
+> > **AOT-as-shipping-shared-libs is not viable** on iOS. Practical answer: ship
+> > interpreter mode only; OR statically link every AOT script into the app
+> > binary at export time.
+>
+> So iOS cannot run today's AOT path either -- it is `dlopen`-based, and that is
+> exactly what is prohibited. The plan's own recommendation is
+> **interpreter-only on iOS for v1.x**.
+>
+> [godot-binding-web-plan.md](hold/godot-binding-web-plan.md) is different again:
+> an AOT path there is "doable", but as per-script `.wasm` artifacts through
+> Godot's own loader -- a different mechanism, not this cache.
+
+The corrected picture, which is more useful than the one it replaces:
+
+| | JIT | today's AOT (stage + subprocess + `dlopen`) | interpreter |
+| --- | --- | --- | --- |
+| Desktop | yes | yes | yes |
+| iOS | no | **no** -- `dlopen` prohibited | yes |
+| Web | no | not this mechanism; would be `.wasm` per script | yes |
+
+**The thing that must survive everywhere is the interpreter.** Today's
+`aot_cache.cpp` is already desktop-only, whichever way the JIT question goes --
+so "can the cache be deleted?" is a desktop-scoped question about build-time
+cost and toolchain dependence, not a portability constraint. That is a smaller
+and more answerable question than the one J4 originally posed.
 
 ### J5 -- W^X inside a host process is a shipping question, not a dev question
 
@@ -180,17 +309,55 @@ different from doing it in `tur`:
 Neither is answered by `tur`'s own JIT working, because `tur` is a developer
 tool users trust differently from a game.
 
+**VERIFIED 2026-09-07, and one hoped-for escape route is already closed.** The
+entitlement/W^X exposure is documented rather than speculative: `tur jit` always
+generates machine code, and the obvious fallback -- running MIR's interpreter
+tier on a locked-down platform -- does not exist as an out.
+[docs/guides/jit-guide.md:107](../guides/jit-guide.md) is explicit that
+`MIR_set_interp_interface` "still publishes native shims through the same
+`MAP_JIT` code allocator, so it carries the identical entitlement and W^X
+profile as the generator and is **not an escape hatch on locked-down
+platforms**" (`TUR_JIT_GEN=interp` is spike instrumentation only; an interpreter
+tier was evaluated and not adopted -- `docs/archive/mir-interp-tier-plan.md`).
+
+So on a platform that refuses W^X there is no degraded-but-working JIT mode to
+fall back to. The fallback is the tree-walking interpreter or AOT, which is the
+same conclusion J4 reaches from the other direction.
+
 ### J6 -- `constructor` attribute
 
 c2mir discards it, so the embedding path must call `__tur_static_init`
 explicitly. The shim's init ordering needs a defined home for that call.
 
-### J7 -- Threading
+### J7 -- Threading. VERIFIED 2026-09-07: the MIR half is already solved; the open half is ours
 
-Godot dispatches script code from more than the main thread
-(`WorkerThreadPool`, physics). The variant arena is already `thread_local`, but
-MIR context reentrancy under concurrent compile or execution is unverified.
-Worth settling before the JIT runs anything beyond `_ready`.
+Filed as "MIR context reentrancy under concurrent compile or execution is
+unverified". Now verified, and it splits cleanly in two.
+
+**The MIR half is real and already handled -- do not go re-investigate it.**
+MIR-gen genuinely is not thread-safe, and the tree measured it rather than
+assumed it: "three different assertions across five runs of one fixture
+(`destroy_func_cfg`, `mark_unreachable_bbs`, `undeclared reg N of func`)"
+([src/jit_engine.c:352](../../src/jit_engine.c)). Turmeric therefore does *not*
+use `MIR_set_lazy_gen_interface`; it reimplements the lazy path as
+`jit_lazy_gen_locked` from public primitives with a process-wide mutex, where
+"the double-check inside the lock is the load-bearing half" -- a plain mutex
+still lets two threads past the stub generate the same function twice and trip
+`_MIR_duplicate_func_insns`
+([docs/guides/jit-guide.md:273](../guides/jit-guide.md)). Contention is
+self-extinguishing: a function generates once, then its thunk goes straight to
+code.
+
+So a Godot host inherits a JIT that already serialises generation. Filed as
+written, J7 would have sent someone to investigate a solved problem.
+
+**The half that is genuinely open is shim-side, not MIR-side.** Godot dispatches
+from `WorkerThreadPool` and the physics thread. The variant arena is
+`thread_local` and its enter/leave bracketing is per-call, which is the right
+shape -- but whether the *interpreter env*, the export/signal tables and the
+`.godot/turmeric-cache` bookkeeping tolerate concurrent entry is untested, and
+that is turmeric-godot's code, not MIR's. That is the question to settle before
+the binding runs anything beyond `_ready`.
 
 ### J8 -- The no-JIT build must keep working
 
@@ -230,10 +397,55 @@ reason to expect Vector2-heavy scripts to behave.
 
 ---
 
+## What actually happened (2026-09-07)
+
+Steps 0-4 ran as written and the branch merged. Recording the deltas, because
+two of the three CI diagnoses were things this plan did **not** anticipate, and
+one prediction was simply wrong.
+
+**The prediction that was wrong.** Step 3 said to budget for Linux and macOS
+drift, since the last verified build was ~Aug 5 and the compiler had moved four
+releases. **No drift materialised** -- all three desktop platforms built clean
+against the pinned v0.44.2 on the first run that got past checkout. The pin was
+still worth adding; the fear was not.
+
+**Three CI cycles, three distinct diagnoses**, none reachable without running:
+
+1. `actions/checkout` refusing `path: ../turmeric` -- as step 1 predicted. The
+   finding underneath it was bigger than the fix: *no* platform had ever been
+   verified, so Windows was never specially broken.
+2. **MSVC rejecting `-Wextra`** (`cl : error D8021`). The workflow had no MSYS2
+   at all and built with Visual Studio, while the port targets MinGW/UCRT64 --
+   which cannot work when `libturi.a` is linked statically. Fixed with
+   `msys2/setup-msys2`, `-G Ninja`, pacman scons, and `use_mingw=yes` (godot-cpp
+   picks MSVC whenever `not use_mingw and msvc.exists(env)`).
+3. **The drive letter did not survive the MSYS2 seam.** `TURMERIC_ROOT` was
+   `${{ github.workspace }}/turmeric`; SCons saw
+   `\a\turmeric-godot\turmeric-godot/turmeric/...` with `D:` gone. This one
+   camouflaged itself: a leading `\` is drive-RELATIVE on Windows and the
+   checkout was already on `D:`, so SConstruct's own `os.path.isfile()` probe
+   resolved it, found the archive, and printed its reassuring "linking libturi
+   from ..." line. Everything compiled. Only SCons's node layer disagreed, 21
+   minutes in, at the final link. Fixed by making the path relative -- no drive
+   letter to lose.
+
+**A process note worth keeping.** After cycle 1 the Windows toolchain mismatch
+was already visible in the workflow, and the temptation was to fix it blind in
+the same commit. Not doing so was right: guessing at MSYS2 package names would
+have produced an untested change, where one CI cycle produced
+`cl : command line error D8021: invalid numeric argument '/Wextra'` -- a
+one-line diagnosis. When a cycle is ~20 minutes and the alternative is a guess,
+spend the cycle.
+
+---
+
 ## Suggested sequence for un-stranding the branch
 
 Ordered by dependency and by risk retired per unit of effort. Steps 1-3 are
 cheap and remove false signals; step 4 is the actual blocker.
+
+> Steps 0-4 are **done**. Kept as written, rather than rewritten in the past
+> tense, so the reasoning can be checked against the outcome above.
 
 ### Step 0 -- Clear the false signals (minutes, no risk)
 
