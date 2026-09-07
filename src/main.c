@@ -3897,7 +3897,15 @@ static int cmd_eval(const char *path, bool use_color,
                     char **extra_argv, int extra_argc, bool debug);
 static int cmd_jit(int argc, char **argv);
 
-#ifdef TUR_HAVE_JIT
+/* NOT under `#ifdef TUR_HAVE_JIT`, deliberately.  These two started as a JIT
+ * probe -- the name still says so -- but `--runtime=split` made the CC path
+ * call jit_try_split_preamble from cmd_build, and cmd_build exists in every
+ * build.  Leaving the definition inside the engine's guard while the
+ * declaration and two of the three call sites sat outside it compiled fine in
+ * any -DTUR_JIT=ON tree (which is every tree this was developed in) and failed
+ * every non-JIT build with
+ * `jit_try_split_preamble used but never defined [-Werror]`.
+ * The declarations image they read moved to tur_core for the same reason. */
 /* S2 (findings 25): swap an emitted TU's fixed preamble for the committed
  * declarations region when this compiler still matches the committed
  * artifacts.  Returns true and fills `out` with
@@ -3971,6 +3979,10 @@ static bool jit_try_split_preamble(Buf *csrc, Buf *out) {
     }
     return true;
 }
+
+/* Everything from here to the matching TUR_HAVE_JIT #endif really is
+ * engine-only; the guard opens here rather than above the split helpers. */
+#ifdef TUR_HAVE_JIT
 
 #ifdef _WIN32
 /* c2mir carries baked-in system-header paths for Linux and macOS

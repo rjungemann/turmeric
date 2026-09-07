@@ -281,6 +281,19 @@ set(TUR_CORE_SOURCES
     # proof hit.  The runtime library must BE the runtime.
     # Regenerate with tools/gen-runtime-split.py when the preamble changes.
     runtime/generated/tur_rt_split.c
+    # ...and its declarations image (tur_rt_split_hash / tur_rt_split_decls).
+    # This used to live in tur_jit_obj under `if(TUR_JIT)`, on the stated
+    # grounds that "non-JIT builds never read it".  `--runtime=split` made the
+    # CC PATH read it, which broke that premise: main.c's jit_try_split_preamble
+    # is called from cmd_build, and a non-JIT build then failed with
+    # `jit_try_split_preamble used but never defined [-Werror]` -- invisible in
+    # any -DTUR_JIT=ON tree, which is every tree it was developed in.
+    #
+    # The split is a cc-path feature that happens to have grown out of a JIT
+    # probe (the function name still says so), so its artifacts belong with the
+    # compiler, not the engine.  Cost of moving it: a non-JIT build now carries
+    # the ~100KB string TU it used to skip.
+    runtime/generated/tur_rt_split_embed.c
     # async/ -- async I/O, fibers, scheduler
     async/atomic_queue.c
     async/fiber.c
@@ -390,6 +403,16 @@ set_source_files_properties(
     "-Wno-pedantic;-Wno-cast-function-type;-Wno-clobbered;-Wno-unknown-warning-option"
 )
 
+# The decls image is one enormous string literal, exceeding C99's 4095-char
+# minimum guarantee by design; every supported compiler handles it, so silence
+# the portability nudge for that one generated TU.  Unconditional, alongside the
+# source it applies to -- it lived inside `if(TUR_JIT)` while the TU did, and a
+# property set in a branch the TU no longer builds under is silently no-op.
+set_source_files_properties(
+    runtime/generated/tur_rt_split_embed.c
+    PROPERTIES COMPILE_OPTIONS "-Wno-overlength-strings"
+)
+
 # ---------------------------------------------------------------------------
 # RM3 regions (on by default): the region runtime sources, embedded.  An
 # emitted program that does not link libturt_runtime.a gets the bodies of
@@ -479,8 +502,9 @@ if(TUR_JIT)
   # jit-ffi-c2mir-plan F1: turi/jit_ffi.c rides in the engine's object
   # library, not tur_core -- it calls the image API and must not drag MIR
   # onto tur_core's eighteen consumers.
-  add_library(tur_jit_obj OBJECT jit_engine.c turi/jit_ffi.c
-              runtime/generated/tur_rt_split_embed.c)
+  # tur_rt_split_embed.c is NOT here any more -- it moved to tur_core, because
+  # --runtime=split made the cc path read it. See the note at its new home.
+  add_library(tur_jit_obj OBJECT jit_engine.c turi/jit_ffi.c)
   target_include_directories(tur_jit_obj PRIVATE ${TUR_INCLUDE_DIRS})
   target_link_libraries(tur_jit_obj PRIVATE tur_mir)
   target_compile_definitions(tur_jit_obj PRIVATE TUR_HAVE_JIT=1)
@@ -495,16 +519,6 @@ if(TUR_JIT)
   # the generated ffi_dispatch.c above.
   set_source_files_properties(jit_engine.c PROPERTIES
     COMPILE_OPTIONS "-Wno-pedantic")
-  # S2 (findings 19.4 item 3): the committed declarations-region string +
-  # content hash cmd_jit consults before swapping the full preamble for the
-  # split is compiled into tur_jit_obj above, alongside the engine.  JIT-only:
-  # non-JIT builds never read it, so they skip the ~100KB string TU entirely.
-  #
-  # The decls string exceeds C99's 4095-char minimum guarantee by design;
-  # every supported compiler handles it, so silence the portability nudge
-  # for the one generated TU.
-  set_source_files_properties(runtime/generated/tur_rt_split_embed.c
-    PROPERTIES COMPILE_OPTIONS "-Wno-overlength-strings")
   # $<TARGET_OBJECTS:> carries objects only -- no usage requirements, no
   # transitive link -- so each consumer states the engine's needs itself.
   target_sources(tur PRIVATE $<TARGET_OBJECTS:tur_jit_obj>)
