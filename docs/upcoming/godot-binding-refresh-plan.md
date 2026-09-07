@@ -108,6 +108,25 @@ Windows only because that is where AOT was first driven end to end.
 
 ## JIT concerns
 
+> **Audited 2026-09-07, one day after filing. Three of the ten were wrong:
+> J1, J2 and J4.** All three failed the same way -- reasoned from a true premise
+> to a conclusion I never checked against the tree, then stated with more
+> confidence than the evidence supported. J1 and J2 were settled by running a
+> three-line program; J4 by reading two paragraphs of a plan I had already
+> cited. Each is corrected in place, with the original claim quoted, rather than
+> quietly rewritten.
+>
+> Scoring the rest honestly: **J6, J8 and J10 verified** against
+> `jit-guide.md:325`, `src/CMakeLists.txt:604` and `cmake/mir.cmake`
+> respectively. **J3's facts hold** but its corpus figure is point-in-time, not
+> standing. **J5 and J7 remain unverified** -- they were filed as open questions
+> and are honest as written. **J9** points at a real open report.
+>
+> The pattern worth carrying forward: the wrong entries are the ones asserting
+> what *would* happen; the sound ones cite a file and a line. Anything below
+> phrased as a mechanism rather than a citation should be treated as a
+> hypothesis until it is run.
+
 The open spike [jit-godot-embedding-spike.md](../reported/jit-godot-embedding-spike.md)
 asks whether the shim should compile in-process rather than shelling out to
 `tur build --shared`. Several of its premises have changed, and several of its
@@ -157,49 +176,111 @@ emits `extern void godot_export(const char *, const char *, double);` and a
 plain typed call. The staged project therefore gets *real types*, not the
 interpreter path's `:int`-shaped dynamic dispatch.
 
-### J2 -- ...but symbol resolution is NOT automatic, and this is the thing to verify first
+### J2 -- CORRECTED 2026-09-07: `dlsym` resolution is fine; the invented problem was mine
 
-The spike leans on `dlsym(RTLD_DEFAULT)` resolving host symbols. **That will not
-find the Godot natives.** They are registered by *string name* into the
-interpreter env against C++ function pointers:
-
-```cpp
-turi_register_default_native_typed("godot-export", tg_native_export,
-                                   nullptr, TUR_NRT_VOID);
-```
-
-`godot-export` is not an exported C symbol, and could not be one -- it is not a
-legal C identifier. JIT'd code calling `godot-export` needs to route through a
-dispatch shim that looks the name up in the env, exactly as the interpreter
-does. That shim does not exist yet and is the first real design question, ahead
-of any performance measurement.
+> **Also wrong, and wrong the same way as J1** -- asserted from a plausible
+> premise without checking what the compiler emits.
+>
+> The original claim: the natives are registered by *string name* into the
+> interpreter env, `godot-export` "is not an exported C symbol, and could not be
+> one -- it is not a legal C identifier", so JIT'd code needs "a dispatch shim
+> that looks the name up in the env", called out as "the first real design
+> question".
+>
+> The first half is true. The conclusion is not. The compiler **mangles `-` to
+> `_`**, so a declaration
+>
+> ```turmeric
+> (extern-c godot-export [name :cstr ty :cstr dflt :float] :void)
+> ```
+>
+> emits an ordinary, perfectly linkable symbol:
+>
+> ```c
+> extern void godot_export(const char *, const char *, double);
+> godot_export("vel-x", "float", 240.0);
+> ```
+>
+> `dlsym` finds `godot_export` like any other symbol. There is **no env-lookup
+> dispatch shim to design** -- that was an invented problem, and it made the JIT
+> route look harder than it is.
+>
+> What is actually required is the J1 correction's work and nothing more: the
+> shim must *export* C entry points under those mangled names, because today's
+> natives are file-local `static` functions in the interpreter's
+> `TuriValue`-based ABI. Once they exist, all three resolution strategies (link,
+> `dlopen` fixup, `dlsym(RTLD_DEFAULT)`) are ordinary.
 
 ### J3 -- The Windows sequencing gate the spike names is now cleared
 
 The spike says to sequence `jit-windows-support-spike.md` first. That spike has
 been run (2026-08-05) and its follow-on defects fixed since:
 
-- `jit-win-prelude-shadows-user-fn` -- fixed, on `main`.
+- `jit-win-prelude-shadows-user-fn` -- fixed; `jit_prelude_win_shadowed` is on
+  `main` in `src/jit_engine.c`.
 - `jit-c2mir-implicit-decl-truncates-pointers` -- `strtok`/`strpbrk`/`memchr`
-  returning 32-bit-truncated pointers; fixed 2026-09-06.
+  returning 32-bit-truncated pointers; fixed, and `emit_module.c` on `main` now
+  emits explicit declarations for all three.
 - `jit-s2-split-disengages-on-hoisted-inline-c-include` -- resolved, archived.
-- Windows JIT corpus now runs **2702 pass / 0 fail**.
+- Windows JIT corpus measured **2702 pass / 0 fail** on 2026-09-06.
 
 The spike's "compounds risk rather than avoiding it" caveat no longer applies
 the way it did.
 
-### J4 -- The JIT cannot replace the AOT path. It can only be a second path
+Two caveats on the above, from re-auditing it 2026-09-07:
 
-The spike's open question 5 asks "replacement or second path?" The platform
-matrix answers it:
+- **That corpus figure is a point-in-time measurement, not a standing
+  guarantee.** Fixtures are added continuously, so treat it as "the corpus was
+  green on that date" and re-measure before relying on it. Per
+  [jit-suite-reports-pass-when-the-engine-is-disabled](../reported/jit-suite-reports-pass-when-the-engine-is-disabled.md)
+  (J9), also confirm the engine actually *engaged* -- a wholesale fallback to
+  `cc` reports green.
+- **Those first two reports are correctly still open**, and this bullet
+  originally said the opposite. Both index rows lead with "RESOLVED" / "Fixed",
+  both fixes really are on `main`, and I moved both to `docs/archive/` on that
+  basis -- then read the bodies and moved them back.
+  `jit-win-prelude-shadows-user-fn` carries a section titled "Still open: the
+  two mechanisms disagree about what is declared" (nothing keeps
+  `JIT_PRELUDE_WIN` and `mangle.c`'s libc denylist in step, so a name added to
+  the prelude silently re-opens the hole), and
+  `jit-c2mir-implicit-decl-truncates-pointers` says its list of three functions
+  is explicitly "a lower bound". A fixed *symptom* is not a resolved *report*.
 
-- **iOS bans JIT outright.** No entitlement, no exception.
-- **Web/WASM has no JIT** -- MIR targets native code.
+### J4 -- CORRECTED 2026-09-07: the universal fallback is the INTERPRETER, not AOT
 
-Both have plans parked in `docs/upcoming/hold/`. If either is ever picked up,
-AOT must still exist. So `aot_cache.cpp`'s staging machinery **cannot** simply
-be deleted, and the spike's question 4 ("what happens to the cache?") should be
-re-scoped from "delete it" to "when is it bypassed."
+> The original claim: iOS bans JIT and Web has no JIT, both have parked plans,
+> therefore "AOT must still exist" and `aot_cache.cpp` cannot be deleted.
+>
+> The two premises are true. **The conclusion is not**, and the parked plans I
+> cited say so in as many words -- I cited them without reading them.
+> [godot-binding-ios-plan.md](hold/godot-binding-ios-plan.md):
+>
+> > iOS does not permit dlopen of arbitrary `.dylib` files in App Store builds.
+> > **AOT-as-shipping-shared-libs is not viable** on iOS. Practical answer: ship
+> > interpreter mode only; OR statically link every AOT script into the app
+> > binary at export time.
+>
+> So iOS cannot run today's AOT path either -- it is `dlopen`-based, and that is
+> exactly what is prohibited. The plan's own recommendation is
+> **interpreter-only on iOS for v1.x**.
+>
+> [godot-binding-web-plan.md](hold/godot-binding-web-plan.md) is different again:
+> an AOT path there is "doable", but as per-script `.wasm` artifacts through
+> Godot's own loader -- a different mechanism, not this cache.
+
+The corrected picture, which is more useful than the one it replaces:
+
+| | JIT | today's AOT (stage + subprocess + `dlopen`) | interpreter |
+| --- | --- | --- | --- |
+| Desktop | yes | yes | yes |
+| iOS | no | **no** -- `dlopen` prohibited | yes |
+| Web | no | not this mechanism; would be `.wasm` per script | yes |
+
+**The thing that must survive everywhere is the interpreter.** Today's
+`aot_cache.cpp` is already desktop-only, whichever way the JIT question goes --
+so "can the cache be deleted?" is a desktop-scoped question about build-time
+cost and toolchain dependence, not a portability constraint. That is a smaller
+and more answerable question than the one J4 originally posed.
 
 ### J5 -- W^X inside a host process is a shipping question, not a dev question
 
