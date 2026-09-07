@@ -1,8 +1,12 @@
 # Saffron -- a dynamically typed `#lang` over the Turmeric runtime
 
-Status: **plan only.** Nothing is implemented; there is no `EXPERIMENTS[]` row,
-no `#lang` base, no fixture. Every "today" claim below was measured against
-`v0.44.2` (`2da89e84`) with the probe transcript in the appendix.
+Status: **plan only for Saffron itself** -- there is no `EXPERIMENTS[]` row, no
+`#lang` base, no dialect fixture. But S0's prerequisites are being burned down:
+**P1 and P2c are fixed and archived** (see the S0 table), which were the two
+that blocked anything else. Every "today" claim below was measured against
+`v0.44.2` (`2da89e84`) with the probe transcript in the appendix; claims about
+P1/P2c behaviour describe the state BEFORE their fixes and are marked where
+they have since changed.
 
 ---
 
@@ -646,7 +650,7 @@ cannot be built until they are.**
 
 | # | Report | Blocks |
 |---|---|---|
-| P1 | [any-type-ids-are-per-tu](../reported/any-type-ids-are-per-tu.md) | **S5, and D8 entirely** |
+| ~~P1~~ | ~~any-type-ids-are-per-tu~~ | **DONE 2026-09-07.** The id is a hash of the identity key, not the per-TU intern index, and the name table became a registry each TU publishes `{id, name, boxed}` rows into. Multi-TU builds now agree; the drop reads the minting TU's boxed flag. This also builds the runtime type registry D8 would key instance lookup off, as anticipated. [Archived](../archive/any-type-ids-are-per-tu.md) |
 | P2 | [forall-dict-byvalue-receiver-emits-uncompilable-c](../reported/forall-dict-byvalue-receiver-emits-uncompilable-c.md) | D8 |
 | P2b | [typeclass-dispatch-on-any-receiver-emits-uncompilable-c](../reported/typeclass-dispatch-on-any-receiver-emits-uncompilable-c.md) | D8 ergonomics; cheap and high-value |
 | ~~P2c~~ | ~~any-narrowing-broken-for-parametric-receivers~~ | **DONE 2026-09-07.** Was: `is?` on an `any`-held `Option` silently false, `cast` panicking `holds Option, not Option`. `is?`/`cast` now share one target resolver, take an applied `(Option float)`, and reject a bare constructor with a diagnostic. The type-case idiom reaches the HKT stack on both paths. [Archived](../archive/any-narrowing-broken-for-parametric-receivers.md) |
@@ -675,21 +679,33 @@ project into one TU** -- confirmed by wrapping `CC`: one `.c`, both modules
 inside, one consistent table. `--shared` and `emit-c --output-dir` (the CMake
 path) both split, and both diverge.
 
-**This reclassifies S0 from bookkeeping to a real prerequisite**, because
-Saffron makes `any` the type of nearly every cross-module value. The fix is a
-deterministic id (a hash of `type_name`, clear of the `TypeKind` range) plus a
-static-init *registry* rather than a per-TU switch -- each TU registers its
-`(id, name, boxed)` rows into a global table, and lookups read the union.
-Carrying `boxed` in the same row fixes failure mode 4 by construction. Full
-reasoning and the rejected alternatives are in the report.
+This reclassified S0 from bookkeeping to a real prerequisite, because Saffron
+makes `any` the type of nearly every cross-module value.
 
-Note the registry is not throwaway scaffolding: it is the runtime type
-registry D8 would key instance lookup off, so P1's fix is the first half of
+**FIXED 2026-09-07** --
+[any-type-ids-are-per-tu](../archive/any-type-ids-are-per-tu.md). The id is now
+FNV-1a over `type_name`, forced clear of the `TypeKind` range, so it needs no
+coordination between TUs; `__tur_any_name_ext` became a registry each TU
+publishes `{id, name, boxed}` rows into at static-init, replacing the single
+function pointer every TU overwrote. Mode 4 falls out for free: the `boxed`
+flag rides the same row as the name, so a drop reads the flag the *minting* TU
+published rather than its own table's. The original repro went from
+`Gamma / Gamma / 0` to `Gamma / Beta / 1`.
+
+Pinned by `tests/run-any-type-id-multi-module.sh` (ctest
+`tur_any_type_id_multi_module`), which drives separate compilation because
+`tur build <dir>` inlines everything into one TU and hides the bug -- and which
+was verified to fail without the fix, with all four behaviours visible. One
+cost recorded: `__tur_any_find` is a linear walk, and `__tur_any_drop` calls it
+at every scope exit owning an `any`; if that ever measures, the answer is an
+index built at startup, not a return to per-TU numbering.
+
+The registry was not throwaway scaffolding, as anticipated: it is the runtime
+type registry D8 would key instance lookup off, so this is the first half of
 D8's foundation whether or not D8 is ever scheduled.
 
-**Exit:** P1 fixed with a fixture on the **multi-TU** path specifically (every
-existing `any` fixture is single-TU, which is why four wrong behaviours went
-unnoticed); P2-P5 fixed or archived.
+**Exit:** ~~P1~~ done, with the multi-TU pin the report asked for; P2-P5 fixed
+or archived (P2c done, see D8 above).
 
 ### S1 -- the `#lang` axis, no semantics (small)
 

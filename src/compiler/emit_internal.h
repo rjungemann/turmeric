@@ -329,11 +329,17 @@ typedef struct EmitCtx {
     uint32_t  cap_fatshim_names;
     /* type-of-cast-kind-granularity: per-monomorph identity for `any` box tags.
      * A primitive keeps its TypeKind as its tag; a struct/ADT interns its
-     * monomorph C name here and rides TUR_ANY_ID_BASE + index, so `cast` / `is?`
-     * / `type-of` distinguish two struct types instead of both reading
-     * "struct". */
+     * monomorph C name here, so `cast` / `is?` / `type-of` distinguish two
+     * struct types instead of both reading "struct".
+     *
+     * any-type-ids-are-per-tu: the id is a HASH of that key, not this table's
+     * index -- an index is only meaningful inside one EmitCtx, and EmitCtx is
+     * per translation unit, so two TUs numbered the same type differently.
+     * The table now records what this TU must publish into the runtime
+     * registry, and no longer decides the numbering. */
     char    **any_type_names;   /* identity key: type_name(), per monomorph */
     char    **any_type_shown;   /* what type-of reports for that id */
+    int64_t  *any_type_ids;     /* the hashed id, kept for collision checking */
     /* any-struct-box-leak-per-widen: is the payload behind this id HEAP-BOXED
      * at the widen site (a by-value aggregate) rather than carried in the tag's
      * value word?  Only a boxed one has anything to free, and the tag is the

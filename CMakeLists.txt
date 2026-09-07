@@ -774,6 +774,18 @@ add_test(
   COMMAND bash tests/run-result-typedef-multi-module.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# any-type-ids-are-per-tu: an `any` box id used to be this TU's intern INDEX,
+# so two translation units numbered the same type differently and a value
+# widened in one module was misidentified in another (type-of, is?, cast, and
+# the drop's boxed flag all read the wrong row).  `tur build <dir>` inlines
+# every module into one TU and hides it, which is why every existing `any`
+# fixture missed this -- so the pin drives separate compilation.  See
+# docs/archive/any-type-ids-are-per-tu.md.
+add_test(
+  NAME tur_any_type_id_multi_module
+  COMMAND bash tests/run-any-type-id-multi-module.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Sweet-exp manifest support: verifies build.tur.sweet is treated as a
 # fully equivalent manifest by walk-up discovery, pkg_manifest_read, and
 # tur init --sweet.  See docs/archive/history/build-tur-sweet-manifest-plan.md.

@@ -1,10 +1,65 @@
 ---
 title: `any` box type-ids are assigned per translation unit, so `type-of` / `is?` / `cast` / drop all disagree across a module boundary in a multi-TU build
-category: Reported
-description: emit_any_type_id interns names into the per-TU EmitCtx and hands out TUR_ANY_ID_BASE + first-seen index, so the same type gets a different id in each TU. Under `tur build --shared` (multi-TU) a value widened to `any` in one module is misidentified in another -- type-of returns another type's name, is? is a false negative, a valid cast panics naming the wrong type, and __tur_any_drop consults the wrong boxed flag. `tur build <dir>` is single-TU and hides all four.
+category: Archive
+description: RESOLVED 2026-09-07. emit_any_type_id interns names into the per-TU EmitCtx and hands out TUR_ANY_ID_BASE + first-seen index, so the same type gets a different id in each TU. Under `tur build --shared` (multi-TU) a value widened to `any` in one module is misidentified in another -- type-of returns another type's name, is? is a false negative, a valid cast panics naming the wrong type, and __tur_any_drop consults the wrong boxed flag. `tur build <dir>` is single-TU and hides all four.
 ---
 
 # `any` box type-ids are per-TU, and multi-TU builds disagree
+
+**RESOLVED 2026-09-07**, along fix directions 1 and 2 as filed; 3 and 4 stayed
+rejected for the reasons recorded below.
+
+**The id is now a hash of the identity key**, not this TU's intern index --
+FNV-1a over `type_name`, forced into the top quarter of the positive range so it
+can never be confused with the `TypeKind` a primitive payload still tags with.
+No coordination between TUs is required, so it survives separate compilation,
+`--shared`, and the CMake path alike. A collision between two distinct keys
+would silently make one type answer as another, so `emit_any_type_id` aborts on
+one within a TU; across TUs it is ~2^-62 and unobservable, which is the accepted
+cost of not coordinating.
+
+**`__tur_any_name_ext` became a registry**, as direction 2 required. It had been
+a single `g_tur_any_name_ext` function pointer that every TU overwrote from its
+own static initializer -- genuinely shared under `TUR_RT_OWNER`, so last writer
+won and every other TU's ids were then read through the wrong table. Each TU now
+publishes a `{ id, name, boxed }` row array and links it into a global chunk
+list at static-init; lookups walk the union.
+
+**Failure mode 4 is fixed by construction**, not separately: the `boxed` flag
+rides the same row as the name, so the drop site reads the flag the *minting* TU
+published. `__tur_any_drop` is now a registry lookup rather than a switch over
+the local TU's ids -- which is what let one module `free()` a handle another
+module owned.
+
+**Measured on the original repro.** Multi-TU went from `Gamma / Gamma / 0` to
+`Gamma / Beta / 1`; the boxed-flag case went from a `HeapThing` reporting as
+`ByVal` (with a `free()` of a foreign handle emitted) to both TUs agreeing on
+`{ 7338711515630455999LL, "HeapThing", 0 }`.
+
+**Pinned by `tests/run-any-type-id-multi-module.sh`** (ctest
+`tur_any_type_id_multi_module`), which asserts both TUs emit an identical
+`(id, name, boxed)` row for a shared type, links and runs the genuinely
+multi-TU program, and runs the whole-program build too so a future change
+cannot fix one build mode by breaking the other. Verified to FAIL without the
+fix: 4 of 9 assertions, with all four behaviours visible (`type-of` answering
+`Alpha` for a `Gamma`, `is?` returning 0, and a `cast: any holds Beta, not
+HeapThing` panic). The fixture deliberately widens *two* local types before
+touching the imported module -- with one, the indices happened to line up from
+`Beta` onward and only mode 1 tripped.
+
+**One cost, recorded.** `__tur_any_find` is linear over (chunks x rows).
+Programs intern a handful of `any` types so this is a short walk, but
+`__tur_any_drop` calls it at every scope exit owning an `any`. If that ever
+measures, the fix is an index built once at startup -- not a return to per-TU
+numbering.
+
+**Suites at the fix:** `run.sh` 2832/0, `run-turi.sh` 1926/0,
+`run-leak-check.sh` 83/0, `run-build-shared.sh` 11/0. All 148 `expected.c`
+snapshots regenerated in the same change.
+
+---
+
+## The original report
 
 **Severity: high, low reach today.** Four distinct wrong behaviours including a
 memory-management one, all on a shipping build mode (`tur build --shared`). The

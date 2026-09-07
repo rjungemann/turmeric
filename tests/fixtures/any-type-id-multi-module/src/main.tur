@@ -1,0 +1,29 @@
+;; any-type-ids-are-per-tu: the module that CONSUMES ids minted next door.
+;;
+;; Gamma is widened before anything from `producer` is touched, so under the
+;; old index scheme this TU numbered Gamma 1000 while producer numbered Beta
+;; 1000 -- and every question main asked about a producer value was answered
+;; from main's table.  All four consequences are asserted below.
+(defmodule main-mod
+  (import producer :refer [make-beta make-heap Beta HeapThing])
+
+  ;; TWO locals widened before anything from `producer` is touched.  The count
+  ;; matters: with only one, this TU's indices happened to line up with
+  ;; producer's from Beta onward and the bug hid at runtime.  Two shifts every
+  ;; subsequent index by one, so Beta and HeapThing genuinely disagree.
+  (defstruct Gamma [g : int])
+  (defstruct Delta [d : int])
+  (defn wrap-gamma [] : any (make-struct Gamma 1))
+  (defn wrap-delta [] : any (make-struct Delta 2))
+
+  (defn main [] : int
+    (println (type-of (wrap-gamma)))
+    (println (type-of (wrap-delta)))
+    (let [v (make-beta)]
+      (println (type-of v))              ;; was "Gamma" -- another type's name
+      (println (if (is? v Beta) 1 0))    ;; was 0 -- false negative
+      (println (.b (cast v Beta))))      ;; was a panic on a valid cast
+    (let [h (make-heap)]
+      (println (type-of h))
+      (println (.x (cast h HeapThing)))) ;; boxed-flag row must come from producer
+    0))

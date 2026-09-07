@@ -749,6 +749,37 @@ char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
  * through this one function, so they cannot disagree. */
 #define TUR_ANY_ID_BASE 1000
 
+/* any-type-ids-are-per-tu: the id is a hash of the type's identity key, NOT its
+ * position in this TU's intern table.
+ *
+ * It used to be `TUR_ANY_ID_BASE + first-seen index`, which is only meaningful
+ * inside one `EmitCtx` -- and `EmitCtx` is per translation unit.  Two TUs
+ * therefore numbered the same type differently, so on a multi-TU build
+ * (`tur build --shared`, `emit-c --output-dir`) a value widened in one module
+ * was misidentified in another: `type-of` answered another type's name, `is?`
+ * was a false negative, a valid `cast` panicked, and `__tur_any_drop` read the
+ * wrong `boxed` flag and freed a handle it did not own.
+ *
+ * A hash of the key needs no coordination between TUs, so it survives separate
+ * compilation, `--shared`, and the CMake path alike -- which a link-time
+ * section table or a whole-program numbering pass would not (the latter defeats
+ * separate compilation, the case that was broken).
+ *
+ * FNV-1a, forced into the top quarter of the positive range so an id can never
+ * be confused with the `TypeKind` a primitive payload still tags with (those
+ * are small, and every consumer discriminates on `>= TUR_ANY_ID_BASE`).
+ * Collision between two distinct keys is ~2^-62 and is checked within a TU by
+ * emit_any_type_id below; across TUs it is unobservable and untestable, which
+ * is the accepted cost of not coordinating. */
+static int64_t tur_any_id_hash(const char *key) {
+    uint64_t h = 1469598103934665603ULL;           /* FNV-1a 64 offset basis */
+    for (const unsigned char *p = (const unsigned char *)key; *p; p++) {
+        h ^= (uint64_t)*p;
+        h *= 1099511628211ULL;                     /* FNV-1a 64 prime */
+    }
+    return (int64_t)((h & 0x3FFFFFFFFFFFFFFFULL) | 0x4000000000000000ULL);
+}
+
 int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
     Type r = ctx ? emit_resolve_type(ctx, t) : t;
     AdtDef *app_def = (r.kind == TY_APP) ? type_adt_app_def(&r) : NULL;
@@ -769,19 +800,35 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
                             ? r.as.adt_.def->name
                             : (app_def ? app_def->name : key);
 
+    /* The id is the hash; the intern table is now only the record of what THIS
+     * TU must publish into the runtime registry (see emit_any_type_name_table).
+     * Interning is therefore a dedupe of the rows, not the id assignment. */
+    int64_t id = tur_any_id_hash(key);
     for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
-        if (strcmp(ctx->any_type_names[i], key) == 0)
-            return (int64_t)(TUR_ANY_ID_BASE + i);
+        if (strcmp(ctx->any_type_names[i], key) == 0) return id;
+        /* Two distinct keys hashing alike would make one type answer as the
+         * other -- exactly the confusion the hash replaces.  Astronomically
+         * unlikely, cheap to rule out inside a TU, and a silent miscompile if
+         * it ever happened. */
+        if (ctx->any_type_ids[i] == id) {
+            fprintf(stderr,
+                    "tur: internal error: `any` type id collision between "
+                    "'%s' and '%s' (id %lld); please report this\n",
+                    ctx->any_type_names[i], key, (long long)id);
+            abort();
+        }
     }
     if (ctx->n_any_type_names >= ctx->cap_any_type_names) {
         uint32_t nc = ctx->cap_any_type_names ? ctx->cap_any_type_names * 2 : 8;
         char **nn = (char **)realloc(ctx->any_type_names, nc * sizeof(char *));
         char **ns = (char **)realloc(ctx->any_type_shown, nc * sizeof(char *));
         bool  *nb = (bool  *)realloc(ctx->any_type_boxed, nc * sizeof(bool));
-        if (!nn || !ns || !nb) { fprintf(stderr, "tur: oom\n"); abort(); }
+        int64_t *ni = (int64_t *)realloc(ctx->any_type_ids, nc * sizeof(int64_t));
+        if (!nn || !ns || !nb || !ni) { fprintf(stderr, "tur: oom\n"); abort(); }
         ctx->any_type_names = nn;
         ctx->any_type_shown = ns;
         ctx->any_type_boxed = nb;
+        ctx->any_type_ids = ni;
         ctx->cap_any_type_names = nc;
     }
     char *kdup = strdup(key);
@@ -795,8 +842,9 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
      * allocated it" cannot disagree -- a heap-ADT handle rides the value word
      * and must never be freed here. */
     ctx->any_type_boxed[ctx->n_any_type_names] = emit_type_is_byvalue_adt(ctx, r);
+    ctx->any_type_ids[ctx->n_any_type_names] = id;
     ctx->n_any_type_names++;
-    return (int64_t)(TUR_ANY_ID_BASE + ctx->n_any_type_names - 1);
+    return id;
 }
 
 void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
@@ -815,39 +863,53 @@ void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
      * at all, took that early return, and emitted a call to a function that was
      * never defined -- an undefined-reference link failure.  With no boxed ids
      * the switch degenerates to `default: return;`, which is exactly right. */
+    /* any-struct-box-leak-per-widen: the drop side.  `__tur_any_drop` is the
+     * ONLY place an `any` payload box is released, and it releases one exactly
+     * when the widen allocated one -- the `boxed` flag published beside the id.
+     * A primitive payload and a heap-ADT handle ride the tag's value word and
+     * own nothing, so both fall through untouched.
+     *
+     * any-type-ids-are-per-tu: this reads the shared REGISTRY, not a switch
+     * over this TU's ids.  A per-TU switch answered for tags it had no business
+     * answering for -- a value widened in another module could land on a local
+     * id whose flag said "boxed", and the drop then free()d a handle this TU
+     * never allocated.  Consulting the row the MINTING TU published makes the
+     * widen and the drop agree by construction, across TUs as well as within
+     * one.
+     *
+     * Emitted unconditionally, before the nothing-to-publish early return: a
+     * drop SITE exists whenever a scope owns an `any`, which does not require
+     * this TU to have interned any struct/ADT payload at all.  A program that
+     * widens only a primitive interns nothing and would otherwise call a
+     * function that was never defined. */
     buf_puts(out, "static void __tur_any_drop(tur_tagged_t __v) {\n");
-    buf_puts(out, "    switch (TUR_GETTAG(__v)) {\n");
-    if (ctx) {
-        bool any_boxed = false;
-        for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
-            if (!ctx->any_type_boxed[i]) continue;
-            any_boxed = true;
-            buf_printf(out, "        case %d:\n", (int)(TUR_ANY_ID_BASE + i));
-        }
-        if (any_boxed)
-            buf_puts(out, "            free((void *)(intptr_t)TUR_UNTAG(__v));\n"
-                          "            return;\n");
-    }
-    buf_puts(out, "        default: return;\n    }\n}\n");
+    buf_puts(out, "    const __tur_any_ti *__ti = __tur_any_find(TUR_GETTAG(__v));\n");
+    buf_puts(out, "    if (__ti && __ti->boxed) free((void *)(intptr_t)TUR_UNTAG(__v));\n");
+    buf_puts(out, "}\n");
     buf_puts(out, "static void (*__tur_any_drop_keep)(tur_tagged_t) "
                   "__attribute__((unused)) = __tur_any_drop;\n");
-    if (!ctx || ctx->n_any_type_names == 0) return;   /* nothing to name */
-    buf_puts(out, "static const char *__tur_any_name_ext(int64_t tag) {\n");
-    if (ctx && ctx->n_any_type_names) {
-        buf_puts(out, "    switch (tag) {\n");
-        for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
-            buf_printf(out, "        case %d: return \"%s\";\n",
-                       (int)(TUR_ANY_ID_BASE + i), ctx->any_type_shown[i]);
-        }
-        buf_puts(out, "        default: break;\n");
-        buf_puts(out, "    }\n");
+    if (!ctx || ctx->n_any_type_names == 0) return;   /* nothing to publish */
+
+    /* This TU's rows.  `id` is the hash, so the same type carries the same id
+     * in every TU that mentions it and the rows simply agree where they
+     * overlap -- which is what makes registering all of them safe. */
+    buf_puts(out, "static const __tur_any_ti __tur_any_rows[] = {\n");
+    for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
+        buf_printf(out, "    { %lldLL, \"%s\", %d },\n",
+                   (long long)ctx->any_type_ids[i],
+                   ctx->any_type_shown[i],
+                   ctx->any_type_boxed[i] ? 1 : 0);
     }
-    buf_puts(out, "    (void)tag;\n    return \"unknown\";\n}\n");
+    buf_puts(out, "};\n");
+    buf_printf(out,
+               "static __tur_any_tichunk __tur_any_chunk = { __tur_any_rows, %u, 0 };\n",
+               (unsigned)ctx->n_any_type_names);
 
     /* Installed from __tur_static_init (the KEYS band runs before any user
-     * code), so the preamble's __tur_any_type_name can reach it. */
+     * code), so the preamble's __tur_any_type_name and __tur_any_drop can see
+     * this TU's rows before anything widens or drops an `any`. */
     buf_puts(out, "static void __tur_any_names_init(void) {\n");
-    buf_puts(out, "    g_tur_any_name_ext = __tur_any_name_ext;\n}\n");
+    buf_puts(out, "    __tur_any_register(&__tur_any_chunk);\n}\n");
     static_init_register("__tur_any_names_init", STATIC_INIT_KEYS);
 }
 
@@ -9741,12 +9803,38 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * TU) simply leaves it NULL and answers "unknown", which is what it did for
      * every struct before.  A forward-declared per-program function would not
      * do: that TU has no definition to link. */
+    /* any-type-ids-are-per-tu: a REGISTRY, not a single hook.
+     *
+     * This used to be one `g_tur_any_name_ext` function pointer that every TU
+     * overwrote from its own static initializer -- last writer wins, so on a
+     * multi-TU build every other TU's ids were then read through the wrong
+     * table.  Now each TU publishes its own rows and lookups walk the union, so
+     * a type minted in one module is legible in all of them.
+     *
+     * The `boxed` flag rides the SAME row as the name.  It has to: the drop
+     * site knows only the tag, and reading the flag from a different TU's table
+     * is what made one module free a handle another module owned.  One row, one
+     * answer, for both questions. */
+    buf_puts(out, "typedef struct __tur_any_ti { int64_t id; const char *name; int boxed; } __tur_any_ti;\n");
+    buf_puts(out, "typedef struct __tur_any_tichunk { const __tur_any_ti *rows; int n; struct __tur_any_tichunk *next; } __tur_any_tichunk;\n");
     emit_rt_global(out, shared,
-                   "const char *(*g_tur_any_name_ext)(int64_t) = 0;\n",
-                   "const char *(*g_tur_any_name_ext)(int64_t)");
+                   "__tur_any_tichunk *g_tur_any_types = 0;\n",
+                   "__tur_any_tichunk *g_tur_any_types");
+    buf_puts(out, "static void __tur_any_register(__tur_any_tichunk *c) {\n");
+    buf_puts(out, "    c->next = g_tur_any_types; g_tur_any_types = c;\n}\n");
+    /* Linear over (chunks x rows).  Programs intern a handful of `any` types,
+     * so this is a short walk; if a program ever makes it hot, the fix is an
+     * index built once at startup, not a return to per-TU numbering. */
+    buf_puts(out, "static const __tur_any_ti *__tur_any_find(int64_t tag) {\n");
+    buf_puts(out, "    for (__tur_any_tichunk *c = g_tur_any_types; c; c = c->next)\n");
+    buf_puts(out, "        for (int i = 0; i < c->n; i++)\n");
+    buf_puts(out, "            if (c->rows[i].id == tag) return &c->rows[i];\n");
+    buf_puts(out, "    return 0;\n}\n");
     buf_puts(out, "static const char *__tur_any_type_name(int64_t tag) {\n");
-    buf_puts(out, "    if (tag >= 1000)\n");
-    buf_puts(out, "        return g_tur_any_name_ext ? g_tur_any_name_ext(tag) : \"unknown\";\n");
+    buf_puts(out, "    if (tag >= 1000) {\n");
+    buf_puts(out, "        const __tur_any_ti *__ti = __tur_any_find(tag);\n");
+    buf_puts(out, "        return __ti ? __ti->name : \"unknown\";\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "    switch (tag) {\n");
     buf_printf(out, "        case %d: return \"nil\";\n",   (int)TY_NIL);
     buf_printf(out, "        case %d: return \"bool\";\n",  (int)TY_BOOL);
@@ -15248,6 +15336,7 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.any_type_names);
     free(ctx.any_type_shown);
     free(ctx.any_type_boxed);
+    free(ctx.any_type_ids);
     /* any-struct-box-leak-per-widen: the pending-drop stack.  Entries are freed
      * as they drain; anything still here belongs to a node whose enclosing call
      * never materialized (a void-returning consumer), so free the names too. */
@@ -16708,6 +16797,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     free(ctx.any_type_names);
     free(ctx.any_type_shown);
     free(ctx.any_type_boxed);
+    free(ctx.any_type_ids);
     /* any-struct-box-leak-per-widen: the pending-drop stack.  Entries are freed
      * as they drain; anything still here belongs to a node whose enclosing call
      * never materialized (a void-returning consumer), so free the names too. */

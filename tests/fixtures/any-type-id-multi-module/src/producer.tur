@@ -1,0 +1,20 @@
+;; any-type-ids-are-per-tu: the module that MINTS the `any` box ids.
+;;
+;; Alpha exists only to be interned here and nowhere else, so this TU's
+;; first-seen ordering differs from main's -- which is what the old
+;; `TUR_ANY_ID_BASE + index` scheme turned into disagreeing ids.
+(defmodule producer
+  (export make-beta make-heap Beta HeapThing)
+
+  (defstruct Alpha [a : int])
+  ;; By-value: heap-boxed at the widen, so its row must say boxed.
+  (defstruct Beta [b : int])
+  ;; :heap: the handle rides the tag's value word and owns nothing here, so its
+  ;; row must say NOT boxed.  When the two TUs disagreed about which id was
+  ;; which, main's drop read Beta's boxed flag for a HeapThing handle and
+  ;; free()d memory this module owns.
+  (defstruct HeapThing :heap [x : int])
+
+  (defn seed [] : any (make-struct Alpha 1))
+  (defn make-beta [] : any (make-struct Beta 7))
+  (defn make-heap [] : any (make-struct HeapThing 11)))

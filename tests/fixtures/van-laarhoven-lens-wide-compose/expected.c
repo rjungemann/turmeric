@@ -1351,10 +1351,23 @@ TUR_RT_API void tur_region_shutdown(void) {
     reg_unlock();
 }
 /* ---- end src/runtime/region.c ---- */
-static const char *(*g_tur_any_name_ext)(int64_t) = 0;
+typedef struct __tur_any_ti { int64_t id; const char *name; int boxed; } __tur_any_ti;
+typedef struct __tur_any_tichunk { const __tur_any_ti *rows; int n; struct __tur_any_tichunk *next; } __tur_any_tichunk;
+static __tur_any_tichunk *g_tur_any_types = 0;
+static void __tur_any_register(__tur_any_tichunk *c) {
+    c->next = g_tur_any_types; g_tur_any_types = c;
+}
+static const __tur_any_ti *__tur_any_find(int64_t tag) {
+    for (__tur_any_tichunk *c = g_tur_any_types; c; c = c->next)
+        for (int i = 0; i < c->n; i++)
+            if (c->rows[i].id == tag) return &c->rows[i];
+    return 0;
+}
 static const char *__tur_any_type_name(int64_t tag) {
-    if (tag >= 1000)
-        return g_tur_any_name_ext ? g_tur_any_name_ext(tag) : "unknown";
+    if (tag >= 1000) {
+        const __tur_any_ti *__ti = __tur_any_find(tag);
+        return __ti ? __ti->name : "unknown";
+    }
     switch (tag) {
         case 1: return "nil";
         case 2: return "bool";
@@ -5218,9 +5231,8 @@ static union { void *__a; int64_t __b;
                char __c[sizeof(void *) + 2 * sizeof(int64_t)]; }
     __tur_fatbox_2 = { .__a = (void *)__tur_fatbox_keep };
 static void __tur_any_drop(tur_tagged_t __v) {
-    switch (TUR_GETTAG(__v)) {
-        default: return;
-    }
+    const __tur_any_ti *__ti = __tur_any_find(TUR_GETTAG(__v));
+    if (__ti && __ti->boxed) free((void *)(intptr_t)TUR_UNTAG(__v));
 }
 static void (*__tur_any_drop_keep)(tur_tagged_t) __attribute__((unused)) = __tur_any_drop;
 
