@@ -1,0 +1,56 @@
+;; interp-native-ctor-loses-adt-name: a value built by a NATIVE ADT constructor
+;; must report its ADT name, the way a value built by evaluating the constructor
+;; does.
+;;
+;; The stdlib `some`/`none`/`ok`/`err` are native overrides under --interpret
+;; (interpreter_natives.c), and the TuriStruct they built carried no ctor->adt
+;; link, so `turi_any_named_type` fell through to the struct's own name:
+;; `(defn f [] : any (some 7.1))` reported "Option" compiled and "Some"
+;; interpreted.
+;;
+;; That is not only a cosmetic string.  `is?` COMPARES those names, so
+;; `(is? x (Option float))` was a false negative for every natively-built option
+;; under --interpret -- a type-case written against the compiled behaviour took
+;; the wrong arm, silently.  That is the assertion that matters here; the
+;; `type-of` rows are how you see why.
+;;
+;; No requires.compiled: running this on both back ends IS the test.  The
+;; divergence survived because nothing compared them on these values.
+;;
+;; Scope, per the report's own instruction to sweep before fixing: every native
+;; that builds an ADT value goes through `turi_make_struct`, which now resolves
+;; the ctor from the env binding EX_DEFDATA registered for that name.  That is
+;; `some`/`none`, `ok`/`err`, and the `Left`/`Right` pair
+;; `str-to-int-checked` builds (not exercised here -- it needs an import these
+;; snippets do not have, and it shares the one code path).
+;;
+;; 7.1, not 7.0: an option's payload rides the `any` box as an IEEE-754 bit
+;; pattern, so an integral literal would not distinguish a correct unbox from a
+;; truncating one.
+
+;; Natively-built: the values that diverged.
+(defn n-some [] : any (some 7.1))
+(defn n-none [] : any (none))
+(defn n-ok   [] : any (ok 7.1))
+(defn n-err  [] : any (err 3))
+
+;; Built by evaluating the ADT constructor: the control.  These always agreed,
+;; which is what localised the defect to the native path.
+(defn c-some [] : any (Some 7.1))
+(defn c-none [] : any (None))
+
+(defn main [] : int
+  (println (type-of (n-some)))
+  (println (type-of (n-none)))
+  (println (type-of (n-ok)))
+  (println (type-of (n-err)))
+  (println (type-of (c-some)))
+  (println (type-of (c-none)))
+  ;; The false negative.  Deliberately only the Option-float shape: an applied
+  ;; target is matched per INSTANTIATION compiled and by HEAD interpreted, so
+  ;; e.g. `(is? (none) (Option float))` legitimately answers 0 / 1 -- the
+  ;; residual documented in any-narrowing-broken-for-parametric-receivers, and
+  ;; identical for a ctor-built value, so it is not this defect.
+  (println (if (is? (n-some) (Option float)) 1 0))
+  (println (if (is? (c-some) (Option float)) 1 0))
+  0)

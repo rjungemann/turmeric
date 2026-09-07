@@ -956,6 +956,11 @@ struct TuriStruct {
                             * lowered to a single-variant record ADT. */
 };
 
+/* interp-native-ctor-loses-adt-name: turi_make_struct below matches on this
+ * function pointer to recover a constructor's CtorDef; defined further down,
+ * with the other natives. */
+static TuriValue adt_ctor_native(TuriEnv *env, TuriValue *args, uint32_t n, void *ud);
+
 static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n, TuriValue *fields) {
     /* Escaping payload: the TuriStruct + its fields array are returned and may
      * be captured/stored, so they live in env's value pool (reclaimed by
@@ -1244,8 +1249,49 @@ static const char *turi_any_named_type(TuriValue v) {
     return v.as_struct->name;
 }
 
+/* interp-native-ctor-loses-adt-name: recover the CtorDef a constructor NAME
+ * belongs to, so a value a native builds carries the same ctor->adt link a value
+ * built by evaluating `(Some x)` does.
+ *
+ * There is no ADT registry on the env; the only handle on a CtorDef at runtime
+ * is the binding EX_DEFDATA registers for each constructor -- a native closure
+ * over `adt_ctor_native` whose user data IS the CtorDef.  Matching on the
+ * function pointer is what makes this safe: an ordinary defn or another native
+ * that happens to share a constructor's name does not match, and a name with no
+ * binding at all (the FFI record at the `"Result"` call site below) simply
+ * leaves the ctor NULL, exactly as before.
+ *
+ * `turi_env_find_binding`, not `turi_env_get`: a miss from the latter formats an
+ * "unbound variable" string, which would be a malloc on every construction that
+ * is not an ADT ctor. */
+static const CtorDef *turi_ctor_for_name(TuriEnv *env, const char *name) {
+    if (!env || !name) return NULL;
+    EnvBinding *b = turi_env_find_binding(env, name);
+    if (!b || b->value.tag != TURI_CLOSURE || !b->value.as_closure) return NULL;
+    if (b->value.as_closure->native != adt_ctor_native) return NULL;
+    return (const CtorDef *)b->value.as_closure->native_ud;
+}
+
+/* interp-native-ctor-loses-adt-name: the entry point every native that builds an
+ * ADT value goes through (`some`/`none`, `ok`/`err`, `Left`/`Right`).
+ *
+ * It used to hand back a TuriStruct with `ctor == NULL`, so `turi_any_named_type`
+ * fell through to the struct's own name and `(defn f [] : any (some 7.1))`
+ * reported "Some" under --interpret where the compiled path says "Option".  That
+ * is not only a cosmetic string: `is?` compares those names, so
+ * `(is? x (Option float))` was a FALSE NEGATIVE for every natively-built option
+ * and result, and a type-case written against the compiled behaviour took the
+ * wrong arm.
+ *
+ * Attaching the link here rather than resolving it inside `turi_any_named_type`
+ * fixes every reader at once -- field-access-by-name and the `is_heap` copy rule
+ * read `ctor` too -- and makes the fallback in `turi_any_named_type` mean what it
+ * is for: a value that genuinely has no constructor. */
 TuriValue turi_make_struct(TuriEnv *env, const char *name, TuriValue *fields, uint32_t n) {
-    return make_struct_val_def(env, name, n, fields);
+    TuriValue v = make_struct_val_def(env, name, n, fields);
+    const CtorDef *ct = turi_ctor_for_name(env, name);
+    if (ct && v.tag == TURI_STRUCT && v.as_struct) v.as_struct->ctor = ct;
+    return v;
 }
 
 static TuriValue make_struct_val(TuriEnv *env, const char *name, uint32_t n, TuriValue *fields) {
