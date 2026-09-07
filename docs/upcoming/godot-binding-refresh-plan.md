@@ -1,8 +1,11 @@
 # Turmeric Godot Binding -- Status Refresh, JIT Concerns, and Un-stranding Plan
 
-> **Status:** Active -- refreshes a stale picture; sequences work that exists
-> but is not landed.
-> **Last Updated:** 2026-09-06
+> **Status:** Steps 0-4 DONE (2026-09-07). The branch is un-stranded: it merged
+> as [turmeric-godot#1](https://github.com/rjungemann/turmeric-godot/pull/1),
+> and that repo now has its **first passing CI run**, green on all four
+> platforms with downloadable artifacts. Steps 5-6 remain -- see
+> "What actually happened" below before starting them.
+> **Last Updated:** 2026-09-07
 > **Type:** Integration / Game Engine -- post-v1.
 > **Does not supersede** [godot-language-binding-plan.md](../archive/godot-language-binding-plan.md);
 > that plan's v1 scope really is complete and stays archived. This one covers
@@ -230,10 +233,55 @@ reason to expect Vector2-heavy scripts to behave.
 
 ---
 
+## What actually happened (2026-09-07)
+
+Steps 0-4 ran as written and the branch merged. Recording the deltas, because
+two of the three CI diagnoses were things this plan did **not** anticipate, and
+one prediction was simply wrong.
+
+**The prediction that was wrong.** Step 3 said to budget for Linux and macOS
+drift, since the last verified build was ~Aug 5 and the compiler had moved four
+releases. **No drift materialised** -- all three desktop platforms built clean
+against the pinned v0.44.2 on the first run that got past checkout. The pin was
+still worth adding; the fear was not.
+
+**Three CI cycles, three distinct diagnoses**, none reachable without running:
+
+1. `actions/checkout` refusing `path: ../turmeric` -- as step 1 predicted. The
+   finding underneath it was bigger than the fix: *no* platform had ever been
+   verified, so Windows was never specially broken.
+2. **MSVC rejecting `-Wextra`** (`cl : error D8021`). The workflow had no MSYS2
+   at all and built with Visual Studio, while the port targets MinGW/UCRT64 --
+   which cannot work when `libturi.a` is linked statically. Fixed with
+   `msys2/setup-msys2`, `-G Ninja`, pacman scons, and `use_mingw=yes` (godot-cpp
+   picks MSVC whenever `not use_mingw and msvc.exists(env)`).
+3. **The drive letter did not survive the MSYS2 seam.** `TURMERIC_ROOT` was
+   `${{ github.workspace }}/turmeric`; SCons saw
+   `\a\turmeric-godot\turmeric-godot/turmeric/...` with `D:` gone. This one
+   camouflaged itself: a leading `\` is drive-RELATIVE on Windows and the
+   checkout was already on `D:`, so SConstruct's own `os.path.isfile()` probe
+   resolved it, found the archive, and printed its reassuring "linking libturi
+   from ..." line. Everything compiled. Only SCons's node layer disagreed, 21
+   minutes in, at the final link. Fixed by making the path relative -- no drive
+   letter to lose.
+
+**A process note worth keeping.** After cycle 1 the Windows toolchain mismatch
+was already visible in the workflow, and the temptation was to fix it blind in
+the same commit. Not doing so was right: guessing at MSYS2 package names would
+have produced an untested change, where one CI cycle produced
+`cl : command line error D8021: invalid numeric argument '/Wextra'` -- a
+one-line diagnosis. When a cycle is ~20 minutes and the alternative is a guess,
+spend the cycle.
+
+---
+
 ## Suggested sequence for un-stranding the branch
 
 Ordered by dependency and by risk retired per unit of effort. Steps 1-3 are
 cheap and remove false signals; step 4 is the actual blocker.
+
+> Steps 0-4 are **done**. Kept as written, rather than rewritten in the past
+> tense, so the reasoning can be checked against the outcome above.
 
 ### Step 0 -- Clear the false signals (minutes, no risk)
 
