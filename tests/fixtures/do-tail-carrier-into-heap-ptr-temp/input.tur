@@ -1,0 +1,76 @@
+;; codegen-carrier-straddle-in-lifted-thunk-sink: a `do` join whose tail is a
+;; call returning the int64 CARRIER for a `:heap` ADT, assigned into the
+;; concrete `tur_adt_TL *` temp emit_control_result_temp_decl declares.
+;;
+;; The `let` joins have paired the by-value bridge with the int64<->pointer one
+;; (bridge_control_result_int_ptr) since gcc14-int-conversion; the two `do`
+;; joins carried only the first, so the assignment straddled the representation
+;; boundary: `-Wint-conversion`, a WARNING (and layout-lucky success) on older
+;; GCC, a HARD cc error on clang and GCC >= 14 -- i.e. `tur build` of this
+;; program failed outright there while Linux CI stayed green.
+;;
+;; Both halves of the shape are load-bearing and neither existed in the tree
+;; (a regions fuzzer generated it, tests/regions-fuzz-src.py seed 1):
+;;
+;;   * the `do` needs a DISCARDED first item ahead of the tail -- with a single
+;;     item the `do` collapses and no join temp is created;
+;;   * the tail must be a CALL returning the carrier for a `:heap` ADT -- a
+;;     constructor call (`(TNil)`) hands back the concrete pointer, so the
+;;     representations already agree and the straddle never forms.
+;;
+;; Drop either and this compiles clean even unfixed, which is why the fixture
+;; keeps both. `tests/run.sh`'s emitted-C pointer/integer ratchet greps each
+;; fixture's build stderr for exactly this warning, so with the shape present
+;; the regression is now caught on Linux too, not only where cc promotes it.
+(defdata Link :heap (Link [v : int nxt : int]))
+(defdata TL :heap (TNil) (TCons :int :TL))
+
+(defn build [n : int acc : int] : int
+  (if (<= n 0) acc (build (- n 1) (:: (Link n acc) :int))))
+
+(defn chain-sum [c : int] : int
+  ```c
+  struct { int64_t v; int64_t nxt; } *p = (void *)(intptr_t)c;
+  int64_t acc = 0;
+  while (p) { acc += p->v; p = (void *)(intptr_t)p->nxt; }
+  return acc;
+  ```)
+
+(defn tbuild [n : int acc : TL] : TL
+  (if (<= n 0) acc (tbuild (- n 1) (TCons n acc))))
+
+(defn tsum [t : TL] : int
+  (match t
+    (TNil)      0
+    (TCons v r) (+ v (tsum r))))
+
+;; ^fat forces the lambda below through the lifted-thunk lowering, which is
+;; where the straddling sink was first seen.
+(defn thunk-call [^fat body : (fn [] TL)] : TL
+  (body))
+
+(defn go [n : int] : TL
+  (thunk-call (fn [] (do (chain-sum (build n 0))
+                         (tbuild n (TNil))))))
+
+;; The same join reached WITHOUT the thunk: a plain `defn` body whose `do`
+;; discards then tails into the carrier-returning call.  The sink lowering is
+;; shared, so this arm would straddle identically.
+(defn direct [n : int] : TL
+  (do (chain-sum (build n 0))
+      (tbuild n (TNil))))
+
+;; And the defers arm of emit_do_value, which had the same missing bridge.
+(defn with-defer [n : int] : TL
+  (do (defer (chain-sum (build 1 0)))
+      (chain-sum (build n 0))
+      (tbuild n (TNil))))
+
+(defn main [] : int
+  ;; Values, not just "it compiled": 3+2+1 = 6 each time.  A straddle that
+  ;; happened to be layout-lucky still printed these, so the fixture's real
+  ;; assertion is the clean build the ratchet checks alongside.
+  (println (tsum (go 3)))
+  (println (tsum (direct 3)))
+  (println (tsum (with-defer 3)))
+  0)

@@ -3806,6 +3806,15 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 char *v = emit_value(ctx, body, last);
                 v = bridge_control_value_to_byvalue_temp(ctx, body, v, last);
+                /* codegen-carrier-straddle-in-lifted-thunk-sink: the `let` joins
+                 * pair the by-value bridge above with the int64<->pointer one;
+                 * this `do` join carried only the first, so a tail that emits the
+                 * CARRIER for a `:heap` ADT landed raw in the concrete
+                 * `tur_adt_X *` temp emit_control_result_temp_decl declared --
+                 * -Wint-conversion, a hard cc error on clang / GCC >= 14.  Same
+                 * (type, tail) pair the decl used, so the two agree by
+                 * construction. */
+                v = bridge_control_result_int_ptr(ctx, v, last->type, last);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = %s;\n", result, v);
                 free(v);
@@ -3991,6 +4000,10 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             emit_control_result_temp_decl(ctx, body, last->type, last, result);
             char *v = emit_value(ctx, body, last);
             v = bridge_control_value_to_byvalue_temp(ctx, body, v, last);
+            /* codegen-carrier-straddle-in-lifted-thunk-sink: as in the no-defers
+             * join above -- the by-value bridge alone does not cover the
+             * int64<->pointer straddle. */
+            v = bridge_control_result_int_ptr(ctx, v, last->type, last);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", result, v);
             free(v);
