@@ -1151,11 +1151,28 @@ and `vec-any-element-roundtrip` runs on both back ends. It carried
 `requires.compiled` for one commit, to record the divergence rather than hide it
 behind a skip nobody reads.
 
-Map and Set were flagged there and are NOT settled: they share no equivalent of
-`vec_tag_set`, but whether their value reads preserve a per-entry tag is a
-different question and one probe did not answer it. **Settle it before the
-`#map{...}` / `#set{...}` work, not after** -- the Vec case is the argument for
-asking early.
+**Map and Set are now settled, and the answer changes S6's order.** Measured on
+both back ends
+([map-of-any-is-broken-on-both-back-ends](../reported/map-of-any-is-broken-on-both-back-ends.md)):
+
+| container | `--interpret` | compiled |
+|---|---|---|
+| `(Vec any)` | correct | correct |
+| `(Map int any)` | **`int` for every value** | **cc error** |
+| `(Set any)` | clean diagnostic | clean diagnostic |
+
+Map is NOT Vec's problem again with a different table: it has no tag side table
+at all -- `native_map_get_eq` returns `turi_int` of the raw carrier word -- so
+there is nothing to extend. A homogeneous `(Map int float)` works because the
+tag comes from the STATIC element type, which is exactly what `any` does not
+have. The best direction is a boxed TuriValue as the HAMT value, matching what
+the compiled path already does for a `(Vec any)` element, so the two back ends
+agree by construction rather than by two mechanisms kept in lockstep.
+
+So `#map{...}` is NOT a transcription of the Vec work, and the wrong answer
+should be closed (or refused, as Set already refuses) before `#map{...}` makes
+the shape ordinary. Asking early was the right call: this would otherwise have
+been found by a user.
 
 Still to do: `[1 "two" 7.1]` defaulting to `(vec any)` in a Saffron file, the
 map/set/cons-list twins, and the prelude.
