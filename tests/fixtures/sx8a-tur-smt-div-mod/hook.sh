@@ -131,8 +131,13 @@ done
 # truncating idiom, never bare.  Count the idioms, then count the div/mod
 # occurrences the idioms do not account for (each idiom holds two).
 all_txt=$(cat "$TMP"/rt[0-9].smt2 2>/dev/null)
-n_idiom=$(printf '%s' "$all_txt" | grep -oE '\(ite \(>= n 0\) \((div|mod) n 2\) \(- \((div|mod) \(- n\) 2\)\)\)' | wc -l)
-n_ops=$(printf '%s' "$all_txt" | grep -oE '\((div|mod) ' | wc -l)
+# The $(( )) wrap is load-bearing, not decoration: BSD `wc -l` pads its count
+# with leading spaces ("      16") where GNU `wc` does not, so interpolating it
+# straight into the echo below printed "idioms:       16" on macOS and passed on
+# Linux -- a stdout mismatch that only CI could see.  Arithmetic evaluation
+# strips the padding on both.
+n_idiom=$(( $(printf '%s' "$all_txt" | grep -oE '\(ite \(>= n 0\) \((div|mod) n 2\) \(- \((div|mod) \(- n\) 2\)\)\)' | wc -l) ))
+n_ops=$(( $(printf '%s' "$all_txt" | grep -oE '\((div|mod) ' | wc -l) ))
 echo "round-trip truncating idioms: $n_idiom"
 echo "round-trip div/mod outside an idiom: $((n_ops - 2 * n_idiom))"
 exit 0

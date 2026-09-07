@@ -22,6 +22,8 @@
  * See docs/archive/regions-plan.md.
  */
 #include <stdio.h>
+#include <stdint.h>   /* int64_t in the word-note checks -- glibc leaks it in
+                       * transitively, MSYS2/UCRT64 does not (CI, 2026-09-06) */
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
