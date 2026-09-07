@@ -119,8 +119,21 @@ Windows only because that is where AOT was first driven end to end.
 > Scoring the rest honestly: **J6, J8 and J10 verified** against
 > `jit-guide.md:325`, `src/CMakeLists.txt:604` and `cmake/mir.cmake`
 > respectively. **J3's facts hold** but its corpus figure is point-in-time, not
-> standing. **J5 and J7 remain unverified** -- they were filed as open questions
-> and are honest as written. **J9** points at a real open report.
+> standing. **J9** points at a real open report.
+>
+> **J5 and J7 have since been verified too, and both moved.** J5 got *worse*:
+> MIR's interpreter tier is not a W^X escape hatch, because it publishes native
+> shims through the same `MAP_JIT` allocator -- so a locked-down platform has no
+> degraded JIT mode, only the interpreter or AOT. J7 got *better in one half and
+> sharper in the other*: MIR-gen's thread-unsafety is real but **already solved**
+> in-tree by `jit_lazy_gen_locked`, so the binding inherits a JIT that
+> serialises generation; what is actually open is shim-side state under Godot's
+> worker threads. As filed, J7 would have sent someone to re-investigate a
+> solved problem -- a vague concern is not harmless, it misdirects.
+>
+> Final tally: **3 wrong (J1, J2, J4), 5 verified sound (J3 with a caveat, J6,
+> J8, J9, J10), 2 verified-and-materially-revised (J5, J7).** Only five of ten
+> survived unchanged.
 >
 > The pattern worth carrying forward: the wrong entries are the ones asserting
 > what *would* happen; the sound ones cite a file and a line. Anything below
@@ -296,17 +309,55 @@ different from doing it in `tur`:
 Neither is answered by `tur`'s own JIT working, because `tur` is a developer
 tool users trust differently from a game.
 
+**VERIFIED 2026-09-07, and one hoped-for escape route is already closed.** The
+entitlement/W^X exposure is documented rather than speculative: `tur jit` always
+generates machine code, and the obvious fallback -- running MIR's interpreter
+tier on a locked-down platform -- does not exist as an out.
+[docs/guides/jit-guide.md:107](../guides/jit-guide.md) is explicit that
+`MIR_set_interp_interface` "still publishes native shims through the same
+`MAP_JIT` code allocator, so it carries the identical entitlement and W^X
+profile as the generator and is **not an escape hatch on locked-down
+platforms**" (`TUR_JIT_GEN=interp` is spike instrumentation only; an interpreter
+tier was evaluated and not adopted -- `docs/archive/mir-interp-tier-plan.md`).
+
+So on a platform that refuses W^X there is no degraded-but-working JIT mode to
+fall back to. The fallback is the tree-walking interpreter or AOT, which is the
+same conclusion J4 reaches from the other direction.
+
 ### J6 -- `constructor` attribute
 
 c2mir discards it, so the embedding path must call `__tur_static_init`
 explicitly. The shim's init ordering needs a defined home for that call.
 
-### J7 -- Threading
+### J7 -- Threading. VERIFIED 2026-09-07: the MIR half is already solved; the open half is ours
 
-Godot dispatches script code from more than the main thread
-(`WorkerThreadPool`, physics). The variant arena is already `thread_local`, but
-MIR context reentrancy under concurrent compile or execution is unverified.
-Worth settling before the JIT runs anything beyond `_ready`.
+Filed as "MIR context reentrancy under concurrent compile or execution is
+unverified". Now verified, and it splits cleanly in two.
+
+**The MIR half is real and already handled -- do not go re-investigate it.**
+MIR-gen genuinely is not thread-safe, and the tree measured it rather than
+assumed it: "three different assertions across five runs of one fixture
+(`destroy_func_cfg`, `mark_unreachable_bbs`, `undeclared reg N of func`)"
+([src/jit_engine.c:352](../../src/jit_engine.c)). Turmeric therefore does *not*
+use `MIR_set_lazy_gen_interface`; it reimplements the lazy path as
+`jit_lazy_gen_locked` from public primitives with a process-wide mutex, where
+"the double-check inside the lock is the load-bearing half" -- a plain mutex
+still lets two threads past the stub generate the same function twice and trip
+`_MIR_duplicate_func_insns`
+([docs/guides/jit-guide.md:273](../guides/jit-guide.md)). Contention is
+self-extinguishing: a function generates once, then its thunk goes straight to
+code.
+
+So a Godot host inherits a JIT that already serialises generation. Filed as
+written, J7 would have sent someone to investigate a solved problem.
+
+**The half that is genuinely open is shim-side, not MIR-side.** Godot dispatches
+from `WorkerThreadPool` and the physics thread. The variant arena is
+`thread_local` and its enter/leave bracketing is per-call, which is the right
+shape -- but whether the *interpreter env*, the export/signal tables and the
+`.godot/turmeric-cache` bookkeeping tolerate concurrent entry is untested, and
+that is turmeric-godot's code, not MIR's. That is the question to settle before
+the binding runs anything beyond `_ready`.
 
 ### J8 -- The no-JIT build must keep working
 
