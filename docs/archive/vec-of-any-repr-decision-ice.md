@@ -65,6 +65,62 @@ bisection handle, not a fix.
 Which two sites disagree is not established here -- `--emit-abi-trace` prints
 every disagreement and is the next step.
 
+## Resolution (2026-09-07)
+
+**Fixed.** All three routes to a `(Vec any)` compile and run: the reported
+repro `(vec-of (id 1))`, the ascribed `(vec-of (:: 1 any))` that tripped the
+separate TUR-E0201, and an explicitly ascribed `(vec-new)` pushed into.
+`tests/fixtures/vec-of-any-builds` pins them under the leak harness.
+
+Direction 1 was right about the shape -- two deciders -- and the trace named
+them once `--emit-abi-trace` was actually run, which is the step this report
+listed as next. They turned out to be two DIFFERENT questions that had been
+answered as one:
+
+- **Does `(Vec any)` NAME a monomorph?** `any` c-names to `tur_tagged_t`, so it
+  is as nameable as `(Vec int)`. But it failed every arm of
+  `adt_app_type_arg_is_concrete`, because the concrete-layout table rejects
+  TY_ANY -- deliberately, and for an unrelated reason (a 16-byte by-value FIELD
+  is an ABI change). So the binder fell to the int64 carrier while `repr_of`
+  said typed heap pointer. Admitted in `adt_app_type_arg_is_concrete`, which is
+  the predicate that asks exactly this, leaving the layout table untouched. The
+  identical shape, and the identical ICE text, as the `(Vec (Opt2 int))` row
+  already recorded in that function.
+
+- **How is an `any` ELEMENT stored?** A container slot is one machine word and a
+  `tur_tagged_t` is two, so erasing the element keeps the payload and drops the
+  tag. `repr_of` now answers `REPR_BOXED_AGG` at `REPR_POS_CONTAINER_ELEM` --
+  the same answer a by-value aggregate element has had since increment 4, which
+  brings the store, the read and the element-free with it, since
+  `type_is_boxed_container_elem` IS that call. Verified: `vec-free` releases
+  the element boxes, LeakSanitizer clean.
+
+One more site was needed and was NOT predicted by this report: the call-argument
+carrier crossing in `emit_expr.c` is gated on `rarg.kind == TY_ADT`, so an `any`
+argument reached neither the heap-box nor the stack-spill branch and the raw
+`tur_tagged_t` went into `vec_push_ex`'s `int64_t` formal. An `any` has the same
+problem there a by-value ADT has -- two words meeting a one-word slot -- so it
+joins that block.
+
+Direction 2 (the `vec-of` TUR-E0201) is fixed too, and it was one word:
+`vec-empty-like__`'s `witness` parameter is never READ, only its type is, so it
+is `^borrow`. Without that, `vec-of`'s macro binds the first element once and
+uses it twice -- as the type witness and as the first push -- which an owned
+`any` cannot survive. Fixing it is what made the two broken routes converge on
+one defect, and it is what the layout table's own TY_ANY note said was missing
+("there is no way to build one today to test it").
+
+Residue, measured and filed as
+[vec-any-monomorph-is-half-plumbed](../reported/vec-any-monomorph-is-half-plumbed.md):
+`vec-get` on a `(Vec any)` still reports `int`, so the element type does not
+flow back out; and a program with a `(Vec any)` beside another `vec-of` emits
+one cosmetic `-Wincompatible-pointer-types` warning from a deduped `vec-new`
+spec (the two monomorphs are structurally identical, verified). Neither blocks
+S6; the first IS S6's subject.
+
+Suites: `run.sh` 2862/0, `run-turi.sh` 1954/0, `run-leak-check.sh` 88/0 with one
+known-open. No codegen snapshot moved.
+
 ## Fix directions
 
 1. **Find the two deciders and make one call the other.** That is the

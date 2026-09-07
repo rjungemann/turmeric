@@ -903,8 +903,12 @@ One thing it reached that the stage did not predict: `(vec-of (id 1))` ICEs the
 compiler with a `(Vec any)` representation disagreement. **Not caused by S2** --
 it reproduces in plain Turmeric with explicit annotations -- but S2 makes it
 trivially reachable. Filed as
-[vec-of-any-repr-decision-ice](../reported/vec-of-any-repr-decision-ice.md); it
-blocks S6, not S3-S5.
+vec-of-any-repr-decision-ice and **fixed 2026-09-07**
+([archived](../archive/vec-of-any-repr-decision-ice.md)): two different
+questions -- does `(Vec any)` NAME a monomorph, and how is an `any` ELEMENT
+stored -- had been answered as one. Its residue,
+[vec-any-monomorph-is-half-plumbed](../reported/vec-any-monomorph-is-half-plumbed.md),
+is S6's own subject rather than a blocker on it.
 
 ### S3 -- the dynamic operator layer, interpreter (medium) -- DONE 2026-09-07
 
@@ -1006,8 +1010,10 @@ defined in the fixture, not a stdlib cons list, because a stdlib cons list
 carries int64 handles -- `head` hands back an int and the heterogeneity is gone
 before `type-of` sees it. `defdata` needed one line to accept an `:any` field
 (it was a name table with no `any` row); whether the wider container story
-works is S6's question, and `vec-of-any-repr-decision-ice` is already open
-against it.
+works is S6's question: the ICE that used to block it is fixed, and what remains
+is that a `(Vec any)` is write-only -- `vec-get` reports `int`, so the element
+type does not flow back out
+([vec-any-monomorph-is-half-plumbed](../reported/vec-any-monomorph-is-half-plumbed.md)).
 
 **Three nodes, and `-Werror=switch` plus the turi parity ratchet enumerated
 every site each one needed.** EX_DYN_CALL, EX_DYN_FIELD (and S3's EX_DYN_OP)
@@ -1114,6 +1120,15 @@ agree word for word, which is what `saffron-seam-panics` asserts.
 G7. `(vec any)` becomes the default container element in Saffron, so
 `[1 "two" 7.1]` is a vector of three boxes. Same for `#map{...}`, `#set{...}`,
 and cons lists.
+
+**The ICE that blocked this stage is fixed** (2026-09-07): a `(Vec any)` builds,
+stores and frees correctly, with its elements boxed one word wide and released
+with the vector. What S6 inherits is the half that is left --
+[a `(Vec any)` is write-only](../reported/vec-any-monomorph-is-half-plumbed.md),
+because `vec-get` reports its result as `int` rather than `any`. That is this
+stage's central question, not a prerequisite for it: the same "how does an
+element type reach a read through a container" governs `#map{...}`, `#set{...}`
+and cons lists, so it should be answered once here rather than per container.
 
 A `stdlib/saffron/prelude.tur` autoloads for `LANG_SAFFRON` files: the dynamic
 `map`/`filter`/`fold`/`reduce`/`assoc`/`get`, the truthiness helpers, and thin

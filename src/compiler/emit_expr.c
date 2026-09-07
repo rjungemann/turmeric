@@ -10060,7 +10060,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (!needs_fn_cast && !matched_spec &&
                     fn_binding->type.kind == TY_FN && emit_arg) {
                     Type rarg = emit_resolve_type(ctx, emit_arg->type);
-                    if (rarg.kind == TY_ADT && emit_type_is_byvalue_adt(ctx, rarg)) {
+                    /* vec-of-any-repr-decision-ice: an `any` argument joins this
+                     * block.  It is the same problem a by-value ADT has here --
+                     * a TWO-WORD value meeting a ONE-WORD carrier slot -- and
+                     * the block below already knows how to solve it (heap-box
+                     * when the callee stores into a container, stack-spill when
+                     * the crossing is transient).  Gated on TY_ADT alone, an
+                     * `any` element handed to `vec-push!` reached neither, and
+                     * the raw `tur_tagged_t` went into an `int64_t` formal:
+                     * "incompatible type for argument 2 of 'vec_push_ex'". */
+                    if ((rarg.kind == TY_ADT && emit_type_is_byvalue_adt(ctx, rarg)) ||
+                        rarg.kind == TY_ANY) {
                         uint32_t n_fnparams = fn_binding->type.as.fn.arity;
                         uint8_t param_idx = (i < n_fnparams) ? (uint8_t)i
                             : (uint8_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
