@@ -114,16 +114,48 @@ asks whether the shim should compile in-process rather than shelling out to
 open questions now have partial answers. Recorded here because the spike doc
 still reads as if the Windows JIT were unexplored.
 
-### J1 -- The JIT is not merely a convenience. It is the plausible *fix* for the AOT defect
+### J1 -- CORRECTED 2026-09-07: the JIT does *not* dissolve the AOT defect
 
-The defect above is structural: the natives are C++ functions **in the host
-process**, and a subprocess can never see them. No amount of work on
-`aot_cache.cpp` changes that; the fix has to either teach standalone `tur` the
-natives (a second, drifting registration surface) or move compilation into the
-process that already has them.
+> **This section was wrong when written, and the error mattered**, because it
+> made the JIT look like a way to skip the work in step 5 rather than a
+> different way to finish it. Corrected here rather than deleted, so the bad
+> reasoning stays visible.
+>
+> The original claim: the natives are C++ functions in the host process, a
+> subprocess can never see them, so in-process compilation "dissolves the defect
+> rather than working around it."
+>
+> The premise is true and the conclusion does not follow. **The failure is at
+> elaboration, not at symbol resolution.** Same three-line program:
+>
+> ```
+> tur build  -> error: unknown function or operator 'godot-export'
+> tur jit    -> error: unknown function or operator 'godot-export'   (identical)
+> tur --interpret -> warning TUR-W0040 ... will runtime-dispatch     (defers)
+> ```
+>
+> The runtime-dispatch fallback lives in a branch
+> [elab_call.c:3726](../../src/compiler/elab_call.c) labels `eval mode`, and
+> `g_interpret_mode` is set by `cmd_eval_h`, `cmd_eval_expr` and `cmd_repl` --
+> not by `cmd_jit`. The JIT elaborates in compiled mode and hard-errors the same
+> way. Being in the right address space does not teach the elaborator a name.
+>
+> **Declarations are required on every route.** What the JIT still buys is
+> narrower and still real: no external toolchain on the player's machine, and no
+> link step. That is an argument about *distribution*, not about *this defect*.
 
-In-process JIT compilation is the second option, and it dissolves the defect
-rather than working around it.
+The work that every route needs, and that should be costed before choosing one:
+~90 exported C entry points with legal names and concrete signatures, plus a
+generated declarations file staged with the source. The natives cannot be linked
+as they stand -- each is
+`static TuriValue tg_native_export(TuriEnv *, TuriValue *, uint32_t, void *)`,
+the interpreter's ABI, file-local.
+
+The declaration half is confirmed cheap: `extern-c` takes a hyphenated name and
+mangles `-` to `_`, so `(extern-c godot-export [name :cstr ty :cstr dflt :float] :void)`
+emits `extern void godot_export(const char *, const char *, double);` and a
+plain typed call. The staged project therefore gets *real types*, not the
+interpreter path's `:int`-shaped dynamic dispatch.
 
 ### J2 -- ...but symbol resolution is NOT automatic, and this is the thing to verify first
 

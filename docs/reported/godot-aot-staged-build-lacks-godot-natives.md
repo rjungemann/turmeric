@@ -1,5 +1,67 @@
 # turmeric-godot AOT: the staged build has no `godot-*` natives, so it cannot compile any real script
 
+> **INVESTIGATED 2026-09-07. Fix direction 3 below is WRONG and should not be
+> acted on.** It claims the JIT makes the problem "disappear rather than being
+> solved" because the natives are already in the host's address space. They are
+> -- and it does not help, because the failure happens at **elaboration**, long
+> before any symbol is resolved.
+>
+> Measured, not reasoned. Same three-line program, one undeclared native:
+>
+> ```
+> tur build  -> error: unknown function or operator 'godot-export'
+> tur jit    -> error: unknown function or operator 'godot-export'   (identical)
+> tur --interpret -> warning TUR-W0040 ... will runtime-dispatch     (defers)
+> ```
+>
+> The reason is in [src/compiler/elab_call.c:3726](../../src/compiler/elab_call.c):
+> the runtime-dispatch fallback lives in a branch the source itself labels
+> `eval mode`. Compiled mode takes the other branch and hard-errors. And
+> `g_interpret_mode` is set by exactly `cmd_eval_h`, `cmd_eval_expr` and
+> `cmd_repl` -- **not** by `cmd_jit`. The JIT elaborates in compiled mode, so it
+> hits this identically. `src/main.c:4420` says as much in passing: "Same
+> emission posture as cmd_jit -- which means COMPILED-mode elaboration".
+>
+> **So declarations are required on every route.** In-process compilation
+> changes where symbols resolve at run time; it does not teach the elaborator a
+> name. This narrows the JIT's advantage here to "no external toolchain and no
+> link step" -- still real, but it is no longer an argument for skipping the
+> work below.
+>
+> ### The declaration route works, and the shape is confirmed
+>
+> `extern-c` accepts a hyphenated name and mangles `-` to `_`:
+>
+> ```turmeric
+> (extern-c godot-export [name :cstr ty :cstr dflt :float] :void)
+> ```
+>
+> emits exactly
+>
+> ```c
+> extern void godot_export(const char *, const char *, double);
+> ...
+> godot_export("vel-x", "float", 240.0);
+> ```
+>
+> A plain, typed C call -- which also means the staged project gets *real types*
+> rather than the interpreter path's `:int`-shaped dynamic dispatch.
+>
+> ### The cost that is not in "just declare them"
+>
+> The natives cannot be linked as they stand. Each is
+> `static TuriValue tg_native_export(TuriEnv *, TuriValue *, uint32_t, void *)`
+> ([src/turmeric_language.cpp:326](https://github.com/rjungemann/turmeric-godot/blob/main/src/turmeric_language.cpp))
+> -- the *interpreter's* ABI, file-local, and nothing compiled code can call. So
+> the real work is ~90 exported C entry points with legal names and concrete
+> signatures, each marshalling to the existing implementation. That is the same
+> work whichever route resolves the symbols, and it is what should be costed.
+>
+> Then, and only then, the narrower choice: link the staged library against the
+> extension, bind at `dlopen` (fix direction 2, and `AotImage` already carries a
+> `mangled` C-symbol field for the export table), or compile in-process and
+> resolve via `dlsym(RTLD_DEFAULT)`, which now works on Windows.
+
 **Summary:** The AOT path stages a script into a transient project and compiles
 it with standalone `tur`. But every `godot-*` name is a C++ native the
 GDExtension registers into the *interpreter* env at run time, and standalone
