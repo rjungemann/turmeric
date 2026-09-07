@@ -402,7 +402,9 @@ When `__auto_type` was added to the region erasure note, the stdlib prelude's
 own erasing ascription put **every** fixture on the cc path and the suite
 still printed `0 failed`. It surfaced only because the fallback then broke for
 ten fixtures on one platform for an unrelated reason. See
-[docs/reported/jit-suite-reports-pass-when-the-engine-is-disabled.md](../reported/jit-suite-reports-pass-when-the-engine-is-disabled.md).
+[jit-suite-reports-pass-when-the-engine-is-disabled](https://github.com/rjungemann/turmeric/blob/main/docs/reported/jit-suite-reports-pass-when-the-engine-is-disabled.md)
+(a blob URL rather than a relative one because `docs/reported/` is not
+rendered into the pack -- the Justfile's `docs` recipe spells out why).
 
 So when you add an emitter construct, check it: build with `-DTUR_JIT=ON` and
 run one fixture, and if `TUR-W0070` appears where it did not before, the
