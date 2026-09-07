@@ -817,6 +817,30 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
      * ("(type-app Box int)"), so `(Box int)` and `(Box float)` are distinct. */
     const char *key = type_name(r);
     if (!key || !*key) return (int64_t)any_box_tag_for_type(&r);
+    /* partial-application-widened-to-any-is-a-ptr: a FAT closure and a bare fn
+     * of the same signature are not interchangeable, so they must not share an
+     * id.  A bare fn payload is a code pointer the cast's call site invokes
+     * directly; a fat one is `{ thunk, env }` and has to be invoked through the
+     * thunk in slot 0.  `cast` emits the call from its TARGET type, and a target
+     * written `(-> int int)` is bare -- so a fat payload passing the check meant
+     * calling a closure box as though it were a code pointer.  That is not
+     * theoretical: `(defn mk [n : int] : any (fn [x : int] : int (+ x n)))` then
+     * `((cast (mk 1) (-> int int)) 41)` SEGFAULTED, where the interpreter
+     * returned 42.  Splitting the id turns it into the ordinary cast panic.
+     *
+     * The marker rides the KEY only, never `type_name` itself: that string is
+     * user-visible in a hundred diagnostics, and renaming boxed fns there would
+     * be churn with no reader benefit.  `shown` stays "fn" for both, so
+     * `type-of` is unchanged and the two back ends still agree on it. */
+    char *fn_key = NULL;
+    if (is_fn && r.as.fn.boxed) {
+        size_t n = strlen(key) + 8;
+        fn_key = (char *)malloc(n);
+        if (!fn_key) { fprintf(stderr, "tur: oom\n"); abort(); }
+        snprintf(fn_key, n, "closure%s", key);
+        key = fn_key;
+    }
+    #define ANY_ID_RET(v) do { free(fn_key); return (v); } while (0)
     /* What `type-of` reports: the source-level name.  A type application shows
      * its head ("Box"), since the parenthesised internal rendering is not what
      * a program printing a type name wants to see.  A function shows "fn" --
@@ -834,7 +858,7 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
      * Interning is therefore a dedupe of the rows, not the id assignment. */
     int64_t id = tur_any_id_hash(key);
     for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
-        if (strcmp(ctx->any_type_names[i], key) == 0) return id;
+        if (strcmp(ctx->any_type_names[i], key) == 0) ANY_ID_RET(id);
         /* Two distinct keys hashing alike would make one type answer as the
          * other -- exactly the confusion the hash replaces.  Astronomically
          * unlikely, cheap to rule out inside a TU, and a silent miscompile if
@@ -873,7 +897,8 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
     ctx->any_type_boxed[ctx->n_any_type_names] = emit_type_is_byvalue_adt(ctx, r);
     ctx->any_type_ids[ctx->n_any_type_names] = id;
     ctx->n_any_type_names++;
-    return id;
+    ANY_ID_RET(id);
+    #undef ANY_ID_RET
 }
 
 void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
@@ -9939,10 +9964,21 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* any-fn-tag-does-not-discriminate-signatures: a fn id discriminates
      * signatures but `shown` stays "fn" for both sides, so the equal-name branch
      * is reached for a wrong-signature cast as well.  "a different instantiation
-     * of fn" is not what happened; say what did. */
+     * of fn" is not what happened; say what did.
+     *
+     * partial-application-widened-to-any-is-a-ptr: and there are now TWO ways to
+     * land here, which the message has to cover, because the second one is the
+     * surprising one.  A closure that captures -- a lambda over a variable, or a
+     * partial application -- is a fat `{ thunk, env }` handle, and a target
+     * written `(-> int int)` is a bare code pointer; those get different ids on
+     * purpose, since calling one as the other is what used to segfault.  The
+     * runtime has only the two display names here, both "fn", so it cannot tell
+     * the reader WHICH of the two it was -- naming both beats naming the wrong
+     * one. */
     buf_puts(out, "        else if (strcmp(__hn, \"fn\") == 0)\n");
     buf_puts(out, "            snprintf(__m, sizeof(__m), \"cast: any holds a "
-                  "function of a different signature\");\n");
+                  "function this cast cannot accept -- a different signature, or "
+                  "a closure that captures where a plain function is required\");\n");
     buf_puts(out, "        else\n");
     buf_puts(out, "            snprintf(__m, sizeof(__m), \"cast: any holds a "
                   "different instantiation of %s\", __hn);\n");

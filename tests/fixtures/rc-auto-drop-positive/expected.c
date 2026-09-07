@@ -1390,7 +1390,7 @@ static void __tur_any_cast_check(int64_t have, int64_t want) {
         if (strcmp(__hn, __wn) != 0)
             snprintf(__m, sizeof(__m), "cast: any holds %s, not %s", __hn, __wn);
         else if (strcmp(__hn, "fn") == 0)
-            snprintf(__m, sizeof(__m), "cast: any holds a function of a different signature");
+            snprintf(__m, sizeof(__m), "cast: any holds a function this cast cannot accept -- a different signature, or a closure that captures where a plain function is required");
         else
             snprintf(__m, sizeof(__m), "cast: any holds a different instantiation of %s", __hn);
         tur_panic(__m);

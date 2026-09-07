@@ -1,0 +1,62 @@
+;; partial-application-widened-to-any-is-a-ptr: a closure that CAPTURES is not
+;; interchangeable with a bare function, and an `any` must not let one be called
+;; as the other.
+;;
+;; Two shapes reach this, and the second is what the report was filed about:
+;;
+;;   (fn [x : int] : int (+ x n))   -- a lambda over an outer binding
+;;   (add 1)                        -- a partial application
+;;
+;; Both are fat `{ thunk, env }` handles.  A cast target written `(-> int int)`
+;; is a bare code pointer, and `cast` emits its call from the TARGET type -- so
+;; a fat payload passing the tag check meant invoking a closure box as though it
+;; were code.  It SEGFAULTED:
+;;
+;;   (defn mk [n : int] : any (fn [x : int] : int (+ x n)))
+;;   ((cast (mk 1) (-> int int)) 41)      => Segmentation fault
+;;
+;; while the interpreter returned 42.  That was pre-existing and had nothing to
+;; do with currying; it surfaced while measuring this report.  A fat closure now
+;; interns a DIFFERENT `any` id from a bare fn of the same signature, so `is?`
+;; answers false and `cast` panics -- an ordinary diagnosed failure rather than
+;; undefined behaviour.
+;;
+;; The partial application also stopped reporting as a POINTER.  Its value type
+;; was `ptr<void>`, so `type-of` said "ptr" compiled and "fn" interpreted, and no
+;; `is?` target could match it at all.  It is a real `(fn [int] : int)` now, and
+;; both back ends say "fn".
+;;
+;; WHAT IS STILL MISSING, and is the reason `is?` answers 0 below rather than 1:
+;; a capturing closure cannot yet be recovered from an `any` and called.  The
+;; interpreter can (it has no fat/bare split), so this is one of the few places
+;; the two back ends genuinely differ in CAPABILITY rather than in an answer --
+;; interpreted, `(is? (mk 1) (-> int int))` is 1 and the cast returns 42.  That
+;; is why the `is?` rows below are compiled-only, and why this fixture carries
+;; requires.compiled.  The fix is to fatten every fn payload at the widen; see
+;; docs/reported/any-cannot-recover-a-capturing-closure.md.
+;;
+;; type-of is asserted here AND in the both-back-ends fixture
+;; any-fn-signature-discriminates, so the parity half is not lost by the marker.
+
+(defn add [x : int y : int] : int (+ x y))
+
+(defn capturing [n : int] : any (fn [x : int] : int (+ x n)))
+(defn curried   [] : any (add 1))
+(defn plain     [] : any (fn [x : int] : int (+ x 1)))
+
+(defn main [] : int
+  ;; A partial application is a function, not a pointer.
+  (println (type-of (curried)))
+  (println (type-of (capturing 1)))
+  ;; Neither is castable to a bare `(-> int int)`: that call would run a closure
+  ;; box as code.
+  (println (if (is? (curried) (-> int int)) 1 0))
+  (println (if (is? (capturing 1) (-> int int)) 1 0))
+  ;; A non-capturing lambda IS a bare code pointer, so it still round-trips --
+  ;; the capability any-fn-tag-does-not-discriminate-signatures kept.
+  (println (if (is? (plain) (-> int int)) 1 0))
+  (println ((cast (plain) (-> int int)) 41))
+  ;; And ordinary currying, untouched by any of this, still applies.
+  (let [add1 (add 1)]
+    (println (add1 41)))
+  0)

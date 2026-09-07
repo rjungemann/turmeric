@@ -1,10 +1,85 @@
 ---
 title: A partially-applied function widened to `any` has static type `ptr<void>`, so `type-of` says "ptr" and no `is?` / `cast` can recover it
-category: Reported
+category: Archive
 description: `(defn mkp [] : any (add 1))` on a two-parameter `add` widens a value whose compiled type is TY_PTR_VOID, not TY_FN. `type-of` answers "ptr" compiled and "fn" interpreted, and `(is? (mkp) (-> int int))` is false on both paths -- there is no target spelling that matches, so a curried closure cannot be narrowed back out of an `any` at all.
 ---
 
 # A curried closure widens as a `ptr`, not as a function
+
+**RESOLVED 2026-09-07** via fix direction 1, with direction 3 folded in and one
+piece deliberately left open (filed, see below).
+
+`elab_partial_apply` typed both the `EX_CLOSURE` it builds and the `EX_LET`
+wrapping it as `TYPE_PTR_VOID`. They are now a real
+`(fn [remaining...] : result)` with the `boxed` bit set -- it is a closure value,
+and the type system already had a spelling for that. `type-of` on a partial
+application answers **"fn" on both back ends** (it said "ptr" compiled and "fn"
+interpreted), and an `is?` target can name it at all, which nothing could before.
+
+Direction 2 ("at least stop diverging, make the interpreter say ptr too") was
+not taken -- the report called it strictly worse, and it was.
+
+## Two things the measurement changed
+
+**The blast radius was one fixture, not a sprawl.** The report warned this "may
+not be a local change". It nearly is: `struct-curry-ctor` broke, because
+`type_fn(rem_kinds, ...)` carries only TypeKinds and the curried constructor's
+result lost its nominal struct type, so `(.name ((Person "Ada") 36))` stopped
+resolving. Copying `result_full_type` and the remaining `arg_full_types` from
+the thunk type -- which already computes both, for exactly this reason -- fixed
+it. Nothing else in 2849 fixtures moved.
+
+**A pre-existing segfault surfaced, unrelated to currying.** A *capturing*
+lambda widened to `any` and cast back had always been undefined behaviour:
+
+```turmeric
+(defn mk [n : int] : any (fn [x : int] : int (+ x n)))
+((cast (mk 1) (-> int int)) 41)      ;; => Segmentation fault; interp said 42
+```
+
+A bare fn payload is a code pointer, a capturing one is a fat `{ thunk, env }`
+handle, and `cast` emits its call from the TARGET type -- which, written
+`(-> int int)`, is bare. So the fat payload passed the tag check and the call ran
+a closure box as code. Giving the curried value a fn type would have made that
+*easier* to reach, so it is fixed here rather than left: a boxed fn now interns a
+different `any` id from a bare fn of the same signature (the marker rides the id
+key only, never `type_name`, which is user-visible in a hundred diagnostics).
+The segfault is an ordinary cast panic now, and the message names both causes
+because the runtime has only the two display names -- both "fn" -- and cannot
+tell which it was.
+
+This also corrects an overclaim in
+[any-fn-tag-does-not-discriminate-signatures](any-fn-tag-does-not-discriminate-signatures.md):
+`(cast x (-> int int))` "works and is the only way to get a callable back out of
+an `any`" was true only for a **non-capturing** function.
+
+## What is left, and why it is a separate change
+
+`is?` on a capturing closure against `(-> int int)` is now `0` compiled and `1`
+interpreted, and the cast panics where the interpreter returns 42. That is a
+capability divergence rather than a wrong answer -- the interpreter has no
+fat/bare split to get wrong -- but it means no capturing closure round-trips
+through `any` on the compiled path.
+
+The fix is to make the representation uniform (fatten every fn payload at the
+widen, via the existing `EX_FN_TO_FAT` shim) rather than discriminate between
+two of them. It is not folded in here because it mallocs a fat box per widen and
+that box needs an owner: a change to the representation of every `any`-boxed
+function, deserving its own leak analysis under LeakSanitizer rather than riding
+along on a report about currying. Filed as
+[any-cannot-recover-a-capturing-closure](../reported/any-cannot-recover-a-capturing-closure.md).
+
+## Fixtures
+
+- `tests/fixtures/any-closure-capture-not-a-bare-fn` -- a partial application
+  and a capturing lambda both report "fn"; neither is castable to a bare
+  `(-> int int)`; a non-capturing lambda still round-trips; ordinary currying
+  still applies. `requires.compiled`, because the `is?` rows are exactly where
+  the back ends differ -- the parity half is asserted on both paths by
+  `any-fn-signature-discriminates`.
+- `any-fn-wrong-signature-cast-panics` -- updated for the new message.
+
+---
 
 **Severity: medium.** Two things at once: a compiled/interpreted divergence in
 `type-of` (the same family as

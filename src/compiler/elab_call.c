@@ -4159,8 +4159,23 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     fn_def_expr->as.fn_def_.fn = pap_fd;
     elab_register_file_def(e, fn_def_expr);
 
+    /* partial-application-widened-to-any-is-a-ptr (PROBE): the curried value's
+     * user-visible type is a function of the REMAINING parameters, not an
+     * untyped pointer. */
+    Type pap_value_type = type_fn(rem_kinds, n_remaining, result_kind);
+    pap_value_type.as.fn.boxed = true;
+    pap_value_type.as.fn.effect_row = fn_type.as.fn.effect_row;
+    pap_value_type.as.fn.result_full_type = thunk_type.as.fn.result_full_type;
+    if (thunk_type.as.fn.arg_full_types) {
+        Type **pv_full = (Type **)arena_alloc(e->arena,
+                             (n_remaining ? n_remaining : 1) * sizeof(Type *));
+        for (uint32_t i = 0; i < n_remaining; i++)
+            pv_full[i] = thunk_type.as.fn.arg_full_types[1 + i];
+        pap_value_type.as.fn.arg_full_types = pv_full;
+    }
+
     /* Build EX_CLOSURE */
-    Expr *closure_expr = expr_new(e->arena, EX_CLOSURE, TYPE_PTR_VOID, call->span);
+    Expr *closure_expr = expr_new(e->arena, EX_CLOSURE, pap_value_type, call->span);
     closure_expr->as.closure_.closure = pap_closure;
 
     if (n_provided == 0) {
@@ -4201,7 +4216,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     }
     #undef PAP_SLOT_FULL
 
-    Expr *let_expr = expr_new(e->arena, EX_LET, TYPE_PTR_VOID, call->span);
+    Expr *let_expr = expr_new(e->arena, EX_LET, pap_value_type, call->span);
     let_expr->as.let_.bindings = let_bs;
     let_expr->as.let_.n = n_provided;
     let_expr->as.let_.body = closure_expr;
