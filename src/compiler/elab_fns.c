@@ -8128,8 +8128,31 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * nil-TYPED tail (a `println` call) is deliberately not checked; see the
          * predicate's comment for the measurement behind that line. */
         bool check_nil_body = return_annotated && body_tail_is_nil_literal(body);
-        ReturnConflict rc = return_position_conflict(
-            return_adt_def, return_kind, body->type, ret_cls, check_nil_body);
+        /* inferred-return-defaults-inconsistently: an UNANNOTATED return has
+         * nothing to conflict with.
+         *
+         * `return_kind` starts TY_NIL and the inference that adopts the body's
+         * type runs further down (the "Infer return type from body" block after
+         * the scope pop), so this check used to compare the body against a
+         * default the programmer never wrote.  Whether that mattered depended on
+         * whether the body's type could ride the int64 carrier: an `int` or
+         * `cstr` body bridged and nothing fired, while a `float` body hit the
+         * register-class arm and reported `function 'pi' declares return type
+         * 'nil'` for a defn that declares nothing.  Three unannotated returns,
+         * three behaviours, and the failing one naming a declaration that does
+         * not exist.
+         *
+         * The pair (unannotated, `: nil`/`: void`) is indistinguishable by KIND
+         * -- which is what the check_nil_body comment above is about --
+         * and `return_annotated` is exactly the bit that separates them.  The
+         * `return_kind == TY_NIL` conjunct keeps this narrow: the annotation
+         * paths that reach `done_return_annotation` by goto set a real kind
+         * without setting `return_annotated`, and those must still be checked. */
+        bool return_unannotated = (!return_annotated && return_kind == TY_NIL);
+        ReturnConflict rc = return_unannotated
+            ? RET_CONFLICT_NONE
+            : return_position_conflict(return_adt_def, return_kind, body->type,
+                                       ret_cls, check_nil_body);
         if (rc != RET_CONFLICT_NONE) {
             const char *want = return_adt_def ? return_adt_def->name
                              : typekind_to_string(return_kind);

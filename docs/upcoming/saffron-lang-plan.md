@@ -148,7 +148,7 @@ Every row below was reproduced against `v0.44.2`. Transcript in the appendix.
 | # | Saffron needs | Today | Diagnostic |
 |---|---|---|---|
 | G1 | unannotated param is dynamic | defaults to `int`; `(twice 7.1)` on `(defn twice [x] (* x 2))` is rejected | TUR-E0001 `expected int, got float` |
-| G2 | unannotated return is dynamic | inconsistent: `int` body OK, `cstr` body OK, **`7.1` body is a hard error** claiming the fn "declares return type 'nil'" | TUR-E0707 |
+| ~~G2~~ | unannotated return is dynamic | **FIXED 2026-09-07** -- was inconsistent (`int`/`cstr` bodies OK, `7.1` a hard error claiming the fn "declares return type 'nil'"). Now inferred for every body type. Still `int`-shaped rather than dynamic, which is S2's job, but no longer wrong | -- |
 | G3 | `(+ x 1)` where `x : any` | rejected | TUR-E0006 `operator lookup failed for '+', first arg type any` |
 | G4 | `(println x)` where `x : any` | rejected -- the union guide's own headline example does not compile | TUR-E0006 |
 | G5 | `(f x)` where `f : any` | rejected | `'f' is not a function or continuation` |
@@ -165,10 +165,11 @@ core engineering work of this plan, and it is the same work on both back ends
 -- except that on the interpreter the *implementation* already exists
 (Section 2.3) and only the elaborator needs to stop rejecting the call.
 
-G2 and G8 are defects independent of Saffron and are filed separately:
-`docs/reported/inferred-return-defaults-inconsistently.md`,
-`docs/reported/type-of-on-boxed-closure-diverges.md`. G4's documentation half
-is `docs/reported/any-type-guide-examples-do-not-compile.md`.
+G2 and G8 are defects independent of Saffron and were filed separately. **G2 is
+fixed** ([inferred-return-defaults-inconsistently](../archive/inferred-return-defaults-inconsistently.md)
+-- an ordering bug, not the missing inference the report guessed); G8 is
+`docs/reported/type-of-on-boxed-closure-diverges.md`, and G4's documentation
+half is `docs/reported/any-type-guide-examples-do-not-compile.md`.
 
 Two further defects were found by the follow-up research into S0 and D8, and
 both are prerequisites rather than side notes -- `any-type-ids-are-per-tu.md`
@@ -252,7 +253,9 @@ Instead: the *signature* is `any` (that is what makes the call site dynamic and
 the language usable), but inside a body, a binding whose value is provably one
 concrete type stays that type. `(let [x 7.1] (* x 2.0))` should remain a
 `double` multiply in a Saffron file, exactly as it is today. The machinery for
-this already exists -- it is what makes G2's `cstr` case work.
+this already exists -- it is what makes an unannotated `defn` return infer at
+all (G2), and fixing G2 confirmed the inference block is already in `elab_defn`
+rather than something Saffron would have to add.
 
 This gives Saffron a clean optimisation ladder that does not need to be built
 up front:
@@ -666,7 +669,7 @@ cannot be built until they are.**
 | ~~P2b~~ | ~~typeclass-dispatch-on-any-receiver-emits-uncompilable-c~~ | **DONE 2026-09-07.** `@TypeName` on an `any` receiver now implies the checked unbox, so the witness is a complete one-token answer to an erased receiver; and a method call on an un-narrowed `any` is a diagnostic naming all three routes instead of uncompilable C. [Archived](../archive/typeclass-dispatch-on-any-receiver-emits-uncompilable-c.md) |
 | ~~P2c~~ | ~~any-narrowing-broken-for-parametric-receivers~~ | **DONE 2026-09-07.** Was: `is?` on an `any`-held `Option` silently false, `cast` panicking `holds Option, not Option`. `is?`/`cast` now share one target resolver, take an applied `(Option float)`, and reject a bare constructor with a diagnostic. The type-case idiom reaches the HKT stack on both paths. [Archived](../archive/any-narrowing-broken-for-parametric-receivers.md) |
 | P2d | [generic-fn-in-any-return-position-emits-uncompilable-c](../reported/generic-fn-in-any-return-position-emits-uncompilable-c.md) | S2 -- a generic defn in an `: any` position is never monomorphised |
-| P3 | [inferred-return-defaults-inconsistently](../reported/inferred-return-defaults-inconsistently.md) | S2 |
+| ~~P3~~ | ~~inferred-return-defaults-inconsistently~~ | **DONE 2026-09-07.** Was an ordering bug, not a missing inference: the conflict check ran before the block that adopts the body's type, so it compared against the un-inferred `TY_NIL`. Unannotated returns are now inferred for every body type, float included. [Archived](../archive/inferred-return-defaults-inconsistently.md) |
 | P4 | [type-of-on-boxed-closure-diverges](../reported/type-of-on-boxed-closure-diverges.md) | S4 |
 | P5 | [any-type-guide-examples-do-not-compile](../reported/any-type-guide-examples-do-not-compile.md) | docs only |
 

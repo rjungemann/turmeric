@@ -1,0 +1,29 @@
+;; inferred-return-defaults-inconsistently: an unannotated `defn` return is
+;; inferred from the body, for every body type.
+;;
+;; The inference always existed (the "Infer return type from body" block in
+;; elab_defn) -- it just ran AFTER the return-position conflict check, so that
+;; check compared the body against `return_kind`'s TY_NIL default.  Whether it
+;; mattered depended on whether the body could ride the int64 carrier: `int`
+;; and `cstr` bridged silently, and `float` hit the register-class arm and was
+;; rejected as "function 'pi' declares return type 'nil'" -- naming a
+;; declaration the programmer never wrote.
+;;
+;; float is the case that was broken, and 7.1 rather than 7.0 is the point: a
+;; float return lives in a different register class (xmm) from the carrier, so
+;; an integral literal could not tell a real `double` signature from a bridge
+;; that happens to survive.  `tri` chains through `pi` so the inferred type has
+;; to be right at the CALL site too, not just in the definition.
+(defn ret-int   [] 42)
+(defn ret-cstr  [] "hi")
+(defn ret-bool  [] true)
+(defn pi        [] 7.1)
+(defn tri       [] (* (pi) 2.0))
+
+(defn main [] : int
+  (println (ret-int))
+  (println (ret-cstr))
+  (println (if (ret-bool) 1 0))
+  (println (pi))
+  (println (tri))
+  0)

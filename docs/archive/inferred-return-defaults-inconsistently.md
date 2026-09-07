@@ -1,10 +1,73 @@
 ---
 title: An unannotated `defn` return is TY_NIL, not inferred -- so a float body errors, naming a `: nil` the programmer never wrote
-category: Reported
-description: elab_defn starts return_kind at TY_NIL and never adopts the body's type when the return was not annotated (elab_fn does, at elab_fns.c:10036). An int or cstr body bridges through the int64 carrier and appears to work; a float body hits the register-class check and reports "declares return type 'nil'" for a defn with no return annotation at all.
+category: Archive
+description: RESOLVED 2026-09-07. Corrected diagnosis: elab_defn DOES infer the body's type (elab_fns.c ~8442) -- that block just runs AFTER the return-position conflict check, so the check compared the body against the un-inferred TY_NIL default. The fix skips the check when the return is unannotated, rather than porting an inference step that already existed. Original text: elab_defn starts return_kind at TY_NIL and never adopts the body's type when the return was not annotated (elab_fn does, at elab_fns.c:10036). An int or cstr body bridges through the int64 carrier and appears to work; a float body hits the register-class check and reports "declares return type 'nil'" for a defn with no return annotation at all.
 ---
 
 # An unannotated `defn` return is `TY_NIL`, not inferred
+
+**RESOLVED 2026-09-07 -- and the filed diagnosis was wrong in a way worth
+recording.**
+
+The report said `elab_defn` "never adopts the body's type" and proposed porting
+`elab_fn`'s inference step across. It does adopt it: the block is right there
+(`elab_fns.c`, "Infer return type from body if not specified or polymorphic"),
+which is why `int64_t n()` and `const char *greet()` were already the emitted
+signatures. **The bug was pure ordering** -- that block runs after the scope
+pop, while the return-position conflict check runs well before it, so the check
+compared the body's type against a `TY_NIL` default the inference had not
+replaced yet.
+
+So the fix is not fix direction 1. **The conflict check is skipped when the
+return is unannotated**, because an unannotated return has nothing to conflict
+*with*: the inference below will adopt whatever the body produced. Concretely
+`(!return_annotated && return_kind == TY_NIL)`.
+
+Both halves of that conjunct earn their place. `return_annotated` is what
+separates the pair the surrounding code already flags as indistinguishable by
+kind -- unannotated versus a written `: nil`/`: void`, which both leave
+`return_kind == TY_NIL` and of which only the second is a real declaration.
+And `return_kind == TY_NIL` keeps it narrow: the annotation paths that reach
+`done_return_annotation` by `goto` set a real kind without setting
+`return_annotated`, and those must still be checked.
+
+This also delivers fix direction 3 by making it unnecessary -- the diagnostic
+can no longer name a `nil` the programmer did not write, because it no longer
+fires in that case at all.
+
+**Verified across the matrix**, since the risk here is silently dropping a
+check rather than fixing one:
+
+| case | before | after |
+| --- | --- | --- |
+| unannotated, `42` / `"hi"` / `true` body | worked (carrier bridge) | works |
+| unannotated, `7.1` body | **TUR-E0707** | **works** -- emits `static double pi()`, and a caller chaining `(* (pi) 2.0)` gets 14.2 |
+| `: nil` / `: void`, float body | error | **still errors** |
+| `: int`, float body | error | still errors |
+| `: float`, cstr body | error | still errors |
+| `: cstr`, int body | error | still errors |
+| `: float`, float body | worked | works |
+
+`7.1` rather than `7.0` throughout: a float return lives in a different
+register class from the carrier, so an integral literal cannot distinguish a
+real `double` signature from a bridge that happens to survive.
+
+**Fixtures:** `defn-unannotated-return-inferred` (all four body types, plus a
+call-site chain so the inferred type has to be right for callers too) and
+`errors/return-type-declared-nil-float-body`, which pins the exact
+discrimination the fix turns on -- if `return_annotated` ever stops being set,
+that fixture goes red instead of the diagnostic vanishing silently. The
+existing `errors/return-type-register-class-*` and
+`errors/return-type-pointer-scalar-*` fixtures cover the annotated mismatches
+and were unaffected.
+
+**Suites at the fix:** `run.sh` 2837/0, `run-turi.sh` 1931/0,
+`check-examples.sh` 38/0, `run-stdlib-checks.sh` 35/0. No snapshot churn --
+elaboration, not codegen.
+
+---
+
+## The original report
 
 **Severity: medium.** Three unannotated `defn` returns, three different
 behaviours, and the failing one blames a declaration the programmer did not
