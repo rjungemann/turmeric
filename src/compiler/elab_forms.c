@@ -43,7 +43,7 @@ static const AdtDef *elab_byval_drop_adt(Type t) {
  * (elab_structs.c) has already applied the `:copy` and `:heap` exclusions and
  * the direct-self-reference test -- a field pointing `drop_inner_def` at its own
  * def is the whole condition, so it is not restated here. */
-static const AdtDef *elab_byval_recspine_adt(Type t) {
+static const AdtDef *elab_byval_localowned_adt(Type t) {
     const AdtDef *def = NULL;
     if (t.kind == TY_ADT)      def = t.as.adt_.def;
     else if (t.kind == TY_APP) def = type_adt_app_def(&t);
@@ -55,7 +55,9 @@ static const AdtDef *elab_byval_recspine_adt(Type t) {
     if (def->n_type_params != 0) return NULL;
     for (uint32_t ci = 0; ci < def->n_ctors; ci++)
         for (uint32_t fi = 0; fi < def->ctors[ci]->n_fields; fi++)
-            if (def->ctors[ci]->fields[fi].drop_inner_def == def) return def;
+            if (def->ctors[ci]->fields[fi].drop_inner_def == def ||
+                def->ctors[ci]->fields[fi].kind == TY_ANY)
+                return def;
     return NULL;
 }
 
@@ -1884,12 +1886,12 @@ Expr *elab_let(Elab *e, const Form *call) {
      * initialisation, or explicitly consumed has handed ownership on, and the
      * new owner's scope frees the spine instead. */
     for (uint32_t k = 0; k < n_binds; k++) {
-        const AdtDef *ad = elab_byval_recspine_adt(binds[k].binding->type);
+        const AdtDef *ad = elab_byval_localowned_adt(binds[k].binding->type);
         if (!ad) continue;
         if (binding_moved_during_init[k] || binds[k].binding->is_moved ||
             is_binding_consumed(body, binds[k].binding))
             continue;
-        binds[k].binding->drops_rec_spine = true;
+        binds[k].binding->drops_local_owned = true;
     }
 
     if (has_byval_drop_bindings && body && body->kind == EX_DO) {

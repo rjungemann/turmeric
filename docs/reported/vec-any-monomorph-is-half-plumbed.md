@@ -1,15 +1,15 @@
 ---
 title: A `(Vec any)` builds and runs, but its element type does not flow back out and its `vec-new` spec dedups against a sibling
 category: Reported
-description: With the repr-decision ICE fixed, a (Vec any) can be constructed, pushed into and freed correctly -- but `vec-get` reports its result as `int` rather than `any`, so an element cannot be read back with its tag; and a program containing both a (Vec any) and another vec-of emits one -Wincompatible-pointer-types warning from a deduped vec-new spec.
+description: With the repr-decision ICE fixed, a (Vec any) can be constructed, pushed into and freed correctly -- but `vec-get` reports its result as `int` rather than `any`, so an element cannot be read back with its tag; and a `vec-of` producing a (Vec any) emits -Wincompatible-pointer-types, which run.sh's emitted-C ratchet fails.
 ---
 
 # `(Vec any)` is buildable now, and half-plumbed
 
 **Severity: medium.** Neither half is a miscompile -- the values stored are
-correct, the element boxes are freed, and the warning is over two structurally
-identical types -- but the first half makes a `(Vec any)` write-only, which is
-most of the point of having one.
+correct and the element boxes are freed -- but the first makes a `(Vec any)`
+write-only, which is most of the point of having one, and the second means only
+one of the three routes to building one is shippable.
 
 Residue of
 [vec-of-any-repr-decision-ice](../archive/vec-of-any-repr-decision-ice.md),
@@ -54,46 +54,67 @@ should be fixed there rather than as a local patch, since the same question --
 "how does an element type reach a read through a container" -- governs
 `#map{...}`, `#set{...}` and cons lists too.
 
-## Half 2 -- a deduped `vec-new` spec, and one cosmetic warning
+## Half 2 -- a `vec-of` producing a `(Vec any)` does not clear the emitted-C ratchet
 
-A program containing a `(Vec any)` AND any other `vec-of` emits:
+**Corrected twice. This is not cosmetic, and `tests/run.sh` says so.**
+
+A `vec-of` that produces a `(Vec any)` emits:
 
 ```
 warning: returning 'tur_adt_Vec__int *' from a function with incompatible
          return type 'tur_adt_Vec__any *' [-Wincompatible-pointer-types]
 ```
 
-Either `vec-of` alone is warning-free; so are two `vec-of`s at different
-CONCRETE element types (`(vec-of "a")` + `(vec-of 7.1)`). It takes an `any`
-beside another element type.
+`run.sh` greps every fixture's build stderr for exactly
+`-Wint-conversion` / `-Wincompatible-pointer-types` and FAILs on a hit. That
+gate was sweep-verified at ZERO across 2563 fixtures before it landed
+(`docs/archive/emitted-c-pointer-integer-warnings-unwatched.md`), so a hit is a
+regression signal, not noise -- and "the two monomorphs have identical layout,
+so the pointer is the same pointer" was the wrong thing to conclude from. It is
+a hard error under `-Werror`.
 
-The cause is inside `vec-empty-like__`, whose body is `(:: (vec-new) (Vec A))`.
-Its own clones stay distinct (their argument types differ, `tur_tagged_t` vs
-`int64_t`), but the nested `vec-new` -- zero arguments, result `(Vec A)` --
-resolves to the `int` instantiation for both. The dedup family is the one
-`emit_abi_intern_spec`'s `match_bindings` flag was added for; whether `vec-new`
-should be asking for it, or whether the `heap_inline_c_producer` block above it
-is flattening the result type before the comparison, is not established here.
+I got this wrong in two stages, both by not asking the suite:
 
-**Measured cosmetic, not asserted.** The two monomorphs have identical layout:
+1. First recorded as "cosmetic" on a layout comparison alone.
+2. Then narrowed to "only when a `(Vec any)` sits beside another `vec-of`",
+   from manual `tur run` probes at `-O1`. `run.sh` builds at `-O2` and fails a
+   SINGLE `vec-of` at `any`.
+
+So only ONE route to a `(Vec any)` is currently shippable -- an explicit
+`(:: (vec-new) (Vec any))`, which `tests/fixtures/vec-of-any-ascribed` pins.
+The `vec-of` macro route builds and runs correctly but cannot be a fixture.
+
+### Cause, as far as it is established
+
+Inside `vec-empty-like__`'s `any` clone, the zero-argument `(vec-new)` call
+resolves to `vec_new__spec__tur_adt_Vec__int__` even though
+`vec_new__spec__tur_adt_Vec__any__` is emitted and is called correctly from
+elsewhere in the same program. A probe on `emit_abi_intern_spec` confirms both
+specs are CREATED (`SPEC-NEW vec-new result=(type-app Vec int)` and
+`... (type-app Vec any)`), so the intern is not the problem -- the call site is.
+
+`emit_call_name` (emit_core.c ~3482) short-circuits a zero-argument call
+BEFORE the spec-matching loop:
 
 ```c
-typedef struct tur_adt_Vec__any { void *data; int64_t len; int64_t cap; } ...;
-typedef struct tur_adt_Vec__int { void *data; int64_t len; int64_t cap; } ...;
+if (call->kind == EX_CALL &&
+    (call->as.call_.n_args == 0 || (b && b->is_construct_template))) {
+    ...
+    return raw_name_for_binding(b);
+}
 ```
 
-so the pointer is the same pointer under two names. The fixture that provokes
-it (`tests/fixtures/vec-of-any-builds`) prints correct results and is
-leak-clean. It is still a warning in a user's build, which this project treats
-as something to close rather than tolerate.
+The comment above it says such a call is meant to be resolved by an
+"exact-match path above ... recorded per-Expr*". Why that recording picks the
+`int` clone inside the `any` clone's body is the next thing to establish; a
+probe on that recording, not another read of the two call sites, is the step.
 
 ## Fix directions
 
 1. **Half 1, in S6**: ground a container read's element tyvar from the
    receiver's monomorph. Worth doing once for every container rather than for
    `Vec` alone.
-2. **Half 2**: determine which of the two candidates above collapses the
-   `vec-new` spec, then either request binding-matching for it or stop the
-   result-type flattening from erasing `(Vec any)` to `(Vec int)`. A probe on
-   `emit_abi_intern_spec`'s dedup loop naming both candidate specs is the next
-   step; reading the two call sites did not settle it.
+2. **Half 2**: find why the per-Expr* recording that resolves a zero-argument
+   call names the `int` clone inside the `any` clone's body. The intern side is
+   ruled out (both specs exist); a probe on that recording is the step, and
+   reading the call sites did not settle it -- twice.

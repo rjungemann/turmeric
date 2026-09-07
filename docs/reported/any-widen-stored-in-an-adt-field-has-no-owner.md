@@ -1,5 +1,27 @@
 # An `any` widen stored into an ADT field has no owner
 
+**PARTIALLY FIXED 2026-09-07.** An `:any` field is now an OWNING field: it sets
+`needs_drop_glue`, the by-value drop glue calls `__tur_any_drop` on it, and a
+non-escaping local releases it at scope exit through the same
+`drop_localowned_<T>(&x)` path the recursive-spine fix introduced (generalised
+from `drop_recspine_` to cover both field kinds -- one "free what this stack
+local owns, do not free the local" function per type, rather than one per field
+kind). `tests/fixtures/any-field-drop` pins it, including the case that must NOT
+free: an `any` field holding an int, where the registry row says `boxed = 0`.
+
+`:copy` and `:heap` owners are excluded, for the reason the recursive-field rule
+records: drop glue makes a type move-only, and that move discipline is the
+single-owner guarantee the free depends on.
+
+**The residue is the same one, and it dominates.** A value handed to a callee is
+MOVED, and nothing discharges ownership there -- so `saffron-higher-order`, whose
+lists are passed to `lmap`/`lfilter`/`each`, went from 840 bytes in 21
+allocations to 800 in 20. One box. The fix closes the non-escaping-local case
+and that fixture has almost none. See
+[byvalue-recursive-adt-boxes-are-never-freed](byvalue-recursive-adt-boxes-are-never-freed.md)
+"Residue 1" for why parameter-side discharge is harder than it looks (a
+pattern-match binder aliases the parent, so a callee-side free double-frees).
+
 **Severity: medium.** One leaked box per value widened into an `any` FIELD of a
 data structure -- so a container with `any` elements leaks once per element,
 unbounded in a loop that rebuilds it.

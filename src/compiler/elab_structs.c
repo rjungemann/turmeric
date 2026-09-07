@@ -1621,6 +1621,29 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
     if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
         def->needs_drop_glue = true;
     }
+    /* any-widen-stored-in-an-adt-field-has-no-owner: an `:any` field is OWNING.
+     *
+     * `any-struct-box-leak-per-widen` gave every `any` payload box an owner
+     * across five passes, and every one of those owners is a SCOPE -- an
+     * argument, a local, a temporary, a narrowed binding.  A box stored into a
+     * FIELD outlives every scope they can attach a drop to, correctly so, and
+     * so it had none: one leaked malloc per value widened into the field, which
+     * a container with `any` elements pays once per element.
+     *
+     * The drop is `__tur_any_drop`, not a statically-named glue: the payload's
+     * type is whatever the tag says at run time, and the registry row already
+     * carries the `boxed` flag that says whether it was heap-boxed at all.  So
+     * an `any` field holding an int frees nothing and one holding a widened
+     * aggregate frees the box, decided by the same row the widen wrote.
+     *
+     * `:copy` and `:heap` are excluded for the reasons the recursive-field rule
+     * beside this one records: drop glue makes a type move-only, and that move
+     * discipline is the single-owner guarantee the free depends on.  Under
+     * `:copy` two values can share the box and a per-owner free would free it
+     * twice. */
+    if (fkind == TY_ANY && !def->is_copy && !def->is_heap) {
+        def->needs_drop_glue = true;
+    }
     return true;
 }
 

@@ -7603,6 +7603,20 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
      * opaque int64 in this type's layout, so its glue may be emitted AFTER ours
      * (emission order is not guaranteed inner-first for a carrier field).  A
      * redundant forward decl of an already-defined static is valid C. */
+    /* any-widen-stored-in-an-adt-field-has-no-owner: `__tur_any_drop` is a
+     * `static` in the runtime preamble, and this glue is emitted BEFORE it --
+     * so without a forward declaration the call is an implicit one, and the
+     * definition that follows is then "static declaration follows non-static".
+     * Same reason and same shape as the nested-glue forward decls below. */
+    for (uint32_t ci = 0; ci < (tagged ? def->n_ctors : 1u); ci++) {
+        bool any_field = false;
+        for (uint32_t fi = 0; fi < def->ctors[ci]->n_fields; fi++)
+            if (def->ctors[ci]->fields[fi].kind == TY_ANY) { any_field = true; break; }
+        if (any_field) {
+            buf_puts(out, "static void __tur_any_drop(tur_tagged_t);\n");
+            break;
+        }
+    }
     for (uint32_t ci = 0; ci < (tagged ? def->n_ctors : 1u); ci++) {
     const CtorDef *fdc = def->ctors[ci];
     for (uint32_t fi = 0; fi < fdc->n_fields; fi++) {
@@ -7649,6 +7663,15 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
                        "    if (s->%s) drop_glue_tur_adt_%s((void *)(intptr_t)s->%s);\n",
                        mp, imn, mp);
             free(imn);
+        } else if (k == TY_ANY) {
+            /* any-widen-stored-in-an-adt-field-has-no-owner: the field holds a
+             * two-word box whose payload may or may not be heap-allocated --
+             * only the runtime registry row for its tag knows, and
+             * __tur_any_drop is the reader of that row.  So the drop is one
+             * call and needs no type knowledge here, which is exactly why an
+             * `any` field could not reuse the statically-named glue the
+             * recursive/nested-aggregate arms above call. */
+            buf_printf(out, "    __tur_any_drop(s->%s);\n", mp);
         } else if (k == TY_FN && ctor->fields[fi].full_type &&
                    ctor->fields[fi].full_type->kind == TY_FN &&
                    ctor->fields[fi].full_type->as.fn.boxed) {
@@ -7724,18 +7747,19 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
      * recursive ADT is a sum by construction -- it needs a base case -- so the
      * single-variant assumption would have excluded every type this exists for. */
     {
-        bool has_rec_field = false;
-        for (uint32_t ci = 0; ci < def->n_ctors && !has_rec_field; ci++)
+        bool has_local_owned = false;
+        for (uint32_t ci = 0; ci < def->n_ctors && !has_local_owned; ci++)
             for (uint32_t fi = 0; fi < def->ctors[ci]->n_fields; fi++)
-                if (def->ctors[ci]->fields[fi].drop_inner_def == def) {
-                    has_rec_field = true;
+                if (def->ctors[ci]->fields[fi].drop_inner_def == def ||
+                    def->ctors[ci]->fields[fi].kind == TY_ANY) {
+                    has_local_owned = true;
                     break;
                 }
-        if (has_rec_field) {
+        if (has_local_owned) {
             const bool rs_tagged = adt_glue_is_tagged(def);
-            buf_printf(out, "static void drop_recspine_%s(void *ptr) __attribute__((unused));\n",
+            buf_printf(out, "static void drop_localowned_%s(void *ptr) __attribute__((unused));\n",
                        adt_c_name);
-            buf_printf(out, "static void drop_recspine_%s(void *ptr) {\n", adt_c_name);
+            buf_printf(out, "static void drop_localowned_%s(void *ptr) {\n", adt_c_name);
             buf_printf(out, "    if (!ptr) return;\n");
             buf_printf(out, "    %s *s = (%s *)ptr;\n", adt_c_name, adt_c_name);
             if (rs_tagged) buf_printf(out, "    switch (s->tag) {\n");
@@ -7743,11 +7767,16 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
                 const CtorDef *rc_ctor = def->ctors[ci];
                 if (rs_tagged) buf_printf(out, "    case %u:\n", ci);
                 for (int32_t fi = (int32_t)rc_ctor->n_fields - 1; fi >= 0; fi--) {
-                    if (rc_ctor->fields[fi].drop_inner_def != def) continue;
+                    bool rec = rc_ctor->fields[fi].drop_inner_def == def;
+                    bool anyf = rc_ctor->fields[fi].kind == TY_ANY;
+                    if (!rec && !anyf) continue;
                     char *mp = adt_field_member_path(def, rc_ctor, (uint32_t)fi);
-                    buf_printf(out,
-                               "    if (s->%s) drop_glue_%s((void *)(intptr_t)s->%s);\n",
-                               mp, adt_c_name, mp);
+                    if (rec)
+                        buf_printf(out,
+                                   "    if (s->%s) drop_glue_%s((void *)(intptr_t)s->%s);\n",
+                                   mp, adt_c_name, mp);
+                    else
+                        buf_printf(out, "    __tur_any_drop(s->%s);\n", mp);
                     free(mp);
                 }
                 if (rs_tagged) buf_printf(out, "        break;\n");
