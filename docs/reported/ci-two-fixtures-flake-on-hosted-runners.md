@@ -1,0 +1,102 @@
+# Two fixtures flake on hosted runners: `httpd-mw-rate-limit` and `rp7-reload-self-heal`
+
+**Summary:** Both failed on a **documentation-only** PR and both passed on a
+re-run of the *identical tree* with no change whatsoever. They are flaky, not
+broken. Recorded because the cost is not the re-run -- it is the half hour spent
+deciding whether a red CI belongs to you.
+
+**Severity:** Low individually; medium as a pair. Neither points at a product
+defect. But a suite that goes red for reasons unrelated to the commit under test
+trains people to skim past red, which is the expensive failure mode.
+
+**Platform:** GitHub hosted runners. `httpd-mw-rate-limit` seen on
+`JIT engine (macos-latest)`; `rp7-reload-self-heal` on `Test (ubuntu-latest)`.
+Neither reproduced locally.
+
+## Evidence that it is flake, not breakage
+
+Observed on [PR #836](https://github.com/rjungemann/turmeric/pull/836), whose
+entire diff is three markdown files -- no code, no tests, no build files -- and
+whose merge-base *is* `origin/main` (`2da89e84f`), the same commit whose own CI
+run was green.
+
+| | first attempt | re-run, same tree |
+| --- | --- | --- |
+| `JIT engine (macos-latest)` | FAIL | **pass** (12m24s) |
+| `Test (ubuntu-latest)` | FAIL | **pass** (15m54s) |
+
+Nothing was pushed between the two. `gh run rerun --failed` on the same run id.
+
+**A method note, because the wrong approach looked reasonable.** The first thing
+tried was scanning recent runs for a pattern, on the theory that a recurring
+failure is a flake. That *disconfirmed* the hypothesis and was misleading:
+`JIT engine (macos-latest)` had indeed failed in three of the four preceding
+failing runs -- but on `j2-load-in-process`, `cps-mixed-coloring` and
+`van-laarhoven-lens-*`, which were real defects on a branch that had real
+defects. Same job name, unrelated cause. History tells you a job is *fragile*;
+only a re-run of the same tree tells you a failure is *spurious*.
+
+## What each looked like
+
+### 1. `httpd-mw-rate-limit` -- stdout mismatch
+
+```
+85: FAIL httpd-mw-rate-limit -- stdout mismatch
+85: jit fixture summary: 2718 passed, 1 failed, 59 skipped
+```
+
+One fixture out of 2718. The fixture exercises a **rate limiter**, so it is
+timing-dependent by construction, and a shared runner is exactly where a
+wall-clock assumption gets violated.
+
+Note also the guidance in CLAUDE.md that the harnesses used to diff stdout
+before reporting a timeout, so a killed fixture surfaced as `stdout mismatch` --
+a claim about the answer when the truth was about the clock. Worth confirming
+which this is before treating the mismatch as meaningful.
+
+Related but distinct, and not the same bug:
+[windows-httpd-async-limit-hangs-on-ci](windows-httpd-async-limit-hangs-on-ci.md)
+is a different fixture on a different platform, and
+`docs/archive/httpd-mw-rate-limit-state-leak.md` is closed.
+
+### 2. `rp7-reload-self-heal` -- failure plus a LeakSanitizer report
+
+```
+FAIL rp7-reload-self-heal -- <U+2597>            <U+2598>
+==127266==ERROR: LeakSanitizer: detected memory leaks
+repl-spice-errors: 4 passed, 1 failed
+```
+
+(The two `<U+....>` above are quarter-block glyphs, transcribed rather than
+pasted so this file stays ASCII.)
+
+Two things worth noticing. The assertion text arrived carrying **spinner
+artifacts** -- the recorded expectation is competing with a progress indicator,
+which is an output-capture race rather than a behavioural difference. And the
+LeakSanitizer report is almost certainly a *consequence* of the failure path
+rather than an independent leak, since the same binary is leak-clean on the
+re-run; do not chase it as a separate defect without confirming that.
+
+`repl-spice-errors` drives a REPL that shells out to real subprocess builds, so
+it carries more timing surface than most.
+
+## Suggested next steps
+
+Cheap, in order:
+
+1. **Make the timing assumption explicit** in `httpd-mw-rate-limit` -- assert on
+   ordering or on counts rather than on a wall-clock-sensitive transcript, or
+   widen the window. First confirm whether the mismatch is a genuine diff or a
+   truncated-by-timeout transcript.
+2. **Stop the spinner from reaching captured output** in the repl-spice harness
+   when stdout is not a TTY. That removes a whole class of false failure and
+   makes the real assertion legible when it does fail.
+3. Only then consider whether either deserves a retry wrapper. Retries hide
+   flakes rather than fixing them, and both of the above are small.
+
+## What this is not
+
+- Not a regression from PR #836, which changes only markdown.
+- Not evidence that `main` is broken -- `main`'s own runs are green.
+- Not the same as the archived `httpd-mw-rate-limit-state-leak`, which was a
+  real state-leak defect and is fixed.
