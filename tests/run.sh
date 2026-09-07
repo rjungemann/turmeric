@@ -370,7 +370,13 @@ matches_filter() {
     if [ -z "$TUR_TEST_FILTER" ]; then
         return 0
     fi
-    printf '%s\n' "$fixture_name" | grep -E -q "$TUR_TEST_FILTER"
+    # bash's own =~, not `printf | grep`: this runs once per fixture, and the
+    # pipeline spawned a subshell AND a grep each time.  On Linux that is
+    # cheap enough to hide; on Windows a process launch is ~50x dearer, and
+    # 2800 fixtures x 2 launches made a FILTERED run cost 2m28s before it ran
+    # a single test -- the same run costs ~8s now.  Measured, not estimated.
+    # (Unfiltered runs never reached the pipeline, so CI was never affected.)
+    [[ "$fixture_name" =~ $TUR_TEST_FILTER ]]
 }
 
 matches_shard() {
