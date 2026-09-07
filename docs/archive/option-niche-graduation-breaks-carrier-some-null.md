@@ -70,7 +70,7 @@ statement. Nothing in any released entry says that **a value which is legal
 today stops being representable**, which is the part a user hits.
 
 The break is currently recorded in exactly one place:
-`docs/upcoming/sr3-option-niche-plan.md`, "The graduation call", hold reason 2.
+`docs/archive/sr3-option-niche-plan.md`, "The graduation call", hold reason 2.
 A plan under `docs/upcoming/` is not release notes.
 
 ## Fix direction
@@ -109,7 +109,7 @@ entry that got this right:
 
 ## Related
 
-- `docs/upcoming/sr3-option-niche-plan.md` -- the graduation hold. Of its
+- `docs/archive/sr3-option-niche-plan.md` -- the graduation hold. Of its
   three conditions, the soak (condition 1) has now been quiet across 0.41 and
   0.42; this report is condition 2 and
   `option-niche-container-elements-box-at-parity` is condition 3.
@@ -126,5 +126,5 @@ will say, and the one-word opt-out (`:non-null` removed). The entry names
 the diagnostic as a diagnostic, not a crash, and keeps the opt-out in the
 entry. When the experiment graduates, the entry moves under that release's
 `### Changed` with the lead removed -- a copy-paste, as the plan wanted.
-`docs/upcoming/sr3-option-niche-plan.md` hold reason 2 points here and
+`docs/archive/sr3-option-niche-plan.md` hold reason 2 points here and
 records it as satisfied; reasons 1 and 3 are unchanged.

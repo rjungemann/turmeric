@@ -13,7 +13,7 @@ description: An `(Option P)` over a non-nullable pointer carried AS that pointer
 eligible population, now including the generic-helper and closure-comparator
 shapes).
 
-Slice B of [sum-representation-plan.md](sum-representation-plan.md) SR3. Slice A
+Slice B of [sum-representation-plan.md](../upcoming/sum-representation-plan.md) SR3. Slice A
 (nullary `None` as the null carrier) shipped default-on 2026-08-27. This is the
 other half: `some(p)` carried AS `p`.
 
@@ -25,7 +25,7 @@ static tur_adt_Vec__int * ctor_Some__Vec__int(tur_adt_Vec__int * _0)  { return _
 
 ## Why it was shelved, and what changed
 
-The [2026-08-27 gate](../archive/sr3-slice-b-gate-results.md) shelved it -- not
+The [2026-08-27 gate](sr3-slice-b-gate-results.md) shelved it -- not
 for the reason the plan expected. The codegen was small and correct; the
 POPULATION was the problem. Two disqualifications, neither visible from the type
 system, between them covered the entire census:
@@ -40,7 +40,7 @@ system, between them covered the entire census:
 That left `option<Vec T>` / `option<Map ...>` / `option<Set ...>`: one fixture.
 
 **The second disqualification is gone.** `defopaque` over a pointer now c-names
-as `void *` ([gate results](../archive/opaque-pointer-c-spelling-gate-results.md),
+as `void *` ([gate results](opaque-pointer-c-spelling-gate-results.md),
 graduated 2026-08-28), so `String` and `StringBuilder` are eligible and the
 ~~`(Option String)` census the plan named -- `env` (5 spellings), `httpd-string`
 (5), `args` (2), `re` (2), `docstrings` (2) -- is in scope.~~ **That census is
@@ -214,7 +214,7 @@ used to carry; closed, pinned by
    the flip.
 2. **Default-on is a semantic break, not just a representation change.**
    Filed 2026-08-30 as
-   [option-niche-graduation-breaks-carrier-some-null](../archive/option-niche-graduation-breaks-carrier-some-null.md)
+   [option-niche-graduation-breaks-carrier-some-null](option-niche-graduation-breaks-carrier-some-null.md)
    and **resolved 2026-09-02**: the release-notes entry is written and
    published under `CHANGELOG.md` `[Unreleased]` as an announced-ahead
    breaking change; the flip moves it under the graduating release.  On
@@ -225,9 +225,9 @@ used to carry; closed, pinned by
    a release-notes entry and a deliberate decision, not a default flipped in
    passing.
 3. **The measurement removes the urgency.** Filed 2026-08-30 as
-   [option-niche-container-elements-box-at-parity](../archive/option-niche-container-elements-box-at-parity.md)
+   [option-niche-container-elements-box-at-parity](option-niche-container-elements-box-at-parity.md)
    and **resolved 2026-09-03 by CE1/CE2**
-   ([container-element-form-plan](container-element-form-plan.md)): a niche
+   ([container-element-form-plan](../upcoming/container-element-form-plan.md)): a niche
    element now lands in its Vec slot as the payload word, and the container
    row reads 17.8 MB against 79.7 MB (table above). The direct-position win
    was already real; the container win is now real too, and it is not
@@ -336,7 +336,7 @@ unsound (mixed conventions) or new ABI for a fact monomorphization makes
 free.
 
 **Refined into a concrete plan 2026-08-28:**
-[container-element-form-plan.md](container-element-form-plan.md) (CE) --
+[container-element-form-plan.md](../upcoming/container-element-form-plan.md) (CE) --
 the invariant made enforceable (census the undecidable sites first, then a
 loud diagnostic on the residue, never a guess), one chokepoint
 (`container_elem_form` beside `repr_of`), Vec-only, scoped INSIDE
@@ -347,12 +347,12 @@ container parity row breaking.
 ## What is left
 
 1. ~~The unbridged inline-C carrier crossings~~ -- **closed 2026-08-28**
-   ([archived report](../archive/option-niche-inline-c-carrier-crossings-incomplete.md)):
+   ([archived report](option-niche-inline-c-carrier-crossings-incomplete.md)):
    match scrutinee and ctor argument bridged, and the audit found and fixed two
    more (the `vec-of` first-element heap-promotion and the `vec-push!`
    double-box); captures clean, rest args unreachable. One ADJACENT finding
    stays open on the DEFAULT path --
-   [inline-c-carrier-producer-byval-container-element](../archive/inline-c-carrier-producer-byval-container-element.md)
+   [inline-c-carrier-producer-byval-container-element](inline-c-carrier-producer-byval-container-element.md)
    (a loud compile error, not a wrong answer; the niche path already handles
    the shape, which is the fix template).
 2. ~~Static enforcement of `:non-null`~~ -- **closed 2026-08-28.** A literal 0
@@ -495,7 +495,7 @@ container parity row breaking.
    per live value against 184-310 bytes of `.text` per translation unit, on
    functions called a handful of times per program. If these sites are ever
    retyped it should be for the reason section 4 of
-   [sum-representation-plan.md](sum-representation-plan.md) gives for the whole
+   [sum-representation-plan.md](../upcoming/sum-representation-plan.md) gives for the whole
    SR programme -- expressiveness, an invariant the type currently cannot
    state -- and the niche then follows for free. Retyping stdlib's `(Option
    cstr)` API to chase 8 bytes would be a breaking change to a public surface
