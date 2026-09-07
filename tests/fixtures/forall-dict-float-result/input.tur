@@ -1,0 +1,52 @@
+;; forall-dict-float-result-truncated: a float result dispatched through a
+;; mode-B dict clone must survive the int64 carrier.
+;;
+;; The clone returns the carrier, and both ends used C NUMERIC conversions:
+;; `return (int64_t)(intptr_t)__ps` on the way out (truncating the double), and
+;; an implicit widening of that integer on the way back in.  So a method
+;; declared `: float` returned 2.5 as 2 and 7.1 as 7 -- no warning, no
+;; diagnostic, correct-looking code.  Both ends now bit-reinterpret through
+;; tur_sc_bits_f64 / tur_sc_f64_from_bits, which is what every other
+;; float/carrier crossing in the emitter does; that preamble helper's own
+;; comment already said "an intptr_t cast would truncate the value".
+;;
+;; The two halves must stay in lockstep -- packing without unpacking turns a
+;; truncation into garbage, which is worse -- so both directions are asserted
+;; here rather than only the value coming out.
+;;
+;; EVERY literal below has a non-zero fractional part, per CLAUDE.md's float
+;; rule.  That is not decoration: this defect is invisible to `7.0`, and the
+;; reason it survived is that no fixture in the forall-dict-* family declared a
+;; float result at all (forall-dict-show returns cstr).
+;;
+;; Receivers are carrier-shaped primitives on purpose, to keep this independent
+;; of the by-value-aggregate restriction (errors/forall-dict-byvalue-receiver).
+(defclass Scale [a] (scale [x : a] : float))
+(definstance Scale [int]  (scale [x : int]  : float 2.5))
+(definstance Scale [bool] (scale [x : bool] : float 7.1))
+
+(defclass Tiny [a] (tiny [x : a] : float32))
+(definstance Tiny [int]  (tiny [x : int]  : float32 3.25))
+(definstance Tiny [bool] (tiny [x : bool] : float32 1.5))
+
+(defn poly-scale [a] [^Scale a x : a] : float  (scale x))
+(defn poly-tiny  [a] [^Tiny  a x : a] : float32 (tiny x))
+
+(defn use-scale [f (forall [a] [(Scale a)] (-> a float))] : float
+  (println (f 3))
+  (println (f true))
+  0.0)
+
+(defn use-tiny [f (forall [a] [(Tiny a)] (-> a float32))] : float32
+  (println (f 3))
+  (println (f true))
+  0.0)
+
+(defn main [] : int
+  (println (use-scale poly-scale))
+  (println (use-tiny poly-tiny))
+  ;; static dispatch of the same methods was always correct -- pinned so a
+  ;; future "fix" cannot regress the path that worked.
+  (println (scale 1))
+  (println (tiny 1))
+  0)

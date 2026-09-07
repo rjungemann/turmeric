@@ -7342,6 +7342,29 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         result = strdup(c.data);
                         buf_free(&c);
                         note_call_ret(ctx, emit_type_c_name(ctx, e->type));   /* findings 16 */
+                    } else if (rk == TY_FLOAT || rk == TY_FLOAT64 ||
+                               rk == TY_FLOAT32) {
+                        /* forall-dict-float-result-truncated: the consumer half.
+                         * The carrier field is typed int64_t, so a float result
+                         * came back as an integer-typed expression and the
+                         * surrounding double context applied a NUMERIC conversion
+                         * -- widening the already-truncated integer the producer
+                         * wrote, so 7.1 printed as 7 with nothing to warn on.
+                         *
+                         * Unpack the bits the producer packed (the dict-clone
+                         * return in emit_fns.c).  The two halves must stay in
+                         * lockstep: with only one of them, a truncation becomes
+                         * garbage, which is worse. */
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "%s(%s)",
+                                   rk == TY_FLOAT32 ? "tur_sc_f32_from_bits"
+                                                    : "tur_sc_f64_from_bits",
+                                   result);
+                        buf_putc(&c, '\0');
+                        free(result);
+                        result = strdup(c.data);
+                        buf_free(&c);
+                        note_call_ret(ctx, emit_type_c_name(ctx, e->type));
                     }
                 }
                 for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);

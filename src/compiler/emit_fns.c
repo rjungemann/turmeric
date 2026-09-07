@@ -4288,8 +4288,26 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * carrier directly -- NONE of the by-value/aggregate spill heuristics
              * below apply, and firing one would malloc-box a value that is already
              * the carrier (double-box).  The `(int64_t)(intptr_t)` cast is a no-op
-             * on an int64 and harmless if the body tail is a bare pointer. */
-            buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
+             * on an int64 and harmless if the body tail is a bare pointer.
+             *
+             * forall-dict-float-result-truncated: it is NOT a no-op on a double.
+             * A method declared `: float` dispatches to a `double`-returning slot,
+             * and `(int64_t)(intptr_t)` on a double is a C numeric conversion --
+             * 2.5 arrived as 2, 7.1 as 7, with no warning and no diagnostic.
+             * Reinterpret the BITS instead, which is what every other float/carrier
+             * crossing does (see tur_sc_bits_f64 in the preamble, whose own comment
+             * says an intptr_t cast would truncate).  The consumer side unpacks
+             * symmetrically in emit_expr.c's poly-call result handling -- the two
+             * must stay in lockstep, since a one-sided change turns a truncation
+             * into garbage. */
+            TypeKind clone_rk = fd->body
+                ? emit_resolve_type(ctx, fd->body->type).kind : TY_UNKNOWN;
+            if (clone_rk == TY_FLOAT || clone_rk == TY_FLOAT64)
+                buf_printf(file, "return tur_sc_bits_f64(%s);\n", ret_val);
+            else if (clone_rk == TY_FLOAT32)
+                buf_printf(file, "return tur_sc_bits_f32(%s);\n", ret_val);
+            else
+                buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
         } else if (inst_method_carrier_spill) {
             /* Direction (1): instance method whose declared result is a
              * parameterized struct (e.g. (Result T E)) returns the carrier

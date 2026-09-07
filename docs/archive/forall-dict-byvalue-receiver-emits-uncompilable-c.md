@@ -51,9 +51,15 @@ than riding along here.
   returns 2.5 as 2 and 7.1 as 7 with no warning at all. Independent of this
   defect: no aggregate, no pointer, carrier-shaped receivers only. It is also
   why the diagnostic above does **not** suggest putting the receiver behind a
-  pointer -- a `:heap` receiver gets past the guard and lands in the
-  truncation, trading a loud failure for a silent one. Found only because the
-  probe used 7.1 rather than 7.0, per CLAUDE.md's float rule.
+  pointer -- at the time, a `:heap` receiver got past the guard and landed in
+  the truncation, trading a loud failure for a silent one. Found only because
+  the probe used 7.1 rather than 7.0, per CLAUDE.md's float rule.
+
+  **Fixed the same day**, so the `:heap` route now returns correct values.
+  The diagnostic still does not recommend it: the dispatched signature is
+  still spelled from the representative instance's pointer type, so that route
+  compiles with a `-Wint-conversion` warning and works only because the two
+  pointer ABIs happen to agree -- the "works by luck" shape CLAUDE.md flags.
 - **The interpreter has no such limitation.** It runs the guarded program
   correctly (19.6349 / 50.41 / 0), because it dispatches on tagged values and
   has no dictionary ABI to squeeze an aggregate through. So this restriction is

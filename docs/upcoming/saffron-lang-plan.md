@@ -674,7 +674,7 @@ cannot be built until they are.**
 | P5 | [any-type-guide-examples-do-not-compile](../reported/any-type-guide-examples-do-not-compile.md) | docs only |
 | P6 | [any-coercion-not-driven-by-expected-type](../reported/any-coercion-not-driven-by-expected-type.md) | **S2/S6** -- found fixing P2d. An `: any` annotation does not widen at a `let` binding or an `if` join, so two of the positions Saffron leans on hardest do not coerce |
 | P7 | [interp-native-ctor-loses-adt-name](../reported/interp-native-ctor-loses-adt-name.md) | S3/S4 -- `type-of` diverges between the back ends for natively-constructed stdlib values, and the interpreter is the path Saffron ships on first |
-| P8 | [forall-dict-float-result-truncated](../reported/forall-dict-float-result-truncated.md) | **high, and not Saffron-specific** -- a float result through a mode-B dict clone is silently truncated (2.5 -> 2). Found guarding P2. Independent of Saffron, but it lands on the same runtime-dictionary machinery D8 would build on |
+| ~~P8~~ | ~~forall-dict-float-result-truncated~~ | **DONE 2026-09-07.** A float result through a mode-B dict clone was silently truncated (2.5 -> 2); both ends of the carrier crossing now bit-reinterpret instead of converting. Not Saffron-specific, but it was on the runtime-dictionary machinery D8 would build on. [Archived](../archive/forall-dict-float-result-truncated.md) |
 
 #### P1 -- the id question, answered
 
