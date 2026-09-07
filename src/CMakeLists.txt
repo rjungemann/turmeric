@@ -1612,7 +1612,7 @@ set_target_properties(tur_wasm_glue_lang_unit PROPERTIES
 # `turi_smt_check` otherwise only runs inside a wasm module, where nothing in
 # CI can look at it.  Nothing in wasm_glue.c is wasm-specific, so linking
 # libturi_wasm runs the real thing -- against the same S0..S3 chain the browser
-# build links.  See docs/upcoming/solver-extension-plan.md (SX8c).
+# build links.  See docs/archive/solver-extension-plan.md (SX8c).
 add_executable(tur_wasm_glue_smt_unit
     ${CMAKE_SOURCE_DIR}/tests/wasm_glue_smt_unit.c
 )
@@ -1636,7 +1636,7 @@ set_target_properties(tur_wasm_glue_smt_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
-# RM3 region allocator unit test (docs/upcoming/regions-plan.md).  Pins the
+# RM3 region allocator unit test (docs/archive/regions-plan.md).  Pins the
 # SAFETY properties -- ownership across retirement, a conservative pop that
 # does not reclaim, a refused mismatched depth -- not that malloc works.
 add_executable(tur_region_unit
@@ -1646,11 +1646,13 @@ add_executable(tur_region_unit
 )
 target_include_directories(tur_region_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_region_unit PRIVATE
-    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
-target_link_options(tur_region_unit PRIVATE
+# region-lock-hardening: the generation stack is per-thread and ownership is
+# process-wide; the unit test spawns a thread to pin both halves.
+target_link_options(tur_region_unit PRIVATE -pthread
     $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 set_target_properties(tur_region_unit PROPERTIES

@@ -17,7 +17,7 @@ the natural spelling of a bracketed helper (`(defn round [n] (bt-scope (fn []
 in-tree caller happens to sit in `main` or pass a thunk that calls nothing, so
 nothing caught it.
 
-Found while wiring RM3 R4 (`docs/upcoming/regions-plan.md`), whose benchmark and
+Found while wiring RM3 R4 (`docs/archive/regions-plan.md`), whose benchmark and
 fixtures both wanted that spelling. Independent of `--enable=regions`: it
 reproduces identically with the flag off.
 

@@ -1,0 +1,117 @@
+;; bench-logic-subst-split -- the SR4 traversal profile's first cut: separate
+;; CONSTRUCTION from TRAVERSAL on logic.tur's real Subst.
+;;
+;; bench-logic-subst measures "bind n, walk n, discard" as one number per op,
+;; and its A/B against TUR_SR4_RECURSIVE_CARRIER=1 attributed the whole
+;; by-value/carrier gap to the walk's per-link copies.  Removing 40% of the copy
+;; volume moved the number ~5%, so the copies are not the dominant term and the
+;; report (docs/archive/sr4-byvalue-recursive-sum-walk-copies-per-link.md)
+;; asked for a profile before any more copy removal.  The first question a
+;; profile has to answer is which PHASE the time is in, because the by-value
+;; path mallocs a 48-byte box per link at BIND time while the walk is what the
+;; report measured.  So: build only, then walk only, each timed alone.
+;;
+;;   build   passes x (build a fresh n-link chain, read its head, discard)
+;;   walk    build ONE n-link chain, then passes x (walk every var once)
+;;
+;; The build rows include the box malloc per link (and, since nothing here
+;; brackets the chain, the leak of it -- the same RM2 residue
+;; bench-regions-subst reclaims; kept OUT of a region on purpose so this
+;; matches what bench-logic-subst measured).  The walk rows touch only the
+;; chain that already exists.  ns are per LINK per pass in both cases.
+;;
+;; Outcome (2026-09-05): construction was never the gap; the walk was a real
+;; recursion GCC could not flatten because the binder copied the boxed link into
+;; a local whose address the self-call took.  The binder borrows the box now and
+;; the walk is at parity with the carrier.  See benchmarks/logic-subst-results.md.
+;;
+;; Since: SR4 traversal profile, 2026-09-05
+
+(load "stdlib/logic.tur")
+
+(extern-c tur_monotonic_ns [] :int)
+
+(defn now-ns [] : int
+  ```c
+  return tur_monotonic_ns();
+  ```)
+
+;;; build-subst -- extend a Subst with `n` bindings, var i -> int i.
+(defn build-subst [n : int acc : Subst] : Subst
+  (if (<= n 0)
+    acc
+    (build-subst (- n 1) (SBind (- n 1) (TInt (- n 1)) acc))))
+
+;;; head-var -- the first binding's var id; keeps a built chain live.
+(defn head-var [s : Subst] : int
+  (match s
+    (SNil n) -1
+    (SBind v term rest) v))
+
+;;; walk-all -- walk every variable in 0..n-1 once, summing to keep it live.
+(defn walk-all [n : int subs : Subst acc : int] : int
+  (if (<= n 0)
+    acc
+    (walk-all (- n 1) subs
+              (+ acc (term-int-val (logic-walk (TVar (- n 1)) subs))))))
+
+;;; build-rounds -- construction only.
+(defn build-rounds [n : int passes : int acc : int] : int
+  (if (<= passes 0)
+    acc
+    (build-rounds n (- passes 1) (+ acc (head-var (build-subst n (subs-empty)))))))
+
+;;; walk-rounds -- traversal only, over one chain built outside the timer.
+(defn walk-rounds [n : int passes : int s : Subst acc : int] : int
+  (if (<= passes 0)
+    acc
+    (walk-rounds n (- passes 1) s (+ acc (walk-all n s 0)))))
+
+(defn emit-header [] : void
+  ```c
+  printf("phase,bindings,passes,total_ns,ns_per_link\n");
+  ```)
+
+(defn emit-row [phase : cstr n : int passes : int ns : int] : void
+  ```c
+  double links = (double)n * (double)passes;
+  printf("%s,%lld,%lld,%lld,%.2f\n", phase, (long long)n, (long long)passes,
+         (long long)ns, links > 0 ? (double)ns / links : 0.0);
+  ```)
+
+(defn passes-for [n : int] : int
+  ```c
+  /* The walk is quadratic in n (n lookups, each scanning up to n links), so
+     hold n*n*passes roughly constant; the build is linear and gets the same
+     pass count so the two rows of one n are directly comparable. */
+  int64_t p = 200000 / (n * n + 1);
+  if (p > 2000) p = 2000;
+  if (p < 3) p = 3;
+  return p;
+  ```)
+
+(defn bench-one [n : int] : int
+  (let [passes (passes-for n)
+        t0     (now-ns)
+        a      (build-rounds n passes 0)
+        t1     (now-ns)
+        s      (build-subst n (subs-empty))
+        t2     (now-ns)
+        b      (walk-rounds n passes s 0)
+        t3     (now-ns)]
+    (emit-row "build" n passes (- t1 t0))
+    ;; The walk row's denominator is links WALKED, not links scanned: walk-all
+    ;; does n lookups per pass and the k-th scans k links, so the scan count is
+    ;; n*(n+1)/2 per pass -- the per-link figure below is the per-LOOKUP cost
+    ;; divided by n, i.e. what bench-logic-subst calls ns/op.
+    (emit-row "walk" n passes (- t3 t2))
+    (+ (if (= a 0) 1 0) (if (< b 0) 1 0))))
+
+(defn sweep [n : int worst : int] : int
+  (if (> n 512)
+    worst
+    (sweep (* n 2) (+ worst (bench-one n)))))
+
+(defn main [] : int
+  (emit-header)
+  (sweep 1 0))

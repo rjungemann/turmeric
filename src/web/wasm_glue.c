@@ -1291,10 +1291,11 @@ static char *smt_finish(Buf *b) {
 /* Answer an SMT-LIB2 script.  Returns a malloc'd JSON string the caller frees
  * with turi_wasm_free_string (JS: Module._free).
  *
- *   {"schema":0,"results":[{"answer":"unsat","decided_by":"S2 (arithmetic)"}]}
- *   {"schema":0,"results":[],"error":"outside the accepted fragment: ..."}
+ *   {"schema":1,"results":[{"answer":"unsat","decided_by":"S2 (arithmetic)"}]}
+ *   {"schema":1,"results":[],"error":"outside the accepted fragment: ..."}
  *
- * `schema` is 0 while the shape is unstable, matching `--dump-refine=json`.
+ * `schema` is 1: the shape is stable since SX9, matching `--dump-refine=json`
+ * (schema 0 was the same shape flagged unstable).
  * `results` carries one entry per `(check-sat)`, in script order.
  */
 #ifdef __EMSCRIPTEN__
@@ -1302,7 +1303,7 @@ EMSCRIPTEN_KEEPALIVE
 #endif
 char *turi_smt_check(const char *smtlib) {
     Buf out; buf_init(&out);
-    buf_puts(&out, "{\"schema\":0,\"results\":[");
+    buf_puts(&out, "{\"schema\":1,\"results\":[");
     if (!smtlib) {
         buf_puts(&out, "],\"error\":\"no input\"}");
         return smt_finish(&out);

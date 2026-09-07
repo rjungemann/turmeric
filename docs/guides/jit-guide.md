@@ -377,6 +377,47 @@ reachable.
 
 ## Constraints that are permanent
 
+### Codegen must not emit GNU-only constructs -- `__auto_type` above all
+
+c2mir is a C11 front end. `__auto_type` is a GCC/clang extension it does not
+implement, and a construct it cannot parse is not a per-function problem: the
+**whole translation unit** is rejected, so one such line anywhere in the
+emitter takes every program that reaches it off the engine.
+
+This is easy to do by accident, because `__auto_type` is genuinely the right
+tool for the job it keeps getting reached for -- giving a hoisted temp the
+value's EXACT emitted representation (carrier `int64_t` vs by-value aggregate
+vs typed pointer) without re-deriving it, which the repr heuristic gets wrong
+for some carrier calls. Three sites in the emitter have now had to solve it
+separately: `emit_fns.c`'s panic-check hoist (names the callee's return type
+from the forward-declaration pass, and keeps `__auto_type` only for indirect
+calls), `emit_cps_ir.c`'s cps->direct temp, and the region erasure note in
+`emit_expr.c` (notes a bare identifier in place, since it is already an
+lvalue, and names the type via `emit_binding_repr_c_name` otherwise).
+
+**The failure is silent, and the suite will not tell you.** The engine's
+per-program `TUR-W0070` fallback to the cc path is a *correctness* safety net,
+so the answers stay right; `run-jit.sh` counts a fallback as a PASS by design.
+When `__auto_type` was added to the region erasure note, the stdlib prelude's
+own erasing ascription put **every** fixture on the cc path and the suite
+still printed `0 failed`. It surfaced only because the fallback then broke for
+ten fixtures on one platform for an unrelated reason. See
+[jit-suite-reports-pass-when-the-engine-is-disabled](https://github.com/rjungemann/turmeric/blob/main/docs/reported/jit-suite-reports-pass-when-the-engine-is-disabled.md)
+(a blob URL rather than a relative one because `docs/reported/` is not
+rendered into the pack -- the Justfile's `docs` recipe spells out why).
+
+So when you add an emitter construct, check it: build with `-DTUR_JIT=ON` and
+run one fixture, and if `TUR-W0070` appears where it did not before, the
+engine has stopped reading your output.
+
+```sh
+TUR_JIT_DUMP_C=/tmp/jit.c ./build-jit/tur jit <fixture>.tur
+# a c2mir diagnostic names <tur-jit>:LINE:COL against exactly this text
+```
+
+The same applies to statement expressions (`({ ... })`), nested functions,
+`typeof`, and `__attribute__` spellings beyond the ones the fork implements.
+
 ### `__attribute__((packed))` is silently ignored
 
 c2mir lays packed structs out at natural alignment and emits no diagnostic

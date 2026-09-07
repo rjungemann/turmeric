@@ -270,10 +270,50 @@ static bool emit_prim_result_kind(TypeKind k) {
         default: return false;
     }
 }
-bool emit_spec_result_mismatch(Type call_result, Type spec_result) {
-    return emit_prim_result_kind(call_result.kind) &&
-           emit_prim_result_kind(spec_result.kind) &&
-           call_result.kind != spec_result.kind;
+/* capturing-thunk-returning-heap-field-record-garbles-int: is a result type
+ * concrete enough that its C spelling identifies its return ABI?  A bare type
+ * variable, an unknown, or an app with an abstract head all c-name to the
+ * int64 carrier exactly as a genuine `int` does, so a C-name comparison on
+ * them would reject the correct clone for a call whose result the enclosing
+ * spec has not grounded yet.  Deciding nothing there keeps the by-args
+ * behaviour those sites were written against.  Same rule as the CPS side's
+ * cps_call_result_discriminator. */
+static bool emit_result_c_name_is_decisive(const Type *t) {
+    switch (t->kind) {
+        case TY_TYVAR:
+        case TY_UNKNOWN:
+            return false;
+        case TY_APP:
+            return type_app_is_concrete_adt(t);
+        default:
+            return true;
+    }
+}
+
+bool emit_spec_result_mismatch(EmitCtx *ctx, Type call_result, Type spec_result) {
+    if (emit_prim_result_kind(call_result.kind) &&
+        emit_prim_result_kind(spec_result.kind) &&
+        call_result.kind != spec_result.kind)
+        return true;
+    /* capturing-thunk-returning-heap-field-record-garbles-int: the primitive
+     * rule above cannot see two ADT results apart.  A generic whose type
+     * variable reaches only the RESULT -- `ident [A] [^fat body : (fn [] A)]
+     * : A`, the bt-scope / with-region bracket shape -- presents identical
+     * args at every instantiation, so a call whose result is a heap-boxed
+     * record (`HoldsLink`, riding the int64 carrier) matched the spec minted
+     * for a BY-VALUE record (`HoldsInt`, a 16-byte aggregate) and read its box
+     * pointer back through the aggregate's layout.  When both results are
+     * concrete, their C spellings are the return ABI; a difference is a
+     * genuinely different ABI and must not match.  A pure narrowing: it can
+     * only turn a wrong hit into "no spec" (the erased base, which is what a
+     * carrier-riding result wants) or an ambiguity into the unique right hit. */
+    if (!emit_result_c_name_is_decisive(&call_result) ||
+        !emit_result_c_name_is_decisive(&spec_result))
+        return false;
+    const char *cc = emit_type_c_name(ctx, call_result);
+    const char *sc = emit_type_c_name(ctx, spec_result);
+    if (!cc || !sc) return false;   /* unspellable either side: do not narrow */
+    return strcmp(cc, sc) != 0;
 }
 
 /* KB-004/KB-021: find the ABI specialization (concrete-by-value clone) that an
@@ -428,7 +468,7 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
         if (spec->binding != fn_binding || spec->n_args != e->as.call_.n_args) continue;
         /* G6: do not match a return-differentiated sibling spec (e.g. the bool
          * `re-cata` clone for an int-result call). */
-        if (emit_spec_result_mismatch(emit_resolve_type(ctx, e->type),
+        if (emit_spec_result_mismatch(ctx, emit_resolve_type(ctx, e->type),
                                       spec->result_type)) {
             continue;
         }
@@ -1091,9 +1131,15 @@ static char *emit_agg_box(EmitCtx *ctx, Type t, const char *val) {
     if (g_emit_abi_trace)
         fprintf(stderr, "repr-trace bridge agg-box %s\n", cn);
     Buf b; buf_init(&b);
+    /* region-lock-hardening: the box is malloc'd and outlives the bracket its
+     * element was built in (a Vec slot, a field store); its words are noted
+     * so an erased node inside the aggregate cannot hide behind the box
+     * pointer the store hook sees.  The macro is `((void)0)` under
+     * TUR_REGIONS=0. */
     buf_printf(&b,
         "({ %s *__tur_pbox = (%s *)malloc(sizeof(%s)); "
-        "*__tur_pbox = (%s); (int64_t)(intptr_t)__tur_pbox; })",
+        "*__tur_pbox = (%s); TUR_REGION_NOTE_WORDS(__tur_pbox, sizeof *__tur_pbox); "
+        "(int64_t)(intptr_t)__tur_pbox; })",
         cn, cn, cn, val);
     buf_putc(&b, '\0');
     char *out = strdup(b.data);
@@ -3760,6 +3806,15 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 char *v = emit_value(ctx, body, last);
                 v = bridge_control_value_to_byvalue_temp(ctx, body, v, last);
+                /* codegen-carrier-straddle-in-lifted-thunk-sink: the `let` joins
+                 * pair the by-value bridge above with the int64<->pointer one;
+                 * this `do` join carried only the first, so a tail that emits the
+                 * CARRIER for a `:heap` ADT landed raw in the concrete
+                 * `tur_adt_X *` temp emit_control_result_temp_decl declared --
+                 * -Wint-conversion, a hard cc error on clang / GCC >= 14.  Same
+                 * (type, tail) pair the decl used, so the two agree by
+                 * construction. */
+                v = bridge_control_result_int_ptr(ctx, v, last->type, last);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = %s;\n", result, v);
                 free(v);
@@ -3945,6 +4000,10 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             emit_control_result_temp_decl(ctx, body, last->type, last, result);
             char *v = emit_value(ctx, body, last);
             v = bridge_control_value_to_byvalue_temp(ctx, body, v, last);
+            /* codegen-carrier-straddle-in-lifted-thunk-sink: as in the no-defers
+             * join above -- the by-value bridge alone does not cover the
+             * int64<->pointer straddle. */
+            v = bridge_control_result_int_ptr(ctx, v, last->type, last);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", result, v);
             free(v);
@@ -4781,6 +4840,167 @@ static bool region_field_form_is_scalar(const Form *f) {
 
 static bool region_type_reaches_node(EmitCtx *ctx, Type t,
                                      const AdtDef **seen, uint32_t *n_seen,
+                                     int depth);
+
+/* The heap collections whose storage is NEVER region memory: handle and
+ * buffer/nodes alike are inline-C `malloc` (stdlib/vec.tur, map.tur over
+ * src/runtime/hamt.c, set.tur, mutmap.tur), and the container-insert bridge
+ * that boxes a by-value aggregate element (`__tur_pbox` / `__tur_box`,
+ * this file) is plain `malloc` too.  The region router is emitted at the
+ * four ADT-ctor sites and nowhere else, and these defs' emitted ctors are
+ * called nowhere (checked across every snapshot at graduation).  The same
+ * compiler-warranted name list the option-niche plan uses (types.c) -- and,
+ * as there, the argument does not REST on the name: the runtime lock
+ * (`tur_region_note_escape`) still sees the escaping handle, so a handle
+ * that somehow did land in the generation retires rather than rewinds.
+ *
+ * What a collection can transitively reach is therefore exactly what its
+ * ELEMENT types can reach: an int64 word reaches nothing, a malloc'd box
+ * around a by-value aggregate reaches what the aggregate's fields reach, a
+ * `:heap` node element is a pointer INTO the generation.  So the arm below
+ * asks the element types the same question, recursively. */
+bool region_def_is_malloc_collection(const AdtDef *def) {
+    if (!def || !def->name || !def->is_heap) return false;
+    return strcmp(def->name, "Vec") == 0 || strcmp(def->name, "Map") == 0 ||
+           strcmp(def->name, "Set") == 0 || strcmp(def->name, "MutableMap") == 0;
+}
+
+/* region-lock-hardening follow-up: can a value of this type, AS ONE WORD, be
+ * region memory?  Narrower than "reaches a node", which the result lock also
+ * answers yes to out of ignorance (a `ptr<void>`, a `cstr`, a bare tyvar).
+ * Only a `:heap` ADT node comes from the routed ctor sites, and a collection
+ * HANDLE is stdlib `malloc` even though its def is `:heap` -- so noting one
+ * buys nothing (`arena_owns` on it is always false) and would put a runtime
+ * call at the top of every hot accessor.  A by-value aggregate is included
+ * because its inline words can hold a node.  Used by the inline-C parameter
+ * note in emit_fns.c. */
+bool emit_region_word_can_be_node(EmitCtx *ctx, const Type *t) {
+    if (!t) return false;
+    Type rt = emit_resolve_type(ctx, *t);
+    if (rt.kind != TY_ADT && rt.kind != TY_APP) return false;
+    AdtDef *def = NULL;
+    Type args[8];
+    uint8_t n_args = 0;
+    /* TY_ADT carries its def directly; only TY_APP needs the extraction (the
+     * same split type_is_heap_adt makes -- running everything through the
+     * extractor drops a plain `:heap` defdata, which is THE case this exists
+     * for).  No def at all is the erased/unresolved shape: a generic parameter
+     * riding the int64 carrier, whose node was noted at its ascription. */
+    if (rt.kind == TY_ADT) def = rt.as.adt_.def;
+    else if (!type_extract_adt_app(&rt, &def, args, &n_args)) def = NULL;
+    if (!def) return false;
+    /* An opaque newtype's bytes come from whatever the C side made
+     * (`defopaque BtCell :ptr`, whose `tur_bt_cell_new` mallocs), never from a
+     * routed ctor -- so it can never be region memory.  This is what the trail
+     * cell accessors are, and without it every one of them is noted. */
+    if (def->is_opaque) return false;
+    if (region_def_is_malloc_collection(def)) return false;   /* stdlib malloc handle */
+    if (def->is_heap) return true;              /* the word IS a node pointer */
+    /* A by-value aggregate: its inline words can include one. */
+    return !emit_region_scope_reclaims(ctx, &rt);
+}
+
+/* The ADT walk proper, shared by the TY_ADT arm (n_args == 0) and the TY_APP
+ * arm (a parametric monomorph such as `(Pair int int)` or `(Option Link)`).
+ * A parametric def's field is declared over a type VARIABLE, so the field
+ * walk substitutes the monomorph's arguments (substitute_adt_app_type_owned)
+ * before asking whether the field reaches a node -- which is what turned
+ * `(Pair int int)` from "refused on sight" into a proved scalar record, and
+ * keeps `(Pair Link int)` refused: its substituted field IS the node. */
+static bool region_adt_reaches_node(EmitCtx *ctx, AdtDef *def,
+                                    const Type *args, uint8_t n_args,
+                                    const AdtDef **seen, uint32_t *n_seen,
+                                    int depth) {
+    if (!def) return true;
+    if (def->is_heap) return true;       /* THE node R2 routes */
+    /* The type ARGUMENTS are walked before the def goes on the path.  They
+     * are values the fields hold, not a route back through the def, so the
+     * same def appearing as its own argument -- `(Pair (Pair int int) int)`,
+     * nesting -- must not read as a cycle; the by-value child sits in a
+     * plain-malloc box (the byval<->carrier field bridge), which reaches
+     * what its own fields reach and nothing more. */
+    for (uint8_t i = 0; i < n_args; i++)
+        if (region_type_reaches_node(ctx, args[i], seen, n_seen, depth - 1))
+            return true;
+    /* `seen` is the current PATH, not a visited set, and the difference
+     * is a use-after-free.  It used to read a repeat as "already fully
+     * explored" and return false -- but a def reached again while it is
+     * still on the path means the type is CYCLIC, which is exactly
+     * "reaches a node".  Mutual recursion is the shape that shows it:
+     *
+     *   (defdata MB :copy (MBnil) (MBcons :int :MA))
+     *   (defdata MA :copy (MAnil) (MAcons :int :MB))
+     *
+     * Neither def is self-recursive, so `is_self_recursive` does not
+     * catch either.  Be precise about what was and was not measured:
+     * a bracket returning `MA` DID rewind its own spine -- `(sumA (esc
+     * 6) 0)` printed 0 instead of 42 -- but that came from a (reverted)
+     * kind-based field accept that never recursed into MB at all; the
+     * old cycle-break was not on that path.  It is fixed here because
+     * the widening this walk was waiting for (resolving the declared
+     * field type -- docs/archive/region-walk-refuses-every-adt-result.md)
+     * WOULD recurse MA -> MB -> MA, and the old rule would then have
+     * proved MA reaches nothing.  Fixing a safety lock's cycle handling
+     * before the next widening rather than after.
+     *
+     * So: a hit is a cycle and refuses, and the entry is POPPED once the
+     * def is fully explored, which keeps a benign repeat (the same
+     * non-recursive ADT in two sibling fields) re-provable instead of
+     * refused.  Bounded by the 32 slots and the depth budget. */
+    for (uint32_t i = 0; i < *n_seen; i++)
+        if (seen[i] == def) return true;    /* cyclic: reaches */
+    if (*n_seen >= 32) return true;         /* out of budget */
+    seen[(*n_seen)++] = def;
+    if (!def->ctors) return true;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        const CtorDef *c = def->ctors[ci];
+        if (!c) return true;             /* ctor array still filling */
+        for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+            const Type *ft = c->fields[fi].full_type;
+            /* A SELF-RECURSIVE field's full_type is deliberately NULL
+             * (see AdtDef.is_self_recursive in types.h: recording a
+             * carrier full_type there would misclassify the field read).
+             * That is precisely the spine -- and precisely what the R4
+             * boxing site allocates -- so unknown reads as "reaches" and
+             * a recursive result is refused.
+             *
+             * NULL is NOT only the spine: `full_type` is populated for a
+             * type-variable field (TP1) and left NULL for an ordinary
+             * `:int`, and MEASURED, a genuine `:int` field and a
+             * carrier-erased `:MB` ADT field both report `kind == TY_INT`
+             * with no `full_type`, so the field's kind cannot tell them
+             * apart -- accepting on kind turned a mutually-recursive
+             * result into a use-after-free (`(sumA (esc 6) 0)` printing 0
+             * instead of 42).  So consult the declared FORM before
+             * refusing on a NULL full_type: a bare scalar primitive
+             * (`:int`, `:cstr`, ...) reaches nothing and is admitted; the
+             * spine (form names the def), an erased ADT field (form is an
+             * ADT name), `ptr`, and any compound form are not scalar
+             * keywords, so they still refuse here.  Admits `(RxIP :int
+             * :int)`, keeps `(MAcons :int :MB)` refused.  See
+             * docs/archive/region-walk-refuses-every-adt-result.md. */
+            if (!ft) {
+                const Form *ff = c->field_forms ? c->field_forms[fi] : NULL;
+                if (region_field_form_is_scalar(ff)) continue;
+                return true;
+            }
+            bool reaches;
+            if (n_args > 0) {
+                Type sub = substitute_adt_app_type_owned(ft, def, args);
+                reaches = region_type_reaches_node(ctx, sub, seen, n_seen, depth - 1);
+                free_struct_app_type(sub);
+            } else {
+                reaches = region_type_reaches_node(ctx, *ft, seen, n_seen, depth - 1);
+            }
+            if (reaches) return true;
+        }
+    }
+    (*n_seen)--;   /* fully explored and proved safe: off the path */
+    return false;
+}
+
+static bool region_type_reaches_node(EmitCtx *ctx, Type t,
+                                     const AdtDef **seen, uint32_t *n_seen,
                                      int depth) {
     if (depth <= 0) return true;
     Type rt = emit_resolve_type(ctx, t);
@@ -4807,23 +5027,9 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
                  * RxPair (RxIP :int :int))` came in here as a bare TY_ADT, found
                  * no app, and was refused -- along with every other
                  * non-parametric `defdata` result a bracket could return.
-                 *
-                 * Read its def directly and continue with zero type arguments.
-                 * The rest of this case is unchanged and is what does the actual
-                 * proving: `is_heap` still refuses, and every ctor's every field
-                 * is still walked.  A NULL `full_type` used to read as "reaches"
-                 * unconditionally; it now consults the declared FORM first (see
-                 * the field loop below), so an ordinary `:int` field is admitted
-                 * as a scalar while the spine and a carrier-erased ADT field
-                 * still refuse.
-                 *
-                 * So what this ADMITS is a non-heap bare ADT whose every ctor
-                 * field is a bare scalar primitive or carries a walkable
-                 * `full_type` that itself reaches nothing: a field-less enum
-                 * `(defdata Color (Red) (Green))` and `(defdata RPair
-                 * (RIP :int :int))` alike.  Both RETIRED before and REWIND now;
+                 * Read its def directly and walk it with zero type arguments.
                  * `region-scope-adt-result`'s `pick` (enum) and `one-round`
-                 * (RPair) pin them with the value read after the pop. */
+                 * (RPair) pin the shapes this admits, value read after the pop. */
                 if (rt.kind == TY_ADT && rt.as.adt_.def) {
                     def = rt.as.adt_.def;
                     n_args = 0;
@@ -4831,151 +5037,42 @@ static bool region_type_reaches_node(EmitCtx *ctx, Type t,
                     return true;
                 }
             }
-            if (def->is_heap) return true;       /* THE node R2 routes */
-            /* `seen` is the current PATH, not a visited set, and the difference
-             * is a use-after-free.  It used to read a repeat as "already fully
-             * explored" and return false -- but a def reached again while it is
-             * still on the path means the type is CYCLIC, which is exactly
-             * "reaches a node".  Mutual recursion is the shape that shows it:
-             *
-             *   (defdata MB :copy (MBnil) (MBcons :int :MA))
-             *   (defdata MA :copy (MAnil) (MAcons :int :MB))
-             *
-             * Neither def is self-recursive, so `is_self_recursive` does not
-             * catch either.  Be precise about what was and was not measured:
-             * a bracket returning `MA` DID rewind its own spine -- `(sumA (esc
-             * 6) 0)` printed 0 instead of 42 -- but that came from a (reverted)
-             * kind-based field accept that never recursed into MB at all; the
-             * old cycle-break was not on that path.  It is fixed here because
-             * the widening this walk is waiting for (resolving the declared
-             * field type -- docs/archive/region-walk-refuses-every-adt-result.md)
-             * WOULD recurse MA -> MB -> MA, and the old rule would then have
-             * proved MA reaches nothing.  Fixing a safety lock's cycle handling
-             * before the next widening rather than after.
-             *
-             * So: a hit is a cycle and refuses, and the entry is POPPED once the
-             * def is fully explored, which keeps a benign repeat (the same
-             * non-recursive ADT in two sibling fields) re-provable instead of
-             * refused.  Bounded by the 32 slots and the depth budget.
-             *
-             * Cost: a def on the path via its own TYPE ARGUMENT -- `(Pair2
-             * (Pair2 int int) int)`, nesting rather than a cycle -- is refused
-             * too.  No observable change: any such def's tyvar-typed fields were
-             * already refused by the `default:` arm below, checked against the
-             * pre-change walk (both retire). */
-            for (uint32_t i = 0; i < *n_seen; i++)
-                if (seen[i] == def) return true;    /* cyclic: reaches */
-            if (*n_seen >= 32) return true;         /* out of budget */
-            seen[(*n_seen)++] = def;
-            for (uint8_t i = 0; i < n_args; i++)
-                if (region_type_reaches_node(ctx, args[i], seen, n_seen, depth - 1))
-                    return true;
-            if (!def->ctors) return true;
-            for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
-                const CtorDef *c = def->ctors[ci];
-                if (!c) return true;             /* ctor array still filling */
-                for (uint32_t fi = 0; fi < c->n_fields; fi++) {
-                    const Type *ft = c->fields[fi].full_type;
-                    /* A SELF-RECURSIVE field's full_type is deliberately NULL
-                     * (see AdtDef.is_self_recursive in types.h: recording a
-                     * carrier full_type there would misclassify the field read).
-                     * That is precisely the spine -- and precisely what the R4
-                     * boxing site allocates -- so unknown reads as "reaches" and
-                     * a recursive result is refused.
-                     *
-                     * NULL is NOT only the spine, and that is why this refuses
-                     * more than it would like: `full_type` is populated for a
-                     * type-variable field (TP1) and left NULL for an ordinary
-                     * `:int`, so `(defdata RxPair (RxIP :int :int))` -- two
-                     * machine integers -- is refused here.  Widening it needs a
-                     * source of truth this struct does not carry: MEASURED, a
-                     * genuine `:int` field and a carrier-erased `:MB` ADT field
-                     * both report `kind == TY_INT` with no `full_type`, so the
-                     * field's kind cannot tell them apart, and accepting on kind
-                     * turned a mutually-recursive result into a use-after-free
-                     * (`(sumA (esc 6) 0)` printing 0 instead of 42).  The
-                     * declared form IS reachable (`c->field_forms[fi]` is
-                     * populated for plain defdata, contrary to its comment), so
-                     * the widening is available to whoever wants it -- it needs
-                     * form-to-type resolution at emit time, which is a layering
-                     * question, not a missing fact.  See
-                     * docs/archive/region-walk-refuses-every-adt-result.md.
-                     *
-                     * RESOLVED: consult the declared FORM before refusing on a
-                     * NULL full_type.  A field whose form is a bare scalar
-                     * primitive (`:int`, `:cstr`, ...) reaches nothing and is
-                     * admitted; the spine (form names the def), an erased ADT
-                     * field (form is an ADT name), `ptr`, and any compound form
-                     * are not scalar keywords, so they still refuse here.  The
-                     * one-shape-at-a-time widening the report and RM3 R5
-                     * graduation item 2 call for -- admits `(RxIP :int :int)`,
-                     * keeps `(MAcons :int :MB)` refused. */
-                    if (!ft) {
-                        const Form *ff =
-                            c->field_forms ? c->field_forms[fi] : NULL;
-                        if (region_field_form_is_scalar(ff)) continue;
-                        return true;
-                    }
-                    if (region_type_reaches_node(ctx, *ft, seen, n_seen, depth - 1))
-                        return true;
-                }
-            }
-            (*n_seen)--;   /* fully explored and proved safe: off the path */
-            return false;
+            return region_adt_reaches_node(ctx, def, args, n_args, seen, n_seen, depth);
         }
         case TY_APP: {
             /* A PARAMETRIC monomorph -- `(Vec int)`, `(Pair int int)` -- is a
-             * TY_APP, so it never reached the TY_ADT arm above and fell to
-             * `default:`: refused on sight.  That is the whole reason "a
+             * TY_APP, so it never reached the TY_ADT arm above and used to fall
+             * to `default:`: refused on sight.  That is the whole reason "a
              * bracket returning a Vec of scalars never rewinds" (R5 item 2's
              * own example of an over-conservative refusal).
              *
-             * This increment admits exactly ONE parametric shape: a `Vec`
-             * whose element is a scalar.  Two facts make it sound, one per
-             * lock.  (1) Every Vec a program can hold comes from inline-C
-             * `malloc` in stdlib/vec.tur (`vec-new` ~59, the buffer ~127):
-             * vec.tur never constructs one through the record constructor,
-             * and the EMITTED `ctor_Vec__<T>` -- which IS routed through the
-             * region router like every ADT ctor, and is defined in every TU
-             * -- is called nowhere (checked across all 148 snapshots at the
-             * graduation).  So in practice the escaping handle is never
-             * region memory.  But the argument does not REST on that: the
-             * bracket passes its result to `tur_region_note_escape` before
-             * the checked pop, so a Vec handle that somehow did land in the
-             * generation would flip the escape flag and RETIRE, never rewind.
-             * The name check is the same compiler-warranted warrant the
-             * option-niche plan uses for Vec/Map/Set ("the compiler itself
-             * emits their constructors as unconditional mallocs"), and the
-             * runtime lock is what makes it safe to be wrong.  (2) The ELEMENTS are
-             * what could transitively reach, and a scalar element is an int64
-             * word in that malloc'd buffer: nothing to reach.  Anything else
-             * refuses here -- a by-value aggregate element (heap-boxed at push
-             * by the escaping bridge, and a later shape once that is pinned),
-             * an ADT element, a node element -- as does any other parametric
-             * def, whose tyvar-typed fields the field walk would refuse anyway
-             * without argument substitution it does not yet do.
+             * Two shapes are decided here rather than refused.  A malloc-backed
+             * COLLECTION (region_def_is_malloc_collection) reaches exactly what
+             * its element types reach, so `(Vec int)`, `(Map int int)` and
+             * `(Set int)` rewind, `(Vec (Pair int int))` rewinds (the element
+             * box is plain malloc; the pair's fields are scalars), and `(Vec
+             * Link)` / `(Map int Link)` retire: their buffer holds pointers
+             * INTO the generation.  Any OTHER parametric def is walked as the
+             * ADT it is, with the monomorph's arguments substituted into its
+             * field types (region_adt_reaches_node): `(Pair int int)` and
+             * `(Option int)` rewind, `(Pair Link int)` and `(Option Link)`
+             * retire, and a `:heap` parametric def is refused as before.
              *
-             * Pinned by `region-scope-vec-scalar`: `(Vec int)` rewinds with
-             * its elements read back after the pop; `(Vec Link)` retires. */
+             * Pinned by `region-scope-vec-scalar` and
+             * `region-scope-parametric`, each value read back after the pop. */
             AdtDef *def = NULL;
             Type args[16];
             uint8_t n_args = 0;
             if (!type_extract_adt_app(&rt, &def, args, &n_args) || !def)
                 return true;
-            if (!def->name || strcmp(def->name, "Vec") != 0 || !def->is_heap ||
-                n_args != 1)
-                return true;
-            Type el = emit_resolve_type(ctx, args[0]);
-            switch (el.kind) {
-                case TY_NIL:  case TY_NEVER: case TY_BOOL:
-                case TY_INT:  case TY_INT8:  case TY_INT16: case TY_INT32: case TY_INT64:
-                case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
-                case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
-                case TY_CSTR:
-                    return false;           /* a scalar element reaches nothing */
-                default:
-                    return true;
+            if (region_def_is_malloc_collection(def)) {
+                for (uint8_t i = 0; i < n_args; i++)
+                    if (region_type_reaches_node(ctx, args[i], seen, n_seen, depth - 1))
+                        return true;
+                return false;
             }
+            if (n_args != def->n_type_params) return true;   /* not a monomorph */
+            return region_adt_reaches_node(ctx, def, args, n_args, seen, n_seen, depth);
         }
         default:
             /* Pointers, refs, rc, closures, structs, other containers, type
@@ -5523,7 +5620,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                        "(void)tur_region_pop_checked(__tur_rgn_%d);\n",
                        tmp, rgn_id);
         else if (rgn_reclaim)
-            buf_printf(body, "(void)tur_region_pop_checked(__tur_rgn_%d);\n", rgn_id);
+            /* region-lock-hardening: a by-value aggregate result is noted by
+             * its WORDS.  The static walk admitted its declared field types,
+             * but an `:int` field can be an erased node (`(HI n (build n 0))`
+             * with `build` returning `(:: (Link ..) :int)`), and before this
+             * the rewind went ahead and the field dangled.  Every aligned word
+             * is compared as an address; a scalar simply is not region
+             * memory, an erased pointer is and retires the generation. */
+            buf_printf(body,
+                       "tur_region_note_escape_words(&%s, sizeof %s); "
+                       "(void)tur_region_pop_checked(__tur_rgn_%d);\n",
+                       tmp, tmp, rgn_id);
         else
             buf_printf(body, "tur_region_pop(__tur_rgn_%d);\n", rgn_id);
     }
@@ -6028,7 +6135,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 } else {
                     buf_printf(&out,
                         "({ %s *__tur_box = (%s *)malloc(sizeof(%s)); "
-                        "*__tur_box = (%s); TUR_TAG(%lld, (int64_t)(intptr_t)__tur_box); })",
+                        "*__tur_box = (%s); TUR_REGION_NOTE_WORDS(__tur_box, sizeof *__tur_box); "
+                        "TUR_TAG(%lld, (int64_t)(intptr_t)__tur_box); })",
                         cn, cn, cn, inner, (long long)tag);
                 }
             } else {
@@ -8263,7 +8371,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         const char *cn = type_c_name(emit_resolve_type(ctx, box_ty));
                         char *tmp = fresh_tmp(ctx);
                         indent_buf(body, ctx->indent);
-                        /* RM3 R4 (docs/upcoming/regions-plan.md): THIS is the
+                        /* RM3 R4 (docs/archive/regions-plan.md): THIS is the
                          * per-link spine box the RM1 leak sweep blames -- the
                          * `tur_adt_Subst *__t = malloc(...)` that boxes an
                          * SR4 recursive ctor field.  It is NOT a `:heap` ADT
@@ -11153,6 +11261,24 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(body, "%s->%s = %s%s;\n",
                                fat_tmp, field, captured_is_pbp ? "*" : "", cn);
                 }
+                /* region-lock-hardening: the env is malloc'd and can outlive
+                 * the bracket the closure was built in (stored into an outer
+                 * container, handed to a thread), and its fields are the one
+                 * place a captured node hides from both locks -- the result
+                 * walk sees a closure and refuses, but a STORED closure is
+                 * only a malloc'd env pointer to the store hook.  Note each
+                 * captured word at the fill, by the field's declared C type. */
+                if (regions_enabled()) {
+                    Buf lv; buf_init(&lv);
+                    buf_printf(&lv, "%s->%s", fat_tmp, field);
+                    buf_putc(&lv, '\0');
+                    const char *fcty_note = captured->type.kind == TY_FN
+                        ? "int64_t"
+                        : (captured->is_poly_fn ? "tur_poly_fn_t"
+                                                : emit_type_c_name(ctx, captured->type));
+                    emit_region_note_lvalue(body, ctx->indent, fcty_note, lv.data);
+                    buf_free(&lv);
+                }
                 /* closure-drop-glue (Model R) walk slice: an rc-typed capture is a
                  * SHARED owning reference.  Flag-on, RETAIN it at capture (a strong
                  * increment) so the closure holds its own count -- balancing the
@@ -11251,6 +11377,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                            inner_type_c, val_tmp, inner_type_c, inner_type_c);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "*%s = %s;\n", val_tmp, inner);
+            }
+            /* region-lock-hardening: the rc block is malloc'd and shared; the
+             * payload it now holds (the adopted node pointer, or the words of
+             * the boxed value) is an escape if it is region memory. */
+            if (regions_enabled()) {
+                if (payload_is_boxed_adt || payload_is_heap_adt) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "TUR_REGION_NOTE(%s);\n", val_tmp);
+                } else {
+                    Buf lv; buf_init(&lv);
+                    buf_printf(&lv, "(*%s)", val_tmp);
+                    buf_putc(&lv, '\0');
+                    emit_region_note_lvalue(body, ctx->indent, inner_type_c, lv.data);
+                    buf_free(&lv);
+                }
             }
 
             char *cb_tmp = fresh_tmp(ctx);
@@ -13396,6 +13537,87 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
          * downstream concrete consumer gets the struct value, not an int64_t. */
         case EX_ASCRIBE: {
             char *inner_val = emit_value(ctx, body, e->as.ascribe_.inner);
+            /* region-lock-hardening: an ERASING ascription -- a value whose
+             * type reaches a region node, ascribed to a type that does not
+             * (`(:: (Link n acc) :int)`, `(:: node Any)`, a `ptr<void>`) -- is
+             * the point where the static walk loses sight of the node.  From
+             * here on it is a word the result walk admits and no container
+             * type refuses.  So the erasure IS the escape: note the value,
+             * and a node erased inside a bracket retires that generation
+             * instead of letting it rewind under an int somebody still
+             * holds.  A node erased OUTSIDE any bracket, or one another
+             * generation owns, is not region memory of any live generation
+             * and costs one compare.  The typed style (a `:copy` sum, a
+             * typed `nxt : Link` field, `(Vec Link)`) never takes this path
+             * and keeps its rewinds. */
+            if (regions_enabled() && inner_val) {
+                const AdtDef *seen_a[32], *seen_b[32];
+                uint32_t na = 0, nb = 0;
+                Type from = emit_resolve_type(ctx, e->as.ascribe_.inner->type);
+                Type to   = emit_resolve_type(ctx, e->type);
+                /* `from` must be a type that can HOLD a node -- an ADT or a
+                 * type application -- not merely one the walk refuses.  The
+                 * walk says "reaches" for a raw pointer, a closure, a type
+                 * variable too, and those are refusals of ignorance: a
+                 * `(:: <ptr<void>> String)` relabel carries no node and
+                 * hoisting it changed the text a downstream cast keyed on
+                 * (the `__inst_Clone_clone_String` -Wint-conversion). */
+                bool from_can_hold_node =
+                    (from.kind == TY_ADT &&
+                     !(from.as.adt_.def && from.as.adt_.def->is_opaque)) ||
+                    from.kind == TY_APP || from.kind == TY_STRUCT;
+                /* And `to` must be an ERASURE -- a word type the walk reads
+                 * as a scalar -- not a refinement to another typed shape
+                 * (`(:: (set-add ..) (Set (Vec int)))` pins a type argument;
+                 * the walk still sees the elements afterwards, and hoisting
+                 * the inner text there lost a downstream pointer cast). */
+                bool to_is_erasure =
+                    to.kind == TY_INT || to.kind == TY_PTR_VOID || to.kind == TY_ANY;
+                if (from_can_hold_node && to_is_erasure &&
+                    region_type_reaches_node(ctx, from, seen_a, &na, 24) &&
+                    !region_type_reaches_node(ctx, to, seen_b, &nb, 24)) {
+                    /* The note needs an ADDRESSABLE lvalue, and this used to
+                     * get one with `__auto_type t = (<inner>);` so the temp
+                     * took the inner's exact emitted representation without
+                     * re-deriving it.  `__auto_type` is GNU-only and **c2mir
+                     * cannot parse it** (see emit_fns.c's S1 note and
+                     * emit_cps_ir.c's cps->direct temp, which name the type for
+                     * exactly this reason).  One unparseable construct rejects
+                     * the WHOLE translation unit, so every program carrying an
+                     * erasing ascription lost the jit engine and fell back to
+                     * cc -- which is how this shipped unnoticed on Linux and
+                     * turned macOS's JIT job red.
+                     *
+                     * When the value is already a bare identifier it IS an
+                     * lvalue: note it in place and hoist nothing, which needs
+                     * no type at all and covers the ordinary case (an erased
+                     * parameter or local).  Otherwise name the temp's type the
+                     * way the let-binding decl does, and when even that cannot
+                     * answer, skip the hoist rather than emit C the engine
+                     * cannot read -- the value is still noted by every STORE
+                     * it reaches, so this loses the erasure's own note, not
+                     * the lock. */
+                    if (emit_str_is_bare_ident(inner_val)) {
+                        emit_region_note_lvalue(body, ctx->indent,
+                                                emit_type_c_name(ctx, from),
+                                                inner_val);
+                    } else {
+                        const char *ect = emit_binding_repr_c_name(
+                            ctx, e->as.ascribe_.inner->type,
+                            e->as.ascribe_.inner);
+                        if (ect) {
+                            char *et = fresh_tmp(ctx);
+                            indent_buf(body, ctx->indent);
+                            buf_printf(body, "%s %s = (%s);\n", ect, et,
+                                       inner_val);
+                            emit_localvar_record_ctype(et, ect);
+                            emit_region_note_lvalue(body, ctx->indent, ect, et);
+                            free(inner_val);
+                            inner_val = et;
+                        }
+                    }
+                }
+            }
             /* KB-021: an ascription `(:: (vec-new) (Vec int))` pins the static
              * type for dispatch discrimination but must NOT change the runtime
              * representation of a carrier-ABI aggregate.  The carrier (int64_t
@@ -13446,6 +13668,30 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 Type rtv = emit_resolve_type(ctx, e->type);
                 if (rtv.kind == TY_FLOAT || rtv.kind == TY_FLOAT32 ||
                     rtv.kind == TY_FLOAT64) {
+                    return emit_carrier_bridge(ctx, body, inner_val,
+                                               CK_CARRIER, CK_CONCRETE, rtv);
+                }
+                /* vec-get-byval-struct-element-returns-carrier: the sentence
+                 * above ("struct elements need no reinterpret -- their carrier
+                 * bits ARE the value") is false for a BY-VALUE aggregate.  A
+                 * heap container stores such an element BOXED
+                 * (type_is_boxed_container_elem: a non-heap by-value product of
+                 * any width), so the int64 the carrier helper hands back is the
+                 * box's address, and `vec-get-byval`'s `(:: (vec-data-get-
+                 * checked__ ...) A)` with `A := P2` was returned raw -- an int64
+                 * where the clone's C return type is `tur_adt_P2`, a hard cc
+                 * error, regions on or off.  The concrete spelling `(:: (vec-get
+                 * v 0) P2)` at a call site takes the aggregate bridge two blocks
+                 * down; the tyvar spelling inside a spec body must take the same
+                 * one.  Gated on the boxed-element predicate, and NOT on the SR4
+                 * recursive-carrier wrapper (its <= 8-byte bits really do ride
+                 * the carrier inline; the B4 match-binder path reads it raw), so
+                 * a shape that was right before stays right. */
+                if ((rtv.kind == TY_ADT || rtv.kind == TY_APP) &&
+                    !type_is_heap_adt(rtv) && !type_is_heap_struct(rtv) &&
+                    !emit_type_is_byval_recursive_carrier(ctx, rtv) &&
+                    type_is_boxed_container_elem(rtv) &&
+                    strcmp(emit_type_c_name(ctx, rtv), "int64_t") != 0) {
                     return emit_carrier_bridge(ctx, body, inner_val,
                                                CK_CARRIER, CK_CONCRETE, rtv);
                 }
@@ -14798,6 +15044,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                      * docs/reported/sr2-carrier-seam-rotted.md) */
                                     buf_printf(body, "%s %s = __scrut%s%s;\n",
                                                ctype, bname, acc, mp);
+                                } else if (type_struct_pass_by_ptr(
+                                               emit_resolve_type(ctx, fb->type))) {
+                                    /* SR4 traversal profile: BORROW the box, do not
+                                     * copy the node out of it.  The slot holds a
+                                     * heap-box pointer to a WIDE by-value aggregate
+                                     * -- the recursive spine link -- and every
+                                     * callee already takes such a value as
+                                     * `const T *`, so bind the pointer and register
+                                     * the binder as pass-by-pointer: field reads
+                                     * use `->`, a by-value use derefs, and a call
+                                     * passes it through.  The copy this replaces
+                                     * was what made `subst-lookup` a real recursion:
+                                     * `&rest` handed the address of a LOCAL to the
+                                     * self-call, so GCC could not turn the tail call
+                                     * into a jump, and each link cost a frame plus
+                                     * the 48-byte copy (~50 instructions against 14
+                                     * for the carrier, which it DID flatten).  With
+                                     * the pointer passed straight through the walk
+                                     * is a loop again: bench-logic-subst-split's walk
+                                     * rows go from 6.5x slower than the carrier at
+                                     * n=512 to parity.  The box is owned by the
+                                     * scrutinee's node, which outlives the arm. */
+                                    buf_printf(body,
+                                        "const %s *%s = (const %s *)(intptr_t)(__scrut%s%s);\n",
+                                        ctype, bname, ctype, acc, mp);
+                                    emit_pbp_push(ctx, fb);
                                 } else {
                                     /* B3: a by-value ADT field stored boxed (int64
                                      * heap pointer) in a carrier / GADT slot --
@@ -15156,6 +15428,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                      * initializer.  Fall through to B3's deref. */
                                     buf_printf(body, "%s %s = __scrut->%s;\n",
                                                ctype, bname, mp);
+                                } else if (type_struct_pass_by_ptr(
+                                               emit_resolve_type(ctx, fb->type))) {
+                                    /* SR4 traversal profile: borrow the box (see the
+                                     * sibling switch-path site for the reasoning). */
+                                    buf_printf(body,
+                                        "const %s *%s = (const %s *)(intptr_t)(__scrut->%s);\n",
+                                        ctype, bname, ctype, mp);
+                                    emit_pbp_push(ctx, fb);
                                 } else {
                                     /* B3: a by-value ADT field stored boxed (int64
                                      * heap pointer) in a carrier / GADT slot --

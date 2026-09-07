@@ -77,7 +77,7 @@ what it is because `no_cube_unsat` calls `euf_new` and `la_new` **per cube**, up
 to 64 cubes per obligation. SX3 (incremental EUF) replaces that rebuild with
 mark/undo over one state, which is already specced, already gated, and deletes
 the same allocations as a side effect of work being done for a different reason.
-See [solver-extension-plan.md](../../upcoming/solver-extension-plan.md) SX3.
+See [solver-extension-plan.md](../solver-extension-plan.md) SX3.
 
 **Nothing needs doing about the VC term.** 2.57 KB per obligation is real but
 small: 400 obligations -- far more than any file in the tree -- costs 1 MB on a

@@ -82,6 +82,7 @@
   : void
   ```c
   struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+  TUR_REGION_NOTE(v);   /* region-lock-hardening: see vec-push! */
   grid->data[(size_t)(y * grid->width + x)] = v;
   ```)
 ;;; grid-width -- return the width of a Grid[A].

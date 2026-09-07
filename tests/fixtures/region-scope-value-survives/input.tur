@@ -1,4 +1,4 @@
-;; RM3 R4 (docs/upcoming/regions-plan.md): `bt-scope` is a region boundary, and
+;; RM3 R4 (docs/archive/regions-plan.md): `bt-scope` is a region boundary, and
 ;; the VALUE read back across it is what this asserts.
 ;;
 ;; That is the SR4 lesson, and the reclamation plan says it applies here with

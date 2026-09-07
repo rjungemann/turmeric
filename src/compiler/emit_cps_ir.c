@@ -6323,7 +6323,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                 : atoms_csv_call_typed(ce, t->as.letcall.args, t->as.letcall.n,
                                        t->as.letcall.fn, lc_spec);
             char *bn = cvar_cname(ce, t->as.letcall.x);
-            /* RM3 R4 (docs/upcoming/regions-plan.md): NO region boundary here,
+            /* RM3 R4 (docs/archive/regions-plan.md): NO region boundary here,
              * deliberately.  The CPS path's `bt-scope` calls all land on the
              * CT_TAILCALL cps->direct arm, which carries the push/pop -- probed
              * with the bracket in tail position, in an arithmetic operand, and
@@ -6600,7 +6600,11 @@ static void emit_term(CE *ce, const CTerm *t) {
                             ce_line(ce, "tur_region_note_escape((const void *)(intptr_t)%s); "
                                         "(void)tur_region_pop_checked(__tur_rgn_%d);", tmp, rgn_id);
                         else if (rgn_reclaim)
-                            ce_line(ce, "(void)tur_region_pop_checked(__tur_rgn_%d);", rgn_id);
+                            /* region-lock-hardening: a by-value aggregate result
+                             * is noted by its words -- an `:int` field can be an
+                             * erased node.  Same rule as the direct path. */
+                            ce_line(ce, "tur_region_note_escape_words(&%s, sizeof %s); "
+                                        "(void)tur_region_pop_checked(__tur_rgn_%d);", tmp, tmp, rgn_id);
                         else
                             ce_line(ce, "tur_region_pop(__tur_rgn_%d);", rgn_id);
                         rgn_id = -1;   /* closed */

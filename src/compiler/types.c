@@ -58,6 +58,10 @@ char *mangle_adt_name(const char *name);
 char *mangle_ctor_symbol(const struct AdtDef *adt, const char *ctor_name);
 char *adt_field_member_path(const struct AdtDef *def, const struct CtorDef *ctor,
                             uint32_t fi);
+/* region-lock-hardening: the store-side region note for a ctor field write,
+ * defined in emit_core.c and declared in emit_internal.h (not included here);
+ * the monomorph ctor's boxed branch uses it exactly as the base ctor does. */
+void emit_region_note_lvalue(struct Buf *body, int indent, const char *ctype, const char *lv);
 
 /* ptr-generic-parameterised-type: intern compound type-name strings (e.g.
  * "double *", "ptr<float>") so type_c_name/type_name can return a stable,
@@ -1438,7 +1442,7 @@ bool adt_ctor_is_null_none(const AdtDef *def, const CtorDef *ctor) {
  * user who turns it on should get the TUR-W0060 lifecycle warning and a plan to
  * read.  `experiment_warn_if_used` is once-per-compile guarded, so calling it
  * from this hot predicate costs one index lookup after the first. */
-/* RM3 regions (docs/upcoming/regions-plan.md): declared lifetimes over the
+/* RM3 regions (docs/archive/regions-plan.md): declared lifetimes over the
  * arena, for values whose owner is a SCOPE rather than another value -- the
  * per-node spine box of a persistent recursive structure, which RM1 cannot
  * reach and RM2 cannot own.
@@ -2201,7 +2205,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
          * and a positional one writes `__r->as.<Ctor>._N`, in lockstep with the
          * typedef + field-read sites. */
         if (app_heap) {
-            /* RM3 R2 (docs/upcoming/regions-plan.md): the spine node, at the
+            /* RM3 R2 (docs/archive/regions-plan.md): the spine node, at the
              * MONOMORPH ctor.  Its sibling is the base ctor in emit_module.c
              * (`emit_adt_typedef_and_ctors`) -- the two mirror each other and a
              * change to one belongs in both.  That is not a general caution: it
@@ -2280,8 +2284,23 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                         "    { %s *__b = (%s *)malloc(sizeof(%s)); *__b = _%u;"
                         " __r->%s = (int64_t)(intptr_t)__b; }\n",
                         val_ctype[fi], val_ctype[fi], val_ctype[fi], fi, mp);
+                    /* region-lock-hardening: the boxed aggregate's words. */
+                    buf_printf(out,
+                        "    TUR_REGION_NOTE_WORDS((void *)(intptr_t)__r->%s, sizeof(%s));\n",
+                        mp, val_ctype[fi]);
                 } else {
                     buf_printf(out, "    __r->%s = _%u;\n", mp, fi);
+                    /* region-lock-hardening: a malloc'd carrier box holding a
+                     * region node is an escape once the box outlives the
+                     * bracket; note the field at construction (the twin of the
+                     * base-ctor note in emit_module.c). */
+                    {
+                        Buf lv; buf_init(&lv);
+                        buf_printf(&lv, "__r->%s", mp);
+                        buf_putc(&lv, '\0');
+                        emit_region_note_lvalue(out, 4, val_ctype[fi], lv.data);
+                        buf_free(&lv);
+                    }
                 }
                 free(mp);
             }

@@ -254,7 +254,7 @@ on the mutators for a month checking as `#fx{}` before the declaration existed.
 ## `bt-scope` is also a region, and `with-region` is only a region
 
 On by default since 2026-09-05 (see the
-[regions plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/regions-plan.md);
+[regions plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/regions-plan.md);
 `TUR_REGIONS=0` turns it off for bisection), `bt-scope` does a second thing besides pushing a trail level: it opens an
 arena **generation**, and everything allocated inside that the returned value
 cannot reach is reclaimed in one rewind when the bracket exits. For a solver
@@ -280,6 +280,14 @@ undo without paying the escape check uses them.
 With `TUR_REGIONS=0`, `with-region` is an identity call and `bt-scope` is just the
 trail bracket described above; neither allocates any differently.
 
+The escape check is not only about the returned value. A node built inside the
+bracket and then `bt-set!` into a cell, pushed into a vec, or captured by a
+closure that is stored outward is noted at the store and blocks the rewind
+too, so a search that stashes part of its state outside the bracket keeps its
+correctness and loses only the saving. See the regions section of the
+[GC guide](gc-guide.md#what-is-not-gc-managed) for the full list of hooked
+stores and the one thing they cannot see (user inline-C).
+
 ## Under `--interpret`
 
 The whole surface works, and the interpreter calls the same
@@ -301,4 +309,4 @@ it to explore, not to measure.
 - [Backtracking Guide](backtracking-guide.md) -- the list-monad search surface.
 - [Logic Programming Guide](logic-programming-guide.md) -- relational search and `Subst`.
 - [Delimited Control Operators Guide](delimited-control-operators-guide.md) -- `shift`/`reset`, `call/cc*`.
-- [Solver extension plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/solver-extension-plan.md) -- design rationale, sections 3.2-3.5.
+- [Solver extension plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/solver-extension-plan.md) -- design rationale, sections 3.2-3.5.

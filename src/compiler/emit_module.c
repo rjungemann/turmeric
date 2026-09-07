@@ -6027,6 +6027,14 @@ static const char *abi_trace_clone_name(const EmitCtx *ctx, const Expr *call) {
         for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
             const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
             if (spec->binding != b || spec->n_args != call->as.call_.n_args) continue;
+            /* Lockstep with emit_call_name's G6 / result-ABI guard, so the
+             * trace reports the clone emit will actually name.  The cast is
+             * trace-only: emit_resolve_type does not mutate the ctx. */
+            if (emit_spec_result_mismatch((EmitCtx *)ctx,
+                                          emit_resolve_type((EmitCtx *)ctx, call->type),
+                                          spec->result_type)) {
+                continue;
+            }
             bool args_match = true;
             for (uint32_t ai = 0; ai < call->as.call_.n_args; ai++) {
                 const Expr *cur = call->as.call_.args[ai];
@@ -7870,7 +7878,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
         if (heap) {
             /* malloc the by-value header, store fields inline, return the typed
              * pointer (no int64 carrier cast -- the pointer IS the value). */
-            /* RM3 R2 (docs/upcoming/regions-plan.md): this is the spine node.
+            /* RM3 R2 (docs/archive/regions-plan.md): this is the spine node.
              * A `:heap` ADT's monomorph ctor mallocs one per link, and it is
              * the allocation RM1 cannot reach (it escapes its constructor by
              * construction) and RM2 cannot own (a persistent tail is shared).
@@ -7931,6 +7939,20 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);
                 buf_printf(out, "    __r->%s = _%u;\n", mp, fi);
+                /* region-lock-hardening: this box is malloc'd (or slab), never
+                 * region memory, so a region node written into one of its
+                 * fields is an escape the moment the box outlives the bracket
+                 * -- and a box is a single word to every store hook.  Note
+                 * the field at construction.  The routed `:heap` branch above
+                 * needs nothing: its node IS region memory. */
+                {
+                    Buf lv; buf_init(&lv);
+                    buf_printf(&lv, "__r->%s", mp);
+                    buf_putc(&lv, '\0');
+                    emit_region_note_lvalue(out, 4,
+                        adt_ctor_field_c_type(&ctor->fields[fi], byval || heap), lv.data);
+                    buf_free(&lv);
+                }
                 free(mp);
             }
             buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
@@ -8206,7 +8228,7 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * other door.  A hand-rolled tagged-None box (tag 0, non-null pointer --
      * the historical layout the read side still accepts) maps to the niche
      * null rather than reading its uninitialised payload word. */
-    /* RM3 regions (docs/upcoming/regions-plan.md; on by default since the
+    /* RM3 regions (docs/archive/regions-plan.md; on by default since the
      * 2026-09-05 graduation): the emitted program reaches the region allocator
      * from every spine-node constructor and drop path, and registers
      * tur_region_shutdown from its static init.  This is the DECLARATION half
@@ -8234,6 +8256,28 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
             "#  endif\n"
             "#endif\n");
         emit_embedded_runtime_source(out, "region.h", tur_rt_embed_region_h);
+    }
+    /* region-lock-hardening: the STORE-SIDE lock's one spelling.  Every
+     * primitive that writes a caller's word into memory that can outlive a
+     * bracket -- stdlib inline-C (vec-push!, mutmap-set!, bt-set!, ...), the
+     * emitted closure-env fill, a heap-boxed ctor field, an erasing
+     * ascription -- says `TUR_REGION_NOTE(word)` and nothing else, so the
+     * same stdlib text compiles on both arms: with regions on it is the
+     * runtime note (a region-owned word flags its generation, which then
+     * retires instead of rewinding); under TUR_REGIONS=0 it is `((void)0)`
+     * and the program references no region symbol, which is what
+     * tests/run-regions-seam.sh's canary greps for.  The WORDS form is for a
+     * by-value aggregate (every aligned word is a possible erased pointer).
+     * The macro names are upper-case on purpose: the canary matches
+     * `tur_region_` and must keep matching the off arm as clean. */
+    if (regions_enabled()) {
+        buf_puts(out,
+            "#define TUR_REGION_NOTE(w) tur_region_note_escape((const void *)(intptr_t)(w))\n"
+            "#define TUR_REGION_NOTE_WORDS(p, n) tur_region_note_escape_words((const void *)(p), (size_t)(n))\n");
+    } else {
+        buf_puts(out,
+            "#define TUR_REGION_NOTE(w) ((void)0)\n"
+            "#define TUR_REGION_NOTE_WORDS(p, n) ((void)0)\n");
     }
     buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) {\n");
@@ -13871,7 +13915,7 @@ int emit_program(Buf *out, const Expr *program) {
                 }
                 buf_printf(&early_file, ") {\n");
                 if (heap) {
-                    /* RM3 R2/R4 (docs/upcoming/regions-plan.md): the THIRD
+                    /* RM3 R2/R4 (docs/archive/regions-plan.md): the THIRD
                      * spine-node ctor emitter.  `emit_program` emits base ctors
                      * HERE rather than through emit_adt_typedef_and_ctors, so a
                      * NON-parametric `:heap` ADT -- `(defdata Link :heap ...)`,
@@ -13940,6 +13984,19 @@ int emit_program(Buf *out, const Expr *program) {
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                         char *mp = adt_field_member_path(def, ctor, fi);
                         buf_printf(&early_file, "    __r->%s = _%u;\n", mp, fi);
+                        /* region-lock-hardening: mirror of the note at the
+                         * emit_adt_typedef_and_ctors site -- this malloc'd
+                         * (or slab) box outlives any bracket, so a region node
+                         * written into it is an escape.  All three boxed-ctor
+                         * emitters carry it. */
+                        {
+                            Buf lv; buf_init(&lv);
+                            buf_printf(&lv, "__r->%s", mp);
+                            buf_putc(&lv, '\0');
+                            emit_region_note_lvalue(&early_file, 4,
+                                adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval), lv.data);
+                            buf_free(&lv);
+                        }
                         free(mp);
                     }
                     buf_printf(&early_file, "    return (int64_t)(intptr_t)__r;\n");

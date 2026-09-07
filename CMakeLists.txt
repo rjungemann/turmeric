@@ -206,7 +206,7 @@ add_test(
   COMMAND bash tests/run-demangle.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
-# RM3: the region allocator's safety properties (docs/upcoming/regions-plan.md).
+# RM3: the region allocator's safety properties (docs/archive/regions-plan.md).
 add_test(
   NAME tur_region_unit
   COMMAND "${CMAKE_BINARY_DIR}/tur_region_unit"
@@ -218,6 +218,18 @@ add_test(
   COMMAND bash tests/run-regions-seam.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# region-lock-hardening: source-level differential fuzz over region brackets.
+# Generated programs let nodes escape a bracket through every route the lock
+# knows (result type, store, erasure, stored closure, nested bracket) and read
+# them back after the pop, on the default arm under ASan and under
+# TUR_REGIONS=0, against a predicted stdout and a predicted rewind / retire
+# count.  Smoke size -- run tests/regions-fuzz-src.py directly for a session.
+add_test(
+  NAME tur_regions_fuzz_src
+  COMMAND bash tests/run-regions-fuzz-src.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_regions_fuzz_src PROPERTIES TIMEOUT 900)
 # RM3 R3: the poison backstop must actually fire.  A backstop that silently
 # stops firing looks exactly like a program with no stragglers.
 add_test(

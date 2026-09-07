@@ -94,12 +94,22 @@ void emit_set_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                    bn, bn);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s = %s;\n", bn, tmp);
+        emit_region_note_lvalue(body, ctx->indent, tcn, bn);
         free(tmp); free(bn); free(v);
         return;
     }
 
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s = %s;\n", bn, v);
+    /* region-lock-hardening: a `set!` target that is a global / module-level
+     * def, or a heap cell a lifted body shares, is memory that outlives any
+     * bracket the store runs inside -- note the word.  A plain local is a
+     * stack slot that dies with its frame: nothing to note, and a hot loop's
+     * counter stays a bare assignment. */
+    if (e->as.set_.target &&
+        (e->as.set_.target->is_global || emit_binding_is_byref_cell(e->as.set_.target)))
+        emit_region_note_lvalue(body, ctx->indent,
+                                type_c_name(emit_resolve_type(ctx, e->as.set_.target->type)), bn);
     free(bn); free(v);
 }
 
@@ -110,6 +120,14 @@ void emit_set_deref_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     const char *inner_type_c = type_c_name(e->as.set_deref_.value->type);
     indent_buf(body, ctx->indent);
     buf_printf(body, "*((%s *)%s) = %s;\n", inner_type_c, ref, val);
+    /* region-lock-hardening: a ref cell is heap memory. */
+    {
+        Buf lv; buf_init(&lv);
+        buf_printf(&lv, "(*((%s *)%s))", inner_type_c, ref);
+        buf_putc(&lv, '\0');
+        emit_region_note_lvalue(body, ctx->indent, inner_type_c, lv.data);
+        buf_free(&lv);
+    }
     free(ref); free(val);
 }
 
@@ -189,6 +207,14 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s = %s;\n", lhs.data, vv);
+        /* region-lock-hardening: the receiver is a heap box or an outer
+         * aggregate; either can outlive the bracket the store runs in. */
+        {
+            const CtorField *cf = &ctor->fields[fi];
+            const char *fcn = cf->full_type ? type_c_name(*cf->full_type)
+                                            : type_c_name(emit_type_from_kind(afk));
+            emit_region_note_lvalue(body, ctx->indent, fcn, lhs.data);
+        }
         buf_free(&lhs);
         free(rv); free(vv); free(mp);
         return;

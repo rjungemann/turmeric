@@ -1,6 +1,6 @@
 ;;; tur/backtrack-dfs -- depth-first search driver over the backtracking trail.
 ;;;
-;;; The SX2 driver (docs/upcoming/solver-extension-plan.md): CPS goal
+;;; The SX2 driver (docs/archive/solver-extension-plan.md): CPS goal
 ;;; combinators whose state lives in trailed cells (stdlib/trail.tur), with
 ;;; every choice point bracketed by bt-scope so a failed branch's writes are
 ;;; undone before the next branch runs.  This is the mark / explore /

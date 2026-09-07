@@ -130,6 +130,12 @@
     vec->data = new_data;
     vec->cap = new_cap;
   }
+  /* region-lock-hardening: the buffer is malloc'd and outlives any region
+     bracket this push runs inside, so a region-allocated element (a node,
+     or an erased `:int` that is one) is an escape the result walk cannot
+     see.  The note flags its generation, which then retires instead of
+     rewinding -- see src/runtime/region.h. */
+  TUR_REGION_NOTE(val);
   vec->data[vec->len++] = (int64_t)val;
   ```)
 ;;; vec-pop! -- remove and return the last element of a Vec[A].
@@ -256,6 +262,7 @@
       RcControlBlock *__o = (RcControlBlock *)(intptr_t)vec->data[i];
       if (__o) { rc_strong_decrement(__o); rc_free_queue_drain(); }
     }
+    TUR_REGION_NOTE(val);   /* region-lock-hardening: see vec-push! */
     vec->data[i] = (int64_t)val;
     return;
   }

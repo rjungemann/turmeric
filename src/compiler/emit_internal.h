@@ -569,6 +569,8 @@ typedef struct EmitCtx {
     Binding    **pbp_param_ptrs;
     uint32_t     n_pbp_params;
     uint32_t     cap_pbp_params;
+    /* Defined in emit_fns.c; registers `b` as held by `const T *`. */
+
     /* ASan/LSan plan (Option C): arena for the transient Type nodes that
      * emit_resolve_type / emit_abi_instantiate_type clone while resolving
      * generic type variables to concrete types for ABI specialization. These
@@ -749,7 +751,7 @@ bool emit_slot_word_is(const char *cname);
  * deliberately absent -- its own body already ascribes the word back to the
  * element, so it hands back the element, not the slot. */
 bool emit_call_is_raw_slot_read(const struct Expr *e);
-/* RM3 R4 (docs/upcoming/regions-plan.md): the region boundary, shared with the
+/* RM3 R4 (docs/archive/regions-plan.md): the region boundary, shared with the
  * CPS emitter.  `emit_binding_is_region_scope` is the callee test (and is false
  * with the flag off, so both call sites are inert by default);
  * `emit_region_scope_reclaims` is the STATIC lock -- true when the bracket's
@@ -766,7 +768,19 @@ bool emit_binding_is_region_scope(const struct Binding *b);
  * prologue is too late, because a constructor runs __tur_static_init (and so
  * registers the defers) before main.  See the definition. */
 void emit_region_shutdown_atexit(Buf *out, int indent);
+/* region-lock-hardening: the store-side note for an lvalue just written into
+ * memory that can outlive a bracket.  `ctype` picks the spelling: a word or
+ * pointer is noted directly, a by-value aggregate by its words, a float or
+ * narrow scalar not at all; NULL means unknown and notes the words.  Emits
+ * nothing under TUR_REGIONS=0.  `lv` must be an lvalue expression. */
+void emit_region_note_lvalue(Buf *body, int indent, const char *ctype, const char *lv);
 bool emit_region_scope_reclaims(struct EmitCtx *ctx, const struct Type *t);
+/* region-lock-hardening follow-up: true when a value of this type, as one
+ * word, can BE region memory -- a `:heap` node or a by-value aggregate whose
+ * inline words hold one, and never a malloc-backed collection handle.  The
+ * filter for the inline-C parameter note; see emit_expr.c for why it is
+ * narrower than the result lock. */
+bool emit_region_word_can_be_node(struct EmitCtx *ctx, const struct Type *t);
 /* S1 (jit-engine-plan section 4): true when an emitted C type NAME denotes a
  * scalar -- any pointer, or one of the primitive/stdint spellings the emitter
  * produces.  Anything else (a struct typedef such as `Option__int` or
@@ -929,9 +943,17 @@ bool emit_spec_arg_type_for_binding(EmitCtx *ctx, const struct Binding *b,
 void emit_abi_assert_routed_concrete(EmitCtx *ctx, const Type *recovered,
                                      const char *site, bool deep);
 /* G6: true when a call's result type and a candidate spec's result type are
- * distinct PRIMITIVE kinds -- a return-differentiated sibling spec that the
- * by-args lookup must not match.  Defined in emit_expr.c. */
-bool emit_spec_result_mismatch(Type call_result, Type spec_result);
+ * distinct PRIMITIVE kinds, or (capturing-thunk-returning-heap-field-record-
+ * garbles-int) are both concrete and spell different C types -- a return-
+ * differentiated sibling spec that the by-args lookup must not match.  Every
+ * by-args spec matcher on the direct path consults this one predicate so they
+ * cannot drift; the CPS emitter's find_mono_clone_for_call carries the same
+ * rule for its arms.  Defined in emit_expr.c. */
+bool emit_spec_result_mismatch(EmitCtx *ctx, Type call_result, Type spec_result);
+/* Register a binding as pass-by-pointer for the current function (emit_fns.c).
+ * Parameters at fn entry, and the match binder that borrows a wide boxed
+ * recursive field (emit_expr.c B3) rather than copying the node out. */
+void emit_pbp_push(EmitCtx *ctx, Binding *b);
 /* G2: the concrete instance-method FnDef a class-method call resolves to for a
  * given recovered dispatch type (e.g. `__inst_Enc_enc_Cons` for `(Cons int)`).
  * Defined in emit_core.c. */

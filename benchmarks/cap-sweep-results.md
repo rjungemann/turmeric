@@ -1,6 +1,6 @@
 # Refinement solver cap sweep (SX0(b))
 
-Generated: 2026-09-05 17:26 at dee5563f by `benchmarks/run-cap-sweep.sh`.
+Generated: 2026-09-06 16:20 at 84664c29 by `benchmarks/run-cap-sweep.sh`.
 
 Every cap below degrades to `RT_UNKNOWN` -> the runtime check survives, so a
 hit is never unsound -- it is lost completeness, and only lost completeness that
@@ -15,14 +15,16 @@ higher cap would actually help -- a VC over the cap may also carry a non-int
 variable, which the sort gate declines at any limit.  Argue a raise from that
 row, never from the hits.
 
-**Do not read the fuzzer population's `model_vars` headroom as a signal.**
-`tests/refine-fuzz-src.py` generates at most TWO parameters per program
-(`rng.randint(0, 2)` / `randint(1, 2)` in its shape methods), so a generated
-VC structurally cannot exceed those plus `r`.  A peak that sits exactly on the
-limit there is the generator's ceiling, not evidence about real code, and 0
-hits from that population is not evidence the cap never bites.  A four-
-parameter function with a refined return trips it immediately -- which is an
-ordinary shape none of the three swept populations happens to contain.
+**The fuzzer population's `model_vars` / `model_evals` rows mean something
+only as far as the generator reaches.**  Until 2026-09-05
+`tests/refine-fuzz-src.py` generated at most TWO parameters per program, so a
+generated VC structurally could not exceed those plus `r` and a peak sitting on
+the limit was the generator's ceiling, not evidence about real code.  Its
+`shape_integer` now emits 3-5 parameter functions (plus `mod`, `/` by a literal
+and squares), so the rows have a population -- but still one shaped by the
+generator: 0 hits there says the cap does not bite on THAT distribution.  The
+`model_evals` row is the search's evaluation-budget decline (MODEL_MAX_EVALS),
+a count like the FM row; every hit would run at a bigger budget.
 
 `path_hyps` is a COLLECTION cap (RT_CS_PATH_MAX_HYPS -- the branch guards
 recovered for a call-site crossing), not a solver stage.  It reads `n/a` for the
@@ -31,22 +33,25 @@ elaborates anything, and its peak SATURATES at the limit, so the headroom column
 means something only while its hits are 0.
 
 
-## SMT-LIB corpus -- 124 unit(s), 1 with a cap hit
+## SMT-LIB corpus -- 130 unit(s), 1 with a cap hit
 
 | cap | hits | peak | limit | headroom | worst unit |
 |---|---:|---:|---:|---:|---|
 | cubes | 0 | 40 | 64 | 38% | gen_mixed_sat_00003.smt2 |
-| cube_lits | 0 | 13 | 64 | 80% | qf_lia_distinct_unsat.smt2 |
-| expand_depth | 0 | 8 | 256 | 97% | qf_lia_distinct_unsat.smt2 |
+| cube_lits | 0 | 15 | 64 | 77% | qf_lia_parity_shift_unsat.smt2 |
+| expand_depth | 0 | 9 | 256 | 96% | qf_lia_div_mod_identity_unsat.smt2 |
 | la_vars | 0 | 9 | 32 | 72% | gen_mixed_sat_00013.smt2 |
-| la_constr | 0 | 10 | 512 | 98% | qf_lia_distinct_unsat.smt2 |
+| la_constr | 0 | 14 | 512 | 97% | qf_lia_parity_shift_unsat.smt2 |
 | euf_terms | 982 | 512 | 512 | 0% | qf_lra_deep_arith_chain_sat.smt2 |
 | no_shared | 0 | 9 | 16 | 44% | gen_mixed_sat_00013.smt2 |
 | path_hyps | n/a | n/a | 8 | n/a | this population does not elaborate |
-| model_vars | n/a | n/a | 8 | n/a | this harness does not run the model search |
+| model_vars | n/a | n/a | 8 | n/a | the corpus emitter does not report the search's caps |
 | la_fm (FM blow-up) | 0 | - | - | - | - |
 | no_rounds (exchange budget) | 0 | - | - | - | - |
-| model_vars would run | n/a | - | - | - | this harness does not run the model search |
+| model_vars would run | n/a | - | - | - | the corpus emitter does not report the search's caps |
+| model_evals (search budget) | n/a | - | - | - | the corpus emitter does not report the search's caps |
+| eq_nounit_split, unknown obligations (Phase 2 trigger) | 1 | - | - | - | gen_mixed_sat_00054.smt2 |
+| la_int_relax_feasible, unknown obligations (Phase 3a trigger) | 23 | - | - | - | qf_uf_no_congruence_sat.smt2 |
 
 ## in-tree fixtures -- 88 unit(s), 0 with a cap hit
 
@@ -64,23 +69,29 @@ means something only while its hits are 0.
 | la_fm (FM blow-up) | 0 | - | - | - | - |
 | no_rounds (exchange budget) | 0 | - | - | - | - |
 | model_vars would run | 0 | - | - | - | of the 0 over the cap |
+| model_evals (search budget) | 0 | - | - | - | - |
+| eq_nounit_split, unknown obligations (Phase 2 trigger) | 0 | - | - | - | - |
+| la_int_relax_feasible, unknown obligations (Phase 3a trigger) | 5 | - | - | - | refine-match-field-wrong |
 
 ## fuzzer VCs -- 200 unit(s), 0 with a cap hit
 
 | cap | hits | peak | limit | headroom | worst unit |
 |---|---:|---:|---:|---:|---|
-| cubes | 0 | 8 | 64 | 88% | c000082.tur |
-| cube_lits | 0 | 5 | 64 | 92% | c000004.tur |
-| expand_depth | 0 | 6 | 256 | 98% | c000082.tur |
-| la_vars | 0 | 7 | 32 | 78% | c000021.tur |
-| la_constr | 0 | 6 | 512 | 99% | c000174.tur |
-| euf_terms | 0 | 23 | 512 | 96% | c000106.tur |
-| no_shared | 0 | 7 | 16 | 56% | c000021.tur |
+| cubes | 0 | 16 | 64 | 75% | c000006.tur |
+| cube_lits | 0 | 12 | 64 | 81% | c000138.tur |
+| expand_depth | 0 | 7 | 256 | 97% | c000138.tur |
+| la_vars | 0 | 9 | 32 | 72% | c000006.tur |
+| la_constr | 0 | 11 | 512 | 98% | c000138.tur |
+| euf_terms | 0 | 25 | 512 | 95% | c000006.tur |
+| no_shared | 0 | 7 | 16 | 56% | c000006.tur |
 | path_hyps | 0 | 4 | 8 | 50% | c000000.tur |
-| model_vars | 0 | 3 | 8 | 62% | c000028.tur |
+| model_vars | 0 | 5 | 8 | 38% | c000002.tur |
 | la_fm (FM blow-up) | 0 | - | - | - | - |
 | no_rounds (exchange budget) | 0 | - | - | - | - |
 | model_vars would run | 0 | - | - | - | of the 0 over the cap |
+| model_evals (search budget) | 0 | - | - | - | - |
+| eq_nounit_split, unknown obligations (Phase 2 trigger) | 0 | - | - | - | - |
+| la_int_relax_feasible, unknown obligations (Phase 3a trigger) | 17 | - | - | - | c000000.tur |
 
 Corpus harness exit code: 0 (0 = PASS, no soundness failure).
 

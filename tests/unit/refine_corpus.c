@@ -19,15 +19,23 @@
  *
  * which gives the check its whole shape:
  *
- *   | :status | RT_VALID              | anything else |
- *   |---------|-----------------------|---------------|
- *   | unsat   | correct (a proof)     | acceptable    |
- *   | sat     | SOUNDNESS FAILURE     | correct       |
+ *   | :status | RT_VALID              | RT_INVALID (a model)  | RT_UNKNOWN |
+ *   |---------|-----------------------|-----------------------|------------|
+ *   | unsat   | correct (a proof)     | MODEL FAILURE         | acceptable |
+ *   | sat     | SOUNDNESS FAILURE     | correct               | correct    |
  *
  * A `sat` benchmark answered VALID is the one-directional invariant broken:
  * the chain claimed a contradiction in a set of constraints that has a model.
  * That is the property this harness exists to defend, and it needs no oracle
  * to check -- only the label.
+ *
+ * An `unsat` benchmark answered with a MODEL is the other direction, and it
+ * is not incompleteness: the model search evaluated every assertion true
+ * under a concrete assignment, so the witness says the reader or the
+ * evaluator gives some term a meaning the script did not write (the case
+ * that found it: SMT-LIB's Euclidean `mod` read as C's `%`).  Counted with
+ * the soundness failures.  A plain RT_UNKNOWN on an `unsat` label stays
+ * "weak" -- that one really is incompleteness.
  *
  * `unknown` labels are recorded and never fail: they carry no claim.
  *
@@ -89,7 +97,14 @@ static RefineVerdict run_chain(RefineVC *vc, Arena *a) {
         RefineDecision d = CHAIN[i](vc, a);
         if (d.verdict != RT_UNKNOWN) return d.verdict;
     }
-    return RT_UNKNOWN;
+    /* What `tur smt` does after the chain comes back Unknown, so this harness
+     * replays the same solver and not a subset of it: the bounded model
+     * search, the one thing allowed to answer RT_INVALID -- with a witness it
+     * EVALUATED.  Without this step the harness could never see a wrong model
+     * (SMT-LIB's Euclidean `mod` read as C's `%` produced one for
+     * `(< (mod x 3) 0)`, and every label here shrugged), so the MODEL row of
+     * the table above was unreachable. */
+    return refine_model_search(vc, a) ? RT_INVALID : RT_UNKNOWN;
 }
 
 static int g_soundness_failures = 0;
@@ -152,14 +167,14 @@ static char *slurp(const char *path, size_t *len_out) {
  *
  * Emitted for every benchmark, not only the capped ones: the peaks of the
  * benchmarks that did NOT cap out are what say how much headroom the corpus
- * actually leaves.  See docs/upcoming/solver-extension-plan.md (SX0(b)). */
-static void report_caps(const char *path) {
+ * actually leaves.  See docs/archive/solver-extension-plan.md (SX0(b)). */
+static void report_caps(const char *path, RefineVerdict v) {
     const char *e = getenv("TUR_CORPUS_CAPS");
     if (!e || e[0] != '1') return;
     const RefineCapStats *c = refine_caps();
     printf("  caps    %s cubes=%u:%u cube_lits=%u:%u expand_depth=%u:%u "
            "la_vars=%u:%u la_constr=%u:%u la_fm=%u euf_terms=%u:%u "
-           "no_shared=%u:%u no_rounds=%u\n",
+           "no_shared=%u:%u no_rounds=%u eq_nounit=%u la_int_feas=%u\n",
            path,
            c->cubes_hits, c->cubes_peak,
            c->cube_lits_hits, c->cube_lits_peak,
@@ -169,7 +184,13 @@ static void report_caps(const char *path) {
            c->la_fm_hits,
            c->euf_terms_hits, c->euf_terms_peak,
            c->no_shared_hits, c->no_shared_peak,
-           c->no_rounds_hits);
+           c->no_rounds_hits,
+           /* solver-integer-tail-plan triggers (counts, not caps): reported
+            * only for a unit the chain left UNKNOWN -- a proved or refuted
+            * unit that carried the shape is not a trigger, something else
+            * decided it -- so the sweep can count units, not calls. */
+           v == RT_UNKNOWN ? c->eq_nounit_split : 0u,
+           v == RT_UNKNOWN ? c->la_int_relax_feasible : 0u);
 }
 
 /* Decide one benchmark and print its line.  Runs in a CHILD process so a
@@ -195,7 +216,7 @@ static int decide_one(const char *path) {
     } else {
         refine_caps_reset();
         RefineVerdict v = run_chain(b.vc, a);
-        report_caps(path);
+        report_caps(path, v);
         if (b.status == SMT_STATUS_SAT) {
             /* The invariant: a satisfiable assertion set must never be proved
              * contradictory.  RT_UNKNOWN and RT_INVALID are both correct. */
@@ -210,6 +231,20 @@ static int decide_one(const char *path) {
         } else if (v == RT_VALID) {
             printf("  ok      %s (unsat, proved)\n", path);
             outcome = OUT_PROVED;
+        } else if (v == RT_INVALID) {
+            /* The OTHER direction.  RT_INVALID is not an `unknown` arrived at
+             * differently: only the bounded model search answers it, and only
+             * after EVALUATING every assertion true under a concrete
+             * assignment.  A witness for an unsatisfiable set means the reader
+             * translated something to a term with a different meaning, or the
+             * evaluator computes one -- which is exactly how SMT-LIB's
+             * Euclidean `mod` read as C's `%` surfaced (a model for
+             * `(< (mod x 3) 0)`).  A label check that shrugged at it would
+             * have let that ship. */
+            printf("  MODEL!  %s -- labelled unsat, chain produced a model "
+                   "(a witness for a contradictory set: the reader or the "
+                   "evaluator gives a term the wrong meaning)\n", path);
+            outcome = OUT_SOUNDNESS;
         } else {
             printf("  weak    %s (unsat, not proved -- incomplete, not unsound)\n",
                    path);
@@ -368,7 +403,8 @@ int main(int argc, char **argv) {
 
     if (g_soundness_failures) {
         printf("\nrefine_corpus: FAIL -- the chain proved a satisfiable "
-               "benchmark contradictory\n");
+               "benchmark contradictory, produced a model for a contradictory "
+               "one, or crashed (see the SOUND! / MODEL! / ERROR lines)\n");
         return 1;
     }
     /* A corpus that decides nothing is not a regression net.  Guard against

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Self-test for RM3's poison backstop (docs/upcoming/regions-plan.md).
+# Self-test for RM3's poison backstop (docs/archive/regions-plan.md).
 #
 # The whole safety argument for regions is that a value outliving its
 # generation crashes LOUDLY rather than reading stale-but-mapped data.  A

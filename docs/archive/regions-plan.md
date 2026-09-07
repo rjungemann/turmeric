@@ -6,6 +6,16 @@ description: A scope form over the arena that already ships, so a persistent str
 
 # Regions (RM3)
 
+> **Archived 2026-09-05.** Graduated and on by default; every increment
+> (R1-R5) and every graduation item below has landed, so this is a record.
+> The one open thread it leaves is item 2's list of result shapes the static
+> escape walk still refuses, which is a standing one-shape-at-a-time widening
+> rather than a phase; the latest batch (parametric monomorphs by argument
+> substitution, and the malloc-backed collections by element type --
+> `region-scope-parametric`) is recorded under item 2.  The reclamation plan
+> (`../upcoming/reclamation-plan.md`, RM2) owns what is left of the spine
+> residue.
+
 **Status: GRADUATED 2026-09-05 -- ON BY DEFAULT.** `--enable=regions` is
 retired (a lingering enable is a `TUR-W0063` no-op for one minor line);
 `TUR_REGIONS=0` is the bisection hatch that restores the pre-graduation build,
@@ -34,7 +44,7 @@ the archive posture and never carries the bodies. The multi-module executable
 link, which chose the archive posture and then never named the archive, now
 adds `-lturt_runtime` like the single-file path.
 
-RM3 of [reclamation-plan.md](reclamation-plan.md). Read that plan's RM2
+RM3 of [reclamation-plan.md](../upcoming/reclamation-plan.md). Read that plan's RM2
 section first -- this phase exists because RM2's question has no answer at RM2.
 
 ## The problem this solves
@@ -239,6 +249,129 @@ ERROR: AddressSanitizer: use-after-poison ... READ of size 8 ... #0 in chain_hys
 
 so the fixture is a live test of the lock and not a shape that happens to work.
 
+### region-lock-hardening (2026-09-06): the result is not the only way out
+
+The two locks above answer one question -- can the RESULT reach the
+generation? -- and a day after graduation three programs answered a different
+one. Each was a segfault on the default build and correct under
+`TUR_REGIONS=0`:
+
+1. **A store.** `(with-region (fn [] (do (vec-push! v (build n 0)) 1)))` --
+   the result is an `:int`, both locks clear it, the generation rewinds, and
+   the outer vec holds a dangling node.
+2. **An erased field.** `(with-region (fn [] (HI n (build n 0))))` with
+   `(defdata HoldsInt (HI :int :int))` -- the static walk admits a record of
+   scalars, the runtime note only ever saw the top-level word (and a by-value
+   aggregate is not a word), and the second field was a node.
+3. **An erased element.** A `(Vec int)` result whose elements are
+   `(:: (Link ..) :int)`. Same shape as 2, one container deeper.
+
+The section above says "it proves nothing about what that pointer
+transitively reaches", and every one of these is that sentence coming due.
+The fix keeps both locks and widens the runtime one from "the result word"
+to "every word that leaves the generation":
+
+- **The store-side lock.** Every primitive that writes a caller's word into
+  memory that can outlive a bracket notes it through one emitted macro,
+  `TUR_REGION_NOTE(word)`: stdlib inline-C (`vec-push!`, `vec-set-o!`,
+  `mutmap-set!`, `bt-set!`, `g-set!`, `atomic-store!/swap!/cas!`,
+  `gen-arr-push!`, `grid-set!`, `rcvec-push!`), the HAMT setters (host
+  runtime, so `tur_hamt_set` calls `tur_region_note_escape` directly), the
+  emitter's `set!` on a global or shared cell, `set-field!`, `set-deref!`,
+  the closure-env fill, the two malloc'd ctor-box emitters and the types.c
+  monomorph twin, the element-box helpers, and `rc/of`. The macro is
+  `((void)0)` under `TUR_REGIONS=0`, so the seam canary still sees no region
+  symbol on the off arm.
+- **The erasure note.** An ascription whose source type reaches a node and
+  whose target type does not (`:int`, `Any`, `ptr<void>`) is where the
+  static walk goes blind, so it is treated as the escape: the value is noted
+  there. The typed style never takes this path; the erased style retires
+  where it used to rewind unsoundly.
+- **Aggregate results by their words.** `tur_region_note_escape_words` reads
+  every aligned word of a by-value result; a scalar compared as an address
+  is not region memory, an erased pointer is.
+- **Owner flagging.** The note flags whichever LIVE generation owns the word,
+  not just the innermost: a store fired inside a nested bracket for a value
+  the OUTER generation allocated must block the outer rewind.
+- **Per-thread stack, process-wide ownership.** The generation stack is
+  `__thread` (as the trail and the panic state already were), so a worker's
+  nodes stop landing in a generation the main thread has open; a registry
+  under a spinlock keeps `tur_region_owns` true across threads, consulted
+  only when another thread has ever opened a region.
+- **Skipped pops retire.** A pop shallower than the stack retires the
+  generations above it (a panic unwound through their brackets) instead of
+  refusing and leaving the stack jammed on a stale innermost. Latent today
+  -- both catch paths pop before the propagation check -- and pinned in
+  `tests/region_unit.c`.
+
+`tests/fixtures/region-escape-via-store` (nine stores, including the nested
+owner case and a captured closure) and `region-escape-via-erasure` (the three
+result shapes) read every value back after the pop and run on both arms
+through `tests/run-regions-seam.sh`. `bench-regions-subst`, the typed
+workload R4 was priced on, keeps its rewinds.
+
+**And then fuzzed.** The three shapes above were found by hand, one at a
+time, which is the wrong rate for a lock with this many doors.
+`tests/regions-fuzz-src.py` (ctest smoke `tur_regions_fuzz_src`) generates
+programs of random brackets -- every result shape the walk admits or
+refuses, every hooked store, the erasure, nested brackets with and without
+the owner case, `with-region` and `bt-scope` alike -- reads each value back
+after the pop on the ASan-compiled default arm and under `TUR_REGIONS=0`
+against a predicted stdout, and checks the runtime's `TUR_REGION_STATS=1`
+rewind / retire counts against the generator's model of which brackets may
+rewind. Two properties, because the second is the one a safety fuzzer never
+asks: a bracket with no escape must still rewind. The first sessions (seeds
+1 and 2, 180 programs, 1,080 brackets) found no region defect; what they
+found was the model learning that `bt-scope` undoes a `bt-set!` at its pop,
+which is the trail doing its job.
+
+What this did not close, at first, was a store the emitter never sees: a user
+inline-C body writing a node into its own `malloc`'d cell. That was filed as
+`docs/reported/region-escape-through-unhooked-stores.md` with a documented
+contract as the proposed fix -- and both halves of that were wrong.
+
+**The inline-C parameter note (2026-09-06, same day).** The report called the
+inline-C class `#fx{Unsafe}` territory needing a contract. It is neither
+exotic nor unfixable. A typed node handed to a hand-written body --
+
+```turmeric
+(defn cell-set! [c : ptr<void> v : Link] : nil ```c *(int64_t *)c = (int64_t)(intptr_t)v; ```)
+(defn stash [c : ptr<void> n : int] : int
+  (with-region (fn [] (do (cell-set! c (Link n 0)) 1))))
+```
+
+-- has a scalar result, clears both locks, **rewinds**, and the read after the
+pop printed garbage and exited 0. A silent wrong answer on the default build,
+with no ascription trickery in it, and the poison did not trap because the
+pooled arena had already been reused.
+
+The fix is at the CALLEE, not the call site: a call site cannot note an
+argument without re-emitting it, but in an emitted inline-C function every
+parameter is already a plain C identifier. So the note goes once at body
+entry, and one rule covers stdlib and user inline-C alike.
+
+The filter is the whole engineering. `emit_region_word_can_be_node` asks "can
+this word BE region memory", which is much narrower than the result lock's
+"cannot prove it reaches nothing" -- that also refuses a `ptr<void>`, a
+`cstr`, a bare tyvar and a `(Map K V)` handle, none of which can ever be a
+node. Only a `:heap` ADT or a by-value aggregate holding one qualifies;
+opaque newtypes (`defopaque BtCell :ptr` is a C-made handle) and the
+malloc-backed collections are excluded. Two wrong versions came first and the
+snapshots priced them: the result lock as the filter emitted 12,373 notes
+across the fixtures, an intermediate one 1,369 (every trail-cell accessor).
+The right filter emits **zero** in this tree -- nothing in it hands a node to
+inline-C -- so the fix costs no existing saving at all. One more trap on the
+way: the type to ask about is the BINDING's, since `fd->param_types[]` carries
+a def-less `TY_ADT` for a `:heap` parameter, which read as "erased" and made
+the note silently never fire.
+
+`tests/fixtures/region-escape-via-inline-c` pins both directions on both arms
+(the node store retires; a bracket whose inline-C sees only scalars still
+rewinds), and the fuzzer gained `store-inline-c` / `inline-c-scalar`, which
+fail 2 of 30 programs on the pre-fix compiler by stdout AND by the savings
+model. What is left in the report is `extern-c` (no emitted body to note in)
+and primitives taking an already-erased `:int`, neither with a repro.
+
 ### R2's "spine-node allocation is routed" did not cover the workload
 
 The single most valuable thing R4 did was measure the saving instead of
@@ -433,13 +566,18 @@ per the standing rule it would not block a release if there were.
    And the negatives held: a variant HOLDING a `:heap` node retires, a
    variant holding a self-recursive spine retires, and `region-scope-adt-
    result`'s mutual-recursion case still retires and prints 42. The
-   `:heap`-holding shape is kept DEFINED in the fixture so its retire is
-   counted, but not RUN -- writing it surfaced an unrelated pre-existing
-   miscompile (a capturing thunk returning a heap-field record garbles the
-   int field, flag off too:
-   [capturing-thunk-returning-heap-field-record-garbles-int](../reported/capturing-thunk-returning-heap-field-record-garbles-int.md)),
-   and running it would bake a nondeterministic pointer into the expected
-   output.
+   `:heap`-holding shape was at first kept DEFINED in the fixture but not
+   RUN -- writing it surfaced an unrelated pre-existing miscompile (a
+   record holding a heap node returned through the bracket read its int
+   field back as an address, flag off too), and running it would have
+   baked a nondeterministic pointer into the expected output. **Fixed the
+   same day and the shape now runs with its 10 asserted**: the cause was
+   the direct emitter's by-args spec matcher handing the call the clone
+   minted for a SIBLING by-value record result, since its result guard
+   only told two primitive kinds apart --
+   [capturing-thunk-returning-heap-field-record-garbles-int](capturing-thunk-returning-heap-field-record-garbles-int.md).
+   Worth knowing for this plan because every bracket call site is that
+   shape: a `[A]` generic whose type variable reaches only the result.
 
    **Third batch, PINNED 2026-09-05 (also `region-scope-shapes`):** a
    variant holding a **non-recursive multi-variant sum of scalars**
@@ -479,11 +617,34 @@ per the standing rule it would not block a release if there were.
    produce the elements are reclaimed and the Vec survives with both
    elements and its length read back correctly after the pop.
 
-   Still refused, deliberately: the **recursive spine** (the result IS the
+   ~~Still refused, deliberately: the **recursive spine** (the result IS the
    node); a **Vec of by-value aggregates** and **Map / Set** (the same
    warrant would apply, each its own increment with its own fixture);
    **other parametric monomorphs** like `(Pair int int)` (need tyvar
-   substitution in the field walk).
+   substitution in the field walk).~~
+
+   **Fifth batch, LANDED 2026-09-05 (`region-scope-parametric`)** -- the
+   whole of that list but the spine.  Two walk changes: (1) the ADT field
+   walk SUBSTITUTES a monomorph's type arguments into its field types
+   (`substitute_adt_app_type_owned`) before asking whether a field reaches,
+   so `(Pair int int)` and `(Option int)` REWIND while `(Pair Link int)` and
+   `(Option Link)` RETIRE -- the substituted field IS the node; a def that is
+   its own type argument (`(Pair (Pair int int) int)`) is nesting, not a
+   cycle, so the arguments are walked before the def goes on the path.  (2)
+   The four malloc-backed collections (`Vec`, `Map`, `Set`, `MutableMap` --
+   the same compiler-warranted name list as the option-niche plan) reach
+   exactly what their ELEMENT types reach: handle and storage are inline-C or
+   runtime `malloc`, and the container-insert bridge boxes a by-value element
+   with plain `malloc`, so `(Vec (Pair int int))`, `(Map int int)` and
+   `(Set int)` REWIND while `(Map int Link)` RETIRES.  Nine shapes, each with
+   its value read after the pop; both arms identical.  What the walk still
+   refuses is the recursive spine (by design), pointers, refs, closures and
+   type variables -- and a `:heap` parametric def of the user's own.
+
+   Writing it surfaced an unrelated pre-existing compile failure:
+   `vec-get-byval` on a `Vec` of a by-value struct
+   (`vec-get-byval-struct-element-returns-carrier.md`); the
+   fixture reads its elements through `(:: (vec-get v i) T)`.
 3. ~~**Close or price the residue** named under R4: the unbracketed CPS
    `CT_LETCALL` arm, argument-position allocation landing in the generation, and
    the pooled slab that is never returned (reachable at exit, not lost -- a pool,

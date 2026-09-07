@@ -306,7 +306,7 @@ extern bool g_trail_autoloaded;
  * meaningless -- and, measured, crashing -- over the int64 carrier.  Clearing
  * SR2 therefore clears the niche too; clearing the niche leaves SR2 alone. */
 extern bool g_opt_option_niche;
-/* RM3 regions (docs/upcoming/regions-plan.md): declared lifetimes over the
+/* RM3 regions (docs/archive/regions-plan.md): declared lifetimes over the
  * arena that already ships, for values with no unique owner -- the per-node
  * spine box of a persistent recursive structure, which RM1's scope-exit rule
  * cannot reach (the nodes escape their constructor by construction) and RM2

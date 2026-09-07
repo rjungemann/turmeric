@@ -97,7 +97,7 @@ for -- see that phase rather than treating it as a separate finding.
 > - Most of the new slope is not the scan's asymptotics either. It is a
 >   per-link aggregate copy the by-value recursive-sum lowering emits, worth
 >   6.8x at n=512 against `TUR_SR4_RECURSIVE_CARRIER=1` and filed separately as
->   [sr4-byvalue-recursive-sum-walk-copies-per-link](sr4-byvalue-recursive-sum-walk-copies-per-link.md).
+>   [sr4-byvalue-recursive-sum-walk-copies-per-link](../archive/sr4-byvalue-recursive-sum-walk-copies-per-link.md).
 >
 > Numbers, method and the representation A/B are in
 > [benchmarks/logic-subst-results.md](../../benchmarks/logic-subst-results.md).

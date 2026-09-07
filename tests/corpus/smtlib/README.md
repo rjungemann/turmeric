@@ -24,15 +24,23 @@ hyps |- false   is VALID   iff   hyps is UNSAT
 
 which gives the check its shape:
 
-| `:status` | chain answers `RT_VALID`      | chain answers anything else |
-|-----------|-------------------------------|-----------------------------|
-| `unsat`   | correct -- it found the proof | acceptable (incomplete)     |
-| `sat`     | **SOUNDNESS FAILURE**         | correct                     |
+| `:status` | chain answers `RT_VALID`      | chain answers `RT_INVALID` (a model) | `RT_UNKNOWN`            |
+|-----------|-------------------------------|--------------------------------------|-------------------------|
+| `unsat`   | correct -- it found the proof | **MODEL FAILURE**                    | acceptable (incomplete) |
+| `sat`     | **SOUNDNESS FAILURE**         | correct                              | correct                 |
 
 A `sat` benchmark answered VALID is the one-directional soundness invariant
 broken: the chain claimed a contradiction in a constraint set that has a model.
 That is the property the corpus defends, and checking it needs only the label --
 never a live solver.
+
+An `unsat` benchmark answered with a MODEL is the other direction, and it is
+not incompleteness: only the bounded model search answers `RT_INVALID`, and
+only after evaluating every assertion true under a concrete assignment. A
+witness for a contradictory set means the reader or the evaluator gives some
+term a meaning the script did not write. That is how SMT-LIB's Euclidean `mod`
+read as C's `%` surfaced (`qf_lia_mod_nonneg_unsat` had a model, `x = -2`), and
+since 2026-09-05 it counts as a failure too.
 
 Incompleteness is never a failure. `RT_UNKNOWN` is always a safe answer, and a
 stage that legitimately decides more later must not break this corpus.

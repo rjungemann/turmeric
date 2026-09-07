@@ -11,6 +11,7 @@
  */
 
 #include "hamt.h"
+#include "region.h"   /* region-lock-hardening: the store-side note in tur_hamt_set */
 
 #include <stdlib.h>
 #include <string.h>
@@ -948,6 +949,18 @@ uint32_t tur_hamt_count(Hamt *m) {
 }
 
 Hamt *tur_hamt_set(Hamt *m, uint64_t hash, void *key, void *val) {
+    /* region-lock-hardening: the store-side region note (src/runtime/region.h).
+     * hamt.c is host runtime, never pasted into a program, so it cannot spell
+     * the emitted TUR_REGION_NOTE macro; it calls the runtime directly --
+     * region.c sits beside it in every library that carries hamt.c, and a
+     * program that pastes its own region.c defines the symbol before the
+     * archive is searched.  With no generation open on this thread (every
+     * TUR_REGIONS=0 program) the note returns at its first compare.  Every
+     * public setter funnels through here, so this is the one place a key or
+     * value word enters HAMT memory -- malloc'd, and outliving any bracket
+     * the insert ran inside. */
+    tur_region_note_escape(key);
+    tur_region_note_escape(val);
     /* A NULL base means "the empty map".  We need a real one to read count /
      * key_ops / val_ops off, but it is OURS, not the caller's -- so it has to
      * be freed again before returning the derived map, or every insert into a

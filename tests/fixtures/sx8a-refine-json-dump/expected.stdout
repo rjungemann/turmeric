@@ -1,4 +1,4 @@
-schema: 0
+schema: 1
 proved: verdict=proven decided_by=S2 (arithmetic) caps={}
 proved: predicate=(= r x)
 proved: located=True

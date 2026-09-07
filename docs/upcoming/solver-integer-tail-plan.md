@@ -7,13 +7,16 @@ description: Where the refinement solver's limits actually are once the numeric 
 # Solver Integer Tail (S2c-lite)
 
 **Status:** Phase 1 **LANDED 2026-09-05** (this document was written with
-it).  Phases 2-4 are open, each with its own trigger.  Nothing here is on the
+it).  Phase 3(b) and Phase 4 landed the same day; Phases 2 and 3(a) are
+parked on measured evidence, with their triggers instrumented (`eq no-unit
+split`, `LA int feasible`, and `benchmarks/run-unknown-oracle.py`, which
+found zero missed proofs in any swept population).  Nothing here is on the
 critical path to v1; every item is additive to a solver that already ships
 and is sound, and every step below is an equivalence over the integers, so
 the one-directional invariant (never `RT_VALID` unless entailed) is preserved
 by construction.
 
-Companion to [solver-extension-plan.md](solver-extension-plan.md) (SX), which
+Companion to [solver-extension-plan.md](../archive/solver-extension-plan.md) (SX), which
 this plan does not replace: SX is about *incrementality and boolean
 structure*; this is about *what the arithmetic stage can decide at all*.  SX7
 ("integer completeness, the long tail") is the SX phase this work belongs
@@ -215,12 +218,30 @@ a correct refutation (`(* p 2) > 0` with `p >= 0`, witness `p = 0`).
   for the budget row.
 - Full `bash tests/run.sh`: 2810 passed, 0 failed (commit dee5563f); refine ctests pass; `benchmarks/run-cap-sweep.sh` regenerated against this compiler -- no cap moved except the `model_vars` limit column and the constraint count an equality now occupies.
 
-## 3. Phase 2 -- the rest of the Omega equality phase (open)
+## 3. Phase 2 -- the rest of the Omega equality phase (open, instrumented)
 
 **Trigger:** an obligation whose equation has no unit coefficient shows up
 outside a test -- the telemetry to add first is a counter on the
 `eq_eliminate` fallback branch (how many equalities were split rather than
 eliminated), reported under `TUR_REFINE_STATS=1`.
+
+**Instrumented and measured 2026-09-05.**  `eq no-unit split` under
+`TUR_REFINE_STATS=1` counts, at OBLIGATION level, obligations the whole
+chain (model search included) left unknown after such a split (the raw
+per-call count is printed beside it; it is inflated by every stage, probe
+and hint that re-decides the same VC -- a three-obligation probe read 14).
+The cap sweep carries it as a row for all three populations
+(`benchmarks/cap-sweep-results.md`):
+
+| population | unknown obligations after a no-unit split |
+|---|---:|
+| SMT-LIB corpus (130 units) | 1 -- `gen_mixed_sat_00054`, labelled `sat`: unknown is the right answer |
+| in-tree fixtures (88) | 0 |
+| fuzzer (200 programs) | 0 |
+
+So the shape exists only in one generated corpus benchmark that has a
+model, where eliminating the equation could not produce a proof.  Parked,
+with the instrument in place; the row is what to watch.
 
 - **Pugh's sigma-substitution** for `sum a_i x_i = b` with all `|a_i| > 1`:
   pick the smallest `|a_k|`, `m = |a_k| + 1`, introduce `sigma` with
@@ -245,32 +266,176 @@ reached by per-constraint rounding).
   the limit.  This is what the archived plan and SX7 call S2c proper.
   **Trigger:** a real obligation, not a constructed one.  The probe set in
   1.3 did not produce one; ordinary bounds reasoning does not need it.
-- **(b) `tur smt` `div`/`mod` semantics.**  The SMT-LIB reader translates
+
+  **Instrumented and measured 2026-09-05, two ways.**  First the
+  population: `LA int feasible` under `TUR_REFINE_STATS=1` counts obligations
+  left unknown after S2 declined a cube that is all-integer, has a constraint
+  over two or more variables, and whose RATIONAL relaxation Fourier-Motzkin
+  found feasible -- exactly the sets the dark shadow would look at.  Corpus
+  23 units (all `sat`-labelled, where unknown is correct), fixtures 5, fuzzer
+  17.  That is an upper bound only: most such sets have integer models too.
+
+  Then the payoff, which is the number that matters.
+  `benchmarks/run-unknown-oracle.py` hands EVERY obligation the compiler
+  left unknown -- its `vc_smtlib` from `--dump-refine=json` -- to Z3 and
+  counts the ones Z3 calls `unsat`, i.e. proofs the in-house chain missed.
+  Reading: **283 unknown obligations (15 fixture, 268 fuzzer), 283 `sat`,
+  0 `unsat`.**  Together with the corpus, where all 72 in-fragment `unsat`
+  benchmarks are already proved, there is not one obligation in any swept
+  population that branch-and-bound, the dark shadow, or any complete
+  integer procedure could turn from unknown into proven.  Parked on that
+  evidence, with both instruments in place.
+
+  Running the oracle found a defect it was not looking for: a third of the
+  dumped VCs would not parse in Z3.  The serializer wrote uninterpreted
+  names verbatim -- `tickm#0` (read as a malformed bit-vector literal),
+  `match`, `_`, `if` (reserved words, which SMT-LIB makes the same symbol
+  even quoted) -- declared uniform `Int`/`Real` parameter sorts for an
+  abstracted form that takes a Bool argument, and named `QF_UFLRA` for a
+  VC that also carries ints.  `tur smt`'s own reader took all of it, which
+  is why the external-replay promise of SX8a was never actually kept for
+  those obligations.  Fixed in `refine_smtlib_emit`: non-simple names are
+  quoted, reserved names are renamed (`|match~rw|`), parameter sorts are
+  read off a real application, and a mixed VC says `QF_UFLIRA`.  The
+  oracle now exits non-zero on an unparsed VC, so the promise stays kept.
+- ~~**(b) `tur smt` `div`/`mod` semantics.**  The SMT-LIB reader translates
   `div`/`mod` to `VC_DIV`/`VC_MOD`, whose constant folding and model
   evaluation use C truncation, while SMT-LIB specifies floor division and a
   non-negative remainder.  No corpus benchmark uses either today.  Either
   translate to the truncating form with an explicit sign adjustment, or
   refuse `div`/`mod` in the reader as out-of-fragment until then.  Small,
-  and worth doing before anyone adds a `QF_LIA` benchmark with `mod`.
+  and worth doing before anyone adds a `QF_LIA` benchmark with `mod`.~~
+  **LANDED 2026-09-05, the first way, in both directions.**  (SMT-LIB's
+  `div`/`mod` are *Euclidean* -- `0 <= mod < |n|`, the quotient absorbing
+  the divisor's sign -- which for a positive divisor is floor division; the
+  paragraph above said "floor" and that was the imprecise half of it.)
 
-## 5. Phase 4 -- make the instruments able to see this class (open)
+  Measured first: `(< (mod x 3) 0)`, unsatisfiable in SMT-LIB, came back
+  `sat` with the model `x = -2` -- the bounded search evaluating `%`.  The
+  reader now BUILDS the Euclidean value from the truncating pair the VC
+  already has, `r_t = VC_MOD(a, k)`, `q_t = VC_DIV(a, k)`:
+
+  ```
+  mod_E = ite(r_t < 0,  r_t + |k|,     r_t)
+  div_E = ite(r_t < 0,  q_t - sgn(k),  q_t)
+  ```
+
+  lifted through the same fresh-variable `ite` the reader already uses,
+  with the truncating axioms asserted for `(a, k)` -- `enc_divmod_axioms`
+  moved onto the VC as `vc_add_divmod_axioms` so the encoder and the
+  reader assert one set, not two copies.  So `tur smt` does not merely
+  stop answering wrong; it decides these: `(< (mod x 3) 0)` is proved
+  unsat by S2, and `(= (mod x 2) 0), (= (mod (+ x 1) 2) 0)` too.  A
+  literal dividend folds outright.  A non-literal divisor (nonlinear, no
+  axiom) and division by zero (uninterpreted in SMT-LIB) are refused whole
+  as outside the fragment -- before this the reader accepted `(div x y)`,
+  left it opaque to the stages, and let the model search evaluate it with
+  C semantics.
+
+  The other direction had the same defect: the serializer (`vc_smtlib` in
+  `--dump-refine=json`, `TUR_REFINE_DUMP`) emitted the compiler's
+  truncating `(/ a k)` as a bare SMT-LIB `(div a k)`, mis-stating every
+  negative-dividend obligation to an external solver.  It now spells the
+  truncating value in Euclidean terms
+  (`(ite (>= a 0) (div a k) (- (div (- a) k)))`, likewise for `mod`), so a
+  dumped VC replays faithfully -- pinned by feeding a dumped `(/ n 2)`
+  obligation straight back into `tur smt`, which proves it.
+
+  Two tests grew teeth with it.  `tur_refine_corpus` now runs the bounded
+  model search after the chain, exactly as `tur smt` does (it replayed a
+  SUBSET of the solver before, so a wrong model was invisible to it), and
+  counts a MODEL on an `unsat`-labelled benchmark as a failure (before,
+  only VALID-on-`sat` was; a witness for a contradictory set is a
+  reader/evaluator bug, not incompleteness, and it is exactly what this
+  defect looked like).  Verified against the pre-fix reader with the new
+  harness: 2 MODEL failures (`qf_lia_mod_nonneg_unsat`,
+  `qf_lia_div_rounds_down_unsat`), and 0 with the fix; no verdict on the
+  pre-existing 125 benchmarks moved.  Six hand-written `QF_LIA` benchmarks
+  with `div`/`mod` are in the corpus -- which closes Phase 4's corpus half
+  too.  Fixture: `tests/fixtures/sx8a-tur-smt-div-mod`, which also pins the
+  `--dump-refine=json` -> `tur smt` round trip proving all four of a
+  `/`+`mod` program's obligations.
+
+  One more reader change rode along, because the round trip needed it: two
+  occurrences of the SAME arithmetic `ite` now share one lifted variable
+  (memoized by term identity, definitions re-added on every hit so a
+  session `pop` cannot strand the variable undefined), and the serializer's
+  truncating idiom is recognized on read and mapped back to the node it
+  was written from plus its axioms (`tr_trunc_idiom`).  Without both, the
+  six idiom occurrences in one dumped `mod` obligation minted eighteen
+  variables, each with its own disjunctive definition, and the replay went
+  over the cube cap.  The lift itself also got cheaper: one disjunction
+  `(c and t = a) or (not c and t = b)` instead of the equivalent pair of
+  implications, which the naive DNF expanded to four cube combinations
+  rather than two -- `qf_lia_div_mod_identity_unsat` sat at exactly 64 of
+  64 cubes on the old form and reads 40 (the pre-existing corpus peak) on
+  the new one, with every corpus verdict identical.
+
+## 5. Phase 4 -- make the instruments able to see this class
+
+**Fuzzer half LANDED 2026-09-05.**  The corpus half stays open behind
+Phase 3(b), as written below.
 
 The blind spot in 1.3 is the actionable finding for the measurement side,
 and it is cheap:
 
-- `tests/refine-fuzz-src.py`: generate `(/ e k)`, `(mod e k)`, `(* e e)`,
-  and 3-5 parameters, at low weight.  Every shape in 1.3 then has a
-  population, and `run-cap-sweep.sh`'s `model_vars` / `model evals` rows
-  start meaning something.  The differential property (elision never turns
-  a caught program into a silent one) is exactly the right check for the
-  truncation axioms: a wrong sign in 2.2 would show up as a miscompile, not
-  as a corpus label.
-- `tests/corpus/smtlib/`: a handful of hand-written `QF_LIA` benchmarks with
+- ~~`tests/refine-fuzz-src.py`: generate `(/ e k)`, `(mod e k)`, `(* e e)`,
+  and 3-5 parameters, at low weight.~~  **Done.**  A `shape_integer`
+  (int mode, ~5% of programs) generates the 1.3 probes as families rather
+  than instances: parity through `mod` with a refined-parameter residue
+  and a body that keeps or moves it; `/` and `mod` by a literal in
+  `{-4..-2, 2..4}` with the dividend's sign bounded by the parameter or
+  left free, and a claim that either holds under C truncation or fails on
+  one side of zero (the SMT-LIB floor reading would make the `mod`
+  "remainder is non-negative" claim true; truncation makes it false for
+  every negative argument, and `main`'s literals are two-signed -- that
+  is the trap an encoder asserting the wrong semantics would fall into,
+  as a `BUG_soundness`); squares of a parameter or an offset of it,
+  including one rung the sign law cannot decide (`x*x - x >= 0`), kept
+  deliberately as the abstracted-nonlinear population; and 3-5 parameter
+  sums with every parameter bounded by a `:pre` (a genuine multi-variable
+  proof) or unbounded (false, so the model search has to find the witness
+  across all of them).  `expr()` also reaches `mod` and a square at low
+  weight, so they show up inside every other shape's arithmetic.
+
+  Validity: 60 of 60 `shape_integer` programs compile, 43 proven / 55
+  refuted / 8 unknown -- all 8 the deliberately abstract square rungs.
+  Differential runs, 0 bugs in every class: n=200 seed=1 mode=both (5
+  suspicious, unchanged from the pre-widening baseline on the same seed;
+  183 proven / 203 refuted against 175 / 188), and n=150 seed=7 mode=int
+  (9 suspicious, two of them the wide rung's false refinement refuted with
+  a 4- and a 5-variable witness while the program's own arguments happened
+  to pass -- the report-only class doing exactly what it is for).  The
+  ctest smoke size (`tests/run-refine-fuzz-src.sh`) passes.
+
+- ~~`tests/corpus/smtlib/`: a handful of hand-written `QF_LIA` benchmarks with
   `div`/`mod` and parity, labelled by both reference solvers per the corpus
   README -- **after** Phase 3(b), or the labels will disagree with the
-  reader's semantics.
-- `benchmarks/run-cap-sweep.sh`: nothing to change; it already reports the
-  new `model evals out` row as a plain count, the way it reports FM blow-ups.
+  reader's semantics.~~  **Done with Phase 3(b), 2026-09-05**: six
+  benchmarks (`qf_lia_mod_negative_dividend_sat`, `qf_lia_mod_nonneg_unsat`,
+  `qf_lia_div_rounds_down_unsat`, `qf_lia_div_mod_identity_unsat`,
+  `qf_lia_div_negative_divisor_sat`, `qf_lia_parity_shift_unsat`), each
+  with its reason in the file, sealed by `validate-labels.py` against BOTH
+  Z3 and cvc5 (131 labels checked, 0 disagreements).  Every one is a
+  discriminator: the truncating reading answers the opposite label on the
+  first three.
+- ~~`benchmarks/run-cap-sweep.sh`: nothing to change; it already reports the
+  new `model evals out` row as a plain count, the way it reports FM blow-ups.~~
+  **Wrong on both counts, and both are fixed.**  (1) The compiler printed
+  the `model evals out` row but the sweep's parser dropped the line; it
+  now reads it into a `model_evals (search budget)` row, counted as a cap
+  hit since a budget decline leaves the obligation unknown.  (2) The sweep
+  constructed the generator with mode `"both"`, which `Gen` does not take
+  -- its `ty` property reads anything but `"int"` as float -- so every
+  sweep before this one measured a FLOAT-ONLY fuzzer population.  That is
+  why the first regeneration after the widening moved nothing: `mod`, the
+  axioms and `shape_integer` are int-mode only.  The sweep now alternates
+  int/float per case exactly as the fuzzer's own driver does.  Regenerated
+  against this compiler, the fuzzer rows finally carry the class: peaks
+  `model_vars` 3 -> 5, `cubes` 8 -> 16, `cube_lits` 5 -> 12, `la_vars`
+  7 -> 9, `la_constr` 6 -> 11, `euf_terms` 23 -> 25; hits stay 0 on every
+  cap, `model_evals` included, so nothing here reopens SX4 or SX6.  The
+  corpus and fixture populations are byte-identical to the previous run.
 
 ## 6. Explicitly not doing
 
@@ -294,4 +459,4 @@ and it is cheap:
 - Dutertre, de Moura, *A Fast Linear-Arithmetic Solver for DPLL(T)* (2006)
   -- the SX4 simplex this plan does not build.
 - [docs/archive/refinement-types-plan.md](../archive/refinement-types-plan.md)
-  S2a-S2c; [solver-extension-plan.md](solver-extension-plan.md) SX0(b), SX7.
+  S2a-S2c; [solver-extension-plan.md](../archive/solver-extension-plan.md) SX0(b), SX7.

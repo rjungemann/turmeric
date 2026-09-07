@@ -11,7 +11,7 @@
 # some crossover, and where that crossover sits relative to real workloads is
 # what decides the SX1 trail design.  The report ends with that crossover.
 #
-# See docs/upcoming/solver-extension-plan.md sections 4.2-4.3 and SX0(a).
+# See docs/archive/solver-extension-plan.md sections 4.2-4.3 and SX0(a).
 #
 # Usage:
 #   bash benchmarks/run-capture-curve.sh

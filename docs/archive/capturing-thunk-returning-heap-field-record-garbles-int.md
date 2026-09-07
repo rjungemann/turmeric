@@ -86,3 +86,48 @@ reaches a node) and so never rewinds it. `region-scope-shapes` keeps its
 it, because running it would bake a nondeterministic pointer into the
 expected output. When this is fixed, that call can be restored to `main` and
 its value (10) asserted like the other three.
+
+## Resolved 2026-09-05
+
+**Neither variable in the table above is the cause.** The capture only decides
+which emit path the caller takes, and the `:heap` field only decides that the
+record is heap-boxed rather than by value. What the table could not see is that
+the repro's CONTROL is what breaks the subject: delete `cap-int` and `cap-heap`
+was always right.
+
+**Root cause.** The direct path's by-args spec matchers (`find_matched_abi_spec`
+in emit_expr.c and the fallback loop in `emit_call_name`, emit_core.c) resolved
+`cap-heap`'s call to `ident__spec__tur_adt_HoldsInt_int64_t` -- the clone
+minted for the OTHER instantiation. `ident`'s type variable reaches only the
+result, so every instantiation presents the same erased fat-thunk argument, and
+the one result guard (`emit_spec_result_mismatch`) rejected a mismatch only
+between two distinct PRIMITIVE kinds. `HoldsLink` and `HoldsInt` are both
+`TY_ADT`, so the guard passed; but `HoldsLink` c-names to the `int64_t` carrier
+(a heap-boxed record) while `HoldsInt` is a 16-byte by-value aggregate. The
+clone called the thunk through `tur_thunk_tur_adt_HoldsInt_t`, took the box
+POINTER as the first word of a `HoldsInt`, and `cap_hyheap` then boxed that
+aggregate again and returned it as the `HoldsLink` carrier: the match read the
+address where the int belonged. `cap-int` printed correctly for a different
+reason -- it is CPS-lowered, where
+[cps-call-arm-ignores-abi-specialization](cps-call-arm-ignores-abi-specialization.md)
+had already made the result type discriminate. That report's "the direct path
+consults [the registry] correctly" was true for its float-vs-record repro
+(distinct kinds) and false for this ADT-vs-ADT one.
+
+**Fix.** `emit_spec_result_mismatch` now takes the ctx and, after the primitive
+rule, rejects a spec whose result C spelling differs from the call's -- when
+BOTH results are decisive (not a bare type variable, not unknown, not an app
+with an abstract head; those c-name to the carrier exactly as a genuine `int`
+does, and narrowing on them would reject the right clone for a call the
+enclosing spec has not grounded). A pure narrowing, the same shape as the CPS
+side's `spec_result_matches`: it can only turn a wrong hit into the erased
+base (which is what a carrier-riding result wants) or an ambiguity into the
+unique right hit. All three direct-path matchers -- both real ones and the
+`--emit-abi-trace` mirror, which had drifted from even the primitive guard --
+consult the one predicate.
+
+**Pinned** by `tests/fixtures/spec-selected-by-result-type-direct` (values
+READ, including the heap field through the fixed path), and the `r-heap` shape
+in `region-scope-shapes` is restored to `main` with its value asserted, as this
+report said it should be. Both `cps-spec-*` fixtures and
+`region-scope-adt-result` unchanged.

@@ -1,0 +1,35 @@
+;; vec-get-byval-struct-element-returns-carrier: `vec-get-byval` on a Vec of
+;; a BY-VALUE struct did not compile.  Its spec clone for `A := P2` is
+;; `(:: (vec-data-get-checked__ ...) A)`; the ascription of the int64 carrier
+;; to a type variable that grounds to a by-value aggregate was emitted as a
+;; bare return of the carrier (the tyvar branch of the ascription arm bridged
+;; only float widths, on the claim that struct elements "need no reinterpret").
+;; A heap container stores a by-value struct element BOXED, so that int64 is
+;; the box's address and must be deref'd -- exactly what the concrete
+;; `(:: (vec-get v 0) P2)` spelling already got.  Both spellings now read the
+;; same value, for a non-parametric struct and for stdlib's parametric Pair.
+;;
+;; Values are READ (fields of the element), not merely built.
+
+(defstruct P2 [x : int y : int])
+
+(defn mk [] : (Vec P2)
+  (let [v (:: (vec-new) (Vec P2))]
+    (vec-push! v (make-struct P2 :x 10 :y 3))
+    (vec-push! v (make-struct P2 :x 20 :y 4))
+    v))
+
+(defn mk-pairs [] : (Vec (Pair int int))
+  (let [v (:: (vec-new) (Vec (Pair int int)))]
+    (vec-push! v (pair 7 8))
+    v))
+
+(defn main [] : int
+  (let [v (mk)]
+    (println (.x (vec-get-byval v 0)))            ;; 10
+    (println (.y (vec-get-byval v 1)))            ;; 4
+    (println (.x (:: (vec-get v 1) P2))))         ;; 20 -- the spelling that always worked
+  (let [p (mk-pairs)]
+    (println (.fst (vec-get-byval p 0)))          ;; 7
+    (println (.snd (vec-get-byval p 0))))         ;; 8
+  0)

@@ -130,6 +130,7 @@
       vec->cap = ncap;
   }
   if (e) rc_strong_increment(e);
+  TUR_REGION_NOTE(e);   /* region-lock-hardening: see vec-push! */
   vec->data[vec->len++] = (int64_t)(intptr_t)e;
   ```)
 ;;; rcvec-get -- the element at index i, as the caller's own reference.

@@ -163,7 +163,7 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 "     * back is process-local -- so a blob taken here deserializes into a world\n"
 "     * where those writes either never happened or can never be unwound.  Both\n"
 "     * are silent wrong answers, so this refuses instead.  See\n"
-"     * docs/upcoming/solver-extension-plan.md 3.5. */\n"
+"     * docs/archive/solver-extension-plan.md 3.5. */\n"
 "    /* Declared here because this prelude is emitted well ahead of trail.tur's\n"
 "     * own extern-c block.  Same return type, so the two declarations are\n"
 "     * compatible and whichever lands first wins. */\n"

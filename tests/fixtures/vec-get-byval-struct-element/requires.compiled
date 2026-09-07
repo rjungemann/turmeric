@@ -1,0 +1,12 @@
+`vec-get-byval` (stdlib/vec.tur) is inline-C, and the tree-walking interpreter
+does not run inline-C (the TI7 carve-out).
+
+This fixture has no ```c fence of its OWN, so run-turi.sh's fixture_has_inline_c
+does not auto-skip it: that detector greps this file and follows `(load "...")`
+one level, but the inline-C here arrives through the stdlib import instead --
+the same gap arc-basic's marker documents.
+
+The fixture is also compiled-path by subject. It pins
+vec-get-byval-struct-element-returns-carrier: the tyvar-ascribed carrier of a
+by-value struct element must take the carrier->concrete unbox, which is a
+CODEGEN decision. There is nothing for the interpreter to assert here.

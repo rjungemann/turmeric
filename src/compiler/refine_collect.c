@@ -370,46 +370,23 @@ static VCTerm *enc_nonlinear(Enc *E, const char *base, const Form *src,
  * These are the TRUNCATING semantics of C's `/` and `%`, which is what both
  * backends emit for `/` and `mod` on ints (builtins.c maps `mod` to `%`; the
  * interpreter's eval uses `%` too), so the axioms describe exactly the value
- * the runtime check would see.  They are NOT SMT-LIB's floor/Euclidean `div`
- * and `mod`; the SMT-LIB reader (`tur smt`) does not go through this encoder
- * and gets no axioms, which keeps it sound for its own semantics.
+ * the runtime check would see.  They are NOT SMT-LIB's Euclidean `div` and
+ * `mod` -- and since 2026-09-05 the SMT-LIB reader (`tur smt`) does NOT get
+ * a truncating reading of those: it builds the Euclidean value out of this
+ * same truncating pair plus these axioms, lifted through an `ite`
+ * (refine_smtlib.c, tr_euclid_divmod), so both surfaces mean what their own
+ * language says.
  *
- * The sign clause is a disjunction, so each axiomatized term doubles the cube
- * count.  After ENC_MAX_DIVMOD_SPLITS terms in one VC the weaker conjunctive
- * bound `-(|k|-1) <= r <= |k|-1` is asserted instead -- still sound, and it
- * means a VC that used to prove without knowing anything about its `mod`
- * terms cannot be pushed over REFINE_MAX_CUBES by learning about them.  Both
- * the relation and the cube telemetry are the evidence for raising it. */
-#define ENC_MAX_DIVMOD_SPLITS 4
-
+ * The axioms themselves live on the VC (vc_add_divmod_axioms, refine_vc.c)
+ * because both the encoder and the reader assert them; the sign clause is a
+ * disjunction and each pair doubles the cube count, so past
+ * VC_MAX_DIVMOD_SPLITS pairs in one VC the weaker conjunctive bound is used
+ * instead -- still sound, and a VC that used to prove without knowing
+ * anything about its `mod` terms cannot be pushed over REFINE_MAX_CUBES by
+ * learning about them.  Both the relation and the cube telemetry are the
+ * evidence for raising it. */
 static void enc_divmod_axioms(Enc *E, VCTerm *a, VCTerm *k) {
-    RefineVC *vc = E->vc;
-    if (!a || !k || k->op != VC_CONST_INT || k->as.i == 0 || a->sort != VS_INT) return;
-    if (is_const_term(a)) return;              /* vc_mk folded the whole term */
-    int64_t kv = k->as.i;
-    if (kv == INT64_MIN) return;
-    int64_t K = kv < 0 ? -kv : kv;
-    VCTerm *q    = vc_mk2(vc, VC_DIV, a, k);
-    VCTerm *r    = vc_mk2(vc, VC_MOD, a, k);
-    VCTerm *zero = vc_int(vc, 0);
-    VCTerm *rel  = vc_mk2(vc, VC_EQ, a, vc_mk2(vc, VC_ADD, vc_mk2(vc, VC_MUL, k, q), r));
-    /* Already axiomatized (the same (a, k) pair encoded twice)?  vc_add_hyp
-     * would dedup the terms anyway; the check keeps the split budget honest. */
-    for (uint32_t i = 0; i < vc->n_hyps; i++) if (vc->hyps[i] == rel) return;
-    vc_add_hyp(vc, rel);
-    VCTerm *km1 = vc_int(vc, K - 1), *nkm1 = vc_int(vc, -(K - 1));
-    if (vc->n_divmod_splits < ENC_MAX_DIVMOD_SPLITS) {
-        vc->n_divmod_splits++;
-        VCTerm *pos[3] = { vc_mk2(vc, VC_LE, zero, a), vc_mk2(vc, VC_LE, zero, r),
-                           vc_mk2(vc, VC_LE, r, km1) };
-        VCTerm *neg[3] = { vc_mk2(vc, VC_LT, a, zero), vc_mk2(vc, VC_LE, nkm1, r),
-                           vc_mk2(vc, VC_LE, r, zero) };
-        vc_add_hyp(vc, vc_mk2(vc, VC_OR, vc_mk(vc, VC_AND, pos, 3),
-                              vc_mk(vc, VC_AND, neg, 3)));
-    } else {
-        vc_add_hyp(vc, vc_mk2(vc, VC_LE, nkm1, r));
-        vc_add_hyp(vc, vc_mk2(vc, VC_LE, r, km1));
-    }
+    vc_add_divmod_axioms(E->vc, a, k);
 }
 
 /* RM-B2: a proposition is not a number.  vc_mk would happily build

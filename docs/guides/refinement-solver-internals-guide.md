@@ -606,9 +606,16 @@ than any number above.
   still warned). Division and remainder by an integer *literal* are not
   nonlinear and are no longer opaque either: the encoder asserts
   `a = k*q + r` plus the truncating sign/bound clause for `q = (/ a k)`,
-  `r = (mod a k)` (`refine_collect.c`, `enc_divmod_axioms`), so S2 reasons
-  about them through the axioms while still treating the terms as shared
-  variables.
+  `r = (mod a k)` (`vc_add_divmod_axioms`, shared by the encoder and the
+  SMT-LIB reader), so S2 reasons about them through the axioms while still
+  treating the terms as shared variables. The VC's `VC_DIV`/`VC_MOD` are C's
+  truncating pair throughout -- folding, model evaluation, axioms -- while
+  SMT-LIB's `div`/`mod` are Euclidean (`0 <= mod < |n|`), so the SMT-LIB seam
+  translates at both ends: `tur smt` builds the Euclidean value out of the
+  truncating pair plus an `ite` (`tr_euclid_divmod`), and the serializer
+  spells the truncating value in Euclidean terms
+  (`(ite (>= a 0) (div a k) (- (div (- a) k)))`). A non-literal divisor or a
+  zero divisor is outside `tur smt`'s fragment and refused whole.
 - **Integers are non-convex and S3 does not case-split.** Deciding a mixed
   integer cube in general needs splitting on disjunctions of equalities; S3
   reaches a fixpoint and answers `RT_UNKNOWN` instead. S2's own integer
@@ -616,7 +623,9 @@ than any number above.
   substitution -- see S2 above); what remains is the inequality-side hull
   (branch-and-bound / dark shadow) and equations with no unit coefficient.
   See `docs/upcoming/solver-integer-tail-plan.md` for what is left and what
-  would trigger it.
+  would trigger it; `TUR_REFINE_STATS=1` prints the two triggers (`eq no-unit
+  split`, `LA int feasible`) as obligation counts, and as of 2026-09-05 no
+  swept population has an unknown obligation Z3 can prove.
 - **No DPLL(T).** Boolean structure is naive DNF: no clause learning, no theory
   propagation, no conflict-driven search. The cube caps exist because of this,
   not the other way round.
@@ -695,7 +704,7 @@ emits its own machine-readable per-benchmark line under `TUR_CORPUS_CAPS=1`
 (aggregation lives in the sweep script because each benchmark is decided in a
 forked child). The current numbers, and what they say about which solver
 extensions are worth building, are in
-[../upcoming/solver-extension-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/solver-extension-plan.md)
+[../archive/solver-extension-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/solver-extension-plan.md)
 under SX0(b).
 
 ### Asking the solver directly -- `tur smt` and `--dump-refine=json`
@@ -787,7 +796,7 @@ The solver is already in the WASM module (`compiler/refine_*.c` are
 
 ```js
 const json = Module.ccall('turi_smt_check', 'string', ['string'], [script]);
-// {"schema":0,"results":[{"answer":"unsat","decided_by":"S2 (arithmetic)"}]}
+// {"schema":1,"results":[{"answer":"unsat","decided_by":"S2 (arithmetic)"}]}
 ```
 
 Same reader, same chain, same bounded model search and same push/pop semantics
@@ -795,8 +804,8 @@ as `tur smt` -- two doors onto one solver should not disagree. One `results`
 entry per `(check-sat)` in script order; a `sat` entry carries its `model`
 inline (the witness belongs with the answer, so nothing has to ask twice). A
 script outside the fragment returns an `error` key and an **empty** `results`
-array -- refused whole, never partially parsed. `schema` is 0 while the shape is
-unstable, matching `--dump-refine=json`.
+array -- refused whole, never partially parsed. `schema` is 1, the stable shape
+since SX9, matching `--dump-refine=json`.
 
 The result is malloc'd; free it from JS with `Module._free`. Nothing reachable
 from this entry point touches elaboration or discharge, so no answer it gives
@@ -837,8 +846,20 @@ writer and reader are now the same file
 in both directions: an external harness can differentially test any solver
 against `tur` without `tur` ever linking one.
 
-The JSON schema is **explicitly unstable** and says so in every record
-(`"schema": 0`). Branch on it; do not assume it.
+The dumped VC is legal SMT-LIB 2.6 for an external solver, not only for
+`tur smt`'s reader: a name that is not a simple symbol is quoted (`|tickm#0|`),
+a reserved or builtin name is renamed (`|match~rw|` -- SMT-LIB makes `|match|`
+the same symbol as `match`, so quoting alone is refused), an uninterpreted
+function's parameter sorts are read off a real application (an abstracted
+`if`/`match` takes a Bool among its Int arguments), and a VC mixing Int and
+Real declares `QF_UFLIRA`. `benchmarks/run-unknown-oracle.py` replays every
+`unknown` obligation through Z3 and fails on a VC it cannot parse, which is
+what keeps this true.
+
+The JSON schema is **stable** since SX9 and says so in every record
+(`"schema": 1`; schema 0 was the same shape while it was flagged unstable).
+Branch on it: an additive change keeps the number, a key removed or retyped
+bumps it.
 
 `TUR_REFINE_NO_DISCHARGE` is a **test seam, not a feature gate** -- env-only,
 with no `--enable`, no `EXPERIMENTS[]` row and no CLI flag. It exists because

@@ -18,7 +18,7 @@
  * Scope, deliberately narrow and stated so the surface never overpromises: the
  * corpus subset of SMT-LIB2 over QF_UFLIA / QF_UFLRA, `unknown` is a
  * first-class answer, and parity with a production SMT solver is a non-goal.
- * See docs/upcoming/solver-extension-plan.md (SX8a). */
+ * See docs/archive/solver-extension-plan.md (SX8a). */
 
 #include "refine_vc.h"
 #include "runtime/buf.h"
@@ -82,7 +82,7 @@ void refine_smtlib_read(SmtlibQuery *out, const char *text, size_t len, Arena *a
  * the standard chain from the current assertion set, which rebuilds the DNF
  * cubes.  It cannot do otherwise -- adding one hypothesis changes the cube set
  * wholesale, so there is no mark to undo between two checks.  See
- * docs/upcoming/solver-extension-plan.md (SX8b). */
+ * docs/archive/solver-extension-plan.md (SX8b). */
 typedef struct SmtlibSession SmtlibSession;
 
 typedef enum {

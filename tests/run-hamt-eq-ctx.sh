@@ -17,8 +17,11 @@ SRC_RUNTIME="src/runtime"
 TEST_SRC="tests/test_hamt_eq_ctx.c"
 BIN="$(mktemp -t tur-eqctx-XXXXXX)"
 
+# region-lock-hardening: hamt.c notes stored words through region.c, so the
+# standalone compile links it (and arena.c under it) exactly as every library
+# that carries hamt.c does.
 if ! "$CC" -std=c11 -fsanitize=address,undefined -I "$SRC_RUNTIME" \
-        "$TEST_SRC" "$SRC_RUNTIME/hamt.c" -o "$BIN" 2>/tmp/eqctx-cc.log; then
+        "$TEST_SRC" "$SRC_RUNTIME/hamt.c" "$SRC_RUNTIME/region.c" "$SRC_RUNTIME/arena.c" -pthread -o "$BIN" 2>/tmp/eqctx-cc.log; then
     echo "FAIL hamt-eq-ctx -- compile failed"
     cat /tmp/eqctx-cc.log
     rm -f "$BIN"

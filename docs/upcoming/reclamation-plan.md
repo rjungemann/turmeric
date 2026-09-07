@@ -740,10 +740,15 @@ the sweep
 ([benchmarks/logic-subst-results.md](../../benchmarks/logic-subst-results.md)).
 The cost is per-link copying in the emitted walk -- 120 bytes per `SBind` link
 against the carrier's one word, two thirds of it redundant. Filed as
-[../reported/sr4-byvalue-recursive-sum-walk-copies-per-link.md](../reported/sr4-byvalue-recursive-sum-walk-copies-per-link.md).
+[../archive/sr4-byvalue-recursive-sum-walk-copies-per-link.md](../archive/sr4-byvalue-recursive-sum-walk-copies-per-link.md).
 
 RM4's construction and memory findings stand and **the flip is not reopened** --
-the two redundant copies are removable with no default change. But the next
+the two redundant copies are removable with no default change.  **Resolved
+2026-09-05:** the profile found the walk's cost was a recursion GCC could not
+flatten (the binder copied the boxed link into a local whose address the
+self-call took), not the copies; the binder now borrows the box as
+`const T *`, and the by-value persistent path is at parity with the carrier
+across the whole sweep (1.01x at n=512, against 4.77x). But the next
 person to price this should sweep chain length rather than pass count;
 `benchmarks/bench-logic-subst.tur` reports that A/B directly. Recorded here as
 well as in the SR plan because RM4 is the phase that owns the decision, and

@@ -110,6 +110,26 @@ something still live would show as a wrong number rather than as a faster run.
 **Every row's checksum is identical in both arms.** `tests/run-regions-seam.sh`
 asserts the same property across eleven fixtures.
 
+## Re-measured 2026-09-06, after region-lock-hardening
+
+The hardening widened the runtime lock from the result word to every word
+that leaves the generation (store hooks, the erasure note, aggregate words --
+`docs/archive/regions-plan.md`, "region-lock-hardening"). The question for
+this benchmark was whether the typed `Subst` workload kept its rewinds or
+started retiring. It kept them. Same Release build recipe, one run each, the
+default arm against `TUR_REGIONS=0` (the flag having graduated):
+
+| bindings | off ns/op | on ns/op | speedup |
+|---:|---:|---:|---:|
+| 2 | 231.0 | 180.0 | 1.28x |
+| 4 | 188.3 | 133.8 | 1.41x |
+| 8 | 144.1 | 95.3 | 1.51x |
+| 16 | 148.5 | 84.0 | 1.77x |
+| 32 | 152.1 | 102.9 | 1.48x |
+
+Checksums identical in every row. The 2026-09-04 columns above are the
+reference; this table is only the "still rewinds" check.
+
 ## Reproducing
 
 ```sh
