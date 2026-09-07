@@ -1,0 +1,24 @@
+;; any-fn-tag-does-not-discriminate-signatures: the undefined-behaviour half.
+;;
+;; `cast` is documented and implemented as a CHECKED downcast that panics on a
+;; mismatch.  For a function payload it did not check at all -- every function
+;; carried the bare TY_FN tag, so `__tur_any_cast_check(7, 7)` passed and the
+;; int->int closure came back typed `(-> cstr cstr)`.  Calling it printed "i":
+;; the pointer's low byte, read as a `const char *` the callee never received.
+;;
+;; It panics now, on BOTH back ends.  The messages differ and only the compiled
+;; one is asserted (expected.stderr is checked by run.sh; run-turi.sh asserts
+;; stdout and the exit code), because the two sides say the same thing
+;; differently: compiled has only the two ids' display names, which are both
+;; "fn", so it reports the mismatch as a signature mismatch; the interpreter has
+;; the closure's reconstructed key and names both signatures outright.
+;;
+;; No requires.compiled: running this under --interpret is the point.  The
+;; interpreter's fn target used to fall into `default: ok = true`, which passed
+;; everything -- `(cast 7 (-> int int))` included.
+(defn mk [] : any (fn [x : int] : int (+ x 1)))
+
+(defn main [] : int
+  (let [f (cast (mk) (-> cstr cstr))]
+    (println (f "hi")))
+  0)

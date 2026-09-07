@@ -2319,6 +2319,39 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
     g_adt_apps[idx].emitting = false;
 }
 
+/* any-fn-tag-does-not-discriminate-signatures: the one renderer for a function
+ * type's identity spelling, "(fn [int cstr] : bool)" / "(c-fn [...] : ...)".
+ *
+ * It was the body of `type_name`'s TY_FN case, lifted out because a second
+ * caller now needs the SAME string: `emit_any_type_id` interns a fn payload's
+ * `any` box id by this key, and the interpreter has to reproduce it from a
+ * TuriClosure's FnDef to answer `is?` / `cast` the way the compiled path does.
+ * Two hand-written renderers would drift, and drift here is a silent
+ * compiled/interpreted disagreement -- exactly the defect being fixed -- so
+ * both sides go through this.
+ *
+ * The result is interned (process-lifetime, deduped), so the caller neither
+ * owns nor frees it, and two calls with the same shape return the same
+ * pointer. */
+const char *tur_fn_type_key(const uint8_t *arg_kinds, uint32_t arity,
+                            TypeKind result_kind, bool cfnptr) {
+    Buf tmp;
+    buf_init(&tmp);
+    buf_puts(&tmp, cfnptr ? "(c-fn [" : "(fn [");
+    for (uint32_t i = 0; i < arity; i++) {
+        if (i > 0) buf_puts(&tmp, " ");
+        buf_puts(&tmp, type_name(type_from_kind(
+                           arg_kinds ? (TypeKind)arg_kinds[i] : TY_UNKNOWN)));
+    }
+    buf_puts(&tmp, "] : ");
+    type_name_buf(&tmp, type_from_kind(result_kind));
+    buf_puts(&tmp, ")");
+    buf_putc(&tmp, '\0');
+    const char *r = intern_type_name(tmp.data);
+    buf_free(&tmp);
+    return r;
+}
+
 /* OWNERSHIP CONTRACT (PH2): type_name has *mixed* ownership -- it returns a
  * static string literal for atomic/primitive kinds but a freshly tur_strdup-ed
  * heap string for composite kinds (TY_FN, TY_HANDLER, TY_UNION, TY_REF,
@@ -2372,23 +2405,9 @@ const char *type_name(Type t) {
         case TY_TYVAR:   return "tyvar";
         /* IT4: Top type */
         case TY_ANY:     return "any";
-        case TY_FN: {
-            /* Build into a buf, then strdup. */
-            Buf tmp;
-            buf_init(&tmp);
-            buf_puts(&tmp, t.as.fn.cfnptr ? "(c-fn [" : "(fn [");
-            for (uint32_t i = 0; i < t.as.fn.arity; i++) {
-                if (i > 0) buf_puts(&tmp, " ");
-                buf_puts(&tmp, type_name(type_from_kind(t.as.fn.arg_kinds[i])));
-            }
-            buf_puts(&tmp, "] : ");
-            type_name_buf(&tmp, type_from_kind(t.as.fn.result_kind));
-            buf_puts(&tmp, ")");
-            buf_putc(&tmp, '\0');
-            const char *r = intern_type_name(tmp.data);
-            buf_free(&tmp);
-            return r;
-        }
+        case TY_FN:
+            return tur_fn_type_key(t.as.fn.arg_kinds, t.as.fn.arity,
+                                   t.as.fn.result_kind, t.as.fn.cfnptr);
         case TY_REF: {
             /* Build "ref<T>" name */
             Buf tmp;

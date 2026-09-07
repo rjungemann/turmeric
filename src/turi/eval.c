@@ -1193,6 +1193,49 @@ static const char *turi_any_target_name(Type t) {
     return type_name(t);
 }
 
+/* any-fn-tag-does-not-discriminate-signatures: a closure's signature, spelled
+ * exactly as `emit_any_type_id` interns a fn payload's `any` box id.
+ *
+ * A TuriClosure carries the FnDef it was built from, and a FnDef carries full
+ * parameter Types plus the declared return Type -- everything the compiled key
+ * is made of.  Rendering it through the shared `tur_fn_type_key` (rather than a
+ * second hand-written spelling) is what lets `is?` and `cast` answer the same
+ * question on both back ends instead of the interpreter's former blanket
+ * "not a function" / "any function will do".
+ *
+ * Returns NULL when the signature cannot be rendered faithfully, and the caller
+ * then falls back to head-matching ("is this a function at all").  NULL, not a
+ * guess: a wrong key is a false negative, which silently breaks a type-case,
+ * where head-matching is merely coarse.  The NULL cases are a native (no FnDef
+ * at all -- a C builtin has no Turmeric signature) and a variadic (the fn Type
+ * the compiled side keys on does not render `& rest`, so any spelling here
+ * would be inventing one). */
+static const char *turi_closure_fn_key(TuriValue v) {
+    if (v.tag != TURI_CLOSURE || !v.as_closure) return NULL;
+    const TuriClosure *cl = v.as_closure;
+    const FnDef *fd = cl->fn;
+    if (!fd || fd->is_variadic) return NULL;
+    /* An EX_CLOSURE lambda's FnDef has the synthetic `__env_p` first parameter
+     * codegen adds; the source-level fn type the compiled side widens does not.
+     * Drop it, the same way eval_apply does. */
+    uint32_t start = cl->skip_env_param ? 1u : 0u;
+    if (fd->n_params < start) return NULL;
+    uint32_t arity = fd->n_params - start;
+    if (arity && !fd->param_types) return NULL;
+    uint8_t inline_kinds[16];
+    uint8_t *kinds = inline_kinds;
+    if (arity > sizeof(inline_kinds)) {
+        kinds = (uint8_t *)malloc(arity);
+        if (!kinds) return NULL;
+    }
+    for (uint32_t i = 0; i < arity; i++)
+        kinds[i] = (uint8_t)fd->param_types[start + i].kind;
+    const char *key = tur_fn_type_key(arity ? kinds : NULL, arity,
+                                      fd->return_type.kind, false);
+    if (kinds != inline_kinds) free(kinds);
+    return key;
+}
+
 static const char *turi_any_named_type(TuriValue v) {
     if (v.tag != TURI_STRUCT || !v.as_struct) return NULL;
     if (!turi_struct_is_struct_like(v) && v.as_struct->ctor &&
@@ -10804,12 +10847,34 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             ok = (v.tag == TURI_STRUCT && have && want && strcmp(have, want) == 0);
             break;
         }
+        /* any-fn-tag-does-not-discriminate-signatures: a fn target checked
+         * NOTHING -- it fell into the `default: ok = true` below, so
+         * `(cast 7 (-> int int))` handed back an int typed as a function and
+         * calling it was undefined behaviour, and a wrong-SIGNATURE cast
+         * miscalled the same way the compiled path did.
+         *
+         * Check the payload is a function, and check its signature whenever the
+         * closure can render one (turi_closure_fn_key).  A native or a variadic
+         * renders nothing, and those head-match rather than reject. */
+        case TY_FN: {
+            const char *have = turi_closure_fn_key(v);
+            const char *want = type_name(e->type);
+            ok = (v.tag == TURI_CLOSURE &&
+                  (!have || !want || strcmp(have, want) == 0));
+            break;
+        }
         default: ok = true; break;
         }
         if (!ok) {
             {
+                /* any-fn-tag-does-not-discriminate-signatures: name the
+                 * signature when the payload is a function.  "any holds a value
+                 * of a different type" is what the fallback said for every
+                 * closure, which tells a reader nothing about the mismatch that
+                 * actually happened. */
                 const char *have = turi_any_named_type(v);
-                char msg[160];
+                if (!have) have = turi_closure_fn_key(v);
+                char msg[192];
                 snprintf(msg, sizeof(msg), "cast: any holds %s, not %s",
                          have ? have : "a value of a different type",
                          type_name(e->type));
@@ -10860,6 +10925,18 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             const char *want = turi_any_target_name(e->as.any_is_.test_type);
             return turi_bool(want && strcmp(named, want) == 0);
         }
+        /* any-fn-tag-does-not-discriminate-signatures: a fn target compares
+         * signatures, the way the compiled per-signature box id does.  A
+         * closure fell off the end of the kind switch below (no TURI_CLOSURE
+         * arm), so it mapped to TY_UNKNOWN and every `(is? f (-> ...))` was
+         * FALSE -- including the correct signature, which compiled answered
+         * true for.  A closure that cannot render its signature (a native, a
+         * variadic) head-matches instead: "is this a function". */
+        if (v.tag == TURI_CLOSURE && e->as.any_is_.test_type.kind == TY_FN) {
+            const char *have = turi_closure_fn_key(v);
+            const char *want = type_name(e->as.any_is_.test_type);
+            return turi_bool(!have || !want || strcmp(have, want) == 0);
+        }
         TypeKind vk = TY_UNKNOWN;
         switch (v.tag) {
         case TURI_INT:    vk = TY_INT;      break;
@@ -10868,6 +10945,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         case TURI_CSTR:   vk = TY_CSTR;     break;
         case TURI_NIL:    vk = TY_NIL;      break;
         case TURI_STRUCT: vk = TY_STRUCT;   break;
+        /* any-fn-tag-does-not-discriminate-signatures: the residue of the
+         * closure case, for a target that carries only a tag and no Type (the
+         * signature comparison above needs `test_type`).  A closure had no arm
+         * here at all, so it mapped to TY_UNKNOWN and the test was false for
+         * every function. */
+        case TURI_CLOSURE: vk = TY_FN;      break;
         default: break;
         }
         return turi_bool((int64_t)vk == e->as.any_is_.test_tag);

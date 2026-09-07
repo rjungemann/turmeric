@@ -56,7 +56,7 @@ SO="$WORK/libany.so"
 BIN="$WORK/app"
 MULTI="$WORK/multi"
 
-EXPECTED=$'Gamma\nDelta\nBeta\n1\n7\nHeapThing\n11'
+EXPECTED=$'Gamma\nDelta\nBeta\n1\n7\nHeapThing\n11\nfn\n1\n0\n42'
 
 # --- 1) Separate compilation: the genuine repro. ---------------------------
 build_out=$(cd "$WORK" && "$TUR" build --shared "$PROJ" \
@@ -91,6 +91,26 @@ if [ -f "$PRODUCER_C" ] && [ -f "$MAIN_C" ]; then
                 "TUs disagree: producer='$p_row' main='$m_row'"
         fi
     done
+    # any-fn-tag-does-not-discriminate-signatures: the same pin for a FUNCTION
+    # payload, which cannot use the loop above because its row's NAME is "fn"
+    # for every signature -- `head -1` would compare producer's one fn row
+    # against whichever of main's two came first.  Take producer's id and
+    # require main to carry that exact id, which is the real question: does a
+    # key that is a rendered SIGNATURE (not an ADT name) hash the same in two
+    # TUs?  A closure rides the tag's value word, so boxed must be 0 -- if it
+    # ever flipped, a drop in main would free() a closure producer owns.
+    p_fn=$(grep -oE '\{ -?[0-9]+LL, "fn", [01] \}' "$PRODUCER_C" | head -1)
+    if [ -z "$p_fn" ]; then
+        fail "any-type-id-agrees-fn" "producer emitted no \"fn\" row"
+    elif ! grep -qF "$p_fn" "$MAIN_C"; then
+        fail "any-type-id-agrees-fn" \
+            "main.c carries no row matching producer's '$p_fn'"
+    elif [ "${p_fn##*, }" != "0 }" ]; then
+        fail "any-type-id-agrees-fn" "closure row must be boxed=0, got '$p_fn'"
+    else
+        pass "any-type-id-agrees-fn"
+    fi
+
     # Beta is by-value (heap-boxed at the widen); HeapThing rides the value word
     # and must NOT be freed by a drop site.  If these ever coincide the boxed
     # flag has stopped meaning anything and mode 4 is back.

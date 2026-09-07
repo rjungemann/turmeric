@@ -5,7 +5,7 @@
 ;; 1000 -- and every question main asked about a producer value was answered
 ;; from main's table.  All four consequences are asserted below.
 (defmodule main-mod
-  (import producer :refer [make-beta make-heap Beta HeapThing])
+  (import producer :refer [make-beta make-heap make-fn Beta HeapThing])
 
   ;; TWO locals widened before anything from `producer` is touched.  The count
   ;; matters: with only one, this TU's indices happened to line up with
@@ -26,4 +26,13 @@
     (let [h (make-heap)]
       (println (type-of h))
       (println (.x (cast h HeapThing)))) ;; boxed-flag row must come from producer
+    ;; any-fn-tag-does-not-discriminate-signatures: the fn id has to cross the
+    ;; TU boundary too.  main mints "(fn [cstr] : cstr)" from its own `is?`
+    ;; target, which producer never mentions, so the two TUs' fn rows are only
+    ;; comparable if the id really is a hash of the signature.
+    (let [f (make-fn)]
+      (println (type-of f))                      ;; fn
+      (println (if (is? f (-> int int)) 1 0))    ;; 1
+      (println (if (is? f (-> cstr cstr)) 1 0))  ;; 0 -- a DIFFERENT signature
+      (println ((cast f (-> int int)) 41)))      ;; 42
     0))

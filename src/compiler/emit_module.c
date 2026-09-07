@@ -784,7 +784,31 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
     Type r = ctx ? emit_resolve_type(ctx, t) : t;
     AdtDef *app_def = (r.kind == TY_APP) ? type_adt_app_def(&r) : NULL;
     bool named = (r.kind == TY_ADT && r.as.adt_.def) || app_def != NULL;
-    if (!ctx || !named) return (int64_t)any_box_tag_for_type(&r);
+    /* any-fn-tag-does-not-discriminate-signatures: a FUNCTION type is interned
+     * too, for the same reason a struct/ADT monomorph is.
+     *
+     * It used to fall through to `any_box_tag_for_type`, i.e. the bare TY_FN
+     * TypeKind, which every function value in the program shares.  `is?` then
+     * lowered to `TUR_GETTAG(v) == 7` and answered TRUE for every function type
+     * -- wrong parameter types, wrong arity, wrong result -- and `cast`
+     * inherited the same non-check, handing the payload back typed as whatever
+     * was asked for.  Calling it is undefined behaviour, reached without a
+     * diagnostic: `(cast f (-> cstr cstr))` on an int->int function then invoked
+     * with a `const char *` printed garbage.
+     *
+     * `type_name` on a fn renders "(fn [int] : int)" / "(c-fn [...] : ...)",
+     * which is a genuine identity key: arity, each parameter's TypeKind, the
+     * result kind and the C-ABI bit all appear in it, and it is interned
+     * globally so the hash is stable across TUs like every other id.
+     *
+     * What it does NOT separate is what the fn Type itself does not carry:
+     * `Type.as.fn.arg_kinds` is an array of TypeKinds, so `(-> Pt int)` and
+     * `(-> Qt int)` both render "(fn [<adt>] : int)" and share an id, and a
+     * variadic's `& rest` does not appear at all.  Those stay coarse until a fn
+     * type carries full parameter Types; the check is a strict improvement over
+     * "every function matches" either way. */
+    bool is_fn = (r.kind == TY_FN);
+    if (!ctx || (!named && !is_fn)) return (int64_t)any_box_tag_for_type(&r);
 
     /* Identity is `type_name`, not the C name: a carrier ADT's C name is
      * `int64_t`, which every carrier ADT shares -- keying on it would give two
@@ -795,10 +819,15 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
     if (!key || !*key) return (int64_t)any_box_tag_for_type(&r);
     /* What `type-of` reports: the source-level name.  A type application shows
      * its head ("Box"), since the parenthesised internal rendering is not what
-     * a program printing a type name wants to see. */
-    const char *shown = (r.kind == TY_ADT && r.as.adt_.def)
-                            ? r.as.adt_.def->name
-                            : (app_def ? app_def->name : key);
+     * a program printing a type name wants to see.  A function shows "fn" --
+     * the id discriminates signatures, but the NAME stays what both back ends
+     * already agree on (type-of-on-boxed-closure-diverges), and the interpreter
+     * has no signature to report even if it wanted to. */
+    const char *shown = is_fn
+                            ? "fn"
+                            : (r.kind == TY_ADT && r.as.adt_.def)
+                                  ? r.as.adt_.def->name
+                                  : (app_def ? app_def->name : key);
 
     /* The id is the hash; the intern table is now only the record of what THIS
      * TU must publish into the runtime registry (see emit_any_type_name_table).
@@ -9904,12 +9933,19 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        char __m[192];\n");
     buf_puts(out, "        const char *__hn = __tur_any_type_name(have);\n");
     buf_puts(out, "        const char *__wn = __tur_any_type_name(want);\n");
-    buf_puts(out, "        if (strcmp(__hn, __wn) == 0)\n");
-    buf_puts(out, "            snprintf(__m, sizeof(__m), \"cast: any holds a "
-                  "different instantiation of %s\", __hn);\n");
-    buf_puts(out, "        else\n");
+    buf_puts(out, "        if (strcmp(__hn, __wn) != 0)\n");
     buf_puts(out, "            snprintf(__m, sizeof(__m), \"cast: any holds %s, "
                   "not %s\", __hn, __wn);\n");
+    /* any-fn-tag-does-not-discriminate-signatures: a fn id discriminates
+     * signatures but `shown` stays "fn" for both sides, so the equal-name branch
+     * is reached for a wrong-signature cast as well.  "a different instantiation
+     * of fn" is not what happened; say what did. */
+    buf_puts(out, "        else if (strcmp(__hn, \"fn\") == 0)\n");
+    buf_puts(out, "            snprintf(__m, sizeof(__m), \"cast: any holds a "
+                  "function of a different signature\");\n");
+    buf_puts(out, "        else\n");
+    buf_puts(out, "            snprintf(__m, sizeof(__m), \"cast: any holds a "
+                  "different instantiation of %s\", __hn);\n");
     buf_puts(out, "        tur_panic(__m);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n");

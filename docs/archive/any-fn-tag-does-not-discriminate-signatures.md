@@ -1,10 +1,89 @@
 ---
 title: `is?` / `cast` on an `any` holding a function match ANY function type, so a wrong-signature cast miscalls silently
-category: Reported
+category: Archive
 description: A function value widened to `any` carries the bare TY_FN TypeKind as its tag, so `is?` compiles to `TUR_GETTAG(v) == 7` and answers true for every function type -- wrong parameter types, wrong arity, wrong result. `cast` then hands back a callable typed however the caller asked, and calling it is undefined behaviour. Compiled and interpreted also disagree on the `is?` answer.
 ---
 
 # An `any`-boxed function matches every function type
+
+**RESOLVED 2026-09-07.** Fix direction 2 landed, with direction 3 alongside it,
+and direction 1 was not needed: the capability the report worried about losing
+is preserved intact.
+
+A function payload now interns a **per-signature** `any` box id, exactly the way
+a struct/ADT monomorph does. `emit_any_type_id` treats `TY_FN` as a named type
+and keys it on the fn type's rendered spelling -- `"(fn [int] : int)"` -- which
+carries arity, each parameter's TypeKind, the result kind and the C-ABI bit. P1
+had already made those ids a hash of the key rather than a per-TU index, so
+nothing else was needed to make them stable across translation units; the
+extended `run-any-type-id-multi-module.sh` pins that a fn row minted in one TU
+carries the identical id in another.
+
+The `shown` name stays `"fn"` deliberately. The id discriminates signatures; the
+*name* is what `type-of` prints, and both back ends already agree on "fn" there
+(`type-of-on-boxed-closure-diverges`). Because both sides of a wrong-signature
+mismatch then display the same name, `__tur_any_cast_check` grew a third arm:
+`"cast: any holds a function of a different signature"`, rather than the
+"a different instantiation of fn" the parametric wording would have produced.
+
+**The interpreter was aligned rather than merely documented.** `type_name`'s
+`TY_FN` case moved into a shared `tur_fn_type_key(arg_kinds, arity, result_kind,
+cfnptr)`, so `eval.c` reconstructs the *same string* from a `TuriClosure`'s
+`FnDef` -- full parameter Types and declared return type are both there -- and
+compares it to the target's. Two hand-written renderers would have drifted, and
+drift here is silently a new compiled/interpreted disagreement.
+
+Both back ends now answer identically on every probe in this report:
+
+| program | before (compiled / interp) | after (both) |
+| --- | --- | --- |
+| `(is? int->int-fn (-> cstr cstr))` | 1 / 0 | **0** |
+| `(is? int->int-fn (-> int int int))` | 1 / 0 | **0** |
+| `(is? int->int-fn (-> int int))` | 1 / 0 | **1** |
+| `(cast int->int-fn (-> cstr cstr))` | miscall / miscall | **panic** |
+| `(cast int->int-fn (-> int int))` then call | 42 / 42 | **42** |
+| `(cast 7 (-> int int))` then call | panic / **miscall** | **panic** |
+
+The last row is a second defect the fix swept up: the interpreter's cast switch
+had no `TY_FN` arm at all, so a fn target fell into `default: ok = true` and
+passed *anything* -- an int typed as a function, then called.
+
+## What is still coarse
+
+Two residuals, both stated in the fixture comments rather than left to be
+rediscovered:
+
+- **Parameter types are TypeKinds.** `Type.as.fn.arg_kinds` is a `uint8_t`
+  vector of `TypeKind`, so `(-> Pt int)` and `(-> Qt int)` both render
+  `"(fn [<adt>] : int)"` and share an id, and `& rest` does not appear in the
+  spelling at all. Separating those needs a fn type that carries full parameter
+  Types, which is a representation change, not a fix to this seam. Both back
+  ends are coarse the same way, so they still agree.
+- **A closure that cannot render its signature head-matches.** A native (no
+  `FnDef`) and a variadic return NULL from `turi_closure_fn_key`, and the
+  interpreter then answers "is this a function at all" rather than guessing. A
+  wrong key would be a false negative that silently breaks a type-case;
+  head-matching is merely coarse.
+
+One neighbouring defect fell out of the probes and is filed separately:
+[partial-application-widened-to-any-is-a-ptr](../reported/partial-application-widened-to-any-is-a-ptr.md)
+-- an under-saturated call's static type is `ptr<void>`, so a curried closure
+widens as a pointer, `type-of` says "ptr" compiled and "fn" interpreted, and no
+`is?` target matches it.
+
+## Fixtures
+
+- `tests/fixtures/any-fn-signature-discriminates` -- wrong types, wrong arity,
+  right-arity-wrong-types, the correct signature, and a `cast` round-trip that
+  calls the recovered function. No `requires.compiled`: it runs on **both** back
+  ends, which is the point.
+- `tests/fixtures/any-fn-wrong-signature-cast-panics` -- the undefined-behaviour
+  case, now a panic on both paths.
+- `tests/run-any-type-id-multi-module.sh` -- a fn payload minted in `producer`
+  and narrowed in `main`, with a structural pin that both TUs emit the same id
+  for it and that a closure row is `boxed=0`.
+
+---
 
 **Severity: high.** `cast` is documented and implemented as a *checked*
 downcast that panics on mismatch. For a function payload it silently does not
