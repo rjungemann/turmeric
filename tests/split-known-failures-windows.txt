@@ -1,0 +1,52 @@
+# Fixtures known to fail under TUR_RUNTIME=split on WINDOWS (MSYS2/UCRT64,
+# MinGW gcc, Debug). The Linux job has its own list in
+# tests/split-known-failures-linux.txt -- the two are genuinely different, and
+# that difference is the reason this file exists.
+#
+# NAMES, not a count. See the linux file's header for why.
+#
+# How the Windows job uses this, and why it differs from the Linux one: the
+# Windows suite is SHARDED three ways (a single runner took 28-52 minutes and
+# once died outright), so no single shard sees the whole corpus. Each shard
+# therefore asserts its failures are a SUBSET of this list -- which catches
+# every new failure, immediately, in whichever shard it lands. The opposite
+# direction, a listed fixture that has started passing, is checked once by
+# running exactly these names unsharded; that run is three fixtures and costs
+# seconds.
+#
+# If you fix one, delete its line in the same commit: the second check turns
+# red on a fixture that passes while still listed here.
+
+# --- fails on Linux too; the one genuinely lossy part of the split ----------
+# The emitted preamble is not fixed across programs: the emitter picks EITHER
+# `#include "hamt.h"` OR the loose `extern void *tur_hamt_new();` declarations
+# from stdlib's extern-c, never both. The committed decls region is generated
+# from ONE canonical emission, so it freezes whichever that program chose.
+# c2mir accepts the loose form alongside hamt.h's `Hamt *tur_hamt_new(void)`;
+# gcc does not, on either platform.
+hamt-lowering-basic
+
+# --- Windows-only, and a REAL defect rather than a measurement artifact -----
+# Both produce no output and exit 127 under the split, while passing under the
+# default runtime with the same compiler and the same build. Established by
+# experiment, in this order:
+#
+#   - NOT the build type. First seen on Release, where CLAUDE.md warns contract
+#     checks are elided; rebuilt Debug on Windows and both still fail.
+#   - NOT a link failure. `nm` finds gc_all_blocks_count in both the split and
+#     the default binary.
+#   - NOT recursion depth. gc-registry-growth builds a 20000-deep chain, and a
+#     hand-written 20000-deep recursion runs fine under split on Windows.
+#   - NOT a missing DLL. `ldd` resolves everything.
+#
+# So: a Windows-only split defect in the rc/GC machinery, failing before any
+# output reaches stdout. Two variables remain uncontrolled -- Windows vs Linux
+# and MinGW gcc 16.1 vs system gcc -- and cannot be separated on a Windows box
+# alone.
+#
+# Next diagnostic, cheapest first: the WIN32 split archive also pulls in
+# async/tur_sjlj_x64_win.S (see add_library(turt_preamble ...) in
+# src/CMakeLists.txt), which the default path gets from elsewhere. Look for a
+# duplicate or divergent unwinding/setjmp implementation across that seam.
+gc-registry-growth
+sx8a-tur-smt-div-mod

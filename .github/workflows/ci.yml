@@ -600,10 +600,10 @@ jobs:
           # run.sh prints trailing "  - <name> (<reason>)" lines per failure.
           sed -n 's/^  - \([A-Za-z0-9._-]*\).*/\1/p' /tmp/split-run.log \
             | sort -u > /tmp/split-actual.txt
-          grep -vE '^\s*(#|$)' tests/split-known-failures.txt \
+          grep -vE '^\s*(#|$)' tests/split-known-failures-linux.txt \
             | sed 's/[[:space:]]*$//' | sort -u > /tmp/split-expected.txt
 
-          echo "--- expected (tests/split-known-failures.txt) ---"; cat /tmp/split-expected.txt
+          echo "--- expected (tests/split-known-failures-linux.txt) ---"; cat /tmp/split-expected.txt
           echo "--- actual ---";                                   cat /tmp/split-actual.txt
 
           if diff -u /tmp/split-expected.txt /tmp/split-actual.txt; then
@@ -611,7 +611,7 @@ jobs:
             echo "Split suite matches its known-failure baseline ($n known)."
             exit 0
           fi
-          echo "::error::split failures differ from tests/split-known-failures.txt (see diff above). A fixture that now PASSES is also a difference -- delete its line."
+          echo "::error::split failures differ from tests/split-known-failures-linux.txt (see diff above). A fixture that now PASSES is also a difference -- delete its line."
           exit 1
 
       - name: Save ccache
@@ -1043,6 +1043,150 @@ jobs:
             fail=1
           done
           exit $fail
+
+  # The split runtime on WINDOWS.  A separate job from `split` (Linux) because
+  # the two disagree, and the disagreement is the point: on Linux exactly one
+  # fixture fails under TUR_RUNTIME=split; on Windows three do, and the extra
+  # two are a real defect (no output, exit 127, while the DEFAULT runtime
+  # passes the same fixture with the same compiler and build).
+  #
+  # That defect was invisible to CI for as long as it existed, which is how it
+  # spent a whole session being mischaracterised as "three failures in the
+  # split" when three was a Windows number and one was the Linux number.
+  #
+  # SHARDED, like the `windows` job and for the same reason: a single Windows
+  # runner takes 28-52 minutes on this corpus and has died outright once.
+  windows-split:
+    name: Windows split runtime ${{ matrix.shard }} (MSYS2/UCRT64)
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1/3', '2/3', '3/3']
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      # As in the `windows` job: a CRLF checkout would rewrite the committed
+      # split-runtime artifacts under src/runtime/generated/, which are exactly
+      # what this leg tests.
+      - name: Keep LF line endings
+        shell: bash
+        run: git config --global core.autocrlf input
+
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            diffutils
+            python
+            git
+
+      # Debug: a Release tur elides contract checks, so contract fixtures fail
+      # with the wrong error and the baseline would be measuring the build type.
+      # Sanitizers are off regardless here -- MinGW ships no ASan runtime.
+      - name: Configure
+        run: >-
+          cmake -S . -B build-win -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      # ALL targets: --runtime=split links libturt_preamble.a, which a
+      # `--target tur` build never produces.  Every fixture would then die at
+      # the link with `cannot find -lturt_preamble`, which reads like a split
+      # bug and is not.
+      - name: Build (all targets -- split links libturt_preamble.a)
+        run: cmake --build build-win -j
+
+      # The split FAILS CLOSED: on a hash mismatch it silently emits the full
+      # preamble and everything still passes, slower.  Without this, a leg that
+      # lost the split would report green having run the default path twice.
+      - name: Verify the split actually engages
+        run: |
+          printf '(defn main [] : int 0)\n' > /tmp/splitprobe.tur
+          out=$(TUR_JIT_TIMING=1 TUR_RUNTIME=split \
+                  ./build-win/tur.exe build /tmp/splitprobe.tur -o /tmp/splitprobe.exe 2>&1) || true
+          printf '%s\n' "$out"
+          if printf '%s\n' "$out" | grep -q 'split.*disengaged'; then
+            echo "::error::the split disengaged on Windows -- see the reason above"
+            exit 1
+          fi
+          [ -f /tmp/splitprobe.exe ] || { echo "::error::split build produced no executable"; exit 1; }
+          /tmp/splitprobe.exe || { echo "::error::split-built binary did not run"; exit 1; }
+          echo "split engaged and the artifact runs."
+
+      # SUBSET check, not an equality one, because this shard sees a third of
+      # the corpus and the baseline covers all of it.  This is the direction
+      # that matters: any NEW failure lands in some shard and turns that shard
+      # red immediately.  The other direction -- a listed fixture that has
+      # started passing -- is checked once, below, and cannot be checked here
+      # without teaching each shard which baseline entries belong to it.
+      - name: Suite under TUR_RUNTIME=split (shard ${{ matrix.shard }})
+        env:
+          TUR_TEST_SHARD: ${{ matrix.shard }}
+        run: |
+          set -o pipefail
+          TUR=./build-win/tur.exe TUR_RUNTIME=split bash tests/run.sh 2>&1 \
+            | tee ./split-win.log || true
+
+          sed -n 's/^  - \([A-Za-z0-9._-]*\).*/\1/p' ./split-win.log | sort -u > ./actual.txt
+          grep -vE '^\s*(#|$)' tests/split-known-failures-windows.txt \
+            | sed 's/[[:space:]]*$//' | sort -u > ./allowed.txt
+
+          echo "--- failures in this shard ---"; cat ./actual.txt
+          unexpected=$(comm -23 ./actual.txt ./allowed.txt)
+          if [ -n "$unexpected" ]; then
+            echo "::error::split failures NOT in tests/split-known-failures-windows.txt:"
+            printf '%s\n' "$unexpected"
+            exit 1
+          fi
+          echo "All failures in this shard are known (see tests/split-known-failures-windows.txt)."
+
+      # The other direction, run once and unsharded: every name in the baseline
+      # must still fail.  Three fixtures, so this costs seconds rather than a
+      # fourth corpus pass.  It is what stops the list rotting into a permanent
+      # allowance for things that were fixed years ago.
+      - name: Every listed failure still fails
+        if: matrix.shard == '1/3'
+        run: |
+          set -o pipefail
+          names=$(grep -vE '^\s*(#|$)' tests/split-known-failures-windows.txt \
+                  | sed 's/[[:space:]]*$//' | sort -u)
+          [ -n "$names" ] || { echo "baseline is empty -- delete this step and the files with it"; exit 0; }
+          filter="^($(printf '%s\n' "$names" | paste -sd'|' -))$"
+          echo "filter: $filter"
+
+          TUR=./build-win/tur.exe TUR_RUNTIME=split TUR_TEST_FILTER="$filter" \
+            bash tests/run.sh 2>&1 | tee ./split-win-known.log || true
+
+          sed -n 's/^  - \([A-Za-z0-9._-]*\).*/\1/p' ./split-win-known.log | sort -u > ./still.txt
+          printf '%s\n' "$names" > ./listed.txt
+
+          fixed=$(comm -23 ./listed.txt ./still.txt)
+          if [ -n "$fixed" ]; then
+            echo "::error::these are listed in tests/split-known-failures-windows.txt but now PASS -- delete their lines:"
+            printf '%s\n' "$fixed"
+            exit 1
+          fi
+          echo "Every listed fixture still fails, as recorded."
+
+      - name: Upload split log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: split-win-${{ strategy.job-index }}
+          path: ./split-win*.log
+          if-no-files-found: ignore
 
   check-guides:
     name: Check guide toggle pairs
