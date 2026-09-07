@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.44.1` -- `tur lsp` and `tur dap` reach editors on Windows again; their stdio transport runs in binary mode, so CRLF-framed headers survive the read.
+**Latest release:** `v0.44.2` -- Closes several silent wrong-answer bugs in the regions escape lock, and fixes `tur lsp`/`tur dap`/release-archive builds on Windows.
 
 ## What
 

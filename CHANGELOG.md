@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.44.2] -- 2026-09-06
 
 ### Fixed
 
@@ -40,6 +40,31 @@ All notable changes to Turmeric are documented here.
   `O_NONBLOCK` was wanted for, so the read is capped at what is already
   buffered and can never block. The DAP and LSP harnesses now run on Windows
   CI, translating MSYS paths to native ones before handing them to `tur.exe`.
+- **Regions: closed several silent wrong-answer and hard-build bugs** in the
+  `with-region` / `bt-scope` escape lock. The runtime note was widened from
+  the bracket's result word to every word a store or an erasure can carry
+  out of a generation, catching a node stored via `vec-push!` into an outer
+  collection, an erased field, a value handed to inline-C, or a parametric
+  result the static walk couldn't see through -- each previously either
+  dangled after a rewind or was wrongly retained. Separately, a carrier/
+  pointer type mismatch at `do` result joins broke native compilation on
+  newer compilers (clang, GCC >= 14) and macOS, and a related emitter fix
+  (dropping a GNU-only `__auto_type` from the region note) had been silently
+  disabling the JIT engine tree-wide.
+- Fixed a generic function returning a heap-boxed record reading back the
+  wrong data when instantiated alongside a sibling generic returning a
+  plain by-value record with identical argument types.
+- Fixed `vec-get-byval` failing to compile on a `Vec` of a by-value struct.
+- `tur smt` and `--dump-refine=json` now read and write SMT-LIB `div`/`mod`
+  with correct Euclidean semantics; some divmod-based obligations previously
+  produced wrong satisfiability results.
+
+### Changed
+
+- Substantial performance improvement to recursive substitution over boxed
+  recursive-field records (SR4): removed a hidden non-tail recursion so the
+  by-value path returns to parity with the carrier path (was up to 4.77x
+  slower, now ~1.01x).
 
 ## [0.44.1] -- 2026-09-05
 
