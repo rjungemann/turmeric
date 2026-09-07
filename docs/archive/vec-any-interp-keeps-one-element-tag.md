@@ -63,6 +63,35 @@ That assumption held for as long as the type system enforced homogeneity.
 `(Vec any)` is the first element type for which it does not, and `any` is
 exactly the type whose whole content is the per-value tag.
 
+## Resolution (2026-09-07)
+
+**Fixed via direction 1**, a byte per element rather than one tag per vec. The
+side table stays keyed on the vec header pointer and stays process-lifetime;
+only the payload widens, from `uint8_t tag` to `uint8_t *tags` grown with the
+vec. An index past what has been recorded reads `TURI_INT` -- the same default
+an absent key already gave -- so a vec built by another native (the schema/json
+int64 buffers the original comment names) is untouched.
+
+Five call sites took an index: the two writers (`vec-push!` at the slot it just
+wrote, `vec-set!` at its index) and the three readers (`vec-get`, `vec-pop!`,
+and the GC mark walk, which types each cell to mark it).
+
+`tests/fixtures/vec-any-element-roundtrip` now runs on BOTH back ends and they
+agree: `int` / `cstr` / `float` / `bool`, with `(cast (vec-get v 2) float)`
+giving 7.1. It had carried `requires.compiled` for exactly one commit, to record
+the divergence rather than hide it.
+
+Suites: `run.sh` 2865/0, `run-turi.sh` 1957/0, `run-leak-check.sh` 91/0 with one
+known-open. The change touches every interpreted Vec, which is why both suites
+ran before it landed.
+
+**Map and Set were flagged in this report and are NOT answered by it.** They
+carry no equivalent of `vec_tag_set` (grep finds none), so they do not share
+this mechanism -- but whether their value reads preserve a per-entry tag is a
+separate question, and the surface (`map-assoc!` does not exist; the Map is the
+persistent HAMT) is different enough that one probe did not settle it. It should
+be settled before S6's `#map{...}` / `#set{...}` work, not after.
+
 ## Fix directions
 
 1. **A per-element tag array beside the buffer.** The Vec header already has

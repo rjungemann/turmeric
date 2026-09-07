@@ -21,14 +21,18 @@
 ;;     keyed on the value's RECORDED emitted spelling, so a widen, a parameter
 ;;     and a let-bound `any` are all untouched.
 ;;
-;; requires.compiled: THE INTERPRETER GETS THIS WRONG, and the fixture must not
-;; hide that.  Its Vec buffer is raw int64 cells with ONE element tag per
-;; vector -- `native_vec_push`'s own comment calls it "the homogeneous element
-;; tag" -- so every element of a heterogeneous vector reports the type of the
-;; LAST one pushed: this program prints bool/bool/bool/bool there and then
-;; panics on the cast.  Filed as vec-any-interp-keeps-one-element-tag.  A
-;; per-element tag is a change to the interpreter's Vec representation and is
-;; its own piece of S6.
+;; BOTH BACK ENDS, deliberately.  The interpreter got this wrong when the
+;; compiled half first landed: its Vec buffer is raw int64 cells and it recorded
+;; ONE element tag per vector -- native_vec_push's own comment called it "the
+;; homogeneous element tag" -- so every element of a heterogeneous vector
+;; reported the type of the LAST one pushed, and the cast below panicked naming
+;; a type this program never asks for.  That assumption was right for as long as
+;; the type system enforced homogeneity; `(Vec any)` is the first element type
+;; for which it is not, and `any` is exactly the type whose content IS the
+;; per-value tag.  The tag side table is now a byte per element rather than one
+;; per vec, so the two back ends agree here rather than diverging.
+;;
+;; requires.leak-check: the element boxes are owned by the vector.
 
 (defn dyn [x : any] : any x)
 

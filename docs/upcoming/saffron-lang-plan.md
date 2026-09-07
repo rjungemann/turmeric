@@ -1140,13 +1140,22 @@ looked like the site, and instrumenting it showed the WORKING `(Vec Pt)` case
 takes the identical path. Those edits were reverted rather than shipped as dead
 code with a confident comment.
 
-**The interpreter now diverges, and worse than it did.** Its Vec buffer is raw
-int64 cells with ONE tag per vector -- `native_vec_push` calls it "the
-homogeneous element tag" -- so every element of a heterogeneous vector reports
-the LAST one's type. Filed as
-[vec-any-interp-keeps-one-element-tag](../reported/vec-any-interp-keeps-one-element-tag.md);
-a per-element tag is the next piece, and the same question should be asked of
-Map and Set BEFORE the `#map{...}` / `#set{...}` work rather than after.
+**The interpreter diverged for exactly one commit, and now agrees.** Its Vec
+buffer is raw int64 cells and it recorded ONE tag per vector --
+`native_vec_push` called it "the homogeneous element tag" -- so every element of
+a heterogeneous vector reported the LAST one's type: a wrong answer with no
+diagnostic. Right for as long as the type system enforced homogeneity, and
+`(Vec any)` is the first element type for which it is not. The side table now
+carries a byte per element ([archived](../archive/vec-any-interp-keeps-one-element-tag.md)),
+and `vec-any-element-roundtrip` runs on both back ends. It carried
+`requires.compiled` for one commit, to record the divergence rather than hide it
+behind a skip nobody reads.
+
+Map and Set were flagged there and are NOT settled: they share no equivalent of
+`vec_tag_set`, but whether their value reads preserve a per-entry tag is a
+different question and one probe did not answer it. **Settle it before the
+`#map{...}` / `#set{...}` work, not after** -- the Vec case is the argument for
+asking early.
 
 Still to do: `[1 "two" 7.1]` defaulting to `(vec any)` in a Saffron file, the
 map/set/cons-list twins, and the prelude.
