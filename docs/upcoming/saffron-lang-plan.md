@@ -488,12 +488,23 @@ What does reach it: user-defined classes, the HKT stack (`fmap`, `bind`,
 | `is?`-guard narrowing | **works today** | `(if (is? x Circle) (area x) ...)` -- verified: 19.6349 / 50.41 |
 | explicit `cast` | **works today** | `(area (cast x Circle))` |
 | annotate the binding | works trivially | `[x : Circle]` |
-| `@TypeName` witness | **broken on `any`** | `(tag-of @bool x)` -- emits uncompilable C |
+| `@TypeName` witness | **works (fixed 2026-09-07)** | `(tag-of @bool x)` -- pins the instance and unboxes, checked |
 
 The first is the important one, and it is not ceremony: it reads as a
 type-case, which is how dynamic languages dispatch anyway (Clojure's
 `condp instance?`, Racket's predicate `cond`). A Saffron program that wants
 per-type behaviour writes the type-case it would have written regardless.
+
+The fourth row used to read "broken on `any`", which mattered more than a
+missing convenience: `@TypeName` is what the compiler's own ambiguity
+diagnostic tells you to reach for, so following the hint produced a `cc`
+error. It now pins the instance **and** unboxes the receiver, checked -- one
+token, and a wrong witness panics rather than reinterpreting the payload. The
+same change made a method call on an un-narrowed `any` a diagnostic naming all
+three routes, where with a single instance in scope there had been no
+diagnostic at all. See
+[typeclass-dispatch-on-any-receiver-emits-uncompilable-c](../archive/typeclass-dispatch-on-any-receiver-emits-uncompilable-c.md);
+its single-instance half had a worse cause than filed, recorded there.
 
 **For a PARAMETRIC or HKT receiver, none of them work.** This was measured
 after the fact and it inverts the paragraph above for the entire `Functor` /
@@ -652,7 +663,7 @@ cannot be built until they are.**
 |---|---|---|
 | ~~P1~~ | ~~any-type-ids-are-per-tu~~ | **DONE 2026-09-07.** The id is a hash of the identity key, not the per-TU intern index, and the name table became a registry each TU publishes `{id, name, boxed}` rows into. Multi-TU builds now agree; the drop reads the minting TU's boxed flag. This also builds the runtime type registry D8 would key instance lookup off, as anticipated. [Archived](../archive/any-type-ids-are-per-tu.md) |
 | P2 | [forall-dict-byvalue-receiver-emits-uncompilable-c](../reported/forall-dict-byvalue-receiver-emits-uncompilable-c.md) | D8 |
-| P2b | [typeclass-dispatch-on-any-receiver-emits-uncompilable-c](../reported/typeclass-dispatch-on-any-receiver-emits-uncompilable-c.md) | D8 ergonomics; cheap and high-value |
+| ~~P2b~~ | ~~typeclass-dispatch-on-any-receiver-emits-uncompilable-c~~ | **DONE 2026-09-07.** `@TypeName` on an `any` receiver now implies the checked unbox, so the witness is a complete one-token answer to an erased receiver; and a method call on an un-narrowed `any` is a diagnostic naming all three routes instead of uncompilable C. [Archived](../archive/typeclass-dispatch-on-any-receiver-emits-uncompilable-c.md) |
 | ~~P2c~~ | ~~any-narrowing-broken-for-parametric-receivers~~ | **DONE 2026-09-07.** Was: `is?` on an `any`-held `Option` silently false, `cast` panicking `holds Option, not Option`. `is?`/`cast` now share one target resolver, take an applied `(Option float)`, and reject a bare constructor with a diagnostic. The type-case idiom reaches the HKT stack on both paths. [Archived](../archive/any-narrowing-broken-for-parametric-receivers.md) |
 | P2d | [generic-fn-in-any-return-position-emits-uncompilable-c](../reported/generic-fn-in-any-return-position-emits-uncompilable-c.md) | S2 -- a generic defn in an `: any` position is never monomorphised |
 | P3 | [inferred-return-defaults-inconsistently](../reported/inferred-return-defaults-inconsistently.md) | S2 |

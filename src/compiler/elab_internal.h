@@ -1683,6 +1683,11 @@ Expr *elab_make_struct(Elab *e, const Form *call);
 Expr *elab_with(Elab *e, const Form *call); /* WITH-V0 */
 Expr *elab_default_of(Elab *e, const Form *call);  /* M2b */
 Expr *elab_borrow_immut(Elab *e, const Form *call);
+/* typeclass-dispatch-on-any-receiver-emits-uncompilable-c: build the checked
+ * `any` unbox (the EX_ANY_CAST `(cast x T)` lowers to) from an already-resolved
+ * target Type.  Used by the `@TypeName` witness path, which pins an instance
+ * and therefore already knows the type the receiver must be unboxed to. */
+Expr *elab_any_unbox_to(Elab *e, Expr *val, Type target, Span span);
 Expr *elab_borrow_mut(Elab *e, const Form *call);
 
 /* elab_types.c */

@@ -5496,6 +5496,7 @@ static void poly_wrap_stamp_carrier_erased(Expr *wrap, const Binding *param) {
 }
 
 Expr *elab_method_call(Elab *e, const Form *call) {
+
     /* call is (.method obj arg1 arg2 ...)
      * call->as.list.items[0] is the symbol .method
      */
@@ -5582,6 +5583,9 @@ Expr *elab_method_call(Elab *e, const Form *call) {
         TypeClassInstance *witness_inst   = NULL;
         FnDef             *witness_method_fn = NULL;
         bool               any_inst_for_method = false;
+        /* typeclass-dispatch-on-any-receiver-emits-uncompilable-c: the type the
+         * witness pins, kept so an `any` receiver can be unboxed to it below. */
+        Type               witness_recv_type = type_simple(TY_UNKNOWN, CK_COPY);
 
         for (TypeClassInstance *inst = e->typeclass_env.instances;
              inst != NULL && !witness_inst; inst = inst->next) {
@@ -5592,6 +5596,7 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                 any_inst_for_method = true;
                 /* Check if a type arg name matches the witness identifier. */
                 bool name_match = false;
+                uint8_t matched_ti = 0;
                 for (uint8_t ti = 0; ti < inst->n_type_args && !name_match; ti++) {
                     if (inst->type_arg_syms && inst->type_arg_syms[ti] &&
                         inst->type_arg_syms[ti]->len == witness_len &&
@@ -5611,10 +5616,13 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                         }
                         if (prim && strcmp(prim, witness_name) == 0) name_match = true;
                     }
+                    if (name_match) matched_ti = ti;
                 }
                 if (name_match) {
                     witness_inst      = inst;
                     witness_method_fn = inst->method_impls[mi];
+                    if (matched_ti < inst->n_type_args)
+                        witness_recv_type = inst->type_args[matched_ti];
                 }
                 break; /* one method match per instance is enough */
             }
@@ -5624,6 +5632,27 @@ Expr *elab_method_call(Elab *e, const Form *call) {
             /* Witness resolved: receiver is items[2], extra args are items[3..]. */
             Expr *obj_w = elab_form(e, call->as.list.items[2]);
             if (!obj_w) return NULL;
+
+            /* typeclass-dispatch-on-any-receiver-emits-uncompilable-c: an `any`
+             * receiver is a two-word `tur_tagged_t`, and the instance impl takes
+             * the payload type.  Handing the box straight over emitted
+             * "incompatible type for argument 1" from cc -- and this is the
+             * route the ambiguity diagnostic RECOMMENDS for an erased receiver,
+             * so following the compiler's own hint produced a build failure.
+             *
+             * The witness already names the instance, which is exactly what the
+             * unbox needs, so pin and unbox together.  It is the CHECKED unbox
+             * (the same node `(cast x T)` lowers to), so a witness that names
+             * the wrong instance panics with `cast: any holds ...` rather than
+             * reinterpreting the payload -- the witness pins which impl runs, it
+             * does not get to assert what the box holds. */
+            if (obj_w->type.kind == TY_ANY &&
+                witness_recv_type.kind != TY_UNKNOWN &&
+                witness_recv_type.kind != TY_ANY) {
+                obj_w = elab_any_unbox_to(e, obj_w, witness_recv_type,
+                                          call->as.list.items[2]->span);
+                if (!obj_w) return NULL;
+            }
 
             uint32_t n_args_w = call->as.list.len - 3;
             Expr **args_w = (Expr **)arena_alloc(e->arena, n_args_w * sizeof(Expr *));
@@ -6550,6 +6579,53 @@ found_method:;
                           (int)method_name_len, method_name);
             return NULL;
         }
+    }
+
+    /* typeclass-dispatch-on-any-receiver-emits-uncompilable-c: an `any` receiver
+     * never dispatches, however many instances matched.
+     *
+     * The ambiguity guard below counts CANDIDATES, so with exactly one instance
+     * nothing fired and resolution took it -- without ever asking whether the
+     * receiver was that type.  It is not: an `any` is a two-word `tur_tagged_t`
+     * box, so the instance impl received the box where it declared the payload,
+     * and cc rejected the call.  One candidate is not evidence that the
+     * candidate is right.
+     *
+     * Checked before the count, so an `any` receiver gets this message rather
+     * than the ambiguity one -- which named only `@TypeName` and left out the
+     * two routes that have always worked. */
+    /* typeclass-dispatch-on-any-receiver-emits-uncompilable-c: an `any` receiver
+     * never dispatches to an instance declared for some other type.
+     *
+     * Nothing rejected it before.  An `any` carries no kind the matcher
+     * recognises, so it took the KIND_ARROW arm, where `type_ok` is
+     * "the instance head is not primitive" -- and every struct/ADT instance
+     * satisfies that.  So the FIRST such instance was taken as an EXACT match
+     * (fallback_count 0, so the ambiguity guard below never even looked), and
+     * the instance impl was then called with a two-word `tur_tagged_t` where it
+     * had declared the payload type.  cc rejected the call; with one instance
+     * in scope there was no diagnostic at all beforehand.
+     *
+     * Keyed on the SELECTED instance rather than on match bookkeeping, so it
+     * holds however dispatch got there -- and so a genuine `definstance C [any]`
+     * still resolves, which is the one case where an `any` receiver is exactly
+     * what the instance asked for. */
+    if (obj && obj->type.kind == TY_ANY && best_inst &&
+        !(best_inst->n_type_args > 0 &&
+          best_inst->type_args[0].kind == TY_ANY)) {
+        diag_emit_with_code(DIAG_ERROR, call->span,
+                            TUR_E0020_AMBIGUOUS_DISPATCH,
+                            "cannot dispatch '.%.*s' on an 'any' receiver: the "
+                            "box holds one type at runtime, and which instance "
+                            "to run is not decidable from it here",
+                            (int)method_name_len, method_name);
+        diag_emit(DIAG_HELP, call->span,
+                  "narrow it first -- `(if (is? x T) (.%.*s x) ...)` -- or unbox "
+                  "with `(cast x T)`, or pin the instance with a type witness: "
+                  "`(.%.*s @T x)`",
+                  (int)method_name_len, method_name,
+                  (int)method_name_len, method_name);
+        return NULL;
     }
 
     /* Phase D0: Ambiguous dispatch diagnostic.

@@ -1,0 +1,4 @@
+cannot dispatch '.area' on an 'any' receiver
+narrow it first
+(cast x T)
+@T x

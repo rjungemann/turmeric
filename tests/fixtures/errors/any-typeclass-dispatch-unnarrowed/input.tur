@@ -1,0 +1,21 @@
+;; typeclass-dispatch-on-any-receiver-emits-uncompilable-c, symptom 1.
+;;
+;; An `any` receiver carries no kind the instance matcher recognises, so it took
+;; the KIND_ARROW arm where "matches" means "the instance head is not a
+;; primitive" -- which every struct/ADT instance satisfies.  The first such
+;; instance was therefore taken as an EXACT match, the ambiguity guard never
+;; looked (it counts fallbacks, and there were none), and the impl was called
+;; with the box.  With a single instance in scope there was no diagnostic at
+;; all; cc reported "incompatible type for argument 1" against generated code.
+;;
+;; One instance deliberately, since that is the shape that had no guard.
+(defclass Shape [a] (area [x : a] : float))
+(defstruct Circle [r : float])
+(definstance Shape [Circle] (area [x : Circle] : float (* 3.14159 (* (.r x) (.r x)))))
+
+(defn dyn-area [x : any] : float
+  (area x))
+
+(defn main [] : int
+  (println (dyn-area (make-struct Circle 2.5)))
+  0)

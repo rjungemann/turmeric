@@ -179,9 +179,25 @@ Expr *elab_any_cast(Elab *e, const Form *call) {
     Type result_type;
     if (!any_narrow_target(e, type_form, "cast", &target_kind, &result_type))
         return NULL;
-    Expr *out = expr_new(e->arena, EX_ANY_CAST, result_type, call->span);
+    (void)target_kind;   /* elab_any_unbox_to recomputes it from result_type */
+    return elab_any_unbox_to(e, val, result_type, call->span);
+}
+
+/* typeclass-dispatch-on-any-receiver-emits-uncompilable-c: the checked unbox,
+ * reachable from a Type rather than a source form.
+ *
+ * `(cast x T)` is the surface spelling; this is the same node, for callers that
+ * have already resolved the target and need to bridge an `any` into a slot
+ * typed by it.  The `@TypeName` witness is the one such caller: it names the
+ * instance, which is exactly the information the unbox needs, so pinning an
+ * instance and unboxing the receiver for it are one act.  Routing both through
+ * here is what keeps the tag check on the witness path -- a wrong witness
+ * panics with the ordinary `cast: any holds ...` message rather than
+ * reinterpreting the payload. */
+Expr *elab_any_unbox_to(Elab *e, Expr *val, Type target, Span span) {
+    Expr *out = expr_new(e->arena, EX_ANY_CAST, target, span);
     out->as.any_cast_.value = val;
-    out->as.any_cast_.target_kind = target_kind;
+    out->as.any_cast_.target_kind = any_box_tag_for_type(&target);
     return out;
 }
 
