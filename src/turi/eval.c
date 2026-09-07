@@ -948,6 +948,11 @@ struct TuriStruct {
     const char  *name;     /* struct name (for debugging) */
     uint32_t     n_fields;
     TuriValue   *fields;   /* heap-allocated array */
+    /* interp-collection-handles-report-as-int: this TuriStruct is not a user
+     * value at all -- it is the `any` box the widen wraps a bare carrier in, so
+     * the reflection surface can name a type the runtime value cannot.  Read
+     * only by the `any` forms (type-of / is? / cast), and unwrapped by cast. */
+    bool is_any_box;
     const CtorDef *ctor;   /* CONV-S1: ADT constructor this value was built from
                             * (record ctors carry field names + a back-pointer to
                             * their AdtDef, incl. from_struct_lowering).  NULL for
@@ -966,9 +971,10 @@ static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n,
      * be captured/stored, so they live in env's value pool (reclaimed by
      * turi_env_free), never individually freed. */
     TuriStruct *s = (TuriStruct *)turi_val_alloc(env, sizeof(TuriStruct));
-    s->name     = name;
-    s->n_fields = n;
-    s->ctor     = NULL;
+    s->name       = name;
+    s->n_fields   = n;
+    s->ctor       = NULL;
+    s->is_any_box = false;   /* arena memory is not zeroed */
     s->fields   = n ? (TuriValue *)turi_val_alloc(env, n * sizeof(TuriValue)) : NULL;
     for (uint32_t i = 0; i < n; i++) s->fields[i] = fields[i];
     return turi_struct_val(s);
@@ -1013,9 +1019,10 @@ static TuriValue turi_copy_byvalue_struct_arg(TuriEnv *env, TuriValue v) {
     if (src->name && strcmp(src->name, "__rc") == 0) return v;   /* rc: shared */
     if (src->ctor && src->ctor->adt && src->ctor->adt->is_heap) return v;
     TuriStruct *s = (TuriStruct *)turi_val_alloc(env, sizeof(TuriStruct));
-    s->name     = src->name;
-    s->n_fields = src->n_fields;
-    s->ctor     = src->ctor;
+    s->name       = src->name;
+    s->n_fields   = src->n_fields;
+    s->ctor       = src->ctor;
+    s->is_any_box = src->is_any_box;
     s->fields   = src->n_fields
                     ? (TuriValue *)turi_val_alloc(env, src->n_fields * sizeof(TuriValue))
                     : NULL;
@@ -1239,6 +1246,49 @@ static const char *turi_closure_fn_key(TuriValue v) {
                                       fd->return_type.kind, false);
     if (kinds != inline_kinds) free(kinds);
     return key;
+}
+
+/* interp-collection-handles-report-as-int: the name an `any` widen should record
+ * for a payload whose RUNTIME value cannot carry one.
+ *
+ * A Vec, a Map, a cons cell and a `defopaque` newtype are all a bare
+ * `TURI_INT` holding a pointer in the interpreter, so `type-of` answered "int"
+ * where the compiled side answered "Vec"/"Map"/"Route" -- and `is?` was wrong in
+ * BOTH directions, a false negative on `(Vec int)` and a false positive on
+ * `int`, so a type-case with an `int` arm and a `Vec` arm took different arms on
+ * the two back ends.
+ *
+ * This is exactly the `named` test `emit_any_type_id` applies to decide whether
+ * a payload gets an interned per-type box id, which is what makes the two sides
+ * agree: box here precisely when the compiled widen mints an id.  A primitive
+ * returns NULL (its runtime tag already answers correctly), and so does a
+ * function -- a closure has its own reflection path
+ * (any-fn-tag-does-not-discriminate-signatures) that boxing would break. */
+static const char *turi_any_boxable_name(Type t) {
+    if (t.kind == TY_ADT && t.as.adt_.def && t.as.adt_.def->name)
+        return t.as.adt_.def->name;
+    if (t.kind == TY_APP) {
+        AdtDef *d = type_adt_app_def(&t);
+        if (d && d->name) return d->name;
+    }
+    return NULL;
+}
+
+/* interp-collection-handles-report-as-int: wrap a widened payload when the
+ * runtime value cannot answer for its own type.  turi_any_boxable_name decides
+ * which qualify; EX_ANY_CAST is the single unwrap. */
+static TuriValue make_struct_val(TuriEnv *env, const char *name, uint32_t n,
+                                 TuriValue *fields);
+static TuriValue turi_any_box_widen(TuriEnv *env, const Expr *e, TuriValue v) {
+    if (!e || e->type.kind != TY_ANY || v.tag == TURI_STRUCT) return v;
+    const Expr *payload = e->as.union_inject_.value;
+    if (!payload) return v;
+    const char *nm = turi_any_boxable_name(payload->type);
+    if (!nm) return v;
+    TuriValue f[1] = { v };
+    TuriValue b = make_struct_val(env, nm, 1, f);
+    if (b.tag == TURI_STRUCT && b.as_struct) b.as_struct->is_any_box = true;
+    return b;
 }
 
 static const char *turi_any_named_type(TuriValue v) {
@@ -6543,6 +6593,24 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
             turi_env_set(env, name, v);
         return turi_nil();
     }
+    /* interp-collection-handles-report-as-int: the LIVE widen site.  The driver
+     * descends an EX_UNION_INJECT through unary_operand and finishes here, so
+     * the `default` below -- "transparent shims" -- was exactly what made
+     * widening to `any` the identity, and why a Vec in an `any` reported "int".
+     *
+     * Only the payloads that cannot answer for themselves are boxed: a
+     * TuriStruct carries its own name, a primitive's runtime tag is already the
+     * right answer, and a closure has its own reflection path
+     * (any-fn-tag-does-not-discriminate-signatures) that boxing would break.
+     * So this fires for a named type whose runtime value is a bare carrier --
+     * Vec, Map, cons, a `defopaque` newtype.
+     *
+     * Nothing downstream has to unwrap: an `any` is opaque to everything but the
+     * three reflection forms, and the only route to a payload is `cast` --
+     * including an `is?` guard, which elaborates to `(let [x (cast x T)] ...)`
+     * (if_narrow_branch), so a narrowed use goes through that same unwrap. */
+    case EX_UNION_INJECT:
+        return turi_any_box_widen(env, e, v);
     default:   /* transparent shims: value passes through unchanged */
         return v;
     }
@@ -10859,8 +10927,15 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     /* --- IT0: union inject — tag a value for union type -------------------- */
-    case EX_UNION_INJECT:
-        return eval_expr(env, frame, e->as.union_inject_.value);
+    /* interp-collection-handles-report-as-int: this arm is the MIRROR, reachable
+     * only when the explicit-stack driver is not in play; the live widen site is
+     * eval_unary_post's EX_UNION_INJECT arm.  Both call one helper so they
+     * cannot drift. */
+    case EX_UNION_INJECT: {
+        TuriValue v = eval_expr(env, frame, e->as.union_inject_.value);
+        if (turi_is_error(v) || env_signaled(env)) return v;
+        return turi_any_box_widen(env, e, v);
+    }
 
     /* --- IT4: any-typed cast and type-of --------------------------------- */
     case EX_ANY_CAST: {
@@ -10928,6 +11003,15 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             }
             return turi_nil(); /* unreachable: turi_runtime_panic never returns */
         }
+        /* interp-collection-handles-report-as-int: the unwrap.  `cast` is the
+         * ONLY way a payload leaves an `any` -- an explicit one, or the implicit
+         * `(let [x (cast x T)] ...)` an `is?` guard elaborates to -- so this one
+         * site puts the bare carrier back and nothing downstream ever meets the
+         * box.  It runs AFTER the check above, which compared against the box's
+         * recorded name, which is the whole point of having boxed it. */
+        if (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->is_any_box &&
+            v.as_struct->n_fields == 1 && v.as_struct->fields)
+            return v.as_struct->fields[0];
         return v;
     }
 
