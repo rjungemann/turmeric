@@ -20,17 +20,37 @@
 # gcc. It is not a claim about every platform.
 #
 # Two fixtures were in this list and are not any more, because they PASS in
-# that configuration: `gc-registry-growth` and `sx8a-tur-smt-div-mod`. Both
-# were observed failing with a `stdout mismatch` locally -- but that run
-# differed from CI in three ways at once (Windows, Release, MinGW gcc 16.1),
-# so which variable matters is NOT established. Do not record them as
-# "Windows-only"; that conflates three things. In particular CLAUDE.md warns
-# that a Release `tur` elides contract checks, which is exactly how a fixture
-# fails with the wrong error.
+# that configuration: `gc-registry-growth` and `sx8a-tur-smt-div-mod`. They
+# still FAIL on Windows, and that is a real split defect, not a measurement
+# artifact. What has been established, by experiment rather than inference:
 #
-# Isolating it needs one experiment: a DEBUG Windows build, same two fixtures.
-# Until someone runs it, the honest statement is "they pass on Linux/Debug and
-# fail on Windows/Release, cause unknown".
+#   - NOT the build type. They were first seen on a Release Windows build, and
+#     CLAUDE.md warns a Release `tur` elides contract checks -- exactly how a
+#     fixture fails with the wrong error. Rebuilt Debug on Windows: both still
+#     fail. Eliminated.
+#   - NOT the fixture, and not a link failure. Same compiler, same build, same
+#     fixture: DEFAULT mode prints 20000 and exits 0; --runtime=split produces
+#     no output and exits 127. `nm` finds gc_all_blocks_count in both binaries,
+#     so the symbol resolves; the split binary is simply 492K against 228K.
+#   - NOT recursion depth. gc-registry-growth builds a 20000-deep chain, and a
+#     hand-written 20000-deep recursion runs fine under split on Windows.
+#     Eliminated.
+#   - NOT a missing DLL. `ldd` resolves everything.
+#
+# So: a genuine Windows-only split defect somewhere in the rc/GC machinery,
+# failing before any output reaches stdout. Two variables remain uncontrolled
+# (Windows vs Linux, MinGW gcc 16.1 vs system gcc) and cannot be separated on a
+# Windows box alone.
+#
+# Next diagnostic, cheapest first: the WIN32 split archive also pulls in
+# async/tur_sjlj_x64_win.S (see add_library(turt_preamble ...) in
+# src/CMakeLists.txt), which the default path gets from elsewhere -- check for a
+# duplicate or divergent unwinding/setjmp implementation between the archive and
+# the emitted program half.
+#
+# These are deliberately NOT listed as expected failures: this file is the
+# Linux job's baseline, and listing a fixture that passes there would make the
+# job red forever. When a Windows split leg exists, it needs its own baseline.
 
 # The one place the split is genuinely LOSSY, and it is understood rather than
 # mysterious. The emitted preamble is not fixed across programs: the emitter
