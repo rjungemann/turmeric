@@ -1576,7 +1576,7 @@ Filed 2026-08 while bringing the `turmeric-godot` GDExtension up on Windows.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [godot-baked-in-prelude-fails-to-eval](godot-baked-in-prelude-fails-to-eval.md) | high | The GDExtension loads and registers correctly but no script ever evaluates -- the baked-in prelude fails |
+| [godot-baked-in-prelude-fails-to-eval](godot-baked-in-prelude-fails-to-eval.md) | fixed, awaiting merge | Both bugs fixed by `516bf0b`; held open only because that commit is on the unmerged `windows-support` branch, so `main` still has it |
 | [godot-aot-staged-build-lacks-godot-natives](godot-aot-staged-build-lacks-godot-natives.md) | high (AOT) | The staged transient project has no `godot-*` natives, so the AOT path cannot compile a script that touches the engine. Interpreter path unaffected |
 | [jit-godot-embedding-spike](jit-godot-embedding-spike.md) | research | Whether the JIT can replace the AOT stage-and-subprocess cache in the GDExtension |
 
