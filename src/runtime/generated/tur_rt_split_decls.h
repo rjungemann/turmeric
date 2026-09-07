@@ -612,9 +612,20 @@ typedef struct tur_frame {
     bool may_capture;
 } tur_frame;
 
-void tur_frame_init(tur_frame *f, tur_frame *parent);
-int tur_frame_push_defer(tur_frame *f, defer_fn_t thunk, void *env);
-void tur_frame_fire_lifo(tur_frame *f);
+static inline void tur_frame_init(tur_frame *f, tur_frame *parent) {
+    f->n = 0; f->parent = parent; f->may_capture = false;
+}
+static inline int tur_frame_push_defer(tur_frame *f, defer_fn_t thunk, void *env) {
+    if (f->n >= TUR_FRAME_MAX_DEFERS) return -1;
+    f->defers[f->n] = thunk;
+    f->envs[f->n] = env;
+    f->n++;
+    return 0;
+}
+static inline void tur_frame_fire_lifo(tur_frame *f) {
+    for (int i = f->n - 1; i >= 0; i--) f->defers[i](f->envs[i]);
+    f->n = 0;
+}
 void tur_frame_fire_chain(tur_frame *f);
 
 /* Phase R2/R6: tur_panic */

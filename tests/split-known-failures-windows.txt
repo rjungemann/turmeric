@@ -11,8 +11,8 @@
 # therefore asserts its failures are a SUBSET of this list -- which catches
 # every new failure, immediately, in whichever shard it lands. The opposite
 # direction, a listed fixture that has started passing, is checked once by
-# running exactly these names unsharded; that run is three fixtures and costs
-# seconds.
+# running exactly these names unsharded; that run is however many names are
+# below and costs seconds.
 #
 # If you fix one, delete its line in the same commit: the second check turns
 # red on a fixture that passes while still listed here.
@@ -26,7 +26,12 @@
 # gcc does not, on either platform.
 hamt-lowering-basic
 
-# --- ROOT-CAUSED 2026-09-07: a stack overflow, not a GC bug ----------------
+# --- FIXED 2026-09-07: was a stack overflow, not a GC bug -------------------
+#
+# NO LONGER LISTED. The fix is in tools/gen-runtime-split.py (INLINE_INTO_DECLS);
+# gc-registry-growth now passes under --runtime=split, and the prologue is back
+# to the monolithic build's `sub $0x48,%rsp`. Kept in full because the
+# investigation is the valuable part and the seam it found is still live.
 #
 # It is NOT a defect in the rc/GC machinery, and the "exit 127, no output" this
 # file used to describe was a red herring the whole time. In bash 127 is a
@@ -67,10 +72,27 @@ hamt-lowering-basic
 # The tur_sjlj_x64_win.S hypothesis this file used to carry is dead: the minimal
 # repro reaches the fault with no setjmp, no panic and no async.
 #
-# Fix direction: keep the two tiny leaf helpers inlinable across the seam (an
-# allowlist in gen-runtime-split.py emitting their bodies as `static inline`
-# into the decls header and omitting them from the archive). Secondary: shrink
-# tur_frame, three fixed 32-entry arrays sized for a common case of 1-2 defers.
+# THE FIX, as actually applied, which differs from the direction first written
+# here in two ways worth recording:
+#
+#  - It is THREE helpers, not two. Inlining tur_frame_init and
+#    tur_frame_push_defer alone changed nothing measurable -- the prologue
+#    stayed at 0x268 -- because the emitter also writes
+#    `tur_frame_fire_lifo(&__frame_N)` at scope exit, and one surviving opaque
+#    callee is enough to make the address escape. It is plain `static` in the
+#    preamble rather than `static inline` (emit_module.c:10110), so it does not
+#    turn up when you grep for the inline ones.
+#  - The archive copies are KEPT, not omitted. The first attempt omitted them;
+#    that works for the first two (nothing in the archive calls them) but not
+#    for fire_lifo, which tur_frame_fire_chain calls from inside the archive.
+#    `static inline` has internal linkage, so keeping both is free of conflict
+#    and removes the need to reason about which archive function calls which.
+#
+# Result: prologue back to `sub $0x48,%rsp`, identical to the monolithic build,
+# and the fixture prints 20000 and exits 0 under --runtime=split.
+#
+# Still worth doing separately: shrink tur_frame itself, three fixed 32-entry
+# arrays sized for a common case of 1-2 defers.
 #
 # TWO FURTHER FINDINGS, both worth their own attention:
 #
@@ -94,7 +116,6 @@ hamt-lowering-basic
 #     build with --runtime=split, `objdump -d` the build_hychain prologue and
 #     read `ulimit -s`. A ~0x230 sub means the same latent cliff exists there;
 #     a ~0x30 sub means the split declined.
-gc-registry-growth
 
 # --- NOT listed, and deliberately: sx8a-tur-smt-div-mod --------------------
 # It fails under split on MY Windows box (MSYS2/UCRT64, MinGW gcc 16.1, Debug)
@@ -112,7 +133,9 @@ gc-registry-growth
 #   local Windows     those two, plus sx8a-tur-smt-div-mod
 #
 # -- and for most of the work on this branch all three were quoted
-# interchangeably as "the three split failures".
+# interchangeably as "the three split failures". (That table is HISTORICAL:
+# gc-registry-growth was fixed the same day, see above. sx8a remains the one
+# entry that differs between this box and the runner.)
 #
 # Leading hypothesis for the difference is a toolchain version gap (local gcc
 # 16.1 vs whatever the runner's MSYS2 currently ships); unverified. An SMT
