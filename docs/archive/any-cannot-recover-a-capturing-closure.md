@@ -1,10 +1,82 @@
 ---
 title: A closure that captures cannot be recovered from an `any` on the compiled back end, though the interpreter can
-category: Reported
+category: Archive
 description: A fat `{thunk, env}` closure -- a lambda over an outer binding, or a partial application -- interns a different `any` box id from a bare fn of the same signature, so `is?` is false and `cast` panics. That is deliberate (calling one as the other segfaulted), but it means no capturing closure round-trips through `any` compiled, while the interpreter has no fat/bare split and does it fine. A capability divergence, not a wrong answer.
 ---
 
 # A capturing closure cannot come back out of an `any` (compiled)
+
+**RESOLVED 2026-09-07** via the filed fix direction -- fatten every fn payload at
+the widen -- and it was three small changes rather than the large one the report
+expected, because the dispatch machinery already existed.
+
+A closure, a partial application, a plain lambda and a `defn` named as a value
+now all round-trip through an `any` and come back callable, on both back ends:
+
+| | before (compiled / interp) | after (both) |
+| --- | --- | --- |
+| `type-of` on a partial application | `ptr` / `fn` | **`fn`** |
+| `is? (capturing 1) (-> int int)` | 0 / 1 | **1** |
+| `((cast (capturing 1) (-> int int)) 41)` | **panic** / 42 | **42** |
+| `((cast (curried) (-> int int)) 41)` | panic / panic | **42** |
+
+## The three changes
+
+1. `elab_coerce_to_any` shims a bare `TY_FN` payload to fat (`EX_FN_TO_FAT`), so
+   an `any` holds exactly one function representation. A `(c-fn ...)` is exempt:
+   it is a real C function pointer with no environment, and fattening it would
+   misrepresent an FFI value.
+2. `any_narrow_target` marks a fn target fat, so the target's box id names the
+   representation the widen produces. `(-> int int)` reads as "a function of this
+   signature"; whether the value carries an environment is a representation
+   detail the source spelling does not express.
+3. `elab_call_head_expr` marks a head taken from an `EX_ANY_CAST` as `boxed`, so
+   emit takes the slot-0 fat-dispatch path -- **the same signal the poly-carrier
+   and cata-carrier heads beside it already use**, for the same reason: a value
+   whose thunk is chosen at runtime, with no named binding to route through.
+   That machinery existing is what made this small.
+
+The interpreter needed one guard too: `turi_closure_fn_key` rendered a partial
+application's signature as `(fn [int] : ?)` (its FnDef carries no resolved return
+type), a key matching nothing, so `is?` was false and the cast panicked. It now
+returns NULL for an unrenderable signature and head-matches -- coarse rather than
+wrong, the same posture as the native and variadic cases.
+
+## The ownership question, which was the reason to file separately
+
+The report was right that it needed answering and wrong about how hard it was.
+Normalising to fat means shimming a bare fn into a `{ thunk, orig_fn }` box, and
+measured naively that leaked one box per widen -- 100 widens, 100 boxes.
+
+For a **file-scope function that box is a link-time constant**: it depends only
+on the function. So the emitter's existing `ensure_static_fatbox` hoists it and
+every widen of that function shares one static -- no allocation at all, which is
+what the widen did before the shim existed. Sharing is safe precisely because
+nothing frees an `any` fn payload: `emit_type_is_byvalue_adt` is false for
+TY_FN, so the row carries `boxed = 0` and `__tur_any_drop` leaves it alone. Both
+common shapes (a `defn` named as a value, a lambda widened directly) take that
+path, and `tests/fixtures/any-fn-widen-no-alloc` pins 200 widens leak-clean under
+`run-leak-check.sh`.
+
+One shape does not: a fn reached through a **local** binding, whose box is not a
+link-time constant. Filed as
+[any-fn-widen-through-local-binding-leaks](../reported/any-fn-widen-through-local-binding-leaks.md)
+with the three ways to close it. A capturing closure's own env box is unchanged
+by any of this -- it was already allocated at closure creation, and its
+pre-existing leak is not this fix's.
+
+## The residual divergence
+
+`(is? (curried) (-> int int int))` -- a partial application against the WRONG
+arity -- is 0 compiled and 1 interpreted, because of the head-match guard above.
+The fixture tests a wrong signature against the closure instead, and says why.
+
+`tests/fixtures/any-closure-roundtrip` (renamed from
+`any-closure-capture-not-a-bare-fn`, which asserted the refusal) now runs on both
+back ends; the `requires.compiled` marker it carried is gone, which was the
+report's own closing request.
+
+---
 
 **Severity: medium.** Nothing miscompiles and nothing crashes -- the compiled
 side says so with a panic. But it is a genuine capability gap, and it is a

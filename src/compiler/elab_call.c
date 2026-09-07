@@ -418,6 +418,54 @@ static bool struct_accessor_hint(Elab *e, const char *name,
 Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     if (!value) return NULL;
     if (value->type.kind == TY_ANY) return value;  /* already boxed */
+    /* any-cannot-recover-a-capturing-closure: normalise a FUNCTION payload to
+     * the fat `{ thunk, env }` representation before boxing it.
+     *
+     * An `any` carries one word, and a function reaches it as one of two things:
+     * a bare code pointer (a non-capturing lambda, a `defn` referenced by name)
+     * or a fat closure box (a capturing lambda, a partial application).  They are
+     * called through different protocols, and `cast` emits its call from the
+     * TARGET type -- so with two representations in play, one of them is always
+     * called wrongly.  Refusing the fat one (which is what the distinct box ids
+     * bought) turned a segfault into a panic but left every capturing closure
+     * unable to come back out of an `any`.
+     *
+     * Making the representation uniform removes the choice instead of guarding
+     * it: a bare fn is shimmed to fat here, `any_narrow_target` marks a fn target
+     * fat to match, and the call head fat-dispatches through slot 0.  Then a
+     * lambda, a closure and a partial application all behave the same, which is
+     * what the interpreter has always done.
+     *
+     * A cfnptr is exempt: a `(c-fn ...)` is a real C function pointer with no
+     * environment, and fattening it would misrepresent an FFI value.  So is an
+     * arity past the shim table, which leaves the payload bare -- it then does
+     * not match a fat target, so `is?` is false rather than wrong. */
+    if (value->type.kind == TY_FN && !value->type.as.fn.boxed &&
+        !value->type.as.fn.cfnptr && value->type.as.fn.arity <= 5) {
+        Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *bt = value->type;
+        bt->as.fn.boxed = true;
+        Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt, value->span);
+        shim->as.fn_to_fat_.inner = value;
+        /* The box must not be a per-widen malloc.  A `{ shim, orig_fn }` box for
+         * a file-scope function is a LINK-TIME CONSTANT -- it depends only on the
+         * function -- so the emitter can hoist it to a static, and then widening
+         * a bare fn allocates nothing at all, exactly as it did before this
+         * shim existed.  Measured: without this, 100 widens leaked 100 boxes.
+         *
+         * Sound here for the same reason it is at the `^fat` argument sites that
+         * already opt in: a shared box is only wrong if someone frees it, and
+         * nothing frees an `any` fn payload -- `emit_type_is_byvalue_adt` is
+         * false for TY_FN, so the payload's registry row carries boxed = 0 and
+         * `__tur_any_drop` leaves it alone.
+         *
+         * The emitter applies its own guard (a global EX_VAR that is not a
+         * param, closure, poly or already-fat binding) and falls back to the
+         * malloc form otherwise, so setting this is a request, not an
+         * assertion. */
+        shim->as.fn_to_fat_.static_ok = true;
+        value = shim;
+    }
     Type any_type;
     memset(&any_type, 0, sizeof(any_type));
     any_type.kind = TY_ANY;
@@ -1593,7 +1641,21 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
      * its own TY_FN type already encodes the signature, and conflating it with
      * returns_closure_fn_binding would make `((curry f) x)` dispatch to the
      * inner fn instead of calling f directly. */
-    if (head_kind == TY_PTR_VOID) {
+    /* any-cannot-recover-a-capturing-closure: the head is a function recovered
+     * from an `any`.  Every fn payload in an `any` is fat -- the widen shims a
+     * bare one (elab_coerce_to_any) -- so the call has to go through slot 0.
+     * Emit reads exactly this flag to choose the fat-dispatch path, the same
+     * signal the poly-carrier and cata-carrier heads below use for the same
+     * reason: a value whose thunk is chosen at runtime, with no named binding to
+     * route through.
+     *
+     * Without it the head stayed a thin pointer call and the box was jumped into
+     * as code -- the segfault `partial-application-widened-to-any-is-a-ptr`
+     * turned into a panic, and this turns into an answer. */
+    if (head_kind == TY_FN && source_expr && source_expr->kind == EX_ANY_CAST &&
+        !head_expr->type.as.fn.cfnptr) {
+        tmp_b->type.as.fn.boxed = true;
+    } else if (head_kind == TY_PTR_VOID) {
         tmp_b->closure_fn_binding = expr_closure_fn_binding(source_expr);
     } else if (head_kind == TY_FN && source_expr && source_expr->kind == EX_CALL) {
         /* curried-fn-typed-param: the head is the *result of a call* whose
@@ -5899,6 +5961,19 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 fn_binding->type.kind == TY_FN &&
                 effect_row_is_empty(fn_binding->type.as.fn.effect_row)) {
                 args[i]->as.union_inject_.frame_box = true;
+                /* any-cannot-recover-a-capturing-closure: the same fact frees
+                 * the fat SHIM box a fn payload is wrapped in.  frame_box says
+                 * the callee neither retains this payload nor can suspend, so a
+                 * copy may live in the caller's frame -- and a shim box under
+                 * exactly those conditions may live there too, which is what
+                 * `stack_ok` asks for.  Without it a widen of a fn value the
+                 * emitter cannot hoist to a static box (a let-bound lambda: its
+                 * binding is local, so the box is not a link-time constant)
+                 * mallocs one per call that nothing frees -- measured at 100
+                 * boxes over 100 iterations. */
+                if (args[i]->as.union_inject_.value &&
+                    args[i]->as.union_inject_.value->kind == EX_FN_TO_FAT)
+                    args[i]->as.union_inject_.value->as.fn_to_fat_.stack_ok = true;
             }
         }
 

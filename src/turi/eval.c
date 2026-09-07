@@ -1234,6 +1234,20 @@ static const char *turi_closure_fn_key(TuriValue v) {
     if (fd->n_params < start) return NULL;
     uint32_t arity = fd->n_params - start;
     if (arity && !fd->param_types) return NULL;
+    /* any-cannot-recover-a-capturing-closure: a signature with an unresolved
+     * piece is not a signature.  A partial application's FnDef reaches here with
+     * an unknown return type, which rendered "(fn [int] : ?)" -- a key that
+     * matches nothing, so `(is? (add 1) (-> int int))` was FALSE and the cast
+     * panicked, where the compiled side (which knows the curried value's real
+     * type) answers 1 and calls it.
+     *
+     * NULL, not a guess: the caller then head-matches ("is this a function"),
+     * which is coarse but never a false negative.  The same posture as the
+     * native and variadic cases above -- a wrong key silently breaks a
+     * type-case, where a coarse one does not. */
+    if (fd->return_type.kind == TY_UNKNOWN) return NULL;
+    for (uint32_t i = 0; i < arity; i++)
+        if (fd->param_types[start + i].kind == TY_UNKNOWN) return NULL;
     uint8_t inline_kinds[16];
     uint8_t *kinds = inline_kinds;
     if (arity > sizeof(inline_kinds)) {

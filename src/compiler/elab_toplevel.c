@@ -110,6 +110,14 @@ static bool any_narrow_target(Elab *e, const Form *type_form, const char *who,
                       "'%s' could not resolve its type argument", who);
             return false;
         }
+        /* any-cannot-recover-a-capturing-closure: a function TARGET names the
+         * fat representation, because that is the only one an `any` holds --
+         * `elab_coerce_to_any` shims a bare fn to fat at the widen.  Without
+         * this the target's box id would be the bare one and no fn payload would
+         * ever match.  `(-> int int)` reads as "a function of this signature";
+         * whether the value carries an environment is a representation detail the
+         * source spelling does not, and should not, express. */
+        if (t->kind == TY_FN && !t->as.fn.cfnptr) t->as.fn.boxed = true;
         *out_type = *t;
         *out_kind = any_box_tag_for_type(t);
         return true;
