@@ -907,9 +907,11 @@ Expr *elab_let(Elab *e, const Form *call) {
          * mistakes like `(let [x : int "hello"] ...)`.  Complex types
          * (structs, ADTs, arrows) parse but skip the equality check;
          * downstream typing rules still apply to the init expression. */
+        bool ann_is_any = false;
         if (type_ann_form) {
             Type *ann_ty = fn_type_from_form(e, type_ann_form, NULL, NULL, 0);
             if (ann_ty) {
+                ann_is_any = (ann_ty->kind == TY_ANY);
                 /* bare-fat-param-non-int-result (Phase A4): a declared-typed
                  * binding whose init's tail is a bare-^fat int64 call carries no
                  * recorded result type; infer it from the annotation and re-stamp
@@ -953,6 +955,25 @@ Expr *elab_let(Elab *e, const Form *call) {
                 src->alias_state = AS_ALIASED;
                 src->alias_name  = name;
             }
+        }
+
+        /* any-coercion-not-driven-by-expected-type: an `: any` annotation is a
+         * WIDENING REQUEST, not just a claim to check.
+         *
+         * The binding below takes `init->type`, and the annotation above is only
+         * consulted for a mismatch check that skips non-primitives -- so
+         * `(let [x : any 42] ...)` bound `x` at `int` and the annotation did
+         * nothing at all.  `type-of` then rejected `x` for not being an `any`,
+         * which reads as a type error when it is really a missing coercion.
+         *
+         * Widen here, AFTER the move/alias tracking above: those inspect
+         * `init->kind == EX_VAR`, and coercing earlier would wrap the init in
+         * EX_UNION_INJECT and silently switch both off for every `: any`
+         * binding. */
+        if (ann_is_any && init->type.kind != TY_ANY &&
+            init->type.kind != TY_NEVER) {
+            init = elab_coerce_to_any(e, init);
+            if (!init) { rc = -1; break; }
         }
 
         Binding *b = binding_new(e, name, init->type, is_mut, false, name_span);
@@ -2939,10 +2960,26 @@ Expr *elab_if(Elab *e, const Form *call) {
             result_t = else_->type;
         } else if (else_div) {
             result_t = then_->type;
-        } else if (then_->type.kind == TY_ANY || else_->type.kind == TY_ANY) {
+        } else if (then_->type.kind == TY_ANY || else_->type.kind == TY_ANY ||
+                   (e->expected_type && e->expected_type->kind == TY_ANY &&
+                    !type_eq(then_->type, else_->type))) {
             /* TY2.2: branch widening to `any`.  When one branch is `any`, box
              * the other (a narrower subtype) so both arms share the tagged
-             * representation and the if yields `any`. */
+             * representation and the if yields `any`.
+             *
+             * any-coercion-not-driven-by-expected-type: an `any` EXPECTATION
+             * does the same.  Only a branch already carrying `any` used to
+             * trigger this, so `(defn f [b] : any (if b (Some 7.1) 42))` fell
+             * through to the mismatch diagnostic below -- reported as a type
+             * error when both arms would widen to the very type the signature
+             * declares.  The union guide describes widening as happening at "an
+             * `if` branch facing an `any` sibling", and that clause was doing
+             * all the work; the declared return is just as good a target.
+             *
+             * Gated on the arms actually DISAGREEING: when they already share a
+             * type there is nothing to reconcile here, and the return-position
+             * widen boxes the result once at the tail rather than once per arm
+             * -- so this stays inert for programs that were already fine. */
             then_ = elab_coerce_to_any(e, then_);
             else_ = elab_coerce_to_any(e, else_);
             result_t = then_->type;

@@ -7865,6 +7865,20 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * specialization to mint a per-instantiation clone instead of
          * silently lowering a by-value struct result to the int64 carrier. */
         body_expected = return_tyvar_type;
+    } else if (return_kind == TY_ANY) {
+        /* any-coercion-not-driven-by-expected-type: a declared `: any` return is
+         * a widening TARGET for the body, and nothing was pushing it -- the
+         * chain above covers ADT / app / fn / exists / tyvar returns and stops.
+         *
+         * The visible consequence was at an `if` join: with no expectation to
+         * consult, `(defn f [b] : any (if b (Some 7.1) 42))` reported "if
+         * branches have mismatched types" even though both arms would widen to
+         * the very type the signature declares.  The join's own widening rule
+         * only fired when a branch was ALREADY `any`, so there was nothing to
+         * face. */
+        body_expected = (Type *)arena_alloc(e->arena, sizeof(Type));
+        memset(body_expected, 0, sizeof(Type));
+        body_expected->kind = TY_ANY;
     }
     if (body_expected) e->expected_type = body_expected;
     {
@@ -11052,6 +11066,24 @@ Expr *elab_def(Elab *e, const Form *call) {
     if (!init) return NULL;
 
     if (declared_type) {
+        /* any-coercion-not-driven-by-expected-type: a `: any` declaration is a
+         * widening request, and this form hand-builds its EX_ASCRIBE rather than
+         * going through elab_ascribe -- so it missed the coercion elab_ascribe
+         * does, whose own comment says why relabelling alone is not enough:
+         * "It must heap-box the value (EX_UNION_INJECT) ... NOT merely relabel
+         * its static type."
+         *
+         * `(def g : any 42)` therefore declared a `tur_tagged_t` slot and
+         * assigned a bare `long int` to it -- "incompatible types when
+         * assigning", a cc error against generated code rather than a
+         * diagnostic.  Widen FIRST, so the size-matched EX_REINTERPRET below
+         * cannot fire on the `any` pair either. */
+        if (declared_type->kind == TY_ANY && init->type.kind != TY_ANY &&
+            init->type.kind != TY_NEVER) {
+            init = elab_coerce_to_any(e, init);
+            if (!init) return NULL;
+        }
+
         /* Align with elab_ascribe */
         if (declared_type->kind == TY_APP && init->kind == EX_CALL &&
             init->as.call_.ctor &&

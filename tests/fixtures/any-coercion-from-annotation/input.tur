@@ -1,0 +1,60 @@
+;; any-coercion-not-driven-by-expected-type: an `: any` annotation is a
+;; WIDENING REQUEST, at every position that takes one -- not just a claim to
+;; check, and not only where a sibling value already happens to be `any`.
+;;
+;; Four positions, four distinct causes, all silent or misleading before:
+;;
+;;   let    -- the binding took the INITIALIZER's type; the annotation was only
+;;             consulted by a mismatch check that skips non-primitives, so it
+;;             did nothing at all and `type-of` then rejected the binding.
+;;   def    -- hand-builds its EX_ASCRIBE instead of going through elab_ascribe,
+;;             so it missed the coercion elab_ascribe does; the slot was declared
+;;             `tur_tagged_t` and assigned a bare `long int`, a cc error.
+;;   if     -- the join widened only when a branch was ALREADY `any`; nothing
+;;             pushed the declared `: any` return in as the body's expected type,
+;;             so mismatched arms were reported as a type error even though both
+;;             would widen to the very type the signature declares.
+;;   letrec -- the forward-declaration scanner commits a param kind only from an
+;;             allow-list, and `any` was missing from it, so an `: any` parameter
+;;             was forward-declared `int` and the recursive self-call failed with
+;;             "expected int, got any".  Named `let` desugars to a letrec, so it
+;;             inherited this.
+;;
+;; Floats use 7.1 rather than 7.0 throughout: a float payload rides the box as
+;; an IEEE-754 bit pattern, so an integral literal cannot distinguish a real
+;; widen from a carrier value that happens to survive.
+(defstruct P [a : int])
+
+;; --- def ---
+(def g-int   : any 42)
+(def g-float : any 7.1)
+
+;; --- if, under a declared `: any` return, with arms that disagree ---
+(defn pick [b : bool] : any (if b (Some 7.1) 42))
+
+;; --- letrec / named let, via an `: any` accumulator ---
+;; Both arms are int so the loop's own inferred return is not what is under
+;; test here -- the `: any` accumulator threading through the recursive
+;; self-call is.
+(defn spin [] : int
+  (let loop [n : int 2 acc : any 0]
+    (if (= n 0) (do (println (type-of acc)) 0) (loop (- n 1) acc))))
+
+(defn main [] : int
+  ;; --- let, over every payload shape ---
+  (let [i : any 42]   (println (type-of i)))
+  (let [s : any "hi"] (println (type-of s)))
+  (let [f : any 7.1]  (println (type-of f)))
+  (let [p : any (make-struct P 1)] (println (type-of p)))
+  ;; the widen must round-trip, not merely relabel
+  (let [f : any 7.1] (println (cast f float)))
+  (let [f : any 7.1] (println (if (is? f float) 1 0)))
+
+  (println (type-of g-int))
+  (println (cast g-float float))
+
+  (println (type-of (pick true)))
+  (println (type-of (pick false)))
+
+  (spin)
+  0)

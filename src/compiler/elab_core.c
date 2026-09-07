@@ -124,11 +124,24 @@ uint32_t fwd_decl_scan_params(Arena *arena, const Form *params_f, TypeKind **out
                 t = p->as.list.items[0];
             if (t->tag == F_SYM || t->tag == F_KEYWORD) {
                 TypeKind k = typekind_from_symbol(t->as.sym->name);
-                /* Only commit primitive scalar kinds; leave compound/unknown
-                 * as the TY_INT placeholder (matches prior pre-pass behavior). */
+                /* Only commit kinds a bare type NAME determines completely;
+                 * leave compound/unknown as the TY_INT placeholder (matches
+                 * prior pre-pass behavior).
+                 *
+                 * any-coercion-not-driven-by-expected-type: `any` belongs on
+                 * that list.  It is spelled as a bare symbol and is fully
+                 * determined by it, exactly like bool/cstr/nil -- it is only
+                 * "compound" in its representation, which this pre-pass does not
+                 * care about.  Leaving it off meant a letrec (and therefore a
+                 * NAMED LET, which desugars to one) forward-declared an `: any`
+                 * parameter as `int`, so the recursive self-call reported
+                 * "function 'loop' arg 2: expected int, got any" -- the annotation
+                 * silently not taking effect.  `cstr` and `float` accumulators
+                 * worked, which is what localised it here. */
                 if (k != TY_UNKNOWN && k != TY_INT &&
                     (typekind_is_numeric(k) || k == TY_BOOL || k == TY_CSTR ||
-                     k == TY_NIL || k == TY_PTR_VOID || k == TY_SYM)) {
+                     k == TY_NIL || k == TY_PTR_VOID || k == TY_SYM ||
+                     k == TY_ANY)) {
                     arg_kinds[arity - 1] = k;
                 }
             }

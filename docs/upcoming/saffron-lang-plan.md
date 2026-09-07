@@ -1,12 +1,24 @@
 # Saffron -- a dynamically typed `#lang` over the Turmeric runtime
 
 Status: **plan only for Saffron itself** -- there is no `EXPERIMENTS[]` row, no
-`#lang` base, no dialect fixture. But S0's prerequisites are being burned down:
-**P1 and P2c are fixed and archived** (see the S0 table), which were the two
-that blocked anything else. Every "today" claim below was measured against
-`v0.44.2` (`2da89e84`) with the probe transcript in the appendix; claims about
-P1/P2c behaviour describe the state BEFORE their fixes and are marked where
-they have since changed.
+`#lang` base, no dialect fixture.
+
+But S0's prerequisites are largely burned down. Fixed and archived as of
+2026-09-07: **P1** (cross-TU `any` ids), **P2** (by-value rank-2 receiver,
+guarded), **P2b** (`@TypeName` implies the unbox), **P2c** (parametric
+narrowing), **P2d** (monomorph under a widen), **P3** (unannotated return
+inference), **P6** (`: any` drives coercion at `let`/`def`/`if`/letrec), and
+**P8** (float truncated through the dict carrier). Remaining: P4, P5, P7 --
+all cosmetic or docs.
+
+Worth stating plainly, because it changes how the rest of this plan should be
+read: **six of those eight reports had a diagnosis that was wrong on
+inspection**, always in the same direction -- control flow read and a cause
+inferred, rather than measured. P2d and P3 were ordering bugs, not missing
+machinery. P8's recommended direction was the larger one. P6 had four causes,
+not the two filed. The "today" claims below were written the same way, so treat
+them as leads to verify rather than findings, and instrument before acting on
+any of them.
 
 ---
 
@@ -672,7 +684,7 @@ cannot be built until they are.**
 | ~~P3~~ | ~~inferred-return-defaults-inconsistently~~ | **DONE 2026-09-07.** Was an ordering bug, not a missing inference: the conflict check ran before the block that adopts the body's type, so it compared against the un-inferred `TY_NIL`. Unannotated returns are now inferred for every body type, float included. [Archived](../archive/inferred-return-defaults-inconsistently.md) |
 | P4 | [type-of-on-boxed-closure-diverges](../reported/type-of-on-boxed-closure-diverges.md) | S4 |
 | P5 | [any-type-guide-examples-do-not-compile](../reported/any-type-guide-examples-do-not-compile.md) | docs only |
-| P6 | [any-coercion-not-driven-by-expected-type](../reported/any-coercion-not-driven-by-expected-type.md) | **S2/S6** -- found fixing P2d. An `: any` annotation does not widen at a `let` binding or an `if` join, so two of the positions Saffron leans on hardest do not coerce |
+| ~~P6~~ | ~~any-coercion-not-driven-by-expected-type~~ | **DONE 2026-09-07.** An `: any` annotation now widens at all four positions that take one -- `let`, `def`, the `if` join, and letrec/named-`let` accumulators -- each of which had a distinct cause. These are the positions S2/S6 lean on hardest. [Archived](../archive/any-coercion-not-driven-by-expected-type.md) |
 | P7 | [interp-native-ctor-loses-adt-name](../reported/interp-native-ctor-loses-adt-name.md) | S3/S4 -- `type-of` diverges between the back ends for natively-constructed stdlib values, and the interpreter is the path Saffron ships on first |
 | ~~P8~~ | ~~forall-dict-float-result-truncated~~ | **DONE 2026-09-07.** A float result through a mode-B dict clone was silently truncated (2.5 -> 2); both ends of the carrier crossing now bit-reinterpret instead of converting. Not Saffron-specific, but it was on the runtime-dictionary machinery D8 would build on. [Archived](../archive/forall-dict-float-result-truncated.md) |
 
