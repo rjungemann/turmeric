@@ -1,5 +1,6 @@
 /* elab_forms.c -- control-flow and basic expression forms (let/if/do/while/case/...). */
 #include "elab_internal.h"
+#include "lang_layers.h"   /* saffron-lang-plan S3: lang_span_is_saffron */
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
@@ -2795,6 +2796,30 @@ Expr *elab_if(Elab *e, const Form *call) {
 
     Expr *cond = elab_form(e, cond_form);
     if (!cond) return NULL;
+    /* saffron-lang-plan S3/D4: truthiness.  A Saffron `if` accepts a dynamic
+     * condition and decides it at runtime, where Turmeric requires a `bool`.
+     *
+     * The rule D4 settles: **`false` and `nil` are falsy; `0`, `""` and the
+     * empty container are truthy.**  That is the Lisp/Clojure convention rather
+     * than the C one, and it is the right default here for a specific reason --
+     * Turmeric's `if` already demands a bool, so there is no legacy
+     * int-truthiness to stay compatible with, and the C rule would silently
+     * turn `(if (vec-len v) ...)` into a bug on an empty vector.
+     *
+     * Lowered as a dynamic operator rather than a second node kind: it is
+     * exactly what EX_DYN_OP is for, a decision the value's own tag makes at
+     * runtime.  The reserved name is not a builtin, so the interpreter answers
+     * it before consulting the builtin table. */
+    if (cond->type.kind == TY_ANY && lang_span_is_saffron(cond->span)) {
+        Expr **targs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+        targs[0] = cond;
+        Expr *t = expr_new(e->arena, EX_DYN_OP, TYPE_BOOL, cond->span);
+        t->as.dyn_op_.op     = symtab_intern(e->st, strslice(SAFFRON_TRUTHY_OP,
+                                   (uint32_t)strlen(SAFFRON_TRUTHY_OP)));
+        t->as.dyn_op_.args   = targs;
+        t->as.dyn_op_.n_args = 1;
+        cond = t;
+    }
     if (!type_eq(cond->type, TYPE_BOOL)) {
         diag_emit(DIAG_ERROR, cond->span,
                   "if condition must be bool, got %s", type_name(cond->type));

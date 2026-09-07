@@ -16,6 +16,12 @@ Expr *expr_new(Arena *a, ExprKind k, Type t, Span span) {
  * misbehaves. */
 void expr_print(Buf *b, const Expr *e) {
     switch (e->kind) {
+        /* saffron-lang-plan S3: a runtime-resolved builtin. */
+        case EX_DYN_OP:
+            buf_puts(b, "(dyn-op ");
+            buf_puts(b, e->as.dyn_op_.op ? e->as.dyn_op_.op->name : "?");
+            buf_puts(b, " ...)");
+            break;
         case EX_NIL_LIT:  buf_puts(b, "nil"); break;
         case EX_BOOL_LIT: buf_puts(b, e->as.b ? "true" : "false"); break;
         case EX_INT_LIT:  buf_printf(b, "%lld", (long long)e->as.i); break;

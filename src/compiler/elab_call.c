@@ -6,6 +6,7 @@
 #define _GNU_SOURCE
 #endif
 #include "elab_internal.h"
+#include "lang_layers.h"   /* saffron-lang-plan S3: lang_span_is_saffron */
 bool sum_box_reader_name(const char *nm);  /* emit_core.c; see emit_internal.h */
 #include "experiments.h"  /* Slice 3 (constrained-hkt-forall): hkt-hrt gate */
 #include "mono_specs.h"   /* VBM1 (van-laarhoven-monomorphization): spec registry */
@@ -3715,6 +3716,46 @@ Expr *elab_call(Elab *e, Form *call) {
             }
         }
     }
+    /* saffron-lang-plan S3/D4: in a Saffron file, a builtin applied to an `any`
+     * argument is resolved at RUNTIME rather than rejected.
+     *
+     * The builtin table is keyed by the first argument's TypeKind, so `(* x 2)`
+     * with `x : any` finds no row -- which in Turmeric is the right answer and
+     * in Saffron is the ordinary case.  Route it to EX_DYN_OP, whose operator
+     * is chosen from the value's own tag when it runs.
+     *
+     * Three conditions, each narrowing:
+     *   - the file is Saffron (per-span, so a loaded Turmeric module keeps the
+     *     static error);
+     *   - the NAME is a real builtin, so a typo is still TUR-E0006 rather than
+     *     a runtime failure -- `builtin_first_with_name` is the same check the
+     *     diagnostic below already makes to decide it has something to say;
+     *   - at least one argument is actually `any`.  A call whose arguments are
+     *     all concrete and still finds no row is a genuine type error, and
+     *     making it dynamic would hide it.
+     *
+     * Note this does NOT require the static lookup to have failed.  `(* 2 x)`
+     * finds a row -- the table is keyed on argument ZERO, and that one is an
+     * int -- and then rejects `x` as "arg 2: expected int, got any".  An
+     * operator is dynamic when ANY operand is, not only when the first is, so
+     * the whole call goes dynamic and the position of the `any` stops
+     * mattering. */
+    if (lang_span_is_saffron(call->span) && builtin_first_with_name(name)) {
+        bool has_any = false;
+        for (uint32_t i = 0; i < n_args; i++)
+            if (args[i] && args[i]->type.kind == TY_ANY) { has_any = true; break; }
+        if (has_any) {
+            Type any_t;
+            memset(&any_t, 0, sizeof(any_t));
+            any_t.kind = TY_ANY;
+            Expr *dyn = expr_new(e->arena, EX_DYN_OP, any_t, call->span);
+            dyn->as.dyn_op_.op     = name;
+            dyn->as.dyn_op_.args   = args;
+            dyn->as.dyn_op_.n_args = n_args;
+            return dyn;
+        }
+    }
+
     if (!spec) {
         const BuiltinSpec *any = builtin_first_with_name(name);
         if (any) {

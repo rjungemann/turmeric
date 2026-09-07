@@ -30,10 +30,11 @@ S3/S4 lean on the interpreter hard), and
 [a spurious `-Wfree-nonheap-object` in emitted code](../reported/any-drop-inlining-warns-free-nonheap.md)
 (cosmetic).
 
-**S1 and S2 landed 2026-09-07** -- the `#lang` language axis with its gate and
-listing, then the `any` default for unannotated parameters. `(defn id [x] x)`
-called at `int`, `cstr` and `7.1` answers identically on both back ends.
-**S3 is next.**
+**S1, S2 and S3 landed 2026-09-07** -- the `#lang` language axis with its gate
+and listing, the `any` default for unannotated parameters, and the dynamic
+operator layer (arithmetic, comparison, print, truthiness) on the interpreter.
+`(defn twice [x] (* x 2))` prints `42` for `21` and `14.2` for `7.1`.
+**S4 is next.**
 
 Worth stating plainly, because it changes how the rest of this plan should be
 read: **six of those eight reports had a diagnosis that was wrong on
@@ -873,7 +874,7 @@ trivially reachable. Filed as
 [vec-of-any-repr-decision-ice](../reported/vec-of-any-repr-decision-ice.md); it
 blocks S6, not S3-S5.
 
-### S3 -- the dynamic operator layer, interpreter (medium)
+### S3 -- the dynamic operator layer, interpreter (medium) -- DONE 2026-09-07
 
 The elaborator learns to route a builtin call with an `any` argument to a
 dynamic node (`EX_DYN_OP`) instead of failing operator lookup. The
@@ -882,8 +883,51 @@ already do the work.
 
 Covers G3, G4, G9, and D4's truthiness rule.
 
-**Exit:** `(defn twice [x] (* x 2))` called with `21` and with `7.1` in one
-interpreted program, printing `42` and `14.2`.
+**Exit: MET 2026-09-07.**
+
+**The interpreter's arm was NOT thin, and the reason is the float rule.** The
+claim above -- that `eval_builtin` already does the work -- is half right:
+`eval_builtin` IS tag-driven, so the interpreter never needed a static type for
+these operators, and the elaborator's refusal was the only thing in the way.
+But it decides int-vs-float from argument ZERO's tag alone and then reads every
+argument through that union member. That is correct for static Turmeric, where
+the elaborator has already made the operands agree, and silently wrong the
+moment they can differ. `(* x 2)` with `x = 7.1` printed **6.91692e-323** --
+the integer 14's bit pattern read as a double. The dynamic path promotes
+instead (all-numeric and any-float means all-float), in the dyn-op arm rather
+than in `eval_builtin`, which static callers rely on as-is.
+
+CLAUDE.md's lead-with-7.1 rule is what caught it on the first probe rather than
+the second; an integral literal would have printed `42` and looked finished.
+
+**`(* 2 x)` is not symmetric with `(* x 2)`.** The static lookup SUCCEEDS for
+the first -- the table is keyed on argument zero, and that one is an int -- and
+then rejects `x` as "arg 2: expected int, got any". So the route cannot be
+"lookup failed"; it is "any operand is dynamic", which is the honest rule
+anyway.
+
+**`and` / `or` needed lazy handling, ahead of the eager argument loop.** They
+are short-circuit builtins with bool-only rows (BS_AND_SC / BS_OR_SC), so a
+dynamic `and` over ints found no overload and panicked. D4 puts them in the
+truthiness group, and they must stay lazy -- `(and (some? x) (unwrap x))` is a
+guard, and evaluating the second operand anyway turns it into a crash. They
+return a bool, matching Turmeric's; returning the deciding VALUE (Lisp style) is
+left as a deliberate D4 choice rather than something to settle by accident.
+
+**The node is EX_DYN_OP, as planned**, and being a distinct kind rather than a
+flag on EX_BUILTIN paid for itself twice: `-Werror=switch` enumerated every site
+that needed an arm (the debug printer, borrow-check, statement position, the
+value emitter), and the turi parity ratchet required the interpreter arm. The
+compiled back end reports the S5 gap as a diagnostic naming `--interpret`,
+because guessing would emit an int add over tag words -- a miscompile, not a
+missing feature.
+
+**Fixtures.** `saffron-dyn-arith-float` (both operand orders, mixed promotion,
+comparison; every literal has a fractional part on purpose),
+`saffron-dyn-truthy` (D4's rule, including the `0` and `""` rows that would flip
+if the decision were ever changed by accident, plus a short-circuit row where
+`and` must not evaluate a `(panic ...)`), and
+`errors/saffron-dyn-op-compiled-unsupported` for the compiled refusal.
 
 ### S4 -- dynamic call and dynamic field access, interpreter (medium)
 

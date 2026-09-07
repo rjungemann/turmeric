@@ -5893,6 +5893,22 @@ static void ce0_trace_elem_read(EmitCtx *ctx, const Expr *e,
 
 static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
+        /* saffron-lang-plan S3: a dynamic operator has no compiled lowering
+         * yet -- that is S5's `__tur_dyn_arith` / `__tur_dyn_cmp` /
+         * `__tur_dyn_print` preamble.  Say so, rather than guessing: the
+         * arguments are `tur_tagged_t` boxes, so emitting the static operator
+         * would be an int add over tag words, and silence here would be a
+         * miscompile rather than a missing feature.
+         *
+         * A diagnostic, not an abort: `tur run` on a Saffron program that uses
+         * arithmetic should say what to do, and `--interpret` runs it today. */
+        case EX_DYN_OP:
+            diag_emit(DIAG_ERROR, e->span,
+                      "'%s' on a dynamic value is not supported by the compiled "
+                      "back end yet (saffron-lang-plan S5); run this file with "
+                      "`tur --interpret` for now",
+                      e->as.dyn_op_.op ? e->as.dyn_op_.op->name : "operator");
+            return atom_nil();
         case EX_NIL_LIT:  return atom_nil();
         case EX_BOOL_LIT: return atom_bool(e->as.b);
         case EX_INT_LIT:  return atom_int_typed(e->as.i, e->type.kind);

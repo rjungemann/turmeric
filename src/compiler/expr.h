@@ -799,6 +799,20 @@ typedef enum ExprKind {
     EX_ANY_TYPE_OF,    /* (type-of x) — returns cstr type name of an any-typed value */
     EX_ANY_CAST,       /* (cast x T) — unsafe downcast from any; returns the inner value as T */
     EX_ANY_IS,         /* TY3: (is? x T) — runtime type test; returns bool */
+    /* saffron-lang-plan S3/D4: a builtin operator applied to at least one
+     * `any` argument, in a `#lang saffron` file.
+     *
+     * Turmeric's builtin table is keyed by the first argument's TypeKind, so
+     * `(* x 2)` with `x : any` finds no row and is TUR-E0006.  In Saffron that
+     * is the ordinary case, not an error: the operator is resolved at RUNTIME
+     * from the value's own tag, which is what "dynamically typed" means for
+     * operators.
+     *
+     * A distinct node rather than a flag on EX_BUILTIN, so the compiled
+     * back end cannot mistake one for a statically-resolved operator and emit
+     * an int add over tagged words.  Until S5 gives it a lowering, emit
+     * reports it as unsupported rather than guessing. */
+    EX_DYN_OP,
     /* DV0-DV1: Dynamic vars (-Xdynamic-vars) */
     EX_DEFDYNAMIC,       /* (defdynamic *name* :type root-expr) -- declare a dynamic var */
     EX_DYNVAR_READ,      /* *name* -- read current value of a dynamic var */
@@ -821,6 +835,13 @@ typedef enum ExprKind {
     /* M2b: (default-of T) — yields a zero-valued T. Type lives in Expr::type. */
     EX_DEFAULT_OF,
 } ExprKind;
+
+/* saffron-lang-plan S3/D4: the reserved EX_DYN_OP operator that asks a dynamic
+ * value whether it is truthy.  Not a builtin name -- deliberately, so it can
+ * never collide with one -- and answered by the interpreter before it consults
+ * the builtin table.  Shared here so elaboration and evaluation cannot spell it
+ * differently. */
+#define SAFFRON_TRUTHY_OP "saffron/truthy?"
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
 struct FnDef {
@@ -1634,6 +1655,12 @@ struct Expr {
          * inject site does; `test_tag` remains the TypeKind for primitives and
          * as the fallback when no named type was resolved. */
         struct { struct Expr *value; int64_t test_tag; Type test_type; } any_is_;
+        /* saffron-lang-plan S3: the operator NAME is kept rather than a
+         * resolved BuiltinSpec -- resolution is exactly what is deferred to
+         * runtime.  The interpreter looks the spec up from the evaluated first
+         * argument's tag and hands it to the same eval_builtin every static
+         * call uses, which is why its arm is thin. */
+        struct { const Symbol *op; struct Expr **args; uint32_t n_args; } dyn_op_;
         /* TY2.3: (cast x T) — checked downcast; panics on tag mismatch. */
         struct {
             struct Expr *value;

@@ -238,6 +238,13 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_UNION_INJECT: /* IT4: pure struct literal, no stmt-level side effects */
         case EX_ANY_TYPE_OF:  /* IT4: pure read, no stmt-level side effects */
         case EX_ANY_CAST:     /* IT4: pure unbox, no stmt-level side effects */
+        /* saffron-lang-plan S3: a dynamic operator has no compiled lowering
+         * until S5, and emit_value reports that.  Listing it with the pure
+         * forms here means a statement-position one is discarded rather than
+         * reaching emit_value -- which would report the S5 gap for an
+         * expression whose value nothing wanted.  `(+ x 1)` alone on a line is
+         * dead code in either language. */
+        case EX_DYN_OP:
         case EX_ANY_IS:       /* TY3: pure tag test, no stmt-level side effects */
         case EX_TYPECLASS_DEF:
         case EX_DEFMODULE: /* Phase M0: module metadata — nothing to emit */

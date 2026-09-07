@@ -249,6 +249,15 @@ static bool borrow_check_var(BorrowCheckCtx *ctx, const Expr *e) {
 /* Recursively check an expression */
 static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
     switch (e->kind) {
+        /* saffron-lang-plan S3: a dynamic operator borrows nothing itself, but
+         * its arguments are ordinary expressions and must still be walked --
+         * skipping them would silently exempt a Saffron program from borrow
+         * checking inside `(+ x (deref r))`. */
+        case EX_DYN_OP:
+            for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
+                if (!borrow_check_expr_recursive(ctx, e->as.dyn_op_.args[i]))
+                    return false;
+            return true;
         case EX_NIL_LIT:
         case EX_BOOL_LIT:
         case EX_INT_LIT:

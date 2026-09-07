@@ -1,0 +1,49 @@
+#lang saffron
+;; saffron-lang-plan S3/D4: truthiness, and the decision D4 makes about it.
+;;
+;; **`false` and `nil` are falsy; `0`, `""` and the empty container are
+;; truthy.**  That is the Lisp/Clojure convention rather than the C one, and D4
+;; picks it for two concrete reasons: Turmeric's `if` already requires a `bool`,
+;; so no existing program depends on int-truthiness and there is nothing to stay
+;; compatible with; and the C rule would make `(if (vec-len v) ...)` silently
+;; take the wrong branch on an empty vector.
+;;
+;; The `0` and `""` rows below are the ones that would flip if anyone ever
+;; changed that decision by accident, which is why they are here rather than
+;; only the obvious `false` case.
+;;
+;; `and` / `or` belong to this group too, and they stay LAZY.  The
+;; short-circuit row is the load-bearing one: `(and (f false) (f (boom)))` must
+;; not evaluate `boom`, because the whole point of `and` is guarding.  They are
+;; handled before the dynamic operator's argument loop, which is eager.
+;;
+;; requires.interp-only: S3 is the interpreter's layer; see the sibling
+;; arithmetic fixture.
+
+(defn dyn [x] x)
+(defn boom [] : int (panic "and must short-circuit before reaching this"))
+
+(defn main [] : int
+  ;; Falsy: exactly two values, `false` and `nil`.
+  (println (if (dyn false) 1 0))
+  (println (if (dyn nil) 1 0))
+  ;; Truthy, including the two the C rule would get wrong.
+  (println (if (dyn 1) 1 0))
+  (println (if (dyn 0) 1 0))
+  (println (if (dyn "") 1 0))
+  (println (if (dyn "text") 1 0))
+  (println (if (dyn 0.0) 1 0))
+  ;; `(nil-value)` is NOT nil: it is the cons-list terminator, which is an int,
+  ;; so it is truthy.  Kept as a contrast because it is exactly the confusion
+  ;; D4's rule is chosen to avoid -- under the C rule this would be falsy and
+  ;; an empty list would silently take the wrong branch.
+  (println (if (dyn (nil-value)) 1 0))
+  ;; `when` and `cond` ride the same lowering, being built on `if`.
+  (when (dyn 0) (println 7))
+  (println (cond (dyn 0) 5 :else 9))
+  ;; and / or, by truthiness rather than by bool.
+  (println (if (and (dyn 1) (dyn 2)) 1 0))
+  (println (if (or (dyn 0) (dyn false)) 1 0))
+  ;; ... and `and` short-circuits: boom never runs.
+  (println (if (and (dyn false) (dyn (boom))) 1 0))
+  0)

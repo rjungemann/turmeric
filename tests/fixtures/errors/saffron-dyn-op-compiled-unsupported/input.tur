@@ -1,0 +1,19 @@
+#lang saffron
+;; saffron-lang-plan S3: a dynamic operator has no COMPILED lowering yet -- that
+;; is S5's `__tur_dyn_arith` / `__tur_dyn_cmp` / `__tur_dyn_print` preamble --
+;; and the compiled back end says so rather than guessing.
+;;
+;; Guessing would be a miscompile, not a missing feature: the arguments are
+;; `tur_tagged_t` boxes, so emitting the static operator would be an int add
+;; over tag words.  That is why S3 introduces a distinct EX_DYN_OP node instead
+;; of a flag on EX_BUILTIN -- the emitter cannot mistake one for a
+;; statically-resolved operator.
+;;
+;; A diagnostic, not an abort, and it names the way forward: this program runs
+;; today under `tur --interpret`, which is what saffron-dyn-arith-float asserts.
+;;
+;; requires.compiled: the assertion is precisely that the COMPILED back end
+;; refuses.  Under --interpret this program prints 42, so run-turi.sh must not
+;; look for the diagnostic here -- the sibling positive fixtures own that side.
+(defn twice [x] (* x 2))
+(defn main [] : int (println (twice 21)) 0)

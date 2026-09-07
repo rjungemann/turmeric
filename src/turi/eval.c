@@ -11029,6 +11029,161 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return v;
     }
 
+    /* --- saffron-lang-plan S3/D4: the dynamic operator layer ------------- */
+    case EX_DYN_OP: {
+        /* The elaborator deferred operator resolution because an argument was
+         * `any`.  Resolve it now, from the value that actually arrived.
+         *
+         * The arm is thin because `eval_builtin` is ALREADY dynamic: it
+         * branches on `args[0].tag` at runtime (the BS_VARIADIC_FOLD arm reads
+         * TURI_FLOAT vs TURI_INT and picks the double or int64 fold), so the
+         * interpreter has never needed the static type for these operators.
+         * All that was missing was permission to reach it, which is what the
+         * elaborator's EX_DYN_OP route grants.
+         *
+         * Unwrap an `any` box first (interp-collection-handles-report-as-int):
+         * a Vec or opaque payload rides a wrapper struct so `type-of` can name
+         * it, and an operator wants the carrier underneath. */
+        uint32_t n = e->as.dyn_op_.n_args;
+
+        /* saffron-lang-plan S3/D4: `and` / `or` are TRUTHINESS operators here,
+         * and they must stay LAZY.
+         *
+         * Handled before the argument loop below, which is eager: the whole
+         * point of `and` is that `(and (some? x) (unwrap x))` does not evaluate
+         * the second operand when the first is falsy, and evaluating it anyway
+         * would turn a guard into a crash.  Turmeric's own `and`/`or` are
+         * short-circuit builtins (BS_AND_SC / BS_OR_SC) for the same reason;
+         * this is that behaviour with the bool requirement relaxed to D4's
+         * truthiness rule.
+         *
+         * Returns a bool, matching what Turmeric's `and`/`or` return.  Lisp
+         * would return the deciding VALUE instead; that is a bigger semantic
+         * choice than S3 needs, and `(if (and ...) ...)` reads the same either
+         * way, so it is left for the D4 surface to settle deliberately rather
+         * than by accident here. */
+        if (e->as.dyn_op_.op && n >= 1) {
+            const char *opn = e->as.dyn_op_.op->name;
+            bool is_and = (strcmp(opn, "and") == 0);
+            bool is_or  = (strcmp(opn, "or") == 0);
+            if (is_and || is_or) {
+                for (uint32_t i = 0; i < n; i++) {
+                    TuriValue v = eval_expr(env, frame, e->as.dyn_op_.args[i]);
+                    if (turi_is_error(v) || env_signaled(env)) return v;
+                    if (v.tag == TURI_STRUCT && v.as_struct &&
+                        v.as_struct->is_any_box && v.as_struct->n_fields == 1 &&
+                        v.as_struct->fields)
+                        v = v.as_struct->fields[0];
+                    bool t = !(v.tag == TURI_NIL ||
+                               (v.tag == TURI_BOOL && !v.as_bool));
+                    if (is_and && !t) return turi_bool(false);
+                    if (is_or  &&  t) return turi_bool(true);
+                }
+                return turi_bool(is_and);
+            }
+        }
+
+        TuriValue stackv[8];
+        TuriValue *vals = stackv;
+        if (n > 8) {
+            vals = (TuriValue *)malloc(n * sizeof(TuriValue));
+            if (!vals) return turi_error("dyn-op: out of memory");
+        }
+        TuriValue result = turi_nil();
+        bool failed = false;
+        for (uint32_t i = 0; i < n; i++) {
+            TuriValue v = eval_expr(env, frame, e->as.dyn_op_.args[i]);
+            if (turi_is_error(v) || env_signaled(env)) { result = v; failed = true; break; }
+            if (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->is_any_box &&
+                v.as_struct->n_fields == 1 && v.as_struct->fields)
+                v = v.as_struct->fields[0];
+            vals[i] = v;
+        }
+        /* saffron-lang-plan S3/D4: truthiness, answered before the builtin
+         * table is consulted -- the reserved name is deliberately not a
+         * builtin, so there is nothing to look up.
+         *
+         * The rule: `false` and `nil` are falsy, everything else -- including
+         * `0`, `""` and an empty container -- is truthy.  Lisp/Clojure, not C.
+         * D4 picks it because Turmeric's `if` already requires a bool, so no
+         * existing program depends on int-truthiness, and because the C rule
+         * makes `(if (vec-len v) ...)` silently wrong on an empty vector. */
+        if (!failed && n == 1 && e->as.dyn_op_.op &&
+            strcmp(e->as.dyn_op_.op->name, SAFFRON_TRUTHY_OP) == 0) {
+            TuriValue v = vals[0];
+            bool truthy = !(v.tag == TURI_NIL ||
+                            (v.tag == TURI_BOOL && !v.as_bool));
+            if (vals != stackv) free(vals);
+            return turi_bool(truthy);
+        }
+        if (!failed && n > 1) {
+            /* Numeric promotion, and it is not optional.
+             *
+             * `eval_builtin` decides int-vs-float from `args[0].tag` ALONE and
+             * then reads every argument through that union member -- which is
+             * correct for static Turmeric, where the elaborator has already
+             * made the operands agree, and wrong the moment they can differ.
+             * `(* x 2)` with `x = 7.1` took the double fold and read the
+             * literal `2` as `.as_float`, printing 6.91692e-323: the int's bit
+             * pattern read as a double.  `(* 2 7.1)` fails the mirror way.
+             *
+             * So promote here, where the mixing is introduced, rather than in
+             * eval_builtin, which static callers rely on as-is.  The rule is
+             * the ordinary numeric tower: if every argument is numeric and any
+             * one is a float, they all become floats.  A non-numeric argument
+             * anywhere leaves the set alone -- that is a type error for the
+             * operator to report, not something to coerce past. */
+            bool all_numeric = true, any_float = false;
+            for (uint32_t i = 0; i < n; i++) {
+                if (vals[i].tag == TURI_FLOAT)    any_float = true;
+                else if (vals[i].tag != TURI_INT) { all_numeric = false; break; }
+            }
+            if (all_numeric && any_float)
+                for (uint32_t i = 0; i < n; i++)
+                    if (vals[i].tag == TURI_INT)
+                        vals[i] = turi_float((double)vals[i].as_int);
+        }
+        if (!failed) {
+            /* The runtime type of argument 0 is what selects the overload --
+             * the same key `builtin_lookup` uses statically, read from the tag
+             * instead of from the declared type. */
+            TypeKind k0 = TY_UNKNOWN;
+            if (n > 0) {
+                switch (vals[0].tag) {
+                case TURI_INT:    k0 = TY_INT;   break;
+                case TURI_FLOAT:  k0 = TY_FLOAT; break;
+                case TURI_BOOL:   k0 = TY_BOOL;  break;
+                case TURI_CSTR:   k0 = TY_CSTR;  break;
+                case TURI_NIL:    k0 = TY_NIL;   break;
+                default: break;
+                }
+            }
+            const BuiltinSpec *spec =
+                (k0 == TY_UNKNOWN) ? NULL
+                                   : builtin_lookup(e->as.dyn_op_.op,
+                                                    type_simple(k0, CK_COPY), n);
+            if (!spec) {
+                /* No overload for the type that actually arrived.  This is a
+                 * genuine runtime type error in a dynamic language -- the
+                 * Saffron analogue of TUR-E0006 -- so it panics with the
+                 * operator and the offending type named, rather than returning
+                 * a wrong answer. */
+                char msg[160];
+                snprintf(msg, sizeof(msg),
+                         "%s: no operator for a %s argument",
+                         e->as.dyn_op_.op ? e->as.dyn_op_.op->name : "operator",
+                         (k0 != TY_UNKNOWN) ? type_name(type_simple(k0, CK_COPY))
+                                            : "value of that type");
+                if (vals != stackv) free(vals);
+                turi_runtime_panic(env, msg);
+                return turi_nil();  /* unreachable */
+            }
+            result = eval_builtin(env, spec, vals, n);
+        }
+        if (vals != stackv) free(vals);
+        return result;
+    }
+
     case EX_ANY_TYPE_OF: {
         TuriValue v = eval_expr(env, frame, e->as.any_type_of_.value);
         if (turi_is_error(v) || env_signaled(env)) return v;
