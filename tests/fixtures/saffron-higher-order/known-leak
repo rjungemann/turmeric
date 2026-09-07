@@ -1,1 +1,1 @@
-docs/reported/saffron-any-return-defeats-the-frame-box-rule.md (the "What is NOT this bug" section: this fixture leaks the pre-existing recursive-ADT shape, one box per cons cell)
+docs/reported/byvalue-recursive-adt-boxes-are-never-freed.md

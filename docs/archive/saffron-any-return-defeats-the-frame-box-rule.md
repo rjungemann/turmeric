@@ -5,6 +5,57 @@ into an `any` parameter -- which in Saffron is most calls, because most Saffron
 functions return `any`. Found while landing saffron-lang-plan S5 (the compiled
 path), which is the first stage where a Saffron program is compiled at all.
 
+**RESOLVED 2026-09-07 -- and the root-cause section below is HALF WRONG, which
+is the part worth reading.**
+
+There were two blockers in series, and this report named only the second. The
+first one stops the inference before the result gate is ever consulted:
+
+**`expr_subtree_has_inline_c` answered TRUE for every Saffron body.** The three
+dynamic nodes (`EX_DYN_OP`, `EX_DYN_CALL`, `EX_DYN_FIELD`) had no arm in that
+walk, so they hit its conservative `default` -- "may hide inline-C" -- and
+`elab_infer_nonretain_masks` skips its whole body for such a function. A probe
+on the inference's entry printed `get-x body=106 inlinec=1`, and `get-x` never
+appeared in the per-parameter probe at all. The `any` readers had needed exactly
+this fix before (the comment above `EX_ANY_TYPE_OF` in that function says so),
+so the omission had a precedent nobody checked against.
+
+That is the second time in this stage that reading the control flow produced a
+plausible wrong answer and one `fprintf` produced the right one in a minute.
+
+**The result gate was the second blocker, and this report's account of it
+stands.** The fix is not to widen the whitelist but to stop using it as the
+whole answer: an `any` result now RUNS the escape walk, with
+`result_cannot_carry = false`. The walk is the real question and answers it
+better than a kind test can -- a bare `p` in result position fails (`EX_VAR`
+checks `confined`), a general call taking `p` fails (its result may alias),
+while a body whose result is a fresh box passes. So `(defn f [x] (+ x 1))` and
+`(defn get-x [p] (.x p))` qualify and `(defn dyn [x] x)` does not, which is
+precisely the distinction the result kind could not draw.
+
+`box_uses_confined` gained arms for the same three nodes: a dynamic operator and
+a dynamic field read are readers whose results cannot alias an operand's box
+(every `__tur_dyn_*` helper returns a fresh `TUR_TAG` or a C scalar; a field read
+copies), and a dynamic CALL keeps the strict answer for the same reason `EX_CALL`
+refuses an `fn_expr` callee -- there is no body to inspect.
+
+The outcome is better than the fix directions below anticipated: the widen does
+not get freed, it stops being **allocated**. `get-x`'s two call sites now emit
+`TUR_TAG(id, &__t183)` -- a caller-frame copy, no `malloc` at all.
+
+Fix direction 3 (RC-managed `any` boxes), which
+`docs/upcoming/saffron-lang-plan.md` S5 proposed, was not needed and should not
+be revived on this evidence.
+
+Verified: `tests/run-leak-check.sh` 87 passed / 0 failed, `run.sh` 2861 / 0,
+`run-turi.sh` 1953 / 0. No codegen snapshot moved, so the widened rule does not
+change the existing corpus -- the `any`-result shape simply does not occur in it
+outside Saffron.
+
+The `saffron-higher-order` leak this report separated out in "What is NOT this
+bug" is still open and now has its own report:
+[byvalue-recursive-adt-boxes-are-never-freed](../reported/byvalue-recursive-adt-boxes-are-never-freed.md).
+
 ## Repro
 
 `tests/fixtures/saffron-dyn-field` under `tests/run-leak-check.sh`:

@@ -5457,7 +5457,36 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
                         _result_safe = true; break;
                     default: break;
                 }
-                if (_result_safe && ptr_param_is_nonretaining(body, _pb, true))
+                /* saffron-any-return-defeats-the-frame-box-rule: an `any`
+                 * RESULT runs the walk too, unconfined.
+                 *
+                 * The whitelist above is a cheap conservative proxy for the
+                 * real question -- "can the result carry a pointer into this
+                 * parameter out?" -- and it answers no only for kinds that
+                 * cannot carry a pointer at all.  `any` can, so it is excluded,
+                 * and that is correct as far as it goes.  What it costs is
+                 * everything: a Saffron function's unannotated return IS `any`
+                 * (D3), so a rule written for the rare case stopped firing in
+                 * the language where the widen is the common case, and every
+                 * call widening a by-value payload malloc'd a box nothing
+                 * freed.
+                 *
+                 * The walk itself answers the real question, and answers it
+                 * better: run it with `result_cannot_carry = false` and a bare
+                 * `p` in result position fails (EX_VAR checks `confined`), a
+                 * general call taking `p` fails (its result may alias), while a
+                 * body whose result is a FRESH box -- which is what every
+                 * dynamic operator and field read produces -- passes.  So
+                 * `(defn f [x] (+ x 1))` and `(defn get-x [p] (.x p))` qualify
+                 * and `(defn dyn [x] x)` does not, which is exactly the
+                 * distinction the result kind could not draw.
+                 *
+                 * Same posture as the rest of this family: only ever sets a
+                 * bit, and the bit only ever moves an allocation into the
+                 * caller's frame.  Every unmodelled form still falls through to
+                 * the strict escape walk, whose default is "escapes". */
+                bool _run_walk = _result_safe || _rk == TY_ANY;
+                if (_run_walk && ptr_param_is_nonretaining(body, _pb, _result_safe))
                     b->nonretain_ptr_param_mask |= (1u << _pi);
             }
         }

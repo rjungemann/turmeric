@@ -39,13 +39,20 @@ code over a heterogeneous list -- `map`, `filter` and `fold` over
 lines as the interpreter. Every S3/S4 fixture lost its `requires.interp-only`
 marker and is asserted on both back ends.
 
-S5 left one thing open, and it is the one the stage predicted: **ownership**.
-Widening a by-value payload into an `any` parameter still mallocs a box nothing
-frees, because the frame-box rule that avoids that allocation requires a
-non-pointer scalar RESULT -- and a Saffron function returns `any`. Filed as
-[saffron-any-return-defeats-the-frame-box-rule](../reported/saffron-any-return-defeats-the-frame-box-rule.md)
-with the measurement and three fix directions; the fixtures carry `known-leak`
-so `tests/run-leak-check.sh` stays readable rather than permanently red.
+S5's predicted risk -- **ownership** -- was real, was filed, and is now
+[fixed](../archive/saffron-any-return-defeats-the-frame-box-rule.md). Widening
+a by-value payload into an `any` parameter no longer allocates at all: the
+frame-box rule fires again, so the widen emits a caller-frame copy. It needed
+two changes, and the first was one the report itself had missed -- the dynamic
+nodes were invisible to `expr_subtree_has_inline_c`, which switched the whole
+non-retain inference off for every Saffron body before its result gate was even
+consulted. **RC-managed `any` boxes, which this plan proposed as the mitigation,
+were not needed** and should not be revived on this evidence.
+
+One leak remains under the gate and it is not Saffron's:
+[a self-recursive by-value ADT mallocs one box per link and frees none](../reported/byvalue-recursive-adt-boxes-are-never-freed.md),
+measured in plain Turmeric with no `any` anywhere (3 cells / 3 allocations,
+5 / 5, linear). `saffron-higher-order` carries a `known-leak` pointing at it.
 **S6, containers and the Saffron prelude, is next.**
 
 Worth stating plainly, because it changes how the rest of this plan should be
@@ -1005,27 +1012,42 @@ Everything S3 and S4 did for the interpreter, done again in C:
 `__tur_dyn_not`, the dynamic call, the dynamic field read, and `match` on an
 `any` scrutinee.
 
-**Exit criterion MET.** All four S3/S4 fixtures lost `requires.interp-only` and
-print identically on both back ends; `saffron-higher-order` -- map/filter/fold
-over `(1 "hi" 7.1 true)` -- gives `4 / int / cstr / float / bool / 2 / 2 / 8.1`
-compiled, `7.1 + 1 = 8.1` included, which is the float rule surviving the whole
-dynamic path. `run.sh` 2861 passed / 0 failed, `run-turi.sh` 1953 / 0, turi
-parity 117/118 with the recorded carve-out.
+**Exit criterion MET.** All four S3/S4 fixtures lost `requires.interp-only`,
+gained `requires.leak-check`, and print identically on both back ends;
+`saffron-higher-order` -- map/filter/fold over `(1 "hi" 7.1 true)` -- gives
+`4 / int / cstr / float / bool / 2 / 2 / 8.1` compiled, `7.1 + 1 = 8.1`
+included, which is the float rule surviving the whole dynamic path. `run.sh`
+2861 passed / 0 failed, `run-turi.sh` 1953 / 0, `run-leak-check.sh` 87 / 0 with
+one known-open (the recursive-ADT box, below), turi parity 117/118 with the
+recorded carve-out.
 
-**The ownership prediction was right, and it is not fixed.** Filed as
-[saffron-any-return-defeats-the-frame-box-rule](../reported/saffron-any-return-defeats-the-frame-box-rule.md),
-with the cause measured rather than guessed: `any-struct-box-leak-per-widen`'s
-frame-box pass already avoids the allocation when the callee cannot retain the
-payload, but it is gated on the callee's RESULT being a non-pointer scalar --
-which is correct, and which Saffron's `any`-by-default return makes false
-everywhere. The rule did not break; it stopped being reachable. The sibling
-`saffron-higher-order` leak is a different thing and the report says so: a plain
-Turmeric recursive ADT leaks one box per cons cell too (measured, 72 bytes for
-three cells), so that half is the existing no-drop-glue story wearing `any`
-boxes. Both fixtures carry `requires.leak-check` AND `known-leak`, so the gate
-reports them without going permanently red. RC-managed `any` boxes -- this
-section's original proposal -- is fix direction 3 of the three filed; directions
-1 and 2 are smaller and should be weighed first.
+**The ownership prediction was right; it was then fixed, and the mitigation this
+section proposed turned out to be the wrong one.**
+[The report](../archive/saffron-any-return-defeats-the-frame-box-rule.md) has
+the full account, including a correction to its own first diagnosis. Two
+blockers in series:
+
+- `expr_subtree_has_inline_c` had no arm for the three dynamic nodes, so every
+  Saffron body hit its conservative `default` -- "may hide inline-C" -- and the
+  non-retain inference skipped the function entirely, before any of the reasoning
+  about result types applied. Found with one probe on the inference's entry after
+  reading the control flow gave a confident wrong answer.
+- The result gate, which this section correctly identified: the frame-box rule
+  is gated on the callee's RESULT being a non-pointer scalar, and a Saffron
+  function returns `any`. The fix is not a wider whitelist but the escape walk
+  itself, run unconfined for an `any` result -- it draws the distinction a kind
+  test cannot, accepting `(defn f [x] (+ x 1))` and `(defn get-x [p] (.x p))`
+  while still refusing `(defn dyn [x] x)`.
+
+The box is not freed; it is never allocated -- the widen emits a caller-frame
+copy. **RC-managed `any` boxes were not needed**, and nothing measured here
+argues for them.
+
+The sibling `saffron-higher-order` leak was a different thing and remains open
+as [byvalue-recursive-adt-boxes-are-never-freed](../reported/byvalue-recursive-adt-boxes-are-never-freed.md):
+a plain Turmeric recursive ADT leaks one box per cons cell too, with no `any`
+anywhere (3 cells / 3 allocations, 5 / 5). Saffron makes that shape easy to
+reach; it does not create it.
 
 Five things differed from what this section expected:
 
