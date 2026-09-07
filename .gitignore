@@ -10,6 +10,7 @@ build-win-lazy/
 build-win-rel/
 build-jit/
 build-jit-asan/
+build-jit-san/
 build-jit-spike/
 build-turjit/
 build-turjit-debug/

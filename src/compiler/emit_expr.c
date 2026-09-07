@@ -13576,13 +13576,46 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (from_can_hold_node && to_is_erasure &&
                     region_type_reaches_node(ctx, from, seen_a, &na, 24) &&
                     !region_type_reaches_node(ctx, to, seen_b, &nb, 24)) {
-                    char *et = fresh_tmp(ctx);
-                    indent_buf(body, ctx->indent);
-                    buf_printf(body, "__auto_type %s = (%s);\n", et, inner_val);
-                    emit_region_note_lvalue(body, ctx->indent,
-                                            emit_type_c_name(ctx, from), et);
-                    free(inner_val);
-                    inner_val = et;
+                    /* The note needs an ADDRESSABLE lvalue, and this used to
+                     * get one with `__auto_type t = (<inner>);` so the temp
+                     * took the inner's exact emitted representation without
+                     * re-deriving it.  `__auto_type` is GNU-only and **c2mir
+                     * cannot parse it** (see emit_fns.c's S1 note and
+                     * emit_cps_ir.c's cps->direct temp, which name the type for
+                     * exactly this reason).  One unparseable construct rejects
+                     * the WHOLE translation unit, so every program carrying an
+                     * erasing ascription lost the jit engine and fell back to
+                     * cc -- which is how this shipped unnoticed on Linux and
+                     * turned macOS's JIT job red.
+                     *
+                     * When the value is already a bare identifier it IS an
+                     * lvalue: note it in place and hoist nothing, which needs
+                     * no type at all and covers the ordinary case (an erased
+                     * parameter or local).  Otherwise name the temp's type the
+                     * way the let-binding decl does, and when even that cannot
+                     * answer, skip the hoist rather than emit C the engine
+                     * cannot read -- the value is still noted by every STORE
+                     * it reaches, so this loses the erasure's own note, not
+                     * the lock. */
+                    if (emit_str_is_bare_ident(inner_val)) {
+                        emit_region_note_lvalue(body, ctx->indent,
+                                                emit_type_c_name(ctx, from),
+                                                inner_val);
+                    } else {
+                        const char *ect = emit_binding_repr_c_name(
+                            ctx, e->as.ascribe_.inner->type,
+                            e->as.ascribe_.inner);
+                        if (ect) {
+                            char *et = fresh_tmp(ctx);
+                            indent_buf(body, ctx->indent);
+                            buf_printf(body, "%s %s = (%s);\n", ect, et,
+                                       inner_val);
+                            emit_localvar_record_ctype(et, ect);
+                            emit_region_note_lvalue(body, ctx->indent, ect, et);
+                            free(inner_val);
+                            inner_val = et;
+                        }
+                    }
                 }
             }
             /* KB-021: an ascription `(:: (vec-new) (Vec int))` pins the static
