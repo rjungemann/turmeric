@@ -31,11 +31,10 @@ a tag word plus one 64-bit payload slot.
 
 ```turmeric
 ;; Named union type
-(deftype IntOrString []
-  (int | cstr))
+(defalias IntOrString (int | cstr))
 
 ;; Inline in a function signature
-(defn print-value [x : (int | cstr | bool)] : unit
+(defn print-value [x : (int | cstr | bool)] : nil
   (match x
     (i : int)  (println i)
     (s : cstr) (println s)
@@ -44,11 +43,10 @@ a tag word plus one 64-bit payload slot.
 
 ```sweet-exp
 ;; Named union type
-deftype IntOrString []
-  (int | cstr)
+defalias IntOrString (int | cstr)
 
 ;; Inline in a function signature
-defn print-value [x : (int | cstr | bool)] : unit
+defn print-value [x : (int | cstr | bool)] : nil
   match x
     (i : int)
     println(i)
@@ -57,6 +55,12 @@ defn print-value [x : (int | cstr | bool)] : unit
     (b : bool)
     println((if b "true" "false"))
 ```
+
+Name a union with `defalias`, not `deftype`: `deftype` is the *recursive* type
+binder, so the name it binds is a distinct nominal type that use sites fail to
+unify with the union body (`expected <rec>, got int`). The
+[syntax guide](syntax-guide.md#naming-a-type----defalias-vs-deftype) has the
+full rule.
 
 Nested unions are flattened: `(int | (cstr | bool))` becomes `(int | cstr | bool)`.
 
@@ -68,17 +72,17 @@ all union members:
 ```turmeric
 (defn describe [x : (int | cstr)] : cstr
   (match x
-    (n : int)  (str "number: " n)
-    (s : cstr) (str "string: " s)))
+    (n : int)  "a number"
+    (s : cstr) s))
 ```
 
 ```sweet-exp
 defn describe [x : (int | cstr)] : cstr
   match x
     (n : int)
-    str("number: " n)
+    "a number"
     (s : cstr)
-    str("string: " s)
+    s
 ```
 
 Omitting any member is a compile-time error (`TUR-E0301`).
@@ -89,14 +93,14 @@ A value of type `A` can be passed anywhere `(A | B)` is expected (widening). Thi
 handled implicitly at call sites and return positions:
 
 ```turmeric
-(defn accepts-union [x : (int | cstr)] : unit ...)
+(defn accepts-union [x : (int | cstr)] : nil ...)
 
 (accepts-union 42)       ;; int widens to (int | cstr)
 (accepts-union "hello")  ;; cstr widens to (int | cstr)
 ```
 
 ```sweet-exp
-defn accepts-union [x : (int | cstr)] : unit ...
+defn accepts-union [x : (int | cstr)] : nil ...
 
 accepts-union(42)       ;; int widens to (int | cstr)
 accepts-union("hello")  ;; cstr widens to (int | cstr)
@@ -141,23 +145,23 @@ The primary use is combining a concrete type with typeclass constraints.
 
 ```turmeric
 ;; Named intersection type
-(deftype ReadWrite []
-  (Readable & Writable))
+(defalias ReadWrite (Readable & Writable))
 
 ;; Inline in a function signature
-(defn save [x : (int & Serializable)] : unit
+(defn save [x : (int & Serializable)] : nil
   (file/write (serialize x) "output.bin"))
 ```
 
 ```sweet-exp
 ;; Named intersection type
-deftype ReadWrite []
-  (Readable & Writable)
+defalias ReadWrite (Readable & Writable)
 
 ;; Inline in a function signature
-defn save [x : (int & Serializable)] : unit
+defn save [x : (int & Serializable)] : nil
   file/write(serialize(x) "output.bin")
 ```
+
+`defalias`, not `deftype`, for the same reason as a named union above.
 
 ### Subtyping
 
@@ -174,6 +178,9 @@ Intersection is most useful when one side is a typeclass:
 (defclass Serializable [a]
   (serialize [x : a] : cstr))
 
+(definstance Serializable [int]
+  (serialize [x : int] : cstr "an int"))
+
 (defn serialize-int [x : (int & Serializable)] : cstr
   (serialize x))
 ```
@@ -182,9 +189,17 @@ Intersection is most useful when one side is a typeclass:
 defclass Serializable [a]
   serialize [x : a] : cstr
 
+definstance Serializable [int]
+  serialize [x : int] : cstr
+    "an int"
+
 defn serialize-int [x : (int & Serializable)] : cstr
   serialize(x)
 ```
+
+The `definstance` is not optional decoration: the intersection resolves the
+method against a real instance, so a class with none in scope fails with
+`no typeclass method found for 'serialize'`.
 
 The value is an `int` with a `Serializable` dictionary attached. The elaborator
 resolves the instance at the intersection type site.
@@ -195,12 +210,12 @@ Intersections of known-disjoint concrete types are rejected statically (`TUR-E03
 
 ```turmeric
 ;; Compile error: int and cstr are disjoint
-(defn bad [x : (int & cstr)] : unit ...)
+(defn bad [x : (int & cstr)] : nil ...)
 ```
 
 ```sweet-exp
 ;; Compile error: int and cstr are disjoint
-defn bad [x : (int & cstr)] : unit ...
+defn bad [x : (int & cstr)] : nil ...
 ```
 
 Intersections involving typeclasses or type variables that cannot be determined disjoint
@@ -214,22 +229,29 @@ at compile time are permitted and fail during instance resolution.
 intersections, it is enabled by default.
 
 ```turmeric
-(defn debug-print [x : any] : unit
-  (println x))
+(defn debug-print [x : any] : nil
+  (println (type-of x)))
 
-(debug-print 42)      ;; ok
-(debug-print "hello") ;; ok
-(debug-print true)    ;; ok
+(debug-print 42)      ;; prints int
+(debug-print "hello") ;; prints cstr
+(debug-print true)    ;; prints bool
 ```
 
 ```sweet-exp
-defn debug-print [x : any] : unit
-  println(x)
+defn debug-print [x : any] : nil
+  println $ type-of x
 
-debug-print(42)      ;; ok
-debug-print("hello") ;; ok
-debug-print(true)    ;; ok
+debug-print(42)      ;; prints int
+debug-print("hello") ;; prints cstr
+debug-print(true)    ;; prints bool
 ```
+
+Note what the body does **not** do: `(println x)` on an `any` does not compile.
+The builtin operator table is keyed on concrete argument kinds and has no `any`
+row, so `println`, `+`, `-`, `=` and `<` all reject an `any` argument with
+`TUR-E0006`. `any` is a storage and reflection type -- it holds a value and
+tells you what it is; to *operate* on the payload, narrow it first with an
+`is?` guard or a `cast` (both below).
 
 `any`-typed values are represented at codegen as a `tur_tagged_t`
 (`{ int64_t tag; int64_t val; }`): the `tag` is the payload's `TypeKind` and
@@ -249,24 +271,41 @@ Union simplification: `(int | cstr | any)` simplifies to `any`.
 Union types and `any` enable a gradual typing path:
 
 ```turmeric
-;; Start untyped
-(defn debug-print [x : any] : unit
-  (println x))
+;; Start untyped -- accept anything, and report what actually arrived
+(defn debug-print [x : any] : nil
+  (println (type-of x)))
 
-;; Narrow gradually as types become known
-(defn typed-print [x : (int | cstr)] : unit
-  (debug-print x))
+;; Narrow gradually as the shape becomes known: a union you can match on
+(defn typed-print [x : (int | cstr)] : nil
+  (match x
+    (n : int)  (println n)
+    (s : cstr) (println s)))
 ```
 
 ```sweet-exp
-;; Start untyped
-defn debug-print [x : any] : unit
-  println(x)
+;; Start untyped -- accept anything, and report what actually arrived
+defn debug-print [x : any] : nil
+  println $ type-of x
 
-;; Narrow gradually as types become known
-defn typed-print [x : (int | cstr)] : unit
-  debug-print(x)
+;; Narrow gradually as the shape becomes known: a union you can match on
+defn typed-print [x : (int | cstr)] : nil
+  match x
+    (n : int)
+    println(n)
+    (s : cstr)
+    println(s)
 ```
+
+> **Not yet: handing a union-typed value to an `any` parameter.** The step this
+> section would most like to show -- `(defn typed-print [x : (int | cstr)] : nil
+> (debug-print x))`, keeping the untyped function and feeding it the narrowed
+> one -- does not compile today. A union is already a `tur_tagged_t` whose tag
+> is a MEMBER INDEX, and widening it to `any` re-tags the aggregate as though it
+> were a scalar, which cc rejects (`aggregate value used where an integer was
+> expected`) in argument, return and local position alike. The interpreter runs
+> it and gives the right answers, so the semantics are settled and only the
+> compiled back end is missing. See
+> [union-to-any-widen-emits-uncompilable-c](../reported/union-to-any-widen-emits-uncompilable-c.md).
 
 ---
 
@@ -359,8 +398,10 @@ support on top of unions -- a far larger change with no user-visible payoff.
 
 The user-facing goal that desugar was meant to deliver -- ADT values
 participating in union-style dispatch -- **already ships** through the `any` top
-type. An ADT value widens to `any` (boxing codegen), reports its kind via
-`type-of` (`"adt"`), and lands back in `match` through a checked `cast`. See the
+type. An ADT value widens to `any` (boxing codegen), reports **its own ADT
+name** via `type-of` -- a `(Circle 5)` answers `"Shape"`, not `"adt"`, per the
+per-type granularity described above -- and lands back in `match` through a
+checked `cast`. See the
 `defdata-as-union` and `any-box-adt` fixtures.
 
 ---

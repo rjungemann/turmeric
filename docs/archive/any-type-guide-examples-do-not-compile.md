@@ -1,10 +1,51 @@
 ---
 title: The union/intersection guide's headline `any` examples do not compile
-category: Reported
+category: Archive
 description: docs/guides/union-intersection-types-guide.md opens its `any` section and its Gradual Typing section with `(defn debug-print [x : any] : unit (println x))`. Two defects in one line -- `: unit` is not a type (the annotations guide says so explicitly), and `println` has no `any` overload, so the body is TUR-E0006. Both the s-expression and sweet-exp renderings are affected, in both sections.
 ---
 
 # The union/intersection guide's headline `any` examples do not compile
+
+**RESOLVED 2026-09-07** via the "minimum" fix direction, plus a fixture --
+`tests/fixtures/docs-any-guide-examples`, which both suites run, so these
+examples cannot rot again without a FAIL. That was the report's own closing
+line ("nothing compiles the guides") and it is the part that keeps the rest
+fixed.
+
+**The scope was wider than filed.** Compiling every example in the guide rather
+than only the two named turned up four more defects of the same species, all
+corrected in the same change:
+
+| where | defect | fix |
+| --- | --- | --- |
+| `## Union Types` / Syntax | `(deftype IntOrString [] (int \| cstr))` -- `deftype` is the RECURSIVE type binder, so the name is nominal and a use site fails to unify: `expected <rec>, got int` | `(defalias IntOrString (int \| cstr))`, with a sentence pointing at the syntax guide, which already says `deftype` is the wrong tool here |
+| Pattern Matching | `(str "number: " n)` -- there is no `str`; `str-concat` exists but needs an import the snippet does not have | narrowed arms that use the bound value without a helper |
+| Intersection Types / Syntax | same `deftype` misuse for a named intersection | `defalias` |
+| Typeclass Intersection | `defclass Serializable` with no `definstance`, so `(serialize x)` is `no typeclass method found` | the instance added, and one sentence saying it is load-bearing rather than decoration |
+| ADTs and Unions | "reports its kind via `type-of` (`"adt"`)" -- stale, and contradicted by this guide's own per-type-granularity paragraph 80 lines above | says the ADT name; a `(Circle 5)` answers `"Shape"` |
+
+The two filed defects were fixed as the report proposed: `: unit` -> `: nil`
+throughout (14 occurrences, s-expr and sweet-exp), `(println x)` -> `(println
+(type-of x))`, and one paragraph saying plainly that no builtin accepts an `any`
+and that operating on the payload needs a narrowing first.
+
+**One example could not be made to compile, because the compiler is wrong, not
+the guide.** The Gradual Typing section's whole point was
+`(defn typed-print [x : (int | cstr)] : nil (debug-print x))` -- keep the
+`any`-taking function, feed it the narrowed one. Widening a union to `any` emits
+uncompilable C in argument, return and local position alike: a union is already
+a `tur_tagged_t` whose tag is a member index, and the widen re-tags the
+aggregate as though it were a scalar. The interpreter runs it and gives the
+right answers. Filed as
+[union-to-any-widen-emits-uncompilable-c](../reported/union-to-any-widen-emits-uncompilable-c.md);
+the section now shows narrowing that works and states the gap in a note, and the
+fixture marks the line to add back.
+
+The "wider" direction is unchanged: if `any` grows a dynamic operator layer
+(Saffron D4, gaps G3/G4/G9), the original `(println x)` becomes correct and the
+new paragraph comes back out.
+
+---
 
 **Severity: low (docs), but load-bearing.** These are the first two examples a
 reader meets for the `any` type and for gradual typing, so the guide currently
