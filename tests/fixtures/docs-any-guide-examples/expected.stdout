@@ -9,6 +9,8 @@ cstr
 bool
 42
 hello
+int
+cstr
 cstr
 hello
 Point

@@ -4464,6 +4464,19 @@ bool any_expr_is_owned_temp(const Expr *x, int depth) {
     if (!x || depth <= 0) return false;
     while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
     if (!x || x->type.kind != TY_ANY) return false;
+    /* union-to-any-widen-emits-uncompilable-c: widening a UNION to `any` mints
+     * nothing -- it re-tags a `tur_tagged_t` whose box the union already owns --
+     * so this expression never owns that payload and a consumer must not drop it.
+     *
+     * Today the guard below would also decline, because the frame-box rule at the
+     * call site carries the SAME three conditions and sets `frame_box` first. That
+     * is a coincidence of two independent rules, not a reason: relax either guard
+     * and a consumer starts freeing a box the union still holds. Say it directly.
+     * The sibling hole in `let_binding_any_freeable` was not so lucky -- it fired,
+     * and printed garbage out of a freed box. */
+    if (x->kind == EX_UNION_INJECT && x->as.union_inject_.value &&
+        x->as.union_inject_.value->type.kind == TY_UNION)
+        return false;
     if (x->kind == EX_UNION_INJECT) return !x->as.union_inject_.frame_box;
     if (x->kind != EX_CALL || !x->as.call_.fn_binding) return false;
     const Binding *fb = x->as.call_.fn_binding;

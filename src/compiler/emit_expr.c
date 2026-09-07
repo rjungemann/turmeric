@@ -2557,6 +2557,24 @@ bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) {
     if (_bk != TY_ANY) return false;
     while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
     if (!init) return false;
+    /* union-to-any-widen-emits-uncompilable-c: an `any` widen of a UNION payload
+     * ALIASES the union's box; it does not allocate one.  Freeing it here is a
+     * use-after-free of a box the union still owns -- and not a subtle one:
+     * `(let [u (:: (make-struct Pt 3 4) (Pt | int))] (let [a (:: u any)] ...)
+     * (match u ...))` printed garbage for `(.y p)` after the inner scope exited.
+     *
+     * This is the same aliasing case the `owned_here` rule below already excludes
+     * for a bare variable ("(let [b a] ...) must not free the box `a` still
+     * holds") -- it just arrives wearing an EX_UNION_INJECT, because that is how
+     * a union reaches `any`.  Before the widen was emittable at all, a union
+     * payload could not get here, so the rule had never had to say so.
+     *
+     * The registry's `boxed` flag for the member type stays 1: a `Pt` widened
+     * DIRECTLY does malloc its box and must still be dropped.  What is wrong is
+     * only the claim that THIS scope allocated it. */
+    if (init->kind == EX_UNION_INJECT && init->as.union_inject_.value &&
+        emit_resolve_type(ctx, init->as.union_inject_.value->type).kind == TY_UNION)
+        return false;
     /* Owned-here shapes only.  A frame-boxed widen is a STACK address -- freeing
      * it would be far worse than the leak this closes. */
     bool owned_here =
@@ -6139,6 +6157,52 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         "TUR_TAG(%lld, (int64_t)(intptr_t)__tur_box); })",
                         cn, cn, cn, inner, (long long)tag);
                 }
+            } else if (e->type.kind == TY_ANY && inj_pt.kind == TY_UNION) {
+                /* union-to-any-widen-emits-uncompilable-c: a UNION payload is
+                 * the third kind that cannot ride the carrier as an integer,
+                 * beside the float bit-pattern and the by-value aggregate above
+                 * -- and it had no arm, so it fell into the scalar cast below
+                 * and cc rejected the whole program with "aggregate value used
+                 * where an integer was expected", in argument, return and local
+                 * position alike.
+                 *
+                 * Casting is not the fix, because the two representations only
+                 * LOOK alike.  Both are `tur_tagged_t`, but a union's tag is a
+                 * MEMBER INDEX into its own member list while an `any` box's tag
+                 * is a TypeKind or an interned per-type id -- different
+                 * namespaces, so re-tagging in place would compile and be
+                 * wrong (`type-of` would answer whatever type happens to own id
+                 * 0 or 1).
+                 *
+                 * Re-box through the member instead: switch on the member index,
+                 * which is statically known, and re-tag with THAT member's `any`
+                 * id.  The payload word carries across untouched in every case --
+                 * a float is already stored as its IEEE-754 bit pattern in both
+                 * representations, and a pointer member is a pointer in both --
+                 * so only the tag is rewritten.  The result is that an `any`
+                 * holding a `(int | cstr)` reports "int" or "cstr", which is what
+                 * the interpreter already answered and what `is?` / `cast` on the
+                 * result then work against with no further change.
+                 *
+                 * The default arm cannot be reached by a well-formed union value
+                 * (every inject site tags with a valid index), but a tag outside
+                 * the member list must not silently become member 0 -- it becomes
+                 * TY_UNKNOWN, which `type-of` reports as "unknown" and no `is?`
+                 * target matches. */
+                const Type *ut = &inj_pt;
+                buf_printf(&out,
+                    "({ tur_tagged_t __tur_ui = (%s); "
+                    "tur_tagged_t __tur_ua = TUR_TAG(%d, TUR_UNTAG(__tur_ui)); "
+                    "switch (TUR_GETTAG(__tur_ui)) {",
+                    inner, (int)TY_UNKNOWN);
+                for (uint8_t m = 0; m < ut->as.union_.n_members; m++) {
+                    const Type *mem = ut->as.union_.members[m];
+                    if (!mem) continue;
+                    buf_printf(&out,
+                        " case %u: __tur_ua = TUR_TAG(%lldLL, TUR_UNTAG(__tur_ui)); break;",
+                        (unsigned)m, (long long)emit_any_type_id(ctx, *mem));
+                }
+                buf_puts(&out, " default: break; } __tur_ua; })");
             } else {
                 buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)(%s))",
                            (long long)tag, inner);

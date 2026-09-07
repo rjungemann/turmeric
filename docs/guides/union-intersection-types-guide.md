@@ -280,6 +280,11 @@ Union types and `any` enable a gradual typing path:
   (match x
     (n : int)  (println n)
     (s : cstr) (println s)))
+
+;; A union-typed value still flows into the `any`-typed function, so the two
+;; coexist while you migrate -- the `any` reports the MEMBER's type, not "union"
+(defn describe-either [x : (int | cstr)] : nil
+  (debug-print x))
 ```
 
 ```sweet-exp
@@ -294,18 +299,17 @@ defn typed-print [x : (int | cstr)] : nil
     println(n)
     (s : cstr)
     println(s)
+
+;; A union-typed value still flows into the `any`-typed function
+defn describe-either [x : (int | cstr)] : nil
+  debug-print(x)
 ```
 
-> **Not yet: handing a union-typed value to an `any` parameter.** The step this
-> section would most like to show -- `(defn typed-print [x : (int | cstr)] : nil
-> (debug-print x))`, keeping the untyped function and feeding it the narrowed
-> one -- does not compile today. A union is already a `tur_tagged_t` whose tag
-> is a MEMBER INDEX, and widening it to `any` re-tags the aggregate as though it
-> were a scalar, which cc rejects (`aggregate value used where an integer was
-> expected`) in argument, return and local position alike. The interpreter runs
-> it and gives the right answers, so the semantics are settled and only the
-> compiled back end is missing. See
-> [union-to-any-widen-emits-uncompilable-c](../reported/union-to-any-widen-emits-uncompilable-c.md).
+Widening a union to `any` re-boxes it through the member it actually holds:
+`(describe-either 42)` prints `int` and `(describe-either "hi")` prints `cstr`,
+never `union`. The two representations look alike -- both are a tag word plus a
+payload -- but a union's tag is a *member index* while an `any` box's is a type
+id, so the widen switches on the index rather than reinterpreting the value.
 
 ---
 

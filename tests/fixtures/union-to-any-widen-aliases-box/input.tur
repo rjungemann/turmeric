@@ -1,0 +1,41 @@
+;; union-to-any-widen-emits-uncompilable-c, the ownership half: an `any` widened
+;; from a union ALIASES the union's heap box.  It must not be dropped.
+;;
+;; This is a regression the union-widen fix INTRODUCED and then closed, so it is
+;; pinned rather than trusted.  Making the widen emittable let a union payload
+;; reach `let_binding_any_freeable`, whose "owned here" test accepts any
+;; non-frame-boxed EX_UNION_INJECT initializer as a box this scope allocated.
+;; For a union payload that is false -- the widen allocates nothing, it re-tags a
+;; box the union already owns -- so the inner scope's exit called
+;; `__tur_any_drop` on it and the outer `(match u ...)` then read freed memory:
+;;
+;;     Pt
+;;     -4770379316646568807        <- was 4
+;;
+;; Visible without a sanitizer, which is why the assertion is the printed value
+;; rather than a leak-check marker.  ASan called it a heap-use-after-free.
+;;
+;; The same hole existed in `any_expr_is_owned_temp` (the argument-position drop).
+;; It did not fire, because the frame-box rule at the call site carries the same
+;; three conditions and set `frame_box` first, which that predicate reads as "not
+;; owned" -- two independent rules agreeing by coincidence, not by reason.  Both
+;; now say directly that a union payload is never owned here, so relaxing either
+;; guard cannot resurrect this.
+;;
+;; The nesting is load-bearing: the `any` must go out of scope while the union is
+;; still live, which is what an inner `let` does and a single flat one does not.
+;;
+;; Not requires.compiled -- the interpreter has no box to mis-free, so it is the
+;; control: both paths must print 4.
+
+(defstruct Pt [x : int y : int])
+
+(defn main [] : int
+  (let [u (:: (make-struct Pt 3 4) (Pt | int))]
+    (let [a (:: u any)]
+      (println (type-of a)))
+    ;; The union's box has to still be alive here.
+    (match u
+      (p : Pt)  (println (.y p))
+      (n : int) (println n)))
+  0)

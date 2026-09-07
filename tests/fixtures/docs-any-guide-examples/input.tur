@@ -12,12 +12,12 @@
 ;; them shows up as a FAIL here rather than in a reader's terminal.  Keep it in
 ;; step with the guide: if an example changes there, change it here.
 ;;
-;; Deliberately NOT here: `(defn typed-print [x : (int | cstr)] : nil
-;; (debug-print x))`, the step the gradual-typing section would most like to
-;; show.  Widening a union to `any` emits uncompilable C in every position --
-;; see docs/reported/union-to-any-widen-emits-uncompilable-c.md, which the guide
-;; now says so in.  When that lands, the example and this fixture both grow the
-;; line back.
+;; `describe-either` below is the step the gradual-typing section would most
+;; like to show -- keep the `any`-taking function, feed it the narrowed one.  It
+;; did not compile when this fixture was written (widening a union to `any` emit-
+;; ted a scalar cast on an aggregate, in every position), so the guide carried a
+;; note instead; union-to-any-widen-emits-uncompilable-c closed that and both the
+;; example and this fixture grew the line back.
 ;;
 ;; No requires.compiled: the guide describes the language, not a back end, so
 ;; both paths run it.
@@ -63,6 +63,10 @@
     (n : int)  (println n)
     (s : cstr) (println s)))
 
+;; A union flows into the `any` parameter, reporting the MEMBER's type.
+(defn describe-either [x : (int | cstr)] : nil
+  (debug-print x))
+
 ;; --- Boxing, `cast`, and `type-of` ----------------------------------------
 (defn box-it [] : any "hello")
 
@@ -81,6 +85,8 @@
   (debug-print true)
   (typed-print 42)
   (typed-print "hello")
+  (describe-either 42)
+  (describe-either "hello")
   (let [a (box-it)]
     (println (type-of a))
     (println (cast a cstr)))
