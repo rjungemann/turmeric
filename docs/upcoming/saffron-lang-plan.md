@@ -30,8 +30,10 @@ S3/S4 lean on the interpreter hard), and
 [a spurious `-Wfree-nonheap-object` in emitted code](../reported/any-drop-inlining-warns-free-nonheap.md)
 (cosmetic).
 
-**S1 landed 2026-09-07** -- the `#lang` language axis, its experiment gate and
-its listing, with no semantics attached. **S2 is next.**
+**S1 and S2 landed 2026-09-07** -- the `#lang` language axis with its gate and
+listing, then the `any` default for unannotated parameters. `(defn id [x] x)`
+called at `int`, `cstr` and `7.1` answers identically on both back ends.
+**S3 is next.**
 
 Worth stating plainly, because it changes how the rest of this plan should be
 read: **six of those eight reports had a diagnosis that was wrong on
@@ -816,7 +818,7 @@ negative instead. Closing the manifest gap properly wants a dedicated runner in
 the shape of `tests/run-any-type-id-multi-module.sh`, and would cover both
 policies at once.
 
-### S2 -- default to `any`, interpreter first (medium)
+### S2 -- default to `any`, interpreter first (medium) -- DONE 2026-09-07
 
 Flip the four `TY_INT` defaults in `elab_fns.c` (defn params ~6726, fn params
 ~9566, defn return ~7183, fn return ~9705) to `TY_ANY` **when the enclosing
@@ -828,8 +830,48 @@ the default flips cleanly and that a program which only *moves* dynamic values
 around (binds them, passes them, returns them, stores them) works end to end
 on both back ends.
 
-**Exit:** `(defn id [x] x)` called at `int`, `cstr`, and `7.1` from one Saffron
-program, compiled and interpreted, same output.
+**Exit: MET 2026-09-07**, and on BOTH back ends simultaneously rather than
+"interpreter first" -- the flip turned out to be back-end-agnostic, because it
+happens in the shared elaborator.
+
+**It was two sites, not four.** The plan named defn params, fn params, defn
+return and fn return. Only the two PARAM defaults need flipping: with
+parameters defaulting to `any`, an unannotated return infers `any` from the body
+on its own (which is what P3 fixed), so `(defn id [x] x)` gets `any -> any` with
+no return-site change. Three neighbouring `TY_INT` defaults are deliberately
+left alone -- a `& rest` parameter in `defn` and `fn` (that int is a cons-list
+HANDLE, not a value type) and an `extern-c` parameter (which declares a C
+signature, where `any` would describe an ABI that does not exist).
+
+**The dialect needs no threading through elaboration.** Every Form carries the
+`file_id` of the file it was read from, and the dialect lives on the
+`SourceFile`, so `lang_span_is_saffron(span)` is a registry lookup. That makes
+the answer per-FILE for free, which is D5's contract boundary arriving early: a
+Saffron program that loads a Turmeric module gets each file's own defaults, and
+the fixture asserts exactly that.
+
+**`--interpret <file>` needed a third wiring point**, and finding it took a
+probe rather than a reading. The file-eval entry does not fold the user file
+into the eval blob -- it splices a `(load ...)`, so the file is registered
+separately by the load path in `elab_toplevel.c`, which set `reader_type` and
+layers but not the language. Before that, the compiler saw Saffron defaults for
+a `#lang saffron` program and the interpreter saw Turmeric ones. The probe that
+found it printed the SourceFile pointer and path at the param site; reading the
+control flow had said the blob's `<eval>` entry was the one that mattered.
+
+**What S2 does not yet reach**, all as the stage predicted (the operators reject
+`any`, which is S3's job) and all identical on both back ends:
+
+- `(if x ...)` on a dynamic value -- `if condition must be bool, got any`.
+- `(println x)` on one -- no `any` overload.
+- Arithmetic, comparison, and every other builtin.
+
+One thing it reached that the stage did not predict: `(vec-of (id 1))` ICEs the
+compiler with a `(Vec any)` representation disagreement. **Not caused by S2** --
+it reproduces in plain Turmeric with explicit annotations -- but S2 makes it
+trivially reachable. Filed as
+[vec-of-any-repr-decision-ice](../reported/vec-of-any-repr-decision-ice.md); it
+blocks S6, not S3-S5.
 
 ### S3 -- the dynamic operator layer, interpreter (medium)
 

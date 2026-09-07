@@ -1,0 +1,4 @@
+;; Deliberately NO `#lang` line: this file is Turmeric, and its unannotated
+;; parameter therefore keeps the `int` default.  Loaded by input.tur to show the
+;; dialect is per-FILE, not per-program.
+(defn twice-turmeric [n] (+ n n))

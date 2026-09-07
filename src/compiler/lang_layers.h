@@ -94,6 +94,19 @@ void lang_layers_apply_readers(LangLayerSet set,
  * case, having emitted the diagnostic.  `path` is used in the message only. */
 bool lang_layers_apply_semantic(LangLayerSet set, const char *path);
 
+/* saffron-lang-plan S2: is the file this span belongs to written in Saffron?
+ *
+ * The dialect lives on the SourceFile, and every Form carries the file_id of
+ * the file it was read from, so this is a registry lookup rather than state
+ * threaded through elaboration.  That is what makes the answer PER-FILE: a
+ * Saffron program that loads a Turmeric module gets Turmeric defaults for that
+ * module's forms and Saffron defaults for its own, with no extra work -- the
+ * contract boundary of D5 falls out of asking the question this way.
+ *
+ * False for an unknown file_id, so an unregistered or synthetic span keeps
+ * today's behaviour. */
+bool lang_span_is_saffron(Span sp);
+
 /* saffron-lang-plan S1: print the `#lang` BASE axis -- the (language, reader)
  * pairs a base token can name -- for `tur lang-layers`.  The layer table has a
  * descriptor array to iterate; the base axis is a small cross-product of two

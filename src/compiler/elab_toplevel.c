@@ -1016,9 +1016,11 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
             LangLayerSet layers = 0;
             const char  *bad = NULL;
             size_t       bad_len = 0;
-            ReaderType lang_type = detect_lang_layered(src_copy, src_len,
+            LangDialect dialect = LANG_TURMERIC;
+            ReaderType lang_type = detect_lang_dialect(src_copy, src_len,
                                                        &lsrc, &llen,
-                                                       &layers, &bad, &bad_len);
+                                                       &layers, &bad, &bad_len,
+                                                       &dialect);
             if (bad) {
                 diag_emit(DIAG_ERROR, path_f->span,
                           "unknown #lang layer '%.*s' in loaded file '%s' "
@@ -1039,6 +1041,19 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
             sfile->len         = llen;
             sfile->reader_type = chosen;
             sfile->lang_layers = layers;
+            /* saffron-lang-plan S2/D5: a loaded file's OWN `#lang` line decides
+             * its language, exactly as it decides its reader.  That is the
+             * contract boundary: a Saffron program that loads a Turmeric module
+             * gets Turmeric's defaults for that module's forms and Saffron's
+             * for its own, because the dialect is per-SourceFile and every Form
+             * carries the file it came from.
+             *
+             * This is also the path `tur --interpret <file>` takes for the USER
+             * file -- the file-eval entry splices a `(load ...)` rather than
+             * folding the source into the eval blob, so without this the
+             * interpreter saw Turmeric defaults for a `#lang saffron` program
+             * while the compiler saw Saffron ones. */
+            sfile->lang        = dialect;
         }
         diag_register_file(sfile);
         /* Transitive-RM (T2): share the entry file's macro registry. */

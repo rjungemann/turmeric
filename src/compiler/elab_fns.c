@@ -1,5 +1,6 @@
 /* elab_fns.c -- function definition forms: defn, fn, extern-c, def. */
 #include "elab_internal.h"
+#include "lang_layers.h"   /* saffron-lang-plan S2: lang_span_is_saffron */
 #include "refine_discharge.h"   /* RT3: decide a refinement obligation in place */
 #include "refine_solver.h"      /* RT1: refine_model_search, for the W0377 witness */
 #include "globals.h"            /* repr-trace: g_emit_abi_trace; G1: g_dump_write_frames */
@@ -5464,6 +5465,35 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
     }
 }
 
+/* saffron-lang-plan S2/D3: the declared type of an UNANNOTATED positional
+ * parameter.
+ *
+ * Turmeric defaults it to `int` -- a static language has to pick something, and
+ * `int` is the carrier.  Saffron defaults it to `any`, which is the whole of
+ * what "dynamically typed" means at the signature level: the call site stops
+ * checking a concrete type, and the value arrives boxed with its own type
+ * available for reflection.
+ *
+ * D3 is explicit that this is the SIGNATURE only.  Local inference still runs
+ * inside the body, so `(let [x 7.1] (* x 2.0))` stays a double multiply in a
+ * Saffron file; the ladder from there (un-boxing within a body, then
+ * specialising a defn only ever called at one type) is future work this does
+ * not foreclose.
+ *
+ * Deliberately NOT applied to three neighbouring defaults that also read
+ * TY_INT:
+ *   - a `& rest` parameter, in `defn` and `fn` alike.  That int is a cons-list
+ *     HANDLE, not a value type, and the rest element type has its own
+ *     declaration rules (AR6).
+ *   - an `extern-c` parameter, which declares a C signature.  `any` there would
+ *     describe an ABI that does not exist.
+ *
+ * Keyed on the span's file, so a Saffron program that loads a Turmeric module
+ * gets each file's own default -- see lang_span_is_saffron. */
+static TypeKind saffron_default_param_kind(Span sp) {
+    return lang_span_is_saffron(sp) ? TY_ANY : TY_INT;
+}
+
 Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase R5: Check for #[no-unwind] attribute before name.
      * #[used]: retain with external C linkage (see Binding.retain_c_linkage).
@@ -6722,9 +6752,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
                       "options value or a '& rest :type' variadic (see the Function "
                       "Arity Style Guide)", HIGH_ARITY_SOFT_LIMIT);
         }
-        /* For phase 2, default to int */
-        param_kinds[n_params] = TY_INT;
-        Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
+        /* For phase 2, default to int -- or `any` in a Saffron file (S2/D3). */
+        TypeKind dflt_k = saffron_default_param_kind(p->span);
+        param_kinds[n_params] = dflt_k;
+        Binding *b = binding_new(e, p->as.sym, type_from_kind(dflt_k),
+                                 false, false, p->span);
         b->is_param = true;
         /* LT0: If the previous ^linear annotation applied to this parameter, mark it linear */
         if (next_param_linear) {
@@ -9599,9 +9631,12 @@ Expr *elab_fn(Elab *e, const Form *call) {
                       "options value or a '& rest :type' variadic (see the Function "
                       "Arity Style Guide)", HIGH_ARITY_SOFT_LIMIT);
         }
-        /* Untyped fn params preserve the existing int default. */
-        param_kinds[n_params] = TY_INT;
-        Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
+        /* Untyped fn params preserve the existing int default -- or take `any`
+         * in a Saffron file, the same rule `defn` uses (S2/D3). */
+        TypeKind fn_dflt_k = saffron_default_param_kind(p->span);
+        param_kinds[n_params] = fn_dflt_k;
+        Binding *b = binding_new(e, p->as.sym, type_from_kind(fn_dflt_k),
+                                 false, false, p->span);
         b->is_param = true;
         /* Bidirectional inference (constrained-generic-as-value-bakes-
          * representative.md): when this lambda is elaborated against an expected

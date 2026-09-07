@@ -239,6 +239,13 @@ void lang_dialects_print_json(void) {
     printf("\n  ]");
 }
 
+/* saffron-lang-plan S2: see lang_layers.h for why this is a registry lookup
+ * rather than threaded state. */
+bool lang_span_is_saffron(Span sp) {
+    const SourceFile *f = diag_source_file(sp.file_id);
+    return f != NULL && f->lang == LANG_SAFFRON;
+}
+
 bool lang_dialect_apply(LangDialect d, const char *path) {
     if (d == LANG_TURMERIC) return true;           /* the default: no gate */
     const char *experiment = "saffron";            /* the only dialect so far */

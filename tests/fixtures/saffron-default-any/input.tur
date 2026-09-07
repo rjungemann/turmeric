@@ -1,0 +1,57 @@
+#lang saffron
+;; saffron-lang-plan S2: an unannotated parameter defaults to `any` in a Saffron
+;; file, where Turmeric defaults it to `int`.  That is the whole of what
+;; "dynamically typed" means at the signature level -- the call site stops
+;; checking a concrete type, and the value arrives carrying its own.
+;;
+;; The stage's exit criterion is the `id` calls below: one function, called at
+;; three unrelated argument types, from one program, with the same answer
+;; compiled and interpreted.
+;;
+;; D3 is explicit that this is the SIGNATURE only.  Local inference still runs
+;; inside a body, so a Saffron file does not become uniformly boxed -- see the
+;; `local` case below, where a concrete literal stays concrete.
+;;
+;; D2: annotations stay legal, and still win.  `annotated` below is an ordinary
+;; static int function living in a Saffron file.
+
+;; Repo-relative, like the `(load "stdlib/...")` in other fixtures: the load
+;; path resolves against the CWD, and the harness runs from the repo root.
+(load "tests/fixtures/saffron-default-any/turmeric-side.tur")
+
+(defn id [x] x)
+
+;; Two hops, to show the `any` survives being passed on rather than only
+;; surviving one call.
+(defn thru [y] (id y))
+
+;; An annotated parameter is unaffected by the default (D2).
+(defn annotated [n : int] : int (+ n 1))
+
+;; Local inference is untouched (D3): the multiply stays a double multiply.
+(defn local [] : float (let [x 7.1] (* x 2.0)))
+
+(defn main [] : int
+  ;; The exit criterion: one function, three argument types.
+  (println (type-of (id 7)))
+  (println (type-of (id "hi")))
+  ;; 7.1 rather than 7.0 -- an integral literal could not tell a correct float
+  ;; box from one that truncated on the way in or out.
+  (println (type-of (id 7.1)))
+
+  ;; Passed on, and bound to a local, still dynamic.
+  (println (type-of (thru "hi")))
+  (let [v (id 7)]
+    (println (type-of v)))
+
+  ;; Annotated: still static.
+  (println (annotated 41))
+  ;; Inferred local: still a float.
+  (println (local))
+
+  ;; The D5 contract boundary.  `turmeric-side.tur` carries no `#lang` line, so
+  ;; its unannotated parameter kept the `int` default and this is an ordinary
+  ;; static call -- the dialect is per-FILE, decided by each file's own
+  ;; directive, because every Form carries the file it was read from.
+  (println (twice-turmeric 21))
+  0)
