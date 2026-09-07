@@ -5933,6 +5933,32 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
         case EX_CAST:
             emit_abi_scan_expr(ctx, e->as.cast_.expr, items, n_items);
             break;
+        /* generic-fn-in-any-return-position-emits-uncompilable-c: the `any`
+         * family are single-child wrappers, and this walk is what seeds the
+         * monomorphization worklist -- so a call underneath one was never
+         * scanned and its specialization never minted.  Elaboration was already
+         * correct: the call node carries `(Option float)` and its `A := float`
+         * abi_binding either way, and only this walk diverged, which is why
+         * `(defn f [] : (Option float) (mk 7.1))` emitted
+         * `mk__spec__tur_adt_Option__float_double` while `: any` emitted a bare
+         * `mk` that nothing declared.
+         *
+         * EX_UNION_INJECT is the widen and covers every position a value is
+         * coerced to `any` (return, call argument, branch join).  The other
+         * three READ a box, and a generic call can sit under any of them the
+         * same way. */
+        case EX_UNION_INJECT:
+            emit_abi_scan_expr(ctx, e->as.union_inject_.value, items, n_items);
+            break;
+        case EX_ANY_CAST:
+            emit_abi_scan_expr(ctx, e->as.any_cast_.value, items, n_items);
+            break;
+        case EX_ANY_IS:
+            emit_abi_scan_expr(ctx, e->as.any_is_.value, items, n_items);
+            break;
+        case EX_ANY_TYPE_OF:
+            emit_abi_scan_expr(ctx, e->as.any_type_of_.value, items, n_items);
+            break;
         case EX_EXISTS_PACK:
             /* Calls inside the packed value still need worklist seeding so
              * any polymorphic helper used to construct the existential is
