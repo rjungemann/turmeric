@@ -166,7 +166,7 @@ Every row below was reproduced against `v0.44.2`. Transcript in the appendix.
 | G5 | `(f x)` where `f : any` | rejected | `'f' is not a function or continuation` |
 | G6 | `(match x)` where `x : any` | rejected at elaboration, though `emit_expr.c:14356` already has a `TY_ANY` scrutinee arm | `match: scrutinee must be an ADT type, got any` |
 | G7 | heterogeneous containers | element type unifies; `(vec-of 1 "two")` is rejected | TUR-E0001 |
-| G8 | `type-of` on a boxed closure | compiled says `"unknown"`; the interpreter says `"fn"` | -- (silent divergence) |
+| ~~G8~~ | `type-of` on a boxed closure | **FIXED 2026-09-07** -- both back ends answer `"fn"`. But the tag is the bare `TY_FN` kind, so it identifies functions as a CLASS and not by signature; see P9 | -- |
 | G9 | `=`/`<`/`>` on `any` | rejected | TUR-E0006 |
 | G10 | `any` truthiness in `if` | untested; `if` wants `bool` | -- |
 | G11 | field access on `any` | no dynamic path | -- |
@@ -682,7 +682,8 @@ cannot be built until they are.**
 | ~~P2c~~ | ~~any-narrowing-broken-for-parametric-receivers~~ | **DONE 2026-09-07.** Was: `is?` on an `any`-held `Option` silently false, `cast` panicking `holds Option, not Option`. `is?`/`cast` now share one target resolver, take an applied `(Option float)`, and reject a bare constructor with a diagnostic. The type-case idiom reaches the HKT stack on both paths. [Archived](../archive/any-narrowing-broken-for-parametric-receivers.md) |
 | ~~P2d~~ | ~~generic-fn-in-any-return-position-emits-uncompilable-c~~ | **DONE 2026-09-07.** Not a missing monomorph request -- elaboration was already correct, and `emit_abi_scan_expr` simply had no case for `EX_UNION_INJECT`, so a call under a widen was never scanned. Four cases added. Wider than filed: argument position and user generics too. [Archived](../archive/generic-fn-in-any-return-position-emits-uncompilable-c.md) |
 | ~~P3~~ | ~~inferred-return-defaults-inconsistently~~ | **DONE 2026-09-07.** Was an ordering bug, not a missing inference: the conflict check ran before the block that adopts the body's type, so it compared against the un-inferred `TY_NIL`. Unannotated returns are now inferred for every body type, float included. [Archived](../archive/inferred-return-defaults-inconsistently.md) |
-| P4 | [type-of-on-boxed-closure-diverges](../reported/type-of-on-boxed-closure-diverges.md) | S4 |
+| ~~P4~~ | ~~type-of-on-boxed-closure-diverges~~ | **DONE 2026-09-07.** A `TY_FN` tag now answers "fn" on both back ends. [Archived](../archive/type-of-on-boxed-closure-diverges.md) |
+| P9 | [any-fn-tag-does-not-discriminate-signatures](../reported/any-fn-tag-does-not-discriminate-signatures.md) | **high; D4/S4.** Found fixing P4. An `any`-boxed function matches every function type, so `cast` to a wrong signature miscalls silently. Its fix direction 2 (intern the fn type so the id is real) is also the prerequisite for CALLING an `any`-held function, which is D4's dynamic-call row |
 | P5 | [any-type-guide-examples-do-not-compile](../reported/any-type-guide-examples-do-not-compile.md) | docs only |
 | ~~P6~~ | ~~any-coercion-not-driven-by-expected-type~~ | **DONE 2026-09-07.** An `: any` annotation now widens at all four positions that take one -- `let`, `def`, the `if` join, and letrec/named-`let` accumulators -- each of which had a distinct cause. These are the positions S2/S6 lean on hardest. [Archived](../archive/any-coercion-not-driven-by-expected-type.md) |
 | P7 | [interp-native-ctor-loses-adt-name](../reported/interp-native-ctor-loses-adt-name.md) | S3/S4 -- `type-of` diverges between the back ends for natively-constructed stdlib values, and the interpreter is the path Saffron ships on first |

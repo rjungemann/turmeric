@@ -1,0 +1,32 @@
+;; type-of-on-boxed-closure-diverges: `type-of` on an `any` holding a function
+;; answers "fn" on BOTH back ends.
+;;
+;; A function value widened to `any` carries the bare TY_FN TypeKind as its tag
+;; -- emit_any_type_id interns a per-monomorph name only for a NAMED type (an
+;; ADT with a def, or a TY_APP whose head resolves to one), and a fn is
+;; neither.  So the tag reached neither the preamble's name switch nor the
+;; runtime registry and fell through to "unknown", while the interpreter
+;; answered "fn" from the value's own tag.
+;;
+;; The divergence survived because nothing compared the two back ends on a
+;; function payload.  This fixture is run by both suites, which is the point of
+;; it -- the assertion is parity, not the string.
+;;
+;; Both a lambda and a named function are covered: they reach the widen by
+;; different routes but share the tag.  The primitive and struct rows are
+;; controls -- they always agreed, and must keep agreeing.
+(defstruct P [a : int])
+
+(defn inc [x : int] : int (+ x 1))
+
+(defn boxed-lambda [] : any (fn [x : int] : int (+ x 1)))
+(defn boxed-named  [] : any inc)
+(defn boxed-float  [] : any 7.1)
+(defn boxed-struct [] : any (make-struct P 1))
+
+(defn main [] : int
+  (println (type-of (boxed-lambda)))
+  (println (type-of (boxed-named)))
+  (println (type-of (boxed-float)))
+  (println (type-of (boxed-struct)))
+  0)

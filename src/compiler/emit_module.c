@@ -9870,6 +9870,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_printf(out, "        case %d: return \"ptr\";\n",   (int)TY_PTR_VOID);
     buf_printf(out, "        case %d: return \"struct\";\n", (int)TY_STRUCT);
     buf_printf(out, "        case %d: return \"adt\";\n",    (int)TY_ADT);
+    /* type-of-on-boxed-closure-diverges: a function value widened to `any`
+     * carries the bare TY_FN TypeKind as its tag -- emit_any_type_id interns a
+     * name only for a NAMED type (an ADT with a def, or a TY_APP whose head
+     * resolves to one), and a fn is neither.  So the tag reached neither this
+     * switch nor the registry and fell through to "unknown", while the
+     * interpreter answered "fn" from the value's own tag (eval.c's
+     * EX_ANY_TYPE_OF, `case TURI_CLOSURE`).  A silent compiled/interp
+     * divergence in the `any` reflection surface, which survived because
+     * nothing compared the two back ends on this shape. */
+    buf_printf(out, "        case %d: return \"fn\";\n",     (int)TY_FN);
     buf_puts(out, "        default: return \"unknown\";\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n");
