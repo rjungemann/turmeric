@@ -1101,17 +1101,9 @@ for d in "${FIXTURE_DIRS[@]}"; do
     fixture_ordinal=$((fixture_ordinal + 1))
 done
 
-HAPPY_XARGS_RC=0
-if [ ${#HAPPY_DIRS[@]} -gt 0 ]; then
-    HAPPY_LIST_FILE="$RESULTS_DIR/happy_dirs.list"
-    printf '%s\n' "${HAPPY_DIRS[@]}" > "$HAPPY_LIST_FILE"
-    # Capture xargs' exit status.  Workers always exit 0 (test failures are
-    # recorded in .result files, not via exit code), so a non-zero rc here means
-    # xargs or a worker was killed by a signal -- i.e. the run was interrupted.
-    xargs -P "$JOBS" -I{} bash -c 'run_happy_worker "$@"' _ {} < "$HAPPY_LIST_FILE" 2>/dev/null || HAPPY_XARGS_RC=$?
-fi
-
-# Error fixtures
+# Error fixtures: discovered HERE, before the happy run dispatches, so that
+# both selected sets exist before any fixture executes.  TUR_TEST_LIST below
+# depends on that, and nothing in this loop depends on the happy run.
 ERROR_DIRS=()
 error_ordinal=0
 for d in tests/fixtures/errors/*/; do
@@ -1123,6 +1115,34 @@ for d in tests/fixtures/errors/*/; do
     fi
     error_ordinal=$((error_ordinal + 1))
 done
+
+# TUR_TEST_LIST=1: print the fixtures this invocation WOULD run, one per line,
+# and exit without running any.  Exists so the shard split can be checked as a
+# SET rather than inferred from a count -- tests/check-shard-partition.sh
+# compares the union of every shard against the unsharded selection.
+#
+# A count cannot establish that: a run that drops two fixtures and
+# double-counts three totals higher than the truth, so "the union is not
+# smaller" proves nothing about what is missing.  Names can be compared
+# exactly, so they are.
+if [ "${TUR_TEST_LIST:-0}" = "1" ]; then
+    # Tagged, because this shares stdout with the ratchet/parity status lines
+    # the harness prints before it gets here -- an untagged list swept four of
+    # them up as if they were fixtures.
+    for d in ${HAPPY_DIRS+"${HAPPY_DIRS[@]}"}; do echo "FIXTURE ${d#tests/fixtures/}"; done
+    for d in ${ERROR_DIRS+"${ERROR_DIRS[@]}"};  do echo "FIXTURE ${d#tests/fixtures/}"; done
+    exit 0
+fi
+
+HAPPY_XARGS_RC=0
+if [ ${#HAPPY_DIRS[@]} -gt 0 ]; then
+    HAPPY_LIST_FILE="$RESULTS_DIR/happy_dirs.list"
+    printf '%s\n' "${HAPPY_DIRS[@]}" > "$HAPPY_LIST_FILE"
+    # Capture xargs' exit status.  Workers always exit 0 (test failures are
+    # recorded in .result files, not via exit code), so a non-zero rc here means
+    # xargs or a worker was killed by a signal -- i.e. the run was interrupted.
+    xargs -P "$JOBS" -I{} bash -c 'run_happy_worker "$@"' _ {} < "$HAPPY_LIST_FILE" 2>/dev/null || HAPPY_XARGS_RC=$?
+fi
 
 ERROR_XARGS_RC=0
 if [ ${#ERROR_DIRS[@]} -gt 0 ]; then

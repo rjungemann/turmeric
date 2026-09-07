@@ -961,6 +961,15 @@ add_test(
   COMMAND bash tests/run-install.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# The shards must be an exact partition of the suite.  CI splits the Windows
+# leg three ways, and a split that drops fixtures would go green with less
+# coverage -- a count cannot catch that (drop two, duplicate three, and the
+# total is HIGHER), so this compares names.  Runs no fixtures; seconds.
+add_test(
+  NAME tur_shard_partition
+  COMMAND bash tests/check-shard-partition.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # `tur fetch` + the lockfile integrity check, against a local file:// repo.
 add_test(
   NAME tur_spice_fetch_tests
