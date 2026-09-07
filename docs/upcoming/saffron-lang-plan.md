@@ -1115,7 +1115,43 @@ compiled ones named it "cstr", because the helper behind them answers NULL for
 anything that is not a struct; a display-name helper beside it makes the two
 agree word for word, which is what `saffron-seam-panics` asserts.
 
-### S6 -- containers and the Saffron prelude (medium)
+### S6 -- containers and the Saffron prelude (medium) -- IN PROGRESS
+
+**Landed 2026-09-07: a `(Vec any)` element round-trips with its own tag, on the
+compiled path.** That was the stage's blocking question -- until it, a
+`(Vec any)` was write-only: `(vec-get v 0)` was typed `int` and `type-of` on it
+was a compile error. Two changes at the two ends of the same value, and neither
+was where the residue report guessed:
+
+- `call_result_type` collapses a bare-tyvar result to the int64 carrier and
+  records a reinterpret. Right for a scalar, impossible for an `any`: it is the
+  TWO-word `tur_tagged_t`, so there is no single carrier word to bitcast back
+  from, and the collapse kept the payload and dropped the tag. `any` and `union`
+  join the composites that comment already exempts, for the reason it already
+  gives -- "a reinterpret cannot carry a composite anyway".
+- The reader end. A `(Vec any)` element is stored BOXED, so a generic `: A`
+  accessor hands back the slot word; `TUR_GETTAG` on an `int64_t` is a hard cc
+  error. The `any` readers bridge a carrier-form operand back to the aggregate,
+  keyed on the value's recorded emitted spelling so every other shape is
+  untouched.
+
+Two probes were wrong before that: the element-read recovery in `emit_expr.c`
+looked like the site, and instrumenting it showed the WORKING `(Vec Pt)` case
+takes the identical path. Those edits were reverted rather than shipped as dead
+code with a confident comment.
+
+**The interpreter now diverges, and worse than it did.** Its Vec buffer is raw
+int64 cells with ONE tag per vector -- `native_vec_push` calls it "the
+homogeneous element tag" -- so every element of a heterogeneous vector reports
+the LAST one's type. Filed as
+[vec-any-interp-keeps-one-element-tag](../reported/vec-any-interp-keeps-one-element-tag.md);
+a per-element tag is the next piece, and the same question should be asked of
+Map and Set BEFORE the `#map{...}` / `#set{...}` work rather than after.
+
+Still to do: `[1 "two" 7.1]` defaulting to `(vec any)` in a Saffron file, the
+map/set/cons-list twins, and the prelude.
+
+### S6 -- containers and the Saffron prelude (medium) -- remaining scope
 
 G7. `(vec any)` becomes the default container element in Saffron, so
 `[1 "two" 7.1]` is a vector of three boxes. Same for `#map{...}`, `#set{...}`,

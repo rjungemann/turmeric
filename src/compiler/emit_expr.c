@@ -6275,6 +6275,29 @@ static char *emit_dyn_field(EmitCtx *ctx, Buf *body, const Expr *e) {
     return rv;
 }
 
+/* saffron-lang-plan S6: an `any` value that arrives as the int64 CARRIER.
+ *
+ * A `(Vec any)` element is stored boxed -- one slot word pointing at the
+ * two-word `tur_tagged_t` (repr_of says REPR_BOXED_AGG at CONTAINER_ELEM) --
+ * so a generic `: A` accessor hands its result back as that carrier word.
+ * Every `any` reader below then wants a real `tur_tagged_t`, and
+ * `TUR_GETTAG(<int64_t>)` is a hard cc error rather than a wrong answer.
+ *
+ * Keyed on the value's RECORDED emitted spelling, the same way
+ * emit_carrier_bridge_escaping decides whether its source needs normalising:
+ * a value that already IS the aggregate is untouched, so a widen, a parameter
+ * and a let-bound `any` all keep the text they had. */
+static char *emit_any_from_carrier(EmitCtx *ctx, Buf *body, char *v,
+                                   const Expr *inner) {
+    if (!v || !inner) return v;
+    Type it = emit_resolve_type(ctx, inner->type);
+    if (it.kind != TY_ANY && it.kind != TY_UNION) return v;
+    if (!emit_str_is_bare_ident(v)) return v;
+    const char *cty = emit_localvar_lookup_ctype(v);
+    if (!cty || strcmp(cty, "int64_t") != 0) return v;
+    return emit_carrier_bridge(ctx, body, v, CK_CARRIER, CK_CONCRETE, it);
+}
+
 static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_DYN_OP:    return emit_dyn_op(ctx, body, e);
@@ -6617,6 +6640,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_ANY_TYPE_OF: {
             /* IT4: (type-of x) — return cstr type name via __tur_any_type_name(tag) */
             char *inner = emit_value(ctx, body, e->as.any_type_of_.value);
+            inner = emit_any_from_carrier(ctx, body, inner,
+                                          e->as.any_type_of_.value);
             Buf out; buf_init(&out);
             buf_printf(&out, "__tur_any_type_name(TUR_GETTAG(%s))", inner);
             buf_putc(&out, '\0');
@@ -6628,6 +6653,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_ANY_IS: {
             /* TY3: (is? x T) — compare the box tag to the tested TypeKind. */
             char *inner = emit_value(ctx, body, e->as.any_is_.value);
+            inner = emit_any_from_carrier(ctx, body, inner, e->as.any_is_.value);
             Buf out; buf_init(&out);
             /* type-of-cast-kind-granularity: the same per-monomorph id the
              * inject site allocated, when the target was a named type. */
@@ -6647,6 +6673,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the target TypeKind; tur_panic on mismatch, otherwise unbox.
              * TY2.2: a struct target unboxes by dereferencing the heap pointer. */
             char *inner = emit_value(ctx, body, e->as.any_cast_.value);
+            inner = emit_any_from_carrier(ctx, body, inner, e->as.any_cast_.value);
             /* type-of-cast-kind-granularity: `e->type` IS the named target
              * type, so the cast checks per-monomorph identity -- casting an
              * `any` holding a Point to OtherStruct now panics instead of

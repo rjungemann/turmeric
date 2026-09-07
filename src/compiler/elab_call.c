@@ -7210,11 +7210,21 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * payload the call site needs to APPLY the returned function, and the
          * application fails with "expression in call head has type `int`, which
          * is not callable".  Keep the full TY_FN for the same reason. */
+        /* saffron-lang-plan S6: `any` and `union` join the composites, and for
+         * the reason the comment above already gives for them -- "a reinterpret
+         * cannot carry a composite anyway".  Both are the TWO-WORD
+         * `tur_tagged_t`, so there is no single carrier word to bitcast back
+         * from: collapsing to int keeps the payload and drops the tag, which is
+         * how `(vec-get v 0)` on a `(Vec any)` came back typed `int` and
+         * `type-of` on it was a compile error naming that.  A boxed element
+         * read derefs, exactly as it does for the by-value aggregates above. */
         bool result_is_concrete_composite =
             (result_type.kind == TY_APP) ||
             (result_type.kind == TY_ADT && result_type.as.adt_.def) ||
             (result_type.kind == TY_EXISTS) ||
             (result_type.kind == TY_FORALL) ||
+            (result_type.kind == TY_ANY) ||
+            (result_type.kind == TY_UNION) ||
             (result_type.kind == TY_FN);
         if (!result_is_concrete_composite) {
             call_result_type = TYPE_INT;

@@ -17,7 +17,24 @@ which is fixed: `(Vec any)` no longer aborts the compiler. These are the two
 things that fix did not reach, both found by measuring what the newly-buildable
 type actually does.
 
-## Half 1 -- `vec-get` on a `(Vec any)` returns `int`
+## Half 1 -- `vec-get` on a `(Vec any)` returns `int` -- FIXED 2026-09-07 (S6)
+
+**Fixed on the compiled path.** Two changes at the two ends of the same value:
+`call_result_type`'s collapse of a bare-tyvar result to the int64 carrier now
+exempts `any`/`union` (they are the two-word `tur_tagged_t`, so there is no
+single word to reinterpret back from -- the reason that comment already gives
+for the composites beside them); and the `any` readers bridge a carrier-form
+operand back to the aggregate, since a boxed element arrives as the slot word.
+`tests/fixtures/vec-any-element-roundtrip` pins int/cstr/float/bool each
+reporting its own type.
+
+The INTERPRETER now diverges instead, and worse -- it answers `bool` for all
+four. Filed as
+[vec-any-interp-keeps-one-element-tag](vec-any-interp-keeps-one-element-tag.md).
+
+The original account follows.
+
+### Original
 
 ```turmeric
 (defn dyn [x : any] : any x)
