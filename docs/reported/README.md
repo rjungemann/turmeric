@@ -1618,6 +1618,15 @@ dynamic-dispatch layer over `any`. Each has a one-file repro against `v0.44.2`
 | [type-of-on-boxed-closure-diverges](type-of-on-boxed-closure-diverges.md) | low | A `TY_FN` payload widened to `any` gets no row in the compiled name table, so `type-of` answers `"unknown"`; the interpreter answers `"fn"` (`eval.c:10810`). A compiled/interp divergence that survived because nothing compares the two on this shape |
 | [any-type-guide-examples-do-not-compile](any-type-guide-examples-do-not-compile.md) | low (docs) | The union/intersection guide opens both its `any` section and its Gradual Typing section with `(defn debug-print [x : any] : unit (println x))`. `: unit` is not a type (the annotations guide says so), and `println` has no `any` overload -- so the first example a reader meets for `any` fails twice |
 
+Two more were added 2026-09-07 by follow-up research into the same plan's S0
+and D8. Both are **existing machinery that is wrong**, not gaps, and the first
+is the most serious thing this survey turned up:
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [any-type-ids-are-per-tu](any-type-ids-are-per-tu.md) | high (low reach today) | `emit_any_type_id` interns into the per-TU `EmitCtx` and returns `TUR_ANY_ID_BASE + first-seen index`, so a type's box tag means something different in each TU. On `tur build --shared`: `type-of` returns another type's name, `is?` is a false negative, a **valid `cast` panics** naming the wrong type in both positions, and `__tur_any_drop` reads the wrong `boxed` flag so one TU `free()`s a handle another owns. `tur build <dir>` folds the project into ONE TU and hides all four -- which is why an early probe of this said "correct" |
+| [forall-dict-byvalue-receiver-emits-uncompilable-c](forall-dict-byvalue-receiver-emits-uncompilable-c.md) | medium | The mode-B dict-clone body erases its argument to `int64_t` but casts the method slot to the instance's concrete signature. For carrier-shaped receivers (`int`, `bool`) the function-pointer pun works; a by-value struct receiver is an `incompatible type for argument 1` **cc error against generated code**. `forall-dict-pass` guards its other unsupported shape with TUR-E0311 and a negative fixture; this one has no guard |
+
 The third row generalises past the docs: the builtin operator table is keyed on
 concrete argument kinds and has no `TY_ANY` row, so `+`, `-`, `=`, `<` and
 `println` all reject an `any` argument with TUR-E0006. That is not filed as a

@@ -166,6 +166,13 @@ G2 and G8 are defects independent of Saffron and are filed separately:
 `docs/reported/type-of-on-boxed-closure-diverges.md`. G4's documentation half
 is `docs/reported/any-type-guide-examples-do-not-compile.md`.
 
+Two further defects were found by the follow-up research into S0 and D8, and
+both are prerequisites rather than side notes -- `any-type-ids-are-per-tu.md`
+(the box tag means different things in different translation units) and
+`forall-dict-byvalue-receiver-emits-uncompilable-c.md`. Neither is in the gap
+table above because neither is a *missing* capability; they are existing
+machinery that is wrong. See S0's P1-P5 table.
+
 ---
 
 ## 4. Design decisions
@@ -361,19 +368,115 @@ dialects link together; they just do not each get the other's guarantees.
 ### D8 -- typeclasses need a static receiver, at first
 
 **Verdict: S1-S7 require a statically known receiver type at each typeclass
-method call. Runtime instance dispatch is a separate epic, deliberately not
-scheduled.**
+method call. Runtime instance dispatch stays unscheduled -- but it is a
+smaller, better-founded piece of work than the first draft of this plan
+assumed, and the shape below is what it would be.**
 
-Dictionary resolution is by static type. Doing it dynamically means a runtime
-instance table keyed on the box id -- which is *tractable*, because
-`emit_any_type_id`'s interned name table is already exactly that registry. But
-it interacts with superclasses, default methods, HKT receivers, and
-monomorphization, and it is the single largest item that could be attached to
-this plan.
+The first draft asserted this was tractable "because `emit_any_type_id`'s name
+table is already a runtime type registry". That was a guess. It was then
+measured, and the picture is more favourable in one direction and more
+constrained in another.
 
-It is therefore not attached. Saffron ships without runtime typeclass
-dispatch, `(show x)` on an `any` is an error with a message pointing at
-`cast`, and the decision to build it is taken later on evidence.
+#### What was measured
+
+**(a) The static path monomorphizes; there is nothing to reuse.** A
+constrained `defn` produces one specialization per instantiating type:
+
+```c
+static double describe__spec__double_tur_adt_Circle(tur_adt_Circle x);
+static double describe__spec__double_tur_adt_Square(tur_adt_Square x);
+```
+
+Under Saffron the argument is `any` and pins no type, so there is nothing to
+specialize on. Runtime dispatch is not an optimisation of the static path --
+it is a different path.
+
+**(b) Per-instance dict types are not the obstacle they look like.** Each
+instance gets its own C struct with concrete-typed method pointers, and there
+is no `dict_Shape` supertype:
+
+```c
+typedef struct dict_Shape_Circle { double (*area)(tur_adt_Circle); } dict_Shape_Circle;
+typedef struct dict_Shape_Square { double (*area)(tur_adt_Square); } dict_Shape_Square;
+```
+
+But the existing dispatch site already punches straight through that, casting
+the dictionary to `void **` and indexing by slot:
+
+```c
+/* the mode-B dict-clone body, from tests/fixtures/forall-dict-show */
+static int64_t poly_hyshow_un_undict_un1444(int64_t __dict_1445, int64_t x) {
+    const char *__ps_40 =
+        (((const char * (*)(int64_t))((void **)(intptr_t)__dict_1445)[0])(x));
+```
+
+So **a dictionary is already an `int64_t` at runtime and a method is already
+reached as `((void **)dict)[slot]`.** The plumbing D8 needs largely exists and
+ships; `forall-dict-pass` graduated 2026-07-06.
+
+**(c) What is actually missing is instance *selection*.** In mode B the
+**caller** picks the singleton, from a type it knows statically:
+
+```c
+((int64_t(*)(void*, int64_t, int64_t))f.fn)(f.env,
+    (int64_t)(intptr_t)(&dict_Show_int_singleton), (int64_t)(INT64_C(7)));
+```
+
+Saffron has no such caller. The selection has to come from the value's box tag:
+`dict = registry[class][tag]`. That registry is exactly what S0's P1 fix
+builds -- so **P1 is a hard prerequisite for D8**, and conversely D8 is
+cheaper than it looks *given* P1.
+
+**(d) The carrier pun does not survive by-value receivers.** The cast above is
+honest only because `int` and `bool` both ride the int64 carrier. With a
+by-value struct receiver the same machinery emits uncompilable C:
+
+```
+error: incompatible type for argument 1 of
+  '(double (*)(tur_adt_Square))*(void **)__dict_1449'
+  note: expected 'tur_adt_Square' but argument is of type 'int64_t'
+```
+
+That is a defect in its own right -- `forall-dict-pass` guards its other
+unsupported shape with TUR-E0311, and this one has no guard -- and it is filed
+as
+[forall-dict-byvalue-receiver-emits-uncompilable-c](../reported/forall-dict-byvalue-receiver-emits-uncompilable-c.md).
+For D8 it is the load-bearing constraint: dictionary slots must hold
+**per-instance carrier wrappers**, not raw instance functions:
+
+```c
+static double __dictwrap_Shape_area_Circle(int64_t c) {
+    return __inst_Shape_area_Circle(*(tur_adt_Circle *)(intptr_t)c);
+}
+```
+
+Then every slot has one uniform carrier signature and the pun becomes honest.
+The box/no-box decision is the same `emit_type_is_byvalue_adt` predicate `any`
+widening already uses, so the two paths should share it.
+
+**(e) The interpreter splits from the compiled path here too.** `TypeClassEnv`
+(`typeclass.c:166`) is a compile-time linked list searched by `TypeKind` plus
+`AdtDef` pointer, living in the compiler arena. Under `--interpret` that env is
+*live at eval time*, and values already carry their type name
+(`turi_any_named_type`). So interpreted runtime dispatch is a lookup against
+machinery that is already in memory; compiled runtime dispatch needs the table
+emitted. **This is the same asymmetry as Section 2.3**, which is a good sign
+the staging model generalises rather than being special-pleading for S3/S4.
+
+#### The verdict, restated
+
+D8 stays unscheduled, and Saffron ships with `(show x)` on an `any` an error
+pointing at `cast`. But the reason is no longer "it is the single largest item
+that could be attached" -- it is that D8 needs P1 and P2 fixed first, and the
+open design questions are the ones the measurement did **not** answer:
+superclass chains, default methods, HKT receivers, and what happens when two
+instances match a tag. Those are worth deciding on evidence from real Saffron
+programs, not up front.
+
+Rough shape if it is ever built: one class-level dict type with carrier-shaped
+slots; per-instance wrappers from (d); registration into P1's table at
+static-init; a `registry[class][tag]` lookup at the call site; a clean
+"no instance for T" panic. Four of those five pieces already have a home.
 
 ### D9 -- the gate
 
@@ -408,33 +511,56 @@ and an expiring row never blocks a release cut.
 Each stage is independently landable and leaves the tree green-ish. Sizes are
 rough multiples of a day of focused work, not commitments.
 
-### S0 -- prerequisites (small)
+### S0 -- prerequisites (was "small"; the id fix is medium)
 
-Fix the three `any` defects that are wrong regardless of Saffron, so the
-dialect is not built on them:
+Five filed defects, all wrong regardless of Saffron. The first is the one that
+matters: **it was an open question in the first draft of this plan and has
+since been measured. The answer is that the ids are NOT stable, and Saffron
+cannot be built until they are.**
 
-- G2: unannotated return defaults inconsistently, and a float body reports
-  "declares return type 'nil'" -- a message that names a declaration the
-  programmer did not write.
-- G8: `type-of` on a boxed closure -- compiled `"unknown"` vs interpreted
-  `"fn"`.
-- G4-docs: the union/intersection guide's headline `any` examples do not
-  compile (`: unit` is not a type; `println` has no `any` overload).
+| # | Report | Blocks |
+|---|---|---|
+| P1 | [any-type-ids-are-per-tu](../reported/any-type-ids-are-per-tu.md) | **S5, and D8 entirely** |
+| P2 | [forall-dict-byvalue-receiver-emits-uncompilable-c](../reported/forall-dict-byvalue-receiver-emits-uncompilable-c.md) | D8 |
+| P3 | [inferred-return-defaults-inconsistently](../reported/inferred-return-defaults-inconsistently.md) | S2 |
+| P4 | [type-of-on-boxed-closure-diverges](../reported/type-of-on-boxed-closure-diverges.md) | S4 |
+| P5 | [any-type-guide-examples-do-not-compile](../reported/any-type-guide-examples-do-not-compile.md) | docs only |
 
-**Open question to settle here, with a recipe:** `emit_any_type_id` interns
-per-`EmitCtx`, and `EmitCtx` is per-TU (`emit_module.c:13604`, `:16145`), so
-`TUR_ANY_ID_BASE + index` is assigned in first-seen order *within one C file*.
-In Saffron every value is `any` and crosses module boundaries constantly, so
-these ids must be stable across TUs. A two-module probe with deliberately
-different intern orders answered correctly (appendix A.3), which means either
-the ids happen to agree or something normalises them -- and "happens to agree"
-is not a foundation. **Recipe:** emit a project build with
-`--build-dir <keep>`, grep each `obj/*.c` for its `__tur_any_name_ext` switch,
-and compare the id assigned to a shared type. If they diverge, S0 grows a
-deterministic global id (hash of `type_name`, or a link-time table) before
-anything else lands.
+#### P1 -- the id question, answered
 
-**Exit:** three reports archived, the id question answered in writing.
+`emit_any_type_id` interns into the per-TU `EmitCtx` and returns
+`TUR_ANY_ID_BASE + first-seen index`, so **the same type gets a different id in
+each translation unit.** Measured on `tur build --shared`, where `amod.c` tags
+`Beta` as 1000 while `main.c` reads 1000 as `"Gamma"` and tests `is? v Beta`
+as `== 1001`. Four wrong behaviours follow, all reproduced:
+
+1. `type-of` returns another type's name.
+2. `is?` is a false negative on the correct type.
+3. A valid `cast` panics -- `cast: any holds ByVal, not HeapThing` on a value
+   that genuinely is a `HeapThing`, with both names wrong.
+4. `__tur_any_drop` consults the wrong `boxed` flag, so a TU calls `free()` on
+   a handle another TU owns (or leaks, in the mirror case).
+
+The first draft's probe passed only because **`tur build <dir>` folds the whole
+project into one TU** -- confirmed by wrapping `CC`: one `.c`, both modules
+inside, one consistent table. `--shared` and `emit-c --output-dir` (the CMake
+path) both split, and both diverge.
+
+**This reclassifies S0 from bookkeeping to a real prerequisite**, because
+Saffron makes `any` the type of nearly every cross-module value. The fix is a
+deterministic id (a hash of `type_name`, clear of the `TypeKind` range) plus a
+static-init *registry* rather than a per-TU switch -- each TU registers its
+`(id, name, boxed)` rows into a global table, and lookups read the union.
+Carrying `boxed` in the same row fixes failure mode 4 by construction. Full
+reasoning and the rejected alternatives are in the report.
+
+Note the registry is not throwaway scaffolding: it is the runtime type
+registry D8 would key instance lookup off, so P1's fix is the first half of
+D8's foundation whether or not D8 is ever scheduled.
+
+**Exit:** P1 fixed with a fixture on the **multi-TU** path specifically (every
+existing `any` fixture is single-TU, which is why four wrong behaviours went
+unnoticed); P2-P5 fixed or archived.
 
 ### S1 -- the `#lang` axis, no semantics (small)
 
@@ -593,8 +719,14 @@ beyond "the typed one needs annotations".
 
 ## 8. Open questions
 
-1. **Cross-TU `any` id stability** -- S0's recipe answers it. Everything
-   downstream assumes the answer is yes.
+1. ~~**Cross-TU `any` id stability.**~~ **ANSWERED, and the answer was no.**
+   The ids diverge per translation unit and four behaviours are wrong on
+   `tur build --shared` today. Moved from an assumption to a hard S0
+   prerequisite (P1); see
+   [any-type-ids-are-per-tu](../reported/any-type-ids-are-per-tu.md). Kept
+   here rather than deleted because the first draft's probe said "correct" and
+   the reason it did -- `tur build <dir>` is single-TU -- is the kind of thing
+   that would otherwise get re-derived from scratch.
 2. **`.saf` extension** -- worth it, but not before the semantics settle;
    sequencing it early means every tool learns a file type whose meaning is
    still moving.
@@ -700,21 +832,88 @@ $ tur run p10.tur
 14.2
 ```
 
-### A.3 -- cross-TU `any` ids (S0's open question)
+### A.3 -- cross-TU `any` ids (ANSWERED: they diverge)
 
 Two-module project, `amod` widening a `Beta` to `any`, `main-mod` interning
-`Gamma` *first* so its local id ordering differs from `amod`'s:
+`Gamma` *first* so its local id ordering differs from `amod`'s. The same
+program, two build modes:
 
 ```
-$ tur build . && ./build/bin/anyids
+$ tur build . && ./build/bin/anyids            # single-TU
 Gamma
 Beta
-1
+1                                              # correct
+
+$ tur build --shared .                         # multi-TU (link obj/*.c, run)
+Gamma
+Gamma                                          # WRONG: a Beta reports as Gamma
+0                                              # WRONG: (is? v Beta) is false
 ```
 
-Correct. But `EmitCtx` is per-TU and ids are `TUR_ANY_ID_BASE + first-seen
-index`, so this needs the S0 recipe to explain *why* it is correct before
-Saffron depends on it.
+The emitted C, side by side:
+
+```c
+/* obj/amod.c */  case 1000: return "Beta";     TUR_TAG(1000, ...)   /* Beta */
+/* obj/main.c */  case 1000: return "Gamma";
+                  case 1001: return "Beta";     TUR_GETTAG(v) == 1001  /* is? */
+```
+
+A third mode surfaces when `main` casts the value it received -- the cast is
+valid and panics anyway, naming the wrong type in both positions:
+
+```
+panic at tur_runtime.h:1817: cast: any holds ByVal, not HeapThing
+```
+
+and a fourth in `__tur_any_drop`, whose per-TU `boxed` flag makes one TU
+`free()` a handle another TU owns.
+
+**Why the first draft's probe said "correct":** `tur build <dir>` folds the
+whole project into ONE TU. Confirmed by wrapping `CC` and capturing its
+inputs -- one `.c` (7445 lines, both modules inside), one consistent table.
+`--shared` passes three, and `emit-c --output-dir` (the CMake-consumer path)
+splits the same way.
+
+Full write-up:
+[any-type-ids-are-per-tu](../reported/any-type-ids-are-per-tu.md).
+
+### A.5 -- runtime typeclass dictionaries (D8)
+
+A constrained `defn` monomorphizes -- no dictionary survives:
+
+```c
+static double describe__spec__double_tur_adt_Circle(tur_adt_Circle x);
+static double describe__spec__double_tur_adt_Square(tur_adt_Square x);
+```
+
+The mode-B rank-2 path *does* carry a dictionary at runtime, as an `int64_t`
+reached by slot index (`tests/fixtures/forall-dict-show`):
+
+```c
+static int64_t poly_hyshow_un_undict_un1444(int64_t __dict_1445, int64_t x) {
+    const char *__ps_40 =
+        (((const char * (*)(int64_t))((void **)(intptr_t)__dict_1445)[0])(x));
+```
+
+with the caller choosing the singleton from a statically known type:
+
+```c
+((int64_t(*)(void*, int64_t, int64_t))f.fn)(f.env,
+    (int64_t)(intptr_t)(&dict_Show_int_singleton), (int64_t)(INT64_C(7)));
+```
+
+The same shape with a by-value struct receiver does not compile:
+
+```
+$ tur run tc3.tur
+error: incompatible type for argument 1 of
+  '(double (*)(tur_adt_Square))*(void **)__dict_1449'
+  note: expected 'tur_adt_Square' but argument is of type 'int64_t'
+tur: cc invocation failed (status 256)
+```
+
+Filed as
+[forall-dict-byvalue-receiver-emits-uncompilable-c](../reported/forall-dict-byvalue-receiver-emits-uncompilable-c.md).
 
 ### A.4 -- `#lang` today
 
