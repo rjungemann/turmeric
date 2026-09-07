@@ -3,13 +3,34 @@
 Status: **plan only for Saffron itself** -- there is no `EXPERIMENTS[]` row, no
 `#lang` base, no dialect fixture.
 
-But S0's prerequisites are largely burned down. Fixed and archived as of
-2026-09-07: **P1** (cross-TU `any` ids), **P2** (by-value rank-2 receiver,
+**S0 is complete as of 2026-09-07** -- all twelve prerequisites are fixed and
+archived: **P1** (cross-TU `any` ids), **P2** (by-value rank-2 receiver,
 guarded), **P2b** (`@TypeName` implies the unbox), **P2c** (parametric
 narrowing), **P2d** (monomorph under a widen), **P3** (unannotated return
-inference), **P6** (`: any` drives coercion at `let`/`def`/`if`/letrec), and
-**P8** (float truncated through the dict carrier). Remaining: P4, P5, P7 --
-all cosmetic or docs.
+inference), **P4** (`type-of` on a boxed closure), **P5** (the guide's `any`
+examples), **P6** (`: any` drives coercion at `let`/`def`/`if`/letrec), **P7**
+(native ADT constructors lose the ADT name), **P8** (float truncated through the
+dict carrier), and **P9** (an `any`-boxed fn matched every fn type).
+
+Four more `any`-surface defects were found *by* that burn-down and also fixed:
+a union widened to `any` emitted uncompilable C; a partial application widened
+as a `ptr<void>`; a collection handle inside an `any` reported as `int` under
+`--interpret`, with `is?` wrong in both directions; and a capturing closure
+could not be recovered from an `any` at all. The `any` surface now agrees
+across both back ends for structs, ADTs, applied constructors, collections,
+opaques, unions, and every function shape -- which is the substrate S2-S4 stand
+on, so this is more than S0 asked for.
+
+Three residuals remain open, none of them S0 blockers:
+[a shim-box leak when a fn is widened through a local binding](../reported/any-fn-widen-through-local-binding-leaks.md)
+(low-medium), [a segfault in the interpreter's `any` reflection for an
+inline-C-produced opaque](../reported/interp-inline-c-opaque-segv-in-any-reflection.md)
+(high, but inside the existing TI7 inline-C carve-out -- worth closing before
+S3/S4 lean on the interpreter hard), and
+[a spurious `-Wfree-nonheap-object` in emitted code](../reported/any-drop-inlining-warns-free-nonheap.md)
+(cosmetic).
+
+**S1 is the next stage and is unblocked.**
 
 Worth stating plainly, because it changes how the rest of this plan should be
 read: **six of those eight reports had a diagnosis that was wrong on
@@ -683,10 +704,10 @@ cannot be built until they are.**
 | ~~P2d~~ | ~~generic-fn-in-any-return-position-emits-uncompilable-c~~ | **DONE 2026-09-07.** Not a missing monomorph request -- elaboration was already correct, and `emit_abi_scan_expr` simply had no case for `EX_UNION_INJECT`, so a call under a widen was never scanned. Four cases added. Wider than filed: argument position and user generics too. [Archived](../archive/generic-fn-in-any-return-position-emits-uncompilable-c.md) |
 | ~~P3~~ | ~~inferred-return-defaults-inconsistently~~ | **DONE 2026-09-07.** Was an ordering bug, not a missing inference: the conflict check ran before the block that adopts the body's type, so it compared against the un-inferred `TY_NIL`. Unannotated returns are now inferred for every body type, float included. [Archived](../archive/inferred-return-defaults-inconsistently.md) |
 | ~~P4~~ | ~~type-of-on-boxed-closure-diverges~~ | **DONE 2026-09-07.** A `TY_FN` tag now answers "fn" on both back ends. [Archived](../archive/type-of-on-boxed-closure-diverges.md) |
-| P9 | [any-fn-tag-does-not-discriminate-signatures](../reported/any-fn-tag-does-not-discriminate-signatures.md) | **high; D4/S4.** Found fixing P4. An `any`-boxed function matches every function type, so `cast` to a wrong signature miscalls silently. Its fix direction 2 (intern the fn type so the id is real) is also the prerequisite for CALLING an `any`-held function, which is D4's dynamic-call row |
-| P5 | [any-type-guide-examples-do-not-compile](../reported/any-type-guide-examples-do-not-compile.md) | docs only |
+| ~~P9~~ | ~~any-fn-tag-does-not-discriminate-signatures~~ | **DONE 2026-09-07** via fix direction 2, as anticipated. A fn payload interns a per-SIGNATURE id keyed on the rendered fn type, and `type_name`'s TY_FN case became a shared `tur_fn_type_key` so the interpreter reconstructs the identical key from a closure's FnDef -- real parity, not a documented divergence. Swept up a second defect: the interpreter's cast switch had no TY_FN arm, so `(cast 7 (-> int int))` handed back an int typed as a function. And the anticipation held -- this WAS the prerequisite for D4's dynamic-call row, which is now also done (see below). [Archived](../archive/any-fn-tag-does-not-discriminate-signatures.md) |
+| ~~P5~~ | ~~any-type-guide-examples-do-not-compile~~ | **DONE 2026-09-07.** Scope was wider than "docs only" implied: compiling every example in the guide rather than the two filed turned up four more of the same species -- `deftype` used to name a union and an intersection, a fabricated `str` helper, a `defclass` with no `definstance`, and a stale `type-of` -> `"adt"` claim the guide's own text contradicts. Pinned by `docs-any-guide-examples`, which both suites run, so they cannot rot again silently. [Archived](../archive/any-type-guide-examples-do-not-compile.md) |
 | ~~P6~~ | ~~any-coercion-not-driven-by-expected-type~~ | **DONE 2026-09-07.** An `: any` annotation now widens at all four positions that take one -- `let`, `def`, the `if` join, and letrec/named-`let` accumulators -- each of which had a distinct cause. These are the positions S2/S6 lean on hardest. [Archived](../archive/any-coercion-not-driven-by-expected-type.md) |
-| P7 | [interp-native-ctor-loses-adt-name](../reported/interp-native-ctor-loses-adt-name.md) | S3/S4 -- `type-of` diverges between the back ends for natively-constructed stdlib values, and the interpreter is the path Saffron ships on first |
+| ~~P7~~ | ~~interp-native-ctor-loses-adt-name~~ | **DONE 2026-09-07**, and the severity was understated: `is?` compares exactly the names `type-of` reports, so this was a false NEGATIVE for every natively-built option and result under `--interpret`, not a cosmetic string -- a type-case took the wrong arm silently, on the path Saffron ships on first. Scope turned out bounded: every native ADT construction goes through `turi_make_struct`, 11 call sites. [Archived](../archive/interp-native-ctor-loses-adt-name.md) |
 | ~~P8~~ | ~~forall-dict-float-result-truncated~~ | **DONE 2026-09-07.** A float result through a mode-B dict clone was silently truncated (2.5 -> 2); both ends of the carrier crossing now bit-reinterpret instead of converting. Not Saffron-specific, but it was on the runtime-dictionary machinery D8 would build on. [Archived](../archive/forall-dict-float-result-truncated.md) |
 
 #### P1 -- the id question, answered
@@ -734,8 +755,19 @@ The registry was not throwaway scaffolding, as anticipated: it is the runtime
 type registry D8 would key instance lookup off, so this is the first half of
 D8's foundation whether or not D8 is ever scheduled.
 
-**Exit:** ~~P1~~ done, with the multi-TU pin the report asked for; P2-P5 fixed
-or archived (P2c done, see D8 above).
+**Exit: MET 2026-09-07.** ~~P1~~ done, with the multi-TU pin the report asked
+for (extended since to pin a fn payload's id across TUs as well); P2-P9 all
+fixed and archived. S1 is unblocked.
+
+Four further `any` defects were found by this burn-down and closed with it --
+[union-to-any-widen](../archive/union-to-any-widen-emits-uncompilable-c.md),
+[partial-application-as-ptr](../archive/partial-application-widened-to-any-is-a-ptr.md),
+[collection-handles-as-int](../archive/interp-collection-handles-report-as-int.md),
+and [capturing-closure-round-trip](../archive/any-cannot-recover-a-capturing-closure.md).
+Together they mean **D4's dynamic-call row already works**: an `any` holding any
+function shape -- lambda, capturing closure, partial application, named `defn` --
+can be tested with `is?`, recovered with `cast`, and called, identically on both
+back ends. S4 inherits that rather than building it.
 
 ### S1 -- the `#lang` axis, no semantics (small)
 
