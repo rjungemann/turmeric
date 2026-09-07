@@ -1,9 +1,20 @@
 # turmeric-godot: baked-in prelude fails to eval, so no script ever loads
 
+> **BOTH BUGS FIXED -- held open only until the fix merges (2026-09-06).**
+> Bug 2 below still reads "NOT fixed"; that is out of date. It was fixed the
+> same night by `516bf0b` in `../turmeric-godot` ("Fix the prelude's
+> forward-referenced handle types"), which declares `ResourceHandle` /
+> `SceneTreeHandle` in the prelude ahead of the facade. All three paddle-pong
+> scripts then load with 0 eval failures and 0 warnings.
+>
+> This report is **not archived yet for one reason**: `516bf0b` sits on the
+> unmerged `windows-support` branch, so anyone on that repo's `main` still has
+> the bug. Archive it the moment that branch lands -- see step 4 of
+> [godot-binding-refresh-plan.md](../upcoming/godot-binding-refresh-plan.md).
+>
 > **INVESTIGATED 2026-08-04.** Root cause found -- it is **two** bugs, both in
 > `../turmeric-godot`, neither Windows-specific and neither a libturi
-> regression. Bug 1 is fixed; bug 2 is diagnosed but NOT fixed. The original
-> report below is kept for the ruled-out list. Read this block first.
+> regression. The original report below is kept for the ruled-out list.
 >
 > ### Bug 1 -- 29 natives were invisible to the elaborator (FIXED)
 >
