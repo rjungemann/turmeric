@@ -477,7 +477,7 @@ D8's limit.
 What does reach it: user-defined classes, the HKT stack (`fmap`, `bind`,
 `pure`), `Eq`'s `eq?`, and `Hash`/`MapKey`, which `Map` requires of its keys.
 
-**Three escape hatches, two of which already work:**
+**The escape hatches work for a MONOMORPHIC receiver:**
 
 | Route | Status | Shape |
 |---|---|---|
@@ -490,6 +490,43 @@ The first is the important one, and it is not ceremony: it reads as a
 type-case, which is how dynamic languages dispatch anyway (Clojure's
 `condp instance?`, Racket's predicate `cond`). A Saffron program that wants
 per-type behaviour writes the type-case it would have written regardless.
+
+**For a PARAMETRIC or HKT receiver, none of them work.** This was measured
+after the fact and it inverts the paragraph above for the entire `Functor` /
+`Applicative` / `Monad` stack, plus `Option` and `Result`:
+
+| Attempt on an `any` holding `(Some 7.1)` | Result |
+|---|---|
+| `(is? x Option)` | **silently `false`** |
+| `(cast x Option)` | **panics**: `cast: any holds Option, not Option` |
+| `(is? x (Option float))` | `error: 'is?' expects a type name as second argument` |
+| `(cast x (Option float))` | same |
+
+with `type-of x` answering `"Option"` the whole time, so nothing in the
+language surface indicates what is wrong. The cause is that
+`emit_any_type_id` interns by `type_name`, which renders a `TY_APP` **per
+instantiation** -- deliberately, so `(Box int)` and `(Box float)` stay
+distinct -- while a bare `Option` target resolves to the head type, a
+different key. Two ids get interned and both are `shown` as `"Option"`:
+
+```c
+case 1000: return "Option";      /* the widen: (Option float) */
+case 1001: return "Option";      /* the is? target: bare Option */
+```
+
+Filed as
+[any-narrowing-broken-for-parametric-receivers](../reported/any-narrowing-broken-for-parametric-receivers.md).
+Until it is fixed there is **no route at all** from an `any` to a typeclass
+method on a parametric receiver -- which means the HKT stack is not merely
+"needs a static receiver", it is unreachable. That is a materially bigger
+limitation than D8's original framing, and it lands on `Option`/`Result`
+handling and monadic pipelines, which dynamic code does constantly.
+
+A second, independent gap sits next to it: a *generic defn* called in an
+`: any` return position is never monomorphised, so
+`(defn f [] : any (some 7.1))` emits a call to an undeclared `some` and fails
+at `cc` (writing `(Some 7.1)` directly works). Filed as
+[generic-fn-in-any-return-position-emits-uncompilable-c](../reported/generic-fn-in-any-return-position-emits-uncompilable-c.md).
 
 `@TypeName` (`elab_typeclasses.c:5563`) is the dedicated syntax for exactly
 this situation -- and it is what the compiler's own ambiguity diagnostic
@@ -515,9 +552,20 @@ caller. `MapKey` has five stdlib instances (`int`, `bool`, `cstr`, `float32`,
 S6's `assoc`/`get` can dispatch dynamic keys with one `is?` chain and Saffron
 gets working maps without D8. The same trick covers `Hash` and `Eq`.
 
-So the limitation is: **closed classes are a prelude implementation detail;
-open classes over heterogeneous data are where a user feels it.** That is a
-real cost but a narrow one, and it is the evidence D8 should be scheduled on.
+So the limitation has two halves, and only the first is narrow:
+
+- **Monomorphic receivers: narrow.** Closed classes are a prelude
+  implementation detail; open classes over heterogeneous data are where a user
+  feels it, and the type-case they write is idiomatic anyway.
+- **Parametric / HKT receivers: total, until the narrowing bug is fixed.**
+  No route reaches a method on an `any`-held `Option`. `fmap`/`bind`/`pure`,
+  `Option`, `Result` and every monadic pipeline are on the far side of it.
+
+That second half is a **prerequisite, not a D8 scheduling question** -- the
+narrowing bug is wrong for shipping Turmeric regardless of Saffron, and once
+it is fixed the parametric case rejoins the monomorphic one (a type-case over
+`Option` / `Result` / user constructors, written once). Until then, any
+estimate of "how much does D8 cost us" is measuring the bug, not the design.
 
 #### The verdict, restated
 
@@ -579,6 +627,8 @@ cannot be built until they are.**
 | P1 | [any-type-ids-are-per-tu](../reported/any-type-ids-are-per-tu.md) | **S5, and D8 entirely** |
 | P2 | [forall-dict-byvalue-receiver-emits-uncompilable-c](../reported/forall-dict-byvalue-receiver-emits-uncompilable-c.md) | D8 |
 | P2b | [typeclass-dispatch-on-any-receiver-emits-uncompilable-c](../reported/typeclass-dispatch-on-any-receiver-emits-uncompilable-c.md) | D8 ergonomics; cheap and high-value |
+| P2c | [any-narrowing-broken-for-parametric-receivers](../reported/any-narrowing-broken-for-parametric-receivers.md) | **S4, S6, and the whole HKT stack.** `is?` on an `any`-held `Option` is silently false and `cast` panics with `holds Option, not Option`. Not a D8 question -- narrowing is Saffron's primary dispatch mechanism, so this blocks the type-case idiom itself for parametric values |
+| P2d | [generic-fn-in-any-return-position-emits-uncompilable-c](../reported/generic-fn-in-any-return-position-emits-uncompilable-c.md) | S2 -- a generic defn in an `: any` position is never monomorphised |
 | P3 | [inferred-return-defaults-inconsistently](../reported/inferred-return-defaults-inconsistently.md) | S2 |
 | P4 | [type-of-on-boxed-closure-diverges](../reported/type-of-on-boxed-closure-diverges.md) | S4 |
 | P5 | [any-type-guide-examples-do-not-compile](../reported/any-type-guide-examples-do-not-compile.md) | docs only |
