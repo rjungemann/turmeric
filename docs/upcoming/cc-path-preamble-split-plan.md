@@ -83,6 +83,60 @@ themselves, so any link that pulls the member for one symbol collides on the
 rest. It needs its own archive (`libturt_preamble.a`), linked only in split
 mode.
 
+## Where it actually got to (2026-09-06)
+
+`tur build --runtime=split` / `TUR_RUNTIME=split` is **wired and works for
+simple and effectful programs, and is NOT correct for the suite.** Full run:
+**2798 passed, 20 failed** against 1 failed in default mode. It is opt-in and
+off by default, so nothing else is affected, but it must not be defaulted until
+these are understood.
+
+Landed and sound:
+
+- generator emits the guarded `TUR_RT_SPLIT_HOSTED` forms (below), hash
+  unchanged, JIT verified unaffected
+- `libturt_preamble.a` -- its own archive, linked all-or-nothing
+- `--runtime=split` + `TUR_RUNTIME=split`, reusing the JIT's own
+  `jit_try_split_preamble` so the paths cannot drift, and declining LOUDLY
+  (falling back to the full preamble) if the hash no longer matches
+- the swap runs BEFORE `hoist_tur_include_directives`, because hoisting lands
+  includes inside the preamble region and the swap was deleting them
+
+### The 20, and what they say
+
+| fixture class | symptom |
+| --- | --- |
+| `async-echo-server`, `async-file`, `async-timer-basic` | `no scheduler` |
+| `fiber-local` | no output at all |
+| `panic-catch-panic-of`, `panic-with-catch-of`, `catch-unwind-branch-result-return` | reaches a `should-not-reach` branch |
+| `gc-registry-growth`, `schema-reader-json-*` | stdout mismatch |
+| `hamt-lowering-basic` | build failed |
+
+This is **not** a declarations problem -- `no scheduler` and a panic taking a
+`should-not-reach` branch are runtime behaviour.
+
+**Two hypotheses tested and RULED OUT**, so nobody re-runs them:
+
+- *Duplicate state across the seam.* `nm`-diffing an async fixture's program
+  object against `libturt_preamble.a` for defined data symbols returns
+  **zero**. (The same diff on a trivial program is what found
+  `tur_closure_headers_enabled`, so the method works.)
+- *Two runtime vintages.* `tur_scheduler` appears in both
+  `libturt_preamble.a` and `libturi.a`, which looks like the seam-3 hazard the
+  S2 notes describe -- but `tur_rt_split.c` is a source of BOTH, so they are
+  the same vintage, not a mix.
+
+So the state is single-instance and single-vintage, and it is still not
+initialized. That points at **initialization order or reachability**: something
+the full preamble did on the way in is not happening when those definitions
+arrive from an archive instead. `__tur_static_init` is the obvious suspect --
+the generator deliberately keeps it `static` in the program half and drops it
+from the runtime TU ("which neither defines nor calls it") -- so the next step
+is to trace, on one async fixture, who is expected to create the scheduler and
+whether that code runs at all under split.
+
+Do that before touching the build wiring again; the wiring is not the problem.
+
 ## Implementation order
 
 1. Generator: weak non-static global definitions in the impl half. Regenerate
