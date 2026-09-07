@@ -49,4 +49,26 @@ hamt-lowering-basic
 # src/CMakeLists.txt), which the default path gets from elsewhere. Look for a
 # duplicate or divergent unwinding/setjmp implementation across that seam.
 gc-registry-growth
-sx8a-tur-smt-div-mod
+
+# --- NOT listed, and deliberately: sx8a-tur-smt-div-mod --------------------
+# It fails under split on MY Windows box (MSYS2/UCRT64, MinGW gcc 16.1, Debug)
+# and PASSES on this job's Windows runner. It was in this list for exactly one
+# CI run, and the "every listed failure still fails" check caught it on that
+# run -- which is the check earning its place, since a subset-only job would
+# have stayed green while the list quietly rotted.
+#
+# Do not re-add it without evidence from THIS job. The lesson it taught is the
+# one this whole file exists for: "fails on Windows" was never one claim. Three
+# configurations give three different answers --
+#
+#   Linux CI          hamt-lowering-basic
+#   Windows CI        hamt-lowering-basic, gc-registry-growth
+#   local Windows     those two, plus sx8a-tur-smt-div-mod
+#
+# -- and for most of the work on this branch all three were quoted
+# interchangeably as "the three split failures".
+#
+# Leading hypothesis for the difference is a toolchain version gap (local gcc
+# 16.1 vs whatever the runner's MSYS2 currently ships); unverified. An SMT
+# fixture is also a plausible candidate for host-dependent behaviour. If it is
+# ever reproduced here, add it back with the run that showed it.
