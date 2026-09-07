@@ -12,7 +12,7 @@ description: What happened when `(Option P)` was carried as its bare payload poi
 > ([results](opaque-pointer-c-spelling-gate-results.md)), which removed the
 > `String` disqualification and with it the reason to shelve. Slice B is now
 > `--enable=option-niche`, a real experiment rather than the env seam described
-> here; see [sr3-option-niche-plan.md](../upcoming/sr3-option-niche-plan.md).
+> here; see [sr3-option-niche-plan.md](sr3-option-niche-plan.md).
 >
 > Two things below did not survive the follow-up, and are worth reading as
 > errata rather than as fact:
@@ -36,7 +36,7 @@ description: What happened when `(Option P)` was carried as its bare payload poi
 > priced and rejected: with the carrier `None` being NULL, the word 0 would
 > mean `Some(nil)` on one side of a crossing and `None` on the other -- the
 > silent-wrong-answer class by design. Full pricing in
-> [sr3-option-niche-plan.md](../upcoming/sr3-option-niche-plan.md).
+> [sr3-option-niche-plan.md](sr3-option-niche-plan.md).
 
 The gate for [sum-representation-plan.md](sum-representation-plan.md) SR3
 slice B (`some(p)` carried AS the payload pointer, 16 bytes to 8), run

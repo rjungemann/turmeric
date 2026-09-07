@@ -100,7 +100,7 @@ and filing it as a cell would misreport a working bridge as a broken one.
 
 ## Related
 
-- `docs/upcoming/sr3-option-niche-plan.md` -- "The graduation call", hold
+- `docs/archive/sr3-option-niche-plan.md` -- "The graduation call", hold
   reason 3, and the container-boxing story sketched below it.
 - `option-niche-graduation-breaks-carrier-some-null` -- hold reason 2.
 - `docs/artifacts/ce0-container-element-census.md` -- and read its "What this

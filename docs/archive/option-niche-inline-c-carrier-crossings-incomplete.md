@@ -138,4 +138,4 @@ A cheaper safety net worth doing regardless: the niche `Some` constructor and
 the bridge could assert the payload is non-null in Debug builds, so any missed
 crossing that smuggles a box (or a genuine null) becomes a loud failure instead
 of a blank line.  See the allowlist discussion in
-[sr3-option-niche-plan.md](../upcoming/sr3-option-niche-plan.md).
+[sr3-option-niche-plan.md](sr3-option-niche-plan.md).
