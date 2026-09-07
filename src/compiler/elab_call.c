@@ -4977,6 +4977,31 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         return elab_make_resume(e, kvar, value, call->span);
     }
 
+    /* saffron-lang-plan S4/D4 (G5): a dynamic callee.  In a Saffron file a
+     * binding of type `any` may hold a function, and calling it is the ordinary
+     * case rather than an error -- higher-order code is the whole point of the
+     * surface syntax.  Resolution moves to runtime, where the value's own tag
+     * says whether it is callable and with what arity. */
+    if (fn_type.kind == TY_ANY && lang_span_is_saffron(call->span)) {
+        uint32_t dn = call->as.list.len - 1;
+        Expr **dargs = (dn == 0) ? NULL
+            : (Expr **)arena_alloc(e->arena, dn * sizeof(Expr *));
+        for (uint32_t i = 0; i < dn; i++) {
+            dargs[i] = elab_form(e, call->as.list.items[1 + i]);
+            if (!dargs[i]) return NULL;
+        }
+        Expr *fnv = expr_new(e->arena, EX_VAR, fn_binding->type, call->span);
+        fnv->as.var.binding = fn_binding;
+        Type any_t;
+        memset(&any_t, 0, sizeof(any_t));
+        any_t.kind = TY_ANY;
+        Expr *dc = expr_new(e->arena, EX_DYN_CALL, any_t, call->span);
+        dc->as.dyn_call_.fn     = fnv;
+        dc->as.dyn_call_.args   = dargs;
+        dc->as.dyn_call_.n_args = dn;
+        return dc;
+    }
+
     if (fn_type.kind != TY_FN && fn_type.kind != TY_CONT) {
         diag_emit(DIAG_ERROR, call->span,
                   "'%s' is not a function or continuation", fn_binding->name->name);
@@ -6136,6 +6161,38 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              * field).  ms_lenient was cleared at entry, so this only relaxes the
              * direct ctor args, never anything nested. */
             arg_ok = true;
+        }
+        /* saffron-lang-plan D5/S4: the Saffron -> Turmeric seam.
+         *
+         * A Saffron caller holds `any` and the callee has a real signature.
+         * D5 weighed three options and chose gradual typing with a RUNTIME
+         * CHECK at the seam: rejecting unless the caller annotates is safe and
+         * unusable, and erasing -- passing the payload word through unchecked
+         * -- turns a type error into a memory-safety bug, because the word is
+         * whatever the box held.
+         *
+         * The checked unbox already exists: `elab_any_unbox_to` is the node
+         * `(cast x T)` lowers to, so a wrong type panics with the ordinary
+         * `cast: any holds ...` message rather than reinterpreting the payload.
+         * That is exactly the contract this seam wants, so the seam is that
+         * node inserted at the argument rather than a new mechanism.
+         *
+         * Only for a CONCRETE expected type: a callee expecting `any` needs no
+         * check, and one expecting a type variable has nothing to check
+         * against. */
+        if (!arg_ok && args[i] && args[i]->type.kind == TY_ANY &&
+            lang_span_is_saffron(args[i]->span) &&
+            expected_arg_kind != TY_ANY && expected_arg_kind != TY_TYVAR &&
+            expected_arg_kind != TY_UNKNOWN) {
+            Type want = type_from_kind(expected_arg_kind);
+            if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+                uint32_t fi = fn_binding->closure_fn_binding ? i + 1 : i;
+                Type *ct = (fi < fn_type.as.fn.arity)
+                    ? fn_type.as.fn.arg_full_types[fi] : NULL;
+                if (ct) want = *ct;
+            }
+            Expr *unboxed = elab_any_unbox_to(e, args[i], want, args[i]->span);
+            if (unboxed) { args[i] = unboxed; arg_ok = true; }
         }
         if (!arg_ok) {
             /* Phase 8: Enhanced type mismatch with error code */

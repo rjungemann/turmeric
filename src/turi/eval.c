@@ -11029,6 +11029,88 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return v;
     }
 
+    /* --- saffron-lang-plan S4/D4 (G11): a dynamic field read -------------- */
+    case EX_DYN_FIELD: {
+        /* `(.f x)` where `x : any`.  The field is resolved against the value's
+         * own constructor, which a TuriStruct carries (`ctor->fields[i].name`)
+         * -- the same table the inline-C field path already reads. */
+        TuriValue ov = eval_expr(env, frame, e->as.dyn_field_.obj);
+        if (turi_is_error(ov) || env_signaled(env)) return ov;
+        if (ov.tag == TURI_STRUCT && ov.as_struct && ov.as_struct->is_any_box &&
+            ov.as_struct->n_fields == 1 && ov.as_struct->fields)
+            ov = ov.as_struct->fields[0];
+        const char *fname = e->as.dyn_field_.field
+                              ? e->as.dyn_field_.field->name : "";
+        if (ov.tag == TURI_STRUCT && ov.as_struct && ov.as_struct->ctor &&
+            ov.as_struct->ctor->fields) {
+            const CtorDef *cd = ov.as_struct->ctor;
+            for (uint32_t fi = 0;
+                 fi < cd->n_fields && fi < ov.as_struct->n_fields; fi++) {
+                if (cd->fields[fi].name &&
+                    strcmp(cd->fields[fi].name, fname) == 0)
+                    return ov.as_struct->fields[fi];
+            }
+        }
+        /* Named neither by this value's type nor by any field it has: a
+         * runtime type error, reported as one.  The value's type is named
+         * because "no field .x" is far less useful than "an int has no .x". */
+        {
+            char msg[160];
+            const char *tn = turi_any_named_type(ov);
+            snprintf(msg, sizeof(msg), "no field '.%s' on a %s value",
+                     fname, tn ? tn : "non-struct");
+            turi_runtime_panic(env, msg);
+            return turi_nil();  /* unreachable */
+        }
+    }
+
+    /* --- saffron-lang-plan S4/D4 (G5): a call through a dynamic callee --- */
+    case EX_DYN_CALL: {
+        /* `(f x)` where `f : any`.  The interpreter needs no new machinery for
+         * the call itself -- closure values are already first-class here, and
+         * `turi_call` is the same entry every other application goes through.
+         * What was missing is permission: the elaborator rejected the call
+         * because the callee's type was not a TY_FN, which is correct for
+         * Turmeric and wrong for a language where a function is an ordinary
+         * value. */
+        TuriValue fnv = eval_expr(env, frame, e->as.dyn_call_.fn);
+        if (turi_is_error(fnv) || env_signaled(env)) return fnv;
+        /* Unwrap an `any` box (interp-collection-handles-report-as-int): only
+         * a bare-carrier payload is wrapped, but a callee could be one if a
+         * future widen boxes closures, and unwrapping a non-box is a no-op. */
+        if (fnv.tag == TURI_STRUCT && fnv.as_struct && fnv.as_struct->is_any_box &&
+            fnv.as_struct->n_fields == 1 && fnv.as_struct->fields)
+            fnv = fnv.as_struct->fields[0];
+        if (fnv.tag != TURI_CLOSURE) {
+            /* The Saffron analogue of "'f' is not a function": a genuine
+             * runtime type error, named as one, rather than a wrong answer. */
+            char msg[128];
+            snprintf(msg, sizeof(msg),
+                     "cannot call a %s value -- it is not a function",
+                     turi_any_named_type(fnv) ? turi_any_named_type(fnv)
+                                              : "non-function");
+            turi_runtime_panic(env, msg);
+            return turi_nil();  /* unreachable */
+        }
+        uint32_t dn = e->as.dyn_call_.n_args;
+        TuriValue dstack[8];
+        TuriValue *dargs = dstack;
+        if (dn > 8) {
+            dargs = (TuriValue *)malloc(dn * sizeof(TuriValue));
+            if (!dargs) return turi_error("dyn-call: out of memory");
+        }
+        TuriValue dres = turi_nil();
+        bool dfailed = false;
+        for (uint32_t i = 0; i < dn; i++) {
+            TuriValue v = eval_expr(env, frame, e->as.dyn_call_.args[i]);
+            if (turi_is_error(v) || env_signaled(env)) { dres = v; dfailed = true; break; }
+            dargs[i] = v;
+        }
+        if (!dfailed) dres = turi_call(env, fnv, dargs, dn);
+        if (dargs != dstack) free(dargs);
+        return dres;
+    }
+
     /* --- saffron-lang-plan S3/D4: the dynamic operator layer ------------- */
     case EX_DYN_OP: {
         /* The elaborator deferred operator resolution because an argument was

@@ -30,11 +30,13 @@ S3/S4 lean on the interpreter hard), and
 [a spurious `-Wfree-nonheap-object` in emitted code](../reported/any-drop-inlining-warns-free-nonheap.md)
 (cosmetic).
 
-**S1, S2 and S3 landed 2026-09-07** -- the `#lang` language axis with its gate
-and listing, the `any` default for unannotated parameters, and the dynamic
-operator layer (arithmetic, comparison, print, truthiness) on the interpreter.
-`(defn twice [x] (* x 2))` prints `42` for `21` and `14.2` for `7.1`.
-**S4 is next.**
+**S1-S4 landed 2026-09-07** -- the `#lang` language axis with its gate and
+listing, the `any` default for unannotated parameters, the dynamic operator
+layer (arithmetic, comparison, print, truthiness), and dynamic call plus dynamic
+field access. Saffron runs higher-order code over a heterogeneous list under
+`--interpret`: `map`, `filter` and `fold` over `(1 "hi" 7.1 true)`. **S5, the
+compiled path, is next** -- and it is the largest stage, since every dynamic
+node currently reports a diagnostic there rather than lowering.
 
 Worth stating plainly, because it changes how the rest of this plan should be
 read: **six of those eight reports had a diagnosis that was wrong on
@@ -929,7 +931,7 @@ if the decision were ever changed by accident, plus a short-circuit row where
 `and` must not evaluate a `(panic ...)`), and
 `errors/saffron-dyn-op-compiled-unsupported` for the compiled refusal.
 
-### S4 -- dynamic call and dynamic field access, interpreter (medium)
+### S4 -- dynamic call and dynamic field access, interpreter (medium) -- DONE 2026-09-07
 
 `EX_DYN_CALL` (G5) and dynamic `(.f x)` (G11), plus `match` on an `any`
 scrutinee (G6). Closures widen into `any` with a real tag, which also closes
@@ -938,8 +940,51 @@ G8 properly rather than papering it.
 This is the stage that makes Saffron a *language* rather than a calculator --
 higher-order functions are the whole point of the surface syntax.
 
-**Exit:** `map`/`filter`/`fold` over a heterogeneous list, written in Saffron,
-interpreted.
+**Exit: MET 2026-09-07** -- `tests/fixtures/saffron-higher-order` runs `lmap`,
+`lfilter` and `lfold` over `(1 "hi" 7.1 true)`.
+
+**G6 needed nothing.** `match` on an `any` scrutinee already worked, measured
+before any code was written. What did NOT work was the arm UNIFIER: it had no
+`any` case, so a fold whose recursive arm was still being inferred and whose
+base arm was the `any` accumulator was rejected as "expected int (from earlier
+arm), got any". The `if` join already widened this way; `match` has its own
+unifier and did not. Fixed there, and NOT gated on the dialect -- `any` is
+Turmeric's top type too, and an arm of type `any` beside one of type `int` has
+exactly one sound join in either language.
+
+**S2's note about returns was incomplete, and this is the correction.** S2
+concluded that only the two parameter defaults needed flipping because an
+unannotated return infers from the body. True for a non-recursive body; a
+SELF-CALL is the case inference cannot cover, because the type is needed before
+the body is analysed. `lfilter`'s two `if` branches came out `then=Lst
+else=int`, the `int` being its own recursive call reading the pass-1 forward
+declaration (the int64 carrier). An unannotated Saffron return now forwards as
+`any`, which being the top type joins with whatever the body turns out to
+produce, so the post-body construction still narrows it.
+
+**D5's seam landed here rather than in S7**, because the exit criterion needs
+it: a Saffron caller reaches stdlib, and stdlib has real signatures. The
+implementation is smaller than S7 implies -- `elab_any_unbox_to` is the node
+`(cast x T)` already lowers to, so the seam is that node inserted at an
+argument, and D5's chosen behaviour (a runtime check, not erasure) comes with
+it. Verified both ways: the right type passes through, the wrong type panics
+with the ordinary cast message. What S7 still owes is the OTHER direction and
+the `:strict` opt-out.
+
+**Containers are S6's, and the fixture says so.** The exit list is a `defdata`
+defined in the fixture, not a stdlib cons list, because a stdlib cons list
+carries int64 handles -- `head` hands back an int and the heterogeneity is gone
+before `type-of` sees it. `defdata` needed one line to accept an `:any` field
+(it was a name table with no `any` row); whether the wider container story
+works is S6's question, and `vec-of-any-repr-decision-ice` is already open
+against it.
+
+**Three nodes, and `-Werror=switch` plus the turi parity ratchet enumerated
+every site each one needed.** EX_DYN_CALL, EX_DYN_FIELD (and S3's EX_DYN_OP)
+each forced arms in the debug printer, borrow-check, statement position, the
+value emitter and eval.c. The statement-position arms are not uniform and the
+difference matters: a dynamic operator and a dynamic field read are pure and
+are discarded, a dynamic CALL runs a user function and must not be.
 
 ### S5 -- the compiled path (large)
 

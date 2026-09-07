@@ -5902,6 +5902,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
          *
          * A diagnostic, not an abort: `tur run` on a Saffron program that uses
          * arithmetic should say what to do, and `--interpret` runs it today. */
+        /* saffron-lang-plan S4: same posture as EX_DYN_OP -- no compiled
+         * lowering until S5 (unbox to a fat pointer, check arity, indirect
+         * call), and saying so beats emitting a call through a tag word. */
+        case EX_DYN_FIELD:
+            diag_emit(DIAG_ERROR, e->span,
+                      "reading field '.%s' of a dynamic value is not supported "
+                      "by the compiled back end yet (saffron-lang-plan S5); run "
+                      "this file with `tur --interpret` for now",
+                      e->as.dyn_field_.field ? e->as.dyn_field_.field->name : "?");
+            return atom_nil();
+        case EX_DYN_CALL:
+            diag_emit(DIAG_ERROR, e->span,
+                      "calling a dynamic value is not supported by the compiled "
+                      "back end yet (saffron-lang-plan S5); run this file with "
+                      "`tur --interpret` for now");
+            return atom_nil();
         case EX_DYN_OP:
             diag_emit(DIAG_ERROR, e->span,
                       "'%s' on a dynamic value is not supported by the compiled "

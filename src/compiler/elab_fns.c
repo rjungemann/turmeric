@@ -7625,7 +7625,28 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * (return_kind still TY_NIL / TY_TYVAR, resolved from body->type after
          * elaboration) is the genuinely mutually-dependent case and is left to
          * the post-body fn_type construction. */
-        if (return_kind != TY_NIL && return_kind != TY_TYVAR) {
+        /* saffron-lang-plan S4: forward an UNANNOTATED Saffron return as `any`.
+         *
+         * RR1 below leaves an inferred return to the post-body construction,
+         * which is right for Turmeric: the self-call then reads the pass-1
+         * forward-decl result, the int64 carrier `TY_INT`, and a static
+         * function's inferred return really is usually an int.  In Saffron it
+         * is usually not, and the mismatch surfaces one level up as a spurious
+         * join failure -- `(if (p h) (Cons h (lfilter p t)) (lfilter p t))`
+         * was rejected with "then=Lst else=int", the `int` being the self-call.
+         *
+         * `any` is the honest forward type for a function whose return is not
+         * yet known, and being the top type it joins with whatever the body
+         * turns out to produce, so the post-body construction still narrows it.
+         *
+         * This corrects the S2 note that returns needed no change: inference
+         * does propagate for a non-recursive body, and a SELF-CALL is the case
+         * it cannot cover, because the type is needed before the body is
+         * analysed. */
+        if (return_kind == TY_NIL && !return_annotated &&
+            lang_span_is_saffron(call->span)) {
+            existing->type.as.fn.result_kind = TY_ANY;
+        } else if (return_kind != TY_NIL && return_kind != TY_TYVAR) {
             existing->type.as.fn.result_kind = return_kind;
             Type *rft = NULL;
             if (return_adt_def) {

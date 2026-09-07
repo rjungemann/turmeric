@@ -245,6 +245,11 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
          * expression whose value nothing wanted.  `(+ x 1)` alone on a line is
          * dead code in either language. */
         case EX_DYN_OP:
+        case EX_DYN_FIELD:   /* a pure read, like EX_ANY_CAST above */
+        /* saffron-lang-plan S4: a dynamic CALL is deliberately NOT in this
+         * discard list -- it runs a user function, so dropping it in statement
+         * position would drop its side effects, unlike a dynamic operator,
+         * which is pure.  Its arm sits with the effectful forms below. */
         case EX_ANY_IS:       /* TY3: pure tag test, no stmt-level side effects */
         case EX_TYPECLASS_DEF:
         case EX_DEFMODULE: /* Phase M0: module metadata — nothing to emit */
@@ -488,6 +493,9 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             fprintf(stderr, "tur: emit: EX_FN_DEF in stmt position\n");
             abort();
             return;
+        /* saffron-lang-plan S4: emitted for effect, which is how it reaches
+         * emit_value and reports the S5 gap. */
+        case EX_DYN_CALL:
         case EX_CALL: {
             /* G1 (carrier<->concrete crossing audit): `tur-list-homog__` is the
              * compile-time-only element-homogeneity assertion the `(list ...)`

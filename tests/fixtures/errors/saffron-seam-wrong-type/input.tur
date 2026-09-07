@@ -1,0 +1,16 @@
+#lang saffron
+;; saffron-lang-plan D5: the Saffron -> Turmeric seam CHECKS rather than erases.
+;;
+;; `takes-int` has a real signature and the caller hands it an `any` holding a
+;; cstr.  D5 rejected erasure explicitly: passing the payload word through
+;; unchecked would turn this type error into a memory-safety bug, because the
+;; word is a `const char *` being read as an int.  The seam reuses the checked
+;; unbox `(cast x T)` lowers to, so the failure is a panic naming the mismatch.
+;;
+;; requires.interp-only: the compiled back end reports the S5 gap for the
+;; dynamic operators in this program before it could reach the seam.
+(defn takes-int [n : int] : int (+ n 1))
+(defn dyn [v] v)
+(defn main [] : int
+  (println (takes-int (dyn "not an int")))
+  0)

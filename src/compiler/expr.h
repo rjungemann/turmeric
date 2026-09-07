@@ -813,6 +813,25 @@ typedef enum ExprKind {
      * an int add over tagged words.  Until S5 gives it a lowering, emit
      * reports it as unsupported rather than guessing. */
     EX_DYN_OP,
+    /* saffron-lang-plan S4/D4 (G5): a call whose CALLEE is a dynamic value --
+     * `(f x)` where `f : any`.
+     *
+     * Turmeric rejects this ("'f' is not a function or continuation") because
+     * the callee's type is not a TY_FN, which is the right answer for a static
+     * language.  In Saffron a function is an ordinary value that arrives in an
+     * `any` like any other, and higher-order code -- map, filter, fold, every
+     * combinator the surface syntax exists to make pleasant -- is exactly this
+     * shape.  Distinct from EX_DYN_OP because the callee is an EXPRESSION, not
+     * a named operator resolved from a table. */
+    EX_DYN_CALL,
+    /* saffron-lang-plan S4/D4 (G11): `(.field x)` where `x : any` -- the field
+     * is found on the value that actually arrived, not on a static type.
+     *
+     * Turmeric resolves `(.f x)` by the receiver's type (a record field, else a
+     * typeclass method), and on an `any` receiver both lookups fail.  In
+     * Saffron the receiver's type is the runtime value's, so the lookup is
+     * deferred with it. */
+    EX_DYN_FIELD,
     /* DV0-DV1: Dynamic vars (-Xdynamic-vars) */
     EX_DEFDYNAMIC,       /* (defdynamic *name* :type root-expr) -- declare a dynamic var */
     EX_DYNVAR_READ,      /* *name* -- read current value of a dynamic var */
@@ -1661,6 +1680,12 @@ struct Expr {
          * argument's tag and hands it to the same eval_builtin every static
          * call uses, which is why its arm is thin. */
         struct { const Symbol *op; struct Expr **args; uint32_t n_args; } dyn_op_;
+        /* saffron-lang-plan S4: callee plus arguments; arity is checked when it
+         * runs, against the closure that actually arrived. */
+        struct { struct Expr *fn; struct Expr **args; uint32_t n_args; } dyn_call_;
+        /* saffron-lang-plan S4: receiver plus the field NAME, resolved against
+         * the runtime value's constructor when it runs. */
+        struct { struct Expr *obj; const Symbol *field; } dyn_field_;
         /* TY2.3: (cast x T) — checked downcast; panics on tag mismatch. */
         struct {
             struct Expr *value;

@@ -80,6 +80,9 @@ static void parse_struct_field_type(const char *tname, uint32_t tlen,
     if (tlen == 9  && memcmp(tname, "ptr<void>", 9) == 0) { *out_kind = TY_PTR_VOID; return; }
     /* Phase 16 v2: :fn field type — function pointer (may carry #{...} effect-row annotation) */
     if (tlen == 2  && memcmp(tname, "fn",    2) == 0) { *out_kind = TY_FN;       return; }
+    /* saffron-lang-plan S4 (PROBE): `:any` field, so a container can hold
+     * values of different types. */
+    if (tlen == 3  && memcmp(tname, "any",   3) == 0) { *out_kind = TY_ANY;      return; }
 
     /* Compound types: rc<T>, ref<T>, lref<T>, weak<T> */
     /* Parse the prefix and inner type */
@@ -3016,6 +3019,26 @@ static bool match_arm_type_compatible(Elab *e, Type a, Type b, Type *out) {
      * with "arm types are incompatible -- expected int, got !". */
     if (a.kind == TY_NEVER) { *out = b; return true; }
     if (b.kind == TY_NEVER) { *out = a; return true; }
+    /* saffron-lang-plan S4: `any` is the TOP type, so an arm producing one
+     * joins with an arm producing anything else -- the result is `any`.
+     *
+     * The `if` join already widens this way (any-coercion-not-driven-by-
+     * expected-type); `match` had its own unifier and did not, so a Saffron
+     * fold over a heterogeneous list was rejected with "expected int (from
+     * earlier arm), got any" -- the earlier arm being the recursive call, whose
+     * return type is still being inferred, and the later one the `any`
+     * accumulator.
+     *
+     * Not gated on the dialect: `any` is Turmeric's top type too, and an arm
+     * of type `any` beside an arm of type `int` has exactly one sound join in
+     * either language.  Widening it is what the type already means. */
+    if (a.kind == TY_ANY || b.kind == TY_ANY) {
+        Type any_t;
+        memset(&any_t, 0, sizeof(any_t));
+        any_t.kind = TY_ANY;
+        *out = any_t;
+        return true;
+    }
     AdtDef *ad = (a.kind == TY_ADT) ? a.as.adt_.def
                : (a.kind == TY_APP) ? type_adt_app_def(&a) : NULL;
     AdtDef *bd = (b.kind == TY_ADT) ? b.as.adt_.def

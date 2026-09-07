@@ -1,5 +1,6 @@
 /* elab_typeclasses.c -- typeclass declarations, instances, and method-call dispatch. */
 #include "elab_internal.h"
+#include "lang_layers.h"   /* saffron-lang-plan S4: lang_span_is_saffron */
 #include "refine_discharge.h"     /* RT1: instance/class refinement variance */
 #include "refine_solver.h"        /* RT1: refine_model_search, for the variance witness */
 #include "forms.h"
@@ -6519,6 +6520,28 @@ Expr *elab_method_call(Elab *e, const Form *call) {
 found_method:;
 
     if (!best_method) {
+        /* saffron-lang-plan S4/D4 (G11): a dynamic field read.
+         *
+         * `(.x p)` with `p : any` has exhausted both static routes -- there is
+         * no record field to find on `any`, and no typeclass instance for it --
+         * which in Turmeric is the end of the road.  In Saffron the receiver's
+         * type is whatever arrived, so the field is looked up then, against the
+         * value's own constructor.
+         *
+         * Placed here, after every static route has been tried, so a Saffron
+         * program with a CONCRETE receiver still gets ordinary static field
+         * access and ordinary method dispatch; only a genuinely dynamic
+         * receiver defers. */
+        if (obj && obj->type.kind == TY_ANY && lang_span_is_saffron(call->span)) {
+            Type any_t;
+            memset(&any_t, 0, sizeof(any_t));
+            any_t.kind = TY_ANY;
+            Expr *df = expr_new(e->arena, EX_DYN_FIELD, any_t, call->span);
+            df->as.dyn_field_.obj   = obj;
+            df->as.dyn_field_.field =
+                symtab_intern(e->st, strslice(method_name, method_name_len));
+            return df;
+        }
         /* No matching method found */
         diag_emit(DIAG_ERROR, call->span,
                   "no typeclass method found for '%.*s'",
