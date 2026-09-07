@@ -16,8 +16,21 @@
 # comparison with it, so the job simply asserts zero failures like every other
 # suite.
 
-# Diverging output; not yet diagnosed.
-gc-registry-growth
+# This list describes the SPLIT CI JOB's configuration: Linux, Debug, system
+# gcc. It is not a claim about every platform.
+#
+# Two fixtures were in this list and are not any more, because they PASS in
+# that configuration: `gc-registry-growth` and `sx8a-tur-smt-div-mod`. Both
+# were observed failing with a `stdout mismatch` locally -- but that run
+# differed from CI in three ways at once (Windows, Release, MinGW gcc 16.1),
+# so which variable matters is NOT established. Do not record them as
+# "Windows-only"; that conflates three things. In particular CLAUDE.md warns
+# that a Release `tur` elides contract checks, which is exactly how a fixture
+# fails with the wrong error.
+#
+# Isolating it needs one experiment: a DEBUG Windows build, same two fixtures.
+# Until someone runs it, the honest statement is "they pass on Linux/Debug and
+# fail on Windows/Release, cause unknown".
 
 # The one place the split is genuinely LOSSY, and it is understood rather than
 # mysterious. The emitted preamble is not fixed across programs: the emitter
@@ -38,5 +51,3 @@ gc-registry-growth
 # extern-c declarations agree with the header.
 hamt-lowering-basic
 
-# Diverging output; not yet diagnosed.
-sx8a-tur-smt-div-mod
