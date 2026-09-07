@@ -301,6 +301,21 @@ def split(src):
             decls.append('#endif')
             i += 1
             continue
+        # A PROJECT header (quoted include).  The impl half genuinely needs it;
+        # the decls half does not use a single type from it, and including it
+        # actively breaks a hosted consumer: hamt.h declares
+        # `Hamt *tur_hamt_new(void)` while the program half emits the loose
+        # `extern void *tur_hamt_new();` from stdlib's extern-c, and gcc calls
+        # that a conflicting type.  c2mir accepts it, which is why the JIT never
+        # noticed.  Guarded rather than dropped so the JIT keeps compiling the
+        # exact text it compiles today.
+        if at_col0 and re.match(r'^#include\s+"', l):
+            impl.append(l)
+            decls.append('#ifndef TUR_RT_SPLIT_HOSTED')
+            decls.append(l)
+            decls.append('#endif')
+            i += 1
+            continue
         # everything else (includes, macros, types, non-static decls,
         # comments): both halves keep it verbatim
         impl.append(l)

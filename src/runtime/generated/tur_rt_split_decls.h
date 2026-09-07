@@ -42,7 +42,9 @@
 #  define TUR_ATOMIC_CAS_INT(p, e, d, s, f) tur_atomic_cas_int((p), (e), (d))
 #endif
 static void __tur_static_init(void);
+#ifndef TUR_RT_SPLIT_HOSTED
 #include "hamt.h"
+#endif
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
