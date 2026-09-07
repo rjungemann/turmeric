@@ -1,0 +1,22 @@
+;; any-narrowing-broken-for-parametric-receivers: the COMPILED path tells two
+;; instantiations of one constructor apart, because the box id is interned per
+;; instantiation ((Box float) and (Box int) get different ids).
+;;
+;; requires.compiled: the interpreter cannot make this distinction.  A
+;; TuriValue records the ADT it was built from, not the instantiation, so
+;; turi_any_target_name head-matches an applied target and answers true for
+;; both rows below.  That is a documented parity limit, not a bug to fix here:
+;; head-matching is what keeps the COMMON test ("is this a Box") agreeing on
+;; both paths, and the alternative -- answering false -- would make the whole
+;; type-case idiom silently fail under --interpret.
+(defdata Box [a] (MkBox a))
+
+(defn boxed-float [] : any (MkBox 7.1))
+(defn boxed-int   [] : any (MkBox 7))
+
+(defn main [] : int
+  (println (if (is? (boxed-float) (Box float)) 1 0))
+  (println (if (is? (boxed-float) (Box int))   1 0))
+  (println (if (is? (boxed-int)   (Box int))   1 0))
+  (println (if (is? (boxed-int)   (Box float)) 1 0))
+  0)

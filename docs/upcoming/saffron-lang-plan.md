@@ -514,13 +514,35 @@ case 1000: return "Option";      /* the widen: (Option float) */
 case 1001: return "Option";      /* the is? target: bare Option */
 ```
 
-Filed as
-[any-narrowing-broken-for-parametric-receivers](../reported/any-narrowing-broken-for-parametric-receivers.md).
-Until it is fixed there is **no route at all** from an `any` to a typeclass
-method on a parametric receiver -- which means the HKT stack is not merely
-"needs a static receiver", it is unreachable. That is a materially bigger
-limitation than D8's original framing, and it lands on `Option`/`Result`
-handling and monadic pipelines, which dynamic code does constantly.
+**FIXED 2026-09-07** --
+[any-narrowing-broken-for-parametric-receivers](../archive/any-narrowing-broken-for-parametric-receivers.md).
+`is?` and `cast` now share one target resolver: an applied target
+`(Option float)` interns the same `TY_APP` the widen site did, and a bare
+constructor is a hard error naming the arity instead of a silent `false`. So
+the type-case idiom reaches the HKT stack, on both back ends:
+
+```turmeric
+(defn dyn-double [x : any] : float
+  (if (is? x (Option float))
+    (unwrap-or (fmap (cast x (Option float))
+                     (fn [v : float] : float (* v 2.0)))
+               0.0)
+    0.0))                                    ;; => 14.2, compiled and interpreted
+```
+
+`tests/fixtures/any-narrow-parametric-roundtrip`. With that, the parametric
+case rejoins the monomorphic one and the "how big is the limitation" answer
+above holds uniformly -- which was the point of fixing it before scheduling
+anything else here.
+
+Two limits survive, both recorded rather than silently absorbed. The
+`if`-guard narrowing does **not** extend to an applied target, so the `cast`
+above is load-bearing rather than decorative -- narrowing recognises the
+simple `(is? x T)` shapes the union guide documents, and widening it is its
+own change. And the interpreter cannot discriminate two instantiations of one
+constructor (a `TuriValue` carries the ADT, not the type argument), so it
+head-matches; `any-narrow-parametric-discriminates` and
+`any-cast-wrong-instantiation` are compiled-only for exactly that reason.
 
 A second, independent gap sits next to it: a *generic defn* called in an
 `: any` return position is never monomorphised, so
@@ -627,7 +649,7 @@ cannot be built until they are.**
 | P1 | [any-type-ids-are-per-tu](../reported/any-type-ids-are-per-tu.md) | **S5, and D8 entirely** |
 | P2 | [forall-dict-byvalue-receiver-emits-uncompilable-c](../reported/forall-dict-byvalue-receiver-emits-uncompilable-c.md) | D8 |
 | P2b | [typeclass-dispatch-on-any-receiver-emits-uncompilable-c](../reported/typeclass-dispatch-on-any-receiver-emits-uncompilable-c.md) | D8 ergonomics; cheap and high-value |
-| P2c | [any-narrowing-broken-for-parametric-receivers](../reported/any-narrowing-broken-for-parametric-receivers.md) | **S4, S6, and the whole HKT stack.** `is?` on an `any`-held `Option` is silently false and `cast` panics with `holds Option, not Option`. Not a D8 question -- narrowing is Saffron's primary dispatch mechanism, so this blocks the type-case idiom itself for parametric values |
+| ~~P2c~~ | ~~any-narrowing-broken-for-parametric-receivers~~ | **DONE 2026-09-07.** Was: `is?` on an `any`-held `Option` silently false, `cast` panicking `holds Option, not Option`. `is?`/`cast` now share one target resolver, take an applied `(Option float)`, and reject a bare constructor with a diagnostic. The type-case idiom reaches the HKT stack on both paths. [Archived](../archive/any-narrowing-broken-for-parametric-receivers.md) |
 | P2d | [generic-fn-in-any-return-position-emits-uncompilable-c](../reported/generic-fn-in-any-return-position-emits-uncompilable-c.md) | S2 -- a generic defn in an `: any` position is never monomorphised |
 | P3 | [inferred-return-defaults-inconsistently](../reported/inferred-return-defaults-inconsistently.md) | S2 |
 | P4 | [type-of-on-boxed-closure-diverges](../reported/type-of-on-boxed-closure-diverges.md) | S4 |

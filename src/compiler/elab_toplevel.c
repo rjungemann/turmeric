@@ -78,10 +78,88 @@ Expr *elab_any_type_of(Elab *e, const Form *call) {
     return out;
 }
 
+/* any-narrowing-broken-for-parametric-receivers: resolve the type target of
+ * `is?` / `cast` into (kind, Type).  Shared so the two forms cannot drift --
+ * they must agree on the target, because `is?` guards a narrowing that `cast`
+ * then has to accept.
+ *
+ * The `any` box id is interned by `type_name`, which renders a TY_APP PER
+ * INSTANTIATION ("(type-app Option float)") so that `(Box int)` and
+ * `(Box float)` stay distinct.  A target written as a bare `Option` resolves to
+ * the head ADT instead -- a different key, hence a different id -- so the test
+ * compared against an id no widen ever mints.  `(is? x Option)` was silently
+ * false and `(cast x Option)` panicked "any holds Option, not Option", both
+ * displaying the same name because `shown` is the head name either way.
+ *
+ * Two changes close that.  A parenthesised target `(Option float)` now goes
+ * through the shared annotation parser, so the resolved Type is the SAME TY_APP
+ * the widen site interned and the ids line up.  A bare type constructor is a
+ * hard error naming the arity, because it does not identify one runtime type --
+ * an error the caller can act on, where the silent `false` was not.
+ *
+ * Returns false having emitted a diagnostic. */
+static bool any_narrow_target(Elab *e, const Form *type_form, const char *who,
+                              TypeKind *out_kind, Type *out_type) {
+    /* A parenthesised type application, or any other compound annotation. */
+    if (type_form->tag != F_SYM) {
+        Type *t = fn_type_from_form(e, type_form, NULL, NULL, 0);
+        if (!t) {
+            /* fn_type_from_form has already reported what it could not read;
+             * add the context it does not have. */
+            diag_emit(DIAG_ERROR, type_form->span,
+                      "'%s' could not resolve its type argument", who);
+            return false;
+        }
+        *out_type = *t;
+        *out_kind = any_box_tag_for_type(t);
+        return true;
+    }
+
+    TypeKind k = typekind_from_symbol(type_form->as.sym->name);
+    if (k != TY_UNKNOWN) {
+        *out_kind = k;
+        *out_type = type_simple(k, CK_COPY);
+        return true;
+    }
+
+    Type *named = elab_lookup_type_by_name(e, type_form->as.sym);
+    if (!named) {
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "unknown type '%s' in '%s'", type_form->as.sym->name, who);
+        return false;
+    }
+
+    /* A bare type CONSTRUCTOR names no single runtime type: an `any` holds one
+     * instantiation, and `Option` does not say which.  Reject rather than test
+     * against the head's own id, which nothing ever boxes. */
+    if (named->kind == TY_ADT && named->as.adt_.def &&
+        named->as.adt_.def->n_type_params > 0) {
+        const AdtDef *d = named->as.adt_.def;
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "'%s' is a type constructor taking %u type parameter%s, so it "
+                  "does not name one runtime type; write it applied, e.g. "
+                  "'(%s %s)'",
+                  d->name, (unsigned)d->n_type_params,
+                  d->n_type_params == 1 ? "" : "s", d->name,
+                  (d->type_params && d->type_params[0]) ? d->type_params[0] : "T");
+        diag_emit(DIAG_HELP, type_form->span,
+                  "matching every instantiation of '%s' at once is not supported "
+                  "yet -- test the one you expect", d->name);
+        return false;
+    }
+
+    /* CONV-S1: a struct-origin lowered ADT tests/casts under its box tag, so
+     * the surface stays transparent to the defstruct-as-defadt lowering. */
+    *out_kind = any_box_tag_for_type(named);
+    *out_type = *named;
+    return true;
+}
+
 /* IT4/TY2.3: (cast x T) — checked downcast from any.  Verifies the runtime box
  * tag matches T's TypeKind and panics on mismatch (see __tur_any_cast_check),
- * then returns the inner value as T.  T may be a primitive type name, or a
- * struct/ADT name (TY2.2 heap-boxed payloads unbox by dereference). */
+ * then returns the inner value as T.  T may be a primitive type name, a
+ * struct/ADT name (TY2.2 heap-boxed payloads unbox by dereference), or an
+ * applied type constructor like `(Option float)`. */
 Expr *elab_any_cast(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -97,28 +175,10 @@ Expr *elab_any_cast(Elab *e, const Form *call) {
         return NULL;
     }
     Form *type_form = call->as.list.items[2];
-    if (type_form->tag != F_SYM) {
-        diag_emit(DIAG_ERROR, type_form->span,
-                  "'cast' expects a type name as second argument");
-        return NULL;
-    }
-    TypeKind target_kind = typekind_from_symbol(type_form->as.sym->name);
+    TypeKind target_kind;
     Type result_type;
-    if (target_kind == TY_UNKNOWN) {
-        /* TY2.2: a struct/ADT name is a valid cast target. */
-        Type *named = elab_lookup_type_by_name(e, type_form->as.sym);
-        if (!named) {
-            diag_emit(DIAG_ERROR, type_form->span,
-                      "unknown type '%s' in 'cast'", type_form->as.sym->name);
-            return NULL;
-        }
-        /* CONV-S1: a struct-origin lowered ADT casts under its box tag, keeping
-         * the cast transparent to the defstruct-as-defadt lowering. */
-        target_kind = any_box_tag_for_type(named);
-        result_type = *named;
-    } else {
-        result_type = type_simple(target_kind, CK_COPY);
-    }
+    if (!any_narrow_target(e, type_form, "cast", &target_kind, &result_type))
+        return NULL;
     Expr *out = expr_new(e->arena, EX_ANY_CAST, result_type, call->span);
     out->as.any_cast_.value = val;
     out->as.any_cast_.target_kind = target_kind;
@@ -143,31 +203,14 @@ Expr *elab_is_q(Elab *e, const Form *call) {
         return NULL;
     }
     Form *type_form = call->as.list.items[2];
-    if (type_form->tag != F_SYM) {
-        diag_emit(DIAG_ERROR, type_form->span,
-                  "'is?' expects a type name as second argument");
-        return NULL;
-    }
-    TypeKind test_kind = typekind_from_symbol(type_form->as.sym->name);
+    /* type-of-cast-kind-granularity: the resolved Type is kept alongside the
+     * kind -- emit turns it into the same per-monomorph box id the inject site
+     * allocates, so `(is? a OtherStruct)` on an `any` holding a Point is false
+     * rather than true-for-every-struct. */
+    TypeKind test_kind;
     Type test_type = type_simple(TY_UNKNOWN, CK_COPY);
-    if (test_kind == TY_UNKNOWN) {
-        Type *named = elab_lookup_type_by_name(e, type_form->as.sym);
-        if (!named) {
-            diag_emit(DIAG_ERROR, type_form->span,
-                      "unknown type '%s' in 'is?'", type_form->as.sym->name);
-            return NULL;
-        }
-        /* CONV-S1: struct-origin lowered ADT tests as TY_STRUCT, matching the
-         * box tag set by elab_coerce_to_any.
-         * type-of-cast-kind-granularity: keep the named type too -- emit turns
-         * it into the same per-monomorph box id the inject site allocates, so
-         * `(is? a OtherStruct)` on an `any` holding a Point is false rather
-         * than true-for-every-struct. */
-        test_kind = any_box_tag_for_type(named);
-        test_type = *named;
-    } else {
-        test_type = type_simple(test_kind, CK_COPY);
-    }
+    if (!any_narrow_target(e, type_form, "is?", &test_kind, &test_type))
+        return NULL;
     Type bool_t = type_simple(TY_BOOL, CK_COPY);
     Expr *out = expr_new(e->arena, EX_ANY_IS, bool_t, call->span);
     out->as.any_is_.value = val;

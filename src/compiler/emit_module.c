@@ -9763,11 +9763,29 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * the target TypeKind and panics on mismatch (the agreed failure behavior).
      * Declared after tur_panic in the preamble; forward-declare tur_panic here. */
     buf_puts(out, "static void tur_panic(const char *msg);\n");
+    /* any-narrowing-broken-for-parametric-receivers: two ids can share a NAME.
+     * The box id is interned per instantiation, so `(Option int)` and
+     * `(Option float)` are distinct ids -- but `type-of` reports the head name
+     * for both, which made a genuine mismatch panic "cast: any holds Option,
+     * not Option".  That names the right constructor twice and tells the reader
+     * nothing.  Say what actually differs instead.
+     *
+     * The exact instantiation is still not named: doing that needs a second
+     * per-id table carrying the applied spelling, and widening `type-of` itself
+     * to report `(Option float)` is a user-visible behaviour change that does
+     * not belong inside a bug fix.  Naming the mismatch as an instantiation is
+     * the actionable half and costs nothing. */
     buf_puts(out, "static void __tur_any_cast_check(int64_t have, int64_t want) {\n");
     buf_puts(out, "    if (have != want) {\n");
-    buf_puts(out, "        char __m[128];\n");
-    buf_puts(out, "        snprintf(__m, sizeof(__m), \"cast: any holds %s, not %s\",\n");
-    buf_puts(out, "                 __tur_any_type_name(have), __tur_any_type_name(want));\n");
+    buf_puts(out, "        char __m[192];\n");
+    buf_puts(out, "        const char *__hn = __tur_any_type_name(have);\n");
+    buf_puts(out, "        const char *__wn = __tur_any_type_name(want);\n");
+    buf_puts(out, "        if (strcmp(__hn, __wn) == 0)\n");
+    buf_puts(out, "            snprintf(__m, sizeof(__m), \"cast: any holds a "
+                  "different instantiation of %s\", __hn);\n");
+    buf_puts(out, "        else\n");
+    buf_puts(out, "            snprintf(__m, sizeof(__m), \"cast: any holds %s, "
+                  "not %s\", __hn, __wn);\n");
     buf_puts(out, "        tur_panic(__m);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n");

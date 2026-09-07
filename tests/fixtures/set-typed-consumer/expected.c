@@ -1370,9 +1370,13 @@ static const char *__tur_any_type_name(int64_t tag) {
 static void tur_panic(const char *msg);
 static void __tur_any_cast_check(int64_t have, int64_t want) {
     if (have != want) {
-        char __m[128];
-        snprintf(__m, sizeof(__m), "cast: any holds %s, not %s",
-                 __tur_any_type_name(have), __tur_any_type_name(want));
+        char __m[192];
+        const char *__hn = __tur_any_type_name(have);
+        const char *__wn = __tur_any_type_name(want);
+        if (strcmp(__hn, __wn) == 0)
+            snprintf(__m, sizeof(__m), "cast: any holds a different instantiation of %s", __hn);
+        else
+            snprintf(__m, sizeof(__m), "cast: any holds %s, not %s", __hn, __wn);
         tur_panic(__m);
     }
 }

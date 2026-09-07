@@ -1,10 +1,57 @@
 ---
 title: `is?` and `cast` on an `any` holding a parametric value are broken all four ways -- including "cast: any holds Option, not Option"
-category: Reported
-description: emit_any_type_id keys on type_name, which renders a TY_APP per instantiation ((type-app Option float)), while is?/cast resolve a bare `Option` to the head type -- a different key. Both intern, both display as "Option", so the ids differ while the names collide. `(is? x Option)` is silently false, `(cast x Option)` panics saying a value is not its own type, and the parameterised spellings are rejected by the reader. There is no working narrowing route for a parametric or HKT receiver.
+category: Archive
+description: RESOLVED 2026-09-07. emit_any_type_id keys on type_name, which renders a TY_APP per instantiation ((type-app Option float)), while is?/cast resolve a bare `Option` to the head type -- a different key. Both intern, both display as "Option", so the ids differ while the names collide. `(is? x Option)` is silently false, `(cast x Option)` panics saying a value is not its own type, and the parameterised spellings are rejected by the reader. There is no working narrowing route for a parametric or HKT receiver.
 ---
 
 # `any` narrowing is broken for parametric receivers
+
+**RESOLVED 2026-09-07.** All three fix directions landed together, because they
+are one seam: `is?` and `cast` now share a single target resolver
+(`any_narrow_target`, `elab_toplevel.c`), so the two forms cannot drift -- which
+matters because `is?` guards a narrowing that `cast` then has to accept.
+
+1. **An applied target resolves through the shared annotation parser.**
+   `(is? x (Option float))` / `(cast x (Option float))` go through
+   `fn_type_from_form`, so the resolved Type is the SAME `TY_APP` the widen site
+   interned and the ids line up. Previously both were rejected outright
+   (`'is?' expects a type name as second argument`), which is why there was no
+   spelling that worked.
+2. **A bare type constructor is a hard error**, naming the arity and showing the
+   applied form. The report offered "hard error or match every instantiation";
+   the error is the smaller change and is forward-compatible -- relaxing it to
+   head-matching later replaces an error, it does not break working code.
+   Silently answering `false` is gone, which was the requirement.
+3. **The panic no longer names one constructor twice.** A mismatch whose two
+   ids share a display name now reads `cast: any holds a different
+   instantiation of Option` instead of `cast: any holds Option, not Option`.
+
+**Interpreter parity** was restored in the same change and is a deliberate,
+documented limit rather than a fix: a `TuriValue` records the ADT it was built
+from, not the instantiation, so `turi_any_target_name` (`eval.c`) head-matches
+an applied target. The common test -- "is this an Option" -- agrees on both
+paths. Only a test that discriminates two instantiations of the SAME
+constructor diverges, and it diverges toward `true`. Returning `false` instead
+would have made the whole type-case idiom silently fail under `--interpret`,
+which is the worse trade.
+
+**What remains, deliberately.** The message says *that* the instantiations
+differ, not *which*: `holds (Option float), not (Option int)` needs a second
+per-id table carrying the applied spelling. Widening `type-of` itself to report
+`(Option float)` would do it more cheaply but is a user-visible behaviour change
+that does not belong inside a bug fix. Not filed as a follow-up -- the message
+is actionable now, and this is a nicety.
+
+**Fixtures:** `any-narrow-parametric-roundtrip` (the type-case + `fmap` round
+trip, both paths), `any-narrow-parametric-discriminates` and
+`any-cast-wrong-instantiation` (compiled-only, per the parity limit above),
+`errors/any-narrow-bare-type-constructor` and
+`errors/any-cast-bare-type-constructor`. Suites at the fix: `run.sh` 2831/0,
+`run-turi.sh` 1926/0.
+
+---
+
+## The original report
 
 **Severity: high.** A **silent wrong answer** (`is?`) and a panic whose message
 is self-contradictory (`cast: any holds Option, not Option`), with no working

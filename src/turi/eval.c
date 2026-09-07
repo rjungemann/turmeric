@@ -1170,6 +1170,29 @@ static bool turi_struct_is_struct_like(TuriValue v) {
  * turi answers with the same name rather than "struct"/"adt" for everything.
  * An ADT value reports its ADT's name (a `(Circle 5)` is a "Shape"), not the
  * constructor's; a struct-lowered record reports its own. */
+/* any-narrowing-broken-for-parametric-receivers: the name an `is?` / `cast`
+ * TARGET presents to the interpreter's `any` reflection.
+ *
+ * `type_name` renders a TY_APP per instantiation ("(type-app Option float)"),
+ * which is what makes the compiled path able to tell `(Box int)` from
+ * `(Box float)`.  A TuriValue records only the ADT it was built from, so it can
+ * never match that spelling -- an applied target has to compare against its
+ * HEAD instead.
+ *
+ * The residual divergence is deliberate and worth stating: compiled,
+ * `(is? x (Option int))` on an `any` holding an `(Option float)` is FALSE;
+ * interpreted it is TRUE, because the interpreter has no instantiation to
+ * check.  Head-matching is still the right trade -- it makes the common test
+ * ("is this an Option") agree on both paths, where returning false would make
+ * the whole type-case idiom silently fail under --interpret. */
+static const char *turi_any_target_name(Type t) {
+    if (t.kind == TY_APP) {
+        AdtDef *d = type_adt_app_def(&t);
+        if (d && d->name) return d->name;
+    }
+    return type_name(t);
+}
+
 static const char *turi_any_named_type(TuriValue v) {
     if (v.tag != TURI_STRUCT || !v.as_struct) return NULL;
     if (!turi_struct_is_struct_like(v) && v.as_struct->ctor &&
@@ -10777,7 +10800,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
              * on the compiled path alike, handing back a reinterpreted value.
              * `e->type` is the named target the elaborator resolved. */
             const char *have = turi_any_named_type(v);
-            const char *want = type_name(e->type);
+            const char *want = turi_any_target_name(e->type);
             ok = (v.tag == TURI_STRUCT && have && want && strcmp(have, want) == 0);
             break;
         }
@@ -10834,7 +10857,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * struct.  Primitives keep the kind compare. */
         const char *named = turi_any_named_type(v);
         if (named && e->as.any_is_.test_type.kind != TY_UNKNOWN) {
-            const char *want = type_name(e->as.any_is_.test_type);
+            const char *want = turi_any_target_name(e->as.any_is_.test_type);
             return turi_bool(want && strcmp(named, want) == 0);
         }
         TypeKind vk = TY_UNKNOWN;
