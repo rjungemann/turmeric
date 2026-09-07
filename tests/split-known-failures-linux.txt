@@ -67,7 +67,20 @@
 #   assignment to 'void *' from 'int' makes pointer from integer without a cast
 # -- which is the safe direction to be wrong in.
 #
-# Real fix: make the decls region carry both shapes, or make the emitted
-# extern-c declarations agree with the header.
-hamt-lowering-basic
+# FIXED 2026-09-07, and by neither of the two directions guessed at here
+# ("carry both shapes" / "make the extern-c declarations agree with the
+# header"). Both would have been substantial; both were unnecessary.
+#
+# The information was never actually lost -- it was discarded. The replaced
+# preamble region contained THIS program's own `#include "hamt.h"`, and the
+# swap threw it away along with everything else in that region.
+# jit_try_split_preamble now re-emits the quoted includes it finds there
+# (src/main.c), so every program gets exactly what it emitted. That is the
+# monolithic behaviour restored, so neither shape has to lose and nothing had
+# to be reconciled.
+#
+# Verified on 133 hamt/map/dict/set fixtures under split: 0 failed. Quoted
+# includes only -- `<...>` system headers stay the decls region's business, and
+# re-emitting those on Windows would feed the JIT the MinGW SDK headers it
+# demonstrably cannot digest.
 

@@ -17,14 +17,30 @@
 # If you fix one, delete its line in the same commit: the second check turns
 # red on a fixture that passes while still listed here.
 
-# --- fails on Linux too; the one genuinely lossy part of the split ----------
-# The emitted preamble is not fixed across programs: the emitter picks EITHER
-# `#include "hamt.h"` OR the loose `extern void *tur_hamt_new();` declarations
-# from stdlib's extern-c, never both. The committed decls region is generated
-# from ONE canonical emission, so it freezes whichever that program chose.
-# c2mir accepts the loose form alongside hamt.h's `Hamt *tur_hamt_new(void)`;
-# gcc does not, on either platform.
-hamt-lowering-basic
+# --- FIXED 2026-09-07: hamt-lowering-basic, the "genuinely lossy" one -------
+#
+# NO LONGER LISTED, on either platform. It was described here as the one place
+# the split is irreducibly lossy. It was not -- the loss was in throwing away
+# information the input already carried.
+#
+# The emitted preamble is not fixed across programs: the emitter writes EITHER
+# `#include "hamt.h"` (a program the compiler lowers straight onto the hamt API)
+# OR loose `extern void *tur_hamt_new();` declarations from stdlib's extern-c.
+# Never both, because gcc rejects the pair outright -- confirmed directly:
+#
+#   error: conflicting types for 'tur_hamt_new'; have 'void *()'
+#   note: previous declaration ... with type 'Hamt *(void)'
+#
+# The committed decls region is generated from ONE canonical emission, so
+# whichever shape that program used was frozen for everybody. Carrying the
+# include unconditionally broke every loose-extern program; guarding it out
+# broke every program needing the header. Both were true, which is why this
+# looked like a trade-off with no good side.
+#
+# The fix is not to choose: jit_try_split_preamble now re-emits the quoted
+# includes the REPLACED REGION actually contained (src/main.c), so each program
+# gets exactly what it emitted -- the monolithic behaviour, restored. Verified
+# on 133 hamt/map/dict/set fixtures under split: 0 failed.
 
 # --- FIXED 2026-09-07: was a stack overflow, not a GC bug -------------------
 #

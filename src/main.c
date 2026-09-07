@@ -3964,6 +3964,43 @@ static bool jit_try_split_preamble(Buf *csrc, Buf *out) {
     const char *after = pe + sizeof(pre_end) - 1;
     buf_write(out, csrc->data, (size_t)(ps - csrc->data));
     buf_write(out, tur_rt_split_decls, tur_rt_split_decls_len);
+    /* Carry THIS program's own project includes across the swap.
+     *
+     * The preamble is not actually fixed across programs, which is the premise
+     * the whole split rests on and the one place it is false: the emitter
+     * writes EITHER `#include "hamt.h"` (a program the compiler lowers
+     * directly onto the hamt API) OR loose `extern void *tur_hamt_new();`
+     * declarations from stdlib's extern-c -- never both, because gcc rejects
+     * the combination outright:
+     *
+     *   error: conflicting types for 'tur_hamt_new'; have 'void *()'
+     *   note: previous declaration ... with type 'Hamt *(void)'
+     *
+     * The committed decls region is generated from ONE canonical emission, so
+     * whichever shape that program happened to use was frozen for everybody.
+     * Carrying the include unconditionally broke every loose-extern program;
+     * guarding it out (`#ifndef TUR_RT_SPLIT_HOSTED`, still in the generated
+     * header) broke every program that needs the header, which is what took
+     * `hamt-lowering-basic` down with a screenful of implicit declarations.
+     *
+     * Re-emitting the includes the REPLACED REGION actually contained gives
+     * each program exactly what it emitted, which is what the monolithic build
+     * does -- so neither shape has to lose. Header guards make a duplicate
+     * harmless if the decls region already pulled the same file in.
+     *
+     * Quoted includes only: `<...>` system headers are the decls region's
+     * business, and on Windows re-emitting them is actively harmful (the JIT
+     * cannot digest the MinGW SDK headers -- see
+     * docs/reported/jit-windows-support-spike.md). */
+    for (const char *p = ps; p < pe; ) {
+        const char *eol = (const char *)memchr(p, '\n', (size_t)(pe - p));
+        size_t len = eol ? (size_t)(eol - p + 1) : (size_t)(pe - p);
+        if (len > sizeof("#include \"") - 1 &&
+            strncmp(p, "#include \"", sizeof("#include \"") - 1) == 0)
+            buf_write(out, p, len);
+        if (!eol) break;
+        p = eol + 1;
+    }
     buf_write(out, after, csrc->len - (size_t)(after - csrc->data));
     /* TUR_JIT_DUMP_C=<path>: the exact text handed to c2mir.  A c2mir
      * diagnostic names <tur-jit>:LINE:COL, and until this existed there was no
