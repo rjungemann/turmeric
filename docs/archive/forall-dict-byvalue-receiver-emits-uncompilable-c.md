@@ -1,10 +1,73 @@
 ---
 title: A mode-B runtime dictionary call on a by-value struct receiver emits uncompilable C instead of TUR-E0311
-category: Reported
-description: The dict-clone body erases its argument to int64_t but casts the method slot to the instance's concrete signature. For carrier-shaped receivers (int, bool) the function-pointer pun works; for a by-value struct it is an "incompatible type for argument 1" cc error. forall-dict-pass guards its other unsupported shape with TUR-E0311 and a negative fixture; this one has no guard, so it escapes as a raw cc failure.
+category: Archive
+description: RESOLVED 2026-09-07 via fix direction 1 (the guard). Direction 2 stays unbuilt, but is now measured rather than guessed -- the caller ALREADY boxes a by-value aggregate into the carrier, so what is missing is only a per-instance deref wrapper in the dict slot, which is a dictionary-ABI change. Original text: The dict-clone body erases its argument to int64_t but casts the method slot to the instance's concrete signature. For carrier-shaped receivers (int, bool) the function-pointer pun works; for a by-value struct it is an "incompatible type for argument 1" cc error. forall-dict-pass guards its other unsupported shape with TUR-E0311 and a negative fixture; this one has no guard, so it escapes as a raw cc failure.
 ---
 
 # Mode-B dict dispatch on a by-value struct receiver emits uncompilable C
+
+**RESOLVED 2026-09-07 via fix direction 1 -- the guard.**
+
+The dispatch site now rejects a class whose method takes a by-value aggregate
+when it is reached through a rank-2 `forall` constraint, instead of emitting a
+signature cc will not accept:
+
+```
+error: forall-dict-pass: typeclass 'Shape' cannot be used as a rank-2
+  constraint because its method 'area' takes a by-value aggregate ('Square').
+  The runtime dictionary passes every argument through the int64 carrier, and a
+  by-value parameter neither fits it nor has one layout across instances. Call
+  the method on a statically known type instead of through a `forall` parameter
+```
+
+The guard lives at the single site that builds the dict-slot cast
+(`emit_call_name`, `emit_core.c`) rather than in `make_dict_clone` beside its
+sibling, because that is the only place the concrete types are exact. It emits
+the carrier so the surrounding C stays well-formed and lets the error count
+abort the build, matching the emitter's other diagnostics.
+
+**Direction 2 is now measured rather than guessed**, which changes what it
+would cost. The report assumed the caller could not pass a by-value aggregate
+through the carrier at all. It already does -- the poly call site heap-boxes
+it:
+
+```c
+(int64_t)(intptr_t)({ tur_adt_Circle *__tur_pbox = malloc(sizeof(tur_adt_Circle));
+                      *__tur_pbox = (__ps_182); ... __tur_pbox; })
+```
+
+So the argument arriving in the clone is a pointer, and the only thing missing
+is a per-instance wrapper **in the dict slot** that derefs it. There is exactly
+one dict-slot dispatch site, so the read side is a single change -- but the
+slot's contents are the dictionary ABI, which every typeclass shares. That is
+why it stays with runtime typeclass dispatch (D8 of the Saffron plan) rather
+than riding along here.
+
+**Two things surfaced while guarding it, both filed:**
+
+- [forall-dict-float-result-truncated](../reported/forall-dict-float-result-truncated.md)
+  **(high, silent)** -- the clone returns a float result through
+  `(int64_t)(intptr_t)`, a numeric conversion, so a method declared `: float`
+  returns 2.5 as 2 and 7.1 as 7 with no warning at all. Independent of this
+  defect: no aggregate, no pointer, carrier-shaped receivers only. It is also
+  why the diagnostic above does **not** suggest putting the receiver behind a
+  pointer -- a `:heap` receiver gets past the guard and lands in the
+  truncation, trading a loud failure for a silent one. Found only because the
+  probe used 7.1 rather than 7.0, per CLAUDE.md's float rule.
+- **The interpreter has no such limitation.** It runs the guarded program
+  correctly (19.6349 / 50.41 / 0), because it dispatches on tagged values and
+  has no dictionary ABI to squeeze an aggregate through. So this restriction is
+  a property of the compiled back end, and direction 2 would be closing a gap
+  between the back ends rather than adding a capability. The negative fixture
+  carries `requires.compiled` for exactly that reason, and says so.
+
+**Fixture:** `errors/forall-dict-byvalue-receiver`. Suites: `run.sh` 2839/0,
+`run-turi.sh` 1932/0. `forall-dict-show` (the working int/bool sibling) is
+unaffected.
+
+---
+
+## The original report
 
 **Severity: medium.** No miscompile -- the build fails -- but it fails as a
 `cc` error against generated code, which is the failure mode
