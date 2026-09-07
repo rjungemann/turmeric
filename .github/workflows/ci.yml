@@ -588,31 +588,24 @@ jobs:
           /tmp/splitprobe || { echo "::error::split-built binary did not run"; exit 1; }
           echo "split engaged and the artifact runs."
 
-      # Compared against a NAMED baseline, not a count.  A count cannot tell
-      # "the three known failures" from "one got fixed and two new ones
-      # appeared".  Any difference in either direction is a failure, including
-      # a fixture that starts passing -- fix one, delete its line.
+      # Plain "zero failures", like every other suite.
+      #
+      # This used to diff against a committed known-failure baseline, which was
+      # scaffolding while the split still had failures. Both lists reached empty
+      # on 2026-09-07, so the scaffolding went with them -- the investigation
+      # they carried is in
+      # docs/archive/cc-path-split-windows-and-hamt-findings.md.
+      #
+      # Worth one line on how they died, because the bug was in the harness and
+      # not the thing under test: with an empty list,
+      # `grep -vE '^\s*(#|$)' <file>` matches nothing and exits 1, and these
+      # steps run under `bash -e`. All four split legs reported
+      # `2828 passed, 0 failed` and then failed anyway. An empty-set edge case
+      # in a check is worse than no check, so the check is now the simple one.
       - name: Suite under TUR_RUNTIME=split
         run: |
           set -o pipefail
-          TUR_RUNTIME=split bash tests/run.sh 2>&1 | tee /tmp/split-run.log || true
-
-          # run.sh prints trailing "  - <name> (<reason>)" lines per failure.
-          sed -n 's/^  - \([A-Za-z0-9._-]*\).*/\1/p' /tmp/split-run.log \
-            | sort -u > /tmp/split-actual.txt
-          grep -vE '^\s*(#|$)' tests/split-known-failures-linux.txt \
-            | sed 's/[[:space:]]*$//' | sort -u > /tmp/split-expected.txt
-
-          echo "--- expected (tests/split-known-failures-linux.txt) ---"; cat /tmp/split-expected.txt
-          echo "--- actual ---";                                   cat /tmp/split-actual.txt
-
-          if diff -u /tmp/split-expected.txt /tmp/split-actual.txt; then
-            n=$(wc -l < /tmp/split-expected.txt)
-            echo "Split suite matches its known-failure baseline ($n known)."
-            exit 0
-          fi
-          echo "::error::split failures differ from tests/split-known-failures-linux.txt (see diff above). A fixture that now PASSES is also a difference -- delete its line."
-          exit 1
+          TUR_RUNTIME=split bash tests/run.sh 2>&1 | tee /tmp/split-run.log
 
       - name: Save ccache
         if: always()
@@ -1125,60 +1118,23 @@ jobs:
           /tmp/splitprobe.exe || { echo "::error::split-built binary did not run"; exit 1; }
           echo "split engaged and the artifact runs."
 
-      # SUBSET check, not an equality one, because this shard sees a third of
-      # the corpus and the baseline covers all of it.  This is the direction
-      # that matters: any NEW failure lands in some shard and turns that shard
-      # red immediately.  The other direction -- a listed fixture that has
-      # started passing -- is checked once, below, and cannot be checked here
-      # without teaching each shard which baseline entries belong to it.
+      # Plain "zero failures", like the Linux leg and every other suite.
+      #
+      # This shard used to assert its failures were a SUBSET of a committed
+      # baseline, with a second step checking the other direction (every listed
+      # name still fails). That scaffolding existed while the split had known
+      # failures; both lists reached empty on 2026-09-07 and it went with them.
+      # The investigation is in
+      # docs/archive/cc-path-split-windows-and-hamt-findings.md -- including the
+      # fact that the second, cheaper check was the one that caught something,
+      # which is worth remembering if a baseline is ever needed again.
       - name: Suite under TUR_RUNTIME=split (shard ${{ matrix.shard }})
         env:
           TUR_TEST_SHARD: ${{ matrix.shard }}
         run: |
           set -o pipefail
           TUR=./build-win/tur.exe TUR_RUNTIME=split bash tests/run.sh 2>&1 \
-            | tee ./split-win.log || true
-
-          sed -n 's/^  - \([A-Za-z0-9._-]*\).*/\1/p' ./split-win.log | sort -u > ./actual.txt
-          grep -vE '^\s*(#|$)' tests/split-known-failures-windows.txt \
-            | sed 's/[[:space:]]*$//' | sort -u > ./allowed.txt
-
-          echo "--- failures in this shard ---"; cat ./actual.txt
-          unexpected=$(comm -23 ./actual.txt ./allowed.txt)
-          if [ -n "$unexpected" ]; then
-            echo "::error::split failures NOT in tests/split-known-failures-windows.txt:"
-            printf '%s\n' "$unexpected"
-            exit 1
-          fi
-          echo "All failures in this shard are known (see tests/split-known-failures-windows.txt)."
-
-      # The other direction, run once and unsharded: every name in the baseline
-      # must still fail.  Three fixtures, so this costs seconds rather than a
-      # fourth corpus pass.  It is what stops the list rotting into a permanent
-      # allowance for things that were fixed years ago.
-      - name: Every listed failure still fails
-        if: matrix.shard == '1/3'
-        run: |
-          set -o pipefail
-          names=$(grep -vE '^\s*(#|$)' tests/split-known-failures-windows.txt \
-                  | sed 's/[[:space:]]*$//' | sort -u)
-          [ -n "$names" ] || { echo "baseline is empty -- delete this step and the files with it"; exit 0; }
-          filter="^($(printf '%s\n' "$names" | paste -sd'|' -))$"
-          echo "filter: $filter"
-
-          TUR=./build-win/tur.exe TUR_RUNTIME=split TUR_TEST_FILTER="$filter" \
-            bash tests/run.sh 2>&1 | tee ./split-win-known.log || true
-
-          sed -n 's/^  - \([A-Za-z0-9._-]*\).*/\1/p' ./split-win-known.log | sort -u > ./still.txt
-          printf '%s\n' "$names" > ./listed.txt
-
-          fixed=$(comm -23 ./listed.txt ./still.txt)
-          if [ -n "$fixed" ]; then
-            echo "::error::these are listed in tests/split-known-failures-windows.txt but now PASS -- delete their lines:"
-            printf '%s\n' "$fixed"
-            exit 1
-          fi
-          echo "Every listed fixture still fails, as recorded."
+            | tee ./split-win.log
 
       - name: Upload split log
         if: failure()
