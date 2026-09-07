@@ -463,6 +463,62 @@ machinery that is already in memory; compiled runtime dispatch needs the table
 emitted. **This is the same asymmetry as Section 2.3**, which is a good sign
 the staging model generalises rather than being special-pleading for S3/S4.
 
+#### How big is the limitation, actually? (measured)
+
+Smaller than "no typeclasses in Saffron" sounds, because **the operators a
+dynamic program leans on are not typeclass methods.** `+ - * / = < > <=`
+and `println` are rows in the builtin operator table
+(`builtins.c:28` -- `{ "=", NULL, 2, 2, {.kind=TY_INT}, {.kind=TY_BOOL},
+BS_BIN_INFIX, "==" }`), not `Eq`'s `eq?`. They are D4's problem, and D4 solves
+them for `any` without any instance resolution at all. Ordinary Saffron code --
+arithmetic, comparison, printing, string work, control flow -- never reaches
+D8's limit.
+
+What does reach it: user-defined classes, the HKT stack (`fmap`, `bind`,
+`pure`), `Eq`'s `eq?`, and `Hash`/`MapKey`, which `Map` requires of its keys.
+
+**Three escape hatches, two of which already work:**
+
+| Route | Status | Shape |
+|---|---|---|
+| `is?`-guard narrowing | **works today** | `(if (is? x Circle) (area x) ...)` -- verified: 19.6349 / 50.41 |
+| explicit `cast` | **works today** | `(area (cast x Circle))` |
+| annotate the binding | works trivially | `[x : Circle]` |
+| `@TypeName` witness | **broken on `any`** | `(tag-of @bool x)` -- emits uncompilable C |
+
+The first is the important one, and it is not ceremony: it reads as a
+type-case, which is how dynamic languages dispatch anyway (Clojure's
+`condp instance?`, Racket's predicate `cond`). A Saffron program that wants
+per-type behaviour writes the type-case it would have written regardless.
+
+`@TypeName` (`elab_typeclasses.c:5563`) is the dedicated syntax for exactly
+this situation -- and it is what the compiler's own ambiguity diagnostic
+recommends -- but it pins the instance without unboxing the receiver, so
+following the hint produces a `cc` error. Filed as
+[typeclass-dispatch-on-any-receiver-emits-uncompilable-c](../reported/typeclass-dispatch-on-any-receiver-emits-uncompilable-c.md).
+**Fixing it is the cheapest large improvement to D8's ergonomics available**:
+the witness already names the target instance, which is precisely what `cast`
+needs, so it can lower to dispatch-plus-checked-unbox and become a one-token
+answer to the erased-receiver case.
+
+**Where the hatches genuinely run out:** a heterogeneous collection crossed
+with an open (user-extensible) class. `(map show xs)` over a vec holding three
+user types cannot be narrowed at one site -- the dispatch has to happen
+per element, so the user ends up hand-writing the type-case that a vtable
+would be. That is the real cost, and S6 makes heterogeneous collections the
+default, so it is not a corner case.
+
+**Where they do not run out, and this bounds the damage:** a *closed* instance
+set can have its type-case written once, in the prelude, instead of by every
+caller. `MapKey` has five stdlib instances (`int`, `bool`, `cstr`, `float32`,
+`float`) plus `String` and `Sym` -- a finite set the prelude controls. So
+S6's `assoc`/`get` can dispatch dynamic keys with one `is?` chain and Saffron
+gets working maps without D8. The same trick covers `Hash` and `Eq`.
+
+So the limitation is: **closed classes are a prelude implementation detail;
+open classes over heterogeneous data are where a user feels it.** That is a
+real cost but a narrow one, and it is the evidence D8 should be scheduled on.
+
 #### The verdict, restated
 
 D8 stays unscheduled, and Saffron ships with `(show x)` on an `any` an error
@@ -522,6 +578,7 @@ cannot be built until they are.**
 |---|---|---|
 | P1 | [any-type-ids-are-per-tu](../reported/any-type-ids-are-per-tu.md) | **S5, and D8 entirely** |
 | P2 | [forall-dict-byvalue-receiver-emits-uncompilable-c](../reported/forall-dict-byvalue-receiver-emits-uncompilable-c.md) | D8 |
+| P2b | [typeclass-dispatch-on-any-receiver-emits-uncompilable-c](../reported/typeclass-dispatch-on-any-receiver-emits-uncompilable-c.md) | D8 ergonomics; cheap and high-value |
 | P3 | [inferred-return-defaults-inconsistently](../reported/inferred-return-defaults-inconsistently.md) | S2 |
 | P4 | [type-of-on-boxed-closure-diverges](../reported/type-of-on-boxed-closure-diverges.md) | S4 |
 | P5 | [any-type-guide-examples-do-not-compile](../reported/any-type-guide-examples-do-not-compile.md) | docs only |
