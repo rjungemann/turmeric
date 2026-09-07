@@ -1603,6 +1603,28 @@ The heading stays because the *category* is worth keeping in view: a defect
 found while sweeping one platform is not thereby a defect of that platform,
 and that one had been in the POSIX path from the start.
 
+## The `any` surface (filed 2026-09-07)
+
+Three findings from surveying `any` while writing
+[docs/upcoming/saffron-lang-plan.md](../upcoming/saffron-lang-plan.md). None is
+a miscompile; all three are in the same area -- what happens when a value's
+type is not statically pinned -- and all three would be prerequisites for any
+dynamic-dispatch layer over `any`. Each has a one-file repro against `v0.44.2`
+(`2da89e84`).
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [inferred-return-defaults-inconsistently](inferred-return-defaults-inconsistently.md) | medium | `elab_defn` starts `return_kind` at `TY_NIL` and never adopts the body's type when the return was unannotated (`elab_fn` does, at `elab_fns.c:10036`). An `int` or `cstr` body bridges through the int64 carrier and appears to work; a `7.1` body hits the register-class check and reports "declares return type 'nil'" for a `defn` carrying no return annotation at all |
+| [type-of-on-boxed-closure-diverges](type-of-on-boxed-closure-diverges.md) | low | A `TY_FN` payload widened to `any` gets no row in the compiled name table, so `type-of` answers `"unknown"`; the interpreter answers `"fn"` (`eval.c:10810`). A compiled/interp divergence that survived because nothing compares the two on this shape |
+| [any-type-guide-examples-do-not-compile](any-type-guide-examples-do-not-compile.md) | low (docs) | The union/intersection guide opens both its `any` section and its Gradual Typing section with `(defn debug-print [x : any] : unit (println x))`. `: unit` is not a type (the annotations guide says so), and `println` has no `any` overload -- so the first example a reader meets for `any` fails twice |
+
+The third row generalises past the docs: the builtin operator table is keyed on
+concrete argument kinds and has no `TY_ANY` row, so `+`, `-`, `=`, `<` and
+`println` all reject an `any` argument with TUR-E0006. That is not filed as a
+defect -- `any` is documented as a storage and reflection type -- but it is the
+single largest gap between what ships and what a dynamic dialect needs, and it
+is scoped as D4/G3-G9 in the Saffron plan.
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
