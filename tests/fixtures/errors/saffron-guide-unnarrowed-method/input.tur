@@ -1,0 +1,13 @@
+#lang saffron
+;; docs/guides/saffron-guide.md, "Typeclasses": a method on an un-narrowed
+;; `any` is a DIAGNOSTIC naming the three ways out, not a guess and not
+;; uncompilable C.
+;;
+;; The guide quotes both the error and its help line, so both are pinned here.
+;; The help text is the load-bearing half: it is what sends a reader to the
+;; type-case, and an earlier version of this path had no diagnostic at all when
+;; a single instance was in scope.
+
+(defn h [x] (hash x))
+
+(defn main [] 0)

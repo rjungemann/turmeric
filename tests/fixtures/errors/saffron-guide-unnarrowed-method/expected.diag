@@ -1,0 +1,2 @@
+cannot dispatch '.hash' on an 'any' receiver
+narrow it first

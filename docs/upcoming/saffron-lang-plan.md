@@ -1520,9 +1520,26 @@ from a clean file. The first version of this probe did exactly that and would
 have concluded the Saffron path was fine on no evidence. Verified to fail
 against a stub server that publishes nothing.
 
+**`docs/guides/saffron-guide.md` is DONE (2026-09-08)**, with every example
+compiled and run by both suites (`tests/fixtures/docs-saffron-guide-examples`),
+and its three error claims pinned separately
+(`saffron-guide-refinement-violated`, `errors/saffron-guide-unnarrowed-method`,
+`errors/saffron-region-bracket-refused`). The `any` guide's examples rotted once
+because nothing compiled them; this one is pinned from the start.
+
+Writing it was not a formality. Drafting the examples found a **build breaker**
+-- the container seam emitted C that GCC >= 14 rejects, so an unannotated
+container parameter did not build on a modern toolchain
+(`saffron-container-param-cast-shape`) -- and corrected three claims that would
+otherwise have shipped wrong: `type-of` on a literal (the `any` default is on
+PARAMETERS, not expressions), `+` on strings (numeric only, it panics), and a
+refinement violation being STATIC when the value is statically known rather
+than the runtime panic the first draft described. Examples a reader would write
+exercise shapes the 2897-fixture corpus does not.
+
 Still open: `tur repl --lang saffron`, `tur init --saffron`, `tools/gendocs.py`
-(docstrings without types), the vim/vscode syntax packs, and
-`docs/guides/saffron-guide.md`. The items are independent of each other.
+(docstrings without types), and the vim/vscode syntax packs. The items are
+independent of each other.
 
 ### S9 -- runtime typeclass dispatch (D8) -- CLEARED, not started
 

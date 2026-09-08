@@ -1,0 +1,84 @@
+#lang saffron
+;; The examples from docs/guides/saffron-guide.md, so they cannot rot.
+;;
+;; The `any` guide's examples DID rot -- nothing compiled the guides, and a
+;; reader's first encounter with the top type was two errors
+;; (any-type-guide-examples-do-not-compile, pinned since by
+;; docs-any-guide-examples). This is that fixture's twin, written at the same
+;; time as the guide rather than after the rot.
+;;
+;; Writing these examples was not a formality: drafting them found a build
+;; breaker (the container seam emitted C that GCC >= 14 rejects,
+;; saffron-container-param-cast-shape) and corrected three claims that would
+;; have shipped wrong -- `type-of` on a literal, `+` on strings, and a
+;; refinement violation being static rather than runtime when the value is
+;; statically known. Examples a READER would write exercise shapes the corpus
+;; does not.
+;;
+;; Keep it in step with the guide: if an example changes there, change it here.
+;;
+;; No requires.compiled -- the guide describes the language, not a back end, so
+;; both suites run it.
+;;
+;; Floats carry a non-zero fractional part throughout: an integral float cannot
+;; show a truncation on the way back through the `any` carrier.
+
+;; --- What actually changes ------------------------------------------------
+(defn add [a b] (+ a b))
+
+;; --- Literals keep their own types ----------------------------------------
+;; The default applies to PARAMETERS, not expressions: `(type-of 7.1)` written
+;; directly is an error ("expects an 'any'-typed argument, got 'float'"), which
+;; is why the guide routes it through an unannotated parameter.
+(defn kind-of [x] (type-of x))
+
+;; --- Annotations stay legal -----------------------------------------------
+(defstruct Point [x : float  y : float])
+(defn px [p] (.x p))
+
+;; --- Truthiness -----------------------------------------------------------
+(defn describe [x] (if x "truthy" "falsy"))
+
+;; --- The dynamic surface --------------------------------------------------
+(defn apply-twice [f x] (f (f x)))
+
+;; --- Containers -----------------------------------------------------------
+(defn total   [v] (vec-fold v 0 (fn [acc x] (+ acc x))))
+(defn doubled [v] (vec-map  v (fn [x] (* x 2))))
+
+;; --- Reading a value back out: the type-case ------------------------------
+;; The `if` guard narrows an APPLIED target, so no explicit cast is needed
+;; inside the branch -- and one there would now be an error, since `shape` is
+;; no longer an `any`.
+(defn area [shape]
+  (if (is? shape (Option float))
+    (unwrap-or shape 0.0)
+    -1.0))
+
+;; --- Refinements become runtime contracts ---------------------------------
+(defn pos [n : #refine{v : any | (> v 0)}] n)
+
+(defn main []
+  (println (add 1 2))
+  (println (add 1.5 2.25))
+
+  (println (kind-of 7.1))
+  (println (kind-of "hi"))
+  (println (kind-of true))
+
+  (println (cast (px (Point 3.25 1.5)) float))
+
+  (println (describe 0))
+  (println (describe ""))
+  (println (describe false))
+
+  (println (cast (apply-twice (fn [n] (+ n 1)) 10) int))
+
+  (println (cast (total [1 2 3]) int))
+  (println (cast (vec-get (doubled [1 2 3]) 2) int))
+  (println (vec-len [1 2 3]))
+
+  (println (cast (area (:: (:: (some 3.5) (Option float)) any)) float))
+
+  (println (cast (pos 5) int))
+  0)

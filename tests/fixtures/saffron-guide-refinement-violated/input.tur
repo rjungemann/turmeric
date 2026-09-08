@@ -1,0 +1,23 @@
+#lang saffron
+;; docs/guides/saffron-guide.md, "Refinements become runtime contracts": a
+;; violation the compiler CANNOT see panics `Contract violated`.
+;;
+;; The distinction the guide draws is the point of this fixture. Written with a
+;; literal -- `(pos -3)` -- the compiler PROVES the violation and reports
+;; TUR-E0371 "cannot be proved statically", which is a different claim
+;; entirely. `hide` launders the value through an unannotated parameter so the
+;; check is the runtime one the guide describes.
+;;
+;; The first draft of the guide got this wrong and would have told readers a
+;; static error was a runtime panic. Found by running the example.
+;;
+;; "before" is printed first so this distinguishes "panicked at the contract"
+;; from "never ran".
+
+(defn pos [n : #refine{v : any | (> v 0)}] n)
+(defn hide [x] x)
+
+(defn main []
+  (println "before")
+  (println (cast (pos (hide -3)) int))
+  0)
