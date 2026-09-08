@@ -757,20 +757,39 @@ it always was for the bare shape.
 So "how much does D8 cost us" can now be estimated against the design rather
 than against a bug -- which was the point of fixing it first.
 
-#### The verdict, restated
+#### The verdict, restated -- CLEARED FOR WORK 2026-09-08
 
-D8 stays unscheduled, and Saffron ships with `(show x)` on an `any` an error
-pointing at `cast`. But the reason is no longer "it is the single largest item
-that could be attached" -- it is that D8 needs P1 and P2 fixed first, and the
-open design questions are the ones the measurement did **not** answer:
-superclass chains, default methods, HKT receivers, and what happens when two
-instances match a tag. Those are worth deciding on evidence from real Saffron
-programs, not up front.
+**Every prerequisite D8 named is now met.** The verdict used to read "D8 stays
+unscheduled ... it needs P1 and P2 fixed first". P1 (the runtime type registry)
+and P2 (the by-value receiver, now guarded) landed 2026-09-07, along with P2b,
+P2c and P2d; the last asymmetry between the monomorphic and parametric
+type-case closed 2026-09-08. Nothing technical blocks D8 any more, and it is
+**scheduled as S9** below.
 
-Rough shape if it is ever built: one class-level dict type with carrier-shaped
-slots; per-instance wrappers from (d); registration into P1's table at
-static-init; a `registry[class][tag]` lookup at the call site; a clean
-"no instance for T" panic. Four of those five pieces already have a home.
+It is scheduled AFTER S8, on the plan's own reasoning rather than for
+convenience. The open questions the measurement did not answer -- superclass
+chains, default methods, HKT receivers, and what happens when two instances
+match a tag -- were called out as "worth deciding on evidence from real Saffron
+programs, not up front." S8 is what makes real Saffron programs writable: the
+guide, the editor support, the REPL. Building D8's dispatch before anyone can
+comfortably write the programs that would settle its design questions is the
+order this plan set out to avoid.
+
+Until S9 lands, Saffron still ships with `(show x)` on an un-narrowed `any` as
+an error naming the three narrowing routes -- which, since the type-case now
+reaches the HKT stack, is a workable answer rather than a wall.
+
+The shape, restated as buildable work:
+
+1. One class-level dict type with carrier-shaped slots.
+2. Per-instance wrappers from (d) -- the only piece with no home yet, and
+   smaller than the report implied: the caller already boxes into the carrier,
+   so only a per-instance deref wrapper in the slot is missing.
+3. Registration into P1's registry at static-init.
+4. A `registry[class][tag]` lookup at the call site.
+5. A clean "no instance for T" panic.
+
+Four of the five already have a home.
 
 ### D9 -- the gate
 
@@ -1437,8 +1456,26 @@ POINTER, which is a WRONG ANSWER rather than a panic. That is why the first
 attempt at this was reverted. The fixtures assert VALUES on both back ends, not
 the absence of a panic.
 
-**Still owed: the `:strict` opt-out.** That is the only thing between this
-stage and done.
+**Still owed: the `:strict` opt-out -- WHICH THIS PLAN NEVER DEFINES.**
+Searched 2026-09-08: `:strict` appears exactly twice, both times in this
+stage's own "still owed" line and S5's echo of it, and nowhere is it given a
+meaning. The one thing it plausibly named -- a way to skip the boundary check
+-- is the thing D5 explicitly **rejects**: "`--saffron-unchecked-boundary` is
+deliberately *not* proposed; if the cost ever matters, the answer is D3's rung
+2, not a soundness switch."
+
+So this is one of two things, and it should be decided rather than carried:
+
+1. **Vestigial** -- a leftover from a draft where the boundary check was
+   optional, superseded by D5's verdict. Then S7 is DONE and the line goes.
+2. **A real but unwritten item** -- most likely a per-file or per-manifest
+   opt-IN to stricter checking (a Saffron file that wants unannotated
+   parameters to be an error, i.e. Saffron-as-linter), which is a different
+   feature from anything D5 discusses and needs its own decision.
+
+Reading (1) is the more likely one on the evidence, but it is a judgement about
+intent, so it is flagged here rather than resolved unilaterally. **Everything
+else in S7 is done.**
 
 **The HAND-WRITTEN spelling is settled ahead of it (2026-09-08), and it is the
 same operation.** `::` now refuses an `any` operand and names `cast`
@@ -1458,6 +1495,28 @@ preserve a `#lang saffron` line and not add annotations), `tur lsp` and
 `tur repl --lang saffron`, `tur init --saffron`, `tools/gendocs.py`
 (docstrings without types), the vim/vscode syntax packs, and a
 `docs/guides/saffron-guide.md`.
+
+`tur fmt` is DONE (2026-09-08): it preserves a `#lang` header verbatim,
+formats the body, and normalises to one newline. The rest is open, and the
+items are independent of each other.
+
+### S9 -- runtime typeclass dispatch (D8) -- CLEARED, not started
+
+D8's prerequisites are all met (see its verdict above): P1 built the runtime
+type registry instance lookup keys off, P2 guarded the by-value receiver, and
+the monomorphic/parametric type-case asymmetry is closed. The five pieces are
+listed there; four have a home already.
+
+**Scheduled after S8 deliberately.** D8's remaining questions -- superclass
+chains, default methods, HKT receivers, two instances matching one tag -- are
+the ones the measurement could not answer, and the plan's own position is that
+they want evidence from real Saffron programs. S8 is what makes those programs
+writable. Building the dispatch first would mean deciding those four questions
+up front, which is what this stage was deferred to avoid.
+
+Exit: a `(show x)` on an un-narrowed `any` dispatches on the box tag, on both
+back ends, with a clean "no instance for T" panic; and the four open questions
+answered from programs rather than from first principles.
 
 ---
 
