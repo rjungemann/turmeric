@@ -99,10 +99,11 @@ Only the INTERPRETER half remains.
    the Vec table is keyed on the header pointer plus an ELEMENT INDEX, and the
    trie exposes no stable index to key on. Recorded so the next person does not
    re-derive it.
-3. **Refuse `(Map K any)` at elaboration** the way Set already refuses, as an
-   interim, if 1 is not imminent. Turns a silent wrong answer into Set's
-   diagnostic. A wrong answer is the one outcome that should not survive contact
-   with S6, where `#map{...}` makes this shape ordinary.
+3. ~~**Refuse `(Map K any)` at elaboration** the way Set already refuses.~~
+   **Withdrawn.** It was the right interim while both back ends were broken; now
+   that the compiled half works, an elaboration refusal would undo it --
+   elaboration is shared, so there is no way to refuse for the interpreter
+   alone. The interim is gone and direction 1 is the only route.
 
 `tests/fixtures/map-any-value-roundtrip` carries `requires.compiled` so the
 remaining divergence is recorded rather than hidden by a skip nobody reads --

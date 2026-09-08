@@ -101,6 +101,11 @@ So only ONE route to a `(Vec any)` is currently shippable -- an explicit
 `(:: (vec-new) (Vec any))`, which `tests/fixtures/vec-of-any-ascribed` pins.
 The `vec-of` macro route builds and runs correctly but cannot be a fixture.
 
+**This now BLOCKS S6's headline feature.** `[1 "two" 7.1]` in a Saffron file
+lowers to `(vec-of ...)`, so G7 (a vector literal defaulting to `(Vec any)`)
+cannot land while a single `vec-of` at `any` trips the emitted-C ratchet. It was
+filed as a residue; it is on the critical path.
+
 ### Cause, as far as it is established
 
 Inside `vec-empty-like__`'s `any` clone, the zero-argument `(vec-new)` call
@@ -121,10 +126,42 @@ if (call->kind == EX_CALL &&
 }
 ```
 
-The comment above it says such a call is meant to be resolved by an
-"exact-match path above ... recorded per-Expr*". Why that recording picks the
-`int` clone inside the `any` clone's body is the next thing to establish; a
-probe on that recording, not another read of the two call sites, is the step.
+**Established 2026-09-08, and it is not the short-circuit.** The call does not
+reach it: it takes the exact-match path above and matches the WRONG entry.
+
+That table is keyed on `(Expr*, active outer spec)`, which is right --
+`vec-empty-like__`'s body is ONE Expr tree emitted once per clone, so a
+per-`Expr*` key alone could hold only one answer. The defect is the CROSS-SPEC
+FALLBACK beside it:
+
+```c
+if (ctx->specialized_call_outer[i] == active_outer) { matched = ...; break; }
+/* Cross-spec fallback only inside a spec (active_outer != NULL) ... */
+if (active_outer != NULL && !saw && !construct_into_carrier) {
+    matched = ctx->specialized_call_names[i];
+    saw = true;
+}
+```
+
+Inside `vec_empty_like____spec__..._any` the `(vec-new)` Expr has an entry
+recorded under the `int` clone's outer and NONE under the `any` clone's, so the
+fallback takes the sibling -- a clone whose return ABI is `tur_adt_Vec__int *`
+where this body returns `tur_adt_Vec__any *`. The comment directly above already
+names that hazard for the NULL-outer case ("so it never routes a call to a
+spec-scoped clone with a different return ABI") and does not guard the non-NULL
+one.
+
+So there are two candidate fixes, and they are different questions:
+
+1. **Why is there no recording under the `any` outer?** That is the root cause;
+   the fallback is only how it surfaces. Probe the recording site, not this
+   lookup.
+2. **Guard the cross-spec fallback on return ABI**, the way
+   `construct_into_carrier` guards it for a different reason. Contained, but it
+   treats the symptom, and declining the fallback drops the call to the carrier
+   base -- which then has its own int64-vs-pointer straddle to survive.
+
+Prefer 1.
 
 ## Fix directions
 

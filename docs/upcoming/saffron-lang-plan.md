@@ -1180,8 +1180,19 @@ The INTERPRETER half of Map is still open, and it is the wrong-answer one.
 Asking early was the right call: it would otherwise have been found by a user
 writing `#map{:a 1 :b "two"}`.
 
-Still to do: `[1 "two" 7.1]` defaulting to `(vec any)` in a Saffron file, the
-map/set/cons-list twins, and the prelude.
+Still to do, and the ORDER is now measured rather than assumed:
+
+1. **The `vec-of` clone-selection bug**, which turned out to BLOCK the headline
+   feature rather than sit beside it: `[1 "two" 7.1]` lowers to `(vec-of ...)`,
+   and a single `vec-of` at `any` trips run.sh's emitted-C ratchet. Diagnosed in
+   [vec-any-monomorph-is-half-plumbed](../reported/vec-any-monomorph-is-half-plumbed.md):
+   the cross-spec fallback in `emit_call_name` takes a sibling clone with a
+   different return ABI, because the `any` outer has no recording of its own.
+2. **G7 itself** -- `[...]` defaulting to `(vec any)` in a Saffron file -- which
+   is then a small lowering, since the `(Vec any)` machinery works on both back
+   ends.
+3. The interpreter's Map value tag (the open wrong answer).
+4. The `#map{...}` / `#set{...}` / cons-list twins, then the prelude.
 
 ### S6 -- containers and the Saffron prelude (medium) -- remaining scope
 
