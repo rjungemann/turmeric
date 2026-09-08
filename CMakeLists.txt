@@ -714,6 +714,16 @@ add_test(
   COMMAND bash tests/run-hamt-owned-keys.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# saffron-lang-plan S7 / D5, reverse direction: a Turmeric module importing a
+# Saffron one.  The import path hardcoded READER_TURMERIC and never ran `#lang`
+# detection, so a Saffron module could not be imported at all -- the directive
+# reached the reader as source.  Needs its own runner because a multi-module
+# fixture requires a dedicated runner anyway.
+add_test(
+  NAME tur_saffron_import
+  COMMAND bash tests/run-saffron-import.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # tur-init-help-scaffolds-and-overwrites: `tur init` must never destroy a
 # working tree.  `tur init --help` did not print help -- the flag fell past the
 # project-name slot, the cwd basename was used as the name, and scaffolding

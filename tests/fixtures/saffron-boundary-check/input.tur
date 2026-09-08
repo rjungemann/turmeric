@@ -1,0 +1,34 @@
+#lang saffron
+;; saffron-lang-plan S7 / D5: the Saffron -> Turmeric boundary is a CONTRACT
+;; boundary -- an implicit CHECKED cast at each argument whose parameter is
+;; concrete and whose argument is `any`.
+;;
+;; Three options were considered and (c) chosen: rejecting unless the caller
+;; annotates is safe and unusable; ERASING -- passing the payload word through
+;; unchecked -- turns a type error into a memory-safety bug, because the word is
+;; whatever the box held; so the seam CHECKS.  It reuses `elab_any_unbox_to`,
+;; the node `(cast x T)` already lowers to, rather than inventing a mechanism --
+;; which is why a mismatch panics with the ordinary `cast: any holds ...`
+;; message and why the hand-written spelling and the compiler-inserted one are
+;; the same operation.
+;;
+;; This fixture is the passing half: the values really are the declared types,
+;; so every call goes through.  tests/fixtures/saffron-boundary-panic is the
+;; other half.
+;;
+;; The elements come out of a `[...]` literal on purpose -- that is a
+;; `(Vec any)` after the S6 widen, so each `vec-get` really is an `any` at the
+;; call site and the seam really fires.  Passing a bare literal would type-check
+;; statically and prove nothing.
+
+(defn takes-int [x : int] : int (+ x 1))
+(defn takes-cstr [s : cstr] : cstr s)
+(defn takes-float [f : float] : float (* f 2.0))
+
+(defn main []
+  (let [v [7 "seven" 3.5]]
+    (println (takes-int (vec-get v 0)))
+    (println (takes-cstr (vec-get v 1)))
+    (println (takes-float (vec-get v 2)))
+    (vec-free v))
+  0)

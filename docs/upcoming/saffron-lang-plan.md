@@ -1324,11 +1324,34 @@ A `stdlib/saffron/prelude.tur` autoloads for `LANG_SAFFRON` files: the dynamic
 reaches for constantly. This is where Saffron stops feeling like Turmeric with
 the types removed and starts feeling like its own thing.
 
-### S7 -- the boundary (medium)
+### S7 -- the boundary (medium) -- MOSTLY DONE 2026-09-08
 
 D5's implicit checked `cast` at each Saffron -> Turmeric argument whose
 parameter is concrete and whose argument is `any`. Fixtures for both
 directions, including the panic path.
+
+**Both directions now have coverage, and the reverse one was BROKEN, not
+merely unpinned.** D5 said a Turmeric module importing a Saffron one "sees
+`any`-typed exports and must narrow them ... nothing new is needed" -- which
+assumed the import worked. It did not: the import path (`elab_module.c`)
+hardcoded `READER_TURMERIC` and never ran `#lang` detection, so
+`(import dyn)` on a `#lang saffron` module was
+`unexpected character '#' (0x23)`. A Saffron module could not be imported at
+all. The `(load ...)` path already detected it -- the same split that let
+`tur fmt` reject every `#lang` file while every other entry point accepted
+them, found the same way and fixed the same way.
+`tests/run-saffron-import.sh` (ctest `tur_saffron_import`) pins it on both back
+ends; `tests/fixtures/saffron-boundary-check` and `saffron-boundary-panic` pin
+the forward direction and its panic path.
+
+**Still owed: the `:strict` opt-out**, and one HIGH-severity defect the fixture
+work uncovered --
+[saffron-unannotated-param-container-cast-panics](../reported/saffron-unannotated-param-container-cast-panics.md).
+`(defn pick [v] (vec-get v 0))` panics compiled and works interpreted, because
+the seam's guard exempts a bare `TY_TYVAR` expected type but not a `TY_APP`
+whose ARGUMENT is a tyvar. Passing a container to a function with an
+unannotated parameter is the ordinary case in this dialect, so S7 is not done
+until that is.
 
 **The HAND-WRITTEN spelling is settled ahead of it (2026-09-08), and it is the
 same operation.** `::` now refuses an `any` operand and names `cast`

@@ -397,6 +397,56 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
     sfile->len = src_len;
     sfile->file_id = e->next_import_file_id++;
     sfile->reader_type = READER_TURMERIC;
+
+    /* saffron-lang-plan S7: honour a `#lang` directive in an IMPORTED module.
+     *
+     * This path hardcoded READER_TURMERIC and never ran detection, so the
+     * directive reached the reader as source and
+     * `(import dyn)` on a `#lang saffron` module was
+     * "unexpected character '#' (0x23)" -- a Saffron module could not be
+     * imported at ALL.  D5's reverse direction ("a Turmeric module importing a
+     * Saffron module sees `any`-typed exports ... nothing new is needed")
+     * assumed the import worked; it did not.
+     *
+     * The `(load ...)` path in elab_toplevel.c already does exactly this, which
+     * is why loading a Saffron file worked while importing one did not -- the
+     * same split that let `tur fmt` reject every `#lang` file while every other
+     * entry point accepted them.  Mirrors that path: the extension still wins
+     * for the base reader, the directive supplies it otherwise, and the
+     * LANGUAGE axis rides out beside it so the module elaborates as Saffron. */
+    {
+        ReaderType ext_type = reader_type_from_extension(path_copy);
+        if (ext_type == READER_UNKNOWN) ext_type = READER_TURMERIC;
+        const char  *msrc = src_copy;
+        size_t       mlen = src_len;
+        LangLayerSet layers = 0;
+        const char  *bad = NULL;
+        size_t       bad_len = 0;
+        LangDialect dialect = LANG_TURMERIC;
+        ReaderType lang_type = detect_lang_dialect(src_copy, src_len,
+                                                   &msrc, &mlen,
+                                                   &layers, &bad, &bad_len,
+                                                   &dialect);
+        if (bad) {
+            diag_emit(DIAG_ERROR, SPAN_UNKNOWN,
+                      "unknown #lang layer '%.*s' in imported module '%s' "
+                      "(TUR-E0330)", (int)bad_len, bad, path_copy);
+            return false;
+        }
+        ReaderType chosen = (ext_type != READER_TURMERIC) ? ext_type : lang_type;
+        if (!reader_type_is_implemented(chosen)) {
+            diag_emit(DIAG_ERROR, SPAN_UNKNOWN,
+                      "#lang %s in imported module '%s' is not yet implemented",
+                      reader_type_name(chosen), path_copy);
+            return false;
+        }
+        sfile->src         = msrc;
+        sfile->len         = mlen;
+        sfile->head_offset = (size_t)(msrc - src_copy);
+        sfile->reader_type = chosen;
+        sfile->lang        = dialect;
+        sfile->lang_layers = layers;
+    }
     diag_register_file(sfile);
 
     /* Parse the source into forms.
