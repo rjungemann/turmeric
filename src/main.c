@@ -7816,15 +7816,26 @@ static int cmd_eval_h(const char *path, bool use_color,
         args_val.as_int = args_list;
         turi_env_set(env, "*args*", args_val);
     }
-    /* Set module_base_dir so (import ...) resolves relative to the script. */
+    /* Set module_base_dir so (import ...) resolves relative to the script.
+     *
+     * Through the SETTER, not a direct field assignment: the field carries an
+     * ownership flag (`module_base_dir_owned`) that only the setter raises, and
+     * `turi_env_free` frees the string only when it is raised.  A direct
+     * assignment is the BORROWED path -- correct for a pointer into `argv`, and
+     * a leak for a fresh allocation, which is what this used to hand it.
+     * The setter strdups, so the slice can live on the stack.
+     * See docs/archive/cli-mallocs-module-base-dir-through-the-borrowed-path.md */
     {
         const char *slash = strrchr(path, '/');
         if (slash) {
             size_t dlen = (size_t)(slash - path);
             char *dpath = (char *)malloc(dlen + 1);
-            memcpy(dpath, path, dlen);
-            dpath[dlen] = '\0';
-            env->module_base_dir = dpath;
+            if (dpath) {
+                memcpy(dpath, path, dlen);
+                dpath[dlen] = '\0';
+                turi_env_set_module_base_dir(env, dpath);
+                free(dpath);
+            }
         }
     }
     /* Debugger Phase 2: attach the debugger before top-level eval so the
@@ -8567,15 +8578,19 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
         /* Register native overrides for common stdlib inline-C patterns. */
         wk_register_stdlib_natives(env);
         /* Set module_base_dir to the fixture directory so that (import ...)
-         * forms resolve sibling .tur files correctly. */
+         * forms resolve sibling .tur files correctly.  Through the setter, for
+         * the ownership reason spelled out at the sibling site in cmd_eval_h. */
         {
             const char *slash = strrchr(input, '/');
             if (slash) {
                 size_t dlen = (size_t)(slash - input);
                 char *dpath = (char *)malloc(dlen + 1);
-                memcpy(dpath, input, dlen);
-                dpath[dlen] = '\0';
-                env->module_base_dir = dpath;
+                if (dpath) {
+                    memcpy(dpath, input, dlen);
+                    dpath[dlen] = '\0';
+                    turi_env_set_module_base_dir(env, dpath);
+                    free(dpath);
+                }
             }
         }
         TuriValue v = turi_eval_file(env, input);

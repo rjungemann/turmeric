@@ -6,6 +6,20 @@ description: "src/main.c:7827 and :8578 malloc a directory string and assign env
 
 # The CLI stores a malloc'd `module_base_dir` as if it were borrowed
 
+**RESOLVED 2026-09-08.** Direction 1: both sites now call
+`turi_env_set_module_base_dir` with a temporary slice and free it immediately,
+so the env owns its own strdup and `turi_env_free` releases it. A clean
+`--interpret` run is now leak-free with detection ON (it previously reported
+the directory-path allocation every time). The `*args*` cons cells still
+report when arguments are passed -- that is the sibling allocation this report
+explicitly excluded, unchanged and still process-lifetime by design.
+
+Verified beyond the leak: `module_base_dir` is what makes `(import ...)`
+resolve relative to the script, so the import-bearing ctest targets
+(`tur_eval_import`, `tur_offtree_load`, `tur_saffron_import`,
+`tur_repl_spice_load`, `tur_repl_spice_reload`) were run and pass, alongside
+run.sh 2891/0 and run-turi.sh 1982/0.
+
 **Severity: low.** A few dozen bytes, once per process, in a CLI that is about
 to exit. What makes it worth a row rather than nothing: it is an ownership-
 contract violation with a one-line fix, and it is **noise in a diagnostic
