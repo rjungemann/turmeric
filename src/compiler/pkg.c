@@ -4144,6 +4144,11 @@ typedef struct {
     const char *author;      /* --author "Name <email>" */
     const char *license;     /* --license MIT|Apache-2.0|BSD-3-Clause|none */
     bool        force;       /* --force: overwrite files that already exist */
+    /* saffron-lang-plan S8: --saffron scaffolds a `#lang saffron` SOURCE tree.
+     * The manifest is untouched -- a manifest is a manifest in either dialect,
+     * and `:experiments` is not needed because the `#lang` line enables the
+     * experiment by itself. */
+    bool        saffron;
 } ScaffoldOpts;
 
 /* Write a file and print it in the scaffold summary.
@@ -4368,7 +4373,20 @@ int scaffold_project_ext(const ScaffoldOpts *opts) {
         mod_name[sizeof(mod_name) - 1] = '\0';
         for (char *q = mod_name; *q; q++) if (*q == '-') *q = '_';
 
-        if (opts->is_bin) {
+        if (opts->is_bin && opts->saffron) {
+            /* No `:int` on main, and no annotations anywhere: that is the whole
+             * point of the dialect, and a scaffold that annotated would teach
+             * the opposite of what the reader asked for. */
+            snprintf(path, sizeof(path), "%s/src/main.tur", dir);
+            snprintf(buf, sizeof(buf),
+                "#lang saffron\n"
+                ";;; %s -- entry point.\n"
+                ";;\n"
+                "(defn main []\n"
+                "  (println \"Hello from %s!\")\n"
+                "  0)\n",
+                name, name);
+        } else if (opts->is_bin) {
             snprintf(path, sizeof(path), "%s/src/main.tur", dir);
             snprintf(buf, sizeof(buf),
                 ";;; %s -- entry point.\n"
@@ -4377,6 +4395,17 @@ int scaffold_project_ext(const ScaffoldOpts *opts) {
                 "  (println \"Hello from %s!\")\n"
                 "  0)\n",
                 name, name);
+        } else if (opts->saffron) {
+            snprintf(path, sizeof(path), "%s/src/%s.tur", dir, mod_name);
+            snprintf(buf, sizeof(buf),
+                "#lang saffron\n"
+                ";;; %s -- library module.\n"
+                ";;;\n"
+                ";;; Since: 0.1.0\n"
+                ";;\n"
+                "(defmodule %s (export add) "
+                    "(defn add [a b] (+ a b)))\n",
+                name, mod_name);
         } else {
             snprintf(path, sizeof(path), "%s/src/%s.tur", dir, mod_name);
             /* The template is emitted in the exact shape `tur fmt` produces so
@@ -4408,7 +4437,16 @@ int scaffold_project_ext(const ScaffoldOpts *opts) {
         for (char *q = mod_name; *q; q++) if (*q == '-') *q = '_';
 
         snprintf(path, sizeof(path), "%s/tests/%s_test.tur", dir, mod_name);
-        if (opts->is_bin) {
+        if (opts->is_bin && opts->saffron) {
+            snprintf(buf, sizeof(buf),
+                "#lang saffron\n"
+                ";;; %s_test -- smoke test for %s.\n"
+                ";;\n"
+                "(defn main []\n"
+                "  (println \"tests: ok\")\n"
+                "  0)\n",
+                mod_name, name);
+        } else if (opts->is_bin) {
             snprintf(buf, sizeof(buf),
                 ";;; %s_test -- smoke test for %s.\n"
                 ";;\n"
@@ -4734,6 +4772,7 @@ int cmd_pkg_init(int argc, char **argv) {
     bool is_bin = true;
     bool no_git = false;
     bool sweet  = false;
+    bool saffron = false;
     const char *name = NULL;
 
     bool force = false;
@@ -4754,6 +4793,7 @@ int cmd_pkg_init(int argc, char **argv) {
                    "options:\n"
                    "  --bin, --lib   binary (default) or library spice\n"
                    "  --sweet        write build.tur.sweet (sweet-exp manifest)\n"
+                   "  --saffron      scaffold `#lang saffron` sources (no annotations)\n"
                    "  --no-git       skip git init\n"
                    "  --force        overwrite files that already exist\n"
                    "  -h, --help     show this help\n");
@@ -4763,10 +4803,12 @@ int cmd_pkg_init(int argc, char **argv) {
         else if (strcmp(argv[i], "--lib") == 0)    is_bin = false;
         else if (strcmp(argv[i], "--no-git") == 0) no_git = true;
         else if (strcmp(argv[i], "--sweet") == 0)  sweet  = true;
+        else if (strcmp(argv[i], "--saffron") == 0) saffron = true;
         else if (strcmp(argv[i], "--force") == 0)  force  = true;
         /* An UNKNOWN flag was silently IGNORED, which is the same accident with
-         * a different spelling: `tur init --saffron`, looking for a flag that
-         * does not exist, scaffolded just as `--help` did.  Refuse instead. */
+         * a different spelling: a flag that does not exist scaffolded just as
+         * `--help` did.  Refuse instead.  (`--saffron` was the example this
+         * comment used to name; it exists now, one line above.) */
         else if (argv[i][0] == '-') {
             fprintf(stderr, "tur init: unknown option '%s'\n"
                             "  run `tur init --help` for usage\n", argv[i]);
@@ -4821,6 +4863,7 @@ int cmd_pkg_init(int argc, char **argv) {
     opts.is_bin  = is_bin;
     opts.no_git  = no_git;
     opts.sweet   = sweet;
+    opts.saffron = saffron;
     opts.license = "none";
     opts.force   = force;
     return scaffold_project_ext(&opts);

@@ -1552,9 +1552,20 @@ That work also surfaced `cli-usage-error-paths-exit-zero`: an unknown flag is
 reported and then exits 0, codebase-wide, so `tur build --typo || exit 1`
 succeeds. Filed rather than fixed here -- it is every subcommand, not this one.
 
-Still open: `tur init --saffron`, `tools/gendocs.py` (docstrings without
-types), and the vim/vscode syntax packs. The items are independent of each
-other.
+**`tur init --saffron` is DONE (2026-09-08)**, and it found the FOURTH entry
+point hardcoding `READER_TURMERIC`. `load_project_prelude` (main.c) built its
+SourceFile with no `#lang` detection, so a scaffolded Saffron LIBRARY died on
+the autoloaded prelude's own first line -- `unexpected character '#'` -- while
+the BINARY scaffold built fine, because that path goes through a different
+loader. Same defect as `tur fmt`, the module import path (S7) and the
+single-file autoload (S6); same one-block fix. Pinned by
+`tests/run-init-saffron.sh` (ctest `tur_init_saffron`), which asserts the
+scaffold BUILDS AND RUNS rather than that it contains a `#lang` line -- the
+text check would have passed against the broken library path. Verified to fail
+on exactly that case with the detection disabled.
+
+Still open: `tools/gendocs.py` (docstrings without types) and the vim/vscode
+syntax packs. The items are independent of each other.
 
 ### S9 -- runtime typeclass dispatch (D8) -- CLEARED, not started
 

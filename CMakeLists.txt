@@ -955,6 +955,17 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_repl_lang_saffron PROPERTIES TIMEOUT 300)
+# saffron-lang-plan S8: `tur init --saffron` scaffolds a project that BUILDS.
+# The assertion is the build, not the file text: checking for a `#lang` line
+# would have passed while the LIBRARY scaffold could not compile at all
+# (load_project_prelude hardcoded READER_TURMERIC, so the autoloaded Saffron
+# prelude died on its own first line).
+add_test(
+  NAME tur_init_saffron
+  COMMAND bash tests/run-init-saffron.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_init_saffron PROPERTIES TIMEOUT 300)
 # RP4: integration test for the FFI binding layer. Builds a fixture
 # spice with several signature shapes and calls each export from the
 # REPL, asserting correct results, qualified-name routing, and clear
