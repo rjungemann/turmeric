@@ -6770,12 +6770,38 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     "*(%s *)(intptr_t)TUR_UNTAG(__tur_c); })",
                     inner, (long long)target_tag, cn);
             } else {
+                /* codegen-gcc14-permerrors, the Saffron container seam: this
+                 * arm used to spell the cast from `target_kind` ALONE --
+                 * `type_simple(kind)` -- which for a heap ADT app collapses to
+                 * the int64 carrier. Assigning that to the typed pointer the
+                 * target really is,
+                 *
+                 *   tur_adt_Vec__any *__t0 = (int64_t)(intptr_t)TUR_UNTAG(..);
+                 *
+                 * is `-Wint-conversion`: a warning through GCC 13 and a HARD
+                 * ERROR from GCC 14 on. So `(defn total [v] (vec-fold v ...))`
+                 * -- an unannotated container parameter, the dialect's headline
+                 * case -- did not build on a modern toolchain at all.
+                 *
+                 * `e->type` is the resolved target and the by-value arm above
+                 * already uses it; when it names a POINTER, spell the cast with
+                 * it. Same class as the match-arm binder fix earlier today: a
+                 * bare kind consulted where the full type was in hand.
+                 *
+                 * Narrowed to the pointer case so every scalar target keeps the
+                 * spelling it has today -- this can only replace a cast that was
+                 * losing the pointer shape. */
                 Type target = type_simple(e->as.any_cast_.target_kind, CK_COPY);
+                const char *cast_ct = type_c_name(target);
+                const char *full_ct =
+                    emit_type_c_name(ctx, emit_resolve_type(ctx, e->type));
+                if (full_ct && strchr(full_ct, '*') != NULL)
+                    cast_ct = full_ct;
                 buf_printf(&out,
                     "({ tur_tagged_t __tur_c = (%s); "
                     "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
                     "(%s)(intptr_t)TUR_UNTAG(__tur_c); })",
-                    inner, (long long)target_tag, type_c_name(target));
+                    inner, (long long)target_tag, cast_ct);
             }
             buf_putc(&out, '\0');
             free(inner);

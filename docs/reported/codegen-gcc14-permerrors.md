@@ -3,7 +3,17 @@
 **Severity:** medium -- latent today, breaks every `tur build` the moment CI's
 compiler crosses GCC 14. Not Windows-specific.
 
-**Status:** open. Worked around, not fixed.
+**Status:** open. Worked around, not fixed. **One instance IS fixed
+(2026-09-08): the Saffron D5 boundary seam over a container.** That cast was
+spelled from the target's bare `TypeKind` (`type_simple(kind)`), which for a
+heap ADT app collapses to the int64 carrier, so the emitted C assigned an
+integer to a typed pointer -- and an unannotated container parameter is the
+Saffron dialect's headline case, so it did not build at all from GCC 14 on.
+Fixed by spelling the cast from the resolved target type when that names a
+pointer; pinned by `tests/fixtures/saffron-container-param-cast-shape`, which
+fails on `run.sh`'s existing pointer/integer ratchet without the fix. The
+ratchet was already correct -- what was missing was a fixture exercising this
+shape. The rest of this report stands.
 
 ## Summary
 

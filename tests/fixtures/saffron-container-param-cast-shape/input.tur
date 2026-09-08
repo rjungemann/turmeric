@@ -1,0 +1,42 @@
+#lang saffron
+;; codegen-gcc14-permerrors, the Saffron container seam.
+;;
+;; The D5 boundary unboxes an `any` argument to the callee's parameter type.
+;; That cast used to be spelled from the target's bare TypeKind alone
+;; (`type_simple(kind)`), which for a heap ADT app collapses to the int64
+;; carrier -- so the emitted C assigned an integer to a typed pointer:
+;;
+;;   tur_adt_Vec__any *__t0 = (int64_t)(intptr_t)TUR_UNTAG(__tur_c);
+;;
+;; `-Wint-conversion`. A warning through GCC 13, and a HARD ERROR from GCC 14
+;; on, which is what makes it worth a fixture rather than a note: an
+;; unannotated container parameter is the dialect's headline case, and it did
+;; not build at all on a modern toolchain.
+;;
+;; THE ASSERTION IS NOT THE OUTPUT. `tests/run.sh` carries a ratchet that fails
+;; any fixture whose emitted C produces -Wint-conversion or
+;; -Wincompatible-pointer-types (see the block in run.sh, and
+;; docs/archive/emitted-c-pointer-integer-warnings-unwatched.md). The ratchet
+;; was already there and already correct -- what was missing was a fixture that
+;; exercised this shape, so nothing ever handed it the warning.
+;;
+;; `vec-get` alone does NOT reproduce it (the existing
+;; saffron-unannotated-container-param fixture passes without this fix); the
+;; fold's callee is what takes the container by typed pointer. So the shape
+;; here is specific, not incidental.
+;;
+;; Same class as the match-arm binder fix: a bare kind consulted at a site where
+;; the full resolved type was in hand.
+
+(defn total [v]
+  (vec-fold v 0 (fn [acc x] (+ acc x))))
+
+(defn total-f [v]
+  (vec-fold v 0.0 (fn [acc x] (+ acc x))))
+
+(defn main []
+  (println (cast (total [1 2 3]) int))
+  ;; a fractional float: an integral one could not show a truncation on the way
+  ;; back through the carrier
+  (println (cast (total-f [1.5 2.25 0.5]) float))
+  0)
