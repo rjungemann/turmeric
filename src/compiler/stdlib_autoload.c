@@ -103,6 +103,24 @@ const char *const *tur_stdlib_autoload_files(void) {
     return (const char *const *)autoload_files_saffron_;
 }
 
+void tur_source_file_apply_lang_header(SourceFile *sf, const char *whole_src,
+                                       size_t whole_len) {
+    if (!sf || !whole_src) return;
+    const char  *rest    = whole_src;
+    size_t       rest_len = whole_len;
+    LangLayerSet lay      = 0;
+    LangDialect  dl       = LANG_TURMERIC;
+    ReaderType   rt = detect_lang_dialect(whole_src, whole_len, &rest, &rest_len,
+                                          &lay, NULL, NULL, &dl);
+    if (rest == whole_src || !reader_type_is_implemented(rt)) return;
+    sf->src         = (char *)rest;
+    sf->len         = rest_len;
+    sf->head_offset = (size_t)(rest - whole_src);
+    sf->reader_type = rt;
+    sf->lang        = dl;
+    sf->lang_layers = lay;
+}
+
 static const char *basename_of(const char *path) {
     const char *slash = strrchr(path, '/');
 #ifdef _WIN32
@@ -197,36 +215,11 @@ uint32_t tur_stdlib_prepend_forms(Arena *arena, SymbolTable *st,
         stdlib_file->len = stdlib_len;
         stdlib_file->file_id = (*file_id_in_out)++;
         stdlib_file->reader_type = READER_TURMERIC;
-        /* saffron-lang-plan S6: honour a `#lang` line in a stdlib file.
-         *
-         * The autoload path used to read every stdlib file as plain Turmeric
-         * with no detection at all, which was fine while no stdlib file had a
-         * directive.  The Saffron prelude does: its own bodies use D4
-         * truthiness (`(when (pred x) ...)` where `pred` returns `any`), a hard
-         * "if condition must be bool, got any" under the Turmeric dialect.
-         *
-         * Detecting here rather than special-casing the prelude's FILENAME,
-         * because the interpreter loads the same file through `(load ...)`,
-         * which runs `#lang` detection already -- so the directive is the one
-         * mechanism both paths honour, and the file says what it is instead of
-         * two call sites remembering it. */
-        {
-            const char *rest = src_copy;
-            size_t rest_len = stdlib_len;
-            LangLayerSet lay = 0;
-            LangDialect dl = LANG_TURMERIC;
-            ReaderType rt = detect_lang_dialect(src_copy, stdlib_len,
-                                                &rest, &rest_len,
-                                                &lay, NULL, NULL, &dl);
-            if (rest != src_copy && reader_type_is_implemented(rt)) {
-                stdlib_file->src = (char *)rest;
-                stdlib_file->len = rest_len;
-                stdlib_file->head_offset = (size_t)(rest - src_copy);
-                stdlib_file->reader_type = rt;
-                stdlib_file->lang = dl;
-                stdlib_file->lang_layers = lay;
-            }
-        }
+        /* saffron-lang-plan S6: honour a `#lang` line in a stdlib file.  The
+         * Saffron prelude has one -- its own bodies use D4 truthiness, a hard
+         * error under the Turmeric dialect.  Shared with load_project_prelude;
+         * see the helper's comment for why it is shared. */
+        tur_source_file_apply_lang_header(stdlib_file, src_copy, stdlib_len);
         diag_register_file(stdlib_file);
 
         uint32_t n = 0;

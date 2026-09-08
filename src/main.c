@@ -1103,40 +1103,14 @@ static Form **load_project_prelude(Arena *arena, SymbolTable *st,
         sf->file_id    = fid++;
         sf->reader_type = READER_TURMERIC;
         /* saffron-lang-plan S8: honour a `#lang` line in an autoloaded stdlib
-         * file, exactly as tur_stdlib_prepend_forms does.
-         *
-         * This is the FOURTH entry point found hardcoding READER_TURMERIC and
-         * breaking on `#lang` -- after `tur fmt`, the module import path (S7),
-         * and the single-file autoload (S6). Here it made
-         * `tur build <dir> --lib` on a Saffron project die with
-         *
-         *   stdlib/saffron/prelude.tur:1:1: error: unexpected character '#'
-         *
-         * on the prelude's own first line. The BINARY path was fine, because it
-         * goes through compile_to_c and the other loader; only the project
-         * library path reaches here, which is why a `tur init --saffron --lib`
-         * scaffold could not build while the `--bin` one could.
-         *
-         * Detecting rather than special-casing the prelude's FILENAME, for the
-         * reason the sibling loader gives: the file says what it is, and one
-         * mechanism serves every path that reads it. */
-        {
-            const char *rest = src_copy;
-            size_t rest_len = stdlib_len;
-            LangLayerSet lay = 0;
-            LangDialect dl = LANG_TURMERIC;
-            ReaderType rt = detect_lang_dialect(src_copy, stdlib_len,
-                                                &rest, &rest_len,
-                                                &lay, NULL, NULL, &dl);
-            if (rest != src_copy && reader_type_is_implemented(rt)) {
-                sf->src         = (char *)rest;
-                sf->len         = rest_len;
-                sf->head_offset = (size_t)(rest - src_copy);
-                sf->reader_type = rt;
-                sf->lang        = dl;
-                sf->lang_layers = lay;
-            }
-        }
+         * file.  Without this a scaffolded Saffron LIBRARY died on the
+         * prelude's own first line (`unexpected character '#'`) while the
+         * BINARY scaffold built fine, because that path goes through
+         * compile_to_c and the other loader.  Shared with
+         * tur_stdlib_prepend_forms -- the two had identical copies, and this
+         * was the fourth loader found missing the detection entirely; see the
+         * helper's comment. */
+        tur_source_file_apply_lang_header(sf, src_copy, stdlib_len);
         diag_register_file(sf);
 
         uint32_t n = 0;

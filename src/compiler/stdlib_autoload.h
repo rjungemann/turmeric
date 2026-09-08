@@ -7,6 +7,7 @@
 #include "arena.h"
 #include "forms.h"
 #include "symbols.h"
+#include "diag.h"   /* SourceFile */
 
 /* -------------------------------------------------------------------------
  * Stdlib autoload
@@ -52,6 +53,30 @@ const char *const *tur_stdlib_autoload_files(void);
  * caller's problem to diagnose, and every missing file would otherwise print
  * during ordinary `--no-auto-stdlib` builds.
  */
+/* Apply an autoloaded stdlib file's `#lang` header to its SourceFile.
+ *
+ * `sf` must already carry `src`/`len` for the WHOLE file and a default
+ * `reader_type`; on a directive this advances them past the header and records
+ * the reader, language and layer set.  A file with no directive is left alone.
+ *
+ * EXISTS BECAUSE THE SAME BLOCK WAS WRITTEN TWICE AND MISSED TWICE MORE. Four
+ * separate loaders have now been found constructing a SourceFile with a
+ * hardcoded `READER_TURMERIC` and no detection, each breaking on `#lang` and
+ * each fixed only when someone walked that particular path:
+ *
+ *   - the single-file stdlib autoload (S6)
+ *   - the module import path (S7) -- a Saffron module could not be imported
+ *   - `tur fmt` -- rejected every `#lang` file
+ *   - `load_project_prelude` (S8) -- a Saffron LIBRARY could not build, while
+ *     the binary path could, because they use different loaders
+ *
+ * The two STDLIB loaders had identical fourteen-line copies; they call this
+ * instead.  `elab_module.c`'s import path deliberately does NOT: it carries an
+ * extension override and its own diagnostics for a bad layer and an
+ * unimplemented reader, which a stdlib file has no use for. */
+void tur_source_file_apply_lang_header(SourceFile *sf, const char *whole_src,
+                                       size_t whole_len);
+
 uint32_t tur_stdlib_prepend_forms(Arena *arena, SymbolTable *st,
                                   const char *stdlib_dir,
                                   const char *entry_path,
