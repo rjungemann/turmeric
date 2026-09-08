@@ -1,0 +1,15 @@
+#lang saffron
+;; saffron-lang-plan D7: linearity still CHECKS in a Saffron file.
+;;
+;; D7's first draft listed `^linear` as unavailable in Saffron, on the premise
+;; that its guarantee needs a static type.  It does not: exactly-once is a walk
+;; over the body's USES, and `any` never enters it.  Measured -- this file
+;; produces the same TUR-E0101 a Turmeric file does.
+;;
+;; Pinned as an error fixture so a later reading of the plan's original list
+;; cannot quietly turn the check off.  Its positive twin is
+;; tests/fixtures/saffron-static-guarantees-still-hold.
+
+(defn go [] (call/cc (fn [^linear k] (do (k 1) (k 2)))))
+
+(defn main [] (println (cast (go) int)) 0)

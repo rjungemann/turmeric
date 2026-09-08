@@ -3082,6 +3082,33 @@ Expr *elab_call(Elab *e, Form *call) {
         fn_binding = fn_binding->source_binding;
     }
 
+    /* saffron-lang-plan D7: a region bracket in a Saffron file.
+     *
+     * Placed AFTER the alias resolution just above, so `(let [g with-region]
+     * (g thunk))` is judged by what `g` resolves to rather than by how the
+     * call is spelled -- and, for the same reason, a local genuinely named
+     * `with-region` that is NOT the stdlib defn is not caught.  Gated on
+     * `is_global` for that second half.
+     *
+     * `bt-scope` is deliberately NOT here even though it opens a region too
+     * (emit_binding_is_region_scope treats the two identically).  Its FEATURE
+     * is the trail level -- mark and undo -- and that half works in Saffron
+     * exactly as it does in Turmeric; only the region half degrades to
+     * retire-don't-rewind.  Rejecting it would take a working feature away to
+     * report a lost optimisation.  `with-region` has no other half: the region
+     * IS the whole of it, so a Saffron `with-region` is precisely the silent
+     * no-op D7 exists to refuse. */
+    if (fn_binding && fn_binding->is_global && fn_binding->name &&
+        fn_binding->name->name &&
+        strcmp(fn_binding->name->name, "with-region") == 0 &&
+        saffron_reject_static_only(e, call->span, "with-region",
+                                   "the rewind is licensed by a static walk "
+                                   "over the bracket's result type, and `any` "
+                                   "clears nothing -- the generation would be "
+                                   "retired, so the bracket costs a push/pop "
+                                   "and reclaims nothing"))
+        return NULL;
+
     /* RT1 (refinement-types-plan): a direct call to a user function is a
      * crossing into whatever refinements its parameters declare.  Record it
      * here -- one place, keyed on the source form, before any of the dozen

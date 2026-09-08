@@ -419,7 +419,60 @@ it does not have.
 ### D7 -- static-only features are rejected, with a message that says why
 
 **Verdict: hard error naming the feature and the reason, never a silent
-downgrade.**
+downgrade.** The verdict stands. The LIST was wrong, and measurement cut it
+from five families to one.
+
+#### DONE 2026-09-08 -- and the list is one entry, not five
+
+The draft below listed five families. Each was then measured, by running the
+same violating program in a Saffron file and in a Turmeric file and comparing
+the diagnostics. **Four of the five check identically in Saffron.**
+
+| Feature | Drafted as | Measured in a Saffron file |
+| --- | --- | --- |
+| `with-region` | reject | **genuinely downgraded.** Emits `tur_region_pop` where Turmeric emits `tur_region_pop_checked` -- retire, not rewind. Safe; reclaims nothing. **Rejected, TUR-E0312.** |
+| `defgadt` | reject | **works.** Skolem escape fires identically. |
+| `Session[P]` | reject | **works.** TUR-E0211 fires, naming the same protocol state. |
+| `^linear` / `^unique` / `lref<T>` | reject | **works.** TUR-E0101 / TUR-E0100 fire identically. |
+| `&T` / `&mut T` | reject | **works.** The aliasing conflict fires identically. |
+
+The premise that produced the long list -- "an `any` cannot carry these
+guarantees" -- conflated two different kinds of proof:
+
+- Proofs that read an **inferred type**. `with-region` is the only one. Its
+  rewind is licensed by a static walk over the *bracket body's result type*,
+  and that is exactly the thing Saffron makes `any`.
+- Proofs that read an **annotation**, or walk **uses and scopes**. Everything
+  else. A GADT's indices come from its constructors' return-type annotations;
+  a session's protocol is in the channel's annotation; linearity is a use
+  count; a borrow is a scope walk. D2 keeps annotations legal in Saffron, so
+  `any` never enters any of these.
+
+The draft's safety argument was also wrong in the direction that matters. A
+Saffron region bracket is **not** a use-after-rewind waiting to happen:
+`region_type_reaches_node` takes its `default: return true` arm for `TY_ANY`
+("can reach a node"), so the static walk refuses and the emitter conservatively
+*retires* the generation. The failure is not unsoundness -- it is that the
+bracket costs a push and a pop and saves nothing, with nothing saying so.
+**That silence is what TUR-E0312 refuses.**
+
+`bt-scope` opens a region too and is deliberately **not** rejected. Its feature
+is the trail level -- mark and undo -- which works in Saffron unchanged; only
+the region half degrades. Taking a working feature away to report a lost
+optimisation is the wrong trade.
+
+Pinned by `tests/fixtures/errors/saffron-region-bracket-refused` (the
+rejection) and, more importantly, by
+`tests/fixtures/saffron-static-guarantees-still-hold` plus four `errors/`
+fixtures (`saffron-gadt-skolem-escape`, `saffron-session-protocol-incomplete`,
+`saffron-linear-used-twice`, `saffron-borrow-conflict`) -- the guard against a
+later reading of the original list quietly removing four working features.
+
+Regions being off is still true, and still per **file**, not per program: a
+Turmeric module in the same project keeps them in full. The two dialects link
+together; they just do not each get the other's guarantees.
+
+#### The original draft, for the record
 
 In a Saffron file, these are `TUR-E03xx` errors:
 

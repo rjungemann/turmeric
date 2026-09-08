@@ -1,0 +1,56 @@
+#lang saffron
+;; saffron-lang-plan D7, THE NEGATIVE HALF: the static guarantees a Saffron
+;; file KEEPS.
+;;
+;; D7's first draft listed five feature families as unavailable in Saffron --
+;; regions, GADTs, sessions, linearity/uniqueness, and borrows -- on the
+;; premise that "an `any` cannot carry these guarantees".  Measured, that
+;; premise holds for exactly ONE of them.
+;;
+;; Only `with-region` is genuinely downgraded, because its proof reads the
+;; INFERRED RESULT TYPE of the bracket body, which is the one thing Saffron
+;; makes `any` (see tests/fixtures/errors/saffron-region-bracket-refused).
+;;
+;; The other four are proved from things `any` never touches:
+;;
+;;   defgadt    constructor return types are ANNOTATIONS, and D2 keeps
+;;              annotations legal in Saffron -- skolem escape still fires.
+;;   Session P  the protocol lives in the annotation -- TUR-E0211 still
+;;              fires, with the same protocol state.
+;;   ^linear    a use-count walk over the body -- TUR-E0101 still fires.
+;;   &T &mut T  a scope walk over uses -- the aliasing conflict still fires.
+;;
+;; This fixture is the guard against a later reading of the plan's original
+;; list taking them away.  It is a POSITIVE fixture on purpose: it compiles
+;; and runs, so it asserts the features are usable, not merely that some
+;; diagnostic fires.  The matching negative assertions -- that each checker
+;; still REJECTS a violation in a Saffron file -- live in
+;; tests/fixtures/errors/saffron-linear-used-twice and its siblings.
+;;
+;; `area` annotates its scrutinee `: Shape` rather than leaving it `any`, and
+;; that is a WORKAROUND, not a preference: matching an UNANNOTATED (`any`)
+;; scrutinee whose constructor comes from a `defgadt` emits uncompilable C
+;; ("aggregate value used where an integer was expected" -- the tagged
+;; aggregate is cast to a pointer).  The same match works with `defdata`, and
+;; the same GADT works annotated, so the gap is specific to the pair.  Filed
+;; as docs/reported/saffron-match-any-scrutinee-on-gadt-emits-bad-c.md; the
+;; annotation here keeps THIS fixture about D7 rather than about that bug.
+(defgadt Shape [a]
+  (Sq  int : (Shape int))
+  (Rec int int : (Shape int)))
+
+(defn area [s : Shape]
+  (match s
+    (Sq  w)   (* w w)
+    (Rec w h) (* w h)))
+
+(defn borrowed []
+  (let [x 21]
+    (let [r (& x)]
+      (* @r 2))))
+
+(defn main []
+  (println (cast (area (Sq 6)) int))
+  (println (cast (area (Rec 3 4)) int))
+  (println (cast (borrowed) int))
+  0)

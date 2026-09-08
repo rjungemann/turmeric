@@ -293,6 +293,30 @@ typedef enum DiagCode {
      * silently running under cc is the exact failure the key exists to
      * prevent. */
     TUR_E0311_UNKNOWN_ENGINE,
+    /* saffron-lang-plan D7: a `#lang saffron` file used a feature whose proof
+     * READS AN INFERRED TYPE -- the one thing Saffron makes `any`.
+     *
+     * Today that is exactly `with-region`.  The emitter's static walk over the
+     * bracket's result type hits `any`, takes the `default: return true` arm
+     * of `region_type_reaches_node` ("can reach a node"), and therefore emits
+     * a plain `tur_region_pop` -- retire, do not rewind -- where the same
+     * program in Turmeric emits `tur_region_pop_checked`.  So the bracket is
+     * SAFE and reclaims nothing: the cost is paid and the saving never
+     * arrives.  A feature that silently does nothing is worse than one that
+     * says it is unavailable.
+     *
+     * D7's list was longer, and MEASUREMENT CUT IT TO ONE.  GADTs, sessions,
+     * linearity and borrows all check identically in a Saffron file, because
+     * their proofs read ANNOTATIONS (which D2 keeps legal) or walk uses and
+     * scopes, neither of which `any` touches: skolem escape, TUR-E0211,
+     * TUR-E0101 and the borrow-aliasing conflict all still fire.  They are
+     * pinned by tests/fixtures/saffron-static-guarantees-still-hold so a later
+     * reading of the plan's original list does not take them away.
+     *
+     * File-level, not program-level: a Turmeric module in the same project
+     * keeps regions in full.  The two dialects link; they just do not each get
+     * the other's guarantees. */
+    TUR_E0312_SAFFRON_STATIC_ONLY,
     TUR_W0060_EXPERIMENTAL_PROTOTYPE,
     TUR_W0061_EXPERIMENTAL_BETA,
     /* RT3 (refinement-types-plan): static discharge of `#refine{...}`

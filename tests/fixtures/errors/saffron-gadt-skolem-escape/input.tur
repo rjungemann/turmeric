@@ -1,0 +1,21 @@
+#lang saffron
+;; saffron-lang-plan D7: GADT index refinement still checks in a Saffron file.
+;;
+;; A GADT's indices come from its constructors' RETURN-TYPE ANNOTATIONS, and
+;; D2 keeps annotations legal in Saffron, so a match arm learns exactly what it
+;; learns in Turmeric -- including that the skolem must not escape.  Measured:
+;; the same diagnostic tests/fixtures/errors/gadt-refine-escape gets.
+;;
+;; See tests/fixtures/saffron-static-guarantees-still-hold for why this is
+;; pinned: D7's first draft would have removed `defgadt` from the dialect on
+;; the premise that "an `any` index refines to nothing".  The index is not an
+;; `any`.
+
+(defgadt Box [a]
+  (MkBox a : (Box a)))
+
+(defn my-unbox [b] : int
+  (match b
+    (MkBox x) x))
+
+(defn main [] 0)

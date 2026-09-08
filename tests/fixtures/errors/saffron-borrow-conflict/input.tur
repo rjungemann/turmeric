@@ -1,0 +1,17 @@
+#lang saffron
+;; saffron-lang-plan D7: borrow checking still runs in a Saffron file.
+;;
+;; A borrow's validity is a walk over SCOPES and USES, not over types, so an
+;; `any` binding costs it nothing.  Measured -- this is the same diagnostic
+;; tests/fixtures/errors/borrow-conflict gets in Turmeric.
+;;
+;; See tests/fixtures/saffron-static-guarantees-still-hold for why this is
+;; pinned: D7's first draft would have removed the feature outright.
+
+(defn main []
+  (let [x 42]
+    (let [r1 (& x)]
+      (let [r2 &mut x]
+        (println 1)))
+    0)
+  0)

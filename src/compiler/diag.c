@@ -326,6 +326,7 @@ const char *diag_code_to_string(DiagCode code) {
         /* XF: experimental-flag mechanism */
         case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
         case TUR_E0311_UNKNOWN_ENGINE:            return "TUR-E0311";
+        case TUR_E0312_SAFFRON_STATIC_ONLY:       return "TUR-E0312";
         case TUR_W0060_EXPERIMENTAL_PROTOTYPE:    return "TUR-W0060";
         case TUR_W0061_EXPERIMENTAL_BETA:         return "TUR-W0061";
         case TUR_E0023_BIND_VOID_EXPRESSION:      return "TUR-E0023";
@@ -495,6 +496,7 @@ DiagCode diag_code_from_string(const char *s) {
     /* XF: experimental-flag mechanism */
     if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
     if (strcmp(s, "TUR-E0311") == 0) return TUR_E0311_UNKNOWN_ENGINE;
+    if (strcmp(s, "TUR-E0312") == 0) return TUR_E0312_SAFFRON_STATIC_ONLY;
     if (strcmp(s, "TUR-W0060") == 0) return TUR_W0060_EXPERIMENTAL_PROTOTYPE;
     if (strcmp(s, "TUR-W0061") == 0) return TUR_W0061_EXPERIMENTAL_BETA;
     if (strcmp(s, "TUR-E0023") == 0) return TUR_E0023_BIND_VOID_EXPRESSION;
@@ -2306,6 +2308,45 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Fix: correct the spelling.  The precedence ladder is\n"
       "  --engine > TUR_ENGINE env > build.tur :engine > \"cc\".\n",
+    },
+    /* saffron-lang-plan D7: static-only feature in a Saffron file */
+    { TUR_E0312_SAFFRON_STATIC_ONLY,
+      "TUR-E0312: this feature's proof reads a type, and Saffron has `any`\n"
+      "\n"
+      "Today this is exactly one feature: `with-region` (and any other region\n"
+      "bracket) in a `#lang saffron` file.\n"
+      "\n"
+      "A region rewinds a generation only when the compiler can prove nothing\n"
+      "outside it still points in, and that proof is a static walk over the\n"
+      "bracket's RESULT TYPE.  An `any` result clears nothing, so the walk\n"
+      "refuses and the emitter RETIRES the generation instead of reclaiming\n"
+      "it -- `tur_region_pop` where Turmeric emits `tur_region_pop_checked`.\n"
+      "\n"
+      "So the bracket is safe, and saves nothing.  You paid a push and a pop\n"
+      "and every allocation inside stayed mapped.  That is why this is an\n"
+      "error rather than a downgrade: a feature that silently does nothing\n"
+      "leaves a file that LOOKS like it carries a guarantee it does not.\n"
+      "\n"
+      "The restriction is per FILE, not per program.  Move the allocation-\n"
+      "heavy code into a Turmeric module, keep the bracket there, and call it\n"
+      "across the boundary -- the two dialects link, they just do not each\n"
+      "get the other's guarantees.\n"
+      "\n"
+      "WHAT IS NOT RESTRICTED.  An earlier draft of the plan listed GADTs,\n"
+      "sessions, linearity and borrows here too.  Measured, all four check\n"
+      "IDENTICALLY in a Saffron file, because their proofs do not read an\n"
+      "inferred type:\n"
+      "\n"
+      "  defgadt      constructor return types are ANNOTATIONS, which stay\n"
+      "               legal in Saffron -- skolem escape still fires.\n"
+      "  Session[P]   the protocol is in the annotation -- TUR-E0211 still\n"
+      "               fires, with the same protocol state.\n"
+      "  ^linear      a use-count walk over the body -- TUR-E0101 still fires.\n"
+      "  &T  &mut T   a scope walk over uses -- the aliasing conflict still\n"
+      "               fires.\n"
+      "\n"
+      "`with-region` is the odd one out precisely because its proof reads the\n"
+      "one thing Saffron makes `any`: the inferred result type of the body.\n",
     },
     /* XF: prototype experimental feature in use */
     { TUR_W0060_EXPERIMENTAL_PROTOTYPE,

@@ -1693,6 +1693,11 @@ Expr *elab_any_unbox_to(Elab *e, Expr *val, Type target, Span span);
  * expression unchanged when it is not an `any` in a Saffron file, so callers
  * apply it unconditionally.  Defined in elab_forms.c. */
 Expr *elab_saffron_truthy(Elab *e, Expr *cond);
+/* saffron-lang-plan D7: reject a static-only feature in a Saffron file, naming
+ * it and the guarantee it rests on.  Returns true when it rejected (false
+ * outside Saffron, so callers can guard on it).  Defined in elab_forms.c. */
+bool saffron_reject_static_only(Elab *e, Span span, const char *feature,
+                                const char *why);
 Expr *elab_borrow_mut(Elab *e, const Form *call);
 
 /* elab_types.c */

@@ -2793,6 +2793,35 @@ static bool if_branches_unify_via_tyvar(Type then_ty, Type else_ty, Type *out) {
     return true;
 }
 
+/* saffron-lang-plan D7: refuse a feature whose whole content is a static
+ * guarantee, in a file whose default type is `any`.
+ *
+ * `feature` names it as the source spells it (`with-region`, `defgadt`,
+ * `^linear`); `why` is the one clause that says what the guarantee rests on,
+ * so the message is specific rather than a shared "not supported here".
+ *
+ * Returns true when it rejected, so a caller can bail on the same line.  False
+ * outside a Saffron file, which is every existing call path -- a Turmeric
+ * module in the same project keeps all of these.
+ *
+ * Deliberately NOT a surface scan of the form tree.  Each call site sits where
+ * the compiler has already RESOLVED what it is looking at (a binding, a
+ * special-form dispatch, a parsed parameter attribute), so a local named
+ * `with-region` or a macro that expands to one is judged by what it elaborates
+ * to, not by how it is spelled. */
+bool saffron_reject_static_only(Elab *e, Span span, const char *feature,
+                                const char *why) {
+    (void)e;
+    if (!lang_span_is_saffron(span)) return false;
+    diag_emit_with_code(DIAG_ERROR, span, TUR_E0312_SAFFRON_STATIC_ONLY,
+                        "`%s` is not available in a `#lang saffron` file: %s",
+                        feature, why);
+    diag_emit(DIAG_NOTE, span,
+              "the restriction is per file -- move this into a Turmeric module "
+              "and call across the boundary; see `tur explain TUR-E0312`");
+    return true;
+}
+
 /* saffron-lang-plan D4: wrap an `any`-typed expression in the truthiness
  * operator so it can feed a C-level `bool` slot.
  *
