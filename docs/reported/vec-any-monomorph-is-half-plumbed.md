@@ -151,17 +151,37 @@ names that hazard for the NULL-outer case ("so it never routes a call to a
 spec-scoped clone with a different return ABI") and does not guard the non-NULL
 one.
 
-So there are two candidate fixes, and they are different questions:
+### Narrowed further, 2026-09-08 -- four layers, each measured
 
-1. **Why is there no recording under the `any` outer?** That is the root cause;
-   the fallback is only how it surfaces. Probe the recording site, not this
-   lookup.
-2. **Guard the cross-spec fallback on return ABI**, the way
-   `construct_into_carrier` guards it for a different reason. Contained, but it
-   treats the symptom, and declining the fallback drops the call to the carrier
-   base -- which then has its own int64-vs-pointer straddle to survive.
+Chasing "why is there no recording under the `any` outer" ruled out three
+candidates and landed inside one function. Each step is a one-line `fprintf`,
+run as `TUR_PROBE_REC=1 ./build/tur emit-c <file>` on
+`(defn main [] : int (println (vec-len (vec-of (:: 2 any)))) 0)`:
 
-Prefer 1.
+1. **Not the recorder.** `emit_abi_record_specialized_call` keys on
+   `(Expr*, active outer)` correctly, and IS called for the `any` clone of
+   `vec-empty-like__` itself:
+   `REC vec-empty-like clone=..._any_... outer=(NULL)`.
+2. **Not the recursion guard.** The scan of a freshly-minted spec body
+   (`if (fd && fd->body && ctx->n_abi_specializations != before_specs)`) RUNS
+   for the `any` clone -- all three conditions true:
+   `RECURSE? fd=1 body=1 newspecs=1 clone=..._any_...`.
+3. **Not the intern.** The `int` clone's recursion reaches the intern site
+   (`REACHED-INTERN vec-new result=(type-app Vec int) outer=..._int_...`); the
+   `any` clone's produces NO such line.
+4. **So the decline is upstream of the intern, inside `emit_abi_scan_expr`'s
+   `EX_CALL` case**, and it is specific to `(Vec any)` -- `(Vec int)` walks the
+   identical path in the same program and proceeds.
+
+That is where the next probe goes: bisect the guards in that case for a
+zero-argument callee whose result is a concrete app over `any`. The lookup-side
+fallback below is then a SYMPTOM, and fixing it would only mask a missing spec.
+
+The alternative fix -- **guard the cross-spec fallback on return ABI**, the way
+`construct_into_carrier` guards it for a different reason -- stays available and
+stays second choice: it treats the symptom, and declining the fallback drops the
+call to the carrier base, which then has its own int64-vs-pointer straddle to
+survive.
 
 ## Fix directions
 
