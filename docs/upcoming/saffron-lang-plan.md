@@ -1330,6 +1330,16 @@ D5's implicit checked `cast` at each Saffron -> Turmeric argument whose
 parameter is concrete and whose argument is `any`. Fixtures for both
 directions, including the panic path.
 
+**The HAND-WRITTEN spelling is settled ahead of it (2026-09-08), and it is the
+same operation.** `::` now refuses an `any` operand and names `cast`
+([archived](../archive/any-narrowing-ascription-does-not-compile.md)); before
+that it was four different `cc` errors compiled and four wrong answers
+interpreted, plus a fifth behaviour for a union target that type-checked and
+silently did not narrow. So a Saffron author who writes the narrowing by hand
+gets pointed at exactly the node D5's boundary inserts, rather than at a
+spelling that looks like it should work. Ascribing an `any` TO `any` stays legal
+-- it is identity, and the S6 data-literal widen emits it.
+
 ### S8 -- tooling (medium, parallelisable)
 
 `tur fmt` / `tur format` (the formatter reads `reader_type`; it needs to

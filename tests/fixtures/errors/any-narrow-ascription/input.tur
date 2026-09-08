@@ -1,0 +1,44 @@
+;; any-narrowing-ascription-does-not-compile: `::` cannot narrow OUT of an
+;; `any`, and every spelling of it was broken in a different way.
+;;
+;; `::` is a REPRESENTATION ASSERTION -- the carrier word is reinterpreted
+;; bit-for-bit -- which is coherent exactly while the operand is a one-word
+;; carrier.  An `any` is the two-word `tur_tagged_t`, so there is no single word
+;; to reinterpret from.  Before this refusal, with `a` an `any` holding 7.1:
+;;
+;;   (:: a int)    cc: aggregate value used where an integer was expected
+;;   (:: a float)  cc: aggregate value used where a floating-point was expected
+;;   (:: a cstr)   cc: incompatible type for argument 1 of 'puts'
+;;   (:: a bool)   cc: used struct type value where scalar is required
+;;   (:: a Pt)     cc: 'tur_tagged_t' has no member named 'x'
+;;
+;; -- four different cc errors with NO Turmeric diagnostic in front of any of
+;; them.  Under --interpret, four WRONG ANSWERS instead: `int` printed
+;; 4619679907765970534 (the IEEE-754 bits of 7.1), while `cstr`, `bool` and
+;; `float` all printed 7.1, because the interpreter's EX_ASCRIBE arm coerces
+;; only on a tag mismatch and is otherwise transparent.  A union target was a
+;; third behaviour again -- it type-checked and silently did not narrow, the
+;; result staying `any`.
+;;
+;; Both back ends were doing what `::` MEANS.  The defect was that `::` accepted
+;; an `any` operand at all.
+;;
+;; `cast` is the spelling that works, for EVERY target measured above --
+;; scalars, structs and unions -- on both back ends, panicking with
+;; "cast: any holds float, not int" on a tag mismatch.  It is also what D5's
+;; Saffron -> Turmeric boundary inserts, so the hand-written spelling and the
+;; compiler-inserted one are the same operation.
+;;
+;; Ascribing an `any` TO `any` stays legal -- it is identity, and the Saffron
+;; data-literal widen emits it for an element that is already `any`.
+;; tests/fixtures/saffron-vector-literal covers that direction.
+;;
+;; 7.1 rather than 7.0: the interpreter's wrong answer for `(:: a int)` was the
+;; float's BIT PATTERN, which an integral value could not have shown.
+
+(defn dyn [x : any] : any x)
+
+(defn main [] : int
+  (let [a (dyn 7.1)]
+    (println (:: a int)))
+  0)

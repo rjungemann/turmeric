@@ -2981,6 +2981,61 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
     e->expected_type = saved_expected;
     if (!inner) return NULL;
 
+    /* any-narrowing-ascription-does-not-compile: `::` cannot narrow OUT of an
+     * `any`, and every spelling of it was broken in a different way.
+     *
+     * `::` is a REPRESENTATION ASSERTION -- on the compiled path the carrier
+     * word is reinterpreted bit-for-bit -- and that is coherent exactly while
+     * the operand is a one-word carrier.  An `any` is not: it is the two-word
+     * `tur_tagged_t`, so there is no single word to reinterpret from.  Measured,
+     * with `a` an `any` holding 7.1:
+     *
+     *   (:: a int)    cc: aggregate value used where an integer was expected
+     *   (:: a float)  cc: aggregate value used where a floating-point was ...
+     *   (:: a cstr)   cc: incompatible type for argument 1 of 'puts'
+     *   (:: a bool)   cc: used struct type value where scalar is required
+     *   (:: a Pt)     cc: 'tur_tagged_t' has no member named 'x'
+     *
+     * -- four different cc errors with no Turmeric diagnostic in front of any
+     * of them.  And under --interpret, four WRONG ANSWERS instead: `int` prints
+     * 4619679907765970534 (the IEEE-754 bits), while `cstr`, `bool` and `float`
+     * all print 7.1, because the interpreter's EX_ASCRIBE arm coerces only on a
+     * tag mismatch and is otherwise transparent.  A union target is a third
+     * behaviour again: it type-checks and silently does not narrow at all (the
+     * result stays `any`).
+     *
+     * Both back ends are doing what `::` MEANS.  The defect is that `::`
+     * accepts an `any` operand at all, so it is refused here -- the same shape
+     * as the owning-value rule and the int/float ambiguity refusal further
+     * down: reject the spelling that cannot work and name the one that does.
+     *
+     * Placed ABOVE the union-target branch, not with the scalar-reinterpret
+     * rules beside those two.  That branch calls `elab_coerce_to_union`, which
+     * accepts an `any` operand that is not a member of the union and leaves the
+     * result typed `any` -- the silent no-op above.  Below it, the union row
+     * stays broken; above it, all six targets get this one message.
+     *
+     * `cast` is that one, and it is correct for EVERY target measured above --
+     * scalars, structs and unions -- on both back ends, panicking with
+     * "cast: any holds float, not int" on a tag mismatch.  It is also what D5's
+     * Saffron -> Turmeric boundary already inserts, so pointing at it keeps the
+     * hand-written spelling and the compiler-inserted one the same operation.
+     *
+     * Ascribing an `any` TO `any` stays legal and is load-bearing: it is
+     * identity, and it is what the Saffron data-literal widen emits for an
+     * element that is already `any` (`dl_saffron_widen_elem`). */
+    if (inner->type.kind == TY_ANY && ascribed->kind != TY_ANY) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "`::` cannot narrow an `any` to %s: `::` asserts a "
+                  "REPRESENTATION, and an `any` is a two-word tagged value with "
+                  "no single word to reinterpret from",
+                  type_name(*ascribed));
+        diag_emit(DIAG_NOTE, call->span,
+                  "use (cast x %s), which reads the tag the `any` is carrying "
+                  "and panics if it is not %s",
+                  type_name(*ascribed), type_name(*ascribed));
+        return NULL;
+    }
     /* GAP 3 (byvalue-adt-int-cast-plan Part B): `(:: v :any)` is the explicit
      * coercion of a value into the `any` erased carrier.  It must heap-box the
      * value (EX_UNION_INJECT), exactly as passing it to an `any`-typed parameter

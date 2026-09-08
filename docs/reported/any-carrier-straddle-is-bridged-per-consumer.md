@@ -117,6 +117,6 @@ Two things still to establish before attempting it:
 
 `(:: any-value int)` -- narrowing OUT of an `any` -- is a different defect with
 a different cause, filed as
-[any-narrowing-ascription-does-not-compile](any-narrowing-ascription-does-not-compile.md).
+[any-narrowing-ascription-does-not-compile](../archive/any-narrowing-ascription-does-not-compile.md).
 That one is about `::` accepting an `any` operand at all; this one is about an
 `any` value's emitted shape.
