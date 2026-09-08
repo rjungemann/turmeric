@@ -2309,6 +2309,32 @@ static char *bridge_control_result_int_ptr(EmitCtx *ctx, char *v, Type ltype,
      * `pointer from integer` under GCC >= 14; bridge it too.  A `void *` temp
      * assigned a POINTER value stays untouched (val_is_ptr, no branch fires). */
     bool temp_is_voidptr = strcmp(tcty, "void *") == 0;
+    /* saffron-lang-plan S6: a `tur_tagged_t` temp assigned the int64 CARRIER.
+     *
+     * An `any` read out of a container arrives as the slot word -- the store
+     * side boxed it (repr_of answers REPR_BOXED_AGG at CONTAINER_ELEM, and the
+     * HAMT assoc calls `tur_hamt_box_key(&v, sizeof(tur_tagged_t))`) -- so the
+     * word IS a `tur_tagged_t *` and the temp wants the aggregate.  Left to the
+     * bail below it was "incompatible types when assigning to type
+     * 'tur_tagged_t' from type 'int64_t'", which is how a `(Map K any)` read
+     * failed to compile.
+     *
+     * Keyed on the VALUE's recorded C spelling like the branches below, so a
+     * value that already is the aggregate is untouched. */
+    bool temp_is_tagged = strcmp(tcty, "tur_tagged_t") == 0;
+    if (temp_is_tagged) {
+        const Expr *tp = tail;
+        while (tp && tp->kind == EX_ASCRIBE) tp = tp->as.ascribe_.inner;
+        const char *tvcty = NULL;
+        if (emit_str_is_bare_ident(v)) tvcty = emit_localvar_lookup_ctype(v);
+        if (!tvcty && tp) tvcty = emit_binding_repr_c_name(ctx, tp->type, tp);
+        if (tvcty && strcmp(tvcty, "int64_t") == 0) {
+            Buf b; buf_init(&b);
+            buf_printf(&b, "(*(tur_tagged_t *)(intptr_t)(%s))", v);
+            buf_putc(&b, '\0'); free(v); v = strdup(b.data); buf_free(&b);
+        }
+        return v;
+    }
     if (!temp_is_i64 && !temp_is_ptr && !temp_is_voidptr) return v;
     /* the value's own representation C type */
     const Expr *p = tail;

@@ -1,0 +1,35 @@
+;; saffron-lang-plan S6: a value read out of a `(Map K any)` comes back with ITS
+;; OWN tag.  Compiled, this used to be "incompatible types when assigning to
+;; type 'tur_tagged_t' from type 'int64_t'" -- a program that would not build.
+;;
+;; The STORE side was already right and that is what made the fix small: the
+;; HAMT assoc boxes the value (`tur_hamt_box_key(&v, sizeof(tur_tagged_t))`),
+;; because repr_of answers REPR_BOXED_AGG for an `any` at a container-element
+;; position.  So the word in the trie IS a `tur_tagged_t *`.  Only the READ was
+;; missing its deref: a control-form result temp declared `tur_tagged_t` was
+;; assigned the raw slot word.  `bridge_control_result_int_ptr` already exists
+;; to reconcile exactly that straddle for the int64<->pointer pairs; a tagged
+;; temp taking a carrier value is the third pair, and it bails before reaching
+;; the branches rather than being handled by them.
+;;
+;; requires.compiled: THE INTERPRETER STILL GETS THIS WRONG, and this fixture
+;; must not hide it.  Its map natives have no tag recovery at all --
+;; `native_map_get_eq` returns `turi_int` of the raw carrier word -- so both
+;; reads answer `int` there.  That is a different mechanism from the Vec case
+;; (which had a tag side table to widen); Map has none, so the fix is to store a
+;; boxed value rather than to add a table.  Filed as
+;; map-of-any-is-broken-on-both-back-ends.
+;;
+;; 7.1 rather than 7.0: a truncating path through the box would print 7.
+
+(defn dyn [x : any] : any x)
+
+(defn main [] : int
+  (let [m (:: (map-new) (Map int any))]
+    (let [m2 (map-assoc m 1 (dyn 7.1))]
+      (let [m3 (map-assoc m2 2 (dyn "hi"))]
+        (println (type-of (map-get m3 1)))
+        (println (type-of (map-get m3 2)))
+        (println (cast (map-get m3 1) float))
+        (map-free m3))))
+  0)

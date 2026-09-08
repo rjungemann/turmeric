@@ -1169,10 +1169,16 @@ have. The best direction is a boxed TuriValue as the HAMT value, matching what
 the compiled path already does for a `(Vec any)` element, so the two back ends
 agree by construction rather than by two mechanisms kept in lockstep.
 
-So `#map{...}` is NOT a transcription of the Vec work, and the wrong answer
-should be closed (or refused, as Set already refuses) before `#map{...}` makes
-the shape ordinary. Asking early was the right call: this would otherwise have
-been found by a user.
+The compiled half is now fixed -- and it was small for a reason worth carrying
+forward: the STORE side was already right, because `repr_of` answers
+`REPR_BOXED_AGG` for an `any` at a container-element position and the HAMT assoc
+boxes accordingly. Only the read was missing its deref. So the container work
+has one shared decision (`repr_of` at `CONTAINER_ELEM`) and per-container read
+plumbing, which is the shape to expect for `#set{...}` and cons lists too.
+
+The INTERPRETER half of Map is still open, and it is the wrong-answer one.
+Asking early was the right call: it would otherwise have been found by a user
+writing `#map{:a 1 :b "two"}`.
 
 Still to do: `[1 "two" 7.1]` defaulting to `(vec any)` in a Saffron file, the
 map/set/cons-list twins, and the prelude.
