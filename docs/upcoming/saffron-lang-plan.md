@@ -1576,7 +1576,34 @@ yields a phantom parameter named `int` and a return type of `':'`, affecting
 1064 of 1999 stdlib definitions. Latent -- `docs/api/` is not checked in -- but
 it would corrupt the reference on the next `tur run docs`.
 
-Still open: the vim/vscode syntax packs. That is the last S8 item.
+**The syntax packs are DONE (2026-09-08), and the item was mis-scoped.** It
+reads as though packs exist and need a Saffron update. They did not exist:
+`editors/vscode-turmeric` is a DEBUGGER extension that declares the `turmeric`
+language but contributes no grammar (`grammars: 0`), and there was no vim pack
+at all -- no `.tmLanguage`, no `.vim`, no `syntax/` anywhere in the tree. So
+there was no syntax highlighting for Turmeric in any editor, let alone Saffron.
+
+Both now exist: a TextMate grammar wired into the existing extension, and a
+standard `syntax/` + `ftdetect/` + `ftplugin/` vim pack. Each covers the
+`#lang` line with its base highlighted distinctly, `;;;` docstrings, the
+definition forms, BOTH annotation spellings, parameter attributes, effect rows,
+reader dispatch, and inline C as embedded.
+
+Pinned by `tests/run-editor-syntax.sh` (ctest `tur_editor_syntax`), and the two
+halves have deliberately unequal assurance, which the script states: the vim
+pack is LOADED IN A REAL VIM and queried with
+`synIDattr(synIDtrans(synID(l, c, 1)))`, while the vscode half is JSON validity
+plus regex checks, since no TextMate engine is available here.
+
+Loading it for real earned its keep twice. The `\b` terminator on the
+special-form rule silently matched NOTHING for any form ending in `?` or `!`
+(`is?`, `set!`) -- there is no word boundary after a non-word character -- and
+rule ORDER made the fused `y :float` highlight as a keyword literal while the
+spaced `y : float` highlighted as a type, because Vim gives a later-defined
+item priority. Both were found by measurement, and the harness was verified to
+fail on the second when reintroduced.
+
+**S8 is complete.** The next stage is S9.
 
 ### S9 -- runtime typeclass dispatch (D8) -- CLEARED, not started
 
