@@ -24,22 +24,35 @@
 ;; `let` binding and a fat-closure `any` slot) -- see
 ;; docs/reported/any-carrier-straddle-is-bridged-per-consumer.md.
 ;;
-;; No requires.leak-check: each of these returns a fresh vector the caller owns,
-;; and they are freed below, but the vectors they are BUILT from are `[...]`
-;; literals whose own elements the S6 widen boxes -- the intermediate literal in
-;; `(vec-map [1 2 3] ...)` is never bound, so nothing can free it.  That is the
-;; same shape as map-literal-leaks-its-intermediate-maps, one container over.
+;; requires.leak-check.  Each of these returns a fresh vector the caller owns,
+;; and every INPUT vector is bound and freed too -- which is the point of
+;; writing it this way rather than passing the literals inline.
+;;
+;; `(vec-map [1 2 3] f)` leaks the `[1 2 3]`: a `[...]` literal in argument
+;; position is never bound, so `vec-free` has nothing to name.  That is explicit
+;; memory management working as designed, not a defect -- Turmeric frees a
+;; vector when the author says so -- but it is a sharp edge a dynamic dialect
+;; makes very easy to hit, and a fixture that demonstrated the prelude by
+;; leaking on every line would be the wrong example to copy.
 
 (defn main []
-  (let [doubled (vec-map [1 2 3] (fn [x] (* x 2)))]
-    (println (vec-len doubled))
-    (println (vec-get doubled 0))
-    (println (vec-get doubled 2))
-    (vec-free doubled))
-  (let [big (vec-filter [1 2 3 4] (fn [x] (> x 2)))]
-    (println (vec-len big))
-    (println (vec-get big 0))
-    (vec-free big))
-  (println (vec-fold [1 2 3] 0 (fn [a x] (+ a x))))
-  (println (vec-fold [1.5 2.25] 0.0 (fn [a x] (+ a x))))
+  (let [src [1 2 3]]
+    (let [doubled (vec-map src (fn [x] (* x 2)))]
+      (println (vec-len doubled))
+      (println (vec-get doubled 0))
+      (println (vec-get doubled 2))
+      (vec-free doubled))
+    (vec-free src))
+  (let [src4 [1 2 3 4]]
+    (let [big (vec-filter src4 (fn [x] (> x 2)))]
+      (println (vec-len big))
+      (println (vec-get big 0))
+      (vec-free big))
+    (vec-free src4))
+  (let [si [1 2 3]]
+    (println (vec-fold si 0 (fn [a x] (+ a x))))
+    (vec-free si))
+  (let [sf [1.5 2.25]]
+    (println (vec-fold sf 0.0 (fn [a x] (+ a x))))
+    (vec-free sf))
   0)

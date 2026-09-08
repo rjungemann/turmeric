@@ -1,0 +1,44 @@
+;; map-literal-leaks-its-intermediate-maps: a `#map{...}` used to leak every
+;; generation but the last, even with `map-free` called.
+;;
+;; A HAMT is persistent, so each `map-assoc` mallocs a fresh `{void* hamt}`
+;; carrier box and returns it.  `hamt-of` chains N of them, and the author holds
+;; only the LAST -- so `#map{:a 1 :b 2 :c 3}` leaked 3 boxes plus the trie
+;; generations they retained: 1080 bytes in 11 allocations, in plain Turmeric
+;; with no `any` anywhere.  Bounded per literal, unbounded in a loop, and
+;; nothing the author could free.
+;;
+;; Each step of the chain now frees the map it assoc'd into
+;; (`map-assoc-consuming__`).  That is sound HERE and deliberately not in
+;; `map-assoc` itself: the caller of `map-assoc` generally holds its argument
+;; and must keep it, whereas `hamt-of` seeds the chain with a fresh
+;; `(map-empty-for ...)` and every later input is a previous step's result, so
+;; every generation in the chain is the chain's own.  Freeing the previous
+;; generation does not disturb the new one -- `tur_hamt_free` is refcount-safe
+;; under structural sharing, which is the guarantee `map-free`'s own body
+;; already documents.
+;;
+;; The DUPLICATE keys are not incidental: a duplicate is the case where a step's
+;; assoc can return a trie that shares more with its input than a fresh key
+;; would, so it is where freeing the input too eagerly would show.
+;;
+;; See tests/fixtures/map-literal-owned-key-no-double-free for the boxed-key
+;; half, which cannot run under turi (inline-C) and is where a refcount error
+;; on the KEY boxes would surface.
+;;
+;; requires.leak-check: nothing is left behind once the final map is freed.
+
+(defn main [] : int
+  (let [mi #map{1 10 2 20 3 30}]
+    (println (map-count mi))
+    (println (map-get mi 2))
+    (map-free mi))
+  (let [md #map{1 10 2 20 1 99}]
+    (println (map-count md))
+    (println (map-get md 1))
+    (map-free md))
+  (let [mc #map{"a" 1 "b" 2 "a" 9}]
+    (println (map-count mc))
+    (println (map-get mc "a"))
+    (map-free mc))
+  0)

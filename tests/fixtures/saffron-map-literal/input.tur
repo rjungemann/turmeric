@@ -19,12 +19,16 @@
 ;; with the literal looking like the culprit.  See
 ;; docs/archive/map-of-any-is-broken-on-both-back-ends.md.
 ;;
-;; NO requires.leak-check, and the reason is worth stating rather than leaving
-;; to a missing file: a map LITERAL leaks its intermediate maps even when the
-;; result is freed, because `hamt-of` chains `map-assoc` and only the last of
-;; the N `{void* hamt}` boxes reaches `map-free`.  Measured PRE-EXISTING -- a
-;; plain Turmeric `#map{:a 1 :b 2 :c 3}` leaks 1080 bytes in 11 allocations with
-;; no `any` anywhere.  Filed as map-literal-leaks-its-intermediate-maps.
+;; requires.leak-check: the `any` value boxes are owned by the map and released
+;; with it.
+;;
+;; This fixture shipped WITHOUT that marker for one commit, and said so: a map
+;; literal used to leak its intermediate maps even when the result was freed,
+;; because `hamt-of` chains `map-assoc` and only the last of the N
+;; `{void* hamt}` boxes reached `map-free`.  Pre-existing and not an `any`
+;; problem -- a plain Turmeric `#map{:a 1 :b 2 :c 3}` leaked 1080 bytes in 11
+;; allocations.  Fixed (map-literal-leaks-its-intermediate-maps): each step of
+;; the chain now frees the map it assoc'd into.
 ;;
 ;; 7.1 rather than 7.0: a truncating path through the box would print 7.
 

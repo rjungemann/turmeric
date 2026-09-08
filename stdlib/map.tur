@@ -852,17 +852,42 @@
   (eq? [x y]
     (and (= (map-count (:: x (Map K V))) (map-count (:: y (Map K V))))
       (map-eq-driver (:: x (Map K V)) (:: y (Map K V)) (fn [a b] (eq? a b))))))
+;;; map-assoc-consuming__ -- internal: assoc, then free the map assoc'd INTO.
+;;;
+;;; map-literal-leaks-its-intermediate-maps.  A HAMT is persistent, so every
+;;; map-assoc mallocs a fresh `{void* hamt}` carrier box and returns it.  In an
+;;; N-entry literal that is N+1 boxes of which the author holds only the LAST,
+;;; so `#map{:a 1 :b 2 :c 3}` leaked 3 boxes and the generations they retain --
+;;; 1080 bytes in 11 allocations -- with map-free called.
+;;;
+;;; This is safe ONLY where the input map is owned by the expression that
+;;; produced it, which is why it lives here and not in map-assoc: the caller of
+;;; map-assoc generally holds its argument and must keep it.  hamt-of seeds the
+;;; chain with a fresh (map-empty-for ...) and every later input is a previous
+;;; step's result, so every generation in the chain is the chain's own.
+;;;
+;;; Freeing the previous generation does not disturb the new one: tur_hamt_free
+;;; is refcount-safe under structural sharing (it decrements each node and frees
+;;; only at zero), which is the same guarantee map-free's own body documents.
+
+(defmacro map-assoc-consuming__ [m k v]
+  `(let [__tur_mprev__ ~m]
+     (let [__tur_mnext__ (map-assoc __tur_mprev__ ~k ~v)]
+       (do (map-free __tur_mprev__)
+           __tur_mnext__))))
 ;;; hamt-assoc-each__ -- internal helper for the hamt-of macro.
 ;;;
 ;;; Threads (map-assoc m k v) over the kv-pairs in xs, returning the final
 ;;; map.  Recursive: each step wraps the accumulator in one more map-assoc,
-;;; so the last pair wins on duplicate keys.
+;;; so the last pair wins on duplicate keys.  Each step also FREES the map it
+;;; assoc'd into -- see map-assoc-consuming__ for why that is sound here and
+;;; not in map-assoc itself.
 
 (defmacro hamt-assoc-each__ [m & kvs]
   (if (empty? kvs)
     m
     (list hamt-assoc-each__
-      (list map-assoc m (first kvs) (second kvs))
+      (list map-assoc-consuming__ m (first kvs) (second kvs))
       ~@(rest (rest kvs)))))
 ;;; tur-map-homog__ -- internal: compile-time homogeneity check (see vec.tur).
 ;;;
