@@ -5,6 +5,7 @@
 #include "mangle.h"   /* tur_cname_name_len */
 #include "refine_discharge.h" /* RT3: final refinement discharge + stats */
 #include "refine_report.h"    /* SX8a-3: --dump-refine=json obligation dump */
+#include "lang_layers.h"      /* saffron-lang-plan S6 (G7): lang_span_is_saffron */
 
 /* duplicate-ctor-names-collide-in-emitted-c: the constructor-name census lives
  * in emit_core.c; declared here because elab_toplevel.c does not include
@@ -251,6 +252,39 @@ static Form *dl_build_call(Elab *e, Span span, const char *head,
     call_items[0] = form_sym(e->arena, span, h);
     for (uint32_t i = 0; i < n; i++) call_items[i + 1] = items[i];
     return form_list(e->arena, span, call_items, n + 1);
+}
+
+/* saffron-lang-plan S6 (G7): wrap one data-literal element in `(:: elem any)`.
+ *
+ * In a Saffron file a container's element type is `any` -- that is what makes
+ * `[1 "two" 7.1]` a vector rather than a type error.  `vec-of` (and `hamt-of`,
+ * and `set-of`) is HOMOGENEOUS by construction: it routes every element through
+ * `tur-vec-homog__`, so element 2 above is rejected against element 1's type
+ * ("function 'vec-push!' arg 2: expected tyvar, got cstr").  Widening each
+ * element at the LITERAL, before the macro sees it, keeps that homogeneity
+ * check intact and satisfies it at `any` -- rather than teaching the macro a
+ * dialect-dependent second mode.
+ *
+ * A uniform `any` also costs a box on `[1 2 3]`, which is the right trade for a
+ * dialect where a vector's element type is not fixed: pushing a string into it
+ * later is ordinary, and a `(Vec int)` that silently became one would be a
+ * surprise no diagnostic covers.
+ *
+ * An element already typed `any` re-ascribes to `any`, which is identity. */
+static Form *dl_saffron_widen_elem(Elab *e, Form *elem) {
+    const Symbol *any_sym = symtab_intern(e->st, strslice("any", 3));
+    Form *ty = form_sym(e->arena, elem->span, any_sym);
+    Form *items[2] = { elem, ty };
+    return dl_build_call(e, elem->span, "::", items, 2);
+}
+
+/* Widen every element of a data literal, or return `items` unchanged when the
+ * literal is not in a Saffron file. */
+static Form **dl_saffron_widen_elems(Elab *e, Span sp, Form **items, uint32_t n) {
+    if (n == 0 || !lang_span_is_saffron(sp)) return items;
+    Form **out = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+    for (uint32_t i = 0; i < n; i++) out[i] = dl_saffron_widen_elem(e, items[i]);
+    return out;
 }
 
 /* DL1: normalize a #map{...} key form to the int key the typed Map expects.
@@ -545,8 +579,13 @@ Expr *elab_form(Elab *e, Form *f) {
              * forms (defn/fn/let/loop/...) grab their F_VEC slot before it ever
              * reaches elab_form, so reaching here means expression position. */
             {
+                /* saffron-lang-plan S6 (G7): in a Saffron file the elements are
+                 * widened to `any` first, so `[1 "two" 7.1]` is a `(Vec any)`
+                 * of three boxes rather than a homogeneity error. */
+                Form **items = dl_saffron_widen_elems(e, f->span, f->as.list.items,
+                                                      f->as.list.len);
                 Form *call = dl_build_call(e, f->span, "vec-of",
-                                           f->as.list.items, f->as.list.len);
+                                           items, f->as.list.len);
                 return elab_form(e, call);
             }
         case F_MAP:

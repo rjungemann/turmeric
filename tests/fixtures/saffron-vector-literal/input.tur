@@ -1,0 +1,35 @@
+#lang saffron
+;; saffron-lang-plan S6 (G7): a `[...]` literal in a Saffron file is a
+;; `(Vec any)`, so its elements need not agree.
+;;
+;; `vec-of` is HOMOGENEOUS by construction -- it routes every element through
+;; `tur-vec-homog__`, so `[1 "two" 7.1]` used to fail on element 2 against
+;; element 1's type ("function 'vec-push!' arg 2: expected tyvar, got cstr").
+;; The widen happens at the LITERAL, before the macro sees it: each element is
+;; wrapped in `(:: elem any)`, which keeps that homogeneity check intact and
+;; satisfies it at `any`, rather than teaching the macro a dialect-dependent
+;; second mode.
+;;
+;; Getting here needed the `vec-of` clone-selection fix first
+;; (docs/archive/vec-any-monomorph-is-half-plumbed.md): a `vec-of` at `any`
+;; emitted -Wincompatible-pointer-types, which run.sh's emitted-C ratchet FAILs,
+;; because `vec-empty-like__`'s `any` clone never interned its own `vec-new`
+;; monomorph and the cross-spec fallback took the `int` clone's.
+;;
+;; A homogeneous-LOOKING literal is a `(Vec any)` too -- see
+;; tests/fixtures/saffron-vector-literal-homogeneous.  That costs a box on
+;; `[1 2 3]`, which is the right trade for a dialect where a vector's element
+;; type is not fixed.
+;;
+;; requires.leak-check: the element boxes are owned by the vector and released
+;; with it.
+
+(defn main [] : int
+  (let [v [1 "two" 7.1 (> 2 1)]]
+    (println (vec-len v))
+    (println (type-of (vec-get v 0)))
+    (println (type-of (vec-get v 1)))
+    (println (type-of (vec-get v 2)))
+    (println (type-of (vec-get v 3)))
+    (vec-free v))
+  0)

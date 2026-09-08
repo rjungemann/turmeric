@@ -1194,11 +1194,27 @@ Still to do, and the ORDER is now measured rather than assumed:
    [Archived](../archive/vec-any-monomorph-is-half-plumbed.md);
    `tests/fixtures/vec-of-any-heterogeneous` pins a heterogeneous `vec-of`
    round-tripping `int`/`cstr`/`float`, leak-clean.
-2. **G7 itself** -- `[...]` defaulting to `(vec any)` in a Saffron file -- now
-   unblocked, and a small lowering: the `(Vec any)` machinery works on both back
-   ends.
-3. The interpreter's Map value tag (the open wrong answer).
-4. The `#map{...}` / `#set{...}` / cons-list twins, then the prelude.
+2. ~~**G7 itself**~~ -- **the VECTOR half is DONE 2026-09-08.** `[...]` in a
+   Saffron file widens each element to `any` at the LITERAL (one helper in
+   `elab_toplevel.c`'s `F_VEC` case), before `vec-of` sees it -- which keeps
+   that macro's `tur-vec-homog__` homogeneity check intact and satisfies it at
+   `any`, rather than teaching the macro a dialect-dependent second mode. The
+   widen is unconditional per file, so `[1 2 3]` is a `(Vec any)` too:
+   `tests/fixtures/saffron-vector-literal-homogeneous` pushes a string into one
+   and reads it back. Both fixtures leak-clean, both back ends agree.
+3. The interpreter's Map value tag (the open wrong answer). **This moved AHEAD
+   of `#map{...}` on measurement, not on preference.** `#map{:a 1 :b "two"}`
+   fails identically to the vector literal did (`tur-map-homog__` on the VALUE
+   side), so the same widen is the obvious next step -- but a `(Map K any)`
+   under `--interpret` reports `int` for every value, with no diagnostic. Doing
+   the widen first would make every Saffron map literal a silent wrong answer on
+   one back end. That is precisely the trap the Vec case set, and the reason
+   this report was filed to check Map and Set BEFORE the literal work rather
+   than after.
+4. The `#map{...}` / `#set{...}` / cons-list twins, then the prelude. `#set{}`
+   needs its own step first: a `(Set any)` refuses at elaboration
+   (`set-add-eq-o` arg 2: expected int, got any) -- a clean failure, not a wrong
+   answer, but the widen does not work there until `any` is admitted.
 
 ### S6 -- containers and the Saffron prelude (medium) -- remaining scope
 
