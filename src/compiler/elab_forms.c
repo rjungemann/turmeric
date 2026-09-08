@@ -2633,18 +2633,31 @@ Expr *elab_named_let(Elab *e, const Form *call) {
  * Only direct, single-variable tests narrow; negation/conjunction do not (see
  * TY3.3).  Recognition is purely syntactic on the un-elaborated Form. */
 static bool if_guard_narrowing(Elab *e, const Form *cond,
-                               const Symbol **out_var, const Symbol **out_type) {
+                               const Symbol **out_var, Form **out_type) {
     if (!cond || cond->tag != F_LIST || cond->as.list.len < 1) return false;
     Form *head = cond->as.list.items[0];
     if (head->tag != F_SYM) return false;
 
-    /* Shape 1: (is? x T) */
+    /* Shape 1: (is? x T), where T is a bare name OR an APPLIED type form.
+     *
+     * The applied form used to be refused here (`tf->tag == F_SYM` only), so
+     * `(if (is? x (Option float)) ...)` tested the tag and then narrowed
+     * nothing -- the body still saw `x : any` and a method call on it was a
+     * "cannot dispatch on an `any` receiver" diagnostic. The author had to
+     * repeat the target in an explicit `(cast x (Option float))` that the
+     * guard had already proved. `(is? x Circle)` narrowed on the same line,
+     * so the two shapes behaved differently with nothing saying why.
+     *
+     * `is?` and `cast` have shared one target resolver since
+     * any-narrowing-broken-for-parametric-receivers was fixed, so an applied
+     * target already resolves for both; passing the FORM through rather than a
+     * Symbol is all that was missing. */
     if (head->as.sym == e->sym_is_q && cond->as.list.len == 3) {
         Form *xf = cond->as.list.items[1];
         Form *tf = cond->as.list.items[2];
-        if (xf->tag == F_SYM && tf->tag == F_SYM) {
+        if (xf->tag == F_SYM && (tf->tag == F_SYM || tf->tag == F_LIST)) {
             *out_var  = xf->as.sym;
-            *out_type = tf->as.sym;
+            *out_type = tf;
             return true;
         }
         return false;
@@ -2664,7 +2677,10 @@ static bool if_guard_narrowing(Elab *e, const Form *cond,
         /* rhs must be a string literal naming the type */
         if (rhs->tag != F_STR) return false;
         *out_var  = xf->as.sym;
-        *out_type = symtab_intern(e->st, rhs->as.s);
+        /* Shape 2's target is a STRING naming the type; rebuild it as the
+         * symbol form the cast expects, so both shapes hand back a Form. */
+        *out_type = form_sym(e->arena, rhs->span,
+                             symtab_intern(e->st, rhs->as.s));
         return true;
     }
 
@@ -2676,13 +2692,15 @@ static bool if_guard_narrowing(Elab *e, const Form *cond,
  * cast, so a use of x at type T inside the branch type-checks and the runtime
  * tag is verified.  Returns the original branch if any piece cannot be built. */
 static Form *if_narrow_branch(Elab *e, Form *branch,
-                              const Symbol *var, const Symbol *type_sym, Span sp) {
+                              const Symbol *var, Form *type_form, Span sp) {
     Arena *a = e->arena;
-    /* (cast x T) */
+    /* (cast x T) -- T spliced as a FORM, so an applied target like
+     * `(Option float)` survives; it used to be re-synthesised from a Symbol,
+     * which is why only a bare name could reach here. */
     Form *cast_items[3];
     cast_items[0] = form_sym(a, sp, e->sym_cast);
     cast_items[1] = form_sym(a, sp, var);
-    cast_items[2] = form_sym(a, sp, type_sym);
+    cast_items[2] = type_form;
     Form *cast_f = form_list(a, sp, cast_items, 3);
     /* binding vector [x (cast x T)] */
     Form *bvec_items[2] = { form_sym(a, sp, var), cast_f };
@@ -2887,12 +2905,12 @@ Expr *elab_if(Elab *e, const Form *call) {
     Form *then_form = call->as.list.items[2];
     Form *else_form = (call->as.list.len == 4) ? call->as.list.items[3] : NULL;
     {
-        const Symbol *gv = NULL, *gt = NULL;
+        const Symbol *gv = NULL; Form *gt = NULL;
         if (if_guard_narrowing(e, cond_form, &gv, &gt)) {
             /* Rewrite the condition to the canonical (is? x T) test form. */
             Form *is_items[3] = { form_sym(e->arena, call->span, e->sym_is_q),
                                   form_sym(e->arena, call->span, gv),
-                                  form_sym(e->arena, call->span, gt) };
+                                  gt };
             cond_form = form_list(e->arena, call->span, is_items, 3);
             Binding *vb = scope_lookup(e->scope, gv);
             if (vb && vb->type.kind == TY_ANY) {

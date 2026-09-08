@@ -685,11 +685,20 @@ case rejoins the monomorphic one and the "how big is the limitation" answer
 above holds uniformly -- which was the point of fixing it before scheduling
 anything else here.
 
-Two limits survive, both recorded rather than silently absorbed. The
-`if`-guard narrowing does **not** extend to an applied target, so the `cast`
-above is load-bearing rather than decorative -- narrowing recognises the
-simple `(is? x T)` shapes the union guide documents, and widening it is its
-own change. And the interpreter cannot discriminate two instantiations of one
+Two limits were recorded rather than silently absorbed, and **the first is now
+closed (2026-09-08)**. The `if`-guard narrowing did **not** extend to an
+applied target, so the `cast` above was load-bearing rather than decorative;
+"widening it is its own change" was right, and that change is
+`tests/fixtures/if-guard-narrows-applied-target` -- `if_guard_narrowing`
+matched `(is? x T)` only for an `F_SYM` target and threaded a `Symbol` into the
+rewrite, so passing the type FORM through was the whole fix. Note the
+consequence: the explicit `cast` in the branch is now REDUNDANT and therefore an
+error, exactly as it already was for a bare target, so
+`any-narrow-parametric-roundtrip` was updated to drop it. That is a behaviour
+change for code written against the workaround, and it is the workaround going
+away rather than a capability being lost.
+
+The second limit stands: the interpreter cannot discriminate two instantiations of one
 constructor (a `TuriValue` carries the ADT, not the type argument), so it
 head-matches; `any-narrow-parametric-discriminates` and
 `any-cast-wrong-instantiation` are compiled-only for exactly that reason.
@@ -729,15 +738,24 @@ So the limitation has two halves, and only the first is narrow:
 - **Monomorphic receivers: narrow.** Closed classes are a prelude
   implementation detail; open classes over heterogeneous data are where a user
   feels it, and the type-case they write is idiomatic anyway.
-- **Parametric / HKT receivers: total, until the narrowing bug is fixed.**
-  No route reaches a method on an `any`-held `Option`. `fmap`/`bind`/`pure`,
-  `Option`, `Result` and every monadic pipeline are on the far side of it.
+- ~~**Parametric / HKT receivers: total, until the narrowing bug is fixed.**~~
+  **RESOLVED. This paragraph was stale from 2026-09-07 and is kept struck
+  through because it was the stated blocker.** The narrowing bug was fixed that
+  day ([archived](../archive/any-narrowing-broken-for-parametric-receivers.md))
+  and re-verified 2026-09-08: `(is? x (Option float))` / `(cast x (Option
+  float))` round-trip on both back ends. `fmap`/`bind`/`pure`, `Option`,
+  `Result` and the monadic pipelines are reachable from `any` via the type-case.
 
-That second half is a **prerequisite, not a D8 scheduling question** -- the
-narrowing bug is wrong for shipping Turmeric regardless of Saffron, and once
-it is fixed the parametric case rejoins the monomorphic one (a type-case over
-`Option` / `Result` / user constructors, written once). Until then, any
-estimate of "how much does D8 cost us" is measuring the bug, not the design.
+The parametric case has **rejoined the monomorphic one**, which is what that
+paragraph said would happen. The remaining asymmetry between the two -- the
+`if`-guard narrowed a BARE target but not an APPLIED one, so the parametric
+shape needed an explicit `cast` the guard had already proved -- was closed
+2026-09-08 (`tests/fixtures/if-guard-narrows-applied-target`). Both shapes now
+narrow, and in both a redundant `cast` on the narrowed binding is an error, as
+it always was for the bare shape.
+
+So "how much does D8 cost us" can now be estimated against the design rather
+than against a bug -- which was the point of fixing it first.
 
 #### The verdict, restated
 
