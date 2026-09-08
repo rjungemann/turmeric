@@ -516,6 +516,104 @@ jobs:
           path: ${{ github.workspace }}/.ccache
           key: ccache-jit-${{ runner.os }}-${{ github.sha }}
 
+  # cc-path-preamble-split-plan: run the corpus with the split runtime ON.
+  #
+  # Nothing in CI exercised `--runtime=split` at all, so the split PR could go
+  # fully green -- twelve jobs, all passing -- while the feature it adds was
+  # never once executed.  That green attested "the opt-in path does not break
+  # the default path", which is worth knowing and is not what it looked like.
+  # It is the same shape as
+  # docs/reported/jit-suite-reports-pass-when-the-engine-is-disabled.md: a
+  # suite reporting PASS for a path it never took.
+  #
+  # Linux only, deliberately.  The split's failure modes so far are compiler
+  # diagnostics from the emitted C (gcc rejecting what c2mir accepts), not
+  # platform behaviour, so a second OS would mostly buy runtime.  Widen it when
+  # a platform-specific split bug actually shows up.
+  split:
+    name: Split runtime (cc path)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-split-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-split-${{ runner.os }}-
+
+      # Debug, matching the `test` job: a Release tur elides contract checks,
+      # so contract fixtures fail with the wrong error and the baseline below
+      # would be measuring the build type rather than the split.
+      - name: Configure (Debug)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+      # ALL targets: --runtime=split links libturt_preamble.a, and `tur` alone
+      # never builds it.  A tur-only build fails every fixture at the link with
+      # `cannot find -lturt_preamble`, which reads like a split bug and is not.
+      - name: Build (all targets -- split links libturt_preamble.a)
+        run: cmake --build build -j
+
+      # Load-bearing, and the whole reason this job is worth having.  The split
+      # FAILS CLOSED: on any mismatch it silently emits the full preamble, so
+      # the suite still passes, slower, and nothing says so.  Without this
+      # check a build that lost the split entirely would report a clean green
+      # -- vacuously, having tested the default path twice.
+      - name: Verify the split actually engages
+        run: |
+          printf '(defn main [] : int 0)\n' > /tmp/splitprobe.tur
+          out=$(TUR_JIT_TIMING=1 TUR_RUNTIME=split \
+                  ./build/tur build /tmp/splitprobe.tur -o /tmp/splitprobe 2>&1) || true
+          printf '%s\n' "$out"
+          if printf '%s\n' "$out" | grep -q 'split.*disengaged'; then
+            echo "::error::the split disengaged -- see the reason above (regenerate artifacts with tools/gen-runtime-split.py after a preamble change)"
+            exit 1
+          fi
+          if [ ! -x /tmp/splitprobe ]; then
+            echo "::error::split build produced no executable"
+            exit 1
+          fi
+          /tmp/splitprobe || { echo "::error::split-built binary did not run"; exit 1; }
+          echo "split engaged and the artifact runs."
+
+      # Plain "zero failures", like every other suite.
+      #
+      # This used to diff against a committed known-failure baseline, which was
+      # scaffolding while the split still had failures. Both lists reached empty
+      # on 2026-09-07, so the scaffolding went with them -- the investigation
+      # they carried is in
+      # docs/archive/cc-path-split-windows-and-hamt-findings.md.
+      #
+      # Worth one line on how they died, because the bug was in the harness and
+      # not the thing under test: with an empty list,
+      # `grep -vE '^\s*(#|$)' <file>` matches nothing and exits 1, and these
+      # steps run under `bash -e`. All four split legs reported
+      # `2828 passed, 0 failed` and then failed anyway. An empty-set edge case
+      # in a check is worse than no check, so the check is now the simple one.
+      - name: Suite under TUR_RUNTIME=split
+        run: |
+          set -o pipefail
+          TUR_RUNTIME=split bash tests/run.sh 2>&1 | tee /tmp/split-run.log
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-split-${{ runner.os }}-${{ github.sha }}
+
   # Phase 3A/4 of docs/upcoming/suite-timing-trends-plan.md.
   #
   # A SEPARATE job, not a step on `test`, specifically because of the
@@ -938,6 +1036,113 @@ jobs:
             fail=1
           done
           exit $fail
+
+  # The split runtime on WINDOWS.  A separate job from `split` (Linux) because
+  # the two disagree, and the disagreement is the point: on Linux exactly one
+  # fixture fails under TUR_RUNTIME=split; on Windows three do, and the extra
+  # two are a real defect (no output, exit 127, while the DEFAULT runtime
+  # passes the same fixture with the same compiler and build).
+  #
+  # That defect was invisible to CI for as long as it existed, which is how it
+  # spent a whole session being mischaracterised as "three failures in the
+  # split" when three was a Windows number and one was the Linux number.
+  #
+  # SHARDED, like the `windows` job and for the same reason: a single Windows
+  # runner takes 28-52 minutes on this corpus and has died outright once.
+  windows-split:
+    name: Windows split runtime ${{ matrix.shard }} (MSYS2/UCRT64)
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1/3', '2/3', '3/3']
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      # As in the `windows` job: a CRLF checkout would rewrite the committed
+      # split-runtime artifacts under src/runtime/generated/, which are exactly
+      # what this leg tests.
+      - name: Keep LF line endings
+        shell: bash
+        run: git config --global core.autocrlf input
+
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            diffutils
+            python
+            git
+
+      # Debug: a Release tur elides contract checks, so contract fixtures fail
+      # with the wrong error and the baseline would be measuring the build type.
+      # Sanitizers are off regardless here -- MinGW ships no ASan runtime.
+      - name: Configure
+        run: >-
+          cmake -S . -B build-win -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      # ALL targets: --runtime=split links libturt_preamble.a, which a
+      # `--target tur` build never produces.  Every fixture would then die at
+      # the link with `cannot find -lturt_preamble`, which reads like a split
+      # bug and is not.
+      - name: Build (all targets -- split links libturt_preamble.a)
+        run: cmake --build build-win -j
+
+      # The split FAILS CLOSED: on a hash mismatch it silently emits the full
+      # preamble and everything still passes, slower.  Without this, a leg that
+      # lost the split would report green having run the default path twice.
+      - name: Verify the split actually engages
+        run: |
+          printf '(defn main [] : int 0)\n' > /tmp/splitprobe.tur
+          out=$(TUR_JIT_TIMING=1 TUR_RUNTIME=split \
+                  ./build-win/tur.exe build /tmp/splitprobe.tur -o /tmp/splitprobe.exe 2>&1) || true
+          printf '%s\n' "$out"
+          if printf '%s\n' "$out" | grep -q 'split.*disengaged'; then
+            echo "::error::the split disengaged on Windows -- see the reason above"
+            exit 1
+          fi
+          [ -f /tmp/splitprobe.exe ] || { echo "::error::split build produced no executable"; exit 1; }
+          /tmp/splitprobe.exe || { echo "::error::split-built binary did not run"; exit 1; }
+          echo "split engaged and the artifact runs."
+
+      # Plain "zero failures", like the Linux leg and every other suite.
+      #
+      # This shard used to assert its failures were a SUBSET of a committed
+      # baseline, with a second step checking the other direction (every listed
+      # name still fails). That scaffolding existed while the split had known
+      # failures; both lists reached empty on 2026-09-07 and it went with them.
+      # The investigation is in
+      # docs/archive/cc-path-split-windows-and-hamt-findings.md -- including the
+      # fact that the second, cheaper check was the one that caught something,
+      # which is worth remembering if a baseline is ever needed again.
+      - name: Suite under TUR_RUNTIME=split (shard ${{ matrix.shard }})
+        env:
+          TUR_TEST_SHARD: ${{ matrix.shard }}
+        run: |
+          set -o pipefail
+          TUR=./build-win/tur.exe TUR_RUNTIME=split bash tests/run.sh 2>&1 \
+            | tee ./split-win.log
+
+      - name: Upload split log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: split-win-${{ strategy.job-index }}
+          path: ./split-win*.log
+          if-no-files-found: ignore
 
   check-guides:
     name: Check guide toggle pairs
