@@ -4143,11 +4143,64 @@ typedef struct {
     bool        sweet;       /* --sweet (emit build.tur.sweet instead of build.tur) */
     const char *author;      /* --author "Name <email>" */
     const char *license;     /* --license MIT|Apache-2.0|BSD-3-Clause|none */
+    bool        force;       /* --force: overwrite files that already exist */
 } ScaffoldOpts;
 
 /* Write a file and print it in the scaffold summary.
  * Returns true on success; false on I/O error. */
+/* tur-init-help-scaffolds-and-overwrites, defect 2: scaffolding OVERWROTE
+ * existing files without refusing or asking.  Run in a checkout of this repo it
+ * replaced a 209-line `.gitignore` with an 8-line template and clobbered
+ * `README.md`; both were tracked so git recovered them, but uncommitted edits
+ * to either would simply be gone.
+ *
+ * The refusal is PRE-FLIGHT rather than per-file, so a collision cannot leave a
+ * half-scaffolded tree -- and it reuses the real scaffold walk in a probe pass
+ * rather than re-listing the dozen target paths, which would drift the first
+ * time a scaffold file is added.  `scaffold_write` is the single chokepoint
+ * every target goes through, so the probe sees exactly what a real run would
+ * write.
+ *
+ * There WAS a refusal, but it keyed on a MANIFEST being present
+ * (`build.tur`/`build.tur.sweet`), not on the files about to be clobbered -- so
+ * a project checkout with no manifest at its root sailed straight past it. */
+static bool g_scaffold_probe = false;
+static char g_scaffold_hits[16][512];
+static int  g_scaffold_n_hits = 0;
+
+/* Record a probe collision for a target that does NOT go through
+ * scaffold_write.  The manifest, tur.lock, the Justfile and ci.yml each write
+ * through their own writer (pkg_manifest_write / pkg_lock_write /
+ * justrun_write_template), so the chokepoint below never sees them -- and the
+ * first version of this fix therefore left all four still overwritable, and
+ * printed their names during the silent probe.  Returns true in probe mode so
+ * the caller skips its real work. */
+static bool scaffold_probe_note(const char *path) {
+    if (!g_scaffold_probe) return false;
+    FILE *ex = fopen(path, "r");
+    if (ex) {
+        fclose(ex);
+        if (g_scaffold_n_hits < (int)(sizeof(g_scaffold_hits) /
+                                      sizeof(g_scaffold_hits[0])))
+            snprintf(g_scaffold_hits[g_scaffold_n_hits++],
+                     sizeof(g_scaffold_hits[0]), "%s", path);
+    }
+    return true;
+}
+
 static bool scaffold_write(const char *path, const char *contents, bool dry_run) {
+    if (g_scaffold_probe) {
+        (void)contents; (void)dry_run;
+        FILE *ex = fopen(path, "r");
+        if (ex) {
+            fclose(ex);
+            if (g_scaffold_n_hits < (int)(sizeof(g_scaffold_hits) /
+                                          sizeof(g_scaffold_hits[0])))
+                snprintf(g_scaffold_hits[g_scaffold_n_hits++],
+                         sizeof(g_scaffold_hits[0]), "%s", path);
+        }
+        return true;
+    }
     printf("  %s\n", path);
     if (dry_run) return true;
     FILE *f = fopen(path, "w");
@@ -4203,10 +4256,37 @@ int scaffold_project_ext(const ScaffoldOpts *opts) {
     char buf[16384];
     char author[256];
 
+    /* tur-init-help-scaffolds-and-overwrites: refuse before writing ANYTHING
+     * if a target already exists.  Runs the whole scaffold once in probe mode
+     * (no printing, no mkdir, no writes) to collect collisions from the same
+     * walk a real run takes -- see scaffold_write.  Guarded on !g_scaffold_probe
+     * so the probe pass does not recurse, and skipped for --dry-run (which
+     * writes nothing) and --force (the explicit opt-in). */
+    if (!opts->dry_run && !opts->force && !g_scaffold_probe) {
+        ScaffoldOpts probe = *opts;
+        probe.dry_run = true;
+        g_scaffold_n_hits = 0;
+        g_scaffold_probe  = true;
+        (void)scaffold_project_ext(&probe);
+        g_scaffold_probe  = false;
+        if (g_scaffold_n_hits > 0) {
+            fprintf(stderr, "tur: refusing to overwrite existing file%s:\n",
+                    g_scaffold_n_hits == 1 ? "" : "s");
+            for (int i = 0; i < g_scaffold_n_hits; i++)
+                fprintf(stderr, "  %s\n", g_scaffold_hits[i]);
+            fprintf(stderr,
+                    "  scaffold into an empty directory, or pass --force to "
+                    "overwrite\n");
+            return 1;
+        }
+    }
+
     resolve_author(opts, author, sizeof(author));
     const char *license = opts->license ? opts->license : "none";
 
-    if (opts->dry_run)
+    if (g_scaffold_probe) {
+        /* silent */
+    } else if (opts->dry_run)
         printf("tur new: (dry-run) would create:\n");
     else
         printf("Creating %s spice '%s'\n",
@@ -4234,7 +4314,8 @@ int scaffold_project_ext(const ScaffoldOpts *opts) {
     {
         const char *manifest_name = opts->sweet ? "build.tur.sweet" : "build.tur";
         snprintf(path, sizeof(path), "%s/%s", dir, manifest_name);
-        if (!opts->dry_run) {
+        if (scaffold_probe_note(path)) { /* probe: recorded, nothing written */ }
+        else if (!opts->dry_run) {
             if (opts->sweet) {
                 /* Sweet-exp scaffold: simple defpackage in t-expr form. */
                 char sweet_buf[1024];
@@ -4267,7 +4348,8 @@ int scaffold_project_ext(const ScaffoldOpts *opts) {
     /* ---- tur.lock ---- */
     {
         snprintf(path, sizeof(path), "%s/tur.lock", dir);
-        if (!opts->dry_run) {
+        if (scaffold_probe_note(path)) { /* probe: recorded, nothing written */ }
+        else if (!opts->dry_run) {
             PkgLockFile lock;
             memset(&lock, 0, sizeof(lock));
             lock.format_version = 1;
@@ -4394,7 +4476,8 @@ int scaffold_project_ext(const ScaffoldOpts *opts) {
     /* ---- Justfile ---- */
     if (!opts->no_justfile) {
         snprintf(path, sizeof(path), "%s/Justfile", dir);
-        if (opts->dry_run) {
+        if (scaffold_probe_note(path)) { /* probe: recorded, nothing written */ }
+        else if (opts->dry_run) {
             printf("  Justfile\n");
         } else {
             /* justrun_write_template is defined in justrun.c */
@@ -4407,7 +4490,11 @@ int scaffold_project_ext(const ScaffoldOpts *opts) {
 
     /* ---- .github/workflows/ci.yml ---- */
     if (!opts->no_ci) {
-        if (!opts->dry_run) {
+        if (g_scaffold_probe) {
+            char wf_probe[4096];
+            snprintf(wf_probe, sizeof(wf_probe), "%s/.github/workflows/ci.yml", dir);
+            (void)scaffold_probe_note(wf_probe);
+        } else if (!opts->dry_run) {
             char wf_dir[4096];
             snprintf(wf_dir, sizeof(wf_dir), "%s/.github/workflows", dir);
             if (!mkdirp(wf_dir)) {
@@ -4649,12 +4736,43 @@ int cmd_pkg_init(int argc, char **argv) {
     bool sweet  = false;
     const char *name = NULL;
 
+    bool force = false;
+
     for (int i = 2; i < argc; i++) {
+        /* tur-init-help-scaffolds-and-overwrites, defect 1: `--help` was not
+         * handled.  It starts with '-', so it fell past the name slot too, and
+         * with no name given the CURRENT DIRECTORY's basename was used -- so
+         * `tur init --help` in a checkout called `turmeric` scaffolded a
+         * project called `turmeric` over the working tree.  Every other
+         * subcommand handles it; this one did not. */
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            printf("usage: tur init [options] [<name>]\n"
+                   "\n"
+                   "Scaffold a spice in the CURRENT directory.  With no <name>,\n"
+                   "the current directory's basename is used.\n"
+                   "\n"
+                   "options:\n"
+                   "  --bin, --lib   binary (default) or library spice\n"
+                   "  --sweet        write build.tur.sweet (sweet-exp manifest)\n"
+                   "  --no-git       skip git init\n"
+                   "  --force        overwrite files that already exist\n"
+                   "  -h, --help     show this help\n");
+            return 0;
+        }
         if (strcmp(argv[i], "--bin") == 0)         is_bin = true;
         else if (strcmp(argv[i], "--lib") == 0)    is_bin = false;
         else if (strcmp(argv[i], "--no-git") == 0) no_git = true;
         else if (strcmp(argv[i], "--sweet") == 0)  sweet  = true;
-        else if (argv[i][0] != '-') {
+        else if (strcmp(argv[i], "--force") == 0)  force  = true;
+        /* An UNKNOWN flag was silently IGNORED, which is the same accident with
+         * a different spelling: `tur init --saffron`, looking for a flag that
+         * does not exist, scaffolded just as `--help` did.  Refuse instead. */
+        else if (argv[i][0] == '-') {
+            fprintf(stderr, "tur init: unknown option '%s'\n"
+                            "  run `tur init --help` for usage\n", argv[i]);
+            return 1;
+        }
+        else {
             if (name) {
                 fprintf(stderr, "tur init: unexpected argument '%s'\n", argv[i]);
                 return 1;
@@ -4704,6 +4822,7 @@ int cmd_pkg_init(int argc, char **argv) {
     opts.no_git  = no_git;
     opts.sweet   = sweet;
     opts.license = "none";
+    opts.force   = force;
     return scaffold_project_ext(&opts);
 }
 

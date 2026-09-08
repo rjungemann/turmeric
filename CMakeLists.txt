@@ -714,6 +714,18 @@ add_test(
   COMMAND bash tests/run-hamt-owned-keys.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# tur-init-help-scaffolds-and-overwrites: `tur init` must never destroy a
+# working tree.  `tur init --help` did not print help -- the flag fell past the
+# project-name slot, the cwd basename was used as the name, and scaffolding
+# overwrote an existing .gitignore and README.md.  Nothing in the suite ran
+# `tur init` in a directory whose contents it cared about (run-tur-new.sh and
+# run-sweet-manifest.sh both scaffold inside mktemp -d), which is why nothing
+# caught it.
+add_test(
+  NAME tur_init_no_clobber
+  COMMAND bash tests/run-init-no-clobber.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # interp-inline-c-opaque-segv-in-any-reflection: `any` reflection over an
 # inline-C `defopaque` value under --interpret.  `type-of` on such a value used
 # to SEGFAULT -- the inline-C result path re-tags a TURI_INT as TURI_STRUCT when
