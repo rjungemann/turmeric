@@ -357,6 +357,13 @@ Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
         Expr *pred_e = elab_form(e, (Form *)ct_preds[ci]);
         if (!pred_e) continue;
         rt_diag_impure_pred(e, pred_e, span);
+        /* saffron-lang-plan D6: a refinement predicate over an `any` is a
+         * dyn-op returning `any`, and `tur-contract-check` takes a `bool` --
+         * so without this the emitted C was
+         * `tur_contract_check(<tur_tagged_t>, ...)`, which does not compile.
+         * D4's truthiness is the same answer `if` already uses for the same
+         * question; the two now share one helper. */
+        pred_e = elab_saffron_truthy(e, pred_e);
 
         Expr *check_expr = pred_e;
         if (cv_b) {
@@ -424,6 +431,7 @@ Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
     Expr *pred_e = elab_form(e, (Form *)pred);
     if (!pred_e) return body;
     rt_diag_impure_pred(e, pred_e, span);
+    pred_e = elab_saffron_truthy(e, pred_e);   /* D6, see rt_inject_param_checks */
 
     Expr **args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
     args[0] = pred_e;
@@ -8483,6 +8491,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             if (ct_pre_form && check_fn) {
                 Expr *pred_e = elab_form(e, (Form *)ct_pre_form);
                 rt_diag_impure_pred(e, pred_e, call->span);
+                pred_e = elab_saffron_truthy(e, pred_e);   /* D6, see above */
                 if (pred_e) {
                     /* Build call: (tur-contract-check pred "Precondition failed") */
                     Expr **check_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));

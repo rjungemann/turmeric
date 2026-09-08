@@ -2793,6 +2793,36 @@ static bool if_branches_unify_via_tyvar(Type then_ty, Type else_ty, Type *out) {
     return true;
 }
 
+/* saffron-lang-plan D4: wrap an `any`-typed expression in the truthiness
+ * operator so it can feed a C-level `bool` slot.
+ *
+ * Only nil and `false` are falsy; everything else -- 0, "", an empty vector --
+ * is truthy, which is why this is a runtime tag decision and not a comparison.
+ * Lowered as a dynamic operator rather than a second node kind: it is exactly
+ * what EX_DYN_OP is for.  The reserved name is not a builtin, so the
+ * interpreter answers it before consulting the builtin table.
+ *
+ * Returns the expression unchanged when it is not an `any` in a Saffron file,
+ * so callers can apply it unconditionally.
+ *
+ * SHARED, because there is more than one bool slot a Saffron `any` can reach:
+ * an `if`/`when` condition, and a `#refine{...}` contract predicate, whose
+ * `tur-contract-check` takes a `bool`.  The contract path had no wrap, so a
+ * refinement over `any` emitted `tur_contract_check(<tur_tagged_t>, ...)` --
+ * uncompilable C, on a path the interpreter ran correctly. */
+Expr *elab_saffron_truthy(Elab *e, Expr *cond) {
+    if (!cond || cond->type.kind != TY_ANY) return cond;
+    if (!lang_span_is_saffron(cond->span)) return cond;
+    Expr **targs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+    targs[0] = cond;
+    Expr *t = expr_new(e->arena, EX_DYN_OP, TYPE_BOOL, cond->span);
+    t->as.dyn_op_.op     = symtab_intern(e->st, strslice(SAFFRON_TRUTHY_OP,
+                               (uint32_t)strlen(SAFFRON_TRUTHY_OP)));
+    t->as.dyn_op_.args   = targs;
+    t->as.dyn_op_.n_args = 1;
+    return t;
+}
+
 /* True when `f` is a call whose head names a return-only-dispatch typeclass
  * method with no shadowing binding (e.g. `(pure x)`, `(empty)`) -- a method
  * whose instance can only be selected from an expected result type.  Used by
@@ -2858,16 +2888,7 @@ Expr *elab_if(Elab *e, const Form *call) {
      * exactly what EX_DYN_OP is for, a decision the value's own tag makes at
      * runtime.  The reserved name is not a builtin, so the interpreter answers
      * it before consulting the builtin table. */
-    if (cond->type.kind == TY_ANY && lang_span_is_saffron(cond->span)) {
-        Expr **targs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
-        targs[0] = cond;
-        Expr *t = expr_new(e->arena, EX_DYN_OP, TYPE_BOOL, cond->span);
-        t->as.dyn_op_.op     = symtab_intern(e->st, strslice(SAFFRON_TRUTHY_OP,
-                                   (uint32_t)strlen(SAFFRON_TRUTHY_OP)));
-        t->as.dyn_op_.args   = targs;
-        t->as.dyn_op_.n_args = 1;
-        cond = t;
-    }
+    cond = elab_saffron_truthy(e, cond);
     if (!type_eq(cond->type, TYPE_BOOL)) {
         diag_emit(DIAG_ERROR, cond->span,
                   "if condition must be bool, got %s", type_name(cond->type));

@@ -1688,6 +1688,11 @@ Expr *elab_borrow_immut(Elab *e, const Form *call);
  * target Type.  Used by the `@TypeName` witness path, which pins an instance
  * and therefore already knows the type the receiver must be unboxed to. */
 Expr *elab_any_unbox_to(Elab *e, Expr *val, Type target, Span span);
+/* saffron-lang-plan D4: wrap an `any` in the truthiness operator so it can feed
+ * a C-level `bool` slot (an `if` condition, a contract predicate).  Returns the
+ * expression unchanged when it is not an `any` in a Saffron file, so callers
+ * apply it unconditionally.  Defined in elab_forms.c. */
+Expr *elab_saffron_truthy(Elab *e, Expr *cond);
 Expr *elab_borrow_mut(Elab *e, const Form *call);
 
 /* elab_types.c */
