@@ -92,21 +92,85 @@ conservative default and skipping the function. That report's own lesson was
 that reading the control flow produced a plausible wrong answer twice; hence
 the probe table above rather than a prose argument.
 
+## PARTIALLY FIXED 2026-09-08 -- and the second blocker, measured
+
+The coloring arms are landed (`EX_UNION_INJECT`, `EX_DYN_OP`, `EX_DYN_CALL`,
+`EX_DYN_FIELD`, in `cps_directly_uses_control`). **The repro still ICEs**, and
+the arms are still correct: they were necessary, not sufficient.
+
+Direction 2 is now measured rather than suspected. Three of the four shapes
+reproduce; all abort identically:
+
+```turmeric
+#lang saffron
+(defn go [] (call/cc (fn [k] (k 42))))                  ; EX_UNION_INJECT
+(defn go [x] : int (+ x (call/cc (fn [k] (k 41)))))     ; EX_DYN_OP
+(defn apply2 [f] : int (f (call/cc (fn [k] (k 41)))))   ; EX_DYN_CALL
+```
+
+`EX_DYN_FIELD` has **no** repro: a dyn field's only child is its receiver, and
+every attempt to hand it an `any`-typed control op there was refused earlier by
+the field resolver ("no typeclass method found for 'n'"). Its arm is by
+construction; do not record it as a reproduced shape.
+
+With the arms in, `TUR_TRACE_EVICT=1` moves the failure one stage and names it:
+
+```
+before:  (no line at all -- never coloured, never a candidate)
+after:   [EVICT] BODY-UNSUPPORTED  eff=0 go  unsupported form: EX_#100
+```
+
+So the function is now coloured, reaches `fn_sig_ok`, and PASSES it
+(`rt=40 slot=0 box=1` -- `slot_box_ty` admits `TY_ANY`, as its comment says).
+It is then evicted by the **CPS IR lowering**, which has no lowering for an
+`EX_UNION_INJECT` whose operand uses control.
+
+`cps_ir.c` does handle the node -- but only as a DELEGATABLE one:
+
+```c
+case EX_UNION_INJECT:
+    return is_atomic(e->as.union_inject_.value)
+        || !operand_uses_control(e->as.union_inject_.value);
+```
+
+That arm was added for the control-FREE case (its comment: "why `(with-any 3)`
+in main -- a widen, nothing more -- took the whole program off the DK
+backend"). A widen over a `call/cc` fails `operand_uses_control`, correctly:
+delegating it would direct-emit a control op inside a CPS function.
+
+### Two routes were evaluated, neither is small
+
+1. **Lower the widen as a new CPS primitive** -- `atomize` the operand into a
+   pending let, emit a `CT_LETPRIM`, and teach `emit_cps_ir.c` to emit it. The
+   work is not the plumbing but the widen's own semantics: `EX_UNION_INJECT`
+   carries a tag index, a target type, and the `frame_box` by-value/malloc
+   decision, all of which the direct emitter currently owns.
+2. **Hoist the control op out** so the existing delegation rule applies --
+   rewrite `(union-inject (call/cc ...))` to `(let [t (call/cc ...)]
+   (union-inject t))`, making the operand atomic. Elegant, and it reuses proven
+   machinery -- but it needs an `Expr` that refers to a CPS-bound `CVar`, and
+   **no such synthesis exists**: `CT_LETRAW` stores a raw `Expr *` and CVars are
+   IR-level. That plumbing would have to be built.
+
+Route 2 is the more attractive shape if the CVar-to-Expr gap can be bridged,
+because it adds no new emission path. Neither was attempted: a half-done
+backend change here produces a wrong answer rather than a loud one, which is
+the trap the sibling seam fix
+(`docs/archive/saffron-unannotated-param-container-cast-panics.md`) fell into
+on its first attempt.
+
 ## Fix directions
 
-1. **Add the `EX_UNION_INJECT` arm**, recursing into the injected value, beside
-   the `EX_ASCRIBE` arm. One line, and it makes the walk say what the
-   neighbouring comment already claims.
-2. **Audit the walk for the other Saffron nodes while there.** `EX_DYN_OP`,
-   `EX_DYN_CALL` and `EX_DYN_FIELD` have no arms either (the `EX_DYNVAR_BINDING`
-   arm is an unrelated node -- dynamic *variables*). A control op nested inside
-   a dynamic operator's argument -- `(+ 1 (call/cc f))` in a Saffron file --
-   would be missed the same way. **Not yet measured**; it is the obvious next
-   probe and should be confirmed before the arms are written, not assumed.
+1. ~~Add the `EX_UNION_INJECT` arm~~ -- **DONE**, along with the three dynamic
+   nodes. Necessary, and on its own it only moves the failure.
+2. **Lower a control-bearing widen in the CPS IR.** This is the remaining work;
+   see the two routes above. Route 2 (hoist) first if the CVar-to-Expr gap can
+   be bridged, since it adds no new emission path and the widen keeps its one
+   owner.
 
-Direction 1 fixes the filed repro. Direction 2 is the same fix applied to the
-rest of the family and should land with it, with a fixture per shape that
-actually reproduces.
+Until 2 lands the repro still aborts -- but it now aborts with a named trace
+category instead of vanishing before the candidate loop, which is what made the
+first diagnosis take three probes.
 
 ## Not this bug
 
