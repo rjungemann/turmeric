@@ -23,10 +23,21 @@
 ;; (truncation is toward zero, so -2.75 -> -2 rather than -3).
 ;;
 ;; The concrete non-float monomorphs are here to pin that the fix did not
-;; retype a binder that already worked: only a field whose DECLARED type is a
-;; tyvar and whose substitution lands on a scalar / cstr / `any` is retyped;
-;; aggregate and handle payloads keep the deref and box branches that already
-;; reason about how they are stored.
+;; retype a binder that already worked.
+;;
+;; A THIRD shape, found by sweeping for the same pattern afterwards: a
+;; substitution that is itself a by-value monomorph, `(Box (Box float))`.  The
+;; monomorph scrutinee stores it INLINE as the aggregate -- which the
+;; `nested-carrier-match` branch already knew, except that branch tests the
+;; DECLARED type and so never fired for a tyvar.  The binder stayed `int64_t`
+;; against a `tur_adt_Box__float` slot:
+;;
+;;   error: incompatible types when initializing type 'int64_t' using type
+;;          'tur_adt_Box__float'
+;;
+;; Loud, so lower severity than the float truncation, and the same mistake.
+;; Wide by-value and pointer-box payloads are excluded on the same conditions
+;; that branch uses, so they keep their deref.
 
 (defdata Box [a] (MkBox a))
 (defdata Pair2 [a b] (MkP a b))
@@ -50,4 +61,6 @@
   ;; two type params, one `any` and one concrete, in the same monomorph
   (println (cast (fst (:: (MkP (:: 1.5 any) 7) (Pair2 any int))) float))
   (println (snd (:: (MkP (:: 1.5 any) 7) (Pair2 any int))))
+  ;; a substitution that is itself a by-value monomorph
+  (println (ub (ub (:: (MkBox (:: (MkBox 6.75) (Box float))) (Box (Box float))))))
   0)

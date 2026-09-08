@@ -15626,6 +15626,31 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                         fb_subst_any = true;
                                         ctype = type_c_name(_sub);
                                         break;
+                                    case TY_APP:
+                                        /* The nested case, `(Box (Box float))`.
+                                         * The substitution is itself a by-value
+                                         * monomorph, which a monomorph scrutinee
+                                         * stores INLINE as the aggregate -- the
+                                         * same fact the `nested-carrier-match`
+                                         * branch below already relies on, except
+                                         * that branch tests `fb->type` and so
+                                         * never fires for a declared tyvar.
+                                         * Without this the binder stayed
+                                         * `int64_t` against a
+                                         * `tur_adt_Box__float` slot:
+                                         * "incompatible types when initializing".
+                                         * Wide by-value and pointer-box payloads
+                                         * are excluded on the same conditions
+                                         * that branch uses, so they keep their
+                                         * deref. */
+                                        if (emit_type_is_byvalue_adt(ctx, _sub) &&
+                                            !emit_type_is_wide_byval_adt(ctx, _sub) &&
+                                            !match_field_is_ros_pointer_box(
+                                                ctx, pat->ctor, fb)) {
+                                            fb_subst_any = true;
+                                            ctype = emit_type_c_name(ctx, _sub);
+                                        }
+                                        break;
                                     default: break;
                                 }
                             }

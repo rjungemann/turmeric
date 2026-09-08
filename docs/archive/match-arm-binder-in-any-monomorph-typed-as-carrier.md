@@ -28,8 +28,17 @@ conversion, so this compiled and returned the wrong number -- 3.25 -> 3,
 7.9 -> 7, 0.5 -> 0, -2.75 -> -2. No diagnostic, no crash, and no Saffron
 anywhere near it. An integer-valued float would have hidden it completely.
 
+**A THIRD shape** turned up in a sweep for the same pattern afterwards and was
+fixed in a follow-up: a substitution that is itself a by-value monomorph,
+`(Box (Box float))`. A monomorph scrutinee stores that INLINE as the aggregate
+-- which the `nested-carrier-match` branch already knew, except it tests the
+DECLARED type and so never fired for a tyvar. The binder stayed `int64_t`
+against a `tur_adt_Box__float` slot ("incompatible types when initializing").
+Loud, so lower severity than the float truncation, and the same mistake.
+Verified pre-existing against a worktree built at the parent commit.
+
 The fix is scoped to a field whose DECLARED type is a tyvar and whose
-substitution lands on a scalar, cstr or `any` -- the cases where the monomorph
+substitution lands on a scalar, cstr, `any`, or a non-wide by-value monomorph -- the cases where the monomorph
 slot holds that type inline, so the honest binder type is its own and the cast
 was the error. Aggregate and handle payloads are left to the deref and box
 branches that already reason about how they are stored.
