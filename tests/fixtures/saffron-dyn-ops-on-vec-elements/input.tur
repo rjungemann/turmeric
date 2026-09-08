@@ -1,0 +1,36 @@
+#lang saffron
+;; saffron-lang-plan S6: a `(Vec any)` element used as a DYNAMIC OPERAND -- as
+;; an `if` condition, in arithmetic, in a comparison, in `and`.
+;;
+;; None of these compiled.  A `(Vec any)` element is stored boxed, so the
+;; generic accessor hands its result back as the boxed slot's carrier WORD, and
+;; an operand whose static type is already `any` gets no widen from
+;; `elab_coerce_to_any` -- so the emitted C was `__tur_dyn_truthy(<int64_t>)`
+;; against a `tur_tagged_t` parameter, and the arith and compare helpers the
+;; same way.  A hard cc error, not a wrong answer; the interpreter was fine
+;; throughout, so this was codegen only.
+;;
+;; This is the THIRD position needing the same bridge, after the `any` readers
+;; (`type-of`, `any-is?`, `cast`) and an argument handed to a parameter declared
+;; `any`.  All three now go through `emit_any_from_carrier`; the general fix --
+;; normalise once at PRODUCTION rather than at each consumer -- is recorded in
+;; docs/reported/any-carrier-straddle-is-bridged-per-consumer.md.
+;;
+;; The truthiness answers are D4's rule, not a typo: ONLY nil and `false` are
+;; falsy, so an empty string and a zero are both truthy.  Both are in here
+;; because "" and 0 are exactly what a reader coming from another dynamic
+;; language would expect to be falsy.
+;;
+;; 7.1 rather than 7.0: `(+ 1 7.1)` printing 8 instead of 8.1 would say the
+;; operand truncated on its way through the box.
+
+(defn main []
+  (let [v [1 "" 7.1 0]]
+    (println (if (vec-get v 0) "t0" "f0"))
+    (println (if (vec-get v 1) "t1" "f1"))
+    (println (if (vec-get v 3) "t3" "f3"))
+    (println (+ (vec-get v 0) (vec-get v 2)))
+    (println (> (vec-get v 2) (vec-get v 0)))
+    (println (and (vec-get v 0) (vec-get v 2)))
+    (vec-free v))
+  0)

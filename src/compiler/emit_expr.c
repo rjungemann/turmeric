@@ -5976,6 +5976,31 @@ static void ce0_trace_elem_read(EmitCtx *ctx, const Expr *e,
  * a lowering that guesses.  Emitting the STATIC operator instead would be a
  * miscompile, not a missing feature: the operands are two-word boxes, so `+`
  * over them would add tag words. */
+/* saffron-lang-plan S6: emit one operand of a dynamic node, normalised.
+ *
+ * The three dynamic nodes all want a real `tur_tagged_t`, and an operand whose
+ * static type is already `any` gets NO widen from `elab_coerce_to_any` -- so a
+ * `(Vec any)` element, which the generic accessor hands back as the boxed
+ * slot's carrier word, reached `__tur_dyn_truthy(<int64_t>)` and the arith /
+ * compare helpers the same way.  A hard cc error, not a wrong answer, and the
+ * interpreter is unaffected.
+ *
+ * Same straddle as the `any` READERS and the `any`-parameter argument site,
+ * which use this helper too; it is a no-op for an operand that already IS the
+ * aggregate, so a widen, a parameter and a let-bound `any` keep their text.
+ *
+ * All three positions bridge at the CONSUMER.  The general fix is to normalise
+ * once at PRODUCTION -- a call whose static result is `any` but whose emitted
+ * local is `int64_t` -- which would subsume all of them; recorded in
+ * docs/reported/any-carrier-straddle-is-bridged-per-consumer.md rather than
+ * done here, because the carrier direction has consumers of its own. */
+static char *emit_any_from_carrier(EmitCtx *ctx, Buf *body, char *v,
+                                   const Expr *inner);   /* defined below */
+static char *emit_dyn_operand(EmitCtx *ctx, Buf *body, const Expr *a) {
+    char *v = emit_value(ctx, body, a);
+    return emit_any_from_carrier(ctx, body, v, a);
+}
+
 static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
     ensure_saffron_dyn_runtime(ctx);
     const char *opn = (e->as.dyn_op_.op && e->as.dyn_op_.op->name)
@@ -6014,7 +6039,7 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
      * truthiness and the result re-boxed, since the node's type is `any`. */
     if ((is_and || is_or) && n >= 1) {
         char *tmp = fresh_tmp(ctx);
-        char *first = emit_value(ctx, body, args[0]);
+        char *first = emit_dyn_operand(ctx, body, args[0]);
         indent_buf(body, ctx->indent);
         buf_printf(body, "int %s = __tur_dyn_truthy(%s);\n", tmp, first);
         free(first);
@@ -6022,7 +6047,7 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
             indent_buf(body, ctx->indent);
             buf_printf(body, "if (%s%s) {\n", is_or ? "!" : "", tmp);
             ctx->indent += 4;
-            char *next = emit_value(ctx, body, args[i]);
+            char *next = emit_dyn_operand(ctx, body, args[i]);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = __tur_dyn_truthy(%s);\n", tmp, next);
             free(next);
@@ -6044,7 +6069,7 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
      * C-level `if`, so re-boxing the answer would only make the consumer unbox
      * it again. */
     if (strcmp(opn, SAFFRON_TRUTHY_OP) == 0 && n == 1) {
-        char *a = emit_value(ctx, body, args[0]);
+        char *a = emit_dyn_operand(ctx, body, args[0]);
         Buf out; buf_init(&out);
         buf_printf(&out, "__tur_dyn_truthy(%s)", a);
         buf_putc(&out, '\0');
@@ -6055,7 +6080,7 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
 
     if (n == 1 && (strcmp(opn, "println") == 0 || strcmp(opn, "not") == 0)) {
-        char *a = emit_value(ctx, body, args[0]);
+        char *a = emit_dyn_operand(ctx, body, args[0]);
         Buf out; buf_init(&out);
         buf_printf(&out, "__tur_dyn_%s(%s)",
                    opn[0] == 'p' ? "println" : "not", a);
@@ -6070,9 +6095,9 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
      * `(a + b) + c`, so the dynamic form nests the same way and a mixed
      * int/float chain promotes at the same points the static one would. */
     if (is_arith && n >= 2) {
-        char *acc = emit_value(ctx, body, args[0]);
+        char *acc = emit_dyn_operand(ctx, body, args[0]);
         for (uint32_t i = 1; i < n; i++) {
-            char *rhs = emit_value(ctx, body, args[i]);
+            char *rhs = emit_dyn_operand(ctx, body, args[i]);
             Buf out; buf_init(&out);
             buf_printf(&out, "__tur_dyn_arith(%d, %s, %s)", opcode, acc, rhs);
             buf_putc(&out, '\0');
@@ -6084,8 +6109,8 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
 
     if (is_cmp && n == 2) {
-        char *a = emit_value(ctx, body, args[0]);
-        char *b = emit_value(ctx, body, args[1]);
+        char *a = emit_dyn_operand(ctx, body, args[0]);
+        char *b = emit_dyn_operand(ctx, body, args[1]);
         Buf out; buf_init(&out);
         buf_printf(&out, "__tur_dyn_cmp(%d, %s, %s)", opcode, a, b);
         buf_putc(&out, '\0');
@@ -6146,10 +6171,10 @@ static char *emit_dyn_call(EmitCtx *ctx, Buf *body, const Expr *e) {
     for (uint32_t i = 0; i < n; i++) want.as.fn.arg_kinds[i] = (uint8_t)TY_ANY;
     int64_t want_id = emit_any_type_id(ctx, want);
 
-    char *fnv = emit_value(ctx, body, e->as.dyn_call_.fn);
+    char *fnv = emit_dyn_operand(ctx, body, e->as.dyn_call_.fn);
     char **argv = n ? (char **)calloc(n, sizeof(char *)) : NULL;
     for (uint32_t i = 0; i < n; i++)
-        argv[i] = emit_value(ctx, body, e->as.dyn_call_.args[i]);
+        argv[i] = emit_dyn_operand(ctx, body, e->as.dyn_call_.args[i]);
 
     /* A statement expression, not a nested call: the callee box is read three
      * times (check, thunk, env) and evaluating its expression three times would
@@ -6235,7 +6260,7 @@ static char *emit_dyn_field(EmitCtx *ctx, Buf *body, const Expr *e) {
     const Expr **items = ctx ? flatten_program_items(ctx->program_root, &n_items)
                              : NULL;
 
-    char *obj = emit_value(ctx, body, e->as.dyn_field_.obj);
+    char *obj = emit_dyn_operand(ctx, body, e->as.dyn_field_.obj);
     char *ov  = fresh_tmp(ctx);
     char *rv  = fresh_tmp(ctx);
     indent_buf(body, ctx->indent);
