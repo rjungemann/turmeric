@@ -1497,8 +1497,32 @@ preserve a `#lang saffron` line and not add annotations), `tur lsp` and
 `docs/guides/saffron-guide.md`.
 
 `tur fmt` is DONE (2026-09-08): it preserves a `#lang` header verbatim,
-formats the body, and normalises to one newline. The rest is open, and the
-items are independent of each other.
+formats the body, and normalises to one newline.
+
+**`tur lsp` / `lsp-lite` needed no work -- MEASURED 2026-09-08, not assumed.**
+The stated concern was that "a Saffron file must not report `any` everywhere as
+an error". It does not: driving a live server, a valid Saffron buffer publishes
+ZERO diagnostics and a broken one reports `unknown function or operator`,
+identically to the Turmeric buffers beside them. The LSP writes the buffer to a
+temp `.tur` file and runs a full compile, and `#lang` detection is
+content-based, so a Saffron buffer is analysed as Saffron for free.
+
+That is true by INHERITANCE rather than by design -- the LSP never mentions the
+dialect -- and two other entry points in this codebase have already been caught
+hardcoding `READER_TURMERIC` and breaking on `#lang` (`tur fmt`, and the module
+import path in S7), each found only when someone tripped over it. So it is now
+pinned: `tests/lsp/saffron-diagnostics.py` (ctest `lsp_saffron_diagnostics`).
+
+The test asserts a BROKEN buffer reports before it believes a clean one, and
+that control is load-bearing: diagnostics publish asynchronously, so a session
+that exits before analysis runs reports nothing, which is indistinguishable
+from a clean file. The first version of this probe did exactly that and would
+have concluded the Saffron path was fine on no evidence. Verified to fail
+against a stub server that publishes nothing.
+
+Still open: `tur repl --lang saffron`, `tur init --saffron`, `tools/gendocs.py`
+(docstrings without types), the vim/vscode syntax packs, and
+`docs/guides/saffron-guide.md`. The items are independent of each other.
 
 ### S9 -- runtime typeclass dispatch (D8) -- CLEARED, not started
 

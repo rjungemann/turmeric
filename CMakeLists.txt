@@ -161,6 +161,22 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 
+# saffron-lang-plan S8: the LSP analyses a `#lang saffron` buffer as Saffron --
+# a valid one reports nothing, a broken one reports.  True today by inheritance
+# (the LSP compiles a temp file and `#lang` detection is content-based) rather
+# than by design: the LSP never mentions the dialect.  Two other entry points
+# have already been caught hardcoding READER_TURMERIC and breaking on `#lang`,
+# so this pins the third.  Drives a live server because diagnostics are
+# published asynchronously -- a session that exits first reports nothing, which
+# looks exactly like a clean file, so the script asserts a BROKEN buffer
+# reports before it believes a clean one.
+add_test(
+  NAME lsp_saffron_diagnostics
+  COMMAND bash tests/lsp/run-saffron-diagnostics.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(lsp_saffron_diagnostics PROPERTIES TIMEOUT 300)
+
 add_test(NAME source_literal_unit COMMAND tur_source_literal_unit)
 
 add_test(
