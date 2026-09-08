@@ -606,6 +606,7 @@ Expr *elab_form(Elab *e, Form *f) {
             for (uint32_t i = 0; i + 1 < n; i += 2) {
                 if (f->as.list.items[i]->tag != F_STR) { all_str_keys = false; break; }
             }
+            bool saffron = lang_span_is_saffron(f->span);
             Form **kvs = (n == 0) ? NULL
                 : (Form **)arena_alloc(e->arena, n * sizeof(Form *));
             for (uint32_t i = 0; i + 1 < n; i += 2) {
@@ -613,7 +614,15 @@ Expr *elab_form(Elab *e, Form *f) {
                  * literals (keywords) are hash-normalized to their int key. */
                 kvs[i]     = all_str_keys ? f->as.list.items[i]
                                           : dl_normalize_map_key(e, f->as.list.items[i]);
-                kvs[i + 1] = f->as.list.items[i + 1];
+                /* saffron-lang-plan S6 (G7): in a Saffron file a map's VALUES
+                 * are `any`, so `#map{:a 1 :b "two"}` is a `(Map Sym any)`
+                 * rather than a `tur-map-homog__` error on the value side.  The
+                 * KEYS are left alone: they are already normalized to one key
+                 * type above, and a heterogeneous key would need `Hash` and
+                 * `MapKey` instances for `any` that do not exist. */
+                kvs[i + 1] = saffron
+                    ? dl_saffron_widen_elem(e, f->as.list.items[i + 1])
+                    : f->as.list.items[i + 1];
             }
             Form *call = dl_build_call(e, f->span, "hamt-of", kvs, n);
             return elab_form(e, call);

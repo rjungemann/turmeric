@@ -1229,10 +1229,22 @@ Still to do, and the ORDER is now measured rather than assumed:
    the report was filed to check Map and Set BEFORE the literal work rather than
    after. Sequencing it this way is what let the `#map{}` widen land next
    against two agreeing back ends. [Archived](../archive/map-of-any-is-broken-on-both-back-ends.md).
-4. The `#map{...}` / `#set{...}` / cons-list twins, then the prelude. `#set{}`
-   needs its own step first: a `(Set any)` refuses at elaboration
-   (`set-add-eq-o` arg 2: expected int, got any) -- a clean failure, not a wrong
-   answer, but the widen does not work there until `any` is admitted.
+4. ~~The `#map{...}` / `#set{...}` twins~~ -- **DONE 2026-09-08**, and `#set{}`
+   turned out to need NO change, which is worth recording rather than leaving
+   the absence of a diff to look like an oversight.
+   - `#map{...}` takes the same widen as `[...]`, on the VALUES only. The KEYS
+     are already normalized to one key type by the lowering above the widen, and
+     a heterogeneous key would need `Hash[any]`/`MapKey[any]` instances that do
+     not exist. `tests/fixtures/saffron-map-literal`.
+   - `#set{...}` already works heterogeneously on both back ends -- construction,
+     content-keyed dedup, and membership by value. `set-of` is not
+     homogeneity-checked the way `vec-of` and `hamt-of` are: it expands to a
+     chain of `set-add1`, each element resolving its own `hash`/`mk-box`/`mk-cmp`.
+     A set also has no read-back accessor, so the write-only problem the Vec and
+     Map cases had does not arise. Widening WOULD break it (`(Set any)` refuses
+     for want of `Hash[any]`). `tests/fixtures/saffron-set-literal` pins the
+     no-change decision.
+5. Cons lists, then the prelude.
 
 ### S6 -- containers and the Saffron prelude (medium) -- remaining scope
 

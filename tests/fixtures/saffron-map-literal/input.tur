@@ -1,0 +1,38 @@
+#lang saffron
+;; saffron-lang-plan S6 (G7): a `#map{...}` literal in a Saffron file has `any`
+;; VALUES, so they need not agree.
+;;
+;; Same shape as the vector literal: `hamt-of` routes every value through
+;; `tur-map-homog__`, so `#map{:a 1 :b "two"}` was "function 'tur-map-homog__'
+;; arg 2: expected tyvar, got cstr".  Each value is wrapped in `(:: v any)` at
+;; the literal, before the macro sees it.
+;;
+;; The KEYS are left alone.  They are already normalized to one key type by the
+;; lowering above the widen, and a heterogeneous key would need `Hash[any]` and
+;; `MapKey[any]` instances that do not exist -- hashing and comparing across
+;; types at run time is a feature, not a lowering.
+;;
+;; This landed AFTER the interpreter's Map value tag was fixed, and the order
+;; was measured rather than assumed.  A `(Map K any)` under `--interpret` used to
+;; report `int` for every value with no diagnostic, so widening the literal first
+;; would have made every Saffron map a silent wrong answer on one back end --
+;; with the literal looking like the culprit.  See
+;; docs/archive/map-of-any-is-broken-on-both-back-ends.md.
+;;
+;; NO requires.leak-check, and the reason is worth stating rather than leaving
+;; to a missing file: a map LITERAL leaks its intermediate maps even when the
+;; result is freed, because `hamt-of` chains `map-assoc` and only the last of
+;; the N `{void* hamt}` boxes reaches `map-free`.  Measured PRE-EXISTING -- a
+;; plain Turmeric `#map{:a 1 :b 2 :c 3}` leaks 1080 bytes in 11 allocations with
+;; no `any` anywhere.  Filed as map-literal-leaks-its-intermediate-maps.
+;;
+;; 7.1 rather than 7.0: a truncating path through the box would print 7.
+
+(defn main [] : int
+  (let [m #map{:a 1 :b "two" :c 7.1}]
+    (println (type-of (map-get m :a)))
+    (println (type-of (map-get m :b)))
+    (println (type-of (map-get m :c)))
+    (println (cast (map-get m :c) float))
+    (map-free m))
+  0)

@@ -1,0 +1,34 @@
+#lang saffron
+;; saffron-lang-plan S6 (G7): a `#set{...}` literal in a Saffron file needs NO
+;; `any` widen, and this fixture exists to pin that rather than leave the
+;; absence of a change to look like an oversight.
+;;
+;; The plan listed `#set{...}` beside `[...]` and `#map{...}` as a third literal
+;; wanting the same treatment.  Measured, it does not:
+;;
+;;   * `set-of` is not homogeneity-checked the way `vec-of` and `hamt-of` are.
+;;     It expands to a chain of `set-add1`, and each element resolves its OWN
+;;     `hash` / `mk-box` / `mk-cmp`, so a heterogeneous literal already builds.
+;;   * A set has no read-back accessor -- the "write-only container" problem the
+;;     Vec and Map cases had does not arise.  The only question you ask a set is
+;;     membership, and that already answers by VALUE: a cstr element is
+;;     content-keyed, so `#set{"a" "a"}` is one member.
+;;   * Widening WOULD break it: `(Set any)` refuses at elaboration
+;;     ("function 'set-add-eq-o' arg 2: expected int, got any") because there is
+;;     no `Hash[any]` or `MapKey[any]`.  That is the good failure -- hashing and
+;;     comparing across types at run time is a feature, not a lowering.
+;;
+;; There IS a real defect here, and it is neither Saffron's nor this literal's:
+;; `#set{1 "two"}` type-checks as `(Set int)` and passes to a `(Set int)`
+;; parameter while holding a cstr pointer. Reproduces in plain Turmeric with
+;; `(set-of 1 "two")`.  Filed as set-of-element-type-is-not-checked.
+
+(defn main [] : int
+  (let [s #set{1 "two" 7.1}]
+    (println (set-count s))
+    (println (set-member? s (hash 1) 1))
+    (println (set-member? s (hash "two") "two"))
+    (println (set-member? s (hash 99) 99))
+    (println (set-count #set{"a" "a"}))
+    (set-free s))
+  0)
