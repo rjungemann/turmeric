@@ -47,7 +47,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * 2026-09-03.  The gate lives in sr3_option_niche (types.c);
      * TUR_OPTION_NICHE=0 restores the tagged 16-byte monomorph for bisection.
      * The name moves to GRADUATED[] below (a lingering --enable is a
-     * TUR-W0063 no-op).  See docs/upcoming/sr3-option-niche-plan.md. */
+     * TUR-W0063 no-op).  See docs/archive/sr3-option-niche-plan.md. */
     /* defstruct-as-defadt GRADUATED 2026-06-28 -- a `defstruct` now lowers to a
      * single-variant record `defadt` unconditionally (always-on; the gate lives
      * in defstruct_lowers_to_adt, elab_structs.c).  See

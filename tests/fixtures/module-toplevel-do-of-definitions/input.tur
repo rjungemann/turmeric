@@ -1,0 +1,32 @@
+;; module-toplevel-do-of-definitions -- a macro that expands to SEVERAL
+;; definitions wrapped in an implicit (do ...) is legal at (defmodule ...)
+;; top level, exactly as a macro expanding to a single definition already was.
+;;
+;; module-toplevel-definition-forms already pins the single-definition case
+;; (make-adder, expanding to one defn). This is the multi-definition sibling:
+;; a `do` is not itself a defmacro/defclass/deftype, so it does not collapse
+;; to EX_NIL_LIT the way a single-definition macro's expansion does, and the
+;; original TUR-E0711 check (module_body_form_is_definition) rejected it
+;; outright. Turmeric-spices macros like `derive-json` (-> two definstances)
+;; and ecs's `defworld-box-helpers` (-> three defns) are exactly this shape,
+;; and every one of their call sites at a test module's top level failed to
+;; elaborate until module_body_form_is_definition learned to recurse into
+;; EX_DO.
+;;
+;; Regression for the turmeric-spices CI sweep that found this gap (ecs,
+;; json, http, httpd all failed TUR-E0711 on a do-of-definitions macro).
+(defmodule mtdod
+  (export run)
+
+  (defmacro make-pair-fns [base n]
+    `(do
+       (defn ~(str->sym (str-append "get-" (symbol-name base))) [] : int ~n)
+       (defn ~(str->sym (str-append "twice-" (symbol-name base))) [] : int ~(* n 2))))
+
+  (make-pair-fns widget 21)
+
+  (defn run [] : int
+    (+ (get-widget) (twice-widget))))
+
+(defn main [] : int
+  (println (run)))

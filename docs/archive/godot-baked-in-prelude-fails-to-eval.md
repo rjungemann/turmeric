@@ -1,9 +1,29 @@
 # turmeric-godot: baked-in prelude fails to eval, so no script ever loads
 
+> **RESOLVED 2026-09-07. Both bugs fixed and shipped.**
+>
+> Bug 2 below still reads "NOT fixed"; that text is out of date and is kept for
+> the investigation trail. It was fixed the same night it was diagnosed, by
+> `516bf0b` in `../turmeric-godot` ("Fix the prelude's forward-referenced handle
+> types"), which declares `ResourceHandle` / `SceneTreeHandle` in the prelude
+> ahead of the facade -- fix direction 1 of the two proposed below. All three
+> paddle-pong scripts then load with 0 eval failures and 0 warnings.
+>
+> Archived only now, and the delay was deliberate rather than an oversight:
+> `516bf0b` sat on an unmerged branch for a month, so the repo's `main` still
+> carried the bug and archiving would have claimed a fix that had not shipped.
+> It landed with
+> [turmeric-godot#1](https://github.com/rjungemann/turmeric-godot/pull/1)
+> on 2026-09-07 -- which is also the first CI run that repo ever passed, on all
+> four platforms. See step 4 of
+> [godot-binding-refresh-plan.md](../upcoming/godot-binding-refresh-plan.md).
+>
+> Still open, and unaffected by this:
+> [godot-aot-staged-build-lacks-godot-natives](../reported/godot-aot-staged-build-lacks-godot-natives.md).
+>
 > **INVESTIGATED 2026-08-04.** Root cause found -- it is **two** bugs, both in
 > `../turmeric-godot`, neither Windows-specific and neither a libturi
-> regression. Bug 1 is fixed; bug 2 is diagnosed but NOT fixed. The original
-> report below is kept for the ruled-out list. Read this block first.
+> regression. The original report below is kept for the ruled-out list.
 >
 > ### Bug 1 -- 29 natives were invisible to the elaborator (FIXED)
 >

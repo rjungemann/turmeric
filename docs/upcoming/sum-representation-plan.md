@@ -482,7 +482,7 @@ to Some/Ok/Err constructions only.  Validation: full suite 2712/0, turi
 **Slice B -- `some(p)` carried AS the payload pointer (16 -> 8) -- GATE RUN
 2026-08-27 and SHELVED; UNSHELVED 2026-08-28 as `--enable=option-niche`.**
 The phase now has its own plan --
-[sr3-option-niche-plan.md](sr3-option-niche-plan.md) -- and the original gate is
+[sr3-option-niche-plan.md](../archive/sr3-option-niche-plan.md) -- and the original gate is
 archived at [sr3-slice-b-gate-results.md](../archive/sr3-slice-b-gate-results.md)
 with an errata header.  The env seam is gone; slice B is a registered
 `EXPERIMENTS[]` row (prototype, introduced 0.41.0), which is what an in-flight
@@ -502,7 +502,7 @@ wraps an empty list, nil-is-0 is load-bearing in ~60 sites including the
 variadic-rest ABI (where moving it breaks user inline-C silently), and the
 per-payload-sentinel alternative makes the word 0 mean `Some(nil)` on one side
 of a carrier crossing and `None` on the other.  Full pricing in
-[sr3-option-niche-plan.md](sr3-option-niche-plan.md), What is left, item 3.
+[sr3-option-niche-plan.md](../archive/sr3-option-niche-plan.md), What is left, item 3.
 
 **And it turned up one crossing the first gate could not have reached.** An
 inline-C body declared `: (Option String)` builds its result with
