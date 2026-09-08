@@ -401,6 +401,16 @@ the cost ever matters, the answer is D3's rung 2, not a soundness switch.
 **Verdict: a refinement in a Saffron file lowers to a runtime contract check,
 not an error and not a silent drop.**
 
+**DONE 2026-09-08.** The INTERPRETER was already correct; the compiled path
+emitted uncompilable C, because a predicate over an `any` is a dyn-op returning
+`any` while `tur-contract-check` takes a `bool`. That is the same question D4
+answers for an `if` condition, so the two now share one helper
+(`elab_saffron_truthy`), applied at all three contract sites -- parameter
+refinements, `:pre`, and the return refinement. Pinned by
+`tests/fixtures/saffron-refinement-contract` and `-violated` as a PAIR: a
+passing-only fixture would also pass against a compiler that dropped the
+predicate, which is exactly the outcome this decision forbids.
+
 `#refine{x : int | (> x 0)}` needs a static base type and an SMT discharge.
 Neither exists over `any`. But the language already ships the dynamic answer:
 `stdlib/contract.tur`, with `assert!`/`require!`/`ensure!` and a contract
@@ -1377,7 +1387,7 @@ A `stdlib/saffron/prelude.tur` autoloads for `LANG_SAFFRON` files: the dynamic
 reaches for constantly. This is where Saffron stops feeling like Turmeric with
 the types removed and starts feeling like its own thing.
 
-### S7 -- the boundary (medium) -- MOSTLY DONE 2026-09-08
+### S7 -- the boundary (medium) -- DONE except `:strict` (2026-09-08)
 
 D5's implicit checked `cast` at each Saffron -> Turmeric argument whose
 parameter is concrete and whose argument is `any`. Fixtures for both
@@ -1397,14 +1407,20 @@ them, found the same way and fixed the same way.
 ends; `tests/fixtures/saffron-boundary-check` and `saffron-boundary-panic` pin
 the forward direction and its panic path.
 
-**Still owed: the `:strict` opt-out**, and one HIGH-severity defect the fixture
-work uncovered --
-[saffron-unannotated-param-container-cast-panics](../reported/saffron-unannotated-param-container-cast-panics.md).
-`(defn pick [v] (vec-get v 0))` panics compiled and works interpreted, because
-the seam's guard exempts a bare `TY_TYVAR` expected type but not a `TY_APP`
-whose ARGUMENT is a tyvar. Passing a container to a function with an
-unannotated parameter is the ordinary case in this dialect, so S7 is not done
-until that is.
+**The HIGH-severity defect that blocked this stage is FIXED (2026-09-08)** --
+[archived](../archive/saffron-unannotated-param-container-cast-panics.md).
+`(defn pick [v] (vec-get v 0))` panicked compiled and worked interpreted,
+because the seam's guard exempts a bare `TY_TYVAR` expected type but not a
+`TY_APP` whose ARGUMENT is a tyvar. Two changes were needed and neither works
+alone: ground the target's open type arguments to `any`, AND re-collect the
+call's tyvar bindings after the seam substitutes the argument -- without the
+second the result collapses to the int64 carrier and the return widens the box
+POINTER, which is a WRONG ANSWER rather than a panic. That is why the first
+attempt at this was reverted. The fixtures assert VALUES on both back ends, not
+the absence of a panic.
+
+**Still owed: the `:strict` opt-out.** That is the only thing between this
+stage and done.
 
 **The HAND-WRITTEN spelling is settled ahead of it (2026-09-08), and it is the
 same operation.** `::` now refuses an `any` operand and names `cast`
@@ -1432,14 +1448,24 @@ preserve a `#lang saffron` line and not add annotations), `tur lsp` and
 Permanent. These are not "later" -- they are the honest answer to "what does
 Saffron give up".
 
+**Four rows here were wrong until 2026-09-08 and are now corrected.** The first
+draft assumed that any feature carrying a static guarantee must be given up in
+a dialect whose default type is `any`. Measured -- the same violating program in
+a Saffron file and a Turmeric file, diagnostics compared -- only ONE is. The
+distinction is whether a proof reads an INFERRED type (regions do) or an
+ANNOTATION / a walk over uses and scopes (everything else does), and D2 keeps
+annotations legal. See D7 for the measurement table, and
+`tests/fixtures/saffron-static-guarantees-still-hold` plus four `errors/`
+fixtures for the guard against this being re-decided from the old prose.
+
 | Feature | Status in Saffron | Why |
 |---|---|---|
 | Refinement types | runtime contracts (D6) | no static base type to discharge over |
-| Session types | rejected | the protocol is the type |
-| GADTs | rejected | index refinement is the whole feature |
-| Linear / affine / unique | rejected | static use-count proof |
-| Explicit borrows, lifetimes | rejected | static region proof |
-| `with-region` / regions | off; GC/RC arm | the escape proof is a walk over the result type (D7) |
+| Session types | **kept** -- TUR-E0211 fires identically | the protocol is in the ANNOTATION, which D2 keeps legal |
+| GADTs | **kept** -- skolem escape fires identically | the indices are in the constructors' return-type annotations |
+| Linear / affine / unique | **kept** -- TUR-E0101/E0100 fire identically | a use-count walk over the body; `any` never enters it |
+| Explicit borrows, lifetimes | **kept** -- the aliasing conflict fires identically | a scope walk over uses; `any` never enters it |
+| `with-region` / regions | rejected, TUR-E0312 | its proof reads the bracket body's INFERRED RESULT TYPE -- the one thing Saffron makes `any` (D7) |
 | Monomorphization, by-value HKT | off; everything boxes | requires ground types at each site |
 | Typeclass dispatch on `any` | rejected, for now (D8) | separate epic |
 | `extern-c`, inline-C | requires annotations (D2) | C needs concrete types |
