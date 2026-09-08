@@ -1171,8 +1171,45 @@ static void turi_rc_drop_value(TuriValue v) {
  * CtorDef's parent AdtDef has from_struct_lowering set).  Used by type-of / cast
  * so the ADT lowering of a defstruct stays invisible, matching the compiled
  * __tur_any_type_name. */
+/* interp-inline-c-opaque-segv-in-any-reflection: a TURI_STRUCT whose payload
+ * cannot be a `TuriStruct *`.
+ *
+ * `(defopaque Route :int)` with an INLINE-C constructor returning 7 produces a
+ * value tagged TURI_STRUCT whose `as_struct` is the immediate 7 -- the inline-C
+ * result path re-tags a TURI_INT as a struct when the declared return type is
+ * TY_ADT, and an opaque IS a TY_ADT (types.h: "a named int64_t carrier").  The
+ * first reader to dereference it segfaulted, so `type-of` on such a value
+ * crashed the interpreter.
+ *
+ * Fixing it at the TAG site is not available: `FnDef.return_type` carries no
+ * AdtDef -- measured NULL for an opaque AND for a genuine `defdata` round-trip
+ * -- so there is nothing there to distinguish "opaque, the word is the value"
+ * from "real ADT, the word is a pointer".  Attaching the def is a separate,
+ * wider change; see the report.
+ *
+ * So the reader validates instead, and the two checks are facts rather than
+ * heuristics: a `TuriStruct` requires 8-byte alignment (so an unaligned word is
+ * definitively not one), and the zero page is never mapped (so a word below it
+ * is definitively not one).  Neither can reject a real `TuriStruct *`.
+ *
+ * Declining here is not merely "wrong but safe" -- it yields the RIGHT answer.
+ * The struct name is only an OVERRIDE; when it is unavailable the reflection
+ * falls back to the name the widen recorded from the static type, which for
+ * `(defopaque Route :int)` is exactly "Route".  That is the same answer the
+ * ascription spelling `(:: 7 Route)` already gives, which is why that spelling
+ * never crashed.
+ *
+ * What this does NOT cover, stated rather than implied: an opaque over a LARGE
+ * integer is bit-indistinguishable from a heap pointer at this level, so it
+ * still mis-tags. Only attaching the def fixes that. */
+static bool turi_struct_ptr_is_plausible(TuriValue v) {
+    uintptr_t p = (uintptr_t)v.as_struct;
+    return p >= 4096 && (p % _Alignof(TuriStruct)) == 0;
+}
+
 static bool turi_struct_is_struct_like(TuriValue v) {
     if (v.tag != TURI_STRUCT || !v.as_struct) return false;
+    if (!turi_struct_ptr_is_plausible(v)) return false;
     const CtorDef *cd = v.as_struct->ctor;
     return cd && cd->adt && cd->adt->from_struct_lowering;
 }
@@ -1307,6 +1344,12 @@ static TuriValue turi_any_box_widen(TuriEnv *env, const Expr *e, TuriValue v) {
 
 static const char *turi_any_named_type(TuriValue v) {
     if (v.tag != TURI_STRUCT || !v.as_struct) return NULL;
+    /* interp-inline-c-opaque-segv-in-any-reflection: this dereferences
+     * `as_struct` twice below, so it needs the same validity check its sibling
+     * makes -- see turi_struct_ptr_is_plausible.  Answering NULL is the
+     * documented "not a struct" reply, and the caller then uses the name the
+     * widen recorded from the static type. */
+    if (!turi_struct_ptr_is_plausible(v)) return NULL;
     if (!turi_struct_is_struct_like(v) && v.as_struct->ctor &&
         v.as_struct->ctor->adt && v.as_struct->ctor->adt->name)
         return v.as_struct->ctor->adt->name;

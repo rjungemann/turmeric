@@ -714,6 +714,18 @@ add_test(
   COMMAND bash tests/run-hamt-owned-keys.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# interp-inline-c-opaque-segv-in-any-reflection: `any` reflection over an
+# inline-C `defopaque` value under --interpret.  `type-of` on such a value used
+# to SEGFAULT -- the inline-C result path re-tags a TURI_INT as TURI_STRUCT when
+# the declared return type is TY_ADT, and an opaque IS a TY_ADT, so the payload
+# 7 became a `TuriStruct *` of 0x7.  Needs its own runner rather than a fixture:
+# tests/run-turi.sh PASS-skips every program with a user inline-C block (the TI7
+# carve-out), which is exactly why nothing caught the crash.
+add_test(
+  NAME tur_interp_inline_c_opaque
+  COMMAND bash tests/run-interp-inline-c-opaque.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Prereq 2a (turi-open-reports-prereqs.md / turi-map-set-hamt-interpreter-gap.md):
 # the context-carrying key comparator family (tur_hamt_*_eq_ctx) that lets a
 # stateful/turi-closure comparator ride along via a `void *ctx` word.  Compiles
