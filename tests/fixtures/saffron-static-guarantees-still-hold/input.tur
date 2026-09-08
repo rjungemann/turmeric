@@ -29,12 +29,15 @@
 ;;
 ;; `area` annotates its scrutinee `: Shape` rather than leaving it `any`, and
 ;; that is a WORKAROUND, not a preference: matching an UNANNOTATED (`any`)
-;; scrutinee whose constructor comes from a `defgadt` emits uncompilable C
-;; ("aggregate value used where an integer was expected" -- the tagged
-;; aggregate is cast to a pointer).  The same match works with `defdata`, and
-;; the same GADT works annotated, so the gap is specific to the pair.  Filed
-;; as docs/reported/saffron-match-any-scrutinee-on-gadt-emits-bad-c.md; the
-;; annotation here keeps THIS fixture about D7 rather than about that bug.
+;; scrutinee against a PARAMETRIC ADT emits uncompilable C ("aggregate value
+;; used where an integer was expected" -- the tagged aggregate is cast to a
+;; pointer).  Filed as
+;; docs/reported/saffron-match-any-scrutinee-on-parametric-adt-emits-bad-c.md.
+;;
+;; That report was first written as a `defgadt` bug and it is not one: a
+;; parametric `defdata` fails identically and a non-parametric one works, so
+;; the axis is ARITY, not `defgadt`.  The annotation here keeps THIS fixture
+;; about D7 rather than about that bug.
 (defgadt Shape [a]
   (Sq  int : (Shape int))
   (Rec int int : (Shape int)))
