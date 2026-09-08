@@ -1564,8 +1564,19 @@ scaffold BUILDS AND RUNS rather than that it contains a `#lang` line -- the
 text check would have passed against the broken library path. Verified to fail
 on exactly that case with the detection disabled.
 
-Still open: `tools/gendocs.py` (docstrings without types) and the vim/vscode
-syntax packs. The items are independent of each other.
+**`tools/gendocs.py` needed NO WORK -- measured 2026-09-08.** The concern was
+"docstrings without types"; a `#lang saffron` module's untyped parameters
+already come back as `('a', None)`, which is correct, and the `#lang` line does
+not disturb the parser. Verified by loading `parse_tur_file` directly (gendocs
+cannot run without the `markdown` package, which is unavailable here).
+
+Checking it did turn up an unrelated defect in that parser, filed as
+`gendocs-misparses-the-spaced-annotation-form`: the SPACED `[a : int]` form
+yields a phantom parameter named `int` and a return type of `':'`, affecting
+1064 of 1999 stdlib definitions. Latent -- `docs/api/` is not checked in -- but
+it would corrupt the reference on the next `tur run docs`.
+
+Still open: the vim/vscode syntax packs. That is the last S8 item.
 
 ### S9 -- runtime typeclass dispatch (D8) -- CLEARED, not started
 
