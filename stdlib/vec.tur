@@ -437,7 +437,8 @@
 ;;; methods correctly.  The witness value itself is unused (only its type is
 ;;; consumed), so it never widens or truncates the stored data.
 
-(defn vec-empty-like__ [A] [^borrow witness : A] : (Vec A) (:: (vec-new) (Vec A)))
+(defn vec-empty-like__ [A] [^borrow witness : A] : (Vec A)
+  (:: (vec-new) (Vec A)))
 ;;; vec-of -- variadic Vec[A] literal.
 ;;;
 ;;; Parameters:

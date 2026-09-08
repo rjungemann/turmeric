@@ -7221,9 +7221,56 @@ static bool fmt_is_tur_file(const char *name) {
  * The pipeline itself lives in fmt.c so the LSP's textDocument/formatting
  * handler -- which is linked into tur_core, not into main.c -- can reach the
  * same code instead of shelling out to this binary. */
+/* saffron-lang-plan S8 (formatter half): format a source that may carry a
+ * `#lang` directive.
+ *
+ * The formatter fed the WHOLE buffer to the reader, and the reader has already
+ * had the directive stripped by every other entry point -- so a `#lang` line
+ * reached it as source and came back
+ * "error: unexpected character '#' (0x23)".  That made EVERY `#lang` file
+ * unformattable, Saffron and `sweet-exp` alike: `tur fmt` on any of the
+ * saffron-* fixtures failed the same way, so the dialect had no formatter at
+ * all.  It surfaced only when a `#lang` file first appeared in stdlib (the
+ * Saffron prelude), because `fmt-bootstrap-stdlib` formats stdlib and nothing
+ * else formatted a `#lang` file.
+ *
+ * The directive is preserved VERBATIM rather than reprinted: it is not an
+ * s-expression, the reader hands back only where it ended, and re-emitting it
+ * from a parse would be inventing a canonical spelling for something with no
+ * formatter rules of its own.
+ *
+ * The header also selects the reader when the caller had no better answer --
+ * a `#lang turmeric/sweet` file must format under the sweet-exp printer, and
+ * the extension alone does not say so. */
 static int fmt_format_source(const char *path_label, const char *src, size_t len,
                               ReaderType rtype, Buf *out) {
-    return fmt_format_buffer(path_label, src, len, rtype, out);
+    const char *body = src;
+    size_t body_len = len;
+    LangLayerSet lay = 0;
+    LangDialect dl = LANG_TURMERIC;
+    ReaderType lang_rt = detect_lang_dialect(src, len, &body, &body_len,
+                                             &lay, NULL, NULL, &dl);
+    size_t head_len = (size_t)(body - src);
+    if (head_len == 0) return fmt_format_buffer(path_label, src, len, rtype, out);
+
+    if (rtype == READER_TURMERIC && reader_type_is_implemented(lang_rt))
+        rtype = lang_rt;
+
+    Buf body_out;
+    int rc = fmt_format_buffer(path_label, body, body_len, rtype, &body_out);
+    if (rc != 0) return rc;
+
+    buf_init(out);
+    buf_write(out, src, head_len);
+    /* The reader hands back the position after the directive TEXT, which may or
+     * may not include its newline, and the printer strips leading blank lines
+     * from the body -- so without this the two ran together as
+     * `#lang saffron;;; ...`.  Normalising to exactly one newline also keeps
+     * the pass idempotent, which `fmt-idempotence-stdlib` checks. */
+    if (head_len == 0 || src[head_len - 1] != '\n') buf_putc(out, '\n');
+    buf_write(out, body_out.data, body_out.len);
+    buf_free(&body_out);
+    return 0;
 }
 
 typedef enum {

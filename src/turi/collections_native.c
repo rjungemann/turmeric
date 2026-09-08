@@ -1051,7 +1051,13 @@ static TuriValue native_hamt_iter_cur_key(TuriEnv *e, TuriValue *a, uint32_t n, 
 static TuriValue native_hamt_iter_cur_val(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     if (n < 1 || a[0].as_int == 0) return turi_int(0);
-    return turi_int((int64_t)(intptr_t)tur_hamt_iter_cur_val((void *)(intptr_t)a[0].as_int));
+    /* map-of-any-is-broken-on-both-back-ends: unbox a boxed-value map's value.
+     * `HamtIter` carries the map it is walking, so this CAN consult `val_owned`
+     * -- the archived report listed it as a residue on the belief that it could
+     * not, which was wrong and showed up as `tur_show_collection_elems`
+     * printing `#map{:a }` for a cstr value. */
+    HamtIter *it = (HamtIter *)(intptr_t)a[0].as_int;
+    return map_val_read(it->map, tur_hamt_iter_cur_val(it));
 }
 static TuriValue native_hamt_keyeq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
@@ -1080,10 +1086,13 @@ static TuriValue native_struct_hash(TuriEnv *e, TuriValue *a, uint32_t n, void *
 static TuriValue native_hamt_get_dynamic(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     if (n < 4) return turi_int(0);
-    void *r = tur_hamt_get_dynamic((Hamt *)(intptr_t)a[0].as_int, a[1].as_int,
+    /* map-of-any-is-broken-on-both-back-ends: same unbox as the iterator twin.
+     * This one takes the bare Hamt handle, so `val_owned` is one deref away. */
+    Hamt *h = (Hamt *)(intptr_t)a[0].as_int;
+    void *r = tur_hamt_get_dynamic(h, a[1].as_int,
                                    (void *)(intptr_t)a[2].as_int,
                                    (void *)(intptr_t)a[3].as_int);
-    return turi_int((int64_t)(intptr_t)r);
+    return map_val_read(h, r);
 }
 static TuriValue native_hamt_has_dynamic(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;

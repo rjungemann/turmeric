@@ -28,12 +28,13 @@
 ;;; A top-level defn rather than a `let`-bound `fn`, because a let-bound fn
 ;;; cannot call itself ("unknown function or operator 'go'") -- there is no
 ;;; letrec, and every prelude walker needs the same shape.
-
-(defn vec-map-loop__ [v : (Vec any) f : (fn [any] any) out : (Vec any)
-                      i : int n : int] : int
+(defn vec-map-loop__ [v : (Vec any)
+                      f : (fn [any] any)
+                      out : (Vec any)
+                      i : int
+                      n : int] : int
   (if (< i n)
-    (do (vec-push! out (f (vec-get v i)))
-        (vec-map-loop__ v f out (+ i 1) n))
+    (do (vec-push! out (f (vec-get v i))) (vec-map-loop__ v f out (+ i 1) n))
     0))
 ;;; vec-map -- apply f to each element of a vector, into a fresh vector.
 ;;;
@@ -55,12 +56,15 @@
     out))
 ;;; vec-filter-loop__ -- internal: the recursive half of vec-filter.
 
-(defn vec-filter-loop__ [v : (Vec any) pred : (fn [any] any) out : (Vec any)
-                         i : int n : int] : int
+(defn vec-filter-loop__ [v : (Vec any)
+                         pred : (fn [any] any)
+                         out : (Vec any)
+                         i : int
+                         n : int] : int
   (if (< i n)
-    (do (let [x (vec-get v i)]
-          (when (pred x) (vec-push! out x)))
-        (vec-filter-loop__ v pred out (+ i 1) n))
+    (do
+      (let [x (vec-get v i)] (when (pred x) (vec-push! out x)))
+      (vec-filter-loop__ v pred out (+ i 1) n))
     0))
 ;;; vec-filter -- keep the elements of a vector for which pred is truthy.
 ;;;
@@ -84,11 +88,12 @@
     out))
 ;;; vec-fold-loop__ -- internal: the recursive half of vec-fold.
 
-(defn vec-fold-loop__ [v : (Vec any) f : (fn [any any] any) acc : any
-                       i : int n : int] : any
-  (if (< i n)
-    (vec-fold-loop__ v f (f acc (vec-get v i)) (+ i 1) n)
-    acc))
+(defn vec-fold-loop__ [v : (Vec any)
+                       f : (fn [any any] any)
+                       acc : any
+                       i : int
+                       n : int] : any
+  (if (< i n) (vec-fold-loop__ v f (f acc (vec-get v i)) (+ i 1) n) acc))
 ;;; vec-fold -- left-fold a vector with an accumulator.
 ;;;
 ;;; Parameters:

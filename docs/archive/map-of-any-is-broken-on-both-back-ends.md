@@ -175,10 +175,17 @@ in the design and it was settled by reading that arm rather than by guessing.
   branch it takes, so such a map is uniformly unboxed and `val_owned` says so;
   it is no worse than before, and a `(Map K any)` with that key shape still
   reports `int`.
-- **`map-iter-cur-val-as` and `map-get-dynamic-as`** take an iterator / a bare
-  HAMT handle rather than the Map box, so they cannot consult `val_owned` and
-  still hand back the raw word. They back the Eq[Map] driver and map-show; a
-  boxed-value map read through those reports the box address.
+- ~~**`map-iter-cur-val-as` and `map-get-dynamic-as`**~~ -- **CLOSED 2026-09-08,
+  and the residue was wrong on its facts.** It claimed these two "cannot consult
+  `val_owned`". Both can: `HamtIter` carries the map it is walking (`iter->map`),
+  and `map-get-dynamic-as` takes the bare `Hamt *` directly, so `val_owned` is
+  one deref away in each. They now unbox through the same `map_val_read`.
+
+  This was not an academic gap. It backs `map-show`, so a HOMOGENEOUS
+  `(Map Sym cstr)` -- boxed, because the conditional rule boxes from the first
+  non-int value -- printed `#map{:a }` with the value missing. The `ctest`
+  target `tur_show_collection_elems` caught it; the three fixture suites did
+  not, because none of them shows a cstr-valued map.
 
 ## Not this bug
 
