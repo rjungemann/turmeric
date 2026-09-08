@@ -1,20 +1,13 @@
 ;; vec-of-any-repr-decision-ice, route 3: an explicitly ascribed `(vec-new)`
-;; pushed into.  See tests/fixtures/vec-of-any-builds for the full account of
-;; what the ICE was and which two representation decisions disagreed.
+;; pushed into.  `(Vec any)` used to ABORT the compiler here -- the let binder
+;; fell to the int64 carrier while repr_of answered typed-heap-pointer, and the
+;; repr-shadow ICE fired -- because `any` failed both concreteness tests in
+;; `adt_app_type_arg_is_concrete`, so `(Vec any)` was not a concrete app.
 ;;
-;; This is the ONE route that clears run.sh's emitted-C ratchet, and the reason
-;; the other two are not fixtures is worth stating rather than leaving to a
-;; missing file.  A `vec-of` producing a `(Vec any)` emits
-;; `-Wincompatible-pointer-types`: the zero-argument `vec-new` inside
-;; `vec-empty-like__`'s `any` clone resolves to the `int` clone's name, because
-;; a zero-arg call short-circuits before the spec-matching loop in
-;; emit_call_name.  The ratchet was sweep-verified at ZERO across the corpus
-;; before it landed, so that is a real regression signal and not noise to
-;; suppress.  Filed as vec-any-monomorph-is-half-plumbed.
-;;
-;; So: `(Vec any)` no longer ICEs, and it is reachable through an explicit
-;; ascription today.  The `vec-of` macro route needs the clone-selection fix
-;; first.
+;; The `vec-of` route to the same type is pinned separately by
+;; tests/fixtures/vec-of-any-heterogeneous; it took a second fix (a missing
+;; `vec-new` monomorph inside `vec-empty-like__`'s `any` clone) and was the
+;; blocker for Saffron's `[1 "two" 7.1]` vector literal.
 ;;
 ;; requires.leak-check: the element boxes are owned by the vector and released
 ;; with it.

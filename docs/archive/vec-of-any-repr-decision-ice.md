@@ -111,7 +111,7 @@ one defect, and it is what the layout table's own TY_ANY note said was missing
 ("there is no way to build one today to test it").
 
 Residue, measured and filed as
-[vec-any-monomorph-is-half-plumbed](../reported/vec-any-monomorph-is-half-plumbed.md):
+[vec-any-monomorph-is-half-plumbed](vec-any-monomorph-is-half-plumbed.md):
 `vec-get` on a `(Vec any)` still reports `int`, so the element type does not
 flow back out; and a program with a `(Vec any)` beside another `vec-of` emits
 one cosmetic `-Wincompatible-pointer-types` warning from a deduped `vec-new`

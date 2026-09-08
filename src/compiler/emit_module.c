@@ -4176,9 +4176,33 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                     for (uint8_t k = 0; k < an1 && nb < ABI_TYPE_BINDINGS_MAX; k++) {
                         if (ae2[k].kind == TY_TYVAR && ae2[k].as.tyvar_.name &&
                             (type_has_concrete_codegen_layout(&ae1[k]) ||
+                             ae1[k].kind == TY_ANY ||
                              (ae1[k].kind == TY_APP &&
                               type_app_is_concrete_adt(&ae1[k])))) {
-                            /* vec-empty-like-monomorph-selects-int-element:
+                            /* vec-any-monomorph-is-half-plumbed: `any` is the
+                             * THIRD kind of concrete element, and it answers no
+                             * to both tests beside it -- the layout table rejects
+                             * TY_ANY on purpose (a 16-byte by-value FIELD is an
+                             * ABI change, a different question), and `any` is not
+                             * a TY_APP.  So `(Vec any)` synthesized no `{A -> any}`
+                             * here, fell through the `n_bindings == 0` gate below,
+                             * and never interned its own `vec-new` monomorph --
+                             * leaving `vec-empty-like__`'s `any` clone calling
+                             * `vec_new__spec__tur_adt_Vec__int__` through the
+                             * cross-spec fallback, whose return ABI is
+                             * `tur_adt_Vec__int *` where this body returns
+                             * `tur_adt_Vec__any *`.  That is the
+                             * -Wincompatible-pointer-types run.sh's emitted-C
+                             * ratchet fails on, and it blocked a `vec-of` at
+                             * `any` -- i.e. Saffron's `[1 "two" 7.1]`.
+                             *
+                             * `adt_app_type_arg_is_concrete` (types.c) already
+                             * answers this same "is the argument concrete enough
+                             * to name a monomorph" question with the same three
+                             * cases; it is static there, so the disjunct is
+                             * repeated rather than shared.
+                             *
+                             * vec-empty-like-monomorph-selects-int-element:
                              * type_has_concrete_codegen_layout returns false for
                              * EVERY TY_APP by design -- its own comment says so,
                              * and names `type_app_is_concrete_adt` as the

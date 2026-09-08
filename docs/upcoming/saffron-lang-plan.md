@@ -907,8 +907,8 @@ vec-of-any-repr-decision-ice and **fixed 2026-09-07**
 ([archived](../archive/vec-of-any-repr-decision-ice.md)): two different
 questions -- does `(Vec any)` NAME a monomorph, and how is an `any` ELEMENT
 stored -- had been answered as one. Its residue,
-[vec-any-monomorph-is-half-plumbed](../reported/vec-any-monomorph-is-half-plumbed.md),
-is S6's own subject rather than a blocker on it.
+[vec-any-monomorph-is-half-plumbed](../archive/vec-any-monomorph-is-half-plumbed.md),
+was S6's own subject rather than a blocker on it, and is now fixed too.
 
 ### S3 -- the dynamic operator layer, interpreter (medium) -- DONE 2026-09-07
 
@@ -1010,10 +1010,10 @@ defined in the fixture, not a stdlib cons list, because a stdlib cons list
 carries int64 handles -- `head` hands back an int and the heterogeneity is gone
 before `type-of` sees it. `defdata` needed one line to accept an `:any` field
 (it was a name table with no `any` row); whether the wider container story
-works is S6's question: the ICE that used to block it is fixed, and what remains
-is that a `(Vec any)` is write-only -- `vec-get` reports `int`, so the element
-type does not flow back out
-([vec-any-monomorph-is-half-plumbed](../reported/vec-any-monomorph-is-half-plumbed.md)).
+works is S6's question: the ICE that used to block it is fixed, and so are both
+halves of its residue -- a `(Vec any)` now reads back each element with its own
+tag, and a `vec-of` at `any` clears the emitted-C ratchet
+([vec-any-monomorph-is-half-plumbed](../archive/vec-any-monomorph-is-half-plumbed.md)).
 
 **Three nodes, and `-Werror=switch` plus the turi parity ratchet enumerated
 every site each one needed.** EX_DYN_CALL, EX_DYN_FIELD (and S3's EX_DYN_OP)
@@ -1182,14 +1182,20 @@ writing `#map{:a 1 :b "two"}`.
 
 Still to do, and the ORDER is now measured rather than assumed:
 
-1. **The `vec-of` clone-selection bug**, which turned out to BLOCK the headline
-   feature rather than sit beside it: `[1 "two" 7.1]` lowers to `(vec-of ...)`,
-   and a single `vec-of` at `any` trips run.sh's emitted-C ratchet. Diagnosed in
-   [vec-any-monomorph-is-half-plumbed](../reported/vec-any-monomorph-is-half-plumbed.md):
-   the cross-spec fallback in `emit_call_name` takes a sibling clone with a
-   different return ABI, because the `any` outer has no recording of its own.
-2. **G7 itself** -- `[...]` defaulting to `(vec any)` in a Saffron file -- which
-   is then a small lowering, since the `(Vec any)` machinery works on both back
+1. ~~**The `vec-of` clone-selection bug**~~ -- **DONE 2026-09-08.** It did BLOCK
+   the headline feature rather than sit beside it (`[1 "two" 7.1]` lowers to
+   `(vec-of ...)`, and a single `vec-of` at `any` tripped run.sh's emitted-C
+   ratchet), and the cause was not where four rounds of reading the call sites
+   put it. Not the cross-spec fallback in `emit_call_name`, which took a sibling
+   clone only because there was nothing else to take: the `any` clone of
+   `vec-empty-like__` never interned a `vec-new` monomorph at all, because
+   `emit_abi_register_call`'s family-element rehydration admits a scalar layout
+   or a concrete ADT app and `any` is neither. One disjunct.
+   [Archived](../archive/vec-any-monomorph-is-half-plumbed.md);
+   `tests/fixtures/vec-of-any-heterogeneous` pins a heterogeneous `vec-of`
+   round-tripping `int`/`cstr`/`float`, leak-clean.
+2. **G7 itself** -- `[...]` defaulting to `(vec any)` in a Saffron file -- now
+   unblocked, and a small lowering: the `(Vec any)` machinery works on both back
    ends.
 3. The interpreter's Map value tag (the open wrong answer).
 4. The `#map{...}` / `#set{...}` / cons-list twins, then the prelude.
@@ -1200,14 +1206,16 @@ G7. `(vec any)` becomes the default container element in Saffron, so
 `[1 "two" 7.1]` is a vector of three boxes. Same for `#map{...}`, `#set{...}`,
 and cons lists.
 
-**The ICE that blocked this stage is fixed** (2026-09-07): a `(Vec any)` builds,
-stores and frees correctly, with its elements boxed one word wide and released
-with the vector. What S6 inherits is the half that is left --
-[a `(Vec any)` is write-only](../reported/vec-any-monomorph-is-half-plumbed.md),
-because `vec-get` reports its result as `int` rather than `any`. That is this
-stage's central question, not a prerequisite for it: the same "how does an
-element type reach a read through a container" governs `#map{...}`, `#set{...}`
-and cons lists, so it should be answered once here rather than per container.
+**Both blockers on this stage are fixed.** The repr-decision ICE (2026-09-07):
+a `(Vec any)` builds, stores and frees correctly, with its elements boxed one
+word wide and released with the vector. Then the two halves of
+[vec-any-monomorph-is-half-plumbed](../archive/vec-any-monomorph-is-half-plumbed.md)
+(2026-09-07 and 2026-09-08): `vec-get` on a `(Vec any)` reports each element's
+own type rather than `int`, and a `vec-of` producing one clears run.sh's
+emitted-C ratchet. So the answer to this stage's central question -- how does an
+element type reach a read through a container -- exists for `Vec`, and the same
+question governs `#map{...}`, `#set{...}` and cons lists; answer it once from
+the `Vec` shape rather than per container.
 
 A `stdlib/saffron/prelude.tur` autoloads for `LANG_SAFFRON` files: the dynamic
 `map`/`filter`/`fold`/`reduce`/`assoc`/`get`, the truthiness helpers, and thin
