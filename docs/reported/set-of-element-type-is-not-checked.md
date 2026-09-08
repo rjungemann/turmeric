@@ -71,8 +71,22 @@ system lets it through silently rather than failing loudly.
    eventually want -- but it is a feature (hashing and comparing across types at
    run time), not a lowering, and it should not gate direction 1.
 
-Direction 1 first: it closes the lie now and does not foreclose direction 2,
-which would then relax the check for `any` the way the Vec and Map paths do.
+**CORRECTION 2026-09-08: direction 1 is NOT first, and cannot be alone.**
+
+That ordering was written before `tests/fixtures/saffron-set-literal` existed.
+That fixture pins a HETEROGENEOUS `#set{1 "two" 7.1}` building, deduping and
+answering membership on both back ends -- which is exactly what direction 1
+would turn into a diagnostic. Landing it alone would be a regression for the
+dialect this work is for, trading a type lie for a lost capability.
+
+The two are not independent, because a set has no honest heterogeneous type
+until `any` is one: `(Set any)` refuses today for want of `Hash[any]` and
+`MapKey[any]`. So the order is direction 2, THEN direction 1 relaxed for `any`
+-- the shape the Vec and Map paths already have, where the homogeneity check
+stands and `any` is the element type that satisfies it.
+
+Direction 1 on its own remains right for a language with no dynamic dialect. It
+is not right for this one, and the report said otherwise for a day.
 
 ## Not this bug
 
