@@ -118,6 +118,7 @@ bool g_sized_types_enabled = true;
 bool g_dump_sizes = false;
 bool g_dump_refine_json = false;
 bool g_trail_autoloaded = false;
+bool g_saffron_prelude = false;   /* saffron-lang-plan S6; set per entry-file detection */
 bool g_opt_option_niche = true;   /* graduated 2026-09-03; TUR_OPTION_NICHE=0 restores the tagged monomorph */
 bool g_opt_regions = true;       /* graduated 2026-09-05; TUR_REGIONS=0 restores malloc + unbracketed calls */
 bool g_opt_saffron = false;      /* saffron-lang-plan D9; off unless enabled */

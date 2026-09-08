@@ -1,0 +1,45 @@
+#lang saffron
+;; saffron-lang-plan S6: the Saffron prelude, auto-loaded for a `#lang saffron`
+;; ENTRY file.
+;;
+;; ADAPTORS, NOT REIMPLEMENTATIONS (R5).  `vec-map`/`vec-filter`/`vec-fold`
+;; forward to the typed stdlib and exist only because the typed signature is
+;; unreachable from dynamic code: a `(Vec any)` cannot be handed to a
+;; `[A B] [v (Vec A) f (fn [A] B)]` without naming A and B, which is the whole
+;; thing Saffron removes.
+;;
+;; The prelude is scoped to the ENTRY file: a Saffron file IMPORTED by a
+;; Turmeric program does not drag it in, and a Turmeric file checked in the same
+;; process right after a Saffron one does not see it either (the flag is set on
+;; every dialect detection, true or false, rather than only when true).
+;;
+;; The prelude itself is `#lang saffron` -- a DIRECTIVE in the file rather than
+;; a filename special-case in the two loaders -- because its own bodies use D4
+;; truthiness (`(when (pred x) ...)` where `pred` returns `any`), which is a hard
+;; "if condition must be bool, got any" under Turmeric.  The interpreter's
+;; `(load ...)` already ran `#lang` detection; the compiled autoload path learned
+;; to, so the file says what it is instead of two call sites remembering.
+;;
+;; Writing it is what found the fourth and fifth `any`-carrier straddles (a
+;; `let` binding and a fat-closure `any` slot) -- see
+;; docs/reported/any-carrier-straddle-is-bridged-per-consumer.md.
+;;
+;; No requires.leak-check: each of these returns a fresh vector the caller owns,
+;; and they are freed below, but the vectors they are BUILT from are `[...]`
+;; literals whose own elements the S6 widen boxes -- the intermediate literal in
+;; `(vec-map [1 2 3] ...)` is never bound, so nothing can free it.  That is the
+;; same shape as map-literal-leaks-its-intermediate-maps, one container over.
+
+(defn main []
+  (let [doubled (vec-map [1 2 3] (fn [x] (* x 2)))]
+    (println (vec-len doubled))
+    (println (vec-get doubled 0))
+    (println (vec-get doubled 2))
+    (vec-free doubled))
+  (let [big (vec-filter [1 2 3 4] (fn [x] (> x 2)))]
+    (println (vec-len big))
+    (println (vec-get big 0))
+    (vec-free big))
+  (println (vec-fold [1 2 3] 0 (fn [a x] (+ a x))))
+  (println (vec-fold [1.5 2.25] 0.0 (fn [a x] (+ a x))))
+  0)

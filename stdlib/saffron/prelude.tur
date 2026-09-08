@@ -1,0 +1,108 @@
+#lang saffron
+;;; saffron/prelude -- the Saffron dialect's prelude.
+;;;
+;;; Auto-loaded, LAST in the stdlib autoload list, when the ENTRY file is
+;;; `#lang saffron`.  A Saffron file imported by a Turmeric program does not
+;;; drag it in: the prelude's names stay out of a program that never asked for
+;;; the dialect, matching how the `#lang` line already scopes the reader and the
+;;; semantic layers.
+;;;
+;;; This file is read as SAFFRON, not Turmeric -- `stdlib_autoload.c` sets the
+;;; language axis on it -- because its own bodies use D4 truthiness, which is a
+;;; hard "if condition must be bool, got any" under the Turmeric dialect every
+;;; other stdlib file is read with.  The reader stays Turmeric; the prelude is
+;;; plain s-expressions.
+;;;
+;;; ADAPTORS, NOT REIMPLEMENTATIONS (saffron-lang-plan R5).  Everything here
+;;; forwards to a typed stdlib entry point and exists only because the typed
+;;; signature is unreachable from dynamic code -- a `(Vec any)` cannot be handed
+;;; to a `[A B] [v (Vec A) f (fn [A] B)]` signature without naming A and B,
+;;; which is the whole thing Saffron removes.  A file added here needs a reason
+;;; beyond "the typed one needs annotations": if the operation does not exist in
+;;; the typed stdlib at all, it belongs there first.
+;;;
+;;; Since: saffron-lang-plan S6
+
+;;; vec-map-loop__ -- internal: the recursive half of vec-map.
+;;;
+;;; A top-level defn rather than a `let`-bound `fn`, because a let-bound fn
+;;; cannot call itself ("unknown function or operator 'go'") -- there is no
+;;; letrec, and every prelude walker needs the same shape.
+
+(defn vec-map-loop__ [v : (Vec any) f : (fn [any] any) out : (Vec any)
+                      i : int n : int] : int
+  (if (< i n)
+    (do (vec-push! out (f (vec-get v i)))
+        (vec-map-loop__ v f out (+ i 1) n))
+    0))
+;;; vec-map -- apply f to each element of a vector, into a fresh vector.
+;;;
+;;; Parameters:
+;;;   v -- (Vec any), e.g. a `[...]` literal
+;;;   f -- a one-argument function over `any`
+;;;
+;;; Returns:
+;;;   A fresh (Vec any) of the same length. The caller owns it.
+;;;
+;;; Example:
+;;;   (vec-map [1 2 3] (fn [x] (* x 2)))   ; => 2 4 6
+;;;
+;;; Since: saffron-lang-plan S6
+
+(defn vec-map [v : (Vec any) f : (fn [any] any)] : (Vec any)
+  (let [out (:: (vec-new) (Vec any))]
+    (vec-map-loop__ v f out 0 (vec-len v))
+    out))
+;;; vec-filter-loop__ -- internal: the recursive half of vec-filter.
+
+(defn vec-filter-loop__ [v : (Vec any) pred : (fn [any] any) out : (Vec any)
+                         i : int n : int] : int
+  (if (< i n)
+    (do (let [x (vec-get v i)]
+          (when (pred x) (vec-push! out x)))
+        (vec-filter-loop__ v pred out (+ i 1) n))
+    0))
+;;; vec-filter -- keep the elements of a vector for which pred is truthy.
+;;;
+;;; Parameters:
+;;;   v    -- (Vec any)
+;;;   pred -- a one-argument predicate over `any`.  D4 truthiness applies, so
+;;;           only nil and `false` drop an element -- an empty string and a zero
+;;;           are both kept.
+;;;
+;;; Returns:
+;;;   A fresh (Vec any) holding the kept elements, in order. The caller owns it.
+;;;
+;;; Example:
+;;;   (vec-filter [1 2 3 4] (fn [x] (> x 2)))   ; => 3 4
+;;;
+;;; Since: saffron-lang-plan S6
+
+(defn vec-filter [v : (Vec any) pred : (fn [any] any)] : (Vec any)
+  (let [out (:: (vec-new) (Vec any))]
+    (vec-filter-loop__ v pred out 0 (vec-len v))
+    out))
+;;; vec-fold-loop__ -- internal: the recursive half of vec-fold.
+
+(defn vec-fold-loop__ [v : (Vec any) f : (fn [any any] any) acc : any
+                       i : int n : int] : any
+  (if (< i n)
+    (vec-fold-loop__ v f (f acc (vec-get v i)) (+ i 1) n)
+    acc))
+;;; vec-fold -- left-fold a vector with an accumulator.
+;;;
+;;; Parameters:
+;;;   v    -- (Vec any)
+;;;   init -- the starting accumulator
+;;;   f    -- (fn [acc x] acc')
+;;;
+;;; Returns:
+;;;   The final accumulator.
+;;;
+;;; Example:
+;;;   (vec-fold [1 2 3] 0 (fn [a x] (+ a x)))   ; => 6
+;;;
+;;; Since: saffron-lang-plan S6
+
+(defn vec-fold [v : (Vec any) init : any f : (fn [any any] any)] : any
+  (vec-fold-loop__ v f init 0 (vec-len v)))

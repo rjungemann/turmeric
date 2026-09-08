@@ -10,6 +10,7 @@
 #include "turi/eval.h"
 #include "buf.h"
 #include "source_literal.h"
+#include "runtime/globals.h"   /* saffron-lang-plan S6: g_saffron_prelude */
 
 #include <stdio.h>
 #include <string.h>
@@ -196,6 +197,19 @@ void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root) {
         buf_putc(&src, '/');
         buf_puts(&src, prelude[i]);
         buf_puts(&src, "\")\n");
+    }
+    /* saffron-lang-plan S6: the Saffron prelude, when the ENTRY file is
+     * `#lang saffron`.  LAST, so every stdlib name it adapts is already bound.
+     *
+     * The compiled path appends the same file to `tur_stdlib_autoload_files()`;
+     * this list is its interpreter twin and the two are kept in sync by hand
+     * (tools/check_turi_native_parity.py checks module-preload parity), so the
+     * append has to happen in both or `tur --interpret` reports
+     * "unknown name 'vec-map'" on a program the compiler accepts. */
+    if (g_saffron_prelude) {
+        buf_puts(&src, "(load \"");
+        buf_puts(&src, eroot);
+        buf_puts(&src, "/saffron/prelude.tur\")\n");
     }
     buf_putc(&src, '\0'); /* turi_eval calls strlen; NUL-terminate */
     TuriValue sv = turi_eval(env, src.data);

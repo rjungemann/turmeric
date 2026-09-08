@@ -289,6 +289,21 @@ extern bool g_sr1_sum_byvalue;
  * also in the output pulling src/runtime/trail.c into the link.  Emitting the
  * guard off any looser signal is an undefined symbol at cc time. */
 extern bool g_trail_autoloaded;
+/* saffron-lang-plan S6: the ENTRY file is `#lang saffron`, so the Saffron
+ * prelude joins the stdlib autoload list.
+ *
+ * Set by every path that detects the entry file's dialect, and set on EVERY
+ * such call (true or false) rather than only when true -- the REPL and the
+ * harnesses run several compiles in one process, and a sticky flag would let a
+ * Saffron file license the prelude for the next Turmeric one.  Same hazard
+ * `g_trail_autoloaded` records above, handled by being self-resetting rather
+ * than by a separate clear.
+ *
+ * The prelude is scoped to the ENTRY file on purpose: a Saffron file IMPORTED
+ * by a Turmeric program does not drag it in.  That keeps the prelude's names
+ * out of a program that never asked for the dialect, and matches how the
+ * `#lang` line already scopes the reader and the semantic layers. */
+extern bool g_saffron_prelude;
 /* SR3 slice B (the Option niche -- default since 2026-09-03, TUR_OPTION_NICHE=0
  * restores the tagged form; docs/upcoming/sr3-option-niche-plan.md):
  * an `(Option P)` whose payload is a NON-NULLABLE pointer is carried AS that

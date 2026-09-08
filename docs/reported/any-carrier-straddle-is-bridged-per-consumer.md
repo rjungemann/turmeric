@@ -1,7 +1,7 @@
 ---
 title: An `any` that arrives as the int64 carrier is bridged at each consumer, not once at production
 category: Reported
-description: A boxed container element whose static type is `any` is emitted as an int64_t local, so every consumer wanting a real tur_tagged_t is a cc error until it is taught to bridge. Three positions have been fixed one at a time -- the any readers, an `any` parameter, and the dynamic-node operands -- each found by a program that did not compile. Normalising once at production would subsume all of them.
+description: A boxed container element whose static type is `any` is emitted as an int64_t local, so every consumer wanting a real tur_tagged_t is a cc error until it is taught to bridge. Five positions have been fixed one at a time, each found by a program that did not compile. Normalising once at production would subsume all of them -- but the call hoist declares its temp __auto_type on purpose, so the emitter does not know the C type where that bridge belongs.
 ---
 
 # The `any` carrier straddle is bridged per consumer
@@ -9,9 +9,10 @@ description: A boxed container element whose static type is `any` is emitted as 
 **Severity: medium.** Every instance is a hard `cc` error with no Turmeric
 diagnostic in front of it, never a wrong answer, and the interpreter is
 unaffected throughout -- so this is codegen shape, not semantics. What makes it
-worth a report is the SHAPE of the bug list: three fixes, three days, each found
+worth a report is the SHAPE of the bug list: five fixes in two days, each found
 by writing an ordinary Saffron program and watching it fail to compile. There is
-no reason to think the third was the last.
+no reason to think the fifth was the last -- the fourth and fifth arrived
+together, from one function in the Saffron prelude.
 
 ## What the straddle is
 
@@ -33,26 +34,33 @@ error: incompatible type for argument 1 of '__tur_dyn_truthy'
 `elab_coerce_to_any` does not help: the operand's static type is ALREADY `any`,
 so there is nothing to widen.
 
-## The three fixed so far
+## The five fixed so far
 
 | position | example | fixed |
 |---|---|---|
 | the `any` readers (`type-of`, `any-is?`, `cast`) | `(type-of (vec-get v 0))` | 2026-09-07 |
 | an argument to a parameter declared `any` | `(describe (vec-get v 0))` | 2026-09-08 |
 | the dynamic-node operands | `(if (vec-get v 0) ...)`, `(+ (vec-get v 0) x)` | 2026-09-08 |
+| a `let` binding declared `any` | `(let [x (vec-get v i)] ...)` | 2026-09-08 |
+| an `any` slot of a fat-closure dispatch | `(f (vec-get v i))`, `f : (fn [any] any)` | 2026-09-08 |
 
-All three call the same helper, `emit_any_from_carrier` (`emit_expr.c`), which
+All five call the same helper, `emit_any_from_carrier` (`emit_expr.c`), which
 is keyed on the value's RECORDED emitted spelling -- so a value that already IS
-the aggregate (a widen, a parameter, a let-bound `any`) is untouched.
+the aggregate (a widen, a parameter, another `any` local) is untouched.
 
 Fixtures: `vec-any-element-roundtrip`, `saffron-unannotated-main`,
-`saffron-dyn-ops-on-vec-elements`.
+`saffron-dyn-ops-on-vec-elements`, `saffron-prelude`.
+
+The last two were found in one sitting, by writing `stdlib/saffron/prelude.tur`
+-- a `vec-map` over a `(Vec any)` with an `any`-taking callback hits both in a
+single function body. Five, not three, and the fourth and fifth arrived
+together.
 
 ## Root cause of the PATTERN
 
 Each fix bridges at the CONSUMER. There are as many consumers as there are
 places an `any` can be used, and nothing enumerates them -- unlike the three
-dynamic nodes, where `-Werror=switch` and the turi parity ratchet named every
+dynamic NODES, where `-Werror=switch` and the turi parity ratchet named every
 site each one needed. This one has no such forcing function, so the list grows
 by someone writing a program.
 
@@ -68,7 +76,32 @@ than a swap of one problem for another: `emit_expr.c`'s argument path admits
 genuinely wants the carrier -- a container element store, a tyvar parameter --
 is already served.
 
-What has to be established before doing it, and was not established here:
+### What blocks it, measured 2026-09-08
+
+The obvious home is `emit_value`'s call hoist -- one chokepoint, `EX_CALL`-only,
+single exit. It cannot go there as written, and the reason is worth recording
+because it is not visible from the call sites:
+
+**The hoist declares its temp `__auto_type`.** That is deliberate ("so the temp
+takes the call's EXACT emitted C representation -- carrier int64 vs by-value
+aggregate vs pointer -- without re-deriving it"), and it means the emitter does
+not know the temp's C type at the one place a production-side bridge would fire.
+
+Which also explains something that looked like a separate mystery: the
+consumer-side bridges kept declining on exactly the values they exist for. They
+are keyed on the carrier-representation side table, and a hoisted CALL temp was
+never in it -- a bridge asked about `__ps_181` and got "unknown". Recording the
+hoist temp's C type in the `ret_ct` arm (where the emitter DOES know it) is what
+made the last two fixes take effect at all, and it is landed. The `__auto_type`
+arm still records nothing, correctly: it exists because the type could not be
+derived, and a guess there is worse than silence.
+
+So the production-side fix needs the callee's declared C return type at the
+hoist -- a materially larger change than "one bridge, one place", and the
+opposite of what the `__auto_type` design is for. That is the real cost, and it
+was not visible when this report was first written.
+
+Two things still to establish before attempting it:
 
 1. **Which other producers make a carrier-shaped `any`.** Container accessors
    are the one known family. An instrumented count over the fixture corpus
@@ -79,11 +112,6 @@ What has to be established before doing it, and was not established here:
    container store each need checking. A miss there turns a compile error into a
    different compile error, which is survivable, but it should be measured
    rather than discovered.
-
-Both are probe-sized. They were not done at the third fix because that fix was
-one line at a site that already existed, and the session was mid-stage on
-`saffron-lang-plan` S6; deferring the general fix is a scheduling choice, not a
-judgement that the per-consumer bridges are right.
 
 ## Not this bug
 

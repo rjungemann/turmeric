@@ -1258,7 +1258,38 @@ Still to do, and the ORDER is now measured rather than assumed:
    why a `defdata` with `any` in both slots (what `saffron-higher-order` uses)
    stays the better idiom for a list you actually walk.
    `tests/fixtures/saffron-cons-list`.
-6. The prelude.
+6. ~~The prelude~~ -- **DONE 2026-09-08.** `stdlib/saffron/prelude.tur`, with
+   `vec-map` / `vec-filter` / `vec-fold` over `(Vec any)`, auto-loaded for a
+   `#lang saffron` ENTRY file on BOTH back ends.
+
+   Three things it settled that were not obvious in advance:
+
+   - **Scope is the entry file, and the flag is self-resetting.** A Saffron file
+     imported by a Turmeric program does not drag the prelude in, and a Turmeric
+     file checked in the same process right after a Saffron one does not see it
+     either -- the flag is set on every dialect detection, true or false, rather
+     than only when true. Same hazard `g_trail_autoloaded` records.
+   - **The prelude is `#lang saffron` itself.** Its own bodies use D4
+     truthiness, a hard "if condition must be bool, got any" under Turmeric.
+     Rather than special-case the filename in the two loaders, the compiled
+     autoload path learned to run `#lang` detection on a stdlib file -- which
+     the interpreter's `(load ...)` already did -- so the file says what it is
+     and neither call site has to remember.
+   - **Writing it found the fourth and fifth `any`-carrier straddles**, in one
+     function: a `let` binding declared `any`, and an `any` slot of a
+     fat-closure dispatch. It also found why the earlier consumer bridges kept
+     declining on the values they exist for -- a hoisted CALL temp was never in
+     the carrier-representation side table. See
+     [any-carrier-straddle-is-bridged-per-consumer](../reported/any-carrier-straddle-is-bridged-per-consumer.md),
+     which now records the measured blocker on the general fix.
+
+   Held to R5's line: these are adaptors, present only because a `(Vec any)`
+   cannot be handed to a `[A B] [v (Vec A) f (fn [A] B)]` signature without
+   naming A and B. The dynamic `assoc`/`get` and the truthiness helpers the
+   stage text also lists are NOT here: `map-get`/`map-assoc` already work on a
+   `(Map K any)` from Saffron, and D4 truthiness is a compiler rule rather than
+   a function, so neither needs an adaptor. Adding one for its own sake is the
+   wedge R5 warns about.
 
 ### S6 -- containers and the Saffron prelude (medium) -- remaining scope
 

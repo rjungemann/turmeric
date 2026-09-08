@@ -217,6 +217,13 @@ static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len
      * file is sweet-exp Turmeric unless its `#lang` line says otherwise, and
      * there is no extension that means "Saffron". */
     if (out_dialect) *out_dialect = dialect;
+    /* saffron-lang-plan S6: the Saffron prelude joins the stdlib autoload list
+     * when the ENTRY file is Saffron.  Set here rather than at each caller
+     * because this is the one function every CLI path that opens an entry file
+     * goes through, and set unconditionally (not only when true) so a Saffron
+     * compile cannot license the prelude for the next Turmeric one in the same
+     * process -- see the note on the declaration. */
+    g_saffron_prelude = (dialect == LANG_SAFFRON);
     return detected_type;
 }
 
@@ -7611,6 +7618,14 @@ static int cmd_eval_h(const char *path, bool use_color,
                  * before the eval blob that would otherwise be the first place
                  * the directive is seen. */
                 env->lang = dialect;
+                /* saffron-lang-plan S6: and the Saffron PRELUDE flag, for the
+                 * same reason one line up.  `turi_env_preload_collections` runs
+                 * below and reads it to decide whether to append
+                 * `saffron/prelude.tur`, so seeding it only in
+                 * `detect_and_adjust_lang` (which the compiled paths use) left
+                 * `tur --interpret` reporting "unknown name 'vec-map'" on a
+                 * program the compiler accepted. */
+                g_saffron_prelude = (dialect == LANG_SAFFRON);
                 /* Pre-seed the layer set too so the prelude and the user file
                  * read under the same layers (lang-layers-plan L1); turi_eval
                  * unions the authoritative set again when it strips the
