@@ -1,0 +1,25 @@
+#lang saffron
+;; The other half of saffron-unannotated-container-param: grounding an OPEN
+;; type argument to `any` must not ground a DETERMINED one.
+;;
+;; `takes-int-vec` declares `(Vec int)`, which has nothing open, so the seam
+;; leaves it alone and checks against it -- a `(Vec any)` holding a cstr is
+;; refused, exactly as before the fix.  Without this fixture, a later change
+;; that grounded every type argument (rather than only the undetermined ones)
+;; would turn the seam into a no-op and nothing would notice: the sibling
+;; fixture would still pass, because it only exercises the open case.
+;;
+;; `hide` launders the literal through an unannotated parameter so the
+;; mismatch is a RUNTIME one -- the whole point of a checked seam.  Passing
+;; the literal directly would be caught statically and prove nothing about it.
+;;
+;; "before" is printed first so the fixture distinguishes "panicked at the
+;; seam" from "never ran".
+
+(defn takes-int-vec [v : (Vec int)] (vec-get v 0))
+(defn hide [x] x)
+
+(defn main []
+  (println "before")
+  (println (cast (takes-int-vec (hide ["nope"])) int))
+  0)

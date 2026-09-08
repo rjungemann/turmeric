@@ -1,0 +1,46 @@
+#lang saffron
+;; docs/reported/saffron-unannotated-param-container-cast-panics: passing a
+;; container to an UNANNOTATED Saffron parameter.  The most ordinary thing a
+;; program does, in the dialect whose whole point is that the parameter needs
+;; no annotation -- and it panicked on the compiled path while the interpreter
+;; was correct.
+;;
+;; `vec-get` is `[A] [v : (Vec A) i : int]`, so the D5 seam's target is
+;; `(Vec A)` -- a TY_APP whose ARGUMENT is a tyvar.  The seam's exemption ("a
+;; callee expecting a type variable has nothing to check against") tests the
+;; KIND, so `(Vec A)` sailed past it and the seam checked the caller's `any`
+;; against a `Vec` instantiation nothing had chosen:
+;;
+;;   panic: cast: any holds a different instantiation of Vec
+;;
+;; THIS FIXTURE ASSERTS VALUES, NOT THE ABSENCE OF A PANIC, and that is the
+;; whole point.  The first attempt at this fix grounded the target to
+;; `(Vec any)`, removed the panic, and printed the element's BOX ADDRESS
+;; (94242104267456 for 7) -- a wrong answer, which is worse than the panic it
+;; replaced.  It was reverted.  A fixture that only checked "does not crash"
+;; would have passed against that revision.
+;;
+;; The missing half was that the call's tyvar bindings are collected from the
+;; argument BEFORE the seam replaces it -- from `any`, which binds nothing --
+;; so `A` stayed open, the result collapsed to the int64 carrier, and the
+;; return position widened the box POINTER instead of reading through it.
+;; Re-collecting after the substitution grounds `A := any` and the payload is
+;; read.
+;;
+;; Floats carry a non-zero fractional part deliberately: an integer-valued
+;; float cannot distinguish a payload from a truncation.
+
+(defn pick  [v] (vec-get v 0))
+(defn pick1 [v] (vec-get v 1))
+
+(defn main []
+  (println (cast (pick  [7 8]) int))
+  (println (cast (pick1 [7 8]) int))
+  (println (cast (pick  [7.1 8.25]) float))
+  (println (cast (pick1 [7.1 8.25]) float))
+  (println (cast (pick  ["ay" "bee"]) cstr))
+  (println (cast (pick  [true false]) bool))
+  ;; the tag and the payload must agree -- a box address would still tag `int`
+  (println (type-of (pick [7.1 8.25])))
+  (println (type-of (pick ["ay"])))
+  0)

@@ -6,6 +6,23 @@ description: "`(defn pick [v] (vec-get v 0))` in a Saffron file panics `cast: an
 
 # An unannotated Saffron parameter holding a container panics compiled
 
+**RESOLVED 2026-09-08 for containers.** Direction 2 (ground the target's
+undetermined type arguments to `any`) PLUS the missing half it needed -- see
+"Why grounding is not enough" below, and "The fix" at the end. Both back ends
+now print the same values for `(Vec int)`, `(Vec float)`, `(Vec cstr)`,
+`(Vec bool)` and nested vectors. Pinned by
+`tests/fixtures/saffron-unannotated-container-param` (values, not just the
+absence of a panic) and
+`tests/fixtures/saffron-concrete-container-param-still-checked` (the seam still
+refuses a real mismatch).
+
+**One shape is NOT fixed and has its own report:** a USER-DEFINED parametric
+ADT holding `any` now fails to COMPILE rather than panicking at runtime -- see
+`docs/reported/match-arm-binder-in-any-monomorph-typed-as-carrier.md`. That is
+a better failure mode than the crash it replaces, and it is still broken. It
+turned out NOT to be a Saffron bug at all: the repro there has no dialect in
+it, and fails the same way with this fix reverted.
+
 **Severity: high.** Passing a vector to a function is the most ordinary thing a
 program does, and in Saffron the parameter is unannotated by design -- that is
 the whole point of the dialect. The compiled path panics; the interpreter is
@@ -156,3 +173,33 @@ An ANNOTATED parameter is fine: `stdlib/saffron/prelude.tur`'s
 fixtures pass. So does an explicit hand-written `(cast v (Vec any))` --
 measured, in plain Turmeric with no Saffron involved. The defect is specifically
 the cast the SEAM chooses when the parameter's type arguments are open.
+
+## The fix (2026-09-08)
+
+Two changes, and **neither works alone** -- which is why the first attempt was
+reverted rather than pushed through.
+
+1. **Ground the target's open type arguments** (`call_ground_open_app_args_to_any`,
+   `elab_call.c`). The seam's exemption tests the type's KIND, so `(Vec A)`
+   -- a TY_APP whose ARGUMENT is a tyvar -- never matched it. Grounding walks
+   the application spine and rewrites each UNDETERMINED argument to `any`,
+   leaving a determined one (`(Vec int)`) exactly as it was. In a Saffron file
+   an undetermined element type IS `any`; that is D3's default and what the S6
+   literal widen produces.
+
+2. **Re-collect the tyvar bindings after the seam substitutes the argument.**
+   This is the half the earlier attempt lacked. The bindings are gathered
+   further up the same loop iteration from `args[i]->type` -- which is `any` at
+   that point, and binds nothing -- so `A` stayed open, `call_result_type`'s
+   bare-tyvar collapse took the result to the int64 carrier, and the return
+   position widened the element's BOX POINTER into an `any` instead of reading
+   through it. Re-running `call_collect_type_bindings` against the substituted
+   argument records `A := any` and the payload is read.
+
+Guarded on "grounding actually changed something", so a seam over an
+already-concrete target keeps the bindings it had -- which is what
+`saffron-concrete-container-param-still-checked` pins.
+
+Direction 3 (head-match parametric targets on the compiled path) was **not**
+taken, and should stay untaken: it weakens `cast` for every program, not just
+Saffron ones, and the compiled strictness is the better half of that trade.

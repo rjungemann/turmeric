@@ -677,6 +677,56 @@ static const AdtDef *call_app_head_adt(const Type *t) {
     return NULL;
 }
 
+/* saffron-lang-plan D5, saffron-unannotated-param-container-cast-panics:
+ * rewrite every UNDETERMINED type argument of an applied type to `any`.
+ *
+ * `vec-get` is `[A] [v : (Vec A) i : int]`, so the seam's target is `(Vec A)`
+ * -- a TY_APP whose ARGUMENT is a tyvar.  The seam's own exemption ("a callee
+ * expecting a type variable has nothing to check against") is about the type's
+ * KIND, so `(Vec A)` sails past it and the seam checks the caller's `any`
+ * against a `Vec` instantiation nothing ever chose: the panic
+ * `cast: any holds a different instantiation of Vec`.
+ *
+ * In a Saffron file an undetermined element type IS `any` -- that is D3's
+ * default and exactly what the S6 literal widen produces -- so grounding here
+ * makes the target `(Vec any)`, which the caller's value satisfies.
+ *
+ * Walks the whole spine, so a two-parameter head (`(Map K V)`) grounds both,
+ * and leaves a DETERMINED argument alone: `(Vec int)` is unchanged, and only a
+ * `(Vec int)` value will satisfy it.  Returns true when it changed something,
+ * so the caller can tell "grounded" from "already concrete". */
+static bool call_ground_open_app_args_to_any(Arena *a, Type *t) {
+    if (!t || t->kind != TY_APP) return false;
+    bool changed = false;
+    if (t->as.app.arg) {
+        if (t->as.app.arg->kind == TY_TYVAR) {
+            Type *any_t = (Type *)arena_alloc(a, sizeof(Type));
+            memset(any_t, 0, sizeof(Type));
+            any_t->kind = TY_ANY;
+            t->as.app.arg = any_t;
+            changed = true;
+        } else if (t->as.app.arg->kind == TY_APP) {
+            Type inner = *t->as.app.arg;
+            if (call_ground_open_app_args_to_any(a, &inner)) {
+                Type *slot = (Type *)arena_alloc(a, sizeof(Type));
+                *slot = inner;
+                t->as.app.arg = slot;
+                changed = true;
+            }
+        }
+    }
+    if (t->as.app.fn && t->as.app.fn->kind == TY_APP) {
+        Type spine = *t->as.app.fn;
+        if (call_ground_open_app_args_to_any(a, &spine)) {
+            Type *slot = (Type *)arena_alloc(a, sizeof(Type));
+            *slot = spine;
+            t->as.app.fn = slot;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 static bool call_collect_type_bindings(const Type *expected, Type actual,
                                        CallTypeBinding *bindings, uint8_t *n_bindings) {
     if (!expected) return true;
@@ -6228,14 +6278,44 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             expected_arg_kind != TY_ANY && expected_arg_kind != TY_TYVAR &&
             expected_arg_kind != TY_UNKNOWN) {
             Type want = type_from_kind(expected_arg_kind);
+            const Type *want_decl = NULL;
             if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
                 uint32_t fi = fn_binding->closure_fn_binding ? i + 1 : i;
                 Type *ct = (fi < fn_type.as.fn.arity)
                     ? fn_type.as.fn.arg_full_types[fi] : NULL;
-                if (ct) want = *ct;
+                if (ct) { want = *ct; want_decl = ct; }
             }
+            /* saffron-unannotated-param-container-cast-panics: ground the
+             * target's OPEN type arguments before checking against it.  See
+             * call_ground_open_app_args_to_any -- `(Vec A)` is a TY_APP, so the
+             * exemption above (which tests the KIND) never fired for it, and
+             * the seam checked against an instantiation nobody chose. */
+            bool grounded = call_ground_open_app_args_to_any(e->arena, &want);
             Expr *unboxed = elab_any_unbox_to(e, args[i], want, args[i]->span);
-            if (unboxed) { args[i] = unboxed; arg_ok = true; }
+            if (unboxed) {
+                args[i] = unboxed; arg_ok = true;
+                /* ...and the half that grounding ALONE does not buy.
+                 *
+                 * The tyvar bindings for this call were collected further up
+                 * this same iteration, from the argument's type BEFORE the
+                 * seam replaced it -- i.e. from `any`, which binds nothing.
+                 * So `A` stayed open, `call_result_type`'s bare-tyvar collapse
+                 * took the result down to the int64 carrier, and the return
+                 * position then widened the element's BOX POINTER into an
+                 * `any` instead of reading through it.  That is a WRONG ANSWER
+                 * (the program printed 94242104267456 for 7), which is why the
+                 * first attempt at this fix was reverted rather than shipped.
+                 *
+                 * Re-collect against the substituted argument so `A := any` is
+                 * recorded and the result types as `any`, which is what the
+                 * caller's Saffron context wants anyway.  Guarded on `grounded`
+                 * so a seam over an already-concrete target (`(Vec int)`) keeps
+                 * the bindings it had. */
+                if (grounded && want_decl)
+                    (void)call_collect_type_bindings(want_decl, args[i]->type,
+                                                     type_bindings,
+                                                     &n_type_bindings);
+            }
         }
         if (!arg_ok) {
             /* Phase 8: Enhanced type mismatch with error code */
