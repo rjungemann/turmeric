@@ -12,13 +12,20 @@
 ;; temp taking a carrier value is the third pair, and it bails before reaching
 ;; the branches rather than being handled by them.
 ;;
-;; requires.compiled: THE INTERPRETER STILL GETS THIS WRONG, and this fixture
-;; must not hide it.  Its map natives have no tag recovery at all --
-;; `native_map_get_eq` returns `turi_int` of the raw carrier word -- so both
-;; reads answer `int` there.  That is a different mechanism from the Vec case
-;; (which had a tag side table to widen); Map has none, so the fix is to store a
-;; boxed value rather than to add a table.  Filed as
-;; map-of-any-is-broken-on-both-back-ends.
+;; The INTERPRETER half is fixed too (2026-09-08), so this runs on both back
+;; ends and its `requires.compiled` marker is gone.  Its map natives had no tag
+;; recovery at all -- `native_map_get_eq` returned `turi_int` of the raw carrier
+;; word -- and the fix is the same shape the compiled path already used, which
+;; is why it is that one and not a side table: box the value and set bit 1 of
+;; the HAMT's `owned` flag, so the runtime owns the box and stamps `val_owned`
+;; on the map for a reader to consult.  A per-entry table (the Vec analogue)
+;; does not transfer -- the Vec table keys on the header pointer plus an ELEMENT
+;; INDEX, and a persistent trie exposes no stable index.
+;;
+;; The boxing is conditional: an int-valued map is byte-identical to before, and
+;; a map boxes from its first non-int value.  See
+;; tests/fixtures/map-any-value-upgrade for the case where that first non-int
+;; value arrives into an already-populated raw map.
 ;;
 ;; 7.1 rather than 7.0: a truncating path through the box would print 7.
 

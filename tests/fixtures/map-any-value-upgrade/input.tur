@@ -1,0 +1,37 @@
+;; map-of-any-is-broken-on-both-back-ends, the case the conditional boxing has
+;; to get right: a `(Map K any)` whose FIRST value is an int.
+;;
+;; The interpreter boxes a map's values only from its first non-int value, so an
+;; int-valued map stays byte-identical to before -- no box, no `val_owned`, the
+;; raw carrier inline.  That leaves one shape to handle: a map that has already
+;; stored raw int carriers and is then handed a string.  Boxing only the new
+;; value would leave the map HALF-boxed, and the next read of key 1 would
+;; dereference the integer 10 as a pointer.
+;;
+;; So the first non-int store rebuilds the map with every value boxed.  It runs
+;; at most once per map lineage (every later assoc sees `val_owned`), and it
+;; builds a NEW map -- `m1` below is persistent and may be held elsewhere, so it
+;; stays raw, readable, and is read here after the upgrade to prove it.
+;;
+;; `#map{:a 1 :b "two"}` in a Saffron file is exactly this shape, which is why
+;; it is pinned rather than left to the general fixture.
+;;
+;; 7.1 rather than 7.0: a truncating path through the box would print 7.
+
+(defn dyn [x : any] : any x)
+
+(defn main [] : int
+  (let [m (:: (map-new) (Map int any))]
+    (let [m1 (map-assoc m 1 (dyn 10))]
+      (let [m2 (map-assoc m1 2 (dyn "two"))]
+        (let [m3 (map-assoc m2 3 (dyn 7.1))]
+          (println (type-of (map-get m3 1)))
+          (println (type-of (map-get m3 2)))
+          (println (type-of (map-get m3 3)))
+          (println (cast (map-get m3 3) float))
+          (println (map-count m3))
+          (println (type-of (map-get m1 1)))
+          (map-free m3)
+          (map-free m2)
+          (map-free m1)))))
+  0)

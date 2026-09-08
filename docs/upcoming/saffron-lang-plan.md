@@ -1153,32 +1153,49 @@ behind a skip nobody reads.
 
 **Map and Set are now settled, and the answer changes S6's order.** Measured on
 both back ends
-([map-of-any-is-broken-on-both-back-ends](../reported/map-of-any-is-broken-on-both-back-ends.md)):
+([map-of-any-is-broken-on-both-back-ends](../archive/map-of-any-is-broken-on-both-back-ends.md)):
 
 | container | `--interpret` | compiled |
 |---|---|---|
 | `(Vec any)` | correct | correct |
-| `(Map int any)` | **`int` for every value** | **cc error** |
+| `(Map int any)` | ~~`int` for every value~~ **fixed** | ~~cc error~~ **fixed** |
 | `(Set any)` | clean diagnostic | clean diagnostic |
 
-Map is NOT Vec's problem again with a different table: it has no tag side table
-at all -- `native_map_get_eq` returns `turi_int` of the raw carrier word -- so
-there is nothing to extend. A homogeneous `(Map int float)` works because the
-tag comes from the STATIC element type, which is exactly what `any` does not
-have. The best direction is a boxed TuriValue as the HAMT value, matching what
-the compiled path already does for a `(Vec any)` element, so the two back ends
-agree by construction rather than by two mechanisms kept in lockstep.
+**Both Map halves are now fixed (2026-09-08).** Map was NOT Vec's problem again
+with a different table -- it had no tag side table at all, and the Vec analogue
+does not transfer (that table keys on an element INDEX a persistent trie does
+not expose). It was the same problem one step earlier: the TAG was dropped at
+the STORE.
 
-The compiled half is now fixed -- and it was small for a reason worth carrying
-forward: the STORE side was already right, because `repr_of` answers
-`REPR_BOXED_AGG` for an `any` at a container-element position and the HAMT assoc
-boxes accordingly. Only the read was missing its deref. So the container work
-has one shared decision (`repr_of` at `CONTAINER_ELEM`) and per-container read
-plumbing, which is the shape to expect for `#set{...}` and cons lists too.
+And the fix was much smaller than "it touches every map operation that reads a
+value" predicted, because **the HAMT already had the mechanism and the compiled
+path already used it**. `Hamt` carries a `val_owned` flag selected by bit 1 of
+the same `owned` word the `_eq_o` operations already thread (bit 0 = key,
+bit 1 = value); the runtime then retains the box on structural copy, releases it
+when the entry dies, and stamps `val_owned` on the result. So the persistence
+problem that ruled out a side table is solved by the trie itself, and a reader
+asks the map rather than a table. Five sites, all in `collections_native.c`.
 
-The INTERPRETER half of Map is still open, and it is the wrong-answer one.
-Asking early was the right call: it would otherwise have been found by a user
-writing `#map{:a 1 :b "two"}`.
+The boxing is CONDITIONAL -- an int-valued map is byte-identical to before, and
+a map boxes from its first non-int value -- which confined the change to the
+maps that were broken. The one shape that needed care is a map that has already
+stored raw int carriers and is then handed a string: boxing only the new value
+leaves it HALF-boxed, so the first non-int store rebuilds the map with every
+value boxed, once per lineage, into a new map that leaves the persistent
+original raw and readable. `#map{:a 1 :b "two"}` is exactly that shape;
+`tests/fixtures/map-any-value-upgrade` pins it.
+
+The compiled half was small for a reason worth carrying forward: the STORE side
+was already right, because `repr_of` answers `REPR_BOXED_AGG` for an `any` at a
+container-element position and the HAMT assoc boxes accordingly. Only the read
+was missing its deref. So the container work has one shared decision (`repr_of`
+at `CONTAINER_ELEM`) and per-container read plumbing, which is the shape to
+expect for `#set{...}` and cons lists too.
+
+Asking early was the right call twice over: the interpreter half was a SILENT
+wrong answer, and it would otherwise have been found by a user writing
+`#map{:a 1 :b "two"}` -- with the widen already landed, so the literal would
+have looked like the culprit.
 
 Still to do, and the ORDER is now measured rather than assumed:
 
@@ -1202,15 +1219,16 @@ Still to do, and the ORDER is now measured rather than assumed:
    widen is unconditional per file, so `[1 2 3]` is a `(Vec any)` too:
    `tests/fixtures/saffron-vector-literal-homogeneous` pushes a string into one
    and reads it back. Both fixtures leak-clean, both back ends agree.
-3. The interpreter's Map value tag (the open wrong answer). **This moved AHEAD
-   of `#map{...}` on measurement, not on preference.** `#map{:a 1 :b "two"}`
-   fails identically to the vector literal did (`tur-map-homog__` on the VALUE
-   side), so the same widen is the obvious next step -- but a `(Map K any)`
-   under `--interpret` reports `int` for every value, with no diagnostic. Doing
-   the widen first would make every Saffron map literal a silent wrong answer on
-   one back end. That is precisely the trap the Vec case set, and the reason
-   this report was filed to check Map and Set BEFORE the literal work rather
-   than after.
+3. ~~The interpreter's Map value tag~~ -- **DONE 2026-09-08.** It moved AHEAD of
+   `#map{...}` on measurement, not on preference: `#map{:a 1 :b "two"}` fails
+   identically to the vector literal did (`tur-map-homog__` on the VALUE side),
+   so the same widen was the obvious next step -- but a `(Map K any)` under
+   `--interpret` reported `int` for every value with no diagnostic, so doing the
+   widen first would have made every Saffron map literal a silent wrong answer
+   on one back end. That is precisely the trap the Vec case set, and the reason
+   the report was filed to check Map and Set BEFORE the literal work rather than
+   after. Sequencing it this way is what let the `#map{}` widen land next
+   against two agreeing back ends. [Archived](../archive/map-of-any-is-broken-on-both-back-ends.md).
 4. The `#map{...}` / `#set{...}` / cons-list twins, then the prelude. `#set{}`
    needs its own step first: a `(Set any)` refuses at elaboration
    (`set-add-eq-o` arg 2: expected int, got any) -- a clean failure, not a wrong
