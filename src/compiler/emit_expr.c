@@ -15594,64 +15594,41 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * integer is a conversion.
                              *
                              * Ask what the field substitutes to in THIS monomorph,
-                             * which is exactly what the layout asked.  The `TY_ANY`
-                             * arm below then reads the slot directly, as it already
-                             * does for a field DECLARED `:any`.
+                             * which is exactly what the layout asked, and let ONE
+                             * effective type drive the whole chain below.  Every
+                             * arm here is asking about the field's type; each one
+                             * that asked `fb->type` was asking the wrong question
+                             * for a monomorph, and each had its own symptom:
+                             *
+                             *   any     the TY_ANY arm did not fire -> a cast of
+                             *           an aggregate to an integer (C error).
+                             *   float   no arm fired -> the default arm's
+                             *           `(int64_t)` conversion, silently lossy.
+                             *   nested  the inline-aggregate arm did not fire ->
+                             *           int64_t against a `tur_adt_Box__float`
+                             *           slot (C error).
+                             *   wide    the by-value arms did not fire -> int64_t
+                             *           against a wide aggregate (C error).
+                             *
+                             * Four shapes, one question asked wrongly in four
+                             * places, so the fix is to ask it once.  A field whose
+                             * declared type is not a tyvar, or a scrutinee that is
+                             * not a monomorph app, keeps `fb->type` exactly as
+                             * before -- this can only refine an erased tyvar.
                              *
                              * The switch path carries the complementary leg
                              * (`!scrut_is_app_monomorph`, resolving a tyvar through
                              * the active spec); this is the monomorph one. */
-                            bool fb_subst_any = false;
+                            Type fb_eff = fb->type;
                             if (scrut_is_app_monomorph &&
                                 fb->type.kind == TY_TYVAR &&
                                 bi < pat->ctor->n_fields) {
                                 Type _sub = adt_field_type_for_app(
                                     &scrut_ty, &pat->ctor->fields[bi]);
-                                /* Scalars, cstr and `any` only.  For these the
-                                 * monomorph slot holds the substituted type
-                                 * INLINE and its C name is the honest binder
-                                 * type, so a direct read is right and the cast
-                                 * is what was wrong.  An aggregate or handle
-                                 * payload is left to the deref / box branches
-                                 * below, which already reason about how it is
-                                 * stored; retyping it here would fight them. */
-                                switch (_sub.kind) {
-                                    case TY_ANY:
-                                    case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
-                                    case TY_INT:   case TY_INT8:  case TY_INT16:
-                                    case TY_INT32: case TY_INT64:
-                                    case TY_UINT8: case TY_UINT16:
-                                    case TY_UINT32: case TY_UINT64:
-                                    case TY_BOOL:  case TY_CSTR:
-                                        fb_subst_any = true;
-                                        ctype = type_c_name(_sub);
-                                        break;
-                                    case TY_APP:
-                                        /* The nested case, `(Box (Box float))`.
-                                         * The substitution is itself a by-value
-                                         * monomorph, which a monomorph scrutinee
-                                         * stores INLINE as the aggregate -- the
-                                         * same fact the `nested-carrier-match`
-                                         * branch below already relies on, except
-                                         * that branch tests `fb->type` and so
-                                         * never fires for a declared tyvar.
-                                         * Without this the binder stayed
-                                         * `int64_t` against a
-                                         * `tur_adt_Box__float` slot:
-                                         * "incompatible types when initializing".
-                                         * Wide by-value and pointer-box payloads
-                                         * are excluded on the same conditions
-                                         * that branch uses, so they keep their
-                                         * deref. */
-                                        if (emit_type_is_byvalue_adt(ctx, _sub) &&
-                                            !emit_type_is_wide_byval_adt(ctx, _sub) &&
-                                            !match_field_is_ros_pointer_box(
-                                                ctx, pat->ctor, fb)) {
-                                            fb_subst_any = true;
-                                            ctype = emit_type_c_name(ctx, _sub);
-                                        }
-                                        break;
-                                    default: break;
+                                if (_sub.kind != TY_UNKNOWN &&
+                                    _sub.kind != TY_TYVAR) {
+                                    fb_eff = _sub;
+                                    ctype  = emit_type_c_name(ctx, _sub);
                                 }
                             }
                             char *bname = name_for_binding(ctx, fb);
@@ -15687,7 +15664,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             } else if (inline_byval) {
                                 buf_printf(body, "%s %s = __scrut%s%s;\n",
                                            ctype, bname, acc, mp);
-                            } else if (fb->type.kind == TY_ANY || fb_subst_any) {
+                            } else if (fb_eff.kind == TY_ANY) {
                                 /* saffron-lang-plan S5: an `:any` field's slot IS
                                  * the two-word box, so it is read directly.  The
                                  * default arm's `(ctype)` cast is a scalar cast
@@ -15696,8 +15673,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                  * inline-by-value arm above, for the same reason. */
                                 buf_printf(body, "%s %s = __scrut%s%s;\n",
                                            ctype, bname, acc, mp);
-                            } else if (emit_type_is_byval_recursive_carrier(ctx, fb->type) ||
-                                       (emit_type_is_wide_byval_adt(ctx, fb->type) &&
+                            } else if (emit_type_is_byval_recursive_carrier(ctx, fb_eff) ||
+                                       (emit_type_is_wide_byval_adt(ctx, fb_eff) &&
                                         strcmp(ctype, "int64_t") == 0)) {
                                 /* B4: read the int64 carrier raw (no deref).
                                  * slice 1 (<=8): the slot holds the by-value
@@ -15711,9 +15688,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                  * and is materialized at the boundary. */
                                 buf_printf(body, "%s %s = (%s)__scrut%s%s;\n",
                                            ctype, bname, ctype, acc, mp);
-                            } else if (emit_type_is_byvalue_adt(ctx, fb->type)) {
+                            } else if (emit_type_is_byvalue_adt(ctx, fb_eff)) {
                                 if (scrut_is_app_monomorph &&
-                                    !emit_type_is_wide_byval_adt(ctx, fb->type) &&
+                                    !emit_type_is_wide_byval_adt(ctx, fb_eff) &&
                                     !match_field_is_ros_pointer_box(ctx, pat->ctor, fb)) {
                                     /* nested-carrier-match: in a monomorph-app
                                      * scrutinee a non-wide by-value ADT field
@@ -15744,7 +15721,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                     buf_printf(body, "%s %s = __scrut%s%s;\n",
                                                ctype, bname, acc, mp);
                                 } else if (type_struct_pass_by_ptr(
-                                               emit_resolve_type(ctx, fb->type))) {
+                                               emit_resolve_type(ctx, fb_eff))) {
                                     /* SR4 traversal profile: BORROW the box, do not
                                      * copy the node out of it.  The slot holds a
                                      * heap-box pointer to a WIDE by-value aggregate

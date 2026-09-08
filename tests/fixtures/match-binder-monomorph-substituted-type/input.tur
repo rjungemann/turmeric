@@ -36,15 +36,30 @@
 ;;          'tur_adt_Box__float'
 ;;
 ;; Loud, so lower severity than the float truncation, and the same mistake.
-;; Wide by-value and pointer-box payloads are excluded on the same conditions
-;; that branch uses, so they keep their deref.
+;;
+;; A FOURTH shape, from continuing the same sweep: a WIDE by-value aggregate
+;; substitution (`(Box Wide)`, four float fields), whose slot holds a heap-box
+;; POINTER rather than the aggregate inline.  Same symptom class again --
+;; int64_t against `tur_adt_Wide`.
+;;
+;; Four shapes, one question asked wrongly in four places: every arm of the
+;; binder chain asks about the field's type, and each asked the DECLARED one.
+;; They now share a single effective type, which is why this fixture exercises
+;; all four rather than the one that was filed.
+;;
+;; The wide case sums 1.5 + 2.25 + 0.5 + 3.1 deliberately: the obvious
+;; 1.5 + 2.25 + 0.5 + 3.75 is 8.0 exactly, which prints as "8" and so cannot
+;; tell a working float from a truncated one -- the same trap the fractional
+;; literals above avoid.
 
 (defdata Box [a] (MkBox a))
 (defdata Pair2 [a b] (MkP a b))
+(defdata Wide (MkW :float :float :float :float))
 
 (defn ub [A] [b : (Box A)] : A (match b (MkBox x) x))
 (defn fst [A B] [p : (Pair2 A B)] : A (match p (MkP x _) x))
 (defn snd [A B] [p : (Pair2 A B)] : B (match p (MkP _ y) y))
+(defn wsum [w : Wide] : float (match w (MkW a b c d) (+ (+ a b) (+ c d))))
 
 (defn main [] : int
   ;; the silent case: floats must keep their fractional part
@@ -63,4 +78,6 @@
   (println (snd (:: (MkP (:: 1.5 any) 7) (Pair2 any int))))
   ;; a substitution that is itself a by-value monomorph
   (println (ub (ub (:: (MkBox (:: (MkBox 6.75) (Box float))) (Box (Box float))))))
+  ;; a WIDE by-value substitution -- the slot holds a heap-box pointer
+  (println (wsum (ub (:: (MkBox (MkW 1.5 2.25 0.5 3.1)) (Box Wide)))))
   0)

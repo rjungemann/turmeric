@@ -28,17 +28,29 @@ conversion, so this compiled and returned the wrong number -- 3.25 -> 3,
 7.9 -> 7, 0.5 -> 0, -2.75 -> -2. No diagnostic, no crash, and no Saffron
 anywhere near it. An integer-valued float would have hidden it completely.
 
-**A THIRD shape** turned up in a sweep for the same pattern afterwards and was
-fixed in a follow-up: a substitution that is itself a by-value monomorph,
-`(Box (Box float))`. A monomorph scrutinee stores that INLINE as the aggregate
--- which the `nested-carrier-match` branch already knew, except it tests the
-DECLARED type and so never fired for a tyvar. The binder stayed `int64_t`
-against a `tur_adt_Box__float` slot ("incompatible types when initializing").
-Loud, so lower severity than the float truncation, and the same mistake.
-Verified pre-existing against a worktree built at the parent commit.
+**FOUR SHAPES IN THE END.** Sweeping for the same pattern turned up two more,
+and the second made it clear the fix should be general rather than a list of
+admitted kinds:
 
-The fix is scoped to a field whose DECLARED type is a tyvar and whose
-substitution lands on a scalar, cstr, `any`, or a non-wide by-value monomorph -- the cases where the monomorph
+| substitution | symptom |
+| --- | --- |
+| `any` | TY_ANY arm did not fire -> aggregate cast to an integer (C error) -- the filed one |
+| `float` | no arm fired -> the default `(int64_t)` conversion, **silently lossy** |
+| `(Box float)` | inline-aggregate arm did not fire -> int64_t against `tur_adt_Box__float` (C error) |
+| wide by-value | by-value arms did not fire -> int64_t against a wide aggregate (C error) |
+
+Every arm of the binder chain asks about the field's type, and every one of
+them asked the DECLARED one. That is one question asked wrongly in four
+places, so the fix is to ask it once: a single effective field type, resolved
+through `adt_field_type_for_app` when the scrutinee is a monomorph app and the
+declared type is a tyvar, drives the whole chain. A non-tyvar field or a
+non-monomorph scrutinee keeps `fb->type` exactly as before, so this can only
+refine an erased tyvar.
+
+Both extra shapes were verified pre-existing against a worktree built at the
+parent commit -- not assumed. (An earlier check of this was invalid: `git
+stash` was a no-op because the fix was already committed, so it silently
+re-ran the fixed binary. The worktree is what settled it.) -- the cases where the monomorph
 slot holds that type inline, so the honest binder type is its own and the cast
 was the error. Aggregate and handle payloads are left to the deref and box
 branches that already reason about how they are stored.
