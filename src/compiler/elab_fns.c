@@ -8160,7 +8160,32 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * existing return-position coercion rather than a second one written here. */
     if (return_kind == TY_NIL && !return_annotated && body &&
         body->type.kind != TY_NEVER && lang_span_is_saffron(call->span)) {
-        return_kind = TY_ANY;
+        /* saffron-lang-plan open question 3: `main` is the ONE unannotated
+         * Saffron function that does not default to `any`.
+         *
+         * `(defn main [] : int ... 0)` is awkward in a file with no annotations,
+         * so a Saffron `main` should be writable without one -- but the default
+         * makes it `: any`, and the emitted C then has `return TUR_TAG(...)` in
+         * a function declared `int`: "incompatible types when returning type
+         * 'tur_tagged_t' but 'int' was expected", a cc error with no Turmeric
+         * diagnostic in front of it.  Every Saffron fixture wrote `: int` to
+         * step around that, which is exactly the annotation the dialect exists
+         * to remove.
+         *
+         * `:int` rather than the plan's `:nil`, because it keeps `main`'s
+         * meaning identical in both dialects -- an explicit exit code still
+         * works, and the process-exit convention does not fork per `#lang`.
+         * A body that yields something else is then an ordinary return-type
+         * error against `int`, pointing at the body rather than at cc.
+         *
+         * Only the ZERO-arity `main`; an `argc`/`argv`-shaped one keeps whatever
+         * the general rule gives it. */
+        if (name_f && name_f->tag == F_SYM &&
+            strcmp(name_f->as.sym->name, "main") == 0 && n_params == 0) {
+            return_kind = TY_INT;
+        } else {
+            return_kind = TY_ANY;
+        }
     }
 
     /* TY2.2: return-position widening to `any`.  A function declared `: any`

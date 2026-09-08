@@ -9547,6 +9547,38 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 char *raw = emit_value(ctx, body, emit_arg);
                 ctx->sum_drop_admit = admit_prev;
+                /* saffron-lang-plan S6: an `any` argument that arrives as the
+                 * int64 CARRIER, handed to a parameter declared `any`.
+                 *
+                 * `(describe (vec-get v 0))` where `describe` takes `: any` and
+                 * `v` is a `(Vec any)`: the element is stored boxed, so the
+                 * generic accessor hands its result back as the slot word, and
+                 * the call emitted `describe(<int64_t>)` against a
+                 * `tur_tagged_t` parameter -- "incompatible type for argument 1",
+                 * a cc error rather than a wrong answer.  The interpreter is
+                 * fine, so this is codegen only.
+                 *
+                 * Same straddle the `any` READERS (`type-of`, `any-is?`,
+                 * `cast`) already bridge with this helper, one position over: it
+                 * is a container element reaching a CALLEE rather than a
+                 * builtin.  Passing a container element to a dynamic function is
+                 * the most ordinary thing a Saffron program does, so the reader
+                 * fix alone left the common case broken.
+                 *
+                 * Gated on the DECLARED parameter kind, not just the argument's
+                 * type: a callee whose parameter is a tyvar takes the int64
+                 * carrier on purpose, and handing it the aggregate there is the
+                 * same mismatch in the other direction.  The helper itself is
+                 * keyed on the value's recorded emitted spelling, so a value
+                 * that already IS the aggregate -- a widen, a parameter, a
+                 * let-bound `any` -- is untouched. */
+                if (fn_binding && fn_binding->type.kind == TY_FN &&
+                    fn_binding->type.as.fn.arity > 0) {
+                    uint8_t _np = fn_binding->type.as.fn.arity;
+                    uint8_t _pi = (i < _np) ? (uint8_t)i : (uint8_t)(_np - 1);
+                    if (fn_binding->type.as.fn.arg_kinds[_pi] == TY_ANY)
+                        raw = emit_any_from_carrier(ctx, body, raw, emit_arg);
+                }
                 /* container-element-form-plan CE1/CE2 (store half): is this
                  * argument a Vec ELEMENT STORE whose slot form is CE_WORD for
                  * a niche element?  Then the bridges below hand the slot the

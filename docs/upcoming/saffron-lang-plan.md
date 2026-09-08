@@ -1363,10 +1363,18 @@ beyond "the typed one needs annotations".
 2. **`.saf` extension** -- worth it, but not before the semantics settle;
    sequencing it early means every tool learns a file type whose meaning is
    still moving.
-3. **Does Saffron get its own `main` convention?** `(defn main [] : int ...)`
-   is awkward in a file with no annotations. A Saffron `main` returning `nil`
-   and exiting 0 is the obvious answer and costs almost nothing; deferred to
-   S6 so it lands with the prelude.
+3. ~~**Does Saffron get its own `main` convention?**~~ **ANSWERED 2026-09-08,
+   and the answer is `:int`, not the proposed `:nil`.** An unannotated Saffron
+   `main` defaulted to `: any` like every other function, and the emitted C then
+   had `return TUR_TAG(...)` inside a function declared `int` -- a cc error with
+   no Turmeric diagnostic in front of it. Every Saffron fixture wrote `: int` on
+   `main` to step around it, which is exactly the annotation the dialect exists
+   to remove. `:int` keeps `main`'s meaning identical in both dialects: an
+   explicit exit code still works, the process-exit convention does not fork per
+   `#lang`, and a body yielding something else is an ordinary return-type error
+   pointing at the body rather than at cc. Only the zero-arity `main`.
+   `tests/fixtures/saffron-unannotated-main` is the first fixture with no type
+   annotation anywhere.
 4. **REPL default dialect.** `tur repl` is the surface where a dynamic dialect
    is most valuable and where changing the default is most disruptive. Propose
    `--lang saffron` opt-in at S8; revisit after there is usage.
