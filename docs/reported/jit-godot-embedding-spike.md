@@ -53,8 +53,46 @@
 >   question (spike question 2) is untouched, and J5 in
 >   [godot-binding-refresh-plan.md](../upcoming/godot-binding-refresh-plan.md)
 >   records that MIR's interpreter tier is *not* an escape hatch there.
-> - Says nothing about question 4 (can the on-disk cache go) -- no compile time
->   was measured for a representative script.
+> ### Question 4 answered too: the cache is not needed on this route
+>
+> The spike says question 4 "turns entirely on" measured compile time, so it was
+> measured. Windows, Release `-DTUR_JIT=ON` build, warm:
+>
+> | | JIT (`tur jit`) | cc path (`tur build`) | cc + `--runtime=split` |
+> | --- | --- | --- | --- |
+> | 6-line program | **103 ms** | 1378 ms | 1208 ms |
+>
+> Roughly **13x**, and that understates it: the shim's AOT path adds staging --
+> creating the cache tree, writing `build.tur` and the source -- plus a
+> **subprocess spawn**, which CLAUDE.md records as costing about 50x more on
+> Windows than on Linux. The 1378 ms is `tur build` invoked directly, with none
+> of that.
+>
+> The more useful number is how it scales, because a Godot script is not six
+> lines:
+>
+> | program | lines | JIT total |
+> | --- | --- | --- |
+> | `bench` | 6 | 103 ms |
+> | `structural-eq` | 438 | 95.5 ms |
+> | `hkt-stdlib-suite` | 722 | 96.5 ms |
+>
+> Essentially **flat**. c2mir is 84% of the time (86 ms of 103) and the runtime
+> preamble is the bulk of what it parses, so compile cost is dominated by a
+> fixed cost rather than by the script. A 722-line program is not measurably
+> dearer than a 6-line one.
+>
+> At ~100 ms per load the on-disk cache stops earning its keep: that is below
+> perceptible for a script load, and comparable to what the cache's own hash,
+> stat and `dlopen` would cost. Deleting `aot_cache.cpp`'s staging, hashing and
+> subprocess machinery would remove a great deal of surface area, including all
+> of its platform-specific parts -- which is what the spike hoped for.
+>
+> **Caveat that keeps this from being a licence to delete:** iOS cannot JIT and
+> Web has no JIT, and per J4 in the refresh plan those platforms cannot use the
+> `dlopen`-based AOT path either -- their fallback is the interpreter. So the
+> cache is a desktop-scoped question, and "when is it bypassed" remains a better
+> framing than "delete it".
 >
 > ### Method note
 >
