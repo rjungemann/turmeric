@@ -1244,7 +1244,21 @@ Still to do, and the ORDER is now measured rather than assumed:
      Map cases had does not arise. Widening WOULD break it (`(Set any)` refuses
      for want of `Hash[any]`). `tests/fixtures/saffron-set-literal` pins the
      no-change decision.
-5. Cons lists, then the prelude.
+5. ~~Cons lists~~ -- **DONE 2026-09-08.** `(list 1 "two" 7.1)` hit the third of
+   the three homogeneity checks (`tur-list-homog__`) and takes the same widen.
+   It is a CALL rather than a reader literal, so the hook is in `elab_form`'s
+   F_LIST case rather than beside the data literals.
+
+   One difference from Vec and Map, recorded because it changes which idiom to
+   reach for: `Cons` is `(defstruct Cons :heap [A] (head A) (tail :int))`, so
+   the TAIL is an erased carrier. `.tail` hands back an `:int` and the element
+   type is gone one step in; `(:: (.tail l) (Cons any))` recovers it and the
+   next `.head` reads its own tag. So the widen makes a Saffron cons list
+   heterogeneous, but WALKING one still costs an ascription per step -- which is
+   why a `defdata` with `any` in both slots (what `saffron-higher-order` uses)
+   stays the better idiom for a list you actually walk.
+   `tests/fixtures/saffron-cons-list`.
+6. The prelude.
 
 ### S6 -- containers and the Saffron prelude (medium) -- remaining scope
 

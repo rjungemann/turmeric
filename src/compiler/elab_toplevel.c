@@ -768,6 +768,42 @@ Expr *elab_form(Elab *e, Form *f) {
                 diag_emit(DIAG_ERROR, f->span, "empty list ()");
                 return NULL;
             }
+            /* saffron-lang-plan S6 (G7): the cons-list twin of the `[...]` and
+             * `#map{...}` widens.  `(list 1 "two" 7.1)` is
+             * "function 'tur-list-homog__' arg 2: expected tyvar, got cstr" --
+             * the same wall, from the third of the three homogeneity checks --
+             * so each element is widened to `any` before the `list` macro runs.
+             *
+             * This one is a CALL rather than a reader literal, so the widen
+             * hooks here instead of beside the data literals; the resulting
+             * form goes through the ordinary macro path unchanged.
+             *
+             * The `scope_lookup` guard is belt-and-braces, not the thing that
+             * preserves user shadowing: measured, a `(let [list f] (list 3 4))`
+             * still reaches the `list` MACRO in plain Turmeric too -- macros
+             * win over a same-named binding there already -- so declining here
+             * changes nothing today.  It is kept so this widen is not the
+             * reason a future fix to that ordering fails to take effect.
+             *
+             * Unlike Vec and Map, a widened cons list is only walkable through
+             * an ascription: `Cons` is `(defstruct Cons :heap [A] (head A)
+             * (tail :int))`, so the TAIL is an erased carrier and `.tail`
+             * hands back an `:int`.  `(:: (.tail l) (Cons any))` recovers it and
+             * the next `.head` reads its own tag -- pinned by
+             * tests/fixtures/saffron-cons-list.  A `defdata` with `any` in BOTH
+             * slots (what tests/fixtures/saffron-higher-order uses) needs no
+             * ascription and stays the better idiom for a list you walk. */
+            if (lang_span_is_saffron(f->span) && f->as.list.len > 1 &&
+                f->as.list.items[0]->tag == F_SYM &&
+                strcmp(f->as.list.items[0]->as.sym->name, "list") == 0 &&
+                !scope_lookup(e->scope, f->as.list.items[0]->as.sym)) {
+                uint32_t n = f->as.list.len;
+                Form **items = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+                items[0] = f->as.list.items[0];
+                for (uint32_t i = 1; i < n; i++)
+                    items[i] = dl_saffron_widen_elem(e, f->as.list.items[i]);
+                f = form_list(e->arena, f->span, items, n);
+            }
             return elab_call(e, f);
         case F_TYPE_ANN:
             diag_emit(DIAG_ERROR, f->span,
