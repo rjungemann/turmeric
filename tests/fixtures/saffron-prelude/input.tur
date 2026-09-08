@@ -21,8 +21,10 @@
 ;; to, so the file says what it is instead of two call sites remembering.
 ;;
 ;; Writing it is what found the fourth and fifth `any`-carrier straddles (a
-;; `let` binding and a fat-closure `any` slot) -- see
-;; docs/reported/any-carrier-straddle-is-bridged-per-consumer.md.
+;; `let` binding and a fat-closure `any` slot), and finding two in one function
+;; is what made the case for a chokepoint over a sixth bridge.  The value is now
+;; normalised once at PRODUCTION and all six consumer bridges are gone -- see
+;; docs/archive/any-carrier-straddle-is-bridged-per-consumer.md.
 ;;
 ;; requires.leak-check.  Each of these returns a fresh vector the caller owns,
 ;; and every INPUT vector is bound and freed too -- which is the point of

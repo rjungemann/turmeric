@@ -3159,27 +3159,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * word; a niche-returning Turmeric function is already the payload. */
             bool init_niche_from_carrier =
                 init_val_recorded_i64 && adt_app_is_niche_option(init_ty_r);
-            /* saffron-lang-plan S6: the same shape one type up.  A `(Vec any)`
-             * element is stored boxed, so the generic accessor hands its result
-             * back as the boxed slot's carrier WORD while its static type is
-             * `any` -- and `(let [x (vec-get v i)] ...)` then emitted
-             * `tur_tagged_t x = <int64_t>;`, "invalid initializer".  Keyed on
-             * the RECORDED emitted spelling exactly as the niche arm above is,
-             * so a producer that already handed back the aggregate (a widen, a
-             * parameter, another `any` local) is untouched.
-             * See docs/reported/any-carrier-straddle-is-bridged-per-consumer.md
-             * for why this is a fourth consumer-side bridge and not the
-             * production-side normalisation that would subsume them. */
-            bool init_any_from_carrier =
-                init_val_recorded_i64 &&
-                (init_ty_r.kind == TY_ANY || init_ty_r.kind == TY_UNION);
-            if (init_any_from_carrier) {
-                char *bridged = emit_carrier_bridge(ctx, body, iv,
-                                    CK_CARRIER, CK_CONCRETE, init_ty_r);
-                indent_buf(body, ctx->indent);
-                buf_printf(body, "%s %s = %s;\n", bind_c, bn, bridged);
-                iv = bridged;  /* emit_carrier_bridge freed the old iv */
-            } else if (init_niche_from_carrier) {
+            if (init_niche_from_carrier) {
                 char *bridged = emit_carrier_bridge(ctx, body, iv,
                                     CK_CARRIER, CK_CONCRETE, init_ty_r);
                 indent_buf(body, ctx->indent);
@@ -3596,27 +3576,7 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * word; a niche-returning Turmeric function is already the payload. */
             bool init_niche_from_carrier =
                 init_val_recorded_i64 && adt_app_is_niche_option(init_ty_r);
-            /* saffron-lang-plan S6: the same shape one type up.  A `(Vec any)`
-             * element is stored boxed, so the generic accessor hands its result
-             * back as the boxed slot's carrier WORD while its static type is
-             * `any` -- and `(let [x (vec-get v i)] ...)` then emitted
-             * `tur_tagged_t x = <int64_t>;`, "invalid initializer".  Keyed on
-             * the RECORDED emitted spelling exactly as the niche arm above is,
-             * so a producer that already handed back the aggregate (a widen, a
-             * parameter, another `any` local) is untouched.
-             * See docs/reported/any-carrier-straddle-is-bridged-per-consumer.md
-             * for why this is a fourth consumer-side bridge and not the
-             * production-side normalisation that would subsume them. */
-            bool init_any_from_carrier =
-                init_val_recorded_i64 &&
-                (init_ty_r.kind == TY_ANY || init_ty_r.kind == TY_UNION);
-            if (init_any_from_carrier) {
-                char *bridged = emit_carrier_bridge(ctx, body, iv,
-                                    CK_CARRIER, CK_CONCRETE, init_ty_r);
-                indent_buf(body, ctx->indent);
-                buf_printf(body, "%s %s = %s;\n", bind_c, bn, bridged);
-                iv = bridged;  /* emit_carrier_bridge freed the old iv */
-            } else if (init_niche_from_carrier) {
+            if (init_niche_from_carrier) {
                 char *bridged = emit_carrier_bridge(ctx, body, iv,
                                     CK_CARRIER, CK_CONCRETE, init_ty_r);
                 indent_buf(body, ctx->indent);
@@ -5240,6 +5200,8 @@ static bool emit_call_is_region_scope(const Expr *e) {
     return emit_binding_is_region_scope(e->as.call_.fn_binding);
 }
 
+static char *emit_any_from_carrier(EmitCtx *ctx, Buf *body, char *v,
+                                   const Expr *inner);   /* defined below */
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* G3 general catch-unwind splitter: a registered hole emits its C temp name
      * verbatim (the suspended sub-expression's already-delivered value). */
@@ -5776,6 +5738,36 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         else
             buf_printf(body, "tur_region_pop(__tur_rgn_%d);\n", rgn_id);
     }
+    /* any-carrier-straddle-is-bridged-per-consumer: NORMALISE AT PRODUCTION.
+     *
+     * A call whose static result type is `any` but whose C return is the int64
+     * carrier -- a `(Vec any)` element, which is stored boxed, so the generic
+     * accessor hands back the slot word -- used to reach every consumer as an
+     * `int64_t` local.  Each consumer that wants a real `tur_tagged_t` was then
+     * a hard cc error until taught to bridge, and five were taught one at a
+     * time over two days: the `any` readers, an argument to an `any` parameter,
+     * the dynamic-node operands, a `let` binding declared `any`, and an `any`
+     * slot of a fat-closure dispatch.  Nothing enumerated the rest.
+     *
+     * Bridging HERE subsumes all five, and the measurement that unblocked it is
+     * worth keeping: the report claimed this was blocked because the hoist
+     * declares its temp `__auto_type`, which the emitter uses precisely when it
+     * cannot derive the type.  That was inferred from the comment, not measured.
+     * Swept over the fixture corpus, every `any`-typed call hoist takes the
+     * `ret_ct` arm -- 333 of 333, none `__auto_type` -- of which 243 are already
+     * `tur_tagged_t` (nothing to do) and 90 are the `int64_t` straddle.
+     *
+     * Placed at the very END so everything between the hoist and here still
+     * sees the carrier temp: the region note in particular can only note a
+     * WORD, and handing it the aggregate would silently drop the runtime half
+     * of the region lock. */
+    {
+        Type rt = emit_resolve_type(ctx, e->type);
+        if (rt.kind == TY_ANY || rt.kind == TY_UNION) {
+            char *bridged = emit_any_from_carrier(ctx, body, strdup(tmp), e);
+            if (bridged) return bridged;
+        }
+    }
     return strdup(tmp);
 }
 
@@ -6030,31 +6022,6 @@ static void ce0_trace_elem_read(EmitCtx *ctx, const Expr *e,
  * a lowering that guesses.  Emitting the STATIC operator instead would be a
  * miscompile, not a missing feature: the operands are two-word boxes, so `+`
  * over them would add tag words. */
-/* saffron-lang-plan S6: emit one operand of a dynamic node, normalised.
- *
- * The three dynamic nodes all want a real `tur_tagged_t`, and an operand whose
- * static type is already `any` gets NO widen from `elab_coerce_to_any` -- so a
- * `(Vec any)` element, which the generic accessor hands back as the boxed
- * slot's carrier word, reached `__tur_dyn_truthy(<int64_t>)` and the arith /
- * compare helpers the same way.  A hard cc error, not a wrong answer, and the
- * interpreter is unaffected.
- *
- * Same straddle as the `any` READERS and the `any`-parameter argument site,
- * which use this helper too; it is a no-op for an operand that already IS the
- * aggregate, so a widen, a parameter and a let-bound `any` keep their text.
- *
- * All three positions bridge at the CONSUMER.  The general fix is to normalise
- * once at PRODUCTION -- a call whose static result is `any` but whose emitted
- * local is `int64_t` -- which would subsume all of them; recorded in
- * docs/reported/any-carrier-straddle-is-bridged-per-consumer.md rather than
- * done here, because the carrier direction has consumers of its own. */
-static char *emit_any_from_carrier(EmitCtx *ctx, Buf *body, char *v,
-                                   const Expr *inner);   /* defined below */
-static char *emit_dyn_operand(EmitCtx *ctx, Buf *body, const Expr *a) {
-    char *v = emit_value(ctx, body, a);
-    return emit_any_from_carrier(ctx, body, v, a);
-}
-
 static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
     ensure_saffron_dyn_runtime(ctx);
     const char *opn = (e->as.dyn_op_.op && e->as.dyn_op_.op->name)
@@ -6093,7 +6060,7 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
      * truthiness and the result re-boxed, since the node's type is `any`. */
     if ((is_and || is_or) && n >= 1) {
         char *tmp = fresh_tmp(ctx);
-        char *first = emit_dyn_operand(ctx, body, args[0]);
+        char *first = emit_value(ctx, body, args[0]);
         indent_buf(body, ctx->indent);
         buf_printf(body, "int %s = __tur_dyn_truthy(%s);\n", tmp, first);
         free(first);
@@ -6101,7 +6068,7 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
             indent_buf(body, ctx->indent);
             buf_printf(body, "if (%s%s) {\n", is_or ? "!" : "", tmp);
             ctx->indent += 4;
-            char *next = emit_dyn_operand(ctx, body, args[i]);
+            char *next = emit_value(ctx, body, args[i]);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = __tur_dyn_truthy(%s);\n", tmp, next);
             free(next);
@@ -6123,7 +6090,7 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
      * C-level `if`, so re-boxing the answer would only make the consumer unbox
      * it again. */
     if (strcmp(opn, SAFFRON_TRUTHY_OP) == 0 && n == 1) {
-        char *a = emit_dyn_operand(ctx, body, args[0]);
+        char *a = emit_value(ctx, body, args[0]);
         Buf out; buf_init(&out);
         buf_printf(&out, "__tur_dyn_truthy(%s)", a);
         buf_putc(&out, '\0');
@@ -6134,7 +6101,7 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
 
     if (n == 1 && (strcmp(opn, "println") == 0 || strcmp(opn, "not") == 0)) {
-        char *a = emit_dyn_operand(ctx, body, args[0]);
+        char *a = emit_value(ctx, body, args[0]);
         Buf out; buf_init(&out);
         buf_printf(&out, "__tur_dyn_%s(%s)",
                    opn[0] == 'p' ? "println" : "not", a);
@@ -6149,9 +6116,9 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
      * `(a + b) + c`, so the dynamic form nests the same way and a mixed
      * int/float chain promotes at the same points the static one would. */
     if (is_arith && n >= 2) {
-        char *acc = emit_dyn_operand(ctx, body, args[0]);
+        char *acc = emit_value(ctx, body, args[0]);
         for (uint32_t i = 1; i < n; i++) {
-            char *rhs = emit_dyn_operand(ctx, body, args[i]);
+            char *rhs = emit_value(ctx, body, args[i]);
             Buf out; buf_init(&out);
             buf_printf(&out, "__tur_dyn_arith(%d, %s, %s)", opcode, acc, rhs);
             buf_putc(&out, '\0');
@@ -6163,8 +6130,8 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
 
     if (is_cmp && n == 2) {
-        char *a = emit_dyn_operand(ctx, body, args[0]);
-        char *b = emit_dyn_operand(ctx, body, args[1]);
+        char *a = emit_value(ctx, body, args[0]);
+        char *b = emit_value(ctx, body, args[1]);
         Buf out; buf_init(&out);
         buf_printf(&out, "__tur_dyn_cmp(%d, %s, %s)", opcode, a, b);
         buf_putc(&out, '\0');
@@ -6225,10 +6192,10 @@ static char *emit_dyn_call(EmitCtx *ctx, Buf *body, const Expr *e) {
     for (uint32_t i = 0; i < n; i++) want.as.fn.arg_kinds[i] = (uint8_t)TY_ANY;
     int64_t want_id = emit_any_type_id(ctx, want);
 
-    char *fnv = emit_dyn_operand(ctx, body, e->as.dyn_call_.fn);
+    char *fnv = emit_value(ctx, body, e->as.dyn_call_.fn);
     char **argv = n ? (char **)calloc(n, sizeof(char *)) : NULL;
     for (uint32_t i = 0; i < n; i++)
-        argv[i] = emit_dyn_operand(ctx, body, e->as.dyn_call_.args[i]);
+        argv[i] = emit_value(ctx, body, e->as.dyn_call_.args[i]);
 
     /* A statement expression, not a nested call: the callee box is read three
      * times (check, thunk, env) and evaluating its expression three times would
@@ -6314,7 +6281,7 @@ static char *emit_dyn_field(EmitCtx *ctx, Buf *body, const Expr *e) {
     const Expr **items = ctx ? flatten_program_items(ctx->program_root, &n_items)
                              : NULL;
 
-    char *obj = emit_dyn_operand(ctx, body, e->as.dyn_field_.obj);
+    char *obj = emit_value(ctx, body, e->as.dyn_field_.obj);
     char *ov  = fresh_tmp(ctx);
     char *rv  = fresh_tmp(ctx);
     indent_buf(body, ctx->indent);
@@ -6745,8 +6712,6 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_ANY_TYPE_OF: {
             /* IT4: (type-of x) — return cstr type name via __tur_any_type_name(tag) */
             char *inner = emit_value(ctx, body, e->as.any_type_of_.value);
-            inner = emit_any_from_carrier(ctx, body, inner,
-                                          e->as.any_type_of_.value);
             Buf out; buf_init(&out);
             buf_printf(&out, "__tur_any_type_name(TUR_GETTAG(%s))", inner);
             buf_putc(&out, '\0');
@@ -6758,7 +6723,6 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_ANY_IS: {
             /* TY3: (is? x T) — compare the box tag to the tested TypeKind. */
             char *inner = emit_value(ctx, body, e->as.any_is_.value);
-            inner = emit_any_from_carrier(ctx, body, inner, e->as.any_is_.value);
             Buf out; buf_init(&out);
             /* type-of-cast-kind-granularity: the same per-monomorph id the
              * inject site allocated, when the target was a named type. */
@@ -6778,7 +6742,6 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the target TypeKind; tur_panic on mismatch, otherwise unbox.
              * TY2.2: a struct target unboxes by dereferencing the heap pointer. */
             char *inner = emit_value(ctx, body, e->as.any_cast_.value);
-            inner = emit_any_from_carrier(ctx, body, inner, e->as.any_cast_.value);
             /* type-of-cast-kind-granularity: `e->type` IS the named target
              * type, so the cast checks per-monomorph identity -- casting an
              * `any` holding a Point to OtherStruct now panics instead of
@@ -7465,15 +7428,6 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(&out, ", %s", fn_ptr_val);
                         for (uint32_t i = 0; i < n; i++) {
                             char *av = emit_value(ctx, body, e->as.call_.args[i]);
-                            /* saffron-lang-plan S6: a `(Vec any)` element
-                             * reaching an `any` SLOT of a fat closure arrives
-                             * as the boxed slot's carrier word -- the fifth
-                             * consumer needing this bridge.  See
-                             * docs/reported/any-carrier-straddle-is-bridged-per-consumer.md. */
-                            if (arg_slot_ty[i].kind == TY_ANY ||
-                                arg_slot_ty[i].kind == TY_UNION)
-                                av = emit_any_from_carrier(ctx, body, av,
-                                                           e->as.call_.args[i]);
                             if (slot_is_wide[i])
                                 av = fat_dispatch_box_arg(ctx, body,
                                     e->as.call_.args[i], arg_slot_ty[i], av);
@@ -7510,15 +7464,6 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                    fn_ptr_val, fn_ptr_val);
                         for (uint32_t i = 0; i < n; i++) {
                             char *av = emit_value(ctx, body, e->as.call_.args[i]);
-                            /* saffron-lang-plan S6: a `(Vec any)` element
-                             * reaching an `any` SLOT of a fat closure arrives
-                             * as the boxed slot's carrier word -- the fifth
-                             * consumer needing this bridge.  See
-                             * docs/reported/any-carrier-straddle-is-bridged-per-consumer.md. */
-                            if (arg_slot_ty[i].kind == TY_ANY ||
-                                arg_slot_ty[i].kind == TY_UNION)
-                                av = emit_any_from_carrier(ctx, body, av,
-                                                           e->as.call_.args[i]);
                             if (slot_is_wide[i]) {
                                 av = fat_dispatch_box_arg(ctx, body,
                                     e->as.call_.args[i], arg_slot_ty[i], av);
@@ -8269,20 +8214,6 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     for (uint32_t i = 0; i < n; i++) {
                         arg_types[i] = emit_resolve_type(ctx, e->as.call_.args[i]->type);
                         arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
-                        /* saffron-lang-plan S6: a `(Vec any)` element handed to
-                         * an `any` slot of a fat-closure dispatch arrives as the
-                         * boxed slot's carrier word, and the typed thunk typedef
-                         * declares that slot `tur_tagged_t` -- "incompatible type
-                         * for argument N".  This is the fifth position needing
-                         * the same bridge; see
-                         * docs/reported/any-carrier-straddle-is-bridged-per-consumer.md
-                         * for why they are still per-consumer.  It is the
-                         * position a Saffron `(vec-map v (fn [x] ...))` hits,
-                         * which is why the prelude is what found it. */
-                        if (arg_types[i].kind == TY_ANY ||
-                            arg_types[i].kind == TY_UNION)
-                            arg_strs[i] = emit_any_from_carrier(ctx, body,
-                                arg_strs[i], e->as.call_.args[i]);
                         /* SR-fat-abi: a wide by-value aggregate slot is int64
                          * (box pointer) in the typedef now -- convert. */
                         arg_strs[i] = fat_dispatch_box_arg(ctx, body,
@@ -8463,15 +8394,6 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             arg_types[i] = e->as.call_.args[i]->type;
                         }
                         arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
-                        /* saffron-lang-plan S6: see the CY2 twin above -- an
-                         * `any` slot of a fat-closure dispatch, reached by a
-                         * `(Vec any)` element that arrives as the boxed slot's
-                         * carrier word.  This is the twin the prelude's
-                         * `(vec-map v (fn [x] ...))` actually takes. */
-                        if (arg_types[i].kind == TY_ANY ||
-                            arg_types[i].kind == TY_UNION)
-                            arg_strs[i] = emit_any_from_carrier(ctx, body,
-                                arg_strs[i], e->as.call_.args[i]);
                         /* SR-fat-abi: see the CY2 twin above. */
                         arg_strs[i] = fat_dispatch_box_arg(ctx, body,
                             e->as.call_.args[i], arg_types[i], arg_strs[i]);
@@ -9667,38 +9589,6 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 char *raw = emit_value(ctx, body, emit_arg);
                 ctx->sum_drop_admit = admit_prev;
-                /* saffron-lang-plan S6: an `any` argument that arrives as the
-                 * int64 CARRIER, handed to a parameter declared `any`.
-                 *
-                 * `(describe (vec-get v 0))` where `describe` takes `: any` and
-                 * `v` is a `(Vec any)`: the element is stored boxed, so the
-                 * generic accessor hands its result back as the slot word, and
-                 * the call emitted `describe(<int64_t>)` against a
-                 * `tur_tagged_t` parameter -- "incompatible type for argument 1",
-                 * a cc error rather than a wrong answer.  The interpreter is
-                 * fine, so this is codegen only.
-                 *
-                 * Same straddle the `any` READERS (`type-of`, `any-is?`,
-                 * `cast`) already bridge with this helper, one position over: it
-                 * is a container element reaching a CALLEE rather than a
-                 * builtin.  Passing a container element to a dynamic function is
-                 * the most ordinary thing a Saffron program does, so the reader
-                 * fix alone left the common case broken.
-                 *
-                 * Gated on the DECLARED parameter kind, not just the argument's
-                 * type: a callee whose parameter is a tyvar takes the int64
-                 * carrier on purpose, and handing it the aggregate there is the
-                 * same mismatch in the other direction.  The helper itself is
-                 * keyed on the value's recorded emitted spelling, so a value
-                 * that already IS the aggregate -- a widen, a parameter, a
-                 * let-bound `any` -- is untouched. */
-                if (fn_binding && fn_binding->type.kind == TY_FN &&
-                    fn_binding->type.as.fn.arity > 0) {
-                    uint8_t _np = fn_binding->type.as.fn.arity;
-                    uint8_t _pi = (i < _np) ? (uint8_t)i : (uint8_t)(_np - 1);
-                    if (fn_binding->type.as.fn.arg_kinds[_pi] == TY_ANY)
-                        raw = emit_any_from_carrier(ctx, body, raw, emit_arg);
-                }
                 /* container-element-form-plan CE1/CE2 (store half): is this
                  * argument a Vec ELEMENT STORE whose slot form is CE_WORD for
                  * a niche element?  Then the bridges below hand the slot the

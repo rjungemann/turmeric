@@ -1280,7 +1280,7 @@ Still to do, and the ORDER is now measured rather than assumed:
      fat-closure dispatch. It also found why the earlier consumer bridges kept
      declining on the values they exist for -- a hoisted CALL temp was never in
      the carrier-representation side table. See
-     [any-carrier-straddle-is-bridged-per-consumer](../reported/any-carrier-straddle-is-bridged-per-consumer.md),
+     [any-carrier-straddle-is-bridged-per-consumer](../archive/any-carrier-straddle-is-bridged-per-consumer.md),
      which now records the measured blocker on the general fix.
 
    Held to R5's line: these are adaptors, present only because a `(Vec any)`
