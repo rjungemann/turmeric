@@ -1,5 +1,70 @@
 # Research spike: should turmeric-godot use the JIT instead of shelling out to `cc`?
 
+> **QUESTION 1 ANSWERED YES, 2026-09-08, ON WINDOWS.** The spike says to try
+> Linux or macOS first "where the JIT is known to work". Windows turned out to
+> be both the harder case and the one where the answer matters most, so it went
+> first. All three legs pass.
+>
+> Measured with a stand-in plugin rather than the real shim -- a DLL that links
+> libturi exactly as the GDExtension does, loaded with `LoadLibrary` by a host
+> that stands in for Godot. That isolates "can the JIT work inside a
+> dynamically-loaded module" from "does godot-cpp build", which is a 20-minute
+> question with a different answer.
+>
+> ```
+>   [plugin] compile rc=0
+>   JIT-compiled go() = 42
+> ```
+>
+> 1. **A JIT-enabled `libturi` links into a plugin.** One requirement the shim
+>    does not meet today: `libturi.a` carries `U MIR_gen` / `U MIR_link`, so
+>    `libtur_mir.a` must join the link line. `SConstruct` links only `libturi.a`
+>    and has no option for a second archive.
+>
+>    Note the trap on the way: linking *succeeds* without `tur_mir` as long as
+>    nothing references the JIT, because a static archive contributes only the
+>    members something needs. A shim that links a JIT-enabled libturi but never
+>    calls the embedding API is green and JIT-less.
+>
+> 2. **MIR survives being inside a dynamically-loaded module.** The plugin
+>    compiled C in-process and ran it. No W^X or executable-memory problem
+>    appeared on Windows -- which answers the Windows half of question 2 and
+>    leaves the macOS hardened-runtime half open.
+>
+> 3. **JIT'd code calls an exported symbol in the plugin.** This is the one that
+>    matters for the natives. The compiled source was
+>    `extern int godot_answer(int); int go(void){ return godot_answer(21); }`,
+>    `godot_answer` was `__declspec(dllexport)` in the plugin, and it returned
+>    42. `MIR_link` resolved it through `jit_import_resolver` ->
+>    `dlsym(RTLD_DEFAULT)` ([jit_engine.c:424](../../src/jit_engine.c)).
+>
+>    **So the AOT route's import-library problem does not exist here.** A PE DLL
+>    cannot link with unresolved symbols, so the staged-subprocess route needs
+>    an import library for the extension (none is produced today). The JIT route
+>    has no link step to fail: it needs the entry points EXPORTED, which is one
+>    attribute or link flag.
+>
+> ### What this does NOT show
+>
+> - Not inside Godot. No engine, no `.gdextension`, no script lifecycle. It
+>   shows the mechanism, not the integration.
+> - Not the real shim -- a stand-in plugin with one exported function.
+> - Windows only, Release libturi only. The macOS `MAP_JIT` / hardened-runtime
+>   question (spike question 2) is untouched, and J5 in
+>   [godot-binding-refresh-plan.md](../upcoming/godot-binding-refresh-plan.md)
+>   records that MIR's interpreter tier is *not* an escape hatch there.
+> - Says nothing about question 4 (can the on-disk cache go) -- no compile time
+>   was measured for a representative script.
+>
+> ### Method note
+>
+> The first attempt returned NULL and looked like a JIT failure. It was not: I
+> had declared `tur_jit_compile_image` with an invented 5-parameter signature
+> against a real 6-parameter one. C linkage does not check signatures, so it
+> linked cleanly and passed garbage. That is exactly the silent ABI mismatch the
+> native signature table exists to prevent -- committed here by hand, in a probe
+> written to investigate it.
+
 **Summary:** The Godot GDExtension compiles every `.tur` script by staging a
 transient project and running `tur build --shared` as a **subprocess**, which
 means every machine that runs a Turmeric-scripted Godot game needs a working C
