@@ -304,6 +304,11 @@ extern bool g_trail_autoloaded;
  * out of a program that never asked for the dialect, and matches how the
  * `#lang` line already scopes the reader and the semantic layers. */
 extern bool g_saffron_prelude;
+/* saffron-lang-plan S8: `tur repl --lang saffron` -- start the interactive
+ * session in Saffron instead of making the user type `#lang saffron` as their
+ * first line.  Read once at REPL startup; `#lang` at the prompt is the other
+ * route to the same env state. */
+extern bool g_repl_start_saffron;
 /* SR3 slice B (the Option niche -- default since 2026-09-03, TUR_OPTION_NICHE=0
  * restores the tagged form; docs/upcoming/sr3-option-niche-plan.md):
  * an `(Option P)` whose payload is a NON-NULLABLE pointer is carried AS that

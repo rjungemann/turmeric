@@ -585,6 +585,11 @@ void turi_env_reset_to_prelude(TuriEnv *env);
  * re-register their dispatches on the next read via
  * lang_layers_apply_readers.  A no-op when nothing changes.  Used by the
  * REPL `#lang` handler and the WASM set-lang entry point. */
+/* saffron-lang-plan S8: apply a reader AND language switch.  The plain
+ * turi_env_apply_lang below keeps the session's current dialect, so an
+ * existing caller is unchanged. */
+void turi_env_apply_lang_dialect(TuriEnv *env, ReaderType reader_type,
+                                 LangLayerSet layers, LangDialect dialect);
 void turi_env_apply_lang(TuriEnv *env, ReaderType reader_type,
                          LangLayerSet layers);
 

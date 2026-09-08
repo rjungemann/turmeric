@@ -9539,9 +9539,13 @@ static int usage_test(void) {
 static int usage_repl(void) {
     fprintf(stderr,
         "usage:\n"
-        "  tur repl [--watch] [--engine <name>]   start the interactive REPL\n"
+        "  tur repl [--watch] [--lang <dialect>] [--engine <name>]\n"
+        "                  start the interactive REPL\n"
         "\n"
         "flags:\n"
+        "  --lang <d>      start in a language dialect: \"turmeric\" (default)\n"
+        "                  or \"saffron\" (unannotated params default to any).\n"
+        "                  Equivalent to typing `#lang <d>` at the prompt.\n"
         "  --watch         auto-reload the enclosing spice between prompts\n"
         "                  when any source .tur file's mtime advances\n"
         "                  (RP6; equivalent to typing (reload) each turn)\n"
@@ -11910,12 +11914,24 @@ int main(int argc, char **argv) {
          * the freshness check runs synchronously each turn. */
         bool watch_mode = false;
         const char *repl_engine_flag = NULL;
+        /* saffron-lang-plan S8: start the session in a dialect, rather than
+         * making the user type `#lang saffron` as their first line.  Both
+         * routes land on the same env switch. */
+        const char *repl_lang_flag = NULL;
         for (int i = 2; i < argc; i++) {
             if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
                 return usage_repl();
             }
             if (strcmp(argv[i], "--watch") == 0) {
                 watch_mode = true;
+                continue;
+            }
+            if (strcmp(argv[i], "--lang") == 0 && i + 1 < argc) {
+                repl_lang_flag = argv[++i];
+                continue;
+            }
+            if (strncmp(argv[i], "--lang=", 7) == 0) {
+                repl_lang_flag = argv[i] + 7;
                 continue;
             }
             if (strcmp(argv[i], "--engine") == 0 && i + 1 < argc) {
@@ -11955,6 +11971,19 @@ int main(int argc, char **argv) {
                         "TUR_ENGINE=cc\n");
                 return 2;
 #endif
+            }
+        }
+        /* Validated HERE rather than inside cmd_repl, so a typo is a usage
+         * error before the banner prints and the stdlib preloads. */
+        if (repl_lang_flag) {
+            if (strcmp(repl_lang_flag, "saffron") == 0) {
+                g_repl_start_saffron = true;
+            } else if (strcmp(repl_lang_flag, "turmeric") != 0) {
+                fprintf(stderr,
+                        "tur repl: unknown --lang '%s' "
+                        "(expected \"turmeric\" or \"saffron\")\n",
+                        repl_lang_flag);
+                return usage_repl();
             }
         }
         return cmd_repl(watch_mode);

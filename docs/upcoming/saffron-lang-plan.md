@@ -1537,9 +1537,24 @@ refinement violation being STATIC when the value is statically known rather
 than the runtime panic the first draft described. Examples a reader would write
 exercise shapes the 2897-fixture corpus does not.
 
-Still open: `tur repl --lang saffron`, `tur init --saffron`, `tools/gendocs.py`
-(docstrings without types), and the vim/vscode syntax packs. The items are
-independent of each other.
+**`tur repl --lang saffron` is DONE (2026-09-08)**, and it turned out to be a
+fix as well as a feature. Typing `#lang saffron` at the prompt -- the guide's
+first line -- was ACCEPTED AND SILENTLY IGNORED: the handler read the line with
+`detect_lang_layered`, which reports only the READER axis, so `saffron` came
+back as plain `turmeric`, the "already set" early-out fired, and the language
+half was dropped. The session kept Turmeric's `int` parameter default while
+telling the user nothing. Both routes now go through one env switch that
+carries the dialect. Pinned by `tests/turi/repl-lang-saffron.sh` (ctest
+`tur_repl_lang_saffron`), whose probe is a float add through an unannotated
+defn -- `(add 1 2)` is 3 under either dialect and would pin nothing.
+
+That work also surfaced `cli-usage-error-paths-exit-zero`: an unknown flag is
+reported and then exits 0, codebase-wide, so `tur build --typo || exit 1`
+succeeds. Filed rather than fixed here -- it is every subcommand, not this one.
+
+Still open: `tur init --saffron`, `tools/gendocs.py` (docstrings without
+types), and the vim/vscode syntax packs. The items are independent of each
+other.
 
 ### S9 -- runtime typeclass dispatch (D8) -- CLEARED, not started
 

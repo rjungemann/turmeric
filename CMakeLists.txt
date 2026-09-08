@@ -945,6 +945,16 @@ add_test(
   COMMAND bash tests/turi/repl-spice-load.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# saffron-lang-plan S8: the REPL as a Saffron session -- by `--lang saffron`,
+# and by `#lang saffron` typed at the prompt (which was accepted and silently
+# ignored: the handler read only the READER axis).  The probe is a float add
+# through an unannotated defn, since `(add 1 2)` is 3 under either dialect.
+add_test(
+  NAME tur_repl_lang_saffron
+  COMMAND bash tests/turi/repl-lang-saffron.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_repl_lang_saffron PROPERTIES TIMEOUT 300)
 # RP4: integration test for the FFI binding layer. Builds a fixture
 # spice with several signature shapes and calls each export from the
 # REPL, asserting correct results, qualified-name routing, and clear
