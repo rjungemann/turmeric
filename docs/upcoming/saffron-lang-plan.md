@@ -64,7 +64,7 @@ which reproduces in plain Turmeric with no `any` anywhere -- is now partially
 fixed: a non-escaping local's spine is freed at scope exit. Its two residues (a
 local handed to a callee, and `:copy` types, where `with-region` already
 reclaims the spine) are recorded there.
-**S6, containers and the Saffron prelude, is next.**
+**S6, containers and the Saffron prelude, is DONE (2026-09-08). S7, the boundary, is next.**
 
 Worth stating plainly, because it changes how the rest of this plan should be
 read: **six of those eight reports had a diagnosis that was wrong on
@@ -1115,7 +1115,7 @@ compiled ones named it "cstr", because the helper behind them answers NULL for
 anything that is not a struct; a display-name helper beside it makes the two
 agree word for word, which is what `saffron-seam-panics` asserts.
 
-### S6 -- containers and the Saffron prelude (medium) -- IN PROGRESS
+### S6 -- containers and the Saffron prelude (medium) -- DONE 2026-09-08
 
 **Landed 2026-09-07: a `(Vec any)` element round-trips with its own tag, on the
 compiled path.** That was the stage's blocking question -- until it, a
@@ -1291,11 +1291,21 @@ Still to do, and the ORDER is now measured rather than assumed:
    a function, so neither needs an adaptor. Adding one for its own sake is the
    wedge R5 warns about.
 
-### S6 -- containers and the Saffron prelude (medium) -- remaining scope
+### S6 -- containers and the Saffron prelude (medium) -- scope, all landed
 
 G7. `(vec any)` becomes the default container element in Saffron, so
-`[1 "two" 7.1]` is a vector of three boxes. Same for `#map{...}`, `#set{...}`,
-and cons lists.
+`[1 "two" 7.1]` is a vector of three boxes. Same for `#map{...}` and cons lists
+-- and NOT `#set{...}`, which measured out of this list: `set-of` is not
+homogeneity-checked the way `vec-of` and `hamt-of` are, a set has no read-back
+accessor so the write-only problem never arises, and widening would BREAK it
+(`(Set any)` refuses for want of `Hash[any]`). `tests/fixtures/saffron-set-literal`
+pins the no-change decision so the absent diff does not read as an oversight.
+
+**Exit: MET 2026-09-08.** Every literal, the unannotated `main`, and the
+prelude. Fixtures: `saffron-vector-literal`,
+`saffron-vector-literal-homogeneous`, `saffron-map-literal`,
+`saffron-set-literal`, `saffron-cons-list`, `saffron-unannotated-main`,
+`saffron-dyn-ops-on-vec-elements`, `saffron-prelude`.
 
 **Both blockers on this stage are fixed.** The repr-decision ICE (2026-09-07):
 a `(Vec any)` builds, stores and frees correctly, with its elements boxed one
