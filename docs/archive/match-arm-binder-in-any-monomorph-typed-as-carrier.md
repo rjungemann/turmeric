@@ -6,7 +6,37 @@ description: "`(match b (MkBox x) x)` on a `(Box any)` emits `int64_t x = (int64
 
 # A match arm binder in an `any` monomorph keeps the carrier type
 
-**Severity: medium.** It is a *loud* failure -- the emitted C does not compile,
+**RESOLVED 2026-09-08 -- and it was worse than filed.** Direction 1: the binder
+now takes its C type from `adt_field_type_for_app` against the monomorph, the
+same substitution the layout already did. Pinned by
+`tests/fixtures/match-binder-monomorph-substituted-type`.
+
+**The filed `any` case was the LOUD half.** Probing the fix with a fractional
+float -- per the float rule in CLAUDE.md -- turned up a silent one from the
+same mistake, and it is the more severe:
+
+```turmeric
+(defdata Box [a] (MkBox a))
+(defn ub [A] [b : (Box A)] : A (match b (MkBox x) x))
+(println (ub (:: (MkBox 3.25) (Box float))))   ;; printed 3
+```
+
+`(Box float)` lays the slot out as `double _0` and emitted the same
+`int64_t x = (int64_t)__scrut.as.MkBox._0;`. Aggregate-to-integer is a C error,
+which is why `any` failed loudly; double-to-integer is a legal LOSSY
+conversion, so this compiled and returned the wrong number -- 3.25 -> 3,
+7.9 -> 7, 0.5 -> 0, -2.75 -> -2. No diagnostic, no crash, and no Saffron
+anywhere near it. An integer-valued float would have hidden it completely.
+
+The fix is scoped to a field whose DECLARED type is a tyvar and whose
+substitution lands on a scalar, cstr or `any` -- the cases where the monomorph
+slot holds that type inline, so the honest binder type is its own and the cast
+was the error. Aggregate and handle payloads are left to the deref and box
+branches that already reason about how they are stored.
+
+Suites: run.sh 2891 passed / 0 failed; run-turi.sh 1982 passed / 0 failed.
+
+**Severity: medium** as filed; **high** in hindsight, for the float half. It is a *loud* failure -- the emitted C does not compile,
 so nothing miscomputes. What it blocks is a user-defined parametric ADT holding
 `any`, which is a shape the Saffron dialect reaches on any ordinary program and
 plain Turmeric reaches whenever someone writes `(Box any)`.
@@ -89,9 +119,14 @@ which is why this is filed rather than fixed.
 ## Fix directions
 
 1. **Type the arm binder from the MONOMORPH's field type, not the generic
-   one.** If the substituted field types are available where the binder's ctype
-   is chosen, this is the direct answer and matches what the struct layout
-   already did.
+   one.** -- **TAKEN.** The substituted type is available: `scrut_ty` is the
+   monomorph app and `adt_field_type_for_app(&scrut_ty, &ctor->fields[bi])`
+   resolves the declared field against it. The switch path already carried the
+   complementary leg (`!scrut_is_app_monomorph`, resolving a tyvar through the
+   active spec); this is the monomorph one, and the niche arm's own comment
+   already described the problem ("this path spells the binder from the pattern
+   binding's own type, which in a specialized `unwrap` body is still the erased
+   `A`").
 2. **Route the binder through the carrier bridge** (`emit_carrier_bridge`,
    `emit_localvar_record_ctype`) the way the `any` production seam does, so the
    binder records `tur_tagged_t` as its representation and every read of `x`

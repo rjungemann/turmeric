@@ -15563,6 +15563,72 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
                             Binding *fb = pat->bindings[bi];
                             const char *ctype = type_c_name(fb->type);
+                            /* match-arm-binder-in-any-monomorph-typed-as-carrier:
+                             * `fb->type` is the ctor's DECLARED field type, so for
+                             * `(defdata Box [a] (MkBox a))` reached at `(Box any)`
+                             * it is the tyvar `a` and `type_c_name` gives the
+                             * int64 carrier -- while the TYPEDEF emitter had
+                             * already substituted and laid the field out as a
+                             * 16-byte `tur_tagged_t`.  The binder was then emitted
+                             *
+                             *   int64_t x = (int64_t)__scrut.as.MkBox._0;
+                             *   __t = x;            // back into a tur_tagged_t
+                             *
+                             * -- an aggregate cast to an integer and assigned back
+                             * to an aggregate: two C errors, one mistake seen from
+                             * both ends.  The specialization was half-applied,
+                             * layout substituted and binder not.
+                             *
+                             * `any` is the LOUD half.  The silent half is worse
+                             * and was found by probing with a fractional float:
+                             * `(Box float)` lays the slot out as `double _0` and
+                             * then emitted
+                             *
+                             *   int64_t x = (int64_t)__scrut.as.MkBox._0;
+                             *
+                             * -- a legal, LOSSY C conversion.  `(ub (MkBox 3.25))`
+                             * returned 3, and 7.9 -> 7, -2.75 -> -2.  A wrong
+                             * answer with no diagnostic, from the same half-applied
+                             * specialization; `any` only failed loudly because
+                             * aggregate-to-integer is an error where double-to-
+                             * integer is a conversion.
+                             *
+                             * Ask what the field substitutes to in THIS monomorph,
+                             * which is exactly what the layout asked.  The `TY_ANY`
+                             * arm below then reads the slot directly, as it already
+                             * does for a field DECLARED `:any`.
+                             *
+                             * The switch path carries the complementary leg
+                             * (`!scrut_is_app_monomorph`, resolving a tyvar through
+                             * the active spec); this is the monomorph one. */
+                            bool fb_subst_any = false;
+                            if (scrut_is_app_monomorph &&
+                                fb->type.kind == TY_TYVAR &&
+                                bi < pat->ctor->n_fields) {
+                                Type _sub = adt_field_type_for_app(
+                                    &scrut_ty, &pat->ctor->fields[bi]);
+                                /* Scalars, cstr and `any` only.  For these the
+                                 * monomorph slot holds the substituted type
+                                 * INLINE and its C name is the honest binder
+                                 * type, so a direct read is right and the cast
+                                 * is what was wrong.  An aggregate or handle
+                                 * payload is left to the deref / box branches
+                                 * below, which already reason about how it is
+                                 * stored; retyping it here would fight them. */
+                                switch (_sub.kind) {
+                                    case TY_ANY:
+                                    case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                                    case TY_INT:   case TY_INT8:  case TY_INT16:
+                                    case TY_INT32: case TY_INT64:
+                                    case TY_UINT8: case TY_UINT16:
+                                    case TY_UINT32: case TY_UINT64:
+                                    case TY_BOOL:  case TY_CSTR:
+                                        fb_subst_any = true;
+                                        ctype = type_c_name(_sub);
+                                        break;
+                                    default: break;
+                                }
+                            }
                             char *bname = name_for_binding(ctx, fb);
                             /* CONV-S1 seam 4: flat named record binds `.field`; a
                              * tagged/positional ADT binds `.as.<Ctor>._N`. */
@@ -15596,7 +15662,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             } else if (inline_byval) {
                                 buf_printf(body, "%s %s = __scrut%s%s;\n",
                                            ctype, bname, acc, mp);
-                            } else if (fb->type.kind == TY_ANY) {
+                            } else if (fb->type.kind == TY_ANY || fb_subst_any) {
                                 /* saffron-lang-plan S5: an `:any` field's slot IS
                                  * the two-word box, so it is read directly.  The
                                  * default arm's `(ctype)` cast is a scalar cast

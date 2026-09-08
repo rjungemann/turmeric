@@ -1,0 +1,53 @@
+;; match-arm-binder-in-any-monomorph-typed-as-carrier: a match arm binder in a
+;; PARAMETRIC MONOMORPH takes its C type from the ctor's DECLARED field type --
+;; a tyvar, which lowers to the int64 carrier -- while the typedef emitter has
+;; already substituted and laid the slot out at the real type.  The
+;; specialization was half-applied: layout substituted, binder not.
+;;
+;; TWO SYMPTOMS, ONE MISTAKE, and the quiet one is the reason this fixture
+;; leads with a fractional float.
+;;
+;;   (Box any)    slot is a 16-byte tur_tagged_t.  Emitted
+;;                  int64_t x = (int64_t)__scrut.as.MkBox._0;
+;;                aggregate-to-integer is a C ERROR, so it failed loudly and
+;;                that is how the bug was filed.
+;;
+;;   (Box float)  slot is a `double`.  The SAME line is a legal, LOSSY C
+;;                conversion, so it compiled and returned the wrong number:
+;;                3.25 -> 3, 7.9 -> 7, 0.5 -> 0, -2.75 -> -2.  No diagnostic,
+;;                no crash, no Saffron involved.
+;;
+;; An integer-valued float would have hidden the second one completely -- 3.0
+;; truncates to 3 and looks right -- which is exactly why the float probes here
+;; all carry a non-zero fractional part, and why the negative case is included
+;; (truncation is toward zero, so -2.75 -> -2 rather than -3).
+;;
+;; The concrete non-float monomorphs are here to pin that the fix did not
+;; retype a binder that already worked: only a field whose DECLARED type is a
+;; tyvar and whose substitution lands on a scalar / cstr / `any` is retyped;
+;; aggregate and handle payloads keep the deref and box branches that already
+;; reason about how they are stored.
+
+(defdata Box [a] (MkBox a))
+(defdata Pair2 [a b] (MkP a b))
+
+(defn ub [A] [b : (Box A)] : A (match b (MkBox x) x))
+(defn fst [A B] [p : (Pair2 A B)] : A (match p (MkP x _) x))
+(defn snd [A B] [p : (Pair2 A B)] : B (match p (MkP _ y) y))
+
+(defn main [] : int
+  ;; the silent case: floats must keep their fractional part
+  (println (ub (:: (MkBox 3.25) (Box float))))
+  (println (ub (:: (MkBox 7.9) (Box float))))
+  (println (ub (:: (MkBox -2.75) (Box float))))
+  ;; the loud case: an `any` monomorph must compile and read the box
+  (println (cast (ub (:: (MkBox (:: 7.1 any)) (Box any))) float))
+  (println (cast (ub (:: (MkBox (:: 42 any)) (Box any))) int))
+  (println (cast (ub (:: (MkBox (:: "hi" any)) (Box any))) cstr))
+  ;; already-working monomorphs, unchanged
+  (println (ub (:: (MkBox 9) (Box int))))
+  (println (ub (:: (MkBox "cc") (Box cstr))))
+  ;; two type params, one `any` and one concrete, in the same monomorph
+  (println (cast (fst (:: (MkP (:: 1.5 any) 7) (Pair2 any int))) float))
+  (println (snd (:: (MkP (:: 1.5 any) 7) (Pair2 any int))))
+  0)
