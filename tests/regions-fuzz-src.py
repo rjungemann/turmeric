@@ -511,21 +511,29 @@ def main():
         problems, on, off = check_program(tur, build, src, expected, rw, rt)
         return i, src, problems, on
 
+    # Report each program the moment it finishes (as_completed, not map
+    # order), flushed: under a pipe or ctest nothing showed until exit.
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as ex:
-        for i, src, problems, on in ex.map(work, enumerate(programs)):
+        futs = [ex.submit(work, item) for item in enumerate(programs)]
+        done = 0
+        for fut in concurrent.futures.as_completed(futs):
+            i, src, problems, on = fut.result()
+            done += 1
             if on.stats:
                 total_rw += on.stats[1]
                 total_rt += on.stats[2]
             if problems:
                 failures += 1
-                print(f"FAIL program {i} (seed {args.seed}):")
+                print(f"FAIL program {i} (seed {args.seed}):", flush=True)
                 for p in problems:
-                    print("  " + p)
+                    print("  " + p, flush=True)
                 if args.save_dir:
                     fn = os.path.join(args.save_dir, f"seed{args.seed}-{i}.tur")
                     with open(fn, "w") as f:
                         f.write(src)
-                    print(f"  saved {fn}")
+                    print(f"  saved {fn}", flush=True)
+            elif done % 10 == 0 or done == args.n:
+                print(f"  {done}/{args.n} programs done", flush=True)
 
     print(f"regions-fuzz-src: {args.n} programs x {args.cases} cases, seed {args.seed}: "
           f"{args.n - failures} passed, {failures} failed; "

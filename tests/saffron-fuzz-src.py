@@ -107,7 +107,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -780,6 +780,18 @@ def known_probes(tur, workdir):
 
 # ---------------------------------------------------------------------------
 
+
+
+def _progress(i, n, kind, extra=""):
+    """Report a case the moment it finishes.  Every non-ok verdict prints its
+    own line; ok cases print a heartbeat every 25 so a long session is
+    visibly alive under a pipe or ctest -V.  Flushed, because stdout is
+    block-buffered under a pipe and nothing would show until exit."""
+    if kind != "ok":
+        print("  case %6d/%d  %s%s" % (i, n, kind, extra), flush=True)
+    elif (i + 1) % 25 == 0 or i + 1 == n:
+        print("  %6d/%d done" % (i + 1, n), flush=True)
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=200, help="cases to generate")
@@ -824,10 +836,21 @@ def main():
               % (args.n, args.seed, args.legs, args.jobs,
                  ", emit-known" if args.emit_known else ""))
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            for i, (kind, detail) in enumerate(pool.map(job, range(args.n))):
+            futs = {pool.submit(job, i): i for i in range(args.n)}
+            done = 0
+            for fut in as_completed(futs):
+                i = futs[fut]
+                kind, detail = fut.result()
                 counts[kind] = counts.get(kind, 0) + 1
                 if detail:
                     findings.append((kind, i, detail))
+                extra = ""
+                if detail and detail[0]:
+                    extra = "  tags=" + " | ".join(
+                        ",".join(sorted(leg.tags)) for _j, _k, leg, *_ in detail[0])
+                _progress(done, args.n, kind, extra)
+                done += 1
+        findings.sort(key=lambda t: t[1])
 
         for kind, i, (failing, src, expected, out) in findings:
             safe = kind.replace("(", "_").replace(")", "").replace(",", "+")
