@@ -840,6 +840,53 @@ So piece 3 is a known quantity now rather than a sketch, and the remaining work
 is: force dict emission for dispatched classes, emit the rows late, add the
 call-site node, and the no-instance panic.
 
+#### What forces dict emission: measured 2026-09-09
+
+Constraint 1 above asks what should force a dict. The blunt answer -- **every
+instance of every class, no analysis** -- was measured rather than argued, and
+it is viable, with the cost falling in a place that changes where the gate
+belongs.
+
+**It compiles and runs.** `emit_instance_is_live` (`emit_module.c:6564`) patched
+to return true unconditionally, rebuilt: a hello-world goes from 1 dict
+singleton to **47**, and from 100 to 128 `__inst_*` bodies, and still builds and
+runs clean. The earlier failure (`__inst_Functor_fmap_Option undeclared`) came
+from bypassing the *dict* half of that gate while leaving the *body* half on.
+The gate governs both in lockstep -- `emit_stmt.c:675` and
+`emit_abi_fn_skip_generic` -- and moving both together is sound. This is worth
+recording because "force dict emission" reads like a dict-site change and is
+not one.
+
+**The cost is nothing today and 4.5x once the rows exist.** Three binaries,
+identical flags:
+
+| | bytes |
+|---|---|
+| baseline (gate on) | 39,512 |
+| all-live, dicts unreferenced | 39,512 |
+| all-live + a table referencing every dict | **179,992** |
+
+The linker strips unreferenced statics, so forcing liveness alone is free. But
+the `{class, tag, dict}` table is exactly the thing that references every dict,
+which anchors all 47 and their method bodies. Hello-world becomes 180 KB -- on
+**every** program, Turmeric and Saffron alike. Emitted C grows 330 KB -> 352 KB
+either way (compile time, always paid).
+
+So the v0 shape is not "no gate", it is **one coarse gate instead of a per-class
+pre-pass**, and the trigger already exists. `elab_typeclasses.c:6637` is the site
+that today REJECTS a method call on an un-narrowed `any`, and it holds
+`best_inst->typeclass`. Turning that rejection into a dispatch site inherently
+records "class C is dynamically dispatched" -- no separate walk over the
+program. Emit rows for every instance of those classes only, and a program that
+never dispatches on `any` emits no table and pays nothing. A later pre-pass then
+refines instance selection *within* a dispatched class, which is a smaller and
+purely-optimizing change.
+
+**A fourth constraint surfaced in the sweep**: `dict_Clone_T_singleton` -- an
+instance whose receiver is a TYPE VARIABLE, so it has no ground tag to key a row
+on. It is in the forced set today. Skip such instances, or give them a wildcard
+row; either way it needs deciding before rows can be emitted.
+
 The four design questions D8 lists may partly answer themselves once the key is
 the concrete box tag -- two instances cannot match one tag, and defaults are
 already resolved into per-instance slots -- but that is reasoning, not
