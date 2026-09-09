@@ -784,8 +784,14 @@ static bool g_no_abi_cache;
  *                 is always behaviorally identical to the old source path.
  *   TUR_RT_LIB    (1) -- force the archive link (lean preferred, else libturi.a,
  *                 else a -lturi fallback with a warning); explicit opt-in.
- *   TUR_RT_SOURCE (2) -- force recompiling the bare runtime sources. */
-enum { TUR_RT_AUTO = 0, TUR_RT_LIB = 1, TUR_RT_SOURCE = 2 };
+ *   TUR_RT_SOURCE (2) -- force recompiling the bare runtime sources.
+ *   TUR_RT_SPLIT  (3) -- cc-path-preamble-split-plan: emit the DECLS region in
+ *                 place of the fixed runtime preamble and link
+ *                 libturt_preamble.a, so the preamble is compiled ONCE rather
+ *                 than once per program.  4360 of 8310 emitted lines for a
+ *                 one-line program are that preamble, byte-identical every
+ *                 time; dropping it measures at 29% off the cc call. */
+enum { TUR_RT_AUTO = 0, TUR_RT_LIB = 1, TUR_RT_SOURCE = 2, TUR_RT_SPLIT = 3 };
 static int g_runtime_mode = TUR_RT_AUTO;
 
 /* DEDUP-4b (docs/archive/gc-cycle-collection-plan.md): resolve whether the emitted preamble
@@ -813,6 +819,13 @@ static int g_runtime_mode = TUR_RT_AUTO;
  * pure filesystem probe with no side effects. */
 static int locate_runtime_lib(char *libdir, size_t dcap,
                               char *libname, size_t ncap);
+
+/* cc-path-preamble-split-plan: swap the fixed runtime preamble in `csrc` for
+ * the committed decls region, appending the result to `out`.  Declines (false)
+ * unless the emitted preamble hashes equal to the committed artifact.  Defined
+ * with the JIT's split machinery further down; `tur build --runtime=split`
+ * calls the same one so the two paths cannot drift. */
+static bool jit_try_split_preamble(Buf *csrc, Buf *out);
 
 /* True while emitting C that `tur` itself will go on to compile and link. */
 static bool g_emit_for_link = false;
@@ -2692,17 +2705,50 @@ static int cmd_build(const char *input, const char *out_path,
         tf = fdopen(fd, "wb");
         memcpy(tmpl, fallback, sizeof(fallback));
     }
-    /* Phase S2: scan for __tur_include__ directives and inject them at the
-     * top of the generated C so stdlib modules can add file-level includes. */
-    hoist_tur_include_directives(&csrc);
+    /* cc-path-preamble-split-plan: under --runtime=split, swap the fixed
+     * runtime preamble for the decls region and link libturt_preamble.a
+     * instead, so the preamble is compiled once rather than once per program.
+     *
+     * Same swap the JIT does (jit_try_split_preamble), including its hash
+     * guard: if the emitted preamble no longer matches the committed
+     * artifact the swap DECLINES and we fall back to the full preamble, which
+     * is slower but always correct.  A silent disengage is the documented
+     * failure mode on the JIT side, so say so here rather than quietly
+     * producing a build that is not what was asked for. */
+    Buf split_c;
+    buf_init(&split_c);
+    bool used_split = false;
+    if (g_runtime_mode == TUR_RT_SPLIT) {
+        used_split = jit_try_split_preamble(&csrc, &split_c);
+        if (!used_split)
+            fprintf(stderr,
+                    "tur build: --runtime=split declined (the emitted preamble "
+                    "does not match the committed split artifact -- regenerate "
+                    "with tools/gen-runtime-split.py); using the full "
+                    "preamble\n");
+    }
+    Buf *emit_c = used_split ? &split_c : &csrc;
 
-    if (!tf || fwrite(csrc.data, 1, csrc.len, tf) != csrc.len) {
+    /* Phase S2: scan for __tur_include__ directives and inject them at the
+     * top of the generated C so stdlib modules can add file-level includes.
+     *
+     * AFTER the split swap, not before.  Hoisting lands these near the top of
+     * the TU, which is INSIDE the fixed-preamble region -- so hoisting first
+     * meant the swap deleted them, and a program that reaches stdlib/hamt lost
+     * the `#include "hamt.h"` it depends on and failed with a wall of implicit
+     * declarations.  Swapping first puts them above the decls region instead,
+     * where they survive and mean the same thing. */
+    hoist_tur_include_directives(emit_c);
+
+    if (!tf || fwrite(emit_c->data, 1, emit_c->len, tf) != emit_c->len) {
         fprintf(stderr, "tur: write failed\n");
         if (tf) fclose(tf);
+        buf_free(&split_c);
         buf_free(&csrc);
         return 2;
     }
     fclose(tf);
+    buf_free(&split_c);
 
     /* Phase S2 / tur-link-and-build-split-plan Phase 3: scan the generated C
      * for __tur_autolink__ comments (shared helper). */
@@ -2770,6 +2816,43 @@ static int cmd_build(const char *input, const char *out_path,
      * (native builds only -- emcc/wasm has no libturi.a). */
     if (!wasm_target) apply_runtime_lib_mode(&autolink);
 
+    /* cc-path-preamble-split-plan: the program half was emitted with the decls
+     * region in place of the preamble, so the definitions have to come from
+     * libturt_preamble.a.  Linked all-or-nothing and only here -- it is NOT a
+     * member of libturt_runtime.a, because a normal program defines these
+     * symbols itself and would collide with any member the linker pulled in.
+     *
+     * TUR_RT_SPLIT_HOSTED tells the decls region it is being compiled for a
+     * host link rather than the JIT: it takes `extern int
+     * tur_closure_headers_enabled;` instead of the definition (the runtime
+     * archive has the definition), and skips the project-header includes whose
+     * strict prototypes conflict with the loose externs the program emits. */
+    Buf split_flags;
+    buf_init(&split_flags);
+    if (used_split) {
+        char libdir[4096], libname[128];
+        if (locate_runtime_lib(libdir, sizeof(libdir), libname, sizeof(libname))) {
+            Buf inj;
+            buf_init(&inj);
+            buf_printf(&inj, "-lturt_preamble -L%s", libdir);
+            if (autolink.len > 1) {
+                buf_putc(&inj, ' ');
+                buf_puts(&inj, autolink.data);
+            }
+            buf_putc(&inj, '\0');
+            buf_free(&autolink);
+            autolink = inj;
+        } else {
+            fprintf(stderr,
+                    "tur build: --runtime=split could not locate the runtime "
+                    "archive directory; the link will need a -L in "
+                    "TUR_CC_FLAGS\n");
+        }
+        buf_printf(&split_flags, "%s -DTUR_RT_SPLIT_HOSTED", cc_flags);
+        buf_putc(&split_flags, '\0');
+        cc_flags = split_flags.data;
+    }
+
     /* tur-link-and-build-split-plan Phase 1: resolve the raw autolink flags
      * (SDK anchoring, ASan autodetect, tree-relative path anchoring, and the
      * -lturi bare-.c filter) via the shared helper -- the same resolution
@@ -2789,6 +2872,7 @@ static int cmd_build(const char *input, const char *out_path,
     buf_free(&aux_sources);
     buf_free(&autolink);
     buf_free(&cmake_flags);
+    buf_free(&split_flags);   /* cc_flags may point into this; done with it now */
     /* Leave the stable temp file for ccache; only unlink random fallbacks.
      * Tested against the real prefix rather than a literal "/tmp/tur-build/":
      * on Windows the path starts with a drive letter, so the old check was
@@ -3852,7 +3936,15 @@ static int cmd_eval(const char *path, bool use_color,
                     char **extra_argv, int extra_argc, bool debug);
 static int cmd_jit(int argc, char **argv);
 
-#ifdef TUR_HAVE_JIT
+/* NOT under `#ifdef TUR_HAVE_JIT`, deliberately.  These two started as a JIT
+ * probe -- the name still says so -- but `--runtime=split` made the CC path
+ * call jit_try_split_preamble from cmd_build, and cmd_build exists in every
+ * build.  Leaving the definition inside the engine's guard while the
+ * declaration and two of the three call sites sat outside it compiled fine in
+ * any -DTUR_JIT=ON tree (which is every tree this was developed in) and failed
+ * every non-JIT build with
+ * `jit_try_split_preamble used but never defined [-Werror]`.
+ * The declarations image they read moved to tur_core for the same reason. */
 /* S2 (findings 25): swap an emitted TU's fixed preamble for the committed
  * declarations region when this compiler still matches the committed
  * artifacts.  Returns true and fills `out` with
@@ -3911,6 +4003,43 @@ static bool jit_try_split_preamble(Buf *csrc, Buf *out) {
     const char *after = pe + sizeof(pre_end) - 1;
     buf_write(out, csrc->data, (size_t)(ps - csrc->data));
     buf_write(out, tur_rt_split_decls, tur_rt_split_decls_len);
+    /* Carry THIS program's own project includes across the swap.
+     *
+     * The preamble is not actually fixed across programs, which is the premise
+     * the whole split rests on and the one place it is false: the emitter
+     * writes EITHER `#include "hamt.h"` (a program the compiler lowers
+     * directly onto the hamt API) OR loose `extern void *tur_hamt_new();`
+     * declarations from stdlib's extern-c -- never both, because gcc rejects
+     * the combination outright:
+     *
+     *   error: conflicting types for 'tur_hamt_new'; have 'void *()'
+     *   note: previous declaration ... with type 'Hamt *(void)'
+     *
+     * The committed decls region is generated from ONE canonical emission, so
+     * whichever shape that program happened to use was frozen for everybody.
+     * Carrying the include unconditionally broke every loose-extern program;
+     * guarding it out (`#ifndef TUR_RT_SPLIT_HOSTED`, still in the generated
+     * header) broke every program that needs the header, which is what took
+     * `hamt-lowering-basic` down with a screenful of implicit declarations.
+     *
+     * Re-emitting the includes the REPLACED REGION actually contained gives
+     * each program exactly what it emitted, which is what the monolithic build
+     * does -- so neither shape has to lose. Header guards make a duplicate
+     * harmless if the decls region already pulled the same file in.
+     *
+     * Quoted includes only: `<...>` system headers are the decls region's
+     * business, and on Windows re-emitting them is actively harmful (the JIT
+     * cannot digest the MinGW SDK headers -- see
+     * docs/reported/jit-windows-support-spike.md). */
+    for (const char *p = ps; p < pe; ) {
+        const char *eol = (const char *)memchr(p, '\n', (size_t)(pe - p));
+        size_t len = eol ? (size_t)(eol - p + 1) : (size_t)(pe - p);
+        if (len > sizeof("#include \"") - 1 &&
+            strncmp(p, "#include \"", sizeof("#include \"") - 1) == 0)
+            buf_write(out, p, len);
+        if (!eol) break;
+        p = eol + 1;
+    }
     buf_write(out, after, csrc->len - (size_t)(after - csrc->data));
     /* TUR_JIT_DUMP_C=<path>: the exact text handed to c2mir.  A c2mir
      * diagnostic names <tur-jit>:LINE:COL, and until this existed there was no
@@ -3926,6 +4055,10 @@ static bool jit_try_split_preamble(Buf *csrc, Buf *out) {
     }
     return true;
 }
+
+/* Everything from here to the matching TUR_HAVE_JIT #endif really is
+ * engine-only; the guard opens here rather than above the split helpers. */
+#ifdef TUR_HAVE_JIT
 
 #ifdef _WIN32
 /* c2mir carries baked-in system-header paths for Linux and macOS
@@ -10828,6 +10961,7 @@ int main(int argc, char **argv) {
             if      (strcmp(rt, "lib") == 0)    g_runtime_mode = TUR_RT_LIB;
             else if (strcmp(rt, "source") == 0) g_runtime_mode = TUR_RT_SOURCE;
             else if (strcmp(rt, "auto") == 0)   g_runtime_mode = TUR_RT_AUTO;
+            else if (strcmp(rt, "split") == 0)  g_runtime_mode = TUR_RT_SPLIT;
         }
     }
 
@@ -11617,9 +11751,10 @@ int main(int argc, char **argv) {
                 if (strcmp(mode, "lib") == 0) g_runtime_mode = TUR_RT_LIB;
                 else if (strcmp(mode, "source") == 0) g_runtime_mode = TUR_RT_SOURCE;
                 else if (strcmp(mode, "auto") == 0) g_runtime_mode = TUR_RT_AUTO;
+                else if (strcmp(mode, "split") == 0) g_runtime_mode = TUR_RT_SPLIT;
                 else {
                     fprintf(stderr, "tur build: unknown --runtime '%s' "
-                            "(supported: auto, lib, source)\n", mode);
+                            "(supported: auto, lib, source, split)\n", mode);
                     free(build_inc); return 1;
                 }
             } else if (strcmp(argv[i], "--no-abi-cache") == 0) {

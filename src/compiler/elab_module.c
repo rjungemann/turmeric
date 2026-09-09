@@ -144,7 +144,19 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
  *   EX_DEFER    -- module-level `defer` is a real feature: it runs at process
  *                  exit (tests/fixtures/module-defer-basic).
  *
- * EX_NIL_LIT admits a bare `nil`, which is inert either way. */
+ * EX_NIL_LIT admits a bare `nil`, which is inert either way.
+ *
+ * EX_DO is a third: a macro that emits SEVERAL definitions wraps them in an
+ * implicit `(do ...)` (e.g. `derive-json` expanding to two `definstance`
+ * forms, or an ecs `defworld-box-helpers` expanding to three `defn`s), and
+ * that wrapper is not itself a defmacro/defclass/deftype, so it does not
+ * collapse to EX_NIL_LIT the way a single-definition macro does. Recursing
+ * is sound for the same reason a single form is: elaborating the `do`
+ * already registered every child definition globally, so a `do` of
+ * definitions is exactly as live as its unwrapped children would be. A `do`
+ * containing even one non-definition (an actual side-effecting call) still
+ * rejects, because that call site is unreachable in codegen the same as
+ * before. */
 static bool module_body_form_is_definition(const Expr *be) {
     switch (be->kind) {
         case EX_NIL_LIT:        /* defmacro / defmacro* / defclass / deftype */
@@ -157,6 +169,12 @@ static bool module_body_form_is_definition(const Expr *be) {
         case EX_INSTANCE_DEF:   /* definstance */
         case EX_INLINE_C:       /* bare ```c block -- file-scope C decls */
         case EX_DEFER:          /* module-level defer -- runs at exit */
+            return true;
+        case EX_DO:             /* macro expanding to several definitions */
+            for (uint32_t i = 0; i < be->as.do_.n; i++) {
+                if (!module_body_form_is_definition(be->as.do_.items[i]))
+                    return false;
+            }
             return true;
         default:
             return false;

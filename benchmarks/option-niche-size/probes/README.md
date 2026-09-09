@@ -1,7 +1,7 @@
 # `(Option cstr)` eligibility probes
 
 The four probes behind item 5 of
-[sr3-option-niche-plan.md](../../../docs/upcoming/sr3-option-niche-plan.md).
+[sr3-option-niche-plan.md](../../../docs/archive/sr3-option-niche-plan.md).
 They answer, by measurement rather than by reading the predicate: can the
 largest pointer-payload Option population in the tree reach the niche?
 

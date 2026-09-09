@@ -310,7 +310,7 @@ extern bool g_saffron_prelude;
  * route to the same env state. */
 extern bool g_repl_start_saffron;
 /* SR3 slice B (the Option niche -- default since 2026-09-03, TUR_OPTION_NICHE=0
- * restores the tagged form; docs/upcoming/sr3-option-niche-plan.md):
+ * restores the tagged form; docs/archive/sr3-option-niche-plan.md):
  * an `(Option P)` whose payload is a NON-NULLABLE pointer is carried AS that
  * pointer -- 16 bytes down to 8, `(none)` as NULL, no tag word anywhere.
  *
