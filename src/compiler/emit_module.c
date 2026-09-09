@@ -1826,6 +1826,71 @@ char *ensure_fat_float_carrier_shim(EmitCtx *ctx, Type result_type,
     return name;
 }
 
+/* typed-float-fn-param-forwarded-into-carrier-base (found by the split-runtime
+ * CI leg on local-fn-into-rank2-slot): the POLY-CARRIER twin of the fat bridge
+ * above.  A typed `:fn` PARAMETER (`f : (fn [float] float)`) already holds a
+ * tur_poly_fn_t whose `.fn` is natively typed (F5), and the HRT4 pass-through
+ * forwards it unchanged into an erased sink -- the carrier base instance
+ * (`__inst_Functor_fmap_Option`), which invokes `.fn` through the int64 cast.
+ * A double then crosses in a general register while the thunk reads xmm0:
+ * undefined behaviour that the whole-preamble build happened to survive (the
+ * value was still sitting in xmm0) and the split build does not (14.5 -> 0).
+ *
+ * The shim's env is a POINTER TO THE ORIGINAL CARRIER (spilled to a local by
+ * the pass-through site), so it can hand the native thunk its own env while
+ * bridging the erased float positions through their bits.  The carrier base
+ * invokes synchronously and does not retain the callback, so the local
+ * outlives every read. */
+char *ensure_poly_float_carrier_shim(EmitCtx *ctx, Type result_type,
+                                     Type *param_types, uint8_t n_params,
+                                     uint64_t erased_mask, bool erased_result) {
+    if (!float_carrier_shim_needed(result_type, param_types, n_params,
+                                   erased_mask, erased_result))
+        return NULL;
+    const char *rc = type_c_name(result_type);
+    if (!rc) return NULL;
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_polyfltcarrier_");
+    append_sanitized_c_token(&nb, rc);
+    for (uint8_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        if (!pc) { buf_free(&nb); return NULL; }
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, pc);
+    }
+    buf_printf(&nb, "_m%llx%s", (unsigned long long)erased_mask,
+               erased_result ? "r" : "");
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    if (!float_carrier_shim_register(ctx, name)) return name;
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    const char *rk = erased_result ? float_carrier_kind(rc) : NULL;
+    buf_printf(target, "static %s %s(void *__e", rk ? "int64_t" : rc, name);
+    for (uint8_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        bool bits = (erased_mask & ARG_IDX_BIT(i)) && float_carrier_kind(pc);
+        buf_printf(target, ", %s a%u", bits ? "int64_t" : pc, (unsigned)i);
+    }
+    buf_puts(target, ") {\n    tur_poly_fn_t *__p = (tur_poly_fn_t *)__e;\n    ");
+    buf_printf(target, "%s __r = ((%s (*)(void *", rc, rc);
+    for (uint8_t i = 0; i < n_params; i++)
+        buf_printf(target, ", %s", type_c_name(param_types[i]));
+    buf_puts(target, "))(intptr_t)__p->fn)(__p->env");
+    for (uint8_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        const char *pk = (erased_mask & ARG_IDX_BIT(i)) ? float_carrier_kind(pc) : NULL;
+        if (pk) buf_printf(target, ", tur_sc_%s_from_bits(a%u)", pk, (unsigned)i);
+        else buf_printf(target, ", a%u", (unsigned)i);
+    }
+    buf_puts(target, ");\n    ");
+    if (rk) buf_printf(target, "return tur_sc_bits_%s(__r);\n}\n", rk);
+    else buf_puts(target, "return __r;\n}\n");
+    return name;
+}
+
 /* let-bound-noncapturing-lambda-segfaults-as-fn-arg: adapter for a `:fn` value
  * that is a BARE C function pointer rather than a closure box.
  *

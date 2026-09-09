@@ -1285,6 +1285,9 @@ char *ensure_fat_aggregate_spill_shim(EmitCtx *ctx, Type result_type,
  * signature and reads the closure's `__fn` out of slot 0 of its env.  Both
  * return NULL when no erased position is float-class (the plain wrapper /
  * typed thunk already agrees with the consumer).  Defined in emit_module.c. */
+char *ensure_poly_float_carrier_shim(EmitCtx *ctx, Type result_type,
+                                     Type *param_types, uint8_t n_params,
+                                     uint64_t erased_mask, bool erased_result);
 char *ensure_float_carrier_shim(EmitCtx *ctx, const char *real_fn,
                                 Type result_type, Type *param_types,
                                 uint8_t n_params, uint64_t erased_mask,

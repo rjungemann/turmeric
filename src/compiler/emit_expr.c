@@ -13803,7 +13803,58 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(tmp);
                     return result;
                 }
-                /* Phase HRT4: pass-through — inner is already a tur_poly_fn_t, emit directly. */
+                /* Phase HRT4: pass-through — inner is already a tur_poly_fn_t.
+                 *
+                 * typed-float-fn-param-forwarded-into-carrier-base: a TYPED
+                 * `:fn` parameter's carrier holds a natively typed thunk (F5),
+                 * and an ERASED sink -- the carrier base instance, which is
+                 * what `poly_wrap_callee_carrier` marks -- invokes `.fn`
+                 * through the int64 cast.  For a float-class position that is
+                 * a register-class mismatch the whole-preamble build survived
+                 * by luck and the split build does not.  Bridge it exactly as
+                 * the wrapper and fat shapes above do, through a shim whose env
+                 * is a pointer to the original carrier. */
+                {
+                    const Expr *pin = e->as.poly_wrap_.inner;
+                    while (pin && pin->kind == EX_ASCRIBE) pin = pin->as.ascribe_.inner;
+                    const Binding *pb = (pin && pin->kind == EX_VAR) ? pin->as.var.binding : NULL;
+                    const Type *pty = (pb && pb->poly_type) ? pb->poly_type : NULL;
+                    if (pty && pty->kind == TY_FN && !pty->as.fn.boxed &&
+                        pty->as.fn.arity > 0 && pty->as.fn.arity <= MAX_FN_ARITY &&
+                        (e->as.poly_wrap_.carrier_erased_arg_mask ||
+                         e->as.poly_wrap_.carrier_erased_result) &&
+                        (e->as.poly_wrap_.boxes_aggregate ||
+                         ctx->poly_wrap_callee_carrier)) {
+                        uint8_t pn = (uint8_t)pty->as.fn.arity;
+                        Type pparams[MAX_FN_ARITY];
+                        for (uint8_t pi = 0; pi < pn; pi++)
+                            pparams[pi] = emit_resolve_type(
+                                ctx, emit_fn_arg_type_from_type(*pty, pi));
+                        Type pres = emit_resolve_type(
+                            ctx, emit_fn_result_type_from_type(*pty));
+                        char *bridge = ensure_poly_float_carrier_shim(
+                            ctx, pres, pn ? pparams : NULL, pn,
+                            e->as.poly_wrap_.carrier_erased_arg_mask,
+                            e->as.poly_wrap_.carrier_erased_result);
+                        if (bridge) {
+                            char *orig = emit_value(ctx, body, e->as.poly_wrap_.inner);
+                            char *tmp = fresh_tmp(ctx);
+                            indent_buf(body, ctx->indent);
+                            buf_printf(body, "tur_poly_fn_t %s = %s;\n", tmp, orig);
+                            Buf out; buf_init(&out);
+                            buf_printf(&out, "(tur_poly_fn_t){ (void *)&%s, "
+                                             "(int64_t(*)(void*,int64_t))%s }",
+                                       tmp, bridge);
+                            buf_putc(&out, '\0');
+                            char *result = strdup(out.data);
+                            buf_free(&out);
+                            free(orig);
+                            free(tmp);
+                            free(bridge);
+                            return result;
+                        }
+                    }
+                }
                 return emit_value(ctx, body, e->as.poly_wrap_.inner);
             }
             /* Emit (tur_poly_fn_t){ NULL, wrapper_fn_name }.

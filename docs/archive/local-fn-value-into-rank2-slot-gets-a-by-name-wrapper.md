@@ -42,6 +42,18 @@ reason that predates this fix and is independent of how the mapper arrives:
 the spec body's own invocation cast. Filed as
 `fmap-over-byvalue-struct-element-passes-the-struct-as-int64`.
 
+**The report's own float control was undefined behaviour (found 2026-09-09
+by the split-runtime CI leg).** "Same `ap`, but `(Option float)` -> 14.5"
+worked because the HRT4 pass-through forwarded the typed `(fn [float]
+float)` parameter's carrier -- a natively typed `double` thunk -- straight
+into the carrier base instance, which invokes `.fn` through the int64 cast:
+the double crossed in a general register while the thunk read xmm0, and the
+whole-preamble build happened to still have the value in xmm0. Under
+`TUR_RUNTIME=split` the same program printed `0`. The pass-through now
+bridges the erased float positions through a poly-carrier bits shim
+(`ensure_poly_float_carrier_shim`), the twin of the wrapper and fat-closure
+bridges, so the fixture's float leg is pinned on both runtimes.
+
 ---
 
 **Severity: medium.** Loud -- a C compile error, never a wrong answer. It
