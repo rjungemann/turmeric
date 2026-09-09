@@ -795,12 +795,55 @@ The shape, restated as buildable work:
 4. A `registry[class][tag]` lookup at the call site.
 5. A clean "no instance for T" panic.
 
-**Pieces 3-5 remain**, and they are the dispatch itself: a parallel
-`{class, tag} -> dict` registry mirroring P1's chunked `{id, name, boxed}` one
-(each TU publishing its rows at static-init, a linear find), a lookup replacing
-today's "cannot dispatch on an `any` receiver" diagnostic, and a panic when no
-instance matches. The registry shape is settled by P1's precedent; what is not
-settled is the four design questions D8 lists, which is why S8 came first.
+**Pieces 3-5 remain**, and they are the dispatch itself.
+
+#### Piece 3 was ATTEMPTED 2026-09-09 and reverted -- two constraints found
+
+The registry itself was built and **works**: a `{class, tag, dict}` row table
+mirroring P1's chunked `{id, name, boxed}` one, accumulated per TU and
+published at static-init with a linear find. On the rank-2 fixture it emitted
+exactly what it should:
+
+```c
+static const __tur_inst_row __tur_inst_rows[] = {
+    { "Eq", 3LL, &dict_Eq_int_singleton },
+    { "Shape", 5271915457487731915LL, &dict_Shape_Circle_singleton },
+    { "Shape", 7170320896677541932LL, &dict_Shape_Square_singleton },
+};
+```
+
+It was reverted because COMPILING it -- not reading it -- turned up two
+constraints that change the shape of the remaining work:
+
+1. **Dicts are only emitted for rank-2 / mode-B use.** A program with purely
+   static dispatch emits NO dict at all, so hanging registration off the
+   singleton site registers nothing for exactly the programs D8 is for. (This
+   is the same measurement that made piece 2 safe -- the slot has no typed
+   caller -- read the other way round.) Runtime dispatch needs a dict per
+   instance of any class with an `any`-receiver call site, so **something must
+   force dict emission**, and deciding what forces it is now the first question
+   of piece 3 rather than an afterthought.
+
+2. **The row table must be emitted AFTER the singletons.** Published in the
+   preamble beside the type rows -- the obvious place, since the two are
+   siblings -- it references `&dict_Shape_Circle_singleton` before that symbol
+   exists: `error: 'dict_Eq_int_singleton' undeclared here`. The type rows have
+   no such problem because they hold only string literals and integers. Either
+   the table moves late or the singletons get forward declarations.
+
+Neither is visible from reading the code, and the second hid behind the first
+in the compiler's output as a spurious-looking
+`missing initializer for field 'dict'` -- gcc had dropped the undeclared symbol
+and then reported the row as short.
+
+So piece 3 is a known quantity now rather than a sketch, and the remaining work
+is: force dict emission for dispatched classes, emit the rows late, add the
+call-site node, and the no-instance panic.
+
+The four design questions D8 lists may partly answer themselves once the key is
+the concrete box tag -- two instances cannot match one tag, and defaults are
+already resolved into per-instance slots -- but that is reasoning, not
+measurement, and superclass chains genuinely need a decision.
 
 ### D9 -- the gate
 
