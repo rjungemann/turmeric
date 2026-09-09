@@ -1293,8 +1293,8 @@ implementation is smaller than S7 implies -- `elab_any_unbox_to` is the node
 `(cast x T)` already lowers to, so the seam is that node inserted at an
 argument, and D5's chosen behaviour (a runtime check, not erasure) comes with
 it. Verified both ways: the right type passes through, the wrong type panics
-with the ordinary cast message. What S7 still owes is the OTHER direction and
-the `:strict` opt-out.
+with the ordinary cast message. What S7 still owed was the OTHER direction,
+since landed.
 
 **Containers are S6's, and the fixture says so.** The exit list is a `defdata`
 defined in the fixture, not a stdlib cons list, because a stdlib cons list
@@ -1615,7 +1615,7 @@ A `stdlib/saffron/prelude.tur` autoloads for `LANG_SAFFRON` files: the dynamic
 reaches for constantly. This is where Saffron stops feeling like Turmeric with
 the types removed and starts feeling like its own thing.
 
-### S7 -- the boundary (medium) -- DONE except `:strict` (2026-09-08)
+### S7 -- the boundary (medium) -- DONE 2026-09-09
 
 D5's implicit checked `cast` at each Saffron -> Turmeric argument whose
 parameter is concrete and whose argument is `any`. Fixtures for both
@@ -1647,26 +1647,11 @@ POINTER, which is a WRONG ANSWER rather than a panic. That is why the first
 attempt at this was reverted. The fixtures assert VALUES on both back ends, not
 the absence of a panic.
 
-**Still owed: the `:strict` opt-out -- WHICH THIS PLAN NEVER DEFINES.**
-Searched 2026-09-08: `:strict` appears exactly twice, both times in this
-stage's own "still owed" line and S5's echo of it, and nowhere is it given a
-meaning. The one thing it plausibly named -- a way to skip the boundary check
--- is the thing D5 explicitly **rejects**: "`--saffron-unchecked-boundary` is
-deliberately *not* proposed; if the cost ever matters, the answer is D3's rung
-2, not a soundness switch."
-
-So this is one of two things, and it should be decided rather than carried:
-
-1. **Vestigial** -- a leftover from a draft where the boundary check was
-   optional, superseded by D5's verdict. Then S7 is DONE and the line goes.
-2. **A real but unwritten item** -- most likely a per-file or per-manifest
-   opt-IN to stricter checking (a Saffron file that wants unannotated
-   parameters to be an error, i.e. Saffron-as-linter), which is a different
-   feature from anything D5 discusses and needs its own decision.
-
-Reading (1) is the more likely one on the evidence, but it is a judgement about
-intent, so it is flagged here rather than resolved unilaterally. **Everything
-else in S7 is done.**
+**`:strict` is retired (2026-09-09).** It appeared twice in this plan and was
+never defined. The analysis narrowed it to either a vestige of a draft in which
+the boundary check was optional -- superseded by D5's verdict -- or an unwritten
+Saffron-as-linter opt-in; the author confirmed the first. Nothing was built for
+it and nothing is owed. S7 is complete.
 
 **The HAND-WRITTEN spelling is settled ahead of it (2026-09-08), and it is the
 same operation.** `::` now refuses an `any` operand and names `cast`
