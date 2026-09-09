@@ -628,8 +628,17 @@ Expr *elab_form(Elab *e, Form *f) {
             return elab_form(e, call);
         }
         case F_SET_LITERAL: {
+            /* saffron-lang-plan S6 (G7) / set-of-element-type-is-not-checked:
+             * the same widen as `[...]`.  `#set{1 "two" 7.1}` used to build
+             * WITHOUT it -- `set-of` had no homogeneity check, so each element
+             * resolved its own Hash/MapKey and the set claimed `(Set int)`
+             * while holding a cstr.  Now that `set-of` checks like `vec-of`
+             * and `Hash[any]`/`MapKey[any]` exist, the literal widens to the
+             * honest `(Set any)`. */
+            Form **items = dl_saffron_widen_elems(e, f->span, f->as.list.items,
+                                                  f->as.list.len);
             Form *call = dl_build_call(e, f->span, "set-of",
-                                       f->as.list.items, f->as.list.len);
+                                       items, f->as.list.len);
             return elab_form(e, call);
         }
         /* Variadic HKT rows: a #row{...} type-row is a TYPE, not a value. It is

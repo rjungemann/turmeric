@@ -1,0 +1,11 @@
+;; set-of-element-type-is-not-checked: a heterogeneous `set-of` in plain
+;; Turmeric is a type error at the offending element, exactly as `vec-of` and
+;; `hamt-of` are -- it used to build and claim `(Set int)` while holding a cstr,
+;; crossing into a `(Set int)` parameter as one.  The honest spelling of a mixed
+;; set is `(Set any)` (see set-of-any-elements); a Saffron `#set{...}` literal
+;; widens to it automatically (saffron-set-literal).
+(defn takes-int-set [s : (Set int)] : int (set-count s))
+
+(defn main [] : int
+  (println (takes-int-set (set-of 1 "two")))
+  0)

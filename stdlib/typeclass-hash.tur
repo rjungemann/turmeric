@@ -64,3 +64,28 @@
     u.f = (double)x;
     return u.i;
     ```))
+;;; Hash [any] -- hash a dynamically-typed value by its runtime type.
+;;;
+;;; set-of-element-type-is-not-checked / saffron-lang-plan S6: the honest type
+;;; of a heterogeneous set is `(Set any)`, and a `(Set any)` needs `Hash[any]`.
+;;; Each `is?` arm narrows `x` to the payload type, so the hash is exactly the
+;;; one that payload would have had unboxed -- an `any` holding 1 hashes as
+;;; `(hash 1)`, which is what lets a plain `1` probe a `(Set any)` and find it.
+;;; Any other payload hashes by its TYPE NAME: correct (equal values agree)
+;;; but coarse (every value of that type collides), which is the v0 trade for
+;;; not reading an arbitrary payload word.  Pure Turmeric, so both back ends
+;;; agree without a native.  The arms use the `.hash` method spelling on
+;;; purpose: a bare `hash` resolves in the VALUE namespace, where a user
+;;; `(defn hash ...)` legitimately shadows the method (TUR-W0039), and this
+;;; body is elaborated in the user's program.
+;;;
+;;; Since: saffron-lang-plan S6 (Hash[any])
+
+(definstance Hash [any]
+  (hash [x]
+    : int
+    (if (is? x int) (.hash x)
+      (if (is? x cstr) (.hash x)
+        (if (is? x float) (.hash x)
+          (if (is? x bool) (.hash x)
+            (.hash (type-of x))))))))

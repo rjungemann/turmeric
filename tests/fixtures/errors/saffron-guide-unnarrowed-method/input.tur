@@ -13,8 +13,16 @@
 ;; type-case, and an earlier version of this path had no diagnostic at all when
 ;; a single instance was in scope.
 ;;
+;; The class is the guide's own `Named`, not a stdlib one: `(hash x)` on an
+;; `any` is WELL-TYPED now that `Hash [any]` exists (set-of-element-type-is-not-
+;; checked), so the diagnostic is only reachable for a class with no `any`
+;; instance -- which is what the guide's example is.
+;;
 ;; The Saffron half is `tests/fixtures/saffron-dyn-typeclass-dispatch`.
 
-(defn h [x : any] : int (hash x))
+(defclass Named [a] (name-of [x] : cstr))
+(definstance Named [int] (name-of [x] : cstr "int"))
+
+(defn h [x : any] : cstr (.name-of x))
 
 (defn main [] : int 0)

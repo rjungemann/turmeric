@@ -118,10 +118,17 @@
 ;; grounds to the int carrier -- silently dropping content equality.  The
 ;; element is let-bound once so a computed element is evaluated exactly once.
 
+;; set-of-element-type-is-not-checked (Set any): the hash is bound BEFORE the
+;; element alias.  A caller's `(set-add s (hash e) e)` names `e` in both slots,
+;; and an `any` local is moved by the `[__tur_se__ ~x]` alias -- so a `~h`
+;; spliced inside that let was a use-after-move (TUR-E0201 "cannot copy unique
+;; value") the moment the element type became `any`.  Same shape below.
+
 (defmacro set-add [s h x]
-  `(let [__tur_se__ ~x]
+  `(let [__tur_sh__ ~h
+         __tur_se__ ~x]
      (set-add-eq-o ~s
-       ~h
+       __tur_sh__
        (mk-box __tur_se__)
        (mk-cmp __tur_se__)
        (mk-owned? __tur_se__))))
@@ -141,9 +148,10 @@
 ;;; Since: Phase TC2
 
 (defmacro set-remove [s h x]
-  `(let [__tur_se__ ~x]
+  `(let [__tur_sh__ ~h
+         __tur_se__ ~x]
      (set-del-eq-o ~s
-       ~h
+       __tur_sh__
        (mk-box __tur_se__)
        (mk-cmp __tur_se__)
        (mk-owned? __tur_se__))))
@@ -163,9 +171,10 @@
 ;;; Since: Phase TC2
 
 (defmacro set-member? [s h x]
-  `(let [__tur_se__ ~x]
+  `(let [__tur_sh__ ~h
+         __tur_se__ ~x]
      (set-has-eq-o? ~s
-       ~h
+       __tur_sh__
        (mk-box __tur_se__)
        (mk-cmp __tur_se__)
        (mk-owned? __tur_se__))))
@@ -510,8 +519,23 @@
 ;;; via Hash[A] + MapKey[A], so (set-of "a" "a") -- two equal strings -- is one
 ;;; member even at distinct addresses.
 
+;;; set-add-elem__ -- internal: typed single-element insert behind set-add1.
+;;;
+;;; set-of-element-type-is-not-checked: `set-of` used to have no homogeneity
+;;; check -- `set-add1` expanded straight to the carrier-typed `set-add-eq-o`,
+;;; each element resolving its own Hash/MapKey, so `(set-of 1 "two")` built
+;;; and claimed `(Set int)` while holding a cstr.  Routing every insert through
+;;; this TYPED helper is the `vec-push!` shape: the element must be the set's
+;;; `A`, and a mismatch is a TUR-E0001 at the offending element.  A
+;;; heterogeneous set is spelled `(Set any)` -- `Hash[any]`/`MapKey[any]`
+;;; satisfy the constraints and each `any` keys by its payload -- which is what
+;;; a Saffron `#set{...}` literal widens to.
+
+(defn set-add-elem__ [^Hash A ^MapKey A] [s : (Set A) x : A] : (Set A)
+  (set-add-eq-o s (.hash x) (.mk-box x) (.mk-cmp x) (.mk-owned? x)))
+
 (defmacro set-add1 [s x]
-  `(let [__tur_se1__ ~x] (set-add ~s (hash __tur_se1__) __tur_se1__)))
+  `(set-add-elem__ ~s ~x))
 ;;; set-add-each__ -- internal helper for the set-of macro.
 ;;;
 ;;; Threads (set-add1 s x) over the elements in xs.  Each element appears

@@ -415,6 +415,45 @@
     : int
     ```c return (int64_t)(intptr_t)__TUR_CNAME_tur-f64-carrier-eq?__; ```)
   (mk-owned? [x] 0))
+;;; MapKey [any] -- key a map or set by a dynamically-typed value.
+;;;
+;;; set-of-element-type-is-not-checked / saffron-lang-plan S6: the twin of
+;;; `Hash[any]`.  Each `is?` arm narrows `x` to its payload type and delegates
+;;; to THAT type's MapKey, so an `any` holding "two" is boxed and compared
+;;; exactly as a bare "two" (content-keyed), and an `any` holding 7.1 as a
+;;; bare 7.1 (bit-reinterpret, value comparator).  The runtime HAMT keeps a
+;;; comparator PER ENTRY, which is what makes mixing them in one set sound:
+;;; this is precisely how a heterogeneous `set-of` already behaved before it
+;;; had an honest type.  An unrecognised payload keys by its type name, like
+;;; its hash.  The arms use the `.mk-box` method spelling on purpose: a bare
+;;; `mk-box` resolves in the VALUE namespace, where a user `(defn mk-box ...)`
+;;; -- a common name for a `Box` constructor helper -- legitimately shadows the
+;;; method (TUR-W0039), and this body is elaborated in the user's program.
+;;;
+;;; Since: saffron-lang-plan S6 (MapKey[any])
+
+(definstance MapKey [any]
+  (mk-box [x]
+    : int
+    (if (is? x int) (.mk-box x)
+      (if (is? x cstr) (.mk-box x)
+        (if (is? x float) (.mk-box x)
+          (if (is? x bool) (.mk-box x)
+            (.mk-box (type-of x)))))))
+  (mk-cmp [x]
+    : int
+    (if (is? x int) (.mk-cmp x)
+      (if (is? x cstr) (.mk-cmp x)
+        (if (is? x float) (.mk-cmp x)
+          (if (is? x bool) (.mk-cmp x)
+            (.mk-cmp (type-of x)))))))
+  (mk-owned? [x]
+    : int
+    (if (is? x int) (.mk-owned? x)
+      (if (is? x cstr) (.mk-owned? x)
+        (if (is? x float) (.mk-owned? x)
+          (if (is? x bool) (.mk-owned? x)
+            (.mk-owned? (type-of x))))))))
 ;;; ============================================================================
 ;;; The typed Map[K V] accessor surface (TMS3).
 ;;;

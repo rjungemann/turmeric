@@ -1,2 +1,2 @@
-cannot dispatch '.hash' on an 'any' receiver
+cannot dispatch '.name-of' on an 'any' receiver
 narrow it first

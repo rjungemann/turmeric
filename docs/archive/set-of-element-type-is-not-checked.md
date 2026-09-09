@@ -1,10 +1,44 @@
 ---
 title: "`(set-of 1 \"two\")` type-checks as `(Set int)` while holding a cstr"
-category: Reported
+category: Archive
 description: set-of has no homogeneity check, unlike vec-of and hamt-of. A heterogeneous set literal builds, dedupes and answers membership correctly -- and reports its type as (Set int) from the first element, so it passes to a (Set int) parameter while holding a cstr pointer. The runtime behaviour is right; the exported type is a lie.
 ---
 
 # `set-of` does not check its element type
+
+**RESOLVED 2026-09-09**, in the corrected order (direction 2, then 1):
+
+- **`Hash [any]`** (`stdlib/typeclass-hash.tur`) and **`MapKey [any]`**
+  (`stdlib/map.tur`) delegate by runtime tag: each `is?` arm narrows `x` to its
+  payload type and calls THAT type's instance, so an `any` holding `"two"`
+  hashes and keys exactly as a bare `"two"` (content), an `any` holding `7.1`
+  as a bare `7.1` (bits / value comparator), and any other payload by its type
+  name (correct, coarse). Pure Turmeric, so both back ends agree without a
+  native. The runtime HAMT keeps a comparator PER ENTRY, which is what makes
+  mixing them in one set sound -- and is precisely how the unchecked
+  heterogeneous `set-of` already behaved. A `definstance` over `any` is
+  accepted; these are the first in the tree.
+- **The check.** `set-add1` is now a call to the constrained typed
+  `set-add-elem__ [^Hash A ^MapKey A] [s : (Set A) x : A]` -- the `vec-push!`
+  shape -- so `(set-of 1 "two")` is a TUR-E0001 at the cstr, and `(set-of
+  (:: 1 any) (:: "two" any))` is an honest `(Set any)`.
+- **A latent use-after-move.** `set-add` / `set-remove` / `set-member?`
+  spliced the caller's hash expression INSIDE the `let` that had already
+  aliased -- moved -- the same element, which was fine while every element
+  type was copyable and became TUR-E0201 the moment it was `any`. The hash is
+  now bound before the alias.
+- **`#set{...}` in a Saffron file** takes the `[...]` widen, reversing the
+  plan's "no change" decision: the check made the widen necessary and the
+  instances made it possible, with byte-identical behaviour.
+
+Fixtures: `tests/fixtures/set-of-any-elements` (construction, dedup through the
+box, membership by `any` and by bare value, a `(Set any)` parameter),
+`errors/set-of-heterogeneous` (the report's repro, now a diagnostic), and
+`saffron-set-literal` (header rewritten; output unchanged). Compiled and
+interpreted suites green. Keying a MAP by `any` is unexplored: `#map{}` still
+normalizes keys to one type first.
+
+---
 
 **Severity: medium.** Nothing miscomputes -- the set builds, dedupes by content,
 and answers membership by value on both back ends. What is wrong is the TYPE it

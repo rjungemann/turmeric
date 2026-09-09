@@ -1521,20 +1521,24 @@ Still to do, and the ORDER is now measured rather than assumed:
    after. Sequencing it this way is what let the `#map{}` widen land next
    against two agreeing back ends. [Archived](../archive/map-of-any-is-broken-on-both-back-ends.md).
 4. ~~The `#map{...}` / `#set{...}` twins~~ -- **DONE 2026-09-08**, and `#set{}`
-   turned out to need NO change, which is worth recording rather than leaving
-   the absence of a diff to look like an oversight.
+   at first needed NO change -- a decision REVERSED 2026-09-09, recorded here
+   because the earlier text explained why the widen would break it.
    - `#map{...}` takes the same widen as `[...]`, on the VALUES only. The KEYS
-     are already normalized to one key type by the lowering above the widen, and
-     a heterogeneous key would need `Hash[any]`/`MapKey[any]` instances that do
-     not exist. `tests/fixtures/saffron-map-literal`.
-   - `#set{...}` already works heterogeneously on both back ends -- construction,
-     content-keyed dedup, and membership by value. `set-of` is not
-     homogeneity-checked the way `vec-of` and `hamt-of` are: it expands to a
-     chain of `set-add1`, each element resolving its own `hash`/`mk-box`/`mk-cmp`.
-     A set also has no read-back accessor, so the write-only problem the Vec and
-     Map cases had does not arise. Widening WOULD break it (`(Set any)` refuses
-     for want of `Hash[any]`). `tests/fixtures/saffron-set-literal` pins the
-     no-change decision.
+     are already normalized to one key type by the lowering above the widen.
+     `tests/fixtures/saffron-map-literal`. (A heterogeneous key needs
+     `Hash[any]`/`MapKey[any]`, which now exist -- see the set row -- but the
+     key normalization still runs first; keying a map by `any` is unexplored.)
+   - `#set{...}` -- **widens like `[...]` since 2026-09-09.** It had worked
+     heterogeneously WITHOUT a widen only because `set-of` had no homogeneity
+     check: each element resolved its own `hash`/`mk-box`/`mk-cmp` and the set
+     claimed `(Set int)` while holding a cstr (`set-of-element-type-is-not-
+     checked`, now archived). Resolving that gave `set-of` the `vec-of`-style
+     typed insert (`set-add-elem__`), which made the widen NECESSARY, and
+     `Hash[any]`/`MapKey[any]` (each `any` hashes and keys by its payload; the
+     HAMT keeps a comparator per entry, which is what makes mixing them sound),
+     which made it POSSIBLE. `tests/fixtures/saffron-set-literal` now pins the
+     widened literal with byte-identical behaviour; `set-of-any-elements` and
+     `errors/set-of-heterogeneous` pin the plain-Turmeric halves.
 5. ~~Cons lists~~ -- **DONE 2026-09-08.** `(list 1 "two" 7.1)` hit the third of
    the three homogeneity checks (`tur-list-homog__`) and takes the same widen.
    It is a CALL rather than a reader literal, so the hook is in `elab_form`'s
@@ -1585,12 +1589,13 @@ Still to do, and the ORDER is now measured rather than assumed:
 ### S6 -- containers and the Saffron prelude (medium) -- scope, all landed
 
 G7. `(vec any)` becomes the default container element in Saffron, so
-`[1 "two" 7.1]` is a vector of three boxes. Same for `#map{...}` and cons lists
--- and NOT `#set{...}`, which measured out of this list: `set-of` is not
-homogeneity-checked the way `vec-of` and `hamt-of` are, a set has no read-back
-accessor so the write-only problem never arises, and widening would BREAK it
-(`(Set any)` refuses for want of `Hash[any]`). `tests/fixtures/saffron-set-literal`
-pins the no-change decision so the absent diff does not read as an oversight.
+`[1 "two" 7.1]` is a vector of three boxes. Same for `#map{...}` values, cons
+lists -- and, since 2026-09-09, `#set{...}` too. The set had first measured OUT
+of this list, but for a bad reason: it only built heterogeneously because
+`set-of` skipped the homogeneity check its siblings have, lying about its
+element type. With `set-of` checked like `vec-of` and `Hash[any]`/`MapKey[any]`
+in the stdlib, the literal widens to an honest `(Set any)` and behaves exactly
+as before (`tests/fixtures/saffron-set-literal`, item 4 above).
 
 **Exit: MET 2026-09-08.** Every literal, the unannotated `main`, and the
 prelude. Fixtures: `saffron-vector-literal`,
