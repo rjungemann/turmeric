@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.44.2` -- Closes several silent wrong-answer bugs in the regions escape lock, and fixes `tur lsp`/`tur dap`/release-archive builds on Windows.
+**Latest release:** `v0.45.0` -- Adds `#lang saffron`, a dynamically typed dialect where unannotated code runs on `any`, and makes `any` a usable type across both back ends.
 
 ## What
 

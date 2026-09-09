@@ -2,7 +2,48 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.45.0] -- 2026-09-09
+
+### Added
+
+- **`#lang saffron` -- a dynamically typed dialect.** Every unannotated
+  parameter and return in a `#lang saffron` file defaults to `any`, and the
+  file gets a dynamic operator layer, dynamic calls and dynamic field access on
+  both the interpreter and the compiled back end. An entry file auto-loads the
+  Saffron prelude. `tur init --saffron` scaffolds one, `tur repl --lang saffron`
+  opens a prompt in it, `tur fmt` and the LSP understand it, and the editor
+  syntax packs ship. See docs/guides/saffron-guide.md.
+- **`any` became a usable type, not just a widening.** `is?`/`cast` work on
+  parametric receivers and narrow inside an `if` guard, `type-of` answers
+  alike on both back ends, a boxed function keeps a per-signature id and
+  survives the round trip, and box type-ids agree across translation units.
+  Containers widen too: `[...]` is a `(Vec any)`, `#map{...}` has `any` values,
+  `(list 1 "two" 7.1)` widens its elements, and each element reads back with
+  its own tag.
+- **Typeclass default method bodies.** A method with a default body now works
+  and dispatches dynamically -- including on an `any` receiver and on a
+  parametric (HKT) receiver keyed on the head -- and an instance may omit it.
+  The `{class, tag, dict}` instance registry is published so the dispatch can
+  find them.
+- **`--runtime=split` (opt-in).** The runtime preamble compiles once instead of
+  once per program. Not yet correct for the whole suite: CI runs it ratcheted
+  against a named failure list, with a Windows leg where the interesting
+  failures actually are.
+- **`set-of` checks its element types**, and `any` gets `Hash` and `MapKey`
+  instances so it can be a set element or a map key.
+- **A top-level `(do ...)` of definitions inside `defmodule`.** A macro
+  expanding to several definitions wraps them in an implicit `do`, which was a
+  hard TUR-E0711 reject -- so every turmeric-spices file calling `derive-json`,
+  `defworld-box-helpers` or `defmirror` at module top level failed CI.
+
+### Changed
+
+- **`::` is refused on an `any` operand**, and the diagnostic names `cast`.
+- **A duplicate `definstance` warns** when it is dropped, instead of vanishing.
+- **An unknown `#lang` base is named** in the diagnostic, which points at
+  `tur lang-layers`.
+- **A rank-2 local fn value passes through as a fat closure**, not a by-name
+  wrapper.
 
 ### Fixed
 
@@ -13,39 +54,45 @@ All notable changes to Turmeric are documented here.
   Every usage error path (unknown flag, missing or duplicated input, bad
   `--lang`) now exits 2; `--help` still exits 0 everywhere, including
   `tur expand --help` (exited 2) and `tur smt --help` (exited 3), which had
-  the inverse bug. `tur emit-c --help` / `tur emit-h --help` are explicit
-  help arms now rather than an unknown flag that happened to print usage.
+  the inverse bug.
+- **`tur init` no longer destroys a working tree.** `tur init --help` did not
+  print help -- the flag fell past the project-name slot, so the current
+  directory's basename was used and the scaffold overwrote an existing
+  `.gitignore` and `README.md`. `--help` is handled, unknown flags are refused,
+  and scaffolding now refuses pre-flight if any of its five targets exists,
+  naming them, with `--force` as the opt-in.
 - **`tools/gendocs.py` reads the spaced annotation form.** `(defn f [a : int]
   : int ...)` -- the spelling 612 stdlib defns and the style guide use -- was
   parsed as parameters `a` (typed `:`) and `int` (untyped) with a return type
   of `:`, so 53% of the API reference would have rendered with a wrong
-  signature on the next `tur run docs`. Both spellings now parse alike, a
-  compound type such as `(Option int)` or `(fn [int] int)` stays one type, and
-  an `#fx{...}` row no longer hides the return type.
+  signature on the next `tur run docs`.
 - **`tur fetch` tells an optional-dep failure from a required one.** An
-  `:optional true` spice that cannot be fetched is reported and skipped
-  (stale lock row dropped, the rest still fetched, `tur.lock` written) and
-  the command exits `1`; a required `:spices` entry, `:cmake-deps` build,
-  manifest or lock-write failure exits `2`; a clean fetch is `0`. Every
-  failure used to be `1`, so CI could only warn-and-continue on all of them.
-- **Emitted `any` drops no longer trip `-Wfree-nonheap-object`.** A
-  `defopaque` over an immediate widened to `any` through an inlined callee
-  made gcc warn `'free' called on a pointer to an unallocated object '7'`
-  from `__tur_any_drop` inlined (or IPA-cloned) into the caller, though the
-  runtime guard never freed anything. The drop is `noinline, noclone` now,
-  and the fixture suite's emitted-C warning ratchet fails on that warning.
-- **`tests/run-jit.sh` notices when the engine is off.** A trivial program
-  must run natively before the fixtures start, and the fixtures allowed to
-  pass through the cc fallback are listed by name in
-  `tests/jit-fallback-baseline.txt`; a new fallback fails the run. An
-  emitter construct c2mir could not parse once put every fixture on the cc
-  path and the suite still reported green.
+  `:optional true` spice that cannot be fetched is reported and skipped and the
+  command exits `1`; a required `:spices` entry, `:cmake-deps` build, manifest
+  or lock-write failure exits `2`; a clean fetch is `0`. Every failure used to
+  be `1`, so CI could only warn-and-continue on all of them.
+- **Emitted `any` drops no longer trip `-Wfree-nonheap-object`.** A `defopaque`
+  over an immediate widened to `any` through an inlined callee made gcc warn
+  `'free' called on a pointer to an unallocated object '7'`, though the runtime
+  guard never freed anything. The drop is `noinline, noclone` now, and the
+  fixture suite's emitted-C warning ratchet fails on that warning.
+- **Three leaks on the `any` and container paths**: a map literal's
+  intermediate generations, the spine of a non-escaping by-value recursive ADT
+  local, and the Saffron `any`-widen leak (the frame-box rule fires again).
+- **`forall-dict` no longer truncates a float result** through the dict
+  carrier, and guards a by-value receiver instead of emitting bad C.
+- **The interpreter no longer segfaults on `type-of` over an inline-C
+  opaque**, a natively-built ADT value gets its `ctor->adt` link, and a
+  `(Map K any)` value reports its own tag rather than `int`.
+- **`tests/run-jit.sh` notices when the engine is off.** A trivial program must
+  run natively before the fixtures start, and the fixtures allowed through the
+  cc fallback are listed by name in `tests/jit-fallback-baseline.txt`; a new
+  fallback fails the run. An emitter construct c2mir could not parse once put
+  every fixture on the cc path and the suite still reported green.
 - **`add_test` under `src/CMakeLists.txt` registers.** `enable_testing()` ran
   after `add_subdirectory(src)`, so `tur_trail` built, passed by hand, and was
-  never listed by `ctest -N` or run in CI. The call moved above the
-  subdirectory; `tur_trail` runs (and passes), and a new lint
-  (`tur_ctest_registration_lint`) fails if a test declared there goes missing
-  from `ctest -N` again.
+  never listed by `ctest -N` or run in CI. A new lint
+  (`tur_ctest_registration_lint`) fails if that happens again.
 
 ## [0.44.2] -- 2026-09-06
 
