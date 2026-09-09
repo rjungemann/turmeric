@@ -1,5 +1,7 @@
 /* elab_fns.c -- function definition forms: defn, fn, extern-c, def. */
 #include "elab_internal.h"
+#include "lang_layers.h"   /* saffron-lang-plan S2: lang_span_is_saffron */
+#include "cps.h"          /* cps_expr_uses_control -- the control-cast hoist */
 #include "refine_discharge.h"   /* RT3: decide a refinement obligation in place */
 #include "refine_solver.h"      /* RT1: refine_model_search, for the W0377 witness */
 #include "globals.h"            /* repr-trace: g_emit_abi_trace; G1: g_dump_write_frames */
@@ -356,6 +358,13 @@ Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
         Expr *pred_e = elab_form(e, (Form *)ct_preds[ci]);
         if (!pred_e) continue;
         rt_diag_impure_pred(e, pred_e, span);
+        /* saffron-lang-plan D6: a refinement predicate over an `any` is a
+         * dyn-op returning `any`, and `tur-contract-check` takes a `bool` --
+         * so without this the emitted C was
+         * `tur_contract_check(<tur_tagged_t>, ...)`, which does not compile.
+         * D4's truthiness is the same answer `if` already uses for the same
+         * question; the two now share one helper. */
+        pred_e = elab_saffron_truthy(e, pred_e);
 
         Expr *check_expr = pred_e;
         if (cv_b) {
@@ -423,6 +432,7 @@ Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
     Expr *pred_e = elab_form(e, (Form *)pred);
     if (!pred_e) return body;
     rt_diag_impure_pred(e, pred_e, span);
+    pred_e = elab_saffron_truthy(e, pred_e);   /* D6, see rt_inject_param_checks */
 
     Expr **args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
     args[0] = pred_e;
@@ -5456,12 +5466,70 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
                         _result_safe = true; break;
                     default: break;
                 }
-                if (_result_safe && ptr_param_is_nonretaining(body, _pb, true))
+                /* saffron-any-return-defeats-the-frame-box-rule: an `any`
+                 * RESULT runs the walk too, unconfined.
+                 *
+                 * The whitelist above is a cheap conservative proxy for the
+                 * real question -- "can the result carry a pointer into this
+                 * parameter out?" -- and it answers no only for kinds that
+                 * cannot carry a pointer at all.  `any` can, so it is excluded,
+                 * and that is correct as far as it goes.  What it costs is
+                 * everything: a Saffron function's unannotated return IS `any`
+                 * (D3), so a rule written for the rare case stopped firing in
+                 * the language where the widen is the common case, and every
+                 * call widening a by-value payload malloc'd a box nothing
+                 * freed.
+                 *
+                 * The walk itself answers the real question, and answers it
+                 * better: run it with `result_cannot_carry = false` and a bare
+                 * `p` in result position fails (EX_VAR checks `confined`), a
+                 * general call taking `p` fails (its result may alias), while a
+                 * body whose result is a FRESH box -- which is what every
+                 * dynamic operator and field read produces -- passes.  So
+                 * `(defn f [x] (+ x 1))` and `(defn get-x [p] (.x p))` qualify
+                 * and `(defn dyn [x] x)` does not, which is exactly the
+                 * distinction the result kind could not draw.
+                 *
+                 * Same posture as the rest of this family: only ever sets a
+                 * bit, and the bit only ever moves an allocation into the
+                 * caller's frame.  Every unmodelled form still falls through to
+                 * the strict escape walk, whose default is "escapes". */
+                bool _run_walk = _result_safe || _rk == TY_ANY;
+                if (_run_walk && ptr_param_is_nonretaining(body, _pb, _result_safe))
                     b->nonretain_ptr_param_mask |= (1u << _pi);
             }
         }
       } while (b->nonretain_param_mask != _prev_fn_mask);
     }
+}
+
+/* saffron-lang-plan S2/D3: the declared type of an UNANNOTATED positional
+ * parameter.
+ *
+ * Turmeric defaults it to `int` -- a static language has to pick something, and
+ * `int` is the carrier.  Saffron defaults it to `any`, which is the whole of
+ * what "dynamically typed" means at the signature level: the call site stops
+ * checking a concrete type, and the value arrives boxed with its own type
+ * available for reflection.
+ *
+ * D3 is explicit that this is the SIGNATURE only.  Local inference still runs
+ * inside the body, so `(let [x 7.1] (* x 2.0))` stays a double multiply in a
+ * Saffron file; the ladder from there (un-boxing within a body, then
+ * specialising a defn only ever called at one type) is future work this does
+ * not foreclose.
+ *
+ * Deliberately NOT applied to three neighbouring defaults that also read
+ * TY_INT:
+ *   - a `& rest` parameter, in `defn` and `fn` alike.  That int is a cons-list
+ *     HANDLE, not a value type, and the rest element type has its own
+ *     declaration rules (AR6).
+ *   - an `extern-c` parameter, which declares a C signature.  `any` there would
+ *     describe an ABI that does not exist.
+ *
+ * Keyed on the span's file, so a Saffron program that loads a Turmeric module
+ * gets each file's own default -- see lang_span_is_saffron. */
+static TypeKind saffron_default_param_kind(Span sp) {
+    return lang_span_is_saffron(sp) ? TY_ANY : TY_INT;
 }
 
 Expr *elab_defn(Elab *e, const Form *call) {
@@ -6722,9 +6790,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
                       "options value or a '& rest :type' variadic (see the Function "
                       "Arity Style Guide)", HIGH_ARITY_SOFT_LIMIT);
         }
-        /* For phase 2, default to int */
-        param_kinds[n_params] = TY_INT;
-        Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
+        /* For phase 2, default to int -- or `any` in a Saffron file (S2/D3). */
+        TypeKind dflt_k = saffron_default_param_kind(p->span);
+        param_kinds[n_params] = dflt_k;
+        Binding *b = binding_new(e, p->as.sym, type_from_kind(dflt_k),
+                                 false, false, p->span);
         b->is_param = true;
         /* LT0: If the previous ^linear annotation applied to this parameter, mark it linear */
         if (next_param_linear) {
@@ -7593,7 +7663,28 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * (return_kind still TY_NIL / TY_TYVAR, resolved from body->type after
          * elaboration) is the genuinely mutually-dependent case and is left to
          * the post-body fn_type construction. */
-        if (return_kind != TY_NIL && return_kind != TY_TYVAR) {
+        /* saffron-lang-plan S4: forward an UNANNOTATED Saffron return as `any`.
+         *
+         * RR1 below leaves an inferred return to the post-body construction,
+         * which is right for Turmeric: the self-call then reads the pass-1
+         * forward-decl result, the int64 carrier `TY_INT`, and a static
+         * function's inferred return really is usually an int.  In Saffron it
+         * is usually not, and the mismatch surfaces one level up as a spurious
+         * join failure -- `(if (p h) (Cons h (lfilter p t)) (lfilter p t))`
+         * was rejected with "then=Lst else=int", the `int` being the self-call.
+         *
+         * `any` is the honest forward type for a function whose return is not
+         * yet known, and being the top type it joins with whatever the body
+         * turns out to produce, so the post-body construction still narrows it.
+         *
+         * This corrects the S2 note that returns needed no change: inference
+         * does propagate for a non-recursive body, and a SELF-CALL is the case
+         * it cannot cover, because the type is needed before the body is
+         * analysed. */
+        if (return_kind == TY_NIL && !return_annotated &&
+            lang_span_is_saffron(call->span)) {
+            existing->type.as.fn.result_kind = TY_ANY;
+        } else if (return_kind != TY_NIL && return_kind != TY_TYVAR) {
             existing->type.as.fn.result_kind = return_kind;
             Type *rft = NULL;
             if (return_adt_def) {
@@ -7865,6 +7956,20 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * specialization to mint a per-instantiation clone instead of
          * silently lowering a by-value struct result to the int64 carrier. */
         body_expected = return_tyvar_type;
+    } else if (return_kind == TY_ANY) {
+        /* any-coercion-not-driven-by-expected-type: a declared `: any` return is
+         * a widening TARGET for the body, and nothing was pushing it -- the
+         * chain above covers ADT / app / fn / exists / tyvar returns and stops.
+         *
+         * The visible consequence was at an `if` join: with no expectation to
+         * consult, `(defn f [b] : any (if b (Some 7.1) 42))` reported "if
+         * branches have mismatched types" even though both arms would widen to
+         * the very type the signature declares.  The join's own widening rule
+         * only fired when a branch was ALREADY `any`, so there was nothing to
+         * face. */
+        body_expected = (Type *)arena_alloc(e->arena, sizeof(Type));
+        memset(body_expected, 0, sizeof(Type));
+        body_expected->kind = TY_ANY;
     }
     if (body_expected) e->expected_type = body_expected;
     {
@@ -8044,6 +8149,54 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
 
+    /* saffron-lang-plan S5/D3: an UNANNOTATED Saffron return IS `any`, not
+     * "whatever the body turned out to produce".
+     *
+     * S4 forwarded `any` for the recursive self-call only, and left the final
+     * type to the inference below.  The interpreter did not care -- a TuriValue
+     * carries its own tag whatever the static type said -- but the two answers
+     * are a C type each, and they disagreed: `lmap`'s self-call was elaborated
+     * against `any` while the function was finally typed `Lst`, so the emitted
+     * self-call spoke a signature the definition did not have.
+     *
+     * Fixing it at the FORWARD decl instead would be the wrong half: inference
+     * cannot see the recursive call's own result, so the two are only reliably
+     * equal if the boundary is fixed at `any` -- which is what D3 says the
+     * default type is.  Inference still runs everywhere inside the body; what
+     * this pins is the SIGNATURE, the one place a caller has to agree.
+     *
+     * Placed before the widen below on purpose, so the body is boxed by the
+     * existing return-position coercion rather than a second one written here. */
+    if (return_kind == TY_NIL && !return_annotated && body &&
+        body->type.kind != TY_NEVER && lang_span_is_saffron(call->span)) {
+        /* saffron-lang-plan open question 3: `main` is the ONE unannotated
+         * Saffron function that does not default to `any`.
+         *
+         * `(defn main [] : int ... 0)` is awkward in a file with no annotations,
+         * so a Saffron `main` should be writable without one -- but the default
+         * makes it `: any`, and the emitted C then has `return TUR_TAG(...)` in
+         * a function declared `int`: "incompatible types when returning type
+         * 'tur_tagged_t' but 'int' was expected", a cc error with no Turmeric
+         * diagnostic in front of it.  Every Saffron fixture wrote `: int` to
+         * step around that, which is exactly the annotation the dialect exists
+         * to remove.
+         *
+         * `:int` rather than the plan's `:nil`, because it keeps `main`'s
+         * meaning identical in both dialects -- an explicit exit code still
+         * works, and the process-exit convention does not fork per `#lang`.
+         * A body that yields something else is then an ordinary return-type
+         * error against `int`, pointing at the body rather than at cc.
+         *
+         * Only the ZERO-arity `main`; an `argc`/`argv`-shaped one keeps whatever
+         * the general rule gives it. */
+        if (name_f && name_f->tag == F_SYM &&
+            strcmp(name_f->as.sym->name, "main") == 0 && n_params == 0) {
+            return_kind = TY_INT;
+        } else {
+            return_kind = TY_ANY;
+        }
+    }
+
     /* TY2.2: return-position widening to `any`.  A function declared `: any`
      * whose body yields a narrower type must box the result, otherwise the
      * raw value leaks into a tur_tagged_t slot and breaks C codegen.  Mirror
@@ -8051,6 +8204,63 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if (return_kind == TY_ANY && body && body->type.kind != TY_ANY &&
         body->type.kind != TY_NEVER) {
         body = elab_coerce_to_any(e, body);
+    }
+
+    /* saffron-concrete-return-annotation-on-a-dynamic-body-emits-bad-c: the
+     * INVERSE of the widen above, and it was missing.
+     *
+     * `(defn go [x] : int (+ x 41))` in a Saffron file has an `any` body -- `x`
+     * is `any`, so `+` is the dynamic operator and yields a box -- against a
+     * CONCRETE declared return.  Nothing narrowed it, and
+     * `return_position_conflict` lets it through as a carrier bridge, so the
+     * emitter wrote `return __tur_dyn_arith(...)` into an `int64_t` slot:
+     * "incompatible types when returning type 'tur_tagged_t'".  No `call/cc`
+     * needed -- this is the plain shape, and D2's promise that annotations stay
+     * legal in Saffron did not hold at the return.
+     *
+     * The fix is the seam D5 already chose for ARGUMENTS, at the other end of
+     * the same function: `elab_any_unbox_to`, the node `(cast x T)` lowers to,
+     * so a box holding the wrong type panics with the ordinary `cast: any holds
+     * ...` message instead of reinterpreting the payload word.  Erasing instead
+     * -- returning the payload unchecked -- would turn a type error into a
+     * memory-safety bug, which is the reasoning D5 recorded and this position
+     * inherits unchanged.
+     *
+     * Only for an ANNOTATED, concrete return: an unannotated one is `any` in
+     * Saffron and has nothing to check against, and a type variable has no
+     * target.  Placed before the conflict check below so that check sees the
+     * narrowed type and stays quiet. */
+    if (body && return_annotated && body->type.kind == TY_ANY &&
+        lang_span_is_saffron(body->span) &&
+        return_kind != TY_ANY && return_kind != TY_NIL &&
+        return_kind != TY_UNION && return_kind != TY_NEVER &&
+        return_kind != TY_TYVAR && return_kind != TY_UNKNOWN) {
+        Type want = return_adt_def ? type_adt(return_adt_def)
+                                   : type_from_kind(return_kind);
+        /* cps-coloring-walk-has-no-arm-for-union-inject: if the body USES A
+         * CONTROL OPERATOR, bind it first and narrow the variable, exactly as
+         * the widen does at the other end.  The CPS IR delegates `EX_ANY_CAST`
+         * rather than lowering it, so a cast wrapped around a `call/cc` is
+         * `BODY-UNSUPPORTED` and the op reaches the direct emitter; a cast of a
+         * LET VARIABLE is an ordinary delegatable node. */
+        Expr *target = body;
+        LetBinding *lb = NULL;
+        if (cps_expr_uses_control(body)) {
+            lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+            target = elab_bind_control_temp(e, body, &lb[0]);
+        }
+        Expr *unboxed = elab_any_unbox_to(e, target, want, body->span);
+        if (unboxed) {
+            if (lb) {
+                Expr *let = expr_new(e->arena, EX_LET, unboxed->type, body->span);
+                let->as.let_.bindings = lb;
+                let->as.let_.n = 1;
+                let->as.let_.body = unboxed;
+                body = let;
+            } else {
+                body = unboxed;
+            }
+        }
     }
 
     /* union-tagged-union-c-emission: the same widening, one type up.  A function
@@ -8128,8 +8338,31 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * nil-TYPED tail (a `println` call) is deliberately not checked; see the
          * predicate's comment for the measurement behind that line. */
         bool check_nil_body = return_annotated && body_tail_is_nil_literal(body);
-        ReturnConflict rc = return_position_conflict(
-            return_adt_def, return_kind, body->type, ret_cls, check_nil_body);
+        /* inferred-return-defaults-inconsistently: an UNANNOTATED return has
+         * nothing to conflict with.
+         *
+         * `return_kind` starts TY_NIL and the inference that adopts the body's
+         * type runs further down (the "Infer return type from body" block after
+         * the scope pop), so this check used to compare the body against a
+         * default the programmer never wrote.  Whether that mattered depended on
+         * whether the body's type could ride the int64 carrier: an `int` or
+         * `cstr` body bridged and nothing fired, while a `float` body hit the
+         * register-class arm and reported `function 'pi' declares return type
+         * 'nil'` for a defn that declares nothing.  Three unannotated returns,
+         * three behaviours, and the failing one naming a declaration that does
+         * not exist.
+         *
+         * The pair (unannotated, `: nil`/`: void`) is indistinguishable by KIND
+         * -- which is what the check_nil_body comment above is about --
+         * and `return_annotated` is exactly the bit that separates them.  The
+         * `return_kind == TY_NIL` conjunct keeps this narrow: the annotation
+         * paths that reach `done_return_annotation` by goto set a real kind
+         * without setting `return_annotated`, and those must still be checked. */
+        bool return_unannotated = (!return_annotated && return_kind == TY_NIL);
+        ReturnConflict rc = return_unannotated
+            ? RET_CONFLICT_NONE
+            : return_position_conflict(return_adt_def, return_kind, body->type,
+                                       ret_cls, check_nil_body);
         if (rc != RET_CONFLICT_NONE) {
             const char *want = return_adt_def ? return_adt_def->name
                              : typekind_to_string(return_kind);
@@ -8316,6 +8549,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             if (ct_pre_form && check_fn) {
                 Expr *pred_e = elab_form(e, (Form *)ct_pre_form);
                 rt_diag_impure_pred(e, pred_e, call->span);
+                pred_e = elab_saffron_truthy(e, pred_e);   /* D6, see above */
                 if (pred_e) {
                     /* Build call: (tur-contract-check pred "Precondition failed") */
                     Expr **check_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
@@ -9562,9 +9796,12 @@ Expr *elab_fn(Elab *e, const Form *call) {
                       "options value or a '& rest :type' variadic (see the Function "
                       "Arity Style Guide)", HIGH_ARITY_SOFT_LIMIT);
         }
-        /* Untyped fn params preserve the existing int default. */
-        param_kinds[n_params] = TY_INT;
-        Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
+        /* Untyped fn params preserve the existing int default -- or take `any`
+         * in a Saffron file, the same rule `defn` uses (S2/D3). */
+        TypeKind fn_dflt_k = saffron_default_param_kind(p->span);
+        param_kinds[n_params] = fn_dflt_k;
+        Binding *b = binding_new(e, p->as.sym, type_from_kind(fn_dflt_k),
+                                 false, false, p->span);
         b->is_param = true;
         /* Bidirectional inference (constrained-generic-as-value-bakes-
          * representative.md): when this lambda is elaborated against an expected
@@ -11029,6 +11266,24 @@ Expr *elab_def(Elab *e, const Form *call) {
     if (!init) return NULL;
 
     if (declared_type) {
+        /* any-coercion-not-driven-by-expected-type: a `: any` declaration is a
+         * widening request, and this form hand-builds its EX_ASCRIBE rather than
+         * going through elab_ascribe -- so it missed the coercion elab_ascribe
+         * does, whose own comment says why relabelling alone is not enough:
+         * "It must heap-box the value (EX_UNION_INJECT) ... NOT merely relabel
+         * its static type."
+         *
+         * `(def g : any 42)` therefore declared a `tur_tagged_t` slot and
+         * assigned a bare `long int` to it -- "incompatible types when
+         * assigning", a cc error against generated code rather than a
+         * diagnostic.  Widen FIRST, so the size-matched EX_REINTERPRET below
+         * cannot fire on the `any` pair either. */
+        if (declared_type->kind == TY_ANY && init->type.kind != TY_ANY &&
+            init->type.kind != TY_NEVER) {
+            init = elab_coerce_to_any(e, init);
+            if (!init) return NULL;
+        }
+
         /* Align with elab_ascribe */
         if (declared_type->kind == TY_APP && init->kind == EX_CALL &&
             init->as.call_.ctor &&

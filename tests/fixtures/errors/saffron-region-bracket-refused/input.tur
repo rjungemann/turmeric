@@ -1,0 +1,31 @@
+#lang saffron
+;; saffron-lang-plan D7: a region bracket in a Saffron file is refused, and
+;; the reason is that it would SILENTLY DO NOTHING -- not that it would be
+;; unsafe.
+;;
+;; A region rewinds a generation only when a static walk over the bracket's
+;; RESULT TYPE proves nothing outside it still points in.  Over `any` that
+;; walk clears nothing (region_type_reaches_node's `default: return true`
+;; arm), so the emitter takes the conservative branch and RETIRES the
+;; generation: plain `tur_region_pop` where the same program in Turmeric
+;; emits `tur_region_pop_checked`.  Measured, on the emitted C.
+;;
+;; So the bracket is safe and reclaims nothing.  That is the silent downgrade
+;; D7 refuses: the cost is paid, the saving never arrives, and without this
+;; diagnostic nothing says so.
+;;
+;; The rejection is keyed on the RESOLVED binding, not the spelling, and is
+;; placed after the let-alias resolution in elab_call.c -- so `(let [g
+;; with-region] (g thunk))` is caught too, and a local genuinely named
+;; `with-region` that is not the stdlib defn is not.
+;;
+;; `bt-scope` opens a region as well and is deliberately NOT refused: its
+;; feature is the trail level, which works in Saffron unchanged, and only the
+;; region half degrades.  Taking a working feature away to report a lost
+;; optimisation is the wrong trade.
+
+(defn mk [n] (with-region (fn [] (+ n 1))))
+
+(defn main []
+  (println (cast (mk 4) int))
+  0)

@@ -1,0 +1,43 @@
+;; generic-fn-in-any-return-position-emits-uncompilable-c: a GENERIC call
+;; underneath an `any` widen gets its monomorph minted.
+;;
+;; Elaboration was never wrong here -- the call node carries `(Option float)`
+;; and its `A := float` abi_binding whether the position is `: (Option float)`
+;; or `: any`.  What diverged was emit's monomorphization walk
+;; (emit_abi_scan_expr), which seeds the specialization worklist and had no case
+;; for EX_UNION_INJECT.  A call under a widen was therefore never scanned, so
+;; `(defn f [] : (Option float) (mk 7.1))` emitted
+;; `mk__spec__tur_adt_Option__float_double` while `: any` emitted a bare `mk`
+;; that nothing declared -- an implicit-declaration warning followed by
+;; "incompatible types when assigning to type 'tur_adt_Option__float'".
+;;
+;; EX_UNION_INJECT is the widen itself, so it covers every position a value is
+;; coerced to `any`; the three reader nodes (cast / is? / type-of) are the same
+;; shape and are exercised below too.
+;;
+;; 7.1, not 7.0: the payload is a float inside a heap-boxed `(Option float)`,
+;; so an integral literal would not distinguish a real monomorph from a carrier
+;; call that happened to survive.
+(defn mk [A] [v : A] : (Option A) (Some v))
+
+(defn ret-pos  []          : any  (mk 7.1))          ;; return position
+(defn take     [x : any]   : cstr (type-of x))       ;; argument position
+(defn stdlib   []          : any  (some 7.1))        ;; the filed repro, via stdlib
+
+;; NOTE on `stdlib` below: it is asserted through `cast`, not `type-of`.  Under
+;; --interpret, `some` is a native override that builds its value without the
+;; ctor->ADT link, so `type-of` answers the CONSTRUCTOR name ("Some") there
+;; while the compiled path answers "Option".  That divergence is pre-existing
+;; and unrelated to monomorphization -- this fix only made the compiled side
+;; start working, which is what exposed it.  Filed as
+;; docs/reported/interp-native-ctor-loses-adt-name.md; asserting the round trip
+;; instead keeps this fixture about the thing it is pinning.
+(defn main [] : int
+  (println (type-of (ret-pos)))
+  (println (take (mk 7.1)))
+  ;; read the box back: is? and cast are the other any-family wrappers, and a
+  ;; generic call can sit under them the same way.
+  (println (if (is? (ret-pos) (Option float)) 1 0))
+  (println (unwrap-or (cast (ret-pos) (Option float)) 0.0))
+  (println (unwrap-or (cast (stdlib)  (Option float)) 0.0))
+  0)

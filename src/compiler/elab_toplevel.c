@@ -5,6 +5,7 @@
 #include "mangle.h"   /* tur_cname_name_len */
 #include "refine_discharge.h" /* RT3: final refinement discharge + stats */
 #include "refine_report.h"    /* SX8a-3: --dump-refine=json obligation dump */
+#include "lang_layers.h"      /* saffron-lang-plan S6 (G7): lang_span_is_saffron */
 
 /* duplicate-ctor-names-collide-in-emitted-c: the constructor-name census lives
  * in emit_core.c; declared here because elab_toplevel.c does not include
@@ -78,10 +79,96 @@ Expr *elab_any_type_of(Elab *e, const Form *call) {
     return out;
 }
 
+/* any-narrowing-broken-for-parametric-receivers: resolve the type target of
+ * `is?` / `cast` into (kind, Type).  Shared so the two forms cannot drift --
+ * they must agree on the target, because `is?` guards a narrowing that `cast`
+ * then has to accept.
+ *
+ * The `any` box id is interned by `type_name`, which renders a TY_APP PER
+ * INSTANTIATION ("(type-app Option float)") so that `(Box int)` and
+ * `(Box float)` stay distinct.  A target written as a bare `Option` resolves to
+ * the head ADT instead -- a different key, hence a different id -- so the test
+ * compared against an id no widen ever mints.  `(is? x Option)` was silently
+ * false and `(cast x Option)` panicked "any holds Option, not Option", both
+ * displaying the same name because `shown` is the head name either way.
+ *
+ * Two changes close that.  A parenthesised target `(Option float)` now goes
+ * through the shared annotation parser, so the resolved Type is the SAME TY_APP
+ * the widen site interned and the ids line up.  A bare type constructor is a
+ * hard error naming the arity, because it does not identify one runtime type --
+ * an error the caller can act on, where the silent `false` was not.
+ *
+ * Returns false having emitted a diagnostic. */
+static bool any_narrow_target(Elab *e, const Form *type_form, const char *who,
+                              TypeKind *out_kind, Type *out_type) {
+    /* A parenthesised type application, or any other compound annotation. */
+    if (type_form->tag != F_SYM) {
+        Type *t = fn_type_from_form(e, type_form, NULL, NULL, 0);
+        if (!t) {
+            /* fn_type_from_form has already reported what it could not read;
+             * add the context it does not have. */
+            diag_emit(DIAG_ERROR, type_form->span,
+                      "'%s' could not resolve its type argument", who);
+            return false;
+        }
+        /* any-cannot-recover-a-capturing-closure: a function TARGET names the
+         * fat representation, because that is the only one an `any` holds --
+         * `elab_coerce_to_any` shims a bare fn to fat at the widen.  Without
+         * this the target's box id would be the bare one and no fn payload would
+         * ever match.  `(-> int int)` reads as "a function of this signature";
+         * whether the value carries an environment is a representation detail the
+         * source spelling does not, and should not, express. */
+        if (t->kind == TY_FN && !t->as.fn.cfnptr) t->as.fn.boxed = true;
+        *out_type = *t;
+        *out_kind = any_box_tag_for_type(t);
+        return true;
+    }
+
+    TypeKind k = typekind_from_symbol(type_form->as.sym->name);
+    if (k != TY_UNKNOWN) {
+        *out_kind = k;
+        *out_type = type_simple(k, CK_COPY);
+        return true;
+    }
+
+    Type *named = elab_lookup_type_by_name(e, type_form->as.sym);
+    if (!named) {
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "unknown type '%s' in '%s'", type_form->as.sym->name, who);
+        return false;
+    }
+
+    /* A bare type CONSTRUCTOR names no single runtime type: an `any` holds one
+     * instantiation, and `Option` does not say which.  Reject rather than test
+     * against the head's own id, which nothing ever boxes. */
+    if (named->kind == TY_ADT && named->as.adt_.def &&
+        named->as.adt_.def->n_type_params > 0) {
+        const AdtDef *d = named->as.adt_.def;
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "'%s' is a type constructor taking %u type parameter%s, so it "
+                  "does not name one runtime type; write it applied, e.g. "
+                  "'(%s %s)'",
+                  d->name, (unsigned)d->n_type_params,
+                  d->n_type_params == 1 ? "" : "s", d->name,
+                  (d->type_params && d->type_params[0]) ? d->type_params[0] : "T");
+        diag_emit(DIAG_HELP, type_form->span,
+                  "matching every instantiation of '%s' at once is not supported "
+                  "yet -- test the one you expect", d->name);
+        return false;
+    }
+
+    /* CONV-S1: a struct-origin lowered ADT tests/casts under its box tag, so
+     * the surface stays transparent to the defstruct-as-defadt lowering. */
+    *out_kind = any_box_tag_for_type(named);
+    *out_type = *named;
+    return true;
+}
+
 /* IT4/TY2.3: (cast x T) — checked downcast from any.  Verifies the runtime box
  * tag matches T's TypeKind and panics on mismatch (see __tur_any_cast_check),
- * then returns the inner value as T.  T may be a primitive type name, or a
- * struct/ADT name (TY2.2 heap-boxed payloads unbox by dereference). */
+ * then returns the inner value as T.  T may be a primitive type name, a
+ * struct/ADT name (TY2.2 heap-boxed payloads unbox by dereference), or an
+ * applied type constructor like `(Option float)`. */
 Expr *elab_any_cast(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -97,31 +184,29 @@ Expr *elab_any_cast(Elab *e, const Form *call) {
         return NULL;
     }
     Form *type_form = call->as.list.items[2];
-    if (type_form->tag != F_SYM) {
-        diag_emit(DIAG_ERROR, type_form->span,
-                  "'cast' expects a type name as second argument");
-        return NULL;
-    }
-    TypeKind target_kind = typekind_from_symbol(type_form->as.sym->name);
+    TypeKind target_kind;
     Type result_type;
-    if (target_kind == TY_UNKNOWN) {
-        /* TY2.2: a struct/ADT name is a valid cast target. */
-        Type *named = elab_lookup_type_by_name(e, type_form->as.sym);
-        if (!named) {
-            diag_emit(DIAG_ERROR, type_form->span,
-                      "unknown type '%s' in 'cast'", type_form->as.sym->name);
-            return NULL;
-        }
-        /* CONV-S1: a struct-origin lowered ADT casts under its box tag, keeping
-         * the cast transparent to the defstruct-as-defadt lowering. */
-        target_kind = any_box_tag_for_type(named);
-        result_type = *named;
-    } else {
-        result_type = type_simple(target_kind, CK_COPY);
-    }
-    Expr *out = expr_new(e->arena, EX_ANY_CAST, result_type, call->span);
+    if (!any_narrow_target(e, type_form, "cast", &target_kind, &result_type))
+        return NULL;
+    (void)target_kind;   /* elab_any_unbox_to recomputes it from result_type */
+    return elab_any_unbox_to(e, val, result_type, call->span);
+}
+
+/* typeclass-dispatch-on-any-receiver-emits-uncompilable-c: the checked unbox,
+ * reachable from a Type rather than a source form.
+ *
+ * `(cast x T)` is the surface spelling; this is the same node, for callers that
+ * have already resolved the target and need to bridge an `any` into a slot
+ * typed by it.  The `@TypeName` witness is the one such caller: it names the
+ * instance, which is exactly the information the unbox needs, so pinning an
+ * instance and unboxing the receiver for it are one act.  Routing both through
+ * here is what keeps the tag check on the witness path -- a wrong witness
+ * panics with the ordinary `cast: any holds ...` message rather than
+ * reinterpreting the payload. */
+Expr *elab_any_unbox_to(Elab *e, Expr *val, Type target, Span span) {
+    Expr *out = expr_new(e->arena, EX_ANY_CAST, target, span);
     out->as.any_cast_.value = val;
-    out->as.any_cast_.target_kind = target_kind;
+    out->as.any_cast_.target_kind = any_box_tag_for_type(&target);
     return out;
 }
 
@@ -143,31 +228,14 @@ Expr *elab_is_q(Elab *e, const Form *call) {
         return NULL;
     }
     Form *type_form = call->as.list.items[2];
-    if (type_form->tag != F_SYM) {
-        diag_emit(DIAG_ERROR, type_form->span,
-                  "'is?' expects a type name as second argument");
-        return NULL;
-    }
-    TypeKind test_kind = typekind_from_symbol(type_form->as.sym->name);
+    /* type-of-cast-kind-granularity: the resolved Type is kept alongside the
+     * kind -- emit turns it into the same per-monomorph box id the inject site
+     * allocates, so `(is? a OtherStruct)` on an `any` holding a Point is false
+     * rather than true-for-every-struct. */
+    TypeKind test_kind;
     Type test_type = type_simple(TY_UNKNOWN, CK_COPY);
-    if (test_kind == TY_UNKNOWN) {
-        Type *named = elab_lookup_type_by_name(e, type_form->as.sym);
-        if (!named) {
-            diag_emit(DIAG_ERROR, type_form->span,
-                      "unknown type '%s' in 'is?'", type_form->as.sym->name);
-            return NULL;
-        }
-        /* CONV-S1: struct-origin lowered ADT tests as TY_STRUCT, matching the
-         * box tag set by elab_coerce_to_any.
-         * type-of-cast-kind-granularity: keep the named type too -- emit turns
-         * it into the same per-monomorph box id the inject site allocates, so
-         * `(is? a OtherStruct)` on an `any` holding a Point is false rather
-         * than true-for-every-struct. */
-        test_kind = any_box_tag_for_type(named);
-        test_type = *named;
-    } else {
-        test_type = type_simple(test_kind, CK_COPY);
-    }
+    if (!any_narrow_target(e, type_form, "is?", &test_kind, &test_type))
+        return NULL;
     Type bool_t = type_simple(TY_BOOL, CK_COPY);
     Expr *out = expr_new(e->arena, EX_ANY_IS, bool_t, call->span);
     out->as.any_is_.value = val;
@@ -184,6 +252,39 @@ static Form *dl_build_call(Elab *e, Span span, const char *head,
     call_items[0] = form_sym(e->arena, span, h);
     for (uint32_t i = 0; i < n; i++) call_items[i + 1] = items[i];
     return form_list(e->arena, span, call_items, n + 1);
+}
+
+/* saffron-lang-plan S6 (G7): wrap one data-literal element in `(:: elem any)`.
+ *
+ * In a Saffron file a container's element type is `any` -- that is what makes
+ * `[1 "two" 7.1]` a vector rather than a type error.  `vec-of` (and `hamt-of`,
+ * and `set-of`) is HOMOGENEOUS by construction: it routes every element through
+ * `tur-vec-homog__`, so element 2 above is rejected against element 1's type
+ * ("function 'vec-push!' arg 2: expected tyvar, got cstr").  Widening each
+ * element at the LITERAL, before the macro sees it, keeps that homogeneity
+ * check intact and satisfies it at `any` -- rather than teaching the macro a
+ * dialect-dependent second mode.
+ *
+ * A uniform `any` also costs a box on `[1 2 3]`, which is the right trade for a
+ * dialect where a vector's element type is not fixed: pushing a string into it
+ * later is ordinary, and a `(Vec int)` that silently became one would be a
+ * surprise no diagnostic covers.
+ *
+ * An element already typed `any` re-ascribes to `any`, which is identity. */
+static Form *dl_saffron_widen_elem(Elab *e, Form *elem) {
+    const Symbol *any_sym = symtab_intern(e->st, strslice("any", 3));
+    Form *ty = form_sym(e->arena, elem->span, any_sym);
+    Form *items[2] = { elem, ty };
+    return dl_build_call(e, elem->span, "::", items, 2);
+}
+
+/* Widen every element of a data literal, or return `items` unchanged when the
+ * literal is not in a Saffron file. */
+static Form **dl_saffron_widen_elems(Elab *e, Span sp, Form **items, uint32_t n) {
+    if (n == 0 || !lang_span_is_saffron(sp)) return items;
+    Form **out = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+    for (uint32_t i = 0; i < n; i++) out[i] = dl_saffron_widen_elem(e, items[i]);
+    return out;
 }
 
 /* DL1: normalize a #map{...} key form to the int key the typed Map expects.
@@ -478,8 +579,13 @@ Expr *elab_form(Elab *e, Form *f) {
              * forms (defn/fn/let/loop/...) grab their F_VEC slot before it ever
              * reaches elab_form, so reaching here means expression position. */
             {
+                /* saffron-lang-plan S6 (G7): in a Saffron file the elements are
+                 * widened to `any` first, so `[1 "two" 7.1]` is a `(Vec any)`
+                 * of three boxes rather than a homogeneity error. */
+                Form **items = dl_saffron_widen_elems(e, f->span, f->as.list.items,
+                                                      f->as.list.len);
                 Form *call = dl_build_call(e, f->span, "vec-of",
-                                           f->as.list.items, f->as.list.len);
+                                           items, f->as.list.len);
                 return elab_form(e, call);
             }
         case F_MAP:
@@ -500,6 +606,7 @@ Expr *elab_form(Elab *e, Form *f) {
             for (uint32_t i = 0; i + 1 < n; i += 2) {
                 if (f->as.list.items[i]->tag != F_STR) { all_str_keys = false; break; }
             }
+            bool saffron = lang_span_is_saffron(f->span);
             Form **kvs = (n == 0) ? NULL
                 : (Form **)arena_alloc(e->arena, n * sizeof(Form *));
             for (uint32_t i = 0; i + 1 < n; i += 2) {
@@ -507,14 +614,31 @@ Expr *elab_form(Elab *e, Form *f) {
                  * literals (keywords) are hash-normalized to their int key. */
                 kvs[i]     = all_str_keys ? f->as.list.items[i]
                                           : dl_normalize_map_key(e, f->as.list.items[i]);
-                kvs[i + 1] = f->as.list.items[i + 1];
+                /* saffron-lang-plan S6 (G7): in a Saffron file a map's VALUES
+                 * are `any`, so `#map{:a 1 :b "two"}` is a `(Map Sym any)`
+                 * rather than a `tur-map-homog__` error on the value side.  The
+                 * KEYS are left alone: they are already normalized to one key
+                 * type above, and a heterogeneous key would need `Hash` and
+                 * `MapKey` instances for `any` that do not exist. */
+                kvs[i + 1] = saffron
+                    ? dl_saffron_widen_elem(e, f->as.list.items[i + 1])
+                    : f->as.list.items[i + 1];
             }
             Form *call = dl_build_call(e, f->span, "hamt-of", kvs, n);
             return elab_form(e, call);
         }
         case F_SET_LITERAL: {
+            /* saffron-lang-plan S6 (G7) / set-of-element-type-is-not-checked:
+             * the same widen as `[...]`.  `#set{1 "two" 7.1}` used to build
+             * WITHOUT it -- `set-of` had no homogeneity check, so each element
+             * resolved its own Hash/MapKey and the set claimed `(Set int)`
+             * while holding a cstr.  Now that `set-of` checks like `vec-of`
+             * and `Hash[any]`/`MapKey[any]` exist, the literal widens to the
+             * honest `(Set any)`. */
+            Form **items = dl_saffron_widen_elems(e, f->span, f->as.list.items,
+                                                  f->as.list.len);
             Form *call = dl_build_call(e, f->span, "set-of",
-                                       f->as.list.items, f->as.list.len);
+                                       items, f->as.list.len);
             return elab_form(e, call);
         }
         /* Variadic HKT rows: a #row{...} type-row is a TYPE, not a value. It is
@@ -652,6 +776,42 @@ Expr *elab_form(Elab *e, Form *f) {
             if (f->as.list.len == 0) {
                 diag_emit(DIAG_ERROR, f->span, "empty list ()");
                 return NULL;
+            }
+            /* saffron-lang-plan S6 (G7): the cons-list twin of the `[...]` and
+             * `#map{...}` widens.  `(list 1 "two" 7.1)` is
+             * "function 'tur-list-homog__' arg 2: expected tyvar, got cstr" --
+             * the same wall, from the third of the three homogeneity checks --
+             * so each element is widened to `any` before the `list` macro runs.
+             *
+             * This one is a CALL rather than a reader literal, so the widen
+             * hooks here instead of beside the data literals; the resulting
+             * form goes through the ordinary macro path unchanged.
+             *
+             * The `scope_lookup` guard is belt-and-braces, not the thing that
+             * preserves user shadowing: measured, a `(let [list f] (list 3 4))`
+             * still reaches the `list` MACRO in plain Turmeric too -- macros
+             * win over a same-named binding there already -- so declining here
+             * changes nothing today.  It is kept so this widen is not the
+             * reason a future fix to that ordering fails to take effect.
+             *
+             * Unlike Vec and Map, a widened cons list is only walkable through
+             * an ascription: `Cons` is `(defstruct Cons :heap [A] (head A)
+             * (tail :int))`, so the TAIL is an erased carrier and `.tail`
+             * hands back an `:int`.  `(:: (.tail l) (Cons any))` recovers it and
+             * the next `.head` reads its own tag -- pinned by
+             * tests/fixtures/saffron-cons-list.  A `defdata` with `any` in BOTH
+             * slots (what tests/fixtures/saffron-higher-order uses) needs no
+             * ascription and stays the better idiom for a list you walk. */
+            if (lang_span_is_saffron(f->span) && f->as.list.len > 1 &&
+                f->as.list.items[0]->tag == F_SYM &&
+                strcmp(f->as.list.items[0]->as.sym->name, "list") == 0 &&
+                !scope_lookup(e->scope, f->as.list.items[0]->as.sym)) {
+                uint32_t n = f->as.list.len;
+                Form **items = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+                items[0] = f->as.list.items[0];
+                for (uint32_t i = 1; i < n; i++)
+                    items[i] = dl_saffron_widen_elem(e, f->as.list.items[i]);
+                f = form_list(e->arena, f->span, items, n);
             }
             return elab_call(e, f);
         case F_TYPE_ANN:
@@ -949,13 +1109,20 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
             LangLayerSet layers = 0;
             const char  *bad = NULL;
             size_t       bad_len = 0;
-            ReaderType lang_type = detect_lang_layered(src_copy, src_len,
+            LangDialect dialect = LANG_TURMERIC;
+            ReaderType lang_type = detect_lang_dialect(src_copy, src_len,
                                                        &lsrc, &llen,
-                                                       &layers, &bad, &bad_len);
+                                                       &layers, &bad, &bad_len,
+                                                       &dialect);
             if (bad) {
-                diag_emit(DIAG_ERROR, path_f->span,
-                          "unknown #lang layer '%.*s' in loaded file '%s' "
-                          "(TUR-E0330)", (int)bad_len, bad, path_buf);
+                if (lang_type == READER_UNKNOWN)
+                    diag_emit(DIAG_ERROR, path_f->span,
+                              "unknown #lang base '%.*s' -- see `tur lang-layers` for the valid bases (in loaded file '%s') (TUR-E0331)",
+                              (int)bad_len, bad, path_buf);
+                else
+                    diag_emit(DIAG_ERROR, path_f->span,
+                              "unknown #lang layer '%.*s' in loaded file '%s' "
+                              "(TUR-E0330)", (int)bad_len, bad, path_buf);
                 lx->rc = -1;
                 continue;
             }
@@ -972,6 +1139,19 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
             sfile->len         = llen;
             sfile->reader_type = chosen;
             sfile->lang_layers = layers;
+            /* saffron-lang-plan S2/D5: a loaded file's OWN `#lang` line decides
+             * its language, exactly as it decides its reader.  That is the
+             * contract boundary: a Saffron program that loads a Turmeric module
+             * gets Turmeric's defaults for that module's forms and Saffron's
+             * for its own, because the dialect is per-SourceFile and every Form
+             * carries the file it came from.
+             *
+             * This is also the path `tur --interpret <file>` takes for the USER
+             * file -- the file-eval entry splices a `(load ...)` rather than
+             * folding the source into the eval blob, so without this the
+             * interpreter saw Turmeric defaults for a `#lang saffron` program
+             * while the compiler saw Saffron ones. */
+            sfile->lang        = dialect;
         }
         diag_register_file(sfile);
         /* Transitive-RM (T2): share the entry file's macro registry. */

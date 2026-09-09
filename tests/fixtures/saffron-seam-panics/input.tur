@@ -1,0 +1,29 @@
+#lang saffron
+;; saffron-lang-plan S5/D5: the Saffron -> Turmeric seam CHECKS rather than
+;; erases, and BOTH back ends say the same thing when the check fails.
+;;
+;; `takes-int` has a real signature and the caller hands it an `any` holding a
+;; cstr.  D5 rejected erasure explicitly: passing the payload word through
+;; unchecked would turn this type error into a memory-safety bug, because the
+;; word is a `const char *` read as an int.  The seam reuses the checked unbox
+;; that `(cast x T)` lowers to, so the failure is a panic naming the mismatch.
+;;
+;; This lives in tests/fixtures/ rather than tests/fixtures/errors/ because the
+;; failure is a RUNTIME panic, not a compile diagnostic: the errors/ suite only
+;; runs `emit-c` and asserts a non-zero exit from the front end, which this
+;; program does not produce -- it compiles fine and then panics.  expected.exit
+;; is `nonzero` rather than a number because the two back ends abort
+;; differently: the compiled program calls abort() and exits 134, the
+;; interpreter exits 1.
+;;
+;; The MESSAGE is the point.  It used to differ: `__tur_any_type_name` names a
+;; primitive on the compiled side, while the interpreter's cast message went
+;; through a helper that answers NULL for anything that is not a struct and so
+;; printed "a value of a different type" -- the same failure, described two
+;; ways, with the useful description on only one of them.  Both now name the
+;; type that actually arrived.
+(defn takes-int [n : int] : int (+ n 1))
+(defn dyn [v] v)
+(defn main [] : int
+  (println (takes-int (dyn "not an int")))
+  0)

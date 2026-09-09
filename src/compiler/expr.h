@@ -135,6 +135,13 @@ struct Binding {
      * there exactly as it did before local fn-field drops existed) while
      * uncolored functions release it. */
     bool          drops_fn_fields;
+    /* byvalue-recursive-adt-boxes-are-never-freed: this local is a by-value
+     * recursive ADT that does not escape, so the direct emitter frees its SPINE
+     * at scope exit (`drop_localowned_<T>(&xs)`).  Emitted directly rather than as
+     * an injected defer, for the same CPS-admission reason drops_fn_fields is --
+     * and, unlike the rc/ref auto-drop beside it, there is no surface form that
+     * frees a recursive box chain to inject. */
+    bool          drops_local_owned;
     /* Phase 11: span of first move for note chaining diagnostics */
     Span          moved_at;
     /* Phase R5: #[no-unwind] attribute on defn */
@@ -799,6 +806,44 @@ typedef enum ExprKind {
     EX_ANY_TYPE_OF,    /* (type-of x) — returns cstr type name of an any-typed value */
     EX_ANY_CAST,       /* (cast x T) — unsafe downcast from any; returns the inner value as T */
     EX_ANY_IS,         /* TY3: (is? x T) — runtime type test; returns bool */
+    /* saffron-lang-plan S3/D4: a builtin operator applied to at least one
+     * `any` argument, in a `#lang saffron` file.
+     *
+     * Turmeric's builtin table is keyed by the first argument's TypeKind, so
+     * `(* x 2)` with `x : any` finds no row and is TUR-E0006.  In Saffron that
+     * is the ordinary case, not an error: the operator is resolved at RUNTIME
+     * from the value's own tag, which is what "dynamically typed" means for
+     * operators.
+     *
+     * A distinct node rather than a flag on EX_BUILTIN, so the compiled
+     * back end cannot mistake one for a statically-resolved operator and emit
+     * an int add over tagged words.  Until S5 gives it a lowering, emit
+     * reports it as unsupported rather than guessing. */
+    EX_DYN_OP,
+    /* saffron-lang-plan S4/D4 (G5): a call whose CALLEE is a dynamic value --
+     * `(f x)` where `f : any`.
+     *
+     * Turmeric rejects this ("'f' is not a function or continuation") because
+     * the callee's type is not a TY_FN, which is the right answer for a static
+     * language.  In Saffron a function is an ordinary value that arrives in an
+     * `any` like any other, and higher-order code -- map, filter, fold, every
+     * combinator the surface syntax exists to make pleasant -- is exactly this
+     * shape.  Distinct from EX_DYN_OP because the callee is an EXPRESSION, not
+     * a named operator resolved from a table. */
+    EX_DYN_CALL,
+    /* saffron-lang-plan S4/D4 (G11): `(.field x)` where `x : any` -- the field
+     * is found on the value that actually arrived, not on a static type.
+     *
+     * Turmeric resolves `(.f x)` by the receiver's type (a record field, else a
+     * typeclass method), and on an `any` receiver both lookups fail.  In
+     * Saffron the receiver's type is the runtime value's, so the lookup is
+     * deferred with it. */
+    EX_DYN_FIELD,
+    /* saffron-lang-plan S9/D8: `(.method x)` where `x : any` AND the method
+     * name DID resolve to a typeclass.  The class and slot are static; only
+     * which instance to run is deferred to the box's tag.  Distinct from
+     * EX_DYN_FIELD, whose name resolved to nothing at all. */
+    EX_DYN_METHOD,
     /* DV0-DV1: Dynamic vars (-Xdynamic-vars) */
     EX_DEFDYNAMIC,       /* (defdynamic *name* :type root-expr) -- declare a dynamic var */
     EX_DYNVAR_READ,      /* *name* -- read current value of a dynamic var */
@@ -821,6 +866,44 @@ typedef enum ExprKind {
     /* M2b: (default-of T) — yields a zero-valued T. Type lives in Expr::type. */
     EX_DEFAULT_OF,
 } ExprKind;
+
+/* saffron-lang-plan S3/D4: the reserved EX_DYN_OP operator that asks a dynamic
+ * value whether it is truthy.  Not a builtin name -- deliberately, so it can
+ * never collide with one -- and answered by the interpreter before it consults
+ * the builtin table.  Shared here so elaboration and evaluation cannot spell it
+ * differently. */
+#define SAFFRON_TRUTHY_OP "saffron/truthy?"
+
+/* saffron-lang-plan S5: the opcodes the compiled dynamic operator runtime
+ * dispatches on.  emit_expr.c picks one from the operator's NAME (which it has
+ * statically) and emit_module.c emits the matching `#define` into the preamble,
+ * so the runtime never does a strcmp -- the name survives only in the panic
+ * message, where a reader needs it.
+ *
+ * Shared here rather than duplicated in the two emitters because they have to
+ * agree on the numbering, and a silent disagreement would turn `+` into `mod`
+ * with nothing to notice it. */
+enum {
+    TUR_DYNOP_ADD = 1,
+    TUR_DYNOP_SUB,
+    TUR_DYNOP_MUL,
+    TUR_DYNOP_DIV,
+    TUR_DYNOP_MOD,
+    TUR_DYNOP_EQ,
+    TUR_DYNOP_NE,
+    TUR_DYNOP_LT,
+    TUR_DYNOP_GT,
+    TUR_DYNOP_LE,
+    TUR_DYNOP_GE,
+    /* Integer-only, like `mod`: the builtin table has rows for the int kinds
+     * and nothing else, so a float operand finds no overload in the
+     * interpreter either and both back ends answer the same way. */
+    TUR_DYNOP_BAND,
+    TUR_DYNOP_BOR,
+    TUR_DYNOP_BXOR,
+    TUR_DYNOP_SHL,
+    TUR_DYNOP_SHR
+};
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
 struct FnDef {
@@ -1634,6 +1717,31 @@ struct Expr {
          * inject site does; `test_tag` remains the TypeKind for primitives and
          * as the fallback when no named type was resolved. */
         struct { struct Expr *value; int64_t test_tag; Type test_type; } any_is_;
+        /* saffron-lang-plan S3: the operator NAME is kept rather than a
+         * resolved BuiltinSpec -- resolution is exactly what is deferred to
+         * runtime.  The interpreter looks the spec up from the evaluated first
+         * argument's tag and hands it to the same eval_builtin every static
+         * call uses, which is why its arm is thin. */
+        struct { const Symbol *op; struct Expr **args; uint32_t n_args; } dyn_op_;
+        /* saffron-lang-plan S4: callee plus arguments; arity is checked when it
+         * runs, against the closure that actually arrived. */
+        struct { struct Expr *fn; struct Expr **args; uint32_t n_args; } dyn_call_;
+        /* saffron-lang-plan S4: receiver plus the field NAME, resolved against
+         * the runtime value's constructor when it runs. */
+        struct { struct Expr *obj; const Symbol *field; } dyn_field_;
+        /* saffron-lang-plan S9 (D8 piece 4): a typeclass method call whose
+         * receiver is an `any`.  The CLASS and the method SLOT are static -- the
+         * elaborator resolved both by name -- and only the instance is deferred,
+         * which is what separates this from EX_DYN_FIELD (where the name itself
+         * is unresolved).  Lowered to a `__tur_inst_find(class, TUR_GETTAG(obj))`
+         * and a call through the dict's slot. */
+        struct {
+            struct Expr     *obj;
+            struct TypeClass *tc;
+            uint8_t          method_idx;
+            struct Expr    **args;      /* the arguments AFTER the receiver */
+            uint32_t         n_args;
+        } dyn_method_;
         /* TY2.3: (cast x T) — checked downcast; panics on tag mismatch. */
         struct {
             struct Expr *value;

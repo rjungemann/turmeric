@@ -562,6 +562,7 @@ static void cmd_type(TuriEnv *env, const char *expr_src) {
     sfile.len         = combined.len - 1;
     sfile.file_id     = 0;
     sfile.reader_type = env->reader_type;
+    sfile.lang        = env->lang;   /* saffron-lang-plan S1 */
     diag_register_file(&sfile);
 
     uint32_t nforms = 0;
@@ -631,6 +632,7 @@ static void cmd_expand(TuriEnv *env, const char *expr_src) {
     sfile.len         = combined.len - 1;
     sfile.file_id     = 0;
     sfile.reader_type = env->reader_type;
+    sfile.lang        = env->lang;   /* saffron-lang-plan S1 */
     diag_register_file(&sfile);
 
     uint32_t nforms = 0;
@@ -1365,6 +1367,18 @@ int turi_repl_run(bool watch_mode) {
     }
     repl_configure_env(env);   /* TR2.4: diag sink + scratch promotion */
 
+    /* saffron-lang-plan S8: `tur repl --lang saffron`.
+     *
+     * Set BEFORE the preload below, because `g_saffron_prelude` selects the
+     * stdlib autoload list -- flipping it afterwards would leave the session
+     * without stdlib/saffron/prelude.tur.  The fields are assigned directly
+     * rather than through turi_env_apply_lang_dialect: that helper resets the
+     * session to its prelude, which at startup has not been loaded yet. */
+    if (g_repl_start_saffron) {
+        env->lang         = LANG_SAFFRON;
+        g_saffron_prelude = true;
+    }
+
     /* Preload the core macros (when/cond/for/and/or + assert!/require!/...) and
      * the typed-collection stdlib so the interactive prompt matches the
      * `--interpret` path -- without this, `#map{...}`/`#set{...}` and every
@@ -1691,24 +1705,45 @@ int turi_repl_run(bool watch_mode) {
                 LangLayerSet layers  = 0;
                 const char  *bad     = NULL;
                 size_t       bad_len = 0;
-                ReaderType rt = detect_lang_layered(line, strlen(line),
+                /* saffron-lang-plan S8: `detect_lang_dialect`, not
+                 * `detect_lang_layered`.  The latter reports only the READER
+                 * axis, so `#lang saffron` came back as plain `turmeric` with
+                 * no dialect, the early-out below fired ("reader already set
+                 * to turmeric"), and the language half was silently dropped --
+                 * `(defn add [a b] ...)` kept Turmeric's `int` parameter
+                 * default in a session the user had just asked to be Saffron.
+                 * The guide's first example is that exact line. */
+                LangDialect dialect = LANG_TURMERIC;
+                ReaderType rt = detect_lang_dialect(line, strlen(line),
                                                     &rest, &rest_len,
-                                                    &layers, &bad, &bad_len);
+                                                    &layers, &bad, &bad_len,
+                                                    &dialect);
                 if (rt == READER_UNKNOWN || rt == (ReaderType)-1) {
                     fprintf(stderr, "unknown #lang: '%s'\n", line + 6);
                 } else if (bad) {
                     fprintf(stderr, "unknown #lang layer: '%.*s'\n",
                             (int)bad_len, bad);
-                } else if (rt != env->reader_type || layers != env->lang_layers) {
+                } else if (rt != env->reader_type || layers != env->lang_layers
+                           || dialect != env->lang) {
                     /* Full switch: rewinds to the pinned stdlib preload
                      * (accumulated USER source may be incompatible with the
                      * new reader, the preload is not) and wipes the session
                      * reader-macro registry so a dropped layer's dispatch
                      * genuinely turns off. */
-                    turi_env_apply_lang(env, rt, layers);
-                    printf("; reader set to %s (session reset)\n", reader_type_name(rt));
+                    turi_env_apply_lang_dialect(env, rt, layers, dialect);
+                    if (dialect == LANG_SAFFRON)
+                        printf("; language set to saffron, reader %s "
+                               "(session reset)\n", reader_type_name(rt));
+                    else
+                        printf("; reader set to %s (session reset)\n",
+                               reader_type_name(rt));
                 } else {
-                    printf("; reader already set to %s\n", reader_type_name(rt));
+                    /* "reader already set to <name>" is the pinned wording
+                     * (tests/run-flags.sh reader-name-canonical and
+                     * lang-layer-same-set-no-reset); the language axis rides
+                     * along as a suffix rather than reshaping the line. */
+                    printf("; reader already set to %s%s\n", reader_type_name(rt),
+                           dialect == LANG_SAFFRON ? " (saffron)" : "");
                 }
                 free(line);
                 continue;

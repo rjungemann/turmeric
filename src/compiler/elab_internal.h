@@ -1340,6 +1340,12 @@ bool elab_module_resolve_path(Elab *e, const Symbol *name,
 
 /* TY2.2: wrap a value in EX_UNION_INJECT to widen it to the `any` top type. */
 Expr *elab_coerce_to_any(Elab *e, Expr *value);
+/* cps-coloring-walk-has-no-arm-for-union-inject: hoist a control-bearing
+ * operand into a `let` so the node above it sees a variable.  The CPS IR can
+ * lower a control op in a let INIT but only delegates the nodes below, and a
+ * delegated control op reaches the direct emitter, which aborts. */
+Expr *elab_bind_control_temp(Elab *e, Expr *value, LetBinding *lb);
+Expr *elab_hoist_control_operands(Elab *e, Expr *node);
 /* union-tagged-union-c-emission: tag a member value flowing into a union slot.
  * The union twin of elab_coerce_to_any; see its comment in elab_call.c for why
  * it never sets frame_box. */
@@ -1683,6 +1689,21 @@ Expr *elab_make_struct(Elab *e, const Form *call);
 Expr *elab_with(Elab *e, const Form *call); /* WITH-V0 */
 Expr *elab_default_of(Elab *e, const Form *call);  /* M2b */
 Expr *elab_borrow_immut(Elab *e, const Form *call);
+/* typeclass-dispatch-on-any-receiver-emits-uncompilable-c: build the checked
+ * `any` unbox (the EX_ANY_CAST `(cast x T)` lowers to) from an already-resolved
+ * target Type.  Used by the `@TypeName` witness path, which pins an instance
+ * and therefore already knows the type the receiver must be unboxed to. */
+Expr *elab_any_unbox_to(Elab *e, Expr *val, Type target, Span span);
+/* saffron-lang-plan D4: wrap an `any` in the truthiness operator so it can feed
+ * a C-level `bool` slot (an `if` condition, a contract predicate).  Returns the
+ * expression unchanged when it is not an `any` in a Saffron file, so callers
+ * apply it unconditionally.  Defined in elab_forms.c. */
+Expr *elab_saffron_truthy(Elab *e, Expr *cond);
+/* saffron-lang-plan D7: reject a static-only feature in a Saffron file, naming
+ * it and the guarantee it rests on.  Returns true when it rejected (false
+ * outside Saffron, so callers can guard on it).  Defined in elab_forms.c. */
+bool saffron_reject_static_only(Elab *e, Span span, const char *feature,
+                                const char *why);
 Expr *elab_borrow_mut(Elab *e, const Form *call);
 
 /* elab_types.c */

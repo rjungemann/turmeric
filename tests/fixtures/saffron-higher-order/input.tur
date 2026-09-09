@@ -1,0 +1,84 @@
+#lang saffron
+;; saffron-lang-plan S4/D4 (G5, G6): dynamic call, and higher-order code over a
+;; heterogeneous list.  This is the stage's exit criterion, and the stage that
+;; makes Saffron a language rather than a calculator -- higher-order functions
+;; are what the surface syntax exists for.
+;;
+;; Three things are in play, and each was a separate blocker:
+;;
+;;   * DYNAMIC CALL (G5).  `(f h)` where `f : any` was "'f' is not a function or
+;;     continuation" -- correct for a static language, wrong for one where a
+;;     function is an ordinary value.  The interpreter needed no new machinery
+;;     for the call itself; closures are already first-class and `turi_call` is
+;;     the same entry every other application uses.  What was missing was
+;;     permission.
+;;   * MATCH ON `any` (G6) already worked, so the plan's G6 needed nothing --
+;;     but the arm UNIFIER did not know `any` is the top type, so a fold whose
+;;     recursive arm was still being inferred and whose base arm was the `any`
+;;     accumulator was rejected as "expected int (from earlier arm), got any".
+;;   * The RECURSIVE FORWARD RETURN.  An unannotated Saffron function's
+;;     self-call read the pass-1 forward declaration -- the int64 carrier -- so
+;;     `lfilter`'s two `if` branches came out `then=Lst else=int`.  It forwards
+;;     as `any` now.  This corrects S2's note that returns needed no change:
+;;     inference does propagate for a non-recursive body, and a self-call is
+;;     exactly the case it cannot cover, because the type is needed before the
+;;     body is analysed.
+;;
+;; The list is genuinely heterogeneous -- int, cstr, float, bool -- and the
+;; float is 7.1 rather than 7.0 so a truncating path through `add-one` would
+;; show as 8 instead of 8.1.
+;;
+;; The container is defined HERE rather than taken from the stdlib, and that is
+;; deliberate: a stdlib cons list carries int64 handles, so `head` hands back an
+;; int and the heterogeneity is gone before `type-of` sees it.  Containers that
+;; can hold dynamic values are S6's subject, not S4's.
+;;
+;; S5 made this compile, and it took four things beyond the dynamic call
+;; itself: an `:any` ADT field had to become a two-word `tur_tagged_t` member
+;; (the int64 carrier stored the payload and dropped the tag); `match` on an
+;; `any` scrutinee had to narrow to the ADT its arms name; a match that JOINS to
+;; `any` had to widen the arms that are not (S4 settled the type and left the
+;; values alone, which only the interpreter could survive); and an unannotated
+;; Saffron return had to BE `any` rather than whatever inference produced, so
+;; the self-call and the definition agree on one C signature.
+
+(defdata Lst [] (Cons [hd : any tl : any]) (Nil))
+
+(defn lmap [f xs]
+  (match xs
+    (Cons h t) (Cons (f h) (lmap f t))
+    (Nil)      (Nil)))
+
+(defn lfilter [p xs]
+  (match xs
+    (Cons h t) (if (p h) (Cons h (lfilter p t)) (lfilter p t))
+    (Nil)      (Nil)))
+
+(defn lfold [f acc xs]
+  (match xs
+    (Cons h t) (lfold f (f acc h) t)
+    (Nil)      acc))
+
+(defn each [f xs]
+  (match xs
+    (Cons h t) (do (f h) (each f t))
+    (Nil)      0))
+
+(defn kind-of [x]     (type-of x))
+(defn is-num? [x]     (or (is? x int) (is? x float)))
+(defn add-one [x]     (+ x 1))
+(defn count1  [acc x] (+ acc 1))
+(defn show    [x]     (println x))
+
+(defn main [] : int
+  (let [xs (Cons 1 (Cons "hi" (Cons 7.1 (Cons true (Nil)))))]
+    ;; fold: four elements of four different types
+    (println (lfold count1 0 xs))
+    ;; map: each element reports its own runtime type
+    (each show (lmap kind-of xs))
+    ;; filter: two of the four are numeric
+    (println (lfold count1 0 (lfilter is-num? xs)))
+    ;; map over the filtered numbers -- 1 -> 2 and 7.1 -> 8.1, so a truncation
+    ;; anywhere in the dynamic arithmetic path would show here.
+    (each show (lmap add-one (lfilter is-num? xs))))
+  0)

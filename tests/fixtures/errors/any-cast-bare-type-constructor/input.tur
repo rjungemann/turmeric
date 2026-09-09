@@ -1,0 +1,11 @@
+;; any-narrowing-broken-for-parametric-receivers: a BARE type constructor as an
+;; `cast` target names no single runtime type -- an `any` holds one
+;; instantiation, and `Option` does not say which.  It used to resolve to the
+;; head ADT and test against an id nothing ever boxes, so this was silently
+;; false (and the `cast` twin panicked "any holds Option, not Option").
+;; Now it is a diagnostic that names the arity and shows the applied form.
+(defn boxed [] : any (Some 7.1))
+
+(defn main [] : int
+  (println (unwrap-or (cast (boxed) Option) 0.0))
+  0)

@@ -192,6 +192,26 @@ etc.) dedupe by value:
 > membership tests take the symbol's hash explicitly, e.g.
 > `(set-member? s (hash :a) :a)`. See [the symbols guide](symbols-guide.md).
 
+### Element homogeneity and `(Set any)`
+
+Like `[...]` and `#map{...}`, a set literal is homogeneous: every element must
+have the set's element type `A`, and a mismatch is a `TUR-E0001` at the
+offending element (`function 'set-add-elem__' arg 2: expected tyvar, got cstr`),
+exactly as `vec-of` reports one at `vec-push!`. A set of mixed values is spelled
+`(Set any)` -- widen each element with `(:: e any)` -- and the stdlib's
+`Hash [any]` / `MapKey [any]` instances key each `any` by its payload, so an
+`any` holding `"two"` is content-keyed like a bare `"two"`, an `any` holding
+`7.1` compares by value like a bare `7.1`, and a bare `1` finds the boxed `1`:
+
+```turmeric no-check
+(set-of (:: 1 any) (:: "two" any) (:: 7.1 any) (:: "two" any))  ; => (Set any), 3 members
+(set-member? s (hash 1) 1)                                       ; => true
+```
+
+In a `#lang saffron` file the literal does this widen itself, so
+`#set{1 "two" 7.1}` is a `(Set any)` with no annotation -- the same rule that
+makes `[1 "two" 7.1]` a `(Vec any)` there.
+
 ## Empty literals
 
 ```turmeric no-check

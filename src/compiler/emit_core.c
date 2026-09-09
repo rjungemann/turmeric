@@ -910,6 +910,29 @@ bool expr_subtree_has_inline_c(const Expr *e) {
          * bodies that touch a struct at all.  The `default` below stays
          * conservative for everything still unlisted. */
         case EX_GET_FIELD:   return expr_subtree_has_inline_c(e->as.get_field_.struct_expr);
+        /* saffron-lang-plan S5: the three dynamic nodes, for exactly the reason
+         * the `any` readers above were added.  Each lowers to emitter-generated
+         * code -- a preamble helper call, a fat-protocol dispatch, a tag chain --
+         * and carries no inline-C of its own, so only the operands need walking.
+         *
+         * Left to the conservative `default` they answered "may hide inline-C"
+         * for every Saffron body, which switched the whole nonretain inference
+         * off before its result gate was even consulted.  Measured, not
+         * reasoned: `(defn get-x [p] (.x p))` reported inlinec=1 under a probe
+         * on the inference's entry, which is why its `any` argument was
+         * heap-boxed at every call site.  A dynamic CALL is walked like an
+         * ordinary one -- the question is whether THIS body contains inline-C,
+         * not what the callee does. */
+        case EX_DYN_OP:
+            for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
+                if (expr_subtree_has_inline_c(e->as.dyn_op_.args[i])) return true;
+            return false;
+        case EX_DYN_CALL:
+            if (expr_subtree_has_inline_c(e->as.dyn_call_.fn)) return true;
+            for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
+                if (expr_subtree_has_inline_c(e->as.dyn_call_.args[i])) return true;
+            return false;
+        case EX_DYN_FIELD:   return expr_subtree_has_inline_c(e->as.dyn_field_.obj);
         case EX_RETURN:  return expr_subtree_has_inline_c(e->as.return_.value);
         /* RM1 (bind chains): a nested closure literal is walked INTO -- its
          * captures are copies of this body's values, so inline C in there can
@@ -1600,6 +1623,33 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
             return box_uses_confined(e->as.any_is_.value, b, /*confined=*/true);
         case EX_ANY_CAST:
             return box_uses_confined(e->as.any_cast_.value, b, /*confined=*/true);
+        /* saffron-lang-plan S5: the dynamic operator and the dynamic field read
+         * are two more readers of the same kind -- each consumes the tagged
+         * value and produces something that CANNOT alias the payload box, so an
+         * operand is checked confined whatever this expression's own position
+         * is:
+         *   dyn-op    -- every helper it lowers to (__tur_dyn_arith / _cmp /
+         *                _not / _println / _truthy) returns a FRESH TUR_TAG or a
+         *                C scalar.  None returns an operand, so none can hand
+         *                back a pointer into one.
+         *   dyn-field -- reads a member out of the receiver's box.  A scalar
+         *                member is copied into a fresh tag; an aggregate member
+         *                is copied into a fresh malloc by dyn_widen_to_any.
+         *                Either way the result is a copy, exactly as EX_ANY_CAST
+         *                above is a deref.
+         *
+         * A dynamic CALL is the opposite case and keeps the strict answer: the
+         * callee is a value, so there is no body to inspect and no mask to
+         * consult -- the same reason EX_CALL refuses an `fn_expr` callee. */
+        case EX_DYN_OP:
+            for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
+                if (!box_uses_confined(e->as.dyn_op_.args[i], b, /*confined=*/true))
+                    return false;
+            return true;
+        case EX_DYN_FIELD:
+            return box_uses_confined(e->as.dyn_field_.obj, b, /*confined=*/true);
+        case EX_DYN_CALL:
+            return false;
         case EX_IF:
             return box_uses_confined(e->as.if_.cond, b, /*discarded=*/true) &&
                    box_uses_confined(e->as.if_.then_, b, confined) &&
@@ -3187,6 +3237,7 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
             const FnDef *mimpl = (repr && slot < repr->n_method_impls)
                 ? repr->method_impls[slot] : NULL;
             Buf b2; buf_init(&b2);
+            /* One diagnostic per dispatch site, not one per offending param. */
             /* MB2.5 (constrained-hkt-forall-mode-b-plan): the dispatched RETURN
              * type must mirror the dict field (emit_stmt.c:581-603), which stores
              * the carrier instance method -- for a class-var-typed result (`(f b)`)
@@ -3231,6 +3282,23 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
                         Type pt = mimpl->param_types[i];
                         if (type_struct_pass_by_ptr(pt))
                             buf_printf(&b2, "const %s *", type_c_name(pt));
+                        else if (emit_type_is_byvalue_adt(ctx, pt)) {
+                            /* D8 piece 2 (forall-dict-byvalue-receiver): the
+                             * carrier, matching the dict SLOT, which now holds
+                             * a per-instance wrapper that derefs it
+                             * (emit_stmt.c).  This used to be a hard error --
+                             * the slot held the raw impl, whose parameter is
+                             * the struct by value, so the pun handed it a
+                             * pointer.  Both ends agree now, so the shape is
+                             * supported rather than guarded.
+                             *
+                             * The REPRESENTATIVE-instance concern the guard
+                             * also raised is answered by the same wrapper: every
+                             * instance's slot is `(carrier) -> ret`, so there is
+                             * one signature to represent rather than two
+                             * disagreeing layouts. */
+                            buf_puts(&b2, "int64_t");
+                        }
                         else
                             buf_puts(&b2, type_c_name(pt));
                     }

@@ -676,6 +676,23 @@ static bool adt_app_type_arg_is_concrete(const Type *a) {
      * A Vec of a parametric PRODUCT monomorph never hit it, because a product
      * IS by-value and passed the second test.  See
      * docs/archive/vec-of-parametric-sum-monomorph-ice.md. */
+    /* vec-of-any-repr-decision-ice: `any` is a concrete type ARGUMENT.
+     *
+     * It c-names to `tur_tagged_t`, so `(Vec any)` is as nameable a monomorph
+     * as `(Vec int)` -- but the layout table rejects TY_ANY (a 16-byte
+     * by-value FIELD is an ABI change, which is a different question), so it
+     * failed both tests above and `(Vec any)` was not-a-concrete-app.  The let
+     * binder then fell to the int64 carrier while repr_of said typed heap
+     * pointer, and the repr-shadow aborted the compile -- the identical shape,
+     * and the identical ICE text, as the `(Vec (Opt2 int))` row above.
+     *
+     * Admitting it HERE rather than in the layout table is what keeps the
+     * scope right: this predicate decides whether an application NAMES a
+     * monomorph, which is the question that was answered wrongly.  Whether an
+     * `any` may be a by-value monomorph FIELD is untouched -- the element goes
+     * through the boxed-aggregate path in repr_of instead, exactly as a
+     * by-value ADT element already does. */
+    if (a->kind == TY_ANY) return true;
     return a->kind == TY_APP && type_app_is_concrete_adt(a);
 }
 
@@ -1715,6 +1732,18 @@ static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
         case TY_BOOL:     return "bool";
         case TY_FLOAT:    return "double";
         case TY_CSTR:     return "const char *";
+        /* saffron-lang-plan S5: an `:any` field is a TWO-word box, and the
+         * `default: int64_t` below is not a narrower spelling of that -- it is
+         * the tag thrown away.  A `(Cons [hd : any tl : any])` laid out as two
+         * int64 slots stores the payload word and loses which type it was, so
+         * `type-of` on a field read answers whatever the carrier happens to
+         * collide with.  The interpreter never had this problem: a TuriValue
+         * carries its own tag wherever it is stored.
+         *
+         * Only reachable for a field whose declared kind is TY_ANY and whose
+         * `full_type` is NULL; a field carrying a full type already resolves to
+         * `tur_tagged_t` through type_c_name above. */
+        case TY_ANY:      return "tur_tagged_t";
         case TY_PTR_VOID: return "void *";
         case TY_RC:
         case TY_WEAK:     return "RcControlBlock *";
@@ -2319,6 +2348,39 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
     g_adt_apps[idx].emitting = false;
 }
 
+/* any-fn-tag-does-not-discriminate-signatures: the one renderer for a function
+ * type's identity spelling, "(fn [int cstr] : bool)" / "(c-fn [...] : ...)".
+ *
+ * It was the body of `type_name`'s TY_FN case, lifted out because a second
+ * caller now needs the SAME string: `emit_any_type_id` interns a fn payload's
+ * `any` box id by this key, and the interpreter has to reproduce it from a
+ * TuriClosure's FnDef to answer `is?` / `cast` the way the compiled path does.
+ * Two hand-written renderers would drift, and drift here is a silent
+ * compiled/interpreted disagreement -- exactly the defect being fixed -- so
+ * both sides go through this.
+ *
+ * The result is interned (process-lifetime, deduped), so the caller neither
+ * owns nor frees it, and two calls with the same shape return the same
+ * pointer. */
+const char *tur_fn_type_key(const uint8_t *arg_kinds, uint32_t arity,
+                            TypeKind result_kind, bool cfnptr) {
+    Buf tmp;
+    buf_init(&tmp);
+    buf_puts(&tmp, cfnptr ? "(c-fn [" : "(fn [");
+    for (uint32_t i = 0; i < arity; i++) {
+        if (i > 0) buf_puts(&tmp, " ");
+        buf_puts(&tmp, type_name(type_from_kind(
+                           arg_kinds ? (TypeKind)arg_kinds[i] : TY_UNKNOWN)));
+    }
+    buf_puts(&tmp, "] : ");
+    type_name_buf(&tmp, type_from_kind(result_kind));
+    buf_puts(&tmp, ")");
+    buf_putc(&tmp, '\0');
+    const char *r = intern_type_name(tmp.data);
+    buf_free(&tmp);
+    return r;
+}
+
 /* OWNERSHIP CONTRACT (PH2): type_name has *mixed* ownership -- it returns a
  * static string literal for atomic/primitive kinds but a freshly tur_strdup-ed
  * heap string for composite kinds (TY_FN, TY_HANDLER, TY_UNION, TY_REF,
@@ -2372,23 +2434,9 @@ const char *type_name(Type t) {
         case TY_TYVAR:   return "tyvar";
         /* IT4: Top type */
         case TY_ANY:     return "any";
-        case TY_FN: {
-            /* Build into a buf, then strdup. */
-            Buf tmp;
-            buf_init(&tmp);
-            buf_puts(&tmp, t.as.fn.cfnptr ? "(c-fn [" : "(fn [");
-            for (uint32_t i = 0; i < t.as.fn.arity; i++) {
-                if (i > 0) buf_puts(&tmp, " ");
-                buf_puts(&tmp, type_name(type_from_kind(t.as.fn.arg_kinds[i])));
-            }
-            buf_puts(&tmp, "] : ");
-            type_name_buf(&tmp, type_from_kind(t.as.fn.result_kind));
-            buf_puts(&tmp, ")");
-            buf_putc(&tmp, '\0');
-            const char *r = intern_type_name(tmp.data);
-            buf_free(&tmp);
-            return r;
-        }
+        case TY_FN:
+            return tur_fn_type_key(t.as.fn.arg_kinds, t.as.fn.arity,
+                                   t.as.fn.result_kind, t.as.fn.cfnptr);
         case TY_REF: {
             /* Build "ref<T>" name */
             Buf tmp;
@@ -5611,8 +5659,22 @@ static ReprForm repr_of_impl(const Type *t, ReprPosition pos) {
      * container slots (the layout switch deliberately rejects them from
      * by-value monomorph fields -- see the TY_ANY note there). */
     if (t->kind == TY_ANY || t->kind == TY_UNION) {
-        if (pos == REPR_POS_CONTAINER_ELEM || pos == REPR_POS_CARRIER_SINK ||
-            pos == REPR_POS_STRUCT_FIELD)
+        /* vec-of-any-repr-decision-ice: a CONTAINER ELEMENT is boxed, not
+         * erased.  A container slot is one machine word and a tur_tagged_t is
+         * two, so erasing an `any` element to the carrier keeps the payload
+         * and drops the tag -- `type-of` on a element read back then answers
+         * whatever the carrier collides with.  The by-value-aggregate arm
+         * below has answered REPR_BOXED_AGG at this position for exactly this
+         * reason since increment 4; an `any` is the same problem wearing a
+         * different kind, so it gets the same answer and the same machinery
+         * (type_is_boxed_container_elem IS this call, so the store, the read
+         * and the element-free all follow from here).
+         *
+         * A carrier SINK and a STRUCT FIELD keep the carrier: the sink is
+         * generic-erased by construction, and a field is where a by-value
+         * monomorph would need the 16-byte slot the layout table declines. */
+        if (pos == REPR_POS_CONTAINER_ELEM) return REPR_BOXED_AGG;
+        if (pos == REPR_POS_CARRIER_SINK || pos == REPR_POS_STRUCT_FIELD)
             return REPR_CARRIER_I64;
         return REPR_BYVAL_AGG;
     }

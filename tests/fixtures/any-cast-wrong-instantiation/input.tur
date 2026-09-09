@@ -1,0 +1,22 @@
+;; any-narrowing-broken-for-parametric-receivers: a genuinely wrong cast between
+;; two instantiations of ONE constructor.  The box id is per instantiation, so
+;; this mismatch is correctly detected -- but `type-of` reports the head name
+;; for both ids, so the panic used to read "cast: any holds Option, not Option",
+;; naming the right constructor twice and telling the reader nothing.
+;;
+;; The message now says what actually differs.  It still does not name the two
+;; instantiations; that needs a second per-id table carrying the applied
+;; spelling (see the report's fix direction 3).
+;;
+;; requires.compiled: the interpreter cannot discriminate instantiations -- a
+;; TuriValue records the ADT it was built from, not the type argument -- so
+;; turi_any_target_name head-matches and this cast SUCCEEDS under --interpret.
+;; Same documented parity limit as any-narrow-parametric-discriminates.
+;;
+;; 7.1, not 7.0: the payload rides the box as an IEEE-754 bit pattern, so an
+;; integral literal would not distinguish a wrong tag from a botched unbox.
+(defn boxed [] : any (Some 7.1))
+
+(defn main [] : int
+  (println (unwrap-or (cast (boxed) (Option int)) 0))
+  0)

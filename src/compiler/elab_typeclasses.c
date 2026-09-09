@@ -1,5 +1,6 @@
 /* elab_typeclasses.c -- typeclass declarations, instances, and method-call dispatch. */
 #include "elab_internal.h"
+#include "lang_layers.h"   /* saffron-lang-plan S4: lang_span_is_saffron */
 #include "refine_discharge.h"     /* RT1: instance/class refinement variance */
 #include "refine_solver.h"        /* RT1: refine_model_search, for the variance witness */
 #include "forms.h"
@@ -1197,6 +1198,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     method->return_refine_var  = return_refine_var;
     method->effect_row = method_effect_row;  /* ER3: NULL if not annotated */
     method->default_fn_expr = NULL;          /* ER3: set by elab_defclass if body forms exist */
+    method->default_method_form = NULL;      /* set by elab_defclass if body forms exist */
     return method;
 }
 
@@ -1237,6 +1239,33 @@ static bool typeclass_signatures_match(const TypeClass *existing,
  * Syntax: (defclass Eq [a] (eq? [x : a, y : a] : bool))
  *         (defclass Show [a] (show [x : a] : cstr))
  */
+
+/* typeclass-default-methods-do-not-work: does a default body mention one of
+ * the class's own methods -- `(.lt? x y)`, or bare `(lt? x y)`?  Such a body can
+ * only be elaborated per instance. */
+static bool form_mentions_sibling(const Form *f, const TypeClassMethod *methods,
+                                  uint32_t n_methods) {
+    if (!f) return false;
+    if (f->tag == F_SYM && f->as.sym && f->as.sym->name) {
+        const char *nm = f->as.sym->name;
+        const char *bare = (nm[0] == '.') ? nm + 1 : nm;
+        for (uint32_t i = 0; i < n_methods; i++)
+            if (methods[i].name && strcmp(methods[i].name->name, bare) == 0) return true;
+        return false;
+    }
+    if (f->tag == F_LIST || f->tag == F_VEC) {
+        for (uint32_t i = 0; i < f->as.list.len; i++)
+            if (form_mentions_sibling(f->as.list.items[i], methods, n_methods)) return true;
+    }
+    return false;
+}
+static bool default_body_mentions_sibling(const Form *method_form, uint32_t body_start,
+                                          const TypeClassMethod *methods, uint32_t n_methods) {
+    for (uint32_t k = body_start; k < method_form->as.list.len; k++)
+        if (form_mentions_sibling(method_form->as.list.items[k], methods, n_methods)) return true;
+    return false;
+}
+
 Expr *elab_defclass(Elab *e, const Form *call) {
     /* Minimum: (defclass Name) */
     if (call->as.list.len < 2) {
@@ -1522,8 +1551,35 @@ Expr *elab_defclass(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Third pass: elaborate default method bodies (if any) now that the
-     * defclass is committed. */
+    /* Third pass: RECORD default method bodies (if any).
+     *
+     * typeclass-default-methods-do-not-work: this used to elaborate the default
+     * body here, as a synthetic `__default_<Class>_<method>` FnDef with its
+     * parameters typed at the class's type variable.  That can never work for
+     * the body a default exists to write -- `(or (.lt? x y) (= x y))` -- because
+     * no instance of the class exists yet, so `.lt?` on a tyvar receiver
+     * resolves to nothing; and it fired even when every instance implemented
+     * the method, so merely WRITING a default broke the class.  The form is
+     * kept instead and elab_definstance splices it in for an omitted method,
+     * where it elaborates as an ordinary instance method against a concrete
+     * receiver with its siblings resolvable. */
+    for (uint32_t i = 0; i < n_methods; i++) {
+        Form *method_form = call->as.list.items[method_form_idx[i]];
+        uint32_t body_start = method_body_starts[i];
+        if (body_start < method_form->as.list.len)
+            methods[i].default_method_form = method_form;
+    }
+
+    /* ...and ALSO elaborate it at the class when that can succeed -- a default
+     * body that calls no sibling method.  `errors/typeclass-effect-row-default-bad`
+     * pins a class-level rule: a default whose body performs an effect beyond
+     * the method's declared row is TUR-E0009 even when every instance overrides
+     * it, and that check needs the body elaborated HERE (the spliced copy is
+     * only checked where it is spliced).  A sibling-calling default is skipped
+     * -- at the class there is nothing for `.lt?` to resolve against, which is
+     * the failure this whole change exists to remove -- and gets its checking
+     * per instance instead.  Decided syntactically, so it never depends on
+     * whether a speculative elaboration happened to fail. */
     for (uint32_t i = 0; i < n_methods; i++) {
         Form *method_form = call->as.list.items[method_form_idx[i]];
         uint32_t body_start = method_body_starts[i];
@@ -1532,7 +1588,8 @@ Expr *elab_defclass(Elab *e, const Form *call) {
         /* ER3: If the method form has forms after the return type, elaborate
          * them as a default body.  This mirrors elab_definstance's method
          * elaboration so that effect_check_pass finds it as a normal FnDef. */
-        if (body_start < method_form->as.list.len) {
+        if (body_start < method_form->as.list.len &&
+            !default_body_mentions_sibling(method_form, body_start, methods, n_methods)) {
             /* Build a synthetic function name: __default_<TypeClass>_<method> */
             char default_name_buf[192];
             snprintf(default_name_buf, sizeof(default_name_buf),
@@ -1634,7 +1691,7 @@ Expr *elab_defclass(Elab *e, const Form *call) {
             methods[i].default_fn_expr = def_expr;
         }
     }
-    
+
     /* Register the typeclass in the environment */
     TypeClass *tc = typeclass_env_register_typeclass(&e->typeclass_env, name);
     if (!tc) {
@@ -3185,6 +3242,30 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                     prev->n_type_args, prev_suffix, sizeof(prev_suffix)))
             continue;
         if (strcmp(prev_suffix, inst_type_suffix) == 0) {
+            /* duplicate-instance-silently-drops-a-user-definstance: the guard
+             * above cannot tell "the same stdlib file loaded twice" (its
+             * reason to exist, and rightly silent) from "a USER file defining
+             * an instance the autoloaded stdlib already covers" -- where
+             * silence meant `(definstance Eq [int] ...)` was accepted and had
+             * no effect, and `(.eq? 3 3)` kept answering from the stdlib.  The
+             * two differ by WHERE the second definition lives: a stdlib file
+             * (autoloaded or explicitly `(load "stdlib/...")`-ed, which is why
+             * `in_stdlib_load` alone is not the signal) stays silent; anything
+             * else is told, once, that the definition is inert.  Warned rather
+             * than replaced or rejected: which of those is right is a language
+             * decision (T1 says user instances shadow stdlib ones for
+             * AMBIGUOUS candidates; nothing has decided the exact-duplicate
+             * case), and a warning turns a mystery into a message without
+             * pre-empting it. */
+            const SourceFile *dup_sf = diag_source_file(call->span.file_id);
+            bool in_stdlib_file = dup_sf && dup_sf->path && strstr(dup_sf->path, "stdlib/");
+            if (!in_stdlib_file && !e->in_stdlib_load) {
+                diag_emit(DIAG_WARNING, call->span,
+                          "instance %s [%s] is already defined (first definition "
+                          "wins): this definstance has no effect",
+                          tc_name->name,
+                          n_type_args > 0 ? type_name(type_args[0]) : "");
+            }
             /* Already have this exact instance; emit nothing further. */
             return e_nil(e, call->span);
         }
@@ -3274,6 +3355,54 @@ Expr *elab_definstance(Elab *e, const Form *call) {
      * The number of methods must match the typeclass definition.
      */
 
+    /* typeclass-default-methods-do-not-work: line the provided impls up in
+     * CLASS ORDER by name, and fill a method the instance omits from the
+     * class's default form.  The default form has the exact shape of an
+     * instance method form -- `(name [params] : ret body...)` -- so from here on
+     * it is indistinguishable from one the instance wrote, and elaborates with
+     * the receiver at this instance's type and its siblings resolvable.  A
+     * method with neither an impl nor a default is the error this used to
+     * report as a bare count. */
+    {
+        Form **ordered = tc->n_methods
+            ? (Form **)arena_alloc(e->arena, tc->n_methods * sizeof(Form *)) : NULL;
+        for (uint32_t k = 0; k < n_method_impl_forms; k++) {
+            Form *pf = method_impl_forms[k];
+            if (pf->tag != F_LIST || pf->as.list.len < 1 || pf->as.list.items[0]->tag != F_SYM)
+                continue;   /* the per-method loop below reports the shape */
+            bool known = false;
+            for (uint8_t i = 0; i < tc->n_methods && !known; i++)
+                known = (pf->as.list.items[0]->as.sym == tc->methods[i].name);
+            if (!known) {
+                diag_emit(DIAG_ERROR, pf->as.list.items[0]->span,
+                          "method implementation name '%s' doesn't match any method of '%s'",
+                          pf->as.list.items[0]->as.sym->name, tc_name->name);
+                return NULL;
+            }
+        }
+        for (uint8_t i = 0; i < tc->n_methods; i++) {
+            Form *found = NULL;
+            for (uint32_t k = 0; k < n_method_impl_forms && !found; k++) {
+                Form *pf = method_impl_forms[k];
+                if (pf->tag == F_LIST && pf->as.list.len >= 1 &&
+                    pf->as.list.items[0]->tag == F_SYM &&
+                    pf->as.list.items[0]->as.sym == tc->methods[i].name)
+                    found = pf;
+            }
+            if (!found && tc->methods[i].default_method_form)
+                found = (Form *)tc->methods[i].default_method_form;
+            if (!found) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "definstance: missing method '%s' for '%s', and the class "
+                          "declares no default for it",
+                          tc->methods[i].name->name, tc_name->name);
+                return NULL;
+            }
+            ordered[i] = found;
+        }
+        method_impl_forms = ordered;
+        n_method_impl_forms = tc->n_methods;
+    }
     if (n_method_impl_forms < tc->n_methods) {
         diag_emit(DIAG_ERROR, call->span,
                   "definstance: expected %d method implementations for '%s', got %d",
@@ -5496,6 +5625,7 @@ static void poly_wrap_stamp_carrier_erased(Expr *wrap, const Binding *param) {
 }
 
 Expr *elab_method_call(Elab *e, const Form *call) {
+
     /* call is (.method obj arg1 arg2 ...)
      * call->as.list.items[0] is the symbol .method
      */
@@ -5582,6 +5712,9 @@ Expr *elab_method_call(Elab *e, const Form *call) {
         TypeClassInstance *witness_inst   = NULL;
         FnDef             *witness_method_fn = NULL;
         bool               any_inst_for_method = false;
+        /* typeclass-dispatch-on-any-receiver-emits-uncompilable-c: the type the
+         * witness pins, kept so an `any` receiver can be unboxed to it below. */
+        Type               witness_recv_type = type_simple(TY_UNKNOWN, CK_COPY);
 
         for (TypeClassInstance *inst = e->typeclass_env.instances;
              inst != NULL && !witness_inst; inst = inst->next) {
@@ -5592,6 +5725,7 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                 any_inst_for_method = true;
                 /* Check if a type arg name matches the witness identifier. */
                 bool name_match = false;
+                uint8_t matched_ti = 0;
                 for (uint8_t ti = 0; ti < inst->n_type_args && !name_match; ti++) {
                     if (inst->type_arg_syms && inst->type_arg_syms[ti] &&
                         inst->type_arg_syms[ti]->len == witness_len &&
@@ -5611,10 +5745,13 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                         }
                         if (prim && strcmp(prim, witness_name) == 0) name_match = true;
                     }
+                    if (name_match) matched_ti = ti;
                 }
                 if (name_match) {
                     witness_inst      = inst;
                     witness_method_fn = inst->method_impls[mi];
+                    if (matched_ti < inst->n_type_args)
+                        witness_recv_type = inst->type_args[matched_ti];
                 }
                 break; /* one method match per instance is enough */
             }
@@ -5624,6 +5761,27 @@ Expr *elab_method_call(Elab *e, const Form *call) {
             /* Witness resolved: receiver is items[2], extra args are items[3..]. */
             Expr *obj_w = elab_form(e, call->as.list.items[2]);
             if (!obj_w) return NULL;
+
+            /* typeclass-dispatch-on-any-receiver-emits-uncompilable-c: an `any`
+             * receiver is a two-word `tur_tagged_t`, and the instance impl takes
+             * the payload type.  Handing the box straight over emitted
+             * "incompatible type for argument 1" from cc -- and this is the
+             * route the ambiguity diagnostic RECOMMENDS for an erased receiver,
+             * so following the compiler's own hint produced a build failure.
+             *
+             * The witness already names the instance, which is exactly what the
+             * unbox needs, so pin and unbox together.  It is the CHECKED unbox
+             * (the same node `(cast x T)` lowers to), so a witness that names
+             * the wrong instance panics with `cast: any holds ...` rather than
+             * reinterpreting the payload -- the witness pins which impl runs, it
+             * does not get to assert what the box holds. */
+            if (obj_w->type.kind == TY_ANY &&
+                witness_recv_type.kind != TY_UNKNOWN &&
+                witness_recv_type.kind != TY_ANY) {
+                obj_w = elab_any_unbox_to(e, obj_w, witness_recv_type,
+                                          call->as.list.items[2]->span);
+                if (!obj_w) return NULL;
+            }
 
             uint32_t n_args_w = call->as.list.len - 3;
             Expr **args_w = (Expr **)arena_alloc(e->arena, n_args_w * sizeof(Expr *));
@@ -6490,6 +6648,28 @@ Expr *elab_method_call(Elab *e, const Form *call) {
 found_method:;
 
     if (!best_method) {
+        /* saffron-lang-plan S4/D4 (G11): a dynamic field read.
+         *
+         * `(.x p)` with `p : any` has exhausted both static routes -- there is
+         * no record field to find on `any`, and no typeclass instance for it --
+         * which in Turmeric is the end of the road.  In Saffron the receiver's
+         * type is whatever arrived, so the field is looked up then, against the
+         * value's own constructor.
+         *
+         * Placed here, after every static route has been tried, so a Saffron
+         * program with a CONCRETE receiver still gets ordinary static field
+         * access and ordinary method dispatch; only a genuinely dynamic
+         * receiver defers. */
+        if (obj && obj->type.kind == TY_ANY && lang_span_is_saffron(call->span)) {
+            Type any_t;
+            memset(&any_t, 0, sizeof(any_t));
+            any_t.kind = TY_ANY;
+            Expr *df = expr_new(e->arena, EX_DYN_FIELD, any_t, call->span);
+            df->as.dyn_field_.obj   = obj;
+            df->as.dyn_field_.field =
+                symtab_intern(e->st, strslice(method_name, method_name_len));
+            return elab_hoist_control_operands(e, df);
+        }
         /* No matching method found */
         diag_emit(DIAG_ERROR, call->span,
                   "no typeclass method found for '%.*s'",
@@ -6550,6 +6730,249 @@ found_method:;
                           (int)method_name_len, method_name);
             return NULL;
         }
+    }
+
+    /* typeclass-dispatch-on-any-receiver-emits-uncompilable-c: an `any` receiver
+     * never dispatches, however many instances matched.
+     *
+     * The ambiguity guard below counts CANDIDATES, so with exactly one instance
+     * nothing fired and resolution took it -- without ever asking whether the
+     * receiver was that type.  It is not: an `any` is a two-word `tur_tagged_t`
+     * box, so the instance impl received the box where it declared the payload,
+     * and cc rejected the call.  One candidate is not evidence that the
+     * candidate is right.
+     *
+     * Checked before the count, so an `any` receiver gets this message rather
+     * than the ambiguity one -- which named only `@TypeName` and left out the
+     * two routes that have always worked. */
+    /* typeclass-dispatch-on-any-receiver-emits-uncompilable-c: an `any` receiver
+     * never dispatches to an instance declared for some other type.
+     *
+     * Nothing rejected it before.  An `any` carries no kind the matcher
+     * recognises, so it took the KIND_ARROW arm, where `type_ok` is
+     * "the instance head is not primitive" -- and every struct/ADT instance
+     * satisfies that.  So the FIRST such instance was taken as an EXACT match
+     * (fallback_count 0, so the ambiguity guard below never even looked), and
+     * the instance impl was then called with a two-word `tur_tagged_t` where it
+     * had declared the payload type.  cc rejected the call; with one instance
+     * in scope there was no diagnostic at all beforehand.
+     *
+     * Keyed on the SELECTED instance rather than on match bookkeeping, so it
+     * holds however dispatch got there -- and so a genuine `definstance C [any]`
+     * still resolves, which is the one case where an `any` receiver is exactly
+     * what the instance asked for. */
+    if (obj && obj->type.kind == TY_ANY && best_inst &&
+        !(best_inst->n_type_args > 0 &&
+          best_inst->type_args[0].kind == TY_ANY)) {
+        /* saffron-lang-plan S9 (D8 piece 4): in Saffron this is not the end of
+         * the road -- it is the whole point.  The class and the method SLOT are
+         * static (the name resolved), so only the instance is undecidable here,
+         * and the box's tag decides it at runtime through the registry S9 piece
+         * 3 publishes.
+         *
+         * The diagnostic below stays for Turmeric, where deferring a decision to
+         * runtime would be the wrong default: there `narrow it first` really is
+         * the answer.  So the two dialects differ in what they do with the same
+         * resolution state, not in how they reach it. */
+        if (lang_span_is_saffron(call->span)) {
+            TypeClass *tc = best_inst->typeclass;
+            uint8_t slot = 0;
+            bool found_slot = false;
+            for (uint8_t i = 0; i < tc->n_methods; i++) {
+                if (tc->methods[i].name->len == method_name_len &&
+                    memcmp(tc->methods[i].name->name, method_name,
+                           method_name_len) == 0) {
+                    slot = i; found_slot = true; break;
+                }
+            }
+            if (found_slot) {
+                uint32_t n_extra = call->as.list.len - 2;
+                Expr **extra = n_extra
+                    ? (Expr **)arena_alloc(e->arena, n_extra * sizeof(Expr *))
+                    : NULL;
+                for (uint32_t i = 0; i < n_extra; i++) {
+                    extra[i] = elab_form(e, call->as.list.items[2 + i]);
+                    if (!extra[i]) return NULL;
+                    /* D8 Q3: every extra argument crosses the dispatch as a BOX
+                     * -- the shim's signature is `(int64_t, tur_tagged_t, ...)`
+                     * for every instance -- so a concrete one is widened here,
+                     * exactly as a dyn call's arguments are. */
+                    if (extra[i]->type.kind != TY_ANY && extra[i]->type.kind != TY_NEVER)
+                        extra[i] = elab_coerce_to_any(e, extra[i]);
+                }
+                /* D8 Q3 -- a PARAMETRIC (HKT) receiver: key the registry on the
+                 * head constructor, as directed.
+                 *
+                 * An HKT instance's receiver is the CONSTRUCTOR (`Option`) while
+                 * a box's tag is an APPLIED type, so no ground row can serve it.
+                 * The row that can is one per instantiation -- and in Saffron
+                 * there is exactly one that matters: the all-`any` one, because
+                 * the parametric-ctor widen builds every Saffron-side value at
+                 * `(Option any)`.  A Turmeric-built `(Option float)` handed
+                 * across still has no row and panics cleanly, by design: its
+                 * elements are raw floats and a Saffron closure expects boxes.
+                 *
+                 * What the row calls is a WITNESS defn synthesised here, not a
+                 * hand-rolled C shim:
+                 *
+                 *   (defn __dynwit_Functor_fmap_Option
+                 *     [__r : (Option any) __a1] : any (.fmap __r __a1))
+                 *
+                 * elaborated at global scope in this Saffron span.  That single
+                 * form buys everything the hard part needed: `.fmap` on a
+                 * CONCRETE `(Option any)` resolves statically, so the ABI scan
+                 * mints the by-value spec for that instantiation (the carrier
+                 * base would read the 16-byte element as an int64); `__a1` is
+                 * `any` by the dialect default, so the D5 seam inserts the
+                 * checked unbox to `(fn [any] any)`; and the `: any` return
+                 * re-tags the result with the id of `(Option any)`.  The emitter
+                 * (emit_instance_dyn_table) then writes a two-line C shim that
+                 * unboxes the receiver word and calls the witness.  Memoised per
+                 * (instance, slot) so a program with many `.fmap` sites gets one
+                 * witness per instance. */
+                bool tc_is_hkt = false;
+                if (tc->type_param_kinds)
+                    for (uint8_t ki = 0; ki < tc->n_type_params; ki++)
+                        if (tc->type_param_kinds[ki] != KIND_STAR) { tc_is_hkt = true; break; }
+                if (tc_is_hkt) {
+                    for (TypeClassInstance *wi = e->typeclass_env.instances; wi; wi = wi->next) {
+                        if (wi->typeclass != tc || wi->n_type_args == 0) continue;
+                        Type h = wi->type_args[0];
+                        if (h.kind != TY_ADT || !h.as.adt_.def ||
+                            h.as.adt_.def->n_type_params == 0) continue;
+                        if (!wi->dyn_witness) {
+                            wi->dyn_witness = (FnDef **)arena_alloc(
+                                e->arena, tc->n_methods * sizeof(FnDef *));
+                            memset(wi->dyn_witness, 0, tc->n_methods * sizeof(FnDef *));
+                        }
+                        if (wi->dyn_witness[slot]) continue;
+                        AdtDef *def = h.as.adt_.def;
+                        Span sp = call->span;
+                        char wn[256];
+                        snprintf(wn, sizeof wn, "__dynwit_%s_%.*s_%s", tc->name->name,
+                                 (int)method_name_len, method_name, def->name);
+                        const Symbol *wsym  = symtab_intern(e->st, strslice(wn, (uint32_t)strlen(wn)));
+                        const Symbol *anys  = symtab_intern(e->st, strslice("any", 3));
+                        const Symbol *defns = symtab_intern(e->st, strslice("defn", 4));
+                        const Symbol *heads = symtab_intern(e->st,
+                            strslice(def->name, (uint32_t)strlen(def->name)));
+                        char dm[160];
+                        snprintf(dm, sizeof dm, ".%.*s", (int)method_name_len, method_name);
+                        const Symbol *dots = symtab_intern(e->st, strslice(dm, (uint32_t)strlen(dm)));
+                        /* (Head any ... any) */
+                        uint32_t ntp = def->n_type_params;
+                        Form **ti = (Form **)arena_alloc(e->arena, (1 + ntp) * sizeof(Form *));
+                        ti[0] = form_sym(e->arena, sp, heads);
+                        for (uint32_t k = 0; k < ntp; k++) ti[1 + k] = form_sym(e->arena, sp, anys);
+                        Form *recv_ty = form_list(e->arena, sp, ti, 1 + ntp);
+                        /* [__r : (Head any..) __a1 __a2 ...] -- class arity, not
+                         * this call's, so the witness matches the declaration. */
+                        uint32_t n_wextra = tc->methods[slot].n_params > 0
+                                              ? tc->methods[slot].n_params - 1 : 0;
+                        /* The reader spells `x : T` as `x` followed by an
+                         * F_TYPE_ANN wrapping T (and `: any` after the params
+                         * the same way); a bare `:` symbol is the legacy GADT
+                         * ctor spelling and elab_defn reads `any` after it as an
+                         * EXPRESSION ("unbound symbol 'any'"). */
+                        Form **pv = (Form **)arena_alloc(e->arena, (2 + n_wextra) * sizeof(Form *));
+                        const Symbol *rsym = symtab_intern(e->st, strslice("__r", 3));
+                        pv[0] = form_sym(e->arena, sp, rsym);
+                        pv[1] = form_type_ann(e->arena, sp, recv_ty);
+                        Form **cargs = (Form **)arena_alloc(e->arena, (2 + n_wextra) * sizeof(Form *));
+                        cargs[0] = form_sym(e->arena, sp, dots);
+                        cargs[1] = form_sym(e->arena, sp, rsym);
+                        /* An extra whose IMPL parameter is the erased fn carrier
+                         * (`ptr-void` -- how an inferred `(g v)` records `g`,
+                         * and what an explicit `: fn` lowers to) is passed as
+                         * `(cast __ak (fn [any] any))`, the one shape that
+                         * reaches the spec as a fat closure rather than as a
+                         * local the poly wrapper would try to call BY NAME from
+                         * file scope.  A Saffron lambda IS a `(fn [any] any)`,
+                         * so the checked cast admits exactly the closures the
+                         * spec can apply, and a closure of another arity panics
+                         * at the cast instead of being called wrongly.  Neither
+                         * the class nor the impl records the fn's arity (the
+                         * method is declared `[container g]`, unannotated), so
+                         * unary is the assumption and it is a stated v0 limit
+                         * for binary-fn methods such as Foldable's. */
+                        FnDef *wimpl = wi->method_impls[slot];
+                        const Symbol *casts = symtab_intern(e->st, strslice("cast", 4));
+                        const Symbol *fns   = symtab_intern(e->st, strslice("fn", 2));
+                        for (uint32_t k = 0; k < n_wextra; k++) {
+                            char an[24]; snprintf(an, sizeof an, "__a%u", k + 1);
+                            const Symbol *as = symtab_intern(e->st, strslice(an, (uint32_t)strlen(an)));
+                            pv[2 + k] = form_sym(e->arena, sp, as);
+                            bool erased_fn = wimpl && wimpl->binding &&
+                                wimpl->binding->type.kind == TY_FN &&
+                                (k + 1) < wimpl->binding->type.as.fn.arity &&
+                                wimpl->binding->type.as.fn.arg_kinds[k + 1] == TY_PTR_VOID;
+                            if (erased_fn) {
+                                Form *pany[1] = { form_sym(e->arena, sp, anys) };
+                                Form *fnt[3] = { form_sym(e->arena, sp, fns),
+                                                 form_vec(e->arena, sp, pany, 1),
+                                                 form_sym(e->arena, sp, anys) };
+                                Form *cst[3] = { form_sym(e->arena, sp, casts),
+                                                 form_sym(e->arena, sp, as),
+                                                 form_list(e->arena, sp, fnt, 3) };
+                                cargs[2 + k] = form_list(e->arena, sp, cst, 3);
+                            } else {
+                                cargs[2 + k] = form_sym(e->arena, sp, as);
+                            }
+                        }
+                        Form *params = form_vec(e->arena, sp, pv, 2 + n_wextra);
+                        Form *body   = form_list(e->arena, sp, cargs, 2 + n_wextra);
+                        Form *di[5] = { form_sym(e->arena, sp, defns), form_sym(e->arena, sp, wsym),
+                                        params,
+                                        form_type_ann(e->arena, sp, form_sym(e->arena, sp, anys)),
+                                        body };
+                        Form *dform = form_list(e->arena, sp, di, 5);
+                        Scope *saved = e->scope;
+                        e->scope = &e->global;
+                        Expr *wdef = elab_defn(e, dform);
+                        e->scope = saved;
+                        if (wdef && wdef->kind == EX_FN_DEF && wdef->as.fn_def_.fn) {
+                            elab_register_file_def(e, wdef);
+                            wi->dyn_witness[slot] = wdef->as.fn_def_.fn;
+                        }
+                    }
+                }
+                /* The result type comes from the METHOD's declaration, which is
+                 * the same for every instance -- that is what makes one slot
+                 * callable through one signature.  For an HKT class the witness
+                 * returns `any`, so the node is `any` regardless of the
+                 * declaration (whose result mentions the class variable). */
+                Type result_type = TYPE_INT;
+                if (tc_is_hkt) result_type = type_from_kind(TY_ANY);
+                if (!tc_is_hkt && best_method && best_method->binding &&
+                    best_method->binding->type.kind == TY_FN) {
+                    Type rt = best_method->binding->type.as.fn.result_full_type
+                                  ? *best_method->binding->type.as.fn.result_full_type
+                                  : type_from_kind(
+                                        best_method->binding->type.as.fn.result_kind);
+                    if (rt.kind != TY_UNKNOWN) result_type = rt;
+                }
+                Expr *dm = expr_new(e->arena, EX_DYN_METHOD, result_type, call->span);
+                dm->as.dyn_method_.obj = obj;
+                dm->as.dyn_method_.tc = tc;
+                dm->as.dyn_method_.method_idx = slot;
+                dm->as.dyn_method_.args = extra;
+                dm->as.dyn_method_.n_args = n_extra;
+                return elab_hoist_control_operands(e, dm);
+            }
+        }
+        diag_emit_with_code(DIAG_ERROR, call->span,
+                            TUR_E0020_AMBIGUOUS_DISPATCH,
+                            "cannot dispatch '.%.*s' on an 'any' receiver: the "
+                            "box holds one type at runtime, and which instance "
+                            "to run is not decidable from it here",
+                            (int)method_name_len, method_name);
+        diag_emit(DIAG_HELP, call->span,
+                  "narrow it first -- `(if (is? x T) (.%.*s x) ...)` -- or unbox "
+                  "with `(cast x T)`, or pin the instance with a type witness: "
+                  "`(.%.*s @T x)`",
+                  (int)method_name_len, method_name,
+                  (int)method_name_len, method_name);
+        return NULL;
     }
 
     /* Phase D0: Ambiguous dispatch diagnostic.
@@ -6708,6 +7131,13 @@ resolved_user_fallback:;
             poly_wrap_stamp_carrier_erased(wrap, best_method->params[0]);
             if (inner_b->is_poly_fn) {
                 wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
+            } else if (!inner_b->is_global) {
+                /* Receiver-position twin of the local-binding pass-through in
+                 * the args loop below (Bifunctor `bimap [g h x]` puts a mapper
+                 * fn in params[0]): a local cannot be named from a file-scope
+                 * wrapper, so pack the runtime value inline. */
+                wrap->as.poly_wrap_.wrapper_binding = NULL;
+                wrap->as.poly_wrap_.is_closure = true;
             } else {
                 uint32_t inner_arity = (inner_b->type.kind == TY_FN)
                     ? (uint8_t)inner_b->type.as.fn.arity : 1;
@@ -6781,14 +7211,24 @@ resolved_user_fallback:;
             }
             if (inner_b->is_poly_fn) {
                 wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
-            } else if (inner_b->closure_fn_binding && !inner_b->is_global) {
+            } else if (!inner_b->is_global) {
                 /* CRU: a *capturing closure VALUE* bound to a local reaching a
                  * `:fn` typeclass-method param.  make_poly_wrapper would emit a
                  * file-scope wrapper statically referencing the local env var
                  * (out of scope at file scope -> uncompilable C).  Pack the
                  * runtime closure inline instead; the is_closure emit path reads
                  * the thunk from the box's slot 0 at runtime, so a capturing
-                 * closure round-trips correctly. */
+                 * closure round-trips correctly.
+                 *
+                 * local-fn-value-into-rank2-slot-gets-a-by-name-wrapper: this
+                 * used to admit only a binding WITH a closure_fn_binding, so a
+                 * fn-typed PARAMETER (`f : (fn [any] any)` forwarded into
+                 * `fmap`) and a let-bound NON-capturing lambda still took the
+                 * by-name wrapper and died with `'f' undeclared`.  Every
+                 * non-global binding has the same problem and the same answer:
+                 * the value in the local already IS what the carrier reads (a
+                 * fat box for a parameter or capturing closure; the emitter's
+                 * bare-fnptr shim covers the unboxed let-bound lambda). */
                 wrap->as.poly_wrap_.wrapper_binding = NULL;
                 wrap->as.poly_wrap_.is_closure = true;
             } else {

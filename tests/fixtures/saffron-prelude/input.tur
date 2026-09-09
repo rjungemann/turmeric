@@ -1,0 +1,60 @@
+#lang saffron
+;; saffron-lang-plan S6: the Saffron prelude, auto-loaded for a `#lang saffron`
+;; ENTRY file.
+;;
+;; ADAPTORS, NOT REIMPLEMENTATIONS (R5).  `vec-map`/`vec-filter`/`vec-fold`
+;; forward to the typed stdlib and exist only because the typed signature is
+;; unreachable from dynamic code: a `(Vec any)` cannot be handed to a
+;; `[A B] [v (Vec A) f (fn [A] B)]` without naming A and B, which is the whole
+;; thing Saffron removes.
+;;
+;; The prelude is scoped to the ENTRY file: a Saffron file IMPORTED by a
+;; Turmeric program does not drag it in, and a Turmeric file checked in the same
+;; process right after a Saffron one does not see it either (the flag is set on
+;; every dialect detection, true or false, rather than only when true).
+;;
+;; The prelude itself is `#lang saffron` -- a DIRECTIVE in the file rather than
+;; a filename special-case in the two loaders -- because its own bodies use D4
+;; truthiness (`(when (pred x) ...)` where `pred` returns `any`), which is a hard
+;; "if condition must be bool, got any" under Turmeric.  The interpreter's
+;; `(load ...)` already ran `#lang` detection; the compiled autoload path learned
+;; to, so the file says what it is instead of two call sites remembering.
+;;
+;; Writing it is what found the fourth and fifth `any`-carrier straddles (a
+;; `let` binding and a fat-closure `any` slot), and finding two in one function
+;; is what made the case for a chokepoint over a sixth bridge.  The value is now
+;; normalised once at PRODUCTION and all six consumer bridges are gone -- see
+;; docs/archive/any-carrier-straddle-is-bridged-per-consumer.md.
+;;
+;; requires.leak-check.  Each of these returns a fresh vector the caller owns,
+;; and every INPUT vector is bound and freed too -- which is the point of
+;; writing it this way rather than passing the literals inline.
+;;
+;; `(vec-map [1 2 3] f)` leaks the `[1 2 3]`: a `[...]` literal in argument
+;; position is never bound, so `vec-free` has nothing to name.  That is explicit
+;; memory management working as designed, not a defect -- Turmeric frees a
+;; vector when the author says so -- but it is a sharp edge a dynamic dialect
+;; makes very easy to hit, and a fixture that demonstrated the prelude by
+;; leaking on every line would be the wrong example to copy.
+
+(defn main []
+  (let [src [1 2 3]]
+    (let [doubled (vec-map src (fn [x] (* x 2)))]
+      (println (vec-len doubled))
+      (println (vec-get doubled 0))
+      (println (vec-get doubled 2))
+      (vec-free doubled))
+    (vec-free src))
+  (let [src4 [1 2 3 4]]
+    (let [big (vec-filter src4 (fn [x] (> x 2)))]
+      (println (vec-len big))
+      (println (vec-get big 0))
+      (vec-free big))
+    (vec-free src4))
+  (let [si [1 2 3]]
+    (println (vec-fold si 0 (fn [a x] (+ a x))))
+    (vec-free si))
+  (let [sf [1.5 2.25]]
+    (println (vec-fold sf 0.0 (fn [a x] (+ a x))))
+    (vec-free sf))
+  0)

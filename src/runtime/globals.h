@@ -289,6 +289,26 @@ extern bool g_sr1_sum_byvalue;
  * also in the output pulling src/runtime/trail.c into the link.  Emitting the
  * guard off any looser signal is an undefined symbol at cc time. */
 extern bool g_trail_autoloaded;
+/* saffron-lang-plan S6: the ENTRY file is `#lang saffron`, so the Saffron
+ * prelude joins the stdlib autoload list.
+ *
+ * Set by every path that detects the entry file's dialect, and set on EVERY
+ * such call (true or false) rather than only when true -- the REPL and the
+ * harnesses run several compiles in one process, and a sticky flag would let a
+ * Saffron file license the prelude for the next Turmeric one.  Same hazard
+ * `g_trail_autoloaded` records above, handled by being self-resetting rather
+ * than by a separate clear.
+ *
+ * The prelude is scoped to the ENTRY file on purpose: a Saffron file IMPORTED
+ * by a Turmeric program does not drag it in.  That keeps the prelude's names
+ * out of a program that never asked for the dialect, and matches how the
+ * `#lang` line already scopes the reader and the semantic layers. */
+extern bool g_saffron_prelude;
+/* saffron-lang-plan S8: `tur repl --lang saffron` -- start the interactive
+ * session in Saffron instead of making the user type `#lang saffron` as their
+ * first line.  Read once at REPL startup; `#lang` at the prompt is the other
+ * route to the same env state. */
+extern bool g_repl_start_saffron;
 /* SR3 slice B (the Option niche -- default since 2026-09-03, TUR_OPTION_NICHE=0
  * restores the tagged form; docs/archive/sr3-option-niche-plan.md):
  * an `(Option P)` whose payload is a NON-NULLABLE pointer is carried AS that
@@ -323,6 +343,16 @@ extern bool g_opt_option_niche;
  * GRADUATED 2026-09-05: default true.  TUR_REGIONS=0 (main.c) is the bisection
  * hatch; tests/run-regions-seam.sh keeps that off path green. */
 extern bool g_opt_regions;
+
+/* saffron-lang-plan D9: the `saffron` experiment's enable bit.  Set by
+ * `--enable=saffron`, by `:experiments` in build.tur, or -- scoped to one file,
+ * at CLI precedence -- by a `#lang saffron` line (lang_dialect_apply).
+ *
+ * S1 reads it nowhere: the dialect selects no semantics yet, so a `#lang
+ * saffron` file elaborates exactly as `#lang turmeric` does.  The bit exists so
+ * the gate, the lifecycle warning and the manifest interaction are all in place
+ * and testable before any behaviour hangs off it. */
+extern bool g_opt_saffron;
 /* SR2a: a MULTI-VARIANT parametric sum monomorph -- `(Opt2 int)`, `(PRes
  * cstr)`, and above all `(Option int)` / `(Result int cstr)` -- flows by value
  * instead of riding the int64 heap-pointer carrier.  The parametric sibling of

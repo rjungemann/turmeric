@@ -1,0 +1,47 @@
+;; typeclass-default-methods-do-not-work: default method bodies, as the
+;; typeclass guide documents them. None of this compiled before -- the
+;; guide's own example failed `unknown function 'lt?'` (bare sibling call; the
+;; language's spelling is `.lt?`, and the guide now says so), the dotted form
+;; failed `no typeclass method found` (the default was elaborated at the CLASS,
+;; where no instance exists yet), an instance that omitted the method was
+;; rejected by the arity count, and merely writing a default broke a class
+;; whose instances all implemented it.
+;;
+;; A default is now kept as a FORM on the class and spliced in by definstance
+;; for a method the instance omits, so it elaborates as an ordinary instance
+;; method with the receiver at the instance's own type and its siblings
+;; resolvable. Four shapes pinned:
+
+;; 1. the guide's example: lte? inherited, calls the sibling lt?
+(defclass Ord2 [a]
+  (lt? [x y] : bool)
+  (lte? [x y] : bool (or (.lt? x y) (= x y))))
+(definstance Ord2 [int]
+  (lt? [x y] : bool (< x y)))
+
+;; 2. an instance that OVERRIDES the default
+(definstance Ord2 [float]
+  (lt? [x y] : bool (< x y))
+  (lte? [x y] : bool false))
+
+;; 3. a class with a default whose instance implements everything, in the
+;;    other order -- the default must not fire and the order must not matter
+(defclass Tag [a]
+  (name [x] : cstr)
+  (loud [x] : cstr "LOUD-DEFAULT"))
+(definstance Tag [bool]
+  (loud [x] : cstr "loud-bool")
+  (name [x] : cstr "bool"))
+
+;; 4. a constant default with no sibling call, inherited
+(definstance Tag [int]
+  (name [x] : cstr "int"))
+
+(defn main [] : int
+  (println (.lte? 3 3))
+  (println (.lte? 3 2))
+  (println (.lte? 7.25 7.25))
+  (println (.loud true))
+  (println (.name true))
+  (println (.loud 7))
+  0)

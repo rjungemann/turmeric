@@ -1,0 +1,25 @@
+; poly-fn-with-any-parameter-is-called-with-the-int64-carrier: a closure whose
+; parameter is `any`, passed to a constrained HKT method through tur_poly_fn_t.
+;
+; The call side already cast `g.fn` to the typed signature
+; `(tur_tagged_t (*)(void *, tur_tagged_t))`, but the `__poly_` wrapper the
+; elaborator synthesises typed its parameter as the int64 carrier -- retyping
+; only float-class arguments away from it. An `any` is the float case one size
+; up: a 16-byte `tur_tagged_t` cannot ride an 8-byte carrier, so the inner call
+; was a hard C error ("expected 'tur_tagged_t' but argument is of type
+; 'int64_t'"). `vec-map` over `(Vec any)` never showed it because it does not go
+; through a poly-fn at all.
+;
+; The `(Option int)` row is the control that always worked; the float row is
+; there because the fix reuses the float-class retype, and 7.35 would expose a
+; conversion where 7.0 could not.
+
+(defn main [] : int
+  (let [o  (:: (some (:: 41 any)) (Option any))
+        r  (fmap o (fn [x : any] : any (:: (+ (cast x int) 1) any)))
+        f  (:: (some (:: 7.35 any)) (Option any))
+        rf (fmap f (fn [x : any] : any (:: (* (cast x float) 2.0) any)))]
+    (println (cast (unwrap-or r (:: 0 any)) int))
+    (println (cast (unwrap-or rf (:: 0.0 any)) float))
+    (println (unwrap-or (fmap (some 41) (fn [x : int] : int (+ x 1))) 0))
+    0))

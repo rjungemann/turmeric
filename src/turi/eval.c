@@ -948,6 +948,11 @@ struct TuriStruct {
     const char  *name;     /* struct name (for debugging) */
     uint32_t     n_fields;
     TuriValue   *fields;   /* heap-allocated array */
+    /* interp-collection-handles-report-as-int: this TuriStruct is not a user
+     * value at all -- it is the `any` box the widen wraps a bare carrier in, so
+     * the reflection surface can name a type the runtime value cannot.  Read
+     * only by the `any` forms (type-of / is? / cast), and unwrapped by cast. */
+    bool is_any_box;
     const CtorDef *ctor;   /* CONV-S1: ADT constructor this value was built from
                             * (record ctors carry field names + a back-pointer to
                             * their AdtDef, incl. from_struct_lowering).  NULL for
@@ -956,14 +961,20 @@ struct TuriStruct {
                             * lowered to a single-variant record ADT. */
 };
 
+/* interp-native-ctor-loses-adt-name: turi_make_struct below matches on this
+ * function pointer to recover a constructor's CtorDef; defined further down,
+ * with the other natives. */
+static TuriValue adt_ctor_native(TuriEnv *env, TuriValue *args, uint32_t n, void *ud);
+
 static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n, TuriValue *fields) {
     /* Escaping payload: the TuriStruct + its fields array are returned and may
      * be captured/stored, so they live in env's value pool (reclaimed by
      * turi_env_free), never individually freed. */
     TuriStruct *s = (TuriStruct *)turi_val_alloc(env, sizeof(TuriStruct));
-    s->name     = name;
-    s->n_fields = n;
-    s->ctor     = NULL;
+    s->name       = name;
+    s->n_fields   = n;
+    s->ctor       = NULL;
+    s->is_any_box = false;   /* arena memory is not zeroed */
     s->fields   = n ? (TuriValue *)turi_val_alloc(env, n * sizeof(TuriValue)) : NULL;
     for (uint32_t i = 0; i < n; i++) s->fields[i] = fields[i];
     return turi_struct_val(s);
@@ -1008,9 +1019,10 @@ static TuriValue turi_copy_byvalue_struct_arg(TuriEnv *env, TuriValue v) {
     if (src->name && strcmp(src->name, "__rc") == 0) return v;   /* rc: shared */
     if (src->ctor && src->ctor->adt && src->ctor->adt->is_heap) return v;
     TuriStruct *s = (TuriStruct *)turi_val_alloc(env, sizeof(TuriStruct));
-    s->name     = src->name;
-    s->n_fields = src->n_fields;
-    s->ctor     = src->ctor;
+    s->name       = src->name;
+    s->n_fields   = src->n_fields;
+    s->ctor       = src->ctor;
+    s->is_any_box = src->is_any_box;
     s->fields   = src->n_fields
                     ? (TuriValue *)turi_val_alloc(env, src->n_fields * sizeof(TuriValue))
                     : NULL;
@@ -1159,8 +1171,45 @@ static void turi_rc_drop_value(TuriValue v) {
  * CtorDef's parent AdtDef has from_struct_lowering set).  Used by type-of / cast
  * so the ADT lowering of a defstruct stays invisible, matching the compiled
  * __tur_any_type_name. */
+/* interp-inline-c-opaque-segv-in-any-reflection: a TURI_STRUCT whose payload
+ * cannot be a `TuriStruct *`.
+ *
+ * `(defopaque Route :int)` with an INLINE-C constructor returning 7 produces a
+ * value tagged TURI_STRUCT whose `as_struct` is the immediate 7 -- the inline-C
+ * result path re-tags a TURI_INT as a struct when the declared return type is
+ * TY_ADT, and an opaque IS a TY_ADT (types.h: "a named int64_t carrier").  The
+ * first reader to dereference it segfaulted, so `type-of` on such a value
+ * crashed the interpreter.
+ *
+ * Fixing it at the TAG site is not available: `FnDef.return_type` carries no
+ * AdtDef -- measured NULL for an opaque AND for a genuine `defdata` round-trip
+ * -- so there is nothing there to distinguish "opaque, the word is the value"
+ * from "real ADT, the word is a pointer".  Attaching the def is a separate,
+ * wider change; see the report.
+ *
+ * So the reader validates instead, and the two checks are facts rather than
+ * heuristics: a `TuriStruct` requires 8-byte alignment (so an unaligned word is
+ * definitively not one), and the zero page is never mapped (so a word below it
+ * is definitively not one).  Neither can reject a real `TuriStruct *`.
+ *
+ * Declining here is not merely "wrong but safe" -- it yields the RIGHT answer.
+ * The struct name is only an OVERRIDE; when it is unavailable the reflection
+ * falls back to the name the widen recorded from the static type, which for
+ * `(defopaque Route :int)` is exactly "Route".  That is the same answer the
+ * ascription spelling `(:: 7 Route)` already gives, which is why that spelling
+ * never crashed.
+ *
+ * What this does NOT cover, stated rather than implied: an opaque over a LARGE
+ * integer is bit-indistinguishable from a heap pointer at this level, so it
+ * still mis-tags. Only attaching the def fixes that. */
+static bool turi_struct_ptr_is_plausible(TuriValue v) {
+    uintptr_t p = (uintptr_t)v.as_struct;
+    return p >= 4096 && (p % _Alignof(TuriStruct)) == 0;
+}
+
 static bool turi_struct_is_struct_like(TuriValue v) {
     if (v.tag != TURI_STRUCT || !v.as_struct) return false;
+    if (!turi_struct_ptr_is_plausible(v)) return false;
     const CtorDef *cd = v.as_struct->ctor;
     return cd && cd->adt && cd->adt->from_struct_lowering;
 }
@@ -1170,16 +1219,217 @@ static bool turi_struct_is_struct_like(TuriValue v) {
  * turi answers with the same name rather than "struct"/"adt" for everything.
  * An ADT value reports its ADT's name (a `(Circle 5)` is a "Shape"), not the
  * constructor's; a struct-lowered record reports its own. */
+/* any-narrowing-broken-for-parametric-receivers: the name an `is?` / `cast`
+ * TARGET presents to the interpreter's `any` reflection.
+ *
+ * `type_name` renders a TY_APP per instantiation ("(type-app Option float)"),
+ * which is what makes the compiled path able to tell `(Box int)` from
+ * `(Box float)`.  A TuriValue records only the ADT it was built from, so it can
+ * never match that spelling -- an applied target has to compare against its
+ * HEAD instead.
+ *
+ * The residual divergence is deliberate and worth stating: compiled,
+ * `(is? x (Option int))` on an `any` holding an `(Option float)` is FALSE;
+ * interpreted it is TRUE, because the interpreter has no instantiation to
+ * check.  Head-matching is still the right trade -- it makes the common test
+ * ("is this an Option") agree on both paths, where returning false would make
+ * the whole type-case idiom silently fail under --interpret. */
+static const char *turi_any_target_name(Type t) {
+    if (t.kind == TY_APP) {
+        AdtDef *d = type_adt_app_def(&t);
+        if (d && d->name) return d->name;
+    }
+    return type_name(t);
+}
+
+/* any-fn-tag-does-not-discriminate-signatures: a closure's signature, spelled
+ * exactly as `emit_any_type_id` interns a fn payload's `any` box id.
+ *
+ * A TuriClosure carries the FnDef it was built from, and a FnDef carries full
+ * parameter Types plus the declared return Type -- everything the compiled key
+ * is made of.  Rendering it through the shared `tur_fn_type_key` (rather than a
+ * second hand-written spelling) is what lets `is?` and `cast` answer the same
+ * question on both back ends instead of the interpreter's former blanket
+ * "not a function" / "any function will do".
+ *
+ * Returns NULL when the signature cannot be rendered faithfully, and the caller
+ * then falls back to head-matching ("is this a function at all").  NULL, not a
+ * guess: a wrong key is a false negative, which silently breaks a type-case,
+ * where head-matching is merely coarse.  The NULL cases are a native (no FnDef
+ * at all -- a C builtin has no Turmeric signature) and a variadic (the fn Type
+ * the compiled side keys on does not render `& rest`, so any spelling here
+ * would be inventing one). */
+static const char *turi_closure_fn_key(TuriValue v) {
+    if (v.tag != TURI_CLOSURE || !v.as_closure) return NULL;
+    const TuriClosure *cl = v.as_closure;
+    const FnDef *fd = cl->fn;
+    if (!fd || fd->is_variadic) return NULL;
+    /* An EX_CLOSURE lambda's FnDef has the synthetic `__env_p` first parameter
+     * codegen adds; the source-level fn type the compiled side widens does not.
+     * Drop it, the same way eval_apply does. */
+    uint32_t start = cl->skip_env_param ? 1u : 0u;
+    if (fd->n_params < start) return NULL;
+    uint32_t arity = fd->n_params - start;
+    if (arity && !fd->param_types) return NULL;
+    /* any-cannot-recover-a-capturing-closure: a signature with an unresolved
+     * piece is not a signature.  A partial application's FnDef reaches here with
+     * an unknown return type, which rendered "(fn [int] : ?)" -- a key that
+     * matches nothing, so `(is? (add 1) (-> int int))` was FALSE and the cast
+     * panicked, where the compiled side (which knows the curried value's real
+     * type) answers 1 and calls it.
+     *
+     * NULL, not a guess: the caller then head-matches ("is this a function"),
+     * which is coarse but never a false negative.  The same posture as the
+     * native and variadic cases above -- a wrong key silently breaks a
+     * type-case, where a coarse one does not. */
+    if (fd->return_type.kind == TY_UNKNOWN) return NULL;
+    for (uint32_t i = 0; i < arity; i++)
+        if (fd->param_types[start + i].kind == TY_UNKNOWN) return NULL;
+    uint8_t inline_kinds[16];
+    uint8_t *kinds = inline_kinds;
+    if (arity > sizeof(inline_kinds)) {
+        kinds = (uint8_t *)malloc(arity);
+        if (!kinds) return NULL;
+    }
+    for (uint32_t i = 0; i < arity; i++)
+        kinds[i] = (uint8_t)fd->param_types[start + i].kind;
+    const char *key = tur_fn_type_key(arity ? kinds : NULL, arity,
+                                      fd->return_type.kind, false);
+    if (kinds != inline_kinds) free(kinds);
+    return key;
+}
+
+/* interp-collection-handles-report-as-int: the name an `any` widen should record
+ * for a payload whose RUNTIME value cannot carry one.
+ *
+ * A Vec, a Map, a cons cell and a `defopaque` newtype are all a bare
+ * `TURI_INT` holding a pointer in the interpreter, so `type-of` answered "int"
+ * where the compiled side answered "Vec"/"Map"/"Route" -- and `is?` was wrong in
+ * BOTH directions, a false negative on `(Vec int)` and a false positive on
+ * `int`, so a type-case with an `int` arm and a `Vec` arm took different arms on
+ * the two back ends.
+ *
+ * This is exactly the `named` test `emit_any_type_id` applies to decide whether
+ * a payload gets an interned per-type box id, which is what makes the two sides
+ * agree: box here precisely when the compiled widen mints an id.  A primitive
+ * returns NULL (its runtime tag already answers correctly), and so does a
+ * function -- a closure has its own reflection path
+ * (any-fn-tag-does-not-discriminate-signatures) that boxing would break. */
+static const char *turi_any_boxable_name(Type t) {
+    if (t.kind == TY_ADT && t.as.adt_.def && t.as.adt_.def->name)
+        return t.as.adt_.def->name;
+    if (t.kind == TY_APP) {
+        AdtDef *d = type_adt_app_def(&t);
+        if (d && d->name) return d->name;
+    }
+    return NULL;
+}
+
+/* interp-collection-handles-report-as-int: wrap a widened payload when the
+ * runtime value cannot answer for its own type.  turi_any_boxable_name decides
+ * which qualify; EX_ANY_CAST is the single unwrap. */
+static TuriValue make_struct_val(TuriEnv *env, const char *name, uint32_t n,
+                                 TuriValue *fields);
+static TuriValue turi_any_box_widen(TuriEnv *env, const Expr *e, TuriValue v) {
+    if (!e || e->type.kind != TY_ANY || v.tag == TURI_STRUCT) return v;
+    const Expr *payload = e->as.union_inject_.value;
+    if (!payload) return v;
+    const char *nm = turi_any_boxable_name(payload->type);
+    if (!nm) return v;
+    TuriValue f[1] = { v };
+    TuriValue b = make_struct_val(env, nm, 1, f);
+    if (b.tag == TURI_STRUCT && b.as_struct) b.as_struct->is_any_box = true;
+    return b;
+}
+
 static const char *turi_any_named_type(TuriValue v) {
     if (v.tag != TURI_STRUCT || !v.as_struct) return NULL;
+    /* interp-inline-c-opaque-segv-in-any-reflection: this dereferences
+     * `as_struct` twice below, so it needs the same validity check its sibling
+     * makes -- see turi_struct_ptr_is_plausible.  Answering NULL is the
+     * documented "not a struct" reply, and the caller then uses the name the
+     * widen recorded from the static type. */
+    if (!turi_struct_ptr_is_plausible(v)) return NULL;
     if (!turi_struct_is_struct_like(v) && v.as_struct->ctor &&
         v.as_struct->ctor->adt && v.as_struct->ctor->adt->name)
         return v.as_struct->ctor->adt->name;
     return v.as_struct->name;
 }
 
+/* saffron-lang-plan S5: the name to PRINT for a value in a runtime type error.
+ *
+ * `turi_any_named_type` above answers NULL for anything that is not a struct,
+ * and its callers must keep that: the ADT cast arm reads NULL as "not a
+ * struct", which is the comparison itself.  But every message built from it
+ * then said "a value of a different type" / "non-struct" / "non-function"
+ * where the compiled half, going through `__tur_any_type_name`, said "cstr".
+ * Same program, same failure, two different sentences -- and the compiled one
+ * is the useful one.
+ *
+ * So the display name is a separate question from the identity name, and this
+ * answers it: the named type when there is one, the primitive's own name
+ * otherwise.  A box wrapper is unwrapped first, since the wrapper exists to
+ * make `type-of` work and should not be what a panic reports. */
+static const char *turi_any_display_type(TuriValue v) {
+    if (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->is_any_box &&
+        v.as_struct->n_fields == 1 && v.as_struct->fields)
+        v = v.as_struct->fields[0];
+    const char *named = turi_any_named_type(v);
+    if (named) return named;
+    switch (v.tag) {
+    case TURI_INT:     return "int";
+    case TURI_FLOAT:   return "float";
+    case TURI_BOOL:    return "bool";
+    case TURI_CSTR:    return "cstr";
+    case TURI_NIL:     return "nil";
+    case TURI_CLOSURE: return "fn";
+    default:           return NULL;
+    }
+}
+
+/* interp-native-ctor-loses-adt-name: recover the CtorDef a constructor NAME
+ * belongs to, so a value a native builds carries the same ctor->adt link a value
+ * built by evaluating `(Some x)` does.
+ *
+ * There is no ADT registry on the env; the only handle on a CtorDef at runtime
+ * is the binding EX_DEFDATA registers for each constructor -- a native closure
+ * over `adt_ctor_native` whose user data IS the CtorDef.  Matching on the
+ * function pointer is what makes this safe: an ordinary defn or another native
+ * that happens to share a constructor's name does not match, and a name with no
+ * binding at all (the FFI record at the `"Result"` call site below) simply
+ * leaves the ctor NULL, exactly as before.
+ *
+ * `turi_env_find_binding`, not `turi_env_get`: a miss from the latter formats an
+ * "unbound variable" string, which would be a malloc on every construction that
+ * is not an ADT ctor. */
+static const CtorDef *turi_ctor_for_name(TuriEnv *env, const char *name) {
+    if (!env || !name) return NULL;
+    EnvBinding *b = turi_env_find_binding(env, name);
+    if (!b || b->value.tag != TURI_CLOSURE || !b->value.as_closure) return NULL;
+    if (b->value.as_closure->native != adt_ctor_native) return NULL;
+    return (const CtorDef *)b->value.as_closure->native_ud;
+}
+
+/* interp-native-ctor-loses-adt-name: the entry point every native that builds an
+ * ADT value goes through (`some`/`none`, `ok`/`err`, `Left`/`Right`).
+ *
+ * It used to hand back a TuriStruct with `ctor == NULL`, so `turi_any_named_type`
+ * fell through to the struct's own name and `(defn f [] : any (some 7.1))`
+ * reported "Some" under --interpret where the compiled path says "Option".  That
+ * is not only a cosmetic string: `is?` compares those names, so
+ * `(is? x (Option float))` was a FALSE NEGATIVE for every natively-built option
+ * and result, and a type-case written against the compiled behaviour took the
+ * wrong arm.
+ *
+ * Attaching the link here rather than resolving it inside `turi_any_named_type`
+ * fixes every reader at once -- field-access-by-name and the `is_heap` copy rule
+ * read `ctor` too -- and makes the fallback in `turi_any_named_type` mean what it
+ * is for: a value that genuinely has no constructor. */
 TuriValue turi_make_struct(TuriEnv *env, const char *name, TuriValue *fields, uint32_t n) {
-    return make_struct_val_def(env, name, n, fields);
+    TuriValue v = make_struct_val_def(env, name, n, fields);
+    const CtorDef *ct = turi_ctor_for_name(env, name);
+    if (ct && v.tag == TURI_STRUCT && v.as_struct) v.as_struct->ctor = ct;
+    return v;
 }
 
 static TuriValue make_struct_val(TuriEnv *env, const char *name, uint32_t n, TuriValue *fields) {
@@ -6431,6 +6681,24 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
             turi_env_set(env, name, v);
         return turi_nil();
     }
+    /* interp-collection-handles-report-as-int: the LIVE widen site.  The driver
+     * descends an EX_UNION_INJECT through unary_operand and finishes here, so
+     * the `default` below -- "transparent shims" -- was exactly what made
+     * widening to `any` the identity, and why a Vec in an `any` reported "int".
+     *
+     * Only the payloads that cannot answer for themselves are boxed: a
+     * TuriStruct carries its own name, a primitive's runtime tag is already the
+     * right answer, and a closure has its own reflection path
+     * (any-fn-tag-does-not-discriminate-signatures) that boxing would break.
+     * So this fires for a named type whose runtime value is a bare carrier --
+     * Vec, Map, cons, a `defopaque` newtype.
+     *
+     * Nothing downstream has to unwrap: an `any` is opaque to everything but the
+     * three reflection forms, and the only route to a payload is `cast` --
+     * including an `is?` guard, which elaborates to `(let [x (cast x T)] ...)`
+     * (if_narrow_branch), so a narrowed use goes through that same unwrap. */
+    case EX_UNION_INJECT:
+        return turi_any_box_widen(env, e, v);
     default:   /* transparent shims: value passes through unchanged */
         return v;
     }
@@ -9496,8 +9764,30 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * under the primary key, keep the native rather than overwriting it. */
         if (fndef->body && fndef->body->kind == EX_INLINE_C) {
             TuriValue existing = turi_env_get(env, primary_key);
+            /* turi-show-instance-with-inline-c-body-prints-a-pointer: the
+             * typeclass-instance natives (`__inst_Show_show_float`, ...) are
+             * stand-ins for STDLIB bodies, registered under the mangled
+             * instance name.  A USER class that happens to spell the same
+             * class/method/type -- a local `(defclass Show [a] (show [x] :
+             * cstr))` with an inline-C `Show [float]` -- lands on the same key
+             * and used to inherit stdlib's native, which returns an owned
+             * String handle: `(println (.show 7.35))` printed the handle's
+             * address, silently, where every other inline-C shape says it
+             * cannot run.  Keep an instance-method native only for an impl
+             * defined under stdlib/ (autoloaded or explicitly loaded -- the
+             * file, not `in_stdlib_load`, is the signal); a user impl falls
+             * through to its own closure, whose inline-C body then reaches the
+             * simple executor or the clean diagnostic like any other.  Plain
+             * defn natives keep the documented override-by-name behaviour. */
+            bool inst_key = strncmp(primary_key, "__inst_", 7) == 0;
+            bool from_stdlib_file = false;
+            if (inst_key && fndef->binding) {
+                const char *fp = diag_file_path(fndef->binding->span.file_id);
+                from_stdlib_file = fp && strstr(fp, "stdlib/") != NULL;
+            }
             if (existing.tag == TURI_CLOSURE && existing.as_closure &&
-                existing.as_closure->native) {
+                existing.as_closure->native &&
+                (!inst_key || from_stdlib_file)) {
                 return existing; /* keep native override */
             }
         }
@@ -10747,8 +11037,15 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     /* --- IT0: union inject — tag a value for union type -------------------- */
-    case EX_UNION_INJECT:
-        return eval_expr(env, frame, e->as.union_inject_.value);
+    /* interp-collection-handles-report-as-int: this arm is the MIRROR, reachable
+     * only when the explicit-stack driver is not in play; the live widen site is
+     * eval_unary_post's EX_UNION_INJECT arm.  Both call one helper so they
+     * cannot drift. */
+    case EX_UNION_INJECT: {
+        TuriValue v = eval_expr(env, frame, e->as.union_inject_.value);
+        if (turi_is_error(v) || env_signaled(env)) return v;
+        return turi_any_box_widen(env, e, v);
+    }
 
     /* --- IT4: any-typed cast and type-of --------------------------------- */
     case EX_ANY_CAST: {
@@ -10777,16 +11074,38 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
              * on the compiled path alike, handing back a reinterpreted value.
              * `e->type` is the named target the elaborator resolved. */
             const char *have = turi_any_named_type(v);
-            const char *want = type_name(e->type);
+            const char *want = turi_any_target_name(e->type);
             ok = (v.tag == TURI_STRUCT && have && want && strcmp(have, want) == 0);
+            break;
+        }
+        /* any-fn-tag-does-not-discriminate-signatures: a fn target checked
+         * NOTHING -- it fell into the `default: ok = true` below, so
+         * `(cast 7 (-> int int))` handed back an int typed as a function and
+         * calling it was undefined behaviour, and a wrong-SIGNATURE cast
+         * miscalled the same way the compiled path did.
+         *
+         * Check the payload is a function, and check its signature whenever the
+         * closure can render one (turi_closure_fn_key).  A native or a variadic
+         * renders nothing, and those head-match rather than reject. */
+        case TY_FN: {
+            const char *have = turi_closure_fn_key(v);
+            const char *want = type_name(e->type);
+            ok = (v.tag == TURI_CLOSURE &&
+                  (!have || !want || strcmp(have, want) == 0));
             break;
         }
         default: ok = true; break;
         }
         if (!ok) {
             {
-                const char *have = turi_any_named_type(v);
-                char msg[160];
+                /* any-fn-tag-does-not-discriminate-signatures: name the
+                 * signature when the payload is a function.  "any holds a value
+                 * of a different type" is what the fallback said for every
+                 * closure, which tells a reader nothing about the mismatch that
+                 * actually happened. */
+                const char *have = turi_any_display_type(v);
+                if (!have) have = turi_closure_fn_key(v);
+                char msg[192];
                 snprintf(msg, sizeof(msg), "cast: any holds %s, not %s",
                          have ? have : "a value of a different type",
                          type_name(e->type));
@@ -10794,7 +11113,311 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             }
             return turi_nil(); /* unreachable: turi_runtime_panic never returns */
         }
+        /* interp-collection-handles-report-as-int: the unwrap.  `cast` is the
+         * ONLY way a payload leaves an `any` -- an explicit one, or the implicit
+         * `(let [x (cast x T)] ...)` an `is?` guard elaborates to -- so this one
+         * site puts the bare carrier back and nothing downstream ever meets the
+         * box.  It runs AFTER the check above, which compared against the box's
+         * recorded name, which is the whole point of having boxed it. */
+        if (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->is_any_box &&
+            v.as_struct->n_fields == 1 && v.as_struct->fields)
+            return v.as_struct->fields[0];
         return v;
+    }
+
+    /* --- saffron-lang-plan S9 (D8 piece 4): dispatch on the runtime type --- */
+    case EX_DYN_METHOD: {
+        /* The compiled path keys a registry on the box's TAG.  The interpreter
+         * has the value itself, so it keys on the NAME `turi_any_display_type`
+         * reports -- deliberately the same string `is?` and `cast` compare
+         * (interp-native-ctor-loses-adt-name is why that name is trustworthy),
+         * so a type-case and a dispatch cannot disagree about what arrived.
+         *
+         * No dict, no shim table: the instance's FnDef is callable directly,
+         * which is the whole reason this arm is short and the compiled one is
+         * not. */
+        TypeClass *tc = e->as.dyn_method_.tc;
+        uint8_t slot = e->as.dyn_method_.method_idx;
+        TuriValue ov = eval_expr(env, frame, e->as.dyn_method_.obj);
+        if (turi_is_error(ov) || env_signaled(env)) return ov;
+        if (ov.tag == TURI_STRUCT && ov.as_struct && ov.as_struct->is_any_box &&
+            ov.as_struct->n_fields == 1 && ov.as_struct->fields)
+            ov = ov.as_struct->fields[0];
+
+        const char *have = turi_any_display_type(ov);
+        FnDef *impl = NULL;
+        if (tc) {
+            TypeClassEnv *tce = (TypeClassEnv *)env->last_tc_env;
+            for (TypeClassInstance *inst = tce ? tce->instances : NULL;
+                 inst != NULL; inst = inst->next) {
+                if (inst->typeclass != tc || inst->n_type_args == 0) continue;
+                const char *want = type_name(inst->type_args[0]);
+                if (!have || !want || strcmp(have, want) != 0) continue;
+                if (slot < inst->n_method_impls) impl = inst->method_impls[slot];
+                break;
+            }
+        }
+        const char *meth = (tc && slot < tc->n_methods && tc->methods[slot].name)
+                               ? tc->methods[slot].name->name : "?";
+        if (!impl) {
+            char msg[224];
+            snprintf(msg, sizeof(msg),
+                     "no instance of %s for %s (dispatching .%s on an any)",
+                     (tc && tc->name) ? tc->name->name : "?",
+                     have ? have : "that value", meth);
+            turi_runtime_panic(env, msg);
+            return turi_nil();
+        }
+
+        uint32_t n = 1 + e->as.dyn_method_.n_args;
+        TuriValue *argv = (TuriValue *)turi_val_alloc(env, n * sizeof(TuriValue));
+        argv[0] = ov;
+        for (uint32_t i = 0; i < e->as.dyn_method_.n_args; i++) {
+            argv[1 + i] = eval_expr(env, frame, e->as.dyn_method_.args[i]);
+            if (turi_is_error(argv[1 + i]) || env_signaled(env)) return argv[1 + i];
+        }
+        TuriClosure *cl = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
+        memset(cl, 0, sizeof(*cl));
+        cl->fn = impl;
+        cl->captured = NULL;
+        return eval_apply(env, cl, argv, n);
+    }
+
+    /* --- saffron-lang-plan S4/D4 (G11): a dynamic field read -------------- */
+    case EX_DYN_FIELD: {
+        /* `(.f x)` where `x : any`.  The field is resolved against the value's
+         * own constructor, which a TuriStruct carries (`ctor->fields[i].name`)
+         * -- the same table the inline-C field path already reads. */
+        TuriValue ov = eval_expr(env, frame, e->as.dyn_field_.obj);
+        if (turi_is_error(ov) || env_signaled(env)) return ov;
+        if (ov.tag == TURI_STRUCT && ov.as_struct && ov.as_struct->is_any_box &&
+            ov.as_struct->n_fields == 1 && ov.as_struct->fields)
+            ov = ov.as_struct->fields[0];
+        const char *fname = e->as.dyn_field_.field
+                              ? e->as.dyn_field_.field->name : "";
+        if (ov.tag == TURI_STRUCT && ov.as_struct && ov.as_struct->ctor &&
+            ov.as_struct->ctor->fields) {
+            const CtorDef *cd = ov.as_struct->ctor;
+            for (uint32_t fi = 0;
+                 fi < cd->n_fields && fi < ov.as_struct->n_fields; fi++) {
+                if (cd->fields[fi].name &&
+                    strcmp(cd->fields[fi].name, fname) == 0)
+                    return ov.as_struct->fields[fi];
+            }
+        }
+        /* Named neither by this value's type nor by any field it has: a
+         * runtime type error, reported as one.  The value's type is named
+         * because "no field .x" is far less useful than "an int has no .x". */
+        {
+            char msg[160];
+            const char *tn = turi_any_display_type(ov);
+            snprintf(msg, sizeof(msg), "no field '.%s' on a %s value",
+                     fname, tn ? tn : "non-struct");
+            turi_runtime_panic(env, msg);
+            return turi_nil();  /* unreachable */
+        }
+    }
+
+    /* --- saffron-lang-plan S4/D4 (G5): a call through a dynamic callee --- */
+    case EX_DYN_CALL: {
+        /* `(f x)` where `f : any`.  The interpreter needs no new machinery for
+         * the call itself -- closure values are already first-class here, and
+         * `turi_call` is the same entry every other application goes through.
+         * What was missing is permission: the elaborator rejected the call
+         * because the callee's type was not a TY_FN, which is correct for
+         * Turmeric and wrong for a language where a function is an ordinary
+         * value. */
+        TuriValue fnv = eval_expr(env, frame, e->as.dyn_call_.fn);
+        if (turi_is_error(fnv) || env_signaled(env)) return fnv;
+        /* Unwrap an `any` box (interp-collection-handles-report-as-int): only
+         * a bare-carrier payload is wrapped, but a callee could be one if a
+         * future widen boxes closures, and unwrapping a non-box is a no-op. */
+        if (fnv.tag == TURI_STRUCT && fnv.as_struct && fnv.as_struct->is_any_box &&
+            fnv.as_struct->n_fields == 1 && fnv.as_struct->fields)
+            fnv = fnv.as_struct->fields[0];
+        if (fnv.tag != TURI_CLOSURE) {
+            /* The Saffron analogue of "'f' is not a function": a genuine
+             * runtime type error, named as one, rather than a wrong answer. */
+            char msg[128];
+            snprintf(msg, sizeof(msg),
+                     "cannot call a %s value -- it is not a function",
+                     turi_any_display_type(fnv) ? turi_any_display_type(fnv)
+                                                : "non-function");
+            turi_runtime_panic(env, msg);
+            return turi_nil();  /* unreachable */
+        }
+        uint32_t dn = e->as.dyn_call_.n_args;
+        TuriValue dstack[8];
+        TuriValue *dargs = dstack;
+        if (dn > 8) {
+            dargs = (TuriValue *)malloc(dn * sizeof(TuriValue));
+            if (!dargs) return turi_error("dyn-call: out of memory");
+        }
+        TuriValue dres = turi_nil();
+        bool dfailed = false;
+        for (uint32_t i = 0; i < dn; i++) {
+            TuriValue v = eval_expr(env, frame, e->as.dyn_call_.args[i]);
+            if (turi_is_error(v) || env_signaled(env)) { dres = v; dfailed = true; break; }
+            dargs[i] = v;
+        }
+        if (!dfailed) dres = turi_call(env, fnv, dargs, dn);
+        if (dargs != dstack) free(dargs);
+        return dres;
+    }
+
+    /* --- saffron-lang-plan S3/D4: the dynamic operator layer ------------- */
+    case EX_DYN_OP: {
+        /* The elaborator deferred operator resolution because an argument was
+         * `any`.  Resolve it now, from the value that actually arrived.
+         *
+         * The arm is thin because `eval_builtin` is ALREADY dynamic: it
+         * branches on `args[0].tag` at runtime (the BS_VARIADIC_FOLD arm reads
+         * TURI_FLOAT vs TURI_INT and picks the double or int64 fold), so the
+         * interpreter has never needed the static type for these operators.
+         * All that was missing was permission to reach it, which is what the
+         * elaborator's EX_DYN_OP route grants.
+         *
+         * Unwrap an `any` box first (interp-collection-handles-report-as-int):
+         * a Vec or opaque payload rides a wrapper struct so `type-of` can name
+         * it, and an operator wants the carrier underneath. */
+        uint32_t n = e->as.dyn_op_.n_args;
+
+        /* saffron-lang-plan S3/D4: `and` / `or` are TRUTHINESS operators here,
+         * and they must stay LAZY.
+         *
+         * Handled before the argument loop below, which is eager: the whole
+         * point of `and` is that `(and (some? x) (unwrap x))` does not evaluate
+         * the second operand when the first is falsy, and evaluating it anyway
+         * would turn a guard into a crash.  Turmeric's own `and`/`or` are
+         * short-circuit builtins (BS_AND_SC / BS_OR_SC) for the same reason;
+         * this is that behaviour with the bool requirement relaxed to D4's
+         * truthiness rule.
+         *
+         * Returns a bool, matching what Turmeric's `and`/`or` return.  Lisp
+         * would return the deciding VALUE instead; that is a bigger semantic
+         * choice than S3 needs, and `(if (and ...) ...)` reads the same either
+         * way, so it is left for the D4 surface to settle deliberately rather
+         * than by accident here. */
+        if (e->as.dyn_op_.op && n >= 1) {
+            const char *opn = e->as.dyn_op_.op->name;
+            bool is_and = (strcmp(opn, "and") == 0);
+            bool is_or  = (strcmp(opn, "or") == 0);
+            if (is_and || is_or) {
+                for (uint32_t i = 0; i < n; i++) {
+                    TuriValue v = eval_expr(env, frame, e->as.dyn_op_.args[i]);
+                    if (turi_is_error(v) || env_signaled(env)) return v;
+                    if (v.tag == TURI_STRUCT && v.as_struct &&
+                        v.as_struct->is_any_box && v.as_struct->n_fields == 1 &&
+                        v.as_struct->fields)
+                        v = v.as_struct->fields[0];
+                    bool t = !(v.tag == TURI_NIL ||
+                               (v.tag == TURI_BOOL && !v.as_bool));
+                    if (is_and && !t) return turi_bool(false);
+                    if (is_or  &&  t) return turi_bool(true);
+                }
+                return turi_bool(is_and);
+            }
+        }
+
+        TuriValue stackv[8];
+        TuriValue *vals = stackv;
+        if (n > 8) {
+            vals = (TuriValue *)malloc(n * sizeof(TuriValue));
+            if (!vals) return turi_error("dyn-op: out of memory");
+        }
+        TuriValue result = turi_nil();
+        bool failed = false;
+        for (uint32_t i = 0; i < n; i++) {
+            TuriValue v = eval_expr(env, frame, e->as.dyn_op_.args[i]);
+            if (turi_is_error(v) || env_signaled(env)) { result = v; failed = true; break; }
+            if (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->is_any_box &&
+                v.as_struct->n_fields == 1 && v.as_struct->fields)
+                v = v.as_struct->fields[0];
+            vals[i] = v;
+        }
+        /* saffron-lang-plan S3/D4: truthiness, answered before the builtin
+         * table is consulted -- the reserved name is deliberately not a
+         * builtin, so there is nothing to look up.
+         *
+         * The rule: `false` and `nil` are falsy, everything else -- including
+         * `0`, `""` and an empty container -- is truthy.  Lisp/Clojure, not C.
+         * D4 picks it because Turmeric's `if` already requires a bool, so no
+         * existing program depends on int-truthiness, and because the C rule
+         * makes `(if (vec-len v) ...)` silently wrong on an empty vector. */
+        if (!failed && n == 1 && e->as.dyn_op_.op &&
+            strcmp(e->as.dyn_op_.op->name, SAFFRON_TRUTHY_OP) == 0) {
+            TuriValue v = vals[0];
+            bool truthy = !(v.tag == TURI_NIL ||
+                            (v.tag == TURI_BOOL && !v.as_bool));
+            if (vals != stackv) free(vals);
+            return turi_bool(truthy);
+        }
+        if (!failed && n > 1) {
+            /* Numeric promotion, and it is not optional.
+             *
+             * `eval_builtin` decides int-vs-float from `args[0].tag` ALONE and
+             * then reads every argument through that union member -- which is
+             * correct for static Turmeric, where the elaborator has already
+             * made the operands agree, and wrong the moment they can differ.
+             * `(* x 2)` with `x = 7.1` took the double fold and read the
+             * literal `2` as `.as_float`, printing 6.91692e-323: the int's bit
+             * pattern read as a double.  `(* 2 7.1)` fails the mirror way.
+             *
+             * So promote here, where the mixing is introduced, rather than in
+             * eval_builtin, which static callers rely on as-is.  The rule is
+             * the ordinary numeric tower: if every argument is numeric and any
+             * one is a float, they all become floats.  A non-numeric argument
+             * anywhere leaves the set alone -- that is a type error for the
+             * operator to report, not something to coerce past. */
+            bool all_numeric = true, any_float = false;
+            for (uint32_t i = 0; i < n; i++) {
+                if (vals[i].tag == TURI_FLOAT)    any_float = true;
+                else if (vals[i].tag != TURI_INT) { all_numeric = false; break; }
+            }
+            if (all_numeric && any_float)
+                for (uint32_t i = 0; i < n; i++)
+                    if (vals[i].tag == TURI_INT)
+                        vals[i] = turi_float((double)vals[i].as_int);
+        }
+        if (!failed) {
+            /* The runtime type of argument 0 is what selects the overload --
+             * the same key `builtin_lookup` uses statically, read from the tag
+             * instead of from the declared type. */
+            TypeKind k0 = TY_UNKNOWN;
+            if (n > 0) {
+                switch (vals[0].tag) {
+                case TURI_INT:    k0 = TY_INT;   break;
+                case TURI_FLOAT:  k0 = TY_FLOAT; break;
+                case TURI_BOOL:   k0 = TY_BOOL;  break;
+                case TURI_CSTR:   k0 = TY_CSTR;  break;
+                case TURI_NIL:    k0 = TY_NIL;   break;
+                default: break;
+                }
+            }
+            const BuiltinSpec *spec =
+                (k0 == TY_UNKNOWN) ? NULL
+                                   : builtin_lookup(e->as.dyn_op_.op,
+                                                    type_simple(k0, CK_COPY), n);
+            if (!spec) {
+                /* No overload for the type that actually arrived.  This is a
+                 * genuine runtime type error in a dynamic language -- the
+                 * Saffron analogue of TUR-E0006 -- so it panics with the
+                 * operator and the offending type named, rather than returning
+                 * a wrong answer. */
+                char msg[160];
+                snprintf(msg, sizeof(msg),
+                         "%s: no operator for a %s argument",
+                         e->as.dyn_op_.op ? e->as.dyn_op_.op->name : "operator",
+                         (k0 != TY_UNKNOWN) ? type_name(type_simple(k0, CK_COPY))
+                                            : "value of that type");
+                if (vals != stackv) free(vals);
+                turi_runtime_panic(env, msg);
+                return turi_nil();  /* unreachable */
+            }
+            result = eval_builtin(env, spec, vals, n);
+        }
+        if (vals != stackv) free(vals);
+        return result;
     }
 
     case EX_ANY_TYPE_OF: {
@@ -10834,8 +11457,20 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * struct.  Primitives keep the kind compare. */
         const char *named = turi_any_named_type(v);
         if (named && e->as.any_is_.test_type.kind != TY_UNKNOWN) {
-            const char *want = type_name(e->as.any_is_.test_type);
+            const char *want = turi_any_target_name(e->as.any_is_.test_type);
             return turi_bool(want && strcmp(named, want) == 0);
+        }
+        /* any-fn-tag-does-not-discriminate-signatures: a fn target compares
+         * signatures, the way the compiled per-signature box id does.  A
+         * closure fell off the end of the kind switch below (no TURI_CLOSURE
+         * arm), so it mapped to TY_UNKNOWN and every `(is? f (-> ...))` was
+         * FALSE -- including the correct signature, which compiled answered
+         * true for.  A closure that cannot render its signature (a native, a
+         * variadic) head-matches instead: "is this a function". */
+        if (v.tag == TURI_CLOSURE && e->as.any_is_.test_type.kind == TY_FN) {
+            const char *have = turi_closure_fn_key(v);
+            const char *want = type_name(e->as.any_is_.test_type);
+            return turi_bool(!have || !want || strcmp(have, want) == 0);
         }
         TypeKind vk = TY_UNKNOWN;
         switch (v.tag) {
@@ -10845,6 +11480,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         case TURI_CSTR:   vk = TY_CSTR;     break;
         case TURI_NIL:    vk = TY_NIL;      break;
         case TURI_STRUCT: vk = TY_STRUCT;   break;
+        /* any-fn-tag-does-not-discriminate-signatures: the residue of the
+         * closure case, for a target that carries only a tag and no Type (the
+         * signature comparison above needs `test_type`).  A closure had no arm
+         * here at all, so it mapped to TY_UNKNOWN and the test was false for
+         * every function. */
+        case TURI_CLOSURE: vk = TY_FN;      break;
         default: break;
         }
         return turi_bool((int64_t)vk == e->as.any_is_.test_tag);
@@ -11975,15 +12616,21 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
         LangLayerSet layers    = 0;
         const char  *bad       = NULL;
         size_t       bad_len   = 0;
-        ReaderType   detected  = detect_lang_layered(src_body, body_len,
+        LangDialect  dialect   = LANG_TURMERIC;
+        ReaderType   detected  = detect_lang_dialect(src_body, body_len,
                                                      &rest, &rest_len,
-                                                     &layers, &bad, &bad_len);
+                                                     &layers, &bad, &bad_len,
+                                                     &dialect);
         if (rest != src_body) {
             /* A #lang directive was found.  Reject an unknown / not-yet-
              * implemented reader the same way the compiled entry points do
              * (src/main.c detect_and_adjust_lang) instead of silently running
              * the program under the default reader -- otherwise `#lang foo`
              * would just execute as plain Turmeric under --interpret. */
+            if (detected == READER_UNKNOWN && bad) {
+                return turi_errorf("error [TUR-E0331]: unknown #lang base '%.*s' -- see `tur lang-layers` for the valid bases",
+                                   (int)bad_len, bad);
+            }
             if (!reader_type_is_implemented(detected)) {
                 return turi_errorf("error: #lang %s is not yet implemented",
                                    reader_type_name(detected));
@@ -12008,6 +12655,12 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
             /* Layers are additive and file-scoped; union them into the
              * session set so reader layers stay active across the eval blob. */
             env->lang_layers |= layers;
+            /* saffron-lang-plan S1: the language axis is sticky like the reader
+             * -- a session that said `#lang saffron` stays Saffron for the
+             * blobs after it.  Only a directive that NAMES a dialect changes
+             * it, so a later directive-free blob cannot silently revert the
+             * session to Turmeric. */
+            if (dialect != LANG_TURMERIC) env->lang = dialect;
             src_body = rest;
             body_len = rest_len;
         }
@@ -12078,6 +12731,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     sfile->file_id     = 0;
     sfile->reader_type = env->reader_type;
     sfile->lang_layers = env->lang_layers;   /* lang-layers-plan L1 */
+    sfile->lang        = env->lang;          /* saffron-lang-plan S1 */
     diag_register_file(sfile);
     /* Re-register the previous turn's loaded files (id 0, this turn's blob,
      * is skipped) so spans in reused Forms still resolve to their real path. */

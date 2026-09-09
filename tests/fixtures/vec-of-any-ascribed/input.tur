@@ -1,0 +1,23 @@
+;; vec-of-any-repr-decision-ice, route 3: an explicitly ascribed `(vec-new)`
+;; pushed into.  `(Vec any)` used to ABORT the compiler here -- the let binder
+;; fell to the int64 carrier while repr_of answered typed-heap-pointer, and the
+;; repr-shadow ICE fired -- because `any` failed both concreteness tests in
+;; `adt_app_type_arg_is_concrete`, so `(Vec any)` was not a concrete app.
+;;
+;; The `vec-of` route to the same type is pinned separately by
+;; tests/fixtures/vec-of-any-heterogeneous; it took a second fix (a missing
+;; `vec-new` monomorph inside `vec-empty-like__`'s `any` clone) and was the
+;; blocker for Saffron's `[1 "two" 7.1]` vector literal.
+;;
+;; requires.leak-check: the element boxes are owned by the vector and released
+;; with it.
+
+(defn dyn [x : any] : any x)
+
+(defn main [] : int
+  (let [v (:: (vec-new) (Vec any))]
+    (vec-push! v (dyn 3))
+    (vec-push! v (dyn "four"))
+    (println (vec-len v))
+    (vec-free v))
+  0)

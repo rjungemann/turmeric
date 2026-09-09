@@ -1,0 +1,40 @@
+#lang saffron
+; saffron-lang-plan S9 (D8): a typeclass method dispatched on the box's own tag.
+;
+; `describe`'s parameter is unannotated, so in Saffron it is `any` -- and
+; `(.kind-of x)` therefore has no static receiver to select an instance from.
+; Turmeric rejects that (TUR-E0020, "narrow it first"), which is the right
+; answer for a language whose types are static. Saffron defers it to the
+; runtime instead: the elaborator resolves the CLASS and the method SLOT by
+; name, and the box's tag picks the instance out of the registry each TU
+; publishes at static init.
+;
+; The float arm is the one that matters most. An `any` box holds a double's BIT
+; PATTERN, so a dispatch that converted rather than reinterpreted would hand the
+; instance 4619...LL as a count -- a wrong number, not a rounded one -- which is
+; why 7.35 is here rather than 7.0. And `kind-of` is hyphenated on purpose: the
+; slot has to be found through the canonical mangler, not an underscore collapse.
+(defclass Kind [a]
+  (kind-of [x] : cstr))
+
+(definstance Kind [int]
+  (kind-of [x] "int"))
+
+(definstance Kind [float]
+  (kind-of [x] "float"))
+
+(definstance Kind [cstr]
+  (kind-of [x] "cstr"))
+
+(definstance Kind [bool]
+  (kind-of [x] "bool"))
+
+(defn describe [x]
+  (.kind-of x))
+
+(defn main []
+  (println (describe 7))
+  (println (describe 7.35))
+  (println (describe "hi"))
+  (println (describe true))
+  0)

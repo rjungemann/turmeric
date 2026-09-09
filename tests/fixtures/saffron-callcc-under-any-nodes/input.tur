@@ -1,0 +1,35 @@
+#lang saffron
+; cps-coloring-walk-has-no-arm-for-union-inject: a control operator underneath
+; the nodes a Saffron file wraps its expressions in.
+;
+; All three shapes aborted with `tur: emit: EX_CALLCC reached the direct
+; emitter`. The coloring arms landed first and only moved the failure: the
+; function became a CPS candidate and was then evicted BODY-UNSUPPORTED,
+; because the CPS IR admits these nodes only as DELEGATABLE ones -- atomic or
+; provably control-free -- and has no LOWERING for one wrapped around a
+; `call/cc`.
+;
+; The report proposed hoisting inside the CPS IR and found it blocked: that
+; needs an `Expr` referring to a CPS-bound `CVar`, which nothing can build.
+; Doing the same hoist one layer up, in the elaborator, needs no such bridge --
+; the temp is an ordinary binding, a control op in a let INIT is something the
+; lowering already handles, and what the wrapper node then sees is a variable.
+;
+; The widen must end up INSIDE the let. Wrapping the let instead is what the
+; elaborator produced before, and it changes nothing: the operand is still a
+; control-bearing expression.
+
+(defn ret-widen []                        ; EX_UNION_INJECT (the `any` return)
+  (call/cc (fn [k] (k 42))))
+
+(defn under-dyn-op [x] : int              ; EX_DYN_OP + the return-narrowing cast
+  (+ x (call/cc (fn [k] (k 41)))))
+
+(defn under-dyn-call [f] : int            ; EX_DYN_CALL
+  (f (call/cc (fn [k] (k 41)))))
+
+(defn main []
+  (println (cast (ret-widen) int))
+  (println (under-dyn-op 1))
+  (println (under-dyn-call (fn [n] (+ n 1))))
+  0)

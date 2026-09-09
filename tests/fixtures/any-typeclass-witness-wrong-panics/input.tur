@@ -1,0 +1,16 @@
+;; typeclass-dispatch-on-any-receiver-emits-uncompilable-c: the witness pins
+;; which IMPL runs; it does not get to assert what the box HOLDS.
+;;
+;; So the unbox it implies is the checked one -- the same node `(cast x T)`
+;; lowers to.  A witness naming the wrong instance panics rather than
+;; reinterpreting the payload, which for a bool-vs-int pair would otherwise be
+;; a silent misread of the tag's value word.
+(defclass Tag [a] (tag-of [x : a] : cstr))
+(definstance Tag [int]  (tag-of [x : int]  : cstr "I-AM-INT"))
+(definstance Tag [bool] (tag-of [x : bool] : cstr "I-AM-BOOL"))
+
+(defn boxed-bool [] : any true)
+
+(defn main [] : int
+  (println (tag-of @int (boxed-bool)))
+  0)

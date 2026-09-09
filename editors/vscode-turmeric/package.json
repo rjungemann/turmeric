@@ -1,14 +1,20 @@
 {
   "name": "turmeric-debug",
-  "displayName": "Turmeric Debugger",
-  "description": "Debug Turmeric (.tur) programs under the interpreter via the Debug Adapter Protocol (tur dap).",
+  "displayName": "Turmeric",
+  "description": "Syntax highlighting for Turmeric (.tur) and the Saffron dialect, plus debugging under the interpreter via the Debug Adapter Protocol (tur dap).",
   "version": "0.1.0",
   "publisher": "turmeric",
   "license": "SEE LICENSE IN ../../LICENSE",
-  "engines": { "vscode": "^1.66.0" },
-  "categories": ["Debuggers"],
+  "engines": {
+    "vscode": "^1.66.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers"
+  ],
   "main": "./extension.js",
   "activationEvents": [
+    "onLanguage:turmeric",
     "onDebugResolve:turmeric",
     "onDebugDynamicConfigurations:turmeric"
   ],
@@ -16,21 +22,34 @@
     "languages": [
       {
         "id": "turmeric",
-        "extensions": [".tur", ".tur.sweet"],
-        "aliases": ["Turmeric", "turmeric"]
+        "extensions": [
+          ".tur",
+          ".tur.sweet"
+        ],
+        "aliases": [
+          "Turmeric",
+          "turmeric"
+        ],
+        "configuration": "./language-configuration.json"
       }
     ],
     "breakpoints": [
-      { "language": "turmeric" }
+      {
+        "language": "turmeric"
+      }
     ],
     "debuggers": [
       {
         "type": "turmeric",
         "label": "Turmeric (interpreter)",
-        "languages": ["turmeric"],
+        "languages": [
+          "turmeric"
+        ],
         "configurationAttributes": {
           "launch": {
-            "required": ["program"],
+            "required": [
+              "program"
+            ],
             "properties": {
               "program": {
                 "type": "string",
@@ -40,7 +59,9 @@
               "args": {
                 "type": "array",
                 "description": "Arguments passed to the program (visible as *args*).",
-                "items": { "type": "string" },
+                "items": {
+                  "type": "string"
+                },
                 "default": []
               },
               "stopOnEntry": {
@@ -97,6 +118,16 @@
             }
           }
         ]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "turmeric",
+        "scopeName": "source.turmeric",
+        "path": "./syntaxes/turmeric.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.block.c": "c"
+        }
       }
     ]
   }

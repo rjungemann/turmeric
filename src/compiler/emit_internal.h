@@ -327,13 +327,25 @@ typedef struct EmitCtx {
     char    **fatshim_names;
     uint32_t  n_fatshim_names;
     uint32_t  cap_fatshim_names;
+    /* saffron-lang-plan S5: has this TU already emitted the dynamic operator
+     * runtime?  The block is emitted ON DEMAND, from the first EX_DYN_* node
+     * that needs it, rather than unconditionally into the preamble -- a program
+     * with no dynamic operator gets no dynamic runtime, which is why the ~1440
+     * codegen snapshots are untouched by this stage. */
+    bool      saffron_dyn_emitted;
     /* type-of-cast-kind-granularity: per-monomorph identity for `any` box tags.
      * A primitive keeps its TypeKind as its tag; a struct/ADT interns its
-     * monomorph C name here and rides TUR_ANY_ID_BASE + index, so `cast` / `is?`
-     * / `type-of` distinguish two struct types instead of both reading
-     * "struct". */
+     * monomorph C name here, so `cast` / `is?` / `type-of` distinguish two
+     * struct types instead of both reading "struct".
+     *
+     * any-type-ids-are-per-tu: the id is a HASH of that key, not this table's
+     * index -- an index is only meaningful inside one EmitCtx, and EmitCtx is
+     * per translation unit, so two TUs numbered the same type differently.
+     * The table now records what this TU must publish into the runtime
+     * registry, and no longer decides the numbering. */
     char    **any_type_names;   /* identity key: type_name(), per monomorph */
     char    **any_type_shown;   /* what type-of reports for that id */
+    int64_t  *any_type_ids;     /* the hashed id, kept for collision checking */
     /* any-struct-box-leak-per-widen: is the payload behind this id HEAP-BOXED
      * at the widen site (a by-value aggregate) rather than carried in the tag's
      * value word?  Only a boxed one has anything to free, and the tag is the
@@ -497,6 +509,42 @@ typedef struct EmitCtx {
     const Binding **carrier_call_bindings;
     uint32_t        n_carrier_call_bindings;
     uint32_t        cap_carrier_call_bindings;
+    /* saffron-lang-plan S9 (D8 piece 3): the set of `any` box tags this TU can
+     * ever produce -- one id per type widened to `any` anywhere in it, collected
+     * by the pre-emission scan from the EX_UNION_INJECT sites (which is where
+     * the id is computed for the box itself, so the two agree by construction).
+     *
+     * This is the key runtime instance dispatch registers on.  A value can only
+     * be inside an `any` by having been widened, so an instance whose receiver
+     * type is not in this set can never be selected at runtime and needs no row
+     * -- which is what keeps the registry to the handful of types a program
+     * actually boxes instead of every instance in the autoloaded stdlib.
+     *
+     * Deliberately NOT crossed with "classes dispatched in this TU": each TU
+     * must decide alone (--shared and `emit-c --output-dir` really do split),
+     * and the tag axis alone is sound per TU -- the TU that widens a type
+     * registers every instance for it, so a DIFFERENT TU dispatching on that box
+     * finds the row in the merged registry. The cross-product is sound only
+     * whole-program. See the plan's "Potential pre-passes" section. */
+    int64_t  *any_widen_ids;
+    uint32_t  n_any_widen_ids;
+    uint32_t  cap_any_widen_ids;
+    /* saffron-lang-plan S9 (D8 piece 3c): the `{class, tag, dict}` rows this TU
+     * publishes into the runtime instance registry.
+     *
+     * Recorded by the dict-singleton emission itself rather than recomputed
+     * later from the instance list, which is what makes the row's dict symbol
+     * exist by construction.  The piece-3 attempt that was reverted got this
+     * wrong in the other direction -- it built the table in the PREAMBLE, beside
+     * P1's type rows, where `&dict_Shape_Circle_singleton` is still undeclared
+     * (`error: 'dict_Eq_int_singleton' undeclared here`, which gcc then reported
+     * as a spurious-looking `missing initializer for field 'dict'`).  Emitting
+     * from what was actually written cannot drift from it. */
+    char    **inst_row_class;   /* class name, as the dispatch site spells it */
+    int64_t  *inst_row_tag;     /* the receiver's `any` id -- the lookup key */
+    char    **inst_row_dict;    /* the emitted `dict_<Class>_<T>_singleton` */
+    uint32_t  n_inst_rows;
+    uint32_t  cap_inst_rows;
     /* dead-base-thunk-chain-references-undefined-ctor (fix direction 1,
      * narrowed): a HEAP parametric ADT never gets a base `ctor_X` definition
      * (only per-spec monomorphs), yet the dead base generic thunk chain still
@@ -880,6 +928,26 @@ int effect_tag(const struct Symbol *eff);
  * in lockstep.  Defined in emit_module.c. */
 struct TypeClassInstance;
 bool emit_instance_is_live(const struct EmitCtx *ctx, struct TypeClassInstance *inst);
+/* saffron-lang-plan S9 (D8 piece 3c): should this instance get a runtime
+ * registry row, and under which `any` tag?  True only when the saffron
+ * experiment is on and the receiver's id is one this TU actually widens.
+ * Defined in emit_module.c; called from the dict-singleton emission so the row
+ * and the symbol it names are written together. */
+bool emit_instance_dispatch_tag(struct EmitCtx *ctx, struct TypeClassInstance *inst,
+                                int64_t *out_tag);
+bool emit_instance_dispatch_recv_type(struct EmitCtx *ctx, struct TypeClassInstance *inst,
+                                      Type *out);
+void emit_note_instance_row(struct EmitCtx *ctx, const char *cls, int64_t tag,
+                            const char *dict_symbol);
+/* Emits the recorded rows + their chunk registration.  Call LAST, after every
+ * dict singleton the rows take the address of. */
+void emit_instance_row_table(struct EmitCtx *ctx, struct Buf *out);
+/* saffron-lang-plan S9 (D8 piece 4): emit this instance's uniform `(int64_t) ->
+ * ret` shims and the table the registry row points at, then record the row.
+ * Defined in emit_stmt.c, beside the dict emission it follows. */
+void emit_instance_dyn_table(struct EmitCtx *ctx, struct TypeClassInstance *inst,
+                             const char *dict_name, const char *type_suffix,
+                             int64_t tag);
 /* nested-construct-byvalue: the FnDef a constrained-instance body re-dispatches a
  * return/argument-dispatched method to under the active spec (e.g. the cstr
  * `dec` impl).  Used by the ABI scan to mark that instance live so the emitted
@@ -1139,6 +1207,13 @@ bool ensure_fatbox_keep(EmitCtx *ctx);
 /* type-of-cast-kind-granularity: the `any` box tag for a type -- its TypeKind
  * for a primitive, an interned per-monomorph id for a struct/ADT. */
 int64_t emit_any_type_id(EmitCtx *ctx, Type t);
+
+/* saffron-lang-plan S5: emit the dynamic operator runtime into this TU's
+ * file-scope buffer, once.  Called from the three EX_DYN_* emitters rather than
+ * from the preamble, so a program with no dynamic operator carries no dynamic
+ * runtime.  Lands in `thunk_typedefs`, which precedes the forward decls, so the
+ * helpers are declared before any body can call them. */
+void ensure_saffron_dyn_runtime(EmitCtx *ctx);
 /* any-struct-box-leak-per-widen: the predicate the `any` widen uses to decide
  * whether a payload is heap-boxed.  Exported so emit_any_type_id can intern the
  * same answer for the drop side -- one predicate, not two that can drift. */
@@ -1210,6 +1285,9 @@ char *ensure_fat_aggregate_spill_shim(EmitCtx *ctx, Type result_type,
  * signature and reads the closure's `__fn` out of slot 0 of its env.  Both
  * return NULL when no erased position is float-class (the plain wrapper /
  * typed thunk already agrees with the consumer).  Defined in emit_module.c. */
+char *ensure_poly_float_carrier_shim(EmitCtx *ctx, Type result_type,
+                                     Type *param_types, uint8_t n_params,
+                                     uint64_t erased_mask, bool erased_result);
 char *ensure_float_carrier_shim(EmitCtx *ctx, const char *real_fn,
                                 Type result_type, Type *param_types,
                                 uint8_t n_params, uint64_t erased_mask,

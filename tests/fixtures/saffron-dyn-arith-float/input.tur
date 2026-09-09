@@ -1,0 +1,57 @@
+#lang saffron
+;; saffron-lang-plan S3/D4: the dynamic operator layer -- arithmetic and
+;; comparison resolved from the value's own tag rather than from a declared
+;; type.
+;;
+;; Turmeric's builtin table is keyed by the first argument's TypeKind, so
+;; `(* x 2)` with `x : any` finds no row and is TUR-E0006.  In a Saffron file
+;; that is the ordinary case: the call becomes an EX_DYN_OP whose operator is
+;; chosen when it runs.
+;;
+;; THE FLOAT RULE IS WHY THIS FIXTURE EXISTS.  Every literal below has a
+;; non-zero fractional part on purpose (CLAUDE.md's rule, and D4 restates it):
+;; `eval_builtin` decides int-vs-float from argument ZERO's tag alone and then
+;; reads every argument through that union member.  That is correct for static
+;; Turmeric, where the elaborator has already made the operands agree, and
+;; silently wrong the moment they can differ -- `(* x 2)` with `x = 7.1` took
+;; the double fold and read the literal `2` through `.as_float`, printing
+;;
+;;     6.91692e-323
+;;
+;; which is the integer 14's bit pattern read as a double.  An integral literal
+;; could not have shown that.  The dynamic path promotes instead: if every
+;; argument is numeric and any one is a float, they all become floats.
+;;
+;; Both operand ORDERS are tested.  `(* 2 x)` is not symmetric with `(* x 2)`
+;; in the elaborator: the static lookup SUCCEEDS for it (argument zero is an
+;; int) and then rejects `x` as "arg 2: expected int, got any".  An operator is
+;; dynamic when any operand is, not only when the first is.
+;;
+;; S5 landed `__tur_dyn_arith` / `__tur_dyn_cmp` / `__tur_dyn_println` in the
+;; preamble, so this fixture now runs on BOTH back ends and the marker is gone.
+;; That is the whole point of it: the compiled half resolves the overload from
+;; the box tag the same way the interpreter resolves it from the TuriValue tag,
+;; and the two must print the same nine lines.
+
+(defn twice     [x] (* x 2))
+(defn twice-rev [x] (* 2 x))
+(defn dec1      [x] (- x 1))
+(defn half      [x] (/ x 2))
+(defn under-ten [x] (< x 10.5))
+
+(defn main [] : int
+  ;; The stage's exit criterion: one function, an int and a float.
+  (println (twice 21))
+  (println (twice 7.1))
+  ;; The `any` in the second operand position.
+  (println (twice-rev 7.1))
+  ;; Mixed-type subtraction and division, both orders of promotion.
+  (println (dec1 7.1))
+  (println (half 7.5))
+  ;; Comparison is dynamic too, and its bool feeds an ordinary `if`.
+  (println (if (under-ten 3.25) 1 0))
+  (println (if (under-ten 99.5) 1 0))
+  ;; print itself takes a dynamic value, at two different runtime types.
+  (println (twice 1.5))
+  (println (twice 3))
+  0)

@@ -1,0 +1,35 @@
+;; typeclass-dispatch-on-any-receiver-emits-uncompilable-c, symptom 2.
+;;
+;; `@TypeName` is the type witness: it pins WHICH instance runs when the
+;; receiver's type is erased, and it is what the ambiguity diagnostic tells the
+;; programmer to reach for.  On an `any` receiver it pinned the instance and
+;; then handed it the two-word box, so cc rejected the call -- following the
+;; compiler's own hint produced a build failure.
+;;
+;; The witness now implies the CHECKED unbox: it names the instance, which is
+;; exactly what the unbox needs.  Both receiver shapes are covered, because they
+;; unbox differently -- a bool rides the tag's value word, a by-value struct is
+;; heap-boxed and has to be dereferenced.
+(defclass Tag [a] (tag-of [x : a] : cstr))
+(definstance Tag [int]  (tag-of [x : int]  : cstr "I-AM-INT"))
+(definstance Tag [bool] (tag-of [x : bool] : cstr "I-AM-BOOL"))
+
+(defclass Shape [a] (area [x : a] : float))
+(defstruct Circle [r : float])
+(defstruct Square [s : float])
+(definstance Shape [Circle] (area [x : Circle] : float (* 3.14159 (* (.r x) (.r x)))))
+(definstance Shape [Square] (area [x : Square] : float (* (.s x) (.s x))))
+
+(defn boxed-bool   [] : any true)
+(defn boxed-int    [] : any 7)
+(defn boxed-circle [] : any (make-struct Circle 2.5))
+(defn boxed-square [] : any (make-struct Square 7.1))
+
+(defn main [] : int
+  (println (tag-of @bool (boxed-bool)))
+  (println (tag-of @int  (boxed-int)))
+  ;; 7.1, not 7.0: the payload rides the heap box as an IEEE-754 pattern, so an
+  ;; integral side would not distinguish a good unbox from a botched one.
+  (println (area @Circle (boxed-circle)))
+  (println (area @Square (boxed-square)))
+  0)

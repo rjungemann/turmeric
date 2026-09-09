@@ -603,8 +603,26 @@ void turi_env_reset_to_prelude(TuriEnv *env) {
 
 void turi_env_apply_lang(TuriEnv *env, ReaderType reader_type,
                          LangLayerSet layers) {
+    turi_env_apply_lang_dialect(env, reader_type, layers,
+                                env ? env->lang : LANG_TURMERIC);
+}
+
+/* saffron-lang-plan S8: the same switch, carrying the LANGUAGE axis too.
+ *
+ * `turi_env_apply_lang` above only ever moved the reader, so `#lang saffron`
+ * typed at the REPL prompt was accepted and its language half silently
+ * dropped: the reader was already `turmeric`, the early-out fired, and
+ * `(defn add [a b] ...)` kept Turmeric's `int` parameter default. A user
+ * following the guide types exactly that line first.
+ *
+ * The dialect joins the early-out condition, so switching ONLY the language
+ * still resets the session -- which it must, since accumulated source was
+ * elaborated under the old defaults. */
+void turi_env_apply_lang_dialect(TuriEnv *env, ReaderType reader_type,
+                                 LangLayerSet layers, LangDialect dialect) {
     if (!env) return;
-    if (reader_type == env->reader_type && layers == env->lang_layers) return;
+    if (reader_type == env->reader_type && layers == env->lang_layers
+        && dialect == env->lang) return;
     turi_env_reset_to_prelude(env);
     /* Reader layers register `#`-dispatch macros into the persistent session
      * registry (RM Q#5), and nothing unregisters them -- so an assignment
@@ -619,6 +637,10 @@ void turi_env_apply_lang(TuriEnv *env, ReaderType reader_type,
         reader_macros_init(env->reader_macros, &env->sym_arena);
     env->reader_type = reader_type;
     env->lang_layers = layers;
+    env->lang        = dialect;
+    /* The Saffron prelude joins the stdlib autoload list when the session is
+     * Saffron -- the REPL's analogue of the entry-file switch in main.c. */
+    g_saffron_prelude = (dialect == LANG_SAFFRON);
 }
 
 void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image) {

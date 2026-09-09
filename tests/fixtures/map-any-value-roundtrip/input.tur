@@ -1,0 +1,42 @@
+;; saffron-lang-plan S6: a value read out of a `(Map K any)` comes back with ITS
+;; OWN tag.  Compiled, this used to be "incompatible types when assigning to
+;; type 'tur_tagged_t' from type 'int64_t'" -- a program that would not build.
+;;
+;; The STORE side was already right and that is what made the fix small: the
+;; HAMT assoc boxes the value (`tur_hamt_box_key(&v, sizeof(tur_tagged_t))`),
+;; because repr_of answers REPR_BOXED_AGG for an `any` at a container-element
+;; position.  So the word in the trie IS a `tur_tagged_t *`.  Only the READ was
+;; missing its deref: a control-form result temp declared `tur_tagged_t` was
+;; assigned the raw slot word.  `bridge_control_result_int_ptr` already exists
+;; to reconcile exactly that straddle for the int64<->pointer pairs; a tagged
+;; temp taking a carrier value is the third pair, and it bails before reaching
+;; the branches rather than being handled by them.
+;;
+;; The INTERPRETER half is fixed too (2026-09-08), so this runs on both back
+;; ends and its `requires.compiled` marker is gone.  Its map natives had no tag
+;; recovery at all -- `native_map_get_eq` returned `turi_int` of the raw carrier
+;; word -- and the fix is the same shape the compiled path already used, which
+;; is why it is that one and not a side table: box the value and set bit 1 of
+;; the HAMT's `owned` flag, so the runtime owns the box and stamps `val_owned`
+;; on the map for a reader to consult.  A per-entry table (the Vec analogue)
+;; does not transfer -- the Vec table keys on the header pointer plus an ELEMENT
+;; INDEX, and a persistent trie exposes no stable index.
+;;
+;; The boxing is conditional: an int-valued map is byte-identical to before, and
+;; a map boxes from its first non-int value.  See
+;; tests/fixtures/map-any-value-upgrade for the case where that first non-int
+;; value arrives into an already-populated raw map.
+;;
+;; 7.1 rather than 7.0: a truncating path through the box would print 7.
+
+(defn dyn [x : any] : any x)
+
+(defn main [] : int
+  (let [m (:: (map-new) (Map int any))]
+    (let [m2 (map-assoc m 1 (dyn 7.1))]
+      (let [m3 (map-assoc m2 2 (dyn "hi"))]
+        (println (type-of (map-get m3 1)))
+        (println (type-of (map-get m3 2)))
+        (println (cast (map-get m3 1) float))
+        (map-free m3))))
+  0)

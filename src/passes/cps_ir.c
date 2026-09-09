@@ -544,6 +544,26 @@ static bool operand_uses_control(const Expr *e) {
         /* The `any` widen / readers carry no control op of their own; only their
          * operand can hide one. */
         case EX_UNION_INJECT: return operand_uses_control(e->as.union_inject_.value);
+        /* saffron: the dynamic nodes carry no control op of their own either --
+         * only their operands can.  Without these arms they took the
+         * conservative `default: return true`, so a control-FREE `(println x)`
+         * read as control-bearing and evicted every function it appeared in --
+         * and a Saffron program is mostly these nodes. */
+        case EX_DYN_OP:
+            for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
+                if (operand_uses_control(e->as.dyn_op_.args[i])) return true;
+            return false;
+        case EX_DYN_CALL:
+            if (operand_uses_control(e->as.dyn_call_.fn)) return true;
+            for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
+                if (operand_uses_control(e->as.dyn_call_.args[i])) return true;
+            return false;
+        case EX_DYN_FIELD:    return operand_uses_control(e->as.dyn_field_.obj);
+        case EX_DYN_METHOD:
+            if (operand_uses_control(e->as.dyn_method_.obj)) return true;
+            for (uint32_t i = 0; i < e->as.dyn_method_.n_args; i++)
+                if (operand_uses_control(e->as.dyn_method_.args[i])) return true;
+            return false;
         case EX_ANY_TYPE_OF:  return operand_uses_control(e->as.any_type_of_.value);
         case EX_ANY_IS:       return operand_uses_control(e->as.any_is_.value);
         case EX_ANY_CAST:     return operand_uses_control(e->as.any_cast_.value);
@@ -608,6 +628,16 @@ static bool is_delegatable_struct(const Expr *e) {
         case EX_UNION_INJECT:
             return is_atomic(e->as.union_inject_.value)
                 || !operand_uses_control(e->as.union_inject_.value);
+        /* saffron: same admission rule as the widen above, for the same reason.
+         * A dynamic op is an ordinary direct-emitted call once nothing under it
+         * threads the DK, and the elaborator hoists a control-bearing operand
+         * into a let (elab_coerce_to_any / elab_dyn_hoist_control) so the
+         * operand it sees here is a variable. */
+        case EX_DYN_OP:
+        case EX_DYN_CALL:
+        case EX_DYN_FIELD:
+        case EX_DYN_METHOD:
+            return !operand_uses_control(e);
         case EX_ANY_TYPE_OF:
             return is_atomic(e->as.any_type_of_.value)
                 || !operand_uses_control(e->as.any_type_of_.value);

@@ -249,6 +249,41 @@ static bool borrow_check_var(BorrowCheckCtx *ctx, const Expr *e) {
 /* Recursively check an expression */
 static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
     switch (e->kind) {
+        /* saffron-lang-plan S3: a dynamic operator borrows nothing itself, but
+         * its arguments are ordinary expressions and must still be walked --
+         * skipping them would silently exempt a Saffron program from borrow
+         * checking inside `(+ x (deref r))`. */
+        case EX_DYN_OP:
+            for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
+                if (!borrow_check_expr_recursive(ctx, e->as.dyn_op_.args[i]))
+                    return false;
+            return true;
+        /* saffron-lang-plan S4: the callee is an expression too, so it is
+         * walked alongside the arguments. */
+        /* saffron-lang-plan S4: a dynamic field READ borrows nothing, but its
+         * receiver is an expression and must still be walked. */
+        case EX_DYN_FIELD:
+            return !e->as.dyn_field_.obj ||
+                   borrow_check_expr_recursive(ctx, e->as.dyn_field_.obj);
+        /* saffron-lang-plan S9: the receiver and every extra argument are
+         * ordinary expressions; the dispatch itself borrows nothing. */
+        case EX_DYN_METHOD:
+            if (e->as.dyn_method_.obj &&
+                !borrow_check_expr_recursive(ctx, e->as.dyn_method_.obj))
+                return false;
+            for (uint32_t i = 0; i < e->as.dyn_method_.n_args; i++)
+                if (e->as.dyn_method_.args[i] &&
+                    !borrow_check_expr_recursive(ctx, e->as.dyn_method_.args[i]))
+                    return false;
+            return true;
+        case EX_DYN_CALL:
+            if (e->as.dyn_call_.fn &&
+                !borrow_check_expr_recursive(ctx, e->as.dyn_call_.fn))
+                return false;
+            for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
+                if (!borrow_check_expr_recursive(ctx, e->as.dyn_call_.args[i]))
+                    return false;
+            return true;
         case EX_NIL_LIT:
         case EX_BOOL_LIT:
         case EX_INT_LIT:

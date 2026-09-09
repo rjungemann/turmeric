@@ -1,0 +1,21 @@
+#lang saffron
+;; saffron-lang-plan D6, the half that proves the predicate is actually
+;; ENFORCED rather than accepted and ignored.
+;;
+;; The plan names that as the one outcome that must not happen: a refinement
+;; accepted and dropped makes a Saffron file look like it carries a guarantee
+;; it does not have.  Its sibling fixture (saffron-refinement-contract) would
+;; pass just as happily against a compiler that dropped the predicate, so this
+;; one is where the guarantee is actually asserted.
+;;
+;; `before` is printed FIRST so the fixture proves the program ran up to the
+;; contract and panicked there, rather than failing to start.
+;;
+;; expected.exit `nonzero`: a contract violation panics.
+
+(defn pos [x : #refine{v : any | (> v 0)}] x)
+
+(defn main []
+  (println "before")
+  (println (cast (pos (:: -3 any)) int))
+  0)

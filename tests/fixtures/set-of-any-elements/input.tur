@@ -1,0 +1,26 @@
+;; set-of-element-type-is-not-checked (direction 2): `Hash[any]` and
+;; `MapKey[any]` make `(Set any)` the honest type of a heterogeneous set.  Each
+;; `any` element hashes and keys by its PAYLOAD -- an `any` holding "two" is
+;; content-keyed like a bare "two", an `any` holding 7.1 compares by value like
+;; a bare 7.1 -- and the runtime HAMT keeps a comparator per entry, so mixing
+;; them in one set is sound.  That is also why a plain `1` probes a `(Set any)`
+;; and finds the boxed 1: the two hash and box identically.
+;;
+;; Plain Turmeric: the elements are widened by hand.  A Saffron `#set{...}`
+;; literal does the same widen at the literal (saffron-set-literal).
+(defn main [] : int
+  (let [s (set-of (:: 1 any) (:: "two" any) (:: 7.1 any) (:: "two" any))]
+    ;; "two" twice -> three members (content-keyed through the box)
+    (println (set-count s))
+    (println (set-member? s (hash (:: 1 any)) (:: 1 any)))
+    (println (set-member? s (hash (:: "two" any)) (:: "two" any)))
+    (println (set-member? s (hash (:: 7.1 any)) (:: 7.1 any)))
+    (println (set-member? s (hash (:: 99 any)) (:: 99 any)))
+    ;; a bare int probes the boxed one
+    (println (set-member? s (hash 1) 1))
+    ;; the element passes a (Set any) parameter, and nothing else
+    (println (count-any s))
+    (set-free s))
+  0)
+
+(defn count-any [s : (Set any)] : int (set-count s))

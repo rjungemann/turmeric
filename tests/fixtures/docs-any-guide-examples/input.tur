@@ -1,0 +1,99 @@
+;; any-type-guide-examples-do-not-compile: the examples from
+;; docs/guides/union-intersection-types-guide.md, so they cannot rot again.
+;;
+;; They rotted because nothing compiled the guides.  The headline `any` example
+;; and the headline gradual-typing example both failed twice over: `: unit` is
+;; not a type (the annotations guide says so explicitly), and `(println x)` on
+;; an `any` is TUR-E0006 because the builtin operator table has no `any` row.
+;; So the first thing a reader met for the top type was two errors.
+;;
+;; This is not a general doc-extraction harness -- it is these examples,
+;; transcribed, in one program that both suites run.  A guide edit that breaks
+;; them shows up as a FAIL here rather than in a reader's terminal.  Keep it in
+;; step with the guide: if an example changes there, change it here.
+;;
+;; `describe-either` below is the step the gradual-typing section would most
+;; like to show -- keep the `any`-taking function, feed it the narrowed one.  It
+;; did not compile when this fixture was written (widening a union to `any` emit-
+;; ted a scalar cast on an aggregate, in every position), so the guide carried a
+;; note instead; union-to-any-widen-emits-uncompilable-c closed that and both the
+;; example and this fixture grew the line back.
+;;
+;; No requires.compiled: the guide describes the language, not a back end, so
+;; both paths run it.
+
+;; --- Union Types / Syntax -------------------------------------------------
+;; `defalias`, not `deftype`: `deftype` is the recursive type binder, so the
+;; name it binds is nominal and a use site fails to unify with the union body.
+(defalias IntOrString (int | cstr))
+
+(defn print-value [x : (int | cstr | bool)] : nil
+  (match x
+    (i : int)  (println i)
+    (s : cstr) (println s)
+    (b : bool) (println (if b "true" "false"))))
+
+;; --- Union Types / Pattern Matching ---------------------------------------
+(defn describe [x : IntOrString] : cstr
+  (match x
+    (n : int)  "a number"
+    (s : cstr) s))
+
+;; --- Intersection Types / Typeclass Intersection --------------------------
+;; The definstance is load-bearing: the intersection resolves the method
+;; against a real instance, and a class with none in scope is an error.
+(defclass Serializable [a]
+  (serialize [x : a] : cstr))
+
+(definstance Serializable [int]
+  (serialize [x : int] : cstr "an int"))
+
+(defn serialize-int [x : (int & Serializable)] : cstr
+  (serialize x))
+
+;; --- The `any` Type, and Gradual Typing -----------------------------------
+;; The body is `(type-of x)`, not `x`: `println` has no `any` overload, and
+;; neither do `+`, `-`, `=` or `<`.  `any` holds a value and tells you what it
+;; is; operating on the payload needs a narrowing first.
+(defn debug-print [x : any] : nil
+  (println (type-of x)))
+
+(defn typed-print [x : (int | cstr)] : nil
+  (match x
+    (n : int)  (println n)
+    (s : cstr) (println s)))
+
+;; A union flows into the `any` parameter, reporting the MEMBER's type.
+(defn describe-either [x : (int | cstr)] : nil
+  (debug-print x))
+
+;; --- Boxing, `cast`, and `type-of` ----------------------------------------
+(defn box-it [] : any "hello")
+
+(defstruct Point [x : int y : int])
+(defstruct Other [a : int b : int])
+
+(defn main [] : int
+  (print-value 42)
+  (print-value "hello")
+  (print-value true)
+  (println (describe 7))
+  (println (describe "hi"))
+  (println (serialize-int 3))
+  (debug-print 42)
+  (debug-print "hello")
+  (debug-print true)
+  (typed-print 42)
+  (typed-print "hello")
+  (describe-either 42)
+  (describe-either "hello")
+  (let [a (box-it)]
+    (println (type-of a))
+    (println (cast a cstr)))
+  ;; The check is by TYPE, not by kind, so two struct types are distinguishable.
+  (let [p (:: (make-struct Point 3 4) any)]
+    (println (type-of p))
+    (println (is? p Point))
+    (println (is? p Other))
+    (println (.x (cast p Point))))
+  0)

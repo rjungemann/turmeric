@@ -1,0 +1,51 @@
+;; saffron-lang-plan D8: the `if`-guard narrows an APPLIED target, not just a
+;; bare name.
+;;
+;; `if_guard_narrowing` matched `(is? x T)` only when T was an `F_SYM`, so
+;; `(is? x (Option float))` tested the tag and then narrowed NOTHING -- the
+;; branch body still saw `x : any`, and a typeclass method on it was
+;;
+;;   error: cannot dispatch '.fmap' on an 'any' receiver
+;;
+;; while `(is? x Circle)` on the very next line narrowed fine.  Two shapes of
+;; one idiom behaving differently, with nothing saying why.  The author's
+;; workaround was to repeat the target in an explicit `(cast x (Option float))`
+;; that the guard had already proved.
+;;
+;; `is?` and `cast` have shared one target resolver since
+;; any-narrowing-broken-for-parametric-receivers was fixed, so an applied
+;; target already resolved for both; what was missing was passing the type
+;; FORM through the narrowing rewrite instead of a Symbol.
+;;
+;; This matters for D8 because the type-case is how a dynamic language
+;; dispatches, and the parametric half of it -- Option, Result, and the whole
+;; Functor/Applicative/Monad stack -- is exactly the half that needed the
+;; workaround.
+;;
+;; Floats carry a non-zero fractional part: a float payload rides the box as
+;; its IEEE-754 bits, so an integral literal could not show a botched
+;; reinterpret on the way back.
+
+(defdata Circle (Circ :float))
+(defn radius [c : Circle] : float (match c (Circ v) v))
+
+;; applied target -- narrows now, no explicit cast
+(defn dyn-double [x : any] : float
+  (if (is? x (Option float))
+    (unwrap-or (fmap x (fn [v : float] : float (* v 2.0))) 0.0)
+    0.0))
+
+;; bare target -- unchanged, and the reason the asymmetry was visible
+(defn dyn-radius [x : any] : float
+  (if (is? x Circle) (radius x) 0.0))
+
+;; a guard that does NOT match still takes the else branch
+(defn dyn-miss [x : any] : float
+  (if (is? x (Option float)) 1.5 (if (is? x Circle) (radius x) -1.25)))
+
+(defn main [] : int
+  (println (dyn-double (:: (:: (some 7.1) (Option float)) any)))
+  (println (dyn-radius (:: (Circ 3.25) any)))
+  (println (dyn-miss   (:: (Circ 0.5) any)))
+  (println (dyn-miss   (:: (:: (some 9.9) (Option float)) any)))
+  0)

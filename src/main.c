@@ -172,7 +172,8 @@ static int  g_audit_span_holes = 0;
  * `out_layers` (may be NULL for callers that don't thread it). */
 static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len,
                                         const char **out_src, size_t *out_len,
-                                        LangLayerSet *out_layers) {
+                                        LangLayerSet *out_layers,
+                                        LangDialect *out_dialect) {
     ReaderType ext_type = reader_type_from_extension(path);
 
     /* Always run detect_lang so any leading "#lang ..." line is stripped from
@@ -185,10 +186,21 @@ static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len
     LangLayerSet layers = 0;
     const char *bad = NULL;
     size_t bad_len = 0;
-    ReaderType lang_type = detect_lang_layered(src, len, &src_rest, &len_rest,
-                                               &layers, &bad, &bad_len);
+    LangDialect dialect = LANG_TURMERIC;
+    ReaderType lang_type = detect_lang_dialect(src, len, &src_rest, &len_rest,
+                                               &layers, &bad, &bad_len,
+                                               &dialect);
 
     if (bad) {
+        /* lang-unknown-base-diagnostic-names-nothing: the detector hands an
+         * unrecognised BASE out through the same slot as an unknown layer;
+         * the returned type says which.  Name what the user wrote either way. */
+        if (lang_type == READER_UNKNOWN) {
+            fprintf(stderr,
+                    "tur: error [TUR-E0331]: unknown #lang base '%.*s' -- see `tur lang-layers` for the valid bases (in %s)\n",
+                    (int)bad_len, bad, path);
+            exit(1);
+        }
         /* Unknown layer token -- hard error (TUR-E0330), mirroring the
          * unimplemented-base exit below. */
         fprintf(stderr,
@@ -209,6 +221,18 @@ static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len
     *out_src = src_rest;
     *out_len = len_rest;
     if (out_layers) *out_layers = layers;
+    /* saffron-lang-plan S1: the language axis rides out beside the reader.  The
+     * extension override above is deliberately reader-only -- a `.tur.sweet`
+     * file is sweet-exp Turmeric unless its `#lang` line says otherwise, and
+     * there is no extension that means "Saffron". */
+    if (out_dialect) *out_dialect = dialect;
+    /* saffron-lang-plan S6: the Saffron prelude joins the stdlib autoload list
+     * when the ENTRY file is Saffron.  Set here rather than at each caller
+     * because this is the one function every CLI path that opens an entry file
+     * goes through, and set unconditionally (not only when true) so a Saffron
+     * compile cannot license the prelude for the next Turmeric one in the same
+     * process -- see the note on the declaration. */
+    g_saffron_prelude = (dialect == LANG_SAFFRON);
     return detected_type;
 }
 
@@ -919,7 +943,8 @@ static int compile_to_c(const char *path, Buf *out_c,
     const char *src_adj = src;
     size_t len_adj = len;
     LangLayerSet lang_layers = 0;
-    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers);
+    LangDialect lang_dialect = LANG_TURMERIC;
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers, &lang_dialect);
 
     /* Each compile_to_c call is a self-contained compilation unit.  Clear the
      * global diagnostic state (the `had_error_` flag and the file registry)
@@ -945,6 +970,7 @@ static int compile_to_c(const char *path, Buf *out_c,
     file.head_offset = (size_t)(src_adj - src);
     file.file_id = 0;
     file.reader_type = reader_type;
+    file.lang        = lang_dialect;
     file.lang_layers = lang_layers;
     diag_register_file(&file);
 
@@ -1098,6 +1124,15 @@ static Form **load_project_prelude(Arena *arena, SymbolTable *st,
         sf->len        = stdlib_len;
         sf->file_id    = fid++;
         sf->reader_type = READER_TURMERIC;
+        /* saffron-lang-plan S8: honour a `#lang` line in an autoloaded stdlib
+         * file.  Without this a scaffolded Saffron LIBRARY died on the
+         * prelude's own first line (`unexpected character '#'`) while the
+         * BINARY scaffold built fine, because that path goes through
+         * compile_to_c and the other loader.  Shared with
+         * tur_stdlib_prepend_forms -- the two had identical copies, and this
+         * was the fourth loader found missing the detection entirely; see the
+         * helper's comment. */
+        tur_source_file_apply_lang_header(sf, src_copy, stdlib_len);
         diag_register_file(sf);
 
         uint32_t n = 0;
@@ -1138,7 +1173,8 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     const char *src_adj = src;
     size_t len_adj = len;
     LangLayerSet lang_layers = 0;
-    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers);
+    LangDialect lang_dialect = LANG_TURMERIC;
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers, &lang_dialect);
 
     /* Fresh diagnostic slate per compilation unit -- see compile_to_c.  The
      * project-mode dir build loops compile_to_h / compile_to_implementation
@@ -1160,6 +1196,7 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     file.head_offset = (size_t)(src_adj - src);
     file.file_id = 0;
     file.reader_type = reader_type;
+    file.lang        = lang_dialect;
     file.lang_layers = lang_layers;
     diag_register_file(&file);
 
@@ -1245,7 +1282,8 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     const char *src_adj = src;
     size_t len_adj = len;
     LangLayerSet lang_layers = 0;
-    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers);
+    LangDialect lang_dialect = LANG_TURMERIC;
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers, &lang_dialect);
 
     /* Fresh diagnostic slate per compilation unit -- see compile_to_c.  The
      * project-mode dir build loops compile_to_h / compile_to_implementation
@@ -1267,6 +1305,7 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     file.head_offset = (size_t)(src_adj - src);
     file.file_id = 0;
     file.reader_type = reader_type;
+    file.lang        = lang_dialect;
     file.lang_layers = lang_layers;
     diag_register_file(&file);
 
@@ -7333,9 +7372,56 @@ static bool fmt_is_tur_file(const char *name) {
  * The pipeline itself lives in fmt.c so the LSP's textDocument/formatting
  * handler -- which is linked into tur_core, not into main.c -- can reach the
  * same code instead of shelling out to this binary. */
+/* saffron-lang-plan S8 (formatter half): format a source that may carry a
+ * `#lang` directive.
+ *
+ * The formatter fed the WHOLE buffer to the reader, and the reader has already
+ * had the directive stripped by every other entry point -- so a `#lang` line
+ * reached it as source and came back
+ * "error: unexpected character '#' (0x23)".  That made EVERY `#lang` file
+ * unformattable, Saffron and `sweet-exp` alike: `tur fmt` on any of the
+ * saffron-* fixtures failed the same way, so the dialect had no formatter at
+ * all.  It surfaced only when a `#lang` file first appeared in stdlib (the
+ * Saffron prelude), because `fmt-bootstrap-stdlib` formats stdlib and nothing
+ * else formatted a `#lang` file.
+ *
+ * The directive is preserved VERBATIM rather than reprinted: it is not an
+ * s-expression, the reader hands back only where it ended, and re-emitting it
+ * from a parse would be inventing a canonical spelling for something with no
+ * formatter rules of its own.
+ *
+ * The header also selects the reader when the caller had no better answer --
+ * a `#lang turmeric/sweet` file must format under the sweet-exp printer, and
+ * the extension alone does not say so. */
 static int fmt_format_source(const char *path_label, const char *src, size_t len,
                               ReaderType rtype, Buf *out) {
-    return fmt_format_buffer(path_label, src, len, rtype, out);
+    const char *body = src;
+    size_t body_len = len;
+    LangLayerSet lay = 0;
+    LangDialect dl = LANG_TURMERIC;
+    ReaderType lang_rt = detect_lang_dialect(src, len, &body, &body_len,
+                                             &lay, NULL, NULL, &dl);
+    size_t head_len = (size_t)(body - src);
+    if (head_len == 0) return fmt_format_buffer(path_label, src, len, rtype, out);
+
+    if (rtype == READER_TURMERIC && reader_type_is_implemented(lang_rt))
+        rtype = lang_rt;
+
+    Buf body_out;
+    int rc = fmt_format_buffer(path_label, body, body_len, rtype, &body_out);
+    if (rc != 0) return rc;
+
+    buf_init(out);
+    buf_write(out, src, head_len);
+    /* The reader hands back the position after the directive TEXT, which may or
+     * may not include its newline, and the printer strips leading blank lines
+     * from the body -- so without this the two ran together as
+     * `#lang saffron;;; ...`.  Normalising to exactly one newline also keeps
+     * the pass idempotent, which `fmt-idempotence-stdlib` checks. */
+    if (head_len == 0 || src[head_len - 1] != '\n') buf_putc(out, '\n');
+    buf_write(out, body_out.data, body_out.len);
+    buf_free(&body_out);
+    return 0;
 }
 
 typedef enum {
@@ -7719,10 +7805,25 @@ static int cmd_eval_h(const char *path, bool use_color,
             head[hn] = '\0';
             const char *rest = head; size_t rest_len = hn;
             LangLayerSet layers = 0;
-            ReaderType rt = detect_lang_layered(head, hn, &rest, &rest_len,
-                                                &layers, NULL, NULL);
+            LangDialect dialect = LANG_TURMERIC;
+            ReaderType rt = detect_lang_dialect(head, hn, &rest, &rest_len,
+                                                &layers, NULL, NULL, &dialect);
             if (rest != head && reader_type_is_implemented(rt)) {
                 env->reader_type = rt;
+                /* saffron-lang-plan S1: seed the LANGUAGE axis here for the
+                 * same reason the reader is seeded -- the prelude must load
+                 * under the same language as the user file, and this runs
+                 * before the eval blob that would otherwise be the first place
+                 * the directive is seen. */
+                env->lang = dialect;
+                /* saffron-lang-plan S6: and the Saffron PRELUDE flag, for the
+                 * same reason one line up.  `turi_env_preload_collections` runs
+                 * below and reads it to decide whether to append
+                 * `saffron/prelude.tur`, so seeding it only in
+                 * `detect_and_adjust_lang` (which the compiled paths use) left
+                 * `tur --interpret` reporting "unknown name 'vec-map'" on a
+                 * program the compiler accepted. */
+                g_saffron_prelude = (dialect == LANG_SAFFRON);
                 /* Pre-seed the layer set too so the prelude and the user file
                  * read under the same layers (lang-layers-plan L1); turi_eval
                  * unions the authoritative set again when it strips the
@@ -7866,15 +7967,26 @@ static int cmd_eval_h(const char *path, bool use_color,
         args_val.as_int = args_list;
         turi_env_set(env, "*args*", args_val);
     }
-    /* Set module_base_dir so (import ...) resolves relative to the script. */
+    /* Set module_base_dir so (import ...) resolves relative to the script.
+     *
+     * Through the SETTER, not a direct field assignment: the field carries an
+     * ownership flag (`module_base_dir_owned`) that only the setter raises, and
+     * `turi_env_free` frees the string only when it is raised.  A direct
+     * assignment is the BORROWED path -- correct for a pointer into `argv`, and
+     * a leak for a fresh allocation, which is what this used to hand it.
+     * The setter strdups, so the slice can live on the stack.
+     * See docs/archive/cli-mallocs-module-base-dir-through-the-borrowed-path.md */
     {
         const char *slash = strrchr(path, '/');
         if (slash) {
             size_t dlen = (size_t)(slash - path);
             char *dpath = (char *)malloc(dlen + 1);
-            memcpy(dpath, path, dlen);
-            dpath[dlen] = '\0';
-            env->module_base_dir = dpath;
+            if (dpath) {
+                memcpy(dpath, path, dlen);
+                dpath[dlen] = '\0';
+                turi_env_set_module_base_dir(env, dpath);
+                free(dpath);
+            }
         }
     }
     /* Debugger Phase 2: attach the debugger before top-level eval so the
@@ -8617,15 +8729,19 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
         /* Register native overrides for common stdlib inline-C patterns. */
         wk_register_stdlib_natives(env);
         /* Set module_base_dir to the fixture directory so that (import ...)
-         * forms resolve sibling .tur files correctly. */
+         * forms resolve sibling .tur files correctly.  Through the setter, for
+         * the ownership reason spelled out at the sibling site in cmd_eval_h. */
         {
             const char *slash = strrchr(input, '/');
             if (slash) {
                 size_t dlen = (size_t)(slash - input);
                 char *dpath = (char *)malloc(dlen + 1);
-                memcpy(dpath, input, dlen);
-                dpath[dlen] = '\0';
-                env->module_base_dir = dpath;
+                if (dpath) {
+                    memcpy(dpath, input, dlen);
+                    dpath[dlen] = '\0';
+                    turi_env_set_module_base_dir(env, dpath);
+                    free(dpath);
+                }
             }
         }
         TuriValue v = turi_eval_file(env, input);
@@ -9574,9 +9690,13 @@ static int usage_test(void) {
 static int usage_repl(void) {
     fprintf(stderr,
         "usage:\n"
-        "  tur repl [--watch] [--engine <name>]   start the interactive REPL\n"
+        "  tur repl [--watch] [--lang <dialect>] [--engine <name>]\n"
+        "                  start the interactive REPL\n"
         "\n"
         "flags:\n"
+        "  --lang <d>      start in a language dialect: \"turmeric\" (default)\n"
+        "                  or \"saffron\" (unannotated params default to any).\n"
+        "                  Equivalent to typing `#lang <d>` at the prompt.\n"
         "  --watch         auto-reload the enclosing spice between prompts\n"
         "                  when any source .tur file's mtime advances\n"
         "                  (RP6; equivalent to typing (reload) each turn)\n"
@@ -10528,10 +10648,12 @@ static int cmd_lang_layers(int argc, char **argv) {
             json = true;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("usage:\n  tur lang-layers [--json]\n\n"
-                   "List the curated `#lang` additive layers.  A `#lang "
-                   "<base> <layer>*`\nline may name any of these after the "
-                   "base dialect; each is order-\nindependent and file-scoped."
-                   "  --json emits the machine-readable form.\n");
+                   "List the two axes of a `#lang` line: the base DIALECTS "
+                   "(language, and\noptionally a reader after a slash) and the "
+                   "curated additive LAYERS.  A\n`#lang <base> <layer>*` line "
+                   "names one base and any number of layers;\nlayers are "
+                   "order-independent and file-scoped.  --json emits the\n"
+                   "machine-readable form.\n");
             return 0;
         } else {
             fprintf(stderr, "tur lang-layers: unexpected argument '%s'\n", argv[i]);
@@ -10542,7 +10664,12 @@ static int cmd_lang_layers(int argc, char **argv) {
     size_t n = lang_layers_count();
 
     if (json) {
-        printf("[");
+        /* saffron-lang-plan S1: both axes.  The layer array keeps its shape at
+         * the "layers" key rather than becoming a bare top-level array, so a
+         * consumer that wants only layers reads one key instead of guessing. */
+        printf("{\n  \"dialects\": ");
+        lang_dialects_print_json();
+        printf(",\n  \"layers\": [");
         for (size_t i = 0; i < n; i++) {
             const LangLayerDescriptor *d = lang_layer_at(i);
             if (i) printf(",");
@@ -10558,14 +10685,23 @@ static int cmd_lang_layers(int argc, char **argv) {
             }
             printf("}");
         }
-        printf("%s]\n", n ? "\n" : "");
+        printf("%s]\n}\n", n ? "\n  " : "");
         return 0;
     }
 
     if (n == 0) {
-        printf("No `#lang` layers are registered.\n");
+        lang_dialects_print();
+        printf("\nNo `#lang` layers are registered.\n");
         return 0;
     }
+
+    /* saffron-lang-plan S1: the two axes of a `#lang` line are listed
+     * together, because a reader looking one up does not know in advance which
+     * axis the token they saw belongs to.  The base names the LANGUAGE and
+     * (optionally, after a slash) the reader; the trailing tokens are the
+     * additive layer set. */
+    lang_dialects_print();
+    printf("\n");
 
     printf("%-12s %-9s %-7s %s\n", "NAME", "KIND", "SINCE", "SUMMARY");
     for (size_t i = 0; i < n; i++) {
@@ -11931,12 +12067,24 @@ int main(int argc, char **argv) {
          * the freshness check runs synchronously each turn. */
         bool watch_mode = false;
         const char *repl_engine_flag = NULL;
+        /* saffron-lang-plan S8: start the session in a dialect, rather than
+         * making the user type `#lang saffron` as their first line.  Both
+         * routes land on the same env switch. */
+        const char *repl_lang_flag = NULL;
         for (int i = 2; i < argc; i++) {
             if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
                 return usage_repl();
             }
             if (strcmp(argv[i], "--watch") == 0) {
                 watch_mode = true;
+                continue;
+            }
+            if (strcmp(argv[i], "--lang") == 0 && i + 1 < argc) {
+                repl_lang_flag = argv[++i];
+                continue;
+            }
+            if (strncmp(argv[i], "--lang=", 7) == 0) {
+                repl_lang_flag = argv[i] + 7;
                 continue;
             }
             if (strcmp(argv[i], "--engine") == 0 && i + 1 < argc) {
@@ -11976,6 +12124,19 @@ int main(int argc, char **argv) {
                         "TUR_ENGINE=cc\n");
                 return 2;
 #endif
+            }
+        }
+        /* Validated HERE rather than inside cmd_repl, so a typo is a usage
+         * error before the banner prints and the stdlib preloads. */
+        if (repl_lang_flag) {
+            if (strcmp(repl_lang_flag, "saffron") == 0) {
+                g_repl_start_saffron = true;
+            } else if (strcmp(repl_lang_flag, "turmeric") != 0) {
+                fprintf(stderr,
+                        "tur repl: unknown --lang '%s' "
+                        "(expected \"turmeric\" or \"saffron\")\n",
+                        repl_lang_flag);
+                return usage_repl();
             }
         }
         return cmd_repl(watch_mode);

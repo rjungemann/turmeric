@@ -1,5 +1,6 @@
 /* elab_structs.c -- struct/ADT/GADT definitions, pattern matching, and borrow traits. */
 #include "elab_internal.h"
+#include "lang_layers.h"  /* saffron-lang-plan S5: lang_span_is_saffron */
 #include <assert.h>   /* structdef-retirement slice 5 DS-B: zero-producer guard */
 
 /* ---- file-local helper forward declarations ---- */
@@ -80,6 +81,9 @@ static void parse_struct_field_type(const char *tname, uint32_t tlen,
     if (tlen == 9  && memcmp(tname, "ptr<void>", 9) == 0) { *out_kind = TY_PTR_VOID; return; }
     /* Phase 16 v2: :fn field type — function pointer (may carry #{...} effect-row annotation) */
     if (tlen == 2  && memcmp(tname, "fn",    2) == 0) { *out_kind = TY_FN;       return; }
+    /* saffron-lang-plan S4 (PROBE): `:any` field, so a container can hold
+     * values of different types. */
+    if (tlen == 3  && memcmp(tname, "any",   3) == 0) { *out_kind = TY_ANY;      return; }
 
     /* Compound types: rc<T>, ref<T>, lref<T>, weak<T> */
     /* Parse the prefix and inner type */
@@ -1373,6 +1377,37 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
     if (ctor_field_form_names_adt(ft_form, def->name))
         def->is_self_recursive = true;
 
+    /* byvalue-recursive-adt-boxes-are-never-freed: a DIRECT self-reference
+     * (`tl : Lst`, not `(Vec Lst)`) is an owning field, and until now nothing
+     * said so.  The slot holds a pointer to a heap copy -- a by-value product
+     * cannot ride the int64 carrier and cannot contain itself inline -- so a
+     * list of N links is N allocations and no frees.  Measured in plain
+     * Turmeric with no `any` anywhere: 3 cells / 3 allocations, 5 / 5.
+     *
+     * `drop_inner_def = def` is the same channel a nested owning aggregate
+     * already uses; pointing it at the ADT itself makes the emitted glue
+     * recursive, which is exactly the walk a spine needs.
+     *
+     * `:copy` IS THE SOUNDNESS LINE, and it is measured rather than assumed.
+     * `needs_drop_glue` makes a type move-only, and the move discipline is what
+     * guarantees the single owner this free depends on -- `(let [a (Cons 1 t)
+     * b (Cons 2 t)] ...)` is already TUR-E0201 "cannot copy unique value 't'".
+     * Under `:copy` that same program compiles, and the emitted C shows both
+     * boxes carrying the SAME tail pointer, so freeing each chain would free it
+     * twice.  So a `:copy` recursive ADT keeps the leak; `with-region` reclaims
+     * it (verified: zero leaks inside a bracket) and is the answer there.
+     *
+     * A `:heap` ADT is excluded for the reason the sibling rules exclude it:
+     * its node is a typed pointer with its own teardown story. */
+    if (!def->is_copy && !def->is_heap &&
+        (ft_form->tag == F_SYM || ft_form->tag == F_KEYWORD) &&
+        ft_form->as.sym && ft_form->as.sym->name && def->name &&
+        strlen(def->name) == ft_form->as.sym->len &&
+        memcmp(ft_form->as.sym->name, def->name, ft_form->as.sym->len) == 0) {
+        ctor->fields[fi].drop_inner_def = def;
+        def->needs_drop_glue = true;
+    }
+
     /* TP1: a bare symbol (non-keyword) may be a declared type parameter.
      * E.g. `a` in `(defdata Opt2 [a] (Yep a))`. */
     {
@@ -1584,6 +1619,29 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
     ctor->fields[fi].inner_kind = finner;
     if (ctor->field_forms) ctor->field_forms[fi] = ft_form;
     if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
+        def->needs_drop_glue = true;
+    }
+    /* any-widen-stored-in-an-adt-field-has-no-owner: an `:any` field is OWNING.
+     *
+     * `any-struct-box-leak-per-widen` gave every `any` payload box an owner
+     * across five passes, and every one of those owners is a SCOPE -- an
+     * argument, a local, a temporary, a narrowed binding.  A box stored into a
+     * FIELD outlives every scope they can attach a drop to, correctly so, and
+     * so it had none: one leaked malloc per value widened into the field, which
+     * a container with `any` elements pays once per element.
+     *
+     * The drop is `__tur_any_drop`, not a statically-named glue: the payload's
+     * type is whatever the tag says at run time, and the registry row already
+     * carries the `boxed` flag that says whether it was heap-boxed at all.  So
+     * an `any` field holding an int frees nothing and one holding a widened
+     * aggregate frees the box, decided by the same row the widen wrote.
+     *
+     * `:copy` and `:heap` are excluded for the reasons the recursive-field rule
+     * beside this one records: drop glue makes a type move-only, and that move
+     * discipline is the single-owner guarantee the free depends on.  Under
+     * `:copy` two values can share the box and a per-owner free would free it
+     * twice. */
+    if (fkind == TY_ANY && !def->is_copy && !def->is_heap) {
         def->needs_drop_glue = true;
     }
     return true;
@@ -3016,6 +3074,26 @@ static bool match_arm_type_compatible(Elab *e, Type a, Type b, Type *out) {
      * with "arm types are incompatible -- expected int, got !". */
     if (a.kind == TY_NEVER) { *out = b; return true; }
     if (b.kind == TY_NEVER) { *out = a; return true; }
+    /* saffron-lang-plan S4: `any` is the TOP type, so an arm producing one
+     * joins with an arm producing anything else -- the result is `any`.
+     *
+     * The `if` join already widens this way (any-coercion-not-driven-by-
+     * expected-type); `match` had its own unifier and did not, so a Saffron
+     * fold over a heterogeneous list was rejected with "expected int (from
+     * earlier arm), got any" -- the earlier arm being the recursive call, whose
+     * return type is still being inferred, and the later one the `any`
+     * accumulator.
+     *
+     * Not gated on the dialect: `any` is Turmeric's top type too, and an arm
+     * of type `any` beside an arm of type `int` has exactly one sound join in
+     * either language.  Widening it is what the type already means. */
+    if (a.kind == TY_ANY || b.kind == TY_ANY) {
+        Type any_t;
+        memset(&any_t, 0, sizeof(any_t));
+        any_t.kind = TY_ANY;
+        *out = any_t;
+        return true;
+    }
     AdtDef *ad = (a.kind == TY_ADT) ? a.as.adt_.def
                : (a.kind == TY_APP) ? type_adt_app_def(&a) : NULL;
     AdtDef *bd = (b.kind == TY_ADT) ? b.as.adt_.def
@@ -3629,6 +3707,150 @@ Expr *elab_match(Elab *e, const Form *call) {
     /* Elaborate scrutinee */
     Expr *scrutinee = elab_form(e, call->as.list.items[1]);
     if (!scrutinee) return NULL;
+
+    /* saffron-lang-plan S5/D4 (row 7): `match` on an `any` scrutinee.
+     *
+     * In Saffron an unannotated parameter is `any`, so `(match xs (Cons h t)
+     * ... )` reaches here with no ADT to match against.  The interpreter needed
+     * nothing for this -- a TuriValue carries its own constructor, so matching
+     * works whatever the static type claimed -- but a compiled `match` reads a
+     * tag out of a C aggregate, and `tur_adt_Lst __scrut_v = xs;` where `xs` is
+     * a two-word box is "invalid initializer".
+     *
+     * The narrow is D5's seam, applied to the scrutinee position: the arms name
+     * an ADT, so unbox to it and let the ordinary match machinery run.  A value
+     * of the wrong type panics with the standard cast message rather than
+     * reinterpreting the payload -- the same trade D5 already made for
+     * arguments, and the reason `cast` was built checked.
+     *
+     * ONE ADT only.  Arms drawn from two different ADTs would need a box-id
+     * switch over unrelated layouts, which is a bigger thing than a narrow and
+     * has no arm-unifier story yet; leaving it to the existing diagnostic is
+     * better than narrowing to whichever ADT happened to be named first. */
+    if (scrutinee->type.kind == TY_ANY && lang_span_is_saffron(call->span)) {
+        AdtDef *only = NULL;
+        bool mixed = false;
+        for (uint32_t ai = 0; ai < n_arms && !mixed; ai++) {
+            Form *pf = call->as.list.items[2 + ai * 2];
+            if (!pf || pf->tag != F_LIST || pf->as.list.len == 0) continue;
+            Form *hd = pf->as.list.items[0];
+            if (!hd || hd->tag != F_SYM) continue;
+            CtorDef *cd = elab_lookup_ctor(e, hd->as.sym);
+            if (!cd || !cd->adt) continue;
+            if (!only) only = cd->adt;
+            else if (only != cd->adt) mixed = true;
+        }
+        if (only && !mixed) {
+            Type target = type_adt(only);
+            bool do_narrow = true;
+            /* saffron-match-any-scrutinee-on-parametric-adt-emits-bad-c: a
+             * PARAMETRIC ADT narrows to itself applied to `any`, once per type
+             * parameter.  This used to be refused outright (`n_type_params ==
+             * 0`), which left the emitter casting the 16-byte `tur_tagged_t`
+             * straight to a pointer -- uncompilable C on the one shape the
+             * dialect exists to make writable.
+             *
+             * Sound only because the ctor call now BUILDS at `any` in a Saffron
+             * file (elab_call.c), so the box really does hold a `(Shape any)`.
+             * Relaxing this guard on its own was tried and reverted: the narrow
+             * fired and then panicked `cast: any holds a different
+             * instantiation of Shape`, because `(Sq 6)` had built a
+             * `(Shape int)`. The two halves only work together.
+             *
+             * `type_adt` hardcodes KIND_STAR, so the arrow kind has to be
+             * restored before applying, or the application is a TUR-E0012 kind
+             * mismatch -- the same restore the ctor result path in elab_call.c
+             * does. */
+            /* A GADT is deliberately excluded, and it must be excluded LOUDLY.
+             *
+             * `(defgadt Shape [a] (Sq int : (Shape int)))` pins its own result
+             * INDEX, so its box really does hold a `(Shape int)` -- the ctor
+             * widen in elab_call.c does not touch it, and cannot: the indices
+             * are the whole point of a GADT, and erasing them to `any` would
+             * discard the type-level information the author wrote down.
+             * Narrowing to `(Shape any)` anyway compiles and then panics
+             * `cast: any holds a different instantiation`, which is a WORSE
+             * failure than the uncompilable C this replaced -- the report says
+             * so explicitly, and the first attempt at this fix died there.
+             *
+             * So decline, and say why. Before this the user got a C compiler
+             * error about aggregates, naming nothing they wrote. */
+            /* "Indexed" means a result-type ARGUMENT that is not simply the
+             * ADT's own type parameter.  A `defgadt` whose ctors all return
+             * `(Box a)` writes result types but pins nothing -- it indexes
+             * exactly as a `defdata` does -- and narrowing it to `(Box any)` is
+             * both sound and necessary: `errors/saffron-gadt-skolem-escape`
+             * asserts that such a match still reaches the skolem-escape check,
+             * which it cannot do if the narrow declines first.  Testing merely
+             * for `result_type_form` conflated the two and swallowed that
+             * fixture's diagnostic with this one. */
+            bool gadt_indexed = false;
+            for (uint32_t ci = 0; ci < only->n_ctors && !gadt_indexed; ci++) {
+                const CtorDef *cd = only->ctors[ci];
+                if (!cd || !cd->result_type_form) continue;
+                const Form *rt = cd->result_type_form;
+                if (rt->tag != F_LIST) continue;
+                for (uint32_t ai2 = 1; ai2 < rt->as.list.len; ai2++) {
+                    const Form *arg = rt->as.list.items[ai2];
+                    bool is_own_param = false;
+                    if (arg && arg->tag == F_SYM) {
+                        for (uint8_t pi = 0; pi < only->n_type_params; pi++)
+                            if (only->type_params[pi] && arg->as.sym->name &&
+                                strcmp(only->type_params[pi], arg->as.sym->name) == 0) {
+                                is_own_param = true; break;
+                            }
+                    }
+                    if (!is_own_param) { gadt_indexed = true; break; }
+                }
+            }
+            if (only->is_gadt && only->n_type_params > 0) {
+                /* Every parametric GADT declines the narrow, which is what it
+                 * did before this change -- an UNINDEXED one
+                 * (`errors/saffron-gadt-skolem-escape`) must keep reaching the
+                 * skolem-escape check that fixture pins, and narrowing it to
+                 * `(Box any)` instead types the arm binder `tur_tagged_t` over
+                 * a carrier field (`invalid initializer`). Declining is the old
+                 * path and the right one.
+                 *
+                 * An INDEXED one additionally gets a diagnostic. Its old
+                 * behaviour was a C compiler error about aggregates, naming
+                 * nothing the user wrote; this is report direction 3 for the
+                 * one shape direction 1 cannot serve. */
+                if (gadt_indexed) {
+                    diag_emit(DIAG_ERROR, scrutinee->span,
+                              "cannot match an 'any' scrutinee against '%s': its "
+                              "constructors pin their own result type, so the "
+                              "box's instantiation is not decidable here",
+                              only->name);
+                    diag_emit(DIAG_HELP, scrutinee->span,
+                              "annotate the scrutinee with the instantiation you "
+                              "expect -- `[s : (%s int)]` -- or narrow with "
+                              "`cast` before matching",
+                              only->name);
+                    return NULL;
+                }
+                do_narrow = false;   /* unindexed: decline, as before */
+            } else if (only->n_type_params > 0) {
+                /* `type_from_kind`, NOT a memset-zeroed Type: `CK_UNIQUE` is 0
+                 * and `CK_MOVE` is an alias for it, so a zeroed `any` is
+                 * MOVE-typed.  The arm binder inherits the type argument, so
+                 * `(match s (Sq w) (* w w))` then failed TUR-E0005
+                 * use-after-move on its second `w` -- while the same `any` as a
+                 * PARAMETER was fine, because parameters are built through this
+                 * helper.  Building it the same way is what makes an arm binder
+                 * and a parameter agree, which is the property the dialect
+                 * needs. */
+                Type any_t = type_from_kind(TY_ANY);
+                target.hkt_kind = kind_for_arity(only->n_type_params);
+                for (uint8_t pi = 0; pi < only->n_type_params; pi++)
+                    target = type_app(e->arena, target, any_t, scrutinee->span);
+            }
+            if (do_narrow) {
+                Expr *nar = elab_any_unbox_to(e, scrutinee, target, scrutinee->span);
+                if (nar) scrutinee = nar;
+            }
+        }
+    }
 
     /* IT1: Union type match — when scrutinee is TY_UNION, handle type-narrowing patterns.
      * Pattern syntax: (varname : TypeName) or bare _ / variable for wildcard.
@@ -4871,6 +5093,29 @@ Expr *elab_match(Elab *e, const Form *call) {
     free(arm_diverges);
 
     if (result_type.kind == TY_UNKNOWN) result_type = TYPE_NIL;
+
+    /* saffron-lang-plan S5: when the arms UNIFIED to `any`, box the ones that
+     * are not.
+     *
+     * S4 taught match_arm_type_compatible that `any` is the top type, so an
+     * `any` arm beside a `Lst` arm joins to `any` instead of being rejected.
+     * That settled the TYPE and left the VALUES alone, which the interpreter
+     * did not notice -- every TuriValue is one word wide there -- and the
+     * compiled path cannot survive: the result temp is a `tur_tagged_t` and the
+     * `Lst` arm assigns a raw aggregate into it ("incompatible types when
+     * assigning").  Widening a value to the type its own arm already claims is
+     * the same coercion the return and argument positions make; this is the
+     * third position that needed it.
+     *
+     * A `!`-typed arm (a `panic`) is skipped: it produces no value to box. */
+    if (result_type.kind == TY_ANY) {
+        for (uint32_t ai = 0; ai < n_arms; ai++) {
+            Expr *b = arms[ai].body;
+            if (!b || b->type.kind == TY_ANY || b->type.kind == TY_NEVER) continue;
+            Expr *w = elab_coerce_to_any(e, b);
+            if (w) arms[ai].body = w;
+        }
+    }
 
     Expr *out = expr_new(e->arena, EX_MATCH, result_type, call->span);
     out->as.match_.scrutinee = scrutinee;

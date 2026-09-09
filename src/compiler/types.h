@@ -1777,6 +1777,16 @@ bool         type_is_subtype(Type sub, Type super_);
  * Non-function types always return 1. */
 int          fn_type_subtype(Type actual, Type expected);
 const char  *type_name(Type t);                   /* "int", "bool", … */
+/* any-fn-tag-does-not-discriminate-signatures: the identity spelling of a
+ * function type -- "(fn [int cstr] : bool)" -- rendered from its parts rather
+ * than from a Type, so a caller holding only a parameter-kind vector (the
+ * interpreter, reconstructing a closure's signature from its FnDef) produces
+ * exactly the string `type_name` produces for the corresponding TY_FN.  That
+ * string is what `emit_any_type_id` hashes into a fn payload's `any` box id, so
+ * the two back ends compare the same key.  Interned; do not free.  Pass
+ * arg_kinds NULL only with arity 0. */
+const char  *tur_fn_type_key(const uint8_t *arg_kinds, uint32_t arity,
+                             TypeKind result_kind, bool cfnptr);
 const char  *type_c_name(Type t);                 /* "int64_t", "bool", … */
 /* ADT-app analogues of the (removed, structdef-retirement DS-D) struct-app
  * helpers: extract an ADT-headed

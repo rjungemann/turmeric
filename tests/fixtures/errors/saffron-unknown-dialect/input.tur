@@ -1,0 +1,7 @@
+#lang saffron/bogus
+;; saffron-lang-plan S1: an unknown reader under a known language is still an
+;; unknown BASE.  `saffron/bogus` names no (language, reader) pair, so it takes
+;; the same path `#lang foo` does rather than silently degrading to `saffron`
+;; with the default reader -- a file that asked for a reader it did not get
+;; would parse under semantics it did not ask for.
+(println "hello")

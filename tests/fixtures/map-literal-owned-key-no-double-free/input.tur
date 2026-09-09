@@ -1,0 +1,53 @@
+;; map-literal-leaks-its-intermediate-maps, the half that could have gone wrong
+;; the other way: OWNED (boxed) keys through the literal chain.
+;;
+;; The fix has each step of `hamt-of`'s chain free the map it assoc'd into.
+;; With `mk-owned? = 1` every KEY is a `tur_hamt_box_key` box the map owns, and
+;; `map-free` "releases every OWNED key box via the map's stamped key_ops" -- so
+;; if freeing an intermediate generation released key boxes the NEXT generation
+;; still points at, this is where it would show, as a double-free or a
+;; use-after-free rather than as a leak.
+;;
+;; It does not: the boxes are refcounted and a structural node copy retains
+;; them, so the intermediate's release decrements and the survivor holds its
+;; own reference. ASan (address + leak) is clean on this program, which is the
+;; whole reason the fixture exists -- the leak fixture alone would not have
+;; caught the opposite error.
+;;
+;; No requires.leak-check marker and no turi run: the MapKey instance is
+;; inline-C (`tur_hamt_box_key` / `tur_hamt_box_key_eq`), so run-turi.sh
+;; PASS-skips it under the inline-c carve-out, and `mk-owned?` is
+;; `#?(:tur 1 :turi 0)` -- the interpreter does not box these keys at all, so
+;; there is nothing for it to assert here.
+;;
+;; The instances are the same shape as tests/fixtures/map-multiword-struct-key,
+;; which covers content-keying rather than lifetimes.
+
+(load "stdlib/typeclass.tur")
+
+(defstruct Point :copy [x : int y : int])
+
+(definstance Hash [Point]
+  (hash [p] : int
+    #?(:tur ```c return (int64_t)tur_hamt_hash_xxh64((const void*)&p, sizeof(p)); ```
+       :turi (struct-hash p))))
+
+(definstance Eq [Point]
+  (eq? [a b] (and (= (.x a) (.x b)) (= (.y a) (.y b)))))
+
+(definstance MapKey [Point]
+  (mk-box [p] : int
+    #?(:tur ```c return (int64_t)(intptr_t)tur_hamt_box_key((const void*)&p, sizeof(p)); ```
+       :turi p))
+  (mk-cmp [p] : int
+    #?(:tur ```c return (int64_t)(intptr_t)&tur_hamt_box_key_eq; ```
+       :turi (struct-key-cmp)))
+  (mk-owned? [p] #?(:tur 1 :turi 0)))
+
+(defn main [] : int
+  (let [ms (hamt-of (Point 1 2) 10 (Point 3 4) 20 (Point 5 6) 30)]
+    (println (map-count ms))
+    (println (map-get ms (Point 3 4)))
+    (println (map-get ms (Point 9 9)))
+    (map-free ms))
+  0)

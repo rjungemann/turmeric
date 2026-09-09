@@ -1,5 +1,6 @@
 /* elab_forms.c -- control-flow and basic expression forms (let/if/do/while/case/...). */
 #include "elab_internal.h"
+#include "lang_layers.h"   /* saffron-lang-plan S3: lang_span_is_saffron */
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
@@ -30,6 +31,34 @@ static const AdtDef *elab_byval_drop_adt(Type t) {
     if (!def->needs_drop_glue || def->is_heap) return NULL;
     if (def->n_ctors != 1) return NULL;
     return def;
+}
+
+/* byvalue-recursive-adt-boxes-are-never-freed: resolve a let-binding type to the
+ * by-value ADT whose recursive SPINE needs a scope-exit free, or NULL.
+ *
+ * The twin of elab_byval_drop_adt above and deliberately not a relaxation of it:
+ * that one refuses a multi-variant ADT because its callers index `ctors[0]`
+ * directly, and a recursive ADT is a sum by construction (it needs a base case),
+ * so every type this exists for is multi-variant.  The recursive-field marking
+ * (elab_structs.c) has already applied the `:copy` and `:heap` exclusions and
+ * the direct-self-reference test -- a field pointing `drop_inner_def` at its own
+ * def is the whole condition, so it is not restated here. */
+static const AdtDef *elab_byval_localowned_adt(Type t) {
+    const AdtDef *def = NULL;
+    if (t.kind == TY_ADT)      def = t.as.adt_.def;
+    else if (t.kind == TY_APP) def = type_adt_app_def(&t);
+    else                       return NULL;
+    if (!def || def->is_heap || !def->needs_drop_glue) return NULL;
+    /* A parametric monomorph's glue carries a mangled per-instantiation name;
+     * threading that through is separate work, as the sibling nested-aggregate
+     * rule already records. */
+    if (def->n_type_params != 0) return NULL;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++)
+        for (uint32_t fi = 0; fi < def->ctors[ci]->n_fields; fi++)
+            if (def->ctors[ci]->fields[fi].drop_inner_def == def ||
+                def->ctors[ci]->fields[fi].kind == TY_ANY)
+                return def;
+    return NULL;
 }
 
 /* rc-field-read-into-var-double-free: peel type ascriptions and return the
@@ -907,9 +936,11 @@ Expr *elab_let(Elab *e, const Form *call) {
          * mistakes like `(let [x : int "hello"] ...)`.  Complex types
          * (structs, ADTs, arrows) parse but skip the equality check;
          * downstream typing rules still apply to the init expression. */
+        bool ann_is_any = false;
         if (type_ann_form) {
             Type *ann_ty = fn_type_from_form(e, type_ann_form, NULL, NULL, 0);
             if (ann_ty) {
+                ann_is_any = (ann_ty->kind == TY_ANY);
                 /* bare-fat-param-non-int-result (Phase A4): a declared-typed
                  * binding whose init's tail is a bare-^fat int64 call carries no
                  * recorded result type; infer it from the annotation and re-stamp
@@ -953,6 +984,25 @@ Expr *elab_let(Elab *e, const Form *call) {
                 src->alias_state = AS_ALIASED;
                 src->alias_name  = name;
             }
+        }
+
+        /* any-coercion-not-driven-by-expected-type: an `: any` annotation is a
+         * WIDENING REQUEST, not just a claim to check.
+         *
+         * The binding below takes `init->type`, and the annotation above is only
+         * consulted for a mismatch check that skips non-primitives -- so
+         * `(let [x : any 42] ...)` bound `x` at `int` and the annotation did
+         * nothing at all.  `type-of` then rejected `x` for not being an `any`,
+         * which reads as a type error when it is really a missing coercion.
+         *
+         * Widen here, AFTER the move/alias tracking above: those inspect
+         * `init->kind == EX_VAR`, and coercing earlier would wrap the init in
+         * EX_UNION_INJECT and silently switch both off for every `: any`
+         * binding. */
+        if (ann_is_any && init->type.kind != TY_ANY &&
+            init->type.kind != TY_NEVER) {
+            init = elab_coerce_to_any(e, init);
+            if (!init) { rc = -1; break; }
         }
 
         Binding *b = binding_new(e, name, init->type, is_mut, false, name_span);
@@ -1824,6 +1874,26 @@ Expr *elab_let(Elab *e, const Form *call) {
         }
     }
 
+    /* byvalue-recursive-adt-boxes-are-never-freed: the same flagging for a
+     * by-value RECURSIVE local, whose spine of boxes is freed at scope exit.
+     *
+     * A separate loop rather than a branch in the one above, because it cannot
+     * share `elab_byval_drop_adt`: that helper refuses `n_ctors != 1` (its
+     * callers read `ctors[0]` directly) and a recursive ADT is a sum by
+     * construction -- it needs a base case -- so every type this exists for
+     * would be refused.  The guards are the same three, and they are what makes
+     * the free sound: a local that was moved into a call, moved during its own
+     * initialisation, or explicitly consumed has handed ownership on, and the
+     * new owner's scope frees the spine instead. */
+    for (uint32_t k = 0; k < n_binds; k++) {
+        const AdtDef *ad = elab_byval_localowned_adt(binds[k].binding->type);
+        if (!ad) continue;
+        if (binding_moved_during_init[k] || binds[k].binding->is_moved ||
+            is_binding_consumed(body, binds[k].binding))
+            continue;
+        binds[k].binding->drops_local_owned = true;
+    }
+
     if (has_byval_drop_bindings && body && body->kind == EX_DO) {
         /* Count owning fields across every eligible by-value local. */
         uint32_t n_field_drops = 0;
@@ -2563,18 +2633,31 @@ Expr *elab_named_let(Elab *e, const Form *call) {
  * Only direct, single-variable tests narrow; negation/conjunction do not (see
  * TY3.3).  Recognition is purely syntactic on the un-elaborated Form. */
 static bool if_guard_narrowing(Elab *e, const Form *cond,
-                               const Symbol **out_var, const Symbol **out_type) {
+                               const Symbol **out_var, Form **out_type) {
     if (!cond || cond->tag != F_LIST || cond->as.list.len < 1) return false;
     Form *head = cond->as.list.items[0];
     if (head->tag != F_SYM) return false;
 
-    /* Shape 1: (is? x T) */
+    /* Shape 1: (is? x T), where T is a bare name OR an APPLIED type form.
+     *
+     * The applied form used to be refused here (`tf->tag == F_SYM` only), so
+     * `(if (is? x (Option float)) ...)` tested the tag and then narrowed
+     * nothing -- the body still saw `x : any` and a method call on it was a
+     * "cannot dispatch on an `any` receiver" diagnostic. The author had to
+     * repeat the target in an explicit `(cast x (Option float))` that the
+     * guard had already proved. `(is? x Circle)` narrowed on the same line,
+     * so the two shapes behaved differently with nothing saying why.
+     *
+     * `is?` and `cast` have shared one target resolver since
+     * any-narrowing-broken-for-parametric-receivers was fixed, so an applied
+     * target already resolves for both; passing the FORM through rather than a
+     * Symbol is all that was missing. */
     if (head->as.sym == e->sym_is_q && cond->as.list.len == 3) {
         Form *xf = cond->as.list.items[1];
         Form *tf = cond->as.list.items[2];
-        if (xf->tag == F_SYM && tf->tag == F_SYM) {
+        if (xf->tag == F_SYM && (tf->tag == F_SYM || tf->tag == F_LIST)) {
             *out_var  = xf->as.sym;
-            *out_type = tf->as.sym;
+            *out_type = tf;
             return true;
         }
         return false;
@@ -2594,7 +2677,10 @@ static bool if_guard_narrowing(Elab *e, const Form *cond,
         /* rhs must be a string literal naming the type */
         if (rhs->tag != F_STR) return false;
         *out_var  = xf->as.sym;
-        *out_type = symtab_intern(e->st, rhs->as.s);
+        /* Shape 2's target is a STRING naming the type; rebuild it as the
+         * symbol form the cast expects, so both shapes hand back a Form. */
+        *out_type = form_sym(e->arena, rhs->span,
+                             symtab_intern(e->st, rhs->as.s));
         return true;
     }
 
@@ -2606,13 +2692,15 @@ static bool if_guard_narrowing(Elab *e, const Form *cond,
  * cast, so a use of x at type T inside the branch type-checks and the runtime
  * tag is verified.  Returns the original branch if any piece cannot be built. */
 static Form *if_narrow_branch(Elab *e, Form *branch,
-                              const Symbol *var, const Symbol *type_sym, Span sp) {
+                              const Symbol *var, Form *type_form, Span sp) {
     Arena *a = e->arena;
-    /* (cast x T) */
+    /* (cast x T) -- T spliced as a FORM, so an applied target like
+     * `(Option float)` survives; it used to be re-synthesised from a Symbol,
+     * which is why only a bare name could reach here. */
     Form *cast_items[3];
     cast_items[0] = form_sym(a, sp, e->sym_cast);
     cast_items[1] = form_sym(a, sp, var);
-    cast_items[2] = form_sym(a, sp, type_sym);
+    cast_items[2] = type_form;
     Form *cast_f = form_list(a, sp, cast_items, 3);
     /* binding vector [x (cast x T)] */
     Form *bvec_items[2] = { form_sym(a, sp, var), cast_f };
@@ -2723,6 +2811,65 @@ static bool if_branches_unify_via_tyvar(Type then_ty, Type else_ty, Type *out) {
     return true;
 }
 
+/* saffron-lang-plan D7: refuse a feature whose whole content is a static
+ * guarantee, in a file whose default type is `any`.
+ *
+ * `feature` names it as the source spells it (`with-region`, `defgadt`,
+ * `^linear`); `why` is the one clause that says what the guarantee rests on,
+ * so the message is specific rather than a shared "not supported here".
+ *
+ * Returns true when it rejected, so a caller can bail on the same line.  False
+ * outside a Saffron file, which is every existing call path -- a Turmeric
+ * module in the same project keeps all of these.
+ *
+ * Deliberately NOT a surface scan of the form tree.  Each call site sits where
+ * the compiler has already RESOLVED what it is looking at (a binding, a
+ * special-form dispatch, a parsed parameter attribute), so a local named
+ * `with-region` or a macro that expands to one is judged by what it elaborates
+ * to, not by how it is spelled. */
+bool saffron_reject_static_only(Elab *e, Span span, const char *feature,
+                                const char *why) {
+    (void)e;
+    if (!lang_span_is_saffron(span)) return false;
+    diag_emit_with_code(DIAG_ERROR, span, TUR_E0312_SAFFRON_STATIC_ONLY,
+                        "`%s` is not available in a `#lang saffron` file: %s",
+                        feature, why);
+    diag_emit(DIAG_NOTE, span,
+              "the restriction is per file -- move this into a Turmeric module "
+              "and call across the boundary; see `tur explain TUR-E0312`");
+    return true;
+}
+
+/* saffron-lang-plan D4: wrap an `any`-typed expression in the truthiness
+ * operator so it can feed a C-level `bool` slot.
+ *
+ * Only nil and `false` are falsy; everything else -- 0, "", an empty vector --
+ * is truthy, which is why this is a runtime tag decision and not a comparison.
+ * Lowered as a dynamic operator rather than a second node kind: it is exactly
+ * what EX_DYN_OP is for.  The reserved name is not a builtin, so the
+ * interpreter answers it before consulting the builtin table.
+ *
+ * Returns the expression unchanged when it is not an `any` in a Saffron file,
+ * so callers can apply it unconditionally.
+ *
+ * SHARED, because there is more than one bool slot a Saffron `any` can reach:
+ * an `if`/`when` condition, and a `#refine{...}` contract predicate, whose
+ * `tur-contract-check` takes a `bool`.  The contract path had no wrap, so a
+ * refinement over `any` emitted `tur_contract_check(<tur_tagged_t>, ...)` --
+ * uncompilable C, on a path the interpreter ran correctly. */
+Expr *elab_saffron_truthy(Elab *e, Expr *cond) {
+    if (!cond || cond->type.kind != TY_ANY) return cond;
+    if (!lang_span_is_saffron(cond->span)) return cond;
+    Expr **targs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+    targs[0] = cond;
+    Expr *t = expr_new(e->arena, EX_DYN_OP, TYPE_BOOL, cond->span);
+    t->as.dyn_op_.op     = symtab_intern(e->st, strslice(SAFFRON_TRUTHY_OP,
+                               (uint32_t)strlen(SAFFRON_TRUTHY_OP)));
+    t->as.dyn_op_.args   = targs;
+    t->as.dyn_op_.n_args = 1;
+    return elab_hoist_control_operands(e, t);
+}
+
 /* True when `f` is a call whose head names a return-only-dispatch typeclass
  * method with no shadowing binding (e.g. `(pure x)`, `(empty)`) -- a method
  * whose instance can only be selected from an expected result type.  Used by
@@ -2758,12 +2905,12 @@ Expr *elab_if(Elab *e, const Form *call) {
     Form *then_form = call->as.list.items[2];
     Form *else_form = (call->as.list.len == 4) ? call->as.list.items[3] : NULL;
     {
-        const Symbol *gv = NULL, *gt = NULL;
+        const Symbol *gv = NULL; Form *gt = NULL;
         if (if_guard_narrowing(e, cond_form, &gv, &gt)) {
             /* Rewrite the condition to the canonical (is? x T) test form. */
             Form *is_items[3] = { form_sym(e->arena, call->span, e->sym_is_q),
                                   form_sym(e->arena, call->span, gv),
-                                  form_sym(e->arena, call->span, gt) };
+                                  gt };
             cond_form = form_list(e->arena, call->span, is_items, 3);
             Binding *vb = scope_lookup(e->scope, gv);
             if (vb && vb->type.kind == TY_ANY) {
@@ -2774,6 +2921,21 @@ Expr *elab_if(Elab *e, const Form *call) {
 
     Expr *cond = elab_form(e, cond_form);
     if (!cond) return NULL;
+    /* saffron-lang-plan S3/D4: truthiness.  A Saffron `if` accepts a dynamic
+     * condition and decides it at runtime, where Turmeric requires a `bool`.
+     *
+     * The rule D4 settles: **`false` and `nil` are falsy; `0`, `""` and the
+     * empty container are truthy.**  That is the Lisp/Clojure convention rather
+     * than the C one, and it is the right default here for a specific reason --
+     * Turmeric's `if` already demands a bool, so there is no legacy
+     * int-truthiness to stay compatible with, and the C rule would silently
+     * turn `(if (vec-len v) ...)` into a bug on an empty vector.
+     *
+     * Lowered as a dynamic operator rather than a second node kind: it is
+     * exactly what EX_DYN_OP is for, a decision the value's own tag makes at
+     * runtime.  The reserved name is not a builtin, so the interpreter answers
+     * it before consulting the builtin table. */
+    cond = elab_saffron_truthy(e, cond);
     if (!type_eq(cond->type, TYPE_BOOL)) {
         diag_emit(DIAG_ERROR, cond->span,
                   "if condition must be bool, got %s", type_name(cond->type));
@@ -2939,10 +3101,26 @@ Expr *elab_if(Elab *e, const Form *call) {
             result_t = else_->type;
         } else if (else_div) {
             result_t = then_->type;
-        } else if (then_->type.kind == TY_ANY || else_->type.kind == TY_ANY) {
+        } else if (then_->type.kind == TY_ANY || else_->type.kind == TY_ANY ||
+                   (e->expected_type && e->expected_type->kind == TY_ANY &&
+                    !type_eq(then_->type, else_->type))) {
             /* TY2.2: branch widening to `any`.  When one branch is `any`, box
              * the other (a narrower subtype) so both arms share the tagged
-             * representation and the if yields `any`. */
+             * representation and the if yields `any`.
+             *
+             * any-coercion-not-driven-by-expected-type: an `any` EXPECTATION
+             * does the same.  Only a branch already carrying `any` used to
+             * trigger this, so `(defn f [b] : any (if b (Some 7.1) 42))` fell
+             * through to the mismatch diagnostic below -- reported as a type
+             * error when both arms would widen to the very type the signature
+             * declares.  The union guide describes widening as happening at "an
+             * `if` branch facing an `any` sibling", and that clause was doing
+             * all the work; the declared return is just as good a target.
+             *
+             * Gated on the arms actually DISAGREEING: when they already share a
+             * type there is nothing to reconcile here, and the return-position
+             * widen boxes the result once at the tail rather than once per arm
+             * -- so this stays inert for programs that were already fine. */
             then_ = elab_coerce_to_any(e, then_);
             else_ = elab_coerce_to_any(e, else_);
             result_t = then_->type;

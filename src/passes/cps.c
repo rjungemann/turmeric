@@ -412,6 +412,9 @@ bool cps_fn_needs_cloneable_transform(const FnDef *fd) {
  * into nested function definitions (each nested fn is colored on its own merits;
  * reaching it is modeled as an unresolved call by the caller). This mirrors the
  * trusted enumeration in cps_expr_contains_shift, plus the serial operators. */
+static bool cps_directly_uses_control(const Expr *e);
+bool cps_expr_uses_control(const Expr *e) { return cps_directly_uses_control(e); }
+
 static bool cps_directly_uses_control(const Expr *e) {
     if (!e) return false;
     switch (e->kind) {
@@ -495,6 +498,69 @@ static bool cps_directly_uses_control(const Expr *e) {
             /* Ascription is erased at codegen; seed on a control op that is
              * only reachable through (:: <control-op> T). */
             return cps_directly_uses_control(e->as.ascribe_.inner);
+        /* cps-coloring-walk-has-no-arm-for-union-inject: the same reasoning as
+         * EX_ASCRIBE above, for the four nodes a `#lang saffron` file wraps its
+         * expressions in.  Without these arms each falls to `default: return
+         * false`, so a function whose only control op sits under one is never
+         * COLORED -- and the candidate loop in cps_color_program is gated on
+         * `cps_colored`, so the signature gate is never even consulted.  The
+         * op then reaches the direct emitter, which has no lowering for one,
+         * and aborts:
+         *
+         *   tur: emit: EX_CALLCC reached the direct emitter
+         *
+         * EX_UNION_INJECT is the return-position widen an `any` return type
+         * inserts, which made `(defn go [] (call/cc ...))` -- an unannotated
+         * Saffron defn, i.e. the ordinary case -- abort while the same function
+         * annotated `: int` compiled.  Three of the four have a fixture
+         * (saffron-callcc-under-any-return, -under-dyn-op, -under-dyn-call).
+         *
+         * EX_DYN_FIELD has NO fixture: a dyn field's only child is its
+         * receiver, and every attempt to give it an `any`-typed control op as
+         * that receiver was refused earlier, by the field resolver ("no
+         * typeclass method found for 'n'").  The arm is here by construction --
+         * the child is an expression and can structurally hold a control op --
+         * not because a repro was found.  If one is ever built, add the
+         * fixture; do not take this comment as evidence the shape reaches here.
+         *
+         * Same class as docs/archive/saffron-any-return-defeats-the-frame-box-
+         * rule.md, where `expr_subtree_has_inline_c` was missing arms for these
+         * same nodes and silently skipped every Saffron function. */
+        case EX_UNION_INJECT:
+            return cps_directly_uses_control(e->as.union_inject_.value);
+        case EX_DYN_OP:
+            for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
+                if (cps_directly_uses_control(e->as.dyn_op_.args[i])) return true;
+            return false;
+        case EX_DYN_CALL:
+            if (cps_directly_uses_control(e->as.dyn_call_.fn)) return true;
+            for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
+                if (cps_directly_uses_control(e->as.dyn_call_.args[i])) return true;
+            return false;
+        case EX_DYN_FIELD:
+            return cps_directly_uses_control(e->as.dyn_field_.obj);
+        /* saffron-lang-plan S9: the dispatch node, same shape as the three
+         * above -- receiver plus arguments, any of which can hold a control op. */
+        case EX_DYN_METHOD:
+            if (cps_directly_uses_control(e->as.dyn_method_.obj)) return true;
+            for (uint32_t i = 0; i < e->as.dyn_method_.n_args; i++)
+                if (cps_directly_uses_control(e->as.dyn_method_.args[i])) return true;
+            return false;
+        /* ...and the `any` READERS, which the first round of arms missed
+         * because nothing then put one between a defn's body and its control
+         * op.  The return-position seam does: a concrete return annotation over
+         * a dynamic body now narrows through `EX_ANY_CAST`, so `(defn go [x] :
+         * int (+ x (call/cc ...)))` had its only control op behind a cast, fell
+         * to `default: return false`, and went UNCOLORED -- the exact failure
+         * this walk's other arms exist to prevent, reintroduced by a node added
+         * later.  A reader is transparent to control the same way an ascription
+         * is. */
+        case EX_ANY_CAST:
+            return cps_directly_uses_control(e->as.any_cast_.value);
+        case EX_ANY_IS:
+            return cps_directly_uses_control(e->as.any_is_.value);
+        case EX_ANY_TYPE_OF:
+            return cps_directly_uses_control(e->as.any_type_of_.value);
         /* B3 (cps-tramp-resume): a `(with-handler hv body)` / `(compose-handlers
          * ...)` is a delimited handler install -- a control seed under the flag,
          * so a `main`/fn whose only control op is a first-class handler value is

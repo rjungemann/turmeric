@@ -1,0 +1,55 @@
+;; saffron-lang-plan S6: an element read out of a `(Vec any)` comes back with
+;; ITS OWN tag.  This is what makes a container of dynamic values useful rather
+;; than merely constructible -- before it, `(vec-get v 0)` was typed `int` and
+;; `type-of` on it was a compile error, so a `(Vec any)` was write-only.
+;;
+;; Two changes, at the two ends of the same value:
+;;
+;;   * `call_result_type` collapses a bare-tyvar result to the int64 carrier and
+;;     records a reinterpret, which is right for a scalar and impossible for an
+;;     `any`: it is the TWO-word tur_tagged_t, so there is no single carrier
+;;     word to bitcast back from, and the collapse kept the payload and dropped
+;;     the tag.  `any` and `union` join the composites the comment there already
+;;     exempts, for the reason it already gives -- "a reinterpret cannot carry a
+;;     composite anyway".
+;;
+;;   * The reader end: a `(Vec any)` element is stored BOXED (one slot word
+;;     pointing at the tur_tagged_t, which is what repr_of answers at
+;;     CONTAINER_ELEM), so a generic `: A` accessor hands back that carrier
+;;     word.  `TUR_GETTAG` on an `int64_t` is a hard cc error, so the `any`
+;;     readers bridge a carrier-form operand back to the aggregate first --
+;;     keyed on the value's RECORDED emitted spelling, so a widen, a parameter
+;;     and a let-bound `any` are all untouched.
+;;
+;; BOTH BACK ENDS, deliberately.  The interpreter got this wrong when the
+;; compiled half first landed: its Vec buffer is raw int64 cells and it recorded
+;; ONE element tag per vector -- native_vec_push's own comment called it "the
+;; homogeneous element tag" -- so every element of a heterogeneous vector
+;; reported the type of the LAST one pushed, and the cast below panicked naming
+;; a type this program never asks for.  That assumption was right for as long as
+;; the type system enforced homogeneity; `(Vec any)` is the first element type
+;; for which it is not, and `any` is exactly the type whose content IS the
+;; per-value tag.  The tag side table is now a byte per element rather than one
+;; per vec, so the two back ends agree here rather than diverging.
+;;
+;; requires.leak-check: the element boxes are owned by the vector.
+
+(defn dyn [x : any] : any x)
+
+(defn main [] : int
+  (let [v (:: (vec-new) (Vec any))]
+    (vec-push! v (dyn 1))
+    (vec-push! v (dyn "hi"))
+    (vec-push! v (dyn 7.1))
+    (vec-push! v (dyn true))
+    (println (vec-len v))
+    ;; Four elements, four different runtime types, each reporting its own.
+    (println (type-of (vec-get v 0)))
+    (println (type-of (vec-get v 1)))
+    (println (type-of (vec-get v 2)))
+    (println (type-of (vec-get v 3)))
+    ;; 7.1 rather than 7.0: a truncating path through the box would show as 7.
+    (println (cast (vec-get v 2) float))
+    (println (if (is? (vec-get v 1) cstr) 1 0))
+    (vec-free v))
+  0)

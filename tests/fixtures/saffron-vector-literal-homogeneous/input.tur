@@ -1,0 +1,23 @@
+#lang saffron
+;; saffron-lang-plan S6 (G7), the half that is easy to get wrong: a literal
+;; whose elements HAPPEN to agree is still a `(Vec any)`, not a `(Vec int)`.
+;;
+;; The widen is unconditional per Saffron file rather than "only when the
+;; elements disagree", and that is deliberate.  A vector's element type is not
+;; fixed in a dynamic dialect: pushing a string into `[1 2 3]` later is ordinary
+;; code, and it is exactly what this fixture does.  Inferring `(Vec int)` from
+;; the literal would reject that push, with a diagnostic pointing at the push
+;; rather than at the literal that decided it -- a surprise no diagnostic
+;; covers.  The cost is one box per element on a homogeneous literal.
+;;
+;; requires.leak-check: the element boxes are owned by the vector and released
+;; with it, including the one pushed after construction.
+
+(defn main [] : int
+  (let [v [1 2 3]]
+    (println (type-of (vec-get v 0)))
+    (vec-push! v (:: "late" any))
+    (println (vec-len v))
+    (println (type-of (vec-get v 3)))
+    (vec-free v))
+  0)

@@ -1,0 +1,15 @@
+#lang saffron
+; saffron-lang-plan D8 question 2: a DEFAULTED method reached through dynamic
+; dispatch. The registry's shim table iterates the instance's method_impls, so a
+; slot filled from the class default is a shim like any other -- which became
+; demonstrable the day an instance could omit a method at all.
+(defclass Tag [a]
+  (tag [x] : cstr "default-tag"))
+(definstance Tag [int])
+(definstance Tag [float]
+  (tag [x] "float-tag"))
+(defn t [x] (.tag x))
+(defn main []
+  (println (t 7))
+  (println (t 7.35))
+  0)

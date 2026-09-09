@@ -1,0 +1,35 @@
+;; fmap-over-byvalue-struct-element-passes-the-struct-as-int64: `fmap` over a
+;; container whose element is a plain by-value `defstruct` (16 bytes -- wider
+;; than the int64 carrier slot).  The by-value spec invokes the mapper through
+;; the typed-carrier cast `(tur_adt_Pt (*)(void *, int64_t))g.fn`: the struct
+;; ARGUMENT crosses as a box pointer (spilled at the dispatch, deref'd by the
+;; thunk) and the struct RESULT comes back by value.  Every mapper shape must
+;; agree with that one convention -- a global defn (generated wrapper), an
+;; inline lambda (its own typed thunk), and a fn-typed parameter forwarded from
+;; an enclosing defn (fat pass-through).  Result was `incompatible type for
+;; argument 2` in the spec body for all three.
+(defstruct Pt [x : float y : float])
+
+(defn sw [p : Pt] : Pt (Pt (.y p) (.x p)))
+
+(defn ap [o : (Option Pt) f : (fn [Pt] Pt)] : (Option Pt) (fmap o f))
+
+(defn show-x [o : (Option Pt)] : void
+  (println (.x (unwrap-or o (Pt 0.0 0.0)))))
+
+(defn main [] : int
+  (let [o (some (Pt 1.25 2.5))]
+    ;; global defn
+    (show-x (fmap o sw))
+    ;; inline lambda
+    (show-x (fmap o (fn [p : Pt] : Pt (Pt (+ (.x p) 10.5) (.y p)))))
+    ;; forwarded fn parameter
+    (show-x (ap o sw))
+    ;; none stays none
+    (show-x (ap (:: (none) (Option Pt)) sw))
+    ;; the same spec shape over Result
+    (let [r (:: (ok (Pt 3.75 4.5)) (Result Pt cstr))]
+      (match (:: (fmap r sw) (Result Pt cstr))
+        (Ok p)  (println (.y p))
+        (Err _) (println "err"))))
+  0)

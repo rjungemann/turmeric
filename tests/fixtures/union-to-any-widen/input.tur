@@ -1,0 +1,59 @@
+;; union-to-any-widen-emits-uncompilable-c: a union-typed value flowing into an
+;; `any` slot.
+;;
+;; A union is already a `tur_tagged_t`, and the `any` widen had no arm for one --
+;; it fell into the SCALAR arm and emitted `TUR_TAG(38, (int64_t)(intptr_t)(x))`
+;; on an aggregate, which cc rejects outright:
+;;
+;;     error: aggregate value used where an integer was expected
+;;
+;; in argument, return and local position alike.  This fixture covers all three,
+;; which is how the report established the scope.
+;;
+;; Casting is not the fix.  Both representations are `tur_tagged_t`, but a
+;; union's tag is a MEMBER INDEX into its own member list while an `any` box's is
+;; a TypeKind or an interned per-type id -- different namespaces, so re-tagging
+;; in place would compile and answer whichever type happens to own id 0.  The
+;; widen switches on the member index and re-tags with THAT member's `any` id,
+;; so the `any` reports "int" / "cstr" / "Pt", which is what the interpreter
+;; already answered.
+;;
+;; No requires.compiled: the interpreter always ran this correctly, so the
+;; assertion is that the compiled path now agrees with it.  A fixture that only
+;; ran compiled would not notice them diverging again.
+;;
+;; The float member is 7.1, not 7.0, deliberately: a float rides BOTH
+;; representations as its IEEE-754 bit pattern, so the payload word carries
+;; across untouched -- and an integral literal could not tell a correct
+;; carry-across from a numeric conversion that truncated.
+
+(defstruct Pt [x : int y : int])
+
+;; Argument position.
+(defn peek [a : any] : nil (println (type-of a)))
+(defn arg-pos [x : (int | cstr)] : nil (peek x))
+
+;; Return position.
+(defn ret-pos [x : (int | float)] : any x)
+
+;; A by-value struct member: the union heap-boxes it, and the pointer carries
+;; across to the `any` unchanged, so `cast` unboxes by dereference as usual.
+(defn struct-member [v : (Pt | int)] : any v)
+
+(defn main [] : int
+  (arg-pos 42)
+  (arg-pos "hi")
+
+  (println (type-of (ret-pos 7.1)))
+  (println (cast (ret-pos 7.1) float))
+  (println (type-of (ret-pos 3)))
+
+  ;; Local position.
+  (let [u (:: 42 (int | cstr))]
+    (peek u))
+
+  (let [a (struct-member (make-struct Pt 3 4))]
+    (println (type-of a))
+    (println (.x (cast a Pt))))
+  (println (type-of (struct-member 9)))
+  0)

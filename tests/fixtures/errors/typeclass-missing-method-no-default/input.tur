@@ -1,0 +1,8 @@
+;; typeclass-default-methods-do-not-work: an omitted method with NO default is
+;; still an error -- now named, rather than reported as a bare count.
+(defclass Shape [a]
+  (area [x] : float)
+  (name [x] : cstr))
+(definstance Shape [int]
+  (area [x] : float 1.5))
+(defn main [] : int 0)

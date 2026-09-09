@@ -1,0 +1,41 @@
+;; any-cannot-recover-a-capturing-closure: widening a bare function to `any`
+;; must not allocate.
+;;
+;; Making every fn payload fat (so a capturing closure can be recovered and
+;; called) means a bare fn is shimmed into a `{ thunk, orig_fn }` box on the way
+;; in -- and a box per widen that nothing frees is an unbounded leak in a loop,
+;; not merely an allocation.  Measured at 100 boxes over 100 iterations before
+;; the fix.
+;;
+;; It does not allocate, because for a file-scope function that box is a
+;; LINK-TIME CONSTANT: it depends only on the function, so the emitter hoists it
+;; to a static (`ensure_static_fatbox`) and every widen of that function shares
+;; it.  Sharing is safe precisely because nothing frees an `any` fn payload --
+;; `emit_type_is_byvalue_adt` is false for TY_FN, so the payload's registry row
+;; carries boxed = 0 and `__tur_any_drop` leaves it alone.
+;;
+;; Both shapes below take that path: a `defn` named as a value, and a lambda
+;; widened directly (which lifts to a file-scope fn).  200 widens, zero
+;; allocations.
+;;
+;; requires.leak-check: the ordinary suite runs fixtures with detect_leaks=0, so
+;; a regression here would be invisible to it -- this assertion only exists
+;; under the leak harness.
+;;
+;; NOT covered, and deliberately: a fn value reached through a LOCAL binding
+;; (`(let [f (fn ...)] (peek f))`).  Its box is not a link-time constant, so the
+;; emitter falls back to the malloc form and it leaks once per widen unless the
+;; callee's non-retain mask lets the frame-box rule fire.  See
+;; docs/reported/any-fn-widen-through-local-binding-leaks.md.
+
+(defn add1 [x : int] : int (+ x 1))
+(defn peek [a : any] : cstr (type-of a))
+
+(defn loop-n [i : int] : int
+  (if (< i 100)
+    (do (println (peek add1))
+        (println (peek (fn [x : int] : int (+ x 2))))
+        (loop-n (+ i 1)))
+    0))
+
+(defn main [] : int (loop-n 0))

@@ -1,0 +1,30 @@
+#lang saffron
+;; saffron-match-any-scrutinee-on-parametric-adt-emits-bad-c, the shape fix
+;; direction 1 cannot serve: a GADT whose constructors pin a CONCRETE result
+;; index.
+;;
+;; `(Sq int : (Shape int))` says the box holds a `(Shape int)`, and the ctor
+;; widen must not touch it -- erasing an index to `any` would discard exactly
+;; the type-level information a GADT exists to carry. So the `any`-scrutinee
+;; narrow declines here rather than targeting `(Shape any)`, which would
+;; compile and then panic `cast: any holds a different instantiation`. The
+;; report is explicit that trading "does not compile" for "panics at runtime"
+;; is the wrong direction.
+;;
+;; What is pinned is that declining is now LOUD. Before, this reached the C
+;; compiler and came back as `aggregate value used where an integer was
+;; expected` -- naming nothing the user wrote, and no workaround.
+;;
+;; The sibling `errors/saffron-gadt-skolem-escape` is the other half: an
+;; UNINDEXED `defgadt` (every ctor returns `(Box a)`) pins nothing, still
+;; declines, and must still reach the skolem-escape check -- so this
+;; diagnostic must not swallow that one.
+
+(defgadt Shape [a]
+  (Sq int : (Shape int)))
+
+(defn area [s]
+  (match s
+    (Sq w) (* w w)))
+
+(defn main [] 0)

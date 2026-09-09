@@ -1,0 +1,66 @@
+;; interp-collection-handles-report-as-int: a collection handle or a `defopaque`
+;; newtype inside an `any` must report its own type, not the carrier's.
+;;
+;; The interpreter represents a Vec, a Map and a `defopaque` over an immediate as
+;; a bare `TURI_INT` holding a pointer, and widening to `any` was the IDENTITY
+;; there -- so the reflection forms read the runtime tag and answered "int".
+;; Compiled answered "Vec" / "Map" / "Route", because the compiled widen boxes
+;; and records a per-type id.
+;;
+;; It was wrong in BOTH directions, which is worse than the name suggests:
+;;
+;;     (is? v (Vec int))   =>  1 compiled, 0 interpreted     false negative
+;;     (is? v int)         =>  0 compiled, 1 interpreted     false positive
+;;
+;; so a type-case with an `int` arm and a `Vec` arm took different arms on the
+;; two back ends, silently.
+;;
+;; The interpreter's widen now boxes such a payload, matching the compiled model
+;; rather than adding a parallel one: it boxes exactly when the compiled widen
+;; mints an id (a named type -- ADT or applied constructor), and only when the
+;; runtime value cannot answer for itself.  A struct already carries its name, a
+;; primitive's tag is already right, and a closure has its own reflection path,
+;; so none of those are boxed.
+;;
+;; The box never escapes.  An `any` is opaque to everything but these three
+;; forms, and the only route to a payload is `cast` -- which unwraps -- including
+;; the implicit one an `is?` guard elaborates to, `(let [x (cast x T)] ...)`.
+;; The `route-num` line below exercises exactly that narrowing path, and the
+;; `vec-len` / `vec-get` lines prove the handle still works after the round trip
+;; rather than merely reporting a nicer name.
+;;
+;; No requires.compiled: agreement between the back ends IS the assertion.
+
+(defopaque Route :int)
+
+(defn a-vec   [] : any (vec-of 1 2 3))
+(defn a-map   [] : any (hamt-of 1 2))
+(defn a-route [] : any (:: 7 Route))
+(defn an-int  [] : any 7)
+(defn a-fn    [] : any (fn [x : int] : int x))
+
+(defn route-num [r : Route] : int (:: r int))
+
+(defn main [] : int
+  (println (type-of (a-vec)))
+  (println (type-of (a-map)))
+  (println (type-of (a-route)))
+  ;; Not boxed: a primitive's runtime tag was always the right answer, and a
+  ;; closure answers through the fn-signature path.
+  (println (type-of (an-int)))
+  (println (type-of (a-fn)))
+
+  ;; Both directions of the test that used to disagree.
+  (println (if (is? (a-vec) (Vec int)) 1 0))
+  (println (if (is? (a-vec) int) 1 0))
+
+  ;; The handle survives the round trip and is still usable.
+  (println (vec-len (cast (a-vec) (Vec int))))
+  (println (vec-get (cast (a-vec) (Vec int)) 1))
+
+  ;; ... and through an `is?` guard, whose narrowing is an implicit cast.
+  (let [r (a-route)]
+    (if (is? r Route)
+      (println (route-num r))
+      (println 0)))
+  0)

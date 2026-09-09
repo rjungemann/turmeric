@@ -1,0 +1,34 @@
+#lang saffron
+;; saffron-lang-plan S1: `#lang saffron` is accepted, and compiles the file
+;; EXACTLY as `#lang turmeric` does.
+;;
+;; (The directive must be the first line -- detect_lang skips spaces and tabs
+;; before it, not comments -- so these notes sit under it rather than above.)
+;;
+;; S1 wires the language axis and its experiment gate only; the dialect selects
+;; no semantics yet.  That is the point of the stage: prove the axis parses,
+;; threads onto SourceFile, gates on its experiment and warns once, before any
+;; behaviour hangs off it.  So this program is ordinary Turmeric, annotations
+;; and all (D2: annotations stay legal in Saffron), and must produce identical
+;; output under both back ends and under either #lang line.
+;;
+;; The `#lang` line IS the enable: `saffron` is an EXPERIMENTS[] row, and the
+;; directive turns it on for this file at CLI precedence -- the same
+;; relationship a semantic `#lang` layer has to its experiment (D9).  So no
+;; --enable flag is needed here, and TUR-W0060 (the prototype lifecycle
+;; warning) is emitted once on stderr, which this fixture deliberately does not
+;; assert: that text belongs to the experiment machinery, not to Saffron.
+
+(defn add [x : int y : int] : int (+ x y))
+
+(defn describe [n : int] : cstr
+  (if (> n 40) "big" "small"))
+
+(defn main [] : int
+  (println (add 1 41))
+  (println (describe 42))
+  (println (describe 1))
+  ;; A float, so a reader or numeric-tower surprise would show here rather than
+  ;; the fixture only ever exercising ints.
+  (println (* 2.5 4.0))
+  0)

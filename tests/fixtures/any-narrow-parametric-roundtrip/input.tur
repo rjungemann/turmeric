@@ -1,0 +1,35 @@
+;; any-narrowing-broken-for-parametric-receivers: the round trip through `any`
+;; for a PARAMETRIC payload.  Widening an (Option float) interns its box id by
+;; the per-instantiation key, so an `is?` / `cast` target written as a bare
+;; `Option` resolved to the head -- a different key, an id no widen ever mints.
+;; `(is? x Option)` was silently false and `(cast x Option)` panicked with
+;; "cast: any holds Option, not Option".
+;;
+;; Both now take the APPLIED target, which resolves to the same TY_APP the
+;; widen interned.  This is the type-case idiom on an HKT receiver: test, then
+;; narrow, then use the typeclass method -- previously unreachable from `any`.
+;;
+;; UPDATED 2026-09-08: `dyn-double`'s body used to repeat the target in an
+;; explicit `(cast x (Option float))`, because the `if`-guard narrowed only a
+;; BARE target -- so the guard proved the type and then handed the branch an
+;; `any` anyway.  The guard now narrows an applied target too, which makes that
+;; cast REDUNDANT, and a redundant cast is an error ("`cast` expects an
+;; `any`-typed first argument, got `(type-app Option float)`") -- exactly as it
+;; already was for a bare target, where `(if (is? x Circle) (r (cast x Circle)))`
+;; has always been refused.  So this fixture now shows the idiom the two shapes
+;; share, rather than the workaround one of them needed.
+;;
+;; 7.1, not 7.0: a float payload rides the box as its IEEE-754 bit pattern, so
+;; an integral literal could not show a botched reinterpret on the way back.
+(defn boxed [] : any (Some 7.1))
+
+(defn dyn-double [x : any] : float
+  (if (is? x (Option float))
+    (unwrap-or (fmap x (fn [v : float] : float (* v 2.0))) 0.0)
+    0.0))
+
+(defn main [] : int
+  (println (if (is? (boxed) (Option float)) 1 0))
+  (println (unwrap-or (cast (boxed) (Option float)) 0.0))
+  (println (dyn-double (boxed)))
+  0)

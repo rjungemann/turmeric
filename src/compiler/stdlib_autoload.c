@@ -70,8 +70,55 @@ static const char *const autoload_files_[] = {
  * tur_stdlib_prepend_forms reads the list through this accessor -- reading the
  * raw array there once made the single-file path disagree with project mode
  * about what was in scope. */
+/* saffron-lang-plan S6: when the ENTRY file is `#lang saffron`, the same list
+ * with `saffron/prelude.tur` appended.
+ *
+ * COPIED from `autoload_files_` at first use rather than written out a second
+ * time, so a file added to the base list is picked up here with no second edit
+ * -- the drift this file already guards against in the other direction (reading
+ * the raw array instead of the accessor made the single-file path disagree with
+ * project mode about what was in scope).
+ *
+ * The prelude goes LAST so every stdlib name it adapts -- `Vec`, `Map`,
+ * `Option`, the typeclasses -- is already in scope when it is read.
+ *
+ * Built once and never mutated after: `g_saffron_prelude` selects between two
+ * finished lists, so what a compile loads cannot depend on what ran before it
+ * in the same process. */
+static const char *autoload_files_saffron_[64];
+
 const char *const *tur_stdlib_autoload_files(void) {
-    return autoload_files_;
+    if (!g_saffron_prelude) return autoload_files_;
+    if (!autoload_files_saffron_[0]) {
+        size_t n = 0;
+        while (autoload_files_[n] != NULL &&
+               n + 2 < sizeof(autoload_files_saffron_) /
+                       sizeof(autoload_files_saffron_[0])) {
+            autoload_files_saffron_[n] = autoload_files_[n];
+            n++;
+        }
+        autoload_files_saffron_[n++] = "saffron/prelude.tur";
+        autoload_files_saffron_[n]   = NULL;
+    }
+    return (const char *const *)autoload_files_saffron_;
+}
+
+void tur_source_file_apply_lang_header(SourceFile *sf, const char *whole_src,
+                                       size_t whole_len) {
+    if (!sf || !whole_src) return;
+    const char  *rest    = whole_src;
+    size_t       rest_len = whole_len;
+    LangLayerSet lay      = 0;
+    LangDialect  dl       = LANG_TURMERIC;
+    ReaderType   rt = detect_lang_dialect(whole_src, whole_len, &rest, &rest_len,
+                                          &lay, NULL, NULL, &dl);
+    if (rest == whole_src || !reader_type_is_implemented(rt)) return;
+    sf->src         = (char *)rest;
+    sf->len         = rest_len;
+    sf->head_offset = (size_t)(rest - whole_src);
+    sf->reader_type = rt;
+    sf->lang        = dl;
+    sf->lang_layers = lay;
 }
 
 static const char *basename_of(const char *path) {
@@ -168,6 +215,11 @@ uint32_t tur_stdlib_prepend_forms(Arena *arena, SymbolTable *st,
         stdlib_file->len = stdlib_len;
         stdlib_file->file_id = (*file_id_in_out)++;
         stdlib_file->reader_type = READER_TURMERIC;
+        /* saffron-lang-plan S6: honour a `#lang` line in a stdlib file.  The
+         * Saffron prelude has one -- its own bodies use D4 truthiness, a hard
+         * error under the Turmeric dialect.  Shared with load_project_prelude;
+         * see the helper's comment for why it is shared. */
+        tur_source_file_apply_lang_header(stdlib_file, src_copy, stdlib_len);
         diag_register_file(stdlib_file);
 
         uint32_t n = 0;

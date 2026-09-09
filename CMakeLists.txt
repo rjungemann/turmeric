@@ -161,6 +161,22 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 
+# saffron-lang-plan S8: the LSP analyses a `#lang saffron` buffer as Saffron --
+# a valid one reports nothing, a broken one reports.  True today by inheritance
+# (the LSP compiles a temp file and `#lang` detection is content-based) rather
+# than by design: the LSP never mentions the dialect.  Two other entry points
+# have already been caught hardcoding READER_TURMERIC and breaking on `#lang`,
+# so this pins the third.  Drives a live server because diagnostics are
+# published asynchronously -- a session that exits first reports nothing, which
+# looks exactly like a clean file, so the script asserts a BROKEN buffer
+# reports before it believes a clean one.
+add_test(
+  NAME lsp_saffron_diagnostics
+  COMMAND bash tests/lsp/run-saffron-diagnostics.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(lsp_saffron_diagnostics PROPERTIES TIMEOUT 300)
+
 add_test(NAME source_literal_unit COMMAND tur_source_literal_unit)
 
 add_test(
@@ -714,6 +730,52 @@ add_test(
   COMMAND bash tests/run-hamt-owned-keys.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# saffron-lang-plan S7 / D5, reverse direction: a Turmeric module importing a
+# Saffron one.  The import path hardcoded READER_TURMERIC and never ran `#lang`
+# detection, so a Saffron module could not be imported at all -- the directive
+# reached the reader as source.  Needs its own runner because a multi-module
+# fixture requires a dedicated runner anyway.
+add_test(
+  NAME tur_saffron_import
+  COMMAND bash tests/run-saffron-import.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# tur-init-help-scaffolds-and-overwrites: `tur init` must never destroy a
+# working tree.  `tur init --help` did not print help -- the flag fell past the
+# project-name slot, the cwd basename was used as the name, and scaffolding
+# overwrote an existing .gitignore and README.md.  Nothing in the suite ran
+# `tur init` in a directory whose contents it cared about (run-tur-new.sh and
+# run-sweet-manifest.sh both scaffold inside mktemp -d), which is why nothing
+# caught it.
+add_test(
+  NAME tur_init_no_clobber
+  COMMAND bash tests/run-init-no-clobber.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# interp-inline-c-opaque-segv-in-any-reflection: `any` reflection over an
+# inline-C `defopaque` value under --interpret.  `type-of` on such a value used
+# to SEGFAULT -- the inline-C result path re-tags a TURI_INT as TURI_STRUCT when
+# the declared return type is TY_ADT, and an opaque IS a TY_ADT, so the payload
+# 7 became a `TuriStruct *` of 0x7.  Needs its own runner rather than a fixture:
+# tests/run-turi.sh PASS-skips every program with a user inline-C block (the TI7
+# carve-out), which is exactly why nothing caught the crash.
+add_test(
+  NAME tur_interp_inline_c_opaque
+  COMMAND bash tests/run-interp-inline-c-opaque.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# turi-show-instance-with-inline-c-body-prints-a-pointer: a USER `Show [float]`
+# whose `show` body is inline-C printed a heap pointer under --interpret with no
+# diagnostic.  The interpreter's stdlib natives are registered under the mangled
+# instance names (`__inst_Show_show_float`) and the "keep native override"
+# branch kept one for ANY same-named impl -- so the user's cstr-returning method
+# ran stdlib's owned-String native.  Same reason as above for a dedicated
+# runner: run-turi.sh PASS-skips every inline-C program.
+add_test(
+  NAME tur_interp_show_inline_c
+  COMMAND bash tests/run-interp-show-inline-c.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Prereq 2a (turi-open-reports-prereqs.md / turi-map-set-hamt-interpreter-gap.md):
 # the context-carrying key comparator family (tur_hamt_*_eq_ctx) that lets a
 # stateful/turi-closure comparator ride along via a `void *ctx` word.  Compiles
@@ -772,6 +834,18 @@ add_test(
 add_test(
   NAME tur_result_typedef_multi_module
   COMMAND bash tests/run-result-typedef-multi-module.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# any-type-ids-are-per-tu: an `any` box id used to be this TU's intern INDEX,
+# so two translation units numbered the same type differently and a value
+# widened in one module was misidentified in another (type-of, is?, cast, and
+# the drop's boxed flag all read the wrong row).  `tur build <dir>` inlines
+# every module into one TU and hides it, which is why every existing `any`
+# fixture missed this -- so the pin drives separate compilation.  See
+# docs/archive/any-type-ids-are-per-tu.md.
+add_test(
+  NAME tur_any_type_id_multi_module
+  COMMAND bash tests/run-any-type-id-multi-module.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # Sweet-exp manifest support: verifies build.tur.sweet is treated as a
@@ -883,6 +957,39 @@ add_test(
   COMMAND bash tests/turi/repl-spice-load.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# saffron-lang-plan S8: the REPL as a Saffron session -- by `--lang saffron`,
+# and by `#lang saffron` typed at the prompt (which was accepted and silently
+# ignored: the handler read only the READER axis).  The probe is a float add
+# through an unannotated defn, since `(add 1 2)` is 3 under either dialect.
+add_test(
+  NAME tur_repl_lang_saffron
+  COMMAND bash tests/turi/repl-lang-saffron.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_repl_lang_saffron PROPERTIES TIMEOUT 300)
+# saffron-lang-plan S8: `tur init --saffron` scaffolds a project that BUILDS.
+# The assertion is the build, not the file text: checking for a `#lang` line
+# would have passed while the LIBRARY scaffold could not compile at all
+# (load_project_prelude hardcoded READER_TURMERIC, so the autoloaded Saffron
+# prelude died on its own first line).
+add_test(
+  NAME tur_init_saffron
+  COMMAND bash tests/run-init-saffron.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_init_saffron PROPERTIES TIMEOUT 300)
+# saffron-lang-plan S8: the editor syntax packs.  The vim half is ACTUALLY
+# LOADED in a real Vim and queried for highlight groups -- which is what caught
+# the fused-vs-spaced annotation bug.  The vscode half is structure and pattern
+# checks only: there is no TextMate engine here, so it validates the JSON, that
+# the grammar is wired into package.json, and each regex against inputs it must
+# and must not match.  Skips cleanly without vim or python3.
+add_test(
+  NAME tur_editor_syntax
+  COMMAND bash tests/run-editor-syntax.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_editor_syntax PROPERTIES TIMEOUT 300)
 # RP4: integration test for the FFI binding layer. Builds a fixture
 # spice with several signature shapes and calls each export from the
 # REPL, asserting correct results, qualified-name routing, and clear

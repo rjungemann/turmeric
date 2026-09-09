@@ -1,0 +1,30 @@
+#lang saffron
+;; saffron-lang-plan S5/D4: the compiled dynamic operator set is BOUNDED, and
+;; the boundary is reported rather than guessed at.
+;;
+;; The two back ends get here by opposite routes.  The interpreter resolves a
+;; dynamic operator by calling `builtin_lookup` with the TypeKind read off the
+;; value's own tag and then running `eval_builtin` -- so it inherits the whole
+;; builtin table for free, and `(cons x 0)` with `x : any` just works.  A
+;; compiled program carries no builtin table, so the compiled half enumerates
+;; its operators, and it enumerates the scalar ones: arithmetic, the bit
+;; operators, comparison, `not`, truthiness (`and` / `or` / `if`) and `println`.
+;;
+;; `cons` is outside that set on purpose -- it builds a linked structure, and
+;; containers that can hold dynamic values are S6's subject, not S5's.  So this
+;; is the shape of the remaining gap, and the diagnostic names the operator and
+;; points at the interpreter, which runs this program today.
+;;
+;; Guessing would be a miscompile rather than a missing feature: the arguments
+;; are `tur_tagged_t` boxes, so emitting the static operator would build a cons
+;; cell out of tag words.  That is why S3 introduced a distinct EX_DYN_OP node
+;; instead of a flag on EX_BUILTIN -- the emitter cannot mistake one for a
+;; statically-resolved operator.
+;;
+;; requires.compiled: the assertion is precisely that the COMPILED back end
+;; refuses.  Under --interpret this program builds the cell and prints 1, so
+;; run-turi.sh must not look for the diagnostic here.
+(defn dyn [x] x)
+(defn main [] : int
+  (println (cons (dyn 1) 0))
+  0)

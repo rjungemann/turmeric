@@ -1,0 +1,42 @@
+;; byvalue-recursive-adt-boxes-are-never-freed: a self-recursive by-value ADT
+;; allocates one box per link and used to free none of them.
+;;
+;; The recursive `tl` field cannot ride the int64 carrier and cannot contain the
+;; aggregate inline, so its slot holds a pointer to a heap copy -- N links, N
+;; allocations. `needs_drop_glue` is set only for rc/ref/weak fields, so such a
+;; field was owning in the allocation sense and unnamed in the ownership model.
+;; Measured before the fix: 3 cells / 3 allocations, 5 cells / 5, linear.
+;;
+;; A DIRECT self-reference now points the field's `drop_inner_def` at its own
+;; def, which makes the emitted drop glue recursive -- exactly the walk a spine
+;; needs -- and a non-escaping local frees that spine at scope exit through
+;; `drop_recspine_<T>(&xs)`, the twin of the boxed-fn-field drop beside it.
+;;
+;; `:copy` IS THE SOUNDNESS LINE and it is measured, not assumed. Drop glue
+;; makes a type move-only, and that move discipline is what guarantees the
+;; single owner this free depends on: the shared-tail program
+;;
+;;     (let [t (Cons 3 (Nil))  a (Cons 1 t)  b (Cons 2 t)] ...)
+;;
+;; is already TUR-E0201 "cannot copy unique value 't'" here. Under `:copy` the
+;; same program compiles and the emitted C shows both boxes carrying the SAME
+;; tail pointer, so a per-chain free would free it twice. So `:copy` recursive
+;; ADTs keep the leak, and `with-region` (which reclaims the spine wholesale,
+;; verified) is the answer there.
+;;
+;; requires.leak-check: the assertion is about allocation, not output. The
+;; printed value would be the same either way, which is exactly why this shape
+;; leaked unnoticed.
+
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn main [] : int
+  ;; Consumed by an INLINE match, so the local is never moved into a callee and
+  ;; the scope still owns the spine when it exits. Passing it to a helper hands
+  ;; ownership to that callee instead, which nothing discharges yet -- the
+  ;; residue the report tracks.
+  (let [xs (Cons 1 (Cons 2 (Cons 3 (Nil))))]
+    (println (match xs
+               (Cons h t) h
+               (Nil)      0)))
+  0)

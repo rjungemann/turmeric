@@ -1,0 +1,22 @@
+#lang saffron
+;; saffron-lang-plan S7 / D5, the other half: the seam CHECKS, so a wrong type
+;; panics rather than reinterpreting the payload word.
+;;
+;; Erasing at the boundary would be faster and would turn this program into a
+;; memory-safety bug -- `takes-int` would read a `const char *` as an `int64_t`.
+;; The check is one tag compare, and the message is the ordinary
+;; `cast: any holds cstr, not int` because the seam reuses the same
+;; `elab_any_unbox_to` node a hand-written `cast` lowers to.
+;;
+;; The `before` line is printed FIRST so the fixture proves the program ran up
+;; to the seam and panicked there, rather than failing to start.
+;;
+;; expected.exit `nonzero`: a panic aborts.
+
+(defn takes-int [x : int] : int (+ x 1))
+
+(defn main []
+  (println "before")
+  (let [v ["not-an-int"]]
+    (println (takes-int (vec-get v 0))))
+  0)

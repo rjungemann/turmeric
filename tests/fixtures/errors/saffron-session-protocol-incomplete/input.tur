@@ -1,0 +1,14 @@
+#lang saffron
+;; saffron-lang-plan D7: session protocols still check in a Saffron file.
+;;
+;; The protocol lives in the ANNOTATION, and D2 keeps annotations legal in
+;; Saffron, so the channel's type is `Session[Send[int, Close]]` here exactly
+;; as it would be in Turmeric -- `any` never touches it.  Measured: the same
+;; TUR-E0211, naming the same protocol state.
+;;
+;; See tests/fixtures/saffron-static-guarantees-still-hold for why this is
+;; pinned: D7's first draft would have removed the feature outright.
+
+(defn go [c : (Session (Send int Close))] 0)
+
+(defn main [] 0)

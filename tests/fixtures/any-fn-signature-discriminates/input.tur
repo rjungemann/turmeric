@@ -1,0 +1,48 @@
+;; any-fn-tag-does-not-discriminate-signatures: `is?` / `cast` on an `any`
+;; holding a function used to be a test that every function passed.
+;;
+;; The box carried the bare TY_FN TypeKind -- one number every function value in
+;; the program shares -- so `is?` lowered to `TUR_GETTAG(v) == 7` and answered
+;; TRUE for the wrong parameter types, the wrong arity and the wrong result
+;; alike.  `cast` inherited the same non-check and handed the payload back typed
+;; as whatever was asked for, so calling it was undefined behaviour reached
+;; without a diagnostic.  The two back ends did not even agree on the (wrong)
+;; answer: compiled said true, the interpreter said false for EVERY function
+;; including the correct signature, because a closure had no arm in its
+;; tag->kind switch at all.
+;;
+;; A fn payload now interns a per-SIGNATURE id from `tur_fn_type_key` -- the
+;; same "(fn [int] : int)" spelling `type_name` renders -- and the interpreter
+;; reconstructs that key from the closure's FnDef, so both paths compare the
+;; same string.  This fixture runs on BOTH back ends deliberately: the
+;; divergence survived precisely because nothing compared them on a function
+;; payload.
+;;
+;; What is still coarse, and is asserted nowhere because it would be asserting a
+;; limitation: `Type.as.fn.arg_kinds` is a vector of TypeKinds, so `(-> Pt int)`
+;; and `(-> Qt int)` share a key, and a `& rest` does not appear in the
+;; spelling.  Both back ends are coarse the same way, so they still agree.
+;;
+;; The float arm uses 7.1 / 2.5, not integral literals: the payload rides the
+;; `any` box as an IEEE-754 bit pattern, so an integral value would not
+;; distinguish a correct unbox from a truncating one.
+(defn mk [] : any (fn [x : int] : int (+ x 1)))
+(defn mk-f [] : any (fn [x : float] : float (* x 2.5)))
+
+(defn main [] : int
+  ;; type-of still answers "fn" on both paths (type-of-on-boxed-closure-diverges):
+  ;; the id discriminates signatures, the NAME does not change.
+  (println (type-of (mk)))
+  ;; wrong parameter and result types
+  (println (if (is? (mk) (-> cstr cstr)) 1 0))
+  ;; wrong arity
+  (println (if (is? (mk) (-> int int int)) 1 0))
+  ;; right arity, wrong types
+  (println (if (is? (mk-f) (-> int int)) 1 0))
+  ;; the correct signature still matches ...
+  (println (if (is? (mk) (-> int int)) 1 0))
+  ;; ... and still casts back to something callable, which is the capability
+  ;; this fix had to keep.
+  (println ((cast (mk) (-> int int)) 41))
+  (println ((cast (mk-f) (-> float float)) 7.1))
+  0)

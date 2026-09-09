@@ -1,0 +1,27 @@
+;; any-type-ids-are-per-tu: the module that MINTS the `any` box ids.
+;;
+;; Alpha exists only to be interned here and nowhere else, so this TU's
+;; first-seen ordering differs from main's -- which is what the old
+;; `TUR_ANY_ID_BASE + index` scheme turned into disagreeing ids.
+(defmodule producer
+  (export make-beta make-heap make-fn Beta HeapThing)
+
+  (defstruct Alpha [a : int])
+  ;; By-value: heap-boxed at the widen, so its row must say boxed.
+  (defstruct Beta [b : int])
+  ;; :heap: the handle rides the tag's value word and owns nothing here, so its
+  ;; row must say NOT boxed.  When the two TUs disagreed about which id was
+  ;; which, main's drop read Beta's boxed flag for a HeapThing handle and
+  ;; free()d memory this module owns.
+  (defstruct HeapThing :heap [x : int])
+
+  (defn seed [] : any (make-struct Alpha 1))
+  (defn make-beta [] : any (make-struct Beta 7))
+  (defn make-heap [] : any (make-struct HeapThing 11))
+  ;; any-fn-tag-does-not-discriminate-signatures: a FUNCTION payload interns a
+  ;; per-signature id through this same registry, so it has to survive separate
+  ;; compilation for the same reason a struct does -- and it is minted from a
+  ;; different key (`type_name` of the TY_FN, not an ADT name), which is the
+  ;; part worth pinning across TUs.  Not boxed: a closure rides the tag's value
+  ;; word, so its row must say 0 or a drop next door frees it.
+  (defn make-fn [] : any (fn [x : int] : int (+ x 1))))

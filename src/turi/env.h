@@ -364,6 +364,12 @@ typedef struct TuriEnv {
      * so reader layers (e.g. `stringed` => #s"...") stay active across the
      * accumulated <eval> blob.  Reset alongside reader_type on a #lang switch. */
     LangLayerSet lang_layers;
+    /* saffron-lang-plan S1: the LANGUAGE axis of the session, the twin of
+     * reader_type above.  Sticky across an eval session the same way the reader
+     * is: a `#lang saffron` blob keeps the dialect for the blobs that follow it
+     * (the REPL is one long session), so it is set when a directive names one
+     * and never silently reset to Turmeric by a later directive-free blob. */
+    LangDialect  lang;
     /* Base directory for resolving module imports (NULL = ".").
      * Set this before turi_eval_file when the input uses (import ...). */
     const char  *module_base_dir;
@@ -579,6 +585,11 @@ void turi_env_reset_to_prelude(TuriEnv *env);
  * re-register their dispatches on the next read via
  * lang_layers_apply_readers.  A no-op when nothing changes.  Used by the
  * REPL `#lang` handler and the WASM set-lang entry point. */
+/* saffron-lang-plan S8: apply a reader AND language switch.  The plain
+ * turi_env_apply_lang below keeps the session's current dialect, so an
+ * existing caller is unchanged. */
+void turi_env_apply_lang_dialect(TuriEnv *env, ReaderType reader_type,
+                                 LangLayerSet layers, LangDialect dialect);
 void turi_env_apply_lang(TuriEnv *env, ReaderType reader_type,
                          LangLayerSet layers);
 

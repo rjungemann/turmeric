@@ -1,0 +1,33 @@
+#lang saffron
+;; saffron-lang-plan D6: a refinement in a Saffron file becomes a RUNTIME
+;; CONTRACT, checked -- not an error, and not a silent drop.
+;;
+;; `#refine{x : int | (> x 0)}` needs a static base type and an SMT discharge,
+;; and an `any` has neither.  The language already ships the dynamic answer
+;; (stdlib/contract.tur), so the predicate stays in the source where a reader
+;; can see it and is checked at run time.  The plan is explicit that the one
+;; thing which must NOT happen is a refinement being accepted and IGNORED --
+;; that would make a Saffron file look like it carries a guarantee it does not.
+;;
+;; The INTERPRETER already did this correctly.  The compiled path emitted
+;; uncompilable C:
+;;
+;;   error: incompatible type for argument 1 of 'tur_contract_check'
+;;          ... tur_tagged_t
+;;
+;; because a predicate over an `any` is a dyn-op returning `any` while
+;; `tur-contract-check` takes a `bool`.  D4's truthiness is the same answer
+;; `if` already uses for the same question, so the two now share one helper
+;; (`elab_saffron_truthy`) rather than the contract path growing its own.
+;;
+;; This is the PASSING half; tests/fixtures/saffron-refinement-violated is the
+;; other one.  A fixture that only checked the passing case would also pass if
+;; the predicate were dropped entirely, which is exactly the failure D6 warns
+;; about -- so the pair is the assertion, not either half alone.
+
+(defn pos [x : #refine{v : any | (> v 0)}] x)
+
+(defn main []
+  (println (cast (pos (:: 5 any)) int))
+  (println (cast (pos (:: 1 any)) int))
+  0)

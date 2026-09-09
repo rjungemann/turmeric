@@ -1,0 +1,46 @@
+#lang saffron
+;; saffron-lang-plan S4/D4 (G11): dynamic field access, and the D5 seam.
+;;
+;; `(.x p)` with `p : any` had exhausted both static routes -- there is no
+;; record field on `any`, and no typeclass instance for `.x` -- so it was "no
+;; typeclass method found for 'x'".  In Saffron the receiver's type is whatever
+;; arrived, so the field is resolved then, against the value's own constructor.
+;;
+;; `get-x` below is called with two UNRELATED struct types.  That is the point:
+;; duck typing, where the field name is the whole contract, and it is what a
+;; static `.x` cannot express without a typeclass.
+;;
+;; The second half covers the Saffron -> Turmeric SEAM (D5).  `takes-int` has a
+;; real signature, and a Saffron caller holds `any`.  D5 weighed three options
+;; and chose gradual typing with a RUNTIME CHECK: rejecting unless the caller
+;; annotates is safe and unusable, and erasing -- passing the payload word
+;; through unchecked -- turns a type error into a memory-safety bug, because
+;; the word is whatever the box happened to hold.  The check reuses the node
+;; `(cast x T)` lowers to, so a wrong type panics with the ordinary cast
+;; message rather than reinterpreting the payload.  The panic case is in
+;; errors/saffron-seam-wrong-type; this fixture asserts the value passes
+;; through when it IS the right type.
+;;
+;; S5 compiles the field read as an if/else chain over the box id, one arm per
+;; type in the program that HAS a field of this name -- the emit-time analogue
+;; of the interpreter's run-time name scan.  Worth stating plainly: the
+;; interpreter's version is OPEN (any struct with the right field works) and the
+;; compiled one is CLOSED over the program, which is inherent to compiling
+;; rather than a shortcut.  For a single program the two sets coincide, which is
+;; why this fixture can assert the same output from both.
+
+(defstruct Pt   [x : int  y : int])
+(defstruct Name [x : cstr])
+
+(defn get-x [p] (.x p))
+
+(defn takes-int [n : int] : int (+ n 1))
+(defn dyn [v] v)
+
+(defn main [] : int
+  ;; One function, two unrelated receivers, resolved by field name.
+  (println (get-x (make-struct Pt 3 4)))
+  (println (get-x (make-struct Name "hi")))
+  ;; A dynamic value crossing into a typed callee, checked at the seam.
+  (println (takes-int (dyn 41)))
+  0)

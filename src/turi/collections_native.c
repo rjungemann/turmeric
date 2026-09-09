@@ -292,6 +292,9 @@ static void set_buf_destroy(void *box) {
  * in a field.  A non-empty map therefore reports its enumeration incomplete
  * (return false), which makes the sweep mark-only for that cycle: nothing is
  * freed on the strength of a scan that might have missed a reference. */
+/* map-of-any-is-broken-on-both-back-ends: defined with the map natives below;
+ * the sweep needs it here. */
+static TuriValue map_val_read(const Hamt *m, void *w);
 static bool set_buf_scan(void *box, TuriCollBufMarkFn mark, void *ctx) {
     void **s = (void **)box;
     Hamt *h = (Hamt *)s[0];
@@ -302,7 +305,10 @@ static bool set_buf_scan(void *box, TuriCollBufMarkFn mark, void *ctx) {
     void *k, *val;
     while (tur_hamt_iter_next(&it, &hash, &k, &val)) {
         mark(turi_int((int64_t)(intptr_t)k), ctx);
-        mark(turi_int((int64_t)(intptr_t)val), ctx);
+        /* map-of-any-is-broken-on-both-back-ends: mark the VALUE a boxed map
+         * holds, not its box address -- a handle stored in a boxed-value map
+         * would otherwise never be seen by the sweep. */
+        mark(map_val_read(h, val), ctx);
     }
     tur_hamt_iter_free(&it);
     return false;
@@ -658,6 +664,85 @@ static bool map_turi_eq_tramp(int64_t a, int64_t b, void *vctx) {
     return false;
 }
 
+/* ---- map-of-any-is-broken-on-both-back-ends: the interpreter's Map value tag.
+ *
+ * A map value went into the HAMT as a bare `(void *)a[i].as_int`, so its TAG
+ * was dropped at the STORE and every read came back `turi_int` of the raw
+ * carrier word.  A homogeneous map survived that anyway -- `map-get-eq-o`
+ * returns the tyvar `:V`, so the read-back is an EX_ASCRIBE that re-tags the
+ * carrier from the STATIC element type.  `any` is exactly the element type with
+ * no static type to recover from, so a `(Map K any)` reported `int` for every
+ * value, with no diagnostic.
+ *
+ * The fix is the one the COMPILED path already uses, which is why it is this
+ * one and not a side table: box the value and set bit 1 of the HAMT's `owned`
+ * flag.  The runtime then owns the box -- retained on structural copy, released
+ * when the entry dies -- and stamps `val_owned` on the resulting map, so a
+ * reader asks the map itself whether its values are boxed.  (A per-entry tag
+ * side table, the Vec analogue, does not transfer: the Vec table keys on the
+ * header pointer plus an ELEMENT INDEX, and a persistent trie exposes no stable
+ * index -- and a table keyed on the map would have to be copied on every assoc,
+ * which is the cost the HAMT exists to avoid.)
+ *
+ * Boxing is NOT unconditional.  An int-valued map is byte-identical to before:
+ * no box, no `val_owned`, the raw carrier inline.  A map boxes from the first
+ * non-int value, and once boxed stays boxed (so it is never half-boxed), which
+ * confines the change to the maps that are broken today.
+ *
+ * `EX_ASCRIBE` coerces only on a TAG MISMATCH, so returning a properly-tagged
+ * value does not disturb the homogeneous read that used to depend on the
+ * re-tag: `(:: (map-get m k) :float)` on a TURI_FLOAT is transparent.  Same
+ * reason the Vec element-tag fix composed with its ascription.
+ */
+static bool map_val_needs_box(TuriValue v) { return v.tag != TURI_INT; }
+
+static void *map_val_box(TuriValue v) {
+    return tur_hamt_box_key((const void *)&v, sizeof(TuriValue));
+}
+
+/* Read one value word back as the TuriValue it was stored as.  `m` is the map
+ * the word came out of: an unboxed map yields the raw carrier int, exactly as
+ * before. */
+static TuriValue map_val_read(const Hamt *m, void *w) {
+    if (!m || !m->val_owned) return turi_int((int64_t)(intptr_t)w);
+    if (!w) return turi_int(0);
+    TuriValue v;
+    memcpy(&v, w, sizeof v);
+    return v;
+}
+
+/* Rebuild `src` with every value boxed, so a map that has been storing raw int
+ * carriers can accept its first non-int value without ending up half-boxed.
+ * Runs at most once per map lineage -- every later assoc sees `val_owned`.
+ *
+ * `src` is persistent and may be held elsewhere, so this builds a NEW map and
+ * leaves `src` untouched and readable.  Every existing value is a raw int
+ * carrier by construction (an unboxed map only ever stored TURI_INT), so
+ * `turi_int(word)` is the value that was put in.
+ *
+ * Declines for an OWNED (boxed) key: re-inserting an existing key box into a
+ * second map would need a retain this does not do, and a scalar key is the case
+ * that matters -- int, cstr and Sym keys all report `mk-owned? = 0`, so
+ * `(Map int any)` and `#map{:a 1 :b "two"}` are covered.  A struct-keyed map
+ * whose first value is an int and whose second is not stays as it was.  Returns
+ * NULL when it declines. */
+static Hamt *map_upgrade_to_boxed(Hamt *src, tur_hamt_keyeq_fn eq, int64_t owned) {
+    if (owned & 1) return NULL;
+    Hamt *dst = tur_hamt_new();
+    if (!dst) return NULL;
+    HamtIter it;
+    tur_hamt_iter_init(&it, src);
+    uint64_t h; void *k, *v;
+    while (tur_hamt_iter_next(&it, &h, &k, &v)) {
+        void *box = map_val_box(turi_int((int64_t)(intptr_t)v));
+        Hamt *old = dst;
+        dst = tur_hamt_set_eq_o(dst, h, k, box, eq, owned | 2);
+        if (old != dst) tur_hamt_free(old);
+    }
+    tur_hamt_iter_free(&it);
+    return dst;
+}
+
 static TuriValue native_map_assoc_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     /* (m h key val keyeq owned) */
@@ -671,11 +756,29 @@ static TuriValue native_map_assoc_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, voi
                                       map_turi_eq_tramp, &ctx);
         return set_wrap_owned(e, src, r);
     }
+    /* map-of-any-is-broken-on-both-back-ends: box the value (and upgrade an
+     * already-populated raw map) so its tag survives the store. */
+    tur_hamt_keyeq_fn keyeq = (tur_hamt_keyeq_fn)(intptr_t)a[4].as_int;
+    int64_t owned = (int64_t)a[5].as_int;
+    Hamt *base = src, *upgraded = NULL;
+    bool box_val = (src && src->val_owned) || map_val_needs_box(a[3]);
+    if (box_val && src && !src->val_owned && tur_hamt_count(src) > 0) {
+        upgraded = map_upgrade_to_boxed(src, keyeq, owned);
+        if (upgraded) base = upgraded; else box_val = false;
+    }
+    if (box_val) {
+        Hamt *r = tur_hamt_set_eq_o(base, (uint64_t)a[1].as_int,
+                                    (void *)(intptr_t)a[2].as_int,
+                                    map_val_box(a[3]), keyeq, owned | 2);
+        TuriValue out = set_wrap_owned(e, base, r);
+        /* The upgrade's own reference is ours; the result holds its own. */
+        if (upgraded && r != upgraded) tur_hamt_free(upgraded);
+        return out;
+    }
     Hamt *r = tur_hamt_set_eq_o(src, (uint64_t)a[1].as_int,
                                 (void *)(intptr_t)a[2].as_int,
                                 (void *)(intptr_t)a[3].as_int,
-                                (tur_hamt_keyeq_fn)(intptr_t)a[4].as_int,
-                                (int64_t)a[5].as_int);
+                                keyeq, owned);
     return set_wrap_owned(e, src, r);
 }
 static TuriValue native_map_get_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
@@ -687,13 +790,13 @@ static TuriValue native_map_get_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void 
         void *v = tur_hamt_get_eq_ctx(set_hamt(a[0]), (uint64_t)a[1].as_int,
                                       (void *)(intptr_t)a[2].as_int,
                                       map_turi_eq_tramp, &ctx);
-        return turi_int((int64_t)(intptr_t)v);
+        return map_val_read(set_hamt(a[0]), v);
     }
     void *v = tur_hamt_get_eq_o(set_hamt(a[0]), (uint64_t)a[1].as_int,
                                 (void *)(intptr_t)a[2].as_int,
                                 (tur_hamt_keyeq_fn)(intptr_t)a[3].as_int,
                                 (int64_t)a[4].as_int);
-    return turi_int((int64_t)(intptr_t)v);
+    return map_val_read(set_hamt(a[0]), v);
 }
 static TuriValue native_map_has_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -742,10 +845,27 @@ static TuriValue native_map_assoc_eq(TuriEnv *e, TuriValue *a, uint32_t n, void 
                                       map_turi_eq_tramp, &ctx);
         return set_wrap_owned(e, src, r);
     }
+    /* map-of-any-is-broken-on-both-back-ends: same value boxing as the _o twin.
+     * This family carries no key-ownership flag, so `owned` is 0 (bit 1 only). */
+    tur_hamt_keyeq_fn keyeq = (tur_hamt_keyeq_fn)(intptr_t)a[4].as_int;
+    Hamt *base = src, *upgraded = NULL;
+    bool box_val = (src && src->val_owned) || map_val_needs_box(a[3]);
+    if (box_val && src && !src->val_owned && tur_hamt_count(src) > 0) {
+        upgraded = map_upgrade_to_boxed(src, keyeq, 0);
+        if (upgraded) base = upgraded; else box_val = false;
+    }
+    if (box_val) {
+        Hamt *r = tur_hamt_set_eq_o(base, (uint64_t)a[1].as_int,
+                                    (void *)(intptr_t)a[2].as_int,
+                                    map_val_box(a[3]), keyeq, 2);
+        TuriValue out = set_wrap_owned(e, base, r);
+        if (upgraded && r != upgraded) tur_hamt_free(upgraded);
+        return out;
+    }
     Hamt *r = tur_hamt_set_eq(src, (uint64_t)a[1].as_int,
                               (void *)(intptr_t)a[2].as_int,
                               (void *)(intptr_t)a[3].as_int,
-                              (tur_hamt_keyeq_fn)(intptr_t)a[4].as_int);
+                              keyeq);
     return set_wrap_owned(e, src, r);
 }
 static TuriValue native_map_get_eq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
@@ -757,12 +877,12 @@ static TuriValue native_map_get_eq(TuriEnv *e, TuriValue *a, uint32_t n, void *u
         void *v = tur_hamt_get_eq_ctx(set_hamt(a[0]), (uint64_t)a[1].as_int,
                                       (void *)(intptr_t)a[2].as_int,
                                       map_turi_eq_tramp, &ctx);
-        return turi_int((int64_t)(intptr_t)v);
+        return map_val_read(set_hamt(a[0]), v);
     }
     void *v = tur_hamt_get_eq(set_hamt(a[0]), (uint64_t)a[1].as_int,
                               (void *)(intptr_t)a[2].as_int,
                               (tur_hamt_keyeq_fn)(intptr_t)a[3].as_int);
-    return turi_int((int64_t)(intptr_t)v);
+    return map_val_read(set_hamt(a[0]), v);
 }
 static TuriValue native_map_has_eq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -801,8 +921,34 @@ static TuriValue native_map_count(TuriEnv *e, TuriValue *a, uint32_t n, void *ud
 static TuriValue native_map_merge(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 2) return n >= 1 ? a[0] : turi_nil();
+    Hamt *ha = set_hamt(a[0]), *hb = set_hamt(a[1]);
+    /* map-of-any-is-broken-on-both-back-ends: `tur_hamt_merge` re-inserts b's
+     * value WORDS into a copy of a without retaining them, which is right for a
+     * raw carrier and a double-free for a map-owned box.  Merge a boxed map by
+     * hand instead, minting a fresh box per entry so each map owns its own.
+     * The result is boxed whenever either input is, so it is never half-boxed. */
+    bool boxed = (ha && ha->val_owned) || (hb && hb->val_owned);
+    if (boxed) {
+        Hamt *r = tur_hamt_new();
+        if (!r) return turi_nil();
+        Hamt *srcs[2] = { ha, hb };     /* b last: its entries win, as merge does */
+        for (int si = 0; si < 2; si++) {
+            if (!srcs[si]) continue;
+            HamtIter it;
+            tur_hamt_iter_init(&it, srcs[si]);
+            uint64_t h; void *k, *v;
+            while (tur_hamt_iter_next(&it, &h, &k, &v)) {
+                void *box = map_val_box(map_val_read(srcs[si], v));
+                Hamt *old = r;
+                r = tur_hamt_set_eq_o(r, h, k, box, NULL, 2);
+                if (old != r) tur_hamt_free(old);
+            }
+            tur_hamt_iter_free(&it);
+        }
+        return set_wrap_tracked(e, r);
+    }
     /* tur_hamt_merge returns a caller-owned reference -- track directly. */
-    return set_wrap_tracked(e, tur_hamt_merge(set_hamt(a[0]), set_hamt(a[1])));
+    return set_wrap_tracked(e, tur_hamt_merge(ha, hb));
 }
 static TuriValue native_map_free(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
@@ -836,9 +982,12 @@ static bool map_eq_iter(TuriEnv *env, Hamt *h1, Hamt *h2,
         void *vb = keyeq ? tur_hamt_get_eq(h2, h, k, keyeq)
                          : tur_hamt_get(h2, h, k);
         if (!vb) { eq = false; break; }
+        /* map-of-any-is-broken-on-both-back-ends: a boxed-value map hands the
+         * comparator the VALUES, not the box pointers -- comparing addresses
+         * would report two structurally equal maps unequal. */
         TuriValue cargs[2];
-        cargs[0].tag = TURI_INT; cargs[0].as_int = (int64_t)(intptr_t)v;
-        cargs[1].tag = TURI_INT; cargs[1].as_int = (int64_t)(intptr_t)vb;
+        cargs[0] = map_val_read(h1, v);
+        cargs[1] = map_val_read(h2, vb);
         TuriValue rv = turi_call(env, val_cmp, cargs, 2);
         if (turi_is_error(rv) || env->throwing) {
             /* returns C bool; promote a value-level error to a throw so the
@@ -902,7 +1051,13 @@ static TuriValue native_hamt_iter_cur_key(TuriEnv *e, TuriValue *a, uint32_t n, 
 static TuriValue native_hamt_iter_cur_val(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     if (n < 1 || a[0].as_int == 0) return turi_int(0);
-    return turi_int((int64_t)(intptr_t)tur_hamt_iter_cur_val((void *)(intptr_t)a[0].as_int));
+    /* map-of-any-is-broken-on-both-back-ends: unbox a boxed-value map's value.
+     * `HamtIter` carries the map it is walking, so this CAN consult `val_owned`
+     * -- the archived report listed it as a residue on the belief that it could
+     * not, which was wrong and showed up as `tur_show_collection_elems`
+     * printing `#map{:a }` for a cstr value. */
+    HamtIter *it = (HamtIter *)(intptr_t)a[0].as_int;
+    return map_val_read(it->map, tur_hamt_iter_cur_val(it));
 }
 static TuriValue native_hamt_keyeq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
@@ -931,10 +1086,13 @@ static TuriValue native_struct_hash(TuriEnv *e, TuriValue *a, uint32_t n, void *
 static TuriValue native_hamt_get_dynamic(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     if (n < 4) return turi_int(0);
-    void *r = tur_hamt_get_dynamic((Hamt *)(intptr_t)a[0].as_int, a[1].as_int,
+    /* map-of-any-is-broken-on-both-back-ends: same unbox as the iterator twin.
+     * This one takes the bare Hamt handle, so `val_owned` is one deref away. */
+    Hamt *h = (Hamt *)(intptr_t)a[0].as_int;
+    void *r = tur_hamt_get_dynamic(h, a[1].as_int,
                                    (void *)(intptr_t)a[2].as_int,
                                    (void *)(intptr_t)a[3].as_int);
-    return turi_int((int64_t)(intptr_t)r);
+    return map_val_read(h, r);
 }
 static TuriValue native_hamt_has_dynamic(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
@@ -967,7 +1125,21 @@ static TuriValue native_map_hamt(TuriEnv *e, TuriValue *a, uint32_t n, void *ud)
  * The table is process-lifetime (the interpreter never frees it); entries for
  * freed vecs are harmless (a later vec may reuse the address and overwrite the
  * stale tag on its first push). */
-typedef struct { void *key; uint8_t tag; } TurVecTagEnt;
+/* vec-any-interp-keeps-one-element-tag: one tag PER ELEMENT, not per vec.
+ *
+ * The single-tag design above was right for as long as the type system
+ * enforced homogeneity, and `(Vec any)` is the first element type for which it
+ * does not -- `any` is exactly the type whose content IS the per-value tag.
+ * With one tag per vec, every element of a heterogeneous vector reported the
+ * type of the LAST one pushed, and a cast to an element's real type panicked
+ * naming a type the program never asked for.
+ *
+ * A byte per element, grown with the vec.  The table stays keyed on the vec
+ * header pointer and process-lifetime, exactly as before; only the payload
+ * widens.  An index past what has been recorded reads TURI_INT, which is the
+ * same default an absent key gave -- so a vec built by another native
+ * (schema/json int64 buffers) is unaffected. */
+typedef struct { void *key; uint8_t *tags; size_t n_tags; } TurVecTagEnt;
 static TurVecTagEnt *g_vec_tag_tab = NULL;
 static size_t g_vec_tag_cap = 0;
 static size_t g_vec_tag_n   = 0;
@@ -979,7 +1151,7 @@ static size_t vec_tag_probe(void *key) {
         h = (h + 1) & mask;
     return h;
 }
-static void vec_tag_set(void *key, uint8_t tag) {
+static void vec_tag_set(void *key, size_t idx, uint8_t tag) {
     if (!key) return;
     if (g_vec_tag_n * 2 >= g_vec_tag_cap) {
         size_t old_cap = g_vec_tag_cap;
@@ -997,18 +1169,30 @@ static void vec_tag_set(void *key, uint8_t tag) {
     size_t h = vec_tag_probe(key);
     if (!g_vec_tag_tab[h].key) g_vec_tag_n++;
     g_vec_tag_tab[h].key = key;
-    g_vec_tag_tab[h].tag = tag;
+    TurVecTagEnt *ent = &g_vec_tag_tab[h];
+    if (idx >= ent->n_tags) {
+        size_t nn = ent->n_tags ? ent->n_tags : 8;
+        while (idx >= nn) nn *= 2;
+        uint8_t *nt = (uint8_t *)realloc(ent->tags, nn);
+        if (!nt) return;   /* out of memory: leave the tag unrecorded (reads as int) */
+        memset(nt + ent->n_tags, (int)TURI_INT, nn - ent->n_tags);
+        ent->tags = nt;
+        ent->n_tags = nn;
+    }
+    ent->tags[idx] = tag;
 }
-static uint8_t vec_tag_get(void *key) {
+static uint8_t vec_tag_get(void *key, size_t idx) {
     if (!key || g_vec_tag_cap == 0) return (uint8_t)TURI_INT;
     size_t h = vec_tag_probe(key);
-    return g_vec_tag_tab[h].key ? g_vec_tag_tab[h].tag : (uint8_t)TURI_INT;
+    const TurVecTagEnt *ent = &g_vec_tag_tab[h];
+    if (!ent->key || idx >= ent->n_tags) return (uint8_t)TURI_INT;
+    return ent->tags[idx];
 }
 /* Re-tag a raw int64 carrier read from a vec cell according to the vec's
  * recorded homogeneous element tag, so float/cstr elements round-trip with
  * their value tag under --interpret (matching the compiled bit-reinterpret). */
-static TuriValue vec_retag_cell(void *vec_key, int64_t cell) {
-    switch ((int)vec_tag_get(vec_key)) {
+static TuriValue vec_retag_cell(void *vec_key, size_t idx, int64_t cell) {
+    switch ((int)vec_tag_get(vec_key, idx)) {
         case TURI_FLOAT: { union { int64_t i; double d; } u; u.i = cell; return turi_float(u.d); }
         case TURI_CSTR:  return turi_cstr((const char *)(intptr_t)cell);
         case TURI_BOOL:  return turi_bool(cell != 0);
@@ -1045,7 +1229,7 @@ static bool vec_buf_scan(void *box, TuriCollBufMarkFn mark, void *ctx) {
     int64_t *data = (int64_t *)(intptr_t)v[0];
     if (!data) return true;
     for (int64_t i = 0; i < v[1]; i++)
-        mark(vec_retag_cell(v, data[i]), ctx);
+        mark(vec_retag_cell(v, (size_t)i, data[i]), ctx);
     return true;
 }
 static TuriValue native_vec_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -1079,7 +1263,7 @@ static TuriValue native_vec_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
         _exit(1);
     }
     int64_t *data = (int64_t *)(intptr_t)v[0];
-    return vec_retag_cell(v, data[i]);
+    return vec_retag_cell(v, (size_t)i, data[i]);
 }
 static TuriValue native_vec_push(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -1103,7 +1287,7 @@ static TuriValue native_vec_push(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     v[1] = len + 1;
     /* Record the homogeneous element tag so vec-get/pop re-tag float/cstr/bool
      * carriers (the buffer only holds raw int64 cells). */
-    if (a[1].tag != TURI_INT) vec_tag_set(v, (uint8_t)a[1].tag);
+    vec_tag_set(v, (size_t)len, (uint8_t)a[1].tag);
     return turi_nil();
 }
 static TuriValue native_vec_pop(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -1116,7 +1300,7 @@ static TuriValue native_vec_pop(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
     }
     int64_t *data = (int64_t *)(intptr_t)v[0];
     v[1]--;
-    return vec_retag_cell(v, data[v[1]]);
+    return vec_retag_cell(v, (size_t)v[1], data[v[1]]);
 }
 static TuriValue native_vec_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -1129,7 +1313,7 @@ static TuriValue native_vec_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
     }
     int64_t *data = (int64_t *)(intptr_t)v[0];
     data[i] = a[2].as_int;
-    if (a[2].tag != TURI_INT) vec_tag_set(v, (uint8_t)a[2].tag);
+    vec_tag_set(v, (size_t)i, (uint8_t)a[2].tag);
     return turi_nil();
 }
 static TuriValue native_vec_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {

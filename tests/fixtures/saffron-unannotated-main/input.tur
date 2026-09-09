@@ -1,0 +1,36 @@
+#lang saffron
+;; saffron-lang-plan open question 3, answered: a Saffron file needs NO type
+;; annotation anywhere, `main` included.
+;;
+;; `(defn main [] : int ...)` is awkward in a file whose whole point is having
+;; no annotations -- but until now it was mandatory.  An unannotated Saffron
+;; function defaults to `: any` (D3), and `main` is the one place that is wrong:
+;; the emitted C got `return TUR_TAG(...)` inside a function declared `int` --
+;;
+;;   error: incompatible types when returning type 'tur_tagged_t' but 'int'
+;;          was expected
+;;
+;; a cc error with no Turmeric diagnostic in front of it.  Every other Saffron
+;; fixture writes `: int` on main, which is exactly the annotation the dialect
+;; exists to remove; this one does not, and that is what it pins.
+;;
+;; `main` defaults to `:int` rather than the plan's proposed `:nil`, so its
+;; meaning does not fork per `#lang`: an explicit exit code still works, and a
+;; body yielding something else is an ordinary return-type error against `int`
+;; -- pointing at the body, not at cc.  Only the ZERO-arity `main`.
+;;
+;; Note what is NOT annotated below: `describe` takes an `any` and returns an
+;; `any`, `main` returns `int` by the rule above, and the vector is a
+;; `(Vec any)` from the S6 literal widen.
+
+(defn describe [x]
+  (type-of x))
+
+(defn main []
+  (let [v [1 "two" 7.1]]
+    (println (vec-len v))
+    (println (describe (vec-get v 0)))
+    (println (describe (vec-get v 1)))
+    (println (describe (vec-get v 2)))
+    (vec-free v))
+  0)

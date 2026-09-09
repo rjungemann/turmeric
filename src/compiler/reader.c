@@ -4419,6 +4419,19 @@ Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
      * diag_had_error(). */
     (void)lang_layers_apply_semantic(file->lang_layers, file->path);
 
+    /* saffron-lang-plan S1: the LANGUAGE axis gets the same treatment, in the
+     * same place, because it is the same decision one level up -- `#lang
+     * saffron` is `--enable=saffron` scoped to this file, and a manifest that
+     * scoped :experiments without it is a hard error.  The diagnostic is
+     * emitted inside; the caller sees it via diag_had_error().
+     *
+     * Here rather than at each detection site: every path that elaborates a
+     * file -- compile, `--interpret`, an imported module, the REPL -- funnels
+     * through this reader entry, so one call covers them all and none can
+     * forget.  The detection sites' only job is to put the dialect on the
+     * SourceFile. */
+    (void)lang_dialect_apply(file->lang, file->path);
+
     switch (file->reader_type) {
         case READER_TURMERIC:
             /* Standard s-expression syntax only */
@@ -4528,8 +4541,21 @@ Form **read_all(Arena *arena, SymbolTable *st, const SourceFile *file,
 /* #lang directive detection and reader type utilities */
 
 /* Resolve a `#lang` base name (the first, possibly slash-namespaced, token)
- * to a ReaderType.  Returns (ReaderType)-1 for an unknown base. */
-static ReaderType lang_base_from_name(const char *name, size_t len) {
+ * to a ReaderType.  Returns (ReaderType)-1 for an unknown base.
+ *
+ * saffron-lang-plan D1: the base token now names a PAIR -- a language and a
+ * reader -- so `out_dialect` receives the language half.  The two axes are
+ * independent: `<lang>` alone means that language's default reader, and
+ * `<lang>/<reader>` picks one explicitly, so every reader is spellable under
+ * every language.  Callers that only want the reader pass NULL.
+ *
+ * `sweet-exp` stays a Turmeric-only legacy alias: it predates the language
+ * axis, and giving it a Saffron spelling would invent a second way to say
+ * something `saffron/sweet` already says. */
+static ReaderType lang_base_from_name(const char *name, size_t len,
+                                      LangDialect *out_dialect) {
+    if (out_dialect) *out_dialect = LANG_TURMERIC;
+
     if (len == 8 && memcmp(name, "turmeric", 8) == 0)
         return READER_TURMERIC;
     if (len == 20 && memcmp(name, "turmeric/curly-infix", 20) == 0)
@@ -4542,20 +4568,43 @@ static ReaderType lang_base_from_name(const char *name, size_t len) {
         return READER_SWEET;
     if (len == 9 && memcmp(name, "sweet-exp", 9) == 0)
         return READER_SWEET;
+
+    /* saffron-lang-plan S1: the Saffron language, over any of the four
+     * readers.  The dialect carries no semantics yet -- a `#lang saffron` file
+     * elaborates exactly as `#lang turmeric` does, and says so once via the
+     * experiment lifecycle warning. */
+    if (len == 7 && memcmp(name, "saffron", 7) == 0) {
+        if (out_dialect) *out_dialect = LANG_SAFFRON;
+        return READER_TURMERIC;
+    }
+    if (len == 19 && memcmp(name, "saffron/curly-infix", 19) == 0) {
+        if (out_dialect) *out_dialect = LANG_SAFFRON;
+        return READER_CURLY_INFIX;
+    }
+    if (len == 16 && memcmp(name, "saffron/neoteric", 16) == 0) {
+        if (out_dialect) *out_dialect = LANG_SAFFRON;
+        return READER_NEOTERIC;
+    }
+    if (len == 13 && memcmp(name, "saffron/sweet", 13) == 0) {
+        if (out_dialect) *out_dialect = LANG_SAFFRON;
+        return READER_SWEET;
+    }
     return (ReaderType)-1;
 }
 
 /* Parse #lang directive, reporting the base reader plus the additive layer
  * set (lang-layers-plan L0).  See the declaration in diag.h for the
  * out-param contract. */
-ReaderType detect_lang_layered(const char *src, size_t len,
+ReaderType detect_lang_dialect(const char *src, size_t len,
                                const char **out_rest, size_t *out_rest_len,
                                LangLayerSet *out_layers,
-                               const char **out_bad, size_t *out_bad_len) {
+                               const char **out_bad, size_t *out_bad_len,
+                               LangDialect *out_dialect) {
     const char *p = src;
     size_t remaining = len;
 
     if (out_layers)  *out_layers  = 0;
+    if (out_dialect) *out_dialect = LANG_TURMERIC;
     if (out_bad)     *out_bad     = NULL;
     if (out_bad_len) *out_bad_len = 0;
 
@@ -4598,7 +4647,23 @@ ReaderType detect_lang_layered(const char *src, size_t len,
             remaining--;
         }
 
-        ReaderType base = lang_base_from_name(lang_start, lang_len);
+        ReaderType base = lang_base_from_name(lang_start, lang_len, out_dialect);
+        /* lang-unknown-base-diagnostic-names-nothing: an unrecognised BASE
+         * used to come back as (ReaderType)-1 with its token dropped, so the
+         * only thing a caller could print was reader_type_name(READER_UNKNOWN)
+         * -- the literal word "unknown", as if it were what the user wrote.
+         * Hand the token out through the same slot an unknown LAYER already
+         * uses (callers tell the two apart by the returned type: a base
+         * failure is READER_UNKNOWN, a layer failure leaves the base valid),
+         * and return READER_UNKNOWN rather than -1 so every caller's
+         * reader_type_is_implemented test sees one value. */
+        if (base == (ReaderType)-1 || base == READER_UNKNOWN) {
+            if (out_bad && *out_bad == NULL) {
+                *out_bad = lang_start;
+                if (out_bad_len) *out_bad_len = lang_len;
+            }
+            base = READER_UNKNOWN;
+        }
 
         /* Collect the space-separated trailing tokens as the layer set, then
          * consume to end-of-line so no token ever leaks into the body handed
@@ -4653,6 +4718,17 @@ ReaderType detect_lang_layered(const char *src, size_t len,
     return READER_TURMERIC;
 }
 
+/* saffron-lang-plan S1: the pre-dialect entry point, now a wrapper.  Kept so
+ * the dozen callers that have no use for the language axis need no change --
+ * the LSP, the REPL line-parser, the wasm glue, the package reader. */
+ReaderType detect_lang_layered(const char *src, size_t len,
+                               const char **out_rest, size_t *out_rest_len,
+                               LangLayerSet *out_layers,
+                               const char **out_bad, size_t *out_bad_len) {
+    return detect_lang_dialect(src, len, out_rest, out_rest_len,
+                               out_layers, out_bad, out_bad_len, NULL);
+}
+
 /* Base-reader-only wrapper: parses (and EOL-consumes) any layer tokens but
  * discards them.  Existing callers that don't thread the layer set use this. */
 ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
@@ -4683,6 +4759,17 @@ const char *reader_type_name(ReaderType type) {
         case READER_NEOTERIC: return "turmeric/neoteric";
         case READER_SWEET: return "turmeric/sweet";
         default: return "<invalid>";
+    }
+}
+
+/* saffron-lang-plan S1: canonical dialect name, the sibling of
+ * reader_type_name.  Used by `tur lang-layers` and by diagnostics that need to
+ * say which language a file is in. */
+const char *lang_dialect_name(LangDialect d) {
+    switch (d) {
+        case LANG_TURMERIC: return "turmeric";
+        case LANG_SAFFRON:  return "saffron";
+        default:            return "<invalid>";
     }
 }
 

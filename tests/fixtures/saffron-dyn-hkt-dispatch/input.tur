@@ -1,0 +1,33 @@
+#lang saffron
+; saffron-lang-plan D8 question 3: a higher-kinded typeclass method dispatched
+; on an `any` receiver, keyed on the HEAD constructor.
+;
+; `Functor [Option]`'s receiver is the constructor, but a box's tag is an
+; applied type, so no ground row can serve it. The row that can is the
+; all-`any` instantiation, `(Option any)` -- which is the only one a Saffron
+; file ever builds, now that a generic constructor FUNCTION's bare type-variable
+; parameter widens to `any` the way a raw ctor's and a literal's already did
+; (`(some 41)` here is an `(Option any)`, not an `(Option int)`).
+;
+; What the row calls is a WITNESS defn the elaborator synthesises,
+;   (defn __dynwit_Functor_fmap_Option [__r : (Option any) __a1] : any
+;     (.fmap __r (cast __a1 (fn [any] any))))
+; so the static path mints the by-value spec for that instantiation (the
+; carrier base would read the 16-byte element as an int64), the D5 seams do
+; the argument typing, and the `: any` return re-tags the result. The
+; interpreter needs none of this and already agreed; this pins parity.
+;
+; 7.35 rather than 7.0: the element crosses two boxes and a closure, and a
+; conversion anywhere on that path would print a wrong number here.
+
+(defn bump [o]
+  (.fmap o (fn [x] (+ x 1))))
+
+(defn scale [o]
+  (.fmap o (fn [x] (* x 2.0))))
+
+(defn main []
+  (println (cast (unwrap-or (cast (bump (some 41)) (Option any)) (:: 0 any)) int))
+  (println (cast (unwrap-or (cast (scale (some 7.35)) (Option any)) (:: 0.0 any)) float))
+  (println (type-of (bump (none))))
+  0)

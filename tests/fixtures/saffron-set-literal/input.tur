@@ -1,0 +1,25 @@
+#lang saffron
+;; saffron-lang-plan S6 (G7): a `#set{...}` literal in a Saffron file takes the
+;; same `any` widen as `[...]` and `#map{...}`, so this is a `(Set any)`.
+;;
+;; This fixture first pinned the OPPOSITE decision -- "no widen needed" --
+;; because a heterogeneous literal already built: `set-of` had no homogeneity
+;; check, each element resolved its own `hash`/`mk-box`/`mk-cmp`, and the set
+;; simply claimed `(Set int)` while holding a cstr (filed as
+;; set-of-element-type-is-not-checked).  Resolving that report gave `set-of` the
+;; `vec-of`-style typed insert (`set-add-elem__`), which made the widen
+;; NECESSARY, and `Hash[any]`/`MapKey[any]`, which made it POSSIBLE: each `any`
+;; keys by its payload, so the observable behaviour below -- construction,
+;; content-keyed dedup (`#set{"a" "a"}` is one member), membership by value, and
+;; a bare `1` finding the boxed 1 -- is byte-for-byte what it was, now under an
+;; honest type.
+
+(defn main [] : int
+  (let [s #set{1 "two" 7.1}]
+    (println (set-count s))
+    (println (set-member? s (hash 1) 1))
+    (println (set-member? s (hash "two") "two"))
+    (println (set-member? s (hash 99) 99))
+    (println (set-count #set{"a" "a"}))
+    (set-free s))
+  0)

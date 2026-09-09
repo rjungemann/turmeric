@@ -1,0 +1,12 @@
+;; inferred-return-defaults-inconsistently: the check is skipped only when the
+;; return is UNANNOTATED.  A written `: nil` is a real declaration and a float
+;; body still conflicts with it -- the register-class mismatch TUR-E0707 exists
+;; for.
+;;
+;; This is the discrimination the fix turns on: unannotated and `: nil` are
+;; indistinguishable by KIND (return_kind starts TY_NIL either way), so the fix
+;; keys on `return_annotated` instead.  If that bit ever stops being set, this
+;; fixture goes green while the diagnostic silently disappears.
+(defn f [] : nil 7.1)
+
+(defn main [] : int 0)

@@ -157,6 +157,116 @@ long lang_layer_index(const char *name, size_t len) {
     return -1;
 }
 
+/* saffron-lang-plan D9: the LANGUAGE axis's twin of
+ * lang_layers_apply_semantic below.
+ *
+ * A dialect is a semantic choice the same way a semantic layer is, so it gets the
+ * same policy rather than a second, parallel enable path: the directive IS the
+ * enable for its experiment, scoped to this file at CLI precedence -- unless
+ * the project manifest scoped `:experiments` and left it out, which is a
+ * deliberate no and therefore a hard error.  Silently compiling the file as
+ * Turmeric would run it under semantics it did not ask for, which is the worse
+ * failure of the two.
+ *
+ * Kept here, beside the layer version, so the two policies stay legible as one
+ * decision; the reader owns parsing the axis, not applying it. */
+/* saffron-lang-plan S1: the base axis, for `tur lang-layers`.
+ *
+ * Rendered from the two enums rather than a table: the legal bases are the
+ * cross-product of {language} x {reader}, and a table would have to be kept in
+ * step with both.  `sweet-exp` is omitted on purpose -- it is a legacy alias
+ * accepted on input and never generated (reader_type_name), so listing it would
+ * advertise a spelling new code should not use. */
+static const LangDialect DIALECTS[] = { LANG_TURMERIC, LANG_SAFFRON };
+static const ReaderType  READERS[]  = { READER_TURMERIC, READER_CURLY_INFIX,
+                                        READER_NEOTERIC, READER_SWEET };
+
+/* The base token for a (language, reader) pair: the bare language name when
+ * the reader is that language's default, else "<language>/<reader-suffix>". */
+static void lang_base_spelling(LangDialect d, ReaderType r,
+                               char *out, size_t cap) {
+    const char *lang = lang_dialect_name(d);
+    if (r == READER_TURMERIC) { snprintf(out, cap, "%s", lang); return; }
+    /* reader_type_name is the fully-qualified "turmeric/<suffix>"; take the
+     * suffix and re-qualify it under this language. */
+    const char *full = reader_type_name(r);
+    const char *slash = strchr(full, '/');
+    snprintf(out, cap, "%s/%s", lang, slash ? slash + 1 : full);
+}
+
+/* The reader half, unqualified.  reader_type_name returns the fully-qualified
+ * "turmeric/<suffix>", which reads as a contradiction in a Saffron row; the
+ * language already has its own column. */
+static const char *lang_reader_suffix(ReaderType r) {
+    const char *full = reader_type_name(r);
+    const char *slash = strchr(full, '/');
+    return slash ? slash + 1 : "s-expr";
+}
+
+void lang_dialects_print(void) {
+    printf("%-22s %-9s %-12s %s\n", "BASE", "LANGUAGE", "READER", "STATUS");
+    for (size_t di = 0; di < sizeof(DIALECTS) / sizeof(DIALECTS[0]); di++) {
+        for (size_t ri = 0; ri < sizeof(READERS) / sizeof(READERS[0]); ri++) {
+            char base[64];
+            lang_base_spelling(DIALECTS[di], READERS[ri], base, sizeof base);
+            const char *status =
+                (DIALECTS[di] == LANG_TURMERIC) ? "stable"
+                                                : "experiment 'saffron'";
+            printf("%-22s %-9s %-12s %s\n", base,
+                   lang_dialect_name(DIALECTS[di]),
+                   lang_reader_suffix(READERS[ri]), status);
+        }
+    }
+}
+
+void lang_dialects_print_json(void) {
+    printf("[");
+    bool first = true;
+    for (size_t di = 0; di < sizeof(DIALECTS) / sizeof(DIALECTS[0]); di++) {
+        for (size_t ri = 0; ri < sizeof(READERS) / sizeof(READERS[0]); ri++) {
+            char base[64];
+            lang_base_spelling(DIALECTS[di], READERS[ri], base, sizeof base);
+            if (!first) printf(",");
+            first = false;
+            printf("\n    {\"base\":\"%s\",\"language\":\"%s\",\"reader\":\"%s\"",
+                   base, lang_dialect_name(DIALECTS[di]),
+                   lang_reader_suffix(READERS[ri]));
+            if (DIALECTS[di] != LANG_TURMERIC)
+                printf(",\"experiment\":\"saffron\"");
+            printf("}");
+        }
+    }
+    printf("\n  ]");
+}
+
+/* saffron-lang-plan S2: see lang_layers.h for why this is a registry lookup
+ * rather than threaded state. */
+bool lang_span_is_saffron(Span sp) {
+    const SourceFile *f = diag_source_file(sp.file_id);
+    return f != NULL && f->lang == LANG_SAFFRON;
+}
+
+bool lang_dialect_apply(LangDialect d, const char *path) {
+    if (d == LANG_TURMERIC) return true;           /* the default: no gate */
+    const char *experiment = "saffron";            /* the only dialect so far */
+    if (experiment_is_enabled(experiment)) {
+        experiment_warn_if_used(experiment);
+        return true;
+    }
+    if (g_manifest_experiments_scoped) {
+        diag_emit(DIAG_ERROR, SPAN_UNKNOWN,
+                  "%s is `#lang %s`, whose experiment '%s' is disabled by the "
+                  "project manifest (add :%s to :experiments in build.tur, or "
+                  "change the #lang line to turmeric)",
+                  path ? path : "this file", lang_dialect_name(d),
+                  experiment, experiment);
+        return false;
+    }
+    experiment_enable(experiment, XF_SRC_CLI);
+    experiment_warn_if_used(experiment);
+    return true;
+}
+
 bool lang_layers_apply_semantic(LangLayerSet set, const char *path) {
     if (!set) return true;
     bool ok = true;

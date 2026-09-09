@@ -1,0 +1,37 @@
+#lang saffron
+;; saffron-lang-plan S6 (G7): the cons-list twin of the `[...]` and `#map{...}`
+;; widens.  `(list 1 "two" 7.1)` was "function 'tur-list-homog__' arg 2:
+;; expected tyvar, got cstr" -- the same wall, from the third of the three
+;; homogeneity checks -- so each element is widened to `any` first.
+;;
+;; This one is a CALL, not a reader literal, so the widen hooks in `elab_form`'s
+;; F_LIST case rather than beside the data literals; the widened form then goes
+;; through the ordinary macro path unchanged.
+;;
+;; The ASCRIPTION on each tail is the part worth knowing, and it is not
+;; incidental.  `Cons` is `(defstruct Cons :heap [A] (head A) (tail :int))` --
+;; the TAIL is an erased carrier -- so `.tail` hands back an `:int` and the
+;; element type is gone one step in.  `(:: (.tail l) (Cons any))` recovers it,
+;; and the next `.head` then reads its own tag.  That is a real difference from
+;; Vec and Map, where a read needs no help: the widen makes a Saffron cons list
+;; heterogeneous, but walking one still costs an ascription per step.
+;;
+;; So a `defdata` with `any` in BOTH slots stays the better idiom for a list you
+;; actually walk -- which is what tests/fixtures/saffron-higher-order uses, and
+;; why S5's exit fixture defined its own list rather than reaching for this one.
+;;
+;; NO requires.leak-check: cons cells are `:heap` and stdlib has no `list-free`
+;; at all, so they are never freed.  Measured pre-existing -- a plain Turmeric
+;; `(list 1 2 3)` leaks too, with no `any` anywhere.
+;;
+;; 7.1 rather than 7.0: a truncating path through the widen would print 7.
+
+(defn main [] : int
+  (let [l (list 1 "two" 7.1)]
+    (println (type-of (.head l)))
+    (let [l2 (:: (.tail l) (Cons any))]
+      (println (type-of (.head l2)))
+      (let [l3 (:: (.tail l2) (Cons any))]
+        (println (type-of (.head l3)))
+        (println (cast (.head l3) float)))))
+  0)

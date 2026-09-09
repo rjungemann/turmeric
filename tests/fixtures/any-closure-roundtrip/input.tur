@@ -1,0 +1,70 @@
+;; any-cannot-recover-a-capturing-closure: every kind of function round-trips
+;; through an `any` and is callable on the way out.
+;;
+;; A function reaches an `any` as one of two representations -- a bare code
+;; pointer (a non-capturing lambda, a `defn` named as a value) or a fat
+;; `{ thunk, env }` box (a capturing lambda, a partial application) -- and they
+;; are invoked through different protocols.  `cast` emits its call from the
+;; TARGET type, and a target written `(-> int int)` names the bare one, so with
+;; two representations in play one of them was always called wrongly:
+;;
+;;   ((cast (capturing 1) (-> int int)) 41)   =>  Segmentation fault
+;;
+;; Giving the two distinct box ids (partial-application-widened-to-any-is-a-ptr)
+;; turned that into a panic, which was safe but left no capturing closure able to
+;; come back out of an `any` at all -- while the interpreter, which has no such
+;; split, returned 42 the whole time.
+;;
+;; The representation is uniform now rather than guarded: the widen shims a bare
+;; fn to fat, an `is?`/`cast` target names the fat form, and a call head taken
+;; from a cast fat-dispatches through slot 0.  All four shapes below behave the
+;; same, on both back ends, which is what the interpreter always did.
+;;
+;; No requires.compiled -- it carried one while the back ends disagreed, and the
+;; whole point of this change is that they no longer do.
+;;
+;; A `(c-fn ...)` is deliberately NOT fattened: it is a real C function pointer
+;; with no environment, and shimming it would misrepresent an FFI value.
+
+(defn add [x : int y : int] : int (+ x y))
+
+(defn plain     []        : any (fn [x : int] : int (+ x 1)))   ; bare code ptr
+(defn capturing [n : int] : any (fn [x : int] : int (+ x n)))   ; fat, captures n
+(defn curried   []        : any (add 1))                        ; fat, partial app
+(defn named     []        : any add)                            ; bare, by name
+
+(defn main [] : int
+  ;; All four report as functions -- the partial application in particular used
+  ;; to answer "ptr" compiled and "fn" interpreted.
+  (println (type-of (plain)))
+  (println (type-of (capturing 1)))
+  (println (type-of (curried)))
+  (println (type-of (named)))
+
+  ;; All four answer the signature test.
+  (println (if (is? (plain)       (-> int int))     1 0))
+  (println (if (is? (capturing 1) (-> int int))     1 0))
+  (println (if (is? (curried)     (-> int int))     1 0))
+  (println (if (is? (named)       (-> int int int)) 1 0))
+
+  ;; A wrong signature is still a wrong signature.
+  ;;
+  ;; Only the closure is tested, not the partial application: the interpreter
+  ;; reconstructs a signature from the closure's FnDef, and a curried closure's
+  ;; carries no resolved return type, so `turi_closure_fn_key` declines to render
+  ;; a key it cannot trust and head-matches instead ("is this a function").
+  ;; `(is? (curried) (-> int int int))` is therefore 0 compiled and 1
+  ;; interpreted -- coarse rather than wrong, and the deliberate direction: a
+  ;; guessed key would be a false NEGATIVE that silently breaks a type-case.
+  (println (if (is? (capturing 1) (-> cstr cstr)) 1 0))
+
+  ;; And all four come back callable -- the capability this was filed for.
+  (println ((cast (plain)       (-> int int)) 41))
+  (println ((cast (capturing 1) (-> int int)) 41))
+  (println ((cast (curried)     (-> int int)) 41))
+  (println ((cast (named) (-> int int int)) 1 41))
+
+  ;; Ordinary currying, which shares the partial-application path, is untouched.
+  (let [add1 (add 1)]
+    (println (add1 41)))
+  0)
