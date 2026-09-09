@@ -1,0 +1,45 @@
+;; local-fn-value-into-rank2-slot-gets-a-by-name-wrapper: a fn-typed LOCAL
+;; (a parameter, a let-bound lambda, a capturing closure, a let alias of a
+;; parameter) passed to a typeclass method whose call resolves to a by-value
+;; specialisation (`fmap` over `(Option any)`) must not be wrapped by a
+;; file-scope thunk that names the local -- that was `'f' undeclared`.  The
+;; value in the local already IS the carrier's representation and is packed
+;; inline.  The two controls that always worked (the float carrier base, and a
+;; global defn through the generated wrapper) pin that the fix did not move
+;; them.
+
+;; 1. a fn-typed PARAMETER forwarded into fmap
+(defn ap [o : (Option any) f : (fn [any] any)] : (Option any) (fmap o f))
+
+;; 2. a `let` ALIAS of that parameter
+(defn ap-alias [o : (Option any) f : (fn [any] any)] : (Option any)
+  (let [g f] (fmap o g)))
+
+;; 3. a global defn through the generated wrapper (control)
+(defn idy [x : any] : any x)
+(defn ap-glob [o : (Option any)] : (Option any) (fmap o idy))
+
+;; 4. the float carrier base (control)
+(defn ap-flt [o : (Option float) f : (fn [float] float)] : (Option float) (fmap o f))
+
+(defn show-int [o : (Option any)] : void
+  (println (cast (unwrap-or o (:: 0 any)) int)))
+
+(defn main [] : int
+  (let [o (:: (some (:: 41 any)) (Option any))]
+    ;; 1. parameter, from a lambda
+    (show-int (ap o (fn [x : any] : any x)))
+    ;; 1b. parameter, from a CAPTURING closure
+    (let [k (:: 7 any)
+          f (fn [x : any] : any (:: (+ (cast x int) (cast k int)) any))]
+      (show-int (ap o f)))
+    ;; 2. alias
+    (show-int (ap-alias o (fn [x : any] : any (:: (* (cast x int) 2) any))))
+    ;; 3. global defn control
+    (show-int (ap-glob o))
+    ;; 5. a let-bound NON-capturing lambda straight into fmap
+    (let [h (fn [x : any] : any (:: (- (cast x int) 1) any))]
+      (show-int (fmap o h)))
+    ;; 4. float control
+    (println (unwrap-or (ap-flt (some 7.25) (fn [x : float] : float (+ x 7.25))) 0.0)))
+  0)

@@ -1,10 +1,48 @@
 ---
 title: "A fn-typed LOCAL passed to a rank-2 (poly-fn) slot of a by-value spec is wrapped by a file-scope thunk that calls it by name: `'f' undeclared`"
-category: Reported
+category: Archive
 description: "`(defn ap [o : (Option any) f : (fn [any] any)] : (Option any) (fmap o f))` fails to compile: `'f' undeclared (first use in this function)`. The call to the by-value `fmap` spec wraps `f` through make_poly_wrapper_ex, which synthesises a top-level `__poly_N(void *, tur_tagged_t)` whose body calls the inner binding BY NAME -- correct for a global defn, meaningless for a parameter. The same function over `(Option float)` works because it reaches the carrier base and passes `f` straight through as the tur_poly_fn_t it already is."
 ---
 
 # A local fn value into a rank-2 slot gets a by-name wrapper
+
+**RESOLVED 2026-09-09** via fix direction 1, in three places rather than the
+one the report named -- the report's "rank-2 path in `elab_call.c`" was the
+plain-defn forall site, and the failing call actually goes through the
+typeclass-method dispatch site in `elab_typeclasses.c`:
+
+- **`elab_typeclasses.c` (the live site).** The local pass-through arm was
+  gated on `closure_fn_binding && !is_global`, i.e. only a capturing-closure
+  VALUE; a fn-typed parameter and a let-bound non-capturing lambda have no
+  closure binding and fell to `make_poly_wrapper`. The gate is now
+  `!is_global` -- every non-global binding has the same problem and the same
+  answer -- in both the args loop and its receiver-position twin
+  (`bimap [g h x]`).
+- **`elab_call.c` (the site the report named).** Same arm added to the
+  plain-defn rank-2 path, with a diagnostic instead of a pass-through when
+  the forall is CONSTRAINED: that carrier ABI leads with a dictionary per
+  constraint, which only a generated wrapper can absorb.
+- **`emit_expr.c` (the part the report did not predict).** Once the local
+  reached the `is_closure` pass-through, a PARAMETER segfaulted: its binding
+  type is an unboxed TY_FN, identical to a let-bound non-capturing lambda,
+  so the bare-fnptr shim fired and ran fat-box memory as code. A parameter's
+  representation is decided by fat normalization, not the boxed bit -- the
+  caller hands it a `{thunk, ...}` box -- so the gate now excludes
+  `is_param && fn_param_type_is_fat_normalized`, and a `(let [g f] ...)`
+  ALIAS of such a parameter (declared as an `int64_t` handle by
+  `emit_let_value`) is recognised through the emitted-local C-type registry
+  rather than by re-deriving the alias shape.
+
+Pinned by `tests/fixtures/local-fn-into-rank2-slot`: parameter from a lambda,
+parameter from a capturing closure, let alias, let-bound non-capturing lambda,
+plus the global-defn and float-carrier controls, agreeing on both back ends.
+
+The by-value STRUCT element control (`(Option Pt)`) does not pass, for a
+reason that predates this fix and is independent of how the mapper arrives:
+the spec body's own invocation cast. Filed as
+`fmap-over-byvalue-struct-element-passes-the-struct-as-int64`.
+
+---
 
 **Severity: medium.** Loud -- a C compile error, never a wrong answer. It
 blocks passing a function *parameter* (or any local fn value) into a

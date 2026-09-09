@@ -7131,6 +7131,13 @@ resolved_user_fallback:;
             poly_wrap_stamp_carrier_erased(wrap, best_method->params[0]);
             if (inner_b->is_poly_fn) {
                 wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
+            } else if (!inner_b->is_global) {
+                /* Receiver-position twin of the local-binding pass-through in
+                 * the args loop below (Bifunctor `bimap [g h x]` puts a mapper
+                 * fn in params[0]): a local cannot be named from a file-scope
+                 * wrapper, so pack the runtime value inline. */
+                wrap->as.poly_wrap_.wrapper_binding = NULL;
+                wrap->as.poly_wrap_.is_closure = true;
             } else {
                 uint32_t inner_arity = (inner_b->type.kind == TY_FN)
                     ? (uint8_t)inner_b->type.as.fn.arity : 1;
@@ -7204,14 +7211,24 @@ resolved_user_fallback:;
             }
             if (inner_b->is_poly_fn) {
                 wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
-            } else if (inner_b->closure_fn_binding && !inner_b->is_global) {
+            } else if (!inner_b->is_global) {
                 /* CRU: a *capturing closure VALUE* bound to a local reaching a
                  * `:fn` typeclass-method param.  make_poly_wrapper would emit a
                  * file-scope wrapper statically referencing the local env var
                  * (out of scope at file scope -> uncompilable C).  Pack the
                  * runtime closure inline instead; the is_closure emit path reads
                  * the thunk from the box's slot 0 at runtime, so a capturing
-                 * closure round-trips correctly. */
+                 * closure round-trips correctly.
+                 *
+                 * local-fn-value-into-rank2-slot-gets-a-by-name-wrapper: this
+                 * used to admit only a binding WITH a closure_fn_binding, so a
+                 * fn-typed PARAMETER (`f : (fn [any] any)` forwarded into
+                 * `fmap`) and a let-bound NON-capturing lambda still took the
+                 * by-name wrapper and died with `'f' undeclared`.  Every
+                 * non-global binding has the same problem and the same answer:
+                 * the value in the local already IS what the carrier reads (a
+                 * fat box for a parameter or capturing closure; the emitter's
+                 * bare-fnptr shim covers the unboxed let-bound lambda). */
                 wrap->as.poly_wrap_.wrapper_binding = NULL;
                 wrap->as.poly_wrap_.is_closure = true;
             } else {

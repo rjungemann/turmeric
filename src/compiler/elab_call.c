@@ -6765,6 +6765,35 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             if (inner_fn_b->is_poly_fn) {
                 /* HRT4: pass-through — binding is already a tur_poly_fn_t, no wrapper needed. */
                 wrap->as.poly_wrap_.wrapper_binding = NULL;
+            } else if (!inner_fn_b->is_global) {
+                /* local-fn-value-into-rank2-slot-gets-a-by-name-wrapper: a
+                 * fn-typed PARAMETER or `let`-bound fn value reaching a rank-2
+                 * slot (every `fmap`/`bind` over a by-value container, e.g.
+                 * `(Option any)`) cannot go through make_poly_wrapper: it
+                 * synthesises a FILE-SCOPE `__poly_N` whose body calls the
+                 * binding by name, which is meaningless for a local
+                 * (`'f' undeclared`).  The value in the local already IS the
+                 * representation the carrier reads -- a fat `{thunk, env}` box
+                 * for a parameter or capturing closure, a bare code pointer for
+                 * a let-bound non-capturing lambda -- so pack it inline through
+                 * the is_closure pass-through, exactly as the `:fn`-carrier
+                 * path below does for the same shapes.  A CONSTRAINED forall
+                 * is the one case the pass-through cannot serve: its carrier
+                 * ABI leads with one dictionary per constraint, and only a
+                 * generated wrapper can absorb those slots. */
+                if (rank2_forall_ty && rank2_forall_ty->as.forall_.n_constraints > 0) {
+                    diag_emit(DIAG_ERROR, args[i]->span,
+                              "cannot pass the local function value '%s' to a "
+                              "rank-2 parameter whose forall type carries a "
+                              "typeclass constraint: the constrained carrier "
+                              "leads with a dictionary per constraint, which only "
+                              "a named top-level function can absorb -- pass a "
+                              "`defn` instead",
+                              inner_fn_b->name ? inner_fn_b->name->name : "?");
+                    return NULL;
+                }
+                wrap->as.poly_wrap_.wrapper_binding = NULL;
+                wrap->as.poly_wrap_.is_closure = true;
             } else {
                 bool forall_constrained = rank2_forall_ty &&
                     rank2_forall_ty->as.forall_.n_constraints > 0;

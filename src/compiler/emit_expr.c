@@ -13690,7 +13690,33 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         while (bi && bi->kind == EX_ASCRIBE) bi = bi->as.ascribe_.inner;
                         const Binding *bb = (bi && bi->kind == EX_VAR)
                             ? bi->as.var.binding : NULL;
-                        if (bb && bb->type.kind == TY_FN && !bb->type.as.fn.boxed &&
+                        /* local-fn-value-into-rank2-slot-gets-a-by-name-wrapper:
+                         * a fn-typed PARAMETER has the same unboxed TY_FN
+                         * binding type as the let-bound lambda, but its
+                         * representation is decided by fat normalization, not
+                         * by the boxed bit -- the caller hands a fat-normalized
+                         * fn param a `{thunk, ...}` box (EX_FN_TO_FAT at the
+                         * call site), so slot 0 IS the thunk and the bare shim
+                         * would run box memory as code (SIGSEGV).  Leave such a
+                         * parameter to the slot-0 read below; only a param the
+                         * normalization rule excludes (arity > 5) is bare. */
+                        bool bb_is_fat_param = bb && bb->is_param &&
+                            fn_param_type_is_fat_normalized(&bb->type);
+                        /* A `(let [g f] ...)` ALIAS of such a parameter has a
+                         * plain let binding, but emit_let_value declared it as
+                         * the int64_t handle (let_init_aliases_fat_fn_param)
+                         * and recorded that C type -- read the record rather
+                         * than re-deriving the alias shape here. */
+                        bool bb_is_fat_handle = false;
+                        if (bb && !bb_is_fat_param && !bb->is_param &&
+                            bb->type.kind == TY_FN) {
+                            char *bbn = name_for_binding(ctx, bb);
+                            const char *rec = bbn ? emit_localvar_lookup_ctype(bbn) : NULL;
+                            bb_is_fat_handle = rec && strcmp(rec, "int64_t") == 0;
+                            free(bbn);
+                        }
+                        if (bb && !bb_is_fat_param && !bb_is_fat_handle &&
+                            bb->type.kind == TY_FN && !bb->type.as.fn.boxed &&
                             !bb->closure_fn_binding && bb->type.as.fn.arity > 0 &&
                             bb->type.as.fn.arity <= MAX_FN_ARITY) {
                             uint8_t bn = (uint8_t)bb->type.as.fn.arity;
