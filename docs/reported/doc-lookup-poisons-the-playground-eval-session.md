@@ -11,11 +11,20 @@ The advice in the message ("rename the local definition") cannot fix anything.
 
 **Fix sequence:**
 [docs/upcoming/playground-session-hygiene-plan.md](../upcoming/playground-session-hygiene-plan.md)
-(PS1-PS5). That plan carries one mechanism this report does not: the wrong
-"auto-loaded stdlib module" diagnostic is the whole-program fallback passing
-`stdlib_prefix = prior`, which marks the user's own previous turns as stdlib
-(`src/turi/eval.c:12837`). Any failed eval discards the elaboration session and
-drops the session onto that path -- which is why one doc lookup is enough.
+(PS1-PS5), whose five open questions were researched and decided 2026-09-09.
+That plan carries two mechanisms this report does not:
+
+- The wrong "auto-loaded stdlib module" diagnostic is the whole-program
+  fallback passing `stdlib_prefix = prior`, which marks the user's own previous
+  turns as stdlib (`src/turi/eval.c:12837`). **Any** failed eval discards the
+  elaboration session and drops the session onto that path -- which is why one
+  doc lookup is enough, and why the fix is to stop the discard rather than to
+  re-scope `stdlib_prefix` (which turns out to carry four roles, including the
+  stdlib/user partition of both elaboration passes).
+- Preloading `docstrings.tur` cannot fix defect 2: its only function is an
+  inline-C body and `doc-lookup` is not registered as an interpreter native, so
+  the tree-walker could not execute it. The table is already a C array inside
+  that inline-C body; PS3 emits it as real C instead.
 
 Reported from the playground as: a repeating
 `warning [TUR-W0040]: unknown name 'doc-lookup'; will runtime-dispatch -- typo?`

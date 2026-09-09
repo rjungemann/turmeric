@@ -1,15 +1,16 @@
 ---
 title: "Playground session hygiene (PS)"
 category: Planning
-description: Stop a doc lookup from mutating the eval session, stop the whole-program fallback from mislabeling a user's own definitions as stdlib, and make Run mean "run this program" rather than "append this program to a session".
+description: Stop a doc lookup from mutating the eval session, stop a failed eval from dropping the session onto a path that mislabels the user's own definitions as stdlib, and make Run mean "run this program" rather than "append this program to a session".
 ---
 
 # Playground session hygiene (PS)
 
-**Status: planned, not started.** Filed from
+**Status: planned, not started. Open questions resolved 2026-09-09** -- the
+five that gated this plan were researched and decided; see "Decisions" below.
+Filed from
 [doc-lookup-poisons-the-playground-eval-session](../reported/doc-lookup-poisons-the-playground-eval-session.md),
-whose repros are all measured against the live site on 2026-09-09. Read the
-report for the symptom; this is the fix sequence.
+whose repros are measured against the live site.
 
 **One line:** a documentation hover can permanently break the Run button, and
 when it does, the error blames the user's own function for colliding with a
@@ -18,20 +19,27 @@ stdlib module that does not contain it.
 **Saffron is not involved.** Every symptom reproduces under `#lang turmeric`.
 Do not let the dialect in the original report send you into `saffron-lang-plan`.
 
+## Decisions
+
+| # | Question | Answer |
+| --- | --- | --- |
+| 1 | Does `stdlib_prefix` carry a second role? | **Yes -- four roles.** PS1 is re-scoped around that; investigate the no-discard route first. |
+| 2 | Is the docstrings table reachable from C? | **It already *is* a C table**, wrapped in a `.tur` inline-C body. |
+| 3 | What does preloading `docstrings.tur` cost? | **Moot -- it cannot work.** Emit a C table and use it both ways instead. |
+| 4 | Which `def*` forms can be safely redefined? | Measured; the split is unprincipled. **Make them all redefinable.** |
+| 5 | Multi-tab semantics under a Run reset? | **Replay the other tabs after the reset.** |
+
 ## The shape of it
 
-Three defects stack into one failure, and they are *not* equally deep. Ordered
-by how much they explain:
+Three defects stack into one failure:
 
-1. **The whole-program fallback marks every accumulated form as stdlib.**
-   This is the one that produces the wrong diagnostic, and it is a four-line
-   fix. It also silently makes `defn` redefinition fail in more sessions than
-   anyone realised (see PS1 -- sweet-exp is always on this path).
-2. **A doc lookup evaluates into the session.** This is what *triggers* the
-   fallback in the reported case, and it is independently wrong: a read-only
-   query should not be able to change program semantics.
-3. **`defeffect` is not re-runnable across turns.** Genuinely separate, and the
-   only one that is not really about the playground -- it reaches `tur repl`.
+1. **A failed eval drops the session onto a path that mislabels every
+   accumulated form as stdlib.** This produces the wrong diagnostic.
+2. **A doc lookup evaluates into the session.** This is what *causes* the
+   failed eval in the reported case, and it is independently wrong: a
+   read-only query should not be able to change program semantics.
+3. **`defeffect` is not re-runnable across turns.** Separate, and the only one
+   that is not really about the playground -- it reaches `tur repl`.
 
 Underneath all three is a design question about what Run means, which PS5
 settles.
@@ -51,19 +59,7 @@ elaborate_program_session(..., forms + elab_from, nforms - elab_from,
                           /*stdlib_prefix=*/prior - elab_from, ...);
 ```
 
-`stdlib_prefix` tells the elaborator that `forms[0..stdlib_prefix)` came from an
-auto-loaded stdlib module (`elab_toplevel.c:1768`), which sets `is_from_stdlib`
-on those bindings. `elab_fns.c:5643` then hard-errors on any user `defn` that
-collides with one:
-
-```c
-if (existing->is_from_stdlib && !e->in_stdlib_load) {
-    diag_emit(DIAG_ERROR, name_f->span,
-              "defn: '%s' is already defined by an auto-loaded stdlib "
-              "module; rename the local definition", ...);
-```
-
-So the two paths disagree about who is stdlib:
+The two paths disagree about who is stdlib:
 
 | path | `elab_from` | `stdlib_prefix` | effect |
 | --- | --- | --- | --- |
@@ -72,60 +68,75 @@ So the two paths disagree about who is stdlib:
 
 `env.c:206` records the incremental path's redefinition behaviour as an
 intentional fix. It is better read as: the fallback has a bug that the
-incremental path happens to route around.
+incremental path routes around.
 
-The env already knows the right answer. `turi_env_pin_prelude` captures the
-preload boundary, and `env->pin_toplevel` is `prior_toplevel` at pin time
-(`src/turi/env.h:196`) -- in the same units as `prior`
-(`eval.c:12801`, `prior = env->prior_toplevel`).
+### `stdlib_prefix` has four roles, not one (Q1)
 
-**The fallback is not rare.** It is taken whenever `elab_session` is absent --
-including after any failed eval, which discards it -- and incremental *parsing*
-is additionally disabled outright for sweet-exp:
+This is why PS1 is not the four-line change an earlier draft of this plan
+claimed. Every consumer, traced:
+
+| Role | Site |
+| --- | --- |
+| Marks bindings `is_from_stdlib` -- the wrong diagnostic | `elab_fns.c:5643` |
+| Seeds the load-dedup visited set, so a later explicit `(load "stdlib/...")` is a no-op | `elab_toplevel.c:1767-1774` |
+| Post-load macro-promotion boundary; **reassigned** as `stdlib_prefix = lx.boundary_out` | `elab_toplevel.c:1805` |
+| **Partitions both elaboration passes**: `e.in_stdlib_load = (stdlib_prefix > 0)`, flipped at `i == stdlib_prefix` | `elab_toplevel.c:2093/2095`, `2161/2163` |
+
+The fourth is the hazard. Shrinking `stdlib_prefix` re-partitions which forms
+count as *user* code in both passes, so prior user turns become newly subject
+to the user-region scans at `:1966` (ambiguity), `:2058`, and `:2115-2116`
+(file-scope grouping) that they escape today. Defensible -- they *are* user
+forms -- but it is a real blast radius, not a diagnostic tweak.
+
+### The fallback is not rare
+
+It is taken whenever `elab_session` is absent, and **any failed eval discards
+it** (`eval.c:12827`). Incremental *parsing* is additionally disabled outright
+for sweet-exp:
 
 ```c
 /* src/turi/eval.c:12757 */
 env->reader_type != READER_SWEET &&
 ```
 
-So a `#lang turmeric/sweet` or `#lang saffron/sweet` session is on the
-mislabeling path from its first turn.
+So one failed eval is enough to put a session on the mislabeling path for the
+rest of its life. That is the whole mechanism behind the report: a doc lookup
+fails, and every subsequent Run is broken.
 
-## PS1 -- `stdlib_prefix` counts the pinned prelude, not the session
+## PS1 -- stop a failed eval from discarding the elaboration session
 
-**The fix.** At `src/turi/eval.c:12837`, pass the pinned prelude's form count
-rather than everything accumulated:
+**Decided (Q1): investigate the no-discard route first, and do not re-scope
+`stdlib_prefix` unless that route fails.**
 
-```c
-/* The stdlib region is the PINNED PRELUDE, not "everything before this turn".
- * Passing `prior` marked the user's own previous turns as stdlib, so their
- * next `(defn main ...)` came back as "already defined by an auto-loaded
- * stdlib module" -- naming a module that does not contain it, and advising a
- * rename that cannot help. */
-const uint32_t pin = env->pin_toplevel;
-const uint32_t stdlib_prefix = (elab_from >= pin) ? 0u : (pin - elab_from);
-```
+The `stdlib_prefix` miscount is real, but it is only *reachable* because a
+failed eval discards `elab_session` and drops the session onto the
+whole-program path. Fixing the trigger keeps every session on the incremental
+path, where the miscount cannot manifest -- and touches none of the four roles
+above.
 
-**Before touching it, verify `stdlib_prefix` has no second role.**
-`elab_toplevel.c:1758` pre-splices the stdlib forms, and `:1788-1790` uses it
-as a `track_boundary` in/out pair; `:897` refers to "the corrected
-stdlib_prefix", so there is prior art on getting this number wrong. Read those
-three sites before changing the caller.
+**The work:**
 
-**Why first:** it is the smallest change with the widest effect. It fixes the
-wrong diagnostic, and it makes `defn` redefinition work on the fallback path --
-which is every sweet-exp session and every session that has seen one error.
+1. Establish why `elab_session` is discarded on failure (`eval.c:12827` and the
+   discard site). If it is discarded because a failed turn may have left it
+   half-mutated, the fix is a rollback to the last committed turn -- the
+   accumulator already has that shape (`acc_committed`, `eval.c:12751`, is
+   exactly this rollback point for forms).
+2. Confirm the sweet-exp arm. Incremental *parsing* is gated separately on
+   `reader_type != READER_SWEET` (`eval.c:12757`); establish whether a parse
+   fallback forces `use_incr_elab` false. **If it does, sweet-exp sessions stay
+   on the mislabeling path and PS1 alone does not fix them** -- that is the
+   trigger for doing the `stdlib_prefix` correction after all, as its own
+   change with its own test pass.
 
-**Done when:** re-running a `(defn main ...)` program succeeds after a
-deliberately-failed eval, and in a `#lang turmeric/sweet` session; and no
-message names an auto-loaded stdlib module for a name that is not in one.
+**Done when:** a deliberately-failed eval leaves the session able to re-run a
+`(defn main ...)` program, and no message names an auto-loaded stdlib module
+for a name that is not in one.
 
-**Tests:** a turi-level regression is the right level here, not a browser test
--- `tests/` already has `tur_incremental_elab_diff` as the A/B harness for this
-exact boundary (`env.c:208`). Add: redefine a `defn` across turns *on the
-fallback path* (force it with `TUR_NO_INCREMENTAL_ELAB=1`) and assert success,
-plus a case asserting the stdlib collision still errors for a name that really
-is in the prelude, so PS1 does not simply delete the check.
+**Tests:** turi-level, not browser. `tests/` already has
+`tur_incremental_elab_diff` as the A/B harness for this boundary
+(`env.c:208`). Add: an eval that fails, then a redefinition that must succeed;
+and a case asserting the stdlib collision still errors for a name that really
+is in the prelude, so the check is not simply deleted.
 
 ## PS2 -- a doc lookup must not evaluate into the session
 
@@ -140,163 +151,172 @@ TuriValue result = turi_eval(g_env, expr);   /* expr = (doc-lookup "name") */
 Every lookup splices `(doc-lookup "...")` into the session permanently. It
 re-elaborates on every later Run (the repeating `TUR-W0040`), it shifts the
 `<eval>:NN` lines the user sees for their own code, and -- because the call
-fails -- it discards `elab_session` and drops the session onto the PS1 path.
+fails -- it discards `elab_session` and drops the session onto PS1's path.
 
-**Two options.**
-
-- **(a) Read the table directly from C.** The function already does exactly
-  this for builtins six lines earlier (`turi_doc_lookup_builtin`,
-  `wasm_glue.c:616`). If the docstrings table is reachable as data, the whole
-  eval detour disappears. Preferred: no evaluation, no failure mode, no
-  session contact.
-- **(b) A non-accumulating eval entry point.** There is no `turi_eval_*`
-  variant today that skips `src_acc` (`eval.c:11813-11826` are all
-  accumulating wrappers over `turi_eval_impl`). Adding one is more surface than
-  (a) but is reusable -- the LSP/hover and completion paths want the same
-  guarantee.
-
-**Do (a) if the table is reachable; fall back to (b).** Decide by reading
-`stdlib/docstrings.tur`'s generated shape and whether `--emit-tur` output has a
-C-side counterpart.
+**Decided (Q2/Q3): read a C table directly, and delete the eval entirely.**
+See PS3 for where the table comes from. `turi_doc_lookup` already does exactly
+this for builtins six lines earlier (`turi_doc_lookup_builtin`,
+`wasm_glue.c:616`), so this is a second call against a second table, not a new
+mechanism.
 
 **Done when:** an arbitrary number of doc lookups leaves `env->src_acc`
 byte-identical, and repro A in the report (lookup, then Run) runs clean.
 
-## PS3 -- decide whether the playground has stdlib docstrings at all
+## PS3 -- emit the docstrings table as C, and use it from both sides
 
-**The defect.** `wasm_preload_stdlib` (`src/web/wasm_glue.c:95-107`) loads
-macros, native stubs, collections and typeclasses. It does **not** load
-`stdlib/docstrings.tur`, the only definition site of `doc-lookup`
-(`stdlib/docstrings.tur:5`). So the query in PS2 cannot resolve for *any*
-name: `wasmDocLookup('vec-map')` returns `null` for a function that has a
-docstring row.
+**The defect.** `wasm_preload_stdlib` (`src/web/wasm_glue.c:95-107`) never
+loads `stdlib/docstrings.tur`, the only definition site of `doc-lookup`
+(`stdlib/docstrings.tur:5`). So PS2's query cannot resolve for *any* name:
+`wasmDocLookup('vec-map')` returns `null` for a function that has a docstring
+row.
 
-**This has been masked.** `web/main.js:4770-4780` falls back to the
+**Masked this whole time.** `web/main.js:4770-4780` falls back to the
 `doc-names.json` summary when the wasm lookup returns nothing, so the panel
-shows *something* and nobody noticed the wasm path was dead. But
-`doc-names.json` carries `{name, summary, kind}` only (6055 entries, measured)
--- a one-line summary, not the full docstring. Users have been getting the
-degraded view for stdlib symbols the whole time.
+showed *something*. But that file carries `{name, summary, kind}` only (6055
+entries, measured) -- a one-line summary, not the docstring. Stdlib symbols
+have been showing the degraded view since the panel shipped.
 
-So this is a real product decision, not a bug with an obvious fix:
+**Preloading cannot fix it (Q3).** `stdlib/docstrings.tur` is 487 KB / 2250
+lines, but size is not the blocker: its only function is an **inline-C body**,
+and `doc-lookup` is **not** registered as an interpreter native. The
+tree-walking interpreter cannot execute it. Adding the file to
+`wasm_preload_stdlib` would load a module whose sole export cannot run.
 
-- **Preload `docstrings.tur`** -- full docstrings return, at the cost of its
-  size in the wasm startup path. Measure that cost first; it is a generated
-  file and not small.
-- **Or emit full docstrings into the docs pack** and drop the eval path
-  entirely, serving stdlib docs from the JSON/pack the panel already loads.
-  This composes with PS2(a) -- if nothing needs `doc-lookup` at runtime, the
-  whole mechanism goes away. It also puts stdlib and spice symbols on one code
-  path instead of two.
+**Decided: emit a real C table and use it both ways.** The data is *already* a
+C array -- `stdlib/docstrings.tur:5` is a `defn` whose body is inline C holding
+`static const struct { const char *key; const char *val; } entries[]`. The
+generator is wrapping a C table in Turmeric for no reason the playground
+benefits from.
 
-**Recommendation: the second.** [offline-docs-plan](offline-docs-plan.md)
-already made the pack the single artifact three consumers read; a parallel
-in-wasm docstring table is the thing that plan exists to avoid. But this needs
-a size check against OD's budget before committing.
+1. `tools/gendocs.py` gains an emitter for a `.c`/`.h` docstrings table
+   alongside `--emit-tur` (which keeps working -- the compiled path still wants
+   the Turmeric module).
+2. Link it into the build; `turi_doc_lookup` reads it directly (PS2).
+3. Register a `doc-lookup` interpreter native backed by the same table, in
+   `turi_env_register_interpreter_natives` beside the other inline-C shims, so
+   `(doc 'vec-map)` works at the playground prompt and under `--interpret`.
+
+Step 3 is what makes this strictly better than serving docs from the pack: one
+table, three consumers, and the `doc` macro (`stdlib/macros.tur:107`) stops
+being a latent hole in every interpreter.
 
 **Done when:** the doc panel shows the same content for a stdlib name as
-`/docs/html/api/` does, and `(doc 'vec-map)` at the playground prompt either
-works or is honestly unsupported -- not warning about a name the environment
-was never given.
+`/docs/html/api/` does, and `(doc 'vec-map)` prints a docstring at the
+playground prompt instead of warning about an unknown name.
 
-## PS4 -- `defeffect` redefinition across turns
+## PS4 -- make every `def*` redefinable across turns
 
-**The defect.** PS1 fixes `defn`. `defeffect` has its own "already defined"
-check that PS1 does not reach: re-running a program containing
-`(defeffect Ask [] :int)` fails on the second run regardless of path. This is
-the examples-dropdown case -- `web/examples.js:99` is that program, so running
-the shipped effects example twice breaks the session.
+**Measured (Q4), `tur repl`:**
 
-**The work:** find `defeffect`'s redefinition check (`elab_effects.c` or
-equivalent) and give it the same across-turns behaviour a `defn` has. Then
-audit the siblings in the same pass -- `defstruct`, `defadt`, `defclass`,
-`definstance`, `defopaque`. Nothing in `env.c:198-215` suggests `defn` was
-*meant* to be the only form that survives a redefinition; it is where the
-incremental work happened to land.
+| form | redefines across turns | what you get |
+| --- | --- | --- |
+| `defn` | yes | works (the incremental-path behaviour) |
+| `defclass` | yes | works, silently |
+| `defopaque` | yes | works |
+| `defeffect` | **no** | `defeffect: 'Ask' is already defined` (`elab_effects.c:1409`) |
+| `defstruct` | **no** | `defstruct: 'P' is already defined (an auto-loaded stdlib module or earlier form in this file defines a type with this name; pick a distinct name)` (`elab_structs.c:1071`) |
+| `defadt` | unestablished | not probed correctly; establish before implementing |
 
-**A judgement call to make explicitly:** redefining an effect or a type is not
-obviously as safe as redefining a function -- existing values may carry the old
-tag. If a form cannot be safely redefined, say so in the diagnostic and point
-at the session reset, rather than reporting a stdlib collision. A correct "you
-cannot redefine an effect mid-session, reset to run this again" is a fine
-outcome for PS4; a wrong "rename your function" is not.
+**Decided: treat the split as unintended and make them all redefinable.** Half
+the forms already permit exactly what the other half refuses, and nothing in
+`env.c:198-215` suggests `defn` was meant to be special -- it is where the
+incremental work happened to land. One rule is also the only version of this a
+user can predict.
 
-**Done when:** the shipped effects example runs twice in a row, or fails with a
-message that names the real constraint and the action that resolves it.
+**Two things to carry:**
 
-**This one reaches `tur repl`,** not just the browser. Test it there too.
+- **`defstruct`'s message has the same misattribution** as the reported one --
+  "an auto-loaded stdlib module or earlier form in this file" blames a module
+  that need not be involved. If any refusal survives implementation, its
+  message must name the session and point at the reset, which is the action
+  that resolves it.
+- **Where a redefinition is genuinely unsafe, say so rather than allowing it.**
+  Live values may carry an old effect or type tag. The decision above is the
+  default, not a mandate to break safety: if a probe shows a form cannot be
+  redefined without corrupting live values, refuse *that* form with an honest
+  message and record why here.
+
+**Done when:** the shipped effects example (`web/examples.js:99`) runs twice in
+a row, and the same holds at `tur repl`.
 
 ## PS5 -- what Run means
 
-The design question under all of it: **Run re-evaluates the editor buffer into
-a session that still holds the previous run's definitions.** That is right for
-a prompt and wrong for a button labelled Run -- pressing it twice is not a
-request to redefine anything.
+**The problem.** Run re-evaluates the editor buffer into a session that still
+holds the previous run's definitions. Right for a prompt, wrong for a button
+labelled Run -- pressing it twice is not a request to redefine anything.
 
-**The constraint that makes this non-trivial.** `runCode` deliberately feeds
-the session (`web/main.js:2318, 2329`):
+**The constraint.** `runCode` deliberately feeds the session
+(`web/main.js:2318, 2329`):
 
 ```js
 if (!isError) replSessionAccept(code);
 ```
 
 with the comment that "a Run is how a tab's definitions become callable at the
-prompt, so it is also how they become offerable there" (W2). A naive "reset on
-Run" throws that away, and also drops *other tabs'* definitions when you run
-this one.
+prompt, so it is also how they become offerable there" (W2).
 
-**Proposal: reset-then-evaluate, not reset-instead-of-evaluate.** On Run,
-reset to the pinned prelude *and then* evaluate the buffer. Afterwards the
-session contains exactly the prelude plus this program -- so W2 still holds
-(the buffer's definitions are callable and offerable at the prompt), and
-re-running is idempotent.
+**Measured (Q5):** `replSessionSource` is a **single global**
+(`main.js:3002`). `switchTab` (`:273`) never touches it; only `:reset` and
+`resetWasm` clear it (`:1602`, `:5538`). All tabs genuinely share one session.
 
-What that trades away, stated plainly:
+**Decided: reset-then-evaluate, replaying the other tabs.** On Run:
 
-- Definitions typed **at the prompt** between runs are discarded by the next
-  Run. Defensible -- Run means "run this program", and the program is the
-  buffer -- but it is a behaviour change a user can notice.
-- **Multi-tab sessions change.** Today, running tab A then tab B leaves both
-  callable. After this, only the last-run tab is. Options: reset scoped
-  per-tab, or re-run the other tabs' accepted source as part of the reset, or
-  accept the change. **Resolve this before implementing** -- see Open
-  questions.
+1. Reset to the pinned prelude (`turi_env_reset_to_prelude`).
+2. Re-accept the other tabs' last-run source.
+3. Evaluate this tab's buffer.
+
+The session then holds the prelude, the other tabs' programs, and exactly one
+copy of this one. Re-running is idempotent, W2 still holds, and cross-tab
+behaviour is what it is today -- no user-visible regression, which is why this
+beat the simpler session-wide reset.
+
+**What it costs, stated plainly:** a replay on every Run, proportional to the
+other tabs' accepted source. Bounded by the tab count and already-elaborated
+text, but it is real work on a hot path -- measure it before assuming it is
+free, and consider caching the replayed prefix if it bites.
+
+**Also traded away:** definitions typed **at the prompt** between runs are
+discarded by the next Run. Defensible -- Run means "run this program", and the
+program is the buffer -- but it is a behaviour change worth a line in the
+release notes.
 
 **Done when:** pressing Run twice on any program in `web/examples.js` produces
-identical output both times.
+identical output both times, and a definition from another tab is still
+callable at the prompt afterwards.
 
 ## Sequencing
 
-PS1 first and alone -- it is small, it is the deepest, and it makes the
-remaining symptoms legible. PS2 next (it is what triggers PS1's path in the
-reported case). PS3 and PS4 are independent of each other and of PS5. PS5 last,
-because PS1+PS2 remove the sharp edges and PS5 is the only one with a real
-behaviour trade to negotiate.
+PS1 first and alone -- it is the trigger for the reported failure and the
+cheapest place to break the chain. PS2 next; it is what fires PS1's path in
+practice, and PS3 supplies the table it needs, so PS2 and PS3 land together.
+PS4 and PS5 are independent of both and of each other.
 
-PS1 and PS2 together close the reported bug. PS3-PS5 are the reason it was
-reachable.
+PS1 + PS2/PS3 close the reported bug. PS4 and PS5 are the reasons it was
+reachable at all.
 
 ## Open questions
 
-1. **Does `stdlib_prefix` carry a second meaning** at
-   `elab_toplevel.c:1758/1788-1790` that PS1 would break? Must be answered
-   before PS1 lands, not after.
-2. **Is the docstrings table reachable from C** without evaluating Turmeric
-   (PS2a)? If not, PS2 costs a new eval entry point.
-3. **What does `docstrings.tur` cost in the wasm startup path** (PS3)? Decides
-   preload-vs-pack.
-4. **Which `def*` forms can be safely redefined mid-session** (PS4)? Needs a
-   real answer per form, not a blanket one.
-5. **Multi-tab semantics under PS5.** Does a reset scope to the tab, replay
-   the other tabs, or change the contract? This is a product call and should
-   be made by whoever owns the Try Turmeric UX, not inferred from the code.
+The five that gated this plan are resolved (see Decisions). What remains is
+implementation-time verification, not design:
+
+1. **Does keeping `elab_session` alive across a failure actually hold the
+   session on the incremental path?** This is PS1's premise. If a failed turn
+   can leave the session half-mutated, PS1 becomes a rollback rather than a
+   no-discard, and `acc_committed` (`eval.c:12751`) is the model.
+2. **Does a sweet-exp parse fallback force `use_incr_elab` false?** If yes,
+   PS1 does not cover sweet-exp sessions and the `stdlib_prefix` correction has
+   to happen after all -- separately, with its own tests, against the four
+   roles above.
+3. **Is `defadt` redefinable?** Unestablished; the probe used wrong syntax.
+4. **What actually breaks when an effect or struct is redefined with live
+   values around?** PS4's policy is decided, but this decides whether any
+   specific form has to keep refusing.
 
 ## Non-goals
 
-- Anything in `saffron-lang-plan`. The dialect is incidental to every symptom
-  here.
-- Reworking the accumulating-session model itself. `env.c:198-215` documents
-  why it exists (O(N^2) memory and time over a long session, measured at ~1 GB
-  and quadratic over 1500 turns). PS1 and PS5 work *within* that model.
-- The offline docs pack's structure. PS3 may add to what the pack carries; it
-  should not change how [offline-docs-plan](offline-docs-plan.md) built it.
+- Anything in `saffron-lang-plan`. The dialect is incidental to every symptom.
+- Reworking the accumulating-session model. `env.c:198-215` documents why it
+  exists (O(N^2) memory and time over a long session, measured at ~1 GB and
+  quadratic over 1500 turns). PS1 and PS5 work *within* that model.
+- The offline docs pack's structure. PS3 adds a C table beside it and does not
+  change how [offline-docs-plan](offline-docs-plan.md) built the pack.
