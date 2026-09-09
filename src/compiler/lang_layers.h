@@ -114,4 +114,35 @@ bool lang_span_is_saffron(Span sp);
 void lang_dialects_print(void);
 void lang_dialects_print_json(void);
 
+/* saffron-lang-plan S1 / try-turmeric-lang-toggle-plan T1: iterate that same
+ * base axis, machine-readably.
+ *
+ * lang_dialects_print renders the cross-product for the CLI; this is its twin
+ * for a second consumer -- the playground's `turi_wasm_lang_registry` -- so
+ * that consumer reads the two enums instead of keeping its own copy.  A
+ * hardcoded copy is precisely what drifted when Saffron landed: the WASM
+ * picker went on offering four bases after there were eight, so `#lang
+ * saffron` worked when typed but could not be selected.
+ *
+ * `base` is composed into the caller's struct (the spelling is built, not a
+ * static string); the remaining fields point at static storage.  `experiment`
+ * is the EXPERIMENTS[] name gating the LANGUAGE half, or NULL when the base is
+ * stable -- a caller badges the row with it rather than hiding the row, since
+ * the directive is itself the enable (D9).  Returns false past the end. */
+typedef struct LangBaseDescriptor {
+    char        base[64];    /* token as written, e.g. "saffron/sweet" */
+    const char *language;    /* "turmeric" | "saffron" */
+    const char *reader;      /* unqualified reader suffix, e.g. "sweet" */
+    const char *experiment;  /* gating EXPERIMENTS[] name, or NULL */
+} LangBaseDescriptor;
+
+size_t lang_bases_count(void);
+bool   lang_base_at(size_t i, LangBaseDescriptor *out);
+
+/* The base token naming one (language, reader) pair -- the bare language name
+ * when the reader is that language's default, else "<language>/<suffix>".
+ * The inverse of lang_base_from_name, for a caller that holds the two axes and
+ * needs to say which base it is in (e.g. reporting a live session's `#lang`). */
+void lang_base_spelling_of(LangDialect d, ReaderType r, char *out, size_t cap);
+
 #endif /* TUR_LANG_LAYERS_H */

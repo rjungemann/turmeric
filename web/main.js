@@ -1235,6 +1235,11 @@ function parseLangDirective(code) {
 // canonical set -- the LAYER list is never hardcoded in JS, because
 // LANG_LAYERS[] in src/compiler/lang_layers.c is the single source of truth
 // and a JS copy would drift on the next layer added or graduated.
+//
+// Deliberately still the four Turmeric bases: a build old enough to be
+// missing the registry export is also old enough to reject `#lang saffron`
+// outright, so offering the Saffron bases here would hand that build a base
+// it cannot read.  A current build never uses this list.
 const LANG_REGISTRY_FALLBACK = {
     bases: [
         { name: 'turmeric',             label: 'S-expression' },
@@ -1268,6 +1273,12 @@ function baseShortLabel(base) {
         case 'turmeric/curly-infix': return 'curly';
         case 'turmeric/neoteric':    return 'neoteric';
         case 'turmeric/sweet':       return 'sweet';
+        // The language is the interesting half of a Saffron base -- the
+        // reader is what the Turmeric rows already say.
+        case 'saffron':              return 'saffron';
+        case 'saffron/curly-infix':  return 'saffron curly';
+        case 'saffron/neoteric':     return 'saffron neoteric';
+        case 'saffron/sweet':        return 'saffron sweet';
         default:                     return base || 's-expr';
     }
 }
@@ -1393,11 +1404,27 @@ function renderLangMenu() {
     if (!basesEl || !layersEl) return;
     const reg = langMenuRegistry();
 
-    basesEl.innerHTML = reg.bases.map(b => `
-        <label class="lang-row">
+    // A base names a (language, reader) PAIR, and `label` is only the reader
+    // half -- so a bare label would print "S-expression" twice once a second
+    // language exists.  Non-default languages carry their name; the base token
+    // itself goes in the summary slot, and an experiment-gated language gets
+    // the same `experimental` chip a semantic layer gets.
+    basesEl.innerHTML = reg.bases.map(b => {
+        const lang = b.language || 'turmeric';
+        const name = lang === 'turmeric'
+            ? b.label
+            : `${lang.charAt(0).toUpperCase()}${lang.slice(1)} -- ${b.label}`;
+        return `
+        <label class="lang-row" title="#lang ${escapeHtml(b.name)}">
             <input type="radio" name="lang-base" value="${escapeHtml(b.name)}">
-            <span class="lang-row-name">${escapeHtml(b.label)}</span>
-        </label>`).join('');
+            <span class="lang-row-name">${escapeHtml(name)}</span>${
+                b.experiment
+                    ? '<span class="lang-chip">experimental</span>'
+                    : ''
+            }
+            <span class="lang-row-summary">#lang ${escapeHtml(b.name)}</span>
+        </label>`;
+    }).join('');
 
     // An unavailable layer renders disabled with the reason -- never hidden,
     // because hiding it makes it undiscoverable and makes the picker

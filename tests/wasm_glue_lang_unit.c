@@ -16,12 +16,21 @@
  *     genuinely turns off (the #s"..." dispatch stops resolving -- the
  *     session reader-macro registry is wiped, not just the layer bits);
  *   - the registry export walks the C tables: canonical base names + labels,
- *     every LANG_LAYERS[] row, and never the legacy alias.
+ *     every LANG_LAYERS[] row, and never the legacy alias;
+ *   - the registry offers EVERY base lang_base_at knows, by count and by
+ *     spelling.  Asserting a couple of names is what let the picker drift a
+ *     whole language behind the reader: `#lang saffron` worked when typed and
+ *     could not be selected, because WASM_LANG_BASES[] was a hand-kept copy
+ *     that nothing compared against the real set;
+ *   - set_lang carries the LANGUAGE axis, not just the reader -- every
+ *     Saffron base shares a Turmeric reader, so dropping the language half
+ *     leaves a "switched" session still elaborating as Turmeric.
  */
 
 #include <stdio.h>
 #include <string.h>
 
+#include "compiler/lang_layers.h"
 #include "web/wasm_glue.h"
 
 static int passed = 0;
@@ -90,7 +99,45 @@ int main(void) {
         CHECK(strstr(reg, "\"name\":\"stringed\"") != NULL &&
               strstr(reg, "\"available\":true") != NULL,
               "registry lists the stringed layer as available");
+
+        /* Completeness, not a spot check: every base the C side accepts has
+         * to be offerable, or the picker silently hides a language. */
+        size_t n_offered = 0;
+        for (const char *q = reg; (q = strstr(q, "\"name\":\"")) != NULL; q++) {
+            /* Count only base rows: they precede the layers array. */
+            const char *layers_at = strstr(reg, "\"layers\":[");
+            if (layers_at && q > layers_at) break;
+            n_offered++;
+        }
+        CHECK(n_offered == lang_bases_count(),
+              "registry offers every base lang_base_at knows (no drift)");
+
+        for (size_t i = 0; i < lang_bases_count(); i++) {
+            LangBaseDescriptor d;
+            if (!lang_base_at(i, &d)) continue;
+            char needle[96];
+            snprintf(needle, sizeof needle, "\"name\":\"%s\"", d.base);
+            CHECK(strstr(reg, needle) != NULL,
+                  "registry offers this specific base spelling");
+        }
+        CHECK(strstr(reg, "\"name\":\"saffron\"") != NULL &&
+              strstr(reg, "\"experiment\":\"saffron\"") != NULL,
+              "the Saffron bases are offered, and badged with their experiment");
     }
+
+    /* The LANGUAGE axis survives a set_lang.  `saffron` reads with the
+     * Turmeric reader, so a reader-only switch looks like success and changes
+     * nothing -- catch it on semantics, not on the reported name alone. */
+    CHECK(turi_wasm_set_lang("saffron") == 0, "set_lang accepts a Saffron base");
+    CHECK(strcmp(turi_wasm_get_lang(), "saffron") == 0,
+          "get_lang reports both axes, not just the reader");
+    CHECK(eval_contains("(defn add [a b] (+ a b))", "add") &&
+          eval_contains("(add 7.1 0.5)", "7.6"),
+          "an unannotated Saffron parameter takes a float (Turmeric defaults to int)");
+    CHECK(turi_wasm_set_lang("saffron/sweet") == 0,
+          "set_lang accepts a slash-namespaced Saffron base");
+    CHECK(strcmp(turi_wasm_get_lang(), "saffron/sweet") == 0,
+          "get_lang reports the Saffron sweet base");
 
     turi_wasm_shutdown();
 

@@ -421,9 +421,16 @@ int turi_wasm_set_lang(const char *name) {
     LangLayerSet layers  = 0;
     const char  *bad     = NULL;
     size_t       bad_len = 0;
-    ReaderType rt = detect_lang_layered(buf, (size_t)written,
+    /* saffron-lang-plan S8: detect_lang_DIALECT, not detect_lang_layered.
+     * The layered form reports only the reader, so every Saffron base came
+     * back as its reader half (`saffron` -> READER_TURMERIC) with the language
+     * silently dropped -- the picker would have "switched" to Saffron and left
+     * the session in Turmeric. */
+    LangDialect dialect = LANG_TURMERIC;
+    ReaderType rt = detect_lang_dialect(buf, (size_t)written,
                                         &rest, &rest_len,
-                                        &layers, &bad, &bad_len);
+                                        &layers, &bad, &bad_len,
+                                        &dialect);
 
     /* rest == buf means no #lang was recognised (pointer unchanged). */
     if (rest == buf || rt == READER_UNKNOWN || rt == (ReaderType)-1) return 1;
@@ -437,14 +444,18 @@ int turi_wasm_set_lang(const char *name) {
      * inline `#lang` path does (web-repl-lang-switch-drops-stdlib), and wipes
      * the session reader-macro registry so a dropped layer's dispatch
      * genuinely turns off. */
-    turi_env_apply_lang(g_env, rt, layers);
+    turi_env_apply_lang_dialect(g_env, rt, layers, dialect);
     return 0;
 }
 
-/* Return the current reader language name as a static string. */
+/* Return the current `#lang` BASE as a static string -- both axes, not just
+ * the reader.  Reporting `reader_type_name` alone answered "turmeric" for a
+ * Saffron session, since every Saffron base shares a Turmeric reader. */
 const char *turi_wasm_get_lang(void) {
+    static char base[64];
     if (!g_env) return reader_type_name(READER_TURMERIC);
-    return reader_type_name(g_env->reader_type);
+    lang_base_spelling_of(g_env->lang, g_env->reader_type, base, sizeof base);
+    return base;
 }
 
 /* ---------------------------------------------------------------------------
@@ -452,19 +463,34 @@ const char *turi_wasm_get_lang(void) {
  * ---------------------------------------------------------------------------
  */
 
-/* Human-readable base labels live HERE, next to the canonical names, not in
- * JS -- the UI renders what this table exports so it can never drift from
- * lang_base_from_name's accepted set.  The legacy `sweet-exp` alias is
+/* Human-readable labels for the READER axis, keyed by the unqualified reader
+ * suffix lang_base_at reports -- not by the full base token.
+ *
+ * This used to be a table of whole base names, and it drifted the moment the
+ * LANGUAGE axis arrived: `saffron`, `saffron/curly-infix`, `saffron/neoteric`
+ * and `saffron/sweet` were all spellable and all worked when typed, but the
+ * picker still offered the original four, so the dialect was unreachable from
+ * the UI.  Keying on the reader suffix means a new LANGUAGE costs this table
+ * nothing -- the base list itself is walked from lang_base_at, the same
+ * cross-product `tur lang-layers` prints.  The legacy `sweet-exp` alias is
  * accepted on input but deliberately not offered. */
 static const struct {
-    const char *name;
+    const char *reader;
     const char *label;
-} WASM_LANG_BASES[] = {
-    { "turmeric",             "S-expression" },
-    { "turmeric/curly-infix", "Curly-infix" },
-    { "turmeric/neoteric",    "Neoteric" },
-    { "turmeric/sweet",       "Sweet-expression" },
+} WASM_READER_LABELS[] = {
+    { "s-expr",      "S-expression" },
+    { "curly-infix", "Curly-infix" },
+    { "neoteric",    "Neoteric" },
+    { "sweet",       "Sweet-expression" },
 };
+
+static const char *wasm_reader_label(const char *reader) {
+    size_t n = sizeof(WASM_READER_LABELS) / sizeof(WASM_READER_LABELS[0]);
+    for (size_t i = 0; i < n; i++)
+        if (strcmp(WASM_READER_LABELS[i].reader, reader) == 0)
+            return WASM_READER_LABELS[i].label;
+    return reader;
+}
 
 /* Append `s` to `b` as a JSON string body (no surrounding quotes). */
 static void wasm_json_escape(Buf *b, const char *s) {
@@ -505,14 +531,29 @@ const char *turi_wasm_lang_registry(void) {
     Buf b;
     buf_init(&b);
     buf_puts(&b, "{\"bases\":[");
-    size_t nbases = sizeof(WASM_LANG_BASES) / sizeof(WASM_LANG_BASES[0]);
+    size_t nbases = lang_bases_count();
     for (size_t i = 0; i < nbases; i++) {
+        LangBaseDescriptor d;
+        if (!lang_base_at(i, &d)) continue;
         if (i) buf_putc(&b, ',');
         buf_puts(&b, "{\"name\":\"");
-        wasm_json_escape(&b, WASM_LANG_BASES[i].name);
+        wasm_json_escape(&b, d.base);
         buf_puts(&b, "\",\"label\":\"");
-        wasm_json_escape(&b, WASM_LANG_BASES[i].label);
-        buf_puts(&b, "\"}");
+        wasm_json_escape(&b, wasm_reader_label(d.reader));
+        buf_puts(&b, "\",\"language\":\"");
+        wasm_json_escape(&b, d.language);
+        /* A base gated by an experiment is BADGED, never hidden: `#lang
+         * saffron` is itself the enable (D9), so the row is always selectable
+         * -- the picker just says what it is signing the session up for. */
+        buf_puts(&b, "\",\"experiment\":");
+        if (d.experiment) {
+            buf_puts(&b, "\"");
+            wasm_json_escape(&b, d.experiment);
+            buf_puts(&b, "\"");
+        } else {
+            buf_puts(&b, "null");
+        }
+        buf_puts(&b, "}");
     }
     buf_puts(&b, "],\"layers\":[");
     size_t nlayers = lang_layers_count();

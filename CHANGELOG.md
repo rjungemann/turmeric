@@ -2,6 +2,25 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- **Try Turmeric's language picker offers the Saffron bases.** `#lang saffron`
+  (and `saffron/curly-infix`, `saffron/neoteric`, `saffron/sweet`) worked when
+  typed into the playground but could not be selected: `WASM_LANG_BASES[]` in
+  `src/web/wasm_glue.c` was a hand-kept copy of the base set that still listed
+  the original four, so a whole language was unreachable from the UI. The
+  registry now walks `lang_base_at` -- the same (language x reader)
+  cross-product `tur lang-layers` prints -- and an experiment-gated base is
+  badged rather than hidden. `turi_wasm_set_lang` carries the LANGUAGE axis
+  too (it used the reader-only `detect_lang_layered`/`turi_env_apply_lang`
+  pair, so selecting a Saffron base would have "switched" to a session still
+  elaborating as Turmeric), and `turi_wasm_get_lang` reports both axes instead
+  of answering `turmeric` for every Saffron session. The unit test now asserts
+  the offered base list matches `lang_bases_count()`, which is what a spot
+  check of two spellings failed to catch.
+
 ## [0.45.0] -- 2026-09-09
 
 ### Added

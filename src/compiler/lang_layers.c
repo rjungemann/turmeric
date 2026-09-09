@@ -203,6 +203,29 @@ static const char *lang_reader_suffix(ReaderType r) {
     return slash ? slash + 1 : "s-expr";
 }
 
+void lang_base_spelling_of(LangDialect d, ReaderType r, char *out, size_t cap) {
+    lang_base_spelling(d, r, out, cap);
+}
+
+size_t lang_bases_count(void) {
+    return (sizeof(DIALECTS) / sizeof(DIALECTS[0]))
+         * (sizeof(READERS)  / sizeof(READERS[0]));
+}
+
+bool lang_base_at(size_t i, LangBaseDescriptor *out) {
+    if (!out || i >= lang_bases_count()) return false;
+    size_t nreaders = sizeof(READERS) / sizeof(READERS[0]);
+    LangDialect d = DIALECTS[i / nreaders];
+    ReaderType  r = READERS[i % nreaders];
+    lang_base_spelling(d, r, out->base, sizeof out->base);
+    out->language = lang_dialect_name(d);
+    out->reader   = lang_reader_suffix(r);
+    /* `saffron` is the only non-default dialect so far, matching
+     * lang_dialects_print/_json above; a second one gets a lookup here. */
+    out->experiment = (d == LANG_TURMERIC) ? NULL : "saffron";
+    return true;
+}
+
 void lang_dialects_print(void) {
     printf("%-22s %-9s %-12s %s\n", "BASE", "LANGUAGE", "READER", "STATUS");
     for (size_t di = 0; di < sizeof(DIALECTS) / sizeof(DIALECTS[0]); di++) {
