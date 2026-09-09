@@ -729,7 +729,7 @@ Encoding a structural type predicate through the SMT layer would mean teaching
 the solver about the type system, which is a great deal of machinery to
 reimplement a question `defworld` can answer by field lookup at elaboration
 time. The right home for it is row/presence constraints, re-filed as
-[`ecs-component-set-bounds-plan.md`](ecs-component-set-bounds-plan.md).
+[`ecs-component-set-bounds-plan.md`](../../archive/ecs-component-set-bounds-plan.md).
 
 Meanwhile the `(HasPos W)` typeclass encoding **ships and works**, so nothing
 is lost by the deferral except one dictionary indirection per polymorphic call.

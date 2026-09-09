@@ -1,11 +1,18 @@
 # Mutable globals -- making `^mut` global state visible to the disciplines that already exist
 
+> **Archived 2026-09-09.** Every phase (G1-G5b) landed and both experiments
+> it introduced graduated -- `global-state` in 0.35.0, `write-frames` in
+> 0.37.0 -- so the header's own "a record rather than open work" is the
+> disposition. The read-side follow-up it drafted,
+> [trusted-refinement-claims-plan.md](../upcoming/trusted-refinement-claims-plan.md),
+> is the one thread still open (R4), and it lives in `docs/upcoming/`.
+
 > **Status: COMPLETE.** **G1, G2, G3, G4a (`^atomic`) LANDED 2026-08-05** (see
 > §10, §15, §16, §17). **G4b LANDED** (§18) and **G5a LANDED** (§19). **The
 > adjacent small items closed 2026-08-17** (see §20): §12.3's classifier
 > shipped as the §13.1 warning (`TUR-W0383`), §13.3's unchecked dynvar
 > `pthread_key_create` fixed, and §14's read-side plan drafted
-> ([`trusted-refinement-claims-plan.md`](trusted-refinement-claims-plan.md)).
+> ([`trusted-refinement-claims-plan.md`](../upcoming/trusted-refinement-claims-plan.md)).
 > **G5b closed 2026-08-18: `global-state` GRADUATED in 0.35.0** (§21) -- every
 > feature is unconditional and the row is retired. Every phase is done; this
 > plan is a record rather than open work.
@@ -14,18 +21,18 @@
 > is checked unconditionally now, including the G1 global-write downgrade and
 > the §22 blast-radius argument, which was scoped to the gate that no longer
 > exists. Nothing else in this plan changes; see
-> [`checked-write-frames-plan.md`](../archive/checked-write-frames-plan.md).
+> [`checked-write-frames-plan.md`](checked-write-frames-plan.md).
 > All open questions in §9 are answered: §11 (thread-local init), §12 (`#reads`
 > strength), §13 (the remainder), §14 (whether the read side gets its own plan).
 > Written as the follow-up
-> [`def-define-consolidation-plan.md`](../archive/def-define-consolidation-plan.md) §8.4
+> [`def-define-consolidation-plan.md`](def-define-consolidation-plan.md) §8.4
 > named ("giving mutable globals a concurrency story is its own plan, not a
 > rider on this one").
 > **Type:** Language / elaboration / effects
 > **Depends on:** `^mut` on a top-level `def`, landed 2026-08-05 (D4).
-> **Related:** [`checked-write-frames-plan.md`](../archive/checked-write-frames-plan.md)
+> **Related:** [`checked-write-frames-plan.md`](checked-write-frames-plan.md)
 > (this plan is scoped to the globals half of its step 3),
-> [`sealed-opaque-plan.md`](../archive/sealed-opaque-plan.md) (the same encapsulation
+> [`sealed-opaque-plan.md`](sealed-opaque-plan.md) (the same encapsulation
 > argument, applied to handles rather than globals).
 
 ## 0. Summary
@@ -1402,7 +1409,7 @@ running nothing. Four directories are in that state -- `sandbox/` (17 files),
 `stm/` (7, including atomicity and deadlock-freedom), `module-transitive-imports/`
 (4), `typeclass/` (2) -- and no other harness picks them up. 30 `.tur` files
 that the summary line counts as passing. Filed as
-[docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md](../archive/fixture-dirs-with-loose-tur-files-pass-without-running.md).
+[docs/archive/fixture-dirs-with-loose-tur-files-pass-without-running.md](fixture-dirs-with-loose-tur-files-pass-without-running.md).
 Found because `module-transitive-imports` looked like the multi-module fixture
 precedent and turned out not to run; the shape G3's fixtures actually use is
 `errors/sealed-opaque-cross-module-fabricate`'s.
@@ -1682,7 +1689,7 @@ thread-local emitter was corrected in the same change.
 
 ### 20.3 §14's read-side plan: drafted
 
-[`trusted-refinement-claims-plan.md`](trusted-refinement-claims-plan.md),
+[`trusted-refinement-claims-plan.md`](../upcoming/trusted-refinement-claims-plan.md),
 named for the tier rather than the annotation, seeded from §§12.1-12.3 and
 §13.5 as §14 specified.  Its phases: R1 the warning (landed, above), R2 the
 gated refusal (which `refine-reads-frame-omits-global` is now written to

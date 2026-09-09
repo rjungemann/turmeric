@@ -70,7 +70,7 @@ truth for a fact the type system already holds.
 
 ## Fix direction
 
-[docs/upcoming/container-element-form-plan.md](../upcoming/container-element-form-plan.md)
+[docs/archive/container-element-form-plan.md](container-element-form-plan.md)
 (CE) is the plan, and it is a corollary of end-to-end monomorphization rather
 than a niche feature: the invariant is satisfied exactly when every base the
 element crosses is a per-monomorph spec.

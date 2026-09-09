@@ -1,7 +1,7 @@
 ;;; tur/result -- typed Result[A B]: ok value A or err value B.
 ;;;
 ;;; Parameterized result type, as a REAL SUM (SR2b of
-;;; docs/upcoming/sum-representation-plan.md): `(Ok A)` or `(Err B)`.
+;;; docs/archive/sum-representation-plan.md): `(Ok A)` or `(Err B)`.
 ;;; Runtime layout is the tagged monomorph -- { int tag; union { Ok; Err } } --
 ;;; 16 bytes (down from the record's 24), one payload slot, no dead arm to
 ;;; zero-fill, so `err` no longer needs a zero value for A nor `ok` one for B.

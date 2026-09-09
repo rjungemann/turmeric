@@ -1,6 +1,6 @@
 /* macro_env.c -- the per-compile macro-time interpreter env.
  *
- * Stage 1 of docs/upcoming/macro-system-direction-plan.md: the elaborator
+ * Stage 1 of docs/archive/macro-system-direction-plan.md: the elaborator
  * gets a lazily-created, capability-denied, fuel-limited turi env hung off
  * its Elab/ElabSession, torn down with the session.  Stage 2's procedural
  * macros (`defmacro*`) evaluate their bodies in this env; nothing in the

@@ -107,7 +107,19 @@ OUT3="$P3/out.log"
 (cd "$P3" && "$TUR_BIN" repl < "$FIFO") >"$OUT3" 2>&1 &
 REPL_PID=$!
 exec 3>"$FIFO"
-# Wait long enough for the failed startup load + diagnostic to complete.
+# Wait for the failed startup load to FINISH before fixing the source.  A
+# fixed `sleep 1` here was a race: on a loaded CI runner (the auxiliary
+# suites run under -j) the REPL had not yet read src/lib.tur when the fix
+# landed, so the STARTUP load succeeded, `(reload)` then said "no changes",
+# and the "loaded 1 export" assertion below failed -- the rp7-reload-self-heal
+# flake in docs/reported/ci-two-fixtures-flake-on-hosted-runners.md.  Poll
+# for the startup diagnostic instead (the same line scenario 2 asserts),
+# then still give the clock a second so the rewrite's mtime moves past the
+# failed build's.
+for _ in $(seq 1 300); do
+    grep -q "fix the error above" "$OUT3" 2>/dev/null && break
+    sleep 0.2
+done
 sleep 1
 # Fix the source.
 cat > "$P3/src/lib.tur" <<'EOF'

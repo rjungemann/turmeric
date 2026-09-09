@@ -14,7 +14,7 @@ below. See **Resolution** immediately below for what shipped, what it
 measured, and what is left.
 
 The fix is planned in
-[docs/upcoming/sum-representation-plan.md](../upcoming/sum-representation-plan.md)
+[docs/archive/sum-representation-plan.md](sum-representation-plan.md)
 (SR), which also records the interaction this report understates: by-value
 lowering removes the LEAK as well as the malloc for the types it covers, since
 a value that is never boxed has nothing to free. That interaction is the one
@@ -397,7 +397,7 @@ nothing and does not import the module
   on the smaller payoff.
 - **Reclamation (row B) is the unblocked half.** 2.6x, fixes footprint rather
   than only speed, and has no correctness blocker in front of it. The ordering
-  in [the SR plan](../upcoming/sum-representation-plan.md) already says
+  in [the SR plan](sum-representation-plan.md) already says
   reclamation first; this decision just removes the slab as a candidate for
   what "reclamation" means.
 

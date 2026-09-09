@@ -6,7 +6,7 @@ why the workload behind the ADT-allocation report has nothing exercising it.
 **Status:** RESOLVED 2026-09-02 (see the end).
 
 Found while censusing construction sites for
-[SR0](../upcoming/sum-representation-plan.md).
+[SR0](sum-representation-plan.md).
 
 ## What the example actually does
 
@@ -56,7 +56,7 @@ This is load-bearing for the allocation work.
 [multi-variant-adts-always-heap-allocate](multi-variant-adts-always-heap-allocate.md)
 measured ~85% of executed instructions inside `malloc` on `logic.tur`'s shapes,
 and `Term`/`Subst`/`Stream` are the recursive sums that
-[the SR plan](../upcoming/sum-representation-plan.md) prices at 1.8x/18x. Every
+[the SR plan](sum-representation-plan.md) prices at 1.8x/18x. Every
 one of those numbers comes from **one synthetic benchmark**
 (`benchmarks/bench-logic-subst.tur`) written for the purpose. There is no real
 program in the tree that exercises the hot path the plan is built around, which

@@ -1528,7 +1528,7 @@ static bool rt_form_mentions_set(const Elab *e, const Form *f, uint32_t depth) {
  * effectively constant"), THIS scan becomes the thing standing between a
  * callee's global write and a stale hypothesis -- and it cannot do that job as
  * written.  Widen the two together or not at all.  See
- * docs/upcoming/mutable-globals-plan.md §4.5. */
+ * docs/archive/mutable-globals-plan.md §4.5. */
 #define RT_WF3_MAX_TARGETS 16
 
 static bool rt_sym_is(const Form *f, const char *name);
@@ -1759,7 +1759,7 @@ bool type_is_atomic_scalar(TypeKind k) {
 
 /* ------------------------------------------------------------------------- *
  * G1: does a body write a MUTABLE GLOBAL?
- * docs/upcoming/mutable-globals-plan.md §4.1, §4.5.
+ * docs/archive/mutable-globals-plan.md §4.1, §4.5.
  *
  * Orthogonal to the frame walk above, and deliberately so.  `#writes` speaks
  * about PARAMETERS; a global is written by name rather than passed, so it is

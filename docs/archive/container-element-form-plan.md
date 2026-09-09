@@ -6,11 +6,16 @@ description: Extend per-monomorph specialization from container RECEIVERS (done,
 
 # Container Element Form (CE)
 
+> **Archived 2026-09-09.** CE0-CE3 built and default since the option niche
+> graduated 2026-09-03; CE5's container row re-measured. CE4 (Map/Set/HAMT)
+> is deferred by the plan's own disposition -- Vec was the whole measured
+> cost -- and would be a new plan if the census ever calls for it.
+
 **Status: CE0, CE1, CE2 and CE3 BUILT (CE3 closed 2026-09-04) and DEFAULT
 since the option niche graduated 2026-09-03; CE4 deferred, CE5 done for
 the container row.** The word convention and the TUR-E0714 / TUR-E0715
 backstops are default-path facts now. The refinement of the "monomorphization
-dependency" the [option-niche graduation hold](../archive/sr3-option-niche-plan.md)
+dependency" the [option-niche graduation hold](sr3-option-niche-plan.md)
 points at, sketched 2026-08-28 in that plan's container-boxing section.
 
 **The exit gate is met.** The container row that read parity before CE2
@@ -38,7 +43,7 @@ The same push spec failed to BUILD on the default path (a by-value
 `(Option String)` element) for the same double-bridge reason; resolving the
 bridge type inside the spec and gating the second arm fixed both. The read
 half of the default-path wrapper was a separate pre-existing defect, filed as
-[generic-vec-read-wrapper-spec-returns-carrier-word](../archive/generic-vec-read-wrapper-spec-returns-carrier-word.md)
+[generic-vec-read-wrapper-spec-returns-carrier-word](generic-vec-read-wrapper-spec-returns-carrier-word.md)
 and resolved 2026-09-04: a spec whose declared result is a CE_BOX element and
 whose tail is a raw container read now takes the same carrier->concrete return
 bridge a catch-box tail already did, so it emits the readback the concrete
@@ -53,7 +58,7 @@ because their carrier form IS their natural word, but a niche `(Option P)` is
 the first eligible element type whose carrier form (a heap-allocated tagged
 box) differs from its natural word (the payload pointer) -- so it pays a
 malloc per element that its whole representation exists to remove, and the
-[graduation measurement](../archive/sr3-option-niche-plan.md) shows exact container
+[graduation measurement](sr3-option-niche-plan.md) shows exact container
 parity with the by-value default.
 
 ## Why the box is where it is
@@ -251,7 +256,7 @@ reinterprets the word (pinned by `option-niche-vec-closure-cmp`, seam
 population). A USER comparator with untyped params that ascribes the word
 itself, `(fn [a b] (eq? (:: a (Option String)) ...))`, was the residue --
 filed as
-[erased-closure-param-over-niche-vec-slot-reads-box](../archive/erased-closure-param-over-niche-vec-slot-reads-box.md).
+[erased-closure-param-over-niche-vec-slot-reads-box](erased-closure-param-over-niche-vec-slot-reads-box.md).
 
 **Closed 2026-09-04, and CE3 is done.** The residue split again along one
 line: whether the comparator is written AT the call. A lambda there is
@@ -274,7 +279,7 @@ says whether any real code puts niche options in maps. Default disposition:
 defer -- Vec was 100% of the measured parity cost.
 
 **CE5 -- fold the result into the graduation calculus.** Re-run the
-[measurement](../archive/sr3-option-niche-plan.md) container row; update the graduation
+[measurement](sr3-option-niche-plan.md) container row; update the graduation
 section. This plan does not itself argue for the flip.
 **Container row re-measured 2026-09-03** (table at the top); the
 graduation section in docs/archive/sr3-option-niche-plan.md records it. The flip is

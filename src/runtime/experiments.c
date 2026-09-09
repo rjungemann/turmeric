@@ -329,7 +329,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * escape hatch.  The row's soak had exactly one job -- do not fix the ABI
      * before SR2b, its heaviest client, exists -- and SR2b landed in-tree and
      * across the spices before the expiry was anywhere near.  See
-     * docs/upcoming/sr2-gate-results.md. */
+     * docs/archive/sr2-gate-results.md. */
     /* saffron-lang-plan: the dynamically typed dialect.  S1 wires the `#lang`
      * axis and this gate only -- the dialect selects no semantics yet, so a
      * `#lang saffron` file compiles exactly as `#lang turmeric` does and says

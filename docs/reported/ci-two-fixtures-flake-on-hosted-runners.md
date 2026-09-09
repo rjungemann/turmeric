@@ -100,3 +100,25 @@ Cheap, in order:
 - Not evidence that `main` is broken -- `main`'s own runs are green.
 - Not the same as the archived `httpd-mw-rate-limit-state-leak`, which was a
   real state-leak defect and is fixed.
+
+## Update 2026-09-09: the `rp7-reload-self-heal` half is root-caused and fixed
+
+It was not an output-capture race. The harness slept a fixed second after
+starting the REPL and then rewrote `src/lib.tur` with the fixed source. On a
+loaded runner (the auxiliary suites run under `-j`, and on
+[#846](https://github.com/rjungemann/turmeric/pull/846) the `test` job was
+also warming a fresh Emscripten) the REPL had not yet performed its failing
+startup load when the fix landed, so the STARTUP load succeeded
+(`Loaded spice from ... (1 export)`), `(reload)` reported `no changes`, and
+the assertion on `(reload) loaded 1 export` failed. The spinner glyphs were
+a red herring: they are the banner. `tests/turi/repl-spice-errors.sh` now
+polls `out.log` for the startup diagnostic (`fix the error above`, the same
+line scenario 2 asserts) before rewriting the source, then still waits one
+second so the rewrite's mtime moves past the failed build's. The LSan
+report in that failure (13 bytes in `tur_ffi_install_spice_bindings`) is
+real but does not decide the test; it is the interpreter's process-lifetime
+binding, on the path where the spice loads at startup and `(reload)` has
+nothing to do.
+
+`httpd-mw-rate-limit` (macOS JIT) is unchanged and this report stays open
+for it.

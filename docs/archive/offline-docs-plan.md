@@ -6,6 +6,11 @@ description: One rendered-docs artifact that serves three consumers -- the websi
 
 # Offline Docs + Try Turmeric Embedding (OD)
 
+> **Archived 2026-09-09.** OD1-OD5 all landed 2026-08-26 and the user-facing
+> guide is [offline-docs-guide.md](../guides/offline-docs-guide.md). Kept as
+> the design record behind the settled decisions (unconditional precaching,
+> one renderer, the size budget as its enforcement).
+
 **Status: built, 2026-08-26.** OD1-OD5 all landed. The user-facing guide is
 [docs/guides/offline-docs-guide.md](../guides/offline-docs-guide.md); read that
 first if you want to *use* any of this. What follows is the design record --

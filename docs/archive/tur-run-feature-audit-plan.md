@@ -1,5 +1,11 @@
 # tur run feature audit: missing just features worth implementing
 
+> **Archived 2026-09-09.** Phases 0-3 executed 2026-08-30. What is not done
+> is what the plan itself ruled out in section 3, plus the Windows shebang
+> invocation path -- Windows-port work tracked with the rest of that port
+> ([windows-remaining-plan.md](../upcoming/v1/windows-remaining-plan.md)),
+> not a phase of this audit.
+
 > **Status:** EXECUTED 2026-08-30 (drafted 2026-08-20, inventory revised and
 > plan carried out the same day). **Track:** tooling. **Type:** CLI / justfile
 > compatibility.

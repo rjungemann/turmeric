@@ -16,7 +16,7 @@ The pack build ends with:
   note: 4 cross-link(s) in 3 page(s) point outside the pack and were left
         pointing at the website:
         guides/macros-guide.html: ../upcoming/hold/row-types-followups-plan.md,
-                                  ../upcoming/macro-system-direction-plan.md
+                                  macro-system-direction-plan.md
         guides/performance-guide.html: memory-management-guide.md
         guides/stateful-refinements-guide.html:
                                   ../archive/borrow-param-passed-as-unique-mut-undiagnosed.md
@@ -83,7 +83,7 @@ two beyond that:
 | Page | Link | Listed in report |
 | --- | --- | --- |
 | `macros-guide.md` | `../upcoming/hold/row-types-followups-plan.md` | yes |
-| `macros-guide.md` | `../upcoming/macro-system-direction-plan.md` | yes |
+| `macros-guide.md` | `macro-system-direction-plan.md` | yes |
 | `performance-guide.md` | `memory-management-guide.md` | yes |
 | `stateful-refinements-guide.md` | `../archive/borrow-param-passed-as-unique-mut-undiagnosed.md` | yes |
 | `refinement-solver-internals-guide.md` | `solver-extension-plan.md` | no |

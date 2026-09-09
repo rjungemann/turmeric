@@ -7,7 +7,7 @@ about the representation, and without the shadow this would be whatever
 miscompile the disagreement implies.
 
 **Status: RESOLVED 2026-08-27.**  Filed the same day while probing the SR2 gate
-([sr2-gate-results](../upcoming/sr2-gate-results.md)); reproduced at the
+([sr2-gate-results](sr2-gate-results.md)); reproduced at the
 pre-session merge base (`2c869636`), so it predated all SR work.  See
 **Resolution** at the bottom.
 

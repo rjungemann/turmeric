@@ -2,7 +2,7 @@
 #
 # Append suite timing rows to the `ci-metrics` orphan branch.
 #
-# Phase 3A of docs/upcoming/suite-timing-trends-plan.md.  The branch carries no
+# Phase 3A of docs/archive/suite-timing-trends-plan.md.  The branch carries no
 # source -- just one JSONL file per year -- so it never builds and never merges.
 # CI does not run on it: .github/workflows/ci.yml triggers only on `main`, and
 # the commit message additionally carries [skip ci].
@@ -68,7 +68,7 @@ Data-only branch. No source, no build, no CI.
 
 `suite-timings-<year>.jsonl` holds one JSON object per CTest suite per CI run,
 appended by `tools/ci/publish-timings.sh` on pushes to `main`. See
-`docs/upcoming/suite-timing-trends-plan.md` on `main` for the schema and the
+`docs/archive/suite-timing-trends-plan.md` on `main` for the schema and the
 reason timings are only comparable within a fixed
 (build_type, os, cc, nproc, jit) tuple.
 

@@ -517,7 +517,7 @@ All notable changes to Turmeric are documented here.
   `(defn push-it [A] [v : (Vec A) x : A] (vec-push! v x))` specialized for an
   Option element double-wrapped the value -- a silent blank read under the
   niche and a `cc` error on the default path.
-  `docs/upcoming/container-element-form-plan.md`.
+  `docs/archive/container-element-form-plan.md`.
 - **ADT and constructor names could collide when emitted to C.** The
   separator fold and the emitted joiner shared the same alphabet
   (`_`/`__`), so distinct ADT/constructor name pairs could mangle to the
@@ -937,7 +937,7 @@ All notable changes to Turmeric are documented here.
   `:heap`, GADT, fixpoint partners) and erased generic bases still use the
   carrier. `--enable=parametric-sum-byvalue` remains accepted as a TUR-W0063
   no-op for one minor line; `TUR_SR2_APP_SUM_BYVALUE=0` restores the carrier
-  for bisection. Plan: `docs/upcoming/sum-representation-plan.md` (SR2c).
+  for bisection. Plan: `docs/archive/sum-representation-plan.md` (SR2c).
 
 - **`ok?` and `err?` take `(Result A B)`, not `:int`.** They were the last
   carrier-typed Result accessors; `some?`, `ok-val` and `err-val` were already
@@ -998,7 +998,7 @@ All notable changes to Turmeric are documented here.
   (`(Option int)`, `(Result float cstr)`, ...) flow by value with no per-ctor
   malloc, instead of riding the int64 heap carrier. The default path is
   unchanged; the experiment is the staging ground for making by-value the
-  default (SR2 graduation). Plan: `docs/upcoming/sr2-gate-results.md`.
+  default (SR2 graduation). Plan: `docs/archive/sr2-gate-results.md`.
 
 - **Lazy solution streams in `stdlib/logic.tur`.** `Stream` gained the immature
   constructor `(StInc :StThunk)` plus `st-force` / `st-pull`, so `run-logic n`
@@ -1042,7 +1042,7 @@ All notable changes to Turmeric are documented here.
 ### Changed
 
 - **`Option` and `Result` are real sums now** (SR2b,
-  `docs/upcoming/sum-representation-plan.md`). `(defdata Option :copy [A]
+  `docs/archive/sum-representation-plan.md`). `(defdata Option :copy [A]
   (None) (Some A))` and `(defdata Result :copy [A B] (Ok A) (Err B))` replace
   the discriminated records; every stdlib accessor and instance is
   match-based, and you can `match` the variants directly. The runtime layout
@@ -1389,7 +1389,7 @@ All notable changes to Turmeric are documented here.
   read-only outside its defining module (write it from another module and you
   get a diagnostic naming the owner and `(export (mut g))`), and `^atomic` /
   `^thread-local` are ordinary annotations on a top-level `def`. Every phase of
-  docs/upcoming/mutable-globals-plan.md had landed, so the row had nothing left
+  docs/archive/mutable-globals-plan.md had landed, so the row had nothing left
   to decide. A lingering `--enable=global-state` is a `TUR-W0063` no-op for one
   minor line, not an error.
 
@@ -1656,7 +1656,7 @@ All notable changes to Turmeric are documented here.
   every later `pthread_getspecific` on it was undefined behaviour: a silent
   wrong-value failure. The emitted `_dynvar_init_*` now checks and aborts,
   mirroring what `^thread-local`'s key init already did
-  (docs/upcoming/mutable-globals-plan.md section 13.3).
+  (docs/archive/mutable-globals-plan.md section 13.3).
 - **The rational/complex numeric tower now runs on all three engines.** Measured
   under the MIR engine for the first time: every rational and complex fixture
   passes with **zero** `cc` fallbacks, from one pure-Turmeric implementation
@@ -1709,7 +1709,7 @@ All notable changes to Turmeric are documented here.
   diagnostic is added. The fact propagates through callees, including callees
   that receive none of the caller's parameters. An EXCEEDED frame is still
   reported -- a global write does not launder TUR-E0382. See
-  [docs/upcoming/mutable-globals-plan.md](docs/upcoming/mutable-globals-plan.md).
+  [docs/archive/mutable-globals-plan.md](docs/archive/mutable-globals-plan.md).
 - **Statements above the first body-level `define` are no longer silently
   dropped.** The define splice built its `let` from the first `define` onward
   and discarded everything before it, so in

@@ -6,6 +6,13 @@ description: Lowering multi-variant ADTs by value, converting Option and Result 
 
 # Sum Representation (SR)
 
+> **Archived 2026-09-09.** SR0-SR4 are all closed: SR1 by value 2026-08-26,
+> SR2a/SR2b shipped and SR2c graduated 2026-08-27, SR3 slice A shipped and
+> slice B graduated 2026-09-03 (`TUR_OPTION_NICHE=0` is the hatch), SR4's
+> default flipped to by value 2026-09-02. Its gate records,
+> [sr1-gate-results.md](sr1-gate-results.md) and
+> [sr2-gate-results.md](sr2-gate-results.md), moved with it.
+
 **Status: SR1 is BUILT and ON by default (2026-08-26).** SR2a/b built and default; SR3 slice A default, slice B (the Option niche) graduated default-on 2026-09-03 (`TUR_OPTION_NICHE=0` is the bisection hatch); SR4 default flipped to by value 2026-09-02 (RM4).
 
 **SR0's verdict -- "do not start SR1 for performance" -- was wrong, and section
@@ -59,15 +66,15 @@ ordering is wrong.
 Three findings from one thread of allocation work, in the order they were
 found:
 
-- [multi-variant-adts-always-heap-allocate](../archive/multi-variant-adts-always-heap-allocate.md)
+- [multi-variant-adts-always-heap-allocate](multi-variant-adts-always-heap-allocate.md)
   -- every `defdata` with more than one variant mallocs on construction however
   small, and nothing frees it. ~85% of executed instructions on an
   allocation-heavy stdlib workload are inside `malloc`.
 - Its **Scope** section, added after the population was actually counted, which
   corrected the report's own headline claim: `Option` and `Result` are not sums.
-- [byvalue-adt-app-rejects-nested-monomorphs](../archive/byvalue-adt-app-rejects-nested-monomorphs.md)
+- [byvalue-adt-app-rejects-nested-monomorphs](byvalue-adt-app-rejects-nested-monomorphs.md)
   -- fixed. Its
-  [paper trail](../archive/history/byvalue-adt-app-rejects-nested-monomorphs.md)
+  [paper trail](history/byvalue-adt-app-rejects-nested-monomorphs.md)
   is the cost estimate for everything below: four predicates had to move in
   lockstep, and the tidier-looking fix broke seven passing fixtures.
 
@@ -157,7 +164,7 @@ The 21 recursive types still box their spine and still leak. They need SR4,
 and SR4 is where the reclamation question (arena / drop glue) actually has to
 be answered. The slab allocator is no longer one of the candidates -- it was
 **shelved** on 2026-08-25; see the
-[decision record](../archive/multi-variant-adts-always-heap-allocate.md#decision----the-slab-allocator-is-shelved-2026-08-25).
+[decision record](multi-variant-adts-always-heap-allocate.md#decision----the-slab-allocator-is-shelved-2026-08-25).
 
 The measured ratios from `benchmarks/adt-alloc/ceiling.c`, for calibration.
 **Re-measured 2026-08-25** after the harness was found missing from the tree and
@@ -296,7 +303,7 @@ worth carrying into SR4:
   field-store site. `adt_graph_reaches` now declines such a type outright.
 
 Full record: the **Resolution** section of
-[multi-variant-adts-always-heap-allocate](../archive/multi-variant-adts-always-heap-allocate.md).
+[multi-variant-adts-always-heap-allocate](multi-variant-adts-always-heap-allocate.md).
 
 **Prototype gate: RUN.** Full results in
 [sr1-gate-results.md](sr1-gate-results.md). The seam is in the tree as
@@ -378,7 +385,7 @@ findings sit outside codegen: a nullary ctor with an inferable type argument
 does not select its monomorph (so `(none)` in argument position would regress
 to annotation-required -- an elaboration fix on the critical path), and
 `vec-of` over a parametric sum monomorph ICEs on the DEFAULT path today
-([filed](../reported/vec-of-parametric-sum-monomorph-ice.md), predates the SR
+([filed](vec-of-parametric-sum-monomorph-ice.md), predates the SR
 work, and `vec<option<T>>` is that shape).
 
 **This one is user-visible**, so per the experimental-features rule in
@@ -482,8 +489,8 @@ to Some/Ok/Err constructions only.  Validation: full suite 2712/0, turi
 **Slice B -- `some(p)` carried AS the payload pointer (16 -> 8) -- GATE RUN
 2026-08-27 and SHELVED; UNSHELVED 2026-08-28 as `--enable=option-niche`.**
 The phase now has its own plan --
-[sr3-option-niche-plan.md](../archive/sr3-option-niche-plan.md) -- and the original gate is
-archived at [sr3-slice-b-gate-results.md](../archive/sr3-slice-b-gate-results.md)
+[sr3-option-niche-plan.md](sr3-option-niche-plan.md) -- and the original gate is
+archived at [sr3-slice-b-gate-results.md](sr3-slice-b-gate-results.md)
 with an errata header.  The env seam is gone; slice B is a registered
 `EXPERIMENTS[]` row (prototype, introduced 0.41.0), which is what an in-flight
 feature carrying a hand-maintained soundness allowlist should be.  Corpus 2712/0
@@ -491,7 +498,7 @@ both with the experiment and without.
 
 **What reversed the shelving is exactly the follow-up the gate named.**
 `defopaque` over a pointer now c-names as `void *`
-([results](../archive/opaque-pointer-c-spelling-gate-results.md), graduated
+([results](opaque-pointer-c-spelling-gate-results.md), graduated
 2026-08-28), so a niche value is distinguishable from a carrier box and
 `String` / `StringBuilder` join the eligibility allowlist -- which is the whole
 `(Option String)` census this section enumerates below.  Read the two
@@ -502,7 +509,7 @@ wraps an empty list, nil-is-0 is load-bearing in ~60 sites including the
 variadic-rest ABI (where moving it breaks user inline-C silently), and the
 per-payload-sentinel alternative makes the word 0 mean `Some(nil)` on one side
 of a carrier crossing and `None` on the other.  Full pricing in
-[sr3-option-niche-plan.md](../archive/sr3-option-niche-plan.md), What is left, item 3.
+[sr3-option-niche-plan.md](sr3-option-niche-plan.md), What is left, item 3.
 
 **And it turned up one crossing the first gate could not have reached.** An
 inline-C body declared `: (Option String)` builds its result with
@@ -592,7 +599,7 @@ still climbing. The cause is per-link copying in the emitted walk -- 120 bytes
 per `SBind` link against the carrier's one word, two thirds of it redundant
 (a dead field binder, and a node copied out of its box and then copied again
 to take its address). Filed as
-[../archive/sr4-byvalue-recursive-sum-walk-copies-per-link.md](../archive/sr4-byvalue-recursive-sum-walk-copies-per-link.md),
+[sr4-byvalue-recursive-sum-walk-copies-per-link.md](sr4-byvalue-recursive-sum-walk-copies-per-link.md),
 with the A/B in
 [benchmarks/logic-subst-results.md](../../benchmarks/logic-subst-results.md).
 
@@ -604,7 +611,7 @@ length, not pass count, and `bench-logic-subst.tur` reports that A/B directly.
 ### SR4 (pre-flip record) -- UNBLOCKED AND MEASURED 2026-08-27; default stayed carrier
 
 **The blocker is fixed.** The fat-dispatch ABI disagreement is
-[resolved](../archive/fat-dispatch-wide-byvalue-aggregate-argument.md) --
+[resolved](fat-dispatch-wide-byvalue-aggregate-argument.md) --
 every fat boundary speaks the b4box convention, spelled once in
 `thunk_param_slot_c_name` -- and with `TUR_SR4_RECURSIVE_BYVALUE=1` the FULL
 suite is **2708 passed / 0 failed** with recursive sums by value.
@@ -663,7 +670,7 @@ notices") is closed for this gate specifically.
 **Measured, not estimated.** Admitting recursive sums to the by-value path
 (drop the `is_self_recursive` test in `adt_sr1_sum_candidate`) leaves the suite
 at **2705 passed, 2 failed**, and both failures are a single defect:
-[fat-dispatch-wide-byvalue-aggregate-argument](../reported/fat-dispatch-wide-byvalue-aggregate-argument.md).
+[fat-dispatch-wide-byvalue-aggregate-argument](fat-dispatch-wide-byvalue-aggregate-argument.md).
 Every other recursive sum in the tree -- `Term`, `Regex`, `RxCls`, `RxPos`,
 `RxStrs`, the fixture trees and lists -- already lowers by value and runs
 correctly.
@@ -712,7 +719,7 @@ but the substance of the whole thing.
 this phase. It was described here as blocked on the `rc/of` coupling that parked
 the slab allocator; that framing assumed reclamation meant the slab. It does
 not. The slab is
-[shelved](../archive/multi-variant-adts-always-heap-allocate.md#decision----the-slab-allocator-is-shelved-2026-08-25)
+[shelved](multi-variant-adts-always-heap-allocate.md#decision----the-slab-allocator-is-shelved-2026-08-25)
 -- it never addressed the footprint half of the problem, and it re-measures at
 1.72x against real reclamation's 2.49x (per-node) or 7.64x (arena), while being
 the only proposed fix that still climbs with heap size.

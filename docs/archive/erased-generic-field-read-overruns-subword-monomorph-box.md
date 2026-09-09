@@ -63,7 +63,7 @@ accident.
 
 ## Related
 
-- `docs/upcoming/sum-representation-plan.md` -- the M6 / G6(c) notes on
+- `docs/archive/sum-representation-plan.md` -- the M6 / G6(c) notes on
   sub-word carriers folding wrong at nested nodes are the same mismatch seen
   from the constructor side.
 

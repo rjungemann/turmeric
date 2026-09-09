@@ -1,4 +1,4 @@
-;; G1 (docs/upcoming/mutable-globals-plan.md): a global is written by NAME
+;; G1 (docs/archive/mutable-globals-plan.md): a global is written by NAME
 ;; rather than passed, so it sits outside the parameter half of a `#writes`
 ;; frame -- which meant a body declaring `#writes []` ("writes nothing") could
 ;; mutate global state and still be stamped VERIFIED.  VERIFIED is what an

@@ -8,7 +8,7 @@ description: The corpus sweep CE0 gates on, both halves. 4699 element stores and
 
 Sweep date: 2026-08-28. Compiler: `claude/seam-harness-registration-zqmrit`
 at the CE0 instrumentation commit. Plan:
-[container-element-form-plan.md](../upcoming/container-element-form-plan.md).
+[container-element-form-plan.md](../archive/container-element-form-plan.md).
 
 ## Method
 

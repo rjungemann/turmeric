@@ -138,7 +138,7 @@ Compounding it: **`run-turi.sh` emits no `TUR_SKIP_PARTIAL:` marker**, though
 it is the strongest candidate in the tree for one -- it permanently skips 737
 fixtures (27% of what it discovers) to the inline-C carve-out. The timing
 plan's stated secondary goal is "detect suites that silently start skipping"
-(`docs/upcoming/suite-timing-trends-plan.md`); this suite skips more than a
+(`docs/archive/suite-timing-trends-plan.md`); this suite skips more than a
 quarter of its corpus and the ingest records `status: "pass"` with no note.
 
 **Fix direction**, cheapest first:

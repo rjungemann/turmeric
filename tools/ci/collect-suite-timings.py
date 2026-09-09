@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Collect per-suite CTest timings into newline-delimited JSON.
 
-Phase 2 of docs/upcoming/suite-timing-trends-plan.md.  Reads one or more JUnit
+Phase 2 of docs/archive/suite-timing-trends-plan.md.  Reads one or more JUnit
 XML files written by `ctest --output-junit` and emits one JSON object per
 registered suite on stdout.
 

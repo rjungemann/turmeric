@@ -30,7 +30,7 @@ readers, dictionary-dispatched `bind`/`fmap` chains -- a user instance may
 retain its argument, so those can never be stamped by name).  That residue
 reaches zero where this report always said it would: end-to-end
 monomorphization.  Mechanism and measurements:
-[reclamation-plan.md](../upcoming/reclamation-plan.md), RM1.
+[reclamation-plan.md](../archive/reclamation-plan.md), RM1.
 
 ## Summary
 
@@ -89,7 +89,7 @@ sites. A dynamic dispatch (abstract receiver inside a constrained
 generic) is freed only after the emitter re-resolves the instance per
 monomorph -- the first round had read a representative instance's flag there,
 which was unsound. Details in
-[reclamation-plan.md](../upcoming/reclamation-plan.md), RM1.
+[reclamation-plan.md](../archive/reclamation-plan.md), RM1.
 
 ## Re-measured 2026-09-05, and two rows re-attributed
 

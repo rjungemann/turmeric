@@ -13,7 +13,7 @@ description: A scope form over the arena that already ships, so a persistent str
 > rather than a phase; the latest batch (parametric monomorphs by argument
 > substitution, and the malloc-backed collections by element type --
 > `region-scope-parametric`) is recorded under item 2.  The reclamation plan
-> (`../upcoming/reclamation-plan.md`, RM2) owns what is left of the spine
+> (`reclamation-plan.md`, RM2) owns what is left of the spine
 > residue.
 
 **Status: GRADUATED 2026-09-05 -- ON BY DEFAULT.** `--enable=regions` is
@@ -44,7 +44,7 @@ the archive posture and never carries the bodies. The multi-module executable
 link, which chose the archive posture and then never named the archive, now
 adds `-lturt_runtime` like the single-file path.
 
-RM3 of [reclamation-plan.md](../upcoming/reclamation-plan.md). Read that plan's RM2
+RM3 of [reclamation-plan.md](reclamation-plan.md). Read that plan's RM2
 section first -- this phase exists because RM2's question has no answer at RM2.
 
 ## The problem this solves

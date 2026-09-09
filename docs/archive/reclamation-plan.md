@@ -6,6 +6,13 @@ description: Freeing what the emitted program allocates -- the mechanism the sum
 
 # Reclamation (RM)
 
+> **Archived 2026-09-09.** Every phase has an outcome: RM0 ran, RM1 is built
+> and narrowed four times, RM2 and RM3 were recorded as not starting for lack
+> of a constituency (RM3's declared-region answer shipped on its own as
+> [regions-plan.md](regions-plan.md), graduated 2026-09-05), and RM4 decided
+> the SR4 default. The spine residue it still names is attributed in
+> `docs/artifacts/` and is a standing measurement, not a phase.
+
 **Status (2026-09-02): every phase has an outcome.** RM0 ran (census
 re-based as allocations; no workload -- see its section). RM1 is built and
 has been narrowed four times (erased sweep 8324 -> 5643 B; the residue is
@@ -40,9 +47,9 @@ from under it.
 
 ## 0. Provenance
 
-- [multi-variant-adts-always-heap-allocate](../archive/multi-variant-adts-always-heap-allocate.md)
+- [multi-variant-adts-always-heap-allocate](multi-variant-adts-always-heap-allocate.md)
   -- "Cause 2 -- nothing ever frees them", and the
-  [slab-shelving decision](../archive/multi-variant-adts-always-heap-allocate.md#decision----the-slab-allocator-is-shelved-2026-08-25)
+  [slab-shelving decision](multi-variant-adts-always-heap-allocate.md#decision----the-slab-allocator-is-shelved-2026-08-25)
   with its two-part reopen condition.
 - [benchmarks/adt-alloc/RESULTS.md](../../benchmarks/adt-alloc/RESULTS.md) --
   the seven representations, and the caveat on rows F and G that is the whole
@@ -50,7 +57,7 @@ from under it.
 - [sum-representation-plan.md](sum-representation-plan.md) sections 2 and 3.
 - Three open reports this plan is the fix for:
   [carrier-sum-option-boxes-have-no-owner](../reported/carrier-sum-option-boxes-have-no-owner.md),
-  [inline-c-option-carrier-box-leaks](../reported/inline-c-option-carrier-box-leaks.md),
+  [inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md),
   and the container-element box that
   [container-element-form-plan.md](container-element-form-plan.md) removes for
   niche Options only.
@@ -213,7 +220,7 @@ the temporary case.
 
 Closes [carrier-sum-option-boxes-have-no-owner](../reported/carrier-sum-option-boxes-have-no-owner.md)
 for the erased path, which is what it has narrowed to after SR2a. Whether it
-closes [inline-c-option-carrier-box-leaks](../reported/inline-c-option-carrier-box-leaks.md)
+closes [inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md)
 is an open question RM1 must answer explicitly rather than assume: that box is
 built inside a C body the emitter did not write, so the drop has to attach at
 the call site from the declared return type, and the report says the obvious
@@ -272,7 +279,7 @@ method has no concrete element type to specialize against.
 consumer keeps the value as a CARRIER (`opt_hyval(__ps_204)`), never bridging
 it to a by-value aggregate -- so there is no carrier->concrete crossing to
 hang a free on. The owned-carrier table built for
-[inline-c-option-carrier-box-leaks](../archive/inline-c-option-carrier-box-leaks.md)
+[inline-c-option-carrier-box-leaks](inline-c-option-carrier-box-leaks.md)
 frees at exactly that crossing and therefore does NOT reach this shape. The
 scope-exit drop this section proposes is the right mechanism, and the two are
 complementary rather than alternatives: one frees a box the caller converts,
@@ -634,12 +641,12 @@ Two defects sit in front of that, both found by the probe, because putting a
 `bt-scope` around a function whose result is a RECORD rather than a scalar is
 something nothing in the tree had done:
 
-- [cps-call-arm-ignores-abi-specialization](../archive/cps-call-arm-ignores-abi-specialization.md)
+- [cps-call-arm-ignores-abi-specialization](cps-call-arm-ignores-abi-specialization.md)
   -- **a silent wrong answer on default flags**, unrelated to regions. A CPS
   emitter call arm picked a specialization that was not this call's.
   **Fixed 2026-09-05**: the call's own result type now discriminates in
   `find_mono_clone_for_call`.
-- [region-bracket-lost-when-bt-scope-specializes](../archive/region-bracket-lost-when-bt-scope-specializes.md)
+- [region-bracket-lost-when-bt-scope-specializes](region-bracket-lost-when-bt-scope-specializes.md)
   -- the same arm emitting no region push at all for a non-scalar result.
   **Fixed 2026-09-05**: a region boundary takes `cps->direct`, the only arm the
   bracket can live on.
@@ -650,7 +657,7 @@ it refused at field 0, because a plain `:int` ctor field records no `full_type`,
 which its comment attributes only to the self-recursive spine. Deciding such a
 field by its `kind` is unsound and was measured so; deciding by the declared
 FORM is not, and that is what landed:
-[region-walk-refuses-every-adt-result](../archive/region-walk-refuses-every-adt-result.md)
+[region-walk-refuses-every-adt-result](region-walk-refuses-every-adt-result.md)
 is RESOLVED. A field whose form is a bare scalar primitive keyword reaches
 nothing and is admitted, so `(RxIP :int :int)` -- `re.tur`'s `re-find-from`
 result, the 312 B -- now REWINDS; an ADT name, `ptr`, a tyvar, or a compound
@@ -740,7 +747,7 @@ the sweep
 ([benchmarks/logic-subst-results.md](../../benchmarks/logic-subst-results.md)).
 The cost is per-link copying in the emitted walk -- 120 bytes per `SBind` link
 against the carrier's one word, two thirds of it redundant. Filed as
-[../archive/sr4-byvalue-recursive-sum-walk-copies-per-link.md](../archive/sr4-byvalue-recursive-sum-walk-copies-per-link.md).
+[sr4-byvalue-recursive-sum-walk-copies-per-link.md](sr4-byvalue-recursive-sum-walk-copies-per-link.md).
 
 RM4's construction and memory findings stand and **the flip is not reopened** --
 the two redundant copies are removable with no default change.  **Resolved

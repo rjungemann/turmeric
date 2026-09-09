@@ -98,7 +98,7 @@ extern bool g_strict_effects;
 /* ER6: --dump-effects flag — print inferred effect row for each top-level defn */
 extern bool g_dump_effects;
 
-/* G1 (docs/upcoming/mutable-globals-plan.md): --dump-write-frames flag — print
+/* G1 (docs/archive/mutable-globals-plan.md): --dump-write-frames flag — print
  * the WF2 verdict for every DECLARED `#writes` frame, plus the global-write
  * answer that can downgrade it.  A diagnostic knob, not an experiment: it
  * reports what the checker decided and changes nothing.  Without it the only
@@ -267,7 +267,7 @@ extern bool g_dump_cps_mono;
  * headed anywhere; the decision record in that report says why, and why
  * reclamation rather than a slab is the thing to build. */
 extern bool g_adt_slab;
-/* SR1 (docs/upcoming/sum-representation-plan.md): flow a non-recursive,
+/* SR1 (docs/archive/sum-representation-plan.md): flow a non-recursive,
  * non-parametric, non-heap MULTI-VARIANT sum by value (tag + union aggregate)
  * instead of the int64 heap carrier.
  *
@@ -369,7 +369,7 @@ extern bool g_opt_saffron;
  * experiment's soak was waiting for.  `TUR_SR2_APP_SUM_BYVALUE=0` restores the
  * int64 carrier -- an escape hatch for bisecting a suspected representation
  * bug, not a supported mode, and the same two-way shape SR1 kept.  Consumed by
- * sr2_app_sum_byvalue (types.c).  See docs/upcoming/sr2-gate-results.md. */
+ * sr2_app_sum_byvalue (types.c).  See docs/archive/sr2-gate-results.md. */
 extern bool g_sr2_app_sum_byvalue;
 
 /* g_opt_cps_tramp_resume RETIRED 2026-08-22 -- the `cps-tramp-resume`

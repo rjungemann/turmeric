@@ -14,7 +14,7 @@
 // in-app docs pane a feature that sometimes has no content. The pack's size
 // budget (enforced at generation time by tools/genpack.py) is what keeps that
 // affordable -- if the pack ever outgrows it, the answer is a smaller pack,
-// never a switch. See docs/upcoming/offline-docs-plan.md (OD3).
+// never a switch. See docs/archive/offline-docs-plan.md (OD3).
 //
 // CACHE_VERSION must change on every DEPLOY so `activate` evicts the old caches
 // AND the changed sw.js bytes make the browser re-install the worker --

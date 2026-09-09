@@ -6,7 +6,7 @@ description: The ~900 B of per-node spine boxes split into "no bracket exists bu
 
 # RM2's spine residue, categorized (2026-09-05)
 
-[reclamation-plan.md](../upcoming/reclamation-plan.md)'s RM2 section records its
+[reclamation-plan.md](../archive/reclamation-plan.md)'s RM2 section records its
 gate's evidence and its blocker, but not the one number a decision needs: of the
 spine bytes still leaking, **how many sit inside a scope a region could bracket,
 and how many do not.** That split decides whether RM3's missing surface form is

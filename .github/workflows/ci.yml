@@ -16,7 +16,14 @@ on:
 
 jobs:
   test:
-    name: Test (${{ matrix.os }})
+    # Two jobs per OS, split along the ctest boundary that already existed as
+    # two steps: `fixtures` runs the RUN_SERIAL tur_tests corpus, `aux` runs
+    # the other ~145 suites under -j.  They only share the build, which ccache
+    # reproduces in about a minute, and running them in parallel takes the
+    # macOS leg from ~23 min (8.5 fixture + 12 auxiliary, back to back) to the
+    # longer of the two.  The fixtures part keeps the "Test (<os>)" check name
+    # so required-status-check rules keep matching it.
+    name: ${{ matrix.job_name }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # tur-link-and-build-split-plan Phase 5: cache the compiler-build objects
     # across runs. ccache launches every `cc -c` in the cmake build of `tur`
@@ -36,22 +43,39 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        # Sharding is temporarily disabled: the fixture suite runs in a single
-        # shard per OS for now. To re-enable, restore the `shard` matrix axis
-        # below (and the shard-specific `env`/`if` uses further down).
-        #
-        # Split the big tur_tests fixture suite (~2100 fixtures) across N runners
-        # via TUR_TEST_SHARD; run.sh partitions round-robin by fixture ordinal so
-        # the shards are balanced and their union is the full corpus. Tune the
-        # shard count by editing this list (and the "/N" denominators below).
-        # shard: ['1/4', '2/4', '3/4', '4/4']
+        part: [fixtures, aux]
+        include:
+          - part: fixtures
+            job_name: Test
+          - part: aux
+            job_name: Auxiliary suites
+        # Sharding the fixture corpus itself is still off.  run.sh supports it
+        # (TUR_TEST_SHARD="i/N" partitions round-robin by fixture ordinal, so
+        # shards are balanced and their union is the full corpus), and the
+        # `fixtures` part is where a shard axis would go.  What has to change
+        # first is the timing trend: every shard would publish a `tur_tests`
+        # row for the same run and environment, and the /ci aggregates assume
+        # one row per suite per run.  Carry the shard in the row (suite name
+        # or a new dimension, in tools/ci/collect-suite-timings.py and the
+        # dashboard) before adding e.g. `fixtures 1/2` / `fixtures 2/2` here.
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+        run: |
+          # The runner image ships a Google Chrome apt source that has served a
+          # stale index ("Hash Sum mismatch") and killed every Linux job of a
+          # main push before any step of ours ran (0dca9811, 2026-09-09).
+          # Nothing here needs it: drop it before updating, and retry the
+          # update once in case the Ubuntu mirrors are mid-sync as well.
+          # gdb: the native-backtrace half of tur_phase4_gdb and the DWARF /
+          # pretty-printer half of tur_phase5_gdb had never run on a hosted
+          # runner (docs/reported/ci-suites-that-never-run-on-hosted-runners.md).
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache gdb
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -64,7 +88,13 @@ jobs:
         # FAIL line, three times on 2026-08-02.  With gtimeout present the same
         # fixture dies at its per-fixture timeout and reports as a FAIL, which
         # is a result you can act on.
-        run: brew install libedit ccache coreutils || true
+        run: |
+          brew install libedit ccache coreutils || true
+          # pyyaml: tests/run-tutorial-quickstart.sh (tur_tutorial_steps) skipped
+          # on every macOS run for want of it, so the tutorial steps were only
+          # ever asserted on Linux.  Non-fatal on purpose: if neither form
+          # installs, the harness still skips honestly rather than failing here.
+          python3 -m pip install pyyaml || python3 -m pip install --break-system-packages pyyaml || true
 
       # Restore + explicit save (not the combined cache action): the combined
       # action's post-save defaults to save-always:false, so it would skip
@@ -74,7 +104,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-test-${{ runner.os }}-${{ github.sha }}
+          key: ccache-test-${{ runner.os }}-${{ matrix.part }}-${{ github.sha }}
           restore-keys: |
             ccache-test-${{ runner.os }}-
 
@@ -86,6 +116,24 @@ jobs:
 
       - name: ccache stats
         run: ccache -s
+
+      # emcc and node are what tests/run-refine-wasm.sh (tur_refine_wasm)
+      # needs; it skipped on every run of this job on both OSes.  Placed
+      # AFTER Build on purpose: TUR_WASM is off here, so configure never
+      # looks for emcc, and the harness only needs it on PATH at test time.
+      - name: Set up Emscripten (for tur_refine_wasm)
+        if: matrix.part == 'aux'
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+          actions-cache-folder: 'emsdk-cache'
+
+      # The sibling checkout that tur_scscm_compile and the requires.spices
+      # fixtures (three today) key on; without it every one of them skipped
+      # on every run.  Shallow, at the sibling's default branch -- the same
+      # thing a developer following CLAUDE.md's "Optional dependencies" gets.
+      - name: Check out turmeric-spices (sibling)
+        run: git clone --depth 1 https://github.com/rjungemann/turmeric-spices ../turmeric-spices
 
       - name: Smoke check (tur --version must not hang)
         run: |
@@ -107,10 +155,10 @@ jobs:
             *) echo "::error::unexpected tur --version output"; exit 1 ;;
           esac
 
-      - name: Run fixture suite (single shard)
-        # Sharding temporarily disabled -- run the whole fixture corpus in one
-        # shard. To re-enable, restore the shard matrix axis above and add
-        # `TUR_TEST_SHARD: ${{ matrix.shard }}` to the env block below.
+      - name: Run fixture suite
+        if: matrix.part == 'fixtures'
+        # The whole corpus in one shard -- see the matrix note above for what
+        # sharding it further would need first.
         #
         # TUR_SANITIZER_GATE makes a UBSan/ASan finding from `tur` ITSELF fail
         # the run, rather than printing into a log nobody reads. That
@@ -143,21 +191,30 @@ jobs:
         # See docs/archive/sanitizer-gate-not-armed-in-ci.md.
         #
         # --output-junit: per-suite name/status/duration for the timing trend
-        # (docs/upcoming/suite-timing-trends-plan.md).  It writes its OWN file
+        # (docs/archive/suite-timing-trends-plan.md).  It writes its OWN file
         # rather than sharing one with the auxiliary step below, because a
         # single path would let that second ctest invocation overwrite this
         # one and silently drop tur_tests -- the most valuable series here.
         # The XML also embeds each test's stdout in <system-out>, even under
         # --output-on-failure, which is where the TUR_SKIP markers are read
         # from; no -V or tee plumbing is needed.
+        # --test-output-size-passed / --test-output-truncation: ctest keeps
+        # only the first 1 KiB of a PASSING test's output by default (the
+        # default truncation mode, "tail", drops the END), so a harness that
+        # prints thousands of PASS lines loses its trailing "summary: N
+        # passed" line and its TUR_SKIP_PARTIAL marker before they reach
+        # <system-out>.  Two weeks of ci-metrics rows carried no counts for
+        # tur_tests or turi_fixture_tests for exactly this reason.  256 KiB
+        # with "head" truncation keeps the tail, where every harness puts
+        # its census.
         env:
           TUR_SANITIZER_GATE: "1"
-        run: ctest --output-on-failure --progress --test-dir build -R '^tur_tests$' --output-junit results-main.xml
+        run: ctest --output-on-failure --progress --test-dir build -R '^tur_tests$' --output-junit results-main.xml --test-output-size-passed 262144 --test-output-truncation head
 
-      - name: Run auxiliary suites (once per OS)
-        # Sharding temporarily disabled -- previously gated on `matrix.shard == '1/4'`
-        # so the auxiliary suites ran only on the first shard. With a single shard
-        # this runs unconditionally once per OS.
+      - name: Run auxiliary suites
+        if: matrix.part == 'aux'
+        # Everything except tur_tests, once per OS, in its own job so it
+        # overlaps the fixture corpus instead of following it.
         #
         # -j: this step runs ~105 targets, so without it wall time is their sum.
         # The count must be explicit -- through CMake 3.28 a bare `-j` is
@@ -176,7 +233,7 @@ jobs:
         # do nothing there.
         # --output-junit to a DISTINCT path from the step above -- see the note
         # there. The two files are merged by the collect step.
-        run: ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build -E '^tur_tests$' --output-junit results-aux.xml
+        run: ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build -E '^tur_tests$' --output-junit results-aux.xml --test-output-size-passed 262144 --test-output-truncation head
 
       # `always()`, NOT `continue-on-error` on the ctest steps: a suite that
       # regressed into a timeout is exactly the signal this exists to catch, so
@@ -203,7 +260,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: timings-test-${{ matrix.os }}
+          name: timings-test-${{ matrix.os }}-${{ matrix.part }}
           path: timings.jsonl
           if-no-files-found: warn
           retention-days: 7
@@ -218,7 +275,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sanitizer-findings-${{ matrix.os }}
+          name: sanitizer-findings-${{ matrix.os }}-${{ matrix.part }}
           path: build/sanitizer-findings.log
           if-no-files-found: ignore
           retention-days: 7
@@ -231,7 +288,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-test-${{ runner.os }}-${{ github.sha }}
+          key: ccache-test-${{ runner.os }}-${{ matrix.part }}-${{ github.sha }}
 
   jit:
     name: JIT engine (${{ matrix.os }})
@@ -272,7 +329,12 @@ jobs:
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+        run: |
+          # Drop the runner image's Google Chrome apt source and retry the
+          # update once -- see the `test` job's dependency step for why.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -465,11 +527,12 @@ jobs:
           # is what turns that case from documentation into a test.
           #
           # --output-junit rides along for the suite-timing trend
-          # (docs/upcoming/suite-timing-trends-plan.md).  These rows carry
+          # (docs/archive/suite-timing-trends-plan.md).  These rows carry
           # jit=true from the build cache, so they form their own series and
           # are never averaged against the `test` job's jit=false rows.
           set +e
           ctest --test-dir build -V --no-tests=error --output-junit results-jit.xml \
+                --test-output-size-passed 262144 --test-output-truncation head \
                 -R '^(tur_jit_fixture_tests|tur_repl_spice_jit|tur_flags_tests)$' 2>&1 \
             | tee jit-ctest.log \
             | grep --line-buffered -aE '^[0-9]+: (FAIL|.*passed,|.*fallback)|^ *Start +[0-9]+:|[0-9]+% tests passed|\*\*\*|Errors while running CTest'
@@ -544,7 +607,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+        run: |
+          # Drop the runner image's Google Chrome apt source and retry the
+          # update once -- see the `test` job's dependency step for why.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
 
       - name: Restore ccache
         uses: actions/cache/restore@v4
@@ -614,7 +682,7 @@ jobs:
           path: ${{ github.workspace }}/.ccache
           key: ccache-split-${{ runner.os }}-${{ github.sha }}
 
-  # Phase 3A/4 of docs/upcoming/suite-timing-trends-plan.md.
+  # Phase 3A/4 of docs/archive/suite-timing-trends-plan.md.
   #
   # A SEPARATE job, not a step on `test`, specifically because of the
   # concurrency group.  `group: ci-metrics` serializes publishers so two runs
@@ -1161,7 +1229,12 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+        run: |
+          # Drop the runner image's Google Chrome apt source and retry the
+          # update once -- see the `test` job's dependency step for why.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
       - name: Restore ccache
         uses: actions/cache/restore@v4
         with:
@@ -1212,7 +1285,12 @@ jobs:
           fetch-depth: 2
 
       - name: Install dependencies (Linux)
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+        run: |
+          # Drop the runner image's Google Chrome apt source and retry the
+          # update once -- see the `test` job's dependency step for why.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
 
       - name: Restore ccache
         uses: actions/cache/restore@v4
@@ -1256,7 +1334,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies (Linux)
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+        run: |
+          # Drop the runner image's Google Chrome apt source and retry the
+          # update once -- see the `test` job's dependency step for why.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
 
       - name: Restore ccache
         uses: actions/cache/restore@v4

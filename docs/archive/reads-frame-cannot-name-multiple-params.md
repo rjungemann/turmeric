@@ -91,7 +91,7 @@ a short plan rather than an opportunistic patch.
 3. **Keep the single-symbol form** working; `#writes` supports both and this
    should too.
 
-Worth checking while doing (1): `docs/upcoming/mutable-globals-plan.md:300`
+Worth checking while doing (1): `docs/archive/mutable-globals-plan.md:300`
 already writes `#reads [*cache*]` -- a bracketed frame over *globals* rather
 than parameters. If that plan lands, the vector form is needed anyway, and
 the two should agree on one syntax rather than arriving separately.
@@ -156,7 +156,7 @@ renders the whole frame.
 
 Suite: **2626 passed, 0 failed.**
 
-Left for whoever lands `docs/upcoming/mutable-globals-plan.md`: that plan
+Left for whoever lands `docs/archive/mutable-globals-plan.md`: that plan
 writes `#reads [*cache*]` -- a bracketed frame over *globals* rather than
 parameters. The bracket syntax now exists and is free to reuse; what still
 needs deciding is whether globals share this mask or get a parallel one.

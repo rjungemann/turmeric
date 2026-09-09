@@ -212,7 +212,7 @@ recursive sum in the tree (`Term`, `Regex`, `RxCls`, `RxPos`, `RxStrs`, the
 fixture trees and lists) already lowers by value and runs correctly.
 
 That is a much smaller blocker than
-[sr1-gate-results.md](../upcoming/sr1-gate-results.md) estimated -- it predicted
+[sr1-gate-results.md](sr1-gate-results.md) estimated -- it predicted
 a `logic.tur` rewrite of unknown size. One of the two ascriptions it flagged was
 indeed just bad typing and is now fixed in stdlib (`fmap-goal-raw`'s callback
 was a bare `:fn`; giving it its real `(fn [Subst] Subst)` type deleted the

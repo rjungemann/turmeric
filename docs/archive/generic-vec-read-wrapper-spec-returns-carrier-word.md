@@ -8,7 +8,7 @@ description: A generic wrapper whose tail is a raw container read failed to comp
 
 **Severity: medium** -- a hard `cc` error on the DEFAULT path for a shape
 `tur check` accepts.  Found 2026-09-03 while building CE2
-([container-element-form-plan](../upcoming/container-element-form-plan.md));
+([container-element-form-plan](container-element-form-plan.md));
 reproduced on the compiler BEFORE that change, so it is pre-existing and
 independent of the option-niche experiment.
 

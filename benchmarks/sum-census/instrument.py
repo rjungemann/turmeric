@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Inject per-constructor call counters into emitted Turmeric C.
 
-SR0(a) (docs/upcoming/sum-representation-plan.md) needs to know how often small
+SR0(a) (docs/archive/sum-representation-plan.md) needs to know how often small
 sums are actually CONSTRUCTED at runtime, not how many construction sites exist
 in the source.  This instruments the emitted C rather than adding a codegen
 flag, for two reasons: the measurement must not perturb the codegen it is

@@ -1,11 +1,27 @@
 # Plan: Test Suite Timing Trends for `rjungemann/turmeric`
 
-## Execution record (2026-08-25)
+> **Archived 2026-09-09.** Phases 0-5 landed (the `/ci` dashboard shipped
+> 2026-08-28) and Phase 6 was declined by the two-week readout below:
+> `tur_tests` is flat, so there is nothing for a per-fixture drill-down to
+> explain. The pipeline defect the readout found (ctest truncating the
+> census line of the two largest suites) is fixed in `ci.yml`; the coverage
+> holes it found are filed as
+> [ci-suites-that-never-run-on-hosted-runners](../reported/ci-suites-that-never-run-on-hosted-runners.md).
+> The `ci-metrics` branch README still names this plan's old path; it is
+> only ever written on the branch's first publish, so it is stale by one
+> directory and harmless.
 
-**Phases 0-4 are implemented and validated.** Phases 5 (dashboard) and 6
-(per-fixture drill-down) are deliberately NOT done -- the rollout order gates
-the first on "~2 weeks of data exists" and the second on "only if `tur_tests`
-turns out to be the thing that moves." Neither precondition is met yet.
+## Execution record (2026-08-25; two-week readout added 2026-09-09)
+
+**Phases 0-5 are implemented and validated; Phase 6 is declined by the data.**
+Phase 5 (the dashboard) shipped 2026-08-28 as `/ci` -- `web/ci/index.html`
+and `web/ci-metrics.js`, with `web/worker.js` proxying the `ci-metrics`
+branch as `/api/ci-timings` and `web/tests/ci.spec.js` covering the page --
+carrying all four views listed under Phase 5 (duration over time, per-suite
+sparklines, the suite table, the skip ledger). This header said "deliberately
+NOT done" for twelve days after that. Phase 6 was gated on "only if
+`tur_tests` turns out to be the thing that moves"; the readout below shows it
+did not move. Nothing in this plan is open.
 
 Landed:
 
@@ -83,6 +99,103 @@ two failures (`tur_engine_select`, `turi_fixture_tests`) are **pre-existing** --
 `tur_spice_resolver_tests` 39.7 s. Note `tur_span_coverage`, not `tur_tests`,
 dominates the auxiliary run -- worth knowing before Phase 6 assumes `tur_tests`
 is the thing to drill into.
+
+### Two-week readout (2026-09-09)
+
+Read from the `ci-metrics` branch at commit `95fddfc0`: 22,620 rows from 89
+`main` pushes between 2026-08-26 and 2026-09-09, in five environments.
+
+| environment (os, build, cc, nproc, jit) | runs | suites |
+|---|---:|---:|
+| Linux, Debug, GNU-13.3.0, 4, jit=false (canonical) | 88 | 144 |
+| macOS, Debug, AppleClang-21.0.0, 3, jit=false | 89 | 147 |
+| Linux and macOS, jit=true (the `jit` job) | 88 / 89 | 3 |
+| Linux, emscripten (the browser suites, since 2026-09-03) | 50 | 2 |
+
+The canonical suite count grew from 115 to 144 over the window; 29 suites
+registered mid-window, which the dashboard handles by absence, per Phase 2.
+Every figure below is the canonical environment, comparing the median of the
+first half of the window (to 2026-09-04) against the second half.
+
+**Phase 6 verdict: `tur_tests` did not move.** 474.8 s to 472.6 s (-0.5%).
+Its series is bimodal -- roughly 300-380 s on some runs and 460-500 s on
+others, with no correlation to the commit under test -- which is runner
+hardware, not code. A per-fixture drill-down would rank fixtures inside a
+suite whose total is flat, so Phase 6 is declined rather than deferred.
+
+**What did move.** The sum of per-suite medians went from 1259 s to 1344 s,
+and all of the delta is in these rows:
+
+| suite | before | after | attribution |
+|---|---:|---:|---|
+| `tur_examples_check` | 12.1 s | 101.5 s | a step at `301f4af8` (2026-09-03): `9b6f08b2` gave the sweep a RUN phase, so every example that checks clean is now also built and run under a 60 s timeout (19 builds through `cc`, ~4 s each). `tur check` itself is 0.1-0.2 s per file. By design, not a regression |
+| `tur_sr2_seam` | 7.8 s | 35.7 s | retired 2026-08-27, restored 2026-09-04 (`f2798113`) as the OFF-path gate compiling the carrier path; expected |
+| `tur_leak_check` | 24.4 s | 35.2 s | `requires.leak-check` opt-ins went from 60 to 99 fixtures over the window; growth by design |
+| `tur_build_project` | 37.3 s | 14.3 s | dropped at the same `301f4af8` merge |
+| `tur_span_coverage` | 227.3 s | 234.7 s | +3%, noise-level, but the second-largest suite and the one Phase 6 would have had to look at next |
+
+**A pipeline defect the readout exposed, fixed 2026-09-09.** Not one
+`tur_tests` or `turi_fixture_tests` row in the 22,620 carries the
+`passed` / `failed` / `skipped` / `discovered` census the ingest parses, and
+turi's `TUR_SKIP_PARTIAL: inline-c carve-out` marker never reached the data
+either -- the very counts `turi-suite-accounting-and-reporting-gaps` item 6
+wanted as a trend. Cause: ctest keeps only the first 1 KiB of a passing
+test's output (`--test-output-size-passed` defaults to 1024, and the default
+`--test-output-truncation tail` drops the END), so any harness that prints
+more than 1 KiB of `PASS` lines loses its trailing summary before it reaches
+`<system-out>`. Reproduced with a 3000-line synthetic test on CMake 3.28
+(the output is replaced by "[... was removed since it exceeds the threshold
+of 1024 bytes.]") and fixed with `--test-output-size-passed 262144
+--test-output-truncation head` on all three ctest invocations in `ci.yml`;
+the same synthetic test then yields `passed=3000` through the ingest. Rows
+before 2026-09-09 stay countless; the census series starts at the next
+`main` push. Phase 1's claim above that "JUnit already carries per-test
+stdout" was true only for suites that print less than a kilobyte.
+
+**The Open question, answered from the skip ledger.** Four suites have never
+run in full on a hosted runner, and the ledger is the first place that said
+so:
+
+- `tur_phase4_gdb` and `tur_phase5_gdb`: `TUR_SKIP_PARTIAL: gdb unavailable`
+  on every run, on BOTH operating systems. The native-backtrace and the
+  DWARF / pretty-printer halves of the debugger tests have never executed in
+  CI.
+- `tur_tutorial_steps`: skipped on every macOS run (`pyyaml unavailable`);
+  runs on Linux.
+- `tur_refine_wasm`: `emcc not on PATH` on every run of the `test` job, both
+  OSes (only the browser job sets up Emscripten).
+- `tur_scscm_compile`: the sibling `turmeric-spices` checkout is absent on
+  every run, both OSes.
+
+Filed as
+[ci-suites-that-never-run-on-hosted-runners](../reported/ci-suites-that-never-run-on-hosted-runners.md),
+which is what the question said such a finding deserves.
+
+**Failure ledger.** "Flake detection" is a non-goal above, but the rows
+already say this much:
+
+- `tur_jit_fixture_tests` on the Linux `jit` leg failed on 11 of 88 runs,
+  invisible because that leg is `continue-on-error`. The latest (`73f6ca81`)
+  is `httpd-h6-routing -- stdout mismatch`, 2805 passed / 1 failed / 59
+  skipped / 29 via the cc fallback. The "FLIP LINUX TO BLOCKING" note in
+  `ci.yml` says its precondition is met; a 1-in-8 red rate says the flip
+  would block one `main` push in eight, and
+  [ci-two-fixtures-flake-on-hosted-runners](../reported/ci-two-fixtures-flake-on-hosted-runners.md)
+  already has the httpd family flaking under JIT.
+- `web_mobile` failed on 49 of the 50 runs since it began reporting on
+  2026-09-03 (WebKit; tracked in
+  [webkit-sw-controlled-reload-fails-wasm-init](../reported/webkit-sw-controlled-reload-fails-wasm-init.md)).
+  `web_desktop` passed 47 of 50.
+- `tur_reported_index_lint` failed twice (2026-08-28, 2026-09-01); index
+  drift, fixed by the next push each time.
+- `0dca9811` (2026-09-09 17:28 UTC, the newest `main` push in the data):
+  every `ubuntu-latest` job died in `apt-get update` with a
+  `Hash Sum mismatch` on the runner image's Google Chrome apt source
+  (`dl.google.com/linux/chrome-stable`), before any step of ours ran. The run
+  has no Linux rows at all, and the browser suites report
+  `suite did not run (no JUnit output)`. Not this repo's packages; the six
+  `apt-get update` lines in `ci.yml` shared the exposure. Fixed the same day:
+  each now drops that source before updating and retries the update once.
 
 ## Goal
 
@@ -438,8 +551,10 @@ Caveats:
    originally scoped (13 harnesses, and 8 of them currently print `PASS` on a
    skip). The `PASS`-on-skip mislabeling is worth fixing on its own merits
    whether or not the rest of this plan proceeds.
-4. **Phase 5** -- dashboard once ~2 weeks of data exists.
+4. **Phase 5** -- dashboard once ~2 weeks of data exists. (Shipped
+   2026-08-28, three days in, as `/ci`.)
 5. **Phase 6** -- only if `tur_tests` turns out to be the thing that moves.
+   (Declined 2026-09-09: it did not; see the two-week readout.)
 
 ## Open question
 

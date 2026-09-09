@@ -1,7 +1,7 @@
 ;;; tur/option -- typed Option[A]: parameterized optional value.
 ;;;
 ;;; First-class parameterized optional value, as a REAL SUM (SR2b of
-;;; docs/upcoming/sum-representation-plan.md): `(None)` or `(Some A)`.
+;;; docs/archive/sum-representation-plan.md): `(None)` or `(Some A)`.
 ;;; Runtime layout is the tagged monomorph -- { int tag; union { None; Some } }
 ;;; -- 16 bytes, with no dead arm to zero-fill.  A concrete monomorph flows BY
 ;;; VALUE with no per-ctor allocation (SR2a, default since 2026-08-27); an
