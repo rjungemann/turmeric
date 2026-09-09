@@ -531,7 +531,7 @@ are independent axes, so every language is spellable over every reader.
 prototype stage**: today `#lang saffron` selects no semantics at all -- the file
 compiles exactly as `#lang turmeric` does -- and the directive exists so the
 language axis, its gate and its warning are in place before any behaviour hangs
-off them. See [docs/upcoming/saffron-lang-plan.md](../upcoming/saffron-lang-plan.md).
+off them. See [docs/upcoming/saffron-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/saffron-lang-plan.md).
 
 The `#lang saffron` line *is* the enable for the `saffron` experiment, scoped to
 that file, at CLI precedence -- exactly the relationship a semantic layer has to

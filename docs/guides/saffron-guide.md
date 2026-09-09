@@ -28,7 +28,7 @@ Turmeric module link together in one program.
 line enables it by itself -- you do **not** need `--enable=saffron` -- but every
 compile prints `TUR-W0060` to say the surface may still change. Design notes and
 current status live in
-[docs/upcoming/saffron-lang-plan.md](../upcoming/saffron-lang-plan.md).
+[docs/upcoming/saffron-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/saffron-lang-plan.md).
 
 ## What actually changes
 
@@ -300,7 +300,7 @@ tur run hello.tur
 
 ## See also
 
-- [docs/upcoming/saffron-lang-plan.md](../upcoming/saffron-lang-plan.md) --
+- [docs/upcoming/saffron-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/saffron-lang-plan.md) --
   the design decisions and their measurements
 - [union-intersection-types-guide.md](union-intersection-types-guide.md) --
   `any`, unions, and gradual typing in typed Turmeric

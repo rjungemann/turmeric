@@ -509,16 +509,6 @@
 (definstance Eq [Set]
   [(Eq A)]
   (eq? [x y] (set-eq-full (:: x (Set A)) (:: y (Set A)))))
-;;; set-add1 -- insert one element, computing its hash via Hash[A].
-;;;
-;;; The convenient single-element add: it evaluates the element once and
-;;; supplies both the Hash[A] hash and the element to set-add, so the set-of /
-;;; #set{...} lowering can mention each element expression exactly once (a
-;;; computed element is evaluated once and is not subject to the let-binding
-;;; move check that a doubled (set-add s (hash e) e) would trip).  Content-keyed
-;;; via Hash[A] + MapKey[A], so (set-of "a" "a") -- two equal strings -- is one
-;;; member even at distinct addresses.
-
 ;;; set-add-elem__ -- internal: typed single-element insert behind set-add1.
 ;;;
 ;;; set-of-element-type-is-not-checked: `set-of` used to have no homogeneity
@@ -533,6 +523,24 @@
 
 (defn set-add-elem__ [^Hash A ^MapKey A] [s : (Set A) x : A] : (Set A)
   (set-add-eq-o s (.hash x) (.mk-box x) (.mk-cmp x) (.mk-owned? x)))
+;;; set-add1 -- insert one element, computing its hash via Hash[A].
+;;;
+;;; The convenient single-element add: the element expression is mentioned
+;;; exactly once (it becomes the argument of the typed set-add-elem__, which
+;;; hashes and boxes it), so the set-of / #set{...} lowering evaluates a
+;;; computed element once.  The element must have the set's element type;
+;;; content-keyed via Hash[A] + MapKey[A], so (set-of "a" "a") -- two equal
+;;; strings -- is one member even at distinct addresses.
+;;;
+;;; Parameters:
+;;;   s -- the set
+;;;   x -- the element to insert
+;;;
+;;; Returns:
+;;;   A new set containing x.
+;;;
+;;; Example:
+;;;   (set-add1 (set-new) 42)   ; => Set {42}
 
 (defmacro set-add1 [s x]
   `(set-add-elem__ ~s ~x))
