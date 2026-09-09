@@ -128,7 +128,7 @@ and all of the delta is in these rows:
 
 | suite | before | after | attribution |
 |---|---:|---:|---|
-| `tur_examples_check` | 12.1 s | 101.5 s | a step at `301f4af8` (2026-09-03), the merge that carried the guestbook-as-a-spice rewrite (`37e5670f`) and the examples ratchets (`9b6f08b2`); `examples/` went from 17 to 20 `.tur` files, so an 8x sweep cost is a per-file cost question for `tests/check-examples.sh`, not a corpus-size one |
+| `tur_examples_check` | 12.1 s | 101.5 s | a step at `301f4af8` (2026-09-03): `9b6f08b2` gave the sweep a RUN phase, so every example that checks clean is now also built and run under a 60 s timeout (19 builds through `cc`, ~4 s each). `tur check` itself is 0.1-0.2 s per file. By design, not a regression |
 | `tur_sr2_seam` | 7.8 s | 35.7 s | retired 2026-08-27, restored 2026-09-04 (`f2798113`) as the OFF-path gate compiling the carrier path; expected |
 | `tur_leak_check` | 24.4 s | 35.2 s | `requires.leak-check` opt-ins went from 60 to 99 fixtures over the window; growth by design |
 | `tur_build_project` | 37.3 s | 14.3 s | dropped at the same `301f4af8` merge |
@@ -193,9 +193,9 @@ already say this much:
   `Hash Sum mismatch` on the runner image's Google Chrome apt source
   (`dl.google.com/linux/chrome-stable`), before any step of ours ran. The run
   has no Linux rows at all, and the browser suites report
-  `suite did not run (no JUnit output)`. Not this repo's packages; the seven
-  `apt-get update` lines in `ci.yml` share the exposure, and dropping that
-  source before updating (or retrying the update) would close it.
+  `suite did not run (no JUnit output)`. Not this repo's packages; the six
+  `apt-get update` lines in `ci.yml` shared the exposure. Fixed the same day:
+  each now drops that source before updating and retries the update once.
 
 ## Goal
 

@@ -12,6 +12,17 @@ than a dashboard row.
 guard the debugger's native source maps (Phase 4 and Phase 5 of the
 debugger work), which have therefore only ever been checked by hand.
 
+**Status:** all four fix directions below are applied to `ci.yml` on the
+same branch as this report (2026-09-09). Before pushing, each suite was run
+locally with its tool present on a Debug/ASan build: both gdb suites pass
+(5 and 6 assertions), `tur_scscm_compile` passes, and the three
+`requires.spices` fixtures pass under `tests/run.sh` (under
+`tests/run-turi.sh` two of them are `requires.dedicated-runner` skips and
+the third is an `errors/` fixture, so the checkout changes nothing there).
+`tur_refine_wasm` could not be run here (no `emcc` in this container) and
+is the one to watch on the first `main` push. Close this report when the
+`/ci` skip ledger shows all four as `pass` on Linux.
+
 ## What the ledger shows
 
 Every row below is "skipped on every one of N runs" in the canonical

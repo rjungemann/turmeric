@@ -51,7 +51,18 @@ jobs:
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+        run: |
+          # The runner image ships a Google Chrome apt source that has served a
+          # stale index ("Hash Sum mismatch") and killed every Linux job of a
+          # main push before any step of ours ran (0dca9811, 2026-09-09).
+          # Nothing here needs it: drop it before updating, and retry the
+          # update once in case the Ubuntu mirrors are mid-sync as well.
+          # gdb: the native-backtrace half of tur_phase4_gdb and the DWARF /
+          # pretty-printer half of tur_phase5_gdb had never run on a hosted
+          # runner (docs/reported/ci-suites-that-never-run-on-hosted-runners.md).
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache gdb
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -64,7 +75,13 @@ jobs:
         # FAIL line, three times on 2026-08-02.  With gtimeout present the same
         # fixture dies at its per-fixture timeout and reports as a FAIL, which
         # is a result you can act on.
-        run: brew install libedit ccache coreutils || true
+        run: |
+          brew install libedit ccache coreutils || true
+          # pyyaml: tests/run-tutorial-quickstart.sh (tur_tutorial_steps) skipped
+          # on every macOS run for want of it, so the tutorial steps were only
+          # ever asserted on Linux.  Non-fatal on purpose: if neither form
+          # installs, the harness still skips honestly rather than failing here.
+          python3 -m pip install pyyaml || python3 -m pip install --break-system-packages pyyaml || true
 
       # Restore + explicit save (not the combined cache action): the combined
       # action's post-save defaults to save-always:false, so it would skip
@@ -86,6 +103,23 @@ jobs:
 
       - name: ccache stats
         run: ccache -s
+
+      # emcc and node are what tests/run-refine-wasm.sh (tur_refine_wasm)
+      # needs; it skipped on every run of this job on both OSes.  Placed
+      # AFTER Build on purpose: TUR_WASM is off here, so configure never
+      # looks for emcc, and the harness only needs it on PATH at test time.
+      - name: Set up Emscripten (for tur_refine_wasm)
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+          actions-cache-folder: 'emsdk-cache'
+
+      # The sibling checkout that tur_scscm_compile and the requires.spices
+      # fixtures (three today) key on; without it every one of them skipped
+      # on every run.  Shallow, at the sibling's default branch -- the same
+      # thing a developer following CLAUDE.md's "Optional dependencies" gets.
+      - name: Check out turmeric-spices (sibling)
+        run: git clone --depth 1 https://github.com/rjungemann/turmeric-spices ../turmeric-spices
 
       - name: Smoke check (tur --version must not hang)
         run: |
@@ -281,7 +315,12 @@ jobs:
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+        run: |
+          # Drop the runner image's Google Chrome apt source and retry the
+          # update once -- see the `test` job's dependency step for why.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -554,7 +593,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+        run: |
+          # Drop the runner image's Google Chrome apt source and retry the
+          # update once -- see the `test` job's dependency step for why.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
 
       - name: Restore ccache
         uses: actions/cache/restore@v4
@@ -1171,7 +1215,12 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+        run: |
+          # Drop the runner image's Google Chrome apt source and retry the
+          # update once -- see the `test` job's dependency step for why.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
       - name: Restore ccache
         uses: actions/cache/restore@v4
         with:
@@ -1222,7 +1271,12 @@ jobs:
           fetch-depth: 2
 
       - name: Install dependencies (Linux)
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+        run: |
+          # Drop the runner image's Google Chrome apt source and retry the
+          # update once -- see the `test` job's dependency step for why.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
 
       - name: Restore ccache
         uses: actions/cache/restore@v4
@@ -1266,7 +1320,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies (Linux)
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+        run: |
+          # Drop the runner image's Google Chrome apt source and retry the
+          # update once -- see the `test` job's dependency step for why.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
 
       - name: Restore ccache
         uses: actions/cache/restore@v4
