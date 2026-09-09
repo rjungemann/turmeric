@@ -3740,10 +3740,115 @@ Expr *elab_match(Elab *e, const Form *call) {
             if (!only) only = cd->adt;
             else if (only != cd->adt) mixed = true;
         }
-        if (only && !mixed && only->n_type_params == 0) {
-            Expr *nar = elab_any_unbox_to(e, scrutinee, type_adt(only),
-                                          scrutinee->span);
-            if (nar) scrutinee = nar;
+        if (only && !mixed) {
+            Type target = type_adt(only);
+            bool do_narrow = true;
+            /* saffron-match-any-scrutinee-on-parametric-adt-emits-bad-c: a
+             * PARAMETRIC ADT narrows to itself applied to `any`, once per type
+             * parameter.  This used to be refused outright (`n_type_params ==
+             * 0`), which left the emitter casting the 16-byte `tur_tagged_t`
+             * straight to a pointer -- uncompilable C on the one shape the
+             * dialect exists to make writable.
+             *
+             * Sound only because the ctor call now BUILDS at `any` in a Saffron
+             * file (elab_call.c), so the box really does hold a `(Shape any)`.
+             * Relaxing this guard on its own was tried and reverted: the narrow
+             * fired and then panicked `cast: any holds a different
+             * instantiation of Shape`, because `(Sq 6)` had built a
+             * `(Shape int)`. The two halves only work together.
+             *
+             * `type_adt` hardcodes KIND_STAR, so the arrow kind has to be
+             * restored before applying, or the application is a TUR-E0012 kind
+             * mismatch -- the same restore the ctor result path in elab_call.c
+             * does. */
+            /* A GADT is deliberately excluded, and it must be excluded LOUDLY.
+             *
+             * `(defgadt Shape [a] (Sq int : (Shape int)))` pins its own result
+             * INDEX, so its box really does hold a `(Shape int)` -- the ctor
+             * widen in elab_call.c does not touch it, and cannot: the indices
+             * are the whole point of a GADT, and erasing them to `any` would
+             * discard the type-level information the author wrote down.
+             * Narrowing to `(Shape any)` anyway compiles and then panics
+             * `cast: any holds a different instantiation`, which is a WORSE
+             * failure than the uncompilable C this replaced -- the report says
+             * so explicitly, and the first attempt at this fix died there.
+             *
+             * So decline, and say why. Before this the user got a C compiler
+             * error about aggregates, naming nothing they wrote. */
+            /* "Indexed" means a result-type ARGUMENT that is not simply the
+             * ADT's own type parameter.  A `defgadt` whose ctors all return
+             * `(Box a)` writes result types but pins nothing -- it indexes
+             * exactly as a `defdata` does -- and narrowing it to `(Box any)` is
+             * both sound and necessary: `errors/saffron-gadt-skolem-escape`
+             * asserts that such a match still reaches the skolem-escape check,
+             * which it cannot do if the narrow declines first.  Testing merely
+             * for `result_type_form` conflated the two and swallowed that
+             * fixture's diagnostic with this one. */
+            bool gadt_indexed = false;
+            for (uint32_t ci = 0; ci < only->n_ctors && !gadt_indexed; ci++) {
+                const CtorDef *cd = only->ctors[ci];
+                if (!cd || !cd->result_type_form) continue;
+                const Form *rt = cd->result_type_form;
+                if (rt->tag != F_LIST) continue;
+                for (uint32_t ai2 = 1; ai2 < rt->as.list.len; ai2++) {
+                    const Form *arg = rt->as.list.items[ai2];
+                    bool is_own_param = false;
+                    if (arg && arg->tag == F_SYM) {
+                        for (uint8_t pi = 0; pi < only->n_type_params; pi++)
+                            if (only->type_params[pi] && arg->as.sym->name &&
+                                strcmp(only->type_params[pi], arg->as.sym->name) == 0) {
+                                is_own_param = true; break;
+                            }
+                    }
+                    if (!is_own_param) { gadt_indexed = true; break; }
+                }
+            }
+            if (only->is_gadt && only->n_type_params > 0) {
+                /* Every parametric GADT declines the narrow, which is what it
+                 * did before this change -- an UNINDEXED one
+                 * (`errors/saffron-gadt-skolem-escape`) must keep reaching the
+                 * skolem-escape check that fixture pins, and narrowing it to
+                 * `(Box any)` instead types the arm binder `tur_tagged_t` over
+                 * a carrier field (`invalid initializer`). Declining is the old
+                 * path and the right one.
+                 *
+                 * An INDEXED one additionally gets a diagnostic. Its old
+                 * behaviour was a C compiler error about aggregates, naming
+                 * nothing the user wrote; this is report direction 3 for the
+                 * one shape direction 1 cannot serve. */
+                if (gadt_indexed) {
+                    diag_emit(DIAG_ERROR, scrutinee->span,
+                              "cannot match an 'any' scrutinee against '%s': its "
+                              "constructors pin their own result type, so the "
+                              "box's instantiation is not decidable here",
+                              only->name);
+                    diag_emit(DIAG_HELP, scrutinee->span,
+                              "annotate the scrutinee with the instantiation you "
+                              "expect -- `[s : (%s int)]` -- or narrow with "
+                              "`cast` before matching",
+                              only->name);
+                    return NULL;
+                }
+                do_narrow = false;   /* unindexed: decline, as before */
+            } else if (only->n_type_params > 0) {
+                /* `type_from_kind`, NOT a memset-zeroed Type: `CK_UNIQUE` is 0
+                 * and `CK_MOVE` is an alias for it, so a zeroed `any` is
+                 * MOVE-typed.  The arm binder inherits the type argument, so
+                 * `(match s (Sq w) (* w w))` then failed TUR-E0005
+                 * use-after-move on its second `w` -- while the same `any` as a
+                 * PARAMETER was fine, because parameters are built through this
+                 * helper.  Building it the same way is what makes an arm binder
+                 * and a parameter agree, which is the property the dialect
+                 * needs. */
+                Type any_t = type_from_kind(TY_ANY);
+                target.hkt_kind = kind_for_arity(only->n_type_params);
+                for (uint8_t pi = 0; pi < only->n_type_params; pi++)
+                    target = type_app(e->arena, target, any_t, scrutinee->span);
+            }
+            if (do_narrow) {
+                Expr *nar = elab_any_unbox_to(e, scrutinee, target, scrutinee->span);
+                if (nar) scrutinee = nar;
+            }
         }
     }
 

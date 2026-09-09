@@ -1,0 +1,2 @@
+cannot match an 'any' scrutinee against 'Shape'
+annotate the scrutinee with the instantiation you expect

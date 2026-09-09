@@ -1,0 +1,52 @@
+#lang saffron
+; saffron-match-any-scrutinee-on-parametric-adt-emits-bad-c: matching an
+; unannotated (`any`) scrutinee against a PARAMETRIC ADT.
+;
+; This emitted uncompilable C -- `aggregate value used where an integer was
+; expected`, the 16-byte tagged box cast straight to a pointer -- while the
+; non-parametric shape worked. It cost the dialect its headline property on
+; user ADTs: in Saffron a parameter is unannotated by design, and here it
+; could not be.
+;
+; The fix is two halves that only work together, which is why relaxing the
+; narrow alone was tried and reverted:
+;   1. a parametric ctor call BUILDS at `any` in a Saffron file, so `(Sq 6)`
+;      is a `(Shape any)` -- the same answer S6 gives container literals;
+;   2. the `any`-scrutinee narrow targets the ADT applied to `any`, instead of
+;      declining outright on `n_type_params == 0`.
+;
+; Half 1 alone leaves the C error; half 2 alone compiles and then panics
+; `cast: any holds a different instantiation of Shape`.
+;
+; `w` is used TWICE on purpose. The arm binder inherits the type argument, and
+; building that argument with a zeroed Type made it CK_UNIQUE (`CK_MOVE` is an
+; alias for it, and it is 0), so the second `w` was a TUR-E0005 use-after-move
+; -- while the same `any` as a PARAMETER was fine. One use would not show it.
+
+(defdata Shape [a] (Sq a))
+
+(defn area [s]
+  (match s
+    (Sq w) (* w w)))
+
+; A ctor field that is NOT a type variable keeps its declared type: the widen
+; must not erase an annotation the author wrote.
+(defdata Tagged [a] (T :int a))
+
+(defn tag-of [v]
+  (match v
+    (T n x) (+ n x)))
+
+; The non-parametric shape, which always worked -- here so a "fix" cannot
+; regress it while making the parametric one pass.
+(defdata Plain (P :int))
+
+(defn plain-of [p]
+  (match p
+    (P n) (* n 2)))
+
+(defn main []
+  (println (cast (area (Sq 6)) int))
+  (println (cast (tag-of (T 10 5)) int))
+  (println (cast (plain-of (P 21)) int))
+  0)

@@ -2499,6 +2499,66 @@ Expr *elab_call(Elab *e, Form *call) {
     }
     const Symbol *name = head->as.sym;
 
+    /* saffron-match-any-scrutinee-on-parametric-adt-emits-bad-c, fix direction
+     * 1: in a Saffron file a PARAMETRIC constructor's type-variable fields are
+     * built at `any`, so `(Sq 6)` is a `(Shape any)` rather than a `(Shape
+     * int)`.
+     *
+     * This is what makes `(match s (Sq w) ...)` work on an unannotated
+     * scrutinee. The `any`-scrutinee narrow (elab_structs.c) unboxes to the ADT
+     * the arms name; for a parametric ADT that target has to be the ADT applied
+     * to something, and `any` is the only choice a match site can make. Before
+     * this, the narrow declined outright (`n_type_params == 0`) and the emitter
+     * cast the 16-byte `tur_tagged_t` straight to a pointer -- uncompilable C.
+     * Relaxing the guard alone was tried and reverted: the narrow then fired and
+     * panicked `cast: any holds a different instantiation of Shape`, because the
+     * box held what the CONSTRUCTOR produced. This is the other half.
+     *
+     * It is the same answer S6 already gives container literals
+     * (dl_saffron_widen_elems, elab_toplevel.c) -- and spelled the same way, as
+     * an `(:: arg any)` ascription on the FORM, before anything is elaborated,
+     * so the ordinary unifier does the work and no inference path learns a
+     * dialect-dependent second mode. It makes "an undetermined type argument is
+     * `any` in Saffron" true uniformly, instead of true for containers only.
+     *
+     * Only fields DECLARED as a type variable widen: a concrete field in a
+     * parametric ADT (`(defdata Box [a] (Tagged :int a))`) keeps its type, so
+     * the ascription cannot silently erase an annotation the author wrote. And
+     * only a saturated call -- an under-applied ctor partial-applies into a
+     * closure, and ascribing its arguments would change what that closure
+     * completes to. */
+    if (lang_span_is_saffron(call->span)) {
+        CtorDef *sctor = elab_lookup_ctor(e, name);
+        if (sctor && sctor->adt && sctor->adt->n_type_params > 0 &&
+            call->as.list.len - 1u == sctor->n_fields) {
+            bool any_tyvar = false;
+            for (uint32_t i = 0; i < sctor->n_fields; i++)
+                if (sctor->fields[i].full_type &&
+                    sctor->fields[i].full_type->kind == TY_TYVAR) {
+                    any_tyvar = true; break;
+                }
+            if (any_tyvar) {
+                const Symbol *any_sym = symtab_intern(e->st, strslice("any", 3));
+                const Symbol *asc_sym = symtab_intern(e->st, strslice("::", 2));
+                uint32_t n = call->as.list.len;
+                Form **items = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+                items[0] = call->as.list.items[0];
+                for (uint32_t i = 1; i < n; i++) {
+                    Form *arg = call->as.list.items[i];
+                    const CtorField *f = &sctor->fields[i - 1];
+                    if (!f->full_type || f->full_type->kind != TY_TYVAR) {
+                        items[i] = arg;
+                        continue;
+                    }
+                    Form *asc[3] = { form_sym(e->arena, arg->span, asc_sym), arg,
+                                     form_sym(e->arena, arg->span, any_sym) };
+                    items[i] = form_list(e->arena, arg->span, asc, 3);
+                }
+                call = form_list(e->arena, call->span, items, n);
+            }
+        }
+    }
+
     /* Phase C2: --no-contracts strips contract checks before their arguments
      * are elaborated, so the predicate expression (and any side effects it
      * carries) never run -- matching the Rust/C `assert` convention. The

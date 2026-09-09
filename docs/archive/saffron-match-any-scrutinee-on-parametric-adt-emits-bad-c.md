@@ -6,7 +6,38 @@ description: "In a #lang saffron file, matching an unannotated (any) scrutinee w
 
 # A `match` on an `any` scrutinee breaks for a PARAMETRIC ADT
 
-**Severity: medium.** A *loud* failure -- the emitted C does not compile, so
+**RESOLVED 2026-09-09** via fix direction 1 (the ctor widen) plus the guard
+relaxation it makes sound, with direction 3's diagnostic for the one shape
+direction 1 cannot serve. Pinned by `tests/fixtures/saffron-match-parametric-adt`
+(both suites run it) and `tests/fixtures/errors/saffron-match-indexed-gadt`.
+
+**What shipped, and what the report got right and wrong:**
+
+- **Right:** the two halves only work together. Half 2 alone was reverted here
+  for panicking `cast: any holds a different instantiation`, and that
+  reproduced exactly.
+- **Right:** `type_adt()` hardcodes `KIND_STAR`, so the arrow kind has to be
+  restored with `kind_for_arity` before applying.
+- **Wrong, and this was the interesting part:** the `CK_MOVE` question the
+  report left open ("whether that is correct for Saffron is its own question")
+  was not a design question at all. `CK_UNIQUE` is **0** and `CK_MOVE` is an
+  alias for it, so the `any` type argument built with a zeroed `Type` was
+  MOVE-typed; the arm binder inherited it and `(* w w)` failed TUR-E0005 on its
+  second use. The same `any` as a PARAMETER was fine, because parameters build
+  their type through `type_from_kind`. Using that helper is the whole fix --
+  nothing about Saffron's ownership semantics needed deciding.
+- **Incomplete:** the report's arity table says a GADT "fails identically" to a
+  parametric `defdata`, and treats them as one bug. They are two. An
+  **indexed** GADT (`(Sq int : (Shape int))`) cannot take the widen at all --
+  erasing an index to `any` discards what a GADT exists to carry -- so it
+  declines and gets direction 3's diagnostic instead of a C compiler error
+  about aggregates. An **unindexed** one (every ctor returning `(Box a)`) also
+  declines, silently, because `errors/saffron-gadt-skolem-escape` asserts such
+  a match still reaches the skolem-escape check; narrowing it to `(Box any)`
+  types the arm binder `tur_tagged_t` over a carrier field. Testing merely for
+  `result_type_form` conflated the two and swallowed that fixture's diagnostic.
+
+**Severity was medium.** A *loud* failure -- the emitted C does not compile, so
 nothing miscomputes. What it costs is the dialect's headline property: in
 Saffron a parameter is unannotated by design, and here it cannot be.
 
