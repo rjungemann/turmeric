@@ -5185,7 +5185,7 @@ static union { void *__a; int64_t __b;
     __tur_fatbox_3 = { .__a = (void *)__tur_fatbox_keep };
 typedef bool (*tur_thunk_bool_int64_t_t)(void *, int64_t);
 typedef bool (*tur_thunk_bool_double_t)(void *, double);
-static void __tur_any_drop(tur_tagged_t __v) {
+static void __attribute__((noinline, noclone)) __tur_any_drop(tur_tagged_t __v) {
     const __tur_any_ti *__ti = __tur_any_find(TUR_GETTAG(__v));
     if (__ti && __ti->boxed) free((void *)(intptr_t)TUR_UNTAG(__v));
 }

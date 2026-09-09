@@ -5182,7 +5182,7 @@ static union { void *__a; int64_t __b;
 typedef tur_adt_Point * (*tur_thunk_tur_adt_Point___int64_t_t)(void *, int64_t);
 typedef bool (*tur_thunk_bool_int64_t_int64_t_t)(void *, int64_t, int64_t);
 typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
-static void __tur_any_drop(tur_tagged_t __v) {
+static void __attribute__((noinline, noclone)) __tur_any_drop(tur_tagged_t __v) {
     const __tur_any_ti *__ti = __tur_any_find(TUR_GETTAG(__v));
     if (__ti && __ti->boxed) free((void *)(intptr_t)TUR_UNTAG(__v));
 }

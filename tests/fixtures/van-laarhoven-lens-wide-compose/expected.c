@@ -5233,7 +5233,7 @@ typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
 static union { void *__a; int64_t __b;
                char __c[sizeof(void *) + 2 * sizeof(int64_t)]; }
     __tur_fatbox_2 = { .__a = (void *)__tur_fatbox_keep };
-static void __tur_any_drop(tur_tagged_t __v) {
+static void __attribute__((noinline, noclone)) __tur_any_drop(tur_tagged_t __v) {
     const __tur_any_ti *__ti = __tur_any_find(TUR_GETTAG(__v));
     if (__ti && __ti->boxed) free((void *)(intptr_t)TUR_UNTAG(__v));
 }

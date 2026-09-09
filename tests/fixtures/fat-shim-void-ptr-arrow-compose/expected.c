@@ -5145,7 +5145,7 @@ typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
 typedef double (*tur_thunk_double_double_t)(void *, double);
 typedef bool (*tur_thunk_bool_int64_t_int64_t_t)(void *, int64_t, int64_t);
 typedef void * (*tur_thunk_void___void___t)(void *, void *);
-static void __tur_any_drop(tur_tagged_t __v) {
+static void __attribute__((noinline, noclone)) __tur_any_drop(tur_tagged_t __v) {
     const __tur_any_ti *__ti = __tur_any_find(TUR_GETTAG(__v));
     if (__ti && __ti->boxed) free((void *)(intptr_t)TUR_UNTAG(__v));
 }
