@@ -529,6 +529,22 @@ typedef struct EmitCtx {
     int64_t  *any_widen_ids;
     uint32_t  n_any_widen_ids;
     uint32_t  cap_any_widen_ids;
+    /* saffron-lang-plan S9 (D8 piece 3c): the `{class, tag, dict}` rows this TU
+     * publishes into the runtime instance registry.
+     *
+     * Recorded by the dict-singleton emission itself rather than recomputed
+     * later from the instance list, which is what makes the row's dict symbol
+     * exist by construction.  The piece-3 attempt that was reverted got this
+     * wrong in the other direction -- it built the table in the PREAMBLE, beside
+     * P1's type rows, where `&dict_Shape_Circle_singleton` is still undeclared
+     * (`error: 'dict_Eq_int_singleton' undeclared here`, which gcc then reported
+     * as a spurious-looking `missing initializer for field 'dict'`).  Emitting
+     * from what was actually written cannot drift from it. */
+    char    **inst_row_class;   /* class name, as the dispatch site spells it */
+    int64_t  *inst_row_tag;     /* the receiver's `any` id -- the lookup key */
+    char    **inst_row_dict;    /* the emitted `dict_<Class>_<T>_singleton` */
+    uint32_t  n_inst_rows;
+    uint32_t  cap_inst_rows;
     /* dead-base-thunk-chain-references-undefined-ctor (fix direction 1,
      * narrowed): a HEAP parametric ADT never gets a base `ctor_X` definition
      * (only per-spec monomorphs), yet the dead base generic thunk chain still
@@ -912,6 +928,18 @@ int effect_tag(const struct Symbol *eff);
  * in lockstep.  Defined in emit_module.c. */
 struct TypeClassInstance;
 bool emit_instance_is_live(const struct EmitCtx *ctx, struct TypeClassInstance *inst);
+/* saffron-lang-plan S9 (D8 piece 3c): should this instance get a runtime
+ * registry row, and under which `any` tag?  True only when the saffron
+ * experiment is on and the receiver's id is one this TU actually widens.
+ * Defined in emit_module.c; called from the dict-singleton emission so the row
+ * and the symbol it names are written together. */
+bool emit_instance_dispatch_tag(struct EmitCtx *ctx, struct TypeClassInstance *inst,
+                                int64_t *out_tag);
+void emit_note_instance_row(struct EmitCtx *ctx, const char *cls, int64_t tag,
+                            const char *dict_symbol);
+/* Emits the recorded rows + their chunk registration.  Call LAST, after every
+ * dict singleton the rows take the address of. */
+void emit_instance_row_table(struct EmitCtx *ctx, struct Buf *out);
 /* nested-construct-byvalue: the FnDef a constrained-instance body re-dispatches a
  * return/argument-dispatched method to under the active spec (e.g. the cstr
  * `dec` impl).  Used by the ABI scan to mark that instance live so the emitted

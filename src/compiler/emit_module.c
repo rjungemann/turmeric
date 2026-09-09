@@ -6724,6 +6724,70 @@ static bool emit_abi_instance_tag_is_widened(EmitCtx *ctx, TypeClassInstance *in
     return emit_abi_any_widen_has(ctx, emit_any_type_id(ctx, recv));
 }
 
+bool emit_instance_dispatch_tag(EmitCtx *ctx, TypeClassInstance *inst,
+                                int64_t *out_tag) {
+    if (!ctx || !g_opt_saffron || !inst || inst->n_type_args == 0) return false;
+    Type recv = inst->type_args[0];
+    if (recv.kind == TY_TYVAR || recv.kind == TY_UNKNOWN) return false;
+    int64_t id = emit_any_type_id(ctx, recv);
+    if (!emit_abi_any_widen_has(ctx, id)) return false;
+    if (out_tag) *out_tag = id;
+    return true;
+}
+
+void emit_note_instance_row(EmitCtx *ctx, const char *cls, int64_t tag,
+                            const char *dict_symbol) {
+    if (!ctx || !cls || !dict_symbol) return;
+    for (uint32_t i = 0; i < ctx->n_inst_rows; i++) {
+        if (ctx->inst_row_tag[i] == tag &&
+            strcmp(ctx->inst_row_class[i], cls) == 0) return;
+    }
+    if (ctx->n_inst_rows >= ctx->cap_inst_rows) {
+        uint32_t nc = ctx->cap_inst_rows ? ctx->cap_inst_rows * 2 : 8;
+        char **ncl = (char **)realloc(ctx->inst_row_class, nc * sizeof(char *));
+        int64_t *nt = (int64_t *)realloc(ctx->inst_row_tag, nc * sizeof(int64_t));
+        char **nd = (char **)realloc(ctx->inst_row_dict, nc * sizeof(char *));
+        if (!ncl || !nt || !nd) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->inst_row_class = ncl;
+        ctx->inst_row_tag = nt;
+        ctx->inst_row_dict = nd;
+        ctx->cap_inst_rows = nc;
+    }
+    ctx->inst_row_class[ctx->n_inst_rows] = strdup(cls);
+    ctx->inst_row_tag[ctx->n_inst_rows] = tag;
+    ctx->inst_row_dict[ctx->n_inst_rows] = strdup(dict_symbol);
+    if (!ctx->inst_row_class[ctx->n_inst_rows] || !ctx->inst_row_dict[ctx->n_inst_rows]) {
+        fprintf(stderr, "tur: oom\n"); abort();
+    }
+    ctx->n_inst_rows++;
+}
+
+/* saffron-lang-plan S9 (D8 piece 3c): publish this TU's instance rows.
+ *
+ * MUST be emitted after the dict singletons -- the rows take their addresses.
+ * The caller places this at the very end of the file, past every definition,
+ * which is the constraint the reverted attempt discovered the hard way.
+ *
+ * Chunked and registered exactly like P1's type rows: each TU pushes its own
+ * chunk and lookups walk the union, so an instance registered by the TU that
+ * widens the type is visible to a different TU that dispatches on the box. */
+void emit_instance_row_table(EmitCtx *ctx, Buf *out) {
+    if (!ctx || ctx->n_inst_rows == 0) return;
+    buf_puts(out, "static const __tur_inst_row __tur_inst_rows[] = {\n");
+    for (uint32_t i = 0; i < ctx->n_inst_rows; i++) {
+        buf_printf(out, "    { \"%s\", %lldLL, &%s },\n",
+                   ctx->inst_row_class[i], (long long)ctx->inst_row_tag[i],
+                   ctx->inst_row_dict[i]);
+    }
+    buf_puts(out, "};\n");
+    buf_printf(out,
+               "static __tur_inst_chunk __tur_inst_chunk_self = { __tur_inst_rows, %u, 0 };\n",
+               (unsigned)ctx->n_inst_rows);
+    buf_puts(out, "static void __tur_inst_rows_init(void) {\n");
+    buf_puts(out, "    __tur_inst_register(&__tur_inst_chunk_self);\n}\n");
+    static_init_register("__tur_inst_rows_init", STATIC_INIT_KEYS);
+}
+
 /* J1: Scan all items for ABI-specialization opportunities. */
 static void emit_abi_scan_program(EmitCtx *ctx, const Expr **items, uint32_t n_items) {
     for (uint32_t i = 0; i < n_items; i++) {
@@ -10424,6 +10488,32 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Linear over (chunks x rows).  Programs intern a handful of `any` types,
      * so this is a short walk; if a program ever makes it hot, the fix is an
      * index built once at startup, not a return to per-TU numbering. */
+    /* saffron-lang-plan S9 (D8 piece 3c): the instance registry, the same shape
+     * as the type registry above and for the same reason -- one chunk per TU,
+     * lookups walk the union, so a row published by the TU that WIDENS a type is
+     * found by a TU that DISPATCHES on the box.  Only the rows array itself is
+     * emitted late (it takes the singletons' addresses); the types and the two
+     * functions belong here, where the dispatch sites can see them. */
+    if (g_opt_saffron) {
+    buf_puts(out, "typedef struct __tur_inst_row { const char *cls; int64_t tag; const void *dict; } __tur_inst_row;\n");
+    buf_puts(out, "typedef struct __tur_inst_chunk { const __tur_inst_row *rows; int n; struct __tur_inst_chunk *next; } __tur_inst_chunk;\n");
+    emit_rt_global(out, shared,
+                   "__tur_inst_chunk *g_tur_insts = 0;\n",
+                   "__tur_inst_chunk *g_tur_insts");
+    buf_puts(out, "static void __tur_inst_register(__tur_inst_chunk *c) "
+                  "__attribute__((unused));\n");
+    buf_puts(out, "static void __tur_inst_register(__tur_inst_chunk *c) {\n");
+    buf_puts(out, "    c->next = g_tur_insts; g_tur_insts = c;\n}\n");
+    buf_puts(out, "static const void *__tur_inst_find(const char *cls, int64_t tag) "
+                  "__attribute__((unused));\n");
+    buf_puts(out, "static const void *__tur_inst_find(const char *cls, int64_t tag) {\n");
+    buf_puts(out, "    for (__tur_inst_chunk *c = g_tur_insts; c; c = c->next)\n");
+    buf_puts(out, "        for (int i = 0; i < c->n; i++)\n");
+    buf_puts(out, "            if (c->rows[i].tag == tag && strcmp(c->rows[i].cls, cls) == 0)\n");
+    buf_puts(out, "                return c->rows[i].dict;\n");
+    buf_puts(out, "    return 0;\n}\n");
+    }   /* g_opt_saffron -- gated so a plain Turmeric program's emitted C, and
+         * therefore every `expected.c` snapshot, is unchanged byte for byte. */
     buf_puts(out, "static const __tur_any_ti *__tur_any_find(int64_t tag) {\n");
     buf_puts(out, "    for (__tur_any_tichunk *c = g_tur_any_types; c; c = c->next)\n");
     buf_puts(out, "        for (int i = 0; i < c->n; i++)\n");
@@ -15936,6 +16026,11 @@ int emit_program(Buf *out, const Expr *program) {
     }
     buf_free(&fatbox_init);
 
+    /* saffron-lang-plan S9 (D8 piece 3c): the instance rows go here -- past
+     * every dict singleton, whose addresses they take, and before
+     * static_init_emit, which needs __tur_inst_rows_init already registered. */
+    emit_instance_row_table(&ctx, out);
+
     /* S1b: after every registered initializer's own definition (they are all
      * `static`), and after `main` -- the preamble carries the declaration. */
     static_init_emit(out);
@@ -16008,6 +16103,13 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.specialized_call_names);
     free(ctx.carrier_call_bindings);
     free(ctx.any_widen_ids);   /* saffron-lang-plan S9 (D8 piece 3) */
+    for (uint32_t __ir = 0; __ir < ctx.n_inst_rows; __ir++) {
+        free(ctx.inst_row_class[__ir]);
+        free(ctx.inst_row_dict[__ir]);
+    }
+    free(ctx.inst_row_class);
+    free(ctx.inst_row_tag);
+    free(ctx.inst_row_dict);
     arena_free(&type_arena);
     /* serial-shift-unsupported-context-miscompile: codegen may emit a hard
      * diagnostic (e.g. TUR-E0706) for a shape that type-checked but cannot be
@@ -16721,6 +16823,21 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
         free(hdr_ctx.specialized_call_outer);
         free(hdr_ctx.specialized_call_names);
         free(hdr_ctx.carrier_call_bindings);
+        /* saffron-lang-plan S9 (D8 piece 3a): the header ctx runs the same
+         * pre-emission scan, which now interns each widened type's `any` id --
+         * so it owns the P1 name table's strings too.  It never did before (the
+         * scan only ever read types), and this teardown had grown to match what
+         * the scan happened to allocate rather than what an EmitCtx can own.
+         * LeakSanitizer caught it on the FIRST --shared build. */
+        for (uint32_t i = 0; i < hdr_ctx.n_any_type_names; i++) {
+            free(hdr_ctx.any_type_names[i]);
+            free(hdr_ctx.any_type_shown[i]);
+        }
+        free(hdr_ctx.any_type_names);
+        free(hdr_ctx.any_type_shown);
+        free(hdr_ctx.any_type_boxed);
+        free(hdr_ctx.any_type_ids);
+        free(hdr_ctx.any_widen_ids);
         if (n_decls > 0) buf_putc(out, '\n');
     }
     arena_free(&hdr_type_arena);
@@ -17404,6 +17521,13 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         static_init_register("__tur_fatbox_init", STATIC_INIT_KEYS);
     }
 
+    /* saffron-lang-plan S9 (D8 piece 3c): same placement as the single-TU path
+     * -- past the singletons, before the init dispatcher.  This is the arm that
+     * makes the per-TU chunking earn its keep: under separate compilation each
+     * TU publishes only the rows for the types IT widens, and the dispatching
+     * TU finds the rest through the merged list. */
+    emit_instance_row_table(&ctx, out);
+
     /* S1b: after every registered initializer's definition.  Emitted in
      * separate-compilation mode too -- there is no `main` in this TU to call
      * it, so the constructor wrapper is the whole mechanism there. */
@@ -17470,6 +17594,13 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     free(ctx.specialized_call_names);
     free(ctx.carrier_call_bindings);
     free(ctx.any_widen_ids);   /* saffron-lang-plan S9 (D8 piece 3) */
+    for (uint32_t __ir = 0; __ir < ctx.n_inst_rows; __ir++) {
+        free(ctx.inst_row_class[__ir]);
+        free(ctx.inst_row_dict[__ir]);
+    }
+    free(ctx.inst_row_class);
+    free(ctx.inst_row_tag);
+    free(ctx.inst_row_dict);
     arena_free(&type_arena2);
     /* serial-shift-unsupported-context-miscompile: mirror emit_program -- a hard
      * codegen diagnostic fails the separate-compilation path too. */

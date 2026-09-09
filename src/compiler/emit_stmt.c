@@ -953,6 +953,23 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_puts(ctx->file, ",\n");
             }
             buf_printf(ctx->file, "};\n\n");
+
+            /* saffron-lang-plan S9 (D8 piece 3c): record the registry row here,
+             * where the singleton has just been written, rather than rebuilding
+             * the mangled name later from the instance list.  The row can then
+             * only ever name a symbol this TU actually emitted -- the failure
+             * mode of the reverted first attempt, which built the table from
+             * the instance list in the preamble and referenced singletons that
+             * dead-instance elimination had dropped (or that had not been
+             * emitted yet). */
+            {
+                int64_t __disp_tag = 0;
+                if (emit_instance_dispatch_tag(ctx, inst, &__disp_tag)) {
+                    char singleton[160];
+                    snprintf(singleton, sizeof(singleton), "%s_singleton", dict_name);
+                    emit_note_instance_row(ctx, tc->name->name, __disp_tag, singleton);
+                }
+            }
             return;
         }
         /* Phase H §1: dictionary passing — EX_DICT is a pure value node; no statement to emit */
