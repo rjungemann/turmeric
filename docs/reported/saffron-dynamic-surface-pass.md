@@ -128,6 +128,22 @@ instead of binding K from the key. Map twin of the archived
 `saffron-unannotated-param-container-cast-panics`; no seam fixture uses a
 map.
 
+**H10. A lambda whose body has a concrete type is not dynamically callable
+compiled.** Saffron's `any` return default reaches `defn` but not `fn`:
+
+```turmeric
+(defn call0 [f] (f))
+(call0 (fn [] 7.25))          ;; compiled: panic `cannot call this function here --
+                              ;;   it takes a different number of arguments ...`   interp: 7.25
+(call0 (fn [] : any 7.25))    ;; compiled: cc error `returning 'double' but
+                              ;;   'tur_tagged_t' was expected`
+(app (fn [x] "s") 1)          ;; same panic; (fn [x] x) and (fn [x] (+ x 1)) work
+```
+
+A lambda body that flows through an `any` (`(fn [] (t 7.25))`) is fine, so
+the literal-bodied lambda gets a `(fn [] float)` signature the dynamic call
+site refuses. Same message site as H8.
+
 ## Medium -- back-end divergence or documented-surface hole
 
 **M1. `.bind` on an `any` Option panics compiled.** `(defn half [o] (.bind o

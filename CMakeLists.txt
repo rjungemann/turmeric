@@ -949,6 +949,20 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_type_fuzz_src PROPERTIES TIMEOUT 600)
+# Saffron dynamic-surface fuzz: correct-by-construction `#lang saffron`
+# programs routing known scalars through random `any` plumbing (wrappers,
+# routes, terminal dynamic operations), asserting check-accepted => the C
+# compiles, runs and prints the predicted output AND `tur --interpret` agrees.
+# Shapes reproducing the open findings in
+# docs/reported/saffron-dynamic-surface-pass.md are excluded via KNOWN (pinned
+# by --known-probes instead), so a finding here is NEW.  Smoke size -- run
+# tests/saffron-fuzz-src.py directly for a session.
+add_test(
+  NAME tur_saffron_fuzz_src
+  COMMAND bash tests/run-saffron-fuzz-src.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_saffron_fuzz_src PROPERTIES TIMEOUT 600)
 # Representation trace smoke (representation-consolidation-meta-plan,
 # increment 0): --emit-abi-trace's repr-trace lines classify every fn-typed
 # parameter's representation and every emit-side representation bridge, so
