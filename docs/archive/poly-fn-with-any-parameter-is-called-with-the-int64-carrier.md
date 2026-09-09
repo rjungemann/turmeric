@@ -6,7 +6,21 @@ description: "`(fmap (:: (some (:: 41 any)) (Option any)) (fn [x : any] : any x)
 
 # A poly-fn with an `any` parameter is called with the int64 carrier
 
-**Severity: medium.** Loud -- uncompilable C, no wrong answer. It blocks any
+**RESOLVED 2026-09-09** via fix direction 1, and it was smaller than any of the
+three directions: the CALL side was already right. The `__poly_` wrapper the
+elaborator synthesises (`elab_call.c`, the poly-wrapper block) retypes only
+FLOAT-class parameters away from the int64 carrier -- the comment there
+explains why: a float lives in a different register class. An `any` is the same
+situation one size up, a 16-byte `tur_tagged_t`, so `k == TY_ANY` now joins that
+condition and the wrapper parameter matches the `(tur_tagged_t (*)(void *,
+tur_tagged_t))` cast the caller already applied. One conjunct. The wrapper's
+RESULT was already the declared kind; only the parameter side was wrong.
+
+Pinned by `tests/fixtures/poly-fn-any-parameter` on both back ends, with the
+`(Option int)` control and a 7.35 float row. This unblocks D8 question 3 on the
+compiled path; the interpreter side already worked.
+
+**Severity was medium.** Loud -- uncompilable C, no wrong answer. It blocks any
 higher-kinded typeclass method applied to a container of `any` with a closure
 that takes the element, which under Saffron is *every* `fmap`/`bind` over a
 container built in a Saffron file (S6 and the parametric-ctor widen make those

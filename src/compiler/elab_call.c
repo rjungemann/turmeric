@@ -8824,6 +8824,17 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
                 ? inner_b->type.as.fn.arg_full_types[i] : NULL;
             bool is_poly = aft && aft->kind == TY_FORALL;
             bool is_float = (k == TY_FLOAT || k == TY_FLOAT32 || k == TY_FLOAT64);
+            /* poly-fn-with-any-parameter-is-called-with-the-int64-carrier: an
+             * `any` is the float case again, one size up.  It is a 16-byte
+             * `tur_tagged_t`, so it cannot ride the int64 carrier at all -- and
+             * the CALL side already casts `g.fn` to the typed signature
+             * `(tur_tagged_t (*)(void *, tur_tagged_t))` -- so an int64-typed
+             * wrapper param was a hard C error at the inner call ("expected
+             * 'tur_tagged_t' but argument is of type 'int64_t'"), which is
+             * what took `fmap` over an `(Option any)` off the table entirely.
+             * Retype it like float; the wrapper's RESULT was already the
+             * declared kind, so only the parameter side was wrong. */
+            bool is_any = (k == TY_ANY);
             /* F5: for a *typed* `:fn` carrier the call site casts fn.fn to the
              * concrete signature, so the wrapper must accept each argument in its
              * native kind (cstr/ptr/sub-int/float) -- not the int64 carrier --
@@ -8831,7 +8842,7 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
              * -Wint-conversion at the inner call, "works by luck" for pointers).
              * For the bare carrier we keep the int64 default (only float, which
              * the bare carrier rejects, is retyped). */
-            if (!is_poly && (is_float || typed_concrete)) rk = k;
+            if (!is_poly && (is_float || is_any || typed_concrete)) rk = k;
         }
         real_arg_kinds[i] = rk;
     }
