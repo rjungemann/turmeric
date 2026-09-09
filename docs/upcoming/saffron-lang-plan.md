@@ -795,7 +795,9 @@ The shape, restated as buildable work:
 4. A `registry[class][tag]` lookup at the call site.
 5. A clean "no instance for T" panic.
 
-**Pieces 3-5 remain**, and they are the dispatch itself.
+**Pieces 3-5 are DONE 2026-09-09.** `(.show x)` on an un-narrowed `any` runs
+the right instance on both back ends; a type with no instance panics naming the
+class and the runtime type. See "S9 -- built" below.
 
 #### Piece 3 was ATTEMPTED 2026-09-09 and reverted -- two constraints found
 
@@ -1811,6 +1813,42 @@ up front, which is what this stage was deferred to avoid.
 Exit: a `(show x)` on an un-narrowed `any` dispatches on the box tag, on both
 back ends, with a clean "no instance for T" panic; and the four open questions
 answered from programs rather than from first principles.
+
+#### S9 -- built 2026-09-09 (pieces 3-5)
+
+The exit condition's first half is **met**: `saffron-dyn-typeclass-dispatch`
+runs the int, float, cstr and bool instances of one class through one
+`(.kind-of x)` on both back ends, and a type with no instance panics naming
+both. Typed Turmeric keeps the diagnostic -- the dialects reach the same
+resolution state and choose differently, which is the design, and
+`errors/saffron-guide-unnarrowed-method` moved to the Turmeric arm to pin it.
+
+What the build changed relative to the sketch:
+
+- **The pre-pass is the ABI scan**, not a new pass. `emit_abi_note_instance_dict_ref`
+  already marked an instance live with dict and bodies in lockstep; forcing
+  emission is new NOTES in a walk that already runs, keyed on the widened tag
+  collected at `EX_UNION_INJECT`.
+- **The row points at a per-instance SHIM TABLE, not the dict.** The dict's
+  slots are not uniformly shaped, so one cast at a dynamic site would pass a
+  double in the wrong register class and read a bool out of a 64-bit word --
+  P8's truncation one layer up. Per-instance shims convert instead, the float
+  arm bit-reinterpreting.
+- **A scan gap fell out**, and it was a real bug of its own:
+  `emit_abi_scan_expr` had no arms for `EX_DYN_OP`/`EX_DYN_CALL`/`EX_DYN_FIELD`,
+  so nothing under `(println ...)` was ever walked -- every widen and every
+  monomorph request beneath one went unrecorded. Exactly what P2d fixed for
+  `EX_UNION_INJECT`, one node family later.
+
+**v0 limits, each a clean panic rather than a wrong answer**: a method taking
+more than the receiver (`eq [x : a y : a]`) or returning the class's own type
+variable (`clone : a -> a`); an instance for a type CONSTRUCTOR
+(`Functor Option`), since a widened value's tag is minted from `(Option float)`;
+and a type-variable receiver (`Clone T`), which has no ground tag.
+
+The second half of the exit -- the four design questions answered from real
+programs -- is still open, and now genuinely can be, since the programs are
+writable and dispatch works.
 
 ---
 
