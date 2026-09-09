@@ -286,6 +286,12 @@ tooling. Optional spices that are absent do not cause a build error.
 When `tur test` is run, optional spices are fetched so test files can import
 them. When `tur build` is run in production, they are skipped.
 
+An optional spice that cannot be fetched is reported and skipped: `tur fetch`
+still writes `tur.lock` and exits `1`, distinct from the `2` a required
+spice's failure earns (and the `0` of a clean fetch), so a CI job can warn on
+the first and fail on the second. See the exit-status table in
+[package-management-guide.md](package-management-guide.md#fetch-dependencies-without-building).
+
 ---
 
 ## C/CMake Dependencies

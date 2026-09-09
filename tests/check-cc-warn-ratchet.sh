@@ -23,7 +23,7 @@ TUR="${TUR:-./build/tur}"
 # The same pattern run.sh matches on.  Kept in sync BY HAND -- if you change one,
 # change the other; a drifted pattern is the quiet failure this script exists to
 # catch, so it is deliberately spelled out here rather than sourced.
-PATTERN='\[-W(int-conversion|incompatible-pointer-types)\]'
+PATTERN='\[-W(int-conversion|incompatible-pointer-types|free-nonheap-object)\]'
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/tur-ccwarn.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT

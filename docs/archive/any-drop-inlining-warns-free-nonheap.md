@@ -4,6 +4,19 @@ category: Reported
 description: __tur_any_drop guards its free with a runtime registry lookup (__ti->boxed), and the row for an opaque over an immediate correctly says boxed=0 -- but when gcc inlines the drop at a site whose payload is a constant, it cannot prove the guard is false and warns. The generated program is correct; the warning is noise in a user's build.
 ---
 
+> **RESOLVED 2026-09-09** via fix direction 2, because direction 1 does not
+> reach the filed repro: the drop site's payload is a CALL result (`(boxed)`),
+> so the boxed flag is a runtime fact there and only gcc, after inlining the
+> callee, ever sees the literal. `__tur_any_drop` is emitted
+> `__attribute__((noinline, noclone))` -- `noclone` because with `noinline`
+> alone gcc's IPA constant propagation minted a `__tur_any_drop.constprop`
+> clone specialised to `7` and warned from inside it. The warning is gone at
+> `-O0` and `-O2` (gcc 13.3). `run.sh`'s emitted-C warning ratchet now also
+> FAILs on `-Wfree-nonheap-object` (the self-test pattern in
+> `check-cc-warn-ratchet.sh` moved with it), and
+> `tests/fixtures/any-opaque-immediate-drop-no-warning` is the case that trips
+> it without the fix.
+
 # Emitted `any` drop warns `-Wfree-nonheap-object`
 
 **Severity: low.** Cosmetic, and the program is correct -- but it is a scary

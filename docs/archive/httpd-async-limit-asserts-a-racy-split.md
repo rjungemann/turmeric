@@ -1,5 +1,14 @@
 # `httpd-async-limit` asserts an exact admit/reject split that is a race, and hardcodes the count that would catch it
 
+> **RESOLVED 2026-09-09.** The race half was already gone when this was
+> re-read: the fixture had been rewritten (see
+> `docs/archive/macos-jit-leg-intermittent-45min-hang.md`) so each admitted
+> handler HOLDS its slot until the busy counter reads 2, which makes the
+> `ok=2` / `busy=2` split a consequence of the cap rather than of scheduling
+> -- fix direction 3, in effect. What remained was the literal: `handler-ran`
+> is now a counter bumped on handler entry (direction 2), so the line that
+> looked like it corroborated the cap can actually observe it being exceeded.
+
 **Severity:** low -- test-only, no product defect implicated. Worth recording
 because it fails intermittently on loaded CI runners, reads as a real
 regression on whatever PR happens to be running, and the one line that looks

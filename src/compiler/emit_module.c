@@ -951,7 +951,31 @@ void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
      * this TU to have interned any struct/ADT payload at all.  A program that
      * widens only a primitive interns nothing and would otherwise call a
      * function that was never defined. */
-    buf_puts(out, "static void __tur_any_drop(tur_tagged_t __v) {\n");
+    /* any-drop-inlining-warns-free-nonheap: `noinline`.  The free is guarded
+     * by a RUNTIME registry lookup, and the row for a `defopaque` over an
+     * immediate correctly says boxed=0 -- but when gcc inlines this into a
+     * scope whose payload it has constant-folded to a literal (`(:: 7 Route)`
+     * through an inlined callee), it cannot see through `__tur_any_find` to
+     * prove the guard false, and warns `'free' called on a pointer to an
+     * unallocated object '7'` [-Wfree-nonheap-object] in the user's build.
+     * Nothing was ever freed; the warning is about a branch it could not rule
+     * out.  Keeping the drop out of line keeps the guard opaque, which is the
+     * honest shape anyway: whether the payload is boxed is a fact the MINTING
+     * TU published at runtime, not one this call site can fold.  `noclone`
+     * too: with only `noinline` gcc's IPA constant propagation made a
+     * `__tur_any_drop.constprop` clone specialised to the literal and warned
+     * from inside it. */
+    /* `noclone` is GCC-only: clang warns `unknown attribute 'noclone'
+     * ignored` [-Wunknown-attributes], and that warning is stderr noise in
+     * every user build (it failed tests/run-offtree-load.sh on the macOS
+     * leg, which captures the build's output).  clang does not mint IPA-CP
+     * clones the way gcc does, so `noinline` alone is the whole fix there. */
+    buf_puts(out, "#if defined(__GNUC__) && !defined(__clang__)\n");
+    buf_puts(out, "#define TUR_ANY_DROP_ATTR __attribute__((noinline, noclone))\n");
+    buf_puts(out, "#else\n");
+    buf_puts(out, "#define TUR_ANY_DROP_ATTR __attribute__((noinline))\n");
+    buf_puts(out, "#endif\n");
+    buf_puts(out, "static void TUR_ANY_DROP_ATTR __tur_any_drop(tur_tagged_t __v) {\n");
     buf_puts(out, "    const __tur_any_ti *__ti = __tur_any_find(TUR_GETTAG(__v));\n");
     buf_puts(out, "    if (__ti && __ti->boxed) free((void *)(intptr_t)TUR_UNTAG(__v));\n");
     buf_puts(out, "}\n");

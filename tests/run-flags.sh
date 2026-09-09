@@ -516,6 +516,29 @@ else
     pass "help-repl"
 fi
 
+# cli-usage-error-paths-exit-zero: for every subcommand with a usage helper,
+# `--help` is a successful request for help (exit 0) AND an unknown flag is an
+# error (exit nonzero).  Both halves, per subcommand: each alone passes for
+# the wrong reason -- the bug was that the error path reused the help helper
+# and inherited its 0, so `tur build --typo || exit 1` reported success.
+for sub in build run check eval doc explain format expand emit-c emit-h link \
+           repl test parse-check docs smt; do
+    "$TUR" "$sub" --help >/dev/null 2>&1; rc=$?
+    if [ $rc -ne 0 ]; then
+        fail "usage-status-help-$sub" "expected 'tur $sub --help' to exit 0, got $rc"
+    else
+        pass "usage-status-help-$sub"
+    fi
+    out=$("$TUR" "$sub" --bogus-flag 2>&1); rc=$?
+    if [ $rc -eq 0 ]; then
+        fail "usage-status-error-$sub" "expected 'tur $sub --bogus-flag' to exit nonzero, got 0"
+    elif ! grep -qi "usage\|unknown\|bogus" <<< "$out"; then
+        fail "usage-status-error-$sub" "expected a usage/unknown-option message"
+    else
+        pass "usage-status-error-$sub"
+    fi
+done
+
 # ---------------------------------------------------------------------------
 # E2: --version / -V (Tier 1)
 # ---------------------------------------------------------------------------

@@ -1,5 +1,13 @@
 # `add_test` in `src/CMakeLists.txt` never registers, silently
 
+> **RESOLVED 2026-09-09** via fix direction 1 plus the guard from direction 3.
+> `enable_testing()` now sits above `add_subdirectory(src)` in the top-level
+> `CMakeLists.txt`; `ctest -N` lists `tur_trail`, and the never-run test
+> **passes** on its first run. `tests/check-ctest-registration.sh` (ctest
+> target `tur_ctest_registration_lint`) checks that every `add_test(NAME ...)`
+> declared under `src/` appears in `ctest -N`, so the next test added there
+> cannot go invisible again.
+
 **Severity: low, but the failure mode is the bad kind** -- a test that looks
 registered, builds, passes when run by hand, and is never run by CI.
 

@@ -4,6 +4,22 @@ category: Reported
 description: "tools/gendocs.py splits a parameter vector on whitespace, so the FUSED form `[a :int]` parses correctly and the SPACED form `[a : int]` -- which 612 stdlib defns and CLAUDE.md's own style guide use -- yields a phantom parameter and a return type of ':'. Latent: docs/api/ is not checked in, so it would surface on the next `tur run docs`."
 ---
 
+> **RESOLVED 2026-09-09** via fix direction 2, and the split site was one
+> place after all: `_parse_params` in `tools/gendocs.py`. A standalone `:`
+> token now attaches the NEXT token as the previous parameter's type, spelled
+> fused (`':int'`) so both spellings take the same downstream path; the return
+> position shares one helper (`_return_type_after_bracket`) that also skips an
+> `#fx{...}` effect row. Two adjacent holes closed with it: the whitespace
+> split broke compound types in EITHER spelling (`(Option int)` became a
+> phantom parameter `int)`), so the tokenizer keeps balanced `()`/`[]`/`<>`
+> groups together, and the `[^\]]*` bracket regex ended the vector at the
+> first `]` inside `(fn [int] int)`, so the vector is found by a nesting-aware
+> scan. Re-measured over `stdlib/*.tur`: 2002 definitions, **0** parameters
+> typed `':'`, **0** return types `':'` (was 984 / 1064). Test:
+> `tests/tools/check_gendocs_parse.py` (ctest `tur_gendocs_parse_lint`), fused,
+> spaced and untyped forms plus the compound, variadic and `#fx` cases; it
+> stubs `markdown` so the parser is testable without the renderer's dependency.
+
 # gendocs misparses the spaced annotation form
 
 **Severity: medium.** Latent rather than shipped -- `docs/api/` is empty in the

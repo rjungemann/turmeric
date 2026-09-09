@@ -11,6 +11,12 @@
 ;; the server stopped (the latter used to deadlock the fixture -- see
 ;; docs/archive/macos-jit-leg-intermittent-45min-hang.md).
 ;;
+;; handler-ran is MEASURED (a counter bumped on handler entry), not the
+;; constant it used to be: as a literal it stayed "2" in the very output
+;; that said ok=3, so the one line that looked like it corroborated the
+;; cap was the one line that could not observe it being exceeded
+;; (docs/archive/httpd-async-limit-asserts-a-racy-split.md).
+;;
 ;; Expected output:
 ;;   ok=2
 ;;   busy=2
@@ -82,6 +88,9 @@
 (defn read-counter [p : ptr<void>] : int
   ```c return p ? *(int64_t *)p : 0; ```)
 
+(defn bump-counter! [p : ptr<void>] : nil
+  ```c if (p) __sync_fetch_and_add((int64_t *)p, 1); ```)
+
 (defn free-counter [p : ptr<void>] : nil
   ```c free(p); ```)
 
@@ -103,7 +112,9 @@
   (let [donech    (chan-new 4)
         ok        (alloc-counter)
         busy      (alloc-counter)
+        ran       (alloc-counter)
         handler   (fn [c : ptr<void>] : nil
+                    (bump-counter! ran)
                     ;; Hold this in-flight slot until both over-cap
                     ;; clients have received their 503 and counted it,
                     ;; then respond. Guarantees exactly two rejections.
@@ -136,10 +147,11 @@
     ;; Now all clients have finished receiving + counting. Print stats.
     (print-tag "ok"          (read-counter ok))
     (print-tag "busy"        (read-counter busy))
-    (print-tag "handler-ran" 2)
+    (print-tag "handler-ran" (read-counter ran))
     (println "done")
     (free-counter ok)
     (free-counter busy)
+    (free-counter ran)
     (httpd-async-free h)
     (chan-free donech)
     0))

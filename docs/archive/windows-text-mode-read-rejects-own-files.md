@@ -1,5 +1,7 @@
 # A text-mode read rejects a file tur itself wrote
 
+> **RESOLVED** (fixed alongside the filing, 2026-09-06; archived 2026-09-09 -- it was parked in `docs/reported/` with a RESOLVED index row).
+
 **Severity: high, Windows only.** `tur.lock` was never read on Windows. Not
 "read partially" -- `pkg_lock_read` returned false on every call, and its caller
 reads that as "there is no lock file yet", so the integrity check never ran, the

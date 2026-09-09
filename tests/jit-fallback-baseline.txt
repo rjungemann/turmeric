@@ -1,0 +1,36 @@
+# tests/jit-fallback-baseline.txt -- fixtures run-jit.sh ALLOWS to pass via
+# the cc fallback (TUR-W0070) instead of the MIR engine.  One name per line.
+# A fallback not listed here FAILs the run; add it deliberately, in the same
+# commit, with the reason the engine lost it.  A listed fixture the engine
+# reclaims is reported so the line can be removed.  Regenerate:
+#   TUR_JIT_FALLBACK_UPDATE=1 TUR=./build-jit/tur bash tests/run-jit.sh
+# (jit-suite-reports-pass-when-the-engine-is-disabled)
+arc-basic
+arc-refcount-snapshot
+arc-weak-upgrade
+atomic-basic
+cancel-chan
+cancel-cooperative
+cancel-select
+dead-base-ctor-trap
+docs-saffron-guide-examples
+future-capturing-closure
+future-linear
+future-split-free
+generic-closure-return-type-app
+httpd-async-limit
+httpd-async-throughput
+local-fn-into-rank2-slot
+once-basic
+poly-fn-any-parameter
+promise-linear
+saffron-callcc-under-any-nodes
+saffron-cons-list
+saffron-dyn-hkt-dispatch
+saffron-dynamic-body-concrete-return
+saffron-higher-order
+thread-local-basic
+typeclass-assoc-type-method-return
+workstealing-balance
+workstealing-metrics
+workstealing-steal

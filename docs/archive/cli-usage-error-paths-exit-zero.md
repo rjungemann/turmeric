@@ -4,6 +4,20 @@ category: Reported
 description: "Subcommand usage functions return 0 -- correct for --help, wrong for the error paths that reuse them. `tur repl --bogus-flag` and `tur build --bogus-flag` both print an error and exit 0, so a script cannot tell a typo from a successful build."
 ---
 
+> **RESOLVED 2026-09-09** via fix direction 1. `usage_error(usage_X)` in
+> `src/main.c` prints the same text and returns 2; every error path (unknown
+> flag, missing or duplicated input, bad `--lang`) goes through it, and every
+> `--help` arm still returns the bare helper's 0. Three siblings of the filed
+> shape were fixed in passing: `tur expand --help` exited 2 (the inverse bug),
+> `tur smt --help` exited 3 (its error paths keep `SMT_EXIT_ERROR`), and
+> `tur run --bogus` reused `usage_justrun()` in `src/compiler/justrun.c`.
+> `emit-c` / `emit-h` gained an explicit `--help` arm, since theirs used to
+> reach usage through the unknown-flag path. The pair the report asked for --
+> `--help` exits 0 AND an unknown flag exits nonzero, per subcommand -- is in
+> `tests/run-flags.sh` (`usage-status-*`, 16 subcommands), and
+> `tests/turi/repl-lang-saffron.sh` now asserts the status it said it could
+> not.
+
 # An unknown flag is reported, and then exits successfully
 
 **Severity: medium.** Nothing miscompiles and the user sees an error message.

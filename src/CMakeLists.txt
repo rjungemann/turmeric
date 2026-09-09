@@ -1069,13 +1069,11 @@ target_link_options(tur_trail PRIVATE -pthread
 set_target_properties(tur_trail PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
-# NOTE: this add_test does NOT register.  enable_testing() is called in the
-# top-level CMakeLists AFTER add_subdirectory(src), so tests declared here are
-# dropped -- `ctest -N` lists 130 tests and tur_trail is not among them.  Left
-# in place rather than moved because moving it makes a never-run test start
-# running, which is a change in its own right; tracked in
-# docs/reported/src-cmakelists-add-test-never-registers.md.  New tests go in
-# the top-level CMakeLists next to the other 130.
+# Registers because the top-level CMakeLists calls enable_testing() BEFORE
+# add_subdirectory(src) (it did not always: see
+# src-cmakelists-add-test-never-registers, archived).
+# tests/check-ctest-registration.sh checks that every add_test here shows
+# up in `ctest -N`.
 add_test(NAME tur_trail COMMAND tur_trail)
 
 # ---------------------------------------------------------------------------

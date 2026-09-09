@@ -395,14 +395,21 @@ calls), `emit_cps_ir.c`'s cps->direct temp, and the region erasure note in
 `emit_expr.c` (notes a bare identifier in place, since it is already an
 lvalue, and names the type via `emit_binding_repr_c_name` otherwise).
 
-**The failure is silent, and the suite will not tell you.** The engine's
-per-program `TUR-W0070` fallback to the cc path is a *correctness* safety net,
-so the answers stay right; `run-jit.sh` counts a fallback as a PASS by design.
-When `__auto_type` was added to the region erasure note, the stdlib prelude's
-own erasing ascription put **every** fixture on the cc path and the suite
-still printed `0 failed`. It surfaced only because the fallback then broke for
-ten fixtures on one platform for an unrelated reason. See
-[jit-suite-reports-pass-when-the-engine-is-disabled](https://github.com/rjungemann/turmeric/blob/main/docs/reported/jit-suite-reports-pass-when-the-engine-is-disabled.md)
+**The failure is silent per program, so the suite checks it in aggregate.**
+The engine's per-program `TUR-W0070` fallback to the cc path is a
+*correctness* safety net, so the answers stay right; `run-jit.sh` counts a
+fallback as a PASS by design. When `__auto_type` was added to the region
+erasure note, the stdlib prelude's own erasing ascription put **every**
+fixture on the cc path and the suite still printed `0 failed`. It surfaced
+only because the fallback then broke for ten fixtures on one platform for an
+unrelated reason. Two checks now close that gap: `run-jit.sh` runs one
+trivial program through the engine before the fixture loop and fails if it
+falls back (the tree-wide case, in a second), and the fixtures allowed to
+fall back are listed by name in `tests/jit-fallback-baseline.txt` -- a new
+fallback fails the run, a reclaimed one is reported so its line can be
+removed, and `TUR_JIT_FALLBACK_UPDATE=1 bash tests/run-jit.sh` regenerates
+the file. See
+[jit-suite-reports-pass-when-the-engine-is-disabled](https://github.com/rjungemann/turmeric/blob/main/docs/archive/jit-suite-reports-pass-when-the-engine-is-disabled.md)
 (a blob URL rather than a relative one because `docs/reported/` is not
 rendered into the pack -- the Justfile's `docs` recipe spells out why).
 

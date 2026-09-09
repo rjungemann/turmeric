@@ -12,9 +12,9 @@
 #     (docs/reported/windows-spice-fetch-shell-quoting.md)
 #   - pkg_lock_read sized with ftell and read in text mode, so it rejected every
 #     tur.lock tur itself wrote
-#     (docs/reported/windows-text-mode-read-rejects-own-files.md)
+#     (docs/archive/windows-text-mode-read-rejects-own-files.md)
 #   - the integrity hash shelled out to sha256sum, which MinGW does not ship
-#     (docs/reported/pkg-hash-shells-out-to-sha256sum.md)
+#     (docs/archive/pkg-hash-shells-out-to-sha256sum.md)
 #   - rename() does not replace on Windows, so the lock was write-once
 #     (docs/archive/windows-rename-does-not-replace.md)
 #
@@ -160,6 +160,51 @@ if grep -q ':sha256 "tree1:[0-9a-f]\{64\}"' tur.lock 2>/dev/null \
 else
     bad "a second fetch rewrites the lock" "$out"
 fi
+
+# 8. tur-fetch-exit-code-optional-vs-required: the exit status tells an
+#    optional-dep failure from a required one.  A consumer whose `:optional`
+#    dep points nowhere still gets its lock written and exits 1; the same
+#    dep declared required exits 2.  Both nonzero -- the point is that CI can
+#    warn on 1 and fail on 2 instead of guessing.
+mkdir -p "$WORK/app2/src"
+cat > "$WORK/app2/build.tur" <<EOF
+(defpackage app2
+  :name    "app2"
+  :version "0.1.0"
+  :spices  #map{"demo"  #map{:url "file://$(native "$WORK/demo")"}
+                "ghost" #map{:url "file://$(native "$WORK/no-such-repo")"
+                             :optional true}})
+EOF
+cp "$WORK/app/src/main.tur" "$WORK/app2/src/main.tur"
+out="$(cd "$WORK/app2" && "$TUR_ABS" fetch 2>&1)"; rc=$?
+if [ "$rc" -eq 1 ] && [ -d "$WORK/app2/spices/demo" ] \
+   && grep -q '"demo"' "$WORK/app2/tur.lock" 2>/dev/null \
+   && grep -q "failed to fetch optional 'ghost'" <<< "$out"; then
+    ok "an unfetchable :optional dep is skipped, the lock written, exit 1"
+else
+    bad "an unfetchable :optional dep is skipped, the lock written, exit 1" "rc=$rc $out"
+fi
+
+mkdir -p "$WORK/app3/src"
+cat > "$WORK/app3/build.tur" <<EOF
+(defpackage app3
+  :name    "app3"
+  :version "0.1.0"
+  :spices  #map{"demo"  #map{:url "file://$(native "$WORK/demo")"}
+                "ghost" #map{:url "file://$(native "$WORK/no-such-repo")"}})
+EOF
+cp "$WORK/app/src/main.tur" "$WORK/app3/src/main.tur"
+out="$(cd "$WORK/app3" && "$TUR_ABS" fetch 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && grep -q "failed to fetch 'ghost'" <<< "$out"; then
+    ok "an unfetchable REQUIRED dep exits 2"
+else
+    bad "an unfetchable REQUIRED dep exits 2" "rc=$rc $out"
+fi
+
+# 9. and a clean fetch is still 0 (the pair, so neither half passes for the
+#    wrong reason).
+"$TUR_ABS" fetch >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] && ok "a clean fetch exits 0" || bad "a clean fetch exits 0" "rc=$rc"
 
 echo
 echo "spice-fetch summary: $PASS passed, $FAIL failed"

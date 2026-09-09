@@ -1,5 +1,7 @@
 # The spice integrity hash was `tar -c | sha256sum`
 
+> **RESOLVED** (fixed in the change that filed it, 2026-09-06; archived 2026-09-09 -- it was parked in `docs/reported/` with a RESOLVED index row).
+
 **Severity: medium.** The lockfile's `:sha256` was a digest of a tar stream
 produced by a subprocess. It was unstable on the machine that wrote it,
 different on every other machine, and unavailable on Windows -- where the

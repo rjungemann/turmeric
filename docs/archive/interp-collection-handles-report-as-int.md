@@ -54,7 +54,7 @@ Neither is this bug; both are filed separately.
   TURI_STRUCT-tagged with `as_struct` set to the raw integer the body returned,
   and `turi_any_named_type` dereferences it. Pre-existing, and invisible because
   `run-turi.sh` skips every inline-C fixture.
-- [any-drop-inlining-warns-free-nonheap](../reported/any-drop-inlining-warns-free-nonheap.md)
+- [any-drop-inlining-warns-free-nonheap](../archive/any-drop-inlining-warns-free-nonheap.md)
   -- gcc warns `'free' called on a pointer to an unallocated object '7'` when it
   inlines `__tur_any_drop` at a site whose payload is a constant. The registry
   row correctly says `boxed = 0` and nothing is freed; it is warning noise in a

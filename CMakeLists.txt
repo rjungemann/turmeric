@@ -107,6 +107,15 @@ if(WIN32 AND TUR_WIN_STATIC)
     add_link_options(-static)
 endif()
 
+# Tests are collected from a subdirectory only if testing was enabled BEFORE
+# it was added, so `enable_testing()` sits above `add_subdirectory(src)`.  It
+# used to come after, in the "Tests (CTest)" section below, and every
+# `add_test` inside src/CMakeLists.txt was silently dropped -- cmake succeeded,
+# the executable built, `ctest -N` never listed it
+# (src-cmakelists-add-test-never-registers).  tests/check-ctest-registration.sh
+# guards the ordering.
+enable_testing()
+
 add_subdirectory(src)
 
 # ---------------------------------------------------------------------------
@@ -138,9 +147,8 @@ if(TUR_JIT_SPIKE)
 endif()
 
 # ---------------------------------------------------------------------------
-# Tests (CTest)
+# Tests (CTest)  -- enable_testing() is above add_subdirectory(src); see there.
 # ---------------------------------------------------------------------------
-enable_testing()
 
 # Escaping a filesystem path for embedding in generated Turmeric source.  The
 # bug it guards took down the entire stdlib prelude on an installed tur.exe --
@@ -608,6 +616,25 @@ add_test(
 add_test(
   NAME tur_reported_index_lint
   COMMAND bash tests/check-reported-index.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# Every add_test declared under src/ must be visible to `ctest -N`.  It was
+# not, for months: enable_testing() ran after add_subdirectory(src), so
+# tur_trail built, passed by hand, and never ran in CI.  The ordering is fixed
+# above; this keeps it fixed.
+add_test(
+  NAME tur_ctest_registration_lint
+  COMMAND bash tests/check-ctest-registration.sh "${CMAKE_BINARY_DIR}"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# tools/gendocs.py read `[a : int] : int` as two parameters and a return type
+# of ':' -- 53% of the stdlib's signatures -- while the fused `[a :int]` was
+# fine (gendocs-misparses-the-spaced-annotation-form).  Both spellings, the
+# untyped form and the compound/variadic/#fx cases, without the renderer's
+# `markdown` dependency.
+add_test(
+  NAME tur_gendocs_parse_lint
+  COMMAND bash tests/check-gendocs-parse.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # Spice-aware per-file resolver: SC0/SC1 (later SC phases extend the script).

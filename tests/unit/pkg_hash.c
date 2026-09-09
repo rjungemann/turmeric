@@ -15,7 +15,7 @@
  *                      slide into each other.
  *
  * plus the tagging that keeps a lockfile an older tur wrote from being read as
- * tampering.  See docs/reported/pkg-hash-shells-out-to-sha256sum.md.
+ * tampering.  See docs/archive/pkg-hash-shells-out-to-sha256sum.md.
  */
 
 #include "compiler/pkg.h"
