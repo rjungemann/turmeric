@@ -43,6 +43,16 @@ if ! command -v node >/dev/null 2>&1; then
   exit 0
 fi
 
+# Emscripten runs a one-time sanity check on a fresh install (or a fresh
+# cache) and prints "shared:INFO: (Emscripten: Running sanity checks)" to
+# stderr from whichever emcc invocation happens to be first.  The compile
+# loop below treats ANY output as a failure -- surfacing -pedantic warnings
+# is its whole point -- so on a fresh runner the first source ever compiled
+# failed on that one line, with every other source clean and the solver
+# checks passing (this suite's first CI run, rjungemann/turmeric#846).  Take
+# the hit on a call whose output nobody reads.
+emcc --version >/dev/null 2>&1 || true
+
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 rc=0

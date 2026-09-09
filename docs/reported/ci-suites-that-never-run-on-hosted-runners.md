@@ -19,9 +19,20 @@ locally with its tool present on a Debug/ASan build: both gdb suites pass
 `requires.spices` fixtures pass under `tests/run.sh` (under
 `tests/run-turi.sh` two of them are `requires.dedicated-runner` skips and
 the third is an `errors/` fixture, so the checkout changes nothing there).
-`tur_refine_wasm` could not be run here (no `emcc` in this container) and
-is the one to watch on the first `main` push. Close this report when the
-`/ci` skip ledger shows all four as `pass` on Linux.
+`tur_refine_wasm` could not be run here at first (no `emcc` in the
+container) and failed on its first CI run
+([#846](https://github.com/rjungemann/turmeric/pull/846)): Emscripten prints
+a one-time `shared:INFO: (Emscripten: Running sanity checks)` line on a
+fresh install, and the harness treats any compiler output as a failure, so
+the first source compiled "failed" on that line alone while the other nine
+and the solver checks passed. Reproduced locally on a fresh emsdk with the
+sanity cache cleared; the harness now warms `emcc` once before the loop.
+The first run also surfaced that enabling the spices checkout put
+`errors/ecs-defsystem-writes-unauthorized` in front of `tur --interpret` for
+the first time, which cannot resolve a manifest's `:spices :path` deps (only
+`check` / `emit-c` / `run <file>` and the REPL do that walk), so it now
+carries `requires.compiled`. Close this report when the `/ci` skip ledger
+shows all four as `pass` on Linux.
 
 ## What the ledger shows
 
