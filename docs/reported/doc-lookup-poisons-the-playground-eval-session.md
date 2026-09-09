@@ -9,6 +9,14 @@ The advice in the message ("rename the local definition") cannot fix anything.
 (turmeric-lang.com/try, deployed build `tur-try-v1-0.45.0-57976dc3f`) on
 2026-09-09. Root cause established for all three defects below.
 
+**Fix sequence:**
+[docs/upcoming/playground-session-hygiene-plan.md](../upcoming/playground-session-hygiene-plan.md)
+(PS1-PS5). That plan carries one mechanism this report does not: the wrong
+"auto-loaded stdlib module" diagnostic is the whole-program fallback passing
+`stdlib_prefix = prior`, which marks the user's own previous turns as stdlib
+(`src/turi/eval.c:12837`). Any failed eval discards the elaboration session and
+drops the session onto that path -- which is why one doc lookup is enough.
+
 Reported from the playground as: a repeating
 `warning [TUR-W0040]: unknown name 'doc-lookup'; will runtime-dispatch -- typo?`
 after running a `#lang saffron` script, followed by
