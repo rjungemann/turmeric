@@ -523,7 +523,7 @@ jobs:
   # never once executed.  That green attested "the opt-in path does not break
   # the default path", which is worth knowing and is not what it looked like.
   # It is the same shape as
-  # docs/reported/jit-suite-reports-pass-when-the-engine-is-disabled.md: a
+  # docs/archive/jit-suite-reports-pass-when-the-engine-is-disabled.md: a
   # suite reporting PASS for a path it never took.
   #
   # Linux only, deliberately.  The split's failure modes so far are compiler

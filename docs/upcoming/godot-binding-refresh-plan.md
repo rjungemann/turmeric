@@ -245,7 +245,7 @@ Two caveats on the above, from re-auditing it 2026-09-07:
 - **That corpus figure is a point-in-time measurement, not a standing
   guarantee.** Fixtures are added continuously, so treat it as "the corpus was
   green on that date" and re-measure before relying on it. Per
-  [jit-suite-reports-pass-when-the-engine-is-disabled](../reported/jit-suite-reports-pass-when-the-engine-is-disabled.md)
+  [jit-suite-reports-pass-when-the-engine-is-disabled](../archive/jit-suite-reports-pass-when-the-engine-is-disabled.md)
   (J9), also confirm the engine actually *engaged* -- a wholesale fallback to
   `cc` reports green.
 - **Those first two reports are correctly still open**, and this bullet
@@ -367,7 +367,7 @@ is given. A JIT path must not become a hard requirement.
 
 ### J9 -- Measurement integrity
 
-[jit-suite-reports-pass-when-the-engine-is-disabled](../reported/jit-suite-reports-pass-when-the-engine-is-disabled.md)
+[jit-suite-reports-pass-when-the-engine-is-disabled](../archive/jit-suite-reports-pass-when-the-engine-is-disabled.md)
 is open: `run-jit.sh` can report PASS when the engine is disabled tree-wide. Any
 "the JIT works in Godot" claim must confirm the engine actually *engaged* --
 a TUR-W0070 fallback to `cc` looks like success from the outside. This exact

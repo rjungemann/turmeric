@@ -1,5 +1,18 @@
 # `run-jit.sh` reports PASS when the jit engine is disabled tree-wide
 
+> **RESOLVED 2026-09-09** for the defect in the title. `tests/run-jit.sh`
+> now (1) compiles ONE trivial program through the engine before the fixture
+> loop and FAILs the run if it exits nonzero, prints anything but `42`, or
+> carries `TUR-W0070` -- the tree-wide case, caught in a second; and (2)
+> ratchets the cc fallbacks BY NAME against `tests/jit-fallback-baseline.txt`:
+> a fallback not listed fails the run, a listed fixture the engine reclaims
+> is reported (never a failure), and `TUR_JIT_FALLBACK_UPDATE=1` regenerates
+> the file. Names rather than a count, as this report argued. The two
+> findings below that were not this bug -- the fallback re-entry inheriting
+> monomorph state, and `gc-heap-struct-rc`'s sensitivity to
+> `TUR_DEBUG_SANITIZE` -- are still open and now live in
+> `docs/reported/jit-cc-fallback-reentry-inherits-monomorph-state.md`.
+
 **Severity: medium (no wrong answers -- but the suite that exists to test the
 jit engine can go from "engine compiles 2700 programs" to "engine compiles
 zero" and still print a green summary and exit 0).** Filed 2026-09-07.
