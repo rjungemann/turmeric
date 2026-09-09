@@ -887,6 +887,94 @@ instance whose receiver is a TYPE VARIABLE, so it has no ground tag to key a row
 on. It is in the forced set today. Skip such instances, or give them a wildcard
 row; either way it needs deciding before rows can be emitted.
 
+#### Potential pre-passes: researched 2026-09-09
+
+The measurement above ends on "v0 wants one coarse gate, a pre-pass refines it
+later". Researching what that pre-pass could be turned up three things that
+change the answer, two of them because the machinery already exists.
+
+**The pre-pass already exists -- it is `emit_abi_scan_expr`.** The pre-emission
+ABI scan already walks every body, already has an `EX_UNION_INJECT` case
+(`emit_module.c:6043`, added by P2d), and already carries the exact primitive
+piece 3 needs: `emit_abi_note_instance_dict_ref` (`emit_module.c:3103`) marks an
+instance live by noting a carrier call on each of its method bindings -- which is
+precisely what keeps the dict and its bodies in lockstep. It is used today to
+keep an existential pack's witness dicts alive. So "force dict emission" is not a
+new pass and not a change at the dict site; it is new *notes* inside a walk that
+already runs.
+
+**The cheapest useful key is the WIDENED TAG, not the dispatched class.** The
+widen site already computes the row key: `emit_any_type_id(ctx,
+e->as.union_inject_.value->type)`, guarded by `e->type.kind == TY_ANY` to
+separate it from a real union's member index (`emit_expr.c:6581-6587`).
+Collecting that set in the scan is about three lines. What it buys, measured:
+
+| | count |
+|---|---|
+| dicts forced by "every instance of every class" | 47 |
+| ... grouped: Eq 22, MapKey 6, Hash 6, Functor 3, Monad 2, Clone 2, Applicative 2, Alternative 2, MonadError 1, Bifunctor 1 | 10 classes |
+| distinct types ever widened into `any`, richest Saffron fixture in the tree (`docs-saffron-guide-examples`) | **8** (4 named + 4 primitive) |
+| ... other Saffron fixtures | 3-7 |
+
+The class axis is the weak one and the numbers say why: **`Eq` is both the
+most-instantiated class and the likeliest dynamic-dispatch target**, so gating on
+"classes with an `any` dispatch site" can still admit 22 of the 47 for exactly
+the program you care about. The tag axis cuts the same set to at most 8 and
+realistically 3-4, because a value can only be in an `any` box by having been
+widened somewhere.
+
+The tag axis also **disposes of the fourth constraint for free**: an instance
+with a type-variable receiver (`Clone T`) matches no widened tag, so it is simply
+never registered. It stops being a special case.
+
+**Per-TU soundness -- this is what rules the cross-product out.** P1 made the
+registry a set of per-TU chunks merged at static init, with the id a hash so
+"the same type carries the same id in every TU and the rows simply agree where
+they overlap" (`emit_module.c:962`). Instance rows can follow that pattern
+exactly. But `tur build <dir>` folds a project into ONE TU while `--shared` and
+`emit-c --output-dir` do not (A.5), so a pre-pass is only usable if each TU can
+decide alone:
+
+- **Tag axis alone is TU-local-sound.** The TU that widens `Point` registers
+  every instance whose receiver is `Point`, for every class. A different TU that
+  dispatches on that box finds the row in the merged registry. Neither TU needs
+  to know what the other does.
+- **Class axis alone is TU-local-sound**, for the mirror reason (the dispatching
+  TU has all the instances via autoload), but buys much less.
+- **The cross-product (tags x dispatched classes) is NOT.** TU A widens `Point`
+  and dispatches nothing; TU B dispatches `.eq` and widens nothing; neither
+  registers `Eq Point` and the program panics at a site that should work. It is
+  sound only whole-program, which `--shared` is not.
+
+So the tag axis is the pre-pass to build, and it is buildable *now* rather than
+later -- it is cheaper than the class gate it would replace, not an optimisation
+layered on top. The one hole is an `any` box a TU never widened because the
+RUNTIME built it (native ADT construction, the interpreter); that needs
+confirming before the tag set can be treated as complete.
+
+**The endgame may be no registry at all, and that machinery also exists.**
+`IT4 typeclass intersection dispatch on union types`
+(`elab_typeclasses.c:6045`) already handles a receiver whose type is a UNION: for
+each member it resolves the instance at elaboration and builds an `EX_MATCH`, so
+`(.show x)` on `(int | bool)` emits an inline tag switch calling
+`__inst_Show_show_int` / `__inst_Show_show_bool` **directly** -- no dict, no
+registry, no indirect call, each arm inlinable (verified by reading the emitted C
+for `tests/fixtures/union-types-typeclass-dispatch`). Its own comment says it
+bypasses dictionary dispatch deliberately.
+
+Two caveats, both measured. A union's tag is a MEMBER INDEX and an `any`'s is the
+global type id -- two tag spaces -- and the bridge already exists as a
+statically-generated per-union remap switch on the `union -> any` widen (`case 0:
+TUR_TAG(3LL, ...)` for int, `case 1: TUR_TAG(2LL, ...)` for bool). And the
+receiver must be a union *at elaboration*, so refining `any -> union` is a
+dataflow question (which widens reach this site), which is a real new pass and a
+whole-program one.
+
+That makes it a v1 item, not v0. But it reframes what "add a pre-pass later"
+means: the later pre-pass is not a smaller registry, it is **eliminating the
+registry at every site whose incoming type set is closed**, falling back to the
+registry only where it genuinely is not.
+
 The four design questions D8 lists may partly answer themselves once the key is
 the concrete box tag -- two instances cannot match one tag, and defaults are
 already resolved into per-instance slots -- but that is reasoning, not
