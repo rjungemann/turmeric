@@ -6776,7 +6776,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             int64_t test_tag = e->as.any_is_.test_type.kind != TY_UNKNOWN
                                    ? emit_any_type_id(ctx, e->as.any_is_.test_type)
                                    : e->as.any_is_.test_tag;
-            buf_printf(&out, "(TUR_GETTAG(%s) == %lld)",
+            /* Spelled like the `=` binop -- operands parenthesised, the
+             * comparison itself not -- so an `if` around it reads
+             * `if ((TUR_GETTAG(x)) == (3))`.  The previous
+             * `(TUR_GETTAG(x) == 3)` became `if ((... == 3))`, which clang
+             * flags as -Wparentheses-equality: sixteen warnings on every
+             * macOS `tur run` once the stdlib's `is?` chains (Hash[any] /
+             * MapKey[any]) were in every program, and a failed
+             * run-offtree-load, which compares stdout+stderr byte for byte. */
+            buf_printf(&out, "(TUR_GETTAG(%s)) == (%lld)",
                        inner, (long long)test_tag);
             buf_putc(&out, '\0');
             free(inner);

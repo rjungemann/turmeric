@@ -5618,7 +5618,7 @@ static dict_Hash_float dict_Hash_float_singleton = {
 
 static int64_t __inst_Hash_hash_T(tur_tagged_t x) {
         int64_t __t1;
-        if ((TUR_GETTAG(x) == 3)) {
+        if ((TUR_GETTAG(x)) == (3)) {
             int64_t __t2;
             {
                 int64_t x_702 = ({ tur_tagged_t __tur_c = (x); __tur_any_cast_check(TUR_GETTAG(__tur_c), 3); (int64_t)(intptr_t)TUR_UNTAG(__tur_c); });
@@ -5630,7 +5630,7 @@ static int64_t __inst_Hash_hash_T(tur_tagged_t x) {
             __t1 = __t2;
         } else {
             int64_t __t4;
-            if ((TUR_GETTAG(x) == 5)) {
+            if ((TUR_GETTAG(x)) == (5)) {
                 int64_t __t5;
                 {
                     const char * x_703 = ({ tur_tagged_t __tur_c = (x); __tur_any_cast_check(TUR_GETTAG(__tur_c), 5); (const char *)(intptr_t)TUR_UNTAG(__tur_c); });
@@ -5642,7 +5642,7 @@ static int64_t __inst_Hash_hash_T(tur_tagged_t x) {
                 __t4 = __t5;
             } else {
                 int64_t __t7;
-                if ((TUR_GETTAG(x) == 4)) {
+                if ((TUR_GETTAG(x)) == (4)) {
                     int64_t __t8;
                     {
                         double x_704 = ({ tur_tagged_t __tur_c = (x); __tur_any_cast_check(TUR_GETTAG(__tur_c), 4); ((union { int64_t i; double d; }){.i = TUR_UNTAG(__tur_c)}).d; });
@@ -5654,7 +5654,7 @@ static int64_t __inst_Hash_hash_T(tur_tagged_t x) {
                     __t7 = __t8;
                 } else {
                     int64_t __t10;
-                    if ((TUR_GETTAG(x) == 2)) {
+                    if ((TUR_GETTAG(x)) == (2)) {
                         int64_t __t11;
                         {
                             bool x_705 = ({ tur_tagged_t __tur_c = (x); __tur_any_cast_check(TUR_GETTAG(__tur_c), 2); (bool)(intptr_t)TUR_UNTAG(__tur_c); });
@@ -5794,7 +5794,7 @@ static dict_MapKey_float dict_MapKey_float_singleton = {
 
 static int64_t __inst_MapKey_mk_hybox_T(tur_tagged_t x) {
         int64_t __t15;
-        if ((TUR_GETTAG(x) == 3)) {
+        if ((TUR_GETTAG(x)) == (3)) {
             int64_t __t16;
             {
                 int64_t x_794 = ({ tur_tagged_t __tur_c = (x); __tur_any_cast_check(TUR_GETTAG(__tur_c), 3); (int64_t)(intptr_t)TUR_UNTAG(__tur_c); });
@@ -5806,7 +5806,7 @@ static int64_t __inst_MapKey_mk_hybox_T(tur_tagged_t x) {
             __t15 = __t16;
         } else {
             int64_t __t18;
-            if ((TUR_GETTAG(x) == 5)) {
+            if ((TUR_GETTAG(x)) == (5)) {
                 int64_t __t19;
                 {
                     const char * x_795 = ({ tur_tagged_t __tur_c = (x); __tur_any_cast_check(TUR_GETTAG(__tur_c), 5); (const char *)(intptr_t)TUR_UNTAG(__tur_c); });
@@ -5818,7 +5818,7 @@ static int64_t __inst_MapKey_mk_hybox_T(tur_tagged_t x) {
                 __t18 = __t19;
             } else {
                 int64_t __t21;
-                if ((TUR_GETTAG(x) == 4)) {
+                if ((TUR_GETTAG(x)) == (4)) {
                     int64_t __t22;
                     {
                         double x_796 = ({ tur_tagged_t __tur_c = (x); __tur_any_cast_check(TUR_GETTAG(__tur_c), 4); ((union { int64_t i; double d; }){.i = TUR_UNTAG(__tur_c)}).d; });
@@ -5830,7 +5830,7 @@ static int64_t __inst_MapKey_mk_hybox_T(tur_tagged_t x) {
                     __t21 = __t22;
                 } else {
                     int64_t __t24;
-                    if ((TUR_GETTAG(x) == 2)) {
+                    if ((TUR_GETTAG(x)) == (2)) {
                         int64_t __t25;
                         {
                             bool x_797 = ({ tur_tagged_t __tur_c = (x); __tur_any_cast_check(TUR_GETTAG(__tur_c), 2); (bool)(intptr_t)TUR_UNTAG(__tur_c); });
@@ -5856,7 +5856,7 @@ static int64_t __inst_MapKey_mk_hybox_T(tur_tagged_t x) {
 
 static int64_t __inst_MapKey_mk_hycmp_T(tur_tagged_t x) {
         int64_t __t28;
-        if ((TUR_GETTAG(x) == 3)) {
+        if ((TUR_GETTAG(x)) == (3)) {
             int64_t __t29;
             {
                 int64_t x_798 = ({ tur_tagged_t __tur_c = (x); __tur_any_cast_check(TUR_GETTAG(__tur_c), 3); (int64_t)(intptr_t)TUR_UNTAG(__tur_c); });
@@ -5868,7 +5868,7 @@ static int64_t __inst_MapKey_mk_hycmp_T(tur_tagged_t x) {
             __t28 = __t29;
         } else {
             int64_t __t31;
-            if ((TUR_GETTAG(x) == 5)) {
+            if ((TUR_GETTAG(x)) == (5)) {
                 int64_t __t32;
                 {
                     const char * x_799 = ({ tur_tagged_t __tur_c = (x); __tur_any_cast_check(TUR_GETTAG(__tur_c), 5); (const char *)(intptr_t)TUR_UNTAG(__tur_c); });
@@ -5880,7 +5880,7 @@ static int64_t __inst_MapKey_mk_hycmp_T(tur_tagged_t x) {
                 __t31 = __t32;
             } else {
                 int64_t __t34;
-                if ((TUR_GETTAG(x) == 4)) {
+                if ((TUR_GETTAG(x)) == (4)) {
                     int64_t __t35;
                     {
                         double x_800 = ({ tur_tagged_t __tur_c = (x); __tur_any_cast_check(TUR_GETTAG(__tur_c), 4); ((union { int64_t i; double d; }){.i = TUR_UNTAG(__tur_c)}).d; });
@@ -5892,7 +5892,7 @@ static int64_t __inst_MapKey_mk_hycmp_T(tur_tagged_t x) {
                     __t34 = __t35;
                 } else {
                     int64_t __t37;
-                    if ((TUR_GETTAG(x) == 2)) {
+                    if ((TUR_GETTAG(x)) == (2)) {
                         int64_t __t38;
                         {
                             bool x_801 = ({ tur_tagged_t __tur_c = (x); __tur_any_cast_check(TUR_GETTAG(__tur_c), 2); (bool)(intptr_t)TUR_UNTAG(__tur_c); });
@@ -5918,7 +5918,7 @@ static int64_t __inst_MapKey_mk_hycmp_T(tur_tagged_t x) {
 
 static int64_t __inst_MapKey_mk_hyowned_qu_T(tur_tagged_t x) {
         int64_t __t41;
-        if ((TUR_GETTAG(x) == 3)) {
+        if ((TUR_GETTAG(x)) == (3)) {
             int64_t __t42;
             {
                 int64_t x_802 = ({ tur_tagged_t __tur_c = (x); __tur_any_cast_check(TUR_GETTAG(__tur_c), 3); (int64_t)(intptr_t)TUR_UNTAG(__tur_c); });
@@ -5930,7 +5930,7 @@ static int64_t __inst_MapKey_mk_hyowned_qu_T(tur_tagged_t x) {
             __t41 = __t42;
         } else {
             int64_t __t44;
-            if ((TUR_GETTAG(x) == 5)) {
+            if ((TUR_GETTAG(x)) == (5)) {
                 int64_t __t45;
                 {
                     const char * x_803 = ({ tur_tagged_t __tur_c = (x); __tur_any_cast_check(TUR_GETTAG(__tur_c), 5); (const char *)(intptr_t)TUR_UNTAG(__tur_c); });
@@ -5942,7 +5942,7 @@ static int64_t __inst_MapKey_mk_hyowned_qu_T(tur_tagged_t x) {
                 __t44 = __t45;
             } else {
                 int64_t __t47;
-                if ((TUR_GETTAG(x) == 4)) {
+                if ((TUR_GETTAG(x)) == (4)) {
                     int64_t __t48;
                     {
                         double x_804 = ({ tur_tagged_t __tur_c = (x); __tur_any_cast_check(TUR_GETTAG(__tur_c), 4); ((union { int64_t i; double d; }){.i = TUR_UNTAG(__tur_c)}).d; });
@@ -5954,7 +5954,7 @@ static int64_t __inst_MapKey_mk_hyowned_qu_T(tur_tagged_t x) {
                     __t47 = __t48;
                 } else {
                     int64_t __t50;
-                    if ((TUR_GETTAG(x) == 2)) {
+                    if ((TUR_GETTAG(x)) == (2)) {
                         int64_t __t51;
                         {
                             bool x_805 = ({ tur_tagged_t __tur_c = (x); __tur_any_cast_check(TUR_GETTAG(__tur_c), 2); (bool)(intptr_t)TUR_UNTAG(__tur_c); });
