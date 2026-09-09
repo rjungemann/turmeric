@@ -5,8 +5,35 @@ import { defineConfig } from 'vite';
 import { cloudflare } from "@cloudflare/vite-plugin";
 import { resolve } from 'path';
 import { readFileSync, existsSync, writeFileSync } from 'fs';
+import { execSync } from 'child_process';
 
 const turmericVersion = readFileSync(resolve(__dirname, '../VERSION'), 'utf-8').trim();
+
+// The service-worker cache name used to be the release VERSION alone, which
+// made every OUT-OF-BAND deploy invisible: a fix deployed at the same version
+// reuses the cache name, `activate` evicts nothing, and every returning visitor
+// keeps being served the old precached bundle and wasm cache-first. That is not
+// hypothetical -- the Saffron language-picker fix deployed green and the live
+// site went on rendering the four stale bases, because the cache was still
+// `tur-try-v1-0.45.0` from the release cut an hour earlier.
+//
+// So the token carries the BUILD, not just the release: the commit the bundle
+// was built from. Any deploy changes sw.js's bytes, which is what makes the
+// browser re-install the worker and drop the old caches. Falls back to a
+// timestamp outside a git checkout (a release tarball), which is still unique
+// per build -- never a constant, or the bug comes back quietly.
+function buildId() {
+  try {
+    const sha = execSync('git rev-parse --short HEAD', {
+      cwd: resolve(__dirname, '..'),
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).toString().trim();
+    if (sha) return sha;
+  } catch { /* not a git checkout -- fall through */ }
+  return String(Date.now());
+}
+
+const swCacheVersion = `tur-try-v1-${turmericVersion}-${buildId()}`;
 
 function injectVersion() {
   return {
@@ -15,7 +42,7 @@ function injectVersion() {
   };
 }
 
-// Rewrite the service worker's cache-version token to the current VERSION after
+// Rewrite the service worker's cache-version token to the current build after
 // the bundle is written. sw.js lives in public/ (copied verbatim into dist/), so
 // transformIndexHtml never touches it -- without this the CACHE_VERSION would
 // stay pinned to whatever literal was last hand-edited, and every returning
@@ -46,9 +73,12 @@ function injectSwVersion() {
 
       for (const swPath of candidates) {
         const src = readFileSync(swPath, 'utf-8');
+        // Matches the clean in-tree literal (public/sw.js is copied verbatim
+        // into dist/ on every build, so what we rewrite is never an
+        // already-stamped name), and tolerates a stamped one for safety.
         const rewritten = src.replace(
-          /tur-try-v1-\d+\.\d+\.\d+/g,
-          `tur-try-v1-${turmericVersion}`,
+          /tur-try-v1-\d+\.\d+\.\d+(?:-[0-9a-zA-Z]+)?/g,
+          swCacheVersion,
         );
         if (rewritten !== src) writeFileSync(swPath, rewritten);
       }

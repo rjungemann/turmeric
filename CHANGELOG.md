@@ -20,6 +20,14 @@ All notable changes to Turmeric are documented here.
   of answering `turmeric` for every Saffron session. The unit test now asserts
   the offered base list matches `lang_bases_count()`, which is what a spot
   check of two spellings failed to catch.
+- **The playground's service worker evicts on every deploy, not every
+  release.** `CACHE_VERSION` was keyed on `VERSION` alone, so an out-of-band
+  deploy at the same version reused the cache name, `activate` evicted nothing,
+  and every returning visitor kept being served the previous bundle and wasm
+  cache-first. The Saffron picker fix above deployed green and the live site
+  went on rendering the four stale bases until the token changed. `vite.config.js`
+  now stamps `tur-try-v1-<VERSION>-<short-sha>`, falling back to a timestamp
+  outside a git checkout -- never a constant.
 
 ## [0.45.0] -- 2026-09-09
 

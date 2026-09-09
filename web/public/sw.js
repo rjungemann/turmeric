@@ -16,18 +16,24 @@
 // affordable -- if the pack ever outgrows it, the answer is a smaller pack,
 // never a switch. See docs/upcoming/offline-docs-plan.md (OD3).
 //
-// CACHE_VERSION must change on every release so `activate` evicts the old
-// caches AND the changed sw.js bytes make the browser re-install the worker --
+// CACHE_VERSION must change on every DEPLOY so `activate` evicts the old caches
+// AND the changed sw.js bytes make the browser re-install the worker --
 // otherwise a cache-first asset (turmeric.js / turmeric.wasm) is served from a
 // stale precache forever, no matter how much newer the deploy is.
 //
-// The version token below is rewritten to the real VERSION at build time by the
-// `injectSwVersion` plugin in vite.config.js (it regex-replaces the
-// `tur-try-v1-<x.y.z>` token in dist/client/sw.js). The literal here is the
-// dev/no-build fallback; keep it in sync with VERSION so an un-built serve is
-// still correct -- and note that until 2026-08-26 the plugin looked in
-// dist/sw.js, which the Cloudflare plugin does not write, so this literal was
-// the *only* thing keeping the version right.
+// Every deploy, not every release: keying the token on VERSION alone made an
+// out-of-band fix invisible to exactly the people who had visited before. The
+// Saffron language-picker fix deployed green and the live site kept rendering
+// the four stale bases, because the cache was still `tur-try-v1-0.45.0` from
+// the release cut an hour earlier.
+//
+// The token below is rewritten at build time by the `injectSwVersion` plugin in
+// vite.config.js, which stamps `tur-try-v1-<VERSION>-<short-sha>` into
+// dist/client/sw.js. The literal here is the dev/no-build fallback; keep its
+// version half in sync with VERSION so an un-built serve is still correct --
+// and note that until 2026-08-26 the plugin looked in dist/sw.js, which the
+// Cloudflare plugin does not write, so this literal was the *only* thing
+// keeping the version right.
 const CACHE_VERSION = 'tur-try-v1-0.45.0';
 const PRECACHE = `${CACHE_VERSION}-precache`;
 const RUNTIME  = `${CACHE_VERSION}-runtime`;
