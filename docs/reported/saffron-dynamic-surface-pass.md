@@ -144,6 +144,27 @@ A lambda body that flows through an `any` (`(fn [] (t 7.25))`) is fine, so
 the literal-bodied lambda gets a `(fn [] float)` signature the dynamic call
 site refuses. Same message site as H8.
 
+**H11. A value read out of a typed struct field cannot dispatch a typeclass
+method unless something else in the file widened that type.** Found by
+`tests/saffron-fuzz-src.py` (seed 7, eight cases, all `wrap_struct` +
+`term_class`).
+
+```turmeric
+(defclass Kind [a] (kind-of [x] : cstr))
+(definstance Kind [float] (kind-of [x] "F"))
+(defstruct Pf [fld : float])
+(defn k [x] (.kind-of x))
+(defn get [p] (.fld p))
+(k (get (make-struct Pf 7.25)))   ;; compiled: panic `no instance of Kind for float
+                                  ;;   (dispatching .kind-of on an any)`   interp: F
+```
+
+`(type-of ...)` on the same value says `float`, and adding an unrelated
+`(t 1.5)` anywhere in the file makes the dispatch succeed. The instance
+registry is populated per WIDENED tag (`emit_module.c:6913`, the tag axis),
+and the dynamic field read (`emit_expr.c:6338` area) is a widen site that
+does not add its field type to that set. A vec element read does.
+
 ## Medium -- back-end divergence or documented-surface hole
 
 **M1. `.bind` on an `any` Option panics compiled.** `(defn half [o] (.bind o
@@ -187,6 +208,14 @@ cannot be walked through an `any` parameter compiled.
 user `defdata` works. The guide's `Functor/Applicative/Monad` reachability
 claim is only via `is?`/`cast`.
 
+**M10. An `any` produced by a stdlib macro gets no checked seam into a typed
+parameter.** `(defn s [v : int] : int v)` then `(s (map-get #map{:k 7} :k))`
+is a static `TUR-E0001: expected int, got any` reported at
+`stdlib/map.tur:573`, while `(s (t (map-get ...)))` through an unannotated
+defn works. The seam insertion is gated on the ARGUMENT's span being Saffron
+(`elab_call.c:6600`); a macro-expanded argument carries the stdlib span.
+Affects every `map-*` accessor since they are macros.
+
 **M9. Multi-arg method on `any`: compiled panics as documented, interp
 dispatches.** `(.near? x y)` -> compiled `cannot be dispatched dynamically
 yet`, interp `true`. Parity note; the guide documents the panic.
@@ -215,6 +244,10 @@ yet`, interp `true`. Parity note; the guide documents the panic.
 - Guide: the boundary example `(scale my-vec 2)` with `v : (Vec int)` panics
   `different instantiation of Vec` when `my-vec` is a Saffron literal
   (always `(Vec any)`); the example only works for a vec built in typed code.
+- `(Wrap 7)` passed straight to a `[v : (W any)]` parameter builds `(W int)`
+  and is a static `TUR-E0001`, while the same call through an unannotated
+  defn builds `(W any)` and passes. The Saffron ctor widen keys on the
+  call's position, not the file.
 - Cosmetic: `vec-get` out of bounds reads `tvec index out of bounds`
   compiled vs `vec index out of bounds` interp.
 

@@ -123,22 +123,29 @@ TIMEOUT = 90
 # ---------------------------------------------------------------------------
 
 KNOWN = [
-    ("H1-capturing-lambda",      "route_capture"),
-    ("H5-sym-in-any",            "scalar_sym"),
-    ("H6-forward-ref-int",       "route_fwdref"),
-    ("H7-seam-fn-param",         "route_seam_fn"),
-    ("H8-typed-defn-in-any",     "route_typed_fn_value"),
-    ("H9-any-map-into-map-get",  "wrap_map_outer"),
-    ("H10-lambda-literal-body",  "wrap_thunk_lit"),
-    ("M7-dynamic-cons-field",    "wrap_cons"),
+    ("H1-capturing-lambda",      ("route_capture",)),
+    ("H5-sym-in-any",            ("scalar_sym",)),
+    ("H6-forward-ref-int",       ("route_fwdref",)),
+    ("H7-seam-fn-param",         ("route_seam_fn",)),
+    ("H8-typed-defn-in-any",     ("route_typed_fn_value",)),
+    ("H9-any-map-into-map-get",  ("wrap_map_outer",)),
+    ("H10-lambda-literal-body",  ("wrap_thunk_lit",)),
+    ("H11-field-read-no-inst-rows", ("wrap_struct", "term_class")),
+    ("M7-dynamic-cons-field",    ("wrap_cons",)),
+    ("M10-macro-any-not-seamed", ("wrap_map_inner", "seam_first")),
+    ("L-ctor-under-typed-expected", ("wrap_adt", "seam_first")),
 ]
-
-KNOWN_TAGS = {tag for _id, tag in KNOWN}
 
 
 def known_bug_slug(tags):
-    hits = sorted(_id for _id, tag in KNOWN if tag in tags)
+    """A row matches when ALL its tags are present; a leg can match more
+    than one row."""
+    hits = sorted(_id for _id, need in KNOWN if all(t in tags for t in need))
     return "+".join(hits) if hits else None
+
+
+def known_shape(tags):
+    return known_bug_slug(tags) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +260,7 @@ class Gen:
         return "%s%dx%d" % (base, self.idx, self.n)
 
     def allow(self, tag):
-        return self.emit_known or tag not in KNOWN_TAGS
+        return self.emit_known or not known_shape({tag})
 
     # -- wrappers ------------------------------------------------------------
     #
@@ -458,6 +465,15 @@ class Gen:
     # -- one leg -------------------------------------------------------------
 
     def leg_gen(self):
+        # Composite known shapes (a wrapper AND a route/terminal) are only
+        # recognisable once the leg is built, so redraw until it is clean.
+        for _ in range(20):
+            leg = self._leg_gen()
+            if self.emit_known or not known_shape(leg.tags):
+                return leg
+        return leg
+
+    def _leg_gen(self):
         rng = self.rng
         self.leg = leg = Leg()
         v = pick_scalar(rng, self.emit_known)
@@ -467,8 +483,11 @@ class Gen:
         leg.tags.add(wtag)
         e = wrap(v.lit)
 
-        for _ in range(rng.randint(1, 3)):
+        for i in range(rng.randint(1, 3)):
+            before = set(leg.tags)
             e = self.route(e, stype, wtag)
+            if i == 0 and "route_seam" in leg.tags - before:
+                leg.tags.add("seam_first")
 
         # An Option can be mapped over before it is opened.
         if wtag == "wrap_opt" and rng.random() < 0.5:
@@ -726,9 +745,21 @@ KNOWN_PROBES = [
     ("H10 lambda with a literal body is not dynamically callable",
      '#lang saffron\n(defn call0 [f] (f))\n'
      '(defn main [] : int (println (call0 (fn [] 7.25))) 0)\n', "7.25\n"),
+    ("H11 dynamic field read publishes no instance rows for its type",
+     '#lang saffron\n(defclass Kind [a] (kind-of [x] : cstr))\n'
+     '(definstance Kind [float] (kind-of [x] "F"))\n(defstruct Pf [fld : float])\n'
+     '(defn k [x] (.kind-of x))\n(defn get [p] (.fld p))\n'
+     '(defn main [] : int (println (k (get (make-struct Pf 7.25)))) 0)\n', "F\n"),
     ("M7  dynamic .head/.tail read on an any-held Cons",
      '#lang saffron\n(defn hd [l] (.head l))\n'
      '(defn main [] : int (println (hd (list 7.25 1))) 0)\n', "7.25\n"),
+    ("M10 macro-expanded any (map-get) gets no seam into a typed param",
+     '#lang saffron\n(defn s [v : int] : int v)\n'
+     '(defn main [] : int (println (s (map-get #map{:k 7 :o 1} :k))) 0)\n', "7\n"),
+    ("L   parametric ctor under a typed (W any) expectation builds (W int)",
+     '#lang saffron\n(defdata W [a] (Wrap a))\n(defn s [v : (W any)] : (W any) v)\n'
+     '(defn t [x] x)\n(defn main [] : int (println (match (t (s (Wrap 7))) (Wrap v) v)) 0)\n',
+     "7\n"),
 ]
 
 
