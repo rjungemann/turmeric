@@ -1678,7 +1678,7 @@ gets pointed at exactly the node D5's boundary inserts, rather than at a
 spelling that looks like it should work. Ascribing an `any` TO `any` stays legal
 -- it is identity, and the S6 data-literal widen emits it.
 
-### S8 -- tooling (medium, parallelisable)
+### S8 -- tooling (medium, parallelisable) -- DONE 2026-09-09
 
 `tur fmt` / `tur format` (the formatter reads `reader_type`; it needs to
 preserve a `#lang saffron` line and not add annotations), `tur lsp` and
@@ -1796,7 +1796,7 @@ fail on the second when reintroduced.
 
 **S8 is complete.** The next stage is S9.
 
-### S9 -- runtime typeclass dispatch (D8) -- CLEARED, not started
+### S9 -- runtime typeclass dispatch (D8) -- BUILT 2026-09-09; design questions open
 
 D8's prerequisites are all met (see its verdict above): P1 built the runtime
 type registry instance lookup keys off, P2 guarded the by-value receiver, and
