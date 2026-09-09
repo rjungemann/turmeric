@@ -11,7 +11,8 @@
 /*
  * cmd_justrun -- execute Justfile recipes from the command line.
  *
- * argc/argv are the full program argv (argv[0] = "tur", argv[1] = "run").
+ * argc/argv are the full program argv (argv[0] = "tur", argv[1] = "run"
+ * or its "just" synonym).
  *
  * Exit codes:
  *   0   recipe succeeded

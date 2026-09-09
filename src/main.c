@@ -9113,7 +9113,7 @@ static void list_external_subcommands(void) {
 
     static const char *const builtins[] = {
         "build", "compile", "link",
-        "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
+        "emit-c", "emit-h", "emit-cmake", "run", "just", "repl", "worker",
         "eval", "doc", "docs", "explain", "test", "check", "expand", "format", "fmt",
         "parse-check", "audit-spans", "debug", "dap", "trace", "lsp-lite",
         "init", "add", "add-cmake", "fetch", "audit",
@@ -9214,6 +9214,17 @@ static const char *const CANONICAL_COMMANDS[] = {
     NULL,
 };
 
+/* Alternate spellings that dispatch to a canonical command.  `tur just` is a
+ * synonym for `tur run`: the task-runner mode reads a Justfile, so `just` is
+ * the name muscle memory reaches for.  Aliases participate in the same
+ * prefix resolution as canonical names, and resolve straight to the
+ * canonical spelling so every downstream dispatch arm sees one name. */
+static const struct { const char *alias; const char *canonical; }
+COMMAND_ALIASES[] = {
+    { "just", "run" },
+    { NULL,   NULL  },
+};
+
 /* Sentinel: `tok` is a prefix of more than one canonical command. */
 static const char *const COMMAND_AMBIGUOUS = (const char *)(intptr_t)-1;
 
@@ -9227,12 +9238,25 @@ static const char *resolve_command(const char *tok) {
     for (int i = 0; CANONICAL_COMMANDS[i] != NULL; i++) {
         if (strcmp(tok, CANONICAL_COMMANDS[i]) == 0) return CANONICAL_COMMANDS[i];
     }
+    for (int i = 0; COMMAND_ALIASES[i].alias != NULL; i++) {
+        if (strcmp(tok, COMMAND_ALIASES[i].alias) == 0)
+            return COMMAND_ALIASES[i].canonical;
+    }
     size_t n = strlen(tok);
     const char *hit = NULL;
     for (int i = 0; CANONICAL_COMMANDS[i] != NULL; i++) {
         if (strncmp(tok, CANONICAL_COMMANDS[i], n) == 0) {
             if (hit != NULL) return COMMAND_AMBIGUOUS;
             hit = CANONICAL_COMMANDS[i];
+        }
+    }
+    for (int i = 0; COMMAND_ALIASES[i].alias != NULL; i++) {
+        if (strncmp(tok, COMMAND_ALIASES[i].alias, n) == 0) {
+            /* An alias and its own canonical name are not two commands, so
+             * `tur ru` stays `run` rather than becoming ambiguous. */
+            if (hit != NULL && strcmp(hit, COMMAND_ALIASES[i].canonical) != 0)
+                return COMMAND_AMBIGUOUS;
+            hit = COMMAND_ALIASES[i].canonical;
         }
     }
     return hit;
@@ -9250,6 +9274,7 @@ static int usage(void) {
         "  tur emit-c <input.tur>            print the generated C to stdout\n"
         "  tur emit-h <input.tur>            print the generated header to stdout\n"
         "  tur run <input.tur>               build + execute a single file\n"
+        "  tur run <recipe>                  run a Justfile recipe (`tur just` is a synonym)\n"
         "  tur repl                          interactive REPL (Phase S1)\n"
         "  tur worker                        persistent fixture evaluator (Tier 3, reads dirs from stdin)\n"
         "  tur interpret <file.tur>          run a file through the tree-walking interpreter\n"

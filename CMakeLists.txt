@@ -285,6 +285,14 @@ add_test(
   COMMAND bash tests/run-tur-run-alias.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# `tur just` is a synonym for `tur run`: both the Justfile task runner and
+# the classic compile-and-run path answer to either spelling, and `tur jit`
+# keeps its own meaning.
+add_test(
+  NAME tur_just_synonym
+  COMMAND bash tests/run-tur-just-synonym.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # OD4: `tur doc <symbol>` reads the full stdlib docstring table shipped with
 # the binary (not just the builtin list), and `tur docs` locates the rendered
 # guides. Both are the no-network half of the offline-docs work.

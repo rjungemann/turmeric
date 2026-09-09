@@ -10,6 +10,13 @@ description: Built-in Justfile-compatible task runner for building, testing, and
 `Justfile` can be driven by `tur run` without installing the upstream
 `just` binary.
 
+`tur just` is a synonym for `tur run` -- the alias resolves to the canonical
+`run` command before dispatch, so **every** form on this page accepts either
+spelling, including the classic `tur run <file.tur>` compile-and-run path.
+Diagnostics still print the canonical `tur run:` prefix. Abbreviations work
+too: `tur ju` and `tur ru` both land on `run`. (`tur jit` is a separate
+command and is unaffected -- `jit` is not a prefix of `just`.)
+
 ## Quick start
 
 ```sh
