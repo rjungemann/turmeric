@@ -965,8 +965,17 @@ void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
      * too: with only `noinline` gcc's IPA constant propagation made a
      * `__tur_any_drop.constprop` clone specialised to the literal and warned
      * from inside it. */
-    buf_puts(out, "static void __attribute__((noinline, noclone)) "
-                  "__tur_any_drop(tur_tagged_t __v) {\n");
+    /* `noclone` is GCC-only: clang warns `unknown attribute 'noclone'
+     * ignored` [-Wunknown-attributes], and that warning is stderr noise in
+     * every user build (it failed tests/run-offtree-load.sh on the macOS
+     * leg, which captures the build's output).  clang does not mint IPA-CP
+     * clones the way gcc does, so `noinline` alone is the whole fix there. */
+    buf_puts(out, "#if defined(__GNUC__) && !defined(__clang__)\n");
+    buf_puts(out, "#define TUR_ANY_DROP_ATTR __attribute__((noinline, noclone))\n");
+    buf_puts(out, "#else\n");
+    buf_puts(out, "#define TUR_ANY_DROP_ATTR __attribute__((noinline))\n");
+    buf_puts(out, "#endif\n");
+    buf_puts(out, "static void TUR_ANY_DROP_ATTR __tur_any_drop(tur_tagged_t __v) {\n");
     buf_puts(out, "    const __tur_any_ti *__ti = __tur_any_find(TUR_GETTAG(__v));\n");
     buf_puts(out, "    if (__ti && __ti->boxed) free((void *)(intptr_t)TUR_UNTAG(__v));\n");
     buf_puts(out, "}\n");
