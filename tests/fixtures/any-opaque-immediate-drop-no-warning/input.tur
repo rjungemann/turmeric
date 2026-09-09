@@ -1,0 +1,21 @@
+;; any-drop-inlining-warns-free-nonheap: a `defopaque` over an immediate,
+;; widened to `any` through a callee gcc inlines, used to make the emitted
+;; program's build print
+;;
+;;   warning: 'free' called on a pointer to an unallocated object '7'
+;;   [-Wfree-nonheap-object]
+;;
+;; from `__tur_any_drop` inlined into main: the free is guarded by a runtime
+;; registry lookup (boxed=0 for Route, so nothing is ever freed), but once
+;; the payload was constant-folded to the literal 7 gcc could not prove the
+;; guard false.  `__tur_any_drop` is noinline/noclone now, and run.sh's
+;; emitted-C warning ratchet FAILs a fixture whose build prints that warning,
+;; so this is the case that keeps it out.
+(defopaque Route :int)
+(defn boxed [] : any (:: 7 Route))
+(defn route-num [r : Route] : int (:: r int))
+
+(defn main [] : int
+  (let [a (boxed)]
+    (if (is? a Route) (println (route-num a)) (println 0)))
+  0)

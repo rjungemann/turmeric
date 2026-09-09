@@ -530,6 +530,18 @@ tur fetch              # fetch all spices listed in tur.lock
 tur fetch --update     # update spices to the latest allowed versions
 ```
 
+`tur fetch`'s exit status separates "an optional dep was unavailable" from
+"a required one was":
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | every dep fetched (or served from the lock) |
+| `1` | only `:optional true` deps failed; they are skipped, the lock is written, and the project builds without them |
+| `2` | a required dep or step failed: a `:spices` entry, a `:cmake-deps` build, the manifest, or the lock write |
+
+A CI job can therefore warn-and-continue on `1` and fail on `2` rather than
+treating every nonzero status the same way.
+
 ### Run the test suite
 
 ```sh

@@ -406,7 +406,8 @@ char *pkg_git_resolve(const char *repo_dir);
 bool pkg_fetch_all(const char *project_dir,
                    const PkgManifest *manifest,
                    PkgLockFile *lock,
-                   bool update);
+                   bool update,
+                   bool *out_optional_failed);
 
 /* Generate cmake/CMakeLists.txt from the :cmake-deps block.
  * Returns true on success. */

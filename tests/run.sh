@@ -788,11 +788,16 @@ run_happy() {
     #
     # Opt out with TUR_SKIP_CC_WARN_CHECK=1 (e.g. on a toolchain that words these
     # differently, or while landing a change that knowingly trips them).
+    # any-drop-inlining-warns-free-nonheap: -Wfree-nonheap-object joined the
+    # ratchet.  Emitted code frees only what a widen boxed, behind a runtime
+    # guard; gcc warning that a literal reaches free() means either the guard
+    # got inlined away (the case that report fixed) or a real free of a
+    # non-heap word, and both belong in a FAIL rather than in a build log.
     if [ "${TUR_SKIP_CC_WARN_CHECK:-0}" != "1" ] && [ -s "$actual_stderr" ]; then
-        if grep -qE '\[-W(int-conversion|incompatible-pointer-types)\]' "$actual_stderr"; then
+        if grep -qE '\[-W(int-conversion|incompatible-pointer-types|free-nonheap-object)\]' "$actual_stderr"; then
             {
-                echo "FAIL $name -- emitted C mixes a pointer and an integer"
-                grep -E '\[-W(int-conversion|incompatible-pointer-types)\]' \
+                echo "FAIL $name -- emitted C mixes a pointer and an integer (or frees a non-heap word)"
+                grep -E '\[-W(int-conversion|incompatible-pointer-types|free-nonheap-object)\]' \
                     "$actual_stderr" | sed 's/^/    /'
                 echo "    This is a warning to cc and a hard error under -Werror."
                 echo "    Opt out for one run with TUR_SKIP_CC_WARN_CHECK=1."

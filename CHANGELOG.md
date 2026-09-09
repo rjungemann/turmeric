@@ -22,6 +22,24 @@ All notable changes to Turmeric are documented here.
   signature on the next `tur run docs`. Both spellings now parse alike, a
   compound type such as `(Option int)` or `(fn [int] int)` stays one type, and
   an `#fx{...}` row no longer hides the return type.
+- **`tur fetch` tells an optional-dep failure from a required one.** An
+  `:optional true` spice that cannot be fetched is reported and skipped
+  (stale lock row dropped, the rest still fetched, `tur.lock` written) and
+  the command exits `1`; a required `:spices` entry, `:cmake-deps` build,
+  manifest or lock-write failure exits `2`; a clean fetch is `0`. Every
+  failure used to be `1`, so CI could only warn-and-continue on all of them.
+- **Emitted `any` drops no longer trip `-Wfree-nonheap-object`.** A
+  `defopaque` over an immediate widened to `any` through an inlined callee
+  made gcc warn `'free' called on a pointer to an unallocated object '7'`
+  from `__tur_any_drop` inlined (or IPA-cloned) into the caller, though the
+  runtime guard never freed anything. The drop is `noinline, noclone` now,
+  and the fixture suite's emitted-C warning ratchet fails on that warning.
+- **`tests/run-jit.sh` notices when the engine is off.** A trivial program
+  must run natively before the fixtures start, and the fixtures allowed to
+  pass through the cc fallback are listed by name in
+  `tests/jit-fallback-baseline.txt`; a new fallback fails the run. An
+  emitter construct c2mir could not parse once put every fixture on the cc
+  path and the suite still reported green.
 - **`add_test` under `src/CMakeLists.txt` registers.** `enable_testing()` ran
   after `add_subdirectory(src)`, so `tur_trail` built, passed by hand, and was
   never listed by `ctest -N` or run in CI. The call moved above the

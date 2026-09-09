@@ -1,5 +1,20 @@
 # `tur fetch` has one exit code for "an optional dep failed" and "a required dep failed"
 
+> **RESOLVED 2026-09-09** via fix direction 1. `FetchItem` carries the
+> declaring manifest's `:optional` (root and transitive); an optional dep
+> whose fetch fails is reported (`failed to fetch optional '<name>' --
+> skipped`), its stale lock row dropped, and the run continues.
+> `pkg_fetch_all` reports it through a new out-param and `tur fetch` exits
+> `0` clean / `1` only optional deps failed (lock written) / `2` a required
+> dep or step failed -- the manifest-missing and manifest-unreadable early
+> exits moved from 1 to 2 with it, since they are required failures.
+> Documented in the package-management and consuming-spices guides; pinned
+> by three new cases in `tests/run-spice-fetch.sh` (optional -> 1 with the
+> lock written, required -> 2, clean -> 0). Direction 2, the
+> `turmeric-spices` CI step reading the code, is that repo's one-line
+> change and stays there. In passing: a transitive `FetchItem` never had its
+> `is_global` set (the queue is malloc'd), which is initialised now.
+
 **Severity: low** (ergonomics/CI diagnosability, not correctness). Split out
 2026-09-04 from
 [spices-ci-fetch-failure-downgraded-to-warning](../archive/spices-ci-fetch-failure-downgraded-to-warning.md)

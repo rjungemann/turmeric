@@ -5150,7 +5150,7 @@ static int cmd_run(int argc, char **argv) {
                  * elaborator's "module not found" diagnostic fires for
                  * that import alone.  Files that only reference healthy
                  * deps keep compiling. */
-                bool fetch_ok = pkg_fetch_all(root, &m, &lock, false);
+                bool fetch_ok = pkg_fetch_all(root, &m, &lock, false, NULL);
                 pkg_lock_write(lock_path, &lock);
                 if (!fetch_ok) {
                     fprintf(stderr,

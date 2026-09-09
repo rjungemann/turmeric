@@ -27,7 +27,7 @@ Three residuals remain open, none of them S0 blockers:
 inline-C-produced opaque](../reported/interp-inline-c-opaque-segv-in-any-reflection.md)
 (high, but inside the existing TI7 inline-C carve-out -- worth closing before
 S3/S4 lean on the interpreter hard), and
-[a spurious `-Wfree-nonheap-object` in emitted code](../reported/any-drop-inlining-warns-free-nonheap.md)
+[a spurious `-Wfree-nonheap-object` in emitted code](../archive/any-drop-inlining-warns-free-nonheap.md)
 (cosmetic).
 
 **S1-S5 landed 2026-09-07** -- the `#lang` language axis with its gate and

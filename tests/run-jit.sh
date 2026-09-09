@@ -149,6 +149,42 @@ stamp_write() {
 RESULTS_DIR="$(mktemp -d -t tur-jit-results.XXXXXX)"
 trap 'rm -rf "$RESULTS_DIR"' EXIT
 
+# jit-suite-reports-pass-when-the-engine-is-disabled: two aggregate checks,
+# because per fixture the cc fallback is (rightly) a pass, and that let the
+# engine go from "compiles 2700 programs" to "compiles zero" -- a GNU-only
+# `__auto_type` in the emitter that c2mir rejects in every TU with an erasing
+# ascription, i.e. every TU that loads the prelude -- while this harness
+# printed a green summary and exited 0.
+#
+# (1) Smoke: ONE trivial program must go through the engine natively.  Costs
+#     a second, needs no list, and catches the tree-wide case before 2700
+#     fixtures spend ten minutes falling back.
+_smoke_dir="$(mktemp -d -t tur-jit-smoke.XXXXXX)"
+printf '(defn main [] : int (println 42) 0)\n' > "$_smoke_dir/smoke.tur"
+_smoke_err="$_smoke_dir/smoke.stderr"
+_smoke_out="$("$TUR" jit "$_smoke_dir/smoke.tur" 2> "$_smoke_err")"; _smoke_rc=$?
+if [ "$_smoke_rc" -ne 0 ] || [ "$_smoke_out" != "42" ] \
+   || grep -q 'TUR-W0070' "$_smoke_err" 2>/dev/null; then
+    echo "FAIL run-jit -- the engine did not natively run a trivial program"
+    echo "     (rc=$_smoke_rc, stdout='$_smoke_out').  If stderr below carries TUR-W0070,"
+    echo "     the engine is falling back TREE-WIDE (an emitter construct c2mir cannot"
+    echo "     parse?) and every fixture 'pass' below would be the cc path, not the JIT."
+    sed 's/^/     stderr: /' "$_smoke_err" | head -12
+    rm -rf "$_smoke_dir"
+    exit 1
+fi
+rm -rf "$_smoke_dir"
+
+# (2) Ratchet: the fixtures ALLOWED to fall back are listed by NAME in
+#     tests/jit-fallback-baseline.txt.  A fixture that falls back and is not
+#     listed FAILs the run -- add it to the baseline in the same commit, with
+#     a reviewer looking at why the engine lost it.  A listed fixture that no
+#     longer falls back is reported as reclaimed (tighten the baseline; not a
+#     failure, so an engine improvement never turns the suite red).  Names,
+#     not a count: a count rots into a rubber-stamp as fixtures come and go.
+#     Regenerate deliberately: TUR_JIT_FALLBACK_UPDATE=1 bash tests/run-jit.sh
+JIT_FALLBACK_BASELINE="tests/jit-fallback-baseline.txt"
+
 # Known latent MISCOMPILES, discovered by this harness being the first to
 # COMPILE the nested typed/* fixtures (run.sh scans only tests/fixtures/*/;
 # these were interpreter-covered only).  Each failed identically under gcc
@@ -413,13 +449,15 @@ if [ ${#ERROR_DIRS[@]} -gt 0 ]; then
         xargs -P "$JOBS" -I{} bash -c 'run_jit_error_fixture "$@"' _ {} 2>/dev/null
 fi
 
+FALLBACK_NAMES=()
 for rf in "$RESULTS_DIR"/*.result; do
     [ -f "$rf" ] || continue
     kind="$(cat "$rf")"
     name="$(basename "${rf%.result}" | tr '__' '/')"
     case "$kind" in
         PASS)          PASS=$((PASS + 1)) ;;
-        PASS_FALLBACK) PASS=$((PASS + 1)); FALLBACK=$((FALLBACK + 1)) ;;
+        PASS_FALLBACK) PASS=$((PASS + 1)); FALLBACK=$((FALLBACK + 1))
+                       FALLBACK_NAMES+=("$name") ;;
         FAIL)          FAIL=$((FAIL + 1)); FAILED+=("$name") ;;
         SKIP)          SKIP=$((SKIP + 1)) ;;
     esac
@@ -429,6 +467,45 @@ echo
 echo "jit fixture summary: $PASS passed, $FAIL failed, $SKIP skipped"
 if [ "$FALLBACK" -gt 0 ]; then
     echo "  (of which $FALLBACK passed via the cc fallback -- TUR-W0070)"
+fi
+
+# The fallback ratchet (see the header above RESULTS_DIR).  Only meaningful
+# on a full run: under a filter most baseline names are simply not exercised,
+# so reclaimed-vs-missing cannot be told apart and NEW fallbacks alone are
+# checked.
+_observed="$(printf '%s\n' "${FALLBACK_NAMES[@]+"${FALLBACK_NAMES[@]}"}" | sed '/^$/d' | sort -u)"
+if [ "${TUR_JIT_FALLBACK_UPDATE:-0}" = "1" ]; then
+    {
+        echo "# tests/jit-fallback-baseline.txt -- fixtures run-jit.sh ALLOWS to pass via"
+        echo "# the cc fallback (TUR-W0070) instead of the MIR engine.  One name per line."
+        echo "# A fallback not listed here FAILs the run; add it deliberately, in the same"
+        echo "# commit, with the reason the engine lost it.  A listed fixture the engine"
+        echo "# reclaims is reported so the line can be removed.  Regenerate:"
+        echo "#   TUR_JIT_FALLBACK_UPDATE=1 TUR=./build-jit/tur bash tests/run-jit.sh"
+        echo "# (jit-suite-reports-pass-when-the-engine-is-disabled)"
+        printf '%s\n' "$_observed"
+    } > "$JIT_FALLBACK_BASELINE"
+    echo "  wrote $JIT_FALLBACK_BASELINE ($FALLBACK name(s))"
+elif [ -f "$JIT_FALLBACK_BASELINE" ]; then
+    _allowed="$(grep -v '^#' "$JIT_FALLBACK_BASELINE" | sed '/^$/d' | sort -u)"
+    _new="$(comm -23 <(printf '%s\n' "$_observed") <(printf '%s\n' "$_allowed") | sed '/^$/d')"
+    if [ -n "$_new" ]; then
+        echo "FAIL run-jit -- fixture(s) fell back to cc that $JIT_FALLBACK_BASELINE does not allow:"
+        printf '%s\n' "$_new" | sed 's/^/  - /'
+        echo "  The engine used to compile these natively.  Fix the engine, or add the"
+        echo "  name(s) to the baseline in the same commit with the reason."
+        FAIL=$((FAIL + 1))
+        while IFS= read -r _n; do FAILED+=("$_n (new cc fallback)"); done <<< "$_new"
+    fi
+    if [ -z "$JIT_FILTER" ]; then
+        _reclaimed="$(comm -13 <(printf '%s\n' "$_observed") <(printf '%s\n' "$_allowed") | sed '/^$/d')"
+        if [ -n "$_reclaimed" ]; then
+            echo "  reclaimed by the engine (remove from $JIT_FALLBACK_BASELINE):"
+            printf '%s\n' "$_reclaimed" | sed 's/^/  - /'
+        fi
+    fi
+else
+    echo "  note: $JIT_FALLBACK_BASELINE is missing; run with TUR_JIT_FALLBACK_UPDATE=1 to create it"
 fi
 if [ $FAIL -ne 0 ]; then
     echo "failed:"

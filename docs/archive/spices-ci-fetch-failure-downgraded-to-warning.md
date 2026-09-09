@@ -13,7 +13,7 @@ Items (2) and (3) (an exit code from `tur fetch` that distinguishes a failed
 instead of guess) are the durable fix and were **not** attempted here --
 that's compiler-side work on `turmeric`, not a CI script change, and is
 tracked separately:
-[tur-fetch-exit-code-optional-vs-required](../reported/tur-fetch-exit-code-optional-vs-required.md).
+[tur-fetch-exit-code-optional-vs-required](../archive/tur-fetch-exit-code-optional-vs-required.md).
 
 **Severity: medium** (diagnosability, not correctness -- but it is why six
 macOS jobs all present as the same misleading message). Found 2026-08-28

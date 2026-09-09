@@ -2068,6 +2068,11 @@ typedef struct FetchItem {
     bool  is_global; /* `#{:global true}` -- owned by `tur install`, never fetched */
     bool  is_cmake;
     bool  from_root; /* LS3: true iff this item came from the root manifest */
+    /* tur-fetch-exit-code-optional-vs-required: `:optional true` on the
+     * declaring manifest.  A failed fetch of an optional dep is reported and
+     * skipped rather than failing the run, and `tur fetch` says so in its
+     * exit status (1 = only optional deps failed, 2 = a required one did). */
+    bool  optional;
     /* origin for error reporting */
     char *from;
 } FetchItem;
@@ -2303,7 +2308,9 @@ typedef struct ConflictEntry {
 bool pkg_fetch_all(const char *project_dir,
                    const PkgManifest *manifest,
                    PkgLockFile *lock,
-                   bool update) {
+                   bool update,
+                   bool *out_optional_failed) {
+    if (out_optional_failed) *out_optional_failed = false;
     /* Create spices/ directory */
     char spices_dir[4096];
     snprintf(spices_dir, sizeof(spices_dir), "%s/spices", project_dir);
@@ -2350,6 +2357,7 @@ bool pkg_fetch_all(const char *project_dir,
         it->is_global = s->is_global;
         it->is_cmake = false;
         it->from_root = true;
+        it->optional = s->optional;
         it->from     = tur_strdup("(root)");
     }
 
@@ -2513,8 +2521,22 @@ bool pkg_fetch_all(const char *project_dir,
 
         char *resolved = pkg_git_fetch(it->url, it->ref, dest);
         if (!resolved) {
-            fprintf(stderr, "spice: failed to fetch '%s'\n", it->name);
-            ok = false;
+            if (it->optional) {
+                /* tur-fetch-exit-code-optional-vs-required: an `:optional`
+                 * dep is EXPECTED to be unfetchable sometimes (a test-only
+                 * spice, a platform the consumer does not have).  Say so,
+                 * drop its stale lock row, and carry on -- but report it
+                 * through the out-param so the CLI can exit 1 rather than
+                 * 0, distinct from the 2 a required failure earns. */
+                fprintf(stderr,
+                        "spice: failed to fetch optional '%s' -- skipped "
+                        "(from %s)\n", it->name, it->from);
+                (void)lock_remove(lock, it->name, false);
+                if (out_optional_failed) *out_optional_failed = true;
+            } else {
+                fprintf(stderr, "spice: failed to fetch '%s'\n", it->name);
+                ok = false;
+            }
             free(it->name); free(it->url); free(it->ref);
             free(it->path); free(it->subdir); free(it->from);
             continue;
@@ -2579,8 +2601,10 @@ bool pkg_fetch_all(const char *project_dir,
                     nit->ref      = ss->ref    ? tur_strdup(ss->ref)    : NULL;
                     nit->path     = ss->path   ? tur_strdup(ss->path)   : NULL;
                     nit->subdir   = ss->subdir ? tur_strdup(ss->subdir) : NULL;
+                    nit->is_global = ss->is_global;
                     nit->is_cmake = false;
                     nit->from_root = false;
+                    nit->optional = ss->optional;
                     char from_buf[256];
                     snprintf(from_buf, sizeof(from_buf), "%s@%s",
                              it->name, it->ref ? it->ref : "HEAD");
@@ -5308,7 +5332,7 @@ int cmd_pkg_add(int argc, char **argv) {
         lock.format_version = 1;
         pkg_lock_read("tur.lock", &lock);
 
-        bool fetch_ok = pkg_fetch_all(".", &m, &lock, false);
+        bool fetch_ok = pkg_fetch_all(".", &m, &lock, false, NULL);
         if (fetch_ok) {
             pkg_lock_write("tur.lock", &lock);
             /* If no ref was given, report what HEAD resolved to */
@@ -5467,12 +5491,12 @@ int cmd_pkg_fetch(int argc, char **argv) {
     char manifest_path[64];
     if (!pkg_resolve_manifest_cwd(manifest_path, sizeof(manifest_path))) {
         fprintf(stderr, "tur fetch: no build.tur found in current directory\n");
-        return 1;
+        return 2;
     }
 
     PkgManifest m;
     memset(&m, 0, sizeof(m));
-    if (!pkg_manifest_read(manifest_path, &m)) return 1;
+    if (!pkg_manifest_read(manifest_path, &m)) return 2;
 
     /* LS6 (local-spice-dev-workflow): --dry-run classifies each direct
      * dep without performing any fetches or touching tur.lock.  Useful
@@ -5525,7 +5549,15 @@ int cmd_pkg_fetch(int argc, char **argv) {
     /* Load existing lock (if any) */
     pkg_lock_read("tur.lock", &lock);
 
-    bool ok = pkg_fetch_all(".", &m, &lock, update);
+    /* tur-fetch-exit-code-optional-vs-required: exit status contract --
+     *   0  everything fetched (or cached);
+     *   1  only `:optional` deps failed -- the lock is written and the
+     *      project is buildable without them;
+     *   2  a REQUIRED dep or step failed (a :spices entry, a :cmake-deps
+     *      build, the lock write, the manifest itself).
+     * CI can then warn-and-continue on 1 and fail on 2 instead of guessing. */
+    bool optional_failed = false;
+    bool ok = pkg_fetch_all(".", &m, &lock, update, &optional_failed);
 
     /* cmake deps: generate cmake/CMakeLists.txt, then configure+build.
      * transitive-cmake-deps-plan: union the enclosing manifest's :cmake-deps
@@ -5571,10 +5603,15 @@ int cmd_pkg_fetch(int argc, char **argv) {
     pkg_lock_free(&lock);
     pkg_manifest_free(&m);
 
-    if (ok) {
-        printf("spice: lock file written to tur.lock\n");
-    } else {
+    if (!ok) {
         fprintf(stderr, "spice: fetch completed with errors\n");
+        return 2;
+    }
+    printf("spice: lock file written to tur.lock\n");
+    if (optional_failed) {
+        fprintf(stderr,
+                "spice: fetch completed; one or more optional deps could not "
+                "be fetched (exit 1)\n");
         return 1;
     }
     return 0;
