@@ -435,25 +435,31 @@
 (definstance MapKey [any]
   (mk-box [x]
     : int
-    (if (is? x int) (.mk-box x)
-      (if (is? x cstr) (.mk-box x)
-        (if (is? x float) (.mk-box x)
-          (if (is? x bool) (.mk-box x)
-            (.mk-box (type-of x)))))))
+    (if (is? x int)
+      (.mk-box x)
+      (if (is? x cstr)
+        (.mk-box x)
+        (if (is? x float)
+          (.mk-box x)
+          (if (is? x bool) (.mk-box x) (.mk-box (type-of x)))))))
   (mk-cmp [x]
     : int
-    (if (is? x int) (.mk-cmp x)
-      (if (is? x cstr) (.mk-cmp x)
-        (if (is? x float) (.mk-cmp x)
-          (if (is? x bool) (.mk-cmp x)
-            (.mk-cmp (type-of x)))))))
+    (if (is? x int)
+      (.mk-cmp x)
+      (if (is? x cstr)
+        (.mk-cmp x)
+        (if (is? x float)
+          (.mk-cmp x)
+          (if (is? x bool) (.mk-cmp x) (.mk-cmp (type-of x)))))))
   (mk-owned? [x]
     : int
-    (if (is? x int) (.mk-owned? x)
-      (if (is? x cstr) (.mk-owned? x)
-        (if (is? x float) (.mk-owned? x)
-          (if (is? x bool) (.mk-owned? x)
-            (.mk-owned? (type-of x))))))))
+    (if (is? x int)
+      (.mk-owned? x)
+      (if (is? x cstr)
+        (.mk-owned? x)
+        (if (is? x float)
+          (.mk-owned? x)
+          (if (is? x bool) (.mk-owned? x) (.mk-owned? (type-of x))))))))
 ;;; ============================================================================
 ;;; The typed Map[K V] accessor surface (TMS3).
 ;;;

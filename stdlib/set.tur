@@ -542,8 +542,7 @@
 ;;; Example:
 ;;;   (set-add1 (set-new) 42)   ; => Set {42}
 
-(defmacro set-add1 [s x]
-  `(set-add-elem__ ~s ~x))
+(defmacro set-add1 [s x] `(set-add-elem__ ~s ~x))
 ;;; set-add-each__ -- internal helper for the set-of macro.
 ;;;
 ;;; Threads (set-add1 s x) over the elements in xs.  Each element appears

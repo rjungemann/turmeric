@@ -35,7 +35,7 @@ fails=0
 # --- 1. --saffron --bin: scaffolds, builds, runs ---------------------------
 mkdir -p "$WORK/bin" && cd "$WORK/bin"
 "$TUR" init --no-git --saffron demo >/dev/null 2>&1
-if ! head -1 src/main.tur | grep -q '^#lang saffron$'; then
+if [ "$(head -1 src/main.tur)" != '#lang saffron' ]; then
     echo "FAIL --saffron --bin: src/main.tur has no '#lang saffron' first line"
     head -3 src/main.tur | sed 's/^/       /'
     fails=$((fails + 1))
@@ -52,7 +52,7 @@ if [ ! -x build/bin/demo ]; then
     echo "FAIL --saffron --bin: build produced no binary"
     sed 's/^/       /' <<<"$out" | head -6
     fails=$((fails + 1))
-elif ! ./build/bin/demo 2>/dev/null | grep -q 'Hello from demo!'; then
+elif ! grep -q 'Hello from demo!' < <(./build/bin/demo 2>/dev/null); then
     echo "FAIL --saffron --bin: the built binary did not greet"
     ./build/bin/demo 2>&1 | sed 's/^/       /' | head -4
     fails=$((fails + 1))
@@ -81,7 +81,7 @@ fi
 # Without this, a change that made every scaffold Saffron would pass 1 and 2.
 mkdir -p "$WORK/plain" && cd "$WORK/plain"
 "$TUR" init --no-git plain >/dev/null 2>&1
-if head -1 src/main.tur | grep -q '^#lang'; then
+if [[ "$(head -1 src/main.tur)" == '#lang'* ]]; then
     echo "FAIL default: a plain scaffold must not carry a #lang line"
     head -2 src/main.tur | sed 's/^/       /'
     fails=$((fails + 1))

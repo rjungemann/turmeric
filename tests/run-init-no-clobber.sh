@@ -71,10 +71,12 @@ esac
 intact "--help leaves the tree alone"
 
 # 2. An UNKNOWN flag is refused, not silently treated as "scaffold here".
-#    `tur init --saffron`, looking for a flag that does not exist, is the same
-#    accident with a different spelling.
+#    A flag that does not exist is the same accident with a different
+#    spelling.  (This case was first written with `--saffron`, back when that
+#    flag did not exist; saffron-lang-plan S8 made `tur init --saffron` real,
+#    so the unknown flag is now one nothing will ever claim.)
 seed
-out="$(cd "$TMP/proj" && "$TUR" init --saffron 2>&1)"
+out="$(cd "$TMP/proj" && "$TUR" init --no-such-flag 2>&1)"
 case "$out" in
     *"unknown option"*) : ;;
     *) echo "FAIL init-no-clobber: unknown flag was not refused"; FAILED=1 ;;

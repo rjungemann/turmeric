@@ -84,8 +84,10 @@
 (definstance Hash [any]
   (hash [x]
     : int
-    (if (is? x int) (.hash x)
-      (if (is? x cstr) (.hash x)
-        (if (is? x float) (.hash x)
-          (if (is? x bool) (.hash x)
-            (.hash (type-of x))))))))
+    (if (is? x int)
+      (.hash x)
+      (if (is? x cstr)
+        (.hash x)
+        (if (is? x float)
+          (.hash x)
+          (if (is? x bool) (.hash x) (.hash (type-of x))))))))

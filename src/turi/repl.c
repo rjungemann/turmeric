@@ -1738,7 +1738,11 @@ int turi_repl_run(bool watch_mode) {
                         printf("; reader set to %s (session reset)\n",
                                reader_type_name(rt));
                 } else {
-                    printf("; already set to %s%s\n", reader_type_name(rt),
+                    /* "reader already set to <name>" is the pinned wording
+                     * (tests/run-flags.sh reader-name-canonical and
+                     * lang-layer-same-set-no-reset); the language axis rides
+                     * along as a suffix rather than reshaping the line. */
+                    printf("; reader already set to %s%s\n", reader_type_name(rt),
                            dialect == LANG_SAFFRON ? " (saffron)" : "");
                 }
                 free(line);
