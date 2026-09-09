@@ -143,16 +143,25 @@ jobs:
         # See docs/archive/sanitizer-gate-not-armed-in-ci.md.
         #
         # --output-junit: per-suite name/status/duration for the timing trend
-        # (docs/upcoming/suite-timing-trends-plan.md).  It writes its OWN file
+        # (docs/archive/suite-timing-trends-plan.md).  It writes its OWN file
         # rather than sharing one with the auxiliary step below, because a
         # single path would let that second ctest invocation overwrite this
         # one and silently drop tur_tests -- the most valuable series here.
         # The XML also embeds each test's stdout in <system-out>, even under
         # --output-on-failure, which is where the TUR_SKIP markers are read
         # from; no -V or tee plumbing is needed.
+        # --test-output-size-passed / --test-output-truncation: ctest keeps
+        # only the first 1 KiB of a PASSING test's output by default (the
+        # default truncation mode, "tail", drops the END), so a harness that
+        # prints thousands of PASS lines loses its trailing "summary: N
+        # passed" line and its TUR_SKIP_PARTIAL marker before they reach
+        # <system-out>.  Two weeks of ci-metrics rows carried no counts for
+        # tur_tests or turi_fixture_tests for exactly this reason.  256 KiB
+        # with "head" truncation keeps the tail, where every harness puts
+        # its census.
         env:
           TUR_SANITIZER_GATE: "1"
-        run: ctest --output-on-failure --progress --test-dir build -R '^tur_tests$' --output-junit results-main.xml
+        run: ctest --output-on-failure --progress --test-dir build -R '^tur_tests$' --output-junit results-main.xml --test-output-size-passed 262144 --test-output-truncation head
 
       - name: Run auxiliary suites (once per OS)
         # Sharding temporarily disabled -- previously gated on `matrix.shard == '1/4'`
@@ -176,7 +185,7 @@ jobs:
         # do nothing there.
         # --output-junit to a DISTINCT path from the step above -- see the note
         # there. The two files are merged by the collect step.
-        run: ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build -E '^tur_tests$' --output-junit results-aux.xml
+        run: ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build -E '^tur_tests$' --output-junit results-aux.xml --test-output-size-passed 262144 --test-output-truncation head
 
       # `always()`, NOT `continue-on-error` on the ctest steps: a suite that
       # regressed into a timeout is exactly the signal this exists to catch, so
@@ -465,11 +474,12 @@ jobs:
           # is what turns that case from documentation into a test.
           #
           # --output-junit rides along for the suite-timing trend
-          # (docs/upcoming/suite-timing-trends-plan.md).  These rows carry
+          # (docs/archive/suite-timing-trends-plan.md).  These rows carry
           # jit=true from the build cache, so they form their own series and
           # are never averaged against the `test` job's jit=false rows.
           set +e
           ctest --test-dir build -V --no-tests=error --output-junit results-jit.xml \
+                --test-output-size-passed 262144 --test-output-truncation head \
                 -R '^(tur_jit_fixture_tests|tur_repl_spice_jit|tur_flags_tests)$' 2>&1 \
             | tee jit-ctest.log \
             | grep --line-buffered -aE '^[0-9]+: (FAIL|.*passed,|.*fallback)|^ *Start +[0-9]+:|[0-9]+% tests passed|\*\*\*|Errors while running CTest'
@@ -614,7 +624,7 @@ jobs:
           path: ${{ github.workspace }}/.ccache
           key: ccache-split-${{ runner.os }}-${{ github.sha }}
 
-  # Phase 3A/4 of docs/upcoming/suite-timing-trends-plan.md.
+  # Phase 3A/4 of docs/archive/suite-timing-trends-plan.md.
   #
   # A SEPARATE job, not a step on `test`, specifically because of the
   # concurrency group.  `group: ci-metrics` serializes publishers so two runs

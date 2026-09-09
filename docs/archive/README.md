@@ -571,6 +571,7 @@ thread now lives.
 - **[container-element-form-plan.md](container-element-form-plan.md)** -- per-monomorph element words in Vec for niche Options; CE0-CE3 built and default since the niche graduated, CE5 re-measured, CE4 (Map/Set/HAMT) deferred by evidence
 - **[macro-system-direction-plan.md](macro-system-direction-plan.md)** -- procedural macros on turi, not phases; Stages 0-3 and Stage 4's RM5 and R3 reflection landed, the JIT fast path shelved pending demand. The CT-language freeze policy lives here
 - **[ecs-component-set-bounds-plan.md](ecs-component-set-bounds-plan.md)** -- the structural `(has ...)` world bound; resolved negatively 2026-08-20 when the ECS profile it gated on measured dictionary dispatch inside noise. `defworld-classes` took the ergonomics half spice-side
+- **[suite-timing-trends-plan.md](suite-timing-trends-plan.md)** -- per-suite CI wall-clock trends on the `ci-metrics` branch and the `/ci` dashboard; Phases 0-5 landed (dashboard 2026-08-28), Phase 6 declined by the two-week readout (`tur_tests` flat at -0.5%). The readout also found ctest truncating the census line of the two largest suites (fixed in `ci.yml`) and four suites that never run in full in CI ([../reported/ci-suites-that-never-run-on-hosted-runners.md](../reported/ci-suites-that-never-run-on-hosted-runners.md))
 
 ### Archived 2026-09-05
 

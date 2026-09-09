@@ -1,0 +1,76 @@
+# Four ctest suites have never run in full on a hosted runner
+
+**Summary:** the `/ci` skip ledger, read over its first two weeks of data
+(89 `main` pushes, 2026-08-26 to 2026-09-09), shows four suites that skip
+all or part of themselves on **every** run of the `test` job, on one or both
+operating systems. Each one exits 0, so ctest records a PASS and nothing in
+the job output says the coverage is missing. The timing-trends plan's open
+question predicted exactly this shape and said it deserves a report rather
+than a dashboard row.
+
+**Severity:** medium. None of these is a product defect, but two of them
+guard the debugger's native source maps (Phase 4 and Phase 5 of the
+debugger work), which have therefore only ever been checked by hand.
+
+## What the ledger shows
+
+Every row below is "skipped on every one of N runs" in the canonical
+environments (`Test (ubuntu-latest)` 88 runs, `Test (macos-latest)` 89
+runs). The marker text is what the harness prints and
+`tools/ci/collect-suite-timings.py` records.
+
+| suite | Linux | macOS | marker |
+|---|---|---|---|
+| `tur_phase4_gdb` | partial, 88/88 | partial, 89/89 | `TUR_SKIP_PARTIAL: gdb unavailable (native backtrace check)` |
+| `tur_phase5_gdb` | partial, 88/88 | partial, 89/89 | `TUR_SKIP_PARTIAL: gdb unavailable (DWARF + pretty-printer checks)` |
+| `tur_tutorial_steps` | runs | skip, 89/89 | `TUR_SKIP: pyyaml unavailable` |
+| `tur_refine_wasm` | skip, 88/88 | skip, 89/89 | `TUR_SKIP: emcc not on PATH` |
+| `tur_scscm_compile` | skip, 88/88 | skip, 89/89 | `TUR_SKIP: sibling ../turmeric-spices checkout absent` |
+
+"Partial" means the emit-c half of the gdb suites does run (586 ms and
+1392 ms measured in the plan's baseline); it is the gdb half -- the part
+that actually asserts a native backtrace names Turmeric source lines, and
+that the DWARF and pretty-printers work -- that has never executed in CI.
+
+## Why it went unnoticed
+
+All five harnesses exit 0 on the skip, which is the right behaviour for a
+developer box without the tool. Before the `TUR_SKIP` markers landed
+(2026-08-25) three of them printed `PASS` on the skip path, so even a person
+reading the log saw a pass. The ledger is the first artifact that
+distinguishes "passed" from "did not run" across runs, and it took the full
+two weeks of rows for "every run" to be a claim rather than a guess.
+
+## Fix directions
+
+Each is one line in the job's dependency step of `.github/workflows/ci.yml`;
+none changes a harness.
+
+1. **gdb on Linux:** add `gdb` to the `apt-get install` line of the `test`
+   job. The ubuntu-24.04 image does not put a `gdb` on `PATH` (the harness
+   checks `command -v gdb`). This turns the Phase 4/5 native checks into
+   real CI coverage for the first time; expect to find something the first
+   time they run. macOS is harder (Homebrew's gdb needs code-signing to
+   attach) and can stay partial as long as Linux runs the full suite.
+2. **pyyaml on macOS:** `python3 -m pip install pyyaml` in the macOS
+   dependency step, matching whatever gives Linux its copy, so the tutorial
+   steps are asserted on both OSes rather than one.
+3. **`tur_refine_wasm`:** either install Emscripten in the `test` job (the
+   browser job already has a `Set up Emscripten` step to copy) or move the
+   suite to the browser job, which is the only place `emcc` exists today.
+4. **`tur_scscm_compile`:** clone `rjungemann/turmeric-spices` next to the
+   checkout in the `test` job, the way CLAUDE.md's "Optional dependencies"
+   section describes, so the `requires.spices` fixtures and this suite run.
+   That is also the precondition for the spices side of several other
+   suites' `requires.spices` skips, which are per-fixture and not counted
+   here.
+
+Once fixed, the rows flip from `skip` to `pass` on the next `main` push and
+the ledger is the check that they stay that way.
+
+## Related
+
+- `docs/archive/suite-timing-trends-plan.md` -- the two-week readout this
+  report comes from.
+- `docs/archive/turi-suite-accounting-and-reporting-gaps.md` -- the same
+  "green while not running" shape inside one suite.

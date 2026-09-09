@@ -14,7 +14,7 @@
 > (`src/compiler/emit_module.c:13620`). All three already exist.
 > **Related:** [`post-jit-benchmark-resurrection-plan.md`](../archive/post-jit-benchmark-resurrection-plan.md)
 > (owns `tur jit --timing-json`, which this plan absorbs without breaking),
-> [`suite-timing-trends-plan.md`](suite-timing-trends-plan.md) (suite-level
+> [`suite-timing-trends-plan.md`](../archive/suite-timing-trends-plan.md) (suite-level
 > wall clock; complementary, not overlapping),
 > [`docs/guides/performance-guide.md`](../guides/performance-guide.md) section
 > "Benchmarking methodology" (which currently has no profiling section to
@@ -537,7 +537,7 @@ side, with scheduler-worker labeling from `src/runtime/tur_tls.c`.
 
 `tur profile report` and `tur profile diff` (percentage-point deltas, for
 regression gating). Wire into `benchmarks/run-benchmarks.sh` and the trend
-work in [`suite-timing-trends-plan.md`](suite-timing-trends-plan.md).
+work in [`suite-timing-trends-plan.md`](../archive/suite-timing-trends-plan.md).
 
 ### P6 -- Windows
 
