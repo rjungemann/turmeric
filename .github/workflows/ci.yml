@@ -16,7 +16,14 @@ on:
 
 jobs:
   test:
-    name: Test (${{ matrix.os }})
+    # Two jobs per OS, split along the ctest boundary that already existed as
+    # two steps: `fixtures` runs the RUN_SERIAL tur_tests corpus, `aux` runs
+    # the other ~145 suites under -j.  They only share the build, which ccache
+    # reproduces in about a minute, and running them in parallel takes the
+    # macOS leg from ~23 min (8.5 fixture + 12 auxiliary, back to back) to the
+    # longer of the two.  The fixtures part keeps the "Test (<os>)" check name
+    # so required-status-check rules keep matching it.
+    name: ${{ matrix.job_name }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # tur-link-and-build-split-plan Phase 5: cache the compiler-build objects
     # across runs. ccache launches every `cc -c` in the cmake build of `tur`
@@ -36,15 +43,21 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        # Sharding is temporarily disabled: the fixture suite runs in a single
-        # shard per OS for now. To re-enable, restore the `shard` matrix axis
-        # below (and the shard-specific `env`/`if` uses further down).
-        #
-        # Split the big tur_tests fixture suite (~2100 fixtures) across N runners
-        # via TUR_TEST_SHARD; run.sh partitions round-robin by fixture ordinal so
-        # the shards are balanced and their union is the full corpus. Tune the
-        # shard count by editing this list (and the "/N" denominators below).
-        # shard: ['1/4', '2/4', '3/4', '4/4']
+        part: [fixtures, aux]
+        include:
+          - part: fixtures
+            job_name: Test
+          - part: aux
+            job_name: Auxiliary suites
+        # Sharding the fixture corpus itself is still off.  run.sh supports it
+        # (TUR_TEST_SHARD="i/N" partitions round-robin by fixture ordinal, so
+        # shards are balanced and their union is the full corpus), and the
+        # `fixtures` part is where a shard axis would go.  What has to change
+        # first is the timing trend: every shard would publish a `tur_tests`
+        # row for the same run and environment, and the /ci aggregates assume
+        # one row per suite per run.  Carry the shard in the row (suite name
+        # or a new dimension, in tools/ci/collect-suite-timings.py and the
+        # dashboard) before adding e.g. `fixtures 1/2` / `fixtures 2/2` here.
 
     steps:
       - uses: actions/checkout@v4
@@ -91,7 +104,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-test-${{ runner.os }}-${{ github.sha }}
+          key: ccache-test-${{ runner.os }}-${{ matrix.part }}-${{ github.sha }}
           restore-keys: |
             ccache-test-${{ runner.os }}-
 
@@ -109,6 +122,7 @@ jobs:
       # AFTER Build on purpose: TUR_WASM is off here, so configure never
       # looks for emcc, and the harness only needs it on PATH at test time.
       - name: Set up Emscripten (for tur_refine_wasm)
+        if: matrix.part == 'aux'
         uses: mymindstorm/setup-emsdk@v14
         with:
           version: latest
@@ -141,10 +155,10 @@ jobs:
             *) echo "::error::unexpected tur --version output"; exit 1 ;;
           esac
 
-      - name: Run fixture suite (single shard)
-        # Sharding temporarily disabled -- run the whole fixture corpus in one
-        # shard. To re-enable, restore the shard matrix axis above and add
-        # `TUR_TEST_SHARD: ${{ matrix.shard }}` to the env block below.
+      - name: Run fixture suite
+        if: matrix.part == 'fixtures'
+        # The whole corpus in one shard -- see the matrix note above for what
+        # sharding it further would need first.
         #
         # TUR_SANITIZER_GATE makes a UBSan/ASan finding from `tur` ITSELF fail
         # the run, rather than printing into a log nobody reads. That
@@ -197,10 +211,10 @@ jobs:
           TUR_SANITIZER_GATE: "1"
         run: ctest --output-on-failure --progress --test-dir build -R '^tur_tests$' --output-junit results-main.xml --test-output-size-passed 262144 --test-output-truncation head
 
-      - name: Run auxiliary suites (once per OS)
-        # Sharding temporarily disabled -- previously gated on `matrix.shard == '1/4'`
-        # so the auxiliary suites ran only on the first shard. With a single shard
-        # this runs unconditionally once per OS.
+      - name: Run auxiliary suites
+        if: matrix.part == 'aux'
+        # Everything except tur_tests, once per OS, in its own job so it
+        # overlaps the fixture corpus instead of following it.
         #
         # -j: this step runs ~105 targets, so without it wall time is their sum.
         # The count must be explicit -- through CMake 3.28 a bare `-j` is
@@ -246,7 +260,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: timings-test-${{ matrix.os }}
+          name: timings-test-${{ matrix.os }}-${{ matrix.part }}
           path: timings.jsonl
           if-no-files-found: warn
           retention-days: 7
@@ -261,7 +275,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sanitizer-findings-${{ matrix.os }}
+          name: sanitizer-findings-${{ matrix.os }}-${{ matrix.part }}
           path: build/sanitizer-findings.log
           if-no-files-found: ignore
           retention-days: 7
@@ -274,7 +288,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-test-${{ runner.os }}-${{ github.sha }}
+          key: ccache-test-${{ runner.os }}-${{ matrix.part }}-${{ github.sha }}
 
   jit:
     name: JIT engine (${{ matrix.os }})
