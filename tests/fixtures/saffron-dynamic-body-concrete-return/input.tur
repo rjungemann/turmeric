@@ -1,0 +1,42 @@
+#lang saffron
+; Two gaps found as CONTROLS while fixing the CPS one, both reproducing with no
+; `call/cc` anywhere -- which is why they are pinned separately from it.
+;
+; 1. A CONCRETE return annotation over a DYNAMIC body never narrowed. `x` is
+;    `any`, so `+` is the dynamic operator and yields a box, and the emitter
+;    wrote `return __tur_dyn_arith(...)` into an `int64_t` slot: "incompatible
+;    types when returning type 'tur_tagged_t'". The widen for the opposite
+;    direction (`: any` over a narrower body) had existed since TY2.2; its
+;    inverse did not, so D2's promise that annotations stay legal in Saffron did
+;    not hold at the return. Fixed with the seam D5 already chose for arguments
+;    -- a CHECKED unbox, so a wrong box panics rather than reinterpreting the
+;    payload word.
+;
+; 2. A dyn call's CONCRETE argument was passed raw. The callee is a runtime
+;    value invoked through `TUR_APPLY*_T(tur_tagged_t, tur_tagged_t, ...)`, so
+;    every argument crosses as a box; `(f 41)` emitted an `int64_t` into that
+;    slot. `(f x)` with an `any` `x` worked, which is why this survived -- the
+;    shape written most often in Saffron was already boxed.
+;
+; The float rows are not decoration: a box carries a double's BIT PATTERN, so a
+; narrowing that converted rather than reinterpreting would print a wrong
+; number here, and 7.0 could not tell the two apart.
+
+(defn add-concrete-ret [x] : int
+  (+ x 41))
+
+(defn add-float-ret [x] : float
+  (+ x 0.1))
+
+(defn call-with-literal [f] : int
+  (f 41))
+
+(defn call-with-float-literal [f] : float
+  (f 7.25))
+
+(defn main []
+  (println (add-concrete-ret 1))
+  (println (add-float-ret 7.25))
+  (println (call-with-literal (fn [n] (+ n 1))))
+  (println (call-with-float-literal (fn [v] (* v 2.0))))
+  0)

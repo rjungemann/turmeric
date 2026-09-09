@@ -412,6 +412,9 @@ bool cps_fn_needs_cloneable_transform(const FnDef *fd) {
  * into nested function definitions (each nested fn is colored on its own merits;
  * reaching it is modeled as an unresolved call by the caller). This mirrors the
  * trusted enumeration in cps_expr_contains_shift, plus the serial operators. */
+static bool cps_directly_uses_control(const Expr *e);
+bool cps_expr_uses_control(const Expr *e) { return cps_directly_uses_control(e); }
+
 static bool cps_directly_uses_control(const Expr *e) {
     if (!e) return false;
     switch (e->kind) {
@@ -536,6 +539,28 @@ static bool cps_directly_uses_control(const Expr *e) {
             return false;
         case EX_DYN_FIELD:
             return cps_directly_uses_control(e->as.dyn_field_.obj);
+        /* saffron-lang-plan S9: the dispatch node, same shape as the three
+         * above -- receiver plus arguments, any of which can hold a control op. */
+        case EX_DYN_METHOD:
+            if (cps_directly_uses_control(e->as.dyn_method_.obj)) return true;
+            for (uint32_t i = 0; i < e->as.dyn_method_.n_args; i++)
+                if (cps_directly_uses_control(e->as.dyn_method_.args[i])) return true;
+            return false;
+        /* ...and the `any` READERS, which the first round of arms missed
+         * because nothing then put one between a defn's body and its control
+         * op.  The return-position seam does: a concrete return annotation over
+         * a dynamic body now narrows through `EX_ANY_CAST`, so `(defn go [x] :
+         * int (+ x (call/cc ...)))` had its only control op behind a cast, fell
+         * to `default: return false`, and went UNCOLORED -- the exact failure
+         * this walk's other arms exist to prevent, reintroduced by a node added
+         * later.  A reader is transparent to control the same way an ascription
+         * is. */
+        case EX_ANY_CAST:
+            return cps_directly_uses_control(e->as.any_cast_.value);
+        case EX_ANY_IS:
+            return cps_directly_uses_control(e->as.any_is_.value);
+        case EX_ANY_TYPE_OF:
+            return cps_directly_uses_control(e->as.any_type_of_.value);
         /* B3 (cps-tramp-resume): a `(with-handler hv body)` / `(compose-handlers
          * ...)` is a delimited handler install -- a control seed under the flag,
          * so a `main`/fn whose only control op is a first-class handler value is

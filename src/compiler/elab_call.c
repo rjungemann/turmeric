@@ -7,6 +7,7 @@
 #endif
 #include "elab_internal.h"
 #include "lang_layers.h"   /* saffron-lang-plan S3: lang_span_is_saffron */
+#include "cps.h"          /* cps_expr_uses_control -- the control-widen hoist */
 bool sum_box_reader_name(const char *nm);  /* emit_core.c; see emit_internal.h */
 #include "experiments.h"  /* Slice 3 (constrained-hkt-forall): hkt-hrt gate */
 #include "mono_specs.h"   /* VBM1 (van-laarhoven-monomorphization): spec registry */
@@ -416,6 +417,87 @@ static bool struct_accessor_hint(Elab *e, const char *name,
  * is set and codegen emits a heap copy.  Already-`any` values pass through
  * unchanged (no double-boxing).  Returns NULL only on allocation paths that
  * cannot happen (defensive). */
+/* cps-coloring-walk-has-no-arm-for-union-inject: bind `value` to a fresh temp
+ * and hand back an `EX_VAR` reading it, filling `lb` with the let binding.
+ *
+ * The one primitive behind both hoists below.  A CPS-lowerable node can hold a
+ * control operator in a LET INIT but not as an operand of a node the IR only
+ * ever DELEGATES, so moving it to an init is the whole trick.  The report
+ * proposed doing this in the CPS IR and found it blocked -- it would need an
+ * `Expr` referring to a CPS-bound `CVar`, which nothing can synthesise. Here
+ * the temp is an ordinary binding and no such bridge is needed. */
+Expr *elab_bind_control_temp(Elab *e, Expr *value, LetBinding *lb) {
+    char nm[48];
+    snprintf(nm, sizeof nm, "__ctlhoist_%u", e->next_id++);
+    const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+    Binding *tb = binding_new(e, sym, value->type, false, false, value->span);
+    memset(lb, 0, sizeof(*lb));
+    lb->binding = tb;
+    lb->init = value;
+    Expr *v = expr_new(e->arena, EX_VAR, value->type, value->span);
+    v->as.var.binding = tb;
+    return v;
+}
+
+/* cps-coloring-walk-has-no-arm-for-union-inject: hoist every control-bearing
+ * operand of a Saffron dynamic node into an enclosing `let`, so what remains at
+ * the node is a variable.
+ *
+ * The CPS IR admits these nodes only as DELEGATABLE ones -- an ordinary
+ * direct-emitted call, once nothing under them threads the DK -- exactly like
+ * the `any` widen beside them.  With a `call/cc` still in an operand they are
+ * `BODY-UNSUPPORTED` and the control op reaches the direct emitter, which
+ * aborts.  `(+ x (call/cc ...))` on an `any` `x` and `(f (call/cc ...))` on an
+ * `any` `f` are the two shapes the report reproduced.
+ *
+ * Bindings are emitted in operand order, which a single `let` evaluates in
+ * order, so evaluation order is unchanged.  A node with no control-bearing
+ * operand is returned untouched -- this costs nothing for ordinary Saffron code,
+ * which is almost all of it. */
+Expr *elab_hoist_control_operands(Elab *e, Expr *node) {
+    if (!node) return node;
+    Expr **slots[32];
+    uint32_t n_slots = 0;
+    switch (node->kind) {
+        case EX_DYN_OP:
+            for (uint32_t i = 0; i < node->as.dyn_op_.n_args && n_slots < 32; i++)
+                slots[n_slots++] = &node->as.dyn_op_.args[i];
+            break;
+        case EX_DYN_CALL:
+            slots[n_slots++] = &node->as.dyn_call_.fn;
+            for (uint32_t i = 0; i < node->as.dyn_call_.n_args && n_slots < 32; i++)
+                slots[n_slots++] = &node->as.dyn_call_.args[i];
+            break;
+        case EX_DYN_FIELD:
+            slots[n_slots++] = &node->as.dyn_field_.obj;
+            break;
+        case EX_DYN_METHOD:
+            slots[n_slots++] = &node->as.dyn_method_.obj;
+            for (uint32_t i = 0; i < node->as.dyn_method_.n_args && n_slots < 32; i++)
+                slots[n_slots++] = &node->as.dyn_method_.args[i];
+            break;
+        default:
+            return node;
+    }
+    uint32_t n_hoist = 0;
+    for (uint32_t i = 0; i < n_slots; i++)
+        if (*slots[i] && cps_expr_uses_control(*slots[i])) n_hoist++;
+    if (n_hoist == 0) return node;
+
+    LetBinding *lbs = (LetBinding *)arena_alloc(e->arena, n_hoist * sizeof(LetBinding));
+    uint32_t h = 0;
+    for (uint32_t i = 0; i < n_slots; i++) {
+        if (!*slots[i] || !cps_expr_uses_control(*slots[i])) continue;
+        *slots[i] = elab_bind_control_temp(e, *slots[i], &lbs[h]);
+        h++;
+    }
+    Expr *let = expr_new(e->arena, EX_LET, node->type, node->span);
+    let->as.let_.bindings = lbs;
+    let->as.let_.n = n_hoist;
+    let->as.let_.body = node;
+    return let;
+}
+
 Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     if (!value) return NULL;
     if (value->type.kind == TY_ANY) return value;  /* already boxed */
@@ -470,6 +552,44 @@ Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     Type any_type;
     memset(&any_type, 0, sizeof(any_type));
     any_type.kind = TY_ANY;
+
+    /* cps-coloring-walk-has-no-arm-for-union-inject, the remaining half: a widen
+     * whose operand USES A CONTROL OPERATOR hoists that operand into a let, so
+     * the widen sees an ordinary variable.
+     *
+     * The CPS IR admits `EX_UNION_INJECT` only as a DELEGATABLE node -- atomic
+     * operand, or provably control-free -- because delegating a widen over a
+     * `call/cc` would direct-emit a control op inside a CPS function. It has no
+     * LOWERING for one, so `(defn go [] (call/cc ...))` in a Saffron file, where
+     * the `any` return supplies the widen, was evicted `BODY-UNSUPPORTED
+     * unsupported form: EX_#100` and the `call/cc` reached the direct emitter,
+     * which aborts.
+     *
+     * The report proposed doing this hoist in the IR and found it blocked: it
+     * would need an `Expr` referring to a CPS-bound `CVar`, and no such
+     * synthesis exists. Doing it HERE, one layer up, needs no such bridge --
+     * the temp is an ordinary binding, the let-init is a control op the lowering
+     * already handles, and the widen's operand becomes an `EX_VAR`, which
+     * `is_atomic` accepts. Verified by hand first: the same shape written out
+     * long-hand (`(let [t (call/cc ...)] (:: t any))`) already compiled and
+     * printed 42, with no backend change at all.
+     *
+     * Note the widen must end up INSIDE the let. Wrapping the let instead --
+     * which is what the elaborator produced before this -- leaves the operand a
+     * control-bearing `EX_LET` and changes nothing. */
+    if (cps_expr_uses_control(value)) {
+        LetBinding *lbs = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+        Expr *v = elab_bind_control_temp(e, value, &lbs[0]);
+        Expr *inner = expr_new(e->arena, EX_UNION_INJECT, any_type, value->span);
+        inner->as.union_inject_.tag_idx = (int64_t)any_box_tag_for_type(&value->type);
+        inner->as.union_inject_.value = v;
+        Expr *let = expr_new(e->arena, EX_LET, any_type, value->span);
+        let->as.let_.bindings = lbs;
+        let->as.let_.n = 1;
+        let->as.let_.body = inner;
+        return let;
+    }
+
     Expr *inject = expr_new(e->arena, EX_UNION_INJECT, any_type, value->span);
     inject->as.union_inject_.tag_idx = (int64_t)any_box_tag_for_type(&value->type);
     inject->as.union_inject_.value = value;
@@ -3905,7 +4025,7 @@ Expr *elab_call(Elab *e, Form *call) {
             dyn->as.dyn_op_.op     = name;
             dyn->as.dyn_op_.args   = args;
             dyn->as.dyn_op_.n_args = n_args;
-            return dyn;
+            return elab_hoist_control_operands(e, dyn);
         }
     }
 
@@ -5142,6 +5262,17 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         for (uint32_t i = 0; i < dn; i++) {
             dargs[i] = elab_form(e, call->as.list.items[1 + i]);
             if (!dargs[i]) return NULL;
+            /* saffron-dyn-call-concrete-argument-is-not-widened: the callee is
+             * a runtime value invoked through `TUR_APPLY*_T(tur_tagged_t,
+             * tur_tagged_t, ...)`, so every argument crosses as a BOX.  A
+             * concrete one was passed raw -- `(f 41)` with `f : any` emitted an
+             * `int64_t` into a `tur_tagged_t` slot and cc rejected it
+             * ("conversion to non-scalar type requested"), while `(f x)` with
+             * an `any` `x` worked, which is why the gap survived: the shape
+             * that happens to be written most often in Saffron is the one that
+             * was already boxed. */
+            if (dargs[i]->type.kind != TY_ANY && dargs[i]->type.kind != TY_NEVER)
+                dargs[i] = elab_coerce_to_any(e, dargs[i]);
         }
         Expr *fnv = expr_new(e->arena, EX_VAR, fn_binding->type, call->span);
         fnv->as.var.binding = fn_binding;
@@ -5152,7 +5283,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         dc->as.dyn_call_.fn     = fnv;
         dc->as.dyn_call_.args   = dargs;
         dc->as.dyn_call_.n_args = dn;
-        return dc;
+        return elab_hoist_control_operands(e, dc);
     }
 
     if (fn_type.kind != TY_FN && fn_type.kind != TY_CONT) {

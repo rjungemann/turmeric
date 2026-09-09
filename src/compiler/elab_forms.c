@@ -2867,7 +2867,7 @@ Expr *elab_saffron_truthy(Elab *e, Expr *cond) {
                                (uint32_t)strlen(SAFFRON_TRUTHY_OP)));
     t->as.dyn_op_.args   = targs;
     t->as.dyn_op_.n_args = 1;
-    return t;
+    return elab_hoist_control_operands(e, t);
 }
 
 /* True when `f` is a call whose head names a return-only-dispatch typeclass

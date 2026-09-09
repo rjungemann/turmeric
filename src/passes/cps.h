@@ -16,6 +16,13 @@ Expr *cps_transform(Arena *a, Expr *program, TypeClassEnv *tc_env);
 
 /* Check if an expression contains shift or shift0 */
 bool cps_expr_contains_shift(const Expr *e);
+/* cps-coloring-walk-has-no-arm-for-union-inject: does this expression use a
+ * control operator DIRECTLY (call/cc, shift, perform, await, ...), without
+ * descending into nested fn bodies?  This is the coloring seed, and the
+ * elaborator consults it to decide whether an `any` widen has to hoist its
+ * operand into a let -- a widen over a control op is not lowerable by the
+ * CPS IR, but a widen over the LET VARIABLE is. */
+bool cps_expr_uses_control(const Expr *e);
 bool cps_expr_contains_effect_op(const Expr *e);
 
 /* Check if a function definition needs (one-shot) CPS transformation */

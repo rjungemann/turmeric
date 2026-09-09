@@ -1,6 +1,7 @@
 /* elab_fns.c -- function definition forms: defn, fn, extern-c, def. */
 #include "elab_internal.h"
 #include "lang_layers.h"   /* saffron-lang-plan S2: lang_span_is_saffron */
+#include "cps.h"          /* cps_expr_uses_control -- the control-cast hoist */
 #include "refine_discharge.h"   /* RT3: decide a refinement obligation in place */
 #include "refine_solver.h"      /* RT1: refine_model_search, for the W0377 witness */
 #include "globals.h"            /* repr-trace: g_emit_abi_trace; G1: g_dump_write_frames */
@@ -8203,6 +8204,63 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if (return_kind == TY_ANY && body && body->type.kind != TY_ANY &&
         body->type.kind != TY_NEVER) {
         body = elab_coerce_to_any(e, body);
+    }
+
+    /* saffron-concrete-return-annotation-on-a-dynamic-body-emits-bad-c: the
+     * INVERSE of the widen above, and it was missing.
+     *
+     * `(defn go [x] : int (+ x 41))` in a Saffron file has an `any` body -- `x`
+     * is `any`, so `+` is the dynamic operator and yields a box -- against a
+     * CONCRETE declared return.  Nothing narrowed it, and
+     * `return_position_conflict` lets it through as a carrier bridge, so the
+     * emitter wrote `return __tur_dyn_arith(...)` into an `int64_t` slot:
+     * "incompatible types when returning type 'tur_tagged_t'".  No `call/cc`
+     * needed -- this is the plain shape, and D2's promise that annotations stay
+     * legal in Saffron did not hold at the return.
+     *
+     * The fix is the seam D5 already chose for ARGUMENTS, at the other end of
+     * the same function: `elab_any_unbox_to`, the node `(cast x T)` lowers to,
+     * so a box holding the wrong type panics with the ordinary `cast: any holds
+     * ...` message instead of reinterpreting the payload word.  Erasing instead
+     * -- returning the payload unchecked -- would turn a type error into a
+     * memory-safety bug, which is the reasoning D5 recorded and this position
+     * inherits unchanged.
+     *
+     * Only for an ANNOTATED, concrete return: an unannotated one is `any` in
+     * Saffron and has nothing to check against, and a type variable has no
+     * target.  Placed before the conflict check below so that check sees the
+     * narrowed type and stays quiet. */
+    if (body && return_annotated && body->type.kind == TY_ANY &&
+        lang_span_is_saffron(body->span) &&
+        return_kind != TY_ANY && return_kind != TY_NIL &&
+        return_kind != TY_UNION && return_kind != TY_NEVER &&
+        return_kind != TY_TYVAR && return_kind != TY_UNKNOWN) {
+        Type want = return_adt_def ? type_adt(return_adt_def)
+                                   : type_from_kind(return_kind);
+        /* cps-coloring-walk-has-no-arm-for-union-inject: if the body USES A
+         * CONTROL OPERATOR, bind it first and narrow the variable, exactly as
+         * the widen does at the other end.  The CPS IR delegates `EX_ANY_CAST`
+         * rather than lowering it, so a cast wrapped around a `call/cc` is
+         * `BODY-UNSUPPORTED` and the op reaches the direct emitter; a cast of a
+         * LET VARIABLE is an ordinary delegatable node. */
+        Expr *target = body;
+        LetBinding *lb = NULL;
+        if (cps_expr_uses_control(body)) {
+            lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+            target = elab_bind_control_temp(e, body, &lb[0]);
+        }
+        Expr *unboxed = elab_any_unbox_to(e, target, want, body->span);
+        if (unboxed) {
+            if (lb) {
+                Expr *let = expr_new(e->arena, EX_LET, unboxed->type, body->span);
+                let->as.let_.bindings = lb;
+                let->as.let_.n = 1;
+                let->as.let_.body = unboxed;
+                body = let;
+            } else {
+                body = unboxed;
+            }
+        }
     }
 
     /* union-tagged-union-c-emission: the same widening, one type up.  A function

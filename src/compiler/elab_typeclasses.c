@@ -6540,7 +6540,7 @@ found_method:;
             df->as.dyn_field_.obj   = obj;
             df->as.dyn_field_.field =
                 symtab_intern(e->st, strslice(method_name, method_name_len));
-            return df;
+            return elab_hoist_control_operands(e, df);
         }
         /* No matching method found */
         diag_emit(DIAG_ERROR, call->span,
@@ -6684,7 +6684,7 @@ found_method:;
                 dm->as.dyn_method_.method_idx = slot;
                 dm->as.dyn_method_.args = extra;
                 dm->as.dyn_method_.n_args = n_extra;
-                return dm;
+                return elab_hoist_control_operands(e, dm);
             }
         }
         diag_emit_with_code(DIAG_ERROR, call->span,

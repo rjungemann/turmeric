@@ -6,7 +6,62 @@ description: "(defn go [] (call/cc (fn [k] (k 42)))) in a Saffron file aborts wi
 
 # The CPS coloring walk does not see through an `any` return widen
 
-**Severity: medium.** A hard compiler abort (`tur: emit: ...`), so it is loud
+**RESOLVED 2026-09-09.** All three reproduced shapes compile and print 42, on
+both back ends, pinned by `tests/fixtures/saffron-callcc-under-any-nodes`.
+
+**The blocked route was not blocked -- it was being attempted one layer too
+low.** The report's route 2 (hoist the control op into a let so the existing
+delegation rule applies) was rejected because it "needs an `Expr` that refers to
+a CPS-bound `CVar`, and no such synthesis exists". True at the IR level, and
+irrelevant: doing the same hoist in the ELABORATOR needs no bridge at all. The
+temp is an ordinary `Binding`, a control op in a let INIT is something the
+lowering already handles, and what the wrapper node then sees is an `EX_VAR`,
+which `is_atomic` accepts. Verified by hand before writing any code -- the same
+shape spelled out long-hand already compiled and printed 42 with no backend
+change.
+
+One detail decides it: **the widen must end up INSIDE the let.** Wrapping the
+let, which is what the elaborator produced before, leaves the operand a
+control-bearing `EX_LET` and changes nothing. That was the first thing measured
+and it is why an obvious-looking hand test appeared to disprove the route.
+
+**Two of the three shapes were blocked by defects that have nothing to do with
+CPS**, found by running each repro's control -- the same program without
+`call/cc`:
+
+- `(defn go [x] : int (+ x 41))` -- a CONCRETE return annotation over a DYNAMIC
+  body -- never narrowed, and emitted `return <tur_tagged_t>` into an `int64_t`
+  slot. The widen for the opposite direction has existed since TY2.2; its
+  inverse did not, so D2's promise that annotations stay legal in Saffron did
+  not hold at the return. Fixed with the seam D5 chose for arguments (a CHECKED
+  unbox).
+- `(f 41)` with `f : any` -- a dyn call's CONCRETE argument -- was passed raw
+  into `TUR_APPLY*_T(tur_tagged_t, ...)`. `(f x)` with an `any` `x` worked,
+  which is why it survived: the shape Saffron programs write most often was
+  already boxed.
+
+Both are pinned by `tests/fixtures/saffron-dynamic-body-concrete-return`, apart
+from the CPS work, because neither needs a control operator to reproduce. The
+first of them briefly turned the `EX_DYN_OP` repro from a loud abort into a
+WRONG ANSWER (a printed pointer) while the hoist was in and the narrowing was
+not -- exactly the trap this report warned about, caught by re-running the
+repro rather than by the suite.
+
+**One claim here did not hold:** the partial-fix note says "Three of the four
+have a fixture (saffron-callcc-under-any-return, -under-dyn-op,
+-under-dyn-call)". Those fixtures do not exist anywhere in the tree; the arms
+landed without them, which is why the failure moved silently rather than being
+caught.
+
+Also added on the way: `EX_ANY_CAST` / `EX_ANY_IS` / `EX_ANY_TYPE_OF` arms in
+the coloring walk. The return-narrowing seam puts a cast between a body and its
+control op, so the walk went back to `default: return false` and the function
+went UNCOLORED again -- the exact failure this report is about, reintroduced by
+a node added later. Same for `EX_DYN_METHOD` (S9), and matching arms in
+`cps_ir.c`, which had none for any dynamic node and so read a control-FREE
+`(println x)` as control-bearing.
+
+**Severity was medium.** A hard compiler abort (`tur: emit: ...`), so it is loud
 and nothing miscompiles. What it blocks is `call/cc` -- and by the same route
 every other delimited-control op -- in any function whose return type is `any`,
 which in a `#lang saffron` file is *every unannotated function*.
