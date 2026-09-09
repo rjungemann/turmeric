@@ -265,6 +265,17 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_DYN_FIELD:
             return !e->as.dyn_field_.obj ||
                    borrow_check_expr_recursive(ctx, e->as.dyn_field_.obj);
+        /* saffron-lang-plan S9: the receiver and every extra argument are
+         * ordinary expressions; the dispatch itself borrows nothing. */
+        case EX_DYN_METHOD:
+            if (e->as.dyn_method_.obj &&
+                !borrow_check_expr_recursive(ctx, e->as.dyn_method_.obj))
+                return false;
+            for (uint32_t i = 0; i < e->as.dyn_method_.n_args; i++)
+                if (e->as.dyn_method_.args[i] &&
+                    !borrow_check_expr_recursive(ctx, e->as.dyn_method_.args[i]))
+                    return false;
+            return true;
         case EX_DYN_CALL:
             if (e->as.dyn_call_.fn &&
                 !borrow_check_expr_recursive(ctx, e->as.dyn_call_.fn))

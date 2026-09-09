@@ -940,6 +940,12 @@ void emit_note_instance_row(struct EmitCtx *ctx, const char *cls, int64_t tag,
 /* Emits the recorded rows + their chunk registration.  Call LAST, after every
  * dict singleton the rows take the address of. */
 void emit_instance_row_table(struct EmitCtx *ctx, struct Buf *out);
+/* saffron-lang-plan S9 (D8 piece 4): emit this instance's uniform `(int64_t) ->
+ * ret` shims and the table the registry row points at, then record the row.
+ * Defined in emit_stmt.c, beside the dict emission it follows. */
+void emit_instance_dyn_table(struct EmitCtx *ctx, struct TypeClassInstance *inst,
+                             const char *dict_name, const char *type_suffix,
+                             int64_t tag);
 /* nested-construct-byvalue: the FnDef a constrained-instance body re-dispatches a
  * return/argument-dispatched method to under the active spec (e.g. the cstr
  * `dec` impl).  Used by the ABI scan to mark that instance live so the emitted

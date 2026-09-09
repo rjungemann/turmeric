@@ -6636,6 +6636,57 @@ found_method:;
     if (obj && obj->type.kind == TY_ANY && best_inst &&
         !(best_inst->n_type_args > 0 &&
           best_inst->type_args[0].kind == TY_ANY)) {
+        /* saffron-lang-plan S9 (D8 piece 4): in Saffron this is not the end of
+         * the road -- it is the whole point.  The class and the method SLOT are
+         * static (the name resolved), so only the instance is undecidable here,
+         * and the box's tag decides it at runtime through the registry S9 piece
+         * 3 publishes.
+         *
+         * The diagnostic below stays for Turmeric, where deferring a decision to
+         * runtime would be the wrong default: there `narrow it first` really is
+         * the answer.  So the two dialects differ in what they do with the same
+         * resolution state, not in how they reach it. */
+        if (lang_span_is_saffron(call->span)) {
+            TypeClass *tc = best_inst->typeclass;
+            uint8_t slot = 0;
+            bool found_slot = false;
+            for (uint8_t i = 0; i < tc->n_methods; i++) {
+                if (tc->methods[i].name->len == method_name_len &&
+                    memcmp(tc->methods[i].name->name, method_name,
+                           method_name_len) == 0) {
+                    slot = i; found_slot = true; break;
+                }
+            }
+            if (found_slot) {
+                uint32_t n_extra = call->as.list.len - 2;
+                Expr **extra = n_extra
+                    ? (Expr **)arena_alloc(e->arena, n_extra * sizeof(Expr *))
+                    : NULL;
+                for (uint32_t i = 0; i < n_extra; i++) {
+                    extra[i] = elab_form(e, call->as.list.items[2 + i]);
+                    if (!extra[i]) return NULL;
+                }
+                /* The result type comes from the METHOD's declaration, which is
+                 * the same for every instance -- that is what makes one slot
+                 * callable through one signature. */
+                Type result_type = TYPE_INT;
+                if (best_method && best_method->binding &&
+                    best_method->binding->type.kind == TY_FN) {
+                    Type rt = best_method->binding->type.as.fn.result_full_type
+                                  ? *best_method->binding->type.as.fn.result_full_type
+                                  : type_from_kind(
+                                        best_method->binding->type.as.fn.result_kind);
+                    if (rt.kind != TY_UNKNOWN) result_type = rt;
+                }
+                Expr *dm = expr_new(e->arena, EX_DYN_METHOD, result_type, call->span);
+                dm->as.dyn_method_.obj = obj;
+                dm->as.dyn_method_.tc = tc;
+                dm->as.dyn_method_.method_idx = slot;
+                dm->as.dyn_method_.args = extra;
+                dm->as.dyn_method_.n_args = n_extra;
+                return dm;
+            }
+        }
         diag_emit_with_code(DIAG_ERROR, call->span,
                             TUR_E0020_AMBIGUOUS_DISPATCH,
                             "cannot dispatch '.%.*s' on an 'any' receiver: the "

@@ -11103,6 +11103,64 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return v;
     }
 
+    /* --- saffron-lang-plan S9 (D8 piece 4): dispatch on the runtime type --- */
+    case EX_DYN_METHOD: {
+        /* The compiled path keys a registry on the box's TAG.  The interpreter
+         * has the value itself, so it keys on the NAME `turi_any_display_type`
+         * reports -- deliberately the same string `is?` and `cast` compare
+         * (interp-native-ctor-loses-adt-name is why that name is trustworthy),
+         * so a type-case and a dispatch cannot disagree about what arrived.
+         *
+         * No dict, no shim table: the instance's FnDef is callable directly,
+         * which is the whole reason this arm is short and the compiled one is
+         * not. */
+        TypeClass *tc = e->as.dyn_method_.tc;
+        uint8_t slot = e->as.dyn_method_.method_idx;
+        TuriValue ov = eval_expr(env, frame, e->as.dyn_method_.obj);
+        if (turi_is_error(ov) || env_signaled(env)) return ov;
+        if (ov.tag == TURI_STRUCT && ov.as_struct && ov.as_struct->is_any_box &&
+            ov.as_struct->n_fields == 1 && ov.as_struct->fields)
+            ov = ov.as_struct->fields[0];
+
+        const char *have = turi_any_display_type(ov);
+        FnDef *impl = NULL;
+        if (tc) {
+            TypeClassEnv *tce = (TypeClassEnv *)env->last_tc_env;
+            for (TypeClassInstance *inst = tce ? tce->instances : NULL;
+                 inst != NULL; inst = inst->next) {
+                if (inst->typeclass != tc || inst->n_type_args == 0) continue;
+                const char *want = type_name(inst->type_args[0]);
+                if (!have || !want || strcmp(have, want) != 0) continue;
+                if (slot < inst->n_method_impls) impl = inst->method_impls[slot];
+                break;
+            }
+        }
+        const char *meth = (tc && slot < tc->n_methods && tc->methods[slot].name)
+                               ? tc->methods[slot].name->name : "?";
+        if (!impl) {
+            char msg[224];
+            snprintf(msg, sizeof(msg),
+                     "no instance of %s for %s (dispatching .%s on an any)",
+                     (tc && tc->name) ? tc->name->name : "?",
+                     have ? have : "that value", meth);
+            turi_runtime_panic(env, msg);
+            return turi_nil();
+        }
+
+        uint32_t n = 1 + e->as.dyn_method_.n_args;
+        TuriValue *argv = (TuriValue *)turi_val_alloc(env, n * sizeof(TuriValue));
+        argv[0] = ov;
+        for (uint32_t i = 0; i < e->as.dyn_method_.n_args; i++) {
+            argv[1 + i] = eval_expr(env, frame, e->as.dyn_method_.args[i]);
+            if (turi_is_error(argv[1 + i]) || env_signaled(env)) return argv[1 + i];
+        }
+        TuriClosure *cl = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
+        memset(cl, 0, sizeof(*cl));
+        cl->fn = impl;
+        cl->captured = NULL;
+        return eval_apply(env, cl, argv, n);
+    }
+
     /* --- saffron-lang-plan S4/D4 (G11): a dynamic field read -------------- */
     case EX_DYN_FIELD: {
         /* `(.f x)` where `x : any`.  The field is resolved against the value's

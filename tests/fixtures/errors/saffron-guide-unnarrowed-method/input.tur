@@ -1,13 +1,20 @@
-#lang saffron
-;; docs/guides/saffron-guide.md, "Typeclasses": a method on an un-narrowed
-;; `any` is a DIAGNOSTIC naming the three ways out, not a guess and not
-;; uncompilable C.
+;; docs/guides/saffron-guide.md, "Typeclasses": in TYPED TURMERIC a method on an
+;; un-narrowed `any` is a DIAGNOSTIC naming the three static ways out -- not a
+;; guess, not uncompilable C, and not the runtime dispatch Saffron does.
+;;
+;; This fixture carried a `#lang saffron` line until S9 (D8) built that
+;; dispatch. Keeping it Saffron would have pinned the OLD answer and turned the
+;; feature into a failure; keeping the assertion on the Turmeric arm is what it
+;; was really about -- the two dialects reach the same resolution state and
+;; choose differently, and this is the half that must not drift.
 ;;
 ;; The guide quotes both the error and its help line, so both are pinned here.
 ;; The help text is the load-bearing half: it is what sends a reader to the
 ;; type-case, and an earlier version of this path had no diagnostic at all when
 ;; a single instance was in scope.
+;;
+;; The Saffron half is `tests/fixtures/saffron-dyn-typeclass-dispatch`.
 
-(defn h [x] (hash x))
+(defn h [x : any] : int (hash x))
 
-(defn main [] 0)
+(defn main [] : int 0)

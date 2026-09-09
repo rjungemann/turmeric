@@ -236,27 +236,56 @@ uses and scopes -- none of which `any` touches:
 
 ## Typeclasses
 
-A typeclass method needs a **statically known receiver**. On an un-narrowed
-`any` you get a diagnostic rather than a guess:
+A method call on an un-narrowed `any` **dispatches on the box's own tag**. The
+method name resolves statically -- that is what fixes the class and the slot --
+and only the instance waits for runtime:
 
 ```turmeric
-(defn h [x] (hash x))
-;; error: cannot dispatch '.hash' on an 'any' receiver: the box holds one type
-;;        at runtime, and which instance to run is not decidable from it here
-;; help:  narrow it first -- `(if (is? x T) (.hash x) ...)` -- or unbox with
-;;        `(cast x T)`, or pin the instance with a type witness: `(.hash @T x)`
+#lang saffron
+(defclass Named [a]
+  (name-of [x] : cstr))
+(definstance Named [int]   (name-of [x] "int"))
+(definstance Named [float] (name-of [x] "float"))
+
+(defn describe-kind [x] (.name-of x))   ;; x is `any`
+
+(describe-kind 7)      ;; => "int"
+(describe-kind 7.35)   ;; => "float"
 ```
 
-Three routes out, all working today:
+A type with no instance of the class is a panic naming both, not a wrong answer:
 
-1. **Narrow with a type-case** -- `(if (is? x Circle) (area x) ...)`. The
-   idiomatic one.
+```
+panic: no instance of Named for bool (dispatching .name-of on an any)
+```
+
+**In typed Turmeric the same code is still a diagnostic**, and deliberately so:
+deferring a decision to runtime is the wrong default for a language whose types
+are static. There you get `cannot dispatch '.name-of' on an 'any' receiver`,
+with a help line naming the three static routes -- which also remain available
+in Saffron, and are still worth preferring when the type IS known:
+
+1. **Narrow with a type-case** -- `(if (is? x Circle) (area x) ...)`.
 2. **Unbox** -- `(area (cast x Circle))`.
 3. **Pin the instance** -- `(.hash @int x)`, one token, and a wrong witness
    panics rather than reinterpreting.
 
-Runtime instance dispatch (picking the instance from the box tag) is designed
-but not built; it is stage S9 of the plan.
+Each of these resolves at compile time, so it costs nothing at runtime and
+cannot panic for a missing instance.
+
+### What dynamic dispatch does not cover yet
+
+The registry is keyed on the **box tag**, so an instance the tag cannot name is
+not reachable through it. Three cases panic with a message saying which:
+
+- A method taking more than the receiver (`eq [x : a y : a]`) or returning the
+  class's own type variable (`clone : a -> a`) -- the call site would have to
+  box and unbox more than the receiver.
+- An instance for a type constructor rather than an applied type
+  (`definstance Functor [Option]`), since a widened value's tag is minted from
+  `(Option float)`, not `Option`.
+- An instance whose receiver is itself a type variable
+  (`definstance Clone [T]`), which has no ground tag at all.
 
 ## Try it
 

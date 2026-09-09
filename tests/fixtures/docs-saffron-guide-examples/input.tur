@@ -58,6 +58,24 @@
 ;; --- Refinements become runtime contracts ---------------------------------
 (defn pos [n : #refine{v : any | (> v 0)}] n)
 
+;; Typeclasses: a method on an un-narrowed `any` dispatches on the box tag.
+;; The guide's claim is that the SAME call reaches two different instances,
+;; so both are exercised -- and the float arm uses 7.35 rather than a whole
+;; number, because an `any` holds a double's BIT PATTERN and a dispatch that
+;; converted instead of reinterpreting would print a wrong number here, not a
+;; rounded one.
+(defclass Named [a]
+  (name-of [x] : cstr))
+
+(definstance Named [int]
+  (name-of [x] "int"))
+
+(definstance Named [float]
+  (name-of [x] "float"))
+
+(defn describe-kind [x]
+  (.name-of x))
+
 (defn main []
   (println (add 1 2))
   (println (add 1.5 2.25))
@@ -81,4 +99,7 @@
   (println (cast (area (:: (:: (some 3.5) (Option float)) any)) float))
 
   (println (cast (pos 5) int))
+
+  (println (describe-kind 7))
+  (println (describe-kind 7.35))
   0)

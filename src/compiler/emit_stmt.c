@@ -246,6 +246,111 @@ static bool dict_slot_param_is_carrier(EmitCtx *ctx, const FnDef *mi,
     return emit_type_is_byvalue_adt(ctx, pt);
 }
 
+/* saffron-lang-plan S9 (D8 piece 4): the per-instance DYNAMIC dispatch table.
+ *
+ * Why not just point the registry row at the dict singleton?  Because the dict's
+ * slots are not uniformly shaped.  Piece 2 made a BY-VALUE receiver's slot
+ * carrier-shaped, but a primitive one still holds the raw impl -- `Show bool`'s
+ * slot is `__inst_Show_show_bool(bool)` and a float instance's is `(double)`.
+ * A dynamic site has one cast for every instance, so calling those through a
+ * single `(ret (*)(int64_t))` would pass a double in the wrong register class
+ * and read a bool from a 64-bit word: exactly the silent float truncation P8
+ * fixed on the mode-B path, reintroduced one layer up.
+ *
+ * So each dispatchable instance gets its OWN table of shims with a uniform
+ * `(int64_t) -> ret` signature, and the row points there.  Mode B keeps the
+ * dict it already has, untouched.
+ *
+ * v0 covers a one-parameter method with a concrete result -- `show`, `hash`,
+ * `display`, `debug`.  A method with extra `a`-typed parameters (`eq [x : a
+ * y : a]`) or an `a`-typed RESULT (`clone : a -> a`) needs the call site to box
+ * and unbox more than the receiver, and gets a NULL slot, which the dispatch
+ * site reports rather than calls.  That is a stated limit, not a silent one. */
+void emit_instance_dyn_table(EmitCtx *ctx, TypeClassInstance *inst,
+                             const char *dict_name, const char *type_suffix,
+                             int64_t tag) {
+    TypeClass *tc = inst->typeclass;
+    char sanitized[128];
+    char table[192];
+    snprintf(table, sizeof(table), "__dyn%s", dict_name);
+
+    for (uint8_t i = 0; i < tc->n_methods; i++) {
+        FnDef *mi = inst->method_impls[i];
+        if (!mi || !mi->param_types || mi->n_params != 1) continue;
+        Type ret;
+        if (mi->binding && mi->binding->type.kind == TY_FN) {
+            Type *rft = mi->binding->type.as.fn.result_full_type;
+            ret = rft ? *rft : emit_type_from_kind(mi->binding->type.as.fn.result_kind);
+        } else if (mi->body) {
+            ret = mi->body->type;
+        } else continue;
+        if (ret.kind == TY_TYVAR || ret.kind == TY_UNKNOWN) continue;
+
+        Type pt = mi->param_types[0];
+        tur_mangle_ident(tc->methods[i].name->name, sanitized, sizeof(sanitized));
+        const char *pcn = type_c_name(pt);
+
+        /* How the carrier word becomes the impl's declared parameter.  Each arm
+         * is the exact inverse of what the WIDEN wrote into the box, which is
+         * why the float arm bit-reinterprets rather than converts: the box holds
+         * the double's bit pattern, so `(double)__r` would read 4614...LL as a
+         * count and hand the instance a wrong number, not a rounded one. */
+        char conv[320];
+        if (dict_slot_param_is_carrier(ctx, mi, 0)) {
+            snprintf(conv, sizeof(conv), "*(%s *)(intptr_t)__r", pcn);
+        } else if (pt.kind == TY_FLOAT) {
+            snprintf(conv, sizeof(conv),
+                     "((union { double d; int64_t i; }){.i = __r}).d");
+        } else if (strchr(pcn, '*') != NULL) {
+            snprintf(conv, sizeof(conv), "(%s)(intptr_t)__r", pcn);
+        } else if (pt.kind == TY_FLOAT32) {
+            continue;   /* not yet: the box's 32-bit widen shape is its own question */
+        } else {
+            snprintf(conv, sizeof(conv), "(%s)__r", pcn);
+        }
+
+        buf_printf(ctx->file, "static %s __dynshim_%s_%s%s(int64_t __r) {\n",
+                   type_c_name(ret), tc->name->name, sanitized, type_suffix);
+        buf_puts(ctx->file, "    return ");
+        if (mi->binding && mi->binding->name)
+            buf_printf(ctx->file, "%s(%s);\n}\n", mi->binding->name->name, conv);
+        else
+            buf_printf(ctx->file, "__inst_%s_%s%s(%s);\n}\n", tc->name->name,
+                       sanitized, type_suffix, conv);
+    }
+
+    /* The table itself: one slot per class method, in slot order, so the
+     * dispatch site can index it with the method index the elaborator resolved.
+     * A method this instance cannot serve dynamically is a NULL slot. */
+    buf_printf(ctx->file, "static const void *%s[] = {\n", table);
+    for (uint8_t i = 0; i < tc->n_methods; i++) {
+        FnDef *mi = inst->method_impls[i];
+        bool have = false;
+        if (mi && mi->param_types && mi->n_params == 1) {
+            Type ret = (mi->binding && mi->binding->type.kind == TY_FN)
+                ? (mi->binding->type.as.fn.result_full_type
+                       ? *mi->binding->type.as.fn.result_full_type
+                       : emit_type_from_kind(mi->binding->type.as.fn.result_kind))
+                : (mi->body ? mi->body->type : emit_type_from_kind(TY_UNKNOWN));
+            const char *pcn0 = type_c_name(mi->param_types[0]);
+            have = (ret.kind != TY_TYVAR && ret.kind != TY_UNKNOWN &&
+                    !(mi->param_types[0].kind == TY_FLOAT32 &&
+                      !dict_slot_param_is_carrier(ctx, mi, 0) &&
+                      strchr(pcn0, '*') == NULL));
+        }
+        if (have) {
+            tur_mangle_ident(tc->methods[i].name->name, sanitized, sizeof(sanitized));
+            buf_printf(ctx->file, "    (const void *)__dynshim_%s_%s%s,\n",
+                       tc->name->name, sanitized, type_suffix);
+        } else {
+            buf_puts(ctx->file, "    0,\n");
+        }
+    }
+    buf_puts(ctx->file, "};\n\n");
+
+    emit_note_instance_row(ctx, tc->name->name, tag, table);
+}
+
 void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Debugger Phase 4 (--debug): anchor each statement to its source line so
      * native stepping advances line-by-line through the `.tur` file.  No-op
@@ -522,6 +627,9 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
          * expression pointer as a Binding. */
         case EX_DYN_OP:
         case EX_DYN_FIELD:
+        /* saffron-lang-plan S9: a dispatched method call is a call -- it runs an
+         * instance body, so statement position must still emit it. */
+        case EX_DYN_METHOD:
         case EX_DYN_CALL: {
             uint32_t pd_mark[3];
             emit_pending_drops_mark(ctx, pd_mark);
@@ -964,11 +1072,9 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
              * emitted yet). */
             {
                 int64_t __disp_tag = 0;
-                if (emit_instance_dispatch_tag(ctx, inst, &__disp_tag)) {
-                    char singleton[160];
-                    snprintf(singleton, sizeof(singleton), "%s_singleton", dict_name);
-                    emit_note_instance_row(ctx, tc->name->name, __disp_tag, singleton);
-                }
+                if (emit_instance_dispatch_tag(ctx, inst, &__disp_tag))
+                    emit_instance_dyn_table(ctx, inst, dict_name, type_suffix,
+                                            __disp_tag);
             }
             return;
         }

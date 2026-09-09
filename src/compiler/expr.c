@@ -29,6 +29,14 @@ void expr_print(Buf *b, const Expr *e) {
             buf_puts(b, e->as.dyn_field_.field ? e->as.dyn_field_.field->name : "?");
             buf_puts(b, ")");
             break;
+        /* saffron-lang-plan S9 (D8 piece 4): the class is known, the instance
+         * is not -- so show the class, which is the part a reader can act on. */
+        case EX_DYN_METHOD:
+            buf_puts(b, "(dyn-method ");
+            buf_puts(b, e->as.dyn_method_.tc && e->as.dyn_method_.tc->name
+                            ? e->as.dyn_method_.tc->name->name : "?");
+            buf_puts(b, ")");
+            break;
         case EX_NIL_LIT:  buf_puts(b, "nil"); break;
         case EX_BOOL_LIT: buf_puts(b, e->as.b ? "true" : "false"); break;
         case EX_INT_LIT:  buf_printf(b, "%lld", (long long)e->as.i); break;

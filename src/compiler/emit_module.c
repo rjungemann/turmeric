@@ -6080,6 +6080,31 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
          * coerced to `any` (return, call argument, branch join).  The other
          * three READ a box, and a generic call can sit under any of them the
          * same way. */
+        /* saffron-lang-plan S9: the Saffron dynamic nodes are OPAQUE to this
+         * walk without these arms -- their children were never visited, so a
+         * widen or a generic call underneath one was invisible.  Exactly the
+         * defect P2d fixed for EX_UNION_INJECT itself, one node family later:
+         * a Saffron program spends most of its time under `(println ...)`,
+         * which is an EX_DYN_OP, and every argument widened there went
+         * unrecorded -- so the instance a `(.show x)` needed had no registry
+         * row and the program panicked on a type it plainly boxes. */
+        case EX_DYN_OP:
+            for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
+                emit_abi_scan_expr(ctx, e->as.dyn_op_.args[i], items, n_items);
+            break;
+        case EX_DYN_CALL:
+            emit_abi_scan_expr(ctx, e->as.dyn_call_.fn, items, n_items);
+            for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
+                emit_abi_scan_expr(ctx, e->as.dyn_call_.args[i], items, n_items);
+            break;
+        case EX_DYN_FIELD:
+            emit_abi_scan_expr(ctx, e->as.dyn_field_.obj, items, n_items);
+            break;
+        case EX_DYN_METHOD:
+            emit_abi_scan_expr(ctx, e->as.dyn_method_.obj, items, n_items);
+            for (uint32_t i = 0; i < e->as.dyn_method_.n_args; i++)
+                emit_abi_scan_expr(ctx, e->as.dyn_method_.args[i], items, n_items);
+            break;
         case EX_UNION_INJECT:
             /* saffron-lang-plan S9 (D8 piece 3): this is the ONLY way a value
              * gets into an `any` box, so the set of payload types seen here is
@@ -6775,7 +6800,9 @@ void emit_instance_row_table(EmitCtx *ctx, Buf *out) {
     if (!ctx || ctx->n_inst_rows == 0) return;
     buf_puts(out, "static const __tur_inst_row __tur_inst_rows[] = {\n");
     for (uint32_t i = 0; i < ctx->n_inst_rows; i++) {
-        buf_printf(out, "    { \"%s\", %lldLL, &%s },\n",
+        /* No `&`: the symbol is the per-instance dyn TABLE (an array of shim
+         * pointers), which already decays to the address the row wants. */
+        buf_printf(out, "    { \"%s\", %lldLL, (const void *)%s },\n",
                    ctx->inst_row_class[i], (long long)ctx->inst_row_tag[i],
                    ctx->inst_row_dict[i]);
     }
@@ -10562,6 +10589,34 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * to report `(Option float)` is a user-visible behaviour change that does
      * not belong inside a bug fix.  Naming the mismatch as an instantiation is
      * the actionable half and costs nothing. */
+    /* saffron-lang-plan S9 (D8 piece 5): the no-instance panic.
+     *
+     * Two distinct misses, said differently, because the fixes differ: no ROW
+     * for this (class, tag) means the type has no instance of the class at all,
+     * while a NULL SLOT means the instance exists but this method's shape is not
+     * one v0 dispatches dynamically.  Collapsing them into "no instance" would
+     * send a reader looking for a `definstance` that is already there.
+     *
+     * Reports the runtime type NAME rather than the tag: the tag is a hash and
+     * means nothing to a reader, and P1's registry already answers this. */
+    if (g_opt_saffron) {
+    buf_puts(out, "static const void *__tur_inst_slot(const char *cls, const char *meth, "
+                  "int64_t tag, int slot) {\n");
+    buf_puts(out, "    const void *__t = __tur_inst_find(cls, tag);\n");
+    buf_puts(out, "    char __m[224];\n");
+    buf_puts(out, "    if (!__t) {\n");
+    buf_puts(out, "        snprintf(__m, sizeof(__m), \"no instance of %s for %s "
+                  "(dispatching .%s on an any)\", cls, __tur_any_type_name(tag), meth);\n");
+    buf_puts(out, "        tur_panic(__m); return 0;\n    }\n");
+    buf_puts(out, "    const void *__f = ((const void **)__t)[slot];\n");
+    buf_puts(out, "    if (!__f) {\n");
+    buf_puts(out, "        snprintf(__m, sizeof(__m), \"instance %s %s exists but "
+                  "'.%s' cannot be dispatched dynamically yet (only a "
+                  "one-parameter method with a concrete result can)\", cls, "
+                  "__tur_any_type_name(tag), meth);\n");
+    buf_puts(out, "        tur_panic(__m); return 0;\n    }\n");
+    buf_puts(out, "    return __f;\n}\n");
+    }
     buf_puts(out, "static void __tur_any_cast_check(int64_t have, int64_t want) {\n");
     buf_puts(out, "    if (have != want) {\n");
     buf_puts(out, "        char __m[192];\n");

@@ -6370,11 +6370,47 @@ static char *emit_any_from_carrier(EmitCtx *ctx, Buf *body, char *v,
     return emit_carrier_bridge(ctx, body, v, CK_CARRIER, CK_CONCRETE, it);
 }
 
+/* saffron-lang-plan S9 (D8 piece 4): dispatch a typeclass method on the `any`
+ * box's own tag.
+ *
+ * The class name and the method SLOT are compile-time constants -- the
+ * elaborator resolved the method by name, so the only unknown is which instance
+ * -- and the box's tag is the key.  `__tur_inst_slot` walks the registry S9
+ * piece 3 published and panics with the specific reason on a miss (piece 5), so
+ * the call below is reached only with a real function pointer.
+ *
+ * The shim's signature is uniform `(int64_t) -> ret` by construction
+ * (emit_instance_dyn_table), which is what lets ONE cast here serve every
+ * instance -- the thing a raw dict slot cannot do, since its parameter is the
+ * instance's own receiver type. */
+static char *emit_dyn_method(EmitCtx *ctx, Buf *body, const Expr *e) {
+    const Expr *obj = e->as.dyn_method_.obj;
+    TypeClass *tc = e->as.dyn_method_.tc;
+    uint8_t slot = e->as.dyn_method_.method_idx;
+    const char *cls = (tc && tc->name) ? tc->name->name : "?";
+    const char *meth = (tc && slot < tc->n_methods && tc->methods[slot].name)
+                           ? tc->methods[slot].name->name : "?";
+    char *recv = emit_value(ctx, body, obj);
+    const char *rcn = emit_type_c_name(ctx, emit_resolve_type(ctx, e->type));
+
+    Buf out; buf_init(&out);
+    buf_printf(&out,
+        "({ tur_tagged_t __tur_dm = (%s); "
+        "const void *__tur_df = __tur_inst_slot(\"%s\", \"%s\", "
+        "TUR_GETTAG(__tur_dm), %d); "
+        "((%s (*)(int64_t))__tur_df)(TUR_UNTAG(__tur_dm)); })",
+        recv, cls, meth, (int)slot, rcn);
+    buf_putc(&out, '\0');
+    free(recv);
+    return out.data;
+}
+
 static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_DYN_OP:    return emit_dyn_op(ctx, body, e);
         case EX_DYN_CALL:  return emit_dyn_call(ctx, body, e);
         case EX_DYN_FIELD: return emit_dyn_field(ctx, body, e);
+        case EX_DYN_METHOD: return emit_dyn_method(ctx, body, e);
         case EX_NIL_LIT:  return atom_nil();
         case EX_BOOL_LIT: return atom_bool(e->as.b);
         case EX_INT_LIT:  return atom_int_typed(e->as.i, e->type.kind);

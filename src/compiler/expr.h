@@ -839,6 +839,11 @@ typedef enum ExprKind {
      * Saffron the receiver's type is the runtime value's, so the lookup is
      * deferred with it. */
     EX_DYN_FIELD,
+    /* saffron-lang-plan S9/D8: `(.method x)` where `x : any` AND the method
+     * name DID resolve to a typeclass.  The class and slot are static; only
+     * which instance to run is deferred to the box's tag.  Distinct from
+     * EX_DYN_FIELD, whose name resolved to nothing at all. */
+    EX_DYN_METHOD,
     /* DV0-DV1: Dynamic vars (-Xdynamic-vars) */
     EX_DEFDYNAMIC,       /* (defdynamic *name* :type root-expr) -- declare a dynamic var */
     EX_DYNVAR_READ,      /* *name* -- read current value of a dynamic var */
@@ -1724,6 +1729,19 @@ struct Expr {
         /* saffron-lang-plan S4: receiver plus the field NAME, resolved against
          * the runtime value's constructor when it runs. */
         struct { struct Expr *obj; const Symbol *field; } dyn_field_;
+        /* saffron-lang-plan S9 (D8 piece 4): a typeclass method call whose
+         * receiver is an `any`.  The CLASS and the method SLOT are static -- the
+         * elaborator resolved both by name -- and only the instance is deferred,
+         * which is what separates this from EX_DYN_FIELD (where the name itself
+         * is unresolved).  Lowered to a `__tur_inst_find(class, TUR_GETTAG(obj))`
+         * and a call through the dict's slot. */
+        struct {
+            struct Expr     *obj;
+            struct TypeClass *tc;
+            uint8_t          method_idx;
+            struct Expr    **args;      /* the arguments AFTER the receiver */
+            uint32_t         n_args;
+        } dyn_method_;
         /* TY2.3: (cast x T) — checked downcast; panics on tag mismatch. */
         struct {
             struct Expr *value;
