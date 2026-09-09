@@ -2917,7 +2917,10 @@ int cmd_justrun(int argc, char **argv) {
                 chdir_to = argv[++i]; continue;
             }
             fprintf(stderr, "tur run: unknown option '%s'\n", argv[i]);
-            return usage_justrun();
+            /* cli-usage-error-paths-exit-zero: same text as --help, but an
+             * unknown flag is an error -- exit 2, not 0. */
+            (void)usage_justrun();
+            return 2;
         }
         /* First positional = recipe name; rest = recipe args */
         if (!recipe_name) {

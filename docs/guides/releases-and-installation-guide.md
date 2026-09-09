@@ -83,7 +83,7 @@ share/turmeric/stdlib/
 Keep that shape. `tur` finds its runtime archive at `<exe_dir>/../lib` and its
 standard library at `<exe_dir>/../share/turmeric/stdlib`; flattening the tree
 leaves it unable to compile anything (see
-`docs/reported/release-archive-cannot-compile.md`, which also tracks the other
+`docs/archive/release-archive-cannot-compile.md`, which also tracks the other
 platforms, still on the flat layout). Put `<extracted>/bin` on `PATH`, or
 symlink `bin/tur.exe` -- the walk-up resolves through a symlink either way.
 

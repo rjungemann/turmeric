@@ -761,6 +761,30 @@ static int  parse_include_flags(int argc, char **argv, int start, char ***out_di
 static bool is_include_flag(int argc, char **argv, int i, int *consumed);
 static int  usage_run(void);
 
+/* cli-usage-error-paths-exit-zero: a `usage_*` helper prints the subcommand's
+ * usage and returns 0 -- right for `--help`, which is a successful request
+ * for help.  The ERROR paths (an unknown flag, a missing or duplicated input)
+ * print the same text but must exit nonzero, or a script cannot tell a typo
+ * from a successful build: `tur build --typo || exit 1` used to succeed.
+ * They route through here.  2 is the subcommand-level usage status (`tur docs`
+ * and `tur expand` already used it); 64 (EX_USAGE) stays with the top-level
+ * dispatcher's unknown-subcommand path. */
+static int usage_error(int (*usage)(void)) {
+    (void)usage();
+    return 2;
+}
+
+/* True when a `--help` / `-h` appears among the subcommand's arguments.  For
+ * the subcommands whose argv loop has no explicit help arm (emit-c, emit-h),
+ * so that `--help` keeps exiting 0 rather than falling into the unknown-flag
+ * arm, which now exits 2. */
+static bool has_help_flag(int argc, char **argv) {
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) return true;
+    }
+    return false;
+}
+
 /* SC4 forward decl: --no-auto-spice flag inspected by auto_append_spice_src
  * (defined below find_spice_root) but set by parse_no_auto_spice in main(). */
 static bool g_no_auto_spice;
@@ -2357,7 +2381,7 @@ static int locate_runtime_lib(char *libdir, size_t dcap,
          * the src/runtime sources that the archive does not ship -- so `tur run` on a
          * released build failed at the C compile step with "no such file or
          * directory: .../src/runtime/hamt.c".  Verified on macOS and Windows;
-         * see docs/reported/release-archive-cannot-compile.md.
+         * see docs/archive/release-archive-cannot-compile.md.
          *
          * Probing <exe_dir> rather than restructuring the archives is what keeps
          * this non-breaking: tvm already restages into bin/ + lib/, Homebrew and
@@ -2633,7 +2657,7 @@ static int link_command_run(const char *cc, const char *cc_flags,
     /* TUR_SHOW_CC=1: print the assembled cc command.  A link error names the
      * library it could not find, never the flags that failed to find it -- this
      * is what showed the doubled -L behind
-     * docs/reported/release-archive-cannot-compile.md, after three plausible
+     * docs/archive/release-archive-cannot-compile.md, after three plausible
      * theories (flag ordering, quoting, a missing archive) had each been tested
      * and eliminated. */
     if (getenv("TUR_SHOW_CC")) fprintf(stderr, "CC: %s\n", cmd.data);
@@ -4801,7 +4825,7 @@ static int cmd_run(int argc, char **argv) {
     }
     char **user_inc = NULL;
     int    n_user_inc = parse_include_flags(scan_end, argv, 2, &user_inc);
-    if (n_user_inc < 0) { free(user_inc); return usage_run(); }
+    if (n_user_inc < 0) { free(user_inc); return usage_error(usage_run); }
 
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--") == 0) {
@@ -9394,7 +9418,7 @@ static int usage_expand(void) {
         "stdout is suitable for golden-file comparison.\n"
         "\n"
         "flags: same as `tur check` (see `tur check --help`)\n");
-    return 2;
+    return 0;
 }
 
 static int usage_check(void) {
@@ -10037,7 +10061,7 @@ static int cmd_docs(int argc, char **argv) {
             continue;
         }
         fprintf(stderr, "tur docs: unknown argument '%s'\n", argv[i]);
-        return usage_docs() ? 2 : 2;
+        return usage_error(usage_docs);
     }
 
     char root[4096];
@@ -10381,8 +10405,12 @@ static int usage_smt(void) {
         "  1  sat        a model was found\n"
         "  2  unknown    no stage decided it\n"
         "  3  error      unreadable, or outside the accepted fragment\n");
-    return SMT_EXIT_ERROR;
+    return 0;
 }
+
+/* An smt usage ERROR keeps the smt-specific status (3): the answer/exit
+ * protocol above reserves 0-2 for sat/unsat/unknown.  `--help` is 0. */
+static int usage_smt_error(void) { (void)usage_smt(); return SMT_EXIT_ERROR; }
 
 /* Drive a fed session to exhaustion, answering each `(check-sat)`.  Returns the
  * last answer's exit code, or SMT_EXIT_ERROR on a refusal.  `*answered` says
@@ -10497,15 +10525,15 @@ static int cmd_smt(int argc, char **argv) {
             interactive = true;
             continue;
         }
-        if (argv[i][0] == '-' && argv[i][1]) return usage_smt();
-        if (input) return usage_smt();
+        if (argv[i][0] == '-' && argv[i][1]) return usage_smt_error();
+        if (input) return usage_smt_error();
         input = argv[i];
     }
     if (interactive) {
-        if (input) return usage_smt();
+        if (input) return usage_smt_error();
         return cmd_smt_interactive();
     }
-    if (!input) return usage_smt();
+    if (!input) return usage_smt_error();
 
     FILE *f = fopen(input, "rb");
     if (!f) {
@@ -11364,7 +11392,8 @@ int main(int argc, char **argv) {
         /* SC2: collect -I flags up front so both emit-c forms see them. */
         char **emit_inc = NULL;
         int    n_emit_inc = parse_include_flags(argc, argv, 2, &emit_inc);
-        if (n_emit_inc < 0) { free(emit_inc); return usage_build(); }
+        if (n_emit_inc < 0) { free(emit_inc); return usage_error(usage_build); }
+        if (has_help_flag(argc, argv)) { free(emit_inc); return usage_build(); }
 
         /* tur emit-c [-I <dir>...] [--output-dir <dir> | --build-dir <dir> | -B <dir>]
          *            <file1> [<file2> ...]
@@ -11379,7 +11408,7 @@ int main(int argc, char **argv) {
                 strcmp(argv[i], "-B")            == 0) { od_idx = i; break; }
         }
         if (od_idx >= 0) {
-            if (od_idx + 1 >= argc) { free(emit_inc); return usage_build(); }
+            if (od_idx + 1 >= argc) { free(emit_inc); return usage_error(usage_build); }
             const char *out_dir = argv[od_idx + 1];
             /* Inputs are every non-flag arg that isn't --output-dir or its
              * value or a -I value.  Build a clean inputs list. */
@@ -11390,7 +11419,7 @@ int main(int argc, char **argv) {
                 if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
                 if (i == od_idx) { i++; continue; }   /* skip --output-dir and its value */
                 if (strcmp(argv[i], "--no-abi-cache") == 0) continue; /* J6: global, skip */
-                if (argv[i][0] == '-') { free(inputs); free(emit_inc); return usage_build(); }
+                if (argv[i][0] == '-') { free(inputs); free(emit_inc); return usage_error(usage_build); }
                 inputs[n_inputs++] = argv[i];
             }
             /* SC4+SC5: auto-discover spice src + cross-spice deps for the
@@ -11423,13 +11452,13 @@ int main(int argc, char **argv) {
             int c;
             if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
             if (argv[i][0] != '-') {
-                if (input) { free(emit_inc); return usage_build(); }
+                if (input) { free(emit_inc); return usage_error(usage_build); }
                 input = argv[i];
                 continue;
             }
-            free(emit_inc); return usage_build();
+            free(emit_inc); return usage_error(usage_build);
         }
-        if (!input) { free(emit_inc); return usage_build(); }
+        if (!input) { free(emit_inc); return usage_error(usage_build); }
         char **ec_owned = NULL; int n_ec_owned = 0;
         Ls2ResolverCtx ec_ls2 = {0};
         auto_append_spice_includes(input, &emit_inc, &n_emit_inc,
@@ -11448,19 +11477,20 @@ int main(int argc, char **argv) {
          * SC4+SC5: auto-discover enclosing spice src/ and dep src/. */
         char **eh_inc = NULL;
         int    n_eh_inc = parse_include_flags(argc, argv, 2, &eh_inc);
-        if (n_eh_inc < 0) { free(eh_inc); return usage_build(); }
+        if (n_eh_inc < 0) { free(eh_inc); return usage_error(usage_build); }
+        if (has_help_flag(argc, argv)) { free(eh_inc); return usage_build(); }
         const char *input = NULL;
         for (int i = 2; i < argc; i++) {
             int c;
             if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
             if (argv[i][0] != '-') {
-                if (input) { free(eh_inc); return usage_build(); }
+                if (input) { free(eh_inc); return usage_error(usage_build); }
                 input = argv[i];
                 continue;
             }
-            free(eh_inc); return usage_build();
+            free(eh_inc); return usage_error(usage_build);
         }
-        if (!input) { free(eh_inc); return usage_build(); }
+        if (!input) { free(eh_inc); return usage_error(usage_build); }
         char **eh_owned = NULL; int n_eh_owned = 0;
         Ls2ResolverCtx eh_ls2 = {0};
         auto_append_spice_includes(input, &eh_inc, &n_eh_inc,
@@ -11482,7 +11512,7 @@ int main(int argc, char **argv) {
          * `src/` so editors / format-on-save don't need explicit -I. */
         char       **check_inc = NULL;
         int          n_check_inc = parse_include_flags(argc, argv, 2, &check_inc);
-        if (n_check_inc < 0) { free(check_inc); return usage_check(); }
+        if (n_check_inc < 0) { free(check_inc); return usage_error(usage_check); }
         const char *input = NULL;
         for (int i = 2; i < argc; i++) {
             if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -11496,13 +11526,13 @@ int main(int argc, char **argv) {
                 continue;
             }
             if (argv[i][0] != '-') {
-                if (input) { free(check_inc); return usage_check(); }
+                if (input) { free(check_inc); return usage_error(usage_check); }
                 input = argv[i];
                 continue;
             }
-            free(check_inc); return usage_check();
+            free(check_inc); return usage_error(usage_check);
         }
-        if (!input) { free(check_inc); return usage_check(); }
+        if (!input) { free(check_inc); return usage_error(usage_check); }
         /* A directory argument checks every .tur file under it (project /
          * spice mode), mirroring `tur test <dir>`. */
         if (is_directory(input)) {
@@ -11549,7 +11579,7 @@ int main(int argc, char **argv) {
          * include-path plumbing as `tur check`. */
         char       **exp_inc = NULL;
         int          n_exp_inc = parse_include_flags(argc, argv, 2, &exp_inc);
-        if (n_exp_inc < 0) { free(exp_inc); return usage_expand(); }
+        if (n_exp_inc < 0) { free(exp_inc); return usage_error(usage_expand); }
         const char *input = NULL;
         for (int i = 2; i < argc; i++) {
             if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -11563,13 +11593,13 @@ int main(int argc, char **argv) {
                 continue;
             }
             if (argv[i][0] != '-') {
-                if (input) { free(exp_inc); return usage_expand(); }
+                if (input) { free(exp_inc); return usage_error(usage_expand); }
                 input = argv[i];
                 continue;
             }
-            free(exp_inc); return usage_expand();
+            free(exp_inc); return usage_error(usage_expand);
         }
-        if (!input) { free(exp_inc); return usage_expand(); }
+        if (!input) { free(exp_inc); return usage_error(usage_expand); }
         char **exp_owned = NULL; int n_exp_owned = 0;
         Ls2ResolverCtx exp_ls2 = {0};
         auto_append_spice_includes(input, &exp_inc, &n_exp_inc,
@@ -11601,7 +11631,7 @@ int main(int argc, char **argv) {
          * 2 = file error. */
         char       **as_inc = NULL;
         int          n_as_inc = parse_include_flags(argc, argv, 2, &as_inc);
-        if (n_as_inc < 0) { free(as_inc); return usage_check(); }
+        if (n_as_inc < 0) { free(as_inc); return usage_error(usage_check); }
         const char *input = NULL;
         for (int i = 2; i < argc; i++) {
             if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -11615,13 +11645,13 @@ int main(int argc, char **argv) {
                 continue;
             }
             if (argv[i][0] != '-') {
-                if (input) { free(as_inc); return usage_check(); }
+                if (input) { free(as_inc); return usage_error(usage_check); }
                 input = argv[i];
                 continue;
             }
-            free(as_inc); return usage_check();
+            free(as_inc); return usage_error(usage_check);
         }
-        if (!input) { free(as_inc); return usage_check(); }
+        if (!input) { free(as_inc); return usage_error(usage_check); }
         char **as_owned = NULL; int n_as_owned = 0;
         Ls2ResolverCtx as_ls2 = {0};
         auto_append_spice_includes(input, &as_inc, &n_as_inc,
@@ -11731,7 +11761,7 @@ int main(int argc, char **argv) {
          * and the positional input. */
         char  **build_inc = NULL;
         int     n_build_inc = parse_include_flags(argc, argv, 2, &build_inc);
-        if (n_build_inc < 0) { free(build_inc); return usage_build(); }
+        if (n_build_inc < 0) { free(build_inc); return usage_error(usage_build); }
         for (int i = 2; i < argc; i++) {
             int c;
             if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
@@ -11771,13 +11801,13 @@ int main(int argc, char **argv) {
                     free(build_inc); return 1;
                 }
             } else if (argv[i][0] != '-') {
-                if (input) { free(build_inc); return usage_build(); }
+                if (input) { free(build_inc); return usage_error(usage_build); }
                 input = argv[i];
             } else {
-                free(build_inc); return usage_build();
+                free(build_inc); return usage_error(usage_build);
             }
         }
-        if (!input) { free(build_inc); return usage_build(); }
+        if (!input) { free(build_inc); return usage_error(usage_build); }
         /* RP0: --shared only supports directory input -- the single-file
          * build path emits a `static`-by-default function and a main(), so
          * dlsym wouldn't find anything useful. Directory mode runs through
@@ -11888,7 +11918,7 @@ int main(int argc, char **argv) {
         const char *cli_build_dir = NULL;
         char  **comp_inc = NULL;
         int     n_comp_inc = parse_include_flags(argc, argv, 2, &comp_inc);
-        if (n_comp_inc < 0) { free(comp_inc); return usage_build(); }
+        if (n_comp_inc < 0) { free(comp_inc); return usage_error(usage_build); }
         for (int i = 2; i < argc; i++) {
             int c;
             if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
@@ -11913,13 +11943,13 @@ int main(int argc, char **argv) {
             } else if (strcmp(argv[i], "--no-abi-cache") == 0) {
                 /* global, consumed elsewhere */
             } else if (argv[i][0] != '-') {
-                if (input) { free(comp_inc); return usage_build(); }
+                if (input) { free(comp_inc); return usage_error(usage_build); }
                 input = argv[i];
             } else {
-                free(comp_inc); return usage_build();
+                free(comp_inc); return usage_error(usage_build);
             }
         }
-        if (!input) { free(comp_inc); return usage_build(); }
+        if (!input) { free(comp_inc); return usage_error(usage_build); }
         if (is_directory(input)) {
             fprintf(stderr, "tur compile: expects a single .tur file, not a directory\n");
             free(comp_inc); return 1;
@@ -11984,10 +12014,10 @@ int main(int argc, char **argv) {
                 inputs[n_inputs++] = argv[i];
             } else {
                 fprintf(stderr, "tur link: unknown option '%s'\n", argv[i]);
-                free(inputs); return usage_build();
+                free(inputs); return usage_error(usage_build);
             }
         }
-        if (n_inputs == 0) { free(inputs); return usage_build(); }
+        if (n_inputs == 0) { free(inputs); return usage_error(usage_build); }
         int rc = cmd_link(out, inputs, n_inputs, shared, link_flags);
         free(inputs);
         return rc;
@@ -12096,7 +12126,7 @@ int main(int argc, char **argv) {
                 continue;
             }
             fprintf(stderr, "tur repl: unknown option '%s'\n", argv[i]);
-            return usage_repl();
+            return usage_error(usage_repl);
         }
         /* J2 (jit-engine-plan 3.3): spice auto-discovery can build in process
          * through the MIR engine instead of the `tur build --shared`
@@ -12136,7 +12166,7 @@ int main(int argc, char **argv) {
                         "tur repl: unknown --lang '%s' "
                         "(expected \"turmeric\" or \"saffron\")\n",
                         repl_lang_flag);
-                return usage_repl();
+                return usage_error(usage_repl);
             }
         }
         return cmd_repl(watch_mode);
@@ -12171,7 +12201,7 @@ int main(int argc, char **argv) {
     }
     /* E3: tur eval '<expr>' or tur eval --file <file> */
     if (strcmp(cmd, "eval") == 0) {
-        if (argc < 3) return usage_eval();
+        if (argc < 3) return usage_error(usage_eval);
         bool is_file = false;
         const char *src = NULL;
         for (int i = 2; i < argc; i++) {
@@ -12184,7 +12214,7 @@ int main(int argc, char **argv) {
                 src = argv[i];
             }
         }
-        if (!src) return usage_eval();
+        if (!src) return usage_error(usage_eval);
         bool use_color = !no_color && stderr_is_tty();
         if (is_file)
             return cmd_eval(src, use_color, NULL, 0, /*debug=*/false);
@@ -12194,7 +12224,7 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "doc") == 0) {
         if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
             return usage_doc();
-        if (argc != 3) return usage_doc();
+        if (argc != 3) return usage_error(usage_doc);
         return cmd_doc_cli(argv[2]);
     }
     /* OD4: tur docs -- locate/open/serve the rendered guides and API pages. */
@@ -12218,8 +12248,9 @@ int main(int argc, char **argv) {
     }
     /* E13: tur explain — first-class subcommand wrapping --explain */
     if (strcmp(cmd, "explain") == 0) {
-        if (argc < 3 || (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0)))
+        if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
             return usage_explain();
+        if (argc < 3) return usage_error(usage_explain);
         return cmd_explain(argv[2]);
     }
     if (strcmp(cmd, "format") == 0) {
@@ -12234,13 +12265,13 @@ int main(int argc, char **argv) {
             } else if (strcmp(argv[i], "--diff") == 0) {
                 diff_mode = true;
             } else if (argv[i][0] != '-') {
-                if (fmt_input) return usage_format();
+                if (fmt_input) return usage_error(usage_format);
                 fmt_input = argv[i];
             } else {
-                return usage_format();
+                return usage_error(usage_format);
             }
         }
-        if (check_only && diff_mode) return usage_format();
+        if (check_only && diff_mode) return usage_error(usage_format);
         return cmd_format(fmt_input, check_only, diff_mode);
     }
     if (strcmp(cmd, "fmt") == 0)
@@ -12249,7 +12280,7 @@ int main(int argc, char **argv) {
         if (argc == 3 && (strcmp(argv[2], "--help") == 0 ||
                           strcmp(argv[2], "-h") == 0))
             return usage_parse_check();
-        if (argc != 4) return usage_parse_check();
+        if (argc != 4) return usage_error(usage_parse_check);
         return cmd_parse_check(argv[2], argv[3]);
     }
     if (strcmp(cmd, "demangle") == 0)
@@ -12257,7 +12288,7 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "test") == 0) {
         if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
             return usage_test();
-        if (argc != 3) return usage_test();
+        if (argc != 3) return usage_error(usage_test);
         return cmd_test(argv[2]);
     }
     /* Phase PKG-1: Spice package manager commands */

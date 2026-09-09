@@ -12,9 +12,9 @@
 #     (docs/reported/windows-spice-fetch-shell-quoting.md)
 #   - pkg_lock_read sized with ftell and read in text mode, so it rejected every
 #     tur.lock tur itself wrote
-#     (docs/reported/windows-text-mode-read-rejects-own-files.md)
+#     (docs/archive/windows-text-mode-read-rejects-own-files.md)
 #   - the integrity hash shelled out to sha256sum, which MinGW does not ship
-#     (docs/reported/pkg-hash-shells-out-to-sha256sum.md)
+#     (docs/archive/pkg-hash-shells-out-to-sha256sum.md)
 #   - rename() does not replace on Windows, so the lock was write-once
 #     (docs/archive/windows-rename-does-not-replace.md)
 #

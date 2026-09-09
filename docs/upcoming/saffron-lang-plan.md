@@ -1732,6 +1732,7 @@ defn -- `(add 1 2)` is 3 under either dialect and would pin nothing.
 That work also surfaced `cli-usage-error-paths-exit-zero`: an unknown flag is
 reported and then exits 0, codebase-wide, so `tur build --typo || exit 1`
 succeeds. Filed rather than fixed here -- it is every subcommand, not this one.
+(Fixed 2026-09-09: every error path exits 2 via `usage_error`; archived.)
 
 **`tur init --saffron` is DONE (2026-09-08)**, and it found the FOURTH entry
 point hardcoding `READER_TURMERIC`. `load_project_prelude` (main.c) built its
@@ -1755,7 +1756,8 @@ Checking it did turn up an unrelated defect in that parser, filed as
 `gendocs-misparses-the-spaced-annotation-form`: the SPACED `[a : int]` form
 yields a phantom parameter named `int` and a return type of `':'`, affecting
 1064 of 1999 stdlib definitions. Latent -- `docs/api/` is not checked in -- but
-it would corrupt the reference on the next `tur run docs`.
+it would corrupt the reference on the next `tur run docs`. (Fixed 2026-09-09:
+both spellings parse alike, 0 of 2002 affected; archived.)
 
 **The syntax packs are DONE (2026-09-08), and the item was mis-scoped.** It
 reads as though packs exist and need a Saffron update. They did not exist:

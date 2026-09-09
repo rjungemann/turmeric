@@ -1301,7 +1301,7 @@ bool pkg_lock_read(const char *path, PkgLockFile *out) {
      * line endings, so on Windows the lockfile was never read AT ALL: the
      * integrity check never ran, and the pinned :resolved refs never applied.
      * The Turmeric reader treats CR as whitespace, so the bytes are fine.
-     * docs/reported/windows-text-mode-read-rejects-own-files.md */
+     * docs/archive/windows-text-mode-read-rejects-own-files.md */
     FILE *f = fopen(path, "rb");
     if (!f) return false; /* not an error -- no lock file yet */
 
@@ -1604,7 +1604,7 @@ bool pkg_sha256_file(const char *path, char out[65]) {
  * platforms for a tree containing symlinks or CRLF-translated files -- git
  * itself materializes those differently -- which is why a mismatch is only
  * ever reported for a hash this same algorithm produced (PKG_TREE_HASH_TAG).
- * See docs/reported/pkg-hash-shells-out-to-sha256sum.md. */
+ * See docs/archive/pkg-hash-shells-out-to-sha256sum.md. */
 
 /* Directory names never descended into.  `.git` because it is VCS metadata
  * rather than content (see 1 above); the rest because they are tur's own build

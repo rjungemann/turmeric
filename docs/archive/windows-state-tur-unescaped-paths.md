@@ -63,5 +63,5 @@ Fixing it moved `run-install.sh` on Windows from 16 passed / 18 failed to
 - [windows-rename-does-not-replace](windows-rename-does-not-replace.md) -- the
   *other* reason the registry could not be updated, found immediately after this
   one and gating six more of the same tests.
-- `docs/reported/windows-text-mode-read-rejects-own-files.md` -- the same
+- `docs/archive/windows-text-mode-read-rejects-own-files.md` -- the same
   "tur cannot read a file tur wrote" shape, on the other side (the read).

@@ -23,13 +23,12 @@
 #      types that line first.
 #   3. The DEFAULT is still Turmeric.  Without this a "fix" that made every
 #      session Saffron would pass 1 and 2.
-#   4. A bad `--lang` is REPORTED and does not start a session -- it must not
-#      fall back to Turmeric silently.  Asserted on the MESSAGE, not the exit
-#      code: `usage_repl()` returns 0 and every error path in this subcommand
-#      reuses it, so `tur repl --bogus-flag` also exits 0.  That is
-#      codebase-wide (`tur build --bogus-flag` does the same) and filed
-#      separately as cli-usage-error-paths-exit-zero; making this one flag the
-#      exception would be a worse inconsistency than the bug.
+#   4. A bad `--lang` is REPORTED, exits nonzero, and does not start a
+#      session -- it must not fall back to Turmeric silently.  The exit code
+#      was not asserted at first: every error path in this subcommand reused
+#      `usage_repl()`, which returns 0, so `tur repl --bogus-flag` also exited
+#      0 (cli-usage-error-paths-exit-zero, since fixed: error paths go through
+#      `usage_error`, which exits 2, and the status is asserted here too).
 #
 # Skips cleanly (exit 0) when the binary is missing, like its siblings.
 
@@ -94,12 +93,12 @@ else
 fi
 
 # --- 4. a bad dialect is reported, and starts nothing -----------------------
-out="$("$TUR" repl --lang saffrom 2>&1)"
-if grep -q "unknown --lang 'saffrom'" <<<"$out" \
+out="$("$TUR" repl --lang saffrom 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && grep -q "unknown --lang 'saffrom'" <<<"$out" \
    && ! grep -q 'type :help for help' <<<"$out"; then
-    echo "ok   --lang saffrom: named in an error, no session started"
+    echo "ok   --lang saffrom: named in an error, exit $rc, no session started"
 else
-    echo "FAIL --lang saffrom: expected the error and no REPL banner"
+    echo "FAIL --lang saffrom: expected the error, a nonzero exit (got $rc) and no REPL banner"
     sed 's/^/       /' <<<"$out" | head -4
     fails=$((fails + 1))
 fi

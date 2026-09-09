@@ -42,12 +42,28 @@ def _parse_params(bracket_content):
     are captured and prepended to the parameter name so they appear in the
     rendered signature, e.g. '^unique v' instead of 'v'.
     """
-    tokens = bracket_content.strip().lstrip('[').split(']')[0].split()
+    inner = bracket_content.strip()
+    if inner.startswith('['):
+        inner = inner[1:]
+    if inner.endswith(']'):
+        inner = inner[:-1]
+    tokens = _split_sig_tokens(inner)
     params = []
     i = 0
     pending_anns = []  # UT3: accumulated ^-annotations for the next param
     while i < len(tokens):
         tok = tokens[i]
+        if tok == ':':
+            # gendocs-misparses-the-spaced-annotation-form: the SPACED form
+            # `a : int` puts the colon in its own token.  It is an infix
+            # marker joining the previous name to the next token, so attach
+            # that token as the type -- spelled fused (':int') so both
+            # spellings take the same downstream path.  A trailing bare ':'
+            # with nothing after it is dropped.
+            if params and i + 1 < len(tokens):
+                params[-1] = _with_type(params[-1], ':' + tokens[i + 1])
+            i += 2
+            continue
         if tok == '&':
             i += 1
             if i < len(tokens):
@@ -68,8 +84,7 @@ def _parse_params(bracket_content):
             # Note: bare 'ptr' without '<' is a valid field/param NAME in Turmeric,
             # so we only treat 'ptr<...' (with the angle bracket) as a type token.
             if params:
-                name, _ = params[-1]
-                params[-1] = (name, tok)
+                params[-1] = _with_type(params[-1], tok)
             i += 1
             continue
         # Regular parameter name -- apply any pending annotations
@@ -82,21 +97,98 @@ def _parse_params(bracket_content):
     return params
 
 
+def _with_type(param, type_tok):
+    """
+    Attach a type token to a parsed (name, type) pair.  A rest parameter
+    (`& rest :cstr`) keeps its '...' marker and carries the element type
+    after it ('... :cstr'), so the renderer can show both the `&` and the
+    type rather than one or the other.
+    """
+    name, cur = param
+    if cur and cur.startswith('...'):
+        return (name, '... ' + type_tok)
+    return (name, type_tok)
+
+
+def _split_sig_tokens(text):
+    """
+    Split a signature fragment on whitespace, keeping a balanced `(...)`,
+    `[...]` or `<...>` group as ONE token, so a compound type such as
+    `(Option int)`, `(fn [int] int)` or `ptr<Foo>` is not broken into a
+    phantom parameter per word.
+    """
+    tokens = []
+    cur = []
+    depth = 0
+    for ch in text:
+        if ch in '([<':
+            depth += 1
+        elif ch in ')]>':
+            depth = max(depth - 1, 0)
+        if ch.isspace() and depth == 0:
+            if cur:
+                tokens.append(''.join(cur))
+                cur = []
+            continue
+        cur.append(ch)
+    if cur:
+        tokens.append(''.join(cur))
+    return tokens
+
+
+# An effect row between the parameter vector and the return type:
+#   (defn f [x : int] #fx{Unsafe} : int ...)
+_FX_ROW_RE = re.compile(r'^\s*#fx\{[^}]*\}')
+
+
+def _return_type_after_bracket(rest):
+    """
+    The return type that follows a closing `]`, in either spelling:
+    fused `] :int`, spaced `] : int`, or a bare `ptr<...>`.  An `#fx{...}`
+    effect row before it is skipped.  None when the body starts right away.
+    """
+    rest = _FX_ROW_RE.sub('', rest, count=1)
+    parts = _split_sig_tokens(rest.strip())
+    if not parts:
+        return None
+    if parts[0] == ':':
+        return ':' + parts[1] if len(parts) > 1 else None
+    if parts[0].startswith(':') or parts[0].startswith('ptr<'):
+        return parts[0]
+    return None
+
+
+def _find_bracket(text):
+    """
+    Locate the first `[...]` vector in text, honouring nesting so that a
+    field type like `(fn [int] int)` inside the vector does not end it
+    early.  Returns (content, end_index) or (None, -1).
+    """
+    start = text.find('[')
+    if start == -1:
+        return None, -1
+    depth = 0
+    for i in range(start, len(text)):
+        ch = text[i]
+        if ch == '[':
+            depth += 1
+        elif ch == ']':
+            depth -= 1
+            if depth == 0:
+                return text[start + 1:i], i + 1
+    return None, -1
+
+
 def _extract_return_type(line):
     """
     Extract return type from a defn signature line.
-    Looks for a ':type' or 'ptr<...>' token after the closing bracket.
+    Looks for a ':type' / ': type' / 'ptr<...>' token after the closing bracket.
     """
     # After the closing ] there may be a return type token
     bracket_end = line.rfind(']')
     if bracket_end == -1:
         return None
-    rest = line[bracket_end + 1:].strip()
-    # First token of rest is the return type (if it starts with : or ptr)
-    parts = rest.split()
-    if parts and (parts[0].startswith(':') or parts[0].startswith('ptr')):
-        return parts[0]
-    return None
+    return _return_type_after_bracket(line[bracket_end + 1:])
 
 
 def _parse_docstring(lines):
@@ -517,15 +609,16 @@ def _parse_def_line(kind, text):
         if ann_m:
             extra['struct_ann'] = ann_m.group(1)
 
-    # Extract params bracket
-    bracket_m = re.search(r'\[([^\]]*)\]', rest)
+    # Extract params bracket (nesting-aware: `(fn [int] int)` as a field
+    # type must not end the vector early).
+    bracket_inner, bracket_end = _find_bracket(rest)
     params = []
     return_type = None
-    if bracket_m:
+    if bracket_inner is not None:
         # Phase TM0: For defstruct, detect type-param vector [K V ...] (symbols only, no colons).
         # If present, record as type_params and the bracket is not the field list.
         if kind == 'defstruct':
-            bracket_content = bracket_m.group(1).strip()
+            bracket_content = bracket_inner.strip()
             # A type-params list contains only bare symbol names (no ':' characters)
             if bracket_content and ':' not in bracket_content:
                 tp_names = bracket_content.split()
@@ -534,12 +627,10 @@ def _parse_def_line(kind, text):
                     # No field params to parse from this bracket
                     params = []
                     return name, params, return_type, extra
-        params = _parse_params('[' + bracket_m.group(1) + ']')
-        after_bracket = rest[bracket_m.end():]
-        # Return type is the first :type or ptr token
-        parts = after_bracket.strip().split()
-        if parts and (parts[0].startswith(':') or parts[0].startswith('ptr')):
-            return_type = parts[0]
+        params = _parse_params('[' + bracket_inner + ']')
+        after_bracket = rest[bracket_end:]
+        # Return type is the first :type / ': type' / ptr<...> token
+        return_type = _return_type_after_bracket(after_bracket)
 
     return name, params, return_type, extra
 
@@ -1292,7 +1383,7 @@ def _render_signature(defn):
         return f"(definstance {name.replace('[', ' [').replace(']', ']')})"
 
     param_str = ' '.join(
-        f"{p} {t}" if t and t != '...' else (f"& {p}" if t == '...' else p)
+        (f"& {p}" + t[3:] if t.startswith('...') else f"{p} {t}") if t else p
         for p, t in params
     )
     sig = f"({name}"

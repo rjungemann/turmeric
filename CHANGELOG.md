@@ -2,6 +2,33 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- **A bad subcommand flag exits nonzero.** `tur build --typo`, `tur repl
+  --bogus`, `tur run --bogus` and every other subcommand printed a usage error
+  and then exited 0, because the error paths reused the `--help` helper and
+  inherited its status -- so `tur build --typo || exit 1` reported success.
+  Every usage error path (unknown flag, missing or duplicated input, bad
+  `--lang`) now exits 2; `--help` still exits 0 everywhere, including
+  `tur expand --help` (exited 2) and `tur smt --help` (exited 3), which had
+  the inverse bug. `tur emit-c --help` / `tur emit-h --help` are explicit
+  help arms now rather than an unknown flag that happened to print usage.
+- **`tools/gendocs.py` reads the spaced annotation form.** `(defn f [a : int]
+  : int ...)` -- the spelling 612 stdlib defns and the style guide use -- was
+  parsed as parameters `a` (typed `:`) and `int` (untyped) with a return type
+  of `:`, so 53% of the API reference would have rendered with a wrong
+  signature on the next `tur run docs`. Both spellings now parse alike, a
+  compound type such as `(Option int)` or `(fn [int] int)` stays one type, and
+  an `#fx{...}` row no longer hides the return type.
+- **`add_test` under `src/CMakeLists.txt` registers.** `enable_testing()` ran
+  after `add_subdirectory(src)`, so `tur_trail` built, passed by hand, and was
+  never listed by `ctest -N` or run in CI. The call moved above the
+  subdirectory; `tur_trail` runs (and passes), and a new lint
+  (`tur_ctest_registration_lint`) fails if a test declared there goes missing
+  from `ctest -N` again.
+
 ## [0.44.2] -- 2026-09-06
 
 ### Fixed
@@ -88,7 +115,7 @@ All notable changes to Turmeric are documented here.
   instance of this bug class after `find_stdlib_beside_exe` and
   `rewrite_autolink_relative_paths`. Known remaining Windows gaps in LSP
   cross-module resolution and DAP time-travel replay are tracked in
-  `docs/reported/lsp-dap-windows-gaps.md`.
+  `docs/archive/lsp-dap-windows-gaps.md`.
 
 ## [0.44.0] -- 2026-09-05
 
