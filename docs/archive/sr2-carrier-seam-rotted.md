@@ -15,7 +15,7 @@ in every cell. See **Defect 3: resolution** at the end.
 below is green with no env vars set. What is broken is the **bisection hatch**
 `TUR_SR2_APP_SUM_BYVALUE=0`, which is the documented way to A/B a suspected
 representation bug against the old int64 carrier
-(`docs/upcoming/sum-representation-plan.md` SR2c, `src/main.c:10280`). It is
+(`docs/archive/sum-representation-plan.md` SR2c, `src/main.c:10280`). It is
 the instrument you reach for when something is already wrong, so it failing is
 a second problem stacked on whatever sent you to it.
 

@@ -44,7 +44,7 @@ typedef enum TuriTag {
                           * (arena-resident -- the env's sym_arena or an
                           * eval arena; never scratch, never individually
                           * freed).  Stage 1 of
-                          * docs/upcoming/macro-system-direction-plan.md.
+                          * docs/archive/macro-system-direction-plan.md.
                           * Appended at the end: "got tag %d" messages
                           * bake tag numbers into error text. */
 } TuriTag;

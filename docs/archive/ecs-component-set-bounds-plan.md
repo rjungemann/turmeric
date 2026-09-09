@@ -6,6 +6,13 @@ description: The third polymorphism encoding for ECS systems -- a structural "th
 
 # ECS Component-Set Bounds (`ECB`)
 
+> **Archived 2026-09-09.** Resolved negatively: the ECS profile this plan
+> gated on now exists and declines the feature (twenty million dictionary
+> lookups measured inside run-to-run noise), and the cheap declaration-site
+> step shipped spice-side as `defworld-classes` on 2026-08-01. The structural
+> `(has ...)` bound stays unscheduled; if it is ever revived, it is on the
+> ergonomics argument alone.
+
 **Status:** the cheap step (3) is **done 2026-08-01** -- shipped spice-side as
 `defworld-classes`, though not in the shape this plan recommended; see the note
 under "Why this is not urgent". The structural `(has ...)` bound itself is not
@@ -50,7 +57,7 @@ started and remains deliberately unscheduled.
 > argument alone -- and `defworld-classes` already took most of that.
 
 Split out of
-[`ecs-refinement-typed-apis-plan.md`](ecs-refinement-typed-apis-plan.md),
+[`ecs-refinement-typed-apis-plan.md`](../upcoming/v1/ecs-refinement-typed-apis-plan.md),
 where it was tracked as a refinement type and should not have been.
 
 ## Why it moved
@@ -70,7 +77,7 @@ about the integer, and the machinery that decides it -- the normalized VC, the
 staged solver, congruence closure -- reasons about integers, reals, booleans,
 and uninterpreted functions. `/has Pos` constrains a **type**: it asks whether
 `W` has a field named `Pos`. The VC term language has no types in it, and
-[the guide](../../guides/refinement-types-guide.md) lists "no refinements on
+[the guide](../guides/refinement-types-guide.md) lists "no refinements on
 type parameters" as a `[prototype]` limit that is not planned.
 
 Encoding a structural type question through the SMT layer would mean teaching
@@ -173,7 +180,7 @@ The pieces that would be needed:
   to construct and no dictionary to pass, which is the entire point.
 - **Monomorphization**, since with no dictionary the polymorphic body must be
   specialized per world it is instantiated at. Turmeric already monomorphizes
-  (see [monomorphization-abi-guide.md](../../guides/monomorphization-abi-guide.md));
+  (see [monomorphization-abi-guide.md](../guides/monomorphization-abi-guide.md));
   the question is whether a structurally-bounded parameter routes through the
   same path, and that is the first thing to establish.
 - **A diagnostic** naming the missing component and the world, pointing at the
@@ -200,9 +207,9 @@ larger and the ECS is the only known consumer.
 
 ## References
 
-- [ecs-refinement-typed-apis-plan.md](ecs-refinement-typed-apis-plan.md) --
+- [ecs-refinement-typed-apis-plan.md](../upcoming/v1/ecs-refinement-typed-apis-plan.md) --
   where this was mis-filed
-- [refinement-types-guide.md](../../guides/refinement-types-guide.md) -- the
+- [refinement-types-guide.md](../guides/refinement-types-guide.md) -- the
   `[prototype]` limit on refinements over type parameters
 - `docs/guides/ecs-guide.md` -- the polymorphism section, encodings (a) and (b)
 - `docs/guides/ecs-vs-haskell-ecs.md` -- the comparison row this would add to

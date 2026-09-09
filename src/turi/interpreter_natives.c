@@ -4370,7 +4370,7 @@ TuriValue native_contract_enabled(TuriEnv *env, TuriValue *args,
  * ---------------------------------------------------------------------- */
 /* ============================================================================
  * SYNTAX natives -- first-class syntax objects (TURI_SYNTAX wrapping a
- * compiler Form*).  Stage 1 of docs/upcoming/macro-system-direction-plan.md:
+ * compiler Form*).  Stage 1 of docs/archive/macro-system-direction-plan.md:
  * the value plumbing that macro-time evaluation (Stage 2's defmacro*) will
  * run on, landed first as REPL/interpreter surface so it is exercisable on
  * its own.  Forms constructed here are allocated from env->sym_arena
@@ -4855,6 +4855,6 @@ void turi_env_register_interpreter_natives(TuriEnv *env) {
      * schema.tur's inline-C constructors/decoder/accessors (Layer 2). */
     wk_register_schema_natives(env);
     /* SYNTAX (turi): first-class syntax objects (TURI_SYNTAX) -- Stage 1 of
-     * docs/upcoming/macro-system-direction-plan.md. */
+     * docs/archive/macro-system-direction-plan.md. */
     wk_register_syntax_natives(env);
 }

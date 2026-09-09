@@ -13,7 +13,7 @@ description: An `(Option P)` over a non-nullable pointer carried AS that pointer
 eligible population, now including the generic-helper and closure-comparator
 shapes).
 
-Slice B of [sum-representation-plan.md](../upcoming/sum-representation-plan.md) SR3. Slice A
+Slice B of [sum-representation-plan.md](sum-representation-plan.md) SR3. Slice A
 (nullary `None` as the null carrier) shipped default-on 2026-08-27. This is the
 other half: `some(p)` carried AS `p`.
 
@@ -227,7 +227,7 @@ used to carry; closed, pinned by
 3. **The measurement removes the urgency.** Filed 2026-08-30 as
    [option-niche-container-elements-box-at-parity](option-niche-container-elements-box-at-parity.md)
    and **resolved 2026-09-03 by CE1/CE2**
-   ([container-element-form-plan](../upcoming/container-element-form-plan.md)): a niche
+   ([container-element-form-plan](container-element-form-plan.md)): a niche
    element now lands in its Vec slot as the payload word, and the container
    row reads 17.8 MB against 79.7 MB (table above). The direct-position win
    was already real; the container win is now real too, and it is not
@@ -336,7 +336,7 @@ unsound (mixed conventions) or new ABI for a fact monomorphization makes
 free.
 
 **Refined into a concrete plan 2026-08-28:**
-[container-element-form-plan.md](../upcoming/container-element-form-plan.md) (CE) --
+[container-element-form-plan.md](container-element-form-plan.md) (CE) --
 the invariant made enforceable (census the undecidable sites first, then a
 loud diagnostic on the residue, never a guess), one chokepoint
 (`container_elem_form` beside `repr_of`), Vec-only, scoped INSIDE
@@ -495,7 +495,7 @@ container parity row breaking.
    per live value against 184-310 bytes of `.text` per translation unit, on
    functions called a handful of times per program. If these sites are ever
    retyped it should be for the reason section 4 of
-   [sum-representation-plan.md](../upcoming/sum-representation-plan.md) gives for the whole
+   [sum-representation-plan.md](sum-representation-plan.md) gives for the whole
    SR programme -- expressiveness, an invariant the type currently cannot
    state -- and the niche then follows for free. Retyping stdlib's `(Option
    cstr)` API to chase 8 bytes would be a breaking change to a public surface

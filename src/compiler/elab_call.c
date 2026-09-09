@@ -5055,7 +5055,7 @@ static bool call_comparator_gets_slot_words(const Binding *fn_binding,
  * receives a box address, so a value compares unequal to itself.
  *
  * That the HAMT boxes where a Vec slot does not is CE4, still deferred
- * (docs/upcoming/container-element-form-plan.md).  This rule does not decide
+ * (docs/archive/container-element-form-plan.md).  This rule does not decide
  * that question; it only makes the read side agree with whatever the container
  * currently stores. */
 static bool call_comparator_gets_carrier_box(const Binding *fn_binding,

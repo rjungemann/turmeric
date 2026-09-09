@@ -105,7 +105,7 @@ different trace.) Small per fixture, and per CONSTRUCTION -- a loop building
 
 ## Why this is not the erased-path residue
 
-Distinct from [RM1](../upcoming/reclamation-plan.md)'s subject in every way
+Distinct from [RM1](reclamation-plan.md)'s subject in every way
 that matters for a fix:
 
 - It is the **specialized** path, not the erased base -- the monomorph is
@@ -434,6 +434,6 @@ it segfaults before any drop-glue question arises.
 
 - [carrier-sum-option-boxes-have-no-owner](../reported/carrier-sum-option-boxes-have-no-owner.md)
   -- the erased-path sibling, whose SR2a narrowing this report qualifies.
-- [reclamation-plan.md](../upcoming/reclamation-plan.md) -- RM1 (built, erased
+- [reclamation-plan.md](reclamation-plan.md) -- RM1 (built, erased
   path) and RM2 (the recursive spine, which `re-string`'s `ctor_RxCons` leaks
   belong to, not to this report).

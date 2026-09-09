@@ -92,7 +92,7 @@ conventions apart -- the decision has to be made where the closure's
 parameters are materialized.
 
 That the HAMT stores a box where a Vec slot stores the word is CE4
-(`docs/upcoming/container-element-form-plan.md`, "decide Map/Set/HAMT by
+(`docs/archive/container-element-form-plan.md`, "decide Map/Set/HAMT by
 evidence, not momentum"), still deferred.  This report is about the read side
 being inconsistent with itself either way and does not depend on how CE4 lands.
 
@@ -151,7 +151,7 @@ answered "eq" for every input, so an equal-only probe reports success).
 - `stdlib/vec.tur` -- the `vec-eq?` docstring's "declare the parameter types"
   advice needs its Map/Set counter-note (plus `stdlib/docstrings.tur` regen).
 - `src/compiler/diag.c` -- the TUR-E0715 explanation, same reason.
-- `docs/upcoming/container-element-form-plan.md` -- CE3 is recorded closed for
+- `docs/archive/container-element-form-plan.md` -- CE3 is recorded closed for
   the word-passing half; this is the rest of the same question.
 
 

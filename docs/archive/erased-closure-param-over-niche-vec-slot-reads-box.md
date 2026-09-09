@@ -8,7 +8,7 @@ description: A vec-eq? comparator with erased parameters unboxed a raw Vec slot 
 
 **Severity: medium** -- a silent wrong read on the DEFAULT path (since the
 Option niche graduated, 2026-09-03), for one shape the checker admits.  The
-residue the [container-element-form plan](../upcoming/container-element-form-plan.md)
+residue the [container-element-form plan](container-element-form-plan.md)
 CE3 recorded; it became a default-path fact with the graduation.
 
 **RESOLVED 2026-09-04.**  Both fix directions were built, each where the other

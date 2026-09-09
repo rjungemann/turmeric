@@ -95,7 +95,7 @@ a failure as a regression.
 ## Found while
 
 Writing the two-module fixtures for G3 of
-[docs/upcoming/mutable-globals-plan.md](../upcoming/mutable-globals-plan.md),
+[docs/archive/mutable-globals-plan.md](mutable-globals-plan.md),
 which needed to know how a multi-module fixture is laid out.
 `module-transitive-imports` looked like the precedent and turned out not to run.
 

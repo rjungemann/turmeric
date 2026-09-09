@@ -5,7 +5,7 @@
 # A MULTI-VARIANT PARAMETRIC sum monomorph ((Opt2 int), (PRes cstr), and above
 # all (Option A) / (Result A B)) flows BY VALUE by default since
 # parametric-sum-byvalue graduated on 2026-08-27
-# (docs/upcoming/sum-representation-plan.md SR2c).  TUR_SR2_APP_SUM_BYVALUE=0
+# (docs/archive/sum-representation-plan.md SR2c).  TUR_SR2_APP_SUM_BYVALUE=0
 # restores the int64 carrier for bisection -- which means nothing in the
 # ordinary suite compiles a parametric sum through the carrier any more.  A gate
 # nobody turns on decays to a gate nobody notices (the lesson of

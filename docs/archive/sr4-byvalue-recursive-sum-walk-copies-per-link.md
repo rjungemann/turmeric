@@ -230,7 +230,7 @@ rounds of an 8-link chain leak 800 boxes, not 8:
 
 **The counts are equal**, so this is not something the SR4 default flip
 introduced -- by value makes each leaked box bigger, not more numerous.  It is
-[reclamation-plan.md](../upcoming/reclamation-plan.md)'s **RM2**, which names
+[reclamation-plan.md](reclamation-plan.md)'s **RM2**, which names
 this exact allocation ("the per-node spine box of a self-recursive sum, which
 is what `logic.tur` allocates") and explains why RM1's scope-exit rule cannot
 reach it: "a tree's nodes escape their constructor by construction". RM2 is

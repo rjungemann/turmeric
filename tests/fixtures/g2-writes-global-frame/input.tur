@@ -1,4 +1,4 @@
-;; G2 (docs/upcoming/mutable-globals-plan.md section 4.2): a `#writes` frame
+;; G2 (docs/archive/mutable-globals-plan.md section 4.2): a `#writes` frame
 ;; may NAME a mutable global, so a body that legitimately maintains global state can carry a CHECKED frame
 ;; instead of being declined outright.
 ;;

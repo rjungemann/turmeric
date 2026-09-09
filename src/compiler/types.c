@@ -3479,7 +3479,7 @@ static bool adt_graph_reaches(const AdtDef *from, const AdtDef *target,
     return false;
 }
 
-/* SR1 prototype gate (docs/upcoming/sum-representation-plan.md).  True when
+/* SR1 prototype gate (docs/archive/sum-representation-plan.md).  True when
  * `def` is a MULTI-VARIANT sum that could flow by value as a tag+union
  * aggregate: non-parametric, non-GADT, non-heap, and not recursive.
  *
@@ -3962,7 +3962,7 @@ bool type_is_byvalue_adt_product(Type t) {
  * kept because it still describes the predicate below; only the dead bit is
  * removed. */
 
-/* SR2a (docs/upcoming/sum-representation-plan.md SR2): a MULTI-VARIANT
+/* SR2a (docs/archive/sum-representation-plan.md SR2): a MULTI-VARIANT
  * parametric sum monomorph (`(Opt2 int)`, and above all `(Option int)` /
  * `(Result int cstr)`) flows by value -- the app-side sibling of SR1's
  * adt_sr1_sum_candidate, and the prerequisite SR2b's stdlib conversion is

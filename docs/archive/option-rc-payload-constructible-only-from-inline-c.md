@@ -197,7 +197,7 @@ rather than an oversight. The result crossing has no safe carry:
   own reference, so every read leaks.
 
 Neither is right because the missing piece is drop glue for a by-value sum's
-payload, which is [RM1](../upcoming/reclamation-plan.md)'s subject. stdlib's
+payload, which is [RM1](reclamation-plan.md)'s subject. stdlib's
 `weak/unwrap` already works around it with a `match`, and a match is correct
 because it binds the payload once.
 

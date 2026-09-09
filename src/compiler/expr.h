@@ -460,7 +460,7 @@ struct Binding {
      * claim, so they need it checked rather than promised.  WF3's callee-frame
      * widening and WF4's entry-check elision both gate on this bit. */
     bool                writes_checked;
-    /* G1 (docs/upcoming/mutable-globals-plan.md): does this function's body
+    /* G1 (docs/archive/mutable-globals-plan.md): does this function's body
      * write a MUTABLE GLOBAL, directly or through a callee?
      *
      * The `#writes` frame's vocabulary is PARAMETERS.  A global is written by

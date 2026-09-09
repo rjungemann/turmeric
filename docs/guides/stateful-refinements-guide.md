@@ -410,7 +410,7 @@ saying so beats a message about parameters.
 `#reads` is deliberately **not** part of this. It is the annotation that
 *grants* congruence, so letting it name a global would let a promise about
 mutable global state pay out in proofs -- see
-[`mutable-globals-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/mutable-globals-plan.md)
+[`mutable-globals-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/mutable-globals-plan.md)
 sections 12.2 and 12.4, and the `refine-reads-frame-omits-global` fixture pair
 that pins what a broken read-side promise costs.
 

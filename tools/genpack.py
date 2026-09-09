@@ -234,7 +234,7 @@ def build(pack_dir: Path, version: str, max_bytes: int,
               f'         2. exclude a doc category from the pack;\n'
               f'         3. tier rarely-read reference pages behind a lazy '
               f'fetch.\n'
-              f'       See docs/upcoming/offline-docs-plan.md (OD1).',
+              f'       See docs/archive/offline-docs-plan.md (OD1).',
               file=sys.stderr)
         return 1
 

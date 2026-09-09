@@ -6,6 +6,10 @@ description: What happened when a non-recursive multi-variant sum was forced by 
 
 # SR1 prototype gate -- results
 
+> **Archived 2026-09-09** with [sum-representation-plan.md](sum-representation-plan.md).
+> The gate it records ran 2026-08-26 and SR1 shipped from its worklist the
+> same day; this is a measurement record, not open work.
+
 The gate specified in [sum-representation-plan.md](sum-representation-plan.md)
 SR1: force one non-recursive sum by value behind a seam and measure, before
 writing any of it.
@@ -16,7 +20,7 @@ writing any of it.
 > was the right order of magnitude (34, on a 2706-green baseline). The two
 > places this document was wrong are marked inline. Full record: the
 > **Resolution** section of
-> [multi-variant-adts-always-heap-allocate](../archive/multi-variant-adts-always-heap-allocate.md).
+> [multi-variant-adts-always-heap-allocate](multi-variant-adts-always-heap-allocate.md).
 
 **Verdict: SR1 is feasible and bigger than the plan assumed -- but the cost is
 not where the plan put it.** The codegen crossings are tractable and cluster

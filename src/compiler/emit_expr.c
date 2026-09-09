@@ -5773,7 +5773,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
 /* ==========================================================================
  * CE0 -- container element-form census
- * (docs/upcoming/container-element-form-plan.md, phase CE0.)
+ * (docs/archive/container-element-form-plan.md, phase CE0.)
  *
  * TRACE ONLY.  This function decides nothing and changes no codegen; it
  * prints one line per container ELEMENT STORE under --emit-abi-trace so a

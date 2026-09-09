@@ -457,7 +457,7 @@ threads. That is the same situation every `defopaque` handle and every
 story is its own plan, not a rider on this one.
 
 That plan now exists:
-[docs/upcoming/mutable-globals-plan.md](../upcoming/mutable-globals-plan.md). It covers the
+[docs/archive/mutable-globals-plan.md](mutable-globals-plan.md). It covers the
 concurrency spellings and, more urgently, the three disciplines a global write
 is currently invisible to -- write frames, module boundaries, and the frame
 vocabulary itself. Its G1 phase closes one latent soundness gap that D4 made

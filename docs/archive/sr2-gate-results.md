@@ -6,6 +6,11 @@ description: What happened when a multi-variant PARAMETRIC sum monomorph was for
 
 # SR2 prototype gate -- results
 
+> **Archived 2026-09-09** with [sum-representation-plan.md](sum-representation-plan.md).
+> The gate it records ran 2026-08-27; SR2a's codegen was paid that day and the
+> stdlib conversion it left as remaining shipped as SR2b, with the experiment
+> row graduated as SR2c. A measurement record, not open work.
+
 The gate for [sum-representation-plan.md](sum-representation-plan.md) SR2
 (Option and Result as real sums), run 2026-08-27 following the SR1 gate's
 method: force the shape by value behind a seam, count the crossings, find the
@@ -148,7 +153,7 @@ Reproducible at the pre-session merge base.  It hid because the generic shim is
 a transparent forwarding tail-call, so aggregates returned in registers survived
 it by luck; only past the SysV 16-byte threshold does sret shift the arguments.
 Fixed and pinned at all three widths:
-[fat-dispatch-parametric-monomorph-generic-shim](../archive/fat-dispatch-parametric-monomorph-generic-shim.md).
+[fat-dispatch-parametric-monomorph-generic-shim](fat-dispatch-parametric-monomorph-generic-shim.md).
 
 The lesson this document already stated stands, and paid: **assert VALUES, not
 just that it builds** -- a function-pointer cast is what cc cannot see through,
@@ -225,7 +230,7 @@ by-value and the disqualifying predicate starts answering yes.  The predicate is
 the same type-ARGUMENT test listed above, and the fix is the same one:
 `(Vec (Opt2 int))` names a real monomorph whether or not its element is by
 value.  Pinned by `tests/fixtures/vec-of-parametric-sum-monomorph`, archived as
-[vec-of-parametric-sum-monomorph-ice](../archive/vec-of-parametric-sum-monomorph-ice.md).
+[vec-of-parametric-sum-monomorph-ice](vec-of-parametric-sum-monomorph-ice.md).
 
 ## What SR2 now costs, in order
 

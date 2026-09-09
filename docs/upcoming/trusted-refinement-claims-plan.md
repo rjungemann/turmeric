@@ -2,7 +2,7 @@
 
 > **Status:** Proposed 2026-08-17.  Drafted as the last step of the
 > mutable-globals work, exactly where
-> [`mutable-globals-plan.md`](mutable-globals-plan.md) section 14 said it
+> [`mutable-globals-plan.md`](../archive/mutable-globals-plan.md) section 14 said it
 > should be: after G2 landed, from findings that came out of doing that work
 > rather than from guessing at them.  **R1 (the warning) and R2 (the
 > refusal) LANDED 2026-08-17** behind `--enable=checked-reads` (see section
@@ -13,7 +13,7 @@
 > **Type:** Language / refinement checking
 > **Depends on:** nothing.  Section 14 of the mutable-globals plan is explicit
 > that the read side blocks nothing and must not become a precondition.
-> **Related:** [`mutable-globals-plan.md`](mutable-globals-plan.md) sections
+> **Related:** [`mutable-globals-plan.md`](../archive/mutable-globals-plan.md) sections
 > 12-13 (the research this plan's section 1 is distilled from),
 > [`docs/guides/stateful-refinements-guide.md`](../guides/stateful-refinements-guide.md)
 > (the trusted tier's own documentation and its three-step trajectory),

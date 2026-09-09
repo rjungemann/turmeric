@@ -7,7 +7,7 @@ description: The 8.3 KB the RM1 measurement surfaced is four unrelated classes, 
 # Corpus leak sweep -- decomposition
 
 Swept 2026-08-30 (v0.42.2 + this branch) while looking into the leaks the
-[RM1 measurement](../upcoming/reclamation-plan.md) surfaced. The headline
+[RM1 measurement](../archive/reclamation-plan.md) surfaced. The headline
 "8.3 KB of leaks in emitted programs" is **four unrelated classes**, and
 reading it as one number overstates the product problem in one direction while
 hiding a real default-path defect in the other.

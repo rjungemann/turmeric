@@ -6,7 +6,7 @@
 > **Type:** Compiler / Type System / Docs
 > **Predecessors:** `docs/archive/history/variadic-hkt-rows-missing.md`
 > (Layers 1-6), `docs/archive/history/row-type-in-value-position-loses-elements.md`
-> **Related:** `docs/upcoming/v1/ecs-component-set-bounds-plan.md`
+> **Related:** `docs/archive/ecs-component-set-bounds-plan.md`
 
 ## Why this document exists
 
@@ -175,7 +175,7 @@ form. So reifying rows is mostly plumbing existing witness infrastructure to a
 new client.
 
 **Why it is still a no.** The cost is not the machinery, it is the
-indirection. `docs/upcoming/v1/ecs-component-set-bounds-plan.md:121-123` makes
+indirection. `docs/archive/ecs-component-set-bounds-plan.md:121-123` makes
 "a codegen assertion that the specialized body contains no dictionary load" a
 hard *acceptance criterion* -- avoiding that indirection is the entire
 justification for the ECS's structural approach over an instance-based one.
@@ -268,7 +268,7 @@ source comment.
   original spec; **contains stale gap claims**
 - `docs/archive/history/row-type-in-value-position-loses-elements.md` -- why
   guard 2 exists
-- `docs/upcoming/v1/ecs-component-set-bounds-plan.md` -- the narrow-vs-general
+- `docs/archive/ecs-component-set-bounds-plan.md` -- the narrow-vs-general
   fork, and the no-dictionary acceptance criterion
 - `docs/archive/spices-type-features-uplift-plan.md:94-137` (typed-field rows),
   `:469-560` (row-typed schemas; httpd/postgres/json object-shape rows OPEN)

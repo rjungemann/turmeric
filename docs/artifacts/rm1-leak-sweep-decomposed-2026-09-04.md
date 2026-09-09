@@ -6,7 +6,7 @@ description: The erased-base leak sweep re-run and broken down by WHO allocated,
 
 # RM1 leak sweep, decomposed by allocation site (2026-09-04)
 
-The sweep behind [reclamation-plan.md](../upcoming/reclamation-plan.md)'s RM1
+The sweep behind [reclamation-plan.md](../archive/reclamation-plan.md)'s RM1
 reports a byte total per fixture.  That total is what the plan's "aside worth
 its own report" priced at 8.3 KB and what makes the phase look bigger or
 smaller than it is.  Re-run here and broken down by **which function

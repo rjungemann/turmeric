@@ -26,7 +26,7 @@ enough to notice. The `-main` defect was real for both, but only minikanren
 demonstrated it.
 
 Found while censusing construction sites for
-[SR0](../upcoming/sum-representation-plan.md): `examples/minikanren` reported
+[SR0](sum-representation-plan.md): `examples/minikanren` reported
 zero ADT constructions, which turned out not to be a property of the program.
 
 ## Repro

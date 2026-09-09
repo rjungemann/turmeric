@@ -1,6 +1,6 @@
 # SR0 results -- the construction census and the migration surface
 
-Instruments for SR0 in [docs/upcoming/sum-representation-plan.md](../../docs/upcoming/sum-representation-plan.md).
+Instruments for SR0 in [docs/archive/sum-representation-plan.md](../../docs/archive/sum-representation-plan.md).
 Both halves ran. **The gate does not close cleanly either way, and the case for
 SR1 as a performance change came back weaker than the plan assumed.**
 
@@ -146,7 +146,7 @@ is load-bearing.
 ## RM0(a) re-run, 2026-09-02 -- allocations, not constructions
 
 Re-run unchanged against today's compiler (SR2a/b default, SR3 slice A, RM1
-built), per [reclamation-plan.md](../../docs/upcoming/reclamation-plan.md)
+built), per [reclamation-plan.md](../../docs/archive/reclamation-plan.md)
 RM0(a). Raw data: [census-rm0-2026-09-02.tsv](census-rm0-2026-09-02.tsv).
 The instrument already records BOXED vs BYVAL per constructor (a body that
 mallocs vs one that returns an aggregate), so "allocations" below is the

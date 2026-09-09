@@ -1,4 +1,4 @@
-;; G4a (docs/upcoming/mutable-globals-plan.md section 4.4): `^atomic ^mut` on a
+;; G4a (docs/archive/mutable-globals-plan.md section 4.4): `^atomic ^mut` on a
 ;; top-level def makes every read a sequentially-consistent load and every `set!` a sequentially-consistent
 ;; store.
 ;;

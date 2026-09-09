@@ -1,4 +1,4 @@
-;; SR1 (docs/upcoming/sum-representation-plan.md): a non-recursive multi-variant
+;; SR1 (docs/archive/sum-representation-plan.md): a non-recursive multi-variant
 ;; sum flows BY VALUE as a tag + union aggregate, not the int64 heap carrier.
 ;; This is the fix for docs/archive/multi-variant-adts-always-heap-allocate.md:
 ;; the constructor no longer mallocs, and a value that is never boxed has

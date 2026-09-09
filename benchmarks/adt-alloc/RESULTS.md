@@ -42,7 +42,7 @@ Rows F and G are new; the original had only A-E.
 **1. The reclamation MECHANISM is the whole story, not the ABI.**
 
 This is the result that matters, and it inverts the ordering rationale in the
-[SR plan](../../docs/upcoming/sum-representation-plan.md).
+[SR plan](../../docs/archive/sum-representation-plan.md).
 
 Row G is region reclamation over **today's boxed representation** -- no
 by-value lowering, no ABI change, no `adt_is_flat_product` work, none of SR1 or

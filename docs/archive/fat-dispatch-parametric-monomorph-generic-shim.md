@@ -9,7 +9,7 @@ SysV 16-byte threshold, at which point the program jumps to address 0.
 repair the fix exposed -- see **Resolution**.
 
 Found 2026-08-27 while working the M7 HKT-carrier worklist from the
-[SR2 prototype gate](../upcoming/sr2-gate-results.md), whose acceptance test
+[SR2 prototype gate](sr2-gate-results.md), whose acceptance test
 (`parsec-tutorial` builds under the SR2 seam and then segfaults) turned out to
 be this bug wearing a seam it did not need.
 
@@ -141,4 +141,4 @@ The other ten fixtures on the SR2 gate's M7 worklist are unchanged -- they are
 a separate carrier/elaboration disagreement (`(ExprF (fn [int] int))` assigned
 into an int64 slot, "aggregate value used where an integer was expected"), not
 an ABI-selection hole. See
-[sr2-gate-results.md](../upcoming/sr2-gate-results.md).
+[sr2-gate-results.md](sr2-gate-results.md).

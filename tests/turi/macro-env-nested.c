@@ -1,5 +1,5 @@
 /* macro-env-nested.c -- Stage 1 gate test for the macro-time interpreter env
- * (docs/upcoming/macro-system-direction-plan.md).
+ * (docs/archive/macro-system-direction-plan.md).
  *
  * Pins the reentrancy contract that Stage 2's procedural macros depend on:
  * a turi env created and evaluated MID-COMPILE (g_interpret_mode == false)

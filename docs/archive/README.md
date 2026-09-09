@@ -555,9 +555,26 @@ finding rather than a closed one:
 - **[spice-guides-bare-brace-manifest-syntax.md](spice-guides-bare-brace-manifest-syntax.md)** -- guides corrected; spice-README coverage and `tur add-cmake` comment-dropping are not
 - **[turi-interp-incremental-reclamation-plan.md](turi-interp-incremental-reclamation-plan.md)** -- TR1 carrier relocation shelved as demand-driven
 
+### Archived 2026-09-09
+
+Each declares every phase closed, so it is a record rather than open work.
+Where a plan leaves a named thread, the banner at its top says where that
+thread now lives.
+
+- **[mutable-globals-plan.md](mutable-globals-plan.md)** -- `^mut` global state made visible to write frames, effect rows and module boundaries; G1-G5b landed, `global-state` graduated in 0.35.0 and `write-frames` in 0.37.0. The read-side follow-up is [../upcoming/trusted-refinement-claims-plan.md](../upcoming/trusted-refinement-claims-plan.md) (R4 open)
+- **[offline-docs-plan.md](offline-docs-plan.md)** -- one docs pack serving the site, the in-app Try Turmeric viewer and offline mode; OD1-OD5 landed 2026-08-26. See [offline-docs-guide.md](../guides/offline-docs-guide.md)
+- **[tur-run-feature-audit-plan.md](tur-run-feature-audit-plan.md)** -- `tur run` parity with just 1.54.0 (attributes, `--set`, groups, platform attributes, modules, backticks); phases 0-3 executed 2026-08-30. The Windows shebang path stays with the Windows port
+- **[sum-representation-plan.md](sum-representation-plan.md)** -- multi-variant ADTs by value, Option/Result as real sums, the Option niche; SR0-SR4 all closed (SR2c graduated 2026-08-27, the niche 2026-09-03, SR4 flipped 2026-09-02). Gate records: [sr1-gate-results.md](sr1-gate-results.md), [sr2-gate-results.md](sr2-gate-results.md)
+- **[sr1-gate-results.md](sr1-gate-results.md)** -- the SR1 prototype gate (2026-08-26): eight crossings, one latent bug, one scope decision; SR1 shipped from this worklist
+- **[sr2-gate-results.md](sr2-gate-results.md)** -- the SR2 prototype gate (2026-08-27): the plan's prerequisite line corrected, an eleven-fixture worklist worked to zero, SR2a paid
+- **[reclamation-plan.md](reclamation-plan.md)** -- freeing what the emitted program allocates; RM0 ran, RM1 built and narrowed, RM2/RM3 recorded as not starting (regions shipped separately), RM4 decided the SR4 default. The spine residue is attributed under `docs/artifacts/`
+- **[container-element-form-plan.md](container-element-form-plan.md)** -- per-monomorph element words in Vec for niche Options; CE0-CE3 built and default since the niche graduated, CE5 re-measured, CE4 (Map/Set/HAMT) deferred by evidence
+- **[macro-system-direction-plan.md](macro-system-direction-plan.md)** -- procedural macros on turi, not phases; Stages 0-3 and Stage 4's RM5 and R3 reflection landed, the JIT fast path shelved pending demand. The CT-language freeze policy lives here
+- **[ecs-component-set-bounds-plan.md](ecs-component-set-bounds-plan.md)** -- the structural `(has ...)` world bound; resolved negatively 2026-08-20 when the ECS profile it gated on measured dictionary dispatch inside noise. `defworld-classes` took the ergonomics half spice-side
+
 ### Archived 2026-09-05
 
-- **[regions-plan.md](regions-plan.md)** -- RM3 declared regions over the arena; R1-R5 landed, `with-region` added, GRADUATED on by default 2026-09-05 (`TUR_REGIONS=0` is the hatch). The static escape walk's admitted result shapes are recorded under graduation item 2; the spine residue stays with [../upcoming/reclamation-plan.md](../upcoming/reclamation-plan.md)
+- **[regions-plan.md](regions-plan.md)** -- RM3 declared regions over the arena; R1-R5 landed, `with-region` added, GRADUATED on by default 2026-09-05 (`TUR_REGIONS=0` is the hatch). The static escape walk's admitted result shapes are recorded under graduation item 2; the spine residue stays with [reclamation-plan.md](reclamation-plan.md)
 - **[solver-extension-plan.md](solver-extension-plan.md)** -- the refinement solver as an incremental, backtracking decision procedure; SX0/SX1/SX2/SX3/SX8/SX9 landed (trail, DFS driver, incremental EUF, `tur smt`, `--dump-refine=json` at schema 1), SX4/SX6 parked on measured-shut gates. Open solver work continues in [../upcoming/solver-integer-tail-plan.md](../upcoming/solver-integer-tail-plan.md)
 
 ### Completed plans swept out of `docs/upcoming/` (2026-08-15)

@@ -747,7 +747,7 @@ intended sweet spot.
   refinement-typed roadmap: strict aliveness (RE1, shipped as
   `ecs/refined-world` + `for-each-alive!`), bounded slot indices
   (RE2, gated on loop invariants and a profile).
-- `docs/upcoming/v1/ecs-component-set-bounds-plan.md` -- the structural
+- `docs/archive/ecs-component-set-bounds-plan.md` -- the structural
   "any world with `Pos` and `Vel`" bound, split out of the above.
 - `../guides/hkt-guide.md` -- the variadic-HKT-rows mechanism behind
   the row-typed `Query` value.
