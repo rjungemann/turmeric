@@ -7084,11 +7084,14 @@ static void * __inst_Show_show_Point(tur_adt_Point p) {
 }
 
 typedef struct dict_Show_Point {
-    void * (*show)(tur_adt_Point);
+    void * (*show)(int64_t);
 } dict_Show_Point;
 
+static void * __dictwrap_Show_show_Point(int64_t __a0) {
+    return __inst_Show_show_Point(*(tur_adt_Point *)(intptr_t)__a0);
+}
 static dict_Show_Point dict_Show_Point_singleton = {
-    .show = __inst_Show_show_Point,
+    .show = __dictwrap_Show_show_Point,
 };
 
 static void * array_hyget(void * arr, int64_t idx) {

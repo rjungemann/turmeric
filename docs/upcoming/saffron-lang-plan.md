@@ -782,14 +782,25 @@ reaches the HKT stack, is a workable answer rather than a wall.
 The shape, restated as buildable work:
 
 1. One class-level dict type with carrier-shaped slots.
-2. Per-instance wrappers from (d) -- the only piece with no home yet, and
-   smaller than the report implied: the caller already boxes into the carrier,
-   so only a per-instance deref wrapper in the slot is missing.
+2. ~~Per-instance wrappers from (d)~~ -- **DONE 2026-09-09.** The piece the plan
+   called "the only one with no home yet". Each instance now gets a carrier
+   wrapper in its dict slot, and the slot is declared carrier-shaped to match,
+   so the mode-B `(void **)dict[slot]` pun is honest for a by-value receiver.
+   That also answers the guard's second objection -- no single REPRESENTATIVE
+   instance could stand for two layouts -- because every slot is now
+   `(carrier) -> ret`. `forall-dict-byvalue-receiver` went from an `errors/`
+   fixture to a passing one that both back ends run, and the interpreter's
+   answer (19.6349 / 50.41 / 0) is what the compiled path now prints.
 3. Registration into P1's registry at static-init.
 4. A `registry[class][tag]` lookup at the call site.
 5. A clean "no instance for T" panic.
 
-Four of the five already have a home.
+**Pieces 3-5 remain**, and they are the dispatch itself: a parallel
+`{class, tag} -> dict` registry mirroring P1's chunked `{id, name, boxed}` one
+(each TU publishing its rows at static-init, a linear find), a lookup replacing
+today's "cannot dispatch on an `any` receiver" diagnostic, and a panic when no
+instance matches. The registry shape is settled by P1's precedent; what is not
+settled is the four design questions D8 lists, which is why S8 came first.
 
 ### D9 -- the gate
 

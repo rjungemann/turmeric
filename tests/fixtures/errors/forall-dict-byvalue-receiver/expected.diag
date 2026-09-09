@@ -1,3 +1,0 @@
-forall-dict-pass: typeclass 'Shape' cannot be used as a rank-2 constraint
-takes a by-value aggregate
-statically known type

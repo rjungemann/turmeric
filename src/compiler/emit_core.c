@@ -3238,7 +3238,6 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
                 ? repr->method_impls[slot] : NULL;
             Buf b2; buf_init(&b2);
             /* One diagnostic per dispatch site, not one per offending param. */
-            bool byval_reported = false;
             /* MB2.5 (constrained-hkt-forall-mode-b-plan): the dispatched RETURN
              * type must mirror the dict field (emit_stmt.c:581-603), which stores
              * the carrier instance method -- for a class-var-typed result (`(f b)`)
@@ -3284,62 +3283,20 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
                         if (type_struct_pass_by_ptr(pt))
                             buf_printf(&b2, "const %s *", type_c_name(pt));
                         else if (emit_type_is_byvalue_adt(ctx, pt)) {
-                            /* forall-dict-byvalue-receiver-emits-uncompilable-c:
-                             * this signature is derived from the REPRESENTATIVE
-                             * instance (see the MB2 note above), which is sound
-                             * only while every instance's C parameter type
-                             * agrees.  For primitives it does -- `Show [int]`
-                             * and `Show [bool]` both render as the int64
-                             * carrier, which is why the int/bool shape works.
-                             * A BY-VALUE aggregate breaks both halves of that:
-                             * the caller boxes it into the carrier (a malloc'd
-                             * pointer, see the poly call site), so the argument
-                             * arriving here is an int64 pointer and not the
-                             * struct the impl declared; and two instances do not
-                             * share a layout, so no single representative can
-                             * stand for both.  Emitting it anyway produced
-                             * `incompatible type for argument 1` from cc against
-                             * generated code.
+                            /* D8 piece 2 (forall-dict-byvalue-receiver): the
+                             * carrier, matching the dict SLOT, which now holds
+                             * a per-instance wrapper that derefs it
+                             * (emit_stmt.c).  This used to be a hard error --
+                             * the slot held the raw impl, whose parameter is
+                             * the struct by value, so the pun handed it a
+                             * pointer.  Both ends agree now, so the shape is
+                             * supported rather than guarded.
                              *
-                             * Guarded rather than supported, matching the
-                             * sibling unsupported shape in make_dict_clone
-                             * (a dispatch inside a directly-applied nested
-                             * lambda).  Supporting it needs a per-instance
-                             * carrier wrapper in the dict SLOT -- see the
-                             * archived report for the measured shape -- which is
-                             * a change to the dictionary ABI and belongs with
-                             * runtime typeclass dispatch, not here.
-                             *
-                             * The message deliberately does NOT suggest putting
-                             * the value behind a pointer.  A `:heap` receiver
-                             * gets past this guard and then hits a SEPARATE
-                             * defect -- the clone returns a float result through
-                             * `(int64_t)(intptr_t)`, a numeric conversion, so
-                             * 19.6349 arrives as 19 with only a -Wint-conversion
-                             * warning.  Sending a user down that road would
-                             * trade a loud failure for a silent one.  Filed as
-                             * docs/reported/forall-dict-float-result-truncated.md.
-                             *
-                             * Emit the carrier so the surrounding C stays
-                             * well-formed; the error count aborts the build
-                             * before cc runs, exactly as the emitter's other
-                             * diagnostics do. */
-                            if (!byval_reported) {
-                                byval_reported = true;
-                                diag_emit(DIAG_ERROR, call->span,
-                                    "forall-dict-pass: typeclass '%s' cannot be "
-                                    "used as a rank-2 constraint because its "
-                                    "method '%s' takes a by-value aggregate "
-                                    "('%s'). The runtime dictionary passes every "
-                                    "argument through the int64 carrier, and a "
-                                    "by-value parameter neither fits it nor has "
-                                    "one layout across instances. Call the method "
-                                    "on a statically known type instead of "
-                                    "through a `forall` parameter",
-                                    disp_tc && disp_tc->name ? disp_tc->name->name : "?",
-                                    tc->methods[slot].name->name,
-                                    type_name(pt));
-                            }
+                             * The REPRESENTATIVE-instance concern the guard
+                             * also raised is answered by the same wrapper: every
+                             * instance's slot is `(carrier) -> ret`, so there is
+                             * one signature to represent rather than two
+                             * disagreeing layouts. */
                             buf_puts(&b2, "int64_t");
                         }
                         else

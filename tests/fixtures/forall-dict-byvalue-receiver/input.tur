@@ -1,0 +1,57 @@
+;; saffron-lang-plan D8 piece 2: a class whose method takes a BY-VALUE
+;; aggregate, routed through a rank-2 `forall` constraint.  SUPPORTED as of
+;; 2026-09-09; this file was an `errors/` fixture until then and is kept in
+;; place, comment and all, because the history is the point.
+;;
+;; Mode-B builds ONE dict-clone body shared across instances and derives the
+;; dispatched signature from a REPRESENTATIVE instance.  That is sound only
+;; while every instance's C parameter type agrees -- for primitives it does
+;; (`Show [int]` and `Show [bool]` both render as the int64 carrier, which is why
+;; tests/fixtures/forall-dict-show works).  A by-value aggregate breaks both
+;; halves: the caller boxes it into the carrier, so the argument arriving is an
+;; int64 pointer rather than the struct the impl declared, and two instances do
+;; not share a layout so no representative can stand for both.
+;;
+;; It used to emit that signature anyway -- `incompatible type for argument 1 of
+;; '(double (*)(tur_adt_Square))*(void **)__dict'` from cc, against generated
+;; code -- and was then GUARDED with a diagnostic (P2, 2026-09-07) so at least
+;; the failure was ours rather than the C compiler's.
+;;
+;; It is now SUPPORTED.  The caller already boxed the aggregate into the
+;; carrier; what was missing was the other end, so each instance now gets a
+;; carrier wrapper in its dict slot:
+;;
+;;   static double __dictwrap_Shape_area_Circle(int64_t c) {
+;;       return __inst_Shape_area_Circle(*(tur_adt_Circle *)(intptr_t)c);
+;;   }
+;;
+;; and the slot is declared carrier-shaped to match.  That also answers the
+;; guard's second objection -- no single REPRESENTATIVE instance could stand for
+;; two layouts -- because every slot is now `(carrier) -> ret`, so there is one
+;; signature rather than two disagreeing ones.
+;;
+;; Safe because the dict slot is ONLY read through the mode-B `(void **)` pun:
+;; measured, a rank-2 program writes the singleton at init and reads it only
+;; through that cast, and a program with purely static dispatch emits no dict at
+;; all.  There is no typed caller to disturb.
+;;
+;; The INTERPRETER always ran this correctly (19.6349 / 50.41 / 0) -- it
+;; dispatches on tagged values and has no dictionary ABI to squeeze an aggregate
+;; through -- so this was a property of the compiled back end, not of the
+;; language, and closing it was closing a BACK-END GAP rather than adding a
+;; capability.  Both paths now print the same three lines, which is why the
+;; `requires.compiled` marker is gone.
+(defclass Shape [a] (area [x : a] : float))
+(defstruct Circle [r : float])
+(defstruct Square [s : float])
+(definstance Shape [Circle] (area [x : Circle] : float (* 3.14159 (* (.r x) (.r x)))))
+(definstance Shape [Square] (area [x : Square] : float (* (.s x) (.s x))))
+
+(defn poly-area [a] [^Shape a x : a] : float (area x))
+
+(defn use-both [f (forall [a] [(Shape a)] (-> a float))] : float
+  (println (f (make-struct Circle 2.5)))
+  (println (f (make-struct Square 7.1)))
+  0.0)
+
+(defn main [] : int (println (use-both poly-area)) 0)

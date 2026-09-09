@@ -225,6 +225,27 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
 }
 
 
+/* D8 piece 2: does this method parameter ride the int64 CARRIER in the dict
+ * slot (and therefore need a per-instance deref wrapper)?
+ *
+ * Three sites have to agree exactly -- the slot's declared type, whether a
+ * wrapper is emitted, and the wrapper's own parameter list.  They did not on
+ * the first attempt: the slot skipped `pass_by_ptr` only when the body was NOT
+ * inline-C, while the wrapper skipped it unconditionally, so an inline-C method
+ * with a pass-by-ptr aggregate got a carrier-shaped SLOT and no wrapper --
+ * `-Wincompatible-pointer-types`, caught by run.sh's pointer/integer ratchet on
+ * `constrained-generic-inline-c-receiver-dispatch`. One predicate now. */
+static bool dict_slot_param_is_carrier(EmitCtx *ctx, const FnDef *mi,
+                                       uint32_t j) {
+    if (!mi || !mi->param_types) return false;
+    if (mi->params && mi->params[j]->is_poly_fn) return false;
+    bool body_is_inline_c = (mi->body && mi->body->kind == EX_INLINE_C);
+    Type pt = mi->param_types[j];
+    if (!mi->closure && !body_is_inline_c && type_struct_pass_by_ptr(pt))
+        return false;                      /* spelled `const T *`, not carrier */
+    return emit_type_is_byvalue_adt(ctx, pt);
+}
+
 void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Debugger Phase 4 (--debug): anchor each statement to its source line so
      * native stepping advances line-by-line through the `.tur` file.  No-op
@@ -808,6 +829,20 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                         if (!method_impl->closure && !body_is_inline_c
                             && type_struct_pass_by_ptr(pt)) {
                             buf_printf(ctx->file, "const %s *", type_c_name(pt));
+                        } else if (dict_slot_param_is_carrier(ctx, method_impl, j)) {
+                            /* D8 piece 2 (forall-dict-byvalue-receiver): a
+                             * BY-VALUE aggregate parameter is spelled as the
+                             * CARRIER here, and the slot is filled with a
+                             * per-instance wrapper that derefs it (below).
+                             *
+                             * Safe because this dict slot is ONLY ever read
+                             * through the mode-B `(void **)dict[slot]` pun --
+                             * measured: in a rank-2 program the singleton is
+                             * written at init and read only through that cast,
+                             * and a program with only STATIC dispatch emits no
+                             * dict at all.  So making the slot carrier-shaped
+                             * cannot disturb a typed caller; there is none. */
+                            buf_puts(ctx->file, "int64_t");
                         } else {
                             buf_printf(ctx->file, "%s", type_c_name(pt));
                         }
@@ -817,6 +852,71 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             buf_printf(ctx->file, "} %s;\n\n", dict_name);
             
+            /* D8 piece 2: per-instance CARRIER WRAPPERS for any method that
+             * takes a by-value aggregate.
+             *
+             * The mode-B clone reads every slot as a carrier-shaped function
+             * pointer, and the CALLER already boxes a by-value argument into
+             * the carrier (a malloc'd pointer -- see the poly call site).  What
+             * was missing was the other end: the slot held the raw instance
+             * function, whose parameter is the struct BY VALUE, so the pun
+             * passed a pointer where a struct was expected.  That was
+             * `incompatible type for argument 1` from cc, and is why the shape
+             * was guarded rather than supported.
+             *
+             * One wrapper per (instance, method) makes the pun honest -- it
+             * takes the carrier, derefs it, and calls the impl -- so the slot
+             * and the cast finally agree. */
+            for (uint8_t i = 0; i < tc->n_methods; i++) {
+                FnDef *mi = inst->method_impls[i];
+                if (!mi || !mi->param_types) continue;
+                bool needs_wrap = false;
+                for (uint32_t j = 0; j < mi->n_params; j++)
+                    if (dict_slot_param_is_carrier(ctx, mi, j)) {
+                        needs_wrap = true; break;
+                    }
+                if (!needs_wrap) continue;
+                tur_mangle_ident(tc->methods[i].name->name, sanitized_method_name,
+                                 sizeof(sanitized_method_name));
+                Type wret;
+                if (mi->binding && mi->binding->type.kind == TY_FN) {
+                    Type *rft = mi->binding->type.as.fn.result_full_type;
+                    wret = rft ? *rft
+                               : emit_type_from_kind(mi->binding->type.as.fn.result_kind);
+                } else {
+                    wret = mi->body->type;
+                }
+                buf_printf(ctx->file, "static %s __dictwrap_%s_%s%s(",
+                           type_c_name(wret), tc->name->name,
+                           sanitized_method_name, type_suffix);
+                for (uint32_t j = 0; j < mi->n_params; j++) {
+                    if (j) buf_puts(ctx->file, ", ");
+                    if (mi->params && mi->params[j]->is_poly_fn)
+                        buf_printf(ctx->file, "tur_poly_fn_t __a%u", j);
+                    else if (dict_slot_param_is_carrier(ctx, mi, j))
+                        buf_printf(ctx->file, "int64_t __a%u", j);
+                    else
+                        buf_printf(ctx->file, "%s __a%u",
+                                   type_c_name(mi->param_types[j]), j);
+                }
+                if (mi->n_params == 0) buf_puts(ctx->file, "void");
+                buf_puts(ctx->file, ") {\n    return ");
+                if (mi->binding && mi->binding->name)
+                    buf_printf(ctx->file, "%s(", mi->binding->name->name);
+                else
+                    buf_printf(ctx->file, "__inst_%s_%s%s(", tc->name->name,
+                               sanitized_method_name, type_suffix);
+                for (uint32_t j = 0; j < mi->n_params; j++) {
+                    if (j) buf_puts(ctx->file, ", ");
+                    if (dict_slot_param_is_carrier(ctx, mi, j))
+                        buf_printf(ctx->file, "*(%s *)(intptr_t)__a%u",
+                                   type_c_name(mi->param_types[j]), j);
+                    else
+                        buf_printf(ctx->file, "__a%u", j);
+                }
+                buf_puts(ctx->file, ");\n}\n");
+            }
+
             /* Emit the global singleton dictionary to file scope */
             buf_printf(ctx->file, "static %s %s_singleton = {\n", dict_name, dict_name);
             for (uint8_t i = 0; i < tc->n_methods; i++) {
@@ -833,7 +933,18 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * the correct type-arg suffix (e.g. _option, _vec) as computed in
                  * elab_definstance, so we avoid a second, potentially wrong suffix. */
                 FnDef *method_impl_ref = inst->method_impls[i];
-                if (method_impl_ref && method_impl_ref->binding) {
+                bool slot_wrapped = false;
+                if (method_impl_ref && method_impl_ref->param_types) {
+                    for (uint32_t j = 0; j < method_impl_ref->n_params; j++)
+                        if (dict_slot_param_is_carrier(ctx, method_impl_ref, j)) {
+                            slot_wrapped = true; break;
+                        }
+                }
+                if (slot_wrapped) {
+                    /* D8 piece 2: the carrier wrapper, not the raw impl. */
+                    buf_printf(ctx->file, "__dictwrap_%s_%s%s", tc->name->name,
+                               sanitized_method_name, type_suffix);
+                } else if (method_impl_ref && method_impl_ref->binding) {
                     buf_printf(ctx->file, "%s", method_impl_ref->binding->name->name);
                 } else {
                     buf_printf(ctx->file, "__inst_%s_%s", tc->name->name, sanitized_method_name);
