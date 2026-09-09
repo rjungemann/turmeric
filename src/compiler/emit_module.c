@@ -3020,6 +3020,46 @@ static void emit_abi_note_carrier_call(EmitCtx *ctx, const Binding *binding) {
     ctx->carrier_call_bindings[ctx->n_carrier_call_bindings++] = binding;
 }
 
+/* saffron-lang-plan S9 (D8 piece 3): record that this TU widens `t` into an
+ * `any`, so its box can carry that tag at runtime.
+ *
+ * Keyed on the ID rather than the Type, because the id is exactly what a
+ * dispatch site compares against -- an instance is registrable iff its
+ * receiver's id equals a widened id, so matching on anything else could only
+ * disagree with the box.  `emit_any_type_id` also interns the type into the
+ * P1 name table, which is idempotent and order-independent (the id is a hash of
+ * `type_name`, and the boxed flag is computed from the type alone), so calling
+ * it here rather than at the widen changes nothing about what gets published. */
+static void emit_abi_note_any_widen(EmitCtx *ctx, Type t) {
+    if (!ctx || !g_opt_saffron) return;
+    /* Gated with its only consumer, so a plain Turmeric program is untouched
+     * BYTE FOR BYTE.  Collecting unconditionally would be tidier but is not
+     * free: `emit_any_type_id` interns, and a widen the scan reaches in code
+     * emission later drops would publish a registry row that the emit-side
+     * interning never would.  Verified against the trivial program either way,
+     * but the gate makes it true by construction rather than by measurement. */
+    int64_t id = emit_any_type_id(ctx, t);
+    for (uint32_t i = 0; i < ctx->n_any_widen_ids; i++) {
+        if (ctx->any_widen_ids[i] == id) return;
+    }
+    if (ctx->n_any_widen_ids >= ctx->cap_any_widen_ids) {
+        uint32_t nc = ctx->cap_any_widen_ids ? ctx->cap_any_widen_ids * 2 : 8;
+        int64_t *grown = (int64_t *)realloc(ctx->any_widen_ids, nc * sizeof(int64_t));
+        if (!grown) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->any_widen_ids = grown;
+        ctx->cap_any_widen_ids = nc;
+    }
+    ctx->any_widen_ids[ctx->n_any_widen_ids++] = id;
+}
+
+static bool emit_abi_any_widen_has(const EmitCtx *ctx, int64_t id) {
+    if (!ctx) return false;
+    for (uint32_t i = 0; i < ctx->n_any_widen_ids; i++) {
+        if (ctx->any_widen_ids[i] == id) return true;
+    }
+    return false;
+}
+
 /* dead-base-thunk-chain-references-undefined-ctor: register a suffix-less
  * reference to the base ctor of a heap parametric ADT.  Such a ctor is never
  * defined (only per-spec monomorphs are), and every reference sits on the
@@ -6041,6 +6081,13 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
          * three READ a box, and a generic call can sit under any of them the
          * same way. */
         case EX_UNION_INJECT:
+            /* saffron-lang-plan S9 (D8 piece 3): this is the ONLY way a value
+             * gets into an `any` box, so the set of payload types seen here is
+             * the complete set of tags this TU's boxes can carry.  The `TY_ANY`
+             * guard is the same discriminator the emitter uses to choose the
+             * global type id over a union's member index (emit_expr.c). */
+            if (e->type.kind == TY_ANY && e->as.union_inject_.value)
+                emit_abi_note_any_widen(ctx, e->as.union_inject_.value->type);
             emit_abi_scan_expr(ctx, e->as.union_inject_.value, items, n_items);
             break;
         case EX_ANY_CAST:
@@ -6655,10 +6702,57 @@ static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
     return !emit_abi_has_carrier_call(ctx, fd->binding);
 }
 
+/* saffron-lang-plan S9 (D8 piece 3): does this instance's receiver have a
+ * ground `any` box tag, and is that tag one this TU can actually produce?
+ *
+ * Two instances are deliberately excluded, and both fail CLEANLY at the call
+ * site (piece 5's "no instance" panic) rather than silently:
+ *
+ *  - A TYPE-VARIABLE receiver (`definstance Clone [T]`) has no ground tag to key
+ *    a row on.  This is the fourth constraint the piece-3 sweep turned up, and
+ *    the tag axis disposes of it by construction rather than by special case.
+ *  - An HKT receiver (`definstance Functor [Option]`) whose type arg is the type
+ *    CONSTRUCTOR: a widened value's id is minted from the APPLIED type
+ *    ("(type-app Option float)"), so the two keys cannot meet.  Dispatching a
+ *    method on an un-narrowed `any` holding an `(Option T)` is exactly the
+ *    HKT-receiver question D8 defers, so a clean panic is the right v0 answer.
+ */
+static bool emit_abi_instance_tag_is_widened(EmitCtx *ctx, TypeClassInstance *inst) {
+    if (!inst || inst->n_type_args == 0) return false;
+    Type recv = inst->type_args[0];
+    if (recv.kind == TY_TYVAR || recv.kind == TY_UNKNOWN) return false;
+    return emit_abi_any_widen_has(ctx, emit_any_type_id(ctx, recv));
+}
+
 /* J1: Scan all items for ABI-specialization opportunities. */
 static void emit_abi_scan_program(EmitCtx *ctx, const Expr **items, uint32_t n_items) {
     for (uint32_t i = 0; i < n_items; i++) {
         emit_abi_scan_expr(ctx, items[i], items, n_items);
+    }
+
+    /* saffron-lang-plan S9 (D8 piece 3): runtime dispatch needs a dict for every
+     * instance a box could select, and dead-instance elimination would otherwise
+     * drop all of them -- a Saffron program dispatches through the registry, so
+     * it makes no DIRECT `__inst_*` call, which is the only liveness source
+     * (emit_instance_is_live).
+     *
+     * A second pass, not part of the walk above, because an instance def can
+     * appear before the widen that makes its tag reachable; the tag set is only
+     * complete once every item has been scanned.
+     *
+     * Gated on the experiment, which `#lang saffron` turns on build-wide
+     * (lang_dialect_apply calls experiment_enable), so a plain Turmeric program
+     * emits exactly what it did before -- no dicts it did not already need, and
+     * no growth from the row table that references them.  A build that mixes a
+     * Saffron TU with a Turmeric TU compiled entirely separately would not share
+     * the flag; that is a known v0 limitation, not a silent one, since the
+     * failure is the no-instance panic rather than a wrong answer. */
+    if (!g_opt_saffron) return;
+    for (uint32_t i = 0; i < n_items; i++) {
+        if (!items[i] || items[i]->kind != EX_INSTANCE_DEF) continue;
+        TypeClassInstance *inst = items[i]->as.instance_def_.instance;
+        if (emit_abi_instance_tag_is_widened(ctx, inst))
+            emit_abi_note_instance_dict_ref(ctx, inst);
     }
 }
 
@@ -15913,6 +16007,7 @@ int emit_program(Buf *out, const Expr *program) {
     /* specialized_call_names entries alias spec->clone_name; freed above. */
     free(ctx.specialized_call_names);
     free(ctx.carrier_call_bindings);
+    free(ctx.any_widen_ids);   /* saffron-lang-plan S9 (D8 piece 3) */
     arena_free(&type_arena);
     /* serial-shift-unsupported-context-miscompile: codegen may emit a hard
      * diagnostic (e.g. TUR-E0706) for a shape that type-checked but cannot be
@@ -17374,6 +17469,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     /* specialized_call_names entries alias spec->clone_name; freed above. */
     free(ctx.specialized_call_names);
     free(ctx.carrier_call_bindings);
+    free(ctx.any_widen_ids);   /* saffron-lang-plan S9 (D8 piece 3) */
     arena_free(&type_arena2);
     /* serial-shift-unsupported-context-miscompile: mirror emit_program -- a hard
      * codegen diagnostic fails the separate-compilation path too. */

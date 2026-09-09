@@ -509,6 +509,26 @@ typedef struct EmitCtx {
     const Binding **carrier_call_bindings;
     uint32_t        n_carrier_call_bindings;
     uint32_t        cap_carrier_call_bindings;
+    /* saffron-lang-plan S9 (D8 piece 3): the set of `any` box tags this TU can
+     * ever produce -- one id per type widened to `any` anywhere in it, collected
+     * by the pre-emission scan from the EX_UNION_INJECT sites (which is where
+     * the id is computed for the box itself, so the two agree by construction).
+     *
+     * This is the key runtime instance dispatch registers on.  A value can only
+     * be inside an `any` by having been widened, so an instance whose receiver
+     * type is not in this set can never be selected at runtime and needs no row
+     * -- which is what keeps the registry to the handful of types a program
+     * actually boxes instead of every instance in the autoloaded stdlib.
+     *
+     * Deliberately NOT crossed with "classes dispatched in this TU": each TU
+     * must decide alone (--shared and `emit-c --output-dir` really do split),
+     * and the tag axis alone is sound per TU -- the TU that widens a type
+     * registers every instance for it, so a DIFFERENT TU dispatching on that box
+     * finds the row in the merged registry. The cross-product is sound only
+     * whole-program. See the plan's "Potential pre-passes" section. */
+    int64_t  *any_widen_ids;
+    uint32_t  n_any_widen_ids;
+    uint32_t  cap_any_widen_ids;
     /* dead-base-thunk-chain-references-undefined-ctor (fix direction 1,
      * narrowed): a HEAP parametric ADT never gets a base `ctor_X` definition
      * (only per-spec monomorphs), yet the dead base generic thunk chain still
