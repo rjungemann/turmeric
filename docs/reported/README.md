@@ -1406,6 +1406,7 @@ the report's own named-let snippet does not compile (its `if` branches are
 
 | Report | Severity | One line |
 |---|---|---|
+| [doc-lookup-poisons-the-playground-eval-session](doc-lookup-poisons-the-playground-eval-session.md) | high (playground) | Three defects behind one failure. `turi_doc_lookup` runs its query through the *accumulating* `turi_eval` (wasm_glue.c:642), so a single doc-panel lookup splices `(doc-lookup "...")` into the session forever -- that is the repeating TUR-W0040, and after it the same program never runs again. `docstrings.tur` is not in `wasm_preload_stdlib`, so the panel's wasm path resolves nothing for any stdlib name. And `defeffect` is not covered by the across-turns redefinition fix `env.c:206` describes for `defn`, whose fallback then blames a user `defn` on "an auto-loaded stdlib module" that does not contain it. Saffron is incidental -- all of it reproduces under `#lang turmeric`. Filed 2026-09-09 |
 
 `try-docs-pane-forgets-scroll-position` was resolved 2026-08-26 and moved to
 [docs/archive](../archive/try-docs-pane-forgets-scroll-position.md), along its
