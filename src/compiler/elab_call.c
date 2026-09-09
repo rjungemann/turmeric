@@ -2586,6 +2586,57 @@ static bool lint_is_panic_site(const char *nm, bool *is_unwrap_out) {
  * was gated on a binding whose type had kind TY_STRUCT, which never occurs now
  * that structs lower to record ADTs. */
 
+
+/* D8 Q3 (the generic-parameter widen): does `t` mention the type variable
+ * `name` anywhere -- as itself, inside an application, or inside a fn type? */
+static bool type_mentions_tyvar_named(const Type *t, const char *name) {
+    if (!t || !name) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return t->as.tyvar_.name && strcmp(t->as.tyvar_.name, name) == 0;
+        case TY_APP:
+            return type_mentions_tyvar_named(t->as.app.fn, name) ||
+                   type_mentions_tyvar_named(t->as.app.arg, name);
+        case TY_FN:
+            if (t->as.fn.result_full_type &&
+                type_mentions_tyvar_named(t->as.fn.result_full_type, name)) return true;
+            if (t->as.fn.arg_full_types)
+                for (uint32_t i = 0; i < t->as.fn.arity; i++)
+                    if (type_mentions_tyvar_named(t->as.fn.arg_full_types[i], name)) return true;
+            return false;
+        default:
+            return false;
+    }
+}
+
+
+/* D8 Q3 (Saffron result grounding): collect the distinct named type variables
+ * mentioned anywhere in `t`, up to `cap`. */
+static void call_collect_tyvar_names(const Type *t, const char **names, uint8_t *n, uint8_t cap) {
+    if (!t || *n >= cap) return;
+    switch (t->kind) {
+        case TY_TYVAR:
+            if (t->as.tyvar_.name) {
+                for (uint8_t i = 0; i < *n; i++)
+                    if (strcmp(names[i], t->as.tyvar_.name) == 0) return;
+                names[(*n)++] = t->as.tyvar_.name;
+            }
+            return;
+        case TY_APP:
+            call_collect_tyvar_names(t->as.app.fn, names, n, cap);
+            call_collect_tyvar_names(t->as.app.arg, names, n, cap);
+            return;
+        case TY_FN:
+            if (t->as.fn.arg_full_types)
+                for (uint32_t i = 0; i < t->as.fn.arity; i++)
+                    call_collect_tyvar_names(t->as.fn.arg_full_types[i], names, n, cap);
+            call_collect_tyvar_names(t->as.fn.result_full_type, names, n, cap);
+            return;
+        default:
+            return;
+    }
+}
+
 Expr *elab_call(Elab *e, Form *call) {
     /* Already established: call->tag == F_LIST and len >= 1. */
     Form *head = call->as.list.items[0];
@@ -2647,7 +2698,8 @@ Expr *elab_call(Elab *e, Form *call) {
      * only a saturated call -- an under-applied ctor partial-applies into a
      * closure, and ascribing its arguments would change what that closure
      * completes to. */
-    if (lang_span_is_saffron(call->span)) {
+    if (lang_span_is_saffron(call->span) &&
+        !(e->expected_type && e->expected_type->kind == TY_APP)) {
         CtorDef *sctor = elab_lookup_ctor(e, name);
         if (sctor && sctor->adt && sctor->adt->n_type_params > 0 &&
             call->as.list.len - 1u == sctor->n_fields) {
@@ -2670,6 +2722,86 @@ Expr *elab_call(Elab *e, Form *call) {
                         items[i] = arg;
                         continue;
                     }
+                    Form *asc[3] = { form_sym(e->arena, arg->span, asc_sym), arg,
+                                     form_sym(e->arena, arg->span, any_sym) };
+                    items[i] = form_list(e->arena, arg->span, asc, 3);
+                }
+                call = form_list(e->arena, call->span, items, n);
+            }
+        }
+    }
+
+    /* D8 Q3, the rule the ctor widen above already states, extended to a
+     * GENERIC FUNCTION's bare type-variable parameters: in a Saffron file an
+     * undetermined type argument is `any`.
+     *
+     * `(some 41)` is not a constructor call -- `some` is a stdlib defn,
+     * `[A] [x : A] : (Option A)` -- so the ctor widen never saw it and a
+     * Saffron program built an `(Option int)`.  That is the ONE instantiation
+     * dynamic dispatch cannot serve: an `(Option int)` holds raw ints, and a
+     * Saffron closure handed to `.fmap` expects boxes, so the closure's
+     * `(fn [any] any)` can never be applied to its elements.  Every value a
+     * Saffron file builds through a generic constructor function therefore has
+     * to be the all-`any` instantiation, exactly as one built through a
+     * literal (S6) or a raw ctor (above) already is.  Consistency, not a new
+     * rule: the dialect's default type applies wherever the program left a
+     * type undetermined.
+     *
+     * Only a BARE type variable widens.  An applied type mentioning one
+     * (`(Vec A)`) is grounded by the D5 seam at the call, and a concrete
+     * parameter keeps its type.  Ascribing to `any` is a boxing no-op on a
+     * value that is already `any`, so a symbol bound to one is unaffected. */
+    /* Both widens below defer to an ENCLOSING ascription: `(:: (some 3.5)
+     * (Option float))` pins the instantiation on purpose, and the ascription
+     * sets e->expected_type around the inner form -- the same signal the ctor
+     * result path consults.  Widening under it produced an `(Option any)` the
+     * ascription then could not accept. */
+    bool saffron_pinned = e->expected_type && e->expected_type->kind == TY_APP;
+    if (lang_span_is_saffron(call->span) && !saffron_pinned && !elab_lookup_ctor(e, name)) {
+        Binding *gb = scope_lookup(e->scope, name);
+        if (gb && gb->type.kind == TY_FN && gb->type.as.fn.arg_full_types &&
+            gb->type.as.fn.arity > 0) {
+            uint32_t n_provided = call->as.list.len - 1;
+            uint32_t arity = gb->type.as.fn.arity;
+            uint32_t n_look = n_provided < arity ? n_provided : arity;
+            /* "Nothing else can pin it": a bare-tyvar parameter widens only
+             * when its variable appears in NO compound parameter type of the
+             * callee.  `unwrap-or [o : (Option A) d : A]` keeps `d` as written
+             * -- `o` fixes `A`, and widening `d` to `any` against an `(Option
+             * float)` receiver was a type error on the guide's own type-case
+             * example.  `some [x : A]` and `identity [x : A]` widen, because
+             * their `A` has no other source.  A property of the SIGNATURE, so
+             * it is decidable here on the forms, in any argument order. */
+            bool widen_param[64] = {0};
+            bool any_bare = false;
+            for (uint32_t i = 0; i < n_look && i < 64; i++) {
+                const Type *ft = gb->type.as.fn.arg_full_types[i];
+                if (!ft || ft->kind != TY_TYVAR || !ft->as.tyvar_.name) continue;
+                bool pinned_elsewhere = false;
+                for (uint32_t j = 0; j < arity && !pinned_elsewhere; j++) {
+                    const Type *ot = gb->type.as.fn.arg_full_types[j];
+                    if (!ot || j == i || ot->kind == TY_TYVAR) continue;
+                    if (type_mentions_tyvar_named(ot, ft->as.tyvar_.name))
+                        pinned_elsewhere = true;
+                }
+                if (!pinned_elsewhere) { widen_param[i] = true; any_bare = true; }
+            }
+            if (any_bare) {
+                const Symbol *any_sym = symtab_intern(e->st, strslice("any", 3));
+                const Symbol *asc_sym = symtab_intern(e->st, strslice("::", 2));
+                uint32_t n = call->as.list.len;
+                Form **items = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+                items[0] = call->as.list.items[0];
+                for (uint32_t i = 1; i < n; i++) {
+                    Form *arg = call->as.list.items[i];
+                    const Type *ft = (i - 1 < n_look && i - 1 < 64 && widen_param[i - 1])
+                                         ? gb->type.as.fn.arg_full_types[i - 1] : NULL;
+                    bool already = arg->tag == F_LIST && arg->as.list.len == 3 &&
+                                   arg->as.list.items[0]->tag == F_SYM &&
+                                   arg->as.list.items[0]->as.sym == asc_sym &&
+                                   arg->as.list.items[2]->tag == F_SYM &&
+                                   arg->as.list.items[2]->as.sym == any_sym;
+                    if (!ft || ft->kind != TY_TYVAR || already) { items[i] = arg; continue; }
                     Form *asc[3] = { form_sym(e->arena, arg->span, asc_sym), arg,
                                      form_sym(e->arena, arg->span, any_sym) };
                     items[i] = form_list(e->arena, arg->span, asc, 3);
@@ -7446,6 +7578,39 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                          type_bindings, &n_type_bindings);
     }
 
+    /* D8 Q3, the third face of one Saffron rule ("an undetermined type
+     * argument is `any`"): a RESULT type variable that no argument bound.
+     * `(none)` is `[A] : (Option A)` with no parameter at all, so neither the
+     * ctor widen nor the generic-parameter widen has anything to act on, and
+     * the call's result stayed an open `(Option A)` -- tagged under a key no
+     * registry row can match, and lowered through the carrier base rather than
+     * the `(Option any)` spec the rest of the Saffron program uses.  Bind each
+     * still-open result variable to `any` here, BEFORE the instantiation below,
+     * so the same code substitutes the result and records the binding as an
+     * abi_binding -- which is what makes the emitter mint
+     * `none__spec__tur_adt_Option__any` instead of calling the base.
+     *
+     * Deferred to an enclosing ascription like the other two: `(:: (none)
+     * (Option float))` pins the instantiation on purpose. */
+    if (fn_type.kind == TY_FN && fn_type.as.fn.result_full_type &&
+        lang_span_is_saffron(call->span) &&
+        call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
+        !(saved_expected_return && saved_expected_return->kind == TY_APP)) {
+        const char *open_names[16];
+        uint8_t n_open = 0;
+        call_collect_tyvar_names(fn_type.as.fn.result_full_type, open_names, &n_open, 16);
+        for (uint8_t oi = 0; oi < n_open && n_type_bindings < 16; oi++) {
+            bool bound = false;
+            for (uint8_t bi = 0; bi < n_type_bindings; bi++)
+                if (type_bindings[bi].name && strcmp(type_bindings[bi].name, open_names[oi]) == 0) {
+                    bound = true; break;
+                }
+            if (bound) continue;
+            type_bindings[n_type_bindings].name = open_names[oi];
+            type_bindings[n_type_bindings].type = type_from_kind(TY_ANY);
+            n_type_bindings++;
+        }
+    }
     /* Result type is the function's return type */
     Type result_type;
     if (fn_type.kind == TY_FN) {

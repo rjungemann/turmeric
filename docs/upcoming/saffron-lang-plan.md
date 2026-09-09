@@ -1857,20 +1857,46 @@ S9 handles a defaulted slot by construction (the shim table iterates
 `method_impls[i]`), which becomes demonstrable the day an instance can omit a
 method.
 
-**Q3 -- HKT receivers: key rows on the head, as directed.** Feasible, and the
-design is settled: record the head def alongside each widened id in the scan,
-emit one row PER WIDENED INSTANTIATION whose head matches the instance, and
-point it at a shim that calls the by-value SPEC for that instantiation -- never
-the carrier base, which reads an `(Option any)`'s 16-byte element as an int64.
-Head-keying is a row-generation rule, not a different lookup. **Blocked on the
-compiled path by a pre-existing defect**: the spec it must call
-(`fmap` over `(Option any)` with an `any`-taking closure) does not compile in
-plain Turmeric, because a `tur_poly_fn_t` cannot carry a 16-byte `any`
-argument. Filed as
-[poly-fn-with-any-parameter-is-called-with-the-int64-carrier](../reported/poly-fn-with-any-parameter-is-called-with-the-int64-carrier.md).
-**The interpreter already does it** -- `(.fmap o (fn [x] (+ x 1)))` on an
-`any` holding `(some 41)` answers 42 under `tur interpret` -- so this is
-currently a back-end divergence, and closing it is that report.
+**Q3 -- HKT receivers: keyed on the head, BUILT 2026-09-09.** `(.fmap o (fn
+[x] (+ x 1)))` on an `any` holding `(some 41)` answers 42 on both back ends,
+pinned by `saffron-dyn-hkt-dispatch` (with a 7.35 row and a `(none)` row).
+The design held, with one correction and two additions found by building it:
+
+- The row is keyed on the all-`any` instantiation, `(Option any)`, and points
+  at a WITNESS defn the elaborator synthesises in the dispatch site's Saffron
+  span -- `(defn __dynwit_Functor_fmap_Option [__r : (Option any) __a1] : any
+  (.fmap __r (cast __a1 (fn [any] any))))` -- so the static path mints the
+  by-value spec for that instantiation, the D5 seams do the typing, and the
+  `: any` return re-tags the result. The emitter writes a two-line C shim from
+  the receiver word to the witness. Never the carrier base, which reads an
+  `(Option any)`'s 16-byte element as an int64.
+- **Correction:** the plan said "Saffron builds every value at the all-`any`
+  instantiation". It did not. `(some 41)` is a stdlib FUNCTION with a bare
+  type-variable parameter, not a raw ctor, and built an `(Option int)`; `(none)`
+  has no parameter at all and left `A` open. Both are now `(Option any)`, by
+  the one rule stated three ways: a bare-tyvar parameter widens to `any` when
+  no compound parameter of the callee can pin its variable (`unwrap-or`'s `d :
+  A` keeps its type because `o : (Option A)` pins `A` -- the guide's own
+  type-case example broke before that refinement); a still-open RESULT variable
+  binds to `any` before the result is instantiated, so the binding reaches the
+  emitter as an abi_binding and the `(Option any)` spec is minted; and both,
+  like the ctor widen, defer to an enclosing ascription that pins the
+  instantiation on purpose.
+- **Arity is a stated limit.** Neither the class (`[container g]`, unannotated)
+  nor the impl (an inferred `g` records as the erased fn carrier) knows `g`'s
+  arity, so the witness casts an erased-fn extra to `(fn [any] any)` -- what a
+  Saffron lambda is -- and a closure of another arity panics at the checked
+  cast rather than being called wrongly. Binary-fn methods (Foldable's) are
+  out until the class records arity.
+- **Exposed on the way:** the witness's first draft passed its `any` parameter
+  straight into `fmap`, and the rank-2 path wrapped that LOCAL in a file-scope
+  thunk that calls it by name (`'f' undeclared`). Plain Turmeric, no Saffron;
+  filed as
+  [local-fn-value-into-rank2-slot-gets-a-by-name-wrapper](../reported/local-fn-value-into-rank2-slot-gets-a-by-name-wrapper.md).
+  The cast form sidesteps it.
+
+The poly-fn `any`-parameter blocker named in the previous version of this
+paragraph is fixed and archived.
 
 **Q4 -- two instances matching one tag.** Cannot happen, and not because the
 tag is per instantiation: a second `definstance` for the same `(class, type)`

@@ -6743,17 +6743,51 @@ static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
  *    HKT-receiver question D8 defers, so a clean panic is the right v0 answer.
  */
 static bool emit_abi_instance_tag_is_widened(EmitCtx *ctx, TypeClassInstance *inst) {
-    if (!inst || inst->n_type_args == 0) return false;
+    Type recv;
+    if (!emit_instance_dispatch_recv_type(ctx, inst, &recv)) return false;
+    return emit_abi_any_widen_has(ctx, emit_any_type_id(ctx, recv));
+}
+
+/* D8 Q3: the type a registry row is keyed on for this instance.  A kind-*
+ * instance keys on its receiver as declared; a PARAMETRIC one (`Functor
+ * [Option]`, receiver = the constructor) keys on the all-`any` instantiation
+ * `(Option any)`, the one Saffron builds.  Returns false for a receiver with no
+ * ground key at all (a type variable). */
+bool emit_instance_dispatch_recv_type(EmitCtx *ctx, TypeClassInstance *inst,
+                                      Type *out) {
+    if (!ctx || !inst || inst->n_type_args == 0) return false;
     Type recv = inst->type_args[0];
     if (recv.kind == TY_TYVAR || recv.kind == TY_UNKNOWN) return false;
-    return emit_abi_any_widen_has(ctx, emit_any_type_id(ctx, recv));
+    /* A hole-headed partial application (`Functor [(Result _ E)]`) has no
+     * single all-`any` instantiation to key on, and a TY_FORALL / anything
+     * else that is neither a primitive nor a named ADT would fall through
+     * `emit_any_type_id` to a bare TypeKind number -- which is a PRIMITIVE's
+     * tag space, so a row keyed on it could collide with `int` or `bool`. */
+    if (recv.kind == TY_APP || recv.kind == TY_FORALL) return false;
+    if (recv.kind == TY_ADT && !recv.as.adt_.def) return false;
+    if (recv.kind == TY_ADT && recv.as.adt_.def && recv.as.adt_.def->n_type_params > 0) {
+        /* Built fresh from the def, as the ctor result path in elab_call.c
+         * does, rather than applying the instance's STORED constructor type:
+         * that Type carries whatever kind/discipline the instance head was
+         * recorded with, and `type_app` kind-checks its head. */
+        AdtDef *def = recv.as.adt_.def;
+        Type any_t = emit_type_from_kind(TY_ANY);   /* the emitter's twin of type_from_kind */
+        Span nosp; memset(&nosp, 0, sizeof nosp);
+        Type base = type_adt(def);
+        base.hkt_kind = kind_for_arity(def->n_type_params);
+        recv = base;
+        for (uint8_t pi = 0; pi < def->n_type_params; pi++)
+            recv = type_app(ctx->type_arena, recv, any_t, nosp);
+    }
+    *out = recv;
+    return true;
 }
 
 bool emit_instance_dispatch_tag(EmitCtx *ctx, TypeClassInstance *inst,
                                 int64_t *out_tag) {
-    if (!ctx || !g_opt_saffron || !inst || inst->n_type_args == 0) return false;
-    Type recv = inst->type_args[0];
-    if (recv.kind == TY_TYVAR || recv.kind == TY_UNKNOWN) return false;
+    if (!ctx || !g_opt_saffron) return false;
+    Type recv;
+    if (!emit_instance_dispatch_recv_type(ctx, inst, &recv)) return false;
     int64_t id = emit_any_type_id(ctx, recv);
     if (!emit_abi_any_widen_has(ctx, id)) return false;
     if (out_tag) *out_tag = id;
@@ -10611,8 +10645,9 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    const void *__f = ((const void **)__t)[slot];\n");
     buf_puts(out, "    if (!__f) {\n");
     buf_puts(out, "        snprintf(__m, sizeof(__m), \"instance %s %s exists but "
-                  "'.%s' cannot be dispatched dynamically yet (only a "
-                  "one-parameter method with a concrete result can)\", cls, "
+                  "'.%s' cannot be dispatched dynamically yet (a method taking "
+                  "more than the receiver, or returning the class variable, on a "
+                  "non-parametric receiver)\", cls, "
                   "__tur_any_type_name(tag), meth);\n");
     buf_puts(out, "        tur_panic(__m); return 0;\n    }\n");
     buf_puts(out, "    return __f;\n}\n");

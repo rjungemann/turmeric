@@ -935,6 +935,8 @@ bool emit_instance_is_live(const struct EmitCtx *ctx, struct TypeClassInstance *
  * and the symbol it names are written together. */
 bool emit_instance_dispatch_tag(struct EmitCtx *ctx, struct TypeClassInstance *inst,
                                 int64_t *out_tag);
+bool emit_instance_dispatch_recv_type(struct EmitCtx *ctx, struct TypeClassInstance *inst,
+                                      Type *out);
 void emit_note_instance_row(struct EmitCtx *ctx, const char *cls, int64_t tag,
                             const char *dict_symbol);
 /* Emits the recorded rows + their chunk registration.  Call LAST, after every

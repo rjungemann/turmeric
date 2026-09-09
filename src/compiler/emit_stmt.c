@@ -274,8 +274,40 @@ void emit_instance_dyn_table(EmitCtx *ctx, TypeClassInstance *inst,
     char table[192];
     snprintf(table, sizeof(table), "__dyn%s", dict_name);
 
+    /* D8 Q3: a witness-backed slot (parametric receiver).  The witness is an
+     * ordinary defn taking the by-value/heap receiver and `any` extras and
+     * returning `any`; the shim's only job is the receiver word -> receiver
+     * value conversion, spelled the way the witness's own C signature wants it
+     * (struct params may be passed by pointer). */
+    Type wrecv;
+    bool have_wrecv = emit_instance_dispatch_recv_type(ctx, inst, &wrecv);
+    for (uint8_t i = 0; i < tc->n_methods; i++) {
+        FnDef *w = (inst->dyn_witness && have_wrecv) ? inst->dyn_witness[i] : NULL;
+        if (!w || !w->binding) continue;
+        tur_mangle_ident(tc->methods[i].name->name, sanitized, sizeof(sanitized));
+        char *wc = raw_name_for_binding(w->binding);
+        Type rr = emit_resolve_type(ctx, wrecv);
+        const char *rcn = emit_type_c_name(ctx, rr);
+        uint32_t nx = w->n_params > 0 ? w->n_params - 1 : 0;
+        buf_printf(ctx->file, "static tur_tagged_t __dynshim_%s_%s%s(int64_t __r",
+                   tc->name->name, sanitized, type_suffix);
+        for (uint32_t k = 0; k < nx; k++) buf_printf(ctx->file, ", tur_tagged_t __a%u", k + 1);
+        buf_puts(ctx->file, ") {\n    return ");
+        buf_printf(ctx->file, "%s(", wc);
+        if (type_struct_pass_by_ptr(rr))
+            buf_printf(ctx->file, "(const %s *)(intptr_t)__r", rcn);
+        else if (emit_type_is_byvalue_adt(ctx, wrecv))
+            buf_printf(ctx->file, "*(%s *)(intptr_t)__r", rcn);
+        else
+            buf_printf(ctx->file, "(%s)(intptr_t)__r", rcn);
+        for (uint32_t k = 0; k < nx; k++) buf_printf(ctx->file, ", __a%u", k + 1);
+        buf_puts(ctx->file, ");\n}\n");
+        free(wc);
+    }
+
     for (uint8_t i = 0; i < tc->n_methods; i++) {
         FnDef *mi = inst->method_impls[i];
+        if (inst->dyn_witness && inst->dyn_witness[i]) continue;   /* witness-backed above */
         if (!mi || !mi->param_types || mi->n_params != 1) continue;
         Type ret;
         if (mi->binding && mi->binding->type.kind == TY_FN) {
@@ -325,8 +357,9 @@ void emit_instance_dyn_table(EmitCtx *ctx, TypeClassInstance *inst,
     buf_printf(ctx->file, "static const void *%s[] = {\n", table);
     for (uint8_t i = 0; i < tc->n_methods; i++) {
         FnDef *mi = inst->method_impls[i];
-        bool have = false;
-        if (mi && mi->param_types && mi->n_params == 1) {
+        bool have = (inst->dyn_witness && have_wrecv && inst->dyn_witness[i] &&
+                     inst->dyn_witness[i]->binding);
+        if (!have && mi && mi->param_types && mi->n_params == 1) {
             Type ret = (mi->binding && mi->binding->type.kind == TY_FN)
                 ? (mi->binding->type.as.fn.result_full_type
                        ? *mi->binding->type.as.fn.result_full_type

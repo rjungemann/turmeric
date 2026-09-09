@@ -51,6 +51,7 @@ TypeClassInstance *typeclass_env_register_instance(TypeClassEnv *env, TypeClass 
     inst->n_type_args = 0;
     inst->method_impls = NULL;
     inst->n_method_impls = 0;
+    inst->dyn_witness = NULL;        /* D8 Q3: filled on demand by a dispatch site */
     inst->constraints = NULL;
     inst->n_constraints = 0;
     /* Phase PTC1: Type parameter constraints */

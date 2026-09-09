@@ -6392,16 +6392,27 @@ static char *emit_dyn_method(EmitCtx *ctx, Buf *body, const Expr *e) {
                            ? tc->methods[slot].name->name : "?";
     char *recv = emit_value(ctx, body, obj);
     const char *rcn = emit_type_c_name(ctx, emit_resolve_type(ctx, e->type));
+    /* D8 Q3: extra arguments cross as boxes (the elaborator widened each to
+     * `any`), so the shim signature is `(int64_t, tur_tagged_t, ...)`. */
+    uint32_t na = e->as.dyn_method_.n_args;
+    char **av = na ? (char **)calloc(na, sizeof(char *)) : NULL;
+    for (uint32_t i = 0; i < na; i++) av[i] = emit_value(ctx, body, e->as.dyn_method_.args[i]);
 
     Buf out; buf_init(&out);
     buf_printf(&out,
         "({ tur_tagged_t __tur_dm = (%s); "
         "const void *__tur_df = __tur_inst_slot(\"%s\", \"%s\", "
         "TUR_GETTAG(__tur_dm), %d); "
-        "((%s (*)(int64_t))__tur_df)(TUR_UNTAG(__tur_dm)); })",
+        "((%s (*)(int64_t",
         recv, cls, meth, (int)slot, rcn);
+    for (uint32_t i = 0; i < na; i++) buf_puts(&out, ", tur_tagged_t");
+    buf_puts(&out, "))__tur_df)(TUR_UNTAG(__tur_dm)");
+    for (uint32_t i = 0; i < na; i++) buf_printf(&out, ", %s", av[i]);
+    buf_puts(&out, "); })");
     buf_putc(&out, '\0');
     free(recv);
+    for (uint32_t i = 0; i < na; i++) free(av[i]);
+    free(av);
     return out.data;
 }
 

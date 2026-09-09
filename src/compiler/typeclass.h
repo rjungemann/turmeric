@@ -127,6 +127,15 @@ struct TypeClassInstance {
     /* Method implementations - these are FnDef pointers */
     struct FnDef **method_impls;   /* Function definitions for each method */
     uint8_t n_method_impls;
+    /* saffron-lang-plan S9 / D8 Q3: per-method-slot WITNESS defns for dynamic
+     * dispatch on a parametric (HKT) receiver, or NULL.  A witness is an
+     * ordinary Saffron-span defn the elaborator synthesises on demand --
+     * `(defn __dynwit_Functor_fmap_Option [__r : (Option any) __a1] : any
+     * (.fmap __r __a1))` -- so the STATIC path mints the by-value spec for the
+     * all-`any` instantiation and the D5 seams do the argument typing; the
+     * registry row's shim then calls it.  Never the carrier base, which reads
+     * an `(Option any)`'s 16-byte element as an int64. */
+    struct FnDef **dyn_witness;
     /* Constraints on type parameters (e.g., Eq a => Eq (List a)) */
     TypeClassInstance **constraints;
     uint8_t n_constraints;
