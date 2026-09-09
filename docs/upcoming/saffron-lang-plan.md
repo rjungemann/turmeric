@@ -1907,7 +1907,9 @@ agree because there is only ever one instance to find. What that exposed is
 that a USER instance for a stdlib-covered type is a silent no-op, against the
 file's own stated intent that user instances shadow stdlib ones. Filed as
 [duplicate-instance-silently-drops-a-user-definstance](../reported/duplicate-instance-silently-drops-a-user-definstance.md);
-the decision (replace, error, or warn) is a language one and S9 inherits it.
+the decision (replace or error) is a language one and S9 inherits it. **The
+warning landed 2026-09-09** -- a user-file definstance the guard drops is now
+told so -- which removes the silence without pre-empting that decision.
 
 One robustness note from Q1: `EX_DYN_METHOD` takes its result type from the
 instance the static resolver happened to select rather than from the class

@@ -3242,6 +3242,30 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                     prev->n_type_args, prev_suffix, sizeof(prev_suffix)))
             continue;
         if (strcmp(prev_suffix, inst_type_suffix) == 0) {
+            /* duplicate-instance-silently-drops-a-user-definstance: the guard
+             * above cannot tell "the same stdlib file loaded twice" (its
+             * reason to exist, and rightly silent) from "a USER file defining
+             * an instance the autoloaded stdlib already covers" -- where
+             * silence meant `(definstance Eq [int] ...)` was accepted and had
+             * no effect, and `(.eq? 3 3)` kept answering from the stdlib.  The
+             * two differ by WHERE the second definition lives: a stdlib file
+             * (autoloaded or explicitly `(load "stdlib/...")`-ed, which is why
+             * `in_stdlib_load` alone is not the signal) stays silent; anything
+             * else is told, once, that the definition is inert.  Warned rather
+             * than replaced or rejected: which of those is right is a language
+             * decision (T1 says user instances shadow stdlib ones for
+             * AMBIGUOUS candidates; nothing has decided the exact-duplicate
+             * case), and a warning turns a mystery into a message without
+             * pre-empting it. */
+            const SourceFile *dup_sf = diag_source_file(call->span.file_id);
+            bool in_stdlib_file = dup_sf && dup_sf->path && strstr(dup_sf->path, "stdlib/");
+            if (!in_stdlib_file && !e->in_stdlib_load) {
+                diag_emit(DIAG_WARNING, call->span,
+                          "instance %s [%s] is already defined (first definition "
+                          "wins): this definstance has no effect",
+                          tc_name->name,
+                          n_type_args > 0 ? type_name(type_args[0]) : "");
+            }
             /* Already have this exact instance; emit nothing further. */
             return e_nil(e, call->span);
         }

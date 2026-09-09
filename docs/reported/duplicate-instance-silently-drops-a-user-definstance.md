@@ -6,6 +6,20 @@ description: "`(definstance Eq [int] (eq? [a b] false))` in a user file is a no-
 
 # A user instance colliding with an autoloaded stdlib instance is a silent no-op
 
+**PARTIALLY RESOLVED 2026-09-09 -- it is no longer silent.** Fix direction 2
+landed: the guard now warns `instance Eq [int] is already defined (first
+definition wins): this definstance has no effect`, keyed on the defining FILE
+(anything outside `stdlib/`), since `in_stdlib_load` is false for an explicit
+`(load "stdlib/...")` -- the repeated-load case the guard was written for, which
+stays silent. A census found no fixture re-instancing a stdlib class for a
+primitive without its own local `defclass`, so nothing in the tree was warning
+noise. Pinned by `tests/fixtures/duplicate-instance-warns` (the warning text and
+that the first definition still wins).
+
+**Still open: the language decision** -- replace (T1's stated intent for
+ambiguous candidates, extended to exact duplicates) or reject. The warning
+pre-empts neither. The report stays open for that.
+
 **Severity: low-medium.** Nothing miscompiles and nothing crashes; the program
 simply runs the OTHER instance. What earns the filing is the silence: a user
 writes an instance, the compiler accepts it, and it has no effect -- with no
