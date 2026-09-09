@@ -1,10 +1,45 @@
 ---
 title: "A `Show`/`show` instance with an inline-C body prints a heap pointer under `tur interpret`, with no diagnostic"
-category: Reported
+category: Archive
 description: "Every other inline-C shape the tree-walker cannot run fails loudly -- either the simple executor declines and the clean `inline-C not supported in interpreter mode` guard fires, or a matcher claims it and returns the right answer. A typeclass named exactly `Show` with a method named exactly `show` takes neither path: it returns the impl's raw carrier word, so `(println (.show 7.35))` prints 88167088870656 instead of `float:7.35`. Renaming the class OR the method restores the clean error."
 ---
 
 # `Show`/`show` + inline-C body = a printed pointer, silently
+
+**RESOLVED 2026-09-09.** The report located the wrong bypass: `turi_call_show_named`
+is the `println`-on-a-struct route and never ran here. The actual one is in
+`interpreter_natives.c`, which registers stdlib's inline-C `Show` instances as
+natives under the ELABORATOR'S MANGLED INSTANCE NAMES (`__inst_Show_show_int`,
+`__inst_Show_show_float`, ...), and the "keep native override" branch in
+`eval.c`'s defn registration kept such a native for ANY impl that landed on
+the same key. A user class spelling `Show`/`show` over `float` produces exactly
+that key, so its inline-C body was never registered at all -- stdlib's native
+ran instead, and stdlib's `show` returns an owned `String` handle (a
+`TURI_INT`), which the user's `cstr`-declared method handed to `println` as a
+number. That is the whole isolation table: rename the class, the method, or
+change the receiver type off stdlib's set and the key no longer collides.
+
+The fix keeps an `__inst_`-keyed native only for an impl whose defining file
+is under `stdlib/` (the FILE, not `in_stdlib_load`, which is false for an
+explicit `(load "stdlib/typeclass-show.tur")` -- the same signal the
+duplicate-instance warning uses). A user impl falls through to its own
+closure, whose inline-C body then reaches the simple executor or the clean
+diagnostic like any other: the `%.2f` float body is unclaimed and reports
+`inline-C not supported in interpreter mode`; the `%lld` int body is CLAIMED
+and answers `int:735` -- the report's other legitimate outcome, so the harness
+accepts either and rejects a bare integer. Plain-defn natives keep the
+documented override-by-name behaviour (the benchmark `head`/`tail` stub
+pattern).
+
+Pinned by `tests/run-interp-show-inline-c.sh` (ctest `tur_interp_show_inline_c`):
+the four isolation rows, the pure-bodied user `Show`, the compiled path, and
+stdlib's own `show-line` on a float under `--interpret` (the override the fix
+must keep). A dedicated runner because `run-turi.sh` PASS-skips every inline-C
+program. Direction 3 (stop keying on names) is untouched: the natives are
+still keyed by mangled name, but now only claim stdlib's bodies. Interpreted
+2002/0, compiled 2910/0.
+
+---
 
 **Severity: medium.** A silent wrong answer, but on a path that is documented
 as unsupported and that no suite covers (`run-turi.sh` PASS-skips every fixture

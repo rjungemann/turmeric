@@ -9764,8 +9764,30 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * under the primary key, keep the native rather than overwriting it. */
         if (fndef->body && fndef->body->kind == EX_INLINE_C) {
             TuriValue existing = turi_env_get(env, primary_key);
+            /* turi-show-instance-with-inline-c-body-prints-a-pointer: the
+             * typeclass-instance natives (`__inst_Show_show_float`, ...) are
+             * stand-ins for STDLIB bodies, registered under the mangled
+             * instance name.  A USER class that happens to spell the same
+             * class/method/type -- a local `(defclass Show [a] (show [x] :
+             * cstr))` with an inline-C `Show [float]` -- lands on the same key
+             * and used to inherit stdlib's native, which returns an owned
+             * String handle: `(println (.show 7.35))` printed the handle's
+             * address, silently, where every other inline-C shape says it
+             * cannot run.  Keep an instance-method native only for an impl
+             * defined under stdlib/ (autoloaded or explicitly loaded -- the
+             * file, not `in_stdlib_load`, is the signal); a user impl falls
+             * through to its own closure, whose inline-C body then reaches the
+             * simple executor or the clean diagnostic like any other.  Plain
+             * defn natives keep the documented override-by-name behaviour. */
+            bool inst_key = strncmp(primary_key, "__inst_", 7) == 0;
+            bool from_stdlib_file = false;
+            if (inst_key && fndef->binding) {
+                const char *fp = diag_file_path(fndef->binding->span.file_id);
+                from_stdlib_file = fp && strstr(fp, "stdlib/") != NULL;
+            }
             if (existing.tag == TURI_CLOSURE && existing.as_closure &&
-                existing.as_closure->native) {
+                existing.as_closure->native &&
+                (!inst_key || from_stdlib_file)) {
                 return existing; /* keep native override */
             }
         }

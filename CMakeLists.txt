@@ -764,6 +764,18 @@ add_test(
   COMMAND bash tests/run-interp-inline-c-opaque.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# turi-show-instance-with-inline-c-body-prints-a-pointer: a USER `Show [float]`
+# whose `show` body is inline-C printed a heap pointer under --interpret with no
+# diagnostic.  The interpreter's stdlib natives are registered under the mangled
+# instance names (`__inst_Show_show_float`) and the "keep native override"
+# branch kept one for ANY same-named impl -- so the user's cstr-returning method
+# ran stdlib's owned-String native.  Same reason as above for a dedicated
+# runner: run-turi.sh PASS-skips every inline-C program.
+add_test(
+  NAME tur_interp_show_inline_c
+  COMMAND bash tests/run-interp-show-inline-c.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Prereq 2a (turi-open-reports-prereqs.md / turi-map-set-hamt-interpreter-gap.md):
 # the context-carrying key comparator family (tur_hamt_*_eq_ctx) that lets a
 # stateful/turi-closure comparator ride along via a `void *ctx` word.  Compiles
