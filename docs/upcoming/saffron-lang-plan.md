@@ -1831,9 +1831,62 @@ variable (`clone : a -> a`); an instance for a type CONSTRUCTOR
 (`Functor Option`), since a widened value's tag is minted from `(Option float)`;
 and a type-variable receiver (`Clone T`), which has no ground tag.
 
-The second half of the exit -- the four design questions answered from real
-programs -- is still open, and now genuinely can be, since the programs are
-writable and dispatch works.
+#### The four design questions -- answered 2026-09-09
+
+Each was measured against a real program, and three of the four turned out
+not to be dynamic-dispatch questions at all.
+
+**Q1 -- superclass chains.** This language has no `defclass` superclass
+declaration; the shape the question meant is the CONSTRAINED instance,
+`(definstance Show [Vec] [(Show A)] ...)`. Such an instance is
+parametric-headed, so it is the same gap as Q3, plus one more thing on top: the
+instance body dispatches `(show (:: x A))` on each element through the
+constraint's dictionary, and under dynamic dispatch with `A = any` that
+dictionary would itself have to dispatch dynamically -- a synthesised
+`dict_Show_any` whose slot does the registry lookup on the element's tag. That
+is the genuinely open design item, and it sits behind Q3. The ground case
+(`.show` on an `any` holding a float) dispatches correctly today; its
+`println` panic was Saffron's dynamic print not knowing `String`, not the
+dispatch.
+
+**Q2 -- default methods.** Cannot be measured, because default method bodies
+do not work under STATIC dispatch either: the typeclass guide's own example
+fails three different ways. Filed as
+[typeclass-default-methods-do-not-work](../reported/typeclass-default-methods-do-not-work.md).
+S9 handles a defaulted slot by construction (the shim table iterates
+`method_impls[i]`), which becomes demonstrable the day an instance can omit a
+method.
+
+**Q3 -- HKT receivers: key rows on the head, as directed.** Feasible, and the
+design is settled: record the head def alongside each widened id in the scan,
+emit one row PER WIDENED INSTANTIATION whose head matches the instance, and
+point it at a shim that calls the by-value SPEC for that instantiation -- never
+the carrier base, which reads an `(Option any)`'s 16-byte element as an int64.
+Head-keying is a row-generation rule, not a different lookup. **Blocked on the
+compiled path by a pre-existing defect**: the spec it must call
+(`fmap` over `(Option any)` with an `any`-taking closure) does not compile in
+plain Turmeric, because a `tur_poly_fn_t` cannot carry a 16-byte `any`
+argument. Filed as
+[poly-fn-with-any-parameter-is-called-with-the-int64-carrier](../reported/poly-fn-with-any-parameter-is-called-with-the-int64-carrier.md).
+**The interpreter already does it** -- `(.fmap o (fn [x] (+ x 1)))` on an
+`any` holding `(some 41)` answers 42 under `tur interpret` -- so this is
+currently a back-end divergence, and closing it is that report.
+
+**Q4 -- two instances matching one tag.** Cannot happen, and not because the
+tag is per instantiation: a second `definstance` for the same `(class, type)`
+is dropped at definition by the idempotent re-instance guard, first definition
+wins, silently. Static resolution, the interpreter's walk and S9's registry all
+agree because there is only ever one instance to find. What that exposed is
+that a USER instance for a stdlib-covered type is a silent no-op, against the
+file's own stated intent that user instances shadow stdlib ones. Filed as
+[duplicate-instance-silently-drops-a-user-definstance](../reported/duplicate-instance-silently-drops-a-user-definstance.md);
+the decision (replace, error, or warn) is a language one and S9 inherits it.
+
+One robustness note from Q1: `EX_DYN_METHOD` takes its result type from the
+instance the static resolver happened to select rather than from the class
+declaration (`TypeClassMethod.return_type`). It was correct in every measured
+case -- for `Show` the instance's `void *` IS `String` -- but the class is the
+right source, since it is what makes one slot callable through one signature.
 
 ---
 
