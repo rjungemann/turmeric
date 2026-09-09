@@ -6,7 +6,22 @@ description: "docs/guides/typeclass-guide.md documents default implementations -
 
 # Typeclass default method bodies do not work
 
-**Severity: medium.** Not a miscompile -- every shape fails loudly at
+**RESOLVED 2026-09-09** via fix directions 1 and 2 together, in a smaller shape
+than either described: the default body is no longer elaborated at the class at
+all. `elab_defclass` records the method FORM on `TypeClassMethod.default_method_form`
+and `elab_definstance` splices that form in for a method the instance omits --
+after lining the provided impls up in class order by name -- so the default
+elaborates through the ordinary instance-method path, with the receiver at the
+instance's own type and its siblings resolvable (the instance is registered
+before its method bodies are elaborated, so `(.lt? x y)` finds it). Nothing
+constrained-generic was needed. All four rows of the table pass on both back
+ends, pinned by `tests/fixtures/typeclass-default-method`; the omitted-method
+error now NAMES the method (`errors/typeclass-missing-method-no-default`); and
+Saffron's dynamic dispatch of a defaulted method -- D8 question 2 -- is pinned
+by `saffron-dyn-default-method`. The guide's example is corrected to the
+language's `.lt?` spelling.
+
+**Severity was medium.** Not a miscompile -- every shape fails loudly at
 elaboration. What makes it medium rather than low is that the feature is
 **documented as working**, with a worked example, in the typeclass guide; a
 reader following the guide hits a wall on the first attempt, and nothing tells

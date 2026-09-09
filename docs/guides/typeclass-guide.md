@@ -370,13 +370,13 @@ To declare a default body, simply provide forms after the return type in the `de
 ```turmeric
 (defclass Ord [a]
   (lt? [x y] : bool)
-  (lte? [x y] : bool (or (lt? x y) (= x y))))
+  (lte? [x y] : bool (or (.lt? x y) (= x y))))
 ```
 ```sweet-exp
 defclass Ord [a]
   lt? [x y] :bool
   lte? [x y] :bool
-    or (lt? x y) (= x y)
+    or (.lt? x y) (= x y)
 ```
 
 When implementing the instance, we can choose to implement `lt?` and completely omit `lte?`, inheriting the default logic:

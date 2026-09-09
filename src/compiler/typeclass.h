@@ -72,6 +72,15 @@ struct TypeClassMethod {
      * NULL if the defclass method has no default body.  Registered in the program
      * by elab_defclass so effect_check_pass validates it automatically. */
     struct Expr *default_fn_expr;
+    /* typeclass-default-methods-do-not-work: the class's method FORM when it
+     * carries a default body -- `(lte? [x y] : bool (or (.lt? x y) (= x y)))`
+     * -- kept UNELABORATED.  A default cannot be elaborated at the class: no
+     * instance exists yet, so a sibling call has nothing to resolve against,
+     * and the eager attempt broke every class that merely declared one.  It is
+     * elaborated per instance instead, by elab_definstance splicing this form
+     * in for a method the instance omits, so it goes through the ordinary
+     * instance-method path with the receiver at the instance's own type. */
+    const struct Form *default_method_form;
 };
 
 /* A typeclass definition (e.g., Eq, Ord, Show) */

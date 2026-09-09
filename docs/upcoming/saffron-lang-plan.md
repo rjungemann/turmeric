@@ -1849,13 +1849,14 @@ is the genuinely open design item, and it sits behind Q3. The ground case
 `println` panic was Saffron's dynamic print not knowing `String`, not the
 dispatch.
 
-**Q2 -- default methods.** Cannot be measured, because default method bodies
-do not work under STATIC dispatch either: the typeclass guide's own example
-fails three different ways. Filed as
-[typeclass-default-methods-do-not-work](../reported/typeclass-default-methods-do-not-work.md).
-S9 handles a defaulted slot by construction (the shim table iterates
-`method_impls[i]`), which becomes demonstrable the day an instance can omit a
-method.
+**Q2 -- default methods: WORK, 2026-09-09.** They could not be measured at
+first because default bodies did not work under STATIC dispatch either (the
+typeclass guide's own example failed three ways). Fixed -- the default is kept
+as a form on the class and spliced in per instance
+([archived](../archive/typeclass-default-methods-do-not-work.md)) -- and the
+dynamic case then held by construction: the shim table iterates
+`method_impls[i]`, and a default-filled slot is a shim like any other. Pinned
+by `saffron-dyn-default-method` on both back ends.
 
 **Q3 -- HKT receivers: keyed on the head, BUILT 2026-09-09.** `(.fmap o (fn
 [x] (+ x 1)))` on an `any` holding `(some 41)` answers 42 on both back ends,

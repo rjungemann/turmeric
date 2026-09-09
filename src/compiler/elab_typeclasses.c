@@ -1198,6 +1198,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     method->return_refine_var  = return_refine_var;
     method->effect_row = method_effect_row;  /* ER3: NULL if not annotated */
     method->default_fn_expr = NULL;          /* ER3: set by elab_defclass if body forms exist */
+    method->default_method_form = NULL;      /* set by elab_defclass if body forms exist */
     return method;
 }
 
@@ -1238,6 +1239,33 @@ static bool typeclass_signatures_match(const TypeClass *existing,
  * Syntax: (defclass Eq [a] (eq? [x : a, y : a] : bool))
  *         (defclass Show [a] (show [x : a] : cstr))
  */
+
+/* typeclass-default-methods-do-not-work: does a default body mention one of
+ * the class's own methods -- `(.lt? x y)`, or bare `(lt? x y)`?  Such a body can
+ * only be elaborated per instance. */
+static bool form_mentions_sibling(const Form *f, const TypeClassMethod *methods,
+                                  uint32_t n_methods) {
+    if (!f) return false;
+    if (f->tag == F_SYM && f->as.sym && f->as.sym->name) {
+        const char *nm = f->as.sym->name;
+        const char *bare = (nm[0] == '.') ? nm + 1 : nm;
+        for (uint32_t i = 0; i < n_methods; i++)
+            if (methods[i].name && strcmp(methods[i].name->name, bare) == 0) return true;
+        return false;
+    }
+    if (f->tag == F_LIST || f->tag == F_VEC) {
+        for (uint32_t i = 0; i < f->as.list.len; i++)
+            if (form_mentions_sibling(f->as.list.items[i], methods, n_methods)) return true;
+    }
+    return false;
+}
+static bool default_body_mentions_sibling(const Form *method_form, uint32_t body_start,
+                                          const TypeClassMethod *methods, uint32_t n_methods) {
+    for (uint32_t k = body_start; k < method_form->as.list.len; k++)
+        if (form_mentions_sibling(method_form->as.list.items[k], methods, n_methods)) return true;
+    return false;
+}
+
 Expr *elab_defclass(Elab *e, const Form *call) {
     /* Minimum: (defclass Name) */
     if (call->as.list.len < 2) {
@@ -1523,8 +1551,35 @@ Expr *elab_defclass(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Third pass: elaborate default method bodies (if any) now that the
-     * defclass is committed. */
+    /* Third pass: RECORD default method bodies (if any).
+     *
+     * typeclass-default-methods-do-not-work: this used to elaborate the default
+     * body here, as a synthetic `__default_<Class>_<method>` FnDef with its
+     * parameters typed at the class's type variable.  That can never work for
+     * the body a default exists to write -- `(or (.lt? x y) (= x y))` -- because
+     * no instance of the class exists yet, so `.lt?` on a tyvar receiver
+     * resolves to nothing; and it fired even when every instance implemented
+     * the method, so merely WRITING a default broke the class.  The form is
+     * kept instead and elab_definstance splices it in for an omitted method,
+     * where it elaborates as an ordinary instance method against a concrete
+     * receiver with its siblings resolvable. */
+    for (uint32_t i = 0; i < n_methods; i++) {
+        Form *method_form = call->as.list.items[method_form_idx[i]];
+        uint32_t body_start = method_body_starts[i];
+        if (body_start < method_form->as.list.len)
+            methods[i].default_method_form = method_form;
+    }
+
+    /* ...and ALSO elaborate it at the class when that can succeed -- a default
+     * body that calls no sibling method.  `errors/typeclass-effect-row-default-bad`
+     * pins a class-level rule: a default whose body performs an effect beyond
+     * the method's declared row is TUR-E0009 even when every instance overrides
+     * it, and that check needs the body elaborated HERE (the spliced copy is
+     * only checked where it is spliced).  A sibling-calling default is skipped
+     * -- at the class there is nothing for `.lt?` to resolve against, which is
+     * the failure this whole change exists to remove -- and gets its checking
+     * per instance instead.  Decided syntactically, so it never depends on
+     * whether a speculative elaboration happened to fail. */
     for (uint32_t i = 0; i < n_methods; i++) {
         Form *method_form = call->as.list.items[method_form_idx[i]];
         uint32_t body_start = method_body_starts[i];
@@ -1533,7 +1588,8 @@ Expr *elab_defclass(Elab *e, const Form *call) {
         /* ER3: If the method form has forms after the return type, elaborate
          * them as a default body.  This mirrors elab_definstance's method
          * elaboration so that effect_check_pass finds it as a normal FnDef. */
-        if (body_start < method_form->as.list.len) {
+        if (body_start < method_form->as.list.len &&
+            !default_body_mentions_sibling(method_form, body_start, methods, n_methods)) {
             /* Build a synthetic function name: __default_<TypeClass>_<method> */
             char default_name_buf[192];
             snprintf(default_name_buf, sizeof(default_name_buf),
@@ -1635,7 +1691,7 @@ Expr *elab_defclass(Elab *e, const Form *call) {
             methods[i].default_fn_expr = def_expr;
         }
     }
-    
+
     /* Register the typeclass in the environment */
     TypeClass *tc = typeclass_env_register_typeclass(&e->typeclass_env, name);
     if (!tc) {
@@ -3275,6 +3331,54 @@ Expr *elab_definstance(Elab *e, const Form *call) {
      * The number of methods must match the typeclass definition.
      */
 
+    /* typeclass-default-methods-do-not-work: line the provided impls up in
+     * CLASS ORDER by name, and fill a method the instance omits from the
+     * class's default form.  The default form has the exact shape of an
+     * instance method form -- `(name [params] : ret body...)` -- so from here on
+     * it is indistinguishable from one the instance wrote, and elaborates with
+     * the receiver at this instance's type and its siblings resolvable.  A
+     * method with neither an impl nor a default is the error this used to
+     * report as a bare count. */
+    {
+        Form **ordered = tc->n_methods
+            ? (Form **)arena_alloc(e->arena, tc->n_methods * sizeof(Form *)) : NULL;
+        for (uint32_t k = 0; k < n_method_impl_forms; k++) {
+            Form *pf = method_impl_forms[k];
+            if (pf->tag != F_LIST || pf->as.list.len < 1 || pf->as.list.items[0]->tag != F_SYM)
+                continue;   /* the per-method loop below reports the shape */
+            bool known = false;
+            for (uint8_t i = 0; i < tc->n_methods && !known; i++)
+                known = (pf->as.list.items[0]->as.sym == tc->methods[i].name);
+            if (!known) {
+                diag_emit(DIAG_ERROR, pf->as.list.items[0]->span,
+                          "method implementation name '%s' doesn't match any method of '%s'",
+                          pf->as.list.items[0]->as.sym->name, tc_name->name);
+                return NULL;
+            }
+        }
+        for (uint8_t i = 0; i < tc->n_methods; i++) {
+            Form *found = NULL;
+            for (uint32_t k = 0; k < n_method_impl_forms && !found; k++) {
+                Form *pf = method_impl_forms[k];
+                if (pf->tag == F_LIST && pf->as.list.len >= 1 &&
+                    pf->as.list.items[0]->tag == F_SYM &&
+                    pf->as.list.items[0]->as.sym == tc->methods[i].name)
+                    found = pf;
+            }
+            if (!found && tc->methods[i].default_method_form)
+                found = (Form *)tc->methods[i].default_method_form;
+            if (!found) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "definstance: missing method '%s' for '%s', and the class "
+                          "declares no default for it",
+                          tc->methods[i].name->name, tc_name->name);
+                return NULL;
+            }
+            ordered[i] = found;
+        }
+        method_impl_forms = ordered;
+        n_method_impl_forms = tc->n_methods;
+    }
     if (n_method_impl_forms < tc->n_methods) {
         diag_emit(DIAG_ERROR, call->span,
                   "definstance: expected %d method implementations for '%s', got %d",
