@@ -4648,6 +4648,22 @@ ReaderType detect_lang_dialect(const char *src, size_t len,
         }
 
         ReaderType base = lang_base_from_name(lang_start, lang_len, out_dialect);
+        /* lang-unknown-base-diagnostic-names-nothing: an unrecognised BASE
+         * used to come back as (ReaderType)-1 with its token dropped, so the
+         * only thing a caller could print was reader_type_name(READER_UNKNOWN)
+         * -- the literal word "unknown", as if it were what the user wrote.
+         * Hand the token out through the same slot an unknown LAYER already
+         * uses (callers tell the two apart by the returned type: a base
+         * failure is READER_UNKNOWN, a layer failure leaves the base valid),
+         * and return READER_UNKNOWN rather than -1 so every caller's
+         * reader_type_is_implemented test sees one value. */
+        if (base == (ReaderType)-1 || base == READER_UNKNOWN) {
+            if (out_bad && *out_bad == NULL) {
+                *out_bad = lang_start;
+                if (out_bad_len) *out_bad_len = lang_len;
+            }
+            base = READER_UNKNOWN;
+        }
 
         /* Collect the space-separated trailing tokens as the layer set, then
          * consume to end-of-line so no token ever leaks into the body handed

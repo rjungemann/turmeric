@@ -12605,6 +12605,10 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
              * (src/main.c detect_and_adjust_lang) instead of silently running
              * the program under the default reader -- otherwise `#lang foo`
              * would just execute as plain Turmeric under --interpret. */
+            if (detected == READER_UNKNOWN && bad) {
+                return turi_errorf("error [TUR-E0331]: unknown #lang base '%.*s' -- see `tur lang-layers` for the valid bases",
+                                   (int)bad_len, bad);
+            }
             if (!reader_type_is_implemented(detected)) {
                 return turi_errorf("error: #lang %s is not yet implemented",
                                    reader_type_name(detected));

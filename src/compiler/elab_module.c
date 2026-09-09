@@ -428,9 +428,14 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
                                                    &layers, &bad, &bad_len,
                                                    &dialect);
         if (bad) {
-            diag_emit(DIAG_ERROR, SPAN_UNKNOWN,
-                      "unknown #lang layer '%.*s' in imported module '%s' "
-                      "(TUR-E0330)", (int)bad_len, bad, path_copy);
+            if (lang_type == READER_UNKNOWN)
+                diag_emit(DIAG_ERROR, SPAN_UNKNOWN,
+                          "unknown #lang base '%.*s' -- see `tur lang-layers` for the valid bases (in imported module '%s') (TUR-E0331)",
+                          (int)bad_len, bad, path_copy);
+            else
+                diag_emit(DIAG_ERROR, SPAN_UNKNOWN,
+                          "unknown #lang layer '%.*s' in imported module '%s' "
+                          "(TUR-E0330)", (int)bad_len, bad, path_copy);
             return false;
         }
         ReaderType chosen = (ext_type != READER_TURMERIC) ? ext_type : lang_type;

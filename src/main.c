@@ -192,6 +192,15 @@ static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len
                                                &dialect);
 
     if (bad) {
+        /* lang-unknown-base-diagnostic-names-nothing: the detector hands an
+         * unrecognised BASE out through the same slot as an unknown layer;
+         * the returned type says which.  Name what the user wrote either way. */
+        if (lang_type == READER_UNKNOWN) {
+            fprintf(stderr,
+                    "tur: error [TUR-E0331]: unknown #lang base '%.*s' -- see `tur lang-layers` for the valid bases (in %s)\n",
+                    (int)bad_len, bad, path);
+            exit(1);
+        }
         /* Unknown layer token -- hard error (TUR-E0330), mirroring the
          * unimplemented-base exit below. */
         fprintf(stderr,

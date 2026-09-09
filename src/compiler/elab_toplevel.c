@@ -1106,9 +1106,14 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
                                                        &layers, &bad, &bad_len,
                                                        &dialect);
             if (bad) {
-                diag_emit(DIAG_ERROR, path_f->span,
-                          "unknown #lang layer '%.*s' in loaded file '%s' "
-                          "(TUR-E0330)", (int)bad_len, bad, path_buf);
+                if (lang_type == READER_UNKNOWN)
+                    diag_emit(DIAG_ERROR, path_f->span,
+                              "unknown #lang base '%.*s' -- see `tur lang-layers` for the valid bases (in loaded file '%s') (TUR-E0331)",
+                              (int)bad_len, bad, path_buf);
+                else
+                    diag_emit(DIAG_ERROR, path_f->span,
+                              "unknown #lang layer '%.*s' in loaded file '%s' "
+                              "(TUR-E0330)", (int)bad_len, bad, path_buf);
                 lx->rc = -1;
                 continue;
             }
