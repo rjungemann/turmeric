@@ -9122,7 +9122,18 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
     if (!inner_is_dict_clone &&
         inner_b->type.kind == TY_FN && inner_b->type.as.fn.result_full_type) {
         const Type *irf = inner_b->type.as.fn.result_full_type;
-        bool aggr = irf->kind == TY_APP;
+        /* fmap-over-byvalue-struct-element-passes-the-struct-as-int64: a plain
+         * by-value `defstruct` result (TY_ADT, e.g. `Pt`) belongs to the same
+         * convention as the parametric monomorph -- the typed-carrier call site
+         * casts `g.fn` to `(tur_adt_Pt (*)(void *, ...))` and reads the struct
+         * BY VALUE, and a lambda's typed thunk returns it that way.  Left as
+         * the int64 carrier, the wrapper took the fat-return path and
+         * malloc-boxed the struct, which that cast then read as the struct
+         * itself.  Same shape test as the by-value PARAM arm above. */
+        bool aggr = irf->kind == TY_APP ||
+                    (irf->kind == TY_ADT && irf->as.adt_.def &&
+                     !irf->as.adt_.def->is_heap &&
+                     adt_is_byvalue_product(irf->as.adt_.def));
         if (aggr) {
             Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
             *rft = *irf;

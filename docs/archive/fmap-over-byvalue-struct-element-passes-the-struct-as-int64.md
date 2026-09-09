@@ -1,10 +1,44 @@
 ---
 title: "`fmap` over an `Option` of a by-value struct does not compile: the by-value spec invokes the mapper as `(Pt (*)(void *, int64_t))g.fn` and passes the `Pt` payload to the int64 slot"
-category: Reported
+category: Archive
 description: "`(fmap (some (Pt 1.25 2.5)) sw)` with `Pt` a two-float defstruct fails in C: `incompatible type for argument 2 of '(tur_adt_Pt (*)(void *, int64_t))g.fn'`. The failure is inside `__inst_Functor_fmap_Option__spec__..._Pt`, the by-value specialisation's own body, and is identical whether the mapper is a global defn, a lambda, or a fn parameter -- so it is the spec's invocation cast, not the argument packing. The interpreter answers 2.5."
 ---
 
 # `fmap` over a by-value struct element casts the mapper's argument to int64
+
+**RESOLVED 2026-09-09** via fix direction 1 -- and the report's diagnosis was
+half right. The spec's cast was not the wrong half; it already spelled the
+one convention every thunk shape shares for a wide by-value ADT (argument as
+an int64 box pointer, result by value). Two things disagreed with it:
+
+- **The generated wrapper's RESULT.** `make_poly_wrapper_ex` carried a
+  by-value result type on the wrapper only for a parametric monomorph
+  (`irf->kind == TY_APP`, the M7 rule). A plain `defstruct` result (TY_ADT)
+  stayed the int64 carrier, so the wrapper took the generic fat-return path
+  and malloc-boxed the struct -- which the spec's by-value cast then read as
+  the struct itself. The rule now admits a non-heap by-value product TY_ADT,
+  the same shape test the wrapper's own by-value PARAM arm uses one screen
+  up. A lambda's typed thunk already returned the struct by value, which is
+  why only the global-defn shape would have misread even after the argument
+  fix.
+- **The spec's ARGUMENT.** The typed-carrier dispatch spelled the wide slot
+  `int64_t` (B4 slice 2) but never boxed the value: that path was written for
+  an argument that was ALREADY the carrier (a boxed monomorph element bound
+  raw by a `match`), and a struct bound out of an `Option` is the aggregate
+  itself. The dispatch now spills such a value and passes its address, as
+  `fat_dispatch_box_arg` does for a fat parameter -- and to keep B4's raw
+  carrier binders untouched, both B4 match-binder sites record their
+  `int64_t` C type in the emitted-local registry, which the spill consults.
+  A spec parameter emitted as the carrier (`emit_carrier_holds_byval`) passes
+  through the same way. This is what `hkt-cata-wide-byvalue-carrier` pinned,
+  and it regressed on the first cut until the registry record went in.
+
+Pinned by `tests/fixtures/fmap-byvalue-struct-element`: a global defn, an
+inline lambda and a forwarded fn parameter over `(Option Pt)`, a `none`, and
+the same spec shape over `(Result Pt cstr)`, agreeing on both back ends.
+Compiled 2910/0, interpreted 2002/0.
+
+---
 
 **Severity: medium.** Loud (a C compile error, never a wrong answer), but it
 means `fmap`/`bind` over a container whose element is a by-value `defstruct`

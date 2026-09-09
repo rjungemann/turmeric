@@ -7871,6 +7871,37 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             raw = rec;
                         }
                     }
+                    /* fmap-over-byvalue-struct-element-passes-the-struct-as-int64:
+                     * the typed-carrier cast below spells a WIDE by-value ADT
+                     * slot `int64_t` (the box-pointer convention every thunk
+                     * derefs at entry), but the value in hand here is the
+                     * struct itself when it came out of a `match` on the
+                     * container (`tur_adt_Pt v = *(tur_adt_Pt *)...`) -- passing
+                     * it raw was `incompatible type for argument 2`.  Spill it
+                     * and pass the address, exactly as the fat-parameter
+                     * dispatch does (fat_dispatch_box_arg).  A value that is
+                     * ALREADY the int64 carrier -- a spec param emitted as the
+                     * carrier, or a local the registry records as int64_t (B4's
+                     * boxed monomorph element) -- passes through untouched. */
+                    if (phase_f_concrete &&
+                        emit_type_is_wide_byval_adt(ctx, e->as.call_.args[i]->type)) {
+                        const Expr *av = e->as.call_.args[i];
+                        while (av && av->kind == EX_ASCRIBE) av = av->as.ascribe_.inner;
+                        const char *agg_cn = emit_type_c_name(ctx,
+                            emit_resolve_type(ctx, e->as.call_.args[i]->type));
+                        bool holds_agg = true;
+                        if (av && av->kind == EX_VAR && av->as.var.binding) {
+                            const Binding *ab = av->as.var.binding;
+                            if (ab->emit_carrier_holds_byval) holds_agg = false;
+                            char *an = name_for_binding(ctx, ab);
+                            const char *rec = an ? emit_localvar_lookup_ctype(an) : NULL;
+                            if (rec) holds_agg = agg_cn && strcmp(rec, agg_cn) == 0;
+                            free(an);
+                        }
+                        if (holds_agg || expr_is_pbp_param(ctx, av))
+                            raw = fat_dispatch_box_arg(ctx, body, av,
+                                                       e->as.call_.args[i]->type, raw);
+                    }
                     /* Phase F concrete path: args used as-is, no int64_t widening. */
                     arg_strs[i] = raw;
                 }
@@ -15787,6 +15818,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                  * and is materialized at the boundary. */
                                 buf_printf(body, "%s %s = (%s)__scrut%s%s;\n",
                                            ctype, bname, ctype, acc, mp);
+                                /* Record the carrier representation (see the
+                                 * switch-path twin): the typed-carrier dispatch
+                                 * spill reads it to leave this binder unboxed. */
+                                emit_localvar_record_ctype(bname, ctype);
                             } else if (emit_type_is_byvalue_adt(ctx, fb_eff)) {
                                 if (scrut_is_app_monomorph &&
                                     !emit_type_is_wide_byval_adt(ctx, fb_eff) &&
@@ -16190,6 +16225,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                  * by-value ADT binding keeps the B3 deref. */
                                 buf_printf(body, "%s %s = (%s)__scrut->%s;\n",
                                            ctype, bname, ctype, mp);
+                                /* Record the carrier representation: the typed-
+                                 * carrier dispatch spill consults the registry to
+                                 * tell this binder (already the box pointer) from
+                                 * a binder holding the aggregate itself. */
+                                emit_localvar_record_ctype(bname, ctype);
                             } else if (emit_type_is_byvalue_adt(ctx, fb->type)) {
                                 if (scrut_is_app_monomorph &&
                                     !emit_type_is_wide_byval_adt(ctx, fb->type) &&
