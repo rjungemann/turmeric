@@ -7,6 +7,7 @@
 #include "globals.h"  /* increment 4 stage 3: g_emit_abi_trace (container-elem shadow) */
 #include "experiments.h" /* SR3 slice B: option-niche lifecycle warning */
 #include "mangle.h"
+char *mangle_adt_name(const char *name);  /* emit_core.c; the one ADT/ctor spelling */
 /* c-keyword guard: keep append_c_ident_mangled in lockstep with mangle_field_name */
 
 #include <stdio.h>
@@ -2078,16 +2079,13 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
     buf_printf(out, "    union {\n");
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
-        /* Mangle ctor name: replace non-alnum chars with '_'. */
-        size_t mlen = strlen(ctor->name);
-        char *mctor = (char *)malloc(mlen + 1);
-        if (!mctor) { fprintf(stderr, "tur: oom\n"); abort(); }
-        for (size_t mi = 0; mi < mlen; mi++) {
-            char c = ctor->name[mi];
-            mctor[mi] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                         (c >= '0' && c <= '9') || c == '_') ? c : '_';
-        }
-        mctor[mlen] = '\0';
+        /* adt-ctor-underscore-mangles-twice: the member name must be the SAME
+         * spelling every access site uses (`adt_field_member_path`, the ctor
+         * body, the match arm), which is the injective mangler's -- a literal
+         * '_' in the ctor name is "_un" there. This used to be a local
+         * "non-alnum -> '_'" fold that kept '_' raw, so `Wrap_q` was declared
+         * as `Wrap_q` and addressed as `Wrap_unq`: uncompilable C. */
+        char *mctor = mangle_adt_name(ctor->name);
         buf_printf(out, "        struct {");
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             /* B4 (slice 2): a wide (>8 byte) by-value ADT element is stored as an
@@ -2142,15 +2140,9 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
     buf_printf(out, "#define TUR_FN_%s\n", adt_inst_name);
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
-        size_t mlen = strlen(ctor->name);
-        char *mctor = (char *)malloc(mlen + 1);
-        if (!mctor) { fprintf(stderr, "tur: oom\n"); abort(); }
-        for (size_t mi = 0; mi < mlen; mi++) {
-            char c = ctor->name[mi];
-            mctor[mi] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                         (c >= '0' && c <= '9') || c == '_') ? c : '_';
-        }
-        mctor[mlen] = '\0';
+        /* adt-ctor-underscore-mangles-twice: the union member spelling, shared
+         * with the typedef above and every access site (see the note there). */
+        char *mctor = mangle_adt_name(ctor->name);
         /* duplicate-ctor-names-collide-in-emitted-c: two different names, and
          * they were the same variable before.  `csym` is the FUNCTION symbol and
          * carries the owning ADT (`ctor_<Adt>_<Ctor><suffix>`); `mctor` stays the

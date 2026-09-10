@@ -1,4 +1,18 @@
+---
+title: Parametric ADT constructor with an underscore in its name emits invalid C
+category: Reported
+description: "The by-value monomorph typedef and constructor spelled the union member through a local non-alnum fold that kept '_' raw, while every access site used the injective mangler ('_' -> '_un'). Uncompilable C, no diagnostic."
+---
+
 # Parametric ADT constructor with an underscore in its name emits invalid C
+
+**RESOLVED 2026-09-10.** Two local "non-alnum -> '_'" folds in
+`src/compiler/types.c` (the monomorph typedef and the monomorph ctor body)
+now call `mangle_adt_name`, the spelling `adt_field_member_path`, the
+generic ctor and the match arm already used. Pinned by
+`tests/fixtures/adt-ctor-underscore-mangles-twice` (ctor and type names with
+underscores, parametric and plain, applied at int/float/cstr, nullary ctor).
+
 
 **Severity:** medium (uncompilable C, no diagnostic; typed Turmeric, not
 Saffron-specific). Found by the first run of `tests/saffron-fuzz-src.py`

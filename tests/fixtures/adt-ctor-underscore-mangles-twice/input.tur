@@ -1,0 +1,18 @@
+;; adt-ctor-underscore-mangles-twice: a parametric ADT constructor with an
+;; underscore in its name was declared in the by-value monomorph typedef
+;; through a local "non-alnum -> '_'" fold that kept the '_' raw (`Wrap_q`),
+;; while the ctor body and the match arm addressed the member through the
+;; injective mangler (`Wrap_unq`) -- uncompilable C, no diagnostic.  The
+;; non-parametric shape never had the problem (one emitter); the type name
+;; carrying the underscore did.  Found by tests/saffron-fuzz-src.py, seed 1.
+(defdata Wq [a] (Wrap_q a))
+(defdata W_1 [a] (Wrap_1 a) (Empty_1))
+(defdata Plain_x (Ctor_x :int))
+(defn main [] : int
+  (println (match (Wrap_q 7) (Wrap_q v) v))
+  (println (match (Wrap_q 7.25) (Wrap_q v) v))
+  (println (match (Wrap_1 "s") (Wrap_1 v) v (Empty_1) "none"))
+  (let [e : (W_1 cstr) (Empty_1)]
+    (println (match e (Wrap_1 v) v (Empty_1) "none")))
+  (println (match (Ctor_x 3) (Ctor_x n) (* n 2)))
+  0)
