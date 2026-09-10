@@ -62,6 +62,118 @@
 > `mangled` C-symbol field for the export table), or compile in-process and
 > resolve via `dlsym(RTLD_DEFAULT)`, which now works on Windows.
 
+> ### PROGRESS 2026-09-09 -- the declaration route is BUILT and a real script
+> ### now AOT-compiles and runs. This report stays OPEN; see "What remains".
+>
+> Reproduced first, on macOS, with a fresh `tur` (v0.46.0) and Godot 4.3
+> against `turmeric-godot` at `origin/main` (which carries the `#mode`
+> stripping fix, so AOT engages). Exactly the reported text:
+>
+> ```
+> .../turmeric-cache/0a180eab577dd51f/src/ball.tur:10:2: error: unknown function or operator 'godot-export'
+> 10 | (godot-export "vel-x"   "float" 240.0)
+>    |  ^^^^^^^^^^^^
+> ```
+>
+> plus one the report does not mention: `unknown function or operator
+> 'node/self'`. The *prelude* is missing from the staged project too, not just
+> the natives -- and the prelude is what every curated `node/...` call in a
+> real script goes through.
+>
+> **Fix direction 2 (resolve at load) needed no compiler change.** `tur build
+> --shared` already passes `-undefined dynamic_lookup` on macOS
+> ([src/main.c:6245](../../src/main.c)), so the staged `.so` links with
+> `godot_vec2` and friends undefined and `dlopen` binds them to the running
+> extension. Verified by `nm -u` on the staged library. The whole fix is
+> therefore in `turmeric-godot`; nothing in this repo changed.
+>
+> **Two hard constraints shaped the design, and both rule out "just paste the
+> declarations at the top of the script":**
+>
+> - `import is only allowed inside defmodule` -- a script written as bare
+>   top-level forms cannot reach a separate declarations module at all.
+> - `defmodule must be the first form in the file` -- so declarations cannot be
+>   prepended to a script that already has one, and `(defmodule ...)` is the
+>   *only* shape whose defns reach `exports.manifest` and are therefore
+>   AOT-dispatchable at all.
+>
+> The stager now rewrites the script instead: a bare-forms script is wrapped in
+> `(defmodule <name> (import tg-godot) (export <its defns>) ... )`, spliced onto
+> the front of the first form's line so no line moves and diagnostics keep the
+> user's line numbers. Its top-level *calls* are blanked in place -- inside a
+> `defmodule` they are TUR-E0711 ("expression at defmodule top level is never
+> evaluated"), and they have already run in the interpreter pass, which is what
+> populates the inspector exports and the signal list.
+>
+> ### What works now, and how it was checked
+>
+> `examples/paddle-pong-tur`, macOS arm64, Godot 4.3 headless:
+>
+> ```sh
+> # scripts/ball.tur and scripts/paddle.tur each carry `#mode aot`
+> TUR_BIN=<fresh tur> Godot --headless --path . --script scripts/pong_driver.gd
+> ```
+>
+> ```
+> [turmeric res://scripts/ball.tur AOT] loaded 110 exports from .../libtg_script_....so (built)
+> [turmeric res://scripts/paddle.tur AOT] loaded 110 exports from .../libtg_script_....so (built)
+> [turmeric-godot AOT] first dispatch routed via AOT: ball/_process (mangled=ball___unprocess)
+> [turmeric-godot AOT] first dispatch routed via AOT: paddle/_process (mangled=paddle___unprocess)
+> [pong] all assertions passed: ball=(281.1, 359.0) vy=-240.00  p1.y=-61.9  p2.y=541.9
+> ```
+>
+> `pong_driver.gd` is a behavioural test, not a smoke test: it drives 200
+> frames and asserts the ball advanced, stayed inside its bounds, and flipped
+> `vel-y` off the bottom wall. The interpreter baseline gives the same answers
+> to within frame jitter.
+>
+> `examples/aot-bench` also works for the first time (its `_ready` calls
+> `godot-println`, so it hit this bug too): **298.4 ns/call interpreted ->
+> 215.9 ns/call AOT** over 1e6 calls.
+>
+> Two bugs on the AOT side had to be fixed to get there, both invisible until
+> the staged build got far enough to expose them:
+>
+> - `cb_has_method` consulted only the interpreter env. Godot asks
+>   `has_method("_process")` to decide whether to put a node on the process
+>   list, and the A4 fast path returns from `_reload` *before* the interpreter
+>   eval -- so on a cache hit the env was empty, `has_method` said no, and every
+>   lifecycle hook was silently dead. This is why the fix appeared to work on a
+>   cold cache and do nothing on a warm one.
+> - The AOT dispatch path set neither `g_current_instance` nor a Variant arena
+>   frame. Compiled code calls the same natives, so `godot-self` /
+>   `godot-prop-get` had no instance and every `godot-vec2` handle leaked.
+>
+> ### What remains
+>
+> - **Variadic natives have no C entry point.** `godot-call{,-v,-f,-b,-c}`,
+>   `godot-signal`, `emit-signal`. `extern-c` has no variadic form
+>   (`elab_extern_c` hardcodes `is_variadic = false`) and calling a C variadic
+>   through a fixed prototype is ABI-invalid on Apple arm64. AOT scripts use the
+>   arity- and type-specialised `godot-callx-*` family instead (25 entry points:
+>   5 return types x {no extra arg, one :int/:float/:bool/:cstr arg}). A script
+>   calling `godot-call` directly still fails -- but now with a note naming the
+>   substitute rather than a bare "unknown function or operator".
+>   `examples/paddle-pong-tur/scripts/score.tur` is the live example.
+> - **The generated facade is not staged.** `TG_GENERATED_FACADE_SOURCE` is 2234
+>   per-class wrappers (`label/set-text`, `node2d/...`), all built on
+>   `godot-call*` at arities 0..N. Staging it means teaching
+>   `tools/gen_godot_facade.py` to pick the arg-class-suffixed spelling, and
+>   growing the `godot-callx-*` family past one extra argument (two-arg shapes
+>   are 5 x 16 = 80 more entry points). Mechanical, but a generator change plus
+>   ~5300 more lines of Turmeric in every staged compile.
+> - **`godot-connect-typed` cannot cross.** It takes a Turmeric closure --
+>   `TuriClosure*` interpreted, a fat pointer compiled. The prelude's
+>   `timer/one-shot` and `after` are marked `;;#aot-skip` for the same reason.
+> - **`(godot-export ...)` inside a hand-written `defmodule` is TUR-E0711.** The
+>   stager blanks top-level calls only when it does the wrapping; a user who
+>   writes their own `defmodule` and puts `godot-export` in it gets the error.
+>   Same for `defgodot-script`'s `:exports` block.
+> - **Compile cost.** A staged build is ~0.50 s wall (669 lines of Turmeric ->
+>   10,364 lines of C, `tur` + `cc`), of which the `tg-godot` module is the bulk.
+>   Cached per source-hash, so it is a cold-start cost, but it scales with
+>   script count.
+
 **Summary:** The AOT path stages a script into a transient project and compiles
 it with standalone `tur`. But every `godot-*` name is a C++ native the
 GDExtension registers into the *interpreter* env at run time, and standalone
