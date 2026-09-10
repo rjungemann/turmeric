@@ -3766,12 +3766,32 @@ Expr *elab_call(Elab *e, Form *call) {
              * with concrete `(POK v rest)` peers.  See
              * docs/archive/history/defdata-parametric-inference-and-elab-match-segv.md. */
             Type result_type = fn_binding->type;
+            bool result_pinned = false;
             if (ctor->adt->n_type_params > 0 && e->expected_type &&
                 e->expected_type->kind == TY_APP) {
                 AdtDef *exp_def = type_adt_app_def(e->expected_type);
                 if (exp_def == ctor->adt) {
                     result_type = *e->expected_type;
+                    result_pinned = true;
                 }
+            }
+            /* saffron-dynamic-surface-pass M3: a NULLARY constructor of a
+             * parametric ADT has no type-variable field for the Saffron ctor
+             * widen above to ascribe, so `(Nothing)` was built at the bare
+             * ADT while `(Just 1)` was `(Opt any)`: `(is? (Nothing) (Opt any))`
+             * was false compiled and a `match` on an `any` holding it panicked
+             * `different instantiation of Opt`.  The dialect's rule is one
+             * sentence -- an undetermined type argument is `any` -- so build
+             * it at the all-`any` instantiation, exactly as the instance
+             * registry keys a parametric receiver. */
+            if (!result_pinned && ctor->adt->n_type_params > 0 &&
+                lang_span_is_saffron(call->span)) {
+                Type any_t = type_from_kind(TY_ANY);
+                Type app = type_adt(ctor->adt);
+                app.hkt_kind = kind_for_arity(ctor->adt->n_type_params);
+                for (uint8_t pi = 0; pi < ctor->adt->n_type_params; pi++)
+                    app = type_app(e->arena, app, any_t, (Span){0});
+                result_type = app;
             }
             Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
             out->as.call_.fn_binding = fn_binding;

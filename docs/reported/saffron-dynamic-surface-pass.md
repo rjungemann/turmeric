@@ -1,9 +1,9 @@
 # Saffron dynamic-surface pass -- findings (2026-09-09)
 
 **Status 2026-09-10.** Resolved on this branch: H1, H2, H3, H4, H5, H6, H8
-(named functions), H9 (a sibling determines K), H10, H11, M4, M5, M6, M10,
+(named functions), H9 (a sibling determines K), H10, H11, M3, M4, M5, M6, M10,
 each pinned by a fixture and retired from the fuzzer's KNOWN table. Open: H7
-(fn-typed seam, a representation gap), M1, M2, M3, M7, M8, M9, and the lows.
+(fn-typed seam, a representation gap), M1, M2, M7, M8, M9, and the lows.
 Struck-through items below carry their resolution note.
 
 **Summary.** A differential pass (compiled `tur run` vs `tur --interpret`,
@@ -176,8 +176,7 @@ f)` via `any`: `no instance of Functor for Result` on both back ends, while
 Option dispatches. `(ok 21)` in Saffron is a `(Result any any)`; the
 registry row is keyed differently.
 
-**M3. A nullary ctor of a parametric ADT built in Saffron is not at the
-`any` instantiation.** `(defdata Opt [a] (Just a) (Nothing))`:
+**~~M3~~. RESOLVED 2026-09-10: the nullary ctor path (`elab_call.c`) builds the all-`any` instantiation in a Saffron file when no enclosing expectation pins it, matching the field widen for saturated ctors. Pinned by `tests/fixtures/saffron-nullary-parametric-ctor-any`. Was: a nullary ctor of a parametric ADT built in Saffron is not at the `any` instantiation.** `(defdata Opt [a] (Just a) (Nothing))`:
 `(is? (Nothing) (Opt any))` is false compiled / true interp; `match` on an
 `any` holding `(Nothing)` panics `different instantiation of Opt` compiled.
 `saffron-match-parametric-adt` never builds a nullary ctor.
