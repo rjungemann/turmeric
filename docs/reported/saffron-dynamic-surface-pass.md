@@ -285,6 +285,36 @@ spelling that converts a container's payload representation. The fix is a
 by-value spec for the hole-headed instance at its all-`any` instantiation --
 i.e. teaching the monomorphiser to clone it -- and nothing short of that.
 
+**The chain from cause to symptom, measured end to end (2026-09-10), so the
+next attempt starts where the evidence stops rather than at the keying it
+already ruled out:**
+
+1. `definstance` with a partially-applied head records the receiver as a
+   `TY_APP` and FORCES the parameter to the int64 carrier -- the `T4` note at
+   `elab_typeclasses.c` (`"a partially-applied instance head (e.g. `(Result _
+   B)` / `(Either E)`) ... Force the carrier here too"`). So
+   `__inst_Functor_fmap_Result_tyvar`'s declared signature carries no named
+   type variables at all.
+2. A call site therefore collects no bindings for it.
+   `emit_abi_register_call` sees `__inst_Functor_fmap_Result_tyvar` with
+   **nb=0**, where the working `__inst_Functor_fmap_Option` arrives with
+   **nb=4**. (Measured by instrumenting that function; both numbers are from
+   the same build.)
+3. With no bindings there is nothing to specialise on, so no `__spec__` clone
+   is minted -- which is why NO Result `fmap` is ever specialised, the typed
+   path with a concrete `(Result int int)` included.
+4. Every Result `fmap` therefore rides the erased carrier, whose payload
+   layout differs from the all-`any` monomorph's, per the two structs above.
+
+So the change is at step 1: a partially-applied head has to keep its type
+variables rather than collapse to the carrier. That is exactly the ABI change,
+and the carrier is forced there deliberately (the surrounding comment gives the
+by-value-struct-receiver reason), so it is not a line to flip -- but it is one
+place, not a search. Two things were ruled out by measurement and should not be
+re-tried: the registry keying (peeling the head, which yields a silent `false`
+from `is?`), and the re-dispatch decline at `emit_abi_register_call`'s
+`is_vl_wide_mono` carve-out, which the Result call never reaches.
+
 **And the obvious fix is a trap.** The same peel in
 `emit_instance_dispatch_recv_type` is NOT the fix, and was measured not to be.
 A hole-headed instance never gets a by-value spec: `.fmap` on a Result resolves
