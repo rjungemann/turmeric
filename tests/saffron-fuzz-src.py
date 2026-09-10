@@ -129,7 +129,7 @@ KNOWN = [
     ("H7-seam-fn-param",         ("route_seam_fn",)),
     ("H8-typed-defn-in-any",     ("route_typed_fn_value",)),
     ("H9-any-map-into-map-get",  ("wrap_map_outer",)),
-    ("H10-lambda-literal-body",  ("wrap_thunk_lit",)),
+    # H10-lambda-literal-body (wrap_thunk_lit): retired 2026-09-10.
     # H11-field-read-no-inst-rows (wrap_struct + term_class): retired 2026-09-10.
     ("M7-dynamic-cons-field",    ("wrap_cons",)),
     ("M10-macro-any-not-seamed", ("wrap_map_inner", "seam_first")),
@@ -742,9 +742,6 @@ KNOWN_PROBES = [
     ("H9  any-held map into map-get",
      '#lang saffron\n(defn lookup [m k : Sym] (map-get m k))\n'
      '(defn main [] : int (println (lookup #map{:a 1} :a)) 0)\n', "1\n"),
-    ("H10 lambda with a literal body is not dynamically callable",
-     '#lang saffron\n(defn call0 [f] (f))\n'
-     '(defn main [] : int (println (call0 (fn [] 7.25))) 0)\n', "7.25\n"),
     ("M7  dynamic .head/.tail read on an any-held Cons",
      '#lang saffron\n(defn hd [l] (.head l))\n'
      '(defn main [] : int (println (hd (list 7.25 1))) 0)\n', "7.25\n"),

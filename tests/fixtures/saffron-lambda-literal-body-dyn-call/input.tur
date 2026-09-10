@@ -1,0 +1,29 @@
+#lang saffron
+;; saffron-dynamic-surface-pass H10: the dialect's `any` return default
+;; reached `defn` but not `fn`.  A lambda whose body has a CONCRETE type --
+;; `(fn [] 7.25)`, `(fn [x] "s")` -- was typed `(fn [] float)`, and the
+;; dynamic call site refused it: "cannot call this function here -- it takes
+;; a different number of arguments, or parameters this call site cannot
+;; supply".  An explicit `(fn [] : any 7.25)` was worse: `return 7.25` into a
+;; tur_tagged_t slot, a cc error.  A body that was already an `any`
+;; (`(fn [x] (+ x 1))`) never showed it, which is why no fixture had.
+;;
+;; The default now pins an unannotated lambda's return to `any` in a Saffron
+;; file and boxes the body, unless an EXPECTED function type (a typed callee's
+;; parameter) already decides it -- `vec-filter`'s predicate below keeps its
+;; `bool` result -- and a nil body stays nil.
+;;
+;; 7.25 rather than 7.0: the float rides the box by bit pattern.
+(defn call0 [f] (f))
+(defn app [f x] (f x))
+(defn show [x] (println (type-of x)) (println x))
+(defn main [] : int
+  (show (call0 (fn [] 7.25)))
+  (show (call0 (fn [] : any 7.25)))
+  (show (app (fn [x] "s") 1))
+  (show (app (fn [x] x) 7.25))
+  (show (app (fn [x] (+ x 1)) 7.25))
+  (show (app (fn [x] true) 0))
+  ;; an expected fn type still wins: the predicate is (fn [any] bool)
+  (println (vec-len (vec-filter [1 2 3 4] (fn [x] (> x 2)))))
+  0)

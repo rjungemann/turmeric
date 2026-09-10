@@ -10264,6 +10264,32 @@ Expr *elab_fn(Elab *e, const Form *call) {
     e->scope = inner.parent;
     scope_free(&inner);
 
+    /* saffron-dynamic-surface-pass H10: the dialect's `any` default reached
+     * `defn` (elab_defn pins the signature) but not `fn`, so a lambda whose
+     * body has a concrete type -- `(fn [] 7.25)`, `(fn [x] "s")` -- was typed
+     * `(fn [] float)` and the dynamic call site refused it: "cannot call this
+     * function here -- it takes a different number of arguments".  A body
+     * that is already an `any` (`(fn [x] (+ x 1))`) never showed it.
+     *
+     * Two gates.  An EXPECTED function type (this lambda is an argument to a
+     * typed callee -- `vec-filter`'s predicate, a typed callback) already
+     * decides the return, so the default yields to it exactly as the
+     * parameter default above does.  And a nil body stays nil, so a
+     * side-effect lambda keeps the shape a `(fn [T] nil)` slot wants. */
+    if (!return_annotated && return_kind == TY_NIL && body &&
+        body->type.kind != TY_NIL && body->type.kind != TY_NEVER &&
+        body->type.kind != TY_ANY && lang_span_is_saffron(call->span) &&
+        !(e->expected_type && e->expected_type->kind == TY_FN)) {
+        return_kind = TY_ANY;
+    }
+    /* TY2.2 at the lambda: a `: any` return (declared, or pinned just above)
+     * boxes a narrower body, as elab_defn does.  Without it an explicit
+     * `(fn [] : any 7.25)` emitted `return 7.25` into a tur_tagged_t slot. */
+    if (return_kind == TY_ANY && body && body->type.kind != TY_ANY &&
+        body->type.kind != TY_NEVER) {
+        body = elab_coerce_to_any(e, body);
+    }
+
     /* Infer return type from body if not specified.
      *
      * Gated on `!return_annotated` so an explicit `: nil` is honoured: without

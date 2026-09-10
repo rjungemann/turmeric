@@ -128,8 +128,7 @@ instead of binding K from the key. Map twin of the archived
 `saffron-unannotated-param-container-cast-panics`; no seam fixture uses a
 map.
 
-**H10. A lambda whose body has a concrete type is not dynamically callable
-compiled.** Saffron's `any` return default reaches `defn` but not `fn`:
+**~~H10~~. RESOLVED 2026-09-10: `elab_fn` pins an unannotated Saffron lambda's return to `any` and boxes the body (unless an expected fn type decides it, or the body is nil), mirroring `elab_defn`; the explicit `: any` case gets the same widen. Pinned by `tests/fixtures/saffron-lambda-literal-body-dyn-call`; KNOWN row retired. Was: a lambda whose body has a concrete type is not dynamically callable compiled.** Saffron's `any` return default reaches `defn` but not `fn`:
 
 ```turmeric
 (defn call0 [f] (f))
@@ -169,7 +168,7 @@ does not add its field type to that set. A vec element read does.
 **M1. `.bind` on an `any` Option panics compiled.** `(defn half [o] (.bind o
 (fn [x] (some (/ x 2.0)))))` -> `cast: any holds a function this cast cannot
 accept` (the witness casts the lambda to `(fn [any] any)`; a bind lambda
-returns `(Option any)`). Interp: 3.55. `.fmap` on Option works.
+returns `(Option any)`). Interp: 3.55. `.fmap` on Option works. **Update 2026-09-10** (after H10 pinned lambda returns to `any`): the cast now passes, but the witness re-boxes the lambda's already-boxed result, so `(type-of (half (some 7.1)))` is `unknown` compiled (a nested box) and the next `cast` panics `any holds unknown, not Option`. The witness's `: any` return must not re-widen a body that is already `any`.
 
 **M2. `Functor[Result]` is not dynamically dispatchable.** `(.fmap (ok 21)
 f)` via `any`: `no instance of Functor for Result` on both back ends, while
