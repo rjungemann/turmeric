@@ -3,6 +3,7 @@
 #include "effect.h"     /* E2 fat-fn-value threading: EffectRow kind gate */
 #include "globals.h"    /* g_dump_mono_specs, emit knobs */
 #include "mono_specs.h" /* VBM3: van Laarhoven lens dispatch redirect */
+#include "stack_guard.h" /* emit-depth-guard-loses-race-with-asan-stack */
 
 /* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
  * type-application) that the carrier ABI stores as a heap pointer.  Used by
@@ -4552,33 +4553,49 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e);
  * zero of the current function's return type.  void/never calls carry
  * no usable value and are checked where they appear as statements
  * (EX_PANIC / EX_PANIC_WITH). */
-/* emit-value-dispatch-unbounded-recursion: depth of the emitter's expression
- * walk.  emit_value sits on every turn of the recursion cycle
+/* emit-value-dispatch-unbounded-recursion: the emitter's expression walk.
+ * emit_value sits on every turn of the recursion cycle
  * (emit_value_dispatch -> emit_value -> emit_builtin -> emit_value_dispatch),
- * so counting here bounds the whole walk without threading a parameter through
- * emit_value's many callers.
+ * so counting here observes the whole walk without threading a parameter
+ * through emit_value's many callers.
  *
- * The bound is a stack budget, not a language limit, and 40 is where two
- * measurements meet:
+ * There is no longer a depth CAP.  There was one -- EMIT_MAX_EXPR_DEPTH, 40 --
+ * and it was wrong in both directions at once:
  *
- *   Ceiling -- it must fire before the stack runs out on the DOCUMENTED
- *   bootstrap build.  Debug+ASan is what CLAUDE.md tells you to build,
- *   TUR_DEBUG_SANITIZE defaults ON everywhere, and ASan inflates these frames
- *   roughly 40x (~170 KB per level vs ~4 KB plain).  At an 8 MB default stack
- *   that build died at 47 levels on macOS/clang and between 60 and 80 on
- *   Linux/gcc, so the bound has to clear the worst of those.  An unsanitized
- *   build tolerates thousands and is not the constraint.
+ *   - As a ceiling it did not hold.  40 was measured against one host's
+ *     Debug+ASan stack cliff, and this frame later grew a 256-byte region-walk
+ *     array, which moved the cliff BELOW 40.  The guard then lost the race it
+ *     existed to win: an ASan stack-overflow abort where TUR-E0712 should have
+ *     printed (docs/archive/emit-depth-guard-loses-race-with-asan-stack.md).
  *
- *   Floor -- it must not reject real code.  The deepest emit_value nesting
- *   anywhere in stdlib/, tests/fixtures/ and examples/ (3014 files) is 20, in
- *   conv-defstruct-setmap-lowering.  40 leaves 2x headroom over that.
+ *   - As a floor it rejected legitimate code.  The deepest HAND-WRITTEN
+ *     nesting in stdlib/, tests/fixtures/ and examples/ is 20, which is what
+ *     40 was checked against -- but macro expansion is not hand-written.  A
+ *     12-component `for-each` in the ecs spice expands past 40 and could not be
+ *     compiled at all, with a diagnostic telling the author to simplify source
+ *     that was already simple.
  *
- * The two only just fit, which is the argument for eventually replacing the
- * native recursion with an explicit worklist and dropping the bound entirely.
- * Until then: nesting this deep is reachable from macro expansion, generated
- * code, a long `cond` chain, or a fold written as nested binary operations, so
- * the diagnostic says how to get out of it. */
-#define EMIT_MAX_EXPR_DEPTH 40
+ * Depth follows the input, so the answer is to give the walk a stack that
+ * matches the job rather than to ration it: the four emit entry points
+ * trampoline onto a large explicitly-sized stack (tur_run_on_big_stack,
+ * stack_guard.h; TUR_STACK_MB tunes it).  What remains here is a
+ * BACKSTOP, not a bound -- it fires only when the real stack is nearly gone,
+ * which after that change means a genuinely unbounded walk rather than a
+ * merely deep one.  Measuring the actual resource is also the only bound that
+ * cannot rot the way a constant did: it is correct at any frame size, on any
+ * host, under any sanitizer.
+ *
+ * Replacing the native recursion with an explicit worklist would remove even
+ * the backstop.  That is a real project -- emit_value_dispatch is ~10k lines
+ * over 124 cases, each interleaving statement emission with child-value
+ * emission, and there are ~218 emit_value call sites -- and it is not what the
+ * stack overflow required. */
+
+/* Depth at which the headroom check switches on.  Below this the walk cannot
+ * plausibly be the thing exhausting the stack, and skipping the check keeps a
+ * legitimately shallow expression on a deliberately tiny stack from tripping
+ * it. */
+#define EMIT_EXPR_DEPTH_STACK_FLOOR 8
 
 static int g_emit_expr_depth;
 static bool g_emit_depth_exceeded;
@@ -5207,20 +5224,48 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * verbatim (the suspended sub-expression's already-delivered value). */
     for (uint8_t i = 0; i < ctx->n_sub_holes; i++)
         if (ctx->sub_holes[i] == e) return strdup(ctx->sub_names[i]);
-    if (g_emit_expr_depth >= EMIT_MAX_EXPR_DEPTH) {
+    /* emit-depth-guard-loses-race-with-asan-stack: the counter is a proxy for
+     * stack headroom, and on an ASan-instrumented build the redzone-inflated
+     * frames of this three-frame cycle (emit_value -> emit_value_dispatch ->
+     * emit_builtin) is bounded only by how deeply the SOURCE nests, so the
+     * only honest limit is the real resource.  Emission runs on a large
+     * explicitly-sized stack (tur_run_on_big_stack, stack_guard.h), which is
+     * what makes this a backstop rather than a bound: reaching it now means a
+     * walk that is genuinely unbounded, not one that is merely deep. */
+    bool emit_stack_low = g_emit_expr_depth >= EMIT_EXPR_DEPTH_STACK_FLOOR &&
+                          tur_stack_nearly_exhausted();
+    if (emit_stack_low) {
+        /* TUR_DEBUG_STACK_GUARD=1: trace what the guard sees, the same knob the
+         * macro-expansion guard carries (elab_call.c). */
+        static int dbg = -1;
+        if (dbg < 0) dbg = getenv("TUR_DEBUG_STACK_GUARD") != NULL;
+        if (dbg) {
+            size_t t = 0, h = tur_stack_headroom(&t);
+            fprintf(stderr, "[stack-guard] emit depth=%d headroom=%zu total=%zu\n",
+                    g_emit_expr_depth, h, t);
+        }
         /* Report once, then unwind quietly: every enclosing level would
          * otherwise repeat the same message for the same expression. */
         if (!g_emit_depth_exceeded) {
+            size_t total = 0;
+            (void)tur_stack_headroom(&total);
             g_emit_depth_exceeded = true;
+            /* Name the real quantity.  The old text said "exceeds the
+             * emitter's depth limit (40)", which after the cap was removed
+             * would have been a claim about a number that no longer exists. */
             diag_emit_with_code(DIAG_ERROR, e->span,
                                 TUR_E0712_EXPR_NESTING_TOO_DEEP,
-                                "expression nesting exceeds the emitter's depth "
-                                "limit (%d)", EMIT_MAX_EXPR_DEPTH);
+                                "expression nesting exhausted the emitter's "
+                                "stack at depth %d (%zu MiB)",
+                                g_emit_expr_depth,
+                                total / (size_t)(1024 * 1024));
             diag_emit(DIAG_NOTE, e->span,
-                      "split the expression into helper functions or `let` "
-                      "bindings; if a macro generated it, have the macro emit a "
-                      "flatter form (a fold written as nested binary operations "
-                      "is the usual source)");
+                      "raise it with TUR_STACK_MB (default %d), or split "
+                      "the expression into helper functions or `let` bindings; "
+                      "if a macro generated it, have the macro emit a flatter "
+                      "form (a fold written as nested binary operations is the "
+                      "usual source)",
+                      TUR_STACK_MB_DEFAULT);
         }
         /* A valid C expression, so the rest of emission stays well-formed --
          * the build fails on the diagnostic, not on malformed output. */

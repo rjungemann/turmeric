@@ -432,7 +432,7 @@ typedef enum ReaderType {
  * its cases mean the same reader -- see the plan's D1 for the full argument. */
 typedef enum LangDialect {
     LANG_TURMERIC = 0,   /* the default; every existing file */
-    LANG_SAFFRON,        /* dynamically typed dialect (experiment "saffron") */
+    LANG_SAFFRON,        /* dynamically typed dialect (`#lang saffron`; stable since 0.46.0) */
 } LangDialect;
 
 /* Canonical name of a dialect, for diagnostics and `tur lang-layers`.
@@ -541,17 +541,16 @@ ReaderType detect_lang_dialect(const char *src, size_t len,
                                const char **out_bad, size_t *out_bad_len,
                                LangDialect *out_dialect);
 
-/* saffron-lang-plan D9: apply a file's dialect the way a SEMANTIC `#lang` layer
- * is applied (lang_layers_apply_semantic).
+/* Apply a file's dialect, at the point the reader has decided what it is.
  *
- * `#lang saffron` IS the enable for the `saffron` experiment, scoped to one
- * file, at CLI precedence -- and it inherits that rule's sharp edge on purpose:
- * a project manifest that scopes `:experiments` and leaves `saffron` out has
- * said no, so the directive is a hard ERROR rather than a silent ignore.
- * Compiling a file under a language it did not ask for is the worse failure.
+ * saffron GRADUATED at 0.46.0, so no dialect is gated: there is nothing to
+ * enable, nothing to warn about, and a project manifest can no longer refuse
+ * one.  What remains is recording that this build contains a Saffron TU
+ * (g_opt_saffron), which the emitter reads to decide whether to emit the `any`
+ * registries -- see lang_layers.c.
  *
- * Returns false having emitted a diagnostic; true (and a no-op) for
- * LANG_TURMERIC. */
+ * Still returns bool, and callers still check it, because that is the shape a
+ * future gated dialect needs; today it cannot fail. */
 bool lang_dialect_apply(LangDialect d, const char *path);
 
 /* Get reader type from file extension (Phase S0) */

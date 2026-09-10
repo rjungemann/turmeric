@@ -34,25 +34,29 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
-[hkt-carrier-result-loses-payload-types](hkt-carrier-result-loses-payload-types.md) was filed 2026-09-10, a baseline
-measurement taken while fixing `saffron-dynamic-surface-pass` M2: on the TYPED
-path, `fmap` on a heterogeneous `(Result int cstr)` or `(Either int cstr)`
-prints a cstr payload as its address -- a silent wrong answer, no diagnostic.
-The carrier dispatch's result type never grounds, so a `match` on it types
-every binder as the int carrier. It is the same missing head-tyvar binding as
-M2; M2's fix binds it only where slot-safe (by-value body, homogeneous
-receiver), which is why the typed heterogeneous case is untouched and this is
-its own report. The `byval_agg` consumer bridge is the fix location.
+## Representation gaps (filed 2026-09-09, extended 2026-09-10)
 
-[all-any-fn-param-is-unusable](all-any-fn-param-is-unusable.md) was filed 2026-09-10, found while fixing
-`saffron-dynamic-surface-pass` H7 and masked until then by H7's own fuzzer
-`KNOWN` row. A parameter declared `(fn [any] any)` or `(fn [] any)` -- the
-signature the Saffron dialect produces by default -- is emitted as a bare
-`int64_t` and then called, so the CALLEE does not compile; and an `any`-held
-function passed into one panics at the cast. The interpreter handles both. It
-is NOT a gap in H7's fix: H7's adaptor declines an all-`any` target correctly
-(that IS the representation the box holds), and lifting the decline was
-measured to fix neither repro.
+A value whose representation does not fit the one the typed path already chose
+for it. The three rows below were found independently and share that shape;
+the family the Saffron pass tracked under H7 / M1 / M2 is resolved and lives in
+[saffron-dynamic-surface-pass](saffron-dynamic-surface-pass.md).
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [fn-typed-tyvar-drops-a-capturing-closure](fn-typed-tyvar-drops-a-capturing-closure.md) | medium-high | A capturing closure passed through a type parameter instantiated to a FUNCTION type is silently miscompiled: `check`, `emit-c` and `build` all exit 0 with no warning, and the built program takes SIGBUS before printing anything. Needs both halves -- a capture-free lambda in the same position works (it lifts to a bare code pointer, which survives the int64 carrier round trip), and spelling the function type concretely instead of through a type variable works. Confirmed pre-existing at v0.46.0. An adjacent `turmeric-spices` defect first looked like the same gap seen from the other side; it is **not** -- its trigger is arm ORDER (the emitter types the match result temporary from the first arm as written), established by three controls, and it has a one-reordering workaround. This one has no `match` in its repro at all |
+| [all-any-fn-param-is-unusable](all-any-fn-param-is-unusable.md) | medium | A parameter declared `(fn [any] any)` or `(fn [] any)` -- the signature the Saffron dialect produces by default -- is emitted as a bare `int64_t` and then CALLED, so the callee itself does not compile; and an `any`-held function passed into one panics at the cast. The interpreter handles both. Found while fixing the Saffron pass's H7 and masked until then by H7's own fuzzer `KNOWN` row |
+| [hkt-carrier-result-loses-payload-types](hkt-carrier-result-loses-payload-types.md) | high | On the TYPED path, `fmap` on a heterogeneous `(Result int cstr)` or `(Either int cstr)` prints a cstr payload as its ADDRESS -- a silent wrong answer, no diagnostic. The carrier dispatch's result type never grounds, so a `match` on it types every binder as the int carrier. Taken as a baseline measurement while fixing the Saffron pass's M2 |
+
+Both 2026-09-10 rows carry a "do not retry this" that is easy to lose: for
+`all-any-fn-param`, it is NOT a gap in H7's fix -- H7's adaptor declines an
+all-`any` target correctly, since that IS the representation the box holds, and
+lifting the decline was measured to fix neither repro. For
+`hkt-carrier-result`, it is the same missing head-tyvar binding as M2, but M2's
+fix binds it only where slot-safe (a by-value body, a homogeneous receiver);
+grounding a heterogeneous hole-at-0 head instead swaps the arms and turns a
+printed address into a miscompiled body. The `byval_agg` consumer bridge is the
+fix location.
+
 
 ## Docs audit sweep (filed 2026-08-20)
 
@@ -788,7 +792,7 @@ Pinned by four `errors/` negatives and
 | ~~jit-suite-reports-pass-when-the-engine-is-disabled~~ | -- | **Resolved 2026-09-09** for the suite-accounting defect it was filed for: `run-jit.sh` runs one trivial program through the engine before the fixtures and fails if it falls back (the tree-wide case, in a second), and ratchets the fixtures allowed to fall back BY NAME against `tests/jit-fallback-baseline.txt` (a new fallback fails the run; a reclaimed one is reported; `TUR_JIT_FALLBACK_UPDATE=1` regenerates). Its two residual findings moved to the row above. See [../archive/jit-suite-reports-pass-when-the-engine-is-disabled.md](../archive/jit-suite-reports-pass-when-the-engine-is-disabled.md). |
 | [codegen-gcc14-permerrors](codegen-gcc14-permerrors.md) | medium | Latent today; breaks every `tur build` the moment CI's compiler crosses GCC 14, which promotes several emitted-C warnings to errors. Worked around, not fixed. Not Windows-specific |
 | [ci-two-fixtures-flake-on-hosted-runners](ci-two-fixtures-flake-on-hosted-runners.md) | low each, medium as a pair | **Filed 2026-09-07.** `httpd-mw-rate-limit` (macOS JIT, `stdout mismatch`, 1 of 2718) and `rp7-reload-self-heal` (ubuntu, plus an LSan report) both failed on a **markdown-only** PR whose merge-base is a green `main`, and both passed on `gh run rerun --failed` against the identical tree. A rate limiter is timing-dependent by construction; the repl one arrived carrying spinner glyphs in its assertion text, i.e. an output-capture race, and its LSan report is likely a consequence of the failure path rather than a leak. Method note worth keeping: scanning run history *disconfirmed* the flake hypothesis and was misleading -- the same job had failed recently on `j2-load-in-process` / `cps-mixed-coloring` / `van-laarhoven-lens-*`, which were real defects on a branch that had real defects. History shows a job is fragile; only re-running the same tree shows a failure is spurious |
-| [ci-suites-that-never-run-on-hosted-runners](ci-suites-that-never-run-on-hosted-runners.md) | medium | **Filed 2026-09-09** from the first two weeks of `/ci` skip-ledger data (89 `main` pushes). `tur_phase4_gdb` / `tur_phase5_gdb` partial-skip their gdb halves on every run on both OSes (no `gdb` on the runners), `tur_tutorial_steps` skips every macOS run (`pyyaml`), and `tur_refine_wasm` / `tur_scscm_compile` skip every run on both OSes (`emcc`, the `turmeric-spices` sibling). All exit 0, so ctest records a pass. Each fix is one dependency line in `ci.yml` |
+| ~~ci-suites-that-never-run-on-hosted-runners~~ | -- | **Resolved 2026-09-09** by its own closure condition, on both OSes rather than just Linux. All five suites read `pass` off the `ci-metrics` ledger for five consecutive `main` pushes (`b58c91e67` through `70f079975`); the push before the `ci.yml` changes, `5204f4c83`, still reads `skip` with the verbatim reasons, which is the positive control that the ledger distinguishes "did not run" from "passed". Two fix-direction predictions came out better than forecast: macOS gdb did not have to stay `partial`, and the gdb halves -- which had never executed on a hosted runner in the project's history -- passed on their first real run. See [../archive/ci-suites-that-never-run-on-hosted-runners.md](../archive/ci-suites-that-never-run-on-hosted-runners.md). |
 | ~~httpd-async-limit-asserts-a-racy-split~~ | -- | **Resolved 2026-09-09.** The race was already gone -- the fixture gates each admitted handler on the busy counter reaching 2 (direction 3 in effect, from the macOS-hang fix); what remained was the literal `handler-ran=2`, now a counter bumped on handler entry. See [../archive/httpd-async-limit-asserts-a-racy-split.md](../archive/httpd-async-limit-asserts-a-racy-split.md). |
 
 `env-doctests-are-machine-dependent` was resolved 2026-08-21 and moved to
@@ -848,7 +852,23 @@ thread-stack query + reading the SP register -- a local's address is on
 ASan's fake stack and useless for this) and raises the same diagnostic when
 the stack is nearly gone, so the ASan-inflated Debug build reports the
 runaway macro instead of aborting with a sanitizer stack-overflow.
-Verified by reproducing the race on Linux under `ulimit -s 4096`.
+
+The **emitter's** half of that same bug was resolved 2026-09-09 and moved to
+[docs/archive](../archive/emit-depth-guard-loses-race-with-asan-stack.md).  It
+was fixed the way the report said and not by re-tuning the constant: the three
+stack-introspection helpers moved out of `elab_call.c` into a shared
+`src/compiler/stack_guard.{c,h}`, and `emit_value` now raises TUR-E0712 when
+EITHER the counter hits `EMIT_MAX_EXPR_DEPTH` OR a genuine nesting is under
+way (depth >= 8) and `tur_stack_nearly_exhausted()` says the real stack is
+nearly gone.  Both triggers were exercised on the filing host (macOS/arm64,
+Debug + ASan): the default 8 MiB stack stops on headroom at depth 32 with
+954 KiB left -- the eight further levels to reach 40 would have wanted ~1.8 MiB
+-- while `ulimit -s 65520` still stops on the plain counter at 40.  One thing
+the filed direction did not ask for and the message needed: when headroom is
+what stopped the walk, an extra note says so, because otherwise the error
+claims the expression exceeded 40 while the counter stood at 32.  The report
+also names the four remaining counter-only walks in the refinement solver as
+the places this shape could recur; none has a repro.
 
 `incremental-elab-loses-span-file-provenance` was resolved 2026-08-13 and moved
 to

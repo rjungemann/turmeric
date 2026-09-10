@@ -220,9 +220,12 @@ bool lang_base_at(size_t i, LangBaseDescriptor *out) {
     lang_base_spelling(d, r, out->base, sizeof out->base);
     out->language = lang_dialect_name(d);
     out->reader   = lang_reader_suffix(r);
-    /* `saffron` is the only non-default dialect so far, matching
-     * lang_dialects_print/_json above; a second one gets a lookup here. */
-    out->experiment = (d == LANG_TURMERIC) ? NULL : "saffron";
+    /* No dialect is experiment-gated any more: `saffron` graduated at 0.46.0
+     * and every base is stable.  The field stays because the SHAPE is what the
+     * playground picker and `tur lang-layers --json` consume -- a future gated
+     * dialect fills it in here and is badged rather than hidden, with no
+     * consumer change.  NULL means "no badge". */
+    out->experiment = NULL;
     return true;
 }
 
@@ -232,9 +235,9 @@ void lang_dialects_print(void) {
         for (size_t ri = 0; ri < sizeof(READERS) / sizeof(READERS[0]); ri++) {
             char base[64];
             lang_base_spelling(DIALECTS[di], READERS[ri], base, sizeof base);
-            const char *status =
-                (DIALECTS[di] == LANG_TURMERIC) ? "stable"
-                                                : "experiment 'saffron'";
+            /* Every base is stable since saffron graduated at 0.46.0.  The
+             * column stays so a future gated dialect has somewhere to say so. */
+            const char *status = "stable";
             printf("%-22s %-9s %-12s %s\n", base,
                    lang_dialect_name(DIALECTS[di]),
                    lang_reader_suffix(READERS[ri]), status);
@@ -254,8 +257,8 @@ void lang_dialects_print_json(void) {
             printf("\n    {\"base\":\"%s\",\"language\":\"%s\",\"reader\":\"%s\"",
                    base, lang_dialect_name(DIALECTS[di]),
                    lang_reader_suffix(READERS[ri]));
-            if (DIALECTS[di] != LANG_TURMERIC)
-                printf(",\"experiment\":\"saffron\"");
+            /* No `"experiment"` key on any base since saffron graduated at
+             * 0.46.0; a future gated dialect adds it back here. */
             printf("}");
         }
     }
@@ -269,24 +272,21 @@ bool lang_span_is_saffron(Span sp) {
     return f != NULL && f->lang == LANG_SAFFRON;
 }
 
+/* saffron GRADUATED at 0.46.0: a non-default dialect is no longer gated, warns
+ * nothing, and cannot be switched off by a manifest.  What remains is the one
+ * side effect the gate used to carry incidentally -- flipping `g_opt_saffron`,
+ * which the emitter reads to decide whether this build emits the `any` type and
+ * instance registries and the dynamic-dispatch panic (emit_module.c).  Setting
+ * it HERE, at the moment a `#lang saffron` file is read, is exactly when
+ * `experiment_enable` used to set it, so the emitted C is unchanged on both
+ * arms: a build with no Saffron TU still emits none of it.
+ *
+ * Returns bool, and every caller still checks it, because that is the shape a
+ * future gated dialect needs; today no dialect can fail. */
 bool lang_dialect_apply(LangDialect d, const char *path) {
-    if (d == LANG_TURMERIC) return true;           /* the default: no gate */
-    const char *experiment = "saffron";            /* the only dialect so far */
-    if (experiment_is_enabled(experiment)) {
-        experiment_warn_if_used(experiment);
-        return true;
-    }
-    if (g_manifest_experiments_scoped) {
-        diag_emit(DIAG_ERROR, SPAN_UNKNOWN,
-                  "%s is `#lang %s`, whose experiment '%s' is disabled by the "
-                  "project manifest (add :%s to :experiments in build.tur, or "
-                  "change the #lang line to turmeric)",
-                  path ? path : "this file", lang_dialect_name(d),
-                  experiment, experiment);
-        return false;
-    }
-    experiment_enable(experiment, XF_SRC_CLI);
-    experiment_warn_if_used(experiment);
+    (void)path;
+    if (d == LANG_TURMERIC) return true;           /* the default: nothing to do */
+    g_opt_saffron = true;
     return true;
 }
 
