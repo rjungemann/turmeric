@@ -263,7 +263,29 @@ match. Peeling the chain to its head makes the two spellings agree
 `Result`. Pinned by `tests/fixtures/saffron-dyn-hkt-partial-head`
 (`requires.interp-only`, since the compiled path still declines).
 
-**Still open, compiled -- and the obvious fix is a trap.** The same peel in
+**Still open, compiled. Root cause narrowed to a LAYOUT mismatch (2026-09-10),
+which settles that no keying or adaptor can reach it.** A hole-headed instance
+is compiled ONCE, generically: `inst_type_suffix` spells the open parameter
+`tyvar`, giving a single `__inst_Functor_fmap_Result_tyvar`, and no Result
+`fmap` is ever specialised -- the TYPED path with a fully concrete
+`(Result int int)` uses that same carrier. The two Result layouts in one
+emitted TU are:
+
+```c
+typedef struct tur_adt_Result        { int tag; union { struct { int64_t     _0; } Ok; ... } as; };
+typedef struct tur_adt_Result__any__any { int tag; union { struct { tur_tagged_t _0; } Ok; ... } as; };
+```
+
+Different payload SIZES, so different offsets. A witness minted on the peeled
+head hands `&tur_adt_Result__any__any` to a carrier that reads it as
+`tur_adt_Result *`, so the receiver is misread before the continuation is even
+called. That is why the M1 fix does not carry over: M1 could repair its
+continuation's calling convention from source, and there is no source-level
+spelling that converts a container's payload representation. The fix is a
+by-value spec for the hole-headed instance at its all-`any` instantiation --
+i.e. teaching the monomorphiser to clone it -- and nothing short of that.
+
+**And the obvious fix is a trap.** The same peel in
 `emit_instance_dispatch_recv_type` is NOT the fix, and was measured not to be.
 A hole-headed instance never gets a by-value spec: `.fmap` on a Result resolves
 to the erased carrier `__inst_Functor_fmap_Result_tyvar`, whose payloads are
