@@ -11342,18 +11342,27 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * Syms and answer them here: `=` / `not=` on two Syms is pointer
          * identity (Eq[Sym]), anything else is "no operator for a Sym
          * argument", the same sentence the compiled runtime uses. */
+        /* saffron-dynamic-surface-pass M4/M5 generalise the Sym rule: ANY
+         * named any-box (a Vec, a Map, an Option, a user struct ...) unboxes
+         * to a bare pointer-as-int, which would then select the int overloads
+         * -- println printed an address, `=` on two maps answered false
+         * while the compiled runtime panicked.  Remember the first named box
+         * and refuse the operator by that name, so both back ends say the
+         * same sentence; the Sym `=`/`not=` case stays the one exception. */
         uint32_t n_sym = 0;
+        const char *boxed_name = NULL;
         for (uint32_t i = 0; i < n; i++) {
             TuriValue v = eval_expr(env, frame, e->as.dyn_op_.args[i]);
             if (turi_is_error(v) || env_signaled(env)) { result = v; failed = true; break; }
             if (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->is_any_box &&
                 v.as_struct->n_fields == 1 && v.as_struct->fields) {
                 if (v.as_struct->name && strcmp(v.as_struct->name, "Sym") == 0) n_sym++;
+                else if (v.as_struct->name && !boxed_name) boxed_name = v.as_struct->name;
                 v = v.as_struct->fields[0];
             }
             vals[i] = v;
         }
-        if (!failed && n_sym > 0 && e->as.dyn_op_.op) {
+        if (!failed && (n_sym > 0 || boxed_name) && e->as.dyn_op_.op) {
             const char *opn = e->as.dyn_op_.op->name;
             bool is_eq = strcmp(opn, "=") == 0, is_ne = strcmp(opn, "not=") == 0;
             if ((is_eq || is_ne) && n == 2 && n_sym == 2) {
@@ -11362,7 +11371,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 return turi_bool(is_eq ? same : !same);
             }
             char msg[160];
-            snprintf(msg, sizeof(msg), "%s: no operator for a Sym argument", opn);
+            snprintf(msg, sizeof(msg), "%s: no operator for a %s argument", opn,
+                     n_sym > 0 ? "Sym" : boxed_name);
             if (vals != stackv) free(vals);
             turi_runtime_panic(env, msg);
             return turi_nil();  /* unreachable */

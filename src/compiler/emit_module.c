@@ -9903,6 +9903,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
      * is user-visible and a fixture can assert it on either back end, so the
      * two must agree word for word rather than approximately. */
     buf_puts(out,
+        "static const char *__tur_any_type_name(int64_t tag);\n"
         "static inline const char *__tur_dyn_argname(int64_t __t) {\n"
         "    switch (__t) {\n"
         "    case TUR_DYNTAG_INT:   return \"int\";\n"
@@ -9911,7 +9912,12 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    case TUR_DYNTAG_CSTR:  return \"cstr\";\n"
         "    case TUR_DYNTAG_NIL:   return \"nil\";\n"
         "    case TUR_DYNTAG_SYM:   return \"Sym\";\n"
-        "    default:               return \"value of that type\";\n"
+        /* saffron-dynamic-surface-pass M4/M5: a registered named type (a Vec,
+         * a Map, a user struct) is named, as the interpreter names it. */
+        "    default: {\n"
+        "        const char *__n = __tur_any_type_name(__t);\n"
+        "        return strcmp(__n, \"unknown\") == 0 ? \"value of that type\" : __n;\n"
+        "    }\n"
         "    }\n"
         "}\n");
     buf_puts(out,
@@ -9961,7 +9967,11 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "            case TUR_DYNOP_BOR:  return TUR_TAG(TUR_DYNTAG_INT, __x | __y);\n"
         "            case TUR_DYNOP_BXOR: return TUR_TAG(TUR_DYNTAG_INT, __x ^ __y);\n"
         "            case TUR_DYNOP_SHL:  return TUR_TAG(TUR_DYNTAG_INT, __x << __y);\n"
-        "            case TUR_DYNOP_SHR:  return TUR_TAG(TUR_DYNTAG_INT, __x >> __y);\n"
+        /* saffron-dynamic-surface-pass M6: LOGICAL shift, as the typed
+         * `bit-shr` builtin (`>>` on the unsigned carrier) and the interpreter
+         * both answer; the signed `>>` here gave `(bit-shr -8 1)` = -4 through
+         * `any` and 9223372036854775804 everywhere else. */
+        "            case TUR_DYNOP_SHR:  return TUR_TAG(TUR_DYNTAG_INT, (int64_t)((uint64_t)__x >> __y));\n"
         "            default:\n"
         "                if (__y == 0) { fprintf(stderr, \"division by zero\\n\"); abort(); }\n"
         "                return TUR_TAG(TUR_DYNTAG_INT, __x % __y);\n"

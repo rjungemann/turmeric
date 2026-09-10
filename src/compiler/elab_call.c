@@ -498,9 +498,62 @@ Expr *elab_hoist_control_operands(Elab *e, Expr *node) {
     return let;
 }
 
+/* saffron-dynamic-surface-pass H8: a TYPED function value entering an `any`
+ * in a Saffron file gets an all-`any` adaptor.
+ *
+ * A dynamic call checks the box's signature id against the all-`any`
+ * signature of the call site, so `(app inc-typed 41)` -- `inc-typed` being
+ * `(fn [int] int)` -- panicked "cannot call this function here" while the
+ * interpreter answered 42.  Rather than teach the dynamic call every
+ * signature, wrap the value once, where it is boxed, in
+ * `(fn [__da0 ...] (NAME __da0 ...))`: the lambda's parameters take the
+ * dialect's `any` default, the call inside it goes through the ordinary
+ * checked seam per argument, and its return takes the `any` pin -- all
+ * machinery that already exists.  Only a NAMED value (a defn or a local
+ * bound to a function) can be re-referenced by a form, so the adaptor
+ * covers those; a typed closure produced by an expression stays as it was. */
+static Expr *saffron_dyn_fn_adaptor(Elab *e, Expr *value) {
+    if (!value || value->kind != EX_VAR || !value->as.var.binding ||
+        !value->as.var.binding->name || value->type.kind != TY_FN)
+        return NULL;
+    if (!(e->toplevel_saffron || lang_span_is_saffron(value->span))) return NULL;
+    const Type *ft = &value->type;
+    if (ft->as.fn.cfnptr || ft->as.fn.arity > 5) return NULL;
+    bool all_any = (ft->as.fn.result_kind == TY_ANY);
+    for (uint32_t i = 0; i < ft->as.fn.arity && all_any; i++)
+        if (ft->as.fn.arg_kinds[i] != TY_ANY) all_any = false;
+    if (all_any) return NULL;
+    Span sp = value->span;
+    uint32_t n = ft->as.fn.arity;
+    Form **params = (Form **)arena_alloc(e->arena, (n ? n : 1) * sizeof(Form *));
+    Form **call_items = (Form **)arena_alloc(e->arena, (n + 1) * sizeof(Form *));
+    call_items[0] = form_sym(e->arena, sp, value->as.var.binding->name);
+    for (uint32_t i = 0; i < n; i++) {
+        char nm[24];
+        snprintf(nm, sizeof nm, "__da%u", i);
+        const Symbol *ps = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+        params[i] = form_sym(e->arena, sp, ps);
+        call_items[i + 1] = form_sym(e->arena, sp, ps);
+    }
+    Form *items[3];
+    items[0] = form_sym(e->arena, sp, symtab_intern(e->st, strslice("fn", 2)));
+    items[1] = form_vec(e->arena, sp, params, n);
+    items[2] = form_list(e->arena, sp, call_items, n + 1);
+    Form *lam = form_list(e->arena, sp, items, 3);
+    Type *saved_expected = e->expected_type;
+    e->expected_type = NULL;
+    Expr *ad = elab_fn(e, lam);
+    e->expected_type = saved_expected;
+    return ad;
+}
+
 Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     if (!value) return NULL;
     if (value->type.kind == TY_ANY) return value;  /* already boxed */
+    {
+        Expr *ad = saffron_dyn_fn_adaptor(e, value);
+        if (ad) value = ad;
+    }
     /* any-cannot-recover-a-capturing-closure: normalise a FUNCTION payload to
      * the fat `{ thunk, env }` representation before boxing it.
      *
