@@ -389,8 +389,33 @@ yet`, interp `true`. Parity note; the guide documents the panic.
 - `(defn f [a & rest : any] ...)` rejects `(f 1 2 3)`: `rest arg 0 has wrong
   type (expected any, got int)` (`elab_call.c:5650`); rest args are not
   widened.
-- `(defstruct Dyn [v : any])` is `unsupported field form` (typed too); ADT
-  fields accept `any`, struct fields do not.
+- ~~`(defstruct Dyn [v : any])` is `unsupported field form` (typed too); ADT
+  fields accept `any`, struct fields do not.~~ **RESOLVED 2026-09-10.**
+  `defstruct_field_type_lowerable` had no arm for `TY_ANY`, so the gate fell to
+  its `default: return false` and a struct with a dynamic field was the one
+  field shape that could not be spelled -- while the record `defdata` a
+  defstruct LOWERS TO had accepted an `any` field all along. One `case TY_ANY:
+  return true`. Pinned by `tests/fixtures/defstruct-any-field`, which is plain
+  Turmeric (the hole was never Saffron-specific) and interleaves two `any`
+  fields with an int, a cstr and a float: an `any` is 16 bytes among 8-byte
+  scalars, so a lowering that got offsets wrong reads back shifted, which a
+  struct of one `any` field could never show.
+
+- **NEW, found by the above and fixed with it: a dynamic read of a field that
+  is ITSELF `any` emitted a TU cc could not compile.** Four
+  `conversion to non-scalar type requested` errors, on
+  `return __inst_Hash_hash_T((tur_tagged_t)__r);` and the three `MapKey[T]`
+  shims. H11 taught the ABI scan to note every candidate field type of a
+  dynamic field read as a widened tag, but an already-`any` field is NOT a
+  widen site -- the read hands its tagged value straight back rather than
+  boxing it -- so noting it registered `any` ITSELF as a dispatchable tag,
+  minting the type-VARIABLE instances at `T = any` whose receiver conversion is
+  a scalar-to-struct cast. The scan now skips `TY_ANY` beside `TY_TYVAR` and
+  `TY_UNKNOWN`, which is the same rule the emit side already needed (M7's
+  "an already-`any` field needs no widen"). Pre-existing and independent of
+  the defstruct gate, MEASURED not assumed: a record `defdata` with an `any`
+  field and no `defstruct` anywhere produced those four errors before the
+  guard. Pinned by `tests/fixtures/saffron-dyn-read-of-any-field`.
 - `(map-assoc #map{:a 1} :c 7.1)` fails with `map-assoc-eq-o arg 4: expected
   tyvar, got float`; the value needs an explicit `(:: 7.1 any)` and the
   message does not say so.

@@ -1,0 +1,31 @@
+#lang saffron
+; A dynamic read of a field that is ITSELF `any` emitted a whole TU cc could
+; not compile:
+;   error: conversion to non-scalar type requested
+;     return __inst_Hash_hash_T((tur_tagged_t)__r);
+; four times over, in the `Hash[T]` / `MapKey[T]` dynamic shims.
+;
+; H11 taught the ABI scan to note every candidate field type of a dynamic field
+; read as a widened tag, so the instance rows for it get published. But an
+; already-`any` field is NOT a widen site -- the read hands its tagged value
+; straight back rather than boxing it -- so noting it registered `any` ITSELF
+; as a dispatchable tag. That mints the type-variable instances at `T = any`,
+; whose receiver conversion spells `(tur_tagged_t)__r`: a scalar-to-struct
+; cast. The scan now skips TY_ANY alongside TY_TYVAR and TY_UNKNOWN.
+;
+; Pre-existing and independent of the defstruct gate fixed alongside it --
+; MEASURED, not assumed: this file uses a record `defdata`, no `defstruct`
+; anywhere, and produced those four errors before the guard.
+;
+; 7.25, not 7.0: the value crosses two boxes on the way out.
+
+(defdata Rec (Rec [v : any]))
+(defstruct Box [v : any])
+
+(defn get-rec [r] (.v r))
+(defn get-box [b] (.v b))
+
+(defn main []
+  (println (get-rec (Rec (:: 7.25 any))))
+  (println (get-box (make-struct Box 2.5)))
+  0)

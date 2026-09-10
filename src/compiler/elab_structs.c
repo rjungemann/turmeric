@@ -705,6 +705,16 @@ static bool defstruct_field_type_lowerable(Elab *e, const Form *type_tok) {
              * by-value ADT product already stores such fields as carriers and
              * synthesises drop glue for the owning (rc/ref/weak) ones (slice 2). */
             return true;
+        case TY_ANY:
+            /* saffron-dynamic-surface-pass (low): `(defstruct Dyn [v : any])`
+             * was "unsupported field form" -- in typed Turmeric too -- while
+             * the `defdata` it lowers TO has accepted an `any` field all
+             * along: `(defdata Dyn (Dyn any))` round-trips a `(:: 7.25 any)`.
+             * The gate simply had no arm for TY_ANY, so a struct with a
+             * dynamic field was the one shape that could not be spelled. The
+             * record-ADT product stores it as the 16-byte tagged value the
+             * same way the ADT does. */
+            return true;
         case TY_UNKNOWN:
             /* slice 4/8 + graduation: a bare *user-type* field -- an ADT, struct,
              * opaque newtype, forward-declared sibling, OR (now that parametric

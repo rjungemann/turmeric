@@ -6212,7 +6212,17 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                         if (!f->name || strcmp(f->name, fname) != 0) continue;
                         Type ft = f->full_type ? *f->full_type
                                                : type_simple(f->kind, CK_COPY);
-                        if (ft.kind == TY_TYVAR || ft.kind == TY_UNKNOWN) continue;
+                        /* An already-`any` field is NOT a widen site -- the
+                         * read hands its tagged value straight back (see
+                         * emit_dyn_field), so there is no payload type to
+                         * publish.  Noting it registers `any` ITSELF as a
+                         * dispatchable tag, which mints `Hash[T]`/`MapKey[T]`
+                         * shims at `T = any` whose receiver conversion spells
+                         * `(tur_tagged_t)__r` -- a scalar-to-struct cast, so
+                         * cc rejects the whole TU.  Reachable from any record
+                         * with an `any` field read dynamically. */
+                        if (ft.kind == TY_TYVAR || ft.kind == TY_UNKNOWN ||
+                            ft.kind == TY_ANY) continue;
                         emit_abi_note_any_widen(ctx, ft);
                     }
                 }
