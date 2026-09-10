@@ -829,16 +829,22 @@ ASan's fake stack and useless for this) and raises the same diagnostic when
 the stack is nearly gone, so the ASan-inflated Debug build reports the
 runaway macro instead of aborting with a sanitizer stack-overflow.
 
-The **emitter's** expression walk still has the un-fixed half of that same
-bug, filed 2026-09-10 as
-[emit-depth-guard-loses-race-with-asan-stack](emit-depth-guard-loses-race-with-asan-stack.md)
-(low; Debug/ASan only).  `EMIT_MAX_EXPR_DEPTH` is a bare depth counter tuned
-against one host's measured stack cliff, with no headroom check, so on
-macOS/arm64 the stack overflows before depth 40 and TUR-E0712 never prints --
-`errors/expr-nesting-depth-limit` goes red with an ASan stack-overflow.  The
-fix is to reuse `elab_stack_nearly_exhausted()` rather than re-tune the
-constant; see the report.
-Verified by reproducing the race on Linux under `ulimit -s 4096`.
+The **emitter's** half of that same bug was resolved 2026-09-09 and moved to
+[docs/archive](../archive/emit-depth-guard-loses-race-with-asan-stack.md).  It
+was fixed the way the report said and not by re-tuning the constant: the three
+stack-introspection helpers moved out of `elab_call.c` into a shared
+`src/compiler/stack_guard.{c,h}`, and `emit_value` now raises TUR-E0712 when
+EITHER the counter hits `EMIT_MAX_EXPR_DEPTH` OR a genuine nesting is under
+way (depth >= 8) and `tur_stack_nearly_exhausted()` says the real stack is
+nearly gone.  Both triggers were exercised on the filing host (macOS/arm64,
+Debug + ASan): the default 8 MiB stack stops on headroom at depth 32 with
+954 KiB left -- the eight further levels to reach 40 would have wanted ~1.8 MiB
+-- while `ulimit -s 65520` still stops on the plain counter at 40.  One thing
+the filed direction did not ask for and the message needed: when headroom is
+what stopped the walk, an extra note says so, because otherwise the error
+claims the expression exceeded 40 while the counter stood at 32.  The report
+also names the four remaining counter-only walks in the refinement solver as
+the places this shape could recur; none has a repro.
 
 `incremental-elab-loses-span-file-provenance` was resolved 2026-08-13 and moved
 to

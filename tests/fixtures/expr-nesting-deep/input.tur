@@ -1,0 +1,25 @@
+;; expr-nesting-deep -- expression nesting far past the RETIRED depth cap
+;; compiles and runs.
+;;
+;; This fixture used to be errors/expr-nesting-depth-limit and asserted the
+;; opposite: that 120-deep nesting was refused with TUR-E0712 "exceeds the
+;; emitter's depth limit (40)".  That cap is gone.  It was calibrated against
+;; one host's Debug+ASan stack cliff, and it was wrong twice over -- the cliff
+;; moved below it when the emit_value frame grew (so it stopped being a
+;; ceiling), and macro expansion routinely produces deeper trees than any
+;; hand-written source (so it rejected legitimate code: a 12-component
+;; `for-each` in the ecs spice could not be compiled at all).
+;;
+;; Emission now runs on a large explicitly-sized stack -- see
+;; tur_run_on_big_stack in src/compiler/stack_guard.h -- so the depth a program
+;; may nest to follows the stack, not a constant.  120 levels here is 3x the
+;; retired cap; the point is that it is unremarkable now.
+;;
+;; The backstop that remains (a real-stack-headroom check, still TUR-E0712) is
+;; asserted by tests/run-emit-stack-guard.sh, which shrinks the stack with
+;; TUR_EMIT_STACK_MB to make it fire.
+;;
+;; Regression for docs/archive/emit-depth-guard-loses-race-with-asan-stack.md
+(defn main [] : int
+  (println (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ 1 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1))
+  0)

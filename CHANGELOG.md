@@ -2,6 +2,52 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **The compiler runs on a stack sized for its own recursion, and the emitter's
+  expression-depth cap is gone.** `EMIT_MAX_EXPR_DEPTH` was 40 and was wrong in
+  both directions at once. As a ceiling it did not hold: it was calibrated
+  against one host's Debug+ASan stack cliff, and the `emit_value` frame later
+  grew a 256-byte region-walk array that moved the cliff *below* 40 -- so
+  `tur emit-c` on a deeply nested expression aborted with
+  `AddressSanitizer: stack-overflow` instead of printing TUR-E0712. As a floor
+  it rejected working code: 40 was checked against the deepest *hand-written*
+  nesting in the tree (20), but macro expansion is not hand-written, and a
+  12-component `for-each` in the `ecs` spice expanded past it and could not be
+  compiled at all.
+
+  Depth follows the input, so `tur` now trampolines its whole driver onto a
+  stack sized by `TUR_STACK_MB` (default 256 MiB) rather than rationing depth
+  with a constant -- the same thing `jit_engine.c` has always done for a JIT'd
+  program's entry stack behind `TUR_JIT_STACK_MB`. A 12-component `for-each`
+  compiles and runs; 120-level nesting, 3x the retired cap, is unremarkable.
+
+  Sizing only *emission* was not enough: at ~400 levels the abort moved to
+  `elab_call -> elab_form`, which had **no depth guard at all**, so deep
+  nesting crashed the compiler with no diagnostic whatsoever. It now carries
+  the same backstop the emitter and macro expansion do.
+
+- **TUR-E0712 names the real quantity.** It used to say "expression nesting
+  exceeds the emitter's depth limit (40)"; with the cap retired that would have
+  been a claim about a number that no longer exists. It now reports the stack
+  actually exhausted and the depth reached, and points at `TUR_STACK_MB`.
+
+### Fixed
+
+- **A deeply nested expression no longer aborts the compiler.** What remains at
+  each recursive walk is a backstop on real stack headroom
+  (`tur_stack_nearly_exhausted`, `src/compiler/stack_guard.h`), shared by the
+  emitter, the elaborator and macro expansion, so an unbounded walk gets a
+  diagnostic rather than a sanitizer abort. Measuring the actual resource is
+  the only bound that cannot rot the way the constant did -- it is correct at
+  any frame size, on any host, under any sanitizer. `errors/expr-nesting-depth-limit`
+  (which asserted the retired cap) is replaced by `tests/fixtures/expr-nesting-deep`
+  plus `tests/run-compiler-stack-guard.sh` (ctest `tur_compiler_stack_guard`),
+  which drives the backstop by shrinking the stack instead of growing the
+  program.
+
 ## [0.46.0] -- 2026-09-09
 
 ### Changed
