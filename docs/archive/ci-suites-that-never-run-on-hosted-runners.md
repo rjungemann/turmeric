@@ -8,6 +8,57 @@ the job output says the coverage is missing. The timing-trends plan's open
 question predicted exactly this shape and said it deserves a report rather
 than a dashboard row.
 
+**Status: RESOLVED 2026-09-09.** The report's own closure condition --
+"Close this report when the `/ci` skip ledger shows all four as `pass` on
+Linux" -- is met, on both operating systems rather than just Linux.
+
+Read straight off the `ci-metrics` orphan branch
+(`suite-timings-2026.jsonl`, 25,962 rows), which is the artifact this report
+was written from:
+
+| suite | 5204f4c83 | b58c91e67 | a42097764 | bf7713246 | d43cc42ef | 70f079975 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `tur_phase4_gdb` | pass / pass | pass / pass | pass / pass | pass / pass | pass / pass | pass / pass |
+| `tur_phase5_gdb` | pass / pass | pass / pass | pass / pass | pass / pass | pass / pass | pass / pass |
+| `tur_tutorial_steps` | pass / **skip** | pass / pass | pass / pass | pass / pass | pass / pass | pass / pass |
+| `tur_refine_wasm` | **skip / skip** | pass / pass | pass / pass | pass / pass | pass / pass | pass / pass |
+| `tur_scscm_compile` | **skip / skip** | pass / pass | pass / pass | pass / pass | pass / pass | pass / pass |
+
+(Linux / macOS. `5204f4c83` is the push immediately before the `ci.yml`
+changes landed; the surviving skip reasons on that row are verbatim
+`emcc not on PATH`, `sibling ../turmeric-spices checkout absent` and
+`pyyaml unavailable`.)
+
+That last column of the pre-fix row matters more than the five green ones
+after it. This report exists because a skip and a pass are indistinguishable
+in a job log -- both exit 0 -- so "they are green now" would be exactly the
+claim the report warns against. The `5204f4c83` row is the positive control:
+the ledger *does* record these suites as `skip` when they skip, it recorded
+them that way right up to the fix, and it has recorded `pass` on every push
+since. Five consecutive pushes, both OSes.
+
+Two predictions in the fix directions did not hold, both in the favourable
+direction:
+
+- **macOS gdb.** Direction 1 said macOS "is harder (Homebrew's gdb needs
+  code-signing to attach) and can stay partial as long as Linux runs the full
+  suite." It did not stay partial -- `tur_phase4_gdb` and `tur_phase5_gdb`
+  are `pass`, not `partial`, on macOS too.
+- **"Expect to find something the first time they run."** The gdb halves had
+  never executed on a hosted runner in the project's history. They passed on
+  their first real run, and on every one since.
+
+The `tur_refine_wasm` wrinkle the report records mid-flight -- Emscripten's
+one-time `shared:INFO: (Emscripten: Running sanity checks)` line, which the
+harness counted as compiler output and therefore a failure -- is fixed and
+stayed fixed: the harness warms `emcc` once before the loop, and the suite has
+been `pass` on both OSes for five pushes.
+
+All five `ci.yml` dependency changes are present on `main` at `70f079975`:
+`gdb` in the Linux `apt-get` line (:78), `pyyaml` on macOS (:97), the
+`Set up Emscripten` step in the `test` job (:124), and the sibling
+`turmeric-spices` clone (:136).
+
 **Severity:** medium. None of these is a product defect, but two of them
 guard the debugger's native source maps (Phase 4 and Phase 5 of the
 debugger work), which have therefore only ever been checked by hand.
