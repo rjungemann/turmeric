@@ -1,0 +1,20 @@
+#lang saffron
+;; saffron-dynamic-surface-pass M10: an `any` produced by a stdlib MACRO.
+;; The Saffron -> typed seam and the `if` truthiness rule were both gated on
+;; the ARGUMENT's (or condition's) span being a Saffron file, and a macro
+;; expansion -- every `map-*` accessor is a macro -- carries stdlib/map.tur's
+;; span.  So `(s (map-get m :k))` into `[v : int]` was a static
+;; "expected int, got any" reported inside the stdlib, and
+;; `(if (map-get m :k) ...)` was "if condition must be bool, got any", in a
+;; Saffron file.  Both gates now also accept the CALL's / FORM's span.
+;; 7.25 rather than 7.0: the value rides the box by bit pattern.
+(defn twice [v : int] : int (* v 2))
+(defn half [v : float] : float (/ v 2.0))
+(defn main [] : int
+  (let [m #map{:k 7 :f 7.25}]
+    (println (twice (map-get m :k)))
+    (println (half (map-get m :f)))
+    (println (if (map-get m :k) "present" "absent"))
+    (println (if (map-get m :zzz) "present" "absent"))
+    (println (if (map-get m :f) "yes" "no")))
+  0)

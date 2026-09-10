@@ -2191,8 +2191,10 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
          * form reachable from it through `do` chains, is a statement.  Anything
          * deeper is an expression subform.  See def_form_is_statement_position. */
         e.toplevel_stmt = forms[i];
+        e.toplevel_saffron = lang_span_is_saffron(forms[i]->span);   /* M10 */
         items[i] = elab_form(&e, forms[i]);
         e.toplevel_stmt = NULL;
+        e.toplevel_saffron = false;
         if (!items[i]) { rc = -1; /* keep going to surface more diagnostics */ }
 
         /* Phase M7+: Each (load ...)-spliced file is conceptually its own

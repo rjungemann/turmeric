@@ -557,6 +557,13 @@ typedef struct Elab {
      * binder's type and an escape delivers an int64 -- neither is a
      * tur_tagged_t. */
     bool in_callcc_receiver;
+    /* saffron-dynamic-surface-pass M10: the dialect of the TOP-LEVEL form
+     * being elaborated, set beside toplevel_stmt in pass 2.  Per-form spans
+     * cannot see through a macro expansion -- `(when (map-get m k) ...)` in
+     * a Saffron file is an `if` whose form is macros.tur's and whose
+     * condition is map.tur's -- so the seam and the truthiness rule consult
+     * this as well as the spans they have. */
+    bool toplevel_saffron;
     /* Phase G2: current per-arm skolem environment (NULL outside GADT match arms) */
     SkolemEnv *g2_skolem_env;
     /* Phase G2: GADT constructor whose arm is currently being elaborated.
@@ -1706,7 +1713,7 @@ Expr *elab_any_unbox_to(Elab *e, Expr *val, Type target, Span span);
  * a C-level `bool` slot (an `if` condition, a contract predicate).  Returns the
  * expression unchanged when it is not an `any` in a Saffron file, so callers
  * apply it unconditionally.  Defined in elab_forms.c. */
-Expr *elab_saffron_truthy(Elab *e, Expr *cond);
+Expr *elab_saffron_truthy(Elab *e, Expr *cond, Span site);
 /* saffron-lang-plan D7: reject a static-only feature in a Saffron file, naming
  * it and the guarantee it rests on.  Returns true when it rejected (false
  * outside Saffron, so callers can guard on it).  Defined in elab_forms.c. */

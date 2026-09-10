@@ -2857,9 +2857,14 @@ bool saffron_reject_static_only(Elab *e, Span span, const char *feature,
  * `tur-contract-check` takes a `bool`.  The contract path had no wrap, so a
  * refinement over `any` emitted `tur_contract_check(<tur_tagged_t>, ...)` --
  * uncompilable C, on a path the interpreter ran correctly. */
-Expr *elab_saffron_truthy(Elab *e, Expr *cond) {
+Expr *elab_saffron_truthy(Elab *e, Expr *cond, Span site) {
     if (!cond || cond->type.kind != TY_ANY) return cond;
-    if (!lang_span_is_saffron(cond->span)) return cond;
+    /* saffron-dynamic-surface-pass M10: the FORM's span counts too -- a
+     * macro-expanded condition (`(if (map-get m k) ...)`) carries the
+     * stdlib's span, and was "if condition must be bool, got any" even in a
+     * Saffron file. */
+    if (!lang_span_is_saffron(cond->span) && !lang_span_is_saffron(site) &&
+        !e->toplevel_saffron) return cond;
     Expr **targs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
     targs[0] = cond;
     Expr *t = expr_new(e->arena, EX_DYN_OP, TYPE_BOOL, cond->span);
@@ -2935,7 +2940,7 @@ Expr *elab_if(Elab *e, const Form *call) {
      * exactly what EX_DYN_OP is for, a decision the value's own tag makes at
      * runtime.  The reserved name is not a builtin, so the interpreter answers
      * it before consulting the builtin table. */
-    cond = elab_saffron_truthy(e, cond);
+    cond = elab_saffron_truthy(e, cond, call->span);
     if (!type_eq(cond->type, TYPE_BOOL)) {
         diag_emit(DIAG_ERROR, cond->span,
                   "if condition must be bool, got %s", type_name(cond->type));

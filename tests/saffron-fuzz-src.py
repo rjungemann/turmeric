@@ -128,11 +128,11 @@ KNOWN = [
     # H6-forward-ref-int (route_fwdref): retired 2026-09-10.
     ("H7-seam-fn-param",         ("route_seam_fn",)),
     ("H8-typed-defn-in-any",     ("route_typed_fn_value",)),
-    ("H9-any-map-into-map-get",  ("wrap_map_outer",)),
+    # H9-any-map-into-map-get (wrap_map_outer): retired 2026-09-10.
     # H10-lambda-literal-body (wrap_thunk_lit): retired 2026-09-10.
     # H11-field-read-no-inst-rows (wrap_struct + term_class): retired 2026-09-10.
     ("M7-dynamic-cons-field",    ("wrap_cons",)),
-    ("M10-macro-any-not-seamed", ("wrap_map_inner", "seam_first")),
+    # M10-macro-any-not-seamed (wrap_map_inner + seam_first): retired 2026-09-10.
     ("L-ctor-under-typed-expected", ("wrap_adt", "seam_first")),
 ]
 
@@ -728,15 +728,9 @@ KNOWN_PROBES = [
     ("H8  typed defn held in an any is not callable",
      '#lang saffron\n(defn app [f x] (f x))\n(defn inc [n : int] : int (+ n 1))\n'
      '(defn main [] : int (println (app inc 41)) 0)\n', "42\n"),
-    ("H9  any-held map into map-get",
-     '#lang saffron\n(defn lookup [m k : Sym] (map-get m k))\n'
-     '(defn main [] : int (println (lookup #map{:a 1} :a)) 0)\n', "1\n"),
     ("M7  dynamic .head/.tail read on an any-held Cons",
      '#lang saffron\n(defn hd [l] (.head l))\n'
      '(defn main [] : int (println (hd (list 7.25 1))) 0)\n', "7.25\n"),
-    ("M10 macro-expanded any (map-get) gets no seam into a typed param",
-     '#lang saffron\n(defn s [v : int] : int v)\n'
-     '(defn main [] : int (println (s (map-get #map{:k 7 :o 1} :k))) 0)\n', "7\n"),
     ("L   parametric ctor under a typed (W any) expectation builds (W int)",
      '#lang saffron\n(defdata W [a] (Wrap a))\n(defn s [v : (W any)] : (W any) v)\n'
      '(defn t [x] x)\n(defn main [] : int (println (match (t (s (Wrap 7))) (Wrap v) v)) 0)\n',

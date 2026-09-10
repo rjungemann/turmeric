@@ -112,7 +112,7 @@ called compiled.**
 The guide says a function value is "just another thing an `any` can hold".
 Message site `emit_module.c:10078`.
 
-**H9. An `any`-held map into `map-get` / `map-assoc` panics compiled.**
+**~~H9~~. RESOLVED 2026-09-10 for the shape where a sibling argument determines the key type: a borrow type now carries its type variable's name (`ref_borrow.target_tyvar`, set by the `(& K)` annotation parse), the binding collector binds through it, and the seam pre-binds its target from the call's other arguments (elaborating a simple later sibling early, as the bidirectional-inference path already does) before grounding only the genuinely open ones. Pinned by `tests/fixtures/saffron-any-map-into-map-get`; KNOWN row retired. **Residual:** an `any` map with an `any` key (`(defn put [m k v] (map-assoc m k v))`) still panics `different instantiation of Map` compiled: nothing determines K statically, and a head-only match would let a `(Map Sym int)` be read as `(Map any any)`. The interpreter, which has no instantiation to check, answers. Was: an `any`-held map into `map-get` / `map-assoc` panics compiled.**
 
 ```turmeric
 (defn lookup [m k : Sym] (map-get m k))   ;; compiled: `cast: any holds a different
@@ -202,8 +202,7 @@ cannot be walked through an `any` parameter compiled.
 user `defdata` works. The guide's `Functor/Applicative/Monad` reachability
 claim is only via `is?`/`cast`.
 
-**M10. An `any` produced by a stdlib macro gets no checked seam into a typed
-parameter.** `(defn s [v : int] : int v)` then `(s (map-get #map{:k 7} :k))`
+**~~M10~~. RESOLVED 2026-09-10: the seam and the truthiness rule also consult the call's / form's span and, since a macro expansion hides both (`when` is macros.tur's `if` over map.tur's condition), the dialect of the top-level form being elaborated (`Elab.toplevel_saffron`, set beside `toplevel_stmt` in pass 2). Pinned by `tests/fixtures/saffron-macro-any-seam-and-truthiness`; KNOWN row retired. Was: an `any` produced by a stdlib macro gets no checked seam into a typed parameter.** `(defn s [v : int] : int v)` then `(s (map-get #map{:k 7} :k))`
 is a static `TUR-E0001: expected int, got any` reported at
 `stdlib/map.tur:573`, while `(s (t (map-get ...)))` through an unannotated
 defn works. The seam insertion is gated on the ARGUMENT's span being Saffron

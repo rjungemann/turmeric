@@ -806,6 +806,11 @@ typedef struct Type {
         /* Phase 12: Borrow types store the referenced type T */
         struct {
             TypeKind target;  /* The type T being referenced by &T or &mut T */
+            /* saffron-dynamic-surface-pass H9: when T is a NAMED type
+             * variable (`(& K)` on a generic parameter), its name -- the
+             * kind alone cannot say WHICH tyvar, so a call could never bind
+             * K from a borrowed argument.  NULL otherwise. */
+            const char *target_tyvar;
         } ref_borrow;
         /* Phase 15: Typeclass types */
         struct {
