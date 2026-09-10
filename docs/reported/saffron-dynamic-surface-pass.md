@@ -563,10 +563,17 @@ yet`, interp `true`. Parity note; the guide documents the panic.
 
 ## Stale text to fix alongside
 
-- `docs/guides/saffron-guide.md:134-136` (the "not dispatchable yet" sentence).
-- `src/compiler/elab_toplevel.c:618-621` and the header comment of
+All fixed, checked 2026-09-10:
+
+- ~~`docs/guides/saffron-guide.md:134-136` (the "not dispatchable yet"
+  sentence).~~ Rewritten with H2/H3.
+- ~~`src/compiler/elab_toplevel.c:618-621` and the header comment of
   `tests/fixtures/saffron-map-literal` both say `Hash[any]`/`MapKey[any]`
-  "do not exist".
+  "do not exist".~~ Neither says so any more.
+- ~~The guide's "What dynamic dispatch does not cover yet" listed
+  `definstance Functor [Option]` as unreachable~~ -- false since the D8
+  witnesses and doubly so after M2. Rewritten with M2 to the actual limit: an
+  HKT method whose body is not by-value-expressible.
 
 ## Method
 

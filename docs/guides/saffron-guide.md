@@ -280,16 +280,25 @@ cannot panic for a missing instance.
 ### What dynamic dispatch does not cover yet
 
 The registry is keyed on the **box tag**, so an instance the tag cannot name is
-not reachable through it. Three cases panic with a message saying which:
+not reachable through it. The cases that panic, with a message saying which:
 
 - A method taking more than the receiver (`eq [x : a y : a]`) or returning the
   class's own type variable (`clone : a -> a`) -- the call site would have to
   box and unbox more than the receiver.
-- An instance for a type constructor rather than an applied type
-  (`definstance Functor [Option]`), since a widened value's tag is minted from
-  `(Option float)`, not `Option`.
 - An instance whose receiver is itself a type variable
   (`definstance Clone [T]`), which has no ground tag at all.
+- A higher-kinded instance whose method body is not by-value-expressible --
+  one that delegates to a carrier helper, as `Functor [(Either E)]`'s `fmap`
+  does through `either-map`.
+
+A higher-kinded instance whose method body constructs its result **is**
+reachable, keyed on the one instantiation a Saffron file ever builds -- the
+all-`any` one -- whether its head is the bare constructor
+(`definstance Functor [Option]`) or a partial application
+(`definstance Functor [(Result _ B)]`): `.fmap` and `.bind` on an `any`-held
+Option or Result dispatch on both back ends. A Turmeric-built `(Option float)`
+handed across still has no row and panics cleanly: its elements are raw
+floats, and a Saffron closure expects boxes.
 
 ## Try it
 
