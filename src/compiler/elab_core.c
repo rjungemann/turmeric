@@ -1,5 +1,6 @@
 /* elab_core.c -- Elab state, scope, free-var analysis, binding/move/linear-state helpers. */
 #include "elab_internal.h"
+#include "lang_layers.h"   /* saffron-dynamic-surface-pass H6: lang_span_is_saffron */
 #include "mangle.h"
 #include <string.h>  /* memset for elab_init_state */
 
@@ -110,6 +111,15 @@ uint32_t fwd_decl_scan_params(Arena *arena, const Form *params_f, TypeKind **out
      * (arbitrary-fn-arity: no MAX_FN_ARITY ceiling). */
     uint32_t cap = params_f->as.list.len ? params_f->as.list.len : 1;
     TypeKind *arg_kinds = (TypeKind *)arena_alloc(arena, cap * sizeof(TypeKind));
+    /* saffron-dynamic-surface-pass H6: in a Saffron file an UNANNOTATED
+     * parameter is `any` (D3), and this forward decl is what a caller
+     * elaborated earlier than the callee checks against -- with the `int`
+     * placeholder, `(later 7.25 "s")` above `(defn later [a b] ...)` was
+     * "expected int, got float", and mutual recursion emitted a call whose C
+     * signature the definition did not have.  A slot that an annotation
+     * follows is handled below exactly as before: the annotation either
+     * commits a scalar kind or restores the compound placeholder. */
+    bool saffron = lang_span_is_saffron(params_f->span);
     for (uint32_t pi = 0; pi < params_f->as.list.len; pi++) {
         const Form *p = params_f->as.list.items[pi];
         /* `^`-prefixed substructural / fat / mut markers annotate the next
@@ -143,12 +153,16 @@ uint32_t fwd_decl_scan_params(Arena *arena, const Form *params_f, TypeKind **out
                      k == TY_NIL || k == TY_PTR_VOID || k == TY_SYM ||
                      k == TY_ANY)) {
                     arg_kinds[arity - 1] = k;
+                } else {
+                    arg_kinds[arity - 1] = TY_INT;   /* compound: the placeholder */
                 }
+            } else {
+                arg_kinds[arity - 1] = TY_INT;       /* compound: the placeholder */
             }
             continue;
         }
         /* Otherwise this form opens a new parameter slot. */
-        arg_kinds[arity] = TY_INT;
+        arg_kinds[arity] = saffron ? TY_ANY : TY_INT;
         arity++;
     }
     *out_arg_kinds = arg_kinds;

@@ -78,8 +78,7 @@ compiled.** `stdlib/typeclass-hash.tur:84`, `stdlib/map.tur:435`.
 (`emit_module.c:10616`); the interpreter tags a Sym as int. H4's `is?`
 chain cannot be fixed for the interpreter until this is.
 
-**H6. Forward reference to a later unannotated defn defaults its return to
-`int`, not `any`.**
+**~~H6~~. RESOLVED 2026-09-10: pass 1 (`elab_pre_declare_toplevel_defn`, `fwd_decl_scan_params`) now applies the Saffron default to the forward decl itself: return `any` except zero-arity `main`, unannotated params `any`. Pinned by `tests/fixtures/saffron-forward-reference-defaults-any`; KNOWN row retired. Was: forward reference to a later unannotated defn defaults its return (and params) to `int`, not `any`.**
 
 ```turmeric
 (defn user [] (+ (later) 1))

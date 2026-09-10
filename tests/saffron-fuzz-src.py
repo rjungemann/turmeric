@@ -125,7 +125,7 @@ TIMEOUT = 90
 KNOWN = [
     ("H1-capturing-lambda",      ("route_capture",)),
     ("H5-sym-in-any",            ("scalar_sym",)),
-    ("H6-forward-ref-int",       ("route_fwdref",)),
+    # H6-forward-ref-int (route_fwdref): retired 2026-09-10.
     ("H7-seam-fn-param",         ("route_seam_fn",)),
     ("H8-typed-defn-in-any",     ("route_typed_fn_value",)),
     ("H9-any-map-into-map-get",  ("wrap_map_outer",)),
@@ -730,9 +730,6 @@ KNOWN_PROBES = [
     ("H5  Sym inside an any: type-of / =",
      '#lang saffron\n(defn k [x] (type-of x))\n(defn s [a b] (= a b))\n'
      '(defn main [] : int (println (k :kw)) (println (s :a :a)) 0)\n', "Sym\ntrue\n"),
-    ("H6  forward reference defaults the return to int",
-     '#lang saffron\n(defn user [] (+ (later) 1))\n(defn later [] 7.25)\n'
-     '(defn main [] : int (println (user)) 0)\n', "8.25\n"),
     ("H7  seam into a fn-typed parameter",
      '#lang saffron\n(defn tfn [f : (fn [int] int)] : int (f 1))\n(defn id [x] x)\n'
      '(defn main [] : int (println (tfn (id (fn [x : int] : int (+ x 1))))) 0)\n', "2\n"),

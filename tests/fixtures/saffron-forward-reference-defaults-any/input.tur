@@ -1,0 +1,30 @@
+#lang saffron
+;; saffron-dynamic-surface-pass H6: a call to a defn declared LATER in the
+;; file saw the typed forward declaration -- return `int`, parameters the
+;; `int` placeholder -- not the dialect's `any`.  `(+ (later) 1)` above
+;; `(defn later [] 7.25)` emitted `tur_tagged_t + long` (a cc error), mutual
+;; recursion was `if branches have mismatched types: then=bool else=int`, and
+;; `(later 7.25 "s")` was `expected int, got float`.  Self-recursion worked
+;; because elab_defn's S4 early-forward fixes the SELF binding as pass 2
+;; starts; a sibling elaborated earlier never saw that.  Pass 1 now applies
+;; the Saffron default (return `any` except zero-arity `main`; unannotated
+;; params `any`) to the forward decl itself.
+;;
+;; 7.25 rather than 7.0: the float rides the box by bit pattern.
+(defn user [] (+ (later) 1))
+(defn later [] 7.25)
+(defn even? [n] (if (= n 0) true (odd? (- n 1))))
+(defn odd? [n] (if (= n 0) false (even? (- n 1))))
+(defn pick-fwd [] (pick 7.25 "s"))
+(defn pick [a b] (if (> a 7) b a))
+;; an ANNOTATED forward decl keeps its annotation
+(defn typed-fwd [] (twice-int 20))
+(defn twice-int [n : int] : int (* n 2))
+(defn main [] : int
+  (println (user))
+  (println (even? 11))
+  (println (odd? 11))
+  (println (pick-fwd))
+  (println (type-of (pick-fwd)))
+  (println (typed-fwd))
+  0)
