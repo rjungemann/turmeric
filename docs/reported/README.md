@@ -1598,6 +1598,24 @@ churn.
 | ~~spices-ci-fetch-failure-downgraded-to-warning~~ | -- | **Resolved 2026-09-04, item (1)**: turmeric-spices commit `e24a41a8` tees `tur fetch`'s output and folds it into the `::warning::` annotation, dropping the "often optional" editorializing. Archived to [docs/archive](../archive/spices-ci-fetch-failure-downgraded-to-warning.md). The durable fix (an exit code from `tur fetch` distinguishing optional vs required failures) is split out to [tur-fetch-exit-code-optional-vs-required](../archive/tur-fetch-exit-code-optional-vs-required.md) |
 | ~~tur-fetch-exit-code-optional-vs-required~~ | -- | **Resolved 2026-09-09** via direction 1: an `:optional` dep that cannot be fetched is skipped (lock row dropped, run continues) and `tur fetch` exits 0 / 1 (only optional failed, lock written) / 2 (a required dep or step failed). Guides updated; `tests/run-spice-fetch.sh` pins all three. The spices-repo CI step (direction 2) is that repo's change. See [../archive/tur-fetch-exit-code-optional-vs-required.md](../archive/tur-fetch-exit-code-optional-vs-required.md). |
 
+## Found getting `turmeric-spices` CI green (filed 2026-09-10)
+
+One finding from the second pass at the sibling checkout's CI
+([turmeric-spices#66](https://github.com/rjungemann/turmeric-spices/pull/66)),
+which took that repo's matrix from 13 failing jobs to 92/92. Twelve of the
+thirteen were macOS-only, and every other one was a defect in the spices
+themselves -- this is the only `turmeric` bug in the set.
+
+Reported against `tur v0.46.0` on macOS 27 / arm64 / AppleClang 21, which is the
+compiler `macos-latest` now ships. That strictness is why this surfaced at all:
+clang 21 makes `-Wint-conversion` an error by default where gcc still warns, so
+the emitted C had been wrong for as long as the store site has existed and no
+CI leg had ever said so.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [global-def-store-misses-int-ptr-bridge](global-def-store-misses-int-ptr-bridge.md) | medium | A module-level `def` whose declared type and initializer straddle the int64/pointer carrier duality emits the store with **no bridging cast** -- `hub_hymutex_1969 = __ps_526;`, global `int64_t`, temp `void *`. The READ side bridges correctly, and `let` bridges the identical straddle (`emit_expr.c:3178-3186`), so it is the store alone. Four emitters share it, in both directions: the whole-program and separate-compilation `EX_DEF` initializers, the `^thread-local` init fn, and plain `set!`. Invisible on gcc and older clang, fatal on clang 21 and GCC 14. Took out the macOS leg of the `ws-server` spice, worked around there by ascribing `:ptr<void>` instead of `:int` -- which is the better-typed spelling regardless, so the workaround is not a debt |
+
 ## Windows port
 
 Originally filed 2026-07-31 during the Windows-support sweep on `main`. The
