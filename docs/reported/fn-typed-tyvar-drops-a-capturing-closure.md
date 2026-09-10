@@ -93,22 +93,37 @@ would instantiate `A` to a real function type and never build a carrier slot,
 so this class disappears rather than being patched. Worth weighing before
 anyone spends long on a targeted fix.
 
-## Related
+## Related -- and a correction to what this section first said
 
-An adjacent defect was isolated in the `turmeric-spices` repo on the same day,
-in `cata` over a function-typed carrier: an algebra arm returning a closure
-that captures **nothing** emits a `void*`-returning C function into an
-`int64_t` carrier slot, and `cc` rejects it outright with
-`incompatible pointer to integer conversion`. Reported matrix there:
-`(k (+ s n))` OK, `(k s)` fails, `(k (+ s 0))` fails, identical at int/int,
-int/bool and cstr/bool carriers.
+An adjacent defect was isolated in the `turmeric-spices` repo the same day, in
+`cata` over a function-typed carrier. **This report originally described it as
+capture-triggered and pointing "the opposite way" from this one. That was
+wrong**, and it was corrected the same day by controls rather than by reading:
 
-Note the two point **opposite ways** on capture -- that one fails when the
-closure captures nothing, this one when it captures something -- which is a
-reason to suspect one representation gap with two faces rather than two
-bugs, and a reason to fix them together rather than separately. That claim
-was verified in the spices tree, not here; this report's own repro is the
-one re-run against `main`.
+- the real trigger there is **arm order**, not capture. The emitter types the
+  `match` result temporary from the **first arm as written**: a first arm
+  returning a non-capturing closure yields an `int64_t` temporary while every
+  arm builds a `void *` fat-closure box, and `cc` rejects the mismatch.
+- three controls establish it. A capturing arm written first with the
+  non-capturing arm second **compiles and runs**; the regex algebra with the
+  capturing `LitF` first and the non-capturing `EmptyF`/`StarF` after it
+  **prints `match`**; all-arms-non-capturing fails. A non-capturing arm
+  anywhere but first is harmless.
+- the regex spice hits it only because `EmptyF` is nullary -- it has nothing it
+  *could* capture -- and is naturally written first.
+
+So the two are **not** two faces of one capture-shaped gap, which is what this
+section originally claimed. They may still share a root -- both are the erased
+carrier meeting a function value -- but the evidence for that is now much
+weaker, and nobody should go looking for a single capture-shaped fix on the
+strength of it.
+
+**This report's own finding is unaffected.** The repro above contains no
+`match` at all, so arm order cannot be its trigger; the three variations in
+"What isolates it" were each run directly, and capture-vs-no-capture is what
+moves it. The corrected spices finding also has a workaround (reorder the arms)
+and a much better consequence -- the matcher-as-`cata` is unblocked there --
+whereas this one has neither.
 
 ## Fix directions
 
