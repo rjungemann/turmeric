@@ -10,8 +10,71 @@ description: "EMIT_MAX_EXPR_DEPTH is a depth counter with no real-stack-headroom
 gets to print). One fixture red on affected hosts:
 `errors/expr-nesting-depth-limit`.
 
-**Status: FIXED 2026-09-09** -- by the fix direction below, verified on the
-host the report was filed from (macOS/arm64, Debug + ASan, 8 MiB stack).
+**Status: FIXED 2026-09-09**, and then fixed properly. The filed direction --
+pair the depth counter with a real-headroom check -- landed first and stopped
+the crash. It was the wrong shape, and the review question that exposed it was
+one sentence: *Turmeric has a trampoline, why is anything stack-overflowing?*
+
+The answer is that the trampoline is a property of the **emitted program** and
+the runtime (`src/runtime/cps_rt.c`) -- it is what stops a Turmeric program's
+recursion from consuming C stack. The compiler's own phases are ordinary C
+recursion over the AST, and nothing trampolines those. But the question is
+still the right one, because it points at the actual defect: the depth *cap*,
+not the missing headroom check.
+
+**`EMIT_MAX_EXPR_DEPTH` was wrong in both directions at once.**
+
+- *As a ceiling it did not hold.* 40 was measured against one host's Debug+ASan
+  cliff. The `emit_value` frame later grew a 256-byte region-walk array, which
+  moved the cliff below 40 -- this report.
+- *As a floor it rejected working code.* 40 was checked against the deepest
+  **hand-written** nesting in the tree (20). Macro expansion is not
+  hand-written. `spices/ecs/tests/for-each-arity-12.tur`, a 12-component
+  `for-each`, expands past 40 and **could not be compiled at all** -- on `main`
+  at the default stack it did not even get the diagnostic, it crashed the
+  compiler (exit 134).
+
+So the cap is gone. Depth follows the input, so the compiler sizes the stack
+for the job instead of rationing it: `tur` trampolines its whole driver onto a
+stack sized by `TUR_STACK_MB` (default 256 MiB) via `tur_run_on_big_stack`.
+That is not a novel move -- `jit_engine.c` has run a JIT'd program's entry on a
+`pthread_attr_setstacksize` thread behind `TUR_JIT_STACK_MB` all along, and
+rustc does the same for compilation behind `RUST_MIN_STACK`.
+
+**A second, worse instance turned up while testing the first.** Sizing only
+*emission* was not enough: at ~400 levels the abort simply moved to
+`elab_call -> elab_form`, which had **no depth guard at all** -- so deep
+nesting aborted the compiler with no diagnostic whatsoever, a strictly worse
+failure than the one this report was filed for. It now carries the same
+headroom backstop. That is why the stack is sized under the whole driver rather
+than per phase.
+
+What remains at each walk is a backstop, not a bound: it fires only when the
+real stack is nearly gone, which after this change means a genuinely unbounded
+walk rather than a merely deep one. Measuring the actual resource is also the
+only bound that cannot rot the way the constant did -- correct at any frame
+size, on any host, under any sanitizer.
+
+### Results
+
+| case | before | after |
+| --- | --- | --- |
+| `ecs/tests/for-each-arity-12.tur` (real code) | **crash**, exit 134 | compiles, runs, prints 3510 |
+| 120-level nesting | refused (over the 40 cap) | compiles, prints 121 |
+| 400-level nesting | **crash** in `elab_call` | compiles |
+| 400-level at `TUR_STACK_MB=8` | **crash**, no diagnostic | TUR-E0712 at depth 317, exit 1 |
+
+Coverage moved with the behaviour. `errors/expr-nesting-depth-limit` asserted a
+cap that no longer exists and is retired; `tests/fixtures/expr-nesting-deep`
+asserts the positive case (120 levels, 3x the retired cap), and
+`tests/run-compiler-stack-guard.sh` (ctest `tur_compiler_stack_guard`) asserts
+the backstop in both directions by shrinking the stack rather than growing the
+program -- which is what keeps it from becoming the stack-size canary the old
+fixture became.
+
+The original headroom work, which still stands underneath all of this, was
+verified on the host the report was filed from (macOS/arm64, Debug + ASan,
+8 MiB stack).
 
 Reproduced first, so the fix has something to be a fix *of*: `tur emit-c` on
 the fixture aborted with `AddressSanitizer: stack-overflow ... in

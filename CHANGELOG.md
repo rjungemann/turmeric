@@ -4,27 +4,49 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **The compiler runs on a stack sized for its own recursion, and the emitter's
+  expression-depth cap is gone.** `EMIT_MAX_EXPR_DEPTH` was 40 and was wrong in
+  both directions at once. As a ceiling it did not hold: it was calibrated
+  against one host's Debug+ASan stack cliff, and the `emit_value` frame later
+  grew a 256-byte region-walk array that moved the cliff *below* 40 -- so
+  `tur emit-c` on a deeply nested expression aborted with
+  `AddressSanitizer: stack-overflow` instead of printing TUR-E0712. As a floor
+  it rejected working code: 40 was checked against the deepest *hand-written*
+  nesting in the tree (20), but macro expansion is not hand-written, and a
+  12-component `for-each` in the `ecs` spice expanded past it and could not be
+  compiled at all.
+
+  Depth follows the input, so `tur` now trampolines its whole driver onto a
+  stack sized by `TUR_STACK_MB` (default 256 MiB) rather than rationing depth
+  with a constant -- the same thing `jit_engine.c` has always done for a JIT'd
+  program's entry stack behind `TUR_JIT_STACK_MB`. A 12-component `for-each`
+  compiles and runs; 120-level nesting, 3x the retired cap, is unremarkable.
+
+  Sizing only *emission* was not enough: at ~400 levels the abort moved to
+  `elab_call -> elab_form`, which had **no depth guard at all**, so deep
+  nesting crashed the compiler with no diagnostic whatsoever. It now carries
+  the same backstop the emitter and macro expansion do.
+
+- **TUR-E0712 names the real quantity.** It used to say "expression nesting
+  exceeds the emitter's depth limit (40)"; with the cap retired that would have
+  been a claim about a number that no longer exists. It now reports the stack
+  actually exhausted and the depth reached, and points at `TUR_STACK_MB`.
+
 ### Fixed
 
-- **TUR-E0712 actually prints on an ASan-instrumented build.** The emitter's
-  expression-depth guard was a bare counter (`EMIT_MAX_EXPR_DEPTH`, 40) tuned
-  against one host's measured stack cliff, so on macOS/arm64 the
-  `emit_value -> emit_value_dispatch -> emit_builtin` cycle exhausted the real
-  stack first and `tur emit-c` aborted with `AddressSanitizer: stack-overflow`
-  instead of the diagnostic the bound exists to print --
-  `errors/expr-nesting-depth-limit` red on the documented bootstrap build. It
-  now has the same second trigger the macro-expansion guard got in 0.42:
-  `elab_call.c`'s three stack-introspection helpers moved into a shared
-  `src/compiler/stack_guard.{c,h}`, and the walk stops when EITHER the counter
-  hits its cap OR a genuine nesting is under way and the calling thread's real
-  headroom has run down. The constant was deliberately not re-tuned -- sizing
-  it against one host's frames only moves the cliff for the next frame that
-  grows. When headroom is what stopped the walk the diagnostic says so, with
-  the depth it reached, so the message does not claim a 40-deep expression
-  when the counter stood at 32. The shared helper caches the thread's stack
-  bounds: the query runs per recursion level, and glibc's
-  `pthread_getattr_np` parses `/proc/self/maps` for the main thread, which was
-  affordable at macro depths and would not have been at emitter ones.
+- **A deeply nested expression no longer aborts the compiler.** What remains at
+  each recursive walk is a backstop on real stack headroom
+  (`tur_stack_nearly_exhausted`, `src/compiler/stack_guard.h`), shared by the
+  emitter, the elaborator and macro expansion, so an unbounded walk gets a
+  diagnostic rather than a sanitizer abort. Measuring the actual resource is
+  the only bound that cannot rot the way the constant did -- it is correct at
+  any frame size, on any host, under any sanitizer. `errors/expr-nesting-depth-limit`
+  (which asserted the retired cap) is replaced by `tests/fixtures/expr-nesting-deep`
+  plus `tests/run-compiler-stack-guard.sh` (ctest `tur_compiler_stack_guard`),
+  which drives the backstop by shrinking the stack instead of growing the
+  program.
 
 ## [0.46.0] -- 2026-09-09
 

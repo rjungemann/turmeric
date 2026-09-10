@@ -319,31 +319,58 @@ Three things follow, and the first two are the traps:
    unlimited` (which `turmeric-spices` CI uses) moves the cliff; it does not
    remove it, and it does nothing for a developer running the documented
    bootstrap build locally.
-3. **A depth counter alone cannot be calibrated against all of these**, so the
-   two bounded walks that can get deep do not try. A constant sized against one
-   host's frames holds only until the frames grow -- and they do: the emitter's
-   `emit_value` frame gained a 256-byte region-walk array, which is enough to
-   put the macOS cliff *below* the 40 that had been chosen to sit under it.
-   `EMIT_MAX_EXPR_DEPTH` (`src/compiler/emit_expr.c`) and
-   `ELAB_MAX_MACRO_EXPANSION_DEPTH` (`src/compiler/elab_call.c`) each pair
-   their counter with `tur_stack_nearly_exhausted()`
-   (`src/compiler/stack_guard.h`), which measures the calling thread's real
-   remaining stack; the diagnostic fires on whichever trigger comes first, and
-   names the stack when that is what stopped the walk. The counter still owns
-   the healthy case -- on a 64 MiB stack the emitter stops at exactly 40.
+3. **Do not bound a recursive compiler walk with a depth constant.** It was
+   tried, and it failed in both directions at once. `EMIT_MAX_EXPR_DEPTH` was
+   40, sized under the measured cliffs in the table above -- then the
+   `emit_value` frame grew a 256-byte region-walk array, the macOS cliff moved
+   *below* 40, and the guard lost the race it existed to win: an ASan
+   stack-overflow abort where TUR-E0712 should have printed. In the other
+   direction, 40 was checked against the deepest **hand-written** nesting in
+   the tree (20) -- but macro expansion is not hand-written, and a
+   12-component `for-each` in the `ecs` spice expanded past it and could not be
+   compiled at all.
 
-   Two things to know before writing a third such probe. Under ASan **the
+   Depth follows the input, so the compiler sizes the stack for the job instead
+   of rationing it. `tur` trampolines its whole driver onto a stack sized by
+   `TUR_STACK_MB` (default 256 MiB, `tur_run_on_big_stack` in
+   `src/compiler/stack_guard.h`), exactly as `jit_engine.c` has always done for
+   a JIT'd program's entry stack via `TUR_JIT_STACK_MB`, and as rustc does with
+   `RUST_MIN_STACK`. There is no depth cap any more.
+
+   What remains at each recursive walk -- `emit_value`, `elab_call`, and macro
+   expansion -- is a **backstop**, not a bound: `tur_stack_nearly_exhausted()`
+   measures the calling thread's real remaining stack, so reaching it means a
+   walk that is genuinely unbounded rather than merely deep. Measuring the
+   actual resource is also the only bound that cannot rot the way the constant
+   did -- it is correct at any frame size, on any host, under any sanitizer.
+
+   Note the numbers in the table above are now *historical*. They describe
+   where an 8 MiB stack ran out, which is no longer the stack the compiler
+   runs on.
+
+   Three things to know before adding a fourth such walk. Under ASan **the
    address of a local does not approximate the stack pointer** (address-taken
    locals live on the sanitizer's fake stack), so a hand-rolled probe silently
-   degrades to the counter; use the shared helper, which reads the SP register.
-   And `TUR_DEBUG_STACK_GUARD=1` traces what either guard sees. See TUR-E0712,
+   degrades to no probe at all; use the shared helper, which reads the SP
+   register. `TUR_DEBUG_STACK_GUARD=1` traces what the guards see. And an
+   unguarded walk fails *worse* than a guarded one: `elab_call -> elab_form`
+   had no guard, so deep nesting aborted the compiler with no diagnostic
+   whatsoever until one was added. See TUR-E0712,
    [docs/archive/emit-value-dispatch-unbounded-recursion.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/emit-value-dispatch-unbounded-recursion.md)
    and
    [docs/archive/emit-depth-guard-loses-race-with-asan-stack.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/emit-depth-guard-loses-race-with-asan-stack.md).
 
-A regression fixture for a depth limit should sit **between** the bound and the
-stack cliff, so it asserts the diagnostic rather than doubling as a stack-size
-canary that fails whenever CI's limit changes.
+A regression fixture cannot usefully assert the backstop: on the real stack the
+nesting needed to trip it is impractically large, and a fixture tuned to sit
+just under a cliff is precisely the stack-size canary that
+`errors/expr-nesting-depth-limit` became before it was retired. Shrink the
+stack instead and keep the program small -- that is what
+`tests/run-compiler-stack-guard.sh` (ctest `tur_compiler_stack_guard`) does
+with `TUR_STACK_MB`, asserting both directions: the same source compiles on a
+normal stack and is refused, with a diagnostic rather than an abort, on a tiny
+one. The positive half lives in the ordinary suite as
+`tests/fixtures/expr-nesting-deep`, whose 120 levels are 3x the retired cap and
+entirely unremarkable now.
 
 ---
 

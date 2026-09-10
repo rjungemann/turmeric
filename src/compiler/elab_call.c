@@ -2640,7 +2640,59 @@ static void call_collect_tyvar_names(const Type *t, const char **names, uint8_t 
     }
 }
 
+static Expr *elab_call_inner(Elab *e, Form *call);
+
+/* Stack backstop for nested-call elaboration.
+ *
+ * elab_call -> elab_form -> elab_call recurses once per level of expression
+ * nesting, and until now nothing bounded it at all: a deeply nested expression
+ * did not get a diagnostic, it aborted the compiler
+ * (`AddressSanitizer: stack-overflow ... in elab_call`).  The emitter's walk
+ * had the same shape and at least reported before dying; this one did not.
+ *
+ * The bound is the real stack, not a constant -- the same reasoning as the
+ * emitter's guard and the macro-expansion guard below, and the same shared
+ * helper.  With the driver running on a TUR_STACK_MB-sized stack (main.c) this
+ * is genuinely a backstop: reaching it means a walk that is unbounded rather
+ * than merely deep.
+ *
+ * The counter exists to hold the floor and to name a depth in the message; it
+ * is not a cap.  A wrapper carries it because elab_call_inner has too many
+ * return paths to bracket by hand. */
+#define ELAB_CALL_DEPTH_STACK_FLOOR 8
+static int  g_elab_call_depth;
+static bool g_elab_call_depth_reported;
+
 Expr *elab_call(Elab *e, Form *call) {
+    if (g_elab_call_depth == 0) g_elab_call_depth_reported = false;
+    if (g_elab_call_depth >= ELAB_CALL_DEPTH_STACK_FLOOR &&
+        tur_stack_nearly_exhausted()) {
+        if (!g_elab_call_depth_reported) {
+            size_t total = 0;
+            (void)tur_stack_headroom(&total);
+            g_elab_call_depth_reported = true;
+            diag_emit_with_code(DIAG_ERROR, call->span,
+                                TUR_E0712_EXPR_NESTING_TOO_DEEP,
+                                "expression nesting exhausted the compiler's "
+                                "stack at depth %d (%zu MiB)",
+                                g_elab_call_depth,
+                                total / (size_t)(1024 * 1024));
+            diag_emit(DIAG_NOTE, call->span,
+                      "raise it with TUR_STACK_MB (default %d), or split the "
+                      "expression into helper functions or `let` bindings; if "
+                      "a macro generated it, have the macro emit a flatter "
+                      "form",
+                      TUR_STACK_MB_DEFAULT);
+        }
+        return NULL;
+    }
+    g_elab_call_depth++;
+    Expr *r = elab_call_inner(e, call);
+    g_elab_call_depth--;
+    return r;
+}
+
+static Expr *elab_call_inner(Elab *e, Form *call) {
     /* Already established: call->tag == F_LIST and len >= 1. */
     Form *head = call->as.list.items[0];
 
