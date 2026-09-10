@@ -6,6 +6,44 @@ All notable changes to Turmeric are documented here.
 
 ### Changed
 
+- **`tests/run-jit.sh` honours `TUR_TEST_SHARD="i/N"`,** so the JIT corpus can
+  be split across N runners the way `tests/run.sh` already could. The parsers
+  are deliberately identical, clamping included (`0/3` and `abc/3` both mean
+  `1/3`, `4/3` means `3/3`, and `1/0`, `1/1` or a value with no slash mean "not
+  sharded"), because CI sets the variable once per job and both harnesses may
+  read it. Ordinals advance over the full corpus rather than over admitted
+  fixtures, so `TUR_TEST_FILTER` never shifts shard membership; happy and error
+  fixtures round-robin on their own counters, so each shard holds within one
+  fixture of an equal share of both.
+
+  This is aimed at the slowest leg in the matrix. `macos-latest` hands out both
+  3-core and 5-core machines, and measured off the `ci-metrics` branch
+  `tur_jit_fixture_tests` runs ~440s median on Linux, ~348s on a 5-core mac and
+  ~730s median / ~940s p90 / 1078s max on a 3-core one -- which CI draws about
+  97% of the time, and which has grown from a 593s median on 08-26. Throughput
+  is linear in cores (the serial suites show the 5-core box is only ~1.2x
+  faster per core), so raising `TUR_TEST_JOBS` on a 3-core runner buys nothing
+  and only risks the per-fixture timeouts it is capped to avoid. More
+  parallelism there means more machines.
+
+  **No CI matrix uses this yet.** A shard axis renames the check
+  (`JIT engine (macos-latest) 1/3`), so any branch-protection rule naming the
+  current check has to move in the same change -- a gating decision, left to a
+  human, and the reason the `test` job kept its own name when it was split.
+- **A sharded run's suite timings no longer collide.** `collect-suite-timings.py`
+  tags each row with `shard_index`/`shard_total` (null when unsharded, so every
+  row written before this stays comparable), and the `/ci` dashboard keys each
+  slice as its own series. Without that, N shards publish N rows carrying the
+  same `(run_id, suite)` and ~1/N of the duration each, which reads as one
+  suite that suddenly got faster and started reporting N times per run. This
+  was the stated prerequisite for sharding anything, recorded in `ci.yml`
+  against the `test` job; it is now met for both harnesses.
+- **`tests/run-jit.sh` gained `TUR_TEST_LIST=1`,** which prints the fixture
+  names an invocation would run -- after filter and shard -- and exits without
+  running any. It is how `tests/run-shard-partition.sh` asks the harness what
+  is in a shard, rather than keeping a second copy of the enumeration that
+  would agree with itself forever while drifting from what CI runs.
+
 - **All four release archives now unpack to the same prefix layout** --
   `bin/`, `lib/`, `include/turi/`, `share/turmeric/stdlib/`. `windows-x86_64`
   has always used it; `linux-x86_64`, `linux-aarch64` and `macos-arm64` shipped
@@ -51,6 +89,18 @@ All notable changes to Turmeric are documented here.
   actually exhausted and the depth reached, and points at `TUR_STACK_MB`.
 
 ### Fixed
+
+- **A shard could have silently corrupted the JIT cc-fallback ratchet.** Its
+  *reclaimed* half compares the fallbacks a run observed against the whole
+  baseline, so a shard -- which exercises 1/N of the corpus -- would have
+  reported the other N-1/N as reclaimed by the engine. It is now suppressed
+  under a shard exactly as it already was under a filter. The half that
+  protects, the new-fallback check, still runs per shard and still holds across
+  the job: every name is in exactly one shard, so their union checks each name
+  exactly once. Regenerating the baseline from a shard is refused outright
+  (exit 2) rather than warned about, because the file is rewritten whole -- a
+  shard would delete every name it did not run, and nothing about the result
+  would look wrong.
 
 - **`tvm install` produced a toolchain that could not compile anything.** tvm
   normalized only the binary -- it moved a flat archive's `tur` down into

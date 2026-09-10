@@ -129,6 +129,17 @@ function envKey(r) {
   return [r.build_type, r.os, r.cc, r.nproc, r.jit ? 'jit' : 'nojit'].join('|');
 }
 
+// A sharded job (TUR_TEST_SHARD="i/N") reports the same suite once per shard,
+// each with ~1/N of the work.  Keyed on the bare name they would land in one
+// series as N points per run at a fraction of the real duration -- a suite that
+// appears to have got faster and noisier on the day sharding was switched on.
+// The shard is therefore part of the series identity, so each slice trends
+// against its own history.  Unsharded rows (shard_total null, which is every
+// row written before sharding existed) keep the bare name and their continuity.
+function seriesName(r) {
+  return r.shard_total ? `${r.suite} [${r.shard_index}/${r.shard_total}]` : r.suite;
+}
+
 function buildEnvs(rows) {
   const seen = new Map();
   for (const r of rows) {
@@ -170,8 +181,9 @@ function bySuite(rows) {
   const m = new Map();
   for (const r of rows) {
     if (!state.statuses.has(r.status)) continue;
-    let a = m.get(r.suite);
-    if (!a) m.set(r.suite, (a = []));
+    const key = seriesName(r);
+    let a = m.get(key);
+    if (!a) m.set(key, (a = []));
     a.push({
       ts: r.ts,
       ms: r.duration_ms,
@@ -356,13 +368,13 @@ function renderTiles() {
     tile('', 'clock', 'Total wall time', esc(fmtDuration(total)),
       'Sum of every suite in the latest run'),
     tile('', 'layers', 'Suites', String(latest.length),
-      `${new Set(rows.map((r) => r.suite)).size} seen in range`),
+      `${new Set(rows.map(seriesName)).size} seen in range`),
     tile(
       failed.length ? 'is-fail' : 'is-clean',
       failed.length ? 'circle-x' : 'circle-check',
       failed.length ? 'Failing' : 'All passing',
       String(failed.length),
-      failed.length ? failed.map((r) => r.suite).join(', ') : 'No failures in the latest run',
+      failed.length ? failed.map(seriesName).join(', ') : 'No failures in the latest run',
     ),
     tile(skipped.length ? 'is-skip' : '', 'circle-minus', 'Skipped',
       String(skipped.length), 'Fully or partially skipped'),
@@ -373,7 +385,7 @@ function renderTiles() {
 
 function renderFilters() {
   const allSuites = [...new Set(
-    state.rows.filter((r) => envKey(r) === state.env).map((r) => r.suite),
+    state.rows.filter((r) => envKey(r) === state.env).map(seriesName),
   )].sort();
 
   const chosen = selected();
@@ -832,9 +844,9 @@ function renderSkips() {
 
   for (const r of latest) {
     if (r.status === 'skip') {
-      add('skip', r.skip_reason || 'no reason recorded', r.suite);
+      add('skip', r.skip_reason || 'no reason recorded', seriesName(r));
     } else if (r.partial_skip_reason != null) {
-      add('partial', r.partial_skip_reason, r.suite);
+      add('partial', r.partial_skip_reason, seriesName(r));
     }
   }
 
@@ -930,7 +942,7 @@ async function boot() {
     if (valid.length) state.statuses = new Set(valid);
   }
 
-  const known = new Set(state.rows.map((r) => r.suite));
+  const known = new Set(state.rows.map(seriesName));
   state.suites = url.suites
     ? Array.from({ length: MAX_SERIES }, (_, i) =>
         (known.has(url.suites[i]) ? url.suites[i] : null))

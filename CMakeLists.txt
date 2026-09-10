@@ -587,6 +587,17 @@ add_test(
   COMMAND bash tests/check-cc-warn-ratchet.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# TUR_TEST_SHARD must partition the corpus: disjoint slices whose union is the
+# whole thing.  Neither half is observable from a sharded run itself -- a shard
+# that silently skipped fixtures, or ran some twice, still prints a clean
+# summary -- so nothing else in the suite would notice.  Enumeration only (it
+# drives run-jit.sh's TUR_TEST_LIST and runs no fixture), so it needs no JIT
+# engine and costs about a minute.
+add_test(
+  NAME tur_shard_partition
+  COMMAND bash tests/run-shard-partition.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # `cmd | grep -q` under `set -o pipefail` reports a FALSE failure when the
 # pattern IS found: grep exits at the first match, the writer takes SIGPIPE
 # (141), and pipefail promotes that to the pipeline's status.  Load- and
