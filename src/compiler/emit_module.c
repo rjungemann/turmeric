@@ -6,6 +6,7 @@
 #include "globals.h"   /* Phase I: g_emit_abi_trace */
 #include "mangle.h"    /* tur_mangle_ident (constrained-byval witness thunks) */
 #include "mono_specs.h" /* VBM2b: by-value van Laarhoven lens mono spec registry */
+#include "stack_guard.h" /* tur_run_on_big_stack -- emission runs on a sized stack */
 #include "rc.h"        /* DEDUP-4b: RC_VT_* -- pinned against TypeKind below */
 
 /* ------------ program-level emit ------------ */
@@ -14627,7 +14628,7 @@ static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
 bool g_emit_ffi_export_shims = false;
 static void emit_ffi_export_shims(Buf *out, const Expr *program);
 
-int emit_program(Buf *out, const Expr *program) {
+static int emit_program_inner(Buf *out, const Expr *program) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit: expected EX_PROGRAM\n");
         return -1;
@@ -16454,7 +16455,7 @@ static const char *manifest_type_tag(TypeKind k) {
 }
 
 /* RP1: append a manifest line per exported defn. See emit.h for format. */
-int emit_exports_manifest(Buf *out, const Expr *program) {
+static int emit_exports_manifest_inner(Buf *out, const Expr *program) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit_exports_manifest: expected EX_PROGRAM\n");
         return -1;
@@ -16658,9 +16659,9 @@ static bool adt_has_inline_byval_monomorph_field(const AdtDef *def) {
 /* Emit a C header file for a module. Contains declarations (not definitions).
  * When separate_compilation is true (Phase M3): only exported functions are
  * declared, and #includes for each imported module's header are emitted. */
-int emit_header(Buf *out, const char *module_name, const Expr *program,
-                bool separate_compilation,
-                const ForcedAbiSpec *forced, uint32_t n_forced) {
+static int emit_header_inner(Buf *out, const char *module_name, const Expr *program,
+                             bool separate_compilation,
+                             const ForcedAbiSpec *forced, uint32_t n_forced) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit_header: expected EX_PROGRAM\n");
         return -1;
@@ -17233,10 +17234,10 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
 /* Emit a C implementation file for a module. Contains definitions.
  * When separate_compilation is true (Phase M3): #includes imported modules'
  * headers instead of emitting their code inline. */
-int emit_implementation(Buf *out, const char *module_name, const Expr *program,
-                        bool separate_compilation,
-                        const ForcedAbiSpec *forced, uint32_t n_forced,
-                        BorrowSpecInfo **out_borrow_specs, uint32_t *out_n_borrow_specs) {
+static int emit_implementation_inner(Buf *out, const char *module_name, const Expr *program,
+                                     bool separate_compilation,
+                                     const ForcedAbiSpec *forced, uint32_t n_forced,
+                                     BorrowSpecInfo **out_borrow_specs, uint32_t *out_n_borrow_specs) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit_implementation: expected EX_PROGRAM\n");
         return -1;
@@ -17869,4 +17870,82 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     /* serial-shift-unsupported-context-miscompile: mirror emit_program -- a hard
      * codegen diagnostic fails the separate-compilation path too. */
     return diag_had_error() ? 1 : 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Emission runs on a stack sized for the job.
+ *
+ * The expression walk below is plain structural recursion over the AST, and
+ * the depth it needs follows the SOURCE -- a macro that expands into a nested
+ * chain can want more levels than a default thread stack holds, and on a
+ * Debug+ASan build each frame is ~40x its normal size.  Rationing that with a
+ * depth constant was tried and failed twice over: the constant stopped being a
+ * ceiling as soon as a frame grew, and it rejected legitimate macro-generated
+ * code that no hand-written source would reach
+ * (docs/archive/emit-depth-guard-loses-race-with-asan-stack.md).
+ *
+ * So the four public entry points trampoline onto a large explicitly-sized
+ * stack instead.  Every caller gets it without a call-site change, and
+ * tur_stack_nearly_exhausted() stays underneath as the backstop for a walk
+ * that is genuinely unbounded rather than merely deep.
+ * ------------------------------------------------------------------------ */
+
+typedef struct { Buf *out; const Expr *program; } EmitProgArgs;
+
+static int emit_program_job(void *p) {
+    EmitProgArgs *a = (EmitProgArgs *)p;
+    return emit_program_inner(a->out, a->program);
+}
+
+int emit_program(Buf *out, const Expr *program) {
+    EmitProgArgs a = { out, program };
+    return tur_run_on_big_stack(emit_program_job, &a);
+}
+
+static int emit_exports_manifest_job(void *p) {
+    EmitProgArgs *a = (EmitProgArgs *)p;
+    return emit_exports_manifest_inner(a->out, a->program);
+}
+
+int emit_exports_manifest(Buf *out, const Expr *program) {
+    EmitProgArgs a = { out, program };
+    return tur_run_on_big_stack(emit_exports_manifest_job, &a);
+}
+
+typedef struct {
+    Buf *out; const char *module_name; const Expr *program;
+    bool separate_compilation;
+    const ForcedAbiSpec *forced; uint32_t n_forced;
+    BorrowSpecInfo **out_borrow_specs; uint32_t *out_n_borrow_specs;
+} EmitModArgs;
+
+static int emit_header_job(void *p) {
+    EmitModArgs *a = (EmitModArgs *)p;
+    return emit_header_inner(a->out, a->module_name, a->program,
+                             a->separate_compilation, a->forced, a->n_forced);
+}
+
+int emit_header(Buf *out, const char *module_name, const Expr *program,
+                bool separate_compilation,
+                const ForcedAbiSpec *forced, uint32_t n_forced) {
+    EmitModArgs a = { out, module_name, program, separate_compilation,
+                      forced, n_forced, NULL, NULL };
+    return tur_run_on_big_stack(emit_header_job, &a);
+}
+
+static int emit_implementation_job(void *p) {
+    EmitModArgs *a = (EmitModArgs *)p;
+    return emit_implementation_inner(a->out, a->module_name, a->program,
+                                     a->separate_compilation, a->forced,
+                                     a->n_forced, a->out_borrow_specs,
+                                     a->out_n_borrow_specs);
+}
+
+int emit_implementation(Buf *out, const char *module_name, const Expr *program,
+                        bool separate_compilation,
+                        const ForcedAbiSpec *forced, uint32_t n_forced,
+                        BorrowSpecInfo **out_borrow_specs, uint32_t *out_n_borrow_specs) {
+    EmitModArgs a = { out, module_name, program, separate_compilation,
+                      forced, n_forced, out_borrow_specs, out_n_borrow_specs };
+    return tur_run_on_big_stack(emit_implementation_job, &a);
 }

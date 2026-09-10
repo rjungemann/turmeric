@@ -230,6 +230,18 @@ add_test(
   COMMAND bash tests/run-demangle.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+
+# The compiler's recursion backstop.  There is no depth CAP any more -- the
+# driver runs on a TUR_STACK_MB-sized stack -- so the remaining guard fires on
+# real stack headroom, and the only practical way to assert it is to shrink the
+# stack rather than to grow the program.  A fixture cannot set an env var, and a
+# fixture tuned to sit just under a cliff is exactly the stack-size canary the
+# retired errors/expr-nesting-depth-limit became, so this lives in a harness.
+add_test(
+  NAME tur_compiler_stack_guard
+  COMMAND bash tests/run-compiler-stack-guard.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # RM3: the region allocator's safety properties (docs/archive/regions-plan.md).
 add_test(
   NAME tur_region_unit

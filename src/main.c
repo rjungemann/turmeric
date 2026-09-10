@@ -68,6 +68,7 @@
 #include "compiler/refine_solver.h" /* SX8a: the S0..S3 chain `tur smt` runs */
 #include "elab.h"
 #include "emit.h"
+#include "compiler/stack_guard.h" /* tur_run_on_big_stack -- see the note at EOF */
 #include "runtime/hamt.h" /* S2: tur_hamt_hash_xxh64 for the split-artifact hash */
 #include "runtime/rt_split_embed.h" /* S2: committed decls region + hash (TUR_JIT) */
 #include "turi/spice_loader.h" /* J2: the REPL's in-process jit hook */
@@ -10899,7 +10900,7 @@ static int try_external_subcommand(int argc, char **argv) {
 }
 
 
-int main(int argc, char **argv) {
+static int tur_main_inner(int argc, char **argv) {
     /* TUR_ADT_SLAB=1: bump-allocate never-freed multi-variant ADT boxes.
      * Env-only measurement seam (see
      * docs/reported/multi-variant-adts-always-heap-allocate.md), deliberately
@@ -12367,4 +12368,43 @@ int main(int argc, char **argv) {
      * from $PATH when "foo" isn't a built-in. Built-ins always win.
      * If exec succeeds, this does not return. */
     return try_external_subcommand(argc, argv);
+}
+
+/* ---------------------------------------------------------------------------
+ * The compiler runs on a stack sized for its own recursion.
+ *
+ * Every phase that walks the AST -- reader, elaborator, emitter -- recurses
+ * once per level of expression nesting, and how deep that goes is a property
+ * of the INPUT.  A macro that expands into a nested chain can want more levels
+ * than a default 8 MiB thread stack holds, and on a Debug+ASan build each
+ * frame is ~40x its usual size.
+ *
+ * Rationing it with a per-phase depth constant was tried and failed in both
+ * directions: the constant stopped being a ceiling as soon as a frame grew (an
+ * ASan stack-overflow abort where a diagnostic should have printed), and it
+ * rejected legitimate macro-generated code that no hand-written source would
+ * reach.  See docs/archive/emit-depth-guard-loses-race-with-asan-stack.md.
+ *
+ * The emitter is where that surfaced, but it is not the only offender: an
+ * ~400-level nested expression aborts in elab_call -> elab_form, which has no
+ * depth guard at all.  So the stack is sized once, underneath the whole
+ * driver, rather than per phase.  TUR_STACK_MB tunes it; jit_engine.c has done
+ * the same for a JIT'd program's entry stack (TUR_JIT_STACK_MB) all along.
+ *
+ * emit_program and friends ALSO trampoline (emit_module.c).  That is not
+ * redundant: tur_run_on_big_stack is re-entrant-safe, so it is a no-op when
+ * reached from here, and it keeps the guarantee for an embedder that links
+ * libturi and calls the emitter without going through this main.
+ * ------------------------------------------------------------------------ */
+
+typedef struct { int argc; char **argv; } TurMainArgs;
+
+static int tur_main_job(void *p) {
+    TurMainArgs *a = (TurMainArgs *)p;
+    return tur_main_inner(a->argc, a->argv);
+}
+
+int main(int argc, char **argv) {
+    TurMainArgs a = { argc, argv };
+    return tur_run_on_big_stack(tur_main_job, &a);
 }
