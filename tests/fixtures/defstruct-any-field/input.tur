@@ -1,0 +1,31 @@
+; saffron-dynamic-surface-pass (low): `(defstruct Dyn [v : any])` was
+; "defstruct 'Dyn': unsupported field form" -- in TYPED Turmeric too, not just
+; Saffron -- while the record `defdata` a defstruct lowers TO has accepted an
+; `any` field all along. The gate (defstruct_field_type_lowerable) simply had
+; no arm for TY_ANY, so a struct with a dynamic field was the one field shape
+; that could not be spelled. The record-ADT product stores it as the same
+; 16-byte tagged value the ADT does.
+;
+; This file is plain Turmeric on purpose: the hole was never Saffron-specific.
+;
+; `Mix` is the part worth having: two `any` fields INTERLEAVED with an int, a
+; cstr and a float. An `any` is 16 bytes among 8-byte scalars, so if the
+; lowering got field offsets wrong this reads back shifted -- which a struct of
+; one `any` field could never show.
+;
+; Non-round floats (7.25, 2.5) rather than 7.0: each crosses the box, and a
+; truncating path would print 7 and 2.
+
+(defstruct Dyn [v : any])
+(defstruct Mix [a : int v : any b : cstr w : any c : float])
+
+(defn main [] : int
+  (let [d (make-struct Dyn (:: 7.25 any))]
+    (println (cast (.v d) float)))
+  (let [m (make-struct Mix 41 (:: 7.25 any) "mid" (:: "str" any) 2.5)]
+    (println (.a m))
+    (println (cast (.v m) float))
+    (println (.b m))
+    (println (cast (.w m) cstr))
+    (println (.c m)))
+  0)

@@ -108,7 +108,7 @@ static const char *tc_path_basename(const char *path) {
  * ascription forms.  Supports only the kinds the dispatch synthesis
  * actually needs: primitives + TY_STRUCT (named) + TY_APP.  Returns
  * NULL for unsupported kinds. */
-static Form *type_to_form(Elab *e, const Type *t, Span span) {
+Form *type_to_form(Elab *e, const Type *t, Span span) {
     if (!t) return NULL;
     const char *kw = NULL;
     switch (t->kind) {
@@ -6838,8 +6838,37 @@ found_method:;
                     for (TypeClassInstance *wi = e->typeclass_env.instances; wi; wi = wi->next) {
                         if (wi->typeclass != tc || wi->n_type_args == 0) continue;
                         Type h = wi->type_args[0];
+                        /* saffron-dynamic-surface-pass M2, second pass: a
+                         * partially-applied head (`Functor [(Result _ B)]`)
+                         * mints a witness too, at the all-`any` instantiation
+                         * of its constructor -- but ONLY when the method body
+                         * is by-value-expressible, the same gate the M2
+                         * head-tyvar collection applies at dispatch.  The two
+                         * gates are one condition seen from two sides: the
+                         * collection grounds the witness's inner `.fmap` to a
+                         * by-value spec exactly when this admits the witness,
+                         * so no witness is ever minted whose dispatch would
+                         * ride the erased carrier and tag its result with an
+                         * unresolved id (the silent `false` from `is?` that
+                         * sank the first attempt).  A carrier-bodied method on
+                         * such a head gets no witness and its row's slot stays
+                         * NULL -- a clean panic. */
+                        bool w_partial = (h.kind == TY_APP);
+                        while (h.kind == TY_APP && h.as.app.fn) h = *h.as.app.fn;
                         if (h.kind != TY_ADT || !h.as.adt_.def ||
                             h.as.adt_.def->n_type_params == 0) continue;
+                        if (w_partial) {
+                            FnDef *pimpl = (slot < wi->n_method_impls)
+                                               ? wi->method_impls[slot] : NULL;
+                            const TypeClassMethod *pcm = &tc->methods[slot];
+                            bool p_applied = pcm->return_type.kind == TY_APP;
+                            bool p_bare    = pcm->return_type.kind == TY_TYVAR;
+                            bool p_body_ok = pimpl && pimpl->body &&
+                                pimpl->body->kind != EX_INLINE_C &&
+                                ((p_applied && m7_body_constructs_byvalue(pimpl->body)) ||
+                                 (p_bare && m7_body_returns_byvalue_element(pimpl->body)));
+                            if (!p_body_ok) continue;
+                        }
                         if (!wi->dyn_witness) {
                             wi->dyn_witness = (FnDef **)arena_alloc(
                                 e->arena, tc->n_methods * sizeof(FnDef *));
@@ -6848,6 +6877,24 @@ found_method:;
                         if (wi->dyn_witness[slot]) continue;
                         AdtDef *def = h.as.adt_.def;
                         Span sp = call->span;
+                        /* `(Head any ... any)` -- the all-`any` instantiation,
+                         * built fresh at every use because a Form is not shared
+                         * between two positions in one tree. */
+                        #define SAFFRON_ALL_ANY_APP(dst)                        \
+                            Form *dst;                                          \
+                            {   uint32_t __ntp = def->n_type_params;            \
+                                Form **__ti = (Form **)arena_alloc(             \
+                                    e->arena, (1 + __ntp) * sizeof(Form *));    \
+                                __ti[0] = form_sym(e->arena, sp,                \
+                                    symtab_intern(e->st, strslice(              \
+                                        def->name,                              \
+                                        (uint32_t)strlen(def->name))));         \
+                                for (uint32_t __k = 0; __k < __ntp; __k++)      \
+                                    __ti[1 + __k] = form_sym(e->arena, sp,      \
+                                        symtab_intern(e->st,                    \
+                                            strslice("any", 3)));               \
+                                dst = form_list(e->arena, sp, __ti, 1 + __ntp); \
+                            }
                         char wn[256];
                         snprintf(wn, sizeof wn, "__dynwit_%s_%.*s_%s", tc->name->name,
                                  (int)method_name_len, method_name, def->name);
@@ -6906,7 +6953,63 @@ found_method:;
                                 wimpl->binding->type.kind == TY_FN &&
                                 (k + 1) < wimpl->binding->type.as.fn.arity &&
                                 wimpl->binding->type.as.fn.arg_kinds[k + 1] == TY_PTR_VOID;
-                            if (erased_fn) {
+                            /* saffron-dynamic-surface-pass M1: a continuation
+                             * whose declared RESULT is the class variable
+                             * APPLIED -- Monad's `k : (fn [a] (m b))`, against
+                             * Functor's `g : (fn [a] b)` -- must not be cast to
+                             * `(fn [any] any)`.
+                             *
+                             * With that cast the method's result instantiation
+                             * never grounds (`(m b)` cannot unify with a bare
+                             * `any`), so `.bind` resolves to the ERASED CARRIER
+                             * `__inst_Monad_bind_Option(int64_t, tur_poly_fn_t)`
+                             * -- whose body calls the continuation through
+                             * `((int64_t (*)(void*, int64_t))k.fn)` while a
+                             * Saffron lambda returns a 16-byte `tur_tagged_t`,
+                             * dropping half the box on the return -- and the
+                             * `: any` pin then tags an unresolved result with a
+                             * bare TypeKind number, which is why `type-of` read
+                             * `unknown`.
+                             *
+                             * Pass a MARSHALLING adaptor instead, the same move
+                             * H7 makes at the argument seam:
+                             *
+                             *   (fn [__ka : any] : (Head any..)
+                             *     (cast (__ak __ka) (Head any..)))
+                             *
+                             * Now `k` really is `(fn [any] (Head any..))`, so
+                             * `b := any`, the instantiation is concrete, the
+                             * ABI scan mints the by-value spec, and the result
+                             * carries the right tag. */
+                            bool app_result_fn = false;
+                            if (erased_fn && slot < tc->n_methods &&
+                                tc->methods[slot].param_types) {
+                                const Type *mp = &tc->methods[slot].param_types[k + 1];
+                                if (mp->kind == TY_FN && mp->as.fn.result_full_type &&
+                                    mp->as.fn.result_full_type->kind == TY_APP)
+                                    app_result_fn = true;
+                            }
+                            if (app_result_fn) {
+                                SAFFRON_ALL_ANY_APP(ret_ty)
+                                SAFFRON_ALL_ANY_APP(cast_ty)
+                                char kn[24];
+                                snprintf(kn, sizeof kn, "__ka%u", k);
+                                const Symbol *ks = symtab_intern(
+                                    e->st, strslice(kn, (uint32_t)strlen(kn)));
+                                Form *inner[2] = { form_sym(e->arena, sp, as),
+                                                   form_sym(e->arena, sp, ks) };
+                                Form *cst2[3] = { form_sym(e->arena, sp, casts),
+                                                  form_list(e->arena, sp, inner, 2),
+                                                  cast_ty };
+                                Form *pv2[2] = { form_sym(e->arena, sp, ks),
+                                                 form_type_ann(e->arena, sp,
+                                                     form_sym(e->arena, sp, anys)) };
+                                Form *lam[4] = { form_sym(e->arena, sp, fns),
+                                                 form_vec(e->arena, sp, pv2, 2),
+                                                 form_type_ann(e->arena, sp, ret_ty),
+                                                 form_list(e->arena, sp, cst2, 3) };
+                                cargs[2 + k] = form_list(e->arena, sp, lam, 4);
+                            } else if (erased_fn) {
                                 Form *pany[1] = { form_sym(e->arena, sp, anys) };
                                 Form *fnt[3] = { form_sym(e->arena, sp, fns),
                                                  form_vec(e->arena, sp, pany, 1),
@@ -7464,6 +7567,79 @@ resolved_user_fallback:;
                 if (pidx < cm->n_params)
                     m7_collect_tyvar_bindings(e, cm->param_types[pidx],
                                               args_orig_types[i], m7_bind_names,
+                                              m7_bind_types, &m7_nb, 16);
+            }
+            /* saffron-dynamic-surface-pass M2 (compiled half): also bind the
+             * INSTANCE's own head type variables -- `B` in
+             * `Functor [(Result _ B)]`, `E` in `Functor [(Either E)]` -- by
+             * unifying the instance head against the receiver.  The class
+             * method's param types are written in the CLASS variables (`f`,
+             * `a`, `b`) and can never bind one of these, so the substituted
+             * result kept it free, m7_byvalue_grounded stayed false, no
+             * by-value spec was ever minted, and every Result `fmap` -- typed
+             * or Saffron -- rode the erased carrier.  Measured on the Result
+             * instance: `body_ok=1, nb=3, grounded=0` against Option's
+             * `grounded=1`, and the free variable in the substituted result
+             * was `B`.  The kind-* branch below already does exactly this for
+             * its own head tyvars (ECS E2d-P6); this is its HKT twin.
+             *
+             * HOLE-AWARE, because T4 erased the hole.  A head `(Result _ B)`
+             * is stored as `app(Result, B)` with `partial_hole_pos == 0`: the
+             * fixed arm B is really the ctor's slot 1, the receiver's OUTERMOST
+             * argument, and pairs with it under a direct unification.  A
+             * leftmost partial application `(Either E)` (`partial_hole_pos`
+             * 0xFF or 1) fixes the LEADING slot, which is the receiver's inner
+             * application -- unified against the whole receiver, E would bind
+             * to the wrong arm -- so the receiver's outer applications are
+             * peeled down to the head's depth first.
+             *
+             * And the hole-at-0 shape is only slot-SAFE when the receiver is
+             * HOMOGENEOUS.  T4's erasure also reversed the class method's
+             * reading of `(f a)` -- `a` binds to the receiver's LAST argument,
+             * the err arm, not the ok arm the hole stands for (measured on
+             * `(Result int cstr)`: `a := cstr`) -- and `(f b)` reconstructs as
+             * `(Result B b)`, arms swapped.  All of that is invisible when
+             * every type argument is the same type, which is the Saffron
+             * `(Result any any)` this exists for, and a silent miscompile when
+             * they differ.  So a heterogeneous `(Result int cstr)` stays on
+             * the carrier exactly as today; lifting that needs a
+             * hole-preserving representation of the class-variable binding,
+             * a wider change than this one. */
+            /* Gated on m7_body_byvalue_ok, and that gate is load-bearing:
+             * grounding a head tyvar only buys anything when the body can be
+             * specialised by value.  For a carrier-bodied instance (Either's
+             * `fmap` delegates to `either-map`, body_ok=0) it buys nothing and
+             * costs a regression -- the now-grounded result reaches the
+             * `byval_agg` "commit the precise type, stay on the carrier" arm
+             * below, whose consumer-side bridge does not cover a let-init, and
+             * `tur_adt_Either__int__cstr m = __ps_N` is an invalid
+             * initializer.  Measured; the gate returns Either to its exact
+             * prior behaviour. */
+            if (m7_body_byvalue_ok && best_inst->n_type_args >= 1 &&
+                best_inst->type_args[0].kind == TY_APP) {
+                Type head = best_inst->type_args[0];
+                Type recv = obj_orig_type;
+                bool head_ok = true;
+                if (best_inst->partial_hole_pos == 0) {
+                    Type first;
+                    bool have_first = false;
+                    for (Type cur = recv;
+                         cur.kind == TY_APP && cur.as.app.fn && cur.as.app.arg;
+                         cur = *cur.as.app.fn) {
+                        if (!have_first) { first = *cur.as.app.arg; have_first = true; }
+                        else if (!type_eq(*cur.as.app.arg, first)) { head_ok = false; break; }
+                    }
+                } else {
+                    uint32_t hd = 0, rd = 0;
+                    for (Type t = head; t.kind == TY_APP && t.as.app.fn; t = *t.as.app.fn) hd++;
+                    for (Type t = recv; t.kind == TY_APP && t.as.app.fn; t = *t.as.app.fn) rd++;
+                    while (rd > hd && recv.kind == TY_APP && recv.as.app.fn) {
+                        recv = *recv.as.app.fn;
+                        rd--;
+                    }
+                }
+                if (head_ok)
+                    m7_collect_tyvar_bindings(e, head, recv, m7_bind_names,
                                               m7_bind_types, &m7_nb, 16);
             }
             /* M6 / G6(c): the method result `(f b)`'s element `b` is determined by

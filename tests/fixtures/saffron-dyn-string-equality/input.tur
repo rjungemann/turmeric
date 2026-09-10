@@ -1,0 +1,38 @@
+#lang saffron
+; saffron-dynamic-surface-pass (low): `=` on two strings through an `any`
+; panicked "=: no operator for a cstr argument" on BOTH back ends, while bool
+; and numeric `=` answered. String equality is table stakes for a dynamic
+; dialect, and in Saffron -- where every value is an `any` -- there is no other
+; spelling for it.
+;
+; The `=` OPERATOR genuinely has no cstr row anywhere, typed Turmeric included:
+; `(= "ab" "ab")` in a plain .tur file is a TUR-E0006 operator-lookup error,
+; with `cstr-eq?` or `(.eq? a b)` as the named alternatives. So this is NOT a
+; missing builtin row being routed around -- adding one would change the typed
+; surface. It is the DYNAMIC path answering what `Eq[cstr]`
+; (stdlib/typeclass-eq.tur) answers, exactly as H5 made dynamic `=` on two
+; Syms answer what `Eq[Sym]` answers though `=` has no Sym row either.
+;
+; Semantics are `cstr-eq?`'s, documented there and matched byte for byte on
+; both back ends: both-NULL equal, a NULL never equal to a non-NULL (including
+; the empty string), otherwise strcmp.
+;
+; The two back ends reached the refusal at DIFFERENT sites, which is why the
+; fix is two arms rather than one: compiled, `__tur_dyn_cmp` fell through to
+; its numeric guard; interpreted, a cstr is a SCALAR any-box carrying no struct
+; name, so it slipped past the named-box refusal and died on the failed
+; `builtin_lookup` instead.
+;
+; The last line pins the other half: ORDERING and MIXED-type compares still
+; refuse, in the same words, on both back ends -- so this arm did not quietly
+; become "compare anything".
+
+(defn t [x] x)
+
+(defn main []
+  (println (= (t "ab") (t "ab")))
+  (println (= (t "ab") (t "cd")))
+  (println (not= (t "ab") (t "cd")))
+  (println (= (t "") (t "")))
+  (println (= (t "ab") (t 1)))
+  0)

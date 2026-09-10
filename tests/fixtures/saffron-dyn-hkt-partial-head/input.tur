@@ -1,0 +1,67 @@
+#lang saffron
+; saffron-dynamic-surface-pass M2: an HKT instance whose head is written
+; PARTIALLY APPLIED -- `definstance Functor [(Result _ B)]` (stdlib/result.tur)
+; -- is a TY_APP chain, not the bare TY_ADT `Functor [Option]` is, and neither
+; back end could dispatch a method on an `any`-held Result: `no instance of
+; Functor for Result` on a value whose own `type-of` says `Result`.
+;
+; Two different defects with one root, fixed a day apart.
+;
+; INTERPRETER: it keys dispatch on the NAME `turi_any_display_type` reports
+; ("Result"), compared against `type_name` of the instance head, which for a
+; TY_APP chain spells "(type-app (type-app Result ?) B)" and could never match.
+; Peeling the chain to its head made the two spellings agree.
+;
+; COMPILED: the same peel keyed the registry row, but the witness it minted
+; then rode the ERASED CARRIER `__inst_Functor_fmap_Result_tyvar` -- int64_t
+; payloads against the all-`any` monomorph's 16-byte ones -- and tagged its
+; result with an unresolved id, so `is?` answered a silent `false`. The reason
+; was measured end to end: the instance's own head tyvar `B` is not a class
+; variable, so unifying the class method's parameter types never bound it, the
+; substituted result `(Result B b)` kept it free, m7_byvalue_grounded stayed
+; false, and no by-value spec was ever minted -- `nb=0` at ABI registration
+; against Option's `nb=4`. The elaborator now binds an instance's own head
+; tyvars by unifying the head against the receiver (as the kind-* path already
+; did), hole-aware because T4 erased the hole, and gated on a by-value-bodied
+; method -- the same gate the witness minter applies, so no witness is ever
+; minted whose dispatch would ride the carrier.
+;
+; This file therefore runs on BOTH back ends now; it was interp-only for a day.
+;
+; `.bind` rides along: M1 taught the witness to marshal a continuation whose
+; declared result is the class variable applied, and with the head tyvar bound
+; that grounding reaches `Monad [(Result _ B)]` too.
+;
+; 7.35 / 7.1 rather than round numbers: the element crosses a box and a
+; closure, and a conversion anywhere on that path prints a wrong number.
+
+(defn t [x] x)
+
+(defn bump [r]
+  (.fmap r (fn [x] (+ x 1))))
+
+(defn scale [r]
+  (.fmap r (fn [x] (* x 2.0))))
+
+(defn half [r]
+  (.bind r (fn [x] (ok (/ x 2.0)))))
+
+(defn main []
+  (match (bump (t (ok 41)))
+    (Ok v)  (println v)
+    (Err e) (println "err"))
+  (match (scale (t (ok 7.35)))
+    (Ok v)  (println v)
+    (Err e) (println "err"))
+  (match (bump (t (err "boom")))
+    (Ok v)  (println "unexpected-ok")
+    (Err e) (println e))
+  (println (type-of (bump (t (ok 1)))))
+  (match (half (t (ok 7.1)))
+    (Ok v)  (println v)
+    (Err e) (println "err"))
+  (match (half (t (err "boom")))
+    (Ok v)  (println "unexpected-ok")
+    (Err e) (println e))
+  (println (type-of (half (t (ok 1)))))
+  0)

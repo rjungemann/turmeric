@@ -3656,6 +3656,13 @@ Expr *elab_while(Elab *e, const Form *call) {
     }
     Expr *cond = elab_form(e, call->as.list.items[1]);
     if (!cond) return NULL;
+    /* saffron-dynamic-surface-pass (low): `while` is the THIRD bool slot a
+     * Saffron `any` can reach, after the `if`/`when` condition and the
+     * `#refine{...}` predicate.  It had no wrap, so `if/when/and/or` applied
+     * truthiness and `while` alone answered "while condition must be bool,
+     * got any" -- a loop could not be driven by a dynamic value in a dialect
+     * whose every value is one. */
+    cond = elab_saffron_truthy(e, cond, call->span);
     if (!type_eq(cond->type, TYPE_BOOL)) {
         diag_emit(DIAG_ERROR, cond->span,
                   "while condition must be bool, got %s", type_name(cond->type));

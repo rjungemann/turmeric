@@ -1,0 +1,37 @@
+; saffron-dynamic-surface-pass (low): `Sym` was not accepted as a `defstruct`
+; or `defdata` field type --
+;   defdata: field has unrecognized type :Sym
+; -- in typed Turmeric, not just Saffron. `parse_struct_field_type` simply had
+; no row for it, so the name never resolved to TY_SYM and fell through to the
+; user-type lookup, which does not know it either.
+;
+; A Sym is an INTERNED record pointer, so it is a pointer-sized scalar carrier
+; like `cstr` beside it -- not a new representation. Two rows were needed, one
+; per layer: the name -> TY_SYM parse, and TY_SYM -> `const struct __tur_sym *`
+; in the ADT field C type. Without the second the field took the `int64_t`
+; default, which still RAN correctly (a pointer fits an int64) but emitted the
+; ctor taking `int64_t` while its caller passed the pointer -- a right answer
+; with a -Wint-conversion under it. This file compiles warning-free.
+;
+; `n : float` beside the Sym field is deliberate: it pins that adding a
+; pointer-typed field did not shift the layout of the fields after it. 7.25
+; rather than 7.0 so a truncating read is visible.
+;
+; The Syms are let-bound rather than written inline: `make-struct` reads a
+; leading keyword as a FIELD NAME, so `(make-struct S :alpha 7.25)` is
+; "unknown field 'alpha'" -- unrelated to this fix.
+
+(defstruct S [k : Sym n : float])
+(defdata D (D Sym))
+
+(defn main [] : int
+  (let [a :alpha
+        b :beta
+        g :gamma
+        s (make-struct S a 7.25)]
+    (println (sym->str (.k s)))
+    (println (.n s))
+    (println (sym=? (.k s) a))
+    (println (sym=? (.k s) b))
+    (match (D g) (D k) (println (sym->str k))))
+  0)

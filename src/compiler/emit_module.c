@@ -6213,7 +6213,17 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                         if (!f->name || strcmp(f->name, fname) != 0) continue;
                         Type ft = f->full_type ? *f->full_type
                                                : type_simple(f->kind, CK_COPY);
-                        if (ft.kind == TY_TYVAR || ft.kind == TY_UNKNOWN) continue;
+                        /* An already-`any` field is NOT a widen site -- the
+                         * read hands its tagged value straight back (see
+                         * emit_dyn_field), so there is no payload type to
+                         * publish.  Noting it registers `any` ITSELF as a
+                         * dispatchable tag, which mints `Hash[T]`/`MapKey[T]`
+                         * shims at `T = any` whose receiver conversion spells
+                         * `(tur_tagged_t)__r` -- a scalar-to-struct cast, so
+                         * cc rejects the whole TU.  Reachable from any record
+                         * with an `any` field read dynamically. */
+                        if (ft.kind == TY_TYVAR || ft.kind == TY_UNKNOWN ||
+                            ft.kind == TY_ANY) continue;
                         emit_abi_note_any_widen(ctx, ft);
                     }
                 }
@@ -6877,12 +6887,43 @@ bool emit_instance_dispatch_recv_type(EmitCtx *ctx, TypeClassInstance *inst,
                                       Type *out) {
     if (!ctx || !inst || inst->n_type_args == 0) return false;
     Type recv = inst->type_args[0];
+    /* saffron-dynamic-surface-pass M2, second pass: a partially-applied head
+     * (`Functor [(Result _ B)]`, a TY_APP) IS keyed now, on the same all-`any`
+     * instantiation a bare `Functor [Option]` head gets below, by peeling to
+     * its constructor.  This was tried once before and reverted -- see the
+     * note that follows -- and what changed is not this function: the
+     * elaborator now grounds such an instance's own head tyvar at a
+     * by-value-bodied dispatch (the M2 head-tyvar collection in
+     * elab_typeclasses.c), so the dynamic witness minted for this row
+     * resolves to a by-value spec instead of the erased carrier, and the
+     * silent `false` the note describes no longer happens.  The witness
+     * minter applies the same body-kind gate, so a head this function keys
+     * whose body cannot be specialised simply gets no witness and the row's
+     * slot stays NULL -- a clean "cannot be dispatched" panic, never a
+     * mis-tagged box. */
+    while (recv.kind == TY_APP && recv.as.app.fn) recv = *recv.as.app.fn;
     if (recv.kind == TY_TYVAR || recv.kind == TY_UNKNOWN) return false;
-    /* A hole-headed partial application (`Functor [(Result _ E)]`) has no
+    /* A hole-headed partial application (`Functor [(Result _ B)]`) has no
      * single all-`any` instantiation to key on, and a TY_FORALL / anything
      * else that is neither a primitive nor a named ADT would fall through
      * `emit_any_type_id` to a bare TypeKind number -- which is a PRIMITIVE's
-     * tag space, so a row keyed on it could collide with `int` or `bool`. */
+     * tag space, so a row keyed on it could collide with `int` or `bool`.
+     *
+     * saffron-dynamic-surface-pass M2: peeling the chain to its head ADT and
+     * keying on `(Result any any)` -- the obvious "fix" -- is WRONG, and was
+     * measured to be.  A hole-headed instance never gets a by-value spec: both
+     * the typed and the dynamic path resolve `.fmap` to the erased carrier
+     * `__inst_Functor_fmap_Result_tyvar`, which takes and returns `int64_t`
+     * payloads, while a Saffron `any` is a 16-byte `tur_tagged_t`.  A witness
+     * minted on the peeled head therefore tags its result with the id of the
+     * UNRESOLVED result type (a small TypeKind number -- the very collision
+     * this comment warns about), and `is?` on the result answers a silent
+     * `false` where the interpreter answers `true`.  Declining here keeps the
+     * honest `no instance of <Class> for <Type>` panic.  The fix that would
+     * work is a by-value spec for the hole-headed instance, not a key.
+     *
+     * (Superseded by the peel above once that spec exists; the history is
+     * kept because the reasoning is what made the second attempt safe.) */
     if (recv.kind == TY_APP || recv.kind == TY_FORALL) return false;
     if (recv.kind == TY_ADT && !recv.as.adt_.def) return false;
     if (recv.kind == TY_ADT && recv.as.adt_.def && recv.as.adt_.def->n_type_params > 0) {
@@ -8196,6 +8237,14 @@ static const char *adt_field_scalar_c_type(TypeKind k) {
          * member spelling; the two must agree or the ctor cannot store its own
          * argument. */
         case TY_ANY:      return "tur_tagged_t";
+        /* saffron-dynamic-surface-pass (low): a `Sym` field is the interned
+         * record POINTER, the same spelling types.c gives TY_SYM.  Without a
+         * row here it fell to the `int64_t` default, and a `(defstruct S [k :
+         * Sym])` ctor then took `int64_t` while its caller passed a
+         * `const struct __tur_sym *` -- a right answer with a
+         * -Wint-conversion under it, which is exactly the shape this codebase
+         * has been bitten by before. */
+        case TY_SYM:      return "const struct __tur_sym *";
         case TY_PTR_VOID: return "void *";
         case TY_RC:
         case TY_WEAK:     return "RcControlBlock *";
@@ -10053,6 +10102,22 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "        __ta == TUR_DYNTAG_SYM && __tb == TUR_DYNTAG_SYM) {\n"
         "        int __se = (TUR_UNTAG(__a) == TUR_UNTAG(__b));\n"
         "        return TUR_TAG(TUR_DYNTAG_BOOL, __op == TUR_DYNOP_EQ ? __se : !__se);\n"
+        "    }\n"
+        /* saffron-dynamic-surface-pass (low): `=` / `not=` on two cstrs answers
+         * Eq[cstr]'s comparison (stdlib/typeclass-eq.tur), byte for byte, with
+         * both-NULL equal and a NULL never equal to a non-NULL -- exactly
+         * `cstr-eq?`'s documented rule, and the same move H5 made for Sym.  The
+         * `=` OPERATOR has no cstr row anywhere, typed Turmeric included, so
+         * this is the dynamic path's own arm; a dialect in which every value is
+         * `any` has no other spelling for string equality.  ORDERING on a cstr
+         * stays "no operator", on both back ends. */
+        "    if ((__op == TUR_DYNOP_EQ || __op == TUR_DYNOP_NE) &&\n"
+        "        __ta == TUR_DYNTAG_CSTR && __tb == TUR_DYNTAG_CSTR) {\n"
+        "        const char *__cx = (const char *)(intptr_t)TUR_UNTAG(__a);\n"
+        "        const char *__cy = (const char *)(intptr_t)TUR_UNTAG(__b);\n"
+        "        int __ce = (__cx == NULL && __cy == NULL) ? 1\n"
+        "                 : ((__cx == NULL || __cy == NULL) ? 0 : (strcmp(__cx, __cy) == 0));\n"
+        "        return TUR_TAG(TUR_DYNTAG_BOOL, __op == TUR_DYNOP_EQ ? __ce : !__ce);\n"
         "    }\n"
         "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_no_operator(__op, __ta); }\n"
         "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_no_operator(__op, __tb); }\n"

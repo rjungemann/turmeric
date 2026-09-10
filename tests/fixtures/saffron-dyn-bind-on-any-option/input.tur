@@ -1,0 +1,49 @@
+#lang saffron
+; saffron-dynamic-surface-pass M1: `.bind` on an `any`-held Option gave the
+; wrong answer compiled -- `(type-of (half (some 7.1)))` was `unknown`, and the
+; next `cast` panicked `any holds unknown, not Option` -- while `.fmap` on the
+; same Option worked. Interpreted: 3.55, which is what this file now gets on
+; both back ends.
+;
+; The difference between the two methods is one line of their DECLARATIONS:
+;   Functor: (fmap [container g : (fn [a] b)]      : (m b))
+;   Monad:   (bind [ma        k : (fn [a] (m b))]  : (m b))
+; `g` returns a bare type variable; `k` returns the class variable APPLIED.
+;
+; The D8 witness cast every erased fn extra to `(fn [any] any)`. For `fmap`
+; that is right and grounds `b := any`. For `bind` it cannot: `(m b)` does not
+; unify with a bare `any`, so the result instantiation never grounded, `.bind`
+; fell back to the ERASED CARRIER
+; `__inst_Monad_bind_Option(int64_t, tur_poly_fn_t)`, and two things went wrong
+; at once -- that body calls the continuation through
+; `((int64_t (*)(void*, int64_t))k.fn)` while a Saffron lambda returns a
+; 16-byte `tur_tagged_t`, dropping half the box on the return; and the `: any`
+; pin then tagged an unresolved result with a bare TypeKind number, which is
+; why `type-of` read `unknown`.
+;
+; So the filed fix direction -- "the witness's `: any` return must not re-widen
+; a body that is already `any`" -- was wrong twice over: the body was not an
+; `any`, and the defect was a truncation rather than a nesting.
+;
+; The witness now passes a MARSHALLING adaptor for such a continuation, the
+; same move H7 makes at the argument seam:
+;   (fn [__ka : any] : (Option any) (cast (__ak __ka) (Option any)))
+; so `k` really is `(fn [any] (Option any))`, `b := any`, the instantiation is
+; concrete, and the ABI scan mints the by-value spec.
+;
+; 7.1 and the halving, not a whole number: the element crosses two boxes and a
+; closure, and the truncation this fixes printed a wrong number rather than
+; failing loudly.
+
+(defn half [o] (.bind o (fn [x] (some (/ x 2.0)))))
+
+(defn main [] : int
+  (let [r (half (some 7.1))]
+    (println (type-of r))
+    (println (cast (unwrap-or (cast r (Option any)) (:: 0.0 any)) float)))
+  ; the None arm still short-circuits, and still types as an Option
+  (println (type-of (half (none))))
+  ; the Functor twin, which always worked -- pinned so a change to the witness
+  ; cannot fix `bind` by breaking `fmap`
+  (println (cast (unwrap-or (.fmap (some 7.1) (fn [x] (* x 2.0))) (:: 0.0 any)) float))
+  0)

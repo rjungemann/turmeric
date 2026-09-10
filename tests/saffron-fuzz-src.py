@@ -126,15 +126,30 @@ KNOWN = [
     # H1-capturing-lambda (route_capture): retired 2026-09-10.
     # H5-sym-in-any (scalar_sym): retired 2026-09-10.
     # H6-forward-ref-int (route_fwdref): retired 2026-09-10.
-    ("H7-seam-fn-param",         ("route_seam_fn",)),
+    # H7-seam-fn-param (route_seam_fn): retired 2026-09-10 -- the seam into a
+    # typed fn parameter synthesises a marshalling adaptor, so an any-held
+    # function (capturing closures included) reaches a typed parameter on both
+    # back ends.
     # H8-typed-defn-in-any (route_typed_fn_value): retired 2026-09-10.
     # H9-any-map-into-map-get (wrap_map_outer): retired 2026-09-10.
     # H10-lambda-literal-body (wrap_thunk_lit): retired 2026-09-10.
     # H11-field-read-no-inst-rows (wrap_struct + term_class): retired 2026-09-10.
-    ("M7-dynamic-cons-field",    ("wrap_cons",)),
+    # M7-dynamic-cons-field (wrap_cons): retired 2026-09-10 -- a dynamic field
+    # read now reaches generic and :heap ADTs, so `.head` on an any-held Cons
+    # answers.  (`.tail` still reads back an `int`, the erased carrier; that
+    # residual is tracked under M7 in the report, not by this row.)
     # M10-macro-any-not-seamed (wrap_map_inner + seam_first): retired 2026-09-10.
     ("L-ctor-under-typed-expected", ("wrap_adt", "seam_first")),
-    ("L-sym-struct-field",       ("scalar_sym", "wrap_struct")),
+    # H7 itself is fixed (see the retirement note above) and pinned by
+    # tests/fixtures/saffron-seam-into-typed-fn-param.  This route stays
+    # suppressed for a DIFFERENT, still-open finding it cannot avoid touching:
+    # its parameter is an all-`any` fn type, and such a parameter is unusable
+    # compiled -- see docs/reported/all-any-fn-param-is-unusable.md.
+    ("all-any-fn-param",         ("route_seam_fn",)),
+    # L-sym-struct-field (scalar_sym + wrap_struct): retired 2026-09-10 --
+    # `Sym` is a legal defstruct/defdata field type, and a keyword VALUE in
+    # construction position (`(make-struct P :kw)`) no longer reads as a field
+    # name.
     ("L-fn-keyword-body",        ("scalar_sym", "wrap_thunk_lit")),
 ]
 
@@ -390,8 +405,20 @@ class Gen:
             return "(%s (%s %s))" % (self.thru, f, e)
         if r == "seam_fn":
             f = self.name("sf")
-            leg.defs.append("(defn %s [f : (fn [] any)] : any (f))" % f)
-            return "(%s %s)" % (f, e)
+            # A route must hand back the SHAPE it was given: this one runs on a
+            # `wrap_thunk` value, whose unwrap is `(call0 ...)`, so it has to
+            # return the thunk rather than its result.  The old body was
+            # `(defn sf [f : (fn [] any)] : any (f))`, which CALLED the thunk --
+            # so the leg then called the already-computed value and every such
+            # case died `cannot call a int value -- it is not a function`.  That
+            # never showed while the H7 KNOWN row classified the whole route as
+            # a known finding; retiring the row surfaced it.
+            #
+            # `thru` on the argument is what makes this the seam: the thunk
+            # arrives as an `any` holding an all-`any` adaptor, and the typed
+            # parameter is what it has to be marshalled into.
+            leg.defs.append("(defn %s [g : (fn [] any)] : (fn [] any) g)" % f)
+            return "(%s (%s %s))" % (self.thru, f, "(%s %s)" % (self.thru, e))
         if r == "fwdref":
             f = self.name("fw")
             leg.late_defs.append("(defn %s [x] x)" % f)
@@ -732,15 +759,12 @@ def self_test(tur, workdir):
 # One pinned minimal repro per open finding.  Each must FIRE (any non-ok
 # classification on either arm) on an unfixed build.
 KNOWN_PROBES = [
-    ("H7  seam into a fn-typed parameter",
-     '#lang saffron\n(defn tfn [f : (fn [int] int)] : int (f 1))\n(defn id [x] x)\n'
-     '(defn main [] : int (println (tfn (id (fn [x : int] : int (+ x 1))))) 0)\n', "2\n"),
-    ("M7  dynamic .head/.tail read on an any-held Cons",
-     '#lang saffron\n(defn hd [l] (.head l))\n'
-     '(defn main [] : int (println (hd (list 7.25 1))) 0)\n', "7.25\n"),
-    ("L   Sym is not accepted as a defstruct field type",
-     '(defstruct P [fld : Sym])\n'
-     '(defn main [] : int (println (sym->str (.fld (make-struct P :kw)))) 0)\n', "kw\n"),
+    # H7, M7 and the Sym field-type probes were retired 2026-09-10 once each
+    # reported FIXED here and gained a fixture of its own
+    # (saffron-seam-into-typed-fn-param, saffron-dyn-field-on-generic-adt,
+    # defstruct-sym-field + ctor-keyword-vs-sym-value).  A probe belongs here
+    # only while its finding is OPEN; a permanently-FIXED row is noise that
+    # trains the reader to skip the list.
     ("L   a keyword-literal lambda body parses as a return annotation",
      '#lang saffron\n(defn call0 [f] (f))\n'
      '(defn main [] : int (println (type-of (call0 (fn [] :kw)))) 0)\n', "Sym\n"),

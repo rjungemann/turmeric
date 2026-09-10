@@ -84,6 +84,12 @@ static void parse_struct_field_type(const char *tname, uint32_t tlen,
     /* saffron-lang-plan S4 (PROBE): `:any` field, so a container can hold
      * values of different types. */
     if (tlen == 3  && memcmp(tname, "any",   3) == 0) { *out_kind = TY_ANY;      return; }
+    /* saffron-dynamic-surface-pass (low): `Sym` had no row here, so
+     * `(defstruct S [k : Sym])` -- and the `(defdata D (D Sym))` it lowers to
+     * -- was "defdata: field has unrecognized type :Sym", in typed Turmeric
+     * too.  A Sym is an INTERNED pointer, so it is a pointer-sized scalar
+     * carrier like the rows above it, not a new representation. */
+    if (tlen == 3  && memcmp(tname, "Sym",   3) == 0) { *out_kind = TY_SYM;      return; }
 
     /* Compound types: rc<T>, ref<T>, lref<T>, weak<T> */
     /* Parse the prefix and inner type */
@@ -704,6 +710,21 @@ static bool defstruct_field_type_lowerable(Elab *e, const Form *type_tok) {
              * whatever its inner type is, so it lowers like a scalar -- the
              * by-value ADT product already stores such fields as carriers and
              * synthesises drop glue for the owning (rc/ref/weak) ones (slice 2). */
+            return true;
+        case TY_SYM:
+            /* saffron-dynamic-surface-pass (low): a `Sym` field is the interned
+             * pointer, an 8-byte scalar carrier like the pointer-kinded rows
+             * above -- see parse_struct_field_type's Sym row. */
+            return true;
+        case TY_ANY:
+            /* saffron-dynamic-surface-pass (low): `(defstruct Dyn [v : any])`
+             * was "unsupported field form" -- in typed Turmeric too -- while
+             * the `defdata` it lowers TO has accepted an `any` field all
+             * along: `(defdata Dyn (Dyn any))` round-trips a `(:: 7.25 any)`.
+             * The gate simply had no arm for TY_ANY, so a struct with a
+             * dynamic field was the one shape that could not be spelled. The
+             * record-ADT product stores it as the 16-byte tagged value the
+             * same way the ADT does. */
             return true;
         case TY_UNKNOWN:
             /* slice 4/8 + graduation: a bare *user-type* field -- an ADT, struct,

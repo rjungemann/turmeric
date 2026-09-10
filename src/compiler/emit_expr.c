@@ -6361,28 +6361,63 @@ static char *emit_dyn_field(EmitCtx *ctx, Buf *body, const Expr *e) {
         if (!it || (it->kind != EX_DEFDATA && it->kind != EX_DEFGADT)) continue;
         AdtDef *def = (it->kind == EX_DEFGADT) ? it->as.defgadt_.def
                                                : it->as.defdata_.def;
-        /* One record constructor and no type parameters: the `defstruct` shape,
-         * where "the type" is a single C struct with the field as a member.  A
-         * multi-ctor sum needs the ctor tag read before a field even has a
-         * location, and a generic ADT has monomorphs rather than one type --
-         * both are real, both are wider than a dynamic FIELD READ, and guessing
-         * at either would emit a read from the wrong offset. */
-        if (!def || def->n_ctors != 1 || def->n_type_params != 0) continue;
+        /* One record constructor: the `defstruct` shape, where "the type" is a
+         * single C struct with the field as a member.  A multi-ctor sum needs
+         * the ctor tag read before a field even has a location -- real, and
+         * wider than a dynamic FIELD READ. */
+        if (!def || def->n_ctors != 1) continue;
         CtorDef *ctor = def->ctors[0];
         if (!ctor || !ctor->is_record) continue;
+        /* saffron-dynamic-surface-pass M7: a GENERIC ADT has one monomorph per
+         * instantiation rather than one type, and their field offsets differ,
+         * which is why this loop used to skip them outright and `.tail` on a
+         * cons list ("no type in this program has a field '.tail'") could not
+         * be read through an `any`.  Saffron only ever builds the all-`any`
+         * instantiation -- the same one `emit_instance_dispatch_recv_type`
+         * keys a dispatch row on -- so name THAT monomorph and let the tag
+         * compare below do the discriminating: a `(Cons int)` box carries a
+         * different id, matches no arm, and falls to `__tur_dyn_no_field`.  No
+         * read is ever emitted at the wrong offset; the guess the old comment
+         * refused to make is not being made. */
         Type at = type_adt(def);
-        if (!emit_type_is_byvalue_adt(ctx, at)) continue;
+        if (def->n_type_params > 0) {
+            Span nosp; memset(&nosp, 0, sizeof nosp);
+            Type any_t = emit_type_from_kind(TY_ANY);
+            at.hkt_kind = kind_for_arity(def->n_type_params);
+            for (uint32_t pi = 0; pi < def->n_type_params; pi++)
+                at = type_app(ctx->type_arena, at, any_t, nosp);
+        }
+        /* A `:heap` ADT joins the by-value ones here: both box a POINTER to
+         * the record, so the deref below is the same text -- only the box's
+         * provenance differs (a malloc'd copy vs the value itself).  `Cons` is
+         * `:heap`, which is the other half of why it never reached this loop.
+         * A single-ctor ADT that is NEITHER is carrier-represented, where the
+         * box does not hold a record pointer at all, and stays out. */
+        if (!emit_type_is_byvalue_adt(ctx, at) && !def->is_heap) continue;
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             const CtorField *f = &ctor->fields[fi];
             if (!f->name || strcmp(f->name, fname) != 0) continue;
             const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, at));
             char *mp = adt_field_member_path(def, ctor, fi);
             Type ft = f->full_type ? *f->full_type : type_simple(f->kind, CK_COPY);
+            /* In the all-`any` monomorph every type-PARAMETER field is itself
+             * an `any`, so a field declared as the type variable reads back a
+             * tagged box already. */
+            if (def->n_type_params > 0 && ft.kind == TY_TYVAR)
+                ft = emit_type_from_kind(TY_ANY);
             Buf read; buf_init(&read);
-            buf_printf(&read, "((%s *)(intptr_t)TUR_UNTAG(%s))->%s", cn, ov,
-                       mp ? mp : f->name);
+            /* A `:heap` ADT's own C name IS the pointer type
+             * (`tur_adt_Cons__any *`), so adding a `*` here would spell a
+             * pointer-to-pointer and cc rejects the `->`. */
+            buf_printf(&read, "((%s%s)(intptr_t)TUR_UNTAG(%s))->%s", cn,
+                       def->is_heap ? "" : " *", ov, mp ? mp : f->name);
             buf_putc(&read, '\0');
-            char *w = dyn_widen_to_any(ctx, ft, read.data);
+            /* An already-`any` field needs no widen -- the read IS a
+             * `tur_tagged_t`, and `dyn_widen_to_any` would cast that 16-byte
+             * value through `(int64_t)`, which is a truncation, not a box. */
+            char *w = (emit_resolve_type(ctx, ft).kind == TY_ANY)
+                          ? strdup(read.data)
+                          : dyn_widen_to_any(ctx, ft, read.data);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s (TUR_GETTAG(%s) == %lld) { %s = %s; }\n",
                        n_cands ? "else if" : "if", ov,
@@ -6883,12 +6918,33 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * NULL now -- a struct target is a record ADT, unboxed by the
              * byvalue-ADT branch below; the StructDef deref arm is removed. */
             if (target_tag == (int64_t)TY_FLOAT) {
-                /* TY2.2: reverse the float bit-reinterpret stored on inject. */
+                /* TY2.2: reverse the float bit-reinterpret stored on inject.
+                 *
+                 * Hoisted for the same reason as the by-value arm below, and
+                 * the note there used to say the scalar arms "yield a word and
+                 * are fine".  They do yield a word -- and that is not what the
+                 * engine trips over.  What matters is what the statement
+                 * expression CONTAINS: `__tur_c` is a 16-byte `tur_tagged_t`
+                 * bound from a call that itself takes `tur_tagged_t` arguments,
+                 * and in argument position that call reached its callee with
+                 * the first argument replaced by the second -- `(g 3.5 1.5)`
+                 * through an `any` computed 1.5 + 1.5 = 3 instead of 5, in the
+                 * engine on x86-64 only, correct under cc and on arm64.
+                 * jit-x86-64-struct-valued-statement-expression-miscompiles
+                 * predicted this exact discovery ("if a fixture that reaches
+                 * one of them starts answering differently in the engine on
+                 * Linux only, this is the first thing to suspect") and its fix
+                 * direction 2 is what this is: keep the emitter out of the
+                 * shape.  `inner` already emits its own statements into `body`,
+                 * so binding it here changes no evaluation order. */
+                char *cb = fresh_tmp(ctx);
+                buf_printf(body,
+                    "tur_tagged_t %s = (%s); "
+                    "__tur_any_cast_check(TUR_GETTAG(%s), %lld);\n",
+                    cb, inner, cb, (long long)target_tag);
                 buf_printf(&out,
-                    "({ tur_tagged_t __tur_c = (%s); "
-                    "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
-                    "((union { int64_t i; double d; }){.i = TUR_UNTAG(__tur_c)}).d; })",
-                    inner, (long long)target_tag);
+                    "((union { int64_t i; double d; }){.i = TUR_UNTAG(%s)}).d", cb);
+                free(cb);
             } else if (emit_type_is_byvalue_adt(ctx, e->type)) {
                 /* CONV-S1 seam 4: by-value record-ADT target (lowered defstruct).
                  * target_struct is NULL, but the payload was heap-boxed on inject,
@@ -6939,11 +6995,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     emit_type_c_name(ctx, emit_resolve_type(ctx, e->type));
                 if (full_ct && strchr(full_ct, '*') != NULL)
                     cast_ct = full_ct;
-                buf_printf(&out,
-                    "({ tur_tagged_t __tur_c = (%s); "
-                    "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
-                    "(%s)(intptr_t)TUR_UNTAG(__tur_c); })",
-                    inner, (long long)target_tag, cast_ct);
+                /* Hoisted for the same reason as the float arm above: the
+                 * statement expression's own value is a word, but it binds a
+                 * 16-byte `tur_tagged_t` from a call that can take struct
+                 * arguments, which is the shape the engine miscompiles. */
+                char *cb = fresh_tmp(ctx);
+                buf_printf(body,
+                    "tur_tagged_t %s = (%s); "
+                    "__tur_any_cast_check(TUR_GETTAG(%s), %lld);\n",
+                    cb, inner, cb, (long long)target_tag);
+                buf_printf(&out, "(%s)(intptr_t)TUR_UNTAG(%s)", cast_ct, cb);
+                free(cb);
             }
             buf_putc(&out, '\0');
             free(inner);

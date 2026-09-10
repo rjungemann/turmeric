@@ -1,0 +1,16 @@
+#lang saffron
+; The guard half of saffron-map-assoc-widens-value. A Saffron file may now
+; assoc a float or a string into a `(Map Sym any)`, because the map's own type
+; binds the value tyvar to `any`. That rule must key on what the CONTAINER is,
+; not on the dialect: a map annotated `(Map Sym int)` in a Saffron file binds
+; the same tyvar to `int`, so a float value is still a type error here.
+;
+; Without this fixture the widen could quietly relax into "a concrete argument
+; at a tyvar parameter is always widened in a Saffron file", which would erase
+; the element type of every annotated container in the dialect.
+
+(defn main []
+  (let [m  : (Map Sym int) (map-new)
+        m2 (map-assoc m :a 7.25)]
+    (println (map-get m2 :a)))
+  0)

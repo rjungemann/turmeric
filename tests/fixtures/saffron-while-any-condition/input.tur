@@ -1,0 +1,50 @@
+#lang saffron
+; saffron-dynamic-surface-pass (low): `while` rejected an `any` condition --
+;   while condition must be bool, got any
+; -- while `if`, `when`, `and` and `or` all applied Saffron truthiness. In a
+; dialect where every value is an `any`, that meant a loop could not be driven
+; by a dynamic value at all.
+;
+; `while` is simply the THIRD bool slot such a value can reach, after the
+; `if`/`when` condition and the `#refine{...}` contract predicate, and
+; `elab_saffron_truthy` was already shared for exactly that reason. It returns
+; its argument unchanged when the value is not an `any` in a Saffron file, so
+; the wrap is unconditional at the call site and typed `while` is untouched.
+;
+; Three conditions, because the interesting part is the RULE, not the wrap:
+;   - an `any` holding a bool, the plain case;
+;   - a `map-get` miss, which is nil -- FALSY, and the shape that makes
+;     "loop while the key is present" work (it is also a stdlib MACRO, whose
+;     span is not this file, which is the M10 seam);
+;   - the integer 0, which is TRUTHY. That is the Lisp rule, deliberately not
+;     C's: `false` and `nil` are falsy and everything else -- 0, "", the empty
+;     container -- is truthy. A C-truthiness `while` would exit the second loop
+;     immediately and print 0 rather than 1, so this line is what pins the
+;     distinction.
+;
+; 1.5 rather than 1.0 in the accumulator: the value crosses the `any` seam on
+; every iteration, and a truncating path would print 3 rather than 4.5.
+
+(defn t [x] x)
+
+(defn main []
+  (let [^mut i   0
+        ^mut acc 0.0]
+    (while (t (< i 3))
+      (do (set! acc (+ acc 1.5))
+          (set! i (+ i 1))))
+    (println acc))
+  (let [m         #map{:a 1.5}
+        ^mut hits 0
+        ^mut cur  (map-get m :a)]
+    (while cur
+      (do (set! hits (+ hits 1))
+          (set! cur (map-get m :zz))))
+    (println hits))
+  (let [^mut n     (t 0)
+        ^mut guard 0]
+    (while n
+      (do (set! guard (+ guard 1))
+          (set! n (t false))))
+    (println guard))
+  0)

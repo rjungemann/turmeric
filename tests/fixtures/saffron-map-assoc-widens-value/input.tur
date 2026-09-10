@@ -1,0 +1,36 @@
+#lang saffron
+; saffron-dynamic-surface-pass (low): `(map-assoc #map{:a 1} :c 7.1)` failed
+; with `function 'map-assoc-eq-o' arg 4: expected tyvar, got float`, reported
+; inside stdlib/map.tur, and the message never said that the value needed an
+; explicit `(:: 7.1 any)`.
+;
+; It is the WIDEN direction of the D5 seam. The seam handles an `any` ARGUMENT
+; meeting a CONCRETE parameter; here the argument is concrete (a float) and the
+; parameter is the bare tyvar `V`, which nothing had bound. So `map-assoc` --
+; and it is a MACRO, which is why the error surfaced in stdlib rather than
+; here -- could only ever take int values in a Saffron file, though the map it
+; assocs into is a `(Map Sym any)`.
+;
+; The fix does NOT widen every concrete argument at a tyvar parameter, because
+; `V` may be bound to something real by a sibling. It binds `V` from the
+; siblings first, exactly as H9 does, and widens only when they determine
+; `any`. The `keep-typed` case below is the half that pins that: a
+; `(Map Sym int)` annotated in this very file still REJECTS a float, so the
+; rule keys on what the container actually is and not on the dialect.
+;
+; This is the call-position twin of `dl_saffron_widen_elem`, which widens a
+; data literal's elements before the homogeneous `vec-of` macro sees them.
+;
+; 7.25 and a string: a float pins that the value is not being truncated
+; through an int slot, and a cstr pins that the widen is not quietly
+; int-specific. The `:a` read at the end pins that the pre-existing entry
+; survived the assoc.
+
+(defn main []
+  (let [m0 #map{:a 1}
+        m1 (map-assoc m0 :c 7.25)
+        m2 (map-assoc m1 :d "str")]
+    (println (map-get m1 :c))
+    (println (map-get m2 :d))
+    (println (map-get m2 :a)))
+  0)

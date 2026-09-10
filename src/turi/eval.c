@@ -11162,7 +11162,21 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             for (TypeClassInstance *inst = tce ? tce->instances : NULL;
                  inst != NULL; inst = inst->next) {
                 if (inst->typeclass != tc || inst->n_type_args == 0) continue;
-                const char *want = type_name(inst->type_args[0]);
+                /* An HKT instance head can be written partially applied --
+                 * `Functor [(Result _ B)]` -- which is a TY_APP chain, so
+                 * `type_name` spells it `(type-app ...)` and never the
+                 * `Result` the box reports.  Key on the chain's HEAD, the
+                 * constructor the receiver names.  The COMPILED side declines
+                 * this shape instead (see the note at
+                 * `emit_instance_dispatch_recv_type`): it has no by-value spec
+                 * for a hole-headed instance, only the `int64_t` carrier, so
+                 * the same peel there answers `is?` a silent `false`.  The
+                 * interpreter has no instantiation to satisfy -- it calls the
+                 * instance's FnDef directly -- so the peel is sound here.
+                 * saffron-dynamic-surface-pass M2. */
+                Type wt = inst->type_args[0];
+                while (wt.kind == TY_APP && wt.as.app.fn) wt = *wt.as.app.fn;
+                const char *want = type_name(wt);
                 if (!have || !want || strcmp(have, want) != 0) continue;
                 if (slot < inst->n_method_impls) impl = inst->method_impls[slot];
                 break;
@@ -11446,6 +11460,33 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 (k0 == TY_UNKNOWN) ? NULL
                                    : builtin_lookup(e->as.dyn_op_.op,
                                                     type_simple(k0, CK_COPY), n);
+            /* saffron-dynamic-surface-pass (low): `=` / `not=` on two cstrs
+             * answers Eq[cstr]'s comparison (stdlib/typeclass-eq.tur) -- byte
+             * for byte, both-NULL equal, a NULL never equal to a non-NULL,
+             * which is `cstr-eq?`'s documented rule -- and it is the same move
+             * H5 made for Sym.  The `=` OPERATOR has no cstr row anywhere,
+             * typed Turmeric included (`(= "ab" "ab")` is a TUR-E0006), which
+             * is why this sits after the failed lookup rather than in the
+             * builtin table: adding a row there would change the TYPED surface
+             * too, while a dialect in which every value is `any` has no other
+             * spelling for string equality.  A cstr is a SCALAR any-box, so it
+             * carries no struct name and never reaches the named-box refusal
+             * above -- this is the site that was rejecting it.  ORDERING on a
+             * cstr stays "no operator", matching the compiled arm word for
+             * word. */
+            if (!spec && n == 2 && e->as.dyn_op_.op &&
+                vals[0].tag == TURI_CSTR && vals[1].tag == TURI_CSTR &&
+                (strcmp(e->as.dyn_op_.op->name, "=") == 0 ||
+                 strcmp(e->as.dyn_op_.op->name, "not=") == 0)) {
+                bool is_eq_c = strcmp(e->as.dyn_op_.op->name, "=") == 0;
+                const char *sx = vals[0].as_cstr, *sy = vals[1].as_cstr;
+                bool same = (sx == NULL && sy == NULL)
+                                ? true
+                                : ((sx == NULL || sy == NULL) ? false
+                                                              : strcmp(sx, sy) == 0);
+                if (vals != stackv) free(vals);
+                return turi_bool(is_eq_c ? same : !same);
+            }
             if (!spec) {
                 /* No overload for the type that actually arrived.  This is a
                  * genuine runtime type error in a dynamic language -- the

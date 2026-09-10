@@ -1,0 +1,48 @@
+#lang saffron
+; saffron-dynamic-surface-pass H7: an `any` that holds a function, passed into
+; a TYPED function parameter, emitted uncompilable C --
+;   incompatible type for argument 1 of 'tfn'
+; -- and the interpreter panicked `cast: any holds fn, not (fn [int] : int)`.
+; Both back ends, though the report recorded only the compiled half.
+;
+; The cause is a representation gap, not a gate. H8's OUTBOUND adaptor makes
+; every function that enters an `any` an all-`any` one: the fat box's slot 0 is
+; a `tur_tagged_t (*)(void *, tur_tagged_t)` shim, whatever the signature was.
+; So the two obvious repairs are both wrong, and both were tried:
+;   - passing the payload word through hands a `(void *)` to a three-word
+;     `tur_poly_fn_t` parameter, which is the cc error above;
+;   - making that word a `tur_poly_fn_t` and relaxing the cast's id check
+;     COMPILES and is a silent wrong answer -- the callee then calls an
+;     all-`any` shim with a raw int64 where a 16-byte tagged value is expected.
+;     That is what the filed fix direction proposed, limited to captureless
+;     lambdas.
+;
+; A representation this different needs MARSHALLING, so the seam synthesises
+; the wrapper that does it:
+;   (let [__sfn <arg>] (fn [__sa0 : A ...] : R (cast (__sfn __sa0 ...) R)))
+; a source-level construct, which is why both back ends are fixed by it.
+;
+; The `mk 10` line is the one the filed direction said would have to panic: the
+; adaptor goes through the BOX rather than a static wrapper, so a CAPTURING
+; closure round-trips like any other.
+;
+; Signatures deliberately vary -- int, float, two floats, cstr -- because the
+; adaptor spells each parameter type and the result from the target type, and a
+; float would be a register-class miscompile if it took the int64 carrier path.
+; 7.25 and 3.5/1.5 rather than whole numbers so a truncation shows.
+
+(defn tfn [f : (fn [int] int)] : int (f 1))
+(defn tfl [f : (fn [float] float)] : float (f 7.25))
+(defn tf2 [f : (fn [float float] float)] : float (f 3.5 1.5))
+(defn tfs [f : (fn [cstr] cstr)] : cstr (f "hi"))
+
+(defn id [x] x)
+(defn mk [k] (fn [x] (+ x k)))
+
+(defn main [] : int
+  (println (tfn (id (fn [x : int] : int (+ x 1)))))
+  (println (tfn (mk 10)))
+  (println (tfl (id (fn [x : float] : float (* x 2.0)))))
+  (println (tf2 (id (fn [a : float b : float] : float (+ a b)))))
+  (println (tfs (id (fn [s : cstr] : cstr s))))
+  0)
