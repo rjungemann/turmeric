@@ -9842,6 +9842,34 @@ bool rt_split_canonical_emission(void) { return g_rt_split_all_gates; }
  * integer (or an int box's word as a double) produces a denormal, not a
  * rounding error.  `__tur_dyn_f` and `__tur_dyn_mkf` are the only two places
  * that pun, and every arithmetic and comparison path goes through them. */
+/* saffron-dynamic-surface-pass H2: the carrier -> `any` bridge, as a helper
+ * function rather than an expression.  A carrier word of 0 is a map accessor's
+ * documented miss, and the bridge answers the nil box for it instead of
+ * dereferencing 0.  It is a FUNCTION because the two expression spellings both
+ * failed in the JIT engine on x86-64: a struct-valued `?:` and then an if/else
+ * inside a `({ ... })`, each correct under cc, each miscompiled by c2mir/MIR-gen
+ * when the bridge sat in a call's argument list (saffron-prelude's float fold
+ * read the element twice; saffron-container-param-cast-shape printed 1 for
+ * 4.25; arm64 was clean).  A plain call is in the engine's subset everywhere.
+ * Emitted on demand so a TU with no `any` carrier does not carry it, and
+ * `static inline` so a TU that emits it unused does not take
+ * -Wunused-function.  The nil tag is the TypeKind value, spelled from the enum
+ * for the same reason the DYNTAG macros are. */
+void ensure_any_carrier_bridge(EmitCtx *ctx) {
+    if (!ctx || ctx->any_bridge_emitted) return;
+    ctx->any_bridge_emitted = true;
+    Buf *out = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    if (!out) return;
+    buf_printf(out,
+        "/* carrier -> any: a 0 carrier (a map accessor's miss) is the nil box */\n"
+        "static inline tur_tagged_t __tur_any_of_carrier(int64_t __p) {\n"
+        "    tur_tagged_t __v;\n"
+        "    if (__p) { __v = *(tur_tagged_t *)(intptr_t)__p; }\n"
+        "    else { __v.tag = %d; __v.val = 0; }\n"
+        "    return __v;\n"
+        "}\n", (int)TY_NIL);
+}
+
 void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
     if (!ctx || ctx->saffron_dyn_emitted) return;
     ctx->saffron_dyn_emitted = true;

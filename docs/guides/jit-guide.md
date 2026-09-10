@@ -425,6 +425,25 @@ TUR_JIT_DUMP_C=/tmp/jit.c ./build-jit/tur jit <fixture>.tur
 The same applies to statement expressions (`({ ... })`), nested functions,
 `typeof`, and `__attribute__` spellings beyond the ones the fork implements.
 
+One more that gcc and clang hide: a cast to a struct type, even the identity
+cast `(tur_tagged_t)(x)` on an `x` that already is one. Both host compilers
+take it as an extension; c2mir enforces C11 6.5.4 and reports
+`conversion to non-scalar type requested`. `TUR_APPLYn_T` casts every
+argument to its declared C type, so a closure invoked through it with a
+by-value struct argument (the Saffron dynamic call, whose arguments are all
+`tur_tagged_t`) falls back to cc -- which is why the dynamic-call emitter
+spells the prototype cast out and passes the boxes uncast. Under this
+diagnostic, look for a struct-typed `Ai` before anything else.
+
+And one that compiles but answers wrong, on x86-64 only: a statement
+expression whose VALUE is a struct (`({ ...; TUR_TAG(...); })`, or one that
+yields a by-value ADT) placed in a call's argument list or as a local's
+initializer overwrites a sibling argument or parameter. The emitter builds
+those values with statements in the body instead -- see
+[jit-x86-64-struct-valued-statement-expression-miscompiles](https://github.com/rjungemann/turmeric/blob/main/docs/reported/jit-x86-64-struct-valued-statement-expression-miscompiles.md)
+for the shapes and the sites. A Linux-only `stdout mismatch` in the JIT
+suite on a program that passes under cc is the signature.
+
 ### `__attribute__((packed))` is silently ignored
 
 c2mir lays packed structs out at natural alignment and emits no diagnostic

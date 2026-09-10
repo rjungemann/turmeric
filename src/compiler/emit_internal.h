@@ -333,6 +333,9 @@ typedef struct EmitCtx {
      * with no dynamic operator gets no dynamic runtime, which is why the ~1440
      * codegen snapshots are untouched by this stage. */
     bool      saffron_dyn_emitted;
+    /* The `__tur_any_of_carrier` bridge helper has been emitted for this
+     * TU (emit_module.c ensure_any_carrier_bridge). */
+    bool      any_bridge_emitted;
     /* type-of-cast-kind-granularity: per-monomorph identity for `any` box tags.
      * A primitive keeps its TypeKind as its tag; a struct/ADT interns its
      * monomorph C name here, so `cast` / `is?` / `type-of` distinguish two
@@ -1214,6 +1217,7 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t);
  * runtime.  Lands in `thunk_typedefs`, which precedes the forward decls, so the
  * helpers are declared before any body can call them. */
 void ensure_saffron_dyn_runtime(EmitCtx *ctx);
+void ensure_any_carrier_bridge(EmitCtx *ctx);
 /* any-struct-box-leak-per-widen: the predicate the `any` widen uses to decide
  * whether a payload is heap-boxed.  Exported so emit_any_type_id can intern the
  * same answer for the drop side -- one predicate, not two that can drift. */

@@ -5687,12 +5687,11 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                      * `(if (map-get m k) ...)` a presence test under Saffron
                      * truthiness.  The interpreter's map_val_read answers the
                      * same nil. */
-                    /* The numeric tag rather than TUR_DYNTAG_NIL: the DYNTAG
-                     * macros are part of the Saffron operator layer and a
-                     * typed `(Map int any)` never emits them. */
-                    buf_printf(&out, "({ int64_t __tur_bp = (int64_t)(intptr_t)(%s); "
-                                     "__tur_bp ? *(tur_tagged_t *)(intptr_t)__tur_bp "
-                                     ": TUR_TAG(%d, 0); })", src_str, (int)TY_NIL);
+                    /* A helper call, not a `({ ... })`: see
+                     * ensure_any_carrier_bridge for the JIT x86-64 reason. */
+                    ensure_any_carrier_bridge(ctx);
+                    buf_printf(&out, "__tur_any_of_carrier((int64_t)(intptr_t)(%s))",
+                               src_str);
                 } else {
                     /* Pointer carrier: dereference the heap pointer. */
                     buf_printf(&out, "(*(%s *)(intptr_t)(%s))", cname, src_str);
