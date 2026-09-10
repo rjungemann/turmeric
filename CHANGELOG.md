@@ -2,32 +2,55 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.45.1] -- 2026-09-09
+
+### Added
+
+- **A source-level differential fuzzer for Saffron.** `tests/saffron-fuzz-src.py`
+  generates random dynamically typed programs and diffs the interpreter against
+  the compiled back end; a ctest smoke target runs a short session. It found most
+  of what this release fixes -- including one bug in plain typed Turmeric. The
+  refine/regions/type fuzzers now report each case as it finishes rather than
+  only at exit.
+- **`tur just` -- a synonym for `tur run`.** Same recipe dispatch and the same
+  Justfile, with shell completion and the guide covering both spellings.
 
 ### Fixed
 
+- **Saffron's dynamic surface, from the first fuzzing pass.** A capturing lambda
+  keeps its environment and a `call/cc` receiver keeps its scalar return; an
+  unannotated lambda's return defaults to `any` the way a `defn`'s does, as does
+  a pass-1 forward declaration; a named typed function is reachable through a
+  dynamic call; dynamic operators cover containers and shifts; a nullary
+  parametric constructor builds at the `any` instantiation; a dynamic field read
+  publishes instance rows for its field types; and elaboration seams see through
+  macros and bind a map's key type from its siblings.
+- **A `Sym` inside an `any` is a `Sym` on both back ends.** The `any` instances
+  gained a `Sym` arm, and the interpreter names a receiver before unboxing it.
+  `map-get` on a `(Map K any)` miss answers with the nil box on both back ends
+  instead of diverging.
+- **A parametric ADT constructor with an underscore in its name emitted invalid
+  C.** Two local "non-alnum -> `_`" folds in `src/compiler/types.c` kept `_` raw
+  while every access site used the injective mangler (`_` -> `_un`), so the union
+  member had two spellings and the C compiler rejected the result with no
+  Turmeric diagnostic. Typed Turmeric, not Saffron-specific.
+- **Saffron compiles under the JIT engine.** Dynamic calls and the `any` bridges
+  no longer force a fallback to the interpreter.
 - **Try Turmeric's language picker offers the Saffron bases.** `#lang saffron`
-  (and `saffron/curly-infix`, `saffron/neoteric`, `saffron/sweet`) worked when
-  typed into the playground but could not be selected: `WASM_LANG_BASES[]` in
+  (and its curly-infix / neoteric / sweet readers) worked when typed into the
+  playground but could not be selected: `WASM_LANG_BASES[]` in
   `src/web/wasm_glue.c` was a hand-kept copy of the base set that still listed
-  the original four, so a whole language was unreachable from the UI. The
-  registry now walks `lang_base_at` -- the same (language x reader)
-  cross-product `tur lang-layers` prints -- and an experiment-gated base is
-  badged rather than hidden. `turi_wasm_set_lang` carries the LANGUAGE axis
-  too (it used the reader-only `detect_lang_layered`/`turi_env_apply_lang`
-  pair, so selecting a Saffron base would have "switched" to a session still
-  elaborating as Turmeric), and `turi_wasm_get_lang` reports both axes instead
-  of answering `turmeric` for every Saffron session. The unit test now asserts
-  the offered base list matches `lang_bases_count()`, which is what a spot
-  check of two spellings failed to catch.
-- **The playground's service worker evicts on every deploy, not every
-  release.** `CACHE_VERSION` was keyed on `VERSION` alone, so an out-of-band
-  deploy at the same version reused the cache name, `activate` evicted nothing,
-  and every returning visitor kept being served the previous bundle and wasm
-  cache-first. The Saffron picker fix above deployed green and the live site
-  went on rendering the four stale bases until the token changed. `vite.config.js`
-  now stamps `tur-try-v1-<VERSION>-<short-sha>`, falling back to a timestamp
-  outside a git checkout -- never a constant.
+  the original four. The registry now walks `lang_base_at` -- the same
+  (language x reader) cross-product `tur lang-layers` prints -- and an
+  experiment-gated base is badged rather than hidden. `turi_wasm_set_lang` and
+  `turi_wasm_get_lang` carry the LANGUAGE axis too, so selecting a Saffron base
+  no longer leaves the session elaborating as Turmeric.
+- **The playground's service worker evicts on every deploy, not every release.**
+  `CACHE_VERSION` was keyed on `VERSION` alone, so an out-of-band deploy at the
+  same version reused the cache name, `activate` evicted nothing, and returning
+  visitors kept being served the previous bundle and wasm cache-first.
+  `vite.config.js` now stamps `tur-try-v1-<VERSION>-<short-sha>`, falling back to
+  a timestamp outside a git checkout -- never a constant.
 
 ## [0.45.0] -- 2026-09-09
 

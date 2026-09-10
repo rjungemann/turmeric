@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-A Lisp that compiles to C99.
+**Latest release:** `v0.45.1` -- A differential fuzzer for `#lang saffron` and the first pass of dynamic-surface fixes it found, including `any` support in the JIT engine.
 
 **Latest release:** `v0.45.0` -- Adds `#lang saffron`, a dynamically typed dialect where unannotated code runs on `any`, and makes `any` a usable type across both back ends.
 
