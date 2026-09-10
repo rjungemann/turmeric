@@ -6886,6 +6886,21 @@ bool emit_instance_dispatch_recv_type(EmitCtx *ctx, TypeClassInstance *inst,
                                       Type *out) {
     if (!ctx || !inst || inst->n_type_args == 0) return false;
     Type recv = inst->type_args[0];
+    /* saffron-dynamic-surface-pass M2, second pass: a partially-applied head
+     * (`Functor [(Result _ B)]`, a TY_APP) IS keyed now, on the same all-`any`
+     * instantiation a bare `Functor [Option]` head gets below, by peeling to
+     * its constructor.  This was tried once before and reverted -- see the
+     * note that follows -- and what changed is not this function: the
+     * elaborator now grounds such an instance's own head tyvar at a
+     * by-value-bodied dispatch (the M2 head-tyvar collection in
+     * elab_typeclasses.c), so the dynamic witness minted for this row
+     * resolves to a by-value spec instead of the erased carrier, and the
+     * silent `false` the note describes no longer happens.  The witness
+     * minter applies the same body-kind gate, so a head this function keys
+     * whose body cannot be specialised simply gets no witness and the row's
+     * slot stays NULL -- a clean "cannot be dispatched" panic, never a
+     * mis-tagged box. */
+    while (recv.kind == TY_APP && recv.as.app.fn) recv = *recv.as.app.fn;
     if (recv.kind == TY_TYVAR || recv.kind == TY_UNKNOWN) return false;
     /* A hole-headed partial application (`Functor [(Result _ B)]`) has no
      * single all-`any` instantiation to key on, and a TY_FORALL / anything
@@ -6904,7 +6919,10 @@ bool emit_instance_dispatch_recv_type(EmitCtx *ctx, TypeClassInstance *inst,
      * this comment warns about), and `is?` on the result answers a silent
      * `false` where the interpreter answers `true`.  Declining here keeps the
      * honest `no instance of <Class> for <Type>` panic.  The fix that would
-     * work is a by-value spec for the hole-headed instance, not a key. */
+     * work is a by-value spec for the hole-headed instance, not a key.
+     *
+     * (Superseded by the peel above once that spec exists; the history is
+     * kept because the reasoning is what made the second attempt safe.) */
     if (recv.kind == TY_APP || recv.kind == TY_FORALL) return false;
     if (recv.kind == TY_ADT && !recv.as.adt_.def) return false;
     if (recv.kind == TY_ADT && recv.as.adt_.def && recv.as.adt_.def->n_type_params > 0) {

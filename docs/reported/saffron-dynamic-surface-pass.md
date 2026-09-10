@@ -3,22 +3,19 @@
 **Status 2026-09-10.** Resolved on this branch: H1, H2, H3, H4, H5, H6, H8
 (named functions), H9 (a sibling determines K), H10, H11, M3, M4, M5, M6, M8,
 M10, each pinned by a fixture and retired from the fuzzer's KNOWN table. M2 is
-resolved on the INTERPRETER and root-caused (not fixed) compiled, and M7's hard
-error is fixed (the cons-list WALK is not). Open: H7 (fn-typed seam, a
-representation gap), M1, M2 (compiled half), M7 (the erased self-referential
-tail), M9, and the lows. Struck-through items below carry their resolution
-note.
+resolved on BOTH back ends, and M7's hard error is fixed (the cons-list WALK is
+not). Open: M7 (the erased self-referential tail), M9, and the remaining lows.
+H7, M1 and M2 -- the representation-gap family -- are all resolved.
+Struck-through items below carry their resolution note.
 
-THREE of those -- H7, M1, and M2's compiled half -- are one SHAPE of problem: a
-value whose Saffron representation (a 16-byte `tur_tagged_t`) does not fit the
-representation the typed path already chose for it (a `tur_poly_fn_t` for H7,
-an `int64_t` carrier payload/return for M1 and M2). None is a gate or a keying
-bug; in each the cheap-looking fix produces a SILENT WRONG ANSWER rather than a
-panic (M1 already does -- it truncates a 16-byte lambda return through an
-`int64_t` function pointer), which is why the other two are parked behind a
-clean decline. They want to be picked up together, and M1's and M2's filed fix
-directions have both been corrected in place after being measured against the
-emitted C.
+H7, M1 and M2 were one SHAPE of problem -- a value whose Saffron representation
+(a 16-byte `tur_tagged_t`) did not fit the representation the typed path had
+chosen for it -- and every one of the three filed fix directions named a
+check or a key where the defect was a width. None was fixed by the direction
+filed. H7 and M1 took a MARSHALLING adaptor (source-level, so both back ends
+at once); M2 took grounding the instance's own head tyvar so the by-value
+spec exists, after which the keying the first attempt tried became correct.
+Each is recorded above with the measurement that decided it.
 
 **Summary.** A differential pass (compiled `tur run` vs `tur --interpret`,
 Debug build at b58c91e6) over the Saffron surface described in
@@ -245,93 +242,61 @@ twin so a later witness change cannot fix one by breaking the other.
 `tur_tagged_t`, so half the box was dropped on the return).
 
 
-**M2. `Functor[Result]` is not dynamically dispatchable COMPILED.** *Update
-2026-09-10: the interpreter half is fixed; the compiled half is a
-representation gap, root-caused below -- not the keying this entry originally
-guessed.* `(.fmap (ok 21) f)` via `any` was `no instance of Functor for Result`
-on both back ends, while Option dispatches.
+**~~M2~~. RESOLVED 2026-09-10 on BOTH back ends -- the compiled half a day
+after the interpreter's.** `(.fmap (t (ok 21)) f)` on an `any`-held Result
+answers `Result` / `42`, `is?` on the result answers `true`, and `.bind` on an
+any-held Result rides along (M1's continuation adaptor plus this grounding).
+Pinned by `tests/fixtures/saffron-dyn-hkt-partial-head`, which was
+`requires.interp-only` for a day and now runs on both back ends with the
+`.bind` cases added.
 
-Root cause, common to both back ends: `Option`'s instance head is the bare
-constructor (`definstance Functor [Option]`, a `TY_ADT`), but Result's is
-written PARTIALLY APPLIED -- `definstance Functor [(Result _ B)]`
-(`stdlib/result.tur:310`) -- which is a `TY_APP` chain. The interpreter
-compared `type_name(inst->type_args[0])` against the name the box reports, and
-`type_name` spells a chain `(type-app (type-app Result ?) B)`, never the
-`Result` that the receiver's own `type-of` reports, so the row could never
-match. Peeling the chain to its head makes the two spellings agree
-(`src/turi/eval.c`, `EX_DYN_METHOD`): interp now answers 42 and `type-of` says
-`Result`. Pinned by `tests/fixtures/saffron-dyn-hkt-partial-head`
-(`requires.interp-only`, since the compiled path still declines).
+Two defects with one root. **Interpreter:** dispatch keyed on the name the box
+reports ("Result") against `type_name` of the instance head, which for the
+TY_APP chain `(Result _ B)` spells `(type-app ...)` and could never match;
+peeling to the head fixed it. **Compiled:** the same peel keyed the row, but
+the witness it minted rode the erased carrier
+`__inst_Functor_fmap_Result_tyvar` -- int64 payloads against the all-`any`
+monomorph's 16-byte ones -- and tagged its result with an unresolved id, so
+`is?` answered a silent `false`. That first attempt was reverted and the
+decline kept.
 
-**Still open, compiled. Root cause narrowed to a LAYOUT mismatch (2026-09-10),
-which settles that no keying or adaptor can reach it.** A hole-headed instance
-is compiled ONCE, generically: `inst_type_suffix` spells the open parameter
-`tyvar`, giving a single `__inst_Functor_fmap_Result_tyvar`, and no Result
-`fmap` is ever specialised -- the TYPED path with a fully concrete
-`(Result int int)` uses that same carrier. The two Result layouts in one
-emitted TU are:
+**What was actually wrong, measured end to end (this is the part worth
+keeping):** the instance's own head tyvar `B` is not a class variable, so
+unifying the class method's parameter types (`(f a)`, `(fn [a] b)`) never
+bound it; the substituted result `(Result B b)` kept `B` free;
+`m7_byvalue_grounded` stayed false; and no by-value spec was minted -- the
+call reached ABI registration with `nb=0` where Option's reaches it with
+`nb=4`. Instrumenting the gate showed `body_ok=1 nb=3 grounded=0 hole=0` for
+Result against `grounded=1` for Option, with `B` the one free variable. The
+kind-* dispatch branch already bound an instance's own head tyvars by
+unifying the head against the receiver (ECS E2d-P6); the HKT branch never got
+the same treatment. It has it now.
 
-```c
-typedef struct tur_adt_Result        { int tag; union { struct { int64_t     _0; } Ok; ... } as; };
-typedef struct tur_adt_Result__any__any { int tag; union { struct { tur_tagged_t _0; } Ok; ... } as; };
-```
+**Hole-aware, and gated, because T4 erased the hole.** `(Result _ B)` is
+stored as `app(Result, B)` with `partial_hole_pos == 0`: the fixed arm is
+really slot 1, the receiver's outermost argument, and pairs with it under a
+direct unification -- while a leftmost partial application `(Either E)` fixes
+the leading slot and needs the receiver's outer applications peeled first
+(measured: `E := int`, slot 0). And a hole-at-0 head is only slot-SAFE when
+the receiver is homogeneous: T4's erasure reversed the class's reading of
+`(f a)` (`a := cstr`, the err arm, on `(Result int cstr)` -- measured) and
+reconstructs `(f b)` with the arms swapped, invisible when every argument is
+the same type and a miscompile when they differ. So the collection is gated
+on a by-value-bodied method (grounding a carrier-bodied Either fed the
+`byval_agg` commit arm and produced an invalid initializer -- measured, and the
+gate returns Either to its exact prior behaviour) and on homogeneity for the
+hole-at-0 shape. The witness minter applies the same body gate, so the two
+are one condition seen from two sides: no witness is ever minted whose
+dispatch would ride the carrier.
 
-Different payload SIZES, so different offsets. A witness minted on the peeled
-head hands `&tur_adt_Result__any__any` to a carrier that reads it as
-`tur_adt_Result *`, so the receiver is misread before the continuation is even
-called. That is why the M1 fix does not carry over: M1 could repair its
-continuation's calling convention from source, and there is no source-level
-spelling that converts a container's payload representation. The fix is a
-by-value spec for the hole-headed instance at its all-`any` instantiation --
-i.e. teaching the monomorphiser to clone it -- and nothing short of that.
-
-**The chain from cause to symptom, measured end to end (2026-09-10), so the
-next attempt starts where the evidence stops rather than at the keying it
-already ruled out:**
-
-1. `definstance` with a partially-applied head records the receiver as a
-   `TY_APP` and FORCES the parameter to the int64 carrier -- the `T4` note at
-   `elab_typeclasses.c` (`"a partially-applied instance head (e.g. `(Result _
-   B)` / `(Either E)`) ... Force the carrier here too"`). So
-   `__inst_Functor_fmap_Result_tyvar`'s declared signature carries no named
-   type variables at all.
-2. A call site therefore collects no bindings for it.
-   `emit_abi_register_call` sees `__inst_Functor_fmap_Result_tyvar` with
-   **nb=0**, where the working `__inst_Functor_fmap_Option` arrives with
-   **nb=4**. (Measured by instrumenting that function; both numbers are from
-   the same build.)
-3. With no bindings there is nothing to specialise on, so no `__spec__` clone
-   is minted -- which is why NO Result `fmap` is ever specialised, the typed
-   path with a concrete `(Result int int)` included.
-4. Every Result `fmap` therefore rides the erased carrier, whose payload
-   layout differs from the all-`any` monomorph's, per the two structs above.
-
-So the change is at step 1: a partially-applied head has to keep its type
-variables rather than collapse to the carrier. That is exactly the ABI change,
-and the carrier is forced there deliberately (the surrounding comment gives the
-by-value-struct-receiver reason), so it is not a line to flip -- but it is one
-place, not a search. Two things were ruled out by measurement and should not be
-re-tried: the registry keying (peeling the head, which yields a silent `false`
-from `is?`), and the re-dispatch decline at `emit_abi_register_call`'s
-`is_vl_wide_mono` carve-out, which the Result call never reaches.
-
-**And the obvious fix is a trap.** The same peel in
-`emit_instance_dispatch_recv_type` is NOT the fix, and was measured not to be.
-A hole-headed instance never gets a by-value spec: `.fmap` on a Result resolves
-to the erased carrier `__inst_Functor_fmap_Result_tyvar`, whose payloads are
-`int64_t`, on the TYPED path too -- while a Saffron `any` is a 16-byte
-`tur_tagged_t`. A witness minted on the peeled head therefore calls that
-carrier and tags its result with the id of the UNRESOLVED result type: a small
-TypeKind number (21), which is the PRIMITIVE tag space that function's own
-comment warns about. `type-of` then reads `unknown`, and -- the disqualifying
-part -- `is?` on the result answers a silent `false` where the interpreter
-answers `true`. That is strictly worse than the panic it replaces, so the
-decline stays and the honest `no instance of Functor for Result` is kept. Fix
-direction: mint a by-value spec for a hole-headed instance at its all-`any`
-instantiation and key the row on that. It is an ABI change touching the typed
-path (which is on the carrier today, and correct there), not a keying change.
-The measurement is recorded in the comment at
-`emit_instance_dispatch_recv_type` so the experiment is not repeated.
+**Deliberately untouched, and filed on its own:** the typed heterogeneous
+`(Result int cstr)` stays on the carrier -- and that carrier path is already
+printing a cstr payload as its address today
+([hkt-carrier-result-loses-payload-types](hkt-carrier-result-loses-payload-types.md)).
+Fixing it by value needs a hole-preserving representation of the
+class-variable binding; fixing it on the carrier needs the `byval_agg`
+consumer bridge completed. Was: `no instance of Functor for Result` on both
+back ends.
 
 **~~M3~~. RESOLVED 2026-09-10: the nullary ctor path (`elab_call.c`) builds the all-`any` instantiation in a Saffron file when no enclosing expectation pins it, matching the field widen for saturated ctors. Pinned by `tests/fixtures/saffron-nullary-parametric-ctor-any`. Was: a nullary ctor of a parametric ADT built in Saffron is not at the `any` instantiation.** `(defdata Opt [a] (Just a) (Nothing))`:
 `(is? (Nothing) (Opt any))` is false compiled / true interp; `match` on an
