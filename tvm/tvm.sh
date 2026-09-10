@@ -73,6 +73,55 @@ __tvm_bin_dir() { printf '%s\n' "$TVM_DIR/versions/$1/bin"; }
 # True if version $1 is installed (has an executable tur).
 __tvm_installed() { [ -x "$TVM_DIR/versions/$1/bin/tur" ]; }
 
+# Path to an installed version's stdlib. Echoes nothing when there is none.
+#
+# Tolerant of both shapes on purpose. `share/turmeric/stdlib` is the prefix
+# layout -- what __tvm_normalize_layout now lays down, and what an installed
+# toolchain looks like. `stdlib` at the version root is what versions already
+# on disk have: every release before the archives were unified was flat, and
+# tvm only ever moved the binary. Upgrading tvm must not strand them.
+__tvm_stdlib_dir() {
+  _sdv="$TVM_DIR/versions/$1"
+  if [ -d "$_sdv/share/turmeric/stdlib" ]; then
+    printf '%s\n' "$_sdv/share/turmeric/stdlib"
+  elif [ -d "$_sdv/stdlib" ]; then
+    printf '%s\n' "$_sdv/stdlib"
+  fi
+}
+
+# Rearrange a freshly extracted version dir into the prefix layout:
+#
+#     bin/tur   lib/*.a   include/turi/   share/turmeric/stdlib/
+#
+# Releases have shipped two shapes -- windows-x86_64 the prefix layout, the
+# three tar.gz targets flat (`tur`, `libturi.a`, `libturt_runtime.a` and
+# `stdlib/` all at the root) -- so this accepts either and leaves one behind.
+#
+# It is not cosmetic. `tur` locates its runtime archive by probing
+# <exe_dir>/src, <exe_dir>, then <exe_dir>/../lib. Moving `tur` into bin/ while
+# leaving libturt_runtime.a at the version root -- which is exactly what tvm
+# used to do to a flat tarball -- matches none of those, so TUR_RT_AUTO fell
+# back to source mode and `tur run` died on a missing src/runtime/hamt.c that
+# no archive ships. Moving the archives into lib/ alongside is what makes an
+# installed version able to compile.
+__tvm_normalize_layout() {
+  _nld="$1"
+  mkdir -p "$_nld/bin"
+  if [ -f "$_nld/tur" ]; then
+    mv "$_nld/tur" "$_nld/bin/tur"
+  fi
+  for _nla in "$_nld"/*.a; do
+    [ -f "$_nla" ] || continue
+    mkdir -p "$_nld/lib"
+    mv "$_nla" "$_nld/lib/"
+  done
+  if [ -d "$_nld/stdlib" ] && [ ! -d "$_nld/share/turmeric/stdlib" ]; then
+    mkdir -p "$_nld/share/turmeric"
+    mv "$_nld/stdlib" "$_nld/share/turmeric/stdlib"
+  fi
+  return 0
+}
+
 # Resolve an alias name to a concrete version. Echoes the resolved version,
 # or the input unchanged if it is not an alias.
 __tvm_resolve_alias() {
@@ -244,11 +293,8 @@ __tvm_cmd_install() {
       rm -rf "$_tmp"
       return 1
     fi
-    # Normalize layout to versions/<v>/bin/tur regardless of tarball shape.
-    if [ -x "$_tmp/tur" ] && [ ! -d "$_tmp/bin" ]; then
-      mkdir -p "$_tmp/bin"
-      mv "$_tmp/tur" "$_tmp/bin/tur"
-    fi
+    # One layout on disk regardless of which shape the tarball had.
+    __tvm_normalize_layout "$_tmp"
     rm -rf "$_vdir"
     mv "$_tmp" "$_vdir"
   fi
@@ -282,12 +328,18 @@ __tvm_build_from_source() {
 
   [ -x "$_src/build-release/tur" ] || { __tvm_err "build produced no tur binary"; return 1; }
 
+  # Same prefix layout __tvm_normalize_layout produces for a downloaded
+  # release, so a source-built version is not a third shape.
   _tmp="$(__tvm_versions_dir)/.tmp.$_ver.$$"
-  rm -rf "$_tmp"; mkdir -p "$_tmp/bin" "$_tmp/include/turi"
+  rm -rf "$_tmp"; mkdir -p "$_tmp/bin" "$_tmp/lib" "$_tmp/include/turi" "$_tmp/share/turmeric"
   cp "$_src/build-release/tur" "$_tmp/bin/tur"
-  [ -f "$_src/build-release/src/libturi.a" ] && { mkdir -p "$_tmp/lib"; cp "$_src/build-release/src/libturi.a" "$_tmp/lib/"; }
+  [ -f "$_src/build-release/src/libturi.a" ] && cp "$_src/build-release/src/libturi.a" "$_tmp/lib/"
+  # libturt_runtime.a is the one TUR_RT_AUTO links against. Without it this
+  # built a version that could not compile anything, for the same reason a
+  # flat tarball could not -- see __tvm_normalize_layout.
+  [ -f "$_src/build-release/src/libturt_runtime.a" ] && cp "$_src/build-release/src/libturt_runtime.a" "$_tmp/lib/"
   cp "$_src"/src/turi/eval.h "$_src"/src/turi/env.h "$_src"/src/turi/value.h "$_src"/src/turi/fiber.h "$_tmp/include/turi/" 2>/dev/null
-  cp -R "$_src/stdlib" "$_tmp/" 2>/dev/null
+  cp -R "$_src/stdlib" "$_tmp/share/turmeric/" 2>/dev/null
   : > "$_tmp/.source-built"
   rm -rf "$_vdir"
   mv "$_tmp" "$_vdir"
@@ -328,8 +380,17 @@ __tvm_cmd_use() {
   PATH="$TVM_DIR/versions/$_ver/bin:$PATH"
   export PATH
   # Export this version's stdlib so resource lookup is unambiguous (Q2).
-  if [ -d "$TVM_DIR/versions/$_ver/stdlib" ]; then
-    export TUR_STDLIB_DIR="$TVM_DIR/versions/$_ver/stdlib"
+  #
+  # Unset on a miss rather than leaving the variable alone. It is exported, so
+  # a value from an EARLIER `tvm use` outlives the switch, and `tur` honors any
+  # directory with a readable macros.tur -- so a version whose stdlib this
+  # cannot find would silently compile against a different version's stdlib.
+  # That miscompiles far downstream, naming neither the stdlib nor the variable.
+  _sd="$(__tvm_stdlib_dir "$_ver")"
+  if [ -n "$_sd" ]; then
+    export TUR_STDLIB_DIR="$_sd"
+  else
+    unset TUR_STDLIB_DIR
   fi
   __tvm_log "tvm: now using $_ver"
   return 0
@@ -455,8 +516,16 @@ __tvm_cmd_run() {
     __tvm_err "$_ver is not installed (try: tvm install $_ver)"
     return 1
   fi
-  TUR_STDLIB_DIR="$TVM_DIR/versions/$_ver/stdlib" \
-    "$TVM_DIR/versions/$_ver/bin/tur" "$@"
+  # Resolve rather than assume: an unconditional export of a path that does
+  # not exist made `tur` print "ignoring TUR_STDLIB_DIR=... (no readable
+  # macros.tur there)" on every single invocation. Clear it on a miss so an
+  # inherited value cannot reach this version's compiler either.
+  _sd="$(__tvm_stdlib_dir "$_ver")"
+  if [ -n "$_sd" ]; then
+    TUR_STDLIB_DIR="$_sd" "$TVM_DIR/versions/$_ver/bin/tur" "$@"
+  else
+    env -u TUR_STDLIB_DIR "$TVM_DIR/versions/$_ver/bin/tur" "$@"
+  fi
 }
 
 __tvm_cmd_exec() {
@@ -467,9 +536,16 @@ __tvm_cmd_exec() {
     __tvm_err "$_ver is not installed"
     return 1
   fi
-  PATH="$TVM_DIR/versions/$_ver/bin:$PATH" \
-    TUR_STDLIB_DIR="$TVM_DIR/versions/$_ver/stdlib" \
-    "$@"
+  _sd="$(__tvm_stdlib_dir "$_ver")"
+  if [ -n "$_sd" ]; then
+    PATH="$TVM_DIR/versions/$_ver/bin:$PATH" \
+      TUR_STDLIB_DIR="$_sd" \
+      "$@"
+  else
+    env -u TUR_STDLIB_DIR \
+      PATH="$TVM_DIR/versions/$_ver/bin:$PATH" \
+      "$@"
+  fi
 }
 
 # --- .tur-version auto-switching (Phase 2) ----------------------------------
@@ -675,7 +751,8 @@ __tvm_bootstrap() {
       __tvm_strip_path
       PATH="$TVM_DIR/versions/$_v/bin:$PATH"
       export PATH
-      [ -d "$TVM_DIR/versions/$_v/stdlib" ] && export TUR_STDLIB_DIR="$TVM_DIR/versions/$_v/stdlib"
+      _sd="$(__tvm_stdlib_dir "$_v")"
+      if [ -n "$_sd" ]; then export TUR_STDLIB_DIR="$_sd"; else unset TUR_STDLIB_DIR; fi
     fi
   fi
 }
