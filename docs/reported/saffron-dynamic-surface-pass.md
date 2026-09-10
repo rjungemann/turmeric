@@ -483,6 +483,24 @@ yet`, interp `true`. Parity note; the guide documents the panic.
   with a `-Wint-conversion` under it. Pinned by
   `tests/fixtures/defstruct-sym-field`, which compiles warning-free and puts a
   `float` field after the Sym so a layout shift would show.
+
+  **A THIRD row was needed, found by re-running the fuzzer's probe:** the field
+  type alone did not make that probe pass, because a record whose first field
+  is `Sym` is CONSTRUCTED with a keyword in that position --
+  `(make-struct P :kw)` -- and a leading keyword was always read as a FIELD
+  NAME (`keyword construction needs :field value pairs`), so such a record
+  could not be built at all. `(Circle :diameter 2.0)` (a typo) and
+  `(make-struct Q :label 9.75)` (a Sym value then a float) are the same shape
+  syntactically, so no argument-count rule separates them -- the first attempt
+  used odd/even and broke three `errors/` fixtures that pin the precise
+  unknown-field diagnostic. The declared TYPES do separate them: positional is
+  chosen only when the keyword names no field, the argument count equals the
+  field count, AND the first field is `Sym`-typed, so `Circle` (one field, two
+  arguments) keeps its `unknown field 'diameter'`. Pinned by
+  `tests/fixtures/ctor-keyword-vs-sym-value`, which carries all four shapes in
+  one file because the rule is a choice BETWEEN them. Both this and M7 had
+  their `KNOWN` rows retired from `tests/saffron-fuzz-src.py`, and 250 fuzz
+  cases with those shapes back in the default pool are clean.
 - `(fn [] :kw)` is `fn: missing body`: a keyword literal in body position is
   read as a return annotation. `(fn [] (:: :kw Sym))` works. Found by the
   fuzzer; the generator avoids both shapes (KNOWN rows) and pins them with
