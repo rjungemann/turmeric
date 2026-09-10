@@ -16,6 +16,7 @@
 # Usage:
 #   bash tests/run-jit.sh                       # the full fixture set
 #   TUR_TEST_FILTER='hamt' bash tests/run-jit.sh  # narrow by regex
+#   TUR_TEST_SHARD=1/3 bash tests/run-jit.sh    # one third of the corpus
 #
 # Environment:
 #   TUR            path to a TUR_JIT=ON tur (default: ./build-turjit/tur,
@@ -23,6 +24,16 @@
 #                  engine SKIPs the whole run (exit 0) so this harness is
 #                  safe to invoke against any build.
 #   TUR_TEST_JOBS  parallelism (default: cpu count, capped at 8)
+#   TUR_TEST_SHARD "i/N" -- run only the i-th of N disjoint slices of the
+#                  corpus, so N runners can share it.  Mirrors run.sh: the
+#                  partition is round-robin by discovery ordinal, ordinals are
+#                  assigned over the FULL corpus (so a filter never shifts
+#                  shard membership), and the union of 1/N..N/N is exactly the
+#                  unsharded run.  Happy and error fixtures round-robin on
+#                  their own counters, so each shard holds within one fixture
+#                  of an equal share of BOTH -- what makes shards equal-cost.
+#   TUR_TEST_LIST  set to 1 to print the fixture names this invocation would
+#                  run (after filter and shard) and exit 0 without running any
 #   TUR_FORCE      set to 1 to skip the stamp-cache fast-path
 #
 # Markers (mirroring run-turi.sh's posture):
@@ -67,7 +78,24 @@ export TUR_BIND_LOOPBACK=1
 
 TUR="${TUR:-./build-turjit/tur}"
 [ -x "$TUR" ] || TUR=./build/tur
-[ -x "$TUR" ] || { echo "run-jit: no tur binary found" >&2; exit 2; }
+
+# TUR_TEST_LIST answers a question about the CORPUS -- which fixtures a filter
+# and shard select -- and the answer does not depend on the compiler at all.
+# So list mode skips every gate that asks something of the binary: the
+# existence check here, the engine probe, and the native-execution smoke test.
+# That is what lets tests/run-shard-partition.sh guard the partition in EVERY
+# job rather than only the one configured -DTUR_JIT=ON -- the partition is a
+# property of tests/fixtures/, which any commit can change.
+#
+# Kept as one named flag rather than repeating the condition at each gate:
+# three separate copies is how the smoke test below got missed the first time,
+# and a fourth gate would be just as easy to miss.
+LIST_ONLY=0
+if [ "${TUR_TEST_LIST:-0}" = "1" ]; then LIST_ONLY=1; fi
+
+if [ "$LIST_ONLY" != "1" ]; then
+    [ -x "$TUR" ] || { echo "run-jit: no tur binary found" >&2; exit 2; }
+fi
 
 # Capability probe -- capture, don't pipe into grep -q (pipefail SIGPIPE).
 # Probed with a nonexistent input: P0 (engine-selection-plan) moved cmd_jit's
@@ -75,13 +103,15 @@ TUR="${TUR:-./build-turjit/tur}"
 # build and no longer discriminates.  A non-JIT binary answers "carries no
 # JIT engine" before touching the file; a JIT binary proceeds to (and fails)
 # the compile.
-probe=$("$TUR" jit /nonexistent-tur-jit-probe.tur 2>&1 || true)
-case "$probe" in
-  *"carries no JIT"*)
-     echo "run-jit: SKIP ($TUR carries no JIT engine; configure -DTUR_JIT=ON)"
-     echo "TUR_SKIP: $TUR carries no JIT engine (configure -DTUR_JIT=ON)"
-     exit 0 ;;
-esac
+if [ "$LIST_ONLY" != "1" ]; then
+    probe=$("$TUR" jit /nonexistent-tur-jit-probe.tur 2>&1 || true)
+    case "$probe" in
+      *"carries no JIT"*)
+         echo "run-jit: SKIP ($TUR carries no JIT engine; configure -DTUR_JIT=ON)"
+         echo "TUR_SKIP: $TUR carries no JIT engine (configure -DTUR_JIT=ON)"
+         exit 0 ;;
+    esac
+fi
 
 # The engine's cc fallback links -lturi; anchor -L at the build tree the
 # binary actually lives in, exactly as tests/run.sh does.
@@ -159,6 +189,7 @@ trap 'rm -rf "$RESULTS_DIR"' EXIT
 # (1) Smoke: ONE trivial program must go through the engine natively.  Costs
 #     a second, needs no list, and catches the tree-wide case before 2700
 #     fixtures spend ten minutes falling back.
+if [ "$LIST_ONLY" != "1" ]; then
 _smoke_dir="$(mktemp -d -t tur-jit-smoke.XXXXXX)"
 printf '(defn main [] : int (println 42) 0)\n' > "$_smoke_dir/smoke.tur"
 _smoke_err="$_smoke_dir/smoke.stderr"
@@ -174,6 +205,7 @@ if [ "$_smoke_rc" -ne 0 ] || [ "$_smoke_out" != "42" ] \
     exit 1
 fi
 rm -rf "$_smoke_dir"
+fi
 
 # (2) Ratchet: the fixtures ALLOWED to fall back are listed by NAME in
 #     tests/jit-fallback-baseline.txt.  A fixture that falls back and is not
@@ -423,27 +455,94 @@ esac
 export TUR_HOST_WINDOWS
 
 JIT_FILTER="${JIT_FILTER:-${TUR_TEST_FILTER:-}}"
+
+# Optional sharding, so N runners can split the corpus.  Parsed exactly as
+# tests/run.sh parses it (same "i/N" spelling, same clamping of a nonsense
+# index) -- a second, subtly different dialect of the same variable is worse
+# than no sharding at all, because CI sets it once for both harnesses.
+TUR_TEST_SHARD="${TUR_TEST_SHARD:-}"
+SHARD_INDEX=0
+SHARD_TOTAL=1
+if [ -n "$TUR_TEST_SHARD" ]; then
+    case "$TUR_TEST_SHARD" in
+        */*)
+            shard_left="${TUR_TEST_SHARD%/*}"
+            shard_right="${TUR_TEST_SHARD#*/}"
+            case "$shard_left" in ''|*[!0-9]*) shard_left=1 ;; esac
+            case "$shard_right" in ''|*[!0-9]*) shard_right=1 ;; esac
+            if [ "$shard_right" -lt 1 ]; then shard_right=1; fi
+            if [ "$shard_left" -lt 1 ]; then shard_left=1; fi
+            if [ "$shard_left" -gt "$shard_right" ]; then shard_left="$shard_right"; fi
+            SHARD_TOTAL="$shard_right"
+            SHARD_INDEX=$((shard_left - 1))
+            ;;
+    esac
+fi
+
+matches_shard() {
+    if [ "$SHARD_TOTAL" -le 1 ]; then
+        return 0
+    fi
+    [ $(($1 % SHARD_TOTAL)) -eq "$SHARD_INDEX" ]
+}
+
+# Refused up front, not warned about at the end: the baseline is rewritten
+# WHOLE, so regenerating it from a shard would silently delete the N-1/N of the
+# names this run never exercised, and the next full run would report every one
+# of them as a new fallback.  Nothing about the resulting file would look
+# wrong.  Checked here rather than at the ratchet so the answer arrives before
+# a shard's worth of fixtures runs, not after.
+if [ "${TUR_JIT_FALLBACK_UPDATE:-0}" = "1" ] && [ "$SHARD_TOTAL" -gt 1 ]; then
+    echo "FAIL run-jit -- TUR_JIT_FALLBACK_UPDATE=1 with TUR_TEST_SHARD=$TUR_TEST_SHARD" >&2
+    echo "  The baseline is rewritten whole, so a shard would drop every name it" >&2
+    echo "  did not run.  Regenerate from an unsharded run." >&2
+    exit 2
+fi
+
+# The ordinal advances on EVERY discovered fixture, not just admitted ones, so
+# shard membership is a property of the corpus rather than of the filter.  A
+# filtered shard run is then a subset of the same slice an unfiltered one takes
+# -- which is what makes `TUR_TEST_FILTER` usable to re-run one shard's failure.
 FILTERED_DIRS=()
+fixture_ordinal=0
 for d in "${ALL_DIRS[@]}"; do
     name="${d#tests/fixtures/}"
-    if [ -z "$JIT_FILTER" ] || grep -E -q "$JIT_FILTER" <<< "$name"; then
+    if { [ -z "$JIT_FILTER" ] || grep -E -q "$JIT_FILTER" <<< "$name"; } \
+       && matches_shard "$fixture_ordinal"; then
         FILTERED_DIRS+=("$d")
     fi
+    fixture_ordinal=$((fixture_ordinal + 1))
 done
+
+ERROR_DIRS=()
+error_ordinal=0
+for d in tests/fixtures/errors/*/; do
+    d="${d%/}"; [ -d "$d" ] || continue
+    name="${d#tests/fixtures/}"
+    if { [ -z "$JIT_FILTER" ] || grep -E -q "$JIT_FILTER" <<< "$name"; } \
+       && matches_shard "$error_ordinal"; then
+        ERROR_DIRS+=("$d")
+    fi
+    error_ordinal=$((error_ordinal + 1))
+done
+
+# Both slices are resolved before any fixture runs, which is what lets
+# TUR_TEST_LIST answer "what is in shard i/N?" without executing anything.
+# tests/run-shard-partition.sh drives the partition assertions through this,
+# so they test the harness's real enumeration rather than a copy of it that
+# can drift.  Names only, one per line, `errors/` kept in the path.
+if [ "$LIST_ONLY" = "1" ]; then
+    for d in "${FILTERED_DIRS[@]+"${FILTERED_DIRS[@]}"}" \
+             "${ERROR_DIRS[@]+"${ERROR_DIRS[@]}"}"; do
+        echo "${d#tests/fixtures/}"
+    done
+    exit 0
+fi
 
 if [ ${#FILTERED_DIRS[@]} -gt 0 ]; then
     printf '%s\n' "${FILTERED_DIRS[@]}" | \
         xargs -P "$JOBS" -I{} bash -c 'run_jit_fixture "$@"' _ {} 2>/dev/null
 fi
-
-ERROR_DIRS=()
-for d in tests/fixtures/errors/*/; do
-    d="${d%/}"; [ -d "$d" ] || continue
-    name="${d#tests/fixtures/}"
-    if [ -z "$JIT_FILTER" ] || grep -E -q "$JIT_FILTER" <<< "$name"; then
-        ERROR_DIRS+=("$d")
-    fi
-done
 if [ ${#ERROR_DIRS[@]} -gt 0 ]; then
     printf '%s\n' "${ERROR_DIRS[@]}" | \
         xargs -P "$JOBS" -I{} bash -c 'run_jit_error_fixture "$@"' _ {} 2>/dev/null
@@ -464,7 +563,11 @@ for rf in "$RESULTS_DIR"/*.result; do
 done
 
 echo
-echo "jit fixture summary: $PASS passed, $FAIL failed, $SKIP skipped"
+if [ "$SHARD_TOTAL" -gt 1 ]; then
+    echo "jit fixture summary (shard $((SHARD_INDEX + 1))/$SHARD_TOTAL): $PASS passed, $FAIL failed, $SKIP skipped"
+else
+    echo "jit fixture summary: $PASS passed, $FAIL failed, $SKIP skipped"
+fi
 if [ "$FALLBACK" -gt 0 ]; then
     echo "  (of which $FALLBACK passed via the cc fallback -- TUR-W0070)"
 fi
@@ -472,7 +575,11 @@ fi
 # The fallback ratchet (see the header above RESULTS_DIR).  Only meaningful
 # on a full run: under a filter most baseline names are simply not exercised,
 # so reclaimed-vs-missing cannot be told apart and NEW fallbacks alone are
-# checked.
+# checked.  A SHARD is the same situation arriving a different way -- it sees
+# 1/N of the corpus, so N-1/N of the baseline is unexercised -- and it gets the
+# same treatment.  The NEW-fallback half still runs per shard and is what makes
+# the ratchet hold across a sharded CI job: every name is in exactly one shard,
+# so their union checks every name exactly once.
 _observed="$(printf '%s\n' "${FALLBACK_NAMES[@]+"${FALLBACK_NAMES[@]}"}" | sed '/^$/d' | sort -u)"
 if [ "${TUR_JIT_FALLBACK_UPDATE:-0}" = "1" ]; then
     {
@@ -497,7 +604,7 @@ elif [ -f "$JIT_FALLBACK_BASELINE" ]; then
         FAIL=$((FAIL + 1))
         while IFS= read -r _n; do FAILED+=("$_n (new cc fallback)"); done <<< "$_new"
     fi
-    if [ -z "$JIT_FILTER" ]; then
+    if [ -z "$JIT_FILTER" ] && [ "$SHARD_TOTAL" -le 1 ]; then
         _reclaimed="$(comm -13 <(printf '%s\n' "$_observed") <(printf '%s\n' "$_allowed") | sed '/^$/d')"
         if [ -n "$_reclaimed" ]; then
             echo "  reclaimed by the engine (remove from $JIT_FALLBACK_BASELINE):"

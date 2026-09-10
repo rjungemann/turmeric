@@ -569,6 +569,42 @@ export.** Diff them before landing a new runner:
 grep -n TUR_BIND_LOOPBACK tests/run.sh tests/run-jit.sh
 ```
 
+### `TUR_TEST_SHARD` -- one spelling, two harnesses
+
+`tests/run.sh` and `tests/run-jit.sh` both honour `TUR_TEST_SHARD="i/N"`:
+run only the i-th of N disjoint slices, so N runners can share one corpus.
+The two parsers are deliberately identical, down to the clamping of a
+nonsense index (`0/3` and `abc/3` both mean `1/3`; `4/3` means `3/3`;
+`1/0`, `1/1` and a value with no slash all mean "not sharded"). CI sets the
+variable once per job and both harnesses may read it, so a second dialect
+would silently partition the two corpora differently.
+
+Three properties the partition is required to have, and which
+`tests/run-shard-partition.sh` asserts against the live corpus:
+
+- **Disjoint and complete.** The union of `1/N`..`N/N` is exactly the
+  unsharded run, with no fixture in two shards.
+- **Stable under filtering.** Ordinals advance over the FULL corpus, not
+  over admitted fixtures only, so `TUR_TEST_FILTER` never shifts shard
+  membership -- which is what lets you re-run one shard's failure by name.
+- **Balanced per class.** Happy and error fixtures round-robin on their own
+  ordinal counters, so each shard holds within one fixture of an equal share
+  of *both* -- which is what makes the shards equal-cost. A contiguous slice
+  would be just as disjoint and just as complete while costing twice as much
+  on one runner as another.
+
+**A shard is not a full run, and anything that ratchets must know it.**
+`run-jit.sh`'s cc-fallback baseline is the live example. Its NEW-fallback
+half works per shard and still holds across the job -- every name is in
+exactly one shard, so the shards' union checks each name exactly once. Its
+*reclaimed* half cannot: a shard sees 1/N of the corpus, so N-1/N of the
+baseline is simply unexercised and would be reported as reclaimed by the
+engine. That half is suppressed under a shard exactly as it already was
+under a filter. Regenerating the baseline from a shard is refused outright
+(exit 2) rather than warned about, because the file is rewritten whole: a
+shard would delete every name it did not run, and nothing about the result
+would look wrong.
+
 ---
 
 ## 9. String literals are not reliably merged

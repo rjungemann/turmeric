@@ -17,9 +17,24 @@ needed.  Harnesses print `TUR_SKIP: <reason>` for a whole-suite skip and
 latter stays a `pass` with a note, because the suite still did real work and
 still has a meaningful duration).
 
+Sharding: a job that ran only part of a corpus (TUR_TEST_SHARD="i/N", honored
+by tests/run.sh and tests/run-jit.sh) tags its rows with shard_index and
+shard_total.  Without that tag the shards of one run are N rows carrying the
+same (run_id, suite) and ~1/N of the real duration each, which reads as one
+suite that suddenly got faster and started reporting N times per run.  The tag
+is what keeps them N distinct series instead.  Both keys are null on an
+unsharded run, so every row written before sharding existed stays comparable.
+
+The tag describes the JOB, not the suite: a suite that does not itself honor
+TUR_TEST_SHARD still gets it, and its rows are then replicas across shards.
+That is the honest reading -- the collector cannot know which harness sharded
+-- and it is why a consumer should group by (suite, shard_index), never sum
+durations across shards without checking.
+
 Usage:
     collect-suite-timings.py results-main.xml results-aux.xml > timings.jsonl
     collect-suite-timings.py --build-dir build results-*.xml
+    TUR_TEST_SHARD=2/3 collect-suite-timings.py results-jit.xml
 """
 
 import argparse
@@ -30,6 +45,34 @@ import re
 import sys
 import time
 import xml.etree.ElementTree as ET
+
+
+def parse_shard(spec):
+    """Parse an "i/N" shard spec into (index, total), 1-based.
+
+    Returns (None, None) when the run was not sharded.
+
+    Clamped exactly as tests/run.sh and tests/run-jit.sh clamp it -- a
+    nonsense index snaps into range rather than erroring, and a total below 1
+    means "not sharded".  Diverging here would let a row claim a slice the
+    harness did not run: with TUR_TEST_SHARD=0/3 the harness runs shard 1/3,
+    so this must say 1/3 too.
+    """
+    if not spec or "/" not in spec:
+        return (None, None)
+    left, _, right = spec.partition("/")
+    total = int(right) if right.isdigit() else 1
+    index = int(left) if left.isdigit() else 1
+    if total < 1:
+        total = 1
+    if index < 1:
+        index = 1
+    if index > total:
+        index = total
+    if total <= 1:
+        return (None, None)
+    return (index, total)
+
 
 SKIP_RE = re.compile(r"^TUR_SKIP:[ \t]*(.*)$", re.MULTILINE)
 SKIP_PARTIAL_RE = re.compile(r"^TUR_SKIP_PARTIAL:[ \t]*(.*)$", re.MULTILINE)
@@ -182,9 +225,13 @@ def main():
     ap.add_argument("xml", nargs="+", help="JUnit XML file(s) from ctest --output-junit")
     ap.add_argument("--build-dir", default="build",
                     help="CMake build dir to read config dimensions from (default: build)")
+    ap.add_argument("--shard", default=None,
+                    help='shard this job ran, as "i/N" (default: $TUR_TEST_SHARD)')
     args = ap.parse_args()
 
     cache = read_cmake_cache(args.build_dir)
+    shard_index, shard_total = parse_shard(
+        args.shard if args.shard is not None else os.environ.get("TUR_TEST_SHARD"))
     row_base = {
         "sha": os.environ.get("GITHUB_SHA"),
         "branch": os.environ.get("GITHUB_REF_NAME"),
@@ -197,6 +244,8 @@ def main():
         "nproc": os.cpu_count(),
         "jit": cmake_bool(cache.get("TUR_JIT")),
         "sanitize": cmake_bool(cache.get("TUR_DEBUG_SANITIZE")),
+        "shard_index": shard_index,
+        "shard_total": shard_total,
     }
 
     seen = {}
@@ -234,7 +283,8 @@ def main():
         warn("no testcases found in any input file")
         return 1
     summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
-    warn(f"emitted {len(order)} suite rows ({summary})")
+    where = f" for shard {shard_index}/{shard_total}" if shard_total else ""
+    warn(f"emitted {len(order)} suite rows{where} ({summary})")
     return 0
 
 

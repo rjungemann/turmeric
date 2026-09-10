@@ -49,15 +49,23 @@ jobs:
             job_name: Test
           - part: aux
             job_name: Auxiliary suites
-        # Sharding the fixture corpus itself is still off.  run.sh supports it
-        # (TUR_TEST_SHARD="i/N" partitions round-robin by fixture ordinal, so
-        # shards are balanced and their union is the full corpus), and the
-        # `fixtures` part is where a shard axis would go.  What has to change
-        # first is the timing trend: every shard would publish a `tur_tests`
-        # row for the same run and environment, and the /ci aggregates assume
-        # one row per suite per run.  Carry the shard in the row (suite name
-        # or a new dimension, in tools/ci/collect-suite-timings.py and the
-        # dashboard) before adding e.g. `fixtures 1/2` / `fixtures 2/2` here.
+        # Sharding the fixture corpus itself is still off, but the blockers
+        # that kept it off are not blockers any more.  run.sh has always
+        # supported it (TUR_TEST_SHARD="i/N" partitions round-robin by fixture
+        # ordinal, so shards are balanced and their union is the full corpus),
+        # and the `fixtures` part is where a shard axis would go.  What was
+        # missing was the timing trend: every shard publishes a `tur_tests` row
+        # for the same run and environment, and the /ci aggregates assumed one
+        # row per suite per run.  They no longer do -- a row now carries
+        # shard_index/shard_total (tools/ci/collect-suite-timings.py, null when
+        # unsharded) and the dashboard keys each slice as its own series
+        # (`seriesName` in web/ci-metrics.js).
+        #
+        # So what is left before adding e.g. `fixtures 1/2` / `fixtures 2/2`
+        # here is a gating decision, not plumbing: a shard axis renames the
+        # check to `Test (<os>) 1/2`, and any branch-protection rule requiring
+        # the current name has to move in the same change.  That is the reason
+        # this job kept the `Test (<os>)` name in the first place.
 
     steps:
       - uses: actions/checkout@v4
@@ -308,6 +316,19 @@ jobs:
     #      the engine.  It is fast (~2 min on Apple Silicon, run serially and
     #      fanned out internally), but it is a second full corpus pass and
     #      belongs on its own clock.
+    #   2b. It is also the slowest leg in the matrix, and the reason is runner
+    #      size rather than anything about the engine.  `macos-latest` hands
+    #      out both 3-core and 5-core machines; measured off the ci-metrics
+    #      branch, tur_jit_fixture_tests runs ~440s median on Linux (4 cores),
+    #      ~348s on a 5-core mac and ~730s median / ~940s p90 on a 3-core one,
+    #      which is what CI draws ~97% of the time.  Throughput is linear in
+    #      cores (the serial suites show the 5-core box is only ~1.2x faster
+    #      per core), so raising TUR_TEST_JOBS on a 3-core runner buys nothing
+    #      and only risks the per-fixture timeouts CLAUDE.md warns about --
+    #      more parallelism here means more MACHINES.  run-jit.sh now honors
+    #      TUR_TEST_SHARD="i/N" for exactly that, guarded by the
+    #      tur_shard_partition test; adding the axis is the gating decision
+    #      described on the `test` job above, not a plumbing one.
     #   3. The `jit` experiment graduated 2026-08-17, but the ENGINE is still
     #      opt-in at build time (-DTUR_JIT=ON) and `cc` is still the default
     #      engine, so this leg exercises a configuration most builds do not
