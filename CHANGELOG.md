@@ -2,6 +2,28 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.46.0] -- 2026-09-09
+
+### Changed
+
+- **`#lang saffron` is on by default.** The dynamically typed dialect graduated
+  out of the experiment registry: no `--enable=`, no `:experiments` entry, and no
+  `TUR-W0060` on every compile. It is an ordinary base dialect on the same footing
+  as `#lang turmeric`, a project manifest can no longer refuse it, and
+  `tur lang-layers` reports all eight bases as `stable`. `tur experiments` now
+  lists nothing at all. A lingering `--enable=saffron` is accepted as a TUR-W0063
+  no-op, so a `build.tur` that named it keeps compiling.
+- **Try Turmeric drops the `experimental` badge** from the four Saffron rows in
+  the language picker. The picker renders that badge from the `#lang` registry, so
+  it followed from the graduation rather than a separate UI change.
+
+### Fixed
+
+- **`(doc 'map-get)` and the web doc panel answer with the current text.**
+  `stdlib/docstrings.tur` had drifted a release behind `stdlib/map.tur`, so the
+  `any`-miss paragraph added in v0.45.1 was missing from the generated lookup
+  table.
+
 ## [0.45.1] -- 2026-09-09
 
 ### Added
