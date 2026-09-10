@@ -98,8 +98,7 @@ still gets the typed default.
 ;; compiled: cc error `incompatible type for argument 1 of 'tfn'`   interp: 2
 ```
 
-**H8. A typed defn or typed capturing closure held in an `any` cannot be
-called compiled.**
+**~~H8~~. RESOLVED 2026-09-10 for a NAMED typed function: the widen wraps it in an all-`any` adaptor lambda `(fn [__da0 ...] (NAME __da0 ...))` (`saffron_dyn_fn_adaptor` in elab_call.c), whose parameters take the dialect default, whose inner call goes through the checked seam, and whose return takes the `any` pin. Pinned by `tests/fixtures/saffron-typed-defn-in-any`; KNOWN row retired. **Residual:** a typed closure produced by an expression (`(app (adder 7) 1)` with a typed `adder`) is not named and still panics. Was: a typed defn or typed capturing closure held in an `any` cannot be called compiled.**
 
 ```turmeric
 (defn app [f x] (f x))
@@ -177,16 +176,16 @@ registry row is keyed differently.
 `any` holding `(Nothing)` panics `different instantiation of Opt` compiled.
 `saffron-match-parametric-adt` never builds a nullary ctor.
 
-**M4. `println` of a container through `any`.** Vec and Map: compiled panics
+**~~M4~~. RESOLVED 2026-09-10: both runtimes refuse by the box's NAME in the same words (`println: no operator for a Vec argument`): the interpreter's dynamic operator layer generalises the Sym rule to every named any-box, and the compiled `__tur_dyn_argname` consults the type registry. Pinned by `tests/fixtures/saffron-container-in-any-refuses-operator`. Was: `println` of a container through `any`: compiled panics, interp prints a raw pointer.** Vec and Map: compiled panics
 `println: no operator for a value of that type`, interp prints a raw
 pointer. Option/None/fn/struct/Cons/nil: both panic. For a dynamic dialect,
 a printable vector is expected; at minimum the interp pointer print is wrong.
 
-**M5. `=` on containers through `any`.** `(= [1 2] [1 2])`, maps, sets:
+**~~M5~~. RESOLVED 2026-09-10 (parity): `=` on two any-held containers panics `=: no operator for a Vec argument` on both back ends instead of the interpreter answering `false`. Structural equality through `any` remains unsupported by design (the closed set). Was: `=` on containers through `any`: compiled panics, interp answers false.** `(= [1 2] [1 2])`, maps, sets:
 compiled panics, interp answers `false` for equal values. `(= (some 7.1)
 (some 7.1))` panics on both.
 
-**M6. Dynamic `bit-shr` on a negative disagrees with the typed path.**
+**~~M6~~. RESOLVED 2026-09-10: the dynamic `bit-shr` shifts the unsigned word like the typed builtin and the interpreter. Pinned by `tests/fixtures/saffron-dyn-shift-parity`. The `(bit-shl 1 64)` typed divergence (0 vs 1, a UB shift) is untouched. Was: dynamic `bit-shr` on a negative disagrees with the typed path.**
 `(bit-shr -8 1)`: typed compiled 9223372036854775804, interp
 9223372036854775804, but through `any` compiled gives -4 (signed shift).
 Also `(bit-shl 1 64)` typed: compiled 0, interp 1 with a UBSan report at
@@ -249,6 +248,13 @@ yet`, interp `true`. Parity note; the guide documents the panic.
   escape delivers an int64, neither of which is a tagged box. Pre-existing;
   the H10 lambda default deliberately exempts the immediate receiver
   (`in_callcc_receiver`) so an unannotated one keeps its scalar return.
+- `Sym` is not accepted as a `defstruct` / `defdata` field type (`defdata:
+  field has unrecognized type :Sym`), typed Turmeric too. Found by the fuzzer
+  once `sym` joined its scalar pool.
+- `(fn [] :kw)` is `fn: missing body`: a keyword literal in body position is
+  read as a return annotation. `(fn [] (:: :kw Sym))` works. Found by the
+  fuzzer; the generator avoids both shapes (KNOWN rows) and pins them with
+  `--known-probes`.
 - Cosmetic: `vec-get` out of bounds reads `tvec index out of bounds`
   compiled vs `vec index out of bounds` interp.
 

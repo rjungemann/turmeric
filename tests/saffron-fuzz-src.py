@@ -127,13 +127,15 @@ KNOWN = [
     # H5-sym-in-any (scalar_sym): retired 2026-09-10.
     # H6-forward-ref-int (route_fwdref): retired 2026-09-10.
     ("H7-seam-fn-param",         ("route_seam_fn",)),
-    ("H8-typed-defn-in-any",     ("route_typed_fn_value",)),
+    # H8-typed-defn-in-any (route_typed_fn_value): retired 2026-09-10.
     # H9-any-map-into-map-get (wrap_map_outer): retired 2026-09-10.
     # H10-lambda-literal-body (wrap_thunk_lit): retired 2026-09-10.
     # H11-field-read-no-inst-rows (wrap_struct + term_class): retired 2026-09-10.
     ("M7-dynamic-cons-field",    ("wrap_cons",)),
     # M10-macro-any-not-seamed (wrap_map_inner + seam_first): retired 2026-09-10.
     ("L-ctor-under-typed-expected", ("wrap_adt", "seam_first")),
+    ("L-sym-struct-field",       ("scalar_sym", "wrap_struct")),
+    ("L-fn-keyword-body",        ("scalar_sym", "wrap_thunk_lit")),
 ]
 
 
@@ -290,10 +292,14 @@ class Gen:
                    "(%s any)" % adt,
                    lambda e: "(match %s (Wrap%s v) v)" % (e, adt)))
 
-        st = self.name("P")
-        leg.defs.append("(defstruct %s [fld : %s])" % (st, v.tname))
-        ws.append(("wrap_struct", lambda e: "(make-struct %s %s)" % (st, e),
-                   st, lambda e: "(.fld %s)" % e))
+        # Sym is not accepted as a defstruct field type (a Low finding in the
+        # report), so a sym leg gets no struct wrapper -- and no struct DEF,
+        # which would reject the whole program even when unused.
+        if v.kind != "sym":
+            st = self.name("P")
+            leg.defs.append("(defstruct %s [fld : %s])" % (st, v.tname))
+            ws.append(("wrap_struct", lambda e: "(make-struct %s %s)" % (st, e),
+                       st, lambda e: "(.fld %s)" % e))
 
         # A thunk whose body flows through an `any`: the literal-body form is
         # finding H10 (a concrete lambda return is not dynamically callable).
@@ -725,12 +731,15 @@ KNOWN_PROBES = [
     ("H7  seam into a fn-typed parameter",
      '#lang saffron\n(defn tfn [f : (fn [int] int)] : int (f 1))\n(defn id [x] x)\n'
      '(defn main [] : int (println (tfn (id (fn [x : int] : int (+ x 1))))) 0)\n', "2\n"),
-    ("H8  typed defn held in an any is not callable",
-     '#lang saffron\n(defn app [f x] (f x))\n(defn inc [n : int] : int (+ n 1))\n'
-     '(defn main [] : int (println (app inc 41)) 0)\n', "42\n"),
     ("M7  dynamic .head/.tail read on an any-held Cons",
      '#lang saffron\n(defn hd [l] (.head l))\n'
      '(defn main [] : int (println (hd (list 7.25 1))) 0)\n', "7.25\n"),
+    ("L   Sym is not accepted as a defstruct field type",
+     '(defstruct P [fld : Sym])\n'
+     '(defn main [] : int (println (sym->str (.fld (make-struct P :kw)))) 0)\n', "kw\n"),
+    ("L   a keyword-literal lambda body parses as a return annotation",
+     '#lang saffron\n(defn call0 [f] (f))\n'
+     '(defn main [] : int (println (type-of (call0 (fn [] :kw)))) 0)\n', "Sym\n"),
     ("L   parametric ctor under a typed (W any) expectation builds (W int)",
      '#lang saffron\n(defdata W [a] (Wrap a))\n(defn s [v : (W any)] : (W any) v)\n'
      '(defn t [x] x)\n(defn main [] : int (println (match (t (s (Wrap 7))) (Wrap v) v)) 0)\n',
