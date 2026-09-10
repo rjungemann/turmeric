@@ -1,0 +1,34 @@
+#lang saffron
+; saffron-dynamic-surface-pass M8: `match` on an `any` whose payload is a
+; STDLIB sum (Option / Result) was a static error --
+;   match: scrutinee must be an ADT type, got any
+; -- while a user `defdata` matched fine. It resolves through the arm-pattern
+; inference in elab_structs.c: a constructor pattern names its own AdtDef, so
+; an unannotated (`any`) scrutinee is patched to that ADT. Nothing about that
+; path is specific to a user defdata, and this file pins that it stays general.
+;
+; Four `any` SOURCES, because they reach the scrutinee by different routes and
+; only the first is a plain parameter default:
+;   - an unannotated parameter (`t`),
+;   - a `map-get` result -- a stdlib MACRO, whose span is stdlib/map.tur, not
+;     this file (the seam M10 fixed keys on the dialect of the top-level form),
+;   - a `vec-get` element read,
+;   - and both sum families, Option and Result, since they are separate
+;     defdatas and the Result one is reached through a partially-applied
+;     instance head elsewhere.
+;
+; Floats with a non-zero fractional part throughout: an int literal cannot show
+; a truncation on the way out of the box, and every value here crosses one.
+
+(defn t [x] x)
+
+(defn m1 [o] (match o (Some x) x (None) 0.0))
+(defn m2 [r] (match r (Ok v) v (Err e) 0.0))
+
+(defn main []
+  (println (m1 (t (some 7.25))))
+  (println (m2 (t (ok 3.5))))
+  (println (m1 (t (none))))
+  (println (m2 (map-get #map{:k (ok 9.75)} :k)))
+  (println (m1 (vec-get [(some 2.5)] 0)))
+  0)

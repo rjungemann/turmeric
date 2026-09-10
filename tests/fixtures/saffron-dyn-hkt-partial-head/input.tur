@@ -1,0 +1,44 @@
+#lang saffron
+; saffron-dynamic-surface-pass M2: an HKT instance whose head is written
+; PARTIALLY APPLIED -- `definstance Functor [(Result _ B)]` (stdlib/result.tur)
+; -- is a TY_APP chain, not the bare TY_ADT that `Functor [Option]` is. The
+; interpreter keys dynamic dispatch on the NAME `turi_any_display_type` reports
+; for the receiver ("Result"), compared against `type_name` of the instance
+; head -- which for a TY_APP chain spells "(type-app (type-app Result ?) B)"
+; and so could never match, giving `no instance of Functor for Result` on a
+; value whose own `type-of` says `Result`. Peeling the chain to its head makes
+; the two spellings agree, and `Functor [(Result _ B)]` dispatches exactly as
+; `Functor [Option]` does.
+;
+; interp-only: the COMPILED path still declines this shape, by design and not
+; by oversight. A hole-headed instance never gets a by-value spec -- `.fmap` on
+; a Result resolves to the erased carrier `__inst_Functor_fmap_Result_tyvar`,
+; whose payloads are `int64_t`, while a Saffron `any` is a 16-byte
+; `tur_tagged_t` -- so `emit_instance_dispatch_recv_type` returns false and the
+; site panics `no instance of Functor for Result`. Keying the row on the peeled
+; head instead was measured to make `is?` on the result answer a silent `false`
+; where this file answers `true`; see the note at that function.
+;
+; 7.35, not 7.0: the element crosses a box and a closure, and a conversion
+; anywhere on that path would print a wrong number here.
+
+(defn t [x] x)
+
+(defn bump [r]
+  (.fmap r (fn [x] (+ x 1))))
+
+(defn scale [r]
+  (.fmap r (fn [x] (* x 2.0))))
+
+(defn main []
+  (match (bump (t (ok 41)))
+    (Ok v)  (println v)
+    (Err e) (println "err"))
+  (match (scale (t (ok 7.35)))
+    (Ok v)  (println v)
+    (Err e) (println "err"))
+  (match (bump (t (err "boom")))
+    (Ok v)  (println "unexpected-ok")
+    (Err e) (println e))
+  (println (type-of (bump (t (ok 1)))))
+  0)

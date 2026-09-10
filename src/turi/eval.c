@@ -11162,7 +11162,21 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             for (TypeClassInstance *inst = tce ? tce->instances : NULL;
                  inst != NULL; inst = inst->next) {
                 if (inst->typeclass != tc || inst->n_type_args == 0) continue;
-                const char *want = type_name(inst->type_args[0]);
+                /* An HKT instance head can be written partially applied --
+                 * `Functor [(Result _ B)]` -- which is a TY_APP chain, so
+                 * `type_name` spells it `(type-app ...)` and never the
+                 * `Result` the box reports.  Key on the chain's HEAD, the
+                 * constructor the receiver names.  The COMPILED side declines
+                 * this shape instead (see the note at
+                 * `emit_instance_dispatch_recv_type`): it has no by-value spec
+                 * for a hole-headed instance, only the `int64_t` carrier, so
+                 * the same peel there answers `is?` a silent `false`.  The
+                 * interpreter has no instantiation to satisfy -- it calls the
+                 * instance's FnDef directly -- so the peel is sound here.
+                 * saffron-dynamic-surface-pass M2. */
+                Type wt = inst->type_args[0];
+                while (wt.kind == TY_APP && wt.as.app.fn) wt = *wt.as.app.fn;
+                const char *want = type_name(wt);
                 if (!have || !want || strcmp(have, want) != 0) continue;
                 if (slot < inst->n_method_impls) impl = inst->method_impls[slot];
                 break;

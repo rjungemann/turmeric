@@ -1,10 +1,19 @@
 # Saffron dynamic-surface pass -- findings (2026-09-09)
 
 **Status 2026-09-10.** Resolved on this branch: H1, H2, H3, H4, H5, H6, H8
-(named functions), H9 (a sibling determines K), H10, H11, M3, M4, M5, M6, M10,
-each pinned by a fixture and retired from the fuzzer's KNOWN table. Open: H7
-(fn-typed seam, a representation gap), M1, M2, M7, M8, M9, and the lows.
-Struck-through items below carry their resolution note.
+(named functions), H9 (a sibling determines K), H10, H11, M3, M4, M5, M6, M8,
+M10, each pinned by a fixture and retired from the fuzzer's KNOWN table. M2 is
+resolved on the INTERPRETER and root-caused (not fixed) compiled. Open: H7
+(fn-typed seam, a representation gap), M1, M2 (compiled half), M7, M9, and the
+lows. Struck-through items below carry their resolution note.
+
+Two of those -- H7, and M2's compiled half -- are the same SHAPE of problem: a
+value whose Saffron representation (a 16-byte `tur_tagged_t`) does not fit the
+representation the typed path already chose for it (a `tur_poly_fn_t` for H7,
+an `int64_t` carrier payload for M2). Neither is a gate or a keying bug, and
+for both the cheap-looking fix produces a SILENT WRONG ANSWER rather than a
+panic, which is why each is parked behind a clean decline. They likely want to
+be picked up together.
 
 **Summary.** A differential pass (compiled `tur run` vs `tur --interpret`,
 Debug build at b58c91e6) over the Saffron surface described in
@@ -171,10 +180,41 @@ does not add its field type to that set. A vec element read does.
 accept` (the witness casts the lambda to `(fn [any] any)`; a bind lambda
 returns `(Option any)`). Interp: 3.55. `.fmap` on Option works. **Update 2026-09-10** (after H10 pinned lambda returns to `any`): the cast now passes, but the witness re-boxes the lambda's already-boxed result, so `(type-of (half (some 7.1)))` is `unknown` compiled (a nested box) and the next `cast` panics `any holds unknown, not Option`. The witness's `: any` return must not re-widen a body that is already `any`.
 
-**M2. `Functor[Result]` is not dynamically dispatchable.** `(.fmap (ok 21)
-f)` via `any`: `no instance of Functor for Result` on both back ends, while
-Option dispatches. `(ok 21)` in Saffron is a `(Result any any)`; the
-registry row is keyed differently.
+**M2. `Functor[Result]` is not dynamically dispatchable COMPILED.** *Update
+2026-09-10: the interpreter half is fixed; the compiled half is a
+representation gap, root-caused below -- not the keying this entry originally
+guessed.* `(.fmap (ok 21) f)` via `any` was `no instance of Functor for Result`
+on both back ends, while Option dispatches.
+
+Root cause, common to both back ends: `Option`'s instance head is the bare
+constructor (`definstance Functor [Option]`, a `TY_ADT`), but Result's is
+written PARTIALLY APPLIED -- `definstance Functor [(Result _ B)]`
+(`stdlib/result.tur:310`) -- which is a `TY_APP` chain. The interpreter
+compared `type_name(inst->type_args[0])` against the name the box reports, and
+`type_name` spells a chain `(type-app (type-app Result ?) B)`, never the
+`Result` that the receiver's own `type-of` reports, so the row could never
+match. Peeling the chain to its head makes the two spellings agree
+(`src/turi/eval.c`, `EX_DYN_METHOD`): interp now answers 42 and `type-of` says
+`Result`. Pinned by `tests/fixtures/saffron-dyn-hkt-partial-head`
+(`requires.interp-only`, since the compiled path still declines).
+
+**Still open, compiled -- and the obvious fix is a trap.** The same peel in
+`emit_instance_dispatch_recv_type` is NOT the fix, and was measured not to be.
+A hole-headed instance never gets a by-value spec: `.fmap` on a Result resolves
+to the erased carrier `__inst_Functor_fmap_Result_tyvar`, whose payloads are
+`int64_t`, on the TYPED path too -- while a Saffron `any` is a 16-byte
+`tur_tagged_t`. A witness minted on the peeled head therefore calls that
+carrier and tags its result with the id of the UNRESOLVED result type: a small
+TypeKind number (21), which is the PRIMITIVE tag space that function's own
+comment warns about. `type-of` then reads `unknown`, and -- the disqualifying
+part -- `is?` on the result answers a silent `false` where the interpreter
+answers `true`. That is strictly worse than the panic it replaces, so the
+decline stays and the honest `no instance of Functor for Result` is kept. Fix
+direction: mint a by-value spec for a hole-headed instance at its all-`any`
+instantiation and key the row on that. It is an ABI change touching the typed
+path (which is on the carrier today, and correct there), not a keying change.
+The measurement is recorded in the comment at
+`emit_instance_dispatch_recv_type` so the experiment is not repeated.
 
 **~~M3~~. RESOLVED 2026-09-10: the nullary ctor path (`elab_call.c`) builds the all-`any` instantiation in a Saffron file when no enclosing expectation pins it, matching the field widen for saturated ctors. Pinned by `tests/fixtures/saffron-nullary-parametric-ctor-any`. Was: a nullary ctor of a parametric ADT built in Saffron is not at the `any` instantiation.** `(defdata Opt [a] (Just a) (Nothing))`:
 `(is? (Nothing) (Opt any))` is false compiled / true interp; `match` on an
@@ -201,10 +241,21 @@ l))` -> `no type in this program has a field '.tail'` (`emit_expr.c:6338`,
 the field is the erased `:int` tail); interp answers `Cons`. A cons list
 cannot be walked through an `any` parameter compiled.
 
-**M8. `match` on an `any` against stdlib Option/Result is a static error**
-(`scrutinee must be an ADT type, got any`, `elab_structs.c:4261`) while a
-user `defdata` works. The guide's `Functor/Applicative/Monad` reachability
-claim is only via `is?`/`cast`.
+**~~M8~~. RESOLVED (verified 2026-09-10): `match` on an `any` holding a stdlib
+Option/Result agrees with a user `defdata`, on both back ends.** The arm-pattern
+inference in `elab_structs.c` patches an unannotated (`any`) scrutinee to the
+`AdtDef` that a constructor pattern names, and nothing on that path was ever
+specific to a user `defdata`; the H-series work of the same day (H2's nil-box
+miss, H10's lambda-return pin, M10's macro-span seam) is what let the stdlib
+sums reach it. Verified across four different `any` SOURCES, since only the
+first is a plain parameter default -- an unannotated parameter, a `map-get`
+result (a stdlib MACRO, whose span is not the Saffron file), a `vec-get`
+element read, and both sum families -- all agreeing compiled and interpreted.
+Pinned by `tests/fixtures/saffron-match-any-stdlib-sum`. Was: a static error
+(`scrutinee must be an ADT type, got any`, `elab_structs.c:4261`) while a user
+`defdata` worked. The guide's `Functor/Applicative/Monad` reachability claim
+being "only via `is?`/`cast`" is now stale for `match`; `.fmap` on an any-held
+Result is still M2 compiled.
 
 **~~M10~~. RESOLVED 2026-09-10: the seam and the truthiness rule also consult the call's / form's span and, since a macro expansion hides both (`when` is macros.tur's `if` over map.tur's condition), the dialect of the top-level form being elaborated (`Elab.toplevel_saffron`, set beside `toplevel_stmt` in pass 2). Pinned by `tests/fixtures/saffron-macro-any-seam-and-truthiness`; KNOWN row retired. Was: an `any` produced by a stdlib macro gets no checked seam into a typed parameter.** `(defn s [v : int] : int v)` then `(s (map-get #map{:k 7} :k))`
 is a static `TUR-E0001: expected int, got any` reported at

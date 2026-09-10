@@ -6877,11 +6877,24 @@ bool emit_instance_dispatch_recv_type(EmitCtx *ctx, TypeClassInstance *inst,
     if (!ctx || !inst || inst->n_type_args == 0) return false;
     Type recv = inst->type_args[0];
     if (recv.kind == TY_TYVAR || recv.kind == TY_UNKNOWN) return false;
-    /* A hole-headed partial application (`Functor [(Result _ E)]`) has no
+    /* A hole-headed partial application (`Functor [(Result _ B)]`) has no
      * single all-`any` instantiation to key on, and a TY_FORALL / anything
      * else that is neither a primitive nor a named ADT would fall through
      * `emit_any_type_id` to a bare TypeKind number -- which is a PRIMITIVE's
-     * tag space, so a row keyed on it could collide with `int` or `bool`. */
+     * tag space, so a row keyed on it could collide with `int` or `bool`.
+     *
+     * saffron-dynamic-surface-pass M2: peeling the chain to its head ADT and
+     * keying on `(Result any any)` -- the obvious "fix" -- is WRONG, and was
+     * measured to be.  A hole-headed instance never gets a by-value spec: both
+     * the typed and the dynamic path resolve `.fmap` to the erased carrier
+     * `__inst_Functor_fmap_Result_tyvar`, which takes and returns `int64_t`
+     * payloads, while a Saffron `any` is a 16-byte `tur_tagged_t`.  A witness
+     * minted on the peeled head therefore tags its result with the id of the
+     * UNRESOLVED result type (a small TypeKind number -- the very collision
+     * this comment warns about), and `is?` on the result answers a silent
+     * `false` where the interpreter answers `true`.  Declining here keeps the
+     * honest `no instance of <Class> for <Type>` panic.  The fix that would
+     * work is a by-value spec for the hole-headed instance, not a key. */
     if (recv.kind == TY_APP || recv.kind == TY_FORALL) return false;
     if (recv.kind == TY_ADT && !recv.as.adt_.def) return false;
     if (recv.kind == TY_ADT && recv.as.adt_.def && recv.as.adt_.def->n_type_params > 0) {
