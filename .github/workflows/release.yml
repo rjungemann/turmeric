@@ -49,23 +49,40 @@ jobs:
       - name: Smoke test
         run: ./build/tur --version
 
+      # PREFIX layout -- bin/, lib/, include/, share/ -- the same shape
+      # build-windows below has always produced.  These three legs shipped flat
+      # (`tur`, the .a files and stdlib/ all at the archive root) up to v0.46.0,
+      # for one reason that no longer holds: at the time the flat tree matched
+      # none of locate_runtime_lib's probes, so Windows was packaged the only
+      # way that could compile.  <exe_dir> is probed now, so both work and the
+      # difference is just four archives that do not look alike.
+      #
+      # The prefix layout is the one `tur` resolves natively rather than by
+      # accommodation -- resolve_stdlib_root step 3 is
+      # <exe_dir>/../share/turmeric/stdlib and locate_runtime_lib probes
+      # <exe_dir>/../lib -- and it is what every consumer restaged into by hand.
+      # See docs/archive/unify-release-archive-layout.md.
+      #
+      # KEEP the <exe_dir> probe in locate_runtime_lib regardless.  It costs one
+      # stat and it is what lets an archive published before this change keep
+      # working with a `tur` built after it.
       - name: Package
         run: |
           TAG=${GITHUB_REF_NAME}
           ARCHIVE="turmeric-${TAG}-${{ matrix.target }}.tar.gz"
 
-          mkdir -p dist/include/turi
+          mkdir -p dist/bin dist/lib dist/include/turi dist/share/turmeric
 
-          cp build/tur dist/
-          cp build/src/libturi.a dist/
+          cp build/tur dist/bin/
+          cp build/src/libturi.a dist/lib/
           # libturt_runtime.a is the one TUR_RT_AUTO will actually link.  Without
           # it in the archive, `tur run` from an extracted tarball fell back to
           # recompiling src/runtime/*.c -- which the archive does not ship -- and
           # failed at the C compile step.  Verified broken on macOS and Windows
-          # before this; docs/reported/release-archive-cannot-compile.md.
-          cp build/src/libturt_runtime.a dist/
+          # before this; docs/archive/release-archive-cannot-compile.md.
+          cp build/src/libturt_runtime.a dist/lib/
           cp src/turi/eval.h src/turi/env.h src/turi/value.h src/turi/fiber.h dist/include/turi/
-          cp -R stdlib dist/
+          cp -R stdlib dist/share/turmeric/
 
           tar -czf "${ARCHIVE}" -C dist .
           echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
@@ -83,7 +100,7 @@ jobs:
             (println "hello from the archive")
             0)
           EOF
-          out=$(cd verify && ./tur run hello.tur 2>&1) || {
+          out=$(cd verify && ./bin/tur run hello.tur 2>&1) || {
             printf '%s\n' "$out"
             echo "::error::the extracted archive cannot compile a program"
             exit 1
@@ -192,14 +209,14 @@ jobs:
           echo "$out"
           echo "Self-contained: no MSYS2 DLLs, runs with MSYS2 off PATH."
 
-      # PREFIX layout -- bin/, lib/, include/, share/ -- not the flat one the
-      # other legs use.  Flat is not merely a style choice there: `tur run` from
-      # a flat extract cannot compile anything.  locate_runtime_lib probes
-      # $TUR_RUNTIME_LIB, <exe_dir>/src, <exe_dir>/../lib and <root>/build/src,
-      # and a flat tree is none of them, so TUR_RT_AUTO falls back to source mode
-      # -- which wants src/runtime/*.c that no archive ships.  The prefix shape is
-      # what <exe_dir>/../lib and resolve_stdlib_root step 3 already understand.
-      # docs/reported/release-archive-cannot-compile.md tracks the other legs.
+      # PREFIX layout -- bin/, lib/, include/, share/ -- which the `build` legs
+      # above now share.  This job has always used it: at the time it was added
+      # a flat tree matched none of locate_runtime_lib's probes, so `tur run`
+      # from a flat extract could not compile anything, and this was the only
+      # shape that worked.  <exe_dir> is probed now, so the shape is no longer
+      # forced here -- but it stays, because it is the one
+      # <exe_dir>/../lib and resolve_stdlib_root step 3 resolve natively.
+      # docs/archive/unify-release-archive-layout.md.
       - name: Package
         run: |
           TAG=${GITHUB_REF_NAME}
