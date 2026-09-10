@@ -81,6 +81,46 @@ thread; the hot path is a register read and a subtract. Behaviour is unchanged
 either way -- both trigger measurements above reproduce identically with the
 cache in place.
 
+## A real-world instance, found after the fix
+
+The fixture this report names is synthetic -- 60 hand-written `(+ ...)` levels
+written to sit between the bound and the cliff. A real one turned up in the
+sibling `turmeric-spices` repo while surveying it:
+`spices/ecs/tests/for-each-arity-12.tur`, a 12-component `for-each` whose body
+is a 12-deep `(+ a (+ b (+ c ...)))` chain. The ECS `for-each` macro expands
+that into something far deeper.
+
+Measured three ways on this host:
+
+| compiler | stack | result |
+| --- | --- | --- |
+| `main` (pre-fix) | 8 MiB default | **crash** -- `AddressSanitizer: stack-overflow`, exit 134 |
+| `main` (pre-fix) | 64 MiB | TUR-E0712 at `tests/for-each-arity-12.tur:72:109` |
+| post-fix | 8 MiB default | TUR-E0712 + the stack note at depth 31, exit 1 |
+
+So the failure mode this report describes is not confined to a fixture written
+to provoke it: an ordinary spice test crashes the compiler on the documented
+bootstrap build, and did so before this change. That is also why the report was
+worth executing at its filed severity of "low" -- the severity was right about
+the blast radius and wrong about how reachable it is.
+
+**One caveat this measurement exposed, and it is a real cost.** The two triggers
+blame different spans. The counter fires at the deepest node and points at the
+user's expression (`for-each-arity-12.tur:72`); the headroom trigger fires at
+whichever node the walk happens to be emitting when the stack runs down, which
+here is inside the macro's own source (`src/ecs/query.tur:111`). Emission order
+is not source order, so the headroom-blamed span is not necessarily the deepest
+nesting and may sit in a library the user did not write.
+
+That is worse than the counter's span, and better than the alternative on this
+build, which is an abort with no span at all. The extra note is what keeps it
+honest -- it says the stack, not the nesting, is what stopped the walk, so a
+reader is not sent hunting for 40 levels of nesting at `query.tur:111`. If the
+span ever needs to be better, the fix is to carry the outermost in-progress
+user-code span alongside the depth counter and prefer it in the headroom case;
+that is a diagnostic-quality improvement, not a correctness one, and is not
+done here.
+
 **Not fixed, and out of scope here:** the same race is structurally available
 to the other unbounded-ish recursive walks that carry only a counter --
 `TR_MAX_TERM_DEPTH` (8000) and `TR_MAX_LET_DEPTH` (6000) in
