@@ -6803,6 +6803,81 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                                      &n_type_bindings);
             }
         }
+        /* saffron-dynamic-surface-pass (low): the WIDEN direction of the seam
+         * above.  `(map-assoc #map{:a 1} :c 7.1)` in a Saffron file was
+         * `function 'map-assoc-eq-o' arg 4: expected tyvar, got float`,
+         * reported inside stdlib/map.tur -- because the value parameter is the
+         * bare tyvar `V`, and the seam above handles only the other direction:
+         * an `any` ARGUMENT meeting a CONCRETE parameter.
+         *
+         * Widening every concrete argument at a tyvar parameter would be
+         * wrong.  `V` may be bound to something real by another argument, and
+         * a `(Map Sym int)` built in typed code must keep rejecting a float
+         * even when the call is written in a Saffron file.  So bind `V` from
+         * the SIBLINGS first, exactly as H9 does above, and widen only when
+         * what they determine is `any` -- which is what a Saffron container's
+         * element type always is.  Bind nothing, or bind it to anything else,
+         * and the ordinary error stands unchanged.
+         *
+         * The binding sibling here is an EARLIER argument (the map itself), so
+         * unlike H9 this needs no elaborate-a-later-sibling step: `args[j]` is
+         * already there.
+         *
+         * This is the call-position twin of `dl_saffron_widen_elem`, which
+         * widens a data LITERAL's elements before the homogeneous `vec-of`
+         * macro sees them -- same reason, same trade. */
+        if (!arg_ok && args[i] && args[i]->type.kind != TY_ANY &&
+            expected_arg_kind == TY_TYVAR && fn_binding &&
+            fn_type.kind == TY_FN &&
+            (lang_span_is_saffron(args[i]->span) ||
+             lang_span_is_saffron(call->span) || e->toplevel_saffron)) {
+            uint32_t fi_w = fn_binding->closure_fn_binding ? i + 1 : i;
+            /* A bare tyvar parameter has no entry in arg_full_types (that is
+             * for compound args), so fall back to the callee's own FnDef,
+             * which keeps the named tyvar -- the same two-step H9 uses. */
+            const Type *want_w =
+                (fn_type.as.fn.arg_full_types && fi_w < fn_type.as.fn.arity)
+                    ? fn_type.as.fn.arg_full_types[fi_w] : NULL;
+            if ((!want_w || want_w->kind != TY_TYVAR) &&
+                fn_binding->source_fn_def && fn_binding->source_fn_def->params &&
+                fi_w < fn_binding->source_fn_def->n_params &&
+                fn_binding->source_fn_def->params[fi_w])
+                want_w = &fn_binding->source_fn_def->params[fi_w]->type;
+            if (want_w && want_w->kind == TY_TYVAR && want_w->as.tyvar_.name) {
+                CallTypeBinding sib[16];
+                uint8_t n_sib = 0;
+                for (uint32_t j = 0; j < n_args; j++) {
+                    if (j == i || !args[j] || args[j]->type.kind == TY_ANY) continue;
+                    uint32_t fj = fn_binding->closure_fn_binding ? j + 1 : j;
+                    const Type *ej =
+                        (fn_type.as.fn.arg_full_types && fj < fn_type.as.fn.arity)
+                            ? fn_type.as.fn.arg_full_types[fj] : NULL;
+                    if (!ej && fn_binding->source_fn_def &&
+                        fn_binding->source_fn_def->params &&
+                        fj < fn_binding->source_fn_def->n_params &&
+                        fn_binding->source_fn_def->params[fj])
+                        ej = &fn_binding->source_fn_def->params[fj]->type;
+                    if (!ej || !call_type_has_named_tyvar(ej)) continue;
+                    (void)call_collect_type_bindings(ej, args[j]->type, sib, &n_sib);
+                }
+                uint8_t bi_w;
+                if (call_find_type_binding(sib, n_sib, want_w->as.tyvar_.name,
+                                           &bi_w) &&
+                    sib[bi_w].type.kind == TY_ANY) {
+                    Expr *widened = elab_coerce_to_any(e, args[i]);
+                    if (widened) {
+                        args[i] = widened;
+                        arg_ok = true;
+                        /* Record `V := any` for this call the way the unbox
+                         * side does, so the result type follows the argument
+                         * rather than collapsing the tyvar to a carrier. */
+                        (void)call_collect_type_bindings(want_w, args[i]->type,
+                                                         type_bindings,
+                                                         &n_type_bindings);
+                    }
+                }
+            }
+        }
         if (!arg_ok) {
             /* Phase 8: Enhanced type mismatch with error code */
             /* IT1: Use union-specific error code when union type is involved */

@@ -432,9 +432,28 @@ yet`, interp `true`. Parity note; the guide documents the panic.
   the defstruct gate, MEASURED not assumed: a record `defdata` with an `any`
   field and no `defstruct` anywhere produced those four errors before the
   guard. Pinned by `tests/fixtures/saffron-dyn-read-of-any-field`.
-- `(map-assoc #map{:a 1} :c 7.1)` fails with `map-assoc-eq-o arg 4: expected
+- ~~`(map-assoc #map{:a 1} :c 7.1)` fails with `map-assoc-eq-o arg 4: expected
   tyvar, got float`; the value needs an explicit `(:: 7.1 any)` and the
-  message does not say so.
+  message does not say so.~~ **RESOLVED 2026-09-10** -- by removing the need
+  for the ascription rather than by improving the message. This is the WIDEN
+  direction of the D5 seam: the seam handles an `any` ARGUMENT meeting a
+  CONCRETE parameter, while here the argument is concrete and the parameter is
+  the bare tyvar `V` that nothing had bound, so a Saffron `map-assoc` could
+  only ever take int values though it assocs into a `(Map Sym any)`. (The
+  error surfaced inside stdlib/map.tur because every `map-*` accessor is a
+  macro -- M10's observation.) The fix does NOT widen every concrete argument
+  at a tyvar parameter: it binds the tyvar from the SIBLINGS first, exactly as
+  H9 does, and widens only when they determine `any`. So the rule keys on what
+  the CONTAINER is, not on the dialect -- a `(Map Sym int)` annotated in a
+  Saffron file still rejects a float, which
+  `tests/fixtures/errors/saffron-map-assoc-typed-value-still-checked` pins
+  against the widen relaxing into "concrete at a tyvar always widens here",
+  which would erase the element type of every annotated container in the
+  dialect. The positive half is
+  `tests/fixtures/saffron-map-assoc-widens-value` (a float and a cstr value,
+  plus a read of the pre-existing entry). Call-position twin of
+  `dl_saffron_widen_elem`, which widens a data literal's elements before the
+  homogeneous `vec-of` macro sees them.
 - `(defn mkv [] [1 2.5])` is parsed as the generic form (type params `[]`,
   params `[1 2.5]`): `parameter must be a symbol or type annotation`.
 - Guide: the boundary example `(scale my-vec 2)` with `v : (Vec int)` panics
