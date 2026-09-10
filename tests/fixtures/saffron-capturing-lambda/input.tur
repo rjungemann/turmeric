@@ -1,0 +1,35 @@
+#lang saffron
+;; saffron-dynamic-surface-pass H1: EVERY capturing lambda in a Saffron file
+;; lost its environment.  `(defn adder [k] (fn [x] (+ x k)))` was emitted as
+;; a plain function with `k` free (cc: 'k' undeclared) and the interpreter --
+;; which builds the closure env from the same capture list -- said
+;; `unbound variable: k`.  The free-variable walker (collect_free_vars) had
+;; no arm for the Saffron operator layer's nodes (EX_DYN_OP / EX_DYN_CALL /
+;; EX_DYN_FIELD / EX_DYN_METHOD), so a variable referenced only inside one of
+;; them was never collected.  A non-capturing lambda, which is all the guide
+;; and the fixtures used, never showed it.
+;;
+;; One capture per node kind: an operator, a dynamic call, a field read, a
+;; method dispatch, plus a let-local capture and a closure returned through
+;; an unannotated defn and called through a parameter.
+;; 7.25 rather than 7.0: the float rides the box by bit pattern.
+(defstruct Pt [x : float])
+(defclass Kind [a] (kind-of [x] : cstr))
+(definstance Kind [float] (kind-of [x] "F"))
+(defn adder [k] (fn [x] (+ x k)))
+(defn caller [f] (fn [x] (f x)))
+(defn field-of [p] (fn [] (.x p)))
+(defn kind-via [v] (fn [] (.kind-of v)))
+(defn app [f x] (f x))
+(defn call0 [f] (f))
+(defn main [] : int
+  (let [f (adder 7.25)]
+    (println (f 1)))
+  (println (app (adder 7.25) 1))
+  (println (app (caller (adder 1)) 7.25))
+  (println (call0 (field-of (make-struct Pt 7.25))))
+  (println (call0 (kind-via 7.25)))
+  (let [k "s"
+        g (fn [x] (if x k "no"))]
+    (println (g true)))
+  0)

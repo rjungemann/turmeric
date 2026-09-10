@@ -364,7 +364,7 @@ Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
          * `tur_contract_check(<tur_tagged_t>, ...)`, which does not compile.
          * D4's truthiness is the same answer `if` already uses for the same
          * question; the two now share one helper. */
-        pred_e = elab_saffron_truthy(e, pred_e);
+        pred_e = elab_saffron_truthy(e, pred_e, span);
 
         Expr *check_expr = pred_e;
         if (cv_b) {
@@ -432,7 +432,7 @@ Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
     Expr *pred_e = elab_form(e, (Form *)pred);
     if (!pred_e) return body;
     rt_diag_impure_pred(e, pred_e, span);
-    pred_e = elab_saffron_truthy(e, pred_e);   /* D6, see rt_inject_param_checks */
+    pred_e = elab_saffron_truthy(e, pred_e, span);   /* D6, see rt_inject_param_checks */
 
     Expr **args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
     args[0] = pred_e;
@@ -8549,7 +8549,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             if (ct_pre_form && check_fn) {
                 Expr *pred_e = elab_form(e, (Form *)ct_pre_form);
                 rt_diag_impure_pred(e, pred_e, call->span);
-                pred_e = elab_saffron_truthy(e, pred_e);   /* D6, see above */
+                pred_e = elab_saffron_truthy(e, pred_e, call->span);   /* D6, see above */
                 if (pred_e) {
                     /* Build call: (tur-contract-check pred "Precondition failed") */
                     Expr **check_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
@@ -9486,6 +9486,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
  * Lifts to a static function. For now, we require a return type annotation.
  * Example: (fn [x y] :int (+ x y)) */
 Expr *elab_fn(Elab *e, const Form *call) {
+    /* H10 x call/cc: consumed here so only the immediate receiver sees it. */
+    bool is_callcc_receiver = e->in_callcc_receiver;
+    e->in_callcc_receiver = false;
     /* Minimum: (fn [params...] body...) */
     if (call->as.list.len < 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -10263,6 +10266,33 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* Pop scope */
     e->scope = inner.parent;
     scope_free(&inner);
+
+    /* saffron-dynamic-surface-pass H10: the dialect's `any` default reached
+     * `defn` (elab_defn pins the signature) but not `fn`, so a lambda whose
+     * body has a concrete type -- `(fn [] 7.25)`, `(fn [x] "s")` -- was typed
+     * `(fn [] float)` and the dynamic call site refused it: "cannot call this
+     * function here -- it takes a different number of arguments".  A body
+     * that is already an `any` (`(fn [x] (+ x 1))`) never showed it.
+     *
+     * Two gates.  An EXPECTED function type (this lambda is an argument to a
+     * typed callee -- `vec-filter`'s predicate, a typed callback) already
+     * decides the return, so the default yields to it exactly as the
+     * parameter default above does.  And a nil body stays nil, so a
+     * side-effect lambda keeps the shape a `(fn [T] nil)` slot wants. */
+    if (!return_annotated && return_kind == TY_NIL && body &&
+        body->type.kind != TY_NIL && body->type.kind != TY_NEVER &&
+        body->type.kind != TY_ANY && lang_span_is_saffron(call->span) &&
+        !is_callcc_receiver &&
+        !(e->expected_type && e->expected_type->kind == TY_FN)) {
+        return_kind = TY_ANY;
+    }
+    /* TY2.2 at the lambda: a `: any` return (declared, or pinned just above)
+     * boxes a narrower body, as elab_defn does.  Without it an explicit
+     * `(fn [] : any 7.25)` emitted `return 7.25` into a tur_tagged_t slot. */
+    if (return_kind == TY_ANY && body && body->type.kind != TY_ANY &&
+        body->type.kind != TY_NEVER) {
+        body = elab_coerce_to_any(e, body);
+    }
 
     /* Infer return type from body if not specified.
      *

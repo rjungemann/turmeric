@@ -6197,20 +6197,40 @@ static char *emit_dyn_call(EmitCtx *ctx, Buf *body, const Expr *e) {
     for (uint32_t i = 0; i < n; i++)
         argv[i] = emit_value(ctx, body, e->as.dyn_call_.args[i]);
 
-    /* A statement expression, not a nested call: the callee box is read three
-     * times (check, thunk, env) and evaluating its expression three times would
-     * run any side effect three times. */
+    /* The callee box is read three times (check, thunk, env), so it is bound
+     * to a temp first -- as a STATEMENT in the body, not inside a `({ ... })`
+     * around the call.  Two reasons, both the JIT's:
+     *
+     *  - TUR_APPLYn_T casts each argument to its declared C type, and here
+     *    every argument IS a tur_tagged_t, so that was `(tur_tagged_t)(a)`,
+     *    a cast to a struct type.  gcc and clang take the identity struct
+     *    cast as an extension; c2mir enforces C11 6.5.4 ("conversion to
+     *    non-scalar type requested") and every Saffron program with a
+     *    dynamic call fell back to cc on it.  The prototype cast on the thunk
+     *    pointer below is the macro's; the no-op argument casts are gone.
+     *  - A struct-valued statement expression in a call's ARGUMENT LIST is
+     *    miscompiled by c2mir/MIR-gen on x86-64 (see
+     *    ensure_any_carrier_bridge); `(if (f x) ...)` puts the dynamic call
+     *    exactly there, inside `__tur_dyn_truthy(...)`.  Hoisting the box
+     *    leaves a plain call expression, which the engine compiles right.
+     *
+     * Evaluation order is unchanged: the callee expression was emitted (and
+     * its statements queued) before the arguments' were, and the check still
+     * runs before any argument is read. */
+    char *dc = fresh_tmp(ctx);
+    buf_printf(body,
+               "tur_tagged_t %s = (%s); "
+               "__tur_dyn_call_check(TUR_GETTAG(%s), %lld);\n",
+               dc, fnv, dc, (long long)want_id);
     Buf out; buf_init(&out);
-    buf_printf(&out,
-               "({ tur_tagged_t __tur_dc = (%s); "
-               "__tur_dyn_call_check(TUR_GETTAG(__tur_dc), %lld); "
-               "TUR_APPLY%u_T(tur_tagged_t",
-               fnv, (long long)want_id, n);
+    buf_puts(&out, "((tur_tagged_t (*)(void *");
     for (uint32_t i = 0; i < n; i++) buf_puts(&out, ", tur_tagged_t");
-    buf_puts(&out, ", TUR_UNTAG(__tur_dc)");
+    buf_printf(&out, "))(intptr_t)TUR_CLOSURE_FN(TUR_UNTAG(%s)))"
+                     "((void *)(intptr_t)TUR_UNTAG(%s)", dc, dc);
     for (uint32_t i = 0; i < n; i++) buf_printf(&out, ", %s", argv[i]);
-    buf_puts(&out, "); })");
+    buf_puts(&out, ")");
     buf_putc(&out, '\0');
+    free(dc);
 
     free(fnv);
     for (uint32_t i = 0; i < n; i++) free(argv[i]);
@@ -6680,11 +6700,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                (long long)tag, slot);
                     free(slot);
                 } else {
-                    buf_printf(&out,
-                        "({ %s *__tur_box = (%s *)malloc(sizeof(%s)); "
-                        "*__tur_box = (%s); TUR_REGION_NOTE_WORDS(__tur_box, sizeof *__tur_box); "
-                        "TUR_TAG(%lld, (int64_t)(intptr_t)__tur_box); })",
-                        cn, cn, cn, inner, (long long)tag);
+                    /* The box is built by STATEMENTS in the body and the
+                     * expression is the bare TUR_TAG, not a `({ ... })`
+                     * yielding the box: a struct-valued statement expression
+                     * in a call's argument list is miscompiled by the JIT's
+                     * c2mir/MIR-gen on x86-64 -- `(each show xs)` with `xs` a
+                     * by-value ADT reached `each` with `show`'s box clobbered
+                     * (saffron-higher-order, engine only, arm64 clean).  See
+                     * ensure_any_carrier_bridge for the other two shapes. */
+                    char *bx = fresh_tmp(ctx);
+                    buf_printf(body,
+                        "%s *%s = (%s *)malloc(sizeof(%s)); "
+                        "*%s = (%s); TUR_REGION_NOTE_WORDS(%s, sizeof *%s);\n",
+                        cn, bx, cn, cn, bx, inner, bx, bx);
+                    buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)%s)",
+                               (long long)tag, bx);
+                    free(bx);
                 }
             } else if (e->type.kind == TY_ANY && inj_pt.kind == TY_UNION) {
                 /* union-to-any-widen-emits-uncompilable-c: a UNION payload is
@@ -6819,11 +6850,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * so unbox by dereferencing the pointer -- the ADT analogue of the
                  * struct deref above. */
                 const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, e->type));
-                buf_printf(&out,
-                    "({ tur_tagged_t __tur_c = (%s); "
-                    "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
-                    "*(%s *)(intptr_t)TUR_UNTAG(__tur_c); })",
-                    inner, (long long)target_tag, cn);
+                /* The box read and the tag check are STATEMENTS in the body
+                 * and the expression is the bare dereference, not a
+                 * `({ ... })` yielding the aggregate: a struct-valued
+                 * statement expression is miscompiled by the JIT's
+                 * c2mir/MIR-gen on x86-64 -- as the initializer of a `match`
+                 * scrutinee it clobbered a sibling parameter, so `(match xs
+                 * ...)` followed by `(f n)` reached `f` with a wrong tag
+                 * (saffron-higher-order, engine only, arm64 clean).  The
+                 * scalar arms beside this one yield a word and are fine. */
+                char *cb = fresh_tmp(ctx);
+                buf_printf(body,
+                    "tur_tagged_t %s = (%s); "
+                    "__tur_any_cast_check(TUR_GETTAG(%s), %lld);\n",
+                    cb, inner, cb, (long long)target_tag);
+                buf_printf(&out, "(*(%s *)(intptr_t)TUR_UNTAG(%s))", cn, cb);
+                free(cb);
             } else {
                 /* codegen-gcc14-permerrors, the Saffron container seam: this
                  * arm used to spell the cast from `target_kind` ALONE --

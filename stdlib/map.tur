@@ -425,12 +425,30 @@
 ;;; comparator PER ENTRY, which is what makes mixing them in one set sound:
 ;;; this is precisely how a heterogeneous `set-of` already behaved before it
 ;;; had an honest type.  An unrecognised payload keys by its type name, like
-;;; its hash.  The arms use the `.mk-box` method spelling on purpose: a bare
+;;; its hash.  The Sym arm keeps keyword keys apart (pointer identity, as
+;;; MapKey[Sym]); without it every keyword collapsed onto the name "Sym"
+;;; (saffron-dynamic-surface-pass H4).  The arms use the `.mk-box` method spelling on purpose: a bare
 ;;; `mk-box` resolves in the VALUE namespace, where a user `(defn mk-box ...)`
 ;;; -- a common name for a `Box` constructor helper -- legitimately shadows the
 ;;; method (TUR-W0039), and this body is elaborated in the user's program.
 ;;;
 ;;; Since: saffron-lang-plan S6 (MapKey[any])
+
+;;; saffron-dynamic-surface-pass H4: the Sym instance (MapKey) lives HERE, beside its
+;;; class, rather than in sym.tur (which the autoloader reads later), so that
+;;; the `any` instance below can name it in its Sym arm.  Non-orphan either
+;;; way: the class is defined in this module.
+;;; MapKey [Sym] -- interned-symbol pointer carrier.  Symbols are deduplicated,
+;;; so pointer identity is content equality; the carrier is the pointer-as-int
+;;; and the comparator is plain integer (identity) equality.
+
+
+(definstance MapKey [Sym]
+  (mk-box [x] : int ```c return (int64_t)(intptr_t)x; ```)
+  (mk-cmp [x]
+    : int
+    ```c return (int64_t)(intptr_t)__TUR_CNAME_tur-int-carrier-eq?__; ```)
+  (mk-owned? [x] 0))
 
 (definstance MapKey [any]
   (mk-box [x]
@@ -441,7 +459,9 @@
         (.mk-box x)
         (if (is? x float)
           (.mk-box x)
-          (if (is? x bool) (.mk-box x) (.mk-box (type-of x)))))))
+          (if (is? x bool)
+            (.mk-box x)
+            (if (is? x Sym) (.mk-box x) (.mk-box (type-of x))))))))
   (mk-cmp [x]
     : int
     (if (is? x int)
@@ -450,7 +470,9 @@
         (.mk-cmp x)
         (if (is? x float)
           (.mk-cmp x)
-          (if (is? x bool) (.mk-cmp x) (.mk-cmp (type-of x)))))))
+          (if (is? x bool)
+            (.mk-cmp x)
+            (if (is? x Sym) (.mk-cmp x) (.mk-cmp (type-of x))))))))
   (mk-owned? [x]
     : int
     (if (is? x int)
@@ -459,7 +481,9 @@
         (.mk-owned? x)
         (if (is? x float)
           (.mk-owned? x)
-          (if (is? x bool) (.mk-owned? x) (.mk-owned? (type-of x))))))))
+          (if (is? x bool)
+            (.mk-owned? x)
+            (if (is? x Sym) (.mk-owned? x) (.mk-owned? (type-of x)))))))))
 ;;; ============================================================================
 ;;; The typed Map[K V] accessor surface (TMS3).
 ;;;
@@ -562,7 +586,9 @@
 ;;;
 ;;; Returns:
 ;;;   The value of type V, or 0 (none) if absent. For a non-int value type read
-;;;   the result with an ascription, e.g. (:: (map-get m k) :float).
+;;;   the result with an ascription, e.g. (:: (map-get m k) :float). When V is
+;;;   `any` a miss is the nil box (falsy under Saffron truthiness), on both
+;;;   back ends.
 ;;;
 ;;; Example:
 ;;;   (map-get m "name")  ; => value or 0

@@ -1,0 +1,29 @@
+#lang saffron
+;; saffron-dynamic-surface-pass H8: a TYPED function value held in an `any`
+;; could not be called compiled.  A dynamic call checks the box's signature
+;; id against the all-`any` signature of the call site, so `(app inc-typed
+;; 41)` -- `inc-typed` being `(fn [int] int)` -- panicked "cannot call this
+;; function here -- it takes a different number of arguments, or parameters
+;; this call site cannot supply", while the interpreter answered 42.
+;;
+;; The widen now wraps a NAMED typed function in an all-`any` adaptor lambda
+;; `(fn [__da0] (inc-typed __da0))`: its parameters take the dialect default,
+;; the inner call goes through the ordinary checked seam per argument (so a
+;; wrong payload still panics `cast: any holds ...`), and its return takes
+;; the `any` pin.  A typed closure produced by an EXPRESSION is not covered.
+;; 7.25 rather than 7.0: the float rides the box by bit pattern.
+(defn inc-typed [n : int] : int (+ n 1))
+(defn half [x : float] : float (/ x 2.0))
+(defn add2 [a : int b : int] : int (+ a b))
+(defn is-pos? [x : float] : bool (> x 0.0))
+(defn app [f x] (f x))
+(defn app2 [f x y] (f x y))
+(defn main [] : int
+  (println (app inc-typed 41))
+  (println (app half 7.25))
+  (println (app2 add2 40 2))
+  (println (app is-pos? 7.25))
+  (println (type-of (app half 7.25)))
+  (let [f inc-typed]
+    (println (app f 1)))
+  0)

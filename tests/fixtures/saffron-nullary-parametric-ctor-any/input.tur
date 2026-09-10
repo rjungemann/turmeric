@@ -1,0 +1,23 @@
+#lang saffron
+;; saffron-dynamic-surface-pass M3: a NULLARY constructor of a parametric ADT
+;; built in a Saffron file.  The ctor widen ascribes type-variable FIELDS to
+;; `any`, and `(Nothing)` has none, so it was built at the bare ADT while
+;; `(Just 1)` was `(Opt any)`: `(is? (Nothing) (Opt any))` was false compiled
+;; (true interpreted, which has no instantiation to check) and a `match` on
+;; an `any` holding it panicked `different instantiation of Opt`.  The
+;; nullary ctor path now builds the all-`any` instantiation in a Saffron
+;; file when no enclosing expectation pins it.
+;; 7.25 rather than 7.0: the payload rides the box by bit pattern.
+(defdata Opt [a] (Just a) (Nothing))
+(defn k [o] (type-of o))
+(defn isopt [o] (is? o (Opt any)))
+(defn m [o] (match o (Just x) x (Nothing) "none"))
+(defn main [] : int
+  (println (k (Nothing)))
+  (println (isopt (Just 7.25)))
+  (println (isopt (Nothing)))
+  (println (m (Just 7.25)))
+  (println (m (Nothing)))
+  ;; an enclosing ascription still pins the instantiation
+  (println (type-of (:: (:: (Nothing) (Opt int)) any)))
+  0)

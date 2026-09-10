@@ -1,5 +1,6 @@
 /* elab_core.c -- Elab state, scope, free-var analysis, binding/move/linear-state helpers. */
 #include "elab_internal.h"
+#include "lang_layers.h"   /* saffron-dynamic-surface-pass H6: lang_span_is_saffron */
 #include "mangle.h"
 #include <string.h>  /* memset for elab_init_state */
 
@@ -110,6 +111,15 @@ uint32_t fwd_decl_scan_params(Arena *arena, const Form *params_f, TypeKind **out
      * (arbitrary-fn-arity: no MAX_FN_ARITY ceiling). */
     uint32_t cap = params_f->as.list.len ? params_f->as.list.len : 1;
     TypeKind *arg_kinds = (TypeKind *)arena_alloc(arena, cap * sizeof(TypeKind));
+    /* saffron-dynamic-surface-pass H6: in a Saffron file an UNANNOTATED
+     * parameter is `any` (D3), and this forward decl is what a caller
+     * elaborated earlier than the callee checks against -- with the `int`
+     * placeholder, `(later 7.25 "s")` above `(defn later [a b] ...)` was
+     * "expected int, got float", and mutual recursion emitted a call whose C
+     * signature the definition did not have.  A slot that an annotation
+     * follows is handled below exactly as before: the annotation either
+     * commits a scalar kind or restores the compound placeholder. */
+    bool saffron = lang_span_is_saffron(params_f->span);
     for (uint32_t pi = 0; pi < params_f->as.list.len; pi++) {
         const Form *p = params_f->as.list.items[pi];
         /* `^`-prefixed substructural / fat / mut markers annotate the next
@@ -143,12 +153,16 @@ uint32_t fwd_decl_scan_params(Arena *arena, const Form *params_f, TypeKind **out
                      k == TY_NIL || k == TY_PTR_VOID || k == TY_SYM ||
                      k == TY_ANY)) {
                     arg_kinds[arity - 1] = k;
+                } else {
+                    arg_kinds[arity - 1] = TY_INT;   /* compound: the placeholder */
                 }
+            } else {
+                arg_kinds[arity - 1] = TY_INT;       /* compound: the placeholder */
             }
             continue;
         }
         /* Otherwise this form opens a new parameter slot. */
-        arg_kinds[arity] = TY_INT;
+        arg_kinds[arity] = saffron ? TY_ANY : TY_INT;
         arity++;
     }
     *out_arg_kinds = arg_kinds;
@@ -424,6 +438,23 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 case EX_ANY_TYPE_OF:  ls[lsp++] = cur->as.any_type_of_.value;   break;
                 case EX_ANY_IS:       ls[lsp++] = cur->as.any_is_.value;        break;
                 case EX_ANY_CAST:     ls[lsp++] = cur->as.any_cast_.value;      break;
+                /* saffron-dynamic-surface-pass H1: the Saffron operator layer's
+                 * own nodes, mirrored in the main traversal below. */
+                case EX_DYN_OP:
+                    for (uint32_t i = cur->as.dyn_op_.n_args; i > 0; i--)
+                        ls[lsp++] = cur->as.dyn_op_.args[i-1];
+                    break;
+                case EX_DYN_CALL:
+                    for (uint32_t i = cur->as.dyn_call_.n_args; i > 0; i--)
+                        ls[lsp++] = cur->as.dyn_call_.args[i-1];
+                    ls[lsp++] = cur->as.dyn_call_.fn;
+                    break;
+                case EX_DYN_FIELD:  ls[lsp++] = cur->as.dyn_field_.obj;  break;
+                case EX_DYN_METHOD:
+                    for (uint32_t i = cur->as.dyn_method_.n_args; i > 0; i--)
+                        ls[lsp++] = cur->as.dyn_method_.args[i-1];
+                    ls[lsp++] = cur->as.dyn_method_.obj;
+                    break;
                 case EX_MAKE_STRUCT:
                     for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--)
                         ls[lsp++] = cur->as.make_struct_.field_values[i-1];
@@ -908,6 +939,32 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
              * exactly this walk's answer, so a missed `v` never rode the env. */
             case EX_UNION_INJECT:
                 stack[sp++] = cur->as.union_inject_.value;
+                break;
+            /* saffron-dynamic-surface-pass H1: a captured variable referenced
+             * only inside a dynamic operator, call, field read or method
+             * dispatch was never collected -- the walker had no arm for the
+             * Saffron nodes -- so `(defn adder [k] (fn [x] (+ x k)))` was
+             * emitted as a plain function with `k` free (cc: undeclared) and
+             * the interpreter, which builds the closure env from this same
+             * list, reported `unbound variable: k`.  Every capturing lambda
+             * in a Saffron file was affected; a non-capturing one, which is
+             * all the fixtures had, was not. */
+            case EX_DYN_OP:
+                for (uint32_t i = cur->as.dyn_op_.n_args; i > 0; i--)
+                    stack[sp++] = cur->as.dyn_op_.args[i-1];
+                break;
+            case EX_DYN_CALL:
+                for (uint32_t i = cur->as.dyn_call_.n_args; i > 0; i--)
+                    stack[sp++] = cur->as.dyn_call_.args[i-1];
+                stack[sp++] = cur->as.dyn_call_.fn;
+                break;
+            case EX_DYN_FIELD:
+                stack[sp++] = cur->as.dyn_field_.obj;
+                break;
+            case EX_DYN_METHOD:
+                for (uint32_t i = cur->as.dyn_method_.n_args; i > 0; i--)
+                    stack[sp++] = cur->as.dyn_method_.args[i-1];
+                stack[sp++] = cur->as.dyn_method_.obj;
                 break;
             case EX_ANY_TYPE_OF:
                 stack[sp++] = cur->as.any_type_of_.value;

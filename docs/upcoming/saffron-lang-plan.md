@@ -1527,7 +1527,10 @@ Still to do, and the ORDER is now measured rather than assumed:
      are already normalized to one key type by the lowering above the widen.
      `tests/fixtures/saffron-map-literal`. (A heterogeneous key needs
      `Hash[any]`/`MapKey[any]`, which now exist -- see the set row -- but the
-     key normalization still runs first; keying a map by `any` is unexplored.)
+     key normalization still runs first.  Keying a map by `any` works since
+     2026-09-10: the instances gained a Sym arm and an `any` key agrees with
+     the typed key on hash, carrier and comparator -- saffron-dynamic-surface-
+     pass H3/H4.)
    - `#set{...}` -- **widens like `[...]` since 2026-09-09.** It had worked
      heterogeneously WITHOUT a widen only because `set-of` had no homogeneity
      check: each element resolved its own `hash`/`mk-box`/`mk-cmp` and the set

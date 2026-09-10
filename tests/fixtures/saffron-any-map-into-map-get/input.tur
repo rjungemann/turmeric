@@ -1,0 +1,24 @@
+#lang saffron
+;; saffron-dynamic-surface-pass H9: a map held in an unannotated (`any`)
+;; parameter, handed to a map accessor.  `(map-get m k)` expands to
+;; `(tur-map-kcheck m (& k))`, whose `(Map K V)` seam ran on argument 0
+;; before the key had bound K, so K and V were both grounded to `any` and the
+;; checked cast failed: `cast: any holds a different instantiation of Map`
+;; against the literal's `(Map Sym any)`.  The seam now binds what the other
+;; arguments already determine (K := Sym from the key) and grounds only the
+;; genuinely open V.  The interpreter, which has no instantiation to check,
+;; always answered.
+;; 7.25 rather than 7.0: the value rides the box by bit pattern.
+(defn lookup [m k : Sym] (map-get m k))
+(defn has [m k : Sym] (map-has? m k))
+(defn put [m k : Sym v] (map-assoc m k v))
+(defn main [] : int
+  (let [m #map{:a 1 :b 7.25}]
+    (println (lookup m :a))
+    (println (cast (lookup m :b) float))
+    (println (has m :b))
+    (println (has m :zzz))
+    (let [m2 (put m :c "three")]
+      (println (map-count (cast m2 (Map Sym any))))
+      (println (type-of (lookup m2 :c)))))
+  0)

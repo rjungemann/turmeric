@@ -6187,6 +6187,36 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                 emit_abi_scan_expr(ctx, e->as.dyn_call_.args[i], items, n_items);
             break;
         case EX_DYN_FIELD:
+            /* saffron-dynamic-surface-pass H11: a dynamic field read WIDENS
+             * the field it reads (emit_dyn_field boxes it with
+             * dyn_widen_to_any), so every candidate field's type is a tag
+             * this TU's boxes can carry -- the instance rows for it must be
+             * published, or `(.kind-of (.fld p))` panics `no instance ... for
+             * float` unless something else in the file happened to widen a
+             * float.  Same candidate filter as the emit site (one record
+             * ctor, no type params) minus the by-value test: noting a type
+             * the read will not produce costs an unused row, missing one
+             * costs the dispatch. */
+            if (e->as.dyn_field_.field && e->as.dyn_field_.field->name) {
+                const char *fname = e->as.dyn_field_.field->name;
+                for (uint32_t i = 0; i < n_items; i++) {
+                    const Expr *it = items[i];
+                    if (!it || (it->kind != EX_DEFDATA && it->kind != EX_DEFGADT)) continue;
+                    AdtDef *def = (it->kind == EX_DEFGADT) ? it->as.defgadt_.def
+                                                           : it->as.defdata_.def;
+                    if (!def || def->n_ctors != 1 || def->n_type_params != 0) continue;
+                    CtorDef *ctor = def->ctors[0];
+                    if (!ctor || !ctor->is_record) continue;
+                    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                        const CtorField *f = &ctor->fields[fi];
+                        if (!f->name || strcmp(f->name, fname) != 0) continue;
+                        Type ft = f->full_type ? *f->full_type
+                                               : type_simple(f->kind, CK_COPY);
+                        if (ft.kind == TY_TYVAR || ft.kind == TY_UNKNOWN) continue;
+                        emit_abi_note_any_widen(ctx, ft);
+                    }
+                }
+            }
             emit_abi_scan_expr(ctx, e->as.dyn_field_.obj, items, n_items);
             break;
         case EX_DYN_METHOD:
@@ -9812,6 +9842,34 @@ bool rt_split_canonical_emission(void) { return g_rt_split_all_gates; }
  * integer (or an int box's word as a double) produces a denormal, not a
  * rounding error.  `__tur_dyn_f` and `__tur_dyn_mkf` are the only two places
  * that pun, and every arithmetic and comparison path goes through them. */
+/* saffron-dynamic-surface-pass H2: the carrier -> `any` bridge, as a helper
+ * function rather than an expression.  A carrier word of 0 is a map accessor's
+ * documented miss, and the bridge answers the nil box for it instead of
+ * dereferencing 0.  It is a FUNCTION because the two expression spellings both
+ * failed in the JIT engine on x86-64: a struct-valued `?:` and then an if/else
+ * inside a `({ ... })`, each correct under cc, each miscompiled by c2mir/MIR-gen
+ * when the bridge sat in a call's argument list (saffron-prelude's float fold
+ * read the element twice; saffron-container-param-cast-shape printed 1 for
+ * 4.25; arm64 was clean).  A plain call is in the engine's subset everywhere.
+ * Emitted on demand so a TU with no `any` carrier does not carry it, and
+ * `static inline` so a TU that emits it unused does not take
+ * -Wunused-function.  The nil tag is the TypeKind value, spelled from the enum
+ * for the same reason the DYNTAG macros are. */
+void ensure_any_carrier_bridge(EmitCtx *ctx) {
+    if (!ctx || ctx->any_bridge_emitted) return;
+    ctx->any_bridge_emitted = true;
+    Buf *out = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    if (!out) return;
+    buf_printf(out,
+        "/* carrier -> any: a 0 carrier (a map accessor's miss) is the nil box */\n"
+        "static inline tur_tagged_t __tur_any_of_carrier(int64_t __p) {\n"
+        "    tur_tagged_t __v;\n"
+        "    if (__p) { __v = *(tur_tagged_t *)(intptr_t)__p; }\n"
+        "    else { __v.tag = %d; __v.val = 0; }\n"
+        "    return __v;\n"
+        "}\n", (int)TY_NIL);
+}
+
 void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
     if (!ctx || ctx->saffron_dyn_emitted) return;
     ctx->saffron_dyn_emitted = true;
@@ -9842,6 +9900,11 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
     buf_printf(out, "#define TUR_DYNTAG_INT   %d\n",   (int)TY_INT);
     buf_printf(out, "#define TUR_DYNTAG_FLOAT %d\n",   (int)TY_FLOAT);
     buf_printf(out, "#define TUR_DYNTAG_CSTR  %d\n",   (int)TY_CSTR);
+    /* saffron-dynamic-surface-pass H5: a Sym has a tag of its own (the bare
+     * TypeKind, like the other primitives) but the dynamic runtime had no
+     * row for it: `type-of` said "unknown", `=` panicked "a value of that
+     * type", println likewise. */
+    buf_printf(out, "#define TUR_DYNTAG_SYM   %d\n",   (int)TY_SYM);
     buf_puts(out,
         "static inline const char *__tur_dyn_op_name(int __op) {\n"
         "    switch (__op) {\n"
@@ -9868,6 +9931,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
      * is user-visible and a fixture can assert it on either back end, so the
      * two must agree word for word rather than approximately. */
     buf_puts(out,
+        "static const char *__tur_any_type_name(int64_t tag);\n"
         "static inline const char *__tur_dyn_argname(int64_t __t) {\n"
         "    switch (__t) {\n"
         "    case TUR_DYNTAG_INT:   return \"int\";\n"
@@ -9875,7 +9939,13 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    case TUR_DYNTAG_BOOL:  return \"bool\";\n"
         "    case TUR_DYNTAG_CSTR:  return \"cstr\";\n"
         "    case TUR_DYNTAG_NIL:   return \"nil\";\n"
-        "    default:               return \"value of that type\";\n"
+        "    case TUR_DYNTAG_SYM:   return \"Sym\";\n"
+        /* saffron-dynamic-surface-pass M4/M5: a registered named type (a Vec,
+         * a Map, a user struct) is named, as the interpreter names it. */
+        "    default: {\n"
+        "        const char *__n = __tur_any_type_name(__t);\n"
+        "        return strcmp(__n, \"unknown\") == 0 ? \"value of that type\" : __n;\n"
+        "    }\n"
         "    }\n"
         "}\n");
     buf_puts(out,
@@ -9925,7 +9995,11 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "            case TUR_DYNOP_BOR:  return TUR_TAG(TUR_DYNTAG_INT, __x | __y);\n"
         "            case TUR_DYNOP_BXOR: return TUR_TAG(TUR_DYNTAG_INT, __x ^ __y);\n"
         "            case TUR_DYNOP_SHL:  return TUR_TAG(TUR_DYNTAG_INT, __x << __y);\n"
-        "            case TUR_DYNOP_SHR:  return TUR_TAG(TUR_DYNTAG_INT, __x >> __y);\n"
+        /* saffron-dynamic-surface-pass M6: LOGICAL shift, as the typed
+         * `bit-shr` builtin (`>>` on the unsigned carrier) and the interpreter
+         * both answer; the signed `>>` here gave `(bit-shr -8 1)` = -4 through
+         * `any` and 9223372036854775804 everywhere else. */
+        "            case TUR_DYNOP_SHR:  return TUR_TAG(TUR_DYNTAG_INT, (int64_t)((uint64_t)__x >> __y));\n"
         "            default:\n"
         "                if (__y == 0) { fprintf(stderr, \"division by zero\\n\"); abort(); }\n"
         "                return TUR_TAG(TUR_DYNTAG_INT, __x % __y);\n"
@@ -9969,6 +10043,15 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "        __ta == TUR_DYNTAG_BOOL && __tb == TUR_DYNTAG_BOOL) {\n"
         "        int __be = ((TUR_UNTAG(__a) != 0) == (TUR_UNTAG(__b) != 0));\n"
         "        return TUR_TAG(TUR_DYNTAG_BOOL, __op == TUR_DYNOP_EQ ? __be : !__be);\n"
+        "    }\n"
+        /* saffron-dynamic-surface-pass H5: `=` / `not=` on two Syms is pointer
+         * identity (they are interned), which is exactly Eq[Sym]'s answer.
+         * Ordering and arithmetic on a Sym stay "no operator", on both back
+         * ends. */
+        "    if ((__op == TUR_DYNOP_EQ || __op == TUR_DYNOP_NE) &&\n"
+        "        __ta == TUR_DYNTAG_SYM && __tb == TUR_DYNTAG_SYM) {\n"
+        "        int __se = (TUR_UNTAG(__a) == TUR_UNTAG(__b));\n"
+        "        return TUR_TAG(TUR_DYNTAG_BOOL, __op == TUR_DYNOP_EQ ? __se : !__se);\n"
         "    }\n"
         "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_no_operator(__op, __ta); }\n"
         "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_no_operator(__op, __tb); }\n"
@@ -10693,6 +10776,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * divergence in the `any` reflection surface, which survived because
      * nothing compared the two back ends on this shape. */
     buf_printf(out, "        case %d: return \"fn\";\n",     (int)TY_FN);
+    /* saffron-dynamic-surface-pass H5: an interned symbol. */
+    buf_printf(out, "        case %d: return \"Sym\";\n",    (int)TY_SYM);
     buf_puts(out, "        default: return \"unknown\";\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n");

@@ -73,13 +73,29 @@
 ;;; `(hash 1)`, which is what lets a plain `1` probe a `(Set any)` and find it.
 ;;; Any other payload hashes by its TYPE NAME: correct (equal values agree)
 ;;; but coarse (every value of that type collides), which is the v0 trade for
-;;; not reading an arbitrary payload word.  Pure Turmeric, so both back ends
+;;; not reading an arbitrary payload word.  The Sym arm is what keeps keyword
+;;; keys apart: without it `#set{:a :b :c}` hashed every keyword by the name
+;;; "Sym" and kept ONE element (saffron-dynamic-surface-pass H4).  Pure Turmeric, so both back ends
 ;;; agree without a native.  The arms use the `.hash` method spelling on
 ;;; purpose: a bare `hash` resolves in the VALUE namespace, where a user
 ;;; `(defn hash ...)` legitimately shadows the method (TUR-W0039), and this
 ;;; body is elaborated in the user's program.
 ;;;
 ;;; Since: saffron-lang-plan S6 (Hash[any])
+
+;;; saffron-dynamic-surface-pass H4: the Sym instance lives HERE, beside its
+;;; class, rather than in sym.tur (which the autoloader reads later), so that
+;;; the `any` instance below can name it in its Sym arm.  Non-orphan either
+;;; way: the class is defined in this module.
+;;; Hash [Sym] -- hash a symbol via its precomputed hash field (a single load).
+
+
+(definstance Hash [Sym]
+  (hash [x]
+    : int
+    ```c
+    return (int64_t)((const struct __tur_sym *)x)->hash;
+    ```))
 
 (definstance Hash [any]
   (hash [x]
@@ -90,4 +106,6 @@
         (.hash x)
         (if (is? x float)
           (.hash x)
-          (if (is? x bool) (.hash x) (.hash (type-of x))))))))
+          (if (is? x bool)
+            (.hash x)
+            (if (is? x Sym) (.hash x) (.hash (type-of x)))))))))

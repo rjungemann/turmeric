@@ -498,9 +498,62 @@ Expr *elab_hoist_control_operands(Elab *e, Expr *node) {
     return let;
 }
 
+/* saffron-dynamic-surface-pass H8: a TYPED function value entering an `any`
+ * in a Saffron file gets an all-`any` adaptor.
+ *
+ * A dynamic call checks the box's signature id against the all-`any`
+ * signature of the call site, so `(app inc-typed 41)` -- `inc-typed` being
+ * `(fn [int] int)` -- panicked "cannot call this function here" while the
+ * interpreter answered 42.  Rather than teach the dynamic call every
+ * signature, wrap the value once, where it is boxed, in
+ * `(fn [__da0 ...] (NAME __da0 ...))`: the lambda's parameters take the
+ * dialect's `any` default, the call inside it goes through the ordinary
+ * checked seam per argument, and its return takes the `any` pin -- all
+ * machinery that already exists.  Only a NAMED value (a defn or a local
+ * bound to a function) can be re-referenced by a form, so the adaptor
+ * covers those; a typed closure produced by an expression stays as it was. */
+static Expr *saffron_dyn_fn_adaptor(Elab *e, Expr *value) {
+    if (!value || value->kind != EX_VAR || !value->as.var.binding ||
+        !value->as.var.binding->name || value->type.kind != TY_FN)
+        return NULL;
+    if (!(e->toplevel_saffron || lang_span_is_saffron(value->span))) return NULL;
+    const Type *ft = &value->type;
+    if (ft->as.fn.cfnptr || ft->as.fn.arity > 5) return NULL;
+    bool all_any = (ft->as.fn.result_kind == TY_ANY);
+    for (uint32_t i = 0; i < ft->as.fn.arity && all_any; i++)
+        if (ft->as.fn.arg_kinds[i] != TY_ANY) all_any = false;
+    if (all_any) return NULL;
+    Span sp = value->span;
+    uint32_t n = ft->as.fn.arity;
+    Form **params = (Form **)arena_alloc(e->arena, (n ? n : 1) * sizeof(Form *));
+    Form **call_items = (Form **)arena_alloc(e->arena, (n + 1) * sizeof(Form *));
+    call_items[0] = form_sym(e->arena, sp, value->as.var.binding->name);
+    for (uint32_t i = 0; i < n; i++) {
+        char nm[24];
+        snprintf(nm, sizeof nm, "__da%u", i);
+        const Symbol *ps = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+        params[i] = form_sym(e->arena, sp, ps);
+        call_items[i + 1] = form_sym(e->arena, sp, ps);
+    }
+    Form *items[3];
+    items[0] = form_sym(e->arena, sp, symtab_intern(e->st, strslice("fn", 2)));
+    items[1] = form_vec(e->arena, sp, params, n);
+    items[2] = form_list(e->arena, sp, call_items, n + 1);
+    Form *lam = form_list(e->arena, sp, items, 3);
+    Type *saved_expected = e->expected_type;
+    e->expected_type = NULL;
+    Expr *ad = elab_fn(e, lam);
+    e->expected_type = saved_expected;
+    return ad;
+}
+
 Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     if (!value) return NULL;
     if (value->type.kind == TY_ANY) return value;  /* already boxed */
+    {
+        Expr *ad = saffron_dyn_fn_adaptor(e, value);
+        if (ad) value = ad;
+    }
     /* any-cannot-recover-a-capturing-closure: normalise a FUNCTION payload to
      * the fat `{ thunk, env }` representation before boxing it.
      *
@@ -649,6 +702,9 @@ static bool call_type_has_named_tyvar(const Type *t) {
     switch (t->kind) {
         case TY_TYVAR:
             return t->as.tyvar_.name != NULL;
+        case TY_REF_IMMUT: case TY_REF_MUT:
+            /* H9: `(& K)` names K through the borrow. */
+            return t->as.ref_borrow.target_tyvar != NULL;
         case TY_APP:
             return call_type_has_named_tyvar(t->as.app.fn) ||
                    call_type_has_named_tyvar(t->as.app.arg);
@@ -851,6 +907,34 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                                        CallTypeBinding *bindings, uint8_t *n_bindings) {
     if (!expected) return true;
     switch (expected->kind) {
+        case TY_REF_IMMUT: case TY_REF_MUT: {
+            /* saffron-dynamic-surface-pass H9: a borrowed generic parameter
+             * `(& K)` binds K from the argument's target -- a borrow's target
+             * kind, or the bare value's type when the caller passed it by
+             * value.  Without this, `tur-map-kcheck`'s `(& K)` could never
+             * contribute K, and an any-held map seamed on argument 0 was
+             * grounded to `(Map any any)`. */
+            const char *tv = expected->as.ref_borrow.target_tyvar;
+            if (!tv) return true;
+            Type target;
+            if (actual.kind == TY_REF_IMMUT || actual.kind == TY_REF_MUT) {
+                /* A borrow's target is a bare KIND, which fully names only a
+                 * scalar.  A struct / String / applied key (`&<adt>`) must
+                 * not bind K from its kind -- it would clash with the K the
+                 * map argument already bound with its full type -- so those
+                 * stay unbound here exactly as before this arm existed. */
+                TypeKind tk = actual.as.ref_borrow.target;
+                if (!(typekind_is_numeric(tk) || tk == TY_BOOL || tk == TY_CSTR ||
+                      tk == TY_NIL || tk == TY_SYM || tk == TY_PTR_VOID))
+                    return true;
+                target = type_from_kind(tk);
+            } else {
+                target = actual;
+            }
+            Type tvt; memset(&tvt, 0, sizeof tvt);
+            tvt.kind = TY_TYVAR; tvt.as.tyvar_.name = tv;
+            return call_collect_type_bindings(&tvt, target, bindings, n_bindings);
+        }
         case TY_TYVAR: {
             uint8_t idx = 0;
             if (!expected->as.tyvar_.name) return true;
@@ -3682,12 +3766,32 @@ Expr *elab_call(Elab *e, Form *call) {
              * with concrete `(POK v rest)` peers.  See
              * docs/archive/history/defdata-parametric-inference-and-elab-match-segv.md. */
             Type result_type = fn_binding->type;
+            bool result_pinned = false;
             if (ctor->adt->n_type_params > 0 && e->expected_type &&
                 e->expected_type->kind == TY_APP) {
                 AdtDef *exp_def = type_adt_app_def(e->expected_type);
                 if (exp_def == ctor->adt) {
                     result_type = *e->expected_type;
+                    result_pinned = true;
                 }
+            }
+            /* saffron-dynamic-surface-pass M3: a NULLARY constructor of a
+             * parametric ADT has no type-variable field for the Saffron ctor
+             * widen above to ascribe, so `(Nothing)` was built at the bare
+             * ADT while `(Just 1)` was `(Opt any)`: `(is? (Nothing) (Opt any))`
+             * was false compiled and a `match` on an `any` holding it panicked
+             * `different instantiation of Opt`.  The dialect's rule is one
+             * sentence -- an undetermined type argument is `any` -- so build
+             * it at the all-`any` instantiation, exactly as the instance
+             * registry keys a parametric receiver. */
+            if (!result_pinned && ctor->adt->n_type_params > 0 &&
+                lang_span_is_saffron(call->span)) {
+                Type any_t = type_from_kind(TY_ANY);
+                Type app = type_adt(ctor->adt);
+                app.hkt_kind = kind_for_arity(ctor->adt->n_type_params);
+                for (uint8_t pi = 0; pi < ctor->adt->n_type_params; pi++)
+                    app = type_app(e->arena, app, any_t, (Span){0});
+                result_type = app;
             }
             Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
             out->as.call_.fn_binding = fn_binding;
@@ -6596,8 +6700,14 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * Only for a CONCRETE expected type: a callee expecting `any` needs no
          * check, and one expecting a type variable has nothing to check
          * against. */
+        /* saffron-dynamic-surface-pass M10: the CALL's span counts too.  A
+         * macro-expanded argument -- `(s (map-get m k))`, every `map-*`
+         * accessor is a macro -- carries stdlib/map.tur's span, so gating on
+         * the argument alone turned a Saffron call into a static
+         * "expected int, got any" reported inside the stdlib. */
         if (!arg_ok && args[i] && args[i]->type.kind == TY_ANY &&
-            lang_span_is_saffron(args[i]->span) &&
+            (lang_span_is_saffron(args[i]->span) ||
+             lang_span_is_saffron(call->span) || e->toplevel_saffron) &&
             expected_arg_kind != TY_ANY && expected_arg_kind != TY_TYVAR &&
             expected_arg_kind != TY_UNKNOWN) {
             Type want = type_from_kind(expected_arg_kind);
@@ -6607,6 +6717,59 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 Type *ct = (fi < fn_type.as.fn.arity)
                     ? fn_type.as.fn.arg_full_types[fi] : NULL;
                 if (ct) { want = *ct; want_decl = ct; }
+            }
+            /* saffron-dynamic-surface-pass H9: before grounding, bind what the
+             * OTHER arguments already determine.  `(map-get m k)` with an
+             * any-held `m` and a `Sym` key expands to `(tur-map-kcheck m (& k))`
+             * whose `(Map K V)` seam ran on argument 0 before the key had
+             * bound K, so K and V were both grounded to `any` and the check
+             * failed as `holds a different instantiation of Map` against the
+             * literal's `(Map Sym any)`.  A one-shot collection over the
+             * concrete siblings gives K := Sym; only the genuinely open
+             * arguments are grounded. */
+            if (want_decl && fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
+                call_type_has_named_tyvar(want_decl)) {
+                CallTypeBinding pre[16];
+                uint8_t n_pre = 0;
+                for (uint32_t j = 0; j < n_args; j++) {
+                    if (j == i) continue;
+                    /* A LATER sibling is not elaborated yet (arguments are
+                     * elaborated in order).  Elaborate it here when its form
+                     * needs no expected-type steering -- a symbol, a literal,
+                     * or a `(& sym)` borrow, which is what the map macros
+                     * pass -- and mark it done so the main loop reuses it,
+                     * as the bidirectional-inference path above already
+                     * does for a fn-typed parameter. */
+                    if (!args[j] && !arg_done[j] && 1 + j < call->as.list.len) {
+                        const Form *sf = call->as.list.items[1 + j];
+                        bool simple = sf->tag == F_SYM || sf->tag == F_INT ||
+                                      sf->tag == F_FLOAT || sf->tag == F_STR ||
+                                      sf->tag == F_KEYWORD ||
+                                      (sf->tag == F_LIST && sf->as.list.len == 2 &&
+                                       sf->as.list.items[0]->tag == F_SYM &&
+                                       sf->as.list.items[0]->as.sym == e->sym_ampersand &&
+                                       sf->as.list.items[1]->tag == F_SYM);
+                        if (simple) {
+                            args[j] = elab_form(e, (Form *)sf);
+                            arg_done[j] = true;
+                        }
+                    }
+                    if (!args[j] || args[j]->type.kind == TY_ANY) continue;
+                    uint32_t fj = fn_binding->closure_fn_binding ? j + 1 : j;
+                    Type *ej = (fj < fn_type.as.fn.arity)
+                        ? fn_type.as.fn.arg_full_types[fj] : NULL;
+                    /* A bare tyvar parameter (`k : K`) has no full type on
+                     * the fn type -- arg_full_types is for compound args --
+                     * but the callee's own FnDef keeps the named tyvar. */
+                    if (!ej && fn_binding->source_fn_def &&
+                        fn_binding->source_fn_def->params &&
+                        fj < fn_binding->source_fn_def->n_params &&
+                        fn_binding->source_fn_def->params[fj])
+                        ej = &fn_binding->source_fn_def->params[fj]->type;
+                    if (!ej || !call_type_has_named_tyvar(ej)) continue;
+                    (void)call_collect_type_bindings(ej, args[j]->type, pre, &n_pre);
+                }
+                if (n_pre > 0) want = call_instantiate_type(e, &want, pre, n_pre);
             }
             /* saffron-unannotated-param-container-cast-panics: ground the
              * target's OPEN type arguments before checking against it.  See

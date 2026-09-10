@@ -13,7 +13,6 @@ cancel-chan
 cancel-cooperative
 cancel-select
 dead-base-ctor-trap
-docs-saffron-guide-examples
 future-capturing-closure
 future-linear
 future-split-free
@@ -24,11 +23,8 @@ local-fn-into-rank2-slot
 once-basic
 poly-fn-any-parameter
 promise-linear
-saffron-callcc-under-any-nodes
 saffron-cons-list
 saffron-dyn-hkt-dispatch
-saffron-dynamic-body-concrete-return
-saffron-higher-order
 thread-local-basic
 typeclass-assoc-type-method-return
 workstealing-balance

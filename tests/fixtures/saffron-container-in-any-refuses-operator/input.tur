@@ -1,0 +1,11 @@
+#lang saffron
+;; saffron-dynamic-surface-pass M4/M5: a container held in an `any` reaching
+;; a dynamic operator.  The compiled runtime panicked "no operator for a value
+;; of that type" while the interpreter unboxed the Vec to its pointer and
+;; printed an ADDRESS (println) or answered `false` for `=` on two equal maps.
+;; Both now refuse by the box's name, in the same words: the dynamic surface
+;; is a closed set, and a container is not in it.
+(defn p [x] (println x))
+(defn main [] : int
+  (p [1 2])
+  0)

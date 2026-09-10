@@ -1100,6 +1100,10 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
             *t = is_mut ? type_ref_mut_lifetime(target->kind, lid)
                         : type_ref_immut_lifetime(target->kind, lid);
+            /* saffron-dynamic-surface-pass H9: keep the tyvar's NAME on the
+             * borrow so a call can bind K from a `(& K)` argument. */
+            t->as.ref_borrow.target_tyvar =
+                (target->kind == TY_TYVAR) ? target->as.tyvar_.name : NULL;
 
             /* LS3: well-formedness of a nested borrow &'a &'b T.  The outer
              * reference (lifetime 'a) points at the inner reference (lifetime

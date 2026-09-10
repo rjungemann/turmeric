@@ -1,0 +1,15 @@
+#lang saffron
+;; saffron-dynamic-surface-pass M6: `bit-shr` through an `any` was a SIGNED
+;; shift compiled (`(bit-shr -8 1)` = -4) while the typed builtin (`>>` on the
+;; unsigned carrier) and the interpreter both answer the logical
+;; 9223372036854775804.  The dynamic operator now shifts the unsigned word
+;; like the typed one.
+(defn sr [a b] (bit-shr a b))
+(defn sl [a b] (bit-shl a b))
+(defn main [] : int
+  (println (sr -8 1))
+  (println (bit-shr -8 1))
+  (println (sr -1 63))
+  (println (sr 256 4))
+  (println (sl 1 62))
+  0)

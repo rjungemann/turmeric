@@ -4383,6 +4383,15 @@ static int cmd_jit(int argc, char **argv) {
                                   prog_argc, prog_argv, &prog_rc);
         }
     } else {
+        /* TUR_JIT_DUMP_C also covers the no-split path: the text handed to
+         * c2mir is the full TU here, and a diagnostic's <tur-jit>:LINE is
+         * against it, not against `tur emit-c` output (g_emit_for_link and
+         * the include hoist both move lines). */
+        const char *dump_full = getenv("TUR_JIT_DUMP_C");
+        if (dump_full && *dump_full) {
+            FILE *df = fopen(dump_full, "wb");
+            if (df) { fwrite(csrc.data, 1, csrc.len, df); fclose(df); }
+        }
         jrc = tur_jit_execute(csrc.data, csrc.len,
                               autolink.len ? autolink.data : NULL,
                               jit_incs, n_jit_incs,

@@ -618,8 +618,9 @@ Expr *elab_form(Elab *e, Form *f) {
                  * are `any`, so `#map{:a 1 :b "two"}` is a `(Map Sym any)`
                  * rather than a `tur-map-homog__` error on the value side.  The
                  * KEYS are left alone: they are already normalized to one key
-                 * type above, and a heterogeneous key would need `Hash` and
-                 * `MapKey` instances for `any` that do not exist. */
+                 * type above (a `#map{...}` is a `(Map Sym any)`).  A key
+                 * arriving as an `any` at a map accessor is served by
+                 * `Hash[any]` / `MapKey[any]`, which key by the payload. */
                 kvs[i + 1] = saffron
                     ? dl_saffron_widen_elem(e, f->as.list.items[i + 1])
                     : f->as.list.items[i + 1];
@@ -1472,8 +1473,17 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                             if (f->as.list.len > ret_idx && f->as.list.items[ret_idx]->tag == F_MAP) {
                                 ret_idx++;
                             }
+                            /* saffron-dynamic-surface-pass H6: whether a return
+                             * annotation is PRESENT, decided structurally -- a
+                             * `: T` (F_TYPE_ANN) or a `:int`-style keyword that
+                             * is followed by a body.  A bare symbol or list at
+                             * this slot is the body of an unannotated defn. */
+                            bool ret_annotated = false;
                             if (f->as.list.len > ret_idx) {
                                 Form *ret_f = f->as.list.items[ret_idx];
+                                ret_annotated = ret_f->tag == F_TYPE_ANN ||
+                                    (ret_f->tag == F_KEYWORD &&
+                                     f->as.list.len > ret_idx + 1);
                                 /* Accept spaced `: T` (F_TYPE_ANN of a single
                                  * symbol/keyword) by treating the inner as a
                                  * keyword.  Compound `: (-> a b)` still routes
@@ -1615,6 +1625,23 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                             uint32_t param_arity = (name_idx + 1 < (uint32_t)f->as.list.len)
                                 ? fwd_decl_scan_params(arena, f->as.list.items[name_idx + 1], &arg_kinds)
                                 : 0;
+                            /* saffron-dynamic-surface-pass H6: an UNANNOTATED
+                             * Saffron return is `any` (D3), and this forward
+                             * decl is what a caller elaborated EARLIER than the
+                             * callee sees -- elab_defn's S4 early-forward only
+                             * runs once the callee's own pass 2 starts, which is
+                             * too late for `(defn user [] (+ (later) 1))` above
+                             * `(defn later [] 7.1)` (cc: invalid operands to
+                             * binary +) and for mutual recursion (`then=bool
+                             * else=int`).  Same `main` exception as elab_defn:
+                             * the zero-arity entry point stays `int`. */
+                            if (!ret_annotated && lang_span_is_saffron(f->span) &&
+                                !(name_f->as.sym->len == 4 &&
+                                  memcmp(name_f->as.sym->name, "main", 4) == 0 &&
+                                  param_arity == 0)) {
+                                return_kind = TY_ANY;
+                                fwd_result_full = NULL;
+                            }
                             Type fn_type = type_fn(arg_kinds, param_arity, return_kind);
                             /* defdata-parametric-forward-decl-inference: carry the
                              * full compound result type on the forward decl. */
@@ -2165,8 +2192,10 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
          * form reachable from it through `do` chains, is a statement.  Anything
          * deeper is an expression subform.  See def_form_is_statement_position. */
         e.toplevel_stmt = forms[i];
+        e.toplevel_saffron = lang_span_is_saffron(forms[i]->span);   /* M10 */
         items[i] = elab_form(&e, forms[i]);
         e.toplevel_stmt = NULL;
+        e.toplevel_saffron = false;
         if (!items[i]) { rc = -1; /* keep going to surface more diagnostics */ }
 
         /* Phase M7+: Each (load ...)-spliced file is conceptually its own

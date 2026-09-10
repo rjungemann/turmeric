@@ -8,9 +8,9 @@
 ;; the literal, before the macro sees it.
 ;;
 ;; The KEYS are left alone.  They are already normalized to one key type by the
-;; lowering above the widen, and a heterogeneous key would need `Hash[any]` and
-;; `MapKey[any]` instances that do not exist -- hashing and comparing across
-;; types at run time is a feature, not a lowering.
+;; lowering above the widen (a `#map{...}` is a `(Map Sym any)`).  An `any`
+;; key at an accessor is served by `Hash[any]` / `MapKey[any]`, which key by
+;; the payload (saffron-dynamic-surface-pass H3/H4).
 ;;
 ;; This landed AFTER the interpreter's Map value tag was fixed, and the order
 ;; was measured rather than assumed.  A `(Map K any)` under `--interpret` used to
