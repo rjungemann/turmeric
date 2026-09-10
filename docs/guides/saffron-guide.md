@@ -131,9 +131,13 @@ stdlib operations work on them unannotated:
 (vec-len [1 2 3])                ;; 3
 ```
 
-`#map{...}` and `#set{...}` widen the same way. One gap to know about: a
-typeclass method on an `any` **key** -- which `map-get` needs for `hash` -- is
-not dispatchable yet; see *Typeclasses* below.
+`#map{...}` and `#set{...}` widen the same way -- a `#map{...}` is a
+`(Map Sym any)`, a `#set{...}` a `(Set any)`. An `any` **key** works too:
+`Hash[any]` and `MapKey[any]` hash and compare by the payload, so a keyword
+held in an `any` finds the entry a bare keyword put there, and a key whose
+payload is not the map's key type is a miss. A miss on a map whose values are
+`any` is `nil`, which under the truthiness rule below makes
+`(if (map-get m k) ...)` a presence test.
 
 ## Reading a value back out
 

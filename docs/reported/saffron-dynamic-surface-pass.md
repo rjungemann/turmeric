@@ -89,7 +89,7 @@ Self-recursion is fine (pinned by the `main`-signature note at
 `elab_fns.c:8171`); the forward decl of a *different* not-yet-elaborated fn
 still gets the typed default.
 
-**H7. Seam into a fn-typed parameter emits uncompilable C.**
+**H7. Seam into a fn-typed parameter emits uncompilable C.** *Update 2026-09-10:* representation gap, not a gate. The seam's checked unbox spells the payload `(void *)` while a `(fn [int] int)` parameter is emitted as the three-word `tur_poly_fn_t` (env, fn, fn_cps), and the widened value's box id is the fat-closure id, not the plain-function id the check wants, so a compiling version would panic "a closure that captures where a plain function is required" -- which is the honest outcome for a capturing closure, and the wrong one for a captureless typed lambda (`static_ok` on its `EX_FN_TO_FAT`), whose code pointer could be recovered. Fix direction: at the compiled `EX_ANY_CAST` for a `TY_FN` target, accept the fat id when the box's env is the static (captureless) one and build the `tur_poly_fn_t` from the fat box; otherwise take the panic path. Left open.
 
 ```turmeric
 (defn tfn [f : (fn [int] int)] : int (f 1))

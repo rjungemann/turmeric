@@ -618,8 +618,9 @@ Expr *elab_form(Elab *e, Form *f) {
                  * are `any`, so `#map{:a 1 :b "two"}` is a `(Map Sym any)`
                  * rather than a `tur-map-homog__` error on the value side.  The
                  * KEYS are left alone: they are already normalized to one key
-                 * type above, and a heterogeneous key would need `Hash` and
-                 * `MapKey` instances for `any` that do not exist. */
+                 * type above (a `#map{...}` is a `(Map Sym any)`).  A key
+                 * arriving as an `any` at a map accessor is served by
+                 * `Hash[any]` / `MapKey[any]`, which key by the payload. */
                 kvs[i + 1] = saffron
                     ? dl_saffron_widen_elem(e, f->as.list.items[i + 1])
                     : f->as.list.items[i + 1];
