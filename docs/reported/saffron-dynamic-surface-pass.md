@@ -144,8 +144,7 @@ A lambda body that flows through an `any` (`(fn [] (t 7.25))`) is fine, so
 the literal-bodied lambda gets a `(fn [] float)` signature the dynamic call
 site refuses. Same message site as H8.
 
-**H11. A value read out of a typed struct field cannot dispatch a typeclass
-method unless something else in the file widened that type.** Found by
+**~~H11~~. RESOLVED 2026-09-10: the ABI scan now notes every candidate field type of a dynamic field read as a widened tag (`emit_module.c`, `EX_DYN_FIELD`), so the instance rows are published. Pinned by `tests/fixtures/saffron-dyn-field-read-dispatch`; KNOWN row retired from the fuzzer. Was: a value read out of a typed struct field cannot dispatch a typeclass method unless something else in the file widened that type.** Found by
 `tests/saffron-fuzz-src.py` (seed 7, eight cases, all `wrap_struct` +
 `term_class`).
 

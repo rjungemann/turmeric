@@ -6187,6 +6187,36 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                 emit_abi_scan_expr(ctx, e->as.dyn_call_.args[i], items, n_items);
             break;
         case EX_DYN_FIELD:
+            /* saffron-dynamic-surface-pass H11: a dynamic field read WIDENS
+             * the field it reads (emit_dyn_field boxes it with
+             * dyn_widen_to_any), so every candidate field's type is a tag
+             * this TU's boxes can carry -- the instance rows for it must be
+             * published, or `(.kind-of (.fld p))` panics `no instance ... for
+             * float` unless something else in the file happened to widen a
+             * float.  Same candidate filter as the emit site (one record
+             * ctor, no type params) minus the by-value test: noting a type
+             * the read will not produce costs an unused row, missing one
+             * costs the dispatch. */
+            if (e->as.dyn_field_.field && e->as.dyn_field_.field->name) {
+                const char *fname = e->as.dyn_field_.field->name;
+                for (uint32_t i = 0; i < n_items; i++) {
+                    const Expr *it = items[i];
+                    if (!it || (it->kind != EX_DEFDATA && it->kind != EX_DEFGADT)) continue;
+                    AdtDef *def = (it->kind == EX_DEFGADT) ? it->as.defgadt_.def
+                                                           : it->as.defdata_.def;
+                    if (!def || def->n_ctors != 1 || def->n_type_params != 0) continue;
+                    CtorDef *ctor = def->ctors[0];
+                    if (!ctor || !ctor->is_record) continue;
+                    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                        const CtorField *f = &ctor->fields[fi];
+                        if (!f->name || strcmp(f->name, fname) != 0) continue;
+                        Type ft = f->full_type ? *f->full_type
+                                               : type_simple(f->kind, CK_COPY);
+                        if (ft.kind == TY_TYVAR || ft.kind == TY_UNKNOWN) continue;
+                        emit_abi_note_any_widen(ctx, ft);
+                    }
+                }
+            }
             emit_abi_scan_expr(ctx, e->as.dyn_field_.obj, items, n_items);
             break;
         case EX_DYN_METHOD:

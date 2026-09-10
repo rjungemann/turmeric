@@ -1,0 +1,28 @@
+#lang saffron
+;; saffron-dynamic-surface-pass H11: a value read out of a typed struct field
+;; through a dynamic `.fld` read could not dispatch a typeclass method
+;; compiled -- `no instance of Kind for float (dispatching .kind-of on an any)`
+;; -- unless something ELSE in the file happened to widen that type.  The
+;; instance registry is populated per widened tag, and the dynamic field read
+;; is a widen site the ABI scan never noted.  Found by tests/saffron-fuzz-src.py
+;; (seed 7, eight cases, all wrap_struct + term_class).
+;;
+;; Nothing else in this file widens a float or a bool: the field reads are the
+;; only way those tags reach a box, which is exactly the shape that failed.
+;; 7.25 rather than 7.0: the float arm must bit-reinterpret, not convert.
+(defclass Kind [a] (kind-of [x] : cstr))
+(definstance Kind [int]   (kind-of [x] "I"))
+(definstance Kind [float] (kind-of [x] "F"))
+(definstance Kind [bool]  (kind-of [x] "B"))
+(definstance Kind [cstr]  (kind-of [x] "C"))
+(defstruct Pf [fld : float])
+(defstruct Pb [fld : bool])
+(defstruct Pc [fld : cstr])
+(defn k [x] (.kind-of x))
+(defn get [p] (.fld p))
+(defn main [] : int
+  (println (k (get (make-struct Pf 7.25))))
+  (println (k (get (make-struct Pb true))))
+  (println (k (get (make-struct Pc "s"))))
+  (println (get (make-struct Pf 7.25)))
+  0)
