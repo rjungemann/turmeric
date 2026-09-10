@@ -354,8 +354,35 @@ yet`, interp `true`. Parity note; the guide documents the panic.
   both halves.
 - `(defn pick [c] (if c 1 "one"))` is a static error (`then=int else=cstr`);
   the if-join only widens under an explicit `: any` (P6).
-- `while` rejects an `any` condition (`elab_forms.c:3656`) while
-  `if/when/and/or` apply truthiness.
+- ~~`while` rejects an `any` condition (`elab_forms.c:3656`) while
+  `if/when/and/or` apply truthiness.~~ **RESOLVED 2026-09-10.** `while` is
+  simply the THIRD bool slot a Saffron `any` can reach, after the `if`/`when`
+  condition and the `#refine{...}` contract predicate, and
+  `elab_saffron_truthy` was already SHARED for exactly that reason -- it just
+  had no call in `elab_while`. It returns its argument unchanged for a
+  non-`any` (or a non-Saffron file), so the wrap is unconditional at the call
+  site and typed `while` is untouched. Pinned by
+  `tests/fixtures/saffron-while-any-condition` across three conditions: an
+  `any` holding a bool, a `map-get` miss (nil, FALSY -- and a stdlib macro, so
+  it also exercises the M10 span seam), and the integer `0`, which is TRUTHY.
+  That last one pins the rule rather than the wrap: a C-truthiness `while`
+  would exit immediately and print `0` where both back ends print `1`.
+
+- **NEW (found 2026-09-10 while pinning the above): `=` on two Syms is a
+  static error unless it goes through an `any`.** `(if (= k :a) ...)` with `k`
+  a Sym-typed binding is `TUR-E0006: operator lookup failed for '=', got 2
+  arg(s), first arg type Sym` on both back ends, while the same comparison on
+  two `any`-held Syms answers pointer identity (H5). So a Saffron file can
+  compare keywords only for as long as the type checker does NOT know they are
+  keywords -- widening through an unannotated defn makes it start working,
+  which is exactly backwards. Same root as the cstr low resolved above (the
+  `=` operator has no Sym row, only `Eq[Sym]` does), but it is NOT fixed by
+  it: the cstr fix lives in the two DYNAMIC paths, and this shape never
+  reaches them. Fix direction: either an `Eq`-backed row for `=` on Sym in the
+  builtin table (which changes the typed surface, the thing the cstr fix
+  deliberately avoided), or route a failed operator lookup to the class
+  instance before reporting TUR-E0006 -- the second is the general answer and
+  would subsume the cstr arms too.
 - Only a bare symbol can be a dynamic call head: `((adder 1) 1)` and
   `((mkc) 7)` are `expression in call head has type any, which is not
   callable` (`elab_call.c:1796`).
