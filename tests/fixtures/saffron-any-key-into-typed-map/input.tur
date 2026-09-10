@@ -1,0 +1,22 @@
+#lang saffron
+;; saffron-dynamic-surface-pass H3: an `any` key handed to a map whose key
+;; type is concrete.  `(defn lookup [m : (Map Sym any) k] (map-get m k))`
+;; hashed the key through Hash[any], which had no Sym arm and hashed a
+;; keyword by its TYPE NAME -- never matching the Hash[Sym]-hashed entries --
+;; and the miss then dereferenced 0 compiled (H2) or came back as int 0
+;; interpreted.  With the Sym arm (H4) the any-key path agrees with the typed
+;; one on hash, carrier and comparator, and a genuine miss is nil (H2).
+;; 7.25 rather than 7.0: the value rides the box by bit pattern.
+(defn lookup [m : (Map Sym any) k] (map-get m k))
+(defn has [m : (Map Sym any) k] (map-has? m k))
+(defn main [] : int
+  (let [m #map{:a 1 :b "two" :c 7.25}]
+    (println (has m :a))
+    (println (has m :zzz))
+    (println (lookup m :a))
+    (println (type-of (lookup m :b)))
+    (println (cast (lookup m :c) float))
+    (println (type-of (lookup m :zzz)))
+    ;; a key whose payload is not a Sym at all is a miss, not a crash
+    (println (type-of (lookup m 7))))
+  0)

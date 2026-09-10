@@ -43,8 +43,7 @@ says the loss is in elaboration, not emit.
 always `(Map Sym any)`, so every Saffron miss is this. `saffron-map-literal`
 only does hits.
 
-**H3. An `any` key into a concretely-keyed map: segfault compiled, silent
-miss interpreted, no diagnostic.**
+**~~H3~~. RESOLVED 2026-09-10 by H4 + H2: with the Sym arm, `Hash[any]` / `MapKey[any]` on a keyword key agree with `Hash[Sym]` / `MapKey[Sym]` (hash, carrier, comparator), so an `any` key hits the same entry a typed key does, and a key whose payload type does not match the map's is a nil miss rather than a crash. Pinned by `tests/fixtures/saffron-any-key-into-typed-map`. Was: an `any` key into a concretely-keyed map: segfault compiled, silent miss interpreted, no diagnostic.**
 
 ```turmeric
 (defn lookup [m : (Map Sym any) k] (map-get m k))
@@ -56,15 +55,14 @@ seam narrowing fires; `hash`/`mk-box`/`mk-cmp` then resolve on the key's
 static type `any` -> `Hash[any]`, which hashes a Sym by type name, never
 matching the `Hash[Sym]`-hashed entries.
 
-**H4. `Hash[any]` / `MapKey[any]` have no `Sym` arm: keyword keys collapse
-compiled.** `stdlib/typeclass-hash.tur:84`, `stdlib/map.tur:435`.
+**~~H4~~. RESOLVED 2026-09-10: both instances gained a `Sym` arm (needs H5 for the interpreter's `is?`). Pinned by `tests/fixtures/saffron-sym-in-any`. Was: `Hash[any]` / `MapKey[any]` have no `Sym` arm: keyword keys collapse compiled.** `stdlib/typeclass-hash.tur:84`, `stdlib/map.tur:435`.
 
 ```turmeric
 (println (set-count #set{:a :b :c}))   ;; compiled: 1   interp: 3
 ;; same with (Map any int) keyed by (:: :a any) / (:: :b any): count 1, second overwrites first
 ```
 
-**H5. A Sym inside an `any` is mis-tagged (typed Turmeric too).**
+**~~H5~~. RESOLVED 2026-09-10: the compiled dynamic runtime gained a Sym row (`TUR_DYNTAG_SYM`, `type-of` "Sym", `=`/`not=` by pointer identity, the panic message names Sym) and the interpreter boxes a widened Sym under the name "Sym" like a named type, with the dynamic operator layer answering `=`/`not=` and refusing the rest by name. Pinned by `tests/fixtures/saffron-sym-in-any`; KNOWN row retired and `sym` joined the fuzzer's default scalar pool. Was: a Sym inside an `any` is mis-tagged (typed Turmeric too).**
 
 ```turmeric
 (defn k [x] (type-of x))  (k :kw)        ;; compiled: "unknown"  interp: "int"

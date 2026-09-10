@@ -1,0 +1,35 @@
+#lang saffron
+;; saffron-dynamic-surface-pass H5 + H4: a Sym inside an `any`.
+;;
+;; The compiled dynamic runtime had no row for the Sym tag (`type-of` said
+;; "unknown", `=` panicked "a value of that type"), and the interpreter
+;; carries a Sym as a bare int holding the interned pointer, so it said
+;; "int", `is? Sym` was false, and println printed the pointer.  Both now
+;; answer "Sym"; `=` / `not=` on two Syms is pointer identity (Eq[Sym]); any
+;; other operator, println included, is "no operator for a Sym argument" on
+;; both back ends (the closed set stays closed).  With `is? Sym` honest,
+;; Hash[any] / MapKey[any] gained a Sym arm: `#set{:a :b :c}` used to hash
+;; every keyword by the name "Sym" and keep ONE element compiled.
+(defn k [x] (type-of x))
+(defn sym? [x] (is? x Sym))
+(defn same [a b] (= a b))
+(defn diff [a b] (not= a b))
+(defn id [x] x)
+(defn main [] : int
+  (println (k :kw))
+  (println (sym? :kw))
+  (println (sym? 1))
+  (println (same :a :a))
+  (println (same :a :b))
+  (println (diff :a :b))
+  (println (sym=? (cast (id :kw) Sym) :kw))
+  (println (set-count #set{:a :b :c}))
+  (println (set-count #set{:a :a}))
+  (let [m0 : (Map any int) (map-new)
+        m1 (map-assoc m0 (:: :a any) 1)
+        m2 (map-assoc m1 (:: :b any) 2)]
+    (println (map-count m2))
+    (println (map-get m2 (:: :a any)))
+    (println (map-get m2 (:: :b any)))
+    (map-free m2))
+  0)

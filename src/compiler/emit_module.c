@@ -9872,6 +9872,11 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
     buf_printf(out, "#define TUR_DYNTAG_INT   %d\n",   (int)TY_INT);
     buf_printf(out, "#define TUR_DYNTAG_FLOAT %d\n",   (int)TY_FLOAT);
     buf_printf(out, "#define TUR_DYNTAG_CSTR  %d\n",   (int)TY_CSTR);
+    /* saffron-dynamic-surface-pass H5: a Sym has a tag of its own (the bare
+     * TypeKind, like the other primitives) but the dynamic runtime had no
+     * row for it: `type-of` said "unknown", `=` panicked "a value of that
+     * type", println likewise. */
+    buf_printf(out, "#define TUR_DYNTAG_SYM   %d\n",   (int)TY_SYM);
     buf_puts(out,
         "static inline const char *__tur_dyn_op_name(int __op) {\n"
         "    switch (__op) {\n"
@@ -9905,6 +9910,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    case TUR_DYNTAG_BOOL:  return \"bool\";\n"
         "    case TUR_DYNTAG_CSTR:  return \"cstr\";\n"
         "    case TUR_DYNTAG_NIL:   return \"nil\";\n"
+        "    case TUR_DYNTAG_SYM:   return \"Sym\";\n"
         "    default:               return \"value of that type\";\n"
         "    }\n"
         "}\n");
@@ -9999,6 +10005,15 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "        __ta == TUR_DYNTAG_BOOL && __tb == TUR_DYNTAG_BOOL) {\n"
         "        int __be = ((TUR_UNTAG(__a) != 0) == (TUR_UNTAG(__b) != 0));\n"
         "        return TUR_TAG(TUR_DYNTAG_BOOL, __op == TUR_DYNOP_EQ ? __be : !__be);\n"
+        "    }\n"
+        /* saffron-dynamic-surface-pass H5: `=` / `not=` on two Syms is pointer
+         * identity (they are interned), which is exactly Eq[Sym]'s answer.
+         * Ordering and arithmetic on a Sym stay "no operator", on both back
+         * ends. */
+        "    if ((__op == TUR_DYNOP_EQ || __op == TUR_DYNOP_NE) &&\n"
+        "        __ta == TUR_DYNTAG_SYM && __tb == TUR_DYNTAG_SYM) {\n"
+        "        int __se = (TUR_UNTAG(__a) == TUR_UNTAG(__b));\n"
+        "        return TUR_TAG(TUR_DYNTAG_BOOL, __op == TUR_DYNOP_EQ ? __se : !__se);\n"
         "    }\n"
         "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_no_operator(__op, __ta); }\n"
         "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_no_operator(__op, __tb); }\n"
@@ -10723,6 +10738,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * divergence in the `any` reflection surface, which survived because
      * nothing compared the two back ends on this shape. */
     buf_printf(out, "        case %d: return \"fn\";\n",     (int)TY_FN);
+    /* saffron-dynamic-surface-pass H5: an interned symbol. */
+    buf_printf(out, "        case %d: return \"Sym\";\n",    (int)TY_SYM);
     buf_puts(out, "        default: return \"unknown\";\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n");

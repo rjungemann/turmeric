@@ -1316,6 +1316,11 @@ static const char *turi_closure_fn_key(TuriValue v) {
  * function -- a closure has its own reflection path
  * (any-fn-tag-does-not-discriminate-signatures) that boxing would break. */
 static const char *turi_any_boxable_name(Type t) {
+    /* saffron-dynamic-surface-pass H5: a Sym is a bare TURI_INT holding an
+     * interned pointer, so it cannot answer for itself either -- `type-of`
+     * said "int", `is? Sym` was false, println printed the pointer.  Box it
+     * under the name the compiled tag reports. */
+    if (t.kind == TY_SYM) return "Sym";
     if (t.kind == TY_ADT && t.as.adt_.def && t.as.adt_.def->name)
         return t.as.adt_.def->name;
     if (t.kind == TY_APP) {
@@ -1372,8 +1377,11 @@ static const char *turi_any_named_type(TuriValue v) {
  * make `type-of` work and should not be what a panic reports. */
 static const char *turi_any_display_type(TuriValue v) {
     if (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->is_any_box &&
-        v.as_struct->n_fields == 1 && v.as_struct->fields)
+        v.as_struct->n_fields == 1 && v.as_struct->fields) {
+        /* H5: the Sym box's payload is an int; the box name is the answer. */
+        if (v.as_struct->name && strcmp(v.as_struct->name, "Sym") == 0) return "Sym";
         v = v.as_struct->fields[0];
+    }
     const char *named = turi_any_named_type(v);
     if (named) return named;
     switch (v.tag) {
@@ -11327,13 +11335,37 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         }
         TuriValue result = turi_nil();
         bool failed = false;
+        /* saffron-dynamic-surface-pass H5: a Sym arrives as an any-box named
+         * "Sym" whose payload is the interned pointer as a TURI_INT.  Unboxed
+         * it would select the int overloads -- `(+ :a 1)` would add a pointer
+         * and println would print one -- so remember which operands were
+         * Syms and answer them here: `=` / `not=` on two Syms is pointer
+         * identity (Eq[Sym]), anything else is "no operator for a Sym
+         * argument", the same sentence the compiled runtime uses. */
+        uint32_t n_sym = 0;
         for (uint32_t i = 0; i < n; i++) {
             TuriValue v = eval_expr(env, frame, e->as.dyn_op_.args[i]);
             if (turi_is_error(v) || env_signaled(env)) { result = v; failed = true; break; }
             if (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->is_any_box &&
-                v.as_struct->n_fields == 1 && v.as_struct->fields)
+                v.as_struct->n_fields == 1 && v.as_struct->fields) {
+                if (v.as_struct->name && strcmp(v.as_struct->name, "Sym") == 0) n_sym++;
                 v = v.as_struct->fields[0];
+            }
             vals[i] = v;
+        }
+        if (!failed && n_sym > 0 && e->as.dyn_op_.op) {
+            const char *opn = e->as.dyn_op_.op->name;
+            bool is_eq = strcmp(opn, "=") == 0, is_ne = strcmp(opn, "not=") == 0;
+            if ((is_eq || is_ne) && n == 2 && n_sym == 2) {
+                bool same = (vals[0].as_int == vals[1].as_int);
+                if (vals != stackv) free(vals);
+                return turi_bool(is_eq ? same : !same);
+            }
+            char msg[160];
+            snprintf(msg, sizeof(msg), "%s: no operator for a Sym argument", opn);
+            if (vals != stackv) free(vals);
+            turi_runtime_panic(env, msg);
+            return turi_nil();  /* unreachable */
         }
         /* saffron-lang-plan S3/D4: truthiness, answered before the builtin
          * table is consulted -- the reserved name is deliberately not a

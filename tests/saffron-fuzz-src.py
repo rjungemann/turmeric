@@ -124,7 +124,7 @@ TIMEOUT = 90
 
 KNOWN = [
     # H1-capturing-lambda (route_capture): retired 2026-09-10.
-    ("H5-sym-in-any",            ("scalar_sym",)),
+    # H5-sym-in-any (scalar_sym): retired 2026-09-10.
     # H6-forward-ref-int (route_fwdref): retired 2026-09-10.
     ("H7-seam-fn-param",         ("route_seam_fn",)),
     ("H8-typed-defn-in-any",     ("route_typed_fn_value",)),
@@ -199,9 +199,7 @@ class V:
 
 
 def pick_scalar(rng, emit_known):
-    kinds = ["int", "float", "bool", "cstr"]
-    if emit_known:
-        kinds.append("sym")
+    kinds = ["int", "float", "bool", "cstr", "sym"]
     k = rng.choice(kinds)
     if k == "int":
         return V(k, rng.randint(-40, 400))
@@ -724,9 +722,6 @@ def self_test(tur, workdir):
 # One pinned minimal repro per open finding.  Each must FIRE (any non-ok
 # classification on either arm) on an unfixed build.
 KNOWN_PROBES = [
-    ("H5  Sym inside an any: type-of / =",
-     '#lang saffron\n(defn k [x] (type-of x))\n(defn s [a b] (= a b))\n'
-     '(defn main [] : int (println (k :kw)) (println (s :a :a)) 0)\n', "Sym\ntrue\n"),
     ("H7  seam into a fn-typed parameter",
      '#lang saffron\n(defn tfn [f : (fn [int] int)] : int (f 1))\n(defn id [x] x)\n'
      '(defn main [] : int (println (tfn (id (fn [x : int] : int (+ x 1))))) 0)\n', "2\n"),
