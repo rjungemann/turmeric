@@ -8218,6 +8218,14 @@ static const char *adt_field_scalar_c_type(TypeKind k) {
          * member spelling; the two must agree or the ctor cannot store its own
          * argument. */
         case TY_ANY:      return "tur_tagged_t";
+        /* saffron-dynamic-surface-pass (low): a `Sym` field is the interned
+         * record POINTER, the same spelling types.c gives TY_SYM.  Without a
+         * row here it fell to the `int64_t` default, and a `(defstruct S [k :
+         * Sym])` ctor then took `int64_t` while its caller passed a
+         * `const struct __tur_sym *` -- a right answer with a
+         * -Wint-conversion under it, which is exactly the shape this codebase
+         * has been bitten by before. */
+        case TY_SYM:      return "const struct __tur_sym *";
         case TY_PTR_VOID: return "void *";
         case TY_RC:
         case TY_WEAK:     return "RcControlBlock *";

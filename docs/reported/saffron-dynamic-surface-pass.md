@@ -387,8 +387,24 @@ yet`, interp `true`. Parity note; the guide documents the panic.
   `((mkc) 7)` are `expression in call head has type any, which is not
   callable` (`elab_call.c:1796`).
 - `(defn f [a & rest : any] ...)` rejects `(f 1 2 3)`: `rest arg 0 has wrong
-  type (expected any, got int)` (`elab_call.c:5650`); rest args are not
-  widened.
+  type (expected any, got int)` (`elab_call.c:5650`). **Fix direction
+  CORRECTED 2026-09-10: "rest args are not widened" is not the bug, and
+  widening them would make things WORSE.** Behind that check the
+  representation does not exist: passing rest args that are ALREADY `any` --
+  `(f 1 (:: 2 any) (:: 7.25 any))` -- does not compile either, with
+  `aggregate value used where an integer was expected` on
+  `__tur_cons_of((int64_t)(intptr_t)(TUR_TAG(...)))`. A variadic rest list is
+  a cons of `__tur_cons_cell { int64_t head; int64_t tail; }` and an `any` is
+  a two-word `tur_tagged_t`, so it does not fit the head slot. Relaxing the
+  type check alone would trade a clean static error for an uncompilable TU.
+  Real fix direction: give the rest list a head that can carry an `any`. The
+  machinery already exists one layer over -- a Saffron `(list 1 "two" 7.1)`
+  builds a heterogeneous list on the `(Cons any)` monomorph, whose `head` IS
+  16 bytes -- so the work is routing the variadic rest lowering onto that
+  rather than the older int64 cell; boxing the tagged value behind a pointer
+  in the existing cell is the other option, and costs a deref in every rest
+  walk. Same representation-gap family as H7/M1/M2-compiled: the THIRD filed
+  direction in this report to name a check when the defect is a width.
 - ~~`(defstruct Dyn [v : any])` is `unsupported field form` (typed too); ADT
   fields accept `any`, struct fields do not.~~ **RESOLVED 2026-09-10.**
   `defstruct_field_type_lowerable` had no arm for `TY_ANY`, so the gate fell to
@@ -434,9 +450,20 @@ yet`, interp `true`. Parity note; the guide documents the panic.
   escape delivers an int64, neither of which is a tagged box. Pre-existing;
   the H10 lambda default deliberately exempts the immediate receiver
   (`in_callcc_receiver`) so an unannotated one keeps its scalar return.
-- `Sym` is not accepted as a `defstruct` / `defdata` field type (`defdata:
+- ~~`Sym` is not accepted as a `defstruct` / `defdata` field type (`defdata:
   field has unrecognized type :Sym`), typed Turmeric too. Found by the fuzzer
-  once `sym` joined its scalar pool.
+  once `sym` joined its scalar pool.~~ **RESOLVED 2026-09-10.** Two rows, one
+  per layer: `parse_struct_field_type` had no `Sym` name -> `TY_SYM` mapping
+  (so the name fell through to the user-type lookup, which does not know it
+  either), and `adt_field_scalar_c_type` had no `TY_SYM` -> `const struct
+  __tur_sym *` row. A Sym is an interned record POINTER -- a pointer-sized
+  scalar carrier like the `cstr` beside it -- so neither layer needed a new
+  representation. The second row matters even though the first alone RUNS
+  correctly: without it the field took the `int64_t` default and the ctor was
+  emitted taking `int64_t` while its caller passed the pointer, a right answer
+  with a `-Wint-conversion` under it. Pinned by
+  `tests/fixtures/defstruct-sym-field`, which compiles warning-free and puts a
+  `float` field after the Sym so a layout shift would show.
 - `(fn [] :kw)` is `fn: missing body`: a keyword literal in body position is
   read as a return annotation. `(fn [] (:: :kw Sym))` works. Found by the
   fuzzer; the generator avoids both shapes (KNOWN rows) and pins them with
