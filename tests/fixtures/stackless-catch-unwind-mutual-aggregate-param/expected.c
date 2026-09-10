@@ -6900,7 +6900,7 @@ static int64_t vec_hylen(int64_t v) {
 static int64_t vec_hyget(int64_t v, int64_t i) {
         struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
   if (i >= 0 && (size_t)i < (size_t)vec->len) return (int64_t)vec->data[i];
-  fprintf(stderr, "tvec index out of bounds\n");
+  fprintf(stderr, "vec index out of bounds\n");
   exit(1);
   return 0;
   
@@ -6950,7 +6950,7 @@ static int64_t vec_hydata_hyget_un_un(void * data, int64_t i) {
 
 static int64_t vec_hydata_hyget_hychecked_un_un(void * data, int64_t i, int64_t len) {
         if (i >= 0 && (size_t)i < (size_t)len) return ((int64_t *)(intptr_t)data)[i];
-  fprintf(stderr, "tvec index out of bounds\n");
+  fprintf(stderr, "vec index out of bounds\n");
   exit(1);
   return 0;
   

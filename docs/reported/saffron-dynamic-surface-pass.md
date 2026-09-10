@@ -441,8 +441,13 @@ yet`, interp `true`. Parity note; the guide documents the panic.
   read as a return annotation. `(fn [] (:: :kw Sym))` works. Found by the
   fuzzer; the generator avoids both shapes (KNOWN rows) and pins them with
   `--known-probes`.
-- Cosmetic: `vec-get` out of bounds reads `tvec index out of bounds`
-  compiled vs `vec index out of bounds` interp.
+- ~~Cosmetic: `vec-get` out of bounds reads `tvec index out of bounds`
+  compiled vs `vec index out of bounds` interp.~~ **RESOLVED 2026-09-10.**
+  `tvec` was a leftover internal name -- the type is `Vec` -- so the compiled
+  side took the interpreter's spelling at both `stdlib/vec.tur` sites
+  (`vec-get` and `vec-data-get-checked__`). Snapshot regen in the same change,
+  as the fixture rule requires: 148 `expected.c` files, 2 lines each, and the
+  whole diff is that one string -- no codegen drift.
 
 ## Stale text to fix alongside
 
