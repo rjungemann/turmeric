@@ -6,6 +6,22 @@ All notable changes to Turmeric are documented here.
 
 ### Changed
 
+- **All four release archives now unpack to the same prefix layout** --
+  `bin/`, `lib/`, `include/turi/`, `share/turmeric/stdlib/`. `windows-x86_64`
+  has always used it; `linux-x86_64`, `linux-aarch64` and `macos-arm64` shipped
+  flat (`tur`, the `.a` files and `stdlib/` at the archive root) through
+  v0.46.0. That split existed because a flat tree once matched none of
+  `locate_runtime_lib`'s probes, so Windows was packaged the only way that
+  could compile; `<exe_dir>` has been probed since, making the difference
+  vestigial. The prefix layout is the one `tur` resolves natively --
+  `<exe_dir>/../lib` and `resolve_stdlib_root` step 3 -- rather than by
+  accommodation. **Extract-and-symlink instructions gain a `bin/`:**
+  `ln -s ~/.local/turmeric/bin/tur ~/.local/bin/tur`.
+- **Archives published before this keep working.** The `<exe_dir>` probe in
+  `locate_runtime_lib` stays exactly as it was, and `resolve_stdlib_root`
+  checks both `stdlib/` and `share/turmeric/stdlib/` at every level of its
+  walk-up, so an older tarball still compiles with a newer `tur`.
+
 - **The compiler runs on a stack sized for its own recursion, and the emitter's
   expression-depth cap is gone.** `EMIT_MAX_EXPR_DEPTH` was 40 and was wrong in
   both directions at once. As a ceiling it did not hold: it was calibrated
@@ -50,6 +66,27 @@ All notable changes to Turmeric are documented here.
   step could not find them. An offline visit loaded the page and then could not
   evaluate anything, which made "installing Try Turmeric means having the
   compiler" untrue for the one asset that makes it a REPL.
+- **`tvm install` produced a toolchain that could not compile anything.** tvm
+  normalized only the binary -- it moved a flat archive's `tur` down into
+  `bin/` and left `libturt_runtime.a` at the version root, which matches none
+  of `locate_runtime_lib`'s probes once `tur` has moved. `TUR_RT_AUTO` then
+  fell back to source mode and wanted `src/runtime/*.c` that no archive ships,
+  so `tur run` died with `no such file or directory: .../src/runtime/hamt.c`.
+  This was the `release-archive-cannot-compile` failure reintroduced by tvm's
+  own restage: the extracted archive worked, the tvm install of it did not.
+  `tvm install` now normalizes the whole tree, accepts either archive shape,
+  and reads either shape back off disk so versions installed by an older tvm
+  are not stranded.
+- **`tvm use` could leave `TUR_STDLIB_DIR` pointing at the previous version.**
+  It exported only on a hit, and the variable outlives the switch, so a version
+  whose stdlib it did not recognize silently compiled against another release's
+  -- which `tur` honors, since the directory has a readable `macros.tur`. It
+  now unsets on a miss. `tvm run` and `tvm exec` no longer export a path that
+  does not exist, which had made every invocation print
+  `ignoring TUR_STDLIB_DIR=...`.
+- **`tvm install --build` never copied `libturt_runtime.a`,** giving a
+  source-built version the same cannot-compile defect from a different
+  direction.
 
 - **A deeply nested expression no longer aborts the compiler.** What remains at
   each recursive walk is a backstop on real stack headroom

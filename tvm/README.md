@@ -79,10 +79,11 @@ release ships one tarball per `(os, arch)`:
 
 ```
 turmeric-v<tag>-<target>.tar.gz   # target: linux-x86_64 | linux-aarch64 | macos-arm64
-  tur                              # the compiler binary
-  libturi.a                        # static interpreter library
+  bin/tur                          # the compiler binary
+  lib/libturt_runtime.a            # runtime archive `tur build` links against
+  lib/libturi.a                    # static interpreter library
   include/turi/*.h                 # headers to link against libturi
-  stdlib/                          # stdlib snapshot for that release
+  share/turmeric/stdlib/           # stdlib snapshot for that release
 ```
 
 `tvm install` downloads the asset matching the current host, verifies its
@@ -90,15 +91,25 @@ SHA-256 against the release's `sha256sums.txt`, and extracts it atomically
 into `$TVM_DIR/versions/<v>/`. `tvm use` activates a version's stdlib by
 exporting `TUR_STDLIB_DIR` so resource lookup is unambiguous.
 
+Releases up to v0.46.0 shipped the three `.tar.gz` targets **flat** instead --
+`tur`, the `.a` files and `stdlib/` all at the archive root -- so `tvm install`
+normalizes either shape into the prefix layout above on the way in, and reads
+either shape back off disk for versions installed before that. The
+rearrangement is not cosmetic: `tur` finds its runtime archive by probing
+`<exe_dir>/../lib`, so a version with `bin/tur` and `libturt_runtime.a` left at
+the root is one that cannot compile anything.
+
 ### Directory layout (`$TVM_DIR`, default `~/.tvm`)
 
 ```
 ~/.tvm/
-  tvm.sh                  # shell entry point (sourced from your rc)
-  versions/<v>/bin/tur    # extracted compilers
-  aliases/default         # plain file: "0.23.1"
-  cache/downloads/        # raw tarballs
-  cache/sources/          # source checkout reused by --build
+  tvm.sh                              # shell entry point (sourced from your rc)
+  versions/<v>/bin/tur                # extracted compilers
+  versions/<v>/lib/*.a                # runtime + interpreter archives
+  versions/<v>/share/turmeric/stdlib/ # that version's stdlib
+  aliases/default                     # plain file: "0.23.1"
+  cache/downloads/                    # raw tarballs
+  cache/sources/                      # source checkout reused by --build
 ```
 
 ## Tests
