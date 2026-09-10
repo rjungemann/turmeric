@@ -1,6 +1,17 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- The `t` is PAINTED, not knocked out.
+
+     It used to be a counter in a single even-odd path, so the letter showed
+     whatever sat behind the icon: right on the site's own near-black ground,
+     but a white `t` in a light browser tab strip. Two paths, with the glyph
+     filled at the var(bg-base) value rgb(12,10,8), read the same on any
+     backdrop.
+
+     (No double-hyphen anywhere in this comment: XML forbids it, and an
+     unparseable favicon silently falls back to the browser's default.) -->
 <svg viewBox="0 -10 148 148" xmlns="http://www.w3.org/2000/svg">
     <g transform="translate(-965 -1)">
-        <path d="M1112.5,1L1102.5,128.5L965,128.5L975,1L1112.5,1ZM1024.761,38.737L1023.474,56.296L1029.327,56.296L1024.761,114.825L1048.173,114.825L1049.461,97.266L1043.608,97.266L1046.886,56.296L1052.739,56.296L1054.026,38.737L1048.173,38.737L1050.046,15.325L1032.487,15.325L1030.614,38.737L1024.761,38.737Z" fill="rgb(239,160,48)"/>
+        <path d="M1112.5,1L1102.5,128.5L965,128.5L975,1L1112.5,1Z" fill="rgb(239,160,48)"/>
+        <path d="M1024.761,38.737L1023.474,56.296L1029.327,56.296L1024.761,114.825L1048.173,114.825L1049.461,97.266L1043.608,97.266L1046.886,56.296L1052.739,56.296L1054.026,38.737L1048.173,38.737L1050.046,15.325L1032.487,15.325L1030.614,38.737L1024.761,38.737Z" fill="rgb(12,10,8)"/>
     </g>
 </svg>
