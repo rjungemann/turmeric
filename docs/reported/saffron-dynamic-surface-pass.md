@@ -336,8 +336,22 @@ yet`, interp `true`. Parity note; the guide documents the panic.
 
 ## Low -- expressiveness holes, both back ends agree
 
-- `(= "ab" "ab")` through `any` panics `=: no operator for a cstr argument`.
-  Bool and numeric `=` work. String equality is table stakes for the dialect.
+- ~~`(= "ab" "ab")` through `any` panics `=: no operator for a cstr
+  argument`.~~ **RESOLVED 2026-09-10.** `=` / `not=` on two cstrs now answers
+  `Eq[cstr]`'s comparison (`stdlib/typeclass-eq.tur`) on both back ends --
+  `cstr-eq?`'s documented rule, byte for byte: both-NULL equal, a NULL never
+  equal to a non-NULL including the empty string, otherwise strcmp. This is
+  the same move H5 made for Sym, and for the same reason: the `=` OPERATOR has
+  no cstr row ANYWHERE -- typed Turmeric included, where `(= "ab" "ab")` is a
+  TUR-E0006 -- so adding one to the builtin table would change the typed
+  surface, while a dialect in which every value is `any` has no other spelling
+  for string equality. Two arms, because the two back ends refused at
+  DIFFERENT sites: compiled, `__tur_dyn_cmp` fell through to its numeric
+  guard; interpreted, a cstr is a SCALAR any-box carrying no struct name, so it
+  slipped past the named-box refusal and died on the failed `builtin_lookup`.
+  Ordering and mixed-type compares still refuse in the same words on both back
+  ends. Pinned by `tests/fixtures/saffron-dyn-string-equality`, which asserts
+  both halves.
 - `(defn pick [c] (if c 1 "one"))` is a static error (`then=int else=cstr`);
   the if-join only widens under an explicit `: any` (P6).
 - `while` rejects an `any` condition (`elab_forms.c:3656`) while

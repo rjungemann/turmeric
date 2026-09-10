@@ -10066,6 +10066,22 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "        int __se = (TUR_UNTAG(__a) == TUR_UNTAG(__b));\n"
         "        return TUR_TAG(TUR_DYNTAG_BOOL, __op == TUR_DYNOP_EQ ? __se : !__se);\n"
         "    }\n"
+        /* saffron-dynamic-surface-pass (low): `=` / `not=` on two cstrs answers
+         * Eq[cstr]'s comparison (stdlib/typeclass-eq.tur), byte for byte, with
+         * both-NULL equal and a NULL never equal to a non-NULL -- exactly
+         * `cstr-eq?`'s documented rule, and the same move H5 made for Sym.  The
+         * `=` OPERATOR has no cstr row anywhere, typed Turmeric included, so
+         * this is the dynamic path's own arm; a dialect in which every value is
+         * `any` has no other spelling for string equality.  ORDERING on a cstr
+         * stays "no operator", on both back ends. */
+        "    if ((__op == TUR_DYNOP_EQ || __op == TUR_DYNOP_NE) &&\n"
+        "        __ta == TUR_DYNTAG_CSTR && __tb == TUR_DYNTAG_CSTR) {\n"
+        "        const char *__cx = (const char *)(intptr_t)TUR_UNTAG(__a);\n"
+        "        const char *__cy = (const char *)(intptr_t)TUR_UNTAG(__b);\n"
+        "        int __ce = (__cx == NULL && __cy == NULL) ? 1\n"
+        "                 : ((__cx == NULL || __cy == NULL) ? 0 : (strcmp(__cx, __cy) == 0));\n"
+        "        return TUR_TAG(TUR_DYNTAG_BOOL, __op == TUR_DYNOP_EQ ? __ce : !__ce);\n"
+        "    }\n"
         "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_no_operator(__op, __ta); }\n"
         "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_no_operator(__op, __tb); }\n"
         "    if (__ta == TUR_DYNTAG_FLOAT || __tb == TUR_DYNTAG_FLOAT) {\n"
