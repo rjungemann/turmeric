@@ -61,6 +61,73 @@
 > extension, bind at `dlopen` (fix direction 2, and `AotImage` already carries a
 > `mangled` C-symbol field for the export table), or compile in-process and
 > resolve via `dlsym(RTLD_DEFAULT)`, which now works on Windows.
+>
+> ### The three routes are NOT equally hard on Windows (2026-09-08)
+>
+> That last sentence understates the difference, and the gap is a platform
+> property rather than a preference.
+>
+> **AOT/cc route.** A PE DLL cannot be linked with unresolved symbols at all:
+>
+> ```
+> ld.exe: undefined reference to `godot_export'
+> collect2.exe: error: ld returned 1 exit status
+> ```
+>
+> So "leave the natives undefined and bind them at `dlopen`" -- fix direction 2
+> -- works on Linux and macOS and **cannot work on Windows**. The staged build
+> would need an import library for the extension, and none is produced today:
+> there is no `.dll.a` anywhere in the tree and `SConstruct` passes no
+> `-Wl,--out-implib`. Producing one, finding it from the staged project, and
+> keeping the staged link line pointed at it is real plumbing, on the most
+> fragile platform surface the shim has.
+>
+> **JIT route.** No link step exists to fail. `MIR_link` resolves undefined
+> imports through `jit_import_resolver`
+> ([src/jit_engine.c:424](../../src/jit_engine.c)), which falls back to
+> `dlsym(RTLD_DEFAULT, name)` -- `jit_engine.c:8` states the model outright,
+> "symbols resolved against THIS process". The same generated `extern-c`
+> declarations therefore work unchanged, and the import-library problem simply
+> does not arise. **On Windows this is the whole difference between the two
+> routes.**
+>
+> What the JIT route still needs is EXPORT, not import, and that is a much
+> smaller ask. `dlsym(RTLD_DEFAULT)` on Windows walks the main module then every
+> loaded module via `EnumProcessModules`, and `GetProcAddress` sees only
+> **exported** symbols ([src/platform_dl.h:54](../../src/platform_dl.h) records
+> this caveat). godot-cpp defaults `symbols_visibility` to `hidden`
+> (`tools/godotcpp.py:316`), so the entry points need an explicit export
+> attribute or an `--export-all-symbols` link flag. One flag, not an import
+> library.
+>
+> ### The JIT's dynamic FFI is also the answer to the variadic problem
+>
+> Separately, and this is the part the AOT route has no equivalent for:
+> `src/turi/jit_ffi.c` is a c2mir-backed dynamic FFI that synthesizes a call
+> thunk from a signature string at run time, cached per signature, explicitly
+> "so there is no `--max-arity` ceiling and no shape-table regeneration".
+>
+> Nine of the 89 natives are variadic, and they are the busiest names in the
+> surface -- `godot-call-v` alone has 1116 call sites across 13 distinct
+> arities. A fixed `extern-c` declaration cannot describe them, so the AOT route
+> needs either ~42 monomorphic entry points or a pack-based calling convention.
+> A dynamic FFI needs neither. That capability is JIT-only.
+>
+> ### What the interpreter does and does not need
+>
+> "turi has no FFI" is too strong: `dlsym` and `call-ptr` exist, gated behind
+> `(unsafe ...)`, and the known interpreter divergence
+> ([jit-ffi-interp-refuses-parametric-record-field](jit-ffi-interp-refuses-parametric-record-field.md))
+> is one record shape, not the whole surface. It also does not matter here --
+> the interpreter reaches the natives through the env by name and never needs an
+> FFI for them, which is why the interpreter path has worked all along while
+> both compiled paths failed.
+>
+> **Net:** the JIT route avoids the import library AND the variadic problem, on
+> the platform where both are worst. That is a materially stronger argument for
+> it than "no toolchain on the player's machine", and it does not contradict the
+> J1/J2 correction above: declarations and exported entry points are still
+> required on every route. What changes is only what happens after them.
 
 > ### PROGRESS 2026-09-09 -- the declaration route is BUILT and a real script
 > ### now AOT-compiles and runs. This report stays OPEN; see "What remains".
