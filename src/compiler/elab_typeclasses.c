@@ -108,7 +108,7 @@ static const char *tc_path_basename(const char *path) {
  * ascription forms.  Supports only the kinds the dispatch synthesis
  * actually needs: primitives + TY_STRUCT (named) + TY_APP.  Returns
  * NULL for unsupported kinds. */
-static Form *type_to_form(Elab *e, const Type *t, Span span) {
+Form *type_to_form(Elab *e, const Type *t, Span span) {
     if (!t) return NULL;
     const char *kw = NULL;
     switch (t->kind) {

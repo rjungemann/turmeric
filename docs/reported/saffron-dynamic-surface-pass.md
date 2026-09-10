@@ -109,7 +109,46 @@ Self-recursion is fine (pinned by the `main`-signature note at
 `elab_fns.c:8171`); the forward decl of a *different* not-yet-elaborated fn
 still gets the typed default.
 
-**H7. Seam into a fn-typed parameter emits uncompilable C.** *Update 2026-09-10:* representation gap, not a gate. The seam's checked unbox spells the payload `(void *)` while a `(fn [int] int)` parameter is emitted as the three-word `tur_poly_fn_t` (env, fn, fn_cps), and the widened value's box id is the fat-closure id, not the plain-function id the check wants, so a compiling version would panic "a closure that captures where a plain function is required" -- which is the honest outcome for a capturing closure, and the wrong one for a captureless typed lambda (`static_ok` on its `EX_FN_TO_FAT`), whose code pointer could be recovered. Fix direction: at the compiled `EX_ANY_CAST` for a `TY_FN` target, accept the fat id when the box's env is the static (captureless) one and build the `tur_poly_fn_t` from the fat box; otherwise take the panic path. Left open.
+**~~H7~~. RESOLVED 2026-09-10 on BOTH back ends (the report recorded only the
+compiled half; the interpreter panicked too, `cast: any holds fn, not (fn [int]
+: int)`).** The seam into a typed function parameter now synthesises a
+MARSHALLING adaptor rather than reinterpreting the payload word:
+
+```turmeric
+(let [__sfn <the any-valued argument>]
+  (fn [__sa0 : A0 ...] : R (cast (__sfn __sa0 ...) R)))
+```
+
+built in `saffron_seam_fn_adaptor` (elab_call.c) beside its outbound twin
+`saffron_dyn_fn_adaptor`. `(__sfn __sa0 ...)` is a dynamic call on an `any`
+head, which boxes each argument and yields an `any`; the `cast` unboxes the
+result to `R` with the ordinary checked-cast panic if the function returned
+something else. The `let` is load-bearing -- without it the argument expression
+would be re-evaluated on every call of the adaptor. Because it is a SOURCE-level
+construct, one change fixes both back ends. Pinned by
+`tests/fixtures/saffron-seam-into-typed-fn-param`; the `KNOWN` row and the
+known-probe are both retired, and 250 fuzz cases with the shape back in the
+default pool are clean.
+
+**The filed fix direction was wrong, and measurably so.** It proposed accepting
+the fat id at the compiled `EX_ANY_CAST` and building the `tur_poly_fn_t` from
+the fat box, limited to captureless lambdas. That COMPILES and is a silent
+wrong answer: H8's outbound adaptor makes every function that enters an `any`
+an all-`any` one, so the fat box's slot 0 is a
+`tur_tagged_t (*)(void *, tur_tagged_t)` shim whatever the original signature
+was -- and the callee would then call it with raw machine words where 16-byte
+tagged values are expected. A representation this different needs marshalling,
+not a reinterpret. The captureless restriction also turns out to be unnecessary:
+going through the BOX rather than a static wrapper means a CAPTURING closure
+(`(mk 10)`) round-trips like any other, which the fixture pins.
+
+**A separate finding came out from under this one.** The adaptor declines an
+all-`any` target -- correctly, since that is already the representation the box
+holds -- and such a parameter turns out to be unusable on its own account: the
+callee's body does not compile (`called object 'f' is not a function`, the
+parameter emitted as a bare `int64_t`). Filed as
+[all-any-fn-param-is-unusable](all-any-fn-param-is-unusable.md); lifting the
+decline was measured NOT to fix it. Was:
 
 ```turmeric
 (defn tfn [f : (fn [int] int)] : int (f 1))

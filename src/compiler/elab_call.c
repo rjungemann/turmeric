@@ -512,6 +512,122 @@ Expr *elab_hoist_control_operands(Elab *e, Expr *node) {
  * machinery that already exists.  Only a NAMED value (a defn or a local
  * bound to a function) can be re-referenced by a form, so the adaptor
  * covers those; a typed closure produced by an expression stays as it was. */
+/* `type_to_form` spells a primitive as a KEYWORD (`:int`), which is the
+ * defstruct field spelling; a `fn` parameter list and a `cast` target want the
+ * bare symbol.  Normalise, and pass everything else (named ADTs, TY_APP
+ * chains) through untouched. */
+static Form *saffron_seam_type_form(Elab *e, const Type *t, Span sp) {
+    Form *f = type_to_form(e, t, sp);
+    if (f && f->tag == F_KEYWORD) return form_sym(e->arena, sp, f->as.sym);
+    return f;
+}
+
+/* saffron-dynamic-surface-pass H7: the INBOUND twin of
+ * `saffron_dyn_fn_adaptor` -- the seam from an `any` that holds a function
+ * INTO a typed function parameter.
+ *
+ * The outbound adaptor (H8) wraps a typed function so an `any` can hold it:
+ * every parameter and the result become `any`, and the box records the
+ * all-`any` id.  So by the time a function reaches an `any`, that is what it
+ * IS -- the fat box's slot 0 is a
+ * `tur_tagged_t (*)(void *, tur_tagged_t)` shim, whatever the original
+ * signature was.
+ *
+ * That is why the two obvious repairs are both wrong, and both were tried:
+ *   - Passing the payload word straight through gives a `(void *)` to a
+ *     three-word `tur_poly_fn_t` parameter -- `incompatible type for
+ *     argument 1`, a whole TU cc rejects.
+ *   - Making the box's word into a `tur_poly_fn_t` and relaxing the cast's
+ *     id check COMPILES, and is a silent wrong answer: the callee then calls
+ *     an all-`any` shim with a raw `int64_t` where a 16-byte `tur_tagged_t`
+ *     is expected.  The filed fix direction proposed exactly this, limited to
+ *     captureless lambdas.
+ *
+ * A representation this different needs MARSHALLING, not a reinterpret, so
+ * synthesise the wrapper that does it:
+ *
+ *   (let [__sfn <the any-valued argument>]
+ *     (fn [__sa0 : A0 ...] : R (cast (__sfn __sa0 ...) R)))
+ *
+ * `(__sfn __sa0 ...)` is a dynamic call on an `any` head, which boxes each
+ * argument and yields an `any`; the `cast` unboxes the result to `R` with the
+ * ordinary checked-cast panic if the function returned something else.  The
+ * `let` matters: without it the argument expression would be re-evaluated on
+ * every call of the adaptor.
+ *
+ * Going through the BOX rather than a static wrapper is what makes this work
+ * for a CAPTURING closure too -- `(mk 10)` -- which the reinterpret could
+ * never have handled.
+ *
+ * Returns NULL to decline (an all-`any` target, which needs no marshalling and
+ * gets the plain checked unbox; a signature too wide; or a parameter/result
+ * type `type_to_form` cannot spell as source), leaving the caller's existing
+ * path untouched. */
+static Expr *saffron_seam_fn_adaptor(Elab *e, const Form *arg_form,
+                                     const Type *want, Span sp) {
+    if (!e || !arg_form || !want || want->kind != TY_FN) return NULL;
+    if (want->as.fn.cfnptr) return NULL;
+    uint32_t n = want->as.fn.arity;
+    if (n > 5) return NULL;
+    /* An all-`any` target is already the representation the box holds, so the
+     * plain checked unbox is right and a wrapper would only add a call. */
+    bool all_any = (want->as.fn.result_kind == TY_ANY);
+    for (uint32_t k = 0; k < n && all_any; k++)
+        if (want->as.fn.arg_kinds[k] != TY_ANY) all_any = false;
+    if (all_any) return NULL;
+
+    const Symbol *fn_s   = symtab_intern(e->st, strslice("fn", 2));
+    const Symbol *let_s  = symtab_intern(e->st, strslice("let", 3));
+    const Symbol *cast_s = symtab_intern(e->st, strslice("cast", 4));
+    const Symbol *sfn_s  = symtab_intern(e->st, strslice("__sfn", 5));
+
+    /* Parameter list: `__sa<k>` followed by its type annotation, the spelling
+     * the reader produces for `x : T`. */
+    Form **pv = (Form **)arena_alloc(e->arena, (2 * (n ? n : 1)) * sizeof(Form *));
+    Form **cargs = (Form **)arena_alloc(e->arena, (n + 1) * sizeof(Form *));
+    cargs[0] = form_sym(e->arena, sp, sfn_s);
+    for (uint32_t k = 0; k < n; k++) {
+        Type at = (want->as.fn.arg_full_types && want->as.fn.arg_full_types[k])
+                      ? *want->as.fn.arg_full_types[k]
+                      : type_from_kind(want->as.fn.arg_kinds[k]);
+        Form *atf = saffron_seam_type_form(e, &at, sp);
+        if (!atf) return NULL;
+        char nm[24];
+        snprintf(nm, sizeof nm, "__sa%u", k);
+        const Symbol *ps = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+        pv[2 * k]     = form_sym(e->arena, sp, ps);
+        pv[2 * k + 1] = form_type_ann(e->arena, sp, atf);
+        cargs[1 + k]  = form_sym(e->arena, sp, ps);
+    }
+    Type rt = want->as.fn.result_full_type ? *want->as.fn.result_full_type
+                                           : type_from_kind(want->as.fn.result_kind);
+    /* Built twice on purpose: the same Form is not shared between the return
+     * annotation and the `cast` target. */
+    Form *rtf_ann  = saffron_seam_type_form(e, &rt, sp);
+    Form *rtf_cast = saffron_seam_type_form(e, &rt, sp);
+    if (!rtf_ann || !rtf_cast) return NULL;
+
+    Form *dyn_call = form_list(e->arena, sp, cargs, n + 1);
+    Form *cast_items[3] = { form_sym(e->arena, sp, cast_s), dyn_call, rtf_cast };
+    Form *body = form_list(e->arena, sp, cast_items, 3);
+    Form *lam_items[4] = { form_sym(e->arena, sp, fn_s),
+                           form_vec(e->arena, sp, pv, 2 * n),
+                           form_type_ann(e->arena, sp, rtf_ann),
+                           body };
+    Form *lam = form_list(e->arena, sp, lam_items, 4);
+    Form *bind_items[2] = { form_sym(e->arena, sp, sfn_s), (Form *)arg_form };
+    Form *let_items[3] = { form_sym(e->arena, sp, let_s),
+                           form_vec(e->arena, sp, bind_items, 2),
+                           lam };
+    Form *let_form = form_list(e->arena, sp, let_items, 3);
+
+    Type *saved_expected = e->expected_type;
+    e->expected_type = NULL;
+    Expr *out = elab_form(e, let_form);
+    e->expected_type = saved_expected;
+    return out;
+}
+
 static Expr *saffron_dyn_fn_adaptor(Elab *e, Expr *value) {
     if (!value || value->kind != EX_VAR || !value->as.var.binding ||
         !value->as.var.binding->name || value->type.kind != TY_FN)
@@ -6828,7 +6944,18 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              * exemption above (which tests the KIND) never fired for it, and
              * the seam checked against an instantiation nobody chose. */
             bool grounded = call_ground_open_app_args_to_any(e->arena, &want);
-            Expr *unboxed = elab_any_unbox_to(e, args[i], want, args[i]->span);
+            /* saffron-dynamic-surface-pass H7: a FUNCTION target needs
+             * marshalling rather than a checked unbox -- see
+             * `saffron_seam_fn_adaptor`.  It declines (NULL) for a target that
+             * is already all-`any`, or one it cannot spell, and the plain
+             * unbox below then runs exactly as before. */
+            Expr *seam_fn_ad = NULL;
+            if (want.kind == TY_FN && 1 + i < call->as.list.len)
+                seam_fn_ad = saffron_seam_fn_adaptor(e, call->as.list.items[1 + i],
+                                                     &want, args[i]->span);
+            Expr *unboxed = seam_fn_ad ? seam_fn_ad
+                                       : elab_any_unbox_to(e, args[i], want,
+                                                           args[i]->span);
             if (unboxed) {
                 args[i] = unboxed; arg_ok = true;
                 /* ...and the half that grounding ALONE does not buy.
@@ -6848,7 +6975,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                  * caller's Saffron context wants anyway.  Guarded on `grounded`
                  * so a seam over an already-concrete target (`(Vec int)`) keeps
                  * the bindings it had. */
-                if (grounded && want_decl)
+                if (grounded && want_decl && !seam_fn_ad)
                     (void)call_collect_type_bindings(want_decl, args[i]->type,
                                                      type_bindings,
                                                      &n_type_bindings);
@@ -7283,8 +7410,31 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     }
                     args[i] = wrap;
                 } else if (args[i]->type.kind == TY_PTR_VOID ||
-                           (args[i]->type.kind == TY_FN && args[i]->type.as.fn.boxed)) {
-                    /* A capturing closure value -- pack it into the carrier. */
+                           (args[i]->type.kind == TY_FN && args[i]->type.as.fn.boxed) ||
+                           (args[i]->kind == EX_ANY_CAST &&
+                            args[i]->type.kind == TY_FN)) {
+                    /* A capturing closure value -- pack it into the carrier.
+                     *
+                     * saffron-dynamic-surface-pass H7: the Saffron SEAM's
+                     * checked unbox (`elab_any_unbox_to`, an EX_ANY_CAST) is
+                     * the third shape that belongs here, and it reached
+                     * neither of the first two -- it has no fn binding to find
+                     * and its TY_FN type is not `boxed` -- so nothing wrapped
+                     * it and the raw payload word was handed to a
+                     * `tur_poly_fn_t` parameter: `incompatible type for
+                     * argument 1 of 'tfn'`, a whole TU cc rejects.
+                     *
+                     * `is_closure` is the RIGHT path for it rather than a
+                     * near-miss: `elab_coerce_to_any` normalises a function
+                     * payload to the fat `{ thunk, env }` representation
+                     * before boxing it, so an `any` that holds a function
+                     * always holds a fat box -- and the is_closure emit reads
+                     * the thunk from slot 0 at run time with the box itself as
+                     * the env, which is exactly the conversion the D8 dynamic
+                     * witness already performs by hand. That it goes through
+                     * the box rather than a static wrapper is why this works
+                     * for a CAPTURING closure too, not only the captureless
+                     * one the filed fix direction proposed to special-case. */
                     Expr *orig = args[i];
                     Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig->span);
                     wrap->as.poly_wrap_.inner = orig;
