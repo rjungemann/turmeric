@@ -12,8 +12,7 @@ ends) but the scenario behind it is broken worse than it says -- see H2/H3.
 
 ## High -- crash, uncompilable C, or silent wrong answer
 
-**H1. A capturing lambda in a Saffron file loses its environment (both back
-ends).** The canonical closure does not work:
+**~~H1~~. RESOLVED 2026-09-10: `collect_free_vars` (elab_core.c) had no arms for the Saffron nodes (`EX_DYN_OP` / `EX_DYN_CALL` / `EX_DYN_FIELD` / `EX_DYN_METHOD`), so a variable referenced only inside one was never captured; both traversals now descend into them. Pinned by `tests/fixtures/saffron-capturing-lambda`; KNOWN row retired. Was: a capturing lambda in a Saffron file loses its environment (both back ends).** The canonical closure does not work:
 
 ```turmeric
 (defn adder [k] (fn [x] (+ x k)))
@@ -247,6 +246,12 @@ yet`, interp `true`. Parity note; the guide documents the panic.
   and is a static `TUR-E0001`, while the same call through an unannotated
   defn builds `(W any)` and passes. The Saffron ctor widen keys on the
   call's position, not the file.
+- A `call/cc` receiver annotated `: any` -- `(call/cc (fn [k] : any (k 42)))`
+  -- is `conversion to non-scalar type requested` at cc: the CPS call/cc
+  emitter assigns its result through a C cast to the binder's type and an
+  escape delivers an int64, neither of which is a tagged box. Pre-existing;
+  the H10 lambda default deliberately exempts the immediate receiver
+  (`in_callcc_receiver`) so an unannotated one keeps its scalar return.
 - Cosmetic: `vec-get` out of bounds reads `tvec index out of bounds`
   compiled vs `vec index out of bounds` interp.
 

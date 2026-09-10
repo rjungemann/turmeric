@@ -2683,7 +2683,10 @@ static Form *callcc_default_cont_param(Elab *e, Form *f_form) {
  * captured continuation yields a value of f's return type. */
 static Expr *callcc_node(Elab *e, const Form *call, bool is_escape) {
     Form *f_form = callcc_default_cont_param(e, call->as.list.items[1]);
+    bool saved_ccr = e->in_callcc_receiver;
+    e->in_callcc_receiver = true;
     Expr *f_expr = elab_form(e, f_form);
+    e->in_callcc_receiver = saved_ccr;
     if (!f_expr) return NULL;
 
     /* f's codomain becomes the call/cc result type; fall back to int. */

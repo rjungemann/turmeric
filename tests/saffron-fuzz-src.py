@@ -123,7 +123,7 @@ TIMEOUT = 90
 # ---------------------------------------------------------------------------
 
 KNOWN = [
-    ("H1-capturing-lambda",      ("route_capture",)),
+    # H1-capturing-lambda (route_capture): retired 2026-09-10.
     ("H5-sym-in-any",            ("scalar_sym",)),
     # H6-forward-ref-int (route_fwdref): retired 2026-09-10.
     ("H7-seam-fn-param",         ("route_seam_fn",)),
@@ -724,9 +724,6 @@ def self_test(tur, workdir):
 # One pinned minimal repro per open finding.  Each must FIRE (any non-ok
 # classification on either arm) on an unfixed build.
 KNOWN_PROBES = [
-    ("H1  capturing lambda loses its environment",
-     '#lang saffron\n(defn adder [k] (fn [x] (+ x k)))\n'
-     '(defn main [] : int (let [f (adder 7.25)] (println (f 1))) 0)\n', "8.25\n"),
     ("H5  Sym inside an any: type-of / =",
      '#lang saffron\n(defn k [x] (type-of x))\n(defn s [a b] (= a b))\n'
      '(defn main [] : int (println (k :kw)) (println (s :a :a)) 0)\n', "Sym\ntrue\n"),

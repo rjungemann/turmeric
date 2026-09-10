@@ -9486,6 +9486,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
  * Lifts to a static function. For now, we require a return type annotation.
  * Example: (fn [x y] :int (+ x y)) */
 Expr *elab_fn(Elab *e, const Form *call) {
+    /* H10 x call/cc: consumed here so only the immediate receiver sees it. */
+    bool is_callcc_receiver = e->in_callcc_receiver;
+    e->in_callcc_receiver = false;
     /* Minimum: (fn [params...] body...) */
     if (call->as.list.len < 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -10279,6 +10282,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     if (!return_annotated && return_kind == TY_NIL && body &&
         body->type.kind != TY_NIL && body->type.kind != TY_NEVER &&
         body->type.kind != TY_ANY && lang_span_is_saffron(call->span) &&
+        !is_callcc_receiver &&
         !(e->expected_type && e->expected_type->kind == TY_FN)) {
         return_kind = TY_ANY;
     }

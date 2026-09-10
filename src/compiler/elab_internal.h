@@ -549,6 +549,14 @@ typedef struct Elab {
      * elaborator clears it for nested sub-calls so it applies only to the
      * outermost call of the ascribed expression. */
     Type *expected_type;
+    /* saffron-dynamic-surface-pass H10 x call/cc: set while the RECEIVER of a
+     * `call/cc` is being elaborated.  elab_fn reads and clears it at entry, so
+     * only the immediate receiver lambda sees it: that lambda keeps its
+     * inferred (scalar) return instead of the Saffron `any` default, because
+     * the CPS call/cc emitter assigns its result through a C cast to the
+     * binder's type and an escape delivers an int64 -- neither is a
+     * tur_tagged_t. */
+    bool in_callcc_receiver;
     /* Phase G2: current per-arm skolem environment (NULL outside GADT match arms) */
     SkolemEnv *g2_skolem_env;
     /* Phase G2: GADT constructor whose arm is currently being elaborated.
