@@ -31,7 +31,7 @@ return-widen/unbox paths at `elab_fns.c:8171` and `:8234` sit in the same
 elaboration and are the first suspects. The interpreter failing identically
 says the loss is in elaboration, not emit.
 
-**H2. `map-get` miss on a `(Map K any)` segfaults compiled (typed too).**
+**~~H2~~. RESOLVED 2026-09-10: a miss on a `(Map K any)` is the nil box on both back ends (`emit_core.c` carrier->any deref, interpreter `map_val_read`), so `(if (map-get m k) ...)` is a presence test. Pinned by `tests/fixtures/map-get-miss-on-any-value-is-nil`. Was: `map-get` miss on a `(Map K any)` segfaults compiled (typed too).**
 
 ```turmeric
 (let [m0 : (Map int any) (map-new)  m1 (map-assoc m0 1 (:: 7.1 any))]
@@ -214,7 +214,9 @@ is a static `TUR-E0001: expected int, got any` reported at
 `stdlib/map.tur:573`, while `(s (t (map-get ...)))` through an unannotated
 defn works. The seam insertion is gated on the ARGUMENT's span being Saffron
 (`elab_call.c:6600`); a macro-expanded argument carries the stdlib span.
-Affects every `map-*` accessor since they are macros.
+Affects every `map-*` accessor since they are macros. The `if` truthiness
+rule (`elab_forms.c:2862`) is gated the same way: `(if (map-get m k) ...)` is
+`if condition must be bool, got any` even in a Saffron file.
 
 **M9. Multi-arg method on `any`: compiled panics as documented, interp
 dispatches.** `(.near? x y)` -> compiled `cannot be dispatched dynamically

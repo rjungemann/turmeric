@@ -562,7 +562,9 @@
 ;;;
 ;;; Returns:
 ;;;   The value of type V, or 0 (none) if absent. For a non-int value type read
-;;;   the result with an ascription, e.g. (:: (map-get m k) :float).
+;;;   the result with an ascription, e.g. (:: (map-get m k) :float). When V is
+;;;   `any` a miss is the nil box (falsy under Saffron truthiness), on both
+;;;   back ends.
 ;;;
 ;;; Example:
 ;;;   (map-get m "name")  ; => value or 0

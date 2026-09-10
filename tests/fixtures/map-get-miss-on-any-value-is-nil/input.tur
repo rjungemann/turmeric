@@ -1,0 +1,32 @@
+#lang saffron
+;; saffron-dynamic-surface-pass H2: `map-get` on a `(Map K any)` returns 0 on
+;; a miss ("0 (none) if absent"), and the compiled read-back dereferenced that
+;; 0 as the 16-byte tagged box -- a segfault on every Saffron `#map{...}` miss,
+;; and on a typed `(Map int any)` too.  The interpreter handed back an int 0
+;; instead, so `type-of` said `int` for a value that was never there.
+;;
+;; A missing `any` is now the nil box on both back ends (emit_core.c's
+;; carrier->any deref; the interpreter's map_val_read), which is what makes
+;; `(if (map-get m k) ...)` a presence test under Saffron truthiness.
+;;
+;; 7.25 rather than 7.0: a hit must still round-trip a float payload exactly.
+;; `(if (map-get m k) ...)` directly is still M10 (the truthiness rule keys on
+;; the condition's span, and the macro expansion carries stdlib/map.tur's), so
+;; the VALUE takes one hop through an unannotated parameter -- only the value:
+;; the map and the key stay typed, since an any-held map (H9) and an any key
+;; (H3) are their own open findings.
+(defn present? [x] (if x "present" "absent"))
+(defn main [] : int
+  (let [m #map{:a 1 :b 7.25}]
+    (println (map-has? m :zzz))
+    (println (type-of (map-get m :zzz)))
+    (println (type-of (map-get m :b)))
+    (println (cast (map-get m :b) float))
+    (println (present? (map-get m :a)))
+    (println (present? (map-get m :zzz))))
+  ;; the typed shape, no Saffron literal involved
+  (let [m0 : (Map int any) (map-new)
+        m1 (map-assoc m0 1 (:: 7.25 any))]
+    (println (type-of (map-get m1 2)))
+    (println (type-of (map-get m1 1))))
+  0)

@@ -705,7 +705,10 @@ static void *map_val_box(TuriValue v) {
  * before. */
 static TuriValue map_val_read(const Hamt *m, void *w) {
     if (!m || !m->val_owned) return turi_int((int64_t)(intptr_t)w);
-    if (!w) return turi_int(0);
+    /* saffron-dynamic-surface-pass H2: a miss on a map whose values are boxed
+     * (an `any` value, a wide by-value struct) is nil, matching the compiled
+     * path's nil box; it used to be an int 0 the caller then read as a value. */
+    if (!w) return turi_nil();
     TuriValue v;
     memcpy(&v, w, sizeof v);
     return v;

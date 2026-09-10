@@ -5678,6 +5678,21 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                     emit_owned_carrier_clear(src_str);
                     free(vtmp);
                     free(ctmp);
+                } else if (concrete_ty.kind == TY_ANY) {
+                    /* saffron-dynamic-surface-pass H2: the carrier is 0 when a
+                     * map accessor MISSED (`map-get`'s documented "0 (none) if
+                     * absent"), and dereferencing that was a segfault on every
+                     * `(Map K any)` miss -- i.e. every Saffron `#map{...}` miss.
+                     * A missing `any` is the nil box, which is also what makes
+                     * `(if (map-get m k) ...)` a presence test under Saffron
+                     * truthiness.  The interpreter's map_val_read answers the
+                     * same nil. */
+                    /* The numeric tag rather than TUR_DYNTAG_NIL: the DYNTAG
+                     * macros are part of the Saffron operator layer and a
+                     * typed `(Map int any)` never emits them. */
+                    buf_printf(&out, "({ int64_t __tur_bp = (int64_t)(intptr_t)(%s); "
+                                     "__tur_bp ? *(tur_tagged_t *)(intptr_t)__tur_bp "
+                                     ": TUR_TAG(%d, 0); })", src_str, (int)TY_NIL);
                 } else {
                     /* Pointer carrier: dereference the heap pointer. */
                     buf_printf(&out, "(*(%s *)(intptr_t)(%s))", cname, src_str);
