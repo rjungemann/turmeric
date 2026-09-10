@@ -13,6 +13,12 @@
 ;; stack cliff: this fixture must assert the DIAGNOSTIC, not "did not crash",
 ;; and must not become a stack-size canary in CI.
 ;;
+;; It became one anyway once the emit_value frame grew and the macOS/ASan cliff
+;; dropped below 40 -- see docs/archive/emit-depth-guard-loses-race-with-asan-stack.md.
+;; What keeps it honest now is not this count but the guard's second trigger:
+;; emit_value stops on real stack headroom as well as on the counter, so
+;; whichever comes first, the diagnostic is what gets printed.
+;;
 ;; Regression for docs/archive/emit-value-dispatch-unbounded-recursion.md
 (defn main [] : int
   (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ 1 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1) 1))

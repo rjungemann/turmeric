@@ -182,6 +182,7 @@ set(TUR_CORE_SOURCES
     compiler/expr.c
     compiler/fmt.c
     compiler/mangle.c
+    compiler/stack_guard.c
     compiler/forms.c
     compiler/span_audit.c
     compiler/pkg.c

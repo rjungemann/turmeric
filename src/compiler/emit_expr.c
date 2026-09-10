@@ -3,6 +3,7 @@
 #include "effect.h"     /* E2 fat-fn-value threading: EffectRow kind gate */
 #include "globals.h"    /* g_dump_mono_specs, emit knobs */
 #include "mono_specs.h" /* VBM3: van Laarhoven lens dispatch redirect */
+#include "stack_guard.h" /* emit-depth-guard-loses-race-with-asan-stack */
 
 /* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
  * type-application) that the carrier ABI stores as a heap pointer.  Used by
@@ -4558,27 +4559,36 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e);
  * so counting here bounds the whole walk without threading a parameter through
  * emit_value's many callers.
  *
- * The bound is a stack budget, not a language limit, and 40 is where two
- * measurements meet:
+ * The bound is a stack budget, not a language limit.  40 has to clear the
+ * deepest emit_value nesting anywhere in stdlib/, tests/fixtures/ and
+ * examples/ (20, in conv-defstruct-setmap-lowering), which it does with 2x to
+ * spare, and it is the only thing that fires on an unsanitized build -- those
+ * tolerate thousands of levels and are not the constraint.
  *
- *   Ceiling -- it must fire before the stack runs out on the DOCUMENTED
- *   bootstrap build.  Debug+ASan is what CLAUDE.md tells you to build,
- *   TUR_DEBUG_SANITIZE defaults ON everywhere, and ASan inflates these frames
- *   roughly 40x (~170 KB per level vs ~4 KB plain).  At an 8 MB default stack
- *   that build died at 47 levels on macOS/clang and between 60 and 80 on
- *   Linux/gcc, so the bound has to clear the worst of those.  An unsanitized
- *   build tolerates thousands and is not the constraint.
+ * It is NOT the ceiling.  It used to be, chosen to sit under a measured
+ * Debug+ASan cliff of 47 levels on macOS/clang and 60-80 on Linux/gcc (ASan
+ * inflates these frames ~40x, ~170 KB per level against ~4 KB plain).  That
+ * calibration could not hold: this frame has since grown a 256-byte
+ * region-walk array, which moved the macOS cliff BELOW 40, and the guard then
+ * lost the race it was written to win -- an ASan stack-overflow abort where
+ * TUR-E0712 should have printed (emit-depth-guard-loses-race-with-asan-stack).
+ * The ceiling is now measured rather than guessed: see the headroom trigger in
+ * emit_value.  Do not re-tune this constant against a fresh cliff measurement;
+ * that is the move that failed.
  *
- *   Floor -- it must not reject real code.  The deepest emit_value nesting
- *   anywhere in stdlib/, tests/fixtures/ and examples/ (3014 files) is 20, in
- *   conv-defstruct-setmap-lowering.  40 leaves 2x headroom over that.
- *
- * The two only just fit, which is the argument for eventually replacing the
- * native recursion with an explicit worklist and dropping the bound entirely.
- * Until then: nesting this deep is reachable from macro expansion, generated
- * code, a long `cond` chain, or a fold written as nested binary operations, so
- * the diagnostic says how to get out of it. */
+ * Replacing the native recursion with an explicit worklist would drop the
+ * bound entirely.  Until then: nesting this deep is reachable from macro
+ * expansion, generated code, a long `cond` chain, or a fold written as nested
+ * binary operations, so the diagnostic says how to get out of it. */
 #define EMIT_MAX_EXPR_DEPTH 40
+
+/* Depth at which the real-stack-headroom check joins the counter (see the
+ * guard in emit_value).  A fifth of the cap: high enough that no ordinary
+ * expression is ever measured, low enough that a runaway is caught long
+ * before an ASan-inflated stack runs out.  The deepest emit_value nesting
+ * across stdlib/, tests/fixtures/ and examples/ is 20, so real code that
+ * reaches this floor is already in the top half of the bound. */
+#define EMIT_EXPR_DEPTH_STACK_FLOOR 8
 
 static int g_emit_expr_depth;
 static bool g_emit_depth_exceeded;
@@ -5207,7 +5217,34 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * verbatim (the suspended sub-expression's already-delivered value). */
     for (uint8_t i = 0; i < ctx->n_sub_holes; i++)
         if (ctx->sub_holes[i] == e) return strdup(ctx->sub_names[i]);
-    if (g_emit_expr_depth >= EMIT_MAX_EXPR_DEPTH) {
+    /* emit-depth-guard-loses-race-with-asan-stack: the counter is a proxy for
+     * stack headroom, and on an ASan-instrumented build the redzone-inflated
+     * frames of this three-frame cycle (emit_value -> emit_value_dispatch ->
+     * emit_builtin) can exhaust the real stack well before depth 40 -- the
+     * process then aborts with a sanitizer stack-overflow report instead of
+     * TUR-E0712.  So measure the real thing too, exactly as the macro-expansion
+     * guard does (elab_call.c): once a genuine nesting is under way
+     * (EMIT_EXPR_DEPTH_STACK_FLOOR -- a runaway passes it immediately, and the
+     * floor keeps a legitimately shallow expression on a deliberately tiny
+     * `ulimit -s` from tripping), nearly-exhausted headroom raises the SAME
+     * diagnostic pair the counter does.  Re-tuning EMIT_MAX_EXPR_DEPTH is not
+     * the fix: a constant sized against one host's frames only moves the cliff
+     * for the next frame that grows. */
+    bool emit_stack_low = g_emit_expr_depth >= EMIT_EXPR_DEPTH_STACK_FLOOR &&
+                          g_emit_expr_depth < EMIT_MAX_EXPR_DEPTH &&
+                          tur_stack_nearly_exhausted();
+    /* TUR_DEBUG_STACK_GUARD=1: trace what the guard sees, the same knob the
+     * macro-expansion guard carries (elab_call.c). */
+    if (emit_stack_low) {
+        static int dbg = -1;
+        if (dbg < 0) dbg = getenv("TUR_DEBUG_STACK_GUARD") != NULL;
+        if (dbg) {
+            size_t t = 0, h = tur_stack_headroom(&t);
+            fprintf(stderr, "[stack-guard] emit depth=%d headroom=%zu total=%zu\n",
+                    g_emit_expr_depth, h, t);
+        }
+    }
+    if (g_emit_expr_depth >= EMIT_MAX_EXPR_DEPTH || emit_stack_low) {
         /* Report once, then unwind quietly: every enclosing level would
          * otherwise repeat the same message for the same expression. */
         if (!g_emit_depth_exceeded) {
@@ -5221,6 +5258,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                       "bindings; if a macro generated it, have the macro emit a "
                       "flatter form (a fold written as nested binary operations "
                       "is the usual source)");
+            /* Say which trigger stopped the walk.  Without this the message
+             * claims the expression exceeded 40 while the counter was at, say,
+             * 12 -- true about the stack, false about the nesting, and the
+             * reader has no way to tell the two apart. */
+            if (emit_stack_low)
+                diag_emit(DIAG_NOTE, e->span,
+                          "emission stopped at depth %d (limit %d): the "
+                          "compiler's C stack is nearly exhausted -- oversized "
+                          "native frames (e.g. a sanitizer-instrumented debug "
+                          "build) or a small stack limit reach the stack "
+                          "before the depth limit",
+                          g_emit_expr_depth, EMIT_MAX_EXPR_DEPTH);
         }
         /* A valid C expression, so the rest of emission stays well-formed --
          * the build fails on the diagnostic, not on malformed output. */

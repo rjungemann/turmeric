@@ -2,6 +2,30 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- **TUR-E0712 actually prints on an ASan-instrumented build.** The emitter's
+  expression-depth guard was a bare counter (`EMIT_MAX_EXPR_DEPTH`, 40) tuned
+  against one host's measured stack cliff, so on macOS/arm64 the
+  `emit_value -> emit_value_dispatch -> emit_builtin` cycle exhausted the real
+  stack first and `tur emit-c` aborted with `AddressSanitizer: stack-overflow`
+  instead of the diagnostic the bound exists to print --
+  `errors/expr-nesting-depth-limit` red on the documented bootstrap build. It
+  now has the same second trigger the macro-expansion guard got in 0.42:
+  `elab_call.c`'s three stack-introspection helpers moved into a shared
+  `src/compiler/stack_guard.{c,h}`, and the walk stops when EITHER the counter
+  hits its cap OR a genuine nesting is under way and the calling thread's real
+  headroom has run down. The constant was deliberately not re-tuned -- sizing
+  it against one host's frames only moves the cliff for the next frame that
+  grows. When headroom is what stopped the walk the diagnostic says so, with
+  the depth it reached, so the message does not claim a 40-deep expression
+  when the counter stood at 32. The shared helper caches the thread's stack
+  bounds: the query runs per recursion level, and glibc's
+  `pthread_getattr_np` parses `/proc/self/maps` for the main thread, which was
+  affordable at macro depths and would not have been at emitter ones.
+
 ## [0.46.0] -- 2026-09-09
 
 ### Changed
