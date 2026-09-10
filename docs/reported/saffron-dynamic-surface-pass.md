@@ -219,39 +219,31 @@ does not add its field type to that set. A vec element read does.
 
 ## Medium -- back-end divergence or documented-surface hole
 
-**M1. `.bind` on an `any` Option gives the wrong answer compiled.** `(defn
-half [o] (.bind o (fn [x] (some (/ x 2.0)))))` -> originally `cast: any holds a
-function this cast cannot accept` (the witness casts the lambda to `(fn [any]
-any)`; a bind lambda returns `(Option any)`). Interp: 3.55. `.fmap` on Option
-works. **Update 2026-09-10** (after H10 pinned lambda returns to `any`): the
-cast now passes and `(type-of (half (some 7.1)))` is `unknown` compiled, then
-the next `cast` panics `any holds unknown, not Option`.
+**~~M1~~. RESOLVED 2026-09-10 on both back ends: `(type-of (half (some 7.1)))`
+is `Option` and the value is `3.55`, which is what the interpreter always
+answered.** The difference between `.bind` and the `.fmap` that always worked
+is one line of their DECLARATIONS -- `Functor`'s `g : (fn [a] b)` returns a
+bare type variable, `Monad`'s `k : (fn [a] (m b))` returns the class variable
+APPLIED. The D8 witness cast every erased fn extra to `(fn [any] any)`; for
+`fmap` that is right and grounds `b := any`, but for `bind` `(m b)` cannot
+unify with a bare `any`, so the result instantiation never grounded and `.bind`
+fell back to the erased carrier
+`__inst_Monad_bind_Option(int64_t, tur_poly_fn_t)`. The witness now passes a
+MARSHALLING adaptor for such a continuation -- the same move H7 makes at the
+argument seam --
+`(fn [__ka : any] : (Option any) (cast (__ak __ka) (Option any)))` -- so `k`
+really is `(fn [any] (Option any))`, `b := any`, the instantiation is concrete,
+and the ABI scan mints the by-value spec. Pinned by
+`tests/fixtures/saffron-dyn-bind-on-any-option`, which also pins the `fmap`
+twin so a later witness change cannot fix one by breaking the other.
 
-**Fix direction CORRECTED 2026-09-10 -- the note below replaces "the witness's
-`: any` return must not re-widen a body that is already `any`", which the
-emitted C does not bear out.** The body is not an `any` being re-boxed. Read
-`__dynwit_Monad_bind_Option`: it calls `__inst_Monad_bind_Option`, the erased
-CARRIER (`static int64_t __inst_Monad_bind_Option(int64_t, tur_poly_fn_t)`),
-and tags its `int64_t` result `TUR_TAG(21, ...)` -- 21 being a bare TypeKind
-number, which is why `type-of` reads `unknown`. There is no by-value spec for
-`bind` at `(Option any)` the way there is for `fmap`, because `bind`'s
-continuation is declared `k : (fn [a] (m b))` (`stdlib/typeclass-monad.tur:13`)
-and the witness casts it to `(fn [any] any)`, so the result instantiation never
-grounds. Worse than the tag: inside that carrier the Saffron lambda is CALLED
-through `((int64_t (*)(void*, int64_t))k.fn)`, while the lambda returns a
-16-byte `tur_tagged_t` -- half the box is dropped on the return. So this is a
-truncation, not a nesting.
+**The filed fix direction was wrong twice over**, which the corrected note of
+2026-09-10 had already established and this fix confirms: the body was not an
+`any` being re-widened, and the defect was a TRUNCATION rather than a nesting
+(the carrier calls the continuation through
+`((int64_t (*)(void*, int64_t))k.fn)` while a Saffron lambda returns a 16-byte
+`tur_tagged_t`, so half the box was dropped on the return).
 
-Why the obvious repair does not work either: casting `__a1` to `(fn [any]
-(Option any))` -- which the class declaration DOES record enough to do -- would
-let H10's "unless an expected fn type decides it" leave the body unboxed. But
-the lambda is boxed at the ORIGINAL dynamic site, `(.bind o <lambda>)`, where
-`o` is an `any` and `m` is unknown, so the widen has already happened by the
-time the witness sees it. `(fn [any] any)` is forced there.
-
-This is the same SHAPE as H7 and M2's compiled half: a Saffron `tur_tagged_t`
-meeting a representation the typed path already chose. Whichever of the three
-is picked up first should carry the other two.
 
 **M2. `Functor[Result]` is not dynamically dispatchable COMPILED.** *Update
 2026-09-10: the interpreter half is fixed; the compiled half is a

@@ -6848,6 +6848,24 @@ found_method:;
                         if (wi->dyn_witness[slot]) continue;
                         AdtDef *def = h.as.adt_.def;
                         Span sp = call->span;
+                        /* `(Head any ... any)` -- the all-`any` instantiation,
+                         * built fresh at every use because a Form is not shared
+                         * between two positions in one tree. */
+                        #define SAFFRON_ALL_ANY_APP(dst)                        \
+                            Form *dst;                                          \
+                            {   uint32_t __ntp = def->n_type_params;            \
+                                Form **__ti = (Form **)arena_alloc(             \
+                                    e->arena, (1 + __ntp) * sizeof(Form *));    \
+                                __ti[0] = form_sym(e->arena, sp,                \
+                                    symtab_intern(e->st, strslice(              \
+                                        def->name,                              \
+                                        (uint32_t)strlen(def->name))));         \
+                                for (uint32_t __k = 0; __k < __ntp; __k++)      \
+                                    __ti[1 + __k] = form_sym(e->arena, sp,      \
+                                        symtab_intern(e->st,                    \
+                                            strslice("any", 3)));               \
+                                dst = form_list(e->arena, sp, __ti, 1 + __ntp); \
+                            }
                         char wn[256];
                         snprintf(wn, sizeof wn, "__dynwit_%s_%.*s_%s", tc->name->name,
                                  (int)method_name_len, method_name, def->name);
@@ -6906,7 +6924,63 @@ found_method:;
                                 wimpl->binding->type.kind == TY_FN &&
                                 (k + 1) < wimpl->binding->type.as.fn.arity &&
                                 wimpl->binding->type.as.fn.arg_kinds[k + 1] == TY_PTR_VOID;
-                            if (erased_fn) {
+                            /* saffron-dynamic-surface-pass M1: a continuation
+                             * whose declared RESULT is the class variable
+                             * APPLIED -- Monad's `k : (fn [a] (m b))`, against
+                             * Functor's `g : (fn [a] b)` -- must not be cast to
+                             * `(fn [any] any)`.
+                             *
+                             * With that cast the method's result instantiation
+                             * never grounds (`(m b)` cannot unify with a bare
+                             * `any`), so `.bind` resolves to the ERASED CARRIER
+                             * `__inst_Monad_bind_Option(int64_t, tur_poly_fn_t)`
+                             * -- whose body calls the continuation through
+                             * `((int64_t (*)(void*, int64_t))k.fn)` while a
+                             * Saffron lambda returns a 16-byte `tur_tagged_t`,
+                             * dropping half the box on the return -- and the
+                             * `: any` pin then tags an unresolved result with a
+                             * bare TypeKind number, which is why `type-of` read
+                             * `unknown`.
+                             *
+                             * Pass a MARSHALLING adaptor instead, the same move
+                             * H7 makes at the argument seam:
+                             *
+                             *   (fn [__ka : any] : (Head any..)
+                             *     (cast (__ak __ka) (Head any..)))
+                             *
+                             * Now `k` really is `(fn [any] (Head any..))`, so
+                             * `b := any`, the instantiation is concrete, the
+                             * ABI scan mints the by-value spec, and the result
+                             * carries the right tag. */
+                            bool app_result_fn = false;
+                            if (erased_fn && slot < tc->n_methods &&
+                                tc->methods[slot].param_types) {
+                                const Type *mp = &tc->methods[slot].param_types[k + 1];
+                                if (mp->kind == TY_FN && mp->as.fn.result_full_type &&
+                                    mp->as.fn.result_full_type->kind == TY_APP)
+                                    app_result_fn = true;
+                            }
+                            if (app_result_fn) {
+                                SAFFRON_ALL_ANY_APP(ret_ty)
+                                SAFFRON_ALL_ANY_APP(cast_ty)
+                                char kn[24];
+                                snprintf(kn, sizeof kn, "__ka%u", k);
+                                const Symbol *ks = symtab_intern(
+                                    e->st, strslice(kn, (uint32_t)strlen(kn)));
+                                Form *inner[2] = { form_sym(e->arena, sp, as),
+                                                   form_sym(e->arena, sp, ks) };
+                                Form *cst2[3] = { form_sym(e->arena, sp, casts),
+                                                  form_list(e->arena, sp, inner, 2),
+                                                  cast_ty };
+                                Form *pv2[2] = { form_sym(e->arena, sp, ks),
+                                                 form_type_ann(e->arena, sp,
+                                                     form_sym(e->arena, sp, anys)) };
+                                Form *lam[4] = { form_sym(e->arena, sp, fns),
+                                                 form_vec(e->arena, sp, pv2, 2),
+                                                 form_type_ann(e->arena, sp, ret_ty),
+                                                 form_list(e->arena, sp, cst2, 3) };
+                                cargs[2 + k] = form_list(e->arena, sp, lam, 4);
+                            } else if (erased_fn) {
                                 Form *pany[1] = { form_sym(e->arena, sp, anys) };
                                 Form *fnt[3] = { form_sym(e->arena, sp, fns),
                                                  form_vec(e->arena, sp, pany, 1),
