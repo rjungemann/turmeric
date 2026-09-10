@@ -75,12 +75,39 @@ in the enclosing body and leaves a plain expression behind:
 - `emit_expr.c` by-value ADT cast out of `any`: the box read and the tag
   check are statements; the expression is the dereference.
 
+**Shape 4, found 2026-09-10 exactly as the paragraph below predicted: the
+`any` -> SCALAR cast.** The note here used to add that "the scalar arms beside
+this one yield a word and are fine". They do yield a word -- and that is not
+what the engine trips over. What matters is what the statement expression
+CONTAINS: `__tur_c` is a 16-byte `tur_tagged_t` bound from a call that itself
+takes `tur_tagged_t` arguments. In argument position that call reached its
+callee with the first argument replaced by the second, which is shape 1's
+symptom arriving through a scalar-valued `({ ... })`:
+
+```turmeric
+#lang saffron
+(defn id [x] x)
+(defn main [] : int
+  (let [g (id (fn [a : float b : float] : float (+ a b)))]
+    (println (cast (g 3.5 1.5) float)))
+  0)
+```
+
+`tur run` prints 5; `tur jit` on x86-64 printed **3** -- 1.5 + 1.5, the first
+argument replaced by the second. No adaptor or seam is involved, so this was
+reachable before the Saffron work; `saffron-seam-into-typed-fn-param` is simply
+the first fixture to run a two-float call through an `any` in the engine.
+Fixed by fix direction 2: both scalar arms of `EX_ANY_CAST` now bind the box
+and run the tag check as STATEMENTS and leave a plain unbox expression, exactly
+as the by-value ADT arm beside them already did. `inner` already emits its own
+statements into the body, so this changes no evaluation order.
+
 Still emitted as struct-valued statement expressions, none observed to
 misbehave yet: the dynamic method call (`__tur_dm`), the union widen
 (`__tur_ua`), `dyn_widen_to_any`'s by-value box (`__tur_fb`), and
 `emit_core.c`'s `__tur_pbox`. If a fixture that reaches one of them starts
 answering differently in the engine on Linux only, this is the first thing to
-suspect.
+suspect -- as shape 4 above did.
 
 ## Fix directions
 

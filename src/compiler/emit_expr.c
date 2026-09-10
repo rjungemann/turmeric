@@ -6918,12 +6918,33 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * NULL now -- a struct target is a record ADT, unboxed by the
              * byvalue-ADT branch below; the StructDef deref arm is removed. */
             if (target_tag == (int64_t)TY_FLOAT) {
-                /* TY2.2: reverse the float bit-reinterpret stored on inject. */
+                /* TY2.2: reverse the float bit-reinterpret stored on inject.
+                 *
+                 * Hoisted for the same reason as the by-value arm below, and
+                 * the note there used to say the scalar arms "yield a word and
+                 * are fine".  They do yield a word -- and that is not what the
+                 * engine trips over.  What matters is what the statement
+                 * expression CONTAINS: `__tur_c` is a 16-byte `tur_tagged_t`
+                 * bound from a call that itself takes `tur_tagged_t` arguments,
+                 * and in argument position that call reached its callee with
+                 * the first argument replaced by the second -- `(g 3.5 1.5)`
+                 * through an `any` computed 1.5 + 1.5 = 3 instead of 5, in the
+                 * engine on x86-64 only, correct under cc and on arm64.
+                 * jit-x86-64-struct-valued-statement-expression-miscompiles
+                 * predicted this exact discovery ("if a fixture that reaches
+                 * one of them starts answering differently in the engine on
+                 * Linux only, this is the first thing to suspect") and its fix
+                 * direction 2 is what this is: keep the emitter out of the
+                 * shape.  `inner` already emits its own statements into `body`,
+                 * so binding it here changes no evaluation order. */
+                char *cb = fresh_tmp(ctx);
+                buf_printf(body,
+                    "tur_tagged_t %s = (%s); "
+                    "__tur_any_cast_check(TUR_GETTAG(%s), %lld);\n",
+                    cb, inner, cb, (long long)target_tag);
                 buf_printf(&out,
-                    "({ tur_tagged_t __tur_c = (%s); "
-                    "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
-                    "((union { int64_t i; double d; }){.i = TUR_UNTAG(__tur_c)}).d; })",
-                    inner, (long long)target_tag);
+                    "((union { int64_t i; double d; }){.i = TUR_UNTAG(%s)}).d", cb);
+                free(cb);
             } else if (emit_type_is_byvalue_adt(ctx, e->type)) {
                 /* CONV-S1 seam 4: by-value record-ADT target (lowered defstruct).
                  * target_struct is NULL, but the payload was heap-boxed on inject,
@@ -6974,11 +6995,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     emit_type_c_name(ctx, emit_resolve_type(ctx, e->type));
                 if (full_ct && strchr(full_ct, '*') != NULL)
                     cast_ct = full_ct;
-                buf_printf(&out,
-                    "({ tur_tagged_t __tur_c = (%s); "
-                    "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
-                    "(%s)(intptr_t)TUR_UNTAG(__tur_c); })",
-                    inner, (long long)target_tag, cast_ct);
+                /* Hoisted for the same reason as the float arm above: the
+                 * statement expression's own value is a word, but it binds a
+                 * 16-byte `tur_tagged_t` from a call that can take struct
+                 * arguments, which is the shape the engine miscompiles. */
+                char *cb = fresh_tmp(ctx);
+                buf_printf(body,
+                    "tur_tagged_t %s = (%s); "
+                    "__tur_any_cast_check(TUR_GETTAG(%s), %lld);\n",
+                    cb, inner, cb, (long long)target_tag);
+                buf_printf(&out, "(%s)(intptr_t)TUR_UNTAG(%s)", cast_ct, cb);
+                free(cb);
             }
             buf_putc(&out, '\0');
             free(inner);

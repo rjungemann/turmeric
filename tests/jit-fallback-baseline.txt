@@ -13,6 +13,7 @@ cancel-chan
 cancel-cooperative
 cancel-select
 dead-base-ctor-trap
+defstruct-any-field
 future-capturing-closure
 future-linear
 future-split-free
@@ -24,7 +25,9 @@ once-basic
 poly-fn-any-parameter
 promise-linear
 saffron-cons-list
+saffron-dyn-bind-on-any-option
 saffron-dyn-hkt-dispatch
+saffron-dyn-hkt-partial-head
 thread-local-basic
 typeclass-assoc-type-method-return
 workstealing-balance
