@@ -46,6 +46,15 @@ const PRECACHE_URLS = [
     '/site.js',
     '/turmeric.js',
     '/turmeric.wasm',
+    // The REPL's own workers. Nothing else names them -- they are constructed
+    // from a string literal in main.js / lsp-client.js, so precacheShellAssets,
+    // which mines the shell's markup, cannot see them. Without these two rows
+    // an offline visit loads the page and then cannot evaluate anything, which
+    // makes "installed means you have the compiler" quietly untrue.
+    // Precaching them also keeps a controlled reload off the network path that
+    // WebKit breaks; see fetchFromNetwork below.
+    '/eval-worker.js',
+    '/lsp-worker.js',
     '/doc-names.json',
     '/favicon.svg',
     '/logo.svg',
@@ -330,6 +339,44 @@ function packRefForDocsUrl(pathname) {
     return null;
 }
 
+/**
+ * Fetch `request` from the network, around a WebKit defect.
+ *
+ * WebKit -- real Safari, not just Playwright's build; confirmed by hand on
+ * Safari 27.0 -- rejects `fetch(request)` inside a service worker with
+ * `TypeError: Load failed` when `request` is a top-level dedicated worker
+ * script (`destination: 'worker'`) that the browser already holds in its HTTP
+ * cache. Chromium serves the identical request without complaint.
+ *
+ * That pairing is a returning visitor. The first, uncontrolled load fetches
+ * /eval-worker.js over the network and the HTTP cache keeps it; on a later
+ * controlled load the same request arrives here, throws, `respondWith`
+ * rejects, `new Worker()` fails, and the REPL says "Failed to load WASM" --
+ * with advice to refresh that cannot help, because the refresh is controlled
+ * too.
+ *
+ * It is the `destination` carried on the Request object that trips it:
+ * `new Request(req)` and `fetch(req, { cache: 'reload' })` fail the same way,
+ * while re-issuing the bare URL -- which carries no worker destination --
+ * succeeds on every engine. So retry that way, and only for worker
+ * destinations: a blanket retry would add a second doomed round-trip to every
+ * genuinely offline request.
+ *
+ * See docs/archive/webkit-sw-controlled-reload-fails-wasm-init.md.
+ */
+function isWorkerScript(request) {
+    return request.destination === 'worker' || request.destination === 'sharedworker';
+}
+
+async function fetchFromNetwork(request) {
+    try {
+        return await fetch(request);
+    } catch (err) {
+        if (!isWorkerScript(request)) throw err;
+        return await fetch(request.url, { credentials: 'same-origin' });
+    }
+}
+
 async function networkFirst(request) {
     const cache = await caches.open(RUNTIME);
     try {
@@ -351,7 +398,7 @@ async function cacheFirst(request) {
     const cached = await caches.match(request);
     if (cached) {
         // Background revalidate; ignore failure (offline).
-        fetch(request).then(async (res) => {
+        fetchFromNetwork(request).then(async (res) => {
             if (res && res.ok) {
                 const cache = await caches.open(RUNTIME);
                 cache.put(request, res.clone());
@@ -360,7 +407,7 @@ async function cacheFirst(request) {
         return cached;
     }
     try {
-        const fresh = await fetch(request);
+        const fresh = await fetchFromNetwork(request);
         if (fresh && fresh.ok) {
             const cache = await caches.open(RUNTIME);
             cache.put(request, fresh.clone());

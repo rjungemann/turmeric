@@ -2,6 +2,25 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- **Try Turmeric's service worker can serve the REPL's own workers on WebKit.**
+  Inside a service worker, WebKit -- real Safari included -- rejects
+  `fetch(request)` with `TypeError: Load failed` when the request carries
+  `destination: 'worker'` and that script is already in the browser's HTTP
+  cache, which is exactly a returning visitor. `cacheFirst` now retries such a
+  request as a plain URL fetch, which every engine accepts. Chromium was never
+  affected, and neither was the built site -- the symptom reproduced only
+  against the dev server -- but nothing except a lucky cache hit was keeping it
+  away from a real reader.
+- **`/eval-worker.js` and `/lsp-worker.js` are precached.** Both are built from
+  string literals, so nothing in the shell's markup names them and the install
+  step could not find them. An offline visit loaded the page and then could not
+  evaluate anything, which made "installing Try Turmeric means having the
+  compiler" untrue for the one asset that makes it a REPL.
+
 ## [0.46.0] -- 2026-09-09
 
 ### Changed
