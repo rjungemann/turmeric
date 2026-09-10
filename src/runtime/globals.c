@@ -122,7 +122,7 @@ bool g_saffron_prelude = false;   /* saffron-lang-plan S6; set per entry-file de
 bool g_repl_start_saffron = false; /* saffron-lang-plan S8; `tur repl --lang saffron` */
 bool g_opt_option_niche = true;   /* graduated 2026-09-03; TUR_OPTION_NICHE=0 restores the tagged monomorph */
 bool g_opt_regions = true;       /* graduated 2026-09-05; TUR_REGIONS=0 restores malloc + unbracketed calls */
-bool g_opt_saffron = false;      /* saffron-lang-plan D9; off unless enabled */
+bool g_opt_saffron = false;      /* graduated 2026-09-10; set by a `#lang saffron` file, not by a flag */
 bool g_adt_slab = false;
 bool g_sr1_sum_byvalue = true;
 bool g_sr2_app_sum_byvalue = true;

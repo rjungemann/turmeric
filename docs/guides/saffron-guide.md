@@ -24,10 +24,13 @@ No annotations, and the same `add` handles ints and floats. It is the same
 compiler, the same runtime, and the same object files: a Saffron module and a
 Turmeric module link together in one program.
 
-**Saffron is an experiment** (`XF_LIFECYCLE_PROTOTYPE`). The `#lang saffron`
-line enables it by itself -- you do **not** need `--enable=saffron` -- but every
-compile prints `TUR-W0060` to say the surface may still change. Design notes and
-current status live in
+Saffron is on by default. The `#lang saffron` line is all you need -- no
+`--enable=` flag, no manifest entry, and no lifecycle warning on stderr. It is
+an ordinary base dialect, on the same footing as `#lang turmeric`, and
+`tur lang-layers` lists all eight bases as `stable`.
+
+The dialect is young, though, and parts of the dynamic surface are still being
+built out -- design notes, remaining stages and known gaps live in
 [docs/upcoming/saffron-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/saffron-lang-plan.md).
 
 ## What actually changes

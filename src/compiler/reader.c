@@ -4419,11 +4419,10 @@ Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
      * diag_had_error(). */
     (void)lang_layers_apply_semantic(file->lang_layers, file->path);
 
-    /* saffron-lang-plan S1: the LANGUAGE axis gets the same treatment, in the
-     * same place, because it is the same decision one level up -- `#lang
-     * saffron` is `--enable=saffron` scoped to this file, and a manifest that
-     * scoped :experiments without it is a hard error.  The diagnostic is
-     * emitted inside; the caller sees it via diag_had_error().
+    /* The LANGUAGE axis gets the same treatment, in the same place, because it
+     * is the same decision one level up.  Since saffron graduated at 0.46.0
+     * this cannot fail -- no dialect is gated -- but it is still where a
+     * Saffron file records itself for the emitter (g_opt_saffron).
      *
      * Here rather than at each detection site: every path that elaborates a
      * file -- compile, `--interpret`, an imported module, the REPL -- funnels

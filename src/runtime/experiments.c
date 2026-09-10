@@ -330,21 +330,21 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * before SR2b, its heaviest client, exists -- and SR2b landed in-tree and
      * across the spices before the expiry was anywhere near.  See
      * docs/archive/sr2-gate-results.md. */
-    /* saffron-lang-plan: the dynamically typed dialect.  S1 wires the `#lang`
-     * axis and this gate only -- the dialect selects no semantics yet, so a
-     * `#lang saffron` file compiles exactly as `#lang turmeric` does and says
-     * so once through the lifecycle warning below.
+    /* saffron GRADUATED 2026-09-10, at 0.46.0 -- `#lang saffron` is an ordinary
+     * base dialect now, on the same footing as `#lang turmeric`.  It needs no
+     * enable, prints no lifecycle warning, and a project manifest that scopes
+     * `:experiments` can no longer turn it off.
      *
-     * `#lang saffron` is itself the enable, scoped to one file at CLI
-     * precedence, the same relationship a semantic `#lang` layer has to its
-     * experiment (D9). */
-    { "saffron",
-      "dynamically typed dialect (#lang saffron)",
-      "docs/upcoming/saffron-lang-plan.md",
-      "0.45.0",                  /* introduced */
-      "0.52.0",                  /* expires_at (soft deadline; advisory only) */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_saffron },
+     * `g_opt_saffron` SURVIVES the graduation and keeps its name, because it
+     * was never only an enable bit: the emitter reads it to decide whether to
+     * emit the `any` type/instance registries and the dynamic-dispatch panic
+     * (emit_module.c), and gating them is what keeps a plain Turmeric program's
+     * emitted C byte-for-byte unchanged.  `lang_dialect_apply` now sets it
+     * directly when it reads a `#lang saffron` file -- the same moment
+     * `experiment_enable` used to be what flipped it -- so the emission
+     * decision is identical either side of this change.  Do NOT re-add a row
+     * for it; the bit is a "this build contains a Saffron TU" fact, not a gate.
+     * See docs/upcoming/saffron-lang-plan.md (still live for D4/G3-G9). */
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
@@ -407,6 +407,13 @@ static const char *const GRADUATED[] = {
     "parametric-sum-byvalue",
     "option-niche",  /* graduated 2026-09-03; TUR_OPTION_NICHE=0 restores the tagged monomorph */
     "regions",       /* graduated 2026-09-05; TUR_REGIONS=0 restores malloc and unbracketed calls */
+    /* graduated 2026-09-10, in the 0.46 line.  Unlike the names above, nobody
+     * had to write this one anywhere: `#lang saffron` was always its own enable
+     * (D9), so a hand-written `--enable=saffron` only ever duplicated the
+     * directive.  It keeps the window anyway -- it shipped as a listed
+     * `tur experiments` row for a full release, which is enough for a
+     * build.tur somewhere to name it. */
+    "saffron",
     NULL,
 };
 

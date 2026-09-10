@@ -828,6 +828,16 @@ thread-stack query + reading the SP register -- a local's address is on
 ASan's fake stack and useless for this) and raises the same diagnostic when
 the stack is nearly gone, so the ASan-inflated Debug build reports the
 runaway macro instead of aborting with a sanitizer stack-overflow.
+
+The **emitter's** expression walk still has the un-fixed half of that same
+bug, filed 2026-09-10 as
+[emit-depth-guard-loses-race-with-asan-stack](emit-depth-guard-loses-race-with-asan-stack.md)
+(low; Debug/ASan only).  `EMIT_MAX_EXPR_DEPTH` is a bare depth counter tuned
+against one host's measured stack cliff, with no headroom check, so on
+macOS/arm64 the stack overflows before depth 40 and TUR-E0712 never prints --
+`errors/expr-nesting-depth-limit` goes red with an ASan stack-overflow.  The
+fix is to reuse `elab_stack_nearly_exhausted()` rather than re-tune the
+constant; see the report.
 Verified by reproducing the race on Linux under `ulimit -s 4096`.
 
 `incremental-elab-loses-span-file-provenance` was resolved 2026-08-13 and moved

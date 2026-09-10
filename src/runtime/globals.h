@@ -344,14 +344,18 @@ extern bool g_opt_option_niche;
  * hatch; tests/run-regions-seam.sh keeps that off path green. */
 extern bool g_opt_regions;
 
-/* saffron-lang-plan D9: the `saffron` experiment's enable bit.  Set by
- * `--enable=saffron`, by `:experiments` in build.tur, or -- scoped to one file,
- * at CLI precedence -- by a `#lang saffron` line (lang_dialect_apply).
+/* "This build contains a Saffron translation unit."  Set by lang_dialect_apply
+ * when the reader takes a `#lang saffron` line; never by a user-facing flag.
  *
- * S1 reads it nowhere: the dialect selects no semantics yet, so a `#lang
- * saffron` file elaborates exactly as `#lang turmeric` does.  The bit exists so
- * the gate, the lifecycle warning and the manifest interaction are all in place
- * and testable before any behaviour hangs off it. */
+ * GRADUATED 2026-09-10, at 0.46.0.  This WAS the `saffron` experiment's enable
+ * bit, flipped by `--enable=saffron` / `:experiments` / the `#lang` line (D9);
+ * the experiment is gone and `--enable=saffron` is a TUR-W0063 no-op, but the
+ * bit stays because the emitter reads it for a reason unrelated to gating: it
+ * decides whether to emit the `any` type registry, the instance registry and
+ * the dynamic-dispatch panic (emit_module.c).  A plain Turmeric program's
+ * emitted C is byte-for-byte what it was before Saffron existed, and that is
+ * what this bit buys.  It is NOT an on/off switch for the dialect -- the
+ * per-file `SourceFile.lang` is (lang_span_is_saffron). */
 extern bool g_opt_saffron;
 /* SR2a: a MULTI-VARIANT parametric sum monomorph -- `(Opt2 int)`, `(PRes
  * cstr)`, and above all `(Option int)` / `(Result int cstr)` -- flows by value

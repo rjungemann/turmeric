@@ -120,9 +120,20 @@ int main(void) {
             CHECK(strstr(reg, needle) != NULL,
                   "registry offers this specific base spelling");
         }
-        CHECK(strstr(reg, "\"name\":\"saffron\"") != NULL &&
-              strstr(reg, "\"experiment\":\"saffron\"") != NULL,
-              "the Saffron bases are offered, and badged with their experiment");
+        /* saffron GRADUATED at 0.46.0, so it is offered UNBADGED.  Both halves
+         * are asserted: that the base is still there, and that no base carries
+         * a non-null `experiment` -- a stray badge would tell every playground
+         * visitor the language is still a prototype. */
+        CHECK(strstr(reg, "\"name\":\"saffron\"") != NULL,
+              "the Saffron bases are offered");
+        CHECK(strstr(reg, "\"experiment\":\"saffron\"") == NULL,
+              "no base is badged with the graduated saffron experiment");
+        for (size_t i = 0; i < lang_bases_count(); i++) {
+            LangBaseDescriptor d;
+            if (!lang_base_at(i, &d)) continue;
+            CHECK(d.experiment == NULL,
+                  "no base is experiment-gated (all eight are stable)");
+        }
     }
 
     /* The LANGUAGE axis survives a set_lang.  `saffron` reads with the

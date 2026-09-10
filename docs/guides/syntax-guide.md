@@ -527,17 +527,15 @@ are independent axes, so every language is spellable over every reader.
 | `saffron/neoteric` | saffron | curly-infix + neoteric |
 | `saffron/sweet` | saffron | full sweet-expressions |
 
-**Saffron** is the dynamically typed dialect, and is an **experiment in its
-prototype stage**: today `#lang saffron` selects no semantics at all -- the file
-compiles exactly as `#lang turmeric` does -- and the directive exists so the
-language axis, its gate and its warning are in place before any behaviour hangs
-off them. See [docs/upcoming/saffron-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/saffron-lang-plan.md).
+**Saffron** is the dynamically typed dialect: an unannotated parameter or
+return defaults to `any` instead of `int`, and the file gets a dynamic operator
+layer, dynamic calls and dynamic field access. Annotations stay legal, and a
+Saffron module links against a Turmeric one in the same program. See
+[the Saffron guide](saffron-guide.md).
 
-The `#lang saffron` line *is* the enable for the `saffron` experiment, scoped to
-that file, at CLI precedence -- exactly the relationship a semantic layer has to
-its experiment (below). So no `--enable=saffron` is needed, and a project
-manifest that scopes `:experiments` and leaves `saffron` out makes the directive
-a **hard error** rather than silently compiling the file as Turmeric.
+Both languages are **stable bases** -- neither is gated. `#lang saffron` needs
+no `--enable=` flag and no `:experiments` entry, and prints no lifecycle
+warning; `tur lang-layers` lists all eight bases as `stable`.
 
 `turmeric/sweet` is the preferred spelling for the sweet-exp base. The older
 `#lang sweet-exp` is still accepted as a legacy alias, so

@@ -6984,13 +6984,13 @@ static void emit_abi_scan_program(EmitCtx *ctx, const Expr **items, uint32_t n_i
      * appear before the widen that makes its tag reachable; the tag set is only
      * complete once every item has been scanned.
      *
-     * Gated on the experiment, which `#lang saffron` turns on build-wide
-     * (lang_dialect_apply calls experiment_enable), so a plain Turmeric program
-     * emits exactly what it did before -- no dicts it did not already need, and
-     * no growth from the row table that references them.  A build that mixes a
-     * Saffron TU with a Turmeric TU compiled entirely separately would not share
-     * the flag; that is a known v0 limitation, not a silent one, since the
-     * failure is the no-instance panic rather than a wrong answer. */
+     * Gated on g_opt_saffron, which a `#lang saffron` file turns on build-wide
+     * (lang_dialect_apply sets it), so a plain Turmeric program emits exactly
+     * what it did before -- no dicts it did not already need, and no growth
+     * from the row table that references them.  A build that mixes a Saffron TU
+     * with a Turmeric TU compiled entirely separately would not share the flag;
+     * that is a known v0 limitation, not a silent one, since the failure is the
+     * no-instance panic rather than a wrong answer. */
     if (!g_opt_saffron) return;
     for (uint32_t i = 0; i < n_items; i++) {
         if (!items[i] || items[i]->kind != EX_INSTANCE_DEF) continue;

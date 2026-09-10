@@ -542,9 +542,11 @@ const char *turi_wasm_lang_registry(void) {
         wasm_json_escape(&b, wasm_reader_label(d.reader));
         buf_puts(&b, "\",\"language\":\"");
         wasm_json_escape(&b, d.language);
-        /* A base gated by an experiment is BADGED, never hidden: `#lang
-         * saffron` is itself the enable (D9), so the row is always selectable
-         * -- the picker just says what it is signing the session up for. */
+        /* Always null since saffron graduated at 0.46.0 -- every base is
+         * stable.  The key is still emitted so the picker's rendering path is
+         * exercised and a future gated dialect needs no JS change: a base with
+         * an experiment is BADGED, never hidden, because the `#lang` line is
+         * itself the enable and the row stays selectable. */
         buf_puts(&b, "\",\"experiment\":");
         if (d.experiment) {
             buf_puts(&b, "\"");
