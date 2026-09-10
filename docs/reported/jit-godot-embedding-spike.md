@@ -14,6 +14,49 @@ Windows note -- that is where it goes from "nice" to "load-bearing."
 
 ---
 
+> ### MEASURED 2026-09-09 -- question 4 has a number, and question 5 has an answer
+>
+> From the AOT-natives work in
+> [godot-aot-staged-build-lacks-godot-natives.md](godot-aot-staged-build-lacks-godot-natives.md),
+> which made a real script AOT-compile end to end for the first time. Measured on
+> macOS arm64 with `tur` v0.46.0 and Godot 4.3, not reasoned about.
+>
+> **Question 4 -- "measure compile time for a representative script".**
+> `examples/paddle-pong-tur/scripts/ball.tur` (34 lines of gameplay) stages to
+> 669 lines of Turmeric, because the declarations module carries the `godot-*`
+> `extern-c` prototypes plus the baked-in prelude. That emits **10,364 lines of
+> C** and a full `tur build --shared` -- fork, elaborate, emit, invoke `cc`,
+> link -- takes **0.50 s wall, stable across three runs.** Per script, cold.
+>
+> So the on-disk cache cannot be deleted on the strength of speed alone: half a
+> second per script at load is fine for one script and is 25 s for fifty. But
+> most of that 0.50 s is the *declarations module*, not the user's code -- the
+> user's 34 lines are 4,751 of the 10,364 emitted lines and the shared
+> `tg-godot` module is the other 5,610. An in-process route that compiles the
+> declarations once per process instead of once per script attacks exactly the
+> dominant term, which the subprocess route structurally cannot.
+>
+> **Question 5 -- "replacement or second path?"** The AOT work settles part of
+> this: whatever compiles, compiles the *same source*. The declarations module
+> and the script rewriting in `aot/aot_natives.cpp` are route-independent -- the
+> JIT would elaborate exactly that text, because compiled-mode elaboration is
+> what makes the declarations necessary in the first place (see the 2026-09-07
+> finding at the top of the AOT report). A JIT path therefore reuses the staging
+> layer wholesale and replaces only `std::system("tur build --shared")` +
+> `dlopen` with `tur_jit_compile_image` + `tur_jit_image_sym`. That is a much
+> smaller second path than this spike assumed when it wrote "two paths mean two
+> things to keep correct".
+>
+> **Question 3 is now load-bearing, not incidental.** `__tur_static_init` is
+> what the emitted `__attribute__((constructor))` calls, and the staged library
+> genuinely uses it -- `__tur_fatbox_init()` and `atexit(tur_region_shutdown)`
+> live there. c2mir discards `constructor`, so an in-process route must call it
+> explicitly or the image's fat-closure boxes are never filled.
+>
+> **Still unanswered by this work:** questions 1 (does MIR survive inside a
+> Godot plugin), 2 (W^X in a host process), and 6 (fixture-level JIT
+> correctness). Nothing here touched the JIT.
+
 ## The problem with the current design
 
 `aot_cache.cpp` in `../turmeric-godot` does this per script:
