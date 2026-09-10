@@ -24,10 +24,41 @@ fail() { printf 'FAIL run-shard-partition -- %s\n' "$*"; FAIL=$((FAIL + 1)); }
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# $1 = output file, rest = environment assignments
+# $1 = output file, rest = environment assignments.
+#
+# stderr is KEPT, not dropped.  When the harness refuses to enumerate -- an
+# engine gate it should have been exempt from, a missing binary, a syntax
+# error -- the only symptom here is an empty list, and "0 fixtures" alone
+# cannot tell that apart from a broken partition.  Discarding the reason cost
+# a CI round exactly once: the non-JIT `test` job hit run-jit.sh's native
+# smoke check, which exits 1, and the log said only "tur_shard_partition
+# (Failed)".  diagnose() below prints what the harness actually said.
+# The EXIT STATUS is the signal, not the line count.  run-jit.sh reports a
+# refusal on stdout, so a harness that bailed hands back several lines of error
+# prose -- which a count-based check happily treats as fixture names and then
+# reports as a bogus partition ("6 fixtures in more than one shard").  That is
+# a worse log than the real one.  Bail on the status instead, and say why.
+#
+# Not hypothetical: the non-JIT `test` job hit run-jit.sh's native-execution
+# smoke check, which exits 1 long before enumerating, and CI said only
+# "tur_shard_partition (Failed)".
 list() {
     local out="$1"; shift
-    env "$@" TUR_TEST_LIST=1 bash tests/run-jit.sh > "$out" 2>/dev/null
+    if env "$@" TUR_TEST_LIST=1 bash tests/run-jit.sh > "$out" 2> "$out.err"; then
+        return 0
+    fi
+    echo "FAIL run-shard-partition -- run-jit.sh exited non-zero while listing"
+    echo "  env: $*"
+    echo "  stdout (first 6 lines):"
+    head -6 "$out" 2>/dev/null | sed 's/^/    /'
+    echo "  stderr (first 6 lines):"
+    head -6 "$out.err" 2>/dev/null | sed 's/^/    /'
+    echo
+    echo "  Most likely a gate in run-jit.sh that TUR_TEST_LIST should skip."
+    echo "  List mode answers a question about tests/fixtures/ and must not"
+    echo "  require a working JIT engine -- this test runs in the non-JIT job"
+    echo "  too, where \`tur jit\` cannot run anything."
+    exit 1
 }
 
 check_partition() {

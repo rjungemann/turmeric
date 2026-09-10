@@ -78,13 +78,22 @@ export TUR_BIND_LOOPBACK=1
 
 TUR="${TUR:-./build-turjit/tur}"
 [ -x "$TUR" ] || TUR=./build/tur
+
 # TUR_TEST_LIST answers a question about the CORPUS -- which fixtures a filter
-# and shard select -- and the answer does not depend on the compiler, so it is
-# exempt from both the binary requirement and the engine probe below.  That is
-# what lets tests/run-shard-partition.sh run in every job rather than only the
-# one configured -DTUR_JIT=ON, and the partition is worth guarding everywhere:
-# it is a property of tests/fixtures/, which any commit can change.
-if [ "${TUR_TEST_LIST:-0}" != "1" ]; then
+# and shard select -- and the answer does not depend on the compiler at all.
+# So list mode skips every gate that asks something of the binary: the
+# existence check here, the engine probe, and the native-execution smoke test.
+# That is what lets tests/run-shard-partition.sh guard the partition in EVERY
+# job rather than only the one configured -DTUR_JIT=ON -- the partition is a
+# property of tests/fixtures/, which any commit can change.
+#
+# Kept as one named flag rather than repeating the condition at each gate:
+# three separate copies is how the smoke test below got missed the first time,
+# and a fourth gate would be just as easy to miss.
+LIST_ONLY=0
+if [ "${TUR_TEST_LIST:-0}" = "1" ]; then LIST_ONLY=1; fi
+
+if [ "$LIST_ONLY" != "1" ]; then
     [ -x "$TUR" ] || { echo "run-jit: no tur binary found" >&2; exit 2; }
 fi
 
@@ -94,7 +103,7 @@ fi
 # build and no longer discriminates.  A non-JIT binary answers "carries no
 # JIT engine" before touching the file; a JIT binary proceeds to (and fails)
 # the compile.
-if [ "${TUR_TEST_LIST:-0}" != "1" ]; then
+if [ "$LIST_ONLY" != "1" ]; then
     probe=$("$TUR" jit /nonexistent-tur-jit-probe.tur 2>&1 || true)
     case "$probe" in
       *"carries no JIT"*)
@@ -180,6 +189,7 @@ trap 'rm -rf "$RESULTS_DIR"' EXIT
 # (1) Smoke: ONE trivial program must go through the engine natively.  Costs
 #     a second, needs no list, and catches the tree-wide case before 2700
 #     fixtures spend ten minutes falling back.
+if [ "$LIST_ONLY" != "1" ]; then
 _smoke_dir="$(mktemp -d -t tur-jit-smoke.XXXXXX)"
 printf '(defn main [] : int (println 42) 0)\n' > "$_smoke_dir/smoke.tur"
 _smoke_err="$_smoke_dir/smoke.stderr"
@@ -195,6 +205,7 @@ if [ "$_smoke_rc" -ne 0 ] || [ "$_smoke_out" != "42" ] \
     exit 1
 fi
 rm -rf "$_smoke_dir"
+fi
 
 # (2) Ratchet: the fixtures ALLOWED to fall back are listed by NAME in
 #     tests/jit-fallback-baseline.txt.  A fixture that falls back and is not
@@ -520,7 +531,7 @@ done
 # tests/run-shard-partition.sh drives the partition assertions through this,
 # so they test the harness's real enumeration rather than a copy of it that
 # can drift.  Names only, one per line, `errors/` kept in the path.
-if [ "${TUR_TEST_LIST:-0}" = "1" ]; then
+if [ "$LIST_ONLY" = "1" ]; then
     for d in "${FILTERED_DIRS[@]+"${FILTERED_DIRS[@]}"}" \
              "${ERROR_DIRS[@]+"${ERROR_DIRS[@]}"}"; do
         echo "${d#tests/fixtures/}"
