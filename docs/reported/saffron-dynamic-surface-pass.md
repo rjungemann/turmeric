@@ -1,5 +1,11 @@
 # Saffron dynamic-surface pass -- findings (2026-09-09)
 
+**Status 2026-09-10.** Resolved on this branch: H1, H2, H3, H4, H5, H6, H8
+(named functions), H9 (a sibling determines K), H10, H11, M4, M5, M6, M10,
+each pinned by a fixture and retired from the fuzzer's KNOWN table. Open: H7
+(fn-typed seam, a representation gap), M1, M2, M3, M7, M8, M9, and the lows.
+Struck-through items below carry their resolution note.
+
 **Summary.** A differential pass (compiled `tur run` vs `tur --interpret`,
 Debug build at b58c91e6) over the Saffron surface described in
 `docs/guides/saffron-guide.md`. Every probe is a `#lang saffron` file unless
