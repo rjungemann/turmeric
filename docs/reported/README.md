@@ -34,7 +34,7 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
-`hkt-carrier-result-loses-payload-types` was filed 2026-09-10, a baseline
+[hkt-carrier-result-loses-payload-types](hkt-carrier-result-loses-payload-types.md) was filed 2026-09-10, a baseline
 measurement taken while fixing `saffron-dynamic-surface-pass` M2: on the TYPED
 path, `fmap` on a heterogeneous `(Result int cstr)` or `(Either int cstr)`
 prints a cstr payload as its address -- a silent wrong answer, no diagnostic.
@@ -44,7 +44,7 @@ M2; M2's fix binds it only where slot-safe (by-value body, homogeneous
 receiver), which is why the typed heterogeneous case is untouched and this is
 its own report. The `byval_agg` consumer bridge is the fix location.
 
-`all-any-fn-param-is-unusable` was filed 2026-09-10, found while fixing
+[all-any-fn-param-is-unusable](all-any-fn-param-is-unusable.md) was filed 2026-09-10, found while fixing
 `saffron-dynamic-surface-pass` H7 and masked until then by H7's own fuzzer
 `KNOWN` row. A parameter declared `(fn [any] any)` or `(fn [] any)` -- the
 signature the Saffron dialect produces by default -- is emitted as a bare
