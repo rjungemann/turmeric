@@ -1,0 +1,47 @@
+; A record whose field type is `Sym` takes keywords as VALUES, but a leading
+; keyword in construction position was always read as a FIELD NAME:
+;   (make-struct P :kw)
+;   -> constructor 'P': keyword construction needs :field value pairs
+; so a Sym-valued record could not be constructed at all. Found by the saffron
+; fuzzer's Sym probe, which kept failing after `Sym` became a legal field type
+; -- the field type was only half of what that probe needed.
+;
+; `(Circle :diameter 2.0)` (a typo) and `(make-struct Q :label 9.75)` (a Sym
+; value then a float) are the SAME SHAPE syntactically, so no count rule can
+; separate them -- but the declared TYPES can. Positional is chosen only when
+; all three hold: the keyword names no field, the argument count equals the
+; field count, and the first field is `Sym`-typed. `Circle` has one field and
+; two arguments, so it stays keyword construction and keeps its precise
+; "unknown field 'diameter' on variant 'Circle'", which the
+; errors/conv-kw-record-variant-unknown-field family pins.
+;
+; All four shapes belong in one file because the rule is a choice BETWEEN
+; them, and a change that fixes one by breaking another would still pass a
+; file that tested only its own case:
+;   - keyword construction, deliberately out of declaration order (so the
+;     reorder is exercised, not just accepted);
+;   - plain positional;
+;   - a Sym value in the leading position, the shape that was impossible;
+;   - a Sym value on a record that also has a non-Sym field, so the positional
+;     reading is not an artifact of the one-field case.
+;
+; Floats with a fractional part throughout: a positional/keyword mix-up that
+; swapped x and y would otherwise be invisible if both were whole numbers.
+
+(defstruct Pt [x : float y : float])
+(defstruct P  [fld : Sym])
+(defstruct Q  [tag : Sym n : float])
+
+(defn main [] : int
+  (let [a (make-struct Pt :y 2.5 :x 7.25)
+        b (make-struct Pt 1.5 3.5)
+        c (make-struct P :kw)
+        d (make-struct Q :label 9.75)]
+    (println (.x a))
+    (println (.y a))
+    (println (.x b))
+    (println (.y b))
+    (println (sym->str (.fld c)))
+    (println (sym->str (.tag d)))
+    (println (.n d)))
+  0)

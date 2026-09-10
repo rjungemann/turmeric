@@ -3649,10 +3649,61 @@ Expr *elab_call(Elab *e, Form *call) {
           fn_binding->type.as.fn.result_kind == TY_ADT))) {
         CtorDef *kwctor = elab_lookup_ctor(e, name);
         if (kwctor && kwctor->is_record) {
+            /* A leading keyword means KEYWORD CONSTRUCTION only when it
+             * NAMES A FIELD.  A record with a `Sym` field takes keywords as
+             * VALUES -- `(make-struct P :kw)` -- and reading that as a field
+             * name made such a record unconstructable ("keyword construction
+             * needs :field value pairs"), which is how the saffron fuzzer's
+             * Sym probe still failed after `Sym` became a legal field type.
+             *
+             * A keyword that DOES name a field keeps the keyword reading, so
+             * `(Circle :radius 2.0)` is unchanged; a typo'd field name now
+             * lands on the ordinary positional arity/type error instead of
+             * the keyword one, which is a worse message but never a wrong
+             * program.  The one genuinely ambiguous shape is a keyword value
+             * that happens to equal one of the record's own field names --
+             * `(make-struct P :fld)` where `fld` is the field -- which still
+             * reads as keyword construction; bind the symbol first to say the
+             * other thing. */
             bool first_kw = call->as.list.items[1]->tag == F_KEYWORD;
             bool any_kw = false;
             for (uint32_t a = 1; a < call->as.list.len; a++)
                 if (call->as.list.items[a]->tag == F_KEYWORD) { any_kw = true; break; }
+            /* ...unless the leading keyword is a Sym VALUE rather than a
+             * field name.  A record whose first field is `Sym` is constructed
+             * with a keyword in that position -- `(make-struct P :kw)` -- and
+             * reading it as a field name made such a record unconstructable
+             * ("keyword construction needs :field value pairs").  That is how
+             * the saffron fuzzer's Sym probe still failed after `Sym` became a
+             * legal field type: the field type was only half of what it needed.
+             *
+             * `(Circle :diameter 2.0)` (a typo) and `(make-struct Q :label
+             * 9.75)` (a Sym value then a float) are the SAME SHAPE
+             * syntactically, so the count alone cannot separate them -- but
+             * the declared TYPES can.  Positional is chosen only when all
+             * three hold: the keyword names no field, the argument count
+             * equals the field count, and the first field is `Sym`-typed.
+             * `(Circle :diameter 2.0)` has one field and two arguments, so it
+             * stays keyword construction and keeps its precise
+             * "unknown field 'diameter' on variant 'Circle'", which the
+             * errors/conv-kw-record-variant-unknown-field family pins.
+             *
+             * The residual is a typo'd field name on a Sym-first record with a
+             * matching count -- `(make-struct Q :labl 9.75)` -- which builds
+             * with `tag = :labl`.  That is not really a residual: `:labl` is a
+             * perfectly good Sym value, and nothing in the program says the
+             * author meant a field name. */
+            if (first_kw && kwctor->n_fields > 0 &&
+                call->as.list.len - 1 == kwctor->n_fields &&
+                kwctor->fields[0].kind == TY_SYM) {
+                const char *kwn = call->as.list.items[1]->as.sym->name;
+                bool names_field = false;
+                for (uint32_t fi = 0; fi < kwctor->n_fields && !names_field; fi++)
+                    if (kwctor->fields[fi].name &&
+                        strcmp(kwctor->fields[fi].name, kwn) == 0)
+                        names_field = true;
+                if (!names_field) { first_kw = false; any_kw = false; }
+            }
             /* Positional argument(s) followed by a keyword -- a mix.  (The
              * keyword-FIRST mix, `(P :x 1 2)`, is caught inside the pair loop
              * below.)  The same diagnostic the make-struct path emits, so a

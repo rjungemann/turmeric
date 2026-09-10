@@ -131,10 +131,16 @@ KNOWN = [
     # H9-any-map-into-map-get (wrap_map_outer): retired 2026-09-10.
     # H10-lambda-literal-body (wrap_thunk_lit): retired 2026-09-10.
     # H11-field-read-no-inst-rows (wrap_struct + term_class): retired 2026-09-10.
-    ("M7-dynamic-cons-field",    ("wrap_cons",)),
+    # M7-dynamic-cons-field (wrap_cons): retired 2026-09-10 -- a dynamic field
+    # read now reaches generic and :heap ADTs, so `.head` on an any-held Cons
+    # answers.  (`.tail` still reads back an `int`, the erased carrier; that
+    # residual is tracked under M7 in the report, not by this row.)
     # M10-macro-any-not-seamed (wrap_map_inner + seam_first): retired 2026-09-10.
     ("L-ctor-under-typed-expected", ("wrap_adt", "seam_first")),
-    ("L-sym-struct-field",       ("scalar_sym", "wrap_struct")),
+    # L-sym-struct-field (scalar_sym + wrap_struct): retired 2026-09-10 --
+    # `Sym` is a legal defstruct/defdata field type, and a keyword VALUE in
+    # construction position (`(make-struct P :kw)`) no longer reads as a field
+    # name.
     ("L-fn-keyword-body",        ("scalar_sym", "wrap_thunk_lit")),
 ]
 
