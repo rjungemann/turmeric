@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Representation gaps (filed 2026-09-09)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [fn-typed-tyvar-drops-a-capturing-closure](fn-typed-tyvar-drops-a-capturing-closure.md) | medium-high | A capturing closure passed through a type parameter instantiated to a FUNCTION type is silently miscompiled: `check`, `emit-c` and `build` all exit 0 with no warning, and the built program takes SIGBUS before printing anything. Needs both halves -- a capture-free lambda in the same position works (it lifts to a bare code pointer, which survives the int64 carrier round trip), and spelling the function type concretely instead of through a type variable works. Confirmed pre-existing at v0.46.0. An adjacent defect isolated in `turmeric-spices` the same day points the OPPOSITE way on capture (a `cata` arm capturing *nothing* fails to compile at all), which is a reason to suspect one representation gap with two faces |
+
 ## Docs audit sweep (filed 2026-08-20)
 
 Thirty-three reports filed from a full-docs accuracy audit (guides, design
