@@ -6,6 +6,26 @@ async function gotoTry(page) {
     // styles.css cache-first. The PWA assertions below need the real thing.
     await page.goto('/try/?sw=1');
     await expect(page.locator('#wasm-status-text')).toHaveText('Ready', { timeout: 30_000 });
+
+    // Let the worker finish installing before any test reloads.
+    //
+    // `install` precaches the wasm and the whole docs pack before it calls
+    // skipWaiting(), so a reload fired the instant the REPL says Ready lands
+    // in the middle of that, on a page no worker controls yet. Against the
+    // vite dev server WebKit then refuses to start /eval-worker.js at all
+    // ("Refused to load ... because of Cross-Origin-Embedder-Policy") -- and
+    // it does so with the service worker removed entirely, so it is the dev
+    // server's revalidation behaviour, not anything these specs are about.
+    // The built site does not do it. Waiting here keeps the reload tests
+    // measuring what they claim to measure.
+    //
+    // This does NOT paper over the bug these specs caught: with the
+    // pre-fix sw.js they still go red after this wait, because the failure
+    // there is on the controlled reload itself.
+    await page.evaluate(async () => {
+        if (!('serviceWorker' in navigator)) return;
+        await navigator.serviceWorker.ready;
+    });
 }
 
 test.describe('Mobile layout + PWA', () => {
@@ -70,8 +90,15 @@ test.describe('Mobile layout + PWA', () => {
 
         const probe = '(println "persist-me-7")';
         await page.evaluate((c) => window._turiEditor.setValue(c), probe);
-        // Wait past the 250ms persistence debounce.
-        await page.waitForTimeout(400);
+        // Wait for the write itself, not for a guessed interval. An edit
+        // reaches localStorage through TWO chained 250ms debounces --
+        // persistContent -> persistTabs (main.js:2161, main.js:231) -- so the
+        // 400ms this used to sleep was short of the ~500ms floor and the tab
+        // snapshot was still unwritten at reload time. Polling the key is
+        // immune to both that arithmetic and to a slow machine.
+        await page.waitForFunction(
+            (want) => (localStorage.getItem('tur.try.tabs.v1') || '').includes(want),
+            'persist-me-7', { timeout: 10_000 });
 
         await page.reload();
         await expect(page.locator('#wasm-status-text')).toHaveText('Ready', { timeout: 30_000 });
@@ -102,6 +129,47 @@ test.describe('Mobile layout + PWA', () => {
             return false;
         });
         expect(cached).toBe(true);
+    });
+
+    // webkit-sw-controlled-reload-fails-wasm-init. On WebKit -- real Safari
+    // included -- `fetch(request)` inside a service worker rejects with
+    // `TypeError: Load failed` when the request is a top-level dedicated worker
+    // script the browser already holds in its HTTP cache. That is precisely a
+    // returning visitor: the first, uncontrolled load put /eval-worker.js in the
+    // HTTP cache, and the controlled reload could then never construct the
+    // Worker, so the REPL reported "Failed to load WASM".
+    //
+    // The two reload tests above already go red if that regresses, but they say
+    // "the status never reached Ready", which is a symptom shared by half a
+    // dozen unrelated faults. This one names the mechanism: the worker script is
+    // precached, and the evaluator genuinely runs on a controlled reload.
+    test('the eval worker survives a service-worker-controlled reload', async ({ page }) => {
+        await gotoTry(page);
+        await page.evaluate(() => navigator.serviceWorker.ready);
+
+        // The precache row is half the fix -- without it the reload has to go
+        // through the network path that WebKit breaks, and an offline visit has
+        // no evaluator at all.
+        const precached = await page.evaluate(async () => {
+            for (const k of await caches.keys()) {
+                if (await (await caches.open(k)).match('/eval-worker.js')) return true;
+            }
+            return false;
+        });
+        expect(precached).toBe(true);
+
+        await page.reload();
+        await expect(page.locator('#wasm-status-text')).toHaveText('Ready', { timeout: 30_000 });
+
+        // Controlled, and the Worker really did start: `Ready` is only posted
+        // after eval-worker.js answered the `init` message.
+        expect(await page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
+
+        // And it still evaluates -- a worker that loaded but cannot run is the
+        // same outage to a reader.
+        await page.evaluate(() => window._turiEditor.setValue('(println "sw-reload-ok")'));
+        await page.locator('#run-btn').click();
+        await expect(page.locator('#console')).toContainText('sw-reload-ok', { timeout: 30_000 });
     });
 
     test('manifest is reachable and valid', async ({ page }) => {
