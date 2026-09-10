@@ -65,27 +65,31 @@ turmeric-vX.Y.Z-windows-x86_64.zip
 sha256sums.txt
 ```
 
-Windows ships a `.zip` rather than a `.tar.gz` because Explorer opens one and
-not the other, and `tur.exe` is statically linked against the MinGW support
-libraries, so the archive has no DLLs beside it and needs nothing on `PATH` to
-start.
-
-It also unpacks to a **prefix layout** rather than the flat one the other
-archives use:
+All four unpack to the same **prefix layout**:
 
 ```
-bin/tur.exe
+bin/tur            (bin/tur.exe on Windows)
 lib/libturt_runtime.a, libturi.a
 include/turi/*.h
 share/turmeric/stdlib/
 ```
 
 Keep that shape. `tur` finds its runtime archive at `<exe_dir>/../lib` and its
-standard library at `<exe_dir>/../share/turmeric/stdlib`; flattening the tree
-leaves it unable to compile anything (see
-`docs/archive/release-archive-cannot-compile.md`, which also tracks the other
-platforms, still on the flat layout). Put `<extracted>/bin` on `PATH`, or
-symlink `bin/tur.exe` -- the walk-up resolves through a symlink either way.
+standard library at `<exe_dir>/../share/turmeric/stdlib`, so the tree is one an
+installed toolchain already has. Put `<extracted>/bin` on `PATH`, or symlink
+`bin/tur` -- the walk-up resolves through a symlink either way.
+
+Windows ships a `.zip` rather than a `.tar.gz` because Explorer opens one and
+not the other, and `tur.exe` is statically linked against the MinGW support
+libraries, so the archive has no DLLs beside it and needs nothing on `PATH` to
+start. That is the only remaining per-platform difference.
+
+**Archives up to v0.46.0 were different.** The three `.tar.gz` targets shipped
+flat -- `tur`, the `.a` files and `stdlib/` all at the archive root -- while
+Windows used the prefix layout from the start. Those older archives still work:
+`locate_runtime_lib` probes `<exe_dir>` as well, deliberately, so an archive
+published before the unification still compiles with a `tur` built after it.
+Adjust the paths below if you are unpacking one.
 
 **Windows also needs a C toolchain to compile anything.** `tur.exe` runs on its
 own, but `tur build` and `tur run` invoke `cc`, and `tur jit` reads the UCRT
@@ -117,13 +121,13 @@ mkdir -p ~/.local/turmeric
 tar -xzf "turmeric-${TAG}-${ARCH}.tar.gz" -C ~/.local/turmeric
 
 # Make `tur` runnable:
-ln -s ~/.local/turmeric/tur ~/.local/bin/tur     # ensure ~/.local/bin is on PATH
+ln -s ~/.local/turmeric/bin/tur ~/.local/bin/tur  # ensure ~/.local/bin is on PATH
 ```
 
 The macOS binary is unsigned. On first run macOS will quarantine it:
 
 ```sh
-xattr -d com.apple.quarantine ~/.local/turmeric/tur
+xattr -d com.apple.quarantine ~/.local/turmeric/bin/tur
 ```
 
 There is no precompiled Intel-Mac (`macos-x86_64`) tarball. Intel-Mac
@@ -174,10 +178,11 @@ After extracting, the tarball lays out like:
 
 ```
 .
-|-- tur                       # the CLI
-|-- libturi.a                 # static library for C embedding
+|-- bin/tur                   # the CLI
+|-- lib/libturt_runtime.a     # runtime archive `tur build` links against
+|-- lib/libturi.a             # static library for C embedding
 |-- include/turi/             # public headers (eval.h, env.h, value.h, fiber.h)
-`-- stdlib/                   # the standard library (~137 .tur files)
+`-- share/turmeric/stdlib/    # the standard library (~137 .tur files)
 ```
 
 `tur` finds `stdlib/` via a probe defined in `src/main.c`
@@ -185,11 +190,16 @@ After extracting, the tarball lays out like:
 
 1. The `TUR_STDLIB_DIR` environment variable, if set.
 2. Walk up from `tur`'s directory looking for `stdlib/macros.tur`
-   (matches when `stdlib/` sits next to the binary -- the tarball layout).
-3. `<exe_dir>/../share/turmeric/stdlib/macros.tur` (the Homebrew layout).
+   (matches when `stdlib/` sits next to the binary -- the pre-v0.47 tarball
+   layout, and a dev build tree).
+3. `<exe_dir>/../share/turmeric/stdlib/macros.tur` (the current tarball layout,
+   and Homebrew's).
 
-If you move `tur` somewhere without an adjacent `stdlib/`, set
-`TUR_STDLIB_DIR` to the directory containing the stdlib `.tur` files.
+Both are probed at every level of the walk-up, which is why an archive from
+either era resolves without a code change or an env var.
+
+If you move `tur` somewhere with neither, set `TUR_STDLIB_DIR` to the directory
+containing the stdlib `.tur` files.
 
 ---
 
@@ -318,13 +328,18 @@ For each matrix leg (`linux-x86_64`, `linux-aarch64`, `macos-arm64`):
 2. Installs `libedit` (Apple/Linux differ on package manager).
 3. Configures and builds with CMake in Release mode.
 4. Runs `tur --version` as a smoke test.
-5. Packages `tur` + `libturi.a` + `include/turi/*.h` + `stdlib/` into
-   a `tar.gz`.
-6. Uploads the artifact.
+5. Packages `bin/tur` + `lib/*.a` + `include/turi/*.h` +
+   `share/turmeric/stdlib/` into a `tar.gz`.
+6. Unpacks that archive and compiles a two-line program with it. `tur
+   --version` above proves only that the binary starts, which is a weaker
+   claim than it looks: the archives passed that check for several releases
+   while being unable to compile anything. This is the step that would have
+   caught it, and it is what verifies whichever layout is packaged.
+7. Uploads the artifact.
 
 Windows is a separate job rather than a fourth matrix leg: every step needs
 `shell: msys2 {0}` and the toolchain arrives through `setup-msys2`, neither of
-which fits the matrix. It does the same six steps, plus one that has no
+which fits the matrix. It does the same steps, plus one that has no
 equivalent elsewhere -- **verifying the binary is self-contained**. A default
 MinGW build needs `libwinpthread-1.dll` and `edit.dll` out of the MSYS2 tree,
 and off an MSYS2 `PATH` such a binary exits 127 with no output and no
