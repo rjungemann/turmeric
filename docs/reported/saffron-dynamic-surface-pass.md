@@ -3,17 +3,22 @@
 **Status 2026-09-10.** Resolved on this branch: H1, H2, H3, H4, H5, H6, H8
 (named functions), H9 (a sibling determines K), H10, H11, M3, M4, M5, M6, M8,
 M10, each pinned by a fixture and retired from the fuzzer's KNOWN table. M2 is
-resolved on the INTERPRETER and root-caused (not fixed) compiled. Open: H7
-(fn-typed seam, a representation gap), M1, M2 (compiled half), M7, M9, and the
-lows. Struck-through items below carry their resolution note.
+resolved on the INTERPRETER and root-caused (not fixed) compiled, and M7's hard
+error is fixed (the cons-list WALK is not). Open: H7 (fn-typed seam, a
+representation gap), M1, M2 (compiled half), M7 (the erased self-referential
+tail), M9, and the lows. Struck-through items below carry their resolution
+note.
 
-Two of those -- H7, and M2's compiled half -- are the same SHAPE of problem: a
+THREE of those -- H7, M1, and M2's compiled half -- are one SHAPE of problem: a
 value whose Saffron representation (a 16-byte `tur_tagged_t`) does not fit the
 representation the typed path already chose for it (a `tur_poly_fn_t` for H7,
-an `int64_t` carrier payload for M2). Neither is a gate or a keying bug, and
-for both the cheap-looking fix produces a SILENT WRONG ANSWER rather than a
-panic, which is why each is parked behind a clean decline. They likely want to
-be picked up together.
+an `int64_t` carrier payload/return for M1 and M2). None is a gate or a keying
+bug; in each the cheap-looking fix produces a SILENT WRONG ANSWER rather than a
+panic (M1 already does -- it truncates a 16-byte lambda return through an
+`int64_t` function pointer), which is why the other two are parked behind a
+clean decline. They want to be picked up together, and M1's and M2's filed fix
+directions have both been corrected in place after being measured against the
+emitted C.
 
 **Summary.** A differential pass (compiled `tur run` vs `tur --interpret`,
 Debug build at b58c91e6) over the Saffron surface described in
@@ -175,10 +180,39 @@ does not add its field type to that set. A vec element read does.
 
 ## Medium -- back-end divergence or documented-surface hole
 
-**M1. `.bind` on an `any` Option panics compiled.** `(defn half [o] (.bind o
-(fn [x] (some (/ x 2.0)))))` -> `cast: any holds a function this cast cannot
-accept` (the witness casts the lambda to `(fn [any] any)`; a bind lambda
-returns `(Option any)`). Interp: 3.55. `.fmap` on Option works. **Update 2026-09-10** (after H10 pinned lambda returns to `any`): the cast now passes, but the witness re-boxes the lambda's already-boxed result, so `(type-of (half (some 7.1)))` is `unknown` compiled (a nested box) and the next `cast` panics `any holds unknown, not Option`. The witness's `: any` return must not re-widen a body that is already `any`.
+**M1. `.bind` on an `any` Option gives the wrong answer compiled.** `(defn
+half [o] (.bind o (fn [x] (some (/ x 2.0)))))` -> originally `cast: any holds a
+function this cast cannot accept` (the witness casts the lambda to `(fn [any]
+any)`; a bind lambda returns `(Option any)`). Interp: 3.55. `.fmap` on Option
+works. **Update 2026-09-10** (after H10 pinned lambda returns to `any`): the
+cast now passes and `(type-of (half (some 7.1)))` is `unknown` compiled, then
+the next `cast` panics `any holds unknown, not Option`.
+
+**Fix direction CORRECTED 2026-09-10 -- the note below replaces "the witness's
+`: any` return must not re-widen a body that is already `any`", which the
+emitted C does not bear out.** The body is not an `any` being re-boxed. Read
+`__dynwit_Monad_bind_Option`: it calls `__inst_Monad_bind_Option`, the erased
+CARRIER (`static int64_t __inst_Monad_bind_Option(int64_t, tur_poly_fn_t)`),
+and tags its `int64_t` result `TUR_TAG(21, ...)` -- 21 being a bare TypeKind
+number, which is why `type-of` reads `unknown`. There is no by-value spec for
+`bind` at `(Option any)` the way there is for `fmap`, because `bind`'s
+continuation is declared `k : (fn [a] (m b))` (`stdlib/typeclass-monad.tur:13`)
+and the witness casts it to `(fn [any] any)`, so the result instantiation never
+grounds. Worse than the tag: inside that carrier the Saffron lambda is CALLED
+through `((int64_t (*)(void*, int64_t))k.fn)`, while the lambda returns a
+16-byte `tur_tagged_t` -- half the box is dropped on the return. So this is a
+truncation, not a nesting.
+
+Why the obvious repair does not work either: casting `__a1` to `(fn [any]
+(Option any))` -- which the class declaration DOES record enough to do -- would
+let H10's "unless an expected fn type decides it" leave the body unboxed. But
+the lambda is boxed at the ORIGINAL dynamic site, `(.bind o <lambda>)`, where
+`o` is an `any` and `m` is unknown, so the widen has already happened by the
+time the witness sees it. `(fn [any] any)` is forced there.
+
+This is the same SHAPE as H7 and M2's compiled half: a Saffron `tur_tagged_t`
+meeting a representation the typed path already chose. Whichever of the three
+is picked up first should carry the other two.
 
 **M2. `Functor[Result]` is not dynamically dispatchable COMPILED.** *Update
 2026-09-10: the interpreter half is fixed; the compiled half is a
@@ -236,10 +270,40 @@ compiled panics, interp answers `false` for equal values. `(= (some 7.1)
 Also `(bit-shl 1 64)` typed: compiled 0, interp 1 with a UBSan report at
 `src/turi/eval.c:3924`.
 
-**M7. Dynamic `.tail` read is rejected compiled.** `(defn tl [l] (.tail
-l))` -> `no type in this program has a field '.tail'` (`emit_expr.c:6338`,
-the field is the erased `:int` tail); interp answers `Cons`. A cons list
-cannot be walked through an `any` parameter compiled.
+**M7. Dynamic field read on a GENERIC ADT was rejected compiled.** *Update
+2026-09-10: the hard error is fixed; the cons-list WALK is not, for a second
+reason this entry had folded into the first.* `(defn tl [l] (.tail l))` ->
+`no type in this program has a field '.tail'`; interp answered `Cons`.
+
+Root cause: `emit_dyn_field`'s candidate scan skipped any ADT with type
+parameters -- a generic ADT has one monomorph per instantiation and their
+field OFFSETS differ -- and, separately, any `:heap` ADT, whose C name is
+already the pointer type. `Cons` is `(defstruct Cons :heap [A] (head A) (tail
+:int))`, so it was excluded twice, and so was every user generic struct. The
+scan now names the all-`any` monomorph (the same instantiation a dispatch row
+is keyed on, and the only one a Saffron file builds) and lets the TAG COMPARE
+discriminate: a `(Duo int cstr)` box carries a different id, matches no arm,
+and falls through to `__tur_dyn_no_field`, so no read is emitted at a guessed
+offset. `:heap` joins by-value because both box a POINTER to the record; a
+single-ctor ADT that is neither is carrier-represented and stays out. An
+already-`any` field is also no longer re-widened -- `dyn_widen_to_any` would
+cast that 16-byte tagged value through `(int64_t)`, a truncation. `.head` on a
+cons list and both fields of a user `(defstruct Duo [A B] ...)` now agree on
+both back ends. Pinned by `tests/fixtures/saffron-dyn-field-on-generic-adt`.
+
+**Still open: walking a cons list through an `any`.** `.tail` now READS, but it
+reads back an `int`: the field is declared `:int`, a type-ERASED carrier
+standing for the recursive `(Cons A)` occurrence, so the widen boxes it with
+the int tag and a `cast` to `(Cons any)` panics. The interpreter answers `Cons`
+because it inspects the value. That is a distinct defect from the one above --
+an erased self-referential field, not a missing candidate -- and it is what
+"a cons list cannot be walked through an `any` parameter" now means. Fix
+direction: the type-erased tail needs its widen to carry the RECURSIVE
+occurrence's tag rather than `:int`'s, which means the erased field must record
+what it was erased FROM; hardcoding "a field named tail on Cons is a Cons"
+is not it. Note the stdlib idiom already sidesteps this -- a `defdata` with
+`any` in both slots, which is what `tests/fixtures/saffron-higher-order` uses
+and why `saffron-cons-list` ascribes each step by hand.
 
 **~~M8~~. RESOLVED (verified 2026-09-10): `match` on an `any` holding a stdlib
 Option/Result agrees with a user `defdata`, on both back ends.** The arm-pattern

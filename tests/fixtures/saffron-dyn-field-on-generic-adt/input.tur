@@ -1,0 +1,42 @@
+#lang saffron
+; saffron-dynamic-surface-pass M7: a dynamic field read on a GENERIC ADT was a
+; hard compile error --
+;   no type in this program has a field '.head', so a dynamic read of it can
+;   never succeed
+; -- because emit_dyn_field's candidate scan skipped any ADT with type
+; parameters (a generic ADT has one monomorph per instantiation, and their
+; field offsets differ) and, separately, any `:heap` ADT. `Cons` is both:
+; `(defstruct Cons :heap [A] (head A) (tail :int))`. So no cons list and no
+; user generic struct could be read through an `any` parameter, while the
+; interpreter -- which inspects the value -- answered fine.
+;
+; The scan now names the all-`any` monomorph, the same instantiation a dynamic
+; dispatch row is keyed on and the only one a Saffron file builds, and lets the
+; TAG COMPARE discriminate: a `(Duo int cstr)` box carries a different id,
+; matches no arm, and falls through to `__tur_dyn_no_field`. No read is emitted
+; at a guessed offset.
+;
+; `Duo` rather than `Pair`: `Pair` is an auto-loaded stdlib type.
+;
+; NOT covered, and deliberately: `(.tail l)` reads back an `int`, not a `Cons`,
+; because the tail field is declared `:int` -- a type-ERASED carrier standing
+; for the recursive occurrence -- so the widen boxes it with the int tag and a
+; `cast` to `(Cons any)` fails. The interpreter says `Cons` there. Walking a
+; cons list through an `any` therefore still does not work compiled; only the
+; hard error is gone. See M7 in the report.
+;
+; Floats with a non-zero fractional part: each value crosses a box on the way
+; out, and a truncating read would print 7 rather than 7.25.
+
+(defstruct Duo [A B] (fst A) (snd B))
+
+(defn hd [l] (.head l))
+(defn f1 [p] (.fst p))
+(defn s1 [p] (.snd p))
+
+(defn main []
+  (println (hd (list 7.25 "two")))
+  (println (f1 (make-struct Duo 3.5 "x")))
+  (println (s1 (make-struct Duo 3.5 "x")))
+  (println (type-of (hd (list 7.25))))
+  0)

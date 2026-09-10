@@ -6316,28 +6316,63 @@ static char *emit_dyn_field(EmitCtx *ctx, Buf *body, const Expr *e) {
         if (!it || (it->kind != EX_DEFDATA && it->kind != EX_DEFGADT)) continue;
         AdtDef *def = (it->kind == EX_DEFGADT) ? it->as.defgadt_.def
                                                : it->as.defdata_.def;
-        /* One record constructor and no type parameters: the `defstruct` shape,
-         * where "the type" is a single C struct with the field as a member.  A
-         * multi-ctor sum needs the ctor tag read before a field even has a
-         * location, and a generic ADT has monomorphs rather than one type --
-         * both are real, both are wider than a dynamic FIELD READ, and guessing
-         * at either would emit a read from the wrong offset. */
-        if (!def || def->n_ctors != 1 || def->n_type_params != 0) continue;
+        /* One record constructor: the `defstruct` shape, where "the type" is a
+         * single C struct with the field as a member.  A multi-ctor sum needs
+         * the ctor tag read before a field even has a location -- real, and
+         * wider than a dynamic FIELD READ. */
+        if (!def || def->n_ctors != 1) continue;
         CtorDef *ctor = def->ctors[0];
         if (!ctor || !ctor->is_record) continue;
+        /* saffron-dynamic-surface-pass M7: a GENERIC ADT has one monomorph per
+         * instantiation rather than one type, and their field offsets differ,
+         * which is why this loop used to skip them outright and `.tail` on a
+         * cons list ("no type in this program has a field '.tail'") could not
+         * be read through an `any`.  Saffron only ever builds the all-`any`
+         * instantiation -- the same one `emit_instance_dispatch_recv_type`
+         * keys a dispatch row on -- so name THAT monomorph and let the tag
+         * compare below do the discriminating: a `(Cons int)` box carries a
+         * different id, matches no arm, and falls to `__tur_dyn_no_field`.  No
+         * read is ever emitted at the wrong offset; the guess the old comment
+         * refused to make is not being made. */
         Type at = type_adt(def);
-        if (!emit_type_is_byvalue_adt(ctx, at)) continue;
+        if (def->n_type_params > 0) {
+            Span nosp; memset(&nosp, 0, sizeof nosp);
+            Type any_t = emit_type_from_kind(TY_ANY);
+            at.hkt_kind = kind_for_arity(def->n_type_params);
+            for (uint32_t pi = 0; pi < def->n_type_params; pi++)
+                at = type_app(ctx->type_arena, at, any_t, nosp);
+        }
+        /* A `:heap` ADT joins the by-value ones here: both box a POINTER to
+         * the record, so the deref below is the same text -- only the box's
+         * provenance differs (a malloc'd copy vs the value itself).  `Cons` is
+         * `:heap`, which is the other half of why it never reached this loop.
+         * A single-ctor ADT that is NEITHER is carrier-represented, where the
+         * box does not hold a record pointer at all, and stays out. */
+        if (!emit_type_is_byvalue_adt(ctx, at) && !def->is_heap) continue;
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             const CtorField *f = &ctor->fields[fi];
             if (!f->name || strcmp(f->name, fname) != 0) continue;
             const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, at));
             char *mp = adt_field_member_path(def, ctor, fi);
             Type ft = f->full_type ? *f->full_type : type_simple(f->kind, CK_COPY);
+            /* In the all-`any` monomorph every type-PARAMETER field is itself
+             * an `any`, so a field declared as the type variable reads back a
+             * tagged box already. */
+            if (def->n_type_params > 0 && ft.kind == TY_TYVAR)
+                ft = emit_type_from_kind(TY_ANY);
             Buf read; buf_init(&read);
-            buf_printf(&read, "((%s *)(intptr_t)TUR_UNTAG(%s))->%s", cn, ov,
-                       mp ? mp : f->name);
+            /* A `:heap` ADT's own C name IS the pointer type
+             * (`tur_adt_Cons__any *`), so adding a `*` here would spell a
+             * pointer-to-pointer and cc rejects the `->`. */
+            buf_printf(&read, "((%s%s)(intptr_t)TUR_UNTAG(%s))->%s", cn,
+                       def->is_heap ? "" : " *", ov, mp ? mp : f->name);
             buf_putc(&read, '\0');
-            char *w = dyn_widen_to_any(ctx, ft, read.data);
+            /* An already-`any` field needs no widen -- the read IS a
+             * `tur_tagged_t`, and `dyn_widen_to_any` would cast that 16-byte
+             * value through `(int64_t)`, which is a truncation, not a box. */
+            char *w = (emit_resolve_type(ctx, ft).kind == TY_ANY)
+                          ? strdup(read.data)
+                          : dyn_widen_to_any(ctx, ft, read.data);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s (TUR_GETTAG(%s) == %lld) { %s = %s; }\n",
                        n_cands ? "else if" : "if", ov,
