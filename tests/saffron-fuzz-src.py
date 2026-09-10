@@ -188,7 +188,7 @@ class V:
         if self.kind == "cstr":
             return self.val
         if self.kind == "sym":
-            return ":" + self.val
+            return self.val          # shown through sym->str, no colon
         return self.lit
 
     @property
@@ -227,8 +227,12 @@ PRELUDE = """#lang saffron
 (definstance Kind [float] (kind-of [x] "F"))
 (definstance Kind [cstr]  (kind-of [x] "C"))
 (definstance Kind [bool]  (kind-of [x] "B"))
+(definstance Kind [Sym]   (kind-of [x] "S"))
 
 (defn show  [x]   (println (type-of x)) (println x))
+;; println refuses a Sym (the dynamic surface is a closed set), so a Sym is
+;; shown by its name through the typed accessor.
+(defn show-sym [x] (println (type-of x)) (println (sym->str (cast x Sym))))
 (defn call0 [f]   (f))
 (defn app   [f x] (f x))
 """
@@ -507,7 +511,7 @@ class Gen:
         e = unwrap(e)
         e, v = self.terminal(e, v)
 
-        leg.body.append("(show %s)" % e)
+        leg.body.append("(%s %s)" % ("show-sym" if v.kind == "sym" else "show", e))
         leg.expected.append(v.tname)
         leg.expected.append(v.out)
         return leg

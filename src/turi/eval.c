@@ -11148,11 +11148,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         uint8_t slot = e->as.dyn_method_.method_idx;
         TuriValue ov = eval_expr(env, frame, e->as.dyn_method_.obj);
         if (turi_is_error(ov) || env_signaled(env)) return ov;
+        /* Name the receiver BEFORE unboxing it: a Sym box's payload is a bare
+         * int, so naming the payload dispatched `.kind-of` on a Sym to the
+         * int instance (saffron-dynamic-surface-pass H5 follow-up, found by
+         * the fuzzer once sym joined its scalar pool). */
+        const char *have = turi_any_display_type(ov);
         if (ov.tag == TURI_STRUCT && ov.as_struct && ov.as_struct->is_any_box &&
             ov.as_struct->n_fields == 1 && ov.as_struct->fields)
             ov = ov.as_struct->fields[0];
-
-        const char *have = turi_any_display_type(ov);
         FnDef *impl = NULL;
         if (tc) {
             TypeClassEnv *tce = (TypeClassEnv *)env->last_tc_env;
@@ -11362,7 +11365,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             }
             vals[i] = v;
         }
-        if (!failed && (n_sym > 0 || boxed_name) && e->as.dyn_op_.op) {
+        if (!failed && (n_sym > 0 || boxed_name) && e->as.dyn_op_.op &&
+            strcmp(e->as.dyn_op_.op->name, SAFFRON_TRUTHY_OP) != 0) {
+            /* Truthiness is answered below for EVERY value -- a Sym or a
+             * container is truthy -- so it is not an operator to refuse. */
             const char *opn = e->as.dyn_op_.op->name;
             bool is_eq = strcmp(opn, "=") == 0, is_ne = strcmp(opn, "not=") == 0;
             if ((is_eq || is_ne) && n == 2 && n_sym == 2) {

@@ -10,6 +10,10 @@
 ;; both back ends (the closed set stays closed).  With `is? Sym` honest,
 ;; Hash[any] / MapKey[any] gained a Sym arm: `#set{:a :b :c}` used to hash
 ;; every keyword by the name "Sym" and keep ONE element compiled.
+(defclass Kind [a] (kind-of [x] : cstr))
+(definstance Kind [int] (kind-of [x] "I"))
+(definstance Kind [Sym] (kind-of [x] "S"))
+(defn kind [x] (.kind-of x))
 (defn k [x] (type-of x))
 (defn sym? [x] (is? x Sym))
 (defn same [a b] (= a b))
@@ -17,6 +21,9 @@
 (defn id [x] x)
 (defn main [] : int
   (println (k :kw))
+  ;; dispatch names the box before unboxing it: Kind[Sym], not Kind[int]
+  (println (kind :kw))
+  (println (kind 1))
   (println (sym? :kw))
   (println (sym? 1))
   (println (same :a :a))
