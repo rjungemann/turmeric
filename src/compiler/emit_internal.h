@@ -860,6 +860,12 @@ bool emit_value_is_recorded_as(const char *v, const char *want_ctype);
  * malloc'd bridged spelling of `iv` or NULL when no bridge is needed. */
 char *emit_store_int_ptr_bridge(EmitCtx *ctx, const char *target_c,
                                 const char *iv, const struct Expr *init);
+/* cps-body-panic-not-propagated: the per-call-site panic-signal check.  Emits
+ * `if (tur_panicking) return <zero of ctx->current_fn_ret_ctype>;` (firing the
+ * function's open defer frames first), or `break` inside the stackless
+ * trampoline.  Shared with the CPS emitter, whose own cps->direct call sites
+ * bypass emit_value and so bypassed the check. */
+void emit_panic_signal_return(EmitCtx *ctx, Buf *body);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);

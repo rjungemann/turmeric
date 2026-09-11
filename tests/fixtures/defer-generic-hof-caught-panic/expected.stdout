@@ -2,8 +2,8 @@ MONO defer fired
 --
 GEN defer fired
 --
-inner defer
 outer defer
+inner defer
 --
 GEN defer fired
 7

@@ -4575,7 +4575,7 @@ static bool spec_abi_spells_ctype(EmitCtx *ctx, const char *cty) {
 
 /* Emit the propagation check that returns a zero of the enclosing function's C
  * return type when a panic signal is pending (panic-return-signal, always-on). */
-static void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
+void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
     const char *rt = ctx->current_fn_ret_ctype;
     /* BR3b: inside the stackless trampoline a fallible reader call routes its
      * panic to the driver's `for(;;)` unwind loop with `break`, never a `return`
