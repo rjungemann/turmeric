@@ -482,6 +482,17 @@ static Form *saffron_seam_type_form(Elab *e, const Type *t, Span sp) {
  * gets the plain checked unbox; a signature too wide; or a parameter/result
  * type `type_to_form` cannot spell as source), leaving the caller's existing
  * path untouched. */
+/* True when every parameter and the result of `t` are `any` -- the signature
+ * H8's outbound adaptor gives every boxed function, and the one the two
+ * adaptors decline to marshal (nothing to marshal). */
+static bool fn_type_is_all_any(const Type *t) {
+    if (!t || t->kind != TY_FN) return false;
+    if (t->as.fn.result_kind != TY_ANY) return false;
+    for (uint32_t k = 0; k < t->as.fn.arity; k++)
+        if (t->as.fn.arg_kinds[k] != TY_ANY) return false;
+    return true;
+}
+
 static Expr *saffron_seam_fn_adaptor(Elab *e, const Form *arg_form,
                                      const Type *want, Span sp) {
     if (!e || !arg_form || !want || want->kind != TY_FN) return NULL;
@@ -6924,6 +6935,20 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             if (want.kind == TY_FN && 1 + i < call->as.list.len)
                 seam_fn_ad = saffron_seam_fn_adaptor(e, call->as.list.items[1 + i],
                                                      &want, args[i]->span);
+            /* all-any-fn-param-is-unusable (repro 2): the adaptor declines an
+             * all-`any` target because the box already holds exactly that
+             * representation -- H8's outbound adaptor makes every boxed fn an
+             * all-`any` FAT closure, stamped with the boxed ("closure...") id.
+             * The plain unbox below then checked the payload against the BARE
+             * `(fn [] any)` id and, on the id that never matched, panicked
+             * `any holds a function this cast cannot accept`; had it matched,
+             * the following fat-normalising shim would have wrapped the fat
+             * box as a bare code pointer.  Unbox to the boxed twin instead: the
+             * cast keys on the id the widen stamped, and the value flows on as
+             * the fat handle it is. */
+            if (!seam_fn_ad && want.kind == TY_FN && !want.as.fn.boxed &&
+                !want.as.fn.cfnptr && fn_type_is_all_any(&want))
+                want.as.fn.boxed = true;
             Expr *unboxed = seam_fn_ad ? seam_fn_ad
                                        : elab_any_unbox_to(e, args[i], want,
                                                            args[i]->span);

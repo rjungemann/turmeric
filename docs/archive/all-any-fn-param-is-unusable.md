@@ -1,6 +1,31 @@
 # An all-`any` function type as a typed parameter is unusable compiled
 
-**Severity: medium** -- a declared parameter type that cannot be called, on a
+**RESOLVED 2026-09-11.** Two defects, as the report said, and neither was
+H7's:
+
+- **Repro 1 (the callee's body).** Not the parameter's representation -- it IS
+  the fat `int64_t` handle, and a `(fn [int] any)` twin dispatched through the
+  thunk protocol fine.  The difference was the ARGUMENT: `(:: 4.5 any)` is an
+  `EX_UNION_INJECT`, which `safe_to_delegate` does not admit, so the call was
+  not delegated to the direct emitter and fell to the CPS IR's generic
+  fallthrough, which builds a named `CT_LETCALL` / `CT_TAILCALL` and spells
+  the callee by name -- `f(__t0)` against an `int64_t f`.  `src/passes/cps_ir.c`
+  now routes a callee BINDING with no `FnDef` behind it (a fn-typed param or
+  local) exactly like the binding-less indirect call: delegate with atomic
+  args, otherwise evict.  A fn value never takes the named arm.
+- **Repro 2 (the seam).** Direction 2 was right about the id and wrong about
+  arity: the box carries the BOXED all-`any` id (H8's outbound adaptor makes
+  every boxed fn a fat all-`any` closure, keyed `closure(fn ...)`), and the
+  seam's plain unbox checked the BARE `(fn [] any)` id.  When
+  `saffron_seam_fn_adaptor` declines an all-`any` target, `elab_call.c` now
+  unboxes to the boxed twin of that type, so the cast keys on the id the widen
+  stamped and the value flows on as the fat handle it is (no fatshim wrap).
+
+Pinned by `tests/fixtures/all-any-fn-param` (both repros, plus an all-`any`
+HOF applied twice, on both back ends).  The fuzzer's `all-any-fn-param` KNOWN
+row is retired; `route_seam_fn` is back in the default pool.
+
+**Severity (at filing): medium** -- a declared parameter type that cannot be called, on a
 signature the Saffron dialect produces by default. Both a cc error and a
 runtime panic, depending on how the value arrives. The interpreter handles
 every shape below.
