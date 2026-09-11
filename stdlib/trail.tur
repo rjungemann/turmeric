@@ -480,9 +480,7 @@
 (defn bt-scope [A] [^fat body : (fn [] A)]
   #fx{Bt}
   : A
-  (let [m (bt-mark)]
-    (defer (bt-undo-to! m))
-    (body)))
+  (let [m (bt-mark)] (defer (bt-undo-to! m)) (body)))
 ;;; with-untrailed -- run `body` with trailing PAUSED, then resume.
 ;;;
 ;;; The bracket form of `untrailed-begin` / `untrailed-end`, and the per-write
@@ -510,9 +508,7 @@
 (defn with-untrailed [A] [^fat body : (fn [] A)]
   #fx{Bt}
   : A
-  (do (untrailed-begin)
-      (defer (untrailed-end))
-      (body)))
+  (do (untrailed-begin) (defer (untrailed-end)) (body)))
 ;;; trail-reset! -- drop every level and entry WITHOUT running undo.
 ;;;
 ;;; Teardown and tests only; not part of the search protocol.
