@@ -11264,14 +11264,17 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    for (int i = f->n - 1; i >= 0; i--) f->defers[i](f->envs[i]);\n");
     buf_puts(out, "    f->n = 0;\n");
     buf_puts(out, "}\n");
+    /* defer-unwind-innermost-first: an early exit (return / throw / panic)
+     * unwinds the INNERMOST frame first, then its parents -- strict LIFO
+     * across scopes, the same order a normal exit produces as scopes end and
+     * the order every other language's defer / finally / RAII uses.  This
+     * used to collect the chain inner-to-outer and walk it backwards, so the
+     * outermost scope's cleanups ran first on an early exit only -- a guard
+     * released before the resource it guarded, and a function whose cleanup
+     * order depended on how it left. */
     buf_puts(out, "static void tur_frame_fire_chain(tur_frame *f) {\n");
-    buf_puts(out, "    tur_frame *frames[64];\n");
-    buf_puts(out, "    int n_frames = 0;\n");
-    buf_puts(out, "    for (tur_frame *cur = f; cur != NULL && n_frames < 64; cur = cur->parent) {\n");
-    buf_puts(out, "        frames[n_frames++] = cur;\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    for (int i = n_frames - 1; i >= 0; i--) {\n");
-    buf_puts(out, "        tur_frame_fire_lifo(frames[i]);\n");
+    buf_puts(out, "    for (tur_frame *cur = f; cur != NULL; cur = cur->parent) {\n");
+    buf_puts(out, "        tur_frame_fire_lifo(cur);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
     

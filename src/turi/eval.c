@@ -2230,7 +2230,7 @@ static TuriValue adt_ctor_native(TuriEnv *env, TuriValue *args, uint32_t n, void
  * pushed onto the chain at each defer-scope entry (a `let`), so the firing
  * helpers can mirror the compiled `tur_frame_fire_chain` two-level ordering --
  * same-scope LIFO, and, on an early exit (return / throw / panic), scopes
- * outer-first.  Markers carry no body and are never evaluated; they are simply
+ * innermost-first.  Markers carry no body and are never evaluated; they are simply
  * skipped (LIFO firing) or used to delimit segments (by-scope firing) and then
  * freed.  See docs/archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md. */
 typedef struct DeferItem {
@@ -2311,14 +2311,16 @@ static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
     g_firing_panic_defer = prev_fpd;
 }
 
-/* Fire defers at an *early exit* (return / throw / panic) boundary, reversing
- * by SCOPE rather than by item.  Mirrors the compiled tur_frame_fire_chain
- * early-exit semantics: scopes fire outer-first, but within a single scope the
- * defers stay LIFO.  Scope-boundary markers (body == NULL) delimit the scopes;
- * the trailing run (after the last marker, down to `mark`) is the outermost
- * scope and fires first.
+/* Fire defers at an *early exit* (return / throw / panic) boundary, one SCOPE
+ * at a time.  Mirrors the compiled tur_frame_fire_chain: scopes unwind
+ * innermost-first and within a single scope the defers stay LIFO -- the same
+ * order a normal exit produces as scopes end (defer-unwind-innermost-first;
+ * this walk used to fire the scopes OUTER-first, an order no other language's
+ * defer / finally / RAII uses, and one that released a guard before the
+ * resource it guarded).  Scope-boundary markers (body == NULL) delimit the
+ * scopes and are freed, never fired.
  *
- * A flat item-reversal -- the previous implementation -- collapsed both axes
+ * A flat item-reversal -- an earlier implementation -- collapsed both axes
  * into one FIFO walk, so multiple defers in a single (e.g. tail-position) scope
  * came out oldest-first instead of LIFO.  See
  * docs/archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md. */
@@ -2355,9 +2357,9 @@ static void fire_defers_to_mark_by_scope(TuriEnv *env, DeferItem *mark,
     bool saved_panicking = env->panicking;   /* C1: defers fire during unwind */
     bool prev_fpd        = g_firing_panic_defer;
 
-    /* Fire runs outer-first (last recorded = outermost); within a run keep
-     * head-first order (LIFO within the scope). */
-    for (size_t r = n_runs; r-- > 0; ) {
+    /* Fire runs innermost-first (runs were recorded head-first, so index 0 is
+     * the innermost scope); within a run keep head-first order (LIFO). */
+    for (size_t r = 0; r < n_runs; r++) {
         for (size_t k = run_start[r]; k < run_end[r]; k++) {
             DeferItem *item = items[k];
             /* C1: clear `panicking` too so a defer fired mid-panic-unwind runs;
@@ -2473,7 +2475,7 @@ void turi_runtime_panic(TuriEnv *env, const char *msg) {
         fprintf(stderr, "panic at\npanic: %s\n", s);
     }
     fflush(stderr);
-    /* Fire all pending defers before exiting (outer-first order). */
+    /* Fire all pending defers before exiting (innermost scope first). */
     if (!env->in_no_unwind)
         fire_defers_to_mark_by_scope(env, NULL, NULL);
     fflush(stdout);
@@ -9049,10 +9051,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * module restore. */
                 env->in_no_unwind = top->was_no_unwind;
                 /* Fire this call's defers.  On an early exit (return / throw)
-                 * the chain spans multiple leaked scopes, which fire outer-first
-                 * (by-scope reversal); on normal completion fire head-first
-                 * (innermost scope first, same-scope LIFO).  Both mirror the
-                 * compiled tur_frame_fire_chain (see
+                 * the chain spans multiple leaked scopes, walked by scope so
+                 * the markers are freed; on normal completion fire head-first.
+                 * Both orders are innermost scope first, same-scope LIFO,
+                 * mirroring the compiled tur_frame_fire_chain (see
                  * docs/archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md). */
                 if (env_signaled(env))
                     fire_defers_to_mark_by_scope(env, (DeferItem *)top->aux, NULL);
