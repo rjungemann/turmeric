@@ -2330,7 +2330,20 @@ static bool constraint_named_type(Elab *e, const Symbol *kw, Type *out) {
  * Syntax: (definstance Eq int (eq? [x y] (== x y)))
  *         (definstance Show int (show [x] (int->str x)))
  */
+static Expr *elab_definstance_inner(Elab *e, const Form *call);
+
+/* typeclass-method-resolution-ignores-the-class: bracket the whole instance
+ * elaboration so the unconstrained-method-call check can tell "inside a
+ * definstance body" from "inside an ordinary defn".  A wrapper rather than
+ * inc/dec at each return, because the inner function has many exit paths. */
 Expr *elab_definstance(Elab *e, const Form *call) {
+    e->definstance_depth++;
+    Expr *r = elab_definstance_inner(e, call);
+    if (e->definstance_depth > 0) e->definstance_depth--;
+    return r;
+}
+
+static Expr *elab_definstance_inner(Elab *e, const Form *call) {
     /* Minimum: (definstance ClassName) */
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span,
@@ -6323,6 +6336,78 @@ Expr *elab_method_call(Elab *e, const Form *call) {
     bool obj_is_abstract_tyvar =
         obj->type.kind == TY_TYVAR ||
         obj_is_unascribed_carrier_elem(obj);
+    /* typeclass-method-resolution-ignores-the-class (symptom B): a method call
+     * on a genuinely ABSTRACT type variable is only well formed when the
+     * enclosing generic declares a constraint naming that method's class.
+     *
+     * The representative search just below deliberately binds such a receiver
+     * to an arbitrary name-matching instance, because for a CONSTRAINED body
+     * that is exactly right -- the representative keeps the polymorphic base
+     * clone valid C, and monomorphization re-resolves the call per
+     * instantiation.  For an UNCONSTRAINED body there is nothing to re-resolve
+     * to, so the representative survived into the emitted C as a direct call to
+     * some other type's impl: `tur check` exited 0 and `cc` then rejected
+     * `__inst_Foo_foo_hyof_Bar(w)` for passing the int64 carrier where the
+     * instance declared its own payload.  A check/build divergence is the worst
+     * place to put this, since `check` is what editors and CI type-check with.
+     *
+     * Only a TY_TYVAR receiver is gated.  obj_is_unascribed_carrier_elem() is an
+     * erased container element, not an abstract parameter -- the enclosing fn
+     * need not (and usually does not) constrain it, so gating it would reject
+     * working code.  A body with no constraint vector at all that is not inside
+     * any defn (cur_fn_n_constraints == 0 with a NULL list) is left alone for
+     * the same reason. */
+    if (obj->type.kind == TY_TYVAR && method_name_len > 0 &&
+        e->definstance_depth == 0) {
+        TypeClass *owner = NULL;
+        for (TypeClass *c = e->typeclass_env.typeclasses; c && !owner; c = c->next) {
+            for (uint8_t mi = 0; mi < c->n_methods; mi++) {
+                const Symbol *mn = c->methods[mi].name;
+                if (mn && mn->len == method_name_len &&
+                    memcmp(mn->name, method_name, method_name_len) == 0) {
+                    owner = c;
+                    break;
+                }
+            }
+        }
+        if (owner) {
+            bool constrained = false;
+            for (uint8_t ci = 0; ci < e->cur_fn_n_constraints && !constrained; ci++) {
+                TypeConstraint *con = &e->cur_fn_constraints[ci];
+                if (!con || !con->typeclass) continue;
+                /* Match by class identity, or by name so a re-registered class
+                 * (same defclass seen through two import paths) still counts. */
+                if (con->typeclass == owner) { constrained = true; break; }
+                if (con->typeclass->name && owner->name &&
+                    con->typeclass->name->len == owner->name->len &&
+                    memcmp(con->typeclass->name->name, owner->name->name,
+                           owner->name->len) == 0)
+                    constrained = true;
+            }
+            if (!constrained) {
+                /* Name the type VARIABLE (`W`), not its kind: type_name() on a
+                 * TY_TYVAR prints the literal "tyvar", which tells the reader
+                 * nothing about which parameter to constrain. */
+                const char *tv = obj->type.as.tyvar_.name;
+                if (!tv || !*tv) tv = "the receiver's type parameter";
+                const char *fn = e->current_fn_name && e->current_fn_name->name
+                                     ? e->current_fn_name->name : NULL;
+                const char *cls = owner->name ? owner->name->name : "C";
+                char whobuf[160];
+                if (fn) snprintf(whobuf, sizeof(whobuf), "'%s'", fn);
+                else    snprintf(whobuf, sizeof(whobuf), "%s", "this function");
+                diag_emit_with_code(DIAG_ERROR, call->span,
+                    TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED,
+                    "'%.*s' is a method of typeclass '%s', but %s does not "
+                    "constrain '%s' to it -- so there is no instance to dispatch "
+                    "to. Add the constraint: (defn %s [%s] [(%s %s)] ...).",
+                    (int)method_name_len, method_name, cls,
+                    whobuf, tv,
+                    fn ? fn : "f", tv, cls, tv);
+                return NULL;
+            }
+        }
+    }
     if (obj_is_abstract_tyvar) {
         TypeClassInstance *carrier_inst = NULL;
         FnDef *carrier_method = NULL;
@@ -6669,6 +6754,68 @@ found_method:;
             df->as.dyn_field_.field =
                 symtab_intern(e->st, strslice(method_name, method_name_len));
             return elab_hoist_control_operands(e, df);
+        }
+        /* typeclass-method-resolution-ignores-the-class (symptom A): before
+         * claiming the method does not exist, ask the CLASS table.  Dispatch
+         * resolves by walking registered INSTANCES, so a class whose instances
+         * are all declared further down the file has nothing to match yet --
+         * and the old text ("no typeclass method found") then denied the
+         * existence of a method declared a few lines above, in the defclass,
+         * and never hinted that moving the definstance up is the fix.
+         *
+         * Name the real cause instead.  Still an error -- resolution genuinely
+         * cannot proceed here -- but an actionable one. */
+        {
+            TypeClass *owner = NULL;
+            for (TypeClass *c = e->typeclass_env.typeclasses; c && !owner;
+                 c = c->next) {
+                for (uint8_t mi = 0; mi < c->n_methods; mi++) {
+                    const Symbol *mn = c->methods[mi].name;
+                    if (mn && mn->len == method_name_len &&
+                        memcmp(mn->name, method_name, method_name_len) == 0) {
+                        owner = c;
+                        break;
+                    }
+                }
+            }
+            if (owner) {
+                uint32_t n_inst = 0;
+                for (TypeClassInstance *inst = e->typeclass_env.instances; inst;
+                     inst = inst->next)
+                    if (inst->typeclass == owner) n_inst++;
+                const char *cls = owner->name ? owner->name->name : "?";
+                if (n_inst == 0) {
+                    /* Nothing of this class is registered yet.  Either none was
+                     * written, or it sits BELOW this use -- instances register
+                     * in source order, so a later one is not in scope here. */
+                    diag_emit_with_code(DIAG_ERROR, call->span,
+                        TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED,
+                        "'%.*s' is a method of typeclass '%s', but no '%s' "
+                        "instance is visible here, so the call cannot be "
+                        "resolved. Instances are registered in source order: "
+                        "declare a (definstance %s [...] ...), and place it "
+                        "ABOVE this use.",
+                        (int)method_name_len, method_name, cls, cls, cls);
+                } else {
+                    /* Instances of this class DO exist and are in scope; none
+                     * applies to this receiver -- e.g. a parametric instance
+                     * whose own constraint is unsatisfied for the element type
+                     * (`Measurable [Box]` requiring `(Measurable A)` against a
+                     * `(Box bool)` with no `Measurable [bool]`).  Telling the
+                     * author to move or declare an instance would be wrong, so
+                     * report the receiver instead, matching the wording of the
+                     * concrete-receiver arm further down. */
+                    diag_emit_with_code(DIAG_ERROR, call->span,
+                        TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED,
+                        "no instance of typeclass '%s' applies to type '%s' "
+                        "(method '.%.*s'). An instance is in scope but does not "
+                        "match -- a parametric instance's own constraints must "
+                        "also hold for the element type.",
+                        cls, type_name(obj->type),
+                        (int)method_name_len, method_name);
+                }
+                return NULL;
+            }
         }
         /* No matching method found */
         diag_emit(DIAG_ERROR, call->span,

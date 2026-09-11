@@ -1,0 +1,21 @@
+;; typeclass-method-resolution-ignores-the-class (symptom B).
+;; A generic body calling a class method on its own abstract type parameter
+;; must declare the constraint. Without it there is no instance to dispatch
+;; to, and the emitter used to hard-wire whichever instance happened to be in
+;; scope -- `tur check` passed and `cc` then rejected the emitted call.
+(defstruct Bar [v : int])
+
+(defclass Foo [W]
+  (foo-of [^borrow w] : int))
+
+(definstance Foo [Bar]
+  (foo-of [w] (.v w)))
+
+;; No [(Foo W)] constraint -- this is the error.
+(defn use-foo [W] [^borrow w : W] : int
+  (foo-of w))
+
+(defn main [] : int
+  (let [b (make-struct Bar 111)]
+    (println (use-foo b))
+    0))

@@ -208,6 +208,38 @@ and `(display 3)` reaches `Show [int]`, with a by-value `defdata` or
 
 ---
 
+### Two rules the compiler enforces
+
+**The constraint is what makes the call legal.** A body that calls a method on
+its own type variable must declare the constraint. Without it there is no
+instance for the call to dispatch to:
+
+```turmeric
+(defn use-foo [W] [^borrow w : W] : int
+  (foo-of w))          ;; TUR-E0015: 'use-foo' does not constrain 'W' to 'Foo'
+```
+
+Add `[(Foo W)]` and it resolves. This is checked at `tur check` time; an
+unconstrained call used to pass the type checker and fail later in the C
+compiler, naming a mangled internal symbol.
+
+**Instances are registered in source order.** A `definstance` is visible to the
+code below it, not above it, so an instance declared underneath a constrained
+generic is not in scope for that generic:
+
+```turmeric
+(defn use-foo [W] [(Foo W)] [^borrow w : W] : int
+  (foo-of w))          ;; TUR-E0015: no 'Foo' instance is visible here
+
+(definstance Foo [Bar] ;; too late for the defn above
+  (foo-of [w] (.v w)))
+```
+
+Move the `definstance` above the first use. The same ordering applies across
+files: a `load` splices the loaded file's forms at the point it appears, so a
+module's own `(load ...)` of the file declaring a class lands that `defclass`
+ahead of any instance the module then declares.
+
 ## Associated Types
 
 An **Associated Type** allows a typeclass to declare a placeholder type member using `(type Name : Type)`. Each concrete instance binds this member to a specific type with `(type Name = <type>)`.

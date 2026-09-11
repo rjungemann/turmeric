@@ -1,1 +1,2 @@
-no typeclass method found for 'measure'
+TUR-E0015
+no instance of typeclass 'Measurable' applies to type

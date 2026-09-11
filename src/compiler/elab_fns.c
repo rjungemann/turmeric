@@ -7875,6 +7875,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
     e->cur_hkt_constraint_class = NULL;
     e->cur_hkt_constraint_tyvar = NULL;
     e->cur_hkt_dict_binding     = NULL;
+    /* typeclass-method-resolution-ignores-the-class: publish THIS fn's full
+     * constraint vector for the duration of its body, on the same save/restore
+     * discipline as the HKT ambient above.  The method-dispatch path reads it
+     * to tell "this generic is entitled to call the method" from "this generic
+     * just happens to have an instance in scope". */
+    TypeConstraint *saved_cur_fn_constraints   = e->cur_fn_constraints;
+    uint8_t         saved_cur_fn_n_constraints = e->cur_fn_n_constraints;
+    e->cur_fn_constraints   = constraint_list;
+    e->cur_fn_n_constraints = n_constraints;
     /* constrained-hkt-pure-and-byvalue-carriers (gap 1): the ambient constraint
      * used to be recorded only for a SINGLE-constraint fn, so the moment a body
      * needed two classes on the same type constructor -- `[^Monad m ^Applicative
@@ -7989,6 +7998,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->cur_hkt_constraint_class = saved_cur_hkt_class;
                 e->cur_hkt_constraint_tyvar = saved_cur_hkt_tyvar;
                 e->cur_hkt_dict_binding = saved_cur_hkt_dict;
+                e->cur_fn_constraints   = saved_cur_fn_constraints;
+                e->cur_fn_n_constraints = saved_cur_fn_n_constraints;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
                 scope_free(&inner);
@@ -8009,6 +8020,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->cur_hkt_constraint_class = saved_cur_hkt_class;
                 e->cur_hkt_constraint_tyvar = saved_cur_hkt_tyvar;
                 e->cur_hkt_dict_binding = saved_cur_hkt_dict;
+                e->cur_fn_constraints   = saved_cur_fn_constraints;
+                e->cur_fn_n_constraints = saved_cur_fn_n_constraints;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
                 scope_free(&inner);
@@ -8030,6 +8043,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     e->cur_hkt_constraint_class = saved_cur_hkt_class;
                     e->cur_hkt_constraint_tyvar = saved_cur_hkt_tyvar;
                     e->cur_hkt_dict_binding = saved_cur_hkt_dict;
+                    e->cur_fn_constraints   = saved_cur_fn_constraints;
+                    e->cur_fn_n_constraints = saved_cur_fn_n_constraints;
                     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                     e->scope = inner.parent;
                     scope_free(&inner);
@@ -8131,6 +8146,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
     e->cur_hkt_constraint_class = saved_cur_hkt_class;
     e->cur_hkt_constraint_tyvar = saved_cur_hkt_tyvar;
     e->cur_hkt_dict_binding = saved_cur_hkt_dict;
+    e->cur_fn_constraints   = saved_cur_fn_constraints;
+    e->cur_fn_n_constraints = saved_cur_fn_n_constraints;
     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
 
     /* bare-fat-result-monomorphization: close the canonical-body capture frame.
