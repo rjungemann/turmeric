@@ -14347,13 +14347,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * emits a plain identifier too, but its address is not a
              * link-time constant, and a computed fn value never is.  Across the
              * fixture corpus this covers 4307 of 4334 boxing sites. */
+            /* any-fn-widen-through-local-binding-leaks: a LOCAL alias of a
+             * global fn (`(let [f (fn ...)] (peek f))`) boxes the same
+             * link-time constant; see through it (widen_fn_alias, set at the
+             * let for an immutable binding) and spell the GLOBAL's name so the
+             * static box is keyed and initialised on the constant, not on the
+             * local. */
+            const Binding *sb_b = (inner->kind == EX_VAR) ? inner->as.var.binding : NULL;
+            if (sb_b && !sb_b->is_global && sb_b->widen_fn_alias)
+                sb_b = sb_b->widen_fn_alias;
             if (e->as.fn_to_fat_.static_ok &&
-                inner->kind == EX_VAR && inner->as.var.binding &&
-                inner->as.var.binding->is_global &&
-                !inner->as.var.binding->closure_fn_binding &&
-                !inner->as.var.binding->is_param &&
-                !inner->as.var.binding->is_poly_fn &&
-                !inner->as.var.binding->is_fat) {
+                sb_b && sb_b->is_global &&
+                !sb_b->closure_fn_binding &&
+                !sb_b->is_param &&
+                !sb_b->is_poly_fn &&
+                !sb_b->is_fat) {
+                if (sb_b != inner->as.var.binding) {
+                    free(fnptr);
+                    fnptr = atom_var(ctx, sb_b);
+                }
                 char shim_name[64];
                 if (!typed_shim)
                     snprintf(shim_name, sizeof shim_name, "__tur_fatshim%u",

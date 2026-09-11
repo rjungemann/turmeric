@@ -1308,6 +1308,16 @@ Expr *elab_let(Elab *e, const Form *call) {
                  * to __fn_N makes (f x) emit a direct call whose result is the
                  * int64 carrier rather than a function pointer. */
                 if (root->is_global && !root->is_lifted_lambda) b->source_binding = root;
+                /* any-fn-widen-through-local-binding-leaks: the widen-only
+                 * alias, which DOES chain to a lifted lambda (see the field's
+                 * note in expr.h).  Immutable bindings only. */
+                if (!b->is_mut) {
+                    Binding *wroot = init_b->widen_fn_alias ? init_b->widen_fn_alias
+                                                            : init_b;
+                    if (wroot->is_global && !wroot->closure_fn_binding &&
+                        !wroot->is_param && !wroot->is_poly_fn && !wroot->is_fat)
+                        b->widen_fn_alias = wroot;
+                }
             }
         }
         

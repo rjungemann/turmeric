@@ -274,6 +274,17 @@ struct Binding {
     /* Phase HRT4: for let-bound aliases of global functions, tracks the original
      * function binding so poly_arg_fn_binding can find the callable C name. */
     struct Binding *source_binding;
+    /* any-fn-widen-through-local-binding-leaks: the GLOBAL fn binding an
+     * immutable local alias holds -- `(let [f (fn ...)] ...)` (the lambda
+     * lifts to a file-scope `__fn_N`) or `(let [f add1] ...)`.  Read by ONE
+     * consumer, the EX_FN_TO_FAT static-box hoist: a widen of `f` to `any`
+     * boxes a link-time constant exactly as a widen of `__fn_N` would, so it
+     * takes the static box instead of a malloc nothing frees (24 bytes per
+     * widen, unbounded in a loop).  Deliberately NOT `source_binding`: that
+     * alias changes CALL semantics and must never chain to a lifted lambda
+     * (pr-386); this one changes only where a box lives.  NULL for a `^mut`
+     * binding (a `set!` could retarget it) and for anything but a global. */
+    struct Binding *widen_fn_alias;
     /* ER6: true if this binding was introduced by an (extern-c ...) declaration.
      * Used by effect_check to infer #{Unsafe} for calls to extern-c functions. */
     bool          is_extern_c;

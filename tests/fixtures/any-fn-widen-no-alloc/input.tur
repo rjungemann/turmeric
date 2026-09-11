@@ -14,19 +14,17 @@
 ;; `emit_type_is_byvalue_adt` is false for TY_FN, so the payload's registry row
 ;; carries boxed = 0 and `__tur_any_drop` leaves it alone.
 ;;
-;; Both shapes below take that path: a `defn` named as a value, and a lambda
-;; widened directly (which lifts to a file-scope fn).  200 widens, zero
-;; allocations.
+;; All four shapes below take that path: a `defn` named as a value, a lambda
+;; widened directly (which lifts to a file-scope fn), and -- since
+;; any-fn-widen-through-local-binding-leaks was fixed -- a fn value reached
+;; through an immutable LOCAL binding, whether the binding holds a lambda or
+;; names a `defn`.  The binding is an alias of the same link-time constant
+;; (`widen_fn_alias`, set at the let), so the widen hoists the same static box.
+;; 400 widens, zero allocations.
 ;;
 ;; requires.leak-check: the ordinary suite runs fixtures with detect_leaks=0, so
 ;; a regression here would be invisible to it -- this assertion only exists
 ;; under the leak harness.
-;;
-;; NOT covered, and deliberately: a fn value reached through a LOCAL binding
-;; (`(let [f (fn ...)] (peek f))`).  Its box is not a link-time constant, so the
-;; emitter falls back to the malloc form and it leaks once per widen unless the
-;; callee's non-retain mask lets the frame-box rule fire.  See
-;; docs/reported/any-fn-widen-through-local-binding-leaks.md.
 
 (defn add1 [x : int] : int (+ x 1))
 (defn peek [a : any] : cstr (type-of a))
@@ -35,6 +33,10 @@
   (if (< i 100)
     (do (println (peek add1))
         (println (peek (fn [x : int] : int (+ x 2))))
+        (let [f (fn [x : int] : int (+ x 3))
+              g add1]
+          (println (peek f))
+          (println (peek g)))
         (loop-n (+ i 1)))
     0))
 

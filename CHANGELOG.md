@@ -55,6 +55,10 @@ user-visible semantic change, not a fix.
   `: (fn [int] int)` whose body is a capturing closure now marks that result
   `boxed` like a `defn` already did, so the consumer dispatches through the
   fat thunk protocol instead of calling the env box as code.
+- **Widening a let-bound function to `any` no longer leaks a box per widen.**
+  `(let [f (fn ...)] (peek f))` malloc'd a 24-byte shim box that nothing freed,
+  unbounded in a loop; the binding is now recorded as an alias of the lifted
+  global, and the widen hoists the same static box a direct widen uses.
 - **Module-level `def`, `^thread-local` init and `set!` stores bridge the
   int64/pointer carrier duality,** so `(def hub-mutex (:: (mutex-new) :int))`
   no longer emits `int64_t g = <void * temp>;` -- a hard error under GCC >= 14
