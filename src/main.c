@@ -2211,6 +2211,40 @@ static void scan_autolink_markers(const Buf *csrc, Buf *autolink) {
     if (autolink->len > 0) buf_putc(autolink, '\0');
 }
 
+/* ffi-spices-integration-plan S1: append the project manifest's
+ * `:build-opts :link-libs` (as -l<name>) and `:link-flags` (verbatim) to the
+ * link line.  `:link-libs` was parsed into the manifest (pkg.c) and then
+ * consumed nowhere -- documented, round-tripped by `tur init`, and ignored by
+ * every build path -- so S1 appended it next to the cmake-dep flags.  It
+ * lived inline in collect_build_aux, and cmd_build_multi_files carried a
+ * hand-copied twin of the cmake read that predated S1 and never got it, which
+ * is how `tur build --shared <dir>` came to ignore a spice's declared link
+ * libraries while `tur build <file>` honoured them.  ONE helper, called from
+ * both, is the only shape that cannot drift like that again.
+ *
+ * Entries in :link-libs are bare names (:link-libs ["m"] -> -lm), the same
+ * spelling the cmake manifest uses.  :link-flags is the verbatim sibling --
+ * no prefix is added, which is the only way to spell `-framework Cocoa` (see
+ * the note on link_flags in pkg.h) or a `-L<dir>`.  No-op when proj_root has
+ * no manifest. */
+static void append_manifest_link_flags(const char *proj_root, Buf *cmake_flags) {
+    char bm[4096];
+    if (!pkg_resolve_manifest_path(proj_root, bm, sizeof(bm))) return;
+    PkgManifest pm;
+    memset(&pm, 0, sizeof(pm));
+    if (pkg_manifest_read(bm, &pm)) {
+        for (int i = 0; i < pm.n_link_libs; i++) {
+            if (pm.link_libs[i] && pm.link_libs[i][0])
+                buf_printf(cmake_flags, " -l%s", pm.link_libs[i]);
+        }
+        for (int i = 0; i < pm.n_link_flags; i++) {
+            if (pm.link_flags[i] && pm.link_flags[i][0])
+                buf_printf(cmake_flags, " %s", pm.link_flags[i]);
+        }
+    }
+    pkg_manifest_free(&pm);
+}
+
 /* tur-link-and-build-split-plan Phase 3: collect the enclosing spice's cmake
  * dep flags (-I/-L/-l from cmake/spice-deps-manifest.json) plus its
  * `:c-includes` (-I) and `:c-sources` (vendored .c) by walking up from the
@@ -2242,34 +2276,7 @@ static void collect_build_aux(const char *input, Buf *cmake_flags,
             pkg_cmake_manifest_append_cc_flags(&cmake_manifest, cmake_flags);
             pkg_cmake_manifest_free(&cmake_manifest);
         }
-        /* ffi-spices-integration-plan S1: `:build-opts :link-libs` was
-         * parsed into the manifest (pkg.c) and then consumed nowhere --
-         * documented, round-tripped by `tur init`, and ignored by every
-         * build path.  Append it here, next to the cmake-dep flags, so both
-         * consumers of this function (the cc link line via
-         * cmd_build/cmd_compile, and the REPL's in-process JIT hook via
-         * repl_jit_build) receive it.  Entries are bare lib names
-         * (:link-libs ["m"] -> -lm), the same spelling the cmake manifest
-         * uses. */
-        char bm[4096];
-        if (pkg_resolve_manifest_path(proj_root, bm, sizeof(bm))) {
-            PkgManifest pm;
-            memset(&pm, 0, sizeof(pm));
-            if (pkg_manifest_read(bm, &pm)) {
-                for (int i = 0; i < pm.n_link_libs; i++) {
-                    if (pm.link_libs[i] && pm.link_libs[i][0])
-                        buf_printf(cmake_flags, " -l%s", pm.link_libs[i]);
-                }
-                /* :link-flags is the verbatim sibling of :link-libs -- no
-                 * prefix is added, which is the only way to spell a
-                 * `-framework Cocoa` (see the note on link_flags in pkg.h). */
-                for (int i = 0; i < pm.n_link_flags; i++) {
-                    if (pm.link_flags[i] && pm.link_flags[i][0])
-                        buf_printf(cmake_flags, " %s", pm.link_flags[i]);
-                }
-            }
-            pkg_manifest_free(&pm);
-        }
+        append_manifest_link_flags(proj_root, cmake_flags);
         collect_spice_aux_c(proj_root, aux_includes, aux_sources);
         free(proj_root);
     }
@@ -6189,7 +6196,24 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
     const char *cc_flags = getenv("TUR_CC_FLAGS");
     if (!cc_flags || !*cc_flags) cc_flags = "-O2 -std=c99 -Wall -fno-strict-aliasing";
 
-    /* Collect cmake dep flags from cmake/spice-deps-manifest.json if present */
+    /* Collect cmake dep flags from cmake/spice-deps-manifest.json if present,
+     * then the project's own `:build-opts :link-libs` / `:link-flags`.
+     *
+     * The second half was missing here. This block is a hand-copied twin of
+     * the cmake-manifest read inside collect_build_aux, taken before
+     * ffi-spices-integration-plan S1 taught THAT function to also honour
+     * `:build-opts` -- so the fix landed in one copy and not the other, and
+     * `tur build --shared <dir>` silently ignored a spice's declared link
+     * libraries while `tur build <file>` honoured them.  Found from the
+     * Godot AOT stager on Windows, where the staged library must link against
+     * the extension DLL (PE resolves every import at link time; there is no
+     * -undefined dynamic_lookup) and the manifest entry it wrote for that
+     * never reached the cc line:
+     *
+     *     ld.exe: undefined reference to `godot_println'
+     *
+     * Both paths now call the same helper, which is the only arrangement that
+     * cannot drift again. */
     Buf cmake_flags;
     buf_init(&cmake_flags);
     {
@@ -6203,6 +6227,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
                 pkg_cmake_manifest_append_cc_flags(&cmake_manifest, &cmake_flags);
                 pkg_cmake_manifest_free(&cmake_manifest);
             }
+            append_manifest_link_flags(proj_root, &cmake_flags);
             free(proj_root);
         }
     }

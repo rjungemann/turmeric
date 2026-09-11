@@ -1,0 +1,3 @@
+;;; mod -- one exported defn, so the shared build has something to emit.
+(defn forty-two [] : int
+  42)

@@ -76,9 +76,14 @@
 >
 > So "leave the natives undefined and bind them at `dlopen`" -- fix direction 2
 > -- works on Linux and macOS and **cannot work on Windows**. The staged build
-> would need an import library for the extension, and none is produced today:
-> there is no `.dll.a` anywhere in the tree and `SConstruct` passes no
-> `-Wl,--out-implib`. Producing one, finding it from the staged project, and
+> would need something for `ld` to resolve the extension's symbols against.
+> (An earlier revision of this note said no import library is produced. That
+> was measured on a tree that had never been built on Windows -- godot-cpp's
+> own SConstruct does pass `-Wl,--out-implib`, yielding a doubled-prefix
+> `liblib<name>.a` beside the DLL. It is simply never consumed. And it is not
+> needed: MinGW's `ld` links against the DLL itself, synthesising the import
+> stubs from its export table.) Producing one, finding it from the staged
+> project, and
 > keeping the staged link line pointed at it is real plumbing, on the most
 > fragile platform surface the shim has.
 >
