@@ -1095,44 +1095,72 @@ else
     echo "SKIP jit-ffi-call-ptr-interp (needs a JIT build on Linux)"
 fi
 
-# jit-ffi-interp-parametric-field-diag: the interpreter refuses a record whose
-# field is a concrete application of a parametric record -- it cannot render
-# that field's layout without per-application type substitution -- and the
-# refusal must say so.
+# jit-ffi-interp-parametric-record-field: a record field whose type is a
+# concrete application of a parametric record -- `(BoxW int32)`, `(Box float)`
+# -- marshals under --interpret and agrees with the compiled path.
 #
-# The message used to read "record has a field with no by-value C member type",
-# which was false in every case it could fire: that path is reachable only when
-# `adt_field_is_inline_byval` returned TRUE, i.e. exactly when codegen DOES
-# inline the field by value. It pointed at the user's type when the type is
-# fine and the gap is the interpreter's.
+# It used to be refused: the F4 marshaller read field types from the GENERIC
+# def, where a type-variable field reports the int64 carrier, so it could not
+# describe the monomorph codegen actually emits. Measured, that monomorph is
+# `struct tur_adt_Box__float { double x; }` inlined by value -- so describing
+# `x` as an int64 would hand the callee eight bytes of reinterpreted double.
+# Refusing was right; rendering it correctly is better.
 #
-# No dlopen: the refusal happens while marshalling the argument, before the
-# pointer is ever used, so a bogus callee keeps this portable. The compiled
-# path accepts the same program -- that divergence is the open finding in
-# docs/reported/jit-ffi-interp-refuses-parametric-record-field.md; what is
-# asserted here is only that the refusal describes itself honestly.
-if [ "$HAS_JIT" = "1" ]; then
-    cat > "$TMP_FFI" <<'TURFFI'
+# The float case is the one that matters: an int32 field survives a wrong
+# member code by accident, a double does not. `fouter_check` returns 1 only if
+# the double arrived intact AND the sibling int32 did too, so a layout slip
+# shows up as 0 rather than as a plausible-looking number.
+#
+# Needs cc to build the callee; skipped where it is unavailable.
+if [ "$HAS_JIT" = "1" ] && command -v cc >/dev/null 2>&1; then
+    _pf_dir=$(mktemp -d)
+    case "$(uname)" in
+        Darwin) _pf_lib="$_pf_dir/libprobe.dylib" ;;
+        *)      _pf_lib="$_pf_dir/libprobe.so"    ;;
+    esac
+    cat > "$_pf_dir/probe.c" <<'PROBEC'
+#include <stdint.h>
+struct BoxWi { int32_t raw; };
+struct Outer { struct BoxWi b; int32_t tag; };
+int32_t outer_sum(struct Outer o) { return o.b.raw * 10 + o.tag; }
+struct Boxf { double x; };
+struct FOuter { struct Boxf b; int32_t tag; };
+int32_t fouter_check(struct FOuter o) {
+    return (o.b.x > 1.49 && o.b.x < 1.51 && o.tag == 7) ? 1 : 0;
+}
+PROBEC
+    if cc -shared -fPIC -o "$_pf_lib" "$_pf_dir/probe.c" 2>/dev/null; then
+        cat > "$TMP_FFI" <<TURFFI
 (defstruct BoxW [a] (raw :int32))
 (defstruct Outer [b : (BoxW int32) tag : int32])
+(defstruct Box [a] (x a))
+(defstruct FOuter [b : (Box float) tag : int32])
 (defn main [] : int
   (unsafe
-    (println (call-ptr 1 [Outer -> :int32]
-                       (make-struct Outer (make-struct BoxW (:: 1 :int32)) (:: 2 :int32)))))
+    (let [h (dlopen "$_pf_lib")
+          p (dlsym h "outer_sum")
+          q (dlsym h "fouter_check")]
+      (println (call-ptr p [Outer -> :int32]
+                         (make-struct Outer (make-struct BoxW (:: 4 :int32)) (:: 2 :int32))))
+      (println (call-ptr q [FOuter -> :int32]
+                         (make-struct FOuter (make-struct Box 1.5) (:: 7 :int32))))))
   0)
 TURFFI
-    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>&1)
-    if ! grep -q "parametric monomorph" <<< "$out"; then
-        fail "jit-ffi-interp-parametric-field-diag" "expected the parametric-monomorph refusal, got: $out"
-    elif ! grep -q "field 'b' of record 'Outer'" <<< "$out"; then
-        fail "jit-ffi-interp-parametric-field-diag" "refusal did not name the offending field, got: $out"
-    elif grep -q "no by-value C member type" <<< "$out"; then
-        fail "jit-ffi-interp-parametric-field-diag" "refusal still claims the field has no by-value C member type, which is the inaccuracy: $out"
+        out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>&1)
+        want=$(printf '42\n1')
+        if grep -q "no by-value C member type\|parametric monomorph" <<< "$out"; then
+            fail "jit-ffi-interp-parametric-record-field" "still refused: $out"
+        elif [ "$out" != "$want" ]; then
+            fail "jit-ffi-interp-parametric-record-field" "expected '42' then '1' (the compiled path's answer), got: $out"
+        else
+            pass "jit-ffi-interp-parametric-record-field"
+        fi
     else
-        pass "jit-ffi-interp-parametric-field-diag"
+        echo "SKIP jit-ffi-interp-parametric-record-field (cc could not build the probe)"
     fi
+    rm -rf "$_pf_dir"
 else
-    echo "SKIP jit-ffi-interp-parametric-field-diag (needs a JIT build)"
+    echo "SKIP jit-ffi-interp-parametric-record-field (needs a JIT build and cc)"
 fi
 
 # jit-ffi-call-ptr-nonjit-diag: a JIT-less interpreter reports a clean

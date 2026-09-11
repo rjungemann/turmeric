@@ -1,6 +1,39 @@
 # call-ptr under --interpret refuses a record with a parametric-monomorph field
 
-**Status update 2026-09-10: fix direction 1 is DONE; direction 2 remains open.**
+**Status update 2026-09-10: BOTH fix directions are DONE. This report is
+resolved and should be archived once the change lands.**
+
+Direction 2 (render the layout) is implemented: `agg_field_class` resolves a
+`TY_APP` field to its base `AdtDef` plus the application's arguments
+(`type_extract_adt_app`), and every field type inside that record is now read
+through `substitute_adt_app_type_owned` before its member code is taken. The
+four walkers that must agree on layout -- `agg_sig_len`, `agg_sig_render`,
+`agg_collect_leaves`, `agg_build_value` -- all thread the same `(def, args)`
+view, so the sig, the flatten and the rebuild cannot disagree.
+
+The load-bearing detail, measured rather than assumed: codegen emits
+`(defstruct Box [a] (x a))` at `float` as
+`struct tur_adt_Box__float { double x; }`, inlined by value into its owner. A
+type-variable field reports `kind == TY_INT` (the int64 carrier), so the member
+code MUST come from the substituted type -- taking it from `f->kind` would
+describe `x` as an int64 and hand the callee eight bytes of reinterpreted
+double, which is exactly the miscall F4 exists to prevent.
+
+Verified differentially against the compiled path, which is the only check
+that can catch a layout slip: a C callee taking the record by value returns
+`4*10+2 = 42` for the int32 shape and `1` for the float shape (which is 1 only
+if the double arrived intact AND its sibling int32 did). Compiled and
+`--interpret` both print `42` then `1`. Pinned by
+`jit-ffi-interp-parametric-record-field` in `tests/run-flags.sh`, which builds
+that callee with `cc` and skips where `cc` is unavailable.
+
+Note the earlier direction-1 assertion had to be REPLACED rather than kept:
+the program it used to prove the refusal message now succeeds, so asserting a
+refusal would have been asserting a bug.
+
+---
+
+**Superseded status note (direction 1, kept for history):**
 The refusal now names the offending field and its record, states that the
 field is a parametric monomorph, and says outright that the user's type is
 fine and the compiled path marshals it:

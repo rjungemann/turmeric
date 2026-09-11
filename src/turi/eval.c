@@ -1476,29 +1476,116 @@ typedef enum {
                         * rather than mis-describe */
 } AggFieldClass;
 
-static AggFieldClass agg_field_class(const CtorField *f,
-                                     const AdtDef **out_def) {
-    if (adt_field_is_inline_byval(f)) {
-        if (f->full_type->kind == TY_ADT) {
-            if (out_def) *out_def = f->full_type->as.adt_.def;
-            return AGGF_NESTED;
-        }
-        return AGGF_UNSUPPORTED;
+/* jit-ffi-interp-refuses-parametric-record-field, direction 2: a record to
+ * render, plus the application arguments that concretize it.
+ *
+ * `args` is NULL for an ordinary record. It is non-NULL when the record was
+ * reached through a parametric field -- `(Box float)` -- and then every field
+ * type must be read THROUGH the substitution, because a type-variable field
+ * reports `kind == TY_INT` (the int64 carrier) while the monomorph codegen
+ * emits carries the substituted type. Measured, not assumed:
+ *
+ *     (defstruct Box [a] (x a))
+ *     (defstruct Outer [b : (Box float) tag : int32])
+ *
+ * emits `struct tur_adt_Box__float { double x; }` inlined into
+ * `struct tur_adt_Outer { tur_adt_Box__float b; int32_t tag; }`. Rendering
+ * that field from the generic def would describe `x` as an int64 and hand the
+ * callee eight bytes of reinterpreted double -- the exact miscall F4 exists to
+ * prevent. */
+typedef struct {
+    const AdtDef *def;
+    const Type   *args;    /* application args, or NULL when not parametric */
+    uint8_t       n_args;
+} AggRec;
+
+/* A field's type as it is actually laid out in `owner`, always OWNED so the
+ * caller can free it uniformly with free_struct_app_type (a no-op on a leaf).
+ * Without an owner substitution this is a clone of the declared type. */
+static Type agg_field_type_owned(const AggRec *owner, const CtorField *f) {
+    if (!f) { Type z; memset(&z, 0, sizeof z); return z; }
+    /* A field carries no full_type when it was declared as a plain scalar
+     * (`raw : int32`); its `kind` is then the whole story and there is nothing
+     * to substitute. Returning a zeroed Type here instead made every such
+     * field look unrepresentable. */
+    if (!f->full_type) {
+        Type k; memset(&k, 0, sizeof k);
+        k.kind = f->kind;
+        return k;
     }
-    return AGGF_SCALAR;
+    if (owner && owner->args)
+        return substitute_adt_app_type_owned(f->full_type, owner->def,
+                                             owner->args);
+    return clone_struct_app_type(*f->full_type);
+}
+
+/* Classify `f` as laid out inside `owner`.  `out_inner` receives the nested
+ * record view (def + its own substitution) for AGGF_NESTED; `out_kind`
+ * receives the SUBSTITUTED TypeKind for AGGF_SCALAR, which is what the member
+ * code must be read from -- `f->kind` is the carrier and lies for a tyvar
+ * field. `out_inner_args` is scratch the caller owns for the lifetime of
+ * *out_inner (the arg vector the inner view points at). */
+static AggFieldClass agg_field_class_in(const AggRec *owner, const CtorField *f,
+                                        AggRec *out_inner, TypeKind *out_kind,
+                                        Type *out_inner_args, uint8_t max_args,
+                                        Type *out_owned) {
+    Type ft = agg_field_type_owned(owner, f);
+    if (out_owned) *out_owned = ft;
+    AggFieldClass cls = AGGF_SCALAR;
+
+    const AdtDef *ad_adt = (ft.kind == TY_ADT) ? ft.as.adt_.def : NULL;
+    /* Mirrors adt_field_is_inline_byval_d's own conditions per kind: a :heap
+     * ADT is a typed pointer, and drop glue would make the owner non-trivially
+     * copyable, so neither inlines. */
+    if (ad_adt && !ad_adt->is_heap && !ad_adt->needs_drop_glue &&
+        adt_is_byvalue_product(ad_adt)) {
+        if (out_inner) {
+            out_inner->def = ft.as.adt_.def;
+            out_inner->args = NULL;
+            out_inner->n_args = 0;
+        }
+        cls = AGGF_NESTED;
+    } else if (ft.kind == TY_APP && adt_app_is_byvalue_product(ft)) {
+        AdtDef *adef = NULL;
+        uint8_t na = 0;
+        if (out_inner_args && max_args &&
+            type_extract_adt_app(&ft, &adef, out_inner_args, &na) && adef &&
+            !adef->is_heap && !adef->needs_drop_glue && na <= max_args) {
+            if (out_inner) {
+                out_inner->def = adef;
+                out_inner->args = out_inner_args;
+                out_inner->n_args = na;
+            }
+            cls = AGGF_NESTED;
+        } else {
+            cls = AGGF_UNSUPPORTED;   /* could not resolve the application */
+        }
+    } else {
+        if (out_kind) *out_kind = ft.kind;
+        cls = AGGF_SCALAR;
+    }
+    if (!out_owned) free_struct_app_type(ft);
+    return cls;
 }
 
 /* Number of sig bytes an aggregate for `def` needs, including braces. */
-static size_t agg_sig_len(const AdtDef *def) {
-    const CtorDef *ct = def->ctors[0];
+static size_t agg_sig_len_in(const AggRec *r) {
+    const CtorDef *ct = r->def->ctors[0];
     size_t n = 2;
     for (uint32_t i = 0; i < ct->n_fields; i++) {
-        const AdtDef *in = NULL;
-        n += (agg_field_class(&ct->fields[i], &in) == AGGF_NESTED)
-                 ? agg_sig_len(in)
-                 : 1;
+        AggRec in; Type inargs[8]; Type owned;
+        memset(&in, 0, sizeof in);
+        AggFieldClass c = agg_field_class_in(r, &ct->fields[i], &in, NULL,
+                                             inargs, 8, &owned);
+        n += (c == AGGF_NESTED) ? agg_sig_len_in(&in) : 1;
+        free_struct_app_type(owned);
     }
     return n;
+}
+
+static size_t agg_sig_len(const AdtDef *def) {
+    AggRec r; r.def = def; r.args = NULL; r.n_args = 0;
+    return agg_sig_len_in(&r);
 }
 
 /* jit-ffi-interp-refuses-parametric-record-field: which field defeated the
@@ -1521,24 +1608,32 @@ struct AggSigFail {
  * `{...}`, matching the layout codegen inlines.  Returns the number of
  * bytes written, or 0 if any field has no by-value member representation
  * the interpreter can describe -- with *fail describing which and why. */
-static size_t agg_sig_render(const AdtDef *def, char *buf, AggSigFail *fail) {
-    const CtorDef *ct = def->ctors[0];
+static size_t agg_sig_render_in(const AggRec *r, char *buf, AggSigFail *fail) {
+    const CtorDef *ct = r->def->ctors[0];
     size_t pos = 0;
     buf[pos++] = '{';
     for (uint32_t i = 0; i < ct->n_fields; i++) {
-        const AdtDef *in = NULL;
-        switch (agg_field_class(&ct->fields[i], &in)) {
-            case AGGF_NESTED: {
-                size_t w = agg_sig_render(in, buf + pos, fail);
+        AggRec in; Type inargs[8]; Type owned; TypeKind sk = TY_UNKNOWN;
+        memset(&in, 0, sizeof in);
+        AggFieldClass cls = agg_field_class_in(r, &ct->fields[i], &in, &sk,
+                                               inargs, 8, &owned);
+        size_t w = 0;
+        switch (cls) {
+            case AGGF_NESTED:
+                w = agg_sig_render_in(&in, buf + pos, fail);
+                free_struct_app_type(owned);
                 if (!w) return 0;   /* *fail already set by the recursion */
                 pos += w;
                 break;
-            }
             case AGGF_SCALAR: {
-                char c = tur_jit_ffi_member_code_for_kind(ct->fields[i].kind);
+                /* The SUBSTITUTED kind, never ct->fields[i].kind: a tyvar
+                 * field reports the int64 carrier while the monomorph carries
+                 * the substituted type. */
+                char c = tur_jit_ffi_member_code_for_kind(sk);
+                free_struct_app_type(owned);
                 if (!c) {
                     if (fail) {
-                        fail->record = def->name;
+                        fail->record = r->def->name;
                         fail->field = ct->fields[i].name;
                         fail->parametric = false;
                     }
@@ -1548,8 +1643,9 @@ static size_t agg_sig_render(const AdtDef *def, char *buf, AggSigFail *fail) {
                 break;
             }
             default:
+                free_struct_app_type(owned);
                 if (fail) {
-                    fail->record = def->name;
+                    fail->record = r->def->name;
                     fail->field = ct->fields[i].name;
                     fail->parametric = true;
                 }
@@ -1558,6 +1654,11 @@ static size_t agg_sig_render(const AdtDef *def, char *buf, AggSigFail *fail) {
     }
     buf[pos++] = '}';
     return pos;
+}
+
+static size_t agg_sig_render(const AdtDef *def, char *buf, AggSigFail *fail) {
+    AggRec r; r.def = def; r.args = NULL; r.n_args = 0;
+    return agg_sig_render_in(&r, buf, fail);
 }
 
 /* jit-ffi-interp-refuses-parametric-record-field: say what is actually wrong.
@@ -1674,56 +1775,79 @@ static TuriValue agg_load_member(const void *base, size_t off, char code,
  * here lands at offs[i]/codes[i] there.  Returns false on a shape mismatch
  * (not a record, wrong field count, or a nested field that is not the
  * record value its slot declares). */
-static bool agg_collect_leaves(const AdtDef *def, TuriValue v,
-                               TuriValue *out, int max, int *n) {
+static bool agg_collect_leaves_in(const AggRec *r, TuriValue v,
+                                  TuriValue *out, int max, int *n) {
     if (v.tag != TURI_STRUCT || !v.as_struct) return false;
-    const CtorDef *ct = def->ctors[0];
+    const CtorDef *ct = r->def->ctors[0];
     if (v.as_struct->n_fields != ct->n_fields) return false;
     for (uint32_t i = 0; i < ct->n_fields; i++) {
-        const AdtDef *in = NULL;
-        if (agg_field_class(&ct->fields[i], &in) == AGGF_NESTED) {
-            if (!agg_collect_leaves(in, v.as_struct->fields[i], out, max, n))
-                return false;
-        } else {
-            if (*n >= max) return false;
+        AggRec in; Type inargs[8]; Type owned;
+        memset(&in, 0, sizeof in);
+        AggFieldClass cls = agg_field_class_in(r, &ct->fields[i], &in, NULL,
+                                               inargs, 8, &owned);
+        bool ok = true;
+        if (cls == AGGF_NESTED)
+            ok = agg_collect_leaves_in(&in, v.as_struct->fields[i], out, max, n);
+        else if (*n >= max)
+            ok = false;
+        else
             out[(*n)++] = v.as_struct->fields[i];
-        }
+        free_struct_app_type(owned);
+        if (!ok) return false;
     }
     return true;
+}
+
+static bool agg_collect_leaves(const AdtDef *def, TuriValue v,
+                               TuriValue *out, int max, int *n) {
+    AggRec r; r.def = def; r.args = NULL; r.n_args = 0;
+    return agg_collect_leaves_in(&r, v, out, max, n);
 }
 
 /* Rebuild a record value of type `def` from the C bytes at `base`, reading
  * leaves at offs[*cur]/codes[*cur] onward (the flattened order the layout
  * engine produced) and reconstructing nested records recursively.  Advances
  * *cur past the leaves consumed. */
-static TuriValue agg_build_value(TuriEnv *env, const AdtDef *def,
-                                 const void *base, const size_t *offs,
-                                 const char *codes, int nleaf, int *cur) {
-    const CtorDef *ct = def->ctors[0];
+static TuriValue agg_build_value_in(TuriEnv *env, const AggRec *r,
+                                    const void *base, const size_t *offs,
+                                    const char *codes, int nleaf, int *cur) {
+    const CtorDef *ct = r->def->ctors[0];
     TuriValue fields[64];
     if (ct->n_fields > 64)
         return turi_error("call-ptr: aggregate return has too many fields");
     for (uint32_t i = 0; i < ct->n_fields; i++) {
-        const AdtDef *in = NULL;
-        if (agg_field_class(&ct->fields[i], &in) == AGGF_NESTED) {
-            fields[i] = agg_build_value(env, in, base, offs, codes,
-                                        nleaf, cur);
+        AggRec in; Type inargs[8]; Type owned; TypeKind sk = TY_UNKNOWN;
+        memset(&in, 0, sizeof in);
+        AggFieldClass cls = agg_field_class_in(r, &ct->fields[i], &in, &sk,
+                                               inargs, 8, &owned);
+        if (cls == AGGF_NESTED) {
+            fields[i] = agg_build_value_in(env, &in, base, offs, codes,
+                                           nleaf, cur);
+            free_struct_app_type(owned);
             if (turi_is_error(fields[i])) return fields[i];
         } else {
+            free_struct_app_type(owned);
             if (*cur >= nleaf)
                 return turi_error("call-ptr: aggregate return layout is "
                                   "shorter than its record declares");
-            fields[i] = agg_load_member(base, offs[*cur], codes[*cur],
-                                        ct->fields[i].kind);
+            /* Substituted kind again -- agg_load_member widens by it. */
+            fields[i] = agg_load_member(base, offs[*cur], codes[*cur], sk);
             (*cur)++;
         }
     }
-    TuriValue r = make_struct_val(env, ct->name, ct->n_fields, fields);
+    TuriValue rv = make_struct_val(env, ct->name, ct->n_fields, fields);
     /* Carry the ctor so field access and `type-of` see a struct, the same
      * thing adt_ctor_native does for a value built in turi. */
-    if (r.tag == TURI_STRUCT && r.as_struct)
-        r.as_struct->ctor = ct;
-    return r;
+    if (rv.tag == TURI_STRUCT && rv.as_struct)
+        rv.as_struct->ctor = ct;
+    return rv;
+}
+
+static TuriValue agg_build_value(TuriEnv *env, const AdtDef *def,
+                                 const void *base, const size_t *offs,
+                                 const char *codes, int nleaf, int *cur) {
+    AggRec r; r.def = def; r.args = NULL; r.n_args = 0;
+    return agg_build_value_in(env, &r, base, offs, codes, nleaf, cur);
 }
 
 /* Bridge for tur_ffi_cb_dispatch (ffi_thunk.c): rebuild a record TuriValue
