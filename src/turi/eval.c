@@ -9318,7 +9318,26 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
                  * reinterpret it so a downstream `match` (tag == TURI_STRUCT)
                  * still finds its arm.  Guard on non-null to leave a genuine
                  * 0/nil carrier alone. */
+                /* interp-inline-c-opaque-segv-in-any-reflection, direction 1
+                 * by another road: `fn->return_type` keeps only the KIND of a
+                 * plain ADT return (its job is the lifetime pass), so it cannot
+                 * say whether the ADT is an OPAQUE -- a named int64 carrier
+                 * whose word IS the value -- and re-tagged `(defopaque Route
+                 * :int)`'s 7 as a TuriStruct pointer.  The binding's full fn
+                 * type does carry the declared result with its def; ask it.
+                 * An opaque result stays the immediate it is, exactly as the
+                 * `(:: 7 Route)` spelling already does, so `type-of` answers
+                 * the widen's static name (`Route`) instead of `adt`. */
+                bool ret_is_opaque = false;
+                if (fn->binding && fn->binding->type.kind == TY_FN &&
+                    fn->binding->type.as.fn.result_full_type) {
+                    const Type *rft = fn->binding->type.as.fn.result_full_type;
+                    if (rft->kind == TY_ADT && rft->as.adt_.def &&
+                        rft->as.adt_.def->is_opaque)
+                        ret_is_opaque = true;
+                }
                 if (inline_result.tag == TURI_INT && inline_result.as_int != 0 &&
+                    !ret_is_opaque &&
                     (fn->return_type.kind == TY_ADT ||
                      fn->return_type.kind == TY_STRUCT)) {
                     inline_result = turi_struct_val(
