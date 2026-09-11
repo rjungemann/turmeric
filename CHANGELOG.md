@@ -44,6 +44,12 @@ user-visible semantic change, not a fix.
   before entering the callee, so `(defer (println "d")) (shout)` printed `d`
   first. The reuse is now gated on an empty defer chain, matching the
   compiler's "defers break tail" rule.
+- **A declared all-`any` function parameter is usable compiled.**
+  `(defn tany [f : (fn [any] any)] : any (f (:: 4.5 any)))` failed in `cc`
+  (the CPS backend spelled the parameter as a named callee), and handing an
+  `any`-held function to such a parameter panicked at the seam (the cast
+  checked the bare fn id where the box carries the fat all-`any` one). Both
+  fixed; the Saffron fuzzer's `route_seam_fn` shape is back in its pool.
 - **A capturing closure passed through a type parameter instantiated to a
   function type no longer crashes (SIGBUS).** A lambda declared
   `: (fn [int] int)` whose body is a capturing closure now marks that result
