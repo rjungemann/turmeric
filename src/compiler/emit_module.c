@@ -11356,7 +11356,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_printf(out, "    if (tur_handler_chain) {\n");
     /* owns_value = 1: the strdup'd message is a heap block this payload owns. */
     buf_printf(out, "        global_panic_payload = panic_payload_new(%d, msg ? strdup(msg) : NULL, __FILE__, __LINE__, 1);\n", (int)TY_CSTR);
-    buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); }\n");
+    buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); global_panic_frame = NULL; }\n");
     /* Signal transport -- set the flag and RETURN; the caller's per-call-site
      * check propagates it up to the catch-unwind boundary. */
     buf_puts(out, "        tur_panicking = 1;\n");
@@ -11859,7 +11859,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * value the payload must never free (catch-unwind-panic-payload-leaks). */
     buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);\n");
     /* Signal transport (always-on): fire defers, set the flag, RETURN. */
-    buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); }\n");
+    buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); global_panic_frame = NULL; }\n");
     buf_puts(out, "        tur_panicking = 1;\n");
     buf_puts(out, "        return;\n");
     buf_puts(out, "    } else if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) {\n");

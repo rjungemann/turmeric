@@ -1,0 +1,10 @@
+MONO defer fired
+--
+GEN defer fired
+--
+inner defer
+outer defer
+--
+GEN defer fired
+7
+done

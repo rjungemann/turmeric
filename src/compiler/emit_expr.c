@@ -4585,15 +4585,35 @@ static void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
         buf_puts(body, "if (tur_panicking) break;\n");
         return;
     }
+    /* defer-in-generic-hof-skipped-on-caught-panic: this early return leaves
+     * the enclosing function, so every defer frame the function has open
+     * (`ctx->frame_var` and its parents -- all frames of THIS function; a
+     * lifted closure body starts with frame_var = NULL) must fire first,
+     * exactly as the normal-exit `tur_frame_fire_lifo` at scope end would.
+     * A panic raised at a site that already fired the chain through
+     * `global_panic_frame` is harmless here: `tur_frame_fire_lifo` zeroes
+     * `f->n`, so the second pass is a no-op.  Without this, a defer in a
+     * function whose callee panics under `catch-unwind` was silently
+     * skipped on the direct-call path (the CPS path only fired it because
+     * its `ret ctype unknown` arm below never propagated at all). */
+    const char *fire_pre = "", *fire_post = "";
+    char fire_buf[128];
+    if (ctx->frame_var) {
+        snprintf(fire_buf, sizeof(fire_buf), "{ tur_frame_fire_chain(&%s); ",
+                 ctx->frame_var);
+        fire_pre = fire_buf;
+        fire_post = " }";
+    }
     indent_buf(body, ctx->indent);
     if (rt && strcmp(rt, "void") == 0) {
-        buf_puts(body, "if (tur_panicking) return;\n");
+        buf_printf(body, "if (tur_panicking) %sreturn;%s\n", fire_pre, fire_post);
     } else if (rt) {
         /* A zero of the exact declared return type propagates the signal.
          * S1: `((T)0)` for scalars -- c2mir rejects a scalar compound literal,
          * and this is the highest-volume `(T){0}` site in the emitter. */
         char *rzero = emit_c_zero_of(rt);
-        buf_printf(body, "if (tur_panicking) return %s;\n", rzero ? rzero : "0");
+        buf_printf(body, "if (tur_panicking) %sreturn %s;%s\n", fire_pre,
+                   rzero ? rzero : "0", fire_post);
         free(rzero);
     } else {
         /* D1a prototype limit: the enclosing function's C return type is not
