@@ -99,10 +99,12 @@ Two caveats:
   level. There is no unwind protection to hang the restore on. `with-untrailed`
   is worse in the same way: a panic there leaves trailing paused for everything
   after it, so later writes silently stop being undoable. Do not put fallible
-  work in a `with-untrailed` that a `bt-scope` could hold instead. A `defer`
-  cannot currently close this: `bt-scope` is generic, and a `defer` inside a
-  generic function is dropped on a caught-panic unwind on the compiled path
-  ([report](https://github.com/rjungemann/turmeric/blob/main/docs/reported/defer-in-generic-hof-skipped-on-caught-panic.md)).
+  work in a `with-untrailed` that a `bt-scope` could hold instead. The route
+  to closing this is a `defer`-based bracket: a `defer` inside a generic
+  function used to be dropped on a caught-panic unwind on the compiled path,
+  which is what blocked it; that is fixed
+  ([archived report](https://github.com/rjungemann/turmeric/blob/main/docs/archive/defer-in-generic-hof-skipped-on-caught-panic.md)),
+  and rewriting `bt-scope` onto a `defer` is the remaining step.
 - **Free cells outside the scope that wrote them.** A trail entry still pointing
   at a freed cell dangles until the next undo, and the failure surfaces inside
   `bt-undo-to!` rather than at the free.
