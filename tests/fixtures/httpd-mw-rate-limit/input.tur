@@ -11,8 +11,16 @@
 ;;   base
 ;;   r2-status=200
 ;;   r3-status=429
-;;   r3-retry-after=60
+;;   r3-retry-after=ok
 ;;   done
+;;
+;; `Retry-After` is `window - age` in whole seconds, so it reads 60 only when
+;; the third request lands within the same second as the first.  On a loaded
+;; hosted runner a one-second stall between them printed 59 -- the
+;; httpd-mw-rate-limit half of ci-two-fixtures-flake-on-hosted-runners.  The
+;; client therefore asserts the header is a positive integer no larger than
+;; the window (`ok`) rather than its exact value.  The client also retries
+;; connect() briefly instead of assuming the server is up after a fixed sleep.
 
 (load "stdlib/httpd.tur")
 (load "stdlib/chan.tur")
@@ -33,9 +41,16 @@
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   addr.sin_port        = htons((uint16_t)port);
   for (int i = 0; i < 3; i++) {
-      int fd = socket(AF_INET, SOCK_STREAM, 0);
+      int fd = -1;
+      for (int attempt = 0; attempt < 200; attempt++) {
+          fd = socket(AF_INET, SOCK_STREAM, 0);
+          if (fd < 0) return NULL;
+          if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) break;
+          close(fd); fd = -1;
+          struct timespec back = { 0, 10000000L };
+          nanosleep(&back, NULL);
+      }
       if (fd < 0) return NULL;
-      if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
       const char *req = "GET / HTTP/1.0\r\n\r\n";
       send(fd, req, strlen(req), 0);
       char drain[1024];
@@ -54,7 +69,11 @@
           if (p) {
               p += strlen(needle);
               const char *eol = strstr(p, "\r\n");
-              if (eol) printf("r3-retry-after=%.*s\n", (int)(eol - p), p);
+              if (eol) {
+                  long v = strtol(p, NULL, 10);
+                  if (v >= 1 && v <= 60) printf("r3-retry-after=ok\n");
+                  else printf("r3-retry-after=%.*s\n", (int)(eol - p), p);
+              }
           }
       }
       close(fd);

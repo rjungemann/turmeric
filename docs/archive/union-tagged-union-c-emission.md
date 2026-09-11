@@ -6,6 +6,16 @@ description: Every (A | B) rides the generic tur_tagged_t, so a member that cann
 
 # Unions never get the documented per-member C union emission
 
+**ARCHIVED 2026-09-11 -- no open defect.** All four defects this report found
+are marked FIXED below (the by-value member widen box, its non-argument
+positions, the heap box's owner, the `match` arm binder, the truncated float
+member), each pinned.  What the report still lists is the ORIGINAL ASK --
+per-member C union emission -- which its own "What is still deferred" section
+argues is a weaker case than when filed, and which the union guide already
+carries in its Deferred table.  An enhancement with a documented deferral is
+not an open finding; it lives in the guide, and this record moves to the
+archive as the paper trail for the four fixes.
+
 **Severity: low as filed, medium as found.** The original entry called this a
 cost, not a defect -- "works correctly, but every `(A | B)` rides the generic
 `tur_tagged_t` `{int64_t tag; int64_t val}`, so wide by-value members must

@@ -112,7 +112,7 @@ exec 3>"$FIFO"
 # suites run under -j) the REPL had not yet read src/lib.tur when the fix
 # landed, so the STARTUP load succeeded, `(reload)` then said "no changes",
 # and the "loaded 1 export" assertion below failed -- the rp7-reload-self-heal
-# flake in docs/reported/ci-two-fixtures-flake-on-hosted-runners.md.  Poll
+# flake in docs/archive/ci-two-fixtures-flake-on-hosted-runners.md.  Poll
 # for the startup diagnostic instead (the same line scenario 2 asserts),
 # then still give the clock a second so the rewrite's mtime moves past the
 # failed build's.
