@@ -4362,7 +4362,25 @@ static int cmd_jit(int argc, char **argv) {
 
     int prog_rc = 0;
     int jrc;
-    if (split_used) {
+    /* jit-cc-fallback-reentry-inherits-monomorph-state: decline the engine
+     * deliberately, so the step-6 cc fallback can be exercised on demand.
+     *
+     * That path is otherwise unreachable on the fixtures that used to break it
+     * -- with __auto_type gone from the emitter the engine no longer declines
+     * them -- which is exactly the condition under which a latent bug gets
+     * rediscovered the hard way.
+     *
+     * Declines BEFORE tur_jit_execute rather than after, so the program is not
+     * run twice: the real shape is a front end that has already elaborated
+     * (and populated the monomorph registry) handing over to a cc compile that
+     * never executed anything. Forcing it post-execution would measure a
+     * different thing and double the program's output.
+     *
+     * Test-only; not in --help. */
+    const char *force_fb = getenv("TUR_JIT_FORCE_FALLBACK");
+    if (force_fb && *force_fb && strcmp(force_fb, "0") != 0) {
+        jrc = TUR_JIT_ERR_COMPILE;
+    } else if (split_used) {
         /* Split first; if the split half fails to COMPILE or LINK, retry the
          * full TU in the engine before conceding to cc -- the hash guard
          * covers emitter drift but not, e.g., an export the host build
@@ -4436,6 +4454,20 @@ static int cmd_jit(int argc, char **argv) {
             fclose(tf);
         }
     }
+    /* jit-cc-fallback-reentry-inherits-monomorph-state: the engine attempt
+     * already ran the front end, and the van-Laarhoven monomorph registry
+     * (mono_specs.c) is file-scope state that survives into the re-entry.
+     * cmd_run then elaborates the program a second time against a registry
+     * that already believes those specs were requested, so the emitted C
+     * CALLS `over_px__lens_<hash>` while nothing emits its definition:
+     *
+     *   error: call to undeclared function 'over_px__lens_89e16e7f8669ca4e'
+     *
+     * `tur run` on the same file is clean, which is what identified the
+     * carried-over state rather than the program. mono_specs_reset() has
+     * existed since the registry was added and was never called; this is the
+     * call site it was written for. */
+    mono_specs_reset();
     return cmd_run(argc, argv);
 #endif /* TUR_HAVE_JIT */
 }
