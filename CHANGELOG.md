@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.46.1] -- 2026-09-11
 
 ### Changed
 
@@ -88,6 +88,28 @@ All notable changes to Turmeric are documented here.
   been a claim about a number that no longer exists. It now reports the stack
   actually exhausted and the depth reached, and points at `TUR_STACK_MB`.
 
+- **A typeclass method call resolves against the class, not just the instances.**
+  Dispatch walked the elaborated instance table for a name match and never
+  consulted the `defclass` or the caller's own constraint, so an *unconstrained*
+  generic body calling a class method passed `tur check` with rc=0 and then died
+  inside `cc` with `passing 'int64_t' to parameter of incompatible type`. It is
+  now rejected at check time, naming the class, the type variable, and the
+  constraint to add. A check/build divergence is the worst place for this, since
+  `check` is what editors and the CI type-check step run.
+- **`Sym` is a `defstruct`/`defdata` field type.** `(defstruct S [k : Sym])` was
+  `defdata: field has unrecognized type :Sym`, so an interned symbol could not be
+  stored in a record at all. A Sym is a pointer-sized scalar carrier like the
+  `cstr` beside it in both tables, so neither layer needed a representation, only
+  its row -- the second one to stop emitting a ctor that takes `int64_t` while its
+  caller passes `const struct __tur_sym *`.
+- **`tur build --shared <dir>` honours the project's `:build-opts` link flags.**
+  `:link-libs` and `:link-flags` were parsed and then dropped on the `--shared`
+  project path; `tur build <file>` had honoured them since the ffi-spices S1 fix,
+  but `cmd_build_multi_files` carried a hand-copied twin of the manifest read
+  taken before it. Found from the Godot AOT stager on Windows, where PE has no
+  `-undefined dynamic_lookup` equivalent and the staged library must resolve
+  `godot_*` at link time.
+
 ### Fixed
 
 - **A shard could have silently corrupted the JIT cc-fallback ratchet.** Its
@@ -150,6 +172,54 @@ All notable changes to Turmeric are documented here.
   which drives the backstop by shrinking the stack instead of growing the
   program.
 
+- **The Saffron `any` seam marshals where it used to reinterpret.** Eight fixes
+  from the dynamic-surface pass: a dynamic `.bind` marshals its continuation
+  instead of erasing it; the seam into a typed `fn` parameter marshals rather
+  than reinterpreting the word; a concrete value widens into an `any`-valued
+  container parameter; `while` applies truthiness to an `any` condition; `=` on
+  two strings through an `any` answers `Eq[cstr]`; a dynamic field read reaches
+  generic and `:heap` ADTs; an `any` `defstruct` field lowers and a dynamic read
+  of one compiles; and a partially-applied HKT instance head dispatches on an
+  `any` on both back ends.
+- **A leading keyword in a constructor call can be a `Sym` value, not only a
+  field name.** A record whose first field is `Sym` is built as
+  `(make-struct P :kw)`, and the leading keyword was always read as a field name,
+  so the call died on `keyword construction needs :field value pairs`.
+  `(Circle :diameter 2.0)` (a typo) and `(make-struct Q :label 9.75)` (a Sym value
+  followed by a float) are the same shape syntactically, so the disambiguation is
+  by field type rather than by argument count, which leaves the `errors/` fixtures
+  pinning the unknown-field diagnostic intact.
+- **The `any` -> scalar cast no longer miscompiles in the JIT engine.** A
+  statement expression binding a 16-byte `tur_tagged_t` from a call that itself
+  takes `tur_tagged_t` arguments reached its callee with the first argument
+  replaced by the second -- a two-float function through an `any` answered 3
+  where 5 was expected under `tur jit`, and correctly under `tur run`. It is
+  shape 4 of `jit-x86-64-struct-valued-statement-expression-miscompiles`, and
+  reproduces from a hand-written `(cast (g 3.5 1.5) float)` with no Saffron code
+  involved.
+- **The JIT's `cc` fallback no longer inherits monomorph state.** `cmd_jit`'s
+  step-6 fallback re-enters `cmd_run` in the same process, so the van-Laarhoven
+  spec registry survived the abandoned engine attempt and the re-entered compile
+  emitted a call to a spec nothing defines
+  (`call to undeclared function 'over_px__lens_...'`). `mono_specs_reset()` had
+  existed since the registry was added and was never called from anywhere in the
+  tree; this is the call site it was written for.
+- **`call-ptr` marshals a record field of concrete parametric-record type, and
+  says what is actually wrong when it refuses one.** The interpreter's struct
+  marshaller refused a `defstruct` field whose type is an application of a
+  parametric record (`(Box float)`, `(BoxW int32)`) while the compiled path
+  accepted the same program. All four layout walkers now thread the same
+  `(def, args)` view, so the signature, the flatten and the rebuild cannot
+  disagree.
+- **A `Vec` out-of-bounds names `vec`, not `tvec`, on both back ends.** The
+  compiled side printed a leftover internal name; it now takes the interpreter's
+  spelling at both `stdlib/vec.tur` sites. 148 snapshots regenerate, two lines
+  each, with no codegen drift.
+- **Try Turmeric's favicon paints its `t` instead of knocking it out.** The glyph
+  was a counter in a single even-odd path, so it showed whatever sat behind the
+  icon -- right on the site's own near-black ground, but 2.16:1 and effectively
+  an empty tile in a light browser tab strip at 16px. Filled at the bg-base
+  value, it is 9.17:1 and identical on any backdrop.
 
 ## [0.46.0] -- 2026-09-09
 

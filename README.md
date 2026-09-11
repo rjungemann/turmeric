@@ -2,9 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.46.0` -- `#lang saffron` graduates to a default-on base dialect: no experiment flag, no lifecycle warning, and no `experimental` badge in Try Turmeric.
-
-**Latest release:** `v0.45.0` -- Adds `#lang saffron`, a dynamically typed dialect where unannotated code runs on `any`, and makes `any` a usable type across both back ends.
+**Latest release:** `v0.46.1` -- Retires the emitter's expression-depth cap in favor of a compiler stack sized for its own recursion, unifies all four release archives on one prefix layout, and fixes a batch of Saffron `any`-seam and JIT miscompiles.
 
 ## What
 
