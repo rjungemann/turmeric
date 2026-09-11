@@ -1,0 +1,25 @@
+;; Positive control for the two errors/ fixtures beside this one: a properly
+;; constrained generic, with its instance declared above the use, dispatches
+;; and runs. This is the shape both diagnostics steer the author toward.
+(defstruct Bar [v : int])
+(defstruct Baz [v : int])
+
+(defclass Foo [W]
+  (foo-of [^borrow w] : int))
+
+(definstance Foo [Bar]
+  (foo-of [w] (.v w)))
+
+(definstance Foo [Baz]
+  (foo-of [w] (+ (.v w) 1000)))
+
+(defn use-foo [W] [(Foo W)] [^borrow w : W] : int
+  (foo-of w))
+
+(defn main [] : int
+  (let [b (make-struct Bar 111)
+        z (make-struct Baz 222)]
+    ;; one generic, two instances -- dispatch picks per instantiation
+    (println (use-foo b))
+    (println (use-foo z))
+    0))

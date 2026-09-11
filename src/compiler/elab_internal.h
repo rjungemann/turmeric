@@ -490,6 +490,29 @@ typedef struct Elab {
     uint32_t cap_handled_effects;
     uint32_t fn_body_depth;
     const Symbol *current_fn_name;  /* Phase R6: track current function name for linting */
+    /* typeclass-method-resolution-ignores-the-class: the constraint vector of
+     * the defn whose BODY is currently being elaborated (not the callee's).
+     *
+     * A typeclass method called on an abstract type variable is only well
+     * formed when the enclosing generic declares a constraint naming that
+     * method's class -- the constraint is what tells monomorphization which
+     * instance the call site needs.  Without one the elaborator used to pick
+     * an arbitrary name-matching instance as a "representative" and emit a
+     * direct call to it, which `tur check` accepted and `cc` then rejected
+     * with a mangled-symbol type error.  Recording the ambient set here lets
+     * the dispatch path reject it with a Turmeric diagnostic instead.
+     *
+     * Saved/restored around the body alongside the HKT ambient below, so a
+     * nested defn's own constraints shadow the enclosing one's. */
+    TypeConstraint *cur_fn_constraints;
+    uint8_t         cur_fn_n_constraints;
+    /* typeclass-method-resolution-ignores-the-class: nesting depth inside
+     * elab_definstance.  An instance method body legitimately calls class
+     * methods on the INSTANCE's own type parameter (`Eq [Option]`'s `eq?`
+     * recursing on the element `A`), and that obligation is carried by the
+     * instance's constraint list, not by any enclosing defn's.  The
+     * unconstrained-call check skips while this is non-zero. */
+    uint32_t definstance_depth;
     /* van-laarhoven-lens-composition: while elaborating the body of a constrained
      * rank-2 (higher-kinded) fn -- `(defn f [^g] [^Functor g ...] ...)` -- these
      * hold that fn's single HKT constraint's class and the abstract type-variable
