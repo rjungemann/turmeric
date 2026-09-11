@@ -855,6 +855,11 @@ bool emit_str_is_bare_ident(const char *s);
  * `want_ctype`, and is that type a by-value aggregate?  Shared by every
  * carrier->concrete bridge so the copies cannot drift.  See emit_expr.c. */
 bool emit_value_is_recorded_as(const char *v, const char *want_ctype);
+/* global-def-store-misses-int-ptr-bridge: the int64<->pointer bridge for a
+ * STORE (module-level def init, thread-local init return, `set!`).  Returns a
+ * malloc'd bridged spelling of `iv` or NULL when no bridge is needed. */
+char *emit_store_int_ptr_bridge(EmitCtx *ctx, const char *target_c,
+                                const char *iv, const struct Expr *init);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);

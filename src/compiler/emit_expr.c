@@ -2000,6 +2000,86 @@ bool emit_str_is_bare_ident(const char *s) {
     return true;
 }
 
+/* global-def-store-misses-int-ptr-bridge: the int64<->pointer store bridge,
+ * shared by every STORE that is not a `let` binder -- the module-level `def`
+ * initializer (whole-program and separate-compilation), the `^thread-local`
+ * init function's `return`, and the plain `set!` store.  The `let` binder
+ * already spelled this bridge inline (its two `(int64_t)(intptr_t)` /
+ * `(T)(intptr_t)` arms below); the four store sites did not, so
+ * `(def hub-mutex (:: (mutex-new) :int))` emitted `int64_t g = <void * temp>;`
+ * -- a hard error under GCC >= 14 / clang >= 21 -- where the same expression
+ * in a `let` bridged correctly.
+ *
+ * `target_c` is the STORE TARGET's emitted C type and `iv` the value string
+ * `emit_value` handed back for `init`.  Keys on the value temp's RECORDED
+ * emitted C type (the local-var side table), as the binder does, because the
+ * source type's c-name collides under the carrier duality: an opaque
+ * `(defopaque Mutex :ptr<void>)` ascribed to `:int` c-names to `int64_t` on
+ * both sides while the temp holding the call result is a `void *`.  Returns a
+ * malloc'd bridged spelling when the two sides straddle, NULL when the store
+ * needs no bridge; the caller frees it. */
+char *emit_store_int_ptr_bridge(EmitCtx *ctx, const char *target_c,
+                                const char *iv, const Expr *init) {
+    if (!target_c || !iv || !init) return NULL;
+    bool target_is_i64 = strcmp(target_c, "int64_t") == 0;
+    bool target_is_ptr = strchr(target_c, '*') != NULL;
+    if (!target_is_i64 && !target_is_ptr) return NULL;
+    TypeKind init_kind = init->type.kind;
+    Type init_ty_r = emit_resolve_type(ctx, init->type);
+    {
+        const Expr *iexpr = init;
+        while (iexpr && iexpr->kind == EX_ASCRIBE) iexpr = iexpr->as.ascribe_.inner;
+        Type spec_ty;
+        if (iexpr && emit_var_spec_arg_type(ctx, iexpr, &spec_ty))
+            init_ty_r = spec_ty;
+    }
+    const char *init_cn = emit_type_c_name(ctx, init_ty_r);
+    bool init_is_ptr_repr = init_cn && strchr(init_cn, '*') != NULL;
+    bool rec_ptr = false, rec_voidp = false, rec_i64 = false;
+    if (emit_str_is_bare_ident(iv)) {
+        const char *lvty = emit_localvar_lookup_ctype(iv);
+        size_t lL = lvty ? strlen(lvty) : 0;
+        rec_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*' &&
+                  strcmp(lvty, "void *") != 0;
+        rec_voidp = lvty && strcmp(lvty, "void *") == 0;
+        rec_i64 = lvty && strcmp(lvty, "int64_t") == 0;
+    }
+    /* The `(:: <int> :ptr<void>)` union-default read is a `void *` value
+     * whatever its static type says (same detection as the binder). */
+    if (!rec_ptr && target_is_i64) {
+        size_t ivL = strlen(iv);
+        if (ivL >= 4 && strcmp(iv + ivL - 4, "}).d") == 0 &&
+            strstr(iv, "void * d;") != NULL)
+            rec_ptr = true;
+    }
+    if (target_is_i64) {
+        /* A by-value aggregate temp c-names without a `*` and is never
+         * reinterpreted here; a pointer-typed init that is RECORDED as an
+         * int64 carrier is already the carrier and needs no cast. */
+        if (rec_i64) return NULL;
+        if (init_kind == TY_FN || init_kind == TY_PTR_VOID ||
+            init_is_ptr_repr || rec_ptr || rec_voidp) {
+            size_t n = strlen(iv) + 32;
+            char *out = (char *)malloc(n);
+            if (!out) { fprintf(stderr, "tur: oom\n"); abort(); }
+            snprintf(out, n, "(int64_t)(intptr_t)(%s)", iv);
+            return out;
+        }
+        return NULL;
+    }
+    /* target_is_ptr */
+    if (rec_ptr || rec_voidp) return NULL;
+    if ((init_cn && strcmp(init_cn, "int64_t") == 0) || rec_i64 ||
+        strncmp(iv, "(int64_t)", 9) == 0) {
+        size_t n = strlen(iv) + strlen(target_c) + 32;
+        char *out = (char *)malloc(n);
+        if (!out) { fprintf(stderr, "tur: oom\n"); abort(); }
+        snprintf(out, n, "(%s)(intptr_t)(%s)", target_c, iv);
+        return out;
+    }
+    return NULL;
+}
+
 /* let-returning-noncapturing-lambda-ices-at-merge-temp: true when a merge temp
  * of type `t` must be declared with the FAT-HANDLE spelling (`void *`, the
  * { thunk, env... } box) rather than a thin `R (*)(A...)` function pointer.

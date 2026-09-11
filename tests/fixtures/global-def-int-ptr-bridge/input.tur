@@ -1,0 +1,19 @@
+(load "stdlib/mutex.tur")
+(defn make-handle [] : int
+  ```c
+  return 42;
+  ```)
+(def ^mut hub-mutex (:: (mutex-new) :int))
+(def ^mut hp (:: (make-handle) :ptr<void>))
+(def ^thread-local tl-mutex (:: (mutex-new) :int))
+(def ^thread-local tl-hp (:: (make-handle) :ptr<void>))
+(defn lock! [] : nil (mutex-lock (:: hub-mutex Mutex)))
+(defn main [] : int
+  (lock!)
+  (set! hub-mutex (:: (mutex-new) :int))
+  (set! hp (:: (make-handle) :ptr<void>))
+  (println (:: hp :int))
+  (println (if (= tl-mutex 0) "bad" "ok"))
+  (println (:: tl-hp :int))
+  (println "ok")
+  0)

@@ -99,6 +99,19 @@ void emit_set_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         return;
     }
 
+    /* global-def-store-misses-int-ptr-bridge: a `set!` whose target's carrier
+     * and value temp straddle int64/pointer gets the same bridge the `let`
+     * binder applies.  The target's RECORDED emitted C type wins over its
+     * type's c-name when the side table has it (a local declared by-value or
+     * as a spec pointer); a global falls back to the c-name. */
+    {
+        const char *tgt_c = NULL;
+        if (emit_str_is_bare_ident(bn)) tgt_c = emit_localvar_lookup_ctype(bn);
+        if (!tgt_c && e->as.set_.target)
+            tgt_c = type_c_name(emit_resolve_type(ctx, e->as.set_.target->type));
+        char *bv = emit_store_int_ptr_bridge(ctx, tgt_c, v, e->as.set_.value);
+        if (bv) { free(v); v = bv; }
+    }
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s = %s;\n", bn, v);
     /* region-lock-hardening: a `set!` target that is a global / module-level

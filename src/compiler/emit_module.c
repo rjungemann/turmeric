@@ -15452,8 +15452,12 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                     ctx.indent = saved_indent;
                     buf_printf(&file, "static %s __tur_tl_initfn_%s(void) {\n", tcn, bn);
                     if (ib.len) buf_write(&file, ib.data, ib.len);
-                    buf_printf(&file, "    return %s;\n}\n", iv);
-                    free(iv); buf_free(&ib);
+                    /* global-def-store-misses-int-ptr-bridge: the init
+                     * function's return is a store into the TL slot. */
+                    char *biv = emit_store_int_ptr_bridge(&ctx, tcn, iv,
+                                                          e->as.def_.init);
+                    buf_printf(&file, "    return %s;\n}\n", biv ? biv : iv);
+                    free(biv); free(iv); buf_free(&ib);
                 } else {
                     buf_printf(&file, "static %s __tur_tl_initfn_%s(void) { return (%s)0; }\n",
                                tcn, bn, tcn);
@@ -15478,8 +15482,14 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                 /* Gap F: route to def_init_body so user-has-main programs
                  * still execute the initializer via __constructor__. */
                 char *iv = emit_value(&ctx, &def_init_body, e->as.def_.init);
+                /* global-def-store-misses-int-ptr-bridge: same bridge the
+                 * `let` binder applies -- the def's declared carrier and the
+                 * init temp's real C type may straddle int64/pointer. */
+                char *biv = emit_store_int_ptr_bridge(&ctx,
+                    type_c_name(e->as.def_.binding->type), iv, e->as.def_.init);
                 indent_buf(&def_init_body, ctx.indent);
-                buf_printf(&def_init_body, "%s = %s;\n", bn, iv);
+                buf_printf(&def_init_body, "%s = %s;\n", bn, biv ? biv : iv);
+                free(biv);
                 free(iv);
             }
             free(bn);
@@ -17671,8 +17681,13 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
                        type_c_name(e->as.def_.binding->type), bn);
             if (e->as.def_.init) {
                 char *iv = emit_value(&ctx, &body, e->as.def_.init);
+                /* global-def-store-misses-int-ptr-bridge (separate-compilation
+                 * twin of the Pass 2 site). */
+                char *biv = emit_store_int_ptr_bridge(&ctx,
+                    type_c_name(e->as.def_.binding->type), iv, e->as.def_.init);
                 indent_buf(&body, ctx.indent);
-                buf_printf(&body, "%s = %s;\n", bn, iv);
+                buf_printf(&body, "%s = %s;\n", bn, biv ? biv : iv);
+                free(biv);
                 free(iv);
             }
             free(bn);
