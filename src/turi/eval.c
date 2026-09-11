@@ -413,7 +413,8 @@ static bool register_extern_c_known(TuriEnv *env, const char *fname) {
 /* Forward decls: the aggregate marshalling engine lives with eval_call_ptr
  * below; extern-c registration (the F4 follow-on) reuses it wholesale. */
 static size_t agg_sig_len(const AdtDef *def);
-static size_t agg_sig_render(const AdtDef *def, char *buf);
+typedef struct AggSigFail AggSigFail;
+static size_t agg_sig_render(const AdtDef *def, char *buf, AggSigFail *fail);
 static bool   agg_collect_leaves(const AdtDef *def, TuriValue v,
                                  TuriValue *out, int max, int *n);
 static TuriValue agg_build_value(TuriEnv *env, const AdtDef *def,
@@ -624,7 +625,7 @@ static char *agg_sig_build(Type ret, const Type *params, uint32_t n,
 
     size_t sp = 0;
     if (rd) {
-        size_t w = agg_sig_render(rd, sig);
+        size_t w = agg_sig_render(rd, sig, NULL);
         if (!w) { free(sig); return NULL; }
         sp = w;
     } else {
@@ -637,7 +638,7 @@ static char *agg_sig_build(Type ret, const Type *params, uint32_t n,
         const AdtDef *pd = extern_slot_agg_def(params[k]);
         if (arg_at) arg_at[k] = sp;
         if (pd) {
-            size_t w = agg_sig_render(pd, sig + sp);
+            size_t w = agg_sig_render(pd, sig + sp, NULL);
             if (!w) { free(sig); return NULL; }
             sp += w;
         } else {
@@ -1500,12 +1501,27 @@ static size_t agg_sig_len(const AdtDef *def) {
     return n;
 }
 
+/* jit-ffi-interp-refuses-parametric-record-field: which field defeated the
+ * render, and why.  `agg_sig_render` bails for two unrelated reasons and the
+ * single message it used to raise was only true of one of them, so the caller
+ * needs to tell them apart to say anything accurate. */
+struct AggSigFail {
+    const char *record;      /* record whose field could not be rendered */
+    const char *field;       /* that field's name, or NULL if positional */
+    bool        parametric;  /* true: an inlined parametric-monomorph field
+                              * (AGGF_UNSUPPORTED) -- the interpreter cannot
+                              * render its layout, though codegen inlines it
+                              * by value perfectly well.
+                              * false: a scalar whose kind has no member code
+                              * at all, which really is unrepresentable. */
+};
+
 /* Render `{...}` for a record ADT into buf (which must hold agg_sig_len
  * bytes).  A nested by-value record field renders as its own inline
  * `{...}`, matching the layout codegen inlines.  Returns the number of
  * bytes written, or 0 if any field has no by-value member representation
- * the interpreter can describe. */
-static size_t agg_sig_render(const AdtDef *def, char *buf) {
+ * the interpreter can describe -- with *fail describing which and why. */
+static size_t agg_sig_render(const AdtDef *def, char *buf, AggSigFail *fail) {
     const CtorDef *ct = def->ctors[0];
     size_t pos = 0;
     buf[pos++] = '{';
@@ -1513,23 +1529,74 @@ static size_t agg_sig_render(const AdtDef *def, char *buf) {
         const AdtDef *in = NULL;
         switch (agg_field_class(&ct->fields[i], &in)) {
             case AGGF_NESTED: {
-                size_t w = agg_sig_render(in, buf + pos);
-                if (!w) return 0;
+                size_t w = agg_sig_render(in, buf + pos, fail);
+                if (!w) return 0;   /* *fail already set by the recursion */
                 pos += w;
                 break;
             }
             case AGGF_SCALAR: {
                 char c = tur_jit_ffi_member_code_for_kind(ct->fields[i].kind);
-                if (!c) return 0;
+                if (!c) {
+                    if (fail) {
+                        fail->record = def->name;
+                        fail->field = ct->fields[i].name;
+                        fail->parametric = false;
+                    }
+                    return 0;
+                }
                 buf[pos++] = c;
                 break;
             }
             default:
+                if (fail) {
+                    fail->record = def->name;
+                    fail->field = ct->fields[i].name;
+                    fail->parametric = true;
+                }
                 return 0;
         }
     }
     buf[pos++] = '}';
     return pos;
+}
+
+/* jit-ffi-interp-refuses-parametric-record-field: say what is actually wrong.
+ *
+ * The old text -- "record has a field with no by-value C member type" -- was
+ * false in every case it could fire for a parametric field: AGGF_UNSUPPORTED
+ * is reachable ONLY through the `adt_field_is_inline_byval` branch, and that
+ * predicate returning true is precisely the statement that codegen DOES
+ * inline the field by value. The limitation is the interpreter's, not the
+ * user's type, and the message pointed at the type.
+ *
+ * `where` names the slot for the return value; pass NULL and an index for an
+ * argument. */
+static TuriValue agg_sig_fail_error(const AggSigFail *f, const char *where,
+                                    unsigned argi) {
+    char slot[48];
+    if (where) snprintf(slot, sizeof(slot), "%s", where);
+    else       snprintf(slot, sizeof(slot), "arg %u", argi);
+
+    char fieldbuf[160];
+    if (f && f->field && f->record)
+        snprintf(fieldbuf, sizeof(fieldbuf), "field '%s' of record '%s'",
+                 f->field, f->record);
+    else if (f && f->record)
+        snprintf(fieldbuf, sizeof(fieldbuf), "a positional field of record '%s'",
+                 f->record);
+    else
+        snprintf(fieldbuf, sizeof(fieldbuf), "%s", "a field");
+
+    if (f && f->parametric)
+        return turi_errorf(
+            "call-ptr: %s: %s is a parametric monomorph, and the interpreter "
+            "cannot render its layout. Your type is fine -- the compiled path "
+            "marshals this field by value; only --interpret refuses it. "
+            "Build the program instead, or give the field a non-parametric type",
+            slot, fieldbuf);
+    return turi_errorf(
+        "call-ptr: %s: %s has no by-value C member type",
+        slot, fieldbuf);
 }
 
 /* Store one TuriValue into `base + off` as member code `code`. */
@@ -1847,10 +1914,10 @@ static TuriValue eval_call_ptr(TuriEnv *env, EvalFrame *frame,
 
     size_t sp = 0;
     if (ps->return_type.kind == TY_ADT && ps->return_type.as.adt_.def) {
-        size_t w = agg_sig_render(ps->return_type.as.adt_.def, sig);
+        AggSigFail rfail = {0};
+        size_t w = agg_sig_render(ps->return_type.as.adt_.def, sig, &rfail);
         if (!w) {
-            result = turi_error("call-ptr: return record has a field with no "
-                                "by-value C member type");
+            result = agg_sig_fail_error(&rfail, "return value", 0);
             goto cleanup;
         }
         sp = w;
@@ -1866,11 +1933,10 @@ static TuriValue eval_call_ptr(TuriEnv *env, EvalFrame *frame,
                         : tur_jit_ffi_class_for_kind(ps->param_types[k].kind, 0);
         agg_at[k] = sp;
         if (adef) {
-            size_t w = agg_sig_render(adef, sig + sp);
+            AggSigFail afail = {0};
+            size_t w = agg_sig_render(adef, sig + sp, &afail);
             if (!w) {
-                result = turi_errorf("call-ptr: arg %u's record has a field "
-                                     "with no by-value C member type",
-                                     (unsigned)k);
+                result = agg_sig_fail_error(&afail, NULL, (unsigned)k);
                 goto cleanup;
             }
             sp += w;
