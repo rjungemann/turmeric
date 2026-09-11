@@ -1,5 +1,21 @@
 # The Windows JIT prelude silently miscompiles a program that defines a libm name
 
+**Status: RESOLVED at filing; archived 2026-09-10.** Written *after* its own fix
+landed ("Fixed in the same change"), so it records the shape rather than an open
+defect -- but it sat in `docs/reported/`, which holds open findings only.
+Nothing was re-fixed; re-verified on `main` before the move:
+`jit_prelude_win_shadowed` (`src/jit_engine.c:652`) is called on the prelude
+path (`:727`), and `tests/fixtures/jit-win-prelude-name-shadow` pins it.
+
+**Its "Still open" section did NOT come along.** That residue -- `mangle.c`'s
+`libc_names` and `src/jit_win_prelude.h` can drift apart silently, re-opening
+the hole as a wrong answer rather than a build error -- is a live finding and
+is tracked separately in
+[jit-win-prelude-and-libc-names-drift](../reported/jit-win-prelude-and-libc-names-drift.md).
+Splitting it follows the precedent this report's own parent set
+(`jit-suite-reports-pass-when-the-engine-is-disabled`), so archiving the
+resolved half does not bury the open one.
+
 **Severity: high on the JIT path, Windows only.** A user `defn` named after one
 of the ~106 entry points `JIT_PRELUDE_WIN` declares is called through the
 PRELUDE's signature, not its own. For the one-argument math names that means an
