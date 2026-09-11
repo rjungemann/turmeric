@@ -114,8 +114,8 @@ include_guard(GLOBAL)
 # the cache still said vnmakarov/a8ab7c31 while this file said the fork.)
 set(TUR_MIR_GIT_REPOSITORY "https://github.com/rjungemann/mir.git"
     CACHE STRING "MIR repository for the JIT spike (fork carrying the ret + RA fixes)")
-set(TUR_MIR_GIT_TAG "07ad0148887c9ffd470d594d8dca9b60c1ab4cdb"
-    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack + C23 enum base types + leading member attributes + aarch64 AAPCS64 HFA passing (both, merged) + win64 lazy-generation wrapper ABI")
+set(TUR_MIR_GIT_TAG "b7e72a958c0b8dfb04d0732516a09c989fd5acad"
+    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack + C23 enum base types + leading member attributes + aarch64 AAPCS64 HFA passing (both, merged) + win64 lazy-generation wrapper ABI + wasm32/Emscripten target -- now on the fork's master, not a feature branch")
 
 include(FetchContent)
 
