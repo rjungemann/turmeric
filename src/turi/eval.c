@@ -8971,7 +8971,25 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         fn->owner_instance->type_param_constraints,
                         fn->owner_instance->n_type_param_constraints);
 
-                if (top->tail) {
+                /* turi-defer-fires-before-tail-call: a tail call may reuse the
+                 * enclosing activation ONLY while that activation has registered
+                 * no defers.  The reuse below fires the activation's defers as
+                 * "frame completion" BEFORE the callee runs, so
+                 * `(let [m (bt-mark)] (defer (bt-undo-to! m)) (body))` undid
+                 * the trail before `body` wrote to it, and
+                 * `(defer (println "d")) (shout)` printed "d" first -- the
+                 * compiled path prints "body ran" first, because a scope with
+                 * a defer is never a tail position there ("defers break tail",
+                 * emit_fns.c).  With a defer pending, take the non-tail fold
+                 * instead: the callee gets its own DK_CALL_RET, and this
+                 * activation's DK_CALL_RET fires the defers once the callee's
+                 * value has come back.  Only the O(1)-stack property of the
+                 * chain is given up, and only in a scope that already holds a
+                 * defer frame -- the same trade the compiler makes. */
+                bool tail_reuse_ok = top->tail && len >= 2 &&
+                    st[len - 2].kind == DK_CALL_RET &&
+                    (DeferItem *)env->defer_stack == (DeferItem *)st[len - 2].aux;
+                if (tail_reuse_ok) {
                     /* F3: tail call -- REUSE the enclosing activation's
                      * DK_CALL_RET instead of pushing a new one, so a tail chain
                      * stays O(1) on the work-stack.  F1/F2 guarantee that no
@@ -8980,15 +8998,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                      * The sequence reproduces the per-iteration pre-bounce
                      * cleanup + top-of-loop re-entry of the retired TcoFrame
                      * trampoline (eval_apply_inner), now folded into the driver. */
-                    assert(len >= 2 && st[len - 2].kind == DK_CALL_RET);
                     DriveCont *ret = &st[len - 2];
-                    /* (1) finish the current activation: restore its no_unwind
-                     * and fire its defers.  Reaching a tail call is a *normal*
-                     * frame completion, so fire head-first (innermost scope
-                     * first, same-scope LIFO) -- matching the compiled
-                     * normal-exit ordering. */
+                    /* (1) finish the current activation: restore its no_unwind.
+                     * (Its defer chain is empty by the guard above, so the
+                     * fire that used to sit here is a no-op and is gone.) */
                     env->in_no_unwind = ret->was_no_unwind;
-                    fire_defers_to_mark(env, (DeferItem *)ret->aux, NULL);
                     /* (2) re-enter the callee in the same slot.  saved_module is
                      * left as captured by the chain head (restored once at the
                      * chain's end); was_returning / was_no_unwind are recaptured
