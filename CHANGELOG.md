@@ -21,6 +21,12 @@ user-visible semantic change, not a fix.
   `finally` / RAII uses. A program that relied on the old cross-scope order
   on an early exit sees its cleanups run in the opposite order. Pinned by
   `tests/fixtures/defer-early-return` and `defer-tail-scope-order`.
+- **A duplicate `definstance` is an error (`TUR-E0025`).** A user instance
+  for a `(class, type)` the autoloaded stdlib already covers -- `(definstance
+  Eq [int] ...)` -- used to be dropped with the stdlib's definition winning
+  (silently, then with a warning). It is now rejected, the conventional
+  overlapping-instance rule; the message points at the newtype route, and a
+  stdlib file loaded twice stays a silent no-op.
 - **`bt-scope` and `with-untrailed` are panic-safe.** Both brackets are now
   `defer`-based, so a panic inside the body that an enclosing `catch-unwind`
   catches undoes the trail level (`bt-scope`) and resumes trailing

@@ -1,0 +1,12 @@
+;; duplicate-instance-silently-drops-a-user-definstance: the route TUR-E0025
+;; recommends.  A primitive cannot get a second Eq instance, but a newtype
+;; over it can, and dispatch on the newtype finds the user's definition while
+;; the primitive keeps the stdlib's.
+(defopaque Loose :int)
+(definstance Eq [Loose]
+  (eq? [a b] : bool false))
+
+(defn main [] : int
+  (println (.eq? 3 3))
+  (println (.eq? (:: 3 Loose) (:: 3 Loose)))
+  0)

@@ -1,1 +1,0 @@
-instance Eq [int] is already defined (first definition wins): this definstance has no effect

@@ -205,6 +205,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0021_PRIVATE_EFFECT:                   return "TUR-E0021";
         /* CF6: async Send-across-await */
         case TUR_E0022_AWAIT_LIVE_NOT_SEND:              return "TUR-E0022";
+        case TUR_E0025_DUPLICATE_INSTANCE:               return "TUR-E0025";
         /* Phase B: mixed-width numeric arithmetic */
         case TUR_E0042_MIXED_WIDTH_ARITH:                return "TUR-E0042";
         case TUR_E0254_INFINITE_EFFECT_ROW:              return "TUR-E0254";
@@ -381,6 +382,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0019") == 0) return TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET;
     if (strcmp(s, "TUR-E0021") == 0) return TUR_E0021_PRIVATE_EFFECT;
     if (strcmp(s, "TUR-E0022") == 0) return TUR_E0022_AWAIT_LIVE_NOT_SEND;
+    if (strcmp(s, "TUR-E0025") == 0) return TUR_E0025_DUPLICATE_INSTANCE;
     if (strcmp(s, "TUR-E0042") == 0) return TUR_E0042_MIXED_WIDTH_ARITH;
     if (strcmp(s, "TUR-E0254") == 0) return TUR_E0254_INFINITE_EFFECT_ROW;
     if (strcmp(s, "TUR-E0260") == 0) return TUR_E0260_SIZED_TYPE_MISMATCH;
@@ -798,6 +800,30 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Define an instance of the required typeclass for the constrained type,\n"
       "or remove the constraint if it is not needed.\n"
+    },
+    { TUR_E0025_DUPLICATE_INSTANCE,
+      "TUR-E0025: Instance already defined for this class and type\n"
+      "\n"
+      "A definstance names a (typeclass, type) pair that already has an\n"
+      "instance -- usually one the autoloaded stdlib supplies, such as\n"
+      "Eq [int] or Show [cstr].  Instances are unique per class and type:\n"
+      "there is exactly one dictionary to dispatch to, so a second definition\n"
+      "cannot coexist with the first, and it is rejected rather than silently\n"
+      "ignored (which is what used to happen, with the first definition\n"
+      "winning and the second having no effect).\n"
+      "\n"
+      "Example:\n"
+      "  (definstance Eq [int]\n"
+      "    (eq? [a b] : bool false))     ;; error: stdlib already defines Eq [int]\n"
+      "\n"
+      "To give a primitive different behaviour under a class, wrap it in a\n"
+      "newtype and define the instance for the newtype:\n"
+      "  (defopaque Loose :int)\n"
+      "  (definstance Eq [Loose] (eq? [a b] : bool false))\n"
+      "\n"
+      "A stdlib file loaded twice (an explicit (load \"stdlib/...\") beside the\n"
+      "autoload) is not a duplicate in this sense: the same definition arriving\n"
+      "through two load paths stays a silent no-op.\n"
     },
     { TUR_E0014_NOT_CLONE,
       "TUR-E0014: Captured binding does not implement Clone\n"

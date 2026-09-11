@@ -1,0 +1,13 @@
+;; duplicate-instance-silently-drops-a-user-definstance: a user instance for a
+;; (class, type) the autoloaded stdlib already covers used to be dropped by the
+;; idempotent re-instance guard -- first definition wins -- first silently,
+;; then with a warning.  Decided 2026-09-11: it is REJECTED (TUR-E0025), the
+;; conventional overlapping-instance rule, with the newtype route named in the
+;; message.  A stdlib file loaded twice stays a silent no-op (the case the
+;; guard was written for); that is keyed on the defining file's path.
+(definstance Eq [int]
+  (eq? [a b] : bool false))
+
+(defn main [] : int
+  (println (.eq? 3 3))
+  0)

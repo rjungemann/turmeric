@@ -53,6 +53,9 @@ typedef enum DiagCode {
     TUR_E0023_BIND_VOID_EXPRESSION,               /* `let` binding whose init has type :void */
 
     TUR_E0024_READS_FRAME_INVALID,                /* malformed or duplicated `#reads` frame */
+    /* duplicate-instance-silently-drops-a-user-definstance: a user definstance
+     * for a (class, type) the stdlib already covers is rejected, not dropped */
+    TUR_E0025_DUPLICATE_INSTANCE,                 /* instance already defined for this class and type */
 
     TUR_E0042_MIXED_WIDTH_ARITH, /* distinct numeric kinds cannot be combined without (as ...) */
     /* ER1: strict-effects warnings */
