@@ -1,5 +1,27 @@
 # call-ptr under --interpret refuses a record with a parametric-monomorph field
 
+**Status update 2026-09-10: fix direction 1 is DONE; direction 2 remains open.**
+The refusal now names the offending field and its record, states that the
+field is a parametric monomorph, and says outright that the user's type is
+fine and the compiled path marshals it:
+
+```
+call-ptr: arg 0: field 'b' of record 'Outer' is a parametric monomorph, and
+the interpreter cannot render its layout. Your type is fine -- the compiled
+path marshals this field by value; only --interpret refuses it. Build the
+program instead, or give the field a non-parametric type
+```
+
+`agg_sig_render` now reports WHICH field defeated it and why, because it bails
+for two unrelated reasons and the single old message was true of only one: a
+scalar whose kind has no member code really is unrepresentable, while an
+`AGGF_UNSUPPORTED` parametric field demonstrably is not. Both now get their
+own wording. Pinned by `jit-ffi-interp-parametric-field-diag` in
+`tests/run-flags.sh`, which also asserts the old inaccurate phrase is GONE.
+
+The compiled/interpreted divergence itself is untouched -- direction 2 below
+is the real fix and is still open.
+
 **Severity: low** (clean refusal, no wrong answers) -- but it is a
 **compiled/interpreted divergence**: the identical program compiles and runs
 on the AOT path and is refused under `--interpret`. The accompanying

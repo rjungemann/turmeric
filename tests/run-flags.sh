@@ -1095,6 +1095,46 @@ else
     echo "SKIP jit-ffi-call-ptr-interp (needs a JIT build on Linux)"
 fi
 
+# jit-ffi-interp-parametric-field-diag: the interpreter refuses a record whose
+# field is a concrete application of a parametric record -- it cannot render
+# that field's layout without per-application type substitution -- and the
+# refusal must say so.
+#
+# The message used to read "record has a field with no by-value C member type",
+# which was false in every case it could fire: that path is reachable only when
+# `adt_field_is_inline_byval` returned TRUE, i.e. exactly when codegen DOES
+# inline the field by value. It pointed at the user's type when the type is
+# fine and the gap is the interpreter's.
+#
+# No dlopen: the refusal happens while marshalling the argument, before the
+# pointer is ever used, so a bogus callee keeps this portable. The compiled
+# path accepts the same program -- that divergence is the open finding in
+# docs/reported/jit-ffi-interp-refuses-parametric-record-field.md; what is
+# asserted here is only that the refusal describes itself honestly.
+if [ "$HAS_JIT" = "1" ]; then
+    cat > "$TMP_FFI" <<'TURFFI'
+(defstruct BoxW [a] (raw :int32))
+(defstruct Outer [b : (BoxW int32) tag : int32])
+(defn main [] : int
+  (unsafe
+    (println (call-ptr 1 [Outer -> :int32]
+                       (make-struct Outer (make-struct BoxW (:: 1 :int32)) (:: 2 :int32)))))
+  0)
+TURFFI
+    out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>&1)
+    if ! grep -q "parametric monomorph" <<< "$out"; then
+        fail "jit-ffi-interp-parametric-field-diag" "expected the parametric-monomorph refusal, got: $out"
+    elif ! grep -q "field 'b' of record 'Outer'" <<< "$out"; then
+        fail "jit-ffi-interp-parametric-field-diag" "refusal did not name the offending field, got: $out"
+    elif grep -q "no by-value C member type" <<< "$out"; then
+        fail "jit-ffi-interp-parametric-field-diag" "refusal still claims the field has no by-value C member type, which is the inaccuracy: $out"
+    else
+        pass "jit-ffi-interp-parametric-field-diag"
+    fi
+else
+    echo "SKIP jit-ffi-interp-parametric-field-diag (needs a JIT build)"
+fi
+
 # jit-ffi-call-ptr-nonjit-diag: a JIT-less interpreter reports a clean
 # "requires a JIT-enabled build" diagnostic for call-ptr -- never nil, never
 # a crash.  (In a JIT build the call succeeds instead, so only the JIT-less
