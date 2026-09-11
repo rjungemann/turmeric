@@ -1163,6 +1163,42 @@ else
     echo "SKIP jit-ffi-interp-parametric-record-field (needs a JIT build and cc)"
 fi
 
+# jit-cc-fallback-reentry-monomorph-state: the step-6 cc fallback must not
+# inherit the abandoned engine attempt's monomorph registry.
+#
+# cmd_jit falls back by calling cmd_run IN THE SAME PROCESS, so mono_specs.c's
+# file-scope registry survives. cmd_run then elaborates a second time against a
+# registry that already believes the van-Laarhoven specs were requested, and
+# the emitted C CALLS `over_px__lens_<hash>` while nothing emits its
+# definition -- a hard cc error, from a program `tur run` compiles cleanly.
+#
+# The path is otherwise unreachable: with __auto_type gone from the emitter the
+# engine no longer declines these fixtures, which is exactly how a latent bug
+# waits to be rediscovered. TUR_JIT_FORCE_FALLBACK=1 declines the engine
+# deliberately (before executing, so the program is not run twice).
+if [ "$HAS_JIT" = "1" ]; then
+    _fb_fx="tests/fixtures/van-laarhoven-lens-wide-mono"
+    if [ -f "$_fb_fx/input.tur" ]; then
+        _fb_err=$(mktemp)
+        out=$(TUR_JIT_FORCE_FALLBACK=1 ASAN_OPTIONS=detect_leaks=0 \
+                  "$TUR" jit "$_fb_fx/input.tur" 2>"$_fb_err")
+        if grep -q "undeclared function" "$_fb_err"; then
+            fail "jit-cc-fallback-reentry-monomorph-state" \
+                 "the fallback re-entry emitted a call to a monomorph spec it never defined: $(grep -m1 'undeclared function' "$_fb_err")"
+        elif [ "$out" != "$(cat "$_fb_fx/expected.stdout")" ]; then
+            fail "jit-cc-fallback-reentry-monomorph-state" \
+                 "forced fallback produced: $out"
+        else
+            pass "jit-cc-fallback-reentry-monomorph-state"
+        fi
+        rm -f "$_fb_err"
+    else
+        echo "SKIP jit-cc-fallback-reentry-monomorph-state (fixture missing)"
+    fi
+else
+    echo "SKIP jit-cc-fallback-reentry-monomorph-state (needs a JIT build)"
+fi
+
 # jit-ffi-call-ptr-nonjit-diag: a JIT-less interpreter reports a clean
 # "requires a JIT-enabled build" diagnostic for call-ptr -- never nil, never
 # a crash.  (In a JIT build the call succeeds instead, so only the JIT-less
