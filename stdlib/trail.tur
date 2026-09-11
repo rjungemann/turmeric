@@ -462,10 +462,10 @@
 ;;;      deliberate (it is how a learned clause outlives a backjump), but it is
 ;;;      the opposite of what "commit into the parent" suggests to a Prolog ear.
 ;;;
-;;;   2. A panic inside `body` skips the undo, leaving the trail at the inner
-;;;      level. A later `bt-undo-to!` on an OUTER mark still unwinds past it,
-;;;      but anything reading cells in between sees the body's writes. There is
-;;;      no unwind protection to hang the restore on.
+;;;   2. A panic inside `body` that is caught by an enclosing `catch-unwind`
+;;;      still undoes: the restore is a `defer`, so it fires on the unwind and
+;;;      the trail is back at the outer level when the catch returns. An
+;;;      UNCAUGHT panic aborts the process, where the undo is moot.
 ;;;
 ;;; The `bt-undo-to!` result is discarded: it reports only that the mark was
 ;;; already spent, which inside this bracket means the body undid or committed
@@ -480,9 +480,9 @@
 (defn bt-scope [A] [^fat body : (fn [] A)]
   #fx{Bt}
   : A
-  (let [m (bt-mark)
-        r (body)]
-    (do (bt-undo-to! m) r)))
+  (let [m (bt-mark)]
+    (defer (bt-undo-to! m))
+    (body)))
 ;;; with-untrailed -- run `body` with trailing PAUSED, then resume.
 ;;;
 ;;; The bracket form of `untrailed-begin` / `untrailed-end`, and the per-write
@@ -501,16 +501,18 @@
 ;;;     (bt-undo-to! m)
 ;;;     (bt-get c))                                      ; => 7, not restored
 ;;;
-;;; Same panic caveat as `bt-scope`, and worse: a panic inside `body` leaves
-;;; trailing paused for everything after it, so later writes silently stop
-;;; being undoable. Do not put fallible work here that a `bt-scope` could hold.
+;;; Panic-safe the same way `bt-scope` is: the resume is a `defer`, so a panic
+;;; inside `body` caught by an enclosing `catch-unwind` unwinds through it and
+;;; trailing is back on -- later writes stay undoable.
 ;;;
 ;;; Since: SX2
 
 (defn with-untrailed [A] [^fat body : (fn [] A)]
   #fx{Bt}
   : A
-  (do (untrailed-begin) (let [r (body)] (do (untrailed-end) r))))
+  (do (untrailed-begin)
+      (defer (untrailed-end))
+      (body)))
 ;;; trail-reset! -- drop every level and entry WITHOUT running undo.
 ;;;
 ;;; Teardown and tests only; not part of the search protocol.

@@ -455,6 +455,14 @@ so the rejected shape was not in use anywhere in the corpus.
 
 *(No open reports.)*
 
+`cps-body-panic-not-propagated` was found and fixed 2026-09-11 and filed
+straight into [docs/archive](../archive/cps-body-panic-not-propagated.md): on
+the DK/CPS path every panic-signal check emitted only a comment, so a
+CPS-colored function whose callee panicked under `catch-unwind` -- or which
+panicked itself -- ran the rest of its body and its whole continuation before
+the catch saw the flag. It was the real cause behind the "generic vs mono"
+asymmetry in `defer-in-generic-hof-skipped-on-caught-panic`.
+
 `cps-direct-bt-scope-closure-temp-undeclared` was filed and resolved 2026-09-04
 and moved to
 [docs/archive](../archive/cps-direct-bt-scope-closure-temp-undeclared.md). Its
@@ -532,6 +540,14 @@ downstream chain at run time, and nothing can bake an original-chain pointer
 into a frame env again.
 
 ## Interpreter (`--interpret` / `tur repl`) divergence
+
+`turi-defer-fires-before-tail-call` was found and fixed 2026-09-11 and filed
+straight into [docs/archive](../archive/turi-defer-fires-before-tail-call.md):
+the interpreter's frame-reusing tail call fired the activation's defers before
+entering the callee, so a `defer` cleanup ran ahead of the tail-called work
+(and a defer-based `bt-scope` undid the trail before the body wrote it). The
+reuse is now gated on an empty defer chain, as the compiler's "defers break
+tail" rule already is.
 
 | Report | Severity | One line |
 | --- | --- | --- |

@@ -1,0 +1,27 @@
+;;; bt-scope / with-untrailed are defer-based brackets: a panic inside the body
+;;; that an enclosing catch-unwind catches unwinds through the defer, so the
+;;; trail level is undone (bt-scope) and trailing is resumed (with-untrailed).
+;;; Closes the "A panic inside body skips the undo" caveat.
+(load "stdlib/trail.tur")
+(defn main [] : int
+  (let [c (bt-cell-new 1)]
+    ;; normal path: the value survives, the write does not
+    (println (bt-scope (fn [] (do (bt-set! c 99) (bt-get c)))))
+    (println (bt-get c))
+    ;; caught panic inside the body: the write is still undone
+    (catch-unwind (fn [] : int (bt-scope (fn [] (do (bt-set! c 77) (panic "boom") 0)))))
+    (println (bt-get c))
+    ;; nested scopes, panic in the inner one: both levels unwind
+    (catch-unwind (fn [] : int
+      (bt-scope (fn [] (do (bt-set! c 50)
+                           (bt-scope (fn [] (do (bt-set! c 51) (panic "inner") 0))))))))
+    (println (bt-get c))
+    ;; with-untrailed: the untrailed write survives, trailing is back on after
+    ;; the caught panic so the next write is undoable again
+    (let [m (bt-mark)]
+      (catch-unwind (fn [] : int (with-untrailed (fn [] (do (bt-set! c 5) (panic "boom2") 0)))))
+      (bt-set! c 6)
+      (bt-undo-to! m)
+      (println (bt-get c)))
+    (bt-cell-free c)
+    0))
