@@ -146,6 +146,30 @@ else
 fi
 rm -rf "$RT"
 
+# --- :build-opts link flags must reach a --shared link -----------------------
+# The executable path honoured :link-libs / :link-flags from
+# ffi-spices-integration-plan S1 on; cmd_build_multi_files (the `--shared
+# <dir>` path) carried a stale copy of the cmake-manifest read that predated S1
+# and silently dropped both. Assert on the CC line itself (TUR_SHOW_CC), which
+# is the observable that was wrong: no library has to exist for -L to be
+# emitted, so this runs identically on every platform.
+SB="$SPICES/shared-build-opts-link"
+rm -rf "$SB/build"
+sb_cc=$(TUR_SHOW_CC=1 "$TUR" build --shared "$SB" 2>&1 | grep -m1 '^CC:')
+rm -rf "$SB/build"
+if [ -z "$sb_cc" ]; then
+    echo "FAIL shared build-opts: no CC: line from TUR_SHOW_CC (did the --shared build run?)"
+    FAIL=$((FAIL + 1)); FAILED+=("shared build-opts")
+elif printf '%s' "$sb_cc" | grep -q -- ' -lm' \
+     && printf '%s' "$sb_cc" | grep -q -- ' -L/tur-shared-build-opts-marker'; then
+    echo "PASS shared build-opts: :link-libs and :link-flags reach the --shared link line"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL shared build-opts: :build-opts tokens missing from the --shared link line"
+    echo "  CC: $sb_cc"
+    FAIL=$((FAIL + 1)); FAILED+=("shared build-opts")
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

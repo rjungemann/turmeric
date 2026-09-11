@@ -1,0 +1,25 @@
+;; A spice whose :build-opts declares link inputs, built as a SHARED library.
+;;
+;; Regression for the --shared project path ignoring :build-opts. The
+;; executable path (`tur build <file>`) honoured :link-libs / :link-flags from
+;; ffi-spices-integration-plan S1 on; cmd_build_multi_files carried a stale
+;; copy of the cmake-manifest read that predated S1 and never received it, so
+;; `tur build --shared <dir>` silently dropped both. Found from the Godot AOT
+;; stager on Windows, where the staged library MUST link against the
+;; extension DLL and the manifest entry it wrote never reached the cc line.
+;;
+;; The -L directory need not exist -- ld treats it as a search path and finds
+;; nothing there -- so this asserts only that the tokens reach the link line,
+;; on every platform, with no real library to provision. That is exactly the
+;; observable that was wrong.
+(defpackage shared-build-opts-link
+  :name        "shared-build-opts-link"
+  :version     "0.1.0"
+  :description "Regression: :build-opts link flags must reach a --shared link."
+  :exports #map{
+    "mod" ["forty-two"]
+  }
+  :build-opts #map{
+    :link-libs  ["m"]
+    :link-flags ["-L/tur-shared-build-opts-marker"]
+  })

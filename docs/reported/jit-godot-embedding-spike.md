@@ -40,7 +40,8 @@
 >
 >    **So the AOT route's import-library problem does not exist here.** A PE DLL
 >    cannot link with unresolved symbols, so the staged-subprocess route needs
->    an import library for the extension (none is produced today). The JIT route
+>    the extension's DLL on its link line (MinGW `ld` links against a DLL
+>    directly; godot-cpp also emits a `liblib<name>.a` implib, unconsumed). The JIT route
 >    has no link step to fail: it needs the entry points EXPORTED, which is one
 >    attribute or link flag.
 >
