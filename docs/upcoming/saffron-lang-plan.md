@@ -24,7 +24,7 @@ on, so this is more than S0 asked for.
 Three residuals remain open, none of them S0 blockers:
 [a shim-box leak when a fn is widened through a local binding](../reported/any-fn-widen-through-local-binding-leaks.md)
 (low-medium), [a segfault in the interpreter's `any` reflection for an
-inline-C-produced opaque](interp-inline-c-opaque-segv-in-any-reflection.md)
+inline-C-produced opaque](../archive/interp-inline-c-opaque-segv-in-any-reflection.md)
 (high, but inside the existing TI7 inline-C carve-out -- worth closing before
 S3/S4 lean on the interpreter hard), and
 [a spurious `-Wfree-nonheap-object` in emitted code](../archive/any-drop-inlining-warns-free-nonheap.md)

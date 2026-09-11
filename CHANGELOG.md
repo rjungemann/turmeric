@@ -55,6 +55,11 @@ user-visible semantic change, not a fix.
   `: (fn [int] int)` whose body is a capturing closure now marks that result
   `boxed` like a `defn` already did, so the consumer dispatches through the
   fat thunk protocol instead of calling the env box as code.
+- **`--interpret`: `type-of` on an `any` holding an inline-C-built opaque value
+  answers the opaque's name** (`Route`), as the compiled path does, instead of
+  `adt`; the inline-C result path no longer re-tags an opaque's word as a
+  struct pointer, which also removes the last way that path could dereference
+  a large integer.
 - **Widening a let-bound function to `any` no longer leaks a box per widen.**
   `(let [f (fn ...)] (peek f))` malloc'd a 24-byte shim box that nothing freed,
   unbounded in a loop; the binding is now recorded as an alias of the lifted
