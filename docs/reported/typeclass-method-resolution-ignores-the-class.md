@@ -105,6 +105,55 @@ Both symptoms want fixtures: a positive with the `definstance` below the use,
 and a negative for the unconstrained generic pinned to whatever new code (2)
 introduces.
 
+## The structural fix for A: measured, not cheap
+
+Direction (1) above -- make instance registration order-independent -- was
+attempted and reverted. What it actually costs, measured rather than guessed:
+
+**The one piece of good news.** Pass 2 stores results as `items[i]`, indexed by
+the form's ORIGINAL position (`elab_toplevel.c`, "Pass 2: Elaborate all
+forms"). So elaboration order can be changed without changing the order
+definitions are EMITTED in -- a correct implementation churns no `expected.c`
+snapshot. That was the expensive-looking part, and it is free.
+
+**Obstacle 1: instances are usually not top-level forms.** stdlib writes
+`definstance` at column 0, but every defmodule-wrapped file -- which is every
+spice and most user code -- makes them CHILDREN of the `(defmodule ...)` form.
+A pre-pass over `forms[]` iterates the single defmodule form and never sees
+them. `load_expand_forms` descends into a defmodule body only to expand
+`(load ...)`; it does not splice the body out. Confirmed: the defmodule-wrapped
+repro fails identically to the top-level one. So the pre-pass has to be a
+recursive walk with its own scoping story, not a scan.
+
+**Obstacle 2: Pass 2 carries sequential state that a reorder invalidates.** A
+straight "elaborate every non-defn form first" reorder breaks `has_defmodule`,
+whose file-boundary reset is driven by comparing `forms[i]` and `forms[i+1]`
+span file_ids as the loop advances. Hoisting the defmodules out from under it
+made stdlib fail to load at all:
+
+```
+stdlib/safe.tur:10:1: error: only one defmodule is allowed per file
+```
+
+`in_stdlib_load` is the same shape of hazard -- it is a running toggle flipped
+at `stdlib_prefix`, and it feeds `TypeClass.from_stdlib` and the
+stdlib-vs-user fallback preference in dispatch, so getting it wrong
+misattributes instances rather than failing loudly.
+
+**Obstacle 3: instances must still follow type elaboration.** An instance body
+that reads a struct field (`(foo-of [w] (.v w))`) needs the full defstruct, not
+the RF0 forward stub. So the phase order is types -> classes -> instances ->
+defn bodies, and a pre-pass has to establish that rather than simply hoisting.
+
+None of this is unbuildable; it is a scoped project (a recursive
+registration walk plus making Pass 2's sequential state position-derived
+rather than loop-carried), not a patch. Filed here so the next attempt starts
+from the three obstacles rather than rediscovering them.
+
+Meanwhile the diagnostic is accurate and names the fix, so the failure mode is
+a papercut with a one-line workaround (move the `definstance` above the use)
+rather than a mystery.
+
 ## Docs correction owed
 
 `docs/archive/ecs-component-set-bounds-plan.md` says the failure mode for the
