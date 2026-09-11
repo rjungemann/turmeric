@@ -1,5 +1,21 @@
 # c2mir silently truncates pointers returned by three CRT functions
 
+**Status: RESOLVED at filing; archived 2026-09-10.** This report was written
+*after* its own fix landed ("Fixed in the same change") and records the shape
+rather than an open defect -- but it was filed into `docs/reported/`, which
+holds open findings only. Nothing was re-fixed; the fix was re-verified on
+`main` before the move: `emit_module.c` emits the three `extern` prototypes
+under `#if defined(_WIN32) && !defined(__GNUC__)`, and a second copy sits
+beside the split-runtime preamble.
+
+**Residue, deliberately not split out.** The report says the list of three is
+a *lower bound* -- why `strtok`/`strpbrk`/`memchr` and not their neighbours was
+never established, and `stdlib/httpd.tur`'s `strpbrk`/`memchr` exposure was
+never separately reproduced. That is a Windows-only question needing a Windows
+JIT to answer, and the fix pattern for any new instance is the three lines
+above, so it is recorded here rather than kept open as a finding nobody on a
+non-Windows box can act on.
+
 **Severity: high on the JIT path, Windows only.** A pointer returned by
 `strtok`, `strpbrk` or `memchr` comes back cut to 32 bits and sign-extended, so
 it is non-NULL and unusable. Code that only counts results looks correct; the
