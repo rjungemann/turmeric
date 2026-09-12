@@ -1,0 +1,37 @@
+;; Forwarding a function-typed parameter to a defn defined LATER in the file.
+;;
+;; This used to be a hard cc failure -- `operand of type 'tur_poly_fn_t' where
+;; arithmetic or pointer type is required` -- while the IDENTICAL program with
+;; the two functions swapped compiled fine.  The elaborator wraps such an
+;; argument in EX_POLY_WRAP only when the callee is already known, so a
+;; forward reference left it a bare EX_VAR and the emitter applied a carrier
+;; cast to what is already a tur_poly_fn_t (a struct).
+;;
+;; BOTH orders are asserted, so a fix cannot be confused with the ordering
+;; workaround.
+
+(defstruct S [v : int])
+(defn add [a : int b : int] : int (+ a b))
+
+;; --- callee defined AFTER the caller (the case that used to fail) ---
+(defn caller-first [g : (fn [int int] int) ^borrow a : S ^borrow b : S] : int
+  (let [x (.v a) y (.v b)
+        r (helper-late g x y 0 true)]
+    r))
+
+(defn helper-late [g : (fn [int int] int) x : int y : int acc : int first : bool] : int
+  (if first (helper-late g x y (g x y) false) acc))
+
+;; --- callee defined BEFORE the caller (the case that always worked) ---
+(defn helper-early [g : (fn [int int] int) x : int y : int acc : int first : bool] : int
+  (if first (helper-early g x y (g x y) false) acc))
+
+(defn callee-first [g : (fn [int int] int) ^borrow a : S ^borrow b : S] : int
+  (let [x (.v a) y (.v b)
+        r (helper-early g x y 0 true)]
+    r))
+
+(defn main [] : int
+  (println (caller-first add (S 3) (S 4)))
+  (println (callee-first add (S 3) (S 4)))
+  0)

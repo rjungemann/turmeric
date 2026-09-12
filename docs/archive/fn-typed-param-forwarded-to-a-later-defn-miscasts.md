@@ -6,9 +6,9 @@ answer, so nothing ships broken. What makes it expensive is that the trigger is
 is written first, and the error names a C type (`tur_poly_fn_t`) that does not
 appear anywhere in the program.
 
-**Status:** open. Found 2026-09-12 building crdt-spice-plan C3's `ORMap`, whose
-`ormap-merge-with` takes the value-merge as a parameter and forwards it to its
-fold helpers.
+**Status: RESOLVED** 2026-09-12, same day. Found building crdt-spice-plan C3's
+`ORMap`, whose `ormap-merge-with` takes the value-merge as a parameter and
+forwards it to its fold helpers.
 
 ## Repro
 
@@ -62,18 +62,40 @@ valid on.
 The forward declaration already carries the correct parameter type, so the
 information is present; the call-site emitter is reading the wrong table.
 
-## Fix direction
+## Root cause -- measured, and not what the section above guessed
 
-Resolve the callee's parameter types from the same declaration pass that emits
-the forward declarations, rather than from definitions emitted so far. A
-narrower fix: suppress the erasing cast when the target parameter type is
-`tur_poly_fn_t`, which is never a carrier.
+The "Mechanism" reading above was close but wrong about *which* table is stale.
+Instrumenting the cast decision in both orders showed identical type kinds and
+one difference:
 
-## Workaround
+```
+BROKEN  (helper after caller):  exkind=EX_VAR         ispoly=1  needs_fn_cast=1
+WORKING (helper before caller): exkind=EX_POLY_WRAP             needs_fn_cast=0
+```
 
-Define the helpers **before** the function that forwards into them. That is
-what `crdt/ormap` does, with a comment pointing here so it is not "tidied" back
-into caller-first order.
+The emitter already skips the cast for an `EX_POLY_WRAP` argument. The
+elaborator inserts that wrapper **only when the callee is already known at the
+time the call is elaborated** -- so with the callee defined later, the argument
+stays a bare `EX_VAR`. That variable's binding is itself `is_poly_fn`, i.e. it
+is *already* a `tur_poly_fn_t`, so it needed no cast either; nothing told the
+emitter that.
+
+## Fix
+
+`src/compiler/emit_expr.c`: exclude a bare `EX_VAR` whose binding is
+`is_poly_fn` from `needs_fn_cast`, exactly as `EX_POLY_WRAP` is excluded. Both
+denote a value that is already a `tur_poly_fn_t`, and a struct is what no
+carrier cast is valid on.
+
+Verified on the module the bug came from: `crdt/ormap` was restored to natural
+caller-first order and compiles and passes there. The ordering workaround and
+its comment have been removed.
+
+## Fixture
+
+`tests/fixtures/fn-param-forwarded-to-later-defn` asserts **both** orders, so a
+regression cannot be mistaken for the ordering workaround. Suite: 2962 passed,
+0 failed.
 
 ## Not this
 

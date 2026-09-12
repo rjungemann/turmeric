@@ -10033,7 +10033,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * docs/archive/history/m5-suite-residual-6-failures-2026-06-14.md. */
                 bool emit_arg_is_fnptr = emit_arg &&
                     (emit_arg->type.kind == TY_FN || emit_arg->type.kind == TY_PTR_VOID);
+                /* A binding that is ALREADY a tur_poly_fn_t needs no cast, for the
+                 * same reason EX_POLY_WRAP above needs none: the value and the
+                 * callee's parameter are both `tur_poly_fn_t`, and that is a
+                 * struct -- the carrier casts below (`(void *)(intptr_t)`,
+                 * `(int64_t)(intptr_t)`) are not valid on it and cc rejects them.
+                 *
+                 * The elaborator normally wraps such an argument in EX_POLY_WRAP,
+                 * which is why this was invisible: that only happens when the
+                 * CALLEE is already known at the time the call is elaborated.  Call
+                 * a function defined LATER in the file and the argument stays a
+                 * bare EX_VAR, reaching here uncast-but-castable.  So the same two
+                 * functions compiled or failed depending on which was written
+                 * first.  See
+                 * docs/archive/fn-typed-param-forwarded-to-a-later-defn-miscasts.md. */
+                bool arg_is_poly_fn_binding =
+                    e->as.call_.args[i]->kind == EX_VAR &&
+                    e->as.call_.args[i]->as.var.binding &&
+                    e->as.call_.args[i]->as.var.binding->is_poly_fn;
                 bool needs_fn_cast = (e->as.call_.args[i]->kind != EX_POLY_WRAP) &&
+                                     !arg_is_poly_fn_binding &&
                                      (e->as.call_.args[i]->type.kind == TY_FN ||
                                       e->as.call_.args[i]->type.kind == TY_PTR_VOID ||
                                       emit_arg_is_fnptr);
