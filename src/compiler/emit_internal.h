@@ -1330,6 +1330,9 @@ char *ensure_fat_float_carrier_shim(EmitCtx *ctx, Type result_type,
  * a poly-wrap thunk boxing an effectful named fn, DK-threading its call through
  * the direct->CPS registry.  Returns the malloc'd twin name (caller uses it for
  * the tur_poly_fn_t.fn_cps slot), or NULL when already emitted. */
+const char *emit_fn_value_clone_for_current_spec(EmitCtx *ctx, const Binding *vb);
+char *ensure_poly_wrap_spec_variant(EmitCtx *ctx, const char *inner_clone,
+                                    uint32_t arity);
 char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
                                  const char *inner_fn);
 /* poly-to-fat-typed-shim-plan: ensure a typed poly-to-fat shim exists for the

@@ -514,15 +514,12 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
        parametric struct becomes a distinct by-value C aggregate per
        instantiation, and that path types the result temp at the carrier while
        the constructor returns the aggregate.
-     - **The join cannot be shared with `ormap-merge-with` via a function
-       value.** A function value is one address and carries no type argument, so
-       passing a constrained helper to the `f`-taking fold collapses every
-       instantiation onto one instance. `__side-loop-j` duplicates the loop;
-       only the line that combines two values differs. That collapse is
-       [reported](../reported/constrained-generic-as-fn-value-collapses.md)
-       with the exact remaining gap measured -- the `tur_poly_fn_t` literal
-       names one elaboration-time wrapper -- so the duplication can be removed
-       when it is closed.
+     - **Both merges share ONE fold.** The constrained path passes `__vjoin`
+       -- a constrained generic -- as the `f` of the same fold the explicit
+       path uses. That collapsed onto a single instance until
+       [the fn-value defect](../archive/constrained-generic-as-fn-value-collapses.md)
+       was fixed, which is why an earlier revision carried a second copy of the
+       loop differing in one line.
      - **`V` is phantom**, but `ormap-new` no longer needs an ascription: a
        phantom-only parametric ADT has one layout for every instantiation, so
        its base ctor is real (it used to be an abort trap), and `V` is pinned by
@@ -535,7 +532,7 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
      the tests are exact without `stdlib/time.tur` -- which would also have
      cost the spice its inline-C-free property (2.5).
 
-  **Seven compiler defects** were found building C3 -- **all seven fixed**:
+  **Nine compiler defects** were found building C3 -- **all nine fixed**:
 
   | Defect | What it did |
   | --- | --- |
@@ -546,8 +543,10 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
   | [base body picks an aggregate instance](../archive/phantom-constrained-generic-base-body-picks-aggregate-instance.md) | no representative tier for a `defopaque` newtype, so the base body would not compile |
   | [generic defn forward reference](../archive/generic-defn-forward-reference-wrong-arity.md) | both pre-passes read the TYPE-param vector as the value params |
   | [bare parametric `:heap` base repr](../archive/bare-parametric-heap-base-repr-disagreement.md) | `repr_of` and the merge-temp emitter disagreed; ICE, plus a duplicate-typedef guard bug |
+  | [phantom-only parametric base ctor was a trap](../archive/generic-defn-forward-reference-wrong-arity.md) | an empty container needed a hand-written ascription; `(ormap-new)` aborted |
+  | [constrained generic as a fn value collapses](../archive/constrained-generic-as-fn-value-collapses.md) | forced two near-identical folds; also surfaced a latent use-after-free in spec interning |
 
-  Four of the seven were **silent wrong answers**, every one a constrained
+  Five of the nine were **silent wrong answers**, every one a constrained
   generic quietly running the wrong instance. That is the argument for building
   these CRDTs against convergence tests whose value types have DIFFERENT joins,
   rather than only type-checking them: a merge that ignores its element's

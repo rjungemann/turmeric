@@ -1,0 +1,6 @@
+The interpreter collapses the fn-value case: it answers 9 12 12 12, getting the
+two DIRECT calls right and both fn-value calls wrong.  Same root cause as
+docs/reported/turi-nested-class-method-call-picks-first-instance.md -- the
+interpreter mints no per-instance specialization at all -- recorded there as a
+third symptom.  Remove this marker when that lands; the rows are already
+written.

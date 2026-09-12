@@ -1528,6 +1528,89 @@ char *ensure_carrier_fatshim(EmitCtx *ctx,
  * NULL if already emitted (deduped) -- caller uses `<wrapper>__cps` either way.
  * The caller restricts `inner_fn` to a plain `int`/`int64` arg AND result, whose
  * C spelling is exactly the `int64_t <fn>(int64_t)` this forward-declares. */
+/* constrained-generic-as-fn-value-collapses: the clone of a constrained
+ * generic that this specialization should reach when the generic is passed as
+ * a function VALUE, or NULL when there is none.
+ *
+ * A specialization's type bindings are the ground truth for which instance is
+ * meant.  Match on them: a fn-value clone is kept apart from its siblings by
+ * bindings alone (they share one C signature), so comparing names+types is the
+ * only way to tell `vjoin` at `Gmax` from `vjoin` at `Gsum`. */
+const char *emit_fn_value_clone_for_current_spec(EmitCtx *ctx, const Binding *vb) {
+    if (!ctx || !vb) return NULL;
+    const EmitAbiSpecialization *cur = ctx->current_abi_specialization;
+    if (!cur || cur->n_bindings == 0) return NULL;
+    for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+        const EmitAbiSpecialization *sp = &ctx->abi_specializations[i];
+        if (sp == cur || sp->binding != vb || !sp->clone_name) continue;
+        if (sp->n_bindings == 0) continue;
+        bool all_agree = true;
+        for (uint8_t bi = 0; bi < sp->n_bindings && all_agree; bi++) {
+            const char *nm = sp->bindings[bi].name;
+            if (!nm) continue;
+            bool found = false;
+            for (uint8_t cj = 0; cj < cur->n_bindings; cj++) {
+                if (!cur->bindings[cj].name ||
+                    strcmp(cur->bindings[cj].name, nm) != 0) continue;
+                found = true;
+                if (!type_eq(sp->bindings[bi].type, cur->bindings[cj].type))
+                    all_agree = false;
+                break;
+            }
+            if (!found) all_agree = false;
+        }
+        if (all_agree) return sp->clone_name;
+    }
+    return NULL;
+}
+
+/* Emit (once) a poly wrapper that forwards to `inner_clone` instead of to the
+ * generic's base entry, and return its name.
+ *
+ * The `tur_poly_fn_t` literal names a single wrapper created at elaboration,
+ * whose body hardcodes one callee -- so every specialization that passes the
+ * same generic as a value reached the same instance.  One wrapper per inner
+ * clone is what lets each specialization carry its own. */
+char *ensure_poly_wrap_spec_variant(EmitCtx *ctx, const char *inner_clone,
+                                    uint32_t arity) {
+    if (!ctx || !inner_clone) return NULL;
+    Buf nb; buf_init(&nb);
+    buf_printf(&nb, "__polyw_%s", inner_clone);
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++)
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;  /* already emitted */
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    /* This band precedes the normal forward decls, so declare the clone here
+     * (carrier ABI: int64 in, int64 out -- the caller's gate guarantees it). */
+    buf_printf(target, "static int64_t %s(", inner_clone);
+    if (arity == 0) buf_puts(target, "void");
+    else for (uint32_t a = 0; a < arity; a++)
+        buf_printf(target, "%sint64_t", a ? ", " : "");
+    buf_puts(target, ");\n");
+    buf_printf(target, "static int64_t %s(void *__pwe", name);
+    for (uint32_t a = 0; a < arity; a++)
+        buf_printf(target, ", int64_t __pwx%u", a);
+    buf_puts(target, ") {\n    (void)__pwe;\n");
+    buf_printf(target, "    return %s(", inner_clone);
+    for (uint32_t a = 0; a < arity; a++)
+        buf_printf(target, "%s__pwx%u", a ? ", " : "", a);
+    buf_puts(target, ");\n}\n");
+    return name;
+}
+
 char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
                                  const char *inner_fn) {
     Buf nb; buf_init(&nb);
@@ -2942,6 +3025,28 @@ static EmitAbiSpecialization *emit_abi_intern_spec(
         const AbiTypeBinding *bindings, uint8_t n_bindings,
         const Type *arg_types, uint8_t n_spec_args, Type result_type,
         const Expr *call_expr, bool match_bindings) {
+    /* `bindings` / `arg_types` may point INTO ctx->abi_specializations (a
+     * caller passing an enclosing spec's own bindings straight through).  The
+     * growth below reallocs that array, leaving them dangling -- a
+     * heap-use-after-free at the copy near the end of this function.  Take a
+     * local copy up front so the inputs outlive the move.
+     *
+     * Latent until a caller actually interned while holding a spec's bindings;
+     * the fn-value scan began doing that once it learned to mint
+     * instance-only clones. */
+    AbiTypeBinding bindings_copy[ABI_TYPE_BINDINGS_MAX];
+    Type arg_types_copy[MAX_FN_ARITY];
+    if (bindings && n_bindings > 0) {
+        uint8_t nb_copy = n_bindings < ABI_TYPE_BINDINGS_MAX
+                            ? n_bindings : ABI_TYPE_BINDINGS_MAX;
+        for (uint8_t i = 0; i < nb_copy; i++) bindings_copy[i] = bindings[i];
+        bindings = bindings_copy;
+    }
+    if (arg_types && n_spec_args > 0) {
+        uint8_t na_copy = n_spec_args < MAX_FN_ARITY ? n_spec_args : MAX_FN_ARITY;
+        for (uint8_t i = 0; i < na_copy; i++) arg_types_copy[i] = arg_types[i];
+        arg_types = arg_types_copy;
+    }
     for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
         EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
         if (spec->binding != fn_binding || spec->n_args != n_spec_args ||
@@ -3505,6 +3610,39 @@ static bool body_has_dispatch_on_app_tyvar(
             g_bhd_relay_depth++;
             bool r = body_has_dispatch_on_app_tyvar(
                 e->as.call_.fn_binding->source_fn_def->body, inner, ni);
+            g_bhd_relay_depth--;
+            if (r) return true;
+        }
+    }
+    /* The same question for a constrained generic passed as an ARGUMENT rather
+     * than called: `(fold vjoin a b)`, where `fold` is an ordinary
+     * higher-order function and `vjoin` is the constrained one.  The relay
+     * probe above only follows the CALLEE, so this body looked free of
+     * dispatch and no specialization was minted.
+     *
+     * The argument is referenced at the enclosing body's own type variables,
+     * so this frame's bindings apply directly -- there is no per-call map to
+     * compose, unlike the callee case. */
+    if (e->kind == EX_CALL && g_bhd_relay_depth < 4) {
+        for (uint32_t ai = 0; ai < e->as.call_.n_args; ai++) {
+            const Expr *arg = e->as.call_.args[ai];
+            /* EX_POLY_WRAP too: an argument crossing into a poly slot is
+             * wrapped as a `tur_poly_fn_t`, and that wrapper hid the variable
+             * from this probe entirely. */
+            while (arg && (arg->kind == EX_ASCRIBE || arg->kind == EX_FN_TO_FAT ||
+                           arg->kind == EX_POLY_WRAP)) {
+                arg = (arg->kind == EX_ASCRIBE)   ? arg->as.ascribe_.inner
+                    : (arg->kind == EX_FN_TO_FAT) ? arg->as.fn_to_fat_.inner
+                                                  : arg->as.poly_wrap_.inner;
+            }
+            if (!arg || arg->kind != EX_VAR) continue;
+            const Binding *ab = arg->as.var.binding;
+            if (!ab || !ab->source_fn_def || !ab->source_fn_def->body) continue;
+            if (!ab->fn_constraints || ab->fn_constraints->n_constraints == 0)
+                continue;
+            g_bhd_relay_depth++;
+            bool r = body_has_dispatch_on_app_tyvar(
+                ab->source_fn_def->body, bindings, n_bindings);
             g_bhd_relay_depth--;
             if (r) return true;
         }
@@ -5983,11 +6121,23 @@ static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
     if (!call || call->kind != EX_CALL || !bindings || n_bindings == 0) return;
     for (uint32_t i = 0; i < call->as.call_.n_args; i++) {
         const Expr *arg = call->as.call_.args[i];
-        while (arg && (arg->kind == EX_ASCRIBE || arg->kind == EX_FN_TO_FAT)) {
-            arg = (arg->kind == EX_ASCRIBE) ? arg->as.ascribe_.inner
-                                            : arg->as.fn_to_fat_.inner;
+        /* EX_POLY_WRAP too -- see the matching note in
+         * body_has_dispatch_on_app_tyvar.  The wrapper hid the variable from
+         * this scan, so a constrained generic passed as a function VALUE never
+         * got a per-instantiation clone. */
+        const Expr *poly_wrapped = NULL;
+        while (arg && (arg->kind == EX_ASCRIBE || arg->kind == EX_FN_TO_FAT ||
+                       arg->kind == EX_POLY_WRAP)) {
+            if (arg->kind == EX_POLY_WRAP) poly_wrapped = arg;
+            arg = (arg->kind == EX_ASCRIBE)   ? arg->as.ascribe_.inner
+                : (arg->kind == EX_FN_TO_FAT) ? arg->as.fn_to_fat_.inner
+                                              : arg->as.poly_wrap_.inner;
         }
-        if (!arg || arg->kind != EX_VAR || arg->type.kind != TY_FN) continue;
+        (void)poly_wrapped;
+        if (!arg || arg->kind != EX_VAR) continue;
+        if (arg->type.kind != TY_FN && !(arg->as.var.binding &&
+                                         arg->as.var.binding->type.kind == TY_FN))
+            continue;
         Binding *vb = arg->as.var.binding;
         if (!vb || vb->type.kind != TY_FN || !vb->is_global || vb->closure_fn_binding)
             continue;
@@ -6008,7 +6158,21 @@ static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
         Type v_result;
         bool abi_changes = emit_abi_fn_value_signature(
             ctx, vb, vfd, bindings, n_bindings, v_args, &v_nargs, &v_result);
-        if (!abi_changes) continue;
+        /* A generic passed as a function VALUE whose specializations share one
+         * ABI but dispatch to DIFFERENT instances -- `vjoin` at two `defopaque`
+         * newtypes over int.  `abi_changes` is false for it (both int64 ->
+         * int64), so the scan skipped it and every instantiation got the single
+         * carrier clone, which bakes the representative instance.  Same
+         * question the direct-call path asks. */
+        bool instance_changes = false;
+        if (!abi_changes && vfd->body) {
+            bool saved_detect = g_bhd_detect_return_dispatch;
+            g_bhd_detect_return_dispatch = false;
+            instance_changes =
+                body_has_dispatch_on_app_tyvar(vfd->body, bindings, n_bindings);
+            g_bhd_detect_return_dispatch = saved_detect;
+        }
+        if (!abi_changes && !instance_changes) continue;
 
         /* Per-instantiation monomorphization: skip inline-C bodies without
          * `__TUR_TY_<NAME>__` markers unless a slot escapes the carrier ABI
@@ -6032,7 +6196,10 @@ static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
         uint32_t before = ctx->n_abi_specializations;
         EmitAbiSpecialization *child = emit_abi_intern_spec(
             ctx, vb, vfn_expr, vfd, bindings, n_bindings,
-            v_args, v_nargs, v_result, NULL, false);
+            v_args, v_nargs, v_result, NULL,
+            /* instance-only clones share a signature, so they must be kept
+             * apart by their type BINDINGS or they dedup into one body. */
+            !abi_changes && instance_changes);
         /* Newly created: recurse into the clone body so nested fn-values
          * specialize too.  (Already-interned specs were scanned when created.) */
         if (ctx->n_abi_specializations != before) {

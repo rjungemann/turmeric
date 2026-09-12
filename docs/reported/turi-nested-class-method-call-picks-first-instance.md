@@ -139,3 +139,28 @@ newtypes apart with `__h<n>`); the interpreter has no such split.
 `requires.compiled` naming this report. Their assertions are already written and include the
 deliberately-failing instances; removing the marker when this lands turns them
 into the interpreter's regression suite for free.
+
+
+## A third symptom, 2026-09-12: a constrained generic passed as a FUNCTION VALUE
+
+Found after fixing the compiled half of
+[constrained-generic-as-fn-value-collapses](../archive/constrained-generic-as-fn-value-collapses.md).
+The interpreter shows the same split this report already describes, from a new
+direction:
+
+```
+compiled:    9 12 9 12     (direct calls, then the same work via a fn value)
+interpreted: 9 12 12 12    -- both fn-value calls answer with one instance
+```
+
+The two DIRECT calls are correct under `--interpret`; only the two that pass the
+constrained generic to an ordinary higher-order function collapse. That is
+consistent with the root cause recorded above -- the compiled path splits a
+specialization per instance and the interpreter has no such split -- and it adds
+a shape worth pinning, because it is the one that makes a container CRDT share
+one fold instead of two.
+
+`tests/fixtures/constrained-generic-as-fn-value` carries a `requires.compiled`
+marker naming this report. Its rows include the direct-call control, so removing
+the marker when this lands turns it into an interpreter regression test for
+free.

@@ -4,8 +4,8 @@
 that is currently worked around by duplicating code, so nothing in the tree
 depends on it today.
 
-**Status:** open. Found 2026-09-12 trying to remove the duplicated fold in
-`crdt/ormap` (see "Why it matters").
+**Status: RESOLVED** 2026-09-12. Found trying to remove the duplicated fold in
+`crdt/ormap`; that duplication is now gone.
 
 ## Repro
 
@@ -37,10 +37,9 @@ This is what forces `crdt/ormap` to carry two nearly identical folds --
 the class method directly. They differ in exactly one line. A constrained
 generic that could be passed as a value would collapse them into one.
 
-## How far it gets, and the exact remaining gap
+## Three layers, all now fixed
 
-Measured by attempting the fix, in case that saves the next attempt the
-detour. Three layers have to line up; the first two can be made to work:
+Measured by attempting the fix. Three layers had to line up:
 
 1. **The enclosing generic must specialize.** `mjoin`'s body has no
    class-method call of its own -- the constrained generic is an ARGUMENT, not
@@ -57,27 +56,34 @@ detour. Three layers have to line up; the first two can be made to work:
    clones: `vjoin__spec__...` calling `__inst_JS_j_Gmax` and `...__h1` calling
    `__inst_JS_j_Gsum`. Verified in the emitted C.
 
-3. **The poly WRAPPER must be per-clone -- this is the gap.** The
-   `tur_poly_fn_t` literal names a single wrapper (`__poly_1626`) created at
-   elaboration, whose body hardcodes one clone. Both `mjoin` specializations
-   reference that one wrapper, so the correct clones from step 2 are never
-   reached. With steps 1-2 applied the answer changes from `12 12` to `9 9` --
-   a different wrong answer, not a fix.
+3. **The poly WRAPPER must be per-clone.** The `tur_poly_fn_t` literal named a
+   single wrapper created at elaboration, whose body hardcodes one callee, so
+   both specializations reached the same instance. With only steps 1-2 the
+   answer moved from `12 12` to `9 9` -- a different wrong answer.
 
-   Closing it needs wrapper clones per inner specialization plus spec-aware
-   naming in value position: `raw_name_for_binding` and `atom_var` both return
-   the base name and consult no specialization.
+   Fixed by emitting a wrapper variant per inner clone, on demand, and having
+   the literal name the variant matching the enclosing specialization's type
+   bindings. Bindings are the only way to tell the siblings apart: a fn-value
+   clone shares its C signature with every other clone of the same generic.
 
-Steps 1 and 2 were implemented and then **reverted** -- they are inert for
-every existing fixture (zero snapshot churn, suite green) but fix nothing on
-their own, and landing untestable half-machinery is worse than a clean gap.
+## A latent use-after-free this surfaced
 
-## Fix direction
+`emit_abi_intern_spec` copies its `bindings` / `arg_types` arguments into the
+new spec *after* growing `ctx->abi_specializations`. When a caller passes an
+enclosing spec's own bindings -- which point INTO that array -- the realloc
+leaves them dangling, and the copy is a heap-use-after-free (ASan caught it at
+once). Latent until a caller actually interned while holding a spec's bindings;
+the fn-value scan began doing exactly that. Both inputs are now copied locally
+before the growth.
 
-Intern a specialization for the wrapper binding alongside the inner one, and
-make the poly-fn literal resolve the wrapper name through the enclosing
-specialization.
+## Fixture
 
-## Fixture owed
+`tests/fixtures/constrained-generic-as-fn-value` asserts the two direct calls
+(the control, correct throughout) and the two fn-value calls, so a regression
+that repairs only the controls is not mistaken for a fix.
 
-The repro above, asserting `9` then `12`.
+It carries a `requires.compiled` marker: the INTERPRETER still collapses the
+fn-value case (`9 12 12 12`), recorded as a third symptom on
+[turi-nested-class-method-call-picks-first-instance](../reported/turi-nested-class-method-call-picks-first-instance.md),
+whose root cause -- the interpreter mints no per-instance specialization -- is
+the same one.
