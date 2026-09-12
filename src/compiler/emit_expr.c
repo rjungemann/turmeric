@@ -8984,7 +8984,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (e->as.call_.ctor && e->as.call_.ctor->adt &&
                         e->as.call_.ctor->adt->n_type_params > 0 &&
                         e->as.call_.ctor->adt->is_heap) {
-                        emit_note_dead_base_ctor(ctx, _mc, 0);
+                        emit_note_dead_base_ctor(ctx, _mc, 0,
+                                                 e->as.call_.ctor->adt);
                     }
                 }
                 free(_mc);
@@ -9795,7 +9796,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (e->as.call_.ctor && e->as.call_.ctor->adt &&
                         e->as.call_.ctor->adt->n_type_params > 0 &&
                         e->as.call_.ctor->adt->is_heap) {
-                        emit_note_dead_base_ctor(ctx, _mc, e->as.call_.n_args);
+                        emit_note_dead_base_ctor(ctx, _mc, e->as.call_.n_args,
+                                                 e->as.call_.ctor->adt);
                     }
                 }
                 free(_mc);

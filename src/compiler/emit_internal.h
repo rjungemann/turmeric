@@ -561,6 +561,10 @@ typedef struct EmitCtx {
      * aborts loudly at runtime with the ctor named. */
     char    **dead_base_ctor_names;
     uint32_t *dead_base_ctor_arities;
+    /* The owning ADT, so the flush can tell a genuinely dead base ctor (emit a
+     * trap) from a PHANTOM-ONLY one, whose layout does not depend on its type
+     * arguments and whose base ctor is therefore real and callable. */
+    const struct AdtDef **dead_base_ctor_defs;
     uint32_t  n_dead_base_ctors;
     uint32_t  cap_dead_base_ctors;
     const EmitAbiSpecialization *current_abi_specialization;
@@ -1407,7 +1411,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e);
  * reference to the (never-defined) base ctor of a heap parametric ADT, and
  * flush the accumulated static trap definitions into a pre-body band.  See
  * the EmitCtx.dead_base_ctor_* comment. */
-void emit_note_dead_base_ctor(EmitCtx *ctx, const char *mangled, uint32_t n_args);
+void emit_note_dead_base_ctor(EmitCtx *ctx, const char *mangled, uint32_t n_args,
+                              const AdtDef *def);
 void emit_flush_dead_base_ctor_traps(EmitCtx *ctx, Buf *out);
 /* G4: reset the per-module shared-driver group registry. */
 void gs_reset_group_registry(void);

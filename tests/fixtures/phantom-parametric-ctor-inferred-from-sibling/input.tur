@@ -1,0 +1,32 @@
+;; An empty parametric `:heap` container whose type parameter is PHANTOM,
+;; constructed without an ascription and pinned by a SIBLING argument.
+;;
+;; The base ctor of a parametric heap ADT used to be an abort trap on the
+;; premise that "every construction site knows the element type and
+;; monomorphizes".  That premise fails exactly when no field carries the
+;; parameter: `(p-new)` has nothing to infer `V` from, reaches the base ctor,
+;; and aborted -- so every call site had to ascribe the type by hand.
+;;
+;; For a phantom-only ADT the base ctor is not dead at all: every
+;; instantiation has ONE layout, so the base IS the constructor. It is emitted
+;; lazily, only where a base reference actually occurs, so a program that never
+;; needs it is unchanged.
+;;
+;; stdlib's `map-new` escapes the same trap only by being inline C, which needs
+;; no ctor -- which is why this looked like it worked everywhere else.
+
+(defopaque G :int)
+(defstruct P :heap [V] [e : int f : int])
+
+(defn p-new [V] [] : (P V) (P 0 0))
+(defn p-put [V] [^borrow m : (P V) v : V] : (P V) (P (:: v int) 0))
+(defn p-get [V] [^borrow m : (P V)] : V (:: (.e m) V))
+
+(defn main [] : int
+  ;; ascribed -- worked before
+  (let [a (:: (p-put (:: (p-new) (P G)) (:: 7 G)) (P G))]
+    (println (:: (:: (p-get a) G) int)))
+  ;; NOT ascribed: V is pinned by the sibling argument's type
+  (let [b (:: (p-put (p-new) (:: 7 G)) (P G))]
+    (println (:: (:: (p-get b) G) int)))
+  0)

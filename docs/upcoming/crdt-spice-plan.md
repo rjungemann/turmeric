@@ -518,9 +518,17 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
        value.** A function value is one address and carries no type argument, so
        passing a constrained helper to the `f`-taking fold collapses every
        instantiation onto one instance. `__side-loop-j` duplicates the loop;
-       only the line that combines two values differs.
-     - **`V` is phantom**, so an empty map cannot infer it: `ormap-new` needs an
-       ascription. Every other entry point takes or returns a `V`.
+       only the line that combines two values differs. That collapse is
+       [reported](../reported/constrained-generic-as-fn-value-collapses.md)
+       with the exact remaining gap measured -- the `tur_poly_fn_t` literal
+       names one elaboration-time wrapper -- so the duplication can be removed
+       when it is closed.
+     - **`V` is phantom**, but `ormap-new` no longer needs an ascription: a
+       phantom-only parametric ADT has one layout for every instantiation, so
+       its base ctor is real (it used to be an abort trap), and `V` is pinned by
+       a sibling argument as in `(ormap-put (ormap-new) r k v)`. `DotContext` is
+       `:heap` for the same reason -- a by-value aggregate field would have made
+       ORMap's base ctor need the generic boxing convention.
 
   2. **Deterministic tests come from parameter-passed wall time, not
      `Mock-Time`.** Every `crdt/hlc` operation takes `now` as an argument, so

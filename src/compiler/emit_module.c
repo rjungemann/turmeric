@@ -3156,7 +3156,40 @@ static bool emit_abi_any_widen_has(const EmitCtx *ctx, int64_t id) {
  * dead base generic chain -- so instead of leaving an undefined symbol that
  * only `-O2` dead-stripping can survive, a static trap definition is flushed
  * into the forward-decl band (emit_flush_dead_base_ctor_traps below). */
-void emit_note_dead_base_ctor(EmitCtx *ctx, const char *mangled, uint32_t n_args) {
+static const char *adt_ctor_field_c_type(const CtorField *f, bool byval);
+
+/* Does this type mention a type VARIABLE anywhere?  Used to decide whether a
+ * parametric ADT's type parameters are PHANTOM -- named in the head, used by
+ * no field.  Such an ADT has one layout for every instantiation. */
+static bool emit_type_mentions_any_tyvar(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR: return true;
+        case TY_APP:
+            return emit_type_mentions_any_tyvar(t->as.app.fn) ||
+                   emit_type_mentions_any_tyvar(t->as.app.arg);
+        default: return false;
+    }
+}
+
+/* True when every type parameter of `def` is phantom, so the base ctor is
+ * well-defined and no monomorph can specialize it.  Shared with emit_expr.c,
+ * which must NOT register a dead-base trap for such a ctor -- the real base
+ * definition and the trap would collide. */
+bool emit_adt_params_all_phantom(const AdtDef *def) {
+    if (!def || def->n_type_params == 0) return false;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        const CtorDef *c = def->ctors[ci];
+        if (!c) continue;
+        for (uint32_t fi = 0; fi < c->n_fields; fi++)
+            if (emit_type_mentions_any_tyvar(c->fields[fi].full_type))
+                return false;
+    }
+    return true;
+}
+
+void emit_note_dead_base_ctor(EmitCtx *ctx, const char *mangled, uint32_t n_args,
+                              const AdtDef *def) {
     if (!ctx || !mangled) return;
     for (uint32_t i = 0; i < ctx->n_dead_base_ctors; i++) {
         if (strcmp(ctx->dead_base_ctor_names[i], mangled) == 0) return;
@@ -3168,16 +3201,32 @@ void emit_note_dead_base_ctor(EmitCtx *ctx, const char *mangled, uint32_t n_args
             new_cap * sizeof(char *));
         uint32_t *grown_a = (uint32_t *)realloc(ctx->dead_base_ctor_arities,
             new_cap * sizeof(uint32_t));
-        if (!grown_n || !grown_a) { fprintf(stderr, "tur: oom\n"); abort(); }
+        const AdtDef **grown_d = (const AdtDef **)realloc(
+            ctx->dead_base_ctor_defs, new_cap * sizeof(const AdtDef *));
+        if (!grown_n || !grown_a || !grown_d) { fprintf(stderr, "tur: oom\n"); abort(); }
         ctx->dead_base_ctor_names = grown_n;
         ctx->dead_base_ctor_arities = grown_a;
+        ctx->dead_base_ctor_defs = grown_d;
         ctx->cap_dead_base_ctors = new_cap;
     }
     char *dup = strdup(mangled);
     if (!dup) { fprintf(stderr, "tur: oom\n"); abort(); }
     ctx->dead_base_ctor_names[ctx->n_dead_base_ctors] = dup;
     ctx->dead_base_ctor_arities[ctx->n_dead_base_ctors] = n_args;
+    ctx->dead_base_ctor_defs[ctx->n_dead_base_ctors] = def;
     ctx->n_dead_base_ctors++;
+    /* A phantom-only base ctor is REAL (see the flush), and it returns the
+     * ADT's typed pointer -- not the carrier a trap would.  Record that here,
+     * while the call is being emitted: the flush writes the definition into
+     * the forward-decl band long after every call site has chosen its temp's
+     * C type, so recording there is too late and the temp inherits whatever
+     * type happened to precede it (observed: an ORMap * landing in a
+     * DotContext * temp, -Wincompatible-pointer-types). */
+    if (def && emit_adt_params_all_phantom(def)) {
+        char sym[288];
+        snprintf(sym, sizeof sym, "ctor_%s", mangled);
+        emit_sig_record_ret_ctype(sym, n_args, adt_heap_ptr_c_name(def));
+    }
 }
 
 /* Flush the registered dead-base-ctor traps as static file-scope definitions.
@@ -3194,6 +3243,39 @@ void emit_flush_dead_base_ctor_traps(EmitCtx *ctx, Buf *out) {
     for (uint32_t i = 0; i < ctx->n_dead_base_ctors; i++) {
         const char *nm = ctx->dead_base_ctor_names[i];
         uint32_t arity = ctx->dead_base_ctor_arities[i];
+        const AdtDef *bd = ctx->dead_base_ctor_defs[i];
+        /* PHANTOM-ONLY parametric ADT: its layout does not depend on its type
+         * arguments, so this base ctor is not dead at all -- it is the single
+         * correct constructor, and a call reaches it exactly when no call site
+         * could pin the (unused) type argument.  `(ormap-new)` is that case:
+         * nothing carries `V`, so without a real definition here every call
+         * site had to ascribe the type by hand.  (stdlib's `map-new` escapes
+         * it only by being inline C, needing no ctor at all.)
+         *
+         * Emitted lazily, here rather than beside the monomorphs, so a program
+         * that never references the base is byte-identical to before. */
+        if (bd && emit_adt_params_all_phantom(bd)) {
+            const char *ptr_name = adt_heap_ptr_c_name(bd);
+            buf_printf(out, "static %s ctor_%s(", ptr_name, nm);
+            if (arity == 0) buf_puts(out, "void");
+            else for (uint32_t a = 0; a < arity; a++)
+                buf_printf(out, "%sint64_t _%u", a ? ", " : "", a);
+            char *sname = mangle_adt_name(bd->name);
+            buf_printf(out, ") {\n"
+                "    %s __r = (%s)tur_region_alloc_or_malloc("
+                "sizeof(struct tur_adt_%s));\n", ptr_name, ptr_name, sname);
+            const CtorDef *c0 = bd->n_ctors > 0 ? bd->ctors[0] : NULL;
+            for (uint32_t a = 0; c0 && a < arity && a < c0->n_fields; a++) {
+                const char *fn2 = c0->fields[a].name;
+                const char *fct = adt_ctor_field_c_type(&c0->fields[a], true);
+                if (fn2)
+                    buf_printf(out, "    __r->%s = (%s)(_%u);\n", fn2, fct, a);
+            }
+            buf_puts(out, "    return __r;\n}\n");
+            free(sname);
+            free(ctx->dead_base_ctor_names[i]);
+            continue;
+        }
         if (i == 0)
             buf_puts(out,
                 "/* Trap stand-ins for base ctors of parametric heap ADTs: never\n"
@@ -3217,8 +3299,10 @@ void emit_flush_dead_base_ctor_traps(EmitCtx *ctx, Buf *out) {
     }
     free(ctx->dead_base_ctor_names);
     free(ctx->dead_base_ctor_arities);
+    free(ctx->dead_base_ctor_defs);
     ctx->dead_base_ctor_names = NULL;
     ctx->dead_base_ctor_arities = NULL;
+    ctx->dead_base_ctor_defs = NULL;
     ctx->n_dead_base_ctors = 0;
     ctx->cap_dead_base_ctors = 0;
 }
