@@ -1,0 +1,33 @@
+;; A parametric instance head whose method recurses into the type parameter.
+;;
+;; This used to SEGV the compiler in clone_struct_app_type: a TY_APP with a
+;; null fn/arg was dereferenced unguarded, though the paired
+;; free_struct_app_type had always null-checked both.  No diagnostic, no
+;; output -- just a crash in memmove.
+;;
+;; The shape matters beyond the crash: recursing a class method into a
+;; container's element type is how a container CRDT merges (an ORMap of
+;; counters joins by joining each value), so this is the general
+;; "constrained recursive instance" form, not a corner case.
+
+(defclass JS [a] (j [x : a y : a] : a))
+(definstance JS [int] (j [x y] (if (< x y) y x)))
+
+(defstruct Box [A] [v : A])
+
+;; The instance's own body calls `j` again, at the element type.
+(definstance JS [(Box A)] (j [x y] (Box (j (.v x) (.v y)))))
+
+(defn main [] : int
+  (let [r (:: (j (Box 3) (Box 7)) (Box int))]
+    (println (.v r)))
+  ;; A second element type, so a fix that works by accident at one carrier is
+  ;; not mistaken for a real one.
+  (let [s (:: (j (Box 2) (Box 1)) (Box int))]
+    (println (.v s)))
+  0)
+
+;; NOT covered here: nesting two deep, `(Box (Box int))`.  That fails in codegen
+;; with a by-value struct passed where an int64 carrier is expected -- a
+;; separate limitation from the crash this fixture pins, and untouched by its
+;; fix.
