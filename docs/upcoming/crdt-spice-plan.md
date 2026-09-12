@@ -482,9 +482,41 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
   [set-add-elem-hash-disagrees-with-set-member](../reported/set-add-elem-hash-disagrees-with-set-member.md)
   -- the typed `set-add-elem__` adds elements that `set-member?` cannot find,
   so `crdt/set` uses the explicit-hash macro pair throughout.
-- **C3 -- registers + maps.** `Hlc`, `LwwRegister`, `MvRegister`, `ORMap`
-  with its constrained recursive instance. Deterministic LWW tests driven
-  from `Mock-Time`.
+- **C3 -- registers + maps. DONE 2026-09-12.** `crdt/hlc`, `crdt/register`
+  (`LwwRegister`, `MvRegister`), `crdt/ormap`. Seven test suites green.
+
+  Two deviations from the design above, both forced and both recorded:
+
+  1. **`ORMap`'s join is a PARAMETER, not a constrained instance.** Section 2.3
+     wanted `(ORMap K V)` to be a `JoinSemilattice` exactly when `V` is, so an
+     ORMap of PNCounters merges "with no code specific to that pairing". That
+     form is currently **miscompiled**: entries live in a HAMT of int carriers,
+     which makes `V` a *phantom* type parameter, and a phantom parameter does
+     not drive monomorphization -- the constrained generic collapses to one
+     specialization and silently runs the representative instance. An ORMap of
+     PNCounters would have merged with the wrong join and printed a plausible
+     number. See
+     [phantom-type-param-does-not-drive-monomorphization](../reported/phantom-type-param-does-not-drive-monomorphization.md).
+
+     `ormap-merge-with` takes the value merge instead. It is checked at every
+     call site, and `test_ormap`'s nesting test asserts the composition the
+     constrained form was for. Revisit when the defect is fixed.
+
+  2. **Deterministic tests come from parameter-passed wall time, not
+     `Mock-Time`.** Every `crdt/hlc` operation takes `now` as an argument, so
+     the tests are exact without `stdlib/time.tur` -- which would also have
+     cost the spice its inline-C-free property (2.5).
+
+  Two compiler defects were found and one FIXED on the way:
+  `clone_struct_app_type` segfaulted on a parametric instance head whose method
+  recurses into the type parameter ([fixed](../archive/clone-struct-app-type-segv-on-null-arg.md));
+  forwarding a function-typed parameter to a later-defined defn emits a broken
+  cast ([open](../reported/fn-typed-param-forwarded-to-a-later-defn-miscasts.md),
+  worked around by helper ordering).
+
+  The HLC ships a drift bound (`hlc-max-drift`) so a remote replica with a
+  wrong clock cannot drag this one forward permanently -- 1.3's requirement.
+
 - **C4 -- deltas.** `DeltaCRDT`, per-instance `Delta` bindings, delta
   mutators for every C1-C3 type, and the equivalence test that matters:
   joining a sequence of deltas equals joining the full states.
