@@ -1,0 +1,33 @@
+;; typeclass-method-resolution-ignores-the-class (symptom A), defmodule half.
+;;
+;; Every spice is defmodule-wrapped, so elab_defmodule's body loop -- not
+;; elaborate_program's Pass 2 -- is where a spice's `definstance` below a use is
+;; decided.  Both loops now defer a defn that cannot resolve a class method and
+;; retry it once the whole body has been processed.
+;;
+;; Also pins ORDER: the deferred defn keeps its original position in the
+;; module body (slot[] is indexed by original position, then compacted), so a
+;; retry cannot reshuffle emission.  `g` is declared after the definstance and
+;; before main; if the deferred `use-foo` were appended rather than slotted, the
+;; module body order would change.
+(defmodule m
+  (export main)
+
+  (defstruct Bar [v : int])
+
+  (defclass Foo [W]
+    (foo-of [^borrow w] : int))
+
+  ;; Uses Foo before any instance exists.
+  (defn use-foo [W] [(Foo W)] [^borrow w : W] : int
+    (foo-of w))
+
+  (definstance Foo [Bar]
+    (foo-of [w] (.v w)))
+
+  (defn g [] : int 5)
+
+  (defn main [] : int
+    (println (use-foo (Bar 7)))
+    (println (g))
+    0))

@@ -174,10 +174,16 @@ def known_bug_slug(tags):
     # could not previously express at all (one instance per class, unary
     # methods only, no same-class nesting, no nullary methods).  Both are open
     # reports, so both are avoided by default and pinned by --known-probes.
-    if "class_nested" in tags:
-        return "nested-class-method-call-picks-the-first-instance"
-    if "class_nullary_newtype" in tags:
-        return "nullary-class-method-unresolvable-over-newtype-tyvar"
+    # (nested-class-method-call-picks-the-first-instance: RESOLVED 2026-09-11 --
+    # emit_reresolve_disp_type recovers the dispatch type through a receiver
+    # that is itself a re-resolved class-method call -- and archived.  The
+    # class_nested shape is in the DEFAULT generation pool now; its probe below
+    # stays as a FIXED regression row.)
+    # (nullary-class-method-unresolvable-over-newtype-tyvar: RESOLVED
+    # 2026-09-11 -- the return-directed representative search accepts a
+    # carrier-compatible opaque newtype, gated on the class tyvar reaching a
+    # parameter -- and archived.  Shape back in the DEFAULT pool; probe below
+    # kept as a FIXED regression row.)
     return None
 
 
@@ -248,11 +254,12 @@ KNOWN_PROBES = [
     # (fn-value-carrier-fat-seam-residuals: RESOLVED 2026-07-31, archived;
     # probe retired -- pinned by tests/fixtures/fn-value-carrier-fat-seams/.)
     #
-    # OPEN (type-confusion-detection-plan F1).  A WRONG ANSWER, so this row
-    # carries an expected stdout: the float specialization resolves its outer
-    # `join` to the first-declared (int) instance and truncates, printing 7
-    # where 7.1 is correct.  Needs all three of constrained body, nesting, and
-    # a non-first instance -- drop any one and it answers correctly.
+    # RESOLVED 2026-09-11, archived.  Kept as a FIXED regression probe, like the
+    # rows above: the wrong-answer arm is what detects a relapse, and a
+    # relapse here is silent everywhere else.  The row carries an expected
+    # stdout because the defect produced a wrong ANSWER (7 for 7.1) rather than
+    # a rejection -- without it this probe would report FIXED on a broken
+    # build.
     ("nested-class-method-call-picks-the-first-instance",
      "(defclass JsP [a] (joinp [x : a y : a] : a))\n"
      "(definstance JsP [int]   (joinp [x y] (if (< x y) y x)))\n"
@@ -260,8 +267,9 @@ KNOWN_PROBES = [
      "(defn fp [^JsP A] [x : A y : A] : A (joinp (joinp x y) y))\n"
      "(defn main [] : int (println (fp 2.5 7.1)) 0)\n",
      "7.1\n"),
-    # OPEN (type-confusion-detection-plan F1).  A hard error, so the 2-tuple
-    # form suffices: `tur check` rejects with "no instance 'MoP tyvar'".
+    # RESOLVED 2026-09-11, archived.  Kept as a FIXED regression probe.  Note
+    # the probe's `fq` takes an A-typed PARAMETER: that is what makes the shape
+    # specializable, and a relapse of the gate would show up here.
     ("nullary-class-method-unresolvable-over-newtype-tyvar",
      "(defclass SgP [a] (combp [x : a y : a] : a))\n"
      "(defclass MoP [a] (mzerop [] : a))\n"
@@ -642,13 +650,12 @@ class Gen:
         # Instance heads: plain type names only.
         if not tn.startswith("("):
             xs.append(self.x_class_thru)
-            # Both are open reports (see known_bug_slug), so they are avoided
-            # by default like every other filed shape and turned back on with
-            # --emit-known.
-            if self.emit_known:
-                xs.append(self.x_class_nested)
-                if tn == "int":
-                    xs.append(self.x_class_nullary_newtype)
+            # class_nested is in the default pool since its report was resolved
+            # (2026-09-11).  class_nullary_newtype is still an open report, so
+            # it stays avoided until --emit-known turns it back on.
+            xs.append(self.x_class_nested)
+            if tn == "int":
+                xs.append(self.x_class_nullary_newtype)
         if self.emit_known:
             xs.append(self.x_tyvar_run)
         return xs

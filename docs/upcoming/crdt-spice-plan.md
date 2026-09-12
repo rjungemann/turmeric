@@ -77,12 +77,13 @@ This is the single most reusable thing the plan needs and does not have.
 The resolution is in section 5: the spice ships it, over `map-iter`, rather
 than growing stdlib.
 
-The smaller half of the same gap: there is no `max` or `min` in stdlib at
-all. `Ord` (`stdlib/typeclass.tur:24`) declares only `lt?` / `lte?` / `gt?` /
-`gte?`, so even a G-Counter's pointwise join has to define its own. That is a
-two-line function, and it is also the clearest measure of how absent the
-lattice vocabulary is: the join of two integers under the natural order does
-not have a name yet.
+The smaller half of the same gap: there was no `max` or `min` usable over an
+abstract element type, so even a G-Counter's pointwise join had to define its
+own. **Closed 2026-09-11** by lattice-vocabulary-plan L1: `max` and `min` are
+constrained generics over `Ord` in `stdlib/typeclass.tur`, and `Ord` gained
+`float` and `cstr` instances. What this section originally recorded -- that the
+join of two integers under the natural order did not have a name -- was the
+clearest measure of how absent the lattice vocabulary was.
 
 ### 1.3 Gap 2 -- no monotonic clock, and `get-time-ms` is wall time
 
@@ -190,12 +191,13 @@ packed 64-bit thing"; a `ReplicaId` is not "an index". The counter inside
 (defstruct PNCounter [pos : GCounter  neg : GCounter])
 (defstruct LwwRegister [A] [value : A  stamp : Hlc])
 
-;; `ord-max` is the spice's own -- see 1.2. Two lines, no stdlib equivalent.
-(defn ord-max [^Ord A] [x : A y : A] : A (if (gte? x y) x y))
-
+;; `max` comes from stdlib now -- a constrained generic over Ord, added by
+;; lattice-vocabulary-plan L1 (2026-09-11).  This plan used to define its own
+;; `ord-max` here because stdlib had no `max` usable over an abstract element
+;; type; it does now, for every Ord instance including float and cstr.
 (definstance JoinSemilattice [GCounter]
   (join [x y]
-    (GCounter (map-merge-with ord-max (.entries x) (.entries y)))))
+    (GCounter (map-merge-with max (.entries x) (.entries y)))))
 
 ;;; The counter's reading. NOT part of the lattice -- it is the query.
 (defn gcounter-value [c : GCounter] : int ...)

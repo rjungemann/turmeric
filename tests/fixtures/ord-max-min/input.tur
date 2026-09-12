@@ -1,0 +1,46 @@
+;; lattice-vocabulary-plan L1: `max` / `min` are constrained generic DEFNS
+;; over Ord -- deliberately NOT class methods with default bodies.
+;;
+;; They were macros in stdlib/macros.tur expanding to the builtin `>=` / `<=`,
+;; so they worked for concrete int and float and nowhere else:
+;;   (max "a" "b")                      -> operator lookup failed for '>=' ... cstr
+;;   (defn f [^Ord A] [x : A y : A] ...) -> operator lookup failed for '>=' ... tyvar
+;; The generic case is the one that matters -- a pointwise maximum over an
+;; abstract element type is what a CRDT counter join needs.
+;;
+;; The two spellings cannot coexist: macro expansion precedes typeclass
+;; dispatch, so a macro named `max` makes the method unreachable everywhere.
+;; The macros are gone.  BREAKING: `max`/`min` now need this load, because
+;; macros.tur is auto-loaded and typeclass.tur is not.
+;;
+;; `Ord [float]` and `Ord [cstr]` are new here too: `float32` had an instance
+;; and `float` did not, and `String`/`StringSlice` had one while bare `cstr`
+;; did not -- so removing the macro without them would have been a net loss.
+(load "stdlib/typeclass.tur")
+
+;; As defns they cost an Ord instance nothing: every instance implements only
+;; the four predicates.  A DEFAULT METHOD was the obvious design and is
+;; miscompiled -- the class's method form is spliced into the instance with its
+;; `: a` annotations intact and elaborated literally, so `Ord [float]`'s copy
+;; emitted as `int64_t __inst_Ord_max_float(int64_t, int64_t)` and truncated its
+;; own arguments: `(generic-max 2.5 7.1)` answered 2.  Caught by the
+;; -Wfloat-conversion ratchet, not by the stdout diff, because the CONCRETE
+;; `(max 2.5 7.1)` was right and only the generic one was wrong.
+;; See docs/reported/default-method-spliced-at-carrier-type.md.
+(defn generic-max [^Ord A] [x : A y : A] : A (max x y))
+(defn generic-min [^Ord A] [x : A y : A] : A (min x y))
+
+(defn main [] : int
+  ;; concrete, per type
+  (println (max 3 9))
+  (println (min 3 9))
+  (println (max 2.5 7.1))
+  (println (min 2.5 7.1))
+  (println (max "alpha" "beta"))
+  (println (min "alpha" "beta"))
+  ;; through a constrained generic -- impossible with the macro
+  (println (generic-max 3 9))
+  (println (generic-max 2.5 7.1))
+  (println (generic-max "alpha" "beta"))
+  (println (generic-min 2.5 7.1))
+  0)

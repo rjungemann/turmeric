@@ -7882,8 +7882,27 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * just happens to have an instance in scope". */
     TypeConstraint *saved_cur_fn_constraints   = e->cur_fn_constraints;
     uint8_t         saved_cur_fn_n_constraints = e->cur_fn_n_constraints;
+    uint32_t        saved_cur_fn_con_param_mask = e->cur_fn_constraint_param_mask;
     e->cur_fn_constraints   = constraint_list;
     e->cur_fn_n_constraints = n_constraints;
+    /* See the field's comment in elab_internal.h: which constraints' tyvars
+     * actually reach a parameter, and can therefore be split by
+     * monomorphization. */
+    {
+        uint32_t mask = 0;
+        for (uint8_t ci = 0; ci < n_constraints && ci < 32; ci++) {
+            const TypeConstraint *con = &constraint_list[ci];
+            if (!con->tyvar || !con->tyvar->name) continue;
+            for (uint32_t pi = 0; pi < n_params; pi++) {
+                if (params[pi] &&
+                    type_mentions_named_tyvar(&params[pi]->type, con->tyvar->name)) {
+                    mask |= (1u << ci);
+                    break;
+                }
+            }
+        }
+        e->cur_fn_constraint_param_mask = mask;
+    }
     /* constrained-hkt-pure-and-byvalue-carriers (gap 1): the ambient constraint
      * used to be recorded only for a SINGLE-constraint fn, so the moment a body
      * needed two classes on the same type constructor -- `[^Monad m ^Applicative
@@ -8000,6 +8019,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->cur_hkt_dict_binding = saved_cur_hkt_dict;
                 e->cur_fn_constraints   = saved_cur_fn_constraints;
                 e->cur_fn_n_constraints = saved_cur_fn_n_constraints;
+                e->cur_fn_constraint_param_mask = saved_cur_fn_con_param_mask;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
                 scope_free(&inner);
@@ -8022,6 +8042,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->cur_hkt_dict_binding = saved_cur_hkt_dict;
                 e->cur_fn_constraints   = saved_cur_fn_constraints;
                 e->cur_fn_n_constraints = saved_cur_fn_n_constraints;
+                e->cur_fn_constraint_param_mask = saved_cur_fn_con_param_mask;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
                 scope_free(&inner);
@@ -8045,6 +8066,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     e->cur_hkt_dict_binding = saved_cur_hkt_dict;
                     e->cur_fn_constraints   = saved_cur_fn_constraints;
                     e->cur_fn_n_constraints = saved_cur_fn_n_constraints;
+                    e->cur_fn_constraint_param_mask = saved_cur_fn_con_param_mask;
                     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                     e->scope = inner.parent;
                     scope_free(&inner);
@@ -8148,6 +8170,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     e->cur_hkt_dict_binding = saved_cur_hkt_dict;
     e->cur_fn_constraints   = saved_cur_fn_constraints;
     e->cur_fn_n_constraints = saved_cur_fn_n_constraints;
+    e->cur_fn_constraint_param_mask = saved_cur_fn_con_param_mask;
     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
 
     /* bare-fat-result-monomorphization: close the canonical-body capture frame.

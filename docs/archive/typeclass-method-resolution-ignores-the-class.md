@@ -4,8 +4,12 @@
 wrong answer at runtime; both are a diagnostic/ordering defect that sends the
 author looking in the wrong place.
 
-**Status 2026-09-11 -- three of four items closed; A's structural half is what
-keeps this open.** See "Execution" at the end. Symptom **B is FIXED** and
+**RESOLVED 2026-09-11 -- all four items closed.** Symptom A's fix is recorded
+under "Symptom A: fixed by deferral" at the end of this file. Earlier status
+text in this report describes A as open; it is kept for the reasoning, not as
+current state.
+
+**Superseded status (kept for the record):** See "Execution" at the end. Symptom **B is FIXED** and
 verified (a clean check-time `TUR-E0015` naming the class, the tyvar and the
 constraint to add -- no cc divergence). The **"Trap" below is FIXED** (a borrow
 caret in a `definstance` method impl no longer consumes a param slot). The
@@ -159,6 +163,13 @@ registration walk plus making Pass 2's sequential state position-derived
 rather than loop-carried), not a patch. Filed here so the next attempt starts
 from the three obstacles rather than rediscovering them.
 
+> **Correction 2026-09-11 -- it is not an ordering problem.** The three
+> obstacles above are real but they are not the blocker, and obstacle 1 is
+> overstated. See "Symptom A, re-measured" at the end of this file: a two-sweep
+> Pass 2 was built and run, and it fails for a reason no phase order can fix.
+> **Do not start the next attempt from the three obstacles.** Start from the
+> cycle.
+
 Meanwhile the diagnostic is accurate and names the fix, so the failure mode is
 a papercut with a one-line workaround (move the `definstance` above the use)
 rather than a mystery.
@@ -249,3 +260,174 @@ anything low, not high.
 
 Nothing here is a reason to defer indefinitely; it is a reason not to attempt
 it as a patch inside an unrelated pass.
+
+## Symptom A, re-measured 2026-09-11
+
+Four findings, all measured against v0.46.1. The last one changes the shape of
+the problem.
+
+### 1. No base clone is emitted, so no symbol is needed
+
+`tur emit-c` on a working constrained generic
+(`(defn use-foo [W] [(Foo W)] [^borrow w : W] : int (foo-of w))`) emits **only**
+`use_foo__spec__int64_t_tur_adt_Bar` -- there is no generic `use_foo` in the
+output at all, and adding a second instance adds a second specialization rather
+than a base clone. Every call site monomorphizes.
+
+So for a CONSTRAINED body the representative instance is purely an
+elaboration-time typing device; nothing about it survives into the C. That is
+the good news, and it is what makes a "resolve against the class" path
+conceivable at all: the class declaration need only supply a *type*, never a
+callable symbol. (Symptom B is the contrast -- an UNCONSTRAINED body has no
+specialization to be re-resolved into, which is why the representative leaked
+into the C there, and why rejecting it was right.)
+
+### 2. But result typing reads the instance BODY, not just its signature
+
+A signature-only path is still not a drop-in, because `elab_typeclasses.c`
+refines the call's result type from the selected implementation in at least
+four places:
+
+- `result_type = best_method->body->type;` (the non-`TY_FN` arm)
+- the transparent-int-newtype propagation (`type_is_transparent_int_newtype`)
+- the zero-arity passthrough case that recovers a boxed `fn` result
+- the M7 by-value checks (`m7_body_constructs_byvalue`,
+  `m7_body_returns_byvalue_element`)
+
+A `defclass` declares a signature and has no body, so routing the constrained
+case through the class would silently change result typing for every
+constrained generic. Not fatal, but it is a second scoped change stacked on the
+first, and it needs the full corpus to validate.
+
+### 3. Obstacle 1 is overstated: the recursive walk already exists
+
+The obstacle says a pre-pass "iterates the single defmodule form and never sees
+them", implying the walk has to be built. It largely does not:
+`elab_forward_declare_defns` (`elab_module.c:11`) is already the shared
+forward-declaration walk over a form range, called from **both**
+`elab_defmodule` (the module body) and `elab_load_module` (a spliced module's
+top-level forms), with `elab_pre_declare_toplevel_defn` as the entry-unit
+twin. Forward *defn* references consequently work inside a defmodule today --
+verified. What is missing is an instance-registration counterpart at those same
+three sites, not the traversal machinery.
+
+### 4. The actual blocker: instance bodies and defn bodies are CYCLIC
+
+A two-sweep Pass 2 was implemented and run -- every non-`defn` form in original
+order, then every `defn`, with `items[i]` still indexed by original position so
+emission order is unchanged. This satisfies obstacle 3 by construction
+(`defstruct` / `defclass` / `definstance` keep their relative order) and
+sidesteps obstacle 2 (`in_stdlib_load` is position-derived; every `defmodule`
+stays in sweep 0 in order, so the `has_defmodule` file-boundary reset is
+undisturbed).
+
+It fails immediately, on stdlib, before any user program:
+
+```
+stdlib/map.tur:924:10: error [TUR-E0006]: operator lookup failed for '=':
+  got 2 arg(s), first arg type (fn [int] : int)
+921 | (definstance Eq [Map]
+922 |   [(Eq K) (Eq V)]
+923 |   (eq? [x y]
+```
+
+`Eq [Map]`'s method body calls `map-count`, an ordinary **defn** declared
+earlier in the same file. With defn bodies deferred to sweep 1, that call sees
+only the Pass-1 forward declaration, which is not precise enough to type it.
+
+That is the whole problem, and it is not an ordering problem:
+
+- a **defn body** needs its class's **instances registered** (symptom A), and
+- an **instance body** needs the **defn bodies** it calls to have elaborated.
+
+No linear phase order satisfies both, because the dependency is a cycle.
+Obstacles 1-3 are all about arranging a better order, so none of them can be
+the fix, and any attempt framed as reordering will rediscover this the same way.
+
+### What this leaves
+
+Three directions remain, in rough order of plausibility:
+
+1. **Deferred re-elaboration of the failing defns only.** Let Pass 2 run
+   unchanged; when a defn body fails *solely* because no instance of a named
+   class is registered, record it and retry after all forms are processed. The
+   cycle is broken by time rather than by order. The cost is that elaboration
+   has side effects (bindings, diagnostics), so the first attempt must be made
+   undoable or suppressible -- which is the real work, and is unexplored.
+2. **Register instance heads early, bodies late.** Breaks the cycle only if
+   finding 2 is dealt with first, since the representative's body is what the
+   result typing reads.
+3. **Iterate to a fixpoint.** Honest, and the most invasive.
+
+**Direction 1 is what landed, same day. See below.**
+
+## Symptom A: fixed by deferral, 2026-09-11
+
+The cycle in finding 4 is real, so the fix does not try to order around it --
+it breaks it by **time**, and only for the forms that need it.
+
+### Mechanism
+
+In both elaboration drivers -- `elaborate_program`'s Pass 2 (a flat file) and
+`elab_defmodule`'s body loop (every spice) -- a `defn` is elaborated inside a
+`diag_push_capture()` frame when the unit contains a later `definstance`. If
+that attempt raises any error, the file-scope defs it registered are rolled
+back (`e->n_file_scope_defs = mark`) and the form is queued. After every other
+form in the unit has been processed -- so every instance is registered -- the
+queued defns are elaborated again, this time with **no capture frame**, so a
+body that fails for some other reason reports its real diagnostic.
+
+The capture/rollback pair is not new machinery: `elab_defn` already uses
+exactly it for the bare-`^fat` lazy probe (`elab_fns.c`, `needs_lazy_probe` /
+`fsd_mark`), and `diag.h` documents the contract -- "a caller that wants the
+real diagnostics simply re-runs the elaboration with no capture frame active".
+
+### Why this succeeds where reordering failed
+
+It never moves a form that is not blocked. The two-sweep experiment deferred
+**every** defn, which is why stdlib's `Eq [Map]` body could no longer see
+`map-count`. Here `map-count` is not blocked on an instance, so it is not
+deferred, and the instance body still sees it fully elaborated. Only the defn
+that genuinely cannot resolve moves, and it moves to a point where the thing it
+was waiting for exists.
+
+### Order is preserved
+
+`elaborate_program` already indexes results by original position (`items[i]`),
+so nothing there moves. `elab_defmodule` did **not** -- it appended to `body[]`
+in fill order -- so a `slot[]` array indexed by original body position was
+added and compacted afterwards. `tests/fixtures/typeclass-instance-after-use-in-defmodule`
+pins this with a `defn` declared between the `definstance` and `main`: if a
+deferred form were appended rather than slotted, module body order would change.
+
+### Cost
+
+The gate is `has a later definstance` -- purely syntactic, depth-bounded. A unit
+with no later `definstance` (the overwhelming majority, including every program
+that does not use typeclasses) takes exactly the previous path: no capture
+frame, no retry, no behavioural change.
+
+### Diagnostic follow-through
+
+The zero-instances message used to end "Instances are registered in source
+order: declare a (definstance ...), and place it ABOVE this use." That advice
+is now wrong -- order no longer matters -- and would send a reader to move a
+form that is already fine. It reads "this program declares no 'Foo' instance at
+all ... it may appear anywhere in the file, above or below this use."
+
+### Fixtures
+
+- `tests/fixtures/typeclass-instance-declared-after-use` -- was
+  `errors/typeclass-instance-declared-after-use`, which pinned the old
+  diagnostic. Now a positive fixture asserting `111`.
+- `tests/fixtures/typeclass-instance-after-use-in-defmodule` -- the spice
+  shape, and the order guard.
+
+### Verified
+
+`tests/run.sh`: **2947 passed, 0 failed**. Auxiliary ctest: **150/150**,
+including `turi_fixture_tests` (the interpreter agrees: the defmodule repro
+answers 7 under `--interpret` too) and all four source-level fuzzers. Negative
+cases re-checked by hand: a class with no instance anywhere still errors, and a
+defn broken for an unrelated reason still reports that reason rather than
+having it swallowed by the capture frame.

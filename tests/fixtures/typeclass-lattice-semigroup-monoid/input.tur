@@ -1,0 +1,63 @@
+;; lattice-vocabulary-plan L2: Semigroup + Monoid + the selection newtypes.
+;;
+;; stdlib/typeclass-lattice.tur is NOT auto-loaded, so it is loaded here.
+;;
+;; The point of the newtypes: one carrier, several algebras.  `int` is a monoid
+;; under sum, product, min AND max, so stdlib ships no bare `Semigroup [int]` --
+;; picking one would be arbitrary, and a user who wanted a different one could
+;; not have it (a colliding definstance is a hard TUR-E0373).
+;;
+;; The law functions double as regression tests for the two defects L0 fixed:
+;;   law-associative? nests `combine`  -> nested-class-method-call-picks-the-first-instance
+;;   law-identity?    calls `(mempty)` -> nullary-class-method-unresolvable-over-newtype-tyvar
+;; Both were silent-wrong-answer / hard-error before 2026-09-11.
+(load "stdlib/typeclass-lattice.tur")
+
+;; A deliberately NON-associative instance, and a deliberately wrong identity.
+;; Without these the law suite would be untested: a law that answers true for
+;; everything is indistinguishable from one that works.
+(defopaque Diff :int)
+(definstance Eq [Diff] (eq? [x y] (= (:: x int) (:: y int))))
+(definstance Semigroup [Diff]
+  (combine [x y] (:: (- (:: x int) (:: y int)) Diff)))
+
+(defopaque BadUnit :int)
+(definstance Eq [BadUnit] (eq? [x y] (= (:: x int) (:: y int))))
+(definstance Semigroup [BadUnit]
+  (combine [x y] (:: (+ (:: x int) (:: y int)) BadUnit)))
+(definstance Monoid [BadUnit] (mempty [] (:: 99 BadUnit)))
+
+(defn main [] : int
+  ;; combine, per algebra
+  (println (:: (combine (:: 3 Sum)     (:: 7 Sum))     int))
+  (println (:: (combine (:: 3 Product) (:: 7 Product)) int))
+  (println (:: (combine (:: 3 MinI)    (:: 7 MinI))    int))
+  (println (:: (combine (:: 3 MaxI)    (:: 7 MaxI))    int))
+  (println (:: (combine (:: true Any)  (:: false Any))  bool))
+  (println (:: (combine (:: true All)  (:: false All))  bool))
+
+  ;; identities
+  (println (:: (let [u : Sum     (mempty)] u) int))
+  (println (:: (let [u : Product (mempty)] u) int))
+  (println (:: (let [u : Any     (mempty)] u) bool))
+  (println (:: (let [u : All     (mempty)] u) bool))
+
+  ;; laws hold where they should
+  (println (law-associative? (:: 1 Sum)     (:: 2 Sum)     (:: 3 Sum)))
+  (println (law-associative? (:: 1 Product) (:: 2 Product) (:: 3 Product)))
+  (println (law-identity? (:: 5 Sum)))
+  (println (law-identity? (:: 5 Product)))
+
+  ;; ...and FAIL where they should
+  (println (law-associative? (:: 1 Diff) (:: 2 Diff) (:: 3 Diff)))
+  (println (law-identity? (:: 5 BadUnit)))
+
+  ;; mconcat (L4).  The EMPTY case is the one that needs the identity, and it
+  ;; resolves only because `(Vec A)` carries the class variable into a
+  ;; parameter -- a generic whose tyvar reaches no parameter cannot be
+  ;; specialized per instance at all.
+  (println (:: (mconcat (vec-of (:: 1 Sum) (:: 2 Sum) (:: 3 Sum))) int))
+  (println (:: (mconcat (vec-of (:: 2 Product) (:: 3 Product) (:: 4 Product))) int))
+  (println (:: (mconcat (:: (vec-of) (Vec Sum))) int))
+  (println (:: (mconcat (:: (vec-of) (Vec Product))) int))
+  0)

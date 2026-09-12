@@ -11,11 +11,11 @@
 ## 0. Summary
 
 Turmeric has no `Semigroup`, no `Monoid`, and no lattice classes. It does not
-have `max`/`min` either -- `Ord` (`stdlib/typeclass.tur:24`) declares only
-`lt?` / `lte?` / `gt?` / `gte?`. The absent vocabulary is not an abstraction
-nicety: it is the reason `effects-chain` in tur-signal hand-rolls a fold, and
-the reason the CRDT plan has to define its own `ord-max` before it can write a
-counter's join.
+have a usable `max`/`min` either. (It had *macros* of those names -- see 3.2
+for what they could and could not do, and what replaced them.) The absent
+vocabulary is not an abstraction nicety: it is the reason `effects-chain` in
+tur-signal hand-rolls a fold, and the reason the CRDT plan had to define its own
+`ord-max` before it could write a counter's join.
 
 This plan adds that vocabulary. It is deliberately **small**: one new family
 (`Semigroup` / `Monoid` / the four lattice classes), two default methods on an
@@ -25,12 +25,12 @@ existing classes, and it does not propose superclasses.
 **The headline finding is not the design -- it is that the design does not
 compile today.** Probing the shapes turned up two defects, both filed:
 
-- [nested-class-method-call-picks-the-first-instance](../reported/nested-class-method-call-picks-the-first-instance.md)
+- [nested-class-method-call-picks-the-first-instance](../archive/nested-class-method-call-picks-the-first-instance.md)
   (**high**, silent wrong answer). A nested class-method call inside a
   constrained generic resolves the outer call to the first declared instance.
   `combine : a -> a -> a` nests by construction, so a `Semigroup` family is
   **entirely** exposed to this. A float instance silently truncates.
-- [nullary-class-method-unresolvable-over-newtype-tyvar](../reported/nullary-class-method-unresolvable-over-newtype-tyvar.md)
+- [nullary-class-method-unresolvable-over-newtype-tyvar](../archive/nullary-class-method-unresolvable-over-newtype-tyvar.md)
   (**medium**, hard error). `mempty` will not resolve against a `defopaque`
   type variable, which removes the one idiom that lets `int` have more than one
   monoid.
@@ -146,6 +146,15 @@ So a function needing two classes lists two constraints. Verified working:
 This compiles and runs. It is also the exact shape that triggers defect 1 once
 a second instance exists, which is how the bug was found.
 
+One ordering constraint this plan was written under is **gone as of
+2026-09-11**: a `definstance` no longer has to appear above the code that
+dispatches on it
+([typeclass-method-resolution-ignores-the-class](../archive/typeclass-method-resolution-ignores-the-class.md),
+resolved -- a defn that cannot resolve a class method is elaborated
+speculatively and retried once its unit is fully processed). So
+`stdlib/typeclass-lattice.tur` can order its classes, newtypes, instances and
+law functions for readability rather than to satisfy the elaborator.
+
 ## 3. Design
 
 ### 3.1 The family
@@ -176,27 +185,65 @@ Deliberately **excluded**: `Group` (no caller), `Lattice` as a combined class
 (absorption laws with nothing to check them), and anything indexed by a higher
 kind (`Foldable`-style `fold-map`) until the flat case is proven.
 
-### 3.2 `max` / `min` on `Ord`, as defaults
+### 3.2 `max` / `min` over `Ord` -- DONE 2026-09-11, but not as written
 
-The single highest-value, lowest-risk item in the plan, and the only one that
-touches an existing class:
+**Two premises in this section were wrong, and the design changed twice.**
+
+**`max`/`min` already existed**, as macros in `stdlib/macros.tur`, which *is*
+auto-loaded (indented inside its `defmodule`, which is why the greps behind
+section 0 missed them):
 
 ```turmeric
-(defclass Ord [a]
-  (lt?  [x y] : bool)
-  (lte? [x y] : bool)
-  (gt?  [x y] : bool)
-  (gte? [x y] : bool)
-  (max  [x : a y : a] : a (if (gte? x y) x y))
-  (min  [x : a y : a] : a (if (gte? x y) y x)))
+(defmacro min [a b] (if (<= a b) a b))
+(defmacro max [a b] (if (>= a b) a b))
 ```
 
-Zero blast radius (2.2), and it removes the `ord-max` stub the CRDT plan
-currently has to define. Worth landing **on its own**, before any of the rest,
-and worth landing even if the reader decides section 1's gate says "not yet"
-for the family.
+They expanded to the builtin `>=` / `<=`, so they worked for concrete `int` and
+`float` and nowhere else: `(max "a" "b")` was `operator lookup failed for '>='
+... cstr`, and inside a constrained generic it was the same failure at
+`type tyvar` -- the case a `max` earns its keep. Macro expansion precedes
+typeclass dispatch, so a macro named `max` makes any method of that name
+unreachable: the two spellings could not coexist. **The macros are retired**
+(their old site carries a note). This is BREAKING -- `max`/`min` now require
+`(load "stdlib/typeclass.tur")`. Exactly one genuine call site existed
+tree-wide, in `spices/stats`, and it was inlined to what the macro expanded to.
 
-### 3.3 Selection newtypes -- blocked by defect 2
+**`Ord` did not cover the primitives.** It had `int`, the sized ints, `float32`,
+`Rational`, `String`, `StringSlice`, `Bound` -- but **not `float` and not
+`cstr`**, so `(gte? 2.5 7.1)` had no instance at all. Retiring the macro
+without adding those two would have been a net loss. Both are added, `cstr`
+over a local `strcmp` helper (`typeclass.tur` cannot load `cstr.tur` without
+adding an edge to the Show/string load cycle).
+
+**They are constrained generic DEFNS, not defaulted methods:**
+
+```turmeric
+(defn max [^Ord A] [x : A y : A] : A (if (gte? x y) x y))
+(defn min [^Ord A] [x : A y : A] : A (if (gte? x y) y x))
+```
+
+The defaulted-method design in this section's original text was implemented
+first and is **miscompiled**: the class's method form is spliced into each
+instance with its `: a` annotations intact and elaborated literally, so
+`Ord [float]`'s copy emits as `int64_t __inst_Ord_max_float(int64_t, int64_t)`
+and converts its own arguments -- `(generic-max 2.5 7.1)` answered 2. Dropping
+the annotations is not an option either (section 2.2's trap). Filed as
+[default-method-spliced-at-carrier-type](../reported/default-method-spliced-at-carrier-type.md).
+
+The defn form is better regardless: it is correct at every instance, works
+inside another generic, and costs a user-written `Ord` instance nothing, where
+a method -- defaulted or not -- is one more thing every instance must satisfy.
+
+**How it was caught matters.** The truncation was found by the
+`-Wfloat-conversion` ratchet from
+[type-confusion-detection-plan.md](type-confusion-detection-plan.md) F0, not by
+the fixture's stdout diff: the concrete `(max 2.5 7.1)` was correct and only
+the call through a generic was wrong, so the obvious assertion passed. That
+ratchet was built two steps earlier in this same chain.
+
+Pinned by `tests/fixtures/ord-max-min`.
+
+### 3.3 Selection newtypes
 
 `int` is a monoid four different ways, and only a wrapper can choose:
 
@@ -211,13 +258,19 @@ Construction is by ascription, not a constructor call: `(:: 3 Sum)`, and
 verified working** -- two newtypes over the same carrier, each selecting its own
 instance through a constrained generic, answering `10` and `7` respectively.
 
-The `Monoid` half does not compile: `mempty` will not resolve against a
-newtype type variable
-([defect 2](../reported/nullary-class-method-unresolvable-over-newtype-tyvar.md)).
-Until that is fixed the newtypes can ship `Semigroup` only, which is a
-genuinely useful half -- `combine` is what folds need -- but it means no
-`mconcat` over an empty vector, and that is exactly where an identity earns
-its keep.
+The `Monoid` half works too as of 2026-09-11
+([defect 2](../archive/nullary-class-method-unresolvable-over-newtype-tyvar.md),
+resolved): `(fold2 (:: 3 Sum) (:: 7 Sum))` answers 10 and the `Product` pair
+answers 21, each selecting its own instance through one constrained generic.
+
+One shape stays refused, by design: a generic whose class tyvar reaches no
+**parameter**. Specializations split on argument types -- `Sum` and `Product`
+are distinct types even though both render `int64_t` -- so a generic with no
+`A`-typed argument interns a single spec for every instantiation and a
+representative chosen for it would be baked in silently. **`mconcat` over an
+empty container is exactly that shape**, so it needs an explicit witness
+argument (or an ascribed element type) rather than relying on return-only
+inference. Worth knowing before L2 writes it.
 
 ### 3.4 Laws
 
@@ -290,27 +343,109 @@ stdlib module (not a spice) needs them without an import.
 
 ## 4. Phases
 
-- **L0 -- unblock.** Fix
-  [defect 1](../reported/nested-class-method-call-picks-the-first-instance.md)
-  (nested call picks the first instance) and
-  [defect 2](../reported/nullary-class-method-unresolvable-over-newtype-tyvar.md)
-  (nullary method over a newtype tyvar). The static half of this -- ratcheting
+- **L0 -- DONE 2026-09-11.**
+  [Defect 1](../archive/nested-class-method-call-picks-the-first-instance.md)
+  (nested call picks the first instance) is **FIXED and archived** -- it was
+  `emit_reresolve_disp_type` refusing to look through a receiver that is itself
+  a re-resolved class-method call. `combine`/`join`/`meet` nest safely now, so
+  the law functions in 3.4 and the lattice four in L3 are unblocked.
+  [Defect 2](../archive/nullary-class-method-unresolvable-over-newtype-tyvar.md)
+  (nullary method over a newtype tyvar) is **FIXED and archived** -- the
+  return-directed representative search accepts a carrier-compatible opaque
+  newtype, gated on the class tyvar reaching a parameter (specs split on
+  argument types, so that is exactly the condition under which the choice can
+  be re-resolved). `mempty` over `Sum`/`Product` works through a constrained
+  generic; the return-only shape keeps its hard error and is pinned by
+  `errors/typeclass-nullary-return-only-newtype`.
+  The static half of this -- ratcheting
   `-Wfloat-conversion` on emitted C, which flags defect 1's line with zero
   noise -- is **F0 of
   [type-confusion-detection-plan.md](type-confusion-detection-plan.md)** and is
   measured there (corpus sweeps clean at 0 across 2250 cc-invoking fixtures);
   do not duplicate it here. **Nothing below is worth starting first.**
-- **L1 -- `Ord` gains `max`/`min`.** Independent of everything else, zero blast
-  radius, removes a stub from the CRDT plan. Land it even if L2+ is deferred.
-- **L2 -- `Semigroup` + `Monoid`** with primitive instances, the law functions,
-  and the selection newtypes' `Semigroup` half.
-- **L3 -- the lattice four** (`JoinSemilattice`, `MeetSemilattice`,
-  `BoundedJoin`, `BoundedMeet`) with their laws. This is what
-  [crdt-spice-plan.md](crdt-spice-plan.md) C1 consumes.
-- **L4 -- retire a hand-rolled fold.** Rewrite tur-signal's `effects-chain` in
-  terms of the vocabulary, or conclude it cannot be and record why. This is the
-  phase that converts section 1's "latent call surface" into real call surface,
-  and it is the honest test of whether any of this earned its place.
+- **L1 -- DONE 2026-09-11.** `max`/`min` are constrained generics over `Ord`
+  (not defaulted methods -- see 3.2), the auto-loaded macros they replace are
+  retired, and `Ord [float]` / `Ord [cstr]` are added. Removes the `ord-max`
+  stub from the CRDT plan. Suite: 2951 passed, 0 failed.
+- **L2 -- DONE 2026-09-11.** `stdlib/typeclass-lattice.tur`: `Semigroup`,
+  `Monoid`, the six selection newtypes (`Sum` `Product` `MinI` `MaxI` `Any`
+  `All`) with their `Eq`/`Semigroup`/`Monoid` instances, and
+  `law-associative?` / `law-identity?`. No bare-primitive instances (3.5); not
+  auto-loaded. Pinned by `tests/fixtures/typeclass-lattice-semigroup-monoid`,
+  which carries deliberately non-associative and wrong-identity instances so
+  the laws are shown to DISCRIMINATE -- section 5's requirement.
+  Two things learned writing it:
+  - **`(combine (mempty) x)` does not elaborate.** Argument inference runs
+    left-to-right, so in first position `mempty` has nothing to fix its type
+    and the call is "cannot infer type for return-directed method". Second
+    position is fine; the laws bind `(let [unit : A (mempty)] ...)`, which also
+    reads better.
+  - **The MinI/MaxI identities are int64 literals**, not `<stdint.h>`
+    constants. The file is deliberately inline-C free: `run-turi.sh`
+    PASS-skips any fixture whose program contains a user inline-C block, so one
+    block here would cost interpreter coverage for everything that loads it.
+- **L3 -- DONE 2026-09-11.** The lattice four (`JoinSemilattice`,
+  `MeetSemilattice`, `BoundedJoin`, `BoundedMeet`) in the same file, with
+  `law-join-associative?` / `law-join-commutative?` / `law-join-idempotent?` /
+  `law-bottom-identity?` / `law-meet-idempotent?` / `law-top-identity?` and
+  `lattice-leq?` (the order that comes free from the operation). Each newtype
+  carries the one lattice its name commits it to -- `MaxI` join, `MinI` meet,
+  `Any` join, `All` meet -- so nothing picks an algebra arbitrarily; `MaxI` is
+  deliberately given no `meet`. Pinned by
+  `tests/fixtures/typeclass-lattice-join-meet`, whose `BadJoin` is associative
+  and commutative but NOT idempotent and must fail exactly one law. This is
+  what [crdt-spice-plan.md](crdt-spice-plan.md) C1 consumes.
+
+  **Interpreter caveat.** Both L2/L3 fixtures carry `requires.compiled`: the
+  law functions nest a class-method call inside a constrained generic, which
+  `--interpret` resolves to the wrong instance, so a law that must answer
+  `false` answers `true`. Compiled is correct. This raised
+  [turi-nested-class-method-call-picks-first-instance](../reported/turi-nested-class-method-call-picks-first-instance.md)
+  from medium to **high** -- over newtypes it is a silent wrong answer, not the
+  crash its original repro produced. The markers name it, and the assertions
+  are already written.
+- **L4 -- INVESTIGATED 2026-09-11. Verdict: yes, it is expressible -- and the
+  shipped function should NOT be rewritten anyway.**
+
+  **It works.** `effects-chain` threads a signal through a `Vec` of signal
+  functions, and a signal function is an endomorphism on Signal, so the loop is
+  a fold over the endomorphism monoid. Built end to end on the real shape --
+  the carrier-spelled `(fn [ptr<void>] ptr<void>)` the fat-dispatch ABI forces,
+  a `Vec` of them, closures and affine values included -- and it answers
+  correctly. So the vocabulary does reach the case section 1 offered as its
+  justification. `mconcat` and `mconcat-from` are in
+  `stdlib/typeclass-lattice.tur` as a result; they were the missing piece, and
+  the empty-`Vec` case (where the identity finally earns its keep) resolves
+  because `(Vec A)` carries the class variable into a parameter.
+
+  **But rewriting `effects-chain` itself would make it worse, not better.**
+  `definstance` heads must be plain type names, so a bare
+  `(fn [ptr<void>] ptr<void>)` cannot carry a `Semigroup` instance -- the
+  endomorphism needs a `defstruct` wrapper. `effects-chain`'s public signature
+  takes an untyped `Vec` of raw SF carriers, so using `mconcat` means wrapping
+  every element first. That is a pass added, not a recursion removed, for no
+  behavioural gain. The win here is conceptual (composition separated from
+  application), and it belongs in code written fresh against the vocabulary --
+  the CRDT spice -- not retrofitted into a shipped module whose signature
+  predates it.
+
+  **A separate, real finding about that module.**
+  `spices/signal/src/signal/compose.tur` hand-writes `__vec-get-i` and
+  `__vec-len-i` in inline C, justified by a comment saying "Project-mode
+  compilation auto-loads only stdlib/macros.tur, so stdlib/vec.tur's `vec-get`
+  is not in scope here." That is **stale**: `src/compiler/stdlib_autoload.c`'s
+  list is shared by single-file and project mode and has carried `vec.tur` for
+  some time, and `spices/plot` and `spices/linalg` both call stdlib `vec-get`
+  in project mode today. Those two helpers -- and the interpreter coverage
+  their inline C costs every fixture that loads the module -- can go. That is a
+  worthwhile change to make to `signal/compose.tur`; swapping its fold for
+  `mconcat` is not.
+
+  So section 1's "latent call surface" stays latent, honestly: the vocabulary
+  is demonstrably able to express it, and the existing caller is not improved
+  by adopting it. The case for the vocabulary rests on new code (the CRDT
+  spice) and on what building it exposed -- four compiler defects, three of
+  them silent wrong answers.
 
 ## 5. Risks and open questions
 
@@ -340,10 +475,10 @@ stdlib module (not a spice) needs them without an import.
 
 ## 6. References
 
-- Defects: [nested-class-method-call-picks-the-first-instance](../reported/nested-class-method-call-picks-the-first-instance.md),
-  [nullary-class-method-unresolvable-over-newtype-tyvar](../reported/nullary-class-method-unresolvable-over-newtype-tyvar.md),
+- Defects: [nested-class-method-call-picks-the-first-instance](../archive/nested-class-method-call-picks-the-first-instance.md),
+  [nullary-class-method-unresolvable-over-newtype-tyvar](../archive/nullary-class-method-unresolvable-over-newtype-tyvar.md),
   and the sibling
-  [typeclass-method-resolution-ignores-the-class](../reported/typeclass-method-resolution-ignores-the-class.md).
+  [typeclass-method-resolution-ignores-the-class](../archive/typeclass-method-resolution-ignores-the-class.md).
 - Consumer: [crdt-spice-plan.md](crdt-spice-plan.md).
 - In-tree: `docs/guides/typeclass-guide.md` (default methods, associated types,
   constrained instances), `src/compiler/stdlib_autoload.c` (the autoload list).

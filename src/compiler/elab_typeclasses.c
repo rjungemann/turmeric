@@ -5382,14 +5382,63 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
         bool bound_is_abstract_tyvar =
             bound.kind == TY_TYVAR;
         if (bound_is_abstract_tyvar) {
-            for (TypeClassInstance *it = env->instances; it; it = it->next) {
-                if (it->typeclass != tc) continue;
-                if (midx >= it->n_method_impls || !it->method_impls[midx]) continue;
-                if (it->n_type_args > 0 && it->type_args[0].kind == TY_INT) {
-                    inst = it;
+            /* nullary-class-method-unresolvable-over-newtype-tyvar: this search
+             * accepted ONLY a literal `TY_INT` head, so a class instanced solely
+             * over `defopaque` newtypes -- the one idiom that gives a single
+             * carrier several algebras, `(defopaque Sum :int)` beside
+             * `(defopaque Product :int)` -- found no representative and
+             * hard-errored with "no instance '<Class> tyvar'".
+             *
+             * A non-pointer opaque newtype IS the int64 carrier at runtime
+             * (AdtDef.is_opaque with opaque_base_is_ptr false), so it is as
+             * valid a polymorphic-base representative as a bare `int`, and
+             * emit-side re-resolution specializes it per monomorphization --
+             * PROVIDED there is a specialization to re-resolve into.
+             *
+             * That proviso is the gate.  Specs are split on argument types, and
+             * `Sum` / `Product` are distinct `Type`s even though both render
+             * int64, so a generic that takes one as a PARAMETER interns two
+             * specs and Gap H names them `..._int64_t` / `..._int64_t__h1`.  A
+             * generic whose class tyvar reaches no parameter
+             * (`(defn zero-of [^Mo A] [] : A (mz))`) interns ONE spec for every
+             * instantiation, so a representative picked here would be baked in
+             * for all of them: `Sum` and `Product` would both answer with
+             * whichever instance was chosen, silently.  Requiring the tyvar to
+             * reach a parameter keeps that shape on its existing hard error,
+             * which is the right answer until return-only specialization can
+             * distinguish same-carrier newtypes.
+             *
+             * Prefer a real `int` head when one exists, so the representative
+             * choice is unchanged for every class that has one.  The
+             * receiver-directed twin in elab_method_call has had this two-tier
+             * shape since constrained-generic-instance-element-dispatch; this is
+             * the return-directed version, which never grew it. */
+            bool tyvar_reaches_param = false;
+            if (bound.as.tyvar_.name) {
+                for (uint8_t ci = 0; ci < e->cur_fn_n_constraints && ci < 32; ci++) {
+                    const TypeConstraint *con = &e->cur_fn_constraints[ci];
+                    if (!con || con->typeclass != tc) continue;
+                    if (!con->tyvar || !con->tyvar->name) continue;
+                    if (strcmp(con->tyvar->name, bound.as.tyvar_.name) != 0) continue;
+                    if (e->cur_fn_constraint_param_mask & (1u << ci))
+                        tyvar_reaches_param = true;
                     break;
                 }
             }
+            TypeClassInstance *carrier_opaque = NULL;
+            for (TypeClassInstance *it = env->instances; it; it = it->next) {
+                if (it->typeclass != tc) continue;
+                if (midx >= it->n_method_impls || !it->method_impls[midx]) continue;
+                if (it->n_type_args == 0) continue;
+                if (it->type_args[0].kind == TY_INT) { inst = it; break; }
+                if (!carrier_opaque && tyvar_reaches_param &&
+                    it->type_args[0].kind == TY_ADT) {
+                    const AdtDef *ad = it->type_args[0].as.adt_.def;
+                    if (ad && ad->is_opaque && !ad->opaque_base_is_ptr)
+                        carrier_opaque = it;
+                }
+            }
+            if (!inst) inst = carrier_opaque;
             /* constrained-hkt-pure-and-byvalue-carriers (gap 1): the search above
              * looks for a kind-`*` `int`-headed representative, which a
              * higher-kinded class never has -- every `Applicative`/`Monad`
@@ -6838,15 +6887,14 @@ found_method:;
             return elab_hoist_control_operands(e, df);
         }
         /* typeclass-method-resolution-ignores-the-class (symptom A): before
-         * claiming the method does not exist, ask the CLASS table.  Dispatch
-         * resolves by walking registered INSTANCES, so a class whose instances
-         * are all declared further down the file has nothing to match yet --
-         * and the old text ("no typeclass method found") then denied the
-         * existence of a method declared a few lines above, in the defclass,
-         * and never hinted that moving the definstance up is the fix.
+         * claiming the method does not exist, ask the CLASS table.  The old
+         * text ("no typeclass method found") denied the existence of a method
+         * declared a few lines above, in the defclass.
          *
-         * Name the real cause instead.  Still an error -- resolution genuinely
-         * cannot proceed here -- but an actionable one. */
+         * Since symptom A was fixed, a `definstance` declared BELOW the use
+         * resolves (the driver defers and retries such a defn), so reaching
+         * here with zero registered instances means the program declares none
+         * at all -- not that one is merely out of order. */
         {
             TypeClass *owner = NULL;
             for (TypeClass *c = e->typeclass_env.typeclasses; c && !owner;
@@ -6867,16 +6915,23 @@ found_method:;
                     if (inst->typeclass == owner) n_inst++;
                 const char *cls = owner->name ? owner->name->name : "?";
                 if (n_inst == 0) {
-                    /* Nothing of this class is registered yet.  Either none was
-                     * written, or it sits BELOW this use -- instances register
-                     * in source order, so a later one is not in scope here. */
+                    /* No instance of this class exists in the program.
+                     *
+                     * This used to add "instances register in source order:
+                     * place it ABOVE this use", because a `definstance` below
+                     * the use genuinely did not resolve (symptom A).  That is
+                     * fixed -- a defn that cannot resolve a class method is
+                     * elaborated speculatively and retried after every form in
+                     * its unit, so declaration order no longer matters -- and
+                     * the advice would now send the reader to move a form that
+                     * is already fine.  Reaching here means there is no
+                     * instance ANYWHERE, which is a different problem. */
                     diag_emit_with_code(DIAG_ERROR, call->span,
                         TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED,
-                        "'%.*s' is a method of typeclass '%s', but no '%s' "
-                        "instance is visible here, so the call cannot be "
-                        "resolved. Instances are registered in source order: "
-                        "declare a (definstance %s [...] ...), and place it "
-                        "ABOVE this use.",
+                        "'%.*s' is a method of typeclass '%s', but this program "
+                        "declares no '%s' instance at all, so the call cannot be "
+                        "resolved. Add a (definstance %s [...] ...) -- it may "
+                        "appear anywhere in the file, above or below this use.",
                         (int)method_name_len, method_name, cls, cls, cls);
                 } else {
                     /* Instances of this class DO exist and are in scope; none

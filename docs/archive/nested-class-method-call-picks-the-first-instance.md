@@ -5,7 +5,9 @@ specialization calls the `int` instance and truncates the double. No
 diagnostic, no warning from `tur`, and the interpreter answers correctly, so a
 `--interpret` cross-check hides it rather than exposing it.
 
-**Status:** open. Found 2026-09-11 while probing the typeclass shapes for
+**RESOLVED 2026-09-11** -- see Execution at the end.
+
+**Status when filed:** open. Found 2026-09-11 while probing the typeclass shapes for
 [crdt-spice-plan.md](../upcoming/crdt-spice-plan.md). Reproduced against
 `build/tur` at **v0.46.1** (Debug, macOS arm64) -- binary and stdlib stamps
 matched.
@@ -157,3 +159,72 @@ is the existing class most exposed, and a `Semigroup`/`Monoid`/lattice family
 exposed. That is why this report exists: it blocks
 [crdt-spice-plan.md](../upcoming/crdt-spice-plan.md) and any lattice-vocabulary
 work until fixed or worked around.
+
+
+## Execution -- RESOLVED 2026-09-11
+
+### Where it actually was
+
+Not in elaboration. `emit_reresolve_disp_type` (`src/compiler/emit_core.c`) is
+the emit-side chokepoint that re-targets a class-method call per
+specialization, and it acts **only on a genuine tyvar** dispatch type -- "a
+concrete receiver/result already baked the correct instance at elaboration".
+
+For a nested call that premise is false. The outer call's receiver is the inner
+call's *result*, whose elaborated type is the representative instance's int64
+carrier, so `emit_dispatch_tyvar` saw a concrete `int`, bailed, and left the
+outer call on `__inst_JS_join_int` while the inner one correctly retargeted:
+
+```c
+static double f__spec__double_double_double(double x, double y) {
+        double  __ps_276 = (__inst_JS_join_float(x, y));   /* inner: right */
+        int64_t __ps_277 = (__inst_JS_join_int(__ps_276, y)); /* outer: WRONG */
+}
+```
+
+The function already carried several recovery branches for other
+erased-receiver shapes (a `TY_APP` embedding the class var; a field extraction
+from a parametric container). This was one more: **the receiver is itself a
+re-resolved class-method call.**
+
+### The fix
+
+When the receiver (ascriptions peeled) is an `EX_CALL` carrying a dict arg, and
+the inner method's declared return is the bare class variable -- every
+`a -> a -> a` shape, which is why a Semigroup-style family is entirely exposed
+-- the receiver's effective dispatch type is the inner call's *resolved* one.
+Recover it by re-resolving the receiver. The recursion walks strictly inward
+along receivers, so it terminates; a receiver whose own dispatch cannot be
+resolved leaves the outer call exactly as before.
+
+Restricted to the bare-class-var return deliberately: a method returning a
+compound shape needs the pattern extraction the `TY_APP` branch already does.
+
+### Registered as a crossing
+
+R4's audit registry flagged the new call site (`emit_reresolve_disp_type
+emit_core.c: 2 -> 3`) and failed `tests/run.sh` before any fixture ran --
+working exactly as designed. `docs/artifacts/crossing-routing-audit.txt` is
+regenerated and row **G8** is added to the audit table in
+`docs/archive/carrier-concrete-abi-crossing-audit-plan.md`.
+
+### Verified
+
+- `tests/run.sh`: **2948 passed, 0 failed**.
+- `tests/fixtures/typeclass-nested-method-call-float` -- float, int and cstr,
+  at two and three levels of nesting, with `int` declared first so the
+  first-instance fallback would be wrong.
+- `tests/type-fuzz-src.py --known-probes` reports this row **FIXED** via the
+  wrong-output arm; the `class_nested` shape is returned to the default
+  generation pool and 80 cases at a fresh seed find nothing.
+
+### One thing this did NOT fix
+
+The **interpreter** has its own copy, for a non-int non-float instance:
+`tur --interpret` resolves a nested `cstr` or `bool` call to the first-declared
+`int` instance and dies with `unknown infix builtin '<'`. Float is correct
+there, which is why this report originally recorded "`--interpret` answers
+correctly, so a turi cross-check hides it" -- true for float, false for bool and
+cstr. Filed as
+[turi-nested-class-method-call-picks-first-instance](turi-nested-class-method-call-picks-first-instance.md),
+and the fixture carries a `requires.compiled` marker naming it.

@@ -1,0 +1,25 @@
+;; The other side of the gate in typeclass-nullary-method-newtype-tyvar.
+;;
+;; `zero-of`'s class tyvar A reaches no PARAMETER, so monomorphization has
+;; nothing to split on: both instantiations share one spec, and a representative
+;; chosen here would be baked in for all of them -- `Sum` and `Product` would
+;; both answer with whichever instance won, silently.
+;;
+;; Keeping the hard error is the right answer until return-only specialization
+;; can distinguish same-carrier newtypes.  This fixture exists so that a future
+;; widening of the gate cannot quietly turn this into a wrong answer: if it
+;; ever compiles, the specs must be checked first.
+(defclass Mo [a] (mz [] : a))
+(defopaque Sum     :int)
+(defopaque Product :int)
+(definstance Mo [Sum]     (mz [] (:: 0 Sum)))
+(definstance Mo [Product] (mz [] (:: 1 Product)))
+
+(defn zero-of [^Mo A] [] : A (mz))
+
+(defn main [] : int
+  (let [s : Sum     (zero-of)
+        p : Product (zero-of)]
+    (println (:: s int))
+    (println (:: p int)))
+  0)

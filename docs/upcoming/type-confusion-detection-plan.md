@@ -17,8 +17,8 @@ an integer. Recent instances, all within two releases -- the `any` -> scalar
 cast miscompiling in the JIT engine, the `Sym` ctor emitted taking `int64_t`
 while its caller passed `const struct __tur_sym *`, eight Saffron `any`-seam
 fixes, and the two defects filed while probing the lattice vocabulary
-([nested-class-method-call-picks-the-first-instance](../reported/nested-class-method-call-picks-the-first-instance.md),
-[nullary-class-method-unresolvable-over-newtype-tyvar](../reported/nullary-class-method-unresolvable-over-newtype-tyvar.md)).
+([nested-class-method-call-picks-the-first-instance](../archive/nested-class-method-call-picks-the-first-instance.md),
+[nullary-class-method-unresolvable-over-newtype-tyvar](../archive/nullary-class-method-unresolvable-over-newtype-tyvar.md)).
 
 The answer to "can this be fuzzed" is yes -- and the more useful answer is
 that **it already is, by four fuzzers, and the cheapest missing detector is
@@ -139,7 +139,7 @@ leg.defs.append("(definstance %s [%s] (%s [self : %s] : %s self))"
 ```
 
 Three properties follow, and each one independently makes
-[defect 1](../reported/nested-class-method-call-picks-the-first-instance.md)
+[defect 1](../archive/nested-class-method-call-picks-the-first-instance.md)
 unreachable:
 
 1. **One instance per class.** The class name is freshly generated per
@@ -158,7 +158,7 @@ Defect 1 requires all three of: a constrained generic body, a nested
 same-class call, and a non-first instance. The generator supplies none of
 them.
 
-[Defect 2](../reported/nullary-class-method-unresolvable-over-newtype-tyvar.md)
+[Defect 2](../archive/nullary-class-method-unresolvable-over-newtype-tyvar.md)
 is missed for a fourth reason: no generated method is **nullary**. Every method
 takes `self`, so a method whose class variable appears only in the return type
 is outside the space entirely.
@@ -296,7 +296,7 @@ The precedent report's entire lesson is that "a grep that silently matches
 nothing looks exactly like a clean corpus," and that two earlier sweeps
 reported false zeros. So the zero above is only meaningful alongside a positive
 control. Building
-[defect 1](../reported/nested-class-method-call-picks-the-first-instance.md)'s
+[defect 1](../archive/nested-class-method-call-picks-the-first-instance.md)'s
 repro through `tur build` with **the same `TUR_CC_FLAGS`** the sweep used:
 
 ```
@@ -451,7 +451,7 @@ condition is not met. Left in section 4 as the escape hatch it was written as.
 - Blocked-on consumers: [lattice-vocabulary-plan.md](lattice-vocabulary-plan.md),
   [crdt-spice-plan.md](crdt-spice-plan.md).
 - Defects this plan would have caught:
-  [nested-class-method-call-picks-the-first-instance](../reported/nested-class-method-call-picks-the-first-instance.md),
-  [nullary-class-method-unresolvable-over-newtype-tyvar](../reported/nullary-class-method-unresolvable-over-newtype-tyvar.md).
+  [nested-class-method-call-picks-the-first-instance](../archive/nested-class-method-call-picks-the-first-instance.md),
+  [nullary-class-method-unresolvable-over-newtype-tyvar](../archive/nullary-class-method-unresolvable-over-newtype-tyvar.md).
 - In-tree: `docs/guides/value-representations-guide.md` (the representation and
   boundary inventory the type fuzzer walks).

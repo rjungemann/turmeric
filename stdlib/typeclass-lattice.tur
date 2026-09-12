@@ -1,0 +1,479 @@
+;;; tur/typeclass-lattice -- Semigroup, Monoid, and the selection newtypes.
+;;;
+;;; The vocabulary for "these two values combine, associatively". Turmeric had
+;;; none of it: no `Semigroup`, no `Monoid`, no name for the operation that
+;;; `effects-chain` in tur-signal and `Category`'s `comp` in stdlib/arrow.tur
+;;; each hand-roll for one shape.
+;;;
+;;; NOT auto-loaded -- `(load "stdlib/typeclass-lattice.tur")` to use it. The
+;;; auto-load list is paid by every TU in every build, and nothing in stdlib
+;;; depends on these classes.
+;;;
+;;; Since: lattice-vocabulary-plan L2 (lattice four: L3)
+;;
+;; Deliberately ships NO instance for a bare primitive.  `int` is a monoid
+;; four different ways -- sum, product, min, max -- so any one of them shipped
+;; as `Semigroup [int]` would pick a winner arbitrarily, and a user who wanted a
+;; different one could not have it: a colliding `definstance` from outside
+;; stdlib/ is a hard TUR-E0373 (reject, not replace).  The selection newtypes
+;; below carry every algebra instead, and `Semigroup [int]` stays free for a
+;; user to define unopposed.
+;;
+;; No inline C anywhere in this file, on purpose: tests/run-turi.sh PASS-skips
+;; any fixture whose program contains a user inline-C block, so a single such
+;; block here would cost interpreter coverage for every fixture that loads it.
+;; That is also why the MinI/MaxI identities are spelled as int64 literals
+;; rather than pulled from <stdint.h>.
+
+;;; Semigroup -- an associative binary operation.
+;;;
+;;; Parameters:
+;;;   a -- the type being combined
+;;;
+;;; Laws:
+;;;   associativity -- (combine (combine x y) z) = (combine x (combine y z))
+;;;
+;;; Example:
+;;;   (combine (:: 3 Sum) (:: 7 Sum))   ; => Sum 10
+;;;
+;;; Since: lattice-vocabulary-plan L2
+(defclass Semigroup [a]
+  (combine [x : a y : a] : a))
+
+;;; Monoid -- a Semigroup with an identity element.
+;;;
+;;; Parameters:
+;;;   a -- the type being combined
+;;;
+;;; Laws:
+;;;   identity -- (combine (mempty) x) = x = (combine x (mempty))
+;;;
+;;; Example:
+;;;   (let [unit : Sum (mempty)] (combine unit (:: 3 Sum)))   ; => Sum 3
+;;;
+;;; Note the binding: `(combine (mempty) x)` does not elaborate, because
+;;; argument inference runs left-to-right and in first position `mempty` has
+;;; nothing to fix its type yet.  In second position, or bound to a typed
+;;; local, it is fine.
+;;;
+;;; Since: lattice-vocabulary-plan L2
+;;
+;; Flat, not a subclass of Semigroup: defclass has no superclasses, so a
+;; function needing both lists both constraints (`[^Semigroup A ^Monoid A]`).
+(defclass Monoid [a]
+  (mempty [] : a))
+
+;; -- selection newtypes -------------------------------------------------------
+;;
+;; One carrier, several algebras.  Values are made by ascription --
+;; `(:: 3 Sum)` -- and the carrier read back the same way, `(:: s int)`.
+
+;;; Sum -- int under addition. Identity 0.
+(defopaque Sum :int)
+;;; Product -- int under multiplication. Identity 1.
+(defopaque Product :int)
+;;; MinI -- int under minimum. Identity is the largest int64.
+(defopaque MinI :int)
+;;; MaxI -- int under maximum. Identity is the smallest int64.
+(defopaque MaxI :int)
+;;; Any -- bool under disjunction. Identity false.
+(defopaque Any :bool)
+;;; All -- bool under conjunction. Identity true.
+(defopaque All :bool)
+
+;; -- Eq, so the law functions below can compare ------------------------------
+;;
+;; A defopaque inherits nothing; each needs its own instance.
+
+;;; Eq [Sum] -- structural equality on the carrier.
+(definstance Eq [Sum]     (eq? [x y] (= (:: x int) (:: y int))))
+;;; Eq [Product] -- structural equality on the carrier.
+(definstance Eq [Product] (eq? [x y] (= (:: x int) (:: y int))))
+;;; Eq [MinI] -- structural equality on the carrier.
+(definstance Eq [MinI]    (eq? [x y] (= (:: x int) (:: y int))))
+;;; Eq [MaxI] -- structural equality on the carrier.
+(definstance Eq [MaxI]    (eq? [x y] (= (:: x int) (:: y int))))
+;;; Eq [Any] -- structural equality on the carrier.
+(definstance Eq [Any]     (eq? [x y] (= (:: x bool) (:: y bool))))
+;;; Eq [All] -- structural equality on the carrier.
+(definstance Eq [All]     (eq? [x y] (= (:: x bool) (:: y bool))))
+
+;; -- Semigroup instances ------------------------------------------------------
+
+;;; Semigroup [Sum] -- addition.
+(definstance Semigroup [Sum]
+  (combine [x y] (:: (+ (:: x int) (:: y int)) Sum)))
+;;; Semigroup [Product] -- multiplication.
+(definstance Semigroup [Product]
+  (combine [x y] (:: (* (:: x int) (:: y int)) Product)))
+;;; Semigroup [MinI] -- minimum.
+(definstance Semigroup [MinI]
+  (combine [x y] (if (< (:: x int) (:: y int)) x y)))
+;;; Semigroup [MaxI] -- maximum.
+(definstance Semigroup [MaxI]
+  (combine [x y] (if (< (:: x int) (:: y int)) y x)))
+;;; Semigroup [Any] -- disjunction.
+(definstance Semigroup [Any]
+  (combine [x y] (:: (or (:: x bool) (:: y bool)) Any)))
+;;; Semigroup [All] -- conjunction.
+(definstance Semigroup [All]
+  (combine [x y] (:: (and (:: x bool) (:: y bool)) All)))
+
+;; -- Monoid instances ---------------------------------------------------------
+;;
+;; MinI / MaxI take the int64 bounds as their identities.  Spelled as literals
+;; because stdlib has no INT64_MAX constant and adding one would mean inline C
+;; in this file (see the header note).
+
+;;; Monoid [Sum] -- identity 0.
+(definstance Monoid [Sum]     (mempty [] (:: 0 Sum)))
+;;; Monoid [Product] -- identity 1.
+(definstance Monoid [Product] (mempty [] (:: 1 Product)))
+;;; Monoid [MinI] -- identity is the largest int64.
+(definstance Monoid [MinI]    (mempty [] (:: 9223372036854775807 MinI)))
+;;; Monoid [MaxI] -- identity is the smallest int64.
+(definstance Monoid [MaxI]    (mempty [] (:: -9223372036854775807 MaxI)))
+;;; Monoid [Any] -- identity false.
+(definstance Monoid [Any]     (mempty [] (:: false Any)))
+;;; Monoid [All] -- identity true.
+(definstance Monoid [All]     (mempty [] (:: true All)))
+
+;; -- laws ---------------------------------------------------------------------
+;;
+;; `Semigroup` and `JoinSemilattice` (L3) declare the same shape and differ ONLY
+;; in their laws, so the laws are the content and ship with the classes rather
+;; than after them.
+;;
+;; `law-associative?` is also a regression test for
+;; docs/archive/nested-class-method-call-picks-the-first-instance.md: a NESTED
+;; class-method call inside a constrained generic used to resolve its outer call
+;; to the first-declared instance, which is precisely `(combine (combine x y) z)`.
+;; `law-identity?` is one for
+;; docs/archive/nullary-class-method-unresolvable-over-newtype-tyvar.md: a
+;; nullary method over a newtype tyvar would not resolve at all.
+
+;;; law-associative? -- does combine associate for these three values?
+;;;
+;;; Parameters:
+;;;   x y z -- values to check
+;;;
+;;; Returns:
+;;;   true when (combine (combine x y) z) equals (combine x (combine y z)).
+;;;
+;;; Example:
+;;;   (law-associative? (:: 1 Sum) (:: 2 Sum) (:: 3 Sum))   ; => true
+;;;
+;;; Since: lattice-vocabulary-plan L2
+(defn law-associative? [^Semigroup A ^Eq A] [x : A y : A z : A] : bool
+  (eq? (combine (combine x y) z) (combine x (combine y z))))
+
+;;; law-identity? -- is mempty a two-sided identity for this value?
+;;;
+;;; Parameters:
+;;;   x -- value to check
+;;;
+;;; Returns:
+;;;   true when (combine (mempty) x) and (combine x (mempty)) both equal x.
+;;;
+;;; Example:
+;;;   (law-identity? (:: 5 Product))   ; => true
+;;;
+;;; Since: lattice-vocabulary-plan L2
+;;
+;; `x : A` is load-bearing beyond the check itself: the class variable must
+;; reach a PARAMETER for `(mempty)` to resolve.  A generic whose tyvar appears
+;; only in the return type interns one specialization for every instantiation,
+;; so the representative would be baked in for all of them -- see
+;; tests/fixtures/errors/typeclass-nullary-return-only-newtype.
+;; The identity is bound to an `: A`-declared local rather than written inline.
+;; `(combine (mempty) x)` does not elaborate: argument inference runs
+;; left-to-right, so in FIRST position `mempty` has nothing to fix its type yet
+;; and the call is "cannot infer type for return-directed method 'mempty'".
+;; In second position it is fine, because `x : A` has already fixed the class
+;; variable -- but then only one side of the law could be written.  The let's
+;; declared type supplies what first position lacks, and states the law more
+;; plainly besides.
+(defn law-identity? [^Semigroup A ^Monoid A ^Eq A] [x : A] : bool
+  (let [unit : A (mempty)]
+    (and (eq? (combine unit x) x)
+         (eq? (combine x unit) x))))
+
+;; -- folding -------------------------------------------------------------------
+
+;;; mconcat-from -- fold a Vec into an accumulator with combine.
+;;;
+;;; Parameters:
+;;;   v   -- the Vec to fold
+;;;   i   -- index to start at
+;;;   n   -- index to stop before
+;;;   acc -- accumulator
+;;;
+;;; Returns:
+;;;   acc combined with v[i..n).
+;;;
+;;; Since: lattice-vocabulary-plan L4
+(defn mconcat-from [^Semigroup A ^Monoid A] [v : (Vec A) i : int n : int acc : A] : A
+  (if (>= i n)
+    acc
+    (mconcat-from v (+ i 1) n (combine acc (vec-get v i)))))
+
+;;; mconcat -- combine every element of a Vec, left to right, from mempty.
+;;;
+;;; Parameters:
+;;;   v -- the Vec to fold
+;;;
+;;; Returns:
+;;;   mempty when v is empty, else v[0] combined with the rest in order.
+;;;
+;;; Example:
+;;;   (mconcat (vec-of (:: 1 Sum) (:: 2 Sum) (:: 3 Sum)))   ; => Sum 6
+;;;
+;;; Since: lattice-vocabulary-plan L4
+;;
+;; This is what L4 set out to find: `effects-chain` in tur-signal is a
+;; hand-written recursion that threads a signal through a Vec of signal
+;; functions, and a signal function is an endomorphism -- so the loop is this
+;; fold over the endomorphism monoid.  Verified end to end on that shape,
+;; closures and all.
+;;
+;; `(Vec A)` mentions the class variable, which is what lets `(mempty)` resolve:
+;; a constrained generic whose tyvar reaches no parameter interns one
+;; specialization for every instantiation and cannot be re-resolved (see
+;; tests/fixtures/errors/typeclass-nullary-return-only-newtype).  An empty Vec
+;; still answers `mempty` correctly here precisely BECAUSE the Vec parameter
+;; carries the type -- which is the whole reason an identity earns its keep.
+(defn mconcat [^Semigroup A ^Monoid A] [v : (Vec A)] : A
+  (let [unit : A (mempty)]
+    (mconcat-from v 0 (vec-len v) unit)))
+
+;; ============================================================================
+;; The lattice four -- lattice-vocabulary-plan L3.
+;; ============================================================================
+;;
+;; `JoinSemilattice` declares exactly the shape `Semigroup` does.  The two
+;; differ ONLY in their laws -- a join is additionally COMMUTATIVE and
+;; IDEMPOTENT -- which is why the laws below are the content of this section and
+;; not an afterthought.  Without them a JoinSemilattice is a Semigroup with a
+;; longer name.
+;;
+;; There is no superclass relating them (defclass has none), so `join`'s
+;; associativity law is restated here rather than borrowed from
+;; `law-associative?`.  That duplication is the honest cost; a constraint-alias
+;; feature would remove it, and is worth considering only if it is felt again.
+
+;;; JoinSemilattice -- associative, commutative, IDEMPOTENT combine (least upper bound).
+;;;
+;;; Parameters:
+;;;   a -- the type being joined
+;;;
+;;; Laws:
+;;;   associativity -- (join (join x y) z) = (join x (join y z))
+;;;   commutativity -- (join x y) = (join y x)
+;;;   idempotence   -- (join x x) = x
+;;;
+;;; Example:
+;;;   (join (:: 3 MaxI) (:: 7 MaxI))   ; => MaxI 7
+;;;
+;;; Since: lattice-vocabulary-plan L3
+(defclass JoinSemilattice [a]
+  (join [x : a y : a] : a))
+
+;;; MeetSemilattice -- the dual of JoinSemilattice (greatest lower bound).
+;;;
+;;; Parameters:
+;;;   a -- the type being met
+;;;
+;;; Laws:
+;;;   associativity, commutativity, idempotence -- as for join
+;;;
+;;; Example:
+;;;   (meet (:: 3 MinI) (:: 7 MinI))   ; => MinI 3
+;;;
+;;; Since: lattice-vocabulary-plan L3
+(defclass MeetSemilattice [a]
+  (meet [x : a y : a] : a))
+
+;;; BoundedJoin -- a JoinSemilattice with a least element.
+;;;
+;;; Laws:
+;;;   identity -- (join (bottom) x) = x
+;;;
+;;; Example:
+;;;   (let [z : MaxI (bottom)] (join z (:: 3 MaxI)))   ; => MaxI 3
+;;;
+;;; Since: lattice-vocabulary-plan L3
+(defclass BoundedJoin [a]
+  (bottom [] : a))
+
+;;; BoundedMeet -- a MeetSemilattice with a greatest element.
+;;;
+;;; Laws:
+;;;   identity -- (meet (top) x) = x
+;;;
+;;; Example:
+;;;   (let [t : MinI (top)] (meet t (:: 3 MinI)))   ; => MinI 3
+;;;
+;;; Since: lattice-vocabulary-plan L3
+(defclass BoundedMeet [a]
+  (top [] : a))
+
+;; -- instances ----------------------------------------------------------------
+;;
+;; Same rule as the Semigroup half: no bare-primitive instances.  Each newtype
+;; carries the ONE lattice its name already commits it to, so nothing here picks
+;; an algebra arbitrarily:
+;;
+;;   MaxI  join = max, bottom = smallest int64
+;;   MinI  meet = min, top    = largest  int64
+;;   Any   join = or,  bottom = false
+;;   All   meet = and, top    = true
+;;
+;; `MaxI` is deliberately NOT given a `meet`, nor `MinI` a `join`: a type whose
+;; name says "maximum" has one lattice, and giving it both would re-introduce
+;; exactly the arbitrary choice the newtypes exist to avoid.
+
+;;; JoinSemilattice [MaxI] -- least upper bound is the larger int.
+(definstance JoinSemilattice [MaxI]
+  (join [x y] (if (< (:: x int) (:: y int)) y x)))
+;;; BoundedJoin [MaxI] -- least element is the smallest int64.
+(definstance BoundedJoin [MaxI]
+  (bottom [] (:: -9223372036854775807 MaxI)))
+
+;;; MeetSemilattice [MinI] -- greatest lower bound is the smaller int.
+(definstance MeetSemilattice [MinI]
+  (meet [x y] (if (< (:: x int) (:: y int)) x y)))
+;;; BoundedMeet [MinI] -- greatest element is the largest int64.
+(definstance BoundedMeet [MinI]
+  (top [] (:: 9223372036854775807 MinI)))
+
+;;; JoinSemilattice [Any] -- disjunction.
+(definstance JoinSemilattice [Any]
+  (join [x y] (:: (or (:: x bool) (:: y bool)) Any)))
+;;; BoundedJoin [Any] -- least element is false.
+(definstance BoundedJoin [Any]
+  (bottom [] (:: false Any)))
+
+;;; MeetSemilattice [All] -- conjunction.
+(definstance MeetSemilattice [All]
+  (meet [x y] (:: (and (:: x bool) (:: y bool)) All)))
+;;; BoundedMeet [All] -- greatest element is true.
+(definstance BoundedMeet [All]
+  (top [] (:: true All)))
+
+;; -- lattice laws -------------------------------------------------------------
+
+;;; law-join-associative? -- does join associate?
+;;;
+;;; Parameters:
+;;;   x y z -- values to check
+;;;
+;;; Returns:
+;;;   true when (join (join x y) z) equals (join x (join y z)).
+;;;
+;;; Example:
+;;;   (law-join-associative? (:: 1 MaxI) (:: 2 MaxI) (:: 3 MaxI))   ; => true
+;;;
+;;; Since: lattice-vocabulary-plan L3
+(defn law-join-associative? [^JoinSemilattice A ^Eq A] [x : A y : A z : A] : bool
+  (eq? (join (join x y) z) (join x (join y z))))
+
+;;; law-join-commutative? -- does join commute?
+;;;
+;;; Parameters:
+;;;   x y -- values to check
+;;;
+;;; Returns:
+;;;   true when (join x y) equals (join y x).
+;;;
+;;; Example:
+;;;   (law-join-commutative? (:: 1 MaxI) (:: 2 MaxI))   ; => true
+;;;
+;;; Since: lattice-vocabulary-plan L3
+(defn law-join-commutative? [^JoinSemilattice A ^Eq A] [x : A y : A] : bool
+  (eq? (join x y) (join y x)))
+
+;;; law-join-idempotent? -- is join idempotent?
+;;;
+;;; Parameters:
+;;;   x -- value to check
+;;;
+;;; Returns:
+;;;   true when (join x x) equals x.
+;;;
+;;; Example:
+;;;   (law-join-idempotent? (:: 1 MaxI))   ; => true
+;;;
+;;; Since: lattice-vocabulary-plan L3
+;;
+;; Idempotence is what separates a join from an ordinary Semigroup, and it is
+;; the law a CRDT actually leans on: re-delivering the same state must not
+;; change the result.
+(defn law-join-idempotent? [^JoinSemilattice A ^Eq A] [x : A] : bool
+  (eq? (join x x) x))
+
+;;; law-bottom-identity? -- is bottom a left identity for join?
+;;;
+;;; Parameters:
+;;;   x -- value to check
+;;;
+;;; Returns:
+;;;   true when (join (bottom) x) equals x.
+;;;
+;;; Example:
+;;;   (law-bottom-identity? (:: 3 MaxI))   ; => true
+;;;
+;;; Since: lattice-vocabulary-plan L3
+(defn law-bottom-identity? [^JoinSemilattice A ^BoundedJoin A ^Eq A] [x : A] : bool
+  (let [z : A (bottom)]
+    (eq? (join z x) x)))
+
+;;; lattice-leq? -- the partial order induced by join.
+;;;
+;;; Parameters:
+;;;   x -- candidate lower value
+;;;   y -- candidate upper value
+;;;
+;;; Returns:
+;;;   true when (join x y) equals y, i.e. x <= y in the lattice order.
+;;;
+;;; Example:
+;;;   (lattice-leq? (:: 3 MaxI) (:: 7 MaxI))   ; => true
+;;;
+;;; Since: lattice-vocabulary-plan L3
+;;
+;; This is the reason a join-semilattice is worth naming: the order comes free
+;; from the operation, so a CRDT's "has this replica seen at least that much"
+;; is one call rather than a hand-written comparison per state type.
+(defn lattice-leq? [^JoinSemilattice A ^Eq A] [x : A y : A] : bool
+  (eq? (join x y) y))
+
+;;; law-meet-idempotent? -- is meet idempotent?
+;;;
+;;; Parameters:
+;;;   x -- value to check
+;;;
+;;; Returns:
+;;;   true when (meet x x) equals x.
+;;;
+;;; Example:
+;;;   (law-meet-idempotent? (:: 1 MinI))   ; => true
+;;;
+;;; Since: lattice-vocabulary-plan L3
+(defn law-meet-idempotent? [^MeetSemilattice A ^Eq A] [x : A] : bool
+  (eq? (meet x x) x))
+
+;;; law-top-identity? -- is top a left identity for meet?
+;;;
+;;; Parameters:
+;;;   x -- value to check
+;;;
+;;; Returns:
+;;;   true when (meet (top) x) equals x.
+;;;
+;;; Example:
+;;;   (law-top-identity? (:: 3 MinI))   ; => true
+;;;
+;;; Since: lattice-vocabulary-plan L3
+(defn law-top-identity? [^MeetSemilattice A ^BoundedMeet A ^Eq A] [x : A] : bool
+  (let [t : A (top)]
+    (eq? (meet t x) x)))

@@ -505,6 +505,24 @@ typedef struct Elab {
      * Saved/restored around the body alongside the HKT ambient below, so a
      * nested defn's own constraints shadow the enclosing one's. */
     TypeConstraint *cur_fn_constraints;
+    /* nullary-class-method-unresolvable-over-newtype-tyvar: bit `ci` is set
+     * when constraint `ci`'s tyvar appears in at least one PARAMETER type of
+     * the enclosing generic.
+     *
+     * The distinction matters because monomorphization splits specializations
+     * on argument types: two instantiations at same-carrier `defopaque`
+     * newtypes (`Sum` vs `Product`, both int64) are distinct `Type`s, so their
+     * arg vectors differ, two specs are interned, and Gap H's `__h<n>`
+     * discriminator names them apart.  A constraint whose tyvar reaches no
+     * parameter has nothing to split on -- both call sites share one spec --
+     * so a representative chosen for it can never be re-resolved, and picking
+     * one would be a silent wrong answer rather than a deferred decision.
+     *
+     * `TypeConstraint.return_resolved` answers almost this question, but only
+     * for the `where (Class tyvar)` syntax; the `[^Class A]` caret forms hard-
+     * code it false, and their construction sites run before params exist.
+     * This mask is computed where both are in scope. */
+    uint32_t        cur_fn_constraint_param_mask;
     uint8_t         cur_fn_n_constraints;
     /* typeclass-method-resolution-ignores-the-class: nesting depth inside
      * elab_definstance.  An instance method body legitimately calls class

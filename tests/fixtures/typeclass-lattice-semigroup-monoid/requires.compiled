@@ -1,0 +1,10 @@
+The law functions nest a class-method call inside a constrained generic
+(`(combine (combine x y) z)`), which the INTERPRETER resolves to the wrong
+instance -- so a law that must answer false answers true.  Compiled is correct;
+this fixture's whole point is that the laws discriminate, and under turi they
+do not.
+
+docs/reported/turi-nested-class-method-call-picks-first-instance.md.  The
+compiled half was fixed 2026-09-11 in emit_reresolve_disp_type; that fix is
+emit-side and does not port.  Remove this marker when the interpreter half
+lands -- the assertions are already written.
