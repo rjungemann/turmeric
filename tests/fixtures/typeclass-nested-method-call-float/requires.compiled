@@ -1,0 +1,8 @@
+The bool/cstr rows fail under `tur --interpret`: the interpreter has its own
+copy of this defect for a non-int, non-float instance -- it resolves the nested
+call to the first-declared (int) instance and dies on `unknown infix builtin
+'<'`.  Filed as docs/reported/turi-nested-class-method-call-picks-first-instance.md.
+
+The compiled rows are the point of this fixture, and dropping bool/cstr to make
+turi green would drop exactly the coverage showing the defect was never
+float-specific.  Remove this marker when the interpreter half lands.

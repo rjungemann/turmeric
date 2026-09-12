@@ -44,6 +44,12 @@ rc=0
 python3 tests/regions-fuzz-src.py --self-test --tur "$TUR" || rc=1
 python3 tests/regions-fuzz-src.py --tur "$TUR" --n "$N" --seed "$SEED" || rc=1
 
+# type-confusion-detection-plan F2: replay any seeds a nightly fuzz run
+# recorded for this harness.  The smoke run above is pinned to seed 1 and
+# therefore searches nothing; the corpus is what carries forward the seeds
+# that actually found something.  Empty corpus = a no-op that says so.
+bash tests/replay-fuzz-seeds.sh regions tests/regions-fuzz-src.py "$TUR" "$N" || rc=1
+
 if [ $rc -ne 0 ]; then
   echo "FAIL regions-fuzz-src"
 else

@@ -1,0 +1,33 @@
+;; typeclass-method-resolution-ignores-the-class (symptom A) -- RESOLVED.
+;;
+;; An instance declared BELOW a constrained generic that dispatches on it used
+;; to be an error: instances register in source order, so nothing was visible
+;; to the body when it elaborated.  Moving the definstance up was the fix, and
+;; no guide documented the ordering rule.
+;;
+;; Reordering the elaborator does not fix this -- instance bodies call ordinary
+;; defns (stdlib's `Eq [Map]` calls `map-count`), so defn bodies must precede
+;; instance bodies just as surely as instances must precede the defn bodies
+;; that dispatch on them.  That is a cycle; a two-sweep Pass 2 breaks stdlib on
+;; it.  It is broken by TIME instead: such a defn is elaborated speculatively,
+;; and on failure rolled back and re-elaborated once every form in the unit has
+;; been processed.
+;;
+;; This file was tests/fixtures/errors/typeclass-instance-declared-after-use,
+;; where it pinned the diagnostic.  It is a positive fixture now.
+(defstruct Bar [v : int])
+
+(defclass Foo [W]
+  (foo-of [^borrow w] : int))
+
+(defn use-foo [W] [(Foo W)] [^borrow w : W] : int
+  (foo-of w))
+
+;; Declared AFTER the use above.
+(definstance Foo [Bar]
+  (foo-of [w] (.v w)))
+
+(defn main [] : int
+  (let [b (make-struct Bar 111)]
+    (println (use-foo b))
+    0))

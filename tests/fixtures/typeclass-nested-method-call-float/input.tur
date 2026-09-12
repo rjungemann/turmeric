@@ -1,0 +1,43 @@
+;; nested-class-method-call-picks-the-first-instance -- RESOLVED.
+;;
+;; A NESTED class-method call inside a CONSTRAINED generic used to resolve its
+;; OUTER call to the first-declared instance.  In a float specialization the
+;; emitted C read
+;;
+;;   double  __ps0 = __inst_JS_join_float(x, y);   ;; inner: right
+;;   int64_t __ps1 = __inst_JS_join_int(__ps0, y); ;; outer: WRONG
+;;
+;; so `(join (join 2.5 7.1) 7.1)` printed 7 instead of 7.1 -- a silent wrong
+;; answer, with `tur check` clean and cc happy because the double converts.
+;; `tur --interpret` answered correctly, so a turi cross-check HID it.
+;;
+;; Three conditions are all required, and this file pins each:
+;;   1. a CONSTRAINED generic body   (`[^JS A]`)
+;;   2. a NESTED same-class call     (`(join (join ...) ...)`)
+;;   3. a NON-FIRST instance         (`int` is declared first below)
+;;
+;; The float literals must have a non-zero fractional part: an integer-valued
+;; float cannot show the truncation, which is why CLAUDE.md's float-probe rule
+;; exists.  The bool/cstr rows are here because the defect was never
+;; float-specific -- it is wrong-instance selection, and truncation was only
+;; its most legible symptom.
+(defclass JS [a] (join [x : a y : a] : a))
+
+;; int FIRST: this is the instance the broken resolver fell back to.
+(definstance JS [int]   (join [x y] (if (< x y) y x)))
+(definstance JS [float] (join [x y] (if (< x y) y x)))
+(definstance JS [cstr]  (join [x y] y))
+
+(defn join2 [^JS A] [x : A y : A] : A
+  (join (join x y) y))
+
+(defn join3 [^JS A] [x : A y : A z : A] : A
+  (join (join (join x y) z) x))
+
+(defn main [] : int
+  (println (join2 2.5 7.1))
+  (println (join2 3 9))
+  (println (join3 2.5 7.1 1.25))
+  (println (join3 3 9 5))
+  (println (join3 "a" "b" "c"))
+  0)

@@ -184,8 +184,26 @@ The pieces that would be needed:
   the question is whether a structurally-bounded parameter routes through the
   same path, and that is the first thing to establish.
 - **A diagnostic** naming the missing component and the world, pointing at the
-  `defworld` that declares the set. The failure mode for (b) today is an
-  instance-not-found error, which is noticeably worse.
+  `defworld` that declares the set.
+
+  > **Correction (2026-09-11).** This bullet used to end "The failure mode for
+  > (b) today is an instance-not-found error, which is noticeably worse." That
+  > is stale. The case it names -- calling a bounded system with a world lacking
+  > the component -- now produces:
+  >
+  > ```
+  > error [TUR-E0001]: no 'HasVel' instance for 'GameWorld' in constrained call
+  > to 'count-vel': the type bound to 'W' has no HasVel instance, but
+  > 'count-vel' requires one
+  > ```
+  >
+  > which names the class, the world, the function and the type variable, and
+  > points at the call. If the ergonomics argument for structural `has` bounds
+  > is ever revisited, argue it against this text rather than the original --
+  > the diagnostic gap this bullet claimed is closed. Recorded by
+  > `typeclass-method-resolution-ignores-the-class`, whose own remaining debt
+  > (instance registration is source-order dependent) this plan does not
+  > mention.
 
 Row types are the obvious neighbouring feature -- `ecs/query.tur` already
 exposes a row-typed `Query #row{...} #row{...}` value -- and whether `has` is a

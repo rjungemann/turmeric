@@ -170,6 +170,29 @@ else
     FAIL=$((FAIL + 1)); FAILED+=("shared build-opts")
 fi
 
+# definstance-not-dispatchable-across-modules: a typeclass instance defined in
+# one module of a spice must be dispatchable from another.  The method is never
+# `is_exported` (a definstance has no export list), so it used to be emitted
+# `static` and left out of the module header -- `tur check` was clean and cc
+# died with `call to undeclared function '__inst_Dbl_dbl_Box'`.
+#
+# Needs a MULTI-MODULE build: the single-file path has no boundary to cross,
+# which is how this survived.  Asserting on the build alone would be a weak
+# test (a future regression could re-static it and still link if the importing
+# TU happened to emit its own copy), so the header declaration is checked too.
+XMI="$SPICES/cross-module-instance"
+rm -rf "$XMI/build"
+if "$TUR" build "$XMI" >/dev/null 2>&1 \
+   && grep -q '__inst_Dbl_dbl_Box' "$XMI/build/obj/xmi__base.h" \
+   && ! grep -q 'static .*__inst_Dbl_dbl_Box' "$XMI/build/obj/xmi__base.c"; then
+    echo "PASS cross-module instance: dispatch links, method is declared and external"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL cross-module instance: a definstance in one module is not usable from another"
+    FAIL=$((FAIL + 1)); FAILED+=("cross-module instance")
+fi
+rm -rf "$XMI/build"
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

@@ -2828,6 +2828,67 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
             }
         }
     }
+    /* nested-class-method-call-picks-the-first-instance: the receiver may
+     * itself be a class-method call that this same pass re-resolves.
+     *
+     * Its ELABORATED type is the representative instance's -- the int64
+     * carrier -- because the generic body was typed against whatever
+     * carrier-compatible instance the elaborator picked first.  So
+     * emit_dispatch_tyvar sees a concrete `int` receiver and bails, and the
+     * OUTER call keeps `__inst_C_m_int` while the INNER one correctly
+     * retargets.  In a float specialization that is
+     *
+     *     double  __ps0 = __inst_JS_join_float(x, y);   // inner: right
+     *     int64_t __ps1 = __inst_JS_join_int(__ps0, y); // outer: WRONG
+     *
+     * -- a silent wrong answer (7 for 7.1), with `tur check` clean and cc
+     * happy, since the double converts.
+     *
+     * When the inner method's declared return is the class variable itself
+     * (`: a` -- every `a -> a -> a` shape: combine / join / meet, and the
+     * reason a Semigroup-style family is entirely exposed to this), the
+     * receiver's effective type IS the inner call's resolved dispatch type.
+     * Recover it by re-resolving the receiver.  The recursion walks strictly
+     * inward along receivers, so it terminates on any finite expression, and a
+     * receiver whose own dispatch cannot be resolved leaves `have_disp` false
+     * exactly as before. */
+    if (!have_disp && call->as.call_.n_args >= 1 && call->as.call_.args) {
+        const Expr *recv = call->as.call_.args[0];
+        while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
+        if (recv && recv->kind == EX_CALL && recv->as.call_.dict_arg) {
+            const Expr *idict = recv->as.call_.dict_arg;
+            if (idict->kind == EX_DICT && idict->as.dict_.instance &&
+                idict->as.dict_.method_name[0] != '\0') {
+                const TypeClass *itc = idict->as.dict_.instance->typeclass;
+                if (itc && itc->n_type_params >= 1 && itc->type_params &&
+                    itc->type_params[0] && itc->type_params[0]->name) {
+                    const char *icv = itc->type_params[0]->name;
+                    for (uint8_t mi = 0; mi < itc->n_methods; mi++) {
+                        const TypeClassMethod *m = &itc->methods[mi];
+                        if (!m->name ||
+                            strcmp(m->name->name, idict->as.dict_.method_name) != 0)
+                            continue;
+                        /* Only the bare-class-var return.  A method returning a
+                         * compound shape needs the pattern extraction the TY_APP
+                         * branch above does, not this. */
+                        if (m->return_type.kind == TY_TYVAR &&
+                            m->return_type.as.tyvar_.name &&
+                            strcmp(m->return_type.as.tyvar_.name, icv) == 0) {
+                            Type inner_resolved;
+                            const Expr *inner_dict = NULL;
+                            if (emit_reresolve_disp_type(ctx, recv, &inner_resolved,
+                                                         &inner_dict)) {
+                                disp_ty = inner_resolved;
+                                have_disp = true;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     /* constrained-instance-element-dispatch: the receiver may be a field
      * extraction from a parametric container whose element type was erased to
      * the int64 carrier at elaboration -- e.g. `(enc (.value x))` in the body of

@@ -1,11 +1,15 @@
+;; The second class is named `Rank`, not `Ord`: stdlib's Ord is auto-loaded
+;; (stdlib/typeclass-ord.tur), so a local `(defclass Ord ...)` is now
+;; `typeclass 'Ord' is already defined`.  The name was always incidental here --
+;; the method is `rank` and has nothing to do with ordering.
 ;; forall-dict-pass-multi-constraint-hkt-plan (Phase 1 acceptance): a genuinely
 ;; polymorphic constrained function `poly` with TWO scalar constraints
-;; (Show a, Ord a) is passed as a rank-2 argument and invoked at two different
+;; (Show a, Rank a) is passed as a rank-2 argument and invoked at two different
 ;; types.  Under --enable=forall-dict-pass the caller resolves BOTH instances per
 ;; call and threads one dictionary per constraint through the poly carrier; the
 ;; dict-clone dispatches `show` through dict slot 0 and `rank` through dict slot 1,
-;; each keyed on the method's own class -- so `(f 7)` runs `Show int` + `Ord int`
-;; and `(f true)` runs `Show bool` + `Ord bool`, through the one compiled body.
+;; each keyed on the method's own class -- so `(f 7)` runs `Show int` + `Rank int`
+;; and `(f true)` runs `Show bool` + `Rank bool`, through the one compiled body.
 (defclass Show [a] (show [x] : cstr))
 (definstance Show [int]
   (show [x] : cstr
@@ -20,13 +24,13 @@
     return x ? "bool:true" : "bool:false";
     ```))
 
-(defclass Ord [a] (rank [x] : int))
-(definstance Ord [int]
+(defclass Rank [a] (rank [x] : int))
+(definstance Rank [int]
   (rank [x] : int
     ```c
     return (int)x;
     ```))
-(definstance Ord [bool]
+(definstance Rank [bool]
   (rank [x] : int
     ```c
     return x ? 1 : 0;
@@ -39,10 +43,10 @@
   return (const char *)buf;
   ```)
 
-(defn poly [a] [^Show a ^Ord a x : a] : cstr
+(defn poly [a] [^Show a ^Rank a x : a] : cstr
   (combine (show x) (rank x)))
 
-(defn use-both [f (forall [a] [(Show a) (Ord a)] (-> a cstr))] : cstr
+(defn use-both [f (forall [a] [(Show a) (Rank a)] (-> a cstr))] : cstr
   (println (f 7))
   (println (f true))
   "done")

@@ -82,6 +82,10 @@ typedef struct {
  * modules need emitted here; pass NULL/0 for the first-pass compilation.
  * `out_borrow_specs`/`out_n` (emit_implementation only): if non-NULL, receives
  * a malloc'd array of BorrowSpecInfo describing clones this module borrowed. */
+/* definstance-not-dispatchable-across-modules: see the definition in
+ * emit_module.c -- true when an instance method may take external linkage. */
+bool emit_inst_method_wants_external(const struct FnDef *fd);
+
 int emit_header(Buf *out, const char *module_name, const Expr *program,
                 bool separate_compilation,
                 const ForcedAbiSpec *forced, uint32_t n_forced);

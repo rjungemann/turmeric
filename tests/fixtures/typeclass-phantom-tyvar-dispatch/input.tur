@@ -1,0 +1,39 @@
+;; A constrained generic whose class variable reaches the dispatch only through
+;; an ASCRIPTION out of a carrier -- `(:: (.v x) V)`.
+;;
+;; This used to be a silent wrong answer.  The emitter stripped EX_ASCRIBE
+;; before asking "does this dispatch on a bound type variable", so the receiver
+;; looked concrete (`int`), `instance_changes` stayed false, no specialization
+;; was minted, and BOTH instantiations ran whichever instance the
+;; representative resolved to.  Both instances were emitted; only one was ever
+;; called.
+;;
+;; The shape matters: it is what reading a value back out of a HAMT or out of a
+;; phantom-parameterized struct looks like, which is how a container CRDT
+;; merges its elements.
+;;
+;; `Real` (field declared `: V`) was detected all along and is kept as the
+;; control -- a fix that only repairs the ascription path must not break it.
+
+(defclass JS [a] (j [x : a y : a] : a))
+(definstance JS [int] (j [x y] (if (< x y) y x)))          ;; max
+(defopaque Sum :int)
+(definstance JS [Sum] (j [x y] (:: (+ (:: x int) (:: y int)) Sum)))  ;; add
+
+(defstruct Real [V] [v : V])     ;; V appears in a FIELD -- control
+(defstruct Ph   [V] [v : int])   ;; V is PHANTOM -- the regression
+
+(defn fromreal [V] [(JS V)] [x : (Real V) y : (Real V)] : V (j (.v x) (.v y)))
+(defn fromph   [V] [(JS V)] [x : (Ph V)   y : (Ph V)]   : V
+  (j (:: (.v x) V) (:: (.v y) V)))
+
+(defn main [] : int
+  ;; control: field-typed, correct before and after
+  (println (:: (fromreal (Real (:: 3 Sum)) (Real (:: 9 Sum))) int))       ;; 12
+  (println (fromreal (Real 3) (Real 9)))                                   ;; 9
+  ;; the regression: same generic, two instantiations, two different answers
+  (println (:: (fromph (:: (Ph 3) (Ph Sum)) (:: (Ph 9) (Ph Sum))) int))    ;; 12
+  ;; A phantom parameter is carried by nothing, so the int instantiation has to
+  ;; be ascribed too -- there is no argument for inference to read it off.
+  (println (:: (fromph (:: (Ph 3) (Ph int)) (:: (Ph 9) (Ph int))) int))     ;; 9
+  0)

@@ -156,7 +156,8 @@ void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root) {
      * a keyword-keyed map needs) are available. */
     static const char *prelude[] = {
         "safe.tur",
-        "typeclass-eq.tur", "typeclass-functor.tur", "typeclass-clone.tur",
+        "typeclass-eq.tur", "typeclass-ord.tur", "typeclass-functor.tur",
+        "typeclass-clone.tur",
         "typeclass-drop.tur",
         "typeclass-hash.tur", "typeclass-applicative.tur",
         "typeclass-alternative.tur", "typeclass-monad.tur",

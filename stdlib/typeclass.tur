@@ -14,83 +14,10 @@
 ;; class it needs.  `(load "stdlib/typeclass.tur")` still ends up providing Show.
 ;; Display/Debug here are self-contained (no `show` call), so they do not need
 ;; Show in scope before the trailing load.
-;;; Ord -- typeclass for total ordering.
-;;;
-;;; Parameters:
-;;;   a -- the type to order
-;;;
-;;; Since: Phase 15
-;; Ord typeclass - ordering
-(defclass Ord [a]
-  (lt? [x y] : bool)
-  (lte? [x y] : bool)
-  (gt? [x y] : bool)
-  (gte? [x y] : bool))
-;; Instances for primitive types
-;;; Ord [int] -- Ord instance for int.
-
-(definstance Ord [int]
-  (lt? [x y] (< x y))
-  (lte? [x y] (<= x y))
-  (gt? [x y] (> x y))
-  (gte? [x y] (>= x y)))
-;; Phase N4: Ord instances for new numeric types
-;;; Ord [int8] -- Ord instance for int8.
-
-(definstance Ord [int8]
-  (lt? [x y] (< x y))
-  (lte? [x y] (<= x y))
-  (gt? [x y] (> x y))
-  (gte? [x y] (>= x y)))
-;;; Ord [int16] -- Ord instance for int16.
-
-(definstance Ord [int16]
-  (lt? [x y] (< x y))
-  (lte? [x y] (<= x y))
-  (gt? [x y] (> x y))
-  (gte? [x y] (>= x y)))
-;;; Ord [int32] -- Ord instance for int32.
-
-(definstance Ord [int32]
-  (lt? [x y] (< x y))
-  (lte? [x y] (<= x y))
-  (gt? [x y] (> x y))
-  (gte? [x y] (>= x y)))
-;;; Ord [uint8] -- Ord instance for uint8.
-
-(definstance Ord [uint8]
-  (lt? [x y] (< x y))
-  (lte? [x y] (<= x y))
-  (gt? [x y] (> x y))
-  (gte? [x y] (>= x y)))
-;;; Ord [uint16] -- Ord instance for uint16.
-
-(definstance Ord [uint16]
-  (lt? [x y] (< x y))
-  (lte? [x y] (<= x y))
-  (gt? [x y] (> x y))
-  (gte? [x y] (>= x y)))
-;;; Ord [uint32] -- Ord instance for uint32.
-
-(definstance Ord [uint32]
-  (lt? [x y] (< x y))
-  (lte? [x y] (<= x y))
-  (gt? [x y] (> x y))
-  (gte? [x y] (>= x y)))
-;;; Ord [uint64] -- Ord instance for uint64.
-
-(definstance Ord [uint64]
-  (lt? [x y] (< x y))
-  (lte? [x y] (<= x y))
-  (gt? [x y] (> x y))
-  (gte? [x y] (>= x y)))
-;;; Ord [float32] -- Ord instance for float32.
-
-(definstance Ord [float32]
-  (lt? [x y] (< x y))
-  (lte? [x y] (<= x y))
-  (gt? [x y] (> x y))
-  (gte? [x y] (>= x y)))
+;; Ord (the class, its primitive instances, and the max/min generics) lives in
+;; stdlib/typeclass-ord.tur, which is AUTO-LOADED -- this file does not
+;; redefine it, the same arrangement Eq has with stdlib/typeclass-eq.tur.
+;; Loading this file still gives you Ord, because the autoload already did.
 ;; Show class + primitive Show instances live in stdlib/typeclass-show.tur
 ;; (loaded at the END of this file -- see the header note).
 ;;; Num -- typeclass for numeric arithmetic.
@@ -109,7 +36,6 @@
 ;;;
 ;;; Since: Phase 15 (N0: de-:int-ified)
 ;; Num typeclass - numeric operations
-
 (defclass Num [a]
   (add [x : a y : a] : a)
   (sub [x : a y : a] : a)

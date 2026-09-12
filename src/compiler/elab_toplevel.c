@@ -1400,6 +1400,36 @@ static bool macro_form_stmt_safe(const Elab *e, const Form *dm,
  * linearly with no forward decl and a self-call reports "unknown function".
  * See docs/archive/compiled-string-return-int-conversion.md (secondary
  * blocker). */
+
+/* typeclass-method-resolution-ignores-the-class (symptom A): does any form at
+ * or after `from` register a typeclass instance?
+ *
+ * Used to gate the speculative defn elaboration below.  Instances register in
+ * source order, so a defn body that calls a class method before ANY instance of
+ * that class exists cannot resolve -- but if one appears later in the unit, the
+ * body would resolve if it were elaborated after it.  This scan is the cheap,
+ * purely syntactic question "is deferral worth attempting here at all", so that
+ * a unit with no later `definstance` -- the overwhelming majority -- takes
+ * exactly the path it took before, with no capture frame and no re-elaboration.
+ *
+ * Recurses (depth-bounded) because a `definstance` is usually a CHILD of a
+ * `(defmodule ...)` rather than a top-level form. */
+static bool tl_has_definstance_at_or_after(const Elab *e, Form *const *forms,
+                                           uint32_t nforms, uint32_t from,
+                                           int depth) {
+    if (depth > 4) return false;
+    for (uint32_t i = from; i < nforms; i++) {
+        Form *f = forms[i];
+        if (!f || f->tag != F_LIST || f->as.list.len == 0) continue;
+        Form *h = f->as.list.items[0];
+        if (h->tag == F_SYM && h->as.sym == e->sym_definstance) return true;
+        if (tl_has_definstance_at_or_after(e, f->as.list.items,
+                                           f->as.list.len, 1, depth + 1))
+            return true;
+    }
+    return false;
+}
+
 void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
         if (f->tag == F_LIST && f->as.list.len > 0) {
             Form *head = f->as.list.items[0];
@@ -2184,10 +2214,43 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         return NULL;
     }
 
-    /* Pass 2: Elaborate all forms */
+    /* Pass 2: Elaborate all forms.
+     *
+     * typeclass-method-resolution-ignores-the-class (symptom A): a defn whose
+     * body calls a class method declared above it, but whose only instance is
+     * declared BELOW it, cannot resolve -- instances register in source order.
+     *
+     * Reordering the pass does not fix this: instance bodies call ordinary
+     * defns (`Eq [Map]`'s `eq?` calls `map-count`), so defn bodies must precede
+     * instance bodies just as surely as instances must precede the defn bodies
+     * that dispatch on them.  That is a cycle, and a two-sweep Pass 2 breaks
+     * stdlib at map.tur on exactly it.
+     *
+     * So break it by TIME rather than by order, and only for the forms that
+     * need it: elaborate such a defn speculatively, and if it fails, roll back
+     * and re-elaborate it after every other form has been processed.  The
+     * capture frame + `n_file_scope_defs` rollback is the same mechanism
+     * elab_defn already uses for its bare-^fat lazy probe.
+     *
+     * Gated on there actually being a later `definstance`, so a unit without
+     * one takes precisely the old path: no capture, no retry, no change. */
+    bool *tl_deferred = (nforms > 0)
+        ? (bool *)calloc(nforms, sizeof(bool)) : NULL;
     e.in_stdlib_load = (stdlib_prefix > 0);
     for (uint32_t i = 0; i < nforms; i++) {
         if (i == stdlib_prefix) e.in_stdlib_load = false;
+        bool tl_may_defer = false;
+        uint32_t tl_fsd_mark = e.n_file_scope_defs;
+        if (tl_deferred) {
+            Form *ff = forms[i];
+            if (ff->tag == F_LIST && ff->as.list.len > 0) {
+                Form *h = ff->as.list.items[0];
+                if (h->tag == F_SYM && h->as.sym == e.sym_defn &&
+                    tl_has_definstance_at_or_after(&e, forms, nforms, i + 1, 0))
+                    tl_may_defer = true;
+            }
+        }
+        if (tl_may_defer) diag_push_capture();
         /* Statement position for the def-position check: this form, and any
          * form reachable from it through `do` chains, is a statement.  Anything
          * deeper is an expression subform.  See def_form_is_statement_position. */
@@ -2196,6 +2259,18 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         items[i] = elab_form(&e, forms[i]);
         e.toplevel_stmt = NULL;
         e.toplevel_saffron = false;
+        if (tl_may_defer) {
+            uint32_t tl_cerr = diag_pop_capture();
+            if (tl_cerr > 0 || !items[i]) {
+                /* Roll back what the failed attempt registered and try again
+                 * at the end, with no capture frame, so a failure that is NOT
+                 * about instance ordering still reports its real diagnostic. */
+                e.n_file_scope_defs = tl_fsd_mark;
+                tl_deferred[i] = true;
+                items[i] = NULL;
+                continue;
+            }
+        }
         if (!items[i]) { rc = -1; /* keep going to surface more diagnostics */ }
 
         /* Phase M7+: Each (load ...)-spliced file is conceptually its own
@@ -2236,6 +2311,25 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
                 }
             }
         }
+    }
+
+    /* symptom A, second chance: the defns whose bodies could not resolve a class
+     * method the first time round.  Every instance in the unit is registered by
+     * now.  No capture frame here -- a still-failing body reports for real. */
+    if (tl_deferred) {
+        e.in_stdlib_load = (stdlib_prefix > 0);
+        for (uint32_t i = 0; i < nforms; i++) {
+            if (i == stdlib_prefix) e.in_stdlib_load = false;
+            if (!tl_deferred[i]) continue;
+            e.toplevel_stmt = forms[i];
+            e.toplevel_saffron = lang_span_is_saffron(forms[i]->span);
+            items[i] = elab_form(&e, forms[i]);
+            e.toplevel_stmt = NULL;
+            e.toplevel_saffron = false;
+            if (!items[i]) rc = -1;
+        }
+        free(tl_deferred);
+        tl_deferred = NULL;
     }
 
     /* cps-backend-n6 cross-function resume: gated whole-program reset-wrapping.

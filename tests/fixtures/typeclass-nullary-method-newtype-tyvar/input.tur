@@ -1,0 +1,45 @@
+;; nullary-class-method-unresolvable-over-newtype-tyvar -- RESOLVED.
+;;
+;; A NULLARY class method (`(mempty [] : a)`) would not resolve against a type
+;; variable whose instances are `defopaque` newtypes: the return-directed
+;; representative search accepted only a literal TY_INT instance head, so a
+;; class instanced solely over newtypes found nothing and hard-errored with
+;; "no instance 'Monoid tyvar'".  Both halves were required -- the same method
+;; resolved at a CONCRETE newtype, and a non-nullary method (`combine`)
+;; resolved over the same newtype tyvar.
+;;
+;; This is the idiom it blocked: one carrier, several algebras.  `int` is a
+;; monoid under sum AND product, and only a wrapper can choose -- which is also
+;; why stdlib must not ship a bare `Semigroup [int]` (a colliding user instance
+;; is TUR-E0373).
+;;
+;; The representative is only admitted when the class tyvar reaches a
+;; PARAMETER, because specs split on argument types: `Sum` and `Product` are
+;; distinct types even though both render int64, so `fold2` interns two specs
+;; that Gap H names `..._int64_t` and `..._int64_t__h1`.  A generic whose tyvar
+;; reaches no parameter interns one spec for every instantiation and keeps its
+;; hard error -- see errors/typeclass-nullary-return-only-newtype.
+;;
+;; `fold2` also NESTS `combine`, so it pins
+;; nested-class-method-call-picks-the-first-instance too: with Sum declared
+;; first, a Product fold that resolved to the first instance would print 10.
+(defclass Semigroup [a] (combine [x : a y : a] : a))
+(defclass Monoid    [a] (mempty  []          : a))
+
+(defopaque Sum     :int)
+(defopaque Product :int)
+
+(definstance Semigroup [Sum]     (combine [x y] (:: (+ (:: x int) (:: y int)) Sum)))
+(definstance Monoid    [Sum]     (mempty [] (:: 0 Sum)))
+(definstance Semigroup [Product] (combine [x y] (:: (* (:: x int) (:: y int)) Product)))
+(definstance Monoid    [Product] (mempty [] (:: 1 Product)))
+
+;; mconcat-shaped: the identity folded with two values, through a constrained
+;; generic -- needs BOTH a nullary method and a nested call.
+(defn fold2 [^Semigroup A ^Monoid A] [x : A y : A] : A
+  (combine (combine (mempty) x) y))
+
+(defn main [] : int
+  (println (:: (fold2 (:: 3 Sum)     (:: 7 Sum))     int))
+  (println (:: (fold2 (:: 3 Product) (:: 7 Product)) int))
+  0)

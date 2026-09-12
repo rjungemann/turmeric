@@ -23,7 +23,14 @@ TUR="${TUR:-./build/tur}"
 # The same pattern run.sh matches on.  Kept in sync BY HAND -- if you change one,
 # change the other; a drifted pattern is the quiet failure this script exists to
 # catch, so it is deliberately spelled out here rather than sourced.
-PATTERN='\[-W(int-conversion|incompatible-pointer-types|free-nonheap-object)\]'
+#
+# run.sh additionally EXCLUDES float-conversion warnings whose destination is a
+# floating type (`to 'float'`): gcc's -Wfloat-conversion covers double -> float,
+# which clang splits out separately, and that direction is a precision note
+# rather than a representation confusion.  The canary below converts a float to
+# an INTEGER, so it is unaffected by that exclusion -- which is the point: it
+# proves the direction the ratchet actually fails on still fires.
+PATTERN='\[-W(int-conversion|incompatible-pointer-types|free-nonheap-object|float-conversion)\]'
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/tur-ccwarn.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
@@ -39,8 +46,64 @@ TUR_EOF
 out=$(CC="${CC:-cc}" "$TUR" build "$tmp/canary.tur" -o "$tmp/canary.bin" 2>&1)
 
 if printf '%s' "$out" | grep -qE "$PATTERN"; then
-    echo "cc-warn ratchet OK: canary trips $PATTERN"
-    # Second canary, CLANG ONLY: the mismatched-function-pointer ratchet.
+    echo "cc-warn ratchet OK: pointer/integer canary trips $PATTERN"
+
+    # Second canary: the FLOAT arm of the same ratchet.
+    #
+    # Unlike -Wint-conversion (on by default in clang), -Wfloat-conversion is
+    # implied by NEITHER the default set nor -Wall, so this arm can be disarmed
+    # two different ways: the toolchain stops producing the diagnostic, or
+    # somebody drops the flag from run.sh's TUR_CC_FLAGS.  Check both -- a flag
+    # that is not passed cannot warn, and the resulting silence is exactly the
+    # false-clean this script exists to prevent.
+    #
+    # The canary returns a `float` PARAMETER from an `:int` defn.  Deliberately
+    # not `return 7.5;`: a literal conversion is tagged -Wliteral-conversion, a
+    # DIFFERENT flag the ratchet does not match, so the constant form would
+    # "pass" while proving nothing about -Wfloat-conversion.
+    # Disarm check 1: the flag is still in run.sh's TUR_CC_FLAGS default.
+    # Checked against the SOURCE, not the environment: run.sh calls this script
+    # before it exports TUR_CC_FLAGS, and the ctest target (tur_cc_warn_ratchet)
+    # runs it with no environment at all -- so an env probe would be vacuous in
+    # both of the places this actually runs.
+    # Scoped to the `export TUR_CC_FLAGS=` line itself, NOT the whole file: the
+    # comment block above that line names the flag several times, so a
+    # whole-file grep matches even after the flag is dropped -- the same
+    # false-clean this script exists to prevent, reintroduced one level up.
+    if ! grep -E '^export TUR_CC_FLAGS=' tests/run.sh | grep -q -- '-Wfloat-conversion'; then
+        echo "check-cc-warn-ratchet: FAILED -- tests/run.sh no longer passes" >&2
+        echo "  -Wfloat-conversion, so the float arm of its ratchet cannot fire on" >&2
+        echo "  any fixture.  Re-add it to TUR_CC_FLAGS or drop this canary too." >&2
+        exit 1
+    fi
+
+    # Disarm check 2: this toolchain still produces the diagnostic.  Build with
+    # the caller's TUR_CC_FLAGS when set (so a hand override that drops the flag
+    # is caught here), else the same default run.sh uses.
+    FCANARY_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -Wfloat-conversion -fno-strict-aliasing}"
+
+    cat > "$tmp/fcanary.tur" <<'TUR_EOF'
+(defn f [x : float] : int
+  ```c
+  return x;
+  ```)
+(defn main [] : int 0)
+TUR_EOF
+
+    fout=$(CC="${CC:-cc}" TUR_CC_FLAGS="$FCANARY_FLAGS" \
+             "$TUR" build "$tmp/fcanary.tur" -o "$tmp/fcanary.bin" 2>&1)
+    if printf '%s' "$fout" | grep -qE '\[-Wfloat-conversion\]'; then
+        echo "cc-warn ratchet OK: float canary trips [-Wfloat-conversion]"
+    else
+        echo "check-cc-warn-ratchet: FAILED -- the float canary produced no" >&2
+        echo "  -Wfloat-conversion warning, so run.sh's ratchet cannot catch a" >&2
+        echo "  double reaching an integer slot in the emitted C." >&2
+        echo "  Flags used: $FCANARY_FLAGS" >&2
+        printf '%s\n' "$fout" | sed 's/^/    /' >&2
+        exit 1
+    fi
+
+    # Third canary, CLANG ONLY: the mismatched-function-pointer ratchet.
     # run.sh also FAILs a fixture whose stderr carries UBSan's "through
     # pointer to incorrect function type" -- a message only clang's
     # -fsanitize=function can produce (GCC has no equivalent), so under GCC
@@ -115,7 +178,7 @@ TUR_EOF
     exit 0
 fi
 
-echo "check-cc-warn-ratchet: FAILED -- the canary produced no matching warning." >&2
+echo "check-cc-warn-ratchet: FAILED -- the pointer/integer canary produced no matching warning." >&2
 echo "  The ratchet in tests/run.sh cannot catch a pointer/integer confusion in" >&2
 echo "  the emitted C, so a clean suite proves nothing about that class." >&2
 echo "  Canary build output was:" >&2

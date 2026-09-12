@@ -1,0 +1,48 @@
+;; lattice-vocabulary-plan L3: JoinSemilattice / MeetSemilattice / BoundedJoin
+;; / BoundedMeet, and the laws that are their only content.
+;;
+;; `JoinSemilattice` declares exactly the shape `Semigroup` does -- both are
+;; `a -> a -> a`.  What separates them is commutativity and IDEMPOTENCE, which
+;; live in the law functions, so this fixture's job is to show the laws
+;; DISCRIMINATE.  `BadJoin` below is a Semigroup-shaped instance that is
+;; associative and commutative but not idempotent (addition); it must fail
+;; exactly the idempotence law and pass the other two.  Without it, a law suite
+;; answering true everywhere would look identical to one that works.
+;;
+;; Idempotence is also the law a CRDT actually leans on: re-delivering the same
+;; state must not change the result.
+(load "stdlib/typeclass-lattice.tur")
+
+(defopaque BadJoin :int)
+(definstance Eq [BadJoin] (eq? [x y] (= (:: x int) (:: y int))))
+(definstance JoinSemilattice [BadJoin]
+  (join [x y] (:: (+ (:: x int) (:: y int)) BadJoin)))
+
+(defn main [] : int
+  ;; the operations
+  (println (:: (join (:: 3 MaxI) (:: 7 MaxI)) int))
+  (println (:: (meet (:: 3 MinI) (:: 7 MinI)) int))
+  (println (:: (join (:: false Any) (:: true Any)) bool))
+  (println (:: (meet (:: false All) (:: true All)) bool))
+
+  ;; bounds
+  (println (:: (let [z : MaxI (bottom)] (join z (:: 3 MaxI))) int))
+  (println (:: (let [t : MinI (top)]    (meet t (:: 3 MinI))) int))
+
+  ;; the order that comes free from the operation
+  (println (lattice-leq? (:: 3 MaxI) (:: 7 MaxI)))
+  (println (lattice-leq? (:: 7 MaxI) (:: 3 MaxI)))
+
+  ;; laws hold for a real lattice
+  (println (law-join-associative? (:: 1 MaxI) (:: 2 MaxI) (:: 3 MaxI)))
+  (println (law-join-commutative? (:: 1 MaxI) (:: 2 MaxI)))
+  (println (law-join-idempotent?  (:: 5 MaxI)))
+  (println (law-bottom-identity?  (:: 3 MaxI)))
+  (println (law-meet-idempotent?  (:: 5 MinI)))
+  (println (law-top-identity?     (:: 3 MinI)))
+
+  ;; BadJoin: associative and commutative, NOT idempotent -- exactly one fails
+  (println (law-join-associative? (:: 1 BadJoin) (:: 2 BadJoin) (:: 3 BadJoin)))
+  (println (law-join-commutative? (:: 1 BadJoin) (:: 2 BadJoin)))
+  (println (law-join-idempotent?  (:: 5 BadJoin)))
+  0)

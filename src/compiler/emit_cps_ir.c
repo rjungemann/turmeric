@@ -9618,9 +9618,14 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * and from other TUs / the FFI export shim.  A bare `static` here on an
      * exported CPS defn contradicts its non-static prototype -- "static
      * declaration follows non-static declaration". */
+    /* definstance-not-dispatchable-across-modules: an instance method is never
+     * `is_exported`, but a user module's instance now keeps external linkage so
+     * an importing TU can dispatch on it -- mirror that here, or this path
+     * emits the very contradiction the comment above warns about. */
     bool entry_static = !(ctx->separate_compilation
         && fd->binding
-        && (fd->binding->is_exported || fd->binding->retain_c_linkage)
+        && (fd->binding->is_exported || fd->binding->retain_c_linkage
+            || emit_inst_method_wants_external(fd))
         && !fd->binding->is_from_stdlib);
     buf_printf(file, "__attribute__((unused)) %s%s %s(",
                entry_static ? "static " : "", rety, cn);

@@ -1,0 +1,158 @@
+name: Fuzz
+
+# The search half of the fuzzing story.
+#
+# Every tests/run-*-fuzz-src.sh is pinned to seed 1 at smoke size, so the four
+# fuzzers CI already runs recompile the same ~40 programs on every push,
+# forever.  That is a REGRESSION guard and performs no search -- a fuzzer at a
+# fixed seed has already found everything it will ever find.  This workflow is
+# where the seed actually moves.
+#
+# Deliberately NOT on push/pull_request.  A fuzz hit is a finding to triage,
+# not a reason to block a merge, and this project's standing position is that a
+# red suite never blocks landing.  When a run finds something, record its seed
+# in tests/fuzz-seed-corpus.txt so every subsequent smoke run replays it.
+#
+# See docs/upcoming/type-confusion-detection-plan.md section F2.
+
+on:
+  schedule:
+    # 04:30 UTC daily -- off the hour, since the hour is the busiest slot on
+    # GitHub's shared scheduler and a delayed cron is a silently skipped run.
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "Seed to use (default: today's date as YYYYMMDD)"
+        required: false
+        type: string
+      n:
+        description: "Cases per harness (default 400)"
+        required: false
+        default: "400"
+        type: string
+
+# One fuzz run at a time: a second run adds nothing (it would search a
+# different seed with the same code) and doubles the runner cost.
+concurrency:
+  group: fuzz
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  fuzz:
+    name: Fuzz search
+    runs-on: ubuntu-latest
+    # Four harnesses at --n 400 each.  Generous, because a timeout here loses
+    # the whole night's search rather than one harness's.
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          # Mirrors ci.yml: the runner image's Google Chrome apt source has
+          # served a stale index and killed jobs before any step ran.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
+
+      - name: Configure (Debug + ASAN)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Smoke check (tur --version must not hang)
+        run: timeout 60 ./build/tur --version
+
+      - name: Pick the seed
+        id: seed
+        run: |
+          SEED="${{ inputs.seed }}"
+          [ -n "$SEED" ] || SEED="$(date -u +%Y%m%d)"
+          echo "seed=$SEED" >> "$GITHUB_OUTPUT"
+          echo "Fuzzing with seed $SEED"
+
+      # Each harness runs even if an earlier one found something: a night that
+      # stops at the first hit wastes the other three searches.  `|| true`
+      # plus an explicit tally is how that stays visible.
+      - name: Run the four harnesses
+        id: run
+        env:
+          SEED: ${{ steps.seed.outputs.seed }}
+          N: ${{ inputs.n || '400' }}
+          ASAN_OPTIONS: detect_leaks=0
+        run: |
+          mkdir -p fuzz-findings
+          failed=""
+          for h in type saffron refine regions; do
+            echo "::group::$h (seed $SEED, n $N)"
+            if ! timeout 35m python3 "tests/${h}-fuzz-src.py" \
+                   --tur ./build/tur --n "$N" --seed "$SEED" \
+                   --save-dir "fuzz-findings/$h"; then
+              failed="$failed $h"
+            fi
+            echo "::endgroup::"
+          done
+          echo "failed=${failed# }" >> "$GITHUB_OUTPUT"
+          if [ -n "$failed" ]; then
+            echo "Harnesses with findings:$failed"
+          else
+            echo "No findings at seed $SEED."
+          fi
+
+      - name: Upload findings
+        if: steps.run.outputs.failed != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-findings-${{ steps.seed.outputs.seed }}
+          path: fuzz-findings/
+          if-no-files-found: warn
+          retention-days: 30
+
+      # An issue rather than a failed check: nothing here gates a merge, and a
+      # red X on a scheduled workflow is the kind of signal people stop reading.
+      - name: Open an issue for the findings
+        if: steps.run.outputs.failed != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SEED: ${{ steps.seed.outputs.seed }}
+          FAILED: ${{ steps.run.outputs.failed }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create \
+            --title "Fuzz: findings at seed $SEED ($FAILED)" \
+            --label fuzz \
+            --body "$(cat <<EOF
+          The nightly fuzz search found something.
+
+          - **Seed:** \`$SEED\`
+          - **Harnesses with findings:** \`$FAILED\`
+          - **Run:** $RUN_URL
+
+          The generated programs and their shape tags are attached to that run
+          as the \`fuzz-findings-$SEED\` artifact. Each finding is already
+          auto-bisected to the failing leg, so it reads as
+          \`wrapper=res route=fat_hof,gid scalar=float\` rather than a blob.
+
+          To reproduce locally:
+
+          \`\`\`sh
+          python3 tests/<harness>-fuzz-src.py --tur ./build/tur --n 400 --seed $SEED
+          \`\`\`
+
+          If this is a real defect: file it under \`docs/reported/\`, add a row
+          to the harness's \`known_bug_slug\` so the shape stops drowning later
+          runs, pin it in \`KNOWN_PROBES\`, and **append the seed to
+          \`tests/fuzz-seed-corpus.txt\`** so every smoke run replays it from
+          now on.
+
+          If it is a generator bug (a \`GEN_REJECT\` the generator claims is
+          legal), fix the generator -- those never fail the run and are
+          reported for exactly this triage.
+          EOF
+          )"

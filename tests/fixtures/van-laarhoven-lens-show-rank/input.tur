@@ -1,8 +1,12 @@
+;; The second class is named `Rank`, not `Ord`: stdlib's Ord is auto-loaded
+;; (stdlib/typeclass-ord.tur), so a local `(defclass Ord ...)` is now
+;; `typeclass 'Ord' is already defined`.  The name was always incidental here --
+;; the method is `rank` and has nothing to do with ordering.
 ;; forall-dict-pass-nested-mapper-general-plan (Phase 1 acceptance): a van
 ;; Laarhoven mapper that dispatches MORE THAN ONE constraint class from inside
 ;; the nested lambda -- `(fn [x] (combine (show x) (rank x)))` under
-;; `(Functor f, Show a, Ord a)`.  The captureless mapper is converted into a
-;; closure that CAPTURES one runtime dict PER class (Show and Ord), and each
+;; `(Functor f, Show a, Rank a)`.  The captureless mapper is converted into a
+;; closure that CAPTURES one runtime dict PER class (Show and Rank), and each
 ;; method dispatches through its own captured dict, so both `show` and `rank`
 ;; run the right instance per caller-chosen focus type -- through the one
 ;; compiled body.  Previously rejected with TUR-E0311 (one env dict only).
@@ -35,11 +39,11 @@
     return x ? "bool:true" : "bool:false";
     ```))
 
-(defclass Ord [a] (rank [x] : int))
-(definstance Ord [int]  (rank [x] : int ```c return (int)(x + 100); ```))
-(definstance Ord [bool] (rank [x] : int ```c return x ? 9 : 8; ```))
+(defclass Rank [a] (rank [x] : int))
+(definstance Rank [int]  (rank [x] : int ```c return (int)(x + 100); ```))
+(definstance Rank [bool] (rank [x] : int ```c return x ? 9 : 8; ```))
 
-;; combine s r -> "<s>/<r>" so BOTH the Show and Ord dispatch are observable.
+;; combine s r -> "<s>/<r>" so BOTH the Show and Rank dispatch are observable.
 (defn combine [s : cstr r : int] : cstr
   ```c
   char *buf = (char *)malloc(48);
@@ -47,29 +51,29 @@
   return (const char *)buf;
   ```)
 
-;; two-lens: forall f a. (Functor f, Show a, Ord a) => (a -> f a) -> a -> (f cstr)
+;; two-lens: forall f a. (Functor f, Show a, Rank a) => (a -> f a) -> a -> (f cstr)
 ;; `show x` AND `rank x` live INSIDE the mapper -- dispatched through their own
 ;; captured dicts; `fmap` through the Functor dict.  f and a chosen per call.
-(defn two-lens [^f a] [^Functor f ^Show a ^Ord a g : (-> a (f a)) s : a] : (f cstr)
+(defn two-lens [^f a] [^Functor f ^Show a ^Rank a g : (-> a (f a)) s : a] : (f cstr)
   (fmap (g s) (fn [x : a] : cstr (combine (show x) (rank x)))))
 
 (defn shown-int
-    [l (forall [(f :: * -> *) a] [(Functor f) (Show a) (Ord a)] (-> (-> a (f a)) a (f cstr)))
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a) (Rank a)] (-> (-> a (f a)) a (f cstr)))
      s : int] : cstr
   (run-id (l (fn [x : int] : (Identity int) (mk-id x)) s)))
 
 (defn shown-bool
-    [l (forall [(f :: * -> *) a] [(Functor f) (Show a) (Ord a)] (-> (-> a (f a)) a (f cstr)))
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a) (Rank a)] (-> (-> a (f a)) a (f cstr)))
      s : bool] : cstr
   (run-id (l (fn [x : bool] : (Identity bool) (mk-id x)) s)))
 
 (defn peek-int
-    [l (forall [(f :: * -> *) a] [(Functor f) (Show a) (Ord a)] (-> (-> a (f a)) a (f cstr)))
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a) (Rank a)] (-> (-> a (f a)) a (f cstr)))
      s : int] : int
   (get-const (l (fn [x : int] : (Const int int) (mk-const x)) s)))
 
 (defn main [] : int
-  (println (shown-int two-lens 7))       ; int:7/107   (Show int + Ord int)
-  (println (shown-bool two-lens true))   ; bool:true/9 (Show bool + Ord bool)
+  (println (shown-int two-lens 7))       ; int:7/107   (Show int + Rank int)
+  (println (shown-bool two-lens true))   ; bool:true/9 (Show bool + Rank bool)
   (println (peek-int two-lens 42))       ; 42          (Const ignores the mapper)
   0)

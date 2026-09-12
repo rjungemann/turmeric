@@ -1185,11 +1185,24 @@ static void append_type_mangle(Buf *b, Type t) {
 Type clone_struct_app_type(Type t) {
     if (t.kind != TY_APP) return t;
     Type out = t;
-    out.as.app.fn = (Type *)malloc(sizeof(Type));
-    out.as.app.arg = (Type *)malloc(sizeof(Type));
-    if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
-    *out.as.app.fn = clone_struct_app_type(*t.as.app.fn);
-    *out.as.app.arg = clone_struct_app_type(*t.as.app.arg);
+    /* A TY_APP can carry a null fn/arg -- a partially-resolved application,
+     * e.g. a parametric instance head whose argument never got bound.  The
+     * paired free_struct_app_type below has always null-checked both, so this
+     * state is expected; cloning dereferenced them unguarded and segfaulted in
+     * memmove instead of letting the caller report a real diagnostic.
+     * See docs/archive/clone-struct-app-type-segv-on-null-arg.md. */
+    out.as.app.fn = NULL;
+    out.as.app.arg = NULL;
+    if (t.as.app.fn) {
+        out.as.app.fn = (Type *)malloc(sizeof(Type));
+        if (!out.as.app.fn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        *out.as.app.fn = clone_struct_app_type(*t.as.app.fn);
+    }
+    if (t.as.app.arg) {
+        out.as.app.arg = (Type *)malloc(sizeof(Type));
+        if (!out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
+        *out.as.app.arg = clone_struct_app_type(*t.as.app.arg);
+    }
     return out;
 }
 

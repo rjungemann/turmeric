@@ -13,8 +13,6 @@
   (export cond
     when
     unless
-    min
-    max
     must!
     must-msg!
     ignore!
@@ -48,8 +46,22 @@
           (list cond ~@(rest (rest clauses)))))))
   (defmacro when [test body] (if test (do body)))
   (defmacro unless [test body] (if test nil (do body)))
-  (defmacro min [a b] (if (<= a b) a b))
-  (defmacro max [a b] (if (>= a b) a b))
+  ;; lattice-vocabulary-plan L1: `min` / `max` were macros here.  They expanded
+  ;; to the BUILTIN `<=` / `>=`, so they worked only where those operators do --
+  ;; int and float concretely, and nowhere else.  `(max "a" "b")` was
+  ;; `operator lookup failed for '>=' ... first arg type cstr`, and inside a
+  ;; constrained generic `(defn f [^Ord A] [x : A y : A] : A (max x y))` it was
+  ;; the same failure at `type tyvar` -- which is precisely where a `max` earns
+  ;; its keep (a pointwise maximum over an abstract element type).
+  ;;
+  ;; They are DEFAULT METHODS on `Ord` now (stdlib/typeclass.tur), so they work
+  ;; for every Ord instance and inside generics.  Macro expansion precedes
+  ;; typeclass dispatch, so the two cannot coexist: a macro named `max` makes
+  ;; the method unreachable at every call site.
+  ;;
+  ;; BREAKING: `max` / `min` now require `(load "stdlib/typeclass.tur")`.  This
+  ;; file is auto-loaded and typeclass.tur is not, so a bare program that called
+  ;; `(max 3 9)` must load it.
   (defmacro must! [expr] (option-must expr))
   (defmacro must-msg! [expr msg] (option-expect expr msg))
   (defmacro ignore! [expr] (do expr nil))

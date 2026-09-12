@@ -1,0 +1,8 @@
+`fold2` nests `combine` inside a constrained generic, which the INTERPRETER
+resolves to the wrong instance: it answers `21 21`, giving the Sum fold
+Product's result.  Compiled answers `10 21`.
+
+docs/reported/turi-nested-class-method-call-picks-first-instance.md.  The
+compiled half was fixed 2026-09-11 in emit_reresolve_disp_type; that fix is
+emit-side and does not port.  Remove this marker when the interpreter half
+lands -- the assertions are already written.
