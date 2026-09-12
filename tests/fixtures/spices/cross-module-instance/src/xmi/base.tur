@@ -1,0 +1,17 @@
+;; The module that DEFINES the instance.
+(defmodule xmi/base
+  (export Box xmi-mk-box xmi-unbox)
+
+(defclass Dbl [a] (dbl [x : a] : a))
+
+(defstruct Box [v : int])
+
+(defn xmi-mk-box [n : int] : Box (Box n))
+(defn xmi-unbox [^borrow b : Box] : int (.v b))
+
+;; Never `is_exported` -- a definstance has no export list -- yet xmi/use below
+;; must be able to dispatch on it.
+(definstance Dbl [Box]
+  (dbl [x] (Box (* 2 (.v x)))))
+
+) ;; end defmodule

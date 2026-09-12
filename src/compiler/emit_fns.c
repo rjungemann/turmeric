@@ -3271,10 +3271,23 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* #[used]: a defn reachable only via its mangled C symbol (cross-module
      * inline-C bridge or by-address C-ABI callback) must keep external linkage
      * so the raw `extern <mangled>` reference in another TU resolves. */
+    /* definstance-not-dispatchable-across-modules: an instance METHOD is never
+     * `is_exported` -- a `definstance` has no export list and the module's
+     * `(export ...)` names defns, not methods -- so it was emitted `static` and
+     * left out of the module header.  Dispatching on that instance from another
+     * module then elaborated clean (the mangled name resolves) and died in cc
+     * with `call to undeclared function '__inst_<Class>_<method>_<Type>'`.
+     *
+     * A user module's instance is defined in exactly one TU, so external
+     * linkage introduces no duplicate symbol.  Stdlib instances are excluded by
+     * the `is_from_stdlib` test that already guards this branch: those ARE
+     * preloaded into every project-mode TU and must stay static. */
+    bool user_inst_method = emit_inst_method_wants_external(fd);
     bool needs_static = !is_main &&
         !ctx->fn_name_override_external &&
         !(ctx->separate_compilation
-          && (fd->binding->is_exported || fd->binding->retain_c_linkage)
+          && (fd->binding->is_exported || fd->binding->retain_c_linkage
+              || user_inst_method)
           && !fd->binding->is_from_stdlib);
     if (needs_static) {
         buf_printf(file, "static ");

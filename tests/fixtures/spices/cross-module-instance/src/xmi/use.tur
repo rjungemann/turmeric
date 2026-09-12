@@ -1,0 +1,14 @@
+;; The module that DISPATCHES on it.  This is the whole fixture: before
+;; definstance-not-dispatchable-across-modules was fixed, `(dbl b)` here
+;; elaborated clean and then failed in cc with
+;;   call to undeclared function '__inst_Dbl_dbl_Box'
+;; because the instance method was emitted `static` in xmi/base's TU and never
+;; declared in its header.
+(defmodule xmi/use
+  (import xmi/base :refer [Box xmi-mk-box xmi-unbox])
+  (export twice)
+
+(defn twice [n : int] : int
+  (xmi-unbox (dbl (xmi-mk-box n))))
+
+) ;; end defmodule

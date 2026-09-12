@@ -1,0 +1,9 @@
+(defpackage tur-xmi
+  :name        "tur-xmi"
+  :version     "0.1.0"
+  :description "definstance-not-dispatchable-across-modules: dispatch on an instance defined in another module."
+  :license     "MIT"
+  :exports #map{
+    "xmi/base" ["Box" "xmi-mk-box" "xmi-unbox"]
+    "xmi/use"  ["twice"]
+  })

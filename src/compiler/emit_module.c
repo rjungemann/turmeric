@@ -7676,6 +7676,28 @@ char *emit_c_zero_of(const char *cname) {
 /* Emit C forward declarations for every EX_FN_DEF in items.  Used by both
  * emit_program (single-file) and emit_implementation (separate compilation)
  * so that mutually-recursive static functions resolve at C-compile time. */
+/* definstance-not-dispatchable-across-modules: may this instance method carry
+ * EXTERNAL linkage in separate-compilation mode?
+ *
+ * Yes when the instance is defined in the module's own source, so exactly one
+ * TU emits it and an importing TU can link against it.  No when it arrives by
+ * `(load ...)`: a loaded file's forms are spliced into EVERY module that loads
+ * it, so each TU emits its own copy and external linkage would be a duplicate
+ * symbol at link time (measured: `__inst_Monoid_mempty_Any` from
+ * stdlib/typeclass-lattice.tur, in four TUs at once).
+ *
+ * `is_from_stdlib` does not answer this -- it is false for an explicit
+ * `(load "stdlib/...")`, the same reason the duplicate-instance guard in
+ * elab_typeclasses.c keys on the defining file's PATH rather than that flag.
+ */
+bool emit_inst_method_wants_external(const FnDef *fd) {
+    if (!fd || !fd->owner_instance || !fd->binding) return false;
+    if (fd->binding->is_from_stdlib) return false;
+    const char *p = diag_file_path(fd->owner_instance->origin_file_id);
+    if (p && strstr(p, "stdlib/")) return false;
+    return true;
+}
+
 static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                                   const Expr **items, uint32_t n_items) {
     /* S1: the per-program reset used to live HERE, which silently discarded
@@ -7702,8 +7724,12 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
         /* #[used] (retain_c_linkage): keep external linkage so a raw
          * `extern <mangled>` reference from another TU resolves -- mirror the
          * definition's linkage in emit_fns.c so the forward decl agrees. */
+        /* definstance-not-dispatchable-across-modules: mirror the definition's
+         * linkage in emit_fns.c -- a user module's instance method keeps
+         * external linkage so an importing TU can call it. */
         if (!ctx->separate_compilation ||
-            !(fd->binding->is_exported || fd->binding->retain_c_linkage) ||
+            !(fd->binding->is_exported || fd->binding->retain_c_linkage ||
+              emit_inst_method_wants_external(fd)) ||
             fd->binding->is_from_stdlib) {
             buf_puts(out, "static ");
         }
@@ -17194,8 +17220,13 @@ static int emit_header_inner(Buf *out, const char *module_name, const Expr *prog
 
             if (is_main) { free((void*)fn_name); continue; }
 
-            /* In separate_compilation mode, only declare exported symbols. */
-            if (separate_compilation && !fd->binding->is_exported) {
+            /* In separate_compilation mode, only declare exported symbols --
+             * plus this module's own typeclass instance methods, which are
+             * never `is_exported` (a definstance has no export list) yet must
+             * be callable from an importing TU that dispatches on the instance.
+             * See definstance-not-dispatchable-across-modules. */
+            if (separate_compilation && !fd->binding->is_exported &&
+                !emit_inst_method_wants_external(fd)) {
                 free((void*)fn_name); continue;
             }
             /* spice-defn-return-result-kind-mismatch: stdlib defns are
