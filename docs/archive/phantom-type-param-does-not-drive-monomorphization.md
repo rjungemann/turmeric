@@ -6,9 +6,9 @@ all, so every instantiation shares one body and dispatches to whichever
 instance the representative resolves to. `tur check` is clean, cc is clean,
 and the program prints a plausible number computed by the wrong instance.
 
-**Status:** open. Found 2026-09-12 executing
+**Status: RESOLVED** 2026-09-12, same day. Found executing
 [crdt-spice-plan.md](../upcoming/crdt-spice-plan.md) C3, whose `ORMap` design
-it blocks outright (see "What it blocks").
+it blocked (see "What it blocked" -- now unblocked).
 
 ## Repro
 
@@ -76,27 +76,61 @@ In particular this is *not* the same-carrier-newtype collapse that
 describes: that one is interpreter-only and is about nesting. This is the
 compiled path, needs no nesting, and turns on phantomness alone.
 
-## Fix direction
+## Root cause -- narrower than "the specialization key"
 
-The specialization key has to include type arguments that do not appear in any
-lowered parameter type. Either extend the key with the *declared* type
-arguments of a parametric struct parameter (not just its lowered form), or
-refuse the collapse: when a constrained generic's type variable is
-unconstrained by the lowered signature, the dictionary must be passed rather
-than resolved at emit time.
+The "Fix direction" first drafted here (extend the specialization key with
+declared type arguments) was aimed at the wrong layer. The key was never
+consulted, because **no specialization was requested at all**.
 
-A diagnostic would be a defensible interim step -- "type parameter `V` is
-phantom, so the `(JS V)` constraint cannot be resolved by specialization" is a
-much better outcome than a wrong number, and the condition is cheap to detect.
+Traced by instrumenting every early return in `emit_abi_register_call`:
+`fromph` exits at the `if (!abi_changes && !instance_changes)` gate with both
+flags false. `instance_changes` comes from `body_has_dispatch_on_app_tyvar`,
+which asks whether the call's receiver is a type variable bound to something
+concrete -- and it does this:
 
-## What it blocks
+```c
+const Expr *recv = e->as.call_.args[0];
+while (recv && recv->kind == EX_ASCRIBE)
+    recv = recv->as.ascribe_.inner;          /* <-- discards the ascribed type */
+if (recv && recv->type.kind == TY_TYVAR && ...)
+```
+
+`fromph`'s receiver is `(:: (.v x) V)`. Stripping the ascription leaves
+`(.v x)`, whose declared type is `int` -- so the dispatch looked concrete. The
+**ascription was the only thing that said `V`**, and it was thrown away before
+the question was asked.
+
+`fromreal`'s receiver is `(.v x)` where the field is declared `: V`, so its
+type *is* a tyvar with no ascription involved. That is why the field-typed
+sibling was correct all along and the defect looked like it was about
+phantomness: phantomness is what forces the ascription.
+
+## Fix
+
+`src/compiler/emit_module.c`: keep the outermost ascribed type before
+stripping, and use it for the tyvar test when it is one. Two lines of intent,
+and the existing `match_bindings` / Gap H `__h<n>` machinery then does the rest
+-- the specialization was always able to be minted, nothing was asking for it.
+
+## Fixture
+
+`tests/fixtures/typeclass-phantom-tyvar-dispatch` asserts both instantiations
+of **both** shapes (ascribed-out-of-carrier and field-typed), so a fix that
+repairs one path while breaking the other is caught. The interpreter was
+verified correct on the same fixture, so it carries no `requires.compiled`
+marker. Suite: 2963 passed, 0 failed.
+
+## What it blocked
 
 crdt-spice-plan section 2.3's `ORMap K V`, whose whole claim is that its join
 recurses at the *value's* instance so "an `ORMap` of `PNCounter`s merges
 correctly with no code specific to that pairing". An `ORMap` stores its entries
 in a HAMT of int carriers, so `V` is necessarily phantom -- which is exactly
-the broken case. The C3 implementation therefore takes the value-join as an
-explicit parameter instead; see the plan's C3 note.
+the broken case. The C3 implementation shipped with the value-join as an explicit parameter,
+which was the right call at the time and remains correct and more general (two
+ORMaps over one value type can merge differently). With this fixed, the
+constrained form is viable -- verified on the original ORMap-shaped probe --
+and migrating to it is now a design choice rather than a workaround.
 
 ## Fixtures owed
 

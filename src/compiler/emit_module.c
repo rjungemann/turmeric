@@ -3380,12 +3380,27 @@ static bool body_has_dispatch_on_app_tyvar(
             type_mentions_bound_tyvar(&e->type, bindings, n_bindings))
             return true;
         const Expr *recv = e->as.call_.args[0];
+        /* phantom-type-param-does-not-drive-monomorphization: keep the
+         * OUTERMOST ascribed type before stripping.  A receiver read out of a
+         * carrier and ascribed back to the class variable -- `(:: (.v x) V)`,
+         * which is what reading a HAMT value or a phantom-parameterized struct
+         * field looks like -- has an inner type of `int`, so stripping first
+         * loses the only thing that said `V`.  Dispatch then looked concrete,
+         * `instance_changes` stayed false, no spec was minted, and every
+         * instantiation ran the representative instance: a silent wrong answer.
+         * The sibling whose field is declared `: V` was detected all along,
+         * which is why this looked like it worked. */
+        Type recv_ascribed = recv ? recv->type : TYPE_INT;
         while (recv && recv->kind == EX_ASCRIBE)
             recv = recv->as.ascribe_.inner;
-        if (recv && recv->type.kind == TY_TYVAR && recv->type.as.tyvar_.name) {
+        const Type *recv_ty = (recv_ascribed.kind == TY_TYVAR &&
+                               recv_ascribed.as.tyvar_.name)
+                                  ? &recv_ascribed
+                                  : (recv ? &recv->type : NULL);
+        if (recv_ty && recv_ty->kind == TY_TYVAR && recv_ty->as.tyvar_.name) {
             for (uint8_t i = 0; i < n_bindings; i++) {
                 if (bindings[i].name &&
-                    strcmp(bindings[i].name, recv->type.as.tyvar_.name) == 0 &&
+                    strcmp(bindings[i].name, recv_ty->as.tyvar_.name) == 0 &&
                     /* generic-show-dispatch-opaque-carrier: a class var bound to a
                      * concrete TY_APP (`Map[cstr int]`) OR a bare nominal TY_ADT --
                      * including an opaque newtype like `String`

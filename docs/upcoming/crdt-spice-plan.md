@@ -507,12 +507,14 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
      the tests are exact without `stdlib/time.tur` -- which would also have
      cost the spice its inline-C-free property (2.5).
 
-  Two compiler defects were found and one FIXED on the way:
+  Three compiler defects were found on the way, **all three now fixed**:
   `clone_struct_app_type` segfaulted on a parametric instance head whose method
-  recurses into the type parameter ([fixed](../archive/clone-struct-app-type-segv-on-null-arg.md));
-  forwarding a function-typed parameter to a later-defined defn emits a broken
-  cast ([open](../reported/fn-typed-param-forwarded-to-a-later-defn-miscasts.md),
-  worked around by helper ordering).
+  recurses into the type parameter
+  ([fixed](../archive/clone-struct-app-type-segv-on-null-arg.md)); forwarding a
+  function-typed parameter to a later-defined defn emitted a broken cast
+  ([fixed](../archive/fn-typed-param-forwarded-to-a-later-defn-miscasts.md) --
+  the helper-ordering workaround has been removed from `crdt/ormap`); and the
+  phantom-dispatch defect above.
 
   The HLC ships a drift bound (`hlc-max-drift`) so a remote replica with a
   wrong clock cannot drag this one forward permanently -- 1.3's requirement.
