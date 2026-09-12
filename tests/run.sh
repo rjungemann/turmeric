@@ -200,8 +200,23 @@ fi
 # Apple clang rejects it outright, so the macOS leg went red on six fixtures
 # that loaded stdlib/serial.tur while gcc 13 on the Linux leg only warned and
 # linked; promoting it to an error here makes both legs see the same thing.
+# `-Wfloat-conversion`: NOT implied by -Wall (verified: 0 warnings vs 2 on a
+# `long f(double d){return d;}` canary), so until this landed the float half of
+# the scalar-representation class was unwatched in emitted C -- exactly the gap
+# docs/archive/emitted-c-pointer-integer-warnings-unwatched.md closed for the
+# pointer/integer half.  An int64 carrier reaching a double slot (or the
+# reverse) is a wrong ANSWER, not a style nit: it is how
+# docs/reported/nested-class-method-call-picks-the-first-instance.md turns 7.1
+# into 7 with nothing else complaining.  Understood by both GCC (>= 4.9) and
+# clang with the same diagnostic tag, so the ratchet's grep is portable.
+# Deliberately NOT -Wconversion: that adds ~7 warnings out of the hand-written
+# preamble/runtime (-Wshorten-64-to-32, -Wsign-conversion) that would have to be
+# cleaned first.  Deliberately NOT -Wimplicit-int-float-conversion: clang-only,
+# so it would split the Linux and macOS legs.
+# Corpus swept clean at 0 hits across 2250 cc-invoking fixtures before this
+# landed -- see docs/upcoming/type-confusion-detection-plan.md section 5.
 _tur_build_dir=$(dirname "$TUR")
-export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -Werror=implicit-function-declaration -fno-strict-aliasing -L${_tur_build_dir}/src}"
+export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -Wfloat-conversion -Werror=implicit-function-declaration -fno-strict-aliasing -L${_tur_build_dir}/src}"
 
 # T19: ThreadSanitizer (TSan) support.
 # Set TUR_TSAN=1 to compile and run all fixtures with -fsanitize=thread.
@@ -788,21 +803,27 @@ run_happy() {
     #
     # Opt out with TUR_SKIP_CC_WARN_CHECK=1 (e.g. on a toolchain that words these
     # differently, or while landing a change that knowingly trips them).
+    # type-confusion-detection-plan F0: -Wfloat-conversion joined the ratchet.
+    # A double reaching an int64 slot is the float half of the same class the
+    # pointer/integer half already covered, and it is the arm that produces a
+    # silent wrong ANSWER rather than a crash -- 7.1 printed as 7, with the
+    # fixture otherwise passing.  Swept clean at 0 across the corpus first, per
+    # the procedure this ratchet was established with.
     # any-drop-inlining-warns-free-nonheap: -Wfree-nonheap-object joined the
     # ratchet.  Emitted code frees only what a widen boxed, behind a runtime
     # guard; gcc warning that a literal reaches free() means either the guard
     # got inlined away (the case that report fixed) or a real free of a
     # non-heap word, and both belong in a FAIL rather than in a build log.
     if [ "${TUR_SKIP_CC_WARN_CHECK:-0}" != "1" ] && [ -s "$actual_stderr" ]; then
-        if grep -qE '\[-W(int-conversion|incompatible-pointer-types|free-nonheap-object)\]' "$actual_stderr"; then
+        if grep -qE '\[-W(int-conversion|incompatible-pointer-types|free-nonheap-object|float-conversion)\]' "$actual_stderr"; then
             {
-                echo "FAIL $name -- emitted C mixes a pointer and an integer (or frees a non-heap word)"
-                grep -E '\[-W(int-conversion|incompatible-pointer-types|free-nonheap-object)\]' \
+                echo "FAIL $name -- emitted C confuses scalar representations (pointer/integer/float), or frees a non-heap word"
+                grep -E '\[-W(int-conversion|incompatible-pointer-types|free-nonheap-object|float-conversion)\]' \
                     "$actual_stderr" | sed 's/^/    /'
                 echo "    This is a warning to cc and a hard error under -Werror."
                 echo "    Opt out for one run with TUR_SKIP_CC_WARN_CHECK=1."
             } > "$log_file"
-            write_result "FAIL" "$name" "emitted C pointer/integer warning" "$log_file"
+            write_result "FAIL" "$name" "emitted C representation warning" "$log_file"
             return
         fi
         # Ratchet: function-pointer type confusion at a closure dispatch.

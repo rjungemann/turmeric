@@ -1,0 +1,31 @@
+# tests/fuzz-seed-corpus.txt -- seeds that once found a real defect.
+#
+# Format: <harness> <seed> [# note]
+#   harness is one of: type saffron refine regions
+#   blank lines and lines starting with # are ignored
+#
+# Why this file exists
+# --------------------
+# Every tests/run-*-fuzz-src.sh is pinned to seed 1 at smoke size, so CI
+# recompiles the same ~40 programs on every push forever.  That is a fine
+# REGRESSION guard and performs no search: a fuzzer at a fixed seed has
+# already found everything it will ever find.
+#
+# The search happens in .github/workflows/fuzz.yml, which runs the drivers
+# nightly with a date-derived seed and a large --n.  When one of those runs
+# (or a hand session) finds a real defect, append its seed here.  Every
+# subsequent run of that harness then replays it at smoke size, which is what
+# keeps a fixed bug fixed WITHOUT pinning the search itself to seed 1.
+#
+# See docs/upcoming/type-confusion-detection-plan.md section F2.
+#
+# Appending a row
+# ---------------
+#   type 20260912   # nested class dispatch, wrong instance on a float leg
+#
+# Remove a row only when its harness or driver no longer accepts the seed
+# (a generator change can make an old seed generate different programs --
+# that is expected and is not a reason to keep a stale row).
+#
+# Currently empty: the nightly workflow has not run yet.  An empty corpus is
+# a no-op, not a skip -- the replay step still runs and reports zero seeds.

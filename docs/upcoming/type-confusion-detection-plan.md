@@ -314,6 +314,110 @@ cleanup backlog to pay down first.** This is the cheapest item in any of the
 three sequenced plans, and it is the one that converts the recurring
 int-into-float-slot class from a silent wrong answer into a suite failure.
 
+## 5a. Execution -- F0, F1, F2 LANDED 2026-09-11
+
+Verified against `build/tur` at v0.46.1 (Debug, macOS arm64, Apple clang 21).
+
+### F0 -- the ratchet is live
+
+- `tests/run.sh`: `-Wfloat-conversion` added to `TUR_CC_FLAGS`, with the
+  rationale and both deliberate exclusions (`-Wconversion`,
+  `-Wimplicit-int-float-conversion`) recorded at the flag.
+- `tests/run.sh`: `float-conversion` joined the ratchet pattern at both grep
+  sites; the FAIL line now reads "confuses scalar representations
+  (pointer/integer/float)" and the result reason is
+  `emitted C representation warning`.
+- `tests/check-cc-warn-ratchet.sh`: a float canary, plus **two** disarm checks,
+  because this arm can be silenced two ways that the pointer arm cannot.
+
+Two traps surfaced while building the canary, both worth keeping:
+
+1. **`return 7.5;` is the wrong canary.** A constant conversion is tagged
+   `-Wliteral-conversion`, a *different* flag the ratchet does not match, so
+   the obvious canary would pass while proving nothing. The canary returns a
+   `float` **parameter** from an `:int` defn instead.
+2. **The first disarm check was itself a false clean.** Grepping the whole of
+   `tests/run.sh` for `-Wfloat-conversion` matched the new *comment block*, so
+   deleting the actual flag still passed. It is scoped to the
+   `^export TUR_CC_FLAGS=` line now. This is the same failure this script
+   exists to prevent, reintroduced one level up -- exactly as its header warns.
+
+The env-based check drafted first was also wrong: `run.sh` calls the canary at
+line 141 but exports `TUR_CC_FLAGS` at line 219, and `tur_cc_warn_ratchet` runs
+it standalone with no environment at all, so an env probe is vacuous in both
+places it actually runs.
+
+Verified in all three disarm modes: standalone/ctest exits 0; an env override
+dropping the flag exits 1; deleting the flag from `run.sh` exits 1.
+**Full suite after: `2945 passed, 1 failed`** -- the same pre-existing failure
+as the baseline sweep (since removed: it was an artifact-only directory with
+zero tracked files, left by `8039ae53a`).
+
+### F1 -- the four shape gaps are closed
+
+`tests/type-fuzz-src.py` gained two crossings:
+
+- `x_class_nested` closes gaps 1-3 in one shape: a class with **two**
+  instances (the leg's own type declared second), a **binary** same-type
+  method, and a **nested** call inside a constrained generic. The method
+  projects its first argument so the nesting is an identity -- a wrong
+  instance therefore surfaces as `BUG_wrong_output`, a wrong *answer*, which
+  is the arm F0's static check cannot see.
+- `x_class_nullary_newtype` closes gap 4: a **nullary** method over a
+  `defopaque` newtype, on bare `int` legs.
+
+Both are open reports, so both are excluded by default via `known_bug_slug`
+and pinned in `KNOWN_PROBES`, per the harness's existing discipline.
+
+**`known_probes()` needed a fix to make that pinning honest.** It decided
+"fires" from `out.kind in (crash, invalid_c, link, reject, other)` -- which
+never includes a wrong ANSWER, since such a program exits 0 with
+`kind == "clean"`. Defect 1's probe would have printed
+`FIXED -- retire its known_bug_slug row` on a still-broken build. `KNOWN_PROBES`
+rows may now be `(label, src, expected)` and a clean run whose stdout differs
+counts as firing:
+
+```
+nested-class-method-call-picks-the-first-instance   fires (wrong_output: '7\n' != '7.1\n')
+nullary-class-method-unresolvable-over-newtype-tyvar fires (reject)
+```
+
+Verified: `--self-test` PASS; default mode 60/60 ok with 0 BUG (shapes
+excluded); `--emit-known --n 120 --seed 7` generates both and classifies them
+`KNOWN(...)` with 0 BUG.
+
+**One finding worth propagating.** `class_nested` fires on `cstr`, `bool` and
+`int` legs as readily as on `float` -- because the generator declares a decoy
+instance first, where the hand repro happened to declare `int` first. The
+defect is wrong-instance selection generally; truncation is only its most
+legible symptom. The report's condition 3 has been corrected accordingly.
+
+### F2 -- the search now moves
+
+- `.github/workflows/fuzz.yml`: nightly (04:30 UTC) plus `workflow_dispatch`,
+  running all four drivers at `--n 400` with a date-derived seed. **Not** on
+  push or pull_request. Every harness runs even after an earlier one hits, so
+  one finding does not waste the other three searches. Findings upload as an
+  artifact and open a labelled issue rather than a red X -- nothing here gates
+  a merge, and a failing scheduled check is a signal people stop reading.
+- `tests/fuzz-seed-corpus.txt` + `tests/replay-fuzz-seeds.sh`: every
+  `run-*-fuzz-src.sh` now replays the seeds recorded for it after its smoke
+  run. The corpus is empty until the nightly runs, and an empty corpus **says
+  so** rather than passing silently. Verified on both paths: a recorded seed
+  replays, a malformed row is reported and skipped, another harness's row is
+  ignored.
+
+All five affected ctest targets pass: `tur_cc_warn_ratchet`,
+`tur_type_fuzz_src`, `tur_saffron_fuzz_src`, `tur_refine_fuzz_src`,
+`tur_regions_fuzz_src`.
+
+### F3 -- deliberately NOT done
+
+F3 is conditional on F1 proving insufficient ("the correct-by-construction
+generator already knows the expected value, which is strictly stronger"). F1
+reaches both defects and produces a wrong-answer verdict on the first, so the
+condition is not met. Left in section 4 as the escape hatch it was written as.
+
 ## 6. Risks and open questions
 
 - **The sweep may not be zero.** If fixtures already trip

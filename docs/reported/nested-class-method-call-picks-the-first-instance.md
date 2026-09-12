@@ -51,10 +51,17 @@ bug easy to walk past:
    nesting at concrete `float` gives `7.1`.
 2. **The class-method call is nested** -- the result of one `join` feeds
    another. The flat `(join x y)` gives `7.1`.
-3. **The instance is not the first one declared.** `int` (declared first) is
-   correct in every arrangement; `float` is wrong whether it is called first
-   or second, so this is *not* an instantiation-order or specialization-cache
-   effect.
+3. **The instance is not the first one declared.** In the repro above `int`
+   is declared first and is correct in every arrangement; `float` is wrong
+   whether it is called first or second, so this is *not* an
+   instantiation-order or specialization-cache effect.
+
+   **Not float-specific.** Confirmed 2026-09-11 by the `class_nested` shape
+   added to `tests/type-fuzz-src.py` (type-confusion-detection-plan F1), which
+   declares a decoy instance first and the leg's own type second: it fires on
+   `cstr`, `bool` and `int` legs as readily as on `float`. Truncation is just
+   the most legible symptom -- the defect is wrong-instance selection, and
+   `int` is safe in the repro only because it happens to be declared first.
 
 A nullary class method (`(bottom [] : a)`) is **not** required. It was in the
 program that first showed the symptom, which sent the initial reduction down a

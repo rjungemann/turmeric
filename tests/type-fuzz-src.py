@@ -129,7 +129,8 @@ BYVALUE_WRAPPERS = {"box", "adt", "opt", "res", "opt_box", "res_box"}
 
 
 CROSSING_TAGS = {"through", "deep", "let", "ascribe", "gid", "fat_hof",
-                 "thin_hof", "class_thru", "tyvar_run"}
+                 "thin_hof", "class_thru", "tyvar_run",
+                 "class_nested", "class_nullary_newtype"}
 
 
 def known_bug_slug(tags):
@@ -168,12 +169,28 @@ def known_bug_slug(tags):
     # (class-method-result-into-generic-invalid-c: RESOLVED 2026-07-31 by
     # consolidation increment 2 -- the carrier-producer classifier now knows
     # M7 by-value instance results -- and archived; rows retired.)
+    #
+    # type-confusion-detection-plan F1: two typeclass shapes the generator
+    # could not previously express at all (one instance per class, unary
+    # methods only, no same-class nesting, no nullary methods).  Both are open
+    # reports, so both are avoided by default and pinned by --known-probes.
+    if "class_nested" in tags:
+        return "nested-class-method-call-picks-the-first-instance"
+    if "class_nullary_newtype" in tags:
+        return "nullary-class-method-unresolvable-over-newtype-tyvar"
     return None
 
 
 # Pinned minimal repros, one per open report above, used by --known-probes to
 # keep the avoid list honest: when one prints `fixed`, retire its
 # known_bug_slug row.
+#
+# A row is either (label, src) -- "fires" means the compiler rejected it,
+# emitted invalid C, failed to link, or crashed -- or (label, src, expected),
+# which ADDS a wrong-output arm: a program that builds and runs cleanly but
+# prints something other than `expected` also counts as firing.  The 3-tuple
+# form is required for any defect whose symptom is a wrong ANSWER; without it
+# such a probe exits 0 and reports FIXED on a build that is still broken.
 KNOWN_PROBES = [
     # The tyvar-result and by-value-result rows are FIXED (stage 1 and
     # increment 2 of fn-value-fat-normalization) and pinned by
@@ -230,6 +247,29 @@ KNOWN_PROBES = [
     # verified by hand -- and archived; probe retired.)
     # (fn-value-carrier-fat-seam-residuals: RESOLVED 2026-07-31, archived;
     # probe retired -- pinned by tests/fixtures/fn-value-carrier-fat-seams/.)
+    #
+    # OPEN (type-confusion-detection-plan F1).  A WRONG ANSWER, so this row
+    # carries an expected stdout: the float specialization resolves its outer
+    # `join` to the first-declared (int) instance and truncates, printing 7
+    # where 7.1 is correct.  Needs all three of constrained body, nesting, and
+    # a non-first instance -- drop any one and it answers correctly.
+    ("nested-class-method-call-picks-the-first-instance",
+     "(defclass JsP [a] (joinp [x : a y : a] : a))\n"
+     "(definstance JsP [int]   (joinp [x y] (if (< x y) y x)))\n"
+     "(definstance JsP [float] (joinp [x y] (if (< x y) y x)))\n"
+     "(defn fp [^JsP A] [x : A y : A] : A (joinp (joinp x y) y))\n"
+     "(defn main [] : int (println (fp 2.5 7.1)) 0)\n",
+     "7.1\n"),
+    # OPEN (type-confusion-detection-plan F1).  A hard error, so the 2-tuple
+    # form suffices: `tur check` rejects with "no instance 'MoP tyvar'".
+    ("nullary-class-method-unresolvable-over-newtype-tyvar",
+     "(defclass SgP [a] (combp [x : a y : a] : a))\n"
+     "(defclass MoP [a] (mzerop [] : a))\n"
+     "(defopaque SumP :int)\n"
+     "(definstance SgP [SumP] (combp [x y] x))\n"
+     "(definstance MoP [SumP] (mzerop [] (:: 0 SumP)))\n"
+     "(defn fq [^SgP A ^MoP A] [x : A] : A (combp x (mzerop)))\n"
+     "(defn main [] : int (println (:: (fq (:: 3 SumP)) int)) 0)\n"),
 ]
 
 
@@ -531,6 +571,60 @@ class Gen:
         dot = "." if self.rng.random() < 0.5 else ""
         return "(%s%s %s)" % (dot, meth, e), "class_thru"
 
+    def x_class_nested(self, leg, tn, e):
+        """Nested same-class dispatch inside a constrained generic, with the
+        leg's own type NOT the first-declared instance.
+
+        Closes three gaps at once (type-confusion-detection-plan 3.1): the
+        class carries TWO instances so "first declared" and "correct" can
+        diverge; the method is BINARY over its own class type so one call can
+        feed another; and the generic body NESTS the two calls.  All three are
+        required by
+        docs/reported/nested-class-method-call-picks-the-first-instance.md.
+
+        The method projects its first argument, so nesting is an identity and
+        the leg's expected value is unchanged -- resolving to the wrong
+        instance therefore surfaces as BUG_wrong_output (a wrong ANSWER), not
+        merely as invalid C.
+        """
+        n = self.n_names
+        self.n_names += 1
+        cls, meth = "FzN%d%d" % (self.i, n), "fzn%d%d" % (self.i, n)
+        gen = "fzng%d%d" % (self.i, n)
+        # The decoy must be declared FIRST and must not be the leg's own type.
+        decoy = "float" if tn == "int" else "int"
+        leg.defs.append("(defclass %s [a] (%s [x : a y : a] : a))" % (cls, meth))
+        leg.defs.append("(definstance %s [%s] (%s [x y] x))" % (cls, decoy, meth))
+        leg.defs.append("(definstance %s [%s] (%s [x y] x))" % (cls, tn, meth))
+        leg.defs.append("(defn %s [^%s A] [x : A] : A (%s (%s x x) x))"
+                        % (gen, cls, meth, meth))
+        return "(%s %s)" % (gen, e), "class_nested"
+
+    def x_class_nullary_newtype(self, leg, tn, e):
+        """A NULLARY class method whose instances are over a `defopaque`
+        newtype -- docs/reported/nullary-class-method-unresolvable-over-newtype-tyvar.md.
+
+        Both halves are required: every other generated method takes `self`,
+        and every other instance head is a plain struct/scalar name.  Applied
+        to bare `int` legs only, since the newtype wraps `:int`; routing the
+        value through it and back keeps the crossing an identity.
+        """
+        n = self.n_names
+        self.n_names += 1
+        nt, cls = "FzW%d%d" % (self.i, n), "FzV%d%d" % (self.i, n)
+        zero, comb = "fzvz%d%d" % (self.i, n), "fzvc%d%d" % (self.i, n)
+        gen, thru = "fzvg%d%d" % (self.i, n), "fzvt%d%d" % (self.i, n)
+        leg.defs.append("(defopaque %s :int)" % nt)
+        leg.defs.append("(defclass %s [a] (%s [] : a) (%s [x : a y : a] : a))"
+                        % (cls, zero, comb))
+        leg.defs.append("(definstance %s [%s] (%s [] (:: 0 %s)) (%s [x y] x))"
+                        % (cls, nt, zero, nt, comb))
+        leg.defs.append("(defn %s [^%s A] [x : A] : A (%s x (%s)))"
+                        % (gen, cls, comb, zero))
+        leg.defs.append("(defn %s [v : int] : int (:: (%s (:: v %s)) int))"
+                        % (thru, gen, nt))
+        return "(%s %s)" % (thru, e), "class_nullary_newtype"
+
     def crossings_for(self, tn, tags):
         # Fn-typed VALUES are fat-normalized across returns/let/ascribe and
         # HOF hops as of fn-value-fat-normalization stage 2 (2026-07-30) --
@@ -548,6 +642,13 @@ class Gen:
         # Instance heads: plain type names only.
         if not tn.startswith("("):
             xs.append(self.x_class_thru)
+            # Both are open reports (see known_bug_slug), so they are avoided
+            # by default like every other filed shape and turned back on with
+            # --emit-known.
+            if self.emit_known:
+                xs.append(self.x_class_nested)
+                if tn == "int":
+                    xs.append(self.x_class_nullary_newtype)
         if self.emit_known:
             xs.append(self.x_tyvar_run)
         return xs
@@ -796,13 +897,23 @@ def self_test(tur, workdir):
 def known_probes(tur, workdir):
     print("known-probe status (open reports the generator avoids by default):")
     any_fixed = False
-    for i, (label, src) in enumerate(KNOWN_PROBES):
+    for i, row in enumerate(KNOWN_PROBES):
+        label, src = row[0], row[1]
+        expected = row[2] if len(row) > 2 else None
         path = os.path.join(workdir, "known%d.tur" % i)
         out = run_case(tur, path, src)
         fired = out.kind in ("crash", "invalid_c", "link", "reject", "other")
+        how = out.kind
+        # A wrong-ANSWER defect builds and runs cleanly, so out.kind is
+        # "clean" and the loop above would call it FIXED on a still-broken
+        # build.  A row that declares its expected stdout gets the extra arm.
+        if not fired and expected is not None and out.kind == "clean" \
+                and out.stdout != expected:
+            fired = True
+            how = "wrong_output: %r != %r" % (out.stdout, expected)
         if not fired:
             any_fixed = True
-        print("  %-62s %s" % (label, "fires (%s)" % out.kind if fired
+        print("  %-62s %s" % (label, "fires (%s)" % how if fired
                               else "FIXED -- retire its known_bug_slug row"))
     return any_fixed
 
