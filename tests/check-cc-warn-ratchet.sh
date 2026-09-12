@@ -23,6 +23,13 @@ TUR="${TUR:-./build/tur}"
 # The same pattern run.sh matches on.  Kept in sync BY HAND -- if you change one,
 # change the other; a drifted pattern is the quiet failure this script exists to
 # catch, so it is deliberately spelled out here rather than sourced.
+#
+# run.sh additionally EXCLUDES float-conversion warnings whose destination is a
+# floating type (`to 'float'`): gcc's -Wfloat-conversion covers double -> float,
+# which clang splits out separately, and that direction is a precision note
+# rather than a representation confusion.  The canary below converts a float to
+# an INTEGER, so it is unaffected by that exclusion -- which is the point: it
+# proves the direction the ratchet actually fails on still fires.
 PATTERN='\[-W(int-conversion|incompatible-pointer-types|free-nonheap-object|float-conversion)\]'
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/tur-ccwarn.XXXXXX")

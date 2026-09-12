@@ -814,12 +814,29 @@ run_happy() {
     # guard; gcc warning that a literal reaches free() means either the guard
     # got inlined away (the case that report fixed) or a real free of a
     # non-heap word, and both belong in a FAIL rather than in a build log.
+    # GCC's -Wfloat-conversion is BROADER than clang's: it also covers
+    # double -> float, which clang splits out as -Wimplicit-float-conversion.
+    # That direction is a precision note, not the representation confusion this
+    # ratchet is for -- an int carrier reaching a float slot, or the reverse --
+    # and the emitter does produce one benign instance of it (a float literal
+    # closing a multi-expression `: float32` body gets a `double` temp; see
+    # docs/reported/float32-block-temp-widens-to-double.md).  Failing the suite
+    # on a legitimate narrowing is the "ratchet that fires on legitimate
+    # narrowing is worse than none" risk this was landed with, so the
+    # destination-is-float direction is excluded here rather than the flag being
+    # dropped: gcc's extra coverage still shows up in the build log.
+    #
+    # The exclusion spans both compilers' quoting -- clang writes `to 'float'`
+    # and gcc `to <U+2018>float<U+2019>` -- hence `.{1,3}` rather than a literal
+    # quote.
+    ccwarn_pat='\[-W(int-conversion|incompatible-pointer-types|free-nonheap-object|float-conversion)\]'
+    ccwarn_skip='to .{1,3}(float|double).'
     if [ "${TUR_SKIP_CC_WARN_CHECK:-0}" != "1" ] && [ -s "$actual_stderr" ]; then
-        if grep -qE '\[-W(int-conversion|incompatible-pointer-types|free-nonheap-object|float-conversion)\]' "$actual_stderr"; then
+        if grep -E "$ccwarn_pat" "$actual_stderr" | grep -qvE "$ccwarn_skip"; then
             {
                 echo "FAIL $name -- emitted C confuses scalar representations (pointer/integer/float), or frees a non-heap word"
-                grep -E '\[-W(int-conversion|incompatible-pointer-types|free-nonheap-object|float-conversion)\]' \
-                    "$actual_stderr" | sed 's/^/    /'
+                grep -E "$ccwarn_pat" "$actual_stderr" | grep -vE "$ccwarn_skip" \
+                    | sed 's/^/    /'
                 echo "    This is a warning to cc and a hard error under -Werror."
                 echo "    Opt out for one run with TUR_SKIP_CC_WARN_CHECK=1."
             } > "$log_file"
